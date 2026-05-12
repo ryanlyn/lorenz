@@ -11,6 +11,8 @@ import { executeTool, toolSpecs } from "../tools.js";
 import { shellEscape, startSshProcess } from "../ssh.js";
 import { validateWorkspaceCwd } from "../workspace.js";
 import { JsonLineProcess } from "./jsonLineProcess.js";
+import { match, P } from "ts-pattern";
+import { z } from "zod";
 
 interface PendingRequest {
   resolve: (value: unknown) => void;
@@ -237,7 +239,8 @@ export class CodexAppServerExecutor implements AgentExecutor {
       return;
     }
 
-    const method = typeof value.method === "string" ? value.method : "";
+    const parsed = codexNotificationSchema.safeParse(value);
+    const method = parsed.success ? parsed.data.method : readString(value.method);
     if (method !== "thread/tokenUsage/updated") {
       const usage = extractUsage(value);
       if (Object.keys(usage).length > 0) {
@@ -249,35 +252,48 @@ export class CodexAppServerExecutor implements AgentExecutor {
         });
       }
     }
-    if (method === "turn/completed")
-      this.emit(session, { type: "turn_completed", message: value, timestamp: new Date() });
-    else if (method === "turn/failed")
-      this.emit(session, { type: "turn_failed", message: value, timestamp: new Date() });
-    else if (method === "turn/cancelled")
-      this.emit(session, { type: "turn_cancelled", message: value, timestamp: new Date() });
-    else if (method === "thread/tokenUsage/updated") {
-      this.emit(session, {
-        type: "usage",
-        usage: extractUsage(value),
-        message: value,
-        timestamp: new Date(),
-      });
-    } else if (method === "rateLimits/updated") {
-      this.emit(session, {
-        type: "rate_limit",
-        rateLimits: value.params,
-        message: value,
-        timestamp: new Date(),
-      });
-    } else if (method === "item/tool/call") {
-      void this.handleDynamicToolCall(session, value);
-    } else if (isApprovalRequest(method)) {
-      this.handleApprovalRequest(session, value, method);
-    } else if (isUserInputRequest(method)) {
-      this.handleUserInputRequest(session, value);
-    } else {
+
+    if (!parsed.success) {
       this.emit(session, { type: "notification", message: value, timestamp: new Date() });
+      return;
     }
+
+    match(parsed.data)
+      .with({ method: "turn/completed" }, (message) =>
+        this.emit(session, { type: "turn_completed", message, timestamp: new Date() }),
+      )
+      .with({ method: "turn/failed" }, (message) =>
+        this.emit(session, { type: "turn_failed", message, timestamp: new Date() }),
+      )
+      .with({ method: "turn/cancelled" }, (message) =>
+        this.emit(session, { type: "turn_cancelled", message, timestamp: new Date() }),
+      )
+      .with({ method: "thread/tokenUsage/updated" }, (message) =>
+        this.emit(session, {
+          type: "usage",
+          usage: extractUsage(message),
+          message,
+          timestamp: new Date(),
+        }),
+      )
+      .with({ method: "rateLimits/updated" }, (message) =>
+        this.emit(session, {
+          type: "rate_limit",
+          rateLimits: message.params,
+          message,
+          timestamp: new Date(),
+        }),
+      )
+      .with({ method: "item/tool/call" }, (message) => {
+        void this.handleDynamicToolCall(session, message);
+      })
+      .with({ method: P.union(...approvalRequestMethods) }, (message) =>
+        this.handleApprovalRequest(session, message, message.method),
+      )
+      .with({ method: P.union(...userInputRequestMethods) }, (message) =>
+        this.handleUserInputRequest(session, message),
+      )
+      .exhaustive();
   }
 
   private handleApprovalRequest(
@@ -445,6 +461,33 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+const codexMessageSchema = <const Method extends string>(method: Method) =>
+  z.object({ method: z.literal(method) }).passthrough();
+
+const approvalRequestMethods = [
+  "item/commandExecution/requestApproval",
+  "item/fileChange/requestApproval",
+  "execCommandApproval",
+  "applyPatchApproval",
+] as const;
+
+const userInputRequestMethods = [
+  "item/tool/requestUserInput",
+  "tool/requestUserInput",
+  "turn/input_required",
+] as const;
+
+const codexNotificationSchema = z.discriminatedUnion("method", [
+  codexMessageSchema("turn/completed"),
+  codexMessageSchema("turn/failed"),
+  codexMessageSchema("turn/cancelled"),
+  codexMessageSchema("thread/tokenUsage/updated"),
+  codexMessageSchema("rateLimits/updated"),
+  codexMessageSchema("item/tool/call"),
+  ...approvalRequestMethods.map(codexMessageSchema),
+  ...userInputRequestMethods.map(codexMessageSchema),
+]);
+
 function readString(value: unknown): string | null {
   return typeof value === "string" && value.trim() !== "" ? value : null;
 }
@@ -462,23 +505,6 @@ function turnTitle(issue: Issue | undefined): string | undefined {
 function protocolMessageCandidate(line: string): boolean {
   const trimmed = line.trim();
   return trimmed.startsWith("{") || trimmed.startsWith("[");
-}
-
-function isApprovalRequest(method: string): boolean {
-  return (
-    method === "item/commandExecution/requestApproval" ||
-    method === "item/fileChange/requestApproval" ||
-    method === "execCommandApproval" ||
-    method === "applyPatchApproval"
-  );
-}
-
-function isUserInputRequest(method: string): boolean {
-  return (
-    method === "item/tool/requestUserInput" ||
-    method === "tool/requestUserInput" ||
-    method === "turn/input_required"
-  );
 }
 
 function autoApproveRequests(session: CodexSession): boolean {

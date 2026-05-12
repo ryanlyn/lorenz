@@ -4,6 +4,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { runSsh, shellEscape, writeRemoteFile } from "./ssh.js";
 import type { AgentKind, Issue } from "./types.js";
+import { z } from "zod";
 
 const execFileAsync = promisify(execFile);
 const remoteMissingMarker = "__SYMPHONY_RESUME_STATE_MISSING__";
@@ -40,7 +41,6 @@ export async function readResumeState(
       : await fs.readFile(resumePath, "utf8");
     if (text === null) return { status: "missing" };
     const decoded = JSON.parse(text) as unknown;
-    if (!isRecord(decoded)) return { status: "error", reason: "invalid_resume_state" };
     const state = decodeResumeState(decoded);
     return state ? { status: "ok", state } : { status: "error", reason: "invalid_resume_state" };
   } catch (error) {
@@ -156,25 +156,44 @@ export function resumeStateMatches(
   );
 }
 
-function decodeResumeState(data: Record<string, unknown>): ResumeState | null {
-  const agentKind = data.agent ?? data.agent_kind ?? data.agentKind;
-  const sessionId = data.session_id ?? data.sessionId;
-  const resumeId = sessionId ?? data.resume_id ?? data.resumeId ?? data.thread_id ?? data.threadId;
-  if (typeof agentKind !== "string" || agentKind.trim() === "") return null;
-  if (typeof resumeId !== "string" || resumeId.trim() === "") {
-    return null;
-  }
-  return {
-    agentKind,
-    resumeId,
-    sessionId: stringOrNull(sessionId),
-    issueId: stringOrNull(data.issue_id ?? data.issueId),
-    issueIdentifier: stringOrNull(data.issue_identifier ?? data.issueIdentifier),
-    issueState: stringOrNull(data.issue_state ?? data.issueState),
-    workerHost: stringOrNull(data.worker_host ?? data.workerHost),
-    workspacePath: stringOrNull(data.workspace_path ?? data.workspacePath),
-    updatedAt: stringOrNull(data.updated_at ?? data.updatedAt),
-  };
+const storedNonBlankStringSchema = z.string().refine((value) => value.trim() !== "");
+const storedNullableStringSchema = z.preprocess(
+  (value) => (typeof value === "string" && value !== "" ? value : null),
+  z.string().nullable(),
+);
+
+const resumeStateSchema = z.preprocess(
+  (value) => {
+    if (!isRecord(value)) return value;
+    const sessionId = value.session_id ?? value.sessionId;
+    return {
+      agentKind: value.agent ?? value.agent_kind ?? value.agentKind,
+      resumeId: sessionId ?? value.resume_id ?? value.resumeId ?? value.thread_id ?? value.threadId,
+      sessionId,
+      issueId: value.issue_id ?? value.issueId,
+      issueIdentifier: value.issue_identifier ?? value.issueIdentifier,
+      issueState: value.issue_state ?? value.issueState,
+      workerHost: value.worker_host ?? value.workerHost,
+      workspacePath: value.workspace_path ?? value.workspacePath,
+      updatedAt: value.updated_at ?? value.updatedAt,
+    };
+  },
+  z.object({
+    agentKind: storedNonBlankStringSchema,
+    resumeId: storedNonBlankStringSchema,
+    sessionId: storedNullableStringSchema,
+    issueId: storedNullableStringSchema,
+    issueIdentifier: storedNullableStringSchema,
+    issueState: storedNullableStringSchema,
+    workerHost: storedNullableStringSchema,
+    workspacePath: storedNullableStringSchema,
+    updatedAt: storedNullableStringSchema,
+  }),
+);
+
+function decodeResumeState(data: unknown): ResumeState | null {
+  const result = resumeStateSchema.safeParse(data);
+  return result.success ? result.data : null;
 }
 
 function encodeResumeState(state: ResumeState): Record<string, unknown> {
@@ -217,10 +236,6 @@ function storedNullableMatches(
 ): boolean {
   if (current === null || current === undefined) return stored === null || stored === undefined;
   return storedStringMatches(stored, current);
-}
-
-function stringOrNull(value: unknown): string | null {
-  return typeof value === "string" && value !== "" ? value : null;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
