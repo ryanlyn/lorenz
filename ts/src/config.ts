@@ -12,15 +12,229 @@ import type {
   HooksSettings,
   PartialRuntimeSettings,
   Settings,
+  TrackerKind,
   TrackerSettings,
 } from "./types.js";
+import {
+  CODEX_APPROVAL_POLICY_NAMES,
+  CODEX_SANDBOX_MODES,
+  TRACKER_KINDS,
+} from "./types.js";
 
-const appServerAgentRecordSchema = z.object({ executor: z.literal("appserver") }).passthrough();
-const acpAgentRecordSchema = z.object({ executor: z.literal("acp") }).passthrough();
+const appServerAgentRecordSchema = z
+  .object({
+    executor: z.literal("appserver"),
+    command: z.unknown().optional(),
+    approvalPolicy: z.unknown().optional(),
+    threadSandbox: z.unknown().optional(),
+    turnSandboxPolicy: z.unknown().optional(),
+    turnTimeoutMs: z.unknown().optional(),
+    readTimeoutMs: z.unknown().optional(),
+    stallTimeoutMs: z.unknown().optional(),
+  })
+  .strict();
+const acpAgentRecordSchema = z
+  .object({
+    executor: z.literal("acp"),
+    bridgeCommand: z.unknown().optional(),
+    bridgeArgs: z.unknown().optional(),
+    command: z.unknown().optional(),
+    model: z.unknown().optional(),
+    permissionMode: z.unknown().optional(),
+    turnTimeoutMs: z.unknown().optional(),
+    stallTimeoutMs: z.unknown().optional(),
+    strictMcpConfig: z.unknown().optional(),
+  })
+  .strict();
 const agentRecordSchema = z.discriminatedUnion("executor", [
   appServerAgentRecordSchema,
   acpAgentRecordSchema,
 ]);
+
+const trackerRawSchema = z
+  .object({
+    kind: z.unknown().optional(),
+    endpoint: z.unknown().optional(),
+    apiKey: z.unknown().optional(),
+    projectSlug: z.unknown().optional(),
+    assignee: z.unknown().optional(),
+    activeStates: z.unknown().optional(),
+    terminalStates: z.unknown().optional(),
+    dispatch: z
+      .object({
+        acceptUnrouted: z.unknown().optional(),
+        onlyRoutes: z.unknown().optional(),
+        routeLabelPrefix: z.unknown().optional(),
+      })
+      .strict()
+      .optional(),
+  })
+  .strict();
+
+const pollingRawSchema = z.object({ intervalMs: z.unknown().optional() }).strict();
+const workspaceRawSchema = z.object({ root: z.unknown().optional() }).strict();
+const workerRawSchema = z
+  .object({
+    sshHosts: z.unknown().optional(),
+    sshTimeoutMs: z.unknown().optional(),
+    maxConcurrentAgentsPerHost: z.unknown().optional(),
+  })
+  .strict();
+const hooksRawSchema = z
+  .object({
+    afterCreate: z.unknown().optional(),
+    beforeRun: z.unknown().optional(),
+    afterRun: z.unknown().optional(),
+    beforeRemove: z.unknown().optional(),
+    timeoutMs: z.unknown().optional(),
+  })
+  .strict();
+const agentRawSchema = z
+  .object({
+    kind: z.unknown().optional(),
+    maxConcurrentAgents: z.unknown().optional(),
+    maxTurns: z.unknown().optional(),
+    maxRetryBackoffMs: z.unknown().optional(),
+    ensembleSize: z.unknown().optional(),
+  })
+  .strict();
+const codexRawSchema = z
+  .object({
+    command: z.unknown().optional(),
+    approvalPolicy: z.unknown().optional(),
+    threadSandbox: z.unknown().optional(),
+    turnSandboxPolicy: z.unknown().optional(),
+    turnTimeoutMs: z.unknown().optional(),
+    readTimeoutMs: z.unknown().optional(),
+    stallTimeoutMs: z.unknown().optional(),
+  })
+  .strict();
+const claudeRawSchema = z
+  .object({
+    command: z.unknown().optional(),
+    model: z.unknown().optional(),
+    permissionMode: z.unknown().optional(),
+    turnTimeoutMs: z.unknown().optional(),
+    stallTimeoutMs: z.unknown().optional(),
+    strictMcpConfig: z.unknown().optional(),
+  })
+  .strict();
+const observabilityRawSchema = z
+  .object({
+    dashboardEnabled: z.unknown().optional(),
+    refreshMs: z.unknown().optional(),
+    renderIntervalMs: z.unknown().optional(),
+  })
+  .strict();
+const serverRawSchema = z
+  .object({
+    host: z.unknown().optional(),
+    port: z.unknown().optional(),
+  })
+  .strict();
+const loggingRawSchema = z.object({ logFile: z.unknown().optional() }).strict();
+const rawRecordSchema = z.record(z.string(), z.unknown());
+const partialAgentRawSchema = agentRawSchema.partial().strict();
+const partialCodexRawSchema = codexRawSchema.partial().strict();
+const partialClaudeRawSchema = claudeRawSchema.partial().strict();
+const statusOverrideRawSchema = z
+  .object({
+    agent: partialAgentRawSchema.optional(),
+    codex: partialCodexRawSchema.optional(),
+    claude: partialClaudeRawSchema.optional(),
+  })
+  .strict();
+
+const workflowConfigSchema = z.preprocess(
+  normalizeWorkflowConfig,
+  z
+    .object({
+      tracker: trackerRawSchema.optional(),
+      polling: pollingRawSchema.optional(),
+      workspace: workspaceRawSchema.optional(),
+      worker: workerRawSchema.optional(),
+      hooks: hooksRawSchema.optional(),
+      agent: agentRawSchema.optional(),
+      agents: z.record(z.string(), rawRecordSchema).optional(),
+      codex: codexRawSchema.optional(),
+      claude: claudeRawSchema.optional(),
+      observability: observabilityRawSchema.optional(),
+      server: serverRawSchema.optional(),
+      logging: loggingRawSchema.optional(),
+      statusOverrides: z.record(z.string(), statusOverrideRawSchema).optional(),
+    })
+    .passthrough(),
+);
+
+type WorkflowConfigRaw = z.infer<typeof workflowConfigSchema>;
+type TrackerRaw = z.infer<typeof trackerRawSchema>;
+type DispatchRaw = NonNullable<TrackerRaw["dispatch"]>;
+type HooksRaw = z.infer<typeof hooksRawSchema>;
+type AgentRaw = z.infer<typeof agentRawSchema>;
+type CodexRaw = z.infer<typeof codexRawSchema>;
+type ClaudeRaw = z.infer<typeof claudeRawSchema>;
+type StatusOverridesRaw = NonNullable<WorkflowConfigRaw["statusOverrides"]>;
+
+const trackerAliases = {
+  api_key: "apiKey",
+  project_slug: "projectSlug",
+  active_states: "activeStates",
+  terminal_states: "terminalStates",
+};
+const dispatchAliases = {
+  accept_unrouted: "acceptUnrouted",
+  only_routes: "onlyRoutes",
+  route_label_prefix: "routeLabelPrefix",
+};
+const pollingAliases = { interval_ms: "intervalMs" };
+const workspaceAliases = {};
+const workerAliases = {
+  ssh_hosts: "sshHosts",
+  ssh_timeout_ms: "sshTimeoutMs",
+  max_concurrent_agents_per_host: "maxConcurrentAgentsPerHost",
+};
+const hooksAliases = {
+  after_create: "afterCreate",
+  before_run: "beforeRun",
+  after_run: "afterRun",
+  before_remove: "beforeRemove",
+  timeout_ms: "timeoutMs",
+};
+const agentAliases = {
+  max_concurrent_agents: "maxConcurrentAgents",
+  max_turns: "maxTurns",
+  max_retry_backoff_ms: "maxRetryBackoffMs",
+  ensemble_size: "ensembleSize",
+};
+const codexAliases = {
+  approval_policy: "approvalPolicy",
+  thread_sandbox: "threadSandbox",
+  turn_sandbox_policy: "turnSandboxPolicy",
+  turn_timeout_ms: "turnTimeoutMs",
+  read_timeout_ms: "readTimeoutMs",
+  stall_timeout_ms: "stallTimeoutMs",
+};
+const claudeAliases = {
+  permission_mode: "permissionMode",
+  turn_timeout_ms: "turnTimeoutMs",
+  stall_timeout_ms: "stallTimeoutMs",
+  strict_mcp_config: "strictMcpConfig",
+};
+const acpAgentAliases = {
+  bridge_command: "bridgeCommand",
+  bridge_args: "bridgeArgs",
+};
+const agentRecordAliases = {
+  ...codexAliases,
+  ...claudeAliases,
+  ...acpAgentAliases,
+};
+const observabilityAliases = {
+  dashboard_enabled: "dashboardEnabled",
+  refresh_ms: "refreshMs",
+  render_interval_ms: "renderIntervalMs",
+};
+const loggingAliases = { log_file: "logFile" };
 
 export const defaultSettings = (): Settings => {
   const codex: CodexSettings = {
@@ -91,38 +305,36 @@ export function parseConfig(
   env: NodeJS.ProcessEnv = process.env,
 ): Settings {
   const settings = defaultSettings();
+  const parsed = parseWorkflowConfig(raw);
 
-  const trackerRaw = getRecord(raw, "tracker");
-  settings.tracker = parseTracker(settings.tracker, trackerRaw, raw, env);
+  const trackerRaw = parsed.tracker ?? {};
+  settings.tracker = parseTracker(settings.tracker, trackerRaw, env);
 
-  const pollingRaw = getRecord(raw, "polling");
+  const pollingRaw = parsed.polling ?? {};
   settings.polling.intervalMs = positiveInt(
-    getAny(pollingRaw, "interval_ms", "intervalMs"),
+    pollingRaw.intervalMs,
     settings.polling.intervalMs,
     "polling.interval_ms",
   );
 
-  const workspaceRaw = getRecord(raw, "workspace");
+  const workspaceRaw = parsed.workspace ?? {};
   const workspaceRootFallback = settings.workspace.rootExpression ?? settings.workspace.root;
   const workspaceRootExpression = resolveWorkspaceRootExpression(
-    nonEmptyString(env.SYMPHONY_WORKSPACE_ROOT) ?? getAny(workspaceRaw, "root"),
+    nonEmptyString(env.SYMPHONY_WORKSPACE_ROOT) ?? workspaceRaw.root,
     workspaceRootFallback,
     env,
   );
   settings.workspace.rootExpression = workspaceRootExpression;
   settings.workspace.root = expandLocalPath(workspaceRootExpression, env);
 
-  const workerRaw = getRecord(raw, "worker");
-  settings.worker.sshHosts = stringArray(
-    getAny(workerRaw, "ssh_hosts", "sshHosts"),
-    settings.worker.sshHosts,
-  );
+  const workerRaw = parsed.worker ?? {};
+  settings.worker.sshHosts = stringArray(workerRaw.sshHosts, settings.worker.sshHosts);
   settings.worker.sshTimeoutMs = positiveInt(
-    getAny(workerRaw, "ssh_timeout_ms", "sshTimeoutMs"),
+    workerRaw.sshTimeoutMs,
     settings.worker.sshTimeoutMs,
     "worker.ssh_timeout_ms",
   );
-  const hostCap = getAny(workerRaw, "max_concurrent_agents_per_host", "maxConcurrentAgentsPerHost");
+  const hostCap = workerRaw.maxConcurrentAgentsPerHost;
   if (hostCap !== undefined) {
     settings.worker.maxConcurrentAgentsPerHost = positiveInt(
       hostCap,
@@ -131,37 +343,35 @@ export function parseConfig(
     );
   }
 
-  settings.hooks = parseHooks(settings.hooks, getRecord(raw, "hooks"));
-  settings.agent = parseAgent(settings.agent, getRecord(raw, "agent"));
-  settings.codex = parseCodex(settings.codex, getRecord(raw, "codex"));
-  settings.claude = parseClaude(settings.claude, getRecord(raw, "claude"));
-  settings.agents = parseAgents(getRecord(raw, "agents"), settings.codex, settings.claude);
+  settings.hooks = parseHooks(settings.hooks, parsed.hooks ?? {});
+  settings.agent = parseAgent(settings.agent, parsed.agent ?? {});
+  settings.codex = parseCodex(settings.codex, parsed.codex ?? {});
+  settings.claude = parseClaude(settings.claude, parsed.claude ?? {});
+  settings.agents = parseAgents(parsed.agents ?? {}, settings.codex, settings.claude);
   applyKnownAgentRecords(settings);
 
-  const observabilityRaw = getRecord(raw, "observability");
+  const observabilityRaw = parsed.observability ?? {};
   settings.observability.dashboardEnabled = booleanValue(
-    getAny(observabilityRaw, "dashboard_enabled", "dashboardEnabled"),
+    observabilityRaw.dashboardEnabled,
     settings.observability.dashboardEnabled,
   );
   settings.observability.refreshMs = positiveInt(
-    getAny(observabilityRaw, "refresh_ms", "refreshMs"),
+    observabilityRaw.refreshMs,
     settings.observability.refreshMs,
     "observability.refresh_ms",
   );
   settings.observability.renderIntervalMs = positiveInt(
-    getAny(observabilityRaw, "render_interval_ms", "renderIntervalMs"),
+    observabilityRaw.renderIntervalMs,
     settings.observability.renderIntervalMs,
     "observability.render_interval_ms",
   );
 
-  const serverRaw = getRecord(raw, "server");
-  settings.server.host = stringValue(getAny(serverRaw, "host"), settings.server.host);
-  const port = getAny(serverRaw, "port");
+  const serverRaw = parsed.server ?? {};
+  settings.server.host = stringValue(serverRaw.host, settings.server.host);
+  const port = serverRaw.port;
   if (port !== undefined) settings.server.port = nonNegativeInt(port, "server.port");
 
-  settings.statusOverrides = parseStatusOverrides(
-    getRecord(raw, "status_overrides", "statusOverrides"),
-  );
+  settings.statusOverrides = parseStatusOverrides(parsed.statusOverrides ?? {});
   return settings;
 }
 
@@ -215,41 +425,29 @@ export function normalizeRouteName(value: unknown): string {
 
 function parseTracker(
   defaults: TrackerSettings,
-  trackerRaw: Record<string, unknown>,
-  raw: Record<string, unknown>,
+  trackerRaw: TrackerRaw,
   env: NodeJS.ProcessEnv,
 ): TrackerSettings {
-  const kindRaw = getAny(trackerRaw, "kind");
-  const kind = kindRaw === undefined || kindRaw === null ? defaults.kind : stringValue(kindRaw, "");
-  if (kind !== undefined && kind !== "linear" && kind !== "memory")
-    throw new Error(`unsupported tracker.kind: ${kind}`);
+  const kindRaw = trackerRaw.kind;
+  const kind =
+    kindRaw === undefined || kindRaw === null
+      ? defaults.kind
+      : trackerKindValue(kindRaw, "tracker.kind");
 
-  const apiKey = resolveConfiguredSecret(
-    getAny(trackerRaw, "api_key", "apiKey"),
-    env,
-    "LINEAR_API_KEY",
-  );
-  const projectSlug =
-    resolveEnv(stringValue(getAny(trackerRaw, "project_slug", "projectSlug"), ""), env) ||
-    undefined;
-  const assignee = resolveConfiguredSecret(getAny(trackerRaw, "assignee"), env, "LINEAR_ASSIGNEE");
+  const apiKey = resolveConfiguredSecret(trackerRaw.apiKey, env, "LINEAR_API_KEY");
+  const projectSlug = resolveEnv(stringValue(trackerRaw.projectSlug, ""), env) || undefined;
+  const assignee = resolveConfiguredSecret(trackerRaw.assignee, env, "LINEAR_ASSIGNEE");
 
   return {
     ...defaults,
     kind,
-    endpoint: stringValue(getAny(trackerRaw, "endpoint"), defaults.endpoint),
+    endpoint: stringValue(trackerRaw.endpoint, defaults.endpoint),
     apiKey,
     projectSlug,
     assignee,
-    activeStates: stringArray(
-      getAny(trackerRaw, "active_states", "activeStates"),
-      defaults.activeStates,
-    ),
-    terminalStates: stringArray(
-      getAny(trackerRaw, "terminal_states", "terminalStates"),
-      defaults.terminalStates,
-    ),
-    dispatch: parseDispatch(defaults.dispatch, getRecord(trackerRaw, "dispatch")),
+    activeStates: stringArray(trackerRaw.activeStates, defaults.activeStates),
+    terminalStates: stringArray(trackerRaw.terminalStates, defaults.terminalStates),
+    dispatch: parseDispatch(defaults.dispatch, trackerRaw.dispatch ?? {}),
   };
 }
 
@@ -269,8 +467,8 @@ function resolveWorkspaceRootExpression(
   return nonEmptyString(expandLocalPath(expression, env)) === undefined ? fallback : expression;
 }
 
-function parseDispatch(defaults: TrackerSettings["dispatch"], raw: Record<string, unknown>) {
-  const onlyRoutesRaw = getAny(raw, "only_routes", "onlyRoutes");
+function parseDispatch(defaults: TrackerSettings["dispatch"], raw: DispatchRaw) {
+  const onlyRoutesRaw = raw.onlyRoutes;
   const onlyRoutes =
     onlyRoutesRaw === null
       ? null
@@ -278,54 +476,48 @@ function parseDispatch(defaults: TrackerSettings["dispatch"], raw: Record<string
         ? defaults.onlyRoutes
         : normalizeOnlyRoutes(stringArray(onlyRoutesRaw, []));
   return {
-    acceptUnrouted: booleanValue(
-      getAny(raw, "accept_unrouted", "acceptUnrouted"),
-      defaults.acceptUnrouted,
-    ),
+    acceptUnrouted: booleanValue(raw.acceptUnrouted, defaults.acceptUnrouted),
     onlyRoutes,
-    routeLabelPrefix: stringValue(
-      getAny(raw, "route_label_prefix", "routeLabelPrefix"),
-      defaults.routeLabelPrefix,
-    ).trim(),
+    routeLabelPrefix: stringValue(raw.routeLabelPrefix, defaults.routeLabelPrefix).trim(),
   };
 }
 
-function parseHooks(defaults: HooksSettings, hooksRaw: Record<string, unknown>): HooksSettings {
+function parseHooks(defaults: HooksSettings, hooksRaw: HooksRaw): HooksSettings {
   return {
-    afterCreate: optionalString(getAny(hooksRaw, "after_create", "afterCreate")),
-    beforeRun: optionalString(getAny(hooksRaw, "before_run", "beforeRun")),
-    afterRun: optionalString(getAny(hooksRaw, "after_run", "afterRun")),
-    beforeRemove: optionalString(getAny(hooksRaw, "before_remove", "beforeRemove")),
+    afterCreate: optionalString(hooksRaw.afterCreate),
+    beforeRun: optionalString(hooksRaw.beforeRun),
+    afterRun: optionalString(hooksRaw.afterRun),
+    beforeRemove: optionalString(hooksRaw.beforeRemove),
     timeoutMs: positiveInt(
-      getAny(hooksRaw, "timeout_ms", "timeoutMs"),
+      hooksRaw.timeoutMs,
       defaults.timeoutMs,
       "hooks.timeout_ms",
     ),
   };
 }
 
-function parseAgent(defaults: AgentSettings, agentRaw: Record<string, unknown>): AgentSettings {
-  const kind = stringValue(getAny(agentRaw, "kind"), defaults.kind);
+function parseAgent(defaults: AgentSettings, agentRaw: AgentRaw): AgentSettings {
+  const kind = stringValue(agentRaw.kind, defaults.kind);
 
   return {
     kind,
     maxConcurrentAgents: positiveInt(
-      getAny(agentRaw, "max_concurrent_agents", "maxConcurrentAgents") ?? undefined,
+      agentRaw.maxConcurrentAgents ?? undefined,
       defaults.maxConcurrentAgents,
       "agent.max_concurrent_agents",
     ),
     maxTurns: positiveInt(
-      getAny(agentRaw, "max_turns", "maxTurns"),
+      agentRaw.maxTurns,
       defaults.maxTurns,
       "agent.max_turns",
     ),
     maxRetryBackoffMs: positiveInt(
-      getAny(agentRaw, "max_retry_backoff_ms", "maxRetryBackoffMs") ?? undefined,
+      agentRaw.maxRetryBackoffMs ?? undefined,
       defaults.maxRetryBackoffMs,
       "agent.max_retry_backoff_ms",
     ),
     ensembleSize: positiveInt(
-      getAny(agentRaw, "ensemble_size", "ensembleSize"),
+      agentRaw.ensembleSize,
       defaults.ensembleSize,
       "agent.ensemble_size",
     ),
@@ -344,7 +536,7 @@ function parseAgents(
     if (!normalized) throw new Error("agents names must not be blank");
     const recordRaw = asRecord(value, `agents.${normalized}`);
     const executor = stringValue(
-      getAny(recordRaw, "executor"),
+      recordRaw.executor,
       normalized === "codex" ? "appserver" : "acp",
     );
     const parsed = parseAgentRecordSchema({ ...recordRaw, executor }, `agents.${normalized}`);
@@ -362,9 +554,7 @@ function parseAgentRecordSchema(
 ): Record<string, unknown> {
   const result = agentRecordSchema.safeParse(raw);
   if (result.success) return result.data;
-  throw new Error(
-    `${label} is invalid: ${result.error.issues.map((issue) => issue.message).join(", ")}`,
-  );
+  throw new Error(configErrorMessage(result.error, label));
 }
 
 function parseAgentRecord(
@@ -372,7 +562,7 @@ function parseAgentRecord(
   raw: Record<string, unknown>,
   defaults: { codex: AppServerAgentConfig; claude: AcpAgentConfig },
 ): AgentConfig {
-  const executor = stringValue(getAny(raw, "executor"), name === "codex" ? "appserver" : "acp");
+  const executor = stringValue(raw.executor, name === "codex" ? "appserver" : "acp");
   if (executor === "appserver") return parseAppServerAgent(raw, defaults.codex);
   if (executor === "acp") return parseAcpAgent(raw, defaults.claude, `agents.${name}`);
   throw new Error(`unsupported agents.${name}.executor: ${executor}`);
@@ -393,28 +583,21 @@ function parseAcpAgent(
 ): AcpAgentConfig {
   return {
     executor: "acp",
-    bridgeCommand: stringValue(
-      getAny(raw, "bridge_command", "bridgeCommand", "command"),
-      defaults.bridgeCommand,
-    ),
-    bridgeArgs: stringArray(getAny(raw, "bridge_args", "bridgeArgs"), defaults.bridgeArgs),
-    model: optionalString(getAny(raw, "model")) ?? defaults.model,
-    permissionMode:
-      optionalString(getAny(raw, "permission_mode", "permissionMode")) ?? defaults.permissionMode,
+    bridgeCommand: stringValue(raw.bridgeCommand ?? raw.command, defaults.bridgeCommand),
+    bridgeArgs: stringArray(raw.bridgeArgs, defaults.bridgeArgs),
+    model: optionalString(raw.model) ?? defaults.model,
+    permissionMode: optionalString(raw.permissionMode) ?? defaults.permissionMode,
     turnTimeoutMs: positiveInt(
-      getAny(raw, "turn_timeout_ms", "turnTimeoutMs"),
+      raw.turnTimeoutMs,
       defaults.turnTimeoutMs,
       `${label}.turn_timeout_ms`,
     ),
     stallTimeoutMs: nonNegativeIntWithFallback(
-      getAny(raw, "stall_timeout_ms", "stallTimeoutMs"),
+      raw.stallTimeoutMs,
       defaults.stallTimeoutMs,
       `${label}.stall_timeout_ms`,
     ),
-    strictMcpConfig: booleanValue(
-      getAny(raw, "strict_mcp_config", "strictMcpConfig"),
-      defaults.strictMcpConfig ?? true,
-    ),
+    strictMcpConfig: booleanValue(raw.strictMcpConfig, defaults.strictMcpConfig ?? true),
   };
 }
 
@@ -463,191 +646,133 @@ function applyKnownAgentRecords(settings: Settings): void {
   }
 }
 
-function parseCodex(defaults: CodexSettings, codexRaw: Record<string, unknown>): CodexSettings {
+function parseCodex(defaults: CodexSettings, codexRaw: CodexRaw): CodexSettings {
   return {
-    command: stringValue(getAny(codexRaw, "command"), defaults.command),
-    approvalPolicy:
-      (getAny(codexRaw, "approval_policy", "approvalPolicy") as
-        | string
-        | Record<string, unknown>
-        | undefined) ?? defaults.approvalPolicy,
-    threadSandbox: stringOnly(
-      getAny(codexRaw, "thread_sandbox", "threadSandbox"),
+    command: stringValue(codexRaw.command, defaults.command),
+    approvalPolicy: approvalPolicyValue(
+      codexRaw.approvalPolicy,
+      defaults.approvalPolicy,
+      "codex.approval_policy",
+    ),
+    threadSandbox: sandboxModeValue(
+      codexRaw.threadSandbox,
       defaults.threadSandbox,
       "codex.thread_sandbox",
     ),
     turnSandboxPolicy: optionalMap(
-      getAny(codexRaw, "turn_sandbox_policy", "turnSandboxPolicy"),
+      codexRaw.turnSandboxPolicy,
       defaults.turnSandboxPolicy,
       "codex.turn_sandbox_policy",
     ),
     turnTimeoutMs: positiveInt(
-      getAny(codexRaw, "turn_timeout_ms", "turnTimeoutMs"),
+      codexRaw.turnTimeoutMs,
       defaults.turnTimeoutMs,
       "codex.turn_timeout_ms",
     ),
     readTimeoutMs: positiveInt(
-      getAny(codexRaw, "read_timeout_ms", "readTimeoutMs"),
+      codexRaw.readTimeoutMs,
       defaults.readTimeoutMs,
       "codex.read_timeout_ms",
     ),
     stallTimeoutMs: nonNegativeIntWithFallback(
-      getAny(codexRaw, "stall_timeout_ms", "stallTimeoutMs") ?? undefined,
+      codexRaw.stallTimeoutMs ?? undefined,
       defaults.stallTimeoutMs,
       "codex.stall_timeout_ms",
     ),
   };
 }
 
-function parseClaude(defaults: ClaudeSettings, claudeRaw: Record<string, unknown>): ClaudeSettings {
+function parseClaude(defaults: ClaudeSettings, claudeRaw: ClaudeRaw): ClaudeSettings {
   return {
-    command: stringValue(getAny(claudeRaw, "command"), defaults.command),
-    model: stringValue(getAny(claudeRaw, "model"), defaults.model),
-    permissionMode: stringValue(
-      getAny(claudeRaw, "permission_mode", "permissionMode") ?? undefined,
-      defaults.permissionMode,
-    ),
+    command: stringValue(claudeRaw.command, defaults.command),
+    model: stringValue(claudeRaw.model, defaults.model),
+    permissionMode: stringValue(claudeRaw.permissionMode ?? undefined, defaults.permissionMode),
     turnTimeoutMs: positiveInt(
-      getAny(claudeRaw, "turn_timeout_ms", "turnTimeoutMs") ?? undefined,
+      claudeRaw.turnTimeoutMs ?? undefined,
       defaults.turnTimeoutMs,
       "claude.turn_timeout_ms",
     ),
     stallTimeoutMs: nonNegativeIntWithFallback(
-      getAny(claudeRaw, "stall_timeout_ms", "stallTimeoutMs") ?? undefined,
+      claudeRaw.stallTimeoutMs ?? undefined,
       defaults.stallTimeoutMs,
       "claude.stall_timeout_ms",
     ),
-    strictMcpConfig: booleanValue(
-      getAny(claudeRaw, "strict_mcp_config", "strictMcpConfig") ?? undefined,
-      defaults.strictMcpConfig,
-    ),
+    strictMcpConfig: booleanValue(claudeRaw.strictMcpConfig ?? undefined, defaults.strictMcpConfig),
   };
 }
 
-function parseStatusOverrides(raw: Record<string, unknown>): Map<string, PartialRuntimeSettings> {
+function parseStatusOverrides(raw: StatusOverridesRaw): Map<string, PartialRuntimeSettings> {
   const overrides = new Map<string, PartialRuntimeSettings>();
 
   for (const [stateName, value] of Object.entries(raw)) {
     const normalizedState = normalizeStateName(stateName);
     if (!normalizedState) throw new Error("status_overrides state names must not be blank");
-    const stateRaw = asRecord(value, `status_overrides.${normalizedState}`);
-
-    const unsupported = Object.keys(stateRaw).filter(
-      (key) => !["agent", "codex", "claude"].includes(key),
-    );
-    if (unsupported.length > 0) {
-      throw new Error(
-        `status_overrides.${normalizedState} contains unsupported keys: ${unsupported.join(", ")}`,
-      );
-    }
 
     const next: PartialRuntimeSettings = {};
-    if (stateRaw.agent !== undefined)
-      next.agent = parsePartialAgent(asRecord(stateRaw.agent, "agent"));
-    if (stateRaw.codex !== undefined)
-      next.codex = parsePartialCodex(asRecord(stateRaw.codex, "codex"));
-    if (stateRaw.claude !== undefined)
-      next.claude = parsePartialClaude(asRecord(stateRaw.claude, "claude"));
+    if (value.agent !== undefined) next.agent = parsePartialAgent(value.agent);
+    if (value.codex !== undefined) next.codex = parsePartialCodex(value.codex);
+    if (value.claude !== undefined) next.claude = parsePartialClaude(value.claude);
     overrides.set(normalizedState, next);
   }
 
   return overrides;
 }
 
-function parsePartialAgent(raw: Record<string, unknown>): Partial<AgentSettings> {
-  const allowed = [
-    "kind",
-    "max_concurrent_agents",
-    "maxConcurrentAgents",
-    "max_turns",
-    "maxTurns",
-    "max_retry_backoff_ms",
-    "maxRetryBackoffMs",
-    "ensemble_size",
-    "ensembleSize",
-  ];
-  rejectUnknown(raw, allowed, "status_overrides.*.agent");
+function parsePartialAgent(raw: Partial<AgentRaw>): Partial<AgentSettings> {
   const next: Partial<AgentSettings> = {};
-  const kind = getAny(raw, "kind");
+  const kind = raw.kind;
   if (kind !== undefined) {
     next.kind = stringValue(kind, "");
   }
-  putPositive(raw, next, "max_concurrent_agents", "maxConcurrentAgents", "maxConcurrentAgents");
-  putPositive(raw, next, "max_turns", "maxTurns", "maxTurns");
-  putPositive(raw, next, "max_retry_backoff_ms", "maxRetryBackoffMs", "maxRetryBackoffMs");
-  putPositive(raw, next, "ensemble_size", "ensembleSize", "ensembleSize");
+  putPositive(raw, next, "maxConcurrentAgents", "maxConcurrentAgents");
+  putPositive(raw, next, "maxTurns", "maxTurns");
+  putPositive(raw, next, "maxRetryBackoffMs", "maxRetryBackoffMs");
+  putPositive(raw, next, "ensembleSize", "ensembleSize");
   return next;
 }
 
-function parsePartialCodex(raw: Record<string, unknown>): Partial<CodexSettings> {
-  const allowed = [
-    "command",
-    "approval_policy",
-    "approvalPolicy",
-    "thread_sandbox",
-    "threadSandbox",
-    "turn_sandbox_policy",
-    "turnSandboxPolicy",
-    "turn_timeout_ms",
-    "turnTimeoutMs",
-    "read_timeout_ms",
-    "readTimeoutMs",
-    "stall_timeout_ms",
-    "stallTimeoutMs",
-  ];
-  rejectUnknown(raw, allowed, "status_overrides.*.codex");
+function parsePartialCodex(raw: Partial<CodexRaw>): Partial<CodexSettings> {
   const next: Partial<CodexSettings> = {};
-  if (getAny(raw, "command") !== undefined) next.command = stringValue(getAny(raw, "command"), "");
-  if (getAny(raw, "approval_policy", "approvalPolicy") !== undefined) {
-    next.approvalPolicy = getAny(raw, "approval_policy", "approvalPolicy") as
-      | string
-      | Record<string, unknown>;
+  if (raw.command !== undefined) next.command = stringValue(raw.command, "");
+  if (raw.approvalPolicy !== undefined) {
+    next.approvalPolicy = approvalPolicyValue(
+      raw.approvalPolicy,
+      "never",
+      "status_overrides.*.codex.approval_policy",
+    );
   }
-  if (getAny(raw, "thread_sandbox", "threadSandbox") !== undefined) {
-    next.threadSandbox = stringOnly(
-      getAny(raw, "thread_sandbox", "threadSandbox"),
-      "",
+  if (raw.threadSandbox !== undefined) {
+    next.threadSandbox = sandboxModeValue(
+      raw.threadSandbox,
+      "workspace-write",
       "status_overrides.*.codex.thread_sandbox",
     );
   }
-  if (getAny(raw, "turn_sandbox_policy", "turnSandboxPolicy") !== undefined) {
+  if (raw.turnSandboxPolicy !== undefined) {
     next.turnSandboxPolicy = optionalMap(
-      getAny(raw, "turn_sandbox_policy", "turnSandboxPolicy"),
+      raw.turnSandboxPolicy,
       null,
       "status_overrides.*.codex.turn_sandbox_policy",
     );
   }
-  putPositive(raw, next, "turn_timeout_ms", "turnTimeoutMs", "turnTimeoutMs");
-  putPositive(raw, next, "read_timeout_ms", "readTimeoutMs", "readTimeoutMs");
-  putNonNegative(raw, next, "stall_timeout_ms", "stallTimeoutMs", "stallTimeoutMs");
+  putPositive(raw, next, "turnTimeoutMs", "turnTimeoutMs");
+  putPositive(raw, next, "readTimeoutMs", "readTimeoutMs");
+  putNonNegative(raw, next, "stallTimeoutMs", "stallTimeoutMs");
   return next;
 }
 
-function parsePartialClaude(raw: Record<string, unknown>): Partial<ClaudeSettings> {
-  const allowed = [
-    "command",
-    "model",
-    "permission_mode",
-    "permissionMode",
-    "turn_timeout_ms",
-    "turnTimeoutMs",
-    "stall_timeout_ms",
-    "stallTimeoutMs",
-    "strict_mcp_config",
-    "strictMcpConfig",
-  ];
-  rejectUnknown(raw, allowed, "status_overrides.*.claude");
+function parsePartialClaude(raw: Partial<ClaudeRaw>): Partial<ClaudeSettings> {
   const next: Partial<ClaudeSettings> = {};
-  if (getAny(raw, "command") !== undefined) next.command = stringValue(getAny(raw, "command"), "");
-  if (getAny(raw, "model") !== undefined) next.model = stringValue(getAny(raw, "model"), "");
-  if (getAny(raw, "permission_mode", "permissionMode") !== undefined) {
-    next.permissionMode = stringValue(getAny(raw, "permission_mode", "permissionMode"), "");
+  if (raw.command !== undefined) next.command = stringValue(raw.command, "");
+  if (raw.model !== undefined) next.model = stringValue(raw.model, "");
+  if (raw.permissionMode !== undefined) {
+    next.permissionMode = stringValue(raw.permissionMode, "");
   }
-  if (getAny(raw, "strict_mcp_config", "strictMcpConfig") !== undefined) {
-    next.strictMcpConfig = booleanValue(getAny(raw, "strict_mcp_config", "strictMcpConfig"), true);
+  if (raw.strictMcpConfig !== undefined) {
+    next.strictMcpConfig = booleanValue(raw.strictMcpConfig, true);
   }
-  putPositive(raw, next, "turn_timeout_ms", "turnTimeoutMs", "turnTimeoutMs");
-  putNonNegative(raw, next, "stall_timeout_ms", "stallTimeoutMs", "stallTimeoutMs");
+  putPositive(raw, next, "turnTimeoutMs", "turnTimeoutMs");
+  putNonNegative(raw, next, "stallTimeoutMs", "stallTimeoutMs");
   return next;
 }
 
@@ -720,22 +845,100 @@ function deepMerge(
   return out;
 }
 
-function getRecord(raw: Record<string, unknown>, ...keys: string[]): Record<string, unknown> {
-  const value = getAny(raw, ...keys);
-  if (value === undefined || value === null) return {};
-  return asRecord(value, keys[0] ?? "value");
-}
-
 function asRecord(value: unknown, label: string): Record<string, unknown> {
   if (!isPlainRecord(value)) throw new Error(`${label} must be a map`);
   return value;
 }
 
-function getAny(raw: Record<string, unknown>, ...keys: string[]): unknown {
-  for (const key of keys) {
-    if (Object.prototype.hasOwnProperty.call(raw, key)) return raw[key];
+function parseWorkflowConfig(raw: Record<string, unknown>): WorkflowConfigRaw {
+  const result = workflowConfigSchema.safeParse(raw);
+  if (result.success) return result.data;
+  throw new Error(configErrorMessage(result.error));
+}
+
+function configErrorMessage(error: z.ZodError, baseLabel?: string): string {
+  const issue = error.issues[0];
+  if (!issue) return `${baseLabel ?? "workflow"} is invalid`;
+  const label = pathLabel(issue.path, baseLabel);
+  if (issue.code === "unrecognized_keys") {
+    return `${label} contains unsupported keys: ${issue.keys.join(", ")}`;
   }
-  return undefined;
+  if (issue.code === "invalid_type") {
+    return `${label} must be a map`;
+  }
+  return `${label} is invalid: ${issue.message}`;
+}
+
+function pathLabel(pathSegments: readonly (string | number | symbol)[], baseLabel?: string): string {
+  const suffix = pathSegments.map(String).join(".");
+  if (suffix && baseLabel) return `${baseLabel}.${suffix}`;
+  if (suffix) return suffix;
+  return baseLabel ?? "workflow";
+}
+
+function normalizeWorkflowConfig(value: unknown): unknown {
+  if (!isPlainRecord(value)) return value;
+  const raw = normalizeAliases(value, { status_overrides: "statusOverrides" });
+  const normalized: Record<string, unknown> = { ...raw };
+
+  normalizeNested(normalized, "tracker", trackerAliases);
+  normalizeNested(normalized, "polling", pollingAliases);
+  normalizeNested(normalized, "workspace", workspaceAliases);
+  normalizeNested(normalized, "worker", workerAliases);
+  normalizeNested(normalized, "hooks", hooksAliases);
+  normalizeNested(normalized, "agent", agentAliases);
+  normalizeNested(normalized, "codex", codexAliases);
+  normalizeNested(normalized, "claude", claudeAliases);
+  normalizeNested(normalized, "observability", observabilityAliases);
+  normalizeNested(normalized, "server", {});
+  normalizeNested(normalized, "logging", loggingAliases);
+
+  if (isPlainRecord(normalized.tracker)) {
+    normalizeNested(normalized.tracker, "dispatch", dispatchAliases);
+  }
+  if (isPlainRecord(normalized.agents)) {
+    normalized.agents = Object.fromEntries(
+      Object.entries(normalized.agents).map(([name, agent]) => [
+        name,
+        isPlainRecord(agent) ? normalizeAliases(agent, agentRecordAliases) : agent,
+      ]),
+    );
+  }
+  if (isPlainRecord(normalized.statusOverrides)) {
+    normalized.statusOverrides = Object.fromEntries(
+      Object.entries(normalized.statusOverrides).map(([state, override]) => {
+        if (!isPlainRecord(override)) return [state, override];
+        const normalizedOverride: Record<string, unknown> = { ...override };
+        normalizeNested(normalizedOverride, "agent", agentAliases);
+        normalizeNested(normalizedOverride, "codex", codexAliases);
+        normalizeNested(normalizedOverride, "claude", claudeAliases);
+        return [state, normalizedOverride];
+      }),
+    );
+  }
+  return normalized;
+}
+
+function normalizeNested(
+  raw: Record<string, unknown>,
+  key: string,
+  aliases: Record<string, string>,
+): void {
+  if (isPlainRecord(raw[key])) raw[key] = normalizeAliases(raw[key], aliases);
+}
+
+function normalizeAliases(
+  raw: Record<string, unknown>,
+  aliases: Record<string, string>,
+): Record<string, unknown> {
+  const out: Record<string, unknown> = { ...raw };
+  for (const [alias, canonical] of Object.entries(aliases)) {
+    if (Object.prototype.hasOwnProperty.call(raw, alias)) {
+      out[canonical] = raw[alias];
+      delete out[alias];
+    }
+  }
+  return out;
 }
 
 function stringValue(value: unknown, fallback: string): string {
@@ -747,6 +950,35 @@ function stringOnly(value: unknown, fallback: string, label: string): string {
   if (value === undefined || value === null) return fallback;
   if (typeof value !== "string") throw new Error(`${label} must be a string`);
   return value;
+}
+
+function trackerKindValue(value: unknown, label: string): TrackerKind {
+  if (typeof value !== "string") throw new Error(`${label} must be a string`);
+  if (isOneOf(value, TRACKER_KINDS)) return value;
+  throw new Error(`unsupported ${label}: ${value}`);
+}
+
+function approvalPolicyValue(
+  value: unknown,
+  fallback: CodexSettings["approvalPolicy"],
+  label: string,
+): CodexSettings["approvalPolicy"] {
+  if (value === undefined || value === null) return fallback;
+  if (isPlainRecord(value)) return value;
+  if (typeof value !== "string") throw new Error(`${label} must be a string or map`);
+  if (isOneOf(value, CODEX_APPROVAL_POLICY_NAMES)) return value;
+  throw new Error(`unsupported ${label}: ${value}`);
+}
+
+function sandboxModeValue(
+  value: unknown,
+  fallback: CodexSettings["threadSandbox"],
+  label: string,
+): CodexSettings["threadSandbox"] {
+  if (value === undefined || value === null) return fallback;
+  if (typeof value !== "string") throw new Error(`${label} must be a string`);
+  if (isOneOf(value, CODEX_SANDBOX_MODES)) return value;
+  throw new Error(`unsupported ${label}: ${value}`);
 }
 
 function optionalMap(
@@ -847,31 +1079,30 @@ function wholeEnvName(value: string): string | null {
 function putPositive<T extends object>(
   raw: Record<string, unknown>,
   target: T,
-  snake: string,
-  camel: string,
+  key: string,
   property: keyof T,
 ): void {
-  const value = getAny(raw, snake, camel);
+  const value = raw[key];
   if (value !== undefined) target[property] = positiveInt(value, 1, String(property)) as T[keyof T];
 }
 
 function putNonNegative<T extends object>(
   raw: Record<string, unknown>,
   target: T,
-  snake: string,
-  camel: string,
+  key: string,
   property: keyof T,
 ): void {
-  const value = getAny(raw, snake, camel);
+  const value = raw[key];
   if (value !== undefined) target[property] = nonNegativeInt(value, String(property)) as T[keyof T];
-}
-
-function rejectUnknown(raw: Record<string, unknown>, allowed: string[], label: string): void {
-  const unknown = Object.keys(raw).filter((key) => !allowed.includes(key));
-  if (unknown.length > 0)
-    throw new Error(`${label} contains unsupported keys: ${unknown.join(", ")}`);
 }
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isOneOf<const Values extends readonly string[]>(
+  value: string,
+  values: Values,
+): value is Values[number] {
+  return (values as readonly string[]).includes(value);
 }

@@ -120,6 +120,18 @@ test("standalone Claude MCP server preserves route and JSON-RPC error contracts"
       id: 10,
       error: { code: -32601, message: "Method not found: tools/missing" },
     });
+
+    const invalidParams = await postMcp(
+      server.url("/claude-mcp"),
+      { jsonrpc: "2.0", id: 11, method: "tools/call", params: { arguments: {} } },
+      200,
+      token,
+    );
+    assert.deepEqual(invalidParams, {
+      jsonrpc: "2.0",
+      id: 11,
+      error: { code: -32602, message: "Invalid params" },
+    });
   } finally {
     revokeMcpToken(token);
     await server.stop();
