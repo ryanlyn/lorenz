@@ -10,24 +10,29 @@ import type { SessionUpdate } from "../spec/session.js";
 import { executeTool, toolSpecs } from "../tools.js";
 import { shellEscape, startSshProcess } from "../ssh.js";
 import { validateWorkspaceCwd } from "../workspace.js";
+import {
+  CodexNdjsonMessageReader,
+  CodexNdjsonMessageWriter,
+} from "./codexJsonRpcTransport.js";
 import { JsonLineProcess } from "./jsonLineProcess.js";
 import { match, P } from "ts-pattern";
+import {
+  CancellationTokenSource,
+  ResponseError,
+  createMessageConnection,
+  type MessageConnection,
+} from "vscode-jsonrpc";
 import { z } from "zod";
-
-interface PendingRequest {
-  resolve: (value: unknown) => void;
-  reject: (error: Error) => void;
-  timer: NodeJS.Timeout;
-}
 
 export interface CodexSession extends AgentSession {
   process: JsonLineProcess;
+  connection: MessageConnection;
   threadId: string;
   settings: Settings;
   workspace: string;
   onUpdate?: ((update: AgentUpdate) => void) | undefined;
-  pending: Map<number, PendingRequest>;
-  nextId: number;
+  inboundRequests: Map<string, Array<Record<string, unknown> & { method: string }>>;
+  exitMessage?: string | undefined;
 }
 
 export class CodexAppServerExecutor implements AgentExecutor {
@@ -54,9 +59,31 @@ export class CodexAppServerExecutor implements AgentExecutor {
           ),
         )
       : new JsonLineProcess(input.settings.codex.command, workspace);
-    const session: CodexSession = {
+    let session!: CodexSession;
+    const reader = new CodexNdjsonMessageReader(process.child.stdout, {
+      requestIdOffset: 1,
+      onMalformedLine: (line) => {
+        if (protocolMessageCandidate(line)) {
+          this.emit(session, { type: "malformed", message: line, timestamp: new Date() });
+        } else {
+          session.onUpdate?.({ type: "stderr", message: line, timestamp: new Date() });
+        }
+      },
+      onNotification: (message) => this.handleNotification(session, message),
+      onRequest: (message) => {
+        const queue = session.inboundRequests.get(message.method) ?? [];
+        queue.push(message);
+        session.inboundRequests.set(message.method, queue);
+      },
+    });
+    const connection = createMessageConnection(
+      reader,
+      new CodexNdjsonMessageWriter(process.child.stdin, { requestIdOffset: 1 }),
+    );
+    session = {
       agentKind: "codex",
       process,
+      connection,
       threadId: "",
       settings: input.settings,
       workspace,
@@ -64,29 +91,23 @@ export class CodexAppServerExecutor implements AgentExecutor {
       resumeId: input.resumeId ?? null,
       executorPid: process.child.pid === undefined ? null : String(process.child.pid),
       onUpdate: input.onUpdate,
-      pending: new Map(),
-      nextId: 1,
-      stop: () => process.stop(),
+      inboundRequests: new Map(),
+      stop: async () => {
+        connection.dispose();
+        await process.stop();
+      },
     };
 
-    process.onJson((value) => this.handleMessage(session, value));
+    this.registerConnectionHandlers(session);
+    connection.listen();
+
     process.onStderr((line) => {
       session.onUpdate?.({ type: "stderr", message: line, timestamp: new Date() });
     });
-    process.onMalformed((line) => {
-      if (protocolMessageCandidate(line)) {
-        this.emit(session, { type: "malformed", message: line, timestamp: new Date() });
-      } else {
-        session.onUpdate?.({ type: "stderr", message: line, timestamp: new Date() });
-      }
-    });
     process.onExit((code, signal) => {
       const message = `codex app-server exited${code === null ? "" : ` with status ${code}`}${signal ? ` signal ${signal}` : ""}`;
-      for (const [id, pending] of session.pending.entries()) {
-        session.pending.delete(id);
-        clearTimeout(pending.timer);
-        pending.reject(new Error(message));
-      }
+      session.exitMessage = message;
+      connection.dispose();
       this.emit(session, { type: "process_exit", message, timestamp: new Date() });
     });
 
@@ -98,7 +119,7 @@ export class CodexAppServerExecutor implements AgentExecutor {
         version: "0.1.0",
       },
     });
-    process.send({ method: "initialized", params: {} });
+    await connection.sendNotification("initialized", {});
 
     const threadResult = input.resumeId
       ? await this.request(session, "thread/resume", {
@@ -205,39 +226,73 @@ export class CodexAppServerExecutor implements AgentExecutor {
     method: string,
     params: Record<string, unknown>,
   ): Promise<unknown> {
-    const id = session.nextId;
-    session.nextId += 1;
+    if (!canWriteToProcess(session.process)) {
+      return Promise.reject(new Error(`codex send failed for ${method}: process unavailable`));
+    }
 
-    return new Promise<unknown>((resolve, reject) => {
-      const timer = setTimeout(() => {
-        session.pending.delete(id);
-        reject(new Error(`codex read timeout waiting for ${method}`));
-      }, session.settings.codex.readTimeoutMs);
+    const source = new CancellationTokenSource();
+    const cleanParams = Object.fromEntries(
+      Object.entries(params).filter(([, value]) => value !== undefined),
+    );
+    let timedOut = false;
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      source.cancel();
+    }, session.settings.codex.readTimeoutMs);
 
-      session.pending.set(id, { resolve, reject, timer });
-      const cleanParams = Object.fromEntries(
-        Object.entries(params).filter(([, value]) => value !== undefined),
-      );
-      if (!session.process.send({ id, method, params: cleanParams })) {
-        session.pending.delete(id);
-        clearTimeout(timer);
-        reject(new Error(`codex send failed for ${method}: process unavailable`));
-      }
+    return session.connection
+      .sendRequest(method, cleanParams, source.token)
+      .catch((error: unknown) => {
+        if (timedOut) throw new Error(`codex read timeout waiting for ${method}`);
+        if (session.exitMessage) throw new Error(session.exitMessage);
+        if (error instanceof ResponseError) throw new Error(JSON.stringify(error.toJson()));
+        throw error;
+      })
+      .finally(() => {
+        clearTimeout(timeout);
+        source.dispose();
+      });
+  }
+
+  private registerConnectionHandlers(session: CodexSession): void {
+    for (const method of approvalRequestMethods) {
+      session.connection.onRequest(method, () => {
+        const message = this.consumeInboundRequest(session, method);
+        return this.handleApprovalRequest(session, message, method);
+      });
+    }
+
+    for (const method of userInputRequestMethods) {
+      session.connection.onRequest(method, () => {
+        const message = this.consumeInboundRequest(session, method);
+        return this.handleUserInputRequest(session, message);
+      });
+    }
+
+    session.connection.onRequest("item/tool/call", async () => {
+      const message = this.consumeInboundRequest(session, "item/tool/call");
+      return this.handleDynamicToolCall(session, message);
+    });
+
+    session.connection.onRequest((method) => {
+      const message = this.consumeInboundRequest(session, method);
+      this.emit(session, { type: "notification", message, timestamp: new Date() });
+      return unresolvedRequest();
     });
   }
 
-  private handleMessage(session: CodexSession, value: unknown): void {
+  private consumeInboundRequest(
+    session: CodexSession,
+    method: string,
+  ): Record<string, unknown> & { method: string } {
+    const queue = session.inboundRequests.get(method);
+    const message = queue?.shift();
+    if (queue && queue.length === 0) session.inboundRequests.delete(method);
+    return message ?? { method };
+  }
+
+  private handleNotification(session: CodexSession, value: unknown): void {
     if (!isRecord(value)) return;
-    const id = typeof value.id === "number" ? value.id : null;
-    if (id !== null && session.pending.has(id)) {
-      const pending = session.pending.get(id);
-      if (!pending) return;
-      session.pending.delete(id);
-      clearTimeout(pending.timer);
-      if (value.error) pending.reject(new Error(JSON.stringify(value.error)));
-      else pending.resolve(value.result ?? {});
-      return;
-    }
 
     const parsed = codexNotificationSchema.safeParse(value);
     const method = parsed.success ? parsed.data.method : readString(value.method);
@@ -300,30 +355,31 @@ export class CodexAppServerExecutor implements AgentExecutor {
     session: CodexSession,
     value: Record<string, unknown>,
     method: string,
-  ): void {
-    const id = typeof value.id === "number" || typeof value.id === "string" ? value.id : null;
+  ): Record<string, string> | Promise<never> {
     if (!autoApproveRequests(session)) {
       this.emit(session, {
         type: "approval_required",
         message: value,
         timestamp: new Date(),
       });
-      return;
+      return unresolvedRequest();
     }
     const decision =
       method === "execCommandApproval" || method === "applyPatchApproval"
         ? "approved_for_session"
         : "acceptForSession";
-    const sent = id !== null && session.process.send({ id, result: { decision } });
     this.emit(session, {
-      type: sent ? "approval_auto_approved" : "approval_reply_failed",
+      type: "approval_auto_approved",
       message: { request: value, decision },
       timestamp: new Date(),
     });
+    return { decision };
   }
 
-  private handleUserInputRequest(session: CodexSession, value: Record<string, unknown>): void {
-    const id = typeof value.id === "number" || typeof value.id === "string" ? value.id : null;
+  private handleUserInputRequest(
+    session: CodexSession,
+    value: Record<string, unknown>,
+  ): { answers: UserInputAnswers } | Promise<never> {
     const answers = autoApproveRequests(session)
       ? autoUserInputAnswers(value)
       : nonInteractiveUserInputAnswers(value);
@@ -333,21 +389,20 @@ export class CodexAppServerExecutor implements AgentExecutor {
         message: value,
         timestamp: new Date(),
       });
-      return;
+      return unresolvedRequest();
     }
-    const sent = id !== null && session.process.send({ id, result: { answers } });
     this.emit(session, {
-      type: sent ? "tool_input_auto_answered" : "tool_input_reply_failed",
+      type: "tool_input_auto_answered",
       message: { request: value, answers },
       timestamp: new Date(),
     });
+    return { answers };
   }
 
   private async handleDynamicToolCall(
     session: CodexSession,
     value: Record<string, unknown>,
-  ): Promise<void> {
-    const id = typeof value.id === "number" || typeof value.id === "string" ? value.id : null;
+  ): Promise<DynamicToolWireResult> {
     const params = isRecord(value.params) ? value.params : {};
     const toolName = readString(params.name) ?? readString(params.tool);
     const args = isRecord(params.arguments) ? params.arguments : {};
@@ -361,21 +416,18 @@ export class CodexAppServerExecutor implements AgentExecutor {
       toolResult.result === undefined
         ? (toolResult.error ?? "")
         : JSON.stringify(toolResult.result);
-    const wireResult = {
+    const wireResult: DynamicToolWireResult = {
       success: toolResult.success,
       output,
       contentItems: [{ type: "inputText", text: output }],
     };
-
-    if (id !== null) {
-      session.process.send({ id, result: wireResult });
-    }
 
     this.emit(session, {
       type: wireResult.success ? "tool_call_completed" : "tool_call_failed",
       message: { request: value, result: wireResult },
       timestamp: new Date(),
     });
+    return wireResult;
   }
 
   private emit(session: CodexSession, update: AgentUpdate): void {
@@ -513,8 +565,22 @@ function autoApproveRequests(session: CodexSession): boolean {
 
 type UserInputAnswers = Record<string, { answers: string[] }>;
 
+interface DynamicToolWireResult {
+  success: boolean;
+  output: string;
+  contentItems: Array<{ type: "inputText"; text: string }>;
+}
+
 const nonInteractiveToolInputAnswer =
   "Unable to provide interactive input in this non-interactive Symphony run.";
+
+function unresolvedRequest(): Promise<never> {
+  return new Promise<never>(() => {});
+}
+
+function canWriteToProcess(process: JsonLineProcess): boolean {
+  return process.child.stdin.writable && process.child.exitCode === null && !process.child.killed;
+}
 
 function autoUserInputAnswers(value: Record<string, unknown>): UserInputAnswers {
   const params = isRecord(value.params) ? value.params : {};

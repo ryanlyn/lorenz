@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import path from "node:path";
 import { test } from "node:test";
 import { CodexAppServerExecutor, parseConfig } from "../src/index.js";
 import { initGitRepo, sampleIssue, tempDir } from "./helpers.js";
@@ -10,6 +11,7 @@ test("live Codex app-server resume smoke", { timeout: 240_000, skip: !runLive },
   await initGitRepo(workspace);
 
   const settings = parseConfig({
+    workspace: { root: path.dirname(workspace) },
     codex: {
       command: process.env.SYMPHONY_TS_CODEX_COMMAND ?? "codex app-server",
       approval_policy: "never",

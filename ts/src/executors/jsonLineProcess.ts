@@ -1,5 +1,6 @@
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { StringDecoder } from "node:string_decoder";
+import { execa } from "execa";
 
 export class JsonLineProcess {
   readonly child: ChildProcessWithoutNullStreams;
@@ -15,10 +16,13 @@ export class JsonLineProcess {
   constructor(command: string | ChildProcessWithoutNullStreams, cwd?: string) {
     this.child =
       typeof command === "string"
-        ? spawn("bash", ["-lc", command], {
-            cwd,
-            stdio: ["pipe", "pipe", "pipe"],
-          })
+        ? (execa("bash", ["-lc", command], {
+            ...(cwd === undefined ? {} : { cwd }),
+            stdin: "pipe",
+            stdout: "pipe",
+            stderr: "pipe",
+            reject: false,
+          }) as unknown as ChildProcessWithoutNullStreams)
         : command;
 
     this.child.stdout.on("data", (chunk) => {

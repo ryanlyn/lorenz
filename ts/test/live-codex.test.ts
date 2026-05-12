@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import path from "node:path";
 import { test } from "node:test";
 import { CodexAppServerExecutor, parseConfig } from "../src/index.js";
 import { sampleIssue, tempDir } from "./helpers.js";
@@ -9,8 +10,10 @@ test(
   async () => {
     const workspace = await tempDir("symphony-ts-live-codex");
     const settings = parseConfig({
+      workspace: { root: path.dirname(workspace) },
       codex: {
         command: process.env.SYMPHONY_TS_CODEX_COMMAND ?? "codex app-server",
+        approval_policy: "never",
         turn_timeout_ms: 180_000,
         read_timeout_ms: 30_000,
       },
