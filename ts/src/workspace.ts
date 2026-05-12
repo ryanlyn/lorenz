@@ -1,8 +1,8 @@
-import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { runSsh, shellEscape } from "./ssh.js";
 import type { HooksSettings, Issue, Settings } from "./types.js";
+import { execa } from "execa";
 
 const remoteWorkspaceMarker = "__SYMPHONY_WORKSPACE__";
 
@@ -158,33 +158,16 @@ export async function runHook(
 ): Promise<void> {
   if (workerHost) return runRemoteHook(workerHost, cwd, command, hooks);
 
-  await new Promise<void>((resolve, reject) => {
-    const child = spawn("bash", ["-lc", command], {
-      cwd,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    let output = "";
-    const timer = setTimeout(() => {
-      child.kill("SIGKILL");
-      reject(new Error(`hook timed out after ${hooks.timeoutMs}ms`));
-    }, hooks.timeoutMs);
-
-    child.stdout.on("data", (chunk) => {
-      output += chunk.toString();
-    });
-    child.stderr.on("data", (chunk) => {
-      output += chunk.toString();
-    });
-    child.on("error", (error) => {
-      clearTimeout(timer);
-      reject(error);
-    });
-    child.on("close", (code) => {
-      clearTimeout(timer);
-      if (code === 0) resolve();
-      else reject(new Error(`hook failed with status ${code}: ${output.trim()}`));
-    });
+  const result = await execa("bash", ["-lc", command], {
+    cwd,
+    timeout: hooks.timeoutMs,
+    all: true,
+    reject: false,
+    stdin: "ignore",
   });
+  if (result.timedOut) throw new Error(`hook timed out after ${hooks.timeoutMs}ms`);
+  if (result.exitCode !== 0)
+    throw new Error(`hook failed with status ${result.exitCode}: ${(result.all ?? "").trim()}`);
 }
 
 export function ensureInsideRoot(target: string, root: string): void {

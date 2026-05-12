@@ -43,6 +43,7 @@
   "dependencies": {
     "@agentclientprotocol/sdk": "^0.21.0",
     "acpx": "^0.7.0",
+    "execa": "^9.6.1",
     "ink": "^7.0.1",
     "liquidjs": "^10.21.1",
     "pino": "^9.14.0",

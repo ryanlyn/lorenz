@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { once } from "node:events";
 import { Readable, Writable } from "node:stream";
 import {
@@ -22,6 +22,7 @@ import { acquireAgentMcpEndpoint, type AgentMcpEndpointLease } from "../mcp/agen
 import { actionForStopReason } from "../policies/stopReasonPolicy.js";
 import { shellEscape, startSshProcess } from "../ssh.js";
 import { validateWorkspaceCwd } from "../workspace.js";
+import { execa } from "execa";
 import { match } from "ts-pattern";
 import type {
   AcpAgentConfig,
@@ -476,7 +477,13 @@ function startBridgeProcess(
   if (workerHost) {
     return startSshProcess(workerHost, `cd ${shellEscape(workspace)} && ${command}`);
   }
-  return spawn("bash", ["-lc", command], { cwd: workspace, stdio: ["pipe", "pipe", "pipe"] });
+  return execa("bash", ["-lc", command], {
+    cwd: workspace,
+    stdin: "pipe",
+    stdout: "pipe",
+    stderr: "pipe",
+    reject: false,
+  }) as unknown as ChildProcessWithoutNullStreams;
 }
 
 function wireProcessEvents(session: AcpSession): void {

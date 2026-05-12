@@ -1,5 +1,6 @@
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import path from "node:path";
+import { execa } from "execa";
+import type { ChildProcessWithoutNullStreams } from "node:child_process";
 
 export interface SshRunOptions {
   timeoutMs?: number | undefined;
@@ -26,43 +27,35 @@ export async function runSsh(
   if (!Number.isInteger(timeoutMs) || timeoutMs <= 0)
     throw new Error(`invalid_ssh_timeout: ${timeoutMs}`);
 
-  return new Promise<SshRunResult>((resolve, reject) => {
-    const child = spawn("ssh", sshArgs(host, command), { stdio: ["ignore", "pipe", "pipe"] });
-    let stdout = "";
-    let stderr = "";
-    let settled = false;
-    const timer = setTimeout(() => {
-      if (settled) return;
-      settled = true;
-      child.kill("SIGKILL");
-      reject(new Error(`ssh_timeout: ${host} ${timeoutMs}`));
-    }, timeoutMs);
-
-    child.stdout.on("data", (chunk) => {
-      stdout += chunk.toString();
+  try {
+    const result = await execa("ssh", sshArgs(host, command), {
+      timeout: timeoutMs,
+      reject: false,
+      ...(options.stderrToStdout ? { all: true } : {}),
+      stdin: "ignore",
+      stripFinalNewline: false,
     });
-    child.stderr.on("data", (chunk) => {
-      const text = chunk.toString();
-      if (options.stderrToStdout) stdout += text;
-      else stderr += text;
-    });
-    child.on("error", (error: NodeJS.ErrnoException) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      reject(new Error(error.code === "ENOENT" ? "ssh_not_found" : error.message));
-    });
-    child.on("close", (status) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      resolve({ stdout, stderr, status: status ?? 0 });
-    });
-  });
+    if ((result as { code?: string }).code === "ENOENT") throw new Error("ssh_not_found");
+    if (result.timedOut) throw new Error(`ssh_timeout: ${host} ${timeoutMs}`);
+    return {
+      stdout: options.stderrToStdout ? (result.all ?? "") : result.stdout,
+      stderr: options.stderrToStdout ? "" : result.stderr,
+      status: result.exitCode ?? 0,
+    };
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT") throw new Error("ssh_not_found");
+    throw error;
+  }
 }
 
 export function startSshProcess(host: string, command: string): ChildProcessWithoutNullStreams {
-  return spawn("ssh", sshArgs(host, command), { stdio: ["pipe", "pipe", "pipe"] });
+  return execa("ssh", sshArgs(host, command), {
+    stdin: "pipe",
+    stdout: "pipe",
+    stderr: "pipe",
+    reject: false,
+  }) as unknown as ChildProcessWithoutNullStreams;
 }
 
 export function startReverseTunnel(
@@ -71,9 +64,12 @@ export function startReverseTunnel(
   localHost: string,
   localPort: number,
 ): ChildProcessWithoutNullStreams {
-  return spawn("ssh", reverseTunnelArgs(host, remotePort, localHost, localPort), {
-    stdio: ["pipe", "pipe", "pipe"],
-  });
+  return execa("ssh", reverseTunnelArgs(host, remotePort, localHost, localPort), {
+    stdin: "pipe",
+    stdout: "pipe",
+    stderr: "pipe",
+    reject: false,
+  }) as unknown as ChildProcessWithoutNullStreams;
 }
 
 export async function writeRemoteFile(
