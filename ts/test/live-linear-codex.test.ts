@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import path from "node:path";
 import { test } from "node:test";
 import { CodexAppServerExecutor, executeTool, LinearClient, parseConfig } from "../src/index.js";
 import type { AgentUpdate } from "../src/index.js";
@@ -13,8 +14,10 @@ test(
     assert.ok(process.env.LINEAR_API_KEY, "LINEAR_API_KEY is required for live Linear E2E");
 
     const marker = `TS_LINEAR_CODEX_E2E_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const workspace = await tempDir("symphony-ts-live-linear-codex");
     const settings = parseConfig(
       {
+        workspace: { root: path.dirname(workspace) },
         tracker: {
           kind: "linear",
           api_key: "$LINEAR_API_KEY",
@@ -134,7 +137,7 @@ test(
 
       const unsupportedTool = await executeTool("not_a_real_tool", {}, settings);
       assert.equal(unsupportedTool.success, false);
-      assert.match(unsupportedTool.error ?? "", /unsupported tool/);
+      assert.match(unsupportedTool.error ?? "", /Unsupported tool/);
 
       const invalidGraphql = await executeTool(
         "linear_graphql",
@@ -142,9 +145,9 @@ test(
         settings,
       );
       assert.equal(invalidGraphql.success, false);
-      assert.equal(invalidGraphql.error, "linear_graphql_errors");
+      assert.equal(invalidGraphql.error, undefined);
+      assert.match(JSON.stringify(invalidGraphql.result), /definitelyNotAField/);
 
-      const workspace = await tempDir("symphony-ts-live-linear-codex");
       const executor = new CodexAppServerExecutor();
       const updates: AgentUpdate[] = [];
       const session = await executor.startSession({
@@ -185,10 +188,12 @@ Do not edit files.
         activeAfterClose.some((issue) => issue.id === created.id),
         false,
       );
+      await client.archiveIssue(created.id);
       issueId = null;
     } finally {
       if (issueId) {
         await client.updateIssueState(issueId, done.id);
+        await client.archiveIssue(issueId);
       }
     }
   },

@@ -286,6 +286,20 @@ export class LinearClient {
     );
   }
 
+  async archiveIssue(issueId: string): Promise<void> {
+    const data = await this.graphql<{
+      issueArchive: { success: boolean };
+    }>(
+      `mutation SymphonyTsArchiveIssue($id: String!) {
+        issueArchive(id: $id) {
+          success
+        }
+      }`,
+      { id: issueId },
+    );
+    if (!data.issueArchive.success) throw new Error("linear issueArchive failed");
+  }
+
   private requiredProjectSlug(): string {
     if (!this.settings.tracker.projectSlug) throw new Error("tracker.project_slug is required");
     return this.settings.tracker.projectSlug;

@@ -289,6 +289,26 @@ test("Linear fetchIssuesByIds returns empty without touching the network", async
   assert.equal(calls.length, 0);
 });
 
+test("Linear archiveIssue archives by id and reports failed payloads", async () => {
+  const calls: FetchCall[] = [];
+  await new LinearClient(
+    settings(),
+    fetchSequence(jsonResponse({ data: { issueArchive: { success: true } } }), calls),
+  ).archiveIssue("issue-1");
+
+  assert.match(String(calls[0]?.body.query), /issueArchive/);
+  assert.deepEqual(calls[0]?.body.variables, { id: "issue-1" });
+
+  await assert.rejects(
+    () =>
+      new LinearClient(
+        settings(),
+        fetchSequence(jsonResponse({ data: { issueArchive: { success: false } } })),
+      ).archiveIssue("issue-2"),
+    /linear issueArchive failed/,
+  );
+});
+
 function settings() {
   return parseConfig(
     {
