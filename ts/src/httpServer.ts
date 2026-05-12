@@ -1,4 +1,7 @@
-import http, { type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { serve } from "@hono/node-server";
+import type { ServerType } from "@hono/node-server";
+import { Hono, type Context } from "hono";
+import { streamSSE } from "hono/streaming";
 import { validMcpToken } from "./mcpAuth.js";
 import { issuePayload, runsPayload, statePayload, type PresenterParams } from "./presenter.js";
 import { executeTool, toolSpecs } from "./tools.js";
@@ -21,58 +24,30 @@ export async function startObservabilityServer(
   runtime: SymphonyRuntime,
   options: ObservabilityServerOptions,
 ): Promise<ObservabilityServerHandle> {
-  const server = http.createServer((request, response) => {
-    handleRequest(runtime, request, response);
-  });
-
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(options.port, options.host, () => {
-      server.off("error", reject);
-      resolve();
-    });
-  });
-
-  const address = server.address();
-  const port = typeof address === "object" && address !== null ? address.port : options.port;
-  return {
-    host: options.host,
-    port,
-    url(path = "/"): string {
-      return `http://${urlHost(options.host)}:${port}${path}`;
-    },
-    stop: () => stopServer(server),
-  };
+  return startHonoServer(buildObservabilityApp(runtime), options);
 }
 
 export async function startClaudeMcpServer(
   settings: Settings,
   options: ObservabilityServerOptions,
 ): Promise<ObservabilityServerHandle> {
-  const server = http.createServer((request, response) => {
-    const method = request.method ?? "GET";
-    const parsedUrl = new URL(request.url ?? "/", "http://127.0.0.1");
-    if (parsedUrl.pathname === "/claude-mcp") {
-      void handleClaudeMcp(settings, request, response);
-      return;
-    }
-    respondError(
-      response,
-      method === "GET" ? 404 : 405,
-      method === "GET" ? "not_found" : "method_not_allowed",
-      method === "GET" ? "Route not found" : "Method not allowed",
-    );
-  });
+  return startHonoServer(buildClaudeMcpApp(settings), options);
+}
 
+async function startHonoServer(
+  app: Hono,
+  options: ObservabilityServerOptions,
+): Promise<ObservabilityServerHandle> {
+  let server!: ServerType;
   await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(options.port, options.host, () => {
+    server = serve({ fetch: app.fetch, hostname: options.host, port: options.port }, () => {
       server.off("error", reject);
       resolve();
     });
+    server.once("error", reject);
   });
-
-  const address = server.address();
+  const activeServer = server;
+  const address = activeServer.address();
   const port = typeof address === "object" && address !== null ? address.port : options.port;
   return {
     host: options.host,
@@ -80,114 +55,113 @@ export async function startClaudeMcpServer(
     url(path = "/"): string {
       return `http://${urlHost(options.host)}:${port}${path}`;
     },
-    stop: () => stopServer(server),
+    stop: () => stopServer(activeServer),
   };
 }
 
-function handleRequest(
-  runtime: SymphonyRuntime,
-  request: IncomingMessage,
-  response: ServerResponse,
-): void {
-  const method = request.method ?? "GET";
-  const parsedUrl = new URL(request.url ?? "/", "http://127.0.0.1");
-  const path = parsedUrl.pathname;
+function buildObservabilityApp(runtime: SymphonyRuntime): Hono {
+  const app = new Hono();
+  const settings = runtimeSettings(runtime);
+  if (settings) mountClaudeMcp(app, settings);
 
-  if (path === "/" && method === "GET") {
-    respondHtml(response, dashboardHtml(runtime));
-    return;
-  }
+  app.get("/", () => htmlResponse(dashboardHtml(runtime)));
+  app.all("/", () => errorResponse(405, "method_not_allowed", "Method not allowed"));
 
-  if (path === "/" && method !== "GET") {
-    respondError(response, 405, "method_not_allowed", "Method not allowed");
-    return;
-  }
-
-  if (path === "/claude-mcp") {
-    void handleClaudeMcp(runtime.workflow.settings, request, response);
-    return;
-  }
-
-  if (path === "/api/v1/state") {
-    if (method !== "GET") {
-      respondError(response, 405, "method_not_allowed", "Method not allowed");
-      return;
-    }
+  app.get("/api/v1/state", () => {
     const snapshot = snapshotResult(runtime);
     if (snapshot.status !== "ok") {
-      respondJson(response, 200, {
+      return jsonResponse({
         generated_at: new Date().toISOString(),
         error: observabilityErrorBody(snapshot.status),
       });
-      return;
     }
-    respondJson(response, 200, statePayload(snapshot.snapshot));
-    return;
-  }
+    return jsonResponse(statePayload(snapshot.snapshot));
+  });
+  app.all("/api/v1/state", () => errorResponse(405, "method_not_allowed", "Method not allowed"));
 
-  if (path === "/api/v1/events") {
-    if (method !== "GET") {
-      respondError(response, 405, "method_not_allowed", "Method not allowed");
-      return;
-    }
-    handleStateEvents(runtime, request, response);
-    return;
-  }
+  app.get("/api/v1/events", (c) => stateEventsResponse(c, runtime));
+  app.all("/api/v1/events", () => errorResponse(405, "method_not_allowed", "Method not allowed"));
 
-  if (path === "/api/v1/runs") {
-    if (method !== "GET") {
-      respondError(response, 405, "method_not_allowed", "Method not allowed");
-      return;
-    }
+  app.get("/api/v1/runs", (c) => {
     const snapshot = snapshotResult(runtime);
     if (snapshot.status !== "ok") {
-      respondError(response, 503, snapshot.status, observabilityErrorBody(snapshot.status).message);
-      return;
+      return errorResponse(503, snapshot.status, observabilityErrorBody(snapshot.status).message);
     }
-    const result = runsPayload(snapshot.snapshot, paramsFromSearch(parsedUrl.searchParams));
+    const result = runsPayload(snapshot.snapshot, paramsFromSearch(new URL(c.req.url).searchParams));
     if (result.status === "run_not_found") {
-      respondError(response, 404, "run_not_found", "Run not found");
-      return;
+      return errorResponse(404, "run_not_found", "Run not found");
     }
-    respondJson(response, 200, result.payload);
-    return;
-  }
+    return jsonResponse(result.payload);
+  });
+  app.all("/api/v1/runs", () => errorResponse(405, "method_not_allowed", "Method not allowed"));
 
-  if (path === "/api/v1/refresh") {
-    if (method !== "POST") {
-      respondError(response, 405, "method_not_allowed", "Method not allowed");
-      return;
-    }
+  app.post("/api/v1/refresh", () => {
     try {
-      respondJson(response, 202, runtime.requestRefresh());
+      return jsonResponse(runtime.requestRefresh(), 202);
     } catch {
-      respondError(response, 503, "orchestrator_unavailable", "Orchestrator is unavailable");
+      return errorResponse(503, "orchestrator_unavailable", "Orchestrator is unavailable");
     }
-    return;
-  }
+  });
+  app.all("/api/v1/refresh", () =>
+    errorResponse(405, "method_not_allowed", "Method not allowed"),
+  );
 
-  const issueMatch = path.match(/^\/api\/v1\/([^/]+)$/);
-  if (issueMatch) {
-    if (method !== "GET") {
-      respondError(response, 405, "method_not_allowed", "Method not allowed");
-      return;
-    }
-    const issueIdentifier = decodeURIComponent(issueMatch[1] ?? "");
+  app.get("/api/v1/:identifier", (c) => {
+    const issueIdentifier = decodeURIComponent(c.req.param("identifier"));
     const snapshot = snapshotResult(runtime);
     if (snapshot.status !== "ok") {
-      respondError(response, 404, "issue_not_found", "Issue not found");
-      return;
+      return errorResponse(404, "issue_not_found", "Issue not found");
     }
     const result = issuePayload(snapshot.snapshot, issueIdentifier);
     if (result.status === "issue_not_found") {
-      respondError(response, 404, "issue_not_found", "Issue not found");
+      return errorResponse(404, "issue_not_found", "Issue not found");
+    }
+    return jsonResponse(result.payload);
+  });
+  app.all("/api/v1/:identifier", () =>
+    errorResponse(405, "method_not_allowed", "Method not allowed"),
+  );
+
+  app.notFound(() => errorResponse(404, "not_found", "Route not found"));
+  return app;
+}
+
+function runtimeSettings(runtime: SymphonyRuntime): Settings | null {
+  return (runtime as unknown as { workflow?: { settings?: Settings } }).workflow?.settings ?? null;
+}
+
+function buildClaudeMcpApp(settings: Settings): Hono {
+  const app = new Hono();
+  mountClaudeMcp(app, settings);
+  app.notFound((c) =>
+    c.req.method === "GET"
+      ? errorResponse(404, "not_found", "Route not found")
+      : errorResponse(405, "method_not_allowed", "Method not allowed"),
+  );
+  return app;
+}
+
+function mountClaudeMcp(app: Hono, settings: Settings): void {
+  app.use("/claude-mcp", async (c, next) => {
+    if (c.req.method !== "POST") {
+      await next();
       return;
     }
-    respondJson(response, 200, result.payload);
-    return;
-  }
-
-  respondError(response, 404, "not_found", "Route not found");
+    if (!authorizedMcpHeader(c.req.header("authorization"))) {
+      return jsonResponse(
+        {
+          error: {
+            code: "unauthorized",
+            message: "Missing or invalid MCP bearer token",
+          },
+        },
+        401,
+      );
+    }
+    await next();
+  });
+  app.post("/claude-mcp", (c) => handleClaudeMcp(settings, c));
+  app.all("/claude-mcp", () => errorResponse(405, "method_not_allowed", "Method not allowed"));
 }
 
 function dashboardHtml(runtime: SymphonyRuntime): string {
@@ -299,41 +273,38 @@ function dashboardHtml(runtime: SymphonyRuntime): string {
 </html>`;
 }
 
-function handleStateEvents(
-  runtime: SymphonyRuntime,
-  request: IncomingMessage,
-  response: ServerResponse,
-): void {
-  response.writeHead(200, {
-    "content-type": "text/event-stream; charset=utf-8",
-    "cache-control": "no-cache, no-transform",
-    connection: "keep-alive",
-  });
-  response.write(": connected\n\n");
-
-  let unsubscribe: (() => void) | null = null;
-  const cleanup = () => {
-    unsubscribe?.();
-    unsubscribe = null;
-    if (!response.writableEnded) response.end();
-  };
-  try {
-    unsubscribe = runtime.subscribe((snapshot) => {
+function stateEventsResponse(c: Context, runtime: SymphonyRuntime): Response {
+  const response = streamSSE(
+    c,
+    async (stream) => {
+      await stream.write(": connected\n\n");
+      let unsubscribe: (() => void) | null = null;
+      const aborted = new Promise<void>((resolve) => stream.onAbort(resolve));
       try {
-        response.write(`event: state\ndata: ${JSON.stringify(statePayload(snapshot))}\n\n`);
-      } catch {
-        cleanup();
+        unsubscribe = runtime.subscribe((snapshot) => {
+          void stream
+            .writeSSE({ event: "state", data: JSON.stringify(statePayload(snapshot)) })
+            .catch(() => stream.abort());
+        });
+      } catch (error) {
+        await stream.writeSSE({
+          event: "error",
+          data: JSON.stringify(observabilityErrorBody(observabilityErrorCode(error))),
+        });
       }
-    });
-  } catch (error) {
-    response.write(
-      `event: error\ndata: ${JSON.stringify(observabilityErrorBody(observabilityErrorCode(error)))}\n\n`,
-    );
-  }
-
-  request.on("close", cleanup);
-  request.on("error", cleanup);
-  response.on("error", cleanup);
+      await aborted;
+      unsubscribe?.();
+    },
+    async (error, stream) => {
+      await stream.writeSSE({
+        event: "error",
+        data: JSON.stringify(observabilityErrorBody(observabilityErrorCode(error))),
+      });
+    },
+  );
+  response.headers.set("content-type", "text/event-stream; charset=utf-8");
+  response.headers.set("cache-control", "no-cache, no-transform");
+  return response;
 }
 
 function metricCard(label: string, value: unknown): string {
@@ -409,63 +380,55 @@ function formatValue(value: unknown): string {
   return String(value);
 }
 
-function respondJson(response: ServerResponse, status: number, body: unknown): void {
-  response.writeHead(status, { "content-type": "application/json; charset=utf-8" });
-  response.end(JSON.stringify(body));
+function jsonResponse(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "content-type": "application/json; charset=utf-8" },
+  });
 }
 
-function respondHtml(response: ServerResponse, body: string): void {
-  response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
-  response.end(body);
+function htmlResponse(body: string): Response {
+  return new Response(body, {
+    status: 200,
+    headers: { "content-type": "text/html; charset=utf-8" },
+  });
 }
 
-function respondError(
-  response: ServerResponse,
-  status: number,
-  code: string,
-  message: string,
-): void {
-  respondJson(response, status, { error: { code, message } });
+function errorResponse(status: number, code: string, message: string): Response {
+  return jsonResponse({ error: { code, message } }, status);
 }
 
-async function handleClaudeMcp(
-  settings: Settings,
-  request: IncomingMessage,
-  response: ServerResponse,
-): Promise<void> {
-  if ((request.method ?? "GET") !== "POST") {
-    respondError(response, 405, "method_not_allowed", "Method not allowed");
-    return;
-  }
-  if (!authorizedMcpRequest(request)) {
-    respondJson(response, 401, {
-      error: {
-        code: "unauthorized",
-        message: "Missing or invalid MCP bearer token",
-      },
-    });
-    return;
-  }
-
+async function handleClaudeMcp(settings: Settings, c: Context): Promise<Response> {
   let body: Record<string, unknown>;
   try {
-    body = await requestJson(request);
+    body = await requestJson(c);
   } catch {
-    respondJson(response, 400, {
-      jsonrpc: "2.0",
-      id: null,
-      error: { code: -32700, message: "Parse error" },
-    });
-    return;
+    return jsonResponse(
+      {
+        jsonrpc: "2.0",
+        id: null,
+        error: { code: -32700, message: "Parse error" },
+      },
+      400,
+    );
   }
 
   const mcpResponse = await claudeMcpResponse(settings, body);
   if (mcpResponse === null) {
-    response.writeHead(204);
-    response.end("");
-    return;
+    return new Response("", { status: 204 });
   }
-  respondJson(response, 200, mcpResponse);
+  return jsonResponse(mcpResponse);
+}
+
+async function requestJson(c: Context): Promise<Record<string, unknown>> {
+  const parsed = JSON.parse(await c.req.text()) as unknown;
+  if (!isRecord(parsed)) throw new Error("request body must be an object");
+  return parsed;
+}
+
+function authorizedMcpHeader(authorization: string | undefined): boolean {
+  const match = /^Bearer\s+(.+)$/.exec(authorization ?? "");
+  return validMcpToken(match?.[1]);
 }
 
 async function claudeMcpResponse(
@@ -515,22 +478,6 @@ async function claudeMcpResponse(
   };
 }
 
-function authorizedMcpRequest(request: IncomingMessage): boolean {
-  const authorization = request.headers.authorization;
-  if (!authorization || Array.isArray(authorization)) return false;
-  const match = /^Bearer\s+(.+)$/.exec(authorization);
-  return validMcpToken(match?.[1]);
-}
-
-async function requestJson(request: IncomingMessage): Promise<Record<string, unknown>> {
-  const chunks: Buffer[] = [];
-  for await (const chunk of request)
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-  const parsed = JSON.parse(Buffer.concat(chunks).toString("utf8")) as unknown;
-  if (!isRecord(parsed)) throw new Error("request body must be an object");
-  return parsed;
-}
-
 function snapshotResult(
   runtime: SymphonyRuntime,
 ):
@@ -570,7 +517,7 @@ function paramsFromSearch(searchParams: URLSearchParams): PresenterParams {
   return params;
 }
 
-function stopServer(server: Server): Promise<void> {
+function stopServer(server: ServerType): Promise<void> {
   return new Promise((resolve, reject) => {
     server.close((error) => (error ? reject(error) : resolve()));
   });

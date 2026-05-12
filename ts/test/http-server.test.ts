@@ -8,6 +8,7 @@ import {
   SymphonyRuntime,
 } from "../src/index.js";
 import { startObservabilityServer } from "../src/httpServer.js";
+import { startClaudeMcpServer } from "../src/httpServer.js";
 import { normalizeIssue } from "../src/issue.js";
 import type { WorkflowDefinition } from "../src/types.js";
 
@@ -84,6 +85,43 @@ test("observability HTTP API exposes Elixir-shaped state, issue, runs, refresh, 
     const notFound = await getJson(server.url("/unknown"), 404);
     assert.deepEqual(notFound, { error: { code: "not_found", message: "Route not found" } });
   } finally {
+    await server.stop();
+  }
+});
+
+test("standalone Claude MCP server preserves route and JSON-RPC error contracts", async () => {
+  const workflow = workflowFixture();
+  const server = await startClaudeMcpServer(workflow.settings, { host: "127.0.0.1", port: 0 });
+  const token = issueMcpToken();
+  try {
+    const missing = await getJson(server.url("/missing"), 404);
+    assert.deepEqual(missing, { error: { code: "not_found", message: "Route not found" } });
+
+    const wrongMethod = await getJson(server.url("/claude-mcp"), 405);
+    assert.deepEqual(wrongMethod, {
+      error: { code: "method_not_allowed", message: "Method not allowed" },
+    });
+
+    const badJson = await postRawMcp(server.url("/claude-mcp"), "{", 400, token);
+    assert.deepEqual(badJson, {
+      jsonrpc: "2.0",
+      id: null,
+      error: { code: -32700, message: "Parse error" },
+    });
+
+    const unknownMethod = await postMcp(
+      server.url("/claude-mcp"),
+      { jsonrpc: "2.0", id: 10, method: "tools/missing" },
+      200,
+      token,
+    );
+    assert.deepEqual(unknownMethod, {
+      jsonrpc: "2.0",
+      id: 10,
+      error: { code: -32601, message: "Method not found: tools/missing" },
+    });
+  } finally {
+    revokeMcpToken(token);
     await server.stop();
   }
 });
@@ -254,12 +292,14 @@ function workflowFixture(): WorkflowDefinition {
 async function getJson(url: string, expectedStatus = 200): Promise<any> {
   const response = await fetch(url);
   assert.equal(response.status, expectedStatus);
+  assert.equal(response.headers.get("content-type"), "application/json; charset=utf-8");
   return response.json();
 }
 
 async function postJson(url: string, expectedStatus = 202): Promise<any> {
   const response = await fetch(url, { method: "POST" });
   assert.equal(response.status, expectedStatus);
+  assert.equal(response.headers.get("content-type"), "application/json; charset=utf-8");
   return response.json();
 }
 
@@ -273,12 +313,28 @@ async function postMcp(
   if (token) headers.authorization = `Bearer ${token}`;
   const response = await fetch(url, { method: "POST", headers, body: JSON.stringify(body) });
   assert.equal(response.status, expectedStatus);
+  assert.equal(response.headers.get("content-type"), "application/json; charset=utf-8");
+  return response.json();
+}
+
+async function postRawMcp(
+  url: string,
+  body: string,
+  expectedStatus = 200,
+  token: string | null,
+): Promise<any> {
+  const headers: Record<string, string> = { "content-type": "application/json" };
+  if (token) headers.authorization = `Bearer ${token}`;
+  const response = await fetch(url, { method: "POST", headers, body });
+  assert.equal(response.status, expectedStatus);
+  assert.equal(response.headers.get("content-type"), "application/json; charset=utf-8");
   return response.json();
 }
 
 async function getText(url: string, expectedStatus = 200): Promise<string> {
   const response = await fetch(url);
   assert.equal(response.status, expectedStatus);
+  assert.equal(response.headers.get("content-type"), "text/html; charset=utf-8");
   return response.text();
 }
 
@@ -286,7 +342,8 @@ async function getEventStream(url: string): Promise<string> {
   const controller = new AbortController();
   const response = await fetch(url, { signal: controller.signal });
   assert.equal(response.status, 200);
-  assert.match(response.headers.get("content-type") ?? "", /text\/event-stream/);
+  assert.equal(response.headers.get("content-type"), "text/event-stream; charset=utf-8");
+  assert.equal(response.headers.get("cache-control"), "no-cache, no-transform");
   const reader = response.body?.getReader();
   assert.ok(reader);
   let text = "";
