@@ -1,12 +1,10 @@
-import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { promisify } from "node:util";
+import { execa } from "execa";
 import { runSsh, shellEscape, writeRemoteFile } from "./ssh.js";
 import type { AgentKind, Issue } from "./types.js";
 import { z } from "zod";
 
-const execFileAsync = promisify(execFile);
 const remoteMissingMarker = "__SYMPHONY_RESUME_STATE_MISSING__";
 
 export interface ResumeState {
@@ -112,7 +110,7 @@ export async function resumeStatePath(
         "resume.json",
       );
     }
-    const { stdout } = await execFileAsync("git", ["-C", workspace, "rev-parse", "--git-dir"]);
+    const { stdout } = await execa("git", ["-C", workspace, "rev-parse", "--git-dir"]);
     const gitDir = stdout.trim();
     const absoluteGitDir = path.isAbsolute(gitDir) ? gitDir : path.join(workspace, gitDir);
     return path.join(absoluteGitDir, "symphony", "resume.json");

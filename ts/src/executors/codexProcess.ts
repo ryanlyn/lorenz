@@ -2,15 +2,11 @@ import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { StringDecoder } from "node:string_decoder";
 import { execa } from "execa";
 
-export class JsonLineProcess {
+export class CodexProcess {
   readonly child: ChildProcessWithoutNullStreams;
-  private stdoutBuffer = "";
   private stderrBuffer = "";
-  private readonly stdoutDecoder = new StringDecoder("utf8");
   private readonly stderrDecoder = new StringDecoder("utf8");
-  private lineHandlers = new Set<(value: unknown, raw: string) => void>();
   private stderrHandlers = new Set<(line: string) => void>();
-  private malformedHandlers = new Set<(line: string) => void>();
   private exitHandlers = new Set<(code: number | null, signal: NodeJS.Signals | null) => void>();
 
   constructor(command: string | ChildProcessWithoutNullStreams, cwd?: string) {
@@ -25,24 +21,6 @@ export class JsonLineProcess {
           }) as unknown as ChildProcessWithoutNullStreams)
         : command;
 
-    this.child.stdout.on("data", (chunk) => {
-      this.stdoutBuffer = this.consumeBuffer(
-        this.stdoutBuffer + this.stdoutDecoder.write(chunk),
-        (line) => {
-          try {
-            const decoded = JSON.parse(line) as unknown;
-            for (const handler of this.lineHandlers) handler(decoded, line);
-          } catch {
-            if (this.malformedHandlers.size > 0) {
-              for (const handler of this.malformedHandlers) handler(line);
-            } else {
-              for (const handler of this.stderrHandlers) handler(line);
-            }
-          }
-        },
-      );
-    });
-
     this.child.stderr.on("data", (chunk) => {
       this.stderrBuffer = this.consumeBuffer(
         this.stderrBuffer + this.stderrDecoder.write(chunk),
@@ -53,12 +31,7 @@ export class JsonLineProcess {
     });
 
     this.child.on("close", (code, signal) => {
-      this.stdoutBuffer += this.stdoutDecoder.end();
       this.stderrBuffer += this.stderrDecoder.end();
-      if (this.stdoutBuffer.trim() !== "") {
-        this.emitStdoutLine(this.stdoutBuffer.trimEnd());
-        this.stdoutBuffer = "";
-      }
       if (this.stderrBuffer.trim() !== "") {
         for (const handler of this.stderrHandlers) handler(this.stderrBuffer.trimEnd());
         this.stderrBuffer = "";
@@ -67,34 +40,12 @@ export class JsonLineProcess {
     });
   }
 
-  onJson(handler: (value: unknown, raw: string) => void): void {
-    this.lineHandlers.add(handler);
-  }
-
   onStderr(handler: (line: string) => void): void {
     this.stderrHandlers.add(handler);
   }
 
-  onMalformed(handler: (line: string) => void): void {
-    this.malformedHandlers.add(handler);
-  }
-
   onExit(handler: (code: number | null, signal: NodeJS.Signals | null) => void): void {
     this.exitHandlers.add(handler);
-  }
-
-  send(value: unknown): boolean {
-    if (!this.child.stdin.writable || this.child.exitCode !== null || this.child.killed)
-      return false;
-    try {
-      return this.child.stdin.write(`${JSON.stringify(value)}\n`);
-    } catch {
-      return false;
-    }
-  }
-
-  sendRawLine(value: string): void {
-    this.child.stdin.write(`${value}\n`);
   }
 
   async stop(): Promise<void> {
@@ -120,19 +71,6 @@ export class JsonLineProcess {
       const line = remaining.slice(0, index).trimEnd();
       remaining = remaining.slice(index + 1);
       if (line.trim() !== "") emit(line);
-    }
-  }
-
-  private emitStdoutLine(line: string): void {
-    try {
-      const decoded = JSON.parse(line) as unknown;
-      for (const handler of this.lineHandlers) handler(decoded, line);
-    } catch {
-      if (this.malformedHandlers.size > 0) {
-        for (const handler of this.malformedHandlers) handler(line);
-      } else {
-        for (const handler of this.stderrHandlers) handler(line);
-      }
     }
   }
 }

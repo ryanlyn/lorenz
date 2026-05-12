@@ -14,7 +14,7 @@ import {
   CodexNdjsonMessageReader,
   CodexNdjsonMessageWriter,
 } from "./codexJsonRpcTransport.js";
-import { JsonLineProcess } from "./jsonLineProcess.js";
+import { CodexProcess } from "./codexProcess.js";
 import { match, P } from "ts-pattern";
 import {
   CancellationTokenSource,
@@ -25,7 +25,7 @@ import {
 import { z } from "zod";
 
 export interface CodexSession extends AgentSession {
-  process: JsonLineProcess;
+  process: CodexProcess;
   connection: MessageConnection;
   threadId: string;
   settings: Settings;
@@ -52,13 +52,13 @@ export class CodexAppServerExecutor implements AgentExecutor {
       input.workerHost ?? null,
     );
     const process = input.workerHost
-      ? new JsonLineProcess(
+      ? new CodexProcess(
           startSshProcess(
             input.workerHost,
             `cd ${shellEscape(workspace)} && ${input.settings.codex.command}`,
           ),
         )
-      : new JsonLineProcess(input.settings.codex.command, workspace);
+      : new CodexProcess(input.settings.codex.command, workspace);
     let session!: CodexSession;
     const reader = new CodexNdjsonMessageReader(process.child.stdout, {
       requestIdOffset: 1,
@@ -578,7 +578,7 @@ function unresolvedRequest(): Promise<never> {
   return new Promise<never>(() => {});
 }
 
-function canWriteToProcess(process: JsonLineProcess): boolean {
+function canWriteToProcess(process: CodexProcess): boolean {
   return process.child.stdin.writable && process.child.exitCode === null && !process.child.killed;
 }
 

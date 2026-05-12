@@ -3,7 +3,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { test } from "node:test";
 import { CodexAppServerExecutor, parseConfig, shellEscape } from "../src/index.js";
-import { JsonLineProcess } from "../src/executors/jsonLineProcess.js";
 import type { AgentUpdate } from "../src/index.js";
 import { sampleIssue, tempDir, writeExecutable } from "./helpers.js";
 
@@ -406,33 +405,6 @@ rl.on("line", (line) => {
     updates.some((update) => update.type === "approval_required"),
     false,
   );
-});
-
-test("JsonLineProcess preserves UTF-8 characters split across stdout chunks", async () => {
-  const root = await tempDir("symphony-ts-json-line-utf8");
-  const fake = path.join(root, "fake-json-line-utf8.js");
-  await writeExecutable(
-    fake,
-    `#!/usr/bin/env node
-const payload = Buffer.from(JSON.stringify({ text: "hello 🙂 世界" }) + "\\n");
-process.stdout.write(payload.subarray(0, payload.length - 4));
-setTimeout(() => {
-  process.stdout.write(payload.subarray(payload.length - 4));
-}, 10);
-`,
-  );
-
-  const process = new JsonLineProcess(fake);
-  const values: unknown[] = [];
-  process.onJson((value) => values.push(value));
-  await new Promise<void>((resolve, reject) => {
-    process.onExit((code) => {
-      if (code === 0) resolve();
-      else reject(new Error(`process exited ${code}`));
-    });
-  });
-
-  assert.deepEqual(values, [{ text: "hello 🙂 世界" }]);
 });
 
 test("Codex app-server executor can launch through an SSH worker host", async () => {
