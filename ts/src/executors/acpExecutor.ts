@@ -22,6 +22,7 @@ import { acquireAgentMcpEndpoint, type AgentMcpEndpointLease } from "../mcp/agen
 import { actionForStopReason } from "../policies/stopReasonPolicy.js";
 import { shellEscape, startSshProcess } from "../ssh.js";
 import { validateWorkspaceCwd } from "../workspace.js";
+import { match } from "ts-pattern";
 import type {
   AcpAgentConfig,
   AgentExecutor,
@@ -512,26 +513,21 @@ function clientCapabilities(workerHost: string | null): ClientCapabilities {
 }
 
 function eventTypeForAcpUpdate(update: SessionNotification["update"]): string {
-  switch (update.sessionUpdate) {
-    case "agent_message_chunk":
-      return "assistant_message";
-    case "user_message_chunk":
-      return "user_message";
-    case "agent_thought_chunk":
-      return "agent_thought";
-    case "tool_call":
-      return "tool_use_requested";
-    case "tool_call_update":
-      if (update.status === "completed") return "tool_result";
-      if (update.status === "failed") return "tool_call_failed";
-      return "tool_call_update";
-    case "usage_update":
-      return "usage";
-    case "plan":
-      return "plan";
-    default:
-      return "notification";
-  }
+  return match(update)
+    .with({ sessionUpdate: "agent_message_chunk" }, () => "assistant_message")
+    .with({ sessionUpdate: "user_message_chunk" }, () => "user_message")
+    .with({ sessionUpdate: "agent_thought_chunk" }, () => "agent_thought")
+    .with({ sessionUpdate: "tool_call" }, () => "tool_use_requested")
+    .with({ sessionUpdate: "tool_call_update", status: "completed" }, () => "tool_result")
+    .with({ sessionUpdate: "tool_call_update", status: "failed" }, () => "tool_call_failed")
+    .with({ sessionUpdate: "tool_call_update" }, () => "tool_call_update")
+    .with({ sessionUpdate: "usage_update" }, () => "usage")
+    .with({ sessionUpdate: "plan" }, () => "plan")
+    .with({ sessionUpdate: "available_commands_update" }, () => "notification")
+    .with({ sessionUpdate: "current_mode_update" }, () => "notification")
+    .with({ sessionUpdate: "config_option_update" }, () => "notification")
+    .with({ sessionUpdate: "session_info_update" }, () => "notification")
+    .exhaustive();
 }
 
 function acpProtocolUpdate(
