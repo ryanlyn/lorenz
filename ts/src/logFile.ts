@@ -1,5 +1,7 @@
+import { appendFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import pino, { type Logger } from "pino";
 
 export interface LogFileOptions {
   maxBytes?: number | undefined;
@@ -11,6 +13,8 @@ export function defaultLogFile(root = process.cwd()): string {
   return path.join(root, "log", "symphony.log");
 }
 
+let configuredLogger: { logFile: string; logger: Logger } | null = null;
+
 export async function configureLogFile(
   logFile: string,
   options: LogFileOptions = {},
@@ -20,10 +24,9 @@ export async function configureLogFile(
   try {
     await fs.mkdir(path.dirname(logFile), { recursive: true });
     await rotateIfNeeded(logFile, maxBytes, maxFiles);
-    await fs.appendFile(
-      logFile,
-      `${JSON.stringify({ at: (options.now ?? (() => new Date()))().toISOString(), event: "symphony_ts_started" })}\n`,
-    );
+    const logger = createLogger(logFile, options.now ?? (() => new Date()));
+    configuredLogger = { logFile, logger };
+    logger.info({ event: "symphony_ts_started" });
   } catch (error) {
     process.stderr.write(`warning: log_file_unavailable ${logFile}: ${errorMessage(error)}\n`);
   }
@@ -35,10 +38,31 @@ export async function appendLogEvent(
 ): Promise<void> {
   try {
     await fs.mkdir(path.dirname(logFile), { recursive: true });
-    await fs.appendFile(logFile, `${JSON.stringify(event)}\n`);
+    const logger =
+      configuredLogger?.logFile === logFile
+        ? configuredLogger.logger
+        : createLogger(logFile, () => new Date());
+    logger.info(event);
   } catch (error) {
     process.stderr.write(`warning: log_file_unavailable ${logFile}: ${errorMessage(error)}\n`);
   }
+}
+
+function createLogger(logFile: string, now: () => Date): Logger {
+  return pino(
+    {
+      base: null,
+      timestamp: false,
+    },
+    {
+      write: (line: string) => {
+        const event = JSON.parse(line) as Record<string, unknown>;
+        delete event.level;
+        event.at ??= now().toISOString();
+        appendFileSync(logFile, `${JSON.stringify(event)}\n`);
+      },
+    },
+  );
 }
 
 async function rotateIfNeeded(logFile: string, maxBytes: number, maxFiles: number): Promise<void> {
