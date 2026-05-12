@@ -215,6 +215,24 @@ test("undocumented top-level compatibility keys are ignored", () => {
   assert.equal(settings.hooks.beforeRun, null);
 });
 
+test("known workflow sections reject unsupported nested keys after alias normalization", () => {
+  assert.throws(
+    () =>
+      parseConfig({
+        tracker: { kind: "memory", project_slug: "mono", surprise: true },
+      }),
+    /tracker contains unsupported keys: surprise/,
+  );
+
+  assert.throws(
+    () =>
+      parseConfig({
+        agent: { max_turns: 3, maxTurns: 4, typo: 5 },
+      }),
+    /agent contains unsupported keys: typo/,
+  );
+});
+
 test("status overrides normalize state names and deep merge Codex policy maps", () => {
   const settings = parseConfig({
     status_overrides: {

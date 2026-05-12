@@ -2,6 +2,8 @@ import { serve } from "@hono/node-server";
 import type { ServerType } from "@hono/node-server";
 import { Hono, type Context } from "hono";
 import { streamSSE } from "hono/streaming";
+import { match } from "ts-pattern";
+import { z } from "zod";
 import { validMcpToken } from "./mcpAuth.js";
 import { issuePayload, runsPayload, statePayload, type PresenterParams } from "./presenter.js";
 import { executeTool, toolSpecs } from "./tools.js";
@@ -437,45 +439,76 @@ async function claudeMcpResponse(
 ): Promise<Record<string, unknown> | null> {
   const method = typeof body.method === "string" ? body.method : "";
   const id = body.id ?? null;
-  if (method === "notifications/initialized") return null;
-  if (method === "initialize") {
-    const params = isRecord(body.params) ? body.params : {};
-    return {
-      jsonrpc: "2.0",
-      id,
-      result: {
-        protocolVersion:
-          typeof params.protocolVersion === "string" ? params.protocolVersion : "2025-11-25",
-        capabilities: { tools: {} },
-        serverInfo: { name: "symphony-claude-mcp", version: "0.1.0" },
-      },
-    };
-  }
-  if (method === "tools/list") {
-    return { jsonrpc: "2.0", id, result: { tools: toolSpecs() } };
-  }
-  if (method === "tools/call") {
-    const params = isRecord(body.params) ? body.params : {};
-    const toolName = typeof params.name === "string" ? params.name : "";
-    const args = isRecord(params.arguments) ? params.arguments : {};
-    const result = await executeTool(toolName, args, settings);
-    const payload = result.success
-      ? (result.result ?? {})
-      : (result.result ?? { error: { message: result.error ?? "dynamic tool failed" } });
-    return {
-      jsonrpc: "2.0",
-      id,
-      result: {
-        content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
-        isError: !result.success,
-      },
-    };
-  }
-  return {
-    jsonrpc: "2.0",
-    id,
-    error: { code: -32601, message: `Method not found: ${method}` },
-  };
+  return match(method)
+    .with("notifications/initialized", () => null)
+    .with("initialize", () => {
+      const parsed = mcpInitializeParamsSchema.safeParse(body.params);
+      if (!parsed.success) return jsonRpcError(id, -32602, "Invalid params");
+      return {
+        jsonrpc: "2.0",
+        id,
+        result: {
+          protocolVersion: parsed.data.protocolVersion ?? "2025-11-25",
+          capabilities: { tools: {} },
+          serverInfo: { name: "symphony-claude-mcp", version: "0.1.0" },
+        },
+      };
+    })
+    .with("tools/list", () => ({ jsonrpc: "2.0", id, result: { tools: toolSpecs() } }))
+    .with("tools/call", async () => {
+      const parsed = mcpToolsCallParamsSchema.safeParse(body.params);
+      if (!parsed.success) return jsonRpcError(id, -32602, "Invalid params");
+      const result = await executeTool(parsed.data.name, parsed.data.arguments, settings);
+      const payload = result.success
+        ? (result.result ?? {})
+        : (result.result ?? { error: { message: result.error ?? "dynamic tool failed" } });
+      return {
+        jsonrpc: "2.0",
+        id,
+        result: {
+          content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
+          isError: !result.success,
+        },
+      };
+    })
+    .otherwise(() => jsonRpcError(id, -32601, `Method not found: ${method}`));
+}
+
+const mcpParamsSchema = z.record(z.string(), z.unknown());
+
+const mcpInitializeParamsSchema = z.preprocess(
+  (value) => (isRecord(value) ? value : {}),
+  z
+    .object({
+      protocolVersion: z.string().optional(),
+    })
+    .passthrough(),
+);
+
+const mcpToolsCallParamsSchema = z.preprocess(
+  (value) => (isRecord(value) ? value : {}),
+  z
+    .object({
+      name: z.string().trim().min(1),
+      arguments: z.preprocess(
+        (value) => (isRecord(value) ? value : {}),
+        mcpParamsSchema,
+      ),
+    })
+    .passthrough()
+    .transform((params) => ({
+      ...params,
+      name: params.name.trim(),
+      arguments: params.arguments ?? {},
+    })),
+);
+
+function jsonRpcError(
+  id: unknown,
+  code: number,
+  message: string,
+): Record<string, unknown> {
+  return { jsonrpc: "2.0", id, error: { code, message } };
 }
 
 function snapshotResult(

@@ -67,6 +67,49 @@ rl.on("line", (line) => {
   assert.match(traceText, /"inputSchema"/);
 });
 
+test("Codex app-server executor normalizes token usage notification params", async () => {
+  const root = await tempDir("symphony-ts-codex-usage-params");
+  const fake = path.join(root, "fake-codex-usage-params.js");
+  await writeExecutable(
+    fake,
+    `#!/usr/bin/env node
+const readline = require("readline");
+const rl = readline.createInterface({ input: process.stdin });
+rl.on("line", (line) => {
+  const msg = JSON.parse(line);
+  if (msg.id && msg.method === "initialize") console.log(JSON.stringify({ id: msg.id, result: {} }));
+  if (msg.id && msg.method === "thread/start") console.log(JSON.stringify({ id: msg.id, result: { thread: { id: "thread-usage" } } }));
+  if (msg.id && msg.method === "turn/start") {
+    console.log(JSON.stringify({ id: msg.id, result: { turn: { id: "turn-usage" } } }));
+    console.log(JSON.stringify({ method: "thread/tokenUsage/updated", params: { usage: { prompt_tokens: "7", completion_tokens: "11", total_tokens: "18" } } }));
+    console.log(JSON.stringify({ method: "turn/completed" }));
+  }
+});
+`,
+  );
+
+  const settings = parseConfig({
+    workspace: { root: path.dirname(root) },
+    codex: { command: `${fake} app-server`, turn_timeout_ms: 5_000 },
+  });
+  const updates: AgentUpdate[] = [];
+  const executor = new CodexAppServerExecutor();
+  const session = await executor.startSession({
+    workspace: root,
+    settings,
+    issue: sampleIssue,
+    onUpdate: (update) => updates.push(update),
+  });
+  await executor.runTurn(session, "hello", sampleIssue);
+  await session.stop();
+
+  assert.deepEqual(updates.find((update) => update.type === "usage")?.usage, {
+    inputTokens: 7,
+    outputTokens: 11,
+    totalTokens: 18,
+  });
+});
+
 test("Codex app-server executor answers string-id dynamic Linear tool calls", async () => {
   const root = await tempDir("symphony-ts-codex-tool");
   const fake = path.join(root, "fake-codex-tool.js");

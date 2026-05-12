@@ -403,9 +403,9 @@ export class CodexAppServerExecutor implements AgentExecutor {
     session: CodexSession,
     value: Record<string, unknown>,
   ): Promise<DynamicToolWireResult> {
-    const params = isRecord(value.params) ? value.params : {};
-    const toolName = readString(params.name) ?? readString(params.tool);
-    const args = isRecord(params.arguments) ? params.arguments : {};
+    const params = dynamicToolCallParamsSchema.parse(value.params);
+    const toolName = params.name ?? params.tool ?? null;
+    const args = params.arguments;
 
     const toolResult =
       toolName === null
@@ -466,38 +466,13 @@ function codexProtocolKind(type: string): string {
 }
 
 function extractUsage(value: Record<string, unknown>): Partial<UsageTotals> {
-  const payload = isRecord(value.params) ? value.params : value;
-  const usage = isRecord(payload.usage)
-    ? payload.usage
-    : isRecord(payload.total_token_usage)
-      ? payload.total_token_usage
-      : payload;
+  const result = usageTotalsSchema.safeParse(value);
+  if (!result.success) return {};
   const out: Partial<UsageTotals> = {};
-  const inputTokens = numberFromAny(usage, [
-    "input_tokens",
-    "inputTokens",
-    "input",
-    "prompt_tokens",
-  ]);
-  const outputTokens = numberFromAny(usage, [
-    "output_tokens",
-    "outputTokens",
-    "output",
-    "completion_tokens",
-  ]);
-  const totalTokens = numberFromAny(usage, ["total_tokens", "totalTokens", "total"]);
-  if (inputTokens !== undefined) out.inputTokens = inputTokens;
-  if (outputTokens !== undefined) out.outputTokens = outputTokens;
-  if (totalTokens !== undefined) out.totalTokens = totalTokens;
+  if (result.data.inputTokens !== undefined) out.inputTokens = result.data.inputTokens;
+  if (result.data.outputTokens !== undefined) out.outputTokens = result.data.outputTokens;
+  if (result.data.totalTokens !== undefined) out.totalTokens = result.data.totalTokens;
   return out;
-}
-
-function numberFromAny(raw: Record<string, unknown>, keys: string[]): number | undefined {
-  for (const key of keys) {
-    const value = raw[key];
-    if (typeof value === "number" && Number.isFinite(value)) return value;
-  }
-  return undefined;
 }
 
 function readNestedString(raw: unknown, path: string[]): string | null {
@@ -539,6 +514,86 @@ const codexNotificationSchema = z.discriminatedUnion("method", [
   ...approvalRequestMethods.map(codexMessageSchema),
   ...userInputRequestMethods.map(codexMessageSchema),
 ]);
+
+const rawParamsSchema = z.record(z.string(), z.unknown());
+
+const optionalNonEmptyStringSchema = z.preprocess(
+  (value) => (typeof value === "string" && value.trim() !== "" ? value.trim() : undefined),
+  z.string().optional(),
+);
+
+const usageTotalsSchema = z.preprocess(
+  (value) => {
+    const record = isRecord(value) ? value : {};
+    const payload = isRecord(record.params) ? record.params : record;
+    const usage = isRecord(payload.usage)
+      ? payload.usage
+      : isRecord(payload.total_token_usage)
+        ? payload.total_token_usage
+        : payload;
+    return {
+      inputTokens: tokenNumberFromAny(usage, [
+        "input_tokens",
+        "inputTokens",
+        "input",
+        "prompt_tokens",
+      ]),
+      outputTokens: tokenNumberFromAny(usage, [
+        "output_tokens",
+        "outputTokens",
+        "output",
+        "completion_tokens",
+      ]),
+      totalTokens: tokenNumberFromAny(usage, ["total_tokens", "totalTokens", "total"]),
+    };
+  },
+  z.object({
+    inputTokens: z.number().finite().optional(),
+    outputTokens: z.number().finite().optional(),
+    totalTokens: z.number().finite().optional(),
+  }),
+);
+
+const dynamicToolCallParamsSchema = z.preprocess(
+  (value) => (isRecord(value) ? value : {}),
+  z
+    .object({
+      name: optionalNonEmptyStringSchema,
+      tool: optionalNonEmptyStringSchema,
+      arguments: z.preprocess(
+        (value) => (isRecord(value) ? value : {}),
+        rawParamsSchema,
+      ),
+    })
+    .passthrough()
+    .transform((params) => ({
+      ...params,
+      arguments: params.arguments ?? {},
+    })),
+);
+
+const userInputParamsSchema = z.preprocess(
+  (value) => (isRecord(value) ? value : {}),
+  z
+    .object({
+      questions: z.array(z.unknown()).optional(),
+    })
+    .passthrough()
+    .transform((params) => ({ questions: params.questions ?? [] })),
+);
+
+function tokenNumberFromAny(raw: unknown, keys: string[]): number | undefined {
+  if (!isRecord(raw)) return undefined;
+  for (const key of keys) {
+    const value = raw[key];
+    if (typeof value === "number" && Number.isFinite(value)) return value;
+    if (typeof value === "string" && value.trim() !== "") {
+      const parsed = Number(value);
+      if (Number.isFinite(parsed)) return parsed;
+    }
+  }
+  return undefined;
+}
 
 function readString(value: unknown): string | null {
   return typeof value === "string" && value.trim() !== "" ? value : null;
@@ -583,8 +638,7 @@ function canWriteToProcess(process: CodexProcess): boolean {
 }
 
 function autoUserInputAnswers(value: Record<string, unknown>): UserInputAnswers {
-  const params = isRecord(value.params) ? value.params : {};
-  const questions = Array.isArray(params.questions) ? params.questions : [];
+  const { questions } = userInputParamsSchema.parse(value.params);
   const answers: UserInputAnswers = {};
   for (const question of questions) {
     if (!isRecord(question)) continue;
@@ -602,8 +656,7 @@ function autoUserInputAnswers(value: Record<string, unknown>): UserInputAnswers 
 }
 
 function nonInteractiveUserInputAnswers(value: Record<string, unknown>): UserInputAnswers {
-  const params = isRecord(value.params) ? value.params : {};
-  const questions = Array.isArray(params.questions) ? params.questions : [];
+  const { questions } = userInputParamsSchema.parse(value.params);
   const answers: UserInputAnswers = {};
   for (const question of questions) {
     if (!isRecord(question)) continue;
