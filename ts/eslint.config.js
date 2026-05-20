@@ -8,7 +8,7 @@ export default tseslint.config(
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {
-    files: ["src/**/*.{ts,tsx}", "test/**/*.ts"],
+    files: ["packages/**/*.{ts,tsx}", "apps/**/*.{ts,tsx}", "test/**/*.ts"],
     rules: {
       "no-undef": "off",
       "@typescript-eslint/no-unused-vars": [
@@ -22,7 +22,7 @@ export default tseslint.config(
     },
   },
   {
-    files: ["test/**/*.ts"],
+    files: ["packages/*/test/**/*.ts", "apps/*/test/**/*.ts", "test/**/*.ts"],
     rules: {
       "@typescript-eslint/no-explicit-any": "off",
     },

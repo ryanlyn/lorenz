@@ -1,0 +1,95 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "dist",
+    "tsBuildInfoFile": "dist/tsconfig.tsbuildinfo"
+  },
+  "include": [
+    "src/**/*.ts",
+    "src/**/*.tsx"
+  ],
+  "references": [
+    {
+      "path": "../../packages/acp"
+    },
+    {
+      "path": "../../packages/agent-runner"
+    },
+    {
+      "path": "../../packages/cli-kit"
+    },
+    {
+      "path": "../../packages/codex"
+    },
+    {
+      "path": "../../packages/config"
+    },
+    {
+      "path": "../../packages/dispatch"
+    },
+    {
+      "path": "../../packages/domain"
+    },
+    {
+      "path": "../../packages/humanize"
+    },
+    {
+      "path": "../../packages/ssh"
+    },
+    {
+      "path": "../../packages/workspace"
+    },
+    {
+      "path": "../../packages/issue"
+    },
+    {
+      "path": "../../packages/log-file"
+    },
+    {
+      "path": "../../packages/mcp"
+    },
+    {
+      "path": "../../packages/orchestrator"
+    },
+    {
+      "path": "../../packages/policies"
+    },
+    {
+      "path": "../../packages/presenter"
+    },
+    {
+      "path": "../../packages/projections"
+    },
+    {
+      "path": "../../packages/prompt"
+    },
+    {
+      "path": "../../packages/protocol"
+    },
+    {
+      "path": "../../packages/resume-state"
+    },
+    {
+      "path": "../../packages/retry-scheduler"
+    },
+    {
+      "path": "../../packages/runtime"
+    },
+    {
+      "path": "../../packages/server"
+    },
+    {
+      "path": "../../packages/linear-tracker"
+    },
+    {
+      "path": "../../packages/memory-tracker"
+    },
+    {
+      "path": "../../packages/tui"
+    },
+    {
+      "path": "../../packages/workflow"
+    }
+  ]
+}

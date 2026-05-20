@@ -1,0 +1,41 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "dist",
+    "tsBuildInfoFile": "dist/tsconfig.tsbuildinfo"
+  },
+  "include": [
+    "src/**/*.ts",
+    "src/**/*.tsx"
+  ],
+  "references": [
+    {
+      "path": "../agent-runner"
+    },
+    {
+      "path": "../config"
+    },
+    {
+      "path": "../dispatch"
+    },
+    {
+      "path": "../domain"
+    },
+    {
+      "path": "../issue"
+    },
+    {
+      "path": "../orchestrator"
+    },
+    {
+      "path": "../policies"
+    },
+    {
+      "path": "../projections"
+    },
+    {
+      "path": "../retry-scheduler"
+    }
+  ]
+}

@@ -7,7 +7,7 @@ Elixir code.
 ## Prerequisites
 
 ```sh
-npm install
+pnpm install
 ```
 
 The live Linear paths require `LINEAR_API_KEY`. The live Codex and Claude paths require working
@@ -16,28 +16,38 @@ The live Linear paths require `LINEAR_API_KEY`. The live Codex and Claude paths 
 ## Run
 
 ```sh
-npm run build
-npm start -- WORKFLOW.md
-npm run start:once -- --dry-run --no-tui WORKFLOW.md
-npm run runs -- --port 4000 --failed
+pnpm build
+pnpm start -- WORKFLOW.md
+pnpm start:once -- --dry-run --no-tui WORKFLOW.md
+pnpm runs -- --port 4000 --failed
 ```
 
 Useful development commands:
 
 ```sh
-npm run typecheck
-npm test
-npm run test:live
-npm run test:live:codex
-npm run test:live:codex-resume
-npm run test:live:linear-codex
-npm run test:live:claude
-npm run test:live:ssh
-npm run proof:parity
+pnpm typecheck
+pnpm test
+pnpm test:live
+pnpm test:live:codex
+pnpm test:live:codex-resume
+pnpm test:live:linear-codex
+pnpm test:live:claude
+pnpm test:live:ssh
+pnpm proof:parity
 ```
 
-The package builds a `symphony-ts` binary at `dist/src/bin/symphony-ts.js` and exposes it through the
-package `bin` field. The CLI mirrors the Elixir entrypoint shape:
+## Workspace
+
+The TypeScript port is a pnpm workspace rooted at `ts/`:
+
+- `packages/*` contains the protocol, domain, policies, runtime, adapters, presentation, and
+  infrastructure libraries.
+- `apps/cli` is the composition root and the only binary app.
+- `test/` contains cross-package parity and live tests. Package-owned unit tests live next to their
+  package under `packages/<name>/test/` or `apps/cli/test/`.
+
+The CLI app builds a `symphony-ts` binary at `apps/cli/dist/bin/cli.js` and exposes it through
+`apps/cli/package.json`. The CLI mirrors the Elixir entrypoint shape:
 
 ```sh
 symphony-ts [--once] [--dry-run] [--no-tui] [--port <port>] [--logs-root <path>] [path-to-WORKFLOW.md]
@@ -89,7 +99,7 @@ The workflow files in this directory are byte-identical copies of the Elixir wor
 - `WORKFLOW_ENSEMBLE.md`
 - `WORKFLOW_ALPHA_EVOLVE.md`
 
-`npm test` includes a drift check that compares those files against `../elixir/`.
+`pnpm test` includes a drift check that compares those files against `../elixir/`.
 
 ## Workflow Prompt
 
@@ -141,19 +151,19 @@ observability server.
 The live tests are opt-in and launch the real `codex` and `claude` executables in isolated temporary
 workspaces.
 
-See `LIVE_E2E_MATRIX.md` for the live proof surface and boundaries. `npm run proof:parity` runs the
+See `LIVE_E2E_MATRIX.md` for the live proof surface and boundaries. `pnpm proof:parity` runs the
 full local parity gate from the repo root, including focused Elixir tests, TS tests, build, package
 dry-run, built CLI dry-run, and live canaries unless `SYMPHONY_PARITY_SKIP_LIVE=1` is set.
 
 ## Packaging
 
 ```sh
-npm run build
-npm pack --dry-run
+pnpm build
+pnpm --filter @symphony/cli pack --dry-run
 ```
 
-The package includes the built CLI, this README, the TS changelog, the live E2E matrix, and the
-copied workflow files.
+The CLI app includes the built CLI. Workspace documentation, workflow examples, and parity evidence
+stay at the workspace root.
 
 ## Parity Scope
 

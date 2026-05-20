@@ -1,11 +1,11 @@
-import assert from "node:assert/strict";
+import { assert } from "./assert.js";
 import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import { test } from "node:test";
+import { test } from "vitest";
 import {
   CodexAppServerExecutor,
   createWorkspaceForIssue,
@@ -14,8 +14,8 @@ import {
   runAgentAttempt,
   runSsh,
   shellEscape,
-} from "../src/index.js";
-import type { Issue, WorkflowDefinition } from "../src/index.js";
+} from "@symphony/cli";
+import type { Issue, WorkflowDefinition } from "@symphony/cli";
 import { sampleIssue, tempDir } from "./helpers.js";
 
 const execFileAsync = promisify(execFile);
@@ -38,13 +38,13 @@ test(
       if (!setup.claudeTokenAvailable) {
         if (requireRemoteClaude)
           throw new Error("remote Claude canary requires CLAUDE_CODE_OAUTH_TOKEN");
-        t.diagnostic("remote Claude canary skipped because no Claude OAuth token was supplied");
+        console.warn("remote Claude canary skipped because no Claude OAuth token was supplied");
         return;
       }
       if (!remoteClaudeAcpBridge) {
         if (requireRemoteClaude)
           throw new Error("remote Claude canary requires SYMPHONY_TS_CLAUDE_ACP_BRIDGE_COMMAND");
-        t.diagnostic("remote Claude canary skipped because no Claude ACP bridge was supplied");
+        console.warn("remote Claude canary skipped because no Claude ACP bridge was supplied");
         return;
       }
       await runRemoteClaudeResumeCanary(setup);

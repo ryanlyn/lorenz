@@ -1,7 +1,7 @@
-import assert from "node:assert/strict";
+import { assert } from "./assert.js";
 import fs from "node:fs";
 import path from "node:path";
-import { test } from "node:test";
+import { test } from "vitest";
 
 const repoRoot = path.resolve(import.meta.dirname, "..", "..");
 
@@ -15,7 +15,7 @@ test("parity audit covers every Elixir commit and capability bucket", () => {
 
   assert.equal(inventory.length, 103);
   assert.equal([...audit.matchAll(/^- \[x\] /gm)].length, 103);
-  assert.doesNotMatch(audit, /unreviewed/);
+  assert.notMatch(audit, /unreviewed/);
 
   for (const capability of requiredCapabilities()) {
     assert.match(
@@ -33,7 +33,7 @@ test("parity audit covers every Elixir commit and capability bucket", () => {
       `matrix row for ${capability} should be partial while gap is open`,
     );
   }
-  assert.doesNotMatch(matrix, /\| gap \|/);
+  assert.notMatch(matrix, /\| gap \|/);
 });
 
 function requiredCapabilities(): string[] {

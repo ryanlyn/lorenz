@@ -1,0 +1,9 @@
+import { defineConfig } from "vitest/config";
+
+export default defineConfig({
+  test: {
+    include: ["packages/*/test/**/*.test.ts", "packages/*/test/**/*.test.tsx", "apps/*/test/**/*.test.ts", "test/**/*.test.ts"],
+    sequence: { concurrent: false },
+    testTimeout: 30_000,
+  },
+});

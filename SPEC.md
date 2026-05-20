@@ -91,7 +91,8 @@ Important boundary:
 6. `Agent Runner`
    - Creates workspace.
    - Builds prompt from issue + workflow template.
-   - Launches the coding agent app-server client.
+   - Selects the configured coding-agent backend.
+   - Launches and drives the selected coding-agent session.
    - Streams agent updates back to the orchestrator.
 
 7. `Status Surface` (optional)
@@ -130,7 +131,8 @@ Symphony is easiest to port when kept in these layers:
 - Issue tracker API (Linear for `tracker.kind: linear` in this specification version).
 - Local filesystem for workspaces and logs.
 - Optional workspace population tooling (for example Git CLI, if used).
-- Coding-agent executable that supports JSON-RPC-like app-server mode over stdio.
+- Coding-agent executable. The required backend is Codex app-server mode over stdio. Optional
+  backends may use a different stable CLI protocol, such as Claude Code stream-json mode.
 - Host environment authentication for the issue tracker and coding agent.
 
 ## 4. Core Domain Model
@@ -153,11 +155,18 @@ Fields:
   - Lower numbers are higher priority in dispatch sorting.
 - `state` (string)
   - Current tracker state name.
+- `state_type` (string or null)
+  - Tracker state category when available. Linear exposes values such as `unstarted`; the service
+    uses this to apply blocker rules without hard-coding one state name.
 - `branch_name` (string or null)
   - Tracker-provided branch metadata if available.
 - `url` (string or null)
+- `assignee_id` (string or null)
+  - Tracker user ID when the tracker payload includes an assignee.
 - `labels` (list of strings)
   - Normalized to lowercase.
+- `assigned_to_worker` (boolean)
+  - Whether the issue is routed to this service instance after optional tracker-assignee filtering.
 - `blocked_by` (list of blocker refs)
   - Each blocker ref contains:
     - `id` (string or null)
@@ -219,16 +228,22 @@ State tracked while a coding-agent subprocess is running.
 
 Fields:
 
-- `session_id` (string, `<thread_id>-<turn_id>`)
-- `thread_id` (string)
-- `turn_id` (string)
-- `codex_app_server_pid` (string or null)
-- `last_codex_event` (string/enum or null)
-- `last_codex_timestamp` (timestamp or null)
-- `last_codex_message` (summarized payload)
-- `codex_input_tokens` (integer)
-- `codex_output_tokens` (integer)
-- `codex_total_tokens` (integer)
+- `session_id` (string)
+  - Stable display ID for the active turn/session. Codex commonly composes this as
+    `<thread_id>-<turn_id>`; other backends may expose a native session ID.
+- `agent_kind` (string)
+  - Configured backend name, such as `codex` or `claude`.
+- `resume_id` (string or null)
+  - Backend-specific continuation identifier.
+- `thread_id` (string or null)
+- `turn_id` (string or null)
+- `executor_pid` (string or null)
+- `last_agent_event` (string/enum or null)
+- `last_agent_timestamp` (timestamp or null)
+- `last_agent_message` (summarized payload)
+- `agent_input_tokens` (integer)
+- `agent_output_tokens` (integer)
+- `agent_total_tokens` (integer)
 - `last_reported_input_tokens` (integer)
 - `last_reported_output_tokens` (integer)
 - `last_reported_total_tokens` (integer)
@@ -246,6 +261,9 @@ Fields:
 - `attempt` (integer, 1-based for retry queue)
 - `due_at_ms` (monotonic clock timestamp)
 - `timer_handle` (runtime-specific timer reference)
+- `slot_index` (integer, default `0`)
+- `worker_host` (string or null)
+- `workspace_path` (string or null)
 - `error` (string or null)
 
 #### 4.1.8 Orchestrator Runtime State
@@ -256,12 +274,12 @@ Fields:
 
 - `poll_interval_ms` (current effective poll interval)
 - `max_concurrent_agents` (current effective global concurrency limit)
-- `running` (map `issue_id -> running entry`)
-- `claimed` (set of issue IDs reserved/running/retrying)
+- `running` (map `{issue_id, slot_index} -> running entry`)
+- `claimed` (set of `{issue_id, slot_index}` keys reserved/running/retrying)
 - `retry_attempts` (map `issue_id -> RetryEntry`)
 - `completed` (set of issue IDs; bookkeeping only, not dispatch gating)
-- `codex_totals` (aggregate tokens + runtime seconds)
-- `codex_rate_limits` (latest rate-limit snapshot from agent events)
+- `agent_totals` (aggregate tokens + runtime seconds)
+- `agent_rate_limits` (latest rate-limit snapshot from agent events)
 
 ### 4.2 Stable Identifiers and Normalization Rules
 
@@ -321,20 +339,23 @@ Top-level keys:
 - `tracker`
 - `polling`
 - `workspace`
+- `worker`
 - `hooks`
 - `agent`
 - `codex`
+- `claude`
+- `observability`
+- `server`
+- `status_overrides`
 
 Unknown keys should be ignored for forward compatibility.
 
 Note:
 
 - The workflow front matter is extensible. Optional extensions may define additional top-level keys
-  (for example `server`) without changing the core schema above.
+  without changing the core schema above.
 - Extensions should document their field schema, defaults, validation rules, and whether changes
   apply dynamically or require restart.
-- Common extension: `server.port` (integer) enables the optional HTTP server described in Section
-  13.7.
 
 #### 5.3.1 `tracker` (object)
 
@@ -342,7 +363,9 @@ Fields:
 
 - `kind` (string)
   - Required for dispatch.
-  - Current supported value: `linear`
+  - Required core value: `linear`.
+  - Implementations may also ship a local/test adapter such as `memory` when it returns the same
+    normalized issue shape.
 - `endpoint` (string)
   - Default for `tracker.kind == "linear"`: `https://api.linear.app/graphql`
 - `api_key` (string)
@@ -351,6 +374,11 @@ Fields:
   - If `$VAR_NAME` resolves to an empty string, treat the key as missing.
 - `project_slug` (string)
   - Required for dispatch when `tracker.kind == "linear"`.
+- `assignee` (string, optional)
+  - May be a literal tracker assignee identity or `$VAR_NAME`.
+  - Canonical environment variable for Linear assignee routing: `LINEAR_ASSIGNEE`.
+  - When set, candidate and refresh queries should mark issues assigned to other users as not
+    routed to this worker.
 - `active_states` (list of strings)
   - Default: `Todo`, `In Progress`
 - `terminal_states` (list of strings)
@@ -408,22 +436,43 @@ Fields:
   - Non-positive values should be treated as invalid and fall back to the default.
   - Changes should be re-applied at runtime for future hook executions.
 
-#### 5.3.5 `agent` (object)
+#### 5.3.5 `worker` (object)
 
 Fields:
 
+- `ssh_hosts` (list of strings)
+  - Default: empty list.
+  - Empty means run workers locally.
+- `ssh_timeout_ms` (integer)
+  - Default: `60000`.
+  - Applies to SSH commands used by remote worker setup, execution, file writes, and cleanup.
+- `max_concurrent_agents_per_host` (integer or null)
+  - Optional shared cap for each configured SSH host.
+  - When every configured host is at capacity, dispatch waits instead of falling back to local work.
+
+#### 5.3.6 `agent` (object)
+
+Fields:
+
+- `kind` (string)
+  - Default: `codex`.
+  - Supported core value: `codex`.
+  - Optional supported value: `claude`, when the Claude Code executor profile is implemented.
 - `max_concurrent_agents` (integer or string integer)
   - Default: `10`
   - Changes should be re-applied at runtime and affect subsequent dispatch decisions.
+- `max_turns` (integer or string integer)
+  - Default: `20`.
+  - Maximum number of back-to-back turns in one worker lifetime while the issue remains active.
 - `max_retry_backoff_ms` (integer or string integer)
   - Default: `300000` (5 minutes)
   - Changes should be re-applied at runtime and affect future retry scheduling.
-- `max_concurrent_agents_by_state` (map `state_name -> positive integer`)
-  - Default: empty map.
-  - State keys are normalized (`lowercase`) for lookup.
-  - Invalid entries (non-positive or non-numeric) are ignored.
+- `ensemble_size` (integer)
+  - Default: `1`.
+  - Number of independent slots to dispatch per issue when the issue does not override it with an
+    `ensemble:<n>` label.
 
-#### 5.3.6 `codex` (object)
+#### 5.3.7 `codex` (object)
 
 Fields:
 
@@ -453,6 +502,71 @@ fields locally if they want stricter startup checks.
   - Default: `300000` (5 minutes)
   - If `<= 0`, stall detection is disabled.
 
+#### 5.3.8 `claude` (object)
+
+Fields:
+
+- `command` (string shell command)
+  - Default: `claude`.
+  - Used when `agent.kind == "claude"`.
+- `model` (string)
+  - Default: implementation-defined.
+- `permission_mode` (string)
+  - Default: implementation-defined.
+  - Passed through to Claude Code as its permission mode.
+- `turn_timeout_ms` (integer)
+  - Default: `3600000` (1 hour).
+- `stall_timeout_ms` (integer)
+  - Default: `300000` (5 minutes).
+  - If `<= 0`, stall detection is disabled for Claude runs.
+- `strict_mcp_config` (boolean)
+  - Default: `true`.
+  - When true, launch Claude Code with only the injected MCP configuration.
+
+#### 5.3.9 `observability` (object)
+
+Fields:
+
+- `dashboard_enabled` (boolean)
+  - Default: `true`.
+- `refresh_ms` (integer)
+  - Default: `1000`.
+- `render_interval_ms` (integer)
+  - Default: implementation-defined.
+
+These settings control optional human-readable observability surfaces. They must not affect
+orchestrator correctness.
+
+#### 5.3.10 `server` (object)
+
+Fields:
+
+- `port` (integer or null)
+  - Enables the optional HTTP observability/control server when present.
+  - `0` requests an ephemeral local port.
+- `host` (string)
+  - Default: `127.0.0.1`.
+
+#### 5.3.11 `status_overrides` (object)
+
+`status_overrides` maps normalized tracker state names to partial runtime overrides. It is used for
+state-specific executor selection, concurrency, retry, turn, and backend settings without hard-
+coding behavior in the orchestrator.
+
+Allowed sections per state:
+
+- `agent`
+- `codex`
+- `claude`
+
+Rules:
+
+- State keys are trimmed and lowercased for lookup.
+- Unknown sections or fields are configuration errors.
+- Partial overrides merge into the base settings for that state.
+- Map-valued Codex policy fields (`approval_policy`, `turn_sandbox_policy`) merge deeply so a state
+  can override one nested policy field without replacing the whole policy.
+
 ### 5.4 Prompt Template Contract
 
 The Markdown body of `WORKFLOW.md` is the per-issue prompt template.
@@ -470,6 +584,10 @@ Template input variables:
 - `attempt` (integer or null)
   - `null`/absent on first attempt.
   - Integer on retry or continuation run.
+- `ensemble` (object)
+  - `enabled` (boolean): true when `ensemble.size > 1`.
+  - `slot_index` (integer): zero-based slot number for the current worker.
+  - `size` (integer): total slots for the current issue run.
 
 Fallback prompt behavior:
 
@@ -519,7 +637,7 @@ Dynamic reload is required:
 - The software should watch `WORKFLOW.md` for changes.
 - On change, it should re-read and re-apply workflow config and prompt template without restart.
 - The software should attempt to adjust live behavior to the new config (for example polling
-  cadence, concurrency limits, active/terminal states, codex settings, workspace paths/hooks, and
+  cadence, concurrency limits, active/terminal states, backend settings, workspace paths/hooks, and
   prompt content for future runs).
 - Reloaded config applies to future dispatch, retry scheduling, reconciliation decisions, hook
   execution, and agent launches.
@@ -555,16 +673,17 @@ Validation checks:
 - `tracker.kind` is present and supported.
 - `tracker.api_key` is present after `$` resolution.
 - `tracker.project_slug` is present when required by the selected tracker kind.
-- `codex.command` is present and non-empty.
+- The configured backend command is present and non-empty.
 
 ### 6.4 Config Fields Summary (Cheat Sheet)
 
 This section is intentionally redundant so a coding agent can implement the config layer quickly.
 
-- `tracker.kind`: string, required, currently `linear`
+- `tracker.kind`: string, required, core value `linear`; optional local/test adapters may be added
 - `tracker.endpoint`: string, default `https://api.linear.app/graphql` when `tracker.kind=linear`
 - `tracker.api_key`: string or `$VAR`, canonical env `LINEAR_API_KEY` when `tracker.kind=linear`
 - `tracker.project_slug`: string, required when `tracker.kind=linear`
+- `tracker.assignee`: string or `$VAR`, optional, canonical env `LINEAR_ASSIGNEE`
 - `tracker.active_states`: list of strings, default `["Todo", "In Progress"]`
 - `tracker.terminal_states`: list of strings, default `["Closed", "Cancelled", "Canceled", "Duplicate", "Done"]`
 - `tracker.dispatch.accept_unrouted`: boolean, default `true`
@@ -574,6 +693,7 @@ This section is intentionally redundant so a coding agent can implement the conf
 - `workspace.root`: path, default `<system-temp>/symphony_workspaces`
 - `worker.ssh_hosts` (extension): list of SSH host strings, optional; when omitted, work runs
   locally
+- `worker.ssh_timeout_ms` (extension): integer, default `60000`
 - `worker.max_concurrent_agents_per_host` (extension): positive integer, optional; shared per-host
   cap applied across configured SSH hosts
 - `hooks.after_create`: shell script or null
@@ -581,10 +701,11 @@ This section is intentionally redundant so a coding agent can implement the conf
 - `hooks.after_run`: shell script or null
 - `hooks.before_remove`: shell script or null
 - `hooks.timeout_ms`: integer, default `60000`
+- `agent.kind`: string, default `codex`
 - `agent.max_concurrent_agents`: integer, default `10`
 - `agent.max_turns`: integer, default `20`
 - `agent.max_retry_backoff_ms`: integer, default `300000` (5m)
-- `agent.max_concurrent_agents_by_state`: map of positive integers, default `{}`
+- `agent.ensemble_size`: integer, default `1`
 - `codex.command`: shell command string, default `codex app-server`
 - `codex.approval_policy`: Codex `AskForApproval` value, default implementation-defined
 - `codex.thread_sandbox`: Codex `SandboxMode` value, default implementation-defined
@@ -592,8 +713,21 @@ This section is intentionally redundant so a coding agent can implement the conf
 - `codex.turn_timeout_ms`: integer, default `3600000`
 - `codex.read_timeout_ms`: integer, default `5000`
 - `codex.stall_timeout_ms`: integer, default `300000`
+- `claude.command`: shell command string, default `claude`
+- `claude.model`: string, default implementation-defined
+- `claude.permission_mode`: string, default implementation-defined
+- `claude.turn_timeout_ms`: integer, default `3600000`
+- `claude.stall_timeout_ms`: integer, default `300000`
+- `claude.strict_mcp_config`: boolean, default `true`
+- `observability.dashboard_enabled`: boolean, default `true`
+- `observability.refresh_ms`: integer, default `1000`
+- `observability.render_interval_ms`: integer, default implementation-defined
 - `server.port` (extension): integer, optional; enables the optional HTTP server, `0` may be used
   for ephemeral local bind, and CLI `--port` overrides it
+- `server.host` (extension): string, default `127.0.0.1`
+- `status_overrides.<state>.agent`: partial `agent` override for that normalized state
+- `status_overrides.<state>.codex`: partial `codex` override for that normalized state
+- `status_overrides.<state>.claude`: partial `claude` override for that normalized state
 
 ## 7. Orchestration State Machine
 
@@ -632,6 +766,9 @@ Important nuance:
 - The first turn should use the full rendered task prompt.
 - Continuation turns should send only continuation guidance to the existing thread, not resend the
   original task prompt that is already present in thread history.
+- If the issue state refresh changes the effective backend profile (`agent.kind` or the selected
+  backend-specific runtime settings), the worker should end the current live session and return
+  control to the orchestrator so a future attempt can start with the new profile.
 - Once the worker exits normally, the orchestrator still schedules a short continuation retry
   (about 1 second) so it can re-check whether the issue remains active and needs another worker
   session.
@@ -673,7 +810,7 @@ Distinct terminal reasons are important because retry logic and logs differ.
   - Update aggregate runtime totals.
   - Schedule exponential-backoff retry.
 
-- `Codex Update Event`
+- `Agent Update Event`
   - Update live session fields, token counters, and rate limits.
 
 - `Retry Timer Fired`
@@ -720,17 +857,19 @@ An issue is dispatch-eligible only if all are true:
 
 - It has `id`, `identifier`, `title`, and `state`.
 - Its state is in `active_states` and not in `terminal_states`.
-- It is not already in `running`.
-- It is not already in `claimed`.
+- It is routed to this worker after optional tracker-assignee filtering.
+- It has at least one unclaimed ensemble slot. For solo runs this means slot `0`.
 - It matches `tracker.dispatch` route eligibility:
   - issues with no matching route label require `accept_unrouted: true`
   - `only_routes: null` accepts all valid routed issues
   - `only_routes: []` accepts no routed issues
   - non-empty `only_routes` accepts only intersecting route names
 - Global concurrency slots are available.
-- Per-state concurrency slots are available.
-- Blocker rule for `Todo` state passes:
-  - If the issue state is `Todo`, do not dispatch when any blocker is non-terminal.
+- State-specific concurrency slots are available after resolving `status_overrides` for the issue
+  state.
+- Blocker rule for unstarted states passes:
+  - If the tracker state type is `unstarted`, do not dispatch when any blocker is non-terminal.
+  - If no state type is available, treat state name `Todo` as the unstarted default.
 
 Sorting order (stable intent):
 
@@ -744,9 +883,9 @@ Global limit:
 
 - `available_slots = max(max_concurrent_agents - running_count, 0)`
 
-Per-state limit:
+State-specific limit:
 
-- `max_concurrent_agents_by_state[state]` if present (state key normalized)
+- `status_overrides[state].agent.max_concurrent_agents` if present (state key normalized)
 - otherwise fallback to global limit
 
 The runtime counts issues by their current tracked state in the `running` map.
@@ -757,7 +896,30 @@ Optional SSH host limit:
   that many concurrent agents at once.
 - Hosts at that cap are skipped for new dispatch until capacity frees up.
 
-### 8.4 Retry and Backoff
+### 8.4 Context Ensembles
+
+An issue may request multiple independent worker slots.
+
+Ensemble size resolution:
+
+1. First valid issue label of the form `ensemble:<n>` where `n >= 1`.
+2. `agent.ensemble_size` from the effective settings for the issue state.
+3. Default `1`.
+
+Execution rules:
+
+- Slot indices are zero-based: `0..ensemble_size-1`.
+- The orchestrator should claim and run each slot independently as `{issue_id, slot_index}`.
+- The issue-level retry entry may re-dispatch any missing slots; retry metadata should include the
+  slot that triggered the retry when known.
+- Global, state-specific, and worker-host capacity still apply to ensemble slots.
+- Prompt rendering must include the `ensemble` object described in Section 5.4.
+- Workspace layout must isolate slots as described in Section 9.1.
+
+Coordination policy between ensemble agents is workflow-owned. The service only provides isolated
+slots, prompt context, observability metadata, and retry/reconciliation mechanics.
+
+### 8.5 Retry and Backoff
 
 Retry entry creation:
 
@@ -787,16 +949,16 @@ Note:
 - Retry handling mainly operates on active candidates and releases claims when the issue is absent,
   rather than performing terminal cleanup itself.
 
-### 8.5 Active Run Reconciliation
+### 8.6 Active Run Reconciliation
 
 Reconciliation runs every tick and has two parts.
 
 Part A: Stall detection
 
 - For each running issue, compute `elapsed_ms` since:
-  - `last_codex_timestamp` if any event has been seen, else
+  - `last_agent_timestamp` if any event has been seen, else
   - `started_at`
-- If `elapsed_ms > codex.stall_timeout_ms`, terminate the worker and queue a retry.
+- If `elapsed_ms > <effective backend>.stall_timeout_ms`, terminate the worker and queue a retry.
 - If `stall_timeout_ms <= 0`, skip stall detection entirely.
 
 Part B: Tracker state refresh
@@ -804,11 +966,14 @@ Part B: Tracker state refresh
 - Fetch current issue states for all running issue IDs.
 - For each running issue:
   - If tracker state is terminal: terminate worker and clean workspace.
+  - If tracker-assignee routing marks the issue as not assigned to this worker: terminate worker
+    without workspace cleanup.
+  - If route labels no longer match this worker: terminate worker without workspace cleanup.
   - If tracker state is still active: update the in-memory issue snapshot.
   - If tracker state is neither active nor terminal: terminate worker without workspace cleanup.
 - If state refresh fails, keep workers running and try again on the next tick.
 
-### 8.6 Startup Terminal Workspace Cleanup
+### 8.7 Startup Terminal Workspace Cleanup
 
 When the service starts:
 
@@ -831,6 +996,13 @@ Per-issue workspace path:
 
 - `<workspace.root>/<sanitized_issue_identifier>`
 
+Per-slot workspace path for ensemble runs:
+
+- `<workspace.root>/<sanitized_issue_identifier>/<slot_index>`
+- When `ensemble_size == 1`, use the issue root directly.
+- When `ensemble_size > 1`, the issue root is a slot container. Hooks and agent execution run in
+  the slot directory, not in the issue root.
+
 Workspace persistence:
 
 - Workspaces are reused across runs for the same issue.
@@ -838,12 +1010,12 @@ Workspace persistence:
 
 ### 9.2 Workspace Creation and Reuse
 
-Input: `issue.identifier`
+Input: `issue.identifier`, `slot_index`, and `ensemble_size`
 
 Algorithm summary:
 
 1. Sanitize identifier to `workspace_key`.
-2. Compute workspace path under workspace root.
+2. Compute workspace path under workspace root, adding a slot directory for ensemble runs.
 3. Ensure the workspace path exists as a directory.
 4. Mark `created_now=true` only if the directory was created during this call; otherwise
    `created_now=false`.
@@ -917,7 +1089,9 @@ Invariant 3: Workspace key is sanitized.
 
 ## 10. Agent Runner Protocol (Coding Agent Integration)
 
-This section defines the language-neutral contract for integrating a coding agent app-server.
+This section defines the language-neutral contract for integrating coding-agent backends. Codex
+app-server is the required core backend. Claude Code stream-json execution is an optional backend
+profile that uses the same agent-runner lifecycle and observability contract.
 
 Compatibility profile:
 
@@ -929,7 +1103,7 @@ Compatibility profile:
   meaning, especially for nested IDs, approval requests, user-input-required signals, and
   token/rate-limit metadata.
 
-### 10.1 Launch Contract
+### 10.1 Codex Launch Contract
 
 Subprocess launch parameters:
 
@@ -948,7 +1122,7 @@ Recommended additional process settings:
 
 - Max line size: 10 MB (for safe buffering)
 
-### 10.2 Session Startup Handshake
+### 10.2 Codex Session Startup Handshake
 
 Reference: https://developers.openai.com/codex/app-server/
 
@@ -979,6 +1153,9 @@ semantics):
      - `cwd` = absolute workspace path
      - If optional client-side tools are implemented, include their advertised tool specs using the
        protocol mechanism supported by the targeted Codex app-server version.
+   - If a valid Codex resume ID exists for this workspace and issue, `thread/resume` may be used
+     instead of `thread/start`. A conforming resume request should preserve extended history when
+     supported by the target app-server.
 4. `turn/start` request
    - Params include:
      - `threadId`
@@ -996,6 +1173,7 @@ Session identifiers:
 - Read `turn_id` from each `turn/start` result `result.turn.id`
 - Emit `session_id = "<thread_id>-<turn_id>"`
 - Reuse the same `thread_id` for all continuation turns inside one worker run
+- Persist Codex resume metadata using `resume_id == thread_id`.
 
 ### 10.3 Streaming Turn Processing
 
@@ -1032,7 +1210,7 @@ include:
 
 - `event` (enum/string)
 - `timestamp` (UTC timestamp)
-- `codex_app_server_pid` (if available)
+- `executor_pid` (if available)
 - optional `usage` map (token counts)
 - payload fields as needed
 
@@ -1168,6 +1346,76 @@ Note:
 
 - Workspaces are intentionally preserved after successful runs.
 
+### 10.8 Optional Claude Code Executor Profile
+
+If `agent.kind == "claude"` is implemented, it should preserve the same worker lifecycle as the
+Codex profile while using Claude Code's stream-json CLI protocol.
+
+Launch contract:
+
+- Validate the workspace cwd using the same root-containment rules as Codex.
+- Launch `claude.command` from the workspace.
+- Use print/stream mode with structured JSON input and output.
+- Pass the configured model and permission mode.
+- Pass an issue title/name when the CLI supports it.
+- If a matching Claude resume ID exists, pass it through the CLI's resume mechanism.
+- If `claude.strict_mcp_config == true`, launch with only the generated MCP config.
+
+MCP/tooling contract:
+
+- The Claude executor may expose the same tool registry through an MCP server instead of Codex
+  dynamic tools.
+- Generated MCP config should be workspace-local and contain only the Symphony-issued bearer token
+  needed to reach the local MCP endpoint.
+- Raw tracker secrets such as Linear API keys must not be written into generated MCP config.
+- Remote workers may use an SSH tunnel or equivalent local forwarding so the remote Claude process
+  can reach the Symphony-owned MCP endpoint.
+- Acquired MCP auth tokens and tunnels must be released when startup fails or the session stops.
+
+Stream handling:
+
+- The executor should keep one Claude process alive across multiple turns inside one worker
+  lifetime.
+- Each turn sends one structured user message to stdin.
+- Parse stdout stream-json lines and emit normalized agent updates such as `session_started`,
+  `turn_started`, `assistant_message`, `tool_use_requested`, `tool_result`, `rate_limit`,
+  `turn_completed`, `permission_denied`, `turn_failed`, `malformed`, and `notification`.
+- Unknown future event types should be logged for debugging and surfaced as notification events
+  rather than crashing the worker.
+- Unsupported control protocol requests should fail clearly instead of stalling indefinitely.
+- Usage fields should include cache creation/read input tokens when computing input tokens.
+- Partial trailing lines should be flushed before reporting process exit.
+
+Timeout and resume behavior:
+
+- `claude.turn_timeout_ms` bounds inactivity while waiting for the next stream event.
+- `claude.stall_timeout_ms` is enforced by the orchestrator from the latest normalized event time.
+- Claude resume metadata should use `agent_kind == "claude"` and the native Claude session/resume
+  ID.
+
+### 10.9 Resume State Contract
+
+Backends may persist resume metadata inside the issue workspace when the workspace is a git
+repository.
+
+Requirements:
+
+- Store resume state under the git directory, for example `.git/symphony/resume.json`.
+- Persist at minimum `agent_kind` and backend-specific `resume_id`.
+- Persist enough issue and runtime identity to avoid unsafe reuse:
+  - `issue_id`
+  - `issue_identifier`
+  - `issue_state`
+  - `workspace_path`
+  - `worker_host`
+- A stored resume state may be reused only when all non-null identity fields match the current run
+  and the stored `agent_kind` matches the selected backend.
+- Missing git metadata should make resume state unavailable, not fatal.
+- Invalid or unreadable resume files should prevent resume for that run and emit an
+  operator-visible warning.
+- Abnormal exits, stalls, and orchestrator-owned retry paths should delete or invalidate stale
+  resume state before retrying.
+
 ## 11. Issue Tracker Integration Contract (Linear-Compatible)
 
 ### 11.1 Required Operations
@@ -1191,6 +1439,8 @@ Linear-specific requirements for `tracker.kind == "linear"`:
 - GraphQL endpoint (default `https://api.linear.app/graphql`)
 - Auth token sent in `Authorization` header
 - `tracker.project_slug` maps to Linear project `slugId`
+- If `tracker.assignee` is configured, candidate and refresh logic should distinguish issues
+  assigned to that worker from issues assigned to someone else.
 - Candidate issue query filters project using `project: { slugId: { eq: $projectSlug } }`
 - Issue-state refresh query uses GraphQL issue IDs with variable type `[ID!]`
 - Pagination required for candidate issues
@@ -1212,6 +1462,10 @@ Candidate issue normalization should produce fields listed in Section 4.1.1.
 Additional normalization details:
 
 - `labels` -> lowercase strings
+- `state_type` -> tracker state type when present
+- `assignee_id` -> tracker assignee ID when present
+- `assigned_to_worker` -> false when an assignee filter is configured and the issue is explicitly
+  assigned to a different user
 - `blocked_by` -> derived from inverse relations where relation type is `blocks`
 - `priority` -> integer only (non-integers become null)
 - `created_at` and `updated_at` -> parse ISO-8601 timestamps
@@ -1317,9 +1571,23 @@ If the implementation exposes a synchronous runtime snapshot (for dashboards or 
 should return:
 
 - `running` (list of running session rows)
-- each running row should include `turn_count`
+- each running row should include:
+  - `issue_id`
+  - `issue_identifier`
+  - `slot_index`
+  - `ensemble_size`
+  - `state`
+  - `agent_kind`
+  - `worker_host`
+  - `workspace_path`
+  - `session_id`
+  - `resume_id`
+  - `executor_pid`
+  - `turn_count`
+  - last event/message/timestamp fields
+  - per-session token totals
 - `retrying` (list of retry queue rows)
-- `codex_totals`
+- `usage_totals`
   - `input_tokens`
   - `output_tokens`
   - `total_tokens`
@@ -1434,8 +1702,15 @@ Minimum endpoints:
         {
           "issue_id": "abc123",
           "issue_identifier": "MT-649",
+          "slot_index": 0,
+          "ensemble_size": 1,
           "state": "In Progress",
+          "agent_kind": "codex",
+          "worker_host": null,
+          "workspace_path": "/tmp/symphony_workspaces/MT-649",
           "session_id": "thread-1-turn-1",
+          "resume_id": "thread-1",
+          "executor_pid": 4242,
           "turn_count": 7,
           "last_event": "turn_completed",
           "last_message": "",
@@ -1457,7 +1732,7 @@ Minimum endpoints:
           "error": "no available orchestrator slots"
         }
       ],
-      "codex_totals": {
+      "usage_totals": {
         "input_tokens": 5000,
         "output_tokens": 2400,
         "total_tokens": 7400,
@@ -1485,7 +1760,14 @@ Minimum endpoints:
         "current_retry_attempt": 2
       },
       "running": {
+        "slot_index": 0,
+        "ensemble_size": 1,
+        "agent_kind": "codex",
+        "worker_host": null,
+        "workspace_path": "/tmp/symphony_workspaces/MT-649",
         "session_id": "thread-1-turn-1",
+        "resume_id": "thread-1",
+        "executor_pid": 4242,
         "turn_count": 7,
         "state": "In Progress",
         "started_at": "2026-02-24T20:10:12Z",
@@ -1500,7 +1782,7 @@ Minimum endpoints:
       },
       "retry": null,
       "logs": {
-        "codex_session_logs": [
+        "session_logs": [
           {
             "label": "latest",
             "path": "/var/log/symphony/codex/MT-649/latest.log",
@@ -1720,8 +2002,8 @@ function start_service():
     claimed: set(),
     retry_attempts: {},
     completed: set(),
-    codex_totals: {input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0},
-    codex_rate_limits: null
+    usage_totals: {input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0},
+    agent_rate_limits: null
   }
 
   validation = validate_dispatch_config()
@@ -1773,7 +2055,7 @@ on_tick(state):
 function reconcile_running_issues(state):
   state = reconcile_stalled_runs(state)
 
-  running_ids = keys(state.running)
+  running_ids = issue_ids_from_slot_keys(keys(state.running))
   if running_ids is empty:
     return state
 
@@ -1786,7 +2068,8 @@ function reconcile_running_issues(state):
     if issue.state in terminal_states:
       state = terminate_running_issue(state, issue.id, cleanup_workspace=true)
     else if issue.state in active_states:
-      state.running[issue.id].issue = issue
+      for slot_key in running_slot_keys_for_issue(state, issue.id):
+        state.running[slot_key].issue = issue
     else:
       state = terminate_running_issue(state, issue.id, cleanup_workspace=false)
 
@@ -1797,8 +2080,11 @@ function reconcile_running_issues(state):
 
 ```text
 function dispatch_issue(issue, state, attempt):
+  slot_index = first_unclaimed_slot(issue, state)
+  slot_key = {issue.id, slot_index}
+
   worker = spawn_worker(
-    fn -> run_agent_attempt(issue, attempt, parent_orchestrator_pid) end
+    fn -> run_agent_attempt(issue, attempt, slot_index, parent_orchestrator_pid) end
   )
 
   if worker spawn failed:
@@ -1807,19 +2093,25 @@ function dispatch_issue(issue, state, attempt):
       error: "failed to spawn agent"
     })
 
-  state.running[issue.id] = {
+  state.running[slot_key] = {
     worker_handle,
     monitor_handle,
     identifier: issue.identifier,
     issue,
+    slot_index: slot_index,
+    ensemble_size: resolve_ensemble_size(issue),
+    agent_kind: effective_settings(issue.state).agent.kind,
+    worker_host: selected_worker_host,
+    workspace_path: expected_workspace_path(issue, slot_index),
     session_id: null,
-    codex_app_server_pid: null,
-    last_codex_message: null,
-    last_codex_event: null,
-    last_codex_timestamp: null,
-    codex_input_tokens: 0,
-    codex_output_tokens: 0,
-    codex_total_tokens: 0,
+    resume_id: null,
+    executor_pid: null,
+    last_agent_message: null,
+    last_agent_event: null,
+    last_agent_timestamp: null,
+    agent_input_tokens: 0,
+    agent_output_tokens: 0,
+    agent_total_tokens: 0,
     last_reported_input_tokens: 0,
     last_reported_output_tokens: 0,
     last_reported_total_tokens: 0,
@@ -1827,7 +2119,7 @@ function dispatch_issue(issue, state, attempt):
     started_at: now_utc()
   }
 
-  state.claimed.add(issue.id)
+  state.claimed.add(slot_key)
   state.retry_attempts.remove(issue.id)
   return state
 ```
@@ -1835,15 +2127,17 @@ function dispatch_issue(issue, state, attempt):
 ### 16.5 Worker Attempt (Workspace + Prompt + Agent)
 
 ```text
-function run_agent_attempt(issue, attempt, orchestrator_channel):
-  workspace = workspace_manager.create_for_issue(issue.identifier)
+function run_agent_attempt(issue, attempt, slot_index, orchestrator_channel):
+  settings = effective_settings(issue.state)
+  workspace = workspace_manager.create_for_issue(issue.identifier, slot_index=slot_index)
   if workspace failed:
     fail_worker("workspace error")
 
   if run_hook("before_run", workspace.path) failed:
     fail_worker("before_run hook error")
 
-  session = app_server.start_session(workspace=workspace.path)
+  executor = agent_executor_for(settings.agent.kind)
+  session = executor.start_session(workspace=workspace.path, settings=settings)
   if session failed:
     run_hook_best_effort("after_run", workspace.path)
     fail_worker("agent session startup error")
@@ -1854,29 +2148,34 @@ function run_agent_attempt(issue, attempt, orchestrator_channel):
   while true:
     prompt = build_turn_prompt(workflow_template, issue, attempt, turn_number, max_turns)
     if prompt failed:
-      app_server.stop_session(session)
+      executor.stop_session(session)
       run_hook_best_effort("after_run", workspace.path)
       fail_worker("prompt error")
 
-    turn_result = app_server.run_turn(
+    turn_result = executor.run_turn(
       session=session,
       prompt=prompt,
       issue=issue,
-      on_message=(msg) -> send(orchestrator_channel, {codex_update, issue.id, msg})
+      on_message=(msg) -> send(orchestrator_channel, {agent_update, issue.id, slot_index, msg})
     )
 
     if turn_result failed:
-      app_server.stop_session(session)
+      executor.stop_session(session)
       run_hook_best_effort("after_run", workspace.path)
       fail_worker("agent turn error")
 
     refreshed_issue = tracker.fetch_issue_states_by_ids([issue.id])
     if refreshed_issue failed:
-      app_server.stop_session(session)
+      executor.stop_session(session)
       run_hook_best_effort("after_run", workspace.path)
       fail_worker("issue state refresh error")
 
     issue = refreshed_issue[0] or issue
+
+    refreshed_settings = effective_settings(issue.state)
+    if refreshed_settings.agent.kind != settings.agent.kind or
+       backend_profile(refreshed_settings) != backend_profile(settings):
+      break
 
     if issue.state is not active:
       break
@@ -1885,8 +2184,9 @@ function run_agent_attempt(issue, attempt, orchestrator_channel):
       break
 
     turn_number = turn_number + 1
+    settings = refreshed_settings
 
-  app_server.stop_session(session)
+  executor.stop_session(session)
   run_hook_best_effort("after_run", workspace.path)
 
   exit_normal()
@@ -1895,8 +2195,10 @@ function run_agent_attempt(issue, attempt, orchestrator_channel):
 ### 16.6 Worker Exit and Retry Handling
 
 ```text
-on_worker_exit(issue_id, reason, state):
-  running_entry = state.running.remove(issue_id)
+on_worker_exit(issue_id, slot_index, reason, state):
+  slot_key = {issue_id, slot_index}
+  running_entry = state.running.remove(slot_key)
+  state.claimed.remove(slot_key)
   state = add_runtime_seconds_to_totals(state, running_entry)
 
   if reason == normal:
@@ -1930,7 +2232,7 @@ on_retry_timer(issue_id, state):
 
   issue = find_by_id(candidates, issue_id)
   if issue is null:
-    state.claimed.remove(issue_id)
+    remove_claimed_slots_for_issue(state, issue_id)
     return state
 
   if available_slots(state) == 0:
@@ -1972,14 +2274,24 @@ Unless otherwise noted, Sections 17.1 through 17.7 are `Core Conformance`. Bulle
 - Config defaults apply when optional values are missing
 - `tracker.kind` validation enforces currently supported kind (`linear`)
 - `tracker.api_key` works (including `$VAR` indirection)
+- `tracker.assignee` works (including `$VAR` indirection) and produces assigned-to-worker routing
+  metadata
 - `tracker.dispatch` defaults preserve accepting all issues
 - `tracker.dispatch.only_routes` preserves null versus empty-list semantics
 - `tracker.dispatch.route_label_prefix` defaults to `Symphony:` and accepts custom prefixes
 - `$VAR` resolution works for tracker API key and path values
 - `~` path expansion works
+- `agent.kind` selects the active backend profile and rejects unsupported values
+- `agent.max_turns` and `agent.ensemble_size` default and validate as positive integers
 - `codex.command` is preserved as a shell command string
-- Per-state concurrency override map normalizes state names and ignores invalid values
+- `claude.command`, `claude.model`, `claude.permission_mode`, timeouts, and
+  `claude.strict_mcp_config` default and validate when the Claude executor extension is shipped
+- `worker.ssh_timeout_ms`, `observability.*`, and `server.host` default and validate when their
+  extensions are shipped
+- `status_overrides` normalizes state names, accepts only `agent` / `codex` / `claude` sections,
+  rejects unknown keys, applies partial overrides, and deep-merges Codex map policy fields
 - Prompt template renders `issue` and `attempt`
+- Prompt template renders `ensemble.enabled`, `ensemble.slot_index`, and `ensemble.size`
 - Prompt rendering fails on unknown variables (strict mode)
 
 ### 17.2 Workspace Manager and Safety
@@ -1997,6 +2309,7 @@ Unless otherwise noted, Sections 17.1 through 17.7 are `Core Conformance`. Bulle
 - `before_remove` hook runs on cleanup and failures/timeouts are ignored
 - Workspace path sanitization and root containment invariants are enforced before agent launch
 - Agent launch uses the per-issue workspace path as cwd and rejects out-of-root paths
+- Ensemble runs use a deterministic per-slot workspace path and run hooks in that slot directory
 
 ### 17.3 Issue Tracker Client
 
@@ -2006,6 +2319,7 @@ Unless otherwise noted, Sections 17.1 through 17.7 are `Core Conformance`. Bulle
 - Pagination preserves order across multiple pages
 - Blockers are normalized from inverse relations of type `blocks`
 - Labels are normalized to lowercase
+- Issue `state_type`, `assignee_id`, and `assigned_to_worker` fields are normalized
 - Issue state refresh by ID returns minimal normalized issues
 - Issue state refresh query uses GraphQL ID typing (`[ID!]`) as specified in Section 11.2
 - Error mapping for request errors, non-200, GraphQL errors, malformed payloads
@@ -2018,8 +2332,12 @@ Unless otherwise noted, Sections 17.1 through 17.7 are `Core Conformance`. Bulle
 - Default tracker dispatch routes accept unrouted, ordinary-labeled, and routed issues
 - Unrouted-only tracker dispatch accepts issues without route labels and rejects routed issues
 - Route allowlists accept only issues with matching route labels
+- Assignee filtering accepts issues assigned to this worker and rejects issues assigned elsewhere
 - Dispatch revalidation skips stale issues whose refreshed labels no longer match local routes
 - Reconciliation stops active local work when refreshed route labels no longer match local routes
+- Reconciliation stops active local work when refreshed assignee routing no longer matches this
+  worker
+- `state_type: unstarted` blockers are enforced even when the state name is not `Todo`
 - Active-state issue refresh updates running entry state
 - Non-active state stops running agent without workspace cleanup
 - Terminal state stops running agent and cleans workspace
@@ -2030,11 +2348,17 @@ Unless otherwise noted, Sections 17.1 through 17.7 are `Core Conformance`. Bulle
 - Retry queue entries include attempt, due time, identifier, and error
 - Stall detection kills stalled sessions and schedules retry
 - Slot exhaustion requeues retries with explicit error reason
+- Context ensembles resolve size from `ensemble:<n>` labels before `agent.ensemble_size`, claim
+  slots independently, and pass slot context into prompts and runtime entries
+- Runtime profile changes between turns end the current live session so a future attempt starts
+  with the new backend settings
+- SSH worker host capacity, host identity, and workspace identity are preserved when the SSH worker
+  extension is shipped
 - If a snapshot API is implemented, it returns running rows, retry rows, token totals, and rate
   limits
 - If a snapshot API is implemented, timeout/unavailable cases are surfaced
 
-### 17.5 Coding-Agent App-Server Client
+### 17.5 Coding-Agent Executor Clients
 
 - Launch command uses workspace cwd and invokes `bash -lc <codex.command>`
 - Startup handshake sends `initialize`, `initialized`, `thread/start`, `turn/start`
@@ -2042,6 +2366,10 @@ Unless otherwise noted, Sections 17.1 through 17.7 are `Core Conformance`. Bulle
   app-server protocol
 - Policy-related startup payloads use the implementation's documented approval/sandbox settings
 - `thread/start` and `turn/start` parse nested IDs and emit `session_started`
+- Existing Codex sessions can be resumed with the persisted resume ID when the app-server protocol
+  supports resume
+- Resume state requires `agent_kind`, issue identity, worker/workspace identity, and a valid
+  backend resume ID; missing or mismatched resume state is ignored with an operator-visible warning
 - Request/response read timeout is enforced
 - Turn timeout is enforced
 - Partial JSON lines are buffered until newline
@@ -2062,6 +2390,15 @@ Unless otherwise noted, Sections 17.1 through 17.7 are `Core Conformance`. Bulle
   - top-level GraphQL `errors` produce `success=false` while preserving the GraphQL body
   - invalid arguments, missing auth, and transport failures return structured failure payloads
   - unsupported tool names still fail without stalling the session
+- If the optional Claude Code executor profile is implemented:
+  - launch arguments include stream JSON input/output, selected model, permission mode, workspace
+    cwd, strict MCP config when enabled, and resume arguments when available
+  - the workspace-local MCP config exposes Symphony tools without writing the raw Linear secret to
+    disk
+  - one Claude process can receive multiple turns through structured user messages
+  - stdout JSON events, stderr/non-JSON lines, trailing partial lines, usage, and unknown event
+    variants are normalized into agent update events
+  - control-protocol or startup failures fail the attempt instead of stalling indefinitely
 
 ### 17.6 Observability
 
@@ -2069,6 +2406,8 @@ Unless otherwise noted, Sections 17.1 through 17.7 are `Core Conformance`. Bulle
 - Structured logging includes issue/session context fields
 - Logging sink failures do not crash orchestration
 - Token/rate-limit aggregation remains correct across repeated agent updates
+- Snapshot/API rows include backend-neutral fields such as `agent_kind`, `slot_index`,
+  `ensemble_size`, `worker_host`, `workspace_path`, `resume_id`, and `executor_pid`
 - If a human-readable status surface is implemented, it is driven from orchestrator state and does
   not affect correctness
 - If humanized event summaries are implemented, they cover key wrapper/agent event classes without
@@ -2095,6 +2434,10 @@ network access, or external service permissions are unavailable.
 - A skipped real-integration test should be reported as skipped, not silently treated as passed.
 - If a real-integration profile is explicitly enabled in CI or release validation, failures should
   fail that job.
+- A live Codex app-server smoke test should launch the configured real `codex` executable and run a
+  minimal turn in an isolated workspace.
+- If the Claude executor extension is shipped, a live Claude Code smoke test should launch the real
+  `claude` executable and run a minimal stream-json turn in an isolated workspace.
 
 ## 18. Implementation Checklist (Definition of Done)
 
@@ -2109,15 +2452,19 @@ Use the same validation profiles as Section 17:
 - Workflow path selection supports explicit runtime path and cwd default
 - `WORKFLOW.md` loader with YAML front matter + prompt body split
 - Typed config layer with defaults and `$` resolution
+- Tracker assignee routing (`tracker.assignee`) with normalized assignment metadata
 - Dynamic `WORKFLOW.md` watch/reload/re-apply for config and prompt
 - Polling orchestrator with single-authority mutable state
 - Issue tracker client with candidate fetch + state refresh + terminal fetch
 - Workspace manager with sanitized per-issue workspaces
 - Workspace lifecycle hooks (`after_create`, `before_run`, `after_run`, `before_remove`)
 - Hook timeout config (`hooks.timeout_ms`, default `60000`)
-- Coding-agent app-server subprocess client with JSON line protocol
-- Codex launch command config (`codex.command`, default `codex app-server`)
-- Strict prompt rendering with `issue` and `attempt` variables
+- Coding-agent executor abstraction selected by `agent.kind`
+- Codex app-server subprocess client with JSON line protocol and launch command config
+  (`codex.command`, default `codex app-server`)
+- Strict prompt rendering with `issue`, `attempt`, and `ensemble` variables
+- Resume-state persistence that records `agent_kind`, backend resume ID, issue/workspace identity,
+  and rejects stale or incomplete state
 - Exponential retry queue with continuation retries after normal exit
 - Configurable retry backoff cap (`agent.max_retry_backoff_ms`, default 5m)
 - Reconciliation that stops runs on terminal/non-active tracker states
@@ -2127,13 +2474,19 @@ Use the same validation profiles as Section 17:
 
 ### 18.2 Recommended Extensions (Not Required for Conformance)
 
+- Context ensembles with `agent.ensemble_size`, `ensemble:<n>` labels, per-slot claims, per-slot
+  workspaces, and prompt slot context.
+- Per-state `status_overrides` for `agent`, `codex`, and `claude` runtime settings, including
+  state-name normalization and Codex policy map deep merge.
+- Optional Claude Code executor profile with stream-json subprocess IO, strict MCP config,
+  workspace-local Symphony MCP config, usage normalization, and resume support.
+- Optional SSH worker execution honors `worker.ssh_hosts`, `worker.ssh_timeout_ms`, host capacity,
+  and host/workspace identity in retries and resume matching.
 - Optional HTTP server honors CLI `--port` over `server.port`, uses a safe default bind host, and
   exposes the baseline endpoints/error semantics in Section 13.7 if shipped.
 - Optional `linear_graphql` client-side tool extension exposes raw Linear GraphQL access through the
   app-server session using configured Symphony auth.
 - TODO: Persist retry queue and session metadata across process restarts.
-- TODO: Make observability settings configurable in workflow front matter without prescribing UI
-  implementation details.
 - TODO: Add first-class tracker write APIs (comments/state transitions) in the orchestrator instead
   of only via agent tools.
 - TODO: Add pluggable issue tracker adapters beyond Linear.

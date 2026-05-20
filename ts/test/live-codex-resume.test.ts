@@ -1,7 +1,7 @@
-import assert from "node:assert/strict";
+import { assert } from "./assert.js";
 import path from "node:path";
-import { test } from "node:test";
-import { CodexAppServerExecutor, parseConfig } from "../src/index.js";
+import { test } from "vitest";
+import { CodexAppServerExecutor, parseConfig } from "@symphony/cli";
 import { initGitRepo, sampleIssue, tempDir } from "./helpers.js";
 
 const runLive = process.env.SYMPHONY_TS_RUN_REAL_CODEX_RESUME_E2E === "1";

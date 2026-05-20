@@ -1,8 +1,8 @@
-import assert from "node:assert/strict";
+import { assert } from "./assert.js";
 import fs from "node:fs/promises";
-import { test } from "node:test";
-import { buildPrompt } from "../src/index.js";
-import type { Issue } from "../src/index.js";
+import { test } from "vitest";
+import { buildPrompt } from "@symphony/cli";
+import type { Issue } from "@symphony/cli";
 
 interface PromptParityFixture {
   name: string;

@@ -1,7 +1,7 @@
-import assert from "node:assert/strict";
+import { assert } from "./assert.js";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { test } from "node:test";
+import { test } from "vitest";
 import {
   buildPrompt,
   continuationPrompt,
@@ -18,7 +18,7 @@ import {
   shellEscape,
   validateWorkspaceCwd,
   writeResumeState,
-} from "../src/index.js";
+} from "@symphony/cli";
 import { initGitRepo, sampleIssue, tempDir, writeExecutable } from "./helpers.js";
 
 test("prompt rendering is strict and exposes ensemble context", async () => {

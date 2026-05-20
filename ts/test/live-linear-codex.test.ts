@@ -1,8 +1,8 @@
-import assert from "node:assert/strict";
+import { assert } from "./assert.js";
 import path from "node:path";
-import { test } from "node:test";
-import { CodexAppServerExecutor, executeTool, LinearClient, parseConfig } from "../src/index.js";
-import type { AgentUpdate } from "../src/index.js";
+import { test } from "vitest";
+import { CodexAppServerExecutor, executeTool, LinearClient, parseConfig } from "@symphony/cli";
+import type { AgentUpdate } from "@symphony/cli";
 import { tempDir } from "./helpers.js";
 
 const runLive = process.env.SYMPHONY_TS_RUN_LINEAR_CODEX_E2E === "1";

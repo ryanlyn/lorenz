@@ -1,19 +1,101 @@
 {
-  "compilerOptions": {
-    "target": "ES2023",
-    "lib": ["ES2023"],
-    "module": "NodeNext",
-    "moduleResolution": "NodeNext",
-    "jsx": "react-jsx",
-    "strict": true,
-    "esModuleInterop": true,
-    "forceConsistentCasingInFileNames": true,
-    "skipLibCheck": true,
-    "noUncheckedIndexedAccess": true,
-    "exactOptionalPropertyTypes": true,
-    "declaration": true,
-    "sourceMap": true,
-    "outDir": "dist"
-  },
-  "include": ["src/**/*.ts", "src/**/*.tsx", "test/**/*.ts", "test/**/*.tsx"]
+  "files": [],
+  "references": [
+    {
+      "path": "./packages/acp"
+    },
+    {
+      "path": "./packages/agent-runner"
+    },
+    {
+      "path": "./packages/cli-kit"
+    },
+    {
+      "path": "./packages/codex"
+    },
+    {
+      "path": "./packages/config"
+    },
+    {
+      "path": "./packages/dispatch"
+    },
+    {
+      "path": "./packages/domain"
+    },
+    {
+      "path": "./packages/humanize"
+    },
+    {
+      "path": "./packages/child-process"
+    },
+    {
+      "path": "./packages/ssh"
+    },
+    {
+      "path": "./packages/worker-host-pool"
+    },
+    {
+      "path": "./packages/workspace"
+    },
+    {
+      "path": "./packages/issue"
+    },
+    {
+      "path": "./packages/log-file"
+    },
+    {
+      "path": "./packages/mcp"
+    },
+    {
+      "path": "./packages/orchestrator"
+    },
+    {
+      "path": "./packages/policies"
+    },
+    {
+      "path": "./packages/ports"
+    },
+    {
+      "path": "./packages/presenter"
+    },
+    {
+      "path": "./packages/projections"
+    },
+    {
+      "path": "./packages/prompt"
+    },
+    {
+      "path": "./packages/protocol"
+    },
+    {
+      "path": "./packages/resume-state"
+    },
+    {
+      "path": "./packages/retry-scheduler"
+    },
+    {
+      "path": "./packages/runtime"
+    },
+    {
+      "path": "./packages/runtime-events"
+    },
+    {
+      "path": "./packages/server"
+    },
+    {
+      "path": "./packages/linear-tracker"
+    },
+    {
+      "path": "./packages/memory-tracker"
+    },
+    {
+      "path": "./packages/tui"
+    },
+    {
+      "path": "./packages/workflow"
+    },
+    {
+      "path": "./apps/cli"
+    }
+  ]
 }

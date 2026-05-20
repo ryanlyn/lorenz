@@ -1,5 +1,5 @@
-import assert from "node:assert/strict";
-import { test } from "node:test";
+import { test } from "vitest";
+import { assert } from "./assert.js";
 import {
   ProjectionActor,
   actionForStopReason,
@@ -10,8 +10,8 @@ import {
   retryBackoffMs,
   Orchestrator,
   slotKey,
-} from "../src/index.js";
-import type { RuntimeProjectionInput, RuntimeRunHistoryEntry } from "../src/index.js";
+} from "@symphony/cli";
+import type { RuntimeProjectionInput, RuntimeRunHistoryEntry } from "@symphony/cli";
 
 test("deterministic policies pin retry, stop reason, usage, and resume decisions", () => {
   assert.equal(retryBackoffMs(1, 60_000, "failure"), 10_000);
@@ -80,7 +80,7 @@ test("projection actor owns bounded read models and snapshots defensively", () =
   const projection = new ProjectionActor();
   for (let index = 0; index < 25; index += 1) {
     projection.recordEvent({
-      type: "event",
+      type: "notification",
       message: `event-${index}`,
       at: new Date(index).toISOString(),
     });
