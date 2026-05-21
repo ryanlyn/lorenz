@@ -1,6 +1,6 @@
 # Symphony
 
-This repository is a fork of [OpenAI Symphony](https://github.com/openai/symphony)'s Elixir reference implementation.
+This repository is a fork of [OpenAI Symphony](https://github.com/openai/symphony)'s Elixir reference implementation, with an additional TypeScript port.
 
 Symphony is an orchestrator that connects a project tracker (Linear) to coding agents (Codex or
 Claude Code). It polls for issues, creates isolated workspaces, and runs agents against each issue
@@ -33,6 +33,8 @@ configuration automatically - no restart needed.
 
 ## Running
 
+### Elixir
+
 See [elixir/README.md](elixir/README.md) for full setup, configuration, and testing instructions.
 
 ```bash
@@ -42,6 +44,19 @@ mise install
 mise exec -- mix setup
 mise exec -- mix build
 mise exec -- ./bin/symphony ./WORKFLOW.md
+```
+
+### TypeScript
+
+See [ts/README.md](ts/README.md) for full setup, configuration, and testing instructions.
+
+```bash
+cd ts
+mise trust
+mise install
+pnpm install
+pnpm build
+pnpm start
 ```
 
 See [CHANGELOG.md](CHANGELOG.md) for notable fork-specific changes.
