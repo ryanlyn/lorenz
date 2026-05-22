@@ -68,11 +68,7 @@ test("config resolves op:// references from env var fallback", async () => {
 
 test("config throws when op:// reference used but op CLI not installed", () => {
   assert.throws(
-    () =>
-      parseConfig(
-        { tracker: { api_key: "op://vault/item/field" } },
-        { PATH: "/nonexistent" },
-      ),
+    () => parseConfig({ tracker: { api_key: "op://vault/item/field" } }, { PATH: "/nonexistent" }),
     /1Password CLI \(op\) is required.*cannot be managed by mise/,
   );
 });

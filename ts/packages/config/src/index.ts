@@ -1052,7 +1052,10 @@ function resolveConfiguredSecret(
   return resolveOnePasswordRef(secret, env);
 }
 
-function resolveOnePasswordRef(value: string | undefined, env: NodeJS.ProcessEnv): string | undefined {
+function resolveOnePasswordRef(
+  value: string | undefined,
+  env: NodeJS.ProcessEnv,
+): string | undefined {
   if (value === undefined || !value.startsWith("op://")) return value;
   const mergedEnv = { ...process.env, ...env };
   try {

@@ -1,0 +1,30 @@
+[env]
+_.file = ".env"
+
+[hooks]
+enter = "mise run check-env"
+
+[settings]
+experimental = true
+
+[tools]
+"npm:@openai/codex" = "latest"
+# Note for Claude
+# stick to NPM install for now. Trying to install via aqua plugin
+# (using the native version leads to an issue: invoking claude just invokes bun.
+# Not worth investigating further)
+"npm:@anthropic-ai/claude-code" = "latest"
+
+[tasks.check-env]
+run = '''
+if [ -z "$LINEAR_API_KEY" ]; then
+  echo "ERROR: LINEAR_API_KEY is not set. Copy .env.template to .env and fill in values." >&2
+  exit 1
+fi
+if [ -z "$LINEAR_PROJECT_SLUG" ]; then
+  echo "ERROR: LINEAR_PROJECT_SLUG is not set. Copy .env.template to .env and fill in values." >&2
+  exit 1
+fi
+'''
+description = "Validate required environment variables"
+quiet = true

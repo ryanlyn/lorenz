@@ -1,6 +1,7 @@
 [tools]
 node = "24"
 pnpm = "9"
+prek = "latest"
 
 [hooks]
 enter = "pnpm install --frozen-lockfile || true"
@@ -26,7 +27,6 @@ run = "pnpm typecheck"
 [tasks.test]
 run = "pnpm test"
 depends = ["build"]
-
 
 [tasks.tidy]
 depends = ["format", "lint-fix"]

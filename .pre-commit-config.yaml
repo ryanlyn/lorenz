@@ -1,0 +1,10 @@
+# Pre-commit config for prek (https://github.com/j178/prek)
+# Install hooks: prek install
+repos:
+  - repo: local
+    hooks:
+      - id: mise-check
+        name: mise run check (lint, type-check, tests)
+        entry: bash -c 'cd ts && mise run check'
+        language: system
+        pass_filenames: false
