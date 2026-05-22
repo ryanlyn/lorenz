@@ -7,3 +7,27 @@ enter = "pnpm install --frozen-lockfile || true"
 
 [settings]
 experimental = true
+
+[tasks.format]
+run = "pnpm format"
+
+[tasks.lint-fix]
+run = "pnpm lint:fix"
+
+[tasks.lint]
+run = "pnpm lint"
+
+[tasks.build]
+run = "pnpm build"
+
+[tasks.typecheck]
+run = "pnpm typecheck"
+
+[tasks.test]
+run = "pnpm test"
+
+[tasks.tidy]
+depends = ["format", "lint-fix"]
+
+[tasks.check]
+depends = ["build", "typecheck", "test", "lint"]

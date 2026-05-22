@@ -80,7 +80,8 @@ export {
   acquireAgentMcpEndpoint,
   mcpConfigContents,
 } from "@symphony/mcp";
-export { LinearClient } from "@symphony/linear-tracker";
+export { LinearClient, LinearGraphQLClient } from "@symphony/linear-tracker";
+export type { LinearClientDeps } from "@symphony/linear-tracker";
 export { MemoryTrackerClient, memoryIssuesFromEnv } from "@symphony/memory-tracker";
 export { configureLogFile, appendLogEvent, defaultLogFile } from "@symphony/log-file";
 export {

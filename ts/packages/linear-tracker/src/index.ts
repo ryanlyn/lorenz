@@ -1,3 +1,5 @@
+import { LinearGraphQLClient } from "@linear/sdk";
+export { LinearGraphQLClient } from "@linear/sdk";
 import { normalizeIssue } from "@symphony/issue";
 import {
   ISSUE_STATE_TYPES,
@@ -73,27 +75,74 @@ interface ResolvedLinearRetryOptions {
   now: () => Date;
 }
 
+export interface LinearClientDeps {
+  fetchImpl?: typeof fetch | undefined;
+  graphqlClient?: LinearGraphQLClient | undefined;
+}
+
 export class LinearClient {
   private readonly retryOptions: ResolvedLinearRetryOptions;
   private resolvedAssignee?: Promise<string | undefined> | undefined;
+  private readonly gqlClient: LinearGraphQLClient | null;
+  private readonly settings: Settings;
+  private readonly fetchImpl: typeof fetch | undefined;
 
   constructor(
-    private settings: Settings,
-    private fetchImpl: typeof fetch = fetch,
+    settings: Settings,
+    fetchImplOrDeps?: typeof fetch | LinearClientDeps,
     retryOptions: LinearRetryOptions = {},
   ) {
+    this.settings = settings;
     this.retryOptions = {
       maxRetries: retryOptions.maxRetries ?? 4,
       baseDelayMs: retryOptions.baseDelayMs ?? 1_000,
       maxDelayMs: retryOptions.maxDelayMs ?? 30_000,
-      sleep: retryOptions.sleep ?? sleep,
+      sleep: retryOptions.sleep ?? defaultSleep,
       now: retryOptions.now ?? (() => new Date()),
     };
+
+    const deps = resolveDeps(fetchImplOrDeps);
+    this.fetchImpl = deps.fetchImpl;
+
+    if (deps.graphqlClient) {
+      this.gqlClient = deps.graphqlClient;
+    } else if (settings.tracker.apiKey && !deps.fetchImpl) {
+      this.gqlClient = new LinearGraphQLClient(settings.tracker.endpoint, {
+        headers: { authorization: settings.tracker.apiKey },
+      });
+    } else {
+      this.gqlClient = null;
+    }
   }
 
   async graphql<T = unknown>(query: string, variables: Record<string, unknown> = {}): Promise<T> {
     if (!this.settings.tracker.apiKey) throw new Error("missing Linear API key");
 
+    if (this.gqlClient) {
+      return this.graphqlWithSdkClient<T>(query, variables);
+    }
+    return this.graphqlWithFetch<T>(query, variables);
+  }
+
+  private async graphqlWithSdkClient<T>(
+    query: string,
+    variables: Record<string, unknown>,
+  ): Promise<T> {
+    for (let retryCount = 0; ; retryCount += 1) {
+      try {
+        return await this.gqlClient!.request<T, Record<string, unknown>>(query, variables);
+      } catch (error: unknown) {
+        if (isRateLimitError(error) && retryCount < this.retryOptions.maxRetries) {
+          const delayMs = retryDelayFromError(error, this.retryOptions, retryCount);
+          await this.retryOptions.sleep(delayMs);
+          continue;
+        }
+        throw reclassifyError(error);
+      }
+    }
+  }
+
+  private async graphqlWithFetch<T>(query: string, variables: Record<string, unknown>): Promise<T> {
     const response = await this.fetchWithRateLimitRetry(query, variables);
     let body: unknown;
     try {
@@ -116,7 +165,7 @@ export class LinearClient {
     variables: Record<string, unknown>,
   ): Promise<Response> {
     for (let retryCount = 0; ; retryCount += 1) {
-      const response = await this.fetchImpl(this.settings.tracker.endpoint, {
+      const response = await this.fetchImpl!(this.settings.tracker.endpoint, {
         method: "POST",
         signal: AbortSignal.timeout(30_000),
         headers: {
@@ -325,6 +374,19 @@ export class LinearClient {
   }
 }
 
+function resolveDeps(fetchImplOrDeps?: typeof fetch | LinearClientDeps): {
+  fetchImpl: typeof fetch | undefined;
+  graphqlClient: LinearGraphQLClient | undefined;
+} {
+  if (!fetchImplOrDeps) return { fetchImpl: undefined, graphqlClient: undefined };
+  if (typeof fetchImplOrDeps === "function")
+    return { fetchImpl: fetchImplOrDeps, graphqlClient: undefined };
+  return {
+    fetchImpl: fetchImplOrDeps.fetchImpl ?? undefined,
+    graphqlClient: fetchImplOrDeps.graphqlClient ?? undefined,
+  };
+}
+
 function linearIssuePayload(issue: Record<string, unknown>): Record<string, unknown> {
   return {
     ...issue,
@@ -363,6 +425,38 @@ function parseProject(project: Record<string, unknown>): LinearProject {
       };
     }),
   };
+}
+
+function isRateLimitError(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const msg = "message" in error ? String((error as { message: unknown }).message) : "";
+  if (msg.includes("429") || msg.toLowerCase().includes("rate limit")) return true;
+  if ("status" in error && (error as { status: unknown }).status === 429) return true;
+  if ("response" in error) {
+    const resp = (error as { response: unknown }).response;
+    if (isRecord(resp) && resp.status === 429) return true;
+  }
+  return false;
+}
+
+function retryDelayFromError(
+  _error: unknown,
+  options: ResolvedLinearRetryOptions,
+  retryCount: number,
+): number {
+  return exponentialRetryDelayMs(options, retryCount);
+}
+
+function reclassifyError(error: unknown): Error {
+  if (error instanceof Error) {
+    const msg = error.message;
+    if (msg.includes("429")) return new Error("linear api status 429", { cause: error });
+    if (msg.toLowerCase().includes("graphql")) {
+      return new Error(`linear_graphql_errors: ${msg}`, { cause: error });
+    }
+    return error;
+  }
+  return new Error(String(error));
 }
 
 function isConnection(value: unknown): value is { nodes: unknown[] } {
@@ -427,6 +521,6 @@ function exponentialRetryDelayMs(options: ResolvedLinearRetryOptions, retryCount
   return Math.min(options.baseDelayMs * 2 ** retryCount, options.maxDelayMs);
 }
 
-async function sleep(delayMs: number): Promise<void> {
+async function defaultSleep(delayMs: number): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, delayMs));
 }

@@ -157,10 +157,17 @@ test("workspace removal runs before_remove best-effort hooks and refuses unsafe 
   assert.deepEqual(await removeWorkspace(settings, path.join(root, "missing")), []);
 
   const symlinkPath = path.join(root, "MT-SYM");
-  const outsideRoot = await tempDir("symphony-ts-workspace-outside");
-  await fs.symlink(outsideRoot, symlinkPath);
-  await assert.rejects(() => removeWorkspace(settings, symlinkPath), /workspace outside root/);
+  const symlinkTarget = await tempDir("symphony-ts-symlink");
+  await fs.symlink(symlinkTarget, symlinkPath);
+  await assert.rejects(
+    () => removeWorkspace(settings, symlinkPath),
+    /unsafe symlink in workspace path/,
+  );
   assert.equal(await fileExists(symlinkPath), true);
+
+  const outsideRoot = await tempDir("symphony-ts-workspace-outside");
+  await assert.rejects(() => removeWorkspace(settings, outsideRoot), /workspace outside root/);
+  assert.equal(await fileExists(outsideRoot), true);
 });
 
 test("workspace issue cleanup removes issue directory and ignores missing or non-string identifiers", async () => {

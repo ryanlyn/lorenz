@@ -8,6 +8,9 @@
   "exports": {
     ".": "./dist/index.js"
   },
+  "devDependencies": {
+    "@types/node": "^22.15.3"
+  },
   "dependencies": {
     "@agentclientprotocol/sdk": "^0.21.0",
     "@hono/node-server": "^1.19.14",

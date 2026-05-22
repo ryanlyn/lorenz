@@ -1,6 +1,10 @@
 import path from "node:path";
+import { setTimeout, clearTimeout } from "node:timers";
 import { execa } from "execa";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
+
+const DEFAULT_SSH_TIMEOUT_MS = 60_000;
+const FORCE_KILL_DELAY_MS = 5_000;
 
 export interface SshRunOptions {
   timeoutMs?: number | undefined;
@@ -23,20 +27,45 @@ export async function runSsh(
   command: string,
   options: SshRunOptions = {},
 ): Promise<SshRunResult> {
-  const timeoutMs = options.timeoutMs ?? 60_000;
+  const timeoutMs = options.timeoutMs ?? DEFAULT_SSH_TIMEOUT_MS;
   if (!Number.isInteger(timeoutMs) || timeoutMs <= 0)
     throw new Error(`invalid_ssh_timeout: ${timeoutMs}`);
 
   try {
-    const result = await execa("ssh", sshArgs(host, command), {
-      timeout: timeoutMs,
+    // Spawn in its own process group (detached) so we can kill the entire group on timeout.
+    // execa's built-in timeout only signals the direct child, leaving sub-processes alive
+    // with open pipes that block resolution until they exit naturally.
+    // SIGTERM first to allow trap handlers / graceful shutdown; SIGKILL after 5s as fallback.
+    // TODO - this may not be enough to ensure the remote ssh process cleans up its children
+    const subprocess = execa("ssh", sshArgs(host, command), {
       reject: false,
       ...(options.stderrToStdout ? { all: true } : {}),
       stdin: "ignore",
       stripFinalNewline: false,
+      detached: true,
     });
+    let timedOut = false;
+    let forceKillTimer: ReturnType<typeof setTimeout> | undefined;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      try {
+        process.kill(-subprocess.pid!, "SIGTERM");
+      } catch {
+        /* process already exited */
+      }
+      forceKillTimer = setTimeout(() => {
+        try {
+          process.kill(-subprocess.pid!, "SIGKILL");
+        } catch {
+          /* process already exited */
+        }
+      }, FORCE_KILL_DELAY_MS);
+    }, timeoutMs);
+    const result = await subprocess;
+    clearTimeout(timer);
+    if (forceKillTimer !== undefined) clearTimeout(forceKillTimer);
     if ((result as { code?: string }).code === "ENOENT") throw new Error("ssh_not_found");
-    if (result.timedOut) throw new Error(`ssh_timeout: ${host} ${timeoutMs}`);
+    if (timedOut) throw new Error(`ssh_timeout: ${host} ${timeoutMs}`);
     return {
       stdout: options.stderrToStdout ? (result.all ?? "") : result.stdout,
       stderr: options.stderrToStdout ? "" : result.stderr,
