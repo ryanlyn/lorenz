@@ -59,7 +59,7 @@ export interface RuntimeRunHistoryEntry {
   durationMs?: number | undefined;
   error?: string | undefined;
   lastEvent?: RuntimeRunLastEvent | null | undefined;
-  lastMessage?: unknown | undefined;
+  lastMessage?: unknown;
   lastEventAt?: string | null | undefined;
   retryAttempt?: number | null | undefined;
 }
@@ -80,7 +80,7 @@ export interface RuntimeRunningEntry {
   turnCount: number;
   startedAt: string;
   lastEvent?: AgentUpdateType | null | undefined;
-  lastMessage?: unknown | undefined;
+  lastMessage?: unknown;
   lastEventAt?: string | null | undefined;
   workspacePath?: string | null | undefined;
   usageTotals: UsageTotals;

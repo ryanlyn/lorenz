@@ -28,7 +28,7 @@ export type ResumeReadResult =
 export async function readResumeState(
   workspace: string,
   workerHost?: string | null,
-  sshTimeoutMs?: number | undefined,
+  sshTimeoutMs?: number,
 ): Promise<ResumeReadResult> {
   const resumePath = await resumeStatePath(workspace, workerHost, sshTimeoutMs);
   if (!resumePath) return { status: "unavailable" };
@@ -54,7 +54,7 @@ export async function writeResumeState(
   workspace: string,
   state: ResumeState,
   workerHost?: string | null,
-  sshTimeoutMs?: number | undefined,
+  sshTimeoutMs?: number,
 ): Promise<void> {
   if (!validResumeState(state)) throw new Error("invalid_resume_state");
   const resumePath = await resumeStatePath(workspace, workerHost, sshTimeoutMs);
@@ -71,7 +71,7 @@ export async function writeResumeState(
 export async function deleteResumeState(
   workspace: string,
   workerHost?: string | null,
-  sshTimeoutMs?: number | undefined,
+  sshTimeoutMs?: number,
 ): Promise<void> {
   const resumePath = await resumeStatePath(workspace, workerHost, sshTimeoutMs);
   if (!resumePath) return;
@@ -90,7 +90,7 @@ export async function deleteResumeState(
 export async function resumeStatePath(
   workspace: string,
   workerHost?: string | null,
-  sshTimeoutMs?: number | undefined,
+  sshTimeoutMs?: number,
 ): Promise<string | null> {
   try {
     if (workerHost) {
@@ -122,7 +122,7 @@ export async function resumeStatePath(
 async function readRemoteResumeState(
   workerHost: string,
   resumePath: string,
-  sshTimeoutMs?: number | undefined,
+  sshTimeoutMs?: number,
 ): Promise<string | null> {
   const result = await runSsh(
     workerHost,

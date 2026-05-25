@@ -21,7 +21,7 @@ export async function buildPrompt(
     issue: issuePromptContext(issue),
     attempt: options.attempt ?? null,
     ensemble,
-  });
+  }) as Promise<string>;
 }
 
 export function ensembleContext(slotIndex: number, size: number): EnsembleContext {

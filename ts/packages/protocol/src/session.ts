@@ -25,15 +25,15 @@ export interface UsageTotals {
 
 export interface SymphonyMeta {
   executorPid?: string | null | undefined;
-  rateLimits?: unknown | undefined;
+  rateLimits?: unknown;
   usage?: Partial<UsageTotals> | undefined;
 }
 
 export interface SessionUpdateBase {
   kind: SessionUpdateKind;
   sessionId?: string | null | undefined;
-  agentKind?: AgentKind | string | undefined;
-  message?: unknown | undefined;
+  agentKind?: AgentKind | undefined;
+  message?: unknown;
   at?: Date | undefined;
   _meta?: SymphonyMeta | undefined;
 }
@@ -53,7 +53,7 @@ export interface TurnUpdate extends SessionUpdateBase {
     | "tool_call"
     | "tool_result"
     | "notification";
-  message?: unknown | undefined;
+  message?: unknown;
 }
 
 export type SessionUpdate = UsageUpdate | TurnUpdate | SessionUpdateBase;

@@ -21,7 +21,7 @@ export class CodexProcess {
           }) as unknown as ChildProcessWithoutNullStreams)
         : command;
 
-    this.child.stderr.on("data", (chunk) => {
+    this.child.stderr.on("data", (chunk: Buffer) => {
       this.stderrBuffer = this.consumeBuffer(
         this.stderrBuffer + this.stderrDecoder.write(chunk),
         (line) => {

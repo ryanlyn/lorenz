@@ -351,11 +351,13 @@ class AcpClientAdapter {
 
   client(): Client {
     const client: Client = {
+      // eslint-disable-next-line @typescript-eslint/require-await
       sessionUpdate: async (params: SessionNotification) => {
         const session = this.currentSession();
         if (!session) return;
         handleAcpSessionUpdate(session, params);
       },
+      // eslint-disable-next-line @typescript-eslint/require-await
       requestPermission: async (params: RequestPermissionRequest) => {
         const session = this.currentSession();
         return handleAcpPermissionRequest(session, params, this.emit);

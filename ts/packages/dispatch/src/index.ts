@@ -96,7 +96,7 @@ export function firstUnclaimedSlot(
   issue: Issue,
   settings: Settings,
   claimedSlots: Set<string>,
-  preferredSlotIndex?: number | null | undefined,
+  preferredSlotIndex?: number | null,
 ): number | null {
   const size = ensembleSize(issue) ?? settings.agent.ensembleSize;
   if (

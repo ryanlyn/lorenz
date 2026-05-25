@@ -108,7 +108,7 @@ export async function removeRemoteWorkspace(
 export async function removeIssueWorkspaces(
   settings: Settings,
   identifier: unknown,
-  workerHost?: string | null | undefined,
+  workerHost?: string | null,
 ): Promise<void> {
   if (typeof identifier !== "string") return;
   if (workerHost) {
@@ -154,7 +154,7 @@ export async function runHook(
   command: string,
   cwd: string,
   hooks: HooksSettings,
-  workerHost?: string | null | undefined,
+  workerHost?: string | null,
 ): Promise<void> {
   if (workerHost) return runRemoteHook(workerHost, cwd, command, hooks);
 
@@ -179,7 +179,7 @@ export function ensureInsideRoot(target: string, root: string): void {
 export async function validateWorkspaceCwd(
   settings: Settings,
   workspace: string,
-  workerHost?: string | null | undefined,
+  workerHost?: string | null,
 ): Promise<string> {
   if (workerHost) return validateRemoteWorkspaceCwd(settings, workspace, workerHost);
   if (invalidWorkspaceInput(workspace)) throw new Error("invalid_workspace_cwd: blank");

@@ -311,7 +311,7 @@ export class CodexAppServerExecutor implements AgentExecutor {
       return;
     }
 
-    match(parsed.data)
+    void match(parsed.data)
       .with({ method: "turn/completed" }, (message) =>
         this.emit(session, { type: "turn_completed", message, timestamp: new Date() }),
       )
