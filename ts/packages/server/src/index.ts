@@ -387,7 +387,7 @@ function emptyState(message: string): string {
 function formatValue(value: unknown): string {
   if (value === null || value === undefined || value === "") return "0";
   if (typeof value === "number") return Number.isInteger(value) ? String(value) : value.toFixed(1);
-  return `${value as string | number | boolean}`;
+  return String(value);
 }
 
 function jsonResponse(body: unknown, status = 200): Response {

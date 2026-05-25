@@ -428,7 +428,7 @@ export function normalizeStateName(value: string): string {
 
 export function normalizeRouteName(value: unknown): string {
   if (value === undefined || value === null) return "";
-  return `${value as string | number}`.trim().toLowerCase();
+  return String(value).trim().toLowerCase();
 }
 
 function parseTracker(
@@ -940,7 +940,7 @@ function normalizeAliases(
 
 function stringValue(value: unknown, fallback: string): string {
   if (value === undefined || value === null) return fallback;
-  return `${value as string | number | boolean}`;
+  return String(value);
 }
 
 function trackerKindValue(value: unknown, label: string): TrackerKind {
@@ -985,7 +985,7 @@ function optionalMap(
 
 function optionalString(value: unknown): string | null {
   if (value === undefined || value === null) return null;
-  const text = `${value as string | number | boolean}`;
+  const text = String(value);
   return text === "" ? null : text;
 }
 

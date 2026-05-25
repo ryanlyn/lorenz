@@ -30,6 +30,12 @@ export default tseslint.config(
     },
   },
   {
+    files: ["packages/config/src/index.ts", "packages/server/src/index.ts"],
+    rules: {
+      "@typescript-eslint/no-base-to-string": "off",
+    },
+  },
+  {
     files: ["packages/*/test/**/*.ts", "apps/*/test/**/*.ts", "test/**/*.ts"],
     ...tseslint.configs.disableTypeChecked,
     rules: {
