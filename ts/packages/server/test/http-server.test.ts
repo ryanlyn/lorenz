@@ -1,5 +1,4 @@
 import { test } from "vitest";
-import { assert } from "../../../test/assert.js";
 import {
   issueMcpToken,
   Orchestrator,
@@ -7,10 +6,14 @@ import {
   revokeMcpToken,
   SymphonyRuntime,
 } from "@symphony/cli";
-import { startObservabilityServer } from "@symphony/server";
-import { startClaudeMcpServer } from "@symphony/server";
 import { normalizeIssue } from "@symphony/issue";
 import type { WorkflowDefinition } from "@symphony/domain";
+
+import { assert } from "../../../test/assert.js";
+
+import { startObservabilityServer } from "@symphony/server";
+import { startClaudeMcpServer } from "@symphony/server";
+
 
 test("observability HTTP API exposes Elixir-shaped state, issue, runs, refresh, and errors", async () => {
   const workflow = workflowFixture();

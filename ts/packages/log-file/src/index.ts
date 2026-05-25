@@ -1,7 +1,9 @@
+import type { Stats } from "node:fs";
 import { readdirSync, rmSync, symlinkSync } from "node:fs";
 import fs from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
+
 import pino, { type Logger } from "pino";
 
 const require = createRequire(import.meta.url);
@@ -196,7 +198,7 @@ function rollFilePattern(logFile: string): RegExp {
   return new RegExp(`^${escapedBaseName}\\.(\\d+)$`);
 }
 
-async function lstatOrNull(filePath: string): Promise<import("node:fs").Stats | null> {
+async function lstatOrNull(filePath: string): Promise<Stats | null> {
   try {
     return await fs.lstat(filePath);
   } catch (error) {

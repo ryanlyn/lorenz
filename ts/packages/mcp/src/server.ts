@@ -4,6 +4,7 @@ import { Hono, type Context } from "hono";
 import { match } from "ts-pattern";
 import { z } from "zod";
 import type { Settings } from "@symphony/domain";
+
 import { validMcpToken } from "./auth.js";
 import { executeTool, toolSpecs } from "./tools.js";
 

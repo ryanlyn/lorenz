@@ -1,5 +1,6 @@
 import { StringDecoder } from "node:string_decoder";
 import type { Readable, Writable } from "node:stream";
+
 import {
   AbstractMessageReader,
   AbstractMessageWriter,
@@ -182,7 +183,7 @@ export class CodexNdjsonMessageWriter extends AbstractMessageWriter implements M
 }
 
 function withJsonRpc(message: Record<string, unknown>): Message {
-  return { jsonrpc: "2.0", ...message } as unknown as Message;
+  return { jsonrpc: "2.0", ...message };
 }
 
 function stripJsonRpc(message: Record<string, unknown>): Record<string, unknown>;

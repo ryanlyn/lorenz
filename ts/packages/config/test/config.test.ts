@@ -1,7 +1,7 @@
-import { assert } from "../../../test/assert.js";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+
 import { test } from "vitest";
 import {
   loadWorkflow,
@@ -11,6 +11,8 @@ import {
   validateDispatchConfig,
   workflowFilePath,
 } from "@symphony/cli";
+
+import { assert } from "../../../test/assert.js";
 import { tempDir } from "../../../test/helpers.js";
 
 test("config resolves env-backed Linear token and assignee", () => {

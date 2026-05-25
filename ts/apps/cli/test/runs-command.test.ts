@@ -1,10 +1,14 @@
-import { assert } from "../../../test/assert.js";
 import fs from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
+
 import { test } from "vitest";
-import { parseRunsArgs, runRunsCommand, runRunsMain } from "@symphony/cli/runs";
+
+import { assert } from "../../../test/assert.js";
 import { tempDir } from "../../../test/helpers.js";
+
+import { parseRunsArgs, runRunsCommand, runRunsMain } from "@symphony/cli/runs";
+
 
 test("runs command parses Elixir mix task filters", () => {
   assert.deepEqual(

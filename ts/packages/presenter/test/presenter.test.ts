@@ -1,9 +1,11 @@
-import { assert } from "../../../test/assert.js";
 import fs from "node:fs";
 import path from "node:path";
+
 import { test } from "vitest";
 import { issuePayload, runsPayload, statePayload } from "@symphony/cli";
 import type { RuntimeSnapshot } from "@symphony/runtime";
+
+import { assert } from "../../../test/assert.js";
 
 test("presenter preserves blocked dispatches, retry errors, run costs, retries, and log hints", () => {
   const snapshot = snapshotFixture();

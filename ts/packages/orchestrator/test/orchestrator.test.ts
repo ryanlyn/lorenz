@@ -1,6 +1,7 @@
 import { test } from "vitest";
-import { assert } from "../../../test/assert.js";
 import { Orchestrator, normalizeIssue, parseConfig, slotKey } from "@symphony/cli";
+
+import { assert } from "../../../test/assert.js";
 
 test("orchestrator claims ensemble slots independently and snapshots backend-neutral fields", () => {
   const settings = parseConfig({

@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+
 import YAML from "yaml";
 import { parseConfig } from "@symphony/config";
 import type { WorkflowDefinition } from "@symphony/domain";

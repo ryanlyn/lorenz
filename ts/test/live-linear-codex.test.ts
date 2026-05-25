@@ -1,8 +1,10 @@
-import { assert } from "./assert.js";
 import path from "node:path";
+
 import { test } from "vitest";
 import { CodexAppServerExecutor, executeTool, LinearClient, parseConfig } from "@symphony/cli";
 import type { AgentUpdate } from "@symphony/cli";
+
+import { assert } from "./assert.js";
 import { tempDir } from "./helpers.js";
 
 const runLive = process.env.SYMPHONY_TS_RUN_LINEAR_CODEX_E2E === "1";
@@ -21,7 +23,7 @@ test(
         tracker: {
           kind: "linear",
           api_key: "$LINEAR_API_KEY",
-          project_slug: "symphony-414bf2e49ff2",
+          project_slug: "$LINEAR_PROJECT_SLUG",
           active_states: ["Todo"],
           terminal_states: ["Done", "Canceled", "Cancelled", "Duplicate", "Closed"],
           assignee: "$LINEAR_VIEWER_ID",

@@ -1,7 +1,9 @@
-import { assert } from "./assert.js";
 import path from "node:path";
+
 import { test } from "vitest";
 import { CodexAppServerExecutor, parseConfig } from "@symphony/cli";
+
+import { assert } from "./assert.js";
 import { initGitRepo, sampleIssue, tempDir } from "./helpers.js";
 
 const runLive = process.env.SYMPHONY_TS_RUN_REAL_CODEX_RESUME_E2E === "1";

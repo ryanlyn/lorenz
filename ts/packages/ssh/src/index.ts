@@ -1,7 +1,8 @@
 import path from "node:path";
 import { setTimeout, clearTimeout } from "node:timers";
-import { execa } from "execa";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
+
+import { execa } from "execa";
 
 const DEFAULT_SSH_TIMEOUT_MS = 60_000;
 const FORCE_KILL_DELAY_MS = 5_000;

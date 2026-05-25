@@ -1,7 +1,10 @@
-import { assert } from "../../../test/assert.js";
 import { PassThrough } from "node:stream";
+
 import { test } from "vitest";
 import type { Message } from "vscode-jsonrpc";
+
+import { assert } from "../../../test/assert.js";
+
 import { CodexNdjsonMessageReader, CodexNdjsonMessageWriter } from "@symphony/codex";
 
 test("Codex NDJSON reader preserves UTF-8 chunks and reports malformed lines", async () => {

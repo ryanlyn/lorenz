@@ -1,6 +1,7 @@
 import { test } from "vitest";
-import { assert } from "./assert.js";
 import { AcpExecutor, parseConfig } from "@symphony/cli";
+
+import { assert } from "./assert.js";
 import { sampleIssue, tempDir } from "./helpers.js";
 
 const claudeAcpBridge = process.env.SYMPHONY_TS_CLAUDE_ACP_BRIDGE_COMMAND;

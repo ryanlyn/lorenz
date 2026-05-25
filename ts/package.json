@@ -24,8 +24,7 @@
     "test:live:ssh": "SYMPHONY_TS_RUN_LIVE_SSH_E2E=1 vitest run test/live-ssh.test.ts",
     "test:live": "pnpm test:live:codex && pnpm test:live:codex-resume && pnpm test:live:linear-codex && pnpm test:live:claude",
     "test:parity": "vitest run",
-    "test:parity:live": "pnpm test:live",
-    "proof:parity": "cd .. && bash scripts/parity/run_full_parity.sh"
+    "test:parity:live": "pnpm test:live"
   },
   "devDependencies": {
     "@agentclientprotocol/sdk": "^0.21.0",
@@ -68,6 +67,7 @@
     "acpx": "^0.7.0",
     "commander": "^14.0.3",
     "eslint": "^10.3.0",
+    "eslint-plugin-import-x": "^4.12.2",
     "execa": "^9.6.1",
     "hono": "^4.12.18",
     "ink": "^7.0.1",

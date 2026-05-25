@@ -115,7 +115,7 @@ export interface Issue {
   /** True when the issue is assigned to the configured worker assignee (or no assignee filter is set). Gates dispatch. */
   assignedToWorker?: boolean | null | undefined;
   /** Untouched tracker payload kept for debugging and downstream consumers; do not rely on its shape. */
-  raw?: unknown | undefined;
+  raw?: unknown;
 }
 
 /**
@@ -537,7 +537,7 @@ export interface RunningEntry {
   startedAt: Date;
   /** Discriminator of the most recent {@link AgentUpdate} (see {@link AgentUpdate.type}). */
   lastAgentEvent?: AgentUpdateType | null | undefined;
-  lastAgentMessage?: unknown | undefined;
+  lastAgentMessage?: unknown;
   lastAgentTimestamp?: Date | null | undefined;
   /** Monotonic per-run totals, kept in sync as usage updates arrive. */
   usageTotals: UsageTotals;
@@ -565,17 +565,17 @@ export interface AgentUpdate {
    */
   type: AgentUpdateType;
   /** Structured update conforming to the cross-language session protocol; populated for events that map cleanly to it. */
-  sessionUpdate?: unknown | undefined;
+  sessionUpdate?: unknown;
   workspacePath?: string | null | undefined;
   sessionId?: string | null | undefined;
   resumeId?: string | null | undefined;
   executorPid?: string | null | undefined;
   /** Free-form payload; string for stderr/process_exit, structured object for protocol events. */
-  message?: unknown | undefined;
+  message?: unknown;
   /** Partial usage snapshot from the provider; merged monotonically into the run's totals. */
   usage?: Partial<UsageTotals> | undefined;
   /** Provider-specific rate-limit payload (e.g. Codex `rate_limit` notification); stored on orchestrator state as-is. */
-  rateLimits?: unknown | undefined;
+  rateLimits?: unknown;
   /** When the executor observed the event; defaults to `new Date()` if omitted. */
   timestamp?: Date | undefined;
 }

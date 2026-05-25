@@ -1,5 +1,6 @@
-import React from "react";
 import path from "node:path";
+
+import React from "react";
 import { Command } from "commander";
 import { render } from "ink";
 import {
@@ -16,21 +17,22 @@ import { validateDispatchConfig } from "@symphony/config";
 import { startObservabilityServer, type ObservabilityServerHandle } from "@symphony/server";
 import { configureLogFile } from "@symphony/log-file";
 import { SymphonyRuntime } from "@symphony/runtime";
-import {
-  createTrackerClient,
-  runAgentAttempt,
-  runtimeAdapters,
-  runtimeDefaultSettingsOptions,
-} from "./daemon.js";
+import { RuntimeApp } from "@symphony/tui";
+import { loadWorkflow } from "@symphony/workflow";
+import type { Settings, WorkflowDefinition } from "@symphony/domain";
+
 import {
   createRunsCommand,
   runRunsCommand,
   runsOptionsFromCommanderOptions,
   type RunsCommanderOptions,
 } from "./runs.js";
-import { RuntimeApp } from "@symphony/tui";
-import { loadWorkflow } from "@symphony/workflow";
-import type { Settings, WorkflowDefinition } from "@symphony/domain";
+import {
+  createTrackerClient,
+  runAgentAttempt,
+  runtimeAdapters,
+  runtimeDefaultSettingsOptions,
+} from "./daemon.js";
 
 export interface CliOptions {
   workflowPath: string | null;

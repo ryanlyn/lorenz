@@ -1,7 +1,9 @@
-import { assert } from "./assert.js";
 import path from "node:path";
+
 import { test } from "vitest";
 import { CodexAppServerExecutor, parseConfig } from "@symphony/cli";
+
+import { assert } from "./assert.js";
 import { sampleIssue, tempDir } from "./helpers.js";
 
 test(

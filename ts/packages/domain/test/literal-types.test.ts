@@ -1,5 +1,4 @@
 import { test } from "vitest";
-import { assert } from "../../../test/assert.js";
 import {
   AGENT_UPDATE_TYPES,
   CODEX_APPROVAL_POLICY_NAMES,
@@ -7,6 +6,8 @@ import {
   ISSUE_STATE_TYPES,
 } from "@symphony/cli";
 import type { AgentUpdate, CodexSettings, Issue, RuntimeEvent, SessionUpdate } from "@symphony/cli";
+
+import { assert } from "../../../test/assert.js";
 
 const codexSettingsFixture: CodexSettings = {
   command: "codex app-server",

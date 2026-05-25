@@ -1,4 +1,5 @@
-import { Command, InvalidArgumentError } from "commander";
+import type { Command} from "commander";
+import { InvalidArgumentError } from "commander";
 
 export type ParseResult<T> =
   | { status: "ok"; options: T }

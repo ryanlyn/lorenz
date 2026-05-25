@@ -12,8 +12,6 @@ import type { SessionUpdate, SessionUpdateKind } from "@symphony/protocol";
 import { executeTool, toolSpecs } from "@symphony/mcp";
 import { shellEscape, startSshProcess } from "@symphony/ssh";
 import { validateWorkspaceCwd } from "@symphony/workspace";
-import { CodexNdjsonMessageReader, CodexNdjsonMessageWriter } from "./transport.js";
-import { CodexProcess } from "./process.js";
 import { match, P } from "ts-pattern";
 import {
   CancellationTokenSource,
@@ -22,6 +20,9 @@ import {
   type MessageConnection,
 } from "vscode-jsonrpc";
 import { z } from "zod";
+
+import { CodexProcess } from "./process.js";
+import { CodexNdjsonMessageReader, CodexNdjsonMessageWriter } from "./transport.js";
 
 export interface CodexSession extends AgentSession {
   process: CodexProcess;
@@ -311,7 +312,7 @@ export class CodexAppServerExecutor implements AgentExecutor {
       return;
     }
 
-    match(parsed.data)
+    void match(parsed.data)
       .with({ method: "turn/completed" }, (message) =>
         this.emit(session, { type: "turn_completed", message, timestamp: new Date() }),
       )

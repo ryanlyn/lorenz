@@ -1,14 +1,26 @@
 import js from "@eslint/js";
 import tseslint from "typescript-eslint";
+import importX from "eslint-plugin-import-x";
 
 export default tseslint.config(
   {
-    ignores: ["dist/**", "log/**", "node_modules/**"],
+    ignores: ["**/dist/**", "log/**", "node_modules/**"],
   },
   js.configs.recommended,
-  ...tseslint.configs.recommended,
+  ...tseslint.configs.recommendedTypeChecked,
+  {
+    languageOptions: {
+      parserOptions: {
+        projectService: true,
+        tsconfigRootDir: import.meta.dirname,
+      },
+    },
+  },
   {
     files: ["packages/**/*.{ts,tsx}", "apps/**/*.{ts,tsx}", "test/**/*.ts"],
+    plugins: {
+      "import-x": importX,
+    },
     rules: {
       "no-undef": "off",
       "@typescript-eslint/no-unused-vars": [
@@ -19,11 +31,15 @@ export default tseslint.config(
           varsIgnorePattern: "^_",
         },
       ],
+      "@typescript-eslint/consistent-type-imports": "error",
+      "import-x/order": ["warn", { "newlines-between": "always" }],
     },
   },
   {
     files: ["packages/*/test/**/*.ts", "apps/*/test/**/*.ts", "test/**/*.ts"],
+    ...tseslint.configs.disableTypeChecked,
     rules: {
+      ...tseslint.configs.disableTypeChecked.rules,
       "@typescript-eslint/no-explicit-any": "off",
     },
   },

@@ -1,8 +1,10 @@
-import { assert } from "../../../test/assert.js";
 import fs from "node:fs/promises";
 import path from "node:path";
+
 import { test } from "vitest";
 import { appendLogEvent, configureLogFile, defaultLogFile } from "@symphony/cli";
+
+import { assert } from "../../../test/assert.js";
 import { tempDir } from "../../../test/helpers.js";
 
 test("log file configuration uses pino-roll with a stable Elixir-compatible path", async () => {

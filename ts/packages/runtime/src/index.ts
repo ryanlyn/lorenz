@@ -95,7 +95,7 @@ export interface RuntimeRunHistoryEntry {
   durationMs?: number | undefined;
   error?: string | undefined;
   lastEvent?: RuntimeRunLastEvent | null | undefined;
-  lastMessage?: unknown | undefined;
+  lastMessage?: unknown;
   lastEventAt?: string | null | undefined;
   retryAttempt?: number | null | undefined;
 }
@@ -116,7 +116,7 @@ export interface RuntimeRunningEntry {
   turnCount: number;
   startedAt: string;
   lastEvent?: AgentUpdateType | null | undefined;
-  lastMessage?: unknown | undefined;
+  lastMessage?: unknown;
   lastEventAt?: string | null | undefined;
   workspacePath?: string | null | undefined;
   usageTotals: UsageTotals;
@@ -362,7 +362,7 @@ export class SymphonyRuntime {
       controller.signal,
     );
     this.inFlight.add(run);
-    run.finally(() => {
+    void run.finally(() => {
       this.inFlight.delete(run);
       this.appStatus = this.inFlight.size > 0 ? "running" : "idle";
       this.emit();
@@ -387,7 +387,7 @@ export class SymphonyRuntime {
     agentKind: AgentKind,
     runId: string,
     workerHost: string | null,
-    abortSignal?: AbortSignal | undefined,
+    abortSignal?: AbortSignal,
   ): Promise<void> {
     const startedAt = this.now().toISOString();
     try {

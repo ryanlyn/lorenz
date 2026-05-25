@@ -1,7 +1,9 @@
 import { test } from "vitest";
-import { assert } from "../../../test/assert.js";
-import { main, parseCliArgs, projectUrlForSettings } from "@symphony/cli";
 import { parseConfig } from "@symphony/config";
+
+import { assert } from "../../../test/assert.js";
+
+import { main, parseCliArgs, projectUrlForSettings } from "@symphony/cli";
 
 test("CLI accepts Elixir-compatible workflow path and TS runtime flags", () => {
   assert.deepEqual(

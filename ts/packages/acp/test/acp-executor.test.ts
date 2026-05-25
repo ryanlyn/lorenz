@@ -1,10 +1,12 @@
-import { assert } from "../../../test/assert.js";
 import fs from "node:fs/promises";
 import net from "node:net";
 import path from "node:path";
+
 import { test } from "vitest";
 import { AcpExecutor, acquireAgentMcpEndpoint, parseConfig, shellEscape } from "@symphony/cli";
 import type { AgentUpdate } from "@symphony/cli";
+
+import { assert } from "../../../test/assert.js";
 import { sampleIssue, tempDir, writeExecutable } from "../../../test/helpers.js";
 
 test("ACP executor starts a session, translates updates, approves permissions, and exposes fs", async () => {

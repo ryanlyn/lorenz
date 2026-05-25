@@ -1,6 +1,6 @@
-import { assert } from "./assert.js";
 import fs from "node:fs/promises";
 import path from "node:path";
+
 import { test } from "vitest";
 import {
   buildPrompt,
@@ -19,6 +19,8 @@ import {
   validateWorkspaceCwd,
   writeResumeState,
 } from "@symphony/cli";
+
+import { assert } from "./assert.js";
 import { initGitRepo, sampleIssue, tempDir, writeExecutable } from "./helpers.js";
 
 test("prompt rendering is strict and exposes ensemble context", async () => {

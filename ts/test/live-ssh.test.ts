@@ -1,10 +1,10 @@
-import { assert } from "./assert.js";
 import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
+
 import { test } from "vitest";
 import {
   CodexAppServerExecutor,
@@ -16,6 +16,8 @@ import {
   shellEscape,
 } from "@symphony/cli";
 import type { Issue, WorkflowDefinition } from "@symphony/cli";
+
+import { assert } from "./assert.js";
 import { sampleIssue, tempDir } from "./helpers.js";
 
 const execFileAsync = promisify(execFile);

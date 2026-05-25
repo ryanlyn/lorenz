@@ -1,8 +1,9 @@
-import { issueMcpToken, revokeMcpToken } from "./auth.js";
-import { startClaudeMcpServer, type ObservabilityServerHandle } from "./server.js";
 import { workerHostPool, type RemoteMcpTunnelLease } from "@symphony/worker-host-pool";
 import type { Settings } from "@symphony/domain";
 import type { McpServer } from "@agentclientprotocol/sdk";
+
+import { startClaudeMcpServer, type ObservabilityServerHandle } from "./server.js";
+import { issueMcpToken, revokeMcpToken } from "./auth.js";
 
 export interface AgentMcpEndpointLease {
   url: string;

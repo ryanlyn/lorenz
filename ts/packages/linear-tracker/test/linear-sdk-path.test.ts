@@ -1,7 +1,8 @@
 import { test, vi } from "vitest";
-import { assert } from "../../../test/assert.js";
 import { LinearClient, parseConfig } from "@symphony/cli";
-import { LinearGraphQLClient } from "@linear/sdk";
+import type { LinearGraphQLClient } from "@linear/sdk";
+
+import { assert } from "../../../test/assert.js";
 
 function mockGraphqlClient(
   requestFn: (...args: unknown[]) => Promise<unknown>,

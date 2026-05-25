@@ -63,7 +63,7 @@ export async function executeTool(
     );
     let body: unknown;
     try {
-      body = (await response.json()) as unknown;
+      body = await response.json();
     } catch (error) {
       if (!response.ok)
         return toolFailure(`Linear GraphQL request failed with HTTP ${response.status}.`, {

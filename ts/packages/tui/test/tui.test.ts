@@ -1,9 +1,13 @@
-import { assert } from "../../../test/assert.js";
 import fs from "node:fs";
 import path from "node:path";
+
 import React from "react";
 import { test } from "vitest";
 import { render } from "ink-testing-library";
+import type { RuntimeSnapshot } from "@symphony/runtime";
+
+import { assert } from "../../../test/assert.js";
+
 import {
   formatElixirStyleDashboard,
   humanizeAgentMessage,
@@ -12,7 +16,6 @@ import {
   RuntimeDashboard,
   updateTokenSamples,
 } from "@symphony/tui";
-import type { RuntimeSnapshot } from "@symphony/runtime";
 
 test("Ink dashboard renders Elixir-style operational sections", () => {
   const { lastFrame } = render(

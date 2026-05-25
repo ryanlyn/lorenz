@@ -185,7 +185,7 @@ export class Orchestrator {
     issueId: string,
     slotIndex: number,
     normal: boolean,
-    error?: string | undefined,
+    error?: string,
     retryKind: "failure" | "continuation" = "failure",
   ): void {
     const key = slotKey(issueId, slotIndex);

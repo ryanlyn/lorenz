@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { Readable, Writable } from "node:stream";
+
 import {
   ClientSideConnection,
   PROTOCOL_VERSION,
@@ -351,14 +352,15 @@ class AcpClientAdapter {
 
   client(): Client {
     const client: Client = {
-      sessionUpdate: async (params: SessionNotification) => {
+      sessionUpdate: (params: SessionNotification): Promise<void> => {
         const session = this.currentSession();
-        if (!session) return;
+        if (!session) return Promise.resolve();
         handleAcpSessionUpdate(session, params);
+        return Promise.resolve();
       },
-      requestPermission: async (params: RequestPermissionRequest) => {
+      requestPermission: (params: RequestPermissionRequest) => {
         const session = this.currentSession();
-        return handleAcpPermissionRequest(session, params, this.emit);
+        return Promise.resolve(handleAcpPermissionRequest(session, params, this.emit));
       },
     };
     if (!this.workerHost) {

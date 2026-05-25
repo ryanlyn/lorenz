@@ -1,8 +1,10 @@
-import { assert } from "./assert.js";
 import path from "node:path";
+
 import { afterAll, beforeAll, describe, test } from "vitest";
 import { setupServer } from "msw/node";
 import { executeTool, LinearClient, parseConfig } from "@symphony/cli";
+
+import { assert } from "./assert.js";
 import { createFakeLinearHandlers } from "./fake-linear-server.js";
 import { tempDir } from "./helpers.js";
 

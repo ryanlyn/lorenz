@@ -146,7 +146,7 @@ export class LinearClient {
     const response = await this.fetchWithRateLimitRetry(query, variables);
     let body: unknown;
     try {
-      body = (await response.json()) as unknown;
+      body = await response.json();
     } catch (error) {
       if (!response.ok) throw new Error(`linear api status ${response.status}`, { cause: error });
       throw new Error(`linear_invalid_json: ${errorMessage(error)}`, { cause: error });
@@ -429,11 +429,12 @@ function parseProject(project: Record<string, unknown>): LinearProject {
 
 function isRateLimitError(error: unknown): boolean {
   if (!error || typeof error !== "object") return false;
-  const msg = "message" in error ? String((error as { message: unknown }).message) : "";
+  const err = error as Record<string, unknown>;
+  const msg = "message" in error ? String(err.message) : "";
   if (msg.includes("429") || msg.toLowerCase().includes("rate limit")) return true;
-  if ("status" in error && (error as { status: unknown }).status === 429) return true;
+  if ("status" in error && err.status === 429) return true;
   if ("response" in error) {
-    const resp = (error as { response: unknown }).response;
+    const resp = err.response;
     if (isRecord(resp) && resp.status === 429) return true;
   }
   return false;
