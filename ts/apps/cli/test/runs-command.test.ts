@@ -9,7 +9,6 @@ import { tempDir } from "../../../test/helpers.js";
 
 import { parseRunsArgs, runRunsCommand, runRunsMain } from "@symphony/cli/runs";
 
-
 test("runs command parses Elixir mix task filters", () => {
   assert.deepEqual(
     parseRunsArgs(["--issue", "MONO-171", "--failed", "--limit", "5", "--port", "4100"]),

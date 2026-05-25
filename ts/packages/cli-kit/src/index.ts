@@ -1,4 +1,4 @@
-import type { Command} from "commander";
+import type { Command } from "commander";
 import { InvalidArgumentError } from "commander";
 
 export type ParseResult<T> =
