@@ -4,3 +4,5 @@ packages:
 allowBuilds:
   esbuild: true
   msw: true
+  # Required by eslint's import resolver; without this pnpm prompts interactively during install.
+  unrs-resolver: true
