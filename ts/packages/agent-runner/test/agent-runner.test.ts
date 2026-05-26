@@ -1,7 +1,6 @@
-import { test } from "vitest";
+import { vi, test } from "vitest";
 import type { AgentExecutor, AgentSession, AgentUpdate, Issue, Settings } from "@symphony/domain";
 import { defaultSettings } from "@symphony/config";
-import { vi } from "vitest";
 
 import { assert } from "../../../test/assert.js";
 import { runAgentAttempt, type RunAgentAttemptAdapters } from "../src/index.js";
