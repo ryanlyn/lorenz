@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
-import { test } from "vitest";
+import { test, vi } from "vitest";
 import {
   createWorkspaceForIssue,
   normalizeIssue,
@@ -532,16 +532,14 @@ test("runtime does not stall a stale ensemble slot snapshot after its runner com
 
     process.env.PATH = `${fakeBin}:${originalPath ?? ""}`;
     const stallPoll = runtime.pollOnce({ dryRun: true });
-    setTimeout(() => {
-      controls.get(1)?.resolve({
-        workspace: path.join(root, "workspace-1"),
-        turnCount: 1,
-        updates: [],
-        resumeId: "ensemble-slot-1",
-        agentKind: "codex",
-        finalIssue: { ...issue, state: "Todo" },
-      });
-    }, 20);
+    controls.get(1)?.resolve({
+      workspace: path.join(root, "workspace-1"),
+      turnCount: 1,
+      updates: [],
+      resumeId: "ensemble-slot-1",
+      agentKind: "codex",
+      finalIssue: { ...issue, state: "Todo" },
+    });
     await stallPoll;
     await waitFor(
       () => runtime.snapshot().runHistory.some((entry) => entry.slotIndex === 1),
@@ -612,11 +610,11 @@ test("runtime does not record late success after stall reconciliation wins", asy
       agentKind: "codex",
       finalIssue: completeIssue,
     });
-    await new Promise((resolve) => setTimeout(resolve, 20));
-
-    const snapshot = runtime.snapshot();
-    assert.equal(snapshot.runHistory.length, 1);
-    assert.equal(snapshot.runHistory[0]?.outcome, "stalled");
+    await vi.waitFor(() => {
+      const snapshot = runtime.snapshot();
+      assert.equal(snapshot.runHistory.length, 1);
+      assert.equal(snapshot.runHistory[0]?.outcome, "stalled");
+    });
   } finally {
     runtime.stop();
   }
@@ -644,8 +642,7 @@ test("runtime coalesces overlapping pollOnce calls", async () => {
   const first = runtime.pollOnce({ dryRun: true });
   await waitFor(() => fetches === 1, 1_000);
   const second = runtime.pollOnce({ dryRun: true });
-  await new Promise((resolve) => setTimeout(resolve, 20));
-  assert.equal(fetches, 1);
+  await vi.waitFor(() => assert.equal(fetches, 1));
 
   const unblockFetch = fetchControl.release;
   assert.ok(unblockFetch);
@@ -939,12 +936,12 @@ async function waitFor(
   predicate: () => boolean | Promise<boolean>,
   timeoutMs: number,
 ): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if (await predicate()) return;
-    await new Promise((resolve) => setTimeout(resolve, 10));
-  }
-  throw new Error("timed out waiting for condition");
+  await vi.waitFor(
+    async () => {
+      if (!(await predicate())) throw new Error("condition not met");
+    },
+    { timeout: timeoutMs, interval: 10 },
+  );
 }
 
 async function fileText(filePath: string): Promise<string> {

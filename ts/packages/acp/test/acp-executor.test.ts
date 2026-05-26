@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import net from "node:net";
 import path from "node:path";
 
-import { test } from "vitest";
+import { test, vi } from "vitest";
 import { AcpExecutor, acquireAgentMcpEndpoint, parseConfig, shellEscape } from "@symphony/cli";
 import type { AgentUpdate } from "@symphony/cli";
 
@@ -410,12 +410,12 @@ function acpAuthHeader(server: unknown): string | undefined {
 }
 
 async function waitForTunnelTrace(tracePath: string, count: number): Promise<void> {
-  const deadline = Date.now() + 5_000;
-  while (Date.now() < deadline) {
-    if (tunnelTraceCount(await fs.readFile(tracePath, "utf8")) === count) return;
-    await new Promise((resolve) => setTimeout(resolve, 10));
-  }
-  assert.equal(tunnelTraceCount(await fs.readFile(tracePath, "utf8")), count);
+  await vi.waitFor(
+    async () => {
+      assert.equal(tunnelTraceCount(await fs.readFile(tracePath, "utf8")), count);
+    },
+    { timeout: 5_000 },
+  );
 }
 
 function reserveTcpPort(): Promise<number> {

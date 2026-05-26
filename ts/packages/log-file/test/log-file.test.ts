@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
-import { test } from "vitest";
+import { test, vi } from "vitest";
 import { appendLogEvent, configureLogFile, defaultLogFile } from "@symphony/cli";
 
 import { assert } from "../../../test/assert.js";
@@ -68,10 +68,21 @@ test("log file configuration delegates size rotation to pino-roll", async () => 
       index,
       message: "x".repeat(160),
     });
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await vi.waitFor(
+      async () => {
+        const content = await fs.readFile(logFile, "utf8");
+        assert.ok(content.includes(`"index":${index}`) || content.includes('"after_roll"'));
+      },
+      { timeout: 2_000, interval: 5 },
+    );
   }
   await appendLogEvent(logFile, { event: "after_roll", message: "ok" });
-  await new Promise((resolve) => setTimeout(resolve, 20));
+  await vi.waitFor(
+    async () => {
+      assert.match(await fs.readFile(logFile, "utf8"), /"event":"after_roll"/);
+    },
+    { timeout: 2_000, interval: 5 },
+  );
 
   const files = await fs.readdir(path.dirname(logFile));
   const numberedLogs = files.filter((file) => /^symphony\.log\.\d+$/.test(file));
