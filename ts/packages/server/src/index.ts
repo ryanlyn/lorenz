@@ -64,7 +64,7 @@ async function startHonoServer(
     url(path = "/"): string {
       return `http://${urlHost(options.host)}:${port}${path}`;
     },
-    stop: () => stopServer(activeServer),
+    stop: async () => stopServer(activeServer),
   };
 }
 
@@ -170,7 +170,7 @@ function mountClaudeMcp(app: Hono, settings: Settings): void {
     }
     await next();
   });
-  app.post("/claude-mcp", (c) => handleClaudeMcp(settings, c));
+  app.post("/claude-mcp", async (c) => handleClaudeMcp(settings, c));
   app.all("/claude-mcp", () => errorResponse(405, "method_not_allowed", "Method not allowed"));
 }
 
@@ -552,7 +552,7 @@ function paramsFromSearch(searchParams: URLSearchParams): PresenterParams {
   return params;
 }
 
-function stopServer(server: ServerType): Promise<void> {
+async function stopServer(server: ServerType): Promise<void> {
   return new Promise((resolve, reject) => {
     server.close((error) => (error ? reject(error) : resolve()));
   });

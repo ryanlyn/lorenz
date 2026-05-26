@@ -32,6 +32,8 @@ export default tseslint.config(
         },
       ],
       "@typescript-eslint/consistent-type-imports": "error",
+      "@typescript-eslint/return-await": ["error", "in-try-catch"],
+      "@typescript-eslint/promise-function-async": "error",
       "import-x/order": ["warn", { "newlines-between": "always" }],
     },
   },

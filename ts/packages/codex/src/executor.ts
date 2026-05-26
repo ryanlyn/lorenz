@@ -220,7 +220,7 @@ export class CodexAppServerExecutor implements AgentExecutor {
     return updates;
   }
 
-  private request(
+  private async request(
     session: CodexSession,
     method: string,
     params: Record<string, unknown>,
@@ -255,14 +255,14 @@ export class CodexAppServerExecutor implements AgentExecutor {
 
   private registerConnectionHandlers(session: CodexSession): void {
     for (const method of approvalRequestMethods) {
-      session.connection.onRequest(method, () => {
+      session.connection.onRequest(method, async () => {
         const message = this.consumeInboundRequest(session, method);
         return this.handleApprovalRequest(session, message, method);
       });
     }
 
     for (const method of userInputRequestMethods) {
-      session.connection.onRequest(method, () => {
+      session.connection.onRequest(method, async () => {
         const message = this.consumeInboundRequest(session, method);
         return this.handleUserInputRequest(session, message);
       });
@@ -273,7 +273,7 @@ export class CodexAppServerExecutor implements AgentExecutor {
       return this.handleDynamicToolCall(session, message);
     });
 
-    session.connection.onRequest((method) => {
+    session.connection.onRequest(async (method) => {
       const message = this.consumeInboundRequest(session, method);
       this.emit(session, { type: "notification", message, timestamp: new Date() });
       return unresolvedRequest();
@@ -341,10 +341,10 @@ export class CodexAppServerExecutor implements AgentExecutor {
       .with({ method: "item/tool/call" }, (message) => {
         void this.handleDynamicToolCall(session, message);
       })
-      .with({ method: P.union(...approvalRequestMethods) }, (message) =>
+      .with({ method: P.union(...approvalRequestMethods) }, async (message) =>
         this.handleApprovalRequest(session, message, message.method),
       )
-      .with({ method: P.union(...userInputRequestMethods) }, (message) =>
+      .with({ method: P.union(...userInputRequestMethods) }, async (message) =>
         this.handleUserInputRequest(session, message),
       )
       .exhaustive();
@@ -627,7 +627,7 @@ interface DynamicToolWireResult {
 const nonInteractiveToolInputAnswer =
   "Unable to provide interactive input in this non-interactive Symphony run.";
 
-function unresolvedRequest(): Promise<never> {
+async function unresolvedRequest(): Promise<never> {
   return new Promise<never>(() => {});
 }
 

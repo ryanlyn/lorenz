@@ -352,13 +352,13 @@ class AcpClientAdapter {
 
   client(): Client {
     const client: Client = {
-      sessionUpdate: (params: SessionNotification): Promise<void> => {
+      sessionUpdate: async (params: SessionNotification): Promise<void> => {
         const session = this.currentSession();
         if (!session) return Promise.resolve();
         handleAcpSessionUpdate(session, params);
         return Promise.resolve();
       },
-      requestPermission: (params: RequestPermissionRequest) => {
+      requestPermission: async (params: RequestPermissionRequest) => {
         const session = this.currentSession();
         return Promise.resolve(handleAcpPermissionRequest(session, params, this.emit));
       },

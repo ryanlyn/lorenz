@@ -121,7 +121,7 @@ export class CodexNdjsonMessageWriter extends AbstractMessageWriter implements M
     super();
   }
 
-  write(message: Message): Promise<void> {
+  async write(message: Message): Promise<void> {
     if (!this.writable.writable) {
       const error = new Error("Codex NDJSON writer is closed");
       this.fireError(error, message, ++this.errorCount);

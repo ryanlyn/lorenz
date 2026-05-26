@@ -359,7 +359,7 @@ export class LinearClient {
     return this.settings.tracker.projectSlug;
   }
 
-  private assigneeFilterValue(): Promise<string | undefined> {
+  private async assigneeFilterValue(): Promise<string | undefined> {
     if (!this.resolvedAssignee) {
       this.resolvedAssignee = this.resolveAssigneeFilterValue();
     }

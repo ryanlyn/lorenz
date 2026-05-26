@@ -12,16 +12,16 @@ export class MemoryTrackerClient implements RuntimeTrackerClient {
     );
   }
 
-  fetchCandidateIssues(): Promise<Issue[]> {
+  async fetchCandidateIssues(): Promise<Issue[]> {
     return Promise.resolve(this.issues.map(cloneIssue));
   }
 
-  fetchIssuesByIds(ids: string[]): Promise<Issue[]> {
+  async fetchIssuesByIds(ids: string[]): Promise<Issue[]> {
     const wanted = new Set(ids);
     return Promise.resolve(this.issues.filter((issue) => wanted.has(issue.id)).map(cloneIssue));
   }
 
-  fetchIssuesByStates(states: string[]): Promise<Issue[]> {
+  async fetchIssuesByStates(states: string[]): Promise<Issue[]> {
     const wanted = new Set(states.map(normalizeState));
     return Promise.resolve(
       this.issues.filter((issue) => wanted.has(normalizeState(issue.state))).map(cloneIssue),
