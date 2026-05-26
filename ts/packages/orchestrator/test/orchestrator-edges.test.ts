@@ -1,10 +1,5 @@
 import { test } from "vitest";
-import {
-  Orchestrator,
-  normalizeIssue,
-  parseConfig,
-  slotKey,
-} from "@symphony/cli";
+import { Orchestrator, normalizeIssue, parseConfig, slotKey } from "@symphony/cli";
 import type { ClockPort } from "@symphony/ports";
 
 import { assert } from "../../../test/assert.js";

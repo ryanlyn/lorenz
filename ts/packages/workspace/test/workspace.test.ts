@@ -70,16 +70,13 @@ test("ensureInsideRoot — root itself does not throw", () => {
 
 // --- validateWorkspaceCwd ---
 
-test("validateWorkspaceCwd — blank input throws \"invalid_workspace_cwd\"", async () => {
+test('validateWorkspaceCwd — blank input throws "invalid_workspace_cwd"', async () => {
   const root = await tempDir("ws-validate");
   const settings = makeSettings(root);
-  await assert.rejects(
-    () => validateWorkspaceCwd(settings, "   "),
-    /invalid_workspace_cwd/,
-  );
+  await assert.rejects(() => validateWorkspaceCwd(settings, "   "), /invalid_workspace_cwd/);
 });
 
-test("validateWorkspaceCwd — newline in path throws \"invalid_workspace_cwd\"", async () => {
+test('validateWorkspaceCwd — newline in path throws "invalid_workspace_cwd"', async () => {
   const root = await tempDir("ws-validate");
   const settings = makeSettings(root);
   await assert.rejects(
@@ -95,10 +92,7 @@ test("validateWorkspaceCwd — rejects directory targets that are symlinks", asy
   await fs.mkdir(real);
   await fs.symlink(real, link);
   const settings = makeSettings(root);
-  await assert.rejects(
-    () => validateWorkspaceCwd(settings, link),
-    /unsafe symlink/,
-  );
+  await assert.rejects(() => validateWorkspaceCwd(settings, link), /unsafe symlink/);
 });
 
 test("validateWorkspaceCwd — rejects workspace equal to workspace root", async () => {
@@ -147,16 +141,16 @@ test("removeWorkspace — removes existing workspace directory", async () => {
   const ws = await createWorkspaceForIssue(settings, sampleIssue);
   const removed = await removeWorkspace(settings, ws);
   assert.deepEqual(removed, [ws]);
-  await assert.rejects(() => fs.stat(ws), (e: unknown) => (e as NodeJS.ErrnoException).code === "ENOENT");
+  await assert.rejects(
+    () => fs.stat(ws),
+    (e: unknown) => (e as NodeJS.ErrnoException).code === "ENOENT",
+  );
 });
 
 test("removeWorkspace — refuses to remove workspace root", async () => {
   const root = await tempDir("ws-remove");
   const settings = makeSettings(root);
-  await assert.rejects(
-    () => removeWorkspace(settings, root),
-    /refusing to remove workspace root/,
-  );
+  await assert.rejects(() => removeWorkspace(settings, root), /refusing to remove workspace root/);
 });
 
 test("removeWorkspace — runs beforeRemove hook before deletion", async () => {

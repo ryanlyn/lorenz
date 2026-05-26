@@ -58,12 +58,12 @@ test("writeResumeState + readResumeState — round-trip preserves all fields", a
 
 // --- readResumeState ---
 
-test("readResumeState — missing file returns { status: \"missing\" }", async () => {
+test('readResumeState — missing file returns { status: "missing" }', async () => {
   const result = await readResumeState(tmpDir);
   assert.equal(result.status, "missing");
 });
 
-test("readResumeState — invalid JSON returns { status: \"error\" }", async () => {
+test('readResumeState — invalid JSON returns { status: "error" }', async () => {
   const { stdout } = await execa("git", ["-C", tmpDir, "rev-parse", "--git-dir"]);
   const gitDir = path.isAbsolute(stdout.trim()) ? stdout.trim() : path.join(tmpDir, stdout.trim());
   const resumePath = path.join(gitDir, "symphony", "resume.json");
@@ -73,7 +73,7 @@ test("readResumeState — invalid JSON returns { status: \"error\" }", async () 
   assert.equal(result.status, "error");
 });
 
-test("readResumeState — non-git directory returns { status: \"unavailable\" }", async () => {
+test('readResumeState — non-git directory returns { status: "unavailable" }', async () => {
   const nonGitDir = await fs.mkdtemp(path.join(os.tmpdir(), "resume-no-git-"));
   try {
     const result = await readResumeState(nonGitDir);
