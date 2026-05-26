@@ -743,6 +743,8 @@ export class SymphonyRuntime {
       at: event.at,
       event: type,
       message,
+    }).catch((err) => {
+      process.stderr.write(`appendLogEvent failed: ${err}\n`);
     });
     this.emit();
   }

@@ -312,42 +312,48 @@ export class CodexAppServerExecutor implements AgentExecutor {
       return;
     }
 
-    void match(parsed.data)
-      .with({ method: "turn/completed" }, (message) =>
-        this.emit(session, { type: "turn_completed", message, timestamp: new Date() }),
-      )
-      .with({ method: "turn/failed" }, (message) =>
-        this.emit(session, { type: "turn_failed", message, timestamp: new Date() }),
-      )
-      .with({ method: "turn/cancelled" }, (message) =>
-        this.emit(session, { type: "turn_cancelled", message, timestamp: new Date() }),
-      )
-      .with({ method: "thread/tokenUsage/updated" }, (message) =>
-        this.emit(session, {
-          type: "usage",
-          usage: extractUsage(message),
-          message,
-          timestamp: new Date(),
-        }),
-      )
-      .with({ method: "rateLimits/updated" }, (message) =>
-        this.emit(session, {
-          type: "rate_limit",
-          rateLimits: message.params,
-          message,
-          timestamp: new Date(),
-        }),
-      )
-      .with({ method: "item/tool/call" }, (message) => {
-        void this.handleDynamicToolCall(session, message);
-      })
-      .with({ method: P.union(...approvalRequestMethods) }, async (message) =>
-        this.handleApprovalRequest(session, message, message.method),
-      )
-      .with({ method: P.union(...userInputRequestMethods) }, async (message) =>
-        this.handleUserInputRequest(session, message),
-      )
-      .exhaustive();
+    void Promise.resolve(
+      match(parsed.data)
+        .with({ method: "turn/completed" }, (message) =>
+          this.emit(session, { type: "turn_completed", message, timestamp: new Date() }),
+        )
+        .with({ method: "turn/failed" }, (message) =>
+          this.emit(session, { type: "turn_failed", message, timestamp: new Date() }),
+        )
+        .with({ method: "turn/cancelled" }, (message) =>
+          this.emit(session, { type: "turn_cancelled", message, timestamp: new Date() }),
+        )
+        .with({ method: "thread/tokenUsage/updated" }, (message) =>
+          this.emit(session, {
+            type: "usage",
+            usage: extractUsage(message),
+            message,
+            timestamp: new Date(),
+          }),
+        )
+        .with({ method: "rateLimits/updated" }, (message) =>
+          this.emit(session, {
+            type: "rate_limit",
+            rateLimits: message.params,
+            message,
+            timestamp: new Date(),
+          }),
+        )
+        .with({ method: "item/tool/call" }, (message) => {
+          void this.handleDynamicToolCall(session, message).catch((err) => {
+            process.stderr.write(`handleDynamicToolCall failed: ${err}\n`);
+          });
+        })
+        .with({ method: P.union(...approvalRequestMethods) }, async (message) =>
+          this.handleApprovalRequest(session, message, message.method),
+        )
+        .with({ method: P.union(...userInputRequestMethods) }, async (message) =>
+          this.handleUserInputRequest(session, message),
+        )
+        .exhaustive(),
+    ).catch((err) => {
+      process.stderr.write(`message dispatch failed: ${err}\n`);
+    });
   }
 
   private handleApprovalRequest(

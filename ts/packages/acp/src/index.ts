@@ -152,7 +152,9 @@ export class AcpExecutor implements AgentExecutor {
 
     return new Promise<AgentUpdate[]>((resolve, reject) => {
       const timer = setTimeout(() => {
-        void session.connection.cancel({ sessionId: requireAcpSessionId(session) });
+        void session.connection.cancel({ sessionId: requireAcpSessionId(session) }).catch((err) => {
+          process.stderr.write(`session cancel failed: ${err}\n`);
+        });
         finishReject(new Error("acp turn timed out"));
       }, session.agentConfig.turnTimeoutMs);
 

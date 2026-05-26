@@ -219,7 +219,9 @@ async function runTurnWithAbort(
   const abortPromise = new Promise<AgentUpdate[]>((_resolve, reject) => {
     onAbort = () => {
       reject(new Error("agent_run_aborted"));
-      void session.stop();
+      void session.stop().catch((err) => {
+        process.stderr.write(`session.stop failed: ${err}\n`);
+      });
     };
     abortSignal?.addEventListener("abort", onAbort, { once: true });
   });
