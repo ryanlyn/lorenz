@@ -60,19 +60,19 @@ Tests exercise only the public API exported from `@symphony/cli` — no source m
 
 **Gap filled:** Go tests verify state file writes in `internal/workspace/manager_test.go`. TS exports `readResumeState`, `writeResumeState`, `deleteResumeState`, `resumeStateMatches` but they have no test file.
 
-- [ ] writeResumeState + readResumeState — round-trip preserves all fields
-- [ ] readResumeState — missing file returns { status: "missing" }
-- [ ] readResumeState — invalid JSON returns { status: "error" }
-- [ ] readResumeState — non-git directory returns { status: "unavailable" }
-- [ ] readResumeState — decodes legacy fields correctly (session_id, agent_kind, thread_id)
-- [ ] writeResumeState — rejects empty agentKind
-- [ ] writeResumeState — rejects empty resumeId
-- [ ] deleteResumeState — removes existing file
-- [ ] deleteResumeState — no-op when file already absent
-- [ ] resumeStateMatches — full match returns true
-- [ ] resumeStateMatches — mismatched issueState returns false
-- [ ] resumeStateMatches — missing optional workerHost still matches when current is null
-- [ ] resumeStateMatches — blank resumeId always returns false
+- [x] writeResumeState + readResumeState — round-trip preserves all fields
+- [x] readResumeState — missing file returns { status: "missing" }
+- [x] readResumeState — invalid JSON returns { status: "error" }
+- [x] readResumeState — non-git directory returns { status: "unavailable" }
+- [x] readResumeState — decodes legacy fields correctly (session_id, agent_kind, thread_id)
+- [x] writeResumeState — rejects empty agentKind
+- [x] writeResumeState — rejects empty resumeId
+- [x] deleteResumeState — removes existing file
+- [x] deleteResumeState — no-op when file already absent
+- [x] resumeStateMatches — full match returns true
+- [x] resumeStateMatches — mismatched issueState returns false
+- [x] resumeStateMatches — missing optional workerHost still matches when current is null
+- [x] resumeStateMatches — blank resumeId always returns false
 
 ---
 
@@ -125,11 +125,11 @@ Tests exercise only the public API exported from `@symphony/cli` — no source m
 
 **Gap filled:** TS uses random cryptographic tokens for authorization of MCP clients over reverse SSH tunnels. These token lifetimes are critical for security but completely untested.
 
-- [ ] issueMcpToken — returns a unique, non-empty cryptographically strong string
-- [ ] validMcpToken — returns true for actively issued tokens
-- [ ] validMcpToken — returns false for random/fake tokens
-- [ ] revokeMcpToken — revoking a token causes validMcpToken to return false
-- [ ] revokeMcpToken — calling revoke twice or with invalid inputs is a safe no-op
+- [x] issueMcpToken — returns a unique, non-empty cryptographically strong string
+- [x] validMcpToken — returns true for actively issued tokens
+- [x] validMcpToken — returns false for random/fake tokens
+- [x] revokeMcpToken — revoking a token causes validMcpToken to return false
+- [x] revokeMcpToken — calling revoke twice or with invalid inputs is a safe no-op
 
 ---
 
