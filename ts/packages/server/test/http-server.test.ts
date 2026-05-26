@@ -14,7 +14,6 @@ import { assert } from "../../../test/assert.js";
 import { startObservabilityServer } from "@symphony/server";
 import { startClaudeMcpServer } from "@symphony/server";
 
-
 test("observability HTTP API exposes Elixir-shaped state, issue, runs, refresh, and errors", async () => {
   const workflow = workflowFixture();
   const orchestrator = new Orchestrator(workflow.settings);

@@ -15,7 +15,6 @@ import {
   writeRemoteFile,
 } from "@symphony/ssh";
 
-
 test("SSH target parsing and command args match Elixir host:port behavior", () => {
   assert.deepEqual(parseSshTarget("localhost:2222"), { destination: "localhost", port: "2222" });
   assert.deepEqual(parseSshTarget("root@127.0.0.1:2200"), {

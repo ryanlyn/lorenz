@@ -162,7 +162,7 @@ test("actionForStopReason — all known stop reasons produce defined actions", (
   }
 });
 
-test("actionForStopReason — unknown/unexpected string returns \"retry\"", () => {
+test('actionForStopReason — unknown/unexpected string returns "retry"', () => {
   assert.equal(actionForStopReason("something_unknown" as never), "retry");
   assert.equal(actionForStopReason("" as never), "retry");
 });
@@ -170,10 +170,22 @@ test("actionForStopReason — unknown/unexpected string returns \"retry\"", () =
 // --- resumeIdentityMatches ---
 
 test("resumeIdentityMatches — null workerHost matches undefined", () => {
-  const stored = { agent: "claude", issueId: "issue-1", workspacePath: "/tmp/ws", workerHost: null };
+  const stored = {
+    agent: "claude",
+    issueId: "issue-1",
+    workspacePath: "/tmp/ws",
+    workerHost: null,
+  };
   const current = {
     agent: "claude",
-    issue: { id: "issue-1", identifier: "ENG-1", title: "t", state: "In Progress", labels: [], blockers: [] } as Issue,
+    issue: {
+      id: "issue-1",
+      identifier: "ENG-1",
+      title: "t",
+      state: "In Progress",
+      labels: [],
+      blockers: [],
+    } as Issue,
     workspacePath: "/tmp/ws",
     workerHost: undefined,
   };
@@ -184,7 +196,14 @@ test("resumeIdentityMatches — mismatched workspace path returns false", () => 
   const stored = { agent: "claude", issueId: "issue-1", workspacePath: "/tmp/ws-a" };
   const current = {
     agent: "claude",
-    issue: { id: "issue-1", identifier: "ENG-1", title: "t", state: "In Progress", labels: [], blockers: [] } as Issue,
+    issue: {
+      id: "issue-1",
+      identifier: "ENG-1",
+      title: "t",
+      state: "In Progress",
+      labels: [],
+      blockers: [],
+    } as Issue,
     workspacePath: "/tmp/ws-b",
   };
   assert.equal(resumeIdentityMatches(stored, current), false);
@@ -194,7 +213,14 @@ test("resumeIdentityMatches — empty string agent always returns false", () => 
   const stored = { agent: "", issueId: "issue-1", workspacePath: "/tmp/ws" };
   const current = {
     agent: "claude",
-    issue: { id: "issue-1", identifier: "ENG-1", title: "t", state: "In Progress", labels: [], blockers: [] } as Issue,
+    issue: {
+      id: "issue-1",
+      identifier: "ENG-1",
+      title: "t",
+      state: "In Progress",
+      labels: [],
+      blockers: [],
+    } as Issue,
     workspacePath: "/tmp/ws",
   };
   assert.equal(resumeIdentityMatches(stored, current), false);
@@ -215,11 +241,13 @@ function makeIssue(overrides: Partial<Issue> = {}): Issue {
   };
 }
 
-function makeSettings(overrides: {
-  activeStates?: string[];
-  terminalStates?: string[];
-  acceptUnrouted?: boolean;
-} = {}): Settings {
+function makeSettings(
+  overrides: {
+    activeStates?: string[];
+    terminalStates?: string[];
+    acceptUnrouted?: boolean;
+  } = {},
+): Settings {
   return {
     tracker: {
       activeStates: overrides.activeStates ?? ["In Progress", "Todo"],
@@ -234,19 +262,19 @@ function makeSettings(overrides: {
   } as unknown as Settings;
 }
 
-test("reconciliationStopReason — terminal issue returns \"terminal\"", () => {
+test('reconciliationStopReason — terminal issue returns "terminal"', () => {
   const issue = makeIssue({ state: "Done" });
   const settings = makeSettings();
   assert.equal(reconciliationStopReason(issue, settings), "terminal");
 });
 
-test("reconciliationStopReason — unrouted issue returns \"unrouted\"", () => {
+test('reconciliationStopReason — unrouted issue returns "unrouted"', () => {
   const issue = makeIssue({ assignedToWorker: false });
   const settings = makeSettings();
   assert.equal(reconciliationStopReason(issue, settings), "unrouted");
 });
 
-test("reconciliationStopReason — blocked issue returns \"blocked\"", () => {
+test('reconciliationStopReason — blocked issue returns "blocked"', () => {
   const issue = makeIssue({
     state: "Todo",
     stateType: "unstarted",
@@ -256,7 +284,7 @@ test("reconciliationStopReason — blocked issue returns \"blocked\"", () => {
   assert.equal(reconciliationStopReason(issue, settings), "blocked");
 });
 
-test("reconciliationStopReason — active, routed, unblocked issue returns \"inactive\"", () => {
+test('reconciliationStopReason — active, routed, unblocked issue returns "inactive"', () => {
   const issue = makeIssue({ state: "In Progress" });
   const settings = makeSettings();
   assert.equal(reconciliationStopReason(issue, settings), "inactive");
