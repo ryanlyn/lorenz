@@ -354,6 +354,8 @@ async function getText(url: string, expectedStatus = 200): Promise<string> {
 
 async function getEventStream(url: string): Promise<string> {
   const controller = new AbortController();
+  const timeout = AbortSignal.timeout(2_000);
+  timeout.addEventListener("abort", () => controller.abort(timeout.reason));
   const response = await fetch(url, { signal: controller.signal });
   assert.equal(response.status, 200);
   assert.equal(response.headers.get("content-type"), "text/event-stream; charset=utf-8");
@@ -361,17 +363,9 @@ async function getEventStream(url: string): Promise<string> {
   const reader = response.body?.getReader();
   assert.ok(reader);
   let text = "";
-  const deadline = Date.now() + 2_000;
   try {
     while (!text.includes("event: state")) {
-      const remaining = deadline - Date.now();
-      assert.ok(remaining > 0, "timed out waiting for state event");
-      const read = await Promise.race([
-        reader.read(),
-        new Promise<Awaited<ReturnType<typeof reader.read>>>((_resolve, reject) =>
-          setTimeout(() => reject(new Error("event stream timeout")), remaining),
-        ),
-      ]);
+      const read = await reader.read();
       if (read.done) break;
       text += Buffer.from(read.value).toString("utf8");
     }

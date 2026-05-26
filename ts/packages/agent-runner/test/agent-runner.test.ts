@@ -1,4 +1,4 @@
-import { test } from "vitest";
+import { vi, test } from "vitest";
 import type { AgentExecutor, AgentSession, AgentUpdate, Issue, Settings } from "@symphony/domain";
 import { defaultSettings } from "@symphony/config";
 
@@ -114,34 +114,38 @@ test("runAgentAttempt respects abort signal and stops executor mid-turn", async 
   const issue = fakeIssue();
   const settings = fakeSettings();
 
+  let turnEntered = false;
+  let stopped = false;
   const slowExecutor: AgentExecutor = {
     kind: "codex",
     async startSession(input) {
-      const session = fakeSession();
+      const session = fakeSession({
+        stop: async () => {
+          stopped = true;
+        },
+      });
       input.onUpdate?.({ type: "session_started", sessionId: session.sessionId });
       return session;
     },
     async runTurn() {
-      // Simulate a long-running turn that will be aborted
-      await new Promise((resolve) => setTimeout(resolve, 5000));
-      return [{ type: "turn_completed" }];
+      turnEntered = true;
+      return new Promise(() => {});
     },
   };
 
-  // Abort quickly
-  setTimeout(() => ac.abort(), 20);
+  const promise = runAgentAttempt({
+    issue,
+    workflow: { path: "/workflow.md", config: {}, promptTemplate: "Fix it", settings },
+    settings,
+    abortSignal: ac.signal,
+    adapters: fakeAdapters({ executorFactory: () => slowExecutor }),
+  });
 
-  await assert.rejects(
-    () =>
-      runAgentAttempt({
-        issue,
-        workflow: { path: "/workflow.md", config: {}, promptTemplate: "Fix it", settings },
-        settings,
-        abortSignal: ac.signal,
-        adapters: fakeAdapters({ executorFactory: () => slowExecutor }),
-      }),
-    "agent_run_aborted",
-  );
+  await vi.waitFor(() => assert.equal(turnEntered, true));
+  ac.abort();
+
+  await assert.rejects(() => promise, "agent_run_aborted");
+  assert.equal(stopped, true);
 });
 
 // ---------------------------------------------------------------------------

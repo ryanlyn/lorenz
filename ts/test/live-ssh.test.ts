@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 
-import { test } from "vitest";
+import { test, vi } from "vitest";
 import {
   CodexAppServerExecutor,
   createWorkspaceForIssue,
@@ -460,17 +460,18 @@ async function readRemoteFile(host: string, remotePath: string): Promise<string>
 }
 
 async function waitForSshHosts(hosts: string[]): Promise<void> {
-  const deadline = Date.now() + 60_000;
   for (const host of hosts) {
-    while (true) {
-      const result = await runSsh(host, "printf ready", {
-        timeoutMs: 5_000,
-        stderrToStdout: true,
-      }).catch(() => null);
-      if (result?.status === 0 && result.stdout === "ready") break;
-      if (Date.now() >= deadline) throw new Error(`timed out waiting for SSH worker ${host}`);
-      await new Promise((resolve) => setTimeout(resolve, 1_000));
-    }
+    await vi.waitFor(
+      async () => {
+        const result = await runSsh(host, "printf ready", {
+          timeoutMs: 5_000,
+          stderrToStdout: true,
+        }).catch(() => null);
+        if (result?.status !== 0 || result.stdout !== "ready")
+          throw new Error(`SSH worker ${host} not ready`);
+      },
+      { timeout: 60_000, interval: 1_000 },
+    );
   }
 }
 
