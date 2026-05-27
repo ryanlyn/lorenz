@@ -86,6 +86,9 @@
       "path": "../../packages/memory-tracker"
     },
     {
+      "path": "../../packages/fs-tracker"
+    },
+    {
       "path": "../../packages/tui"
     },
     {

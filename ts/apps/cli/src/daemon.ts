@@ -20,6 +20,7 @@ import {
 } from "@symphony/resume-state";
 import { LinearClient } from "@symphony/linear-tracker";
 import { MemoryTrackerClient, memoryIssuesFromEnv } from "@symphony/memory-tracker";
+import { FsTrackerClient } from "@symphony/fs-tracker";
 
 export function runtimeDefaultSettings(): Settings {
   return defaultSettings(runtimeDefaultSettingsOptions());
@@ -35,6 +36,13 @@ export function createTrackerClient(
 ): RuntimeTrackerClient {
   if (settings.tracker.kind === "memory") return new MemoryTrackerClient(memoryIssuesFromEnv(env));
   if (settings.tracker.kind === "linear") return new LinearClient(settings);
+  if (settings.tracker.kind === "fs") {
+    if (!settings.tracker.boardDir) throw new Error("tracker.board_dir is required");
+    return new FsTrackerClient(settings.tracker.boardDir, {
+      activeStates: settings.tracker.activeStates,
+      assignee: settings.tracker.assignee,
+    });
+  }
   throw new Error("tracker.kind is required");
 }
 

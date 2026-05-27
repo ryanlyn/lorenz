@@ -27,6 +27,7 @@ import {
   runsOptionsFromCommanderOptions,
   type RunsCommanderOptions,
 } from "./runs.js";
+import { createBoardCommand } from "./board.js";
 import {
   createTrackerClient,
   runAgentAttempt,
@@ -84,6 +85,7 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
     );
   });
   command.addCommand(runsCommand);
+  command.addCommand(createBoardCommand("board"));
 
   try {
     await command.parseAsync(args, { from: "user" });

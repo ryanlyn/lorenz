@@ -37,6 +37,7 @@
     "@symphony/domain": "workspace:*",
     "@symphony/linear-tracker": "workspace:*",
     "@symphony/memory-tracker": "workspace:*",
+    "@symphony/fs-tracker": "workspace:*",
     "@symphony/config": "workspace:*",
     "@symphony/workflow": "workspace:*",
     "@symphony/issue": "workspace:*",

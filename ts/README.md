@@ -92,6 +92,37 @@ Supported top-level sections match the copied Elixir workflow files:
 `hooks`, `observability`, and `server`. Extension sections ignored by Elixir, such as `logging`,
 are ignored here too; use `--logs-root` for the TS runtime log sink.
 
+### Tracker backends
+
+`tracker.kind` selects where issues come from:
+
+- `linear` — the Linear GraphQL API (requires `api_key` and `project_slug`).
+- `memory` — an in-process fixture for tests, seeded from `SYMPHONY_MEMORY_TRACKER_ISSUES_JSON`.
+- `fs` — a built-in **filesystem board** that requires no external service. Issues live as
+  Markdown files under `tracker.board_dir` (default `.symphony/board`, overridable with
+  `SYMPHONY_BOARD_DIR`), so Symphony can run on personal projects, airgapped, or in CI.
+
+With the `fs` backend, each issue is one file at `<board_dir>/<state>/<identifier>.md`: the
+containing directory names the state and the file is YAML frontmatter plus a Markdown body (the
+issue description). State directory names match `active_states`/`terminal_states` case- and
+separator-insensitively (`in-progress` ≡ `In Progress`). Move an issue between states by moving its
+file. The runtime only reads the board; you author and transition issues yourself, by hand, via git,
+or with the `board` CLI:
+
+```bash
+symphony-ts board new --title "Add login page" --label backend --prefix ENG
+symphony-ts board move ENG-1 "In Progress"
+symphony-ts board list
+```
+
+```yaml
+tracker:
+  kind: fs
+  board_dir: .symphony/board
+  active_states: [Todo, In Progress]
+  terminal_states: [Done, Canceled]
+```
+
 The workflow files in this directory are byte-identical copies of the Elixir workflow files:
 
 - `WORKFLOW.md`

@@ -56,6 +56,18 @@ Issues move to terminal states automatically when agents finish. To manually cle
 rm -rf /tmp/symphony-demo-workspaces
 ```
 
+## No Linear? Use the filesystem board
+
+For a self-contained run with no Linear workspace, point a workflow at the `fs` tracker and the
+pre-baked board under `demo/board/` (two "Todo" coding tasks):
+
+```bash
+SYMPHONY_BOARD_DIR=demo/board pnpm start path/to/your-fs-workflow.md --once --dry-run --no-tui
+```
+
+Author or transition issues with the `board` CLI (`board new`, `board move`, `board list`). See the
+"Tracker backends" section of `../README.md` for the file format and config.
+
 ## Customization
 
 - Edit `demo/DEMO_WORKFLOW.md` to change agent settings, concurrency, or prompt

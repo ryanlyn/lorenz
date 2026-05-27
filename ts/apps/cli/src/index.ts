@@ -83,6 +83,17 @@ export {
 export { LinearClient, LinearGraphQLClient } from "@symphony/linear-tracker";
 export type { LinearClientDeps } from "@symphony/linear-tracker";
 export { MemoryTrackerClient, memoryIssuesFromEnv } from "@symphony/memory-tracker";
+export {
+  FsTrackerClient,
+  readBoardFiles,
+  boardFileToIssue,
+  parseBoardFile,
+  serializeBoardFile,
+  slugifyState,
+} from "@symphony/fs-tracker";
+export type { FsTrackerOptions, BoardFile } from "@symphony/fs-tracker";
+export { createBoardCommand, boardNew, boardMove, boardList, resolveBoardDir } from "./board.js";
+export type { BoardNewInput } from "./board.js";
 export { configureLogFile, appendLogEvent, defaultLogFile } from "@symphony/log-file";
 export {
   humanizeAgentMessage,

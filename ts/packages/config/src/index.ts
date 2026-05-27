@@ -52,6 +52,7 @@ const trackerRawSchema = z
     endpoint: z.unknown().optional(),
     apiKey: z.unknown().optional(),
     projectSlug: z.unknown().optional(),
+    boardDir: z.unknown().optional(),
     assignee: z.unknown().optional(),
     activeStates: z.unknown().optional(),
     terminalStates: z.unknown().optional(),
@@ -173,6 +174,7 @@ type StatusOverridesRaw = NonNullable<WorkflowConfigRaw["statusOverrides"]>;
 const trackerAliases = {
   api_key: "apiKey",
   project_slug: "projectSlug",
+  board_dir: "boardDir",
   active_states: "activeStates",
   terminal_states: "terminalStates",
 };
@@ -267,6 +269,7 @@ export const defaultSettings = (options: DefaultSettingsOptions = {}): Settings 
     tracker: {
       kind: undefined,
       endpoint: "https://api.linear.app/graphql",
+      boardDir: joinPath(cwd, ".symphony/board"),
       activeStates: ["Todo", "In Progress"],
       terminalStates: ["Closed", "Cancelled", "Canceled", "Duplicate", "Done"],
       dispatch: {
@@ -401,6 +404,9 @@ export function validateDispatchConfig(settings: Settings): void {
     if (!settings.tracker.apiKey) throw new Error("tracker.api_key is required");
     if (!settings.tracker.projectSlug) throw new Error("tracker.project_slug is required");
   }
+  if (settings.tracker.kind === "fs" && !settings.tracker.boardDir) {
+    throw new Error("tracker.board_dir is required");
+  }
 
   const requiredBackends = new Set<AgentKind>([settings.agent.kind]);
   for (const override of settings.statusOverrides.values()) {
@@ -446,6 +452,9 @@ function parseTracker(
   const apiKey = resolveConfiguredSecret(trackerRaw.apiKey, env, "LINEAR_API_KEY");
   const projectSlug = resolveEnv(stringValue(trackerRaw.projectSlug, ""), env) || undefined;
   const assignee = resolveConfiguredSecret(trackerRaw.assignee, env, "LINEAR_ASSIGNEE");
+  const boardDirRaw =
+    nonEmptyString(env.SYMPHONY_BOARD_DIR) ?? stringValue(trackerRaw.boardDir, "");
+  const boardDir = boardDirRaw === "" ? defaults.boardDir : expandLocalPath(boardDirRaw, env);
 
   return {
     ...defaults,
@@ -453,6 +462,7 @@ function parseTracker(
     endpoint: stringValue(trackerRaw.endpoint, defaults.endpoint),
     apiKey,
     projectSlug,
+    boardDir,
     assignee,
     activeStates: stringArray(trackerRaw.activeStates, defaults.activeStates),
     terminalStates: stringArray(trackerRaw.terminalStates, defaults.terminalStates),

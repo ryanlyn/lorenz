@@ -12,7 +12,7 @@ export const AGENT_EXECUTOR_KINDS = ["appserver", "acp"] as const;
  */
 export type AgentExecutorKind = (typeof AGENT_EXECUTOR_KINDS)[number];
 
-export const TRACKER_KINDS = ["linear", "memory"] as const;
+export const TRACKER_KINDS = ["linear", "memory", "fs"] as const;
 
 export type TrackerKind = (typeof TRACKER_KINDS)[number];
 
@@ -142,12 +142,17 @@ export interface DispatchSettings {
  * Connection and filtering rules for the issue tracker that feeds work into this instance.
  */
 export interface TrackerSettings {
-  /** Backend adapter selector. `"memory"` is an in-process fixture used for tests. */
+  /**
+   * Backend adapter selector. `"memory"` is an in-process fixture used for tests; `"fs"` reads
+   * issues from local Markdown files (see {@link TrackerSettings.boardDir}).
+   */
   kind?: TrackerKind | undefined;
   endpoint: string;
   apiKey?: string | undefined;
   /** Linear project slug; required when `kind === "linear"`. */
   projectSlug?: string | undefined;
+  /** Filesystem board directory; required when `kind === "fs"`. */
+  boardDir?: string | undefined;
   /** Tracker assignee identity (or `$VAR`) used to scope candidate queries to one user. */
   assignee?: string | undefined;
   /** Tracker state names considered eligible for dispatch (case-insensitive match). */
