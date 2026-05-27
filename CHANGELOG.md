@@ -57,9 +57,8 @@
 
 ## 2026-04-09
 
-- Added an AlphaEvolve-inspired workflow template and an orchestrator run
-  history observability CLI exposing completed attempts, retries, token totals,
-  and per-run forensic context.
+- Added an orchestrator run history observability CLI exposing completed
+  attempts, retries, token totals, and per-run forensic context.
 - Excluded dynamic Claude system prompt sections from `--print` runs for a more
   stable stream payload.
 - Hardened runtime and dispatch behavior by composing global and per-status
