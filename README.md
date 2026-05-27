@@ -6,6 +6,19 @@ Symphony is an orchestrator that connects a project tracker (Linear) to coding a
 Claude Code). It polls for issues, creates isolated workspaces, and runs agents against each issue
 until the work is done.
 
+## Screenshots
+
+The TypeScript port ships two operator views over the same runtime snapshot: an Ink terminal
+dashboard (TUI) and a web dashboard served by the observability API.
+
+### Terminal dashboard (TUI)
+
+![Symphony terminal dashboard](docs/images/symphony-tui.png)
+
+### Web dashboard
+
+![Symphony web dashboard](docs/images/symphony-dashboard.png)
+
 ## How it works
 
 1. Polls Linear for issues in active states (e.g. `Todo`, `In Progress`)
