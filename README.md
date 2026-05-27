@@ -30,6 +30,9 @@ configuration automatically - no restart needed.
 | Workflow and runtime hardening | Defaults Codex workflows to sandboxed `workspace-write`, honors Linear `Retry-After` backoff on `429`, tightens remote workspace path validation, and improves long-running orchestrator reliability. |
 | Claude parity and MCP handling | Routes Claude and Codex through the same Symphony-owned Linear tool backend, removes the Python MCP sidecar, and improves remote cleanup behavior. |
 | Dispatch routing | Adds tracker-scoped static routing with Linear labels such as `Symphony:shard-a`, so multiple Symphony instances can split work by configured route labels. |
+| Run history CLI | Adds an orchestrator run history command (`mix symphony.runs` / `symphony-ts runs`) exposing completed attempts, retries, token totals, and per-run forensic context beyond live state. |
+| AlphaEvolve workflow | Adds a `WORKFLOW_ALPHA_EVOLVE.md` example that approximates AlphaEvolve-style search using existing workflow features. |
+| Secret resolution | Resolves `op://` references in workflow secrets (e.g. `LINEAR_API_KEY`) through the 1Password CLI. |
 
 ## Running
 

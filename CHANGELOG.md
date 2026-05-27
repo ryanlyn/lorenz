@@ -1,5 +1,71 @@
 # Changelog
 
+## 2026-05-27
+
+- Tightened TypeScript port runtime fidelity by tracking live elapsed runtime
+  for active runs in the TUI and refreshing running-issue tracker state during
+  reconcile so dashboard stages follow live state transitions.
+
+## 2026-05-26
+
+- Hardened the TypeScript port with type-aware ESLint
+  (`recommendedTypeChecked`), consistent type-import and import-order rules,
+  and broad unit plus property-based test coverage across the workspace,
+  dispatch, issue, config, orchestrator, resume-state, and auth packages.
+
+## 2026-05-22
+
+- Added 1Password `op://` secret resolution via the `op` CLI, adopted the
+  Linear SDK for tracker access, and added a demo setup with a Linear issue
+  seed script and a simplified Codex workflow.
+- Improved repository ergonomics with pre-commit hooks and a CI TypeScript
+  `mise check` job.
+
+## 2026-05-21
+
+- Added a standalone TypeScript port of Symphony under `ts/`, structured as a
+  pnpm workspace (`packages/*` plus `apps/cli`) with parity-tested protocol,
+  domain, policy, runtime, adapter, presentation, and infrastructure libraries,
+  a `symphony-ts` CLI mirroring the Elixir entrypoint, an Ink terminal
+  dashboard, a Hono observability server, and pino-based log rotation. The port
+  copies the Elixir workflow files byte-for-byte and enforces drift checks
+  rather than importing Elixir code.
+
+## 2026-05-03
+
+- Fixed stale retry slot claims so a failed worker no longer strands eligible
+  retry issues behind an orphaned claimed slot.
+- Removed the deprecated `mcp_server_python` workflow setting and the PR
+  description lint workflow.
+
+## 2026-04-30
+
+- Added tracker dispatch routing with Linear route labels (e.g.
+  `Symphony:shard-a`), letting multiple Symphony instances split work by
+  configured route.
+
+## 2026-04-24
+
+- Decoupled the built-in skills from Codex/Elixir specifics by dropping the
+  hard-coded Codex co-author trailer, broadening contributor-guide references,
+  and discovering project pre-push validation from repo guides instead of a
+  fixed `make -C elixir` gate.
+
+## 2026-04-23
+
+- Inlined the PR body template directly in the `symphony-push` skill.
+
+## 2026-04-09
+
+- Added an AlphaEvolve-inspired workflow template and an orchestrator run
+  history observability CLI exposing completed attempts, retries, token totals,
+  and per-run forensic context.
+- Excluded dynamic Claude system prompt sections from `--print` runs for a more
+  stable stream payload.
+- Hardened runtime and dispatch behavior by composing global and per-status
+  concurrency caps, caching parsed workflow templates, and bounding workspace
+  setup and hook execution with runner-side timeouts.
+
 ## 2026-04-07
 
 - Added Context Ensembles with configurable multi-agent issue fan-out,
