@@ -79,6 +79,60 @@ test("terminal dashboard preserves tracker states in the running stage column", 
   assert.notMatch(rendered, /codex\s+running\s+4242/);
 });
 
+test("Runtime field tracks live elapsed time of active runs as the clock advances", () => {
+  // A single run started at 00:00:00 with no completion-accumulated seconds.
+  const snapshot = dashboardSnapshot({
+    now: "2026-05-05T00:00:30.000Z",
+    usageTotals: { inputTokens: 0, outputTokens: 0, totalTokens: 0, secondsRunning: 0 },
+    running: [
+      runningFixture(
+        "MT-1",
+        "codex",
+        "running",
+        "4242",
+        30,
+        1,
+        0,
+        "working",
+        "2026-05-05T00:00:30.000Z",
+      ),
+    ],
+  });
+
+  // No new snapshot is emitted between frames; only the wall clock advances.
+  const runtimeLine = (now: string): string => {
+    const frame = formatElixirStyleDashboard(snapshot, { now });
+    return (frame.split("\n").find((line) => line.includes("Runtime:")) ?? "").trim();
+  };
+
+  assert.equal(runtimeLine("2026-05-05T00:00:30.000Z"), "│ Runtime: 0m 30s");
+  assert.equal(runtimeLine("2026-05-05T00:01:30.000Z"), "│ Runtime: 1m 30s");
+});
+
+test("Runtime field adds active-run elapsed on top of completion-accumulated seconds", () => {
+  const snapshot = dashboardSnapshot({
+    now: "2026-05-05T00:00:30.000Z",
+    // 120s already banked from completed runs.
+    usageTotals: { inputTokens: 0, outputTokens: 0, totalTokens: 0, secondsRunning: 120 },
+    running: [
+      runningFixture(
+        "MT-1",
+        "codex",
+        "running",
+        "4242",
+        30,
+        1,
+        0,
+        "working",
+        "2026-05-05T00:00:30.000Z",
+      ),
+    ],
+  });
+  const frame = formatElixirStyleDashboard(snapshot, { now: "2026-05-05T00:00:30.000Z" });
+  // 120 banked + 30 live = 150s = 2m 30s.
+  assert.match(frame, /Runtime: 2m 30s/);
+});
+
 test("TUI humanizes Codex and Claude event variants like the Elixir dashboard", () => {
   assert.equal(
     humanizeCodexMessage({

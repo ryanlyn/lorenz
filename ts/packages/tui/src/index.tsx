@@ -122,7 +122,7 @@ export function formatElixirStyleDashboard(
   const ansi = options.ansi === true;
   const now = coerceDate(options.now) ?? new Date();
   const maxAgents = options.maxAgents ?? 10;
-  const runtimeSeconds = options.runtimeSeconds ?? snapshot.usageTotals.secondsRunning;
+  const runtimeSeconds = options.runtimeSeconds ?? liveRuntimeSeconds(snapshot, now);
   const throughputTps =
     options.throughputTps ?? throughput(snapshot.usageTotals.totalTokens, runtimeSeconds);
   const lines = [
@@ -319,6 +319,14 @@ function formatRetryDue(seconds: number): string {
 function formatMinutesSeconds(seconds: number): string {
   const whole = Math.max(0, Math.floor(seconds));
   return `${Math.floor(whole / 60)}m ${whole % 60}s`;
+}
+
+function liveRuntimeSeconds(snapshot: RuntimeSnapshot, now: Date): number {
+  let seconds = snapshot.usageTotals.secondsRunning;
+  for (const run of snapshot.running) {
+    seconds += Math.max(0, secondsBetween(now, run.startedAt));
+  }
+  return seconds;
 }
 
 function throughput(totalTokens: number, runtimeSeconds: number): number {
