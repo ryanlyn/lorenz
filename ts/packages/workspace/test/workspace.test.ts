@@ -9,15 +9,20 @@ import {
   validateWorkspaceCwd,
   createWorkspaceForIssue,
   removeWorkspace,
+  removeIssueWorkspaces,
 } from "@symphony/cli";
 import type { Settings } from "@symphony/domain";
 
 import { assert } from "../../../test/assert.js";
 import { tempDir, sampleIssue } from "../../../test/helpers.js";
 
-function makeSettings(root: string, hooks: Partial<Settings["hooks"]> = {}): Settings {
+function makeSettings(
+  root: string,
+  hooks: Partial<Settings["hooks"]> = {},
+  workspace: Partial<Settings["workspace"]> = {},
+): Settings {
   return {
-    workspace: { root },
+    workspace: { root, ...workspace },
     worker: { sshHosts: [], sshTimeoutMs: 5_000 },
     hooks: { timeoutMs: 5_000, ...hooks },
   } as unknown as Settings;
@@ -131,6 +136,34 @@ test("createWorkspaceForIssue — runs afterCreate hook on new workspace", async
   const hookFile = path.join(ws, ".hook-ran");
   const stat = await fs.stat(hookFile);
   assert.ok(stat.isFile());
+});
+
+// --- shared workspace (perRun: false) ---
+
+test("createWorkspaceForIssue — shared mode returns the root for every issue", async () => {
+  const root = await tempDir("ws-shared");
+  const settings = makeSettings(root, {}, { perRun: false });
+  const canonicalRoot = await fs.realpath(root);
+  const first = await createWorkspaceForIssue(settings, sampleIssue);
+  const second = await createWorkspaceForIssue(settings, { ...sampleIssue, identifier: "MT-2" });
+  assert.equal(first, canonicalRoot);
+  assert.equal(second, canonicalRoot);
+});
+
+test("validateWorkspaceCwd — shared mode allows the root as cwd", async () => {
+  const root = await tempDir("ws-shared");
+  const settings = makeSettings(root, {}, { perRun: false });
+  const result = await validateWorkspaceCwd(settings, root);
+  assert.equal(result, await fs.realpath(root));
+});
+
+test("removeIssueWorkspaces — shared mode never deletes the root", async () => {
+  const root = await tempDir("ws-shared");
+  const settings = makeSettings(root, {}, { perRun: false });
+  await createWorkspaceForIssue(settings, sampleIssue);
+  await removeIssueWorkspaces(settings, sampleIssue.identifier);
+  const stat = await fs.stat(root);
+  assert.ok(stat.isDirectory());
 });
 
 // --- removeWorkspace ---

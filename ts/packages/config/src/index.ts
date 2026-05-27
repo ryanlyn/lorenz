@@ -67,7 +67,9 @@ const trackerRawSchema = z
   .strict();
 
 const pollingRawSchema = z.object({ intervalMs: z.unknown().optional() }).strict();
-const workspaceRawSchema = z.object({ root: z.unknown().optional() }).strict();
+const workspaceRawSchema = z
+  .object({ root: z.unknown().optional(), perRun: z.unknown().optional() })
+  .strict();
 const workerRawSchema = z
   .object({
     sshHosts: z.unknown().optional(),
@@ -182,7 +184,7 @@ const dispatchAliases = {
   route_label_prefix: "routeLabelPrefix",
 };
 const pollingAliases = { interval_ms: "intervalMs" };
-const workspaceAliases = {};
+const workspaceAliases = { per_run: "perRun" };
 const workerAliases = {
   ssh_hosts: "sshHosts",
   ssh_timeout_ms: "sshTimeoutMs",
@@ -279,6 +281,7 @@ export const defaultSettings = (options: DefaultSettingsOptions = {}): Settings 
     workspace: {
       root: workspaceRoot,
       rootExpression: workspaceRoot,
+      perRun: true,
     },
     worker: { sshHosts: [], sshTimeoutMs: 60_000 },
     hooks: { timeoutMs: 60_000 },
@@ -330,6 +333,10 @@ export function parseConfig(
   );
   settings.workspace.rootExpression = workspaceRootExpression;
   settings.workspace.root = expandLocalPath(workspaceRootExpression, env);
+  settings.workspace.perRun = booleanValue(
+    nonEmptyString(env.SYMPHONY_WORKSPACE_PER_RUN) ?? workspaceRaw.perRun,
+    settings.workspace.perRun ?? true,
+  );
 
   const workerRaw = parsed.worker ?? {};
   settings.worker.sshHosts = stringArray(workerRaw.sshHosts, settings.worker.sshHosts);

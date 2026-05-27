@@ -12,6 +12,10 @@ export function safeIdentifier(identifier: unknown): string {
   return identifier.replace(/[^A-Za-z0-9_.-]/g, "_");
 }
 
+function sharedWorkspaceRoot(settings: Settings): boolean {
+  return settings.workspace.perRun === false;
+}
+
 export function workspacePath(
   root: string,
   issueIdentifier: string,
@@ -35,9 +39,20 @@ export async function createWorkspaceForIssue(
   const ensembleSize = options.ensembleSize ?? 1;
 
   const rootPath = path.resolve(settings.workspace.root);
+  const shared = sharedWorkspaceRoot(settings);
+  const rootExisted = shared ? await exists(rootPath) : true;
   await fs.mkdir(rootPath, { recursive: true });
   await rejectFinalSymlink(rootPath);
   const canonicalRoot = await fs.realpath(rootPath);
+
+  if (shared) {
+    const canonicalRootTarget = await validateWorkspaceCwd(settings, canonicalRoot);
+    if (!rootExisted && settings.hooks.afterCreate) {
+      await runHook(settings.hooks.afterCreate, canonicalRootTarget, settings.hooks);
+    }
+    return canonicalRootTarget;
+  }
+
   const target = workspacePath(canonicalRoot, identifier, slotIndex, ensembleSize);
   const existed = await exists(target);
   await ensureDirectoryWithinRoot(canonicalRoot, target);
@@ -112,6 +127,9 @@ export async function removeIssueWorkspaces(
   workerHost?: string | null,
 ): Promise<void> {
   if (typeof identifier !== "string") return;
+  // The shared workspace is the root itself and is never owned by a single issue, so it must
+  // outlive any individual run; auto-cleanup would wipe other agents' work.
+  if (sharedWorkspaceRoot(settings)) return;
   if (workerHost) {
     try {
       await removeRemoteIssueWorkspaces(settings, identifier, workerHost);
@@ -191,7 +209,7 @@ export async function validateWorkspaceCwd(
   if (!(await exists(candidate))) throw new Error(`invalid_workspace_cwd: missing ${candidate}`);
   await rejectPathSymlinksWithinRoot(canonicalRoot, candidate);
   const canonicalTarget = await fs.realpath(candidate);
-  if (canonicalTarget === canonicalRoot)
+  if (canonicalTarget === canonicalRoot && !sharedWorkspaceRoot(settings))
     throw new Error(`refusing to use workspace root as cwd: ${canonicalRoot}`);
   ensureInsideRoot(canonicalTarget, canonicalRoot);
   return canonicalTarget;
@@ -261,12 +279,9 @@ async function createRemoteWorkspaceForIssue(
 ): Promise<string> {
   const identifier = typeof issue === "string" ? issue : issue.identifier;
   const root = await remoteWorkspaceRoot(settings, workerHost);
-  const workspace = remoteWorkspacePath(
-    root,
-    identifier,
-    options.slotIndex ?? 0,
-    options.ensembleSize ?? 1,
-  );
+  const workspace = sharedWorkspaceRoot(settings)
+    ? root
+    : remoteWorkspacePath(root, identifier, options.slotIndex ?? 0, options.ensembleSize ?? 1);
 
   const script = [
     "set -eu",
@@ -306,9 +321,10 @@ async function validateRemoteWorkspaceCwd(
   workerHost: string,
 ): Promise<string> {
   if (invalidWorkspaceInput(workspace)) throw new Error("invalid_workspace_cwd: blank");
+  const shared = sharedWorkspaceRoot(settings);
   const root = await remoteWorkspaceRoot(settings, workerHost);
   ensureRemoteInsideRoot(workspace, root);
-  if (normalizeRemotePath(workspace) === normalizeRemotePath(root)) {
+  if (!shared && normalizeRemotePath(workspace) === normalizeRemotePath(root)) {
     throw new Error(`refusing to use workspace root as cwd: ${root}`);
   }
   const script = [
@@ -327,7 +343,7 @@ async function validateRemoteWorkspaceCwd(
     throw new Error(`invalid_workspace_cwd: ${workerHost} ${result.status} ${result.stdout}`);
   const parsed = parseRemoteWorkspaceValidationOutput(result.stdout);
   ensureRemoteInsideRoot(parsed.workspace, parsed.root);
-  if (normalizeRemotePath(parsed.workspace) === normalizeRemotePath(parsed.root)) {
+  if (!shared && normalizeRemotePath(parsed.workspace) === normalizeRemotePath(parsed.root)) {
     throw new Error(`refusing to use workspace root as cwd: ${parsed.root}`);
   }
   return parsed.workspace;

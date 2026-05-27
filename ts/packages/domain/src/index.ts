@@ -351,6 +351,13 @@ export interface WorkspaceSettings {
    * where home-directory and env-var expansion must happen on the worker host, not locally.
    */
   rootExpression?: string | undefined;
+  /**
+   * When `false`, every agent runs directly in `root` as a single shared workspace instead of
+   * getting an isolated `<root>/<safe-identifier>` folder per issue. Intended for high-touchpoint
+   * setups where co-located agents are desired. Resume isolation and per-issue workspace cleanup
+   * are forfeited in this mode. Defaults to per-run isolation when omitted.
+   */
+  perRun?: boolean | undefined;
 }
 
 /**

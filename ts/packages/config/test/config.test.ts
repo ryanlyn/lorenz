@@ -118,6 +118,18 @@ test("workspace root honors SYMPHONY_WORKSPACE_ROOT and expands local tilde path
   assert.equal(settings.workspace.rootExpression, "~/override");
 });
 
+test("workspace perRun defaults to true and is overridable via config and env", () => {
+  assert.equal(parseConfig({}).workspace.perRun, true);
+  assert.equal(parseConfig({ workspace: { per_run: false } }).workspace.perRun, false);
+  assert.equal(parseConfig({ workspace: { perRun: false } }).workspace.perRun, false);
+  assert.equal(
+    parseConfig({ workspace: { per_run: false } }, { SYMPHONY_WORKSPACE_PER_RUN: "true" }).workspace
+      .perRun,
+    true,
+  );
+  assert.equal(parseConfig({}, { SYMPHONY_WORKSPACE_PER_RUN: "false" }).workspace.perRun, false);
+});
+
 test("workspace root resolves only whole-string env references", () => {
   const resolved = parseConfig(
     { workspace: { root: "$WORKSPACE_ROOT" } },
