@@ -541,6 +541,7 @@ export class SymphonyRuntime {
         routedToThisWorker(issue, this.workflow.settings) &&
         !issueHasOpenBlockers(issue, this.workflow.settings)
       ) {
+        this.orchestrator.refreshRunningIssue(issue);
         continue;
       }
       this.abortIssueRuns(issue.id);

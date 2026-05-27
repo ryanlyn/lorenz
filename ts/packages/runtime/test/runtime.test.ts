@@ -704,6 +704,30 @@ test("runtime reconciliation removes terminal retry workspaces before polling", 
   assert.ok(runtime.snapshot().recentEvents.some((event) => event.type === "workspace_cleanup"));
 });
 
+test("runtime reconcile refreshes the running stage when the tracker state changes", async () => {
+  const workflow = workflowFixture();
+  const orchestrator = new Orchestrator(workflow.settings);
+  assert.ok(orchestrator.claim(issueFixture("issue-1", "MT-1")));
+
+  const moved: Issue = { ...issueFixture("issue-1", "MT-1"), state: "In Progress" };
+  const runtime = new SymphonyRuntime(
+    runtimeOptions({
+      workflow,
+      orchestrator,
+      client: {
+        fetchCandidateIssues: async () => [],
+        fetchIssuesByIds: async () => [moved],
+      },
+    }),
+  );
+
+  assert.equal(runtime.snapshot().running[0]?.state, "Todo");
+
+  await runtime.pollOnce({ dryRun: true });
+
+  assert.equal(runtime.snapshot().running[0]?.state, "In Progress");
+});
+
 test("runtime performs startup terminal workspace cleanup through tracker state queries", async () => {
   const root = await tempDir("symphony-ts-runtime-startup-cleanup");
   const workflow = workflowFixture(root);

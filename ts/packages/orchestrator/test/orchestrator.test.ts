@@ -43,6 +43,20 @@ test("orchestrator claims ensemble slots independently and snapshots backend-neu
   assert.equal(orchestrator.snapshot().retrying[0]?.attempt, 1);
 });
 
+test("refreshRunningIssue updates the tracker state of all slots for a running issue", () => {
+  const orchestrator = new Orchestrator(parseConfig({ agent: { ensemble_size: 2 } }));
+  const issue = normalizeIssue({ id: "i1", identifier: "MT-1", title: "Title", state: "Todo" });
+  assert.ok(orchestrator.claim(issue));
+  assert.ok(orchestrator.claim(issue));
+  assert.equal(orchestrator.snapshot().running[0]?.issue.state, "Todo");
+  assert.equal(orchestrator.snapshot().running[1]?.issue.state, "Todo");
+
+  orchestrator.refreshRunningIssue({ ...issue, state: "In Progress" });
+
+  assert.equal(orchestrator.snapshot().running[0]?.issue.state, "In Progress");
+  assert.equal(orchestrator.snapshot().running[1]?.issue.state, "In Progress");
+});
+
 test("orchestrator keeps per-entry usage totals monotonic across runner corrections", () => {
   const orchestrator = new Orchestrator(parseConfig());
   const issue = normalizeIssue({

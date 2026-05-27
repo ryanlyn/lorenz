@@ -165,6 +165,12 @@ export class Orchestrator {
     return this.selectWorkerHost() !== undefined;
   }
 
+  refreshRunningIssue(issue: Issue): void {
+    for (const entry of this.state.running.values()) {
+      if (entry.issue.id === issue.id) entry.issue = issue;
+    }
+  }
+
   applyUpdate(issueId: string, slotIndex: number, update: AgentUpdate): void {
     const entry = this.state.running.get(slotKey(issueId, slotIndex));
     if (!entry) return;
