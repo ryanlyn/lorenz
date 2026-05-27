@@ -13,7 +13,7 @@ export function safeIdentifier(identifier: unknown): string {
 }
 
 function sharedWorkspaceRoot(settings: Settings): boolean {
-  return settings.workspace.perRun === false;
+  return settings.workspace.shared === true;
 }
 
 export function workspacePath(

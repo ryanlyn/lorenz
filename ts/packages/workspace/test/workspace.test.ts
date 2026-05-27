@@ -142,7 +142,7 @@ test("createWorkspaceForIssue — runs afterCreate hook on new workspace", async
 
 test("createWorkspaceForIssue — shared mode returns the root for every issue", async () => {
   const root = await tempDir("ws-shared");
-  const settings = makeSettings(root, {}, { perRun: false });
+  const settings = makeSettings(root, {}, { shared: true });
   const canonicalRoot = await fs.realpath(root);
   const first = await createWorkspaceForIssue(settings, sampleIssue);
   const second = await createWorkspaceForIssue(settings, { ...sampleIssue, identifier: "MT-2" });
@@ -152,14 +152,14 @@ test("createWorkspaceForIssue — shared mode returns the root for every issue",
 
 test("validateWorkspaceCwd — shared mode allows the root as cwd", async () => {
   const root = await tempDir("ws-shared");
-  const settings = makeSettings(root, {}, { perRun: false });
+  const settings = makeSettings(root, {}, { shared: true });
   const result = await validateWorkspaceCwd(settings, root);
   assert.equal(result, await fs.realpath(root));
 });
 
 test("removeIssueWorkspaces — shared mode never deletes the root", async () => {
   const root = await tempDir("ws-shared");
-  const settings = makeSettings(root, {}, { perRun: false });
+  const settings = makeSettings(root, {}, { shared: true });
   await createWorkspaceForIssue(settings, sampleIssue);
   await removeIssueWorkspaces(settings, sampleIssue.identifier);
   const stat = await fs.stat(root);

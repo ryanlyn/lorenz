@@ -68,7 +68,7 @@ const trackerRawSchema = z
 
 const pollingRawSchema = z.object({ intervalMs: z.unknown().optional() }).strict();
 const workspaceRawSchema = z
-  .object({ root: z.unknown().optional(), perRun: z.unknown().optional() })
+  .object({ root: z.unknown().optional(), shared: z.unknown().optional() })
   .strict();
 const workerRawSchema = z
   .object({
@@ -184,7 +184,7 @@ const dispatchAliases = {
   route_label_prefix: "routeLabelPrefix",
 };
 const pollingAliases = { interval_ms: "intervalMs" };
-const workspaceAliases = { per_run: "perRun" };
+const workspaceAliases = {};
 const workerAliases = {
   ssh_hosts: "sshHosts",
   ssh_timeout_ms: "sshTimeoutMs",
@@ -281,7 +281,7 @@ export const defaultSettings = (options: DefaultSettingsOptions = {}): Settings 
     workspace: {
       root: workspaceRoot,
       rootExpression: workspaceRoot,
-      perRun: true,
+      shared: false,
     },
     worker: { sshHosts: [], sshTimeoutMs: 60_000 },
     hooks: { timeoutMs: 60_000 },
@@ -325,18 +325,21 @@ export function parseConfig(
   );
 
   const workspaceRaw = parsed.workspace ?? {};
+  if (workspaceRaw.root !== undefined && workspaceRaw.shared !== undefined) {
+    throw new Error("workspace.root and workspace.shared are mutually exclusive");
+  }
+  const sharedWorkspace = workspaceRaw.shared !== undefined;
   const workspaceRootFallback = settings.workspace.rootExpression ?? settings.workspace.root;
   const workspaceRootExpression = resolveWorkspaceRootExpression(
-    nonEmptyString(env.SYMPHONY_WORKSPACE_ROOT) ?? workspaceRaw.root,
+    sharedWorkspace
+      ? workspaceRaw.shared
+      : (nonEmptyString(env.SYMPHONY_WORKSPACE_ROOT) ?? workspaceRaw.root),
     workspaceRootFallback,
     env,
   );
   settings.workspace.rootExpression = workspaceRootExpression;
   settings.workspace.root = expandLocalPath(workspaceRootExpression, env);
-  settings.workspace.perRun = booleanValue(
-    nonEmptyString(env.SYMPHONY_WORKSPACE_PER_RUN) ?? workspaceRaw.perRun,
-    settings.workspace.perRun ?? true,
-  );
+  settings.workspace.shared = sharedWorkspace;
 
   const workerRaw = parsed.worker ?? {};
   settings.worker.sshHosts = stringArray(workerRaw.sshHosts, settings.worker.sshHosts);

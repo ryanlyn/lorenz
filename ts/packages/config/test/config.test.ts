@@ -118,16 +118,22 @@ test("workspace root honors SYMPHONY_WORKSPACE_ROOT and expands local tilde path
   assert.equal(settings.workspace.rootExpression, "~/override");
 });
 
-test("workspace perRun defaults to true and is overridable via config and env", () => {
-  assert.equal(parseConfig({}).workspace.perRun, true);
-  assert.equal(parseConfig({ workspace: { per_run: false } }).workspace.perRun, false);
-  assert.equal(parseConfig({ workspace: { perRun: false } }).workspace.perRun, false);
-  assert.equal(
-    parseConfig({ workspace: { per_run: false } }, { SYMPHONY_WORKSPACE_PER_RUN: "true" }).workspace
-      .perRun,
-    true,
+test("workspace defaults to per-run isolation", () => {
+  assert.equal(parseConfig({}).workspace.shared, false);
+});
+
+test("workspace.shared sets the shared root and enables shared mode", () => {
+  const settings = parseConfig({ workspace: { shared: "~/agents" } }, { HOME: os.homedir() });
+  assert.equal(settings.workspace.shared, true);
+  assert.equal(settings.workspace.root, path.join(os.homedir(), "agents"));
+  assert.equal(settings.workspace.rootExpression, "~/agents");
+});
+
+test("workspace.root and workspace.shared are mutually exclusive", () => {
+  assert.throws(
+    () => parseConfig({ workspace: { root: "/a", shared: "/b" } }),
+    /workspace.root and workspace.shared are mutually exclusive/,
   );
-  assert.equal(parseConfig({}, { SYMPHONY_WORKSPACE_PER_RUN: "false" }).workspace.perRun, false);
 });
 
 test("workspace root resolves only whole-string env references", () => {

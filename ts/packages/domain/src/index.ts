@@ -352,12 +352,13 @@ export interface WorkspaceSettings {
    */
   rootExpression?: string | undefined;
   /**
-   * When `false`, every agent runs directly in `root` as a single shared workspace instead of
-   * getting an isolated `<root>/<safe-identifier>` folder per issue. Intended for high-touchpoint
-   * setups where co-located agents are desired. Resume isolation and per-issue workspace cleanup
-   * are forfeited in this mode. Defaults to per-run isolation when omitted.
+   * When `true`, `root` is a single shared folder that every agent runs in directly, instead of
+   * each issue getting an isolated `<root>/<safe-identifier>` subfolder. Selected via the
+   * `workspace.shared` config key, which is mutually exclusive with `workspace.root`. Session
+   * resumption is disabled in this mode and the shared folder is never auto-removed. Intended for
+   * high-touchpoint setups where co-located agents are desired. Defaults to per-run isolation.
    */
-  perRun?: boolean | undefined;
+  shared?: boolean | undefined;
 }
 
 /**
