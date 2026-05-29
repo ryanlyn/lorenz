@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, writeFile, mkdir } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile, mkdir, readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -116,6 +116,40 @@ test("description containing a literal '## Comments' heading survives round-trip
 
   const file = await readFile(path.join(dir, "BOARD-1.md"), "utf8");
   assert.match(file, /- 2026-05-29T10:00:00.000Z agent: real agent note/);
+});
+
+test("rejects path-traversal and malformed issue ids without touching the filesystem", async () => {
+  const dir = await tempBoard();
+  const store = new BoardStore(dir);
+  await store.create({ title: "Valid", body: "Body", status: "Todo" });
+
+  const before = (await readdir(dir)).sort();
+  // Capture a marker file outside the board dir so we can prove nothing escaped.
+  const parent = path.dirname(dir);
+  const sentinel = path.join(parent, "outside-marker.txt");
+  await writeFile(sentinel, "untouched", "utf8");
+  const sentinelBefore = await readFile(sentinel, "utf8");
+  const parentBefore = (await readdir(parent)).sort();
+
+  const badIds = ["../../etc/passwd", "BOARD-1/../x", "foo", "", "BOARD-1/../../outside-marker"];
+  for (const id of badIds) {
+    await assert.rejects(() => store.updateStatus(id, "Done"), /invalid.*id|BOARD/i);
+    await assert.rejects(() => store.appendComment(id, "x"), /invalid.*id|BOARD/i);
+    await assert.rejects(() => store.getByIds([id]), /invalid.*id|BOARD/i);
+  }
+
+  // No file created or removed outside the board dir, and the board itself is unchanged.
+  assert.deepEqual((await readdir(dir)).sort(), before);
+  assert.equal(await readFile(sentinel, "utf8"), sentinelBefore);
+  // The parent dir gained or lost nothing (the rejected ids never reached the filesystem).
+  assert.deepEqual((await readdir(parent)).sort(), parentBefore);
+
+  // A valid id still works end to end.
+  const ok = await store.updateStatus("BOARD-1", "In Progress");
+  assert.equal(ok.state, "In Progress");
+  await store.appendComment("BOARD-1", "still works", () => new Date("2026-05-29T12:00:00Z"));
+  const fetched = (await store.getByIds(["BOARD-1"]))[0]!;
+  assert.equal(fetched.identifier, "BOARD-1");
 });
 
 test("CRLF board files parse with clean status and description", async () => {

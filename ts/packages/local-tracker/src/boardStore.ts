@@ -20,6 +20,13 @@ interface ParsedFile {
  */
 const COMMENTS_MARKER = "<!-- symphony:comments -->";
 
+/**
+ * The only id shape {@link BoardStore} ever mints (see {@link BoardStore.nextId}).
+ * Anything else - including ids containing path separators, "..", or NUL - is rejected
+ * before it can reach the filesystem, closing off path traversal via agent-supplied ids.
+ */
+const ID_PATTERN = /^BOARD-\d+$/;
+
 export class BoardStore {
   constructor(private readonly dir: string) {}
 
@@ -31,6 +38,7 @@ export class BoardStore {
   }
 
   async getByIds(ids: string[]): Promise<Issue[]> {
+    for (const id of ids) assertValidId(id);
     const existing = new Set(await this.issueIds());
     const out: Issue[] = [];
     for (const id of ids) if (existing.has(id)) out.push(await this.read(id));
@@ -43,6 +51,7 @@ export class BoardStore {
   }
 
   async updateStatus(id: string, status: string): Promise<Issue> {
+    assertValidId(id);
     const parsed = await this.parse(id);
     parsed.status = status;
     await this.write(id, parsed);
@@ -50,6 +59,7 @@ export class BoardStore {
   }
 
   async appendComment(id: string, body: string, now: () => Date = () => new Date()): Promise<void> {
+    assertValidId(id);
     const parsed = await this.parse(id);
     const line = `- ${now().toISOString()} agent: ${body}`;
     parsed.comments = parsed.comments ? `${parsed.comments}\n${line}` : line;
@@ -69,7 +79,14 @@ export class BoardStore {
   }
 
   private filePath(id: string): string {
-    return path.join(this.dir, `${id}.md`);
+    assertValidId(id);
+    const resolved = path.resolve(this.dir, `${id}.md`);
+    // Defense in depth: even with a valid-looking id, refuse any path that escapes the board dir.
+    const base = path.resolve(this.dir);
+    if (resolved !== path.join(base, `${id}.md`) || !resolved.startsWith(base + path.sep)) {
+      throw new Error(`invalid board issue id: ${JSON.stringify(id)}`);
+    }
+    return resolved;
   }
 
   private async issueIds(): Promise<string[]> {
@@ -129,6 +146,12 @@ export class BoardStore {
       sections.push(`${COMMENTS_MARKER}\n## Comments\n${p.comments.trim()}`);
     await fs.mkdir(this.dir, { recursive: true });
     await fs.writeFile(this.filePath(id), `${sections.join("\n\n")}\n`, "utf8");
+  }
+}
+
+function assertValidId(id: string): void {
+  if (!ID_PATTERN.test(id)) {
+    throw new Error(`invalid board issue id: ${JSON.stringify(id)} (expected BOARD-<n>)`);
   }
 }
 
