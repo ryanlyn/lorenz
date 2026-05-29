@@ -13,6 +13,13 @@ interface ParsedFile {
   comments: string;
 }
 
+/**
+ * Collision-resistant sentinel that marks the start of the comments section. It sits
+ * immediately before the human-readable "## Comments" heading so a description that
+ * legitimately contains a "## Comments" heading is never misparsed.
+ */
+const COMMENTS_MARKER = "<!-- symphony:comments -->";
+
 export class BoardStore {
   constructor(private readonly dir: string) {}
 
@@ -102,11 +109,11 @@ export class BoardStore {
   }
 
   private async parse(id: string): Promise<ParsedFile> {
-    const raw = await fs.readFile(this.filePath(id), "utf8");
+    const raw = (await fs.readFile(this.filePath(id), "utf8")).replace(/\r\n/g, "\n");
     const { frontmatter, body } = splitFrontmatter(raw);
     const fm = (frontmatter ? parseYaml(frontmatter) : {}) as Record<string, unknown>;
-    const status = typeof fm.status === "string" ? fm.status : "";
-    if (status.trim() === "") throw new Error(`board issue ${id} is missing required 'status'`);
+    const status = typeof fm.status === "string" ? fm.status.trim() : "";
+    if (status === "") throw new Error(`board issue ${id} is missing required 'status'`);
     const labels = Array.isArray(fm.labels)
       ? fm.labels.filter((l): l is string => typeof l === "string")
       : [];
@@ -118,7 +125,8 @@ export class BoardStore {
     if (p.labels.length > 0) fm.labels = p.labels;
     const sections = [`---\n${stringifyYaml(fm).trimEnd()}\n---`, `# ${p.title}`];
     if (p.description.trim() !== "") sections.push(p.description.trim());
-    if (p.comments.trim() !== "") sections.push(`## Comments\n${p.comments.trim()}`);
+    if (p.comments.trim() !== "")
+      sections.push(`${COMMENTS_MARKER}\n## Comments\n${p.comments.trim()}`);
     await fs.mkdir(this.dir, { recursive: true });
     await fs.writeFile(this.filePath(id), `${sections.join("\n\n")}\n`, "utf8");
   }
@@ -140,17 +148,18 @@ function splitFrontmatter(raw: string): { frontmatter: string | null; body: stri
 }
 
 function splitBody(body: string): { title: string; description: string; comments: string } {
-  const commentsIdx = body.indexOf("\n## Comments");
-  const main = commentsIdx === -1 ? body : body.slice(0, commentsIdx);
+  const markerIdx = body.indexOf(COMMENTS_MARKER);
+  const main = markerIdx === -1 ? body : body.slice(0, markerIdx);
   const comments =
-    commentsIdx === -1
+    markerIdx === -1
       ? ""
-      : main.length === body.length
-        ? ""
-        : body.slice(commentsIdx).replace(/^\n## Comments\n?/, "");
+      : body
+          .slice(markerIdx + COMMENTS_MARKER.length)
+          .replace(/^\n?## Comments\n?/, "")
+          .trim();
   const lines = main.split("\n");
   const headingIdx = lines.findIndex((l) => l.startsWith("# "));
   const title = headingIdx === -1 ? "" : lines[headingIdx]!.slice(2).trim();
   const descLines = headingIdx === -1 ? lines : lines.slice(headingIdx + 1);
-  return { title, description: descLines.join("\n").trim(), comments: comments.trim() };
+  return { title, description: descLines.join("\n").trim(), comments };
 }

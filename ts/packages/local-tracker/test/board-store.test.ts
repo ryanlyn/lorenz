@@ -97,3 +97,34 @@ test("missing status throws a clear error", async () => {
   const store = new BoardStore(dir);
   await assert.rejects(() => store.getByIds(["BOARD-9"]), /BOARD-9.*status/);
 });
+
+test("description containing a literal '## Comments' heading survives round-trips", async () => {
+  const dir = await tempBoard();
+  const store = new BoardStore(dir);
+  const body = "Intro\n## Comments\nplease comment";
+  await store.create({ title: "T", body, status: "Todo" });
+
+  let issue = (await store.getByIds(["BOARD-1"]))[0]!;
+  assert.equal(issue.description, body);
+
+  await store.appendComment("BOARD-1", "real agent note", () => new Date("2026-05-29T10:00:00Z"));
+  await store.updateStatus("BOARD-1", "In Progress");
+
+  issue = (await store.getByIds(["BOARD-1"]))[0]!;
+  assert.equal(issue.description, body);
+  assert.equal(issue.state, "In Progress");
+
+  const file = await readFile(path.join(dir, "BOARD-1.md"), "utf8");
+  assert.match(file, /- 2026-05-29T10:00:00.000Z agent: real agent note/);
+});
+
+test("CRLF board files parse with clean status and description", async () => {
+  const dir = await tempBoard();
+  const raw = ["---", "status: In Progress", "---", "", "# Title", "", "Body line"].join("\r\n");
+  await writeFile(path.join(dir, "BOARD-3.md"), `${raw}\r\n`, "utf8");
+  const store = new BoardStore(dir);
+  const issue = (await store.getByIds(["BOARD-3"]))[0]!;
+  assert.equal(issue.state, "In Progress");
+  assert.equal(issue.stateType, "started");
+  assert.equal(issue.description, "Body line");
+});
