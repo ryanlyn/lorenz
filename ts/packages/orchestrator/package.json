@@ -29,6 +29,7 @@
     "@symphony/config": "workspace:*",
     "@symphony/policies": "workspace:*",
     "@symphony/ports": "workspace:*",
-    "@symphony/domain": "workspace:*"
+    "@symphony/domain": "workspace:*",
+    "@symphony/fsm": "workspace:*"
   }
 }

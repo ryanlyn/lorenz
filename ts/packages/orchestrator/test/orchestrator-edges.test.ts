@@ -261,3 +261,62 @@ test("Orchestrator — accepts custom ClockPort for deterministic time assertion
   const entry = orchestrator.claim(issue);
   assert.equal(entry?.startedAt.getTime(), fixedTime.getTime());
 });
+
+// --- Dual-write: SlotRegistry mirrors Map state ---
+
+test("dual-write — SlotRegistry mirrors claim+update+finish cycle", () => {
+  const orchestrator = new Orchestrator(parseConfig());
+  const issue = makeIssue();
+
+  // After claim: registry should have 'claimed'
+  const entry = orchestrator.claim(issue);
+  assert.ok(entry);
+  const key = slotKey(issue.id, 0);
+  const afterClaim = orchestrator.slotRegistry.getState(key);
+  assert.ok(afterClaim);
+  assert.equal(afterClaim?.kind, "claimed");
+
+  // After first update: registry should transition to 'running'
+  orchestrator.applyUpdate(issue.id, 0, { type: "turn_completed" });
+  const afterUpdate = orchestrator.slotRegistry.getState(key);
+  assert.equal(afterUpdate?.kind, "running");
+
+  // After second update: still 'running' (self-loop)
+  orchestrator.applyUpdate(issue.id, 0, { type: "turn_completed" });
+  const afterSecondUpdate = orchestrator.slotRegistry.getState(key);
+  assert.equal(afterSecondUpdate?.kind, "running");
+
+  // After normal finish: registry should transition to 'retrying'
+  orchestrator.finish(issue.id, 0, true);
+  const afterFinish = orchestrator.slotRegistry.getState(key);
+  assert.equal(afterFinish?.kind, "retrying");
+
+  // Maps should also be consistent
+  assert.equal(orchestrator.state.running.has(key), false);
+  assert.equal(orchestrator.state.claimed.has(key), false);
+});
+
+test("dual-write — SlotRegistry transitions to done on non-normal finish", () => {
+  const orchestrator = new Orchestrator(parseConfig());
+  const issue = makeIssue();
+
+  orchestrator.claim(issue);
+  const key = slotKey(issue.id, 0);
+  orchestrator.applyUpdate(issue.id, 0, { type: "turn_completed" });
+  orchestrator.finish(issue.id, 0, false, "crashed");
+
+  const state = orchestrator.slotRegistry.getState(key);
+  assert.equal(state?.kind, "done");
+});
+
+test("dual-write — SlotRegistry transitions to done on cleanupIssue", () => {
+  const orchestrator = new Orchestrator(parseConfig());
+  const issue = makeIssue();
+
+  orchestrator.claim(issue);
+  const key = slotKey(issue.id, 0);
+  orchestrator.cleanupIssue(issue.id);
+
+  const state = orchestrator.slotRegistry.getState(key);
+  assert.equal(state?.kind, "done");
+});

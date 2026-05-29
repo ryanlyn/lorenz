@@ -236,7 +236,7 @@ describe("SlotMachine BFS walker", () => {
     // claimed transitions
     "claimed+claim": null,
     "claimed+agent_update": "running",
-    "claimed+run_finished": null,
+    "claimed+run_finished": "retrying",
     "claimed+run_failed": "retrying",
     "claimed+abort": null,
     "claimed+cleanup_done": null,

@@ -25,6 +25,7 @@
     "yaml": "^2.8.0",
     "zod": "^4.4.3",
     "@symphony/dispatch": "workspace:*",
+    "@symphony/fsm": "workspace:*",
     "@symphony/policies": "workspace:*",
     "@symphony/issue": "workspace:*",
     "@symphony/orchestrator": "workspace:*",

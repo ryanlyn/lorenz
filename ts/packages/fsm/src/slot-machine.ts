@@ -104,6 +104,18 @@ export function transition(state: SlotState, event: SlotEvent): SlotState | null
         startedAt: new Date(),
       }))
 
+      // claimed + run_finished => retrying (finished before first agent_update)
+      .with([{ kind: "claimed" }, { kind: "run_finished" }], ([s]) => ({
+        kind: "retrying" as const,
+        attempt: 1,
+        dueAt: new Date(),
+        lastError: null,
+        lastRunId: s.runId,
+        slotIndex: 0,
+        workerHost: null,
+        workspacePath: null,
+      }))
+
       // claimed + run_failed => retrying
       .with([{ kind: "claimed" }, { kind: "run_failed" }], ([s, ev]) => ({
         kind: "retrying" as const,

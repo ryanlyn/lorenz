@@ -21,6 +21,9 @@ import type {
   UsageTotals,
 } from "@symphony/domain";
 import { systemClock, type ClockPort } from "@symphony/ports";
+import { SlotRegistry, RunningHandleImpl, type IRunningHandle } from "@symphony/fsm";
+
+// --- Derived state view (backward-compatible interface) ---
 
 export interface OrchestratorState {
   running: Map<string, RunningEntry>;
@@ -44,41 +47,122 @@ export function createState(): OrchestratorState {
   };
 }
 
+export interface ClaimResult extends RunningEntry {
+  handle: IRunningHandle;
+}
+
 export class Orchestrator {
-  readonly state: OrchestratorState;
+  readonly slotRegistry: SlotRegistry = new SlotRegistry();
+
+  // Aggregated usage totals (derived computation kept on orchestrator)
+  private _usageTotals: UsageTotals = {
+    inputTokens: 0,
+    outputTokens: 0,
+    totalTokens: 0,
+    secondsRunning: 0,
+  };
+  private _rateLimits: unknown = null;
+  private _blockedDispatches: DispatchBlockEntry[] = [];
+
+  // RunningEntry data stored alongside the FSM (keyed by slot key)
+  private readonly _entries: Map<string, RunningEntry> = new Map();
+
+  // RetryEntry data stored alongside the FSM (keyed by issue id)
+  private readonly _retries: Map<string, RetryEntry> = new Map();
+
+  // Completed issue ids
+  private readonly _completed: Set<string> = new Set();
 
   constructor(
     public settings: Settings,
     private readonly clock: ClockPort = systemClock,
-    state: OrchestratorState = createState(),
+    state?: OrchestratorState,
   ) {
-    this.state = state;
+    // Seed from legacy state if provided
+    if (state && (state.running.size > 0 || state.claimed.size > 0)) {
+      for (const [key, entry] of state.running) {
+        this._entries.set(key, entry);
+        this.slotRegistry.getOrCreate(key);
+        this.slotRegistry.transition(key, {
+          kind: "claim",
+          runId: key,
+          entry: entry as unknown as Record<string, unknown>,
+          handle: { runId: key, controller: new AbortController() },
+        });
+      }
+      for (const key of state.claimed) {
+        if (!this._entries.has(key)) {
+          this.slotRegistry.getOrCreate(key);
+          // Mark as claimed without a running entry (stale claim)
+          this.slotRegistry.transition(key, {
+            kind: "claim",
+            runId: key,
+            entry: {},
+            handle: { runId: key, controller: new AbortController() },
+          });
+        }
+      }
+      for (const [id, retry] of state.retryAttempts) {
+        this._retries.set(id, retry);
+      }
+      for (const id of state.completed) {
+        this._completed.add(id);
+      }
+      this._usageTotals = { ...state.usageTotals };
+      this._rateLimits = state.rateLimits;
+    }
+  }
+
+  /** Backward-compatible state view derived from registry. */
+  get state(): OrchestratorState {
+    return {
+      running: this._entries,
+      claimed: this._claimedSet(),
+      retryAttempts: this._retries,
+      completed: this._completed,
+      usageTotals: this._usageTotals,
+      rateLimits: this._rateLimits,
+      blockedDispatches: this._blockedDispatches,
+    };
+  }
+
+  private _claimedSet(): Set<string> {
+    // Build claimed set from registry: any slot in claimed or running state
+    const set = new Set<string>();
+    for (const [key, state] of this.slotRegistry.entries()) {
+      if (state.kind === "claimed" || state.kind === "running") {
+        set.add(key);
+      }
+    }
+    return set;
   }
 
   eligibleIssues(issues: Issue[]): Issue[] {
     // Remove retry attempts if the issue is no longer active
     this.cleanupRetryAttempts(issues);
-    this.state.blockedDispatches = [];
+    this._blockedDispatches = [];
     const runningByState = new Map<string, number>();
-    for (const entry of this.state.running.values()) {
+    for (const entry of this._entries.values()) {
       runningByState.set(entry.issue.state, (runningByState.get(entry.issue.state) ?? 0) + 1);
     }
 
+    const claimed = this._claimedSet();
+
     // Check if issues can be dispatched to workers and sort by priority
     return sortForDispatch(issues).filter((issue) => {
-      const retry = this.state.retryAttempts.get(issue.id);
+      const retry = this._retries.get(issue.id);
       // Not yet time for retry
       if (retry && retry.dueAt.getTime() > this.clock.now().getTime()) return false;
       if (retry) this.releaseStaleClaimsForRetry(issue.id);
       const dispatchState = {
-        runningCount: this.state.running.size,
+        runningCount: this._entries.size,
         runningByState,
-        claimedSlots: this.state.claimed,
+        claimedSlots: claimed,
         workerCapacityAvailable: this.workerCapacityAvailable(),
       };
       const reason = dispatchBlockReason(issue, this.settings, dispatchState);
       if (reason) {
-        this.state.blockedDispatches.push({
+        this._blockedDispatches.push({
           issueId: issue.id,
           identifier: issue.identifier,
           state: issue.state,
@@ -91,31 +175,27 @@ export class Orchestrator {
     });
   }
 
-  claim(issue: Issue): RunningEntry | null {
-    const retry = this.state.retryAttempts.get(issue.id);
+  claim(issue: Issue): ClaimResult | null {
+    const retry = this._retries.get(issue.id);
     // If it's not yet time to retry and the issue isn't running, release the claim
     if (retry && retry.dueAt.getTime() <= this.clock.now().getTime())
       this.releaseStaleClaimsForRetry(issue.id);
     const runningByState = new Map<string, number>();
-    for (const entry of this.state.running.values()) {
+    for (const entry of this._entries.values()) {
       runningByState.set(entry.issue.state, (runningByState.get(entry.issue.state) ?? 0) + 1);
     }
+    const claimed = this._claimedSet();
     if (
       !shouldDispatchIssue(issue, this.settings, {
-        runningCount: this.state.running.size,
+        runningCount: this._entries.size,
         runningByState,
-        claimedSlots: this.state.claimed,
+        claimedSlots: claimed,
         workerCapacityAvailable: this.workerCapacityAvailable(),
       })
     ) {
       return null;
     }
-    const slotIndex = firstUnclaimedSlot(
-      issue,
-      this.settings,
-      this.state.claimed,
-      retry?.slotIndex,
-    );
+    const slotIndex = firstUnclaimedSlot(issue, this.settings, claimed, retry?.slotIndex);
     if (slotIndex === null) return null;
     const workerHost = this.selectWorkerHost();
     if (workerHost === undefined) return null; // would happen if all hosts are at capacity
@@ -146,16 +226,33 @@ export class Orchestrator {
       retryAttempt: retry?.attempt ?? null,
     };
 
-    this.state.claimed.add(key);
-    this.state.running.set(key, entry);
-    this.state.retryAttempts.delete(issue.id);
-    return entry;
+    // Create a proper RunningHandle for this generation
+    const handle = new RunningHandleImpl(key, key, slotIndex, issue.id, this.slotRegistry);
+
+    // Store entry and transition FSM
+    this._entries.set(key, entry);
+    this._retries.delete(issue.id);
+
+    // If slot is in terminal 'done' state, reset it so it can be reclaimed
+    const existing = this.slotRegistry.getState(key);
+    if (existing !== null && existing.kind === "done") {
+      this.slotRegistry.delete(key);
+    }
+    this.slotRegistry.getOrCreate(key);
+    this.slotRegistry.transition(key, {
+      kind: "claim",
+      runId: key,
+      entry: entry as unknown as Record<string, unknown>,
+      handle: { runId: key, controller: handle.controller },
+    });
+
+    return Object.assign(entry, { handle });
   }
 
   private selectWorkerHost(): string | null | undefined {
     // Count number of running agents on each worker host, returning the least loaded host
     const counts = new Map<string, number>();
-    for (const entry of this.state.running.values()) {
+    for (const entry of this._entries.values()) {
       if (entry.workerHost) counts.set(entry.workerHost, (counts.get(entry.workerHost) ?? 0) + 1);
     }
     return selectLeastLoadedHost({
@@ -172,13 +269,14 @@ export class Orchestrator {
   }
 
   refreshRunningIssue(issue: Issue): void {
-    for (const entry of this.state.running.values()) {
+    for (const entry of this._entries.values()) {
       if (entry.issue.id === issue.id) entry.issue = issue;
     }
   }
 
   applyUpdate(issueId: string, slotIndex: number, update: AgentUpdate): void {
-    const entry = this.state.running.get(slotKey(issueId, slotIndex));
+    const key = slotKey(issueId, slotIndex);
+    const entry = this._entries.get(key);
     if (!entry) return;
 
     entry.lastAgentEvent = update.type;
@@ -189,8 +287,11 @@ export class Orchestrator {
     if (update.executorPid !== undefined) entry.executorPid = update.executorPid;
     if (update.workspacePath !== undefined) entry.workspacePath = update.workspacePath;
     if (update.type === "turn_completed") entry.turnCount += 1;
-    if (update.rateLimits !== undefined) this.state.rateLimits = update.rateLimits;
+    if (update.rateLimits !== undefined) this._rateLimits = update.rateLimits;
     if (update.usage) this.applyUsageDelta(entry, update.usage);
+
+    // Transition claimed->running or running self-loop in FSM
+    this.slotRegistry.transition(key, { kind: "agent_update", runId: key });
   }
 
   finish(
@@ -201,19 +302,18 @@ export class Orchestrator {
     retryKind: "failure" | "continuation" = "failure",
   ): void {
     const key = slotKey(issueId, slotIndex);
-    const entry = this.state.running.get(key);
+    const entry = this._entries.get(key);
     if (!entry) return;
-    this.state.running.delete(key);
-    this.state.claimed.delete(key);
-    this.state.usageTotals.secondsRunning += Math.max(
+    this._entries.delete(key);
+    this._usageTotals.secondsRunning += Math.max(
       0,
       (this.clock.now().getTime() - entry.startedAt.getTime()) / 1000,
     );
 
     if (normal) {
       const attempt = retryKind === "continuation" ? 1 : (entry.retryAttempt ?? 0) + 1;
-      this.state.completed.add(issueId);
-      this.state.retryAttempts.set(issueId, {
+      this._completed.add(issueId);
+      this._retries.set(issueId, {
         issueId,
         identifier: entry.identifier,
         attempt,
@@ -225,18 +325,30 @@ export class Orchestrator {
         workspacePath: entry.workspacePath,
         error,
       });
+      // Transition FSM to retrying
+      this.slotRegistry.transition(key, { kind: "run_finished", runId: key });
+    } else {
+      // Non-normal finish transitions to done
+      this.slotRegistry.transition(key, {
+        kind: "reconcile_terminal",
+        reason: error ?? "abnormal",
+      });
     }
   }
 
   cleanupIssue(issueId: string): void {
-    for (const [key, entry] of this.state.running.entries()) {
+    for (const [key, entry] of this._entries.entries()) {
       if (entry.issue.id === issueId) {
-        this.state.running.delete(key);
-        this.state.claimed.delete(key);
+        this._entries.delete(key);
+        // Transition FSM to done
+        this.slotRegistry.transition(key, {
+          kind: "reconcile_terminal",
+          reason: "cleanup",
+        });
       }
     }
-    this.state.retryAttempts.delete(issueId);
-    this.state.completed.add(issueId);
+    this._retries.delete(issueId);
+    this._completed.add(issueId);
   }
 
   snapshot(): {
@@ -247,11 +359,11 @@ export class Orchestrator {
     rateLimits: unknown;
   } {
     return {
-      running: [...this.state.running.values()],
-      retrying: [...this.state.retryAttempts.values()],
-      blocked: this.state.blockedDispatches.map((entry) => ({ ...entry })),
-      usageTotals: { ...this.state.usageTotals },
-      rateLimits: this.state.rateLimits,
+      running: [...this._entries.values()],
+      retrying: [...this._retries.values()],
+      blocked: this._blockedDispatches.map((entry) => ({ ...entry })),
+      usageTotals: { ...this._usageTotals },
+      rateLimits: this._rateLimits,
     };
   }
 
@@ -264,7 +376,7 @@ export class Orchestrator {
         totalTokens: entry.lastReportedTotalTokens,
         secondsRunning: 0,
       },
-      globalTotals: this.state.usageTotals,
+      globalTotals: this._usageTotals,
       update: usage,
     });
 
@@ -272,12 +384,12 @@ export class Orchestrator {
     entry.lastReportedInputTokens = merged.reportedTotals.inputTokens;
     entry.lastReportedOutputTokens = merged.reportedTotals.outputTokens;
     entry.lastReportedTotalTokens = merged.reportedTotals.totalTokens;
-    this.state.usageTotals = merged.globalTotals;
+    this._usageTotals = merged.globalTotals;
   }
 
   private cleanupRetryAttempts(issues: Issue[]): void {
     for (const issue of issues) {
-      if (!issueIsActive(issue, this.settings)) this.state.retryAttempts.delete(issue.id);
+      if (!issueIsActive(issue, this.settings)) this._retries.delete(issue.id);
     }
   }
 
@@ -288,9 +400,16 @@ export class Orchestrator {
   }
 
   private releaseStaleClaimsForRetry(issueId: string): void {
-    for (const key of [...this.state.claimed]) {
+    // Release FSM slots that are in 'claimed' state without a running entry
+    for (const [key, slotState] of this.slotRegistry.entries()) {
       if (!key.startsWith(`${issueId}:`)) continue;
-      if (!this.state.running.has(key)) this.state.claimed.delete(key);
+      if (slotState.kind === "claimed" && !this._entries.has(key)) {
+        // Transition stale claim to done so the slot can be reclaimed
+        this.slotRegistry.transition(key, {
+          kind: "reconcile_terminal",
+          reason: "stale_claim_release",
+        });
+      }
     }
   }
 }
