@@ -9,6 +9,8 @@ interface RawSlackMessage {
   reactions?: Array<{ name?: string }>;
 }
 
+const MAX_HISTORY_PAGES = 50;
+
 export class SlackWebTransport implements SlackTransport {
   private readonly endpoint: string;
   private readonly token: string;
@@ -26,12 +28,19 @@ export class SlackWebTransport implements SlackTransport {
   async listMentions(channels: string[]): Promise<SlackMessage[]> {
     const out: SlackMessage[] = [];
     for (const channel of channels) {
-      const body = await this.get("conversations.history", { channel, limit: "200" });
-      const messages = Array.isArray(body.messages) ? (body.messages as RawSlackMessage[]) : [];
-      for (const m of messages) {
-        if (typeof m.ts !== "string") continue;
-        if (!isBotMention(m.text ?? "", this.botUserId)) continue;
-        out.push(toMessage(channel, m));
+      let cursor: string | undefined;
+      for (let page = 0; page < MAX_HISTORY_PAGES; page += 1) {
+        const params: Record<string, string> = { channel, limit: "200" };
+        if (cursor) params.cursor = cursor;
+        const body = await this.get("conversations.history", params);
+        const messages = Array.isArray(body.messages) ? (body.messages as RawSlackMessage[]) : [];
+        for (const m of messages) {
+          if (typeof m.ts !== "string") continue;
+          if (!isBotMention(m.text ?? "", this.botUserId)) continue;
+          out.push(toMessage(channel, m));
+        }
+        cursor = nextCursor(body);
+        if (!cursor) break;
       }
     }
     return out;
@@ -98,6 +107,14 @@ export class SlackWebTransport implements SlackTransport {
     }
     return body;
   }
+}
+
+function nextCursor(body: Record<string, unknown>): string | undefined {
+  const meta = body.response_metadata;
+  if (typeof meta !== "object" || meta === null) return undefined;
+  const cursor = (meta as Record<string, unknown>).next_cursor;
+  if (typeof cursor !== "string" || cursor === "") return undefined;
+  return cursor;
 }
 
 function toMessage(channel: string, m: RawSlackMessage): SlackMessage {

@@ -67,6 +67,68 @@ test("listMentions filters to the configured bot user when botUserId is set", as
   );
 });
 
+test("listMentions follows response_metadata.next_cursor across pages", async () => {
+  const calls: Array<{ url: string }> = [];
+  const fetchImpl = (async (url: string | URL) => {
+    calls.push({ url: String(url) });
+    const parsed = new URL(String(url));
+    const cursor = parsed.searchParams.get("cursor");
+    if (!cursor) {
+      return new Response(
+        JSON.stringify({
+          ok: true,
+          messages: [{ ts: "1.1", text: "<@U1> first page", reactions: [] }],
+          response_metadata: { next_cursor: "CURSOR_2" },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }
+    return new Response(
+      JSON.stringify({
+        ok: true,
+        messages: [{ ts: "2.2", text: "<@U1> second page", reactions: [] }],
+        response_metadata: { next_cursor: "" },
+      }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+  }) as typeof fetch;
+
+  const transport = new SlackWebTransport(settings(), fetchImpl);
+  const messages = await transport.listMentions(["C1"]);
+
+  assert.deepEqual(
+    messages.map((m) => m.ts),
+    ["1.1", "2.2"],
+  );
+  assert.equal(calls.length, 2);
+  assert.equal(new URL(calls[0]!.url).searchParams.get("cursor"), null);
+  assert.equal(new URL(calls[1]!.url).searchParams.get("cursor"), "CURSOR_2");
+});
+
+test("listMentions stops paging when next_cursor is empty", async () => {
+  let pages = 0;
+  const fetchImpl = (async () => {
+    pages += 1;
+    return new Response(
+      JSON.stringify({
+        ok: true,
+        messages: [{ ts: `${pages}.0`, text: "<@U1> only page", reactions: [] }],
+        response_metadata: { next_cursor: "" },
+      }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+  }) as typeof fetch;
+
+  const transport = new SlackWebTransport(settings(), fetchImpl);
+  const messages = await transport.listMentions(["C1"]);
+
+  assert.equal(pages, 1);
+  assert.deepEqual(
+    messages.map((m) => m.ts),
+    ["1.0"],
+  );
+});
+
 test("addReaction posts to reactions.add", async () => {
   const calls: string[] = [];
   const fetchImpl = (async (url: string | URL) => {
