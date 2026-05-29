@@ -12,7 +12,7 @@ export class RetryScheduler {
       this.timers.delete(retry.issueId);
       onDue(retry);
     }, delayMs);
-    timer.unref?.();
+    timer.unref?.(); // unref to avoid keeping the process alive
     this.timers.set(retry.issueId, timer);
   }
 
