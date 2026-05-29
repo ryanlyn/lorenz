@@ -48,6 +48,21 @@ export function normalizeIssue(input: Record<string, unknown>, assignee?: string
   };
 }
 
+const DEFAULT_STATE_TYPES: Record<string, IssueStateType> = {
+  todo: "unstarted",
+  "in progress": "started",
+  done: "completed",
+  cancelled: "canceled",
+  canceled: "canceled",
+  backlog: "backlog",
+  triage: "triage",
+};
+
+/** Best-effort category for a free-form workflow state name; null when unknown. */
+export function defaultStateType(name: string): IssueStateType | null {
+  return DEFAULT_STATE_TYPES[name.trim().toLowerCase()] ?? null;
+}
+
 export function ensembleSize(issue: Issue): number | null {
   for (const label of issue.labels) {
     const match = /^ensemble:(\d+)$/.exec(label.trim().toLowerCase());
