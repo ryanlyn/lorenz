@@ -56,6 +56,7 @@ export class Orchestrator {
   }
 
   eligibleIssues(issues: Issue[]): Issue[] {
+    // Remove retry attempts if the issue is no longer active
     this.cleanupRetryAttempts(issues);
     this.state.blockedDispatches = [];
     const runningByState = new Map<string, number>();
@@ -63,8 +64,10 @@ export class Orchestrator {
       runningByState.set(entry.issue.state, (runningByState.get(entry.issue.state) ?? 0) + 1);
     }
 
+    // Check if issues can be dispatched to workers and sort by priority
     return sortForDispatch(issues).filter((issue) => {
       const retry = this.state.retryAttempts.get(issue.id);
+      // Not yet time for retry
       if (retry && retry.dueAt.getTime() > this.clock.now().getTime()) return false;
       if (retry) this.releaseStaleClaimsForRetry(issue.id);
       const dispatchState = {
@@ -90,6 +93,7 @@ export class Orchestrator {
 
   claim(issue: Issue): RunningEntry | null {
     const retry = this.state.retryAttempts.get(issue.id);
+    // If it's not yet time to retry and the issue isn't running, release the claim
     if (retry && retry.dueAt.getTime() <= this.clock.now().getTime())
       this.releaseStaleClaimsForRetry(issue.id);
     const runningByState = new Map<string, number>();
@@ -114,8 +118,9 @@ export class Orchestrator {
     );
     if (slotIndex === null) return null;
     const workerHost = this.selectWorkerHost();
-    if (workerHost === undefined) return null;
+    if (workerHost === undefined) return null; // would happen if all hosts are at capacity
 
+    // Override bits of the settings if specified (from the WORKFLOW.md YAML front matter)
     const effective = settingsForIssueState(this.settings, issue.state);
     const size = ensembleSize(issue) ?? this.settings.agent.ensembleSize;
     const key = slotKey(issue.id, slotIndex);
@@ -148,6 +153,7 @@ export class Orchestrator {
   }
 
   private selectWorkerHost(): string | null | undefined {
+    // Count number of running agents on each worker host, returning the least loaded host
     const counts = new Map<string, number>();
     for (const entry of this.state.running.values()) {
       if (entry.workerHost) counts.set(entry.workerHost, (counts.get(entry.workerHost) ?? 0) + 1);
