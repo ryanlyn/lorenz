@@ -58,6 +58,21 @@ export interface RunAgentAttemptAdapters {
   executorFactory(settings: Settings): Promise<AgentExecutor> | AgentExecutor;
 }
 
+/**
+ * Lifecycle phases of a single agent run attempt.
+ * Used for observability -- knowing WHERE a run is when it stalls or fails.
+ */
+export type RunPhase =
+  | "preparing_workspace"
+  | "running_hook"
+  | "checking_resume"
+  | "starting_session"
+  | "executing_turn"
+  | "persisting_state"
+  | "refreshing_issue"
+  | "stopping_session"
+  | "completed";
+
 export interface RunResult {
   workspace: string;
   turnCount: number;
@@ -85,7 +100,14 @@ export async function runAgentAttempt(input: RunAgentAttemptInput): Promise<RunR
 }
 
 export class RunController {
+  private phase: RunPhase = "preparing_workspace";
+
   constructor(private readonly input: RunAgentAttemptInput) {}
+
+  /** Current lifecycle phase of the run (for observability). */
+  get currentPhase(): RunPhase {
+    return this.phase;
+  }
 
   async run(): Promise<RunResult> {
     const input = this.input;
@@ -95,16 +117,21 @@ export class RunController {
     const size = ensembleSize(issue) ?? settings.agent.ensembleSize;
     const slotIndex = input.slotIndex ?? 0;
     const workerHost = input.workerHost ?? null;
+
+    this.phase = "preparing_workspace";
     const workspace = await createWorkspaceForIssue(input.adapters, runtime, issue, {
       slotIndex,
       ensembleSize: size,
       workerHost,
     });
     input.onUpdate?.({ type: "workspace_prepared", workspacePath: workspace });
+
     if (runtime.hooks.beforeRun) {
+      this.phase = "running_hook";
       await runHook(input.adapters, runtime.hooks.beforeRun, workspace, runtime.hooks, workerHost);
     }
 
+    this.phase = "checking_resume";
     const resume = await readResumeState(
       input.adapters,
       workspace,
@@ -134,6 +161,7 @@ export class RunController {
     }
     const resumeId = resumeMatches ? resume.state.resumeId : null;
 
+    this.phase = "starting_session";
     const executor = await executorFor(input.adapters, runtime);
     const updates: AgentUpdate[] = [];
     const session = await executor.startSession({
@@ -151,6 +179,7 @@ export class RunController {
     let turnCount = 0;
     try {
       while (turnCount < runtime.agent.maxTurns) {
+        this.phase = "executing_turn";
         throwIfAborted(input.abortSignal);
         const prompt =
           turnCount === 0
@@ -162,9 +191,12 @@ export class RunController {
             : continuationPrompt(turnCount + 1, runtime.agent.maxTurns);
         await runTurnWithAbort(executor, session, prompt, issue, input.abortSignal);
         turnCount += 1;
+
+        this.phase = "persisting_state";
         await persistResumeState(input.adapters, session, runtime, issue, workspace, workerHost);
 
         if (!input.fetchIssue) break;
+        this.phase = "refreshing_issue";
         issue = await input.fetchIssue(issue);
         if (!issueIsActive(issue, settings)) break;
         const refreshed = settingsForIssueState(settings, issue.state);
@@ -177,6 +209,7 @@ export class RunController {
         runtime = refreshed;
       }
     } finally {
+      this.phase = "stopping_session";
       await session.stop();
       if (runtime.hooks.afterRun) {
         try {
@@ -193,8 +226,10 @@ export class RunController {
       }
     }
 
+    this.phase = "persisting_state";
     await persistResumeState(input.adapters, session, runtime, issue, workspace, workerHost);
 
+    this.phase = "completed";
     return {
       workspace,
       turnCount,
