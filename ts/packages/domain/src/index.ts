@@ -12,7 +12,7 @@ export const AGENT_EXECUTOR_KINDS = ["appserver", "acp"] as const;
  */
 export type AgentExecutorKind = (typeof AGENT_EXECUTOR_KINDS)[number];
 
-export const TRACKER_KINDS = ["linear", "memory", "local"] as const;
+export const TRACKER_KINDS = ["linear", "memory", "local", "slack"] as const;
 
 export type TrackerKind = (typeof TRACKER_KINDS)[number];
 
@@ -152,6 +152,10 @@ export interface TrackerSettings {
   assignee?: string | undefined;
   /** Local tracker board directory (e.g. `.symphony/board`). Used when `kind === "local"`. */
   path?: string | undefined;
+  /** Slack channel IDs to watch for mentions. Used when `kind === "slack"`. */
+  channels?: string[] | undefined;
+  /** Slack emoji-name → workflow-state overrides (merged over defaults). */
+  emojiStates?: Record<string, string> | undefined;
   /** Tracker state names considered eligible for dispatch (case-insensitive match). */
   activeStates: string[];
   /** Tracker state names that mark an issue as finished; running agents on these issues are stopped and their workspaces cleaned up. */
