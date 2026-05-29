@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, writeFile, mkdir, readdir } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile, mkdir, readdir, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -150,6 +150,62 @@ test("rejects path-traversal and malformed issue ids without touching the filesy
   await store.appendComment("BOARD-1", "still works", () => new Date("2026-05-29T12:00:00Z"));
   const fetched = (await store.getByIds(["BOARD-1"]))[0]!;
   assert.equal(fetched.identifier, "BOARD-1");
+});
+
+test("write leaves no temporary file behind (atomic rename)", async () => {
+  const dir = await tempBoard();
+  const store = new BoardStore(dir);
+  await store.create({ title: "Atomic", body: "Body", status: "Todo" });
+  await store.updateStatus("BOARD-1", "In Progress");
+  await store.appendComment("BOARD-1", "note", () => new Date("2026-05-29T10:00:00Z"));
+
+  const entries = (await readdir(dir)).sort();
+  // The only artifact is the final issue file; no *.tmp / *.<pid> scratch files remain.
+  assert.deepEqual(entries, ["BOARD-1.md"]);
+  const issue = (await store.getByIds(["BOARD-1"]))[0]!;
+  assert.equal(issue.state, "In Progress");
+});
+
+test("create never overwrites a pre-existing higher id and stays collision-safe", async () => {
+  const dir = await tempBoard();
+  // Seed a hand-authored BOARD-3 directly on disk.
+  await writeFile(
+    path.join(dir, "BOARD-3.md"),
+    "---\nstatus: Todo\n---\n\n# Seeded\n\nDo not clobber\n",
+    "utf8",
+  );
+  const store = new BoardStore(dir);
+
+  const created = await store.create({ title: "Next", status: "Todo" });
+  assert.equal(created.identifier, "BOARD-4");
+
+  // The seeded file is untouched.
+  const seeded = await readFile(path.join(dir, "BOARD-3.md"), "utf8");
+  assert.match(seeded, /# Seeded/);
+  assert.match(seeded, /Do not clobber/);
+});
+
+test("concurrent create calls allocate unique ids without losing writes", async () => {
+  const dir = await tempBoard();
+  const store = new BoardStore(dir);
+
+  // Fire many creates at once: the wx exclusive-create + retry path must keep ids unique.
+  const results = await Promise.all(
+    Array.from({ length: 12 }, (_unused, i) =>
+      store.create({ title: `Task ${i}`, status: "Todo" }),
+    ),
+  );
+  const ids = results.map((r) => r.identifier).sort();
+  const unique = new Set(ids);
+  assert.equal(unique.size, results.length, `expected unique ids, got ${ids.join(",")}`);
+
+  // Every create produced exactly one file on disk; nothing was overwritten.
+  const files = (await readdir(dir)).filter((f) => f.endsWith(".md")).sort();
+  assert.equal(files.length, results.length);
+  for (const id of ids) {
+    const fileStat = await stat(path.join(dir, `${id}.md`));
+    assert.equal(fileStat.isFile(), true);
+  }
 });
 
 test("CRLF board files parse with clean status and description", async () => {

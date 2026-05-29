@@ -67,15 +67,31 @@ export class BoardStore {
   }
 
   async create(input: { title: string; body?: string; status?: string }): Promise<Issue> {
-    const id = await this.nextId();
-    await this.write(id, {
+    const parsed: ParsedFile = {
       status: input.status ?? "Todo",
       labels: [],
       title: input.title,
       description: input.body ?? "",
       comments: "",
-    });
-    return this.read(id);
+    };
+    await fs.mkdir(this.dir, { recursive: true });
+    const contents = this.render(parsed);
+    // Allocate an id with an exclusive create so two racing creates can never pick the
+    // same BOARD-<n>. On collision (EEXIST) we recompute the next id and retry within a
+    // bounded loop rather than blindly overwriting an existing issue file.
+    const attempts = 64;
+    for (let attempt = 0; attempt < attempts; attempt++) {
+      const id = await this.nextId();
+      const target = this.filePath(id);
+      try {
+        await fs.writeFile(target, contents, { encoding: "utf8", flag: "wx" });
+        return await this.read(id);
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === "EEXIST") continue;
+        throw err;
+      }
+    }
+    throw new Error(`failed to allocate a board id after ${attempts} attempts`);
   }
 
   private filePath(id: string): string {
@@ -137,15 +153,32 @@ export class BoardStore {
     return { status, labels, ...splitBody(body) };
   }
 
-  private async write(id: string, p: ParsedFile): Promise<void> {
+  private render(p: ParsedFile): string {
     const fm: Record<string, unknown> = { status: p.status };
     if (p.labels.length > 0) fm.labels = p.labels;
     const sections = [`---\n${stringifyYaml(fm).trimEnd()}\n---`, `# ${p.title}`];
     if (p.description.trim() !== "") sections.push(p.description.trim());
     if (p.comments.trim() !== "")
       sections.push(`${COMMENTS_MARKER}\n## Comments\n${p.comments.trim()}`);
+    return `${sections.join("\n\n")}\n`;
+  }
+
+  /**
+   * Atomic replace: write to a uniquely-named sibling temp file in the SAME directory and
+   * fs.rename it over the target. rename is atomic within a filesystem, so a crash mid-write
+   * leaves either the prior file or the fully-written new file intact - never a truncated one.
+   */
+  private async write(id: string, p: ParsedFile): Promise<void> {
     await fs.mkdir(this.dir, { recursive: true });
-    await fs.writeFile(this.filePath(id), `${sections.join("\n\n")}\n`, "utf8");
+    const target = this.filePath(id);
+    const tmp = `${target}.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`;
+    try {
+      await fs.writeFile(tmp, this.render(p), "utf8");
+      await fs.rename(tmp, target);
+    } catch (err) {
+      await fs.rm(tmp, { force: true }).catch(() => {});
+      throw err;
+    }
   }
 }
 
