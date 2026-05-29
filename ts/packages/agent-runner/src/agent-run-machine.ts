@@ -7,7 +7,8 @@ import { match } from "ts-pattern";
 //      → stoppingSession → runningAfterHook → persistingFinalState → completed
 //                                                                  → failed
 //
-// Events signal completion of the CURRENT phase and advance to the next.
+// The FSM drives execution: each state has exactly one effect performed by the
+// interpreter. Events signal completion of the CURRENT phase and advance to the next.
 // Abort only consulted at state-transition boundaries.
 // session.stop() guaranteed exactly once: only stoppingSession calls it.
 
@@ -29,6 +30,7 @@ export type AgentRunState =
 // --- AgentRunEvent discriminated union ---
 
 export type AgentRunEvent =
+  | { kind: "start" }
   | { kind: "workspace_ready" }
   | { kind: "hook_done" }
   | { kind: "resume_checked" }
@@ -74,7 +76,7 @@ export function agentRunTransition(
 
   // Normal linear transitions
   return match([state, event] as const)
-    .with([{ kind: "idle" }, { kind: "workspace_ready" }], () => ({
+    .with([{ kind: "idle" }, { kind: "start" }], () => ({
       kind: "preparingWorkspace" as const,
     }))
     .with([{ kind: "preparingWorkspace" }, { kind: "workspace_ready" }], () => ({

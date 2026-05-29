@@ -81,7 +81,7 @@ describe("FSM composition: full lifecycle", () => {
     let agentState: AgentRunState = { kind: "idle" };
 
     // idle → preparingWorkspace
-    agentState = agentRunTransition(agentState, { kind: "workspace_ready" })!;
+    agentState = agentRunTransition(agentState, { kind: "start" })!;
     expect(agentState.kind).toBe("preparingWorkspace");
 
     // preparingWorkspace → runningBeforeHook
@@ -283,7 +283,7 @@ describe("FSM composition: full lifecycle", () => {
     let state: AgentRunState = { kind: "idle" };
 
     // Advance to runningTurn
-    state = agentRunTransition(state, { kind: "workspace_ready" })!;
+    state = agentRunTransition(state, { kind: "start" })!;
     state = agentRunTransition(state, { kind: "workspace_ready" })!;
     state = agentRunTransition(state, { kind: "hook_done" })!;
     state = agentRunTransition(state, { kind: "resume_checked" })!;

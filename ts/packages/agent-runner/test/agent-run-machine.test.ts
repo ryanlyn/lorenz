@@ -19,7 +19,7 @@ function makeState(kind: AgentRunStateKind): AgentRunState {
 
 // The happy-path event sequence that drives the machine from idle to completed
 const HAPPY_PATH_EVENTS: AgentRunEvent[] = [
-  { kind: "workspace_ready" }, // idle -> preparingWorkspace
+  { kind: "start" }, // idle -> preparingWorkspace
   { kind: "workspace_ready" }, // preparingWorkspace -> runningBeforeHook
   { kind: "hook_done" }, // runningBeforeHook -> checkingResumeState
   { kind: "resume_checked" }, // checkingResumeState -> startingSession
@@ -93,7 +93,7 @@ describe("AgentRunMachine happy path", () => {
     // Drive to evaluatingContinuation
     let state: AgentRunState = { kind: "idle" };
     const eventsToEval: AgentRunEvent[] = [
-      { kind: "workspace_ready" },
+      { kind: "start" },
       { kind: "workspace_ready" },
       { kind: "hook_done" },
       { kind: "resume_checked" },
@@ -214,7 +214,7 @@ describe("AgentRunMachine session.stop() guarantee", () => {
     // Drive to runningTurn, then abort
     let state: AgentRunState = { kind: "idle" };
     const eventsToTurn: AgentRunEvent[] = [
-      { kind: "workspace_ready" },
+      { kind: "start" },
       { kind: "workspace_ready" },
       { kind: "hook_done" },
       { kind: "resume_checked" },
@@ -266,6 +266,7 @@ describe("AgentRunMachine session.stop() guarantee", () => {
 describe("AgentRunMachine terminal states", () => {
   it("completed rejects all events", () => {
     const allEvents: AgentRunEvent[] = [
+      { kind: "start" },
       { kind: "workspace_ready" },
       { kind: "hook_done" },
       { kind: "resume_checked" },
@@ -288,6 +289,7 @@ describe("AgentRunMachine terminal states", () => {
 
   it("failed rejects all events", () => {
     const allEvents: AgentRunEvent[] = [
+      { kind: "start" },
       { kind: "workspace_ready" },
       { kind: "hook_done" },
       { kind: "resume_checked" },
@@ -315,6 +317,8 @@ describe("AgentRunMachine invalid events", () => {
   it("wrong event for current state returns null", () => {
     // hook_done in idle
     expect(agentRunTransition({ kind: "idle" }, { kind: "hook_done" })).toBeNull();
+    // workspace_ready in idle (must use "start" first)
+    expect(agentRunTransition({ kind: "idle" }, { kind: "workspace_ready" })).toBeNull();
     // workspace_ready in runningTurn
     expect(agentRunTransition({ kind: "runningTurn" }, { kind: "workspace_ready" })).toBeNull();
     // session_stopped in idle
@@ -330,6 +334,7 @@ describe("AgentRunMachine invalid events", () => {
 
 describe("AgentRunMachine properties", () => {
   const arbEvent: fc.Arbitrary<AgentRunEvent> = fc.oneof(
+    fc.constant({ kind: "start" } as AgentRunEvent),
     fc.constant({ kind: "workspace_ready" } as AgentRunEvent),
     fc.constant({ kind: "hook_done" } as AgentRunEvent),
     fc.constant({ kind: "resume_checked" } as AgentRunEvent),

@@ -49,6 +49,7 @@ export function createState(): OrchestratorState {
 
 export interface ClaimResult extends RunningEntry {
   handle: IRunningHandle;
+  runId: string;
 }
 
 export class Orchestrator {
@@ -175,9 +176,10 @@ export class Orchestrator {
     });
   }
 
-  claim(issue: Issue): ClaimResult | null {
+  private _nextRunId = 1;
+
+  claim(issue: Issue, runId?: string): ClaimResult | null {
     const retry = this._retries.get(issue.id);
-    // If it's not yet time to retry and the issue isn't running, release the claim
     if (retry && retry.dueAt.getTime() <= this.clock.now().getTime())
       this.releaseStaleClaimsForRetry(issue.id);
     const runningByState = new Map<string, number>();
@@ -198,12 +200,12 @@ export class Orchestrator {
     const slotIndex = firstUnclaimedSlot(issue, this.settings, claimed, retry?.slotIndex);
     if (slotIndex === null) return null;
     const workerHost = this.selectWorkerHost();
-    if (workerHost === undefined) return null; // would happen if all hosts are at capacity
+    if (workerHost === undefined) return null;
 
-    // Override bits of the settings if specified (from the WORKFLOW.md YAML front matter)
     const effective = settingsForIssueState(this.settings, issue.state);
     const size = ensembleSize(issue) ?? this.settings.agent.ensembleSize;
     const key = slotKey(issue.id, slotIndex);
+    const generationId = runId ?? `orch-${this._nextRunId++}`;
     const entry: RunningEntry = {
       issue,
       identifier: issue.identifier,
@@ -226,14 +228,11 @@ export class Orchestrator {
       retryAttempt: retry?.attempt ?? null,
     };
 
-    // Create a proper RunningHandle for this generation
-    const handle = new RunningHandleImpl(key, key, slotIndex, issue.id, this.slotRegistry);
+    const handle = new RunningHandleImpl(generationId, key, slotIndex, issue.id, this.slotRegistry);
 
-    // Store entry and transition FSM
     this._entries.set(key, entry);
     this._retries.delete(issue.id);
 
-    // If slot is in terminal 'done' state, reset it so it can be reclaimed
     const existing = this.slotRegistry.getState(key);
     if (existing !== null && existing.kind === "done") {
       this.slotRegistry.delete(key);
@@ -241,12 +240,12 @@ export class Orchestrator {
     this.slotRegistry.getOrCreate(key);
     this.slotRegistry.transition(key, {
       kind: "claim",
-      runId: key,
+      runId: generationId,
       entry: entry as unknown as Record<string, unknown>,
-      handle: { runId: key, controller: handle.controller },
+      handle: { runId: generationId, controller: handle.controller },
     });
 
-    return Object.assign(entry, { handle });
+    return Object.assign(entry, { handle, runId: generationId });
   }
 
   private selectWorkerHost(): string | null | undefined {
@@ -290,8 +289,10 @@ export class Orchestrator {
     if (update.rateLimits !== undefined) this._rateLimits = update.rateLimits;
     if (update.usage) this.applyUsageDelta(entry, update.usage);
 
-    // Transition claimed->running or running self-loop in FSM
-    this.slotRegistry.transition(key, { kind: "agent_update", runId: key });
+    const slotState = this.slotRegistry.getState(key);
+    if (slotState && "runId" in slotState) {
+      this.slotRegistry.transition(key, { kind: "agent_update", runId: slotState.runId });
+    }
   }
 
   finish(
@@ -310,6 +311,9 @@ export class Orchestrator {
       (this.clock.now().getTime() - entry.startedAt.getTime()) / 1000,
     );
 
+    const slotState = this.slotRegistry.getState(key);
+    const currentRunId = slotState && "runId" in slotState ? slotState.runId : null;
+
     if (normal) {
       const attempt = retryKind === "continuation" ? 1 : (entry.retryAttempt ?? 0) + 1;
       this._completed.add(issueId);
@@ -325,10 +329,10 @@ export class Orchestrator {
         workspacePath: entry.workspacePath,
         error,
       });
-      // Transition FSM to retrying
-      this.slotRegistry.transition(key, { kind: "run_finished", runId: key });
+      if (currentRunId) {
+        this.slotRegistry.transition(key, { kind: "run_finished", runId: currentRunId });
+      }
     } else {
-      // Non-normal finish transitions to done
       this.slotRegistry.transition(key, {
         kind: "reconcile_terminal",
         reason: error ?? "abnormal",

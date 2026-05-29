@@ -11,12 +11,7 @@ import type {
   WorkflowDefinition,
 } from "@symphony/domain";
 
-import {
-  agentRunTransition,
-  shouldCallSessionStop,
-  type AgentRunState,
-  type AgentRunEvent,
-} from "./agent-run-machine.js";
+import { agentRunTransition, type AgentRunState, type AgentRunEvent } from "./agent-run-machine.js";
 
 interface ResumeStateShape {
   agentKind: string;
@@ -91,12 +86,23 @@ export async function runAgentAttempt(input: RunAgentAttemptInput): Promise<RunR
   return new RunController(input).run();
 }
 
+// Mutable context threaded through the interpreter loop
+interface RunContext {
+  issue: Issue;
+  runtime: Settings;
+  workspace: string | null;
+  session: AgentSession | null;
+  executor: AgentExecutor | null;
+  updates: AgentUpdate[];
+  turnCount: number;
+  resumeId: string | null;
+}
+
 export class RunController {
   private state: AgentRunState = { kind: "idle" };
 
   constructor(private readonly input: RunAgentAttemptInput) {}
 
-  /** Advance the machine; throws if the transition is invalid. */
   private advance(event: AgentRunEvent): void {
     const next = agentRunTransition(this.state, event);
     if (next === null) {
@@ -107,217 +113,234 @@ export class RunController {
     this.state = next;
   }
 
-  /** Check abort signal at state boundaries. */
-  private checkAbort(): void {
-    if (this.input.abortSignal?.aborted) {
-      this.advance({ kind: "abort" });
-      throw new Error("agent_run_aborted");
-    }
-  }
-
   async run(): Promise<RunResult> {
     const input = this.input;
-    let issue = input.issue;
     const settings = input.settings ?? input.workflow.settings;
-    let runtime = settingsForIssueState(settings, issue.state);
-    const size = ensembleSize(issue) ?? settings.agent.ensembleSize;
+    const ctx: RunContext = {
+      issue: input.issue,
+      runtime: settingsForIssueState(settings, input.issue.state),
+      workspace: null,
+      session: null,
+      executor: null,
+      updates: [],
+      turnCount: 0,
+      resumeId: null,
+    };
+
+    while (this.state.kind !== "completed" && this.state.kind !== "failed") {
+      if (
+        this.input.abortSignal?.aborted &&
+        this.state.kind !== "stoppingSession" &&
+        this.state.kind !== "runningAfterHook" &&
+        this.state.kind !== "persistingFinalState"
+      ) {
+        this.advance({ kind: "abort" });
+        continue;
+      }
+      await this.execute(ctx);
+    }
+
+    if (this.state.kind === "failed") {
+      throw new Error(this.state.reason);
+    }
+
+    if (!ctx.workspace) {
+      throw new Error("agent_run_aborted");
+    }
+
+    return {
+      workspace: ctx.workspace,
+      turnCount: ctx.turnCount,
+      updates: ctx.updates,
+      resumeId: ctx.session?.resumeId,
+      agentKind: ctx.runtime.agent.kind,
+      finalIssue: ctx.issue,
+    };
+  }
+
+  private async execute(ctx: RunContext): Promise<void> {
+    const input = this.input;
+    const settings = input.settings ?? input.workflow.settings;
+    const size = ensembleSize(input.issue) ?? settings.agent.ensembleSize;
     const slotIndex = input.slotIndex ?? 0;
     const workerHost = input.workerHost ?? null;
 
-    // --- preparingWorkspace ---
-    this.advance({ kind: "workspace_ready" }); // idle -> preparingWorkspace
-    this.checkAbort();
-    const workspace = await createWorkspaceForIssue(input.adapters, runtime, issue, {
-      slotIndex,
-      ensembleSize: size,
-      workerHost,
-    });
-    input.onUpdate?.({ type: "workspace_prepared", workspacePath: workspace });
+    switch (this.state.kind) {
+      case "idle": {
+        this.advance({ kind: "start" });
+        return;
+      }
 
-    // --- runningBeforeHook ---
-    this.advance({ kind: "workspace_ready" }); // preparingWorkspace -> runningBeforeHook
-    this.checkAbort();
-    if (runtime.hooks.beforeRun) {
-      await runHook(input.adapters, runtime.hooks.beforeRun, workspace, runtime.hooks, workerHost);
-    }
+      case "preparingWorkspace": {
+        ctx.workspace = await createWorkspaceForIssue(input.adapters, ctx.runtime, ctx.issue, {
+          slotIndex,
+          ensembleSize: size,
+          workerHost,
+        });
+        input.onUpdate?.({ type: "workspace_prepared", workspacePath: ctx.workspace });
+        this.advance({ kind: "workspace_ready" });
+        return;
+      }
 
-    // --- checkingResumeState ---
-    this.advance({ kind: "hook_done" }); // runningBeforeHook -> checkingResumeState
-    this.checkAbort();
-    const resume = await readResumeState(
-      input.adapters,
-      workspace,
-      workerHost,
-      runtime.worker.sshTimeoutMs,
-    );
-    const resumeMatches =
-      resume.status === "ok" &&
-      resumeStateMatches(input.adapters, resume.state, {
-        agentKind: runtime.agent.kind,
-        issue,
-        workspacePath: workspace,
-        workerHost,
-      });
-    if (resume.status === "error") {
-      input.onUpdate?.({
-        type: "resume_state_warning",
-        workspacePath: workspace,
-        message: resume.reason,
-      });
-    } else if (resume.status === "ok" && !resumeMatches) {
-      input.onUpdate?.({
-        type: "resume_state_warning",
-        workspacePath: workspace,
-        message: "resume_state_identity_mismatch",
-      });
-    }
-    const resumeId = resumeMatches ? resume.state.resumeId : null;
+      case "runningBeforeHook": {
+        if (ctx.runtime.hooks.beforeRun) {
+          await runHook(
+            input.adapters,
+            ctx.runtime.hooks.beforeRun,
+            ctx.workspace!,
+            ctx.runtime.hooks,
+            workerHost,
+          );
+        }
+        this.advance({ kind: "hook_done" });
+        return;
+      }
 
-    // --- startingSession ---
-    this.advance({ kind: "resume_checked" }); // checkingResumeState -> startingSession
-    this.checkAbort();
-    const executor = await executorFor(input.adapters, runtime);
-    const updates: AgentUpdate[] = [];
-    const session = await executor.startSession({
-      workspace,
-      workerHost,
-      issue,
-      settings: runtime,
-      resumeId,
-      onUpdate: (update) => {
-        updates.push(update);
-        input.onUpdate?.(update);
-      },
-    });
+      case "checkingResumeState": {
+        const resume = await readResumeState(
+          input.adapters,
+          ctx.workspace!,
+          workerHost,
+          ctx.runtime.worker.sshTimeoutMs,
+        );
+        const resumeMatches =
+          resume.status === "ok" &&
+          resumeStateMatches(input.adapters, resume.state, {
+            agentKind: ctx.runtime.agent.kind,
+            issue: ctx.issue,
+            workspacePath: ctx.workspace!,
+            workerHost,
+          });
+        if (resume.status === "error") {
+          input.onUpdate?.({
+            type: "resume_state_warning",
+            workspacePath: ctx.workspace!,
+            message: resume.reason,
+          });
+        } else if (resume.status === "ok" && !resumeMatches) {
+          input.onUpdate?.({
+            type: "resume_state_warning",
+            workspacePath: ctx.workspace!,
+            message: "resume_state_identity_mismatch",
+          });
+        }
+        ctx.resumeId = resumeMatches ? resume.state.resumeId : null;
+        this.advance({ kind: "resume_checked" });
+        return;
+      }
 
-    // --- runningTurn loop ---
-    this.advance({ kind: "session_started" }); // startingSession -> runningTurn
-    let turnCount = 0;
+      case "startingSession": {
+        ctx.executor = await executorFor(input.adapters, ctx.runtime);
+        ctx.session = await ctx.executor.startSession({
+          workspace: ctx.workspace!,
+          workerHost,
+          issue: ctx.issue,
+          settings: ctx.runtime,
+          resumeId: ctx.resumeId,
+          onUpdate: (update) => {
+            ctx.updates.push(update);
+            input.onUpdate?.(update);
+          },
+        });
+        this.advance({ kind: "session_started" });
+        return;
+      }
 
-    try {
-      while (turnCount < runtime.agent.maxTurns) {
-        // Check abort before each turn
-        this.checkAbort();
-
+      case "runningTurn": {
         const prompt =
-          turnCount === 0
-            ? await buildPrompt(input.workflow.promptTemplate, issue, {
+          ctx.turnCount === 0
+            ? await buildPrompt(input.workflow.promptTemplate, ctx.issue, {
                 attempt: input.attempt ?? null,
                 slotIndex,
                 ensembleSize: size,
               })
-            : continuationPrompt(turnCount + 1, runtime.agent.maxTurns);
-        await runTurnWithAbort(executor, session, prompt, issue, input.abortSignal);
-        turnCount += 1;
+            : continuationPrompt(ctx.turnCount + 1, ctx.runtime.agent.maxTurns);
+        await runTurnWithAbort(ctx.executor!, ctx.session!, prompt, ctx.issue, input.abortSignal);
+        ctx.turnCount += 1;
+        this.advance({ kind: "turn_done" });
+        return;
+      }
 
-        // --- persistingMidRunState ---
-        this.advance({ kind: "turn_done" }); // runningTurn -> persistingMidRunState
-        await persistResumeState(input.adapters, session, runtime, issue, workspace, workerHost);
+      case "persistingMidRunState": {
+        await persistResumeState(
+          input.adapters,
+          ctx.session!,
+          ctx.runtime,
+          ctx.issue,
+          ctx.workspace!,
+          workerHost,
+        );
+        this.advance({ kind: "state_persisted" });
+        return;
+      }
 
-        // --- evaluatingContinuation ---
-        this.advance({ kind: "state_persisted" }); // persistingMidRunState -> evaluatingContinuation
-
-        // Evaluate whether to continue
+      case "evaluatingContinuation": {
         let shouldContinue = false;
         if (input.fetchIssue) {
-          issue = await input.fetchIssue(issue);
-          if (issueIsActive(issue, settings)) {
-            const refreshed = settingsForIssueState(settings, issue.state);
+          ctx.issue = await input.fetchIssue(ctx.issue);
+          if (issueIsActive(ctx.issue, settings)) {
+            const refreshed = settingsForIssueState(settings, ctx.issue.state);
             if (
-              refreshed.agent.kind === runtime.agent.kind &&
-              backendProfile(refreshed) === backendProfile(runtime)
+              refreshed.agent.kind === ctx.runtime.agent.kind &&
+              backendProfile(refreshed) === backendProfile(ctx.runtime)
             ) {
-              runtime = refreshed;
-              shouldContinue = turnCount < runtime.agent.maxTurns;
+              ctx.runtime = refreshed;
+              shouldContinue = ctx.turnCount < ctx.runtime.agent.maxTurns;
             }
           }
         }
-
         if (shouldContinue) {
-          this.advance({ kind: "continuation_yes" }); // evaluatingContinuation -> runningTurn
+          this.advance({ kind: "continuation_yes" });
         } else {
-          this.advance({ kind: "continuation_no" }); // evaluatingContinuation -> stoppingSession
-          break;
+          this.advance({ kind: "continuation_no" });
         }
+        return;
       }
 
-      // If we exited the while due to maxTurns, transition to stoppingSession
-      if (this.state.kind === "runningTurn") {
-        // maxTurns reached before entering the turn body - stop
-        this.advance({ kind: "turn_done" });
-        this.advance({ kind: "state_persisted" });
-        this.advance({ kind: "continuation_no" });
+      case "stoppingSession": {
+        if (ctx.session) {
+          await ctx.session.stop();
+        }
+        this.advance({ kind: "session_stopped" });
+        return;
       }
-    } finally {
-      // --- stoppingSession ---
-      await this.stopSession(session);
 
-      // --- runningAfterHook ---
-      if (this.state.kind === "runningAfterHook" && runtime.hooks.afterRun) {
-        try {
-          await runHook(
+      case "runningAfterHook": {
+        if (ctx.workspace && ctx.runtime.hooks.afterRun) {
+          try {
+            await runHook(
+              input.adapters,
+              ctx.runtime.hooks.afterRun,
+              ctx.workspace,
+              ctx.runtime.hooks,
+              workerHost,
+            );
+          } catch {
+            // after_run is best effort by SPEC.
+          }
+        }
+        this.advance({ kind: "after_hook_done" });
+        return;
+      }
+
+      case "persistingFinalState": {
+        if (ctx.session && ctx.workspace) {
+          await persistResumeState(
             input.adapters,
-            runtime.hooks.afterRun,
-            workspace,
-            runtime.hooks,
+            ctx.session,
+            ctx.runtime,
+            ctx.issue,
+            ctx.workspace,
             workerHost,
           );
-        } catch {
-          // after_run is best effort by SPEC.
         }
+        this.advance({ kind: "final_persisted" });
+        return;
       }
-      if (this.state.kind === "runningAfterHook") {
-        this.advance({ kind: "after_hook_done" }); // runningAfterHook -> persistingFinalState
-      }
-    }
 
-    // --- persistingFinalState ---
-    await persistResumeState(input.adapters, session, runtime, issue, workspace, workerHost);
-    if (this.state.kind === "persistingFinalState") {
-      this.advance({ kind: "final_persisted" }); // persistingFinalState -> completed
-    }
-
-    return {
-      workspace,
-      turnCount,
-      updates,
-      resumeId: session.resumeId,
-      agentKind: runtime.agent.kind,
-      finalIssue: issue,
-    };
-  }
-
-  /**
-   * Ensure session.stop() is called exactly once, advancing the machine
-   * through the stoppingSession state if it hasn't already passed through it.
-   */
-  private async stopSession(session: AgentSession): Promise<void> {
-    // Already in stoppingSession from normal flow (continuation_no)
-    if (shouldCallSessionStop(this.state)) {
-      await session.stop();
-      this.advance({ kind: "session_stopped" });
-      return;
-    }
-
-    // Error/exception path: machine needs to transition to stoppingSession first
-    if (
-      this.state.kind !== "completed" &&
-      this.state.kind !== "failed" &&
-      this.state.kind !== "runningAfterHook" &&
-      this.state.kind !== "persistingFinalState"
-    ) {
-      const errorNext = agentRunTransition(this.state, { kind: "error", reason: "exception" });
-      if (errorNext) this.state = errorNext;
-    }
-
-    if (shouldCallSessionStop(this.state)) {
-      await session.stop();
-      const stopped = agentRunTransition(this.state, { kind: "session_stopped" });
-      if (stopped) this.state = stopped;
-    } else {
-      // Already past stoppingSession (runningAfterHook, persistingFinalState, etc.)
-      // or in a terminal state - session.stop() was already called or is unnecessary
-      await session.stop();
+      case "completed":
+      case "failed":
+        return;
     }
   }
 }

@@ -342,14 +342,14 @@ export class SymphonyRuntime {
       return [];
     }
 
-    const claim = this.orchestrator.claim(refreshed);
+    const runId = `run-${this.nextRunNumber}`;
+    this.nextRunNumber += 1;
+    const claim = this.orchestrator.claim(refreshed, runId);
     if (!claim) {
       this.addEvent("dispatch_skipped", `${refreshed.identifier} stale_before_dispatch`);
       return [];
     }
     const key = slotKey(refreshed.id, claim.slotIndex);
-    const runId = `run-${this.nextRunNumber}`;
-    this.nextRunNumber += 1;
     this.activeHandles.set(key, { runId, handle: claim.handle });
     this.addEvent("run_started", `${refreshed.identifier} slot=${claim.slotIndex}`);
 
