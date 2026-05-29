@@ -10,6 +10,22 @@ export function splitIssueId(id: string): [string, string] | null {
   return [id.slice(0, idx), id.slice(idx + 1)];
 }
 
+/**
+ * Derive labels from hashtag tokens in `text`: match `#tag`, strip the leading `#`, lowercase,
+ * and dedupe (preserving first-seen order). Lets Slack issues carry plain routing/filter labels.
+ */
+export function deriveLabels(text: string): string[] {
+  const labels: string[] = [];
+  const seen = new Set<string>();
+  for (const match of text.matchAll(/#([a-z0-9][a-z0-9_-]*)/gi)) {
+    const label = match[1]!.toLowerCase();
+    if (seen.has(label)) continue;
+    seen.add(label);
+    labels.push(label);
+  }
+  return labels;
+}
+
 export class SlackTrackerClient implements RuntimeTrackerClient {
   constructor(
     private readonly settings: Settings,
@@ -56,7 +72,7 @@ export class SlackTrackerClient implements RuntimeTrackerClient {
       description: message.text,
       state,
       ...(stateType ? { state_type: stateType } : {}),
-      labels: [],
+      labels: deriveLabels(message.text),
       raw: message,
     });
   }

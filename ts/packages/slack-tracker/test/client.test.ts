@@ -64,6 +64,28 @@ test("piped mention form <@U123|alice> is detected and stripped from the title",
   );
 });
 
+test("hashtag tokens in the message become deduped, lowercased labels", async () => {
+  const transport = new InMemorySlackTransport({
+    C1: [
+      { ts: "1700000000.000400", text: "<@U_BOT> fix the build #backend #Urgent", reactions: [] },
+    ],
+  });
+  const client = new SlackTrackerClient(settings(), transport);
+
+  const candidates = await client.fetchCandidateIssues();
+  assert.deepEqual(candidates[0]!.labels, ["backend", "urgent"]);
+});
+
+test("a message with no hashtags yields no labels", async () => {
+  const transport = new InMemorySlackTransport({
+    C1: [{ ts: "1700000000.000500", text: "<@U_BOT> fix the build", reactions: [] }],
+  });
+  const client = new SlackTrackerClient(settings(), transport);
+
+  const candidates = await client.fetchCandidateIssues();
+  assert.deepEqual(candidates[0]!.labels, []);
+});
+
 test("with botUserId only mentions of the bot become candidates", async () => {
   const transport = new InMemorySlackTransport(
     {
