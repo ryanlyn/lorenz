@@ -620,6 +620,77 @@ test("runtime does not record late success after stall reconciliation wins", asy
   }
 });
 
+test("runtime keeps a retry handle active when a stalled generation finishes late", async () => {
+  const issue = issueFixture("issue-stale-finally", "MT-STALE-FINALLY");
+  const root = await tempDir("symphony-ts-runtime-stale-finally");
+  const workflow = workflowFixture(root);
+  workflow.settings.agent.maxRetryBackoffMs = 0;
+  workflow.settings.codex.stallTimeoutMs = 50;
+  const orchestrator = new Orchestrator(workflow.settings);
+  let attempts = 0;
+  const abortedAttempts = new Set<number>();
+  const controls = new Map<number, { resolve: (value: RunResult) => void }>();
+  const runtime = new SymphonyRuntime(
+    runtimeOptions({
+      workflow,
+      orchestrator,
+      client: {
+        fetchCandidateIssues: async () => [issue],
+        fetchIssuesByIds: async () => [issue],
+      },
+      runner: async ({ abortSignal, onUpdate }) => {
+        attempts += 1;
+        const attempt = attempts;
+        onUpdate?.({
+          type: "workspace_prepared",
+          workspacePath: path.join(root, `workspace-${attempt}`),
+        });
+        abortSignal?.addEventListener("abort", () => {
+          abortedAttempts.add(attempt);
+        });
+        return await new Promise<RunResult>((resolve) => {
+          controls.set(attempt, { resolve });
+        });
+      },
+    }),
+  );
+
+  try {
+    await runtime.pollOnce();
+    assert.equal(attempts, 1);
+    const firstEntry = orchestrator.snapshot().running[0];
+    assert.ok(firstEntry);
+    firstEntry.lastAgentTimestamp = new Date(Date.now() - 1_000);
+
+    await runtime.pollOnce({ dryRun: true });
+    assert.equal(runtime.snapshot().runHistory[0]?.outcome, "stalled");
+    assert.equal(abortedAttempts.has(1), true);
+
+    await runtime.pollOnce();
+    await waitFor(() => attempts === 2, 1_000);
+    assert.equal(runtime.snapshot().running[0]?.runId, "run-2");
+
+    controls.get(1)?.resolve({
+      workspace: path.join(root, "workspace-1"),
+      turnCount: 1,
+      updates: [],
+      resumeId: "stale-finished-late",
+      agentKind: "codex",
+      finalIssue: issue,
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    const snapshot = runtime.snapshot();
+    assert.equal(snapshot.running[0]?.runId, "run-2");
+    assert.deepEqual(
+      snapshot.runHistory.map((entry) => entry.outcome),
+      ["stalled"],
+    );
+  } finally {
+    runtime.stop();
+  }
+});
+
 test("runtime coalesces overlapping pollOnce calls", async () => {
   const fetchControl: { release?: () => void } = {};
   let fetches = 0;
