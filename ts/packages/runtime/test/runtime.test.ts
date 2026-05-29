@@ -721,6 +721,37 @@ test("runtime coalesces overlapping pollOnce calls", async () => {
   await Promise.all([first, second]);
 });
 
+test("runtime keeps polling after a candidate fetch throws in the recurring loop", async () => {
+  let fetches = 0;
+  const runtime = new SymphonyRuntime(
+    runtimeOptions({
+      workflow: workflowFixture(),
+      client: {
+        fetchCandidateIssues: async () => {
+          fetches += 1;
+          if (fetches === 1) throw new Error("tracker fetch failed");
+          return [];
+        },
+        fetchIssuesByIds: async () => [],
+      },
+    }),
+  );
+
+  void runtime.start({ once: false });
+  try {
+    await waitFor(() => fetches >= 2, 1_000);
+    const snapshot = runtime.snapshot();
+    assert.ok(fetches >= 2);
+    assert.ok(
+      snapshot.recentEvents.some(
+        (event) => event.type === "poll_error" && event.message.includes("tracker fetch failed"),
+      ),
+    );
+  } finally {
+    runtime.stop();
+  }
+});
+
 test("runtime appends operational events to the configured log file", async () => {
   const root = await tempDir("symphony-ts-runtime-event-log");
   const workflow = workflowFixture(root);
