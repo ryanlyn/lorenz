@@ -54,6 +54,8 @@ const trackerRawSchema = z
     projectSlug: z.unknown().optional(),
     assignee: z.unknown().optional(),
     path: z.unknown().optional(),
+    channels: z.unknown().optional(),
+    emojiStates: z.unknown().optional(),
     activeStates: z.unknown().optional(),
     terminalStates: z.unknown().optional(),
     dispatch: z
@@ -174,6 +176,7 @@ type StatusOverridesRaw = NonNullable<WorkflowConfigRaw["statusOverrides"]>;
 const trackerAliases = {
   api_key: "apiKey",
   project_slug: "projectSlug",
+  emoji_states: "emojiStates",
   active_states: "activeStates",
   terminal_states: "terminalStates",
 };
@@ -408,6 +411,14 @@ export function validateDispatchConfig(settings: Settings): void {
       throw new Error("tracker.path is required");
     }
   }
+  if (settings.tracker.kind === "slack") {
+    if (!settings.tracker.apiKey) {
+      throw new Error("tracker.api_key (or SLACK_BOT_TOKEN) is required for the slack tracker");
+    }
+    if (!settings.tracker.channels || settings.tracker.channels.length === 0) {
+      throw new Error("tracker.channels is required for the slack tracker");
+    }
+  }
 
   const requiredBackends = new Set<AgentKind>([settings.agent.kind]);
   for (const override of settings.statusOverrides.values()) {
@@ -450,22 +461,41 @@ function parseTracker(
       ? defaults.kind
       : trackerKindValue(kindRaw, "tracker.kind");
 
-  const apiKey = resolveConfiguredSecret(trackerRaw.apiKey, env, "LINEAR_API_KEY");
+  const secretEnvVar = kind === "slack" ? "SLACK_BOT_TOKEN" : "LINEAR_API_KEY";
+  const apiKey = resolveConfiguredSecret(trackerRaw.apiKey, env, secretEnvVar);
   const projectSlug = resolveEnv(stringValue(trackerRaw.projectSlug, ""), env) || undefined;
   const assignee = resolveConfiguredSecret(trackerRaw.assignee, env, "LINEAR_ASSIGNEE");
+  const endpointDefault = kind === "slack" ? "https://slack.com/api" : defaults.endpoint;
+  const emojiStates = parseEmojiStates(trackerRaw.emojiStates);
 
   return {
     ...defaults,
     kind,
-    endpoint: stringValue(trackerRaw.endpoint, defaults.endpoint),
+    endpoint: stringValue(trackerRaw.endpoint, endpointDefault),
     path: stringValue(trackerRaw.path, defaults.path ?? ".symphony/board"),
     apiKey,
     projectSlug,
     assignee,
+    channels: stringArray(trackerRaw.channels, []),
+    ...(emojiStates !== undefined ? { emojiStates } : {}),
     activeStates: stringArray(trackerRaw.activeStates, defaults.activeStates),
     terminalStates: stringArray(trackerRaw.terminalStates, defaults.terminalStates),
     dispatch: parseDispatch(defaults.dispatch, trackerRaw.dispatch ?? {}),
   };
+}
+
+function parseEmojiStates(value: unknown): Record<string, string> | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("tracker.emoji_states must be a mapping of emoji name to state name");
+  }
+  const out: Record<string, string> = {};
+  for (const [emoji, state] of Object.entries(value as Record<string, unknown>)) {
+    if (typeof state !== "string")
+      throw new Error(`tracker.emoji_states.${emoji} must be a string`);
+    out[emoji] = state;
+  }
+  return out;
 }
 
 function expandLocalPath(value: string, env: NodeJS.ProcessEnv): string {

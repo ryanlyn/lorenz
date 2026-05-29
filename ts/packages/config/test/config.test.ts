@@ -480,3 +480,29 @@ test("parses local tracker config with path", () => {
   assert.equal(settings.tracker.kind, "local");
   assert.equal(settings.tracker.path, ".symphony/board");
 });
+
+test("parses slack tracker config with channels, emoji overrides, and token env", () => {
+  const settings = parseConfig(
+    { tracker: { kind: "slack", channels: ["C1", "C2"], emoji_states: { rocket: "Shipped" } } },
+    { SLACK_BOT_TOKEN: "xoxb-test" },
+  );
+  assert.equal(settings.tracker.kind, "slack");
+  assert.equal(settings.tracker.endpoint, "https://slack.com/api");
+  assert.equal(settings.tracker.apiKey, "xoxb-test");
+  assert.deepEqual(settings.tracker.channels, ["C1", "C2"]);
+  assert.deepEqual(settings.tracker.emojiStates, { rocket: "Shipped" });
+});
+
+test("slack tracker requires a token and at least one channel", () => {
+  assert.throws(
+    () => validateDispatchConfig(parseConfig({ tracker: { kind: "slack", channels: ["C1"] } }, {})),
+    /SLACK_BOT_TOKEN/,
+  );
+  assert.throws(
+    () =>
+      validateDispatchConfig(
+        parseConfig({ tracker: { kind: "slack" } }, { SLACK_BOT_TOKEN: "xoxb-test" }),
+      ),
+    /channels is required/,
+  );
+});
