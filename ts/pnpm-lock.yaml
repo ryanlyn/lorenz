@@ -769,6 +769,10 @@ importers:
       ts-pattern:
         specifier: ^5.9.0
         version: 5.9.0
+    devDependencies:
+      "@symphony/agent-runner":
+        specifier: workspace:*
+        version: link:../agent-runner
 
   packages/humanize:
     dependencies:

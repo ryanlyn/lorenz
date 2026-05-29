@@ -1,14 +1,5 @@
 import { transition, type SlotState, type SlotEvent } from "./slot-machine.js";
 
-// --- Derived state interface ---
-
-export interface DerivedState {
-  runningCount: number;
-  claimedSet: Set<string>;
-  retryList: Array<{ key: string; state: SlotState & { kind: "retrying" } }>;
-  completedSet: Set<string>;
-}
-
 // --- SlotRegistry (Map<slotKey, SlotState>) ---
 
 export class SlotRegistry {
@@ -41,6 +32,10 @@ export class SlotRegistry {
     if (current === undefined) return null;
     const next = transition(current, event);
     if (next === null) return null;
+    // Side effect: abort the controller when leaving `running` state
+    if (current.kind === "running" && next.kind !== "running") {
+      current.handle.controller.abort();
+    }
     this.slots.set(key, next);
     return next;
   }
@@ -48,32 +43,6 @@ export class SlotRegistry {
   /** Iterate over all slot entries. */
   entries(): IterableIterator<[string, SlotState]> {
     return this.slots.entries();
-  }
-
-  derivedState(): DerivedState {
-    let runningCount = 0;
-    const claimedSet = new Set<string>();
-    const retryList: Array<{ key: string; state: SlotState & { kind: "retrying" } }> = [];
-    const completedSet = new Set<string>();
-
-    for (const [key, state] of this.slots) {
-      switch (state.kind) {
-        case "running":
-          runningCount++;
-          break;
-        case "claimed":
-          claimedSet.add(key);
-          break;
-        case "retrying":
-          retryList.push({ key, state });
-          break;
-        case "done":
-          completedSet.add(key);
-          break;
-      }
-    }
-
-    return { runningCount, claimedSet, retryList, completedSet };
   }
 
   get size(): number {

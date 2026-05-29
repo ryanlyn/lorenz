@@ -13,6 +13,8 @@ import type {
 
 import { agentRunTransition, type AgentRunState, type AgentRunEvent } from "./agent-run-machine.js";
 
+export { agentRunTransition, type AgentRunState, type AgentRunEvent } from "./agent-run-machine.js";
+
 interface ResumeStateShape {
   agentKind: string;
   resumeId: string;
@@ -100,6 +102,7 @@ interface RunContext {
 
 export class RunController {
   private state: AgentRunState = { kind: "idle" };
+  private firstError: string | null = null;
 
   constructor(private readonly input: RunAgentAttemptInput) {}
 
@@ -137,11 +140,21 @@ export class RunController {
         this.advance({ kind: "abort" });
         continue;
       }
-      await this.execute(ctx);
+      try {
+        await this.execute(ctx);
+      } catch (err) {
+        const reason = err instanceof Error ? err.message : String(err);
+        if (this.firstError === null) this.firstError = reason;
+        this.advance({ kind: "error", reason });
+      }
     }
 
     if (this.state.kind === "failed") {
       throw new Error(this.state.reason);
+    }
+
+    if (this.firstError !== null) {
+      throw new Error(this.firstError);
     }
 
     if (!ctx.workspace) {

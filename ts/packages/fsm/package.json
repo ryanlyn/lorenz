@@ -10,5 +10,8 @@
   },
   "dependencies": {
     "ts-pattern": "^5.9.0"
+  },
+  "devDependencies": {
+    "@symphony/agent-runner": "workspace:*"
   }
 }

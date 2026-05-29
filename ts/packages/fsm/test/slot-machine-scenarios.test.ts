@@ -8,7 +8,6 @@ import {
 } from "../src/slot-machine.js";
 import { SlotRegistry } from "../src/slot-registry.js";
 import { RunningHandle } from "../src/running-handle.js";
-import { PollMachine } from "../src/poll-machine.js";
 
 // --- Helpers ---
 
@@ -222,7 +221,6 @@ describe("Scenario: double-stop", () => {
       { kind: "run_failed", runId: "x", error: "err" },
       { kind: "abort", reason: "stop" },
       { kind: "cleanup_done", runId: "x" },
-      { kind: "retry_due" },
       { kind: "reconcile_terminal", reason: "closed" },
     ];
 
@@ -306,121 +304,5 @@ describe("Scenario: reconcile + redispatch same tick", () => {
       handle: makeSlotHandle("run-2"),
     });
     expect(retry).toBeNull();
-  });
-});
-
-// --- Scenario: Poll coalescing (PollMachine rejects concurrent polls) ---
-
-describe("Scenario: poll coalescing", () => {
-  it("second requestPoll during active poll does not invoke executor again", async () => {
-    const pm = new PollMachine();
-    let executorCallCount = 0;
-    let resolveExecutor: () => void;
-    const executorPromise = new Promise<void>((resolve) => {
-      resolveExecutor = resolve;
-    });
-
-    // First poll starts the executor
-    const p1 = pm.requestPoll(() => {
-      executorCallCount++;
-      return executorPromise;
-    });
-    expect(pm.state.kind).toBe("polling");
-    expect(executorCallCount).toBe(1);
-
-    // Second poll while first is in-flight - should NOT call executor
-    const p2 = pm.requestPoll(() => {
-      executorCallCount++;
-      return Promise.resolve();
-    });
-    expect(executorCallCount).toBe(1); // Still 1
-
-    // Third poll - also coalesced
-    const p3 = pm.requestPoll(() => {
-      executorCallCount++;
-      return Promise.resolve();
-    });
-    expect(executorCallCount).toBe(1); // Still 1
-
-    // Resolve the original executor
-    resolveExecutor!();
-    await Promise.all([p1, p2, p3]);
-
-    // All waiters resolved, executor called exactly once
-    expect(executorCallCount).toBe(1);
-    expect(pm.state.kind).toBe("idle");
-  });
-
-  it("after first poll completes, next requestPoll starts a fresh executor", async () => {
-    const pm = new PollMachine();
-    let executorCallCount = 0;
-
-    // First poll
-    await pm.requestPoll(() => {
-      executorCallCount++;
-      return Promise.resolve();
-    });
-    expect(executorCallCount).toBe(1);
-    expect(pm.state.kind).toBe("idle");
-
-    // Second poll (after first completed) - should invoke executor again
-    await pm.requestPoll(() => {
-      executorCallCount++;
-      return Promise.resolve();
-    });
-    expect(executorCallCount).toBe(2);
-    expect(pm.state.kind).toBe("idle");
-  });
-
-  it("poll failure still resolves all waiters and records error", async () => {
-    const pm = new PollMachine();
-    let resolveExecutor: () => void;
-    let rejectExecutor: (err: Error) => void;
-    const executorPromise = new Promise<void>((resolve, reject) => {
-      resolveExecutor = resolve;
-      rejectExecutor = reject;
-    });
-    void resolveExecutor!;
-
-    const p1 = pm.requestPoll(() => executorPromise);
-    const p2 = pm.requestPoll(() => Promise.resolve()); // coalesced waiter
-
-    // Reject the executor
-    rejectExecutor!(new Error("network timeout"));
-    await Promise.all([p1, p2]);
-
-    // Both waiters resolved (not rejected - PollMachine swallows executor errors)
-    expect(pm.state.kind).toBe("idle");
-    if (pm.state.kind === "idle") {
-      expect(pm.state.lastError).toBe("network timeout");
-      expect(pm.state.lastPollAt).toBeInstanceOf(Date);
-    }
-  });
-
-  it("state is idle after coalesced poll completes", async () => {
-    const pm = new PollMachine();
-    let resolveExec: () => void;
-    const execPromise = new Promise<void>((r) => {
-      resolveExec = r;
-    });
-
-    pm.requestPoll(() => execPromise);
-
-    // Verify polling state has waiters
-    if (pm.state.kind === "polling") {
-      expect(pm.state.waiters.length).toBe(1);
-    }
-
-    // Add a coalesced waiter
-    pm.requestPoll(() => Promise.resolve());
-    if (pm.state.kind === "polling") {
-      expect(pm.state.waiters.length).toBe(2);
-    }
-
-    resolveExec!();
-    // Allow microtask to flush
-    await new Promise<void>((r) => setTimeout(r, 0));
-
-    expect(pm.state.kind).toBe("idle");
   });
 });

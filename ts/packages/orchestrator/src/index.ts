@@ -305,14 +305,27 @@ export class Orchestrator {
     const key = slotKey(issueId, slotIndex);
     const entry = this._entries.get(key);
     if (!entry) return;
+
+    // Transition FSM first, then mutate bookkeeping state
+    const slotState = this.slotRegistry.getState(key);
+    const currentRunId = slotState && "runId" in slotState ? slotState.runId : null;
+
+    if (normal) {
+      if (currentRunId) {
+        this.slotRegistry.transition(key, { kind: "run_finished", runId: currentRunId });
+      }
+    } else {
+      this.slotRegistry.transition(key, {
+        kind: "reconcile_terminal",
+        reason: error ?? "abnormal",
+      });
+    }
+
     this._entries.delete(key);
     this._usageTotals.secondsRunning += Math.max(
       0,
       (this.clock.now().getTime() - entry.startedAt.getTime()) / 1000,
     );
-
-    const slotState = this.slotRegistry.getState(key);
-    const currentRunId = slotState && "runId" in slotState ? slotState.runId : null;
 
     if (normal) {
       const attempt = retryKind === "continuation" ? 1 : (entry.retryAttempt ?? 0) + 1;
@@ -328,14 +341,6 @@ export class Orchestrator {
         workerHost: entry.workerHost,
         workspacePath: entry.workspacePath,
         error,
-      });
-      if (currentRunId) {
-        this.slotRegistry.transition(key, { kind: "run_finished", runId: currentRunId });
-      }
-    } else {
-      this.slotRegistry.transition(key, {
-        kind: "reconcile_terminal",
-        reason: error ?? "abnormal",
       });
     }
   }

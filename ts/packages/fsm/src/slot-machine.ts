@@ -60,7 +60,6 @@ export type SlotEvent =
   | { kind: "run_failed"; runId: string; error: string }
   | { kind: "abort"; reason: string }
   | { kind: "cleanup_done"; runId: string }
-  | { kind: "retry_due" }
   | { kind: "reconcile_terminal"; reason: string };
 
 // --- Generation-safety guard ---
@@ -77,7 +76,11 @@ function runIdMatches(state: SlotState, event: SlotEvent): boolean {
 
 // --- Pure transition function ---
 
-export function transition(state: SlotState, event: SlotEvent): SlotState | null {
+export function transition(
+  state: SlotState,
+  event: SlotEvent,
+  now: Date = new Date(),
+): SlotState | null {
   // Terminal state rejects all events
   if (state.kind === "done") return null;
 
@@ -92,7 +95,7 @@ export function transition(state: SlotState, event: SlotEvent): SlotState | null
         runId: ev.runId,
         handle: ev.handle,
         entry: ev.entry,
-        claimedAt: new Date(),
+        claimedAt: now,
       }))
 
       // claimed + agent_update => running (first update)
@@ -101,14 +104,14 @@ export function transition(state: SlotState, event: SlotEvent): SlotState | null
         runId: s.runId,
         handle: s.handle,
         entry: s.entry,
-        startedAt: new Date(),
+        startedAt: now,
       }))
 
       // claimed + run_finished => retrying (finished before first agent_update)
       .with([{ kind: "claimed" }, { kind: "run_finished" }], ([s]) => ({
         kind: "retrying" as const,
         attempt: 1,
-        dueAt: new Date(),
+        dueAt: now,
         lastError: null,
         lastRunId: s.runId,
         slotIndex: 0,
@@ -120,7 +123,7 @@ export function transition(state: SlotState, event: SlotEvent): SlotState | null
       .with([{ kind: "claimed" }, { kind: "run_failed" }], ([s, ev]) => ({
         kind: "retrying" as const,
         attempt: 1,
-        dueAt: new Date(),
+        dueAt: now,
         lastError: ev.error,
         lastRunId: s.runId,
         slotIndex: 0,
@@ -131,7 +134,7 @@ export function transition(state: SlotState, event: SlotEvent): SlotState | null
       // claimed + reconcile_terminal => done
       .with([{ kind: "claimed" }, { kind: "reconcile_terminal" }], () => ({
         kind: "done" as const,
-        completedAt: new Date(),
+        completedAt: now,
       }))
 
       // running + agent_update => running (self-loop)
@@ -141,7 +144,7 @@ export function transition(state: SlotState, event: SlotEvent): SlotState | null
       .with([{ kind: "running" }, { kind: "run_finished" }], ([s]) => ({
         kind: "retrying" as const,
         attempt: 1,
-        dueAt: new Date(),
+        dueAt: now,
         lastError: null,
         lastRunId: s.runId,
         slotIndex: 0,
@@ -153,7 +156,7 @@ export function transition(state: SlotState, event: SlotEvent): SlotState | null
       .with([{ kind: "running" }, { kind: "run_failed" }], ([s, ev]) => ({
         kind: "retrying" as const,
         attempt: 1,
-        dueAt: new Date(),
+        dueAt: now,
         lastError: ev.error,
         lastRunId: s.runId,
         slotIndex: 0,
@@ -162,31 +165,25 @@ export function transition(state: SlotState, event: SlotEvent): SlotState | null
       }))
 
       // running + abort => aborting
-      .with([{ kind: "running" }, { kind: "abort" }], ([s, ev]) => {
-        s.handle.controller.abort();
-        return {
-          kind: "aborting" as const,
-          runId: s.runId,
-          reason: ev.reason,
-          entry: s.entry,
-          abortedAt: new Date(),
-        };
-      })
+      .with([{ kind: "running" }, { kind: "abort" }], ([s, ev]) => ({
+        kind: "aborting" as const,
+        runId: s.runId,
+        reason: ev.reason,
+        entry: s.entry,
+        abortedAt: now,
+      }))
 
-      // running + reconcile_terminal => done (aborts controller)
-      .with([{ kind: "running" }, { kind: "reconcile_terminal" }], ([s]) => {
-        s.handle.controller.abort();
-        return {
-          kind: "done" as const,
-          completedAt: new Date(),
-        };
-      })
+      // running + reconcile_terminal => done
+      .with([{ kind: "running" }, { kind: "reconcile_terminal" }], () => ({
+        kind: "done" as const,
+        completedAt: now,
+      }))
 
       // aborting + cleanup_done => retrying
       .with([{ kind: "aborting" }, { kind: "cleanup_done" }], ([s]) => ({
         kind: "retrying" as const,
         attempt: 1,
-        dueAt: new Date(),
+        dueAt: now,
         lastError: s.reason,
         lastRunId: s.runId,
         slotIndex: 0,
@@ -197,7 +194,7 @@ export function transition(state: SlotState, event: SlotEvent): SlotState | null
       // aborting + reconcile_terminal => done
       .with([{ kind: "aborting" }, { kind: "reconcile_terminal" }], () => ({
         kind: "done" as const,
-        completedAt: new Date(),
+        completedAt: now,
       }))
 
       // retrying + claim => claimed (new runId)
@@ -206,13 +203,13 @@ export function transition(state: SlotState, event: SlotEvent): SlotState | null
         runId: ev.runId,
         handle: ev.handle,
         entry: ev.entry,
-        claimedAt: new Date(),
+        claimedAt: now,
       }))
 
       // retrying + reconcile_terminal => done
       .with([{ kind: "retrying" }, { kind: "reconcile_terminal" }], () => ({
         kind: "done" as const,
-        completedAt: new Date(),
+        completedAt: now,
       }))
 
       // All other combinations are invalid

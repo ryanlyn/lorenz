@@ -407,7 +407,7 @@ export class SymphonyRuntime {
         abortSignal: handle.signal,
       });
       const finalIssue = result.finalIssue ?? (await this.fetchIssueOrSelf(issue));
-      if (!handle.finish({ success: true })) return;
+      if (!handle.isActive) return;
       const entry = this.orchestrator
         .snapshot()
         .running.find((item) => item.issue.id === issue.id && item.slotIndex === slotIndex);
@@ -440,7 +440,7 @@ export class SymphonyRuntime {
       });
       this.addEvent("run_completed", `${issue.identifier} turns=${result.turnCount}`);
     } catch (error) {
-      if (!handle.fail(error instanceof Error ? error : new Error(String(error)))) return;
+      if (!handle.isActive) return;
       const entry = this.orchestrator
         .snapshot()
         .running.find((item) => item.issue.id === issue.id && item.slotIndex === slotIndex);

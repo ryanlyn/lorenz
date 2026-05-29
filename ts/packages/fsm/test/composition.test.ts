@@ -4,7 +4,6 @@
  * Exercises the full lifecycle of the Symphony FSM hierarchy:
  *
  * SymphonyRuntime
- * ├── PollMachine (idle | polling)
  * ├── Orchestrator
  * │   └── SlotRegistry (Map<slotKey, SlotMachine>)
  * │       ├── SlotMachine("issue-1:0") → RunningHandle → AgentRunMachine
@@ -12,8 +11,8 @@
  * └── RetryScheduler
  */
 import { describe, it, expect } from "vitest";
+import { agentRunTransition, type AgentRunState } from "@symphony/agent-runner";
 
-import { PollMachine } from "../src/poll-machine.js";
 import { SlotRegistry } from "../src/slot-registry.js";
 import { RunningHandle } from "../src/running-handle.js";
 import {
@@ -21,10 +20,6 @@ import {
   type SlotState,
   type RunningHandle as SlotHandle,
 } from "../src/slot-machine.js";
-import {
-  agentRunTransition,
-  type AgentRunState,
-} from "../../agent-runner/src/agent-run-machine.js";
 
 // --- Helpers ---
 
@@ -33,25 +28,10 @@ function makeSlotHandle(runId: string): SlotHandle {
 }
 
 describe("FSM composition: full lifecycle", () => {
-  it("exercises PollMachine → SlotRegistry → RunningHandle → AgentRunMachine → retry → done", async () => {
-    // ===== Phase 1: PollMachine triggers a poll and discovers issues =====
-
+  it("exercises SlotRegistry → RunningHandle → AgentRunMachine → retry → done", async () => {
     const registry = new SlotRegistry();
-    const pollMachine = new PollMachine();
-    const discoveredIssues: string[] = [];
 
-    expect(pollMachine.state.kind).toBe("idle");
-
-    // Simulate a poll that discovers an issue
-    await pollMachine.requestPoll(async () => {
-      discoveredIssues.push("issue-1");
-    });
-
-    expect(pollMachine.state.kind).toBe("idle");
-    expect(pollMachine.state.kind === "idle" && pollMachine.state.lastError).toBeNull();
-    expect(discoveredIssues).toEqual(["issue-1"]);
-
-    // ===== Phase 2: SlotRegistry dispatches (idle → claimed → running) =====
+    // ===== Phase 1: SlotRegistry dispatches (idle → claimed → running) =====
 
     const issueId = "issue-1";
     const slotIndex = 0;
@@ -161,10 +141,8 @@ describe("FSM composition: full lifecycle", () => {
     retryHandle.applyUpdate({ progress: 0 });
     expect(registry.getState(key)?.kind).toBe("running");
 
-    // Verify derived state shows 1 running
-    const derived = registry.derivedState();
-    expect(derived.runningCount).toBe(1);
-    expect(derived.retryList).toHaveLength(0);
+    // Verify running state
+    expect(registry.getState(key)?.kind).toBe("running");
 
     // ===== Phase 6: Issue becomes terminal (→ done) =====
 
@@ -179,43 +157,8 @@ describe("FSM composition: full lifecycle", () => {
     expect(retryHandle.controller.signal.aborted).toBe(true);
     expect(retryHandle.isActive).toBe(false);
 
-    // Derived state reflects completion
-    const finalDerived = registry.derivedState();
-    expect(finalDerived.runningCount).toBe(0);
-    expect(finalDerived.completedSet).toEqual(new Set([key]));
-  });
-
-  it("PollMachine coalesces concurrent polls while lifecycle proceeds", async () => {
-    const pollMachine = new PollMachine();
-    let pollCount = 0;
-    let resolveCurrentPoll: (() => void) | null = null;
-
-    // Start a slow poll
-    const slowPollPromise = new Promise<void>((r) => {
-      resolveCurrentPoll = r;
-    });
-
-    const p1 = pollMachine.requestPoll(() => {
-      pollCount++;
-      return slowPollPromise;
-    });
-
-    expect(pollMachine.state.kind).toBe("polling");
-
-    // A second request coalesces (does not start another poll)
-    const p2 = pollMachine.requestPoll(() => {
-      pollCount++;
-      return Promise.resolve();
-    });
-
-    expect(pollCount).toBe(1);
-
-    // Complete the poll
-    resolveCurrentPoll!();
-    await Promise.all([p1, p2]);
-
-    expect(pollMachine.state.kind).toBe("idle");
-    expect(pollCount).toBe(1); // Only one executor call ever made
+    // Verify completion
+    expect(registry.getState(key)?.kind).toBe("done");
   });
 
   it("multiple slots for the same issue evolve independently", () => {
@@ -260,9 +203,9 @@ describe("FSM composition: full lifecycle", () => {
     handle0.finish({ success: true });
     expect(registry.getState(key0)?.kind).toBe("retrying");
 
-    const derived = registry.derivedState();
-    expect(derived.runningCount).toBe(0);
-    expect(derived.retryList).toHaveLength(2);
+    // Both slots are retrying
+    expect(registry.getState(key0)?.kind).toBe("retrying");
+    expect(registry.getState(key1)?.kind).toBe("retrying");
   });
 
   it("pure transition function rejects events in terminal state", () => {
@@ -276,7 +219,6 @@ describe("FSM composition: full lifecycle", () => {
     expect(transition(doneState, { kind: "run_finished", runId: "x" })).toBeNull();
     expect(transition(doneState, { kind: "abort", reason: "test" })).toBeNull();
     expect(transition(doneState, { kind: "reconcile_terminal", reason: "test" })).toBeNull();
-    expect(transition(doneState, { kind: "retry_due" })).toBeNull();
   });
 
   it("AgentRunMachine abort mid-run routes through stoppingSession", () => {

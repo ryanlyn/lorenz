@@ -1,5 +1,4 @@
 import { describe, it, expect } from "vitest";
-import fc from "fast-check";
 
 import { SlotRegistry } from "../src/slot-registry.js";
 import type { RunningHandle, SlotEvent } from "../src/slot-machine.js";
@@ -57,50 +56,6 @@ describe("SlotRegistry", () => {
     expect(reg.getState("slot-1")?.kind).toBe("idle");
   });
 
-  describe("derivedState", () => {
-    it("empty registry returns zero counts", () => {
-      const reg = new SlotRegistry();
-      const ds = reg.derivedState();
-      expect(ds.runningCount).toBe(0);
-      expect(ds.claimedSet.size).toBe(0);
-      expect(ds.retryList.length).toBe(0);
-      expect(ds.completedSet.size).toBe(0);
-    });
-
-    it("correctly categorizes mixed slot states", () => {
-      const reg = new SlotRegistry();
-
-      // slot-a: running
-      reg.getOrCreate("slot-a");
-      reg.transition("slot-a", makeClaimEvent("run-a"));
-      reg.transition("slot-a", { kind: "agent_update", runId: "run-a" });
-
-      // slot-b: claimed
-      reg.getOrCreate("slot-b");
-      reg.transition("slot-b", makeClaimEvent("run-b"));
-
-      // slot-c: retrying
-      reg.getOrCreate("slot-c");
-      reg.transition("slot-c", makeClaimEvent("run-c"));
-      reg.transition("slot-c", { kind: "run_failed", runId: "run-c", error: "err" });
-
-      // slot-d: done
-      reg.getOrCreate("slot-d");
-      reg.transition("slot-d", makeClaimEvent("run-d"));
-      reg.transition("slot-d", { kind: "reconcile_terminal", reason: "closed" });
-
-      // slot-e: idle
-      reg.getOrCreate("slot-e");
-
-      const ds = reg.derivedState();
-      expect(ds.runningCount).toBe(1);
-      expect(ds.claimedSet).toEqual(new Set(["slot-b"]));
-      expect(ds.retryList).toHaveLength(1);
-      expect(ds.retryList[0]!.key).toBe("slot-c");
-      expect(ds.completedSet).toEqual(new Set(["slot-d"]));
-    });
-  });
-
   describe("keys()", () => {
     it("returns all registered keys", () => {
       const reg = new SlotRegistry();
@@ -108,46 +63,6 @@ describe("SlotRegistry", () => {
       reg.getOrCreate("b");
       reg.getOrCreate("c");
       expect([...reg.keys()].sort()).toEqual(["a", "b", "c"]);
-    });
-  });
-
-  describe("property-based: derivedState is consistent with slot states", () => {
-    it("sum of categories equals total slots", () => {
-      fc.assert(
-        fc.property(
-          fc.array(fc.uuid(), { minLength: 1, maxLength: 20 }),
-          fc.array(fc.boolean(), { minLength: 1, maxLength: 20 }),
-          (keys, shouldClaim) => {
-            const uniqueKeys = [...new Set(keys)];
-            const reg = new SlotRegistry();
-
-            for (let i = 0; i < uniqueKeys.length; i++) {
-              const key = uniqueKeys[i]!;
-              reg.getOrCreate(key);
-              if (shouldClaim[i % shouldClaim.length]) {
-                const runId = `run-${i}`;
-                reg.transition(key, makeClaimEvent(runId));
-              }
-            }
-
-            const ds = reg.derivedState();
-            const idleCount =
-              reg.size -
-              ds.runningCount -
-              ds.claimedSet.size -
-              ds.retryList.length -
-              ds.completedSet.size;
-            expect(idleCount).toBeGreaterThanOrEqual(0);
-            expect(
-              ds.runningCount +
-                ds.claimedSet.size +
-                ds.retryList.length +
-                ds.completedSet.size +
-                idleCount,
-            ).toBe(reg.size);
-          },
-        ),
-      );
     });
   });
 });

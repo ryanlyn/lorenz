@@ -36,7 +36,6 @@ function arbSlotEvent(runId?: string): fc.Arbitrary<SlotEvent> {
     rid.map((r) => ({ kind: "run_failed", runId: r, error: "boom" }) as SlotEvent),
     fc.constant({ kind: "abort", reason: "user-requested" } as SlotEvent),
     rid.map((r) => ({ kind: "cleanup_done", runId: r }) as SlotEvent),
-    fc.constant({ kind: "retry_due" } as SlotEvent),
     fc.constant({
       kind: "reconcile_terminal",
       reason: "issue closed",
@@ -150,7 +149,6 @@ describe("SlotMachine BFS walker", () => {
     "run_failed",
     "abort",
     "cleanup_done",
-    "retry_due",
     "reconcile_terminal",
   ] as const;
 
@@ -214,8 +212,6 @@ describe("SlotMachine BFS walker", () => {
         return { kind: "abort", reason: "user-abort" };
       case "cleanup_done":
         return { kind: "cleanup_done", runId: RUN_ID };
-      case "retry_due":
-        return { kind: "retry_due" };
       case "reconcile_terminal":
         return { kind: "reconcile_terminal", reason: "issue closed" };
     }
@@ -230,7 +226,6 @@ describe("SlotMachine BFS walker", () => {
     "idle+run_failed": null,
     "idle+abort": null,
     "idle+cleanup_done": null,
-    "idle+retry_due": null,
     "idle+reconcile_terminal": null,
 
     // claimed transitions
@@ -240,7 +235,6 @@ describe("SlotMachine BFS walker", () => {
     "claimed+run_failed": "retrying",
     "claimed+abort": null,
     "claimed+cleanup_done": null,
-    "claimed+retry_due": null,
     "claimed+reconcile_terminal": "done",
 
     // running transitions
@@ -250,7 +244,6 @@ describe("SlotMachine BFS walker", () => {
     "running+run_failed": "retrying",
     "running+abort": "aborting",
     "running+cleanup_done": null,
-    "running+retry_due": null,
     "running+reconcile_terminal": "done",
 
     // aborting transitions
@@ -260,7 +253,6 @@ describe("SlotMachine BFS walker", () => {
     "aborting+run_failed": null,
     "aborting+abort": null,
     "aborting+cleanup_done": "retrying",
-    "aborting+retry_due": null,
     "aborting+reconcile_terminal": "done",
 
     // retrying transitions
@@ -270,7 +262,6 @@ describe("SlotMachine BFS walker", () => {
     "retrying+run_failed": null,
     "retrying+abort": null,
     "retrying+cleanup_done": null,
-    "retrying+retry_due": null,
     "retrying+reconcile_terminal": "done",
 
     // done transitions (all rejected)
@@ -280,14 +271,13 @@ describe("SlotMachine BFS walker", () => {
     "done+run_failed": null,
     "done+abort": null,
     "done+cleanup_done": null,
-    "done+retry_due": null,
     "done+reconcile_terminal": null,
   };
 
-  it("covers all 48 (state, event) pairs", () => {
+  it("covers all 42 (state, event) pairs", () => {
     const totalPairs = STATE_KINDS.length * EVENT_KINDS.length;
-    expect(totalPairs).toBe(48);
-    expect(Object.keys(EXPECTED).length).toBe(48);
+    expect(totalPairs).toBe(42);
+    expect(Object.keys(EXPECTED).length).toBe(42);
   });
 
   for (const stateKind of STATE_KINDS) {
