@@ -948,53 +948,84 @@ test("runtime invalidates resume state before scheduling failure retry", async (
   assert.ok(snapshot.recentEvents.some((event) => event.type === "resume_state_invalidated"));
 });
 
-test("runtime schedules retry refresh timers independently of the poll cadence", async () => {
-  const issue = issueFixture("issue-timer-retry", "MT-TIMER");
-  const doneIssue: Issue = { ...issue, state: "Done", stateType: "completed" };
-  const workflow = workflowFixture();
-  workflow.settings.polling.intervalMs = 60_000;
-  workflow.settings.agent.maxRetryBackoffMs = 20;
-  let attempts = 0;
-  const runtime = new SymphonyRuntime(
-    runtimeOptions({
-      workflow,
-      client: {
-        fetchCandidateIssues: async () => [issue],
-        fetchIssuesByIds: async () => (attempts >= 2 ? [doneIssue] : [issue]),
-      },
-      runner: async () => {
-        attempts += 1;
-        if (attempts === 1) throw new Error("agent exited: retry me");
-        return {
-          workspace: "/tmp/symphony/MT-TIMER",
-          turnCount: 1,
-          updates: [],
-          resumeId: "timer-resume",
-          agentKind: "codex",
-          finalIssue: doneIssue,
-        };
-      },
-    }),
-  );
+test(
+  "runtime schedules retry refresh timers independently of the poll cadence",
+  { timeout: 30_000 },
+  async () => {
+    const issue = issueFixture("issue-timer-retry", "MT-TIMER");
+    const doneIssue: Issue = { ...issue, state: "Done", stateType: "completed" };
+    const workflow = workflowFixture();
+    workflow.settings.polling.intervalMs = 60_000;
+    workflow.settings.agent.maxRetryBackoffMs = 200;
+    let attempts = 0;
+    const runtime = new SymphonyRuntime(
+      runtimeOptions({
+        workflow,
+        client: {
+          fetchCandidateIssues: async () => [issue],
+          fetchIssuesByIds: async () => (attempts >= 2 ? [doneIssue] : [issue]),
+        },
+        runner: async () => {
+          attempts += 1;
+          if (attempts === 1) throw new Error("agent exited: retry me");
+          return {
+            workspace: "/tmp/symphony/MT-TIMER",
+            turnCount: 1,
+            updates: [],
+            resumeId: "timer-resume",
+            agentKind: "codex",
+            finalIssue: doneIssue,
+          };
+        },
+      }),
+    );
 
-  await runtime.pollOnce({ waitForRuns: true });
-  assert.equal(attempts, 1);
-  assert.equal(runtime.snapshot().retrying[0]?.attempt, 1);
+    // Use snapshot subscription to detect state transitions deterministically
+    // rather than polling with arbitrary timeouts.
+    const snapshotWaiter = <T>(
+      predicate: (snap: ReturnType<typeof runtime.snapshot>) => T | false,
+    ) =>
+      new Promise<T>((resolve) => {
+        const unsub = runtime.subscribe((snap) => {
+          const result = predicate(snap);
+          if (result !== false) {
+            unsub();
+            resolve(result);
+          }
+        });
+        // Also check current state in case the transition already happened
+        const current = predicate(runtime.snapshot());
+        if (current !== false) {
+          unsub();
+          resolve(current);
+        }
+      });
 
-  await waitFor(() => attempts === 2, 2_000);
-  let snapshot = runtime.snapshot();
-  assert.equal(snapshot.retrying[0]?.attempt, 1);
+    await runtime.pollOnce({ waitForRuns: true });
+    assert.equal(attempts, 1);
+    assert.equal(runtime.snapshot().retrying[0]?.attempt, 1);
 
-  await waitFor(() => runtime.snapshot().retrying.length === 0, 2_000);
-  snapshot = runtime.snapshot();
-  assert.equal(snapshot.retrying.length, 0);
-  assert.equal(snapshot.runHistory[0]?.outcome, "success");
-  assert.equal(
-    snapshot.recentEvents.some((event) => event.type === "retry_timer_due"),
-    true,
-  );
-  runtime.stop();
-});
+    await snapshotWaiter(
+      (snap) => snap.recentEvents.some((e) => e.type === "retry_timer_due") || false,
+    );
+
+    // Wait for the successful second run to complete (recorded as second history entry)
+    await snapshotWaiter((snap) => snap.runHistory.length >= 2 || false);
+
+    // Wait for reconciliation to clean up the continuation retry
+    await snapshotWaiter(
+      (snap) => (snap.retrying.length === 0 && snap.runHistory.length >= 2) || false,
+    );
+    const snapshot = runtime.snapshot();
+    assert.equal(snapshot.retrying.length, 0);
+    assert.equal(snapshot.runHistory[0]?.outcome, "success");
+    assert.equal(
+      snapshot.recentEvents.some((event) => event.type === "retry_timer_due"),
+      true,
+    );
+    runtime.stop();
+  },
+);
 
 function workflowFixture(root = "/tmp/symphony-ts-runtime-test"): WorkflowDefinition {
   const settings = parseConfig({

@@ -22,6 +22,8 @@ import type {
 } from "@symphony/domain";
 import { systemClock, type ClockPort } from "@symphony/ports";
 
+import { type SlotState, transitionSlot } from "./slot-state.js";
+
 export interface OrchestratorState {
   running: Map<string, RunningEntry>;
   claimed: Set<string>;
@@ -46,6 +48,7 @@ export function createState(): OrchestratorState {
 
 export class Orchestrator {
   readonly state: OrchestratorState;
+  private readonly slots = new Map<string, SlotState>();
 
   constructor(
     public settings: Settings,
@@ -53,6 +56,18 @@ export class Orchestrator {
     state: OrchestratorState = createState(),
   ) {
     this.state = state;
+  }
+
+  private getSlotState(key: string): SlotState {
+    return this.slots.get(key) ?? { phase: "idle" };
+  }
+
+  private setSlotState(key: string, slotState: SlotState): void {
+    if (slotState.phase === "idle" || slotState.phase === "completed") {
+      this.slots.delete(key);
+    } else {
+      this.slots.set(key, slotState);
+    }
   }
 
   eligibleIssues(issues: Issue[]): Issue[] {
@@ -141,6 +156,11 @@ export class Orchestrator {
       retryAttempt: retry?.attempt ?? null,
     };
 
+    // Transition slot state machine
+    const slotState = this.getSlotState(key);
+    this.setSlotState(key, transitionSlot(slotState, { type: "CLAIM", entry }));
+
+    // Maintain legacy data structures
     this.state.claimed.add(key);
     this.state.running.set(key, entry);
     this.state.retryAttempts.delete(issue.id);
@@ -172,17 +192,15 @@ export class Orchestrator {
   }
 
   applyUpdate(issueId: string, slotIndex: number, update: AgentUpdate): void {
-    const entry = this.state.running.get(slotKey(issueId, slotIndex));
+    const key = slotKey(issueId, slotIndex);
+    const entry = this.state.running.get(key);
     if (!entry) return;
 
-    entry.lastAgentEvent = update.type;
-    entry.lastAgentMessage = update.message;
-    entry.lastAgentTimestamp = update.timestamp ?? this.clock.now();
-    if (update.sessionId !== undefined) entry.sessionId = update.sessionId;
-    if (update.resumeId !== undefined) entry.resumeId = update.resumeId;
-    if (update.executorPid !== undefined) entry.executorPid = update.executorPid;
-    if (update.workspacePath !== undefined) entry.workspacePath = update.workspacePath;
-    if (update.type === "turn_completed") entry.turnCount += 1;
+    // Transition slot state -- this handles field mutations on the entry
+    const slotState = this.getSlotState(key);
+    this.setSlotState(key, transitionSlot(slotState, { type: "UPDATE", update }, this.clock.now()));
+
+    // Handle orchestrator-level side effects not managed by slot state
     if (update.rateLimits !== undefined) this.state.rateLimits = update.rateLimits;
     if (update.usage) this.applyUsageDelta(entry, update.usage);
   }
@@ -197,8 +215,8 @@ export class Orchestrator {
     const key = slotKey(issueId, slotIndex);
     const entry = this.state.running.get(key);
     if (!entry) return;
-    this.state.running.delete(key);
-    this.state.claimed.delete(key);
+
+    // Accumulate runtime before clearing
     this.state.usageTotals.secondsRunning += Math.max(
       0,
       (this.clock.now().getTime() - entry.startedAt.getTime()) / 1000,
@@ -206,8 +224,7 @@ export class Orchestrator {
 
     if (normal) {
       const attempt = retryKind === "continuation" ? 1 : (entry.retryAttempt ?? 0) + 1;
-      this.state.completed.add(issueId);
-      this.state.retryAttempts.set(issueId, {
+      const retryEntry: RetryEntry = {
         issueId,
         identifier: entry.identifier,
         attempt,
@@ -218,17 +235,47 @@ export class Orchestrator {
         workerHost: entry.workerHost,
         workspacePath: entry.workspacePath,
         error,
-      });
+      };
+
+      // Transition slot state machine: running -> retrying
+      const slotState = this.getSlotState(key);
+      this.setSlotState(key, transitionSlot(slotState, { type: "FINISH_NORMAL", retryEntry }));
+
+      // Maintain legacy data structures
+      this.state.completed.add(issueId);
+      this.state.retryAttempts.set(issueId, retryEntry);
+    } else {
+      // Transition slot state machine: running -> idle
+      const slotState = this.getSlotState(key);
+      this.setSlotState(key, transitionSlot(slotState, { type: "FINISH_ABNORMAL" }));
     }
+
+    // Clear from legacy running/claimed
+    this.state.running.delete(key);
+    this.state.claimed.delete(key);
   }
 
   cleanupIssue(issueId: string): void {
-    for (const [key, entry] of this.state.running.entries()) {
-      if (entry.issue.id === issueId) {
-        this.state.running.delete(key);
-        this.state.claimed.delete(key);
-      }
+    // Collect keys first to avoid iterating while mutating
+    const runningKeys = [...this.state.running.entries()]
+      .filter(([, entry]) => entry.issue.id === issueId)
+      .map(([key]) => key);
+    for (const key of runningKeys) {
+      const slotState = this.getSlotState(key);
+      this.setSlotState(key, transitionSlot(slotState, { type: "CLEANUP" }));
+      this.state.running.delete(key);
+      this.state.claimed.delete(key);
     }
+
+    // Also cleanup any retry-phase slots for this issue
+    const retryKeys = [...this.slots.entries()]
+      .filter(([key, s]) => key.startsWith(`${issueId}:`) && s.phase === "retrying")
+      .map(([key]) => key);
+    for (const key of retryKeys) {
+      const slotState = this.getSlotState(key);
+      this.setSlotState(key, transitionSlot(slotState, { type: "CLEANUP" }));
+    }
+
     this.state.retryAttempts.delete(issueId);
     this.state.completed.add(issueId);
   }
@@ -288,3 +335,6 @@ export class Orchestrator {
     }
   }
 }
+
+export type { SlotState, SlotEvent } from "./slot-state.js";
+export { transitionSlot, initialSlotState } from "./slot-state.js";

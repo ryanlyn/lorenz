@@ -26,9 +26,19 @@ import type {
   WorkflowDefinition,
 } from "@symphony/domain";
 
-export type RuntimeRunner = (input: Parameters<typeof runAgentAttempt>[0]) => Promise<RunResult>;
+import {
+  type RuntimePhase,
+  type RuntimeAppStatus,
+  initialRuntimePhase,
+  transitionRuntime,
+  deriveAppStatus,
+  isStartupCleanupDone,
+  isStopped,
+} from "./runtime-state.js";
 
-export type RuntimeAppStatus = "starting" | "idle" | "polling" | "running" | "stopping" | "error";
+export type RuntimeRunner = (input: Parameters<typeof runAgentAttempt>[0]) => Promise<RunResult>;
+export type { RuntimePhase, RuntimeTransition, RuntimeAppStatus } from "./runtime-state.js";
+export { transitionRuntime, deriveAppStatus, initialRuntimePhase } from "./runtime-state.js";
 export type RuntimePollStatus = "idle" | "checking" | "error";
 export const RUNTIME_RUN_OUTCOMES = ["success", "failed", "stalled", "canceled"] as const;
 export type RuntimeRunOutcome = (typeof RUNTIME_RUN_OUTCOMES)[number];
@@ -226,9 +236,7 @@ export class SymphonyRuntime {
   private readonly now: () => Date;
   private readonly listeners = new Set<(snapshot: RuntimeSnapshot) => void>();
   private readonly retryScheduler = new RetryScheduler();
-  private readonly inFlight = new Set<Promise<void>>();
-  private stopped = false;
-  private appStatus: RuntimeAppStatus = "starting";
+  private runtimePhase: RuntimePhase = initialRuntimePhase();
   private pollStatus: RuntimePollStatus = "idle";
   private candidates = 0;
   private eligible = 0;
@@ -237,7 +245,6 @@ export class SymphonyRuntime {
   private lastError: string | null = null;
   private readonly projection = new ProjectionActor();
   private readonly activeRuns = new Map<string, ActiveRunHandle>();
-  private startupCleanupDone = false;
   private nextRunNumber = 1;
   private pollInProgress: Promise<void> | null = null;
 
@@ -247,7 +254,6 @@ export class SymphonyRuntime {
     this.orchestrator = input.orchestrator ?? new Orchestrator(input.workflow.settings);
     this.runner = input.runner ?? runAgentAttempt;
     this.now = input.now ?? (() => new Date());
-    this.appStatus = "idle";
   }
 
   get workflow(): WorkflowDefinition {
@@ -265,7 +271,7 @@ export class SymphonyRuntime {
   snapshot(): RuntimeSnapshot {
     const orchestration = this.orchestrator.snapshot();
     return this.projection.snapshot({
-      appStatus: this.appStatus,
+      appStatus: deriveAppStatus(this.runtimePhase),
       workflowPath: this.workflow.path,
       poll: {
         status: this.pollStatus,
@@ -290,17 +296,16 @@ export class SymphonyRuntime {
   }
 
   async start(options: RuntimeStartOptions = {}): Promise<void> {
-    this.stopped = false;
+    this.runtimePhase = initialRuntimePhase();
     do {
       await this.pollOnce({ dryRun: options.dryRun, waitForRuns: options.once });
       if (options.once) break;
-      await delay(this.workflow.settings.polling.intervalMs, () => this.stopped);
-    } while (!this.stopped);
+      await delay(this.workflow.settings.polling.intervalMs, () => isStopped(this.runtimePhase));
+    } while (!isStopped(this.runtimePhase));
   }
 
   stop(): void {
-    this.stopped = true;
-    this.appStatus = "stopping";
+    this.runtimePhase = transitionRuntime(this.runtimePhase, { type: "STOP_REQUESTED" });
     for (const handle of this.activeRuns.values()) handle.abort();
     this.retryScheduler.stop();
     this.emit();
@@ -319,7 +324,7 @@ export class SymphonyRuntime {
 
   private async pollOnceUnlocked(options: PollOptions = {}): Promise<void> {
     this.pollStatus = "checking";
-    this.appStatus = this.inFlight.size > 0 ? "running" : "polling";
+    this.runtimePhase = transitionRuntime(this.runtimePhase, { type: "POLL_START" });
     this.lastPollAt = this.now().toISOString();
     this.lastError = null;
     this.emit();
@@ -349,13 +354,16 @@ export class SymphonyRuntime {
       }
 
       this.pollStatus = "idle";
-      this.appStatus = this.inFlight.size > 0 ? "running" : "idle";
+      this.runtimePhase = transitionRuntime(this.runtimePhase, { type: "POLL_SUCCESS" });
       this.nextPollAt = new Date(
         this.now().getTime() + this.workflow.settings.polling.intervalMs,
       ).toISOString();
     } catch (error) {
       this.pollStatus = "error";
-      this.appStatus = "error";
+      this.runtimePhase = transitionRuntime(this.runtimePhase, {
+        type: "POLL_ERROR",
+        error: errorMessage(error),
+      });
       this.lastError = errorMessage(error);
       this.addEvent("poll_error", this.lastError);
       throw error;
@@ -391,10 +399,9 @@ export class SymphonyRuntime {
       claim.workerHost ?? null,
       handle,
     );
-    this.inFlight.add(run);
+    this.runtimePhase = transitionRuntime(this.runtimePhase, { type: "RUN_STARTED" });
     void run.finally(() => {
-      this.inFlight.delete(run);
-      this.appStatus = this.inFlight.size > 0 ? "running" : "idle";
+      this.runtimePhase = transitionRuntime(this.runtimePhase, { type: "RUN_FINISHED" });
       this.emit();
     });
     this.emit();
@@ -660,8 +667,8 @@ export class SymphonyRuntime {
   }
 
   private async cleanupTerminalWorkspacesOnce(): Promise<void> {
-    if (this.startupCleanupDone) return;
-    this.startupCleanupDone = true;
+    if (isStartupCleanupDone(this.runtimePhase)) return;
+    this.runtimePhase = transitionRuntime(this.runtimePhase, { type: "STARTUP_CLEANUP_DONE" });
     if (!this.client.fetchIssuesByStates) return;
     try {
       const terminalIssues = await this.client.fetchIssuesByStates(
@@ -743,12 +750,21 @@ export class SymphonyRuntime {
       ) {
         return;
       }
-      if (this.pollInProgress) return;
-      this.addEvent("retry_timer_due", `${scheduled.identifier} attempt=${scheduled.attempt}`);
-      this.pollOnce().catch((error) => {
-        this.lastError = errorMessage(error);
-        this.addEvent("retry_timer_error", this.lastError);
-      });
+      const triggerPoll = () => {
+        this.addEvent("retry_timer_due", `${scheduled.identifier} attempt=${scheduled.attempt}`);
+        this.pollOnce().catch((error) => {
+          this.lastError = errorMessage(error);
+          this.addEvent("retry_timer_error", this.lastError);
+        });
+      };
+      if (this.pollInProgress) {
+        // A poll is already in flight (common when the timer fires before the
+        // enclosing pollOnce returns). Wait for it to finish, then trigger a
+        // fresh poll so the retry is not silently dropped.
+        void this.pollInProgress.then(triggerPoll, triggerPoll);
+      } else {
+        triggerPoll();
+      }
     });
   }
 
