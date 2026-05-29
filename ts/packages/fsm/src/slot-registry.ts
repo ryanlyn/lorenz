@@ -26,7 +26,7 @@ export class SlotRegistry {
     return this.slots.get(key) ?? null;
   }
 
-  /** Directly set a slot state (used for backward-compat seeding in tests). */
+  /** Directly set a slot state (used for seeding in tests). */
   setState(key: string, state: SlotState): void {
     this.slots.set(key, state);
   }
