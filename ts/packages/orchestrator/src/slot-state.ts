@@ -13,10 +13,12 @@ export type SlotState =
 
 /**
  * Events that cause slot state transitions.
+ * Each event variant carries all data required for its transition -- no
+ * out-of-band parameters needed.
  */
 export type SlotEvent =
   | { type: "CLAIM"; entry: RunningEntry }
-  | { type: "UPDATE"; update: AgentUpdate }
+  | { type: "UPDATE"; update: AgentUpdate; now: Date }
   | { type: "FINISH_WITH_RETRY"; retryEntry: RetryEntry }
   | { type: "FINISH_NO_RETRY" }
   | { type: "CLEANUP" };
@@ -37,14 +39,14 @@ function applyUpdateToEntry(entry: RunningEntry, update: AgentUpdate, now: Date)
 }
 
 /**
- * Pure transition function for a single slot's lifecycle.
+ * Transition function for a single slot's lifecycle.
  * Given the current state and an event, returns the next state.
  *
- * Note: UPDATE events mutate the RunningEntry in place (for efficiency with
- * large entry objects) but still return the same state reference. This is
- * consistent with the existing orchestrator behavior.
+ * @mutates state - UPDATE events mutate the RunningEntry in place (for
+ * efficiency with large entry objects) but still return the same state
+ * reference. This is consistent with the existing orchestrator behavior.
  */
-export function transitionSlot(state: SlotState, event: SlotEvent, now?: Date): SlotState {
+export function transitionSlot(state: SlotState, event: SlotEvent): SlotState {
   switch (state.phase) {
     case "idle":
       if (event.type === "CLAIM") return { phase: "running", entry: event.entry };
@@ -53,7 +55,7 @@ export function transitionSlot(state: SlotState, event: SlotEvent, now?: Date): 
 
     case "running":
       if (event.type === "UPDATE") {
-        applyUpdateToEntry(state.entry, event.update, now ?? new Date());
+        applyUpdateToEntry(state.entry, event.update, event.now);
         return state;
       }
       if (event.type === "FINISH_WITH_RETRY") return { phase: "retrying", retry: event.retryEntry };

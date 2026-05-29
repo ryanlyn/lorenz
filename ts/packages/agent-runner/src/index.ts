@@ -118,7 +118,6 @@ export class RunController {
     const slotIndex = input.slotIndex ?? 0;
     const workerHost = input.workerHost ?? null;
 
-    this.phase = "preparing_workspace";
     const workspace = await createWorkspaceForIssue(input.adapters, runtime, issue, {
       slotIndex,
       ensembleSize: size,

@@ -85,20 +85,29 @@ function activeRunCount(state: RuntimePhase): number {
 }
 
 /**
- * Whether the runtime is in a stopped/stopping state (replaces the `stopped` boolean).
+ * Whether a stop has been requested (the runtime is draining active runs).
+ * This replaces the old `stopped` boolean -- note that it means "stop requested",
+ * not "fully quiesced".
  */
-export function isStopped(state: RuntimePhase): boolean {
+export function isStopRequested(state: RuntimePhase): boolean {
   return state.phase === "stopping";
 }
+
+/**
+ * @deprecated Use `isStopRequested` for clarity. This alias is kept during migration.
+ */
+export const isStopped = isStopRequested;
 
 /**
  * Transition function for the runtime state machine.
  * Given the current phase and an event, returns the next phase.
  *
- * Note: For counter-only updates that stay within the same phase (RUN_STARTED in
- * polling/running), the state object is mutated in place and returned to avoid
- * allocation overhead on the hot path. Phase-changing transitions (including
- * RUN_FINISHED in `running` when activeRuns reaches zero) always return a new object.
+ * @mutates state - For counter-only updates that stay within the same phase
+ * (RUN_STARTED in polling/running, RUN_FINISHED in stopping/error,
+ * STARTUP_CLEANUP_DONE in polling), the state object is mutated in place and
+ * returned to avoid allocation overhead on the hot path. Phase-changing
+ * transitions always return a new object. Do NOT rely on reference equality to
+ * detect changes; compare the `phase` field or activeRuns count instead.
  */
 export function transitionRuntime(state: RuntimePhase, event: RuntimeTransition): RuntimePhase {
   // STOP_REQUESTED transitions from any non-terminal state

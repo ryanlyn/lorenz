@@ -3,7 +3,7 @@ import type { AgentExecutor, AgentSession, AgentUpdate, Issue, Settings } from "
 import { defaultSettings } from "@symphony/config";
 
 import { assert } from "../../../test/assert.js";
-import { runAgentAttempt, type RunAgentAttemptAdapters } from "../src/index.js";
+import { runAgentAttempt, RunController, type RunAgentAttemptAdapters } from "../src/index.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -638,4 +638,79 @@ test("backendProfile extracts profile from settings", async () => {
   assert.equal(receivedSettings!.agent.kind, "codex");
   // The agents map should contain the codex config
   assert.ok(receivedSettings!.agents["codex"]);
+});
+
+// ---------------------------------------------------------------------------
+// RunPhase lifecycle tracking
+// ---------------------------------------------------------------------------
+
+test("RunController.currentPhase tracks lifecycle phases through a successful run", async () => {
+  const issue = fakeIssue();
+  const settings = fakeSettings();
+  const phases: string[] = [];
+
+  const controller = new RunController({
+    issue,
+    workflow: { path: "/workflow.md", config: {}, promptTemplate: "Fix it", settings },
+    settings,
+    adapters: fakeAdapters({
+      createWorkspaceForIssue: async () => {
+        phases.push(controller.currentPhase);
+        return "/tmp/workspace/TEST-1";
+      },
+      executorFactory: () => ({
+        kind: "codex",
+        async startSession(input) {
+          phases.push(controller.currentPhase);
+          input.onUpdate?.({ type: "session_started", sessionId: "s1" });
+          return fakeSession();
+        },
+        async runTurn() {
+          phases.push(controller.currentPhase);
+          return [{ type: "turn_completed" }];
+        },
+      }),
+    }),
+  });
+
+  await controller.run();
+
+  phases.push(controller.currentPhase);
+
+  // Verify key phases were observed in order
+  assert.equal(phases[0], "preparing_workspace");
+  assert.equal(phases[1], "starting_session");
+  assert.equal(phases[2], "executing_turn");
+  assert.equal(phases[phases.length - 1], "completed");
+});
+
+test("RunController.currentPhase is stopping_session after turn error", async () => {
+  const issue = fakeIssue();
+  const settings = fakeSettings();
+  let phaseAfterStop: string | null = null;
+
+  const controller = new RunController({
+    issue,
+    workflow: { path: "/workflow.md", config: {}, promptTemplate: "Fix it", settings },
+    settings,
+    adapters: fakeAdapters({
+      executorFactory: () => ({
+        kind: "codex",
+        async startSession(input) {
+          input.onUpdate?.({ type: "session_started", sessionId: "s1" });
+          return fakeSession({
+            stop: async () => {
+              phaseAfterStop = controller.currentPhase;
+            },
+          });
+        },
+        async runTurn() {
+          throw new Error("turn_exploded");
+        },
+      }),
+    }),
+  });
+
+  await assert.rejects(() => controller.run(), "turn_exploded");
+  assert.equal(phaseAfterStop, "stopping_session");
 });

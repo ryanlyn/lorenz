@@ -76,8 +76,9 @@ test("idle + CLEANUP -> completed", () => {
 
 test("idle + irrelevant events are no-ops", () => {
   const state = initialSlotState();
+  const now = new Date("2025-01-01T00:00:00Z");
   assert.equal(
-    transitionSlot(state, { type: "UPDATE", update: { type: "turn_completed" } }),
+    transitionSlot(state, { type: "UPDATE", update: { type: "turn_completed" }, now }),
     state,
   );
   assert.equal(
@@ -93,20 +94,17 @@ test("running + UPDATE mutates entry fields", () => {
   const entry = makeRunningEntry();
   const state: SlotState = { phase: "running", entry };
   const now = new Date("2025-01-01T00:05:00Z");
-  const next = transitionSlot(
-    state,
-    {
-      type: "UPDATE",
-      update: {
-        type: "turn_completed",
-        sessionId: "s1",
-        resumeId: "r1",
-        executorPid: "123",
-        workspacePath: "/tmp/ws",
-      },
+  const next = transitionSlot(state, {
+    type: "UPDATE",
+    update: {
+      type: "turn_completed",
+      sessionId: "s1",
+      resumeId: "r1",
+      executorPid: "123",
+      workspacePath: "/tmp/ws",
     },
     now,
-  );
+  });
   // Same state reference (mutation in place)
   assert.equal(next, state);
   assert.equal(entry.lastAgentEvent, "turn_completed");
@@ -121,14 +119,16 @@ test("running + UPDATE mutates entry fields", () => {
 test("running + UPDATE with turn_completed increments turnCount", () => {
   const entry = makeRunningEntry({ turnCount: 3 });
   const state: SlotState = { phase: "running", entry };
-  transitionSlot(state, { type: "UPDATE", update: { type: "turn_completed" } });
+  const now = new Date("2025-01-01T00:05:00Z");
+  transitionSlot(state, { type: "UPDATE", update: { type: "turn_completed" }, now });
   assert.equal(entry.turnCount, 4);
 });
 
 test("running + UPDATE with non-turn event does not increment turnCount", () => {
   const entry = makeRunningEntry({ turnCount: 2 });
   const state: SlotState = { phase: "running", entry };
-  transitionSlot(state, { type: "UPDATE", update: { type: "usage" } });
+  const now = new Date("2025-01-01T00:05:00Z");
+  transitionSlot(state, { type: "UPDATE", update: { type: "usage" }, now });
   assert.equal(entry.turnCount, 2);
 });
 
@@ -185,8 +185,9 @@ test("retrying + CLAIM -> running (direct reclaim on retry)", () => {
 
 test("retrying + irrelevant events are no-ops", () => {
   const state: SlotState = { phase: "retrying", retry: makeRetryEntry() };
+  const now = new Date("2025-01-01T00:00:00Z");
   assert.equal(
-    transitionSlot(state, { type: "UPDATE", update: { type: "turn_completed" } }),
+    transitionSlot(state, { type: "UPDATE", update: { type: "turn_completed" }, now }),
     state,
   );
   assert.equal(
@@ -200,9 +201,10 @@ test("retrying + irrelevant events are no-ops", () => {
 
 test("completed absorbs all events", () => {
   const state: SlotState = { phase: "completed" };
+  const now = new Date("2025-01-01T00:00:00Z");
   assert.equal(transitionSlot(state, { type: "CLAIM", entry: makeRunningEntry() }), state);
   assert.equal(
-    transitionSlot(state, { type: "UPDATE", update: { type: "turn_completed" } }),
+    transitionSlot(state, { type: "UPDATE", update: { type: "turn_completed" }, now }),
     state,
   );
   assert.equal(

@@ -7,6 +7,8 @@ import {
   transitionRuntime,
   deriveAppStatus,
   initialRuntimePhase,
+  isStopRequested,
+  isStopped,
 } from "@symphony/runtime";
 
 test("initialRuntimePhase starts in idle with startupCleanupDone=false", () => {
@@ -48,6 +50,13 @@ test("idle + STOP_REQUESTED -> stopping", () => {
   const state: RuntimePhase = { phase: "idle", startupCleanupDone: false };
   const next = transitionRuntime(state, { type: "STOP_REQUESTED" });
   assert.deepEqual(next, { phase: "stopping", activeRuns: 0 });
+});
+
+test("idle + RUN_STARTED is a no-op (cannot start run outside polling)", () => {
+  const state: RuntimePhase = { phase: "idle", startupCleanupDone: true };
+  const next = transitionRuntime(state, { type: "RUN_STARTED" });
+  assert.equal(next, state);
+  assert.deepEqual(next, { phase: "idle", startupCleanupDone: true });
 });
 
 test("idle + irrelevant events are no-ops", () => {
@@ -139,6 +148,13 @@ test("running + STOP_REQUESTED -> stopping", () => {
   assert.deepEqual(next, { phase: "stopping", activeRuns: 2 });
 });
 
+test("running + POLL_ERROR is a no-op (errors only captured during polling phase)", () => {
+  const state: RuntimePhase = { phase: "running", activeRuns: 2 };
+  const next = transitionRuntime(state, { type: "POLL_ERROR", error: "timeout" });
+  assert.equal(next, state);
+  assert.deepEqual(next, { phase: "running", activeRuns: 2 });
+});
+
 test("running + irrelevant events are no-ops", () => {
   const state: RuntimePhase = { phase: "running", activeRuns: 1 };
   assert.equal(transitionRuntime(state, { type: "POLL_SUCCESS" }), state);
@@ -152,6 +168,12 @@ test("stopping + RUN_FINISHED decrements activeRuns", () => {
   const state: RuntimePhase = { phase: "stopping", activeRuns: 2 };
   const next = transitionRuntime(state, { type: "RUN_FINISHED" });
   assert.deepEqual(next, { phase: "stopping", activeRuns: 1 });
+});
+
+test("stopping + RUN_FINISHED with activeRuns=0 clamps to 0 (defensive guard)", () => {
+  const state: RuntimePhase = { phase: "stopping", activeRuns: 0 };
+  const next = transitionRuntime(state, { type: "RUN_FINISHED" });
+  assert.deepEqual(next, { phase: "stopping", activeRuns: 0 });
 });
 
 test("stopping absorbs most events", () => {
@@ -188,4 +210,22 @@ test("error absorbs irrelevant events", () => {
   assert.equal(transitionRuntime(state, { type: "POLL_SUCCESS" }), state);
   assert.equal(transitionRuntime(state, { type: "RUN_STARTED" }), state);
   assert.equal(transitionRuntime(state, { type: "STARTUP_CLEANUP_DONE" }), state);
+});
+
+// --- isStopRequested / isStopped ---
+
+test("isStopRequested returns true only for stopping phase", () => {
+  assert.equal(isStopRequested({ phase: "idle", startupCleanupDone: false }), false);
+  assert.equal(
+    isStopRequested({ phase: "polling", startupCleanupDone: true, activeRuns: 0 }),
+    false,
+  );
+  assert.equal(isStopRequested({ phase: "running", activeRuns: 1 }), false);
+  assert.equal(isStopRequested({ phase: "stopping", activeRuns: 0 }), true);
+  assert.equal(isStopRequested({ phase: "stopping", activeRuns: 3 }), true);
+  assert.equal(isStopRequested({ phase: "error", lastError: "x", activeRuns: 0 }), false);
+});
+
+test("isStopped is an alias for isStopRequested", () => {
+  assert.equal(isStopped, isStopRequested);
 });

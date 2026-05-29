@@ -33,12 +33,18 @@ import {
   transitionRuntime,
   deriveAppStatus,
   isStartupCleanupDone,
-  isStopped,
+  isStopRequested,
 } from "./runtime-state.js";
 
 export type RuntimeRunner = (input: Parameters<typeof runAgentAttempt>[0]) => Promise<RunResult>;
 export type { RuntimePhase, RuntimeTransition, RuntimeAppStatus } from "./runtime-state.js";
-export { transitionRuntime, deriveAppStatus, initialRuntimePhase } from "./runtime-state.js";
+export {
+  transitionRuntime,
+  deriveAppStatus,
+  initialRuntimePhase,
+  isStopRequested,
+  isStopped,
+} from "./runtime-state.js";
 export type RuntimePollStatus = "idle" | "checking" | "error";
 export const RUNTIME_RUN_OUTCOMES = ["success", "failed", "stalled", "canceled"] as const;
 export type RuntimeRunOutcome = (typeof RUNTIME_RUN_OUTCOMES)[number];
@@ -300,8 +306,10 @@ export class SymphonyRuntime {
     do {
       await this.pollOnce({ dryRun: options.dryRun, waitForRuns: options.once });
       if (options.once) break;
-      await delay(this.workflow.settings.polling.intervalMs, () => isStopped(this.runtimePhase));
-    } while (!isStopped(this.runtimePhase));
+      await delay(this.workflow.settings.polling.intervalMs, () =>
+        isStopRequested(this.runtimePhase),
+      );
+    } while (!isStopRequested(this.runtimePhase));
   }
 
   stop(): void {

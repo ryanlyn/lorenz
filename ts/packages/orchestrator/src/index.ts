@@ -54,6 +54,11 @@ export class Orchestrator {
    * The legacy `state.running`/`state.claimed`/`state.retryAttempts` collections are
    * maintained in parallel during the migration period. Once all consumers read from
    * the FSM directly, the legacy collections can be removed.
+   *
+   * TODO(fsm-migration): Remove dual-write to legacy collections
+   * (`state.running`, `state.claimed`, `state.retryAttempts`) once snapshot() and
+   * eligibleIssues() read from the FSM. Target: next iteration after this FSM
+   * stabilizes (i.e., after the runtime integration tests pass without legacy reads).
    */
   private readonly slots = new Map<string, SlotState>();
 
@@ -207,7 +212,10 @@ export class Orchestrator {
 
     // Transition slot state -- UPDATE mutates the entry in place and returns
     // the same state reference, so slotState.entry remains valid after this call.
-    this.setSlotState(key, transitionSlot(slotState, { type: "UPDATE", update }, this.clock.now()));
+    this.setSlotState(
+      key,
+      transitionSlot(slotState, { type: "UPDATE", update, now: this.clock.now() }),
+    );
 
     // Handle orchestrator-level side effects not managed by slot state
     if (update.rateLimits !== undefined) this.state.rateLimits = update.rateLimits;
@@ -276,9 +284,10 @@ export class Orchestrator {
       this.state.claimed.delete(key);
     }
 
-    // Also cleanup any retry-phase slots for this issue
+    // Also cleanup any retry-phase slots for this issue.
+    // Uses issueIdFromSlotKey to stay coupled to the canonical slotKey format.
     const retryKeys = [...this.slots.entries()]
-      .filter(([key, s]) => key.startsWith(`${issueId}:`) && s.phase === "retrying")
+      .filter(([key, s]) => issueIdFromSlotKey(key) === issueId && s.phase === "retrying")
       .map(([key]) => key);
     for (const key of retryKeys) {
       const slotState = this.getSlotState(key);
@@ -339,13 +348,22 @@ export class Orchestrator {
 
   private releaseStaleClaimsForRetry(issueId: string): void {
     for (const key of [...this.state.claimed]) {
-      if (!key.startsWith(`${issueId}:`)) continue;
+      if (issueIdFromSlotKey(key) !== issueId) continue;
       // Use the slot FSM as the source of truth: if the slot is not in "running"
       // phase, the claim is stale and should be released.
       const slot = this.getSlotState(key);
       if (slot.phase !== "running") this.state.claimed.delete(key);
     }
   }
+}
+
+/**
+ * Extracts the issueId portion from a slot key produced by slotKey().
+ * Coupled to the `${issueId}:${slotIndex}` format defined in @symphony/dispatch.
+ */
+function issueIdFromSlotKey(key: string): string {
+  const sep = key.lastIndexOf(":");
+  return sep === -1 ? key : key.slice(0, sep);
 }
 
 export type { SlotState, SlotEvent } from "./slot-state.js";

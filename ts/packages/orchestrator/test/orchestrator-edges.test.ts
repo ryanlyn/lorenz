@@ -215,6 +215,33 @@ test("cleanupIssue — adds issue to completed set", () => {
   assert.equal(orchestrator.state.completed.has(issue.id), true);
 });
 
+test("cleanupIssue — transitions retry-phase slots to completed (FSM)", () => {
+  const settings = parseConfig({ agent: { ensemble_size: 2 } });
+  const orchestrator = new Orchestrator(settings);
+  const issue = makeIssue();
+
+  // Claim slot 0, finish with retry -> slot 0 enters retrying phase
+  orchestrator.claim(issue);
+  orchestrator.finish(issue.id, 0, true);
+  assert.equal(orchestrator.snapshot().retrying.length, 1);
+
+  // Claim slot 1 so it is in running phase
+  const secondClaim = orchestrator.claim(issue);
+  assert.ok(secondClaim);
+  assert.equal(orchestrator.snapshot().running.length, 1);
+
+  // cleanupIssue should transition BOTH slots (running + retrying) to completed
+  orchestrator.cleanupIssue(issue.id);
+  assert.equal(orchestrator.snapshot().running.length, 0);
+  assert.equal(orchestrator.snapshot().retrying.length, 0);
+  assert.equal(orchestrator.state.completed.has(issue.id), true);
+
+  // Attempting to claim after cleanup should still work (slot is completed in FSM,
+  // which is cleaned up from the Map, so a fresh claim on the same issue would be
+  // blocked by the completed set -- not by a stale FSM entry)
+  assert.equal(orchestrator.state.claimed.size, 0);
+});
+
 // --- snapshot ---
 
 test("snapshot — returns defensive copy (mutation does not affect state)", () => {
