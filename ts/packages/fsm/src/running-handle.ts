@@ -13,20 +13,7 @@ export interface RunResult {
 
 // --- RunningHandle (capability-scoped to one generation) ---
 
-export interface IRunningHandle {
-  readonly runId: string;
-  readonly key: string;
-  readonly slotIndex: number;
-  readonly issueId: string;
-  readonly controller: AbortController;
-  applyUpdate(update: AgentUpdate): void;
-  finish(result: RunResult): boolean;
-  fail(error: Error): boolean;
-  get isActive(): boolean;
-  get signal(): AbortSignal;
-}
-
-export class RunningHandle implements IRunningHandle {
+export class RunningHandle {
   readonly controller: AbortController;
 
   constructor(

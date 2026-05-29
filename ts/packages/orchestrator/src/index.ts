@@ -21,7 +21,7 @@ import type {
   UsageTotals,
 } from "@symphony/domain";
 import { systemClock, type ClockPort } from "@symphony/ports";
-import { SlotRegistry, RunningHandleImpl, type IRunningHandle } from "@symphony/fsm";
+import { SlotRegistry, RunningHandleImpl } from "@symphony/fsm";
 
 // --- Derived state view (backward-compatible interface) ---
 
@@ -48,7 +48,7 @@ export function createState(): OrchestratorState {
 }
 
 export interface ClaimResult extends RunningEntry {
-  handle: IRunningHandle;
+  handle: RunningHandleImpl;
   runId: string;
 }
 

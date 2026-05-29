@@ -25,7 +25,7 @@ import type {
   UsageTotals,
   WorkflowDefinition,
 } from "@symphony/domain";
-import type { IRunningHandle } from "@symphony/fsm";
+import type { RunningHandleImpl } from "@symphony/fsm";
 
 export type RuntimeRunner = (input: Parameters<typeof runAgentAttempt>[0]) => Promise<RunResult>;
 
@@ -206,7 +206,7 @@ export class SymphonyRuntime {
   private nextPollAt: string | null = null;
   private lastError: string | null = null;
   private readonly projection = new ProjectionActor();
-  private activeHandles = new Map<string, { runId: string; handle: IRunningHandle }>();
+  private activeHandles = new Map<string, { runId: string; handle: RunningHandleImpl }>();
   private startupCleanupDone = false;
   private nextRunNumber = 1;
   private pollInProgress: Promise<void> | null = null;
@@ -387,7 +387,7 @@ export class SymphonyRuntime {
     agentKind: AgentKind,
     runId: string,
     workerHost: string | null,
-    handle: IRunningHandle,
+    handle: RunningHandleImpl,
   ): Promise<void> {
     const startedAt = this.now().toISOString();
     try {
