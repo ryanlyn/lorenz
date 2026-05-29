@@ -21,6 +21,7 @@ import type {
   UsageTotals,
 } from "@symphony/domain";
 import { systemClock, type ClockPort } from "@symphony/ports";
+import { SlotRegistry } from "@symphony/fsm";
 
 export interface OrchestratorState {
   running: Map<string, RunningEntry>;
@@ -46,6 +47,7 @@ export function createState(): OrchestratorState {
 
 export class Orchestrator {
   readonly state: OrchestratorState;
+  readonly slotRegistry: SlotRegistry = new SlotRegistry();
 
   constructor(
     public settings: Settings,
@@ -149,6 +151,16 @@ export class Orchestrator {
     this.state.claimed.add(key);
     this.state.running.set(key, entry);
     this.state.retryAttempts.delete(issue.id);
+
+    // Dual-write: transition the slot in the FSM registry
+    this.slotRegistry.getOrCreate(key);
+    this.slotRegistry.transition(key, {
+      kind: "claim",
+      runId: key,
+      entry: entry as unknown as Record<string, unknown>,
+      handle: { runId: key, controller: new AbortController() },
+    });
+
     return entry;
   }
 
@@ -178,7 +190,8 @@ export class Orchestrator {
   }
 
   applyUpdate(issueId: string, slotIndex: number, update: AgentUpdate): void {
-    const entry = this.state.running.get(slotKey(issueId, slotIndex));
+    const key = slotKey(issueId, slotIndex);
+    const entry = this.state.running.get(key);
     if (!entry) return;
 
     entry.lastAgentEvent = update.type;
@@ -191,6 +204,9 @@ export class Orchestrator {
     if (update.type === "turn_completed") entry.turnCount += 1;
     if (update.rateLimits !== undefined) this.state.rateLimits = update.rateLimits;
     if (update.usage) this.applyUsageDelta(entry, update.usage);
+
+    // Dual-write: transition claimed->running or running self-loop
+    this.slotRegistry.transition(key, { kind: "agent_update", runId: key });
   }
 
   finish(
@@ -225,6 +241,14 @@ export class Orchestrator {
         workspacePath: entry.workspacePath,
         error,
       });
+      // Dual-write: transition to retrying (run_finished or run_failed)
+      this.slotRegistry.transition(key, { kind: "run_finished", runId: key });
+    } else {
+      // Dual-write: non-normal finish transitions to done via reconcile_terminal
+      this.slotRegistry.transition(key, {
+        kind: "reconcile_terminal",
+        reason: error ?? "abnormal",
+      });
     }
   }
 
@@ -233,6 +257,11 @@ export class Orchestrator {
       if (entry.issue.id === issueId) {
         this.state.running.delete(key);
         this.state.claimed.delete(key);
+        // Dual-write: transition to done
+        this.slotRegistry.transition(key, {
+          kind: "reconcile_terminal",
+          reason: "cleanup",
+        });
       }
     }
     this.state.retryAttempts.delete(issueId);

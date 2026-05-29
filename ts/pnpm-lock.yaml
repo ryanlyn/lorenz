@@ -1054,6 +1054,9 @@ importers:
       "@symphony/domain":
         specifier: workspace:*
         version: link:../domain
+      "@symphony/fsm":
+        specifier: workspace:*
+        version: link:../fsm
       "@symphony/issue":
         specifier: workspace:*
         version: link:../issue
