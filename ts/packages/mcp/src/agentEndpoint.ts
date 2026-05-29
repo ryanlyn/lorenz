@@ -1,9 +1,13 @@
 import { workerHostPool, type RemoteMcpTunnelLease } from "@symphony/worker-host-pool";
-import type { Settings } from "@symphony/domain";
+import type { Settings, TrackerKind } from "@symphony/domain";
 import type { McpServer } from "@agentclientprotocol/sdk";
 
 import { startClaudeMcpServer, type ObservabilityServerHandle } from "./server.js";
 import { issueMcpToken, revokeMcpToken } from "./auth.js";
+
+export function trackerMcpServerName(kind: TrackerKind | undefined): string {
+  return `symphony_${kind ?? "linear"}`;
+}
 
 export interface AgentMcpEndpointLease {
   url: string;
@@ -47,7 +51,7 @@ export async function acquireAgentMcpEndpoint(
       token,
       acpServer: () => ({
         type: "http",
-        name: "symphony_linear",
+        name: trackerMcpServerName(settings.tracker.kind),
         url: endpoint?.url ?? "",
         headers: [{ name: "Authorization", value: `Bearer ${token}` }],
       }),
@@ -67,11 +71,15 @@ export async function acquireAgentMcpEndpoint(
   }
 }
 
-export function mcpConfigContents(serverUrl: string, token: string): string {
+export function mcpConfigContents(
+  serverUrl: string,
+  token: string,
+  serverName = "symphony_linear",
+): string {
   return `${JSON.stringify(
     {
       mcpServers: {
-        symphony_linear: {
+        [serverName]: {
           type: "http",
           url: serverUrl,
           headers: {
