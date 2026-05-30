@@ -52,6 +52,9 @@ importers:
       "@symphony/linear-tracker":
         specifier: workspace:*
         version: link:packages/linear-tracker
+      "@symphony/local-tracker":
+        specifier: workspace:*
+        version: link:packages/local-tracker
       "@symphony/log-file":
         specifier: workspace:*
         version: link:packages/log-file
