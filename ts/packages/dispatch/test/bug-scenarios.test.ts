@@ -21,28 +21,31 @@ function makeSettings(overrides: Record<string, unknown> = {}) {
 }
 
 describe("Bug 1: Float priority treated as valid (S-022)", () => {
-  test("priority 2.5 should sort last (after priority 4)", () => {
-    const a = { ...makeIssue({ identifier: "A" }), priority: 2.5 };
-    const b = { ...makeIssue({ identifier: "B" }), priority: 4 };
+  test("normalizeIssue rejects float priority 2.5 (becomes null)", () => {
+    const issue = makeIssue({ identifier: "A", priority: 2.5 });
+    assert.equal(issue.priority, null);
+  });
+
+  test("float priority 2.5 sorts last (after priority 4)", () => {
+    const a = makeIssue({ identifier: "A", priority: 2.5 });
+    const b = makeIssue({ identifier: "B", priority: 4 });
     const sorted = sortForDispatch([a, b]);
     assert.equal(sorted[0]!.identifier, "B");
     assert.equal(sorted[1]!.identifier, "A");
   });
 
-  test("priority 1.5 should sort last (after priority 2)", () => {
-    const a = { ...makeIssue({ identifier: "A" }), priority: 1.5 };
-    const b = { ...makeIssue({ identifier: "B" }), priority: 2 };
+  test("float priority 1.5 sorts last (after priority 2)", () => {
+    const a = makeIssue({ identifier: "A", priority: 1.5 });
+    const b = makeIssue({ identifier: "B", priority: 2 });
     const sorted = sortForDispatch([a, b]);
-    // Correct: 1.5 is not an integer, should be invalid (MAX_SAFE_INTEGER), sorts after 2
     assert.equal(sorted[0]!.identifier, "B");
     assert.equal(sorted[1]!.identifier, "A");
   });
 
-  test("priority 3.5 should sort last (after priority 4)", () => {
-    const a = { ...makeIssue({ identifier: "A" }), priority: 3.5 };
-    const b = { ...makeIssue({ identifier: "B" }), priority: 4 };
+  test("float priority 3.5 sorts last (after priority 4)", () => {
+    const a = makeIssue({ identifier: "A", priority: 3.5 });
+    const b = makeIssue({ identifier: "B", priority: 4 });
     const sorted = sortForDispatch([a, b]);
-    // Correct: 3.5 is not an integer, should be invalid (MAX_SAFE_INTEGER), sorts after 4
     assert.equal(sorted[0]!.identifier, "B");
     assert.equal(sorted[1]!.identifier, "A");
   });
