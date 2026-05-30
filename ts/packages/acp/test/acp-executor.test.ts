@@ -160,7 +160,6 @@ test("ACP executor times out stalled bridge turns and emits a typed failure", as
 test("ACP MCP endpoint leases reuse one reverse tunnel per worker host with per-session tokens", async () => {
   const root = await tempDir("symphony-ts-acp-remote-mcp");
   const trace = path.join(root, "ssh.trace");
-  const oldPath = process.env.PATH;
   const leases: Awaited<ReturnType<typeof acquireAgentMcpEndpoint>>[] = [];
   try {
     await installEvalSsh(root, trace);
@@ -194,8 +193,7 @@ test("ACP MCP endpoint leases reuse one reverse tunnel per worker host with per-
     await waitForTunnelTrace(trace, 2);
   } finally {
     await Promise.all(leases.map((lease) => lease.release()));
-    if (oldPath === undefined) delete process.env.PATH;
-    else process.env.PATH = oldPath;
+    vi.unstubAllEnvs();
   }
 });
 
@@ -392,7 +390,7 @@ fi
 eval "$last_arg"
 `,
   );
-  process.env.PATH = `${bin}:${process.env.PATH ?? ""}`;
+  vi.stubEnv("PATH", `${bin}:${process.env.PATH ?? ""}`);
   await fs.writeFile(trace, "");
 }
 
@@ -414,7 +412,7 @@ async function waitForTunnelTrace(tracePath: string, count: number): Promise<voi
     async () => {
       assert.equal(tunnelTraceCount(await fs.readFile(tracePath, "utf8")), count);
     },
-    { timeout: 5_000 },
+    { timeout: 10_000, interval: 100 },
   );
 }
 

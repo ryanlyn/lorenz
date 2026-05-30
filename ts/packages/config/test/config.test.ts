@@ -360,11 +360,10 @@ test("config rejects empty strings and booleans for typed fields", () => {
   assert.throws(() => parseConfig({ tracker: { kind: "" } }), /unsupported tracker.kind/);
 });
 
-test("stall timeout zero and workflow logging extension match Elixir config semantics", () => {
+test("stall_timeout_ms=0 is accepted as a valid value at top-level and in status overrides", () => {
   const settings = parseConfig({
     codex: { stall_timeout_ms: 0 },
     claude: { stall_timeout_ms: 0 },
-    logging: { log_file: "tmp/custom/symphony.log" },
     status_overrides: {
       Todo: {
         codex: { stall_timeout_ms: 0 },
@@ -375,11 +374,18 @@ test("stall timeout zero and workflow logging extension match Elixir config sema
 
   assert.equal(settings.codex.stallTimeoutMs, 0);
   assert.equal(settings.claude.stallTimeoutMs, 0);
-  assert.equal(settings.logging.logFile, "./log/symphony.log");
 
   const effective = settingsForIssueState(settings, "Todo");
   assert.equal(effective.codex.stallTimeoutMs, 0);
   assert.equal(effective.claude.stallTimeoutMs, 0);
+});
+
+test("config ignores custom logging.log_file and uses default path", () => {
+  const settings = parseConfig({
+    logging: { log_file: "tmp/custom/symphony.log" },
+  });
+
+  assert.equal(settings.logging.logFile, "./log/symphony.log");
 });
 
 test("status overrides reject legacy per-state map and unknown sections", () => {

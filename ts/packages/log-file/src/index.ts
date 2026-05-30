@@ -35,6 +35,11 @@ export function defaultLogFile(root = process.cwd()): string {
 
 const loggers = new Map<string, Promise<Logger>>();
 
+/** @internal Test-only: clears the module-level loggers Map to ensure test isolation. */
+export function resetLogFileState(): void {
+  loggers.clear();
+}
+
 export async function configureLogFile(
   logFile: string,
   options: LogFileOptions = {},

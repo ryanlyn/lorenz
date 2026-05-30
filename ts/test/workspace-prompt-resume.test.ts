@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
-import { test } from "vitest";
+import { test, vi } from "vitest";
 import {
   buildPrompt,
   continuationPrompt,
@@ -189,45 +189,43 @@ test("remote workspace creation and removal use SSH hooks and validate remote pa
   const root = await tempDir("symphony-ts-remote-workspace");
   const trace = path.join(root, "ssh.trace");
   const remoteHome = path.join(root, "remote-home");
-  const oldPath = process.env.PATH;
 
-  try {
-    const canonicalRemoteHome = await installEvalSsh(root, trace, remoteHome);
-    const marker = path.join(root, "remote-before-remove.log");
-    const settings = parseConfig({
-      workspace: { root: "~/workspaces" },
-      worker: { ssh_hosts: ["worker-01:2200"], ssh_timeout_ms: 5_000 },
-      hooks: {
-        after_create: "echo remote-after > after_create.log",
-        before_remove: `echo remote-before > ${shellEscape(marker)}`,
-      },
-    });
+  const { canonicalRemoteHome, binDir } = await installEvalSsh(root, trace, remoteHome);
+  vi.stubEnv("PATH", `${binDir}:${process.env.PATH ?? ""}`);
 
-    const workspace = await createWorkspaceForIssue(settings, "MT-REMOTE", {
-      workerHost: "worker-01:2200",
-    });
-    assert.equal(workspace, path.join(canonicalRemoteHome, "workspaces", "MT-REMOTE"));
-    assert.equal(
-      (await fs.readFile(path.join(workspace, "after_create.log"), "utf8")).trim(),
-      "remote-after",
-    );
+  const marker = path.join(root, "remote-before-remove.log");
+  const settings = parseConfig({
+    workspace: { root: "~/workspaces" },
+    worker: { ssh_hosts: ["worker-01:2200"], ssh_timeout_ms: 5_000 },
+    hooks: {
+      after_create: "echo remote-after > after_create.log",
+      before_remove: `echo remote-before > ${shellEscape(marker)}`,
+    },
+  });
 
-    await removeRemoteWorkspace(settings, workspace, "worker-01:2200");
-    assert.equal(await fileExists(workspace), false);
-    assert.equal((await fs.readFile(marker, "utf8")).trim(), "remote-before");
+  const workspace = await createWorkspaceForIssue(settings, "MT-REMOTE", {
+    workerHost: "worker-01:2200",
+  });
+  assert.equal(workspace, path.join(canonicalRemoteHome, "workspaces", "MT-REMOTE"));
+  assert.equal(
+    (await fs.readFile(path.join(workspace, "after_create.log"), "utf8")).trim(),
+    "remote-after",
+  );
 
-    await assert.rejects(
-      () => removeRemoteWorkspace(settings, "/tmp/outside-root", "worker-01:2200"),
-      /workspace outside root/,
-    );
-    const traceText = await fs.readFile(trace, "utf8");
-    assert.match(traceText, /-T -p 2200 worker-01 bash -lc/);
-    assert.match(traceText, /printf "%s\\n" "\$HOME"/);
-    assert.match(traceText, /rm -rf/);
-  } finally {
-    if (oldPath === undefined) delete process.env.PATH;
-    else process.env.PATH = oldPath;
-  }
+  await removeRemoteWorkspace(settings, workspace, "worker-01:2200");
+  assert.equal(await fileExists(workspace), false);
+  assert.equal((await fs.readFile(marker, "utf8")).trim(), "remote-before");
+
+  await assert.rejects(
+    () => removeRemoteWorkspace(settings, "/tmp/outside-root", "worker-01:2200"),
+    /workspace outside root/,
+  );
+  const traceText = await fs.readFile(trace, "utf8");
+  assert.match(traceText, /-T -p 2200 worker-01 bash -lc/);
+  assert.match(traceText, /printf "%s\\n" "\$HOME"/);
+  assert.match(traceText, /rm -rf/);
+
+  vi.unstubAllEnvs();
 });
 
 test("agent attempts run workspace hooks at lifecycle boundaries and tolerate after_run failures", async () => {
@@ -377,7 +375,6 @@ test("remote agent attempts run hooks and persist resume state over SSH", async 
   const remoteHome = path.join(root, "remote-home");
   const fakeCodex = path.join(root, "fake-codex.js");
   const hookLog = path.join(root, "remote-hooks.log");
-  const oldPath = process.env.PATH;
 
   await writeExecutable(
     fakeCodex,
@@ -396,90 +393,85 @@ rl.on("line", (line) => {
 `,
   );
 
-  try {
-    const canonicalRemoteHome = await installEvalSsh(root, trace, remoteHome);
-    const settings = parseConfig({
-      workspace: { root: "~/workspaces" },
-      worker: { ssh_hosts: ["worker-01:2200"], ssh_timeout_ms: 5_000 },
-      hooks: {
-        after_create: `git init -q && echo after_create >> ${shellEscape(hookLog)}`,
-        before_run: `echo before_run >> ${shellEscape(hookLog)}`,
-        after_run: `echo after_run >> ${shellEscape(hookLog)}`,
-      },
-      codex: { command: `${fakeCodex} app-server`, turn_timeout_ms: 5_000 },
-      agent: { max_turns: 1 },
-    });
-    const workflow = {
-      path: path.join(root, "WORKFLOW.md"),
-      config: {},
-      promptTemplate: "Issue {{ issue.identifier }}",
-      settings,
-    };
+  const { canonicalRemoteHome, binDir } = await installEvalSsh(root, trace, remoteHome);
+  vi.stubEnv("PATH", `${binDir}:${process.env.PATH ?? ""}`);
 
-    const result = await runAgentAttempt({
-      issue: sampleIssue,
-      workflow,
-      workerHost: "worker-01:2200",
-    });
+  const settings = parseConfig({
+    workspace: { root: "~/workspaces" },
+    worker: { ssh_hosts: ["worker-01:2200"], ssh_timeout_ms: 5_000 },
+    hooks: {
+      after_create: `git init -q && echo after_create >> ${shellEscape(hookLog)}`,
+      before_run: `echo before_run >> ${shellEscape(hookLog)}`,
+      after_run: `echo after_run >> ${shellEscape(hookLog)}`,
+    },
+    codex: { command: `${fakeCodex} app-server`, turn_timeout_ms: 5_000 },
+    agent: { max_turns: 1 },
+  });
+  const workflow = {
+    path: path.join(root, "WORKFLOW.md"),
+    config: {},
+    promptTemplate: "Issue {{ issue.identifier }}",
+    settings,
+  };
 
-    assert.equal(
-      result.workspace,
-      path.join(canonicalRemoteHome, "workspaces", sampleIssue.identifier),
-    );
-    assert.equal(result.turnCount, 1);
-    assert.deepEqual((await fs.readFile(hookLog, "utf8")).trim().split("\n"), [
-      "after_create",
-      "before_run",
-      "after_run",
-    ]);
+  const result = await runAgentAttempt({
+    issue: sampleIssue,
+    workflow,
+    workerHost: "worker-01:2200",
+  });
 
-    const resume = await readResumeState(result.workspace, "worker-01:2200");
-    assert.equal(resume.status, "ok");
-    assert.equal(resume.status === "ok" && resume.state.workerHost, "worker-01:2200");
-    assert.equal(
-      resume.status === "ok" &&
-        resumeStateMatches(resume.state, {
-          agentKind: "codex",
-          issue: sampleIssue,
-          workspacePath: result.workspace,
-          workerHost: "worker-01:2200",
-        }),
-      true,
-    );
+  assert.equal(
+    result.workspace,
+    path.join(canonicalRemoteHome, "workspaces", sampleIssue.identifier),
+  );
+  assert.equal(result.turnCount, 1);
+  assert.deepEqual((await fs.readFile(hookLog, "utf8")).trim().split("\n"), [
+    "after_create",
+    "before_run",
+    "after_run",
+  ]);
 
-    const traceText = await fs.readFile(trace, "utf8");
-    assert.match(traceText, /git -C/);
-    assert.match(traceText, /symphony\/resume.json/);
-  } finally {
-    if (oldPath === undefined) delete process.env.PATH;
-    else process.env.PATH = oldPath;
-  }
+  const resume = await readResumeState(result.workspace, "worker-01:2200");
+  assert.equal(resume.status, "ok");
+  assert.equal(resume.status === "ok" && resume.state.workerHost, "worker-01:2200");
+  assert.equal(
+    resume.status === "ok" &&
+      resumeStateMatches(resume.state, {
+        agentKind: "codex",
+        issue: sampleIssue,
+        workspacePath: result.workspace,
+        workerHost: "worker-01:2200",
+      }),
+    true,
+  );
+
+  const traceText = await fs.readFile(trace, "utf8");
+  assert.match(traceText, /git -C/);
+  assert.match(traceText, /symphony\/resume.json/);
+
+  vi.unstubAllEnvs();
 });
 
 test("remote resume-state reads honor the configured SSH timeout", async () => {
   const root = await tempDir("symphony-ts-remote-resume-timeout");
   const bin = path.join(root, "bin");
-  const oldPath = process.env.PATH;
 
-  try {
-    await fs.mkdir(bin, { recursive: true });
-    await writeExecutable(
-      path.join(bin, "ssh"),
-      `#!/bin/sh
+  await fs.mkdir(bin, { recursive: true });
+  await writeExecutable(
+    path.join(bin, "ssh"),
+    `#!/bin/sh
 sleep 1
 `,
-    );
-    process.env.PATH = `${bin}:${process.env.PATH ?? ""}`;
+  );
+  vi.stubEnv("PATH", `${bin}:${process.env.PATH ?? ""}`);
 
-    const startedAt = Date.now();
-    const result = await readResumeState("/remote/workspace", "worker-01:2200", 20);
+  const startedAt = Date.now();
+  const result = await readResumeState("/remote/workspace", "worker-01:2200", 20);
 
-    assert.equal(result.status, "unavailable");
-    assert.ok(Date.now() - startedAt < 500);
-  } finally {
-    if (oldPath === undefined) delete process.env.PATH;
-    else process.env.PATH = oldPath;
-  }
+  assert.equal(result.status, "unavailable");
+  assert.ok(Date.now() - startedAt < 500);
+
+  vi.unstubAllEnvs();
 });
 
 test("agent attempts warn and skip invalid resume state files", async () => {
@@ -665,7 +657,11 @@ async function fileExists(filePath: string): Promise<boolean> {
   }
 }
 
-async function installEvalSsh(root: string, trace: string, remoteHome: string): Promise<string> {
+async function installEvalSsh(
+  root: string,
+  trace: string,
+  remoteHome: string,
+): Promise<{ canonicalRemoteHome: string; binDir: string }> {
   const bin = path.join(root, "bin");
   await fs.mkdir(bin, { recursive: true });
   await fs.mkdir(remoteHome, { recursive: true });
@@ -685,7 +681,6 @@ export HOME=${shellEscape(canonicalRemoteHome)}
 eval "$last_arg"
 `,
   );
-  process.env.PATH = `${bin}:${process.env.PATH ?? ""}`;
   await fs.writeFile(trace, "");
-  return canonicalRemoteHome;
+  return { canonicalRemoteHome, binDir: bin };
 }

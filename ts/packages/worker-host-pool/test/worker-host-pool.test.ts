@@ -182,30 +182,36 @@ test("port recycling returns freed ports in sorted order", () => {
   assert.equal(lease5.remotePort, 46_001);
 });
 
-test("concurrent acquire/release maintains consistent count", async () => {
+test("rapid sequential acquire/release of many workers maintains consistent port allocation", () => {
   setupMock();
   const pool = new WorkerHostPool();
 
-  // Simulate concurrent acquire operations for the same host
-  const results = await Promise.all(
-    Array.from({ length: 10 }, (_, i) =>
-      Promise.resolve().then(() => pool.acquireRemoteMcpTunnel(`worker-${i}`, "127.0.0.1", 3000)),
-    ),
+  // Acquire 10 different workers in quick succession
+  const results = Array.from({ length: 10 }, (_, i) =>
+    pool.acquireRemoteMcpTunnel(`worker-${i}`, "127.0.0.1", 3000),
   );
 
-  // Each should get a unique port
+  // Each should get a unique, sequentially-allocated port
   const ports = results.map((r) => r.remotePort);
   const uniquePorts = new Set(ports);
   assert.equal(uniquePorts.size, 10);
+  for (let i = 0; i < 10; i++) {
+    assert.equal(results[i]!.remotePort, 46_000 + i);
+    assert.equal(results[i]!.workerHost, `worker-${i}`);
+  }
 
-  // Release all
-  await Promise.all(
-    results.map((r) => Promise.resolve().then(() => pool.releaseRemoteMcpTunnel(r.workerHost))),
-  );
+  // Release all workers
+  for (const r of results) {
+    pool.releaseRemoteMcpTunnel(r.workerHost);
+  }
 
   // All ports recycled — next acquire should get lowest recycled port
   const newLease = pool.acquireRemoteMcpTunnel("new-worker", "127.0.0.1", 3000);
   assert.equal(newLease.remotePort, 46_000);
+
+  // Verify a second acquire gets the next recycled port (46001), not a fresh one
+  const newLease2 = pool.acquireRemoteMcpTunnel("new-worker-2", "127.0.0.1", 3000);
+  assert.equal(newLease2.remotePort, 46_001);
 });
 
 test("tunnel close event triggers cleanup and port recycling", () => {

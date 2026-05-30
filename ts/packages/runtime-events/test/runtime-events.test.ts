@@ -10,7 +10,6 @@ import type {
   RuntimeEvent,
   RuntimeRetryEntry,
   RuntimeRunHistoryEntry,
-  RuntimeRunningEntry,
   RuntimeSnapshot,
 } from "@symphony/runtime-events";
 
@@ -228,35 +227,57 @@ test("RuntimeSnapshot recentEvents preserves event ordering through serializatio
   assert.equal(roundTripped.recentEvents[2].at, "2026-05-26T00:02:00.000Z");
 });
 
-test("RuntimeBlockedEntry reason field is constrained to known DispatchBlockReason values", () => {
-  // Verify that all three known block reasons produce valid entries
-  const reasons: DispatchBlockEntry["reason"][] = [
-    "global_concurrency_cap",
-    "local_concurrency_cap",
-    "worker_host_capacity",
-  ];
+test("RuntimeBlockedEntry is structurally identical to DispatchBlockEntry (type alias)", () => {
+  // RuntimeBlockedEntry is declared as `type RuntimeBlockedEntry = DispatchBlockEntry`.
+  // Verify the contract: any DispatchBlockEntry is assignable to RuntimeBlockedEntry and vice versa,
+  // and the reason field exhaustively covers the DispatchBlockReason union.
 
-  const entries: RuntimeBlockedEntry[] = reasons.map((reason) => ({
-    issueId: `issue-${reason}`,
-    identifier: `MT-${reason}`,
+  // Build one entry per reason, proving TypeScript accepts each literal
+  const global: RuntimeBlockedEntry = {
+    issueId: "i1",
+    identifier: "MT-1",
     state: "Todo",
-    reason,
-  }));
+    reason: "global_concurrency_cap",
+  };
+  const local: RuntimeBlockedEntry = {
+    issueId: "i2",
+    identifier: "MT-2",
+    state: "InProgress",
+    reason: "local_concurrency_cap",
+  };
+  const worker: RuntimeBlockedEntry = {
+    issueId: "i3",
+    identifier: "MT-3",
+    state: "Todo",
+    reason: "worker_host_capacity",
+  };
 
-  // Verify each entry's reason is one of the known values
-  for (const entry of entries) {
-    assert.ok(reasons.includes(entry.reason));
+  // Exhaustive switch proves we handle every DispatchBlockReason variant at compile time.
+  // If a new reason is added to DispatchBlockReason, this test will fail to compile.
+  function reasonLabel(entry: RuntimeBlockedEntry): string {
+    switch (entry.reason) {
+      case "global_concurrency_cap":
+        return "global";
+      case "local_concurrency_cap":
+        return "local";
+      case "worker_host_capacity":
+        return "worker";
+      default: {
+        const _exhaustive: never = entry.reason;
+        throw new Error(`unexpected reason: ${_exhaustive}`);
+      }
+    }
   }
 
-  // Verify entries are distinct (not sharing references)
-  assert.notEqual(entries[0].reason, entries[1].reason);
-  assert.notEqual(entries[1].reason, entries[2].reason);
+  assert.equal(reasonLabel(global), "global");
+  assert.equal(reasonLabel(local), "local");
+  assert.equal(reasonLabel(worker), "worker");
 
-  // RuntimeBlockedEntry is a type alias for DispatchBlockEntry - verify assignment compatibility
-  const asDispatch: DispatchBlockEntry = entries[0];
+  // Verify bidirectional assignment: RuntimeBlockedEntry === DispatchBlockEntry
+  const asDispatch: DispatchBlockEntry = global;
   const asBlocked: RuntimeBlockedEntry = asDispatch;
-  assert.equal(asBlocked.issueId, asDispatch.issueId);
-  assert.equal(asBlocked.reason, asDispatch.reason);
+  assert.equal(asDispatch.reason, asBlocked.reason);
+  assert.equal(asDispatch.issueId, asBlocked.issueId);
 });
 
 test("RuntimeBlockedEntry workerHost is optional and defaults to undefined when omitted", () => {
@@ -296,22 +317,27 @@ test("RuntimeBlockedEntry workerHost is optional and defaults to undefined when 
   assert.equal(serializedWith.workerHost, "worker-1.local");
 });
 
-test("RuntimeRetryEntry attempt must be a positive integer", () => {
-  const retry: RuntimeRetryEntry = {
-    issueId: "issue-3",
-    identifier: "MT-3",
-    attempt: 1,
-    dueAt: "2026-05-26T02:00:00.000Z",
-  };
+test("RuntimeRetryEntry serialization round-trip preserves numeric attempt without coercion", () => {
+  // Verify that the numeric `attempt` field survives JSON serialization without being
+  // coerced to a string or dropped -- this matters because the runtime snapshot is
+  // serialized over the wire (HTTP API / TUI refresh) and consumers rely on numeric type.
+  const retries: RuntimeRetryEntry[] = [
+    { issueId: "issue-1", identifier: "MT-1", attempt: 1, dueAt: "2026-05-26T00:00:00.000Z" },
+    { issueId: "issue-2", identifier: "MT-2", attempt: 5, dueAt: "2026-05-26T01:00:00.000Z" },
+  ];
 
-  // attempt should be a positive integer
-  assert.ok(Number.isInteger(retry.attempt));
-  assert.ok(retry.attempt > 0);
+  const parsed = JSON.parse(JSON.stringify(retries));
 
-  // dueAt should be a valid ISO string that can be parsed as a date
-  const parsed = new Date(retry.dueAt);
-  assert.ok(!isNaN(parsed.getTime()));
-  assert.equal(parsed.toISOString(), retry.dueAt);
+  // attempt must remain a number (not stringified) after round-trip
+  assert.equal(typeof parsed[0].attempt, "number");
+  assert.equal(typeof parsed[1].attempt, "number");
+  assert.equal(parsed[0].attempt, 1);
+  assert.equal(parsed[1].attempt, 5);
+
+  // dueAt must remain a string (ISO-8601) -- not converted to a Date object
+  assert.equal(typeof parsed[0].dueAt, "string");
+  assert.equal(parsed[0].dueAt, "2026-05-26T00:00:00.000Z");
+  assert.equal(parsed[1].dueAt, "2026-05-26T01:00:00.000Z");
 });
 
 test("RuntimeRetryEntry optional fields serialize correctly across the JSON boundary", () => {
@@ -355,29 +381,79 @@ test("RuntimeRetryEntry optional fields serialize correctly across the JSON boun
   assert.equal(fullParsed.attempt, 3);
 });
 
-test("RuntimeRunningEntry usageTotals totalTokens equals inputTokens + outputTokens by convention", () => {
-  // While not enforced at the type level, the contract is that totalTokens = input + output
-  // This test documents and verifies that convention
-  const running: RuntimeRunningEntry = {
-    issueId: "issue-2",
-    issueIdentifier: "MT-2",
-    title: "Deploy the service",
-    state: "InProgress",
-    slotIndex: 0,
-    ensembleSize: 1,
-    agentKind: "claude",
-    turnCount: 5,
-    startedAt: "2026-05-26T01:00:00.000Z",
+test("RuntimeRunningEntry usageTotals fields survive snapshot serialization with correct types", () => {
+  // The RuntimeSnapshot is serialized to JSON for the HTTP status endpoint and TUI refresh.
+  // This test verifies that usageTotals fields retain their numeric type and that a snapshot
+  // with multiple running entries produces independently-typed usage objects (no shared refs).
+  const snapshot: RuntimeSnapshot = {
+    appStatus: "running",
+    workflowPath: "/workflow.yaml",
+    poll: {
+      status: "idle",
+      candidates: 0,
+      eligible: 0,
+      lastPollAt: null,
+      nextPollAt: null,
+      lastError: null,
+    },
+    running: [
+      {
+        issueId: "issue-1",
+        issueIdentifier: "MT-1",
+        title: "First task",
+        state: "InProgress",
+        slotIndex: 0,
+        ensembleSize: 1,
+        agentKind: "claude",
+        turnCount: 3,
+        startedAt: "2026-05-26T00:00:00.000Z",
+        usageTotals: { inputTokens: 150, outputTokens: 250, totalTokens: 400, secondsRunning: 30 },
+      },
+      {
+        issueId: "issue-2",
+        issueIdentifier: "MT-2",
+        title: "Second task",
+        state: "InProgress",
+        slotIndex: 0,
+        ensembleSize: 1,
+        agentKind: "codex",
+        turnCount: 1,
+        startedAt: "2026-05-26T00:01:00.000Z",
+        usageTotals: { inputTokens: 0, outputTokens: 0, totalTokens: 0, secondsRunning: 0 },
+      },
+    ],
+    retrying: [],
+    blocked: [],
+    runHistory: [],
     usageTotals: { inputTokens: 150, outputTokens: 250, totalTokens: 400, secondsRunning: 30 },
+    rateLimits: null,
+    logFile: null,
+    recentEvents: [],
   };
 
-  assert.equal(
-    running.usageTotals.totalTokens,
-    running.usageTotals.inputTokens + running.usageTotals.outputTokens,
-  );
-  assert.ok(running.usageTotals.secondsRunning >= 0);
-  assert.ok(running.usageTotals.inputTokens >= 0);
-  assert.ok(running.usageTotals.outputTokens >= 0);
+  const parsed = JSON.parse(JSON.stringify(snapshot));
+
+  // Per-entry usageTotals fields must be numbers after round-trip
+  assert.equal(typeof parsed.running[0].usageTotals.inputTokens, "number");
+  assert.equal(typeof parsed.running[0].usageTotals.outputTokens, "number");
+  assert.equal(typeof parsed.running[0].usageTotals.totalTokens, "number");
+  assert.equal(typeof parsed.running[0].usageTotals.secondsRunning, "number");
+
+  // Values must match the originals
+  assert.equal(parsed.running[0].usageTotals.inputTokens, 150);
+  assert.equal(parsed.running[0].usageTotals.outputTokens, 250);
+  assert.equal(parsed.running[0].usageTotals.totalTokens, 400);
+  assert.equal(parsed.running[0].usageTotals.secondsRunning, 30);
+
+  // Zero-value usageTotals must not be dropped or coerced
+  assert.equal(parsed.running[1].usageTotals.inputTokens, 0);
+  assert.equal(parsed.running[1].usageTotals.outputTokens, 0);
+  assert.equal(parsed.running[1].usageTotals.totalTokens, 0);
+  assert.equal(parsed.running[1].usageTotals.secondsRunning, 0);
+
+  // Aggregate usageTotals at the snapshot level must also survive
+  assert.equal(parsed.usageTotals.inputTokens, 150);
+  assert.equal(parsed.usageTotals.totalTokens, 400);
 });
 
 test("RuntimeSnapshot arrays can hold heterogeneous entries simultaneously", () => {

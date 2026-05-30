@@ -256,20 +256,21 @@ test("issueHasOpenBlockers — non-unstarted issues never blocked", () => {
 });
 
 test("issueHasOpenBlockers — all-terminal blockers do not block", () => {
+  const terminalStates = ["Done", "Closed", "Cancelled"];
   fc.assert(
     fc.property(
       fc.array(
         fc.record({
           id: fc.constant("b1"),
           identifier: fc.constant("B-1"),
-          state: fc.constantFrom("Done", "Closed", "Cancelled"),
+          state: fc.constantFrom(...terminalStates),
           stateType: fc.constant(null as string | null),
         }),
         { minLength: 1, maxLength: 3 },
       ),
       (blockers) => {
         const issue = issueWith({ state: "Todo", stateType: "unstarted", blockers });
-        const settings = makeSettings();
+        const settings = makeSettings({ terminalStates });
         assert.ok(!issueHasOpenBlockers(issue, settings));
       },
     ),
@@ -331,12 +332,21 @@ test("shouldDispatchIssue — concurrency cap blocks dispatch", () => {
 });
 
 test("dispatchBlockReason — null iff shouldDispatch would be true (given unclaimed slot)", () => {
+  // Terminal states that must be excluded from the generated issue state to ensure
+  // the issue passes the issueIsActive check (which requires state in activeStates
+  // AND state NOT in terminalStates).
+  const terminalStates = ["Done", "Cancelled", "Canceled", "Closed", "Duplicate"];
+
   const arbTestIssue = (): fc.Arbitrary<Issue> =>
     fc.record({
       id: fc.string({ minLength: 1, maxLength: 15 }),
       identifier: fc.string({ minLength: 1, maxLength: 10 }),
       title: fc.string({ minLength: 1, maxLength: 20 }),
-      state: fc.string({ minLength: 1, maxLength: 15 }),
+      state: fc
+        .string({ minLength: 1, maxLength: 15 })
+        .filter(
+          (s) => !terminalStates.some((t) => t.trim().toLowerCase() === s.trim().toLowerCase()),
+        ),
       stateType: fc.option(fc.constantFrom("unstarted", "started", "completed", "cancelled"), {
         nil: null,
       }),
@@ -357,7 +367,10 @@ test("dispatchBlockReason — null iff shouldDispatch would be true (given uncla
 
   fc.assert(
     fc.property(arbTestIssue(), (issue) => {
-      const settings = makeSettings({ activeStates: ["Todo", "In Progress", issue.state] });
+      const settings = makeSettings({
+        activeStates: ["Todo", "In Progress", issue.state],
+        terminalStates,
+      });
       // Use empty claimedSlots so the slot-claiming logic in shouldDispatchIssue
       // does not reject (since dispatchBlockReason does not check slots)
       const state = { runningCount: 0, claimedSlots: new Set<string>() };

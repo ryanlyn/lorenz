@@ -39,6 +39,11 @@ const validRuntimeEvent: RuntimeEvent = {
 };
 const validSessionUpdate: SessionUpdate = { kind: "turn_completed", message: "completed" };
 
+// Compile-time type checks below rely on `tsc --noEmit` (run as part of `mise run check`)
+// to detect regressions. If the test runner bypasses type checking (e.g. esbuild/swc transform),
+// these @ts-expect-error annotations still serve as documentation of the type constraints.
+// The runtime assertions in the test cases below provide a secondary safety net.
+
 // @ts-expect-error Agent updates must use the canonical event vocabulary.
 const invalidAgentUpdate: AgentUpdate = { type: "event" };
 const invalidRuntimeEvent: RuntimeEvent = {
@@ -132,6 +137,20 @@ test("typed fixture values are accepted by their respective runtime arrays", () 
   assert.ok(
     issueFixture.stateType !== undefined && issueStateTypes.includes(issueFixture.stateType),
   );
+
+  // Exhaustiveness: verify array lengths match expected union member counts.
+  // If a value is added to or removed from the array without updating the type,
+  // the length assertion fails, catching drift that single-value includes checks miss.
+  assert.equal(AGENT_UPDATE_TYPES.length, 28, "AGENT_UPDATE_TYPES length mismatch");
+  assert.equal(CODEX_SANDBOX_MODES.length, 3, "CODEX_SANDBOX_MODES length mismatch");
+  assert.equal(SESSION_UPDATE_KINDS.length, 9, "SESSION_UPDATE_KINDS length mismatch");
+  assert.equal(ISSUE_STATE_TYPES.length, 6, "ISSUE_STATE_TYPES length mismatch");
+  // RUNTIME_EVENT_TYPES = AGENT_UPDATE_TYPES + runtime-only entries
+  assert.equal(
+    RUNTIME_EVENT_TYPES.length,
+    AGENT_UPDATE_TYPES.length + 20,
+    "RUNTIME_EVENT_TYPES should be AGENT_UPDATE_TYPES plus 20 runtime-only events",
+  );
 });
 
 test("CODEX_APPROVAL_POLICY_NAMES covers all expected security policies", () => {
@@ -163,4 +182,35 @@ test("ISSUE_STATE_TYPES covers all tracker state buckets", () => {
   assert.ok(types.includes("canceled"));
   assert.ok(types.includes("triage"));
   assert.equal(ISSUE_STATE_TYPES.length, 6);
+});
+
+test("runtime arrays reject values outside the canonical vocabulary", () => {
+  // Runtime complement to the compile-time @ts-expect-error checks above.
+  // Ensures invalid values are not present even if the type checker is bypassed.
+  const agentUpdateTypes = AGENT_UPDATE_TYPES as readonly string[];
+  assert.ok(
+    !agentUpdateTypes.includes("event"),
+    "bogus 'event' should not be in AGENT_UPDATE_TYPES",
+  );
+
+  const runtimeEventTypes = RUNTIME_EVENT_TYPES as readonly string[];
+  assert.ok(
+    !runtimeEventTypes.includes("event"),
+    "bogus 'event' should not be in RUNTIME_EVENT_TYPES",
+  );
+
+  const sessionKinds = SESSION_UPDATE_KINDS as readonly string[];
+  assert.ok(!sessionKinds.includes("event"), "bogus 'event' should not be in SESSION_UPDATE_KINDS");
+
+  const issueStateTypes = ISSUE_STATE_TYPES as readonly string[];
+  assert.ok(
+    !issueStateTypes.includes("needs-review"),
+    "bogus 'needs-review' should not be in ISSUE_STATE_TYPES",
+  );
+
+  const sandboxModes = CODEX_SANDBOX_MODES as readonly string[];
+  assert.ok(
+    !sandboxModes.includes("workspaceWrite"),
+    "bogus 'workspaceWrite' should not be in CODEX_SANDBOX_MODES",
+  );
 });

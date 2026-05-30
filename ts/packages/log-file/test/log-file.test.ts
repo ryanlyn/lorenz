@@ -1,11 +1,15 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
-import { test, vi } from "vitest";
-import { appendLogEvent, configureLogFile, defaultLogFile } from "@symphony/cli";
+import { afterEach, test, vi } from "vitest";
+import { appendLogEvent, configureLogFile, defaultLogFile, resetLogFileState } from "@symphony/cli";
 
 import { assert } from "../../../test/assert.js";
 import { tempDir } from "../../../test/helpers.js";
+
+afterEach(() => {
+  resetLogFileState();
+});
 
 test("log file configuration uses pino-roll with a stable Elixir-compatible path", async () => {
   const root = await tempDir("symphony-ts-log-file");
@@ -95,8 +99,29 @@ test("log file configuration delegates size rotation to pino-roll", async () => 
 
   const files = await fs.readdir(path.dirname(logFile));
   const numberedLogs = files.filter((file) => /^symphony\.log\.\d+$/.test(file));
-  assert.ok(numberedLogs.length <= maxFiles + 1); // we always keep one old log + one active log file
-  assert.equal(numberedLogs.includes("symphony.log.1"), false);
+  // pruneRollFilesSync keeps at most maxFiles+1 numbered roll files (keepCount).
+  // With maxFiles=1, that means at most 2 numbered files remain.
+  assert.equal(
+    numberedLogs.length <= maxFiles + 1,
+    true,
+    `Expected at most ${maxFiles + 1} numbered log files, got ${numberedLogs.length}: ${numberedLogs.join(", ")}`,
+  );
+  // The stale pre-existing files (symphony.log.1, .2, .3) must have been pruned.
+  assert.equal(
+    numberedLogs.includes("symphony.log.1"),
+    false,
+    "stale symphony.log.1 should be pruned",
+  );
+  assert.equal(
+    numberedLogs.includes("symphony.log.2"),
+    false,
+    "stale symphony.log.2 should be pruned",
+  );
+  assert.equal(
+    numberedLogs.includes("symphony.log.3"),
+    false,
+    "stale symphony.log.3 should be pruned",
+  );
   assert.equal((await fs.lstat(logFile)).isSymbolicLink(), true);
   assert.match(await fs.readFile(logFile, "utf8"), /"event":"after_roll"/);
 });

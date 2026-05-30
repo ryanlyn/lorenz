@@ -1,4 +1,4 @@
-import { test } from "vitest";
+import { test, vi } from "vitest";
 import {
   issueMcpToken,
   Orchestrator,
@@ -197,16 +197,19 @@ test("Claude MCP endpoint authorizes bearer tokens and executes Linear tools", a
   const server = await startObservabilityServer(runtime, { host: "127.0.0.1", port: 0 });
   const token = issueMcpToken();
   const originalFetch = globalThis.fetch;
-  globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+  const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation((async (
+    url: string | URL | Request,
+    init?: RequestInit,
+  ) => {
     const target = typeof url === "string" ? url : url instanceof URL ? url.toString() : url.url;
-    if (!target.includes("api.linear.app")) return originalFetch(url as any, init);
+    if (!target.includes("api.linear.app")) return originalFetch(url, init);
     const body = JSON.parse(String(init?.body)) as { query: string };
     assert.match(body.query, /viewer/);
     return new Response(JSON.stringify({ data: { viewer: { id: "viewer-1" } } }), {
       status: 200,
       headers: { "content-type": "application/json" },
     });
-  }) as typeof fetch;
+  }) as typeof fetch);
 
   try {
     const initialize = await postMcp(
@@ -279,7 +282,7 @@ test("Claude MCP endpoint authorizes bearer tokens and executes Linear tools", a
     assert.equal(revoked.error.code, "unauthorized");
   } finally {
     revokeMcpToken(token);
-    globalThis.fetch = originalFetch;
+    fetchSpy.mockRestore();
     await server.stop();
   }
 });

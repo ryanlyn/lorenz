@@ -12,7 +12,6 @@ import type {
   TurnResult,
   UsageTotals,
   SymphonyMeta,
-  SessionUpdateBase,
 } from "@symphony/protocol";
 
 describe("SESSION_UPDATE_KINDS", () => {
@@ -106,56 +105,34 @@ describe("SESSION_UPDATE_KINDS", () => {
 });
 
 describe("SessionUpdate type structure", () => {
-  test("UsageUpdate requires a usage field with Partial<UsageTotals>", () => {
-    // Verify that a UsageUpdate with partial usage (not all fields) is valid
-    const update: UsageUpdate = {
-      kind: "usage_update",
-      usage: { inputTokens: 42 },
+  test("SESSION_UPDATE_KINDS can be used as a runtime discriminator for SessionUpdate.kind", () => {
+    // The primary runtime use of this module: using the constant array to
+    // validate incoming data (e.g., from JSON deserialization).
+    const isValidSessionUpdate = (data: unknown): data is SessionUpdate => {
+      if (typeof data !== "object" || data === null) return false;
+      const obj = data as Record<string, unknown>;
+      return (
+        typeof obj.kind === "string" &&
+        (SESSION_UPDATE_KINDS as readonly string[]).includes(obj.kind)
+      );
     };
-    // The usage field should carry through exactly what was provided
-    assert.equal(update.usage.inputTokens, 42);
-    assert.equal(update.usage.outputTokens, undefined);
-    assert.equal(update.usage.totalTokens, undefined);
-    assert.equal(update.usage.secondsRunning, undefined);
+
+    // Valid updates
+    assert.ok(isValidSessionUpdate({ kind: "usage_update", usage: {} }));
+    assert.ok(isValidSessionUpdate({ kind: "turn_started" }));
+    assert.ok(isValidSessionUpdate({ kind: "notification", message: "hi" }));
+
+    // Invalid data rejected at runtime
+    assert.equal(isValidSessionUpdate({ kind: "invalid_kind" }), false);
+    assert.equal(isValidSessionUpdate({ kind: 123 }), false);
+    assert.equal(isValidSessionUpdate(null), false);
+    assert.equal(isValidSessionUpdate("not an object"), false);
+    assert.equal(isValidSessionUpdate({ noKind: true }), false);
   });
 
-  test("UsageUpdate with empty usage object is valid (all fields optional via Partial)", () => {
-    const update: UsageUpdate = {
-      kind: "usage_update",
-      usage: {},
-    };
-    assert.deepEqual(update.usage, {});
-  });
-
-  test("SessionUpdateBase optional fields default to undefined when omitted", () => {
-    const base: SessionUpdateBase = { kind: "notification" };
-    assert.equal(base.sessionId, undefined);
-    assert.equal(base.agentKind, undefined);
-    assert.equal(base.message, undefined);
-    assert.equal(base.at, undefined);
-    assert.equal(base._meta, undefined);
-  });
-
-  test("SessionUpdateBase carries all optional metadata fields correctly", () => {
-    const now = new Date("2026-01-15T10:00:00Z");
-    const base: SessionUpdateBase = {
-      kind: "turn_started",
-      sessionId: "sess-abc",
-      agentKind: "code-agent",
-      message: { text: "hello" },
-      at: now,
-      _meta: { executorPid: "pid-1", usage: { inputTokens: 5 } },
-    };
-    assert.equal(base.sessionId, "sess-abc");
-    assert.equal(base.agentKind, "code-agent");
-    assert.deepEqual(base.message, { text: "hello" });
-    assert.equal(base.at, now);
-    assert.equal(base._meta!.executorPid, "pid-1");
-    assert.deepEqual(base._meta!.usage, { inputTokens: 5 });
-  });
-
-  test("TurnUpdate kind field only accepts non-usage_update kinds from SESSION_UPDATE_KINDS", () => {
-    // Verify the TurnUpdate interface's kind is assignable from all non-usage kinds
+  test("SESSION_UPDATE_KINDS partitions cleanly into UsageUpdate vs TurnUpdate kinds", () => {
+    // Verify that usage_update is the only kind not in TurnUpdate's kind union.
+    // This tests the runtime constant matches the protocol's discriminated union design.
     const turnKinds: TurnUpdate["kind"][] = [
       "session_started",
       "turn_started",
@@ -166,17 +143,23 @@ describe("SessionUpdate type structure", () => {
       "tool_result",
       "notification",
     ];
-    // Ensure all these are in SESSION_UPDATE_KINDS (runtime consistency)
-    for (const k of turnKinds) {
-      assert.ok((SESSION_UPDATE_KINDS as readonly string[]).includes(k));
+    const usageKinds: UsageUpdate["kind"][] = ["usage_update"];
+
+    // The union of both sets should exactly equal SESSION_UPDATE_KINDS
+    const combined = new Set([...turnKinds, ...usageKinds]);
+    const fromConst = new Set<string>(SESSION_UPDATE_KINDS);
+
+    assert.equal(combined.size, fromConst.size);
+    for (const k of combined) {
+      assert.ok(fromConst.has(k), `expected SESSION_UPDATE_KINDS to contain "${k}"`);
     }
-    // Verify usage_update is NOT one of TurnUpdate's kinds (it belongs to UsageUpdate)
-    // This is enforced at compile time, but we verify the protocol constant segregation
-    const usageKind = "usage_update";
-    assert.ok(!turnKinds.includes(usageKind as TurnUpdate["kind"]));
+    for (const k of fromConst) {
+      assert.ok(combined.has(k), `unexpected kind "${k}" in SESSION_UPDATE_KINDS`);
+    }
   });
 
-  test("SessionUpdate union accepts both UsageUpdate and TurnUpdate", () => {
+  test("kind-based discriminator filters UsageUpdate from TurnUpdate at runtime", () => {
+    // Simulates the pattern consumers use to branch on update type
     const updates: SessionUpdate[] = [
       { kind: "usage_update", usage: { totalTokens: 100 } },
       { kind: "turn_started", message: "starting" },
@@ -184,61 +167,54 @@ describe("SessionUpdate type structure", () => {
       { kind: "turn_failed", message: "timeout" },
       { kind: "notification", message: "info" },
     ];
-    // Verify all are valid by checking they have kind fields that exist in SESSION_UPDATE_KINDS
-    for (const u of updates) {
-      assert.ok((SESSION_UPDATE_KINDS as readonly string[]).includes(u.kind));
-    }
-    assert.equal(updates.length, 5);
+
+    const usageUpdates = updates.filter((u): u is UsageUpdate => u.kind === "usage_update");
+    const turnUpdates = updates.filter((u): u is TurnUpdate => u.kind !== "usage_update");
+
+    assert.equal(usageUpdates.length, 1);
+    assert.equal(turnUpdates.length, 4);
+    // Verify runtime narrowing gives access to UsageUpdate-specific field
+    assert.deepEqual(usageUpdates[0].usage, { totalTokens: 100 });
   });
 });
 
 describe("TurnResult", () => {
-  test("requires stopReason and sessionId fields", () => {
+  test("can be serialized to JSON and deserialized back preserving all fields", () => {
     const result: TurnResult = {
       stopReason: "end_turn",
       sessionId: "sess-xyz",
+      _meta: {
+        executorPid: "proc-1",
+        usage: { inputTokens: 200, outputTokens: 100 },
+        rateLimits: { rpm: 60 },
+      },
     };
-    assert.equal(result.stopReason, "end_turn");
-    assert.equal(result.sessionId, "sess-xyz");
-    assert.equal(result._meta, undefined);
+
+    const json = JSON.stringify(result);
+    const parsed = JSON.parse(json) as TurnResult;
+
+    assert.equal(parsed.stopReason, "end_turn");
+    assert.equal(parsed.sessionId, "sess-xyz");
+    assert.equal(parsed._meta!.executorPid, "proc-1");
+    assert.deepEqual(parsed._meta!.usage, { inputTokens: 200, outputTokens: 100 });
+    assert.deepEqual(parsed._meta!.rateLimits, { rpm: 60 });
   });
 
-  test("_meta.usage carries Partial<UsageTotals> allowing any subset of fields", () => {
+  test("JSON round-trip of TurnResult without _meta produces clean object", () => {
     const result: TurnResult = {
       stopReason: "max_tokens",
       sessionId: "sess-1",
-      _meta: {
-        usage: { inputTokens: 200, outputTokens: 100 },
-      },
     };
-    // Verify partial usage -- totalTokens and secondsRunning are omitted
-    assert.equal(result._meta!.usage!.inputTokens, 200);
-    assert.equal(result._meta!.usage!.outputTokens, 100);
-    assert.equal(result._meta!.usage!.totalTokens, undefined);
-    assert.equal(result._meta!.usage!.secondsRunning, undefined);
+
+    const json = JSON.stringify(result);
+    const parsed = JSON.parse(json);
+
+    // _meta should not appear in serialized output when undefined
+    assert.equal(Object.prototype.hasOwnProperty.call(parsed, "_meta"), false);
+    assert.deepEqual(Object.keys(parsed).sort(), ["sessionId", "stopReason"]);
   });
 
-  test("_meta fields are all independently optional", () => {
-    // SymphonyMeta has executorPid, rateLimits, usage -- all optional
-    const withPidOnly: TurnResult = {
-      stopReason: "cancelled",
-      sessionId: "sess-2",
-      _meta: { executorPid: "proc-42" },
-    };
-    assert.equal(withPidOnly._meta!.executorPid, "proc-42");
-    assert.equal(withPidOnly._meta!.usage, undefined);
-    assert.equal(withPidOnly._meta!.rateLimits, undefined);
-
-    // executorPid can be null per the type definition
-    const withNullPid: TurnResult = {
-      stopReason: "refusal",
-      sessionId: "sess-3",
-      _meta: { executorPid: null },
-    };
-    assert.equal(withNullPid._meta!.executorPid, null);
-  });
-
-  test("stopReason accepts all defined StopReason values", () => {
+  test("stopReason values are distinct strings usable as discriminators", () => {
     const stopReasons: StopReason[] = [
       "end_turn",
       "max_tokens",
@@ -246,66 +222,85 @@ describe("TurnResult", () => {
       "refusal",
       "cancelled",
     ];
-    // Verify all are assignable and produce valid TurnResult objects
-    const results: TurnResult[] = stopReasons.map((reason, i) => ({
-      stopReason: reason,
-      sessionId: `sess-${i}`,
-    }));
-    assert.equal(results.length, 5);
-    for (let i = 0; i < results.length; i++) {
-      assert.equal(results[i].stopReason, stopReasons[i]);
-      assert.equal(results[i].sessionId, `sess-${i}`);
+    // Verify all values are unique (no duplicates in the union type at runtime)
+    const unique = new Set(stopReasons);
+    assert.equal(unique.size, stopReasons.length);
+
+    // Verify they can be used in a switch/map pattern (common consumer usage)
+    const labelMap: Record<StopReason, string> = {
+      end_turn: "completed",
+      max_tokens: "truncated",
+      max_turn_requests: "loop_limit",
+      refusal: "refused",
+      cancelled: "aborted",
+    };
+    for (const reason of stopReasons) {
+      assert.ok(labelMap[reason].length > 0);
     }
   });
 });
 
 describe("SymphonyMeta", () => {
-  test("usage field accepts empty partial", () => {
-    const meta: SymphonyMeta = { usage: {} };
-    assert.deepEqual(meta.usage, {});
-    assert.equal(meta.executorPid, undefined);
+  test("survives JSON round-trip with all fields populated", () => {
+    const meta: SymphonyMeta = {
+      executorPid: "pid-99",
+      rateLimits: { requestsPerMinute: 60, tokensPerMinute: 100000 },
+      usage: { inputTokens: 500, outputTokens: 250, totalTokens: 750, secondsRunning: 3 },
+    };
+
+    const parsed = JSON.parse(JSON.stringify(meta)) as SymphonyMeta;
+    assert.equal(parsed.executorPid, "pid-99");
+    assert.deepEqual(parsed.rateLimits, { requestsPerMinute: 60, tokensPerMinute: 100000 });
+    assert.deepEqual(parsed.usage, {
+      inputTokens: 500,
+      outputTokens: 250,
+      totalTokens: 750,
+      secondsRunning: 3,
+    });
   });
 
-  test("rateLimits field accepts arbitrary data", () => {
-    const meta: SymphonyMeta = {
-      rateLimits: { requestsPerMinute: 60, tokensPerMinute: 100000 },
-    };
-    assert.deepEqual(meta.rateLimits, {
-      requestsPerMinute: 60,
-      tokensPerMinute: 100000,
-    });
+  test("null executorPid serializes distinctly from undefined executorPid", () => {
+    // null vs undefined matters for JSON serialization -- null is preserved, undefined is stripped
+    const withNull: SymphonyMeta = { executorPid: null };
+    const withUndefined: SymphonyMeta = { executorPid: undefined };
+
+    const nullJson = JSON.stringify(withNull);
+    const undefinedJson = JSON.stringify(withUndefined);
+
+    assert.ok(nullJson.includes('"executorPid":null'));
+    assert.equal(undefinedJson, "{}");
   });
 });
 
 describe("UsageTotals", () => {
-  test("all fields are numeric and independently settable", () => {
+  test("JSON serialization preserves all numeric fields without loss", () => {
     const usage: UsageTotals = {
       inputTokens: 1500,
       outputTokens: 750,
       totalTokens: 2250,
       secondsRunning: 12,
     };
-    // Verify totalTokens is not auto-computed -- it is a plain data field
-    // Users can set it to any value independent of input + output
-    assert.equal(usage.totalTokens, 2250);
-    assert.equal(usage.inputTokens + usage.outputTokens, 2250);
 
-    // Verify that totalTokens does NOT need to equal input + output
-    const inconsistent: UsageTotals = {
-      inputTokens: 100,
-      outputTokens: 50,
-      totalTokens: 999, // deliberately not sum of input + output
-      secondsRunning: 1,
-    };
-    assert.equal(inconsistent.totalTokens, 999);
-    assert.notEqual(inconsistent.totalTokens, inconsistent.inputTokens + inconsistent.outputTokens);
+    const parsed = JSON.parse(JSON.stringify(usage)) as UsageTotals;
+    assert.equal(parsed.inputTokens, 1500);
+    assert.equal(parsed.outputTokens, 750);
+    assert.equal(parsed.totalTokens, 2250);
+    assert.equal(parsed.secondsRunning, 12);
   });
 
-  test("Partial<UsageTotals> allows any subset of fields", () => {
-    const partial: Partial<UsageTotals> = { secondsRunning: 7 };
-    assert.equal(partial.secondsRunning, 7);
-    assert.equal(partial.inputTokens, undefined);
-    assert.equal(partial.outputTokens, undefined);
-    assert.equal(partial.totalTokens, undefined);
+  test("totalTokens is a plain data field with no auto-computation from input + output", () => {
+    // Demonstrates that totalTokens is not derived — consumers must compute it themselves.
+    // This guards against someone adding a getter/setter that auto-computes totalTokens.
+    const usage: UsageTotals = {
+      inputTokens: 100,
+      outputTokens: 50,
+      totalTokens: 999,
+      secondsRunning: 1,
+    };
+
+    const parsed = JSON.parse(JSON.stringify(usage)) as UsageTotals;
+    // After round-trip, totalTokens should remain 999, not be recomputed as 150
+    assert.equal(parsed.totalTokens, 999);
+    assert.notEqual(parsed.totalTokens, parsed.inputTokens + parsed.outputTokens);
   });
 });
