@@ -120,7 +120,6 @@ async function setupLiveWorkers(): Promise<LiveWorkerSetupResult> {
     "live_e2e_docker",
   );
   const projectName = dockerProjectName(runId);
-  const previousSshConfig = process.env.SYMPHONY_SSH_CONFIG;
   const claudeToken =
     process.env.SYMPHONY_LIVE_DOCKER_CLAUDE_CODE_OAUTH_TOKEN ??
     process.env.CLAUDE_CODE_OAUTH_TOKEN ??
@@ -149,11 +148,10 @@ async function setupLiveWorkers(): Promise<LiveWorkerSetupResult> {
       "",
     ].join("\n"),
   );
-  process.env.SYMPHONY_SSH_CONFIG = configPath;
+  vi.stubEnv("SYMPHONY_SSH_CONFIG", configPath);
 
   const cleanup = async () => {
-    if (previousSshConfig === undefined) delete process.env.SYMPHONY_SSH_CONFIG;
-    else process.env.SYMPHONY_SSH_CONFIG = previousSshConfig;
+    vi.unstubAllEnvs();
     await cleanupRemoteRoot(hosts, `~/.${runId}`);
     await execFileAsync(
       "docker",
@@ -206,7 +204,6 @@ async function setupNativeSshdWorker(runId: string): Promise<LiveWorkerSetup> {
   const pidPath = path.join(root, "sshd.pid");
   const port = await reserveTcpPort();
   const host = `localhost:${port}`;
-  const previousSshConfig = process.env.SYMPHONY_SSH_CONFIG;
   const user = os.userInfo().username;
 
   await execFileAsync("ssh-keygen", ["-q", "-t", "ed25519", "-N", "", "-f", keyPath]);
@@ -253,11 +250,10 @@ async function setupNativeSshdWorker(runId: string): Promise<LiveWorkerSetup> {
 
   await execFileAsync("/usr/sbin/sshd", ["-t", "-f", configPath]);
   await execFileAsync("/usr/sbin/sshd", ["-f", configPath, "-E", logPath]);
-  process.env.SYMPHONY_SSH_CONFIG = clientConfigPath;
+  vi.stubEnv("SYMPHONY_SSH_CONFIG", clientConfigPath);
 
   const cleanup = async () => {
-    if (previousSshConfig === undefined) delete process.env.SYMPHONY_SSH_CONFIG;
-    else process.env.SYMPHONY_SSH_CONFIG = previousSshConfig;
+    vi.unstubAllEnvs();
     await cleanupRemoteRoot([host], `~/.${runId}`);
     const pid = await fs.readFile(pidPath, "utf8").catch(() => "");
     if (pid.trim()) {
@@ -504,20 +500,36 @@ async function fileExists(filePath: string): Promise<boolean> {
   }
 }
 
-async function reserveTcpPort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const server = net.createServer();
-    server.listen(0, "127.0.0.1", () => {
-      const address = server.address();
-      const port = typeof address === "object" && address !== null ? address.port : null;
-      server.close((error) => {
-        if (error) reject(error);
-        else if (port === null) reject(new Error("failed to reserve tcp port"));
-        else resolve(port);
+async function reserveTcpPort(retries = 3): Promise<number> {
+  for (let attempt = 0; attempt < retries; attempt++) {
+    const port = await new Promise<number>((resolve, reject) => {
+      const server = net.createServer();
+      server.listen(0, "127.0.0.1", () => {
+        const address = server.address();
+        const p = typeof address === "object" && address !== null ? address.port : null;
+        server.close((error) => {
+          if (error) reject(error);
+          else if (p === null) reject(new Error("failed to reserve tcp port"));
+          else resolve(p);
+        });
+      });
+      server.on("error", reject);
+    });
+    // Verify the port is still available to reduce TOCTOU race window
+    const available = await new Promise<boolean>((resolve) => {
+      const probe = net.createServer();
+      probe.once("error", () => resolve(false));
+      probe.listen(port, "127.0.0.1", () => {
+        probe.close(() => resolve(true));
       });
     });
-    server.on("error", reject);
-  });
+    if (available) return port;
+    if (attempt < retries - 1) {
+      // Small delay before retrying to let ephemeral port churn settle
+      await new Promise((r) => setTimeout(r, 50));
+    }
+  }
+  throw new Error("failed to reserve an available tcp port after retries");
 }
 
 function dockerProjectName(runId: string): string {

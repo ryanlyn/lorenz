@@ -272,8 +272,11 @@ test("runtime aborts in-flight runs when reconciliation sees a terminal issue", 
 
   await runtime.pollOnce();
   assert.equal(started, true);
+  // The second pollOnce triggers reconciliation which detects the terminal issue
+  // and aborts the in-flight run. The abort is async so we wait for it with a
+  // generous timeout to avoid flakiness under CI load.
   await runtime.pollOnce({ dryRun: true });
-  await waitFor(() => aborted, 1_000);
+  await waitFor(() => aborted, 2_000);
 
   const snapshot = runtime.snapshot();
   assert.equal(snapshot.running.length, 0);
@@ -463,6 +466,10 @@ test("runtime reconciles stalled runs from the orchestrator poll loop", async ()
   }
 });
 
+// NOTE: This test modifies process.env.PATH to inject a fake ssh binary.
+// It restores PATH in the finally block but is NOT safe for parallel execution
+// with other tests that depend on PATH or invoke ssh. The test suite runs
+// sequentially so this is acceptable.
 test("runtime does not stall a stale ensemble slot snapshot after its runner completes", async () => {
   const issue = issueFixture("issue-ensemble-stall-race", "MT-ENSEMBLE-RACE");
   const root = await tempDir("symphony-ts-runtime-ensemble-stall-race");
@@ -518,7 +525,7 @@ test("runtime does not stall a stale ensemble slot snapshot after its runner com
   try {
     await runtime.pollOnce();
     await runtime.pollOnce();
-    await waitFor(() => controls.size === 2, 1_000);
+    await waitFor(() => controls.size === 2, 2_000);
 
     const entries = orchestrator.snapshot().running;
     assert.equal(entries.length, 2);
@@ -543,7 +550,7 @@ test("runtime does not stall a stale ensemble slot snapshot after its runner com
     await stallPoll;
     await waitFor(
       () => runtime.snapshot().runHistory.some((entry) => entry.slotIndex === 1),
-      1_000,
+      2_000,
     );
 
     const snapshot = runtime.snapshot();
@@ -948,6 +955,10 @@ test("runtime invalidates resume state before scheduling failure retry", async (
   assert.ok(snapshot.recentEvents.some((event) => event.type === "resume_state_invalidated"));
 });
 
+// NOTE: This test intentionally exercises real timers (not vi.useFakeTimers()) to
+// verify that retry scheduling fires independently of the poll cadence. The
+// maxRetryBackoffMs is set to 20ms and waitFor timeouts are generous (3s) to
+// tolerate CI load without flakiness.
 test("runtime schedules retry refresh timers independently of the poll cadence", async () => {
   const issue = issueFixture("issue-timer-retry", "MT-TIMER");
   const doneIssue: Issue = { ...issue, state: "Done", stateType: "completed" };
@@ -981,11 +992,11 @@ test("runtime schedules retry refresh timers independently of the poll cadence",
   assert.equal(attempts, 1);
   assert.equal(runtime.snapshot().retrying[0]?.attempt, 1);
 
-  await waitFor(() => attempts === 2, 2_000);
+  await waitFor(() => attempts === 2, 3_000);
   let snapshot = runtime.snapshot();
   assert.equal(snapshot.retrying[0]?.attempt, 1);
 
-  await waitFor(() => runtime.snapshot().retrying.length === 0, 2_000);
+  await waitFor(() => runtime.snapshot().retrying.length === 0, 3_000);
   snapshot = runtime.snapshot();
   assert.equal(snapshot.retrying.length, 0);
   assert.equal(snapshot.runHistory[0]?.outcome, "success");

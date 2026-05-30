@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
 
-import { test } from "vitest";
+import { test, vi } from "vitest";
 
 import { assert } from "../../../test/assert.js";
 import { tempDir } from "../../../test/helpers.js";
@@ -283,7 +283,6 @@ test("runs command uses workflow-derived default server host and port", async ()
     );
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-  const oldWorkflow = process.env.SYMPHONY_WORKFLOW;
 
   try {
     const address = server.address();
@@ -294,13 +293,12 @@ test("runs command uses workflow-derived default server host and port", async ()
       workflowPath,
       `---\nserver:\n  host: 127.0.0.1\n  port: ${address.port}\n---\nRun it\n`,
     );
-    process.env.SYMPHONY_WORKFLOW = workflowPath;
+    vi.stubEnv("SYMPHONY_WORKFLOW", workflowPath);
 
     const output = await runRunsMain(["--limit", "1"]);
     assert.match(output, /Run History/);
   } finally {
-    if (oldWorkflow === undefined) delete process.env.SYMPHONY_WORKFLOW;
-    else process.env.SYMPHONY_WORKFLOW = oldWorkflow;
+    vi.unstubAllEnvs();
     await new Promise<void>((resolve, reject) =>
       server.close((error) => (error ? reject(error) : resolve())),
     );

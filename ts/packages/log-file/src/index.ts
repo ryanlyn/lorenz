@@ -35,6 +35,7 @@ export function defaultLogFile(root = process.cwd()): string {
 
 const loggers = new Map<string, Promise<Logger>>();
 
+
 export async function configureLogFile(
   logFile: string,
   options: LogFileOptions = {},

@@ -1,12 +1,17 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
-import { test } from "vitest";
+import { afterEach, test, vi } from "vitest";
 import { CodexAppServerExecutor, parseConfig, shellEscape } from "@symphony/cli";
 import type { AgentUpdate } from "@symphony/cli";
 
 import { assert } from "../../../test/assert.js";
 import { sampleIssue, tempDir, writeExecutable } from "../../../test/helpers.js";
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+  vi.unstubAllGlobals();
+});
 
 test("Codex app-server executor performs initialize, thread start, turn start, and completion", async () => {
   const root = await tempDir("symphony-ts-codex");
@@ -144,23 +149,18 @@ rl.on("line", (line) => {
     tracker: { api_key: "linear-token", project_slug: "mono" },
     codex: { command: `${fake} app-server`, turn_timeout_ms: 5_000 },
   });
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = (async () =>
-    jsonResponse({ data: { viewer: { id: "viewer-1" } } })) as typeof fetch;
-  try {
-    const executor = new CodexAppServerExecutor();
-    const session = await executor.startSession({ workspace: root, settings, issue: sampleIssue });
-    const updates = await executor.runTurn(session, "hello", sampleIssue);
-    await session.stop();
+  vi.stubGlobal("fetch", (async () =>
+    jsonResponse({ data: { viewer: { id: "viewer-1" } } })) as typeof fetch);
+  const executor = new CodexAppServerExecutor();
+  const session = await executor.startSession({ workspace: root, settings, issue: sampleIssue });
+  const updates = await executor.runTurn(session, "hello", sampleIssue);
+  await session.stop();
 
-    assert.ok(updates.some((update) => update.type === "tool_call_completed"));
-    const traceText = await fs.readFile(trace, "utf8");
-    assert.match(traceText, /"id":"tool-string-1","result":\{"success":true/);
-    assert.match(traceText, /"contentItems":/);
-    assert.match(traceText, /viewer-1/);
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
+  assert.ok(updates.some((update) => update.type === "tool_call_completed"));
+  const traceText = await fs.readFile(trace, "utf8");
+  assert.match(traceText, /"id":"tool-string-1","result":\{"success":true/);
+  assert.match(traceText, /"contentItems":/);
+  assert.match(traceText, /viewer-1/);
 });
 
 test("Codex app-server executor reports dynamic tool failures", async () => {
@@ -458,13 +458,11 @@ test("Codex app-server executor can launch through an SSH worker host", async ()
   const fakeCodex = path.join(root, "fake-codex-remote.js");
   const sshTrace = path.join(root, "ssh.trace");
   const codexTrace = path.join(root, "codex.trace");
-  const oldPath = process.env.PATH;
   await fs.mkdir(remoteWorkspace, { recursive: true });
-  try {
-    await installEvalSsh(root, sshTrace);
-    await writeExecutable(
-      fakeCodex,
-      `#!/usr/bin/env node
+  await installEvalSsh(root, sshTrace);
+  await writeExecutable(
+    fakeCodex,
+    `#!/usr/bin/env node
 const fs = require("fs");
 const readline = require("readline");
 const trace = ${JSON.stringify(codexTrace)};
@@ -480,30 +478,26 @@ rl.on("line", (line) => {
   }
 });
 `,
-    );
+  );
 
-    const settings = parseConfig({
-      workspace: { root: path.dirname(root) },
-      codex: { command: `${fakeCodex} app-server`, turn_timeout_ms: 5_000 },
-    });
-    const executor = new CodexAppServerExecutor();
-    const session = await executor.startSession({
-      workspace: remoteWorkspace,
-      workerHost: "worker-01:2200",
-      settings,
-      issue: sampleIssue,
-    });
-    await executor.runTurn(session, "hello", sampleIssue);
-    await session.stop();
+  const settings = parseConfig({
+    workspace: { root: path.dirname(root) },
+    codex: { command: `${fakeCodex} app-server`, turn_timeout_ms: 5_000 },
+  });
+  const executor = new CodexAppServerExecutor();
+  const session = await executor.startSession({
+    workspace: remoteWorkspace,
+    workerHost: "worker-01:2200",
+    settings,
+    issue: sampleIssue,
+  });
+  await executor.runTurn(session, "hello", sampleIssue);
+  await session.stop();
 
-    const sshLog = await fs.readFile(sshTrace, "utf8");
-    assert.match(sshLog, /-T -p 2200 worker-01 bash -lc/);
-    assert.match(sshLog, /remote-workspace/);
-    assert.match(await fs.readFile(codexTrace, "utf8"), /"method":"turn\/start"/);
-  } finally {
-    if (oldPath === undefined) delete process.env.PATH;
-    else process.env.PATH = oldPath;
-  }
+  const sshLog = await fs.readFile(sshTrace, "utf8");
+  assert.match(sshLog, /-T -p 2200 worker-01 bash -lc/);
+  assert.match(sshLog, /remote-workspace/);
+  assert.match(await fs.readFile(codexTrace, "utf8"), /"method":"turn\/start"/);
 });
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -532,6 +526,6 @@ fi
 eval "$last_arg"
 `,
   );
-  process.env.PATH = `${bin}:${process.env.PATH ?? ""}`;
+  vi.stubEnv("PATH", `${bin}:${process.env.PATH ?? ""}`);
   await fs.writeFile(trace, "");
 }
