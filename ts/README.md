@@ -280,10 +280,12 @@ There is no `slack_create_issue`: issues are created by humans @-mentioning the 
 agent.
 
 Routing note: Slack issues carry only hashtag-derived labels (a `#tag` in the message text
-becomes the label `tag`); they are not otherwise routed or assigned. With label routing, keep
-`accept_unrouted: true` (the default) so mentions without a matching route label are still
-processed, or tag messages with a hashtag that matches your `route_label_prefix` route so they
-route to the intended instance.
+becomes the label `tag`); they are not otherwise routed or assigned. Dispatch treats a label as a
+route only when it starts with `route_label_prefix`, so the Slack workflow sets
+`route_label_prefix: route-`. Tag a message `#route-<name>` to route it: `#route-backend` becomes
+the label `route-backend`, which dispatch resolves to the route `backend` (set `only_routes`
+accordingly). Plain hashtags such as `#backend` stay non-route labels; with the default
+`accept_unrouted: true` all Slack mentions are still picked up.
 
 ## Workflow Prompt
 

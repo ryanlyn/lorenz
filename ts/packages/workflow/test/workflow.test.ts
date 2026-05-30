@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { test } from "vitest";
 
@@ -13,6 +14,8 @@ import {
   effectivePromptTemplate,
   defaultPromptTemplate,
 } from "@symphony/workflow";
+
+const tsRoot = path.resolve(fileURLToPath(new URL(".", import.meta.url)), "../../..");
 
 // --- workflowFilePath ---
 
@@ -56,6 +59,13 @@ test("loadWorkflow returns error for malformed YAML", async () => {
   await fs.writeFile(workflowFile, ["---", "bad: yaml: [unterminated", "---", "body"].join("\n"));
 
   await assert.rejects(() => loadWorkflow(workflowFile, {}, { cwd: dir }), /workflow_parse_error/);
+});
+
+test("WORKFLOW.slack.md uses route- as the dispatch route_label_prefix", async () => {
+  const workflowFile = path.join(tsRoot, "WORKFLOW.slack.md");
+  const workflow = await loadWorkflow(workflowFile, {}, { cwd: tsRoot });
+
+  assert.equal(workflow.settings.tracker.dispatch.routeLabelPrefix, "route-");
 });
 
 // --- parseWorkflowContent ---

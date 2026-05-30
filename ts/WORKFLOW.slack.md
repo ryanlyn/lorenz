@@ -17,7 +17,7 @@ tracker:
   dispatch:
     accept_unrouted: true
     only_routes: null
-    route_label_prefix: "Symphony:"
+    route_label_prefix: "route-"
 polling:
   interval_ms: 5000
 workspace:
@@ -95,6 +95,13 @@ This workflow is backed by **Slack**, not Linear. There is **no Linear and no `l
 - The mentioned message's text **is the issue description/title**; threaded replies on that message are the discussion/context.
 - The issue id is the Slack message reference in `<channel>:<ts>` form (for example `C0123456789:1717000000.000100`). This is the `{{ issue.id }}` you operate on and the `issueId` you pass to `slack_update_status` / `slack_comment`. The display label `{{ issue.identifier }}` (for example `SLK-1717000000-000100`) is for reference only and is **not** a valid `issueId`; never pass it to a tool.
 - **Status is shown as an emoji reaction** on the source message. You never edit frontmatter or a file; you change a reaction.
+
+## Routing with hashtags
+
+Slack issues carry only labels derived from hashtags in the message text: a `#tag` becomes the label `tag`. Dispatch treats a label as a **route** only when it starts with `tracker.dispatch.route_label_prefix`. This workflow sets that prefix to `route-`, so:
+
+- Tag a message `#route-<name>` to route it. `#route-backend` yields the label `route-backend`, which dispatch resolves to the route `backend`. Set `only_routes` accordingly (for example `only_routes: ["backend"]`) so a given instance only picks up its routes.
+- Plain hashtags such as `#backend` stay **non-route** labels (they do not start with `route-`). With the default `accept_unrouted: true`, those messages are still picked up; an instance with `only_routes` set and `accept_unrouted: false` would skip them.
 
 ## Status as emoji reactions
 

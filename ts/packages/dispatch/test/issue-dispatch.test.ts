@@ -7,6 +7,7 @@ import {
   normalizeIssue,
   parseConfig,
   routeNames,
+  routedToThisWorker,
   shouldDispatchIssue,
   slotKey,
   sortForDispatch,
@@ -149,6 +150,56 @@ test("route and assignee rules match the SPEC", () => {
 
   const assignedElsewhere = { ...issue, assignedToWorker: false };
   assert.equal(shouldDispatchIssue(assignedElsewhere, settings, { runningCount: 0 }), false);
+});
+
+test("slack hashtag routing resolves #route- labels via route_label_prefix", () => {
+  // Slack deriveLabels turns "#route-backend" into the label "route-backend";
+  // with route_label_prefix "route-" dispatch resolves it to the route "backend".
+  const matching = parseConfig({
+    tracker: { dispatch: { route_label_prefix: "route-", only_routes: ["backend"] } },
+  });
+  const routed = normalizeIssue({
+    id: "slk-1",
+    identifier: "SLK-1",
+    title: "Routed",
+    state: "Todo",
+    labels: ["route-backend"],
+  });
+  assert.deepEqual(routeNames(routed, matching), ["backend"]);
+  assert.equal(routedToThisWorker(routed, matching), true);
+
+  const otherRoute = parseConfig({
+    tracker: { dispatch: { route_label_prefix: "route-", only_routes: ["frontend"] } },
+  });
+  assert.equal(routedToThisWorker(routed, otherRoute), false);
+});
+
+test("slack plain hashtag labels are unrouted under route_label_prefix", () => {
+  // A plain "#backend" hashtag yields label "backend", which does not start with
+  // "route-" and so is a non-route label handled by accept_unrouted.
+  const plain = normalizeIssue({
+    id: "slk-2",
+    identifier: "SLK-2",
+    title: "Plain hashtag",
+    state: "Todo",
+    labels: ["backend"],
+  });
+
+  const accept = parseConfig({
+    tracker: {
+      dispatch: { route_label_prefix: "route-", only_routes: ["backend"], accept_unrouted: true },
+    },
+  });
+  assert.deepEqual(routeNames(plain, accept), []);
+  assert.equal(hasRouteLabel(plain, accept), false);
+  assert.equal(routedToThisWorker(plain, accept), true);
+
+  const reject = parseConfig({
+    tracker: {
+      dispatch: { route_label_prefix: "route-", only_routes: ["backend"], accept_unrouted: false },
+    },
+  });
+  assert.equal(routedToThisWorker(plain, reject), false);
 });
 
 test("empty route labels are routed labels but are not dispatchable as unrouted", () => {
