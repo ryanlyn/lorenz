@@ -78,7 +78,6 @@ export {
   revokeMcpToken,
   validMcpToken,
   acquireAgentMcpEndpoint,
-  mcpConfigContents,
 } from "@symphony/mcp";
 export { LinearClient, LinearGraphQLClient } from "@symphony/linear-tracker";
 export type { LinearClientDeps } from "@symphony/linear-tracker";

@@ -71,28 +71,6 @@ export async function acquireAgentMcpEndpoint(
   }
 }
 
-export function mcpConfigContents(
-  serverUrl: string,
-  token: string,
-  serverName = "symphony_linear",
-): string {
-  return `${JSON.stringify(
-    {
-      mcpServers: {
-        [serverName]: {
-          type: "http",
-          url: serverUrl,
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
-        },
-      },
-    },
-    null,
-    2,
-  )}\n`;
-}
-
 async function localMcpEndpoint(settings: Settings): Promise<McpEndpoint> {
   const localServer = await ensureLocalMcpServer(settings);
   return {
