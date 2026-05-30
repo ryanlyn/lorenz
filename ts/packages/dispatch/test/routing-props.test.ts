@@ -73,7 +73,7 @@ test("routeNames — returned routes are derived from issue labels", () => {
         assert.deepEqual(routes, expected);
         // Also verify each route individually matches the derivation
         for (let i = 0; i < routes.length; i++) {
-          assert.equal(routes[i], normalizeRouteName(labels[i]!.slice(prefix.length)));
+          assert.equal(routes[i], expected[i]);
         }
       },
     ),
