@@ -31,16 +31,28 @@ export function runtimeDefaultSettingsOptions(): DefaultSettingsOptions {
   return { tmpdir: os.tmpdir(), cwd: process.cwd() };
 }
 
+function assertNever(value: never): never {
+  throw new Error(`unhandled tracker kind: ${String(value)}`);
+}
+
 export function createTrackerClient(
   settings: Settings,
   env: NodeJS.ProcessEnv = process.env,
 ): RuntimeTrackerClient {
-  if (settings.tracker.kind === "memory") return new MemoryTrackerClient(memoryIssuesFromEnv(env));
-  if (settings.tracker.kind === "linear") return new LinearClient(settings);
-  if (settings.tracker.kind === "local") return new LocalTrackerClient(settings);
-  if (settings.tracker.kind === "slack")
-    return new SlackTrackerClient(settings, new SlackWebTransport(settings));
-  throw new Error("tracker.kind is required");
+  const kind = settings.tracker.kind;
+  if (kind === undefined) throw new Error("tracker.kind is required");
+  switch (kind) {
+    case "memory":
+      return new MemoryTrackerClient(memoryIssuesFromEnv(env));
+    case "linear":
+      return new LinearClient(settings);
+    case "local":
+      return new LocalTrackerClient(settings);
+    case "slack":
+      return new SlackTrackerClient(settings, new SlackWebTransport(settings));
+    default:
+      return assertNever(kind);
+  }
 }
 
 export function createRunAgentAttemptAdapters(): RunAgentAttemptAdapters {
