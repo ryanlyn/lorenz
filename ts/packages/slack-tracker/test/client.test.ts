@@ -86,6 +86,22 @@ test("channel references and user mentions are not mistaken for hashtag labels",
   assert.deepEqual(candidates[0]!.labels, ["backend"]);
 });
 
+test("in-token '#' (hex colors, URL fragments) does not leak as a bogus label", async () => {
+  const transport = new InMemorySlackTransport({
+    C1: [
+      {
+        ts: "1700000000.000475",
+        text: "<@U_BOT> fix color:#fff see http://x#frag then #Backend and #api",
+        reactions: [],
+      },
+    ],
+  });
+  const client = new SlackTrackerClient(settings(), transport);
+
+  const candidates = await client.fetchCandidateIssues();
+  assert.deepEqual(candidates[0]!.labels, ["backend", "api"]);
+});
+
 test("a message with no hashtags yields no labels", async () => {
   const transport = new InMemorySlackTransport({
     C1: [{ ts: "1700000000.000500", text: "<@U_BOT> fix the build", reactions: [] }],

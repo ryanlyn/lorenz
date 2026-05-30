@@ -14,6 +14,9 @@ export function splitIssueId(id: string): [string, string] | null {
  * Derive labels from hashtag tokens in `text`: match `#tag`, strip the leading `#`, lowercase,
  * and dedupe (preserving first-seen order). Lets Slack issues carry plain routing/filter labels.
  *
+ * The `#` must be at a boundary (start of string or preceded by whitespace) so in-token `#`s -
+ * a URL fragment (`http://x#frag`) or a hex color (`color:#fff`) - do not leak in as bogus labels.
+ *
  * Slack channel references (`<#C0ABC|general>`) and user mentions (`<@U123|alice>`) embed an
  * id behind `#`/`@` inside angle brackets; those are stripped first so they cannot leak in as
  * bogus labels (e.g. `c0abc`).
@@ -22,7 +25,7 @@ export function deriveLabels(text: string): string[] {
   const stripped = text.replace(/<[#@][^>]*>/g, " ");
   const labels: string[] = [];
   const seen = new Set<string>();
-  for (const match of stripped.matchAll(/#([a-z0-9][a-z0-9_-]*)/gi)) {
+  for (const match of stripped.matchAll(/(?<=^|\s)#([a-z0-9][a-z0-9_-]*)/gi)) {
     const label = match[1]!.toLowerCase();
     if (seen.has(label)) continue;
     seen.add(label);

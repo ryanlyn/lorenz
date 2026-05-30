@@ -47,10 +47,15 @@ export function statusEmojiMap(settings: Settings): Record<string, string> {
   return { ...DEFAULT_EMOJI_STATES, ...(settings.tracker.emojiStates ?? {}) };
 }
 
-/** Rank a status by category so a more-advanced state wins over a less-advanced one. */
+/**
+ * Rank a status by category so a more-advanced state wins over a less-advanced one. Canceled
+ * outranks completed so that a cancellation deterministically overrides a completion when both
+ * reactions are present, regardless of reaction order.
+ */
 function stateRank(state: string): number {
   switch (defaultStateType(state)) {
     case "canceled":
+      return 4;
     case "completed":
       return 3;
     case "started":
