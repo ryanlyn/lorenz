@@ -2,35 +2,14 @@
 
 **Date:** 2026-05-29  
 **Total Scenarios Tested:** 210  
-**Passed:** 200  
-**Failed:** 10
+**Passed:** 201  
+**Failed:** 9
 
 ---
 
 ## Failures Found
 
-### Failure 1: S-022
-**Invariant Violated:** Out-of-range priority SHALL sort last (valid priorities are 1-4 integers)  
-**Code Location:** `ts/packages/dispatch/src/index.ts` — `prioritySort` (line ~142)  
-**Explanation:** `prioritySort` checks `priority >= 1 && priority <= 4` but does NOT verify `Number.isInteger()`. A float like 2.5 passes the range check and is treated as a valid priority sorting between 2 and 3, instead of being mapped to `MAX_SAFE_INTEGER` (sort last). The invariant specifies "valid priorities (1-4)" which implies integers.  
-**Reproduction:**
-```ts
-import { sortForDispatch } from "@symphony/dispatch";
-const a = { ...issue, priority: 2.5, identifier: "A" };
-const b = { ...issue, priority: 2, identifier: "B" };
-sortForDispatch([a, b]); // Returns [b, a] — treats 2.5 as valid priority
-```
-**Suggested Fix:** Add `Number.isInteger(priority)` to the guard:
-```ts
-function prioritySort(priority: number | null | undefined): number {
-  return priority && Number.isInteger(priority) && priority >= 1 && priority <= 4
-    ? priority : Number.MAX_SAFE_INTEGER;
-}
-```
-
----
-
-### Failure 2: S-105
+### Failure 1: S-105
 **Invariant Violated:** Minimum delay floor SHALL prevent zero-delay retry storms  
 **Code Location:** `ts/packages/policies/src/retry.ts` — `retryBackoffMs` (line 9)  
 **Explanation:** `retryBackoffMs(1, 0, "failure")` computes `Math.min(0, 10000) = 0`. With a cap of 0, the retry delay is zero, creating potential retry storms. There is no minimum floor enforced on the result.  
@@ -47,7 +26,7 @@ return Math.max(MIN_RETRY_DELAY_MS, Math.min(maxRetryBackoffMs, 10_000 * 2 ** Ma
 
 ---
 
-### Failure 3: S-106
+### Failure 2: S-106
 **Invariant Violated:** Retry delay SHALL be non-negative  
 **Code Location:** `ts/packages/policies/src/retry.ts` — `retryBackoffMs` (line 9)  
 **Explanation:** `retryBackoffMs(1, -1, "failure")` computes `Math.min(-1, 10000) = -1`. A negative `maxRetryBackoffMs` propagates directly as a negative result. No validation or clamping prevents this.  
@@ -62,7 +41,7 @@ return Math.max(0, Math.min(maxRetryBackoffMs, 10_000 * 2 ** Math.max(0, attempt
 
 ---
 
-### Failure 4: S-120
+### Failure 3: S-120
 **Invariant Violated:** Token counts SHALL never become negative / NaN  
 **Code Location:** `ts/packages/policies/src/usage.ts` — `mergeMonotonicUsage` (lines 17-21)  
 **Explanation:** When `update.inputTokens` is `NaN`, the nullish coalescing (`??`) does NOT catch it (NaN is not null/undefined). This feeds NaN into `Math.max(10, 0, NaN)` which returns NaN in JavaScript. The result propagates through entry totals, reported totals, and global totals, corrupting all downstream state.  
@@ -85,7 +64,7 @@ const safeInput = Number.isFinite(input.update.inputTokens)
 
 ---
 
-### Failure 5: S-121
+### Failure 4: S-121
 **Invariant Violated:** Token counts SHALL never become negative / NaN  
 **Code Location:** `ts/packages/policies/src/usage.ts` — `mergeMonotonicUsage` (lines 27-31)  
 **Explanation:** Same root cause as S-120 but for the `totalTokens` field. `Math.max(10, 0, NaN)` returns NaN. Each token field is independently vulnerable. A single NaN field corrupts only that field's chain but leaves others intact.  
@@ -98,7 +77,7 @@ mergeMonotonicUsage({ ..., update: { totalTokens: NaN, inputTokens: 20 } });
 
 ---
 
-### Failure 6: S-185
+### Failure 5: S-185
 **Invariant Violated:** Retry delay SHALL never exceed the configured maximum cap  
 **Code Location:** `ts/packages/policies/src/retry.ts` — `retryBackoffMs` (line 8)  
 **Explanation:** The continuation path returns `1_000` unconditionally via early return, bypassing `Math.min(maxRetryBackoffMs, ...)`. When `maxRetryBackoffMs < 1000` (e.g., 500), the returned delay exceeds the configured cap.  
@@ -113,7 +92,7 @@ if (retryKind === "continuation") return Math.min(maxRetryBackoffMs, 1_000);
 
 ---
 
-### Failure 7: S-186
+### Failure 6: S-186
 **Invariant Violated:** Token counts SHALL never become negative / NaN  
 **Code Location:** `ts/packages/policies/src/usage.ts` — `mergeMonotonicUsage` (lines 17-35)  
 **Explanation:** When ALL token fields in the update are NaN, all three chains (entry, reported, global) become NaN simultaneously. This is the compound version of S-120/S-121 affecting all fields at once.  
@@ -129,7 +108,7 @@ mergeMonotonicUsage({
 
 ---
 
-### Failure 8: S-209
+### Failure 7: S-209
 **Invariant Violated:** Workspace path SHALL be a strict descendant of the workspace root  
 **Code Location:** `ts/packages/workspace/src/index.ts` — `workspacePath` (line ~22)  
 **Explanation:** `workspacePath("/tmp/w", "", 0, 1)` calls `safeIdentifier("")` which returns `""`, then `path.join("/tmp/w", "")` returns `"/tmp/w"` — which equals root. While `createWorkspaceForIssue` catches this downstream via `validateWorkspaceCwd`, the pure `workspacePath` function itself produces an invalid path. Any code path that calls `workspacePath` directly (without going through create) would get a root-equal path.  
@@ -150,7 +129,7 @@ export function workspacePath(root, identifier, slotIndex = 0, ensembleSize = 1)
 
 ---
 
-### Failure 9: S-210
+### Failure 8: S-210
 **Invariant Violated:** Retry delay SHALL never exceed the configured maximum cap  
 **Code Location:** `ts/packages/policies/src/retry.ts` — `retryBackoffMs` (line 8)  
 **Explanation:** Same root cause as S-185. Continuation returns 1000 without cap enforcement. With `maxRetryBackoffMs=100`, result is 1000 > 100.  
@@ -159,7 +138,7 @@ export function workspacePath(root, identifier, slotIndex = 0, ensembleSize = 1)
 
 ---
 
-### Failure 10: S-184
+### Failure 9: S-184
 **Invariant Violated:** WHEN a non-unstarted issue has non-terminal blockers, THE SYSTEM SHALL still consider it eligible (blockers only gate unstarted issues)  
 **Code Location:** `ts/packages/dispatch/src/index.ts` — `issueHasOpenBlockers` (line ~43)  
 **Explanation:** The function determines "unstarted" via `issue.stateType === "unstarted" || issue.state.trim().toLowerCase() === "todo"`. An issue with `stateType="started"` (explicitly categorized by the tracker as started) but `state="Todo"` (state name happens to be "Todo") is treated as unstarted due to the `||`. This means a started issue is incorrectly gated by blockers because its state name matches the hardcoded string "todo".  
@@ -187,15 +166,14 @@ const unstarted = issue.stateType
 
 | # | Module | Bug | Severity |
 |---|--------|-----|----------|
-| 1 | `dispatch/prioritySort` | Float priorities (e.g. 2.5) treated as valid | Low |
-| 2 | `policies/retry` | No minimum delay floor; cap=0 produces zero delay | Medium |
-| 3 | `policies/retry` | Negative cap propagates as negative delay | Medium |
-| 4 | `policies/usage` | NaN in update corrupts all token totals | High |
-| 5 | `policies/retry` | Continuation bypass ignores cap entirely | Low |
-| 6 | `workspace` | Empty identifier produces root-equal path | Medium |
-| 7 | `dispatch/issueHasOpenBlockers` | State name "Todo" overrides stateType="started" | Medium |
+| 1 | `policies/retry` | No minimum delay floor; cap=0 produces zero delay | Medium |
+| 2 | `policies/retry` | Negative cap propagates as negative delay | Medium |
+| 3 | `policies/usage` | NaN in update corrupts all token totals | High |
+| 4 | `policies/retry` | Continuation bypass ignores cap entirely | Low |
+| 5 | `workspace` | Empty identifier produces root-equal path | Medium |
+| 6 | `dispatch/issueHasOpenBlockers` | State name "Todo" overrides stateType="started" | Medium |
 
-(Failures 4-6-7 are variants of bug #4; failures 5-9-10 are variants of bug #5)
+(Failures 3-5-6 are variants of bug #3; failures 4-8 are variants of bug #4)
 
 ---
 
@@ -374,14 +352,6 @@ const unstarted = issue.stateType
 **Action:** sortForDispatch(issues)  
 **Expected:** Ordered by createdAt ascending  
 **Status:** PENDING
-
-### S-022: Float priority (2.5) is out of range
-**Category:** Dispatch Ordering  
-**Invariant:** Out-of-range sorts last  
-**Setup:** A(priority=2.5), B(priority=2)  
-**Action:** sortForDispatch([A, B])  
-**Expected:** Depends on prioritySort implementation - does it check integer?  
-**Status:** **FAILED** — prioritySort does not check Number.isInteger(); 2.5 passes the >= 1 && <= 4 check
 
 ### S-023: Priority undefined vs null same behavior
 **Category:** Dispatch Ordering  
@@ -1751,13 +1721,13 @@ const unstarted = issue.stateType
 **Expected:** 1 (Number("01")=1, isInteger=true, >0=true)  
 **Status:** PENDING
 
-### S-188: Float priority handled by prioritySort
+### S-188: Float priority unrepresentable with Priority type
 **Category:** Dispatch Ordering  
 **Invariant:** Out-of-range sorts last  
-**Setup:** Issue with priority=2.5  
-**Action:** prioritySort(2.5)  
-**Expected:** 2.5 passes range check (>=1 && <=4) but isn't integer. Does check exist?  
-**Status:** PENDING
+**Setup:** Priority type is 1|2|3|4 literal union — float values cannot be assigned  
+**Action:** N/A — compile-time enforcement  
+**Expected:** N/A — addressed by type system  
+**Status:** RESOLVED — Priority literal type (1|2|3|4) makes floats unrepresentable
 
 ### S-189: normalizeRouteName with non-string input (number)
 **Category:** Routing  
