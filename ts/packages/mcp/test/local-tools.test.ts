@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, readFile } from "node:fs/promises";
+import { access, mkdtemp, mkdir, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -56,4 +56,35 @@ test("local tools reject unknown names", async () => {
   const { settings } = await localSettings();
   const result = await executeTool("local_bogus", {}, settings);
   assert.equal(result.success, false);
+});
+
+test("local_create_issue writes under HOME for a ~ path, not a literal ~ under cwd", async () => {
+  // Regression: the write path (MCP tools) must expand "~" the same way the read path
+  // (LocalTrackerClient, which the daemon polls) does. Before the shared resolver the
+  // tool wrote a literal "<cwd>/~/board" segment, so agent writes never reached the
+  // polled HOME/board and the run loop re-dispatched forever.
+  const home = await mkdtemp(path.join(tmpdir(), "board-mcp-home-"));
+  const settings = parseConfig({ tracker: { kind: "local", path: "~/board" } }, {});
+
+  const previousHome = process.env.HOME;
+  process.env.HOME = home;
+  try {
+    const created = await executeTool("local_create_issue", { title: "FromTilde" }, settings);
+    assert.equal(created.success, true);
+
+    // The issue file lands under the expanded HOME/board directory.
+    await access(path.join(home, "board", "BOARD-1.md"));
+
+    // And NOT under a literal "~" segment relative to cwd.
+    let literalExists = true;
+    try {
+      await access(path.join(process.cwd(), "~", "board", "BOARD-1.md"));
+    } catch {
+      literalExists = false;
+    }
+    assert.equal(literalExists, false);
+  } finally {
+    if (previousHome === undefined) delete process.env.HOME;
+    else process.env.HOME = previousHome;
+  }
 });

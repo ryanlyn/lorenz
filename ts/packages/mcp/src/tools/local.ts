@@ -1,7 +1,5 @@
-import path from "node:path";
-
 import type { Settings } from "@symphony/domain";
-import { BoardStore } from "@symphony/local-tracker";
+import { BoardStore, resolveBoardDir } from "@symphony/local-tracker";
 
 import type { ToolResult, ToolSpec } from "../tools.js";
 
@@ -87,10 +85,7 @@ export async function executeLocalTool(
 }
 
 function storeFor(settings: Settings): BoardStore {
-  const configured = settings.tracker.path ?? ".symphony/board";
-  return new BoardStore(
-    path.isAbsolute(configured) ? configured : path.join(process.cwd(), configured),
-  );
+  return new BoardStore(resolveBoardDir(settings.tracker.path));
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
