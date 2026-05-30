@@ -133,7 +133,11 @@ function normalizeStateType(value: string | null): IssueStateType | null {
 }
 
 function priorityOrNull(value: unknown): Priority | null {
-  if (typeof value === "number" && Number.isInteger(value) && (PRIORITY_VALUES as readonly number[]).includes(value))
+  if (
+    typeof value === "number" &&
+    Number.isInteger(value) &&
+    (PRIORITY_VALUES as readonly number[]).includes(value)
+  )
     return value as Priority;
   return null;
 }

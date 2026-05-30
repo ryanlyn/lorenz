@@ -83,11 +83,7 @@ export {
 export { LinearClient, LinearGraphQLClient } from "@symphony/linear-tracker";
 export type { LinearClientDeps } from "@symphony/linear-tracker";
 export { MemoryTrackerClient, memoryIssuesFromEnv } from "@symphony/memory-tracker";
-export {
-  configureLogFile,
-  appendLogEvent,
-  defaultLogFile,
-} from "@symphony/log-file";
+export { configureLogFile, appendLogEvent, defaultLogFile } from "@symphony/log-file";
 export {
   humanizeAgentMessage,
   humanizeClaudeMessage,

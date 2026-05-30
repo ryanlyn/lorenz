@@ -45,13 +45,20 @@ test("literal types reject invalid values at compile time", () => {
   // @ts-expect-error Agent updates must use the canonical event vocabulary.
   const _agentUpdate: AgentUpdate = { type: "event" };
   // @ts-expect-error Runtime events must use the canonical runtime event vocabulary.
-  const _runtimeEvent: RuntimeEvent = { type: "event", message: "event", at: "2026-05-13T00:00:00.000Z" };
+  const _runtimeEvent: RuntimeEvent = {
+    type: "event",
+    message: "event",
+    at: "2026-05-13T00:00:00.000Z",
+  };
   // @ts-expect-error Session updates must use the canonical protocol update vocabulary.
   const _sessionUpdate: SessionUpdate = { kind: "event" };
   // @ts-expect-error Issue state type is normalized to known tracker buckets.
   const _issue: Issue = { ...issueFixture, stateType: "needs-review" };
   // @ts-expect-error Codex thread sandbox accepts only app-server sandbox mode names.
-  const _codexSettings: CodexSettings = { ...codexSettingsFixture, threadSandbox: "workspaceWrite" };
+  const _codexSettings: CodexSettings = {
+    ...codexSettingsFixture,
+    threadSandbox: "workspaceWrite",
+  };
 });
 
 test("AGENT_UPDATE_TYPES contains no duplicate entries", () => {
