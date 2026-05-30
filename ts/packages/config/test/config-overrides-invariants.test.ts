@@ -696,7 +696,6 @@ test("turnSandboxPolicy override replaces when base is null", () => {
   );
 });
 
-
 test("Robustness: settingsForIssueState is deterministic for same input", () => {
   fc.assert(
     fc.property(stateNameArb, boundaryPositiveIntArb, (state, maxTurns) => {
