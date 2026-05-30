@@ -1,8 +1,62 @@
 # Symphony Extended Test Scenarios
 
 **Total Scenarios:** 1040  
-**Date:** 2026-05-29  
+**Date:** 2026-05-30  
 **Categories:** 10 (Dispatch Ordering, Dispatch Eligibility, Routing, Retry/Backoff, Usage Accounting, Worker Host, Orchestrator, Runtime Integration, Concurrency Stress, State Transitions)
+
+---
+
+## New Failures Found
+
+### Failure 11: S-1171 (NEW)
+**Invariant Violated:** WHEN a non-unstarted issue has blockers added during execution, THE SYSTEM SHALL NOT abort the running worker (blockers only gate unstarted issues)  
+**Code Location:** `ts/packages/runtime/src/index.ts` — `reconcileTrackedIssues` (line ~570) calling `issueHasOpenBlockers` from `ts/packages/dispatch/src/index.ts` (line ~26)  
+**Explanation:** The `reconcileTrackedIssues` method checks `!issueHasOpenBlockers(issue, settings)` to decide whether to keep a running worker alive. Due to the known `||` bug in `issueHasOpenBlockers` (`issue.stateType === "unstarted" || issue.state.trim().toLowerCase() === "todo"`), a running issue with `state="Todo"` and `stateType="started"` is incorrectly identified as blocked — causing the **already-running worker to be aborted**. This is a higher-severity manifestation of the dispatch-blocking bug (Failure 10/S-184): it doesn't just prevent dispatch, it **terminates active work**.  
+**Reproduction:**
+```ts
+// Sandbox scenario: issue with state="Todo" + stateType="started" is running.
+// A blocker is added mid-execution via timed mutation.
+// On next reconciliation tick, the worker is incorrectly aborted.
+const result = await runScenario({
+  issues: [makeIssue("x", "X-1", {
+    state: "Todo",
+    stateType: "started",
+    blockers: [],
+  })],
+  runnerConfig: { defaultBehavior: { turnCount: 5, latencyPerTurnMs: 100 } },
+  pollTicks: 3,
+  tickDelayMs: 200,
+  timedMutations: [{
+    afterMs: 100,
+    mutate: { type: "add_blocker", issueId: "x", blockerId: "new-block" },
+  }],
+});
+// EXPECTED: Worker continues (stateType="started" means not gated by blockers)
+// ACTUAL: run_reconciled event fires — worker is aborted
+result.events.some(e => e.type === "run_reconciled"); // true — BUG
+```
+**Suggested Fix:** Same root cause as S-184. Prefer `stateType` when available in `issueHasOpenBlockers`:
+```ts
+const unstarted = issue.stateType
+  ? issue.stateType === "unstarted"
+  : issue.state.trim().toLowerCase() === "todo";
+```
+Additionally, the reconciliation path in `reconcileTrackedIssues` (runtime/src/index.ts:570) could be hardened to skip the blocker check for issues that are clearly started (have an active running entry):
+```ts
+if (
+  issueIsActive(issue, this.workflow.settings) &&
+  routedToThisWorker(issue, this.workflow.settings) &&
+  !issueHasOpenBlockers(issue, this.workflow.settings)
+) {
+```
+This condition should arguably not check blockers at all for already-running issues, since the invariant says blockers only gate *unstarted* dispatch.
+
+---
+
+### Note on Bug #1 (Float Priority): Unreachable in Production
+**Discovery:** While generating scenarios, we found that `normalizeIssue` (used by both `makeIssue` in the sandbox and the Linear tracker client) calls `numberOrNull(input.priority)`, which enforces `Number.isInteger(value)`. Any non-integer priority (e.g. 2.5) becomes `null` before reaching `prioritySort`. The bug in `prioritySort` (no `isInteger` check) is therefore **dead code in production** — it can only be triggered by unit tests or code paths that construct `Issue` objects directly without normalization. Severity downgraded from Low to Informational.
+
+---
 
 ## How to Run
 
@@ -16,14 +70,15 @@ npx tsx demo/sandbox.ts --inline '{"issues":[...],"assertions":[...]}'
 
 ## Known Bugs Tested
 
-| # | Bug | Scenarios |
-|---|-----|-----------|
-| 1 | Float priority 2.5 passes prioritySort range check (no isInteger) | S-222, S-228, S-232, S-280 |
-| 2 | Zero/negative cap → zero/negative retry delay (no floor) | S-541, S-542, S-550, S-555 |
-| 3 | NaN in usage update propagates through Math.max | S-621, S-622, S-630, S-635 |
-| 4 | Continuation retry returns 1000 ignoring cap | S-531, S-545, S-560 |
-| 5 | Empty identifier → root-equal workspace path | S-1020, S-1025 |
-| 6 | state="Todo" || overrides stateType="started" for blockers | S-380, S-385, S-390 |
+| # | Bug | Scenarios | Severity |
+|---|-----|-----------|----------|
+| 1 | Float priority 2.5 passes prioritySort range check (no isInteger) | S-222, S-228, S-232, S-280 | Informational (unreachable in prod — `normalizeIssue` enforces `isInteger`) |
+| 2 | Zero/negative cap → zero/negative retry delay (no floor) | S-541, S-542, S-550, S-555 | Medium |
+| 3 | NaN in usage update propagates through Math.max | S-621, S-622, S-630, S-635 | High |
+| 4 | Continuation retry returns 1000 ignoring cap | S-531, S-545, S-560 | Low |
+| 5 | Empty identifier → root-equal workspace path | S-1020, S-1025 | Medium |
+| 6 | state="Todo" ǀǀ overrides stateType="started" — blocks dispatch | S-380, S-385, S-390 | Medium |
+| 7 | **(NEW)** Same ǀǀ bug aborts *running* workers during reconciliation | S-1171 | **High** |
 
 ## PBT Approach
 
@@ -1652,8 +1707,8 @@ Sweep (MS, STATE) over: (50,"Done"), (100,"Cancelled"), (150,"Backlog"), (200,"I
 
 | Category | Scenarios | Known Bugs Triggered |
 |----------|-----------|---------------------|
-| Dispatch Ordering | S-211 – S-330 (120) | Float priority (S-222–S-228, S-232, S-280) |
-| Dispatch Eligibility | S-331 – S-450 (120) | Todo/stateType conflict (S-380–S-383) |
+| Dispatch Ordering | S-211 – S-330 (120) | Float priority (S-222–S-228, S-232, S-280) — unreachable in prod |
+| Dispatch Eligibility | S-331 – S-450 (120) | Todo/stateType conflict blocks dispatch (S-380–S-383) |
 | Routing | S-451 – S-530 (80) | — |
 | Retry and Backoff | S-531 – S-610 (80) | Cap bypass (S-531,S-551–560), zero/negative (S-541–542) |
 | Usage Accounting | S-611 – S-690 (80) | NaN propagation (S-621–622) |
@@ -1661,5 +1716,20 @@ Sweep (MS, STATE) over: (50,"Done"), (100,"Cancelled"), (150,"Backlog"), (200,"I
 | Orchestrator Scheduling | S-751 – S-850 (100) | — |
 | Runtime Integration | S-851 – S-1000 (150) | — |
 | Concurrency and Stress | S-1001 – S-1150 (150) | — |
-| State Transitions | S-1151 – S-1250 (100) | — |
-| **TOTAL** | **1040** | **7 distinct bugs** |
+| State Transitions | S-1151 – S-1250 (100) | **(NEW)** Todo/stateType conflict aborts running workers (S-1171) |
+| **TOTAL** | **1040** | **7 distinct bugs (1 newly discovered)** |
+
+## Distinct Bugs Summary
+
+| # | Module | Bug | Severity |
+|---|--------|-----|----------|
+| 1 | `dispatch/prioritySort` | Float priorities treated as valid | Informational (unreachable) |
+| 2 | `policies/retry` | No minimum delay floor; cap=0 produces zero delay | Medium |
+| 3 | `policies/retry` | Negative cap propagates as negative delay | Medium |
+| 4 | `policies/usage` | NaN in update corrupts all token totals | High |
+| 5 | `policies/retry` | Continuation bypass ignores cap entirely | Low |
+| 6 | `workspace` | Empty identifier produces root-equal path | Medium |
+| 7 | `dispatch/issueHasOpenBlockers` | State name "Todo" overrides stateType="started" for dispatch | Medium |
+| 8 | **(NEW)** `runtime/reconcileTrackedIssues` | Same || bug aborts running workers when blocker added | **High** |
+
+(Bug #8 shares root cause with #7 but has higher impact: #7 prevents dispatch, #8 terminates active work)
