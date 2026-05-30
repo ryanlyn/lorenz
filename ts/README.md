@@ -101,6 +101,187 @@ The workflow files in this directory are byte-identical copies of the Elixir wor
 
 `pnpm test` includes a drift check that compares those files against `../elixir/`.
 
+## Trackers
+
+A tracker is the source of issues Symphony works on. It is selected by `tracker.kind` in the
+workflow front matter. Every tracker exposes the same read surface to the runtime (poll for
+candidate issues, refresh in-flight issues by id) and one or more agent write tools. The write
+tools differ per kind; their descriptions are self-documenting and surface to the agent via the
+MCP `tools/list` call.
+
+Supported kinds:
+
+- `linear` - issues live in a Linear project. Read access uses `tracker.api_key` (resolved from
+  `LINEAR_API_KEY`) and `tracker.project_slug`; the agent writes through the `linear_graphql`
+  tool. This is the original backend and is unchanged.
+- `local` - issues live as Markdown files on disk. No external service required.
+- `slack` - an @-mention of the bot is an issue, an emoji reaction is the status, and a thread
+  reply is a comment.
+- `memory` - an in-process tracker used for tests and dry runs.
+
+All kinds share the dispatch routing block under `tracker.dispatch`:
+
+```yaml
+tracker:
+  dispatch:
+    accept_unrouted: true # process issues that carry no matching route label (default)
+    only_routes: null # or a list of route names this instance handles
+    route_label_prefix: "Symphony:" # the label prefix that names a route
+```
+
+### Local tracker (filesystem board)
+
+The local tracker runs Symphony against a directory of Markdown files, with no Linear API key or
+workspace. See `WORKFLOW.local.md` for a complete example workflow.
+
+Configure it with `kind: local` and a board `path` (default `.symphony/board`):
+
+```yaml
+tracker:
+  kind: local
+  path: .symphony/board
+  active_states:
+    - Todo
+    - In Progress
+  terminal_states:
+    - Done
+    - Cancelled
+```
+
+`path` is the only local-specific setting and is always defaulted, so a local workflow is valid
+with just `kind: local`.
+
+Each issue is one file named `BOARD-<n>.md` (for example `.symphony/board/BOARD-7.md`). The
+identifier is the file stem (`BOARD-7`). The format is YAML front matter followed by a `# Title`
+heading, the description, and an optional `## Comments` section:
+
+```markdown
+---
+status: In Progress
+labels:
+  - backend
+---
+
+# Fix the retry queue
+
+The retry slot is not released when a worker fails.
+
+<!-- symphony:comments -->
+
+## Comments
+
+- 2026-05-29T12:00:00.000Z agent: Reproduced the leak; fix in progress.
+```
+
+- `status` (required) is the issue state. Active states (`Todo`, `In Progress`) mean the issue is
+  available to work; terminal states (`Done`, `Cancelled`) mean it is finished and must not be
+  reopened. Configure the exact sets with `active_states` / `terminal_states`.
+- `labels` (optional) is a YAML list. Labels feed dispatch routing the same way Linear labels do.
+- The `# Title` heading is the issue title; the text below it is the description.
+- The `## Comments` section is managed by the `local_comment` tool. The hidden
+  `<!-- symphony:comments -->` marker delimits it so a description that itself contains a
+  `## Comments` heading is never misparsed; treat the most recent comment block as the live
+  workpad.
+
+Agent write tools for `kind: local`:
+
+- `local_update_status` - move an issue to a new status (args: `issueId`, `status`).
+- `local_comment` - append a progress note to the issue's `## Comments` section (args: `issueId`,
+  `body`).
+- `local_create_issue` - create a new board issue for out-of-scope follow-up work (args: `title`,
+  optional `body`, optional `status`).
+
+To seed a board so you can try `kind: local` immediately, use the demo seeder, which writes
+sample `BOARD-<n>.md` files through the same `BoardStore` the running tracker uses:
+
+```sh
+npx tsx demo/seed-local.ts                  # seeds ./.symphony/board
+npx tsx demo/seed-local.ts /tmp/demo-board  # seeds an explicit directory
+npx tsx demo/seed-local.ts .symphony/board 2 # seeds only the first 2 issues
+```
+
+Point `tracker.path` at the directory you seeded and run Symphony as usual.
+
+### Slack tracker (mention + reaction)
+
+The Slack tracker treats an @-mention of a bot as an issue. The mentioned message's text is the
+issue title/description, threaded replies are comments, and a status emoji reaction on the source
+message is the status. See `WORKFLOW.slack.md` for a complete example workflow.
+
+Set up a Slack app:
+
+1. Create a Slack app at <https://api.slack.com/apps> (from scratch) in your workspace.
+2. Under "OAuth & Permissions", add these **bot token scopes**:
+   - `channels:history` - read messages in public channels.
+   - `groups:history` - read messages in private channels (only if you watch private channels).
+   - `reactions:read` - read the status emoji reactions on a message.
+   - `reactions:write` - set status by adding/removing the managed reaction.
+   - `chat:write` - post threaded replies as comments.
+   - `app_mentions:read` - read the @-mentions that create issues.
+3. Install the app to the workspace and copy the **Bot User OAuth Token** (starts with `xoxb-`).
+   Export it as `SLACK_BOT_TOKEN`; Symphony resolves it into `tracker.api_key`.
+4. Find the app's **bot user id** (the `U...` id, shown on the app's "App Home" / via
+   `auth.test`). Export it as `SLACK_BOT_USER_ID` and reference it as `tracker.bot_user_id`.
+5. Invite the bot to each channel you want it to watch (`/invite @your-bot`). A bot only sees
+   `*:history` for channels it has joined.
+6. Collect the **channel IDs** (`C...`, from the channel's "About" panel) for those channels and
+   list them under `tracker.channels`.
+
+Configure it with `kind: slack`:
+
+```yaml
+tracker:
+  kind: slack
+  channels:
+    - C0123456789
+  bot_user_id: $SLACK_BOT_USER_ID
+  emoji_states:
+    eyes: In Progress
+    white_check_mark: Done
+    x: Cancelled
+  active_states:
+    - Todo
+    - In Progress
+  terminal_states:
+    - Done
+    - Cancelled
+```
+
+`SLACK_BOT_TOKEN` (the bot token) and a non-empty `channels` list are required. The bot user id
+matters for **mention filtering**: with `bot_user_id` set, only messages that mention that exact
+user become issues, and only that leading mention is stripped from the title. Without it, any
+`<@U...>` mention in a watched channel is treated as an issue (back-compat), which is usually too
+broad for a shared workspace, so set it.
+
+The issue identifier is the message reference in `<channel>:<ts>` form (for example
+`C0123456789:1717000000.000100`); that is the `issueId` passed to the write tools.
+
+Status is shown as an emoji reaction on the source message, controlled by `emoji_states` (emoji
+name to state name). The default map is:
+
+- `:eyes:` -> `In Progress`
+- `:white_check_mark:` -> `Done`
+- `:x:` -> `Cancelled`
+
+A message with no managed reaction is effectively new (`Todo`). Setting status swaps the
+reaction: it removes any other status emoji it manages and adds the one for the target state.
+
+Agent write tools for `kind: slack`:
+
+- `slack_update_status` - set the issue's status by swapping its managed emoji reaction (args:
+  `issueId`, `status`).
+- `slack_comment` - post a threaded reply on the source message as a comment (args: `issueId`,
+  `body`).
+
+There is no `slack_create_issue`: issues are created by humans @-mentioning the bot, not by the
+agent.
+
+Routing note: Slack issues carry only hashtag-derived labels (a `#tag` in the message text
+becomes the label `tag`); they are not otherwise routed or assigned. With label routing, keep
+`accept_unrouted: true` (the default) so mentions without a matching route label are still
+processed, or tag messages with a hashtag that matches your `route_label_prefix` route so they
+route to the intended instance.
+
 ## Workflow Prompt
 
 The prompt body supports the same public context surface as Elixir:

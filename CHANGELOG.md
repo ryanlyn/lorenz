@@ -1,5 +1,23 @@
 # Changelog
 
+## 2026-05-30
+
+- Decoupled the TypeScript port's tracker abstraction so backends are pluggable
+  by `tracker.kind`, and added two trackers that need no external service. The
+  `local` tracker stores each issue as a `BOARD-<n>.md` file under
+  `.symphony/board/` (status front matter, optional labels, and a
+  `## Comments` workpad) with `local_update_status`, `local_comment`, and
+  `local_create_issue` write tools and a demo seeder. The `slack` tracker turns
+  a bot @-mention into an issue, an emoji reaction into status, and a thread
+  reply into a comment, with `slack_update_status` and `slack_comment` write
+  tools, configurable watched channels, bot-user-id mention filtering, and a
+  configurable emoji-to-state map. Added `WORKFLOW.local.md` and
+  `WORKFLOW.slack.md` example workflows and a Trackers section in `ts/README.md`.
+- Hardened both new trackers: atomic, lock-guarded local board writes with
+  collision-safe id allocation and path-traversal-proof ids, and Slack mention
+  filtering scoped to the configured bot user with hashtag-derived routing
+  labels.
+
 ## 2026-05-27
 
 - Tightened TypeScript port runtime fidelity by tracking live elapsed runtime
