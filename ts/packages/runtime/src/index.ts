@@ -127,7 +127,7 @@ export interface RuntimeRetryEntry {
   issueId: string;
   identifier: string;
   attempt: number;
-  dueAt: string;
+  dueAtIso: string;
   monotonicDeadlineMs: number;
   error?: string | undefined;
   slotIndex?: number | undefined;
@@ -740,7 +740,7 @@ export class SymphonyRuntime {
       if (
         !current ||
         current.attempt !== scheduled.attempt ||
-        current.dueAtIso !== scheduled.dueAt
+        current.dueAtIso !== scheduled.dueAtIso
       ) {
         return;
       }
@@ -881,7 +881,7 @@ function runtimeRetryEntry(entry: {
     issueId: entry.issueId,
     identifier: entry.identifier,
     attempt: entry.attempt,
-    dueAt: entry.dueAtIso,
+    dueAtIso: entry.dueAtIso,
     monotonicDeadlineMs: entry.monotonicDeadlineMs,
     ...(entry.error !== undefined ? { error: entry.error } : {}),
     ...(entry.slotIndex !== undefined ? { slotIndex: entry.slotIndex } : {}),

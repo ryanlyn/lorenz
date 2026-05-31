@@ -456,7 +456,7 @@ function retryFixture(
     issueId: identifier,
     identifier,
     attempt,
-    dueAt: new Date(new Date(now).getTime() + dueInSeconds * 1000).toISOString(),
+    dueAtIso: new Date(new Date(now).getTime() + dueInSeconds * 1000).toISOString(),
     monotonicDeadlineMs: performance.now() + dueInSeconds * 1000,
     error,
     slotIndex: 0,

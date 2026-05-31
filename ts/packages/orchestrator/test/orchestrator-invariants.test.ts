@@ -235,7 +235,7 @@ describe("INVARIANT: When a claim succeeds, the retryAttempts entry for that iss
     const snap1 = orch.snapshot();
     assert.equal(snap1.retrying.length, 1);
 
-    // Advance past dueAt
+    // Advance past due time
     clock.advance(10000);
     const entry2 = orch.claim(issue);
     assert.ok(entry2 !== null);

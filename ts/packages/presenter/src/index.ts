@@ -31,7 +31,7 @@ export function statePayload(
       issue_id: entry.issueId,
       issue_identifier: entry.identifier,
       attempt: entry.attempt,
-      due_at: entry.dueAt,
+      due_at: entry.dueAtIso,
       error: entry.error ?? null,
       worker_host: entry.workerHost ?? null,
       workspace_path: entry.workspacePath ?? null,
@@ -68,7 +68,7 @@ export function issuePayload(
       retry: retry
         ? {
             attempt: retry.attempt,
-            due_at: retry.dueAt,
+            due_at: retry.dueAtIso,
             error: retry.error ?? null,
             worker_host: retry.workerHost ?? null,
             workspace_path: retry.workspacePath ?? null,

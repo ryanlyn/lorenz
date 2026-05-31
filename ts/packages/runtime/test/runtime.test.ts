@@ -117,7 +117,7 @@ test("runtime schedules continuation retry after normal worker exit even when is
   assert.ok(retry);
   assert.equal(retry.identifier, "MT-INACTIVE-CONTINUATION");
   assert.equal(retry.attempt, 1);
-  const delayMs = new Date(retry.dueAt).getTime() - beforeRun;
+  const delayMs = new Date(retry.dueAtIso).getTime() - beforeRun;
   assert.ok(delayMs >= 900 && delayMs <= 1_500);
 });
 
