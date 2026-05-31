@@ -5,8 +5,8 @@ import { test, vi } from "vitest";
 import {
   buildPrompt,
   continuationPrompt,
+  createResumeStateStore,
   createWorkspaceForIssue,
-  deleteResumeState,
   parseConfig,
   readResumeState,
   removeIssueWorkspaces,
@@ -17,11 +17,41 @@ import {
   safeIdentifier,
   shellEscape,
   validateWorkspaceCwd,
-  writeResumeState,
 } from "@symphony/cli";
+import type { ResumeState } from "@symphony/resume-state";
 
 import { assert } from "./assert.js";
-import { initGitRepo, sampleIssue, tempDir, writeExecutable } from "./helpers.js";
+import { sampleIssue, tempDir, writeExecutable } from "./helpers.js";
+
+function resumeKey(workspace: string, workerHost?: string | null): string {
+  return `${workerHost ?? "local"}\0${workspace}`;
+}
+
+function createMemoryResumeStateAdapters(initial: ResumeState[] = []) {
+  const states = new Map<string, ResumeState>();
+  for (const state of initial) {
+    if (state.workspacePath) states.set(resumeKey(state.workspacePath, state.workerHost), state);
+  }
+
+  return {
+    adapters: {
+      readResumeState: async (workspace: string, workerHost?: string | null) => {
+        const state = states.get(resumeKey(workspace, workerHost));
+        return state ? ({ status: "ok", state } as const) : ({ status: "missing" } as const);
+      },
+      writeResumeState: async (
+        workspace: string,
+        state: ResumeState,
+        workerHost: string | null,
+      ) => {
+        states.set(resumeKey(workspace, workerHost), { ...state, workerHost });
+      },
+      resumeStateMatches,
+    },
+    read: (workspace: string, workerHost?: string | null) =>
+      states.get(resumeKey(workspace, workerHost)),
+  };
+}
 
 test("prompt rendering is strict and exposes ensemble context", async () => {
   const prompt = await buildPrompt(
@@ -347,7 +377,6 @@ new acp.AgentSideConnection((connection) => new FakeAgent(connection), stream);
         stall_timeout_ms: 0,
       },
     },
-    hooks: { after_create: "git init -b main >/dev/null" },
   });
   const workflow = {
     path: path.join(root, "WORKFLOW.md"),
@@ -355,18 +384,19 @@ new acp.AgentSideConnection((connection) => new FakeAgent(connection), stream);
     promptTemplate: "Issue {{ issue.identifier }}",
     settings,
   };
+  const resumeStore = createMemoryResumeStateAdapters();
 
   const result = await runAgentAttempt({
     issue: sampleIssue,
     workflow,
     fetchIssue: async () => sampleIssue,
+    adapters: resumeStore.adapters,
   });
 
-  const resume = await readResumeState(result.workspace);
+  const resume = resumeStore.read(result.workspace);
   assert.equal(result.turnCount, 2);
   assert.equal(result.resumeId, "claude-session-2");
-  assert.equal(resume.status, "ok");
-  assert.equal(resume.status === "ok" && resume.state.resumeId, "claude-session-2");
+  assert.equal(resume?.resumeId, "claude-session-2");
 });
 
 test("remote agent attempts run hooks and persist resume state over SSH", async () => {
@@ -400,7 +430,7 @@ rl.on("line", (line) => {
     workspace: { root: "~/workspaces" },
     worker: { ssh_hosts: ["worker-01:2200"], ssh_timeout_ms: 5_000 },
     hooks: {
-      after_create: `git init -q && echo after_create >> ${shellEscape(hookLog)}`,
+      after_create: `echo after_create >> ${shellEscape(hookLog)}`,
       before_run: `echo before_run >> ${shellEscape(hookLog)}`,
       after_run: `echo after_run >> ${shellEscape(hookLog)}`,
     },
@@ -413,11 +443,13 @@ rl.on("line", (line) => {
     promptTemplate: "Issue {{ issue.identifier }}",
     settings,
   };
+  const resumeStore = createMemoryResumeStateAdapters();
 
   const result = await runAgentAttempt({
     issue: sampleIssue,
     workflow,
     workerHost: "worker-01:2200",
+    adapters: resumeStore.adapters,
   });
 
   assert.equal(
@@ -431,23 +463,25 @@ rl.on("line", (line) => {
     "after_run",
   ]);
 
-  const resume = await readResumeState(result.workspace, "worker-01:2200");
-  assert.equal(resume.status, "ok");
-  assert.equal(resume.status === "ok" && resume.state.workerHost, "worker-01:2200");
+  const resume = resumeStore.read(result.workspace, "worker-01:2200");
+  assert.equal(resume?.workerHost, "worker-01:2200");
   assert.equal(
-    resume.status === "ok" &&
-      resumeStateMatches(resume.state, {
+    Boolean(
+      resume &&
+      resumeStateMatches(resume, {
         agentKind: "codex",
         issue: sampleIssue,
         workspacePath: result.workspace,
         workerHost: "worker-01:2200",
       }),
+    ),
     true,
   );
 
   const traceText = await fs.readFile(trace, "utf8");
-  assert.match(traceText, /git -C/);
-  assert.match(traceText, /symphony\/resume.json/);
+  assert.match(traceText, /after_create/);
+  assert.match(traceText, /before_run/);
+  assert.match(traceText, /after_run/);
 
   vi.unstubAllEnvs();
 });
@@ -497,7 +531,6 @@ rl.on("line", (line) => {
   );
   const settings = parseConfig({
     workspace: { root: workspaceRoot },
-    hooks: { after_create: "git init -q" },
     codex: { command: `${fakeCodex} app-server`, turn_timeout_ms: 5_000 },
     agent: { max_turns: 1 },
   });
@@ -507,16 +540,18 @@ rl.on("line", (line) => {
     promptTemplate: "Issue {{ issue.identifier }}",
     settings,
   };
-  const workspace = await createWorkspaceForIssue(settings, sampleIssue);
-  const resumePath = path.join(workspace, ".git", "symphony", "resume.json");
-  await fs.mkdir(path.dirname(resumePath), { recursive: true });
-  await fs.writeFile(resumePath, "{not-json");
   const updates: string[] = [];
 
   const result = await runAgentAttempt({
     issue: sampleIssue,
     workflow,
     onUpdate: (update) => updates.push(`${update.type}:${String(update.message ?? "")}`),
+    adapters: {
+      readResumeState: async () =>
+        ({ status: "error", reason: "resume_state_decode_failed" }) as const,
+      writeResumeState: async () => {},
+      resumeStateMatches,
+    },
   });
 
   assert.equal(result.turnCount, 1);
@@ -549,7 +584,6 @@ rl.on("line", (line) => {
 
   const settings = parseConfig({
     workspace: { root: workspaceRoot },
-    hooks: { after_create: "git init -q" },
     codex: { command: `${fakeCodex} app-server`, stall_timeout_ms: 30, turn_timeout_ms: 50 },
     agent: { max_turns: 1 },
   });
@@ -560,27 +594,31 @@ rl.on("line", (line) => {
     settings,
   };
   const workspace = await createWorkspaceForIssue(settings, sampleIssue);
-  await writeResumeState(workspace, {
-    agentKind: "codex",
-    resumeId: "thread-stale",
-    issueId: sampleIssue.id,
-    issueIdentifier: sampleIssue.identifier,
-    issueState: sampleIssue.state,
-    workspacePath: workspace,
-  });
+  const resumeStore = createMemoryResumeStateAdapters([
+    {
+      agentKind: "codex",
+      resumeId: "thread-stale",
+      issueId: sampleIssue.id,
+      issueIdentifier: sampleIssue.identifier,
+      issueState: sampleIssue.state,
+      workspacePath: workspace,
+    },
+  ]);
 
   await assert.rejects(
-    () => runAgentAttempt({ issue: sampleIssue, workflow }),
+    () => runAgentAttempt({ issue: sampleIssue, workflow, adapters: resumeStore.adapters }),
     /codex turn timed out/,
   );
-  assert.equal((await readResumeState(workspace)).status, "ok");
+  assert.equal(resumeStore.read(workspace)?.resumeId, "thread-stale");
 });
 
 test("resume state reads generic agent/session_id shape and matches issue/workspace identity", async () => {
   const workspace = await tempDir("symphony-ts-resume");
-  await initGitRepo(workspace);
+  const gitDir = path.join(workspace, ".git");
+  await fs.mkdir(gitDir, { recursive: true });
+  const store = createResumeStateStore({ resolveGitDir: async () => gitDir });
 
-  await writeResumeState(workspace, {
+  await store.write(workspace, {
     agentKind: "codex",
     resumeId: "thread-1",
     issueId: sampleIssue.id,
@@ -589,7 +627,7 @@ test("resume state reads generic agent/session_id shape and matches issue/worksp
     workspacePath: workspace,
   });
 
-  const result = await readResumeState(workspace);
+  const result = await store.read(workspace);
   assert.equal(result.status, "ok");
   assert.equal(result.status === "ok" && result.state.agentKind, "codex");
   const resumePath = path.join(workspace, ".git", "symphony", "resume.json");
@@ -623,7 +661,7 @@ test("resume state reads generic agent/session_id shape and matches issue/worksp
   );
 
   await assert.rejects(
-    () => writeResumeState(workspace, { agentKind: "" as "codex", resumeId: "bad" }),
+    () => store.write(workspace, { agentKind: "" as "codex", resumeId: "bad" }),
     /invalid_resume_state/,
   );
 
@@ -638,13 +676,13 @@ test("resume state reads generic agent/session_id shape and matches issue/worksp
       workspace_path: workspace,
     })}\n`,
   );
-  const generic = await readResumeState(workspace);
+  const generic = await store.read(workspace);
   assert.equal(generic.status, "ok");
   assert.equal(generic.status === "ok" && generic.state.agentKind, "pi");
   assert.equal(generic.status === "ok" && generic.state.resumeId, "pi-session");
 
-  await deleteResumeState(workspace);
-  assert.equal((await readResumeState(workspace)).status, "missing");
+  await store.delete(workspace);
+  assert.equal((await store.read(workspace)).status, "missing");
 });
 
 async function fileExists(filePath: string): Promise<boolean> {

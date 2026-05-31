@@ -72,6 +72,7 @@ export {
   writeRemoteFile,
 } from "@symphony/ssh";
 export {
+  createResumeStateStore,
   readResumeState,
   writeResumeState,
   deleteResumeState,
