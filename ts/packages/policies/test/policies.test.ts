@@ -261,6 +261,16 @@ test('reconciliationStopReason — blocked issue returns "blocked"', () => {
   assert.equal(reconciliationStopReason(issue, settings), "blocked");
 });
 
+test('reconciliationStopReason — started issue with open blockers returns "blocked"', () => {
+  const issue = makeIssue({
+    state: "In Progress",
+    stateType: "started",
+    blockers: [{ id: "blocker-1", identifier: "ENG-2", state: "Todo" }],
+  });
+  const settings = makeSettings();
+  assert.equal(reconciliationStopReason(issue, settings), "blocked");
+});
+
 test('reconciliationStopReason — active, routed, unblocked issue returns "inactive"', () => {
   const issue = makeIssue({ state: "In Progress" });
   const settings = makeSettings();
@@ -326,16 +336,16 @@ test('reconciliationStopReason — unrouted via route label mismatch returns "un
   assert.equal(reconciliationStopReason(issue, settings), "unrouted");
 });
 
-test("reconciliationStopReason — blocked only fires for unstarted/todo state issues", () => {
-  // Issue is "In Progress" (started state) with blockers - issueHasOpenBlockers requires
-  // stateType "unstarted" or state "todo", so this should NOT return "blocked".
+test("reconciliationStopReason — started issue with open blockers returns blocked", () => {
+  // Blockers apply regardless of stateType — a started issue with open blockers
+  // should be aborted during reconciliation.
   const issue = makeIssue({
     state: "In Progress",
     stateType: "started",
     blockers: [{ id: "blocker-1", identifier: "ENG-2", state: "In Progress" }],
   });
   const settings = makeSettings();
-  assert.equal(reconciliationStopReason(issue, settings), "inactive");
+  assert.equal(reconciliationStopReason(issue, settings), "blocked");
 });
 
 test('reconciliationStopReason — blocked with all blockers in terminal state returns "inactive"', () => {

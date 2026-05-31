@@ -443,9 +443,9 @@ test("blocker terminal check is case-insensitive with whitespace trimming", () =
   );
 });
 
-// INVARIANT: When a non-unstarted issue has blockers, it SHALL still be eligible.
+// INVARIANT: When a non-unstarted issue has open blockers, it SHALL be blocked.
 
-test("non-unstarted issue with blockers SHALL still be eligible", () => {
+test("non-unstarted issue with open blockers SHALL be blocked", () => {
   fc.assert(
     fc.property(
       fc.array(
@@ -464,15 +464,15 @@ test("non-unstarted issue with blockers SHALL still be eligible", () => {
         });
         const settings = makeSettings({ activeStates: ["Todo", "In Progress"] });
         const state = { runningCount: 0, claimedSlots: new Set<string>() };
-        assert.equal(issueHasOpenBlockers(issue, settings), false);
-        assert.equal(shouldDispatchIssue(issue, settings, state), true);
+        assert.equal(issueHasOpenBlockers(issue, settings), true);
+        assert.equal(shouldDispatchIssue(issue, settings, state), false);
       },
     ),
     { numRuns: 100 },
   );
 });
 
-test("started issue ignores blockers even with many open blockers", () => {
+test("started issue with many open blockers SHALL be blocked", () => {
   fc.assert(
     fc.property(fc.integer({ min: 1, max: 10 }), (numBlockers) => {
       const blockers = Array.from({ length: numBlockers }, (_, i) => ({
@@ -487,8 +487,8 @@ test("started issue ignores blockers even with many open blockers", () => {
       });
       const settings = makeSettings({ activeStates: ["Todo", "In Progress"] });
       const state = { runningCount: 0, claimedSlots: new Set<string>() };
-      assert.equal(issueHasOpenBlockers(issue, settings), false);
-      assert.equal(shouldDispatchIssue(issue, settings, state), true);
+      assert.equal(issueHasOpenBlockers(issue, settings), true);
+      assert.equal(shouldDispatchIssue(issue, settings, state), false);
     }),
     { numRuns: 50 },
   );

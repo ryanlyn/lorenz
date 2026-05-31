@@ -271,7 +271,7 @@ describe("routedToThisWorker", () => {
 });
 
 describe("issueHasOpenBlockers", () => {
-  test("started state never counts as blocked even with blockers", () => {
+  test("started state with open blockers is blocked", () => {
     const settings = makeSettings();
     const issue = normalizeIssue({
       id: "i1",
@@ -280,7 +280,7 @@ describe("issueHasOpenBlockers", () => {
       state: { name: "In Progress", type: "started" },
       blockers: [{ state: "Todo" }],
     });
-    assert.equal(issueHasOpenBlockers(issue, settings), false);
+    assert.equal(issueHasOpenBlockers(issue, settings), true);
   });
 
   test("all blockers terminal returns false", () => {
@@ -355,7 +355,7 @@ describe("issueHasOpenBlockers", () => {
     assert.equal(issueHasOpenBlockers(issue, settings), true);
   });
 
-  test("completed state is not treated as blocked", () => {
+  test("completed state with open blockers is still considered blocked", () => {
     const settings = makeSettings();
     const issue = normalizeIssue({
       id: "i1",
@@ -364,7 +364,7 @@ describe("issueHasOpenBlockers", () => {
       state: { name: "Done", type: "completed" },
       blockers: [{ state: "Todo" }],
     });
-    assert.equal(issueHasOpenBlockers(issue, settings), false);
+    assert.equal(issueHasOpenBlockers(issue, settings), true);
   });
 });
 
