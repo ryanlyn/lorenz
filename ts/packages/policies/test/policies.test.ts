@@ -209,7 +209,6 @@ function makeIssue(overrides: Partial<Issue> = {}): Issue {
     title: "Test issue",
     state: "In Progress",
     stateType: "started",
-    stateType: "started",
     labels: [],
     blockers: [],
     assignedToWorker: true,
@@ -286,7 +285,6 @@ test('reconciliationStopReason — terminal + unrouted + blocked: "terminal" tak
   const issue = makeIssue({
     state: "Done",
     stateType: "completed",
-    stateType: "unstarted",
     assignedToWorker: false,
     blockers: [{ id: "blocker-1", identifier: "ENG-2", state: "In Progress" }],
   });
@@ -299,7 +297,6 @@ test('reconciliationStopReason — unrouted + blocked: "unrouted" takes priority
   // and would be blocked (unstarted state with open blocker). "unrouted" should win.
   const issue = makeIssue({
     state: "Todo",
-    stateType: "unstarted",
     stateType: "unstarted",
     assignedToWorker: false,
     blockers: [{ id: "blocker-1", identifier: "ENG-2", state: "In Progress" }],
@@ -335,7 +332,6 @@ test("reconciliationStopReason — blocked only fires for unstarted/todo state i
   const issue = makeIssue({
     state: "In Progress",
     stateType: "started",
-    stateType: "started",
     blockers: [{ id: "blocker-1", identifier: "ENG-2", state: "In Progress" }],
   });
   const settings = makeSettings();
@@ -347,7 +343,6 @@ test('reconciliationStopReason — blocked with all blockers in terminal state r
   // so issueHasOpenBlockers returns false and the issue falls through to "inactive".
   const issue = makeIssue({
     state: "Todo",
-    stateType: "unstarted",
     stateType: "unstarted",
     blockers: [{ id: "blocker-1", identifier: "ENG-2", state: "Done" }],
   });

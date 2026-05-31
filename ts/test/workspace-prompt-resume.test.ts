@@ -84,7 +84,7 @@ test("workspace identifiers preserve Elixir safe_identifier semantics", async ()
 
   const root = await tempDir("symphony-ts-workspace-empty-identifier");
   const settings = parseConfig({ workspace: { root } });
-  await assert.rejects(() => createWorkspaceForIssue(settings, ""), /workspace root/);
+  await assert.rejects(() => createWorkspaceForIssue(settings, ""), /empty identifier/);
 });
 
 test("workspace cwd validation rejects control characters", async () => {
