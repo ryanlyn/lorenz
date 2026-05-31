@@ -6,7 +6,8 @@
  * one JSON line per AgentUpdate event emitted by the TraceEmitter.
  */
 
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync } from "node:fs";
+import { readdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
 
 import type { DisplayEvent } from "./models/display-events.js";
@@ -31,6 +32,7 @@ export class TraceWatcher {
   private fileStates = new Map<string, FileState>();
   private timer: ReturnType<typeof setInterval> | null = null;
   private stopped = false;
+  private scanning = false;
 
   constructor(traceDir: string, pollIntervalMs = DEFAULT_POLL_INTERVAL_MS) {
     this.traceDir = traceDir;
@@ -40,10 +42,10 @@ export class TraceWatcher {
   start(callback: WatcherCallback): void {
     this.stopped = false;
     // Initial scan
-    this.scan(callback);
+    void this.scan(callback);
     // Set up polling
     this.timer = setInterval(() => {
-      this.scan(callback);
+      void this.scan(callback);
     }, this.pollIntervalMs);
   }
 
@@ -107,12 +109,12 @@ export class TraceWatcher {
   /**
    * Force re-read of a single file by issueId.
    */
-  refresh(issueId: string): DisplayEvent[] {
+  async refresh(issueId: string): Promise<DisplayEvent[]> {
     const filePath = path.resolve(this.traceDir, `${issueId}.jsonl`);
     const resolvedDir = path.resolve(this.traceDir);
     if (!filePath.startsWith(resolvedDir + path.sep)) return [];
     if (!existsSync(filePath)) return [];
-    const state = this.readFile(filePath, issueId);
+    const state = await this.readFile(filePath, issueId);
     if (state) {
       this.fileStates.set(issueId, state);
       return state.events;
@@ -120,52 +122,62 @@ export class TraceWatcher {
     return [];
   }
 
-  private scan(callback: WatcherCallback): void {
+  private async scan(callback: WatcherCallback): Promise<void> {
     if (this.stopped) return;
+    if (this.scanning) return; // Skip if previous scan is still in progress
     if (!existsSync(this.traceDir)) return;
 
-    let entries: string[];
+    this.scanning = true;
     try {
-      entries = readdirSync(this.traceDir);
-    } catch {
-      return;
-    }
-
-    for (const entry of entries) {
-      if (!entry.endsWith(".jsonl")) continue;
-      const filePath = path.join(this.traceDir, entry);
-      const issueId = entry.slice(0, -6); // strip .jsonl
-
+      let entries: string[];
       try {
-        const stat = statSync(filePath);
-        const existing = this.fileStates.get(issueId);
-
-        // Skip if file has not been modified since last read
-        if (existing && stat.mtimeMs <= existing.lastModified) {
-          continue;
-        }
-
-        const state = this.readFile(filePath, issueId, stat.mtimeMs);
-        if (state && state.lineCount !== (existing?.lineCount ?? 0)) {
-          this.fileStates.set(issueId, state);
-          callback(issueId, state.events);
-        } else if (state) {
-          // Update lastModified even if line count is same (file may have been touched)
-          this.fileStates.set(issueId, state);
-        }
+        entries = await readdir(this.traceDir);
       } catch {
-        // Skip files we cannot read
+        return;
       }
+
+      for (const entry of entries) {
+        if (!entry.endsWith(".jsonl")) continue;
+        const filePath = path.join(this.traceDir, entry);
+        const issueId = entry.slice(0, -6); // strip .jsonl
+
+        try {
+          const fileStat = await stat(filePath);
+          const existing = this.fileStates.get(issueId);
+
+          // Skip if file has not been modified since last read
+          if (existing && fileStat.mtimeMs <= existing.lastModified) {
+            continue;
+          }
+
+          const state = await this.readFile(filePath, issueId, fileStat.mtimeMs);
+          if (state && state.lineCount !== (existing?.lineCount ?? 0)) {
+            this.fileStates.set(issueId, state);
+            callback(issueId, state.events);
+          } else if (state) {
+            // Update lastModified even if line count is same (file may have been touched)
+            this.fileStates.set(issueId, state);
+          }
+        } catch {
+          // Skip files we cannot read
+        }
+      }
+    } finally {
+      this.scanning = false;
     }
   }
 
-  private readFile(filePath: string, issueId: string, mtimeMs?: number): FileState | null {
+  private async readFile(
+    filePath: string,
+    issueId: string,
+    mtimeMs?: number,
+  ): Promise<FileState | null> {
     try {
-      const content = readFileSync(filePath, "utf-8");
+      const content = await readFile(filePath, "utf-8");
       const lines = content.split("\n").filter((l) => l.trim().length > 0);
       const events = parseTraceLines(lines);
       const metadata = extractTicketMetadata(lines);
-      const lastModified = mtimeMs ?? statSync(filePath).mtimeMs;
+      const lastModified = mtimeMs ?? (await stat(filePath)).mtimeMs;
 
       return {
         issueId: metadata?.issueId ?? issueId,

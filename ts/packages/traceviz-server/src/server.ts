@@ -29,7 +29,6 @@ import { computeStats } from "./stats.js";
 
 export interface CreateAppOptions {
   traceDir: string;
-  port?: number | undefined;
   staticDir?: string | undefined;
 }
 
@@ -70,8 +69,9 @@ export async function createApp(options: CreateAppOptions) {
     for (const ws of connections) {
       try {
         ws.send(msg);
-      } catch {
+      } catch (err) {
         connections.delete(ws);
+        console.debug("[traceviz] WebSocket send failed, removing connection:", err);
       }
     }
   }

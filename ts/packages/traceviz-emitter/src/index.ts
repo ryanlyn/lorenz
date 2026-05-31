@@ -40,7 +40,7 @@ export class TraceEmitter {
   static tracePathForIssue(traceDir: string, issueId: string): string {
     const resolved = path.resolve(traceDir, issueId + ".jsonl");
     const resolvedDir = path.resolve(traceDir);
-    if (!resolved.startsWith(resolvedDir + path.sep) && resolved !== resolvedDir) {
+    if (!resolved.startsWith(resolvedDir + path.sep)) {
       throw new Error(`Invalid issueId: path traversal detected`);
     }
     return resolved;

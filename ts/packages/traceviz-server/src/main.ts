@@ -52,7 +52,7 @@ async function main(): Promise<void> {
     staticDir = path.resolve(staticDir);
   }
 
-  const app = await createApp({ traceDir, port, staticDir });
+  const app = await createApp({ traceDir, staticDir });
 
   await app.listen({ host: "127.0.0.1", port });
   console.log(`Traceviz server listening at http://127.0.0.1:${port}`);

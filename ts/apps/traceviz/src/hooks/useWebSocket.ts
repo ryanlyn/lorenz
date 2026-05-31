@@ -9,8 +9,10 @@ export function useWebSocket() {
   const [lastMessage, setLastMessage] = useState<WsMessage | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const disposedRef = useRef(false);
 
   const connect = useCallback(() => {
+    if (disposedRef.current) return;
     if (
       wsRef.current?.readyState === WebSocket.OPEN ||
       wsRef.current?.readyState === WebSocket.CONNECTING
@@ -39,7 +41,7 @@ export function useWebSocket() {
 
     ws.onclose = () => {
       setStatus("disconnected");
-      // Only schedule reconnect if not disposed (wsRef cleared on unmount)
+      if (disposedRef.current) return;
       if (wsRef.current === ws) {
         wsRef.current = null;
         reconnectTimer.current = setTimeout(connect, 3000);
@@ -52,8 +54,10 @@ export function useWebSocket() {
   }, []);
 
   useEffect(() => {
+    disposedRef.current = false;
     connect();
     return () => {
+      disposedRef.current = true;
       if (reconnectTimer.current) clearTimeout(reconnectTimer.current);
       const ws = wsRef.current;
       wsRef.current = null;
