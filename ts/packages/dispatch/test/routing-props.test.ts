@@ -232,7 +232,7 @@ test("routedToThisWorker — assignedToWorker false always rejects", () => {
 
 // --- issueHasOpenBlockers ---
 
-test("issueHasOpenBlockers — non-unstarted issues never blocked", () => {
+test("issueHasOpenBlockers — any issue with open blockers is blocked regardless of stateType", () => {
   fc.assert(
     fc.property(
       fc.constantFrom("started", "completed", null),
@@ -249,7 +249,7 @@ test("issueHasOpenBlockers — non-unstarted issues never blocked", () => {
       (stateType, state, blockers) => {
         const issue = issueWith({ state, stateType, blockers });
         const settings = makeSettings();
-        assert.ok(!issueHasOpenBlockers(issue, settings));
+        assert.ok(issueHasOpenBlockers(issue, settings));
       },
     ),
   );
@@ -277,17 +277,21 @@ test("issueHasOpenBlockers — all-terminal blockers do not block", () => {
   );
 });
 
-test("issueHasOpenBlockers — any non-terminal blocker blocks unstarted issue", () => {
+test("issueHasOpenBlockers — any non-terminal blocker blocks any issue", () => {
   fc.assert(
-    fc.property(fc.constantFrom("Todo", "In Progress", "Review"), (blockerState) => {
-      const issue = issueWith({
-        state: "Todo",
-        stateType: "unstarted",
-        blockers: [{ id: "b1", identifier: "B-1", state: blockerState, stateType: null }],
-      });
-      const settings = makeSettings();
-      assert.ok(issueHasOpenBlockers(issue, settings));
-    }),
+    fc.property(
+      fc.constantFrom("Todo", "In Progress", "Review"),
+      fc.constantFrom("unstarted", "started", "completed"),
+      (blockerState, stateType) => {
+        const issue = issueWith({
+          state: "Todo",
+          stateType,
+          blockers: [{ id: "b1", identifier: "B-1", state: blockerState, stateType: null }],
+        });
+        const settings = makeSettings();
+        assert.ok(issueHasOpenBlockers(issue, settings));
+      },
+    ),
   );
 });
 
