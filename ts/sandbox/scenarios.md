@@ -2,46 +2,12 @@
 
 **Date:** 2026-05-29  
 **Total Scenarios Tested:** 210  
-**Passed:** 203  
-**Failed:** 7
+**Passed:** 206  
+**Failed:** 4
 
 ---
 
 ## Failures Found
-
-### Failure 3: S-120
-**Invariant Violated:** Token counts SHALL never become negative / NaN  
-**Code Location:** `ts/packages/policies/src/usage.ts` — `mergeMonotonicUsage` (lines 17-21)  
-**Explanation:** When `update.inputTokens` is `NaN`, the nullish coalescing (`??`) does NOT catch it (NaN is not null/undefined). This feeds NaN into `Math.max(10, 0, NaN)` which returns NaN in JavaScript. The result propagates through entry totals, reported totals, and global totals, corrupting all downstream state.  
-**Reproduction:**
-```ts
-import { mergeMonotonicUsage } from "@symphony/policies/usage";
-mergeMonotonicUsage({
-  entryTotals: { inputTokens: 10, outputTokens: 5, totalTokens: 15, secondsRunning: 0 },
-  reportedTotals: { inputTokens: 10, outputTokens: 5, totalTokens: 15, secondsRunning: 0 },
-  globalTotals: { inputTokens: 100, outputTokens: 50, totalTokens: 150, secondsRunning: 0 },
-  update: { inputTokens: NaN },
-});
-// entryTotals.inputTokens = NaN, globalTotals.inputTokens = NaN
-```
-**Suggested Fix:** Validate update values with `Number.isFinite()`:
-```ts
-const safeInput = Number.isFinite(input.update.inputTokens)
-  ? input.update.inputTokens : input.entryTotals.inputTokens;
-```
-
----
-
-### Failure 4: S-121
-**Invariant Violated:** Token counts SHALL never become negative / NaN  
-**Code Location:** `ts/packages/policies/src/usage.ts` — `mergeMonotonicUsage` (lines 27-31)  
-**Explanation:** Same root cause as S-120 but for the `totalTokens` field. `Math.max(10, 0, NaN)` returns NaN. Each token field is independently vulnerable. A single NaN field corrupts only that field's chain but leaves others intact.  
-**Reproduction:**
-```ts
-mergeMonotonicUsage({ ..., update: { totalTokens: NaN, inputTokens: 20 } });
-// entryTotals.totalTokens = NaN, but inputTokens correctly updates to 20
-```
-**Suggested Fix:** Same NaN guard applied to all three token fields.
 
 ---
 
@@ -59,20 +25,6 @@ if (retryKind === "continuation") return Math.min(maxRetryBackoffMs, 1_000);
 ```
 
 ---
-
-### Failure 6: S-186
-**Invariant Violated:** Token counts SHALL never become negative / NaN  
-**Code Location:** `ts/packages/policies/src/usage.ts` — `mergeMonotonicUsage` (lines 17-35)  
-**Explanation:** When ALL token fields in the update are NaN, all three chains (entry, reported, global) become NaN simultaneously. This is the compound version of S-120/S-121 affecting all fields at once.  
-**Reproduction:**
-```ts
-mergeMonotonicUsage({
-  ...,
-  update: { inputTokens: NaN, outputTokens: NaN, totalTokens: NaN },
-});
-// All token fields across all totals become NaN
-```
-**Suggested Fix:** Apply `Number.isFinite()` guard to each field before Math.max.
 
 ---
 
@@ -134,12 +86,11 @@ const unstarted = issue.stateType
 
 | # | Module | Bug | Severity |
 |---|--------|-----|----------|
-| 1 | `policies/usage` | NaN in update corrupts all token totals | High |
-| 2 | `policies/retry` | Continuation bypass ignores cap entirely | Low |
-| 3 | `workspace` | Empty identifier produces root-equal path | Medium |
-| 4 | `dispatch/issueHasOpenBlockers` | State name "Todo" overrides stateType="started" | Medium |
+| 1 | `policies/retry` | Continuation bypass ignores cap entirely | Low |
+| 2 | `workspace` | Empty identifier produces root-equal path | Medium |
+| 3 | `dispatch/issueHasOpenBlockers` | State name "Todo" overrides stateType="started" | Medium |
 
-(Failures 3-5-6 are variants of bug #1; failures 5-8 are variants of bug #2)
+(Failures 5-8 are variants of bug #1)
 
 ---
 
@@ -1125,7 +1076,7 @@ const unstarted = issue.stateType
 **Setup:** entryTotals={input:10}, update={inputTokens:NaN}  
 **Action:** mergeMonotonicUsage(...)  
 **Expected:** Math.max(10, 0, NaN) = 10? Or NaN? (Math.max behavior with NaN)  
-**Status:** **FAILED** — Math.max(10, 0, NaN) returns NaN in JavaScript; corrupts all downstream totals
+**Status:** PASSED — Fixed: Number.isFinite() guard prevents NaN propagation
 
 ### S-121: NaN in update.totalTokens only
 **Category:** Usage Accounting  
@@ -1133,7 +1084,7 @@ const unstarted = issue.stateType
 **Setup:** entryTotals={total:10}, update={totalTokens:NaN, inputTokens:20}  
 **Action:** mergeMonotonicUsage(...)  
 **Expected:** total: Math.max(10, 0, NaN) = NaN! Bug?  
-**Status:** **FAILED** — NaN propagates per-field; totalTokens becomes NaN while inputTokens correctly updates
+**Status:** PASSED — Fixed: Number.isFinite() guard prevents NaN propagation
 
 ### S-122: Very large token value (Number.MAX_SAFE_INTEGER)
 **Category:** Usage Accounting  
@@ -1677,7 +1628,7 @@ const unstarted = issue.stateType
 **Setup:** update={inputTokens:NaN, outputTokens:NaN, totalTokens:NaN}  
 **Action:** mergeMonotonicUsage(...)  
 **Expected:** Math.max(prev, 0, NaN) = NaN when prev > 0? Actually Math.max(10, 0, NaN) = NaN!  
-**Status:** **FAILED** — All token fields become NaN, corrupting entry, reported, and global totals
+**Status:** PASSED — Fixed: Number.isFinite() guard prevents NaN propagation
 
 ### S-187: ensembleSize with label "ensemble:01" (leading zero)
 **Category:** Ensemble Resolution  
