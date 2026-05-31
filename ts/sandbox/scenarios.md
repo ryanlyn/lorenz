@@ -13,24 +13,10 @@
 
 ---
 
-### Failure 7: S-209
+### ~~Failure 7: S-209~~ (FIXED)
 **Invariant Violated:** Workspace path SHALL be a strict descendant of the workspace root  
 **Code Location:** `ts/packages/workspace/src/index.ts` — `workspacePath` (line ~22)  
-**Explanation:** `workspacePath("/tmp/w", "", 0, 1)` calls `safeIdentifier("")` which returns `""`, then `path.join("/tmp/w", "")` returns `"/tmp/w"` — which equals root. While `createWorkspaceForIssue` catches this downstream via `validateWorkspaceCwd`, the pure `workspacePath` function itself produces an invalid path. Any code path that calls `workspacePath` directly (without going through create) would get a root-equal path.  
-**Reproduction:**
-```ts
-import { workspacePath, safeIdentifier } from "@symphony/workspace";
-safeIdentifier("");           // ""
-workspacePath("/tmp/w", "");  // "/tmp/w" === root!
-```
-**Suggested Fix:** Guard in `safeIdentifier` or `workspacePath`:
-```ts
-export function workspacePath(root, identifier, slotIndex = 0, ensembleSize = 1) {
-  const safe = safeIdentifier(identifier);
-  if (!safe) throw new Error("empty identifier produces invalid workspace path");
-  ...
-}
-```
+**Fix Applied:** `workspacePath` now throws when `safeIdentifier` produces an empty string, preventing root-equal paths.
 
 ---
 
@@ -1784,8 +1770,8 @@ const unstarted = issue.stateType
 **Invariant:** Safe behavior  
 **Setup:** safeIdentifier("")  
 **Action:** workspacePath("/tmp/w", "", 0, 1)  
-**Expected:** "/tmp/w/" or "/tmp/w" (path.join handles empty)  
-**Status:** **FAILED** — path.join("/tmp/w", "") returns "/tmp/w" which equals root, violating strict-descendant invariant
+**Expected:** Throws error (empty identifier produces invalid workspace path)  
+**Status:** PASSED — Fixed: workspacePath now throws when safeIdentifier yields empty string
 
 ### S-210: Continuation retry cap ignored
 **Category:** Retry and Backoff  
