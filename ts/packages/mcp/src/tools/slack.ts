@@ -1,8 +1,10 @@
 import {
   emojiForState,
+  isBotMention,
   SlackWebTransport,
   splitIssueId,
   statusEmojiMap,
+  type SlackMessage,
   type SlackTransport,
 } from "@symphony/slack-tracker";
 import type { Settings } from "@symphony/domain";
@@ -54,17 +56,23 @@ export async function executeSlackTool(
         if (!target) {
           return failure(`No emoji configured for status '${status}'.`);
         }
-        const message = await transport.getMessage(channel, ts);
-        const present = (message?.reactions ?? []).filter((r) => map[r]);
-        // Add-before-remove so the message is never left without a managed status reaction.
-        // The read path maps a missing managed reaction to "Todo", so an add failure must
-        // never erase the existing status, and a cleanup failure must leave the target intact.
+        // Trust-boundary check: the agent-supplied issueId must point at a watched channel
+        // and a message that is actually a tracked bot-mention issue before we mutate it.
+        const message = await ensureTrackedMessage(settings, transport, channel, ts);
+        if ("error" in message) return message.error;
+        const present = message.reactions.filter((r) => map[r]);
+        // Add the target first (when absent), then roll back on a cleanup failure so a partial
+        // failure preserves the OLD status: never the wrong new status, never empty. The read
+        // path ranks reactions by category, so a lingering higher-ranked stale reaction would
+        // otherwise shadow a newly added lower-ranked target and report a wrong status.
+        let added = false;
         if (!present.includes(target)) {
           try {
             await transport.addReaction(channel, ts, target);
+            added = true;
           } catch (error) {
             // Adding the new status failed; leave every existing reaction untouched so the
-            // prior status is preserved rather than erased.
+            // prior status is preserved rather than erased. No removes were attempted.
             return failure((error as Error).message);
           }
         }
@@ -72,15 +80,25 @@ export async function executeSlackTool(
         for (const reaction of stale) {
           try {
             await transport.removeReaction(channel, ts, reaction);
-          } catch (error) {
-            // The target is already present, so the intended status holds. Surface the
-            // cleanup failure but never remove the target while a stale reaction lingers.
-            return failure((error as Error).message);
+          } catch {
+            // Cleanup failed. If we added the target this call, roll it back (best-effort) so
+            // the stale reactions still rank to the OLD status rather than the wrong new one.
+            if (added) {
+              try {
+                await transport.removeReaction(channel, ts, target);
+              } catch {
+                // Best-effort rollback; keep the original failure as the reported outcome.
+              }
+            }
+            return failure("status not changed");
           }
         }
         return { success: true, result: { ok: true, status } };
       }
       case "slack_comment": {
+        // Same trust-boundary check as update_status: only reply on a watched, tracked issue.
+        const message = await ensureTrackedMessage(settings, transport, channel, ts);
+        if ("error" in message) return message.error;
         await transport.postReply(channel, ts, requireStr(args, "body"));
         return { success: true, result: { ok: true } };
       }
@@ -102,6 +120,31 @@ export function slackTransportFor(
   injected?: SlackTransport,
 ): SlackTransport {
   return injected ?? new SlackWebTransport(settings, fetchImpl);
+}
+
+/**
+ * Enforce the agent trust boundary: the issueId must reference a configured (watched) channel
+ * and an existing message that is a tracked bot-mention. Returns the message on success, or a
+ * `{ error }` wrapper carrying the failure result to return to the caller.
+ */
+async function ensureTrackedMessage(
+  settings: Settings,
+  transport: SlackTransport,
+  channel: string,
+  ts: string,
+): Promise<SlackMessage | { error: ToolResult }> {
+  const channels = settings.tracker.channels ?? [];
+  if (!channels.includes(channel)) {
+    return { error: failure(`channel '${channel}' is not a configured tracker channel`) };
+  }
+  const message = await transport.getMessage(channel, ts);
+  if (!message) {
+    return { error: failure(`no tracked issue at ${channel}:${ts}`) };
+  }
+  if (!isBotMention(message.text, settings.tracker.botUserId)) {
+    return { error: failure("message is not a tracked bot-mention issue") };
+  }
+  return message;
 }
 
 function failure(message: string): ToolResult {
