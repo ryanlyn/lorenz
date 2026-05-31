@@ -32,6 +32,12 @@ export {
   validateDispatchConfig,
   normalizeStateName,
   normalizeRouteName,
+  ONE_WEEK_MS,
+  PORT_MAX,
+  RENDER_INTERVAL_MAX_MS,
+  CONCURRENCY_MAX,
+  MAX_TURNS_MAX,
+  ENSEMBLE_SIZE_MAX,
 } from "@symphony/config";
 export {
   defaultPromptTemplate,

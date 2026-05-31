@@ -350,6 +350,18 @@ test("config rejects empty strings and booleans for typed fields", () => {
     /polling.interval_ms must be a positive integer/,
   );
   assert.throws(
+    () => parseConfig({ codex: { stall_timeout_ms: " " } }),
+    /codex.stall_timeout_ms must be a non-negative integer/,
+  );
+  assert.throws(
+    () => parseConfig({ server: { port: "" } }),
+    /server.port must be a valid port number/,
+  );
+  assert.throws(
+    () => parseConfig({ server: { port: 99999 } }),
+    /server.port must be a valid port number/,
+  );
+  assert.throws(
     () => parseConfig({ polling: { interval_ms: true } }),
     /polling.interval_ms must be a positive integer/,
   );
@@ -378,6 +390,41 @@ test("stall_timeout_ms=0 is accepted as a valid value at top-level and in status
   const effective = settingsForIssueState(settings, "Todo");
   assert.equal(effective.codex.stallTimeoutMs, 0);
   assert.equal(effective.claude.stallTimeoutMs, 0);
+});
+
+test("hooks accept explicit null as disabled", () => {
+  const settings = parseConfig({
+    hooks: {
+      after_create: null,
+      before_run: null,
+      after_run: null,
+      before_remove: null,
+    },
+  });
+
+  assert.equal(settings.hooks.afterCreate, null);
+  assert.equal(settings.hooks.beforeRun, null);
+  assert.equal(settings.hooks.afterRun, null);
+  assert.equal(settings.hooks.beforeRemove, null);
+});
+
+test("config reports useful errors for list fields and agent executors", () => {
+  assert.throws(
+    () => parseConfig({ tracker: { active_states: "Todo" } }),
+    /tracker.active_states must be a list of strings/,
+  );
+  assert.throws(
+    () => parseConfig({ worker: { ssh_hosts: "worker-a" } }),
+    /worker.ssh_hosts must be a list of strings/,
+  );
+  assert.throws(
+    () => parseConfig({ agents: { pi: { executor: "acp", bridge_args: "--safe-mode" } } }),
+    /agents.pi.bridge_args must be a list of strings/,
+  );
+  assert.throws(
+    () => parseConfig({ agents: { pi: { executor: "foo" } } }),
+    /unsupported agents.pi.executor: foo/,
+  );
 });
 
 test("config ignores custom logging.log_file and uses default path", () => {
