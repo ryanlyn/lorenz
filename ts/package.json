@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "TypeScript port of Symphony orchestration contracts.",
+  "description": "Symphony TypeScript orchestration contracts.",
   "scripts": {
     "dev": "pnpm build && pnpm start",
     "start": "pnpm exec node apps/cli/dist/bin/cli.js",
