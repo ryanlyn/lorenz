@@ -1,6 +1,7 @@
 import { test } from "vitest";
 import fc from "fast-check";
 import { ensembleSize, isTerminalState } from "@symphony/cli";
+import { ENSEMBLE_SIZE_MAX } from "@symphony/config";
 import type { Issue } from "@symphony/domain";
 
 import { assert } from "../../../test/assert.js";
@@ -27,7 +28,7 @@ function issueWith(labels: string[]): Issue {
 
 test("ensembleSize — valid ensemble label returns positive integer", () => {
   fc.assert(
-    fc.property(fc.integer({ min: 1, max: 100 }), (n) => {
+    fc.property(fc.integer({ min: 1, max: ENSEMBLE_SIZE_MAX }), (n) => {
       const issue = issueWith([`ensemble:${n}`]);
       const result = ensembleSize(issue);
       assert.equal(result, n);

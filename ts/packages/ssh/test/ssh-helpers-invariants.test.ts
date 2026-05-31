@@ -1,5 +1,6 @@
 import { test, describe } from "vitest";
 import fc from "fast-check";
+import { PORT_MAX } from "@symphony/config";
 
 import { assert } from "../../../test/assert.js";
 
@@ -122,7 +123,7 @@ const sshDestination = fc.oneof(
 );
 
 /** Arbitrary valid port number. */
-const sshPort = fc.integer({ min: 1, max: 65535 });
+const sshPort = fc.integer({ min: 1, max: PORT_MAX });
 
 /** Arbitrary SSH target string (destination with optional port). */
 const sshTargetWithPort = fc
@@ -294,7 +295,7 @@ describe("INVARIANT: When an SSH target is parsed, destination and port SHALL be
             fc.integer({ min: 0, max: 0xffff }),
             fc.integer({ min: 0, max: 0xffff }),
             fc.integer({ min: 0, max: 0xffff }),
-            fc.integer({ min: 1, max: 65535 }),
+            fc.integer({ min: 1, max: PORT_MAX }),
           )
           .map(
             ([a, b, c, port]) => `${a.toString(16)}:${b.toString(16)}::${c.toString(16)}:${port}`,
