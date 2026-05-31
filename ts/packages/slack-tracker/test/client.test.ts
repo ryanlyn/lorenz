@@ -112,6 +112,30 @@ test("a message with no hashtags yields no labels", async () => {
   assert.deepEqual(candidates[0]!.labels, []);
 });
 
+test("fetchIssuesByIds re-validates channel and bot mention (refresh-path trust boundary)", async () => {
+  const transport = new InMemorySlackTransport(
+    {
+      C1: [
+        { ts: "1700000000.000600", text: "<@U_BOT> still tracked", reactions: ["eyes"] },
+        { ts: "1700000000.000700", text: "<@U_OTHER> mention removed", reactions: ["eyes"] },
+      ],
+      C9: [{ ts: "1700000000.000800", text: "<@U_BOT> wrong channel", reactions: ["eyes"] }],
+    },
+    { botUserId: "U_BOT" },
+  );
+  const client = new SlackTrackerClient(botSettings(), transport);
+
+  // Still a bot mention in a configured channel -> returned.
+  assert.deepEqual(
+    (await client.fetchIssuesByIds(["C1:1700000000.000600"])).map((i) => i.id),
+    ["C1:1700000000.000600"],
+  );
+  // Bot mention edited away -> reconciles as gone (no issue), not still active.
+  assert.deepEqual(await client.fetchIssuesByIds(["C1:1700000000.000700"]), []);
+  // Id whose channel is not in tracker.channels -> rejected even though the bot is mentioned.
+  assert.deepEqual(await client.fetchIssuesByIds(["C9:1700000000.000800"]), []);
+});
+
 test("with botUserId only mentions of the bot become candidates", async () => {
   const transport = new InMemorySlackTransport(
     {

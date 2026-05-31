@@ -1,7 +1,7 @@
 import { defaultStateType, normalizeIssue } from "@symphony/issue";
 import type { Issue, RuntimeTrackerClient, Settings } from "@symphony/domain";
 
-import { stateFromReactions, statusEmojiMap, stripLeadingMention } from "./mapping.js";
+import { isBotMention, stateFromReactions, statusEmojiMap, stripLeadingMention } from "./mapping.js";
 import type { SlackMessage, SlackTransport } from "./transport.js";
 
 export function splitIssueId(id: string): [string, string] | null {
@@ -47,12 +47,21 @@ export class SlackTrackerClient implements RuntimeTrackerClient {
   }
 
   async fetchIssuesByIds(ids: string[]): Promise<Issue[]> {
+    const channels = new Set(this.channels());
+    const botUserId = this.settings.tracker.botUserId;
     const out: Issue[] = [];
     for (const id of ids) {
       const parts = splitIssueId(id);
       if (!parts) continue;
-      const msg = await this.transport.getMessage(parts[0], parts[1]);
-      if (msg) out.push(this.toIssue(msg));
+      const [channel, ts] = parts;
+      // Apply the same tracked-message predicate as candidate discovery and the Slack write tools:
+      // only configured channels, and only messages that still mention the bot. If a human edits the
+      // source message to drop the mention, the issue reconciles as gone instead of staying live.
+      if (!channels.has(channel)) continue;
+      const msg = await this.transport.getMessage(channel, ts);
+      if (!msg) continue;
+      if (!isBotMention(msg.text, botUserId)) continue;
+      out.push(this.toIssue(msg));
     }
     return out;
   }
