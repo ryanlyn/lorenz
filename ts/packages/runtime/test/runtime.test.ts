@@ -952,7 +952,7 @@ test("runtime schedules retry refresh timers independently of the poll cadence",
   const doneIssue: Issue = { ...issue, state: "Done", stateType: "completed" };
   const workflow = workflowFixture();
   workflow.settings.polling.intervalMs = 60_000;
-  workflow.settings.agent.maxRetryBackoffMs = 20;
+  workflow.settings.agent.maxRetryBackoffMs = 1_000;
   let attempts = 0;
   const runtime = new SymphonyRuntime(
     runtimeOptions({

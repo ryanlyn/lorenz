@@ -19,7 +19,7 @@ test("deterministic policies pin retry, stop reason, usage, and resume decisions
   assert.equal(retryBackoffMs(3, 60_000, "failure"), 40_000);
   assert.equal(retryBackoffMs(20, 60_000, "failure"), 60_000);
   assert.equal(retryBackoffMs(20, 60_000, "continuation"), 1_000);
-  assert.equal(retryBackoffMs(1, 500, "continuation"), 500);
+  assert.equal(retryBackoffMs(1, 500, "continuation"), 1_000);
 
   assert.equal(actionForStopReason("end_turn"), "continue");
   assert.equal(actionForStopReason("max_tokens"), "continue");
