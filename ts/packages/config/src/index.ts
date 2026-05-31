@@ -21,7 +21,8 @@ const numericInput = z.union([
   z
     .string()
     .refine((s) => s.trim() !== "", { message: "must not be empty" })
-    .transform(Number),
+    .transform(Number)
+    .refine((n) => !Number.isNaN(n), { message: "must be a number" }),
 ]);
 
 const coercedPositiveInt = numericInput.refine((n) => Number.isInteger(n) && n > 0, {
@@ -37,6 +38,7 @@ const coercedBoolean = z.union([
   z.literal("true").transform(() => true),
   z.literal("false").transform(() => false),
 ]);
+
 const optionalHookScript = z.string().nullable().optional();
 
 const appServerAgentRecordSchema = z
@@ -820,7 +822,7 @@ function configErrorMessage(error: z.ZodError, baseLabel?: string): string {
     if (expected === "array") return `${label} must be a list of strings`;
     return `${label} must be a map`;
   }
-  if (issue.code === "too_small") return `${label} must be a positive integer`;
+  if (issue.code === "too_small") return integerMessageForLabel(label);
   if (issue.code === "custom") return `${label} ${issue.message}`;
   if (issue.code === "invalid_union") {
     // Zod 3.x ZodInvalidUnionIssue exposes nested errors per branch.
