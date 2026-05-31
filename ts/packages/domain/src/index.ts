@@ -461,15 +461,17 @@ export interface EnsembleContext {
 
 /**
  * Scheduled retry or continuation for an issue that just finished a run.
- * Held in the orchestrator until `dueAt` elapses, then the issue becomes dispatchable again.
+ * Held in the orchestrator until the monotonic deadline elapses, then the issue becomes dispatchable again.
  */
 export interface RetryEntry {
   issueId: string;
   identifier: string;
   /** 1-based attempt counter; bumped each time a failure retry is recorded, reset to 1 for continuation retries. */
   attempt: number;
-  /** Absolute wall-clock time when the issue is eligible for re-dispatch; backoff comes from `maxRetryBackoffMs`. */
-  dueAt: Date;
+  /** Monotonic clock deadline (ms) — drives timer scheduling; immune to wall-clock adjustments. */
+  monotonicDeadlineMs: number;
+  /** Wall-clock estimate (ISO-8601) for display/serialization only. */
+  dueAtIso: string;
   /** Last error message, when the previous run failed. */
   error?: string | undefined;
   /** Slot this retry prefers to reclaim so ensemble slots stay stable across attempts. */

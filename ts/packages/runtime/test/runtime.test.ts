@@ -906,7 +906,8 @@ test("runtime records failed attempts as retryable work and keeps polling", asyn
 
   const retry = orchestrator.snapshot().retrying[0];
   assert.ok(retry);
-  retry.dueAt = new Date(Date.now() - 1);
+  retry.dueAtIso = new Date(Date.now() - 1).toISOString();
+  retry.monotonicDeadlineMs = 0;
   await runtime.pollOnce({ waitForRuns: true });
   snapshot = runtime.snapshot();
   assert.equal(attempts, 2);

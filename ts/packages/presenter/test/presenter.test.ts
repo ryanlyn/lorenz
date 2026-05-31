@@ -187,6 +187,7 @@ function snapshotFixture(): RuntimeSnapshot {
         identifier: "MT-RETRY",
         attempt: 2,
         dueAt: "2026-05-06T00:01:00.000Z",
+        monotonicDeadlineMs: 60000,
         error: "agent exited: boom",
         workspacePath: "/tmp/symphony/MT-RETRY",
       },

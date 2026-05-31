@@ -14,12 +14,18 @@ function makeIssue(overrides: Record<string, unknown> = {}) {
   });
 }
 
-function fakeClock(now = new Date()): ClockPort {
-  return {
-    now: () => now,
+function fakeClock(initial = new Date()) {
+  let tick = initial.getTime();
+  const clock: ClockPort & { advance(ms: number): void } = {
+    now: () => new Date(tick),
+    monotonicMs: () => tick,
     setTimeout: (cb, ms) => setTimeout(cb, ms),
     clearTimeout: (h) => clearTimeout(h as ReturnType<typeof setTimeout>),
+    advance(ms: number) {
+      tick += ms;
+    },
   };
+  return clock;
 }
 
 // --- claim ---
@@ -66,7 +72,8 @@ test("claim — preferred slot honored on retry", () => {
     issueId: issue.id,
     identifier: issue.identifier,
     attempt: 1,
-    dueAt: new Date(Date.now() - 1),
+    monotonicDeadlineMs: 0,
+    dueAtIso: new Date(Date.now() - 1).toISOString(),
     slotIndex: 2,
     error: "failed",
   });
@@ -142,11 +149,11 @@ test("finish — secondsRunning accumulates across multiple finishes", () => {
   const issueB = makeIssue({ id: "b", identifier: "MT-B" });
 
   orchestrator.claim(issueA);
-  clock.now = () => new Date(now.getTime() + 10_000);
+  clock.advance(10_000);
   orchestrator.finish(issueA.id, 0, false);
 
   orchestrator.claim(issueB);
-  clock.now = () => new Date(now.getTime() + 25_000);
+  clock.advance(15_000);
   orchestrator.finish(issueB.id, 0, false);
 
   assert.equal(orchestrator.snapshot().usageTotals.secondsRunning, 25);

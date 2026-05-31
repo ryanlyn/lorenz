@@ -12,10 +12,15 @@ import { Orchestrator } from "@symphony/orchestrator";
 
 function makeClock(baseMs: number) {
   let now = baseMs;
+  let monotonic = 0;
   return {
     now: () => new Date(now),
+    monotonicMs: () => monotonic,
+    setTimeout: (_cb: () => void, _ms: number) => ({ unref: undefined }),
+    clearTimeout: (_h: unknown) => {},
     advance(ms: number) {
       now += ms;
+      monotonic += ms;
     },
   };
 }
@@ -284,12 +289,13 @@ test("stale claim released when retry becomes due and re-dispatch proceeds", () 
   // Add stale claim (claimed but NOT running)
   orch.state.claimed.add(slotKey(issue.id, 0));
 
-  // Set a retry entry with dueAt in the past
+  // Set a retry entry with deadline in the past
   orch.state.retryAttempts.set(issue.id, {
     issueId: issue.id,
     identifier: issue.identifier,
     attempt: 1,
-    dueAt: new Date(clock.now().getTime() - 1000),
+    dueAtIso: new Date(clock.now().getTime() - 1000).toISOString(),
+    monotonicDeadlineMs: clock.monotonicMs() - 1000,
     error: "agent exited",
   });
 

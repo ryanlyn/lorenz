@@ -128,6 +128,7 @@ export interface RuntimeRetryEntry {
   identifier: string;
   attempt: number;
   dueAt: string;
+  monotonicDeadlineMs: number;
   error?: string | undefined;
   slotIndex?: number | undefined;
   workerHost?: string | null | undefined;
@@ -739,11 +740,21 @@ export class SymphonyRuntime {
       if (
         !current ||
         current.attempt !== scheduled.attempt ||
-        current.dueAt.toISOString() !== scheduled.dueAt
+        current.dueAtIso !== scheduled.dueAt
       ) {
         return;
       }
-      if (this.pollInProgress) return;
+      this.orchestrator.markRetryDue(scheduled.issueId);
+      if (this.pollInProgress) {
+        void this.pollInProgress.then(() => {
+          this.addEvent("retry_timer_due", `${scheduled.identifier} attempt=${scheduled.attempt}`);
+          this.pollOnce().catch((error) => {
+            this.lastError = errorMessage(error);
+            this.addEvent("retry_timer_error", this.lastError);
+          });
+        });
+        return;
+      }
       this.addEvent("retry_timer_due", `${scheduled.identifier} attempt=${scheduled.attempt}`);
       this.pollOnce().catch((error) => {
         this.lastError = errorMessage(error);
@@ -859,7 +870,8 @@ function runtimeRetryEntry(entry: {
   issueId: string;
   identifier: string;
   attempt: number;
-  dueAt: Date;
+  dueAtIso: string;
+  monotonicDeadlineMs: number;
   error?: string | undefined;
   slotIndex?: number | undefined;
   workerHost?: string | null | undefined;
@@ -869,7 +881,8 @@ function runtimeRetryEntry(entry: {
     issueId: entry.issueId,
     identifier: entry.identifier,
     attempt: entry.attempt,
-    dueAt: entry.dueAt.toISOString(),
+    dueAt: entry.dueAtIso,
+    monotonicDeadlineMs: entry.monotonicDeadlineMs,
     ...(entry.error !== undefined ? { error: entry.error } : {}),
     ...(entry.slotIndex !== undefined ? { slotIndex: entry.slotIndex } : {}),
     ...(entry.workerHost !== undefined ? { workerHost: entry.workerHost } : {}),

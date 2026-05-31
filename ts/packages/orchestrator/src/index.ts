@@ -65,7 +65,7 @@ export class Orchestrator {
 
     return sortForDispatch(issues).filter((issue) => {
       const retry = this.state.retryAttempts.get(issue.id);
-      if (retry && retry.dueAt.getTime() > this.clock.now().getTime()) return false;
+      if (retry && this.clock.monotonicMs() < retry.monotonicDeadlineMs) return false;
       if (retry) this.releaseStaleClaimsForRetry(issue.id);
       const dispatchState = {
         runningCount: this.state.running.size,
@@ -90,7 +90,7 @@ export class Orchestrator {
 
   claim(issue: Issue): RunningEntry | null {
     const retry = this.state.retryAttempts.get(issue.id);
-    if (retry && retry.dueAt.getTime() <= this.clock.now().getTime())
+    if (retry && this.clock.monotonicMs() >= retry.monotonicDeadlineMs)
       this.releaseStaleClaimsForRetry(issue.id);
     const runningByState = new Map<string, number>();
     for (const entry of this.state.running.values()) {
@@ -207,13 +207,15 @@ export class Orchestrator {
     if (normal) {
       const attempt = retryKind === "continuation" ? 1 : (entry.retryAttempt ?? 0) + 1;
       this.state.completed.add(issueId);
+      const deadline = this.retryDeadline(
+        retryBackoffMs(attempt, this.settings.agent.maxRetryBackoffMs, retryKind),
+      );
       this.state.retryAttempts.set(issueId, {
         issueId,
         identifier: entry.identifier,
         attempt,
-        dueAt: this.dueAt(
-          retryBackoffMs(attempt, this.settings.agent.maxRetryBackoffMs, retryKind),
-        ),
+        monotonicDeadlineMs: deadline.monotonicDeadlineMs,
+        dueAtIso: deadline.dueAtIso,
         slotIndex,
         workerHost: entry.workerHost,
         workspacePath: entry.workspacePath,
@@ -275,10 +277,18 @@ export class Orchestrator {
     }
   }
 
-  private dueAt(delayMs: number): Date {
+  markRetryDue(issueId: string): void {
+    const retry = this.state.retryAttempts.get(issueId);
+    if (retry) retry.monotonicDeadlineMs = 0;
+  }
+
+  private retryDeadline(delayMs: number): { dueAtIso: string; monotonicDeadlineMs: number } {
     const dueAt = this.clock.now();
     dueAt.setTime(dueAt.getTime() + delayMs);
-    return dueAt;
+    return {
+      dueAtIso: dueAt.toISOString(),
+      monotonicDeadlineMs: this.clock.monotonicMs() + delayMs,
+    };
   }
 
   private releaseStaleClaimsForRetry(issueId: string): void {
