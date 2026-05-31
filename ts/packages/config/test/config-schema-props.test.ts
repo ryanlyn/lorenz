@@ -5,7 +5,6 @@ import { assert } from "../../../test/assert.js";
 
 import { parseConfig, ONE_WEEK_MS, PORT_MAX } from "@symphony/config";
 
-
 // --- camelToSnake (tested indirectly via error labels) ---
 
 test("camelToSnake — error labels use snake_case field names for numeric fields", () => {

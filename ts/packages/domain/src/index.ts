@@ -44,46 +44,82 @@ export const CODEX_SANDBOX_MODES = ["read-only", "workspace-write", "danger-full
 
 export type CodexSandboxMode = (typeof CODEX_SANDBOX_MODES)[number];
 
+// ─── Bound constants ────────────────────────────────────────────────────────
+
+export const PORT_MAX = 65535;
+export const ONE_WEEK_MS = 604_800_000;
+export const RENDER_INTERVAL_MAX_MS = 60_000;
+export const CONCURRENCY_MAX = 1000;
+export const MAX_TURNS_MAX = 10_000;
+export const ENSEMBLE_SIZE_MAX = 100;
+
 // ─── Branded numeric types ──────────────────────────────────────────────────
-// These enforce that only values passing through validated construction (Zod schemas in
-// @symphony/config) can satisfy the type. Downstream code gets compile-time guarantees
-// that bounds are respected.
 
 declare const PositiveTimeoutMsBrand: unique symbol;
-/** Positive integer ms in [1, ONE_WEEK_MS]. Produced exclusively by config schema validation. */
 export type PositiveTimeoutMs = number & { readonly [PositiveTimeoutMsBrand]: true };
 
 declare const NonNegativeTimeoutMsBrand: unique symbol;
-/** Non-negative integer ms in [0, ONE_WEEK_MS]. Produced exclusively by config schema validation. */
 export type NonNegativeTimeoutMs = number & { readonly [NonNegativeTimeoutMsBrand]: true };
 
 declare const PositiveIntervalMsBrand: unique symbol;
-/** Positive integer ms in [1, ONE_WEEK_MS] used for polling/refresh intervals. */
 export type PositiveIntervalMs = number & { readonly [PositiveIntervalMsBrand]: true };
 
 declare const RenderIntervalMsBrand: unique symbol;
-/** Positive integer ms in [1, RENDER_INTERVAL_MAX_MS] for UI render throttle. */
 export type RenderIntervalMs = number & { readonly [RenderIntervalMsBrand]: true };
 
 declare const ConcurrencyBrand: unique symbol;
-/** Positive integer in [1, CONCURRENCY_MAX]. */
 export type Concurrency = number & { readonly [ConcurrencyBrand]: true };
 
 declare const MaxTurnsBrand: unique symbol;
-/** Positive integer in [1, MAX_TURNS_MAX]. */
 export type MaxTurns = number & { readonly [MaxTurnsBrand]: true };
 
 declare const EnsembleSizeBrand: unique symbol;
-/** Positive integer in [1, ENSEMBLE_SIZE_MAX]. */
 export type EnsembleSize = number & { readonly [EnsembleSizeBrand]: true };
 
 declare const PortBrand: unique symbol;
-/** Non-negative integer in [0, 65535]. */
 export type Port = number & { readonly [PortBrand]: true };
+
+// ─── Type guards / validators ───────────────────────────────────────────────
+
+function isInt(n: number): boolean {
+  return Number.isInteger(n) && !Number.isNaN(n);
+}
+
+export function isValidPort(n: number): n is Port {
+  return isInt(n) && n >= 0 && n <= PORT_MAX;
+}
+
+export function isValidTimeout(n: number): n is PositiveTimeoutMs {
+  return isInt(n) && n >= 1 && n <= ONE_WEEK_MS;
+}
+
+export function isValidNonNegativeTimeout(n: number): n is NonNegativeTimeoutMs {
+  return isInt(n) && n >= 0 && n <= ONE_WEEK_MS;
+}
+
+export function isValidInterval(n: number): n is PositiveIntervalMs {
+  return isInt(n) && n >= 1 && n <= ONE_WEEK_MS;
+}
+
+export function isValidRenderInterval(n: number): n is RenderIntervalMs {
+  return isInt(n) && n >= 1 && n <= RENDER_INTERVAL_MAX_MS;
+}
+
+export function isValidConcurrency(n: number): n is Concurrency {
+  return isInt(n) && n >= 1 && n <= CONCURRENCY_MAX;
+}
+
+export function isValidMaxTurns(n: number): n is MaxTurns {
+  return isInt(n) && n >= 1 && n <= MAX_TURNS_MAX;
+}
+
+export function isValidEnsembleSize(n: number): n is EnsembleSize {
+  return isInt(n) && n >= 1 && n <= ENSEMBLE_SIZE_MAX;
+}
 
 /**
  * Unsafe cast — for use in test fixtures only. Bypasses brand enforcement.
- * Production code must go through @symphony/config schema validation.
+ * Production code must go through validated type guards or @symphony/config schema parsing.
  */
 export function unsafeBrand<T extends number>(value: number): T {
   return value as unknown as T;

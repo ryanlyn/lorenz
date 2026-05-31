@@ -23,7 +23,6 @@ import { unsafeBrand } from "@symphony/domain";
 import { assert } from "../../../test/assert.js";
 import { initGitRepo, tempDir, writeExecutable } from "../../../test/helpers.js";
 
-
 import { SymphonyRuntime } from "@symphony/runtime";
 
 function runtimeOptions(options: SymphonyRuntimeOptions): SymphonyRuntimeOptions {
