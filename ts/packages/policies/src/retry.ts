@@ -7,7 +7,8 @@ export function retryBackoffMs(
   maxRetryBackoffMs: number,
   retryKind: RetryKind,
 ): number {
-  if (retryKind === "continuation") return Math.max(0, Math.min(MIN_RETRY_DELAY_MS, maxRetryBackoffMs));
+  if (retryKind === "continuation")
+    return Math.max(0, Math.min(MIN_RETRY_DELAY_MS, maxRetryBackoffMs));
   // Fix: maxRetryBackoffMs now acts as a hard ceiling on retry delay.
   // Previously, Math.max(MIN_RETRY_DELAY_MS, ...) ignored the configured max when it was
   // below 1000ms. Now the configured maxRetryBackoffMs is always the upper bound on retry
