@@ -1,4 +1,4 @@
-import { test } from "vitest";
+import { describe, test } from "vitest";
 import fc from "fast-check";
 import { mergeMonotonicUsage } from "@symphony/cli";
 
@@ -478,6 +478,157 @@ test("empty update (all undefined) preserves entry and global unchanged", () => 
     }),
     { numRuns: 500 },
   );
+});
+
+// INVARIANT: Token counts SHALL never become negative / NaN.
+
+describe("NaN in update fields", () => {
+  test("NaN in update.inputTokens does not corrupt entry, reported, or global totals (S-120)", () => {
+    fc.assert(
+      fc.property(
+        arbUsageTotals(),
+        arbUsageTotals(),
+        arbUsageTotals(),
+        (entry, reported, global) => {
+          const result = mergeMonotonicUsage({
+            entryTotals: entry,
+            reportedTotals: reported,
+            globalTotals: global,
+            update: { inputTokens: NaN },
+          });
+          assert.ok(Number.isFinite(result.entryTotals.inputTokens));
+          assert.ok(Number.isFinite(result.reportedTotals.inputTokens));
+          assert.ok(Number.isFinite(result.globalTotals.inputTokens));
+          assert.ok(result.entryTotals.inputTokens >= entry.inputTokens);
+          assert.ok(result.globalTotals.inputTokens >= global.inputTokens);
+        },
+      ),
+      { numRuns: 500 },
+    );
+  });
+
+  test("NaN in update.totalTokens does not corrupt totals while other fields update correctly (S-121)", () => {
+    fc.assert(
+      fc.property(
+        arbUsageTotals(),
+        arbUsageTotals(),
+        arbUsageTotals(),
+        (entry, reported, global) => {
+          const validInput = entry.inputTokens + 10;
+          const result = mergeMonotonicUsage({
+            entryTotals: entry,
+            reportedTotals: reported,
+            globalTotals: global,
+            update: { totalTokens: NaN, inputTokens: validInput },
+          });
+          assert.ok(Number.isFinite(result.entryTotals.totalTokens));
+          assert.ok(Number.isFinite(result.globalTotals.totalTokens));
+          assert.ok(result.entryTotals.totalTokens >= entry.totalTokens);
+          assert.equal(result.entryTotals.inputTokens, validInput);
+        },
+      ),
+      { numRuns: 500 },
+    );
+  });
+
+  test("all NaN update fields do not corrupt any totals (S-186)", () => {
+    fc.assert(
+      fc.property(
+        arbUsageTotals(),
+        arbUsageTotals(),
+        arbUsageTotals(),
+        (entry, reported, global) => {
+          const result = mergeMonotonicUsage({
+            entryTotals: entry,
+            reportedTotals: reported,
+            globalTotals: global,
+            update: { inputTokens: NaN, outputTokens: NaN, totalTokens: NaN },
+          });
+          assert.ok(Number.isFinite(result.entryTotals.inputTokens));
+          assert.ok(Number.isFinite(result.entryTotals.outputTokens));
+          assert.ok(Number.isFinite(result.entryTotals.totalTokens));
+          assert.ok(Number.isFinite(result.reportedTotals.inputTokens));
+          assert.ok(Number.isFinite(result.reportedTotals.outputTokens));
+          assert.ok(Number.isFinite(result.reportedTotals.totalTokens));
+          assert.ok(Number.isFinite(result.globalTotals.inputTokens));
+          assert.ok(Number.isFinite(result.globalTotals.outputTokens));
+          assert.ok(Number.isFinite(result.globalTotals.totalTokens));
+          assert.ok(result.entryTotals.inputTokens >= entry.inputTokens);
+          assert.ok(result.entryTotals.outputTokens >= entry.outputTokens);
+          assert.ok(result.entryTotals.totalTokens >= entry.totalTokens);
+          assert.ok(result.globalTotals.inputTokens >= global.inputTokens);
+          assert.ok(result.globalTotals.outputTokens >= global.outputTokens);
+          assert.ok(result.globalTotals.totalTokens >= global.totalTokens);
+        },
+      ),
+      { numRuns: 500 },
+    );
+  });
+
+  test("Infinity and -Infinity in update fields are treated as invalid", () => {
+    fc.assert(
+      fc.property(
+        arbUsageTotals(),
+        arbUsageTotals(),
+        arbUsageTotals(),
+        (entry, reported, global) => {
+          for (const bad of [Infinity, -Infinity]) {
+            const result = mergeMonotonicUsage({
+              entryTotals: entry,
+              reportedTotals: reported,
+              globalTotals: global,
+              update: { inputTokens: bad, outputTokens: bad, totalTokens: bad },
+            });
+            assert.ok(Number.isFinite(result.entryTotals.inputTokens));
+            assert.ok(Number.isFinite(result.entryTotals.outputTokens));
+            assert.ok(Number.isFinite(result.entryTotals.totalTokens));
+            assert.ok(result.entryTotals.inputTokens >= entry.inputTokens);
+            assert.ok(result.entryTotals.outputTokens >= entry.outputTokens);
+            assert.ok(result.entryTotals.totalTokens >= entry.totalTokens);
+          }
+        },
+      ),
+      { numRuns: 500 },
+    );
+  });
+
+  test("NaN update preserves monotonicity in N-step chain", () => {
+    fc.assert(
+      fc.property(
+        arbUsageTotals(),
+        arbUsageTotals(),
+        arbUsageTotals(),
+        fc.array(
+          fc.oneof(
+            arbPartialUsageUpdate(),
+            fc.constant({ inputTokens: NaN, outputTokens: NaN, totalTokens: NaN }),
+            fc.constant({ inputTokens: NaN }),
+            fc.constant({ totalTokens: NaN }),
+          ),
+          { minLength: 3, maxLength: 10 },
+        ),
+        (entry, reported, global, updates) => {
+          let current = { entryTotals: entry, reportedTotals: reported, globalTotals: global };
+          for (const update of updates) {
+            const next = mergeMonotonicUsage({
+              entryTotals: current.entryTotals,
+              reportedTotals: current.reportedTotals,
+              globalTotals: current.globalTotals,
+              update,
+            });
+            assert.ok(Number.isFinite(next.entryTotals.inputTokens));
+            assert.ok(Number.isFinite(next.entryTotals.outputTokens));
+            assert.ok(Number.isFinite(next.entryTotals.totalTokens));
+            assert.ok(next.entryTotals.inputTokens >= current.entryTotals.inputTokens);
+            assert.ok(next.entryTotals.outputTokens >= current.entryTotals.outputTokens);
+            assert.ok(next.entryTotals.totalTokens >= current.entryTotals.totalTokens);
+            current = next;
+          }
+        },
+      ),
+      { numRuns: 500 },
+    );
+  });
 });
 
 // INVARIANT: When an update value is lower than the current entry, the entry SHALL not decrease.

@@ -14,21 +14,19 @@ export interface UsageMergeResult {
 }
 
 export function mergeMonotonicUsage(input: UsageMergeInput): UsageMergeResult {
-  const nextInput = Math.max(
-    input.entryTotals.inputTokens,
-    0,
-    input.update.inputTokens ?? input.entryTotals.inputTokens,
-  );
-  const nextOutput = Math.max(
-    input.entryTotals.outputTokens,
-    0,
-    input.update.outputTokens ?? input.entryTotals.outputTokens,
-  );
-  const nextTotal = Math.max(
-    input.entryTotals.totalTokens,
-    0,
-    input.update.totalTokens ?? input.entryTotals.totalTokens,
-  );
+  const safeInput = Number.isFinite(input.update.inputTokens)
+    ? input.update.inputTokens!
+    : input.entryTotals.inputTokens;
+  const safeOutput = Number.isFinite(input.update.outputTokens)
+    ? input.update.outputTokens!
+    : input.entryTotals.outputTokens;
+  const safeTotal = Number.isFinite(input.update.totalTokens)
+    ? input.update.totalTokens!
+    : input.entryTotals.totalTokens;
+
+  const nextInput = Math.max(input.entryTotals.inputTokens, 0, safeInput);
+  const nextOutput = Math.max(input.entryTotals.outputTokens, 0, safeOutput);
+  const nextTotal = Math.max(input.entryTotals.totalTokens, 0, safeTotal);
 
   const inputDelta = Math.max(0, nextInput - input.reportedTotals.inputTokens);
   const outputDelta = Math.max(0, nextOutput - input.reportedTotals.outputTokens);
