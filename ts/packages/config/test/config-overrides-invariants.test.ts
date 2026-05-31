@@ -5,8 +5,8 @@ import {
   settingsForIssueState,
   parseConfig,
   normalizeStateName,
-  MAX_TURNS_MAX,
 } from "@symphony/cli";
+import { MAX_TURNS_MAX } from "@symphony/domain";
 
 import { assert } from "../../../test/assert.js";
 

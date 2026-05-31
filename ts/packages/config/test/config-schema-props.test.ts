@@ -1,6 +1,7 @@
 import { test } from "vitest";
 import fc from "fast-check";
-import { parseConfig, ONE_WEEK_MS, PORT_MAX } from "@symphony/cli";
+import { parseConfig } from "@symphony/cli";
+import { ONE_WEEK_MS, PORT_MAX } from "@symphony/domain";
 
 import { assert } from "../../../test/assert.js";
 

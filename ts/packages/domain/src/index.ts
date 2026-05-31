@@ -1,3 +1,48 @@
+// --- Bounds constants ---
+
+export const PORT_MAX = 65535;
+export const ONE_WEEK_MS = 604_800_000;
+export const RENDER_INTERVAL_MAX_MS = 60_000;
+export const CONCURRENCY_MAX = 1000;
+export const MAX_TURNS_MAX = 10_000;
+export const ENSEMBLE_SIZE_MAX = 100;
+
+// --- Bounds validators ---
+
+export function isValidPort(n: number): boolean {
+  return Number.isInteger(n) && n >= 0 && n <= PORT_MAX;
+}
+
+export function isValidTimeoutMs(n: number): boolean {
+  return Number.isInteger(n) && n >= 1 && n <= ONE_WEEK_MS;
+}
+
+export function isValidNonNegativeTimeoutMs(n: number): boolean {
+  return Number.isInteger(n) && n >= 0 && n <= ONE_WEEK_MS;
+}
+
+export function isValidIntervalMs(n: number): boolean {
+  return Number.isInteger(n) && n >= 1 && n <= ONE_WEEK_MS;
+}
+
+export function isValidRenderIntervalMs(n: number): boolean {
+  return Number.isInteger(n) && n >= 1 && n <= RENDER_INTERVAL_MAX_MS;
+}
+
+export function isValidConcurrency(n: number): boolean {
+  return Number.isInteger(n) && n >= 1 && n <= CONCURRENCY_MAX;
+}
+
+export function isValidMaxTurns(n: number): boolean {
+  return Number.isInteger(n) && n >= 1 && n <= MAX_TURNS_MAX;
+}
+
+export function isValidEnsembleSize(n: number): boolean {
+  return Number.isInteger(n) && n >= 1 && n <= ENSEMBLE_SIZE_MAX;
+}
+
+// --- Domain types ---
+
 /**
  * Identifies a configured agent backend by name (e.g. `"codex"`, `"claude"`).
  * Matches a key in {@link Settings.agents} and is open-ended because operators define their own.
