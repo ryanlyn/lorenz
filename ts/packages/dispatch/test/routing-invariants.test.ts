@@ -70,6 +70,7 @@ const arbRouteNameNoColon = fc
 const arbWhitespace = fc
   .array(fc.constantFrom(" ", "\t", "\n", "\r"), { minLength: 0, maxLength: 5 })
   .map((a) => a.join(""));
+// INVARIANT: When route name normalization is applied twice, the result SHALL be the same (idempotent).
 test("normalizeRouteName - normalization is idempotent", () => {
   fc.assert(
     fc.property(fc.string({ maxLength: 100 }), (input) => {
@@ -79,6 +80,8 @@ test("normalizeRouteName - normalization is idempotent", () => {
     { numRuns: 50 },
   );
 });
+// INVARIANT: When route names are normalized, normalization SHALL be case-insensitive.
+// INVARIANT: When route names are normalized, leading and trailing whitespace SHALL be stripped.
 test("normalizeRouteName - output is always lowercase and trimmed", () => {
   fc.assert(
     fc.property(fc.string({ minLength: 1, maxLength: 80 }), (input) => {
@@ -89,6 +92,7 @@ test("normalizeRouteName - output is always lowercase and trimmed", () => {
     { numRuns: 50 },
   );
 });
+// INVARIANT: When a route name after prefix removal is whitespace-only, it SHALL not be valid.
 test("routeNames - whitespace-only suffix is not valid", () => {
   fc.assert(
     fc.property(
@@ -107,6 +111,7 @@ test("routeNames - whitespace-only suffix is not valid", () => {
     { numRuns: 100 },
   );
 });
+// INVARIANT: When prefix matching is performed, matching SHALL be case-insensitive.
 test("routeNames - prefix matching is case-insensitive", () => {
   fc.assert(
     fc.property(
@@ -157,6 +162,7 @@ test("routeNames - extracted route is always normalized", () => {
     { numRuns: 200 },
   );
 });
+// INVARIANT: When the allowlist is null, the system SHALL accept all routes.
 test("routedToThisWorker - null allowlist accepts all routes", () => {
   fc.assert(
     fc.property(arbRouteName, (routeName) => {
@@ -170,6 +176,7 @@ test("routedToThisWorker - null allowlist accepts all routes", () => {
     { numRuns: 200 },
   );
 });
+// INVARIANT: When the allowlist is empty, the system SHALL reject all routes.
 test("routedToThisWorker - empty allowlist rejects all routes", () => {
   fc.assert(
     fc.property(arbRouteName, (routeName) => {
@@ -183,6 +190,7 @@ test("routedToThisWorker - empty allowlist rejects all routes", () => {
     { numRuns: 200 },
   );
 });
+// INVARIANT: When no route label is present and unrouted dispatch is disabled, the dispatch SHALL be ineligible.
 test("routedToThisWorker - no route label and unrouted disabled means ineligible", () => {
   fc.assert(
     fc.property(
@@ -219,6 +227,7 @@ test("routedToThisWorker - no route label with unrouted enabled accepts", () => 
     { numRuns: 200 },
   );
 });
+// INVARIANT: When prefix matching succeeds but the remaining name is whitespace-only, the route SHALL be rejected as routed-but-invalid.
 test("routedToThisWorker - whitespace-only suffix means rejected", () => {
   const arbWs = fc
     .array(fc.constantFrom(" ", "\t", "\n", "\r"), { minLength: 0, maxLength: 5 })
