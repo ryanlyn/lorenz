@@ -1,3 +1,75 @@
+import { z } from "zod";
+
+// --- Bounds constants ---
+
+export const PORT_MAX = 65535;
+export const ONE_WEEK_MS = 604_800_000;
+export const RENDER_INTERVAL_MAX_MS = 60_000;
+export const CONCURRENCY_MAX = 1000;
+export const MAX_TURNS_MAX = 10_000;
+export const ENSEMBLE_SIZE_MAX = 100;
+
+// --- Numeric validation schemas ---
+
+const numericInput = z.union([
+  z.number().refine((n) => !Number.isNaN(n), { message: "must not be NaN" }),
+  z
+    .string()
+    .refine((s) => s.trim() !== "", { message: "must not be empty" })
+    .transform(Number)
+    .refine((n) => !Number.isNaN(n), { message: "must be a number" }),
+]);
+
+export const coercedPort = numericInput
+  .refine((n) => Number.isInteger(n) && n >= 0 && n <= PORT_MAX, {
+    message: `must be a valid port number (0-${PORT_MAX})`,
+  })
+  .describe("non-negative");
+
+export const coercedTimeoutMs = numericInput
+  .refine((n) => Number.isInteger(n) && n >= 1 && n <= ONE_WEEK_MS, {
+    message: `must be a positive integer no greater than ${ONE_WEEK_MS} (1 week)`,
+  })
+  .describe("positive");
+
+export const coercedNonNegativeTimeoutMs = numericInput
+  .refine((n) => Number.isInteger(n) && n >= 0 && n <= ONE_WEEK_MS, {
+    message: `must be a non-negative integer no greater than ${ONE_WEEK_MS} (1 week)`,
+  })
+  .describe("non-negative");
+
+export const coercedIntervalMs = numericInput
+  .refine((n) => Number.isInteger(n) && n >= 1 && n <= ONE_WEEK_MS, {
+    message: `must be a positive integer no greater than ${ONE_WEEK_MS} (1 week)`,
+  })
+  .describe("positive");
+
+export const coercedRenderIntervalMs = numericInput
+  .refine((n) => Number.isInteger(n) && n >= 1 && n <= RENDER_INTERVAL_MAX_MS, {
+    message: `must be a positive integer no greater than ${RENDER_INTERVAL_MAX_MS}`,
+  })
+  .describe("positive");
+
+export const coercedConcurrency = numericInput
+  .refine((n) => Number.isInteger(n) && n >= 1 && n <= CONCURRENCY_MAX, {
+    message: `must be an integer between 1 and ${CONCURRENCY_MAX}`,
+  })
+  .describe("positive");
+
+export const coercedMaxTurns = numericInput
+  .refine((n) => Number.isInteger(n) && n >= 1 && n <= MAX_TURNS_MAX, {
+    message: `must be an integer between 1 and ${MAX_TURNS_MAX}`,
+  })
+  .describe("positive");
+
+export const coercedEnsembleSize = numericInput
+  .refine((n) => Number.isInteger(n) && n >= 1 && n <= ENSEMBLE_SIZE_MAX, {
+    message: `must be an integer between 1 and ${ENSEMBLE_SIZE_MAX}`,
+  })
+  .describe("positive");
+
+// --- Domain types ---
+
 /**
  * Identifies a configured agent backend by name (e.g. `"codex"`, `"claude"`).
  * Matches a key in {@link Settings.agents} and is open-ended because operators define their own.

@@ -1,6 +1,6 @@
 import { test, describe } from "vitest";
 import fc from "fast-check";
-import { PORT_MAX } from "@symphony/config";
+import { PORT_MAX } from "@symphony/domain";
 
 import { assert } from "../../../test/assert.js";
 
