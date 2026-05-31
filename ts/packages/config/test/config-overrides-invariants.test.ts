@@ -1,4 +1,4 @@
-import { test } from "vitest";
+import { test, describe } from "vitest";
 import fc from "fast-check";
 import {
   defaultSettings,
@@ -54,41 +54,41 @@ const distinctStateNamesArb = fc
   .tuple(stateNameArb, stateNameArb)
   .filter(([a, b]) => normalizeStateName(a) !== normalizeStateName(b));
 
-// INVARIANT: When no override is present, the base settings SHALL remain unchanged.
+describe("INVARIANT: When no override is present, the base settings SHALL remain unchanged", () => {
+  test("no override present — base settings remain unchanged", () => {
+    fc.assert(
+      fc.property(stateNameArb, (state) => {
+        // Create settings with empty statusOverrides (default)
+        const settings = defaultSettings();
+        // Ensure the map has no entry for any normalized state
+        assert.equal(settings.statusOverrides.size, 0);
 
-test("no override present — base settings remain unchanged", () => {
-  fc.assert(
-    fc.property(stateNameArb, (state) => {
-      // Create settings with empty statusOverrides (default)
-      const settings = defaultSettings();
-      // Ensure the map has no entry for any normalized state
-      assert.equal(settings.statusOverrides.size, 0);
+        const result = settingsForIssueState(settings, state);
 
-      const result = settingsForIssueState(settings, state);
+        // Agent settings preserved
+        assert.equal(result.agent.kind, settings.agent.kind);
+        assert.equal(result.agent.maxConcurrentAgents, settings.agent.maxConcurrentAgents);
+        assert.equal(result.agent.maxTurns, settings.agent.maxTurns);
+        assert.equal(result.agent.maxRetryBackoffMs, settings.agent.maxRetryBackoffMs);
+        assert.equal(result.agent.ensembleSize, settings.agent.ensembleSize);
 
-      // Agent settings preserved
-      assert.equal(result.agent.kind, settings.agent.kind);
-      assert.equal(result.agent.maxConcurrentAgents, settings.agent.maxConcurrentAgents);
-      assert.equal(result.agent.maxTurns, settings.agent.maxTurns);
-      assert.equal(result.agent.maxRetryBackoffMs, settings.agent.maxRetryBackoffMs);
-      assert.equal(result.agent.ensembleSize, settings.agent.ensembleSize);
+        // Codex settings preserved
+        assert.equal(result.codex.command, settings.codex.command);
+        assert.equal(result.codex.turnTimeoutMs, settings.codex.turnTimeoutMs);
+        assert.equal(result.codex.readTimeoutMs, settings.codex.readTimeoutMs);
+        assert.equal(result.codex.stallTimeoutMs, settings.codex.stallTimeoutMs);
+        assert.equal(result.codex.threadSandbox, settings.codex.threadSandbox);
 
-      // Codex settings preserved
-      assert.equal(result.codex.command, settings.codex.command);
-      assert.equal(result.codex.turnTimeoutMs, settings.codex.turnTimeoutMs);
-      assert.equal(result.codex.readTimeoutMs, settings.codex.readTimeoutMs);
-      assert.equal(result.codex.stallTimeoutMs, settings.codex.stallTimeoutMs);
-      assert.equal(result.codex.threadSandbox, settings.codex.threadSandbox);
-
-      // Claude settings preserved
-      assert.equal(result.claude.command, settings.claude.command);
-      assert.equal(result.claude.model, settings.claude.model);
-      assert.equal(result.claude.permissionMode, settings.claude.permissionMode);
-      assert.equal(result.claude.turnTimeoutMs, settings.claude.turnTimeoutMs);
-      assert.equal(result.claude.stallTimeoutMs, settings.claude.stallTimeoutMs);
-    }),
-    { numRuns: 200 },
-  );
+        // Claude settings preserved
+        assert.equal(result.claude.command, settings.claude.command);
+        assert.equal(result.claude.model, settings.claude.model);
+        assert.equal(result.claude.permissionMode, settings.claude.permissionMode);
+        assert.equal(result.claude.turnTimeoutMs, settings.claude.turnTimeoutMs);
+        assert.equal(result.claude.stallTimeoutMs, settings.claude.stallTimeoutMs);
+      }),
+      { numRuns: 200 },
+    );
+  });
 });
 
 test("state present but NOT in overrides map — base settings remain unchanged", () => {
@@ -131,36 +131,36 @@ test("settingsForIssueState returns a clone, not the same object reference", () 
   );
 });
 
-// INVARIANT: When override lookup is performed, it SHALL be case-insensitive.
+describe("INVARIANT: When override lookup is performed, it SHALL be case-insensitive", () => {
+  test("override lookup is case-insensitive — upper/lower/mixed match", () => {
+    fc.assert(
+      fc.property(
+        stateNameArb.filter((s) => /[a-z]/.test(s)),
+        positiveIntArb,
+        (state, maxTurns) => {
+          const settings = defaultSettings();
+          const normalizedKey = state.trim().toLowerCase();
+          settings.statusOverrides.set(normalizedKey, {
+            agent: { maxTurns },
+          });
 
-test("override lookup is case-insensitive — upper/lower/mixed match", () => {
-  fc.assert(
-    fc.property(
-      stateNameArb.filter((s) => /[a-z]/.test(s)),
-      positiveIntArb,
-      (state, maxTurns) => {
-        const settings = defaultSettings();
-        const normalizedKey = state.trim().toLowerCase();
-        settings.statusOverrides.set(normalizedKey, {
-          agent: { maxTurns },
-        });
+          // Look up with all-uppercase
+          const upper = settingsForIssueState(settings, state.toUpperCase());
+          assert.equal(upper.agent.maxTurns, maxTurns);
 
-        // Look up with all-uppercase
-        const upper = settingsForIssueState(settings, state.toUpperCase());
-        assert.equal(upper.agent.maxTurns, maxTurns);
+          // Look up with all-lowercase
+          const lower = settingsForIssueState(settings, state.toLowerCase());
+          assert.equal(lower.agent.maxTurns, maxTurns);
 
-        // Look up with all-lowercase
-        const lower = settingsForIssueState(settings, state.toLowerCase());
-        assert.equal(lower.agent.maxTurns, maxTurns);
-
-        // Look up with mixed case (first char upper, rest lower)
-        const mixed = state.charAt(0).toUpperCase() + state.slice(1).toLowerCase();
-        const mixedResult = settingsForIssueState(settings, mixed);
-        assert.equal(mixedResult.agent.maxTurns, maxTurns);
-      },
-    ),
-    { numRuns: 200 },
-  );
+          // Look up with mixed case (first char upper, rest lower)
+          const mixed = state.charAt(0).toUpperCase() + state.slice(1).toLowerCase();
+          const mixedResult = settingsForIssueState(settings, mixed);
+          assert.equal(mixedResult.agent.maxTurns, maxTurns);
+        },
+      ),
+      { numRuns: 200 },
+    );
+  });
 });
 
 test("lookup is whitespace-insensitive (leading/trailing trimmed)", () => {
@@ -225,47 +225,47 @@ test("parseConfig normalizes state names in statusOverrides map keys", () => {
   );
 });
 
-// INVARIANT: When overrides are defined for different states, they SHALL apply independently.
+describe("INVARIANT: When overrides are defined for different states, they SHALL apply independently", () => {
+  test("overrides for different states apply independently", () => {
+    fc.assert(
+      fc.property(
+        positiveIntArb,
+        positiveIntArb,
+        fc.integer({ min: 1, max: 50 }),
+        fc.integer({ min: 51, max: 100 }),
+        (timeoutA, timeoutB, turnsA, turnsB) => {
+          const settings = defaultSettings();
+          settings.statusOverrides.set("state_alpha", {
+            agent: { maxTurns: turnsA },
+            codex: { turnTimeoutMs: timeoutA },
+          });
+          settings.statusOverrides.set("state_beta", {
+            agent: { maxTurns: turnsB },
+            codex: { turnTimeoutMs: timeoutB },
+          });
 
-test("overrides for different states apply independently", () => {
-  fc.assert(
-    fc.property(
-      positiveIntArb,
-      positiveIntArb,
-      fc.integer({ min: 1, max: 50 }),
-      fc.integer({ min: 51, max: 100 }),
-      (timeoutA, timeoutB, turnsA, turnsB) => {
-        const settings = defaultSettings();
-        settings.statusOverrides.set("state_alpha", {
-          agent: { maxTurns: turnsA },
-          codex: { turnTimeoutMs: timeoutA },
-        });
-        settings.statusOverrides.set("state_beta", {
-          agent: { maxTurns: turnsB },
-          codex: { turnTimeoutMs: timeoutB },
-        });
+          const alpha = settingsForIssueState(settings, "state_alpha");
+          const beta = settingsForIssueState(settings, "state_beta");
 
-        const alpha = settingsForIssueState(settings, "state_alpha");
-        const beta = settingsForIssueState(settings, "state_beta");
+          // Each state gets its own override values
+          assert.equal(alpha.agent.maxTurns, turnsA);
+          assert.equal(alpha.codex.turnTimeoutMs, timeoutA);
 
-        // Each state gets its own override values
-        assert.equal(alpha.agent.maxTurns, turnsA);
-        assert.equal(alpha.codex.turnTimeoutMs, timeoutA);
+          assert.equal(beta.agent.maxTurns, turnsB);
+          assert.equal(beta.codex.turnTimeoutMs, timeoutB);
 
-        assert.equal(beta.agent.maxTurns, turnsB);
-        assert.equal(beta.codex.turnTimeoutMs, timeoutB);
-
-        // They don't bleed into each other
-        if (turnsA !== turnsB) {
-          assert.notEqual(alpha.agent.maxTurns, beta.agent.maxTurns);
-        }
-        if (timeoutA !== timeoutB) {
-          assert.notEqual(alpha.codex.turnTimeoutMs, beta.codex.turnTimeoutMs);
-        }
-      },
-    ),
-    { numRuns: 200 },
-  );
+          // They don't bleed into each other
+          if (turnsA !== turnsB) {
+            assert.notEqual(alpha.agent.maxTurns, beta.agent.maxTurns);
+          }
+          if (timeoutA !== timeoutB) {
+            assert.notEqual(alpha.codex.turnTimeoutMs, beta.codex.turnTimeoutMs);
+          }
+        },
+      ),
+      { numRuns: 200 },
+    );
+  });
 });
 
 test("one state override does not affect querying another state", () => {
@@ -346,30 +346,30 @@ test("querying override does not mutate the source settings object", () => {
   );
 });
 
-// INVARIANT: When a partial override is applied, unmentioned fields SHALL be preserved.
+describe("INVARIANT: When a partial override is applied, unmentioned fields SHALL be preserved", () => {
+  test("partial agent override preserves unmentioned agent fields", () => {
+    fc.assert(
+      fc.property(boundaryPositiveIntArb, (maxTurns) => {
+        const settings = defaultSettings();
+        // Only override maxTurns
+        settings.statusOverrides.set("partial", {
+          agent: { maxTurns },
+        });
 
-test("partial agent override preserves unmentioned agent fields", () => {
-  fc.assert(
-    fc.property(boundaryPositiveIntArb, (maxTurns) => {
-      const settings = defaultSettings();
-      // Only override maxTurns
-      settings.statusOverrides.set("partial", {
-        agent: { maxTurns },
-      });
+        const result = settingsForIssueState(settings, "partial");
 
-      const result = settingsForIssueState(settings, "partial");
+        // Overridden field
+        assert.equal(result.agent.maxTurns, maxTurns);
 
-      // Overridden field
-      assert.equal(result.agent.maxTurns, maxTurns);
-
-      // Unmentioned fields preserved from base
-      assert.equal(result.agent.kind, settings.agent.kind);
-      assert.equal(result.agent.maxConcurrentAgents, settings.agent.maxConcurrentAgents);
-      assert.equal(result.agent.maxRetryBackoffMs, settings.agent.maxRetryBackoffMs);
-      assert.equal(result.agent.ensembleSize, settings.agent.ensembleSize);
-    }),
-    { numRuns: 200 },
-  );
+        // Unmentioned fields preserved from base
+        assert.equal(result.agent.kind, settings.agent.kind);
+        assert.equal(result.agent.maxConcurrentAgents, settings.agent.maxConcurrentAgents);
+        assert.equal(result.agent.maxRetryBackoffMs, settings.agent.maxRetryBackoffMs);
+        assert.equal(result.agent.ensembleSize, settings.agent.ensembleSize);
+      }),
+      { numRuns: 200 },
+    );
+  });
 });
 
 test("partial codex override preserves unmentioned codex fields", () => {
@@ -496,37 +496,37 @@ test("partial override via parseConfig preserves fields not in raw config", () =
   );
 });
 
-// INVARIANT: When nested map fields are overridden, they SHALL be deep-merged.
+describe("INVARIANT: When nested map fields are overridden, they SHALL be deep-merged", () => {
+  test("codex approvalPolicy deep-merged — override keys merge, base keys preserved", () => {
+    fc.assert(
+      fc.property(fc.boolean(), fc.boolean(), (sandboxApproval, rules) => {
+        const settings = defaultSettings();
+        // Base approvalPolicy is a map: { reject: { sandbox_approval: true, rules: true, mcp_elicitations: true } }
+        settings.statusOverrides.set("deep_merge", {
+          codex: {
+            approvalPolicy: { reject: { sandbox_approval: sandboxApproval, rules } },
+          },
+        });
 
-test("codex approvalPolicy deep-merged — override keys merge, base keys preserved", () => {
-  fc.assert(
-    fc.property(fc.boolean(), fc.boolean(), (sandboxApproval, rules) => {
-      const settings = defaultSettings();
-      // Base approvalPolicy is a map: { reject: { sandbox_approval: true, rules: true, mcp_elicitations: true } }
-      settings.statusOverrides.set("deep_merge", {
-        codex: {
-          approvalPolicy: { reject: { sandbox_approval: sandboxApproval, rules } },
-        },
-      });
+        const result = settingsForIssueState(settings, "deep_merge");
+        const policy = result.codex.approvalPolicy;
 
-      const result = settingsForIssueState(settings, "deep_merge");
-      const policy = result.codex.approvalPolicy;
+        // Must be a record (deep-merged), not replaced wholesale
+        assert.ok(typeof policy === "object" && policy !== null && !Array.isArray(policy));
+        const policyMap = policy as Record<string, unknown>;
+        const reject = policyMap.reject as Record<string, unknown>;
+        assert.ok(reject !== undefined);
 
-      // Must be a record (deep-merged), not replaced wholesale
-      assert.ok(typeof policy === "object" && policy !== null && !Array.isArray(policy));
-      const policyMap = policy as Record<string, unknown>;
-      const reject = policyMap.reject as Record<string, unknown>;
-      assert.ok(reject !== undefined);
+        // Overridden keys reflect the override values
+        assert.equal(reject.sandbox_approval, sandboxApproval);
+        assert.equal(reject.rules, rules);
 
-      // Overridden keys reflect the override values
-      assert.equal(reject.sandbox_approval, sandboxApproval);
-      assert.equal(reject.rules, rules);
-
-      // Key NOT mentioned in override but present in base is preserved
-      assert.equal(reject.mcp_elicitations, true);
-    }),
-    { numRuns: 200 },
-  );
+        // Key NOT mentioned in override but present in base is preserved
+        assert.equal(reject.mcp_elicitations, true);
+      }),
+      { numRuns: 200 },
+    );
+  });
 });
 
 test("codex turnSandboxPolicy deep-merged when both base and override are maps", () => {

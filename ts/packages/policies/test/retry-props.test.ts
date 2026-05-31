@@ -1,4 +1,4 @@
-import { test } from "vitest";
+import { test, describe } from "vitest";
 import fc from "fast-check";
 import { retryBackoffMs } from "@symphony/cli";
 
@@ -19,17 +19,18 @@ test("retryBackoffMs — monotonically non-decreasing for failure kind", () => {
   );
 });
 
-// INVARIANT: failure delay never exceeds max (when max >= minimum floor)
-test("retryBackoffMs — always capped by max when max >= 1000", () => {
-  fc.assert(
-    fc.property(
-      fc.integer({ min: -10, max: 100 }),
-      fc.integer({ min: 1_000, max: 10_000_000 }),
-      (attempt, max) => {
-        assert.ok(retryBackoffMs(attempt, max, "failure") <= max);
-      },
-    ),
-  );
+describe("INVARIANT: failure delay never exceeds max (when max >= minimum floor)", () => {
+  test("retryBackoffMs — always capped by max when max >= 1000", () => {
+    fc.assert(
+      fc.property(
+        fc.integer({ min: -10, max: 100 }),
+        fc.integer({ min: 1_000, max: 10_000_000 }),
+        (attempt, max) => {
+          assert.ok(retryBackoffMs(attempt, max, "failure") <= max);
+        },
+      ),
+    );
+  });
 });
 
 test("retryBackoffMs — floor at base when max >= 10_000", () => {
@@ -56,23 +57,22 @@ test("retryBackoffMs — continuation respects cap", () => {
   );
 });
 
-// INVARIANT: result is always non-negative when maxRetryBackoffMs >= 0
-test("retryBackoffMs — result is always non-negative", () => {
-  fc.assert(
-    fc.property(
-      fc.integer({ min: -10, max: 100 }),
-      fc.integer({ min: 0, max: 10_000_000 }),
-      fc.constantFrom("failure" as const, "continuation" as const),
-      (attempt, max, kind) => {
-        assert.ok(retryBackoffMs(attempt, max, kind) >= 0);
-      },
-    ),
-  );
+describe("INVARIANT: result is always non-negative when maxRetryBackoffMs >= 0", () => {
+  test("retryBackoffMs — result is always non-negative", () => {
+    fc.assert(
+      fc.property(
+        fc.integer({ min: -10, max: 100 }),
+        fc.integer({ min: 0, max: 10_000_000 }),
+        fc.constantFrom("failure" as const, "continuation" as const),
+        (attempt, max, kind) => {
+          assert.ok(retryBackoffMs(attempt, max, kind) >= 0);
+        },
+      ),
+    );
+  });
 });
 
-// INVARIANT: maxRetryBackoffMs is always the hard ceiling on failure delay.
-// The 1000ms minimum floor applies only when maxRetryBackoffMs >= 1000; otherwise the
-// configured max overrides the floor, enforcing that callers can cap retry timing from above.
+describe("INVARIANT: failure delay is always >= 1000ms minimum floor to prevent retry storms", () => {
 test("retryBackoffMs — failure delay never exceeds maxRetryBackoffMs", () => {
   fc.assert(
     fc.property(
@@ -83,4 +83,5 @@ test("retryBackoffMs — failure delay never exceeds maxRetryBackoffMs", () => {
       },
     ),
   );
+});
 });

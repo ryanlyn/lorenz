@@ -51,12 +51,6 @@ if (
 ```
 This condition should arguably not check blockers at all for already-running issues, since the invariant says blockers only gate *unstarted* dispatch.
 
----
-
-### Note on Bug #1 (Float Priority): Unreachable in Production
-**Discovery:** While generating scenarios, we found that `normalizeIssue` (used by both `makeIssue` in the sandbox and the Linear tracker client) calls `numberOrNull(input.priority)`, which enforces `Number.isInteger(value)`. Any non-integer priority (e.g. 2.5) becomes `null` before reaching `prioritySort`. The bug in `prioritySort` (no `isInteger` check) is therefore **dead code in production** — it can only be triggered by unit tests or code paths that construct `Issue` objects directly without normalization. Severity downgraded from Low to Informational.
-
----
 
 ## How to Run
 
