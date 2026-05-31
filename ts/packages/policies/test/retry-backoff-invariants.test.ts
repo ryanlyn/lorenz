@@ -4,8 +4,7 @@ import { retryBackoffMs } from "@symphony/cli";
 
 import { assert } from "../../../test/assert.js";
 
-// INVARIANT: When a retry delay is calculated, it SHALL be a non-negative finite number.
-test("retryBackoffMs - delay is always non-negative and finite for the full input domain", () => {
+test("INVARIANT: When a retry delay is calculated, it SHALL be a non-negative finite number. - retryBackoffMs - delay is always non-negative and finite for the full input domain", () => {
   fc.assert(
     fc.property(
       fc.integer({ min: -2_147_483_648, max: 2_147_483_647 }),
@@ -21,8 +20,7 @@ test("retryBackoffMs - delay is always non-negative and finite for the full inpu
   );
 });
 
-// INVARIANT: When failure retry delay is calculated, it SHALL be monotonically non-decreasing with attempt number.
-test("retryBackoffMs - failure delays are monotonically non-decreasing with attempt number", () => {
+test("INVARIANT: When failure retry delay is calculated, it SHALL be monotonically non-decreasing with attempt number. - retryBackoffMs - failure delays are monotonically non-decreasing with attempt number", () => {
   fc.assert(
     fc.property(
       fc.nat({ max: 100 }),
@@ -40,8 +38,7 @@ test("retryBackoffMs - failure delays are monotonically non-decreasing with atte
   );
 });
 
-// INVARIANT: When a retry delay is calculated, it SHALL never exceed the configured maximum cap (when cap >= minimum floor).
-test("retryBackoffMs - failure delay never exceeds the configured maximum cap", () => {
+test("INVARIANT: When a retry delay is calculated, it SHALL never exceed the configured maximum cap (when cap >= minimum floor). - retryBackoffMs - failure delay never exceeds the configured maximum cap", () => {
   fc.assert(
     fc.property(
       fc.integer({ min: -100, max: 10_000 }),
@@ -55,8 +52,7 @@ test("retryBackoffMs - failure delay never exceeds the configured maximum cap", 
   );
 });
 
-// INVARIANT: When maxBackoff permits, failure delays SHALL have a positive floor preventing zero-delay storms.
-test("retryBackoffMs - failure delay has a positive floor when maxBackoff permits", () => {
+test("INVARIANT: When maxBackoff permits, failure delays SHALL have a positive floor preventing zero-delay storms. - retryBackoffMs - failure delay has a positive floor when maxBackoff permits", () => {
   fc.assert(
     fc.property(
       fc.integer({ min: -100, max: 200 }),
@@ -70,8 +66,7 @@ test("retryBackoffMs - failure delay has a positive floor when maxBackoff permit
   );
 });
 
-// INVARIANT: When a continuation retry is scheduled, it SHALL use a fixed short delay capped by maxRetryBackoffMs.
-test("retryBackoffMs - continuation retry respects cap", () => {
+test("INVARIANT: When a continuation retry is scheduled, it SHALL use a fixed short delay capped by maxRetryBackoffMs. - retryBackoffMs - continuation retry respects cap", () => {
   fc.assert(
     fc.property(
       fc.integer({ min: -1000, max: 1000 }),

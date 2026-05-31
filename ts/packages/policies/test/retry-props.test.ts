@@ -19,8 +19,7 @@ test("retryBackoffMs — monotonically non-decreasing for failure kind", () => {
   );
 });
 
-// INVARIANT: failure delay never exceeds max (when max >= minimum floor)
-test("retryBackoffMs — always capped by max when max >= 1000", () => {
+test("INVARIANT: failure delay never exceeds max (when max >= minimum floor) - retryBackoffMs — always capped by max when max >= 1000", () => {
   fc.assert(
     fc.property(
       fc.integer({ min: -10, max: 100 }),
@@ -56,8 +55,7 @@ test("retryBackoffMs — continuation respects cap", () => {
   );
 });
 
-// INVARIANT: result is always non-negative when maxRetryBackoffMs >= 0
-test("retryBackoffMs — result is always non-negative", () => {
+test("INVARIANT: result is always non-negative when maxRetryBackoffMs >= 0 - retryBackoffMs — result is always non-negative", () => {
   fc.assert(
     fc.property(
       fc.integer({ min: -10, max: 100 }),
@@ -70,8 +68,7 @@ test("retryBackoffMs — result is always non-negative", () => {
   );
 });
 
-// INVARIANT: failure delay is always >= 1000ms minimum floor to prevent retry storms
-test("retryBackoffMs — failure delay enforces minimum floor of 1000ms", () => {
+test("INVARIANT: failure delay is always >= 1000ms minimum floor to prevent retry storms - retryBackoffMs — failure delay enforces minimum floor of 1000ms", () => {
   fc.assert(
     fc.property(
       fc.integer({ min: -10, max: 100 }),

@@ -92,9 +92,7 @@ const arbNearOverflowTotals = () =>
     secondsRunning: fc.nat(),
   });
 
-// INVARIANT: When token counters are updated sequentially, they SHALL never decrease (monotonic growth).
-
-test("monotonicity holds over N-step sequential chain for both entry and global", () => {
+test("INVARIANT: When token counters are updated sequentially, they SHALL never decrease (monotonic growth) - monotonicity holds over N-step sequential chain for both entry and global", () => {
   fc.assert(
     fc.property(
       arbUsageTotals(),
@@ -210,9 +208,7 @@ test("idempotency holds for each step in a chain (re-applying same update is no-
   );
 });
 
-// INVARIANT: When global aggregates are updated, growth SHALL be bounded by entry growth.
-
-test("global growth per step is bounded above by the new entry value", () => {
+test("INVARIANT: When global aggregates are updated, growth SHALL be bounded by entry growth - global growth per step is bounded above by the new entry value", () => {
   fc.assert(
     fc.property(
       arbUsageTotals(),
@@ -317,9 +313,7 @@ test("entry result is at least as large as both entry and positive update values
   );
 });
 
-// INVARIANT: When extreme values are applied, token counts SHALL never become negative.
-
-test("all invariants hold with extreme value updates", () => {
+test("INVARIANT: When extreme values are applied, token counts SHALL never become negative - all invariants hold with extreme value updates", () => {
   fc.assert(
     fc.property(
       arbUsageTotals(),
@@ -384,9 +378,7 @@ test("heavily negative updates do not corrupt state", () => {
   );
 });
 
-// INVARIANT: When values are near integer limits, the system SHALL not produce NaN or negative values.
-
-test("near-overflow globalTotals: function does not produce NaN or negative values", () => {
+test("INVARIANT: When values are near integer limits, the system SHALL not produce NaN or negative values - near-overflow globalTotals: function does not produce NaN or negative values", () => {
   fc.assert(
     fc.property(
       arbUsageTotals(),
@@ -456,9 +448,7 @@ test("near-overflow: entry and reported remain valid when globalTotals near limi
   );
 });
 
-// INVARIANT: When no update fields are provided, entry and global totals SHALL remain unchanged.
-
-test("empty update (all undefined) preserves entry and global unchanged", () => {
+test("INVARIANT: When no update fields are provided, entry and global totals SHALL remain unchanged - empty update (all undefined) preserves entry and global unchanged", () => {
   fc.assert(
     fc.property(arbUsageTotals(), arbUsageTotals(), arbUsageTotals(), (entry, reported, global) => {
       const update = {
@@ -480,9 +470,7 @@ test("empty update (all undefined) preserves entry and global unchanged", () => 
   );
 });
 
-// INVARIANT: Token counts SHALL never become negative / NaN.
-
-describe("NaN in update fields", () => {
+describe("INVARIANT: Token counts SHALL never become negative / NaN - NaN in update fields", () => {
   test("NaN in update.inputTokens does not corrupt entry, reported, or global totals", () => {
     fc.assert(
       fc.property(
@@ -631,9 +619,7 @@ describe("NaN in update fields", () => {
   });
 });
 
-// INVARIANT: When an update value is lower than the current entry, the entry SHALL not decrease.
-
-test("update with lower value than entry does NOT decrease entry", () => {
+test("INVARIANT: When an update value is lower than the current entry, the entry SHALL not decrease - update with lower value than entry does NOT decrease entry", () => {
   fc.assert(
     fc.property(
       fc.record({

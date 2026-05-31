@@ -133,9 +133,7 @@ const sshTargetWithoutPort = sshDestination;
 
 const sshTargetAny = fc.oneof(sshTargetWithPort, sshTargetWithoutPort);
 
-// INVARIANT: When shellEscape is applied, the output SHALL be reversible to the original input by a POSIX shell.
-
-test("shellEscape wraps value in single quotes preventing unquoted shell metacharacters", () => {
+test("INVARIANT: When shellEscape is applied, the output SHALL be reversible to the original input by a POSIX shell - shellEscape wraps value in single quotes preventing unquoted shell metacharacters", () => {
   fc.assert(
     fc.property(shellDangerousString, (input) => {
       const escaped = shellEscape(input);
@@ -223,9 +221,7 @@ test("negative: shellEscape output never contains unbalanced quotes", () => {
   );
 });
 
-// INVARIANT: When an SSH target is parsed, destination and port SHALL be correctly separated.
-
-test("parseSshTarget roundtrip - destination:port recombines correctly", () => {
+test("INVARIANT: When an SSH target is parsed, destination and port SHALL be correctly separated - parseSshTarget roundtrip - destination:port recombines correctly", () => {
   fc.assert(
     fc.property(sshDestination, sshPort, (dest, port) => {
       const input = `${dest}:${port}`;
@@ -309,9 +305,7 @@ test("parseSshTarget bare IPv6 (unbracketed with colons) does not extract port",
   );
 });
 
-// INVARIANT: When sshArgs constructs arguments, they SHALL be consistent with parseSshTarget output.
-
-test("sshArgs uses parseSshTarget destination as the host argument", () => {
+test("INVARIANT: When sshArgs constructs arguments, they SHALL be consistent with parseSshTarget output - sshArgs uses parseSshTarget destination as the host argument", () => {
   fc.assert(
     fc.property(sshTargetAny, shellDangerousString, (host, command) => {
       const args = sshArgs(host, command);

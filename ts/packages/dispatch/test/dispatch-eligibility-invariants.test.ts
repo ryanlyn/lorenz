@@ -191,9 +191,7 @@ function issueArb(
     }));
 }
 
-// INVARIANT: When a dispatch is missing required fields, it SHALL be ineligible.
-
-test("missing required fields (id, identifier, title, state) SHALL be ineligible", () => {
+test("INVARIANT: When a dispatch is missing required fields, it SHALL be ineligible. - missing required fields (id, identifier, title, state) SHALL be ineligible", () => {
   const requiredFields = ["id", "identifier", "title", "state"] as const;
 
   fc.assert(
@@ -246,9 +244,7 @@ test("if shouldDispatchIssue rejects due to missing fields, dispatchBlockReason 
   );
 });
 
-// INVARIANT: When a dispatch is in a terminal state, it SHALL be ineligible.
-
-test("terminal state issues SHALL be ineligible", () => {
+test("INVARIANT: When a dispatch is in a terminal state, it SHALL be ineligible. - terminal state issues SHALL be ineligible", () => {
   const defaultTerminalStates = ["Closed", "Cancelled", "Canceled", "Duplicate", "Done"];
 
   fc.assert(
@@ -302,9 +298,7 @@ test("custom terminal states configured via settings are respected", () => {
   );
 });
 
-// INVARIANT: When a dispatch is in a non-active state, it SHALL be ineligible.
-
-test("non-active state issues SHALL be ineligible", () => {
+test("INVARIANT: When a dispatch is in a non-active state, it SHALL be ineligible. - non-active state issues SHALL be ineligible", () => {
   fc.assert(
     fc.property(
       fc.oneof(
@@ -348,9 +342,7 @@ test("active state comparison is case-insensitive with whitespace handling", () 
   );
 });
 
-// INVARIANT: When a dispatch is not assigned to this worker, it SHALL be ineligible.
-
-test("issues not assigned to this worker SHALL be ineligible", () => {
+test("INVARIANT: When a dispatch is not assigned to this worker, it SHALL be ineligible. - issues not assigned to this worker SHALL be ineligible", () => {
   fc.assert(
     fc.property(
       fc.integer({ min: 0, max: 10 }),
@@ -366,9 +358,7 @@ test("issues not assigned to this worker SHALL be ineligible", () => {
   );
 });
 
-// INVARIANT: When an unstarted issue has a non-terminal blocker, it SHALL NOT be dispatched (blockers prevent starting).
-
-test("unstarted issue with a non-terminal blocker SHALL be ineligible", () => {
+test("INVARIANT: When an unstarted issue has a non-terminal blocker, it SHALL NOT be dispatched (blockers prevent starting). - unstarted issue with a non-terminal blocker SHALL be ineligible", () => {
   fc.assert(
     fc.property(
       fc.oneof(
@@ -443,9 +433,7 @@ test("blocker terminal check is case-insensitive with whitespace trimming", () =
   );
 });
 
-// INVARIANT: When a started issue has open blockers, it SHALL be blocked (blockers on started issues abort).
-
-test("started issue with open blockers SHALL be blocked", () => {
+test("INVARIANT: When a started issue has open blockers, it SHALL be blocked (blockers on started issues abort). - started issue with open blockers SHALL be blocked", () => {
   fc.assert(
     fc.property(
       fc.array(
@@ -494,9 +482,7 @@ test("started issue with many open blockers SHALL be blocked", () => {
   );
 });
 
-// INVARIANT: When a terminal issue has open blockers, it SHALL be a no-op (blockers on terminal issues are no-op).
-
-test("terminal issue with open blockers SHALL still be ineligible via terminal check, not blockers", () => {
+test("INVARIANT: When a terminal issue has open blockers, it SHALL be a no-op (blockers on terminal issues are no-op). - terminal issue with open blockers SHALL still be ineligible via terminal check, not blockers", () => {
   fc.assert(
     fc.property(
       fc.constantFrom("Done", "Closed", "Cancelled", "Canceled", "Duplicate"),
@@ -551,9 +537,7 @@ test("terminal issue with open blockers does not produce a dispatch block reason
   );
 });
 
-// INVARIANT: When an unstarted issue has only terminal blockers, it SHALL be eligible.
-
-test("unstarted issue with only terminal blockers SHALL be eligible", () => {
+test("INVARIANT: When an unstarted issue has only terminal blockers, it SHALL be eligible. - unstarted issue with only terminal blockers SHALL be eligible", () => {
   const defaultTerminalStates = ["Closed", "Cancelled", "Canceled", "Duplicate", "Done"];
   fc.assert(
     fc.property(
@@ -609,9 +593,7 @@ test("terminal blockers in various case/whitespace forms still allow dispatch", 
   );
 });
 
-// INVARIANT: When the global concurrency cap is reached, the system SHALL not dispatch new work.
-
-test("global concurrency cap reached SHALL not dispatch new work", () => {
+test("INVARIANT: When the global concurrency cap is reached, the system SHALL not dispatch new work. - global concurrency cap reached SHALL not dispatch new work", () => {
   fc.assert(
     fc.property(fc.integer({ min: 1, max: 50 }), fc.nat({ max: 10 }), (cap, extra) => {
       const issue = validIssue({
@@ -674,9 +656,7 @@ test("exactly at cap blocks, one below cap does not block", () => {
   );
 });
 
-// INVARIANT: When a per-state concurrency cap is reached, the system SHALL not dispatch new work in that state.
-
-test("per-state concurrency cap reached SHALL not dispatch new work in that state", () => {
+test("INVARIANT: When a per-state concurrency cap is reached, the system SHALL not dispatch new work in that state. - per-state concurrency cap reached SHALL not dispatch new work in that state", () => {
   fc.assert(
     fc.property(fc.integer({ min: 1, max: 20 }), fc.nat({ max: 5 }), (perStateCap, extra) => {
       const issue = validIssue({
@@ -749,9 +729,7 @@ test("state normalization for statusOverrides key matching", () => {
   );
 });
 
-// INVARIANT: When all ensemble slots are claimed, the dispatch SHALL be ineligible.
-
-test("all ensemble slots claimed SHALL make the dispatch ineligible", () => {
+test("INVARIANT: When all ensemble slots are claimed, the dispatch SHALL be ineligible. - all ensemble slots claimed SHALL make the dispatch ineligible", () => {
   fc.assert(
     fc.property(fc.integer({ min: 1, max: 5 }), (ensembleSize) => {
       const issueId = "issue-ensemble";
@@ -867,9 +845,7 @@ test("claiming slots for a different issue does not block this issue", () => {
   );
 });
 
-// INVARIANT: When all worker hosts are at capacity, the system SHALL not dispatch new work.
-
-test("workerCapacityAvailable=false SHALL block dispatch", () => {
+test("INVARIANT: When all worker hosts are at capacity, the system SHALL not dispatch new work. - workerCapacityAvailable=false SHALL block dispatch", () => {
   fc.assert(
     fc.property(fc.constantFrom("Todo", "In Progress"), (activeState) => {
       const issue = validIssue({
@@ -912,9 +888,7 @@ test("workerCapacityAvailable=true or undefined does NOT block", () => {
   );
 });
 
-// INVARIANT: When shouldDispatchIssue returns true, all sub-checks SHALL pass.
-
-test("shouldDispatchIssue=true implies ALL sub-checks pass (random issues)", () => {
+test("INVARIANT: When shouldDispatchIssue returns true, all sub-checks SHALL pass. - shouldDispatchIssue=true implies ALL sub-checks pass (random issues)", () => {
   fc.assert(
     fc.property(
       issueArb(),
