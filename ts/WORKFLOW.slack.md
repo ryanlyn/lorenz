@@ -19,7 +19,12 @@ tracker:
     only_routes: null
     route_label_prefix: "route-"
 polling:
-  interval_ms: 5000
+  # Slack conversations.history is rate-limited (newer non-Marketplace apps can be throttled to
+  # ~1 request/minute), and each poll re-scans recent channel history. Keep this interval
+  # conservative (60s) so a busy channel does not trigger sustained 429s; watched channels should
+  # be dedicated and low-traffic. The 429/Retry-After backoff and per-channel poll_error handling
+  # cover transient limits on top of this.
+  interval_ms: 60000
 workspace:
   root: ~/dev/symphony-workspaces
 worker:

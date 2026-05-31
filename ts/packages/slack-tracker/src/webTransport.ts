@@ -54,6 +54,15 @@ export class SlackWebTransport implements SlackTransport {
   }
 
   async listMentions(channels: string[]): Promise<SlackMessage[]> {
+    // Each poll scans recent conversations.history from newest backward (no oldest/latest
+    // watermark). A per-channel incremental watermark is a DEFERRED enhancement: a naive
+    // time-watermark would regress re-discovery of undispatched active issues, because the runtime
+    // re-surfaces an active-but-undispatched Todo/In Progress issue via the candidate poll, and a
+    // watermark that advanced past it would stop re-surfacing it so it would never be picked up.
+    // Doing this safely needs a stateful open-issue registry, tracked separately. The conservative
+    // poll interval (WORKFLOW.slack.md polling.interval_ms) plus the 429/Retry-After backoff bound
+    // the rate-limit pressure in the meantime.
+    //
     // Fail closed: with no bot user id configured, the any-mention fallback would treat every
     // human-to-human <@U...> mention in a watched channel as an issue and expose that text to
     // workers. The production transport must never do that, so match nothing and warn once.

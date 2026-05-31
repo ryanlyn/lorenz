@@ -226,6 +226,13 @@ Set up a Slack app:
    in message text, so it does not need `app_mentions:read`. Only add that scope if you separately
    wire up the Events API / `app_mention` subscription, which Symphony does not use today.
 
+   `conversations.history` is rate-limited (newer non-Marketplace apps can be throttled to roughly
+   one request per minute), and each poll re-scans recent channel history. The shipped Slack
+   workflow therefore sets a conservative `polling.interval_ms` of `60000` (one minute), and you
+   should point it at dedicated, low-traffic channels so a busy channel does not trigger sustained
+   `429`s. The transport's `429`/`Retry-After` backoff and per-channel `poll_error` handling cover
+   transient limits on top of that.
+
 3. Install the app to the workspace and copy the **Bot User OAuth Token** (starts with `xoxb-`).
    Export it as `SLACK_BOT_TOKEN`; Symphony resolves it into `tracker.api_key`.
 4. Find the app's **bot user id** (the `U...` id, shown on the app's "App Home" / via
