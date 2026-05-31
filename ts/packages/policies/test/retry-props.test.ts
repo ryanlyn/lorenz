@@ -1,6 +1,6 @@
 import { describe, test } from "vitest";
 import fc from "fast-check";
-import { retryBackoffMs } from "@symphony/cli";
+import { retryBackoffMs, MIN_RETRY_DELAY_MS } from "@symphony/cli";
 
 import { assert } from "../../../test/assert.js";
 
@@ -31,13 +31,13 @@ test("retryBackoffMs — floor at base when max >= 10_000", () => {
   );
 });
 
-test("retryBackoffMs — continuation always returns 1_000", () => {
+test("retryBackoffMs — continuation always returns MIN_RETRY_DELAY_MS", () => {
   fc.assert(
     fc.property(
       fc.integer({ min: -10, max: 100 }),
       fc.integer({ min: 0, max: 10_000_000 }),
       (attempt, max) => {
-        assert.equal(retryBackoffMs(attempt, max, "continuation"), 1_000);
+        assert.equal(retryBackoffMs(attempt, max, "continuation"), MIN_RETRY_DELAY_MS);
       },
     ),
   );

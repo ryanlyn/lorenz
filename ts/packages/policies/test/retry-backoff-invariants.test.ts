@@ -1,6 +1,6 @@
 import { test, describe } from "vitest";
 import fc from "fast-check";
-import { retryBackoffMs } from "@symphony/cli";
+import { retryBackoffMs, MIN_RETRY_DELAY_MS } from "@symphony/cli";
 
 import { assert } from "../../../test/assert.js";
 
@@ -73,15 +73,15 @@ describe("INVARIANT: When maxBackoff permits, failure delays SHALL have a positi
   });
 });
 
-describe("INVARIANT: When a continuation retry is scheduled, it SHALL always return a fixed 1_000ms delay.", () => {
-  test("retryBackoffMs - continuation retry always returns 1_000", () => {
+describe("INVARIANT: When a continuation retry is scheduled, it SHALL always return a fixed MIN_RETRY_DELAY_MS delay.", () => {
+  test("retryBackoffMs - continuation retry always returns MIN_RETRY_DELAY_MS", () => {
     fc.assert(
       fc.property(
         fc.integer({ min: -1000, max: 1000 }),
         fc.integer({ min: 0, max: 100_000_000 }),
         (attempt, maxBackoff) => {
           const result = retryBackoffMs(attempt, maxBackoff, "continuation");
-          assert.equal(result, 1_000);
+          assert.equal(result, MIN_RETRY_DELAY_MS);
         },
       ),
       { numRuns: 200 },

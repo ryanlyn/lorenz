@@ -131,6 +131,7 @@ export { SESSION_UPDATE_KINDS } from "@symphony/protocol";
 export type { SessionUpdate, SessionUpdateKind, StopReason, TurnResult } from "@symphony/protocol";
 export {
   retryBackoffMs,
+  MIN_RETRY_DELAY_MS,
   actionForStopReason,
   mergeMonotonicUsage,
   resumeIdentityMatches,
