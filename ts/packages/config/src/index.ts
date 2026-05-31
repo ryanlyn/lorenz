@@ -17,7 +17,7 @@ import type {
 import { CODEX_APPROVAL_POLICY_NAMES, CODEX_SANDBOX_MODES, TRACKER_KINDS } from "@symphony/domain";
 
 const numericInput = z.union([
-  z.number(),
+  z.number().refine((n) => !Number.isNaN(n), { message: "must not be NaN" }),
   z
     .string()
     .refine((s) => s.trim() !== "", { message: "must not be empty" })
@@ -823,7 +823,7 @@ function configErrorMessage(error: z.ZodError, baseLabel?: string): string {
   if (issue.code === "too_small") return `${label} must be a positive integer`;
   if (issue.code === "custom") return `${label} ${issue.message}`;
   if (issue.code === "invalid_union") {
-    // Inspect the first branch's inner error to determine the expected type.
+    // Zod 3.x ZodInvalidUnionIssue exposes nested errors per branch.
     const innerErrors = (issue as { errors?: unknown[][] }).errors;
     const firstInner = innerErrors?.[0]?.[0] as { expected?: string } | undefined;
     if (firstInner?.expected === "boolean") return `expected a boolean`;
@@ -833,11 +833,11 @@ function configErrorMessage(error: z.ZodError, baseLabel?: string): string {
   return `${label} is invalid: ${issue.message}`;
 }
 
+const NON_NEGATIVE_INT_FIELDS = new Set(["port", "stall_timeout_ms"]);
+
 function integerMessageForLabel(label: string): string {
-  const kind =
-    label === "server.port" || label.endsWith(".stall_timeout_ms")
-      ? "a non-negative integer"
-      : "a positive integer";
+  const field = label.split(".").pop() ?? "";
+  const kind = NON_NEGATIVE_INT_FIELDS.has(field) ? "a non-negative integer" : "a positive integer";
   return `${label} must be ${kind}`;
 }
 
