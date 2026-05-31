@@ -12,7 +12,7 @@ import type { Settings } from "@symphony/domain";
 
 import type { ToolResult, ToolSpec } from "../tools.js";
 
-const TOOL_NAMES = ["slack_update_status", "slack_comment"] as const;
+const TOOL_NAMES = ["slack_update_status", "slack_comment", "slack_read_thread"] as const;
 
 export function slackToolSpecs(): ToolSpec[] {
   return [
@@ -33,6 +33,17 @@ export function slackToolSpecs(): ToolSpec[] {
         type: "object",
         properties: { issueId: { type: "string" }, body: { type: "string" } },
         required: ["issueId", "body"],
+      },
+    },
+    {
+      name: "slack_read_thread",
+      description:
+        "Read a Slack issue's source message (text, derived status, reactions) and its thread " +
+        "replies. Args: issueId.",
+      inputSchema: {
+        type: "object",
+        properties: { issueId: { type: "string" } },
+        required: ["issueId"],
       },
     },
   ];
@@ -179,6 +190,22 @@ export async function executeSlackTool(
         if ("error" in message) return message.error;
         await transport.postReply(channel, ts, requireStr(args, "body"));
         return { success: true, result: { ok: true } };
+      }
+      case "slack_read_thread": {
+        // Same trust-boundary check as the write tools: only read a watched, tracked issue.
+        const message = await ensureTrackedMessage(settings, transport, channel, ts);
+        if ("error" in message) return message.error;
+        const map = statusEmojiMap(settings);
+        return {
+          success: true,
+          result: {
+            issueId: `${channel}:${ts}`,
+            status: stateFromReactions(message.reactions, map),
+            text: message.text,
+            reactions: message.reactions,
+            replies: await transport.getThread(channel, ts),
+          },
+        };
       }
       default:
         return {

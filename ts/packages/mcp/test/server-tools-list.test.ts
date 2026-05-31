@@ -62,7 +62,11 @@ test("MCP tools/list advertises the local board tools for a local tracker", asyn
 });
 
 test("MCP tools/list advertises the slack tools for a slack tracker", async () => {
-  assert.deepEqual(await toolsListNames(slackSettings()), ["slack_update_status", "slack_comment"]);
+  assert.deepEqual(await toolsListNames(slackSettings()), [
+    "slack_update_status",
+    "slack_comment",
+    "slack_read_thread",
+  ]);
 });
 
 test("MCP tools/list still advertises only linear_graphql for a linear tracker", async () => {

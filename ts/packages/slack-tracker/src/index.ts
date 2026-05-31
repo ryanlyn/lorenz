@@ -1,4 +1,4 @@
-export type { SlackMessage, SlackTransport } from "./transport.js";
+export type { SlackMessage, SlackThreadReply, SlackTransport } from "./transport.js";
 export { InMemorySlackTransport } from "./inMemoryTransport.js";
 export { SlackWebTransport } from "./webTransport.js";
 export type { SlackTrackerLogger } from "./webTransport.js";

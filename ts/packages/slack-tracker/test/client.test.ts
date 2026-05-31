@@ -136,6 +136,35 @@ test("fetchIssuesByIds re-validates channel and bot mention (refresh-path trust 
   assert.deepEqual(await client.fetchIssuesByIds(["C9:1700000000.000800"]), []);
 });
 
+test("InMemorySlackTransport getThread returns seeded replies and a posted reply is read back", async () => {
+  const transport = new InMemorySlackTransport({
+    C1: [
+      {
+        ts: "1700000000.000100",
+        text: "<@U_BOT> do it",
+        reactions: ["eyes"],
+        replies: [{ ts: "1700000000.000101", text: "first", user: "U_HUMAN" }],
+      },
+    ],
+  });
+
+  // The parent message is excluded; only the seeded reply is returned.
+  assert.deepEqual(await transport.getThread("C1", "1700000000.000100"), [
+    { ts: "1700000000.000101", text: "first", user: "U_HUMAN" },
+  ]);
+
+  // A posted reply is appended to the thread and can be read back.
+  await transport.postReply("C1", "1700000000.000100", "second");
+  const after = await transport.getThread("C1", "1700000000.000100");
+  assert.deepEqual(
+    after.map((r) => r.text),
+    ["first", "second"],
+  );
+
+  // An unknown / non-parent ts yields an empty thread.
+  assert.deepEqual(await transport.getThread("C1", "9.9"), []);
+});
+
 test("with botUserId only mentions of the bot become candidates", async () => {
   const transport = new InMemorySlackTransport(
     {

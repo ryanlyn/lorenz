@@ -659,6 +659,73 @@ test("postReply posts to chat.postMessage with thread_ts and text", async () => 
   assert.deepEqual(calls[0]!.body, { channel: "C1", thread_ts: "1.1", text: "done!" });
 });
 
+test("getThread reads conversations.replies and drops the parent message", async () => {
+  const calls: Array<{ url: string }> = [];
+  const fetchImpl = (async (url: string | URL) => {
+    calls.push({ url: String(url) });
+    return new Response(
+      JSON.stringify({
+        ok: true,
+        messages: [
+          { ts: "1.1", text: "<@U1> the root", reactions: [{ name: "eyes" }] },
+          { ts: "1.2", text: "first reply", user: "U_HUMAN" },
+          { ts: "1.3", text: "second reply" },
+        ],
+      }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+  }) as typeof fetch;
+
+  const replies = await new SlackWebTransport(settings(), fetchImpl).getThread("C1", "1.1");
+
+  // The parent (ts === thread ts) is dropped; only the replies remain, with user when present.
+  assert.deepEqual(replies, [
+    { ts: "1.2", text: "first reply", user: "U_HUMAN" },
+    { ts: "1.3", text: "second reply" },
+  ]);
+  assert.match(calls[0]!.url, /\/conversations\.replies\?/);
+  assert.match(calls[0]!.url, /channel=C1/);
+  assert.match(calls[0]!.url, /ts=1\.1/);
+});
+
+test("getThread follows next_cursor across pages, excluding the parent on each page", async () => {
+  const calls: Array<{ url: string }> = [];
+  const fetchImpl = (async (url: string | URL) => {
+    calls.push({ url: String(url) });
+    const cursor = new URL(String(url)).searchParams.get("cursor");
+    if (!cursor) {
+      return new Response(
+        JSON.stringify({
+          ok: true,
+          messages: [
+            { ts: "1.1", text: "<@U1> root", reactions: [] },
+            { ts: "1.2", text: "reply one" },
+          ],
+          response_metadata: { next_cursor: "CURSOR_2" },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }
+    return new Response(
+      JSON.stringify({
+        ok: true,
+        messages: [{ ts: "1.3", text: "reply two" }],
+        response_metadata: { next_cursor: "" },
+      }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+  }) as typeof fetch;
+
+  const replies = await new SlackWebTransport(settings(), fetchImpl).getThread("C1", "1.1");
+
+  assert.deepEqual(
+    replies.map((r) => r.text),
+    ["reply one", "reply two"],
+  );
+  assert.equal(calls.length, 2);
+  assert.equal(new URL(calls[1]!.url).searchParams.get("cursor"), "CURSOR_2");
+});
+
 test("a 200 response with ok:false surfaces the slack error reason", async () => {
   const fetchImpl = (async () => {
     return new Response(JSON.stringify({ ok: false, error: "channel_not_found" }), {

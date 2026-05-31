@@ -1,5 +1,9 @@
 import { test } from "vitest";
-import { InMemorySlackTransport, stateFromReactions, statusEmojiMap } from "@symphony/slack-tracker";
+import {
+  InMemorySlackTransport,
+  stateFromReactions,
+  statusEmojiMap,
+} from "@symphony/slack-tracker";
 import { parseConfig } from "@symphony/config";
 
 import { assert } from "../../../test/assert.js";
@@ -13,11 +17,107 @@ function settings() {
   );
 }
 
-test("slack toolSpecs lists update_status and comment", () => {
+test("slack toolSpecs lists update_status, comment, and read_thread", () => {
   assert.deepEqual(
     toolSpecs(settings()).map((t) => t.name),
-    ["slack_update_status", "slack_comment"],
+    ["slack_update_status", "slack_comment", "slack_read_thread"],
   );
+});
+
+test("slack_read_thread returns text, derived status, reactions, and the thread replies", async () => {
+  const transport = new InMemorySlackTransport({
+    C1: [
+      {
+        ts: "1.1",
+        text: "<@U1> do the thing",
+        reactions: ["eyes"],
+        replies: [{ ts: "1.2", text: "on it", user: "U2" }],
+      },
+    ],
+  });
+
+  const result = await executeTool("slack_read_thread", { issueId: "C1:1.1" }, settings(), fetch, {
+    slackTransport: transport,
+  });
+
+  assert.equal(result.success, true);
+  assert.deepEqual(result.result, {
+    issueId: "C1:1.1",
+    status: "In Progress",
+    text: "<@U1> do the thing",
+    reactions: ["eyes"],
+    replies: [{ ts: "1.2", text: "on it", user: "U2" }],
+  });
+});
+
+test("slack_read_thread reads back a reply posted via slack_comment", async () => {
+  const transport = new InMemorySlackTransport({
+    C1: [{ ts: "1.1", text: "<@U1> do the thing", reactions: ["white_check_mark"] }],
+  });
+
+  const replied = await executeTool(
+    "slack_comment",
+    { issueId: "C1:1.1", body: "all done" },
+    settings(),
+    fetch,
+    { slackTransport: transport },
+  );
+  assert.equal(replied.success, true);
+
+  const read = await executeTool("slack_read_thread", { issueId: "C1:1.1" }, settings(), fetch, {
+    slackTransport: transport,
+  });
+  assert.equal(read.success, true);
+  const result = read.result as {
+    status: string;
+    reactions: string[];
+    replies: Array<{ text: string }>;
+  };
+  assert.equal(result.status, "Done");
+  assert.deepEqual(result.reactions, ["white_check_mark"]);
+  assert.deepEqual(
+    result.replies.map((r) => r.text),
+    ["all done"],
+  );
+});
+
+test("slack_read_thread rejects a channel that is not in tracker.channels", async () => {
+  const transport = new InMemorySlackTransport({
+    C9: [{ ts: "1.1", text: "<@U1> do the thing", reactions: ["eyes"] }],
+  });
+
+  const result = await executeTool("slack_read_thread", { issueId: "C9:1.1" }, settings(), fetch, {
+    slackTransport: transport,
+  });
+
+  assert.equal(result.success, false);
+  assert.match(result.error ?? "", /C9/);
+});
+
+test("slack_read_thread fails when no message exists at the issueId", async () => {
+  const transport = new InMemorySlackTransport({
+    C1: [{ ts: "1.1", text: "<@U1> do the thing", reactions: ["eyes"] }],
+  });
+
+  const result = await executeTool("slack_read_thread", { issueId: "C1:9.9" }, settings(), fetch, {
+    slackTransport: transport,
+  });
+
+  assert.equal(result.success, false);
+  assert.match(result.error ?? "", /no tracked issue/);
+});
+
+test("slack_read_thread fails when the message is not a bot mention", async () => {
+  const transport = new InMemorySlackTransport({
+    C1: [{ ts: "1.1", text: "just chatting, no mention here", reactions: ["eyes"] }],
+  });
+
+  const result = await executeTool("slack_read_thread", { issueId: "C1:1.1" }, settings(), fetch, {
+    slackTransport: transport,
+  });
+
+  assert.equal(result.success, false);
+  assert.match(result.error ?? "", /not a tracked bot-mention/);
 });
 
 test("slack_update_status swaps the status reaction; slack_comment replies in thread", async () => {

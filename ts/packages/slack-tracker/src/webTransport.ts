@@ -1,11 +1,12 @@
 import type { Settings } from "@symphony/domain";
 
 import { isBotMention } from "./mapping.js";
-import type { SlackMessage, SlackTransport } from "./transport.js";
+import type { SlackMessage, SlackThreadReply, SlackTransport } from "./transport.js";
 
 interface RawSlackMessage {
   ts?: string;
   text?: string;
+  user?: string;
   reactions?: Array<{ name?: string }>;
 }
 
@@ -161,6 +162,28 @@ export class SlackWebTransport implements SlackTransport {
     return found ? toMessage(channel, found) : null;
   }
 
+  async getThread(channel: string, ts: string): Promise<SlackThreadReply[]> {
+    // conversations.replies returns the parent (root) message FIRST followed by its replies. Page
+    // through next_cursor like listMentions (a pure read, safe to retry on 429/5xx) and drop the
+    // parent (the message whose ts === the thread ts) so only the replies are returned.
+    const out: SlackThreadReply[] = [];
+    let cursor: string | undefined;
+    for (let page = 0; page < this.maxHistoryPages; page += 1) {
+      const params: Record<string, string> = { channel, ts, limit: "200" };
+      if (cursor) params.cursor = cursor;
+      const body = await this.get("conversations.replies", params);
+      const messages = Array.isArray(body.messages) ? (body.messages as RawSlackMessage[]) : [];
+      for (const m of messages) {
+        if (typeof m.ts !== "string") continue;
+        if (m.ts === ts) continue;
+        out.push(toThreadReply(m));
+      }
+      cursor = nextCursor(body);
+      if (!cursor) break;
+    }
+    return out;
+  }
+
   async addReaction(channel: string, ts: string, name: string): Promise<void> {
     // reactions.add is idempotent: re-applying an already-present reaction is harmless (Slack
     // returns already_reacted, which parse() treats as success), so retrying on an ambiguous 5xx
@@ -177,9 +200,13 @@ export class SlackWebTransport implements SlackTransport {
   async postReply(channel: string, threadTs: string, body: string): Promise<void> {
     // chat.postMessage is NOT idempotent: a retry posts a DUPLICATE reply. It may retry only on a
     // 429 (rejected before processing), never on an ambiguous 5xx where the reply may have applied.
-    await this.post("chat.postMessage", { channel, thread_ts: threadTs, text: body }, {
-      idempotent: false,
-    });
+    await this.post(
+      "chat.postMessage",
+      { channel, thread_ts: threadTs, text: body },
+      {
+        idempotent: false,
+      },
+    );
   }
 
   private async get(
@@ -306,4 +333,11 @@ function toMessage(channel: string, m: RawSlackMessage): SlackMessage {
       .map((r) => r.name)
       .filter((n): n is string => typeof n === "string"),
   };
+}
+
+function toThreadReply(m: RawSlackMessage): SlackThreadReply {
+  // exactOptionalPropertyTypes: only set `user` when present rather than assigning undefined.
+  const reply: SlackThreadReply = { ts: m.ts ?? "", text: m.text ?? "" };
+  if (typeof m.user === "string") reply.user = m.user;
+  return reply;
 }
