@@ -255,11 +255,12 @@ tracker:
     - Cancelled
 ```
 
-`SLACK_BOT_TOKEN` (the bot token) and a non-empty `channels` list are required. The bot user id
-matters for **mention filtering**: with `bot_user_id` set, only messages that mention that exact
-user become issues, and only that leading mention is stripped from the title. Without it, any
-`<@U...>` mention in a watched channel is treated as an issue (back-compat), which is usually too
-broad for a shared workspace, so set it.
+`SLACK_BOT_TOKEN` (the bot token), a non-empty `channels` list, and `tracker.bot_user_id`
+(`SLACK_BOT_USER_ID`) are all **required**. The bot user id scopes issue creation to the bot's own
+mentions: only messages that mention that exact user become issues, and only that leading mention
+is stripped from the title. It is required so that ordinary human-to-human `<@U...>` mentions in a
+watched channel never spawn agents or expose their text to workers. If it is unset or resolves
+empty, config validation fails and the production transport fails closed (it scans nothing).
 
 The issue identifier is the message reference in `<channel>:<ts>` form (for example
 `C0123456789:1717000000.000100`); that is the `issueId` passed to the write tools.

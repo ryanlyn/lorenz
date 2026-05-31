@@ -32,7 +32,7 @@ function slackIssue(): Issue {
 
 function slackSettings() {
   return parseConfig(
-    { tracker: { kind: "slack", channels: [CHANNEL] } },
+    { tracker: { kind: "slack", channels: [CHANNEL], bot_user_id: "U999" } },
     { SLACK_BOT_TOKEN: "xoxb" },
   );
 }

@@ -535,14 +535,56 @@ test("cloned settings deep-copy slack channels and emoji states", () => {
 
 test("slack tracker requires a token and at least one channel", () => {
   assert.throws(
-    () => validateDispatchConfig(parseConfig({ tracker: { kind: "slack", channels: ["C1"] } }, {})),
+    () =>
+      validateDispatchConfig(
+        parseConfig({ tracker: { kind: "slack", channels: ["C1"], bot_user_id: "U_BOT" } }, {}),
+      ),
     /SLACK_BOT_TOKEN/,
   );
   assert.throws(
     () =>
       validateDispatchConfig(
-        parseConfig({ tracker: { kind: "slack" } }, { SLACK_BOT_TOKEN: "xoxb-test" }),
+        parseConfig(
+          { tracker: { kind: "slack", bot_user_id: "U_BOT" } },
+          { SLACK_BOT_TOKEN: "xoxb-test" },
+        ),
       ),
     /channels is required/,
+  );
+});
+
+test("slack tracker requires bot_user_id so mentions are scoped to the bot (fail closed)", () => {
+  // Without a bot user id the mention matcher would fall back to matching ANY <@U...> mention,
+  // spawning agents on ordinary human-to-human chatter. Validation must reject that config.
+  assert.throws(
+    () =>
+      validateDispatchConfig(
+        parseConfig({ tracker: { kind: "slack", channels: ["C1"] } }, { SLACK_BOT_TOKEN: "xoxb" }),
+      ),
+    /bot_user_id.*required|SLACK_BOT_USER_ID/,
+  );
+  // An empty SLACK_BOT_USER_ID env value must not satisfy the requirement either.
+  assert.throws(
+    () =>
+      validateDispatchConfig(
+        parseConfig(
+          { tracker: { kind: "slack", channels: ["C1"] } },
+          { SLACK_BOT_TOKEN: "xoxb", SLACK_BOT_USER_ID: "" },
+        ),
+      ),
+    /bot_user_id.*required|SLACK_BOT_USER_ID/,
+  );
+  // With a bot user id present (explicit or via env), validation passes.
+  validateDispatchConfig(
+    parseConfig(
+      { tracker: { kind: "slack", channels: ["C1"], bot_user_id: "U_BOT" } },
+      { SLACK_BOT_TOKEN: "xoxb" },
+    ),
+  );
+  validateDispatchConfig(
+    parseConfig(
+      { tracker: { kind: "slack", channels: ["C1"] } },
+      { SLACK_BOT_TOKEN: "xoxb", SLACK_BOT_USER_ID: "U_ENV" },
+    ),
   );
 });

@@ -22,7 +22,10 @@ async function localSettings(): Promise<Settings> {
 }
 
 function slackSettings(): Settings {
-  return parseConfig({ tracker: { kind: "slack", channels: ["C1"] } }, { SLACK_BOT_TOKEN: "xoxb" });
+  return parseConfig(
+    { tracker: { kind: "slack", channels: ["C1"], bot_user_id: "U1" } },
+    { SLACK_BOT_TOKEN: "xoxb" },
+  );
 }
 
 async function toolsListNames(settings: Settings): Promise<string[]> {

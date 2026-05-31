@@ -26,6 +26,7 @@ export class SlackWebTransport implements SlackTransport {
   private readonly endpoint: string;
   private readonly token: string;
   private readonly botUserId: string | undefined;
+  private warnedNoBotUserId = false;
 
   constructor(
     settings: Settings,
@@ -39,6 +40,19 @@ export class SlackWebTransport implements SlackTransport {
   }
 
   async listMentions(channels: string[]): Promise<SlackMessage[]> {
+    // Fail closed: with no bot user id configured, the any-mention fallback would treat every
+    // human-to-human <@U...> mention in a watched channel as an issue and expose that text to
+    // workers. The production transport must never do that, so match nothing and warn once.
+    if (!this.botUserId || this.botUserId.trim() === "") {
+      if (!this.warnedNoBotUserId) {
+        this.warnedNoBotUserId = true;
+        this.logger.warn(
+          "slack tracker: bot_user_id (SLACK_BOT_USER_ID) is not set; refusing to scan mentions " +
+            "(fail closed). Set tracker.bot_user_id so only the bot's own mentions create issues.",
+        );
+      }
+      return [];
+    }
     const out: SlackMessage[] = [];
     const failures: string[] = [];
     let anySucceeded = false;

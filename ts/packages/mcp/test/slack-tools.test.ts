@@ -7,7 +7,10 @@ import { assert } from "../../../test/assert.js";
 import { executeTool, toolSpecs } from "@symphony/mcp";
 
 function settings() {
-  return parseConfig({ tracker: { kind: "slack", channels: ["C1"] } }, { SLACK_BOT_TOKEN: "xoxb" });
+  return parseConfig(
+    { tracker: { kind: "slack", channels: ["C1"], bot_user_id: "U1" } },
+    { SLACK_BOT_TOKEN: "xoxb" },
+  );
 }
 
 test("slack toolSpecs lists update_status and comment", () => {

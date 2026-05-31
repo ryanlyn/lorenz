@@ -82,9 +82,13 @@ test("tracker factory selects slack adapter from the workflow-slack fixture", as
     path.join(import.meta.dirname, "../../../test/fixtures/workflow-slack.md"),
     "utf8",
   );
-  const settings = parseConfig(frontmatter(raw), { SLACK_BOT_TOKEN: "xoxb-test" });
+  const settings = parseConfig(frontmatter(raw), {
+    SLACK_BOT_TOKEN: "xoxb-test",
+    SLACK_BOT_USER_ID: "U999",
+  });
   assert.equal(settings.tracker.kind, "slack");
   assert.deepEqual(settings.tracker.channels, ["C0123456789"]);
+  assert.equal(settings.tracker.botUserId, "U999");
   assert.ok(createTrackerClient(settings) instanceof SlackTrackerClient);
 });
 

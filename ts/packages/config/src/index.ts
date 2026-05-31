@@ -420,6 +420,13 @@ export function validateDispatchConfig(settings: Settings): void {
     if (!settings.tracker.channels || settings.tracker.channels.length === 0) {
       throw new Error("tracker.channels is required for the slack tracker");
     }
+    if (!settings.tracker.botUserId || settings.tracker.botUserId.trim() === "") {
+      throw new Error(
+        "tracker.bot_user_id (or SLACK_BOT_USER_ID) is required for the slack tracker so issue " +
+          "creation is scoped to the bot's own mentions; without it any human-to-human mention " +
+          "in a watched channel would spawn an agent",
+      );
+    }
   }
 
   const requiredBackends = new Set<AgentKind>([settings.agent.kind]);

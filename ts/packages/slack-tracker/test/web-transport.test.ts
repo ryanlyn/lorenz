@@ -7,7 +7,7 @@ import { SlackWebTransport } from "@symphony/slack-tracker";
 
 function settings() {
   return parseConfig(
-    { tracker: { kind: "slack", channels: ["C1"] } },
+    { tracker: { kind: "slack", channels: ["C1"], bot_user_id: "U1" } },
     { SLACK_BOT_TOKEN: "xoxb-abc" },
   );
 }
@@ -67,13 +67,16 @@ test("listMentions filters to the configured bot user when botUserId is set", as
   );
 });
 
-test("listMentions falls back to any mention when no botUserId is configured", async () => {
-  // Negative control for the bot-id filter, on the SAME web transport and identical payload as the
-  // positive test above. With NO botUserId set, a message mentioning a non-bot user ("1.1",
-  // <@U_OTHER>) IS returned via the any-mention fallback. The only difference from the positive
-  // test is the absent botUserId, so its disappearance there is provably the filter at work - not
-  // some unrelated parsing of those messages.
+test("listMentions fails closed when no botUserId is configured: no mentions, warns once, no fetch", async () => {
+  // Trust boundary: with NO botUserId set, the production web transport must refuse to scan rather
+  // than fall back to any-mention (which would treat every human-to-human <@U...> mention as an
+  // issue and expose its text to workers). It returns nothing, warns once, and never even calls
+  // Slack. Contrast with the positive bot-id test above on the identical payload, where the bot's
+  // own mentions ("1.2"/"1.3") ARE returned - so the disappearance here is provably the fail-closed
+  // guard, not unrelated parsing.
+  let fetchCalls = 0;
   const fetchImpl = (async () => {
+    fetchCalls += 1;
     return new Response(
       JSON.stringify({
         ok: true,
@@ -87,13 +90,26 @@ test("listMentions falls back to any mention when no botUserId is configured", a
     );
   }) as typeof fetch;
 
-  const transport = new SlackWebTransport(settings(), fetchImpl);
-  const messages = await transport.listMentions(["C1"]);
-
-  assert.deepEqual(
-    messages.map((m) => m.ts),
-    ["1.1", "1.2", "1.3"],
+  // Build a slack settings object and then blank out the bot user id, since parseConfig + validate
+  // now require one. This mirrors a misconfigured deployment where SLACK_BOT_USER_ID resolves empty.
+  const noBot = parseConfig(
+    { tracker: { kind: "slack", channels: ["C1"], bot_user_id: "U1" } },
+    { SLACK_BOT_TOKEN: "xoxb-abc" },
   );
+  delete noBot.tracker.botUserId;
+
+  const warnings: string[] = [];
+  const transport = new SlackWebTransport(noBot, fetchImpl, () => Promise.resolve(), {
+    warn: (m) => warnings.push(m),
+  });
+
+  assert.deepEqual(await transport.listMentions(["C1"]), []);
+  // A second poll must not re-warn (one-time warning) and must still match nothing.
+  assert.deepEqual(await transport.listMentions(["C1"]), []);
+
+  assert.equal(fetchCalls, 0);
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0]!, /SLACK_BOT_USER_ID|bot_user_id/);
 });
 
 test("listMentions follows response_metadata.next_cursor across pages", async () => {

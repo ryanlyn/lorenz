@@ -95,7 +95,7 @@ test("runtime discovers a bot-mention issue from a real Slack transport via crea
       polling: { interval_ms: 5 },
       workspace: { root: await mkdtemp(path.join(tmpdir(), "runtime-slack-e2e-")) },
     },
-    { SLACK_BOT_TOKEN: "xoxb-test" },
+    { SLACK_BOT_TOKEN: "xoxb-test", SLACK_BOT_USER_ID: "U_BOT" },
   );
 
   // Prove the production factory selects the Slack client for kind:"slack" WITHOUT touching the
