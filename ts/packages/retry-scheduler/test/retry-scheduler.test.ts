@@ -133,6 +133,42 @@ test("RetryScheduler resets timer when rescheduled before firing", () => {
   scheduler.stop();
 });
 
+test("RetryScheduler fires immediately when monotonicDeadlineMs is in the past", () => {
+  const scheduler = new RetryScheduler(clock);
+  const calls: string[] = [];
+
+  clock.advance(5000);
+
+  scheduler.sync(
+    {
+      issueId: "i-past",
+      identifier: "MT-PAST",
+      attempt: 1,
+      dueAt: new Date(0).toISOString(),
+      monotonicDeadlineMs: 1000,
+    },
+    (retry) => calls.push(retry.issueId),
+  );
+
+  clock.advance(0);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0], "i-past");
+
+  scheduler.stop();
+});
+
+test("RetryScheduler does not throw when sync is called with undefined retry", () => {
+  const scheduler = new RetryScheduler(clock);
+  const calls: string[] = [];
+
+  scheduler.sync(undefined, (retry) => calls.push(retry.issueId));
+
+  clock.advance(10000);
+  assert.equal(calls.length, 0);
+
+  scheduler.stop();
+});
+
 test("RetryScheduler does not fire after destroy", () => {
   const scheduler = new RetryScheduler(clock);
   const calls: string[] = [];

@@ -14,13 +14,18 @@ function makeIssue(overrides: Record<string, unknown> = {}) {
   });
 }
 
-function fakeClock(now = new Date()): ClockPort {
-  return {
-    now: () => now,
-    monotonicMs: () => now.getTime(),
+function fakeClock(initial = new Date()) {
+  let tick = initial.getTime();
+  const clock: ClockPort & { advance(ms: number): void } = {
+    now: () => new Date(tick),
+    monotonicMs: () => tick,
     setTimeout: (cb, ms) => setTimeout(cb, ms),
     clearTimeout: (h) => clearTimeout(h as ReturnType<typeof setTimeout>),
+    advance(ms: number) {
+      tick += ms;
+    },
   };
+  return clock;
 }
 
 // --- claim ---
@@ -144,11 +149,11 @@ test("finish — secondsRunning accumulates across multiple finishes", () => {
   const issueB = makeIssue({ id: "b", identifier: "MT-B" });
 
   orchestrator.claim(issueA);
-  clock.now = () => new Date(now.getTime() + 10_000);
+  clock.advance(10_000);
   orchestrator.finish(issueA.id, 0, false);
 
   orchestrator.claim(issueB);
-  clock.now = () => new Date(now.getTime() + 25_000);
+  clock.advance(15_000);
   orchestrator.finish(issueB.id, 0, false);
 
   assert.equal(orchestrator.snapshot().usageTotals.secondsRunning, 25);
@@ -235,6 +240,27 @@ test("eligibleIssues — inactive issue cleared from retryAttempts", () => {
   });
   orchestrator.eligibleIssues([doneIssue]);
   assert.equal(orchestrator.snapshot().retrying.length, 0);
+});
+
+test("eligibleIssues — retry with future monotonicDeadlineMs excluded until deadline passes", () => {
+  const settings = parseConfig();
+  const clock = fakeClock(new Date("2025-01-01T00:00:00Z"));
+  const orchestrator = new Orchestrator(settings, clock);
+  const issue = makeIssue();
+
+  orchestrator.claim(issue);
+  orchestrator.finish(issue.id, 0, true);
+  assert.equal(orchestrator.snapshot().retrying.length, 1);
+
+  const eligible1 = orchestrator.eligibleIssues([issue]);
+  assert.deepEqual(eligible1, []);
+
+  clock.advance(30_000);
+  const eligible2 = orchestrator.eligibleIssues([issue]);
+  assert.deepEqual(
+    eligible2.map((i) => i.id),
+    [issue.id],
+  );
 });
 
 test("eligibleIssues — issue with unresolved blockers excluded", () => {

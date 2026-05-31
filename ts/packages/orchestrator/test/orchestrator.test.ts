@@ -184,8 +184,7 @@ test("orchestrator gates retry attempts until backoff is due and clears terminal
   assert.equal(retry?.attempt, 1);
   assert.deepEqual(orchestrator.eligibleIssues([issue]), []);
 
-  retry!.dueAtIso = new Date(Date.now() - 1).toISOString();
-  retry!.monotonicDeadlineMs = 0;
+  orchestrator.markRetryDue(issue.id);
   assert.equal(orchestrator.eligibleIssues([issue])[0]?.identifier, "MT-RETRY");
   assert.equal(orchestrator.claim(issue)?.retryAttempt, 1);
   orchestrator.finish(issue.id, 0, true);
@@ -223,8 +222,7 @@ test("orchestrator uses Elixir retry delays for failures and active continuation
   const continuationDelay = Date.parse(retry.dueAtIso) - beforeContinuation;
   assert.ok(continuationDelay >= 900 && continuationDelay <= 1_500);
 
-  retry.dueAtIso = new Date(Date.now() - 1).toISOString();
-  retry.monotonicDeadlineMs = 0;
+  continuationOrchestrator.markRetryDue(issue.id);
   assert.equal(continuationOrchestrator.claim(issue)?.retryAttempt, 1);
   const beforeSecondContinuation = Date.now();
   continuationOrchestrator.finish(issue.id, 0, true, undefined, "continuation");
@@ -234,8 +232,7 @@ test("orchestrator uses Elixir retry delays for failures and active continuation
   const secondContinuationDelay = Date.parse(retry.dueAtIso) - beforeSecondContinuation;
   assert.ok(secondContinuationDelay >= 900 && secondContinuationDelay <= 1_500);
 
-  retry.dueAtIso = new Date(Date.now() - 1).toISOString();
-  retry.monotonicDeadlineMs = 0;
+  continuationOrchestrator.markRetryDue(issue.id);
   assert.equal(continuationOrchestrator.claim(issue)?.retryAttempt, 1);
   const beforeFailureAfterContinuations = Date.now();
   continuationOrchestrator.finish(
@@ -276,6 +273,26 @@ test("orchestrator retry dispatch reopens slots blocked only by stale claims", (
   assert.equal(claim?.slotIndex, 0);
   assert.equal(claim?.retryAttempt, 1);
   assert.equal(orchestrator.snapshot().retrying.length, 0);
+});
+
+test("markRetryDue makes a pending retry eligible immediately and is a no-op for unknown issues", () => {
+  const settings = parseConfig({ agent: { max_retry_backoff_ms: 60_000 } });
+  const orchestrator = new Orchestrator(settings);
+  const issue = normalizeIssue({
+    id: "mark-due",
+    identifier: "MT-MARK-DUE",
+    title: "Mark due",
+    state: { name: "Todo", type: "unstarted" },
+  });
+
+  assert.ok(orchestrator.claim(issue));
+  orchestrator.finish(issue.id, 0, true);
+  assert.deepEqual(orchestrator.eligibleIssues([issue]), []);
+
+  orchestrator.markRetryDue(issue.id);
+  assert.equal(orchestrator.eligibleIssues([issue])[0]?.identifier, "MT-MARK-DUE");
+
+  orchestrator.markRetryDue("nonexistent-id");
 });
 
 test("orchestrator retries an ensemble issue in its original slot", () => {

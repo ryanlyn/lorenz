@@ -16,8 +16,8 @@ function makeClock(baseMs: number) {
   return {
     now: () => new Date(now),
     monotonicMs: () => monotonic,
-    setTimeout: (cb: () => void, ms: number) => setTimeout(cb, ms),
-    clearTimeout: (h: unknown) => clearTimeout(h as ReturnType<typeof setTimeout>),
+    setTimeout: (_cb: () => void, _ms: number) => ({ unref: undefined }),
+    clearTimeout: (_h: unknown) => {},
     advance(ms: number) {
       now += ms;
       monotonic += ms;
@@ -313,6 +313,50 @@ describe("INVARIANT: When a retry becomes due, stale claimed slots SHALL be rele
     assert.ok(claimed !== null);
     assert.equal(claimed!.slotIndex, 0);
     assert.equal(orch.snapshot().retrying.length, 0);
+  });
+});
+
+describe("INVARIANT: When markRetryDue is called with an existing retry entry, monotonicDeadlineMs SHALL be set to 0", () => {
+  test("markRetryDue sets monotonicDeadlineMs to 0 making the issue immediately eligible", () => {
+    const clock = makeClock(1000000);
+    const settings = makeSettings({ maxConcurrent: 10 });
+    const orch = new Orchestrator(settings, clock);
+    const issue = makeIssue();
+
+    orch.claim(issue);
+    clock.advance(5000);
+    orch.finish(issue.id, 0, true, undefined, "continuation");
+
+    const retryBefore = orch.state.retryAttempts.get(issue.id);
+    assert.ok(retryBefore);
+    assert.ok(retryBefore!.monotonicDeadlineMs > clock.monotonicMs());
+
+    orch.markRetryDue(issue.id);
+
+    const retryAfter = orch.state.retryAttempts.get(issue.id);
+    assert.ok(retryAfter);
+    assert.equal(retryAfter!.monotonicDeadlineMs, 0);
+
+    const eligible = orch.eligibleIssues([issue]);
+    assert.ok(eligible.some((i) => i.id === issue.id));
+  });
+
+  test("markRetryDue with a non-existent issueId is a no-op", () => {
+    const clock = makeClock(1000000);
+    const settings = makeSettings({ maxConcurrent: 10 });
+    const orch = new Orchestrator(settings, clock);
+    const issue = makeIssue();
+
+    orch.claim(issue);
+    clock.advance(5000);
+    orch.finish(issue.id, 0, true, undefined, "continuation");
+
+    const snapBefore = JSON.stringify(orch.snapshot());
+
+    orch.markRetryDue("nonexistent-issue-id");
+
+    const snapAfter = JSON.stringify(orch.snapshot());
+    assert.equal(snapBefore, snapAfter);
   });
 });
 

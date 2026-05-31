@@ -350,6 +350,12 @@ test("RuntimeRetryEntry serialization round-trip preserves numeric attempt witho
   assert.equal(typeof parsed[0].dueAt, "string");
   assert.equal(parsed[0].dueAt, "2026-05-26T00:00:00.000Z");
   assert.equal(parsed[1].dueAt, "2026-05-26T01:00:00.000Z");
+
+  // monotonicDeadlineMs must remain a number after round-trip
+  assert.equal(typeof parsed[0].monotonicDeadlineMs, "number");
+  assert.equal(typeof parsed[1].monotonicDeadlineMs, "number");
+  assert.equal(parsed[0].monotonicDeadlineMs, 1000);
+  assert.equal(parsed[1].monotonicDeadlineMs, 5000);
 });
 
 test("RuntimeRetryEntry optional fields serialize correctly across the JSON boundary", () => {
@@ -391,8 +397,10 @@ test("RuntimeRetryEntry optional fields serialize correctly across the JSON boun
   // Required fields present in both
   assert.equal(minParsed.issueId, "issue-min");
   assert.equal(minParsed.attempt, 1);
+  assert.equal(minParsed.monotonicDeadlineMs, 1000);
   assert.equal(fullParsed.issueId, "issue-full");
   assert.equal(fullParsed.attempt, 3);
+  assert.equal(fullParsed.monotonicDeadlineMs, 3000);
 });
 
 test("RuntimeRunningEntry usageTotals fields survive snapshot serialization with correct types", () => {
