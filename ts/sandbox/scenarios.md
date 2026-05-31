@@ -2,27 +2,12 @@
 
 **Date:** 2026-05-29  
 **Total Scenarios Tested:** 210  
-**Passed:** 206  
-**Failed:** 4
+**Passed:** 208  
+**Failed:** 2
 
 ---
 
 ## Failures Found
-
----
-
-### Failure 5: S-185
-**Invariant Violated:** Retry delay SHALL never exceed the configured maximum cap  
-**Code Location:** `ts/packages/policies/src/retry.ts` — `retryBackoffMs` (line 8)  
-**Explanation:** The continuation path returns `1_000` unconditionally via early return, bypassing `Math.min(maxRetryBackoffMs, ...)`. When `maxRetryBackoffMs < 1000` (e.g., 500), the returned delay exceeds the configured cap.  
-**Reproduction:**
-```ts
-retryBackoffMs(1, 500, "continuation"); // Returns 1000, which exceeds cap of 500
-```
-**Suggested Fix:** Apply cap to continuation:
-```ts
-if (retryKind === "continuation") return Math.min(maxRetryBackoffMs, 1_000);
-```
 
 ---
 
@@ -46,15 +31,6 @@ export function workspacePath(root, identifier, slotIndex = 0, ensembleSize = 1)
   ...
 }
 ```
-
----
-
-### Failure 8: S-210
-**Invariant Violated:** Retry delay SHALL never exceed the configured maximum cap  
-**Code Location:** `ts/packages/policies/src/retry.ts` — `retryBackoffMs` (line 8)  
-**Explanation:** Same root cause as S-185. Continuation returns 1000 without cap enforcement. With `maxRetryBackoffMs=100`, result is 1000 > 100.  
-**Reproduction:** Same as S-185 with cap=100.  
-**Suggested Fix:** Same as S-185.
 
 ---
 
@@ -86,11 +62,8 @@ const unstarted = issue.stateType
 
 | # | Module | Bug | Severity |
 |---|--------|-----|----------|
-| 1 | `policies/retry` | Continuation bypass ignores cap entirely | Low |
-| 2 | `workspace` | Empty identifier produces root-equal path | Medium |
-| 3 | `dispatch/issueHasOpenBlockers` | State name "Todo" overrides stateType="started" | Medium |
-
-(Failures 5-8 are variants of bug #1)
+| 1 | `workspace` | Empty identifier produces root-equal path | Medium |
+| 2 | `dispatch/issueHasOpenBlockers` | State name "Todo" overrides stateType="started" | Medium |
 
 ---
 
@@ -1620,7 +1593,7 @@ const unstarted = issue.stateType
 **Setup:** cap=500 (less than 1000)  
 **Action:** retryBackoffMs(1, 500, "continuation")  
 **Expected:** 1000 (doesn't go through Math.min(cap,...) path)  
-**Status:** **FAILED** — Continuation bypasses cap; returns 1000 even when cap is 500
+**Status:** PASSED — Fixed: continuation now returns Math.min(MIN_RETRY_DELAY_MS, maxRetryBackoffMs)
 
 ### S-186: mergeMonotonicUsage with all NaN update
 **Category:** Usage Accounting  
@@ -1820,4 +1793,4 @@ const unstarted = issue.stateType
 **Setup:** cap=100 (less than 1000)  
 **Action:** retryBackoffMs(1, 100, "continuation")  
 **Expected:** 1000 (cap not applied to continuation)  
-**Status:** **FAILED** — Same as S-185; continuation early-return bypasses Math.min(cap,...)
+**Status:** PASSED — Fixed: continuation now returns Math.min(MIN_RETRY_DELAY_MS, maxRetryBackoffMs)
