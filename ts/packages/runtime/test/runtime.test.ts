@@ -674,8 +674,6 @@ test("runtime keeps a retry handle active when a stalled generation finishes lat
     assert.equal(abortedAttempts.has(1), true);
 
     await runtime.pollOnce();
-    // Fix: increased waitFor timeout from 1_000 to 3_000 to tolerate CI load without flakiness.
-    // Invariant: timeout must be generous relative to retry delay to avoid timing-induced failures.
     await waitFor(() => attempts === 2, 3_000);
     assert.equal(runtime.snapshot().running[0]?.runId, "run-2");
 
@@ -995,10 +993,6 @@ test("runtime schedules retry refresh timers independently of the poll cadence",
   assert.equal(attempts, 1);
   assert.equal(runtime.snapshot().retrying[0]?.attempt, 1);
 
-  // Fix: increased waitFor timeouts from 3_000 to 10_000 to tolerate event-loop congestion when
-  // multiple tests run sequentially. The retry-scheduler timer (20ms delay) must fire and trigger
-  // pollOnce; under heavy CI load, macrotask scheduling jitter requires generous timeouts.
-  // Invariant: timeout must be generous relative to retry delay to avoid timing-induced failures.
   await waitFor(() => attempts === 2, 10_000);
   let snapshot = runtime.snapshot();
   assert.equal(snapshot.retrying[0]?.attempt, 1);
@@ -1045,11 +1039,7 @@ function issueFixture(id: string, identifier: string): Issue {
   });
 }
 
-// Fix: custom waitFor that yields to the macrotask queue via setTimeout between checks.
-// vi.waitFor may use microtask-based polling that prevents unref'd setTimeout callbacks from
-// interleaving during batch test runs. This implementation ensures macrotasks (including the
-// retry-scheduler's unref'd timers) have an opportunity to execute between predicate checks.
-// Invariant: all pending macrotasks must be allowed to run between polling attempts.
+// Yields to the macrotask queue between checks so timer callbacks can interleave.
 async function waitFor(
   predicate: () => boolean | Promise<boolean>,
   timeoutMs: number,

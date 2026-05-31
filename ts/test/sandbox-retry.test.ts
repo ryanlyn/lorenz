@@ -93,9 +93,6 @@ describe("Sandbox: Retry and Backoff", () => {
       runnerConfig: {
         defaultBehavior: { shouldSucceed: false, turnCount: 1, latencyPerTurnMs: 0 },
       },
-      // Fix: increased tickDelayMs from 300 to 500 and pollTicks from 8 to 10 to provide
-      // wider timing margins under CI load, preventing flakiness without changing assertions.
-      // Invariant: total test window must comfortably exceed cumulative backoff for 3+ retries.
       pollTicks: 10,
       tickDelayMs: 500,
     });
@@ -151,8 +148,6 @@ describe("Sandbox: Retry and Backoff", () => {
         defaultBehavior: { shouldSucceed: false, turnCount: 1, latencyPerTurnMs: 0 },
       },
       pollTicks: 10,
-      // Fix: increased tickDelayMs from 150 to 300 to avoid flakiness under CI load.
-      // Invariant: tick delay must exceed maxRetryBackoffMs to allow retries between ticks.
       tickDelayMs: 300,
     });
 
@@ -175,9 +170,6 @@ describe("Sandbox: Retry and Backoff", () => {
       runnerConfig: {
         defaultBehavior: { shouldSucceed: false, turnCount: 1, latencyPerTurnMs: 0 },
       },
-      // Fix: increased tickDelayMs from 300 to 500 and pollTicks from 8 to 10 to provide
-      // wider timing margins under CI load, preventing flakiness without changing assertions.
-      // Invariant: total test window must comfortably exceed cumulative backoff for 3+ retries.
       pollTicks: 10,
       tickDelayMs: 500,
     });

@@ -73,15 +73,15 @@ describe("INVARIANT: result is always non-negative when maxRetryBackoffMs >= 0",
 });
 
 describe("INVARIANT: failure delay never exceeds maxRetryBackoffMs", () => {
-test("retryBackoffMs — failure delay never exceeds maxRetryBackoffMs", () => {
-  fc.assert(
-    fc.property(
-      fc.integer({ min: -10, max: 100 }),
-      fc.integer({ min: 0, max: 10_000_000 }),
-      (attempt, max) => {
-        assert.ok(retryBackoffMs(attempt, max, "failure") <= max);
-      },
-    ),
-  );
-});
+  test("retryBackoffMs — failure delay never exceeds maxRetryBackoffMs", () => {
+    fc.assert(
+      fc.property(
+        fc.integer({ min: -10, max: 100 }),
+        fc.integer({ min: 0, max: 10_000_000 }),
+        (attempt, max) => {
+          assert.ok(retryBackoffMs(attempt, max, "failure") <= max);
+        },
+      ),
+    );
+  });
 });

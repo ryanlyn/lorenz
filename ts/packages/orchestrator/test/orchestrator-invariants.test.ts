@@ -303,7 +303,7 @@ describe("INVARIANT: When a retry becomes due, stale claimed slots SHALL be rele
       issueId: issue.id,
       identifier: issue.identifier,
       attempt: 1,
-      dueAt: new Date(clock.now().getTime() - 1000),
+      dueAtIso: new Date(clock.now().getTime() - 1000).toISOString(),
       monotonicDeadlineMs: clock.monotonicMs() - 1000,
       error: "agent exited",
     });

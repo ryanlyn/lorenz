@@ -14,6 +14,7 @@ export class RetryScheduler {
       this.timers.delete(retry.issueId);
       onDue(retry);
     }, delayMs);
+    timer.unref?.();
     this.timers.set(retry.issueId, timer);
   }
 
