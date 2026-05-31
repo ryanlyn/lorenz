@@ -740,7 +740,7 @@ export class SymphonyRuntime {
       if (
         !current ||
         current.attempt !== scheduled.attempt ||
-        current.dueAt.toISOString() !== scheduled.dueAt
+        current.dueAtIso !== scheduled.dueAt
       ) {
         return;
       }
@@ -870,7 +870,7 @@ function runtimeRetryEntry(entry: {
   issueId: string;
   identifier: string;
   attempt: number;
-  dueAt: Date;
+  dueAtIso: string;
   monotonicDeadlineMs: number;
   error?: string | undefined;
   slotIndex?: number | undefined;
@@ -881,7 +881,7 @@ function runtimeRetryEntry(entry: {
     issueId: entry.issueId,
     identifier: entry.identifier,
     attempt: entry.attempt,
-    dueAt: entry.dueAt.toISOString(),
+    dueAt: entry.dueAtIso,
     monotonicDeadlineMs: entry.monotonicDeadlineMs,
     ...(entry.error !== undefined ? { error: entry.error } : {}),
     ...(entry.slotIndex !== undefined ? { slotIndex: entry.slotIndex } : {}),

@@ -67,8 +67,8 @@ test("claim — preferred slot honored on retry", () => {
     issueId: issue.id,
     identifier: issue.identifier,
     attempt: 1,
-    dueAt: new Date(Date.now() - 1),
     monotonicDeadlineMs: 0,
+    dueAtIso: new Date(Date.now() - 1).toISOString(),
     slotIndex: 2,
     error: "failed",
   });

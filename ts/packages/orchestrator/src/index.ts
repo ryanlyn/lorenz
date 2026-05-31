@@ -214,8 +214,8 @@ export class Orchestrator {
         issueId,
         identifier: entry.identifier,
         attempt,
-        dueAt: deadline.dueAt,
         monotonicDeadlineMs: deadline.monotonicDeadlineMs,
+        dueAtIso: deadline.dueAtIso,
         slotIndex,
         workerHost: entry.workerHost,
         workspacePath: entry.workspacePath,
@@ -282,10 +282,10 @@ export class Orchestrator {
     if (retry) retry.monotonicDeadlineMs = 0;
   }
 
-  private retryDeadline(delayMs: number): { dueAt: Date; monotonicDeadlineMs: number } {
+  private retryDeadline(delayMs: number): { dueAtIso: string; monotonicDeadlineMs: number } {
     const dueAt = this.clock.now();
     dueAt.setTime(dueAt.getTime() + delayMs);
-    return { dueAt, monotonicDeadlineMs: this.clock.monotonicMs() + delayMs };
+    return { dueAtIso: dueAt.toISOString(), monotonicDeadlineMs: this.clock.monotonicMs() + delayMs };
   }
 
   private releaseStaleClaimsForRetry(issueId: string): void {
