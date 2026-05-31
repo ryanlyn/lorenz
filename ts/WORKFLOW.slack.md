@@ -61,7 +61,8 @@ You are working on a Slack issue `{{ issue.id }}`
 Continuation context:
 
 - This is retry attempt #{{ attempt }} because the issue is still in an active state.
-- Resume from the current workspace state instead of restarting from scratch.
+- Resume from the current workspace state instead of restarting from scratch. Your resumable state is your restored git workspace (your branch, commits, and any open PR) plus the issue's current status (the managed emoji reaction) and the source message - reconstruct what is already done from those.
+- You CANNOT read back your earlier `slack_comment` thread replies: there is no Slack read tool and replies are not included in this prompt. Treat thread replies as write-only, human-visible progress notes; never depend on re-reading them to recover plan or validation state.
 - Do not repeat already-completed investigation or validation unless needed for new code changes.
 - Do not end the turn while the issue remains in an active state unless you are blocked by missing required permissions/secrets.
   {% endif %}
@@ -119,14 +120,14 @@ You set status with `slack_update_status`, which **swaps the reaction**: it remo
 You have exactly two Slack write tools:
 
 - `slack_update_status` - set the issue's status by swapping its status emoji reaction. Args: `issueId` (`<channel>:<ts>`), `status` (one of `In Progress`, `Done`, `Cancelled`). Example: set `In Progress` when you pick it up, `Done` when complete.
-- `slack_comment` - post a threaded reply on the source message. Args: `issueId` (`<channel>:<ts>`), `body`. Use threaded replies as your running progress log / workpad.
+- `slack_comment` - post a threaded reply on the source message. Args: `issueId` (`<channel>:<ts>`), `body`. Use it to post human-visible progress notes. These replies are write-only: you cannot read them back on a later turn, so do not rely on them as resumable state (use your workspace and the issue status instead).
 
 There is **no `linear_graphql`** tool and no Linear MCP server. Do not attempt to call Linear. Do not stop because "Linear is not configured" - this workflow never uses Linear. There is also no `slack_create_issue`: issues are created by humans @-mentioning the bot, not by the agent.
 
 ## Default posture
 
 - Start by reading the current emoji reaction to determine status, then follow the matching flow.
-- Keep a single running progress log by posting threaded replies with `slack_comment`; reference earlier replies instead of duplicating context.
+- Post human-visible progress as threaded replies with `slack_comment`. These are write-only audit notes; for your own continuation rely on the restored workspace and the issue's current status, not on re-reading replies.
 - Spend extra effort up front on planning and verification design before implementation.
 - Reproduce first: confirm the current behavior/issue signal before changing code.
 - Move status only when the matching quality bar is met (use `slack_update_status` to swap the reaction).
@@ -152,13 +153,13 @@ There is **no `linear_graphql`** tool and no Linear MCP server. Do not attempt t
 1. Read the source message and its current managed reaction to determine status.
 2. Route to the matching flow:
    - `Todo` (no managed reaction) -> call `slack_update_status(issueId, "In Progress")`, then start the execution flow.
-   - `In Progress` -> continue the execution flow from your latest threaded reply.
+   - `In Progress` -> continue the execution flow using your restored workspace (branch/commits and any open PR) and the issue's current state as the source of truth for what is done; you cannot read back prior thread replies.
    - `Done` / `Cancelled` -> do nothing and shut down.
 3. If a PR already exists for the current branch and it is `CLOSED` or `MERGED`, treat prior branch work as non-reusable. Create a fresh branch from `origin/main` and restart the execution flow.
 
 ## Step 1: Start / continue execution
 
-1. Establish a single running workpad by posting a `slack_comment` threaded reply with a hierarchical plan and acceptance criteria in checklist form. Update it as a follow-up reply on each milestone.
+1. Post a `slack_comment` threaded reply with a hierarchical plan and acceptance criteria in checklist form, plus follow-up replies on each milestone, as a human-visible progress log. This thread is NOT your resumable memory (you cannot read it back); your durable state is the git workspace, so keep the plan reflected in your commits/PR and the issue status.
 2. If arriving from `Todo`, ensure the `:eyes:` (`In Progress`) reaction is set (you set it in Step 0).
 3. Include a compact environment stamp in the first workpad reply: `<host>:<abs-workdir>@<short-sha>`.
 4. Capture a concrete reproduction signal and record it in a threaded reply before implementing.
@@ -190,12 +191,12 @@ There is **no `linear_graphql`** tool and no Linear MCP server. Do not attempt t
 - Status changes happen exclusively through `slack_update_status` (it swaps the managed reaction); never manually add/remove reactions for status by hand.
 - If the branch PR is already closed/merged, create a new branch from `origin/main` and restart from reproduction/planning.
 - Do not reopen terminal (`Done`/`Cancelled`) issues.
-- Use threaded replies (`slack_comment`) as the single running progress log.
+- Use threaded replies (`slack_comment`) as a human-visible progress log only; they are write-only and not readable on later turns, so never treat them as resumable agent state.
 - If blocked by missing required tools/auth, post one threaded reply via `slack_comment` describing the blocker, its impact, and the next unblock action.
 
-## Workpad template
+## Progress-note template
 
-Use this structure for the first threaded workpad reply and keep it referenced in follow-ups:
+Use this structure for the first `slack_comment` progress reply and keep follow-ups consistent. These replies are human-visible notes, not resumable state:
 
 ````md
 ## Symphony Workpad
