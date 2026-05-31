@@ -434,6 +434,71 @@ test("first create fsyncs the PARENT of a newly-created board dir (new-dir entry
   assert.equal(issue.state, "Todo");
 });
 
+test("concurrent first-run creates fsync the FULL new chain before publishing (ensureBoardDir is locked)", async () => {
+  // A first-run board several levels deep whose entire chain is missing: <tmp>/p1/p2/board. The
+  // chain is built by mkdir(recursive), which returns only the topmost level a given call observed
+  // as newly-created. If ensureBoardDir ran OUTSIDE the per-dir lock, two racing first-run creates
+  // could interleave inside the recursive mkdir so each fsyncs only its own slice of the chain with
+  // no barrier guaranteeing the upper parents are durable before the other create links its file.
+  // Running ensureBoardDir under the same lock as the publish makes exactly one create build AND
+  // fully fsync the new chain; the other observes the dir as already existing and skips re-fsyncing.
+  const tmp = await mkdtemp(path.join(tmpdir(), "board-first-run-race-"));
+  const p1 = path.join(tmp, "p1");
+  const p2 = path.join(p1, "p2");
+  const dir = path.join(p2, "board");
+  // Two SEPARATE stores so the only thing serializing them is the module-level per-dir lock.
+  const a = new BoardStore(dir);
+  const b = new BoardStore(dir);
+
+  const synced: string[] = [];
+  const realOpen = nodeFs.open.bind(nodeFs);
+  const openSpy = vi
+    .spyOn(nodeFs, "open")
+    .mockImplementation(async (p: Parameters<typeof nodeFs.open>[0], ...rest) => {
+      const fh = await (realOpen as typeof nodeFs.open)(p, ...rest);
+      const realSync = fh.sync.bind(fh);
+      fh.sync = async () => {
+        synced.push(path.resolve(String(p)));
+        return realSync();
+      };
+      return fh;
+    });
+  let results: Awaited<ReturnType<BoardStore["create"]>>[];
+  try {
+    results = await Promise.all([
+      a.create({ title: "Race A", status: "Todo" }),
+      b.create({ title: "Race B", status: "Todo" }),
+    ]);
+  } finally {
+    openSpy.mockRestore();
+  }
+
+  // Both creates succeeded with unique ids (no lost write, no clobber).
+  const ids = results.map((r) => r.identifier).sort();
+  assert.deepEqual(ids, ["BOARD-1", "BOARD-2"]);
+
+  // Every parent entry along the newly-created chain was fsynced, so the whole chain is reachable
+  // after a crash: the pre-existing tmp dir gained `p1`, `p1` gained `p2`, `p2` gained `board`.
+  for (const ancestorParent of [tmp, p1, p2]) {
+    assert.ok(
+      synced.includes(path.resolve(ancestorParent)),
+      `expected ${ancestorParent} to be fsynced, saw ${JSON.stringify(synced)}`,
+    );
+  }
+  // The board dir itself was fsynced post-publish (persists the new file entries inside it).
+  assert.ok(
+    synced.includes(path.resolve(dir)),
+    `expected the board dir to be fsynced, saw ${JSON.stringify(synced)}`,
+  );
+
+  // Both issues are durable on disk and round-trip through a fresh store.
+  const fetched = await new BoardStore(dir).getByIds(["BOARD-1", "BOARD-2"]);
+  assert.deepEqual(
+    fetched.map((i) => i.identifier).sort(),
+    ["BOARD-1", "BOARD-2"],
+  );
+});
+
 test("create leaves NO partial BOARD file when the publish (link) fails", async () => {
   const dir = await tempBoard();
   const store = new BoardStore(dir);

@@ -206,13 +206,21 @@ export class BoardStore {
       description: input.body ?? "",
       comments: "",
     };
-    await this.ensureBoardDir();
     const contents = this.render(parsed);
     // Serialize id allocation per board DIRECTORY under the same module-level lock so concurrent
     // creates in one daemon do not all scan the same nextId in lockstep. The no-overwrite link
     // below is still the authoritative guard (it also defends against any external writer), so the
     // lock is an optimization that also keeps the bounded retry loop from churning.
     return withLock(path.resolve(this.dir), async () => {
+      // ensureBoardDir MUST run inside the per-directory lock. On a first-run board the chain is
+      // created by mkdir(recursive), and fs.mkdir returns only the topmost level THIS call observed
+      // as newly-created. Two concurrent first-run creates can interleave inside Node's recursive
+      // mkdir so each sees a different topmost-created level and fsyncs only its own slice of the
+      // chain - with no happens-before barrier guaranteeing the slice covering the upper parents is
+      // durable before the other caller publishes its file. Serializing ensureBoardDir under the
+      // same lock as the publish makes exactly one create build AND fully fsync the new chain before
+      // any racing create observes the dir as existing (mkdir returns undefined) and links its file.
+      await this.ensureBoardDir();
       // Crash-atomic publish: write the full contents to a sibling TEMP file first, then PUBLISH
       // it to the final BOARD-<n>.md with a no-overwrite hard link. fs.link is atomic and fails
       // with EEXIST if the target already exists, so it is collision-safe (two racing creates can
