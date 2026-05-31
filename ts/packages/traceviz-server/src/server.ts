@@ -101,14 +101,11 @@ export async function createApp(options: CreateAppOptions) {
     },
   );
 
-  app.get<{ Params: { issueId: string } }>(
-    "/api/tickets/:issueId/stats",
-    (request): TraceStats => {
-      const { issueId } = request.params;
-      const events = watcher.getEventsForTicket(issueId);
-      return computeStats(events);
-    },
-  );
+  app.get<{ Params: { issueId: string } }>("/api/tickets/:issueId/stats", (request): TraceStats => {
+    const { issueId } = request.params;
+    const events = watcher.getEventsForTicket(issueId);
+    return computeStats(events);
+  });
 
   // WebSocket endpoint for live updates
   app.get("/ws", { websocket: true }, (socket: WebSocket) => {

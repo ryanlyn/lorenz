@@ -15,18 +15,23 @@ interface TimelineProps {
   loading: boolean;
 }
 
+function eventKey(event: DisplayEvent, index: number): string {
+  return `${event.kind}-${event.timestamp}-${index}`;
+}
+
 function renderEvent(event: DisplayEvent, index: number) {
+  const key = eventKey(event, index);
   switch (event.kind) {
     case "thought":
-      return <ThoughtEvent key={index} event={event} />;
+      return <ThoughtEvent key={key} event={event} />;
     case "message":
-      return <MessageEvent key={index} event={event} />;
+      return <MessageEvent key={key} event={event} />;
     case "tool_call":
-      return <ToolCallEvent key={index} event={event} />;
+      return <ToolCallEvent key={key} event={event} />;
     case "turn_completed":
-      return <TurnCompletedEvent key={index} event={event} />;
+      return <TurnCompletedEvent key={key} event={event} />;
     case "notification":
-      return <NotificationEvent key={index} event={event} />;
+      return <NotificationEvent key={key} event={event} />;
     default:
       return null;
   }

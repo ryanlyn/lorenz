@@ -76,6 +76,12 @@ interface PendingToolCall {
   startTs: string;
 }
 
+/** Tracks a turn_started event and whether it has been consumed by a completion/failure/cancellation. */
+interface TurnStartedRecord {
+  timestamp: string;
+  consumed: boolean;
+}
+
 /**
  * Parse a single JSONL line into a RawTraceLine, or null if invalid.
  */
@@ -97,6 +103,7 @@ function parseLine(line: string): RawTraceLine | null {
 export function parseTraceLines(lines: string[]): DisplayEvent[] {
   const events: DisplayEvent[] = [];
   const pendingToolCalls = new Map<string, PendingToolCall>();
+  const turnStartedRecords: TurnStartedRecord[] = [];
   let turnIndex = 0;
 
   for (const line of lines) {
@@ -210,6 +217,7 @@ export function parseTraceLines(lines: string[]): DisplayEvent[] {
 
       case "turn_started": {
         turnIndex++;
+        turnStartedRecords.push({ timestamp: ts, consumed: false });
         events.push({ kind: "turn_started", turnIndex, timestamp: ts });
         break;
       }
@@ -224,12 +232,13 @@ export function parseTraceLines(lines: string[]): DisplayEvent[] {
               raw.usage.totalTokens ?? (raw.usage.inputTokens ?? 0) + (raw.usage.outputTokens ?? 0),
           };
         }
-        // Try to compute duration from last turn_started
+        // Try to compute duration from the most recent unconsumed turn_started
         let durationMs: number | null = null;
-        for (let i = events.length - 1; i >= 0; i--) {
-          const ev = events[i];
-          if (ev !== undefined && ev.kind === "turn_started") {
-            const startMs = new Date(ev.timestamp).getTime();
+        for (let i = turnStartedRecords.length - 1; i >= 0; i--) {
+          const record = turnStartedRecords[i];
+          if (record !== undefined && !record.consumed) {
+            record.consumed = true;
+            const startMs = new Date(record.timestamp).getTime();
             const endMs = new Date(ts).getTime();
             if (!Number.isNaN(startMs) && !Number.isNaN(endMs)) {
               durationMs = endMs - startMs;
@@ -243,6 +252,14 @@ export function parseTraceLines(lines: string[]): DisplayEvent[] {
 
       case "turn_failed":
       case "turn_cancelled": {
+        // Mark the most recent unconsumed turn_started as consumed
+        for (let i = turnStartedRecords.length - 1; i >= 0; i--) {
+          const record = turnStartedRecords[i];
+          if (record !== undefined && !record.consumed) {
+            record.consumed = true;
+            break;
+          }
+        }
         events.push({
           kind: "notification",
           text: `Turn ${raw.type}: ${typeof msg === "string" ? msg : JSON.stringify(msg ?? "")}`,

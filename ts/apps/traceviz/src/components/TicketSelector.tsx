@@ -9,7 +9,7 @@ interface TicketSelectorProps {
   onSelect: (id: string | null) => void;
 }
 
-function statusColor(status: string): string {
+function statusColor(status: TicketInfo["status"]): string {
   switch (status) {
     case "completed":
       return "bg-accent-green";

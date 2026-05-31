@@ -55,15 +55,19 @@ export function useTraceData() {
 
     if (msg.type === "init") {
       setTickets(msg.tickets);
-    } else if (msg.type === "events_update" && msg.issueId === selectedTicketId) {
-      void loadTicketData(msg.issueId);
+    } else if (msg.type === "events_update") {
+      // Always refresh ticket list so new tickets and updated counts appear
+      void loadTickets();
+      if (msg.issueId === selectedTicketId) {
+        void loadTicketData(msg.issueId);
+      }
     } else if (msg.type === "events" && msg.issueId === selectedTicketId) {
       setEvents(msg.events);
       fetchStats(msg.issueId)
         .then(setStats)
         .catch(() => {});
     }
-  }, [lastMessage, selectedTicketId, loadTicketData]);
+  }, [lastMessage, selectedTicketId, loadTicketData, loadTickets]);
 
   return {
     tickets,
