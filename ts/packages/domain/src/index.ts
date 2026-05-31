@@ -154,7 +154,7 @@ export interface TrackerSettings {
   projectSlug?: string | undefined;
   /** Tracker assignee identity (or `$VAR`) used to scope candidate queries to one user. */
   assignee?: string | undefined;
-  /** Local tracker board directory (e.g. `.symphony/board`). Used when `kind === "local"`. */
+  /** Local tracker board directory (e.g. `.symphony/local`). Used when `kind === "local"`. */
   path?: string | undefined;
   /** Slack channel IDs to watch for mentions. Used when `kind === "slack"`. */
   channels?: string[] | undefined;

@@ -348,7 +348,7 @@ export const defaultSettings = (options: DefaultSettingsOptions = {}): Settings 
     tracker: {
       kind: undefined,
       endpoint: "https://api.linear.app/graphql",
-      path: ".symphony/board",
+      path: ".symphony/local",
       activeStates: ["Todo", "In Progress"],
       terminalStates: ["Closed", "Cancelled", "Canceled", "Duplicate", "Done"],
       dispatch: {
@@ -534,7 +534,7 @@ function parseTracker(
     ...defaults,
     kind,
     endpoint: trackerRaw.endpoint ?? endpointDefault,
-    path: trackerRaw.path ?? defaults.path ?? ".symphony/board",
+    path: trackerRaw.path ?? defaults.path ?? ".symphony/local",
     apiKey,
     projectSlug,
     assignee,

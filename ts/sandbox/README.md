@@ -13,13 +13,13 @@ npx tsx sandbox/seed-local.ts
 ```
 
 This writes a few sample issues (a couple in `Todo`, one in `In Progress`) into
-`.symphony/board/` via `@symphony/local-tracker`'s `BoardStore`, so the ids and on-disk
+`.symphony/local/` via `@symphony/local-tracker`'s `BoardStore`, so the ids and on-disk
 format match what the running tracker expects.
 
 - Seed a different directory: `npx tsx sandbox/seed-local.ts /tmp/demo-board`
-- Seed fewer issues: `npx tsx sandbox/seed-local.ts .symphony/board 2`
+- Seed fewer issues: `npx tsx sandbox/seed-local.ts .symphony/local 2`
 
-Point a workflow at the board with `tracker.kind: local` and `tracker.path: .symphony/board`
+Point a workflow at the board with `tracker.kind: local` and `tracker.path: .symphony/local`
 (matching the directory you seeded), then run Symphony as below.
 
 There is no Slack equivalent of this seeder: Slack issues are real messages in a live

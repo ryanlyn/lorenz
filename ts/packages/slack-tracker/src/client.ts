@@ -1,7 +1,12 @@
 import { defaultStateType, normalizeIssue } from "@symphony/issue";
 import type { Issue, RuntimeTrackerClient, Settings } from "@symphony/domain";
 
-import { isBotMention, stateFromReactions, statusEmojiMap, stripLeadingMention } from "./mapping.js";
+import {
+  isBotMention,
+  stateFromReactions,
+  statusEmojiMap,
+  stripLeadingMention,
+} from "./mapping.js";
 import type { SlackMessage, SlackTransport } from "./transport.js";
 
 export function splitIssueId(id: string): [string, string] | null {

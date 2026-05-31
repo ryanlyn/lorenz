@@ -7,13 +7,13 @@
  *   npx tsx sandbox/seed-local.ts [dir] [count]
  *
  * Arguments (both optional):
- *   dir    target board directory (default: .symphony/board)
+ *   dir    target board directory (default: .symphony/local)
  *   count  how many of the sample issues to create (default: all of them)
  *
  * Examples:
- *   npx tsx sandbox/seed-local.ts                       # seeds ./.symphony/board
+ *   npx tsx sandbox/seed-local.ts                       # seeds ./.symphony/local
  *   npx tsx sandbox/seed-local.ts /tmp/demo-board       # seeds an explicit dir
- *   npx tsx sandbox/seed-local.ts .symphony/board 2     # seeds only the first 2 issues
+ *   npx tsx sandbox/seed-local.ts .symphony/local 2     # seeds only the first 2 issues
  *
  * Issues are written as `BOARD-<n>.md` files via @symphony/local-tracker's BoardStore so
  * the ids and on-disk format stay correct and match what the running tracker expects.
@@ -96,7 +96,7 @@ export async function seedLocalBoard(
 }
 
 async function main(): Promise<void> {
-  const dir = process.argv[2] ?? ".symphony/board";
+  const dir = process.argv[2] ?? ".symphony/local";
   const count = process.argv[3] ? parseInt(process.argv[3], 10) : SEED_ISSUES.length;
 
   const created = await seedLocalBoard(dir, count);

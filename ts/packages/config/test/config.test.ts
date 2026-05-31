@@ -553,11 +553,11 @@ test("workflow parsing treats front matter as optional like Elixir", () => {
 
 test("parses local tracker config with path", () => {
   const settings = parseConfig(
-    { tracker: { kind: "local", path: ".symphony/board", active_states: ["Todo"] } },
+    { tracker: { kind: "local", path: ".symphony/local", active_states: ["Todo"] } },
     {},
   );
   assert.equal(settings.tracker.kind, "local");
-  assert.equal(settings.tracker.path, ".symphony/board");
+  assert.equal(settings.tracker.path, ".symphony/local");
 });
 
 test("parses slack tracker config with channels, emoji overrides, and token env", () => {
