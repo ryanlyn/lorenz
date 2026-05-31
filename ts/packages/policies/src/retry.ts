@@ -7,9 +7,8 @@ export function retryBackoffMs(
   maxRetryBackoffMs: number,
   retryKind: RetryKind,
 ): number {
-  if (retryKind === "continuation") return Math.min(MIN_RETRY_DELAY_MS, maxRetryBackoffMs);
-  return Math.max(
-    MIN_RETRY_DELAY_MS,
-    Math.min(maxRetryBackoffMs, 10_000 * 2 ** Math.max(0, attempt - 1)),
-  );
+  if (retryKind === "continuation")
+    return Math.max(0, Math.min(MIN_RETRY_DELAY_MS, maxRetryBackoffMs));
+  const uncapped = Math.max(MIN_RETRY_DELAY_MS, 10_000 * 2 ** Math.max(0, attempt - 1));
+  return Math.max(0, Math.min(maxRetryBackoffMs, uncapped));
 }

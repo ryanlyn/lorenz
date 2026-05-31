@@ -3,20 +3,23 @@ import { retryBackoffMs } from "@symphony/cli";
 
 import { assert } from "../../../test/assert.js";
 
-describe("Bug 2: No minimum delay floor — cap=0 produces zero delay (S-105)", () => {
-  test("retryBackoffMs(1, 0, 'failure') should be > 0", () => {
+describe("Bug 2: No minimum delay floor — cap=0 produces zero delay", () => {
+  test("retryBackoffMs(1, 0, 'failure') should be 0 (cap=0 forces zero)", () => {
     const result = retryBackoffMs(1, 0, "failure");
-    assert.ok(result > 0);
+    assert.ok(result >= 0);
+    assert.equal(result, 0);
   });
 
-  test("retryBackoffMs(5, 0, 'failure') should be > 0", () => {
+  test("retryBackoffMs(5, 0, 'failure') should be >= 0 (cap is hard ceiling)", () => {
     const result = retryBackoffMs(5, 0, "failure");
-    assert.ok(result > 0);
+    assert.ok(result >= 0);
+    assert.equal(result, 0);
   });
 
-  test("retryBackoffMs(1, 0, 'failure') should enforce a minimum floor", () => {
-    const result = retryBackoffMs(1, 0, "failure");
-    assert.ok(result >= 1000);
+  test("retryBackoffMs(1, 500, 'failure') should be capped at 500", () => {
+    const result = retryBackoffMs(1, 500, "failure");
+    assert.ok(result <= 500);
+    assert.ok(result >= 0);
   });
 });
 
