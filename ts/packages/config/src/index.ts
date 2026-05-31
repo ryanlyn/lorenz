@@ -18,14 +18,20 @@ import {
   CODEX_APPROVAL_POLICY_NAMES,
   CODEX_SANDBOX_MODES,
   TRACKER_KINDS,
-  coercedPort,
-  coercedTimeoutMs,
-  coercedNonNegativeTimeoutMs,
-  coercedIntervalMs,
-  coercedRenderIntervalMs,
-  coercedConcurrency,
-  coercedMaxTurns,
-  coercedEnsembleSize,
+  PORT_MAX,
+  ONE_WEEK_MS,
+  RENDER_INTERVAL_MAX_MS,
+  CONCURRENCY_MAX,
+  MAX_TURNS_MAX,
+  ENSEMBLE_SIZE_MAX,
+  isValidPort,
+  isValidTimeoutMs,
+  isValidNonNegativeTimeoutMs,
+  isValidIntervalMs,
+  isValidRenderIntervalMs,
+  isValidConcurrency,
+  isValidMaxTurns,
+  isValidEnsembleSize,
 } from "@symphony/domain";
 
 export {
@@ -35,15 +41,72 @@ export {
   CONCURRENCY_MAX,
   MAX_TURNS_MAX,
   ENSEMBLE_SIZE_MAX,
-  coercedPort,
-  coercedTimeoutMs,
-  coercedNonNegativeTimeoutMs,
-  coercedIntervalMs,
-  coercedRenderIntervalMs,
-  coercedConcurrency,
-  coercedMaxTurns,
-  coercedEnsembleSize,
+  isValidPort,
+  isValidTimeoutMs,
+  isValidNonNegativeTimeoutMs,
+  isValidIntervalMs,
+  isValidRenderIntervalMs,
+  isValidConcurrency,
+  isValidMaxTurns,
+  isValidEnsembleSize,
 } from "@symphony/domain";
+
+const numericInput = z.union([
+  z.number().refine((n) => !Number.isNaN(n), { message: "must not be NaN" }),
+  z
+    .string()
+    .refine((s) => s.trim() !== "", { message: "must not be empty" })
+    .transform(Number)
+    .refine((n) => !Number.isNaN(n), { message: "must be a number" }),
+]);
+
+const coercedPort = numericInput
+  .refine((n) => isValidPort(n), {
+    message: `must be a valid port number (0-${PORT_MAX})`,
+  })
+  .describe("non-negative");
+
+const coercedTimeoutMs = numericInput
+  .refine((n) => isValidTimeoutMs(n), {
+    message: `must be a positive integer no greater than ${ONE_WEEK_MS} (1 week)`,
+  })
+  .describe("positive");
+
+const coercedNonNegativeTimeoutMs = numericInput
+  .refine((n) => isValidNonNegativeTimeoutMs(n), {
+    message: `must be a non-negative integer no greater than ${ONE_WEEK_MS} (1 week)`,
+  })
+  .describe("non-negative");
+
+const coercedIntervalMs = numericInput
+  .refine((n) => isValidIntervalMs(n), {
+    message: `must be a positive integer no greater than ${ONE_WEEK_MS} (1 week)`,
+  })
+  .describe("positive");
+
+const coercedRenderIntervalMs = numericInput
+  .refine((n) => isValidRenderIntervalMs(n), {
+    message: `must be a positive integer no greater than ${RENDER_INTERVAL_MAX_MS}`,
+  })
+  .describe("positive");
+
+const coercedConcurrency = numericInput
+  .refine((n) => isValidConcurrency(n), {
+    message: `must be an integer between 1 and ${CONCURRENCY_MAX}`,
+  })
+  .describe("positive");
+
+const coercedMaxTurns = numericInput
+  .refine((n) => isValidMaxTurns(n), {
+    message: `must be an integer between 1 and ${MAX_TURNS_MAX}`,
+  })
+  .describe("positive");
+
+const coercedEnsembleSize = numericInput
+  .refine((n) => isValidEnsembleSize(n), {
+    message: `must be an integer between 1 and ${ENSEMBLE_SIZE_MAX}`,
+  })
+  .describe("positive");
 
 const coercedBoolean = z.union([
   z.boolean(),
