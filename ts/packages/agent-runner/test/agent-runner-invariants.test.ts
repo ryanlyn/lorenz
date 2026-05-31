@@ -225,19 +225,11 @@ test("session ends when backend profile changes between turns via agent kind ove
     agent: { ...defaultSettings().agent, maxTurns: 10, kind: "codex" },
     statusOverrides: overrides as Settings["statusOverrides"],
   });
-  let turnNumber = 0;
-
   const result = await runAgentAttempt({
     issue,
     workflow: { path: "/workflow.md", config: {}, promptTemplate: "Fix it", settings },
     settings,
-    fetchIssue: async (iss) => {
-      turnNumber += 1;
-      if (turnNumber >= 1) {
-        return { ...iss, state: "In Progress" };
-      }
-      return iss;
-    },
+    fetchIssue: async (iss) => ({ ...iss, state: "In Progress" }),
     adapters: fakeAdapters({
       executorFactory: () => ({
         kind: "codex",

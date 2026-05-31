@@ -144,6 +144,7 @@ test("routeNames - prefix matching is case-insensitive", () => {
     { numRuns: 200 },
   );
 });
+// INVARIANT: When routes are extracted from labels, the output SHALL always be in normalized form.
 test("routeNames - extracted route is always normalized", () => {
   fc.assert(
     fc.property(
@@ -209,6 +210,7 @@ test("routedToThisWorker - no route label and unrouted disabled means ineligible
     { numRuns: 200 },
   );
 });
+// INVARIANT: When no route label is present and unrouted dispatch is enabled, the dispatch SHALL be eligible.
 test("routedToThisWorker - no route label with unrouted enabled accepts", () => {
   fc.assert(
     fc.property(
@@ -244,6 +246,7 @@ test("routedToThisWorker - whitespace-only suffix means rejected", () => {
     { numRuns: 200 },
   );
 });
+// INVARIANT: When allowlist matching is performed, matching SHALL be case-insensitive.
 test("routedToThisWorker - allowlist matching is case-insensitive", () => {
   fc.assert(
     fc.property(arbRouteNameNoColon, (routeName) => {
@@ -254,6 +257,7 @@ test("routedToThisWorker - allowlist matching is case-insensitive", () => {
     { numRuns: 200 },
   );
 });
+// INVARIANT: When an issue is not assigned to the worker, routing SHALL always reject regardless of other settings.
 test("routedToThisWorker - assignedToWorker false always rejects", () => {
   fc.assert(
     fc.property(
@@ -275,6 +279,7 @@ test("routedToThisWorker - assignedToWorker false always rejects", () => {
     { numRuns: 200 },
   );
 });
+// INVARIANT: When an issue's route appears in the allowlist, the dispatch SHALL be eligible.
 test("routedToThisWorker - route in allowlist is accepted", () => {
   fc.assert(
     fc.property(
@@ -292,6 +297,7 @@ test("routedToThisWorker - route in allowlist is accepted", () => {
     { numRuns: 200 },
   );
 });
+// INVARIANT: When an issue's route does not appear in the allowlist, the dispatch SHALL be ineligible.
 test("routedToThisWorker - route NOT in allowlist is rejected", () => {
   const poolA = ["alpha", "beta", "gamma", "delta", "epsilon", "zeta"];
   const poolB = ["one", "two", "three", "four", "five", "six"];
@@ -311,6 +317,7 @@ test("routedToThisWorker - route NOT in allowlist is rejected", () => {
     { numRuns: 200 },
   );
 });
+// INVARIANT: When multiple route labels are present, matching ANY route in the allowlist SHALL be sufficient for eligibility.
 test("routedToThisWorker - multiple labels, accepted if ANY in allowlist", () => {
   fc.assert(
     fc.property(
@@ -333,6 +340,7 @@ test("routedToThisWorker - multiple labels, accepted if ANY in allowlist", () =>
     { numRuns: 500 },
   );
 });
+// INVARIANT: When labels do not match the route prefix, they SHALL not produce route names.
 test("routeNames - non-matching labels are ignored", () => {
   fc.assert(
     fc.property(

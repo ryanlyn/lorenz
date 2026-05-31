@@ -312,10 +312,15 @@ test("applyUpdate with nonexistent slotKey does not throw and does not mutate st
       fc.integer({ min: 0, max: 100 }),
       (issueId, slotIndex) => {
         const clock = makeClock(1000000);
-        const settings = makeSettings();
+        const settings = makeSettings({ maxConcurrent: 10 });
         const orch = new Orchestrator(settings, clock);
 
+        const existing = makeIssue({ id: "existing-1", identifier: "E-1" });
+        orch.claim(existing);
+
         const snapBefore = JSON.stringify(orch.snapshot());
+        if (slotKey(issueId, slotIndex) === slotKey("existing-1", 0)) return;
+
         orch.applyUpdate(issueId, slotIndex, {
           type: "turn_completed",
           sessionId: "s1",
@@ -499,8 +504,8 @@ test("finish computes elapsed seconds from startedAt to clock.now and accumulate
   assert.equal(orch.snapshot().usageTotals.secondsRunning, 45);
 });
 
-// INVARIANT: When a continuation finish occurs, the system SHALL create a retry entry rather than permanently completing.
-test("normal finish creates a retry entry rather than permanently completing the issue", () => {
+// INVARIANT: When a continuation finish occurs, the issue SHALL be added to both the completed set AND retryAttempts (scheduling re-dispatch).
+test("continuation finish adds issue to completed set and creates retry entry for re-dispatch", () => {
   const clock = makeClock(1000000);
   const settings = makeSettings({ maxConcurrent: 10 });
   const orch = new Orchestrator(settings, clock);
