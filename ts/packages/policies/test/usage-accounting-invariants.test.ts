@@ -483,7 +483,7 @@ test("empty update (all undefined) preserves entry and global unchanged", () => 
 // INVARIANT: Token counts SHALL never become negative / NaN.
 
 describe("NaN in update fields", () => {
-  test("NaN in update.inputTokens does not corrupt entry, reported, or global totals (S-120)", () => {
+  test("NaN in update.inputTokens does not corrupt entry, reported, or global totals", () => {
     fc.assert(
       fc.property(
         arbUsageTotals(),
@@ -507,7 +507,7 @@ describe("NaN in update fields", () => {
     );
   });
 
-  test("NaN in update.totalTokens does not corrupt totals while other fields update correctly (S-121)", () => {
+  test("NaN in update.totalTokens does not corrupt totals while other fields update correctly", () => {
     fc.assert(
       fc.property(
         arbUsageTotals(),
@@ -531,7 +531,7 @@ describe("NaN in update fields", () => {
     );
   });
 
-  test("all NaN update fields do not corrupt any totals (S-186)", () => {
+  test("all NaN update fields do not corrupt any totals", () => {
     fc.assert(
       fc.property(
         arbUsageTotals(),

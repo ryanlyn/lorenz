@@ -10,7 +10,7 @@ function makeSettings(overrides: Record<string, unknown> = {}) {
   });
 }
 
-describe("S-1171: blockers abort running workers regardless of stateType", () => {
+describe("blockers abort running workers regardless of stateType", () => {
   test("stateType='started' with open blockers IS blocked", () => {
     const settings = makeSettings();
     const issue = normalizeIssue({

@@ -7,7 +7,7 @@ function makeTotals(input = 10, output = 5, total = 15) {
   return { inputTokens: input, outputTokens: output, totalTokens: total, secondsRunning: 0 };
 }
 
-describe("Bug 4: NaN in update corrupts all token totals (S-120, S-121, S-186)", () => {
+describe("Bug 4: NaN in update corrupts all token totals", () => {
   test("single field NaN: update.inputTokens=NaN should not corrupt entryTotals.inputTokens", () => {
     const result = mergeMonotonicUsage({
       entryTotals: makeTotals(10, 5, 15),
