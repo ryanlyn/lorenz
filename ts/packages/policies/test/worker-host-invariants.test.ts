@@ -61,7 +61,8 @@ const arbRunningCountsFor = (hosts: string[]) =>
     return map;
   });
 
-test("selected host is always from the configured list", () => {
+// INVARIANT: When a host is selected, it SHALL be from the configured list or "no host available" SHALL be returned.
+test("strengthened: with diverse running counts, selected host is always from configured list", () => {
   fc.assert(
     fc.property(
       arbNonEmptyHosts().chain((hosts) =>
@@ -78,6 +79,7 @@ test("selected host is always from the configured list", () => {
   );
 });
 
+// INVARIANT: When hosts are evaluated, only hosts with load strictly below the cap SHALL be considered.
 test("selected host always has load strictly below the cap", () => {
   fc.assert(
     fc.property(
@@ -111,7 +113,8 @@ test("negative: when all hosts are at or above cap, undefined is returned", () =
   );
 });
 
-test("selected host has the lowest load among hosts below cap", () => {
+// INVARIANT: When multiple hosts are below the cap, the host with the lowest load SHALL be selected.
+test("selected host has the lowest load among all hosts below cap", () => {
   fc.assert(
     fc.property(
       arbUniqueHosts().chain((hosts) =>
@@ -183,7 +186,8 @@ test("with duplicates in host list: still picks lowest-loaded", () => {
   );
 });
 
-test("empty host list returns no host available", () => {
+// INVARIANT: When the host list is empty, "no host available" SHALL be returned.
+test("empty host list returns null (no host available)", () => {
   fc.assert(
     fc.property(arbCap(), (cap) => {
       const result = selectLeastLoadedHost({
@@ -217,7 +221,8 @@ test("with non-empty runningCounts: empty host list still returns null", () => {
   );
 });
 
-test("at least one host below cap guarantees a host is selected", () => {
+// INVARIANT: When at least one host is below the cap, the system SHALL always select a host.
+test("if at least one host is below cap, a host string is returned (no false starvation)", () => {
   fc.assert(
     fc.property(
       fc.uniqueArray(arbHostName(), { minLength: 1, maxLength: 12 }),
@@ -239,7 +244,8 @@ test("at least one host below cap guarantees a host is selected", () => {
   );
 });
 
-test("cap of zero means no host is selectable", () => {
+// INVARIANT: When cap is zero, no host SHALL be selectable.
+test("cap of 0 means no host can be selected (undefined for non-empty lists)", () => {
   fc.assert(
     fc.property(
       arbNonEmptyHosts().chain((hosts) => fc.tuple(fc.constant(hosts), arbRunningCountsFor(hosts))),
@@ -253,7 +259,8 @@ test("cap of zero means no host is selectable", () => {
   );
 });
 
-test("hosts absent from running counts are treated as count zero", () => {
+// INVARIANT: When a host is absent from the running counts, the system SHALL treat it as having count zero.
+test("hosts absent from runningCounts are treated as count 0", () => {
   fc.assert(
     fc.property(
       fc.uniqueArray(arbHostName(), { minLength: 2, maxLength: 8 }),
@@ -273,7 +280,8 @@ test("hosts absent from running counts are treated as count zero", () => {
   );
 });
 
-test("same inputs produce the same result", () => {
+// INVARIANT: When the same inputs are provided, the system SHALL produce the same result.
+test("selectLeastLoadedHost is deterministic", () => {
   fc.assert(
     fc.property(
       arbUniqueHosts().chain((hosts) =>
@@ -289,6 +297,7 @@ test("same inputs produce the same result", () => {
   );
 });
 
+// INVARIANT: When exactly one host is below cap, that host SHALL be selected.
 test("single eligible host is always selected", () => {
   fc.assert(
     fc.property(

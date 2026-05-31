@@ -307,7 +307,9 @@ const safeIssueArb: fc.Arbitrary<Issue> = fc.record({
   assignedToWorker: fc.option(fc.boolean(), { nil: null }),
 }) as fc.Arbitrary<Issue>;
 
-test("empty or whitespace-only prompt body falls back to minimal default prompt", async () => {
+// INVARIANT: When the workflow prompt body is empty or whitespace-only, the system SHALL use a minimal default prompt.
+
+test("when workflow prompt body is empty or whitespace-only, system uses minimal default prompt", async () => {
   await fc.assert(
     fc.asyncProperty(strictWhitespaceOnlyArb, safeIssueArb, async (template, issue) => {
       const result = await buildPrompt(template, issue);
@@ -349,7 +351,9 @@ test("non-whitespace template does NOT fall back to default", () => {
   );
 });
 
-test("unknown variable reference in template causes render failure", async () => {
+// INVARIANT: When a prompt template references an unknown variable, rendering SHALL fail strictly.
+
+test("when prompt template references unknown variable, rendering fails strictly", async () => {
   await fc.assert(
     fc.asyncProperty(unknownVariableNameArb, async (varName) => {
       const template = `Hello {{ ${varName} }}`;
@@ -405,7 +409,9 @@ test("deeply nested unknown path fails strictly", async () => {
   );
 });
 
-test("unknown filter reference in template causes render failure", async () => {
+// INVARIANT: When a prompt template references an unknown filter, rendering SHALL fail strictly.
+
+test("when prompt template references unknown filter, rendering fails strictly", async () => {
   await fc.assert(
     fc.asyncProperty(unknownFilterNameArb, async (filterName) => {
       const template = `Hello {{ issue.title | ${filterName} }}`;
@@ -447,6 +453,8 @@ test("chained unknown filter after known filter still fails", async () => {
     { numRuns: 100 },
   );
 });
+
+// INVARIANT: When a prompt is rendered, the issue, attempt, and ensemble objects SHALL be available as template inputs.
 
 test("issue object is available as template input with expected fields", async () => {
   await fc.assert(
@@ -578,6 +586,8 @@ test("ensemble.enabled is true only when rendered size in output is > 1", async 
   );
 });
 
+// INVARIANT: When a template is rendered, interpolation SHALL faithfully reproduce source values.
+
 test("static text in template passes through unchanged", async () => {
   // Any template with only static text (no Liquid tags) should render verbatim
   const staticTextArb = fc
@@ -614,6 +624,8 @@ test("template containing Liquid expression produces output different from raw t
     { numRuns: 100 },
   );
 });
+
+// INVARIANT: When user-controlled data contains template syntax, it SHALL be rendered literally, not interpreted.
 
 test("user-controlled data containing Liquid syntax does not cause template injection", async () => {
   // Issue fields may contain {{ }}, {% %}, or other Liquid syntax.
@@ -660,6 +672,8 @@ test("Liquid-special characters in issue title are rendered literally, not inter
     { numRuns: 50 },
   );
 });
+
+// INVARIANT: When a prompt is rendered, issue.labels and issue.blocked_by SHALL be accessible as arrays.
 
 test("issue.labels is rendered as an array accessible via Liquid for-loop", async () => {
   const labelsArb = fc.array(

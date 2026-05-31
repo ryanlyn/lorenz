@@ -54,7 +54,9 @@ const distinctStateNamesArb = fc
   .tuple(stateNameArb, stateNameArb)
   .filter(([a, b]) => normalizeStateName(a) !== normalizeStateName(b));
 
-test("no override present leaves base settings unchanged", () => {
+// INVARIANT: When no override is present, the base settings SHALL remain unchanged.
+
+test("no override present — base settings remain unchanged", () => {
   fc.assert(
     fc.property(stateNameArb, (state) => {
       // Create settings with empty statusOverrides (default)
@@ -129,7 +131,9 @@ test("settingsForIssueState returns a clone, not the same object reference", () 
   );
 });
 
-test("override lookup is case-insensitive", () => {
+// INVARIANT: When override lookup is performed, it SHALL be case-insensitive.
+
+test("override lookup is case-insensitive — upper/lower/mixed match", () => {
   fc.assert(
     fc.property(
       stateNameArb.filter((s) => /[a-z]/.test(s)),
@@ -220,6 +224,8 @@ test("parseConfig normalizes state names in statusOverrides map keys", () => {
     { numRuns: 200 },
   );
 });
+
+// INVARIANT: When overrides are defined for different states, they SHALL apply independently.
 
 test("overrides for different states apply independently", () => {
   fc.assert(
@@ -340,7 +346,9 @@ test("querying override does not mutate the source settings object", () => {
   );
 });
 
-test("partial override preserves unmentioned fields", () => {
+// INVARIANT: When a partial override is applied, unmentioned fields SHALL be preserved.
+
+test("partial agent override preserves unmentioned agent fields", () => {
   fc.assert(
     fc.property(boundaryPositiveIntArb, (maxTurns) => {
       const settings = defaultSettings();
@@ -488,7 +496,9 @@ test("partial override via parseConfig preserves fields not in raw config", () =
   );
 });
 
-test("nested map fields are deep-merged on override", () => {
+// INVARIANT: When nested map fields are overridden, they SHALL be deep-merged.
+
+test("codex approvalPolicy deep-merged — override keys merge, base keys preserved", () => {
   fc.assert(
     fc.property(fc.boolean(), fc.boolean(), (sandboxApproval, rules) => {
       const settings = defaultSettings();

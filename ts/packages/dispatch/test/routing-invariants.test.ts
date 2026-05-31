@@ -70,7 +70,8 @@ const arbRouteNameNoColon = fc
 const arbWhitespace = fc
   .array(fc.constantFrom(" ", "\t", "\n", "\r"), { minLength: 0, maxLength: 5 })
   .map((a) => a.join(""));
-test("route name normalization is idempotent", () => {
+// INVARIANT: When route name normalization is applied twice, the result SHALL be the same (idempotent).
+test("normalizeRouteName - normalization is idempotent", () => {
   fc.assert(
     fc.property(fc.string({ maxLength: 100 }), (input) => {
       const once = normalizeRouteName(input);
@@ -79,7 +80,9 @@ test("route name normalization is idempotent", () => {
     { numRuns: 50 },
   );
 });
-test("normalized route names are always lowercase and trimmed", () => {
+// INVARIANT: When route names are normalized, normalization SHALL be case-insensitive.
+// INVARIANT: When route names are normalized, leading and trailing whitespace SHALL be stripped.
+test("normalizeRouteName - output is always lowercase and trimmed", () => {
   fc.assert(
     fc.property(fc.string({ minLength: 1, maxLength: 80 }), (input) => {
       const result = normalizeRouteName(input);
@@ -89,7 +92,8 @@ test("normalized route names are always lowercase and trimmed", () => {
     { numRuns: 50 },
   );
 });
-test("whitespace-only suffix after prefix removal is not a valid route", () => {
+// INVARIANT: When a route name after prefix removal is whitespace-only, it SHALL not be valid.
+test("routeNames - whitespace-only suffix is not valid", () => {
   fc.assert(
     fc.property(
       fc.constantFrom("Symphony:", "Route:", "Team:", "X:"),
@@ -107,7 +111,8 @@ test("whitespace-only suffix after prefix removal is not a valid route", () => {
     { numRuns: 100 },
   );
 });
-test("prefix matching is case-insensitive", () => {
+// INVARIANT: When prefix matching is performed, matching SHALL be case-insensitive.
+test("routeNames - prefix matching is case-insensitive", () => {
   fc.assert(
     fc.property(
       arbRouteNameNoColon,
@@ -139,7 +144,8 @@ test("prefix matching is case-insensitive", () => {
     { numRuns: 200 },
   );
 });
-test("extracted routes are always in normalized form", () => {
+// INVARIANT: When routes are extracted from labels, the output SHALL always be in normalized form.
+test("routeNames - extracted route is always normalized", () => {
   fc.assert(
     fc.property(
       fc.string({ minLength: 1, maxLength: 20 }).filter((s) => s.trim().length > 0),
@@ -157,7 +163,8 @@ test("extracted routes are always in normalized form", () => {
     { numRuns: 200 },
   );
 });
-test("null allowlist accepts all routes", () => {
+// INVARIANT: When the allowlist is null, the system SHALL accept all routes.
+test("routedToThisWorker - null allowlist accepts all routes", () => {
   fc.assert(
     fc.property(arbRouteName, (routeName) => {
       assert.ok(
@@ -170,7 +177,8 @@ test("null allowlist accepts all routes", () => {
     { numRuns: 200 },
   );
 });
-test("empty allowlist rejects all routes", () => {
+// INVARIANT: When the allowlist is empty, the system SHALL reject all routes.
+test("routedToThisWorker - empty allowlist rejects all routes", () => {
   fc.assert(
     fc.property(arbRouteName, (routeName) => {
       assert.ok(
@@ -183,7 +191,8 @@ test("empty allowlist rejects all routes", () => {
     { numRuns: 200 },
   );
 });
-test("no route label with unrouted disabled means ineligible", () => {
+// INVARIANT: When no route label is present and unrouted dispatch is disabled, the dispatch SHALL be ineligible.
+test("routedToThisWorker - no route label and unrouted disabled means ineligible", () => {
   fc.assert(
     fc.property(
       fc.array(
@@ -201,7 +210,8 @@ test("no route label with unrouted disabled means ineligible", () => {
     { numRuns: 200 },
   );
 });
-test("no route label with unrouted enabled means eligible", () => {
+// INVARIANT: When no route label is present and unrouted dispatch is enabled, the dispatch SHALL be eligible.
+test("routedToThisWorker - no route label with unrouted enabled accepts", () => {
   fc.assert(
     fc.property(
       fc.array(
@@ -219,7 +229,8 @@ test("no route label with unrouted enabled means eligible", () => {
     { numRuns: 200 },
   );
 });
-test("whitespace-only suffix after prefix match is rejected as routed-but-invalid", () => {
+// INVARIANT: When prefix matching succeeds but the remaining name is whitespace-only, the route SHALL be rejected as routed-but-invalid.
+test("routedToThisWorker - whitespace-only suffix means rejected", () => {
   const arbWs = fc
     .array(fc.constantFrom(" ", "\t", "\n", "\r"), { minLength: 0, maxLength: 5 })
     .map((a) => a.join(""));
@@ -235,7 +246,8 @@ test("whitespace-only suffix after prefix match is rejected as routed-but-invali
     { numRuns: 200 },
   );
 });
-test("allowlist matching is case-insensitive", () => {
+// INVARIANT: When allowlist matching is performed, matching SHALL be case-insensitive.
+test("routedToThisWorker - allowlist matching is case-insensitive", () => {
   fc.assert(
     fc.property(arbRouteNameNoColon, (routeName) => {
       const issue = issueWith({ labels: [`Symphony:${routeName}`] });
@@ -245,7 +257,8 @@ test("allowlist matching is case-insensitive", () => {
     { numRuns: 200 },
   );
 });
-test("unassigned issue is always rejected regardless of other settings", () => {
+// INVARIANT: When an issue is not assigned to the worker, routing SHALL always reject regardless of other settings.
+test("routedToThisWorker - assignedToWorker false always rejects", () => {
   fc.assert(
     fc.property(
       fc.array(fc.string({ minLength: 1, maxLength: 20 }), { maxLength: 5 }),
@@ -266,7 +279,8 @@ test("unassigned issue is always rejected regardless of other settings", () => {
     { numRuns: 200 },
   );
 });
-test("route in allowlist is accepted", () => {
+// INVARIANT: When an issue's route appears in the allowlist, the dispatch SHALL be eligible.
+test("routedToThisWorker - route in allowlist is accepted", () => {
   fc.assert(
     fc.property(
       arbRouteNameNoColon,
@@ -283,7 +297,8 @@ test("route in allowlist is accepted", () => {
     { numRuns: 200 },
   );
 });
-test("route not in allowlist is rejected", () => {
+// INVARIANT: When an issue's route does not appear in the allowlist, the dispatch SHALL be ineligible.
+test("routedToThisWorker - route NOT in allowlist is rejected", () => {
   const poolA = ["alpha", "beta", "gamma", "delta", "epsilon", "zeta"];
   const poolB = ["one", "two", "three", "four", "five", "six"];
   fc.assert(
@@ -302,7 +317,8 @@ test("route not in allowlist is rejected", () => {
     { numRuns: 200 },
   );
 });
-test("multiple route labels accepted if any matches the allowlist", () => {
+// INVARIANT: When multiple route labels are present, matching ANY route in the allowlist SHALL be sufficient for eligibility.
+test("routedToThisWorker - multiple labels, accepted if ANY in allowlist", () => {
   fc.assert(
     fc.property(
       arbRouteNameNoColon,
@@ -324,7 +340,8 @@ test("multiple route labels accepted if any matches the allowlist", () => {
     { numRuns: 500 },
   );
 });
-test("non-matching labels do not produce route names", () => {
+// INVARIANT: When labels do not match the route prefix, they SHALL not produce route names.
+test("routeNames - non-matching labels are ignored", () => {
   fc.assert(
     fc.property(
       fc.constantFrom("Symphony:", "Route:", "Team:"),

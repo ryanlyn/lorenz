@@ -63,7 +63,8 @@ function fakeAdapters(overrides: Partial<RunAgentAttemptAdapters> = {}): RunAgen
 // Agent Execution Invariants
 // ---------------------------------------------------------------------------
 
-test("first turn sends the full rendered prompt", async () => {
+// INVARIANT: When the first turn begins, the system SHALL send the full rendered prompt.
+test("first turn receives the full rendered prompt from the template", async () => {
   const issue = fakeIssue({ title: "Fix the widget" });
   const settings = fakeSettings();
   const prompts: string[] = [];
@@ -100,6 +101,7 @@ test("first turn sends the full rendered prompt", async () => {
   assert.notMatch(prompts[0]!, /continuation turn #/);
 });
 
+// INVARIANT: When the first turn begins, the system SHALL send the full rendered prompt.
 test("first turn prompt renders all issue template variables", async () => {
   const issue = fakeIssue({
     identifier: "BUG-99",
@@ -133,7 +135,8 @@ test("first turn prompt renders all issue template variables", async () => {
   assert.match(capturedPrompt!, "Issue BUG-99: Broken search (state: Todo)");
 });
 
-test("continuation turns receive only continuation guidance, not the full prompt", async () => {
+// INVARIANT: When a continuation turn begins, the system SHALL send only the continuation guidance.
+test("continuation turns receive continuation guidance, not the full prompt", async () => {
   const issue = fakeIssue({ title: "Fix the widget" });
   const settings = fakeSettings({ agent: { ...defaultSettings().agent, maxTurns: 3 } });
   const prompts: string[] = [];
@@ -181,6 +184,7 @@ test("continuation turns receive only continuation guidance, not the full prompt
   assert.match(prompts[2]!, /turn #3 of 3/);
 });
 
+// INVARIANT: When a continuation turn begins, the system SHALL send only the continuation guidance.
 test("single turn run without fetchIssue never sends continuation guidance", async () => {
   const settings = fakeSettings({ agent: { ...defaultSettings().agent, maxTurns: 5 } });
   const prompts: string[] = [];
@@ -210,7 +214,8 @@ test("single turn run without fetchIssue never sends continuation guidance", asy
   assert.notMatch(prompts[0]!, /Continuation guidance/);
 });
 
-test("session ends when backend profile changes between turns", async () => {
+// INVARIANT: When the backend profile changes between turns, the system SHALL end the session and yield to the orchestrator.
+test("session ends when backend profile changes between turns via agent kind override", async () => {
   const issue = fakeIssue({ state: "Todo" });
   const overrides = new Map<string, { agent?: Partial<Settings["agent"]> }>();
   overrides.set("in progress", {
@@ -243,6 +248,7 @@ test("session ends when backend profile changes between turns", async () => {
   assert.equal(result.turnCount, 1);
 });
 
+// INVARIANT: When the backend profile changes between turns, the system SHALL end the session and yield to the orchestrator.
 test("session continues when profile stays the same across turns", async () => {
   // No statusOverrides, issue stays in same state -> profile unchanged -> all turns run
   const settings = fakeSettings({ agent: { ...defaultSettings().agent, maxTurns: 3 } });
@@ -258,6 +264,7 @@ test("session continues when profile stays the same across turns", async () => {
   assert.equal(result.turnCount, 3);
 });
 
+// INVARIANT: When the turn count reaches the maximum, the system SHALL end the session.
 test("session ends when turn count reaches maxTurns", async () => {
   const issue = fakeIssue();
   const settings = fakeSettings({ agent: { ...defaultSettings().agent, maxTurns: 2 } });
@@ -287,6 +294,8 @@ test("session ends when turn count reaches maxTurns", async () => {
   assert.equal(prompts.length, 2);
 });
 
+// INVARIANT: When the turn count reaches the maximum, the system SHALL end the session.
+// Property-based: maxTurns as arbitrary positive integer always terminates at exactly that count.
 test("session terminates at exactly maxTurns for arbitrary positive values", async () => {
   await fc.assert(
     fc.asyncProperty(fc.integer({ min: 1, max: 50 }), async (maxTurns) => {
@@ -306,6 +315,8 @@ test("session terminates at exactly maxTurns for arbitrary positive values", asy
   );
 });
 
+// INVARIANT: When an agent run starts, the working directory SHALL be set to the validated workspace path.
+// (Partial: verifies workspace propagation to executor startSession, not OS-level cwd)
 test("workspace path is passed to the executor session", async () => {
   const issue = fakeIssue();
   const settings = fakeSettings();
@@ -334,6 +345,8 @@ test("workspace path is passed to the executor session", async () => {
   assert.equal(sessionWorkspace, "/tmp/validated/workspace/TEST-1");
 });
 
+// INVARIANT: When an agent run starts, the working directory SHALL be set to the validated workspace path.
+// (Partial: verifies the result reports the workspace path from the adapter)
 test("result workspace matches the path from createWorkspaceForIssue", async () => {
   const issue = fakeIssue();
   const settings = fakeSettings();

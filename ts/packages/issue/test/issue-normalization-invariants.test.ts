@@ -54,7 +54,9 @@ function validIssueInput(overrides: Record<string, unknown> = {}): Record<string
   };
 }
 
-test("state resolution accepts nested object, snake_case, camelCase, and direct string form", () => {
+// INVARIANT: When a state value is resolved, the system SHALL accept nested object form, snake_case, camelCase, and direct string form (in that priority order).
+
+test("state resolution accepts nested object form { state: { name, type } }", () => {
   fc.assert(
     fc.property(nonBlankString, (stateName) => {
       const issue = normalizeIssue(
@@ -152,7 +154,9 @@ test("state is preserved exactly (not trimmed or lowercased)", () => {
   );
 });
 
-test("labels are trimmed, lowercased, and empty strings filtered out", () => {
+// INVARIANT: When labels are normalized, they SHALL be trimmed, lowercased, and empty strings filtered out.
+
+test("labels are trimmed and lowercased", () => {
   fc.assert(
     fc.property(
       fc.array(
@@ -264,7 +268,9 @@ test("normalization is idempotent (applying twice yields same result)", () => {
   );
 });
 
-test("explicit blockers array preferred over relations with blocks type fallback", () => {
+// INVARIANT: When blockers are resolved, the system SHALL prefer an explicit blockers array, falling back to filtering relations where type equals "blocks" (case-insensitive).
+
+test("explicit blockers array is preferred over relations", () => {
   fc.assert(
     fc.property(
       fc.array(fc.record({ id: nonBlankString, identifier: nonBlankString }), {
@@ -396,7 +402,9 @@ test("multiple blocking relations all become blockers", () => {
   );
 });
 
-test("issue with no assignee marked assignedToWorker=false when filter is configured", () => {
+// INVARIANT: When an assignee filter is configured and the issue has no assignee, it SHALL be marked as not assigned to this worker.
+
+test("issue with no assignee is marked assignedToWorker=false when filter is configured", () => {
   fc.assert(
     fc.property(nonBlankString, (assigneeFilter) => {
       const issue = normalizeIssue(validIssueInput({}), assigneeFilter);
@@ -442,7 +450,9 @@ test("empty string assignee filter means assignedToWorker=true regardless", () =
   );
 });
 
-test("assignee filter comparison is case-insensitive", () => {
+// INVARIANT: When an assignee filter is configured, comparison SHALL be case-insensitive.
+
+test("assignee comparison is case-insensitive", () => {
   fc.assert(
     fc.property(
       fc.string({ minLength: 1, maxLength: 30 }).filter((s) => s.trim().length > 0),
@@ -509,7 +519,9 @@ test("assignee nested object id takes priority over assignee_id", () => {
   );
 });
 
-test("missing required fields cause rejection", () => {
+// INVARIANT: When an issue is missing any required field, normalization SHALL reject it.
+
+test("arbitrary records missing required fields are rejected", () => {
   const requiredKeys = ["id", "identifier", "title", "state"];
   const arbitraryExtraRecord = fc
     .array(
@@ -601,7 +613,9 @@ test("blank/whitespace-only required fields cause rejection", () => {
   );
 });
 
-test("only canonical state types accepted, others rejected", () => {
+// INVARIANT: When a state type is normalized, only values in the canonical set SHALL be accepted; others SHALL become null.
+
+test("canonical state types with random casing and padding are accepted", () => {
   fc.assert(
     fc.property(
       fc.constantFrom(...ISSUE_STATE_TYPES),
@@ -731,7 +745,9 @@ test("stateType camelCase field works as fallback", () => {
   );
 });
 
-test("normalized issue has all required fields populated", () => {
+// INVARIANT: When an issue is normalized, it SHALL have all required fields populated.
+
+test("normalized issue always has id, identifier, title, state, stateType, labels, blockers", () => {
   fc.assert(
     fc.property(
       nonBlankString,

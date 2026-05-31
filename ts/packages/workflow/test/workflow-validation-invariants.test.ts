@@ -77,7 +77,9 @@ const yamlKeyArb = fc
   )
   .map(([first, rest]) => first + rest.join(""));
 
-test("non-map YAML front matter produces a typed error", () => {
+// INVARIANT: When YAML front matter is not a map, the system SHALL produce a typed error.
+
+test("parseWorkflowContent SHALL produce a typed error when YAML front matter is not a map", () => {
   fc.assert(
     fc.property(guaranteedNonMapYamlArb, (yamlValue) => {
       const content = wrapFrontMatter(yamlValue, "body");

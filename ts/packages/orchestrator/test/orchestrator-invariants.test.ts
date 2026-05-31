@@ -52,7 +52,8 @@ function makeSettings(overrides: { maxConcurrent?: number; ensembleSize?: number
 // DISPATCH CONCURRENCY
 // ============================================================================
 
-test("global concurrency cap blocks new dispatch", () => {
+// INVARIANT: When the global concurrency cap is reached, the system SHALL NOT dispatch new work.
+test("eligibleIssues blocks dispatch when running map size equals global maxConcurrentAgents", () => {
   const settings = parseConfig({ agent: { max_concurrent_agents: 2 } });
   const clock = makeClock(1000000);
   const orch = new Orchestrator(settings, clock);
@@ -74,7 +75,8 @@ test("global concurrency cap blocks new dispatch", () => {
   assert.equal(blockedEntry!.reason, "global_concurrency_cap");
 });
 
-test("per-state concurrency cap blocks only issues in that state", () => {
+// INVARIANT: When a per-state concurrency cap is reached, the system SHALL block only issues in that state.
+test("eligibleIssues applies per-state cap only to running entries in that state", () => {
   const settings = parseConfig({
     agent: { max_concurrent_agents: 10 },
     status_overrides: { Todo: { agent: { max_concurrent_agents: 1 } } },
@@ -99,7 +101,8 @@ test("per-state concurrency cap blocks only issues in that state", () => {
   assert.ok(!eligible.some((i) => i.id === "todo-c"));
 });
 
-test("dispatch requires both global and per-state caps to have room simultaneously", () => {
+// INVARIANT: When dispatch is evaluated, both global and per-state caps SHALL have room simultaneously.
+test("dispatch requires both global and state caps to have room simultaneously", () => {
   const settings = parseConfig({
     agent: { max_concurrent_agents: 2 },
     status_overrides: { Todo: { agent: { max_concurrent_agents: 2 } } },
@@ -128,7 +131,8 @@ test("dispatch requires both global and per-state caps to have room simultaneous
   assert.equal(blockedEntry!.reason, "global_concurrency_cap");
 });
 
-test("all worker hosts at capacity blocks new dispatch", () => {
+// INVARIANT: When all worker hosts are at capacity, the system SHALL NOT dispatch new work.
+test("worker host running count derived from running map entries per host", () => {
   const settings = defaultSettings();
   settings.agent.maxConcurrentAgents = 10;
   settings.worker.sshHosts = ["host-a", "host-b"];
@@ -158,7 +162,8 @@ test("all worker hosts at capacity blocks new dispatch", () => {
   assert.equal(reclaimed!.workerHost, "host-a");
 });
 
-test("tied hosts select first in config order", () => {
+// INVARIANT: When multiple hosts are tied at the lowest load, the system SHALL select the first in config order.
+test("host selection picks first host in config order on equal load tie", () => {
   const settings = defaultSettings();
   settings.agent.maxConcurrentAgents = 10;
   settings.worker.sshHosts = ["host-a", "host-b", "host-c"];
@@ -187,7 +192,8 @@ test("tied hosts select first in config order", () => {
 // CLAIM LIFECYCLE
 // ============================================================================
 
-test("repeated claim for already-claimed slot returns null", () => {
+// INVARIANT: When a slot is already claimed, a repeated claim for the same issue SHALL return null.
+test("claimed slot cannot be double-claimed by repeated claim calls", () => {
   const settings = makeSettings({ maxConcurrent: 10, ensembleSize: 1 });
   const clock = makeClock(1000000);
   const orch = new Orchestrator(settings, clock);
@@ -203,7 +209,8 @@ test("repeated claim for already-claimed slot returns null", () => {
   assert.equal(orch.state.running.size, 1);
 });
 
-test("successful claim deletes retryAttempts entry for the issue", () => {
+// INVARIANT: When a claim succeeds, the retryAttempts entry for that issue SHALL be deleted.
+test("successful claim deletes the retryAttempts entry for the issue", () => {
   const clock = makeClock(1000000);
   const settings = makeSettings({ maxConcurrent: 10 });
   const orch = new Orchestrator(settings, clock);
@@ -226,6 +233,7 @@ test("successful claim deletes retryAttempts entry for the issue", () => {
   assert.equal(orch.snapshot().retrying.length, 0);
 });
 
+// INVARIANT: When an entry is finished, its slot key SHALL be removed from both the running map and claimed set.
 test("finish removes slot key from running map and claimed set", () => {
   const clock = makeClock(1000000);
   const settings = makeSettings({ maxConcurrent: 10 });
@@ -244,7 +252,8 @@ test("finish removes slot key from running map and claimed set", () => {
   assert.equal(orch.snapshot().running.length, 0);
 });
 
-test("all ensemble slots claimed returns null on subsequent claim", () => {
+// INVARIANT: When all ensemble slots are claimed, the system SHALL return null on subsequent claim attempts.
+test("issue with all ensemble slots claimed returns null on subsequent claim", () => {
   fc.assert(
     fc.property(fc.integer({ min: 1, max: 5 }), (ensembleSize) => {
       const clock = makeClock(1000000);
@@ -265,7 +274,8 @@ test("all ensemble slots claimed returns null on subsequent claim", () => {
   );
 });
 
-test("stale claimed slots released when retry becomes due", () => {
+// INVARIANT: When a retry becomes due, stale claimed slots SHALL be released and re-dispatch SHALL proceed.
+test("stale claim released when retry becomes due and re-dispatch proceeds", () => {
   const clock = makeClock(1000000);
   const settings = makeSettings({ maxConcurrent: 10 });
   const orch = new Orchestrator(settings, clock);
@@ -294,7 +304,8 @@ test("stale claimed slots released when retry becomes due", () => {
 // RUNNING ENTRY UPDATES
 // ============================================================================
 
-test("update targeting nonexistent slot key does not throw or mutate state", () => {
+// INVARIANT: When an update targets a nonexistent slot key, the system SHALL NOT throw or mutate state.
+test("applyUpdate with nonexistent slotKey does not throw and does not mutate state", () => {
   fc.assert(
     fc.property(
       fc.string({ minLength: 1, maxLength: 20 }),
@@ -324,6 +335,7 @@ test("update targeting nonexistent slot key does not throw or mutate state", () 
   );
 });
 
+// INVARIANT: When a turn_completed event is applied, turnCount SHALL increment by exactly one.
 test("turnCount increments by exactly one per turn_completed event", () => {
   fc.assert(
     fc.property(fc.integer({ min: 1, max: 20 }), (numTurns) => {
@@ -349,7 +361,8 @@ test("turnCount increments by exactly one per turn_completed event", () => {
   );
 });
 
-test("entry usageTotals never decrease on lower reported values", () => {
+// INVARIANT: When a usage update reports lower values, entry usageTotals SHALL NOT decrease.
+test("entry usageTotals never decrease even when update reports lower values", () => {
   const clock = makeClock(1000000);
   const settings = makeSettings({ maxConcurrent: 10 });
   const orch = new Orchestrator(settings, clock);
@@ -374,7 +387,8 @@ test("entry usageTotals never decrease on lower reported values", () => {
   assert.equal(snap.running[0]!.usageTotals.totalTokens, 150);
 });
 
-test("global usageTotals growth bounded by positive deltas from highwater marks", () => {
+// INVARIANT: When global usage totals are updated, growth SHALL be bounded by positive deltas from highwater marks.
+test("global usageTotals only accumulates positive deltas from lastReported highwater marks", () => {
   const clock = makeClock(1000000);
   const settings = makeSettings({ maxConcurrent: 10 });
   const orch = new Orchestrator(settings, clock);
@@ -410,7 +424,8 @@ test("global usageTotals growth bounded by positive deltas from highwater marks"
   assert.equal(orch.state.usageTotals.totalTokens, 180);
 });
 
-test("refreshRunningIssue propagates update to every ensemble slot", () => {
+// INVARIANT: When a running issue is refreshed, the update SHALL propagate to every ensemble slot for that issue.
+test("refreshRunningIssue updates issue object on every ensemble slot for the same issue", () => {
   fc.assert(
     fc.property(fc.integer({ min: 2, max: 5 }), (ensembleSize) => {
       const clock = makeClock(1000000);
@@ -440,7 +455,8 @@ test("refreshRunningIssue propagates update to every ensemble slot", () => {
 // ORCHESTRATOR COMPLETION
 // ============================================================================
 
-test("cleanupIssue removes all running entries, claimed slots, and retry state", () => {
+// INVARIANT: When an issue is cleaned up, all running entries, claimed slots, and retry state SHALL be removed.
+test("cleanupIssue removes all running entries, claimed slots, and retry for the issue", () => {
   const clock = makeClock(1000000);
   const settings = makeSettings({ maxConcurrent: 20, ensembleSize: 2 });
   const orch = new Orchestrator(settings, clock);
@@ -467,6 +483,7 @@ test("cleanupIssue removes all running entries, claimed slots, and retry state",
   assert.equal(orch.state.completed.has(issue.id), true);
 });
 
+// INVARIANT: When an entry is finished, elapsed seconds SHALL be computed from startedAt to clock.now and accumulated.
 test("finish computes elapsed seconds from startedAt to clock.now and accumulates", () => {
   const clock = makeClock(new Date("2025-01-01T00:00:00Z").getTime());
   const settings = makeSettings({ maxConcurrent: 10 });
@@ -487,7 +504,8 @@ test("finish computes elapsed seconds from startedAt to clock.now and accumulate
   assert.equal(orch.snapshot().usageTotals.secondsRunning, 45);
 });
 
-test("continuation finish adds to completed set and creates retry entry", () => {
+// INVARIANT: When a continuation finish occurs, the issue SHALL be added to both the completed set AND retryAttempts (scheduling re-dispatch).
+test("continuation finish adds issue to completed set and creates retry entry for re-dispatch", () => {
   const clock = makeClock(1000000);
   const settings = makeSettings({ maxConcurrent: 10 });
   const orch = new Orchestrator(settings, clock);
@@ -508,7 +526,8 @@ test("continuation finish adds to completed set and creates retry entry", () => 
   assert.equal(orch.state.retryAttempts.has(issue.id), true);
 });
 
-test("snapshot returns independent copies that do not alias internals", () => {
+// INVARIANT: When a snapshot is taken, its arrays and objects SHALL be independent copies that do not alias internals.
+test("snapshot arrays and objects are independent copies that do not alias orchestrator internals", () => {
   const clock = makeClock(1000000);
   const settings = makeSettings({ maxConcurrent: 10 });
   const orch = new Orchestrator(settings, clock);
