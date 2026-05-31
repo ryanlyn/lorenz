@@ -359,9 +359,9 @@ export class BoardStore {
   private async read(id: string): Promise<Issue> {
     const parsed = await this.parse(id);
     const stat = await fs.stat(this.filePath(id));
-    // normalizeIssue requires a stateType. Map known statuses and fall back to "unstarted"
+    // normalizeIssue requires a stateType. Map known statuses and fall back to "backlog"
     // for custom/free-form board statuses so an unrecognized status never crashes the read.
-    const stateType = defaultStateType(parsed.status) ?? "unstarted";
+    const stateType = defaultStateType(parsed.status) ?? "backlog";
     return normalizeIssue({
       id,
       identifier: id,

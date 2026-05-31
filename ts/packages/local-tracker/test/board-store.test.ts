@@ -26,7 +26,7 @@ test("a custom/unknown status falls back to a valid stateType (normalizeIssue re
   const store = new BoardStore(dir);
   const issue = (await store.getByIds(["BOARD-7"]))[0]!;
   assert.equal(issue.state, "Reviewing");
-  assert.equal(issue.stateType, "unstarted");
+  assert.equal(issue.stateType, "backlog");
 });
 
 test("create allocates incrementing BOARD ids and round-trips", async () => {

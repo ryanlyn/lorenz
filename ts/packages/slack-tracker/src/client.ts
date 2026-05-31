@@ -81,9 +81,9 @@ export class SlackTrackerClient implements RuntimeTrackerClient {
     const firstLine = (message.text.split("\n")[0] ?? "").trim();
     const title =
       stripLeadingMention(firstLine, this.settings.tracker.botUserId).trim() || message.ts;
-    // normalizeIssue requires a stateType. Fall back to "unstarted" for custom emoji_states
+    // normalizeIssue requires a stateType. Fall back to "backlog" for custom emoji_states
     // mappings whose state name is not a known category, so they never crash the read.
-    const stateType = defaultStateType(state) ?? "unstarted";
+    const stateType = defaultStateType(state) ?? "backlog";
     return normalizeIssue({
       id: `${message.channel}:${message.ts}`,
       identifier: `SLK-${message.ts.replace(/\./g, "-")}`,
