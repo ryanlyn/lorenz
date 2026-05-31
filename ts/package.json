@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "TypeScript port of Symphony orchestration contracts.",
+  "description": "Symphony TypeScript orchestration contracts.",
   "scripts": {
     "dev": "pnpm build && pnpm start",
     "start": "pnpm exec node apps/cli/dist/bin/cli.js",
@@ -25,7 +25,10 @@
     "test:live:linear-sandbox": "SYMPHONY_TS_RUN_LINEAR_SANDBOX=1 vitest run test/linear-sandbox.test.ts",
     "test:live": "pnpm test:live:codex && pnpm test:live:codex-resume && pnpm test:live:linear-codex && pnpm test:live:claude",
     "test:parity": "vitest run",
-    "test:parity:live": "pnpm test:live"
+    "test:parity:live": "pnpm test:live",
+    "traceviz": "pnpm --filter @symphony/traceviz-server dev",
+    "traceviz:ui": "pnpm --filter @symphony/traceviz dev",
+    "traceviz:build": "pnpm --filter @symphony/traceviz build"
   },
   "devDependencies": {
     "@agentclientprotocol/sdk": "^0.21.0",
@@ -59,6 +62,8 @@
     "@symphony/runtime-events": "workspace:*",
     "@symphony/server": "workspace:*",
     "@symphony/ssh": "workspace:*",
+    "@symphony/traceviz-emitter": "workspace:*",
+    "@symphony/traceviz-server": "workspace:*",
     "@symphony/tui": "workspace:*",
     "@symphony/worker-host-pool": "workspace:*",
     "@symphony/workflow": "workspace:*",

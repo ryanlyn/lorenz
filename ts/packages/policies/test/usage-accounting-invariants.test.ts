@@ -92,36 +92,36 @@ const arbNearOverflowTotals = () =>
     secondsRunning: fc.nat(),
   });
 
-// INVARIANT: When token counters are updated sequentially, they SHALL never decrease (monotonic growth).
-
-test("monotonicity holds over N-step sequential chain for both entry and global", () => {
-  fc.assert(
-    fc.property(
-      arbUsageTotals(),
-      arbUsageTotals(),
-      arbUsageTotals(),
-      fc.array(arbPartialUsageUpdate(), { minLength: 3, maxLength: 12 }),
-      (entry, reported, global, updates) => {
-        let current = { entryTotals: entry, reportedTotals: reported, globalTotals: global };
-        for (const update of updates) {
-          const next = mergeMonotonicUsage({
-            entryTotals: current.entryTotals,
-            reportedTotals: current.reportedTotals,
-            globalTotals: current.globalTotals,
-            update,
-          });
-          assert.ok(next.entryTotals.inputTokens >= current.entryTotals.inputTokens);
-          assert.ok(next.entryTotals.outputTokens >= current.entryTotals.outputTokens);
-          assert.ok(next.entryTotals.totalTokens >= current.entryTotals.totalTokens);
-          assert.ok(next.globalTotals.inputTokens >= current.globalTotals.inputTokens);
-          assert.ok(next.globalTotals.outputTokens >= current.globalTotals.outputTokens);
-          assert.ok(next.globalTotals.totalTokens >= current.globalTotals.totalTokens);
-          current = next;
-        }
-      },
-    ),
-    { numRuns: 500 },
-  );
+describe("INVARIANT: When token counters are updated sequentially, they SHALL never decrease (monotonic growth)", () => {
+  test("monotonicity holds over N-step sequential chain for both entry and global", () => {
+    fc.assert(
+      fc.property(
+        arbUsageTotals(),
+        arbUsageTotals(),
+        arbUsageTotals(),
+        fc.array(arbPartialUsageUpdate(), { minLength: 3, maxLength: 12 }),
+        (entry, reported, global, updates) => {
+          let current = { entryTotals: entry, reportedTotals: reported, globalTotals: global };
+          for (const update of updates) {
+            const next = mergeMonotonicUsage({
+              entryTotals: current.entryTotals,
+              reportedTotals: current.reportedTotals,
+              globalTotals: current.globalTotals,
+              update,
+            });
+            assert.ok(next.entryTotals.inputTokens >= current.entryTotals.inputTokens);
+            assert.ok(next.entryTotals.outputTokens >= current.entryTotals.outputTokens);
+            assert.ok(next.entryTotals.totalTokens >= current.entryTotals.totalTokens);
+            assert.ok(next.globalTotals.inputTokens >= current.globalTotals.inputTokens);
+            assert.ok(next.globalTotals.outputTokens >= current.globalTotals.outputTokens);
+            assert.ok(next.globalTotals.totalTokens >= current.globalTotals.totalTokens);
+            current = next;
+          }
+        },
+      ),
+      { numRuns: 500 },
+    );
+  });
 });
 
 test("reported-totals sync with entry at every step in N-step chain", () => {
@@ -210,37 +210,37 @@ test("idempotency holds for each step in a chain (re-applying same update is no-
   );
 });
 
-// INVARIANT: When global aggregates are updated, growth SHALL be bounded by entry growth.
+describe("INVARIANT: When global aggregates are updated, growth SHALL be bounded by entry growth", () => {
+  test("global growth per step is bounded above by the new entry value", () => {
+    fc.assert(
+      fc.property(
+        arbUsageTotals(),
+        arbUsageTotals(),
+        arbUsageTotals(),
+        arbPartialUsageUpdate(),
+        (entry, reported, global, update) => {
+          const result = mergeMonotonicUsage({
+            entryTotals: entry,
+            reportedTotals: reported,
+            globalTotals: global,
+            update,
+          });
+          const globalInputGrowth = result.globalTotals.inputTokens - global.inputTokens;
+          const globalOutputGrowth = result.globalTotals.outputTokens - global.outputTokens;
+          const globalTotalGrowth = result.globalTotals.totalTokens - global.totalTokens;
 
-test("global growth per step is bounded above by the new entry value", () => {
-  fc.assert(
-    fc.property(
-      arbUsageTotals(),
-      arbUsageTotals(),
-      arbUsageTotals(),
-      arbPartialUsageUpdate(),
-      (entry, reported, global, update) => {
-        const result = mergeMonotonicUsage({
-          entryTotals: entry,
-          reportedTotals: reported,
-          globalTotals: global,
-          update,
-        });
-        const globalInputGrowth = result.globalTotals.inputTokens - global.inputTokens;
-        const globalOutputGrowth = result.globalTotals.outputTokens - global.outputTokens;
-        const globalTotalGrowth = result.globalTotals.totalTokens - global.totalTokens;
+          assert.ok(globalInputGrowth >= 0);
+          assert.ok(globalOutputGrowth >= 0);
+          assert.ok(globalTotalGrowth >= 0);
 
-        assert.ok(globalInputGrowth >= 0);
-        assert.ok(globalOutputGrowth >= 0);
-        assert.ok(globalTotalGrowth >= 0);
-
-        assert.ok(globalInputGrowth <= result.entryTotals.inputTokens);
-        assert.ok(globalOutputGrowth <= result.entryTotals.outputTokens);
-        assert.ok(globalTotalGrowth <= result.entryTotals.totalTokens);
-      },
-    ),
-    { numRuns: 500 },
-  );
+          assert.ok(globalInputGrowth <= result.entryTotals.inputTokens);
+          assert.ok(globalOutputGrowth <= result.entryTotals.outputTokens);
+          assert.ok(globalTotalGrowth <= result.entryTotals.totalTokens);
+        },
+      ),
+      { numRuns: 500 },
+    );
+  });
 });
 
 test("global growth is zero when entry does not exceed reported", () => {
@@ -317,43 +317,43 @@ test("entry result is at least as large as both entry and positive update values
   );
 });
 
-// INVARIANT: When extreme values are applied, token counts SHALL never become negative.
-
-test("all invariants hold with extreme value updates", () => {
-  fc.assert(
-    fc.property(
-      arbUsageTotals(),
-      arbUsageTotals(),
-      arbUsageTotals(),
-      arbExtremeUpdate(),
-      (entry, reported, global, update) => {
-        const result = mergeMonotonicUsage({
-          entryTotals: entry,
-          reportedTotals: reported,
-          globalTotals: global,
-          update,
-        });
-        assert.ok(result.entryTotals.inputTokens >= 0);
-        assert.ok(result.entryTotals.outputTokens >= 0);
-        assert.ok(result.entryTotals.totalTokens >= 0);
-        assert.ok(result.globalTotals.inputTokens >= 0);
-        assert.ok(result.globalTotals.outputTokens >= 0);
-        assert.ok(result.globalTotals.totalTokens >= 0);
-        assert.ok(result.entryTotals.inputTokens >= entry.inputTokens);
-        assert.ok(result.entryTotals.outputTokens >= entry.outputTokens);
-        assert.ok(result.entryTotals.totalTokens >= entry.totalTokens);
-        assert.ok(result.globalTotals.inputTokens >= global.inputTokens);
-        assert.ok(result.globalTotals.outputTokens >= global.outputTokens);
-        assert.ok(result.globalTotals.totalTokens >= global.totalTokens);
-        assert.equal(result.reportedTotals.inputTokens, result.entryTotals.inputTokens);
-        assert.equal(result.reportedTotals.outputTokens, result.entryTotals.outputTokens);
-        assert.equal(result.reportedTotals.totalTokens, result.entryTotals.totalTokens);
-        assert.equal(result.entryTotals.secondsRunning, entry.secondsRunning);
-        assert.equal(result.globalTotals.secondsRunning, global.secondsRunning);
-      },
-    ),
-    { numRuns: 500 },
-  );
+describe("INVARIANT: When extreme values are applied, token counts SHALL never become negative", () => {
+  test("all invariants hold with extreme value updates", () => {
+    fc.assert(
+      fc.property(
+        arbUsageTotals(),
+        arbUsageTotals(),
+        arbUsageTotals(),
+        arbExtremeUpdate(),
+        (entry, reported, global, update) => {
+          const result = mergeMonotonicUsage({
+            entryTotals: entry,
+            reportedTotals: reported,
+            globalTotals: global,
+            update,
+          });
+          assert.ok(result.entryTotals.inputTokens >= 0);
+          assert.ok(result.entryTotals.outputTokens >= 0);
+          assert.ok(result.entryTotals.totalTokens >= 0);
+          assert.ok(result.globalTotals.inputTokens >= 0);
+          assert.ok(result.globalTotals.outputTokens >= 0);
+          assert.ok(result.globalTotals.totalTokens >= 0);
+          assert.ok(result.entryTotals.inputTokens >= entry.inputTokens);
+          assert.ok(result.entryTotals.outputTokens >= entry.outputTokens);
+          assert.ok(result.entryTotals.totalTokens >= entry.totalTokens);
+          assert.ok(result.globalTotals.inputTokens >= global.inputTokens);
+          assert.ok(result.globalTotals.outputTokens >= global.outputTokens);
+          assert.ok(result.globalTotals.totalTokens >= global.totalTokens);
+          assert.equal(result.reportedTotals.inputTokens, result.entryTotals.inputTokens);
+          assert.equal(result.reportedTotals.outputTokens, result.entryTotals.outputTokens);
+          assert.equal(result.reportedTotals.totalTokens, result.entryTotals.totalTokens);
+          assert.equal(result.entryTotals.secondsRunning, entry.secondsRunning);
+          assert.equal(result.globalTotals.secondsRunning, global.secondsRunning);
+        },
+      ),
+      { numRuns: 500 },
+    );
+  });
 });
 
 test("heavily negative updates do not corrupt state", () => {
@@ -384,47 +384,47 @@ test("heavily negative updates do not corrupt state", () => {
   );
 });
 
-// INVARIANT: When values are near integer limits, the system SHALL not produce NaN or negative values.
-
-test("near-overflow globalTotals: function does not produce NaN or negative values", () => {
-  fc.assert(
-    fc.property(
-      arbUsageTotals(),
-      fc.record({
-        inputTokens: fc.nat({ max: 100 }),
-        outputTokens: fc.nat({ max: 100 }),
-        totalTokens: fc.nat({ max: 100 }),
-        secondsRunning: fc.nat(),
-      }),
-      arbNearOverflowTotals(),
-      fc.record({
-        inputTokens: fc.option(fc.integer({ min: 1000, max: 10_000_000 }), { nil: undefined }),
-        outputTokens: fc.option(fc.integer({ min: 1000, max: 10_000_000 }), { nil: undefined }),
-        totalTokens: fc.option(fc.integer({ min: 1000, max: 10_000_000 }), { nil: undefined }),
-      }),
-      (entry, reported, global, update) => {
-        const result = mergeMonotonicUsage({
-          entryTotals: entry,
-          reportedTotals: reported,
-          globalTotals: global,
-          update,
-        });
-        assert.ok(!Number.isNaN(result.globalTotals.inputTokens));
-        assert.ok(!Number.isNaN(result.globalTotals.outputTokens));
-        assert.ok(!Number.isNaN(result.globalTotals.totalTokens));
-        assert.ok(result.globalTotals.inputTokens >= 0);
-        assert.ok(result.globalTotals.outputTokens >= 0);
-        assert.ok(result.globalTotals.totalTokens >= 0);
-        assert.ok(Number.isFinite(result.globalTotals.inputTokens));
-        assert.ok(Number.isFinite(result.globalTotals.outputTokens));
-        assert.ok(Number.isFinite(result.globalTotals.totalTokens));
-        assert.ok(result.globalTotals.inputTokens >= global.inputTokens);
-        assert.ok(result.globalTotals.outputTokens >= global.outputTokens);
-        assert.ok(result.globalTotals.totalTokens >= global.totalTokens);
-      },
-    ),
-    { numRuns: 500 },
-  );
+describe("INVARIANT: When values are near integer limits, the system SHALL not produce NaN or negative values", () => {
+  test("near-overflow globalTotals: function does not produce NaN or negative values", () => {
+    fc.assert(
+      fc.property(
+        arbUsageTotals(),
+        fc.record({
+          inputTokens: fc.nat({ max: 100 }),
+          outputTokens: fc.nat({ max: 100 }),
+          totalTokens: fc.nat({ max: 100 }),
+          secondsRunning: fc.nat(),
+        }),
+        arbNearOverflowTotals(),
+        fc.record({
+          inputTokens: fc.option(fc.integer({ min: 1000, max: 10_000_000 }), { nil: undefined }),
+          outputTokens: fc.option(fc.integer({ min: 1000, max: 10_000_000 }), { nil: undefined }),
+          totalTokens: fc.option(fc.integer({ min: 1000, max: 10_000_000 }), { nil: undefined }),
+        }),
+        (entry, reported, global, update) => {
+          const result = mergeMonotonicUsage({
+            entryTotals: entry,
+            reportedTotals: reported,
+            globalTotals: global,
+            update,
+          });
+          assert.ok(!Number.isNaN(result.globalTotals.inputTokens));
+          assert.ok(!Number.isNaN(result.globalTotals.outputTokens));
+          assert.ok(!Number.isNaN(result.globalTotals.totalTokens));
+          assert.ok(result.globalTotals.inputTokens >= 0);
+          assert.ok(result.globalTotals.outputTokens >= 0);
+          assert.ok(result.globalTotals.totalTokens >= 0);
+          assert.ok(Number.isFinite(result.globalTotals.inputTokens));
+          assert.ok(Number.isFinite(result.globalTotals.outputTokens));
+          assert.ok(Number.isFinite(result.globalTotals.totalTokens));
+          assert.ok(result.globalTotals.inputTokens >= global.inputTokens);
+          assert.ok(result.globalTotals.outputTokens >= global.outputTokens);
+          assert.ok(result.globalTotals.totalTokens >= global.totalTokens);
+        },
+      ),
+      { numRuns: 500 },
+    );
+  });
 });
 
 test("near-overflow: entry and reported remain valid when globalTotals near limit", () => {
@@ -456,34 +456,37 @@ test("near-overflow: entry and reported remain valid when globalTotals near limi
   );
 });
 
-// INVARIANT: When no update fields are provided, entry and global totals SHALL remain unchanged.
-
-test("empty update (all undefined) preserves entry and global unchanged", () => {
-  fc.assert(
-    fc.property(arbUsageTotals(), arbUsageTotals(), arbUsageTotals(), (entry, reported, global) => {
-      const update = {
-        inputTokens: undefined,
-        outputTokens: undefined,
-        totalTokens: undefined,
-      };
-      const result = mergeMonotonicUsage({
-        entryTotals: entry,
-        reportedTotals: reported,
-        globalTotals: global,
-        update,
-      });
-      assert.equal(result.entryTotals.inputTokens, entry.inputTokens);
-      assert.equal(result.entryTotals.outputTokens, entry.outputTokens);
-      assert.equal(result.entryTotals.totalTokens, entry.totalTokens);
-    }),
-    { numRuns: 500 },
-  );
+describe("INVARIANT: When no update fields are provided, entry and global totals SHALL remain unchanged", () => {
+  test("empty update (all undefined) preserves entry and global unchanged", () => {
+    fc.assert(
+      fc.property(
+        arbUsageTotals(),
+        arbUsageTotals(),
+        arbUsageTotals(),
+        (entry, reported, global) => {
+          const update = {
+            inputTokens: undefined,
+            outputTokens: undefined,
+            totalTokens: undefined,
+          };
+          const result = mergeMonotonicUsage({
+            entryTotals: entry,
+            reportedTotals: reported,
+            globalTotals: global,
+            update,
+          });
+          assert.equal(result.entryTotals.inputTokens, entry.inputTokens);
+          assert.equal(result.entryTotals.outputTokens, entry.outputTokens);
+          assert.equal(result.entryTotals.totalTokens, entry.totalTokens);
+        },
+      ),
+      { numRuns: 500 },
+    );
+  });
 });
 
-// INVARIANT: Token counts SHALL never become negative / NaN.
-
-describe("NaN in update fields", () => {
-  test("NaN in update.inputTokens does not corrupt entry, reported, or global totals (S-120)", () => {
+describe("INVARIANT: Token counts SHALL never become negative / NaN", () => {
+  test("NaN in update.inputTokens does not corrupt entry, reported, or global totals", () => {
     fc.assert(
       fc.property(
         arbUsageTotals(),
@@ -507,7 +510,7 @@ describe("NaN in update fields", () => {
     );
   });
 
-  test("NaN in update.totalTokens does not corrupt totals while other fields update correctly (S-121)", () => {
+  test("NaN in update.totalTokens does not corrupt totals while other fields update correctly", () => {
     fc.assert(
       fc.property(
         arbUsageTotals(),
@@ -531,7 +534,7 @@ describe("NaN in update fields", () => {
     );
   });
 
-  test("all NaN update fields do not corrupt any totals (S-186)", () => {
+  test("all NaN update fields do not corrupt any totals", () => {
     fc.assert(
       fc.property(
         arbUsageTotals(),
@@ -631,36 +634,36 @@ describe("NaN in update fields", () => {
   });
 });
 
-// INVARIANT: When an update value is lower than the current entry, the entry SHALL not decrease.
-
-test("update with lower value than entry does NOT decrease entry", () => {
-  fc.assert(
-    fc.property(
-      fc.record({
-        inputTokens: fc.integer({ min: 100, max: 10_000_000 }),
-        outputTokens: fc.integer({ min: 100, max: 10_000_000 }),
-        totalTokens: fc.integer({ min: 100, max: 10_000_000 }),
-        secondsRunning: fc.nat(),
-      }),
-      arbUsageTotals(),
-      arbUsageTotals(),
-      (entry, reported, global) => {
-        const update = {
-          inputTokens: entry.inputTokens - 1,
-          outputTokens: entry.outputTokens - 1,
-          totalTokens: entry.totalTokens - 1,
-        };
-        const result = mergeMonotonicUsage({
-          entryTotals: entry,
-          reportedTotals: reported,
-          globalTotals: global,
-          update,
-        });
-        assert.ok(result.entryTotals.inputTokens >= entry.inputTokens);
-        assert.ok(result.entryTotals.outputTokens >= entry.outputTokens);
-        assert.ok(result.entryTotals.totalTokens >= entry.totalTokens);
-      },
-    ),
-    { numRuns: 500 },
-  );
+describe("INVARIANT: When an update value is lower than the current entry, the entry SHALL not decrease", () => {
+  test("update with lower value than entry does NOT decrease entry", () => {
+    fc.assert(
+      fc.property(
+        fc.record({
+          inputTokens: fc.integer({ min: 100, max: 10_000_000 }),
+          outputTokens: fc.integer({ min: 100, max: 10_000_000 }),
+          totalTokens: fc.integer({ min: 100, max: 10_000_000 }),
+          secondsRunning: fc.nat(),
+        }),
+        arbUsageTotals(),
+        arbUsageTotals(),
+        (entry, reported, global) => {
+          const update = {
+            inputTokens: entry.inputTokens - 1,
+            outputTokens: entry.outputTokens - 1,
+            totalTokens: entry.totalTokens - 1,
+          };
+          const result = mergeMonotonicUsage({
+            entryTotals: entry,
+            reportedTotals: reported,
+            globalTotals: global,
+            update,
+          });
+          assert.ok(result.entryTotals.inputTokens >= entry.inputTokens);
+          assert.ok(result.entryTotals.outputTokens >= entry.outputTokens);
+          assert.ok(result.entryTotals.totalTokens >= entry.totalTokens);
+        },
+      ),
+      { numRuns: 500 },
+    );
+  });
 });

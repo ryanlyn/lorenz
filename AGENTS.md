@@ -14,4 +14,5 @@
 ## Typescript
 
 - When working on the ts/ folder, run `mise run tidy` for linting and formatting autofix
-- When working on the ts/ folder, run `mise run check` to run lint, build, types and tests
+- When working on the ts/ folder, run `mise run check` to run lint, build, types and tests (this rebuilds automatically)
+- When running tests directly with vitest, make sure you rebuild first

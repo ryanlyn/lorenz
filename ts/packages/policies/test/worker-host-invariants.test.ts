@@ -1,4 +1,4 @@
-import { test } from "vitest";
+import { test, describe } from "vitest";
 import fc from "fast-check";
 import { selectLeastLoadedHost } from "@symphony/cli";
 
@@ -61,41 +61,43 @@ const arbRunningCountsFor = (hosts: string[]) =>
     return map;
   });
 
-// INVARIANT: When a host is selected, it SHALL be from the configured list or "no host available" SHALL be returned.
-test("strengthened: with diverse running counts, selected host is always from configured list", () => {
-  fc.assert(
-    fc.property(
-      arbNonEmptyHosts().chain((hosts) =>
-        fc.tuple(fc.constant(hosts), arbRunningCountsFor(hosts), arbCap()),
-      ),
-      ([hosts, runningCounts, cap]) => {
-        const result = selectLeastLoadedHost({ hosts, runningCounts, cap });
+describe('INVARIANT: When a host is selected, it SHALL be from the configured list or "no host available" SHALL be returned.', () => {
+  test("strengthened: with diverse running counts, selected host is always from configured list", () => {
+    fc.assert(
+      fc.property(
+        arbNonEmptyHosts().chain((hosts) =>
+          fc.tuple(fc.constant(hosts), arbRunningCountsFor(hosts), arbCap()),
+        ),
+        ([hosts, runningCounts, cap]) => {
+          const result = selectLeastLoadedHost({ hosts, runningCounts, cap });
 
-        if (result === null || result === undefined) return;
-        assert.ok(hosts.includes(result));
-      },
-    ),
-    { numRuns: 200 },
-  );
+          if (result === null || result === undefined) return;
+          assert.ok(hosts.includes(result));
+        },
+      ),
+      { numRuns: 200 },
+    );
+  });
 });
 
-// INVARIANT: When hosts are evaluated, only hosts with load strictly below the cap SHALL be considered.
-test("selected host always has load strictly below the cap", () => {
-  fc.assert(
-    fc.property(
-      arbNonEmptyHosts().chain((hosts) =>
-        fc.tuple(fc.constant(hosts), arbRunningCountsFor(hosts), arbCap()),
-      ),
-      ([hosts, runningCounts, cap]) => {
-        const result = selectLeastLoadedHost({ hosts, runningCounts, cap });
+describe("INVARIANT: When hosts are evaluated, only hosts with load strictly below the cap SHALL be considered.", () => {
+  test("selected host always has load strictly below the cap", () => {
+    fc.assert(
+      fc.property(
+        arbNonEmptyHosts().chain((hosts) =>
+          fc.tuple(fc.constant(hosts), arbRunningCountsFor(hosts), arbCap()),
+        ),
+        ([hosts, runningCounts, cap]) => {
+          const result = selectLeastLoadedHost({ hosts, runningCounts, cap });
 
-        if (typeof result !== "string") return;
-        const count = runningCounts.get(result) ?? 0;
-        assert.ok(count < cap);
-      },
-    ),
-    { numRuns: 200 },
-  );
+          if (typeof result !== "string") return;
+          const count = runningCounts.get(result) ?? 0;
+          assert.ok(count < cap);
+        },
+      ),
+      { numRuns: 200 },
+    );
+  });
 });
 
 test("negative: when all hosts are at or above cap, undefined is returned", () => {
@@ -113,31 +115,32 @@ test("negative: when all hosts are at or above cap, undefined is returned", () =
   );
 });
 
-// INVARIANT: When multiple hosts are below the cap, the host with the lowest load SHALL be selected.
-test("selected host has the lowest load among all hosts below cap", () => {
-  fc.assert(
-    fc.property(
-      arbUniqueHosts().chain((hosts) =>
-        fc.tuple(fc.constant(hosts), arbRunningCountsFor(hosts), arbCap()),
-      ),
-      ([hosts, runningCounts, cap]) => {
-        const result = selectLeastLoadedHost({ hosts, runningCounts, cap });
+describe("INVARIANT: When multiple hosts are below the cap, the host with the lowest load SHALL be selected.", () => {
+  test("selected host has the lowest load among all hosts below cap", () => {
+    fc.assert(
+      fc.property(
+        arbUniqueHosts().chain((hosts) =>
+          fc.tuple(fc.constant(hosts), arbRunningCountsFor(hosts), arbCap()),
+        ),
+        ([hosts, runningCounts, cap]) => {
+          const result = selectLeastLoadedHost({ hosts, runningCounts, cap });
 
-        if (typeof result !== "string") return;
+          if (typeof result !== "string") return;
 
-        const selectedCount = runningCounts.get(result) ?? 0;
+          const selectedCount = runningCounts.get(result) ?? 0;
 
-        // No other host in the list should have a count that is both below cap and strictly less than selectedCount
-        for (const host of hosts) {
-          const count = runningCounts.get(host) ?? 0;
-          if (count < cap) {
-            assert.ok(count >= selectedCount);
+          // No other host in the list should have a count that is both below cap and strictly less than selectedCount
+          for (const host of hosts) {
+            const count = runningCounts.get(host) ?? 0;
+            if (count < cap) {
+              assert.ok(count >= selectedCount);
+            }
           }
-        }
-      },
-    ),
-    { numRuns: 200 },
-  );
+        },
+      ),
+      { numRuns: 200 },
+    );
+  });
 });
 
 test("forced scenario: with explicit distinct loads, lowest-loaded host is picked", () => {
@@ -186,19 +189,20 @@ test("with duplicates in host list: still picks lowest-loaded", () => {
   );
 });
 
-// INVARIANT: When the host list is empty, "no host available" SHALL be returned.
-test("empty host list returns null (no host available)", () => {
-  fc.assert(
-    fc.property(arbCap(), (cap) => {
-      const result = selectLeastLoadedHost({
-        hosts: [],
-        runningCounts: new Map(),
-        cap,
-      });
-      assert.equal(result, null);
-    }),
-    { numRuns: 200 },
-  );
+describe('INVARIANT: When the host list is empty, "no host available" SHALL be returned.', () => {
+  test("empty host list returns null (no host available)", () => {
+    fc.assert(
+      fc.property(arbCap(), (cap) => {
+        const result = selectLeastLoadedHost({
+          hosts: [],
+          runningCounts: new Map(),
+          cap,
+        });
+        assert.equal(result, null);
+      }),
+      { numRuns: 200 },
+    );
+  });
 });
 
 test("with non-empty runningCounts: empty host list still returns null", () => {
@@ -221,103 +225,110 @@ test("with non-empty runningCounts: empty host list still returns null", () => {
   );
 });
 
-// INVARIANT: When at least one host is below the cap, the system SHALL always select a host.
-test("if at least one host is below cap, a host string is returned (no false starvation)", () => {
-  fc.assert(
-    fc.property(
-      fc.uniqueArray(arbHostName(), { minLength: 1, maxLength: 12 }),
-      fc.integer({ min: 1, max: 100 }),
-      (hosts, cap) => {
-        // Construct running counts ensuring at least one host is strictly below cap
-        const runningCounts = new Map<string, number>();
-        // Force the first host to have count 0 (below any cap >= 1)
-        runningCounts.set(hosts[0]!, 0);
-        for (let i = 1; i < hosts.length; i++) {
-          runningCounts.set(hosts[i]!, cap + 10); // others above cap
-        }
+describe("INVARIANT: When at least one host is below the cap, the system SHALL always select a host.", () => {
+  test("if at least one host is below cap, a host string is returned (no false starvation)", () => {
+    fc.assert(
+      fc.property(
+        fc.uniqueArray(arbHostName(), { minLength: 1, maxLength: 12 }),
+        fc.integer({ min: 1, max: 100 }),
+        (hosts, cap) => {
+          // Construct running counts ensuring at least one host is strictly below cap
+          const runningCounts = new Map<string, number>();
+          // Force the first host to have count 0 (below any cap >= 1)
+          runningCounts.set(hosts[0]!, 0);
+          for (let i = 1; i < hosts.length; i++) {
+            runningCounts.set(hosts[i]!, cap + 10); // others above cap
+          }
 
-        const result = selectLeastLoadedHost({ hosts, runningCounts, cap });
-        assert.equal(typeof result, "string");
-      },
-    ),
-    { numRuns: 200 },
-  );
-});
-
-// INVARIANT: When cap is zero, no host SHALL be selectable.
-test("cap of 0 means no host can be selected (undefined for non-empty lists)", () => {
-  fc.assert(
-    fc.property(
-      arbNonEmptyHosts().chain((hosts) => fc.tuple(fc.constant(hosts), arbRunningCountsFor(hosts))),
-      ([hosts, runningCounts]) => {
-        const result = selectLeastLoadedHost({ hosts, runningCounts, cap: 0 });
-        // No non-negative count is < 0, so no host qualifies
-        assert.equal(result, undefined);
-      },
-    ),
-    { numRuns: 200 },
-  );
-});
-
-// INVARIANT: When a host is absent from the running counts, the system SHALL treat it as having count zero.
-test("hosts absent from runningCounts are treated as count 0", () => {
-  fc.assert(
-    fc.property(
-      fc.uniqueArray(arbHostName(), { minLength: 2, maxLength: 8 }),
-      fc.integer({ min: 1, max: 100 }),
-      (hosts, cap) => {
-        // Only set counts for hosts after the first one, leaving first host absent from map
-        const runningCounts = new Map<string, number>();
-        for (let i = 1; i < hosts.length; i++) {
-          runningCounts.set(hosts[i]!, cap); // at cap, not eligible
-        }
-        // hosts[0] is not in the map, so it should be treated as 0, which is < cap
-        const result = selectLeastLoadedHost({ hosts, runningCounts, cap });
-        assert.equal(result, hosts[0]);
-      },
-    ),
-    { numRuns: 200 },
-  );
-});
-
-// INVARIANT: When the same inputs are provided, the system SHALL produce the same result.
-test("selectLeastLoadedHost is deterministic", () => {
-  fc.assert(
-    fc.property(
-      arbUniqueHosts().chain((hosts) =>
-        fc.tuple(fc.constant(hosts), arbRunningCountsFor(hosts), arbCap()),
+          const result = selectLeastLoadedHost({ hosts, runningCounts, cap });
+          assert.equal(typeof result, "string");
+        },
       ),
-      ([hosts, runningCounts, cap]) => {
-        const result1 = selectLeastLoadedHost({ hosts, runningCounts, cap });
-        const result2 = selectLeastLoadedHost({ hosts, runningCounts, cap });
-        assert.equal(result1, result2);
-      },
-    ),
-    { numRuns: 200 },
-  );
+      { numRuns: 200 },
+    );
+  });
 });
 
-// INVARIANT: When exactly one host is below cap, that host SHALL be selected.
-test("single eligible host is always selected", () => {
-  fc.assert(
-    fc.property(
-      fc.uniqueArray(arbHostName(), { minLength: 1, maxLength: 8 }),
-      fc.integer({ min: 1, max: 100 }),
-      fc.integer({ min: 0, max: 99 }),
-      (hosts, cap, eligibleIdx) => {
-        const idx = eligibleIdx % hosts.length;
-        const runningCounts = new Map<string, number>();
-        for (let i = 0; i < hosts.length; i++) {
-          if (i === idx) {
-            runningCounts.set(hosts[i]!, 0); // below cap
-          } else {
+describe("INVARIANT: When cap is zero, no host SHALL be selectable.", () => {
+  test("cap of 0 means no host can be selected (undefined for non-empty lists)", () => {
+    fc.assert(
+      fc.property(
+        arbNonEmptyHosts().chain((hosts) =>
+          fc.tuple(fc.constant(hosts), arbRunningCountsFor(hosts)),
+        ),
+        ([hosts, runningCounts]) => {
+          const result = selectLeastLoadedHost({ hosts, runningCounts, cap: 0 });
+          // No non-negative count is < 0, so no host qualifies
+          assert.equal(result, undefined);
+        },
+      ),
+      { numRuns: 200 },
+    );
+  });
+});
+
+describe("INVARIANT: When a host is absent from the running counts, the system SHALL treat it as having count zero.", () => {
+  test("hosts absent from runningCounts are treated as count 0", () => {
+    fc.assert(
+      fc.property(
+        fc.uniqueArray(arbHostName(), { minLength: 2, maxLength: 8 }),
+        fc.integer({ min: 1, max: 100 }),
+        (hosts, cap) => {
+          // Only set counts for hosts after the first one, leaving first host absent from map
+          const runningCounts = new Map<string, number>();
+          for (let i = 1; i < hosts.length; i++) {
             runningCounts.set(hosts[i]!, cap); // at cap, not eligible
           }
-        }
-        const result = selectLeastLoadedHost({ hosts, runningCounts, cap });
-        assert.equal(result, hosts[idx]);
-      },
-    ),
-    { numRuns: 200 },
-  );
+          // hosts[0] is not in the map, so it should be treated as 0, which is < cap
+          const result = selectLeastLoadedHost({ hosts, runningCounts, cap });
+          assert.equal(result, hosts[0]);
+        },
+      ),
+      { numRuns: 200 },
+    );
+  });
+});
+
+describe("INVARIANT: When the same inputs are provided, the system SHALL produce the same result.", () => {
+  test("selectLeastLoadedHost is deterministic", () => {
+    fc.assert(
+      fc.property(
+        arbUniqueHosts().chain((hosts) =>
+          fc.tuple(fc.constant(hosts), arbRunningCountsFor(hosts), arbCap()),
+        ),
+        ([hosts, runningCounts, cap]) => {
+          const result1 = selectLeastLoadedHost({ hosts, runningCounts, cap });
+          const result2 = selectLeastLoadedHost({ hosts, runningCounts, cap });
+          assert.equal(result1, result2);
+        },
+      ),
+      { numRuns: 200 },
+    );
+  });
+});
+
+describe("INVARIANT: When exactly one host is below cap, that host SHALL be selected.", () => {
+  test("single eligible host is always selected", () => {
+    fc.assert(
+      fc.property(
+        fc.uniqueArray(arbHostName(), { minLength: 1, maxLength: 8 }),
+        fc.integer({ min: 1, max: 100 }),
+        fc.integer({ min: 0, max: 99 }),
+        (hosts, cap, eligibleIdx) => {
+          const idx = eligibleIdx % hosts.length;
+          const runningCounts = new Map<string, number>();
+          for (let i = 0; i < hosts.length; i++) {
+            if (i === idx) {
+              runningCounts.set(hosts[i]!, 0); // below cap
+            } else {
+              runningCounts.set(hosts[i]!, cap); // at cap, not eligible
+            }
+          }
+          const result = selectLeastLoadedHost({ hosts, runningCounts, cap });
+          assert.equal(result, hosts[idx]);
+        },
+      ),
+      { numRuns: 200 },
+    );
+  });
 });

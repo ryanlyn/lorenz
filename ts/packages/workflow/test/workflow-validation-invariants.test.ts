@@ -1,4 +1,4 @@
-import { test } from "vitest";
+import { test, describe } from "vitest";
 import fc from "fast-check";
 
 import { assert } from "../../../test/assert.js";
@@ -77,30 +77,30 @@ const yamlKeyArb = fc
   )
   .map(([first, rest]) => first + rest.join(""));
 
-// INVARIANT: When YAML front matter is not a map, the system SHALL produce a typed error.
-
-test("parseWorkflowContent SHALL produce a typed error when YAML front matter is not a map", () => {
-  fc.assert(
-    fc.property(guaranteedNonMapYamlArb, (yamlValue) => {
-      const content = wrapFrontMatter(yamlValue, "body");
-      let threw = false;
-      let errorMessage = "";
-      try {
-        parseWorkflowContent(content);
-      } catch (err: unknown) {
-        threw = true;
-        errorMessage = err instanceof Error ? err.message : String(err);
-      }
-      // Must throw for guaranteed non-map values
-      assert.ok(threw, `Expected parseWorkflowContent to throw for input: ${yamlValue}`);
-      // Error must be a typed workflow error
-      const isTypedError =
-        errorMessage.includes("workflow_front_matter_not_a_map") ||
-        errorMessage.includes("workflow_parse_error");
-      assert.ok(isTypedError, `Expected typed error but got: ${errorMessage}`);
-    }),
-    { numRuns: 1000 },
-  );
+describe("INVARIANT: When YAML front matter is not a map, the system SHALL produce a typed error.", () => {
+  test("parseWorkflowContent SHALL produce a typed error when YAML front matter is not a map", () => {
+    fc.assert(
+      fc.property(guaranteedNonMapYamlArb, (yamlValue) => {
+        const content = wrapFrontMatter(yamlValue, "body");
+        let threw = false;
+        let errorMessage = "";
+        try {
+          parseWorkflowContent(content);
+        } catch (err: unknown) {
+          threw = true;
+          errorMessage = err instanceof Error ? err.message : String(err);
+        }
+        // Must throw for guaranteed non-map values
+        assert.ok(threw, `Expected parseWorkflowContent to throw for input: ${yamlValue}`);
+        // Error must be a typed workflow error
+        const isTypedError =
+          errorMessage.includes("workflow_front_matter_not_a_map") ||
+          errorMessage.includes("workflow_parse_error");
+        assert.ok(isTypedError, `Expected typed error but got: ${errorMessage}`);
+      }),
+      { numRuns: 1000 },
+    );
+  });
 });
 
 test("valid map front matter SHALL parse successfully and return config as a plain object", () => {

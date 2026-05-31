@@ -742,31 +742,28 @@ describe("Runtime Integration (sandbox scenarios)", () => {
     // Fast-completing runs bypass global concurrency cap via microtask race
     // Bug: the dispatch loop has await points where fast-completing runs (0ms latency)
     // free their slot via microtask before the next claim(), bypassing the cap.
-    test.fails(
-      "BUG: global concurrency cap not bypassable by fast-completing runs",
-      async () => {
-        const result = await runScenario({
-          issues: [
-            makeIssue("a", "A-1", { state: "In Progress", stateType: "started", priority: 1 }),
-            makeIssue("b", "B-1", { state: "In Progress", stateType: "started", priority: 2 }),
-            makeIssue("c", "C-1", { state: "In Progress", stateType: "started", priority: 3 }),
-          ],
-          settingsOverrides: { agent: { maxConcurrentAgents: 1 } },
-          runnerConfig: {
-            defaultBehavior: { shouldSucceed: true, turnCount: 1, latencyPerTurnMs: 0 },
-          },
-          pollTicks: 1,
-        });
+    test.fails("BUG: global concurrency cap not bypassable by fast-completing runs", async () => {
+      const result = await runScenario({
+        issues: [
+          makeIssue("a", "A-1", { state: "In Progress", stateType: "started", priority: 1 }),
+          makeIssue("b", "B-1", { state: "In Progress", stateType: "started", priority: 2 }),
+          makeIssue("c", "C-1", { state: "In Progress", stateType: "started", priority: 3 }),
+        ],
+        settingsOverrides: { agent: { maxConcurrentAgents: 1 } },
+        runnerConfig: {
+          defaultBehavior: { shouldSucceed: true, turnCount: 1, latencyPerTurnMs: 0 },
+        },
+        pollTicks: 1,
+      });
 
-        // With maxConcurrentAgents=1 and instant completion (0ms), only A-1 should
-        // be dispatched in a single tick. The bug allows all 3 to dispatch.
-        const startedMessages = result.events
-          .filter((e) => e.type === "run_started")
-          .map((e) => e.message);
-        expect(startedMessages.some((m) => m.includes("B-1"))).toBe(false);
-        expect(startedMessages.some((m) => m.includes("C-1"))).toBe(false);
-      },
-    );
+      // With maxConcurrentAgents=1 and instant completion (0ms), only A-1 should
+      // be dispatched in a single tick. The bug allows all 3 to dispatch.
+      const startedMessages = result.events
+        .filter((e) => e.type === "run_started")
+        .map((e) => e.message);
+      expect(startedMessages.some((m) => m.includes("B-1"))).toBe(false);
+      expect(startedMessages.some((m) => m.includes("C-1"))).toBe(false);
+    });
 
     // Per-host SSH capacity cap bypassed by fast-completing runs
     // Bug: same microtask-ordering issue but targeting per-host capacity.
