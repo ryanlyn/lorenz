@@ -443,8 +443,8 @@ describe("INVARIANT: When an unstarted issue has a non-terminal blocker, it SHAL
   });
 });
 
-describe("INVARIANT: When a started issue has open blockers, it SHALL be blocked (blockers on started issues abort).", () => {
-  test("started issue with open blockers SHALL be blocked", () => {
+describe("INVARIANT: When a started issue has open blockers, blockers SHALL NOT gate dispatch.", () => {
+  test("started issue with open blockers SHALL remain eligible", () => {
     fc.assert(
       fc.property(
         fc.array(
@@ -463,15 +463,15 @@ describe("INVARIANT: When a started issue has open blockers, it SHALL be blocked
           });
           const settings = makeSettings({ activeStates: ["Todo", "In Progress"] });
           const state = { runningCount: 0, claimedSlots: new Set<string>() };
-          assert.equal(issueHasOpenBlockers(issue, settings), true);
-          assert.equal(shouldDispatchIssue(issue, settings, state), false);
+          assert.equal(issueHasOpenBlockers(issue, settings), false);
+          assert.equal(shouldDispatchIssue(issue, settings, state), true);
         },
       ),
       { numRuns: 100 },
     );
   });
 
-  test("started issue with many open blockers SHALL be blocked", () => {
+  test("started issue with many open blockers SHALL remain eligible", () => {
     fc.assert(
       fc.property(fc.integer({ min: 1, max: 10 }), (numBlockers) => {
         const blockers = Array.from({ length: numBlockers }, (_, i) => ({
@@ -486,8 +486,8 @@ describe("INVARIANT: When a started issue has open blockers, it SHALL be blocked
         });
         const settings = makeSettings({ activeStates: ["Todo", "In Progress"] });
         const state = { runningCount: 0, claimedSlots: new Set<string>() };
-        assert.equal(issueHasOpenBlockers(issue, settings), true);
-        assert.equal(shouldDispatchIssue(issue, settings, state), false);
+        assert.equal(issueHasOpenBlockers(issue, settings), false);
+        assert.equal(shouldDispatchIssue(issue, settings, state), true);
       }),
       { numRuns: 50 },
     );

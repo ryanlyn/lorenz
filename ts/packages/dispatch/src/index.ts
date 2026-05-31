@@ -23,6 +23,8 @@ export function issueIsActive(issue: Issue, settings: Settings): boolean {
 }
 
 export function issueHasOpenBlockers(issue: Issue, settings: Settings): boolean {
+  if (issue.stateType !== "unstarted") return false;
+
   return issue.blockers.some(
     (blocker) => !isTerminalState(blocker.state, settings.tracker.terminalStates),
   );

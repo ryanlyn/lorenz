@@ -10,8 +10,8 @@ function makeSettings(overrides: Record<string, unknown> = {}) {
   });
 }
 
-describe("blockers abort running workers regardless of stateType", () => {
-  test("stateType='started' with open blockers IS blocked", () => {
+describe("blockers gate only unstarted issues", () => {
+  test("stateType='started' with open blockers is not blocked", () => {
     const settings = makeSettings();
     const issue = normalizeIssue({
       id: "i1",
@@ -20,10 +20,10 @@ describe("blockers abort running workers regardless of stateType", () => {
       state: { name: "Todo", type: "started" },
       blockers: [{ state: "In Progress" }],
     });
-    assert.equal(issueHasOpenBlockers(issue, settings), true);
+    assert.equal(issueHasOpenBlockers(issue, settings), false);
   });
 
-  test("stateType='started' with state='todo' (lowercase) with open blockers IS blocked", () => {
+  test("stateType='started' with state='todo' and open blockers is not blocked", () => {
     const settings = makeSettings();
     const issue = normalizeIssue({
       id: "i1",
@@ -32,10 +32,10 @@ describe("blockers abort running workers regardless of stateType", () => {
       state: { name: "todo", type: "started" },
       blockers: [{ state: "In Progress" }],
     });
-    assert.equal(issueHasOpenBlockers(issue, settings), true);
+    assert.equal(issueHasOpenBlockers(issue, settings), false);
   });
 
-  test("stateType='started' with state=' Todo ' (whitespace) with open blockers IS blocked", () => {
+  test("stateType='started' with state=' Todo ' and open blockers is not blocked", () => {
     const settings = makeSettings();
     const issue = normalizeIssue({
       id: "i1",
@@ -44,10 +44,22 @@ describe("blockers abort running workers regardless of stateType", () => {
       state: { name: " Todo ", type: "started" },
       blockers: [{ state: "In Progress" }],
     });
+    assert.equal(issueHasOpenBlockers(issue, settings), false);
+  });
+
+  test("stateType='unstarted' with open blockers is blocked", () => {
+    const settings = makeSettings();
+    const issue = normalizeIssue({
+      id: "i1",
+      identifier: "MT-1",
+      title: "Title",
+      state: { name: "Todo", type: "unstarted" },
+      blockers: [{ state: "In Progress" }],
+    });
     assert.equal(issueHasOpenBlockers(issue, settings), true);
   });
 
-  test("stateType='started' with all-terminal blockers is NOT blocked", () => {
+  test("stateType='started' with all-terminal blockers is not blocked", () => {
     const settings = makeSettings();
     const issue = normalizeIssue({
       id: "i1",
