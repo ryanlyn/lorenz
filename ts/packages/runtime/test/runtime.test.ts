@@ -7,14 +7,12 @@ import {
   normalizeIssue,
   Orchestrator,
   parseConfig,
-  readResumeState,
   runtimeAdapters,
-  writeResumeState,
 } from "@symphony/cli";
 import type { Issue, RunResult, SymphonyRuntimeOptions, WorkflowDefinition } from "@symphony/cli";
 
 import { assert } from "../../../test/assert.js";
-import { initGitRepo, tempDir, writeExecutable } from "../../../test/helpers.js";
+import { tempDir, writeExecutable } from "../../../test/helpers.js";
 
 import { SymphonyRuntime } from "@symphony/runtime";
 
@@ -409,15 +407,7 @@ test("runtime reconciles stalled runs from the orchestrator poll loop", async ()
   const workflow = workflowFixture(root);
   workflow.settings.codex.stallTimeoutMs = 50;
   const workspace = await createWorkspaceForIssue(workflow.settings, issue);
-  await initGitRepo(workspace);
-  await writeResumeState(workspace, {
-    agentKind: "codex",
-    resumeId: "stale-stalled-resume",
-    issueId: issue.id,
-    issueIdentifier: issue.identifier,
-    issueState: issue.state,
-    workspacePath: workspace,
-  });
+  const deletedResumeStates: string[] = [];
   const orchestrator = new Orchestrator(workflow.settings);
   let aborted = false;
   const runtime = new SymphonyRuntime(
@@ -427,6 +417,9 @@ test("runtime reconciles stalled runs from the orchestrator poll loop", async ()
       client: {
         fetchCandidateIssues: async () => [issue],
         fetchIssuesByIds: async () => [issue],
+      },
+      deleteResumeState: async (workspacePath) => {
+        deletedResumeStates.push(workspacePath);
       },
       runner: async ({ abortSignal, onUpdate }) => {
         onUpdate?.({ type: "workspace_prepared", workspacePath: workspace });
@@ -458,7 +451,7 @@ test("runtime reconciles stalled runs from the orchestrator poll loop", async ()
     assert.equal(snapshot.running.length, 0);
     assert.equal(snapshot.runHistory[0]?.outcome, "stalled");
     assert.equal(snapshot.retrying[0]?.attempt, 1);
-    assert.equal((await readResumeState(workspace)).status, "missing");
+    assert.deepEqual(deletedResumeStates, [workspace]);
     assert.ok(snapshot.recentEvents.some((event) => event.type === "run_stalled"));
     assert.ok(snapshot.recentEvents.some((event) => event.type === "resume_state_invalidated"));
   } finally {
@@ -923,21 +916,16 @@ test("runtime invalidates resume state before scheduling failure retry", async (
   const issue = issueFixture("issue-failure-resume", "MT-FAILURE-RESUME");
   const workflow = workflowFixture(root);
   const workspace = await createWorkspaceForIssue(workflow.settings, issue);
-  await initGitRepo(workspace);
-  await writeResumeState(workspace, {
-    agentKind: "codex",
-    resumeId: "stale-failure-resume",
-    issueId: issue.id,
-    issueIdentifier: issue.identifier,
-    issueState: issue.state,
-    workspacePath: workspace,
-  });
+  const deletedResumeStates: string[] = [];
   const runtime = new SymphonyRuntime(
     runtimeOptions({
       workflow,
       client: {
         fetchCandidateIssues: async () => [issue],
         fetchIssuesByIds: async () => [issue],
+      },
+      deleteResumeState: async (workspacePath) => {
+        deletedResumeStates.push(workspacePath);
       },
       runner: async ({ onUpdate }) => {
         onUpdate?.({ type: "workspace_prepared", workspacePath: workspace });
@@ -951,7 +939,7 @@ test("runtime invalidates resume state before scheduling failure retry", async (
   const snapshot = runtime.snapshot();
   assert.equal(snapshot.runHistory[0]?.outcome, "failed");
   assert.equal(snapshot.retrying[0]?.attempt, 1);
-  assert.equal((await readResumeState(workspace)).status, "missing");
+  assert.deepEqual(deletedResumeStates, [workspace]);
   assert.ok(snapshot.recentEvents.some((event) => event.type === "resume_state_invalidated"));
 });
 

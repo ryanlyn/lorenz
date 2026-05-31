@@ -232,11 +232,10 @@ test("routedToThisWorker — assignedToWorker false always rejects", () => {
 
 // --- issueHasOpenBlockers ---
 
-test("issueHasOpenBlockers — any issue with open blockers is blocked regardless of stateType", () => {
+test("issueHasOpenBlockers - unstarted issues with open blockers are blocked", () => {
   fc.assert(
     fc.property(
-      fc.constantFrom("started", "completed", null),
-      fc.constantFrom("In Progress", "Done", "Review"),
+      fc.constantFrom("Todo", "In Progress", "Review"),
       fc.array(
         fc.record({
           id: fc.constant("b1"),
@@ -246,8 +245,8 @@ test("issueHasOpenBlockers — any issue with open blockers is blocked regardles
         }),
         { minLength: 1, maxLength: 3 },
       ),
-      (stateType, state, blockers) => {
-        const issue = issueWith({ state, stateType, blockers });
+      (state, blockers) => {
+        const issue = issueWith({ state, stateType: "unstarted", blockers });
         const settings = makeSettings();
         assert.ok(issueHasOpenBlockers(issue, settings));
       },
@@ -277,11 +276,11 @@ test("issueHasOpenBlockers — all-terminal blockers do not block", () => {
   );
 });
 
-test("issueHasOpenBlockers — any non-terminal blocker blocks any issue", () => {
+test("issueHasOpenBlockers - non-unstarted issues with open blockers are not blocked", () => {
   fc.assert(
     fc.property(
       fc.constantFrom("Todo", "In Progress", "Review"),
-      fc.constantFrom("unstarted", "started", "completed"),
+      fc.constantFrom("started", "completed", null),
       (blockerState, stateType) => {
         const issue = issueWith({
           state: "Todo",
@@ -289,7 +288,7 @@ test("issueHasOpenBlockers — any non-terminal blocker blocks any issue", () =>
           blockers: [{ id: "b1", identifier: "B-1", state: blockerState, stateType: null }],
         });
         const settings = makeSettings();
-        assert.ok(issueHasOpenBlockers(issue, settings));
+        assert.ok(!issueHasOpenBlockers(issue, settings));
       },
     ),
   );

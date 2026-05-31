@@ -14,7 +14,42 @@ import type {
   TrackerKind,
   TrackerSettings,
 } from "@symphony/domain";
-import { CODEX_APPROVAL_POLICY_NAMES, CODEX_SANDBOX_MODES, TRACKER_KINDS } from "@symphony/domain";
+import {
+  CODEX_APPROVAL_POLICY_NAMES,
+  CODEX_SANDBOX_MODES,
+  TRACKER_KINDS,
+  PORT_MAX,
+  ONE_WEEK_MS,
+  RENDER_INTERVAL_MAX_MS,
+  CONCURRENCY_MAX,
+  MAX_TURNS_MAX,
+  ENSEMBLE_SIZE_MAX,
+  isValidPort,
+  isValidTimeoutMs,
+  isValidNonNegativeTimeoutMs,
+  isValidIntervalMs,
+  isValidRenderIntervalMs,
+  isValidConcurrency,
+  isValidMaxTurns,
+  isValidEnsembleSize,
+} from "@symphony/domain";
+
+export {
+  PORT_MAX,
+  ONE_WEEK_MS,
+  RENDER_INTERVAL_MAX_MS,
+  CONCURRENCY_MAX,
+  MAX_TURNS_MAX,
+  ENSEMBLE_SIZE_MAX,
+  isValidPort,
+  isValidTimeoutMs,
+  isValidNonNegativeTimeoutMs,
+  isValidIntervalMs,
+  isValidRenderIntervalMs,
+  isValidConcurrency,
+  isValidMaxTurns,
+  isValidEnsembleSize,
+} from "@symphony/domain";
 
 const numericInput = z.union([
   z.number().refine((n) => !Number.isNaN(n), { message: "must not be NaN" }),
@@ -25,57 +60,50 @@ const numericInput = z.union([
     .refine((n) => !Number.isNaN(n), { message: "must be a number" }),
 ]);
 
-export const PORT_MAX = 65535;
-export const ONE_WEEK_MS = 604_800_000;
-export const RENDER_INTERVAL_MAX_MS = 60_000;
-export const CONCURRENCY_MAX = 1000;
-export const MAX_TURNS_MAX = 10_000;
-export const ENSEMBLE_SIZE_MAX = 100;
-
 const coercedPort = numericInput
-  .refine((n) => Number.isInteger(n) && n >= 0 && n <= PORT_MAX, {
+  .refine((n) => isValidPort(n), {
     message: `must be a valid port number (0-${PORT_MAX})`,
   })
   .describe("non-negative");
 
 const coercedTimeoutMs = numericInput
-  .refine((n) => Number.isInteger(n) && n >= 1 && n <= ONE_WEEK_MS, {
+  .refine((n) => isValidTimeoutMs(n), {
     message: `must be a positive integer no greater than ${ONE_WEEK_MS} (1 week)`,
   })
   .describe("positive");
 
 const coercedNonNegativeTimeoutMs = numericInput
-  .refine((n) => Number.isInteger(n) && n >= 0 && n <= ONE_WEEK_MS, {
+  .refine((n) => isValidNonNegativeTimeoutMs(n), {
     message: `must be a non-negative integer no greater than ${ONE_WEEK_MS} (1 week)`,
   })
   .describe("non-negative");
 
 const coercedIntervalMs = numericInput
-  .refine((n) => Number.isInteger(n) && n >= 1 && n <= ONE_WEEK_MS, {
+  .refine((n) => isValidIntervalMs(n), {
     message: `must be a positive integer no greater than ${ONE_WEEK_MS} (1 week)`,
   })
   .describe("positive");
 
 const coercedRenderIntervalMs = numericInput
-  .refine((n) => Number.isInteger(n) && n >= 1 && n <= RENDER_INTERVAL_MAX_MS, {
+  .refine((n) => isValidRenderIntervalMs(n), {
     message: `must be a positive integer no greater than ${RENDER_INTERVAL_MAX_MS}`,
   })
   .describe("positive");
 
 const coercedConcurrency = numericInput
-  .refine((n) => Number.isInteger(n) && n >= 1 && n <= CONCURRENCY_MAX, {
+  .refine((n) => isValidConcurrency(n), {
     message: `must be an integer between 1 and ${CONCURRENCY_MAX}`,
   })
   .describe("positive");
 
 const coercedMaxTurns = numericInput
-  .refine((n) => Number.isInteger(n) && n >= 1 && n <= MAX_TURNS_MAX, {
+  .refine((n) => isValidMaxTurns(n), {
     message: `must be an integer between 1 and ${MAX_TURNS_MAX}`,
   })
   .describe("positive");
 
 const coercedEnsembleSize = numericInput
-  .refine((n) => Number.isInteger(n) && n >= 1 && n <= ENSEMBLE_SIZE_MAX, {
+  .refine((n) => isValidEnsembleSize(n), {
     message: `must be an integer between 1 and ${ENSEMBLE_SIZE_MAX}`,
   })
   .describe("positive");

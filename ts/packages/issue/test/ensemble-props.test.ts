@@ -1,7 +1,7 @@
 import { test } from "vitest";
 import fc from "fast-check";
 import { ensembleSize, isTerminalState } from "@symphony/cli";
-import { ENSEMBLE_SIZE_MAX } from "@symphony/config";
+import { ENSEMBLE_SIZE_MAX } from "@symphony/domain";
 import type { Issue } from "@symphony/domain";
 
 import { assert } from "../../../test/assert.js";

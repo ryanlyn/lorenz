@@ -16,24 +16,26 @@ describe("Sandbox: Concurrency and Stress", () => {
     "no starvation: all 20 issues eventually dispatched under cap=5",
     { timeout: 15_000 },
     async () => {
+      const maxConcurrentAgents = 5;
       const issues = Array.from({ length: 20 }, (_, i) =>
         makeIssue(`traffic-${i}`, `TRAFFIC-${i}`, { priority: 2 }),
       );
 
       const result = await runScenario({
         issues,
-        settingsOverrides: { agent: { maxConcurrentAgents: 5, maxRetryBackoffMs: 50 } },
+        settingsOverrides: { agent: { maxConcurrentAgents, maxRetryBackoffMs: 1000 } },
         runnerConfig: { defaultBehavior: { turnCount: 1, latencyPerTurnMs: 5 } },
-        pollTicks: 10,
-        tickDelayMs: 30,
+        pollTicks: Math.ceil(issues.length / maxConcurrentAgents),
       });
 
       const startedIssueIds = new Set(
         result.events.filter((e) => e.type === "run_started").map((e) => e.message.split(" ")[0]),
       );
-      expect(startedIssueIds.size).toBeGreaterThanOrEqual(20);
+      expect(startedIssueIds).toEqual(new Set(issues.map((issue) => issue.identifier)));
 
-      const capResults = checkAssertions(result, [{ type: "concurrency_cap", maxConcurrent: 5 }]);
+      const capResults = checkAssertions(result, [
+        { type: "concurrency_cap", maxConcurrent: maxConcurrentAgents },
+      ]);
       for (const r of capResults) {
         expect(r.passed).toBe(true);
       }

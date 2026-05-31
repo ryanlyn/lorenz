@@ -2,7 +2,7 @@
 
 ## Workspace Layout
 
-The TypeScript port is a pnpm workspace rooted at `ts/`. Runtime code belongs in `packages/*`;
+The TypeScript workspace is a pnpm workspace rooted at `ts/`. Runtime code belongs in `packages/*`;
 process wiring and CLI commands belong in `apps/cli`.
 
 Create a package when a boundary has a clear owner. Each package needs:

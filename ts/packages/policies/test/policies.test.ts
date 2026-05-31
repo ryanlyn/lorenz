@@ -260,14 +260,14 @@ test('reconciliationStopReason — blocked issue returns "blocked"', () => {
   assert.equal(reconciliationStopReason(issue, settings), "blocked");
 });
 
-test('reconciliationStopReason — started issue with open blockers returns "blocked"', () => {
+test('reconciliationStopReason - started issue with open blockers returns "inactive"', () => {
   const issue = makeIssue({
     state: "In Progress",
     stateType: "started",
     blockers: [{ id: "blocker-1", identifier: "ENG-2", state: "Todo" }],
   });
   const settings = makeSettings();
-  assert.equal(reconciliationStopReason(issue, settings), "blocked");
+  assert.equal(reconciliationStopReason(issue, settings), "inactive");
 });
 
 test('reconciliationStopReason — active, routed, unblocked issue returns "inactive"', () => {
@@ -335,16 +335,15 @@ test('reconciliationStopReason — unrouted via route label mismatch returns "un
   assert.equal(reconciliationStopReason(issue, settings), "unrouted");
 });
 
-test("reconciliationStopReason — started issue with open blockers returns blocked", () => {
-  // Blockers apply regardless of stateType — a started issue with open blockers
-  // should be aborted during reconciliation.
+test('reconciliationStopReason - started issue with open blockers returns "inactive"', () => {
+  // Blockers only gate unstarted issues; started work keeps running.
   const issue = makeIssue({
     state: "In Progress",
     stateType: "started",
     blockers: [{ id: "blocker-1", identifier: "ENG-2", state: "In Progress" }],
   });
   const settings = makeSettings();
-  assert.equal(reconciliationStopReason(issue, settings), "blocked");
+  assert.equal(reconciliationStopReason(issue, settings), "inactive");
 });
 
 test('reconciliationStopReason — blocked with all blockers in terminal state returns "inactive"', () => {
@@ -396,19 +395,19 @@ describe("INVARIANT: Blockers on unstarted issues prevent starting", () => {
   });
 });
 
-describe("INVARIANT: Blockers on started issues abort", () => {
-  test("reconciliationStopReason — started issue with open blockers returns blocked (abort)", () => {
+describe("INVARIANT: Blockers on started issues do not abort", () => {
+  test('reconciliationStopReason - started issue with open blockers returns "inactive"', () => {
     const issue = makeIssue({
       state: "In Progress",
       stateType: "started",
       blockers: [{ id: "blocker-1", identifier: "ENG-2", state: "Todo" }],
     });
     const settings = makeSettings();
-    assert.equal(reconciliationStopReason(issue, settings), "blocked");
+    assert.equal(reconciliationStopReason(issue, settings), "inactive");
   });
 });
 
-test("reconciliationStopReason — started issue with multiple open blockers returns blocked (abort)", () => {
+test('reconciliationStopReason - started issue with multiple open blockers returns "inactive"', () => {
   const issue = makeIssue({
     state: "In Progress",
     stateType: "started",
@@ -418,5 +417,5 @@ test("reconciliationStopReason — started issue with multiple open blockers ret
     ],
   });
   const settings = makeSettings();
-  assert.equal(reconciliationStopReason(issue, settings), "blocked");
+  assert.equal(reconciliationStopReason(issue, settings), "inactive");
 });
