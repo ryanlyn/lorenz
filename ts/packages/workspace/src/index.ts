@@ -191,6 +191,7 @@ export async function validateWorkspaceCwd(
   const canonicalRoot = await fs.realpath(rootPath);
   const candidate = path.resolve(workspace);
   if (!(await exists(candidate))) throw new Error(`invalid_workspace_cwd: missing ${candidate}`);
+  await rejectFinalSymlink(candidate);
   await rejectPathSymlinksWithinRoot(canonicalRoot, candidate);
   const canonicalTarget = await fs.realpath(candidate);
   if (canonicalTarget === canonicalRoot)
