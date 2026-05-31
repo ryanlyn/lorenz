@@ -6,7 +6,6 @@
  * one JSON line per AgentUpdate event emitted by the TraceEmitter.
  */
 
-import { existsSync } from "node:fs";
 import { access, readdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
 
@@ -30,6 +29,8 @@ export class TraceWatcher {
   private readonly traceDir: string;
   private readonly pollIntervalMs: number;
   private fileStates = new Map<string, FileState>();
+  /** Maps filename (without extension) to the canonical issueId key used in fileStates. */
+  private fileKeyToCanonical = new Map<string, string>();
   private timer: ReturnType<typeof setInterval> | null = null;
   private stopped = false;
   private scanning = false;
@@ -104,22 +105,6 @@ export class TraceWatcher {
     return state ? state.events : [];
   }
 
-  /**
-   * Force re-read of a single file by issueId.
-   */
-  async refresh(issueId: string): Promise<DisplayEvent[]> {
-    const filePath = path.resolve(this.traceDir, `${issueId}.jsonl`);
-    const resolvedDir = path.resolve(this.traceDir);
-    if (!filePath.startsWith(resolvedDir + path.sep)) return [];
-    if (!existsSync(filePath)) return [];
-    const state = await this.readFile(filePath, issueId);
-    if (state) {
-      this.fileStates.set(issueId, state);
-      return state.events;
-    }
-    return [];
-  }
-
   private async scan(callback: WatcherCallback): Promise<void> {
     if (this.stopped) return;
     if (this.scanning) return; // Skip if previous scan is still in progress
@@ -138,27 +123,49 @@ export class TraceWatcher {
         return;
       }
 
+      const resolvedDir = path.resolve(this.traceDir);
+
       for (const entry of entries) {
         if (!entry.endsWith(".jsonl")) continue;
         const filePath = path.join(this.traceDir, entry);
-        const issueId = entry.slice(0, -6); // strip .jsonl
+
+        // Guard against path traversal from filenames like "../../etc/passwd.jsonl"
+        const resolvedFilePath = path.resolve(filePath);
+        if (!resolvedFilePath.startsWith(resolvedDir + path.sep)) continue;
+
+        const fileKey = entry.slice(0, -6); // strip .jsonl
 
         try {
           const fileStat = await stat(filePath);
-          const existing = this.fileStates.get(issueId);
+
+          // Look up existing state: either by filename key or via the canonical mapping
+          const canonicalForFile = this.fileKeyToCanonical.get(fileKey);
+          const existing = this.fileStates.get(canonicalForFile ?? fileKey);
 
           // Skip if file has not been modified since last read
           if (existing && fileStat.mtimeMs <= existing.lastModified) {
             continue;
           }
 
-          const state = await this.readFile(filePath, issueId, fileStat.mtimeMs);
-          if (state && state.lineCount !== (existing?.lineCount ?? 0)) {
-            this.fileStates.set(issueId, state);
-            callback(issueId, state.events);
-          } else if (state) {
-            // Update lastModified even if line count is same (file may have been touched)
-            this.fileStates.set(issueId, state);
+          const state = await this.readFile(filePath, fileKey, fileStat.mtimeMs);
+          if (state) {
+            // Use the metadata-derived issueId as the canonical map key
+            const canonicalKey = state.issueId;
+            this.fileKeyToCanonical.set(fileKey, canonicalKey);
+
+            // If metadata issueId differs from filename, remove stale entry keyed by filename
+            if (canonicalKey !== fileKey) {
+              this.fileStates.delete(fileKey);
+            }
+
+            const existingByCanonical = this.fileStates.get(canonicalKey);
+            if (state.lineCount !== (existingByCanonical?.lineCount ?? 0)) {
+              this.fileStates.set(canonicalKey, state);
+              callback(canonicalKey, state.events);
+            } else {
+              // Update lastModified even if line count is same (file may have been touched)
+              this.fileStates.set(canonicalKey, state);
+            }
           }
         } catch {
           // Skip files we cannot read

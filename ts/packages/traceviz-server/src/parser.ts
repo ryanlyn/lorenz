@@ -202,10 +202,14 @@ export function parseTraceLines(lines: string[]): DisplayEvent[] {
         if (pending) {
           pendingToolCalls.delete(toolUseId);
           const toolCall = pending.event;
-          toolCall.output =
+          // Only overwrite accumulated partial output if the result provides explicit output
+          const resultOutput =
             (payload.output as string | unknown[] | null) ??
             (payload.content as string | unknown[] | null) ??
             null;
+          if (resultOutput !== null) {
+            toolCall.output = resultOutput;
+          }
           toolCall.isError =
             raw.type === "tool_call_failed" || (payload.is_error as boolean) === true;
           const startMs = new Date(pending.startTs).getTime();

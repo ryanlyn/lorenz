@@ -1,9 +1,11 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 
 import type { TicketInfo, DisplayEvent, Stats } from "../api/types";
 import { fetchTickets, fetchEvents, fetchStats } from "../api/client";
 
 import { useWebSocket } from "./useWebSocket";
+
+const TICKET_REFRESH_DEBOUNCE_MS = 300;
 
 export function useTraceData() {
   const [tickets, setTickets] = useState<TicketInfo[]>([]);
@@ -14,10 +16,21 @@ export function useTraceData() {
 
   const { status: wsStatus, lastMessage } = useWebSocket();
 
+  const ticketRefreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   const loadTickets = useCallback(async () => {
     const data = await fetchTickets();
     setTickets(data);
   }, []);
+
+  /** Debounced ticket list refresh to avoid excessive HTTP requests during high activity. */
+  const scheduleTicketRefresh = useCallback(() => {
+    if (ticketRefreshTimer.current) return; // Already scheduled
+    ticketRefreshTimer.current = setTimeout(() => {
+      ticketRefreshTimer.current = null;
+      void loadTickets();
+    }, TICKET_REFRESH_DEBOUNCE_MS);
+  }, [loadTickets]);
 
   const loadTicketData = useCallback(async (issueId: string) => {
     setLoading(true);
@@ -56,8 +69,8 @@ export function useTraceData() {
     if (msg.type === "init") {
       setTickets(msg.tickets);
     } else if (msg.type === "events_update") {
-      // Always refresh ticket list so new tickets and updated counts appear
-      void loadTickets();
+      // Debounce ticket list refresh to avoid excessive requests during high activity
+      scheduleTicketRefresh();
       if (msg.issueId === selectedTicketId) {
         void loadTicketData(msg.issueId);
       }
@@ -67,7 +80,16 @@ export function useTraceData() {
         .then(setStats)
         .catch(() => {});
     }
-  }, [lastMessage, selectedTicketId, loadTicketData, loadTickets]);
+  }, [lastMessage, selectedTicketId, loadTicketData, scheduleTicketRefresh]);
+
+  // Cleanup debounce timer on unmount
+  useEffect(() => {
+    return () => {
+      if (ticketRefreshTimer.current) {
+        clearTimeout(ticketRefreshTimer.current);
+      }
+    };
+  }, []);
 
   return {
     tickets,

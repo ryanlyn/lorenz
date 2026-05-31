@@ -7,6 +7,8 @@ import type { AgentUpdate } from "@symphony/domain";
 export class TraceEmitter {
   private readonly traceDir: string;
   private initialized = false;
+  /** Per-file write queues to avoid unbounded concurrent writes. */
+  private writeQueues = new Map<string, Promise<void>>();
 
   constructor(traceDir: string) {
     this.traceDir = traceDir;
@@ -28,11 +30,16 @@ export class TraceEmitter {
       sessionId: update.sessionId ?? null,
       executorPid: update.executorPid ?? null,
     });
-    void appendFile(TraceEmitter.tracePathForIssue(this.traceDir, issueId), line + "\n").catch(
-      (err: unknown) => {
+    const filePath = TraceEmitter.tracePathForIssue(this.traceDir, issueId);
+
+    // Chain writes per file to provide backpressure and avoid concurrent file handle exhaustion
+    const prev = this.writeQueues.get(filePath) ?? Promise.resolve();
+    const next = prev.then(async () =>
+      appendFile(filePath, line + "\n").catch((err: unknown) => {
         console.error(`[TraceEmitter] Failed to write trace for issue ${issueId}:`, err);
-      },
+      }),
     );
+    this.writeQueues.set(filePath, next);
   }
 
   clear(issueId: string): void {
