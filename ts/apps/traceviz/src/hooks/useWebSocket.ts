@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from "react";
+
 import type { WsMessage } from "../api/types";
 
 export type WsStatus = "connecting" | "connected" | "disconnected";
@@ -10,7 +11,11 @@ export function useWebSocket() {
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const connect = useCallback(() => {
-    if (wsRef.current?.readyState === WebSocket.OPEN) return;
+    if (
+      wsRef.current?.readyState === WebSocket.OPEN ||
+      wsRef.current?.readyState === WebSocket.CONNECTING
+    )
+      return;
 
     setStatus("connecting");
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
@@ -23,7 +28,7 @@ export function useWebSocket() {
 
     ws.onmessage = (event) => {
       try {
-        const message: WsMessage = JSON.parse(event.data);
+        const message = JSON.parse(event.data as string) as WsMessage;
         if (message.type !== "ping") {
           setLastMessage(message);
         }
@@ -34,8 +39,11 @@ export function useWebSocket() {
 
     ws.onclose = () => {
       setStatus("disconnected");
-      wsRef.current = null;
-      reconnectTimer.current = setTimeout(connect, 3000);
+      // Only schedule reconnect if not disposed (wsRef cleared on unmount)
+      if (wsRef.current === ws) {
+        wsRef.current = null;
+        reconnectTimer.current = setTimeout(connect, 3000);
+      }
     };
 
     ws.onerror = () => {
@@ -47,7 +55,9 @@ export function useWebSocket() {
     connect();
     return () => {
       if (reconnectTimer.current) clearTimeout(reconnectTimer.current);
-      wsRef.current?.close();
+      const ws = wsRef.current;
+      wsRef.current = null;
+      ws?.close();
     };
   }, [connect]);
 

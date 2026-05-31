@@ -1,4 +1,5 @@
 import { ChevronDown } from "lucide-react";
+
 import type { TicketInfo } from "../api/types";
 import { cn } from "../lib/utils";
 
@@ -21,11 +22,7 @@ function statusColor(status: string): string {
   }
 }
 
-export function TicketSelector({
-  tickets,
-  selectedId,
-  onSelect,
-}: TicketSelectorProps) {
+export function TicketSelector({ tickets, selectedId, onSelect }: TicketSelectorProps) {
   return (
     <div className="relative">
       <select
@@ -34,7 +31,7 @@ export function TicketSelector({
         className={cn(
           "appearance-none rounded-lg border border-border bg-card px-3 py-1.5 pr-8 text-sm",
           "focus:outline-none focus:ring-2 focus:ring-accent-purple/50",
-          "cursor-pointer min-w-[240px]"
+          "cursor-pointer min-w-[240px]",
         )}
       >
         <option value="">Select a ticket...</option>
@@ -51,9 +48,7 @@ export function TicketSelector({
         <span
           className={cn(
             "absolute -right-4 top-1/2 -translate-y-1/2 ml-2 h-2 w-2 rounded-full",
-            statusColor(
-              tickets.find((t) => t.issueId === selectedId)?.status ?? "idle"
-            )
+            statusColor(tickets.find((t) => t.issueId === selectedId)?.status ?? "idle"),
           )}
         />
       )}

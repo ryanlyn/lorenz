@@ -6,6 +6,7 @@
  */
 
 import path from "node:path";
+
 import { createApp } from "./server.js";
 
 function usage(): never {

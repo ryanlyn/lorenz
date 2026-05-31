@@ -37,7 +37,10 @@ export function computeStats(events: DisplayEvent[]): TraceStats {
   const totalTokens = inputTokens + outputTokens;
 
   // Tool breakdown by category
-  const categoryMap = new Map<ToolCategory, { count: number; errorCount: number; totalDurationMs: number }>();
+  const categoryMap = new Map<
+    ToolCategory,
+    { count: number; errorCount: number; totalDurationMs: number }
+  >();
   for (const event of events) {
     if (event.kind === "tool_call") {
       const existing = categoryMap.get(event.category);

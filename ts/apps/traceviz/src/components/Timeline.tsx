@@ -1,17 +1,14 @@
 import { useState, useMemo } from "react";
-import {
-  ChevronsUpDown,
-  ChevronsDownUp,
-  ArrowUpDown,
-  Loader2,
-} from "lucide-react";
+import { ChevronsUpDown, ChevronsDownUp, ArrowUpDown, Loader2 } from "lucide-react";
+
 import type { DisplayEvent } from "../api/types";
+import { cn } from "../lib/utils";
+
 import { ThoughtEvent } from "./events/ThoughtEvent";
 import { MessageEvent } from "./events/MessageEvent";
 import { ToolCallEvent } from "./events/ToolCallEvent";
 import { TurnCompletedEvent } from "./events/TurnCompletedEvent";
 import { NotificationEvent } from "./events/NotificationEvent";
-import { cn } from "../lib/utils";
 
 interface TimelineProps {
   events: DisplayEvent[];
@@ -111,9 +108,7 @@ export function Timeline({ events, loading }: TimelineProps) {
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between">
-        <h2 className="text-sm font-medium text-muted">
-          Timeline ({events.length} events)
-        </h2>
+        <h2 className="text-sm font-medium text-muted">Timeline ({events.length} events)</h2>
         <div className="flex items-center gap-2">
           <button
             onClick={() => setSortNewest((p) => !p)}
@@ -147,26 +142,24 @@ export function Timeline({ events, loading }: TimelineProps) {
               onClick={() => toggleTurn(group.turnIndex)}
               className={cn(
                 "flex w-full items-center justify-between px-4 py-2.5 text-left",
-                "hover:bg-muted/20 transition-colors"
+                "hover:bg-muted/20 transition-colors",
               )}
             >
               <span className="text-sm font-medium">
                 Turn {group.turnIndex}
-                <span className="ml-2 text-xs text-muted">
-                  ({group.events.length} events)
-                </span>
+                <span className="ml-2 text-xs text-muted">({group.events.length} events)</span>
               </span>
               <ChevronsUpDown
                 className={cn(
                   "h-4 w-4 text-muted transition-transform",
-                  isExpanded && "rotate-180"
+                  isExpanded && "rotate-180",
                 )}
               />
             </button>
             <div
               className={cn(
                 "overflow-hidden transition-all duration-200",
-                isExpanded ? "max-h-[10000px] opacity-100" : "max-h-0 opacity-0"
+                isExpanded ? "max-h-[10000px] opacity-100" : "max-h-0 opacity-0",
               )}
             >
               <div className="space-y-2 px-4 pb-3">

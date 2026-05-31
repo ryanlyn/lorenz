@@ -96,4 +96,5 @@ export type DisplayEvent =
 export type WsMessage =
   | { type: "init"; tickets: TicketInfo[] }
   | { type: "events_update"; issueId: string; eventCount: number }
-  | { type: "events"; issueId: string; events: DisplayEvent[] };
+  | { type: "events"; issueId: string; events: DisplayEvent[] }
+  | { type: "ping" };

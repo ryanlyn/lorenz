@@ -10,13 +10,19 @@
  */
 
 import fs from "node:fs";
+
 import fastify from "fastify";
 import fastifyWebsocket from "@fastify/websocket";
 import fastifyStatic from "@fastify/static";
 import fastifyCors from "@fastify/cors";
 import type { WebSocket } from "@fastify/websocket";
 
-import type { HealthResponse, TicketsResponse, TicketTraceResponse, TraceStats } from "./models/api.js";
+import type {
+  HealthResponse,
+  TicketsResponse,
+  TicketTraceResponse,
+  TraceStats,
+} from "./models/api.js";
 import type { DisplayEvent } from "./models/display-events.js";
 import { TraceWatcher } from "./watcher.js";
 import { computeStats } from "./stats.js";
@@ -72,17 +78,17 @@ export async function createApp(options: CreateAppOptions) {
 
   // --- Routes ---
 
-  app.get("/health", async (): Promise<HealthResponse> => {
+  app.get("/health", (): HealthResponse => {
     return { status: "ok" };
   });
 
-  app.get("/api/tickets", async (): Promise<TicketsResponse> => {
+  app.get("/api/tickets", (): TicketsResponse => {
     return { tickets: watcher.getTickets() };
   });
 
   app.get<{ Params: { issueId: string } }>(
     "/api/tickets/:issueId/events",
-    async (request): Promise<TicketTraceResponse> => {
+    (request): TicketTraceResponse => {
       const { issueId } = request.params;
       const events = watcher.getEventsForTicket(issueId);
       const tickets = watcher.getTickets();
@@ -97,7 +103,7 @@ export async function createApp(options: CreateAppOptions) {
 
   app.get<{ Params: { issueId: string } }>(
     "/api/tickets/:issueId/stats",
-    async (request): Promise<TraceStats> => {
+    (request): TraceStats => {
       const { issueId } = request.params;
       const events = watcher.getEventsForTicket(issueId);
       return computeStats(events);
@@ -105,7 +111,7 @@ export async function createApp(options: CreateAppOptions) {
   );
 
   // WebSocket endpoint for live updates
-  app.get("/ws", { websocket: true }, (socket) => {
+  app.get("/ws", { websocket: true }, (socket: WebSocket) => {
     connections.add(socket);
 
     // Send initial state
@@ -114,7 +120,10 @@ export async function createApp(options: CreateAppOptions) {
 
     socket.on("message", (data: Buffer | string) => {
       try {
-        const msg = JSON.parse(typeof data === "string" ? data : data.toString()) as Record<string, unknown>;
+        const msg = JSON.parse(typeof data === "string" ? data : data.toString()) as Record<
+          string,
+          unknown
+        >;
         if (msg.type === "subscribe" && typeof msg.issueId === "string") {
           // Client wants events for a specific ticket
           const events = watcher.getEventsForTicket(msg.issueId);
@@ -131,7 +140,7 @@ export async function createApp(options: CreateAppOptions) {
   });
 
   // Cleanup on close
-  app.addHook("onClose", async () => {
+  app.addHook("onClose", () => {
     watcher.stop();
     for (const ws of connections) {
       ws.close();

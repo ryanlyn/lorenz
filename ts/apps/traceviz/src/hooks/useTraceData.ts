@@ -1,6 +1,8 @@
 import { useState, useEffect, useCallback } from "react";
-import type { TicketInfo, DisplayEvent, Stats, WsMessage } from "../api/types";
+
+import type { TicketInfo, DisplayEvent, Stats } from "../api/types";
 import { fetchTickets, fetchEvents, fetchStats } from "../api/client";
+
 import { useWebSocket } from "./useWebSocket";
 
 export function useTraceData() {
@@ -35,12 +37,12 @@ export function useTraceData() {
   }, []);
 
   useEffect(() => {
-    loadTickets();
+    void loadTickets();
   }, [loadTickets]);
 
   useEffect(() => {
     if (selectedTicketId) {
-      loadTicketData(selectedTicketId);
+      void loadTicketData(selectedTicketId);
     } else {
       setEvents([]);
       setStats(null);
@@ -49,14 +51,17 @@ export function useTraceData() {
 
   useEffect(() => {
     if (!lastMessage) return;
-    const msg = lastMessage as WsMessage;
+    const msg = lastMessage;
 
     if (msg.type === "init") {
       setTickets(msg.tickets);
     } else if (msg.type === "events_update" && msg.issueId === selectedTicketId) {
-      loadTicketData(msg.issueId);
+      void loadTicketData(msg.issueId);
     } else if (msg.type === "events" && msg.issueId === selectedTicketId) {
       setEvents(msg.events);
+      fetchStats(msg.issueId)
+        .then(setStats)
+        .catch(() => {});
     }
   }, [lastMessage, selectedTicketId, loadTicketData]);
 

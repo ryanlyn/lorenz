@@ -61,8 +61,8 @@ export class TraceWatcher {
   getTickets(): TicketInfo[] {
     const tickets: TicketInfo[] = [];
     for (const state of this.fileStates.values()) {
-      const turnCount = state.events.filter((e) => e.kind === "turn_started").length;
-      const hasCompleted = state.events.some((e) => e.kind === "turn_completed");
+      const turnStartedCount = state.events.filter((e) => e.kind === "turn_started").length;
+      const turnCompletedCount = state.events.filter((e) => e.kind === "turn_completed").length;
       const hasFailed = state.events.some(
         (e) => e.kind === "notification" && e.text.startsWith("Turn turn_failed"),
       );
@@ -70,9 +70,9 @@ export class TraceWatcher {
       let status: TicketInfo["status"] = "idle";
       if (hasFailed) {
         status = "failed";
-      } else if (hasCompleted && turnCount > 0) {
+      } else if (turnStartedCount > 0 && turnCompletedCount >= turnStartedCount) {
         status = "completed";
-      } else if (turnCount > 0) {
+      } else if (turnStartedCount > 0) {
         status = "running";
       }
 
@@ -88,7 +88,7 @@ export class TraceWatcher {
       tickets.push({
         issueId: state.issueId,
         identifier: state.issueIdentifier,
-        turnCount,
+        turnCount: turnStartedCount,
         status,
         startedAt,
       });
@@ -108,7 +108,9 @@ export class TraceWatcher {
    * Force re-read of a single file by issueId.
    */
   refresh(issueId: string): DisplayEvent[] {
-    const filePath = path.join(this.traceDir, `${issueId}.jsonl`);
+    const filePath = path.resolve(this.traceDir, `${issueId}.jsonl`);
+    const resolvedDir = path.resolve(this.traceDir);
+    if (!filePath.startsWith(resolvedDir + path.sep)) return [];
     if (!existsSync(filePath)) return [];
     const state = this.readFile(filePath, issueId);
     if (state) {
@@ -143,7 +145,7 @@ export class TraceWatcher {
           continue;
         }
 
-        const state = this.readFile(filePath, issueId);
+        const state = this.readFile(filePath, issueId, stat.mtimeMs);
         if (state && state.lineCount !== (existing?.lineCount ?? 0)) {
           this.fileStates.set(issueId, state);
           callback(issueId, state.events);
@@ -157,19 +159,19 @@ export class TraceWatcher {
     }
   }
 
-  private readFile(filePath: string, issueId: string): FileState | null {
+  private readFile(filePath: string, issueId: string, mtimeMs?: number): FileState | null {
     try {
       const content = readFileSync(filePath, "utf-8");
       const lines = content.split("\n").filter((l) => l.trim().length > 0);
       const events = parseTraceLines(lines);
       const metadata = extractTicketMetadata(lines);
-      const stat = statSync(filePath);
+      const lastModified = mtimeMs ?? statSync(filePath).mtimeMs;
 
       return {
         issueId: metadata?.issueId ?? issueId,
         issueIdentifier: metadata?.issueIdentifier ?? issueId,
         lineCount: lines.length,
-        lastModified: stat.mtimeMs,
+        lastModified,
         events,
       };
     } catch {

@@ -108,27 +108,46 @@ export function parseTraceLines(lines: string[]): DisplayEvent[] {
 
     switch (raw.type) {
       case "agent_thought": {
-        const text = typeof msg === "string" ? msg : typeof msg === "object" && msg !== null ? ((msg as Record<string, unknown>).text as string ?? "") : "";
+        const text =
+          typeof msg === "string"
+            ? msg
+            : typeof msg === "object" && msg !== null
+              ? (((msg as Record<string, unknown>).text as string) ?? "")
+              : "";
         events.push({ kind: "thought", text, timestamp: ts });
         break;
       }
 
       case "assistant_message": {
-        const text = typeof msg === "string" ? msg : typeof msg === "object" && msg !== null ? ((msg as Record<string, unknown>).text as string ?? "") : "";
+        const text =
+          typeof msg === "string"
+            ? msg
+            : typeof msg === "object" && msg !== null
+              ? (((msg as Record<string, unknown>).text as string) ?? "")
+              : "";
         events.push({ kind: "message", text, timestamp: ts });
         break;
       }
 
       case "user_message": {
-        const text = typeof msg === "string" ? msg : typeof msg === "object" && msg !== null ? ((msg as Record<string, unknown>).text as string ?? "") : "";
+        const text =
+          typeof msg === "string"
+            ? msg
+            : typeof msg === "object" && msg !== null
+              ? (((msg as Record<string, unknown>).text as string) ?? "")
+              : "";
         events.push({ kind: "message", text, timestamp: ts });
         break;
       }
 
       case "tool_use_requested": {
-        const payload = typeof msg === "object" && msg !== null ? msg as Record<string, unknown> : {};
+        const payload =
+          typeof msg === "object" && msg !== null ? (msg as Record<string, unknown>) : {};
         const toolName = (payload.name as string) ?? (payload.toolName as string) ?? "unknown";
-        const toolUseId = (payload.id as string) ?? (payload.toolUseId as string) ?? `tool-${Date.now()}-${Math.random()}`;
+        const toolUseId =
+          (payload.id as string) ??
+          (payload.toolUseId as string) ??
+          `tool-${Date.now()}-${Math.random()}`;
         const input = (payload.input as Record<string, unknown>) ?? {};
 
         const toolCall: ToolCallDisplayEvent = {
@@ -149,18 +168,24 @@ export function parseTraceLines(lines: string[]): DisplayEvent[] {
       case "tool_result":
       case "tool_call_completed":
       case "tool_call_failed": {
-        const payload = typeof msg === "object" && msg !== null ? msg as Record<string, unknown> : {};
+        const payload =
+          typeof msg === "object" && msg !== null ? (msg as Record<string, unknown>) : {};
         const toolUseId = (payload.id as string) ?? (payload.toolUseId as string) ?? "";
         const pending = pendingToolCalls.get(toolUseId);
 
         if (pending) {
           pendingToolCalls.delete(toolUseId);
           const toolCall = pending.event;
-          toolCall.output = (payload.output as string | unknown[] | null) ?? (payload.content as string | unknown[] | null) ?? null;
-          toolCall.isError = raw.type === "tool_call_failed" || (payload.is_error as boolean) === true;
+          toolCall.output =
+            (payload.output as string | unknown[] | null) ??
+            (payload.content as string | unknown[] | null) ??
+            null;
+          toolCall.isError =
+            raw.type === "tool_call_failed" || (payload.is_error as boolean) === true;
           const startMs = new Date(pending.startTs).getTime();
           const endMs = new Date(ts).getTime();
-          toolCall.durationMs = Number.isNaN(startMs) || Number.isNaN(endMs) ? null : endMs - startMs;
+          toolCall.durationMs =
+            Number.isNaN(startMs) || Number.isNaN(endMs) ? null : endMs - startMs;
           events.push(toolCall);
         } else {
           // No pending tool call found; emit as standalone
@@ -170,7 +195,10 @@ export function parseTraceLines(lines: string[]): DisplayEvent[] {
             category: detectToolCategory(toolName),
             toolName,
             input: {},
-            output: (payload.output as string | unknown[] | null) ?? (payload.content as string | unknown[] | null) ?? null,
+            output:
+              (payload.output as string | unknown[] | null) ??
+              (payload.content as string | unknown[] | null) ??
+              null,
             isError: raw.type === "tool_call_failed" || (payload.is_error as boolean) === true,
             durationMs: null,
             nestedEvents: [],
@@ -192,7 +220,8 @@ export function parseTraceLines(lines: string[]): DisplayEvent[] {
           usage = {
             inputTokens: raw.usage.inputTokens ?? 0,
             outputTokens: raw.usage.outputTokens ?? 0,
-            totalTokens: raw.usage.totalTokens ?? (raw.usage.inputTokens ?? 0) + (raw.usage.outputTokens ?? 0),
+            totalTokens:
+              raw.usage.totalTokens ?? (raw.usage.inputTokens ?? 0) + (raw.usage.outputTokens ?? 0),
           };
         }
         // Try to compute duration from last turn_started
@@ -223,7 +252,14 @@ export function parseTraceLines(lines: string[]): DisplayEvent[] {
       }
 
       case "notification": {
-        const text = typeof msg === "string" ? msg : typeof msg === "object" && msg !== null ? ((msg as Record<string, unknown>).text as string ?? JSON.stringify(msg)) : String(msg ?? "");
+        const text =
+          typeof msg === "string"
+            ? msg
+            : typeof msg === "object" && msg !== null
+              ? (((msg as Record<string, unknown>).text as string) ?? JSON.stringify(msg))
+              : msg != null
+                ? JSON.stringify(msg)
+                : "";
         events.push({ kind: "notification", text, timestamp: ts });
         break;
       }
@@ -236,12 +272,20 @@ export function parseTraceLines(lines: string[]): DisplayEvent[] {
       case "fs_write":
       case "plan": {
         // Known types we skip or store as unknown for debugging
-        events.push({ kind: "unknown", raw: raw as unknown as Record<string, unknown>, timestamp: ts });
+        events.push({
+          kind: "unknown",
+          raw: raw as unknown as Record<string, unknown>,
+          timestamp: ts,
+        });
         break;
       }
 
       default: {
-        events.push({ kind: "unknown", raw: raw as unknown as Record<string, unknown>, timestamp: ts });
+        events.push({
+          kind: "unknown",
+          raw: raw as unknown as Record<string, unknown>,
+          timestamp: ts,
+        });
         break;
       }
     }
@@ -258,7 +302,9 @@ export function parseTraceLines(lines: string[]): DisplayEvent[] {
 /**
  * Extract the issueId and issueIdentifier from the first valid line of a trace file.
  */
-export function extractTicketMetadata(lines: string[]): { issueId: string; issueIdentifier: string } | null {
+export function extractTicketMetadata(
+  lines: string[],
+): { issueId: string; issueIdentifier: string } | null {
   for (const line of lines) {
     const raw = parseLine(line);
     if (raw && raw.issueId && raw.issueIdentifier) {

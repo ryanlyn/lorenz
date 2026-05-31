@@ -176,7 +176,9 @@ export interface SymphonyRuntimeOptions {
     | ((workspace: string, workerHost?: string | null, timeoutMs?: number) => Promise<void>)
     | undefined;
   appendLogEvent?: ((logFile: string, event: Record<string, unknown>) => Promise<void>) | undefined;
-  traceEmitter?: { emit(issueId: string, issueIdentifier: string, update: AgentUpdate): void } | undefined;
+  traceEmitter?:
+    | { emit(issueId: string, issueIdentifier: string, update: AgentUpdate): void }
+    | undefined;
   now?: (() => Date) | undefined;
 }
 

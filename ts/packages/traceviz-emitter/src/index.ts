@@ -1,5 +1,6 @@
 import { mkdirSync, appendFileSync, unlinkSync, existsSync } from "node:fs";
 import path from "node:path";
+
 import type { AgentUpdate } from "@symphony/domain";
 
 export class TraceEmitter {
@@ -37,6 +38,11 @@ export class TraceEmitter {
   }
 
   static tracePathForIssue(traceDir: string, issueId: string): string {
-    return path.join(traceDir, issueId + ".jsonl");
+    const resolved = path.resolve(traceDir, issueId + ".jsonl");
+    const resolvedDir = path.resolve(traceDir);
+    if (!resolved.startsWith(resolvedDir + path.sep) && resolved !== resolvedDir) {
+      throw new Error(`Invalid issueId: path traversal detected`);
+    }
+    return resolved;
   }
 }
