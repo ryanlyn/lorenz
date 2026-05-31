@@ -105,6 +105,14 @@ test("shipped WORKFLOW.local.md selects a local tracker client with a real playb
   assert.match(prose, /local_comment/);
   assert.match(prose, /local_create_issue/);
   assert.notMatch(prose, /stop and ask the user to configure Linear/i);
+
+  // A worker only has its cloned repo workspace + the rendered issue context, not the
+  // daemon's board directory, so the playbook must NOT instruct reading the board file for
+  // state. State comes from the rendered `Current status` line instead. (A passing
+  // "BOARD-<n>.md" reference is fine; an instruction to READ it for state is not.)
+  assert.notMatch(prose, /read the issue file/i);
+  assert.notMatch(prose, /read .*BOARD-<n>\.md/i);
+  assert.match(prose, /Current status/);
 });
 
 test("shipped WORKFLOW.slack.md selects a slack tracker client with a real playbook body", async () => {

@@ -86,9 +86,8 @@ Work only in the provided repository copy. Do not touch any other path.
 
 This workflow is backed by a **local board**, not Linear. There is **no Linear and no `linear_graphql` tool**. Issues live as Markdown files on disk under the board directory configured in `tracker.path` (default `.symphony/board/`).
 
-- Each issue is a Markdown file named `BOARD-<n>.md` (for example `.symphony/board/BOARD-7.md`).
-- The issue's status, title, and metadata live in the file's YAML frontmatter (for example `status: Todo`).
-- The Markdown body below the frontmatter is the issue description.
+- On the daemon side each issue is a Markdown file named `BOARD-<n>.md` (for example `.symphony/board/BOARD-7.md`), but that board directory lives outside your cloned repo workspace - you cannot open it, so never try to read the board file for state.
+- The issue's status, title, and description are surfaced to you in the rendered issue context above (use the `Current status` line for status); the board file's YAML frontmatter is the daemon's copy, not yours to read.
 - Comments are appended to the issue file by the `local_comment` tool. They are write-only, human-visible progress notes: the file lives outside your workspace and you cannot read your own comments back on a later turn, so do not rely on them as resumable state (use your workspace and the issue status instead).
 
 Active statuses (`Todo`, `In Progress`) mean the issue is yours to work. Terminal statuses (`Done`, `Cancelled`) mean it is finished and you must not reopen it.
@@ -105,7 +104,7 @@ There is **no `linear_graphql`** tool and no Linear MCP server. Do not attempt t
 
 ## Default posture
 
-- Start by reading the issue's current status, then follow the matching flow for that status.
+- Start from the `Current status` in the rendered issue context above, then follow the matching flow for that status.
 - Post human-visible progress as comments with `local_comment`. These are write-only audit notes; for your own continuation rely on the restored workspace and the issue's current status, not on re-reading comments.
 - Spend extra effort up front on planning and verification design before implementation.
 - Reproduce first: confirm the current behavior/issue signal before changing code so the fix target is explicit.
@@ -130,7 +129,7 @@ There is **no `linear_graphql`** tool and no Linear MCP server. Do not attempt t
 
 ## Step 0: Determine current status and route
 
-1. Read the issue file (`BOARD-<n>.md`) and its frontmatter `status`.
+1. Use the `Current status` from the rendered issue context above (you only have your cloned repo workspace and this rendered context, not the daemon's board directory, so do not try to open `BOARD-<n>.md`).
 2. Route to the matching flow:
    - `Todo` -> call `local_update_status(issueId, "In Progress")`, then start the execution flow.
    - `In Progress` -> continue the execution flow using your restored workspace (branch/commits and any open PR) and the issue's current state as the source of truth for what is done; you cannot read back prior comments.
