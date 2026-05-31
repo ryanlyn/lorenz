@@ -23,8 +23,7 @@ export function issueIsActive(issue: Issue, settings: Settings): boolean {
 }
 
 export function issueHasOpenBlockers(issue: Issue, settings: Settings): boolean {
-  const unstarted = issue.stateType === "unstarted" || issue.state.trim().toLowerCase() === "todo";
-  if (!unstarted) return false;
+  if (issue.stateType !== "unstarted") return false;
   return issue.blockers.some(
     (blocker) => !isTerminalState(blocker.state, settings.tracker.terminalStates),
   );

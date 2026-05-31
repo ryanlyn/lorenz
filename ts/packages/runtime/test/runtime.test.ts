@@ -545,7 +545,7 @@ test("runtime does not stall a stale ensemble slot snapshot after its runner com
       updates: [],
       resumeId: "ensemble-slot-1",
       agentKind: "codex",
-      finalIssue: { ...issue, state: "Todo" },
+      finalIssue: { ...issue, state: { name: "Todo", type: "unstarted" } },
     });
     await stallPoll;
     await waitFor(
@@ -1032,7 +1032,7 @@ function issueFixture(id: string, identifier: string): Issue {
     id,
     identifier,
     title: "Runtime fixture",
-    state: "Todo",
+    state: { name: "Todo", type: "unstarted" },
     labels: [],
     blockers: [],
   });

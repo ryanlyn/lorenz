@@ -11,8 +11,15 @@ import {
 
 test("memory tracker adapter returns configured issues and filters by id like Elixir", async () => {
   const client = new MemoryTrackerClient([
-    { id: "one", identifier: "MT-1", title: "One", state: "Todo", labels: ["Symphony:Backend"] },
-    { id: "two", identifier: "MT-2", title: "Two", state: "Done" },
+    {
+      id: "one",
+      identifier: "MT-1",
+      title: "One",
+      state: "Todo",
+      stateType: "unstarted",
+      labels: ["Symphony:Backend"],
+    },
+    { id: "two", identifier: "MT-2", title: "Two", state: "Done", stateType: "completed" },
   ]);
 
   const candidates = await client.fetchCandidateIssues();
@@ -35,7 +42,7 @@ test("tracker factory selects memory adapter from workflow settings and JSON env
   const settings = parseConfig({ tracker: { kind: "memory" } }, {});
   const client = createTrackerClient(settings, {
     SYMPHONY_MEMORY_TRACKER_ISSUES_JSON: JSON.stringify([
-      { id: "env", identifier: "MT-ENV", title: "Env", state: "Todo" },
+      { id: "env", identifier: "MT-ENV", title: "Env", state: "Todo", stateType: "unstarted" },
     ]),
   });
 

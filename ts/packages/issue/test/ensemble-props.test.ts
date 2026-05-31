@@ -11,7 +11,7 @@ function issueWith(labels: string[]): Issue {
     identifier: "TEST-1",
     title: "Test",
     state: "Todo",
-    stateType: null,
+    stateType: "unstarted",
     description: null,
     branchName: null,
     url: null,

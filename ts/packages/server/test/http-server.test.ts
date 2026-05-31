@@ -21,7 +21,7 @@ test("observability HTTP API exposes Elixir-shaped state, issue, runs, refresh, 
     id: "issue-http",
     identifier: "MT-HTTP",
     title: "HTTP visibility",
-    state: "In Progress",
+    state: { name: "In Progress", type: "started" },
     labels: [],
     blockers: [],
   });

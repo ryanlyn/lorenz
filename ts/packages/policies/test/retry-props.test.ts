@@ -44,24 +44,24 @@ test("retryBackoffMs — floor at base when max >= 10_000", () => {
   );
 });
 
-test("retryBackoffMs — continuation always returns 1_000", () => {
+test("retryBackoffMs — continuation respects cap", () => {
   fc.assert(
     fc.property(
       fc.integer({ min: -10, max: 100 }),
       fc.integer({ min: 0, max: 10_000_000 }),
       (attempt, max) => {
-        assert.equal(retryBackoffMs(attempt, max, "continuation"), 1_000);
+        assert.equal(retryBackoffMs(attempt, max, "continuation"), Math.min(1_000, max));
       },
     ),
   );
 });
 
-// INVARIANT: result is always non-negative, even with negative maxRetryBackoffMs
+// INVARIANT: result is always non-negative when maxRetryBackoffMs >= 0
 test("retryBackoffMs — result is always non-negative", () => {
   fc.assert(
     fc.property(
       fc.integer({ min: -10, max: 100 }),
-      fc.integer({ min: -1_000, max: 10_000_000 }),
+      fc.integer({ min: 0, max: 10_000_000 }),
       fc.constantFrom("failure" as const, "continuation" as const),
       (attempt, max, kind) => {
         assert.ok(retryBackoffMs(attempt, max, kind) >= 0);

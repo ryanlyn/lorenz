@@ -103,8 +103,8 @@ export interface Issue {
   description?: string | null | undefined;
   /** Display name of the workflow state (e.g. `"In Progress"`). Used as a lookup key for per-state setting overrides. */
   state: string;
-  /** Category bucket from the tracker: typically `"unstarted" | "started" | "completed" | "canceled" | "backlog" | "triage"`. */
-  stateType?: IssueStateType | null | undefined;
+  /** Category bucket from the tracker: `"unstarted" | "started" | "completed" | "canceled" | "backlog" | "triage"`. All trackers must provide this. */
+  stateType: IssueStateType;
   branchName?: string | null | undefined;
   url?: string | null | undefined;
   priority?: Priority | null | undefined;

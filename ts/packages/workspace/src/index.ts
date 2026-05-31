@@ -18,7 +18,9 @@ export function workspacePath(
   slotIndex = 0,
   ensembleSize = 1,
 ): string {
-  const issueRoot = path.join(root, safeIdentifier(issueIdentifier));
+  const safe = safeIdentifier(issueIdentifier);
+  if (!safe) throw new Error("empty identifier produces invalid workspace path");
+  const issueRoot = path.join(root, safe);
   return ensembleSize > 1 ? path.join(issueRoot, String(slotIndex)) : issueRoot;
 }
 

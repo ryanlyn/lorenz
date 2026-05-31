@@ -49,17 +49,19 @@ function validIssueInput(overrides: Record<string, unknown> = {}): Record<string
     id: "issue-1",
     identifier: "TEST-1",
     title: "A title",
-    state: { name: "Todo" },
+    state: { name: "Todo", type: "unstarted" },
     ...overrides,
   };
 }
 
 // INVARIANT: When a state value is resolved, the system SHALL accept nested object form, snake_case, camelCase, and direct string form (in that priority order).
 
-test("state resolution accepts nested object form { state: { name } }", () => {
+test("state resolution accepts nested object form { state: { name, type } }", () => {
   fc.assert(
     fc.property(nonBlankString, (stateName) => {
-      const issue = normalizeIssue(validIssueInput({ state: { name: stateName } }));
+      const issue = normalizeIssue(
+        validIssueInput({ state: { name: stateName, type: "unstarted" } }),
+      );
       assert.equal(issue.state, stateName);
     }),
     { numRuns: 200 },
@@ -69,7 +71,9 @@ test("state resolution accepts nested object form { state: { name } }", () => {
 test("state resolution accepts snake_case state_name", () => {
   fc.assert(
     fc.property(nonBlankString, (stateName) => {
-      const issue = normalizeIssue(validIssueInput({ state: undefined, state_name: stateName }));
+      const issue = normalizeIssue(
+        validIssueInput({ state: undefined, state_name: stateName, state_type: "unstarted" }),
+      );
       assert.equal(issue.state, stateName);
     }),
     { numRuns: 200 },
@@ -80,7 +84,12 @@ test("state resolution accepts camelCase stateName", () => {
   fc.assert(
     fc.property(nonBlankString, (stateName) => {
       const issue = normalizeIssue(
-        validIssueInput({ state: undefined, state_name: undefined, stateName }),
+        validIssueInput({
+          state: undefined,
+          state_name: undefined,
+          stateName,
+          stateType: "unstarted",
+        }),
       );
       assert.equal(issue.state, stateName);
     }),
@@ -91,7 +100,7 @@ test("state resolution accepts camelCase stateName", () => {
 test("state resolution accepts direct string form", () => {
   fc.assert(
     fc.property(nonBlankString, (stateName) => {
-      const issue = normalizeIssue(validIssueInput({ state: stateName }));
+      const issue = normalizeIssue(validIssueInput({ state: stateName, state_type: "unstarted" }));
       assert.equal(issue.state, stateName);
     }),
     { numRuns: 200 },
@@ -104,7 +113,7 @@ test("nested object form takes priority over snake_case and camelCase", () => {
       fc.pre(nested !== snake && nested !== camel);
       const issue = normalizeIssue(
         validIssueInput({
-          state: { name: nested },
+          state: { name: nested, type: "unstarted" },
           state_name: snake,
           stateName: camel,
         }),
@@ -124,6 +133,7 @@ test("snake_case takes priority over camelCase when no nested object", () => {
           state: undefined,
           state_name: snake,
           stateName: camel,
+          state_type: "unstarted",
         }),
       );
       assert.equal(issue.state, snake);
@@ -135,7 +145,9 @@ test("snake_case takes priority over camelCase when no nested object", () => {
 test("state is preserved exactly (not trimmed or lowercased)", () => {
   fc.assert(
     fc.property(paddedString, (stateName) => {
-      const issue = normalizeIssue(validIssueInput({ state: { name: stateName } }));
+      const issue = normalizeIssue(
+        validIssueInput({ state: { name: stateName, type: "unstarted" } }),
+      );
       assert.equal(issue.state, stateName);
     }),
     { numRuns: 200 },
@@ -531,6 +543,7 @@ test("arbitrary records missing required fields are rejected", () => {
           identifier: "PROJ-1",
           title: "A title",
           state: "Todo",
+          state_type: "unstarted",
           ...extraFields,
         };
         delete input[missingKey];
@@ -567,6 +580,7 @@ test("invalid types for required fields cause rejection regardless of other fiel
           identifier: "PROJ-1",
           title: "A title",
           state: "Todo",
+          state_type: "unstarted",
           ...extras,
         };
         input[targetKey] = badValue;
@@ -590,6 +604,7 @@ test("blank/whitespace-only required fields cause rejection", () => {
         identifier: "PROJ-1",
         title: "A title",
         state: "Todo",
+        state_type: "unstarted",
       };
       input[targetKey] = blank;
       assert.throws(() => normalizeIssue(input), new RegExp(`issue\\.${targetKey} is required`));
@@ -621,7 +636,7 @@ test("canonical state types with random casing and padding are accepted", () => 
   );
 });
 
-test("non-canonical state types become null", () => {
+test("non-canonical state types throw", () => {
   fc.assert(
     fc.property(
       fc
@@ -633,17 +648,17 @@ test("non-canonical state types become null", () => {
             ),
         ),
       (invalidType) => {
-        const issue = normalizeIssue(
-          validIssueInput({ state: { name: "Todo", type: invalidType } }),
+        assert.throws(
+          () => normalizeIssue(validIssueInput({ state: { name: "Todo", type: invalidType } })),
+          /stateType is required/,
         );
-        assert.equal(issue.stateType, null);
       },
     ),
     { numRuns: 200 },
   );
 });
 
-test("near-miss state types (mutations of valid types) become null", () => {
+test("near-miss state types (mutations of valid types) throw", () => {
   const mutatedStateType = fc
     .constantFrom(...ISSUE_STATE_TYPES)
     .chain((base) =>
@@ -673,18 +688,22 @@ test("near-miss state types (mutations of valid types) become null", () => {
 
   fc.assert(
     fc.property(mutatedStateType, (invalidType) => {
-      const issue = normalizeIssue(validIssueInput({ state: { name: "Todo", type: invalidType } }));
-      assert.equal(issue.stateType, null);
+      assert.throws(
+        () => normalizeIssue(validIssueInput({ state: { name: "Todo", type: invalidType } })),
+        /stateType is required/,
+      );
     }),
     { numRuns: 200 },
   );
 });
 
-test("null or missing state type remains null", () => {
+test("null or missing state type throws", () => {
   fc.assert(
     fc.property(nonBlankString, (stateName) => {
-      const issue = normalizeIssue(validIssueInput({ state: { name: stateName } }));
-      assert.equal(issue.stateType, null);
+      assert.throws(
+        () => normalizeIssue(validIssueInput({ state: { name: stateName } })),
+        /stateType is required/,
+      );
     }),
     { numRuns: 200 },
   );
@@ -728,19 +747,27 @@ test("stateType camelCase field works as fallback", () => {
 
 // INVARIANT: When an issue is normalized, it SHALL have all required fields populated.
 
-test("normalized issue always has id, identifier, title, state, labels, blockers", () => {
+test("normalized issue always has id, identifier, title, state, stateType, labels, blockers", () => {
   fc.assert(
     fc.property(
       nonBlankString,
       nonBlankString,
       nonBlankString,
       nonBlankString,
-      (id, identifier, title, stateName) => {
-        const issue = normalizeIssue({ id, identifier, title, state: stateName });
+      fc.constantFrom(...ISSUE_STATE_TYPES),
+      (id, identifier, title, stateName, stateType) => {
+        const issue = normalizeIssue({
+          id,
+          identifier,
+          title,
+          state: stateName,
+          state_type: stateType,
+        });
         assert.ok(typeof issue.id === "string" && issue.id.length > 0);
         assert.ok(typeof issue.identifier === "string" && issue.identifier.length > 0);
         assert.ok(typeof issue.title === "string" && issue.title.length > 0);
         assert.ok(typeof issue.state === "string" && issue.state.length > 0);
+        assert.ok(typeof issue.stateType === "string");
         assert.ok(Array.isArray(issue.labels));
         assert.ok(Array.isArray(issue.blockers));
       },
@@ -757,7 +784,7 @@ test("raw field preserves the original input object", () => {
       nonBlankString,
       nonBlankString,
       (id, identifier, title, state) => {
-        const input = { id, identifier, title, state };
+        const input = { id, identifier, title, state, state_type: "unstarted" };
         const issue = normalizeIssue(input);
         assert.equal(issue.raw, input);
       },

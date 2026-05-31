@@ -9,7 +9,7 @@
 
 ## New Failures Found
 
-### Failure 12: S-1251
+### Failure 12: S-1251  
 **Invariant Violated:** Per-state concurrency cap SHALL be enforced regardless of state name casing  
 **Code Location:** `ts/packages/orchestrator/src/index.ts` — `eligibleIssues` / `claim` (runningByState Map construction) and `ts/packages/dispatch/src/index.ts` — `dispatchBlockReason` (line 64)  
 **Explanation:** The `runningByState` Map is built using raw `entry.issue.state` strings as keys (case-sensitive). However, `settingsForIssueState` resolves the per-state cap via `normalizeStateName()` which does `state.trim().toLowerCase()`. Two issues with states `"In Progress"` and `"in progress"` are logically the same state but get separate counts in the Map, allowing both to bypass the per-state cap.  

@@ -17,7 +17,7 @@ function makeIssue(overrides: Record<string, unknown> = {}) {
     id: "i1",
     identifier: "MT-1",
     title: "Title",
-    state: "Todo",
+    state: { name: "Todo", type: "unstarted" },
     ...overrides,
   });
 }
@@ -56,20 +56,20 @@ describe("shouldDispatchIssue", () => {
 
   test("terminal state returns false", () => {
     const settings = makeSettings();
-    const issue = makeIssue({ state: "Done" });
+    const issue = makeIssue({ state: { name: "Done", type: "completed" } });
     assert.equal(shouldDispatchIssue(issue, settings, { runningCount: 0 }), false);
   });
 
   test("returns true for valid active issue with unclaimed slots", () => {
     const settings = makeSettings();
-    const issue = makeIssue({ state: "Todo" });
+    const issue = makeIssue();
     const state = { runningCount: 0, claimedSlots: new Set<string>() };
     assert.equal(shouldDispatchIssue(issue, settings, state), true);
   });
 
   test("returns false when all ensemble slots are claimed", () => {
     const settings = makeSettings({ agent: { ensemble_size: 2 } });
-    const issue = makeIssue({ state: "Todo" });
+    const issue = makeIssue();
     const claimed = new Set([slotKey(issue.id, 0), slotKey(issue.id, 1)]);
     const state = { runningCount: 0, claimedSlots: claimed };
     assert.equal(shouldDispatchIssue(issue, settings, state), false);
@@ -77,7 +77,7 @@ describe("shouldDispatchIssue", () => {
 
   test("returns true when some ensemble slots are unclaimed", () => {
     const settings = makeSettings({ agent: { ensemble_size: 3 } });
-    const issue = makeIssue({ state: "Todo" });
+    const issue = makeIssue();
     const claimed = new Set([slotKey(issue.id, 0), slotKey(issue.id, 1)]);
     const state = { runningCount: 0, claimedSlots: claimed };
     assert.equal(shouldDispatchIssue(issue, settings, state), true);
@@ -85,7 +85,7 @@ describe("shouldDispatchIssue", () => {
 
   test("returns false when global concurrency cap is reached", () => {
     const settings = makeSettings({ agent: { max_concurrent_agents: 2 } });
-    const issue = makeIssue({ state: "Todo" });
+    const issue = makeIssue();
     const state = { runningCount: 2, claimedSlots: new Set<string>() };
     assert.equal(shouldDispatchIssue(issue, settings, state), false);
   });
@@ -95,7 +95,7 @@ describe("shouldDispatchIssue", () => {
       agent: { max_concurrent_agents: 10 },
       status_overrides: { Todo: { agent: { max_concurrent_agents: 1 } } },
     });
-    const issue = makeIssue({ state: "Todo" });
+    const issue = makeIssue();
     const runningByState = new Map([["Todo", 1]]);
     const state = { runningCount: 1, runningByState, claimedSlots: new Set<string>() };
     assert.equal(shouldDispatchIssue(issue, settings, state), false);
@@ -103,7 +103,7 @@ describe("shouldDispatchIssue", () => {
 
   test("returns false when workerCapacityAvailable is false", () => {
     const settings = makeSettings();
-    const issue = makeIssue({ state: "Todo" });
+    const issue = makeIssue();
     const state = {
       runningCount: 0,
       claimedSlots: new Set<string>(),
@@ -114,7 +114,7 @@ describe("shouldDispatchIssue", () => {
 
   test("returns true when workerCapacityAvailable is undefined (no constraint)", () => {
     const settings = makeSettings();
-    const issue = makeIssue({ state: "Todo" });
+    const issue = makeIssue();
     const state = {
       runningCount: 0,
       claimedSlots: new Set<string>(),
@@ -144,14 +144,14 @@ describe("shouldDispatchIssue", () => {
         dispatch: { only_routes: ["frontend"] },
       },
     });
-    const issue = makeIssue({ state: "Todo", labels: ["Symphony:Backend"] });
+    const issue = makeIssue({ labels: ["Symphony:Backend"] });
     const state = { runningCount: 0, claimedSlots: new Set<string>() };
     assert.equal(shouldDispatchIssue(issue, settings, state), false);
   });
 
   test("uses ensemble label on issue to determine slot count", () => {
     const settings = makeSettings({ agent: { ensemble_size: 1 } });
-    const issue = makeIssue({ state: "Todo", labels: ["ensemble:3"] });
+    const issue = makeIssue({ labels: ["ensemble:3"] });
     // With ensemble:3 label, there are 3 slots. Claiming only slot 0 leaves 2 unclaimed.
     const claimed = new Set([slotKey(issue.id, 0)]);
     const state = { runningCount: 0, claimedSlots: claimed };
@@ -331,28 +331,25 @@ describe("issueHasOpenBlockers", () => {
     assert.equal(issueHasOpenBlockers(issue, settings), false);
   });
 
-  test("returns false for issue with state name 'Todo' but no stateType (inferred unstarted)", () => {
-    const settings = makeSettings();
-    // The source code also checks: issue.state.trim().toLowerCase() === "todo"
-    // so even without explicit stateType "unstarted", a Todo issue is treated as unstarted
-    const issue = normalizeIssue({
-      id: "i1",
-      identifier: "MT-1",
-      title: "Title",
-      state: "Todo",
-      blockers: [{ state: "Done" }],
-    });
-    // All blockers are terminal so returns false, but the key point is the todo-state path is hit
-    assert.equal(issueHasOpenBlockers(issue, settings), false);
+  test("normalizeIssue throws when stateType is missing", () => {
+    assert.throws(() =>
+      normalizeIssue({
+        id: "i1",
+        identifier: "MT-1",
+        title: "Title",
+        state: "Todo",
+        blockers: [{ state: "Done" }],
+      }),
+    );
   });
 
-  test("returns true for issue with state name 'Todo' without explicit stateType and non-terminal blocker", () => {
+  test("stateType='unstarted' with non-terminal blocker returns true", () => {
     const settings = makeSettings();
     const issue = normalizeIssue({
       id: "i1",
       identifier: "MT-1",
       title: "Title",
-      state: "Todo",
+      state: { name: "Todo", type: "unstarted" },
       blockers: [{ state: "In Progress" }],
     });
     assert.equal(issueHasOpenBlockers(issue, settings), true);
@@ -441,14 +438,14 @@ describe("firstUnclaimedSlot", () => {
 describe("dispatchBlockReason", () => {
   test("returns null for dispatchable issue (no block)", () => {
     const settings = makeSettings();
-    const issue = makeIssue({ state: "Todo" });
+    const issue = makeIssue();
     const state = { runningCount: 0, claimedSlots: new Set<string>() };
     assert.equal(dispatchBlockReason(issue, settings, state), null);
   });
 
   test("returns global_concurrency_cap when runningCount >= maxConcurrentAgents", () => {
     const settings = makeSettings({ agent: { max_concurrent_agents: 3 } });
-    const issue = makeIssue({ state: "Todo" });
+    const issue = makeIssue();
     const state = { runningCount: 3, claimedSlots: new Set<string>() };
     assert.equal(dispatchBlockReason(issue, settings, state), "global_concurrency_cap");
   });
@@ -458,7 +455,7 @@ describe("dispatchBlockReason", () => {
       agent: { max_concurrent_agents: 10 },
       status_overrides: { Todo: { agent: { max_concurrent_agents: 2 } } },
     });
-    const issue = makeIssue({ state: "Todo" });
+    const issue = makeIssue();
     const runningByState = new Map([["Todo", 2]]);
     const state = { runningCount: 2, runningByState, claimedSlots: new Set<string>() };
     assert.equal(dispatchBlockReason(issue, settings, state), "local_concurrency_cap");
@@ -466,7 +463,7 @@ describe("dispatchBlockReason", () => {
 
   test("returns worker_host_capacity when workerCapacityAvailable is false", () => {
     const settings = makeSettings();
-    const issue = makeIssue({ state: "Todo" });
+    const issue = makeIssue();
     const state = {
       runningCount: 0,
       claimedSlots: new Set<string>(),
@@ -484,7 +481,7 @@ describe("dispatchBlockReason", () => {
 
   test("returns null when issue is in terminal state (not active)", () => {
     const settings = makeSettings();
-    const issue = makeIssue({ state: "Done" });
+    const issue = makeIssue({ state: { name: "Done", type: "completed" } });
     const state = { runningCount: 0, claimedSlots: new Set<string>() };
     assert.equal(dispatchBlockReason(issue, settings, state), null);
   });
@@ -494,7 +491,7 @@ describe("dispatchBlockReason", () => {
       agent: { max_concurrent_agents: 2 },
       status_overrides: { Todo: { agent: { max_concurrent_agents: 1 } } },
     });
-    const issue = makeIssue({ state: "Todo" });
+    const issue = makeIssue();
     const runningByState = new Map([["Todo", 2]]);
     const state = { runningCount: 2, runningByState, claimedSlots: new Set<string>() };
     // Global cap is checked first, so it wins
@@ -506,7 +503,7 @@ describe("dispatchBlockReason", () => {
       agent: { max_concurrent_agents: 10 },
       status_overrides: { Todo: { agent: { max_concurrent_agents: 1 } } },
     });
-    const issue = makeIssue({ state: "Todo" });
+    const issue = makeIssue();
     const runningByState = new Map([["Todo", 1]]);
     const state = {
       runningCount: 1,

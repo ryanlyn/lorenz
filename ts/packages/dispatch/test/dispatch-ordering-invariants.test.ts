@@ -1,20 +1,17 @@
 import { test } from "vitest";
 import fc from "fast-check";
 import { sortForDispatch } from "@symphony/cli";
-import type { Issue } from "@symphony/domain";
+import type { Issue, Priority } from "@symphony/domain";
 
 import { assert } from "../../../test/assert.js";
 
 /**
  * Helper: determines whether a priority value is considered "valid" by the sort.
- * Derived independently from the specification: valid priorities are numeric values
- * that are truthy AND in the closed interval [1, 4]. Everything else sorts last.
- *
- * NOTE: This is a specification-level predicate (not copied from source).
- * The sort specification says: priorities 1-4 are valid; null/undefined/out-of-range sort last.
+ * The Priority type enforces values are 1-4 at the type level, so the only
+ * "invalid" priority values at runtime are null and undefined.
  */
 function isValidPriority(p: number | null | undefined): boolean {
-  return typeof p === "number" && !Number.isNaN(p) && p >= 1 && p <= 4 && p !== 0;
+  return p !== null && p !== undefined;
 }
 
 /**
@@ -41,17 +38,13 @@ const arbIssue = (): fc.Arbitrary<Issue> =>
     ),
     title: fc.string({ minLength: 1, maxLength: 30 }),
     state: fc.constant("active"),
+    stateType: fc.constant("started" as const),
     labels: fc.constant([] as string[]),
     blockers: fc.constant([]),
     priority: fc.oneof(
-      fc.constantFrom(1, 2, 3, 4),
-      fc.constant(null as number | null),
-      fc.constant(undefined as number | undefined),
-      fc.integer({ min: -10, max: 0 }),
-      fc.integer({ min: 5, max: 100 }),
-      fc.constant(NaN),
-      fc.constant(Infinity),
-      fc.constant(-Infinity),
+      fc.constantFrom(1, 2, 3, 4) as fc.Arbitrary<Priority | null | undefined>,
+      fc.constant(null as Priority | null | undefined),
+      fc.constant(undefined as Priority | null | undefined),
     ),
     createdAt: fc.oneof(
       fc
@@ -73,16 +66,19 @@ const arbIssueWithValidPriority = (): fc.Arbitrary<Issue> =>
     identifier: fc.string({ minLength: 1, maxLength: 20 }),
     title: fc.string({ minLength: 1, maxLength: 30 }),
     state: fc.constant("active"),
+    stateType: fc.constant("started" as const),
     labels: fc.constant([] as string[]),
     blockers: fc.constant([]),
-    priority: fc.constantFrom(1, 2, 3, 4),
+    priority: fc.constantFrom(1, 2, 3, 4) as fc.Arbitrary<Priority>,
     createdAt: fc
       .integer({ min: new Date("2000-01-01").getTime(), max: new Date("2040-01-01").getTime() })
       .map((ms) => new Date(ms).toISOString()),
   });
 
 /**
- * Arbitrary that produces an Issue with null/missing/out-of-range priority.
+ * Arbitrary that produces an Issue with null/undefined priority.
+ * The Priority type (1|2|3|4) enforces valid values at the type level,
+ * so the only "invalid" priorities at runtime are null and undefined.
  */
 const arbIssueWithInvalidPriority = (): fc.Arbitrary<Issue> =>
   fc.record({
@@ -90,18 +86,10 @@ const arbIssueWithInvalidPriority = (): fc.Arbitrary<Issue> =>
     identifier: fc.string({ minLength: 1, maxLength: 20 }),
     title: fc.string({ minLength: 1, maxLength: 30 }),
     state: fc.constant("active"),
+    stateType: fc.constant("started" as const),
     labels: fc.constant([] as string[]),
     blockers: fc.constant([]),
-    priority: fc.oneof(
-      fc.constant(null as number | null),
-      fc.constant(undefined as number | undefined),
-      fc.constant(0),
-      fc.integer({ min: 5, max: 100 }),
-      fc.integer({ min: -100, max: -1 }),
-      fc.constant(NaN),
-      fc.constant(Infinity),
-      fc.constant(-Infinity),
-    ),
+    priority: fc.constant(null) as fc.Arbitrary<Priority | null | undefined>,
     createdAt: fc
       .integer({ min: new Date("2000-01-01").getTime(), max: new Date("2040-01-01").getTime() })
       .map((ms) => new Date(ms).toISOString()),
@@ -116,6 +104,7 @@ const arbIssueWithInvalidCreatedAt = (): fc.Arbitrary<Issue> =>
     identifier: fc.string({ minLength: 1, maxLength: 20 }),
     title: fc.string({ minLength: 1, maxLength: 30 }),
     state: fc.constant("active"),
+    stateType: fc.constant("started" as const),
     labels: fc.constant([] as string[]),
     blockers: fc.constant([]),
     priority: fc.constantFrom(1, 2, 3, 4),
@@ -227,6 +216,7 @@ test("all four priorities: list with one of each priority is sorted 1,2,3,4", ()
           identifier: `ID-${p}`,
           title: `Title ${p}`,
           state: "active",
+          stateType: "started",
           labels: [],
           blockers: [],
           priority: p,
@@ -259,6 +249,7 @@ test("same priority with earlier creation time SHALL sort first", () => {
           identifier: idA,
           title: "A",
           state: "active",
+          stateType: "started",
           labels: [],
           blockers: [],
           priority,
@@ -269,6 +260,7 @@ test("same priority with earlier creation time SHALL sort first", () => {
           identifier: idB,
           title: "B",
           state: "active",
+          stateType: "started",
           labels: [],
           blockers: [],
           priority,
@@ -304,6 +296,7 @@ test("same priority and creation time, lexicographically earlier identifier SHAL
           identifier: idA,
           title: "A",
           state: "active",
+          stateType: "started",
           labels: [],
           blockers: [],
           priority,
@@ -314,6 +307,7 @@ test("same priority and creation time, lexicographically earlier identifier SHAL
           identifier: idB,
           title: "B",
           state: "active",
+          stateType: "started",
           labels: [],
           blockers: [],
           priority,
@@ -346,6 +340,7 @@ test("unicode identifiers: handles unicode comparison correctly", () => {
           identifier: id,
           title: "T",
           state: "active",
+          stateType: "started",
           labels: [],
           blockers: [],
           priority,
@@ -415,6 +410,7 @@ test("dispatch with null, missing, or unparseable creation time SHALL sort last 
           identifier: "VALID-1",
           title: "Valid",
           state: "active",
+          stateType: "started",
           labels: [],
           blockers: [],
           priority,
@@ -455,6 +451,7 @@ test("multi: within the same priority, all invalid-createdAt dispatches sort aft
           identifier: `V-${i}`,
           title: `Valid ${i}`,
           state: "active",
+          stateType: "started",
           labels: [],
           blockers: [],
           priority,
@@ -465,6 +462,7 @@ test("multi: within the same priority, all invalid-createdAt dispatches sort aft
           identifier: `I-${i}`,
           title: `Invalid ${i}`,
           state: "active",
+          stateType: "started",
           labels: [],
           blockers: [],
           priority,
@@ -553,6 +551,7 @@ test("sort SHALL be transitive (A < B < C by priority implies A before C)", () =
           identifier: "A",
           title: "A",
           state: "active",
+          stateType: "started",
           labels: [],
           blockers: [],
           priority: basePriority,
@@ -563,6 +562,7 @@ test("sort SHALL be transitive (A < B < C by priority implies A before C)", () =
           identifier: "B",
           title: "B",
           state: "active",
+          stateType: "started",
           labels: [],
           blockers: [],
           priority: (basePriority + 1) as 2 | 3 | 4,
@@ -573,6 +573,7 @@ test("sort SHALL be transitive (A < B < C by priority implies A before C)", () =
           identifier: "C",
           title: "C",
           state: "active",
+          stateType: "started",
           labels: [],
           blockers: [],
           priority: (basePriority + 2) as 3 | 4 | 5,
@@ -615,6 +616,7 @@ test("transitivity via createdAt: A < B < C by date implies A before C", () => {
           identifier: "ZZZ", // worst identifier, should not matter
           title: "A",
           state: "active",
+          stateType: "started",
           labels: [],
           blockers: [],
           priority,
@@ -625,6 +627,7 @@ test("transitivity via createdAt: A < B < C by date implies A before C", () => {
           identifier: "MMM",
           title: "B",
           state: "active",
+          stateType: "started",
           labels: [],
           blockers: [],
           priority,
@@ -635,6 +638,7 @@ test("transitivity via createdAt: A < B < C by date implies A before C", () => {
           identifier: "AAA", // best identifier, should not matter
           title: "C",
           state: "active",
+          stateType: "started",
           labels: [],
           blockers: [],
           priority,
@@ -676,6 +680,7 @@ test("priority SHALL dominate createdAt and identifier in ordering", () => {
         identifier: "ZZZ-999",
         title: "Better",
         state: "active",
+        stateType: "started",
         labels: [],
         blockers: [],
         priority: lowerPriority,
@@ -686,6 +691,7 @@ test("priority SHALL dominate createdAt and identifier in ordering", () => {
         identifier: "AAA-001",
         title: "Worse",
         state: "active",
+        stateType: "started",
         labels: [],
         blockers: [],
         priority: higherPriority,
@@ -712,6 +718,7 @@ test("createdAt SHALL dominate identifier within the same priority group", () =>
           identifier: "ZZZ-999", // worse identifier
           title: "Early",
           state: "active",
+          stateType: "started",
           labels: [],
           blockers: [],
           priority,
@@ -722,6 +729,7 @@ test("createdAt SHALL dominate identifier within the same priority group", () =>
           identifier: "AAA-001", // better identifier
           title: "Late",
           state: "active",
+          stateType: "started",
           labels: [],
           blockers: [],
           priority,

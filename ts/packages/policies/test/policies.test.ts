@@ -56,6 +56,7 @@ test("resumeIdentityMatches — null workerHost matches undefined", () => {
       identifier: "ENG-1",
       title: "t",
       state: "In Progress",
+      stateType: "started",
       labels: [],
       blockers: [],
     } as Issue,
@@ -79,6 +80,7 @@ test("resumeIdentityMatches — all fields match with non-null workerHost return
       identifier: "ENG-1",
       title: "t",
       state: "In Progress",
+      stateType: "started",
       labels: [],
       blockers: [],
     } as Issue,
@@ -102,6 +104,7 @@ test("resumeIdentityMatches — mismatched issueId returns false", () => {
       identifier: "ENG-2",
       title: "t",
       state: "In Progress",
+      stateType: "started",
       labels: [],
       blockers: [],
     } as Issue,
@@ -127,6 +130,7 @@ test("resumeIdentityMatches — stored workerHost string with current workerHost
       identifier: "ENG-1",
       title: "t",
       state: "In Progress",
+      stateType: "started",
       labels: [],
       blockers: [],
     } as Issue,
@@ -145,6 +149,7 @@ test("resumeIdentityMatches — mismatched workspace path returns false", () => 
       identifier: "ENG-1",
       title: "t",
       state: "In Progress",
+      stateType: "started",
       labels: [],
       blockers: [],
     } as Issue,
@@ -162,6 +167,7 @@ test("resumeIdentityMatches — empty string agent always returns false", () => 
       identifier: "ENG-1",
       title: "t",
       state: "In Progress",
+      stateType: "started",
       labels: [],
       blockers: [],
     } as Issue,
@@ -184,6 +190,7 @@ test("resumeIdentityMatches — mismatched workerHost strings returns false", ()
       identifier: "ENG-1",
       title: "t",
       state: "In Progress",
+      stateType: "started",
       labels: [],
       blockers: [],
     } as Issue,
@@ -201,6 +208,7 @@ function makeIssue(overrides: Partial<Issue> = {}): Issue {
     identifier: "ENG-1",
     title: "Test issue",
     state: "In Progress",
+    stateType: "started",
     labels: [],
     blockers: [],
     assignedToWorker: true,
@@ -231,7 +239,7 @@ function makeSettings(
 }
 
 test('reconciliationStopReason — terminal issue returns "terminal"', () => {
-  const issue = makeIssue({ state: "Done" });
+  const issue = makeIssue({ state: "Done", stateType: "completed" });
   const settings = makeSettings();
   assert.equal(reconciliationStopReason(issue, settings), "terminal");
 });
@@ -245,6 +253,7 @@ test('reconciliationStopReason — unrouted issue returns "unrouted"', () => {
 test('reconciliationStopReason — blocked issue returns "blocked"', () => {
   const issue = makeIssue({
     state: "Todo",
+    stateType: "unstarted",
     stateType: "unstarted",
     blockers: [{ id: "blocker-1", identifier: "ENG-2", state: "In Progress" }],
   });
@@ -265,7 +274,7 @@ test('reconciliationStopReason — active, routed, unblocked issue returns "inac
 test('reconciliationStopReason — terminal + unrouted: "terminal" takes priority over "unrouted"', () => {
   // Issue is in a terminal state AND is not assigned to this worker.
   // "terminal" should win because it is checked first.
-  const issue = makeIssue({ state: "Done", assignedToWorker: false });
+  const issue = makeIssue({ state: "Done", stateType: "completed", assignedToWorker: false });
   const settings = makeSettings();
   assert.equal(reconciliationStopReason(issue, settings), "terminal");
 });
@@ -275,7 +284,7 @@ test('reconciliationStopReason — terminal + unrouted + blocked: "terminal" tak
   // Since "Done" is terminal, that check fires first regardless of other conditions.
   const issue = makeIssue({
     state: "Done",
-    stateType: "unstarted",
+    stateType: "completed",
     assignedToWorker: false,
     blockers: [{ id: "blocker-1", identifier: "ENG-2", state: "In Progress" }],
   });
@@ -300,7 +309,7 @@ test('reconciliationStopReason — state not in activeStates returns "terminal"'
   // "Backlog" is not in activeStates ["In Progress", "Todo"] and not in terminalStates
   // ["Done", "Cancelled"]. issueIsActive requires state to be in activeStates, so this
   // returns false and the function returns "terminal".
-  const issue = makeIssue({ state: "Backlog" });
+  const issue = makeIssue({ state: "Backlog", stateType: "backlog" });
   const settings = makeSettings();
   assert.equal(reconciliationStopReason(issue, settings), "terminal");
 });
@@ -310,6 +319,7 @@ test('reconciliationStopReason — unrouted via route label mismatch returns "un
   // so routedToThisWorker returns false.
   const issue = makeIssue({
     state: "In Progress",
+    stateType: "started",
     labels: ["symphony:backend"],
   });
   const settings = makeSettings({ onlyRoutes: ["frontend"] });

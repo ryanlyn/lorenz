@@ -16,7 +16,7 @@ function issueWith(labels: string[]): Issue {
     identifier: "TEST-1",
     title: "Test issue",
     state: "Todo",
-    stateType: null,
+    stateType: "unstarted",
     description: null,
     branchName: null,
     url: null,
@@ -39,7 +39,7 @@ function normalizedIssueWith(rawLabels: string[]): Issue {
     id: "id-1",
     identifier: "TEST-1",
     title: "Test issue",
-    state: { name: "Todo" },
+    state: { name: "Todo", type: "unstarted" },
     labels: rawLabels,
   });
 }

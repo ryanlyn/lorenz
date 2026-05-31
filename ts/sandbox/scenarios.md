@@ -1,147 +1,6 @@
 # Symphony Invariant Test Results
 
-**Date:** 2026-05-29  
-**Total Scenarios Tested:** 210  
-**Passed:** 203  
-**Failed:** 7
 
----
-
-## Failures Found
-
-### Failure 3: S-120
-**Invariant Violated:** Token counts SHALL never become negative / NaN  
-**Code Location:** `ts/packages/policies/src/usage.ts` — `mergeMonotonicUsage` (lines 17-21)  
-**Explanation:** When `update.inputTokens` is `NaN`, the nullish coalescing (`??`) does NOT catch it (NaN is not null/undefined). This feeds NaN into `Math.max(10, 0, NaN)` which returns NaN in JavaScript. The result propagates through entry totals, reported totals, and global totals, corrupting all downstream state.  
-**Reproduction:**
-```ts
-import { mergeMonotonicUsage } from "@symphony/policies/usage";
-mergeMonotonicUsage({
-  entryTotals: { inputTokens: 10, outputTokens: 5, totalTokens: 15, secondsRunning: 0 },
-  reportedTotals: { inputTokens: 10, outputTokens: 5, totalTokens: 15, secondsRunning: 0 },
-  globalTotals: { inputTokens: 100, outputTokens: 50, totalTokens: 150, secondsRunning: 0 },
-  update: { inputTokens: NaN },
-});
-// entryTotals.inputTokens = NaN, globalTotals.inputTokens = NaN
-```
-**Suggested Fix:** Validate update values with `Number.isFinite()`:
-```ts
-const safeInput = Number.isFinite(input.update.inputTokens)
-  ? input.update.inputTokens : input.entryTotals.inputTokens;
-```
-
----
-
-### Failure 4: S-121
-**Invariant Violated:** Token counts SHALL never become negative / NaN  
-**Code Location:** `ts/packages/policies/src/usage.ts` — `mergeMonotonicUsage` (lines 27-31)  
-**Explanation:** Same root cause as S-120 but for the `totalTokens` field. `Math.max(10, 0, NaN)` returns NaN. Each token field is independently vulnerable. A single NaN field corrupts only that field's chain but leaves others intact.  
-**Reproduction:**
-```ts
-mergeMonotonicUsage({ ..., update: { totalTokens: NaN, inputTokens: 20 } });
-// entryTotals.totalTokens = NaN, but inputTokens correctly updates to 20
-```
-**Suggested Fix:** Same NaN guard applied to all three token fields.
-
----
-
-### Failure 5: S-185
-**Invariant Violated:** Retry delay SHALL never exceed the configured maximum cap  
-**Code Location:** `ts/packages/policies/src/retry.ts` — `retryBackoffMs` (line 8)  
-**Explanation:** The continuation path returns `1_000` unconditionally via early return, bypassing `Math.min(maxRetryBackoffMs, ...)`. When `maxRetryBackoffMs < 1000` (e.g., 500), the returned delay exceeds the configured cap.  
-**Reproduction:**
-```ts
-retryBackoffMs(1, 500, "continuation"); // Returns 1000, which exceeds cap of 500
-```
-**Suggested Fix:** Apply cap to continuation:
-```ts
-if (retryKind === "continuation") return Math.min(maxRetryBackoffMs, 1_000);
-```
-
----
-
-### Failure 6: S-186
-**Invariant Violated:** Token counts SHALL never become negative / NaN  
-**Code Location:** `ts/packages/policies/src/usage.ts` — `mergeMonotonicUsage` (lines 17-35)  
-**Explanation:** When ALL token fields in the update are NaN, all three chains (entry, reported, global) become NaN simultaneously. This is the compound version of S-120/S-121 affecting all fields at once.  
-**Reproduction:**
-```ts
-mergeMonotonicUsage({
-  ...,
-  update: { inputTokens: NaN, outputTokens: NaN, totalTokens: NaN },
-});
-// All token fields across all totals become NaN
-```
-**Suggested Fix:** Apply `Number.isFinite()` guard to each field before Math.max.
-
----
-
-### Failure 7: S-209
-**Invariant Violated:** Workspace path SHALL be a strict descendant of the workspace root  
-**Code Location:** `ts/packages/workspace/src/index.ts` — `workspacePath` (line ~22)  
-**Explanation:** `workspacePath("/tmp/w", "", 0, 1)` calls `safeIdentifier("")` which returns `""`, then `path.join("/tmp/w", "")` returns `"/tmp/w"` — which equals root. While `createWorkspaceForIssue` catches this downstream via `validateWorkspaceCwd`, the pure `workspacePath` function itself produces an invalid path. Any code path that calls `workspacePath` directly (without going through create) would get a root-equal path.  
-**Reproduction:**
-```ts
-import { workspacePath, safeIdentifier } from "@symphony/workspace";
-safeIdentifier("");           // ""
-workspacePath("/tmp/w", "");  // "/tmp/w" === root!
-```
-**Suggested Fix:** Guard in `safeIdentifier` or `workspacePath`:
-```ts
-export function workspacePath(root, identifier, slotIndex = 0, ensembleSize = 1) {
-  const safe = safeIdentifier(identifier);
-  if (!safe) throw new Error("empty identifier produces invalid workspace path");
-  ...
-}
-```
-
----
-
-### Failure 8: S-210
-**Invariant Violated:** Retry delay SHALL never exceed the configured maximum cap  
-**Code Location:** `ts/packages/policies/src/retry.ts` — `retryBackoffMs` (line 8)  
-**Explanation:** Same root cause as S-185. Continuation returns 1000 without cap enforcement. With `maxRetryBackoffMs=100`, result is 1000 > 100.  
-**Reproduction:** Same as S-185 with cap=100.  
-**Suggested Fix:** Same as S-185.
-
----
-
-### Failure 9: S-184
-**Invariant Violated:** WHEN a non-unstarted issue has non-terminal blockers, THE SYSTEM SHALL still consider it eligible (blockers only gate unstarted issues)  
-**Code Location:** `ts/packages/dispatch/src/index.ts` — `issueHasOpenBlockers` (line ~43)  
-**Explanation:** The function determines "unstarted" via `issue.stateType === "unstarted" || issue.state.trim().toLowerCase() === "todo"`. An issue with `stateType="started"` (explicitly categorized by the tracker as started) but `state="Todo"` (state name happens to be "Todo") is treated as unstarted due to the `||`. This means a started issue is incorrectly gated by blockers because its state name matches the hardcoded string "todo".  
-**Reproduction:**
-```ts
-import { issueHasOpenBlockers } from "@symphony/dispatch";
-const issue = {
-  ...validIssue,
-  state: "Todo",
-  stateType: "started",
-  blockers: [{ state: "In Progress" }],
-};
-issueHasOpenBlockers(issue, settings); // true — WRONG, stateType says it's started
-```
-**Suggested Fix:** Prefer `stateType` when available:
-```ts
-const unstarted = issue.stateType
-  ? issue.stateType === "unstarted"
-  : issue.state.trim().toLowerCase() === "todo";
-```
-
----
-
-## Summary of Distinct Bugs
-
-| # | Module | Bug | Severity |
-|---|--------|-----|----------|
-| 1 | `policies/usage` | NaN in update corrupts all token totals | High |
-| 2 | `policies/retry` | Continuation bypass ignores cap entirely | Low |
-| 3 | `workspace` | Empty identifier produces root-equal path | Medium |
-| 4 | `dispatch/issueHasOpenBlockers` | State name "Todo" overrides stateType="started" | Medium |
-
-(Failures 3-5-6 are variants of bug #1; failures 5-8 are variants of bug #2)
-
----
 
 # Symphony Invariant Test Scenarios
 
@@ -1125,7 +984,7 @@ const unstarted = issue.stateType
 **Setup:** entryTotals={input:10}, update={inputTokens:NaN}  
 **Action:** mergeMonotonicUsage(...)  
 **Expected:** Math.max(10, 0, NaN) = 10? Or NaN? (Math.max behavior with NaN)  
-**Status:** **FAILED** — Math.max(10, 0, NaN) returns NaN in JavaScript; corrupts all downstream totals
+**Status:** PASSED — Fixed: Number.isFinite() guard prevents NaN propagation
 
 ### S-121: NaN in update.totalTokens only
 **Category:** Usage Accounting  
@@ -1133,7 +992,7 @@ const unstarted = issue.stateType
 **Setup:** entryTotals={total:10}, update={totalTokens:NaN, inputTokens:20}  
 **Action:** mergeMonotonicUsage(...)  
 **Expected:** total: Math.max(10, 0, NaN) = NaN! Bug?  
-**Status:** **FAILED** — NaN propagates per-field; totalTokens becomes NaN while inputTokens correctly updates
+**Status:** PASSED — Fixed: Number.isFinite() guard prevents NaN propagation
 
 ### S-122: Very large token value (Number.MAX_SAFE_INTEGER)
 **Category:** Usage Accounting  
@@ -1669,7 +1528,7 @@ const unstarted = issue.stateType
 **Setup:** cap=500 (less than 1000)  
 **Action:** retryBackoffMs(1, 500, "continuation")  
 **Expected:** 1000 (doesn't go through Math.min(cap,...) path)  
-**Status:** **FAILED** — Continuation bypasses cap; returns 1000 even when cap is 500
+**Status:** PASSED — Fixed: continuation now returns Math.min(MIN_RETRY_DELAY_MS, maxRetryBackoffMs)
 
 ### S-186: mergeMonotonicUsage with all NaN update
 **Category:** Usage Accounting  
@@ -1677,7 +1536,7 @@ const unstarted = issue.stateType
 **Setup:** update={inputTokens:NaN, outputTokens:NaN, totalTokens:NaN}  
 **Action:** mergeMonotonicUsage(...)  
 **Expected:** Math.max(prev, 0, NaN) = NaN when prev > 0? Actually Math.max(10, 0, NaN) = NaN!  
-**Status:** **FAILED** — All token fields become NaN, corrupting entry, reported, and global totals
+**Status:** PASSED — Fixed: Number.isFinite() guard prevents NaN propagation
 
 ### S-187: ensembleSize with label "ensemble:01" (leading zero)
 **Category:** Ensemble Resolution  
@@ -1860,8 +1719,8 @@ const unstarted = issue.stateType
 **Invariant:** Safe behavior  
 **Setup:** safeIdentifier("")  
 **Action:** workspacePath("/tmp/w", "", 0, 1)  
-**Expected:** "/tmp/w/" or "/tmp/w" (path.join handles empty)  
-**Status:** **FAILED** — path.join("/tmp/w", "") returns "/tmp/w" which equals root, violating strict-descendant invariant
+**Expected:** Throws error (empty identifier produces invalid workspace path)  
+**Status:** PASSED — Fixed: workspacePath now throws when safeIdentifier yields empty string
 
 ### S-210: Continuation retry cap ignored
 **Category:** Retry and Backoff  
@@ -1869,4 +1728,4 @@ const unstarted = issue.stateType
 **Setup:** cap=100 (less than 1000)  
 **Action:** retryBackoffMs(1, 100, "continuation")  
 **Expected:** 1000 (cap not applied to continuation)  
-**Status:** **FAILED** — Same as S-185; continuation early-return bypasses Math.min(cap,...)
+**Status:** PASSED — Fixed: continuation now returns Math.min(MIN_RETRY_DELAY_MS, maxRetryBackoffMs)

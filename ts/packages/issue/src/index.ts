@@ -15,8 +15,10 @@ export function normalizeIssue(input: Record<string, unknown>, assignee?: string
     stringFromPath(input, ["state", "name"]) ??
     optionalString(input.state ?? input.state_name ?? input.stateName);
   if (state === null || state.trim() === "") throw new Error("issue.state is required");
-  const stateType =
+  const rawStateType =
     stringFromPath(input, ["state", "type"]) ?? optionalString(input.state_type ?? input.stateType);
+  const stateType = normalizeStateType(rawStateType);
+  if (stateType === null) throw new Error("issue.stateType is required");
   const assigneeId =
     stringFromPath(input, ["assignee", "id"]) ??
     optionalString(input.assignee_id ?? input.assigneeId);
@@ -36,7 +38,7 @@ export function normalizeIssue(input: Record<string, unknown>, assignee?: string
     title,
     description: optionalString(input.description),
     state,
-    stateType: normalizeStateType(stateType),
+    stateType,
     branchName: optionalString(input.branchName ?? input.branch_name),
     url: optionalString(input.url),
     priority: priorityOrNull(input.priority),

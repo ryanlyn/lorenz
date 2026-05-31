@@ -9,7 +9,7 @@ function makeIssue(overrides: Record<string, unknown> = {}) {
     id: "edge-1",
     identifier: "MT-EDGE-1",
     title: "Edge case issue",
-    state: "Todo",
+    state: { name: "Todo", type: "unstarted" },
     ...overrides,
   });
 }
@@ -242,7 +242,7 @@ test("eligibleIssues — issue with unresolved blockers excluded", () => {
     id: "blocked",
     identifier: "MT-BLOCKED",
     title: "Blocked",
-    state: "Todo",
+    state: { name: "Todo", type: "unstarted" },
     blockers: [{ id: "dep-1", identifier: "MT-DEP", state: "In Progress" }],
   });
 
