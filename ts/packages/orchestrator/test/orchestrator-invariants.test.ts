@@ -215,93 +215,8 @@ describe("INVARIANT: When a slot is already claimed, a repeated claim for the sa
     const second = orch.claim(issue);
     assert.equal(second, null);
 
-  assert.equal(orch.state.claimed.has(slotKey(issue.id, 0)), true);
-  assert.equal(orch.state.running.size, 1);
-});
-
-// INVARIANT: When a claim succeeds, the retryAttempts entry for that issue SHALL be deleted.
-test("successful claim deletes the retryAttempts entry for the issue", () => {
-  const clock = makeClock(1000000);
-  const settings = makeSettings({ maxConcurrent: 10 });
-  const orch = new Orchestrator(settings, clock);
-  const issue = makeIssue();
-
-  const entry = orch.claim(issue);
-  assert.ok(entry !== null);
-  clock.advance(1000);
-  orch.finish(issue.id, 0, true, undefined, "continuation");
-
-  const snap1 = orch.snapshot();
-  assert.equal(snap1.retrying.length, 1);
-
-  // Advance past dueAt
-  clock.advance(10000);
-  const entry2 = orch.claim(issue);
-  assert.ok(entry2 !== null);
-
-  assert.equal(orch.state.retryAttempts.has(issue.id), false);
-  assert.equal(orch.snapshot().retrying.length, 0);
-});
-
-// INVARIANT: When an entry is finished, its slot key SHALL be removed from both the running map and claimed set.
-test("finish removes slot key from running map and claimed set", () => {
-  const clock = makeClock(1000000);
-  const settings = makeSettings({ maxConcurrent: 10 });
-  const orch = new Orchestrator(settings, clock);
-  const issue = makeIssue();
-
-  orch.claim(issue);
-  assert.equal(orch.state.running.has(slotKey(issue.id, 0)), true);
-  assert.equal(orch.state.claimed.has(slotKey(issue.id, 0)), true);
-
-  clock.advance(5000);
-  orch.finish(issue.id, 0, false);
-
-  assert.equal(orch.state.running.has(slotKey(issue.id, 0)), false);
-  assert.equal(orch.state.claimed.has(slotKey(issue.id, 0)), false);
-  assert.equal(orch.snapshot().running.length, 0);
-});
-
-// INVARIANT: When all ensemble slots are claimed, the system SHALL return null on subsequent claim attempts.
-test("issue with all ensemble slots claimed returns null on subsequent claim", () => {
-  fc.assert(
-    fc.property(fc.integer({ min: 1, max: 5 }), (ensembleSize) => {
-      const clock = makeClock(1000000);
-      const settings = makeSettings({ maxConcurrent: 20, ensembleSize });
-      const orch = new Orchestrator(settings, clock);
-      const issue = makeIssue();
-
-      for (let i = 0; i < ensembleSize; i++) {
-        const entry = orch.claim(issue);
-        assert.ok(entry !== null);
-        assert.equal(entry!.slotIndex, i);
-      }
-
-      assert.equal(orch.claim(issue), null);
-      assert.equal(orch.eligibleIssues([issue]).length, 0);
-    }),
-    { numRuns: 200 },
-  );
-});
-
-// INVARIANT: When a retry becomes due, stale claimed slots SHALL be released and re-dispatch SHALL proceed.
-test("stale claim released when retry becomes due and re-dispatch proceeds", () => {
-  const clock = makeClock(1000000);
-  const settings = makeSettings({ maxConcurrent: 10 });
-  const orch = new Orchestrator(settings, clock);
-  const issue = makeIssue();
-
-  // Add stale claim (claimed but NOT running)
-  orch.state.claimed.add(slotKey(issue.id, 0));
-
-  // Set a retry entry with deadline in the past
-  orch.state.retryAttempts.set(issue.id, {
-    issueId: issue.id,
-    identifier: issue.identifier,
-    attempt: 1,
-    dueAt: new Date(clock.now().getTime() - 1000),
-    monotonicDeadlineMs: clock.monotonicMs() - 1000,
-    error: "agent exited",
+    assert.equal(orch.state.claimed.has(slotKey(issue.id, 0)), true);
+    assert.equal(orch.state.running.size, 1);
   });
 });
 
@@ -383,12 +298,13 @@ describe("INVARIANT: When a retry becomes due, stale claimed slots SHALL be rele
     // Add stale claim (claimed but NOT running)
     orch.state.claimed.add(slotKey(issue.id, 0));
 
-    // Set a retry entry with dueAt in the past
+    // Set a retry entry with deadline in the past
     orch.state.retryAttempts.set(issue.id, {
       issueId: issue.id,
       identifier: issue.identifier,
       attempt: 1,
       dueAt: new Date(clock.now().getTime() - 1000),
+      monotonicDeadlineMs: clock.monotonicMs() - 1000,
       error: "agent exited",
     });
 

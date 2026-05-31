@@ -72,7 +72,7 @@ describe("INVARIANT: result is always non-negative when maxRetryBackoffMs >= 0",
   });
 });
 
-describe("INVARIANT: failure delay is always >= 1000ms minimum floor to prevent retry storms", () => {
+describe("INVARIANT: failure delay never exceeds maxRetryBackoffMs", () => {
 test("retryBackoffMs — failure delay never exceeds maxRetryBackoffMs", () => {
   fc.assert(
     fc.property(
