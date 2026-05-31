@@ -25,13 +25,19 @@ const numericInput = z.union([
     .refine((n) => !Number.isNaN(n), { message: "must be a number" }),
 ]);
 
-const coercedPositiveInt = numericInput.refine((n) => Number.isInteger(n) && n > 0, {
-  message: "must be a positive integer",
-});
+const coercedPositiveInt = numericInput
+  .refine((n) => Number.isInteger(n) && n > 0, { message: "must be a positive integer" })
+  .describe("positive");
 
-const coercedNonNegativeInt = numericInput.refine((n) => Number.isInteger(n) && n >= 0, {
-  message: "must be a non-negative integer",
-});
+const coercedNonNegativeInt = numericInput
+  .refine((n) => Number.isInteger(n) && n >= 0, { message: "must be a non-negative integer" })
+  .describe("non-negative");
+
+const coercedPort = numericInput
+  .refine((n) => Number.isInteger(n) && n >= 0 && n <= 65535, {
+    message: "must be a valid port number (0-65535)",
+  })
+  .describe("non-negative");
 
 const coercedBoolean = z.union([
   z.boolean(),
@@ -39,15 +45,18 @@ const coercedBoolean = z.union([
   z.literal("false").transform(() => false),
 ]);
 
+const approvalPolicySchema = z.union([z.string(), z.record(z.string(), z.unknown())]).optional();
+const sandboxPolicySchema = z.record(z.string(), z.unknown()).nullable().optional();
+
 const optionalHookScript = z.string().nullable().optional();
 
 const appServerAgentRecordSchema = z
   .object({
     executor: z.literal("appserver"),
     command: z.string().optional(),
-    approvalPolicy: z.unknown().optional(),
+    approvalPolicy: approvalPolicySchema,
     threadSandbox: z.string().optional(),
-    turnSandboxPolicy: z.unknown().optional(),
+    turnSandboxPolicy: sandboxPolicySchema,
     turnTimeoutMs: coercedPositiveInt.optional(),
     readTimeoutMs: coercedPositiveInt.optional(),
     stallTimeoutMs: coercedNonNegativeInt.optional(),
@@ -121,9 +130,9 @@ const agentRawSchema = z
 const codexRawSchema = z
   .object({
     command: z.string().optional(),
-    approvalPolicy: z.unknown().optional(),
+    approvalPolicy: approvalPolicySchema,
     threadSandbox: z.string().optional(),
-    turnSandboxPolicy: z.unknown().optional(),
+    turnSandboxPolicy: sandboxPolicySchema,
     turnTimeoutMs: coercedPositiveInt.optional(),
     readTimeoutMs: coercedPositiveInt.optional(),
     stallTimeoutMs: coercedNonNegativeInt.optional(),
@@ -149,7 +158,7 @@ const observabilityRawSchema = z
 const serverRawSchema = z
   .object({
     host: z.string().optional(),
-    port: coercedNonNegativeInt.optional(),
+    port: coercedPort.optional(),
   })
   .strict();
 const loggingRawSchema = z.object({ logFile: z.string().optional() }).strict();
@@ -825,7 +834,6 @@ function configErrorMessage(error: z.ZodError, baseLabel?: string): string {
   if (issue.code === "too_small") return integerMessageForLabel(label);
   if (issue.code === "custom") return `${label} ${issue.message}`;
   if (issue.code === "invalid_union") {
-    // Zod 3.x ZodInvalidUnionIssue exposes nested errors per branch.
     const innerErrors = (issue as { errors?: unknown[][] }).errors;
     const firstInner = innerErrors?.[0]?.[0] as { expected?: string } | undefined;
     if (firstInner?.expected === "boolean") return `expected a boolean`;
@@ -835,16 +843,18 @@ function configErrorMessage(error: z.ZodError, baseLabel?: string): string {
   return `${label} is invalid: ${issue.message}`;
 }
 
-const NON_NEGATIVE_INT_FIELDS = new Set(["port", "stall_timeout_ms"]);
-
 function integerMessageForLabel(label: string): string {
   const field = label.split(".").pop() ?? "";
-  const kind = NON_NEGATIVE_INT_FIELDS.has(field) ? "a non-negative integer" : "a positive integer";
+  if (field === "port") return `${label} must be a valid port number (0-65535)`;
+  const kind = field === "stall_timeout_ms" ? "a non-negative integer" : "a positive integer";
   return `${label} must be ${kind}`;
 }
 
 function camelToSnake(s: string): string {
-  return s.replace(/[A-Z]/g, (ch) => `_${ch.toLowerCase()}`);
+  return s
+    .replace(/([A-Z]+)([A-Z][a-z])/g, "$1_$2")
+    .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
+    .toLowerCase();
 }
 
 function pathLabel(

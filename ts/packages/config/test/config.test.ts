@@ -355,7 +355,11 @@ test("config rejects empty strings and booleans for typed fields", () => {
   );
   assert.throws(
     () => parseConfig({ server: { port: "" } }),
-    /server.port must be a non-negative integer/,
+    /server.port must be a valid port number/,
+  );
+  assert.throws(
+    () => parseConfig({ server: { port: 99999 } }),
+    /server.port must be a valid port number/,
   );
   assert.throws(
     () => parseConfig({ polling: { interval_ms: true } }),
