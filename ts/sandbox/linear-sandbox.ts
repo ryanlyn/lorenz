@@ -4,7 +4,8 @@
  * Unlike the in-memory sandbox (sandbox.ts), this variant:
  * - Creates real Linear issues via the API as test fixtures
  * - Uses the real LinearClient as the RuntimeTrackerClient
- * - Still uses a FakeAgentRunner (tests tracker integration, not agent execution)
+ * - Uses the real runAgentAttempt (RunController) with a fake AgentExecutor
+ * - Mirrors production wiring: clientFactory, full runner adapters
  * - Cleans up (archives) all created issues on completion
  *
  * Requires: LINEAR_API_KEY and LINEAR_PROJECT_SLUG environment variables.
@@ -14,8 +15,14 @@
  */
 
 import { LinearClient, parseConfig } from "@symphony/cli";
+import {
+  runAgentAttempt as runAgentAttemptCore,
+  type RunAgentAttemptAdapters,
+  type RunAgentAttemptInput,
+  type RunResult,
+} from "@symphony/agent-runner";
 import { SymphonyRuntime } from "@symphony/runtime";
-import type { Issue, Settings, WorkflowDefinition } from "@symphony/cli";
+import type { Issue, Settings, WorkflowDefinition, AgentExecutor, AgentSession } from "@symphony/cli";
 import type {
   RuntimeRunner,
   RuntimeSnapshot,
@@ -24,8 +31,8 @@ import type {
 } from "@symphony/runtime";
 import type { LinearProject, LinearTeam, LinearState } from "@symphony/linear-tracker";
 
-import { createFakeAgentRunner, sleep } from "./sandbox.js";
-import type { FakeRunnerConfig, Assertion } from "./sandbox.js";
+import { sleep } from "./sandbox.js";
+import type { FakeRunnerConfig, FakeRunnerIssueBehavior, Assertion } from "./sandbox.js";
 import { checkAssertions } from "./sandbox.js";
 
 // ---------------------------------------------------------------------------
@@ -153,6 +160,112 @@ export async function setupLinearSandbox(): Promise<LinearSandboxContext> {
 // Scenario Runner
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Production-faithful runner: uses real runAgentAttempt with a fake executor
+// ---------------------------------------------------------------------------
+
+function createSandboxExecutor(config: FakeRunnerConfig): AgentExecutor {
+  const defaultBehavior: Required<FakeRunnerIssueBehavior> = {
+    shouldSucceed: true,
+    errorMessage: "FakeExecutor: simulated failure",
+    turnCount: 1,
+    latencyPerTurnMs: 0,
+    stall: false,
+    usagePerTurn: { inputTokens: 100, outputTokens: 50, totalTokens: 150 },
+    crashMidTurn: false,
+    crashAtTurn: 1,
+    customUpdates: [],
+  };
+
+  function resolveBehavior(issue: Issue | undefined): Required<FakeRunnerIssueBehavior> {
+    if (!issue) return { ...defaultBehavior, ...config.defaultBehavior };
+    if (config.byId && config.byId[issue.id]) {
+      return { ...defaultBehavior, ...config.defaultBehavior, ...config.byId[issue.id] };
+    }
+    if (config.byPattern) {
+      for (const { pattern, behavior } of config.byPattern) {
+        if (pattern.test(issue.id) || pattern.test(issue.identifier)) {
+          return { ...defaultBehavior, ...config.defaultBehavior, ...behavior };
+        }
+      }
+    }
+    return { ...defaultBehavior, ...config.defaultBehavior };
+  }
+
+  const turnsBySession = new Map<string, number>();
+
+  return {
+    kind: "codex" as const,
+    async startSession(input) {
+      const sessionId = `sandbox-session-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+      const session: AgentSession = {
+        agentKind: "codex",
+        sessionId,
+        resumeId: input.resumeId ?? null,
+        executorPid: null,
+        async stop() {
+          turnsBySession.delete(sessionId);
+        },
+      };
+      turnsBySession.set(sessionId, 0);
+      input.onUpdate?.({ type: "session_started", sessionId });
+      return session;
+    },
+    async runTurn(session, _prompt, issue) {
+      const behavior = resolveBehavior(issue);
+      const sessionId = session.sessionId!;
+      const currentTurn = (turnsBySession.get(sessionId) ?? 0) + 1;
+      turnsBySession.set(sessionId, currentTurn);
+
+      if (behavior.stall) {
+        return new Promise<never>(() => {});
+      }
+
+      if (behavior.crashMidTurn && currentTurn === behavior.crashAtTurn) {
+        throw new Error("FakeExecutor: crash mid-turn");
+      }
+
+      if (behavior.latencyPerTurnMs > 0) {
+        await sleep(behavior.latencyPerTurnMs);
+      }
+
+      if (!behavior.shouldSucceed) {
+        throw new Error(behavior.errorMessage);
+      }
+
+      return [];
+    },
+  };
+}
+
+function createSandboxRunnerAdapters(executor: AgentExecutor): RunAgentAttemptAdapters {
+  let workspaceCounter = 0;
+  return {
+    async createWorkspaceForIssue(_settings, issue, _options) {
+      workspaceCounter += 1;
+      return `/tmp/linear-sandbox-workspaces/${issue.identifier}-${workspaceCounter}`;
+    },
+    async runHook() {},
+    async readResumeState() {
+      return { status: "missing" as const };
+    },
+    resumeStateMatches() {
+      return false;
+    },
+    async writeResumeState() {},
+    executorFactory: () => executor,
+  };
+}
+
+function createSandboxRunner(config: FakeRunnerConfig): RuntimeRunner {
+  const executor = createSandboxExecutor(config);
+  const adapters = createSandboxRunnerAdapters(executor);
+
+  return async (input: RunAgentAttemptInput): Promise<RunResult> => {
+    return runAgentAttemptCore({ ...input, adapters });
+  };
+}
+
 export async function runLinearScenario(
   ctx: LinearSandboxContext,
   scenario: LinearSandboxScenario,
@@ -171,6 +284,7 @@ export async function runLinearScenario(
         title: `[${marker}] ${def.title}`,
         description: def.description ?? `Sandbox test issue. Marker: ${marker}`,
         assigneeId: ctx.viewerId,
+        priority: def.priority,
       });
       createdIssueIds.push(issue.id);
       createdIssues.push(issue);
@@ -179,16 +293,16 @@ export async function runLinearScenario(
     // Wait for Linear to propagate
     await sleep(1000);
 
-    // Configure settings with concurrency override
+    // Configure settings with concurrency and turn-limit overrides
     const settings = { ...ctx.settings };
     if (scenario.maxConcurrentAgents !== undefined) {
       settings.agent = { ...settings.agent, maxConcurrentAgents: scenario.maxConcurrentAgents };
     }
+    if (scenario.runnerConfig?.defaultBehavior?.turnCount !== undefined) {
+      settings.agent = { ...settings.agent, maxTurns: scenario.runnerConfig.defaultBehavior.turnCount };
+    }
 
-    // Build a runner config that maps real issue IDs to behaviors
-    const runnerConfig: FakeRunnerConfig = scenario.runnerConfig ?? {};
-
-    const runner: RuntimeRunner = createFakeAgentRunner(runnerConfig);
+    const runner = createSandboxRunner(scenario.runnerConfig ?? {});
 
     const workflow: WorkflowDefinition = {
       path: "/tmp/linear-sandbox-workflow.md",
@@ -203,7 +317,7 @@ export async function runLinearScenario(
 
     const runtimeOptions: SymphonyRuntimeOptions = {
       workflow,
-      client: ctx.client,
+      clientFactory: () => ctx.client,
       runner,
       removeIssueWorkspaces: async () => {},
       deleteResumeState: async () => {},

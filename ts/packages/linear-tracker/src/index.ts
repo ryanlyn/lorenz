@@ -291,6 +291,7 @@ export class LinearClient {
     title: string;
     description: string;
     assigneeId?: string;
+    priority?: number;
   }): Promise<Issue> {
     const data = await this.graphql<{
       issueCreate: { success: boolean; issue: Record<string, unknown> | null };
@@ -309,6 +310,7 @@ export class LinearClient {
           title: input.title,
           description: input.description,
           assigneeId: input.assigneeId,
+          ...(input.priority !== undefined ? { priority: input.priority } : {}),
         },
       },
     );
