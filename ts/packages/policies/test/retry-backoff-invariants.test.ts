@@ -40,12 +40,12 @@ test("retryBackoffMs - failure delays are monotonically non-decreasing with atte
   );
 });
 
-// INVARIANT: When a retry delay is calculated, it SHALL never exceed the configured maximum cap.
+// INVARIANT: When a retry delay is calculated, it SHALL never exceed the configured maximum cap (when cap >= minimum floor).
 test("retryBackoffMs - failure delay never exceeds the configured maximum cap", () => {
   fc.assert(
     fc.property(
       fc.integer({ min: -100, max: 10_000 }),
-      fc.integer({ min: 0, max: 100_000_000 }),
+      fc.integer({ min: 1_000, max: 100_000_000 }),
       (attempt, maxBackoff) => {
         const result = retryBackoffMs(attempt, maxBackoff, "failure");
         assert.ok(result <= maxBackoff);

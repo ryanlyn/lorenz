@@ -1,7 +1,7 @@
 import { test } from "vitest";
 import fc from "fast-check";
 import { sortForDispatch } from "@symphony/cli";
-import type { Issue } from "@symphony/domain";
+import type { Issue, Priority } from "@symphony/domain";
 
 import { assert } from "../../../test/assert.js";
 
@@ -14,10 +14,8 @@ const arbSortableIssue = (): fc.Arbitrary<Issue> =>
     labels: fc.constant([] as string[]),
     blockers: fc.constant([]),
     priority: fc.oneof(
-      fc.constantFrom(1, 2, 3, 4),
-      fc.constant(null as number | null),
-      fc.integer({ min: 5, max: 10 }),
-      fc.constant(0),
+      fc.constantFrom(1, 2, 3, 4) as fc.Arbitrary<Priority | null>,
+      fc.constant(null as Priority | null),
     ),
     createdAt: fc.oneof(
       fc
@@ -53,8 +51,8 @@ test("sortForDispatch — idempotent", () => {
   );
 });
 
-function normalizedPriority(p: number | null | undefined): number {
-  return p && p >= 1 && p <= 4 ? p : Number.MAX_SAFE_INTEGER;
+function normalizedPriority(p: Priority | null | undefined): number {
+  return p ?? Number.MAX_SAFE_INTEGER;
 }
 
 function normalizedCreatedAt(c: string | null | undefined): number {

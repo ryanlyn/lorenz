@@ -1,8 +1,10 @@
 import {
   ISSUE_STATE_TYPES,
+  PRIORITY_VALUES,
   type Issue,
   type IssueRef,
   type IssueStateType,
+  type Priority,
 } from "@symphony/domain";
 
 export function normalizeIssue(input: Record<string, unknown>, assignee?: string): Issue {
@@ -37,7 +39,7 @@ export function normalizeIssue(input: Record<string, unknown>, assignee?: string
     stateType: normalizeStateType(stateType),
     branchName: optionalString(input.branchName ?? input.branch_name),
     url: optionalString(input.url),
-    priority: numberOrNull(input.priority),
+    priority: priorityOrNull(input.priority),
     createdAt: optionalString(input.created_at ?? input.createdAt),
     updatedAt: optionalString(input.updated_at ?? input.updatedAt),
     labels,
@@ -130,8 +132,13 @@ function normalizeStateType(value: string | null): IssueStateType | null {
   return isOneOf(normalized, ISSUE_STATE_TYPES) ? normalized : null;
 }
 
-function numberOrNull(value: unknown): number | null {
-  if (typeof value === "number" && Number.isInteger(value)) return value;
+function priorityOrNull(value: unknown): Priority | null {
+  if (
+    typeof value === "number" &&
+    Number.isInteger(value) &&
+    (PRIORITY_VALUES as readonly number[]).includes(value)
+  )
+    return value as Priority;
   return null;
 }
 

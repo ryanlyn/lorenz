@@ -1,6 +1,6 @@
 import { ensembleSize, isTerminalState } from "@symphony/issue";
 import { normalizeRouteName, settingsForIssueState } from "@symphony/config";
-import type { DispatchBlockReason, Issue, Settings } from "@symphony/domain";
+import type { DispatchBlockReason, Issue, Priority, Settings } from "@symphony/domain";
 
 export function routeNames(issue: Issue, settings: Settings): string[] {
   const prefix = settings.tracker.dispatch.routeLabelPrefix.trim().toLowerCase();
@@ -138,6 +138,6 @@ function stateIn(state: string, states: string[]): boolean {
   return states.some((candidate) => candidate.trim().toLowerCase() === state.trim().toLowerCase());
 }
 
-function prioritySort(priority: number | null | undefined): number {
-  return priority && priority >= 1 && priority <= 4 ? priority : Number.MAX_SAFE_INTEGER;
+function prioritySort(priority: Priority | null | undefined): number {
+  return priority ?? Number.MAX_SAFE_INTEGER;
 }

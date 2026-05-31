@@ -27,6 +27,10 @@ export const ISSUE_STATE_TYPES = [
 
 export type IssueStateType = (typeof ISSUE_STATE_TYPES)[number];
 
+export const PRIORITY_VALUES = [1, 2, 3, 4] as const;
+
+export type Priority = (typeof PRIORITY_VALUES)[number];
+
 export const CODEX_APPROVAL_POLICY_NAMES = [
   "untrusted",
   "on-failure",
@@ -103,7 +107,7 @@ export interface Issue {
   stateType?: IssueStateType | null | undefined;
   branchName?: string | null | undefined;
   url?: string | null | undefined;
-  priority?: number | null | undefined;
+  priority?: Priority | null | undefined;
   /** ISO-8601 timestamp string as returned by the tracker; not parsed into a Date. */
   createdAt?: string | null | undefined;
   /** ISO-8601 timestamp string as returned by the tracker; not parsed into a Date. */
