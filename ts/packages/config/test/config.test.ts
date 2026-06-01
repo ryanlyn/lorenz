@@ -525,6 +525,34 @@ test("workflow parsing treats front matter as optional like Elixir", () => {
   );
 });
 
+test("parses local tracker config with path", () => {
+  const settings = parseConfig(
+    { tracker: { kind: "local", path: ".symphony/local", active_states: ["Todo"] } },
+    {},
+  );
+  assert.equal(settings.tracker.kind, "local");
+  assert.equal(settings.tracker.path, ".symphony/local");
+});
+
+test("local tracker id_prefix defaults to BOARD- and can be overridden", () => {
+  const def = parseConfig({ tracker: { kind: "local" } }, {});
+  assert.equal(def.tracker.idPrefix, "BOARD-");
+
+  const custom = parseConfig({ tracker: { kind: "local", id_prefix: "XXX-" } }, {});
+  assert.equal(custom.tracker.idPrefix, "XXX-");
+});
+
+test("an unsafe id_prefix is rejected at config parse", () => {
+  assert.throws(
+    () => parseConfig({ tracker: { kind: "local", id_prefix: "../evil" } }, {}),
+    /id_prefix/,
+  );
+  assert.throws(
+    () => parseConfig({ tracker: { kind: "local", id_prefix: "a/b" } }, {}),
+    /id_prefix/,
+  );
+});
+
 test("config validation accepts project_slugs as an alternative to project_slug", () => {
   const settings = parseConfig(
     {
