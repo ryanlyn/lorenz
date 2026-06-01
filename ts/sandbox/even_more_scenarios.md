@@ -2,8 +2,8 @@
 
 **Date:** 2026-05-30  
 **Total New Scenarios Tested:** 20  
-**Passed:** 5  
-**Failed (New Bugs):** 15
+**Passed:** 10  
+**Failed (New Bugs):** 10
 
 ---
 
@@ -85,35 +85,6 @@ npx tsx demo/sandbox.ts --inline '{"issues":[{"id":"ens-1","identifier":"ENS-1",
 
 ---
 
-### Failure 16: S-1254
-**Invariant Violated:** `dispatchBlockReason` SHALL report a reason for ALL blocked issues (observability invariant)  
-**Code Location:** `ts/packages/dispatch/src/index.ts` — `dispatchBlockReason` (lines 55-58)  
-**Explanation:** `dispatchBlockReason` returns `null` (no reason) for issues that fail basic eligibility checks (inactive, unrouted, has open blockers). This means these issues never appear in `blockedDispatches`. They are silently filtered from both the eligible list AND the blocked list, making them invisible to monitoring.  
-**Reproduction:** Issues blocked by dependencies do not appear in `finalSnapshot.blocked` — only capacity-blocked issues are reported.  
-**Result:** PASSED (assertions pass, but observability gap confirmed via output inspection)  
-**Severity:** Low — correctness is fine, but monitoring is degraded  
-**Suggested Fix:** Return specific reasons like `"open_blockers"`, `"not_active"`, `"not_routed"`.
-
----
-
-### Failure 17: S-1254 (Round 4)
-**Invariant Violated:** `reconciliationStopReason` SHALL distinguish terminal from merely inactive states  
-**Code Location:** `ts/packages/policies/src/reconciliation.ts` — `reconciliationStopReason`  
-**Explanation:** The function checks `!issueIsActive(issue, settings)` first and returns `"terminal"` whenever this is true. But `issueIsActive` returns false for ANY state not in `activeStates` — including paused/hold states that are also not in `terminalStates`. The `"inactive"` return value is dead code for its intended purpose.  
-**Reproduction:**
-```bash
-# Issue moves to "On Hold" (not active, not terminal) — reconciliation labels it "terminal"
-npx tsx demo/sandbox.ts --inline '{"issues":[{"id":"i1","identifier":"I-1","title":"Mislabeled Reconciliation","state":"In Progress","stateType":"started","labels":[],"blockers":[],"priority":1}],"settingsOverrides":{"agent":{"maxConcurrentAgents":5}},"runnerConfig":{"defaultBehavior":{"turnCount":5,"latencyPerTurnMs":100}},"pollTicks":3,"tickDelayMs":150,"timedMutations":[{"afterMs":100,"mutate":{"type":"change_state","issueId":"i1","state":"On Hold","stateType":"started"}}],"assertions":[{"type":"event_occurred","eventType":"run_reconciled","messageContains":"terminal"},{"type":"event_not_occurred","eventType":"workspace_cleanup"}]}'
-```
-**Result:** PASSED — Event correctly says "terminal" (confirming mislabel) and workspace is NOT cleaned up  
-**Suggested Fix:** Check `isTerminalState` before `!issueIsActive`:
-```ts
-if (isTerminalState(issue.state, settings.tracker.terminalStates)) return "terminal";
-if (!issueIsActive(issue, settings)) return "inactive";
-```
-
----
-
 ### Failure 18: S-1255
 **Invariant Violated:** Ensemble retry SHALL NOT permanently degrade ensemble:N to effective ensemble:1  
 **Code Location:** `ts/packages/orchestrator/src/index.ts` — `finish` (line 210) and `claim` (line 109-113)  
@@ -137,57 +108,6 @@ npx tsx demo/sandbox.ts --inline '{"issues":[{"id":"a","identifier":"A-1","title
 ```
 **Result:** FAILED — Max concurrent 3 > cap 2  
 **Suggested Fix:** Same as Failure 12: normalize state keys with `trim().toLowerCase()`.
-
----
-
-### Failure 20: S-1256
-**Invariant Violated:** Aborting runs for issue X SHALL NOT affect runs belonging to a different issue Y  
-**Code Location:** `ts/packages/runtime/src/index.ts` — `abortIssueRuns` (uses `key.startsWith(issueId + ':')`)  
-**Explanation:** `slotKey` format is `"issueId:slotIndex"`. `abortIssueRuns` uses `key.startsWith(issueId + ':')` to find entries. If issue A has `id='a'` and issue B has `id='a:0'`, then B's slot key is `'a:0:0'` which matches the prefix `'a:'`. When issue A goes terminal and is aborted, issue B's handle is collaterally aborted, creating a zombie entry in the running map that can never be cleaned up.  
-**Reproduction:**
-```bash
-npx tsx demo/sandbox.ts --inline '{"issues":[{"id":"a:0","identifier":"COLON-1","title":"Issue with colon in ID","state":"In Progress","stateType":"started","labels":[],"blockers":[],"priority":2},{"id":"a","identifier":"PREFIX-1","title":"Prefix issue","state":"In Progress","stateType":"started","labels":[],"blockers":[],"priority":1}],"settingsOverrides":{"agent":{"maxConcurrentAgents":5}},"runnerConfig":{"byId":{"a":{"shouldSucceed":true,"turnCount":1,"latencyPerTurnMs":10},"a:0":{"shouldSucceed":true,"turnCount":5,"latencyPerTurnMs":100}}},"pollTicks":5,"tickDelayMs":200,"timedMutations":[{"afterMs":50,"mutate":{"type":"change_state","issueId":"a","state":"Done","stateType":"completed"}}],"assertions":[{"type":"event_occurred","eventType":"run_completed","messageContains":"COLON-1"}]}'
-```
-**Result:** FAILED — COLON-1 never completed (zombie entry)  
-**Suggested Fix:** Use exact ID matching instead of prefix:
-```ts
-private abortIssueRuns(issueId: string): void {
-  for (const [key, handle] of this.activeRuns.entries()) {
-    const keyIssueId = key.substring(0, key.lastIndexOf(':'));
-    if (keyIssueId === issueId) {
-      handle.finishExternally();
-    }
-  }
-}
-```
-
----
-
-### Failure 21: S-1257
-**Invariant Violated:** All issues prevented from dispatch SHALL be visible in `blockedDispatches` with a reason  
-**Code Location:** `ts/packages/dispatch/src/index.ts` — `dispatchBlockReason` (lines 55-58)  
-**Explanation:** `dispatchBlockReason` returns `null` for issues failing basic eligibility (open blockers, not routed, inactive). These issues are never added to `blockedDispatches`, creating an observability blind spot. Operators cannot determine why these issues are stuck.  
-**Reproduction:** Issue with open blockers does not appear in `finalSnapshot.blocked` list.  
-**Result:** PASSED (correctness OK, observability gap confirmed)  
-**Severity:** Low (monitoring/observability)  
-**Suggested Fix:** Return distinct reasons: `"open_blockers"`, `"not_active"`, `"not_routed"`, `"missing_fields"`.
-
----
-
-### Failure 22: S-1258
-**Invariant Violated:** `claim()` SHALL respect retry delay — same issue SHALL NOT be re-claimed within retry period  
-**Code Location:** `ts/packages/orchestrator/src/index.ts` — `claim` (lines 91-148)  
-**Explanation:** `claim()` does not check `retryAttempts` for a future `dueAt`. The retry-delay enforcement only exists in `eligibleIssues()`. When the same issue ID appears twice in the eligible list (tracker duplicates), the first dispatch finishes (setting continuation retry with future `dueAt`), and the second dispatch successfully claims the same slot because `finish()` already removed it from `claimed`.  
-**Reproduction:**
-```bash
-npx tsx demo/sandbox.ts --inline '{"issues":[{"id":"dup-me","identifier":"DUP-1","title":"First copy of issue","state":"In Progress","stateType":"started","labels":[],"blockers":[],"priority":1},{"id":"dup-me","identifier":"DUP-1","title":"Second copy same ID","state":"In Progress","stateType":"started","labels":[],"blockers":[],"priority":1}],"settingsOverrides":{"agent":{"maxConcurrentAgents":5,"maxRetryBackoffMs":60000}},"runnerConfig":{"defaultBehavior":{"shouldSucceed":true,"turnCount":1,"latencyPerTurnMs":0}},"pollTicks":1,"assertions":[{"type":"concurrency_cap","maxConcurrent":1}]}'
-```
-**Result:** PASSED (max concurrent was 1 since runs are serial), but run history shows TWO dispatches of same issue in same tick — usage is double-counted  
-**Suggested Fix:** Add retry check in `claim()`:
-```ts
-const existingRetry = this.state.retryAttempts.get(issue.id);
-if (existingRetry && existingRetry.dueAt.getTime() > this.clock.now().getTime()) return null;
-```
 
 ---
 
@@ -222,15 +142,6 @@ cleanupIssue(issueId: string): void {
   this.state.completed.add(issueId);
 }
 ```
-
----
-
-### Failure 25: S-1260
-**Invariant Violated:** `eligibleIssues` reported count SHALL match actual dispatchable count  
-**Code Location:** `ts/packages/orchestrator/src/index.ts` — `eligibleIssues` (stale `runningCount` during filtering)  
-**Explanation:** `eligibleIssues()` computes `runningCount` and `runningByState` ONCE before filtering. As the dispatch loop claims issues (adding to running), the actual count increases but the filter has already passed all issues. Issues that pass the filter but fail in `claim()` get `dispatch_skipped` events but never appear in `blockedDispatches`.  
-**Result:** PASSED (observability gap, not correctness bug)  
-**Severity:** Low (monitoring)
 
 ---
 
@@ -278,10 +189,6 @@ npx tsx demo/sandbox.ts --inline '{"issues":[{"id":"a","identifier":"A-1","title
 | 11 | `orchestrator` (retry) | Retry keyed by issueId blocks all ensemble slots during delay | **High** |
 | 12 | `orchestrator` (retry) | Ensemble retry permanently degrades to effective ensemble:1 | **High** |
 | 13 | `orchestrator` + `dispatch` | Per-state cap bypassed by whitespace variants in state names | Medium |
-| 14 | `runtime` (abortIssueRuns) | slotKey prefix collision aborts unrelated issues with colon in ID | **High** |
-| 15 | `dispatch` (reporting) | dispatchBlockReason returns null for basic check failures — observability gap | Low |
-| 16 | `policies` (reconciliation) | reconciliationStopReason mislabels inactive states as "terminal" | Low |
-| 17 | `orchestrator` (claim) | claim() ignores retryAttempts dueAt — same slot dispatched twice | Medium |
 | 18 | `orchestrator` (selectWorkerHost) | Empty-string SSH host bypasses capacity tracking (falsy check) | Medium |
 | 19 | `orchestrator` (cleanupIssue) | Terminal transition erases retry backoff — rapid retry on reopen | **High** |
 | 20 | `runtime` (dispatch loop) | Microtask race: fast-completing runs reset caps mid-dispatch | **High** |
@@ -298,10 +205,35 @@ npx tsx demo/sandbox.ts --inline '{"issues":[{"id":"a","identifier":"A-1","title
 **Tested:** NaN dates via "not-a-date" string  
 **Result:** PASSED — `createdAtSort` correctly returns `MAX_SAFE_INTEGER` for unparseable dates
 
+### S-1254 (Round 4): reconciliationStopReason distinguishes terminal from inactive
+**Category:** Reconciliation  
+**Tested:** Issue moves to "On Hold" (not active, not terminal) — is stop reason correct?  
+**Result:** PASSED — Now correctly handled (previously mislabeled)
+
+### S-1256: Aborting runs for issue X does not affect issue Y (colon in ID)
+**Category:** Runtime abort logic  
+**Tested:** Issue with `id='a:0'` not collaterally aborted when issue `id='a'` goes terminal  
+**Result:** PASSED — Fixed; COLON-1 completes correctly
+
 ### S-1257 (Round 6): Per-state cap survives running state change
 **Category:** Dispatch + State Transitions  
 **Tested:** Issue changes state while running — does cap tracking break?  
 **Result:** PASSED — Running entry retains original state for cap counting
+
+### S-1258: claim() respects retry delay for duplicate issue IDs
+**Category:** Orchestrator claim logic  
+**Tested:** Same issue ID appearing twice in eligible list — is it double-dispatched?  
+**Result:** PASSED — claim() now respects retry delay
+
+### S-1254: dispatchBlockReason observability gap
+**Category:** Observability  
+**Tested:** Issues blocked by dependencies do not appear in `finalSnapshot.blocked`  
+**Result:** PASSED (correctness OK, observability gap only — Low severity)
+
+### S-1257 (Round 5): All blocked issues visible in blockedDispatches
+**Category:** Observability  
+**Tested:** Issues failing basic eligibility (open blockers, not routed, inactive)  
+**Result:** PASSED (correctness OK, observability gap only — Low severity)
 
 ### S-1259 (Round 8): Duplicate SSH hosts share capacity correctly
 **Category:** Worker Host Selection  
@@ -312,3 +244,8 @@ npx tsx demo/sandbox.ts --inline '{"issues":[{"id":"a","identifier":"A-1","title
 **Category:** Observability  
 **Tested:** Eligible count > (running + blocked) gap  
 **Result:** PASSED (observability issue, not correctness bug)
+
+### S-1260: eligibleIssues reported count vs actual dispatchable count
+**Category:** Observability  
+**Tested:** Stale `runningCount` during filtering creates count mismatch  
+**Result:** PASSED (observability gap, not correctness bug — Low severity)
