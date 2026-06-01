@@ -1,5 +1,9 @@
+import { readFile as fsReadFile } from "node:fs/promises";
+import path from "node:path";
+
 import { serve } from "@hono/node-server";
 import type { ServerType } from "@hono/node-server";
+import { serveStatic } from "@hono/node-server/serve-static";
 import { Hono, type Context } from "hono";
 import { streamSSE } from "hono/streaming";
 import { match } from "ts-pattern";
@@ -9,6 +13,9 @@ import { issuePayload, runsPayload, statePayload, type PresenterParams } from "@
 import { executeTool, toolSpecs } from "@symphony/mcp";
 import type { RuntimeSnapshot } from "@symphony/runtime-events";
 import type { Settings } from "@symphony/domain";
+
+import { createTraceRoutes } from "./trace-routes.js";
+import { createWsHandler } from "./ws.js";
 
 export interface RuntimeServerSource {
   workflow?: { settings?: Settings } | undefined;
@@ -20,6 +27,8 @@ export interface RuntimeServerSource {
 export interface ObservabilityServerOptions {
   host: string;
   port: number;
+  traceDir?: string;
+  staticDir?: string;
 }
 
 export interface ObservabilityServerHandle {
@@ -33,7 +42,19 @@ export async function startObservabilityServer(
   runtime: RuntimeServerSource,
   options: ObservabilityServerOptions,
 ): Promise<ObservabilityServerHandle> {
-  return startHonoServer(buildObservabilityApp(runtime), options);
+  const app = buildObservabilityApp(runtime, options);
+  let internals: HonoServerInternals | undefined;
+
+  if (options.traceDir) {
+    const { watcher } = createTraceRoutes(options.traceDir);
+    const wsSetup = createWsHandler(app, watcher);
+    internals = {
+      injectWebSocket: wsSetup.injectWebSocket,
+      stopWatcher: () => watcher.stop(),
+    };
+  }
+
+  return startHonoServer(app, options, internals);
 }
 
 export async function startClaudeMcpServer(
@@ -43,9 +64,15 @@ export async function startClaudeMcpServer(
   return startHonoServer(buildClaudeMcpApp(settings), options);
 }
 
+interface HonoServerInternals {
+  injectWebSocket?: (server: unknown) => void;
+  stopWatcher?: () => void;
+}
+
 async function startHonoServer(
   app: Hono,
   options: ObservabilityServerOptions,
+  internals?: HonoServerInternals,
 ): Promise<ObservabilityServerHandle> {
   let server!: ServerType;
   await new Promise<void>((resolve, reject) => {
@@ -56,24 +83,55 @@ async function startHonoServer(
     server.once("error", reject);
   });
   const activeServer = server;
+
+  // Inject WebSocket support after server starts listening
+  if (internals?.injectWebSocket) {
+    internals.injectWebSocket(activeServer);
+  }
+
   const address = activeServer.address();
   const port = typeof address === "object" && address !== null ? address.port : options.port;
   return {
     host: options.host,
     port,
-    url(path = "/"): string {
-      return `http://${urlHost(options.host)}:${port}${path}`;
+    url(urlPath = "/"): string {
+      return `http://${urlHost(options.host)}:${port}${urlPath}`;
     },
-    stop: async () => stopServer(activeServer),
+    stop: async () => {
+      internals?.stopWatcher?.();
+      await stopServer(activeServer);
+    },
   };
 }
 
-function buildObservabilityApp(runtime: RuntimeServerSource): Hono {
+function buildObservabilityApp(
+  runtime: RuntimeServerSource,
+  options: ObservabilityServerOptions,
+): Hono {
   const app = new Hono();
   const settings = runtimeSettings(runtime);
   if (settings) mountClaudeMcp(app, settings);
 
-  app.get("/", () => htmlResponse(dashboardHtml(runtime)));
+  // Health endpoint
+  app.get("/health", () => jsonResponse({ status: "ok" }));
+
+  // Static file serving or inline dashboard
+  if (options.staticDir) {
+    const staticDir = options.staticDir;
+    app.get("/", async () => {
+      try {
+        const indexPath = path.join(staticDir, "index.html");
+        const content = await fsReadFile(indexPath, "utf-8");
+        return htmlResponse(content);
+      } catch {
+        return errorResponse(404, "not_found", "index.html not found");
+      }
+    });
+    app.get("/ops-dashboard", () => htmlResponse(dashboardHtml(runtime)));
+    app.use("/assets/*", serveStatic({ root: staticDir }));
+  } else {
+    app.get("/", () => htmlResponse(dashboardHtml(runtime)));
+  }
   app.all("/", () => errorResponse(405, "method_not_allowed", "Method not allowed"));
 
   app.get("/api/v1/state", () => {
@@ -115,6 +173,12 @@ function buildObservabilityApp(runtime: RuntimeServerSource): Hono {
     }
   });
   app.all("/api/v1/refresh", () => errorResponse(405, "method_not_allowed", "Method not allowed"));
+
+  // Mount trace routes BEFORE the :identifier catch-all
+  if (options.traceDir) {
+    const { app: traceApp } = createTraceRoutes(options.traceDir);
+    app.route("/", traceApp);
+  }
 
   app.get("/api/v1/:identifier", (c) => {
     const issueIdentifier = decodeURIComponent(c.req.param("identifier"));

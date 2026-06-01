@@ -21,6 +21,9 @@
     },
     {
       "path": "../runtime-events"
+    },
+    {
+      "path": "../traceviz-server"
     }
   ]
 }
