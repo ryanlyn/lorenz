@@ -76,21 +76,3 @@ export interface RemoteShellPort {
     timeoutMs?: number,
   ): Promise<{ stdout: string; stderr: string }>;
 }
-
-export interface HostAssignmentRecord {
-  workerHost: string;
-  identifier?: string | null | undefined;
-  updatedAt?: string | undefined;
-}
-
-export interface HostAssignmentStorePort {
-  get(issueId: string): string | null;
-  set(issueId: string, record: HostAssignmentRecord): void;
-  delete(issueId: string): void;
-}
-
-export const noopHostAssignmentStore: HostAssignmentStorePort = {
-  get: () => null,
-  set: () => undefined,
-  delete: () => undefined,
-};

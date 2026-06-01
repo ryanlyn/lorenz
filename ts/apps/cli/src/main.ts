@@ -16,7 +16,7 @@ import {
 import { validateDispatchConfig } from "@symphony/config";
 import { startObservabilityServer, type ObservabilityServerHandle } from "@symphony/server";
 import { configureLogFile } from "@symphony/log-file";
-import { FileHostAssignmentStore, SymphonyRuntime } from "@symphony/runtime";
+import { SymphonyRuntime } from "@symphony/runtime";
 import { RuntimeApp } from "@symphony/tui";
 import { loadWorkflow } from "@symphony/workflow";
 import type { Settings, WorkflowDefinition } from "@symphony/domain";
@@ -114,24 +114,11 @@ export async function runDaemon(options: CliOptions): Promise<number> {
     const workflow = await loadRuntimeWorkflow();
     await configureLogFile(workflow.settings.logging.logFile);
 
-    const hostAssignmentsPath = path.join(
-      path.dirname(workflow.settings.logging.logFile),
-      "host_assignments.json",
-    );
-    const hostAssignments = await FileHostAssignmentStore.load({
-      filePath: hostAssignmentsPath,
-      onError: (error) =>
-        process.stderr.write(
-          `host_assignments persistence error: ${error instanceof Error ? error.message : String(error)}\n`,
-        ),
-    });
-
     const runtime = new SymphonyRuntime({
       workflow,
       clientFactory: createTrackerClient,
       reloadWorkflow: loadRuntimeWorkflow,
       runner: runAgentAttempt,
-      hostAssignments,
       ...runtimeAdapters,
     });
     let server: ObservabilityServerHandle | null = null;

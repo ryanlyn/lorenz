@@ -20,12 +20,7 @@ import type {
   Settings,
   UsageTotals,
 } from "@symphony/domain";
-import {
-  noopHostAssignmentStore,
-  systemClock,
-  type ClockPort,
-  type HostAssignmentStorePort,
-} from "@symphony/ports";
+import { systemClock, type ClockPort } from "@symphony/ports";
 
 export interface OrchestratorState {
   running: Map<string, RunningEntry>;
@@ -56,7 +51,6 @@ export class Orchestrator {
     public settings: Settings,
     private readonly clock: ClockPort = systemClock,
     state: OrchestratorState = createState(),
-    private readonly hostAssignments: HostAssignmentStorePort = noopHostAssignmentStore,
   ) {
     this.state = state;
   }
@@ -119,7 +113,7 @@ export class Orchestrator {
       retry?.slotIndex,
     );
     if (slotIndex === null) return null;
-    const workerHost = this.selectWorkerHost(issue.id);
+    const workerHost = this.selectWorkerHost();
     if (workerHost === undefined) return null;
 
     const effective = settingsForIssueState(this.settings, issue.state);
@@ -150,40 +144,19 @@ export class Orchestrator {
     this.state.claimed.add(key);
     this.state.running.set(key, entry);
     this.state.retryAttempts.delete(issue.id);
-    if (workerHost) {
-      this.hostAssignments.set(issue.id, {
-        workerHost,
-        identifier: issue.identifier,
-      });
-    }
     return entry;
   }
 
-  releaseHostAssignment(issueId: string): void {
-    this.hostAssignments.delete(issueId);
-  }
-
-  private selectWorkerHost(issueId?: string): string | null | undefined {
+  private selectWorkerHost(): string | null | undefined {
     const counts = new Map<string, number>();
     for (const entry of this.state.running.values()) {
       if (entry.workerHost) counts.set(entry.workerHost, (counts.get(entry.workerHost) ?? 0) + 1);
     }
-    const cap =
-      this.settings.worker.maxConcurrentAgentsPerHost ?? this.settings.agent.maxConcurrentAgents;
-    if (issueId) {
-      const pinned = this.hostAssignments.get(issueId);
-      if (
-        pinned &&
-        this.settings.worker.sshHosts.includes(pinned) &&
-        (counts.get(pinned) ?? 0) < cap
-      ) {
-        return pinned;
-      }
-    }
     return selectLeastLoadedHost({
       hosts: this.settings.worker.sshHosts,
       runningCounts: counts,
-      cap,
+      cap:
+        this.settings.worker.maxConcurrentAgentsPerHost ?? this.settings.agent.maxConcurrentAgents,
     });
   }
 
