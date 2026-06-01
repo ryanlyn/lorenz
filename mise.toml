@@ -15,6 +15,7 @@ prek = "latest"
 # (using the native version leads to an issue: invoking claude just invokes bun.
 # Not worth investigating further)
 "npm:@anthropic-ai/claude-code" = "latest"
+"npm:@agentclientprotocol/claude-agent-acp" = "latest"
 
 [tasks.check-env]
 run = '''
