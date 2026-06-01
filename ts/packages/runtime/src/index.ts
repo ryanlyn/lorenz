@@ -208,6 +208,10 @@ class ActiveRunHandle {
     return this.activeRuns.get(this.key) === this;
   }
 
+  get aborted(): boolean {
+    return this.controller.signal.aborted;
+  }
+
   abort(): void {
     this.controller.abort();
   }
@@ -488,7 +492,12 @@ export class SymphonyRuntime {
       });
       this.addEvent("run_completed", `${issue.identifier} turns=${result.turnCount}`);
     } catch (error) {
-      if (!handle.isActive) return;
+      // A graceful stop() aborts the run's signal without releasing the slot
+      // (so isActive stays true), and the runner rejects with agent_run_aborted.
+      // Treat that as a clean shutdown, not a run failure — otherwise the daemon
+      // records a failed run and emits a run_failed event, which the TUI renders
+      // as a red error banner right before it exits on Ctrl+C.
+      if (handle.aborted || !handle.isActive) return;
       const entry = this.orchestrator
         .snapshot()
         .running.find((item) => item.issue.id === issue.id && item.slotIndex === slotIndex);

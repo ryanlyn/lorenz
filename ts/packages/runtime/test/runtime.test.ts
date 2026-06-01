@@ -752,6 +752,53 @@ test("runtime keeps polling after a candidate fetch throws in the recurring loop
   }
 });
 
+test("runtime stop does not record an in-flight run as a failure", async () => {
+  const issue = issueFixture("issue-stop", "MT-STOP");
+  const orchestrator = new Orchestrator(workflowFixture().settings);
+  let aborted = false;
+  const runtime = new SymphonyRuntime(
+    runtimeOptions({
+      workflow: workflowFixture(),
+      orchestrator,
+      client: {
+        fetchCandidateIssues: async () => [issue],
+        fetchIssuesByIds: async () => [issue],
+      },
+      // Mirror the real runner: a stop()-triggered abort rejects the in-flight turn.
+      runner: async ({ abortSignal }) =>
+        await new Promise<RunResult>((_resolve, reject) => {
+          abortSignal?.addEventListener(
+            "abort",
+            () => {
+              aborted = true;
+              reject(new Error("agent_run_aborted"));
+            },
+            { once: true },
+          );
+        }),
+    }),
+  );
+
+  await runtime.pollOnce();
+  await waitFor(() => orchestrator.snapshot().running.length === 1, 1_000);
+
+  // Ctrl+C path: stop() aborts the in-flight run without releasing its slot.
+  runtime.stop();
+  await waitFor(() => aborted, 1_000);
+  // Let the runner's rejection propagate through runClaim's catch.
+  await new Promise<void>((resolve) => setImmediate(resolve));
+
+  const snapshot = runtime.snapshot();
+  assert.equal(
+    snapshot.runHistory.some((entry) => entry.outcome === "failed"),
+    false,
+  );
+  assert.equal(
+    snapshot.recentEvents.some((event) => event.type === "run_failed"),
+    false,
+  );
+});
+
 test("runtime appends operational events to the configured log file", async () => {
   const root = await tempDir("symphony-ts-runtime-event-log");
   const workflow = workflowFixture(root);
