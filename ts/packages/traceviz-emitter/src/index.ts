@@ -61,6 +61,10 @@ export class TraceEmitter {
     this.writeQueues.set(filePath, next);
   }
 
+  async drain(): Promise<void> {
+    await Promise.all([...this.writeQueues.values()]);
+  }
+
   clear(issueIdentifier: string): void {
     const dirPath = this.issueDirPath(issueIdentifier);
     if (existsSync(dirPath)) {

@@ -21,6 +21,13 @@ export class MemoryTrackerClient implements RuntimeTrackerClient {
     return Promise.resolve(this.issues.filter((issue) => wanted.has(issue.id)).map(cloneIssue));
   }
 
+  updateIssue(id: string, fields: Partial<Pick<Issue, "state" | "stateType">>): void {
+    const issue = this.issues.find((i) => i.id === id);
+    if (!issue) return;
+    if (fields.state !== undefined) issue.state = fields.state;
+    if (fields.stateType !== undefined) issue.stateType = fields.stateType;
+  }
+
   async fetchIssuesByStates(states: string[]): Promise<Issue[]> {
     const wanted = new Set(states.map(normalizeState));
     return Promise.resolve(

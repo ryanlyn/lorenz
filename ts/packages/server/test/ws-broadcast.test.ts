@@ -23,7 +23,10 @@ describe("TraceWatcher broadcast callback", () => {
           issueId: "ws-id-1",
           issueIdentifier: "WS-1",
           timestamp: "2026-01-01T00:00:01Z",
-          message: { method: "item/completed", params: { item: { type: "agentMessage", text: "Hi" } } },
+          message: {
+            method: "item/completed",
+            params: { item: { type: "agentMessage", text: "Hi" } },
+          },
         }),
       ].join("\n") + "\n",
     );

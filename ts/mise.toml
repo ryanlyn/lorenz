@@ -44,7 +44,7 @@ pnpm --filter @symphony/dashboard build && \
 npx tsx sandbox/e2e-trace-test.ts
 """
 description = "Run end-to-end trace pipeline test (requires a real agent)"
-env = { SYMPHONY_E2E_AGENT_KIND = "{{env.SYMPHONY_E2E_AGENT_KIND || 'codex'}}" }
+env = { SYMPHONY_E2E_AGENT_KIND = "{{env.SYMPHONY_E2E_AGENT_KIND | default(value='codex')}}" }
 
 [tasks."e2e:trace:codex"]
 run = "mise run e2e:trace"

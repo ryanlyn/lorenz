@@ -344,7 +344,13 @@ describe("parseTraceLines Codex tool_call format", () => {
           request: {
             method: "item/tool/call",
             id: 1,
-            params: { threadId: "t1", turnId: "turn-1", callId: "call_def", tool: "web_search", arguments: { q: "test" } },
+            params: {
+              threadId: "t1",
+              turnId: "turn-1",
+              callId: "call_def",
+              tool: "web_search",
+              arguments: { q: "test" },
+            },
           },
           result: { success: false, output: "Rate limited" },
         },
@@ -362,11 +368,38 @@ describe("parseTraceLines Codex tool_call format", () => {
 describe("parseTraceLines noise filtering", () => {
   it("does not emit unknown events for usage/session/workspace/stderr/process_exit", () => {
     const lines = [
-      JSON.stringify({ type: "workspace_prepared", issueId: "id", issueIdentifier: "T-1", timestamp: null }),
-      JSON.stringify({ type: "session_started", issueId: "id", issueIdentifier: "T-1", timestamp: null }),
-      JSON.stringify({ type: "stderr", issueId: "id", issueIdentifier: "T-1", timestamp: "2026-01-01T00:00:00Z", message: "warn" }),
-      JSON.stringify({ type: "usage", issueId: "id", issueIdentifier: "T-1", timestamp: "2026-01-01T00:00:01Z", usage: { inputTokens: 100, outputTokens: 50 } }),
-      JSON.stringify({ type: "process_exit", issueId: "id", issueIdentifier: "T-1", timestamp: "2026-01-01T00:00:02Z" }),
+      JSON.stringify({
+        type: "workspace_prepared",
+        issueId: "id",
+        issueIdentifier: "T-1",
+        timestamp: null,
+      }),
+      JSON.stringify({
+        type: "session_started",
+        issueId: "id",
+        issueIdentifier: "T-1",
+        timestamp: null,
+      }),
+      JSON.stringify({
+        type: "stderr",
+        issueId: "id",
+        issueIdentifier: "T-1",
+        timestamp: "2026-01-01T00:00:00Z",
+        message: "warn",
+      }),
+      JSON.stringify({
+        type: "usage",
+        issueId: "id",
+        issueIdentifier: "T-1",
+        timestamp: "2026-01-01T00:00:01Z",
+        usage: { inputTokens: 100, outputTokens: 50 },
+      }),
+      JSON.stringify({
+        type: "process_exit",
+        issueId: "id",
+        issueIdentifier: "T-1",
+        timestamp: "2026-01-01T00:00:02Z",
+      }),
     ];
     const events = parseTraceLines(lines);
     expect(events.length).toBe(0);
@@ -374,7 +407,12 @@ describe("parseTraceLines noise filtering", () => {
 
   it("still emits unknown for truly unrecognized event types", () => {
     const lines = [
-      JSON.stringify({ type: "some_new_type", issueId: "id", issueIdentifier: "T-1", timestamp: "2026-01-01T00:00:00Z" }),
+      JSON.stringify({
+        type: "some_new_type",
+        issueId: "id",
+        issueIdentifier: "T-1",
+        timestamp: "2026-01-01T00:00:00Z",
+      }),
     ];
     const events = parseTraceLines(lines);
     expect(events.length).toBe(1);

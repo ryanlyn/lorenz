@@ -17,18 +17,15 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { execSync } from "node:child_process";
 
-import { parseConfig } from "@symphony/config";
 import { loadWorkflow } from "@symphony/workflow";
 import { SymphonyRuntime } from "@symphony/runtime";
 import { TraceEmitter } from "@symphony/traceviz-emitter";
-import { TraceWatcher, parseTraceLines } from "@symphony/traceviz-server";
+import { parseTraceLines } from "@symphony/traceviz-server";
 import { startObservabilityServer } from "@symphony/server";
 import { MemoryTrackerClient } from "@symphony/memory-tracker";
 import { normalizeIssue } from "@symphony/issue";
 import {
-  createRunAgentAttemptAdapters,
   runtimeAdapters,
   runtimeDefaultSettingsOptions,
 } from "../apps/cli/src/daemon.js";
@@ -54,11 +51,71 @@ async function cleanDirs() {
   }
 }
 
+function renderWorkflowContent(agentKind: string): string {
+  return `---
+tracker:
+  kind: memory
+  active_states:
+    - Todo
+    - In Progress
+  terminal_states:
+    - Done
+    - Closed
+    - Cancelled
+  dispatch:
+    accept_unrouted: true
+
+polling:
+  interval_ms: 2000
+
+workspace:
+  root: /tmp/symphony-e2e-workspaces
+
+hooks:
+  after_create: |
+    git init .
+    git commit --allow-empty -m "initial"
+
+agent:
+  kind: ${agentKind}
+  max_concurrent_agents: 1
+  max_turns: 10
+
+codex:
+  command: codex app-server
+  approval_policy: never
+  thread_sandbox: workspace-write
+  turn_timeout_ms: 180000
+  stall_timeout_ms: 60000
+
+claude:
+  command: claude-agent-acp
+  model: claude-sonnet-4-6
+  permission_mode: dontAsk
+  turn_timeout_ms: 360000
+  stall_timeout_ms: 300000
+
+server:
+  port: 0
+  traceDir: /tmp/symphony-e2e-traces
+---
+
+You are working on issue {{ issue.identifier }}: {{ issue.title }}
+
+Issue description:
+{{ issue.description }}
+
+Instructions:
+1. Complete the task described above.
+2. Create the requested files in the current working directory.
+3. Do not create extra files beyond what is asked.
+4. When done, report what you created.
+`;
+}
+
 async function runOrchestrator(): Promise<{ rawLogPath: string; traceJsonlPath: string }> {
   const agentKind = process.env.SYMPHONY_E2E_AGENT_KIND ?? "codex";
   console.log(`[e2e] Agent kind: ${agentKind}`);
-
-  const workflowPath = path.join(__dirname, "E2E_WORKFLOW.md");
 
   const issue = normalizeIssue({
     id: ISSUE_ID,
@@ -73,11 +130,14 @@ async function runOrchestrator(): Promise<{ rawLogPath: string; traceJsonlPath: 
 
   const rawLogPath = path.join(LOG_DIR, "log", "symphony.log");
 
-  const workflow = await loadWorkflow(workflowPath, {
+  const env = {
     ...process.env,
-    SYMPHONY_E2E_AGENT_KIND: agentKind,
     SYMPHONY_MEMORY_TRACKER_ISSUES_JSON: JSON.stringify([issue]),
-  } as unknown as NodeJS.ProcessEnv, runtimeDefaultSettingsOptions());
+  } as unknown as NodeJS.ProcessEnv;
+
+  const workflowPath = path.join(LOG_DIR, "WORKFLOW.md");
+  await fs.writeFile(workflowPath, renderWorkflowContent(agentKind));
+  const workflow = await loadWorkflow(workflowPath, env, runtimeDefaultSettingsOptions());
 
   workflow.settings.server.traceDir = TRACE_DIR;
   workflow.settings.logging.logFile = rawLogPath;
@@ -100,7 +160,8 @@ async function runOrchestrator(): Promise<{ rawLogPath: string; traceJsonlPath: 
 
   console.log(`[e2e] Starting orchestrator (--once mode)...`);
   await runtime.start({ once: true, dryRun: false });
-  console.log(`[e2e] Orchestrator completed.`);
+
+  console.log(`[e2e] Orchestrator completed (issue marked terminal).`);
 
   const traceJsonlPath = path.join(TRACE_DIR, ISSUE_IDENTIFIER, "trace.jsonl");
   return { rawLogPath, traceJsonlPath };
