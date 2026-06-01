@@ -129,13 +129,7 @@ export class TraceWatcher {
 
         try {
           const dirStat = await stat(dirPath);
-          if (!dirStat.isDirectory()) {
-            // Backwards compatibility: handle flat {issueId}.jsonl files
-            if (entry.endsWith(".jsonl")) {
-              await this.scanLegacyFile(path.join(this.traceDir, entry), entry.slice(0, -6), callback);
-            }
-            continue;
-          }
+          if (!dirStat.isDirectory()) continue;
 
           const fileStat = await stat(filePath);
           const existing = this.fileStates.get(entry);
@@ -161,28 +155,6 @@ export class TraceWatcher {
       }
     } finally {
       this.scanning = false;
-    }
-  }
-
-  private async scanLegacyFile(filePath: string, fileKey: string, callback: WatcherCallback): Promise<void> {
-    try {
-      const fileStat = await stat(filePath);
-      const existing = this.fileStates.get(fileKey);
-      if (existing && fileStat.mtimeMs <= existing.lastModified) return;
-
-      const state = await this.readFile(filePath, fileKey, fileStat.mtimeMs);
-      if (state) {
-        const canonicalKey = state.issueId;
-        const existingByKey = this.fileStates.get(canonicalKey);
-        if (state.lineCount !== (existingByKey?.lineCount ?? 0)) {
-          this.fileStates.set(canonicalKey, state);
-          callback(canonicalKey, state.events);
-        } else {
-          this.fileStates.set(canonicalKey, state);
-        }
-      }
-    } catch {
-      // Skip
     }
   }
 
