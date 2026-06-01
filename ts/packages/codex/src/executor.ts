@@ -530,33 +530,44 @@ const optionalNonEmptyStringSchema = z.preprocess(
   z.string().optional(),
 );
 
+const USAGE_INPUT_KEYS = ["input_tokens", "inputTokens", "input", "prompt_tokens"];
+const USAGE_OUTPUT_KEYS = ["output_tokens", "outputTokens", "output", "completion_tokens"];
+const USAGE_TOTAL_KEYS = ["total_tokens", "totalTokens", "total"];
+
+// Token usage can arrive either nested under `params` (e.g.
+// thread/tokenUsage/updated → params.tokenUsage.total) or as a top-level field
+// on the message itself, a sibling of `params` (e.g. the `usage` field on
+// turn/completed). Collect every plausible container from both levels so the
+// first one carrying token numbers wins.
+function usageCandidates(value: unknown): Record<string, unknown>[] {
+  const record = isRecord(value) ? value : {};
+  const params = isRecord(record.params) ? record.params : {};
+  const candidates: Record<string, unknown>[] = [];
+  for (const container of [record, params]) {
+    const tokenUsage = isRecord(container.tokenUsage) ? container.tokenUsage : undefined;
+    if (tokenUsage && isRecord(tokenUsage.total)) candidates.push(tokenUsage.total);
+    if (tokenUsage) candidates.push(tokenUsage);
+    if (isRecord(container.usage)) candidates.push(container.usage);
+    if (isRecord(container.total_token_usage)) candidates.push(container.total_token_usage);
+    candidates.push(container);
+  }
+  return candidates;
+}
+
 const usageTotalsSchema = z.preprocess(
   (value) => {
-    const record = isRecord(value) ? value : {};
-    const payload = isRecord(record.params) ? record.params : record;
-    const tokenUsage = isRecord(payload.tokenUsage) ? payload.tokenUsage : undefined;
-    const tokenUsageTotal = tokenUsage && isRecord(tokenUsage.total) ? tokenUsage.total : undefined;
-    const usage = tokenUsageTotal
-      ? tokenUsageTotal
-      : isRecord(payload.usage)
-        ? payload.usage
-        : isRecord(payload.total_token_usage)
-          ? payload.total_token_usage
-          : payload;
+    const candidates = usageCandidates(value);
+    const usage =
+      candidates.find(
+        (candidate) =>
+          tokenNumberFromAny(candidate, USAGE_INPUT_KEYS) !== undefined ||
+          tokenNumberFromAny(candidate, USAGE_OUTPUT_KEYS) !== undefined ||
+          tokenNumberFromAny(candidate, USAGE_TOTAL_KEYS) !== undefined,
+      ) ?? {};
     return {
-      inputTokens: tokenNumberFromAny(usage, [
-        "input_tokens",
-        "inputTokens",
-        "input",
-        "prompt_tokens",
-      ]),
-      outputTokens: tokenNumberFromAny(usage, [
-        "output_tokens",
-        "outputTokens",
-        "output",
-        "completion_tokens",
-      ]),
-      totalTokens: tokenNumberFromAny(usage, ["total_tokens", "totalTokens", "total"]),
+      inputTokens: tokenNumberFromAny(usage, USAGE_INPUT_KEYS),
+      outputTokens: tokenNumberFromAny(usage, USAGE_OUTPUT_KEYS),
+      totalTokens: tokenNumberFromAny(usage, USAGE_TOTAL_KEYS),
     };
   },
   z.object({

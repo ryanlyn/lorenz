@@ -160,6 +160,52 @@ rl.on("line", (line) => {
   });
 });
 
+test("Codex app-server executor extracts top-level usage from turn/completed", async () => {
+  const root = await tempDir("symphony-ts-codex-usage-turn-completed");
+  const fake = path.join(root, "fake-codex-usage-turn-completed.js");
+  // The current codex app-server reports per-turn token usage as a top-level
+  // `usage` field on the turn/completed message (a sibling of `params`), rather
+  // than via a separate thread/tokenUsage/updated notification. The Elixir
+  // reference reads it via `payload["usage"]`.
+  await writeExecutable(
+    fake,
+    `#!/usr/bin/env node
+const readline = require("readline");
+const rl = readline.createInterface({ input: process.stdin });
+rl.on("line", (line) => {
+  const msg = JSON.parse(line);
+  if (msg.id && msg.method === "initialize") console.log(JSON.stringify({ id: msg.id, result: {} }));
+  if (msg.id && msg.method === "thread/start") console.log(JSON.stringify({ id: msg.id, result: { thread: { id: "thread-tc" } } }));
+  if (msg.id && msg.method === "turn/start") {
+    console.log(JSON.stringify({ id: msg.id, result: { turn: { id: "turn-tc" } } }));
+    console.log(JSON.stringify({ method: "turn/completed", params: { threadId: "thread-tc", turn: { id: "turn-tc", status: "completed" } }, usage: { input_tokens: 1500, output_tokens: 300, total_tokens: 1800 } }));
+  }
+});
+`,
+  );
+
+  const settings = parseConfig({
+    workspace: { root: path.dirname(root) },
+    codex: { command: `${fake} app-server`, turn_timeout_ms: 5_000 },
+  });
+  const updates: AgentUpdate[] = [];
+  const executor = new CodexAppServerExecutor();
+  const session = await executor.startSession({
+    workspace: root,
+    settings,
+    issue: sampleIssue,
+    onUpdate: (update) => updates.push(update),
+  });
+  await executor.runTurn(session, "hello", sampleIssue);
+  await session.stop();
+
+  assert.deepEqual(updates.find((update) => update.type === "usage")?.usage, {
+    inputTokens: 1500,
+    outputTokens: 300,
+    totalTokens: 1800,
+  });
+});
+
 test("Codex app-server executor answers string-id dynamic Linear tool calls", async () => {
   const root = await tempDir("symphony-ts-codex-tool");
   const fake = path.join(root, "fake-codex-tool.js");
