@@ -17,6 +17,7 @@ import { RetryScheduler } from "@symphony/retry-scheduler";
 import { AGENT_UPDATE_TYPES } from "@symphony/domain";
 import type {
   AgentKind,
+  AgentUpdate,
   AgentUpdateType,
   DispatchBlockEntry,
   Issue,
@@ -127,7 +128,8 @@ export interface RuntimeRetryEntry {
   issueId: string;
   identifier: string;
   attempt: number;
-  dueAt: string;
+  dueAtIso: string;
+  monotonicDeadlineMs: number;
   error?: string | undefined;
   slotIndex?: number | undefined;
   workerHost?: string | null | undefined;
@@ -175,6 +177,7 @@ export interface SymphonyRuntimeOptions {
     | ((workspace: string, workerHost?: string | null, timeoutMs?: number) => Promise<void>)
     | undefined;
   appendLogEvent?: ((logFile: string, event: Record<string, unknown>) => Promise<void>) | undefined;
+  onAgentUpdate?: ((issue: Issue, update: AgentUpdate) => void) | undefined;
   now?: (() => Date) | undefined;
 }
 
@@ -307,7 +310,9 @@ export class SymphonyRuntime {
   }
 
   async pollOnce(options: PollOptions = {}): Promise<void> {
-    if (this.pollInProgress) return this.pollInProgress;
+    if (this.pollInProgress) {
+      return this.pollInProgress;
+    }
     const poll = this.pollOnceUnlocked(options);
     this.pollInProgress = poll;
     try {
@@ -429,6 +434,7 @@ export class SymphonyRuntime {
         onUpdate: (update) => {
           this.orchestrator.applyUpdate(issue.id, slotIndex, update);
           this.addEvent(update.type, `${issue.identifier} ${update.type}`);
+          this.input.onAgentUpdate?.(issue, update);
         },
         fetchIssue: async (current) => {
           const refreshed = await this.client.fetchIssuesByIds([current.id]);
@@ -739,7 +745,7 @@ export class SymphonyRuntime {
       if (
         !current ||
         current.attempt !== scheduled.attempt ||
-        current.dueAt.toISOString() !== scheduled.dueAt
+        current.dueAtIso !== scheduled.dueAtIso
       ) {
         return;
       }
@@ -859,7 +865,8 @@ function runtimeRetryEntry(entry: {
   issueId: string;
   identifier: string;
   attempt: number;
-  dueAt: Date;
+  dueAtIso: string;
+  monotonicDeadlineMs: number;
   error?: string | undefined;
   slotIndex?: number | undefined;
   workerHost?: string | null | undefined;
@@ -869,7 +876,8 @@ function runtimeRetryEntry(entry: {
     issueId: entry.issueId,
     identifier: entry.identifier,
     attempt: entry.attempt,
-    dueAt: entry.dueAt.toISOString(),
+    dueAtIso: entry.dueAtIso,
+    monotonicDeadlineMs: entry.monotonicDeadlineMs,
     ...(entry.error !== undefined ? { error: entry.error } : {}),
     ...(entry.slotIndex !== undefined ? { slotIndex: entry.slotIndex } : {}),
     ...(entry.workerHost !== undefined ? { workerHost: entry.workerHost } : {}),

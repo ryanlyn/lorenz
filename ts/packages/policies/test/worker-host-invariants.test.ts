@@ -100,7 +100,7 @@ describe("INVARIANT: When hosts are evaluated, only hosts with load strictly bel
   });
 });
 
-test("negative: when all hosts are at or above cap, undefined is returned", () => {
+test("INVARIANT: When all hosts are at or above cap, the system SHALL return undefined", () => {
   fc.assert(
     fc.property(arbUniqueHosts(), fc.integer({ min: 1, max: 50 }), (hosts, cap) => {
       // Set all hosts at or above cap
@@ -163,7 +163,7 @@ test("forced scenario: with explicit distinct loads, lowest-loaded host is picke
   );
 });
 
-test("with duplicates in host list: still picks lowest-loaded", () => {
+test("INVARIANT: When the host list contains duplicates, the system SHALL still select the lowest-loaded host", () => {
   fc.assert(
     fc.property(
       arbNonEmptyHosts().chain((hosts) =>

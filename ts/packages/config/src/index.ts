@@ -1,3 +1,5 @@
+import { homedir } from "node:os";
+
 import { execaSync } from "execa";
 import { z } from "zod";
 import type {
@@ -14,7 +16,34 @@ import type {
   TrackerKind,
   TrackerSettings,
 } from "@symphony/domain";
-import { CODEX_APPROVAL_POLICY_NAMES, CODEX_SANDBOX_MODES, TRACKER_KINDS } from "@symphony/domain";
+import {
+  CODEX_APPROVAL_POLICY_NAMES,
+  CODEX_SANDBOX_MODES,
+  TRACKER_KINDS,
+  PORT_MAX,
+  ONE_WEEK_MS,
+  RENDER_INTERVAL_MAX_MS,
+  CONCURRENCY_MAX,
+  MAX_TURNS_MAX,
+  ENSEMBLE_SIZE_MAX,
+  isValidPort,
+  isValidTimeoutMs,
+  isValidNonNegativeTimeoutMs,
+  isValidIntervalMs,
+  isValidRenderIntervalMs,
+  isValidConcurrency,
+  isValidMaxTurns,
+  isValidEnsembleSize,
+} from "@symphony/domain";
+
+export {
+  PORT_MAX,
+  ONE_WEEK_MS,
+  RENDER_INTERVAL_MAX_MS,
+  CONCURRENCY_MAX,
+  MAX_TURNS_MAX,
+  ENSEMBLE_SIZE_MAX,
+} from "@symphony/domain";
 
 const numericInput = z.union([
   z.number().refine((n) => !Number.isNaN(n), { message: "must not be NaN" }),
@@ -25,57 +54,50 @@ const numericInput = z.union([
     .refine((n) => !Number.isNaN(n), { message: "must be a number" }),
 ]);
 
-export const PORT_MAX = 65535;
-export const ONE_WEEK_MS = 604_800_000;
-export const RENDER_INTERVAL_MAX_MS = 60_000;
-export const CONCURRENCY_MAX = 1000;
-export const MAX_TURNS_MAX = 10_000;
-export const ENSEMBLE_SIZE_MAX = 100;
-
 const coercedPort = numericInput
-  .refine((n) => Number.isInteger(n) && n >= 0 && n <= PORT_MAX, {
+  .refine((n) => isValidPort(n), {
     message: `must be a valid port number (0-${PORT_MAX})`,
   })
   .describe("non-negative");
 
 const coercedTimeoutMs = numericInput
-  .refine((n) => Number.isInteger(n) && n >= 1 && n <= ONE_WEEK_MS, {
+  .refine((n) => isValidTimeoutMs(n), {
     message: `must be a positive integer no greater than ${ONE_WEEK_MS} (1 week)`,
   })
   .describe("positive");
 
 const coercedNonNegativeTimeoutMs = numericInput
-  .refine((n) => Number.isInteger(n) && n >= 0 && n <= ONE_WEEK_MS, {
+  .refine((n) => isValidNonNegativeTimeoutMs(n), {
     message: `must be a non-negative integer no greater than ${ONE_WEEK_MS} (1 week)`,
   })
   .describe("non-negative");
 
 const coercedIntervalMs = numericInput
-  .refine((n) => Number.isInteger(n) && n >= 1 && n <= ONE_WEEK_MS, {
+  .refine((n) => isValidIntervalMs(n), {
     message: `must be a positive integer no greater than ${ONE_WEEK_MS} (1 week)`,
   })
   .describe("positive");
 
 const coercedRenderIntervalMs = numericInput
-  .refine((n) => Number.isInteger(n) && n >= 1 && n <= RENDER_INTERVAL_MAX_MS, {
+  .refine((n) => isValidRenderIntervalMs(n), {
     message: `must be a positive integer no greater than ${RENDER_INTERVAL_MAX_MS}`,
   })
   .describe("positive");
 
 const coercedConcurrency = numericInput
-  .refine((n) => Number.isInteger(n) && n >= 1 && n <= CONCURRENCY_MAX, {
+  .refine((n) => isValidConcurrency(n), {
     message: `must be an integer between 1 and ${CONCURRENCY_MAX}`,
   })
   .describe("positive");
 
 const coercedMaxTurns = numericInput
-  .refine((n) => Number.isInteger(n) && n >= 1 && n <= MAX_TURNS_MAX, {
+  .refine((n) => isValidMaxTurns(n), {
     message: `must be an integer between 1 and ${MAX_TURNS_MAX}`,
   })
   .describe("positive");
 
 const coercedEnsembleSize = numericInput
-  .refine((n) => Number.isInteger(n) && n >= 1 && n <= ENSEMBLE_SIZE_MAX, {
+  .refine((n) => isValidEnsembleSize(n), {
     message: `must be an integer between 1 and ${ENSEMBLE_SIZE_MAX}`,
   })
   .describe("positive");
@@ -91,6 +113,12 @@ const sandboxPolicySchema = z.record(z.string(), z.unknown()).nullable().optiona
 
 const optionalHookScript = z.string().nullable().optional();
 
+const reasoningSchema = z
+  .object({
+    summary: z.enum(["concise", "detailed", "auto"]),
+  })
+  .strict();
+
 const appServerAgentRecordSchema = z
   .object({
     executor: z.literal("appserver"),
@@ -101,6 +129,7 @@ const appServerAgentRecordSchema = z
     turnTimeoutMs: coercedTimeoutMs.optional(),
     readTimeoutMs: coercedTimeoutMs.optional(),
     stallTimeoutMs: coercedNonNegativeTimeoutMs.optional(),
+    reasoning: reasoningSchema.nullable().optional(),
   })
   .strict();
 const acpAgentRecordSchema = z
@@ -127,6 +156,8 @@ const trackerRawSchema = z
     endpoint: z.string().optional(),
     apiKey: z.string().optional(),
     projectSlug: z.string().optional(),
+    projectSlugs: z.array(z.string()).optional(),
+    projectLabels: z.array(z.string()).optional(),
     assignee: z.string().optional(),
     activeStates: z.array(z.string()).optional(),
     terminalStates: z.array(z.string()).optional(),
@@ -177,6 +208,7 @@ const codexRawSchema = z
     turnTimeoutMs: coercedTimeoutMs.optional(),
     readTimeoutMs: coercedTimeoutMs.optional(),
     stallTimeoutMs: coercedNonNegativeTimeoutMs.optional(),
+    reasoning: reasoningSchema.nullable().optional(),
   })
   .strict();
 const claudeRawSchema = z
@@ -200,6 +232,8 @@ const serverRawSchema = z
   .object({
     host: z.string().optional(),
     port: coercedPort.optional(),
+    traceDir: z.string().optional(),
+    staticDir: z.string().optional(),
   })
   .strict();
 const loggingRawSchema = z.object({ logFile: z.string().optional() }).strict();
@@ -248,6 +282,8 @@ type StatusOverridesRaw = NonNullable<WorkflowConfigRaw["statusOverrides"]>;
 const trackerAliases = {
   api_key: "apiKey",
   project_slug: "projectSlug",
+  project_slugs: "projectSlugs",
+  project_labels: "projectLabels",
   active_states: "activeStates",
   terminal_states: "terminalStates",
 };
@@ -329,6 +365,7 @@ export const defaultSettings = (options: DefaultSettingsOptions = {}): Settings 
     turnTimeoutMs: 3_600_000,
     readTimeoutMs: 5_000,
     stallTimeoutMs: 300_000,
+    reasoning: { summary: "concise" },
   };
   const claude: ClaudeSettings = {
     command: "claude-agent-acp",
@@ -372,7 +409,7 @@ export const defaultSettings = (options: DefaultSettingsOptions = {}): Settings 
       refreshMs: 1_000,
       renderIntervalMs: 16,
     },
-    server: { host: "127.0.0.1" },
+    server: { host: "127.0.0.1", port: 4040, traceDir: joinPath(homedir(), ".symphony/traces") },
     logging: { logFile: joinPath(cwd, "log/symphony.log") },
     statusOverrides: new Map(),
   };
@@ -426,6 +463,8 @@ export function parseConfig(
   const serverRaw = parsed.server ?? {};
   settings.server.host = serverRaw.host ?? settings.server.host;
   if (serverRaw.port !== undefined) settings.server.port = serverRaw.port;
+  if (serverRaw.traceDir !== undefined) settings.server.traceDir = serverRaw.traceDir;
+  if (serverRaw.staticDir !== undefined) settings.server.staticDir = serverRaw.staticDir;
 
   settings.statusOverrides = parseStatusOverrides(parsed.statusOverrides ?? {});
   return settings;
@@ -451,7 +490,19 @@ export function validateDispatchConfig(settings: Settings): void {
   if (!settings.tracker.kind) throw new Error("tracker.kind is required");
   if (settings.tracker.kind === "linear") {
     if (!settings.tracker.apiKey) throw new Error("tracker.api_key is required");
-    if (!settings.tracker.projectSlug) throw new Error("tracker.project_slug is required");
+    const { projectSlug, projectSlugs, projectLabels } = settings.tracker;
+    const hasSlug = !!projectSlug;
+    const hasSlugs = !!projectSlugs && projectSlugs.length > 0;
+    const hasLabels = !!projectLabels && projectLabels.length > 0;
+    const count = [hasSlug, hasSlugs, hasLabels].filter(Boolean).length;
+    if (count === 0)
+      throw new Error(
+        "tracker.project_slug, tracker.project_slugs, or tracker.project_labels is required",
+      );
+    if (count > 1)
+      throw new Error(
+        "tracker.project_slug, tracker.project_slugs, and tracker.project_labels are mutually exclusive",
+      );
   }
 
   const requiredBackends = new Set<AgentKind>([settings.agent.kind]);
@@ -499,12 +550,17 @@ function parseTracker(
   const projectSlug = resolveEnv(trackerRaw.projectSlug ?? "", env) || undefined;
   const assignee = resolveConfiguredSecret(trackerRaw.assignee, env, "LINEAR_ASSIGNEE");
 
+  const projectSlugs = trackerRaw.projectSlugs?.length ? trackerRaw.projectSlugs : undefined;
+  const projectLabels = trackerRaw.projectLabels?.length ? trackerRaw.projectLabels : undefined;
+
   return {
     ...defaults,
     kind,
     endpoint: trackerRaw.endpoint ?? defaults.endpoint,
     apiKey,
     projectSlug,
+    projectSlugs,
+    projectLabels,
     assignee,
     activeStates: trackerRaw.activeStates ?? defaults.activeStates,
     terminalStates: trackerRaw.terminalStates ?? defaults.terminalStates,
@@ -660,6 +716,7 @@ function applyKnownAgentRecords(settings: Settings): void {
       turnTimeoutMs: codex.turnTimeoutMs,
       readTimeoutMs: codex.readTimeoutMs,
       stallTimeoutMs: codex.stallTimeoutMs,
+      reasoning: codex.reasoning ?? settings.codex.reasoning,
     };
   }
   const claude = settings.agents.claude;
@@ -696,6 +753,7 @@ function parseCodex(defaults: CodexSettings, codexRaw: CodexRaw): CodexSettings 
     turnTimeoutMs: codexRaw.turnTimeoutMs ?? defaults.turnTimeoutMs,
     readTimeoutMs: codexRaw.readTimeoutMs ?? defaults.readTimeoutMs,
     stallTimeoutMs: codexRaw.stallTimeoutMs ?? defaults.stallTimeoutMs,
+    reasoning: codexRaw.reasoning !== undefined ? codexRaw.reasoning : defaults.reasoning,
   };
 }
 
@@ -764,6 +822,7 @@ function parsePartialCodex(raw: Partial<CodexRaw>): Partial<CodexSettings> {
   if (raw.turnTimeoutMs !== undefined) next.turnTimeoutMs = raw.turnTimeoutMs;
   if (raw.readTimeoutMs !== undefined) next.readTimeoutMs = raw.readTimeoutMs;
   if (raw.stallTimeoutMs !== undefined) next.stallTimeoutMs = raw.stallTimeoutMs;
+  if (raw.reasoning !== undefined) next.reasoning = raw.reasoning ?? null;
   return next;
 }
 

@@ -33,7 +33,7 @@ const issueFields = `
   updatedAt
 `;
 
-export interface LinearViewer {
+interface LinearViewer {
   id: string;
   name?: string;
   email?: string;
@@ -59,7 +59,7 @@ export interface LinearProject {
   teams: LinearTeam[];
 }
 
-export interface LinearRetryOptions {
+interface LinearRetryOptions {
   maxRetries?: number | undefined;
   baseDelayMs?: number | undefined;
   maxDelayMs?: number | undefined;
@@ -83,6 +83,7 @@ export interface LinearClientDeps {
 export class LinearClient {
   private readonly retryOptions: ResolvedLinearRetryOptions;
   private resolvedAssignee?: Promise<string | undefined> | undefined;
+  private resolvedProjectSlugs?: Promise<string[]> | undefined;
   private readonly gqlClient: LinearGraphQLClient | null;
   private readonly settings: Settings;
   private readonly fetchImpl: typeof fetch | undefined;
@@ -222,6 +223,7 @@ export class LinearClient {
     let after: string | null = null;
     const issues: Issue[] = [];
     const assignee = await this.assigneeFilterValue();
+    const projectSlugs = await this.resolveProjectSlugs();
 
     for (;;) {
       const data: {
@@ -230,14 +232,14 @@ export class LinearClient {
           pageInfo: { hasNextPage: boolean; endCursor?: string | null };
         };
       } = await this.graphql(
-        `query SymphonyTsPoll($projectSlug: String!, $stateNames: [String!]!, $first: Int!, $after: String) {
-          issues(filter: {project: {slugId: {eq: $projectSlug}}, state: {name: {in: $stateNames}}}, first: $first, after: $after) {
+        `query SymphonyTsPoll($projectSlugs: [String!]!, $stateNames: [String!]!, $first: Int!, $after: String) {
+          issues(filter: {project: {slugId: {in: $projectSlugs}}, state: {name: {in: $stateNames}}}, first: $first, after: $after) {
             nodes { ${issueFields} }
             pageInfo { hasNextPage endCursor }
           }
         }`,
         {
-          projectSlug: this.requiredProjectSlug(),
+          projectSlugs,
           stateNames,
           first: 50,
           after,
@@ -354,6 +356,41 @@ export class LinearClient {
       { id: issueId },
     );
     if (!data.issueArchive.success) throw new Error("linear issueArchive failed");
+  }
+
+  async resolveProjectSlugs(): Promise<string[]> {
+    if (!this.resolvedProjectSlugs) {
+      this.resolvedProjectSlugs = this.doResolveProjectSlugs();
+    }
+    return this.resolvedProjectSlugs;
+  }
+
+  private async doResolveProjectSlugs(): Promise<string[]> {
+    const { projectSlug, projectSlugs, projectLabels } = this.settings.tracker;
+    if (projectSlugs && projectSlugs.length > 0) return projectSlugs;
+    if (projectLabels && projectLabels.length > 0)
+      return this.resolveProjectSlugsByLabels(projectLabels);
+    if (projectSlug) return [projectSlug];
+    throw new Error(
+      "tracker.project_slug, tracker.project_slugs, or tracker.project_labels is required",
+    );
+  }
+
+  private async resolveProjectSlugsByLabels(labels: string[]): Promise<string[]> {
+    const data = await this.graphql<{
+      projects: { nodes: Array<{ slugId: string }> };
+    }>(
+      `query SymphonyTsProjectsByLabels($labels: [String!]!) {
+        projects(filter: {labels: {name: {in: $labels}}}, first: 100) {
+          nodes { slugId }
+        }
+      }`,
+      { labels },
+    );
+    const slugs = data.projects.nodes.map((p) => p.slugId);
+    if (slugs.length === 0)
+      throw new Error(`no linear projects found for labels: ${labels.join(", ")}`);
+    return slugs;
   }
 
   private requiredProjectSlug(): string {

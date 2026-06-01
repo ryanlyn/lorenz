@@ -67,7 +67,7 @@ test("continuationPrompt includes prior context and continuation reason", () => 
   assert.match(result, /still in an active state/);
 });
 
-test("continuationPrompt references resume state when available", () => {
+test("continuationPrompt includes resume-from-workspace guidance in output", () => {
   const result = continuationPrompt(1, 3);
 
   assert.match(result, /Resume from the current workspace and workpad state/);

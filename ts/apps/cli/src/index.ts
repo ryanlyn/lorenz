@@ -5,7 +5,6 @@ export {
   parseCliArgs,
   createDaemonCommand,
   projectUrlForSettings,
-  usageText,
 } from "./main.js";
 export type { CliOptions, CliParseResult } from "./main.js";
 export {
@@ -13,7 +12,6 @@ export {
   createTrackerClient,
   runAgentAttempt,
   runtimeAdapters,
-  runtimeDefaultSettings,
   runtimeDefaultSettingsOptions,
 } from "./daemon.js";
 export {
@@ -22,7 +20,6 @@ export {
   runRunsCommand,
   runRunsMain,
   runsOptionsFromCommanderOptions,
-  runsUsageText,
 } from "./runs.js";
 export type { RunsCommandOptions, RunsCommanderOptions, RunsParseResult } from "./runs.js";
 export {
@@ -47,7 +44,7 @@ export {
   workflowFilePath,
 } from "@symphony/workflow";
 export { normalizeIssue, ensembleSize, isTerminalState } from "@symphony/issue";
-export { buildPrompt, continuationPrompt, ensembleContext } from "@symphony/prompt";
+export { buildPrompt, continuationPrompt } from "@symphony/prompt";
 export {
   safeIdentifier,
   workspacePath,
@@ -98,7 +95,6 @@ export {
 } from "@symphony/humanize";
 export { Orchestrator, createState } from "@symphony/orchestrator";
 export type { OrchestratorState } from "@symphony/orchestrator";
-export { RunController } from "@symphony/agent-runner";
 export type { RunAgentAttemptInput, RunResult } from "@symphony/agent-runner";
 export {
   SymphonyRuntime,
@@ -123,7 +119,7 @@ export type {
   SymphonyRuntimeOptions,
 } from "@symphony/runtime";
 export { statePayload, issuePayload, runsPayload } from "@symphony/presenter";
-export type { PresenterParams, RunsPayloadResult } from "@symphony/presenter";
+export type { PresenterParams } from "@symphony/presenter";
 export { startObservabilityServer, startClaudeMcpServer } from "@symphony/server";
 export type { ObservabilityServerHandle, ObservabilityServerOptions } from "@symphony/server";
 export { RuntimeApp } from "@symphony/tui";
@@ -165,13 +161,9 @@ export {
   CodexAppServerExecutor,
   CodexNdjsonMessageReader,
   CodexNdjsonMessageWriter,
-  CodexProcess,
 } from "@symphony/codex";
-export type { CodexJsonRpcTransportOptions, CodexSession } from "@symphony/codex";
 export { AcpExecutor } from "@symphony/acp";
-export type { AcpSession } from "@symphony/acp";
 export {
-  AGENT_EXECUTOR_KINDS,
   AGENT_UPDATE_TYPES,
   CODEX_APPROVAL_POLICY_NAMES,
   CODEX_SANDBOX_MODES,

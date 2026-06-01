@@ -1,16 +1,53 @@
+// --- Bounds constants ---
+
+export const PORT_MAX = 65535;
+export const ONE_WEEK_MS = 604_800_000;
+export const RENDER_INTERVAL_MAX_MS = 60_000;
+export const CONCURRENCY_MAX = 1000;
+export const MAX_TURNS_MAX = 10_000;
+export const ENSEMBLE_SIZE_MAX = 100;
+
+// --- Bounds validators ---
+
+export function isValidPort(n: number): boolean {
+  return Number.isInteger(n) && n >= 0 && n <= PORT_MAX;
+}
+
+export function isValidTimeoutMs(n: number): boolean {
+  return Number.isInteger(n) && n >= 1 && n <= ONE_WEEK_MS;
+}
+
+export function isValidNonNegativeTimeoutMs(n: number): boolean {
+  return Number.isInteger(n) && n >= 0 && n <= ONE_WEEK_MS;
+}
+
+export function isValidIntervalMs(n: number): boolean {
+  return Number.isInteger(n) && n >= 1 && n <= ONE_WEEK_MS;
+}
+
+export function isValidRenderIntervalMs(n: number): boolean {
+  return Number.isInteger(n) && n >= 1 && n <= RENDER_INTERVAL_MAX_MS;
+}
+
+export function isValidConcurrency(n: number): boolean {
+  return Number.isInteger(n) && n >= 1 && n <= CONCURRENCY_MAX;
+}
+
+export function isValidMaxTurns(n: number): boolean {
+  return Number.isInteger(n) && n >= 1 && n <= MAX_TURNS_MAX;
+}
+
+export function isValidEnsembleSize(n: number): boolean {
+  return Number.isInteger(n) && n >= 1 && n <= ENSEMBLE_SIZE_MAX;
+}
+
+// --- Domain types ---
+
 /**
  * Identifies a configured agent backend by name (e.g. `"codex"`, `"claude"`).
  * Matches a key in {@link Settings.agents} and is open-ended because operators define their own.
  */
 export type AgentKind = string;
-
-export const AGENT_EXECUTOR_KINDS = ["appserver", "acp"] as const;
-
-/**
- * Transport used to drive an agent process: `"appserver"` speaks Codex's JSON-RPC
- * app-server protocol, `"acp"` speaks the Agent Client Protocol bridge.
- */
-export type AgentExecutorKind = (typeof AGENT_EXECUTOR_KINDS)[number];
 
 export const TRACKER_KINDS = ["linear", "memory"] as const;
 
@@ -150,8 +187,12 @@ export interface TrackerSettings {
   kind?: TrackerKind | undefined;
   endpoint: string;
   apiKey?: string | undefined;
-  /** Linear project slug; required when `kind === "linear"`. */
+  /** @deprecated Use `projectSlugs` instead. Single Linear project slug; required when `kind === "linear"`. */
   projectSlug?: string | undefined;
+  /** Linear project slugs to monitor. Mutually exclusive with `projectLabels`. */
+  projectSlugs?: string[] | undefined;
+  /** Linear project labels for dynamic discovery. Mutually exclusive with `projectSlugs`. */
+  projectLabels?: string[] | undefined;
   /** Tracker assignee identity (or `$VAR`) used to scope candidate queries to one user. */
   assignee?: string | undefined;
   /** Tracker state names considered eligible for dispatch (case-insensitive match). */
@@ -261,6 +302,13 @@ export interface CodexSettings {
   readTimeoutMs: number;
   /** Inactivity window (ms) before a session with no events is force-aborted as stalled. `<= 0` disables stall detection. */
   stallTimeoutMs: number;
+  /** Reasoning effort/summary configuration passed to `turn/start`. */
+  reasoning: CodexReasoning | null;
+}
+
+export interface CodexReasoning {
+  /** Summary detail level returned in reasoning items (e.g. `"concise"`, `"detailed"`, `"auto"`). */
+  summary: "concise" | "detailed" | "auto";
 }
 
 /**
@@ -304,6 +352,10 @@ export interface ServerSettings {
    * (e.g. Claude, which needs the MCP endpoint). `0` requests an ephemeral local port.
    */
   port?: number | undefined;
+  /** Directory containing JSONL trace files (same directory TraceEmitter writes to). */
+  traceDir?: string | undefined;
+  /** Built frontend assets directory (override for dashboard SPA). */
+  staticDir?: string | undefined;
 }
 
 /**
@@ -461,15 +513,17 @@ export interface EnsembleContext {
 
 /**
  * Scheduled retry or continuation for an issue that just finished a run.
- * Held in the orchestrator until `dueAt` elapses, then the issue becomes dispatchable again.
+ * Held in the orchestrator until the monotonic deadline elapses, then the issue becomes dispatchable again.
  */
 export interface RetryEntry {
   issueId: string;
   identifier: string;
   /** 1-based attempt counter; bumped each time a failure retry is recorded, reset to 1 for continuation retries. */
   attempt: number;
-  /** Absolute wall-clock time when the issue is eligible for re-dispatch; backoff comes from `maxRetryBackoffMs`. */
-  dueAt: Date;
+  /** Monotonic clock deadline (ms) — drives timer scheduling; immune to wall-clock adjustments. */
+  monotonicDeadlineMs: number;
+  /** Wall-clock estimate (ISO-8601) for display/serialization only. */
+  dueAtIso: string;
   /** Last error message, when the previous run failed. */
   error?: string | undefined;
   /** Slot this retry prefers to reclaim so ensemble slots stay stable across attempts. */

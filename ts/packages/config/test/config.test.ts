@@ -524,3 +524,83 @@ test("workflow parsing treats front matter as optional like Elixir", () => {
     /workflow_parse_error/,
   );
 });
+
+test("config validation accepts project_slugs as an alternative to project_slug", () => {
+  const settings = parseConfig(
+    {
+      tracker: {
+        kind: "linear",
+        api_key: "token",
+        project_slugs: ["slug-a", "slug-b"],
+        active_states: ["Todo"],
+      },
+      agent: { kind: "codex" },
+      agents: { codex: { command: "codex" } },
+    },
+    {},
+  );
+
+  assert.deepEqual(settings.tracker.projectSlugs, ["slug-a", "slug-b"]);
+  validateDispatchConfig(settings);
+});
+
+test("config validation accepts project_labels as an alternative to project_slug", () => {
+  const settings = parseConfig(
+    {
+      tracker: {
+        kind: "linear",
+        api_key: "token",
+        project_labels: ["team:backend"],
+        active_states: ["Todo"],
+      },
+      agent: { kind: "codex" },
+      agents: { codex: { command: "codex" } },
+    },
+    {},
+  );
+
+  assert.deepEqual(settings.tracker.projectLabels, ["team:backend"]);
+  validateDispatchConfig(settings);
+});
+
+test("config validation rejects when no project config is provided for linear tracker", () => {
+  const settings = parseConfig(
+    {
+      tracker: {
+        kind: "linear",
+        api_key: "token",
+        active_states: ["Todo"],
+      },
+      agent: { kind: "codex" },
+      agents: { codex: { command: "codex" } },
+    },
+    {},
+  );
+
+  assert.throws(
+    () => validateDispatchConfig(settings),
+    /tracker.project_slug, tracker.project_slugs, or tracker.project_labels is required/,
+  );
+});
+
+test("config validation rejects when multiple project configs are provided", () => {
+  const settings = parseConfig(
+    {
+      tracker: {
+        kind: "linear",
+        api_key: "token",
+        project_slug: "mono",
+        project_slugs: ["slug-a"],
+        active_states: ["Todo"],
+      },
+      agent: { kind: "codex" },
+      agents: { codex: { command: "codex" } },
+    },
+    {},
+  );
+
+  assert.throws(
+    () => validateDispatchConfig(settings),
+    /tracker.project_slug, tracker.project_slugs, and tracker.project_labels are mutually exclusive/,
+  );
+});

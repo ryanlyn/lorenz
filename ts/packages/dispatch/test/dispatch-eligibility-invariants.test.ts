@@ -443,8 +443,8 @@ describe("INVARIANT: When an unstarted issue has a non-terminal blocker, it SHAL
   });
 });
 
-describe("INVARIANT: When a started issue has open blockers, it SHALL be blocked.", () => {
-  test("started issue with open blockers SHALL be ineligible", () => {
+describe("INVARIANT: When a started issue has open blockers, blockers SHALL NOT gate dispatch.", () => {
+  test("started issue with open blockers SHALL remain eligible", () => {
     fc.assert(
       fc.property(
         fc.array(
@@ -463,15 +463,15 @@ describe("INVARIANT: When a started issue has open blockers, it SHALL be blocked
           });
           const settings = makeSettings({ activeStates: ["Todo", "In Progress"] });
           const state = { runningCount: 0, claimedSlots: new Set<string>() };
-          assert.equal(issueHasOpenBlockers(issue, settings), true);
-          assert.equal(shouldDispatchIssue(issue, settings, state), false);
+          assert.equal(issueHasOpenBlockers(issue, settings), false);
+          assert.equal(shouldDispatchIssue(issue, settings, state), true);
         },
       ),
       { numRuns: 100 },
     );
   });
 
-  test("started issue with many open blockers SHALL be ineligible", () => {
+  test("started issue with many open blockers SHALL remain eligible", () => {
     fc.assert(
       fc.property(fc.integer({ min: 1, max: 10 }), (numBlockers) => {
         const blockers = Array.from({ length: numBlockers }, (_, i) => ({
@@ -486,8 +486,8 @@ describe("INVARIANT: When a started issue has open blockers, it SHALL be blocked
         });
         const settings = makeSettings({ activeStates: ["Todo", "In Progress"] });
         const state = { runningCount: 0, claimedSlots: new Set<string>() };
-        assert.equal(issueHasOpenBlockers(issue, settings), true);
-        assert.equal(shouldDispatchIssue(issue, settings, state), false);
+        assert.equal(issueHasOpenBlockers(issue, settings), false);
+        assert.equal(shouldDispatchIssue(issue, settings, state), true);
       }),
       { numRuns: 50 },
     );
@@ -688,7 +688,7 @@ describe("INVARIANT: When a per-state concurrency cap is reached, the system SHA
         settings.statusOverrides.set("todo", { agent: { maxConcurrentAgents: perStateCap } });
         const state = {
           runningCount: 0,
-          runningByState: new Map([["Todo", perStateCap + extra]]),
+          runningByState: new Map([["todo", perStateCap + extra]]),
           claimedSlots: new Set<string>(),
         };
         assert.equal(shouldDispatchIssue(issue, settings, state), false);
@@ -711,7 +711,7 @@ describe("INVARIANT: When a per-state concurrency cap is reached, the system SHA
         settings.statusOverrides.set("todo", { agent: { maxConcurrentAgents: perStateCap } });
         const state = {
           runningCount: 0,
-          runningByState: new Map([["Todo", perStateCap - 1]]),
+          runningByState: new Map([["todo", perStateCap - 1]]),
           claimedSlots: new Set<string>(),
         };
         assert.notEqual(dispatchBlockReason(issue, settings, state), "local_concurrency_cap");
@@ -738,7 +738,7 @@ describe("INVARIANT: When a per-state concurrency cap is reached, the system SHA
           });
           const state = {
             runningCount: 0,
-            runningByState: new Map([[issueState, perStateCap]]),
+            runningByState: new Map([[issueState.trim().toLowerCase(), perStateCap]]),
             claimedSlots: new Set<string>(),
           };
           assert.equal(dispatchBlockReason(issue, settings, state), "local_concurrency_cap");

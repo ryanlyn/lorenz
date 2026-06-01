@@ -91,7 +91,8 @@ export interface RuntimeRetryEntry {
   issueId: string;
   identifier: string;
   attempt: number;
-  dueAt: string;
+  dueAtIso: string;
+  monotonicDeadlineMs: number;
   error?: string | undefined;
   slotIndex?: number | undefined;
   workerHost?: string | null | undefined;

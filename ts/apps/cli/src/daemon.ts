@@ -7,7 +7,7 @@ import {
   type RunAgentAttemptInput,
   type RunResult,
 } from "@symphony/agent-runner";
-import { defaultSettings, type DefaultSettingsOptions } from "@symphony/config";
+import type { DefaultSettingsOptions } from "@symphony/config";
 import { CodexAppServerExecutor } from "@symphony/codex";
 import type { RuntimeTrackerClient, Settings } from "@symphony/domain";
 import { createWorkspaceForIssue, removeIssueWorkspaces, runHook } from "@symphony/workspace";
@@ -21,10 +21,6 @@ import {
 import { LinearClient } from "@symphony/linear-tracker";
 import { MemoryTrackerClient, memoryIssuesFromEnv } from "@symphony/memory-tracker";
 
-export function runtimeDefaultSettings(): Settings {
-  return defaultSettings(runtimeDefaultSettingsOptions());
-}
-
 export function runtimeDefaultSettingsOptions(): DefaultSettingsOptions {
   return { tmpdir: os.tmpdir(), cwd: process.cwd() };
 }
@@ -34,7 +30,11 @@ export function createTrackerClient(
   env: NodeJS.ProcessEnv = process.env,
 ): RuntimeTrackerClient {
   if (settings.tracker.kind === "memory") return new MemoryTrackerClient(memoryIssuesFromEnv(env));
-  if (settings.tracker.kind === "linear") return new LinearClient(settings);
+  if (settings.tracker.kind === "linear") {
+    const client = new LinearClient(settings);
+    void client.resolveProjectSlugs();
+    return client;
+  }
   throw new Error("tracker.kind is required");
 }
 

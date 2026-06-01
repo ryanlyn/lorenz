@@ -32,3 +32,26 @@ depends = ["format", "lint-fix"]
 
 [tasks.check]
 depends = ["typecheck", "test", "lint"]
+
+[tasks."e2e:setup"]
+run = "pnpm exec playwright install chromium"
+description = "Install Playwright browsers for E2E tests"
+
+[tasks."e2e:trace"]
+run = """
+pnpm build && \
+pnpm --filter @symphony/dashboard build && \
+npx tsx sandbox/e2e-trace-test.ts
+"""
+description = "Run end-to-end trace pipeline test (requires a real agent)"
+env = { SYMPHONY_E2E_AGENT_KIND = "{{env.SYMPHONY_E2E_AGENT_KIND | default(value='codex')}}" }
+
+[tasks."e2e:trace:codex"]
+run = "mise run e2e:trace"
+description = "Run E2E trace test with Codex agent"
+env = { SYMPHONY_E2E_AGENT_KIND = "codex" }
+
+[tasks."e2e:trace:claude"]
+run = "mise run e2e:trace"
+description = "Run E2E trace test with Claude agent"
+env = { SYMPHONY_E2E_AGENT_KIND = "claude" }

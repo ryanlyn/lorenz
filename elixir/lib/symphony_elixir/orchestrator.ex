@@ -612,11 +612,6 @@ defmodule SymphonyElixir.Orchestrator do
 
         terminate_all_issue_slots(state, issue.id, false, :canceled, "issue no longer matches dispatch routes")
 
-      active_issue_state?(issue.state, active_states) and issue_blocked_by_non_terminal?(issue, terminal_states) ->
-        Logger.info("Issue blocked by non-terminal blocker: #{issue_context(issue)} blocked_by=#{length(issue.blocked_by)}; stopping active agent")
-
-        terminate_all_issue_slots(state, issue.id, false, :canceled, "issue blocked by non-terminal blocker")
-
       active_issue_state?(issue.state, active_states) ->
         refresh_running_issue_state(state, issue)
 
@@ -900,7 +895,7 @@ defmodule SymphonyElixir.Orchestrator do
 
     candidate_issue?(issue, active_states, terminal_states) and
       issue_matches_dispatch_routes?(issue, state) and
-      !issue_blocked_by_non_terminal?(issue, terminal_states) and
+      !unstarted_issue_blocked_by_non_terminal?(issue, terminal_states) and
       claimed_slot_count_for_issue(claimed, issue.id) < ensemble_size
   end
 
@@ -955,18 +950,29 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp issue_routable_to_worker?(_issue), do: true
 
-  defp issue_blocked_by_non_terminal?(%Issue{blocked_by: blockers}, terminal_states)
-       when is_list(blockers) do
-    Enum.any?(blockers, fn
-      %{state: blocker_state} when is_binary(blocker_state) ->
-        !terminal_issue_state?(blocker_state, terminal_states)
+  defp unstarted_issue_blocked_by_non_terminal?(
+         %Issue{state: issue_state, state_type: issue_state_type, blocked_by: blockers},
+         terminal_states
+       )
+       when is_binary(issue_state) and is_list(blockers) do
+    unstarted_issue_state?(issue_state, issue_state_type) and
+      Enum.any?(blockers, fn
+        %{state: blocker_state} when is_binary(blocker_state) ->
+          !terminal_issue_state?(blocker_state, terminal_states)
 
-      _ ->
-        true
-    end)
+        _ ->
+          true
+      end)
   end
 
-  defp issue_blocked_by_non_terminal?(_issue, _terminal_states), do: false
+  defp unstarted_issue_blocked_by_non_terminal?(_issue, _terminal_states), do: false
+
+  defp unstarted_issue_state?(state_name, state_type) when is_binary(state_name) do
+    case state_type do
+      state_type when is_binary(state_type) -> Schema.normalize_issue_state(state_type) == "unstarted"
+      _ -> Schema.normalize_issue_state(state_name) == "todo"
+    end
+  end
 
   defp terminal_issue_state?(state_name, terminal_states) when is_binary(state_name) do
     Enum.member?(terminal_states, Schema.normalize_issue_state(state_name))
@@ -2038,7 +2044,7 @@ defmodule SymphonyElixir.Orchestrator do
   defp retry_candidate_issue?(%Issue{} = issue, active_states, terminal_states, dispatch_settings) do
     candidate_issue?(issue, active_states, terminal_states) and
       issue_matches_dispatch_routes?(issue, dispatch_settings) and
-      !issue_blocked_by_non_terminal?(issue, terminal_states)
+      !unstarted_issue_blocked_by_non_terminal?(issue, terminal_states)
   end
 
   defp apply_usage_token_delta(

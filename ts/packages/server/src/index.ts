@@ -1,5 +1,10 @@
+import { readFile as fsReadFile } from "node:fs/promises";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
 import { serve } from "@hono/node-server";
 import type { ServerType } from "@hono/node-server";
+import { serveStatic } from "@hono/node-server/serve-static";
 import { Hono, type Context } from "hono";
 import { streamSSE } from "hono/streaming";
 import { match } from "ts-pattern";
@@ -9,6 +14,10 @@ import { issuePayload, runsPayload, statePayload, type PresenterParams } from "@
 import { executeTool, toolSpecs } from "@symphony/mcp";
 import type { RuntimeSnapshot } from "@symphony/runtime-events";
 import type { Settings } from "@symphony/domain";
+import type { TraceWatcher } from "@symphony/traceviz-server";
+
+import { createTraceRoutes } from "./trace-routes.js";
+import { createWsHandler } from "./ws.js";
 
 export interface RuntimeServerSource {
   workflow?: { settings?: Settings } | undefined;
@@ -20,6 +29,8 @@ export interface RuntimeServerSource {
 export interface ObservabilityServerOptions {
   host: string;
   port: number;
+  traceDir?: string;
+  staticDir?: string;
 }
 
 export interface ObservabilityServerHandle {
@@ -33,7 +44,18 @@ export async function startObservabilityServer(
   runtime: RuntimeServerSource,
   options: ObservabilityServerOptions,
 ): Promise<ObservabilityServerHandle> {
-  return startHonoServer(buildObservabilityApp(runtime), options);
+  const { app, watcher } = buildObservabilityApp(runtime, options);
+  let internals: HonoServerInternals | undefined;
+
+  if (watcher) {
+    const wsSetup = createWsHandler(app, watcher);
+    internals = {
+      injectWebSocket: wsSetup.injectWebSocket,
+      stopWatcher: () => watcher.stop(),
+    };
+  }
+
+  return startHonoServer(app, options, internals);
 }
 
 export async function startClaudeMcpServer(
@@ -43,9 +65,15 @@ export async function startClaudeMcpServer(
   return startHonoServer(buildClaudeMcpApp(settings), options);
 }
 
+interface HonoServerInternals {
+  injectWebSocket?: (server: unknown) => void;
+  stopWatcher?: () => void;
+}
+
 async function startHonoServer(
   app: Hono,
   options: ObservabilityServerOptions,
+  internals?: HonoServerInternals,
 ): Promise<ObservabilityServerHandle> {
   let server!: ServerType;
   await new Promise<void>((resolve, reject) => {
@@ -56,24 +84,63 @@ async function startHonoServer(
     server.once("error", reject);
   });
   const activeServer = server;
+
+  // Inject WebSocket support after server starts listening
+  if (internals?.injectWebSocket) {
+    internals.injectWebSocket(activeServer);
+  }
+
   const address = activeServer.address();
   const port = typeof address === "object" && address !== null ? address.port : options.port;
   return {
     host: options.host,
     port,
-    url(path = "/"): string {
-      return `http://${urlHost(options.host)}:${port}${path}`;
+    url(urlPath = "/"): string {
+      return `http://${urlHost(options.host)}:${port}${urlPath}`;
     },
-    stop: async () => stopServer(activeServer),
+    stop: async () => {
+      internals?.stopWatcher?.();
+      await stopServer(activeServer);
+    },
   };
 }
 
-function buildObservabilityApp(runtime: RuntimeServerSource): Hono {
+interface BuildResult {
+  app: Hono;
+  watcher: TraceWatcher | null;
+}
+
+function buildObservabilityApp(
+  runtime: RuntimeServerSource,
+  options: ObservabilityServerOptions,
+): BuildResult {
   const app = new Hono();
   const settings = runtimeSettings(runtime);
   if (settings) mountClaudeMcp(app, settings);
 
-  app.get("/", () => htmlResponse(dashboardHtml(runtime)));
+  // Health endpoint
+  app.get("/health", () => jsonResponse({ status: "ok" }));
+
+  // SPA serving
+  const staticDir = options.staticDir ?? resolveStaticDir();
+  app.get("/", async () => {
+    const indexPath = path.join(staticDir, "index.html");
+    try {
+      const content = await fsReadFile(indexPath, "utf-8");
+      return htmlResponse(content);
+    } catch {
+      return jsonResponse(
+        {
+          error: {
+            code: "dashboard_not_built",
+            message: "Dashboard assets not found. Run: pnpm dashboard:build",
+          },
+        },
+        503,
+      );
+    }
+  });
+  app.use("/assets/*", serveStatic({ root: staticDir }));
   app.all("/", () => errorResponse(405, "method_not_allowed", "Method not allowed"));
 
   app.get("/api/v1/state", () => {
@@ -116,6 +183,14 @@ function buildObservabilityApp(runtime: RuntimeServerSource): Hono {
   });
   app.all("/api/v1/refresh", () => errorResponse(405, "method_not_allowed", "Method not allowed"));
 
+  // Mount trace routes BEFORE the :identifier catch-all
+  let watcher: TraceWatcher | null = null;
+  if (options.traceDir) {
+    const traceRoutes = createTraceRoutes(options.traceDir);
+    watcher = traceRoutes.watcher;
+    app.route("/", traceRoutes.app);
+  }
+
   app.get("/api/v1/:identifier", (c) => {
     const issueIdentifier = decodeURIComponent(c.req.param("identifier"));
     const snapshot = snapshotResult(runtime);
@@ -133,7 +208,7 @@ function buildObservabilityApp(runtime: RuntimeServerSource): Hono {
   );
 
   app.notFound(() => errorResponse(404, "not_found", "Route not found"));
-  return app;
+  return { app, watcher };
 }
 
 function runtimeSettings(runtime: RuntimeServerSource): Settings | null {
@@ -174,113 +249,9 @@ function mountClaudeMcp(app: Hono, settings: Settings): void {
   app.all("/claude-mcp", () => errorResponse(405, "method_not_allowed", "Method not allowed"));
 }
 
-function dashboardHtml(runtime: RuntimeServerSource): string {
-  const snapshot = snapshotResult(runtime);
-  if (snapshot.status !== "ok") {
-    const error = observabilityErrorBody(snapshot.status);
-    return `<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <title>Symphony Operations Dashboard</title>
-  <style>
-    body { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; margin: 2rem; background: #0f172a; color: #e2e8f0; }
-    h1 { font-size: 1.4rem; }
-  </style>
-</head>
-<body>
-  <h1>Operations Dashboard</h1>
-  <p>${escapeHtml(error.code)}: ${escapeHtml(error.message)}</p>
-</body>
-</html>`;
-  }
-  const state = statePayload(snapshot.snapshot);
-  const running = Array.isArray(state.running) ? state.running : [];
-  const retrying = Array.isArray(state.retrying) ? state.retrying : [];
-  const blocked = Array.isArray(state.blocked) ? state.blocked : [];
-  const usage = isRecord(state.usage_totals) ? state.usage_totals : {};
-  const counts = isRecord(state.counts) ? state.counts : {};
-  return `<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <title>Symphony Operations Dashboard</title>
-  <style>
-    body { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; margin: 0; background: #101418; color: #e8edf2; }
-    main { max-width: 1180px; margin: 0 auto; padding: 24px; }
-    header { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; }
-    h1 { font-size: 1.3rem; margin: 0 0 4px; }
-    .subtle { color: #91a1b2; }
-    .badge { color: #0f1720; background: #6ee7b7; padding: 2px 8px; border-radius: 4px; font-weight: 700; }
-    .metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin: 22px 0; }
-    .metric { border: 1px solid #2d3742; padding: 12px; background: #161d24; border-radius: 6px; }
-    .metric span { display: block; color: #91a1b2; font-size: .78rem; }
-    .metric strong { display: block; font-size: 1.25rem; margin-top: 6px; }
-    section { margin-top: 22px; }
-    h2 { font-size: .92rem; text-transform: uppercase; letter-spacing: 0; color: #cbd5df; }
-    table { width: 100%; border-collapse: collapse; background: #141a21; border: 1px solid #2d3742; }
-    th, td { padding: 8px 10px; border-bottom: 1px solid #24303a; text-align: left; vertical-align: top; }
-    th { color: #91a1b2; font-size: .78rem; }
-    td { font-size: .84rem; }
-    .empty { color: #91a1b2; border: 1px dashed #34414f; padding: 12px; background: #141a21; }
-    code { color: #bae6fd; }
-  </style>
-</head>
-<body>
-  <main>
-    <header>
-      <div>
-        <h1>Symphony Operations Dashboard</h1>
-        <div class="subtle">workflow=${escapeHtml(snapshot.snapshot.workflowPath)} status=${snapshot.snapshot.appStatus}</div>
-      </div>
-      <span class="badge" id="connection">live</span>
-    </header>
-
-    <div class="metrics">
-      ${metricCard("Running", counts.running)}
-      ${metricCard("Retrying", counts.retrying)}
-      ${metricCard("Blocked", counts.blocked)}
-      ${metricCard("Tokens", usage.total_tokens)}
-    </div>
-
-    <section>
-      <h2>Running Sessions</h2>
-      ${running.length === 0 ? emptyState("No running sessions") : runningTable(running)}
-    </section>
-
-    <section>
-      <h2>Retry Queue</h2>
-      ${retrying.length === 0 ? emptyState("No queued retries") : retryTable(retrying)}
-    </section>
-
-    <section>
-      <h2>Dispatch Blocks</h2>
-      ${blocked.length === 0 ? emptyState("No capacity-blocked issues") : blockedTable(blocked)}
-    </section>
-  </main>
-  <script>
-    async function refreshState() {
-      try {
-        const response = await fetch('/api/v1/state', { cache: 'no-store' });
-        document.getElementById('connection').textContent = response.ok ? 'live' : 'offline';
-      } catch (_error) {
-        document.getElementById('connection').textContent = 'offline';
-      }
-    }
-    if ('EventSource' in window) {
-      const events = new EventSource('/api/v1/events');
-      events.addEventListener('state', () => {
-        document.getElementById('connection').textContent = 'live';
-      });
-      events.onerror = () => {
-        document.getElementById('connection').textContent = 'offline';
-      };
-    } else {
-      setInterval(refreshState, ${Math.max(250, snapshot.snapshot.poll.nextPollAt ? 1000 : 1000)});
-    }
-  </script>
-</body>
-</html>`;
+function resolveStaticDir(): string {
+  const thisFile = fileURLToPath(import.meta.url);
+  return path.resolve(path.dirname(thisFile), "../../../apps/symphony-dashboard/dist");
 }
 
 function stateEventsResponse(c: Context, runtime: RuntimeServerSource): Response {
@@ -315,80 +286,6 @@ function stateEventsResponse(c: Context, runtime: RuntimeServerSource): Response
   response.headers.set("content-type", "text/event-stream; charset=utf-8");
   response.headers.set("cache-control", "no-cache, no-transform");
   return response;
-}
-
-function metricCard(label: string, value: unknown): string {
-  return `<div class="metric"><span>${escapeHtml(label)}</span><strong>${escapeHtml(formatValue(value))}</strong></div>`;
-}
-
-function runningTable(rows: unknown[]): string {
-  return table(
-    ["Issue", "Agent", "Worker", "Turns", "Tokens", "Session", "Event"],
-    rows.map((row) => {
-      const item = isRecord(row) ? row : {};
-      const tokens = isRecord(item.tokens)
-        ? item.tokens.total_tokens
-        : isRecord(item.usage_totals)
-          ? item.usage_totals.total_tokens
-          : "";
-      return [
-        item.issue_identifier,
-        item.agent_kind,
-        item.worker_host ?? "local",
-        item.turn_count,
-        tokens,
-        item.session_id ?? "n/a",
-        item.last_event ?? "n/a",
-      ];
-    }),
-  );
-}
-
-function retryTable(rows: unknown[]): string {
-  return table(
-    ["Issue", "Attempt", "Due", "Worker", "Workspace", "Error"],
-    rows.map((row) => {
-      const item = isRecord(row) ? row : {};
-      return [
-        item.issue_identifier,
-        item.attempt,
-        item.due_at,
-        item.worker_host ?? "local",
-        item.workspace_path ?? "n/a",
-        item.error ?? "n/a",
-      ];
-    }),
-  );
-}
-
-function blockedTable(rows: unknown[]): string {
-  return table(
-    ["Issue", "Reason", "Worker"],
-    rows.map((row) => {
-      const item = isRecord(row) ? row : {};
-      return [item.issue_identifier, item.reason ?? "unknown", item.worker_host ?? "n/a"];
-    }),
-  );
-}
-
-function table(headers: string[], rows: unknown[][]): string {
-  return `<table><thead><tr>${headers.map((header) => `<th>${escapeHtml(header)}</th>`).join("")}</tr></thead><tbody>${rows
-    .map(
-      (row) =>
-        `<tr>${row.map((value) => `<td>${escapeHtml(formatValue(value))}</td>`).join("")}</tr>`,
-    )
-    .join("")}</tbody></table>`;
-}
-
-function emptyState(message: string): string {
-  return `<div class="empty">${escapeHtml(message)}</div>`;
-}
-
-function formatValue(value: unknown): string {
-  if (value === null || value === undefined || value === "") return "0";
-  if (typeof value === "number") return Number.isInteger(value) ? String(value) : value.toFixed(1);
-  // eslint-disable-next-line @typescript-eslint/no-base-to-string
-  return String(value);
 }
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -560,10 +457,6 @@ async function stopServer(server: ServerType): Promise<void> {
 
 function urlHost(host: string): string {
   return host.includes(":") && !host.startsWith("[") ? `[${host}]` : host;
-}
-
-function escapeHtml(value: string): string {
-  return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

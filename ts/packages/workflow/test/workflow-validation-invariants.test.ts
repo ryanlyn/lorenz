@@ -103,7 +103,7 @@ describe("INVARIANT: When YAML front matter is not a map, the system SHALL produ
   });
 });
 
-test("valid map front matter SHALL parse successfully and return config as a plain object", () => {
+test("INVARIANT: valid map front matter SHALL parse successfully and return config as a plain object", () => {
   fc.assert(
     fc.property(
       fc.dictionary(yamlKeyArb, fc.constantFrom("value1", "42", "true", "null"), {
@@ -123,7 +123,7 @@ test("valid map front matter SHALL parse successfully and return config as a pla
   );
 });
 
-test("content without front matter delimiters SHALL return full content as body with empty config", () => {
+test("INVARIANT: content without front matter delimiters SHALL return full content as body with empty config", () => {
   fc.assert(
     fc.property(
       fc.string({ minLength: 1, maxLength: 100 }).filter((s) => !s.startsWith("---")),

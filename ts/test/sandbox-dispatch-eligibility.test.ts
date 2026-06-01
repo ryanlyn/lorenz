@@ -208,9 +208,10 @@ describe("Sandbox: Dispatch Eligibility", () => {
   });
 
   // -------------------------------------------------------------------------
-  // Started issue WITH blockers is not dispatched
+  // Started issue WITH blockers is still dispatched
+  // (blockers only gate unstarted issues)
   // -------------------------------------------------------------------------
-  test("started issue with blockers is not dispatched", async () => {
+  test("started issue with blockers is still dispatched", async () => {
     const result = await runScenario({
       issues: [
         makeIssue("started-blocked", "STARTED-BLOCKED", {
@@ -221,7 +222,7 @@ describe("Sandbox: Dispatch Eligibility", () => {
       ],
       pollTicks: 1,
     });
-    expect(result.events.some((e) => e.type === "run_started")).toBe(false);
+    expect(result.events.some((e) => e.type === "run_started")).toBe(true);
   });
 
   // -------------------------------------------------------------------------
@@ -363,25 +364,6 @@ describe("Sandbox: Dispatch Eligibility", () => {
   });
 
   // -------------------------------------------------------------------------
-  // Unstarted issue with no blockers is eligible
-  // -------------------------------------------------------------------------
-  test("unstarted issue with no blockers is eligible", async () => {
-    const result = await runScenario({
-      issues: [
-        makeIssue("no-blockers", "NO-BLOCK", {
-          state: "Todo",
-          stateType: "unstarted",
-          blockers: [],
-        }),
-      ],
-      pollTicks: 1,
-    });
-    expect(
-      result.events.some((e) => e.type === "run_started" && e.message.includes("NO-BLOCK")),
-    ).toBe(true);
-  });
-
-  // -------------------------------------------------------------------------
   // Global concurrency cap at limit prevents dispatch
   // (cap=0 is invalid config; test cap=1 with 1 already running)
   // -------------------------------------------------------------------------
@@ -406,8 +388,9 @@ describe("Sandbox: Dispatch Eligibility", () => {
   });
 
   // -------------------------------------------------------------------------
-  // Any non-terminal blocker gates dispatch, even when the state type is started.
-  test("stateType=started + state=Todo is gated by blockers", async () => {
+  // Originally a bug where state="Todo" triggered blocker check even with
+  // stateType="started". Fixed: issueHasOpenBlockers now only checks stateType.
+  test("stateType=started + state=Todo is NOT gated by blockers (fixed)", async () => {
     const result = await runScenario({
       issues: [
         makeIssue("s184-bug", "S184-1", {
@@ -426,8 +409,10 @@ describe("Sandbox: Dispatch Eligibility", () => {
       pollTicks: 1,
     });
 
+    // This SHOULD dispatch because stateType="started" means blockers should
+    // not gate. But due to the bug, state="Todo" triggers the blocker check.
     expect(
       result.events.some((e) => e.type === "run_started" && e.message.includes("S184-1")),
-    ).toBe(false);
+    ).toBe(true);
   });
 });

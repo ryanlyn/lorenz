@@ -770,27 +770,6 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     refute Orchestrator.should_dispatch_issue_for_test(issue, state)
   end
 
-  test "started issue with non-terminal blocker is not dispatch-eligible" do
-    state = %Orchestrator.State{
-      max_concurrent_agents: 3,
-      running: %{},
-      claimed: MapSet.new(),
-      usage_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0},
-      retry_attempts: %{}
-    }
-
-    issue = %Issue{
-      id: "blocked-started-1",
-      identifier: "MT-1001B",
-      title: "Blocked started work",
-      state: "In Progress",
-      state_type: "started",
-      blocked_by: [%{id: "blocker-1", identifier: "MT-1002", state: "Todo"}]
-    }
-
-    refute Orchestrator.should_dispatch_issue_for_test(issue, state)
-  end
-
   test "issue assigned to another worker is not dispatch-eligible" do
     write_workflow_file!(Workflow.workflow_file_path(), tracker_assignee: "dev@example.com")
 
@@ -981,7 +960,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
              :local_concurrency_cap
   end
 
-  test "dispatch revalidation skips stale issue once a non-terminal blocker appears" do
+  test "dispatch revalidation skips stale todo issue once a non-terminal blocker appears" do
     stale_issue = %Issue{
       id: "blocked-2",
       identifier: "MT-1005",

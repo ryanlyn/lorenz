@@ -12,10 +12,15 @@ import { Orchestrator } from "@symphony/orchestrator";
 
 function makeClock(baseMs: number) {
   let now = baseMs;
+  let monotonic = 0;
   return {
     now: () => new Date(now),
+    monotonicMs: () => monotonic,
+    setTimeout: (_cb: () => void, _ms: number) => ({ unref: undefined }),
+    clearTimeout: (_h: unknown) => {},
     advance(ms: number) {
       now += ms;
+      monotonic += ms;
     },
   };
 }
@@ -230,7 +235,7 @@ describe("INVARIANT: When a claim succeeds, the retryAttempts entry for that iss
     const snap1 = orch.snapshot();
     assert.equal(snap1.retrying.length, 1);
 
-    // Advance past dueAt
+    // Advance past due time
     clock.advance(10000);
     const entry2 = orch.claim(issue);
     assert.ok(entry2 !== null);
@@ -293,12 +298,13 @@ describe("INVARIANT: When a retry becomes due, stale claimed slots SHALL be rele
     // Add stale claim (claimed but NOT running)
     orch.state.claimed.add(slotKey(issue.id, 0));
 
-    // Set a retry entry with dueAt in the past
+    // Set a retry entry with monotonicDeadlineMs in the past
     orch.state.retryAttempts.set(issue.id, {
       issueId: issue.id,
       identifier: issue.identifier,
       attempt: 1,
-      dueAt: new Date(clock.now().getTime() - 1000),
+      monotonicDeadlineMs: clock.monotonicMs() - 1,
+      dueAtIso: new Date(clock.now().getTime() - 1000).toISOString(),
       error: "agent exited",
     });
 

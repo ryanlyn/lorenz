@@ -124,7 +124,7 @@ describe("INVARIANT: When token counters are updated sequentially, they SHALL ne
   });
 });
 
-test("reported-totals sync with entry at every step in N-step chain", () => {
+test("INVARIANT: When token counters are updated sequentially, reportedTotals SHALL equal entryTotals at every step", () => {
   fc.assert(
     fc.property(
       arbUsageTotals(),
@@ -151,7 +151,7 @@ test("reported-totals sync with entry at every step in N-step chain", () => {
   );
 });
 
-test("seconds-running preserved across entire N-step chain", () => {
+test("INVARIANT: When token counters are updated sequentially, secondsRunning SHALL be preserved unchanged", () => {
   fc.assert(
     fc.property(
       arbUsageTotals(),
@@ -177,7 +177,7 @@ test("seconds-running preserved across entire N-step chain", () => {
   );
 });
 
-test("idempotency holds for each step in a chain (re-applying same update is no-op)", () => {
+test("INVARIANT: When the same update is re-applied at any step, the result SHALL be unchanged (idempotency)", () => {
   fc.assert(
     fc.property(
       arbUsageTotals(),
@@ -243,7 +243,7 @@ describe("INVARIANT: When global aggregates are updated, growth SHALL be bounded
   });
 });
 
-test("global growth is zero when entry does not exceed reported", () => {
+test("INVARIANT: When entry does not exceed reported, global growth SHALL be zero", () => {
   fc.assert(
     fc.property(
       fc.record({
@@ -281,7 +281,7 @@ test("global growth is zero when entry does not exceed reported", () => {
   );
 });
 
-test("entry result is at least as large as both entry and positive update values", () => {
+test("INVARIANT: When positive values are applied, entry result SHALL be at least as large as both prior entry and the update", () => {
   fc.assert(
     fc.property(
       arbUsageTotals(),
@@ -356,7 +356,7 @@ describe("INVARIANT: When extreme values are applied, token counts SHALL never b
   });
 });
 
-test("heavily negative updates do not corrupt state", () => {
+test("INVARIANT: When heavily negative updates are applied, token counts SHALL remain non-negative and non-decreasing", () => {
   fc.assert(
     fc.property(arbUsageTotals(), arbUsageTotals(), arbUsageTotals(), (entry, reported, global) => {
       const update = {
@@ -427,7 +427,7 @@ describe("INVARIANT: When values are near integer limits, the system SHALL not p
   });
 });
 
-test("near-overflow: entry and reported remain valid when globalTotals near limit", () => {
+test("INVARIANT: When globalTotals are near integer limits, entry and reported SHALL remain valid and non-decreasing", () => {
   fc.assert(
     fc.property(
       arbUsageTotals(),

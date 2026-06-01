@@ -322,8 +322,20 @@ test("RuntimeRetryEntry serialization round-trip preserves numeric attempt witho
   // coerced to a string or dropped -- this matters because the runtime snapshot is
   // serialized over the wire (HTTP API / TUI refresh) and consumers rely on numeric type.
   const retries: RuntimeRetryEntry[] = [
-    { issueId: "issue-1", identifier: "MT-1", attempt: 1, dueAt: "2026-05-26T00:00:00.000Z" },
-    { issueId: "issue-2", identifier: "MT-2", attempt: 5, dueAt: "2026-05-26T01:00:00.000Z" },
+    {
+      issueId: "issue-1",
+      identifier: "MT-1",
+      attempt: 1,
+      dueAtIso: "2026-05-26T00:00:00.000Z",
+      monotonicDeadlineMs: 1000,
+    },
+    {
+      issueId: "issue-2",
+      identifier: "MT-2",
+      attempt: 5,
+      dueAtIso: "2026-05-26T01:00:00.000Z",
+      monotonicDeadlineMs: 5000,
+    },
   ];
 
   const parsed = JSON.parse(JSON.stringify(retries));
@@ -334,10 +346,10 @@ test("RuntimeRetryEntry serialization round-trip preserves numeric attempt witho
   assert.equal(parsed[0].attempt, 1);
   assert.equal(parsed[1].attempt, 5);
 
-  // dueAt must remain a string (ISO-8601) -- not converted to a Date object
-  assert.equal(typeof parsed[0].dueAt, "string");
-  assert.equal(parsed[0].dueAt, "2026-05-26T00:00:00.000Z");
-  assert.equal(parsed[1].dueAt, "2026-05-26T01:00:00.000Z");
+  // dueAtIso must remain a string (ISO-8601) -- not converted to a Date object
+  assert.equal(typeof parsed[0].dueAtIso, "string");
+  assert.equal(parsed[0].dueAtIso, "2026-05-26T00:00:00.000Z");
+  assert.equal(parsed[1].dueAtIso, "2026-05-26T01:00:00.000Z");
 });
 
 test("RuntimeRetryEntry optional fields serialize correctly across the JSON boundary", () => {
@@ -345,14 +357,16 @@ test("RuntimeRetryEntry optional fields serialize correctly across the JSON boun
     issueId: "issue-min",
     identifier: "MT-MIN",
     attempt: 1,
-    dueAt: "2026-05-26T00:00:00.000Z",
+    dueAtIso: "2026-05-26T00:00:00.000Z",
+    monotonicDeadlineMs: 1000,
   };
 
   const full: RuntimeRetryEntry = {
     issueId: "issue-full",
     identifier: "MT-FULL",
     attempt: 3,
-    dueAt: "2026-05-26T02:00:00.000Z",
+    dueAtIso: "2026-05-26T02:00:00.000Z",
+    monotonicDeadlineMs: 3000,
     error: "OOM killed",
     slotIndex: 2,
     workerHost: "worker-3.local",
@@ -500,7 +514,8 @@ test("RuntimeSnapshot arrays can hold heterogeneous entries simultaneously", () 
         issueId: "i2",
         identifier: "MT-2",
         attempt: 2,
-        dueAt: "2026-05-26T00:05:00.000Z",
+        dueAtIso: "2026-05-26T00:05:00.000Z",
+        monotonicDeadlineMs: 300000,
         error: "timeout",
       },
     ],

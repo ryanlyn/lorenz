@@ -169,7 +169,7 @@ test("dispatch block reasons classify capacity gates without hiding routing fail
     title: "Title",
     state: { name: "Todo", type: "unstarted" },
   });
-  const runningByState = new Map([["Todo", 1]]);
+  const runningByState = new Map([["todo", 1]]);
 
   assert.equal(
     dispatchBlockReason(issue, settings, { runningCount: 1, runningByState }),

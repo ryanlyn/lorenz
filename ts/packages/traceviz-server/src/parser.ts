@@ -98,6 +98,89 @@ function parseLine(line: string): RawTraceLine | null {
 }
 
 /**
+ * Parse an `item/completed` notification params into a DisplayEvent.
+ * Mirrors thib-coding-agent's CodexEventMerger.codexItemToDisplay logic.
+ */
+function parseItemCompleted(params: Record<string, unknown>, ts: string): DisplayEvent | null {
+  const item = params.item as Record<string, unknown> | undefined;
+  if (!item) return null;
+  const itemType = item.type as string | undefined;
+
+  switch (itemType) {
+    case "reasoning": {
+      let text = typeof item.text === "string" ? item.text : "";
+      if (!text) {
+        const summary = item.summary as Array<Record<string, unknown>> | undefined;
+        if (summary && summary.length > 0) {
+          text = summary
+            .map((s) => (s.text as string) ?? "")
+            .filter(Boolean)
+            .join("\n");
+        }
+      }
+      if (!text) {
+        const content = item.content as Array<Record<string, unknown>> | undefined;
+        if (content && content.length > 0) {
+          text = content
+            .map((c) => (c.text as string) ?? "")
+            .filter(Boolean)
+            .join("\n");
+        }
+      }
+      if (!text) return null;
+      return { kind: "thought", text, timestamp: ts };
+    }
+
+    case "agentMessage":
+      return {
+        kind: "message",
+        text: typeof item.text === "string" ? item.text : "",
+        timestamp: ts,
+      };
+
+    case "userMessage": {
+      const content = item.content as Array<Record<string, unknown>> | undefined;
+      const text = content?.[0]?.text as string | undefined;
+      return { kind: "message", text: text ?? "", timestamp: ts };
+    }
+
+    case "commandExecution":
+      return {
+        kind: "tool_call",
+        category: "bash_command",
+        toolName: "command_execution",
+        input: { command: item.command },
+        output: (item.aggregatedOutput as string) ?? null,
+        isError: (item.exitCode as number) !== 0,
+        durationMs: (item.durationMs as number) ?? null,
+        nestedEvents: [],
+        timestamp: ts,
+      };
+
+    case "dynamicToolCall": {
+      const toolName = (item.tool as string) ?? "unknown";
+      const args = (item.arguments as Record<string, unknown>) ?? {};
+      const contentItems = item.contentItems as Array<Record<string, unknown>> | undefined;
+      const output = (contentItems?.[0]?.text as string | null) ?? null;
+      return {
+        kind: "tool_call",
+        category: detectToolCategory(toolName),
+        toolName,
+        input: args,
+        output,
+        isError: (item.success as boolean) === false,
+        durationMs: (item.durationMs as number) ?? null,
+        nestedEvents: [],
+        timestamp: ts,
+      };
+    }
+
+    default:
+      return null;
+  }
+}
+
+/**
  * Parse all lines from a JSONL trace file content into DisplayEvents.
  */
 export function parseTraceLines(lines: string[]): DisplayEvent[] {
@@ -196,6 +279,54 @@ export function parseTraceLines(lines: string[]): DisplayEvent[] {
       case "tool_call_failed": {
         const payload =
           typeof msg === "object" && msg !== null ? (msg as Record<string, unknown>) : {};
+
+        // Handle Codex request/result format
+        const request = payload.request as Record<string, unknown> | undefined;
+        const result = payload.result as Record<string, unknown> | undefined;
+        if (request && typeof request === "object") {
+          const params = request.params as Record<string, unknown> | undefined;
+          const toolName = (params?.tool as string) ?? "unknown";
+          const callId = (params?.callId as string) ?? "";
+          const input = (params?.arguments as Record<string, unknown>) ?? {};
+          const output =
+            (result?.output as string | null) ??
+            ((result?.contentItems as Array<Record<string, unknown>> | undefined)?.[0]?.text as
+              | string
+              | null) ??
+            null;
+          const isError = raw.type === "tool_call_failed" || (result?.success as boolean) === false;
+
+          // Try to match against a pending tool call by callId
+          const pendingCodex = callId ? pendingToolCalls.get(callId) : undefined;
+          if (pendingCodex) {
+            pendingToolCalls.delete(callId);
+            const toolCall = pendingCodex.event;
+            if (output !== null) {
+              toolCall.output = output;
+            }
+            toolCall.isError = isError;
+            const startMs = new Date(pendingCodex.startTs).getTime();
+            const endMs = new Date(ts).getTime();
+            toolCall.durationMs =
+              Number.isNaN(startMs) || Number.isNaN(endMs) ? null : endMs - startMs;
+            events.push(toolCall);
+          } else {
+            events.push({
+              kind: "tool_call",
+              category: detectToolCategory(toolName),
+              toolName,
+              input,
+              output,
+              isError,
+              durationMs: null,
+              nestedEvents: [],
+              timestamp: ts,
+            });
+          }
+          break;
+        }
+
+        // Original handling for Claude format
         const toolUseId = (payload.id as string) ?? (payload.toolUseId as string) ?? "";
         const pending = pendingToolCalls.get(toolUseId);
 
@@ -292,15 +423,51 @@ export function parseTraceLines(lines: string[]): DisplayEvent[] {
       }
 
       case "notification": {
-        const text =
-          typeof msg === "string"
-            ? msg
-            : typeof msg === "object" && msg !== null
-              ? (((msg as Record<string, unknown>).text as string) ?? JSON.stringify(msg))
-              : msg != null
-                ? JSON.stringify(msg)
-                : "";
-        events.push({ kind: "notification", text, timestamp: ts });
+        if (typeof msg !== "object" || msg === null) break;
+        const method = (msg as Record<string, unknown>).method as string | undefined;
+        const params = (msg as Record<string, unknown>).params as
+          | Record<string, unknown>
+          | undefined;
+        if (!method || !params) break;
+
+        if (method === "item/completed") {
+          const displayEvent = parseItemCompleted(params, ts);
+          if (displayEvent) events.push(displayEvent);
+        } else if (method === "turn/started") {
+          // Deduplicate: if the last event is already a turn_started (from raw event), update it
+          const lastEvent = events[events.length - 1];
+          if (lastEvent && lastEvent.kind === "turn_started") {
+            // Update timestamp if the raw one had null/fallback
+            if (ts && new Date(ts).getTime() > 0) {
+              lastEvent.timestamp = ts;
+              // Also update the corresponding turnStartedRecord timestamp
+              const lastRecord = turnStartedRecords[turnStartedRecords.length - 1];
+              if (lastRecord) {
+                lastRecord.timestamp = ts;
+              }
+            }
+          } else {
+            turnIndex++;
+            turnStartedRecords.push({ timestamp: ts, consumed: false });
+            events.push({ kind: "turn_started", turnIndex, timestamp: ts });
+          }
+        } else if (method === "turn/completed") {
+          // turn/completed from notification form (usage extracted from params if available)
+          let durationMs: number | null = null;
+          for (let i = turnStartedRecords.length - 1; i >= 0; i--) {
+            const record = turnStartedRecords[i];
+            if (record !== undefined && !record.consumed) {
+              record.consumed = true;
+              const startMs = new Date(record.timestamp).getTime();
+              const endMs = new Date(ts).getTime();
+              if (!Number.isNaN(startMs) && !Number.isNaN(endMs)) {
+                durationMs = endMs - startMs;
+              }
+              break;
+            }
+          }
+          events.push({ kind: "turn_completed", usage: null, durationMs, timestamp: ts });
+        }
         break;
       }
 
@@ -308,15 +475,10 @@ export function parseTraceLines(lines: string[]): DisplayEvent[] {
       case "rate_limit":
       case "workspace_prepared":
       case "session_started":
+      case "process_exit":
       case "stderr":
       case "fs_write":
       case "plan": {
-        // Known types we skip or store as unknown for debugging
-        events.push({
-          kind: "unknown",
-          raw: raw as unknown as Record<string, unknown>,
-          timestamp: ts,
-        });
         break;
       }
 

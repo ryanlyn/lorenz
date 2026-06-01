@@ -773,55 +773,6 @@ defmodule SymphonyElixir.CoreTest do
     assert updated_entry.issue.state == "In Progress"
   end
 
-  test "reconcile stops running issue when a non-terminal blocker appears" do
-    issue_id = "issue-blocked"
-
-    agent_pid =
-      spawn(fn ->
-        receive do
-          :stop -> :ok
-        end
-      end)
-
-    state = %Orchestrator.State{
-      running: %{
-        {issue_id, 0} =>
-          build_running_entry(%{
-            pid: agent_pid,
-            ref: nil,
-            identifier: "MT-560",
-            issue: %Issue{
-              id: issue_id,
-              identifier: "MT-560",
-              state: "In Progress",
-              state_type: "started",
-              blocked_by: []
-            }
-          })
-      },
-      claimed: MapSet.new([{issue_id, 0}]),
-      usage_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0},
-      retry_attempts: %{}
-    }
-
-    issue = %Issue{
-      id: issue_id,
-      identifier: "MT-560",
-      state: "In Progress",
-      state_type: "started",
-      title: "Blocked active issue",
-      description: "Worker should stop",
-      labels: [],
-      blocked_by: [%{id: "blocker-1", identifier: "MT-559", state: "Todo"}]
-    }
-
-    updated_state = Orchestrator.reconcile_issue_states_for_test([issue], state)
-
-    refute Map.has_key?(updated_state.running, {issue_id, 0})
-    refute MapSet.member?(updated_state.claimed, {issue_id, 0})
-    refute Process.alive?(agent_pid)
-  end
-
   test "reconcile stops running issue when it is reassigned away from this worker" do
     issue_id = "issue-reassigned"
 

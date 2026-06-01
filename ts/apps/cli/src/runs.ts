@@ -35,8 +35,6 @@ export interface RunsCommanderOptions {
 }
 
 export type RunsParseResult = ParseResult<RunsCommandOptions>;
-export const runsUsageText = createRunsCommand("symphony-ts runs").helpInformation().trimEnd();
-
 export function createRunsCommand(name = "symphony-ts runs"): Command {
   return new Command(name)
     .description("Query Symphony run history from the observability API.")

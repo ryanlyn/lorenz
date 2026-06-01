@@ -99,7 +99,7 @@ test("releaseRemoteMcpTunnel is idempotent (no-op for unknown session)", () => {
   pool.releaseRemoteMcpTunnel("");
 });
 
-test("selectHost picks least-loaded host from pool via port allocation", () => {
+test("acquireRemoteMcpTunnel allocates sequential ports for different worker hosts", () => {
   setupMock();
   const pool = new WorkerHostPool();
 
@@ -119,7 +119,7 @@ test("selectHost picks least-loaded host from pool via port allocation", () => {
   assert.equal(lease3.workerHost, "worker-c");
 });
 
-test("selectHost returns sole host when pool has one entry", () => {
+test("acquireRemoteMcpTunnel works correctly with a single worker host", () => {
   setupMock();
   const pool = new WorkerHostPool();
 

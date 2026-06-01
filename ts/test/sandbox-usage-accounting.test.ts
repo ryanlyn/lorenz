@@ -9,7 +9,7 @@ import { describe, expect, test } from "vitest";
 
 import { runScenario, makeIssue } from "../sandbox/sandbox.js";
 
-describe("Usage Accounting (sandbox scenarios)", () => {
+describe("INVARIANT: Usage Accounting (sandbox scenarios)", () => {
   // ---------------------------------------------------------------------------
   // Tokens accumulate across turns for single issue
   // Invariant: Monotonic growth
@@ -24,7 +24,7 @@ describe("Usage Accounting (sandbox scenarios)", () => {
   // reports produce zero delta. So we verify the final total equals the
   // per-turn watermark value (since each turn reports the same cumulative total).
   // ---------------------------------------------------------------------------
-  test("tokens accumulate across turns for single issue (monotonic growth)", async () => {
+  test("INVARIANT: tokens accumulate across turns for single issue (monotonic growth)", async () => {
     // The FakeAgentRunner reports the same usagePerTurn value on each turn.
     // Under monotonic merge, the entry totals reach the watermark on turn 1
     // and remain there (subsequent identical reports produce zero delta).
@@ -90,7 +90,7 @@ describe("Usage Accounting (sandbox scenarios)", () => {
   // watermark value. The global total should equal the sum of all issues'
   // watermark values.
   // ---------------------------------------------------------------------------
-  test("global totals equal sum of all issues usage (global aggregates)", async () => {
+  test("INVARIANT: global totals equal sum of all issues usage (global aggregates)", async () => {
     // Three concurrent issues each with distinct usage watermark values.
     const result = await runScenario({
       issues: [
@@ -177,7 +177,7 @@ describe("Usage Accounting (sandbox scenarios)", () => {
   // Zero token reports keep totals at zero
   // Invariant: Monotonic (0 not > previous)
   // ---------------------------------------------------------------------------
-  test("zero token reports keep totals at zero (monotonic)", async () => {
+  test("INVARIANT: zero token reports keep totals at zero (monotonic)", async () => {
     const result = await runScenario({
       issues: [makeIssue("z-1", "Z-1", { state: "Todo", stateType: "unstarted" })],
       runnerConfig: {

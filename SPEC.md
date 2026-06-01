@@ -867,9 +867,9 @@ An issue is dispatch-eligible only if all are true:
 - Global concurrency slots are available.
 - State-specific concurrency slots are available after resolving `status_overrides` for the issue
   state.
-- Blocker rule passes:
-  - Do not dispatch when any blocker is non-terminal, regardless of the issue's current active
-    state type.
+- Blocker rule for unstarted states passes:
+  - If the tracker state type is `unstarted`, do not dispatch when any blocker is non-terminal.
+  - If no state type is available, treat state name `Todo` as the unstarted default.
 
 Sorting order (stable intent):
 
@@ -969,7 +969,6 @@ Part B: Tracker state refresh
   - If tracker-assignee routing marks the issue as not assigned to this worker: terminate worker
     without workspace cleanup.
   - If route labels no longer match this worker: terminate worker without workspace cleanup.
-  - If the issue has any non-terminal blocker: terminate worker without workspace cleanup.
   - If tracker state is still active: update the in-memory issue snapshot.
   - If tracker state is neither active nor terminal: terminate worker without workspace cleanup.
 - If state refresh fails, keep workers running and try again on the next tick.
@@ -1909,8 +1908,6 @@ Operators can control behavior by:
 - Changing issue states in the tracker:
   - terminal state -> running session is stopped and workspace cleaned when reconciled
   - non-active state -> running session is stopped without cleanup
-- Adding a non-terminal blocker to an active issue stops its running session without workspace
-  cleanup when reconciled.
 - Restarting the service for process recovery or deployment (not as the normal path for applying
   workflow config changes).
 
@@ -2070,8 +2067,6 @@ function reconcile_running_issues(state):
   for issue in refreshed:
     if issue.state in terminal_states:
       state = terminate_running_issue(state, issue.id, cleanup_workspace=true)
-    else if issue.state in active_states and issue has any non-terminal blocker:
-      state = terminate_running_issue(state, issue.id, cleanup_workspace=false)
     else if issue.state in active_states:
       for slot_key in running_slot_keys_for_issue(state, issue.id):
         state.running[slot_key].issue = issue
@@ -2332,8 +2327,8 @@ Unless otherwise noted, Sections 17.1 through 17.7 are `Core Conformance`. Bulle
 ### 17.4 Orchestrator Dispatch, Reconciliation, and Retry
 
 - Dispatch sort order is priority then oldest creation time
-- Issue with non-terminal blockers is not eligible
-- Issue with terminal blockers is eligible
+- `Todo` issue with non-terminal blockers is not eligible
+- `Todo` issue with terminal blockers is eligible
 - Default tracker dispatch routes accept unrouted, ordinary-labeled, and routed issues
 - Unrouted-only tracker dispatch accepts issues without route labels and rejects routed issues
 - Route allowlists accept only issues with matching route labels
@@ -2342,8 +2337,7 @@ Unless otherwise noted, Sections 17.1 through 17.7 are `Core Conformance`. Bulle
 - Reconciliation stops active local work when refreshed route labels no longer match local routes
 - Reconciliation stops active local work when refreshed assignee routing no longer matches this
   worker
-- Non-terminal blockers are enforced even when the issue state type is already started.
-- Reconciliation stops active local work when a non-terminal blocker appears.
+- `state_type: unstarted` blockers are enforced even when the state name is not `Todo`
 - Active-state issue refresh updates running entry state
 - Non-active state stops running agent without workspace cleanup
 - Terminal state stops running agent and cleans workspace

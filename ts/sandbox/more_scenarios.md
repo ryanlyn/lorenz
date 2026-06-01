@@ -8,10 +8,10 @@
 
 ## New Failures Found
 
-### Failure 11: S-1171 (SUPERSEDED)
-**Invariant Violated:** Former contract: non-unstarted issues with blockers added during execution kept running.
+### Failure 11: S-1171 (NEW)
+**Invariant Violated:** WHEN a non-unstarted issue has blockers added during execution, THE SYSTEM SHALL NOT abort the running worker (blockers only gate unstarted issues)  
 **Code Location:** `ts/packages/runtime/src/index.ts` — `reconcileTrackedIssues` (line ~570) calling `issueHasOpenBlockers` from `ts/packages/dispatch/src/index.ts` (line ~26)  
-**Explanation:** This scenario has been superseded by the blocker-abort contract: a running issue with a non-terminal blocker is intentionally reconciled out.
+**Explanation:** The `reconcileTrackedIssues` method checks `!issueHasOpenBlockers(issue, settings)` to decide whether to keep a running worker alive. Due to the known `||` bug in `issueHasOpenBlockers` (`issue.stateType === "unstarted" || issue.state.trim().toLowerCase() === "todo"`), a running issue with `state="Todo"` and `stateType="started"` is incorrectly identified as blocked — causing the **already-running worker to be aborted**. This is a higher-severity manifestation of the dispatch-blocking bug (Failure 10/S-184): it doesn't just prevent dispatch, it **terminates active work**.  
 **Reproduction:**
 ```ts
 // Sandbox scenario: issue with state="Todo" + stateType="started" is running.
@@ -31,10 +31,25 @@ const result = await runScenario({
     mutate: { type: "add_blocker", issueId: "x", blockerId: "new-block" },
   }],
 });
-// EXPECTED: Worker is reconciled out after the blocker appears.
-result.events.some(e => e.type === "run_reconciled"); // true
+// EXPECTED: Worker continues (stateType="started" means not gated by blockers)
+// ACTUAL: run_reconciled event fires — worker is aborted
+result.events.some(e => e.type === "run_reconciled"); // true — BUG
 ```
-**Suggested Fix:** No fix. The draft blocker-abort contract intentionally aborts this worker.
+**Suggested Fix:** Same root cause as S-184. Prefer `stateType` when available in `issueHasOpenBlockers`:
+```ts
+const unstarted = issue.stateType
+  ? issue.stateType === "unstarted"
+  : issue.state.trim().toLowerCase() === "todo";
+```
+Additionally, the reconciliation path in `reconcileTrackedIssues` (runtime/src/index.ts:570) could be hardened to skip the blocker check for issues that are clearly started (have an active running entry):
+```ts
+if (
+  issueIsActive(issue, this.workflow.settings) &&
+  routedToThisWorker(issue, this.workflow.settings) &&
+  !issueHasOpenBlockers(issue, this.workflow.settings)
+) {
+```
+This condition should arguably not check blockers at all for already-running issues, since the invariant says blockers only gate *unstarted* dispatch.
 
 
 ## How to Run

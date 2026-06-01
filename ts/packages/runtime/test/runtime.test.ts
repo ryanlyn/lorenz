@@ -117,7 +117,7 @@ test("runtime schedules continuation retry after normal worker exit even when is
   assert.ok(retry);
   assert.equal(retry.identifier, "MT-INACTIVE-CONTINUATION");
   assert.equal(retry.attempt, 1);
-  const delayMs = new Date(retry.dueAt).getTime() - beforeRun;
+  const delayMs = new Date(retry.dueAtIso).getTime() - beforeRun;
   assert.ok(delayMs >= 900 && delayMs <= 1_500);
 });
 
@@ -899,7 +899,8 @@ test("runtime records failed attempts as retryable work and keeps polling", asyn
 
   const retry = orchestrator.snapshot().retrying[0];
   assert.ok(retry);
-  retry.dueAt = new Date(Date.now() - 1);
+  retry.dueAtIso = new Date(Date.now() - 1).toISOString();
+  retry.monotonicDeadlineMs = 0;
   await runtime.pollOnce({ waitForRuns: true });
   snapshot = runtime.snapshot();
   assert.equal(attempts, 2);
@@ -943,16 +944,12 @@ test("runtime invalidates resume state before scheduling failure retry", async (
   assert.ok(snapshot.recentEvents.some((event) => event.type === "resume_state_invalidated"));
 });
 
-// NOTE: This test intentionally exercises real timers (not vi.useFakeTimers()) to
-// verify that retry scheduling fires independently of the poll cadence. The
-// maxRetryBackoffMs is set to 20ms and waitFor timeouts are generous (3s) to
-// tolerate CI load without flakiness.
 test("runtime schedules retry refresh timers independently of the poll cadence", async () => {
   const issue = issueFixture("issue-timer-retry", "MT-TIMER");
   const doneIssue: Issue = { ...issue, state: "Done", stateType: "completed" };
   const workflow = workflowFixture();
   workflow.settings.polling.intervalMs = 60_000;
-  workflow.settings.agent.maxRetryBackoffMs = 20;
+  workflow.settings.agent.maxRetryBackoffMs = 500;
   let attempts = 0;
   const runtime = new SymphonyRuntime(
     runtimeOptions({

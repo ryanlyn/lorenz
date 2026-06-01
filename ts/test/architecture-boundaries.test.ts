@@ -11,6 +11,7 @@ import {
   slotKey,
 } from "@symphony/cli";
 import type { RuntimeProjectionInput, RuntimeRunHistoryEntry } from "@symphony/cli";
+import type { ClockPort } from "@symphony/ports";
 
 import { assert } from "./assert.js";
 
@@ -19,7 +20,7 @@ test("deterministic policies pin retry, stop reason, usage, and resume decisions
   assert.equal(retryBackoffMs(3, 60_000, "failure"), 40_000);
   assert.equal(retryBackoffMs(20, 60_000, "failure"), 60_000);
   assert.equal(retryBackoffMs(20, 60_000, "continuation"), 1_000);
-  assert.equal(retryBackoffMs(1, 500, "continuation"), 500);
+  assert.equal(retryBackoffMs(1, 500, "continuation"), 1_000);
 
   assert.equal(actionForStopReason("end_turn"), "continue");
   assert.equal(actionForStopReason("max_tokens"), "continue");
@@ -119,7 +120,13 @@ test("ugly retry flow keeps capacity authority in the orchestrator", () => {
   const settings = parseConfig({
     agent: { ensemble_size: 2, max_concurrent_agents: 2, max_retry_backoff_ms: 10_000 },
   });
-  const orchestrator = new Orchestrator(settings);
+  const clock: ClockPort = {
+    now: () => new Date("2026-05-07T00:00:10.000Z"),
+    monotonicMs: () => 10_000,
+    setTimeout: (cb, ms) => setTimeout(cb, ms),
+    clearTimeout: (h) => clearTimeout(h as ReturnType<typeof setTimeout>),
+  };
+  const orchestrator = new Orchestrator(settings, clock);
   const issue = normalizeIssue({
     id: "ugly-retry-capacity",
     identifier: "MT-UGLY-RETRY",
@@ -133,7 +140,8 @@ test("ugly retry flow keeps capacity authority in the orchestrator", () => {
     issueId: issue.id,
     identifier: issue.identifier,
     attempt: 1,
-    dueAt: new Date(Date.now() - 1),
+    dueAtIso: new Date(Date.now() - 1).toISOString(),
+    monotonicDeadlineMs: 0,
     slotIndex: 1,
     error: "agent_stalled",
   });

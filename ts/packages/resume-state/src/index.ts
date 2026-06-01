@@ -20,13 +20,13 @@ export interface ResumeState {
   updatedAt?: string | null | undefined;
 }
 
-export type ResumeReadResult =
+type ResumeReadResult =
   | { status: "ok"; state: ResumeState }
   | { status: "missing" }
   | { status: "unavailable" }
   | { status: "error"; reason: string };
 
-export type ResolveGitDir = (
+type ResolveGitDir = (
   workspace: string,
   workerHost?: string | null,
   sshTimeoutMs?: number,
@@ -52,7 +52,7 @@ export interface ResumeStateStore {
   ): Promise<string | null>;
 }
 
-export interface ResumeStateStoreOptions {
+interface ResumeStateStoreOptions {
   resolveGitDir?: ResolveGitDir | undefined;
 }
 
@@ -176,14 +176,6 @@ async function deleteResumeStateWithResolver(
     return;
   }
   await fs.rm(resumePath, { force: true });
-}
-
-export async function resumeStatePath(
-  workspace: string,
-  workerHost?: string | null,
-  sshTimeoutMs?: number,
-): Promise<string | null> {
-  return defaultResumeStateStore.path(workspace, workerHost, sshTimeoutMs);
 }
 
 async function resumeStatePathWithResolver(

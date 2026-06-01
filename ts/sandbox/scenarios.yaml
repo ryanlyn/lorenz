@@ -55,12 +55,14 @@ failures:
 
   - id: 9
     scenario: S-184
-    status: SUPERSEDED
-    invariant_violated: "Former contract: non-unstarted issues with non-terminal blockers remained eligible."
+    status: OPEN
+    invariant_violated: "WHEN a non-unstarted issue has non-terminal blockers, THE SYSTEM SHALL still consider it eligible (blockers only gate unstarted issues)"
     code_location: "ts/packages/dispatch/src/index.ts — issueHasOpenBlockers (line ~43)"
     explanation: >
-      This scenario has been superseded by the blocker-abort contract: any non-terminal blocker now gates dispatch regardless
-      of the issue state type.
+      The function determines "unstarted" via issue.stateType === "unstarted" || issue.state.trim().toLowerCase() === "todo".
+      An issue with stateType="started" (explicitly categorized by the tracker as started) but state="Todo" (state name happens to be "Todo")
+      is treated as unstarted due to the ||. This means a started issue is incorrectly gated by blockers because its state name matches
+      the hardcoded string "todo".
     reproduction: |
       import { issueHasOpenBlockers } from "@symphony/dispatch";
       const issue = {
@@ -69,18 +71,24 @@ failures:
         stateType: "started",
         blockers: [{ state: "In Progress" }],
       };
-      issueHasOpenBlockers(issue, settings); // true — expected under the blocker-abort contract
-    suggested_fix: "No fix. The draft blocker-abort contract intentionally keeps this blocked."
+      issueHasOpenBlockers(issue, settings); // true — WRONG, stateType says it's started
+    suggested_fix: |
+      const unstarted = issue.stateType
+        ? issue.stateType === "unstarted"
+        : issue.state.trim().toLowerCase() === "todo";
 
   - id: 11
     scenario: S-1171
-    status: SUPERSEDED
+    status: OPEN
     severity: High
-    invariant_violated: "Former contract: non-unstarted issues with blockers added during execution kept running."
+    invariant_violated: "WHEN a non-unstarted issue has blockers added during execution, THE SYSTEM SHALL NOT abort the running worker (blockers only gate unstarted issues)"
     code_location: "ts/packages/runtime/src/index.ts — reconcileTrackedIssues (line ~570) calling issueHasOpenBlockers from ts/packages/dispatch/src/index.ts (line ~26)"
     explanation: >
-      This scenario has been superseded by the blocker-abort contract: a running issue with a non-terminal blocker is
-      intentionally reconciled out.
+      The reconcileTrackedIssues method checks !issueHasOpenBlockers(issue, settings) to decide whether to keep a running worker alive.
+      Due to the known || bug in issueHasOpenBlockers (issue.stateType === "unstarted" || issue.state.trim().toLowerCase() === "todo"),
+      a running issue with state="Todo" and stateType="started" is incorrectly identified as blocked — causing the already-running worker to be aborted.
+      This is a higher-severity manifestation of the dispatch-blocking bug (Failure 10/S-184): it doesn't just prevent dispatch,
+      it terminates active work.
     reproduction: |
       const result = await runScenario({
         issues: [makeIssue("x", "X-1", {
@@ -96,9 +104,15 @@ failures:
           mutate: { type: "add_blocker", issueId: "x", blockerId: "new-block" },
         }],
       });
-      // EXPECTED: Worker is reconciled out after the blocker appears.
-      result.events.some(e => e.type === "run_reconciled"); // true
-    suggested_fix: "No fix. The draft blocker-abort contract intentionally aborts this worker."
+      // EXPECTED: Worker continues (stateType="started" means not gated by blockers)
+      // ACTUAL: run_reconciled event fires — worker is aborted
+      result.events.some(e => e.type === "run_reconciled"); // true — BUG
+    suggested_fix: |
+      // Same root cause as S-184. Prefer stateType when available in issueHasOpenBlockers:
+      const unstarted = issue.stateType
+        ? issue.stateType === "unstarted"
+        : issue.state.trim().toLowerCase() === "todo";
+      // Additionally, reconciliation could skip blocker check for already-running issues.
 
   - id: 12
     scenario: S-1251
@@ -1834,9 +1848,9 @@ scenarios:
   - id: S-168
     category: Reconciliation
     invariant: "Blocked issue reconciled"
-    setup: "Running started issue gains a non-terminal blocker"
+    setup: "Running started issue gains blocker (but since it's started, blockers don't gate)"
     action: "reconcileTrackedIssues()"
-    expected: "Worker stops without workspace cleanup"
+    expected: "Worker continues (blockers only gate unstarted)"
     status: PENDING
 
   # ===========================================================================

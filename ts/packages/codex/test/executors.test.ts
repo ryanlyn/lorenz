@@ -117,6 +117,49 @@ rl.on("line", (line) => {
   });
 });
 
+test("Codex app-server executor extracts v2 tokenUsage.total format", async () => {
+  const root = await tempDir("symphony-ts-codex-usage-v2");
+  const fake = path.join(root, "fake-codex-usage-v2.js");
+  await writeExecutable(
+    fake,
+    `#!/usr/bin/env node
+const readline = require("readline");
+const rl = readline.createInterface({ input: process.stdin });
+rl.on("line", (line) => {
+  const msg = JSON.parse(line);
+  if (msg.id && msg.method === "initialize") console.log(JSON.stringify({ id: msg.id, result: {} }));
+  if (msg.id && msg.method === "thread/start") console.log(JSON.stringify({ id: msg.id, result: { thread: { id: "thread-v2" } } }));
+  if (msg.id && msg.method === "turn/start") {
+    console.log(JSON.stringify({ id: msg.id, result: { turn: { id: "turn-v2" } } }));
+    console.log(JSON.stringify({ method: "thread/tokenUsage/updated", params: { threadId: "thread-v2", turnId: "turn-v2", tokenUsage: { total: { inputTokens: 500, outputTokens: 200, totalTokens: 700, cachedInputTokens: 50, reasoningOutputTokens: 10 }, last: { inputTokens: 100, outputTokens: 40, totalTokens: 140, cachedInputTokens: 0, reasoningOutputTokens: 0 } } } }));
+    console.log(JSON.stringify({ method: "turn/completed" }));
+  }
+});
+`,
+  );
+
+  const settings = parseConfig({
+    workspace: { root: path.dirname(root) },
+    codex: { command: `${fake} app-server`, turn_timeout_ms: 5_000 },
+  });
+  const updates: AgentUpdate[] = [];
+  const executor = new CodexAppServerExecutor();
+  const session = await executor.startSession({
+    workspace: root,
+    settings,
+    issue: sampleIssue,
+    onUpdate: (update) => updates.push(update),
+  });
+  await executor.runTurn(session, "hello", sampleIssue);
+  await session.stop();
+
+  assert.deepEqual(updates.find((update) => update.type === "usage")?.usage, {
+    inputTokens: 500,
+    outputTokens: 200,
+    totalTokens: 700,
+  });
+});
+
 test("Codex app-server executor answers string-id dynamic Linear tool calls", async () => {
   const root = await tempDir("symphony-ts-codex-tool");
   const fake = path.join(root, "fake-codex-tool.js");

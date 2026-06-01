@@ -1,6 +1,7 @@
 import { test } from "vitest";
 import fc from "fast-check";
-import { parseConfig, ONE_WEEK_MS, PORT_MAX } from "@symphony/cli";
+import { parseConfig } from "@symphony/cli";
+import { ONE_WEEK_MS, PORT_MAX } from "@symphony/domain";
 
 import { assert } from "../../../test/assert.js";
 
@@ -24,7 +25,7 @@ test("camelToSnake — error labels use snake_case field names for numeric field
 
 // --- coercedIntervalMs (via polling.interval_ms) ---
 
-test("coercedPositiveInt — accepts any positive integer", () => {
+test("INVARIANT: coercedPositiveInt SHALL accept any positive integer", () => {
   fc.assert(
     fc.property(fc.integer({ min: 1, max: ONE_WEEK_MS }), (n) => {
       const settings = parseConfig({ polling: { interval_ms: n } });
@@ -33,7 +34,7 @@ test("coercedPositiveInt — accepts any positive integer", () => {
   );
 });
 
-test("coercedPositiveInt — accepts positive integer as string", () => {
+test("INVARIANT: coercedPositiveInt SHALL accept positive integers as strings", () => {
   fc.assert(
     fc.property(fc.integer({ min: 1, max: ONE_WEEK_MS }), (n) => {
       const settings = parseConfig({ polling: { interval_ms: String(n) } });
@@ -42,7 +43,7 @@ test("coercedPositiveInt — accepts positive integer as string", () => {
   );
 });
 
-test("coercedPositiveInt — rejects zero and negative integers", () => {
+test("INVARIANT: coercedPositiveInt SHALL reject zero and negative integers", () => {
   fc.assert(
     fc.property(fc.integer({ min: -1_000_000, max: 0 }), (n) => {
       assert.throws(() => parseConfig({ polling: { interval_ms: n } }), /polling.interval_ms/);
@@ -70,7 +71,7 @@ test("coercedPositiveInt — rejects NaN", () => {
 
 // --- coercedNonNegativeTimeoutMs (via codex.stall_timeout_ms) ---
 
-test("coercedNonNegativeInt — accepts zero and positive integers", () => {
+test("INVARIANT: coercedNonNegativeInt SHALL accept zero and positive integers", () => {
   fc.assert(
     fc.property(fc.integer({ min: 0, max: ONE_WEEK_MS }), (n) => {
       const settings = parseConfig({ codex: { stall_timeout_ms: n } });
@@ -88,7 +89,7 @@ test("coercedNonNegativeInt — accepts non-negative integer as string", () => {
   );
 });
 
-test("coercedNonNegativeInt — rejects negative integers", () => {
+test("INVARIANT: coercedNonNegativeInt SHALL reject negative integers", () => {
   fc.assert(
     fc.property(fc.integer({ min: -1_000_000, max: -1 }), (n) => {
       assert.throws(
@@ -101,7 +102,7 @@ test("coercedNonNegativeInt — rejects negative integers", () => {
 
 // --- coercedPort (via server.port) ---
 
-test("coercedPort — accepts valid port numbers 0-65535", () => {
+test("INVARIANT: coercedPort SHALL accept valid port numbers 0-65535", () => {
   fc.assert(
     fc.property(fc.integer({ min: 0, max: PORT_MAX }), (n) => {
       const settings = parseConfig({ server: { port: n } });
@@ -119,7 +120,7 @@ test("coercedPort — accepts valid port as string", () => {
   );
 });
 
-test("coercedPort — rejects ports above 65535", () => {
+test("INVARIANT: coercedPort SHALL reject ports above 65535", () => {
   fc.assert(
     fc.property(fc.integer({ min: PORT_MAX + 1, max: 1_000_000 }), (n) => {
       assert.throws(
@@ -130,7 +131,7 @@ test("coercedPort — rejects ports above 65535", () => {
   );
 });
 
-test("coercedPort — rejects negative ports", () => {
+test("INVARIANT: coercedPort SHALL reject negative ports", () => {
   fc.assert(
     fc.property(fc.integer({ min: -1_000_000, max: -1 }), (n) => {
       assert.throws(
@@ -143,7 +144,7 @@ test("coercedPort — rejects negative ports", () => {
 
 // --- coercedBoolean (via observability.dashboard_enabled) ---
 
-test("coercedBoolean — accepts boolean values", () => {
+test("INVARIANT: coercedBoolean SHALL accept boolean values", () => {
   fc.assert(
     fc.property(fc.boolean(), (b) => {
       const settings = parseConfig({ observability: { dashboard_enabled: b } });
@@ -161,7 +162,7 @@ test("coercedBoolean — accepts string 'true' and 'false'", () => {
   );
 });
 
-test("coercedBoolean — rejects arbitrary strings", () => {
+test("INVARIANT: coercedBoolean SHALL reject arbitrary strings", () => {
   fc.assert(
     fc.property(
       fc.string({ minLength: 1, maxLength: 20 }).filter((s) => s !== "true" && s !== "false"),
