@@ -127,9 +127,26 @@ export async function runDaemon(options: CliOptions): Promise<number> {
       },
       ...runtimeAdapters,
     });
-    const stop = () => runtime.stop();
-    process.once("SIGINT", stop);
-    process.once("SIGTERM", stop);
+    let instance: ReturnType<typeof render> | null = null;
+    // Persistent (not once) handlers so the graceful teardown below actually
+    // runs to completion. With process.once, the listener is removed after the
+    // first SIGINT; a second SIGINT — which Node + Ink can surface while the
+    // daemon is still winding down — then hits the default disposition and kills
+    // the process with code 130 mid-shutdown, before Ink restores the terminal.
+    // That abrupt kill is what leaves a garbled/red error state on Ctrl+C.
+    let shuttingDown = false;
+    const requestStop = () => {
+      if (shuttingDown) {
+        // Repeated Ctrl+C: force-quit, but unmount Ink first so the terminal is
+        // left clean rather than mid-render.
+        instance?.unmount();
+        process.exit(130);
+      }
+      shuttingDown = true;
+      runtime.stop();
+    };
+    process.on("SIGINT", requestStop);
+    process.on("SIGTERM", requestStop);
 
     let server: Awaited<ReturnType<typeof startObservabilityServer>> | null = null;
     if (options.dashboard) {
@@ -148,7 +165,7 @@ export async function runDaemon(options: CliOptions): Promise<number> {
       process.stderr.write(`Observability API listening on ${server.url("/")}\n`);
     }
 
-    const instance =
+    instance =
       options.tui && process.stdout.isTTY
         ? render(
             React.createElement(RuntimeApp, {
@@ -168,6 +185,8 @@ export async function runDaemon(options: CliOptions): Promise<number> {
     try {
       await runtime.start({ once: options.once, dryRun: options.dryRun });
     } finally {
+      // Leave the signal handlers attached through teardown so a second Ctrl+C
+      // can't slip past them and kill the process mid-shutdown.
       instance?.unmount();
       await server?.stop();
     }
