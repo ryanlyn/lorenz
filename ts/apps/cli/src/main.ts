@@ -52,7 +52,6 @@ interface CliCommanderOptions {
 }
 
 export type CliParseResult = ParseResult<CliOptions>;
-export const usageText = createDaemonCommand().helpInformation().trimEnd();
 
 export function parseCliArgs(args: string[]): CliParseResult {
   const command = configureCommandForParse(createDaemonCommand());

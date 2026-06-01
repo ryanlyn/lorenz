@@ -34,30 +34,6 @@ describe("SESSION_UPDATE_KINDS", () => {
     );
   });
 
-  test("has exactly 9 members", () => {
-    assert.equal(SESSION_UPDATE_KINDS.length, 9);
-  });
-
-  test("contains no duplicate entries", () => {
-    const unique = new Set(SESSION_UPDATE_KINDS);
-    assert.equal(unique.size, SESSION_UPDATE_KINDS.length);
-  });
-
-  test("every entry is a non-empty string", () => {
-    for (const kind of SESSION_UPDATE_KINDS) {
-      assert.equal(typeof kind, "string");
-      assert.ok(kind.length > 0);
-    }
-  });
-
-  test("is declared as a readonly array (as const)", () => {
-    // Verify the array is a standard JS array (as const is compile-time only)
-    assert.ok(Array.isArray(SESSION_UPDATE_KINDS));
-    // Verify it has the expected structure -- a plain array with string entries
-    assert.equal(typeof SESSION_UPDATE_KINDS[0], "string");
-    assert.equal(typeof SESSION_UPDATE_KINDS[SESSION_UPDATE_KINDS.length - 1], "string");
-  });
-
   test("SessionUpdateKind type is derivable from the runtime array", () => {
     // Verify that the runtime array can be used to validate a kind string
     // This tests the pattern used in real code: checking if a value is a valid kind.

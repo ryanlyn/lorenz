@@ -43,7 +43,7 @@ describe("Sandbox: Dispatch Ordering", () => {
     for (const r of assertionResults) expect(r.passed).toBe(true);
   });
 
-  test("zero priority (below valid range) sorts last", async () => {
+  test("zero priority sorts after valid priorities (1-4) but before null", async () => {
     const result = await runScenario({
       issues: [makeIssue("a", "A-1", { priority: 0 }), makeIssue("b", "B-1", { priority: 4 })],
       settingsOverrides: { agent: { maxConcurrentAgents: 10 } },

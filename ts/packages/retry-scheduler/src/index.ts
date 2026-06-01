@@ -16,7 +16,8 @@ export class RetryScheduler {
     //   When that happens, sortForDispatch will ignore the issue because its time isn't due yet.
     // We fix this by adding a small delay to the timeout to ensure it fires after the issue is eligible.
     const delayMs =
-      Math.max(0, retry.monotonicDeadlineMs - this.clock.monotonicMs()) + RETRY_SCHEDULER_SYNC_DELAY_MS;
+      Math.max(0, retry.monotonicDeadlineMs - this.clock.monotonicMs()) +
+      RETRY_SCHEDULER_SYNC_DELAY_MS;
     const timer = this.clock.setTimeout(() => {
       this.timers.delete(retry.issueId);
       onDue(retry);

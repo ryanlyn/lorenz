@@ -84,7 +84,7 @@ export async function runAgentAttempt(input: RunAgentAttemptInput): Promise<RunR
   return new RunController(input).run();
 }
 
-export class RunController {
+class RunController {
   constructor(private readonly input: RunAgentAttemptInput) {}
 
   async run(): Promise<RunResult> {

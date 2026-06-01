@@ -7,7 +7,7 @@ import {
   type RunAgentAttemptInput,
   type RunResult,
 } from "@symphony/agent-runner";
-import { defaultSettings, type DefaultSettingsOptions } from "@symphony/config";
+import type { DefaultSettingsOptions } from "@symphony/config";
 import { CodexAppServerExecutor } from "@symphony/codex";
 import type { RuntimeTrackerClient, Settings } from "@symphony/domain";
 import { createWorkspaceForIssue, removeIssueWorkspaces, runHook } from "@symphony/workspace";
@@ -20,10 +20,6 @@ import {
 } from "@symphony/resume-state";
 import { LinearClient } from "@symphony/linear-tracker";
 import { MemoryTrackerClient, memoryIssuesFromEnv } from "@symphony/memory-tracker";
-
-export function runtimeDefaultSettings(): Settings {
-  return defaultSettings(runtimeDefaultSettingsOptions());
-}
 
 export function runtimeDefaultSettingsOptions(): DefaultSettingsOptions {
   return { tmpdir: os.tmpdir(), cwd: process.cwd() };

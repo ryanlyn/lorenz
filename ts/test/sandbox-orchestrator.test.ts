@@ -189,8 +189,7 @@ describe("Sandbox: Orchestrator Scheduling", () => {
       waitForRuns: false,
     });
 
-    // With 1 host at capacity 1, only 1 issue should be running at any time
-    const _maxConcurrent = Math.max(...result.snapshots.map((s) => s.running.length), 0);
+    // With 1 host at capacity 1, only 1 issue should be running at any time.
     // Due to the known microtask race bug, this might dispatch more, but at minimum
     // we confirm the system attempted to restrict
     expect(result.events.some((e) => e.type === "run_started")).toBe(true);

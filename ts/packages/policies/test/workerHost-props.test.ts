@@ -20,7 +20,7 @@ const arbHostsWithCounts = (capArb: fc.Arbitrary<number>) =>
       })),
   );
 
-test("selectLeastLoadedHost — result is from input.hosts or null/undefined", () => {
+test("INVARIANT: When a host is selected, it SHALL be from the configured list or null/undefined SHALL be returned", () => {
   fc.assert(
     fc.property(arbHostsWithCounts(arbCap()), ({ hosts, runningCounts, cap }) => {
       const result = selectLeastLoadedHost({ hosts, runningCounts, cap });
@@ -30,7 +30,7 @@ test("selectLeastLoadedHost — result is from input.hosts or null/undefined", (
   );
 });
 
-test("selectLeastLoadedHost — selected host has count < cap", () => {
+test("INVARIANT: When a host is selected, its load SHALL be strictly below the cap", () => {
   fc.assert(
     fc.property(arbHostsWithCounts(arbCap()), ({ hosts, runningCounts, cap }) => {
       const result = selectLeastLoadedHost({ hosts, runningCounts, cap });
@@ -41,7 +41,7 @@ test("selectLeastLoadedHost — selected host has count < cap", () => {
   );
 });
 
-test("selectLeastLoadedHost — no other host has a lower count below cap", () => {
+test("INVARIANT: When a host is selected, no other host below cap SHALL have a lower load", () => {
   fc.assert(
     fc.property(arbHostsWithCounts(arbCap()), ({ hosts, runningCounts, cap }) => {
       const result = selectLeastLoadedHost({ hosts, runningCounts, cap });
@@ -57,7 +57,7 @@ test("selectLeastLoadedHost — no other host has a lower count below cap", () =
   );
 });
 
-test("selectLeastLoadedHost — empty hosts returns null", () => {
+test("INVARIANT: When the host list is empty, null SHALL be returned", () => {
   fc.assert(
     fc.property(arbCap(), (cap) => {
       assert.equal(selectLeastLoadedHost({ hosts: [], runningCounts: new Map(), cap }), null);
@@ -65,7 +65,7 @@ test("selectLeastLoadedHost — empty hosts returns null", () => {
   );
 });
 
-test("selectLeastLoadedHost — at least one host below cap means result is a string", () => {
+test("INVARIANT: When at least one host is below the cap, the system SHALL always select a host", () => {
   fc.assert(
     fc.property(
       fc.integer({ min: 1, max: 20 }).chain((cap) =>

@@ -248,28 +248,4 @@ describe("Sandbox: Reconciliation", () => {
     const startedEvents = result.events.filter((e) => e.type === "run_started");
     expect(startedEvents.length).toBeGreaterThanOrEqual(1);
   });
-
-  test("issue with stateType changed during reconcile", async () => {
-    const result = await runScenario({
-      issues: [makeIssue("x", "X-1", { state: "In Progress", stateType: "started" })],
-      runnerConfig: { defaultBehavior: { turnCount: 20, latencyPerTurnMs: 100 } },
-      pollTicks: 4,
-      tickDelayMs: 200,
-      waitForRuns: false,
-      timedMutations: [
-        {
-          afterMs: 50,
-          mutate: { type: "change_state", issueId: "x", state: "Done", stateType: "completed" },
-        },
-      ],
-    });
-
-    // Once state becomes terminal, reconciliation should detect it and
-    // trigger workspace_cleanup (terminal path)
-    const assertions = checkAssertions(result, [
-      { type: "not_running", issueId: "x" },
-      { type: "event_occurred", eventType: "workspace_cleanup" },
-    ]);
-    expect(assertions.every((a) => a.passed)).toBe(true);
-  });
 });

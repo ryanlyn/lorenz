@@ -12,7 +12,7 @@ import { assert } from "../../../test/assert.js";
 
 // --- normalizeStateName ---
 
-test("normalizeStateName — idempotent", () => {
+test("INVARIANT: normalizeStateName SHALL be idempotent", () => {
   fc.assert(
     fc.property(fc.string({ maxLength: 30 }), (input) => {
       const once = normalizeStateName(input);
@@ -22,7 +22,7 @@ test("normalizeStateName — idempotent", () => {
   );
 });
 
-test("normalizeStateName — case folding", () => {
+test("INVARIANT: normalizeStateName SHALL be case-insensitive", () => {
   fc.assert(
     fc.property(fc.string({ minLength: 1, maxLength: 20 }), (input) => {
       assert.equal(
@@ -33,7 +33,7 @@ test("normalizeStateName — case folding", () => {
   );
 });
 
-test("normalizeStateName — trims whitespace", () => {
+test("INVARIANT: normalizeStateName SHALL trim leading and trailing whitespace", () => {
   fc.assert(
     fc.property(fc.string({ minLength: 1, maxLength: 20 }), (input) => {
       assert.equal(normalizeStateName(`  ${input}  `), normalizeStateName(input));
@@ -51,7 +51,7 @@ test("normalizeRouteName — null and undefined produce empty string", () => {
   );
 });
 
-test("normalizeRouteName — idempotent", () => {
+test("INVARIANT: normalizeRouteName SHALL be idempotent", () => {
   fc.assert(
     fc.property(fc.string({ maxLength: 30 }), (input) => {
       const once = normalizeRouteName(input);
@@ -61,7 +61,7 @@ test("normalizeRouteName — idempotent", () => {
   );
 });
 
-test("normalizeRouteName — case folding", () => {
+test("INVARIANT: normalizeRouteName SHALL be case-insensitive", () => {
   fc.assert(
     fc.property(fc.string({ minLength: 1, maxLength: 20 }), (input) => {
       assert.equal(
@@ -72,7 +72,7 @@ test("normalizeRouteName — case folding", () => {
   );
 });
 
-test("normalizeRouteName — trims whitespace", () => {
+test("INVARIANT: normalizeRouteName SHALL trim leading and trailing whitespace", () => {
   fc.assert(
     fc.property(fc.string({ minLength: 1, maxLength: 20 }), (input) => {
       assert.equal(normalizeRouteName(`  ${input}  `), normalizeRouteName(input));
@@ -82,7 +82,7 @@ test("normalizeRouteName — trims whitespace", () => {
 
 // --- settingsForIssueState with status overrides ---
 
-test("settingsForIssueState — no override returns base settings unchanged", () => {
+test("INVARIANT: When no override is present, settingsForIssueState SHALL return base settings unchanged", () => {
   fc.assert(
     fc.property(
       fc
@@ -98,7 +98,7 @@ test("settingsForIssueState — no override returns base settings unchanged", ()
   );
 });
 
-test("settingsForIssueState — state name lookup is case insensitive", () => {
+test("INVARIANT: settingsForIssueState state name lookup SHALL be case-insensitive", () => {
   fc.assert(
     fc.property(
       fc
@@ -119,7 +119,7 @@ test("settingsForIssueState — state name lookup is case insensitive", () => {
   );
 });
 
-test("settingsForIssueState — override isolation between states", () => {
+test("INVARIANT: settingsForIssueState overrides for different states SHALL be isolated", () => {
   fc.assert(
     fc.property(fc.integer({ min: 1, max: 10 }), fc.integer({ min: 11, max: 20 }), (capA, capB) => {
       const settings = defaultSettings();
@@ -133,7 +133,7 @@ test("settingsForIssueState — override isolation between states", () => {
   );
 });
 
-test("settingsForIssueState — partial override preserves unmentioned fields", () => {
+test("INVARIANT: settingsForIssueState partial overrides SHALL preserve unmentioned fields", () => {
   fc.assert(
     fc.property(fc.integer({ min: 100_000, max: 9_000_000 }), (timeout) => {
       const settings = defaultSettings();

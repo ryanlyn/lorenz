@@ -24,7 +24,7 @@ export async function buildPrompt(
   }) as Promise<string>;
 }
 
-export function ensembleContext(slotIndex: number, size: number): EnsembleContext {
+function ensembleContext(slotIndex: number, size: number): EnsembleContext {
   return {
     enabled: size > 1,
     slot_index: slotIndex,

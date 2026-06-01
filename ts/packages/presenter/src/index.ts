@@ -10,7 +10,7 @@ export interface PresenterParams {
   [key: string]: string | boolean | number | undefined;
 }
 
-export type RunsPayloadResult =
+type RunsPayloadResult =
   | { status: "ok"; payload: Record<string, unknown> }
   | { status: "run_not_found" };
 

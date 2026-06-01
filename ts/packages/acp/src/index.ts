@@ -37,7 +37,7 @@ import type {
 } from "@symphony/domain";
 import type { SessionUpdateKind } from "@symphony/protocol";
 
-export interface AcpSession extends AgentSession {
+interface AcpSession extends AgentSession {
   connection: ClientSideConnection;
   process: ChildProcessWithoutNullStreams;
   settings: Settings;

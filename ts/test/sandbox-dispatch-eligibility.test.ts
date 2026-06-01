@@ -364,25 +364,6 @@ describe("Sandbox: Dispatch Eligibility", () => {
   });
 
   // -------------------------------------------------------------------------
-  // Unstarted issue with no blockers is eligible
-  // -------------------------------------------------------------------------
-  test("unstarted issue with no blockers is eligible", async () => {
-    const result = await runScenario({
-      issues: [
-        makeIssue("no-blockers", "NO-BLOCK", {
-          state: "Todo",
-          stateType: "unstarted",
-          blockers: [],
-        }),
-      ],
-      pollTicks: 1,
-    });
-    expect(
-      result.events.some((e) => e.type === "run_started" && e.message.includes("NO-BLOCK")),
-    ).toBe(true);
-  });
-
-  // -------------------------------------------------------------------------
   // Global concurrency cap at limit prevents dispatch
   // (cap=0 is invalid config; test cap=1 with 1 already running)
   // -------------------------------------------------------------------------

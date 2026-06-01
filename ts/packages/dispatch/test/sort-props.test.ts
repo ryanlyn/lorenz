@@ -26,7 +26,7 @@ const arbSortableIssue = (): fc.Arbitrary<Issue> =>
     ),
   });
 
-test("sortForDispatch — output is a permutation of input", () => {
+test("INVARIANT: sortForDispatch SHALL return a permutation of the input (no elements added or removed).", () => {
   fc.assert(
     fc.property(fc.array(arbSortableIssue(), { maxLength: 20 }), (issues) => {
       const sorted = sortForDispatch(issues);
@@ -38,7 +38,7 @@ test("sortForDispatch — output is a permutation of input", () => {
   );
 });
 
-test("sortForDispatch — idempotent", () => {
+test("INVARIANT: When sortForDispatch is applied twice, the result SHALL be the same (idempotent).", () => {
   fc.assert(
     fc.property(fc.array(arbSortableIssue(), { maxLength: 20 }), (issues) => {
       const once = sortForDispatch(issues);
@@ -61,7 +61,7 @@ function normalizedCreatedAt(c: string | null | undefined): number {
   return Number.isNaN(parsed) ? Number.MAX_SAFE_INTEGER : parsed;
 }
 
-test("sortForDispatch — adjacent pairs respect priority ordering", () => {
+test("INVARIANT: In the sorted output, each adjacent pair SHALL respect priority ordering (lower priority value first).", () => {
   fc.assert(
     fc.property(fc.array(arbSortableIssue(), { minLength: 2, maxLength: 20 }), (issues) => {
       const sorted = sortForDispatch(issues);
@@ -74,7 +74,7 @@ test("sortForDispatch — adjacent pairs respect priority ordering", () => {
   );
 });
 
-test("sortForDispatch — within same priority, earlier createdAt comes first", () => {
+test("INVARIANT: Within the same priority, earlier createdAt SHALL come first.", () => {
   fc.assert(
     fc.property(fc.array(arbSortableIssue(), { minLength: 2, maxLength: 20 }), (issues) => {
       const sorted = sortForDispatch(issues);
@@ -89,7 +89,7 @@ test("sortForDispatch — within same priority, earlier createdAt comes first", 
   );
 });
 
-test("sortForDispatch — within same priority and createdAt, alphabetical by identifier", () => {
+test("INVARIANT: Within the same priority and createdAt, issues SHALL be ordered alphabetically by identifier.", () => {
   fc.assert(
     fc.property(fc.array(arbSortableIssue(), { minLength: 2, maxLength: 20 }), (issues) => {
       const sorted = sortForDispatch(issues);

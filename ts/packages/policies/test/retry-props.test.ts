@@ -6,7 +6,7 @@ import { assert } from "../../../test/assert.js";
 
 import { MIN_RETRY_DELAY_MS } from "@symphony/policies";
 
-test("retryBackoffMs — monotonically non-decreasing for failure kind", () => {
+test("INVARIANT: When failure retry delay is calculated, it SHALL be monotonically non-decreasing with attempt number", () => {
   fc.assert(
     fc.property(
       fc.nat({ max: 50 }),
@@ -21,7 +21,7 @@ test("retryBackoffMs — monotonically non-decreasing for failure kind", () => {
   );
 });
 
-test("retryBackoffMs — floor at base when max >= 10_000", () => {
+test("INVARIANT: When maxBackoff permits, failure delays SHALL have a positive floor preventing zero-delay storms", () => {
   fc.assert(
     fc.property(
       fc.integer({ min: -10, max: 100 }),
@@ -33,7 +33,7 @@ test("retryBackoffMs — floor at base when max >= 10_000", () => {
   );
 });
 
-test("retryBackoffMs — continuation always returns MIN_RETRY_DELAY_MS", () => {
+test("INVARIANT: When a continuation retry is scheduled, it SHALL always return a fixed MIN_RETRY_DELAY_MS delay", () => {
   fc.assert(
     fc.property(
       fc.integer({ min: -10, max: 100 }),

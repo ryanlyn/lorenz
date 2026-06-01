@@ -26,7 +26,7 @@ function issueWith(labels: string[]): Issue {
   };
 }
 
-test("ensembleSize — valid ensemble label returns positive integer", () => {
+test("INVARIANT: When a valid ensemble label with a positive integer is present, ensembleSize SHALL return that integer.", () => {
   fc.assert(
     fc.property(fc.integer({ min: 1, max: ENSEMBLE_SIZE_MAX }), (n) => {
       const issue = issueWith([`ensemble:${n}`]);
@@ -38,7 +38,7 @@ test("ensembleSize — valid ensemble label returns positive integer", () => {
   );
 });
 
-test("ensembleSize — first valid label wins", () => {
+test("INVARIANT: When multiple valid ensemble labels are present, ensembleSize SHALL use the first encountered.", () => {
   fc.assert(
     fc.property(
       fc.integer({ min: 1, max: 50 }),
@@ -51,7 +51,7 @@ test("ensembleSize — first valid label wins", () => {
   );
 });
 
-test("ensembleSize — returns null when no valid label", () => {
+test("INVARIANT: When no valid ensemble label is present, ensembleSize SHALL return null.", () => {
   fc.assert(
     fc.property(
       fc.array(
@@ -66,7 +66,7 @@ test("ensembleSize — returns null when no valid label", () => {
   );
 });
 
-test("ensembleSize — zero or negative numbers return null", () => {
+test("INVARIANT: When an ensemble label specifies zero or a negative integer, ensembleSize SHALL return null.", () => {
   fc.assert(
     fc.property(fc.integer({ min: -100, max: 0 }), (n) => {
       const issue = issueWith([`ensemble:${n}`]);
@@ -75,7 +75,7 @@ test("ensembleSize — zero or negative numbers return null", () => {
   );
 });
 
-test("ensembleSize — case insensitive and trims", () => {
+test("INVARIANT: When matching ensemble labels, matching SHALL be case-insensitive and whitespace-insensitive.", () => {
   fc.assert(
     fc.property(fc.integer({ min: 1, max: 50 }), (n) => {
       const variations = [`ensemble:${n}`, ` ensemble:${n} `, `ENSEMBLE:${n}`, `Ensemble:${n}`];
@@ -89,7 +89,7 @@ test("ensembleSize — case insensitive and trims", () => {
 
 // --- isTerminalState ---
 
-test("isTerminalState — null/undefined state is never terminal", () => {
+test("INVARIANT: When the state is null or undefined, isTerminalState SHALL return false.", () => {
   fc.assert(
     fc.property(
       fc.array(fc.string({ minLength: 1, maxLength: 15 }), { minLength: 1, maxLength: 5 }),
@@ -101,7 +101,7 @@ test("isTerminalState — null/undefined state is never terminal", () => {
   );
 });
 
-test("isTerminalState — case insensitive matching", () => {
+test("INVARIANT: When checking terminal state membership, comparison SHALL be case-insensitive.", () => {
   const alpha = "abcdefghijklmnopqrstuvwxyz";
   fc.assert(
     fc.property(
@@ -115,7 +115,7 @@ test("isTerminalState — case insensitive matching", () => {
   );
 });
 
-test("isTerminalState — whitespace trimmed during comparison", () => {
+test("INVARIANT: When checking terminal state membership, leading and trailing whitespace SHALL be stripped.", () => {
   const alpha = "abcdefghij";
   fc.assert(
     fc.property(
@@ -128,7 +128,7 @@ test("isTerminalState — whitespace trimmed during comparison", () => {
   );
 });
 
-test("isTerminalState — state not in list returns false", () => {
+test("INVARIANT: When a state is not in the terminal states list, isTerminalState SHALL return false.", () => {
   const setA = "abcdefghij";
   const setB = "klmnopqrst";
   fc.assert(

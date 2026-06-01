@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, useCallback } from "react";
 
 import type { WsMessage } from "../api/types";
 
-export type WsStatus = "connecting" | "connected" | "disconnected";
+type WsStatus = "connecting" | "connected" | "disconnected";
 
 export function useWebSocket() {
   const [status, setStatus] = useState<WsStatus>("disconnected");

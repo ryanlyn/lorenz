@@ -49,14 +49,6 @@ export function isValidEnsembleSize(n: number): boolean {
  */
 export type AgentKind = string;
 
-export const AGENT_EXECUTOR_KINDS = ["appserver", "acp"] as const;
-
-/**
- * Transport used to drive an agent process: `"appserver"` speaks Codex's JSON-RPC
- * app-server protocol, `"acp"` speaks the Agent Client Protocol bridge.
- */
-export type AgentExecutorKind = (typeof AGENT_EXECUTOR_KINDS)[number];
-
 export const TRACKER_KINDS = ["linear", "memory"] as const;
 
 export type TrackerKind = (typeof TRACKER_KINDS)[number];

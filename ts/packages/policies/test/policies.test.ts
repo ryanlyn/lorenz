@@ -335,17 +335,6 @@ test('reconciliationStopReason — unrouted via route label mismatch returns "un
   assert.equal(reconciliationStopReason(issue, settings), "unrouted");
 });
 
-test('reconciliationStopReason - started issue with open blockers returns "inactive"', () => {
-  // Blockers only gate unstarted issues; started work keeps running.
-  const issue = makeIssue({
-    state: "In Progress",
-    stateType: "started",
-    blockers: [{ id: "blocker-1", identifier: "ENG-2", state: "In Progress" }],
-  });
-  const settings = makeSettings();
-  assert.equal(reconciliationStopReason(issue, settings), "inactive");
-});
-
 test('reconciliationStopReason — blocked with all blockers in terminal state returns "inactive"', () => {
   // Issue is in "Todo" (unstarted) state but all blockers are in a terminal state,
   // so issueHasOpenBlockers returns false and the issue falls through to "inactive".
@@ -381,30 +370,6 @@ test("reconciliationStopReason — cancelled issue with open blockers returns te
   });
   const settings = makeSettings();
   assert.equal(reconciliationStopReason(issue, settings), "terminal");
-});
-
-describe("INVARIANT: Blockers on unstarted issues prevent starting", () => {
-  test("reconciliationStopReason — unstarted issue with open blockers returns blocked", () => {
-    const issue = makeIssue({
-      state: "Todo",
-      stateType: "unstarted",
-      blockers: [{ id: "blocker-1", identifier: "ENG-2", state: "In Progress" }],
-    });
-    const settings = makeSettings();
-    assert.equal(reconciliationStopReason(issue, settings), "blocked");
-  });
-});
-
-describe("INVARIANT: Blockers on started issues do not abort", () => {
-  test('reconciliationStopReason - started issue with open blockers returns "inactive"', () => {
-    const issue = makeIssue({
-      state: "In Progress",
-      stateType: "started",
-      blockers: [{ id: "blocker-1", identifier: "ENG-2", state: "Todo" }],
-    });
-    const settings = makeSettings();
-    assert.equal(reconciliationStopReason(issue, settings), "inactive");
-  });
 });
 
 test('reconciliationStopReason - started issue with multiple open blockers returns "inactive"', () => {

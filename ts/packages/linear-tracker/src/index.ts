@@ -33,7 +33,7 @@ const issueFields = `
   updatedAt
 `;
 
-export interface LinearViewer {
+interface LinearViewer {
   id: string;
   name?: string;
   email?: string;
@@ -59,7 +59,7 @@ export interface LinearProject {
   teams: LinearTeam[];
 }
 
-export interface LinearRetryOptions {
+interface LinearRetryOptions {
   maxRetries?: number | undefined;
   baseDelayMs?: number | undefined;
   maxDelayMs?: number | undefined;

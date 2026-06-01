@@ -54,7 +54,7 @@ function issueWith(overrides: Partial<Issue>): Issue {
 
 // --- routeNames ---
 
-test("routeNames — returned routes are derived from issue labels", () => {
+test("INVARIANT: When route labels are present, routeNames SHALL return the normalized suffix of each matching label.", () => {
   fc.assert(
     fc.property(
       fc.array(
@@ -80,7 +80,7 @@ test("routeNames — returned routes are derived from issue labels", () => {
   );
 });
 
-test("routeNames — labels without matching prefix yield no routes", () => {
+test("INVARIANT: When labels do not match the configured prefix, routeNames SHALL return an empty array.", () => {
   fc.assert(
     fc.property(
       fc.array(
@@ -99,7 +99,7 @@ test("routeNames — labels without matching prefix yield no routes", () => {
   );
 });
 
-test("routeNames — blank suffix after prefix yields no routes", () => {
+test("INVARIANT: When the suffix after the route prefix is blank, routeNames SHALL return an empty array.", () => {
   fc.assert(
     fc.property(fc.constantFrom("Symphony:", "Route:", "Team:"), (prefix) => {
       const issue = issueWith({ labels: [prefix, `${prefix}  `, `${prefix}\t`] });
@@ -110,7 +110,7 @@ test("routeNames — blank suffix after prefix yields no routes", () => {
   );
 });
 
-test("routeNames — case insensitive prefix matching", () => {
+test("INVARIANT: When prefix matching is performed, matching SHALL be case-insensitive.", () => {
   fc.assert(
     fc.property(
       fc
@@ -137,7 +137,7 @@ test("routeNames — case insensitive prefix matching", () => {
 
 // --- normalizeRouteName ---
 
-test("normalizeRouteName — idempotent", () => {
+test("INVARIANT: When route name normalization is applied twice, the result SHALL be the same (idempotent).", () => {
   fc.assert(
     fc.property(fc.string({ maxLength: 30 }), (input) => {
       const once = normalizeRouteName(input);
@@ -147,7 +147,7 @@ test("normalizeRouteName — idempotent", () => {
   );
 });
 
-test("normalizeRouteName — case folding", () => {
+test("INVARIANT: When route names are normalized, normalization SHALL be case-insensitive.", () => {
   fc.assert(
     fc.property(fc.string({ minLength: 1, maxLength: 20 }), (input) => {
       assert.equal(
@@ -158,7 +158,7 @@ test("normalizeRouteName — case folding", () => {
   );
 });
 
-test("normalizeRouteName — trim invariant", () => {
+test("INVARIANT: When route names are normalized, leading and trailing whitespace SHALL be stripped.", () => {
   fc.assert(
     fc.property(fc.string({ minLength: 1, maxLength: 20 }), (input) => {
       assert.equal(normalizeRouteName(`  ${input}  `), normalizeRouteName(input));
@@ -168,7 +168,7 @@ test("normalizeRouteName — trim invariant", () => {
 
 // --- routedToThisWorker ---
 
-test("routedToThisWorker — onlyRoutes null accepts all valid routed issues", () => {
+test("INVARIANT: When the allowlist is null, the system SHALL accept all routes.", () => {
   fc.assert(
     fc.property(
       fc
@@ -183,7 +183,7 @@ test("routedToThisWorker — onlyRoutes null accepts all valid routed issues", (
   );
 });
 
-test("routedToThisWorker — onlyRoutes empty rejects all routed issues", () => {
+test("INVARIANT: When the allowlist is empty, the system SHALL reject all routes.", () => {
   fc.assert(
     fc.property(
       fc
@@ -198,7 +198,7 @@ test("routedToThisWorker — onlyRoutes empty rejects all routed issues", () => 
   );
 });
 
-test("routedToThisWorker — unrouted issues rejected when acceptUnrouted is false", () => {
+test("INVARIANT: When no route label is present and unrouted dispatch is disabled, the dispatch SHALL be ineligible.", () => {
   fc.assert(
     fc.property(
       fc.array(
@@ -216,7 +216,7 @@ test("routedToThisWorker — unrouted issues rejected when acceptUnrouted is fal
   );
 });
 
-test("routedToThisWorker — assignedToWorker false always rejects", () => {
+test("INVARIANT: When an issue is not assigned to the worker, routing SHALL always reject regardless of other settings.", () => {
   fc.assert(
     fc.property(
       fc.array(fc.string({ minLength: 1, maxLength: 15 }), { maxLength: 3 }),
@@ -232,7 +232,7 @@ test("routedToThisWorker — assignedToWorker false always rejects", () => {
 
 // --- issueHasOpenBlockers ---
 
-test("issueHasOpenBlockers - unstarted issues with open blockers are blocked", () => {
+test("INVARIANT: When an unstarted issue has non-terminal blockers, it SHALL be considered blocked.", () => {
   fc.assert(
     fc.property(
       fc.constantFrom("Todo", "In Progress", "Review"),
@@ -254,7 +254,7 @@ test("issueHasOpenBlockers - unstarted issues with open blockers are blocked", (
   );
 });
 
-test("issueHasOpenBlockers — all-terminal blockers do not block", () => {
+test("INVARIANT: When all blockers are in terminal states, the issue SHALL NOT be considered blocked.", () => {
   const terminalStates = ["Done", "Closed", "Cancelled"];
   fc.assert(
     fc.property(
@@ -296,7 +296,7 @@ test("issueHasOpenBlockers - non-unstarted issues with open blockers are not blo
 
 // --- shouldDispatchIssue / dispatchBlockReason consistency ---
 
-test("shouldDispatchIssue — missing required fields never eligible", () => {
+test("INVARIANT: When an issue is missing required fields, it SHALL never be eligible for dispatch.", () => {
   fc.assert(
     fc.property(fc.constantFrom("id", "identifier", "title", "state"), (field) => {
       const issue = issueWith({ [field]: "" });
@@ -307,7 +307,7 @@ test("shouldDispatchIssue — missing required fields never eligible", () => {
   );
 });
 
-test("shouldDispatchIssue — terminal state never eligible", () => {
+test("INVARIANT: When an issue is in a terminal state, it SHALL never be eligible for dispatch.", () => {
   fc.assert(
     fc.property(
       fc.constantFrom("Done", "Closed", "Cancelled", "Canceled", "Duplicate"),
@@ -321,7 +321,7 @@ test("shouldDispatchIssue — terminal state never eligible", () => {
   );
 });
 
-test("shouldDispatchIssue — concurrency cap blocks dispatch", () => {
+test("INVARIANT: When the concurrency cap is reached, dispatch SHALL be blocked.", () => {
   fc.assert(
     fc.property(fc.integer({ min: 1, max: 20 }), (cap) => {
       const issue = issueWith({ state: "Todo", stateType: "unstarted", blockers: [] });
@@ -334,7 +334,7 @@ test("shouldDispatchIssue — concurrency cap blocks dispatch", () => {
   );
 });
 
-test("dispatchBlockReason — null iff shouldDispatch would be true (given unclaimed slot)", () => {
+test("INVARIANT: dispatchBlockReason SHALL return null if and only if shouldDispatchIssue returns true (given unclaimed slots).", () => {
   // Terminal states that must be excluded from the generated issue state to ensure
   // the issue passes the issueIsActive check (which requires state in activeStates
   // AND state NOT in terminalStates).
