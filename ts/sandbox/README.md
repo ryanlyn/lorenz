@@ -1,8 +1,32 @@
 # Symphony Demo Run
 
-Run Symphony end-to-end with pre-baked Linear issues and a real Codex agent.
+Run Symphony end-to-end with pre-baked issues and a real Codex agent.
 
-## Prerequisites
+## Try it with no external tracker (`kind: local`)
+
+The fastest way to try Symphony is the local file-based board: no Linear API key, no
+workspace, just a directory of `BOARD-<n>.md` files.
+
+```bash
+cd /home/coder/work/symphony/ts
+npx tsx sandbox/seed-local.ts
+```
+
+This writes a few sample issues (a couple in `Todo`, one in `In Progress`) into
+`.symphony/local/` via `@symphony/local-tracker`'s `BoardStore`, so the ids and on-disk
+format match what the running tracker expects.
+
+- Seed a different directory: `npx tsx sandbox/seed-local.ts /tmp/demo-board`
+- Seed fewer issues: `npx tsx sandbox/seed-local.ts .symphony/local 2`
+
+Point a workflow at the board with `tracker.kind: local` and `tracker.path: .symphony/local`
+(matching the directory you seeded), then run Symphony as below.
+
+There is no Slack equivalent of this seeder: Slack issues are real messages in a live
+workspace, so they cannot be seeded offline. To exercise `kind: slack`, post a message in a
+configured channel and add the "in progress" reaction yourself.
+
+## Prerequisites (Linear demo)
 
 - `LINEAR_API_KEY` and `LINEAR_PROJECT_SLUG` env vars set
 - `codex` CLI available
@@ -28,6 +52,7 @@ pnpm start demo/DEMO_WORKFLOW.md --port 4040
 ```
 
 This starts the orchestrator which will:
+
 - Poll Linear for issues in "Todo" / "In Progress"
 - Dispatch Codex to work on each issue in an isolated workspace under `/tmp/symphony-demo-workspaces/`
 - Serve the dashboard at http://localhost:4040
@@ -35,6 +60,7 @@ This starts the orchestrator which will:
 ### 3. Inspect the dashboard
 
 Open http://localhost:4040 in your browser to see:
+
 - Running sessions (which issues are being worked on)
 - Retry queue
 - Token usage

@@ -246,6 +246,121 @@ Prerequisites:
 Route labels let multiple Symphony instances share one Linear project. With the default
 `route_label_prefix`, labels such as `Symphony:backend` and `Symphony:frontend` become route names.
 
+## Trackers
+
+A tracker is the source of issues Symphony works on. It is selected by `tracker.kind` in the
+workflow front matter. Every tracker exposes the same read surface to the runtime (poll for
+candidate issues, refresh in-flight issues by id) and a set of agent tools. Those tools are now
+read+write symmetric across kinds, mirroring `linear_graphql` (which both reads and writes): each
+tracker gives the agent at least one write tool and one read tool. The tools differ per kind; their
+descriptions are self-documenting and surface to the agent via the MCP `tools/list` call.
+
+Supported kinds:
+
+- `linear` - issues live in a Linear project. Read access uses `tracker.api_key` (resolved from
+  `LINEAR_API_KEY`) and `tracker.project_slug`; the agent both reads and writes through the
+  `linear_graphql` tool. This is the original backend and is unchanged.
+- `local` - issues live as Markdown files on disk. No external service required.
+- `memory` - an in-process tracker used for tests and dry runs.
+
+All kinds share the dispatch routing block under `tracker.dispatch`:
+
+```yaml
+tracker:
+  dispatch:
+    accept_unrouted: true # process issues that carry no matching route label (default)
+    only_routes: null # or a list of route names this instance handles
+    route_label_prefix: "Symphony:" # the label prefix that names a route
+```
+
+### Local tracker (filesystem board)
+
+The local tracker runs Symphony against a directory of Markdown files, with no Linear API key or
+workspace. See `WORKFLOW.local.md` for a complete example workflow.
+
+Configure it with `kind: local` and a board `path` (default `.symphony/local`):
+
+```yaml
+tracker:
+  kind: local
+  path: .symphony/local
+  id_prefix: "BOARD-" # optional, default "BOARD-"
+  active_states:
+    - Todo
+    - In Progress
+  terminal_states:
+    - Done
+    - Cancelled
+```
+
+Both `path` and `id_prefix` are local-specific and always defaulted, so a local workflow is valid
+with just `kind: local`. `id_prefix` sets the issue-id prefix for the board: the tracker only treats
+`<prefix><n>.md` files as issues and mints new ids with it, so one board can be `BOARD-1`, `BOARD-2`
+and another `XXX-1`, `FEAT-1`, etc. It must be filesystem-safe (start alphanumeric, then only
+letters, digits, `_` or `-`); an unsafe prefix is rejected at config load. Changing the prefix of an
+existing board orphans files written under the old prefix (they stop matching), so set it up front.
+
+Each issue is one file named `<prefix><n>.md` (for example `.symphony/local/BOARD-7.md`, or
+`.symphony/local/XXX-7.md` with `id_prefix: "XXX-"`). The identifier is the file stem (`BOARD-7`).
+The format is YAML front matter followed by a `# Title`
+heading, the description, and an optional `## Comments` section:
+
+<!-- prettier-ignore -->
+```markdown
+---
+status: In Progress
+labels:
+  - backend
+---
+
+# Fix the retry queue
+
+The retry slot is not released when a worker fails.
+
+<!-- symphony:comments -->
+## Comments
+- 2026-05-29T12:00:00.000Z agent: Reproduced the leak; fix in progress.
+```
+
+- `status` (required) is the issue state. Active states (`Todo`, `In Progress`) mean the issue is
+  available to work; terminal states (`Done`, `Cancelled`) mean it is finished and must not be
+  reopened. Configure the exact sets with `active_states` / `terminal_states`.
+- `labels` (optional) is a YAML list. Labels feed dispatch routing the same way Linear labels do.
+- The `# Title` heading is the issue title; the text below it is the description.
+- The `## Comments` section is managed by the `local_comment` tool. The hidden
+  `<!-- symphony:comments -->` marker delimits it so a description that itself contains a
+  `## Comments` heading is never misparsed; treat the most recent comment block as the live
+  workpad.
+
+Agent tools for `kind: local` (read and write, symmetric with `linear_graphql`):
+
+- `local_update_status` - move an issue to a new status (args: `issueId`, `status`).
+- `local_comment` - append a progress note to the issue's `## Comments` section (args: `issueId`,
+  `body`).
+- `local_create_issue` - create a new board issue for out-of-scope follow-up work (args: `title`,
+  optional `body`, optional `status`).
+- `local_read_issue` - read an issue's authoritative state: its current status, title, description,
+  and comments (args: `issueId`). Use it to re-read state and recover prior progress notes on a
+  continuation turn.
+
+Concurrent writes (multiple agents or ensemble slots) to the same board file are serialized
+in-process so a status change and comments are never lost. This assumes a single Symphony daemon
+owns the board; editing the `BOARD-<n>.md` files from another process at the same time is out of
+scope.
+
+To seed a board so you can try `kind: local` immediately, use the demo seeder, which writes
+sample `BOARD-<n>.md` files through the same `BoardStore` the running tracker uses:
+
+```sh
+npx tsx sandbox/seed-local.ts                    # seeds ./.symphony/local
+npx tsx sandbox/seed-local.ts /tmp/demo-board    # seeds an explicit directory
+npx tsx sandbox/seed-local.ts .symphony/local 2  # seeds only the first 2 issues
+npx tsx sandbox/seed-local.ts /tmp/demo-board 3 XXX-  # seeds XXX-1..XXX-3 (match tracker.id_prefix)
+```
+
+Point `tracker.path` at the directory you seeded and run Symphony as usual. If you set a custom
+`id_prefix`, pass the same prefix to the seeder so the seeded ids match what the tracker expects.
+
 ## Workflow Prompt
 
 The prompt body can read these public issue and run fields:

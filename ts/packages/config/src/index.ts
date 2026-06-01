@@ -159,6 +159,8 @@ const trackerRawSchema = z
     projectSlugs: z.array(z.string()).optional(),
     projectLabels: z.array(z.string()).optional(),
     assignee: z.string().optional(),
+    path: z.string().optional(),
+    idPrefix: z.string().optional(),
     activeStates: z.array(z.string()).optional(),
     terminalStates: z.array(z.string()).optional(),
     dispatch: z
@@ -282,6 +284,7 @@ type StatusOverridesRaw = NonNullable<WorkflowConfigRaw["statusOverrides"]>;
 const trackerAliases = {
   api_key: "apiKey",
   project_slug: "projectSlug",
+  id_prefix: "idPrefix",
   project_slugs: "projectSlugs",
   project_labels: "projectLabels",
   active_states: "activeStates",
@@ -379,6 +382,8 @@ export const defaultSettings = (options: DefaultSettingsOptions = {}): Settings 
     tracker: {
       kind: undefined,
       endpoint: "https://api.linear.app/graphql",
+      path: ".symphony/local",
+      idPrefix: "BOARD-",
       activeStates: ["Todo", "In Progress"],
       terminalStates: ["Closed", "Cancelled", "Canceled", "Duplicate", "Done"],
       dispatch: {
@@ -504,6 +509,11 @@ export function validateDispatchConfig(settings: Settings): void {
         "tracker.project_slug, tracker.project_slugs, and tracker.project_labels are mutually exclusive",
       );
   }
+  if (settings.tracker.kind === "local") {
+    if (!settings.tracker.path || settings.tracker.path.trim() === "") {
+      throw new Error("tracker.path (board directory) is required for the local tracker");
+    }
+  }
 
   const requiredBackends = new Set<AgentKind>([settings.agent.kind]);
   for (const override of settings.statusOverrides.values()) {
@@ -535,6 +545,21 @@ export function normalizeRouteName(value: unknown): string {
   return String(value).trim().toLowerCase();
 }
 
+/**
+ * Local-tracker issue-id prefixes must be filesystem-safe so `<prefix><n>.md` can never escape the
+ * board dir. Mirrors BoardStore's own guard (config must not import the tracker packages, so the
+ * rule is duplicated here as the user-facing validation). Default "BOARD-" satisfies it.
+ */
+const LOCAL_ID_PREFIX_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
+function assertValidLocalIdPrefix(prefix: string): void {
+  if (!LOCAL_ID_PREFIX_PATTERN.test(prefix)) {
+    throw new Error(
+      `tracker.id_prefix ${JSON.stringify(prefix)} is invalid: ` +
+        `must start alphanumeric, then only letters, digits, "_" or "-"`,
+    );
+  }
+}
+
 function parseTracker(
   defaults: TrackerSettings,
   trackerRaw: TrackerRaw,
@@ -549,6 +574,8 @@ function parseTracker(
   const apiKey = resolveConfiguredSecret(trackerRaw.apiKey, env, "LINEAR_API_KEY");
   const projectSlug = resolveEnv(trackerRaw.projectSlug ?? "", env) || undefined;
   const assignee = resolveConfiguredSecret(trackerRaw.assignee, env, "LINEAR_ASSIGNEE");
+  const idPrefix = trackerRaw.idPrefix ?? defaults.idPrefix ?? "BOARD-";
+  assertValidLocalIdPrefix(idPrefix);
 
   const projectSlugs = trackerRaw.projectSlugs?.length ? trackerRaw.projectSlugs : undefined;
   const projectLabels = trackerRaw.projectLabels?.length ? trackerRaw.projectLabels : undefined;
@@ -557,6 +584,8 @@ function parseTracker(
     ...defaults,
     kind,
     endpoint: trackerRaw.endpoint ?? defaults.endpoint,
+    path: trackerRaw.path ?? defaults.path ?? ".symphony/local",
+    idPrefix,
     apiKey,
     projectSlug,
     projectSlugs,
@@ -851,7 +880,7 @@ function mergeCodex(base: CodexSettings, override: Partial<CodexSettings>): Code
 function cloneSettings(settings: Settings): Settings {
   return {
     ...settings,
-    tracker: { ...settings.tracker, dispatch: { ...settings.tracker.dispatch } },
+    tracker: cloneTracker(settings.tracker),
     polling: { ...settings.polling },
     workspace: { ...settings.workspace },
     worker: { ...settings.worker, sshHosts: [...settings.worker.sshHosts] },
@@ -864,6 +893,19 @@ function cloneSettings(settings: Settings): Settings {
     server: { ...settings.server },
     logging: { ...settings.logging },
     statusOverrides: new Map(settings.statusOverrides),
+  };
+}
+
+/**
+ * Deep-copy mutable tracker collections (dispatch and state lists) so per-issue-state clones
+ * cannot mutate the shared base config.
+ */
+function cloneTracker(tracker: TrackerSettings): TrackerSettings {
+  return {
+    ...tracker,
+    dispatch: { ...tracker.dispatch },
+    activeStates: [...tracker.activeStates],
+    terminalStates: [...tracker.terminalStates],
   };
 }
 

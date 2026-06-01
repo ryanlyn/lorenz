@@ -46,6 +46,7 @@
     "@symphony/humanize": "workspace:*",
     "@symphony/issue": "workspace:*",
     "@symphony/linear-tracker": "workspace:*",
+    "@symphony/local-tracker": "workspace:*",
     "@symphony/log-file": "workspace:*",
     "@symphony/mcp": "workspace:*",
     "@symphony/memory-tracker": "workspace:*",
