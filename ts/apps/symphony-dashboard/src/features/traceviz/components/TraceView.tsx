@@ -39,6 +39,8 @@ export function TraceView({ issueId, onBack }: TraceViewProps) {
           onSelect={(id) => {
             if (id) {
               window.location.hash = `#/trace/${encodeURIComponent(id)}`;
+            } else {
+              window.location.hash = "#/trace";
             }
           }}
         />
@@ -52,7 +54,13 @@ export function TraceView({ issueId, onBack }: TraceViewProps) {
         </div>
       ) : (
         <div className="flex flex-col items-center justify-center py-16 text-center">
-          <p className="text-sm text-muted">Loading trace data...</p>
+          {tickets.length > 0 ? (
+            <p className="text-sm text-muted">
+              {tickets.length} trace{tickets.length !== 1 ? "s" : ""} available — select one above
+            </p>
+          ) : (
+            <p className="text-sm text-muted">No traces found on disk</p>
+          )}
         </div>
       )}
     </div>
