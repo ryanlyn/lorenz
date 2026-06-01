@@ -27,7 +27,7 @@ import type { DisplayEvent } from "./models/display-events.js";
 import { TraceWatcher } from "./watcher.js";
 import { computeStats } from "./stats.js";
 
-interface CreateAppOptions {
+export interface CreateAppOptions {
   traceDir: string;
   staticDir?: string | undefined;
 }

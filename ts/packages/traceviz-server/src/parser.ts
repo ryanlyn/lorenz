@@ -51,7 +51,7 @@ const TOOL_NAME_CATEGORIES: Record<string, ToolCategory> = {
   TodoRead: "todo",
 };
 
-function detectToolCategory(toolName: string): ToolCategory {
+export function detectToolCategory(toolName: string): ToolCategory {
   return TOOL_NAME_CATEGORIES[toolName] ?? "unknown";
 }
 

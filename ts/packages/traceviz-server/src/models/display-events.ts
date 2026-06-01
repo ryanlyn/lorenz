@@ -3,16 +3,19 @@
  * These are the parsed, presentation-ready events derived from raw AgentUpdate JSONL traces.
  */
 
-export type ToolCategory =
-  | "plan_mode"
-  | "agent"
-  | "bash_command"
-  | "search"
-  | "file_operation"
-  | "web"
-  | "todo"
-  | "skill"
-  | "unknown";
+export const TOOL_CATEGORIES = [
+  "plan_mode",
+  "agent",
+  "bash_command",
+  "search",
+  "file_operation",
+  "web",
+  "todo",
+  "skill",
+  "unknown",
+] as const;
+
+export type ToolCategory = (typeof TOOL_CATEGORIES)[number];
 
 export interface TokenUsage {
   inputTokens: number;
