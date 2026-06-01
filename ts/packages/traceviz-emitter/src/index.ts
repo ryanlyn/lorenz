@@ -4,6 +4,23 @@ import path from "node:path";
 
 import type { AgentUpdate } from "@symphony/domain";
 
+/**
+ * Notification methods that carry meaningful trace information.
+ * Everything else (streaming deltas, config warnings, rate limits, etc.) is dropped.
+ * Mirrors the filtering in thib-coding-agent's CodexEventMerger which only keeps
+ * item.completed and turn.completed.
+ */
+const NOTIFICATION_METHOD_ALLOWLIST = new Set(["item/completed", "turn/started", "turn/completed"]);
+
+function shouldEmit(update: AgentUpdate): boolean {
+  if (update.type !== "notification") return true;
+  const msg = update.message;
+  if (typeof msg !== "object" || msg === null) return false;
+  const method = (msg as Record<string, unknown>).method;
+  if (typeof method !== "string") return false;
+  return NOTIFICATION_METHOD_ALLOWLIST.has(method);
+}
+
 export class TraceEmitter {
   private readonly traceDir: string;
   private initialized = new Set<string>();
@@ -15,6 +32,8 @@ export class TraceEmitter {
   }
 
   emit(issueId: string, issueIdentifier: string, update: AgentUpdate): void {
+    if (!shouldEmit(update)) return;
+
     const dirPath = this.issueDirPath(issueIdentifier);
     if (!this.initialized.has(dirPath)) {
       mkdirSync(dirPath, { recursive: true });
