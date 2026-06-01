@@ -1,7 +1,7 @@
 import { test } from "vitest";
 import fc from "fast-check";
 import { sortForDispatch } from "@symphony/cli";
-import type { Issue } from "@symphony/domain";
+import type { Issue, Priority } from "@symphony/domain";
 
 import { assert } from "../../../test/assert.js";
 
@@ -14,10 +14,8 @@ const arbSortableIssue = (): fc.Arbitrary<Issue> =>
     labels: fc.constant([] as string[]),
     blockers: fc.constant([]),
     priority: fc.oneof(
-      fc.constantFrom(1, 2, 3, 4),
-      fc.constant(null as number | null),
-      fc.integer({ min: 5, max: 10 }),
-      fc.constant(0),
+      fc.constantFrom(1, 2, 3, 4) as fc.Arbitrary<Priority | null>,
+      fc.constant(null as Priority | null),
     ),
     createdAt: fc.oneof(
       fc
@@ -28,7 +26,7 @@ const arbSortableIssue = (): fc.Arbitrary<Issue> =>
     ),
   });
 
-test("sortForDispatch — output is a permutation of input", () => {
+test("INVARIANT: sortForDispatch SHALL return a permutation of the input (no elements added or removed).", () => {
   fc.assert(
     fc.property(fc.array(arbSortableIssue(), { maxLength: 20 }), (issues) => {
       const sorted = sortForDispatch(issues);
@@ -40,7 +38,7 @@ test("sortForDispatch — output is a permutation of input", () => {
   );
 });
 
-test("sortForDispatch — idempotent", () => {
+test("INVARIANT: When sortForDispatch is applied twice, the result SHALL be the same (idempotent).", () => {
   fc.assert(
     fc.property(fc.array(arbSortableIssue(), { maxLength: 20 }), (issues) => {
       const once = sortForDispatch(issues);
@@ -53,8 +51,8 @@ test("sortForDispatch — idempotent", () => {
   );
 });
 
-function normalizedPriority(p: number | null | undefined): number {
-  return p && p >= 1 && p <= 4 ? p : Number.MAX_SAFE_INTEGER;
+function normalizedPriority(p: Priority | null | undefined): number {
+  return p ?? Number.MAX_SAFE_INTEGER;
 }
 
 function normalizedCreatedAt(c: string | null | undefined): number {
@@ -63,7 +61,7 @@ function normalizedCreatedAt(c: string | null | undefined): number {
   return Number.isNaN(parsed) ? Number.MAX_SAFE_INTEGER : parsed;
 }
 
-test("sortForDispatch — adjacent pairs respect priority ordering", () => {
+test("INVARIANT: In the sorted output, each adjacent pair SHALL respect priority ordering (lower priority value first).", () => {
   fc.assert(
     fc.property(fc.array(arbSortableIssue(), { minLength: 2, maxLength: 20 }), (issues) => {
       const sorted = sortForDispatch(issues);
@@ -76,7 +74,7 @@ test("sortForDispatch — adjacent pairs respect priority ordering", () => {
   );
 });
 
-test("sortForDispatch — within same priority, earlier createdAt comes first", () => {
+test("INVARIANT: Within the same priority, earlier createdAt SHALL come first.", () => {
   fc.assert(
     fc.property(fc.array(arbSortableIssue(), { minLength: 2, maxLength: 20 }), (issues) => {
       const sorted = sortForDispatch(issues);
@@ -91,7 +89,7 @@ test("sortForDispatch — within same priority, earlier createdAt comes first", 
   );
 });
 
-test("sortForDispatch — within same priority and createdAt, alphabetical by identifier", () => {
+test("INVARIANT: Within the same priority and createdAt, issues SHALL be ordered alphabetically by identifier.", () => {
   fc.assert(
     fc.property(fc.array(arbSortableIssue(), { minLength: 2, maxLength: 20 }), (issues) => {
       const sorted = sortForDispatch(issues);

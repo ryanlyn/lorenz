@@ -152,7 +152,7 @@ test("runAgentAttempt respects abort signal and stops executor mid-turn", async 
 // executorFor
 // ---------------------------------------------------------------------------
 
-test("executorFor selects codex executor for codex backend profile", async () => {
+test("runAgentAttempt invokes executorFactory with resolved settings and reports agentKind from settings", async () => {
   const issue = fakeIssue();
   const settings = fakeSettings();
   let factoryCalledWith: Settings | null = null;
@@ -169,23 +169,34 @@ test("executorFor selects codex executor for codex backend profile", async () =>
     }),
   });
 
+  // Verify executorFactory received the correct settings including agent kind
   assert.ok(factoryCalledWith);
+  assert.equal(factoryCalledWith!.agent.kind, "codex");
+  // Result agentKind comes from settings.agent.kind, not from executor session
   assert.equal(result.agentKind, "codex");
 });
 
-test("executorFor selects ACP executor for claude backend profile", async () => {
+test("runAgentAttempt passes claude agent kind settings to executorFactory and returns it in result", async () => {
   const issue = fakeIssue();
   const settings = fakeSettings({ agent: { ...defaultSettings().agent, kind: "claude" } });
+  let factoryCalledWith: Settings | null = null;
 
   const result = await runAgentAttempt({
     issue,
     workflow: { path: "/workflow.md", config: {}, promptTemplate: "Fix it", settings },
     settings,
     adapters: fakeAdapters({
-      executorFactory: () => fakeExecutor({ session: { agentKind: "claude" } }),
+      executorFactory: (s) => {
+        factoryCalledWith = s;
+        return fakeExecutor({ session: { agentKind: "claude" } });
+      },
     }),
   });
 
+  // Verify executorFactory received settings with claude agent kind
+  assert.ok(factoryCalledWith);
+  assert.equal(factoryCalledWith!.agent.kind, "claude");
+  // Result agentKind reflects the settings.agent.kind value
   assert.equal(result.agentKind, "claude");
 });
 

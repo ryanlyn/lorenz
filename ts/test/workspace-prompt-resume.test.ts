@@ -1,12 +1,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
-import { test } from "vitest";
+import { test, vi } from "vitest";
 import {
   buildPrompt,
   continuationPrompt,
+  createResumeStateStore,
   createWorkspaceForIssue,
-  deleteResumeState,
   parseConfig,
   readResumeState,
   removeIssueWorkspaces,
@@ -17,11 +17,41 @@ import {
   safeIdentifier,
   shellEscape,
   validateWorkspaceCwd,
-  writeResumeState,
 } from "@symphony/cli";
+import type { ResumeState } from "@symphony/resume-state";
 
 import { assert } from "./assert.js";
-import { initGitRepo, sampleIssue, tempDir, writeExecutable } from "./helpers.js";
+import { sampleIssue, tempDir, writeExecutable } from "./helpers.js";
+
+function resumeKey(workspace: string, workerHost?: string | null): string {
+  return `${workerHost ?? "local"}\0${workspace}`;
+}
+
+function createMemoryResumeStateAdapters(initial: ResumeState[] = []) {
+  const states = new Map<string, ResumeState>();
+  for (const state of initial) {
+    if (state.workspacePath) states.set(resumeKey(state.workspacePath, state.workerHost), state);
+  }
+
+  return {
+    adapters: {
+      readResumeState: async (workspace: string, workerHost?: string | null) => {
+        const state = states.get(resumeKey(workspace, workerHost));
+        return state ? ({ status: "ok", state } as const) : ({ status: "missing" } as const);
+      },
+      writeResumeState: async (
+        workspace: string,
+        state: ResumeState,
+        workerHost: string | null,
+      ) => {
+        states.set(resumeKey(workspace, workerHost), { ...state, workerHost });
+      },
+      resumeStateMatches,
+    },
+    read: (workspace: string, workerHost?: string | null) =>
+      states.get(resumeKey(workspace, workerHost)),
+  };
+}
 
 test("prompt rendering is strict and exposes ensemble context", async () => {
   const prompt = await buildPrompt(
@@ -41,7 +71,7 @@ test("prompt rendering is strict and exposes ensemble context", async () => {
 test("empty workflow prompt uses the Elixir default prompt template", async () => {
   const prompt = await buildPrompt("", { ...sampleIssue, description: null });
 
-  assert.match(prompt, /You are working on a Linear issue\./);
+  assert.match(prompt, /You are working on an issue from the configured tracker\./);
   assert.match(prompt, /Identifier: MT-1/);
   assert.match(prompt, /No description provided\./);
 });
@@ -51,7 +81,7 @@ test("continuation prompt matches the Elixir runner guidance", () => {
     continuationPrompt(2, 3),
     `Continuation guidance:
 
-- The previous agent turn completed normally, but the Linear issue is still in an active state.
+- The previous agent turn completed normally, but the issue is still in an active state.
 - This is continuation turn #2 of 3 for the current agent run.
 - Resume from the current workspace and workpad state instead of restarting from scratch.
 - The original task instructions and prior turn context are already present in this thread, so do not restate them before acting.
@@ -84,7 +114,7 @@ test("workspace identifiers preserve Elixir safe_identifier semantics", async ()
 
   const root = await tempDir("symphony-ts-workspace-empty-identifier");
   const settings = parseConfig({ workspace: { root } });
-  await assert.rejects(() => createWorkspaceForIssue(settings, ""), /workspace root/);
+  await assert.rejects(() => createWorkspaceForIssue(settings, ""), /empty identifier/);
 });
 
 test("workspace cwd validation rejects control characters", async () => {
@@ -189,45 +219,43 @@ test("remote workspace creation and removal use SSH hooks and validate remote pa
   const root = await tempDir("symphony-ts-remote-workspace");
   const trace = path.join(root, "ssh.trace");
   const remoteHome = path.join(root, "remote-home");
-  const oldPath = process.env.PATH;
 
-  try {
-    const canonicalRemoteHome = await installEvalSsh(root, trace, remoteHome);
-    const marker = path.join(root, "remote-before-remove.log");
-    const settings = parseConfig({
-      workspace: { root: "~/workspaces" },
-      worker: { ssh_hosts: ["worker-01:2200"], ssh_timeout_ms: 5_000 },
-      hooks: {
-        after_create: "echo remote-after > after_create.log",
-        before_remove: `echo remote-before > ${shellEscape(marker)}`,
-      },
-    });
+  const { canonicalRemoteHome, binDir } = await installEvalSsh(root, trace, remoteHome);
+  vi.stubEnv("PATH", `${binDir}:${process.env.PATH ?? ""}`);
 
-    const workspace = await createWorkspaceForIssue(settings, "MT-REMOTE", {
-      workerHost: "worker-01:2200",
-    });
-    assert.equal(workspace, path.join(canonicalRemoteHome, "workspaces", "MT-REMOTE"));
-    assert.equal(
-      (await fs.readFile(path.join(workspace, "after_create.log"), "utf8")).trim(),
-      "remote-after",
-    );
+  const marker = path.join(root, "remote-before-remove.log");
+  const settings = parseConfig({
+    workspace: { root: "~/workspaces" },
+    worker: { ssh_hosts: ["worker-01:2200"], ssh_timeout_ms: 5_000 },
+    hooks: {
+      after_create: "echo remote-after > after_create.log",
+      before_remove: `echo remote-before > ${shellEscape(marker)}`,
+    },
+  });
 
-    await removeRemoteWorkspace(settings, workspace, "worker-01:2200");
-    assert.equal(await fileExists(workspace), false);
-    assert.equal((await fs.readFile(marker, "utf8")).trim(), "remote-before");
+  const workspace = await createWorkspaceForIssue(settings, "MT-REMOTE", {
+    workerHost: "worker-01:2200",
+  });
+  assert.equal(workspace, path.join(canonicalRemoteHome, "workspaces", "MT-REMOTE"));
+  assert.equal(
+    (await fs.readFile(path.join(workspace, "after_create.log"), "utf8")).trim(),
+    "remote-after",
+  );
 
-    await assert.rejects(
-      () => removeRemoteWorkspace(settings, "/tmp/outside-root", "worker-01:2200"),
-      /workspace outside root/,
-    );
-    const traceText = await fs.readFile(trace, "utf8");
-    assert.match(traceText, /-T -p 2200 worker-01 bash -lc/);
-    assert.match(traceText, /printf "%s\\n" "\$HOME"/);
-    assert.match(traceText, /rm -rf/);
-  } finally {
-    if (oldPath === undefined) delete process.env.PATH;
-    else process.env.PATH = oldPath;
-  }
+  await removeRemoteWorkspace(settings, workspace, "worker-01:2200");
+  assert.equal(await fileExists(workspace), false);
+  assert.equal((await fs.readFile(marker, "utf8")).trim(), "remote-before");
+
+  await assert.rejects(
+    () => removeRemoteWorkspace(settings, "/tmp/outside-root", "worker-01:2200"),
+    /workspace outside root/,
+  );
+  const traceText = await fs.readFile(trace, "utf8");
+  assert.match(traceText, /-T -p 2200 worker-01 bash -lc/);
+  assert.match(traceText, /printf "%s\\n" "\$HOME"/);
+  assert.match(traceText, /rm -rf/);
+
+  vi.unstubAllEnvs();
 });
 
 test("agent attempts run workspace hooks at lifecycle boundaries and tolerate after_run failures", async () => {
@@ -406,7 +434,6 @@ new acp.AgentSideConnection((connection) => new FakeAgent(connection), stream);
         stall_timeout_ms: 0,
       },
     },
-    hooks: { after_create: "git init -b main >/dev/null" },
   });
   const workflow = {
     path: path.join(root, "WORKFLOW.md"),
@@ -414,18 +441,19 @@ new acp.AgentSideConnection((connection) => new FakeAgent(connection), stream);
     promptTemplate: "Issue {{ issue.identifier }}",
     settings,
   };
+  const resumeStore = createMemoryResumeStateAdapters();
 
   const result = await runAgentAttempt({
     issue: sampleIssue,
     workflow,
     fetchIssue: async () => sampleIssue,
+    adapters: resumeStore.adapters,
   });
 
-  const resume = await readResumeState(result.workspace);
+  const resume = resumeStore.read(result.workspace);
   assert.equal(result.turnCount, 2);
   assert.equal(result.resumeId, "claude-session-2");
-  assert.equal(resume.status, "ok");
-  assert.equal(resume.status === "ok" && resume.state.resumeId, "claude-session-2");
+  assert.equal(resume?.resumeId, "claude-session-2");
 });
 
 test("remote agent attempts run hooks and persist resume state over SSH", async () => {
@@ -434,7 +462,6 @@ test("remote agent attempts run hooks and persist resume state over SSH", async 
   const remoteHome = path.join(root, "remote-home");
   const fakeCodex = path.join(root, "fake-codex.js");
   const hookLog = path.join(root, "remote-hooks.log");
-  const oldPath = process.env.PATH;
 
   await writeExecutable(
     fakeCodex,
@@ -453,90 +480,89 @@ rl.on("line", (line) => {
 `,
   );
 
-  try {
-    const canonicalRemoteHome = await installEvalSsh(root, trace, remoteHome);
-    const settings = parseConfig({
-      workspace: { root: "~/workspaces" },
-      worker: { ssh_hosts: ["worker-01:2200"], ssh_timeout_ms: 5_000 },
-      hooks: {
-        after_create: `git init -q && echo after_create >> ${shellEscape(hookLog)}`,
-        before_run: `echo before_run >> ${shellEscape(hookLog)}`,
-        after_run: `echo after_run >> ${shellEscape(hookLog)}`,
-      },
-      codex: { command: `${fakeCodex} app-server`, turn_timeout_ms: 5_000 },
-      agent: { max_turns: 1 },
-    });
-    const workflow = {
-      path: path.join(root, "WORKFLOW.md"),
-      config: {},
-      promptTemplate: "Issue {{ issue.identifier }}",
-      settings,
-    };
+  const { canonicalRemoteHome, binDir } = await installEvalSsh(root, trace, remoteHome);
+  vi.stubEnv("PATH", `${binDir}:${process.env.PATH ?? ""}`);
 
-    const result = await runAgentAttempt({
-      issue: sampleIssue,
-      workflow,
-      workerHost: "worker-01:2200",
-    });
+  const settings = parseConfig({
+    workspace: { root: "~/workspaces" },
+    worker: { ssh_hosts: ["worker-01:2200"], ssh_timeout_ms: 5_000 },
+    hooks: {
+      after_create: `echo after_create >> ${shellEscape(hookLog)}`,
+      before_run: `echo before_run >> ${shellEscape(hookLog)}`,
+      after_run: `echo after_run >> ${shellEscape(hookLog)}`,
+    },
+    codex: { command: `${fakeCodex} app-server`, turn_timeout_ms: 5_000 },
+    agent: { max_turns: 1 },
+  });
+  const workflow = {
+    path: path.join(root, "WORKFLOW.md"),
+    config: {},
+    promptTemplate: "Issue {{ issue.identifier }}",
+    settings,
+  };
+  const resumeStore = createMemoryResumeStateAdapters();
 
-    assert.equal(
-      result.workspace,
-      path.join(canonicalRemoteHome, "workspaces", sampleIssue.identifier),
-    );
-    assert.equal(result.turnCount, 1);
-    assert.deepEqual((await fs.readFile(hookLog, "utf8")).trim().split("\n"), [
-      "after_create",
-      "before_run",
-      "after_run",
-    ]);
+  const result = await runAgentAttempt({
+    issue: sampleIssue,
+    workflow,
+    workerHost: "worker-01:2200",
+    adapters: resumeStore.adapters,
+  });
 
-    const resume = await readResumeState(result.workspace, "worker-01:2200");
-    assert.equal(resume.status, "ok");
-    assert.equal(resume.status === "ok" && resume.state.workerHost, "worker-01:2200");
-    assert.equal(
-      resume.status === "ok" &&
-        resumeStateMatches(resume.state, {
-          agentKind: "codex",
-          issue: sampleIssue,
-          workspacePath: result.workspace,
-          workerHost: "worker-01:2200",
-        }),
-      true,
-    );
+  assert.equal(
+    result.workspace,
+    path.join(canonicalRemoteHome, "workspaces", sampleIssue.identifier),
+  );
+  assert.equal(result.turnCount, 1);
+  assert.deepEqual((await fs.readFile(hookLog, "utf8")).trim().split("\n"), [
+    "after_create",
+    "before_run",
+    "after_run",
+  ]);
 
-    const traceText = await fs.readFile(trace, "utf8");
-    assert.match(traceText, /git -C/);
-    assert.match(traceText, /symphony\/resume.json/);
-  } finally {
-    if (oldPath === undefined) delete process.env.PATH;
-    else process.env.PATH = oldPath;
-  }
+  const resume = resumeStore.read(result.workspace, "worker-01:2200");
+  assert.equal(resume?.workerHost, "worker-01:2200");
+  assert.equal(
+    Boolean(
+      resume &&
+      resumeStateMatches(resume, {
+        agentKind: "codex",
+        issue: sampleIssue,
+        workspacePath: result.workspace,
+        workerHost: "worker-01:2200",
+      }),
+    ),
+    true,
+  );
+
+  const traceText = await fs.readFile(trace, "utf8");
+  assert.match(traceText, /after_create/);
+  assert.match(traceText, /before_run/);
+  assert.match(traceText, /after_run/);
+
+  vi.unstubAllEnvs();
 });
 
 test("remote resume-state reads honor the configured SSH timeout", async () => {
   const root = await tempDir("symphony-ts-remote-resume-timeout");
   const bin = path.join(root, "bin");
-  const oldPath = process.env.PATH;
 
-  try {
-    await fs.mkdir(bin, { recursive: true });
-    await writeExecutable(
-      path.join(bin, "ssh"),
-      `#!/bin/sh
+  await fs.mkdir(bin, { recursive: true });
+  await writeExecutable(
+    path.join(bin, "ssh"),
+    `#!/bin/sh
 sleep 1
 `,
-    );
-    process.env.PATH = `${bin}:${process.env.PATH ?? ""}`;
+  );
+  vi.stubEnv("PATH", `${bin}:${process.env.PATH ?? ""}`);
 
-    const startedAt = Date.now();
-    const result = await readResumeState("/remote/workspace", "worker-01:2200", 20);
+  const startedAt = Date.now();
+  const result = await readResumeState("/remote/workspace", "worker-01:2200", 20);
 
-    assert.equal(result.status, "unavailable");
-    assert.ok(Date.now() - startedAt < 500);
-  } finally {
-    if (oldPath === undefined) delete process.env.PATH;
-    else process.env.PATH = oldPath;
-  }
+  assert.equal(result.status, "unavailable");
+  assert.ok(Date.now() - startedAt < 500);
+
+  vi.unstubAllEnvs();
 });
 
 test("agent attempts warn and skip invalid resume state files", async () => {
@@ -562,7 +588,6 @@ rl.on("line", (line) => {
   );
   const settings = parseConfig({
     workspace: { root: workspaceRoot },
-    hooks: { after_create: "git init -q" },
     codex: { command: `${fakeCodex} app-server`, turn_timeout_ms: 5_000 },
     agent: { max_turns: 1 },
   });
@@ -572,16 +597,18 @@ rl.on("line", (line) => {
     promptTemplate: "Issue {{ issue.identifier }}",
     settings,
   };
-  const workspace = await createWorkspaceForIssue(settings, sampleIssue);
-  const resumePath = path.join(workspace, ".git", "symphony", "resume.json");
-  await fs.mkdir(path.dirname(resumePath), { recursive: true });
-  await fs.writeFile(resumePath, "{not-json");
   const updates: string[] = [];
 
   const result = await runAgentAttempt({
     issue: sampleIssue,
     workflow,
     onUpdate: (update) => updates.push(`${update.type}:${String(update.message ?? "")}`),
+    adapters: {
+      readResumeState: async () =>
+        ({ status: "error", reason: "resume_state_decode_failed" }) as const,
+      writeResumeState: async () => {},
+      resumeStateMatches,
+    },
   });
 
   assert.equal(result.turnCount, 1);
@@ -614,7 +641,6 @@ rl.on("line", (line) => {
 
   const settings = parseConfig({
     workspace: { root: workspaceRoot },
-    hooks: { after_create: "git init -q" },
     codex: { command: `${fakeCodex} app-server`, stall_timeout_ms: 30, turn_timeout_ms: 50 },
     agent: { max_turns: 1 },
   });
@@ -625,27 +651,31 @@ rl.on("line", (line) => {
     settings,
   };
   const workspace = await createWorkspaceForIssue(settings, sampleIssue);
-  await writeResumeState(workspace, {
-    agentKind: "codex",
-    resumeId: "thread-stale",
-    issueId: sampleIssue.id,
-    issueIdentifier: sampleIssue.identifier,
-    issueState: sampleIssue.state,
-    workspacePath: workspace,
-  });
+  const resumeStore = createMemoryResumeStateAdapters([
+    {
+      agentKind: "codex",
+      resumeId: "thread-stale",
+      issueId: sampleIssue.id,
+      issueIdentifier: sampleIssue.identifier,
+      issueState: sampleIssue.state,
+      workspacePath: workspace,
+    },
+  ]);
 
   await assert.rejects(
-    () => runAgentAttempt({ issue: sampleIssue, workflow }),
+    () => runAgentAttempt({ issue: sampleIssue, workflow, adapters: resumeStore.adapters }),
     /codex turn timed out/,
   );
-  assert.equal((await readResumeState(workspace)).status, "ok");
+  assert.equal(resumeStore.read(workspace)?.resumeId, "thread-stale");
 });
 
 test("resume state reads generic agent/session_id shape and matches issue/workspace identity", async () => {
   const workspace = await tempDir("symphony-ts-resume");
-  await initGitRepo(workspace);
+  const gitDir = path.join(workspace, ".git");
+  await fs.mkdir(gitDir, { recursive: true });
+  const store = createResumeStateStore({ resolveGitDir: async () => gitDir });
 
-  await writeResumeState(workspace, {
+  await store.write(workspace, {
     agentKind: "codex",
     resumeId: "thread-1",
     issueId: sampleIssue.id,
@@ -654,7 +684,7 @@ test("resume state reads generic agent/session_id shape and matches issue/worksp
     workspacePath: workspace,
   });
 
-  const result = await readResumeState(workspace);
+  const result = await store.read(workspace);
   assert.equal(result.status, "ok");
   assert.equal(result.status === "ok" && result.state.agentKind, "codex");
   const resumePath = path.join(workspace, ".git", "symphony", "resume.json");
@@ -688,7 +718,7 @@ test("resume state reads generic agent/session_id shape and matches issue/worksp
   );
 
   await assert.rejects(
-    () => writeResumeState(workspace, { agentKind: "" as "codex", resumeId: "bad" }),
+    () => store.write(workspace, { agentKind: "" as "codex", resumeId: "bad" }),
     /invalid_resume_state/,
   );
 
@@ -703,13 +733,13 @@ test("resume state reads generic agent/session_id shape and matches issue/worksp
       workspace_path: workspace,
     })}\n`,
   );
-  const generic = await readResumeState(workspace);
+  const generic = await store.read(workspace);
   assert.equal(generic.status, "ok");
   assert.equal(generic.status === "ok" && generic.state.agentKind, "pi");
   assert.equal(generic.status === "ok" && generic.state.resumeId, "pi-session");
 
-  await deleteResumeState(workspace);
-  assert.equal((await readResumeState(workspace)).status, "missing");
+  await store.delete(workspace);
+  assert.equal((await store.read(workspace)).status, "missing");
 });
 
 async function fileExists(filePath: string): Promise<boolean> {
@@ -722,7 +752,11 @@ async function fileExists(filePath: string): Promise<boolean> {
   }
 }
 
-async function installEvalSsh(root: string, trace: string, remoteHome: string): Promise<string> {
+async function installEvalSsh(
+  root: string,
+  trace: string,
+  remoteHome: string,
+): Promise<{ canonicalRemoteHome: string; binDir: string }> {
   const bin = path.join(root, "bin");
   await fs.mkdir(bin, { recursive: true });
   await fs.mkdir(remoteHome, { recursive: true });
@@ -742,7 +776,6 @@ export HOME=${shellEscape(canonicalRemoteHome)}
 eval "$last_arg"
 `,
   );
-  process.env.PATH = `${bin}:${process.env.PATH ?? ""}`;
   await fs.writeFile(trace, "");
-  return canonicalRemoteHome;
+  return { canonicalRemoteHome, binDir: bin };
 }

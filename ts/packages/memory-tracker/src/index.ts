@@ -1,5 +1,5 @@
 import { normalizeIssue } from "@symphony/issue";
-import type { Issue, RuntimeTrackerClient } from "@symphony/domain";
+import { ISSUE_STATE_TYPES, type Issue, type RuntimeTrackerClient } from "@symphony/domain";
 
 export class MemoryTrackerClient implements RuntimeTrackerClient {
   private readonly issues: Issue[];
@@ -19,6 +19,13 @@ export class MemoryTrackerClient implements RuntimeTrackerClient {
   async fetchIssuesByIds(ids: string[]): Promise<Issue[]> {
     const wanted = new Set(ids);
     return Promise.resolve(this.issues.filter((issue) => wanted.has(issue.id)).map(cloneIssue));
+  }
+
+  updateIssue(id: string, fields: Partial<Pick<Issue, "state" | "stateType">>): void {
+    const issue = this.issues.find((i) => i.id === id);
+    if (!issue) return;
+    if (fields.state !== undefined) issue.state = fields.state;
+    if (fields.stateType !== undefined) issue.stateType = fields.stateType;
   }
 
   async fetchIssuesByStates(states: string[]): Promise<Issue[]> {
@@ -58,6 +65,8 @@ function isIssue(value: Issue | Record<string, unknown>): value is Issue {
     typeof value.identifier === "string" &&
     typeof value.title === "string" &&
     typeof value.state === "string" &&
+    typeof value.stateType === "string" &&
+    (ISSUE_STATE_TYPES as readonly string[]).includes(value.stateType) &&
     Array.isArray(value.labels) &&
     Array.isArray(value.blockers)
   );

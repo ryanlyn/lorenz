@@ -14,7 +14,7 @@ export const SESSION_UPDATE_KINDS = [
 
 export type SessionUpdateKind = (typeof SESSION_UPDATE_KINDS)[number];
 
-export type AgentKind = string;
+type AgentKind = string;
 
 export interface UsageTotals {
   inputTokens: number;
@@ -29,7 +29,7 @@ export interface SymphonyMeta {
   usage?: Partial<UsageTotals> | undefined;
 }
 
-export interface SessionUpdateBase {
+interface SessionUpdateBase {
   kind: SessionUpdateKind;
   sessionId?: string | null | undefined;
   agentKind?: AgentKind | undefined;

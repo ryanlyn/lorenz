@@ -34,7 +34,7 @@ export async function startClaudeMcpServer(
   return startHonoServer(app, options);
 }
 
-export function mountClaudeMcp(app: Hono, settings: Settings): void {
+function mountClaudeMcp(app: Hono, settings: Settings): void {
   app.use("/claude-mcp", async (c, next) => {
     if (c.req.method !== "POST") {
       await next();
@@ -134,7 +134,7 @@ async function claudeMcpResponse(
         },
       };
     })
-    .with("tools/list", () => ({ jsonrpc: "2.0", id, result: { tools: toolSpecs() } }))
+    .with("tools/list", () => ({ jsonrpc: "2.0", id, result: { tools: toolSpecs(settings) } }))
     .with("tools/call", async () => {
       const parsed = mcpToolsCallParamsSchema.safeParse(body.params);
       if (!parsed.success) return jsonRpcError(id, -32602, "Invalid params");

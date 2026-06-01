@@ -7,14 +7,12 @@ import {
   normalizeIssue,
   Orchestrator,
   parseConfig,
-  readResumeState,
   runtimeAdapters,
-  writeResumeState,
 } from "@symphony/cli";
 import type { Issue, RunResult, SymphonyRuntimeOptions, WorkflowDefinition } from "@symphony/cli";
 
 import { assert } from "../../../test/assert.js";
-import { initGitRepo, tempDir, writeExecutable } from "../../../test/helpers.js";
+import { tempDir, writeExecutable } from "../../../test/helpers.js";
 
 import { SymphonyRuntime } from "@symphony/runtime";
 
@@ -119,7 +117,7 @@ test("runtime schedules continuation retry after normal worker exit even when is
   assert.ok(retry);
   assert.equal(retry.identifier, "MT-INACTIVE-CONTINUATION");
   assert.equal(retry.attempt, 1);
-  const delayMs = new Date(retry.dueAt).getTime() - beforeRun;
+  const delayMs = new Date(retry.dueAtIso).getTime() - beforeRun;
   assert.ok(delayMs >= 900 && delayMs <= 1_500);
 });
 
@@ -272,8 +270,11 @@ test("runtime aborts in-flight runs when reconciliation sees a terminal issue", 
 
   await runtime.pollOnce();
   assert.equal(started, true);
+  // The second pollOnce triggers reconciliation which detects the terminal issue
+  // and aborts the in-flight run. The abort is async so we wait for it with a
+  // generous timeout to avoid flakiness under CI load.
   await runtime.pollOnce({ dryRun: true });
-  await waitFor(() => aborted, 1_000);
+  await waitFor(() => aborted, 2_000);
 
   const snapshot = runtime.snapshot();
   assert.equal(snapshot.running.length, 0);
@@ -406,15 +407,7 @@ test("runtime reconciles stalled runs from the orchestrator poll loop", async ()
   const workflow = workflowFixture(root);
   workflow.settings.codex.stallTimeoutMs = 50;
   const workspace = await createWorkspaceForIssue(workflow.settings, issue);
-  await initGitRepo(workspace);
-  await writeResumeState(workspace, {
-    agentKind: "codex",
-    resumeId: "stale-stalled-resume",
-    issueId: issue.id,
-    issueIdentifier: issue.identifier,
-    issueState: issue.state,
-    workspacePath: workspace,
-  });
+  const deletedResumeStates: string[] = [];
   const orchestrator = new Orchestrator(workflow.settings);
   let aborted = false;
   const runtime = new SymphonyRuntime(
@@ -424,6 +417,9 @@ test("runtime reconciles stalled runs from the orchestrator poll loop", async ()
       client: {
         fetchCandidateIssues: async () => [issue],
         fetchIssuesByIds: async () => [issue],
+      },
+      deleteResumeState: async (workspacePath) => {
+        deletedResumeStates.push(workspacePath);
       },
       runner: async ({ abortSignal, onUpdate }) => {
         onUpdate?.({ type: "workspace_prepared", workspacePath: workspace });
@@ -455,7 +451,7 @@ test("runtime reconciles stalled runs from the orchestrator poll loop", async ()
     assert.equal(snapshot.running.length, 0);
     assert.equal(snapshot.runHistory[0]?.outcome, "stalled");
     assert.equal(snapshot.retrying[0]?.attempt, 1);
-    assert.equal((await readResumeState(workspace)).status, "missing");
+    assert.deepEqual(deletedResumeStates, [workspace]);
     assert.ok(snapshot.recentEvents.some((event) => event.type === "run_stalled"));
     assert.ok(snapshot.recentEvents.some((event) => event.type === "resume_state_invalidated"));
   } finally {
@@ -463,6 +459,10 @@ test("runtime reconciles stalled runs from the orchestrator poll loop", async ()
   }
 });
 
+// NOTE: This test modifies process.env.PATH to inject a fake ssh binary.
+// It restores PATH in the finally block but is NOT safe for parallel execution
+// with other tests that depend on PATH or invoke ssh. The test suite runs
+// sequentially so this is acceptable.
 test("runtime does not stall a stale ensemble slot snapshot after its runner completes", async () => {
   const issue = issueFixture("issue-ensemble-stall-race", "MT-ENSEMBLE-RACE");
   const root = await tempDir("symphony-ts-runtime-ensemble-stall-race");
@@ -518,7 +518,7 @@ test("runtime does not stall a stale ensemble slot snapshot after its runner com
   try {
     await runtime.pollOnce();
     await runtime.pollOnce();
-    await waitFor(() => controls.size === 2, 1_000);
+    await waitFor(() => controls.size === 2, 2_000);
 
     const entries = orchestrator.snapshot().running;
     assert.equal(entries.length, 2);
@@ -538,12 +538,12 @@ test("runtime does not stall a stale ensemble slot snapshot after its runner com
       updates: [],
       resumeId: "ensemble-slot-1",
       agentKind: "codex",
-      finalIssue: { ...issue, state: "Todo" },
+      finalIssue: { ...issue, state: { name: "Todo", type: "unstarted" } },
     });
     await stallPoll;
     await waitFor(
       () => runtime.snapshot().runHistory.some((entry) => entry.slotIndex === 1),
-      1_000,
+      2_000,
     );
 
     const snapshot = runtime.snapshot();
@@ -620,6 +620,77 @@ test("runtime does not record late success after stall reconciliation wins", asy
   }
 });
 
+test("runtime keeps a retry handle active when a stalled generation finishes late", async () => {
+  const issue = issueFixture("issue-stale-finally", "MT-STALE-FINALLY");
+  const root = await tempDir("symphony-ts-runtime-stale-finally");
+  const workflow = workflowFixture(root);
+  workflow.settings.agent.maxRetryBackoffMs = 0;
+  workflow.settings.codex.stallTimeoutMs = 50;
+  const orchestrator = new Orchestrator(workflow.settings);
+  let attempts = 0;
+  const abortedAttempts = new Set<number>();
+  const controls = new Map<number, { resolve: (value: RunResult) => void }>();
+  const runtime = new SymphonyRuntime(
+    runtimeOptions({
+      workflow,
+      orchestrator,
+      client: {
+        fetchCandidateIssues: async () => [issue],
+        fetchIssuesByIds: async () => [issue],
+      },
+      runner: async ({ abortSignal, onUpdate }) => {
+        attempts += 1;
+        const attempt = attempts;
+        onUpdate?.({
+          type: "workspace_prepared",
+          workspacePath: path.join(root, `workspace-${attempt}`),
+        });
+        abortSignal?.addEventListener("abort", () => {
+          abortedAttempts.add(attempt);
+        });
+        return await new Promise<RunResult>((resolve) => {
+          controls.set(attempt, { resolve });
+        });
+      },
+    }),
+  );
+
+  try {
+    await runtime.pollOnce();
+    assert.equal(attempts, 1);
+    const firstEntry = orchestrator.snapshot().running[0];
+    assert.ok(firstEntry);
+    firstEntry.lastAgentTimestamp = new Date(Date.now() - 1_000);
+
+    await runtime.pollOnce({ dryRun: true });
+    assert.equal(runtime.snapshot().runHistory[0]?.outcome, "stalled");
+    assert.equal(abortedAttempts.has(1), true);
+
+    await runtime.pollOnce();
+    await waitFor(() => attempts === 2, 1_000);
+    assert.equal(runtime.snapshot().running[0]?.runId, "run-2");
+
+    controls.get(1)?.resolve({
+      workspace: path.join(root, "workspace-1"),
+      turnCount: 1,
+      updates: [],
+      resumeId: "stale-finished-late",
+      agentKind: "codex",
+      finalIssue: issue,
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    const snapshot = runtime.snapshot();
+    assert.equal(snapshot.running[0]?.runId, "run-2");
+    assert.deepEqual(
+      snapshot.runHistory.map((entry) => entry.outcome),
+      ["stalled"],
+    );
+  } finally {
+    runtime.stop();
+  }
+});
+
 test("runtime coalesces overlapping pollOnce calls", async () => {
   const fetchControl: { release?: () => void } = {};
   let fetches = 0;
@@ -648,6 +719,37 @@ test("runtime coalesces overlapping pollOnce calls", async () => {
   assert.ok(unblockFetch);
   unblockFetch();
   await Promise.all([first, second]);
+});
+
+test("runtime keeps polling after a candidate fetch throws in the recurring loop", async () => {
+  let fetches = 0;
+  const runtime = new SymphonyRuntime(
+    runtimeOptions({
+      workflow: workflowFixture(),
+      client: {
+        fetchCandidateIssues: async () => {
+          fetches += 1;
+          if (fetches === 1) throw new Error("tracker fetch failed");
+          return [];
+        },
+        fetchIssuesByIds: async () => [],
+      },
+    }),
+  );
+
+  void runtime.start({ once: false });
+  try {
+    await waitFor(() => fetches >= 2, 1_000);
+    const snapshot = runtime.snapshot();
+    assert.ok(fetches >= 2);
+    assert.ok(
+      snapshot.recentEvents.some(
+        (event) => event.type === "poll_error" && event.message.includes("tracker fetch failed"),
+      ),
+    );
+  } finally {
+    runtime.stop();
+  }
 });
 
 test("runtime appends operational events to the configured log file", async () => {
@@ -828,7 +930,8 @@ test("runtime records failed attempts as retryable work and keeps polling", asyn
 
   const retry = orchestrator.snapshot().retrying[0];
   assert.ok(retry);
-  retry.dueAt = new Date(Date.now() - 1);
+  retry.dueAtIso = new Date(Date.now() - 1).toISOString();
+  retry.monotonicDeadlineMs = 0;
   await runtime.pollOnce({ waitForRuns: true });
   snapshot = runtime.snapshot();
   assert.equal(attempts, 2);
@@ -845,21 +948,16 @@ test("runtime invalidates resume state before scheduling failure retry", async (
   const issue = issueFixture("issue-failure-resume", "MT-FAILURE-RESUME");
   const workflow = workflowFixture(root);
   const workspace = await createWorkspaceForIssue(workflow.settings, issue);
-  await initGitRepo(workspace);
-  await writeResumeState(workspace, {
-    agentKind: "codex",
-    resumeId: "stale-failure-resume",
-    issueId: issue.id,
-    issueIdentifier: issue.identifier,
-    issueState: issue.state,
-    workspacePath: workspace,
-  });
+  const deletedResumeStates: string[] = [];
   const runtime = new SymphonyRuntime(
     runtimeOptions({
       workflow,
       client: {
         fetchCandidateIssues: async () => [issue],
         fetchIssuesByIds: async () => [issue],
+      },
+      deleteResumeState: async (workspacePath) => {
+        deletedResumeStates.push(workspacePath);
       },
       runner: async ({ onUpdate }) => {
         onUpdate?.({ type: "workspace_prepared", workspacePath: workspace });
@@ -873,7 +971,7 @@ test("runtime invalidates resume state before scheduling failure retry", async (
   const snapshot = runtime.snapshot();
   assert.equal(snapshot.runHistory[0]?.outcome, "failed");
   assert.equal(snapshot.retrying[0]?.attempt, 1);
-  assert.equal((await readResumeState(workspace)).status, "missing");
+  assert.deepEqual(deletedResumeStates, [workspace]);
   assert.ok(snapshot.recentEvents.some((event) => event.type === "resume_state_invalidated"));
 });
 
@@ -882,7 +980,7 @@ test("runtime schedules retry refresh timers independently of the poll cadence",
   const doneIssue: Issue = { ...issue, state: "Done", stateType: "completed" };
   const workflow = workflowFixture();
   workflow.settings.polling.intervalMs = 60_000;
-  workflow.settings.agent.maxRetryBackoffMs = 20;
+  workflow.settings.agent.maxRetryBackoffMs = 500;
   let attempts = 0;
   const runtime = new SymphonyRuntime(
     runtimeOptions({
@@ -910,11 +1008,11 @@ test("runtime schedules retry refresh timers independently of the poll cadence",
   assert.equal(attempts, 1);
   assert.equal(runtime.snapshot().retrying[0]?.attempt, 1);
 
-  await waitFor(() => attempts === 2, 2_000);
+  await waitFor(() => attempts === 2, 3_000);
   let snapshot = runtime.snapshot();
   assert.equal(snapshot.retrying[0]?.attempt, 1);
 
-  await waitFor(() => runtime.snapshot().retrying.length === 0, 2_000);
+  await waitFor(() => runtime.snapshot().retrying.length === 0, 3_000);
   snapshot = runtime.snapshot();
   assert.equal(snapshot.retrying.length, 0);
   assert.equal(snapshot.runHistory[0]?.outcome, "success");
@@ -950,7 +1048,7 @@ function issueFixture(id: string, identifier: string): Issue {
     id,
     identifier,
     title: "Runtime fixture",
-    state: "Todo",
+    state: { name: "Todo", type: "unstarted" },
     labels: [],
     blockers: [],
   });

@@ -1,4 +1,4 @@
-import { test } from "vitest";
+import { test, vi } from "vitest";
 import {
   issueMcpToken,
   Orchestrator,
@@ -21,7 +21,7 @@ test("observability HTTP API exposes Elixir-shaped state, issue, runs, refresh, 
     id: "issue-http",
     identifier: "MT-HTTP",
     title: "HTTP visibility",
-    state: "In Progress",
+    state: { name: "In Progress", type: "started" },
     labels: [],
     blockers: [],
   });
@@ -44,7 +44,11 @@ test("observability HTTP API exposes Elixir-shaped state, issue, runs, refresh, 
       fetchIssuesByIds: async () => [],
     },
   });
-  const server = await startObservabilityServer(runtime, { host: "127.0.0.1", port: 0 });
+  const server = await startObservabilityServer(runtime, {
+    host: "127.0.0.1",
+    port: 0,
+    staticDir: "/tmp/nonexistent-dashboard-dist",
+  });
 
   try {
     const state = await getJson(server.url("/api/v1/state"));
@@ -62,14 +66,13 @@ test("observability HTTP API exposes Elixir-shaped state, issue, runs, refresh, 
     assert.equal(runs.runs[0].issue_identifier, "MT-HTTP");
     assert.equal(runs.runs[0].outcome, "running");
 
-    const dashboard = await getText(server.url("/"));
-    assert.match(dashboard, /Symphony Operations Dashboard/);
-    assert.match(dashboard, /Running Sessions/);
-    assert.match(dashboard, /Retry Queue/);
-    assert.match(dashboard, /Dispatch Blocks/);
-    assert.match(dashboard, /id="connection">live/);
-    assert.match(dashboard, /EventSource\('\/api\/v1\/events'\)/);
-    assert.match(dashboard, /MT-HTTP/);
+    const dashboard = await getJson(server.url("/"), 503);
+    assert.deepEqual(dashboard, {
+      error: {
+        code: "dashboard_not_built",
+        message: "Dashboard assets not found. Run: pnpm dashboard:build",
+      },
+    });
 
     const events = await getEventStream(server.url("/api/v1/events"));
     assert.match(events, /event: state/);
@@ -144,6 +147,7 @@ test("observability HTTP API matches Elixir snapshot timeout and unavailable bra
   const unavailable = await startObservabilityServer(fakeRuntime("snapshot_unavailable"), {
     host: "127.0.0.1",
     port: 0,
+    staticDir: "/tmp/nonexistent-dashboard-dist",
   });
   try {
     const state = await getJson(unavailable.url("/api/v1/state"));
@@ -163,8 +167,13 @@ test("observability HTTP API matches Elixir snapshot timeout and unavailable bra
       error: { code: "orchestrator_unavailable", message: "Orchestrator is unavailable" },
     });
 
-    const html = await getText(unavailable.url("/"));
-    assert.match(html, /snapshot_unavailable/);
+    const dashboard = await getJson(unavailable.url("/"), 503);
+    assert.deepEqual(dashboard, {
+      error: {
+        code: "dashboard_not_built",
+        message: "Dashboard assets not found. Run: pnpm dashboard:build",
+      },
+    });
   } finally {
     await unavailable.stop();
   }
@@ -197,16 +206,19 @@ test("Claude MCP endpoint authorizes bearer tokens and executes Linear tools", a
   const server = await startObservabilityServer(runtime, { host: "127.0.0.1", port: 0 });
   const token = issueMcpToken();
   const originalFetch = globalThis.fetch;
-  globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+  const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation((async (
+    url: string | URL | Request,
+    init?: RequestInit,
+  ) => {
     const target = typeof url === "string" ? url : url instanceof URL ? url.toString() : url.url;
-    if (!target.includes("api.linear.app")) return originalFetch(url as any, init);
+    if (!target.includes("api.linear.app")) return originalFetch(url, init);
     const body = JSON.parse(String(init?.body)) as { query: string };
     assert.match(body.query, /viewer/);
     return new Response(JSON.stringify({ data: { viewer: { id: "viewer-1" } } }), {
       status: 200,
       headers: { "content-type": "application/json" },
     });
-  }) as typeof fetch;
+  }) as typeof fetch);
 
   try {
     const initialize = await postMcp(
@@ -279,7 +291,7 @@ test("Claude MCP endpoint authorizes bearer tokens and executes Linear tools", a
     assert.equal(revoked.error.code, "unauthorized");
   } finally {
     revokeMcpToken(token);
-    globalThis.fetch = originalFetch;
+    fetchSpy.mockRestore();
     await server.stop();
   }
 });
@@ -343,13 +355,6 @@ async function postRawMcp(
   assert.equal(response.status, expectedStatus);
   assert.equal(response.headers.get("content-type"), "application/json; charset=utf-8");
   return response.json();
-}
-
-async function getText(url: string, expectedStatus = 200): Promise<string> {
-  const response = await fetch(url);
-  assert.equal(response.status, expectedStatus);
-  assert.equal(response.headers.get("content-type"), "text/html; charset=utf-8");
-  return response.text();
 }
 
 async function getEventStream(url: string): Promise<string> {

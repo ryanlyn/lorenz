@@ -1,8 +1,10 @@
 import {
   ISSUE_STATE_TYPES,
+  PRIORITY_VALUES,
   type Issue,
   type IssueRef,
   type IssueStateType,
+  type Priority,
 } from "@symphony/domain";
 
 export function normalizeIssue(input: Record<string, unknown>, assignee?: string): Issue {
@@ -13,8 +15,10 @@ export function normalizeIssue(input: Record<string, unknown>, assignee?: string
     stringFromPath(input, ["state", "name"]) ??
     optionalString(input.state ?? input.state_name ?? input.stateName);
   if (state === null || state.trim() === "") throw new Error("issue.state is required");
-  const stateType =
+  const rawStateType =
     stringFromPath(input, ["state", "type"]) ?? optionalString(input.state_type ?? input.stateType);
+  const stateType = normalizeStateType(rawStateType);
+  if (stateType === null) throw new Error("issue.stateType is required");
   const assigneeId =
     stringFromPath(input, ["assignee", "id"]) ??
     optionalString(input.assignee_id ?? input.assigneeId);
@@ -34,10 +38,10 @@ export function normalizeIssue(input: Record<string, unknown>, assignee?: string
     title,
     description: optionalString(input.description),
     state,
-    stateType: normalizeStateType(stateType),
+    stateType,
     branchName: optionalString(input.branchName ?? input.branch_name),
     url: optionalString(input.url),
-    priority: numberOrNull(input.priority),
+    priority: priorityOrNull(input.priority),
     createdAt: optionalString(input.created_at ?? input.createdAt),
     updatedAt: optionalString(input.updated_at ?? input.updatedAt),
     labels,
@@ -46,6 +50,21 @@ export function normalizeIssue(input: Record<string, unknown>, assignee?: string
     assignedToWorker,
     raw: input,
   };
+}
+
+const DEFAULT_STATE_TYPES: Record<string, IssueStateType> = {
+  todo: "unstarted",
+  "in progress": "started",
+  done: "completed",
+  cancelled: "canceled",
+  canceled: "canceled",
+  backlog: "backlog",
+  triage: "triage",
+};
+
+/** Best-effort category for a free-form workflow state name; null when unknown. */
+export function defaultStateType(name: string): IssueStateType | null {
+  return DEFAULT_STATE_TYPES[name.trim().toLowerCase()] ?? null;
 }
 
 export function ensembleSize(issue: Issue): number | null {
@@ -130,8 +149,13 @@ function normalizeStateType(value: string | null): IssueStateType | null {
   return isOneOf(normalized, ISSUE_STATE_TYPES) ? normalized : null;
 }
 
-function numberOrNull(value: unknown): number | null {
-  if (typeof value === "number" && Number.isInteger(value)) return value;
+function priorityOrNull(value: unknown): Priority | null {
+  if (
+    typeof value === "number" &&
+    Number.isInteger(value) &&
+    (PRIORITY_VALUES as readonly number[]).includes(value)
+  )
+    return value as Priority;
   return null;
 }
 

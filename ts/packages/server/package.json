@@ -11,6 +11,7 @@
   "dependencies": {
     "@agentclientprotocol/sdk": "^0.21.0",
     "@hono/node-server": "^1.19.14",
+    "@hono/node-ws": "^1.1.1",
     "acpx": "^0.7.0",
     "commander": "^14.0.3",
     "execa": "^9.6.1",
@@ -27,6 +28,7 @@
     "@symphony/mcp": "workspace:*",
     "@symphony/presenter": "workspace:*",
     "@symphony/runtime-events": "workspace:*",
-    "@symphony/domain": "workspace:*"
+    "@symphony/domain": "workspace:*",
+    "@symphony/traceviz-server": "workspace:*"
   }
 }

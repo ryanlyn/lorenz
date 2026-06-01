@@ -12,7 +12,7 @@ const arbPartialUpdate = () =>
     totalTokens: fc.option(fc.integer({ min: -100, max: 100_000 }), { nil: undefined }),
   });
 
-test("mergeMonotonicUsage — entryTotals are always non-negative", () => {
+test("INVARIANT: When token counters are updated, entryTotals SHALL always be non-negative", () => {
   fc.assert(
     fc.property(
       arbUsageTotals(),
@@ -34,7 +34,7 @@ test("mergeMonotonicUsage — entryTotals are always non-negative", () => {
   );
 });
 
-test("mergeMonotonicUsage — entryTotals never decrease from input", () => {
+test("INVARIANT: When token counters are updated, entryTotals SHALL never decrease from their input values", () => {
   fc.assert(
     fc.property(
       arbUsageTotals(),
@@ -56,7 +56,7 @@ test("mergeMonotonicUsage — entryTotals never decrease from input", () => {
   );
 });
 
-test("mergeMonotonicUsage — globalTotals never decrease from input", () => {
+test("INVARIANT: When token counters are updated, globalTotals SHALL never decrease from their input values", () => {
   fc.assert(
     fc.property(
       arbUsageTotals(),
@@ -78,7 +78,7 @@ test("mergeMonotonicUsage — globalTotals never decrease from input", () => {
   );
 });
 
-test("mergeMonotonicUsage — reportedTotals sync with entryTotals token fields", () => {
+test("INVARIANT: When token counters are updated, reportedTotals SHALL always equal entryTotals token fields", () => {
   fc.assert(
     fc.property(
       arbUsageTotals(),
@@ -100,7 +100,7 @@ test("mergeMonotonicUsage — reportedTotals sync with entryTotals token fields"
   );
 });
 
-test("mergeMonotonicUsage — secondsRunning preserved for each aggregate", () => {
+test("INVARIANT: When token counters are updated, secondsRunning SHALL be preserved unchanged for each aggregate", () => {
   fc.assert(
     fc.property(
       arbUsageTotals(),
@@ -122,7 +122,7 @@ test("mergeMonotonicUsage — secondsRunning preserved for each aggregate", () =
   );
 });
 
-test("mergeMonotonicUsage — idempotent when applied twice with same update", () => {
+test("INVARIANT: When the same update is applied twice, the result SHALL be idempotent", () => {
   fc.assert(
     fc.property(
       arbUsageTotals(),

@@ -1,7 +1,22 @@
 import { test } from "vitest";
 import { Orchestrator, normalizeIssue, parseConfig, slotKey } from "@symphony/cli";
+import type { ClockPort } from "@symphony/ports";
 
 import { assert } from "../../../test/assert.js";
+
+function fakeClock(initial = new Date()) {
+  let tick = initial.getTime();
+  const clock: ClockPort & { advance(ms: number): void } = {
+    now: () => new Date(tick),
+    monotonicMs: () => tick,
+    setTimeout: (cb, ms) => setTimeout(cb, ms),
+    clearTimeout: (h) => clearTimeout(h as ReturnType<typeof setTimeout>),
+    advance(ms: number) {
+      tick += ms;
+    },
+  };
+  return clock;
+}
 
 test("orchestrator claims ensemble slots independently and snapshots backend-neutral fields", () => {
   const settings = parseConfig({
@@ -13,7 +28,7 @@ test("orchestrator claims ensemble slots independently and snapshots backend-neu
     id: "i1",
     identifier: "MT-1",
     title: "Title",
-    state: "Todo",
+    state: { name: "Todo", type: "unstarted" },
   });
 
   const first = orchestrator.claim(issue);
@@ -45,13 +60,18 @@ test("orchestrator claims ensemble slots independently and snapshots backend-neu
 
 test("refreshRunningIssue updates the tracker state of all slots for a running issue", () => {
   const orchestrator = new Orchestrator(parseConfig({ agent: { ensemble_size: 2 } }));
-  const issue = normalizeIssue({ id: "i1", identifier: "MT-1", title: "Title", state: "Todo" });
+  const issue = normalizeIssue({
+    id: "i1",
+    identifier: "MT-1",
+    title: "Title",
+    state: { name: "Todo", type: "unstarted" },
+  });
   assert.ok(orchestrator.claim(issue));
   assert.ok(orchestrator.claim(issue));
   assert.equal(orchestrator.snapshot().running[0]?.issue.state, "Todo");
   assert.equal(orchestrator.snapshot().running[1]?.issue.state, "Todo");
 
-  orchestrator.refreshRunningIssue({ ...issue, state: "In Progress" });
+  orchestrator.refreshRunningIssue({ ...issue, state: "In Progress", stateType: "started" });
 
   assert.equal(orchestrator.snapshot().running[0]?.issue.state, "In Progress");
   assert.equal(orchestrator.snapshot().running[1]?.issue.state, "In Progress");
@@ -63,7 +83,7 @@ test("orchestrator keeps per-entry usage totals monotonic across runner correcti
     id: "usage-non-monotonic",
     identifier: "MT-USAGE",
     title: "Usage",
-    state: "Todo",
+    state: { name: "Todo", type: "unstarted" },
   });
 
   assert.ok(orchestrator.claim(issue));
@@ -97,13 +117,23 @@ test("orchestrator assigns SSH worker hosts by least loaded capacity", () => {
     agent: { max_concurrent_agents: 2 },
   });
   const orchestrator = new Orchestrator(settings);
-  const firstIssue = normalizeIssue({ id: "i1", identifier: "MT-1", title: "One", state: "Todo" });
-  const secondIssue = normalizeIssue({ id: "i2", identifier: "MT-2", title: "Two", state: "Todo" });
+  const firstIssue = normalizeIssue({
+    id: "i1",
+    identifier: "MT-1",
+    title: "One",
+    state: { name: "Todo", type: "unstarted" },
+  });
+  const secondIssue = normalizeIssue({
+    id: "i2",
+    identifier: "MT-2",
+    title: "Two",
+    state: { name: "Todo", type: "unstarted" },
+  });
   const thirdIssue = normalizeIssue({
     id: "i3",
     identifier: "MT-3",
     title: "Three",
-    state: "Todo",
+    state: { name: "Todo", type: "unstarted" },
   });
 
   assert.equal(orchestrator.claim(firstIssue)?.workerHost, "worker-a:2200");
@@ -121,13 +151,13 @@ test("orchestrator snapshots capacity-blocked dispatch candidates", () => {
     id: "running",
     identifier: "MT-RUN",
     title: "Running",
-    state: "Todo",
+    state: { name: "Todo", type: "unstarted" },
   });
   const blocked = normalizeIssue({
     id: "blocked",
     identifier: "MT-BLOCK",
     title: "Blocked",
-    state: "Todo",
+    state: { name: "Todo", type: "unstarted" },
   });
   assert.ok(globalOrchestrator.claim(running));
   assert.deepEqual(globalOrchestrator.eligibleIssues([blocked]), []);
@@ -153,13 +183,14 @@ test("orchestrator snapshots capacity-blocked dispatch candidates", () => {
 });
 
 test("orchestrator gates retry attempts until backoff is due and clears terminal retries", () => {
+  const clock = fakeClock();
   const settings = parseConfig({ agent: { max_retry_backoff_ms: 2_000 } });
-  const orchestrator = new Orchestrator(settings);
+  const orchestrator = new Orchestrator(settings, clock);
   const issue = normalizeIssue({
     id: "retry-1",
     identifier: "MT-RETRY",
     title: "Retry",
-    state: "Todo",
+    state: { name: "Todo", type: "unstarted" },
   });
   const doneIssue = normalizeIssue({ ...issue, state: "Done", stateType: "completed" });
 
@@ -167,9 +198,11 @@ test("orchestrator gates retry attempts until backoff is due and clears terminal
   orchestrator.finish(issue.id, 0, true);
   const retry = orchestrator.snapshot().retrying[0];
   assert.equal(retry?.attempt, 1);
+  // Issue will only be available for a retry after the retry backoff is due
   assert.deepEqual(orchestrator.eligibleIssues([issue]), []);
+  // Advance the clock to make sure the retry backoff is due
+  clock.advance(100_000);
 
-  retry!.dueAt = new Date(Date.now() - 1);
   assert.equal(orchestrator.eligibleIssues([issue])[0]?.identifier, "MT-RETRY");
   assert.equal(orchestrator.claim(issue)?.retryAttempt, 1);
   orchestrator.finish(issue.id, 0, true);
@@ -186,7 +219,7 @@ test("orchestrator uses Elixir retry delays for failures and active continuation
     id: "retry-delay",
     identifier: "MT-RETRY-DELAY",
     title: "Retry delay",
-    state: "Todo",
+    state: { name: "Todo", type: "unstarted" },
   });
 
   assert.ok(orchestrator.claim(issue));
@@ -195,7 +228,7 @@ test("orchestrator uses Elixir retry delays for failures and active continuation
   let retry = orchestrator.snapshot().retrying[0];
   assert.ok(retry);
   assert.equal(retry.attempt, 1);
-  assert.ok(retry.dueAt.getTime() - beforeFailure >= 9_900);
+  assert.ok(Date.parse(retry.dueAtIso) - beforeFailure >= 9_900);
 
   const continuationOrchestrator = new Orchestrator(settings);
   assert.ok(continuationOrchestrator.claim(issue));
@@ -204,20 +237,18 @@ test("orchestrator uses Elixir retry delays for failures and active continuation
   retry = continuationOrchestrator.snapshot().retrying[0];
   assert.ok(retry);
   assert.equal(retry.attempt, 1);
-  const continuationDelay = retry.dueAt.getTime() - beforeContinuation;
+  const continuationDelay = Date.parse(retry.dueAtIso) - beforeContinuation;
   assert.ok(continuationDelay >= 900 && continuationDelay <= 1_500);
 
-  retry.dueAt = new Date(Date.now() - 1);
   assert.equal(continuationOrchestrator.claim(issue)?.retryAttempt, 1);
   const beforeSecondContinuation = Date.now();
   continuationOrchestrator.finish(issue.id, 0, true, undefined, "continuation");
   retry = continuationOrchestrator.snapshot().retrying[0];
   assert.ok(retry);
   assert.equal(retry.attempt, 1);
-  const secondContinuationDelay = retry.dueAt.getTime() - beforeSecondContinuation;
+  const secondContinuationDelay = Date.parse(retry.dueAtIso) - beforeSecondContinuation;
   assert.ok(secondContinuationDelay >= 900 && secondContinuationDelay <= 1_500);
 
-  retry.dueAt = new Date(Date.now() - 1);
   assert.equal(continuationOrchestrator.claim(issue)?.retryAttempt, 1);
   const beforeFailureAfterContinuations = Date.now();
   continuationOrchestrator.finish(
@@ -230,7 +261,7 @@ test("orchestrator uses Elixir retry delays for failures and active continuation
   retry = continuationOrchestrator.snapshot().retrying[0];
   assert.ok(retry);
   assert.equal(retry.attempt, 2);
-  const failureDelay = retry.dueAt.getTime() - beforeFailureAfterContinuations;
+  const failureDelay = Date.parse(retry.dueAtIso) - beforeFailureAfterContinuations;
   assert.ok(failureDelay >= 19_900 && failureDelay <= 20_500);
 });
 
@@ -241,14 +272,15 @@ test("orchestrator retry dispatch reopens slots blocked only by stale claims", (
     id: "stale-retry",
     identifier: "MT-STALE",
     title: "Retry stale claim",
-    state: "Todo",
+    state: { name: "Todo", type: "unstarted" },
   });
   orchestrator.state.claimed.add(slotKey(issue.id, 0));
   orchestrator.state.retryAttempts.set(issue.id, {
     issueId: issue.id,
     identifier: issue.identifier,
     attempt: 1,
-    dueAt: new Date(Date.now() - 1),
+    monotonicDeadlineMs: 0,
+    dueAtIso: new Date(Date.now() - 1).toISOString(),
     error: "agent exited: boom",
   });
 
@@ -266,14 +298,15 @@ test("orchestrator retries an ensemble issue in its original slot", () => {
     id: "ensemble-retry",
     identifier: "MT-ENSEMBLE-RETRY",
     title: "Retry slot",
-    state: "Todo",
+    state: { name: "Todo", type: "unstarted" },
   });
 
   orchestrator.state.retryAttempts.set(issue.id, {
     issueId: issue.id,
     identifier: issue.identifier,
     attempt: 1,
-    dueAt: new Date(Date.now() - 1),
+    monotonicDeadlineMs: 0,
+    dueAtIso: new Date(Date.now() - 1).toISOString(),
     slotIndex: 2,
     error: "agent exited",
   });

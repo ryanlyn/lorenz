@@ -1,12 +1,17 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
-import { test } from "vitest";
+import { afterEach, test, vi } from "vitest";
 import { CodexAppServerExecutor, parseConfig, shellEscape } from "@symphony/cli";
 import type { AgentUpdate } from "@symphony/cli";
 
 import { assert } from "../../../test/assert.js";
 import { sampleIssue, tempDir, writeExecutable } from "../../../test/helpers.js";
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+  vi.unstubAllGlobals();
+});
 
 test("Codex app-server executor performs initialize, thread start, turn start, and completion", async () => {
   const root = await tempDir("symphony-ts-codex");
@@ -112,6 +117,95 @@ rl.on("line", (line) => {
   });
 });
 
+test("Codex app-server executor extracts v2 tokenUsage.total format", async () => {
+  const root = await tempDir("symphony-ts-codex-usage-v2");
+  const fake = path.join(root, "fake-codex-usage-v2.js");
+  await writeExecutable(
+    fake,
+    `#!/usr/bin/env node
+const readline = require("readline");
+const rl = readline.createInterface({ input: process.stdin });
+rl.on("line", (line) => {
+  const msg = JSON.parse(line);
+  if (msg.id && msg.method === "initialize") console.log(JSON.stringify({ id: msg.id, result: {} }));
+  if (msg.id && msg.method === "thread/start") console.log(JSON.stringify({ id: msg.id, result: { thread: { id: "thread-v2" } } }));
+  if (msg.id && msg.method === "turn/start") {
+    console.log(JSON.stringify({ id: msg.id, result: { turn: { id: "turn-v2" } } }));
+    console.log(JSON.stringify({ method: "thread/tokenUsage/updated", params: { threadId: "thread-v2", turnId: "turn-v2", tokenUsage: { total: { inputTokens: 500, outputTokens: 200, totalTokens: 700, cachedInputTokens: 50, reasoningOutputTokens: 10 }, last: { inputTokens: 100, outputTokens: 40, totalTokens: 140, cachedInputTokens: 0, reasoningOutputTokens: 0 } } } }));
+    console.log(JSON.stringify({ method: "turn/completed" }));
+  }
+});
+`,
+  );
+
+  const settings = parseConfig({
+    workspace: { root: path.dirname(root) },
+    codex: { command: `${fake} app-server`, turn_timeout_ms: 5_000 },
+  });
+  const updates: AgentUpdate[] = [];
+  const executor = new CodexAppServerExecutor();
+  const session = await executor.startSession({
+    workspace: root,
+    settings,
+    issue: sampleIssue,
+    onUpdate: (update) => updates.push(update),
+  });
+  await executor.runTurn(session, "hello", sampleIssue);
+  await session.stop();
+
+  assert.deepEqual(updates.find((update) => update.type === "usage")?.usage, {
+    inputTokens: 500,
+    outputTokens: 200,
+    totalTokens: 700,
+  });
+});
+
+test("Codex app-server executor extracts top-level usage from turn/completed", async () => {
+  const root = await tempDir("symphony-ts-codex-usage-turn-completed");
+  const fake = path.join(root, "fake-codex-usage-turn-completed.js");
+  // The current codex app-server reports per-turn token usage as a top-level
+  // `usage` field on the turn/completed message (a sibling of `params`), rather
+  // than via a separate thread/tokenUsage/updated notification. The Elixir
+  // reference reads it via `payload["usage"]`.
+  await writeExecutable(
+    fake,
+    `#!/usr/bin/env node
+const readline = require("readline");
+const rl = readline.createInterface({ input: process.stdin });
+rl.on("line", (line) => {
+  const msg = JSON.parse(line);
+  if (msg.id && msg.method === "initialize") console.log(JSON.stringify({ id: msg.id, result: {} }));
+  if (msg.id && msg.method === "thread/start") console.log(JSON.stringify({ id: msg.id, result: { thread: { id: "thread-tc" } } }));
+  if (msg.id && msg.method === "turn/start") {
+    console.log(JSON.stringify({ id: msg.id, result: { turn: { id: "turn-tc" } } }));
+    console.log(JSON.stringify({ method: "turn/completed", params: { threadId: "thread-tc", turn: { id: "turn-tc", status: "completed" } }, usage: { input_tokens: 1500, output_tokens: 300, total_tokens: 1800 } }));
+  }
+});
+`,
+  );
+
+  const settings = parseConfig({
+    workspace: { root: path.dirname(root) },
+    codex: { command: `${fake} app-server`, turn_timeout_ms: 5_000 },
+  });
+  const updates: AgentUpdate[] = [];
+  const executor = new CodexAppServerExecutor();
+  const session = await executor.startSession({
+    workspace: root,
+    settings,
+    issue: sampleIssue,
+    onUpdate: (update) => updates.push(update),
+  });
+  await executor.runTurn(session, "hello", sampleIssue);
+  await session.stop();
+
+  assert.deepEqual(updates.find((update) => update.type === "usage")?.usage, {
+    inputTokens: 1500,
+    outputTokens: 300,
+    totalTokens: 1800,
+  });
+});
+
 test("Codex app-server executor answers string-id dynamic Linear tool calls", async () => {
   const root = await tempDir("symphony-ts-codex-tool");
   const fake = path.join(root, "fake-codex-tool.js");
@@ -144,23 +238,18 @@ rl.on("line", (line) => {
     tracker: { api_key: "linear-token", project_slug: "mono" },
     codex: { command: `${fake} app-server`, turn_timeout_ms: 5_000 },
   });
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = (async () =>
-    jsonResponse({ data: { viewer: { id: "viewer-1" } } })) as typeof fetch;
-  try {
-    const executor = new CodexAppServerExecutor();
-    const session = await executor.startSession({ workspace: root, settings, issue: sampleIssue });
-    const updates = await executor.runTurn(session, "hello", sampleIssue);
-    await session.stop();
+  vi.stubGlobal("fetch", (async () =>
+    jsonResponse({ data: { viewer: { id: "viewer-1" } } })) as typeof fetch);
+  const executor = new CodexAppServerExecutor();
+  const session = await executor.startSession({ workspace: root, settings, issue: sampleIssue });
+  const updates = await executor.runTurn(session, "hello", sampleIssue);
+  await session.stop();
 
-    assert.ok(updates.some((update) => update.type === "tool_call_completed"));
-    const traceText = await fs.readFile(trace, "utf8");
-    assert.match(traceText, /"id":"tool-string-1","result":\{"success":true/);
-    assert.match(traceText, /"contentItems":/);
-    assert.match(traceText, /viewer-1/);
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
+  assert.ok(updates.some((update) => update.type === "tool_call_completed"));
+  const traceText = await fs.readFile(trace, "utf8");
+  assert.match(traceText, /"id":"tool-string-1","result":\{"success":true/);
+  assert.match(traceText, /"contentItems":/);
+  assert.match(traceText, /viewer-1/);
 });
 
 test("Codex app-server executor reports dynamic tool failures", async () => {
@@ -458,13 +547,11 @@ test("Codex app-server executor can launch through an SSH worker host", async ()
   const fakeCodex = path.join(root, "fake-codex-remote.js");
   const sshTrace = path.join(root, "ssh.trace");
   const codexTrace = path.join(root, "codex.trace");
-  const oldPath = process.env.PATH;
   await fs.mkdir(remoteWorkspace, { recursive: true });
-  try {
-    await installEvalSsh(root, sshTrace);
-    await writeExecutable(
-      fakeCodex,
-      `#!/usr/bin/env node
+  await installEvalSsh(root, sshTrace);
+  await writeExecutable(
+    fakeCodex,
+    `#!/usr/bin/env node
 const fs = require("fs");
 const readline = require("readline");
 const trace = ${JSON.stringify(codexTrace)};
@@ -480,30 +567,26 @@ rl.on("line", (line) => {
   }
 });
 `,
-    );
+  );
 
-    const settings = parseConfig({
-      workspace: { root: path.dirname(root) },
-      codex: { command: `${fakeCodex} app-server`, turn_timeout_ms: 5_000 },
-    });
-    const executor = new CodexAppServerExecutor();
-    const session = await executor.startSession({
-      workspace: remoteWorkspace,
-      workerHost: "worker-01:2200",
-      settings,
-      issue: sampleIssue,
-    });
-    await executor.runTurn(session, "hello", sampleIssue);
-    await session.stop();
+  const settings = parseConfig({
+    workspace: { root: path.dirname(root) },
+    codex: { command: `${fakeCodex} app-server`, turn_timeout_ms: 5_000 },
+  });
+  const executor = new CodexAppServerExecutor();
+  const session = await executor.startSession({
+    workspace: remoteWorkspace,
+    workerHost: "worker-01:2200",
+    settings,
+    issue: sampleIssue,
+  });
+  await executor.runTurn(session, "hello", sampleIssue);
+  await session.stop();
 
-    const sshLog = await fs.readFile(sshTrace, "utf8");
-    assert.match(sshLog, /-T -p 2200 worker-01 bash -lc/);
-    assert.match(sshLog, /remote-workspace/);
-    assert.match(await fs.readFile(codexTrace, "utf8"), /"method":"turn\/start"/);
-  } finally {
-    if (oldPath === undefined) delete process.env.PATH;
-    else process.env.PATH = oldPath;
-  }
+  const sshLog = await fs.readFile(sshTrace, "utf8");
+  assert.match(sshLog, /-T -p 2200 worker-01 bash -lc/);
+  assert.match(sshLog, /remote-workspace/);
+  assert.match(await fs.readFile(codexTrace, "utf8"), /"method":"turn\/start"/);
 });
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -532,6 +615,6 @@ fi
 eval "$last_arg"
 `,
   );
-  process.env.PATH = `${bin}:${process.env.PATH ?? ""}`;
+  vi.stubEnv("PATH", `${bin}:${process.env.PATH ?? ""}`);
   await fs.writeFile(trace, "");
 }

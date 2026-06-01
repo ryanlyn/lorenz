@@ -26,6 +26,7 @@
     "ts-pattern": "^5.9.0",
     "vscode-jsonrpc": "^8.2.1",
     "yaml": "^2.8.0",
-    "zod": "^4.4.3"
+    "zod": "^4.4.3",
+    "@symphony/domain": "workspace:*"
   }
 }

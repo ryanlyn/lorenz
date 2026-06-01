@@ -22,7 +22,9 @@ export function workspacePath(
   slotIndex = 0,
   ensembleSize = 1,
 ): string {
-  const issueRoot = path.join(root, safeIdentifier(issueIdentifier));
+  const safe = safeIdentifier(issueIdentifier);
+  if (!safe) throw new Error("empty identifier produces invalid workspace path");
+  const issueRoot = path.join(root, safe);
   return ensembleSize > 1 ? path.join(issueRoot, String(slotIndex)) : issueRoot;
 }
 
@@ -202,6 +204,7 @@ export async function validateWorkspaceCwd(
   const canonicalRoot = await fs.realpath(rootPath);
   const candidate = path.resolve(workspace);
   if (!(await exists(candidate))) throw new Error(`invalid_workspace_cwd: missing ${candidate}`);
+  await rejectFinalSymlink(candidate);
   await rejectPathSymlinksWithinRoot(canonicalRoot, candidate);
   const canonicalTarget = await fs.realpath(candidate);
   if (canonicalTarget === canonicalRoot && !sharedWorkspaceRoot(settings))

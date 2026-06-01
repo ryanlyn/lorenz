@@ -9,6 +9,7 @@ function makeIssue(overrides: Partial<Issue> & { id: string; identifier: string 
   return {
     title: "Default title",
     state: "Todo",
+    stateType: "unstarted",
     labels: [],
     blockers: [],
     ...overrides,
@@ -35,8 +36,13 @@ test("stores and retrieves issues by ID", async () => {
 
 test("filters issues by state", async () => {
   const todo = makeIssue({ id: "1", identifier: "MT-1", state: "Todo" });
-  const inProgress = makeIssue({ id: "2", identifier: "MT-2", state: "In Progress" });
-  const done = makeIssue({ id: "3", identifier: "MT-3", state: "Done" });
+  const inProgress = makeIssue({
+    id: "2",
+    identifier: "MT-2",
+    state: "In Progress",
+    stateType: "started",
+  });
+  const done = makeIssue({ id: "3", identifier: "MT-3", state: "Done", stateType: "completed" });
 
   const client = new MemoryTrackerClient([todo, inProgress, done]);
 
@@ -50,7 +56,12 @@ test("filters issues by state", async () => {
 // --- claimIssue equivalent: state filtering transitions ---
 
 test("fetchIssuesByStates matches case-insensitively (claimed state lookup)", async () => {
-  const issue = makeIssue({ id: "1", identifier: "MT-1", state: "In Progress" });
+  const issue = makeIssue({
+    id: "1",
+    identifier: "MT-1",
+    state: "In Progress",
+    stateType: "started",
+  });
 
   const client = new MemoryTrackerClient([issue]);
 
@@ -64,7 +75,12 @@ test("fetchIssuesByStates matches case-insensitively (claimed state lookup)", as
 
 test("fetchCandidateIssues returns all stored issues", async () => {
   const issueA = makeIssue({ id: "a", identifier: "MT-1", state: "Todo" });
-  const issueB = makeIssue({ id: "b", identifier: "MT-2", state: "In Progress" });
+  const issueB = makeIssue({
+    id: "b",
+    identifier: "MT-2",
+    state: "In Progress",
+    stateType: "started",
+  });
 
   const client = new MemoryTrackerClient([issueA, issueB]);
 
@@ -80,8 +96,8 @@ test("fetchCandidateIssues returns all stored issues", async () => {
 test("fetchIssuesByStates finds issues whose state matches any of the provided states", async () => {
   const issues = [
     makeIssue({ id: "1", identifier: "MT-1", state: "Todo" }),
-    makeIssue({ id: "2", identifier: "MT-2", state: "In Progress" }),
-    makeIssue({ id: "3", identifier: "MT-3", state: "Done" }),
+    makeIssue({ id: "2", identifier: "MT-2", state: "In Progress", stateType: "started" }),
+    makeIssue({ id: "3", identifier: "MT-3", state: "Done", stateType: "completed" }),
     makeIssue({ id: "4", identifier: "MT-4", state: "Todo" }),
   ];
 
@@ -139,7 +155,7 @@ test("constructor normalizes raw record objects into Issue instances", async () 
     id: "raw-1",
     identifier: "MT-99",
     title: "From raw",
-    state: { name: "Backlog" },
+    state: { name: "Backlog", type: "backlog" },
     labels: [{ name: "Feature" }],
   };
 

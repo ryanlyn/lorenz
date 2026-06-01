@@ -20,18 +20,79 @@ export interface ResumeState {
   updatedAt?: string | null | undefined;
 }
 
-export type ResumeReadResult =
+type ResumeReadResult =
   | { status: "ok"; state: ResumeState }
   | { status: "missing" }
   | { status: "unavailable" }
   | { status: "error"; reason: string };
+
+type ResolveGitDir = (
+  workspace: string,
+  workerHost?: string | null,
+  sshTimeoutMs?: number,
+) => Promise<string | null>;
+
+export interface ResumeStateStore {
+  read(
+    workspace: string,
+    workerHost?: string | null,
+    sshTimeoutMs?: number,
+  ): Promise<ResumeReadResult>;
+  write(
+    workspace: string,
+    state: ResumeState,
+    workerHost?: string | null,
+    sshTimeoutMs?: number,
+  ): Promise<void>;
+  delete(workspace: string, workerHost?: string | null, sshTimeoutMs?: number): Promise<void>;
+  path(
+    workspace: string,
+    workerHost?: string | null,
+    sshTimeoutMs?: number,
+  ): Promise<string | null>;
+}
+
+interface ResumeStateStoreOptions {
+  resolveGitDir?: ResolveGitDir | undefined;
+}
+
+export function createResumeStateStore(options: ResumeStateStoreOptions = {}): ResumeStateStore {
+  const resolveGitDir = options.resolveGitDir ?? resolveWorkspaceGitDir;
+
+  return {
+    read: async (workspace, workerHost, sshTimeoutMs) =>
+      readResumeStateWithResolver(resolveGitDir, workspace, workerHost, sshTimeoutMs),
+    write: async (workspace, state, workerHost, sshTimeoutMs) =>
+      writeResumeStateWithResolver(resolveGitDir, workspace, state, workerHost, sshTimeoutMs),
+    delete: async (workspace, workerHost, sshTimeoutMs) =>
+      deleteResumeStateWithResolver(resolveGitDir, workspace, workerHost, sshTimeoutMs),
+    path: async (workspace, workerHost, sshTimeoutMs) =>
+      resumeStatePathWithResolver(resolveGitDir, workspace, workerHost, sshTimeoutMs),
+  };
+}
+
+const defaultResumeStateStore = createResumeStateStore();
 
 export async function readResumeState(
   workspace: string,
   workerHost?: string | null,
   sshTimeoutMs?: number,
 ): Promise<ResumeReadResult> {
-  const resumePath = await resumeStatePath(workspace, workerHost, sshTimeoutMs);
+  return defaultResumeStateStore.read(workspace, workerHost, sshTimeoutMs);
+}
+
+async function readResumeStateWithResolver(
+  resolveGitDir: ResolveGitDir,
+  workspace: string,
+  workerHost?: string | null,
+  sshTimeoutMs?: number,
+): Promise<ResumeReadResult> {
+  const resumePath = await resumeStatePathWithResolver(
+    resolveGitDir,
+    workspace,
+    workerHost,
+    sshTimeoutMs,
+  );
   if (!resumePath) return { status: "unavailable" };
 
   try {
@@ -57,8 +118,23 @@ export async function writeResumeState(
   workerHost?: string | null,
   sshTimeoutMs?: number,
 ): Promise<void> {
+  return defaultResumeStateStore.write(workspace, state, workerHost, sshTimeoutMs);
+}
+
+async function writeResumeStateWithResolver(
+  resolveGitDir: ResolveGitDir,
+  workspace: string,
+  state: ResumeState,
+  workerHost?: string | null,
+  sshTimeoutMs?: number,
+): Promise<void> {
   if (!validResumeState(state)) throw new Error("invalid_resume_state");
-  const resumePath = await resumeStatePath(workspace, workerHost, sshTimeoutMs);
+  const resumePath = await resumeStatePathWithResolver(
+    resolveGitDir,
+    workspace,
+    workerHost,
+    sshTimeoutMs,
+  );
   if (!resumePath) return;
   const payload = `${JSON.stringify(encodeResumeState(state), null, 2)}\n`;
   if (workerHost) {
@@ -74,7 +150,21 @@ export async function deleteResumeState(
   workerHost?: string | null,
   sshTimeoutMs?: number,
 ): Promise<void> {
-  const resumePath = await resumeStatePath(workspace, workerHost, sshTimeoutMs);
+  return defaultResumeStateStore.delete(workspace, workerHost, sshTimeoutMs);
+}
+
+async function deleteResumeStateWithResolver(
+  resolveGitDir: ResolveGitDir,
+  workspace: string,
+  workerHost?: string | null,
+  sshTimeoutMs?: number,
+): Promise<void> {
+  const resumePath = await resumeStatePathWithResolver(
+    resolveGitDir,
+    workspace,
+    workerHost,
+    sshTimeoutMs,
+  );
   if (!resumePath) return;
   if (workerHost) {
     const result = await runSsh(workerHost, `rm -f ${shellEscape(resumePath)}`, {
@@ -88,36 +178,56 @@ export async function deleteResumeState(
   await fs.rm(resumePath, { force: true });
 }
 
-export async function resumeStatePath(
+async function resumeStatePathWithResolver(
+  resolveGitDir: ResolveGitDir,
   workspace: string,
   workerHost?: string | null,
   sshTimeoutMs?: number,
 ): Promise<string | null> {
   try {
-    if (workerHost) {
-      const result = await runSsh(
-        workerHost,
-        `git -C ${shellEscape(workspace)} rev-parse --git-dir`,
-        {
-          stderrToStdout: true,
-          timeoutMs: sshTimeoutMs,
-        },
-      );
-      if (result.status !== 0) return null;
-      const gitDir = result.stdout.trim();
-      return path.posix.join(
-        path.posix.isAbsolute(gitDir) ? gitDir : path.posix.join(workspace, gitDir),
-        "symphony",
-        "resume.json",
-      );
-    }
-    const { stdout } = await execa("git", ["-C", workspace, "rev-parse", "--git-dir"]);
-    const gitDir = stdout.trim();
-    const absoluteGitDir = path.isAbsolute(gitDir) ? gitDir : path.join(workspace, gitDir);
-    return path.join(absoluteGitDir, "symphony", "resume.json");
+    const gitDir = await resolveGitDir(workspace, workerHost, sshTimeoutMs);
+    if (!gitDir) return null;
+    return resumePathForGitDir(workspace, gitDir, workerHost);
   } catch {
     return null;
   }
+}
+
+async function resolveWorkspaceGitDir(
+  workspace: string,
+  workerHost?: string | null,
+  sshTimeoutMs?: number,
+): Promise<string | null> {
+  if (workerHost) {
+    const result = await runSsh(
+      workerHost,
+      `git -C ${shellEscape(workspace)} rev-parse --git-dir`,
+      {
+        stderrToStdout: true,
+        timeoutMs: sshTimeoutMs,
+      },
+    );
+    if (result.status !== 0) return null;
+    return result.stdout.trim();
+  }
+  const { stdout } = await execa("git", ["-C", workspace, "rev-parse", "--git-dir"]);
+  return stdout.trim();
+}
+
+function resumePathForGitDir(
+  workspace: string,
+  gitDir: string,
+  workerHost?: string | null,
+): string {
+  if (workerHost) {
+    return path.posix.join(
+      path.posix.isAbsolute(gitDir) ? gitDir : path.posix.join(workspace, gitDir),
+      "symphony",
+      "resume.json",
+    );
+  }
+  const absoluteGitDir = path.isAbsolute(gitDir) ? gitDir : path.join(workspace, gitDir);
+  return path.join(absoluteGitDir, "symphony", "resume.json");
 }
 
 async function readRemoteResumeState(

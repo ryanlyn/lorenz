@@ -86,7 +86,16 @@
       "path": "./packages/linear-tracker"
     },
     {
+      "path": "./packages/local-tracker"
+    },
+    {
       "path": "./packages/memory-tracker"
+    },
+    {
+      "path": "./packages/traceviz-emitter"
+    },
+    {
+      "path": "./packages/traceviz-server"
     },
     {
       "path": "./packages/tui"

@@ -3,7 +3,6 @@ export type {
   SessionUpdateKind,
   StopReason,
   SymphonyMeta,
-  SessionUpdateBase,
   UsageUpdate,
   TurnUpdate,
   SessionUpdate,

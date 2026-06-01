@@ -9,7 +9,7 @@ import pino, { type Logger } from "pino";
 const require = createRequire(import.meta.url);
 const buildPinoRoll = require("pino-roll") as (options: PinoRollOptions) => Promise<RollStream>;
 
-export interface LogFileOptions {
+interface LogFileOptions {
   maxBytes?: number | undefined;
   maxFiles?: number | undefined;
   now?: (() => Date) | undefined;

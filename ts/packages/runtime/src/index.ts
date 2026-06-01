@@ -17,6 +17,7 @@ import { RetryScheduler } from "@symphony/retry-scheduler";
 import { AGENT_UPDATE_TYPES } from "@symphony/domain";
 import type {
   AgentKind,
+  AgentUpdate,
   AgentUpdateType,
   DispatchBlockEntry,
   Issue,
@@ -127,7 +128,8 @@ export interface RuntimeRetryEntry {
   issueId: string;
   identifier: string;
   attempt: number;
-  dueAt: string;
+  dueAtIso: string;
+  monotonicDeadlineMs: number;
   error?: string | undefined;
   slotIndex?: number | undefined;
   workerHost?: string | null | undefined;
@@ -175,6 +177,7 @@ export interface SymphonyRuntimeOptions {
     | ((workspace: string, workerHost?: string | null, timeoutMs?: number) => Promise<void>)
     | undefined;
   appendLogEvent?: ((logFile: string, event: Record<string, unknown>) => Promise<void>) | undefined;
+  onAgentUpdate?: ((issue: Issue, update: AgentUpdate) => void) | undefined;
   now?: (() => Date) | undefined;
 }
 
@@ -186,6 +189,37 @@ export interface RuntimeStartOptions {
 export interface PollOptions {
   dryRun?: boolean | undefined;
   waitForRuns?: boolean | undefined;
+}
+
+class ActiveRunHandle {
+  readonly controller = new AbortController();
+
+  constructor(
+    readonly key: string,
+    readonly runId: string,
+    private readonly activeRuns: Map<string, ActiveRunHandle>,
+  ) {}
+
+  get signal(): AbortSignal {
+    return this.controller.signal;
+  }
+
+  get isActive(): boolean {
+    return this.activeRuns.get(this.key) === this;
+  }
+
+  abort(): void {
+    this.controller.abort();
+  }
+
+  finishExternally(): void {
+    this.abort();
+    this.release();
+  }
+
+  release(): void {
+    if (this.isActive) this.activeRuns.delete(this.key);
+  }
 }
 
 export class SymphonyRuntime {
@@ -205,9 +239,7 @@ export class SymphonyRuntime {
   private nextPollAt: string | null = null;
   private lastError: string | null = null;
   private readonly projection = new ProjectionActor();
-  private activeRunIds = new Map<string, string>();
-  private activeAbortControllers = new Map<string, AbortController>();
-  private externallyFinishedRunKeys = new Set<string>();
+  private readonly activeRuns = new Map<string, ActiveRunHandle>();
   private startupCleanupDone = false;
   private nextRunNumber = 1;
   private pollInProgress: Promise<void> | null = null;
@@ -247,7 +279,10 @@ export class SymphonyRuntime {
         lastError: this.lastError,
       },
       running: orchestration.running.map((entry) =>
-        runtimeRunningEntry(entry, this.activeRunIds.get(slotKey(entry.issue.id, entry.slotIndex))),
+        runtimeRunningEntry(
+          entry,
+          this.activeRuns.get(slotKey(entry.issue.id, entry.slotIndex))?.runId,
+        ),
       ),
       retrying: orchestration.retrying.map(runtimeRetryEntry),
       blocked: orchestration.blocked.map((entry) => ({ ...entry })),
@@ -260,8 +295,19 @@ export class SymphonyRuntime {
   async start(options: RuntimeStartOptions = {}): Promise<void> {
     this.stopped = false;
     do {
-      await this.pollOnce({ dryRun: options.dryRun, waitForRuns: options.once });
-      if (options.once) break;
+      if (options.once) {
+        await this.pollOnce({ dryRun: options.dryRun, waitForRuns: true });
+        break;
+      }
+      // A thrown poll (e.g. tracker fetchCandidateIssues rejecting) must not
+      // terminate the recurring daemon loop. pollOnceUnlocked already records a
+      // poll_error event and surfaces the error on the snapshot before rethrowing,
+      // so swallow the rejection here and continue to the next interval.
+      try {
+        await this.pollOnce({ dryRun: options.dryRun });
+      } catch {
+        // Intentionally ignored: the error is already logged as poll_error.
+      }
       await delay(this.workflow.settings.polling.intervalMs, () => this.stopped);
     } while (!this.stopped);
   }
@@ -269,14 +315,15 @@ export class SymphonyRuntime {
   stop(): void {
     this.stopped = true;
     this.appStatus = "stopping";
-    for (const controller of this.activeAbortControllers.values()) controller.abort();
-    this.activeAbortControllers.clear();
+    for (const handle of this.activeRuns.values()) handle.abort();
     this.retryScheduler.stop();
     this.emit();
   }
 
   async pollOnce(options: PollOptions = {}): Promise<void> {
-    if (this.pollInProgress) return this.pollInProgress;
+    if (this.pollInProgress) {
+      return this.pollInProgress;
+    }
     const poll = this.pollOnceUnlocked(options);
     this.pollInProgress = poll;
     try {
@@ -348,18 +395,17 @@ export class SymphonyRuntime {
     const key = slotKey(refreshed.id, claim.slotIndex);
     const runId = `run-${this.nextRunNumber}`;
     this.nextRunNumber += 1;
-    this.activeRunIds.set(key, runId);
+    const handle = new ActiveRunHandle(key, runId, this.activeRuns);
+    this.activeRuns.set(key, handle);
     this.addEvent("run_started", `${refreshed.identifier} slot=${claim.slotIndex}`);
 
-    const controller = new AbortController();
-    this.activeAbortControllers.set(key, controller);
     const run = this.runClaim(
       refreshed,
       claim.slotIndex,
       claim.agentKind,
       runId,
       claim.workerHost ?? null,
-      controller.signal,
+      handle,
     );
     this.inFlight.add(run);
     void run.finally(() => {
@@ -387,7 +433,7 @@ export class SymphonyRuntime {
     agentKind: AgentKind,
     runId: string,
     workerHost: string | null,
-    abortSignal?: AbortSignal,
+    handle: ActiveRunHandle,
   ): Promise<void> {
     const startedAt = this.now().toISOString();
     try {
@@ -399,16 +445,17 @@ export class SymphonyRuntime {
         onUpdate: (update) => {
           this.orchestrator.applyUpdate(issue.id, slotIndex, update);
           this.addEvent(update.type, `${issue.identifier} ${update.type}`);
+          this.input.onAgentUpdate?.(issue, update);
         },
         fetchIssue: async (current) => {
           const refreshed = await this.client.fetchIssuesByIds([current.id]);
           return refreshed[0] ?? current;
         },
-        abortSignal,
+        abortSignal: handle.signal,
       });
+      if (!handle.isActive) return;
       const finalIssue = result.finalIssue ?? (await this.fetchIssueOrSelf(issue));
-      const key = slotKey(issue.id, slotIndex);
-      if (this.externallyFinishedRunKeys.delete(key)) return;
+      if (!handle.isActive) return;
       const entry = this.orchestrator
         .snapshot()
         .running.find((item) => item.issue.id === issue.id && item.slotIndex === slotIndex);
@@ -441,12 +488,12 @@ export class SymphonyRuntime {
       });
       this.addEvent("run_completed", `${issue.identifier} turns=${result.turnCount}`);
     } catch (error) {
-      const key = slotKey(issue.id, slotIndex);
-      if (this.externallyFinishedRunKeys.delete(key)) return;
+      if (!handle.isActive) return;
       const entry = this.orchestrator
         .snapshot()
         .running.find((item) => item.issue.id === issue.id && item.slotIndex === slotIndex);
       await this.invalidateResumeStateForRunningEntry(entry, "failure");
+      if (!handle.isActive) return;
       this.orchestrator.finish(issue.id, slotIndex, true, errorMessage(error), "failure");
       this.syncRetryTimer(issue.id);
       this.recordHistory({
@@ -477,9 +524,7 @@ export class SymphonyRuntime {
       });
       this.addEvent("run_failed", `${issue.identifier} ${errorMessage(error)}`);
     } finally {
-      const key = slotKey(issue.id, slotIndex);
-      this.activeRunIds.delete(key);
-      this.activeAbortControllers.delete(key);
+      handle.release();
     }
   }
 
@@ -585,20 +630,16 @@ export class SymphonyRuntime {
       if (elapsedMs <= timeoutMs) continue;
 
       const key = slotKey(currentEntry.issue.id, currentEntry.slotIndex);
+      const activeHandle = this.activeRuns.get(key);
       const runId =
-        this.activeRunIds.get(key) ?? `stalled-${currentEntry.issue.id}-${currentEntry.slotIndex}`;
+        activeHandle?.runId ?? `stalled-${currentEntry.issue.id}-${currentEntry.slotIndex}`;
       const error = `agent_stalled after ${timeoutMs}ms`;
-      this.externallyFinishedRunKeys.add(key);
-      this.activeAbortControllers.get(key)?.abort();
-      this.activeAbortControllers.delete(key);
-      await this.invalidateResumeStateForRunningEntry(currentEntry, "stalled");
       const entry = this.runningEntry(snapshotEntry.issue.id, snapshotEntry.slotIndex);
-      if (!entry) {
-        if (!this.activeRunIds.has(key)) this.externallyFinishedRunKeys.delete(key);
-        continue;
-      }
+      if (!entry) continue;
       this.orchestrator.finish(entry.issue.id, entry.slotIndex, true, error, "failure");
       this.syncRetryTimer(entry.issue.id);
+      activeHandle?.finishExternally();
+      await this.invalidateResumeStateForRunningEntry(currentEntry, "stalled");
       this.recordHistory({
         id: runId,
         issueId: entry.issue.id,
@@ -655,10 +696,9 @@ export class SymphonyRuntime {
   }
 
   private abortIssueRuns(issueId: string): void {
-    for (const [key, controller] of this.activeAbortControllers.entries()) {
+    for (const [key, handle] of this.activeRuns.entries()) {
       if (!key.startsWith(`${issueId}:`)) continue;
-      controller.abort();
-      this.activeAbortControllers.delete(key);
+      handle.finishExternally();
     }
   }
 
@@ -716,7 +756,7 @@ export class SymphonyRuntime {
       if (
         !current ||
         current.attempt !== scheduled.attempt ||
-        current.dueAt.toISOString() !== scheduled.dueAt
+        current.dueAtIso !== scheduled.dueAtIso
       ) {
         return;
       }
@@ -836,7 +876,8 @@ function runtimeRetryEntry(entry: {
   issueId: string;
   identifier: string;
   attempt: number;
-  dueAt: Date;
+  dueAtIso: string;
+  monotonicDeadlineMs: number;
   error?: string | undefined;
   slotIndex?: number | undefined;
   workerHost?: string | null | undefined;
@@ -846,7 +887,8 @@ function runtimeRetryEntry(entry: {
     issueId: entry.issueId,
     identifier: entry.identifier,
     attempt: entry.attempt,
-    dueAt: entry.dueAt.toISOString(),
+    dueAtIso: entry.dueAtIso,
+    monotonicDeadlineMs: entry.monotonicDeadlineMs,
     ...(entry.error !== undefined ? { error: entry.error } : {}),
     ...(entry.slotIndex !== undefined ? { slotIndex: entry.slotIndex } : {}),
     ...(entry.workerHost !== undefined ? { workerHost: entry.workerHost } : {}),
