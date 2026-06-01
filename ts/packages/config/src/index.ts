@@ -113,6 +113,12 @@ const sandboxPolicySchema = z.record(z.string(), z.unknown()).nullable().optiona
 
 const optionalHookScript = z.string().nullable().optional();
 
+const reasoningSchema = z
+  .object({
+    summary: z.enum(["concise", "detailed", "auto"]),
+  })
+  .strict();
+
 const appServerAgentRecordSchema = z
   .object({
     executor: z.literal("appserver"),
@@ -123,6 +129,7 @@ const appServerAgentRecordSchema = z
     turnTimeoutMs: coercedTimeoutMs.optional(),
     readTimeoutMs: coercedTimeoutMs.optional(),
     stallTimeoutMs: coercedNonNegativeTimeoutMs.optional(),
+    reasoning: reasoningSchema.nullable().optional(),
   })
   .strict();
 const acpAgentRecordSchema = z
@@ -201,6 +208,7 @@ const codexRawSchema = z
     turnTimeoutMs: coercedTimeoutMs.optional(),
     readTimeoutMs: coercedTimeoutMs.optional(),
     stallTimeoutMs: coercedNonNegativeTimeoutMs.optional(),
+    reasoning: reasoningSchema.nullable().optional(),
   })
   .strict();
 const claudeRawSchema = z
@@ -357,6 +365,7 @@ export const defaultSettings = (options: DefaultSettingsOptions = {}): Settings 
     turnTimeoutMs: 3_600_000,
     readTimeoutMs: 5_000,
     stallTimeoutMs: 300_000,
+    reasoning: { summary: "concise" },
   };
   const claude: ClaudeSettings = {
     command: "claude-agent-acp",
@@ -707,6 +716,7 @@ function applyKnownAgentRecords(settings: Settings): void {
       turnTimeoutMs: codex.turnTimeoutMs,
       readTimeoutMs: codex.readTimeoutMs,
       stallTimeoutMs: codex.stallTimeoutMs,
+      reasoning: codex.reasoning ?? settings.codex.reasoning,
     };
   }
   const claude = settings.agents.claude;
@@ -743,6 +753,7 @@ function parseCodex(defaults: CodexSettings, codexRaw: CodexRaw): CodexSettings 
     turnTimeoutMs: codexRaw.turnTimeoutMs ?? defaults.turnTimeoutMs,
     readTimeoutMs: codexRaw.readTimeoutMs ?? defaults.readTimeoutMs,
     stallTimeoutMs: codexRaw.stallTimeoutMs ?? defaults.stallTimeoutMs,
+    reasoning: codexRaw.reasoning !== undefined ? codexRaw.reasoning : defaults.reasoning,
   };
 }
 
@@ -811,6 +822,7 @@ function parsePartialCodex(raw: Partial<CodexRaw>): Partial<CodexSettings> {
   if (raw.turnTimeoutMs !== undefined) next.turnTimeoutMs = raw.turnTimeoutMs;
   if (raw.readTimeoutMs !== undefined) next.readTimeoutMs = raw.readTimeoutMs;
   if (raw.stallTimeoutMs !== undefined) next.stallTimeoutMs = raw.stallTimeoutMs;
+  if (raw.reasoning !== undefined) next.reasoning = raw.reasoning ?? null;
   return next;
 }
 

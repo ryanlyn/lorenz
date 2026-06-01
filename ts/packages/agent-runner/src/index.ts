@@ -160,9 +160,23 @@ class RunController {
                 ensembleSize: size,
               })
             : continuationPrompt(turnCount + 1, runtime.agent.maxTurns);
-        await runTurnWithAbort(executor, session, prompt, issue, input.abortSignal);
+        const turnUpdates = await runTurnWithAbort(
+          executor,
+          session,
+          prompt,
+          issue,
+          input.abortSignal,
+        );
         turnCount += 1;
         await persistResumeState(input.adapters, session, runtime, issue, workspace, workerHost);
+
+        if (
+          turnCount > 1 &&
+          runtime.agents[runtime.agent.kind]?.executor === "acp" &&
+          !turnUpdates.some((u) => u.type === "tool_use_requested")
+        ) {
+          break;
+        }
 
         if (!input.fetchIssue) break;
         issue = await input.fetchIssue(issue);

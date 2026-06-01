@@ -8,7 +8,10 @@ import { TraceWatcher } from "../src/watcher.js";
 import type { DisplayEvent } from "../src/models/display-events.js";
 
 function makeTraceDir(): string {
-  const dir = path.join(tmpdir(), `traceviz-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  const dir = path.join(
+    tmpdir(),
+    `traceviz-test-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+  );
   mkdirSync(dir, { recursive: true });
   return dir;
 }
@@ -90,7 +93,10 @@ describe("TraceWatcher", () => {
       issueId: "id-2",
       issueIdentifier: "TEST-2",
       timestamp: "2026-01-01T00:00:05Z",
-      message: { method: "item/completed", params: { item: { type: "agentMessage", text: "Update" } } },
+      message: {
+        method: "item/completed",
+        params: { item: { type: "agentMessage", text: "Update" } },
+      },
     });
 
     await new Promise((r) => setTimeout(r, 150));
@@ -122,7 +128,10 @@ describe("TraceWatcher", () => {
       issueId: "id-3",
       issueIdentifier: "TEST-3",
       timestamp: "2026-01-01T00:00:05Z",
-      message: { method: "item/completed", params: { item: { type: "agentMessage", text: "Msg" } } },
+      message: {
+        method: "item/completed",
+        params: { item: { type: "agentMessage", text: "Msg" } },
+      },
     });
 
     await new Promise((r) => setTimeout(r, 150));
@@ -146,7 +155,10 @@ describe("TraceWatcher", () => {
       issueId: "id-4",
       issueIdentifier: "TEST-4",
       timestamp: "2026-01-01T00:00:01Z",
-      message: { method: "item/completed", params: { item: { type: "agentMessage", text: "Test" } } },
+      message: {
+        method: "item/completed",
+        params: { item: { type: "agentMessage", text: "Test" } },
+      },
     });
 
     watcher.start(() => {});

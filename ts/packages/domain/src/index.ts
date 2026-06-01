@@ -302,6 +302,13 @@ export interface CodexSettings {
   readTimeoutMs: number;
   /** Inactivity window (ms) before a session with no events is force-aborted as stalled. `<= 0` disables stall detection. */
   stallTimeoutMs: number;
+  /** Reasoning effort/summary configuration passed to `turn/start`. */
+  reasoning: CodexReasoning | null;
+}
+
+export interface CodexReasoning {
+  /** Summary detail level returned in reasoning items (e.g. `"concise"`, `"detailed"`, `"auto"`). */
+  summary: "concise" | "detailed" | "auto";
 }
 
 /**

@@ -2,7 +2,13 @@ import type { DisplayEvent, Stats, ToolBreakdownEntry } from "./types";
 
 export function computeStatsFromEvents(events: DisplayEvent[]): Stats {
   if (events.length === 0) {
-    return { durationMs: 0, totalEvents: 0, totalTurns: 0, tokenUsage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 }, toolBreakdown: [] };
+    return {
+      durationMs: 0,
+      totalEvents: 0,
+      totalTurns: 0,
+      tokenUsage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+      toolBreakdown: [],
+    };
   }
 
   let minTs = Infinity;
@@ -27,7 +33,10 @@ export function computeStatsFromEvents(events: DisplayEvent[]): Stats {
     }
   }
 
-  const categoryMap = new Map<string, { count: number; errorCount: number; totalDurationMs: number }>();
+  const categoryMap = new Map<
+    string,
+    { count: number; errorCount: number; totalDurationMs: number }
+  >();
   for (const event of events) {
     if (event.kind === "tool_call") {
       const existing = categoryMap.get(event.category);
@@ -47,7 +56,12 @@ export function computeStatsFromEvents(events: DisplayEvent[]): Stats {
 
   const toolBreakdown: ToolBreakdownEntry[] = [];
   for (const [category, data] of categoryMap) {
-    toolBreakdown.push({ category, count: data.count, errorCount: data.errorCount, totalDurationMs: data.totalDurationMs });
+    toolBreakdown.push({
+      category,
+      count: data.count,
+      errorCount: data.errorCount,
+      totalDurationMs: data.totalDurationMs,
+    });
   }
   toolBreakdown.sort((a, b) => b.count - a.count);
 
