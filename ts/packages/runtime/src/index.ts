@@ -374,34 +374,39 @@ export class SymphonyRuntime {
       return [];
     }
 
-    const claim = this.orchestrator.claim(refreshed);
+    const runs: Array<Promise<void>> = [];
+    let claim = this.orchestrator.claim(refreshed);
     if (!claim) {
       this.addEvent("dispatch_skipped", `${refreshed.identifier} stale_before_dispatch`);
       return [];
     }
-    const key = slotKey(refreshed.id, claim.slotIndex);
-    const runId = `run-${this.nextRunNumber}`;
-    this.nextRunNumber += 1;
-    const handle = new ActiveRunHandle(key, runId, this.activeRuns);
-    this.activeRuns.set(key, handle);
-    this.addEvent("run_started", `${refreshed.identifier} slot=${claim.slotIndex}`);
+    while (claim) {
+      const key = slotKey(refreshed.id, claim.slotIndex);
+      const runId = `run-${this.nextRunNumber}`;
+      this.nextRunNumber += 1;
+      const handle = new ActiveRunHandle(key, runId, this.activeRuns);
+      this.activeRuns.set(key, handle);
+      this.addEvent("run_started", `${refreshed.identifier} slot=${claim.slotIndex}`);
 
-    const run = this.runClaim(
-      refreshed,
-      claim.slotIndex,
-      claim.agentKind,
-      runId,
-      claim.workerHost ?? null,
-      handle,
-    );
-    this.inFlight.add(run);
-    void run.finally(() => {
-      this.inFlight.delete(run);
-      this.appStatus = this.inFlight.size > 0 ? "running" : "idle";
-      this.emit();
-    });
+      const run = this.runClaim(
+        refreshed,
+        claim.slotIndex,
+        claim.agentKind,
+        runId,
+        claim.workerHost ?? null,
+        handle,
+      );
+      this.inFlight.add(run);
+      void run.finally(() => {
+        this.inFlight.delete(run);
+        this.appStatus = this.inFlight.size > 0 ? "running" : "idle";
+        this.emit();
+      });
+      runs.push(run);
+      claim = this.orchestrator.claim(refreshed);
+    }
     this.emit();
-    return [run];
+    return runs;
   }
 
   private async fetchIssueForDispatch(issue: Issue): Promise<Issue | null> {

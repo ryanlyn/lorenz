@@ -31,34 +31,29 @@ describe("Sandbox: Orchestrator Scheduling", () => {
     expect(result.finalSnapshot.runHistory.length).toBeGreaterThanOrEqual(1);
   });
 
-  // Known bug: ensemble retry permanently degrades to effective ensemble:1.
-  // The retry keyed by issueId blocks all ensemble slots during delay.
-  test.fails(
-    "ensemble:2 claims distinct slots (both run_started events contain different slot numbers)",
-    async () => {
-      const result = await runScenario({
-        issues: [makeIssue("ens-1", "ENS-1", { labels: ["ensemble:2"] })],
-        settingsOverrides: { agent: { maxConcurrentAgents: 10 } },
-        runnerConfig: {
-          defaultBehavior: { shouldSucceed: true, turnCount: 1, latencyPerTurnMs: 0 },
-        },
-        pollTicks: 1,
-      });
+  test("ensemble:2 claims distinct slots (both run_started events contain different slot numbers)", async () => {
+    const result = await runScenario({
+      issues: [makeIssue("ens-1", "ENS-1", { labels: ["ensemble:2"] })],
+      settingsOverrides: { agent: { maxConcurrentAgents: 10 } },
+      runnerConfig: {
+        defaultBehavior: { shouldSucceed: true, turnCount: 1, latencyPerTurnMs: 0 },
+      },
+      pollTicks: 1,
+    });
 
-      expect(result.errors).toHaveLength(0);
-      const startedEvents = result.events.filter(
-        (e) => e.type === "run_started" && e.message.includes("ENS-1"),
-      );
-      expect(startedEvents.length).toBeGreaterThanOrEqual(2);
+    expect(result.errors).toHaveLength(0);
+    const startedEvents = result.events.filter(
+      (e) => e.type === "run_started" && e.message.includes("ENS-1"),
+    );
+    expect(startedEvents.length).toBeGreaterThanOrEqual(2);
 
-      const slotNumbers = startedEvents.map((e) => {
-        const match = e.message.match(/slot=(\d+)/);
-        return match ? parseInt(match[1], 10) : -1;
-      });
-      expect(slotNumbers).toContain(0);
-      expect(slotNumbers).toContain(1);
-    },
-  );
+    const slotNumbers = startedEvents.map((e) => {
+      const match = e.message.match(/slot=(\d+)/);
+      return match ? parseInt(match[1], 10) : -1;
+    });
+    expect(slotNumbers).toContain(0);
+    expect(slotNumbers).toContain(1);
+  });
 
   test("finish() creates retry entry -> issue re-dispatched on next tick", async () => {
     const result = await runScenario({

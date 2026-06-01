@@ -72,7 +72,15 @@ export class Orchestrator {
 
     return sortForDispatch(issues).filter((issue) => {
       const retry = this.state.retryAttempts.get(issue.id);
-      if (retry && this.clock.monotonicMs() < retry.monotonicDeadlineMs) return false;
+      if (retry && this.clock.monotonicMs() < retry.monotonicDeadlineMs) {
+        const size = ensembleSize(issue) ?? this.settings.agent.ensembleSize;
+        let hasOtherUnclaimed = false;
+        for (let slot = 0; slot < size; slot++) {
+          if (slot === retry.slotIndex) continue;
+          if (!this.state.claimed.has(slotKey(issue.id, slot))) { hasOtherUnclaimed = true; break; }
+        }
+        if (!hasOtherUnclaimed) return false;
+      }
       if (retry) this.releaseStaleClaimsForRetry(issue.id);
       const dispatchState = {
         runningCount: this.state.running.size,
@@ -120,18 +128,23 @@ export class Orchestrator {
     ) {
       return null;
     }
-    const slotIndex = firstUnclaimedSlot(
-      issue,
-      this.settings,
-      this.state.claimed,
-      retry?.slotIndex,
-    );
+    let effectiveClaimed: Set<string> = this.state.claimed;
+    const size = ensembleSize(issue) ?? this.settings.agent.ensembleSize;
+    if (
+      size > 1 &&
+      retry &&
+      retry.slotIndex != null &&
+      this.clock.monotonicMs() < retry.monotonicDeadlineMs
+    ) {
+      effectiveClaimed = new Set(this.state.claimed);
+      effectiveClaimed.add(slotKey(issue.id, retry.slotIndex));
+    }
+    const slotIndex = firstUnclaimedSlot(issue, this.settings, effectiveClaimed, retry?.slotIndex);
     if (slotIndex === null) return null;
     const workerHost = this.selectWorkerHost();
     if (workerHost === undefined) return null;
 
     const effective = settingsForIssueState(this.settings, issue.state);
-    const size = ensembleSize(issue) ?? this.settings.agent.ensembleSize;
     const key = slotKey(issue.id, slotIndex);
     const entry: RunningEntry = {
       issue,
