@@ -1,8 +1,8 @@
 import { Activity, RefreshCw, AlertOctagon, Coins } from "lucide-react";
 
 import { useOpsStream } from "../hooks/useOpsStream";
-import { cn, formatNumber } from "../../../lib/utils";
-import type { OpsSessionEntry } from "../api/types";
+import { cn, formatNumber, formatTimestamp } from "../../../lib/utils";
+import type { OpsRunningEntry, OpsRetryEntry, OpsBlockedEntry } from "../api/types";
 
 interface MetricCardProps {
   label: string;
@@ -28,40 +28,141 @@ function MetricCard({ label, value, icon, color }: MetricCardProps) {
   );
 }
 
-function SessionTable({
-  title,
-  sessions,
-  emptyText,
-}: {
-  title: string;
-  sessions: OpsSessionEntry[];
-  emptyText: string;
-}) {
+function RunningTable({ sessions }: { sessions: OpsRunningEntry[] }) {
   return (
     <div className="rounded-lg border border-border bg-card">
       <div className="border-b border-border px-4 py-3">
-        <h3 className="text-sm font-medium text-foreground">{title}</h3>
+        <h3 className="text-sm font-medium text-foreground">Running Sessions</h3>
       </div>
       {sessions.length === 0 ? (
-        <div className="px-4 py-6 text-center text-sm text-muted">{emptyText}</div>
+        <div className="px-4 py-6 text-center text-sm text-muted">No active sessions</div>
       ) : (
-        <div className="divide-y divide-border">
-          {sessions.map((session) => (
-            <div key={session.issueId} className="flex items-center gap-3 px-4 py-2.5 text-sm">
-              <a
-                href={`#/trace/${encodeURIComponent(session.issueId)}`}
-                className="font-mono text-accent-blue hover:underline"
-              >
-                {session.identifier ?? session.issueId}
-              </a>
-              {session.title && <span className="truncate text-muted">{session.title}</span>}
-              {session.agentKind && (
-                <span className="ml-auto rounded bg-surface px-2 py-0.5 text-xs text-muted">
-                  {session.agentKind}
-                </span>
-              )}
-            </div>
-          ))}
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-border text-left text-xs text-muted">
+                <th className="px-4 py-2 font-medium">Issue</th>
+                <th className="px-4 py-2 font-medium">Agent</th>
+                <th className="px-4 py-2 font-medium">Worker</th>
+                <th className="px-4 py-2 font-medium">Turns</th>
+                <th className="px-4 py-2 font-medium">Tokens</th>
+                <th className="px-4 py-2 font-medium">Session</th>
+                <th className="px-4 py-2 font-medium">Event</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-border">
+              {sessions.map((s) => (
+                <tr key={s.issue_id} className="hover:bg-surface">
+                  <td className="px-4 py-2">
+                    <a
+                      href={`#/trace/${encodeURIComponent(s.issue_id)}`}
+                      className="font-mono text-accent-blue hover:underline"
+                    >
+                      {s.issue_identifier}
+                    </a>
+                  </td>
+                  <td className="px-4 py-2">
+                    <span className="rounded bg-surface px-2 py-0.5 text-xs text-muted">
+                      {s.agent_kind}
+                    </span>
+                  </td>
+                  <td className="px-4 py-2 text-muted">{s.worker_host ?? "local"}</td>
+                  <td className="px-4 py-2 font-mono">{s.turn_count}</td>
+                  <td className="px-4 py-2 font-mono">{formatNumber(s.tokens.total_tokens)}</td>
+                  <td className="px-4 py-2 font-mono text-muted">{s.session_id ?? "n/a"}</td>
+                  <td className="px-4 py-2 text-muted">{s.last_event ?? "n/a"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function RetryTable({ entries }: { entries: OpsRetryEntry[] }) {
+  return (
+    <div className="rounded-lg border border-border bg-card">
+      <div className="border-b border-border px-4 py-3">
+        <h3 className="text-sm font-medium text-foreground">Retry Queue</h3>
+      </div>
+      {entries.length === 0 ? (
+        <div className="px-4 py-6 text-center text-sm text-muted">No pending retries</div>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-border text-left text-xs text-muted">
+                <th className="px-4 py-2 font-medium">Issue</th>
+                <th className="px-4 py-2 font-medium">Attempt</th>
+                <th className="px-4 py-2 font-medium">Due</th>
+                <th className="px-4 py-2 font-medium">Worker</th>
+                <th className="px-4 py-2 font-medium">Workspace</th>
+                <th className="px-4 py-2 font-medium">Error</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-border">
+              {entries.map((e) => (
+                <tr key={e.issue_id} className="hover:bg-surface">
+                  <td className="px-4 py-2">
+                    <a
+                      href={`#/trace/${encodeURIComponent(e.issue_id)}`}
+                      className="font-mono text-accent-blue hover:underline"
+                    >
+                      {e.issue_identifier}
+                    </a>
+                  </td>
+                  <td className="px-4 py-2 font-mono">{e.attempt}</td>
+                  <td className="px-4 py-2 font-mono">{formatTimestamp(e.due_at)}</td>
+                  <td className="px-4 py-2 text-muted">{e.worker_host ?? "local"}</td>
+                  <td className="px-4 py-2 font-mono text-muted">{e.workspace_path ?? "n/a"}</td>
+                  <td className="px-4 py-2 text-muted">{e.error ?? "n/a"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function BlockedTable({ entries }: { entries: OpsBlockedEntry[] }) {
+  return (
+    <div className="rounded-lg border border-border bg-card">
+      <div className="border-b border-border px-4 py-3">
+        <h3 className="text-sm font-medium text-foreground">Blocked Issues</h3>
+      </div>
+      {entries.length === 0 ? (
+        <div className="px-4 py-6 text-center text-sm text-muted">No blocked issues</div>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-border text-left text-xs text-muted">
+                <th className="px-4 py-2 font-medium">Issue</th>
+                <th className="px-4 py-2 font-medium">Reason</th>
+                <th className="px-4 py-2 font-medium">Worker</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-border">
+              {entries.map((e) => (
+                <tr key={e.issue_id} className="hover:bg-surface">
+                  <td className="px-4 py-2">
+                    <a
+                      href={`#/trace/${encodeURIComponent(e.issue_id)}`}
+                      className="font-mono text-accent-blue hover:underline"
+                    >
+                      {e.issue_identifier}
+                    </a>
+                  </td>
+                  <td className="px-4 py-2 text-muted">{e.label}</td>
+                  <td className="px-4 py-2 text-muted">{e.worker_host ?? "n/a"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       )}
     </div>
@@ -126,11 +227,11 @@ export function OpsOverview() {
         ))}
       </div>
 
-      {/* Session tables */}
-      <div className="grid gap-6 lg:grid-cols-3">
-        <SessionTable title="Running Sessions" sessions={running} emptyText="No active sessions" />
-        <SessionTable title="Retry Queue" sessions={retrying} emptyText="No pending retries" />
-        <SessionTable title="Blocked Issues" sessions={blocked} emptyText="No blocked issues" />
+      {/* Detail tables */}
+      <div className="space-y-6">
+        <RunningTable sessions={running} />
+        <RetryTable entries={retrying} />
+        <BlockedTable entries={blocked} />
       </div>
     </div>
   );
