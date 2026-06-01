@@ -102,7 +102,6 @@ describe("Sandbox: Retry and Backoff", () => {
     );
     // With 0 turn latency, 8 ticks with delay 300, we get to 2400ms which is strictly less than 3 x maxRetryBackoffMs
     expect(startedEvents.length).toBeGreaterThanOrEqual(2);
-
   });
 
   test("multiple failures + retries, eventually succeeds (runner config changes via mutations)", async () => {

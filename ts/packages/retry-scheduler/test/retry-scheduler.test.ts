@@ -4,6 +4,7 @@ import type { ClockPort, TimerHandle } from "@symphony/ports";
 import { assert } from "../../../test/assert.js";
 
 import { RetryScheduler } from "@symphony/retry-scheduler";
+import { RETRY_SCHEDULER_SYNC_DELAY_MS } from "@symphony/retry-scheduler";
 
 function fakeClock(): ClockPort & { tick: number; advance(ms: number): void } {
   let tick = 0;
@@ -42,7 +43,7 @@ beforeEach(() => {
   clock = fakeClock();
 });
 
-test("RetryScheduler fires callback after delay elapses", () => {
+test("RetryScheduler fires callback after monotonicDeadlineMs + RETRY_SCHEDULER_SYNC_DELAY_MS", () => {
   const scheduler = new RetryScheduler(clock);
   const calls: string[] = [];
 
@@ -60,7 +61,7 @@ test("RetryScheduler fires callback after delay elapses", () => {
   clock.advance(4999);
   assert.equal(calls.length, 0);
 
-  clock.advance(1);
+  clock.advance(1 + RETRY_SCHEDULER_SYNC_DELAY_MS);
   assert.equal(calls.length, 1);
   assert.equal(calls[0], "i1");
 
@@ -126,14 +127,14 @@ test("RetryScheduler resets timer when rescheduled before firing", () => {
   assert.equal(calls.length, 0);
 
   // New timer fires 3000ms from reschedule point
-  clock.advance(1500);
+  clock.advance(1500 + RETRY_SCHEDULER_SYNC_DELAY_MS);
   assert.equal(calls.length, 1);
   assert.equal(calls[0], "i3-a2");
 
   scheduler.stop();
 });
 
-test("RetryScheduler fires immediately when monotonicDeadlineMs is in the past", () => {
+test("RetryScheduler fires after RETRY_SCHEDULER_SYNC_DELAY_MS when monotonicDeadlineMs is in the past", () => {
   const scheduler = new RetryScheduler(clock);
   const calls: string[] = [];
 
@@ -150,7 +151,7 @@ test("RetryScheduler fires immediately when monotonicDeadlineMs is in the past",
     (retry) => calls.push(retry.issueId),
   );
 
-  clock.advance(1);
+  clock.advance(1 + RETRY_SCHEDULER_SYNC_DELAY_MS);
   assert.equal(calls.length, 1);
   assert.equal(calls[0], "i-past");
 

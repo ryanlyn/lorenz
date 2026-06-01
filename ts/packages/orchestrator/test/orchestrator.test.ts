@@ -182,7 +182,6 @@ test("orchestrator snapshots capacity-blocked dispatch candidates", () => {
   assert.equal(workerOrchestrator.snapshot().blocked[0]?.reason, "worker_host_capacity");
 });
 
-
 test("orchestrator gates retry attempts until backoff is due and clears terminal retries", () => {
   const clock = fakeClock();
   const settings = parseConfig({ agent: { max_retry_backoff_ms: 2_000 } });
@@ -203,7 +202,7 @@ test("orchestrator gates retry attempts until backoff is due and clears terminal
   assert.deepEqual(orchestrator.eligibleIssues([issue]), []);
   // Advance the clock to make sure the retry backoff is due
   clock.advance(100_000);
-  
+
   assert.equal(orchestrator.eligibleIssues([issue])[0]?.identifier, "MT-RETRY");
   assert.equal(orchestrator.claim(issue)?.retryAttempt, 1);
   orchestrator.finish(issue.id, 0, true);

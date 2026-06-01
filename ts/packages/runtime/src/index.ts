@@ -308,7 +308,9 @@ export class SymphonyRuntime {
   }
 
   async pollOnce(options: PollOptions = {}): Promise<void> {
-    if (this.pollInProgress) return this.pollInProgress;
+    if (this.pollInProgress) {
+      return this.pollInProgress;
+    }
     const poll = this.pollOnceUnlocked(options);
     this.pollInProgress = poll;
     try {
