@@ -239,7 +239,7 @@ function mountClaudeMcp(app: Hono, settings: Settings): void {
 
 function resolveStaticDir(): string {
   const thisFile = fileURLToPath(import.meta.url);
-  return path.resolve(path.dirname(thisFile), "../../apps/symphony-dashboard/dist");
+  return path.resolve(path.dirname(thisFile), "../../../apps/symphony-dashboard/dist");
 }
 
 function stateEventsResponse(c: Context, runtime: RuntimeServerSource): Response {

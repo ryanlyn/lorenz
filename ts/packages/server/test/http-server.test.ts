@@ -44,7 +44,11 @@ test("observability HTTP API exposes Elixir-shaped state, issue, runs, refresh, 
       fetchIssuesByIds: async () => [],
     },
   });
-  const server = await startObservabilityServer(runtime, { host: "127.0.0.1", port: 0 });
+  const server = await startObservabilityServer(runtime, {
+    host: "127.0.0.1",
+    port: 0,
+    staticDir: "/tmp/nonexistent-dashboard-dist",
+  });
 
   try {
     const state = await getJson(server.url("/api/v1/state"));
@@ -140,6 +144,7 @@ test("observability HTTP API matches Elixir snapshot timeout and unavailable bra
   const unavailable = await startObservabilityServer(fakeRuntime("snapshot_unavailable"), {
     host: "127.0.0.1",
     port: 0,
+    staticDir: "/tmp/nonexistent-dashboard-dist",
   });
   try {
     const state = await getJson(unavailable.url("/api/v1/state"));
