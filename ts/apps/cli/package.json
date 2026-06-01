@@ -36,6 +36,7 @@
     "zod": "^4.4.3",
     "@symphony/domain": "workspace:*",
     "@symphony/linear-tracker": "workspace:*",
+    "@symphony/local-tracker": "workspace:*",
     "@symphony/memory-tracker": "workspace:*",
     "@symphony/config": "workspace:*",
     "@symphony/workflow": "workspace:*",

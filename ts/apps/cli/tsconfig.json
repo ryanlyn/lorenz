@@ -83,6 +83,9 @@
       "path": "../../packages/linear-tracker"
     },
     {
+      "path": "../../packages/local-tracker"
+    },
+    {
       "path": "../../packages/memory-tracker"
     },
     {
