@@ -239,6 +239,9 @@ importers:
       '@symphony/linear-tracker':
         specifier: workspace:*
         version: link:../../packages/linear-tracker
+      '@symphony/local-tracker':
+        specifier: workspace:*
+        version: link:../../packages/local-tracker
       '@symphony/log-file':
         specifier: workspace:*
         version: link:../../packages/log-file
@@ -999,6 +1002,9 @@ importers:
       '@symphony/domain':
         specifier: workspace:*
         version: link:../domain
+      '@symphony/local-tracker':
+        specifier: workspace:*
+        version: link:../local-tracker
       '@symphony/worker-host-pool':
         specifier: workspace:*
         version: link:../worker-host-pool

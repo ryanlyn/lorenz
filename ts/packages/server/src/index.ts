@@ -360,7 +360,7 @@ async function claudeMcpResponse(
         },
       };
     })
-    .with("tools/list", () => ({ jsonrpc: "2.0", id, result: { tools: toolSpecs() } }))
+    .with("tools/list", () => ({ jsonrpc: "2.0", id, result: { tools: toolSpecs(settings) } }))
     .with("tools/call", async () => {
       const parsed = mcpToolsCallParamsSchema.safeParse(body.params);
       if (!parsed.success) return jsonRpcError(id, -32602, "Invalid params");

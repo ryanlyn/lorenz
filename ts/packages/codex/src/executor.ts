@@ -132,7 +132,7 @@ export class CodexAppServerExecutor implements AgentExecutor {
           cwd: workspace,
           approvalPolicy: approvalPolicyForWire(input.settings.codex.approvalPolicy),
           sandbox: input.settings.codex.threadSandbox,
-          dynamicTools: toolSpecs(),
+          dynamicTools: toolSpecs(input.settings),
         });
 
     const threadId = readNestedString(threadResult, ["thread", "id"]);
