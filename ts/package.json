@@ -26,7 +26,7 @@
     "test:live": "pnpm test:live:codex && pnpm test:live:codex-resume && pnpm test:live:linear-codex && pnpm test:live:claude",
     "test:parity": "vitest run",
     "test:parity:live": "pnpm test:live",
-    "traceviz": "pnpm --filter @symphony/traceviz-server dev",
+    "traceviz": "pnpm start -- --port 4040 --no-tui --once --dry-run",
     "traceviz:ui": "pnpm --filter @symphony/traceviz dev",
     "traceviz:build": "pnpm --filter @symphony/traceviz build"
   },
