@@ -238,14 +238,16 @@ export class Orchestrator {
     }
   }
 
-  cleanupIssue(issueId: string): void {
+  cleanupIssue(issueId: string, options?: { preserveRetry?: boolean }): void {
     for (const [key, entry] of this.state.running.entries()) {
       if (entry.issue.id === issueId) {
         this.state.running.delete(key);
         this.state.claimed.delete(key);
       }
     }
-    this.state.retryAttempts.delete(issueId);
+    if (!options?.preserveRetry) {
+      this.state.retryAttempts.delete(issueId);
+    }
     this.state.completed.add(issueId);
   }
 

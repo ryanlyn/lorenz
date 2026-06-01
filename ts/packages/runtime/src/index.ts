@@ -576,10 +576,16 @@ export class SymphonyRuntime {
         continue;
       }
       this.abortIssueRuns(issue.id);
-      this.orchestrator.cleanupIssue(issue.id);
-      this.clearRetryTimer(issue.id);
       const reason = reconciliationStopReason(issue, this.workflow.settings);
-      if (isTerminalState(issue.state, this.workflow.settings.tracker.terminalStates)) {
+      const isTerminal = isTerminalState(issue.state, this.workflow.settings.tracker.terminalStates);
+      const isInactiveOnly =
+        !issueIsActive(issue, this.workflow.settings) &&
+        routedToThisWorker(issue, this.workflow.settings) &&
+        !issueHasOpenBlockers(issue, this.workflow.settings) &&
+        !isTerminal;
+      this.orchestrator.cleanupIssue(issue.id, { preserveRetry: isInactiveOnly });
+      this.clearRetryTimer(issue.id);
+      if (isTerminal) {
         await this.removeIssueWorkspaces(
           this.workflow.settings,
           issue.identifier || tracked.get(issue.id)?.identifier,

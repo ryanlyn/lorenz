@@ -184,7 +184,7 @@ test("cleanupIssue — removes running entry and claimed slot", () => {
   assert.equal(orchestrator.state.claimed.has(slotKey(issue.id, 0)), false);
 });
 
-test("cleanupIssue — removes retry attempts for issue", () => {
+test("cleanupIssue — removes retry attempts for issue by default", () => {
   const orchestrator = new Orchestrator(parseConfig());
   const issue = makeIssue();
   orchestrator.claim(issue);
@@ -193,6 +193,17 @@ test("cleanupIssue — removes retry attempts for issue", () => {
 
   orchestrator.cleanupIssue(issue.id);
   assert.equal(orchestrator.snapshot().retrying.length, 0);
+});
+
+test("cleanupIssue — preserves retry attempts when preserveRetry is true", () => {
+  const orchestrator = new Orchestrator(parseConfig());
+  const issue = makeIssue();
+  orchestrator.claim(issue);
+  orchestrator.finish(issue.id, 0, true);
+  assert.equal(orchestrator.snapshot().retrying.length, 1);
+
+  orchestrator.cleanupIssue(issue.id, { preserveRetry: true });
+  assert.equal(orchestrator.snapshot().retrying.length, 1);
 });
 
 test("cleanupIssue — adds issue to completed set", () => {
