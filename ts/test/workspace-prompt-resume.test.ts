@@ -71,7 +71,7 @@ test("prompt rendering is strict and exposes ensemble context", async () => {
 test("empty workflow prompt uses the Elixir default prompt template", async () => {
   const prompt = await buildPrompt("", { ...sampleIssue, description: null });
 
-  assert.match(prompt, /You are working on a Linear issue\./);
+  assert.match(prompt, /You are working on an issue from the configured tracker\./);
   assert.match(prompt, /Identifier: MT-1/);
   assert.match(prompt, /No description provided\./);
 });
@@ -81,7 +81,7 @@ test("continuation prompt matches the Elixir runner guidance", () => {
     continuationPrompt(2, 3),
     `Continuation guidance:
 
-- The previous agent turn completed normally, but the Linear issue is still in an active state.
+- The previous agent turn completed normally, but the issue is still in an active state.
 - This is continuation turn #2 of 3 for the current agent run.
 - Resume from the current workspace and workpad state instead of restarting from scratch.
 - The original task instructions and prior turn context are already present in this thread, so do not restate them before acting.

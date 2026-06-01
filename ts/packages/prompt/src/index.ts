@@ -35,7 +35,7 @@ function ensembleContext(slotIndex: number, size: number): EnsembleContext {
 export function continuationPrompt(turnNumber: number, maxTurns: number): string {
   return `Continuation guidance:
 
-- The previous agent turn completed normally, but the Linear issue is still in an active state.
+- The previous agent turn completed normally, but the issue is still in an active state.
 - This is continuation turn #${turnNumber} of ${maxTurns} for the current agent run.
 - Resume from the current workspace and workpad state instead of restarting from scratch.
 - The original task instructions and prior turn context are already present in this thread, so do not restate them before acting.

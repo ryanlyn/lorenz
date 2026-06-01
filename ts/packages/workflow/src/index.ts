@@ -6,7 +6,7 @@ import { parseConfig } from "@symphony/config";
 import type { WorkflowDefinition } from "@symphony/domain";
 import type { DefaultSettingsOptions } from "@symphony/config";
 
-export const defaultPromptTemplate = `You are working on a Linear issue.
+export const defaultPromptTemplate = `You are working on an issue from the configured tracker.
 
 Identifier: {{ issue.identifier }}
 Title: {{ issue.title }}
