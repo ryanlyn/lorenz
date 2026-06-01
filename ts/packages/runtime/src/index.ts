@@ -746,16 +746,7 @@ export class SymphonyRuntime {
       ) {
         return;
       }
-      if (this.pollInProgress) {
-        void this.pollInProgress.then(() => {
-          this.addEvent("retry_timer_due", `${scheduled.identifier} attempt=${scheduled.attempt}`);
-          this.pollOnce().catch((error) => {
-            this.lastError = errorMessage(error);
-            this.addEvent("retry_timer_error", this.lastError);
-          });
-        });
-        return;
-      }
+      if (this.pollInProgress) return;
       this.addEvent("retry_timer_due", `${scheduled.identifier} attempt=${scheduled.attempt}`);
       this.pollOnce().catch((error) => {
         this.lastError = errorMessage(error);
