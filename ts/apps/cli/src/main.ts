@@ -14,11 +14,12 @@ import {
   type ParseResult,
 } from "@symphony/cli-kit";
 import { validateDispatchConfig } from "@symphony/config";
-import { startObservabilityServer, type ObservabilityServerHandle } from "@symphony/server";
+import { startObservabilityServer } from "@symphony/server";
 import { configureLogFile } from "@symphony/log-file";
 import { SymphonyRuntime } from "@symphony/runtime";
 import { RuntimeApp } from "@symphony/tui";
 import { loadWorkflow } from "@symphony/workflow";
+import { TraceEmitter } from "@symphony/traceviz-emitter";
 import type { Settings, WorkflowDefinition } from "@symphony/domain";
 
 import {
@@ -39,6 +40,7 @@ export interface CliOptions {
   once: boolean;
   dryRun: boolean;
   tui: boolean;
+  dashboard: boolean;
   port: number | null;
   logsRoot: string | null;
 }
@@ -47,6 +49,7 @@ interface CliCommanderOptions {
   once?: boolean;
   dryRun?: boolean;
   tui?: boolean;
+  dashboard?: boolean;
   port?: number;
   logsRoot?: string;
 }
@@ -113,22 +116,23 @@ export async function runDaemon(options: CliOptions): Promise<number> {
     const workflow = await loadRuntimeWorkflow();
     await configureLogFile(workflow.settings.logging.logFile);
 
+    const traceEmitter = new TraceEmitter(workflow.settings.server.traceDir!);
     const runtime = new SymphonyRuntime({
       workflow,
       clientFactory: createTrackerClient,
       reloadWorkflow: loadRuntimeWorkflow,
       runner: runAgentAttempt,
+      onAgentUpdate: (issue, update) => {
+        traceEmitter.emit(issue.id, issue.identifier, update);
+      },
       ...runtimeAdapters,
     });
-    let server: ObservabilityServerHandle | null = null;
     const stop = () => runtime.stop();
     process.once("SIGINT", stop);
     process.once("SIGTERM", stop);
 
-    const shouldStartServer =
-      typeof workflow.settings.server.port === "number" ||
-      workflow.settings.agent.kind === "claude";
-    if (shouldStartServer) {
+    let server: Awaited<ReturnType<typeof startObservabilityServer>> | null = null;
+    if (options.dashboard) {
       server = await startObservabilityServer(runtime, {
         host: workflow.settings.server.host,
         port: workflow.settings.server.port ?? 0,
@@ -182,6 +186,7 @@ export function createDaemonCommand(name = "symphony-ts"): Command {
     .option("--once", "Poll once and exit.")
     .option("--dry-run", "Evaluate candidates without dispatching agents.")
     .option("--no-tui", "Disable the terminal dashboard.")
+    .option("--no-dashboard", "Disable the web dashboard and traceviz server.")
     .option(
       "--logs-root <path>",
       "Root directory for Symphony logs.",
@@ -200,6 +205,7 @@ function cliOptionsFromCommander(parsed: CliCommanderOptions, workflowPath?: str
     once: parsed.once ?? false,
     dryRun: parsed.dryRun ?? false,
     tui: parsed.tui ?? true,
+    dashboard: parsed.dashboard ?? true,
     port: parsed.port ?? null,
     logsRoot: parsed.logsRoot ?? null,
   };

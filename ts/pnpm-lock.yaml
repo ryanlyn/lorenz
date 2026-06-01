@@ -275,6 +275,9 @@ importers:
       '@symphony/ssh':
         specifier: workspace:*
         version: link:../../packages/ssh
+      '@symphony/traceviz-emitter':
+        specifier: workspace:*
+        version: link:../../packages/traceviz-emitter
       '@symphony/tui':
         specifier: workspace:*
         version: link:../../packages/tui

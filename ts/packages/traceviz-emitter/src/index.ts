@@ -1,4 +1,4 @@
-import { mkdirSync, unlinkSync, existsSync } from "node:fs";
+import { mkdirSync, existsSync, rmSync } from "node:fs";
 import { appendFile } from "node:fs/promises";
 import path from "node:path";
 
@@ -6,7 +6,7 @@ import type { AgentUpdate } from "@symphony/domain";
 
 export class TraceEmitter {
   private readonly traceDir: string;
-  private initialized = false;
+  private initialized = new Set<string>();
   /** Per-file write queues to avoid unbounded concurrent writes. */
   private writeQueues = new Map<string, Promise<void>>();
 
@@ -15,9 +15,10 @@ export class TraceEmitter {
   }
 
   emit(issueId: string, issueIdentifier: string, update: AgentUpdate): void {
-    if (!this.initialized) {
-      mkdirSync(this.traceDir, { recursive: true });
-      this.initialized = true;
+    const dirPath = this.issueDirPath(issueIdentifier);
+    if (!this.initialized.has(dirPath)) {
+      mkdirSync(dirPath, { recursive: true });
+      this.initialized.add(dirPath);
     }
     const line = JSON.stringify({
       type: update.type,
@@ -30,30 +31,41 @@ export class TraceEmitter {
       sessionId: update.sessionId ?? null,
       executorPid: update.executorPid ?? null,
     });
-    const filePath = TraceEmitter.tracePathForIssue(this.traceDir, issueId);
+    const filePath = path.join(dirPath, "trace.jsonl");
 
-    // Chain writes per file to provide backpressure and avoid concurrent file handle exhaustion
     const prev = this.writeQueues.get(filePath) ?? Promise.resolve();
     const next = prev.then(async () =>
       appendFile(filePath, line + "\n").catch((err: unknown) => {
-        console.error(`[TraceEmitter] Failed to write trace for issue ${issueId}:`, err);
+        console.error(`[TraceEmitter] Failed to write trace for issue ${issueIdentifier}:`, err);
       }),
     );
     this.writeQueues.set(filePath, next);
   }
 
-  clear(issueId: string): void {
-    const filePath = TraceEmitter.tracePathForIssue(this.traceDir, issueId);
-    if (existsSync(filePath)) {
-      unlinkSync(filePath);
+  clear(issueIdentifier: string): void {
+    const dirPath = this.issueDirPath(issueIdentifier);
+    if (existsSync(dirPath)) {
+      rmSync(dirPath, { recursive: true });
+      this.initialized.delete(dirPath);
     }
   }
 
-  static tracePathForIssue(traceDir: string, issueId: string): string {
-    const resolved = path.resolve(traceDir, issueId + ".jsonl");
+  private issueDirPath(issueIdentifier: string): string {
+    const sanitized = issueIdentifier.replace(/[^a-zA-Z0-9_-]/g, "_");
+    const resolved = path.resolve(this.traceDir, sanitized);
+    const resolvedDir = path.resolve(this.traceDir);
+    if (!resolved.startsWith(resolvedDir + path.sep)) {
+      throw new Error(`Invalid issueIdentifier: path traversal detected`);
+    }
+    return resolved;
+  }
+
+  static tracePathForIssue(traceDir: string, issueIdentifier: string): string {
+    const sanitized = issueIdentifier.replace(/[^a-zA-Z0-9_-]/g, "_");
+    const resolved = path.resolve(traceDir, sanitized, "trace.jsonl");
     const resolvedDir = path.resolve(traceDir);
     if (!resolved.startsWith(resolvedDir + path.sep)) {
-      throw new Error(`Invalid issueId: path traversal detected`);
+      throw new Error(`Invalid issueIdentifier: path traversal detected`);
     }
     return resolved;
   }

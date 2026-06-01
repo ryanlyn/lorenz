@@ -1,3 +1,5 @@
+import { homedir } from "node:os";
+
 import { execaSync } from "execa";
 import { z } from "zod";
 import type {
@@ -220,6 +222,8 @@ const serverRawSchema = z
   .object({
     host: z.string().optional(),
     port: coercedPort.optional(),
+    traceDir: z.string().optional(),
+    staticDir: z.string().optional(),
   })
   .strict();
 const loggingRawSchema = z.object({ logFile: z.string().optional() }).strict();
@@ -392,7 +396,7 @@ export const defaultSettings = (options: DefaultSettingsOptions = {}): Settings 
       refreshMs: 1_000,
       renderIntervalMs: 16,
     },
-    server: { host: "127.0.0.1" },
+    server: { host: "127.0.0.1", port: 4040, traceDir: joinPath(homedir(), ".symphony/traces") },
     logging: { logFile: joinPath(cwd, "log/symphony.log") },
     statusOverrides: new Map(),
   };
@@ -446,6 +450,8 @@ export function parseConfig(
   const serverRaw = parsed.server ?? {};
   settings.server.host = serverRaw.host ?? settings.server.host;
   if (serverRaw.port !== undefined) settings.server.port = serverRaw.port;
+  if (serverRaw.traceDir !== undefined) settings.server.traceDir = serverRaw.traceDir;
+  if (serverRaw.staticDir !== undefined) settings.server.staticDir = serverRaw.staticDir;
 
   settings.statusOverrides = parseStatusOverrides(parsed.statusOverrides ?? {});
   return settings;
