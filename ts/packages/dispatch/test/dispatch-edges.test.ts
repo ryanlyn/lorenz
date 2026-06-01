@@ -96,7 +96,7 @@ describe("shouldDispatchIssue", () => {
       status_overrides: { Todo: { agent: { max_concurrent_agents: 1 } } },
     });
     const issue = makeIssue();
-    const runningByState = new Map([["Todo", 1]]);
+    const runningByState = new Map([["todo", 1]]);
     const state = { runningCount: 1, runningByState, claimedSlots: new Set<string>() };
     assert.equal(shouldDispatchIssue(issue, settings, state), false);
   });
@@ -456,7 +456,7 @@ describe("dispatchBlockReason", () => {
       status_overrides: { Todo: { agent: { max_concurrent_agents: 2 } } },
     });
     const issue = makeIssue();
-    const runningByState = new Map([["Todo", 2]]);
+    const runningByState = new Map([["todo", 2]]);
     const state = { runningCount: 2, runningByState, claimedSlots: new Set<string>() };
     assert.equal(dispatchBlockReason(issue, settings, state), "local_concurrency_cap");
   });
@@ -492,7 +492,7 @@ describe("dispatchBlockReason", () => {
       status_overrides: { Todo: { agent: { max_concurrent_agents: 1 } } },
     });
     const issue = makeIssue();
-    const runningByState = new Map([["Todo", 2]]);
+    const runningByState = new Map([["todo", 2]]);
     const state = { runningCount: 2, runningByState, claimedSlots: new Set<string>() };
     // Global cap is checked first, so it wins
     assert.equal(dispatchBlockReason(issue, settings, state), "global_concurrency_cap");
@@ -504,7 +504,7 @@ describe("dispatchBlockReason", () => {
       status_overrides: { Todo: { agent: { max_concurrent_agents: 1 } } },
     });
     const issue = makeIssue();
-    const runningByState = new Map([["Todo", 1]]);
+    const runningByState = new Map([["todo", 1]]);
     const state = {
       runningCount: 1,
       runningByState,

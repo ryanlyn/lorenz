@@ -688,7 +688,7 @@ describe("INVARIANT: When a per-state concurrency cap is reached, the system SHA
         settings.statusOverrides.set("todo", { agent: { maxConcurrentAgents: perStateCap } });
         const state = {
           runningCount: 0,
-          runningByState: new Map([["Todo", perStateCap + extra]]),
+          runningByState: new Map([["todo", perStateCap + extra]]),
           claimedSlots: new Set<string>(),
         };
         assert.equal(shouldDispatchIssue(issue, settings, state), false);
@@ -711,7 +711,7 @@ describe("INVARIANT: When a per-state concurrency cap is reached, the system SHA
         settings.statusOverrides.set("todo", { agent: { maxConcurrentAgents: perStateCap } });
         const state = {
           runningCount: 0,
-          runningByState: new Map([["Todo", perStateCap - 1]]),
+          runningByState: new Map([["todo", perStateCap - 1]]),
           claimedSlots: new Set<string>(),
         };
         assert.notEqual(dispatchBlockReason(issue, settings, state), "local_concurrency_cap");
@@ -738,7 +738,7 @@ describe("INVARIANT: When a per-state concurrency cap is reached, the system SHA
           });
           const state = {
             runningCount: 0,
-            runningByState: new Map([[issueState, perStateCap]]),
+            runningByState: new Map([[issueState.trim().toLowerCase(), perStateCap]]),
             claimedSlots: new Set<string>(),
           };
           assert.equal(dispatchBlockReason(issue, settings, state), "local_concurrency_cap");

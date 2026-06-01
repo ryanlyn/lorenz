@@ -7,7 +7,7 @@ import {
   sortForDispatch,
 } from "@symphony/dispatch";
 import { ensembleSize } from "@symphony/issue";
-import { settingsForIssueState } from "@symphony/config";
+import { normalizeStateName, settingsForIssueState } from "@symphony/config";
 import { retryBackoffMs } from "@symphony/policies/retry";
 import { mergeMonotonicUsage } from "@symphony/policies/usage";
 import { selectLeastLoadedHost } from "@symphony/policies/workerHost";
@@ -60,7 +60,8 @@ export class Orchestrator {
     this.state.blockedDispatches = [];
     const runningByState = new Map<string, number>();
     for (const entry of this.state.running.values()) {
-      runningByState.set(entry.issue.state, (runningByState.get(entry.issue.state) ?? 0) + 1);
+      const key = normalizeStateName(entry.issue.state);
+      runningByState.set(key, (runningByState.get(key) ?? 0) + 1);
     }
 
     return sortForDispatch(issues).filter((issue) => {
@@ -94,7 +95,8 @@ export class Orchestrator {
       this.releaseStaleClaimsForRetry(issue.id);
     const runningByState = new Map<string, number>();
     for (const entry of this.state.running.values()) {
-      runningByState.set(entry.issue.state, (runningByState.get(entry.issue.state) ?? 0) + 1);
+      const key = normalizeStateName(entry.issue.state);
+      runningByState.set(key, (runningByState.get(key) ?? 0) + 1);
     }
     if (
       !shouldDispatchIssue(issue, this.settings, {

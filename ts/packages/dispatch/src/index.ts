@@ -1,5 +1,5 @@
 import { ensembleSize, isTerminalState } from "@symphony/issue";
-import { normalizeRouteName, settingsForIssueState } from "@symphony/config";
+import { normalizeRouteName, normalizeStateName, settingsForIssueState } from "@symphony/config";
 import type { DispatchBlockReason, Issue, Priority, Settings } from "@symphony/domain";
 
 export function routeNames(issue: Issue, settings: Settings): string[] {
@@ -60,7 +60,7 @@ export function dispatchBlockReason(
   if (state.runningCount >= settings.agent.maxConcurrentAgents) return "global_concurrency_cap";
 
   const effective = settingsForIssueState(settings, issue.state);
-  const stateCount = state.runningByState?.get(issue.state) ?? 0;
+  const stateCount = state.runningByState?.get(normalizeStateName(issue.state)) ?? 0;
   if (stateCount >= effective.agent.maxConcurrentAgents) return "local_concurrency_cap";
 
   if (state.workerCapacityAvailable === false) return "worker_host_capacity";
