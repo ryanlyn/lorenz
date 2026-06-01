@@ -295,8 +295,19 @@ export class SymphonyRuntime {
   async start(options: RuntimeStartOptions = {}): Promise<void> {
     this.stopped = false;
     do {
-      await this.pollOnce({ dryRun: options.dryRun, waitForRuns: options.once });
-      if (options.once) break;
+      if (options.once) {
+        await this.pollOnce({ dryRun: options.dryRun, waitForRuns: true });
+        break;
+      }
+      // A thrown poll (e.g. tracker fetchCandidateIssues rejecting) must not
+      // terminate the recurring daemon loop. pollOnceUnlocked already records a
+      // poll_error event and surfaces the error on the snapshot before rethrowing,
+      // so swallow the rejection here and continue to the next interval.
+      try {
+        await this.pollOnce({ dryRun: options.dryRun });
+      } catch {
+        // Intentionally ignored: the error is already logged as poll_error.
+      }
       await delay(this.workflow.settings.polling.intervalMs, () => this.stopped);
     } while (!this.stopped);
   }
