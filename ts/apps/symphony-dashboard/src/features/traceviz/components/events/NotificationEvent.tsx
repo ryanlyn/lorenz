@@ -1,7 +1,7 @@
 import { Info, AlertTriangle } from "lucide-react";
 
 import type { NotificationEvent as NotificationEventType, TurnFailedEvent } from "../../api/types";
-import { cn, formatTimestamp } from "../../lib/utils";
+import { cn, formatTimestamp } from "../../../../lib/utils";
 
 interface NotificationEventProps {
   event: NotificationEventType | TurnFailedEvent;

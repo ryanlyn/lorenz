@@ -9,9 +9,9 @@ import {
 } from "lucide-react";
 
 import type { Stats } from "../api/types";
-import { formatDuration, formatNumber, cn } from "../lib/utils";
+import { formatDuration, formatNumber, cn } from "../../../lib/utils";
 
-interface DashboardProps {
+interface TraceSummaryProps {
   stats: Stats;
 }
 
@@ -39,7 +39,7 @@ function StatCard({ label, value, icon, color }: StatCardProps) {
   );
 }
 
-export function Dashboard({ stats }: DashboardProps) {
+export function TraceSummary({ stats }: TraceSummaryProps) {
   const totalToolCalls = stats.toolBreakdown.reduce((sum, v) => sum + v.count, 0);
   const totalErrors = stats.toolBreakdown.reduce((sum, v) => sum + v.errorCount, 0);
 

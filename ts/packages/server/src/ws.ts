@@ -40,8 +40,7 @@ export function createWsHandler(app: Hono, watcher: TraceWatcher): WsSetupResult
       },
       onMessage(event: { data: unknown }, ws: WSContext) {
         try {
-          const data =
-            typeof event.data === "string" ? event.data : String(event.data);
+          const data = typeof event.data === "string" ? event.data : String(event.data);
           const message = JSON.parse(data) as Record<string, unknown>;
           if (message.type === "subscribe" && typeof message.issueId === "string") {
             const events = watcher.getEventsForTicket(message.issueId);

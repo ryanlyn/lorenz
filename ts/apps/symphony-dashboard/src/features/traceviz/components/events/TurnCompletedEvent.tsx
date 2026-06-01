@@ -1,7 +1,7 @@
 import { CheckCircle } from "lucide-react";
 
 import type { TurnCompletedEvent as TurnCompletedEventType } from "../../api/types";
-import { formatTimestamp, formatNumber, formatDuration } from "../../lib/utils";
+import { formatTimestamp, formatNumber, formatDuration } from "../../../../lib/utils";
 
 interface TurnCompletedEventProps {
   event: TurnCompletedEventType;

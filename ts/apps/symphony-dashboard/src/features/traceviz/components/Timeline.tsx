@@ -2,7 +2,7 @@ import { useState, useMemo } from "react";
 import { ChevronsUpDown, ChevronsDownUp, ArrowUpDown, Loader2 } from "lucide-react";
 
 import type { DisplayEvent } from "../api/types";
-import { cn } from "../lib/utils";
+import { cn } from "../../../lib/utils";
 
 import { ThoughtEvent } from "./events/ThoughtEvent";
 import { MessageEvent } from "./events/MessageEvent";

@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Brain, ChevronDown } from "lucide-react";
 
 import type { ThoughtEvent as ThoughtEventType } from "../../api/types";
-import { formatTimestamp, cn } from "../../lib/utils";
+import { formatTimestamp, cn } from "../../../../lib/utils";
 
 interface ThoughtEventProps {
   event: ThoughtEventType;

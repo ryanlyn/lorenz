@@ -347,7 +347,7 @@ export interface ServerSettings {
   port?: number | undefined;
   /** Directory containing JSONL trace files (same directory TraceEmitter writes to). */
   traceDir?: string | undefined;
-  /** Built frontend assets directory (e.g. apps/traceviz/dist/). */
+  /** Built frontend assets directory (override for dashboard SPA). */
   staticDir?: string | undefined;
 }
 

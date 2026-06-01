@@ -1,8 +1,8 @@
 import { Activity } from "lucide-react";
 
-import { useHashRouter } from "./hooks/useHashRouter";
-import { OpsOverview } from "./components/OpsOverview";
-import { TraceView } from "./components/TraceView";
+import { useHashRouter } from "./shared/hooks/useHashRouter";
+import { OpsOverview } from "./features/ops/components/OpsOverview";
+import { TraceView } from "./features/traceviz/components/TraceView";
 
 export function App() {
   const { route, navigate } = useHashRouter();

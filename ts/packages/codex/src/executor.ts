@@ -533,11 +533,15 @@ const usageTotalsSchema = z.preprocess(
   (value) => {
     const record = isRecord(value) ? value : {};
     const payload = isRecord(record.params) ? record.params : record;
-    const usage = isRecord(payload.usage)
-      ? payload.usage
-      : isRecord(payload.total_token_usage)
-        ? payload.total_token_usage
-        : payload;
+    const tokenUsage = isRecord(payload.tokenUsage) ? payload.tokenUsage : undefined;
+    const tokenUsageTotal = tokenUsage && isRecord(tokenUsage.total) ? tokenUsage.total : undefined;
+    const usage = tokenUsageTotal
+      ? tokenUsageTotal
+      : isRecord(payload.usage)
+        ? payload.usage
+        : isRecord(payload.total_token_usage)
+          ? payload.total_token_usage
+          : payload;
     return {
       inputTokens: tokenNumberFromAny(usage, [
         "input_tokens",

@@ -1,7 +1,7 @@
 import { MessageSquare } from "lucide-react";
 
 import type { MessageEvent as MessageEventType } from "../../api/types";
-import { formatTimestamp } from "../../lib/utils";
+import { formatTimestamp } from "../../../../lib/utils";
 
 interface MessageEventProps {
   event: MessageEventType;

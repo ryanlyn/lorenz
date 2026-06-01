@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Code, ChevronDown } from "lucide-react";
 
 import type { ToolCallEvent as ToolCallEventType } from "../../api/types";
-import { formatTimestamp, formatDuration, cn } from "../../lib/utils";
+import { formatTimestamp, formatDuration, cn } from "../../../../lib/utils";
 
 interface ToolCallEventProps {
   event: ToolCallEventType;

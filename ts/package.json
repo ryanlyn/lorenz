@@ -5,7 +5,7 @@
   "type": "module",
   "description": "Symphony TypeScript orchestration contracts.",
   "scripts": {
-    "dev": "pnpm build && pnpm start",
+    "dev": "pnpm dashboard:build && pnpm start",
     "start": "pnpm exec node apps/cli/dist/bin/cli.js",
     "start:once": "pnpm exec node apps/cli/dist/bin/cli.js --once",
     "runs": "pnpm exec node apps/cli/dist/bin/cli.js runs",
@@ -26,9 +26,9 @@
     "test:live": "pnpm test:live:codex && pnpm test:live:codex-resume && pnpm test:live:linear-codex && pnpm test:live:claude",
     "test:parity": "vitest run",
     "test:parity:live": "pnpm test:live",
-    "traceviz": "pnpm start -- --port 4040 --no-tui --once --dry-run",
-    "traceviz:ui": "pnpm --filter @symphony/traceviz dev",
-    "traceviz:build": "pnpm --filter @symphony/traceviz build"
+    "dashboard": "pnpm start -- --port 4040 --no-tui --once --dry-run",
+    "dashboard:ui": "pnpm --filter @symphony/dashboard dev",
+    "dashboard:build": "pnpm --filter @symphony/dashboard build"
   },
   "devDependencies": {
     "@agentclientprotocol/sdk": "^0.21.0",

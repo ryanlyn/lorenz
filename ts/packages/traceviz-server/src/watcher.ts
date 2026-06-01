@@ -1,9 +1,14 @@
 /**
- * TraceWatcher: polls a trace directory for JSONL trace files and maintains
- * parsed event state per ticket (issue).
+ * TraceWatcher: polls a trace directory for per-ticket subdirectories, each
+ * containing a `trace.jsonl` file with one JSON line per AgentUpdate event
+ * emitted by the TraceEmitter.
  *
- * Each file in the trace directory is named `{issueId}.jsonl` and contains
- * one JSON line per AgentUpdate event emitted by the TraceEmitter.
+ * Directory layout:
+ *   traceDir/
+ *     CAN-123/
+ *       trace.jsonl
+ *     CAN-456/
+ *       trace.jsonl
  */
 
 import { access, readdir, readFile, stat } from "node:fs/promises";
@@ -29,8 +34,6 @@ export class TraceWatcher {
   private readonly traceDir: string;
   private readonly pollIntervalMs: number;
   private fileStates = new Map<string, FileState>();
-  /** Maps filename (without extension) to the canonical issueId key used in fileStates. */
-  private fileKeyToCanonical = new Map<string, string>();
   private timer: ReturnType<typeof setInterval> | null = null;
   private stopped = false;
   private scanning = false;
@@ -42,9 +45,7 @@ export class TraceWatcher {
 
   start(callback: WatcherCallback): void {
     this.stopped = false;
-    // Initial scan
     void this.scan(callback);
-    // Set up polling
     this.timer = setInterval(() => {
       void this.scan(callback);
     }, this.pollIntervalMs);
@@ -58,9 +59,6 @@ export class TraceWatcher {
     }
   }
 
-  /**
-   * Get summary info for all tracked tickets.
-   */
   getTickets(): TicketInfo[] {
     const tickets: TicketInfo[] = [];
     for (const state of this.fileStates.values()) {
@@ -77,7 +75,6 @@ export class TraceWatcher {
         status = "running";
       }
 
-      // Determine startedAt from first event
       let startedAt: string | undefined;
       if (state.events.length > 0) {
         const firstEvent = state.events[0];
@@ -97,9 +94,6 @@ export class TraceWatcher {
     return tickets;
   }
 
-  /**
-   * Get all parsed display events for a specific ticket/issue.
-   */
   getEventsForTicket(issueId: string): DisplayEvent[] {
     const state = this.fileStates.get(issueId);
     return state ? state.events : [];
@@ -107,7 +101,7 @@ export class TraceWatcher {
 
   private async scan(callback: WatcherCallback): Promise<void> {
     if (this.stopped) return;
-    if (this.scanning) return; // Skip if previous scan is still in progress
+    if (this.scanning) return;
     try {
       await access(this.traceDir);
     } catch {
@@ -126,49 +120,37 @@ export class TraceWatcher {
       const resolvedDir = path.resolve(this.traceDir);
 
       for (const entry of entries) {
-        if (!entry.endsWith(".jsonl")) continue;
-        const filePath = path.join(this.traceDir, entry);
+        const dirPath = path.join(this.traceDir, entry);
 
-        // Guard against path traversal from filenames like "../../etc/passwd.jsonl"
-        const resolvedFilePath = path.resolve(filePath);
-        if (!resolvedFilePath.startsWith(resolvedDir + path.sep)) continue;
+        const resolvedDirPath = path.resolve(dirPath);
+        if (!resolvedDirPath.startsWith(resolvedDir + path.sep)) continue;
 
-        const fileKey = entry.slice(0, -6); // strip .jsonl
+        const filePath = path.join(dirPath, "trace.jsonl");
 
         try {
+          const dirStat = await stat(dirPath);
+          if (!dirStat.isDirectory()) continue;
+
           const fileStat = await stat(filePath);
+          const existing = this.fileStates.get(entry);
 
-          // Look up existing state: either by filename key or via the canonical mapping
-          const canonicalForFile = this.fileKeyToCanonical.get(fileKey);
-          const existing = this.fileStates.get(canonicalForFile ?? fileKey);
-
-          // Skip if file has not been modified since last read
           if (existing && fileStat.mtimeMs <= existing.lastModified) {
             continue;
           }
 
-          const state = await this.readFile(filePath, fileKey, fileStat.mtimeMs);
+          const state = await this.readFile(filePath, entry, fileStat.mtimeMs);
           if (state) {
-            // Use the metadata-derived issueId as the canonical map key
             const canonicalKey = state.issueId;
-            this.fileKeyToCanonical.set(fileKey, canonicalKey);
-
-            // If metadata issueId differs from filename, remove stale entry keyed by filename
-            if (canonicalKey !== fileKey) {
-              this.fileStates.delete(fileKey);
-            }
-
-            const existingByCanonical = this.fileStates.get(canonicalKey);
-            if (state.lineCount !== (existingByCanonical?.lineCount ?? 0)) {
+            const existingByKey = this.fileStates.get(canonicalKey);
+            if (state.lineCount !== (existingByKey?.lineCount ?? 0)) {
               this.fileStates.set(canonicalKey, state);
               callback(canonicalKey, state.events);
             } else {
-              // Update lastModified even if line count is same (file may have been touched)
               this.fileStates.set(canonicalKey, state);
             }
           }
         } catch {
-          // Skip files we cannot read
+          // Skip entries we cannot read
         }
       }
     } finally {

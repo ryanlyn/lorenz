@@ -1,7 +1,7 @@
 import { ChevronDown } from "lucide-react";
 
 import type { TicketInfo } from "../api/types";
-import { cn } from "../lib/utils";
+import { cn } from "../../../lib/utils";
 
 interface TicketSelectorProps {
   tickets: TicketInfo[];

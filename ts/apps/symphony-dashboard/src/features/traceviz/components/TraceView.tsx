@@ -4,7 +4,7 @@ import { ArrowLeft } from "lucide-react";
 import { useTraceData } from "../hooks/useTraceData";
 
 import { TicketSelector } from "./TicketSelector";
-import { Dashboard } from "./Dashboard";
+import { TraceSummary } from "./TraceSummary";
 import { Timeline } from "./Timeline";
 
 interface TraceViewProps {
@@ -47,7 +47,7 @@ export function TraceView({ issueId, onBack }: TraceViewProps) {
       {/* Trace content */}
       {selectedTicketId ? (
         <div className="space-y-6">
-          {stats && <Dashboard stats={stats} />}
+          {stats && <TraceSummary stats={stats} />}
           <Timeline key={selectedTicketId} events={events} loading={loading} />
         </div>
       ) : (
