@@ -92,11 +92,10 @@ export function makeSettings(overrides: Record<string, unknown> = {}): Settings 
       },
       claude: {
         command: "echo claude",
-        model: "claude-opus-4-6",
-        permissionMode: "dontAsk",
         turnTimeoutMs: 60_000,
         stallTimeoutMs: 30_000,
         strictMcpConfig: true,
+        providerConfig: { permissions: { defaultMode: "dontAsk" } },
       },
       ...overrides,
     },

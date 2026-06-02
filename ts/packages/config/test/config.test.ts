@@ -35,7 +35,6 @@ test("config resolves env-backed Linear token and assignee", () => {
   assert.equal(settings.agents.codex?.executor, "acp");
   const codexAgent = settings.agents.codex as any;
   assert.equal(codexAgent.bridgeCommand, "codex-acp");
-  assert.deepEqual(codexAgent.bridgeArgs, []);
   assert.equal(settings.agents.claude?.executor, "acp");
 });
 
@@ -47,11 +46,8 @@ test("partial codex agent override preserves bridgeCommand codex-acp", () => {
   const codexAgent = settings.agents.codex as any;
   assert.equal(codexAgent.executor, "acp");
   assert.equal(codexAgent.bridgeCommand, "codex-acp");
-  assert.deepEqual(codexAgent.bridgeArgs, []);
   assert.equal(codexAgent.stallTimeoutMs, 60000);
-  // Must NOT inherit claude-specific fields
-  assert.equal(codexAgent.model, undefined);
-  assert.equal(codexAgent.permissionMode, undefined);
+  assert.equal(codexAgent.providerConfig, undefined);
 });
 
 test("config resolves op:// references via 1Password CLI", async () => {
@@ -117,7 +113,7 @@ test("config defaults and validation match Elixir parity", () => {
   const settings = parseConfig({}, {});
 
   assert.equal(settings.tracker.kind, undefined);
-  assert.equal(settings.claude.model, "claude-opus-4-6[1m]");
+  assert.deepEqual(settings.claude.providerConfig, { permissions: { defaultMode: "dontAsk" } });
   assert.equal(settings.observability.renderIntervalMs, 16);
   assert.throws(() => validateDispatchConfig(settings), /tracker.kind is required/);
 });
@@ -304,7 +300,10 @@ test("agents map overrides known runtime settings via ACP records", () => {
   const settings = parseConfig({
     agent: { kind: "codex" },
     codex: { turn_timeout_ms: 60_000 },
-    claude: { command: "legacy-claude", model: "legacy-model", permission_mode: "acceptEdits" },
+    claude: {
+      command: "legacy-claude",
+      provider_config: { permissions: { defaultMode: "acceptEdits" } },
+    },
     agents: {
       codex: {
         bridge_command: "codex-custom",
@@ -312,12 +311,11 @@ test("agents map overrides known runtime settings via ACP records", () => {
       },
       claude: {
         bridge_command: "claude-agent-acp",
-        bridge_args: ["--permission-mode", "acceptEdits"],
-        model: "opus-agent",
+        provider_config: { permissions: { defaultMode: "acceptEdits" } },
       },
       pi: {
         bridge_command: "pi-acp",
-        bridge_args: ["--safe-mode"],
+        provider_config: { safe_mode: true },
       },
     },
   });
@@ -325,13 +323,11 @@ test("agents map overrides known runtime settings via ACP records", () => {
   assert.equal(settings.agents.codex.bridgeCommand, "codex-custom");
   assert.equal(settings.agents.codex.turnTimeoutMs, 120_000);
   assert.equal(settings.claude.command, "claude-agent-acp");
-  assert.equal(settings.claude.model, "opus-agent");
+  assert.deepEqual(settings.claude.providerConfig, { permissions: { defaultMode: "acceptEdits" } });
   assert.deepEqual(settings.agents.pi, {
     executor: "acp",
     bridgeCommand: "pi-acp",
-    bridgeArgs: ["--safe-mode"],
-    model: "legacy-model",
-    permissionMode: "acceptEdits",
+    providerConfig: { safe_mode: true },
     turnTimeoutMs: 3_600_000,
     stallTimeoutMs: 300_000,
     strictMcpConfig: true,
@@ -497,10 +493,6 @@ test("config reports useful errors for list fields and agent executors", () => {
   assert.throws(
     () => parseConfig({ worker: { ssh_hosts: "worker-a" } }),
     /worker.ssh_hosts must be a list of strings/,
-  );
-  assert.throws(
-    () => parseConfig({ agents: { pi: { executor: "acp", bridge_args: "--safe-mode" } } }),
-    /agents.pi.bridge_args must be a list of strings/,
   );
   assert.throws(
     () => parseConfig({ agents: { pi: { executor: "foo" } } }),

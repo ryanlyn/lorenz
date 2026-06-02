@@ -79,6 +79,7 @@ export class AcpExecutor implements AgentExecutor {
     let session: AcpSession | null = null;
     try {
       mcpEndpoint = await acquireAgentMcpEndpoint(input.settings, input.workerHost ?? null);
+      await writeProviderConfig(agentConfig, agentKind, workspace, input.workerHost ?? null);
       child = startBridgeProcess(agentConfig, workspace, input.workerHost ?? null);
       const client = acpClient({
         workspace,
@@ -472,14 +473,70 @@ async function openAcpSession(
   return created.sessionId;
 }
 
+async function writeProviderConfig(
+  agentConfig: AcpAgentConfig,
+  agentKind: string,
+  workspace: string,
+  workerHost: string | null,
+): Promise<void> {
+  if (!agentConfig.providerConfig) return;
+
+  const isClaudeBridge = agentKind === "claude";
+  const relativePath = isClaudeBridge ? ".claude/settings.local.json" : ".codex/config.toml";
+  const content = isClaudeBridge
+    ? JSON.stringify(agentConfig.providerConfig, null, 2)
+    : toToml(agentConfig.providerConfig);
+
+  const filePath = path.join(workspace, relativePath);
+  if (workerHost) {
+    const escaped = shellEscape(content);
+    const mkdirCmd = `mkdir -p ${shellEscape(path.dirname(filePath))} && printf '%s' ${escaped} > ${shellEscape(filePath)}`;
+    const proc = startSshProcess(workerHost, mkdirCmd);
+    await new Promise<void>((resolve, reject) => {
+      proc.on("close", (code) =>
+        code === 0
+          ? resolve()
+          : reject(new Error(`failed to write provider config (exit ${code})`)),
+      );
+      proc.on("error", reject);
+    });
+  } else {
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
+    await fs.writeFile(filePath, content);
+  }
+}
+
+function toToml(obj: Record<string, unknown>, prefix = ""): string {
+  const lines: string[] = [];
+  const sections: [string, Record<string, unknown>][] = [];
+  for (const [key, value] of Object.entries(obj)) {
+    if (value === null || value === undefined) continue;
+    if (typeof value === "object" && !Array.isArray(value)) {
+      sections.push([prefix ? `${prefix}.${key}` : key, value as Record<string, unknown>]);
+    } else {
+      lines.push(`${key} = ${toTomlValue(value)}`);
+    }
+  }
+  for (const [section, nested] of sections) {
+    lines.push(`\n[${section}]`);
+    lines.push(toToml(nested, section).trim());
+  }
+  return lines.join("\n") + "\n";
+}
+
+function toTomlValue(value: unknown): string {
+  if (typeof value === "string") return JSON.stringify(value);
+  if (typeof value === "boolean" || typeof value === "number") return String(value);
+  if (Array.isArray(value)) return `[${value.map(toTomlValue).join(", ")}]`;
+  return JSON.stringify(value);
+}
+
 function startBridgeProcess(
   agentConfig: AcpAgentConfig,
   workspace: string,
   workerHost: string | null,
 ): ChildProcessWithoutNullStreams {
-  const command = `exec ${[agentConfig.bridgeCommand, ...agentConfig.bridgeArgs]
-    .map(shellEscape)
-    .join(" ")}`;
+  const command = `exec ${agentConfig.bridgeCommand}`;
   if (workerHost) {
     return startSshProcess(workerHost, `cd ${shellEscape(workspace)} && ${command}`);
   }

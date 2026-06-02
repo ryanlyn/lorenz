@@ -43,22 +43,21 @@ codex:
 agents:
   codex:
     bridge_command: codex-acp
-    bridge_args:
-      - --config
-      - shell_environment_policy.inherit=all
-      - --config
-      - model_reasoning_effort=high
-      - --config
-      - service_tier=fast
-      - --model
-      - gpt-5.4
+    provider_config:
+      shell_environment_policy:
+        inherit: all
+      model_reasoning_effort: high
+      service_tier: fast
+      model: gpt-5.4
 claude:
   command: claude
-  model: claude-opus-4-6[1m]
-  permission_mode: bypassPermissions
   turn_timeout_ms: 3600000
   stall_timeout_ms: 300000
   strict_mcp_config: true
+  provider_config:
+    model: claude-opus-4-6
+    permissions:
+      defaultMode: bypassPermissions
 ---
 
 You are working on a Linear ticket `{{ issue.identifier }}`
