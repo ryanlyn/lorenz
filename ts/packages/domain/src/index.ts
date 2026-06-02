@@ -122,7 +122,7 @@ export interface TraceContentBlock {
   text?: string;
 }
 
-/** Tool call info common to both ACP and Codex trace events. */
+/** Tool call info for trace events. */
 export interface TraceToolCall {
   toolCallId: string;
   toolName: string;
@@ -130,7 +130,7 @@ export interface TraceToolCall {
   input: Record<string, unknown>;
 }
 
-/** Tool call result info common to both ACP and Codex trace events. */
+/** Tool call result info for trace events. */
 export interface TraceToolResult {
   toolCallId: string;
   toolName?: string;

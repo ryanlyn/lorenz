@@ -1,10 +1,6 @@
 /**
- * Normalization helpers that both ACP and Codex executors call to produce
- * structured, typed message payloads from their native event formats.
- *
- * These functions ensure that regardless of which executor produced the trace,
- * the `message` field on AgentUpdate carries structurally identical payloads
- * for semantically equivalent events.
+ * Normalization helpers that the ACP executor calls to produce structured,
+ * typed message payloads from native event formats.
  */
 
 import type { SessionNotification } from "@agentclientprotocol/sdk";
@@ -15,13 +11,29 @@ import type {
   TraceToolResult,
   TraceToolCallUpdate,
   TraceUsageMessage,
-  TraceNotificationMessage,
-  TraceApprovalMessage,
-  TraceFsWriteMessage,
-  TraceProcessMessage,
 } from "./index.js";
 
 // --- ACP SDK -> Normalized ---
+
+function extractOutput(update: Record<string, unknown>): string | null {
+  if (typeof update.rawOutput === "string") {
+    return update.rawOutput;
+  } else if (update.rawOutput != null) {
+    return JSON.stringify(update.rawOutput);
+  } else if (Array.isArray(update.content) && update.content.length > 0) {
+    const texts = (update.content as Array<Record<string, unknown>>)
+      .map((c) => {
+        if (c.type === "content") {
+          const block = c.content as Record<string, unknown> | undefined;
+          return (block?.text as string) ?? "";
+        }
+        return "";
+      })
+      .filter(Boolean);
+    return texts.join("\n") || null;
+  }
+  return null;
+}
 
 export function normalizeTextChunk(notification: SessionNotification): TraceTextMessage {
   const update = notification.update as Record<string, unknown>;
@@ -44,27 +56,10 @@ export function normalizeToolCall(notification: SessionNotification): TraceToolC
 
 export function normalizeToolCallUpdate(notification: SessionNotification): TraceToolCallUpdate {
   const update = notification.update as Record<string, unknown>;
-  let output: string | null = null;
-  if (typeof update.rawOutput === "string") {
-    output = update.rawOutput;
-  } else if (update.rawOutput != null) {
-    output = JSON.stringify(update.rawOutput);
-  } else if (Array.isArray(update.content) && update.content.length > 0) {
-    const texts = (update.content as Array<Record<string, unknown>>)
-      .map((c) => {
-        if (c.type === "content") {
-          const block = c.content as Record<string, unknown> | undefined;
-          return (block?.text as string) ?? "";
-        }
-        return "";
-      })
-      .filter(Boolean);
-    output = texts.join("\n") || null;
-  }
   return {
     toolCallId: (update.toolCallId as string) ?? "",
     status: (update.status as TraceToolCallUpdate["status"]) ?? null,
-    output,
+    output: extractOutput(update),
   };
 }
 
@@ -73,85 +68,15 @@ export function normalizeToolResult(
   isError: boolean,
 ): TraceToolResult {
   const update = notification.update as Record<string, unknown>;
-  let output: string | null = null;
-  if (typeof update.rawOutput === "string") {
-    output = update.rawOutput;
-  } else if (update.rawOutput != null) {
-    output = JSON.stringify(update.rawOutput);
-  } else if (Array.isArray(update.content) && update.content.length > 0) {
-    const texts = (update.content as Array<Record<string, unknown>>)
-      .map((c) => {
-        if (c.type === "content") {
-          const block = c.content as Record<string, unknown> | undefined;
-          return (block?.text as string) ?? "";
-        }
-        return "";
-      })
-      .filter(Boolean);
-    output = texts.join("\n") || null;
-  }
   return {
     toolCallId: (update.toolCallId as string) ?? "",
     toolName: (update.title as string) ?? undefined,
     status: isError ? "failed" : "completed",
-    output,
+    output: extractOutput(update),
     isError,
   };
 }
 
 export function normalizeUsage(used: number): TraceUsageMessage {
   return { totalTokens: used };
-}
-
-// --- Codex -> Normalized ---
-
-export function normalizeCodexToolCompleted(value: Record<string, unknown>): TraceToolResult {
-  const request = value.request as Record<string, unknown> | undefined;
-  const result = value.result as Record<string, unknown> | undefined;
-  const params = (request?.params as Record<string, unknown>) ?? {};
-  const toolName = (params.tool as string) ?? (params.name as string) ?? "unknown";
-  const callId = (params.callId as string) ?? "";
-  const output =
-    (result?.output as string | null) ??
-    (result?.contentItems as Array<{ text?: string }> | undefined)?.[0]?.text ??
-    null;
-  const isError = (result?.success as boolean) === false;
-  return {
-    toolCallId: callId,
-    toolName,
-    status: isError ? "failed" : "completed",
-    output,
-    isError,
-  };
-}
-
-export function normalizeCodexNotification(
-  value: Record<string, unknown>,
-): TraceNotificationMessage {
-  return {
-    method: (value.method as string) ?? "unknown",
-    params: (value.params as Record<string, unknown>) ?? undefined,
-  };
-}
-
-// --- Shared helpers ---
-
-export function normalizeApproval(
-  toolCallId: string | null,
-  toolName: string | null,
-  decision: string | null,
-): TraceApprovalMessage {
-  return { toolCallId, toolName, decision };
-}
-
-export function normalizeFsWrite(filePath: string): TraceFsWriteMessage {
-  return { path: filePath };
-}
-
-export function normalizeProcessExit(
-  code: number | null,
-  signal: string | null,
-): TraceProcessMessage {
-  const text = `exited${code === null ? "" : ` with status ${code}`}${signal ? ` signal ${signal}` : ""}`;
-  return { exitCode: code, signal, text };
 }

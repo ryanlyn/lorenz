@@ -1,7 +1,5 @@
-/**
- * Re-export display event types from @symphony/traceviz-server to avoid duplication.
- * Only the WsMessage type remains local (it is a client-only concern).
- */
+import type { TicketInfo, DisplayEvent } from "@symphony/traceviz-server";
+
 export type {
   DisplayEvent,
   ThoughtDisplayEvent as ThoughtEvent,
@@ -27,6 +25,3 @@ export type WsMessage =
   | { type: "update"; issueId: string; events: DisplayEvent[]; tickets: TicketInfo[] }
   | { type: "events"; issueId: string; events: DisplayEvent[] }
   | { type: "ping" };
-
-// Re-import for use in the WsMessage type above
-import type { TicketInfo, DisplayEvent } from "@symphony/traceviz-server";

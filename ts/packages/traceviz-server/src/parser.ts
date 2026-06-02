@@ -126,6 +126,17 @@ function extractText(msg: unknown): string {
   return "";
 }
 
+function resolveText(msg: unknown): string {
+  if (isTraceTextMessage(msg)) return msg.text;
+  if (typeof msg === "string") return msg;
+  return (
+    extractText(msg) ||
+    (typeof msg === "object" && msg !== null
+      ? (((msg as Record<string, unknown>).text as string) ?? "")
+      : "")
+  );
+}
+
 function extractToolCall(
   msg: unknown,
 ): { name: string; id: string; input: Record<string, unknown> } | null {
@@ -270,43 +281,19 @@ export function parseTraceLines(lines: string[]): DisplayEvent[] {
 
     switch (raw.type) {
       case "agent_thought": {
-        // Try normalized TraceTextMessage first, then legacy extraction
-        const text = isTraceTextMessage(msg)
-          ? msg.text
-          : typeof msg === "string"
-            ? msg
-            : (extractText(msg) ??
-              (typeof msg === "object" && msg !== null
-                ? (((msg as Record<string, unknown>).text as string) ?? "")
-                : ""));
+        const text = resolveText(msg);
         if (text) events.push({ kind: "thought", text, timestamp: ts });
         break;
       }
 
       case "assistant_message": {
-        // Try normalized TraceTextMessage first, then legacy extraction
-        const text = isTraceTextMessage(msg)
-          ? msg.text
-          : typeof msg === "string"
-            ? msg
-            : (extractText(msg) ??
-              (typeof msg === "object" && msg !== null
-                ? (((msg as Record<string, unknown>).text as string) ?? "")
-                : ""));
+        const text = resolveText(msg);
         if (text) events.push({ kind: "message", text, timestamp: ts });
         break;
       }
 
       case "user_message": {
-        // Try normalized TraceTextMessage first, then legacy extraction
-        const text = isTraceTextMessage(msg)
-          ? msg.text
-          : typeof msg === "string"
-            ? msg
-            : (extractText(msg) ??
-              (typeof msg === "object" && msg !== null
-                ? (((msg as Record<string, unknown>).text as string) ?? "")
-                : ""));
+        const text = resolveText(msg);
         if (text) events.push({ kind: "message", text, timestamp: ts });
         break;
       }
@@ -427,9 +414,6 @@ export function parseTraceLines(lines: string[]): DisplayEvent[] {
           break;
         }
 
-        const payload =
-          typeof msg === "object" && msg !== null ? (msg as Record<string, unknown>) : {};
-
         // Handle ACP tool_call_update format
         const acpResult = extractToolResult(msg);
         if (acpResult) {
@@ -454,52 +438,6 @@ export function parseTraceLines(lines: string[]): DisplayEvent[] {
               input: {},
               output: acpResult.output,
               isError: acpResult.isError || raw.type === "tool_call_failed",
-              durationMs: null,
-              nestedEvents: [],
-              timestamp: ts,
-            });
-          }
-          break;
-        }
-
-        // Handle Codex request/result format
-        const request = payload.request as Record<string, unknown> | undefined;
-        const result = payload.result as Record<string, unknown> | undefined;
-        if (request && typeof request === "object") {
-          const params = request.params as Record<string, unknown> | undefined;
-          const toolName = (params?.tool as string) ?? "unknown";
-          const callId = (params?.callId as string) ?? "";
-          const input = (params?.arguments as Record<string, unknown>) ?? {};
-          const output =
-            (result?.output as string | null) ??
-            ((result?.contentItems as Array<Record<string, unknown>> | undefined)?.[0]?.text as
-              | string
-              | null) ??
-            null;
-          const isError = raw.type === "tool_call_failed" || (result?.success as boolean) === false;
-
-          // Try to match against a pending tool call by callId
-          const pendingCodex = callId ? pendingToolCalls.get(callId) : undefined;
-          if (pendingCodex) {
-            pendingToolCalls.delete(callId);
-            const toolCall = pendingCodex.event;
-            if (output !== null) {
-              toolCall.output = output;
-            }
-            toolCall.isError = isError;
-            const startMs = new Date(pendingCodex.startTs).getTime();
-            const endMs = new Date(ts).getTime();
-            toolCall.durationMs =
-              Number.isNaN(startMs) || Number.isNaN(endMs) ? null : endMs - startMs;
-            events.push(toolCall);
-          } else {
-            events.push({
-              kind: "tool_call",
-              category: detectToolCategory(toolName),
-              toolName,
-              input,
-              output,
-              isError,
               durationMs: null,
               nestedEvents: [],
               timestamp: ts,
