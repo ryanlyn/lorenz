@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "bin": {
-    "symphony-ts": "./dist/bin/cli.js"
+    "symphony-ts": "./bin/symphony-ts.js"
   },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
