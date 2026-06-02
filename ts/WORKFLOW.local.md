@@ -41,21 +41,15 @@ codex:
     networkAccess: true
 agents:
   codex:
-    bridge_command: codex-acp
-    bridge_args:
-      - --config
-      - shell_environment_policy.inherit=all
-      - --config
-      - model_reasoning_effort=high
-      - --model
-      - gpt-5.4
+    bridge_command: codex-acp --config shell_environment_policy.inherit=all --config model_reasoning_effort=high --model gpt-5.4
 claude:
   command: claude
-  model: claude-opus-4-6[1m]
-  permission_mode: dontAsk
   turn_timeout_ms: 3600000
   stall_timeout_ms: 300000
   strict_mcp_config: true
+  provider_config:
+    permissions:
+      defaultMode: dontAsk
 ---
 
 You are working on a local board issue `{{ issue.identifier }}`

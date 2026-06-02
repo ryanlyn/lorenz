@@ -210,8 +210,7 @@ function acpSettings(
     agents: {
       claude: {
         executor: "acp",
-        bridge_command: process.execPath,
-        bridge_args: [fake, mode, trace],
+        bridge_command: `${process.execPath} ${fake} ${mode} ${trace}`,
         turn_timeout_ms: turnTimeoutMs,
         stall_timeout_ms: 0,
       },

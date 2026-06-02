@@ -122,10 +122,8 @@ const acpAgentRecordSchema = z
   .object({
     executor: z.literal("acp"),
     bridgeCommand: z.string().optional(),
-    bridgeArgs: z.array(z.string()).optional(),
     command: z.string().optional(),
-    model: z.string().optional(),
-    permissionMode: z.string().optional(),
+    providerConfig: z.record(z.string(), z.unknown()).optional(),
     turnTimeoutMs: coercedTimeoutMs.optional(),
     stallTimeoutMs: coercedNonNegativeTimeoutMs.optional(),
     strictMcpConfig: coercedBoolean.optional(),
@@ -204,11 +202,10 @@ const codexRawSchema = z
 const claudeRawSchema = z
   .object({
     command: z.string().optional(),
-    model: z.string().optional(),
-    permissionMode: z.string().optional(),
     turnTimeoutMs: coercedTimeoutMs.optional(),
     stallTimeoutMs: coercedNonNegativeTimeoutMs.optional(),
     strictMcpConfig: coercedBoolean.optional(),
+    providerConfig: z.record(z.string(), z.unknown()).optional(),
   })
   .strict();
 const observabilityRawSchema = z
@@ -312,14 +309,14 @@ const codexAliases = {
   stall_timeout_ms: "stallTimeoutMs",
 };
 const claudeAliases = {
-  permission_mode: "permissionMode",
   turn_timeout_ms: "turnTimeoutMs",
   stall_timeout_ms: "stallTimeoutMs",
   strict_mcp_config: "strictMcpConfig",
+  provider_config: "providerConfig",
 };
 const acpAgentAliases = {
   bridge_command: "bridgeCommand",
-  bridge_args: "bridgeArgs",
+  provider_config: "providerConfig",
 };
 const agentRecordAliases = {
   ...codexAliases,
@@ -360,11 +357,12 @@ export const defaultSettings = (options: DefaultSettingsOptions = {}): Settings 
   };
   const claude: ClaudeSettings = {
     command: "claude-agent-acp",
-    model: "claude-opus-4-6[1m]",
-    permissionMode: "dontAsk",
     turnTimeoutMs: 3_600_000,
     stallTimeoutMs: 300_000,
     strictMcpConfig: true,
+    providerConfig: {
+      permissions: { defaultMode: "dontAsk" },
+    },
   };
   return {
     tracker: {
@@ -692,9 +690,7 @@ function parseAcpAgent(
   return {
     executor: "acp",
     bridgeCommand: raw.bridgeCommand ?? raw.command ?? defaults.bridgeCommand,
-    bridgeArgs: raw.bridgeArgs ?? defaults.bridgeArgs,
-    model: raw.model ?? defaults.model,
-    permissionMode: raw.permissionMode ?? defaults.permissionMode,
+    providerConfig: raw.providerConfig ?? defaults.providerConfig,
     turnTimeoutMs: raw.turnTimeoutMs ?? defaults.turnTimeoutMs,
     stallTimeoutMs: raw.stallTimeoutMs ?? defaults.stallTimeoutMs,
     strictMcpConfig: raw.strictMcpConfig ?? defaults.strictMcpConfig ?? true,
@@ -709,16 +705,13 @@ function defaultAgentRecords(
     codex: {
       executor: "acp",
       bridgeCommand: "codex-acp",
-      bridgeArgs: [],
       turnTimeoutMs: codex.turnTimeoutMs,
       stallTimeoutMs: codex.stallTimeoutMs,
     },
     claude: {
       executor: "acp",
       bridgeCommand: claude.command,
-      bridgeArgs: ["--permission-mode", claude.permissionMode, "--model", claude.model],
-      model: claude.model,
-      permissionMode: claude.permissionMode,
+      providerConfig: claude.providerConfig,
       turnTimeoutMs: claude.turnTimeoutMs,
       stallTimeoutMs: claude.stallTimeoutMs,
       strictMcpConfig: claude.strictMcpConfig,
@@ -731,11 +724,10 @@ function applyKnownAgentRecords(settings: Settings): void {
   if (claude?.executor === "acp") {
     settings.claude = {
       command: claude.bridgeCommand,
-      model: claude.model ?? settings.claude.model,
-      permissionMode: claude.permissionMode ?? settings.claude.permissionMode,
       turnTimeoutMs: claude.turnTimeoutMs,
       stallTimeoutMs: claude.stallTimeoutMs,
       strictMcpConfig: claude.strictMcpConfig ?? settings.claude.strictMcpConfig,
+      providerConfig: claude.providerConfig ?? settings.claude.providerConfig,
     };
   }
 }
@@ -768,11 +760,10 @@ function parseCodex(defaults: CodexSettings, codexRaw: CodexRaw): CodexSettings 
 function parseClaude(defaults: ClaudeSettings, claudeRaw: ClaudeRaw): ClaudeSettings {
   return {
     command: claudeRaw.command ?? defaults.command,
-    model: claudeRaw.model ?? defaults.model,
-    permissionMode: claudeRaw.permissionMode ?? defaults.permissionMode,
     turnTimeoutMs: claudeRaw.turnTimeoutMs ?? defaults.turnTimeoutMs,
     stallTimeoutMs: claudeRaw.stallTimeoutMs ?? defaults.stallTimeoutMs,
     strictMcpConfig: claudeRaw.strictMcpConfig ?? defaults.strictMcpConfig,
+    providerConfig: claudeRaw.providerConfig ?? defaults.providerConfig,
   };
 }
 
@@ -837,11 +828,10 @@ function parsePartialCodex(raw: Partial<CodexRaw>): Partial<CodexSettings> {
 function parsePartialClaude(raw: Partial<ClaudeRaw>): Partial<ClaudeSettings> {
   const next: Partial<ClaudeSettings> = {};
   if (raw.command !== undefined) next.command = raw.command;
-  if (raw.model !== undefined) next.model = raw.model;
-  if (raw.permissionMode !== undefined) next.permissionMode = raw.permissionMode;
   if (raw.strictMcpConfig !== undefined) next.strictMcpConfig = raw.strictMcpConfig;
   if (raw.turnTimeoutMs !== undefined) next.turnTimeoutMs = raw.turnTimeoutMs;
   if (raw.stallTimeoutMs !== undefined) next.stallTimeoutMs = raw.stallTimeoutMs;
+  if (raw.providerConfig !== undefined) next.providerConfig = raw.providerConfig;
   return next;
 }
 
@@ -891,7 +881,7 @@ function cloneTracker(tracker: TrackerSettings): TrackerSettings {
 function cloneAgentRecords(records: Record<string, AgentConfig>): Record<string, AgentConfig> {
   const cloned: Record<string, AgentConfig> = {};
   for (const [name, record] of Object.entries(records)) {
-    cloned[name] = { ...record, bridgeArgs: [...record.bridgeArgs] };
+    cloned[name] = { ...record };
   }
   return cloned;
 }

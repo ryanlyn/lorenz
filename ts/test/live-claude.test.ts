@@ -65,8 +65,7 @@ function liveClaudeSettings(timeoutMs: number, extra: Record<string, unknown> = 
     agents: {
       claude: {
         executor: "acp",
-        bridge_command: claudeAcpBridge ?? "claude-agent-acp",
-        bridge_args: claudeAcpBridgeArgs(),
+        bridge_command: claudeAcpBridgeCommand(),
         turn_timeout_ms: timeoutMs,
         stall_timeout_ms: 300_000,
       },
@@ -74,12 +73,13 @@ function liveClaudeSettings(timeoutMs: number, extra: Record<string, unknown> = 
   });
 }
 
-function claudeAcpBridgeArgs(): string[] {
+function claudeAcpBridgeCommand(): string {
+  const base = claudeAcpBridge ?? "claude-agent-acp";
   const raw = process.env.SYMPHONY_TS_CLAUDE_ACP_BRIDGE_ARGS;
-  if (!raw) return [];
+  if (!raw) return base;
   const parsed = JSON.parse(raw) as unknown;
   if (!Array.isArray(parsed) || !parsed.every((item) => typeof item === "string")) {
     throw new Error("SYMPHONY_TS_CLAUDE_ACP_BRIDGE_ARGS must be a JSON string array");
   }
-  return parsed;
+  return [base, ...parsed].join(" ");
 }

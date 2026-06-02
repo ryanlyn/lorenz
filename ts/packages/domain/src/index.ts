@@ -254,14 +254,10 @@ export interface AgentSettings {
  */
 export interface AcpAgentConfig {
   executor: "acp";
-  /** Shell command launched per session (run via `bash -lc` in the workspace, or over SSH on remote workers). */
+  /** Shell command launched per session (run via `bash -lc` in the workspace, or over SSH on remote workers). Also determines the provider config format: `claude-agent-acp` → `.claude/settings.local.json`, `codex-acp` → `.codex/config.toml`. */
   bridgeCommand: string;
-  /** Additional argv appended to `bridgeCommand` when launching the bridge process. */
-  bridgeArgs: string[];
-  /** Informational model identifier passed to bridge defaults; not interpreted by the ACP executor itself. */
-  model?: string | undefined;
-  /** Informational permission-mode string for the bridge (e.g. Claude's `"dontAsk"`); not interpreted by ACP directly. */
-  permissionMode?: string | undefined;
+  /** Free-form provider configuration written to the workspace before launching the bridge. The file path and format are derived from {@link bridgeCommand}. */
+  providerConfig?: Record<string, unknown> | undefined;
   /** Hard limit (ms) on a single ACP turn before it is force-cancelled. */
   turnTimeoutMs: number;
   /** Inactivity window (ms) after which a session with no agent events is treated as stalled and aborted. `<= 0` disables stall detection. */
@@ -315,16 +311,14 @@ export interface CodexReasoning {
 export interface ClaudeSettings {
   /** Shell command for the Claude Code ACP bridge; invoked via `bash -lc` in the workspace. */
   command: string;
-  /** Claude model identifier passed to the bridge, e.g. `"claude-opus-4-6[1m]"`. */
-  model: string;
-  /** Claude Code permission mode forwarded to the bridge, e.g. `"dontAsk"`, `"acceptEdits"`, `"plan"`. */
-  permissionMode: string;
   /** Hard limit (ms) on a single Claude turn before it is force-cancelled. */
   turnTimeoutMs: number;
   /** Inactivity window (ms) before a stalled session is aborted. `<= 0` disables stall detection. */
   stallTimeoutMs: number;
   /** When true, launch Claude with only Symphony's injected MCP servers (ignore user MCP config). */
   strictMcpConfig: boolean;
+  /** Provider-specific settings written to `.claude/settings.local.json` in the workspace. */
+  providerConfig?: Record<string, unknown> | undefined;
 }
 
 /**
