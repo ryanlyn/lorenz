@@ -6,8 +6,6 @@ import type {
   AgentKind,
   AgentConfig,
   AgentSettings,
-  AcpAgentConfig,
-  AppServerAgentConfig,
   ClaudeSettings,
   CodexSettings,
   HooksSettings,
@@ -119,36 +117,18 @@ const reasoningSchema = z
   })
   .strict();
 
-const appServerAgentRecordSchema = z
-  .object({
-    executor: z.literal("appserver"),
-    command: z.string().optional(),
-    approvalPolicy: approvalPolicySchema,
-    threadSandbox: z.string().optional(),
-    turnSandboxPolicy: sandboxPolicySchema,
-    turnTimeoutMs: coercedTimeoutMs.optional(),
-    readTimeoutMs: coercedTimeoutMs.optional(),
-    stallTimeoutMs: coercedNonNegativeTimeoutMs.optional(),
-    reasoning: reasoningSchema.nullable().optional(),
-  })
-  .strict();
 const acpAgentRecordSchema = z
   .object({
     executor: z.literal("acp"),
     bridgeCommand: z.string().optional(),
-    bridgeArgs: z.array(z.string()).optional(),
     command: z.string().optional(),
-    model: z.string().optional(),
-    permissionMode: z.string().optional(),
+    providerConfig: z.record(z.string(), z.unknown()).optional(),
     turnTimeoutMs: coercedTimeoutMs.optional(),
     stallTimeoutMs: coercedNonNegativeTimeoutMs.optional(),
     strictMcpConfig: coercedBoolean.optional(),
   })
   .strict();
-const agentRecordSchema = z.discriminatedUnion("executor", [
-  appServerAgentRecordSchema,
-  acpAgentRecordSchema,
-]);
+const agentRecordSchema = acpAgentRecordSchema;
 
 const trackerRawSchema = z
   .object({
@@ -221,11 +201,10 @@ const codexRawSchema = z
 const claudeRawSchema = z
   .object({
     command: z.string().optional(),
-    model: z.string().optional(),
-    permissionMode: z.string().optional(),
     turnTimeoutMs: coercedTimeoutMs.optional(),
     stallTimeoutMs: coercedNonNegativeTimeoutMs.optional(),
     strictMcpConfig: coercedBoolean.optional(),
+    providerConfig: z.record(z.string(), z.unknown()).optional(),
   })
   .strict();
 const observabilityRawSchema = z
@@ -329,14 +308,14 @@ const codexAliases = {
   stall_timeout_ms: "stallTimeoutMs",
 };
 const claudeAliases = {
-  permission_mode: "permissionMode",
   turn_timeout_ms: "turnTimeoutMs",
   stall_timeout_ms: "stallTimeoutMs",
   strict_mcp_config: "strictMcpConfig",
+  provider_config: "providerConfig",
 };
 const acpAgentAliases = {
   bridge_command: "bridgeCommand",
-  bridge_args: "bridgeArgs",
+  provider_config: "providerConfig",
 };
 const agentRecordAliases = {
   ...codexAliases,
@@ -360,7 +339,7 @@ export const defaultSettings = (options: DefaultSettingsOptions = {}): Settings 
   const cwd = options.cwd ?? ".";
   const workspaceRoot = joinPath(tmpdir, "symphony_workspaces");
   const codex: CodexSettings = {
-    command: "codex app-server",
+    command: "codex-acp",
     approvalPolicy: {
       reject: {
         sandbox_approval: true,
@@ -377,11 +356,12 @@ export const defaultSettings = (options: DefaultSettingsOptions = {}): Settings 
   };
   const claude: ClaudeSettings = {
     command: "claude-agent-acp",
-    model: "claude-opus-4-6[1m]",
-    permissionMode: "dontAsk",
     turnTimeoutMs: 3_600_000,
     stallTimeoutMs: 300_000,
     strictMcpConfig: true,
+    providerConfig: {
+      permissions: { defaultMode: "dontAsk" },
+    },
   };
   return {
     tracker: {
@@ -460,7 +440,7 @@ export function parseConfig(
 
   settings.hooks = parseHooks(settings.hooks, parsed.hooks ?? {});
   if (settings.workspace.isolation === "none") assertNoWorkspaceHooks(settings.hooks);
-  settings.agent = parseAgent(settings.agent, parsed.agent ?? {});
+  settings.agent = parseAgentSettings(settings.agent, parsed.agent ?? {});
   settings.codex = parseCodex(settings.codex, parsed.codex ?? {});
   settings.claude = parseClaude(settings.claude, parsed.claude ?? {});
   settings.agents = parseAgents(parsed.agents ?? {}, settings.codex, settings.claude);
@@ -530,10 +510,7 @@ export function validateDispatchConfig(settings: Settings): void {
   for (const kind of requiredBackends) {
     const agent = settings.agents[kind];
     if (!agent) throw new Error(`agents.${kind} is required`);
-    if (agent.executor === "appserver" && !agent.command.trim()) {
-      throw new Error(`${kind}.command is required`);
-    }
-    if (agent.executor === "acp" && !agent.bridgeCommand.trim()) {
+    if (!agent.bridgeCommand.trim()) {
       throw new Error(
         kind === "claude"
           ? "claude.command is required"
@@ -659,7 +636,7 @@ function parseHooks(defaults: HooksSettings, hooksRaw: HooksRaw): HooksSettings 
   };
 }
 
-function parseAgent(defaults: AgentSettings, agentRaw: AgentRaw): AgentSettings {
+function parseAgentSettings(defaults: AgentSettings, agentRaw: AgentRaw): AgentSettings {
   const kind = agentRaw.kind ?? defaults.kind;
 
   return {
@@ -678,19 +655,21 @@ function parseAgents(
 ): Record<string, AgentConfig> {
   const baseAgents = defaultAgentRecords(codex, claude);
   const agents = cloneAgentRecords(baseAgents);
+  const claudeDefaults = baseAgents.claude!;
   for (const [name, value] of Object.entries(raw)) {
     const normalized = name.trim();
     if (!normalized) throw new Error("agents names must not be blank");
     const recordRaw = asRecord(value, `agents.${normalized}`);
-    const executor = stringValue(recordRaw.executor, normalized === "codex" ? "appserver" : "acp");
-    if (executor !== "appserver" && executor !== "acp") {
-      throw new Error(`unsupported agents.${normalized}.executor: ${executor}`);
+    const executor = recordRaw.executor;
+    if (executor !== undefined && executor !== "acp") {
+      throw new Error(`unsupported agents.${normalized}.executor: ${JSON.stringify(executor)}`);
     }
-    const parsed = parseAgentRecordSchema({ ...recordRaw, executor }, `agents.${normalized}`);
-    agents[normalized] = parseAgentRecord(parsed, {
-      codex: baseAgents.codex as AppServerAgentConfig,
-      claude: baseAgents.claude as AcpAgentConfig,
-    });
+    const parsed = parseAgentRecordSchema(
+      { ...recordRaw, executor: "acp" },
+      `agents.${normalized}`,
+    );
+    const defaults = baseAgents[normalized] ?? claudeDefaults;
+    agents[normalized] = parseAgent(parsed, defaults);
   }
   return agents;
 }
@@ -703,32 +682,11 @@ function parseAgentRecordSchema(raw: Record<string, unknown>, label: string): Ag
   throw new Error(configErrorMessage(result.error, label));
 }
 
-function parseAgentRecord(
-  raw: AgentRecordRaw,
-  defaults: { codex: AppServerAgentConfig; claude: AcpAgentConfig },
-): AgentConfig {
-  if (raw.executor === "appserver") return parseAppServerAgent(raw, defaults.codex);
-  return parseAcpAgent(raw, defaults.claude);
-}
-
-function parseAppServerAgent(
-  raw: z.infer<typeof appServerAgentRecordSchema>,
-  defaults: AppServerAgentConfig,
-): AppServerAgentConfig {
-  const codex = parseCodex(defaults, raw);
-  return { executor: "appserver", ...codex };
-}
-
-function parseAcpAgent(
-  raw: z.infer<typeof acpAgentRecordSchema>,
-  defaults: AcpAgentConfig,
-): AcpAgentConfig {
+function parseAgent(raw: z.infer<typeof acpAgentRecordSchema>, defaults: AgentConfig): AgentConfig {
   return {
     executor: "acp",
     bridgeCommand: raw.bridgeCommand ?? raw.command ?? defaults.bridgeCommand,
-    bridgeArgs: raw.bridgeArgs ?? defaults.bridgeArgs,
-    model: raw.model ?? defaults.model,
-    permissionMode: raw.permissionMode ?? defaults.permissionMode,
+    providerConfig: raw.providerConfig ?? defaults.providerConfig,
     turnTimeoutMs: raw.turnTimeoutMs ?? defaults.turnTimeoutMs,
     stallTimeoutMs: raw.stallTimeoutMs ?? defaults.stallTimeoutMs,
     strictMcpConfig: raw.strictMcpConfig ?? defaults.strictMcpConfig ?? true,
@@ -736,17 +694,20 @@ function parseAcpAgent(
 }
 
 function defaultAgentRecords(
-  codex: CodexSettings,
+  codex: Pick<CodexSettings, "turnTimeoutMs" | "stallTimeoutMs">,
   claude: ClaudeSettings,
 ): Record<string, AgentConfig> {
   return {
-    codex: { executor: "appserver", ...codex },
+    codex: {
+      executor: "acp",
+      bridgeCommand: "codex-acp",
+      turnTimeoutMs: codex.turnTimeoutMs,
+      stallTimeoutMs: codex.stallTimeoutMs,
+    },
     claude: {
       executor: "acp",
       bridgeCommand: claude.command,
-      bridgeArgs: ["--permission-mode", claude.permissionMode, "--model", claude.model],
-      model: claude.model,
-      permissionMode: claude.permissionMode,
+      providerConfig: claude.providerConfig,
       turnTimeoutMs: claude.turnTimeoutMs,
       stallTimeoutMs: claude.stallTimeoutMs,
       strictMcpConfig: claude.strictMcpConfig,
@@ -755,28 +716,14 @@ function defaultAgentRecords(
 }
 
 function applyKnownAgentRecords(settings: Settings): void {
-  const codex = settings.agents.codex;
-  if (codex?.executor === "appserver") {
-    settings.codex = {
-      command: codex.command,
-      approvalPolicy: codex.approvalPolicy,
-      threadSandbox: codex.threadSandbox,
-      turnSandboxPolicy: codex.turnSandboxPolicy,
-      turnTimeoutMs: codex.turnTimeoutMs,
-      readTimeoutMs: codex.readTimeoutMs,
-      stallTimeoutMs: codex.stallTimeoutMs,
-      reasoning: codex.reasoning ?? settings.codex.reasoning,
-    };
-  }
   const claude = settings.agents.claude;
   if (claude?.executor === "acp") {
     settings.claude = {
       command: claude.bridgeCommand,
-      model: claude.model ?? settings.claude.model,
-      permissionMode: claude.permissionMode ?? settings.claude.permissionMode,
       turnTimeoutMs: claude.turnTimeoutMs,
       stallTimeoutMs: claude.stallTimeoutMs,
       strictMcpConfig: claude.strictMcpConfig ?? settings.claude.strictMcpConfig,
+      providerConfig: claude.providerConfig ?? settings.claude.providerConfig,
     };
   }
 }
@@ -809,11 +756,10 @@ function parseCodex(defaults: CodexSettings, codexRaw: CodexRaw): CodexSettings 
 function parseClaude(defaults: ClaudeSettings, claudeRaw: ClaudeRaw): ClaudeSettings {
   return {
     command: claudeRaw.command ?? defaults.command,
-    model: claudeRaw.model ?? defaults.model,
-    permissionMode: claudeRaw.permissionMode ?? defaults.permissionMode,
     turnTimeoutMs: claudeRaw.turnTimeoutMs ?? defaults.turnTimeoutMs,
     stallTimeoutMs: claudeRaw.stallTimeoutMs ?? defaults.stallTimeoutMs,
     strictMcpConfig: claudeRaw.strictMcpConfig ?? defaults.strictMcpConfig,
+    providerConfig: claudeRaw.providerConfig ?? defaults.providerConfig,
   };
 }
 
@@ -878,11 +824,10 @@ function parsePartialCodex(raw: Partial<CodexRaw>): Partial<CodexSettings> {
 function parsePartialClaude(raw: Partial<ClaudeRaw>): Partial<ClaudeSettings> {
   const next: Partial<ClaudeSettings> = {};
   if (raw.command !== undefined) next.command = raw.command;
-  if (raw.model !== undefined) next.model = raw.model;
-  if (raw.permissionMode !== undefined) next.permissionMode = raw.permissionMode;
   if (raw.strictMcpConfig !== undefined) next.strictMcpConfig = raw.strictMcpConfig;
   if (raw.turnTimeoutMs !== undefined) next.turnTimeoutMs = raw.turnTimeoutMs;
   if (raw.stallTimeoutMs !== undefined) next.stallTimeoutMs = raw.stallTimeoutMs;
+  if (raw.providerConfig !== undefined) next.providerConfig = raw.providerConfig;
   return next;
 }
 
@@ -932,28 +877,12 @@ function cloneTracker(tracker: TrackerSettings): TrackerSettings {
 function cloneAgentRecords(records: Record<string, AgentConfig>): Record<string, AgentConfig> {
   const cloned: Record<string, AgentConfig> = {};
   for (const [name, record] of Object.entries(records)) {
-    cloned[name] =
-      record.executor === "appserver"
-        ? {
-            ...record,
-            approvalPolicy: cloneUnknownRecord(record.approvalPolicy),
-            turnSandboxPolicy: cloneNullableRecord(record.turnSandboxPolicy),
-          }
-        : { ...record, bridgeArgs: [...record.bridgeArgs] };
+    cloned[name] = {
+      ...record,
+      providerConfig: record.providerConfig ? structuredClone(record.providerConfig) : undefined,
+    };
   }
   return cloned;
-}
-
-function cloneUnknownRecord(
-  value: CodexSettings["approvalPolicy"],
-): CodexSettings["approvalPolicy"] {
-  return isPlainRecord(value) ? deepMerge({}, value) : value;
-}
-
-function cloneNullableRecord(
-  value: Record<string, unknown> | null,
-): Record<string, unknown> | null {
-  return value === null ? null : deepMerge({}, value);
 }
 
 function deepMerge(
@@ -1098,12 +1027,6 @@ function normalizeAliases(
     }
   }
   return out;
-}
-
-function stringValue(value: unknown, fallback: string): string {
-  if (value === undefined || value === null) return fallback;
-  // eslint-disable-next-line @typescript-eslint/no-base-to-string
-  return String(value);
 }
 
 function trackerKindValue(value: unknown, label: string): TrackerKind {

@@ -12,13 +12,14 @@ import type { AgentUpdate, CodexSettings, Issue, RuntimeEvent, SessionUpdate } f
 import { assert } from "../../../test/assert.js";
 
 const codexSettingsFixture: CodexSettings = {
-  command: "codex app-server",
+  command: "codex-acp",
   approvalPolicy: "never",
   threadSandbox: "workspace-write",
   turnSandboxPolicy: null,
   turnTimeoutMs: 1,
   readTimeoutMs: 1,
   stallTimeoutMs: 0,
+  reasoning: null,
 };
 
 const issueFixture: Issue = {
@@ -54,7 +55,7 @@ test("literal types reject invalid values at compile time", () => {
   const _sessionUpdate: SessionUpdate = { kind: "event" };
   // @ts-expect-error Issue state type is normalized to known tracker buckets.
   const _issue: Issue = { ...issueFixture, stateType: "needs-review" };
-  // @ts-expect-error Codex thread sandbox accepts only app-server sandbox mode names.
+  // @ts-expect-error Codex thread sandbox accepts only canonical sandbox mode names.
   const _codexSettings: CodexSettings = {
     ...codexSettingsFixture,
     threadSandbox: "workspaceWrite",

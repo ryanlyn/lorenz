@@ -156,12 +156,7 @@ export {
 export { ProjectionActor } from "@symphony/projections";
 export type { RuntimeProjectionInput } from "@symphony/projections";
 export { RetryScheduler } from "@symphony/retry-scheduler";
-export {
-  CodexAppServerExecutor,
-  CodexNdjsonMessageReader,
-  CodexNdjsonMessageWriter,
-} from "@symphony/codex";
-export { AcpExecutor } from "@symphony/acp";
+export { Executor } from "@symphony/acp";
 export {
   AGENT_UPDATE_TYPES,
   CODEX_APPROVAL_POLICY_NAMES,

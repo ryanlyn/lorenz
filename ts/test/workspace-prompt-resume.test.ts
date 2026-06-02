@@ -261,22 +261,29 @@ test("remote workspace creation and removal use SSH hooks and validate remote pa
 test("agent attempts run workspace hooks at lifecycle boundaries and tolerate after_run failures", async () => {
   const root = await tempDir("symphony-ts-workspace-agent-hooks");
   const workspaceRoot = path.join(root, "workspaces");
-  const fakeCodex = path.join(root, "fake-codex.js");
+  const fakeBridge = path.join(root, "fake-acp.mjs");
   const hookLog = path.join(root, "hooks.log");
+  const acpModule = new URL("../node_modules/@agentclientprotocol/sdk/dist/acp.js", import.meta.url)
+    .href;
   await writeExecutable(
-    fakeCodex,
+    fakeBridge,
     `#!/usr/bin/env node
-const readline = require("readline");
-const rl = readline.createInterface({ input: process.stdin });
-rl.on("line", (line) => {
-  const msg = JSON.parse(line);
-  if (msg.id && msg.method === "initialize") console.log(JSON.stringify({ id: msg.id, result: {} }));
-  if (msg.id && msg.method === "thread/start") console.log(JSON.stringify({ id: msg.id, result: { thread: { id: "thread-hooks" } } }));
-  if (msg.id && msg.method === "turn/start") {
-    console.log(JSON.stringify({ id: msg.id, result: { turn: { id: "turn-hooks" } } }));
-    console.log(JSON.stringify({ method: "turn/completed" }));
+import { Readable, Writable } from "node:stream";
+import * as acp from ${JSON.stringify(acpModule)};
+class FakeAgent {
+  constructor(connection) { this.connection = connection; }
+  async initialize() { return { protocolVersion: acp.PROTOCOL_VERSION, agentCapabilities: { sessionCapabilities: { close: {} } } }; }
+  async authenticate() { return {}; }
+  async newSession() { return { sessionId: "hooks-session" }; }
+  async prompt() {
+    await this.connection.sessionUpdate({ sessionId: "hooks-session", update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "done" } } });
+    return { stopReason: "end_turn", usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 } };
   }
-});
+  async cancel() {}
+  async closeSession() { return {}; }
+}
+const stream = acp.ndJsonStream(Writable.toWeb(process.stdout), Readable.toWeb(process.stdin));
+new acp.AgentSideConnection((connection) => new FakeAgent(connection), stream);
 `,
   );
   const settings = parseConfig({
@@ -286,7 +293,13 @@ rl.on("line", (line) => {
       before_run: `echo before_run >> ${JSON.stringify(hookLog)}`,
       after_run: `echo after_run >> ${JSON.stringify(hookLog)}; exit 17`,
     },
-    codex: { command: `${fakeCodex} app-server`, turn_timeout_ms: 5_000 },
+    agents: {
+      codex: {
+        bridge_command: `${process.execPath} ${fakeBridge}`,
+        turn_timeout_ms: 5_000,
+        stall_timeout_ms: 0,
+      },
+    },
     agent: { max_turns: 1 },
   });
   const workflow = {
@@ -309,7 +322,6 @@ rl.on("line", (line) => {
 test('workspace.isolation = "none" rejects every hook and co-locates agents in one folder', async () => {
   const root = await tempDir("symphony-ts-shared-ws");
 
-  // A shared workspace cannot be paired with any lifecycle hook — config refuses it outright.
   for (const hook of ["after_create", "before_run", "after_run", "before_remove"]) {
     assert.throws(
       () =>
@@ -321,27 +333,40 @@ test('workspace.isolation = "none" rejects every hook and co-locates agents in o
     );
   }
 
-  const fakeCodex = path.join(root, "fake-codex.js");
+  const fakeBridge = path.join(root, "fake-acp.mjs");
+  const acpModule = new URL("../node_modules/@agentclientprotocol/sdk/dist/acp.js", import.meta.url)
+    .href;
   await writeExecutable(
-    fakeCodex,
+    fakeBridge,
     `#!/usr/bin/env node
-const readline = require("readline");
-const rl = readline.createInterface({ input: process.stdin });
-rl.on("line", (line) => {
-  const msg = JSON.parse(line);
-  if (msg.id && msg.method === "initialize") console.log(JSON.stringify({ id: msg.id, result: {} }));
-  if (msg.id && msg.method === "thread/start") console.log(JSON.stringify({ id: msg.id, result: { thread: { id: "thread-shared" } } }));
-  if (msg.id && msg.method === "turn/start") {
-    console.log(JSON.stringify({ id: msg.id, result: { turn: { id: "turn-shared" } } }));
-    console.log(JSON.stringify({ method: "turn/completed" }));
+import { Readable, Writable } from "node:stream";
+import * as acp from ${JSON.stringify(acpModule)};
+class FakeAgent {
+  constructor(connection) { this.connection = connection; }
+  async initialize() { return { protocolVersion: acp.PROTOCOL_VERSION, agentCapabilities: { sessionCapabilities: { close: {} } } }; }
+  async authenticate() { return {}; }
+  async newSession() { return { sessionId: "shared-session" }; }
+  async prompt() {
+    await this.connection.sessionUpdate({ sessionId: "shared-session", update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "done" } } });
+    return { stopReason: "end_turn", usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 } };
   }
-});
+  async cancel() {}
+  async closeSession() { return {}; }
+}
+const stream = acp.ndJsonStream(Writable.toWeb(process.stdout), Readable.toWeb(process.stdin));
+new acp.AgentSideConnection((connection) => new FakeAgent(connection), stream);
 `,
   );
   const sharedRoot = path.join(root, "shared");
   const settings = parseConfig({
     workspace: { root: sharedRoot, isolation: "none" },
-    codex: { command: `${fakeCodex} app-server`, turn_timeout_ms: 5_000 },
+    agents: {
+      codex: {
+        bridge_command: `${process.execPath} ${fakeBridge}`,
+        turn_timeout_ms: 5_000,
+        stall_timeout_ms: 0,
+      },
+    },
     agent: { max_turns: 1 },
   });
   assert.equal(settings.workspace.isolation, "none");
@@ -361,7 +386,6 @@ rl.on("line", (line) => {
   const canonicalRoot = await fs.realpath(sharedRoot);
   assert.equal(first.workspace, canonicalRoot);
   assert.equal(second.workspace, canonicalRoot);
-  // No per-issue subfolder is created in shared mode.
   const entries = await fs.readdir(canonicalRoot);
   assert.ok(!entries.includes(safeIdentifier(sampleIssue.identifier)));
   assert.ok(!entries.includes("MT-77"));
@@ -432,8 +456,7 @@ new acp.AgentSideConnection((connection) => new FakeAgent(connection), stream);
     agents: {
       claude: {
         executor: "acp",
-        bridge_command: process.execPath,
-        bridge_args: [fakeClaude],
+        bridge_command: `${process.execPath} ${fakeClaude}`,
         turn_timeout_ms: 5_000,
         stall_timeout_ms: 0,
       },
@@ -464,23 +487,30 @@ test("remote agent attempts run hooks and persist resume state over SSH", async 
   const root = await tempDir("symphony-ts-remote-agent-hooks");
   const trace = path.join(root, "ssh.trace");
   const remoteHome = path.join(root, "remote-home");
-  const fakeCodex = path.join(root, "fake-codex.js");
+  const fakeBridge = path.join(root, "fake-acp.mjs");
   const hookLog = path.join(root, "remote-hooks.log");
+  const acpModule = new URL("../node_modules/@agentclientprotocol/sdk/dist/acp.js", import.meta.url)
+    .href;
 
   await writeExecutable(
-    fakeCodex,
+    fakeBridge,
     `#!/usr/bin/env node
-const readline = require("readline");
-const rl = readline.createInterface({ input: process.stdin });
-rl.on("line", (line) => {
-  const msg = JSON.parse(line);
-  if (msg.id && msg.method === "initialize") console.log(JSON.stringify({ id: msg.id, result: {} }));
-  if (msg.id && msg.method === "thread/start") console.log(JSON.stringify({ id: msg.id, result: { thread: { id: "thread-remote-hooks" } } }));
-  if (msg.id && msg.method === "turn/start") {
-    console.log(JSON.stringify({ id: msg.id, result: { turn: { id: "turn-remote-hooks" } } }));
-    console.log(JSON.stringify({ method: "turn/completed" }));
+import { Readable, Writable } from "node:stream";
+import * as acp from ${JSON.stringify(acpModule)};
+class FakeAgent {
+  constructor(connection) { this.connection = connection; }
+  async initialize() { return { protocolVersion: acp.PROTOCOL_VERSION, agentCapabilities: { sessionCapabilities: { close: {} } } }; }
+  async authenticate() { return {}; }
+  async newSession() { return { sessionId: "remote-session" }; }
+  async prompt() {
+    await this.connection.sessionUpdate({ sessionId: "remote-session", update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "done" } } });
+    return { stopReason: "end_turn", usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 } };
   }
-});
+  async cancel() {}
+  async closeSession() { return {}; }
+}
+const stream = acp.ndJsonStream(Writable.toWeb(process.stdout), Readable.toWeb(process.stdin));
+new acp.AgentSideConnection((connection) => new FakeAgent(connection), stream);
 `,
   );
 
@@ -495,7 +525,13 @@ rl.on("line", (line) => {
       before_run: `echo before_run >> ${shellEscape(hookLog)}`,
       after_run: `echo after_run >> ${shellEscape(hookLog)}`,
     },
-    codex: { command: `${fakeCodex} app-server`, turn_timeout_ms: 5_000 },
+    agents: {
+      codex: {
+        bridge_command: `${process.execPath} ${fakeBridge}`,
+        turn_timeout_ms: 5_000,
+        stall_timeout_ms: 0,
+      },
+    },
     agent: { max_turns: 1 },
   });
   const workflow = {
@@ -572,27 +608,39 @@ sleep 1
 test("agent attempts warn and skip invalid resume state files", async () => {
   const root = await tempDir("symphony-ts-invalid-resume-warning");
   const workspaceRoot = path.join(root, "workspaces");
-  const fakeCodex = path.join(root, "fake-codex.js");
+  const fakeBridge = path.join(root, "fake-acp.mjs");
+  const acpModule = new URL("../node_modules/@agentclientprotocol/sdk/dist/acp.js", import.meta.url)
+    .href;
   await writeExecutable(
-    fakeCodex,
+    fakeBridge,
     `#!/usr/bin/env node
-const readline = require("readline");
-const rl = readline.createInterface({ input: process.stdin });
-rl.on("line", (line) => {
-  const msg = JSON.parse(line);
-  if (msg.id && msg.method === "initialize") console.log(JSON.stringify({ id: msg.id, result: {} }));
-  if (msg.id && msg.method === "thread/start") console.log(JSON.stringify({ id: msg.id, result: { thread: { id: "thread-invalid-resume" } } }));
-  if (msg.id && msg.method === "thread/resume") console.log(JSON.stringify({ id: msg.id, error: { message: "should not resume invalid state" } }));
-  if (msg.id && msg.method === "turn/start") {
-    console.log(JSON.stringify({ id: msg.id, result: { turn: { id: "turn-invalid-resume" } } }));
-    console.log(JSON.stringify({ method: "turn/completed" }));
+import { Readable, Writable } from "node:stream";
+import * as acp from ${JSON.stringify(acpModule)};
+class FakeAgent {
+  constructor(connection) { this.connection = connection; }
+  async initialize() { return { protocolVersion: acp.PROTOCOL_VERSION, agentCapabilities: { sessionCapabilities: { close: {} } } }; }
+  async authenticate() { return {}; }
+  async newSession() { return { sessionId: "resume-session" }; }
+  async prompt() {
+    await this.connection.sessionUpdate({ sessionId: "resume-session", update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "done" } } });
+    return { stopReason: "end_turn", usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 } };
   }
-});
+  async cancel() {}
+  async closeSession() { return {}; }
+}
+const stream = acp.ndJsonStream(Writable.toWeb(process.stdout), Readable.toWeb(process.stdin));
+new acp.AgentSideConnection((connection) => new FakeAgent(connection), stream);
 `,
   );
   const settings = parseConfig({
     workspace: { root: workspaceRoot },
-    codex: { command: `${fakeCodex} app-server`, turn_timeout_ms: 5_000 },
+    agents: {
+      codex: {
+        bridge_command: `${process.execPath} ${fakeBridge}`,
+        turn_timeout_ms: 5_000,
+        stall_timeout_ms: 0,
+      },
+    },
     agent: { max_turns: 1 },
   });
   const workflow = {
@@ -624,28 +672,37 @@ rl.on("line", (line) => {
 test("agent attempts leave stall reconciliation to runtime and preserve resume state on turn failure", async () => {
   const root = await tempDir("symphony-ts-stall-retry");
   const workspaceRoot = path.join(root, "workspaces");
-  const fakeCodex = path.join(root, "fake-stalled-codex.js");
+  const fakeBridge = path.join(root, "fake-stall-acp.mjs");
+  const acpModule = new URL("../node_modules/@agentclientprotocol/sdk/dist/acp.js", import.meta.url)
+    .href;
   await writeExecutable(
-    fakeCodex,
+    fakeBridge,
     `#!/usr/bin/env node
-const readline = require("readline");
-const rl = readline.createInterface({ input: process.stdin });
-rl.on("line", (line) => {
-  const msg = JSON.parse(line);
-  if (msg.id && msg.method === "initialize") console.log(JSON.stringify({ id: msg.id, result: {} }));
-  if (msg.id && (msg.method === "thread/start" || msg.method === "thread/resume")) {
-    console.log(JSON.stringify({ id: msg.id, result: { thread: { id: "thread-stalled" } } }));
-  }
-  if (msg.id && msg.method === "turn/start") {
-    console.log(JSON.stringify({ id: msg.id, result: { turn: { id: "turn-stalled" } } }));
-  }
-});
+import { Readable, Writable } from "node:stream";
+import * as acp from ${JSON.stringify(acpModule)};
+class FakeAgent {
+  constructor(connection) { this.connection = connection; }
+  async initialize() { return { protocolVersion: acp.PROTOCOL_VERSION, agentCapabilities: { sessionCapabilities: { close: {} } } }; }
+  async authenticate() { return {}; }
+  async newSession() { return { sessionId: "stall-session" }; }
+  async prompt() { return new Promise(() => {}); }
+  async cancel() {}
+  async closeSession() { return {}; }
+}
+const stream = acp.ndJsonStream(Writable.toWeb(process.stdout), Readable.toWeb(process.stdin));
+new acp.AgentSideConnection((connection) => new FakeAgent(connection), stream);
 `,
   );
 
   const settings = parseConfig({
     workspace: { root: workspaceRoot },
-    codex: { command: `${fakeCodex} app-server`, stall_timeout_ms: 30, turn_timeout_ms: 50 },
+    agents: {
+      codex: {
+        bridge_command: `${process.execPath} ${fakeBridge}`,
+        turn_timeout_ms: 50,
+        stall_timeout_ms: 0,
+      },
+    },
     agent: { max_turns: 1 },
   });
   const workflow = {
@@ -668,7 +725,7 @@ rl.on("line", (line) => {
 
   await assert.rejects(
     () => runAgentAttempt({ issue: sampleIssue, workflow, adapters: resumeStore.adapters }),
-    /codex turn timed out/,
+    /timed out/,
   );
   assert.equal(resumeStore.read(workspace)?.resumeId, "thread-stale");
 });

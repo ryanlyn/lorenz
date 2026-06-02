@@ -85,8 +85,6 @@ describe("INVARIANT: When no override is present, the base settings SHALL remain
 
         // Claude settings preserved
         assert.equal(result.claude.command, settings.claude.command);
-        assert.equal(result.claude.model, settings.claude.model);
-        assert.equal(result.claude.permissionMode, settings.claude.permissionMode);
         assert.equal(result.claude.turnTimeoutMs, settings.claude.turnTimeoutMs);
         assert.equal(result.claude.stallTimeoutMs, settings.claude.stallTimeoutMs);
       }),
@@ -113,7 +111,7 @@ test("state present but NOT in overrides map — base settings remain unchanged"
       // Should match base defaults
       assert.equal(result.agent.maxConcurrentAgents, settings.agent.maxConcurrentAgents);
       assert.equal(result.codex.turnTimeoutMs, settings.codex.turnTimeoutMs);
-      assert.equal(result.claude.model, settings.claude.model);
+      assert.equal(result.claude.turnTimeoutMs, settings.claude.turnTimeoutMs);
     }),
     { numRuns: 200 },
   );
@@ -414,8 +412,6 @@ test("partial claude override preserves unmentioned claude fields", () => {
 
       // Unmentioned fields preserved
       assert.equal(result.claude.command, settings.claude.command);
-      assert.equal(result.claude.model, settings.claude.model);
-      assert.equal(result.claude.permissionMode, settings.claude.permissionMode);
       assert.equal(result.claude.stallTimeoutMs, settings.claude.stallTimeoutMs);
       assert.equal(result.claude.strictMcpConfig, settings.claude.strictMcpConfig);
     }),
@@ -441,7 +437,6 @@ test("override with only agent section leaves codex and claude untouched", () =>
 
       // Claude entirely untouched
       assert.equal(result.claude.command, settings.claude.command);
-      assert.equal(result.claude.model, settings.claude.model);
       assert.equal(result.claude.turnTimeoutMs, settings.claude.turnTimeoutMs);
       assert.equal(result.claude.stallTimeoutMs, settings.claude.stallTimeoutMs);
     }),
@@ -494,7 +489,7 @@ test("partial override via parseConfig preserves fields not in raw config", () =
       assert.equal(result.agent.ensembleSize, settings.agent.ensembleSize);
       // Codex and claude completely default
       assert.equal(result.codex.turnTimeoutMs, settings.codex.turnTimeoutMs);
-      assert.equal(result.claude.model, settings.claude.model);
+      assert.equal(result.claude.turnTimeoutMs, settings.claude.turnTimeoutMs);
     }),
     { numRuns: 200 },
   );
@@ -714,7 +709,7 @@ test("Robustness: settingsForIssueState is deterministic for same input", () => 
 
       assert.equal(result1.agent.maxTurns, result2.agent.maxTurns);
       assert.equal(result1.codex.turnTimeoutMs, result2.codex.turnTimeoutMs);
-      assert.equal(result1.claude.model, result2.claude.model);
+      assert.equal(result1.claude.turnTimeoutMs, result2.claude.turnTimeoutMs);
     }),
     { numRuns: 200 },
   );
@@ -744,7 +739,7 @@ test("Robustness: override with all three sections applies each independently", 
         // Unmentioned fields in each section preserved
         assert.equal(result.agent.maxConcurrentAgents, settings.agent.maxConcurrentAgents);
         assert.equal(result.codex.command, settings.codex.command);
-        assert.equal(result.claude.model, settings.claude.model);
+        assert.equal(result.claude.command, settings.claude.command);
       },
     ),
     { numRuns: 200 },

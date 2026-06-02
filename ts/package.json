@@ -39,7 +39,6 @@
     "@symphony/child-process": "workspace:*",
     "@symphony/cli": "workspace:*",
     "@symphony/cli-kit": "workspace:*",
-    "@symphony/codex": "workspace:*",
     "@symphony/config": "workspace:*",
     "@symphony/dispatch": "workspace:*",
     "@symphony/domain": "workspace:*",

@@ -30,11 +30,13 @@ agent:
   max_turns: 10
 
 codex:
-  command: codex app-server
   approval_policy: never
   thread_sandbox: workspace-write
   turn_timeout_ms: 120000
   stall_timeout_ms: 60000
+agents:
+  codex:
+    bridge_command: codex-acp
 
 server:
   port: 4040

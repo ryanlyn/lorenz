@@ -149,8 +149,8 @@ agent:
 
 agents:
   codex:
-    executor: appserver
-    command: codex app-server
+    executor: acp
+    bridge_command: codex-acp
   claude:
     executor: acp
     bridge_command: claude-agent-acp
@@ -169,7 +169,7 @@ status_overrides:
       max_concurrent_agents: 2
 
 codex:
-  command: codex app-server # launched through bash -lc in the workspace
+  command: codex-acp # legacy alias for agents.codex.bridge_command
   approval_policy: never # untrusted, on-failure, on-request, never, or a map
   thread_sandbox: workspace-write # read-only, workspace-write, danger-full-access
   turn_sandbox_policy:
@@ -472,7 +472,7 @@ pnpm test:live:linear-sandbox
 
 Environment knobs:
 
-- `SYMPHONY_TS_CODEX_COMMAND` overrides the Codex app-server command for live tests.
+- `SYMPHONY_TS_CODEX_ACP_COMMAND` overrides the Codex ACP bridge command for live tests.
 - `SYMPHONY_TS_CLAUDE_ACP_BRIDGE_COMMAND` enables Claude live tests.
 - `SYMPHONY_TS_CLAUDE_ACP_BRIDGE_ARGS` supplies Claude ACP bridge args as a JSON string array.
 - `LINEAR_API_KEY` is required for Linear live tests and Claude MCP canaries.

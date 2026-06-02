@@ -419,27 +419,15 @@ export interface AgentSettings {
 }
 
 /**
- * Agent record selecting the in-process Codex app-server executor. Inherits all Codex runtime
- * knobs since the executor speaks Codex's JSON-RPC app-server protocol directly over stdio.
- */
-export interface AppServerAgentConfig extends CodexSettings {
-  executor: "appserver";
-}
-
-/**
  * Agent record selecting the Agent Client Protocol (ACP) executor, which drives an external
  * bridge subprocess (e.g. Claude Code) over stdio using the ACP JSON-RPC schema.
  */
-export interface AcpAgentConfig {
+export interface AgentConfig {
   executor: "acp";
-  /** Shell command launched per session (run via `bash -lc` in the workspace, or over SSH on remote workers). */
+  /** Shell command launched per session (run via `bash -lc` in the workspace, or over SSH on remote workers). Also determines the provider config format: `claude-agent-acp` → `.claude/settings.local.json`, `codex-acp` → `.codex/config.toml`. */
   bridgeCommand: string;
-  /** Additional argv appended to `bridgeCommand` when launching the bridge process. */
-  bridgeArgs: string[];
-  /** Informational model identifier passed to bridge defaults; not interpreted by the ACP executor itself. */
-  model?: string | undefined;
-  /** Informational permission-mode string for the bridge (e.g. Claude's `"dontAsk"`); not interpreted by ACP directly. */
-  permissionMode?: string | undefined;
+  /** Free-form provider configuration written to the workspace before launching the bridge. The file path and format are derived from {@link bridgeCommand}. */
+  providerConfig?: Record<string, unknown> | undefined;
   /** Hard limit (ms) on a single ACP turn before it is force-cancelled. */
   turnTimeoutMs: number;
   /** Inactivity window (ms) after which a session with no agent events is treated as stalled and aborted. `<= 0` disables stall detection. */
@@ -449,14 +437,9 @@ export interface AcpAgentConfig {
 }
 
 /**
- * Per-agent backend configuration keyed by agent kind in {@link Settings.agents}.
- * Discriminated by `executor`: `"appserver"` runs Codex directly, `"acp"` spawns an ACP bridge.
- */
-export type AgentConfig = AppServerAgentConfig | AcpAgentConfig;
-
-/**
- * Runtime knobs for the Codex app-server executor. Policy/sandbox fields are pass-through values
- * matching the installed Codex schema (inspect via `codex app-server generate-json-schema`).
+ * Legacy top-level codex configuration section. Fields `turnTimeoutMs` and `stallTimeoutMs`
+ * feed defaults into the `agents.codex` AgentConfig record. Remaining fields are retained
+ * for backward compatibility with existing workflow YAML files but are not consumed at runtime.
  */
 export interface CodexSettings {
   /** Shell command launched per session; invoked via `bash -lc` in the workspace directory. */
@@ -475,7 +458,7 @@ export interface CodexSettings {
   turnSandboxPolicy: Record<string, unknown> | null;
   /** Hard limit (ms) on a single Codex turn before it is treated as timed out. */
   turnTimeoutMs: number;
-  /** Per-request JSON-RPC read timeout (ms) for app-server method calls. */
+  /** Per-request read timeout (ms). Retained for config compatibility; not consumed at runtime. */
   readTimeoutMs: number;
   /** Inactivity window (ms) before a session with no events is force-aborted as stalled. `<= 0` disables stall detection. */
   stallTimeoutMs: number;
@@ -490,21 +473,19 @@ export interface CodexReasoning {
 
 /**
  * Runtime knobs for the Claude Code backend, driven via an ACP bridge subprocess.
- * Mirrored into the `claude` entry of {@link Settings.agents} as an {@link AcpAgentConfig}.
+ * Mirrored into the `claude` entry of {@link Settings.agents} as an {@link AgentConfig}.
  */
 export interface ClaudeSettings {
   /** Shell command for the Claude Code ACP bridge; invoked via `bash -lc` in the workspace. */
   command: string;
-  /** Claude model identifier passed to the bridge, e.g. `"claude-opus-4-6[1m]"`. */
-  model: string;
-  /** Claude Code permission mode forwarded to the bridge, e.g. `"dontAsk"`, `"acceptEdits"`, `"plan"`. */
-  permissionMode: string;
   /** Hard limit (ms) on a single Claude turn before it is force-cancelled. */
   turnTimeoutMs: number;
   /** Inactivity window (ms) before a stalled session is aborted. `<= 0` disables stall detection. */
   stallTimeoutMs: number;
   /** When true, launch Claude with only Symphony's injected MCP servers (ignore user MCP config). */
   strictMcpConfig: boolean;
+  /** Provider-specific settings written to `.claude/settings.local.json` in the workspace. */
+  providerConfig?: Record<string, unknown> | undefined;
 }
 
 /**

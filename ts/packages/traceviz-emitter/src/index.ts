@@ -7,8 +7,6 @@ import type { AgentUpdate } from "@symphony/domain";
 /**
  * Notification methods that carry meaningful trace information.
  * Everything else (streaming deltas, config warnings, rate limits, etc.) is dropped.
- * Mirrors the filtering in thib-coding-agent's CodexEventMerger which only keeps
- * item.completed and turn.completed.
  */
 const NOTIFICATION_METHOD_ALLOWLIST = new Set(["item/completed", "turn/started", "turn/completed"]);
 

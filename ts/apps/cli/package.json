@@ -59,7 +59,6 @@
     "@symphony/dispatch": "workspace:*",
     "@symphony/projections": "workspace:*",
     "@symphony/retry-scheduler": "workspace:*",
-    "@symphony/codex": "workspace:*",
     "@symphony/acp": "workspace:*",
     "@symphony/cli-kit": "workspace:*",
     "@symphony/traceviz-emitter": "workspace:*"

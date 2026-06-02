@@ -31,9 +31,6 @@ importers:
       "@symphony/cli-kit":
         specifier: workspace:*
         version: link:packages/cli-kit
-      "@symphony/codex":
-        specifier: workspace:*
-        version: link:packages/codex
       "@symphony/config":
         specifier: workspace:*
         version: link:packages/config
@@ -217,9 +214,6 @@ importers:
       "@symphony/cli-kit":
         specifier: workspace:*
         version: link:../../packages/cli-kit
-      "@symphony/codex":
-        specifier: workspace:*
-        version: link:../../packages/codex
       "@symphony/config":
         specifier: workspace:*
         version: link:../../packages/config
@@ -566,69 +560,6 @@ importers:
       "@hono/node-server":
         specifier: ^1.19.14
         version: 1.19.14(hono@4.12.23)
-      acpx:
-        specifier: ^0.7.0
-        version: 0.7.0
-      commander:
-        specifier: ^14.0.3
-        version: 14.0.3
-      execa:
-        specifier: ^9.6.1
-        version: 9.6.1
-      hono:
-        specifier: ^4.12.18
-        version: 4.12.23
-      ink:
-        specifier: ^7.0.1
-        version: 7.0.5(@types/react@19.2.15)(react@19.2.6)
-      liquidjs:
-        specifier: ^10.21.1
-        version: 10.27.0
-      pino:
-        specifier: ^9.14.0
-        version: 9.14.0
-      pino-roll:
-        specifier: ^3.1.0
-        version: 3.1.0
-      react:
-        specifier: ^19.2.5
-        version: 19.2.6
-      ts-pattern:
-        specifier: ^5.9.0
-        version: 5.9.0
-      vscode-jsonrpc:
-        specifier: ^8.2.1
-        version: 8.2.1
-      yaml:
-        specifier: ^2.8.0
-        version: 2.9.0
-      zod:
-        specifier: ^4.4.3
-        version: 4.4.3
-
-  packages/codex:
-    dependencies:
-      "@agentclientprotocol/sdk":
-        specifier: ^0.21.0
-        version: 0.21.1(zod@4.4.3)
-      "@hono/node-server":
-        specifier: ^1.19.14
-        version: 1.19.14(hono@4.12.23)
-      "@symphony/domain":
-        specifier: workspace:*
-        version: link:../domain
-      "@symphony/mcp":
-        specifier: workspace:*
-        version: link:../mcp
-      "@symphony/protocol":
-        specifier: workspace:*
-        version: link:../protocol
-      "@symphony/ssh":
-        specifier: workspace:*
-        version: link:../ssh
-      "@symphony/workspace":
-        specifier: workspace:*
-        version: link:../workspace
       acpx:
         specifier: ^0.7.0
         version: 0.7.0

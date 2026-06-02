@@ -21,10 +21,9 @@ import type {
   TraceProcessMessage,
 } from "./index.js";
 
-
 // --- ACP SDK -> Normalized ---
 
-export function normalizeAcpTextChunk(notification: SessionNotification): TraceTextMessage {
+export function normalizeTextChunk(notification: SessionNotification): TraceTextMessage {
   const update = notification.update as Record<string, unknown>;
   const content = update.content as Record<string, unknown> | undefined;
   return {
@@ -33,7 +32,7 @@ export function normalizeAcpTextChunk(notification: SessionNotification): TraceT
   };
 }
 
-export function normalizeAcpToolCall(notification: SessionNotification): TraceToolCall {
+export function normalizeToolCall(notification: SessionNotification): TraceToolCall {
   const update = notification.update as Record<string, unknown>;
   return {
     toolCallId: (update.toolCallId as string) ?? "",
@@ -43,7 +42,7 @@ export function normalizeAcpToolCall(notification: SessionNotification): TraceTo
   };
 }
 
-export function normalizeAcpToolCallUpdate(notification: SessionNotification): TraceToolCallUpdate {
+export function normalizeToolCallUpdate(notification: SessionNotification): TraceToolCallUpdate {
   const update = notification.update as Record<string, unknown>;
   let output: string | null = null;
   if (typeof update.rawOutput === "string") {
@@ -69,7 +68,7 @@ export function normalizeAcpToolCallUpdate(notification: SessionNotification): T
   };
 }
 
-export function normalizeAcpToolResult(
+export function normalizeToolResult(
   notification: SessionNotification,
   isError: boolean,
 ): TraceToolResult {
@@ -100,7 +99,7 @@ export function normalizeAcpToolResult(
   };
 }
 
-export function normalizeAcpUsage(used: number): TraceUsageMessage {
+export function normalizeUsage(used: number): TraceUsageMessage {
   return { totalTokens: used };
 }
 

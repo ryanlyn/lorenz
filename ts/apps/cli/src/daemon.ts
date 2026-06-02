@@ -1,6 +1,6 @@
 import os from "node:os";
 
-import { AcpExecutor } from "@symphony/acp";
+import { Executor } from "@symphony/acp";
 import {
   runAgentAttempt as runAgentAttemptCore,
   type RunAgentAttemptAdapters,
@@ -8,7 +8,6 @@ import {
   type RunResult,
 } from "@symphony/agent-runner";
 import type { DefaultSettingsOptions } from "@symphony/config";
-import { CodexAppServerExecutor } from "@symphony/codex";
 import type { RuntimeTrackerClient, Settings } from "@symphony/domain";
 import { createWorkspaceForIssue, removeIssueWorkspaces, runHook } from "@symphony/workspace";
 import { appendLogEvent } from "@symphony/log-file";
@@ -62,9 +61,7 @@ export function createRunAgentAttemptAdapters(): RunAgentAttemptAdapters {
     executorFactory: (settings) => {
       const agent = settings.agents[settings.agent.kind];
       if (!agent) throw new Error(`agents.${settings.agent.kind} is required`);
-      if (agent.executor === "appserver") return new CodexAppServerExecutor();
-      if (agent.executor === "acp") return new AcpExecutor(settings.agent.kind);
-      throw new Error(`unsupported agents.${settings.agent.kind}.executor`);
+      return new Executor(settings.agent.kind);
     },
   };
 }

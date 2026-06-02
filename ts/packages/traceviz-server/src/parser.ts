@@ -20,7 +20,7 @@ import {
   isTraceToolCallUpdate,
 } from "./type-guards.js";
 
-/** Tool name -> category mapping for common Claude/Codex tools. */
+/** Tool name -> category mapping for common Claude tools. */
 const TOOL_NAME_CATEGORIES: Record<string, ToolCategory> = {
   // plan_mode
   Task: "plan_mode",
@@ -73,7 +73,6 @@ interface RawTraceLine {
   usage?: { inputTokens?: number; outputTokens?: number; totalTokens?: number } | null;
   workspacePath?: string | null;
   sessionId?: string | null;
-  executorPid?: string | null;
 }
 
 interface PendingToolCall {
@@ -107,49 +106,42 @@ function parseLine(line: string): RawTraceLine | null {
 }
 
 /**
- * Extract text from an ACP SessionNotification message.
- * ACP wraps content in: {sessionId, update: {sessionUpdate, content: {type: "text", text: "..."}}}
+ * Extract the ACP `update` envelope from a SessionNotification message.
+ * All AgentUpdates from the ACP executor use this shape: {sessionId, update: {...}}
  */
-function extractAcpText(msg: unknown): string | null {
+function extractUpdate(msg: unknown): Record<string, unknown> | null {
   if (typeof msg !== "object" || msg === null) return null;
   const rec = msg as Record<string, unknown>;
   const update = rec.update as Record<string, unknown> | undefined;
-  if (!update) return null;
-  const content = update.content as Record<string, unknown> | undefined;
-  if (content && typeof content.text === "string") return content.text;
-  return null;
+  return update ?? null;
 }
 
-/**
- * Extract tool call info from an ACP SessionNotification for tool_call updates.
- * ACP format: {sessionId, update: {sessionUpdate: "tool_call", title, toolCallId, rawInput, kind, ...}}
- */
-function extractAcpToolCall(
+function extractText(msg: unknown): string {
+  if (typeof msg === "string") return msg;
+  const update = extractUpdate(msg);
+  if (update) {
+    const content = update.content as Record<string, unknown> | undefined;
+    if (content && typeof content.text === "string") return content.text;
+  }
+  return "";
+}
+
+function extractToolCall(
   msg: unknown,
 ): { name: string; id: string; input: Record<string, unknown> } | null {
-  if (typeof msg !== "object" || msg === null) return null;
-  const rec = msg as Record<string, unknown>;
-  const update = rec.update as Record<string, unknown> | undefined;
-  if (!update) return null;
-  if (update.sessionUpdate !== "tool_call") return null;
+  const update = extractUpdate(msg);
+  if (!update || update.sessionUpdate !== "tool_call") return null;
   const name = (update.title as string) ?? (update.kind as string) ?? "unknown";
   const id = (update.toolCallId as string) ?? "";
   const input = (update.rawInput as Record<string, unknown>) ?? {};
   return { name, id, input };
 }
 
-/**
- * Extract tool result info from an ACP SessionNotification for tool_call_update events.
- * ACP format: {sessionId, update: {sessionUpdate: "tool_call_update", toolCallId, rawOutput, status, content, ...}}
- */
-function extractAcpToolResult(
+function extractToolResult(
   msg: unknown,
 ): { id: string; output: string | unknown[] | null; isError: boolean } | null {
-  if (typeof msg !== "object" || msg === null) return null;
-  const rec = msg as Record<string, unknown>;
-  const update = rec.update as Record<string, unknown> | undefined;
-  if (!update) return null;
-  if (update.sessionUpdate !== "tool_call_update") return null;
+  const update = extractUpdate(msg);
+  if (!update || update.sessionUpdate !== "tool_call_update") return null;
   const id = (update.toolCallId as string) ?? "";
   let output: string | unknown[] | null = null;
   if (typeof update.rawOutput === "string") {
@@ -180,7 +172,6 @@ function extractAcpToolResult(
 
 /**
  * Parse an `item/completed` notification params into a DisplayEvent.
- * Mirrors thib-coding-agent's CodexEventMerger.codexItemToDisplay logic.
  */
 function parseItemCompleted(params: Record<string, unknown>, ts: string): DisplayEvent | null {
   const item = params.item as Record<string, unknown> | undefined;
@@ -284,7 +275,7 @@ export function parseTraceLines(lines: string[]): DisplayEvent[] {
           ? msg.text
           : typeof msg === "string"
             ? msg
-            : (extractAcpText(msg) ??
+            : (extractText(msg) ??
               (typeof msg === "object" && msg !== null
                 ? (((msg as Record<string, unknown>).text as string) ?? "")
                 : ""));
@@ -298,7 +289,7 @@ export function parseTraceLines(lines: string[]): DisplayEvent[] {
           ? msg.text
           : typeof msg === "string"
             ? msg
-            : (extractAcpText(msg) ??
+            : (extractText(msg) ??
               (typeof msg === "object" && msg !== null
                 ? (((msg as Record<string, unknown>).text as string) ?? "")
                 : ""));
@@ -312,7 +303,7 @@ export function parseTraceLines(lines: string[]): DisplayEvent[] {
           ? msg.text
           : typeof msg === "string"
             ? msg
-            : (extractAcpText(msg) ??
+            : (extractText(msg) ??
               (typeof msg === "object" && msg !== null
                 ? (((msg as Record<string, unknown>).text as string) ?? "")
                 : ""));
@@ -341,7 +332,7 @@ export function parseTraceLines(lines: string[]): DisplayEvent[] {
           });
         } else {
           // Legacy fallback
-          const acpTool = extractAcpToolCall(msg);
+          const acpTool = extractToolCall(msg);
           const payload =
             typeof msg === "object" && msg !== null ? (msg as Record<string, unknown>) : {};
           const toolName =
@@ -440,7 +431,7 @@ export function parseTraceLines(lines: string[]): DisplayEvent[] {
           typeof msg === "object" && msg !== null ? (msg as Record<string, unknown>) : {};
 
         // Handle ACP tool_call_update format
-        const acpResult = extractAcpToolResult(msg);
+        const acpResult = extractToolResult(msg);
         if (acpResult) {
           const pendingAcp = acpResult.id ? pendingToolCalls.get(acpResult.id) : undefined;
           if (pendingAcp) {
@@ -517,46 +508,6 @@ export function parseTraceLines(lines: string[]): DisplayEvent[] {
           break;
         }
 
-        // Original handling for Claude format
-        const toolUseId = (payload.id as string) ?? (payload.toolUseId as string) ?? "";
-        const pending = pendingToolCalls.get(toolUseId);
-
-        if (pending) {
-          pendingToolCalls.delete(toolUseId);
-          const toolCall = pending.event;
-          // Only overwrite accumulated partial output if the result provides explicit output
-          const resultOutput =
-            (payload.output as string | unknown[] | null) ??
-            (payload.content as string | unknown[] | null) ??
-            null;
-          if (resultOutput !== null) {
-            toolCall.output = resultOutput;
-          }
-          toolCall.isError =
-            raw.type === "tool_call_failed" || (payload.is_error as boolean) === true;
-          const startMs = new Date(pending.startTs).getTime();
-          const endMs = new Date(ts).getTime();
-          toolCall.durationMs =
-            Number.isNaN(startMs) || Number.isNaN(endMs) ? null : endMs - startMs;
-          events.push(toolCall);
-        } else {
-          // No pending tool call found; emit as standalone
-          const toolName = (payload.name as string) ?? (payload.toolName as string) ?? "unknown";
-          events.push({
-            kind: "tool_call",
-            category: detectToolCategory(toolName),
-            toolName,
-            input: {},
-            output:
-              (payload.output as string | unknown[] | null) ??
-              (payload.content as string | unknown[] | null) ??
-              null,
-            isError: raw.type === "tool_call_failed" || (payload.is_error as boolean) === true,
-            durationMs: null,
-            nestedEvents: [],
-            timestamp: ts,
-          });
-        }
         break;
       }
 
