@@ -4,10 +4,10 @@ import path from "node:path";
 
 import { parseConfig } from "@symphony/config";
 import { test } from "vitest";
+import { BoardStore, LocalTrackerClient } from "@symphony/local-tracker";
 
 import { assert } from "../../../test/assert.js";
 
-import { BoardStore, LocalTrackerClient } from "@symphony/local-tracker";
 
 test("LocalTrackerClient reads candidates by active states from the board dir", async () => {
   const dir = await mkdtemp(path.join(tmpdir(), "board-client-"));

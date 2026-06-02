@@ -4,7 +4,6 @@ import { assert } from "../../../test/assert.js";
 
 import { applyQuery, matchesFilter, parseFilter, parseQuerySpec, pickFields } from "@symphony/mcp";
 
-
 test("predicates: eq, ne, in, nin, exists, and numeric comparisons", () => {
   const r = { state: "Todo", n: 3, labels: ["backend", "urgent"] };
   assert.equal(matchesFilter(r, parseFilter({ field: "state", op: "eq", value: "Todo" })), true);
@@ -74,7 +73,11 @@ test("parseFilter rejects malformed and over-deep filters", () => {
 });
 
 test("parseQuerySpec clamps limit and validates offset and order_by", () => {
-  const spec = parseQuerySpec({ limit: 99999, offset: 2, order_by: [{ field: "title", dir: "desc" }] });
+  const spec = parseQuerySpec({
+    limit: 99999,
+    offset: 2,
+    order_by: [{ field: "title", dir: "desc" }],
+  });
   assert.equal(spec.limit, 1000);
   assert.equal(spec.offset, 2);
   assert.deepEqual(spec.orderBy, [{ field: "title", dir: "desc" }]);

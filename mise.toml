@@ -16,6 +16,7 @@ prek = "latest"
 # Not worth investigating further)
 "npm:@anthropic-ai/claude-code" = "latest"
 "npm:@agentclientprotocol/claude-agent-acp" = "latest"
+"npm:@agentclientprotocol/codex-acp" = "latest"
 
 [tasks.check-env]
 run = '''

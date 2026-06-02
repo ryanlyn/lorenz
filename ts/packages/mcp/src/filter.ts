@@ -125,7 +125,8 @@ export function matchesFilter(record: Record<string, unknown>, filter: Filter): 
 function matchesPredicate(record: Record<string, unknown>, p: Predicate): boolean {
   // An unknown/undefined field is "absent": every comparison is false, mirroring linear_graphql's
   // "ask for a field you do not have, get null" ergonomics. Only `exists:false` matches absence.
-  const present = Object.prototype.hasOwnProperty.call(record, p.field) && record[p.field] !== undefined;
+  const present =
+    Object.prototype.hasOwnProperty.call(record, p.field) && record[p.field] !== undefined;
   if (!present) return p.op === "exists" && p.value === false;
 
   const raw = record[p.field];
@@ -176,7 +177,9 @@ export function applyQuery<T extends Record<string, unknown>>(
   records: T[],
   spec: QuerySpec,
 ): { rows: T[]; total: number } {
-  let filtered = spec.where ? records.filter((r) => matchesFilter(r, spec.where!)) : records.slice();
+  let filtered = spec.where
+    ? records.filter((r) => matchesFilter(r, spec.where!))
+    : records.slice();
   if (spec.orderBy.length > 0) filtered = sortRecords(filtered, spec.orderBy);
   const total = filtered.length;
   return { rows: filtered.slice(spec.offset, spec.offset + spec.limit), total };

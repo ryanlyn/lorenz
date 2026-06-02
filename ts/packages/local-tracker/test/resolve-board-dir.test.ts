@@ -1,10 +1,10 @@
 import path from "node:path";
 
 import { test } from "vitest";
+import { DEFAULT_BOARD_DIR, resolveBoardDir } from "@symphony/local-tracker";
 
 import { assert } from "../../../test/assert.js";
 
-import { DEFAULT_BOARD_DIR, resolveBoardDir } from "@symphony/local-tracker";
 
 test("resolveBoardDir defaults to .symphony/local under cwd", () => {
   const cwd = "/work/project";
