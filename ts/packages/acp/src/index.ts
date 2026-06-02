@@ -79,7 +79,7 @@ export class AcpExecutor implements AgentExecutor {
     let session: AcpSession | null = null;
     try {
       mcpEndpoint = await acquireAgentMcpEndpoint(input.settings, input.workerHost ?? null);
-      await writeProviderConfig(agentConfig, workspace, input.workerHost ?? null);
+      await writeProviderConfig(agentConfig, agentKind, workspace, input.workerHost ?? null);
       child = startBridgeProcess(agentConfig, workspace, input.workerHost ?? null);
       const client = acpClient({
         workspace,
@@ -475,12 +475,13 @@ async function openAcpSession(
 
 async function writeProviderConfig(
   agentConfig: AcpAgentConfig,
+  agentKind: string,
   workspace: string,
   workerHost: string | null,
 ): Promise<void> {
   if (!agentConfig.providerConfig) return;
 
-  const isClaudeBridge = agentConfig.bridgeCommand.includes("claude");
+  const isClaudeBridge = agentKind === "claude";
   const relativePath = isClaudeBridge ? ".claude/settings.local.json" : ".codex/config.toml";
   const content = isClaudeBridge
     ? JSON.stringify(agentConfig.providerConfig, null, 2)

@@ -197,22 +197,111 @@ test("ACP MCP endpoint leases reuse one reverse tunnel per worker host with per-
   }
 });
 
+test("writeProviderConfig writes .claude/settings.local.json for claude bridge", async () => {
+  const root = await tempDir("symphony-ts-acp-provider-claude");
+  const fake = await writeFakeAcpBridge(root);
+  const trace = path.join(root, "trace.jsonl");
+  const providerConfig = { permission_mode: "dontAsk" };
+  const settings = acpSettings(root, fake, trace, "new", 5_000, { providerConfig });
+  const executor = new AcpExecutor("claude");
+  const session = await executor.startSession({
+    workspace: root,
+    settings,
+    issue: sampleIssue,
+  });
+  await session.stop();
+
+  const written = JSON.parse(
+    await fs.readFile(path.join(root, ".claude", "settings.local.json"), "utf8"),
+  );
+  assert.deepEqual(written, { permission_mode: "dontAsk" });
+});
+
+test("writeProviderConfig writes .codex/config.toml for codex bridge", async () => {
+  const root = await tempDir("symphony-ts-acp-provider-codex");
+  const fake = await writeFakeAcpBridge(root);
+  const trace = path.join(root, "trace.jsonl");
+  const providerConfig = { model: "gpt-5.5", model_reasoning_effort: "xhigh" };
+  const settings = acpSettings(root, fake, trace, "new", 5_000, {
+    agentKind: "codex",
+    providerConfig,
+  });
+  const executor = new AcpExecutor("codex");
+  const session = await executor.startSession({
+    workspace: root,
+    settings,
+    issue: sampleIssue,
+  });
+  await session.stop();
+
+  const toml = await fs.readFile(path.join(root, ".codex", "config.toml"), "utf8");
+  assert.match(toml, /model = "gpt-5.5"/);
+  assert.match(toml, /model_reasoning_effort = "xhigh"/);
+});
+
+test("writeProviderConfig writes nested TOML sections", async () => {
+  const root = await tempDir("symphony-ts-acp-provider-toml-nested");
+  const fake = await writeFakeAcpBridge(root);
+  const trace = path.join(root, "trace.jsonl");
+  const providerConfig = {
+    model: "gpt-5.5",
+    history: { max_entries: 100, persistence: true },
+  };
+  const settings = acpSettings(root, fake, trace, "new", 5_000, {
+    agentKind: "codex",
+    providerConfig,
+  });
+  const executor = new AcpExecutor("codex");
+  const session = await executor.startSession({
+    workspace: root,
+    settings,
+    issue: sampleIssue,
+  });
+  await session.stop();
+
+  const toml = await fs.readFile(path.join(root, ".codex", "config.toml"), "utf8");
+  assert.match(toml, /model = "gpt-5.5"/);
+  assert.match(toml, /\[history\]/);
+  assert.match(toml, /max_entries = 100/);
+  assert.match(toml, /persistence = true/);
+});
+
+test("writeProviderConfig is skipped when providerConfig is absent from agent config", async () => {
+  const root = await tempDir("symphony-ts-acp-provider-none");
+  const fake = await writeFakeAcpBridge(root);
+  const trace = path.join(root, "trace.jsonl");
+  const settings = acpSettings(root, fake, trace, "new", 5_000, { agentKind: "codex" });
+  delete (settings.agents.codex as Record<string, unknown>).providerConfig;
+  const executor = new AcpExecutor("codex");
+  const session = await executor.startSession({
+    workspace: root,
+    settings,
+    issue: sampleIssue,
+  });
+  await session.stop();
+
+  await assert.rejects(() => fs.access(path.join(root, ".codex", "config.toml")));
+});
+
 function acpSettings(
   root: string,
   fake: string,
   trace: string,
   mode: string,
   turnTimeoutMs = 5_000,
+  opts?: { agentKind?: string; providerConfig?: Record<string, unknown> },
 ) {
+  const kind = opts?.agentKind ?? "claude";
   return parseConfig({
     workspace: { root: path.dirname(root) },
-    agent: { kind: "claude" },
+    agent: { kind },
     agents: {
-      claude: {
+      [kind]: {
         executor: "acp",
         bridge_command: `${process.execPath} ${fake} ${mode} ${trace}`,
         turn_timeout_ms: turnTimeoutMs,
         stall_timeout_ms: 0,
+        ...(opts?.providerConfig ? { provider_config: opts.providerConfig } : {}),
       },
     },
   });
