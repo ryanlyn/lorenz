@@ -89,11 +89,10 @@ agents:
     stall_timeout_ms: 60000
   claude:
     bridge_command: claude-agent-acp
-    bridge_args: ["--permission-mode", "dontAsk", "--model", "claude-sonnet-4-6"]
-    model: claude-sonnet-4-6
-    permission_mode: dontAsk
     turn_timeout_ms: 360000
     stall_timeout_ms: 300000
+    provider_config:
+      permission_mode: dontAsk
 
 server:
   port: 0

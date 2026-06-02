@@ -117,7 +117,9 @@ function extractText(msg: unknown): string {
   return "";
 }
 
-function extractToolCall(msg: unknown): { name: string; id: string; input: Record<string, unknown> } | null {
+function extractToolCall(
+  msg: unknown,
+): { name: string; id: string; input: Record<string, unknown> } | null {
   const update = extractAcpUpdate(msg);
   if (!update || update.sessionUpdate !== "tool_call") return null;
   const name = (update.title as string) ?? (update.kind as string) ?? "unknown";
@@ -126,7 +128,9 @@ function extractToolCall(msg: unknown): { name: string; id: string; input: Recor
   return { name, id, input };
 }
 
-function extractToolResult(msg: unknown): { id: string; output: string | unknown[] | null; isError: boolean } | null {
+function extractToolResult(
+  msg: unknown,
+): { id: string; output: string | unknown[] | null; isError: boolean } | null {
   const update = extractAcpUpdate(msg);
   if (!update || update.sessionUpdate !== "tool_call_update") return null;
   const id = (update.toolCallId as string) ?? "";

@@ -295,8 +295,7 @@ new acp.AgentSideConnection((connection) => new FakeAgent(connection), stream);
     },
     agents: {
       codex: {
-        bridge_command: process.execPath,
-        bridge_args: [fakeAcp],
+        bridge_command: `${process.execPath} ${fakeAcp}`,
         turn_timeout_ms: 5_000,
         stall_timeout_ms: 0,
       },
@@ -363,8 +362,7 @@ new acp.AgentSideConnection((connection) => new FakeAgent(connection), stream);
     workspace: { root: sharedRoot, isolation: "none" },
     agents: {
       codex: {
-        bridge_command: process.execPath,
-        bridge_args: [fakeAcp],
+        bridge_command: `${process.execPath} ${fakeAcp}`,
         turn_timeout_ms: 5_000,
         stall_timeout_ms: 0,
       },
@@ -458,8 +456,7 @@ new acp.AgentSideConnection((connection) => new FakeAgent(connection), stream);
     agents: {
       claude: {
         executor: "acp",
-        bridge_command: process.execPath,
-        bridge_args: [fakeClaude],
+        bridge_command: `${process.execPath} ${fakeClaude}`,
         turn_timeout_ms: 5_000,
         stall_timeout_ms: 0,
       },
@@ -530,8 +527,7 @@ new acp.AgentSideConnection((connection) => new FakeAgent(connection), stream);
     },
     agents: {
       codex: {
-        bridge_command: process.execPath,
-        bridge_args: [fakeAcp],
+        bridge_command: `${process.execPath} ${fakeAcp}`,
         turn_timeout_ms: 5_000,
         stall_timeout_ms: 0,
       },
@@ -640,8 +636,7 @@ new acp.AgentSideConnection((connection) => new FakeAgent(connection), stream);
     workspace: { root: workspaceRoot },
     agents: {
       codex: {
-        bridge_command: process.execPath,
-        bridge_args: [fakeAcp],
+        bridge_command: `${process.execPath} ${fakeAcp}`,
         turn_timeout_ms: 5_000,
         stall_timeout_ms: 0,
       },
@@ -703,8 +698,7 @@ new acp.AgentSideConnection((connection) => new FakeAgent(connection), stream);
     workspace: { root: workspaceRoot },
     agents: {
       codex: {
-        bridge_command: process.execPath,
-        bridge_args: [fakeAcp],
+        bridge_command: `${process.execPath} ${fakeAcp}`,
         turn_timeout_ms: 50,
         stall_timeout_ms: 0,
       },

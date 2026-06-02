@@ -293,7 +293,6 @@ describe("parseTraceLines turn deduplication", () => {
   });
 });
 
-
 describe("parseTraceLines noise filtering", () => {
   it("does not emit unknown events for usage/session/workspace/stderr/process_exit", () => {
     const lines = [
