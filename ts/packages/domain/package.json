@@ -6,8 +6,7 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
-    ".": "./dist/index.js",
-    "./trace-normalize": "./dist/trace-normalize.js"
+    ".": "./dist/index.js"
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "^0.21.0",

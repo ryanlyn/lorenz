@@ -35,13 +35,6 @@ import type {
   Settings,
   UsageTotals,
 } from "@symphony/domain";
-import {
-  normalizeTextChunk,
-  normalizeToolCall,
-  normalizeToolCallUpdate,
-  normalizeToolResult,
-  normalizeUsage,
-} from "@symphony/domain/trace-normalize";
 import type { SessionUpdateKind } from "@symphony/protocol";
 
 interface Session extends AgentSession {
@@ -298,7 +291,6 @@ function handleSessionUpdate(session: Session, notification: SessionNotification
     return;
   }
   const type = eventTypeForUpdate(notification.update);
-  const message = normalizeMessage(type, notification);
   const update: AgentUpdate = {
     type,
     sessionUpdate: acpProtocolUpdate(
@@ -310,35 +302,12 @@ function handleSessionUpdate(session: Session, notification: SessionNotification
     sessionId: session.sessionId,
     resumeId: session.resumeId,
     executorPid: session.executorPid,
-    message,
+    message: notification,
     usage: extractUsageUpdate(notification.update),
     timestamp: new Date(),
   };
   if (!update.usage) delete update.usage;
   session.onUpdate?.(update);
-}
-
-function normalizeMessage(type: AgentUpdateType, notification: SessionNotification): unknown {
-  switch (type) {
-    case "assistant_message":
-    case "user_message":
-    case "agent_thought":
-      return normalizeTextChunk(notification);
-    case "tool_use_requested":
-      return normalizeToolCall(notification);
-    case "tool_call_update":
-      return normalizeToolCallUpdate(notification);
-    case "tool_result":
-      return normalizeToolResult(notification, false);
-    case "tool_call_failed":
-      return normalizeToolResult(notification, true);
-    case "usage": {
-      const used = (notification.update as { used?: number }).used;
-      return typeof used === "number" ? normalizeUsage(used) : notification;
-    }
-    default:
-      return notification;
-  }
 }
 
 function handlePermissionRequest(

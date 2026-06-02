@@ -11,9 +11,6 @@
   "scripts": {
     "build": "tsc"
   },
-  "dependencies": {
-    "@symphony/domain": "workspace:*"
-  },
   "devDependencies": {
     "@types/node": "^22.15.3",
     "@types/ws": "^8.18.1",
