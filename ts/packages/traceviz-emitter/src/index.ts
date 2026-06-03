@@ -4,10 +4,6 @@ import path from "node:path";
 
 import type { AgentUpdate, TraceEvent } from "@symphony/domain";
 
-function shouldEmit(_update: AgentUpdate): boolean {
-  return true;
-}
-
 export class TraceEmitter {
   private readonly traceDir: string;
   private initialized = new Set<string>();
@@ -19,8 +15,6 @@ export class TraceEmitter {
   }
 
   emit(issueId: string, issueIdentifier: string, update: AgentUpdate): void {
-    if (!shouldEmit(update)) return;
-
     const dirPath = this.issueDirPath(issueIdentifier);
     if (!this.initialized.has(dirPath)) {
       mkdirSync(dirPath, { recursive: true });
