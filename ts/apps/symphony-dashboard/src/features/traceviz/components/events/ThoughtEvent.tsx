@@ -3,6 +3,7 @@ import { Brain, ChevronDown } from "lucide-react";
 
 import type { ThoughtEvent as ThoughtEventType } from "../../api/types";
 import { formatTimestamp, cn } from "../../../../lib/utils";
+import { Markdown } from "../Markdown";
 
 interface ThoughtEventProps {
   event: ThoughtEventType;
@@ -28,14 +29,9 @@ export function ThoughtEvent({ event }: ThoughtEventProps) {
               />
             )}
           </div>
-          <p
-            className={cn(
-              "mt-1 text-sm italic text-foreground/80",
-              !expanded && isLong && "line-clamp-3",
-            )}
-          >
-            {event.text}
-          </p>
+          <div className={cn("mt-1", !expanded && isLong && "line-clamp-3")}>
+            <Markdown className="text-sm italic text-foreground/80">{event.text}</Markdown>
+          </div>
         </div>
       </div>
     </div>

@@ -12,6 +12,7 @@
     "@symphony/traceviz-server": "workspace:*",
     "react": "^19.1",
     "react-dom": "^19.1",
+    "react-markdown": "^10.1",
     "lucide-react": "^0.500",
     "clsx": "^2.1",
     "tailwind-merge": "^3.3"
