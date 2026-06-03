@@ -15,6 +15,7 @@ function fakeIssue(overrides: Partial<Issue> = {}): Issue {
     identifier: "TEST-1",
     title: "Test issue",
     state: "Todo",
+    stateType: "unstarted",
     labels: [],
     blockers: [],
     ...overrides,
