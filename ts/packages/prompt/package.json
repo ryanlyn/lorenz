@@ -9,7 +9,7 @@
     ".": "./dist/index.js"
   },
   "dependencies": {
-    "liquidjs": "^10.21.1",
+    "liquidjs": "catalog:",
     "@symphony/domain": "workspace:*",
     "@symphony/workflow": "workspace:*"
   }

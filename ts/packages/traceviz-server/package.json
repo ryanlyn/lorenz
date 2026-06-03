@@ -12,12 +12,12 @@
     "build": "tsc"
   },
   "dependencies": {
-    "@agentclientprotocol/sdk": "^0.21.0",
+    "@agentclientprotocol/sdk": "catalog:",
     "@symphony/domain": "workspace:*"
   },
   "devDependencies": {
-    "@types/node": "^22.15.3",
-    "tsx": "^4.19.4",
-    "typescript": "^5.8.3"
+    "@types/node": "catalog:",
+    "tsx": "catalog:",
+    "typescript": "catalog:"
   }
 }

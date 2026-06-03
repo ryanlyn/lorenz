@@ -9,7 +9,7 @@
     ".": "./dist/index.js"
   },
   "dependencies": {
-    "yaml": "^2.8.0",
+    "yaml": "catalog:",
     "@symphony/domain": "workspace:*",
     "@symphony/issue": "workspace:*"
   }

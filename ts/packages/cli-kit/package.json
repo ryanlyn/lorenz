@@ -9,6 +9,6 @@
     ".": "./dist/index.js"
   },
   "dependencies": {
-    "commander": "^14.0.3"
+    "commander": "catalog:"
   }
 }
