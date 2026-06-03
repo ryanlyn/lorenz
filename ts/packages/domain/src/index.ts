@@ -107,16 +107,7 @@ export const AGENT_UPDATE_TYPES = [
   "resume_state_warning",
   "session_replay_suppressed",
   "fs_write",
-  "agent_message_chunk",
-  "user_message_chunk",
-  "agent_thought_chunk",
-  "tool_call",
-  "tool_call_update",
-  "plan",
-  "available_commands_update",
-  "current_mode_update",
-  "config_option_update",
-  "session_info_update",
+  "session_notification",
 ] as const;
 
 export type AgentUpdateType = (typeof AGENT_UPDATE_TYPES)[number];
@@ -629,31 +620,15 @@ export interface AgentUpdateBase {
 
 // --- Typed message variants per AgentUpdate.type ---
 
-export type NotificationUpdateType =
-  | "agent_message_chunk"
-  | "user_message_chunk"
-  | "agent_thought_chunk"
-  | "tool_call"
-  | "tool_call_update"
-  | "plan"
-  | "available_commands_update"
-  | "current_mode_update"
-  | "config_option_update"
-  | "session_info_update";
-
 export interface NotificationAgentUpdate extends AgentUpdateBase {
-  type: NotificationUpdateType;
+  type: "session_notification";
   message: SessionNotification;
 }
 
-export type StringMessageUpdateType = "stderr" | "process_exit" | "resume_state_warning";
-
-export interface StringMessageUpdate extends AgentUpdateBase {
-  type: StringMessageUpdateType;
-  message: string;
-}
-
-export type BareUpdateType =
+export type StringMessageUpdateType =
+  | "stderr"
+  | "process_exit"
+  | "resume_state_warning"
   | "session_started"
   | "workspace_prepared"
   | "rate_limit"
@@ -661,8 +636,9 @@ export type BareUpdateType =
   | "tool_input_auto_answered"
   | "malformed";
 
-export interface BareAgentUpdate extends AgentUpdateBase {
-  type: BareUpdateType;
+export interface StringMessageUpdate extends AgentUpdateBase {
+  type: StringMessageUpdateType;
+  message: string;
 }
 
 export interface SessionReplaySuppressedUpdate extends AgentUpdateBase {
@@ -719,7 +695,6 @@ export interface FsWriteUpdate extends AgentUpdateBase {
 export type AgentUpdate =
   | NotificationAgentUpdate
   | StringMessageUpdate
-  | BareAgentUpdate
   | SessionReplaySuppressedUpdate
   | TurnStartedUpdate
   | TurnCompletedUpdate
@@ -730,17 +705,15 @@ export type AgentUpdate =
   | ApprovalAutoApprovedUpdate
   | FsWriteUpdate;
 
-type AgentUpdateMessage<K extends AgentUpdateType> = K extends NotificationUpdateType
+type AgentUpdateMessage<K extends AgentUpdateType> = K extends "session_notification"
   ? SessionNotification
   : K extends StringMessageUpdateType
     ? string
-    : K extends BareUpdateType
-      ? undefined
-      : K extends "usage_update"
-        ? { response: PromptResponse } | SessionNotification
-        : Extract<AgentUpdate, { type: K }> extends { message: infer M }
-          ? M
-          : undefined;
+    : K extends "usage_update"
+      ? { response: PromptResponse } | SessionNotification
+      : Extract<AgentUpdate, { type: K }> extends { message: infer M }
+        ? M
+        : undefined;
 
 /**
  * Wire format of a single JSONL trace line as written by TraceEmitter.

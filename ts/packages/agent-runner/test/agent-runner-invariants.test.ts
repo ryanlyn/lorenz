@@ -50,7 +50,7 @@ function fakeAdapters(overrides: Partial<RunAgentAttemptAdapters> = {}): RunAgen
     executorFactory: () => ({
       kind: "codex",
       async startSession(input) {
-        input.onUpdate?.({ type: "session_started", sessionId: "s1" });
+        input.onUpdate?.({ type: "session_started", message: "session started (s1)", sessionId: "s1" });
         return fakeSession();
       },
       async runTurn() {
@@ -84,7 +84,7 @@ describe("INVARIANT: When the first turn begins, the system SHALL send the full 
         executorFactory: () => ({
           kind: "codex",
           async startSession(input) {
-            input.onUpdate?.({ type: "session_started", sessionId: "s1" });
+            input.onUpdate?.({ type: "session_started", message: "session started (s1)", sessionId: "s1" });
             return fakeSession();
           },
           async runTurn(_session, prompt) {
@@ -121,7 +121,7 @@ describe("INVARIANT: When the first turn begins, the system SHALL send the full 
         executorFactory: () => ({
           kind: "codex",
           async startSession(input) {
-            input.onUpdate?.({ type: "session_started", sessionId: "s1" });
+            input.onUpdate?.({ type: "session_started", message: "session started (s1)", sessionId: "s1" });
             return fakeSession();
           },
           async runTurn(_session, prompt) {
@@ -157,13 +157,13 @@ describe("INVARIANT: When a continuation turn begins, the system SHALL send only
         executorFactory: () => ({
           kind: "codex",
           async startSession(input) {
-            input.onUpdate?.({ type: "session_started", sessionId: "s1" });
+            input.onUpdate?.({ type: "session_started", message: "session started (s1)", sessionId: "s1" });
             return fakeSession();
           },
           async runTurn(_session, prompt) {
             prompts.push(prompt);
             // Emit tool_use_requested so ACP loop continues
-            return [{ type: "tool_call" }, { type: "turn_completed" }];
+            return [{ type: "session_notification", message: { sessionId: "s1", update: { sessionUpdate: "tool_call" } } }, { type: "turn_completed" }];
           },
         }),
       }),
@@ -200,7 +200,7 @@ describe("INVARIANT: When a continuation turn begins, the system SHALL send only
         executorFactory: () => ({
           kind: "codex",
           async startSession(input) {
-            input.onUpdate?.({ type: "session_started", sessionId: "s1" });
+            input.onUpdate?.({ type: "session_started", message: "session started (s1)", sessionId: "s1" });
             return fakeSession();
           },
           async runTurn(_session, prompt) {
@@ -237,12 +237,12 @@ describe("INVARIANT: When the backend profile changes between turns, the system 
         executorFactory: () => ({
           kind: "codex",
           async startSession(input) {
-            input.onUpdate?.({ type: "session_started", sessionId: "s1" });
+            input.onUpdate?.({ type: "session_started", message: "session started (s1)", sessionId: "s1" });
             return fakeSession();
           },
           async runTurn() {
             // Emit tool_use_requested so ACP check does not interfere
-            return [{ type: "tool_call" }, { type: "turn_completed" }];
+            return [{ type: "session_notification", message: { sessionId: "s1", update: { sessionUpdate: "tool_call" } } }, { type: "turn_completed" }];
           },
         }),
       }),
@@ -265,12 +265,12 @@ describe("INVARIANT: When the backend profile changes between turns, the system 
         executorFactory: () => ({
           kind: "codex",
           async startSession(input) {
-            input.onUpdate?.({ type: "session_started", sessionId: "s1" });
+            input.onUpdate?.({ type: "session_started", message: "session started (s1)", sessionId: "s1" });
             return fakeSession();
           },
           async runTurn() {
             // Emit tool_use_requested so ACP loop continues
-            return [{ type: "tool_call" }, { type: "turn_completed" }];
+            return [{ type: "session_notification", message: { sessionId: "s1", update: { sessionUpdate: "tool_call" } } }, { type: "turn_completed" }];
           },
         }),
       }),
@@ -295,13 +295,13 @@ describe("INVARIANT: When the turn count reaches the maximum, the system SHALL e
         executorFactory: () => ({
           kind: "codex",
           async startSession(input) {
-            input.onUpdate?.({ type: "session_started", sessionId: "s1" });
+            input.onUpdate?.({ type: "session_started", message: "session started (s1)", sessionId: "s1" });
             return fakeSession();
           },
           async runTurn(_session, prompt) {
             prompts.push(prompt);
             // Emit tool_use_requested so ACP loop continues
-            return [{ type: "tool_call" }, { type: "turn_completed" }];
+            return [{ type: "session_notification", message: { sessionId: "s1", update: { sessionUpdate: "tool_call" } } }, { type: "turn_completed" }];
           },
         }),
       }),
@@ -325,12 +325,12 @@ describe("INVARIANT: When the turn count reaches the maximum, the system SHALL e
             executorFactory: () => ({
               kind: "codex",
               async startSession(input) {
-                input.onUpdate?.({ type: "session_started", sessionId: "s1" });
+                input.onUpdate?.({ type: "session_started", message: "session started (s1)", sessionId: "s1" });
                 return fakeSession();
               },
               async runTurn() {
                 // Emit tool_use_requested so ACP loop continues
-                return [{ type: "tool_call" }, { type: "turn_completed" }];
+                return [{ type: "session_notification", message: { sessionId: "s1", update: { sessionUpdate: "tool_call" } } }, { type: "turn_completed" }];
               },
             }),
           }),
@@ -359,7 +359,7 @@ describe("INVARIANT: When an agent run starts, the working directory SHALL be se
           kind: "codex",
           async startSession(input) {
             sessionWorkspace = input.workspace;
-            input.onUpdate?.({ type: "session_started", sessionId: "s1" });
+            input.onUpdate?.({ type: "session_started", message: "session started (s1)", sessionId: "s1" });
             return fakeSession();
           },
           async runTurn() {
@@ -407,7 +407,7 @@ describe("INVARIANT (ACP): The tool_use_requested check only gates continuation 
         executorFactory: () => ({
           kind: "codex",
           async startSession(input) {
-            input.onUpdate?.({ type: "session_started", sessionId: "s1" });
+            input.onUpdate?.({ type: "session_started", message: "session started (s1)", sessionId: "s1" });
             return fakeSession();
           },
           async runTurn(_session, prompt) {
@@ -437,7 +437,7 @@ describe("INVARIANT (ACP): The tool_use_requested check only gates continuation 
         executorFactory: () => ({
           kind: "codex",
           async startSession(input) {
-            input.onUpdate?.({ type: "session_started", sessionId: "s1" });
+            input.onUpdate?.({ type: "session_started", message: "session started (s1)", sessionId: "s1" });
             return fakeSession();
           },
           async runTurn() {
@@ -466,13 +466,13 @@ describe("INVARIANT (ACP): After turn 2+, the loop continues when tool_use_reque
         executorFactory: () => ({
           kind: "codex",
           async startSession(input) {
-            input.onUpdate?.({ type: "session_started", sessionId: "s1" });
+            input.onUpdate?.({ type: "session_started", message: "session started (s1)", sessionId: "s1" });
             return fakeSession();
           },
           async runTurn(_session, prompt) {
             prompts.push(prompt);
             // Emit tool_use_requested on every turn -> loop should not break
-            return [{ type: "tool_call" }, { type: "turn_completed" }];
+            return [{ type: "session_notification", message: { sessionId: "s1", update: { sessionUpdate: "tool_call" } } }, { type: "turn_completed" }];
           },
         }),
       }),
@@ -496,14 +496,14 @@ describe("INVARIANT (ACP): After turn 2+, the loop continues when tool_use_reque
         executorFactory: () => ({
           kind: "codex",
           async startSession(input) {
-            input.onUpdate?.({ type: "session_started", sessionId: "s1" });
+            input.onUpdate?.({ type: "session_started", message: "session started (s1)", sessionId: "s1" });
             return fakeSession();
           },
           async runTurn() {
             turnCount += 1;
             // Emit tool_use_requested on turns 1-2, stop on turn 3
             if (turnCount <= 2) {
-              return [{ type: "tool_call" }, { type: "turn_completed" }];
+              return [{ type: "session_notification", message: { sessionId: "s1", update: { sessionUpdate: "tool_call" } } }, { type: "turn_completed" }];
             }
             return [{ type: "turn_completed" }];
           },

@@ -128,6 +128,7 @@ export class Executor implements AgentExecutor {
       session.resumeId = sessionId;
       this.emit(session, {
         type: "session_started",
+        message: `session started (${sessionId})`,
         sessionId,
         resumeId: sessionId,
         executorPid,
@@ -276,10 +277,10 @@ function handleSessionUpdate(session: Session, notification: SessionNotification
     session.replayedUpdateCount += 1;
     return;
   }
-  const type = notification.update.sessionUpdate;
+  const sessionUpdate = notification.update.sessionUpdate;
   const usage = extractUsageUpdate(notification.update);
   const base = {
-    sessionUpdate: acpProtocolUpdate(session, type, notification, usage),
+    sessionUpdate: acpProtocolUpdate(session, sessionUpdate === "usage_update" ? "usage_update" : "session_notification", notification, usage),
     sessionId: session.sessionId,
     resumeId: session.resumeId,
     executorPid: session.executorPid,
@@ -287,10 +288,10 @@ function handleSessionUpdate(session: Session, notification: SessionNotification
     timestamp: new Date(),
     ...(usage && { usage }),
   };
-  if (type === "usage_update" && usage) {
+  if (sessionUpdate === "usage_update" && usage) {
     session.onUpdate?.({ ...base, type: "usage_update", usage });
-  } else if (type !== "usage_update") {
-    session.onUpdate?.({ ...base, type });
+  } else if (sessionUpdate !== "usage_update") {
+    session.onUpdate?.({ ...base, type: "session_notification" });
   }
 }
 

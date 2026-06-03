@@ -27,16 +27,7 @@ describe("SESSION_UPDATE_KINDS", () => {
         "turn_completed",
         "turn_failed",
         "turn_cancelled",
-        "tool_call",
-        "tool_call_update",
-        "plan",
-        "agent_message_chunk",
-        "user_message_chunk",
-        "agent_thought_chunk",
-        "available_commands_update",
-        "current_mode_update",
-        "config_option_update",
-        "session_info_update",
+        "session_notification",
       ],
     );
   });
@@ -57,9 +48,7 @@ describe("SESSION_UPDATE_KINDS", () => {
   test("can be used to exhaustively enumerate all SessionUpdateKinds", () => {
     const kindSet = new Set<string>(SESSION_UPDATE_KINDS);
     assert.ok(kindSet.has("usage_update"));
-    assert.ok(kindSet.has("tool_call"));
-    assert.ok(kindSet.has("tool_call_update"));
-    assert.ok(kindSet.has("agent_message_chunk"));
+    assert.ok(kindSet.has("session_notification"));
     assert.ok(kindSet.has("turn_completed"));
     assert.equal(kindSet.size, SESSION_UPDATE_KINDS.length);
   });
@@ -81,11 +70,11 @@ describe("SessionUpdate type structure", () => {
     // Valid updates
     assert.ok(isValidSessionUpdate({ kind: "usage_update", usage: {} }));
     assert.ok(isValidSessionUpdate({ kind: "turn_started" }));
-    assert.ok(isValidSessionUpdate({ kind: "agent_message_chunk", message: "hi" }));
+    assert.ok(isValidSessionUpdate({ kind: "session_notification", message: "hi" }));
 
     // Invalid data rejected at runtime
     assert.equal(isValidSessionUpdate({ kind: "invalid_kind" }), false);
-    assert.equal(isValidSessionUpdate({ kind: "notification" }), false);
+    assert.equal(isValidSessionUpdate({ kind: "agent_message_chunk" }), false);
     assert.equal(isValidSessionUpdate({ kind: 123 }), false);
     assert.equal(isValidSessionUpdate(null), false);
     assert.equal(isValidSessionUpdate("not an object"), false);
@@ -111,7 +100,7 @@ describe("SessionUpdate type structure", () => {
       { kind: "turn_started", message: "starting" },
       { kind: "turn_completed" },
       { kind: "turn_failed", message: "timeout" },
-      { kind: "agent_message_chunk", message: "info" },
+      { kind: "session_notification", message: "info" },
     ];
 
     const usageUpdates = updates.filter((u): u is UsageUpdate => u.kind === "usage_update");

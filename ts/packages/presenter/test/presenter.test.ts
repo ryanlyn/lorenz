@@ -107,7 +107,7 @@ test("presenter preserves blocked dispatches, retry errors, run costs, retries, 
 
 test("presenter humanizes structured agent messages at the JSON API boundary", () => {
   const snapshot = snapshotFixture();
-  snapshot.running[0]!.lastEvent = "agent_message_chunk";
+  snapshot.running[0]!.lastEvent = "session_notification";
   snapshot.running[0]!.lastEventAt = "2026-05-06T00:00:02.000Z";
   snapshot.running[0]!.lastMessage = {
     agent_kind: "claude",
@@ -117,7 +117,7 @@ test("presenter humanizes structured agent messages at the JSON API boundary", (
       message: { content: [{ type: "text", text: "structured update\nfrom Claude" }] },
     },
   };
-  snapshot.runHistory[0]!.lastEvent = "agent_message_chunk";
+  snapshot.runHistory[0]!.lastEvent = "session_notification";
   snapshot.runHistory[0]!.lastMessage = {
     event: "agent_message_delta",
     message: {

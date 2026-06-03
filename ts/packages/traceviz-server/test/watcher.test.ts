@@ -46,7 +46,7 @@ describe("TraceWatcher", () => {
       timestamp: "2026-01-01T00:00:00Z",
     });
     writeTraceLine(traceDir, "TEST-1", {
-      type: "agent_message_chunk",
+      type: "session_notification",
       issueId: "id-1",
       issueIdentifier: "TEST-1",
       timestamp: "2026-01-01T00:00:01Z",
@@ -89,7 +89,7 @@ describe("TraceWatcher", () => {
 
     // Now append a new line
     writeTraceLine(traceDir, "TEST-2", {
-      type: "agent_message_chunk",
+      type: "session_notification",
       issueId: "id-2",
       issueIdentifier: "TEST-2",
       timestamp: "2026-01-01T00:00:05Z",
@@ -121,7 +121,7 @@ describe("TraceWatcher", () => {
     await new Promise((r) => setTimeout(r, 150));
 
     writeTraceLine(traceDir, "TEST-3", {
-      type: "agent_message_chunk",
+      type: "session_notification",
       issueId: "id-3",
       issueIdentifier: "TEST-3",
       timestamp: "2026-01-01T00:00:05Z",
@@ -145,7 +145,7 @@ describe("TraceWatcher", () => {
       timestamp: "2026-01-01T00:00:00Z",
     });
     writeTraceLine(traceDir, "TEST-4", {
-      type: "agent_message_chunk",
+      type: "session_notification",
       issueId: "id-4",
       issueIdentifier: "TEST-4",
       timestamp: "2026-01-01T00:00:01Z",

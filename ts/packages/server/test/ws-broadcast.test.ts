@@ -19,7 +19,7 @@ describe("TraceWatcher broadcast callback", () => {
           timestamp: "2026-01-01T00:00:00Z",
         }),
         JSON.stringify({
-          type: "agent_message_chunk",
+          type: "session_notification",
           issueId: "ws-id-1",
           issueIdentifier: "WS-1",
           timestamp: "2026-01-01T00:00:01Z",

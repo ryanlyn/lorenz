@@ -208,7 +208,7 @@ function createSandboxExecutor(config: FakeRunnerConfig): AgentExecutor {
         },
       };
       turnsBySession.set(sessionId, 0);
-      input.onUpdate?.({ type: "session_started", sessionId });
+      input.onUpdate?.({ type: "session_started", message: `session started (${sessionId})`, sessionId });
       return session;
     },
     async runTurn(session, _prompt, issue) {

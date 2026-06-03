@@ -28,10 +28,10 @@ test("observability HTTP API exposes Elixir-shaped state, issue, runs, refresh, 
   const claimed = orchestrator.claim(issue);
   assert.ok(claimed);
   orchestrator.applyUpdate(issue.id, 0, {
-    type: "agent_message_chunk",
+    type: "session_notification",
     sessionId: "thread-http",
     resumeId: "thread-http",
-    message: "rendered",
+    message: { sessionId: "thread-http", update: { sessionUpdate: "agent_message_chunk" } },
     usage: { inputTokens: 4, outputTokens: 8, totalTokens: 12 },
     timestamp: new Date("2026-05-05T00:00:01.000Z"),
   });

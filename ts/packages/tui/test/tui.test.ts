@@ -422,7 +422,7 @@ function runningFixture(
   totalTokens: number,
   lastMessage: string,
   now: string,
-  lastEvent: RuntimeSnapshot["running"][number]["lastEvent"] = "agent_message_chunk",
+  lastEvent: RuntimeSnapshot["running"][number]["lastEvent"] = "session_notification",
 ): RuntimeSnapshot["running"][number] {
   return {
     issueId: identifier,

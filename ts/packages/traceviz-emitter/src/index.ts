@@ -4,15 +4,8 @@ import path from "node:path";
 
 import type { AgentUpdate, TraceEvent } from "@symphony/domain";
 
-const SKIPPED_TYPES = new Set([
-  "available_commands_update",
-  "current_mode_update",
-  "config_option_update",
-  "session_info_update",
-]);
-
-function shouldEmit(update: AgentUpdate): boolean {
-  return !SKIPPED_TYPES.has(update.type);
+function shouldEmit(_update: AgentUpdate): boolean {
+  return true;
 }
 
 export class TraceEmitter {

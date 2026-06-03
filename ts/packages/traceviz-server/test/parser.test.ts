@@ -124,7 +124,7 @@ describe("parseTraceLines reasoning/thought extraction", () => {
   it("extracts thought text from agent_thought_chunk", () => {
     const lines = [
       JSON.stringify({
-        type: "agent_thought_chunk",
+        type: "session_notification",
         issueId: "id",
         issueIdentifier: "T-1",
         timestamp: "2026-01-01T00:00:00Z",
@@ -143,7 +143,7 @@ describe("parseTraceLines reasoning/thought extraction", () => {
   it("skips thought events with empty text", () => {
     const lines = [
       JSON.stringify({
-        type: "agent_thought_chunk",
+        type: "session_notification",
         issueId: "id",
         issueIdentifier: "T-1",
         timestamp: "2026-01-01T00:00:00Z",
@@ -189,12 +189,14 @@ describe("parseTraceLines noise filtering", () => {
     const lines = [
       JSON.stringify({
         type: "workspace_prepared",
+        message: "workspace prepared at /tmp/ws",
         issueId: "id",
         issueIdentifier: "T-1",
         timestamp: null,
       }),
       JSON.stringify({
         type: "session_started",
+        message: "session started",
         issueId: "id",
         issueIdentifier: "T-1",
         timestamp: null,

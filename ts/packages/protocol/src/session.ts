@@ -7,16 +7,7 @@ export const SESSION_UPDATE_KINDS = [
   "turn_completed",
   "turn_failed",
   "turn_cancelled",
-  "tool_call",
-  "tool_call_update",
-  "plan",
-  "agent_message_chunk",
-  "user_message_chunk",
-  "agent_thought_chunk",
-  "available_commands_update",
-  "current_mode_update",
-  "config_option_update",
-  "session_info_update",
+  "session_notification",
 ] as const;
 
 export type SessionUpdateKind = (typeof SESSION_UPDATE_KINDS)[number];

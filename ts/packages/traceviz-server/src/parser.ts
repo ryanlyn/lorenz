@@ -111,114 +111,101 @@ export function parseTraceLines(lines: string[]): DisplayEvent[] {
     const ts = raw.timestamp ?? new Date().toISOString();
 
     switch (raw.type) {
-      case "agent_thought_chunk": {
-        const msg = raw.message;
-        if (!msg || !("update" in msg)) break;
-        const text = extractTextFromNotification(msg);
-        if (text) events.push({ kind: "thought", text, timestamp: ts });
-        break;
-      }
-
-      case "agent_message_chunk":
-      case "user_message_chunk": {
-        const msg = raw.message;
-        if (!msg || !("update" in msg)) break;
-        const text = extractTextFromNotification(msg);
-        if (text) events.push({ kind: "message", text, timestamp: ts });
-        break;
-      }
-
-      case "tool_call": {
+      case "session_notification": {
         const msg = raw.message;
         if (!msg || !("update" in msg)) break;
         const update = msg.update;
-        if (update.sessionUpdate !== "tool_call") break;
-        const name = update.title ?? (update.kind as string) ?? "unknown";
-        const id = update.toolCallId ?? "";
-        const input = (update.rawInput as Record<string, unknown>) ?? {};
+        const sessionUpdate = update.sessionUpdate;
+        if (
+          sessionUpdate === "agent_message_chunk" ||
+          sessionUpdate === "user_message_chunk"
+        ) {
+          const text = extractTextFromNotification(msg);
+          if (text) events.push({ kind: "message", text, timestamp: ts });
+        } else if (sessionUpdate === "agent_thought_chunk") {
+          const text = extractTextFromNotification(msg);
+          if (text) events.push({ kind: "thought", text, timestamp: ts });
+        } else if (sessionUpdate === "tool_call") {
+          const name = update.title ?? (update.kind as string) ?? "unknown";
+          const id = update.toolCallId ?? "";
+          const input = (update.rawInput as Record<string, unknown>) ?? {};
 
-        const toolCall: ToolCallDisplayEvent = {
-          kind: "tool_call",
-          category: detectToolCategory(name),
-          toolName: name,
-          input,
-          output: null,
-          isError: false,
-          durationMs: null,
-          nestedEvents: [],
-          timestamp: ts,
-        };
-        pendingToolCalls.set(id, { event: toolCall, toolUseId: id, startTs: ts });
-        break;
-      }
+          const toolCall: ToolCallDisplayEvent = {
+            kind: "tool_call",
+            category: detectToolCategory(name),
+            toolName: name,
+            input,
+            output: null,
+            isError: false,
+            durationMs: null,
+            nestedEvents: [],
+            timestamp: ts,
+          };
+          pendingToolCalls.set(id, { event: toolCall, toolUseId: id, startTs: ts });
+        } else if (sessionUpdate === "tool_call_update") {
+          const toolUseId = update.toolCallId ?? "";
+          const status = update.status;
 
-      case "tool_call_update": {
-        const msg = raw.message;
-        if (!msg || !("update" in msg)) break;
-        const update = msg.update;
-        if (update.sessionUpdate !== "tool_call_update") break;
-        const toolUseId = update.toolCallId ?? "";
-        const status = update.status;
-
-        if (status === "completed" || status === "failed") {
-          let output: string | unknown[] | null = null;
-          if (typeof update.rawOutput === "string") {
-            output = update.rawOutput;
-          } else if (update.rawOutput != null) {
-            output = JSON.stringify(update.rawOutput);
-          } else {
-            const content = update.content as Array<ToolCallContent> | undefined;
-            if (content && content.length > 0) {
-              const texts = content
-                .map((c) => {
-                  if (c.type === "content") {
-                    const block = c.content;
-                    return block.type === "text" ? block.text : "";
-                  }
-                  if (c.type === "terminal") {
-                    return ((c as Record<string, unknown>).output as string) ?? "";
-                  }
-                  return "";
-                })
-                .filter(Boolean);
-              output = texts.join("\n") || null;
+          if (status === "completed" || status === "failed") {
+            let output: string | unknown[] | null = null;
+            if (typeof update.rawOutput === "string") {
+              output = update.rawOutput;
+            } else if (update.rawOutput != null) {
+              output = JSON.stringify(update.rawOutput);
+            } else {
+              const content = update.content as Array<ToolCallContent> | undefined;
+              if (content && content.length > 0) {
+                const texts = content
+                  .map((c) => {
+                    if (c.type === "content") {
+                      const block = c.content;
+                      return block.type === "text" ? block.text : "";
+                    }
+                    if (c.type === "terminal") {
+                      return ((c as Record<string, unknown>).output as string) ?? "";
+                    }
+                    return "";
+                  })
+                  .filter(Boolean);
+                output = texts.join("\n") || null;
+              }
             }
-          }
-          const isError = status === "failed";
-          const pending = toolUseId ? pendingToolCalls.get(toolUseId) : undefined;
-          if (pending) {
-            pendingToolCalls.delete(toolUseId);
-            const toolCallEvent = pending.event;
-            if (output !== null) {
-              toolCallEvent.output = output;
+            const isError = status === "failed";
+            const pending = toolUseId ? pendingToolCalls.get(toolUseId) : undefined;
+            if (pending) {
+              pendingToolCalls.delete(toolUseId);
+              const toolCallEvent = pending.event;
+              if (output !== null) {
+                toolCallEvent.output = output;
+              }
+              toolCallEvent.isError = isError;
+              const startMs = new Date(pending.startTs).getTime();
+              const endMs = new Date(ts).getTime();
+              toolCallEvent.durationMs =
+                Number.isNaN(startMs) || Number.isNaN(endMs) ? null : endMs - startMs;
+              events.push(toolCallEvent);
+            } else {
+              events.push({
+                kind: "tool_call",
+                category: "unknown",
+                toolName: "unknown",
+                input: {},
+                output,
+                isError,
+                durationMs: null,
+                nestedEvents: [],
+                timestamp: ts,
+              });
             }
-            toolCallEvent.isError = isError;
-            const startMs = new Date(pending.startTs).getTime();
-            const endMs = new Date(ts).getTime();
-            toolCallEvent.durationMs =
-              Number.isNaN(startMs) || Number.isNaN(endMs) ? null : endMs - startMs;
-            events.push(toolCallEvent);
           } else {
-            events.push({
-              kind: "tool_call",
-              category: "unknown",
-              toolName: "unknown",
-              input: {},
-              output,
-              isError,
-              durationMs: null,
-              nestedEvents: [],
-              timestamp: ts,
-            });
-          }
-        } else {
-          const pending = pendingToolCalls.get(toolUseId);
-          if (pending) {
-            const partialOutput = typeof update.rawOutput === "string" ? update.rawOutput : null;
-            if (partialOutput !== null && typeof pending.event.output === "string") {
-              pending.event.output = pending.event.output + partialOutput;
-            } else if (partialOutput !== null) {
-              pending.event.output = partialOutput;
+            const pending = pendingToolCalls.get(toolUseId);
+            if (pending) {
+              const partialOutput = typeof update.rawOutput === "string" ? update.rawOutput : null;
+              if (partialOutput !== null && typeof pending.event.output === "string") {
+                pending.event.output = pending.event.output + partialOutput;
+              } else if (partialOutput !== null) {
+                pending.event.output = partialOutput;
+              }
             }
           }
         }
@@ -277,10 +264,6 @@ export function parseTraceLines(lines: string[]): DisplayEvent[] {
         break;
       }
 
-      case "available_commands_update":
-      case "current_mode_update":
-      case "config_option_update":
-      case "session_info_update":
       case "usage_update":
       case "rate_limit":
       case "workspace_prepared":
@@ -289,7 +272,6 @@ export function parseTraceLines(lines: string[]): DisplayEvent[] {
       case "process_exit":
       case "stderr":
       case "fs_write":
-      case "plan":
       case "approval_auto_approved":
       case "approval_required":
       case "resume_state_warning": {

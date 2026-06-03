@@ -36,10 +36,8 @@ test("ACP executor starts a session, translates updates, approves permissions, a
     updates.find((update) => update.type === "usage_update")?.sessionUpdate?.kind,
     "usage_update",
   );
-  assert.ok(updates.some((update) => update.type === "agent_message_chunk"));
-  assert.ok(updates.some((update) => update.type === "tool_call"));
+  assert.ok(updates.some((update) => update.type === "session_notification"));
   assert.ok(updates.some((update) => update.type === "approval_auto_approved"));
-  assert.ok(updates.some((update) => update.type === "tool_call_update"));
   assert.ok(updates.some((update) => update.type === "fs_write"));
   assert.deepEqual(turnUpdates.find((update) => update.type === "turn_completed")?.usage, {
     inputTokens: 2,
@@ -123,7 +121,7 @@ test("ACP executor falls back to session/load and suppresses replayed updates", 
   assert.equal(
     updates.some(
       (update) =>
-        update.type === "agent_message_chunk" &&
+        update.type === "session_notification" &&
         JSON.stringify(update.message).includes("replayed history"),
     ),
     false,
