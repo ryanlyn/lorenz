@@ -19,9 +19,9 @@
     "runs": "node dist/bin/cli.js runs"
   },
   "dependencies": {
-    "commander": "^14.0.3",
-    "ink": "^7.0.1",
-    "react": "^19.2.5",
+    "commander": "catalog:",
+    "ink": "catalog:",
+    "react": "catalog:",
     "@symphony/acp": "workspace:*",
     "@symphony/agent-runner": "workspace:*",
     "@symphony/cli-kit": "workspace:*",

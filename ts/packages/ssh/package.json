@@ -9,10 +9,10 @@
     ".": "./dist/index.js"
   },
   "devDependencies": {
-    "@types/node": "^22.15.3"
+    "@types/node": "catalog:"
   },
   "dependencies": {
-    "execa": "^9.6.1",
+    "execa": "catalog:",
     "@symphony/domain": "workspace:*"
   }
 }

@@ -9,11 +9,11 @@
     ".": "./dist/index.js"
   },
   "dependencies": {
-    "@agentclientprotocol/sdk": "^0.21.0",
-    "@hono/node-server": "^1.19.14",
-    "hono": "^4.12.18",
-    "ts-pattern": "^5.9.0",
-    "zod": "^4.4.3",
+    "@agentclientprotocol/sdk": "catalog:",
+    "@hono/node-server": "catalog:",
+    "hono": "catalog:",
+    "ts-pattern": "catalog:",
+    "zod": "catalog:",
     "@symphony/domain": "workspace:*",
     "@symphony/local-tracker": "workspace:*",
     "@symphony/worker-host-pool": "workspace:*"

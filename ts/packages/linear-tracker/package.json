@@ -9,7 +9,7 @@
     ".": "./dist/index.js"
   },
   "dependencies": {
-    "@linear/sdk": "^84.0.0",
+    "@linear/sdk": "catalog:",
     "@symphony/domain": "workspace:*",
     "@symphony/issue": "workspace:*"
   }

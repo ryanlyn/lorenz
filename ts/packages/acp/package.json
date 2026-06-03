@@ -9,8 +9,8 @@
     ".": "./dist/index.js"
   },
   "dependencies": {
-    "@agentclientprotocol/sdk": "^0.21.0",
-    "execa": "^9.6.1",
+    "@agentclientprotocol/sdk": "catalog:",
+    "execa": "catalog:",
     "@symphony/child-process": "workspace:*",
     "@symphony/domain": "workspace:*",
     "@symphony/mcp": "workspace:*",
