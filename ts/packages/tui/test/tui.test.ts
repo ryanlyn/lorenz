@@ -150,7 +150,9 @@ test("TUI humanizes Codex and Claude event variants like the Elixir dashboard", 
   assert.equal(
     humanizeCodexMessage({
       event: "tool_call_update",
-      message: { payload: { method: "item/tool/call", params: { name: "linear_graphql", status: "failed" } } },
+      message: {
+        payload: { method: "item/tool/call", params: { name: "linear_graphql", status: "failed" } },
+      },
     }),
     "dynamic tool call failed (linear_graphql)",
   );

@@ -100,7 +100,11 @@ class RunController {
       ensembleSize: size,
       workerHost,
     });
-    input.onUpdate?.({ type: "workspace_prepared", workspacePath: workspace, message: `workspace prepared at ${workspace}` });
+    input.onUpdate?.({
+      type: "workspace_prepared",
+      workspacePath: workspace,
+      message: `workspace prepared at ${workspace}`,
+    });
     if (runtime.hooks.beforeRun) {
       await runHook(input.adapters, runtime.hooks.beforeRun, workspace, runtime.hooks, workerHost);
     }
@@ -180,7 +184,10 @@ class RunController {
         if (
           turnCount > 1 &&
           runtime.agents[runtime.agent.kind]?.executor === "acp" &&
-          !turnUpdates.some((u) => u.type === "session_notification" && u.message.update?.sessionUpdate === "tool_call")
+          !turnUpdates.some(
+            (u) =>
+              u.type === "session_notification" && u.message.update?.sessionUpdate === "tool_call",
+          )
         ) {
           break;
         }

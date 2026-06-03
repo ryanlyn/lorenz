@@ -94,7 +94,6 @@ function extractTextFromNotification(msg: SessionNotification): string {
   return "";
 }
 
-
 /**
  * Parse all lines from a JSONL trace file content into DisplayEvents.
  */
@@ -116,10 +115,7 @@ export function parseTraceLines(lines: string[]): DisplayEvent[] {
         if (!msg || !("update" in msg)) break;
         const update = msg.update;
         const sessionUpdate = update.sessionUpdate;
-        if (
-          sessionUpdate === "agent_message_chunk" ||
-          sessionUpdate === "user_message_chunk"
-        ) {
+        if (sessionUpdate === "agent_message_chunk" || sessionUpdate === "user_message_chunk") {
           const text = extractTextFromNotification(msg);
           if (text) events.push({ kind: "message", text, timestamp: ts });
         } else if (sessionUpdate === "agent_thought_chunk") {
@@ -264,7 +260,6 @@ export function parseTraceLines(lines: string[]): DisplayEvent[] {
         break;
       }
 
-      case "usage_update":
       case "rate_limit":
       case "workspace_prepared":
       case "session_started":

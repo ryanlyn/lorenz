@@ -50,7 +50,10 @@ describe("TraceWatcher", () => {
       issueId: "id-1",
       issueIdentifier: "TEST-1",
       timestamp: "2026-01-01T00:00:01Z",
-      message: { sessionId: "s1", update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Hi" } } },
+      message: {
+        sessionId: "s1",
+        update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Hi" } },
+      },
     });
 
     watcher.start((issueId, events) => {
@@ -93,7 +96,10 @@ describe("TraceWatcher", () => {
       issueId: "id-2",
       issueIdentifier: "TEST-2",
       timestamp: "2026-01-01T00:00:05Z",
-      message: { sessionId: "s1", update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Update" } } },
+      message: {
+        sessionId: "s1",
+        update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Update" } },
+      },
     });
 
     await new Promise((r) => setTimeout(r, 150));
@@ -125,7 +131,10 @@ describe("TraceWatcher", () => {
       issueId: "id-3",
       issueIdentifier: "TEST-3",
       timestamp: "2026-01-01T00:00:05Z",
-      message: { sessionId: "s1", update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Msg" } } },
+      message: {
+        sessionId: "s1",
+        update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Msg" } },
+      },
     });
 
     await new Promise((r) => setTimeout(r, 150));
@@ -149,7 +158,10 @@ describe("TraceWatcher", () => {
       issueId: "id-4",
       issueIdentifier: "TEST-4",
       timestamp: "2026-01-01T00:00:01Z",
-      message: { sessionId: "s1", update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Test" } } },
+      message: {
+        sessionId: "s1",
+        update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Test" } },
+      },
     });
 
     watcher.start(() => {});

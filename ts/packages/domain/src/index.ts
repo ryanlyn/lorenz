@@ -704,7 +704,9 @@ export const AGENT_UPDATE_TYPES = [
 ] as const satisfies readonly AgentUpdateType[];
 
 // Fails to compile if a union member is missing from the array (catches forgotten entries).
-type _AllAgentTypesPresent = [Exclude<AgentUpdateType, (typeof AGENT_UPDATE_TYPES)[number]>] extends [never]
+type _AllAgentTypesPresent = [
+  Exclude<AgentUpdateType, (typeof AGENT_UPDATE_TYPES)[number]>,
+] extends [never]
   ? true
   : never;
 const _allAgentTypesPresent: _AllAgentTypesPresent = true;

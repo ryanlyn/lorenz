@@ -104,8 +104,7 @@ function humanizeCodexEvent(event: string, message: unknown, payload: unknown): 
       (isRecord(payload) ? stringAt(payload, ["params", "status"]) : null);
     if (status === "completed")
       return humanizeDynamicToolEvent("dynamic tool call completed", payload);
-    if (status === "failed")
-      return humanizeDynamicToolEvent("dynamic tool call failed", payload);
+    if (status === "failed") return humanizeDynamicToolEvent("dynamic tool call failed", payload);
   }
   if (event === "unsupported_tool_call")
     return humanizeDynamicToolEvent("unsupported dynamic tool call rejected", payload);

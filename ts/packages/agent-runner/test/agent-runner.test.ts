@@ -1,5 +1,12 @@
 import { vi, test } from "vitest";
-import type { AgentExecutor, AgentSession, AgentUpdate, Issue, SessionNotification, Settings } from "@symphony/domain";
+import type {
+  AgentExecutor,
+  AgentSession,
+  AgentUpdate,
+  Issue,
+  SessionNotification,
+  Settings,
+} from "@symphony/domain";
 import { defaultSettings } from "@symphony/config";
 
 import { assert } from "../../../test/assert.js";
@@ -48,7 +55,11 @@ function fakeExecutor(
   return {
     kind: "codex",
     async startSession(input) {
-      input.onUpdate?.({ type: "session_started", message: `session started (${session.sessionId})`, sessionId: session.sessionId });
+      input.onUpdate?.({
+        type: "session_started",
+        message: `session started (${session.sessionId})`,
+        sessionId: session.sessionId,
+      });
       return session;
     },
     async runTurn(_session, _prompt, _issue) {
@@ -125,7 +136,11 @@ test("runAgentAttempt respects abort signal and stops executor mid-turn", async 
           stopped = true;
         },
       });
-      input.onUpdate?.({ type: "session_started", message: `session started (${session.sessionId})`, sessionId: session.sessionId });
+      input.onUpdate?.({
+        type: "session_started",
+        message: `session started (${session.sessionId})`,
+        sessionId: session.sessionId,
+      });
       return session;
     },
     async runTurn() {
@@ -514,7 +529,11 @@ test("RunController propagates updates from executor to caller", async () => {
       executorFactory: () => ({
         kind: "codex",
         async startSession(input) {
-          input.onUpdate?.({ type: "session_started", message: "session started (s1)", sessionId: "s1" });
+          input.onUpdate?.({
+            type: "session_started",
+            message: "session started (s1)",
+            sessionId: "s1",
+          });
           return fakeSession();
         },
         async runTurn(_session, _prompt, _issue) {
@@ -545,7 +564,11 @@ test("RunController accumulates usage totals across turns", async () => {
         kind: "codex",
         async startSession(input) {
           sessionOnUpdate = input.onUpdate;
-          input.onUpdate?.({ type: "session_started", message: "session started (s1)", sessionId: "s1" });
+          input.onUpdate?.({
+            type: "session_started",
+            message: "session started (s1)",
+            sessionId: "s1",
+          });
           return fakeSession();
         },
         async runTurn() {

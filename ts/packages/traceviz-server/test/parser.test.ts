@@ -59,9 +59,7 @@ describe("parseTraceLines with minimal fixture", () => {
 
   it("extracts MCP/dynamic tool calls", () => {
     const events = parseTraceLines(lines);
-    const mcpCalls = events.filter(
-      (e) => e.kind === "tool_call" && e.toolName !== "Bash",
-    );
+    const mcpCalls = events.filter((e) => e.kind === "tool_call" && e.toolName !== "Bash");
     expect(mcpCalls.length).toBeGreaterThan(0);
 
     for (const call of mcpCalls) {
@@ -130,7 +128,10 @@ describe("parseTraceLines reasoning/thought extraction", () => {
         timestamp: "2026-01-01T00:00:00Z",
         message: {
           sessionId: "s1",
-          update: { sessionUpdate: "agent_thought_chunk", content: { type: "text", text: "Thinking about the task" } },
+          update: {
+            sessionUpdate: "agent_thought_chunk",
+            content: { type: "text", text: "Thinking about the task" },
+          },
         },
       }),
     ];
@@ -209,13 +210,6 @@ describe("parseTraceLines noise filtering", () => {
         message: "warn",
       }),
       JSON.stringify({
-        type: "usage_update",
-        issueId: "id",
-        issueIdentifier: "T-1",
-        timestamp: "2026-01-01T00:00:01Z",
-        usage: { inputTokens: 100, outputTokens: 50 },
-      }),
-      JSON.stringify({
         type: "process_exit",
         issueId: "id",
         issueIdentifier: "T-1",
@@ -240,4 +234,3 @@ describe("parseTraceLines noise filtering", () => {
     expect(events[0]!.kind).toBe("unknown");
   });
 });
-

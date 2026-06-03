@@ -422,7 +422,11 @@ test("runtime reconciles stalled runs from the orchestrator poll loop", async ()
         deletedResumeStates.push(workspacePath);
       },
       runner: async ({ abortSignal, onUpdate }) => {
-        onUpdate?.({ type: "workspace_prepared", message: `workspace prepared at ${workspace}`, workspacePath: workspace });
+        onUpdate?.({
+          type: "workspace_prepared",
+          message: `workspace prepared at ${workspace}`,
+          workspacePath: workspace,
+        });
         await new Promise<void>((_resolve, reject) => {
           abortSignal?.addEventListener(
             "abort",
@@ -489,7 +493,11 @@ test("runtime does not stall a stale ensemble slot snapshot after its runner com
       runner: async ({ abortSignal, onUpdate, slotIndex }) => {
         const slot = slotIndex ?? 0;
         const workspace = path.join(root, `workspace-${slot}`);
-        onUpdate?.({ type: "workspace_prepared", message: `workspace prepared at ${workspace}`, workspacePath: workspace });
+        onUpdate?.({
+          type: "workspace_prepared",
+          message: `workspace prepared at ${workspace}`,
+          workspacePath: workspace,
+        });
         return await new Promise<RunResult>((resolve, reject) => {
           controls.set(slot, { resolve, reject });
           abortSignal?.addEventListener("abort", () => reject(new Error(`aborted slot ${slot}`)), {
@@ -1008,7 +1016,11 @@ test("runtime invalidates resume state before scheduling failure retry", async (
         deletedResumeStates.push(workspacePath);
       },
       runner: async ({ onUpdate }) => {
-        onUpdate?.({ type: "workspace_prepared", message: `workspace prepared at ${workspace}`, workspacePath: workspace });
+        onUpdate?.({
+          type: "workspace_prepared",
+          message: `workspace prepared at ${workspace}`,
+          workspacePath: workspace,
+        });
         throw new Error("agent exited: retry me");
       },
     }),
