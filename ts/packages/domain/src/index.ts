@@ -92,29 +92,6 @@ export const CODEX_SANDBOX_MODES = ["read-only", "workspace-write", "danger-full
 
 export type CodexSandboxMode = (typeof CODEX_SANDBOX_MODES)[number];
 
-export const AGENT_UPDATE_TYPES = [
-  "workspace_prepared",
-  "session_started",
-  "turn_started",
-  "turn_completed",
-  "turn_failed",
-  "turn_cancelled",
-  "turn_input_required",
-  "approval_required",
-  "approval_auto_approved",
-  "tool_input_auto_answered",
-  "rate_limit",
-  "stderr",
-  "malformed",
-  "process_exit",
-  "resume_state_warning",
-  "session_replay_suppressed",
-  "fs_write",
-  "session_notification",
-] as const;
-
-export type AgentUpdateType = (typeof AGENT_UPDATE_TYPES)[number];
-
 /**
  * Minimal reference to a related issue - just enough to identify it and check its state.
  * Used for relationships like blockers where the full issue isn't needed.
@@ -700,6 +677,37 @@ export type AgentUpdate =
   | ApprovalRequiredUpdate
   | ApprovalAutoApprovedUpdate
   | FsWriteUpdate;
+
+// Derived from the AgentUpdate discriminated union — no separate source of truth.
+export type AgentUpdateType = AgentUpdate["type"];
+
+// `satisfies` rejects any array entry that isn't in AgentUpdateType (catches typos/stale entries).
+export const AGENT_UPDATE_TYPES = [
+  "workspace_prepared",
+  "session_started",
+  "turn_started",
+  "turn_completed",
+  "turn_failed",
+  "turn_cancelled",
+  "turn_input_required",
+  "approval_required",
+  "approval_auto_approved",
+  "tool_input_auto_answered",
+  "rate_limit",
+  "stderr",
+  "malformed",
+  "process_exit",
+  "resume_state_warning",
+  "session_replay_suppressed",
+  "fs_write",
+  "session_notification",
+] as const satisfies readonly AgentUpdateType[];
+
+// Fails to compile if a union member is missing from the array (catches forgotten entries).
+type _AllAgentTypesPresent = [Exclude<AgentUpdateType, (typeof AGENT_UPDATE_TYPES)[number]>] extends [never]
+  ? true
+  : never;
+const _allAgentTypesPresent: _AllAgentTypesPresent = true;
 
 type AgentUpdateMessage<K extends AgentUpdateType> = K extends "session_notification"
   ? SessionNotification
