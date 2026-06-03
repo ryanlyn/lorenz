@@ -33,10 +33,7 @@ export function computeStatsFromEvents(events: DisplayEvent[]): Stats {
     }
   }
 
-  const toolMap = new Map<
-    string,
-    { count: number; errorCount: number; totalDurationMs: number }
-  >();
+  const toolMap = new Map<string, { count: number; errorCount: number; totalDurationMs: number }>();
   for (const event of events) {
     if (event.kind === "tool_call") {
       const existing = toolMap.get(event.toolName);
