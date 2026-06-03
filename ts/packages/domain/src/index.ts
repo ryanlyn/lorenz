@@ -629,15 +629,45 @@ export interface AgentUpdateBase {
 
 // --- Typed message variants per AgentUpdate.type ---
 
-export interface SessionStartedUpdate extends AgentUpdateBase {
-  type: "session_started";
+export type NotificationUpdateType =
+  | "assistant_message"
+  | "user_message"
+  | "agent_thought"
+  | "tool_use_requested"
+  | "tool_call_update"
+  | "tool_result"
+  | "tool_call_failed"
+  | "tool_call_completed"
+  | "notification"
+  | "plan";
+
+export interface NotificationAgentUpdate extends AgentUpdateBase {
+  type: NotificationUpdateType;
+  message: SessionNotification;
 }
+
+export type StringMessageUpdateType = "stderr" | "process_exit" | "resume_state_warning";
+
+export interface StringMessageUpdate extends AgentUpdateBase {
+  type: StringMessageUpdateType;
+  message: string;
+}
+
+export type BareUpdateType =
+  | "session_started"
+  | "workspace_prepared"
+  | "rate_limit"
+  | "turn_input_required"
+  | "tool_input_auto_answered"
+  | "malformed";
+
+export interface BareAgentUpdate extends AgentUpdateBase {
+  type: BareUpdateType;
+}
+
 export interface SessionReplaySuppressedUpdate extends AgentUpdateBase {
   type: "session_replay_suppressed";
   message: { replayedUpdateCount: number };
-}
-export interface WorkspacePreparedUpdate extends AgentUpdateBase {
-  type: "workspace_prepared";
 }
 
 export interface TurnStartedUpdate extends AgentUpdateBase {
@@ -666,47 +696,6 @@ export interface UsageUpdateEvent extends AgentUpdateBase {
   usage: Partial<UsageTotals>;
 }
 
-export interface AssistantMessageUpdate extends AgentUpdateBase {
-  type: "assistant_message";
-  message: SessionNotification;
-}
-export interface UserMessageUpdate extends AgentUpdateBase {
-  type: "user_message";
-  message: SessionNotification;
-}
-export interface AgentThoughtUpdate extends AgentUpdateBase {
-  type: "agent_thought";
-  message: SessionNotification;
-}
-export interface ToolUseRequestedUpdate extends AgentUpdateBase {
-  type: "tool_use_requested";
-  message: SessionNotification;
-}
-export interface ToolCallUpdateEvent extends AgentUpdateBase {
-  type: "tool_call_update";
-  message: SessionNotification;
-}
-export interface ToolResultUpdate extends AgentUpdateBase {
-  type: "tool_result";
-  message: SessionNotification;
-}
-export interface ToolCallFailedUpdate extends AgentUpdateBase {
-  type: "tool_call_failed";
-  message: SessionNotification;
-}
-export interface ToolCallCompletedUpdate extends AgentUpdateBase {
-  type: "tool_call_completed";
-  message: SessionNotification;
-}
-export interface NotificationUpdate extends AgentUpdateBase {
-  type: "notification";
-  message: SessionNotification;
-}
-export interface PlanUpdate extends AgentUpdateBase {
-  type: "plan";
-  message: SessionNotification;
-}
-
 export interface ApprovalRequiredUpdate extends AgentUpdateBase {
   type: "approval_required";
   message: { request: RequestPermissionRequest; selected: PermissionOption | null };
@@ -721,32 +710,6 @@ export interface FsWriteUpdate extends AgentUpdateBase {
   message: { path: string };
 }
 
-export interface StderrUpdate extends AgentUpdateBase {
-  type: "stderr";
-  message: string;
-}
-export interface ProcessExitUpdate extends AgentUpdateBase {
-  type: "process_exit";
-  message: string;
-}
-export interface ResumeStateWarningUpdate extends AgentUpdateBase {
-  type: "resume_state_warning";
-  message: string;
-}
-
-export interface RateLimitUpdate extends AgentUpdateBase {
-  type: "rate_limit";
-}
-export interface TurnInputRequiredUpdate extends AgentUpdateBase {
-  type: "turn_input_required";
-}
-export interface ToolInputAutoAnsweredUpdate extends AgentUpdateBase {
-  type: "tool_input_auto_answered";
-}
-export interface MalformedUpdate extends AgentUpdateBase {
-  type: "malformed";
-}
-
 /**
  * Single event from an agent executor: session lifecycle, turn progress, usage, errors, or raw notifications.
  * Streamed via the `onUpdate` callback and also returned in batches from {@link AgentExecutor.runTurn}.
@@ -754,52 +717,46 @@ export interface MalformedUpdate extends AgentUpdateBase {
  * Discriminated on `type`.
  */
 export type AgentUpdate =
-  | SessionStartedUpdate
+  | NotificationAgentUpdate
+  | StringMessageUpdate
+  | BareAgentUpdate
   | SessionReplaySuppressedUpdate
-  | WorkspacePreparedUpdate
   | TurnStartedUpdate
   | TurnCompletedUpdate
   | TurnCancelledUpdate
   | TurnFailedUpdate
   | UsageUpdateEvent
-  | AssistantMessageUpdate
-  | UserMessageUpdate
-  | AgentThoughtUpdate
-  | ToolUseRequestedUpdate
-  | ToolCallUpdateEvent
-  | ToolResultUpdate
-  | ToolCallFailedUpdate
-  | ToolCallCompletedUpdate
-  | NotificationUpdate
-  | PlanUpdate
   | ApprovalRequiredUpdate
   | ApprovalAutoApprovedUpdate
-  | FsWriteUpdate
-  | StderrUpdate
-  | ProcessExitUpdate
-  | ResumeStateWarningUpdate
-  | RateLimitUpdate
-  | TurnInputRequiredUpdate
-  | ToolInputAutoAnsweredUpdate
-  | MalformedUpdate;
+  | FsWriteUpdate;
+
+type AgentUpdateMessage<K extends AgentUpdateType> = K extends NotificationUpdateType
+  ? SessionNotification
+  : K extends StringMessageUpdateType
+    ? string
+    : K extends BareUpdateType
+      ? undefined
+      : Extract<AgentUpdate, { type: K }> extends { message: infer M }
+        ? M
+        : undefined;
 
 /**
  * Wire format of a single JSONL trace line as written by TraceEmitter.
  * Mapped union: switching on `type` narrows `message` to the variant's specific shape.
  */
 export type TraceEvent = {
-  [K in AgentUpdate["type"]]: {
+  [K in AgentUpdateType]: {
     type: K;
     issueId: string;
     issueIdentifier: string;
     timestamp: string | null;
-    message: Extract<AgentUpdate, { type: K }>["message"] | null;
+    message: AgentUpdateMessage<K> | null;
     usage: Partial<UsageTotals> | null;
     workspacePath: string | null;
     sessionId: string | null;
     executorPid: string | null;
   };
-}[AgentUpdate["type"]];
+}[AgentUpdateType];
 
 /**
  * Handle to a started agent process, returned by {@link AgentExecutor.startSession}.

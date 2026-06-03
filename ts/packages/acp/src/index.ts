@@ -31,19 +31,11 @@ import type {
   AgentSession,
   AgentUpdate,
   AgentUpdateType,
-  AssistantMessageUpdate,
-  AgentThoughtUpdate,
   Issue,
-  NotificationUpdate,
-  PlanUpdate,
+  NotificationAgentUpdate,
   Settings,
-  ToolCallFailedUpdate,
-  ToolCallUpdateEvent,
-  ToolResultUpdate,
-  ToolUseRequestedUpdate,
   UsageUpdateEvent,
   UsageTotals,
-  UserMessageUpdate,
 } from "@symphony/domain";
 import type { SessionUpdateKind } from "@symphony/protocol";
 
@@ -280,17 +272,7 @@ export class Executor implements AgentExecutor {
   }
 }
 
-type SessionUpdate =
-  | AssistantMessageUpdate
-  | UserMessageUpdate
-  | AgentThoughtUpdate
-  | ToolUseRequestedUpdate
-  | ToolResultUpdate
-  | ToolCallFailedUpdate
-  | ToolCallUpdateEvent
-  | UsageUpdateEvent
-  | PlanUpdate
-  | NotificationUpdate;
+type SessionUpdate = NotificationAgentUpdate | UsageUpdateEvent;
 
 function handleSessionUpdate(session: Session, notification: SessionNotification): void {
   session.sessionId = notification.sessionId;
