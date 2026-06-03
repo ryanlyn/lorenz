@@ -320,7 +320,7 @@ function dashboardScenarios(): Array<{
             3_200,
             "thread token usage up...",
             "2026-05-05T00:01:15.000Z",
-            "usage_update",
+            "session_notification",
           ),
         ],
       }),

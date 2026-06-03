@@ -201,16 +201,6 @@ export class Executor implements AgentExecutor {
         })
         .then((response) => {
           const usage = extractUsage(response.usage ?? undefined);
-          if (usage) {
-            this.emit(session, {
-              type: "usage_update",
-              sessionId,
-              resumeId: session.resumeId,
-              usage,
-              message: { response },
-              timestamp: new Date(),
-            });
-          }
           const action = actionForStopReason(response.stopReason);
           const base = {
             sessionUpdate: acpProtocolUpdate(session, "turn_completed", { response }, usage),
@@ -277,22 +267,17 @@ function handleSessionUpdate(session: Session, notification: SessionNotification
     session.replayedUpdateCount += 1;
     return;
   }
-  const sessionUpdate = notification.update.sessionUpdate;
   const usage = extractUsageUpdate(notification.update);
-  const base = {
-    sessionUpdate: acpProtocolUpdate(session, sessionUpdate === "usage_update" ? "usage_update" : "session_notification", notification, usage),
+  session.onUpdate?.({
+    type: "session_notification",
+    sessionUpdate: acpProtocolUpdate(session, "session_notification", notification, usage),
     sessionId: session.sessionId,
     resumeId: session.resumeId,
     executorPid: session.executorPid,
     message: notification,
     timestamp: new Date(),
     ...(usage && { usage }),
-  };
-  if (sessionUpdate === "usage_update" && usage) {
-    session.onUpdate?.({ ...base, type: "usage_update", usage });
-  } else if (sessionUpdate !== "usage_update") {
-    session.onUpdate?.({ ...base, type: "session_notification" });
-  }
+  });
 }
 
 function handlePermissionRequest(
@@ -584,7 +569,7 @@ function acpProtocolUpdate(
   message: unknown,
   usage?: Partial<UsageTotals>,
 ): NonNullable<AgentUpdate["sessionUpdate"]> {
-  const base = {
+  return {
     kind: type,
     sessionId: session.sessionId,
     agentKind: session.agentKind,
@@ -595,8 +580,6 @@ function acpProtocolUpdate(
       usage,
     },
   };
-  if (type === "usage_update" && usage) return { ...base, kind: "usage_update", usage };
-  return base;
 }
 
 function extractUsageUpdate(

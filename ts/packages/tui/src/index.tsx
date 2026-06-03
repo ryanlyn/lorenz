@@ -243,8 +243,6 @@ function runningStage(run: RuntimeSnapshot["running"][number]): string {
 function rowColor(lastEvent: AgentUpdateType | null | undefined): string {
   if (lastEvent === null || lastEvent === undefined) return "31";
   switch (lastEvent) {
-    case "usage_update":
-      return "33";
     case "turn_started":
       return "32";
     case "turn_completed":

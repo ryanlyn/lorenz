@@ -99,7 +99,6 @@ export const AGENT_UPDATE_TYPES = [
   "approval_required",
   "approval_auto_approved",
   "tool_input_auto_answered",
-  "usage_update",
   "rate_limit",
   "stderr",
   "malformed",
@@ -666,12 +665,6 @@ export interface TurnFailedUpdate extends AgentUpdateBase {
   usage?: Partial<UsageTotals>;
 }
 
-export interface UsageUpdateEvent extends AgentUpdateBase {
-  type: "usage_update";
-  message: { response: PromptResponse } | SessionNotification;
-  usage: Partial<UsageTotals>;
-}
-
 export interface ApprovalRequiredUpdate extends AgentUpdateBase {
   type: "approval_required";
   message: { request: RequestPermissionRequest; selected: PermissionOption | null };
@@ -700,7 +693,6 @@ export type AgentUpdate =
   | TurnCompletedUpdate
   | TurnCancelledUpdate
   | TurnFailedUpdate
-  | UsageUpdateEvent
   | ApprovalRequiredUpdate
   | ApprovalAutoApprovedUpdate
   | FsWriteUpdate;
@@ -709,11 +701,9 @@ type AgentUpdateMessage<K extends AgentUpdateType> = K extends "session_notifica
   ? SessionNotification
   : K extends StringMessageUpdateType
     ? string
-    : K extends "usage_update"
-      ? { response: PromptResponse } | SessionNotification
-      : Extract<AgentUpdate, { type: K }> extends { message: infer M }
-        ? M
-        : undefined;
+    : Extract<AgentUpdate, { type: K }> extends { message: infer M }
+      ? M
+      : undefined;
 
 /**
  * Wire format of a single JSONL trace line as written by TraceEmitter.
