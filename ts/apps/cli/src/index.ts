@@ -1,6 +1,5 @@
 export {
   main,
-  run,
   runDaemon,
   parseCliArgs,
   createDaemonCommand,

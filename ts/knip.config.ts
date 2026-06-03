@@ -3,10 +3,11 @@ import type { KnipConfig } from "knip";
 const config: KnipConfig = {
   workspaces: {
     ".": {
-      entry: ["test/**/*.test.ts", "sandbox/**/*.ts"],
+      entry: ["test/**/*.test.ts"],
       ignoreDependencies: [
         "@symphony/dispatch",
         "@symphony/humanize",
+        "@symphony/log-file",
         "@symphony/mcp",
         "@symphony/memory-tracker",
         "@symphony/orchestrator",
@@ -14,18 +15,16 @@ const config: KnipConfig = {
         "@symphony/projections",
         "@symphony/retry-scheduler",
         "@symphony/runtime-events",
+        "@symphony/server",
         "@symphony/ssh",
+        "@symphony/traceviz-emitter",
+        "@symphony/traceviz-server",
         "@symphony/tui",
         "@symphony/worker-host-pool",
         "@symphony/workflow",
         "@symphony/workspace",
+        "playwright",
       ],
-    },
-    "apps/cli": {
-      entry: ["src/bin/cli.ts"],
-    },
-    "apps/symphony-dashboard": {
-      entry: ["src/main.tsx"],
     },
     "packages/*": {
       entry: ["src/index.{ts,tsx}"],

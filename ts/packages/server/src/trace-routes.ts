@@ -45,4 +45,3 @@ export function createTraceRoutes(traceDir: string): TraceRoutesResult {
 
   return { app, watcher };
 }
-

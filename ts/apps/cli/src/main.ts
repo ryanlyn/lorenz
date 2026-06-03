@@ -97,8 +97,6 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
   }
 }
 
-export const run = main;
-
 export async function runDaemon(options: CliOptions): Promise<number> {
   try {
     let boundServerPort: number | null = null;
