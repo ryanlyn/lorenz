@@ -31,6 +31,7 @@
     "dashboard:build": "pnpm --filter @symphony/dashboard build"
   },
   "devDependencies": {
+    "@agentclientprotocol/sdk": "^0.21.0",
     "@eslint/js": "^10.0.1",
     "@symphony/agent-runner": "workspace:*",
     "@symphony/cli": "workspace:*",
