@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 
 import type { TicketInfo, DisplayEvent, Stats } from "../api/types";
-import { fetchTickets, fetchEvents, fetchStats, checkTraceExists } from "../api/client";
+import { fetchTickets, fetchEvents, fetchStats } from "../api/client";
 import { computeStatsFromEvents } from "../api/stats";
 
 import { useWebSocket } from "./useWebSocket";
@@ -27,25 +27,18 @@ export function useTraceData() {
     setTraceExists(null);
     try {
       setError(null);
-      const exists = await checkTraceExists(issueId);
-      setTraceExists(exists);
-
-      if (!exists) {
-        setEvents([]);
-        setStats(null);
-        return;
-      }
-
       const [eventsData, statsData] = await Promise.all([
         fetchEvents(issueId),
         fetchStats(issueId),
       ]);
       setEvents(eventsData);
       setStats(statsData);
+      setTraceExists(eventsData.length > 0);
     } catch {
       setError("Failed to load trace data");
       setEvents([]);
       setStats(null);
+      setTraceExists(false);
     } finally {
       setLoading(false);
     }

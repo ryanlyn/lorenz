@@ -1,8 +1,6 @@
-import { useState, useEffect, useRef, useCallback } from "react";
 import { Search, ExternalLink, Loader2 } from "lucide-react";
 
-import type { IssueRecord } from "../api/types";
-import { fetchRecentIssues, searchIssues } from "../api/client";
+import { useIssueSearch } from "../hooks/useIssueSearch";
 import { cn } from "../../../lib/utils";
 
 interface TraceListProps {
@@ -22,48 +20,7 @@ function formatRelativeTime(epochMs: number): string {
 }
 
 export function TraceList({ onSelect }: TraceListProps) {
-  const [query, setQuery] = useState("");
-  const [recentIssues, setRecentIssues] = useState<IssueRecord[]>([]);
-  const [searchResults, setSearchResults] = useState<IssueRecord[]>([]);
-  const [searching, setSearching] = useState(false);
-  const [searched, setSearched] = useState(false);
-  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  useEffect(() => {
-    void fetchRecentIssues(5).then(setRecentIssues);
-  }, []);
-
-  const doSearch = useCallback(async (q: string) => {
-    setSearching(true);
-    try {
-      const results = await searchIssues(q);
-      setSearchResults(results);
-      setSearched(true);
-    } finally {
-      setSearching(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    if (debounceRef.current) clearTimeout(debounceRef.current);
-
-    if (query.length < 2) {
-      setSearchResults([]);
-      setSearched(false);
-      return;
-    }
-
-    debounceRef.current = setTimeout(() => {
-      void doSearch(query);
-    }, 300);
-
-    return () => {
-      if (debounceRef.current) clearTimeout(debounceRef.current);
-    };
-  }, [query, doSearch]);
-
-  const isSearchMode = query.length >= 2;
-  const displayIssues = isSearchMode ? searchResults : recentIssues;
+  const { query, setQuery, issues, searching, isSearchMode, noResults } = useIssueSearch();
 
   return (
     <div className="space-y-4">
@@ -94,13 +51,11 @@ export function TraceList({ onSelect }: TraceListProps) {
         <h2 className="text-xs font-medium uppercase tracking-wide text-muted">Recent</h2>
       )}
 
-      {isSearchMode && searched && searchResults.length === 0 && !searching && (
-        <p className="py-8 text-center text-sm text-muted">No results</p>
-      )}
+      {noResults && <p className="py-8 text-center text-sm text-muted">No results</p>}
 
-      {displayIssues.length > 0 && (
+      {issues.length > 0 && (
         <div className="divide-y divide-border rounded-lg border border-border bg-card">
-          {displayIssues.map((issue) => (
+          {issues.map((issue) => (
             <button
               key={issue.issueId}
               onClick={() => onSelect(issue.issueId)}
@@ -127,7 +82,7 @@ export function TraceList({ onSelect }: TraceListProps) {
         </div>
       )}
 
-      {!isSearchMode && recentIssues.length === 0 && (
+      {!isSearchMode && issues.length === 0 && (
         <div className="flex flex-col items-center justify-center py-16 text-center">
           <p className="text-sm text-muted">No issues found</p>
           <p className="mt-1 text-xs text-muted/70">

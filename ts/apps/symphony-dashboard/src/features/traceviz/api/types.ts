@@ -16,6 +16,7 @@ export type {
   TraceStats as Stats,
 } from "@symphony/traceviz-server";
 
+/** Mirrors IssueRecord from @symphony/server — kept local to avoid a Node.js dependency in the browser bundle. */
 export interface IssueRecord {
   issueId: string;
   issueIdentifier: string;

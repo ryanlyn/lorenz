@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { ArrowLeft, Archive } from "lucide-react";
 
+import type { DisplayEvent, Stats } from "../api/types";
 import { useTraceData } from "../hooks/useTraceData";
 
 import { TicketSelector } from "./TicketSelector";
@@ -64,26 +65,50 @@ export function TraceView({ issueId, onBack }: TraceViewProps) {
 
       {/* Trace content */}
       <div aria-live="polite" aria-atomic="true">
-        {selectedTicketId ? (
-          traceExists === false ? (
-            <div className="flex flex-col items-center justify-center py-16 text-center">
-              <Archive aria-hidden="true" className="h-10 w-10 text-muted" />
-              <p className="mt-4 text-sm font-medium text-foreground">{selectedTicketId}</p>
-              <p className="mt-2 max-w-md text-sm text-muted">
-                Trace data has been cleaned up for this issue. This is normal — traces are
-                periodically removed to save disk space.
-              </p>
-            </div>
-          ) : (
-            <div className="space-y-6">
-              {stats && <TraceSummary stats={stats} />}
-              <Timeline key={selectedTicketId} events={events} loading={loading} />
-            </div>
-          )
-        ) : (
-          <TraceList onSelect={navigateToTrace} />
-        )}
+        <TraceContent
+          selectedTicketId={selectedTicketId}
+          traceExists={traceExists}
+          events={events}
+          stats={stats}
+          loading={loading}
+          onSelect={navigateToTrace}
+        />
       </div>
+    </div>
+  );
+}
+
+interface TraceContentProps {
+  selectedTicketId: string | null;
+  traceExists: boolean | null;
+  events: DisplayEvent[];
+  stats: Stats | null;
+  loading: boolean;
+  onSelect: (id: string) => void;
+}
+
+function TraceContent({ selectedTicketId, traceExists, events, stats, loading, onSelect }: TraceContentProps) {
+  if (!selectedTicketId) {
+    return <TraceList onSelect={onSelect} />;
+  }
+
+  if (traceExists === false) {
+    return (
+      <div className="flex flex-col items-center justify-center py-16 text-center">
+        <Archive aria-hidden="true" className="h-10 w-10 text-muted" />
+        <p className="mt-4 text-sm font-medium text-foreground">{selectedTicketId}</p>
+        <p className="mt-2 max-w-md text-sm text-muted">
+          Trace data has been cleaned up for this issue. This is normal — traces are
+          periodically removed to save disk space.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-6">
+      {stats && <TraceSummary stats={stats} />}
+      <Timeline key={selectedTicketId} events={events} loading={loading} />
     </div>
   );
 }

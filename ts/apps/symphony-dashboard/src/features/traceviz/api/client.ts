@@ -34,9 +34,3 @@ export async function searchIssues(query: string, limit = 20): Promise<IssueReco
   return data.issues;
 }
 
-export async function checkTraceExists(issueId: string): Promise<boolean> {
-  const res = await fetch(`/api/v1/tickets/${encodeURIComponent(issueId)}/exists`);
-  if (!res.ok) return false;
-  const data = (await res.json()) as { exists: boolean };
-  return data.exists;
-}
