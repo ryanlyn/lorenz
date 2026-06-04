@@ -5,6 +5,40 @@ import { fetchOpsState } from "../api/client";
 
 const RECONNECT_DELAY_MS = 3000;
 
+interface OpsStreamCallbacks {
+  setConnected(connected: boolean): void;
+  setState(state: OpsState): void;
+  scheduleReconnect(): void;
+}
+
+interface OpsEventSourceLike {
+  onopen: (() => void) | null;
+  onerror: (() => void) | null;
+  addEventListener(type: string, listener: (event: MessageEvent<string>) => void): void;
+  close(): void;
+}
+
+export function wireOpsStream(stream: OpsEventSourceLike, callbacks: OpsStreamCallbacks): void {
+  stream.onopen = () => {
+    callbacks.setConnected(true);
+  };
+
+  stream.addEventListener("state", (event: MessageEvent<string>) => {
+    try {
+      const data = JSON.parse(event.data) as OpsState;
+      callbacks.setState(data);
+    } catch {
+      // Ignore malformed messages
+    }
+  });
+
+  stream.onerror = () => {
+    callbacks.setConnected(false);
+    stream.close();
+    callbacks.scheduleReconnect();
+  };
+}
+
 export function useOpsStream() {
   const [state, setState] = useState<OpsState | null>(null);
   const [connected, setConnected] = useState(false);
@@ -21,29 +55,17 @@ export function useOpsStream() {
     const es = new EventSource("/api/v1/events");
     esRef.current = es;
 
-    es.onopen = () => {
-      setConnected(true);
-    };
-
-    es.onmessage = (event: MessageEvent<string>) => {
-      try {
-        const data = JSON.parse(event.data) as OpsState;
-        setState(data);
-      } catch {
-        // Ignore malformed messages
-      }
-    };
-
-    es.onerror = () => {
-      setConnected(false);
-      es.close();
-      esRef.current = null;
-      // Schedule reconnect
-      reconnectTimer.current = setTimeout(() => {
-        reconnectTimer.current = null;
-        connect();
-      }, RECONNECT_DELAY_MS);
-    };
+    wireOpsStream(es, {
+      setConnected,
+      setState,
+      scheduleReconnect: () => {
+        esRef.current = null;
+        reconnectTimer.current = setTimeout(() => {
+          reconnectTimer.current = null;
+          connect();
+        }, RECONNECT_DELAY_MS);
+      },
+    });
   }, []);
 
   useEffect(() => {
