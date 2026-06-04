@@ -45,18 +45,20 @@ agents:
     provider_config:
       shell_environment_policy:
         inherit: all
-      model_reasoning_effort: high
+      model_reasoning_effort: xhigh
       service_tier: fast
-      model: gpt-5.4
-claude:
-  command: claude
-  turn_timeout_ms: 3600000
-  stall_timeout_ms: 300000
-  strict_mcp_config: true
-  provider_config:
-    model: claude-opus-4-6
-    permissions:
-      defaultMode: bypassPermissions
+      model: gpt-5.5
+  claude:
+    executor: acp
+    bridge_command: claude-agent-acp
+    provider_config:
+      model: claude-opus-4-8[1m]
+      effortLevel: xhigh
+      permissions:
+        defaultMode: bypassPermissions
+    turn_timeout_ms: 3600000
+    stall_timeout_ms: 300000
+    strict_mcp_config: true
 ---
 
 You are working on a Linear ticket `{{ issue.identifier }}`
