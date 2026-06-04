@@ -43,7 +43,7 @@ agents:
   turn_timeout_ms: 3600000
   stall_timeout_ms: 300000
   codex:
-    bridge_command: codex-acp
+    bridge_command: 'env CODEX_PATH="$(command -v codex)" codex-acp'
     provider_config:
       shell_environment_policy:
         inherit: all
@@ -52,7 +52,7 @@ agents:
       model: gpt-5.5
   claude:
     executor: acp
-    bridge_command: claude-agent-acp
+    bridge_command: 'env CLAUDE_CODE_EXECUTABLE="$(command -v claude)" claude-agent-acp'
     provider_config:
       model: claude-opus-4-8[1m]
       effortLevel: xhigh
