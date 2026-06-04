@@ -3,9 +3,9 @@ import { mkdirSync, readFileSync, rmSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import type { AgentUpdate } from "@symphony/domain";
 
 import { TraceEmitter } from "../src/index.js";
-import type { AgentUpdate } from "@symphony/domain";
 
 function makeTempDir(): string {
   const dir = path.join(

@@ -1,4 +1,5 @@
 import { readFile as fsReadFile } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -195,7 +196,7 @@ function buildObservabilityApp(
   let watcher: TraceWatcher | null = null;
   let issueStore: IssueStore | null = null;
   if (options.traceDir) {
-    issueStore = new IssueStore(path.join(options.traceDir, "issues.db"));
+    issueStore = new IssueStore(path.join(os.homedir(), ".symphony", "issues.db"));
     const traceRoutes = createTraceRoutes(options.traceDir, issueStore);
     watcher = traceRoutes.watcher;
     app.route("/", traceRoutes.app);

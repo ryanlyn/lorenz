@@ -63,8 +63,8 @@ describe("trace routes with IssueStore enrichment", () => {
   }
 
   it("GET /api/v1/tickets enriches title and url from issue store", async () => {
-    issueStore.upsert({ id: "id-1", identifier: "TEST-1", title: "Fix login", url: "https://linear.app/1" });
-    issueStore.upsert({ id: "id-2", identifier: "TEST-2", title: "Add tests", url: null });
+    issueStore.upsert({ issueId: "id-1", identifier: "TEST-1", title: "Fix login", url: "https://linear.app/1" });
+    issueStore.upsert({ issueId: "id-2", identifier: "TEST-2", title: "Add tests", url: null });
 
     // Let watcher pick up the trace files
     watcher.start(() => {});
@@ -95,7 +95,7 @@ describe("trace routes with IssueStore enrichment", () => {
   });
 
   it("GET /api/v1/tickets/:id/events uses store identifier", async () => {
-    issueStore.upsert({ id: "id-1", identifier: "RENAMED-1", title: "Title", url: null });
+    issueStore.upsert({ issueId: "id-1", identifier: "RENAMED-1", title: "Title", url: null });
 
     watcher.start(() => {});
     await new Promise((r) => setTimeout(r, 150));

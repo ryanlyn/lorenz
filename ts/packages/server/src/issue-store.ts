@@ -1,7 +1,7 @@
 import Database from "better-sqlite3";
 
 export interface IssueRecord {
-  id: string;
+  issueId: string;
   identifier: string;
   title: string | null;
   url: string | null;
@@ -9,39 +9,64 @@ export interface IssueRecord {
 
 export class IssueStore {
   private db: Database.Database;
-  private upsertStmt: Database.Statement;
+  private insertStmt: Database.Statement;
+  private updateStmt: Database.Statement;
   private getStmt: Database.Statement;
   private getAllStmt: Database.Statement;
+  private cache = new Map<string, IssueRecord>();
 
   constructor(dbPath: string) {
     this.db = new Database(dbPath);
     this.db.pragma("journal_mode = WAL");
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS issues (
-        id TEXT PRIMARY KEY,
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        issueId TEXT NOT NULL,
         identifier TEXT NOT NULL,
         title TEXT,
         url TEXT
       )
     `);
-    this.upsertStmt = this.db.prepare(`
-      INSERT INTO issues (id, identifier, title, url)
-      VALUES (?, ?, ?, ?)
-      ON CONFLICT(id) DO UPDATE SET
-        identifier = excluded.identifier,
-        title = excluded.title,
-        url = excluded.url
+    this.db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_issues_issueId ON issues(issueId)
     `);
-    this.getStmt = this.db.prepare("SELECT id, identifier, title, url FROM issues WHERE id = ?");
-    this.getAllStmt = this.db.prepare("SELECT id, identifier, title, url FROM issues");
+    this.insertStmt = this.db.prepare(
+      "INSERT INTO issues (issueId, identifier, title, url) VALUES (?, ?, ?, ?)",
+    );
+    this.updateStmt = this.db.prepare(
+      "UPDATE issues SET identifier = ?, title = ?, url = ? WHERE issueId = ?",
+    );
+    this.getStmt = this.db.prepare(
+      "SELECT issueId, identifier, title, url FROM issues WHERE issueId = ?",
+    );
+    this.getAllStmt = this.db.prepare("SELECT issueId, identifier, title, url FROM issues");
+
+    for (const row of this.getAllStmt.all() as IssueRecord[]) {
+      this.cache.set(row.issueId, row);
+    }
   }
 
   upsert(record: IssueRecord): void {
-    this.upsertStmt.run(record.id, record.identifier, record.title, record.url);
+    const cached = this.cache.get(record.issueId);
+    if (
+      cached &&
+      cached.identifier === record.identifier &&
+      cached.title === record.title &&
+      cached.url === record.url
+    ) {
+      return;
+    }
+
+    if (cached) {
+      this.updateStmt.run(record.identifier, record.title, record.url, record.issueId);
+    } else {
+      this.insertStmt.run(record.issueId, record.identifier, record.title, record.url);
+    }
+    this.cache.set(record.issueId, { ...record });
   }
 
-  get(id: string): IssueRecord | undefined {
-    return this.getStmt.get(id) as IssueRecord | undefined;
+  get(issueId: string): IssueRecord | undefined {
+    return this.getStmt.get(issueId) as IssueRecord | undefined;
   }
 
   getAll(): IssueRecord[] {

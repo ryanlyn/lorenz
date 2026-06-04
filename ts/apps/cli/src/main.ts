@@ -1,3 +1,4 @@
+import os from "node:os";
 import path from "node:path";
 
 import React from "react";
@@ -117,7 +118,8 @@ export async function runDaemon(options: CliOptions): Promise<number> {
 
     const traceDir = workflow.settings.server.traceDir!;
     const traceEmitter = new TraceEmitter(traceDir);
-    const issueStore = new IssueStore(path.join(traceDir, "issues.db"));
+    const symphonyDir = path.join(os.homedir(), ".symphony");
+    const issueStore = new IssueStore(path.join(symphonyDir, "issues.db"));
     const runtime = new SymphonyRuntime({
       workflow,
       clientFactory: createTrackerClient,
@@ -125,7 +127,7 @@ export async function runDaemon(options: CliOptions): Promise<number> {
       runner: runAgentAttempt,
       onAgentUpdate: (issue, update) => {
         issueStore.upsert({
-          id: issue.id,
+          issueId: issue.id,
           identifier: issue.identifier,
           title: issue.title,
           url: issue.url ?? null,
