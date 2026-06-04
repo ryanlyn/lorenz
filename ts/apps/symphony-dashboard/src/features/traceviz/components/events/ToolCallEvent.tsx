@@ -1,8 +1,10 @@
-import { useState } from "react";
+import { useState, type KeyboardEvent } from "react";
 import { Code, ChevronDown } from "lucide-react";
 
 import type { ToolCallEvent as ToolCallEventType } from "../../api/types";
 import { formatTimestamp, formatDuration, cn } from "../../../../lib/utils";
+
+import { isActivationKey } from "./interactiveRow";
 
 interface ToolCallEventProps {
   event: ToolCallEventType;
@@ -10,6 +12,12 @@ interface ToolCallEventProps {
 
 export function ToolCallEvent({ event }: ToolCallEventProps) {
   const [expanded, setExpanded] = useState(false);
+  const toggleExpanded = () => setExpanded((value) => !value);
+  const handleToggleKeyDown = (keyboardEvent: KeyboardEvent<HTMLDivElement>) => {
+    if (!isActivationKey(keyboardEvent.key)) return;
+    keyboardEvent.preventDefault();
+    toggleExpanded();
+  };
 
   return (
     <div
@@ -18,12 +26,19 @@ export function ToolCallEvent({ event }: ToolCallEventProps) {
         event.isError ? "border-accent-red" : "border-accent-orange",
       )}
     >
-      <button
-        type="button"
-        className="flex w-full items-start gap-2 text-left bg-transparent border-none p-0 cursor-pointer"
+      <div
+        role="button"
+        tabIndex={0}
+        className={cn(
+          "flex w-full cursor-pointer items-start gap-2 bg-transparent p-0 text-left focus:outline-none focus-visible:ring-2",
+          event.isError
+            ? "focus-visible:ring-accent-red/60"
+            : "focus-visible:ring-accent-orange/60",
+        )}
         aria-expanded={expanded}
         aria-label={`Toggle ${event.toolName} details`}
-        onClick={() => setExpanded(!expanded)}
+        onClick={toggleExpanded}
+        onKeyDown={handleToggleKeyDown}
       >
         <Code
           aria-hidden="true"
@@ -52,7 +67,7 @@ export function ToolCallEvent({ event }: ToolCallEventProps) {
             />
           </div>
         </div>
-      </button>
+      </div>
 
       <div
         className={cn(
