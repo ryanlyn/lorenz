@@ -77,7 +77,7 @@ app.get("/*", (c) => {
 
 const PORT = 4040;
 
-serve({ fetch: app.fetch, port: PORT }, () => {
+serve({ fetch: app.fetch, hostname: "127.0.0.1", port: PORT }, () => {
   const url = `http://localhost:${PORT}/#/trace/${encodeURIComponent(issueId)}`;
   console.log(`Trace: ${resolved} (${events.length} events)`);
   console.log();
