@@ -111,6 +111,88 @@ test("orchestrator keeps per-entry usage totals monotonic across runner correcti
   });
 });
 
+test("orchestrator accumulates per-turn usage deltas for dashboard snapshots", () => {
+  const orchestrator = new Orchestrator(parseConfig());
+  const issue = normalizeIssue({
+    id: "usage-deltas",
+    identifier: "MT-USAGE-DELTAS",
+    title: "Usage deltas",
+    state: { name: "Todo", type: "unstarted" },
+  });
+
+  assert.ok(orchestrator.claim(issue));
+  orchestrator.applyUpdate(issue.id, 0, {
+    type: "turn_completed",
+    usageKind: "delta",
+    usage: { inputTokens: 100, outputTokens: 50, totalTokens: 150 },
+  });
+  orchestrator.applyUpdate(issue.id, 0, {
+    type: "turn_completed",
+    usageKind: "delta",
+    usage: { inputTokens: 200, outputTokens: 100, totalTokens: 300 },
+  });
+
+  const snapshot = orchestrator.snapshot();
+  assert.deepEqual(snapshot.running[0]?.usageTotals, {
+    inputTokens: 300,
+    outputTokens: 150,
+    totalTokens: 450,
+    secondsRunning: 0,
+  });
+  assert.deepEqual(snapshot.usageTotals, {
+    inputTokens: 300,
+    outputTokens: 150,
+    totalTokens: 450,
+    secondsRunning: 0,
+  });
+});
+
+test("orchestrator does not double count streamed cumulative usage before final turn deltas", () => {
+  const orchestrator = new Orchestrator(parseConfig());
+  const issue = normalizeIssue({
+    id: "usage-mixed",
+    identifier: "MT-USAGE-MIXED",
+    title: "Usage mixed",
+    state: { name: "Todo", type: "unstarted" },
+  });
+
+  assert.ok(orchestrator.claim(issue));
+  orchestrator.applyUpdate(issue.id, 0, {
+    type: "session_notification",
+    usageKind: "cumulative",
+    usage: { totalTokens: 150 },
+  });
+  orchestrator.applyUpdate(issue.id, 0, {
+    type: "turn_completed",
+    usageKind: "delta",
+    usage: { inputTokens: 100, outputTokens: 50, totalTokens: 150 },
+  });
+  orchestrator.applyUpdate(issue.id, 0, {
+    type: "session_notification",
+    usageKind: "cumulative",
+    usage: { totalTokens: 450 },
+  });
+  orchestrator.applyUpdate(issue.id, 0, {
+    type: "turn_completed",
+    usageKind: "delta",
+    usage: { inputTokens: 200, outputTokens: 100, totalTokens: 300 },
+  });
+
+  const snapshot = orchestrator.snapshot();
+  assert.deepEqual(snapshot.running[0]?.usageTotals, {
+    inputTokens: 300,
+    outputTokens: 150,
+    totalTokens: 450,
+    secondsRunning: 0,
+  });
+  assert.deepEqual(snapshot.usageTotals, {
+    inputTokens: 300,
+    outputTokens: 150,
+    totalTokens: 450,
+    secondsRunning: 0,
+  });
+});
+
 test("orchestrator assigns SSH worker hosts by least loaded capacity", () => {
   const settings = parseConfig({
     worker: { ssh_hosts: ["worker-a:2200", "worker-b:2200"], max_concurrent_agents_per_host: 1 },

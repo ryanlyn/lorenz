@@ -209,7 +209,7 @@ export class Executor implements AgentExecutor {
             executorPid: session.executorPid,
             message: { response },
             timestamp: new Date(),
-            ...(usage && { usage }),
+            ...(usage && { usage, usageKind: "delta" as const }),
           };
           if (action === "continue") {
             this.emit(session, { ...base, type: "turn_completed" });
@@ -267,6 +267,10 @@ function handleSessionUpdate(session: Session, notification: SessionNotification
     session.replayedUpdateCount += 1;
     return;
   }
+  const usage =
+    notification.update.sessionUpdate === "usage_update"
+      ? extractUsageUpdate(notification.update)
+      : undefined;
   session.onUpdate?.({
     type: "session_notification",
     sessionUpdate: acpProtocolUpdate(session, "session_notification", notification),
@@ -275,9 +279,7 @@ function handleSessionUpdate(session: Session, notification: SessionNotification
     executorPid: session.executorPid,
     message: notification,
     timestamp: new Date(),
-    ...(notification.update.sessionUpdate === "usage_update" && {
-      usage: extractUsageUpdate(notification.update),
-    }),
+    ...(usage && { usage, usageKind: "cumulative" as const }),
   });
 }
 

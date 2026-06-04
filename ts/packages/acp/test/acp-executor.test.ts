@@ -33,9 +33,19 @@ test("ACP executor starts a session, translates updates, approves permissions, a
     "turn_completed",
   );
   assert.ok(updates.some((update) => update.type === "session_notification" && update.usage));
+  assert.ok(
+    updates.some(
+      (update) =>
+        update.type === "session_notification" &&
+        update.usage?.totalTokens === 5 &&
+        update.usageKind === "cumulative",
+    ),
+  );
   assert.ok(updates.some((update) => update.type === "approval_auto_approved"));
   assert.ok(updates.some((update) => update.type === "fs_write"));
-  assert.deepEqual(turnUpdates.find((update) => update.type === "turn_completed")?.usage, {
+  const turnCompleted = turnUpdates.find((update) => update.type === "turn_completed");
+  assert.equal(turnCompleted?.usageKind, "delta");
+  assert.deepEqual(turnCompleted?.usage, {
     inputTokens: 2,
     outputTokens: 3,
     totalTokens: 5,

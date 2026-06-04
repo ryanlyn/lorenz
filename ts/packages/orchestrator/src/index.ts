@@ -44,8 +44,30 @@ export function createState(): OrchestratorState {
   };
 }
 
+function zeroUsageTotals(): UsageTotals {
+  return { inputTokens: 0, outputTokens: 0, totalTokens: 0, secondsRunning: 0 };
+}
+
+function reportedUsageTotals(entry: RunningEntry): UsageTotals {
+  return {
+    inputTokens: entry.lastReportedInputTokens,
+    outputTokens: entry.lastReportedOutputTokens,
+    totalTokens: entry.lastReportedTotalTokens,
+    secondsRunning: 0,
+  };
+}
+
+function usageDelta(value: number | undefined): number {
+  return Number.isFinite(value) ? Math.max(0, value!) : 0;
+}
+
+function deltaNotAlreadyReported(delta: number, reported: number, base: number): number {
+  return Math.max(0, delta - Math.max(0, reported - base));
+}
+
 export class Orchestrator {
   readonly state: OrchestratorState;
+  private readonly usageDeltaBases = new Map<string, UsageTotals>();
 
   constructor(
     public settings: Settings,
@@ -145,6 +167,7 @@ export class Orchestrator {
 
     this.state.claimed.add(key);
     this.state.running.set(key, entry);
+    this.usageDeltaBases.set(key, zeroUsageTotals());
     this.state.retryAttempts.delete(issue.id);
     return entry;
   }
@@ -174,7 +197,8 @@ export class Orchestrator {
   }
 
   applyUpdate(issueId: string, slotIndex: number, update: AgentUpdate): void {
-    const entry = this.state.running.get(slotKey(issueId, slotIndex));
+    const key = slotKey(issueId, slotIndex);
+    const entry = this.state.running.get(key);
     if (!entry) return;
 
     entry.lastAgentEvent = update.type;
@@ -186,7 +210,7 @@ export class Orchestrator {
     if (update.workspacePath !== undefined) entry.workspacePath = update.workspacePath;
     if (update.type === "turn_completed") entry.turnCount += 1;
     if (update.rateLimits !== undefined) this.state.rateLimits = update.rateLimits;
-    if (update.usage) this.applyUsageDelta(entry, update.usage);
+    if (update.usage) this.applyUsageUpdate(key, entry, update);
   }
 
   finish(
@@ -201,6 +225,7 @@ export class Orchestrator {
     if (!entry) return;
     this.state.running.delete(key);
     this.state.claimed.delete(key);
+    this.usageDeltaBases.delete(key);
     this.state.usageTotals.secondsRunning += Math.max(
       0,
       (this.clock.now().getTime() - entry.startedAt.getTime()) / 1000,
@@ -231,6 +256,7 @@ export class Orchestrator {
       if (entry.issue.id === issueId) {
         this.state.running.delete(key);
         this.state.claimed.delete(key);
+        this.usageDeltaBases.delete(key);
       }
     }
     this.state.retryAttempts.delete(issueId);
@@ -253,7 +279,16 @@ export class Orchestrator {
     };
   }
 
-  private applyUsageDelta(entry: RunningEntry, usage: Partial<UsageTotals>): void {
+  private applyUsageUpdate(key: string, entry: RunningEntry, update: AgentUpdate): void {
+    if (!update.usage) return;
+    if (update.usageKind === "delta") {
+      this.applyIncrementalUsage(key, entry, update.usage);
+      return;
+    }
+    this.applyCumulativeUsage(entry, update.usage);
+  }
+
+  private applyCumulativeUsage(entry: RunningEntry, usage: Partial<UsageTotals>): void {
     const merged = mergeMonotonicUsage({
       entryTotals: entry.usageTotals,
       reportedTotals: {
@@ -271,6 +306,67 @@ export class Orchestrator {
     entry.lastReportedOutputTokens = merged.reportedTotals.outputTokens;
     entry.lastReportedTotalTokens = merged.reportedTotals.totalTokens;
     this.state.usageTotals = merged.globalTotals;
+  }
+
+  private applyIncrementalUsage(
+    key: string,
+    entry: RunningEntry,
+    usage: Partial<UsageTotals>,
+  ): void {
+    const base = this.usageDeltaBases.get(key) ?? reportedUsageTotals(entry);
+    const inputDelta = usageDelta(usage.inputTokens);
+    const outputDelta = usageDelta(usage.outputTokens);
+    const reportedTotalDelta = Number.isFinite(usage.totalTokens)
+      ? Math.max(0, usage.totalTokens!, inputDelta + outputDelta)
+      : inputDelta + outputDelta;
+
+    const inputToAdd = deltaNotAlreadyReported(
+      inputDelta,
+      entry.lastReportedInputTokens,
+      base.inputTokens,
+    );
+    const outputToAdd = deltaNotAlreadyReported(
+      outputDelta,
+      entry.lastReportedOutputTokens,
+      base.outputTokens,
+    );
+    const totalToAdd = deltaNotAlreadyReported(
+      reportedTotalDelta,
+      entry.lastReportedTotalTokens,
+      base.totalTokens,
+    );
+
+    const nextInput = entry.usageTotals.inputTokens + inputToAdd;
+    const nextOutput = entry.usageTotals.outputTokens + outputToAdd;
+    const nextTotal = Math.max(entry.usageTotals.totalTokens + totalToAdd, nextInput + nextOutput);
+    const actualTotalToAdd = nextTotal - entry.usageTotals.totalTokens;
+
+    entry.usageTotals = {
+      inputTokens: nextInput,
+      outputTokens: nextOutput,
+      totalTokens: nextTotal,
+      secondsRunning: entry.usageTotals.secondsRunning,
+    };
+    this.state.usageTotals = {
+      inputTokens: this.state.usageTotals.inputTokens + inputToAdd,
+      outputTokens: this.state.usageTotals.outputTokens + outputToAdd,
+      totalTokens: this.state.usageTotals.totalTokens + actualTotalToAdd,
+      secondsRunning: this.state.usageTotals.secondsRunning,
+    };
+
+    const nextBase = {
+      inputTokens: base.inputTokens + inputDelta,
+      outputTokens: base.outputTokens + outputDelta,
+      totalTokens: base.totalTokens + reportedTotalDelta,
+      secondsRunning: 0,
+    };
+    this.usageDeltaBases.set(key, nextBase);
+    entry.lastReportedInputTokens = Math.max(entry.lastReportedInputTokens, nextBase.inputTokens);
+    entry.lastReportedOutputTokens = Math.max(
+      entry.lastReportedOutputTokens,
+      nextBase.outputTokens,
+    );
+    entry.lastReportedTotalTokens = Math.max(entry.lastReportedTotalTokens, nextBase.totalTokens);
   }
 
   private cleanupRetryAttempts(issues: Issue[]): void {
