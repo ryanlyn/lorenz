@@ -253,6 +253,11 @@ function rowColor(lastEvent: AgentUpdateType | null | undefined): string {
 }
 
 function terminalEvent(run: RuntimeSnapshot["running"][number]): string {
+  if (
+    (run.lastEvent === null || run.lastEvent === undefined) &&
+    (run.lastMessage === null || run.lastMessage === undefined)
+  )
+    return "pending";
   return truncate(
     humanizeAgentMessage({
       agent_kind: run.agentKind,
