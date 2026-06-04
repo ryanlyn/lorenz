@@ -18,9 +18,9 @@ import type { TraceWatcher } from "@symphony/traceviz-server";
 
 import { createTraceRoutes } from "./trace-routes.js";
 import { createWsHandler } from "./ws.js";
-import { IssueStore } from "./issue-store.js";
+import { defaultIssueStorePath, IssueStore } from "./issue-store.js";
 
-export { IssueStore };
+export { defaultIssueStorePath, IssueStore };
 export type { IssueRecord } from "./issue-store.js";
 
 export interface RuntimeServerSource {
@@ -49,20 +49,35 @@ export async function startObservabilityServer(
   runtime: RuntimeServerSource,
   options: ObservabilityServerOptions,
 ): Promise<ObservabilityServerHandle> {
-  const { app, watcher } = buildObservabilityApp(runtime, options);
-  let internals: HonoServerInternals | undefined;
-
-  if (watcher) {
-    const wsSetup = createWsHandler(app, watcher);
-    internals = {
-      injectWebSocket: wsSetup.injectWebSocket,
-      stopWatcher: () => {
-        watcher.stop();
-      },
-    };
+  const ownedIssueStore =
+    options.traceDir && !options.issueStore ? new IssueStore(defaultIssueStorePath()) : null;
+  const serverOptions = ownedIssueStore ? { ...options, issueStore: ownedIssueStore } : options;
+  let app: Hono;
+  let watcher: TraceWatcher | null;
+  try {
+    ({ app, watcher } = buildObservabilityApp(runtime, serverOptions));
+  } catch (error) {
+    ownedIssueStore?.close();
+    throw error;
   }
+  const internals: HonoServerInternals = {};
 
-  return startHonoServer(app, options, internals);
+  try {
+    if (watcher) {
+      const wsSetup = createWsHandler(app, watcher);
+      internals.injectWebSocket = wsSetup.injectWebSocket;
+      internals.stopWatcher = () => {
+        watcher.stop();
+      };
+    }
+    if (ownedIssueStore) internals.closeIssueStore = () => ownedIssueStore.close();
+
+    return await startHonoServer(app, options, hasInternals(internals) ? internals : undefined);
+  } catch (error) {
+    internals.stopWatcher?.();
+    internals.closeIssueStore?.();
+    throw error;
+  }
 }
 
 export async function startClaudeMcpServer(
@@ -75,6 +90,7 @@ export async function startClaudeMcpServer(
 interface HonoServerInternals {
   injectWebSocket?: (server: unknown) => void;
   stopWatcher?: () => void;
+  closeIssueStore?: () => void;
 }
 
 async function startHonoServer(
@@ -107,9 +123,21 @@ async function startHonoServer(
     },
     stop: async () => {
       internals?.stopWatcher?.();
-      await stopServer(activeServer);
+      try {
+        await stopServer(activeServer);
+      } finally {
+        internals?.closeIssueStore?.();
+      }
     },
   };
+}
+
+function hasInternals(internals: HonoServerInternals): boolean {
+  return (
+    internals.injectWebSocket !== undefined ||
+    internals.stopWatcher !== undefined ||
+    internals.closeIssueStore !== undefined
+  );
 }
 
 interface BuildResult {

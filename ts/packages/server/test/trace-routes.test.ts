@@ -69,7 +69,12 @@ describe("trace routes with IssueStore enrichment", () => {
       title: "Fix login",
       url: "https://linear.app/1",
     });
-    issueStore.upsert({ issueId: "id-2", issueIdentifier: "TEST-2", title: "Add tests", url: null });
+    issueStore.upsert({
+      issueId: "id-2",
+      issueIdentifier: "TEST-2",
+      title: "Add tests",
+      url: null,
+    });
 
     // Let watcher pick up the trace files
     watcher.start(() => {});

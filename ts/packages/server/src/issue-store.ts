@@ -1,3 +1,7 @@
+import { mkdirSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+
 import Database from "better-sqlite3";
 
 export interface IssueRecord {
@@ -8,15 +12,22 @@ export interface IssueRecord {
   url: string | null;
 }
 
+export function defaultIssueStorePath(homeDir = os.homedir()): string {
+  return path.join(homeDir, ".symphony", "issues.db");
+}
+
 export class IssueStore {
   private readonly db: Database.Database;
   private readonly upsertStmt: Database.Statement;
   private readonly getStmt: Database.Statement;
 
   constructor(dbPath: string) {
+    mkdirSync(path.dirname(dbPath), { recursive: true });
     this.db = new Database(dbPath);
     this.db.pragma("journal_mode = WAL");
+    this.db.pragma("synchronous = NORMAL");
     this.db.pragma("busy_timeout = 5000");
+    this.db.pragma("foreign_keys = ON");
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS issues (
         id INTEGER PRIMARY KEY,

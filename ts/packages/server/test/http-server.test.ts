@@ -1,3 +1,8 @@
+import { existsSync } from "node:fs";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+
 import { test, vi } from "vitest";
 import {
   issueMcpToken,
@@ -11,7 +16,7 @@ import type { WorkflowDefinition } from "@symphony/domain";
 
 import { assert } from "../../../test/assert.js";
 
-import { startObservabilityServer } from "@symphony/server";
+import { defaultIssueStorePath, startObservabilityServer } from "@symphony/server";
 import { startClaudeMcpServer } from "@symphony/server";
 
 test("observability HTTP API exposes Elixir-shaped state, issue, runs, refresh, and errors", async () => {
@@ -140,6 +145,33 @@ test("standalone Claude MCP server preserves route and JSON-RPC error contracts"
   } finally {
     revokeMcpToken(token);
     await server.stop();
+  }
+});
+
+test("observability HTTP API creates a default issue store when traceDir is configured", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "symphony-http-issue-store-"));
+  const traceDir = path.join(root, "traces");
+  await mkdir(traceDir, { recursive: true });
+  vi.stubEnv("HOME", root);
+  let server: Awaited<ReturnType<typeof startObservabilityServer>> | null = null;
+
+  try {
+    server = await startObservabilityServer(fakeRuntime("snapshot_unavailable"), {
+      host: "127.0.0.1",
+      port: 0,
+      traceDir,
+      staticDir: "/tmp/nonexistent-dashboard-dist",
+    });
+
+    assert.ok(existsSync(defaultIssueStorePath(root)));
+    const response = await fetch(server.url("/api/v1/tickets"));
+    assert.equal(response.status, 200);
+    const tickets = await response.json();
+    assert.deepEqual(tickets, { tickets: [] });
+  } finally {
+    await server?.stop();
+    vi.unstubAllEnvs();
+    await rm(root, { recursive: true, force: true });
   }
 });
 

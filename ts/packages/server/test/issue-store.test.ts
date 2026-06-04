@@ -1,5 +1,5 @@
 import path from "node:path";
-import { mkdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
@@ -80,7 +80,18 @@ describe("IssueStore", () => {
     expect(record?.url).toBeNull();
   });
 
-it("survives close and reopen", () => {
+  it("creates missing database parent directories", () => {
+    const nestedPath = path.join(dir, "nested", "issues.db");
+    const nestedStore = new IssueStore(nestedPath);
+    try {
+      nestedStore.upsert({ issueId: "id-1", issueIdentifier: "ENG-1", title: null, url: null });
+      expect(existsSync(nestedPath)).toBe(true);
+    } finally {
+      nestedStore.close();
+    }
+  });
+
+  it("survives close and reopen", () => {
     store.upsert({ issueId: "id-1", issueIdentifier: "ENG-1", title: "Persistent", url: null });
     store.close();
 
@@ -94,7 +105,6 @@ it("survives close and reopen", () => {
     store.upsert({ issueId: "id-1", issueIdentifier: "ENG-1", title: "First", url: null });
     store.upsert({ issueId: "id-2", issueIdentifier: "ENG-2", title: "Second", url: null });
 
-     
     const db = (store as any).db;
     const rows = db.prepare("SELECT id, issueId FROM issues ORDER BY id").all() as Array<{
       id: number;

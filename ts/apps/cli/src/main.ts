@@ -1,4 +1,3 @@
-import os from "node:os";
 import path from "node:path";
 
 import React from "react";
@@ -21,7 +20,7 @@ import { SymphonyRuntime } from "@symphony/runtime";
 import { RuntimeApp } from "@symphony/tui";
 import { loadWorkflow } from "@symphony/workflow";
 import { TraceEmitter } from "@symphony/traceviz-emitter";
-import { IssueStore } from "@symphony/server";
+import { defaultIssueStorePath, IssueStore } from "@symphony/server";
 import type { Settings, WorkflowDefinition } from "@symphony/domain";
 
 import {
@@ -118,8 +117,7 @@ export async function runDaemon(options: CliOptions): Promise<number> {
 
     const traceDir = workflow.settings.server.traceDir!;
     const traceEmitter = new TraceEmitter(traceDir);
-    const symphonyDir = path.join(os.homedir(), ".symphony");
-    const issueStore = new IssueStore(path.join(symphonyDir, "issues.db"));
+    const issueStore = new IssueStore(defaultIssueStorePath());
     const runtime = new SymphonyRuntime({
       workflow,
       clientFactory: createTrackerClient,
