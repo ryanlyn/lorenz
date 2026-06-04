@@ -13,7 +13,6 @@ export class IssueStore {
   private updateStmt: Database.Statement;
   private getStmt: Database.Statement;
   private getAllStmt: Database.Statement;
-  private cache = new Map<string, IssueRecord>();
 
   constructor(dbPath: string) {
     this.db = new Database(dbPath);
@@ -40,29 +39,15 @@ export class IssueStore {
       "SELECT issueId, identifier, title, url FROM issues WHERE issueId = ?",
     );
     this.getAllStmt = this.db.prepare("SELECT issueId, identifier, title, url FROM issues");
-
-    for (const row of this.getAllStmt.all() as IssueRecord[]) {
-      this.cache.set(row.issueId, row);
-    }
   }
 
   upsert(record: IssueRecord): void {
-    const cached = this.cache.get(record.issueId);
-    if (
-      cached &&
-      cached.identifier === record.identifier &&
-      cached.title === record.title &&
-      cached.url === record.url
-    ) {
-      return;
-    }
-
-    if (cached) {
+    const existing = this.getStmt.get(record.issueId);
+    if (existing) {
       this.updateStmt.run(record.identifier, record.title, record.url, record.issueId);
     } else {
       this.insertStmt.run(record.issueId, record.identifier, record.title, record.url);
     }
-    this.cache.set(record.issueId, { ...record });
   }
 
   get(issueId: string): IssueRecord | undefined {

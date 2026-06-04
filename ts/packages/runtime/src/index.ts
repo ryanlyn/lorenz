@@ -178,6 +178,7 @@ export interface SymphonyRuntimeOptions {
     | undefined;
   appendLogEvent?: ((logFile: string, event: Record<string, unknown>) => Promise<void>) | undefined;
   onAgentUpdate?: ((issue: Issue, update: AgentUpdate) => void) | undefined;
+  onIssueDispatched?: ((issue: Issue) => void) | undefined;
   now?: (() => Date) | undefined;
 }
 
@@ -401,6 +402,7 @@ export class SymphonyRuntime {
     const handle = new ActiveRunHandle(key, runId, this.activeRuns);
     this.activeRuns.set(key, handle);
     this.addEvent("run_started", `${refreshed.identifier} slot=${claim.slotIndex}`);
+    this.input.onIssueDispatched?.(refreshed);
 
     const run = this.runClaim(
       refreshed,

@@ -117,36 +117,15 @@ describe("IssueStore", () => {
     expect(rows[1]!.issueId).toBe("id-2");
   });
 
-  it("skips DB write when record is unchanged", () => {
-    const record = { issueId: "id-1", identifier: "ENG-1", title: "Title", url: "https://x.com" };
-    store.upsert(record);
-
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const db = (store as any).db;
-    const changesBefore = db.prepare("SELECT total_changes() as c").get() as { c: number };
-
-    // Upsert the same record repeatedly
-    store.upsert(record);
-    store.upsert(record);
-    store.upsert(record);
-
-    const changesAfter = db.prepare("SELECT total_changes() as c").get() as { c: number };
-    expect(changesAfter.c).toBe(changesBefore.c);
-  });
-
-  it("writes to DB when record data changes", () => {
+  it("updates existing record on repeated upsert", () => {
     store.upsert({ issueId: "id-1", identifier: "ENG-1", title: "Old", url: null });
+    store.upsert({ issueId: "id-1", identifier: "ENG-1", title: "New", url: "https://x.com" });
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const db = (store as any).db;
-    const changesBefore = db.prepare("SELECT total_changes() as c").get() as { c: number };
-
-    store.upsert({ issueId: "id-1", identifier: "ENG-1", title: "New", url: null });
-
-    const changesAfter = db.prepare("SELECT total_changes() as c").get() as { c: number };
-    expect(changesAfter.c).toBeGreaterThan(changesBefore.c);
+    const all = store.getAll();
+    expect(all).toHaveLength(1);
 
     const record = store.get("id-1");
     expect(record?.title).toBe("New");
+    expect(record?.url).toBe("https://x.com");
   });
 });
