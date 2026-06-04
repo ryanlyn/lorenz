@@ -4,6 +4,11 @@ import path from "node:path";
 
 import type { AgentUpdate, TraceEvent } from "@symphony/domain";
 
+export interface TraceEmitOptions {
+  title?: string | null | undefined;
+  url?: string | null | undefined;
+}
+
 export class TraceEmitter {
   private readonly traceDir: string;
   private initialized = new Set<string>();
@@ -14,7 +19,7 @@ export class TraceEmitter {
     this.traceDir = traceDir;
   }
 
-  emit(issueId: string, issueIdentifier: string, update: AgentUpdate): void {
+  emit(issueId: string, issueIdentifier: string, update: AgentUpdate, options?: TraceEmitOptions): void {
     const dirPath = this.issueDirPath(issueIdentifier);
     if (!this.initialized.has(dirPath)) {
       mkdirSync(dirPath, { recursive: true });
@@ -24,6 +29,8 @@ export class TraceEmitter {
       type: update.type,
       issueId,
       issueIdentifier,
+      ...(options?.title ? { issueTitle: options.title } : {}),
+      ...(options?.url ? { issueUrl: options.url } : {}),
       timestamp: update.timestamp ? update.timestamp.toISOString() : null,
       message: update.message ?? null,
       usage: update.usage ?? null,

@@ -505,7 +505,7 @@ test("config ignores custom logging.log_file and uses default path", () => {
     logging: { log_file: "tmp/custom/symphony.log" },
   });
 
-  assert.equal(settings.logging.logFile, "./log/symphony.log");
+  assert.equal(settings.logging.logFile, path.join(os.homedir(), ".symphony/log/symphony.log"));
 });
 
 test("status overrides reject legacy per-state map and unknown sections", () => {

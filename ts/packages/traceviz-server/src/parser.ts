@@ -276,16 +276,26 @@ export function parseTraceLines(lines: string[]): DisplayEvent[] {
   return events;
 }
 
+export interface TicketMetadata {
+  issueId: string;
+  issueIdentifier: string;
+  issueTitle?: string | undefined;
+  issueUrl?: string | undefined;
+}
+
 /**
- * Extract the issueId and issueIdentifier from the first valid line of a trace file.
+ * Extract the issueId, issueIdentifier, title, and url from the first valid line of a trace file.
  */
-export function extractTicketMetadata(
-  lines: string[],
-): { issueId: string; issueIdentifier: string } | null {
+export function extractTicketMetadata(lines: string[]): TicketMetadata | null {
   for (const line of lines) {
     const raw = parseLine(line);
     if (raw && raw.issueId && raw.issueIdentifier) {
-      return { issueId: raw.issueId, issueIdentifier: raw.issueIdentifier };
+      return {
+        issueId: raw.issueId,
+        issueIdentifier: raw.issueIdentifier,
+        issueTitle: raw.issueTitle ?? undefined,
+        issueUrl: raw.issueUrl ?? undefined,
+      };
     }
   }
   return null;

@@ -121,7 +121,10 @@ export async function runDaemon(options: CliOptions): Promise<number> {
       reloadWorkflow: loadRuntimeWorkflow,
       runner: runAgentAttempt,
       onAgentUpdate: (issue, update) => {
-        traceEmitter.emit(issue.id, issue.identifier, update);
+        traceEmitter.emit(issue.id, issue.identifier, update, {
+          title: issue.title,
+          url: issue.url,
+        });
       },
       ...runtimeAdapters,
     });

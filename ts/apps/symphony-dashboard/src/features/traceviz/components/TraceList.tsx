@@ -55,7 +55,7 @@ export function TraceList({ tickets, onSelect }: TraceListProps) {
       <div className="flex flex-col items-center justify-center py-16 text-center">
         <p className="text-sm text-muted">No traces found on disk</p>
         <p className="mt-1 text-xs text-muted/70">
-          Traces will appear here once tickets are processed
+          Traces will appear here once issues are processed
         </p>
       </div>
     );

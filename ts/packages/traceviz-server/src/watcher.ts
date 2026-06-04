@@ -23,6 +23,8 @@ const DEFAULT_POLL_INTERVAL_MS = 500;
 interface FileState {
   issueId: string;
   issueIdentifier: string;
+  issueTitle?: string | undefined;
+  issueUrl?: string | undefined;
   lineCount: number;
   lastModified: number;
   events: DisplayEvent[];
@@ -86,6 +88,8 @@ export class TraceWatcher {
       tickets.push({
         issueId: state.issueId,
         identifier: state.issueIdentifier,
+        title: state.issueTitle,
+        url: state.issueUrl,
         turnCount: turnStartedCount,
         status,
         startedAt,
@@ -173,6 +177,8 @@ export class TraceWatcher {
       return {
         issueId: metadata?.issueId ?? issueId,
         issueIdentifier: metadata?.issueIdentifier ?? issueId,
+        issueTitle: metadata?.issueTitle,
+        issueUrl: metadata?.issueUrl,
         lineCount: lines.length,
         lastModified,
         events,

@@ -336,7 +336,7 @@ export interface DefaultSettingsOptions {
 
 export const defaultSettings = (options: DefaultSettingsOptions = {}): Settings => {
   const tmpdir = options.tmpdir ?? "/tmp";
-  const cwd = options.cwd ?? ".";
+  const _cwd = options.cwd ?? ".";
   const workspaceRoot = joinPath(tmpdir, "symphony_workspaces");
   const codex: CodexSettings = {
     command: "codex-acp",
@@ -400,8 +400,8 @@ export const defaultSettings = (options: DefaultSettingsOptions = {}): Settings 
       refreshMs: 1_000,
       renderIntervalMs: 16,
     },
-    server: { host: "127.0.0.1", port: 4040, traceDir: joinPath(homedir(), ".symphony/traces") },
-    logging: { logFile: joinPath(cwd, "log/symphony.log") },
+    server: { host: "127.0.0.1", port: 4040, traceDir: joinPath(homedir(), ".symphony/issues") },
+    logging: { logFile: joinPath(homedir(), ".symphony/log/symphony.log") },
     statusOverrides: new Map(),
   };
 };

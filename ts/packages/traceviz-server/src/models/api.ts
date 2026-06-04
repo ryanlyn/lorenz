@@ -12,6 +12,7 @@ export interface TicketInfo {
   issueId: string;
   identifier: string;
   title?: string | undefined;
+  url?: string | undefined;
   agentKind?: string | undefined;
   startedAt?: string | undefined;
   turnCount: number;
