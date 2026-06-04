@@ -4,6 +4,8 @@ import { assert } from "../../../test/assert.js";
 
 import { applyQuery, matchesFilter, parseFilter, parseQuerySpec, pickFields } from "@symphony/mcp";
 
+
+
 test("predicates: eq, ne, in, nin, exists, and numeric comparisons", () => {
   const r = { state: "Todo", n: 3, labels: ["backend", "urgent"] };
   assert.equal(matchesFilter(r, parseFilter({ field: "state", op: "eq", value: "Todo" })), true);

@@ -185,10 +185,7 @@ export function Timeline({ events, loading }: TimelineProps) {
                 <span className="ml-2 text-xs text-muted">({group.events.length} events)</span>
               </span>
               <ChevronRight
-                className={cn(
-                  "h-4 w-4 text-muted transition-transform",
-                  isExpanded && "rotate-90",
-                )}
+                className={cn("h-4 w-4 text-muted transition-transform", isExpanded && "rotate-90")}
               />
             </button>
             <div

@@ -17,6 +17,7 @@ import {
   updateTokenSamples,
 } from "@symphony/tui";
 
+
 test("Ink dashboard renders Elixir-style operational sections", () => {
   const { lastFrame } = render(
     React.createElement(RuntimeDashboard, { snapshot: snapshotFixture() }),

@@ -25,7 +25,12 @@ function statusColor(status: TicketInfo["status"]): string {
 export function TicketSelector({ tickets, selectedId, onSelect }: TicketSelectorProps) {
   return (
     <div className="relative">
-      <label htmlFor="ticket-selector" className="absolute w-px h-px p-0 -m-px overflow-hidden [clip:rect(0,0,0,0)] whitespace-nowrap border-0">Select a ticket</label>
+      <label
+        htmlFor="ticket-selector"
+        className="absolute w-px h-px p-0 -m-px overflow-hidden [clip:rect(0,0,0,0)] whitespace-nowrap border-0"
+      >
+        Select a ticket
+      </label>
       <select
         id="ticket-selector"
         value={selectedId ?? ""}
@@ -45,7 +50,10 @@ export function TicketSelector({ tickets, selectedId, onSelect }: TicketSelector
           </option>
         ))}
       </select>
-      <ChevronDown aria-hidden="true" className="pointer-events-none absolute right-2 top-1/2 h-4 w-4 -translate-y-1/2 text-muted" />
+      <ChevronDown
+        aria-hidden="true"
+        className="pointer-events-none absolute right-2 top-1/2 h-4 w-4 -translate-y-1/2 text-muted"
+      />
       {selectedId && (
         <span
           role="img"

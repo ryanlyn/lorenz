@@ -24,11 +24,11 @@ interface StatCardProps {
 
 function StatCard({ label, value, icon, color }: StatCardProps) {
   return (
-    <div
-      className="rounded-lg border border-border bg-card p-4"
-    >
+    <div className="rounded-lg border border-border bg-card p-4">
       <div className="flex items-center gap-2">
-        <div className={cn("text-sm", color)} aria-hidden="true">{icon}</div>
+        <div className={cn("text-sm", color)} aria-hidden="true">
+          {icon}
+        </div>
         <span className="text-xs text-muted">{label}</span>
       </div>
       <div className="mt-2 text-2xl font-semibold tracking-tight">{value}</div>

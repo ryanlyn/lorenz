@@ -10,6 +10,7 @@ import { assert } from "../../../test/assert.js";
 import { createResumeStateStore, resumeStateMatches } from "@symphony/resume-state";
 import type { ResumeState, ResumeStateStore } from "@symphony/resume-state";
 
+
 let tmpDir: string;
 let gitDir: string;
 let store: ResumeStateStore;

@@ -14,6 +14,7 @@ import {
   parseConfig,
 } from "@symphony/cli";
 
+
 function frontmatter(raw: string): Record<string, unknown> {
   const end = raw.indexOf("\n---", 3);
   return parseYaml(raw.slice(raw.indexOf("\n") + 1, end)) as Record<string, unknown>;

@@ -8,6 +8,7 @@ import { assert } from "../../../test/assert.js";
 
 import { WorkerHostPool } from "@symphony/worker-host-pool";
 
+
 vi.mock("@symphony/ssh", () => ({
   startReverseTunnel: vi.fn(),
 }));

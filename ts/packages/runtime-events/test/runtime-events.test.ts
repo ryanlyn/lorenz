@@ -13,6 +13,7 @@ import type {
   RuntimeSnapshot,
 } from "@symphony/runtime-events";
 
+
 test("RUNTIME_EVENT_TYPES is a strict superset of AGENT_UPDATE_TYPES with no duplicates", () => {
   // Every AGENT_UPDATE_TYPE must appear in RUNTIME_EVENT_TYPES
   for (const agentType of AGENT_UPDATE_TYPES) {

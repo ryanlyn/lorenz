@@ -7,6 +7,7 @@ import { assert } from "../../../test/assert.js";
 import type { RuntimeProjectionInput } from "@symphony/projections";
 import { ProjectionActor } from "@symphony/projections";
 
+
 function makeUsageTotals(overrides: Partial<UsageTotals> = {}): UsageTotals {
   return {
     inputTokens: 0,
