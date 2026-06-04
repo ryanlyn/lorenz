@@ -24,6 +24,29 @@ export function createTraceRoutes(traceDir: string, issueStore: IssueStore): Tra
   const watcher = new TraceWatcher(traceDir);
   const app = new Hono();
 
+  app.get("/api/v1/issues/recent", (c) => {
+    const limit = Math.min(
+      100,
+      Math.max(1, Number(new URL(c.req.url).searchParams.get("limit")) || 5),
+    );
+    const issues = issueStore.getRecent(limit);
+    return c.json({ issues });
+  });
+
+  app.get("/api/v1/issues/search", (c) => {
+    const params = new URL(c.req.url).searchParams;
+    const q = params.get("q") ?? "";
+    const limit = Math.min(100, Math.max(1, Number(params.get("limit")) || 20));
+    const issues = issueStore.search(q, limit);
+    return c.json({ issues });
+  });
+
+  app.get("/api/v1/tickets/:id/exists", (c) => {
+    const issueId = decodeURIComponent(c.req.param("id"));
+    const exists = watcher.hasTicket(issueId);
+    return c.json({ exists });
+  });
+
   app.get("/api/v1/tickets", (c) => {
     const tickets = watcher.getTickets().map((t) => {
       const record = issueStore.get(t.issueId);

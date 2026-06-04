@@ -331,12 +331,10 @@ const loggingAliases = { log_file: "logFile" };
 
 export interface DefaultSettingsOptions {
   tmpdir?: string | undefined;
-  cwd?: string | undefined;
 }
 
 export const defaultSettings = (options: DefaultSettingsOptions = {}): Settings => {
   const tmpdir = options.tmpdir ?? "/tmp";
-  const _cwd = options.cwd ?? ".";
   const workspaceRoot = joinPath(tmpdir, "symphony_workspaces");
   const codex: CodexSettings = {
     command: "codex-acp",

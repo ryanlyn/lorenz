@@ -94,6 +94,10 @@ export class TraceWatcher {
     return tickets;
   }
 
+  hasTicket(issueId: string): boolean {
+    return this.fileStates.has(issueId);
+  }
+
   getEventsForTicket(issueId: string): DisplayEvent[] {
     const state = this.fileStates.get(issueId);
     return state ? state.events : [];

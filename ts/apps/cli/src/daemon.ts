@@ -22,7 +22,7 @@ import { LocalTrackerClient } from "@symphony/local-tracker";
 import { MemoryTrackerClient, memoryIssuesFromEnv } from "@symphony/memory-tracker";
 
 export function runtimeDefaultSettingsOptions(): DefaultSettingsOptions {
-  return { tmpdir: os.tmpdir(), cwd: process.cwd() };
+  return { tmpdir: os.tmpdir() };
 }
 
 function assertNever(value: never): never {

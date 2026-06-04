@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 
 import type { TicketInfo, DisplayEvent, Stats } from "../api/types";
-import { fetchTickets, fetchEvents, fetchStats } from "../api/client";
+import { fetchTickets, fetchEvents, fetchStats, checkTraceExists } from "../api/client";
 import { computeStatsFromEvents } from "../api/stats";
 
 import { useWebSocket } from "./useWebSocket";
@@ -13,6 +13,7 @@ export function useTraceData() {
   const [stats, setStats] = useState<Stats | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [traceExists, setTraceExists] = useState<boolean | null>(null);
 
   const { status: wsStatus, lastMessage } = useWebSocket();
 
@@ -23,8 +24,18 @@ export function useTraceData() {
 
   const loadTicketData = useCallback(async (issueId: string) => {
     setLoading(true);
+    setTraceExists(null);
     try {
       setError(null);
+      const exists = await checkTraceExists(issueId);
+      setTraceExists(exists);
+
+      if (!exists) {
+        setEvents([]);
+        setStats(null);
+        return;
+      }
+
       const [eventsData, statsData] = await Promise.all([
         fetchEvents(issueId),
         fetchStats(issueId),
@@ -50,6 +61,7 @@ export function useTraceData() {
     } else {
       setEvents([]);
       setStats(null);
+      setTraceExists(null);
     }
   }, [selectedTicketId, loadTicketData]);
 
@@ -64,10 +76,12 @@ export function useTraceData() {
       if (msg.issueId === selectedTicketId) {
         setEvents(msg.events);
         setStats(computeStatsFromEvents(msg.events));
+        setTraceExists(true);
       }
     } else if (msg.type === "events" && msg.issueId === selectedTicketId) {
       setEvents(msg.events);
       setStats(computeStatsFromEvents(msg.events));
+      setTraceExists(true);
     }
   }, [lastMessage, selectedTicketId]);
 
@@ -79,6 +93,7 @@ export function useTraceData() {
     stats,
     loading,
     error,
+    traceExists,
     wsStatus,
   };
 }

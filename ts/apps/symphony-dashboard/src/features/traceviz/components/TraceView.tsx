@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, Archive } from "lucide-react";
 
 import { useTraceData } from "../hooks/useTraceData";
 
@@ -15,7 +15,8 @@ interface TraceViewProps {
 }
 
 export function TraceView({ issueId, onBack }: TraceViewProps) {
-  const { tickets, selectedTicketId, setSelectedTicketId, events, stats, loading } = useTraceData();
+  const { tickets, selectedTicketId, setSelectedTicketId, events, stats, loading, traceExists } =
+    useTraceData();
 
   useEffect(() => {
     if (issueId && selectedTicketId !== issueId) {
@@ -64,12 +65,23 @@ export function TraceView({ issueId, onBack }: TraceViewProps) {
       {/* Trace content */}
       <div aria-live="polite" aria-atomic="true">
         {selectedTicketId ? (
-          <div className="space-y-6">
-            {stats && <TraceSummary stats={stats} />}
-            <Timeline key={selectedTicketId} events={events} loading={loading} />
-          </div>
+          traceExists === false ? (
+            <div className="flex flex-col items-center justify-center py-16 text-center">
+              <Archive aria-hidden="true" className="h-10 w-10 text-muted" />
+              <p className="mt-4 text-sm font-medium text-foreground">{selectedTicketId}</p>
+              <p className="mt-2 max-w-md text-sm text-muted">
+                Trace data has been cleaned up for this issue. This is normal — traces are
+                periodically removed to save disk space.
+              </p>
+            </div>
+          ) : (
+            <div className="space-y-6">
+              {stats && <TraceSummary stats={stats} />}
+              <Timeline key={selectedTicketId} events={events} loading={loading} />
+            </div>
+          )
         ) : (
-          <TraceList tickets={tickets} onSelect={navigateToTrace} />
+          <TraceList onSelect={navigateToTrace} />
         )}
       </div>
     </div>

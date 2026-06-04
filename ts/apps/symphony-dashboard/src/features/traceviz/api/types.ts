@@ -16,6 +16,14 @@ export type {
   TraceStats as Stats,
 } from "@symphony/traceviz-server";
 
+export interface IssueRecord {
+  issueId: string;
+  issueIdentifier: string;
+  title: string | null;
+  url: string | null;
+  updatedAt: number;
+}
+
 export type WsMessage =
   | { type: "init"; tickets: TicketInfo[] }
   | { type: "update"; issueId: string; events: DisplayEvent[]; tickets: TicketInfo[] }
