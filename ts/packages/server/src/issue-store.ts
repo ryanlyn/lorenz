@@ -62,6 +62,35 @@ export class IssueStore {
     );
   }
 
+  getMany(issueIds: string[]): Map<string, Omit<IssueRecord, "updatedAt">> {
+    const map = new Map<string, Omit<IssueRecord, "updatedAt">>();
+    if (issueIds.length === 0) return map;
+    const CHUNK = 50;
+    for (let i = 0; i < issueIds.length; i += CHUNK) {
+      const chunk = issueIds.slice(i, i + CHUNK);
+      const stmt = this.getManyStmt(chunk.length);
+      const rows = stmt.all(...chunk) as Array<Omit<IssueRecord, "updatedAt">>;
+      for (const row of rows) {
+        map.set(row.issueId, row);
+      }
+    }
+    return map;
+  }
+
+  private getManyCache = new Map<number, Database.Statement>();
+
+  private getManyStmt(count: number): Database.Statement {
+    let stmt = this.getManyCache.get(count);
+    if (!stmt) {
+      const placeholders = Array.from({ length: count }, () => "?").join(",");
+      stmt = this.db.prepare(
+        `SELECT issueId, issueIdentifier, title, url FROM issues WHERE issueId IN (${placeholders})`,
+      );
+      this.getManyCache.set(count, stmt);
+    }
+    return stmt;
+  }
+
   upsert(record: Omit<IssueRecord, "updatedAt">): void {
     this.upsertStmt.run(
       record.issueId,

@@ -27,13 +27,53 @@ interface FileState {
   lineCount: number;
   lastModified: number;
   filePath: string;
-  turnStartedCount: number;
-  turnCompletedCount: number;
-  hasFailed: boolean;
-  startedAt: string | undefined;
+  cachedTicketInfo: TicketInfo;
 }
 
 export type WatcherCallback = (issueId: string, events: DisplayEvent[]) => void;
+
+function computeTicketInfo(state: {
+  issueId: string;
+  issueIdentifier: string;
+  events: DisplayEvent[];
+}): TicketInfo {
+  let turnStartedCount = 0;
+  let turnCompletedCount = 0;
+  let hasFailed = false;
+  let startedAt: string | undefined;
+
+  for (const e of state.events) {
+    if (e.kind === "turn_started") {
+      turnStartedCount++;
+      if (startedAt === undefined) startedAt = e.timestamp;
+    } else if (e.kind === "turn_completed") {
+      turnCompletedCount++;
+    } else if (e.kind === "turn_failed") {
+      hasFailed = true;
+    }
+  }
+
+  if (startedAt === undefined && state.events.length > 0) {
+    startedAt = state.events[0]!.timestamp;
+  }
+
+  let status: TicketInfo["status"] = "idle";
+  if (hasFailed) {
+    status = "failed";
+  } else if (turnStartedCount > 0 && turnCompletedCount >= turnStartedCount) {
+    status = "completed";
+  } else if (turnStartedCount > 0) {
+    status = "running";
+  }
+
+  return {
+    issueId: state.issueId,
+    identifier: state.issueIdentifier,
+    turnCount: turnStartedCount,
+    status,
+    startedAt,
+  };
+}
 
 export class TraceWatcher {
   private readonly traceDir: string;
@@ -65,26 +105,11 @@ export class TraceWatcher {
   }
 
   getTickets(): TicketInfo[] {
-    const tickets: TicketInfo[] = [];
-    for (const state of this.fileStates.values()) {
-      let status: TicketInfo["status"] = "idle";
-      if (state.hasFailed) {
-        status = "failed";
-      } else if (state.turnStartedCount > 0 && state.turnCompletedCount >= state.turnStartedCount) {
-        status = "completed";
-      } else if (state.turnStartedCount > 0) {
-        status = "running";
-      }
+    return Array.from(this.fileStates.values(), (s) => s.cachedTicketInfo);
+  }
 
-      tickets.push({
-        issueId: state.issueId,
-        identifier: state.issueIdentifier,
-        turnCount: state.turnStartedCount,
-        status,
-        startedAt: state.startedAt,
-      });
-    }
-    return tickets;
+  getTicketInfo(issueId: string): TicketInfo | undefined {
+    return this.fileStates.get(issueId)?.cachedTicketInfo;
   }
 
   hasTicket(issueId: string): boolean {
@@ -174,26 +199,23 @@ export class TraceWatcher {
     try {
       const content = await readFile(filePath, "utf-8");
       const lines = content.split("\n").filter((l) => l.trim().length > 0);
+      const lastModified = mtimeMs ?? (await stat(filePath)).mtimeMs;
       const events = parseTraceLines(lines);
       const metadata = extractTicketMetadata(lines);
-      const lastModified = mtimeMs ?? (await stat(filePath)).mtimeMs;
-
-      const turnStartedCount = events.filter((e) => e.kind === "turn_started").length;
-      const turnCompletedCount = events.filter((e) => e.kind === "turn_completed").length;
-      const hasFailed = events.some((e) => e.kind === "turn_failed");
-      const firstEvent = events[0];
-      const startedAt = firstEvent?.timestamp;
+      const resolvedIssueId = metadata?.issueId ?? issueId;
+      const resolvedIdentifier = metadata?.issueIdentifier ?? issueId;
 
       const state: FileState = {
-        issueId: metadata?.issueId ?? issueId,
-        issueIdentifier: metadata?.issueIdentifier ?? issueId,
+        issueId: resolvedIssueId,
+        issueIdentifier: resolvedIdentifier,
         lineCount: lines.length,
         lastModified,
         filePath,
-        turnStartedCount,
-        turnCompletedCount,
-        hasFailed,
-        startedAt,
+        cachedTicketInfo: computeTicketInfo({
+          issueId: resolvedIssueId,
+          issueIdentifier: resolvedIdentifier,
+          events,
+        }),
       };
 
       return { state, events };

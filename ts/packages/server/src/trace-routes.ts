@@ -48,25 +48,27 @@ export function createTraceRoutes(traceDir: string, issueStore: IssueStore): Tra
   });
 
   app.get("/api/v1/tickets", (c) => {
-    const tickets = watcher.getTickets().map((t) => {
-      const record = issueStore.get(t.issueId);
+    const tickets = watcher.getTickets();
+    const issueIds = tickets.map((t) => t.issueId);
+    const records = issueStore.getMany(issueIds);
+    const enriched = tickets.map((t) => {
+      const record = records.get(t.issueId);
       return {
         ...t,
         ...(record && { title: record.title, url: record.url }),
       };
     });
-    return c.json({ tickets });
+    return c.json({ tickets: enriched });
   });
 
   app.get("/api/v1/tickets/:id/events", (c) => {
     const issueId = decodeURIComponent(c.req.param("id"));
     const events = watcher.getEventsForTicket(issueId);
-    const tickets = watcher.getTickets();
-    const ticket = tickets.find((t) => t.issueId === issueId);
+    const ticketInfo = watcher.getTicketInfo(issueId);
     const record = issueStore.get(issueId);
     return c.json({
       issueId,
-      identifier: record?.issueIdentifier ?? ticket?.identifier ?? issueId,
+      identifier: record?.issueIdentifier ?? ticketInfo?.identifier ?? issueId,
       events,
     });
   });
