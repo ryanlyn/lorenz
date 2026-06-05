@@ -61,28 +61,40 @@ export async function runSsh(
       stripFinalNewline: false,
       detached: true,
     });
-    let timedOut = false;
+    let timeoutTimer: ReturnType<typeof setTimeout> | undefined;
     let forceKillTimer: ReturnType<typeof setTimeout> | undefined;
-    const timer = setTimeout(() => {
-      timedOut = true;
+    let timedOut = false;
+
+    const killProcessGroup = (signal: NodeJS.Signals): void => {
       try {
-        process.kill(-subprocess.pid!, "SIGTERM");
+        process.kill(-subprocess.pid!, signal);
       } catch {
         /* process already exited */
       }
-      forceKillTimer = setTimeout(() => {
-        try {
-          process.kill(-subprocess.pid!, "SIGKILL");
-        } catch {
-          /* process already exited */
-        }
-      }, FORCE_KILL_DELAY_MS);
-    }, timeoutMs);
-    const result = await subprocess;
-    clearTimeout(timer);
-    if (forceKillTimer !== undefined) clearTimeout(forceKillTimer);
+    };
+
+    const clearTimers = (): void => {
+      if (timeoutTimer !== undefined) clearTimeout(timeoutTimer);
+      // After timeout, descendants can still hold inherited pipes open even if the direct child exits.
+      if (!timedOut && forceKillTimer !== undefined) clearTimeout(forceKillTimer);
+    };
+
+    const timeout = new Promise<never>((_, reject) => {
+      timeoutTimer = setTimeout(() => {
+        timedOut = true;
+        killProcessGroup("SIGTERM");
+        forceKillTimer = setTimeout(() => {
+          killProcessGroup("SIGKILL");
+        }, FORCE_KILL_DELAY_MS);
+        reject(new Error(`ssh_timeout: ${host} ${timeoutMs}`));
+      }, timeoutMs);
+    });
+
+    void subprocess.then(clearTimers, clearTimers);
+
+    const result = await Promise.race([subprocess, timeout]);
+    clearTimers();
     if ((result as { code?: string }).code === "ENOENT") throw new Error("ssh_not_found");
-    if (timedOut) throw new Error(`ssh_timeout: ${host} ${timeoutMs}`);
     return {
       stdout: options.stderrToStdout ? (result.all ?? "") : result.stdout,
       stderr: options.stderrToStdout ? "" : result.stderr,
