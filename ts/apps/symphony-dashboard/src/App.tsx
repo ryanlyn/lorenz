@@ -1,11 +1,13 @@
 import { Activity } from "lucide-react";
 
 import { useHashRouter } from "./shared/hooks/useHashRouter";
+import { useOpsStream } from "./features/ops/hooks/useOpsStream";
 import { OpsOverview } from "./features/ops/components/OpsOverview";
 import { TraceView } from "./features/traceviz/components/TraceView";
 
 export function App() {
   const { route, navigate } = useHashRouter();
+  const { state: opsState, connected: opsConnected } = useOpsStream();
 
   return (
     <div className="min-h-screen bg-background text-foreground">
@@ -41,7 +43,7 @@ export function App() {
       </header>
 
       <main className="mx-auto max-w-7xl px-4 py-6">
-        {route.view === "overview" && <OpsOverview />}
+        {route.view === "overview" && <OpsOverview state={opsState} connected={opsConnected} />}
         {route.view === "trace" && (
           <TraceView issueId={route.issueId} onBack={() => navigate("/")} />
         )}

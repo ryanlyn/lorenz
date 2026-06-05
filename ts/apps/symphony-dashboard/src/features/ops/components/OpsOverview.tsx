@@ -1,8 +1,7 @@
 import { Activity, RefreshCw, AlertOctagon, Coins, ExternalLink, FileText } from "lucide-react";
 
-import { useOpsStream } from "../hooks/useOpsStream";
 import { cn, formatNumber, formatTimestamp } from "../../../lib/utils";
-import type { OpsRunningEntry, OpsRetryEntry, OpsBlockedEntry } from "../api/types";
+import type { OpsState, OpsRunningEntry, OpsRetryEntry, OpsBlockedEntry } from "../api/types";
 
 import { RecentIssues } from "./RecentIssues";
 
@@ -216,8 +215,12 @@ function BlockedTable({ entries }: { entries: OpsBlockedEntry[] }) {
   );
 }
 
-export function OpsOverview() {
-  const { state, connected } = useOpsStream();
+interface OpsOverviewProps {
+  state: OpsState | null;
+  connected: boolean;
+}
+
+export function OpsOverview({ state, connected }: OpsOverviewProps) {
 
   const running = state?.running ?? [];
   const retrying = state?.retrying ?? [];
