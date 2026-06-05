@@ -5,7 +5,6 @@ import type { DisplayEvent, Stats } from "../api/types";
 import { useTraceData } from "../hooks/useTraceData";
 
 import { TicketSelector } from "./TicketSelector";
-import { TraceNavigator } from "./TraceNavigator";
 import { TraceList } from "./TraceList";
 import { TraceSummary } from "./TraceSummary";
 import { Timeline } from "./Timeline";
@@ -53,11 +52,6 @@ export function TraceView({ issueId, onBack }: TraceViewProps) {
                   window.location.hash = "#/trace";
                 }
               }}
-            />
-            <TraceNavigator
-              tickets={tickets}
-              selectedId={selectedTicketId}
-              onSelect={navigateToTrace}
             />
           </>
         )}
