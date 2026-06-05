@@ -1,6 +1,7 @@
 export interface OpsRunningEntry {
   issue_id: string;
   issue_identifier: string;
+  issue_url: string | null;
   agent_kind: string;
   worker_host: string | null;
   turn_count: number;
@@ -12,6 +13,7 @@ export interface OpsRunningEntry {
 export interface OpsRetryEntry {
   issue_id: string;
   issue_identifier: string;
+  issue_url: string | null;
   attempt: number;
   due_at: string;
   worker_host: string | null;
@@ -22,6 +24,7 @@ export interface OpsRetryEntry {
 export interface OpsBlockedEntry {
   issue_id: string;
   issue_identifier: string;
+  issue_url: string | null;
   reason: string;
   label: string;
   worker_host: string | null;

@@ -1,4 +1,4 @@
-import { Activity, RefreshCw, AlertOctagon, Coins } from "lucide-react";
+import { Activity, RefreshCw, AlertOctagon, Coins, ExternalLink, FileText } from "lucide-react";
 
 import { useOpsStream } from "../hooks/useOpsStream";
 import { cn, formatNumber, formatTimestamp } from "../../../lib/utils";
@@ -54,12 +54,27 @@ function RunningTable({ sessions }: { sessions: OpsRunningEntry[] }) {
               {sessions.map((s) => (
                 <tr key={s.issue_id} className="hover:bg-surface">
                   <td className="px-4 py-2">
-                    <a
-                      href={`#/trace/${encodeURIComponent(s.issue_id)}`}
-                      className="font-mono text-accent-blue hover:underline"
-                    >
-                      {s.issue_identifier}
-                    </a>
+                    <div className="flex items-center gap-2">
+                      <a
+                        href={`#/trace/${encodeURIComponent(s.issue_id)}`}
+                        className="inline-flex items-center gap-1 font-mono text-accent-blue hover:underline"
+                        title="View trace"
+                      >
+                        <FileText className="h-3 w-3" />
+                        {s.issue_identifier}
+                      </a>
+                      {s.issue_url && (
+                        <a
+                          href={s.issue_url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center text-muted hover:text-foreground"
+                          title="Open in tracker"
+                        >
+                          <ExternalLink className="h-3.5 w-3.5" />
+                        </a>
+                      )}
+                    </div>
                   </td>
                   <td className="px-4 py-2">
                     <span className="rounded bg-surface px-2 py-0.5 text-xs text-muted">
@@ -106,12 +121,27 @@ function RetryTable({ entries }: { entries: OpsRetryEntry[] }) {
               {entries.map((e) => (
                 <tr key={e.issue_id} className="hover:bg-surface">
                   <td className="px-4 py-2">
-                    <a
-                      href={`#/trace/${encodeURIComponent(e.issue_id)}`}
-                      className="font-mono text-accent-blue hover:underline"
-                    >
-                      {e.issue_identifier}
-                    </a>
+                    <div className="flex items-center gap-2">
+                      <a
+                        href={`#/trace/${encodeURIComponent(e.issue_id)}`}
+                        className="inline-flex items-center gap-1 font-mono text-accent-blue hover:underline"
+                        title="View trace"
+                      >
+                        <FileText className="h-3 w-3" />
+                        {e.issue_identifier}
+                      </a>
+                      {e.issue_url && (
+                        <a
+                          href={e.issue_url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center text-muted hover:text-foreground"
+                          title="Open in tracker"
+                        >
+                          <ExternalLink className="h-3.5 w-3.5" />
+                        </a>
+                      )}
+                    </div>
                   </td>
                   <td className="px-4 py-2 font-mono">{e.attempt}</td>
                   <td className="px-4 py-2 font-mono">{formatTimestamp(e.due_at)}</td>
@@ -150,12 +180,27 @@ function BlockedTable({ entries }: { entries: OpsBlockedEntry[] }) {
               {entries.map((e) => (
                 <tr key={e.issue_id} className="hover:bg-surface">
                   <td className="px-4 py-2">
-                    <a
-                      href={`#/trace/${encodeURIComponent(e.issue_id)}`}
-                      className="font-mono text-accent-blue hover:underline"
-                    >
-                      {e.issue_identifier}
-                    </a>
+                    <div className="flex items-center gap-2">
+                      <a
+                        href={`#/trace/${encodeURIComponent(e.issue_id)}`}
+                        className="inline-flex items-center gap-1 font-mono text-accent-blue hover:underline"
+                        title="View trace"
+                      >
+                        <FileText className="h-3 w-3" />
+                        {e.issue_identifier}
+                      </a>
+                      {e.issue_url && (
+                        <a
+                          href={e.issue_url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center text-muted hover:text-foreground"
+                          title="Open in tracker"
+                        >
+                          <ExternalLink className="h-3.5 w-3.5" />
+                        </a>
+                      )}
+                    </div>
                   </td>
                   <td className="px-4 py-2 text-muted">{e.label}</td>
                   <td className="px-4 py-2 text-muted">{e.worker_host ?? "n/a"}</td>
