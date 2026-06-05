@@ -1,3 +1,7 @@
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+
 import { test, vi } from "vitest";
 import {
   issueMcpToken,
@@ -11,7 +15,7 @@ import type { WorkflowDefinition } from "@symphony/domain";
 
 import { assert } from "../../../test/assert.js";
 
-import { startObservabilityServer } from "@symphony/server";
+import { IssueStore, startObservabilityServer } from "@symphony/server";
 import { startClaudeMcpServer } from "@symphony/server";
 
 test("observability HTTP API exposes Elixir-shaped state, issue, runs, refresh, and errors", async () => {
@@ -28,10 +32,10 @@ test("observability HTTP API exposes Elixir-shaped state, issue, runs, refresh, 
   const claimed = orchestrator.claim(issue);
   assert.ok(claimed);
   orchestrator.applyUpdate(issue.id, 0, {
-    type: "notification",
+    type: "session_notification",
     sessionId: "thread-http",
     resumeId: "thread-http",
-    message: "rendered",
+    message: { sessionId: "thread-http", update: { sessionUpdate: "agent_message_chunk" } },
     usage: { inputTokens: 4, outputTokens: 8, totalTokens: 12 },
     timestamp: new Date("2026-05-05T00:00:01.000Z"),
   });
@@ -70,7 +74,7 @@ test("observability HTTP API exposes Elixir-shaped state, issue, runs, refresh, 
     assert.deepEqual(dashboard, {
       error: {
         code: "dashboard_not_built",
-        message: "Dashboard assets not found. Run: pnpm dashboard:build",
+        message: "Dashboard assets not found. Run: pnpm build",
       },
     });
 
@@ -143,6 +147,33 @@ test("standalone Claude MCP server preserves route and JSON-RPC error contracts"
   }
 });
 
+test("observability HTTP API serves trace routes when issueStore is provided", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "symphony-http-issue-store-"));
+  const traceDir = path.join(root, "traces");
+  await mkdir(traceDir, { recursive: true });
+  const issueStore = new IssueStore(path.join(root, "issues.db"));
+  let server: Awaited<ReturnType<typeof startObservabilityServer>> | null = null;
+
+  try {
+    server = await startObservabilityServer(fakeRuntime("snapshot_unavailable"), {
+      host: "127.0.0.1",
+      port: 0,
+      traceDir,
+      issueStore,
+      staticDir: "/tmp/nonexistent-dashboard-dist",
+    });
+
+    const response = await fetch(server.url("/api/v1/tickets"));
+    assert.equal(response.status, 200);
+    const tickets = await response.json();
+    assert.deepEqual(tickets, { tickets: [] });
+  } finally {
+    await server?.stop();
+    issueStore.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("observability HTTP API matches Elixir snapshot timeout and unavailable branches", async () => {
   const unavailable = await startObservabilityServer(fakeRuntime("snapshot_unavailable"), {
     host: "127.0.0.1",
@@ -171,7 +202,7 @@ test("observability HTTP API matches Elixir snapshot timeout and unavailable bra
     assert.deepEqual(dashboard, {
       error: {
         code: "dashboard_not_built",
-        message: "Dashboard assets not found. Run: pnpm dashboard:build",
+        message: "Dashboard assets not found. Run: pnpm build",
       },
     });
   } finally {

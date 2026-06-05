@@ -1,6 +1,5 @@
 export {
   main,
-  run,
   runDaemon,
   parseCliArgs,
   createDaemonCommand,
@@ -122,8 +121,7 @@ export type { PresenterParams } from "@symphony/presenter";
 export { startObservabilityServer, startClaudeMcpServer } from "@symphony/server";
 export type { ObservabilityServerHandle, ObservabilityServerOptions } from "@symphony/server";
 export { RuntimeApp } from "@symphony/tui";
-export { SESSION_UPDATE_KINDS } from "@symphony/protocol";
-export type { SessionUpdate, SessionUpdateKind, StopReason, TurnResult } from "@symphony/protocol";
+export type { StopReason } from "@symphony/domain";
 export {
   retryBackoffMs,
   actionForStopReason,
@@ -156,12 +154,7 @@ export {
 export { ProjectionActor } from "@symphony/projections";
 export type { RuntimeProjectionInput } from "@symphony/projections";
 export { RetryScheduler } from "@symphony/retry-scheduler";
-export {
-  CodexAppServerExecutor,
-  CodexNdjsonMessageReader,
-  CodexNdjsonMessageWriter,
-} from "@symphony/codex";
-export { AcpExecutor } from "@symphony/acp";
+export { Executor } from "@symphony/acp";
 export {
   AGENT_UPDATE_TYPES,
   CODEX_APPROVAL_POLICY_NAMES,

@@ -3,20 +3,6 @@
  * These are the parsed, presentation-ready events derived from raw AgentUpdate JSONL traces.
  */
 
-export const TOOL_CATEGORIES = [
-  "plan_mode",
-  "agent",
-  "bash_command",
-  "search",
-  "file_operation",
-  "web",
-  "todo",
-  "skill",
-  "unknown",
-] as const;
-
-export type ToolCategory = (typeof TOOL_CATEGORIES)[number];
-
 export interface TokenUsage {
   inputTokens: number;
   outputTokens: number;
@@ -38,7 +24,6 @@ export interface MessageDisplayEvent {
 
 export interface ToolCallDisplayEvent {
   kind: "tool_call";
-  category: ToolCategory;
   toolName: string;
   input: Record<string, unknown>;
   output: string | unknown[] | null;

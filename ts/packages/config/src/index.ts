@@ -6,8 +6,7 @@ import type {
   AgentKind,
   AgentConfig,
   AgentSettings,
-  AcpAgentConfig,
-  AppServerAgentConfig,
+  AgentUsageAccounting,
   ClaudeSettings,
   CodexSettings,
   HooksSettings,
@@ -17,6 +16,7 @@ import type {
   TrackerSettings,
 } from "@symphony/domain";
 import {
+  AGENT_USAGE_ACCOUNTING_VALUES,
   CODEX_APPROVAL_POLICY_NAMES,
   CODEX_SANDBOX_MODES,
   TRACKER_KINDS,
@@ -119,36 +119,22 @@ const reasoningSchema = z
   })
   .strict();
 
-const appServerAgentRecordSchema = z
-  .object({
-    executor: z.literal("appserver"),
-    command: z.string().optional(),
-    approvalPolicy: approvalPolicySchema,
-    threadSandbox: z.string().optional(),
-    turnSandboxPolicy: sandboxPolicySchema,
-    turnTimeoutMs: coercedTimeoutMs.optional(),
-    readTimeoutMs: coercedTimeoutMs.optional(),
-    stallTimeoutMs: coercedNonNegativeTimeoutMs.optional(),
-    reasoning: reasoningSchema.nullable().optional(),
-  })
-  .strict();
+const usageAccountingSchema = z.enum(AGENT_USAGE_ACCOUNTING_VALUES);
+
 const acpAgentRecordSchema = z
   .object({
     executor: z.literal("acp"),
     bridgeCommand: z.string().optional(),
-    bridgeArgs: z.array(z.string()).optional(),
     command: z.string().optional(),
-    model: z.string().optional(),
-    permissionMode: z.string().optional(),
+    usageAccounting: usageAccountingSchema.optional(),
+    providerConfig: z.record(z.string(), z.unknown()).optional(),
+    // TODO: Remove per-agent timeout fields after configs use shared agents-level timeout defaults.
     turnTimeoutMs: coercedTimeoutMs.optional(),
     stallTimeoutMs: coercedNonNegativeTimeoutMs.optional(),
     strictMcpConfig: coercedBoolean.optional(),
   })
   .strict();
-const agentRecordSchema = z.discriminatedUnion("executor", [
-  appServerAgentRecordSchema,
-  acpAgentRecordSchema,
-]);
+const agentRecordSchema = acpAgentRecordSchema;
 
 const trackerRawSchema = z
   .object({
@@ -178,7 +164,12 @@ const trackerRawSchema = z
   .strict();
 
 const pollingRawSchema = z.object({ intervalMs: coercedIntervalMs.optional() }).strict();
-const workspaceRawSchema = z.object({ root: z.string().optional() }).strict();
+const workspaceRawSchema = z
+  .object({
+    root: z.string().optional(),
+    isolation: z.enum(["per-agent", "none"]).optional(),
+  })
+  .strict();
 const workerRawSchema = z
   .object({
     sshHosts: z.array(z.string()).optional(),
@@ -219,11 +210,10 @@ const codexRawSchema = z
 const claudeRawSchema = z
   .object({
     command: z.string().optional(),
-    model: z.string().optional(),
-    permissionMode: z.string().optional(),
     turnTimeoutMs: coercedTimeoutMs.optional(),
     stallTimeoutMs: coercedNonNegativeTimeoutMs.optional(),
     strictMcpConfig: coercedBoolean.optional(),
+    providerConfig: z.record(z.string(), z.unknown()).optional(),
   })
   .strict();
 const observabilityRawSchema = z
@@ -242,7 +232,7 @@ const serverRawSchema = z
   })
   .strict();
 const loggingRawSchema = z.object({ logFile: z.string().optional() }).strict();
-const rawRecordSchema = z.record(z.string(), z.unknown());
+const agentsRawSchema = z.record(z.string(), z.unknown());
 const partialAgentRawSchema = agentRawSchema.partial().strict();
 const partialCodexRawSchema = codexRawSchema.partial().strict();
 const partialClaudeRawSchema = claudeRawSchema.partial().strict();
@@ -264,7 +254,7 @@ const workflowConfigSchema = z.preprocess(
       worker: workerRawSchema.optional(),
       hooks: hooksRawSchema.optional(),
       agent: agentRawSchema.optional(),
-      agents: z.record(z.string(), rawRecordSchema).optional(),
+      agents: agentsRawSchema.optional(),
       codex: codexRawSchema.optional(),
       claude: claudeRawSchema.optional(),
       observability: observabilityRawSchema.optional(),
@@ -280,6 +270,7 @@ type TrackerRaw = z.infer<typeof trackerRawSchema>;
 type DispatchRaw = NonNullable<TrackerRaw["dispatch"]>;
 type HooksRaw = z.infer<typeof hooksRawSchema>;
 type AgentRaw = z.infer<typeof agentRawSchema>;
+type AgentsRaw = z.infer<typeof agentsRawSchema>;
 type CodexRaw = z.infer<typeof codexRawSchema>;
 type ClaudeRaw = z.infer<typeof claudeRawSchema>;
 type StatusOverridesRaw = NonNullable<WorkflowConfigRaw["statusOverrides"]>;
@@ -320,6 +311,10 @@ const agentAliases = {
   max_retry_backoff_ms: "maxRetryBackoffMs",
   ensemble_size: "ensembleSize",
 };
+const agentsAliases = {
+  turn_timeout_ms: "turnTimeoutMs",
+  stall_timeout_ms: "stallTimeoutMs",
+};
 const codexAliases = {
   approval_policy: "approvalPolicy",
   thread_sandbox: "threadSandbox",
@@ -329,14 +324,15 @@ const codexAliases = {
   stall_timeout_ms: "stallTimeoutMs",
 };
 const claudeAliases = {
-  permission_mode: "permissionMode",
   turn_timeout_ms: "turnTimeoutMs",
   stall_timeout_ms: "stallTimeoutMs",
   strict_mcp_config: "strictMcpConfig",
+  provider_config: "providerConfig",
 };
 const acpAgentAliases = {
   bridge_command: "bridgeCommand",
-  bridge_args: "bridgeArgs",
+  usage_accounting: "usageAccounting",
+  provider_config: "providerConfig",
 };
 const agentRecordAliases = {
   ...codexAliases,
@@ -352,15 +348,13 @@ const loggingAliases = { log_file: "logFile" };
 
 export interface DefaultSettingsOptions {
   tmpdir?: string | undefined;
-  cwd?: string | undefined;
 }
 
 export const defaultSettings = (options: DefaultSettingsOptions = {}): Settings => {
   const tmpdir = options.tmpdir ?? "/tmp";
-  const cwd = options.cwd ?? ".";
   const workspaceRoot = joinPath(tmpdir, "symphony_workspaces");
   const codex: CodexSettings = {
-    command: "codex app-server",
+    command: "codex-acp",
     approvalPolicy: {
       reject: {
         sandbox_approval: true,
@@ -377,11 +371,12 @@ export const defaultSettings = (options: DefaultSettingsOptions = {}): Settings 
   };
   const claude: ClaudeSettings = {
     command: "claude-agent-acp",
-    model: "claude-opus-4-6[1m]",
-    permissionMode: "dontAsk",
     turnTimeoutMs: 3_600_000,
     stallTimeoutMs: 300_000,
     strictMcpConfig: true,
+    providerConfig: {
+      permissions: { defaultMode: "dontAsk" },
+    },
   };
   return {
     tracker: {
@@ -401,6 +396,7 @@ export const defaultSettings = (options: DefaultSettingsOptions = {}): Settings 
     workspace: {
       root: workspaceRoot,
       rootExpression: workspaceRoot,
+      isolation: "per-agent",
     },
     worker: { sshHosts: [], sshTimeoutMs: 60_000 },
     hooks: { timeoutMs: 60_000 },
@@ -419,8 +415,8 @@ export const defaultSettings = (options: DefaultSettingsOptions = {}): Settings 
       refreshMs: 1_000,
       renderIntervalMs: 16,
     },
-    server: { host: "127.0.0.1", port: 4040, traceDir: joinPath(homedir(), ".symphony/traces") },
-    logging: { logFile: joinPath(cwd, "log/symphony.log") },
+    server: { host: "127.0.0.1", port: 4040, traceDir: joinPath(homedir(), ".symphony/issues") },
+    logging: { logFile: joinPath(homedir(), ".symphony/log/symphony.log") },
     statusOverrides: new Map(),
   };
 };
@@ -448,6 +444,7 @@ export function parseConfig(
   );
   settings.workspace.rootExpression = workspaceRootExpression;
   settings.workspace.root = expandLocalPath(workspaceRootExpression, env);
+  settings.workspace.isolation = workspaceRaw.isolation ?? settings.workspace.isolation;
 
   const workerRaw = parsed.worker ?? {};
   settings.worker.sshHosts = workerRaw.sshHosts ?? settings.worker.sshHosts;
@@ -457,7 +454,8 @@ export function parseConfig(
   }
 
   settings.hooks = parseHooks(settings.hooks, parsed.hooks ?? {});
-  settings.agent = parseAgent(settings.agent, parsed.agent ?? {});
+  if (settings.workspace.isolation === "none") assertNoWorkspaceHooks(settings.hooks);
+  settings.agent = parseAgentSettings(settings.agent, parsed.agent ?? {});
   settings.codex = parseCodex(settings.codex, parsed.codex ?? {});
   settings.claude = parseClaude(settings.claude, parsed.claude ?? {});
   settings.agents = parseAgents(parsed.agents ?? {}, settings.codex, settings.claude);
@@ -542,10 +540,7 @@ export function validateDispatchConfig(settings: Settings): void {
   for (const kind of requiredBackends) {
     const agent = settings.agents[kind];
     if (!agent) throw new Error(`agents.${kind} is required`);
-    if (agent.executor === "appserver" && !agent.command.trim()) {
-      throw new Error(`${kind}.command is required`);
-    }
-    if (agent.executor === "acp" && !agent.bridgeCommand.trim()) {
+    if (!agent.bridgeCommand.trim()) {
       throw new Error(
         kind === "claude"
           ? "claude.command is required"
@@ -670,6 +665,18 @@ function parseDispatch(defaults: TrackerSettings["dispatch"], raw: DispatchRaw) 
   };
 }
 
+function assertNoWorkspaceHooks(hooks: HooksSettings): void {
+  // Derive the lifecycle hook list from hooksAliases so adding a new hook there can't silently
+  // bypass this guard. timeout_ms is a knob, not a hook.
+  const configured = Object.entries(hooksAliases)
+    .filter(([snake, camel]) => snake !== "timeout_ms" && hooks[camel as keyof HooksSettings])
+    .map(([snake]) => snake);
+  if (configured.length === 0) return;
+  throw new Error(
+    `workspace.isolation = "none" does not support hooks; remove ${configured.join(", ")}`,
+  );
+}
+
 function parseHooks(defaults: HooksSettings, hooksRaw: HooksRaw): HooksSettings {
   return {
     afterCreate: hooksRaw.afterCreate ?? null,
@@ -680,7 +687,7 @@ function parseHooks(defaults: HooksSettings, hooksRaw: HooksRaw): HooksSettings 
   };
 }
 
-function parseAgent(defaults: AgentSettings, agentRaw: AgentRaw): AgentSettings {
+function parseAgentSettings(defaults: AgentSettings, agentRaw: AgentRaw): AgentSettings {
   const kind = agentRaw.kind ?? defaults.kind;
 
   return {
@@ -693,27 +700,71 @@ function parseAgent(defaults: AgentSettings, agentRaw: AgentRaw): AgentSettings 
 }
 
 function parseAgents(
-  raw: Record<string, unknown>,
+  raw: AgentsRaw,
   codex: CodexSettings,
   claude: ClaudeSettings,
 ): Record<string, AgentConfig> {
-  const baseAgents = defaultAgentRecords(codex, claude);
+  const { timeoutDefaults, records } = parseAgentsRaw(raw);
+  // TODO: Remove legacy top-level codex/claude timeout fallbacks after configs use shared agents-level timeout defaults.
+  const baseAgents = withAgentTimeoutDefaults(defaultAgentRecords(codex, claude), timeoutDefaults);
   const agents = cloneAgentRecords(baseAgents);
-  for (const [name, value] of Object.entries(raw)) {
+  const claudeDefaults = baseAgents.claude!;
+  for (const [name, value] of Object.entries(records)) {
     const normalized = name.trim();
     if (!normalized) throw new Error("agents names must not be blank");
     const recordRaw = asRecord(value, `agents.${normalized}`);
-    const executor = stringValue(recordRaw.executor, normalized === "codex" ? "appserver" : "acp");
-    if (executor !== "appserver" && executor !== "acp") {
-      throw new Error(`unsupported agents.${normalized}.executor: ${executor}`);
+    const executor = recordRaw.executor;
+    if (executor !== undefined && executor !== "acp") {
+      throw new Error(`unsupported agents.${normalized}.executor: ${JSON.stringify(executor)}`);
     }
-    const parsed = parseAgentRecordSchema({ ...recordRaw, executor }, `agents.${normalized}`);
-    agents[normalized] = parseAgentRecord(parsed, {
-      codex: baseAgents.codex as AppServerAgentConfig,
-      claude: baseAgents.claude as AcpAgentConfig,
-    });
+    const parsed = parseAgentRecordSchema(
+      { ...recordRaw, executor: "acp" },
+      `agents.${normalized}`,
+    );
+    const defaults = baseAgents[normalized] ?? claudeDefaults;
+    agents[normalized] = parseAgent(normalized, parsed, defaults);
   }
   return agents;
+}
+
+interface AgentTimeoutDefaults {
+  turnTimeoutMs?: number | undefined;
+  stallTimeoutMs?: number | undefined;
+}
+
+function parseAgentsRaw(raw: AgentsRaw): {
+  timeoutDefaults: AgentTimeoutDefaults;
+  records: Record<string, unknown>;
+} {
+  const { turnTimeoutMs, stallTimeoutMs, ...records } = raw;
+  const result = z
+    .object({
+      turnTimeoutMs: coercedTimeoutMs.optional(),
+      stallTimeoutMs: coercedNonNegativeTimeoutMs.optional(),
+    })
+    .strict()
+    .safeParse({ turnTimeoutMs, stallTimeoutMs });
+  if (!result.success) throw new Error(configErrorMessage(result.error, "agents"));
+  return { timeoutDefaults: result.data, records };
+}
+
+function withAgentTimeoutDefaults(
+  records: Record<string, AgentConfig>,
+  timeoutDefaults: AgentTimeoutDefaults,
+): Record<string, AgentConfig> {
+  if (timeoutDefaults.turnTimeoutMs === undefined && timeoutDefaults.stallTimeoutMs === undefined) {
+    return records;
+  }
+  return Object.fromEntries(
+    Object.entries(records).map(([name, record]) => [
+      name,
+      {
+        ...record,
+        turnTimeoutMs: timeoutDefaults.turnTimeoutMs ?? record.turnTimeoutMs,
+        stallTimeoutMs: timeoutDefaults.stallTimeoutMs ?? record.stallTimeoutMs,
+      },
+    ]),
+  );
 }
 
 type AgentRecordRaw = z.infer<typeof agentRecordSchema>;
@@ -724,32 +775,17 @@ function parseAgentRecordSchema(raw: Record<string, unknown>, label: string): Ag
   throw new Error(configErrorMessage(result.error, label));
 }
 
-function parseAgentRecord(
-  raw: AgentRecordRaw,
-  defaults: { codex: AppServerAgentConfig; claude: AcpAgentConfig },
-): AgentConfig {
-  if (raw.executor === "appserver") return parseAppServerAgent(raw, defaults.codex);
-  return parseAcpAgent(raw, defaults.claude);
-}
-
-function parseAppServerAgent(
-  raw: z.infer<typeof appServerAgentRecordSchema>,
-  defaults: AppServerAgentConfig,
-): AppServerAgentConfig {
-  const codex = parseCodex(defaults, raw);
-  return { executor: "appserver", ...codex };
-}
-
-function parseAcpAgent(
+function parseAgent(
+  kind: AgentKind,
   raw: z.infer<typeof acpAgentRecordSchema>,
-  defaults: AcpAgentConfig,
-): AcpAgentConfig {
+  defaults: AgentConfig,
+): AgentConfig {
+  const bridgeCommand = raw.bridgeCommand ?? raw.command ?? defaults.bridgeCommand;
   return {
     executor: "acp",
-    bridgeCommand: raw.bridgeCommand ?? raw.command ?? defaults.bridgeCommand,
-    bridgeArgs: raw.bridgeArgs ?? defaults.bridgeArgs,
-    model: raw.model ?? defaults.model,
-    permissionMode: raw.permissionMode ?? defaults.permissionMode,
+    bridgeCommand,
+    usageAccounting: raw.usageAccounting ?? inferUsageAccounting(kind, bridgeCommand),
+    providerConfig: raw.providerConfig ?? defaults.providerConfig,
     turnTimeoutMs: raw.turnTimeoutMs ?? defaults.turnTimeoutMs,
     stallTimeoutMs: raw.stallTimeoutMs ?? defaults.stallTimeoutMs,
     strictMcpConfig: raw.strictMcpConfig ?? defaults.strictMcpConfig ?? true,
@@ -757,17 +793,22 @@ function parseAcpAgent(
 }
 
 function defaultAgentRecords(
-  codex: CodexSettings,
+  codex: Pick<CodexSettings, "turnTimeoutMs" | "stallTimeoutMs">,
   claude: ClaudeSettings,
 ): Record<string, AgentConfig> {
   return {
-    codex: { executor: "appserver", ...codex },
+    codex: {
+      executor: "acp",
+      bridgeCommand: "codex-acp",
+      usageAccounting: "per-turn",
+      turnTimeoutMs: codex.turnTimeoutMs,
+      stallTimeoutMs: codex.stallTimeoutMs,
+    },
     claude: {
       executor: "acp",
       bridgeCommand: claude.command,
-      bridgeArgs: ["--permission-mode", claude.permissionMode, "--model", claude.model],
-      model: claude.model,
-      permissionMode: claude.permissionMode,
+      usageAccounting: "per-turn",
+      providerConfig: claude.providerConfig,
       turnTimeoutMs: claude.turnTimeoutMs,
       stallTimeoutMs: claude.stallTimeoutMs,
       strictMcpConfig: claude.strictMcpConfig,
@@ -775,29 +816,21 @@ function defaultAgentRecords(
   };
 }
 
+function inferUsageAccounting(kind: AgentKind, bridgeCommand: string): AgentUsageAccounting {
+  if (kind === "codex" || kind === "claude") return "per-turn";
+  if (/(^|\s|\/)(codex-acp|claude-agent-acp)(\s|$)/.test(bridgeCommand)) return "per-turn";
+  return "cumulative";
+}
+
 function applyKnownAgentRecords(settings: Settings): void {
-  const codex = settings.agents.codex;
-  if (codex?.executor === "appserver") {
-    settings.codex = {
-      command: codex.command,
-      approvalPolicy: codex.approvalPolicy,
-      threadSandbox: codex.threadSandbox,
-      turnSandboxPolicy: codex.turnSandboxPolicy,
-      turnTimeoutMs: codex.turnTimeoutMs,
-      readTimeoutMs: codex.readTimeoutMs,
-      stallTimeoutMs: codex.stallTimeoutMs,
-      reasoning: codex.reasoning ?? settings.codex.reasoning,
-    };
-  }
   const claude = settings.agents.claude;
   if (claude?.executor === "acp") {
     settings.claude = {
       command: claude.bridgeCommand,
-      model: claude.model ?? settings.claude.model,
-      permissionMode: claude.permissionMode ?? settings.claude.permissionMode,
       turnTimeoutMs: claude.turnTimeoutMs,
       stallTimeoutMs: claude.stallTimeoutMs,
       strictMcpConfig: claude.strictMcpConfig ?? settings.claude.strictMcpConfig,
+      providerConfig: claude.providerConfig ?? settings.claude.providerConfig,
     };
   }
 }
@@ -830,11 +863,10 @@ function parseCodex(defaults: CodexSettings, codexRaw: CodexRaw): CodexSettings 
 function parseClaude(defaults: ClaudeSettings, claudeRaw: ClaudeRaw): ClaudeSettings {
   return {
     command: claudeRaw.command ?? defaults.command,
-    model: claudeRaw.model ?? defaults.model,
-    permissionMode: claudeRaw.permissionMode ?? defaults.permissionMode,
     turnTimeoutMs: claudeRaw.turnTimeoutMs ?? defaults.turnTimeoutMs,
     stallTimeoutMs: claudeRaw.stallTimeoutMs ?? defaults.stallTimeoutMs,
     strictMcpConfig: claudeRaw.strictMcpConfig ?? defaults.strictMcpConfig,
+    providerConfig: claudeRaw.providerConfig ?? defaults.providerConfig,
   };
 }
 
@@ -899,11 +931,10 @@ function parsePartialCodex(raw: Partial<CodexRaw>): Partial<CodexSettings> {
 function parsePartialClaude(raw: Partial<ClaudeRaw>): Partial<ClaudeSettings> {
   const next: Partial<ClaudeSettings> = {};
   if (raw.command !== undefined) next.command = raw.command;
-  if (raw.model !== undefined) next.model = raw.model;
-  if (raw.permissionMode !== undefined) next.permissionMode = raw.permissionMode;
   if (raw.strictMcpConfig !== undefined) next.strictMcpConfig = raw.strictMcpConfig;
   if (raw.turnTimeoutMs !== undefined) next.turnTimeoutMs = raw.turnTimeoutMs;
   if (raw.stallTimeoutMs !== undefined) next.stallTimeoutMs = raw.stallTimeoutMs;
+  if (raw.providerConfig !== undefined) next.providerConfig = raw.providerConfig;
   return next;
 }
 
@@ -955,28 +986,12 @@ function cloneTracker(tracker: TrackerSettings): TrackerSettings {
 function cloneAgentRecords(records: Record<string, AgentConfig>): Record<string, AgentConfig> {
   const cloned: Record<string, AgentConfig> = {};
   for (const [name, record] of Object.entries(records)) {
-    cloned[name] =
-      record.executor === "appserver"
-        ? {
-            ...record,
-            approvalPolicy: cloneUnknownRecord(record.approvalPolicy),
-            turnSandboxPolicy: cloneNullableRecord(record.turnSandboxPolicy),
-          }
-        : { ...record, bridgeArgs: [...record.bridgeArgs] };
+    cloned[name] = {
+      ...record,
+      providerConfig: record.providerConfig ? structuredClone(record.providerConfig) : undefined,
+    };
   }
   return cloned;
-}
-
-function cloneUnknownRecord(
-  value: CodexSettings["approvalPolicy"],
-): CodexSettings["approvalPolicy"] {
-  return isPlainRecord(value) ? deepMerge({}, value) : value;
-}
-
-function cloneNullableRecord(
-  value: Record<string, unknown> | null,
-): Record<string, unknown> | null {
-  return value === null ? null : deepMerge({}, value);
 }
 
 function deepMerge(
@@ -1069,6 +1084,7 @@ function normalizeWorkflowConfig(value: unknown): unknown {
   normalizeNested(normalized, "worker", workerAliases);
   normalizeNested(normalized, "hooks", hooksAliases);
   normalizeNested(normalized, "agent", agentAliases);
+  normalizeNested(normalized, "agents", agentsAliases);
   normalizeNested(normalized, "codex", codexAliases);
   normalizeNested(normalized, "claude", claudeAliases);
   normalizeNested(normalized, "observability", observabilityAliases);
@@ -1121,12 +1137,6 @@ function normalizeAliases(
     }
   }
   return out;
-}
-
-function stringValue(value: unknown, fallback: string): string {
-  if (value === undefined || value === null) return fallback;
-  // eslint-disable-next-line @typescript-eslint/no-base-to-string
-  return String(value);
 }
 
 function trackerKindValue(value: unknown, label: string): TrackerKind {

@@ -30,6 +30,7 @@ export function statePayload(
     retrying: snapshot.retrying.map((entry) => ({
       issue_id: entry.issueId,
       issue_identifier: entry.identifier,
+      issue_url: entry.issueUrl ?? null,
       attempt: entry.attempt,
       due_at: entry.dueAtIso,
       error: entry.error ?? null,
@@ -275,6 +276,7 @@ function blockedEntryPayload(entry: RuntimeSnapshot["blocked"][number]): Record<
   return {
     issue_id: entry.issueId,
     issue_identifier: entry.identifier,
+    issue_url: entry.issueUrl ?? null,
     state: entry.state,
     reason: entry.reason,
     label: blockReasonLabel(entry.reason),
@@ -286,6 +288,7 @@ function runningEntryPayload(entry: RuntimeRunningEntry): Record<string, unknown
   return {
     issue_id: entry.issueId,
     issue_identifier: entry.issueIdentifier,
+    issue_url: entry.issueUrl ?? null,
     state: entry.state,
     slot_index: entry.slotIndex,
     ensemble_size: entry.ensembleSize,

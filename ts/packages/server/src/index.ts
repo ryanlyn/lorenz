@@ -18,6 +18,10 @@ import type { TraceWatcher } from "@symphony/traceviz-server";
 
 import { createTraceRoutes } from "./trace-routes.js";
 import { createWsHandler } from "./ws.js";
+import { defaultIssueStorePath, IssueStore } from "./issue-store.js";
+
+export { defaultIssueStorePath, IssueStore };
+export type { IssueRecord } from "./issue-store.js";
 
 export interface RuntimeServerSource {
   workflow?: { settings?: Settings } | undefined;
@@ -31,6 +35,7 @@ export interface ObservabilityServerOptions {
   port: number;
   traceDir?: string;
   staticDir?: string;
+  issueStore?: IssueStore;
 }
 
 export interface ObservabilityServerHandle {
@@ -45,17 +50,22 @@ export async function startObservabilityServer(
   options: ObservabilityServerOptions,
 ): Promise<ObservabilityServerHandle> {
   const { app, watcher } = buildObservabilityApp(runtime, options);
-  let internals: HonoServerInternals | undefined;
+  const internals: HonoServerInternals = {};
 
-  if (watcher) {
-    const wsSetup = createWsHandler(app, watcher);
-    internals = {
-      injectWebSocket: wsSetup.injectWebSocket,
-      stopWatcher: () => watcher.stop(),
-    };
+  try {
+    if (watcher) {
+      const wsSetup = createWsHandler(app, watcher);
+      internals.injectWebSocket = wsSetup.injectWebSocket;
+      internals.stopWatcher = () => {
+        watcher.stop();
+      };
+    }
+
+    return await startHonoServer(app, options, hasInternals(internals) ? internals : undefined);
+  } catch (error) {
+    internals.stopWatcher?.();
+    throw error;
   }
-
-  return startHonoServer(app, options, internals);
 }
 
 export async function startClaudeMcpServer(
@@ -105,6 +115,10 @@ async function startHonoServer(
   };
 }
 
+function hasInternals(internals: HonoServerInternals): boolean {
+  return internals.injectWebSocket !== undefined || internals.stopWatcher !== undefined;
+}
+
 interface BuildResult {
   app: Hono;
   watcher: TraceWatcher | null;
@@ -133,7 +147,7 @@ function buildObservabilityApp(
         {
           error: {
             code: "dashboard_not_built",
-            message: "Dashboard assets not found. Run: pnpm dashboard:build",
+            message: "Dashboard assets not found. Run: pnpm build",
           },
         },
         503,
@@ -185,8 +199,8 @@ function buildObservabilityApp(
 
   // Mount trace routes BEFORE the :identifier catch-all
   let watcher: TraceWatcher | null = null;
-  if (options.traceDir) {
-    const traceRoutes = createTraceRoutes(options.traceDir);
+  if (options.traceDir && options.issueStore) {
+    const traceRoutes = createTraceRoutes(options.traceDir, options.issueStore);
     watcher = traceRoutes.watcher;
     app.route("/", traceRoutes.app);
   }

@@ -2,7 +2,7 @@
  * API response types for the traceviz server endpoints.
  */
 
-import type { DisplayEvent, TokenUsage, ToolCategory } from "./display-events.js";
+import type { DisplayEvent, TokenUsage } from "./display-events.js";
 
 export interface HealthResponse {
   status: string;
@@ -12,6 +12,7 @@ export interface TicketInfo {
   issueId: string;
   identifier: string;
   title?: string | undefined;
+  url?: string | undefined;
   agentKind?: string | undefined;
   startedAt?: string | undefined;
   turnCount: number;
@@ -29,7 +30,7 @@ export interface TicketTraceResponse {
 }
 
 export interface ToolBreakdownEntry {
-  category: ToolCategory;
+  toolName: string;
   count: number;
   errorCount: number;
   totalDurationMs: number;

@@ -53,11 +53,13 @@ codex:
     networkAccess: true
 claude:
   command: claude
-  model: claude-opus-4-6[1m]
-  permission_mode: dontAsk
   turn_timeout_ms: 3600000
   stall_timeout_ms: 300000
   strict_mcp_config: true
+  provider_config:
+    model: claude-opus-4-6[1m]
+    permissions:
+      defaultMode: dontAsk
 ---
 
 You are working on a Slack issue `{{ issue.id }}`

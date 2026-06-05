@@ -6,15 +6,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 
 import { test, vi } from "vitest";
-import {
-  CodexAppServerExecutor,
-  createWorkspaceForIssue,
-  parseConfig,
-  readResumeState,
-  runAgentAttempt,
-  runSsh,
-  shellEscape,
-} from "@symphony/cli";
+import { parseConfig, readResumeState, runAgentAttempt, runSsh, shellEscape } from "@symphony/cli";
 import type { Issue, WorkflowDefinition } from "@symphony/cli";
 
 import { assert } from "./assert.js";
@@ -23,7 +15,7 @@ import { sampleIssue, tempDir } from "./helpers.js";
 const execFileAsync = promisify(execFile);
 const runLiveSsh = process.env.SYMPHONY_TS_RUN_LIVE_SSH_E2E === "1";
 const requireRemoteClaude = process.env.SYMPHONY_TS_REQUIRE_REMOTE_CLAUDE === "1";
-const remoteClaudeAcpBridge = process.env.SYMPHONY_TS_CLAUDE_ACP_BRIDGE_COMMAND;
+const remoteClaudeBridge = process.env.SYMPHONY_TS_CLAUDE_ACP_BRIDGE_COMMAND;
 
 test(
   "live SSH worker runs remote Codex and remote Claude MCP resume",
@@ -43,7 +35,7 @@ test(
         console.warn("remote Claude canary skipped because no Claude OAuth token was supplied");
         return;
       }
-      if (!remoteClaudeAcpBridge) {
+      if (!remoteClaudeBridge) {
         if (requireRemoteClaude)
           throw new Error("remote Claude canary requires SYMPHONY_TS_CLAUDE_ACP_BRIDGE_COMMAND");
         console.warn("remote Claude canary skipped because no Claude ACP bridge was supplied");
@@ -305,41 +297,39 @@ async function runRemoteCodexCanary(setup: LiveWorkerSetup): Promise<void> {
     workspace: { root: setup.workspaceRoot },
     worker: { ssh_hosts: setup.hosts, ssh_timeout_ms: 60_000 },
     hooks: { after_create: initRepoHook(), timeout_ms: 60_000 },
-    codex: {
-      command: process.env.SYMPHONY_TS_CODEX_COMMAND ?? "codex app-server",
-      approval_policy: "never",
-      turn_timeout_ms: 300_000,
-      stall_timeout_ms: 300_000,
+    agents: {
+      codex: {
+        bridge_command: process.env.SYMPHONY_TS_CODEX_ACP_COMMAND ?? "codex-acp",
+        turn_timeout_ms: 300_000,
+        stall_timeout_ms: 300_000,
+      },
     },
   });
-  const workspace = await createWorkspaceForIssue(settings, issue, { workerHost: host });
-  const executor = new CodexAppServerExecutor();
-  const session = await executor.startSession({ workspace, workerHost: host, settings, issue });
-  try {
-    const updates = await executor.runTurn(
-      session,
+
+  const result = await runAgentAttempt({
+    issue,
+    workflow: workflow(
+      settings,
       [
         "This is a live TypeScript Symphony remote SSH Codex canary.",
         `Create a file named REMOTE_CODEX_E2E.txt whose only contents are ${marker} followed by a newline.`,
         "Do not create any other files.",
       ].join("\n"),
-      issue,
-    );
-    assert.ok(updates.some((update) => update.type === "turn_completed"));
-  } finally {
-    await session.stop();
-  }
+    ),
+    workerHost: host,
+  });
+  assert.equal(result.turnCount, 1);
 
-  const result = await runSsh(
+  const fileResult = await runSsh(
     host,
-    `cat ${shellEscape(path.posix.join(workspace, "REMOTE_CODEX_E2E.txt"))}`,
+    `cat ${shellEscape(path.posix.join(result.workspace, "REMOTE_CODEX_E2E.txt"))}`,
     {
       timeoutMs: settings.worker.sshTimeoutMs,
       stderrToStdout: true,
     },
   );
-  assert.equal(result.status, 0, result.stdout);
-  assert.equal(result.stdout, `${marker}\n`);
+  assert.equal(fileResult.status, 0, fileResult.stdout);
+  assert.equal(fileResult.stdout, `${marker}\n`);
 }
 
 async function runRemoteClaudeResumeCanary(setup: LiveWorkerSetup): Promise<void> {
@@ -367,8 +357,7 @@ async function runRemoteClaudeResumeCanary(setup: LiveWorkerSetup): Promise<void
     agents: {
       claude: {
         executor: "acp",
-        bridge_command: remoteClaudeAcpBridge ?? "claude-agent-acp",
-        bridge_args: remoteClaudeAcpBridgeArgs(),
+        bridge_command: remoteClaudeBridgeCommand(),
         turn_timeout_ms: 300_000,
         stall_timeout_ms: 300_000,
       },
@@ -536,12 +525,13 @@ function dockerProjectName(runId: string): string {
   return runId.toLowerCase().replace(/[^a-z0-9_-]/g, "-");
 }
 
-function remoteClaudeAcpBridgeArgs(): string[] {
+function remoteClaudeBridgeCommand(): string {
+  const base = remoteClaudeBridge ?? "claude-agent-acp";
   const raw = process.env.SYMPHONY_TS_CLAUDE_ACP_BRIDGE_ARGS;
-  if (!raw) return [];
+  if (!raw) return base;
   const parsed = JSON.parse(raw) as unknown;
   if (!Array.isArray(parsed) || !parsed.every((item) => typeof item === "string")) {
     throw new Error("SYMPHONY_TS_CLAUDE_ACP_BRIDGE_ARGS must be a JSON string array");
   }
-  return parsed;
+  return [base, ...parsed].join(" ");
 }

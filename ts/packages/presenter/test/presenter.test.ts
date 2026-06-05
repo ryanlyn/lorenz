@@ -16,6 +16,7 @@ test("presenter preserves blocked dispatches, retry errors, run costs, retries, 
   assert.deepEqual((state.running as any[])[0] as Record<string, unknown>, {
     issue_id: "running-1",
     issue_identifier: "MT-RUNNING",
+    issue_url: null,
     state: "Todo",
     slot_index: 0,
     ensemble_size: 1,
@@ -37,6 +38,7 @@ test("presenter preserves blocked dispatches, retry errors, run costs, retries, 
   assert.deepEqual((state.blocked as any[])[0], {
     issue_id: "blocked-1",
     issue_identifier: "MT-BLOCKED",
+    issue_url: null,
     state: "Todo",
     reason: "worker_host_capacity",
     label: "worker host capacity",
@@ -107,17 +109,17 @@ test("presenter preserves blocked dispatches, retry errors, run costs, retries, 
 
 test("presenter humanizes structured agent messages at the JSON API boundary", () => {
   const snapshot = snapshotFixture();
-  snapshot.running[0]!.lastEvent = "assistant_message";
+  snapshot.running[0]!.lastEvent = "session_notification";
   snapshot.running[0]!.lastEventAt = "2026-05-06T00:00:02.000Z";
   snapshot.running[0]!.lastMessage = {
     agent_kind: "claude",
-    event: "assistant_message",
+    event: "agent_message_chunk",
     message: {
       type: "assistant",
       message: { content: [{ type: "text", text: "structured update\nfrom Claude" }] },
     },
   };
-  snapshot.runHistory[0]!.lastEvent = "assistant_message";
+  snapshot.runHistory[0]!.lastEvent = "session_notification";
   snapshot.runHistory[0]!.lastMessage = {
     event: "agent_message_delta",
     message: {

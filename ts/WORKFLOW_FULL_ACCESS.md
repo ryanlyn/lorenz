@@ -26,28 +26,39 @@ hooks:
   after_create: |
     git clone --depth 1 https://github.com/ryanlyn/symphony .
     if command -v mise >/dev/null 2>&1; then
-      cd elixir && mise trust && mise exec -- mix deps.get
+      mise trust
+      cd ts && mise trust && mise exec -- pnpm install --frozen-lockfile
     fi
-  before_remove: |
-    cd elixir && mise exec -- mix workspace.before_remove
 agent:
   kind: codex
   max_concurrent_agents: 10
   max_turns: 20
 codex:
-  command: codex --config shell_environment_policy.inherit=all --config model_reasoning_effort=high --config service_tier=fast --model gpt-5.4 app-server
   approval_policy: never
   thread_sandbox: danger-full-access
   turn_sandbox_policy:
     type: dangerFullAccess
     networkAccess: true
-claude:
-  command: claude
-  model: claude-opus-4-6[1m]
-  permission_mode: bypassPermissions
+agents:
   turn_timeout_ms: 3600000
   stall_timeout_ms: 300000
-  strict_mcp_config: true
+  codex:
+    bridge_command: 'env CODEX_PATH="$(command -v codex)" codex-acp'
+    provider_config:
+      shell_environment_policy:
+        inherit: all
+      model_reasoning_effort: xhigh
+      service_tier: flex
+      model: gpt-5.5
+  claude:
+    executor: acp
+    bridge_command: 'env CLAUDE_CODE_EXECUTABLE="$(command -v claude)" claude-agent-acp'
+    provider_config:
+      model: claude-opus-4-8[1m]
+      effortLevel: xhigh
+      permissions:
+        defaultMode: bypassPermissions
+    strict_mcp_config: true
 ---
 
 You are working on a Linear ticket `{{ issue.identifier }}`

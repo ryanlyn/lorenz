@@ -79,6 +79,32 @@ test("terminal dashboard preserves tracker states in the running stage column", 
   assert.notMatch(rendered, /codex\s+running\s+4242/);
 });
 
+test("terminal dashboard renders pending for claimed runs before agent events arrive", () => {
+  const rendered = formatElixirStyleDashboard(
+    dashboardSnapshot({
+      now: "2026-05-05T02:00:00.000Z",
+      running: [
+        runningFixture(
+          "MT-PEND",
+          "codex",
+          "running",
+          null,
+          0,
+          0,
+          0,
+          null,
+          "2026-05-05T02:00:00.000Z",
+          null,
+        ),
+      ],
+    }),
+    { now: "2026-05-05T02:00:00.000Z", runtimeSeconds: 0, throughputTps: 0 },
+  );
+
+  assert.match(rendered, /MT-PEND[\s\S]*pending/);
+  assert.notMatch(rendered, /\bundefined\b/);
+});
+
 test("Runtime field tracks live elapsed time of active runs as the clock advances", () => {
   // A single run started at 00:00:00 with no completion-accumulated seconds.
   const snapshot = dashboardSnapshot({
@@ -149,8 +175,10 @@ test("TUI humanizes Codex and Claude event variants like the Elixir dashboard", 
   );
   assert.equal(
     humanizeCodexMessage({
-      event: "tool_call_failed",
-      message: { payload: { method: "item/tool/call", params: { name: "linear_graphql" } } },
+      event: "tool_call_update",
+      message: {
+        payload: { method: "item/tool/call", params: { name: "linear_graphql", status: "failed" } },
+      },
     }),
     "dynamic tool call failed (linear_graphql)",
   );
@@ -179,7 +207,7 @@ test("TUI humanizes Codex and Claude event variants like the Elixir dashboard", 
   assert.equal(
     humanizeAgentMessage({
       agent_kind: "claude",
-      event: "assistant_message",
+      event: "agent_message_chunk",
       message: { type: "assistant", message: { content: [{ type: "tool_use", name: "Bash" }] } },
     }),
     "tool requested (Bash)",
@@ -320,7 +348,7 @@ function dashboardScenarios(): Array<{
             3_200,
             "thread token usage up...",
             "2026-05-05T00:01:15.000Z",
-            "usage",
+            "session_notification",
           ),
         ],
       }),
@@ -416,13 +444,13 @@ function runningFixture(
   identifier: string,
   agentKind: string,
   state: string,
-  executorPid: string,
+  executorPid: string | null,
   ageSeconds: number,
   turnCount: number,
   totalTokens: number,
-  lastMessage: string,
+  lastMessage: unknown,
   now: string,
-  lastEvent: RuntimeSnapshot["running"][number]["lastEvent"] = "notification",
+  lastEvent: RuntimeSnapshot["running"][number]["lastEvent"] = "session_notification",
 ): RuntimeSnapshot["running"][number] {
   return {
     issueId: identifier,

@@ -20,9 +20,6 @@
       "path": "../../packages/cli-kit"
     },
     {
-      "path": "../../packages/codex"
-    },
-    {
       "path": "../../packages/config"
     },
     {
@@ -63,9 +60,6 @@
     },
     {
       "path": "../../packages/prompt"
-    },
-    {
-      "path": "../../packages/protocol"
     },
     {
       "path": "../../packages/resume-state"

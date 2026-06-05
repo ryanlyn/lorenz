@@ -1,2 +1,6 @@
 .env
 .antigravitycli/
+*.ndjson
+
+# Local git worktree checkouts
+.claude/worktrees/

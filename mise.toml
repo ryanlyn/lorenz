@@ -2,20 +2,17 @@
 _.file = ".env"
 
 [hooks]
-enter = "mise run check-env && prek install -v"
+enter = "mise run check-env && prek install --hook-type pre-push -v"
 
 [settings]
 experimental = true
 
 [tools]
-prek = "latest"
+prek = "0.4.3"
+claude-code = "latest"
 "npm:@openai/codex" = "latest"
-# Note for Claude
-# stick to NPM install for now. Trying to install via aqua plugin
-# (using the native version leads to an issue: invoking claude just invokes bun.
-# Not worth investigating further)
-"npm:@anthropic-ai/claude-code" = "latest"
-"npm:@agentclientprotocol/claude-agent-acp" = "latest"
+"npm:@agentclientprotocol/claude-agent-acp" = "0.37.0"
+"npm:@agentclientprotocol/codex-acp" = "0.0.44"
 
 [tasks.check-env]
 run = '''

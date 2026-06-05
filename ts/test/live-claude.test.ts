@@ -1,17 +1,16 @@
 import { test } from "vitest";
-import { AcpExecutor, parseConfig } from "@symphony/cli";
+import { Executor, parseConfig } from "@symphony/cli";
 
 import { assert } from "./assert.js";
 import { sampleIssue, tempDir } from "./helpers.js";
 
-const claudeAcpBridge = process.env.SYMPHONY_TS_CLAUDE_ACP_BRIDGE_COMMAND;
-const runLiveClaude =
-  process.env.SYMPHONY_TS_RUN_REAL_CLAUDE_E2E === "1" && Boolean(claudeAcpBridge);
+const claudeBridge = process.env.SYMPHONY_TS_CLAUDE_ACP_BRIDGE_COMMAND;
+const runLiveClaude = process.env.SYMPHONY_TS_RUN_REAL_CLAUDE_E2E === "1" && Boolean(claudeBridge);
 
 test("live Claude ACP bridge smoke", { timeout: 180_000, skip: !runLiveClaude }, async () => {
   const workspace = await tempDir("symphony-ts-live-claude");
   const settings = liveClaudeSettings(180_000);
-  const executor = new AcpExecutor("claude");
+  const executor = new Executor("claude");
   const session = await executor.startSession({ workspace, settings, issue: sampleIssue });
   const updates = await executor.runTurn(
     session,
@@ -35,7 +34,7 @@ test(
         project_slug: "symphony-414bf2e49ff2",
       },
     });
-    const executor = new AcpExecutor("claude");
+    const executor = new Executor("claude");
     const session = await executor.startSession({ workspace, settings, issue: sampleIssue });
     try {
       const updates = await executor.runTurn(
@@ -65,8 +64,7 @@ function liveClaudeSettings(timeoutMs: number, extra: Record<string, unknown> = 
     agents: {
       claude: {
         executor: "acp",
-        bridge_command: claudeAcpBridge ?? "claude-agent-acp",
-        bridge_args: claudeAcpBridgeArgs(),
+        bridge_command: claudeBridgeCommand(),
         turn_timeout_ms: timeoutMs,
         stall_timeout_ms: 300_000,
       },
@@ -74,12 +72,13 @@ function liveClaudeSettings(timeoutMs: number, extra: Record<string, unknown> = 
   });
 }
 
-function claudeAcpBridgeArgs(): string[] {
+function claudeBridgeCommand(): string {
+  const base = claudeBridge ?? "claude-agent-acp";
   const raw = process.env.SYMPHONY_TS_CLAUDE_ACP_BRIDGE_ARGS;
-  if (!raw) return [];
+  if (!raw) return base;
   const parsed = JSON.parse(raw) as unknown;
   if (!Array.isArray(parsed) || !parsed.every((item) => typeof item === "string")) {
     throw new Error("SYMPHONY_TS_CLAUDE_ACP_BRIDGE_ARGS must be a JSON string array");
   }
-  return parsed;
+  return [base, ...parsed].join(" ");
 }

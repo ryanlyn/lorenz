@@ -123,7 +123,11 @@ test("applyUpdate — rateLimits propagated to state", () => {
   orchestrator.claim(issue);
 
   const limits = { provider: "anthropic", retryAfter: 30 };
-  orchestrator.applyUpdate(issue.id, 0, { type: "rate_limit", rateLimits: limits });
+  orchestrator.applyUpdate(issue.id, 0, {
+    type: "rate_limit",
+    message: "rate limited by anthropic",
+    rateLimits: limits,
+  });
 
   assert.deepEqual(orchestrator.snapshot().rateLimits, limits);
 });

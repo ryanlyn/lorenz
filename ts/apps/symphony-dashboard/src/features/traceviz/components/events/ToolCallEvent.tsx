@@ -1,8 +1,10 @@
-import { useState } from "react";
+import { useState, type KeyboardEvent } from "react";
 import { Code, ChevronDown } from "lucide-react";
 
 import type { ToolCallEvent as ToolCallEventType } from "../../api/types";
 import { formatTimestamp, formatDuration, cn } from "../../../../lib/utils";
+
+import { isActivationKey } from "./interactiveRow";
 
 interface ToolCallEventProps {
   event: ToolCallEventType;
@@ -10,6 +12,12 @@ interface ToolCallEventProps {
 
 export function ToolCallEvent({ event }: ToolCallEventProps) {
   const [expanded, setExpanded] = useState(false);
+  const toggleExpanded = () => setExpanded((value) => !value);
+  const handleToggleKeyDown = (keyboardEvent: KeyboardEvent<HTMLDivElement>) => {
+    if (!isActivationKey(keyboardEvent.key)) return;
+    keyboardEvent.preventDefault();
+    toggleExpanded();
+  };
 
   return (
     <div
@@ -18,8 +26,22 @@ export function ToolCallEvent({ event }: ToolCallEventProps) {
         event.isError ? "border-accent-red" : "border-accent-orange",
       )}
     >
-      <div className="flex items-start gap-2 cursor-pointer" onClick={() => setExpanded(!expanded)}>
+      <div
+        role="button"
+        tabIndex={0}
+        className={cn(
+          "flex w-full cursor-pointer items-start gap-2 bg-transparent p-0 text-left focus:outline-none focus-visible:ring-2",
+          event.isError
+            ? "focus-visible:ring-accent-red/60"
+            : "focus-visible:ring-accent-orange/60",
+        )}
+        aria-expanded={expanded}
+        aria-label={`Toggle ${event.toolName} details`}
+        onClick={toggleExpanded}
+        onKeyDown={handleToggleKeyDown}
+      >
         <Code
+          aria-hidden="true"
           className={cn(
             "mt-0.5 h-4 w-4 shrink-0",
             event.isError ? "text-accent-red" : "text-accent-orange",
@@ -29,14 +51,11 @@ export function ToolCallEvent({ event }: ToolCallEventProps) {
           <div className="flex items-center gap-2">
             <span className="text-xs text-muted">{formatTimestamp(event.timestamp)}</span>
             <span className="font-mono text-sm font-medium">{event.toolName}</span>
-            <span className="rounded-full bg-muted/30 px-1.5 py-0.5 text-[10px] text-muted">
-              {event.category}
-            </span>
             {event.durationMs != null && (
-              <span className="text-[10px] text-muted">{formatDuration(event.durationMs)}</span>
+              <span className="text-xs text-muted">{formatDuration(event.durationMs)}</span>
             )}
             {event.isError && (
-              <span className="rounded-full bg-accent-red/20 px-1.5 py-0.5 text-[10px] text-accent-red">
+              <span className="rounded-full bg-accent-red/20 px-1.5 py-0.5 text-xs text-accent-red">
                 error
               </span>
             )}

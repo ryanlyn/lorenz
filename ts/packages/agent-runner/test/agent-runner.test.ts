@@ -1,5 +1,12 @@
 import { vi, test } from "vitest";
-import type { AgentExecutor, AgentSession, AgentUpdate, Issue, Settings } from "@symphony/domain";
+import type {
+  AgentExecutor,
+  AgentSession,
+  AgentUpdate,
+  Issue,
+  SessionNotification,
+  Settings,
+} from "@symphony/domain";
 import { defaultSettings } from "@symphony/config";
 
 import { assert } from "../../../test/assert.js";
@@ -15,6 +22,7 @@ function fakeIssue(overrides: Partial<Issue> = {}): Issue {
     identifier: "TEST-1",
     title: "Test issue",
     state: "Todo",
+    stateType: "unstarted",
     labels: [],
     blockers: [],
     ...overrides,
@@ -47,7 +55,11 @@ function fakeExecutor(
   return {
     kind: "codex",
     async startSession(input) {
-      input.onUpdate?.({ type: "session_started", sessionId: session.sessionId });
+      input.onUpdate?.({
+        type: "session_started",
+        message: `session started (${session.sessionId})`,
+        sessionId: session.sessionId,
+      });
       return session;
     },
     async runTurn(_session, _prompt, _issue) {
@@ -124,7 +136,11 @@ test("runAgentAttempt respects abort signal and stops executor mid-turn", async 
           stopped = true;
         },
       });
-      input.onUpdate?.({ type: "session_started", sessionId: session.sessionId });
+      input.onUpdate?.({
+        type: "session_started",
+        message: `session started (${session.sessionId})`,
+        sessionId: session.sessionId,
+      });
       return session;
     },
     async runTurn() {
@@ -513,7 +529,11 @@ test("RunController propagates updates from executor to caller", async () => {
       executorFactory: () => ({
         kind: "codex",
         async startSession(input) {
-          input.onUpdate?.({ type: "session_started", sessionId: "s1" });
+          input.onUpdate?.({
+            type: "session_started",
+            message: "session started (s1)",
+            sessionId: "s1",
+          });
           return fakeSession();
         },
         async runTurn(_session, _prompt, _issue) {
@@ -544,13 +564,18 @@ test("RunController accumulates usage totals across turns", async () => {
         kind: "codex",
         async startSession(input) {
           sessionOnUpdate = input.onUpdate;
-          input.onUpdate?.({ type: "session_started", sessionId: "s1" });
+          input.onUpdate?.({
+            type: "session_started",
+            message: "session started (s1)",
+            sessionId: "s1",
+          });
           return fakeSession();
         },
         async runTurn() {
           turnNumber += 1;
           const usageUpdate: AgentUpdate = {
-            type: "usage",
+            type: "session_notification",
+            message: {} as SessionNotification,
             usage: {
               inputTokens: 10 * turnNumber,
               outputTokens: 5 * turnNumber,
@@ -567,7 +592,7 @@ test("RunController accumulates usage totals across turns", async () => {
 
   // The controller runs at least one turn and accumulates updates from onUpdate callback
   assert.ok(result.turnCount >= 1);
-  const usageUpdates = result.updates.filter((u) => u.type === "usage");
+  const usageUpdates = result.updates.filter((u) => u.type === "session_notification" && u.usage);
   assert.ok(usageUpdates.length >= 1);
   // Verify usage fields are passed through
   assert.ok(usageUpdates[0]!.usage);

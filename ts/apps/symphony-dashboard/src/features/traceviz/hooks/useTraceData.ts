@@ -12,6 +12,8 @@ export function useTraceData() {
   const [events, setEvents] = useState<DisplayEvent[]>([]);
   const [stats, setStats] = useState<Stats | null>(null);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [traceExists, setTraceExists] = useState<boolean | null>(null);
 
   const { status: wsStatus, lastMessage } = useWebSocket();
 
@@ -22,16 +24,21 @@ export function useTraceData() {
 
   const loadTicketData = useCallback(async (issueId: string) => {
     setLoading(true);
+    setTraceExists(null);
     try {
+      setError(null);
       const [eventsData, statsData] = await Promise.all([
         fetchEvents(issueId),
         fetchStats(issueId),
       ]);
       setEvents(eventsData);
       setStats(statsData);
+      setTraceExists(eventsData.length > 0);
     } catch {
+      setError("Failed to load trace data");
       setEvents([]);
       setStats(null);
+      setTraceExists(false);
     } finally {
       setLoading(false);
     }
@@ -47,6 +54,7 @@ export function useTraceData() {
     } else {
       setEvents([]);
       setStats(null);
+      setTraceExists(null);
     }
   }, [selectedTicketId, loadTicketData]);
 
@@ -61,10 +69,12 @@ export function useTraceData() {
       if (msg.issueId === selectedTicketId) {
         setEvents(msg.events);
         setStats(computeStatsFromEvents(msg.events));
+        setTraceExists(true);
       }
     } else if (msg.type === "events" && msg.issueId === selectedTicketId) {
       setEvents(msg.events);
       setStats(computeStatsFromEvents(msg.events));
+      setTraceExists(true);
     }
   }, [lastMessage, selectedTicketId]);
 
@@ -75,6 +85,8 @@ export function useTraceData() {
     events,
     stats,
     loading,
+    error,
+    traceExists,
     wsStatus,
   };
 }

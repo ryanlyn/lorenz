@@ -111,6 +111,139 @@ test("orchestrator keeps per-entry usage totals monotonic across runner correcti
   });
 });
 
+test("orchestrator accumulates per-turn usage deltas for dashboard snapshots", () => {
+  const orchestrator = new Orchestrator(parseConfig());
+  const issue = normalizeIssue({
+    id: "usage-deltas",
+    identifier: "MT-USAGE-DELTAS",
+    title: "Usage deltas",
+    state: { name: "Todo", type: "unstarted" },
+  });
+
+  assert.ok(orchestrator.claim(issue));
+  orchestrator.applyUpdate(issue.id, 0, {
+    type: "turn_completed",
+    usageKind: "delta",
+    usage: { inputTokens: 100, outputTokens: 50, totalTokens: 150 },
+  });
+  orchestrator.applyUpdate(issue.id, 0, {
+    type: "turn_completed",
+    usageKind: "delta",
+    usage: { inputTokens: 200, outputTokens: 100, totalTokens: 300 },
+  });
+
+  const snapshot = orchestrator.snapshot();
+  assert.deepEqual(snapshot.running[0]?.usageTotals, {
+    inputTokens: 300,
+    outputTokens: 150,
+    totalTokens: 450,
+    secondsRunning: 0,
+  });
+  assert.deepEqual(snapshot.usageTotals, {
+    inputTokens: 300,
+    outputTokens: 150,
+    totalTokens: 450,
+    secondsRunning: 0,
+  });
+});
+
+test("orchestrator does not double count streamed cumulative usage before final turn deltas", () => {
+  const orchestrator = new Orchestrator(parseConfig());
+  const issue = normalizeIssue({
+    id: "usage-mixed",
+    identifier: "MT-USAGE-MIXED",
+    title: "Usage mixed",
+    state: { name: "Todo", type: "unstarted" },
+  });
+
+  assert.ok(orchestrator.claim(issue));
+  orchestrator.applyUpdate(issue.id, 0, {
+    type: "session_notification",
+    usageKind: "cumulative",
+    usage: { totalTokens: 150 },
+  });
+  orchestrator.applyUpdate(issue.id, 0, {
+    type: "turn_completed",
+    usageKind: "delta",
+    usage: { inputTokens: 100, outputTokens: 50, totalTokens: 150 },
+  });
+  orchestrator.applyUpdate(issue.id, 0, {
+    type: "session_notification",
+    usageKind: "cumulative",
+    usage: { totalTokens: 450 },
+  });
+  orchestrator.applyUpdate(issue.id, 0, {
+    type: "turn_completed",
+    usageKind: "delta",
+    usage: { inputTokens: 200, outputTokens: 100, totalTokens: 300 },
+  });
+
+  const snapshot = orchestrator.snapshot();
+  assert.deepEqual(snapshot.running[0]?.usageTotals, {
+    inputTokens: 300,
+    outputTokens: 150,
+    totalTokens: 450,
+    secondsRunning: 0,
+  });
+  assert.deepEqual(snapshot.usageTotals, {
+    inputTokens: 300,
+    outputTokens: 150,
+    totalTokens: 450,
+    secondsRunning: 0,
+  });
+});
+
+test("orchestrator does not double-count ACP usage updates when turn completion repeats the same total", () => {
+  const orchestrator = new Orchestrator(parseConfig());
+  const issue = normalizeIssue({
+    id: "usage-acp",
+    identifier: "MT-ACP-USAGE",
+    title: "ACP usage",
+    state: { name: "Todo", type: "unstarted" },
+  });
+
+  assert.ok(orchestrator.claim(issue));
+  orchestrator.applyUpdate(issue.id, 0, {
+    type: "session_notification",
+    usageKind: "cumulative",
+    usage: { totalTokens: 5 },
+  });
+
+  let snapshot = orchestrator.snapshot();
+  assert.deepEqual(snapshot.running[0]?.usageTotals, {
+    inputTokens: 0,
+    outputTokens: 0,
+    totalTokens: 5,
+    secondsRunning: 0,
+  });
+  assert.deepEqual(snapshot.usageTotals, {
+    inputTokens: 0,
+    outputTokens: 0,
+    totalTokens: 5,
+    secondsRunning: 0,
+  });
+
+  orchestrator.applyUpdate(issue.id, 0, {
+    type: "turn_completed",
+    usageKind: "delta",
+    usage: { inputTokens: 2, outputTokens: 3, totalTokens: 5 },
+  });
+
+  snapshot = orchestrator.snapshot();
+  assert.deepEqual(snapshot.running[0]?.usageTotals, {
+    inputTokens: 2,
+    outputTokens: 3,
+    totalTokens: 5,
+    secondsRunning: 0,
+  });
+  assert.deepEqual(snapshot.usageTotals, {
+    inputTokens: 2,
+    outputTokens: 3,
+    totalTokens: 5,
+    secondsRunning: 0,
+  });
+});
+
 test("orchestrator assigns SSH worker hosts by least loaded capacity", () => {
   const settings = parseConfig({
     worker: { ssh_hosts: ["worker-a:2200", "worker-b:2200"], max_concurrent_agents_per_host: 1 },
@@ -142,6 +275,110 @@ test("orchestrator assigns SSH worker hosts by least loaded capacity", () => {
 
   orchestrator.finish(firstIssue.id, 0, false);
   assert.equal(orchestrator.claim(thirdIssue)?.workerHost, "worker-a:2200");
+});
+
+test("config reload that adds worker pools leaves running workspaces in place", () => {
+  // Mirrors runtime.reloadWorkflowIfConfigured, which swaps orchestrator.settings in place.
+  const orchestrator = new Orchestrator(
+    parseConfig({
+      worker: { ssh_hosts: ["worker-a"], max_concurrent_agents_per_host: 1 },
+      agent: { max_concurrent_agents: 4 },
+    }),
+  );
+  const issue = normalizeIssue({
+    id: "i1",
+    identifier: "MT-1",
+    title: "One",
+    state: "Todo",
+    stateType: "unstarted",
+  });
+
+  const claimed = orchestrator.claim(issue);
+  assert.equal(claimed?.workerHost, "worker-a");
+  orchestrator.applyUpdate(issue.id, 0, {
+    type: "turn_completed",
+    sessionId: "session-1",
+    workspacePath: "/work/worker-a/MT-1",
+  });
+
+  orchestrator.settings = parseConfig({
+    worker: { ssh_hosts: ["worker-a", "worker-b"], max_concurrent_agents_per_host: 1 },
+    agent: { max_concurrent_agents: 4 },
+  });
+
+  const running = orchestrator.snapshot().running;
+  assert.equal(running.length, 1);
+  // Same entry instance: not recreated, and still pinned to its original host/workspace.
+  assert.equal(running[0], claimed);
+  assert.equal(running[0]?.workerHost, "worker-a");
+  assert.equal(running[0]?.workspacePath, "/work/worker-a/MT-1");
+  assert.equal(running[0]?.sessionId, "session-1");
+
+  // The newly added pool only takes future dispatches; the existing run stays put.
+  const secondIssue = normalizeIssue({
+    id: "i2",
+    identifier: "MT-2",
+    title: "Two",
+    state: "Todo",
+    stateType: "unstarted",
+  });
+  assert.equal(orchestrator.claim(secondIssue)?.workerHost, "worker-b");
+  assert.equal(orchestrator.snapshot().running[0]?.workerHost, "worker-a");
+});
+
+test("config reload that removes a worker pool keeps its running workspace until completion", () => {
+  const orchestrator = new Orchestrator(
+    parseConfig({
+      worker: { ssh_hosts: ["worker-a", "worker-b"], max_concurrent_agents_per_host: 1 },
+      agent: { max_concurrent_agents: 4 },
+    }),
+  );
+  const first = normalizeIssue({
+    id: "i1",
+    identifier: "MT-1",
+    title: "One",
+    state: "Todo",
+    stateType: "unstarted",
+  });
+  const second = normalizeIssue({
+    id: "i2",
+    identifier: "MT-2",
+    title: "Two",
+    state: "Todo",
+    stateType: "unstarted",
+  });
+
+  assert.equal(orchestrator.claim(first)?.workerHost, "worker-a");
+  const onRemovedHost = orchestrator.claim(second);
+  assert.equal(onRemovedHost?.workerHost, "worker-b");
+  orchestrator.applyUpdate(second.id, 0, {
+    type: "turn_completed",
+    workspacePath: "/work/worker-b/MT-2",
+  });
+
+  orchestrator.settings = parseConfig({
+    worker: { ssh_hosts: ["worker-a"], max_concurrent_agents_per_host: 1 },
+    agent: { max_concurrent_agents: 4 },
+  });
+
+  // The run on the removed pool is neither relocated nor recreated: same instance, same host.
+  const stillRunning = orchestrator
+    .snapshot()
+    .running.find((entry) => entry.issue.id === second.id);
+  assert.equal(stillRunning, onRemovedHost);
+  assert.equal(stillRunning?.workerHost, "worker-b");
+  assert.equal(stillRunning?.workspacePath, "/work/worker-b/MT-2");
+
+  // New dispatches only consider the remaining pool; worker-a is at capacity so the next issue blocks.
+  const third = normalizeIssue({
+    id: "i3",
+    identifier: "MT-3",
+    title: "Three",
+    state: "Todo",
+    stateType: "unstarted",
+  });
+  assert.deepEqual(orchestrator.eligibleIssues([third]), []);
+  assert.equal(orchestrator.snapshot().blocked[0]?.reason, "worker_host_capacity");
 });
 
 test("orchestrator snapshots capacity-blocked dispatch candidates", () => {

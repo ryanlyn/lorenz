@@ -1,124 +1,99 @@
-import { Clock, RotateCcw, Play, CheckCircle, XCircle, Circle } from "lucide-react";
+import { Search, ExternalLink, Loader2 } from "lucide-react";
 
-import type { TicketInfo } from "../api/types";
+import { useIssueSearch } from "../hooks/useIssueSearch";
 import { cn } from "../../../lib/utils";
 
 interface TraceListProps {
-  tickets: TicketInfo[];
   onSelect: (issueId: string) => void;
 }
 
-function statusIcon(status: TicketInfo["status"]) {
-  switch (status) {
-    case "running":
-      return <Play className="h-3.5 w-3.5 text-accent-blue" />;
-    case "completed":
-      return <CheckCircle className="h-3.5 w-3.5 text-accent-green" />;
-    case "failed":
-      return <XCircle className="h-3.5 w-3.5 text-accent-red" />;
-    default:
-      return <Circle className="h-3.5 w-3.5 text-muted" />;
-  }
+function formatRelativeTime(epochMs: number): string {
+  const diff = Date.now() - epochMs;
+  const seconds = Math.floor(diff / 1000);
+  if (seconds < 60) return "just now";
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  return `${days}d ago`;
 }
 
-function statusLabel(status: TicketInfo["status"]): string {
-  switch (status) {
-    case "running":
-      return "Running";
-    case "completed":
-      return "Completed";
-    case "failed":
-      return "Failed";
-    default:
-      return "Idle";
-  }
-}
-
-function formatStartedAt(iso: string | undefined): string {
-  if (!iso) return "—";
-  try {
-    const d = new Date(iso);
-    return d.toLocaleDateString("en-US", {
-      month: "short",
-      day: "numeric",
-      hour: "2-digit",
-      minute: "2-digit",
-    });
-  } catch {
-    return iso;
-  }
-}
-
-export function TraceList({ tickets, onSelect }: TraceListProps) {
-  if (tickets.length === 0) {
-    return (
-      <div className="flex flex-col items-center justify-center py-16 text-center">
-        <p className="text-sm text-muted">No traces found on disk</p>
-        <p className="mt-1 text-xs text-muted/70">
-          Traces will appear here once tickets are processed
-        </p>
-      </div>
-    );
-  }
-
-  const sorted = [...tickets].sort((a, b) => {
-    if (a.startedAt && b.startedAt) return b.startedAt.localeCompare(a.startedAt);
-    if (a.startedAt) return -1;
-    if (b.startedAt) return 1;
-    return 0;
-  });
+export function TraceList({ onSelect }: TraceListProps) {
+  const { query, setQuery, issues, searching, isSearchMode, noResults } = useIssueSearch();
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <h2 className="text-sm font-medium text-muted">
-          {tickets.length} trace{tickets.length !== 1 ? "s" : ""} available
+      <div className="relative">
+        <Search
+          aria-hidden="true"
+          className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted"
+        />
+        <input
+          type="text"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Search by ID or title…"
+          className={cn(
+            "w-full rounded-lg border border-border bg-card py-2 pl-9 pr-3 text-sm text-foreground",
+            "placeholder:text-muted focus:border-accent-purple/50 focus:outline-none focus:ring-2 focus:ring-accent-purple/50",
+          )}
+        />
+        {searching && (
+          <Loader2
+            aria-hidden="true"
+            className="absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 animate-spin text-muted"
+          />
+        )}
+      </div>
+
+      {isSearchMode ? (
+        <h2 className="text-xs font-medium uppercase tracking-wide text-muted">
+          Results matching &ldquo;{query}&rdquo;
         </h2>
-      </div>
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-        {sorted.map((ticket) => (
-          <button
-            key={ticket.issueId}
-            onClick={() => onSelect(ticket.issueId)}
-            className={cn(
-              "rounded-lg border border-border bg-card p-4 text-left",
-              "transition-all hover:border-accent-purple/50 hover:shadow-sm",
-              "focus:outline-none focus:ring-2 focus:ring-accent-purple/50",
-            )}
-          >
-            <div className="flex items-start justify-between">
+      ) : (
+        <h2 className="text-xs font-medium uppercase tracking-wide text-muted">Recent</h2>
+      )}
+
+      {noResults && <p className="py-8 text-center text-sm text-muted">No results</p>}
+
+      {issues.length > 0 && (
+        <div className="divide-y divide-border rounded-lg border border-border bg-card">
+          {issues.map((issue) => (
+            <button
+              key={issue.issueId}
+              onClick={() => onSelect(issue.issueId)}
+              className={cn(
+                "flex w-full items-center gap-3 px-4 py-3 text-left",
+                "transition-colors hover:bg-muted/10",
+                "focus:outline-none focus:bg-muted/10",
+              )}
+            >
               <div className="min-w-0 flex-1">
-                <p className="truncate text-sm font-medium text-foreground">{ticket.identifier}</p>
-                {ticket.title && (
-                  <p className="mt-0.5 truncate text-xs text-muted">{ticket.title}</p>
-                )}
+                <p className="truncate text-sm font-medium text-foreground">
+                  {issue.issueIdentifier}
+                </p>
+                {issue.title && <p className="truncate text-xs text-muted">{issue.title}</p>}
               </div>
-              <div className="ml-2 flex items-center gap-1">{statusIcon(ticket.status)}</div>
-            </div>
-            <div className="mt-3 flex items-center gap-3 text-xs text-muted">
-              <span className="flex items-center gap-1">
-                <RotateCcw className="h-3 w-3" />
-                {ticket.turnCount} turn{ticket.turnCount !== 1 ? "s" : ""}
+              <span className="shrink-0 text-xs text-muted">
+                {formatRelativeTime(issue.updatedAt)}
               </span>
-              <span className="flex items-center gap-1">
-                <Clock className="h-3 w-3" />
-                {formatStartedAt(ticket.startedAt)}
-              </span>
-              <span
-                className={cn(
-                  "ml-auto rounded-full px-1.5 py-0.5 text-[10px] font-medium",
-                  ticket.status === "running" && "bg-accent-blue/10 text-accent-blue",
-                  ticket.status === "completed" && "bg-accent-green/10 text-accent-green",
-                  ticket.status === "failed" && "bg-accent-red/10 text-accent-red",
-                  ticket.status === "idle" && "bg-muted/10 text-muted",
-                )}
-              >
-                {statusLabel(ticket.status)}
-              </span>
-            </div>
-          </button>
-        ))}
-      </div>
+              {issue.url && (
+                <ExternalLink aria-hidden="true" className="h-3.5 w-3.5 shrink-0 text-muted" />
+              )}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {!isSearchMode && issues.length === 0 && (
+        <div className="flex flex-col items-center justify-center py-16 text-center">
+          <p className="text-sm text-muted">No issues found</p>
+          <p className="mt-1 text-xs text-muted/70">
+            Issues will appear here once they are processed
+          </p>
+        </div>
+      )}
     </div>
   );
 }

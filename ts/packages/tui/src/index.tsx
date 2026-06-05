@@ -243,8 +243,6 @@ function runningStage(run: RuntimeSnapshot["running"][number]): string {
 function rowColor(lastEvent: AgentUpdateType | null | undefined): string {
   if (lastEvent === null || lastEvent === undefined) return "31";
   switch (lastEvent) {
-    case "usage":
-      return "33";
     case "turn_started":
       return "32";
     case "turn_completed":
@@ -255,6 +253,11 @@ function rowColor(lastEvent: AgentUpdateType | null | undefined): string {
 }
 
 function terminalEvent(run: RuntimeSnapshot["running"][number]): string {
+  if (
+    (run.lastEvent === null || run.lastEvent === undefined) &&
+    (run.lastMessage === null || run.lastMessage === undefined)
+  )
+    return "pending";
   return truncate(
     humanizeAgentMessage({
       agent_kind: run.agentKind,

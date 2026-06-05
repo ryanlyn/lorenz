@@ -33,7 +33,9 @@ test("slack_query lists bot-mention issues with derived state and labels", async
     ],
   });
 
-  const res = await executeTool("slack_query", {}, settings(), fetch, { slackTransport: transport });
+  const res = await executeTool("slack_query", {}, settings(), fetch, {
+    slackTransport: transport,
+  });
   assert.equal(res.success, true);
   const result = res.result as {
     rows: Array<{ issueId: string; title: string; state: string; labels: string[] }>;

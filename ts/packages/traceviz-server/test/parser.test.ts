@@ -1,4 +1,4 @@
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 
 import { describe, it, expect } from "vitest";
@@ -6,7 +6,6 @@ import { describe, it, expect } from "vitest";
 import { parseTraceLines } from "../src/parser.js";
 
 const FIXTURE_PATH = path.join(import.meta.dirname, "fixtures/minimal-trace.jsonl");
-const CAN143_PATH = `${process.env.HOME}/.symphony/traces/CAN-143/trace.jsonl`;
 
 describe("parseTraceLines with minimal fixture", () => {
   const lines = readFileSync(FIXTURE_PATH, "utf-8").split("\n");
@@ -39,12 +38,12 @@ describe("parseTraceLines with minimal fixture", () => {
 
   it("extracts bash tool_calls with expected shape", () => {
     const events = parseTraceLines(lines);
-    const bashCalls = events.filter((e) => e.kind === "tool_call" && e.category === "bash_command");
+    const bashCalls = events.filter((e) => e.kind === "tool_call" && e.toolName === "Bash");
     expect(bashCalls.length).toBeGreaterThan(0);
 
     for (const call of bashCalls) {
       if (call.kind !== "tool_call") continue;
-      expect(call.toolName).toBe("command_execution");
+      expect(call.toolName).toBe("Bash");
       expect(typeof (call.input as Record<string, unknown>).command).toBe("string");
       expect(typeof call.isError).toBe("boolean");
       expect(call.durationMs === null || typeof call.durationMs === "number").toBe(true);
@@ -53,16 +52,14 @@ describe("parseTraceLines with minimal fixture", () => {
 
   it("marks non-zero exit codes as errors", () => {
     const events = parseTraceLines(lines);
-    const bashCalls = events.filter((e) => e.kind === "tool_call" && e.category === "bash_command");
+    const bashCalls = events.filter((e) => e.kind === "tool_call" && e.toolName === "Bash");
     const errors = bashCalls.filter((e) => e.kind === "tool_call" && e.isError);
     expect(errors.length).toBeGreaterThan(0);
   });
 
   it("extracts MCP/dynamic tool calls", () => {
     const events = parseTraceLines(lines);
-    const mcpCalls = events.filter(
-      (e) => e.kind === "tool_call" && e.toolName !== "command_execution",
-    );
+    const mcpCalls = events.filter((e) => e.kind === "tool_call" && e.toolName !== "Bash");
     expect(mcpCalls.length).toBeGreaterThan(0);
 
     for (const call of mcpCalls) {
@@ -122,22 +119,18 @@ describe("parseTraceLines with minimal fixture", () => {
 });
 
 describe("parseTraceLines reasoning/thought extraction", () => {
-  it("extracts text from summary array", () => {
+  it("extracts thought text from agent_thought_chunk", () => {
     const lines = [
       JSON.stringify({
-        type: "notification",
+        type: "session_notification",
         issueId: "id",
         issueIdentifier: "T-1",
         timestamp: "2026-01-01T00:00:00Z",
         message: {
-          method: "item/completed",
-          params: {
-            item: {
-              type: "reasoning",
-              id: "rs_1",
-              summary: [{ type: "summary_text", text: "Thinking about the task" }],
-              content: [],
-            },
+          sessionId: "s1",
+          update: {
+            sessionUpdate: "agent_thought_chunk",
+            content: { type: "text", text: "Thinking about the task" },
           },
         },
       }),
@@ -148,44 +141,16 @@ describe("parseTraceLines reasoning/thought extraction", () => {
     expect(thoughts[0]!.kind === "thought" && thoughts[0]!.text).toBe("Thinking about the task");
   });
 
-  it("extracts text from content array when summary is empty", () => {
+  it("skips thought events with empty text", () => {
     const lines = [
       JSON.stringify({
-        type: "notification",
+        type: "session_notification",
         issueId: "id",
         issueIdentifier: "T-1",
         timestamp: "2026-01-01T00:00:00Z",
         message: {
-          method: "item/completed",
-          params: {
-            item: {
-              type: "reasoning",
-              id: "rs_1",
-              summary: [],
-              content: [{ type: "thinking", text: "Deep thought" }],
-            },
-          },
-        },
-      }),
-    ];
-    const events = parseTraceLines(lines);
-    const thoughts = events.filter((e) => e.kind === "thought");
-    expect(thoughts.length).toBe(1);
-    expect(thoughts[0]!.kind === "thought" && thoughts[0]!.text).toBe("Deep thought");
-  });
-
-  it("skips empty reasoning items entirely", () => {
-    const lines = [
-      JSON.stringify({
-        type: "notification",
-        issueId: "id",
-        issueIdentifier: "T-1",
-        timestamp: "2026-01-01T00:00:00Z",
-        message: {
-          method: "item/completed",
-          params: {
-            item: { type: "reasoning", id: "rs_1", summary: [], content: [] },
-          },
+          sessionId: "s1",
+          update: { sessionUpdate: "agent_thought_chunk", content: { type: "text", text: "" } },
         },
       }),
     ];
@@ -193,54 +158,159 @@ describe("parseTraceLines reasoning/thought extraction", () => {
     const thoughts = events.filter((e) => e.kind === "thought");
     expect(thoughts.length).toBe(0);
   });
+});
 
-  it("prefers item.text over summary/content", () => {
+describe("parseTraceLines chunk combining", () => {
+  function makeChunk(
+    sessionUpdate: "agent_thought_chunk" | "agent_message_chunk" | "user_message_chunk",
+    text: string,
+    timestamp = "2026-01-01T00:00:00Z",
+  ): string {
+    return JSON.stringify({
+      type: "session_notification",
+      issueId: "id",
+      issueIdentifier: "T-1",
+      timestamp,
+      message: {
+        sessionId: "s1",
+        update: { sessionUpdate, content: { type: "text", text } },
+      },
+    });
+  }
+
+  it("combines consecutive thought chunks into a single event", () => {
     const lines = [
-      JSON.stringify({
-        type: "notification",
-        issueId: "id",
-        issueIdentifier: "T-1",
-        timestamp: "2026-01-01T00:00:00Z",
-        message: {
-          method: "item/completed",
-          params: {
-            item: {
-              type: "reasoning",
-              id: "rs_1",
-              text: "Direct text",
-              summary: [{ text: "Summary text" }],
-              content: [{ text: "Content text" }],
-            },
-          },
-        },
-      }),
+      makeChunk("agent_thought_chunk", "The user is asking "),
+      makeChunk("agent_thought_chunk", "which model "),
+      makeChunk("agent_thought_chunk", "I'm running on."),
     ];
     const events = parseTraceLines(lines);
     const thoughts = events.filter((e) => e.kind === "thought");
     expect(thoughts.length).toBe(1);
-    expect(thoughts[0]!.kind === "thought" && thoughts[0]!.text).toBe("Direct text");
+    expect(thoughts[0]!.kind === "thought" && thoughts[0]!.text).toBe(
+      "The user is asking which model I'm running on.",
+    );
+  });
+
+  it("combines consecutive message chunks into a single event", () => {
+    const lines = [
+      makeChunk("agent_message_chunk", "I am "),
+      makeChunk("agent_message_chunk", "Claude, made by "),
+      makeChunk("agent_message_chunk", "Anthropic."),
+    ];
+    const events = parseTraceLines(lines);
+    const messages = events.filter((e) => e.kind === "message");
+    expect(messages.length).toBe(1);
+    expect(messages[0]!.kind === "message" && messages[0]!.text).toBe(
+      "I am Claude, made by Anthropic.",
+    );
+  });
+
+  it("combines user_message_chunk into message kind", () => {
+    const lines = [
+      makeChunk("user_message_chunk", "Hello "),
+      makeChunk("user_message_chunk", "world"),
+    ];
+    const events = parseTraceLines(lines);
+    const messages = events.filter((e) => e.kind === "message");
+    expect(messages.length).toBe(1);
+    expect(messages[0]!.kind === "message" && messages[0]!.text).toBe("Hello world");
+  });
+
+  it("flushes thought before starting a new message sequence", () => {
+    const lines = [
+      makeChunk("agent_thought_chunk", "thinking part 1"),
+      makeChunk("agent_thought_chunk", " part 2"),
+      makeChunk("agent_message_chunk", "response part 1"),
+      makeChunk("agent_message_chunk", " part 2"),
+    ];
+    const events = parseTraceLines(lines);
+    const thoughts = events.filter((e) => e.kind === "thought");
+    const messages = events.filter((e) => e.kind === "message");
+    expect(thoughts.length).toBe(1);
+    expect(messages.length).toBe(1);
+    expect(thoughts[0]!.kind === "thought" && thoughts[0]!.text).toBe("thinking part 1 part 2");
+    expect(messages[0]!.kind === "message" && messages[0]!.text).toBe("response part 1 part 2");
+  });
+
+  it("flushes pending text before a tool_call", () => {
+    const lines = [
+      makeChunk("agent_message_chunk", "Let me check."),
+      JSON.stringify({
+        type: "session_notification",
+        issueId: "id",
+        issueIdentifier: "T-1",
+        timestamp: "2026-01-01T00:00:01Z",
+        message: {
+          sessionId: "s1",
+          update: {
+            sessionUpdate: "tool_call",
+            title: "Bash",
+            toolCallId: "tc1",
+            rawInput: { command: "ls" },
+          },
+        },
+      }),
+      JSON.stringify({
+        type: "session_notification",
+        issueId: "id",
+        issueIdentifier: "T-1",
+        timestamp: "2026-01-01T00:00:02Z",
+        message: {
+          sessionId: "s1",
+          update: {
+            sessionUpdate: "tool_call_update",
+            toolCallId: "tc1",
+            status: "completed",
+            rawOutput: "file.txt",
+          },
+        },
+      }),
+      makeChunk("agent_message_chunk", "Done.", "2026-01-01T00:00:03Z"),
+    ];
+    const events = parseTraceLines(lines);
+    expect(events[0]).toMatchObject({ kind: "message", text: "Let me check." });
+    expect(events[1]).toMatchObject({ kind: "tool_call", toolName: "Bash" });
+    expect(events[2]).toMatchObject({ kind: "message", text: "Done." });
+  });
+
+  it("flushes pending text before turn_started", () => {
+    const lines = [
+      makeChunk("agent_message_chunk", "end of turn"),
+      JSON.stringify({
+        type: "turn_started",
+        issueId: "id",
+        issueIdentifier: "T-1",
+        timestamp: "2026-01-01T00:00:01Z",
+        sessionId: "sess-1",
+      }),
+    ];
+    const events = parseTraceLines(lines);
+    expect(events[0]).toMatchObject({ kind: "message", text: "end of turn" });
+    expect(events[1]).toMatchObject({ kind: "turn_started" });
+  });
+
+  it("uses the timestamp of the first chunk in a combined event", () => {
+    const lines = [
+      makeChunk("agent_thought_chunk", "first", "2026-01-01T00:00:01Z"),
+      makeChunk("agent_thought_chunk", " second", "2026-01-01T00:00:02Z"),
+      makeChunk("agent_thought_chunk", " third", "2026-01-01T00:00:03Z"),
+    ];
+    const events = parseTraceLines(lines);
+    expect(events.length).toBe(1);
+    expect(events[0]!.timestamp).toBe("2026-01-01T00:00:01Z");
   });
 });
 
-describe("parseTraceLines turn deduplication", () => {
-  it("deduplicates raw turn_started + notification turn/started", () => {
+describe("parseTraceLines turn handling", () => {
+  it("emits turn_started with sequential indices", () => {
     const lines = [
       JSON.stringify({
         type: "turn_started",
         issueId: "id",
         issueIdentifier: "T-1",
-        timestamp: null,
+        timestamp: "2026-01-01T00:00:00Z",
         sessionId: "sess-1",
-      }),
-      JSON.stringify({
-        type: "notification",
-        issueId: "id",
-        issueIdentifier: "T-1",
-        timestamp: "2026-01-01T00:00:01Z",
-        message: {
-          method: "turn/started",
-          params: { threadId: "t1", turn: { id: "turn-1", status: "inProgress" } },
-        },
       }),
       JSON.stringify({
         type: "turn_completed",
@@ -254,114 +324,6 @@ describe("parseTraceLines turn deduplication", () => {
     const turns = events.filter((e) => e.kind === "turn_started");
     expect(turns.length).toBe(1);
     expect(turns[0]!.kind === "turn_started" && turns[0]!.turnIndex).toBe(1);
-    // Should use the notification timestamp (not null)
-    expect(turns[0]!.timestamp).toBe("2026-01-01T00:00:01Z");
-  });
-
-  it("emits separate turns when notification is not immediately after raw", () => {
-    const lines = [
-      JSON.stringify({
-        type: "turn_started",
-        issueId: "id",
-        issueIdentifier: "T-1",
-        timestamp: "2026-01-01T00:00:00Z",
-      }),
-      JSON.stringify({
-        type: "notification",
-        issueId: "id",
-        issueIdentifier: "T-1",
-        timestamp: "2026-01-01T00:00:01Z",
-        message: {
-          method: "item/completed",
-          params: { item: { type: "agentMessage", text: "Hello" } },
-        },
-      }),
-      JSON.stringify({
-        type: "notification",
-        issueId: "id",
-        issueIdentifier: "T-1",
-        timestamp: "2026-01-01T00:00:02Z",
-        message: {
-          method: "turn/started",
-          params: { threadId: "t1", turn: { id: "turn-2", status: "inProgress" } },
-        },
-      }),
-    ];
-    const events = parseTraceLines(lines);
-    const turns = events.filter((e) => e.kind === "turn_started");
-    expect(turns.length).toBe(2);
-  });
-});
-
-describe("parseTraceLines Codex tool_call format", () => {
-  it("parses tool_call_completed with request/result structure", () => {
-    const lines = [
-      JSON.stringify({
-        type: "tool_call_completed",
-        issueId: "id",
-        issueIdentifier: "T-1",
-        timestamp: "2026-01-01T00:00:05Z",
-        message: {
-          request: {
-            method: "item/tool/call",
-            id: 0,
-            params: {
-              threadId: "t1",
-              turnId: "turn-1",
-              callId: "call_abc",
-              tool: "linear_graphql",
-              arguments: { query: "{ viewer { id } }" },
-            },
-          },
-          result: {
-            success: true,
-            output: '{"data":{"viewer":{"id":"123"}}}',
-            contentItems: [{ type: "inputText", text: '{"data":{"viewer":{"id":"123"}}}' }],
-          },
-        },
-      }),
-    ];
-    const events = parseTraceLines(lines);
-    const tools = events.filter((e) => e.kind === "tool_call");
-    expect(tools.length).toBe(1);
-    const tool = tools[0]!;
-    expect(tool.kind === "tool_call" && tool.toolName).toBe("linear_graphql");
-    expect(tool.kind === "tool_call" && tool.isError).toBe(false);
-    expect(tool.kind === "tool_call" && tool.output).toBe('{"data":{"viewer":{"id":"123"}}}');
-    expect(tool.kind === "tool_call" && (tool.input as Record<string, unknown>).query).toBe(
-      "{ viewer { id } }",
-    );
-  });
-
-  it("parses tool_call_failed with request/result structure", () => {
-    const lines = [
-      JSON.stringify({
-        type: "tool_call_failed",
-        issueId: "id",
-        issueIdentifier: "T-1",
-        timestamp: "2026-01-01T00:00:05Z",
-        message: {
-          request: {
-            method: "item/tool/call",
-            id: 1,
-            params: {
-              threadId: "t1",
-              turnId: "turn-1",
-              callId: "call_def",
-              tool: "web_search",
-              arguments: { q: "test" },
-            },
-          },
-          result: { success: false, output: "Rate limited" },
-        },
-      }),
-    ];
-    const events = parseTraceLines(lines);
-    const tools = events.filter((e) => e.kind === "tool_call");
-    expect(tools.length).toBe(1);
-    const tool = tools[0]!;
-    expect(tool.kind === "tool_call" && tool.toolName).toBe("web_search");
-    expect(tool.kind === "tool_call" && tool.isError).toBe(true);
   });
 });
 
@@ -370,12 +332,14 @@ describe("parseTraceLines noise filtering", () => {
     const lines = [
       JSON.stringify({
         type: "workspace_prepared",
+        message: "workspace prepared at /tmp/ws",
         issueId: "id",
         issueIdentifier: "T-1",
         timestamp: null,
       }),
       JSON.stringify({
         type: "session_started",
+        message: "session started",
         issueId: "id",
         issueIdentifier: "T-1",
         timestamp: null,
@@ -386,13 +350,6 @@ describe("parseTraceLines noise filtering", () => {
         issueIdentifier: "T-1",
         timestamp: "2026-01-01T00:00:00Z",
         message: "warn",
-      }),
-      JSON.stringify({
-        type: "usage",
-        issueId: "id",
-        issueIdentifier: "T-1",
-        timestamp: "2026-01-01T00:00:01Z",
-        usage: { inputTokens: 100, outputTokens: 50 },
       }),
       JSON.stringify({
         type: "process_exit",
@@ -417,44 +374,5 @@ describe("parseTraceLines noise filtering", () => {
     const events = parseTraceLines(lines);
     expect(events.length).toBe(1);
     expect(events[0]!.kind).toBe("unknown");
-  });
-});
-
-describe("parseTraceLines with full trace (integration)", () => {
-  const shouldRun = existsSync(CAN143_PATH);
-
-  it.skipIf(!shouldRun)("filters noise and produces only meaningful events", () => {
-    const raw = readFileSync(CAN143_PATH, "utf-8");
-    const allLines = raw.split("\n");
-    const totalRawLines = allLines.filter((l) => l.trim()).length;
-
-    const ALLOWLIST = new Set(["item/completed", "turn/started", "turn/completed"]);
-    const filteredLines = allLines.filter((l) => {
-      const trimmed = l.trim();
-      if (!trimmed) return false;
-      try {
-        const obj = JSON.parse(trimmed) as Record<string, unknown>;
-        if (obj.type !== "notification") return true;
-        const msg = obj.message as Record<string, unknown> | null;
-        if (!msg || typeof msg.method !== "string") return false;
-        return ALLOWLIST.has(msg.method);
-      } catch {
-        return false;
-      }
-    });
-
-    // Should dramatically reduce line count
-    expect(filteredLines.length).toBeLessThan(totalRawLines / 10);
-    expect(filteredLines.length).toBeGreaterThan(0);
-
-    const events = parseTraceLines(filteredLines);
-    const kinds = new Set(events.map((e) => e.kind));
-
-    expect(kinds.has("tool_call")).toBe(true);
-    expect(kinds.has("message")).toBe(true);
-    expect(kinds.has("turn_started")).toBe(true);
-
-    // No notification noise leaks through
-    expect(events.filter((e) => e.kind === "notification").length).toBe(0);
   });
 });

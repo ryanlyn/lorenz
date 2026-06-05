@@ -82,19 +82,17 @@ agent:
   max_concurrent_agents: 1
   max_turns: 10
 
-codex:
-  command: codex app-server
-  approval_policy: never
-  thread_sandbox: workspace-write
-  turn_timeout_ms: 180000
-  stall_timeout_ms: 60000
-
-claude:
-  command: claude-agent-acp
-  model: claude-sonnet-4-6
-  permission_mode: dontAsk
-  turn_timeout_ms: 360000
-  stall_timeout_ms: 300000
+agents:
+  codex:
+    bridge_command: codex-acp
+    turn_timeout_ms: 180000
+    stall_timeout_ms: 60000
+  claude:
+    bridge_command: claude-agent-acp
+    turn_timeout_ms: 360000
+    stall_timeout_ms: 300000
+    provider_config:
+      permission_mode: dontAsk
 
 server:
   port: 0
@@ -264,7 +262,7 @@ async function verifyTraces(rawLogPath: string, traceJsonlPath: string) {
   return { traceLineCount: traceLines.length, eventCount: events.length, kinds: [...kinds] };
 }
 
-async function screenshotDashboard(traceJsonlPath: string): Promise<string> {
+async function screenshotDashboard(traceJsonlPath: string, issueId: string): Promise<string> {
   console.log(`[e2e] Starting dashboard server...`);
 
   const runtimeSource = {
@@ -294,16 +292,24 @@ async function screenshotDashboard(traceJsonlPath: string): Promise<string> {
     const traceListUrl = `${server.url("/")}#/trace/`;
     console.log(`[e2e] Navigating to trace list: ${traceListUrl}`);
     await page.goto(traceListUrl);
-    await page.waitForTimeout(2000);
+    await page.waitForTimeout(3000);
 
     screenshotPath = path.join(SCREENSHOT_DIR, "trace-list.png");
     await page.screenshot({ path: screenshotPath, fullPage: true });
     console.log(`[e2e] Screenshot (trace list): ${screenshotPath}`);
 
-    const traceViewUrl = `${server.url("/")}#/trace/${path.basename(path.dirname(traceJsonlPath))}`;
+    // Navigate to the specific trace detail view using the Linear issue UUID
+    const traceViewUrl = `${server.url("/")}#/trace/${encodeURIComponent(issueId)}`;
     console.log(`[e2e] Navigating to trace view: ${traceViewUrl}`);
     await page.goto(traceViewUrl);
-    await page.waitForTimeout(2000);
+    await page.waitForTimeout(3000);
+
+    // Expand the turn to show all events
+    const expandBtn = page.getByRole("button", { name: "Expand all" });
+    if (await expandBtn.isVisible()) {
+      await expandBtn.click();
+      await page.waitForTimeout(1000);
+    }
 
     const traceViewScreenshot = path.join(SCREENSHOT_DIR, "trace-view.png");
     await page.screenshot({ path: traceViewScreenshot, fullPage: true });
@@ -332,7 +338,7 @@ async function main() {
     console.log("\n[e2e] Trace verification results:");
     console.log(JSON.stringify(verification, null, 2));
 
-    const screenshotPath = await screenshotDashboard(traceJsonlPath);
+    const screenshotPath = await screenshotDashboard(traceJsonlPath, issueId);
 
     console.log("\n=== E2E Test PASSED ===");
     console.log(`Filtered trace: ${traceJsonlPath}`);

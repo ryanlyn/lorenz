@@ -2,6 +2,7 @@ import { useState, useMemo, useCallback } from "react";
 import {
   ChevronsUpDown,
   ChevronsDownUp,
+  ChevronRight,
   ArrowUpDown,
   ArrowUp,
   ChevronUp,
@@ -155,6 +156,7 @@ export function Timeline({ events, loading }: TimelineProps) {
           </button>
           <button
             onClick={scrollToTop}
+            aria-label="Scroll to top"
             className="flex items-center gap-1 rounded-md border border-border px-2 py-1 text-xs text-muted hover:text-foreground transition-colors"
           >
             <ArrowUp className="h-3 w-3" />
@@ -172,6 +174,7 @@ export function Timeline({ events, loading }: TimelineProps) {
           >
             <button
               onClick={() => toggleTurn(group.turnIndex)}
+              aria-expanded={isExpanded}
               className={cn(
                 "flex w-full items-center justify-between px-4 py-2.5 text-left",
                 "hover:bg-muted/20 transition-colors",
@@ -181,28 +184,27 @@ export function Timeline({ events, loading }: TimelineProps) {
                 Turn {group.turnIndex}
                 <span className="ml-2 text-xs text-muted">({group.events.length} events)</span>
               </span>
-              <ChevronsUpDown
-                className={cn(
-                  "h-4 w-4 text-muted transition-transform",
-                  isExpanded && "rotate-180",
-                )}
+              <ChevronRight
+                className={cn("h-4 w-4 text-muted transition-transform", isExpanded && "rotate-90")}
               />
             </button>
             <div
               className={cn(
-                "overflow-hidden transition-all duration-200",
-                isExpanded ? "max-h-[10000px] opacity-100" : "max-h-0 opacity-0",
+                "grid transition-[grid-template-rows,opacity] duration-200",
+                isExpanded ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0",
               )}
             >
-              <div className="space-y-2 px-4 pb-3">
-                {group.events.map((event, idx) => renderEvent(event, idx))}
-                <button
-                  onClick={() => toggleTurn(group.turnIndex)}
-                  className="flex items-center gap-1 rounded-md border border-border px-2 py-1 text-xs text-muted hover:text-foreground transition-colors"
-                >
-                  <ChevronUp className="h-3 w-3" />
-                  Collapse turn
-                </button>
+              <div className="overflow-hidden">
+                <div className="space-y-2 px-4 pb-3">
+                  {group.events.map((event, idx) => renderEvent(event, idx))}
+                  <button
+                    onClick={() => toggleTurn(group.turnIndex)}
+                    className="flex items-center gap-1 rounded-md border border-border px-2 py-1 text-xs text-muted hover:text-foreground transition-colors"
+                  >
+                    <ChevronUp className="h-3 w-3" />
+                    Collapse turn
+                  </button>
+                </div>
               </div>
             </div>
           </div>

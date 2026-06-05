@@ -11,19 +11,6 @@ function sortTicketsByRecency(tickets: TicketInfo[]): TicketInfo[] {
   });
 }
 
-function navigateTraces(
-  tickets: TicketInfo[],
-  selectedId: string,
-  direction: "prev" | "next",
-): string | null {
-  const currentIndex = tickets.findIndex((t) => t.issueId === selectedId);
-  if (currentIndex === -1) return null;
-  if (direction === "prev" && currentIndex > 0) return tickets[currentIndex - 1]!.issueId;
-  if (direction === "next" && currentIndex < tickets.length - 1)
-    return tickets[currentIndex + 1]!.issueId;
-  return null;
-}
-
 const mockTickets: TicketInfo[] = [
   {
     issueId: "CAN-101",
@@ -84,46 +71,6 @@ describe("TraceList sorting", () => {
     const original = [...mockTickets];
     sortTicketsByRecency(mockTickets);
     expect(mockTickets).toEqual(original);
-  });
-});
-
-describe("TraceNavigator logic", () => {
-  const tickets = mockTickets;
-
-  it("navigates to next trace", () => {
-    expect(navigateTraces(tickets, "CAN-101", "next")).toBe("CAN-102");
-    expect(navigateTraces(tickets, "CAN-102", "next")).toBe("CAN-103");
-    expect(navigateTraces(tickets, "CAN-103", "next")).toBe("CAN-104");
-  });
-
-  it("returns null at end of list (next)", () => {
-    expect(navigateTraces(tickets, "CAN-104", "next")).toBeNull();
-  });
-
-  it("navigates to previous trace", () => {
-    expect(navigateTraces(tickets, "CAN-104", "prev")).toBe("CAN-103");
-    expect(navigateTraces(tickets, "CAN-103", "prev")).toBe("CAN-102");
-    expect(navigateTraces(tickets, "CAN-102", "prev")).toBe("CAN-101");
-  });
-
-  it("returns null at start of list (prev)", () => {
-    expect(navigateTraces(tickets, "CAN-101", "prev")).toBeNull();
-  });
-
-  it("returns null for unknown ticket id", () => {
-    expect(navigateTraces(tickets, "UNKNOWN-99", "next")).toBeNull();
-    expect(navigateTraces(tickets, "UNKNOWN-99", "prev")).toBeNull();
-  });
-
-  it("returns null when list has single element", () => {
-    const single = [tickets[0]!];
-    expect(navigateTraces(single, "CAN-101", "next")).toBeNull();
-    expect(navigateTraces(single, "CAN-101", "prev")).toBeNull();
-  });
-
-  it("returns null on empty list", () => {
-    expect(navigateTraces([], "CAN-101", "next")).toBeNull();
-    expect(navigateTraces([], "CAN-101", "prev")).toBeNull();
   });
 });
 

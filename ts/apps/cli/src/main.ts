@@ -20,6 +20,7 @@ import { SymphonyRuntime } from "@symphony/runtime";
 import { RuntimeApp } from "@symphony/tui";
 import { loadWorkflow } from "@symphony/workflow";
 import { TraceEmitter } from "@symphony/traceviz-emitter";
+import { defaultIssueStorePath, IssueStore } from "@symphony/server";
 import type { Settings, WorkflowDefinition } from "@symphony/domain";
 
 import {
@@ -97,8 +98,6 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
   }
 }
 
-export const run = main;
-
 export async function runDaemon(options: CliOptions): Promise<number> {
   try {
     let boundServerPort: number | null = null;
@@ -116,7 +115,9 @@ export async function runDaemon(options: CliOptions): Promise<number> {
     const workflow = await loadRuntimeWorkflow();
     await configureLogFile(workflow.settings.logging.logFile);
 
-    const traceEmitter = new TraceEmitter(workflow.settings.server.traceDir!);
+    const traceDir = workflow.settings.server.traceDir!;
+    const traceEmitter = new TraceEmitter(traceDir);
+    const issueStore = new IssueStore(defaultIssueStorePath());
     const runtime = new SymphonyRuntime({
       workflow,
       clientFactory: createTrackerClient,
@@ -125,11 +126,36 @@ export async function runDaemon(options: CliOptions): Promise<number> {
       onAgentUpdate: (issue, update) => {
         traceEmitter.emit(issue.id, issue.identifier, update);
       },
+      onIssueDispatched: (issue) => {
+        issueStore.upsert({
+          issueId: issue.id,
+          issueIdentifier: issue.identifier,
+          title: issue.title,
+          url: issue.url ?? null,
+        });
+      },
       ...runtimeAdapters,
     });
-    const stop = () => runtime.stop();
-    process.once("SIGINT", stop);
-    process.once("SIGTERM", stop);
+    let instance: ReturnType<typeof render> | null = null;
+    // Persistent (not once) handlers so the graceful teardown below actually
+    // runs to completion. With process.once, the listener is removed after the
+    // first SIGINT; a second SIGINT — which Node + Ink can surface while the
+    // daemon is still winding down — then hits the default disposition and kills
+    // the process with code 130 mid-shutdown, before Ink restores the terminal.
+    // That abrupt kill is what leaves a garbled/red error state on Ctrl+C.
+    let shuttingDown = false;
+    const requestStop = () => {
+      if (shuttingDown) {
+        // Repeated Ctrl+C: force-quit, but unmount Ink first so the terminal is
+        // left clean rather than mid-render.
+        instance?.unmount();
+        process.exit(130);
+      }
+      shuttingDown = true;
+      runtime.stop();
+    };
+    process.on("SIGINT", requestStop);
+    process.on("SIGTERM", requestStop);
 
     let server: Awaited<ReturnType<typeof startObservabilityServer>> | null = null;
     if (options.dashboard) {
@@ -142,13 +168,14 @@ export async function runDaemon(options: CliOptions): Promise<number> {
         ...(workflow.settings.server.staticDir !== undefined && {
           staticDir: workflow.settings.server.staticDir,
         }),
+        issueStore,
       });
       workflow.settings.server.port = server.port;
       boundServerPort = server.port;
       process.stderr.write(`Observability API listening on ${server.url("/")}\n`);
     }
 
-    const instance =
+    instance =
       options.tui && process.stdout.isTTY
         ? render(
             React.createElement(RuntimeApp, {
@@ -168,8 +195,11 @@ export async function runDaemon(options: CliOptions): Promise<number> {
     try {
       await runtime.start({ once: options.once, dryRun: options.dryRun });
     } finally {
+      // Leave the signal handlers attached through teardown so a second Ctrl+C
+      // can't slip past them and kill the process mid-shutdown.
       instance?.unmount();
       await server?.stop();
+      issueStore.close();
     }
     return 0;
   } catch (error) {

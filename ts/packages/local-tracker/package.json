@@ -5,10 +5,12 @@
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
-  "exports": { ".": "./dist/index.js" },
+  "exports": {
+    ".": "./dist/index.js"
+  },
   "dependencies": {
-    "yaml": "^2.8.0",
-    "@symphony/issue": "workspace:*",
-    "@symphony/domain": "workspace:*"
+    "yaml": "catalog:",
+    "@symphony/domain": "workspace:*",
+    "@symphony/issue": "workspace:*"
   }
 }

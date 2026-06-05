@@ -284,7 +284,9 @@ async function executeSlackQuery(
   const requested = parseStringArray(args.channels, "channels");
   const channels = requested ? requested.filter((c) => allow.includes(c)) : allow;
   const messages = await transport.listMentions(channels);
-  const records = messages.map((m) => slackMessageToRow(m, settings) as unknown as Record<string, unknown>);
+  const records = messages.map(
+    (m) => slackMessageToRow(m, settings) as unknown as Record<string, unknown>,
+  );
   const { rows, total } = applyQuery(records, spec);
   const out: Array<Record<string, unknown>> = [];
   for (const row of rows) {

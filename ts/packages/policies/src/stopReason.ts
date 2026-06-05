@@ -1,4 +1,4 @@
-import type { StopReason } from "@symphony/protocol";
+import type { StopReason } from "@symphony/domain";
 
 export type StopReasonAction = "continue" | "retry" | "cancel";
 

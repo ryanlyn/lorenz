@@ -27,12 +27,14 @@ hooks:
 agent:
   kind: claude
 
+agents:
+  turn_timeout_ms: 3600000
+  stall_timeout_ms: 300000
+
 claude:
   command: claude-agent-acp
   model: claude-sonnet-4-6
   permission_mode: dontAsk
-  turn_timeout_ms: 3600000
-  stall_timeout_ms: 300000
 
 server:
   port: 4040

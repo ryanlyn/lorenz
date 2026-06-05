@@ -18,9 +18,9 @@ export function NotificationEvent({ event }: NotificationEventProps) {
     >
       <div className="flex items-start gap-2">
         {isFailed ? (
-          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-accent-red" />
+          <AlertTriangle aria-hidden="true" className="mt-0.5 h-4 w-4 shrink-0 text-accent-red" />
         ) : (
-          <Info className="mt-0.5 h-4 w-4 shrink-0 text-muted" />
+          <Info aria-hidden="true" className="mt-0.5 h-4 w-4 shrink-0 text-muted" />
         )}
         <div className="min-w-0 flex-1">
           <span className="text-xs text-muted">{formatTimestamp(event.timestamp)}</span>

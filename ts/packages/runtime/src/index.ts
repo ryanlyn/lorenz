@@ -105,6 +105,7 @@ export interface RuntimeRunningEntry {
   runId?: string | undefined;
   issueId: string;
   issueIdentifier: string;
+  issueUrl?: string | null | undefined;
   title: string;
   state: string;
   slotIndex: number;
@@ -127,6 +128,7 @@ export interface RuntimeRunningEntry {
 export interface RuntimeRetryEntry {
   issueId: string;
   identifier: string;
+  issueUrl?: string | null | undefined;
   attempt: number;
   dueAtIso: string;
   monotonicDeadlineMs: number;
@@ -178,6 +180,7 @@ export interface SymphonyRuntimeOptions {
     | undefined;
   appendLogEvent?: ((logFile: string, event: Record<string, unknown>) => Promise<void>) | undefined;
   onAgentUpdate?: ((issue: Issue, update: AgentUpdate) => void) | undefined;
+  onIssueDispatched?: ((issue: Issue) => void) | undefined;
   now?: (() => Date) | undefined;
 }
 
@@ -315,7 +318,10 @@ export class SymphonyRuntime {
   stop(): void {
     this.stopped = true;
     this.appStatus = "stopping";
-    for (const handle of this.activeRuns.values()) handle.abort();
+    // finishExternally (abort + release) mirrors the other abort sites and clears
+    // isActive, so the resulting agent_run_aborted rejection is treated as a clean
+    // shutdown in runClaim rather than recorded as a failed run.
+    for (const handle of [...this.activeRuns.values()]) handle.finishExternally();
     this.retryScheduler.stop();
     this.emit();
   }
@@ -398,6 +404,7 @@ export class SymphonyRuntime {
     const handle = new ActiveRunHandle(key, runId, this.activeRuns);
     this.activeRuns.set(key, handle);
     this.addEvent("run_started", `${refreshed.identifier} slot=${claim.slotIndex}`);
+    this.input.onIssueDispatched?.(refreshed);
 
     const run = this.runClaim(
       refreshed,
@@ -488,6 +495,10 @@ export class SymphonyRuntime {
       });
       this.addEvent("run_completed", `${issue.identifier} turns=${result.turnCount}`);
     } catch (error) {
+      // Skip runs that are no longer active: superseded, finished externally, or
+      // released by stop() during shutdown. In the shutdown case the runner
+      // rejects with agent_run_aborted; recording it as a failure would emit a
+      // run_failed event the TUI renders as a red error banner on Ctrl+C.
       if (!handle.isActive) return;
       const entry = this.orchestrator
         .snapshot()
@@ -621,9 +632,10 @@ export class SymphonyRuntime {
       if (!currentEntry) continue;
       const effective = settingsForIssueState(this.workflow.settings, currentEntry.issue.state);
       const timeoutMs =
-        currentEntry.agentKind === "claude"
+        effective.agents[currentEntry.agentKind]?.stallTimeoutMs ??
+        (currentEntry.agentKind === "claude"
           ? effective.claude.stallTimeoutMs
-          : effective.codex.stallTimeoutMs;
+          : effective.codex.stallTimeoutMs);
       if (timeoutMs <= 0) continue;
       const lastActivity = currentEntry.lastAgentTimestamp ?? currentEntry.startedAt;
       const elapsedMs = this.now().getTime() - lastActivity.getTime();
@@ -852,6 +864,7 @@ function runtimeRunningEntry(entry: RunningEntry, runId: string | undefined): Ru
     runId,
     issueId: entry.issue.id,
     issueIdentifier: entry.identifier,
+    issueUrl: entry.issue.url ?? null,
     title: entry.issue.title,
     state: entry.issue.state,
     slotIndex: entry.slotIndex,
@@ -875,6 +888,7 @@ function runtimeRunningEntry(entry: RunningEntry, runId: string | undefined): Ru
 function runtimeRetryEntry(entry: {
   issueId: string;
   identifier: string;
+  issueUrl?: string | null | undefined;
   attempt: number;
   dueAtIso: string;
   monotonicDeadlineMs: number;
@@ -886,6 +900,7 @@ function runtimeRetryEntry(entry: {
   return {
     issueId: entry.issueId,
     identifier: entry.identifier,
+    issueUrl: entry.issueUrl ?? null,
     attempt: entry.attempt,
     dueAtIso: entry.dueAtIso,
     monotonicDeadlineMs: entry.monotonicDeadlineMs,

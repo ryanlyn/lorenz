@@ -26,7 +26,7 @@ export function splitIssueId(id: string): [string, string] | null {
  * id behind `#`/`@` inside angle brackets; those are stripped first so they cannot leak in as
  * bogus labels (e.g. `c0abc`).
  */
-export function deriveLabels(text: string): string[] {
+function deriveLabels(text: string): string[] {
   const stripped = text.replace(/<[#@][^>]*>/g, " ");
   const labels: string[] = [];
   const seen = new Set<string>();

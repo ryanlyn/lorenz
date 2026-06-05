@@ -47,12 +47,11 @@ describe("computeStats", () => {
     expect(stats.tokenUsage.totalTokens).toBe(450);
   });
 
-  it("computes tool breakdown by category", () => {
+  it("computes tool breakdown by tool name", () => {
     const events: DisplayEvent[] = [
       {
         kind: "tool_call",
-        category: "bash_command",
-        toolName: "command_execution",
+        toolName: "Bash",
         input: {},
         output: null,
         isError: false,
@@ -62,8 +61,7 @@ describe("computeStats", () => {
       },
       {
         kind: "tool_call",
-        category: "bash_command",
-        toolName: "command_execution",
+        toolName: "Bash",
         input: {},
         output: null,
         isError: true,
@@ -73,7 +71,6 @@ describe("computeStats", () => {
       },
       {
         kind: "tool_call",
-        category: "file_operation",
         toolName: "Read",
         input: {},
         output: null,
@@ -86,15 +83,15 @@ describe("computeStats", () => {
     const stats = computeStats(events);
     expect(stats.toolBreakdown.length).toBe(2);
 
-    const bash = stats.toolBreakdown.find((t) => t.category === "bash_command");
+    const bash = stats.toolBreakdown.find((t) => t.toolName === "Bash");
     expect(bash).toBeDefined();
     expect(bash!.count).toBe(2);
     expect(bash!.errorCount).toBe(1);
     expect(bash!.totalDurationMs).toBe(150);
 
-    const file = stats.toolBreakdown.find((t) => t.category === "file_operation");
-    expect(file).toBeDefined();
-    expect(file!.count).toBe(1);
-    expect(file!.errorCount).toBe(0);
+    const read = stats.toolBreakdown.find((t) => t.toolName === "Read");
+    expect(read).toBeDefined();
+    expect(read!.count).toBe(1);
+    expect(read!.errorCount).toBe(0);
   });
 });

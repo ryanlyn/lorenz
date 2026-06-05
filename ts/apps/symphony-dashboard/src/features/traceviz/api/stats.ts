@@ -33,19 +33,16 @@ export function computeStatsFromEvents(events: DisplayEvent[]): Stats {
     }
   }
 
-  const categoryMap = new Map<
-    string,
-    { count: number; errorCount: number; totalDurationMs: number }
-  >();
+  const toolMap = new Map<string, { count: number; errorCount: number; totalDurationMs: number }>();
   for (const event of events) {
     if (event.kind === "tool_call") {
-      const existing = categoryMap.get(event.category);
+      const existing = toolMap.get(event.toolName);
       if (existing) {
         existing.count++;
         if (event.isError) existing.errorCount++;
         if (event.durationMs != null) existing.totalDurationMs += event.durationMs;
       } else {
-        categoryMap.set(event.category, {
+        toolMap.set(event.toolName, {
           count: 1,
           errorCount: event.isError ? 1 : 0,
           totalDurationMs: event.durationMs ?? 0,
@@ -55,9 +52,9 @@ export function computeStatsFromEvents(events: DisplayEvent[]): Stats {
   }
 
   const toolBreakdown: ToolBreakdownEntry[] = [];
-  for (const [category, data] of categoryMap) {
+  for (const [toolName, data] of toolMap) {
     toolBreakdown.push({
-      category,
+      toolName,
       count: data.count,
       errorCount: data.errorCount,
       totalDurationMs: data.totalDurationMs,

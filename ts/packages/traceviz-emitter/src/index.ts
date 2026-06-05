@@ -2,24 +2,7 @@ import { mkdirSync, existsSync, rmSync } from "node:fs";
 import { appendFile } from "node:fs/promises";
 import path from "node:path";
 
-import type { AgentUpdate } from "@symphony/domain";
-
-/**
- * Notification methods that carry meaningful trace information.
- * Everything else (streaming deltas, config warnings, rate limits, etc.) is dropped.
- * Mirrors the filtering in thib-coding-agent's CodexEventMerger which only keeps
- * item.completed and turn.completed.
- */
-const NOTIFICATION_METHOD_ALLOWLIST = new Set(["item/completed", "turn/started", "turn/completed"]);
-
-function shouldEmit(update: AgentUpdate): boolean {
-  if (update.type !== "notification") return true;
-  const msg = update.message;
-  if (typeof msg !== "object" || msg === null) return false;
-  const method = (msg as Record<string, unknown>).method;
-  if (typeof method !== "string") return false;
-  return NOTIFICATION_METHOD_ALLOWLIST.has(method);
-}
+import type { AgentUpdate, TraceEvent } from "@symphony/domain";
 
 export class TraceEmitter {
   private readonly traceDir: string;
@@ -32,14 +15,12 @@ export class TraceEmitter {
   }
 
   emit(issueId: string, issueIdentifier: string, update: AgentUpdate): void {
-    if (!shouldEmit(update)) return;
-
     const dirPath = this.issueDirPath(issueIdentifier);
     if (!this.initialized.has(dirPath)) {
       mkdirSync(dirPath, { recursive: true });
       this.initialized.add(dirPath);
     }
-    const line = JSON.stringify({
+    const payload: TraceEvent = {
       type: update.type,
       issueId,
       issueIdentifier,
@@ -49,7 +30,8 @@ export class TraceEmitter {
       workspacePath: update.workspacePath ?? null,
       sessionId: update.sessionId ?? null,
       executorPid: update.executorPid ?? null,
-    });
+    } as TraceEvent;
+    const line = JSON.stringify(payload);
     const filePath = path.join(dirPath, "trace.jsonl");
 
     const prev = this.writeQueues.get(filePath) ?? Promise.resolve();

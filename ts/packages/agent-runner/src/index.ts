@@ -100,39 +100,48 @@ class RunController {
       ensembleSize: size,
       workerHost,
     });
-    input.onUpdate?.({ type: "workspace_prepared", workspacePath: workspace });
+    input.onUpdate?.({
+      type: "workspace_prepared",
+      workspacePath: workspace,
+      message: `workspace prepared at ${workspace}`,
+    });
     if (runtime.hooks.beforeRun) {
       await runHook(input.adapters, runtime.hooks.beforeRun, workspace, runtime.hooks, workerHost);
     }
 
-    const resume = await readResumeState(
-      input.adapters,
-      workspace,
-      workerHost,
-      runtime.worker.sshTimeoutMs,
-    );
-    const resumeMatches =
-      resume.status === "ok" &&
-      resumeStateMatches(input.adapters, resume.state, {
-        agentKind: runtime.agent.kind,
-        issue,
-        workspacePath: workspace,
+    // A shared workspace is reused by every issue, so its resume state cannot be tied to one run.
+    const resumeEnabled = settings.workspace.isolation !== "none";
+    let resumeId: string | null = null;
+    if (resumeEnabled) {
+      const resume = await readResumeState(
+        input.adapters,
+        workspace,
         workerHost,
-      });
-    if (resume.status === "error") {
-      input.onUpdate?.({
-        type: "resume_state_warning",
-        workspacePath: workspace,
-        message: resume.reason,
-      });
-    } else if (resume.status === "ok" && !resumeMatches) {
-      input.onUpdate?.({
-        type: "resume_state_warning",
-        workspacePath: workspace,
-        message: "resume_state_identity_mismatch",
-      });
+        runtime.worker.sshTimeoutMs,
+      );
+      const resumeMatches =
+        resume.status === "ok" &&
+        resumeStateMatches(input.adapters, resume.state, {
+          agentKind: runtime.agent.kind,
+          issue,
+          workspacePath: workspace,
+          workerHost,
+        });
+      if (resume.status === "error") {
+        input.onUpdate?.({
+          type: "resume_state_warning",
+          workspacePath: workspace,
+          message: resume.reason,
+        });
+      } else if (resume.status === "ok" && !resumeMatches) {
+        input.onUpdate?.({
+          type: "resume_state_warning",
+          workspacePath: workspace,
+          message: "resume_state_identity_mismatch",
+        });
+      }
+      resumeId = resumeMatches ? resume.state.resumeId : null;
     }
-    const resumeId = resumeMatches ? resume.state.resumeId : null;
 
     const executor = await executorFor(input.adapters, runtime);
     const updates: AgentUpdate[] = [];
@@ -168,12 +177,17 @@ class RunController {
           input.abortSignal,
         );
         turnCount += 1;
-        await persistResumeState(input.adapters, session, runtime, issue, workspace, workerHost);
+        if (resumeEnabled) {
+          await persistResumeState(input.adapters, session, runtime, issue, workspace, workerHost);
+        }
 
         if (
           turnCount > 1 &&
           runtime.agents[runtime.agent.kind]?.executor === "acp" &&
-          !turnUpdates.some((u) => u.type === "tool_use_requested")
+          !turnUpdates.some(
+            (u) =>
+              u.type === "session_notification" && u.message.update?.sessionUpdate === "tool_call",
+          )
         ) {
           break;
         }
@@ -207,7 +221,9 @@ class RunController {
       }
     }
 
-    await persistResumeState(input.adapters, session, runtime, issue, workspace, workerHost);
+    if (resumeEnabled) {
+      await persistResumeState(input.adapters, session, runtime, issue, workspace, workerHost);
+    }
 
     return {
       workspace,

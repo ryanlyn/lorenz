@@ -27,9 +27,6 @@
     },
     {
       "path": "../policies"
-    },
-    {
-      "path": "../protocol"
     }
   ]
 }

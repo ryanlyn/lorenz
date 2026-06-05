@@ -32,7 +32,9 @@ test("config resolves env-backed Linear token and assignee", () => {
   assert.equal(settings.agent.kind, "codex");
   assert.equal(settings.agent.maxTurns, 20);
   assert.equal(settings.agent.ensembleSize, 1);
-  assert.equal(settings.agents.codex?.executor, "appserver");
+  assert.equal(settings.agents.codex?.executor, "acp");
+  const codexAgent = settings.agents.codex as any;
+  assert.equal(codexAgent.bridgeCommand, "codex-acp");
   assert.equal(settings.agents.claude?.executor, "acp");
 });
 
@@ -60,6 +62,19 @@ test("config parses slack bot_user_id and resolves SLACK_BOT_USER_ID fallback", 
     { SLACK_BOT_TOKEN: "xoxb-test" },
   );
   assert.equal(unset.tracker.botUserId, undefined);
+});
+
+test("partial codex agent override preserves bridgeCommand codex-acp", () => {
+  const settings = parseConfig({
+    agents: { codex: { stall_timeout_ms: 60000 } },
+  });
+
+  const codexAgent = settings.agents.codex as any;
+  assert.equal(codexAgent.executor, "acp");
+  assert.equal(codexAgent.bridgeCommand, "codex-acp");
+  assert.equal(codexAgent.usageAccounting, "per-turn");
+  assert.equal(codexAgent.stallTimeoutMs, 60000);
+  assert.equal(codexAgent.providerConfig, undefined);
 });
 
 test("config resolves op:// references via 1Password CLI", async () => {
@@ -125,7 +140,7 @@ test("config defaults and validation match Elixir parity", () => {
   const settings = parseConfig({}, {});
 
   assert.equal(settings.tracker.kind, undefined);
-  assert.equal(settings.claude.model, "claude-opus-4-6[1m]");
+  assert.deepEqual(settings.claude.providerConfig, { permissions: { defaultMode: "dontAsk" } });
   assert.equal(settings.observability.renderIntervalMs, 16);
   assert.throws(() => validateDispatchConfig(settings), /tracker.kind is required/);
 });
@@ -142,6 +157,72 @@ test("workspace root honors SYMPHONY_WORKSPACE_ROOT and expands local tilde path
 
   assert.equal(settings.workspace.root, path.join(os.homedir(), "override"));
   assert.equal(settings.workspace.rootExpression, "~/override");
+});
+
+test("workspace defaults to per-agent isolation", () => {
+  assert.equal(parseConfig({}).workspace.isolation, "per-agent");
+});
+
+test('workspace.isolation = "none" runs every agent in the configured root', () => {
+  const settings = parseConfig(
+    { workspace: { root: "~/agents", isolation: "none" } },
+    { HOME: os.homedir() },
+  );
+  assert.equal(settings.workspace.isolation, "none");
+  assert.equal(settings.workspace.root, path.join(os.homedir(), "agents"));
+  assert.equal(settings.workspace.rootExpression, "~/agents");
+});
+
+test("workspace.root accepts an explicit per-agent isolation override", () => {
+  const settings = parseConfig({ workspace: { root: "/srv/agents", isolation: "per-agent" } });
+  assert.equal(settings.workspace.isolation, "per-agent");
+  assert.equal(settings.workspace.root, "/srv/agents");
+});
+
+test("workspace.isolation rejects unknown values", () => {
+  assert.throws(() => parseConfig({ workspace: { isolation: "per-issue" } }), /isolation/);
+});
+
+test('workspace.isolation = "none" rejects every lifecycle hook', () => {
+  for (const hook of ["after_create", "before_run", "after_run", "before_remove"]) {
+    assert.throws(
+      () =>
+        parseConfig({
+          workspace: { root: "/srv/agents", isolation: "none" },
+          hooks: { [hook]: "echo hi" },
+        }),
+      new RegExp(`workspace.isolation = "none" does not support hooks; remove ${hook}`),
+    );
+  }
+});
+
+test('workspace.isolation = "none" error lists all configured hooks', () => {
+  assert.throws(
+    () =>
+      parseConfig({
+        workspace: { root: "/srv/agents", isolation: "none" },
+        hooks: { before_run: "a", after_run: "b" },
+      }),
+    /remove before_run, after_run/,
+  );
+});
+
+test('workspace.isolation = "none" allows a hooks block with only a timeout', () => {
+  const settings = parseConfig({
+    workspace: { root: "/srv/agents", isolation: "none" },
+    hooks: { timeout_ms: 1_000 },
+  });
+  assert.equal(settings.workspace.isolation, "none");
+  assert.equal(settings.hooks.timeoutMs, 1_000);
+});
+
+test("per-agent workspaces still accept hooks", () => {
+  const settings = parseConfig({
+    workspace: { root: "/srv/agents" },
+    hooks: { after_create: "echo hi" },
+  });
+  assert.equal(settings.workspace.isolation, "per-agent");
+  assert.equal(settings.hooks.afterCreate, "echo hi");
 });
 
 test("workspace root resolves only whole-string env references", () => {
@@ -242,45 +323,100 @@ test("config validates literal-only backend, approval, and sandbox names", () =>
   );
 });
 
-test("agents map hoists legacy backends and can override known runtime settings", () => {
+test("agents map overrides known runtime settings via ACP records", () => {
   const settings = parseConfig({
     agent: { kind: "codex" },
-    codex: { command: "legacy-codex", read_timeout_ms: 123 },
-    claude: { command: "legacy-claude", model: "legacy-model", permission_mode: "acceptEdits" },
+    codex: { turn_timeout_ms: 60_000 },
+    claude: {
+      command: "legacy-claude",
+      provider_config: { permissions: { defaultMode: "acceptEdits" } },
+    },
     agents: {
       codex: {
-        executor: "appserver",
-        command: "codex-from-agent-map",
-        read_timeout_ms: 456,
+        bridge_command: "codex-custom",
+        turn_timeout_ms: 120_000,
       },
       claude: {
-        executor: "acp",
         bridge_command: "claude-agent-acp",
-        bridge_args: ["--permission-mode", "acceptEdits"],
-        model: "opus-agent",
+        provider_config: { permissions: { defaultMode: "acceptEdits" } },
       },
       pi: {
-        executor: "acp",
         bridge_command: "pi-acp",
-        bridge_args: ["--safe-mode"],
+        provider_config: { safe_mode: true },
+        usage_accounting: "cumulative",
       },
     },
   });
 
-  assert.equal(settings.codex.command, "codex-from-agent-map");
-  assert.equal(settings.codex.readTimeoutMs, 456);
+  assert.equal(settings.agents.codex.bridgeCommand, "codex-custom");
+  assert.equal(settings.agents.codex.turnTimeoutMs, 120_000);
   assert.equal(settings.claude.command, "claude-agent-acp");
-  assert.equal(settings.claude.model, "opus-agent");
+  assert.deepEqual(settings.claude.providerConfig, { permissions: { defaultMode: "acceptEdits" } });
   assert.deepEqual(settings.agents.pi, {
     executor: "acp",
     bridgeCommand: "pi-acp",
-    bridgeArgs: ["--safe-mode"],
-    model: "legacy-model",
-    permissionMode: "acceptEdits",
+    providerConfig: { safe_mode: true },
+    usageAccounting: "cumulative",
     turnTimeoutMs: 3_600_000,
     stallTimeoutMs: 300_000,
     strictMcpConfig: true,
   });
+});
+
+test("custom ACP agents default to cumulative usage unless using a known per-turn bridge", () => {
+  const settings = parseConfig({
+    agents: {
+      pi: { bridge_command: "pi-acp" },
+      claude_alias: { bridge_command: "claude-agent-acp" },
+    },
+  });
+
+  assert.equal(settings.agents.pi.usageAccounting, "cumulative");
+  assert.equal(settings.agents.claude_alias.usageAccounting, "per-turn");
+});
+
+test("agents map accepts shared timeout defaults with legacy per-agent overrides", () => {
+  const settings = parseConfig({
+    agents: {
+      turn_timeout_ms: 90_000,
+      stall_timeout_ms: 0,
+      claude: {
+        turn_timeout_ms: 120_000,
+        stall_timeout_ms: 5_000,
+      },
+      pi: {
+        bridge_command: "pi-acp",
+      },
+    },
+  });
+
+  assert.equal(settings.agents.codex.turnTimeoutMs, 90_000);
+  assert.equal(settings.agents.codex.stallTimeoutMs, 0);
+  assert.equal(settings.agents.claude.turnTimeoutMs, 120_000);
+  assert.equal(settings.agents.claude.stallTimeoutMs, 5_000);
+  assert.equal(settings.claude.turnTimeoutMs, 120_000);
+  assert.equal(settings.claude.stallTimeoutMs, 5_000);
+  assert.equal(settings.agents.pi.turnTimeoutMs, 90_000);
+  assert.equal(settings.agents.pi.stallTimeoutMs, 0);
+});
+
+test("legacy top-level claude timeouts remain fallback when agents defaults are omitted", () => {
+  const settings = parseConfig({
+    claude: {
+      turn_timeout_ms: 130_000,
+      stall_timeout_ms: 7_000,
+    },
+    agents: {
+      pi: {
+        bridge_command: "pi-acp",
+      },
+    },
+  });
+
+  assert.equal(settings.agents.claude.turnTimeoutMs, 130_000);
+  assert.equal(settings.agents.claude.stallTimeoutMs, 7_000);
+  assert.equal(settings.agents.pi.turnTimeoutMs, 130_000);
+  assert.equal(settings.agents.pi.stallTimeoutMs, 7_000);
 });
 
 test("dispatch validation requires configured agents for active and override states", () => {
@@ -313,7 +449,7 @@ test("undocumented top-level compatibility keys are ignored", () => {
 
   assert.equal(settings.tracker.kind, undefined);
   assert.equal(settings.agent.maxTurns, 20);
-  assert.equal(settings.codex.command, "codex app-server");
+  assert.equal(settings.codex.command, "codex-acp");
   assert.notEqual(settings.workspace.root, "/tmp/legacy-root");
   assert.equal(settings.hooks.beforeRun, null);
 });
@@ -444,12 +580,8 @@ test("config reports useful errors for list fields and agent executors", () => {
     /worker.ssh_hosts must be a list of strings/,
   );
   assert.throws(
-    () => parseConfig({ agents: { pi: { executor: "acp", bridge_args: "--safe-mode" } } }),
-    /agents.pi.bridge_args must be a list of strings/,
-  );
-  assert.throws(
     () => parseConfig({ agents: { pi: { executor: "foo" } } }),
-    /unsupported agents.pi.executor: foo/,
+    /unsupported agents\.pi\.executor/,
   );
 });
 
@@ -458,7 +590,7 @@ test("config ignores custom logging.log_file and uses default path", () => {
     logging: { log_file: "tmp/custom/symphony.log" },
   });
 
-  assert.equal(settings.logging.logFile, "./log/symphony.log");
+  assert.equal(settings.logging.logFile, path.join(os.homedir(), ".symphony/log/symphony.log"));
 });
 
 test("status overrides reject legacy per-state map and unknown sections", () => {

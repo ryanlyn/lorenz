@@ -14,6 +14,7 @@ test("camelToSnake — error labels use snake_case field names for numeric field
     { section: "worker", snake: "max_concurrent_agents_per_host" },
     { section: "observability", snake: "render_interval_ms" },
     { section: "agent", snake: "max_retry_backoff_ms" },
+    { section: "agents", snake: "turn_timeout_ms" },
     { section: "codex", snake: "turn_timeout_ms" },
   ];
 

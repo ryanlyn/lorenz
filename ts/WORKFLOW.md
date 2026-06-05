@@ -27,17 +27,14 @@ hooks:
   after_create: |
     git clone --depth 1 https://github.com/ryanlyn/symphony .
     if command -v mise >/dev/null 2>&1; then
-      cd elixir && mise trust && mise exec -- mix deps.get
+      mise trust
+      cd ts && mise trust && mise exec -- pnpm install --frozen-lockfile
     fi
-  before_remove: |
-    cd elixir && mise exec -- mix workspace.before_remove
 agent:
   kind: codex
   max_concurrent_agents: 10
   max_turns: 20
 codex:
-  command: >
-    codex --config shell_environment_policy.inherit=all --config model_reasoning_effort=high --model gpt-5.4 app-server
   approval_policy: never
   thread_sandbox: workspace-write
   turn_sandbox_policy:
@@ -45,13 +42,23 @@ codex:
     writableRoots:
       - /Users/ryan/dev/symphony-workspaces
     networkAccess: true
-claude:
-  command: claude
-  model: claude-opus-4-6[1m]
-  permission_mode: dontAsk
+agents:
   turn_timeout_ms: 3600000
   stall_timeout_ms: 300000
+  codex:
+    bridge_command: codex-acp
+    provider_config:
+      shell_environment_policy:
+        inherit: all
+      model_reasoning_effort: high
+      model: gpt-5.4
+claude:
+  command: claude
   strict_mcp_config: true
+  provider_config:
+    model: claude-opus-4-6
+    permissions:
+      defaultMode: dontAsk
 ---
 
 You are working on a Linear ticket `{{ issue.identifier }}`

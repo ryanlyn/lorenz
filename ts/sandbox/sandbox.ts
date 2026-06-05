@@ -92,11 +92,10 @@ export function makeSettings(overrides: Record<string, unknown> = {}): Settings 
       },
       claude: {
         command: "echo claude",
-        model: "claude-opus-4-6",
-        permissionMode: "dontAsk",
         turnTimeoutMs: 60_000,
         stallTimeoutMs: 30_000,
         strictMcpConfig: true,
+        providerConfig: { permissions: { defaultMode: "dontAsk" } },
       },
       ...overrides,
     },
@@ -359,6 +358,7 @@ export function createFakeAgentRunner(config: FakeRunnerConfig = {}): RuntimeRun
     // Emit workspace_prepared
     const workspaceUpdate: AgentUpdate = {
       type: "workspace_prepared",
+      message: `workspace prepared at ${workspace}`,
       workspacePath: workspace,
     };
     onUpdate?.(workspaceUpdate);
@@ -367,6 +367,7 @@ export function createFakeAgentRunner(config: FakeRunnerConfig = {}): RuntimeRun
     // Emit session_started
     const sessionUpdate: AgentUpdate = {
       type: "session_started",
+      message: `session started (fake-session-${issue.id})`,
       sessionId: `fake-session-${issue.id}`,
     };
     onUpdate?.(sessionUpdate);

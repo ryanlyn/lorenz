@@ -2,11 +2,13 @@
  * Trace routes for the unified dashboard.
  *
  * Exposes ticket/event/stats data from TraceWatcher via REST endpoints.
+ * Issue metadata (title, url) comes from a local SQLite store rather than trace files.
  */
 
 import { Hono } from "hono";
 import { TraceWatcher, computeStats } from "@symphony/traceviz-server";
-import type { WatcherCallback } from "@symphony/traceviz-server";
+
+import type { IssueStore } from "./issue-store.js";
 
 export interface TraceRoutesResult {
   app: Hono;
@@ -18,22 +20,55 @@ export interface TraceRoutesResult {
  *
  * The caller can wire the watcher's callback to WebSocket broadcast externally.
  */
-export function createTraceRoutes(traceDir: string): TraceRoutesResult {
+export function createTraceRoutes(traceDir: string, issueStore: IssueStore): TraceRoutesResult {
   const watcher = new TraceWatcher(traceDir);
   const app = new Hono();
 
+  app.get("/api/v1/issues/recent", (c) => {
+    const limit = Math.min(
+      100,
+      Math.max(1, Number(new URL(c.req.url).searchParams.get("limit")) || 5),
+    );
+    const issues = issueStore.getRecent(limit);
+    return c.json({ issues });
+  });
+
+  app.get("/api/v1/issues/search", (c) => {
+    const params = new URL(c.req.url).searchParams;
+    const q = params.get("q") ?? "";
+    const limit = Math.min(100, Math.max(1, Number(params.get("limit")) || 20));
+    const issues = issueStore.search(q, limit);
+    return c.json({ issues });
+  });
+
+  app.get("/api/v1/tickets/:id/exists", (c) => {
+    const issueId = decodeURIComponent(c.req.param("id"));
+    const exists = watcher.hasTicket(issueId);
+    return c.json({ exists });
+  });
+
   app.get("/api/v1/tickets", (c) => {
-    return c.json({ tickets: watcher.getTickets() });
+    const tickets = watcher.getTickets();
+    const issueIds = tickets.map((t) => t.issueId);
+    const records = issueStore.getMany(issueIds);
+    const enriched = tickets.map((t) => {
+      const record = records.get(t.issueId);
+      return {
+        ...t,
+        ...(record && { title: record.title, url: record.url }),
+      };
+    });
+    return c.json({ tickets: enriched });
   });
 
   app.get("/api/v1/tickets/:id/events", (c) => {
     const issueId = decodeURIComponent(c.req.param("id"));
     const events = watcher.getEventsForTicket(issueId);
-    const tickets = watcher.getTickets();
-    const ticket = tickets.find((t) => t.issueId === issueId);
+    const ticketInfo = watcher.getTicketInfo(issueId);
+    const record = issueStore.get(issueId);
     return c.json({
       issueId,
-      identifier: ticket?.identifier ?? issueId,
+      identifier: record?.issueIdentifier ?? ticketInfo?.identifier ?? issueId,
       events,
     });
   });
@@ -45,12 +80,4 @@ export function createTraceRoutes(traceDir: string): TraceRoutesResult {
   });
 
   return { app, watcher };
-}
-
-/**
- * Start the watcher with a given callback. Returns a stop function.
- */
-export function startTraceWatcher(watcher: TraceWatcher, callback: WatcherCallback): () => void {
-  watcher.start(callback);
-  return () => watcher.stop();
 }

@@ -406,6 +406,7 @@ test("runtime reconciles stalled runs from the orchestrator poll loop", async ()
   const root = await tempDir("symphony-ts-runtime-stall-resume");
   const workflow = workflowFixture(root);
   workflow.settings.codex.stallTimeoutMs = 50;
+  workflow.settings.agents.codex.stallTimeoutMs = 50;
   const workspace = await createWorkspaceForIssue(workflow.settings, issue);
   const deletedResumeStates: string[] = [];
   const orchestrator = new Orchestrator(workflow.settings);
@@ -422,7 +423,11 @@ test("runtime reconciles stalled runs from the orchestrator poll loop", async ()
         deletedResumeStates.push(workspacePath);
       },
       runner: async ({ abortSignal, onUpdate }) => {
-        onUpdate?.({ type: "workspace_prepared", workspacePath: workspace });
+        onUpdate?.({
+          type: "workspace_prepared",
+          message: `workspace prepared at ${workspace}`,
+          workspacePath: workspace,
+        });
         await new Promise<void>((_resolve, reject) => {
           abortSignal?.addEventListener(
             "abort",
@@ -459,6 +464,78 @@ test("runtime reconciles stalled runs from the orchestrator poll loop", async ()
   }
 });
 
+test("runtime stall reconciliation uses agents-level stall timeout defaults", async () => {
+  const issue = issueFixture("issue-agents-stall", "MT-AGENTS-STALL");
+  const root = await tempDir("symphony-ts-runtime-agents-stall");
+  const settings = parseConfig({
+    tracker: {
+      kind: "linear",
+      api_key: "linear-token",
+      project_slug: "mono",
+      active_states: ["Todo", "In Progress"],
+      terminal_states: ["Done"],
+    },
+    polling: { interval_ms: 5 },
+    workspace: { root },
+    agents: { stall_timeout_ms: 50 },
+  });
+  assert.equal(settings.codex.stallTimeoutMs, 300_000);
+  assert.equal(settings.agents.codex.stallTimeoutMs, 50);
+  const workflow: WorkflowDefinition = {
+    path: "/tmp/WORKFLOW.md",
+    config: {},
+    promptTemplate: "Issue {{ issue.identifier }}",
+    settings,
+  };
+  const workspace = await createWorkspaceForIssue(workflow.settings, issue);
+  const orchestrator = new Orchestrator(workflow.settings);
+  let aborted = false;
+  const runtime = new SymphonyRuntime(
+    runtimeOptions({
+      workflow,
+      orchestrator,
+      client: {
+        fetchCandidateIssues: async () => [issue],
+        fetchIssuesByIds: async () => [issue],
+      },
+      runner: async ({ abortSignal, onUpdate }) => {
+        onUpdate?.({
+          type: "workspace_prepared",
+          message: `workspace prepared at ${workspace}`,
+          workspacePath: workspace,
+        });
+        await new Promise<void>((_resolve, reject) => {
+          abortSignal?.addEventListener(
+            "abort",
+            () => {
+              aborted = true;
+              reject(new Error("aborted by agents-level stall timeout"));
+            },
+            { once: true },
+          );
+        });
+        throw new Error("unreachable");
+      },
+    }),
+  );
+
+  try {
+    await runtime.pollOnce();
+    const running = orchestrator.snapshot().running[0];
+    assert.ok(running);
+    running.lastAgentTimestamp = new Date(Date.now() - 1_000);
+
+    await runtime.pollOnce({ dryRun: true });
+    await waitFor(() => aborted, 1_000);
+
+    const snapshot = runtime.snapshot();
+    assert.equal(snapshot.running.length, 0);
+    assert.equal(snapshot.runHistory[0]?.outcome, "stalled");
+  } finally {
+    runtime.stop();
+  }
+});
+
 // NOTE: This test modifies process.env.PATH to inject a fake ssh binary.
 // It restores PATH in the finally block but is NOT safe for parallel execution
 // with other tests that depend on PATH or invoke ssh. The test suite runs
@@ -469,6 +546,7 @@ test("runtime does not stall a stale ensemble slot snapshot after its runner com
   const workflow = workflowFixture(root);
   workflow.settings.agent.ensembleSize = 2;
   workflow.settings.codex.stallTimeoutMs = 50;
+  workflow.settings.agents.codex.stallTimeoutMs = 50;
   workflow.settings.worker.sshTimeoutMs = 2_000;
   const orchestrator = new Orchestrator(workflow.settings);
   const controls = new Map<
@@ -489,7 +567,11 @@ test("runtime does not stall a stale ensemble slot snapshot after its runner com
       runner: async ({ abortSignal, onUpdate, slotIndex }) => {
         const slot = slotIndex ?? 0;
         const workspace = path.join(root, `workspace-${slot}`);
-        onUpdate?.({ type: "workspace_prepared", workspacePath: workspace });
+        onUpdate?.({
+          type: "workspace_prepared",
+          message: `workspace prepared at ${workspace}`,
+          workspacePath: workspace,
+        });
         return await new Promise<RunResult>((resolve, reject) => {
           controls.set(slot, { resolve, reject });
           abortSignal?.addEventListener("abort", () => reject(new Error(`aborted slot ${slot}`)), {
@@ -567,6 +649,7 @@ test("runtime does not record late success after stall reconciliation wins", asy
   const issue = issueFixture("issue-late-success", "MT-LATE-SUCCESS");
   const workflow = workflowFixture();
   workflow.settings.codex.stallTimeoutMs = 50;
+  workflow.settings.agents.codex.stallTimeoutMs = 50;
   const orchestrator = new Orchestrator(workflow.settings);
   let aborted = false;
   const runControl: { resolve?: (value: any) => void } = {};
@@ -626,6 +709,7 @@ test("runtime keeps a retry handle active when a stalled generation finishes lat
   const workflow = workflowFixture(root);
   workflow.settings.agent.maxRetryBackoffMs = 0;
   workflow.settings.codex.stallTimeoutMs = 50;
+  workflow.settings.agents.codex.stallTimeoutMs = 50;
   const orchestrator = new Orchestrator(workflow.settings);
   let attempts = 0;
   const abortedAttempts = new Set<number>();
@@ -643,6 +727,7 @@ test("runtime keeps a retry handle active when a stalled generation finishes lat
         const attempt = attempts;
         onUpdate?.({
           type: "workspace_prepared",
+          message: `workspace prepared at ${path.join(root, `workspace-${attempt}`)}`,
           workspacePath: path.join(root, `workspace-${attempt}`),
         });
         abortSignal?.addEventListener("abort", () => {
@@ -750,6 +835,53 @@ test("runtime keeps polling after a candidate fetch throws in the recurring loop
   } finally {
     runtime.stop();
   }
+});
+
+test("runtime stop does not record an in-flight run as a failure", async () => {
+  const issue = issueFixture("issue-stop", "MT-STOP");
+  const orchestrator = new Orchestrator(workflowFixture().settings);
+  let aborted = false;
+  const runtime = new SymphonyRuntime(
+    runtimeOptions({
+      workflow: workflowFixture(),
+      orchestrator,
+      client: {
+        fetchCandidateIssues: async () => [issue],
+        fetchIssuesByIds: async () => [issue],
+      },
+      // Mirror the real runner: a stop()-triggered abort rejects the in-flight turn.
+      runner: async ({ abortSignal }) =>
+        await new Promise<RunResult>((_resolve, reject) => {
+          abortSignal?.addEventListener(
+            "abort",
+            () => {
+              aborted = true;
+              reject(new Error("agent_run_aborted"));
+            },
+            { once: true },
+          );
+        }),
+    }),
+  );
+
+  await runtime.pollOnce();
+  await waitFor(() => orchestrator.snapshot().running.length === 1, 1_000);
+
+  // Ctrl+C path: stop() aborts the in-flight run without releasing its slot.
+  runtime.stop();
+  await waitFor(() => aborted, 1_000);
+  // Let the runner's rejection propagate through runClaim's catch.
+  await new Promise<void>((resolve) => setImmediate(resolve));
+
+  const snapshot = runtime.snapshot();
+  assert.equal(
+    snapshot.runHistory.some((entry) => entry.outcome === "failed"),
+    false,
+  );
+  assert.equal(
+    snapshot.recentEvents.some((event) => event.type === "run_failed"),
+    false,
+  );
 });
 
 test("runtime appends operational events to the configured log file", async () => {
@@ -960,7 +1092,11 @@ test("runtime invalidates resume state before scheduling failure retry", async (
         deletedResumeStates.push(workspacePath);
       },
       runner: async ({ onUpdate }) => {
-        onUpdate?.({ type: "workspace_prepared", workspacePath: workspace });
+        onUpdate?.({
+          type: "workspace_prepared",
+          message: `workspace prepared at ${workspace}`,
+          workspacePath: workspace,
+        });
         throw new Error("agent exited: retry me");
       },
     }),

@@ -25,7 +25,7 @@ import { shellEscape, startSshProcess } from "@symphony/ssh";
 import { validateWorkspaceCwd } from "@symphony/workspace";
 import { execa } from "execa";
 import type {
-  AcpAgentConfig,
+  AgentConfig,
   AgentKind,
   AgentExecutor,
   AgentSession,
@@ -35,24 +35,24 @@ import type {
   Settings,
   UsageTotals,
 } from "@symphony/domain";
-import type { SessionUpdateKind } from "@symphony/protocol";
 
-interface AcpSession extends AgentSession {
+interface Session extends AgentSession {
   connection: ClientSideConnection;
   process: ChildProcessWithoutNullStreams;
   settings: Settings;
   workspace: string;
-  agentConfig: AcpAgentConfig;
+  agentConfig: AgentConfig;
   init: InitializeResponse;
   mcpEndpoint: AgentMcpEndpointLease;
   workerHost?: string | null | undefined;
   onUpdate?: ((update: AgentUpdate) => void) | undefined;
   loadingReplay: boolean;
   replayedUpdateCount: number;
+  usageTotals: UsageTotals;
   pendingTurn?: { reject: (error: Error) => void } | undefined;
 }
 
-export class AcpExecutor implements AgentExecutor {
+export class Executor implements AgentExecutor {
   readonly kind: AgentKind;
 
   constructor(kind = "acp") {
@@ -66,19 +66,20 @@ export class AcpExecutor implements AgentExecutor {
     resumeId?: string | null;
     workerHost?: string | null;
     onUpdate?: (update: AgentUpdate) => void;
-  }): Promise<AcpSession> {
+  }): Promise<Session> {
     const workspace = await validateWorkspaceCwd(
       input.settings,
       input.workspace,
       input.workerHost ?? null,
     );
     const agentKind = input.settings.agent.kind;
-    const agentConfig = acpAgentConfig(input.settings, agentKind);
+    const agentConfig = resolveAgentConfig(input.settings, agentKind);
     let mcpEndpoint: AgentMcpEndpointLease | null = null;
     let child: ChildProcessWithoutNullStreams | null = null;
-    let session: AcpSession | null = null;
+    let session: Session | null = null;
     try {
       mcpEndpoint = await acquireAgentMcpEndpoint(input.settings, input.workerHost ?? null);
+      await writeProviderConfig(agentConfig, agentKind, workspace, input.workerHost ?? null);
       child = startBridgeProcess(agentConfig, workspace, input.workerHost ?? null);
       const client = acpClient({
         workspace,
@@ -98,7 +99,7 @@ export class AcpExecutor implements AgentExecutor {
         "acp initialize timed out",
       );
 
-      const nextSession: AcpSession = {
+      const nextSession: Session = {
         agentKind,
         connection,
         process: child,
@@ -114,6 +115,7 @@ export class AcpExecutor implements AgentExecutor {
         onUpdate: input.onUpdate,
         loadingReplay: false,
         replayedUpdateCount: 0,
+        usageTotals: emptyUsageTotals(),
         stop: async () => {
           await this.stopSession(nextSession);
         },
@@ -121,13 +123,14 @@ export class AcpExecutor implements AgentExecutor {
       session = nextSession;
       wireProcessEvents(session);
 
-      const sessionId = await openAcpSession(session, input.resumeId ?? null, [
+      const sessionId = await openSession(session, input.resumeId ?? null, [
         mcpEndpoint.acpServer(),
       ]);
       session.sessionId = sessionId;
       session.resumeId = sessionId;
       this.emit(session, {
         type: "session_started",
+        message: `session started (${sessionId})`,
         sessionId,
         resumeId: sessionId,
         executorPid,
@@ -144,7 +147,7 @@ export class AcpExecutor implements AgentExecutor {
     }
   }
 
-  async runTurn(session: AcpSession, prompt: string, _issue?: Issue): Promise<AgentUpdate[]> {
+  async runTurn(session: Session, prompt: string, _issue?: Issue): Promise<AgentUpdate[]> {
     if (session.pendingTurn) throw new Error("ACP turn already running");
     const previous = session.onUpdate;
     const updates: AgentUpdate[] = [];
@@ -152,7 +155,7 @@ export class AcpExecutor implements AgentExecutor {
 
     return new Promise<AgentUpdate[]>((resolve, reject) => {
       const timer = setTimeout(() => {
-        void session.connection.cancel({ sessionId: requireAcpSessionId(session) }).catch((err) => {
+        void session.connection.cancel({ sessionId: requireSessionId(session) }).catch((err) => {
           process.stderr.write(`session cancel failed: ${err}\n`);
         });
         finishReject(new Error("acp turn timed out"));
@@ -184,7 +187,7 @@ export class AcpExecutor implements AgentExecutor {
         previous?.(update);
       };
 
-      const sessionId = requireAcpSessionId(session);
+      const sessionId = requireSessionId(session);
       this.emit(session, {
         type: "turn_started",
         sessionId,
@@ -199,29 +202,25 @@ export class AcpExecutor implements AgentExecutor {
           prompt: [{ type: "text", text: prompt }],
         })
         .then((response) => {
-          const usage = extractAcpUsage(response.usage ?? undefined);
-          if (usage) {
-            this.emit(session, {
-              type: "usage",
-              sessionId,
-              resumeId: session.resumeId,
-              usage,
-              message: { response },
-              timestamp: new Date(),
-            });
-          }
+          const usage = normalizeSessionUsage(session, extractUsage(response.usage ?? undefined));
           const action = actionForStopReason(response.stopReason);
+          const base = {
+            sessionUpdate: acpProtocolUpdate(session, "turn_completed", { response }),
+            sessionId: session.sessionId,
+            resumeId: session.resumeId,
+            executorPid: session.executorPid,
+            message: { response },
+            timestamp: new Date(),
+            ...(usage && { usage, usageKind: "cumulative" as const }),
+          };
           if (action === "continue") {
-            const completion = this.update(session, "turn_completed", { response }, usage);
-            this.emit(session, completion);
+            this.emit(session, { ...base, type: "turn_completed" });
             finishResolve([...updates]);
           } else if (action === "cancel") {
-            const cancellation = this.update(session, "turn_cancelled", { response }, usage);
-            this.emit(session, cancellation);
+            this.emit(session, { ...base, type: "turn_cancelled" });
             finishReject(new Error("acp_turn_cancelled"));
           } else {
-            const failure = this.update(session, "turn_failed", { response }, usage);
-            this.emit(session, failure);
+            this.emit(session, { ...base, type: "turn_failed" });
             finishReject(new Error(`acp_turn_failed: ${response.stopReason}`));
           }
         })
@@ -239,30 +238,11 @@ export class AcpExecutor implements AgentExecutor {
     });
   }
 
-  private update(
-    session: AcpSession,
-    type: AgentUpdateType,
-    message: unknown,
-    usage?: Partial<UsageTotals>,
-  ): AgentUpdate {
-    const update: AgentUpdate = {
-      type,
-      sessionUpdate: acpProtocolUpdate(session, type, message, usage),
-      sessionId: session.sessionId,
-      resumeId: session.resumeId,
-      executorPid: session.executorPid,
-      message,
-      timestamp: new Date(),
-    };
-    if (usage) update.usage = usage;
-    return update;
-  }
-
-  private emit(session: AcpSession | null, update: AgentUpdate): void {
+  private emit(session: Session | null, update: AgentUpdate): void {
     session?.onUpdate?.(update);
   }
 
-  private async stopSession(session: AcpSession): Promise<void> {
+  private async stopSession(session: Session): Promise<void> {
     const sessionId = session.sessionId;
     session.pendingTurn?.reject(new Error("acp session stopped"));
     try {
@@ -282,34 +262,26 @@ export class AcpExecutor implements AgentExecutor {
   }
 }
 
-function handleAcpSessionUpdate(session: AcpSession, notification: SessionNotification): void {
+function handleSessionUpdate(session: Session, notification: SessionNotification): void {
   session.sessionId = notification.sessionId;
   session.resumeId = notification.sessionId;
   if (session.loadingReplay) {
     session.replayedUpdateCount += 1;
     return;
   }
-  const update: AgentUpdate = {
-    type: eventTypeForAcpUpdate(notification.update),
-    sessionUpdate: acpProtocolUpdate(
-      session,
-      eventTypeForAcpUpdate(notification.update),
-      notification,
-      extractUsageUpdate(notification.update),
-    ),
+  session.onUpdate?.({
+    type: "session_notification",
+    sessionUpdate: acpProtocolUpdate(session, "session_notification", notification),
     sessionId: session.sessionId,
     resumeId: session.resumeId,
     executorPid: session.executorPid,
     message: notification,
-    usage: extractUsageUpdate(notification.update),
     timestamp: new Date(),
-  };
-  if (!update.usage) delete update.usage;
-  session.onUpdate?.(update);
+  });
 }
 
-function handleAcpPermissionRequest(
-  session: AcpSession | null,
+function handlePermissionRequest(
+  session: Session | null,
   request: RequestPermissionRequest,
   emit: (update: AgentUpdate) => void,
 ): RequestPermissionResponse {
@@ -317,25 +289,35 @@ function handleAcpPermissionRequest(
     request.options.find((option) => option.kind.startsWith("allow")) ??
     request.options.find((option) => option.optionId.toLowerCase().includes("allow")) ??
     null;
+  if (selected) {
+    emit({
+      type: "approval_auto_approved",
+      sessionId: request.sessionId,
+      resumeId: session?.resumeId,
+      executorPid: session?.executorPid,
+      message: { request, selected },
+      timestamp: new Date(),
+    });
+    return { outcome: { outcome: "selected", optionId: selected.optionId } };
+  }
   emit({
-    type: selected ? "approval_auto_approved" : "approval_required",
+    type: "approval_required",
     sessionId: request.sessionId,
     resumeId: session?.resumeId,
     executorPid: session?.executorPid,
     message: { request, selected },
     timestamp: new Date(),
   });
-  if (!selected) return { outcome: { outcome: "cancelled" } };
-  return { outcome: { outcome: "selected", optionId: selected.optionId } };
+  return { outcome: { outcome: "cancelled" } };
 }
 
 function acpClient(input: {
   workspace: string;
   workerHost: string | null;
-  currentSession: () => AcpSession | null;
+  currentSession: () => Session | null;
   emit: (update: AgentUpdate) => void;
 }): Client {
-  const executor = new AcpClientAdapter(
+  const executor = new ClientAdapter(
     input.workspace,
     input.workerHost,
     input.currentSession,
@@ -344,11 +326,11 @@ function acpClient(input: {
   return executor.client();
 }
 
-class AcpClientAdapter {
+class ClientAdapter {
   constructor(
     private readonly workspace: string,
     private readonly workerHost: string | null,
-    private readonly currentSession: () => AcpSession | null,
+    private readonly currentSession: () => Session | null,
     private readonly emit: (update: AgentUpdate) => void,
   ) {}
 
@@ -357,12 +339,12 @@ class AcpClientAdapter {
       sessionUpdate: async (params: SessionNotification): Promise<void> => {
         const session = this.currentSession();
         if (!session) return Promise.resolve();
-        handleAcpSessionUpdate(session, params);
+        handleSessionUpdate(session, params);
         return Promise.resolve();
       },
       requestPermission: async (params: RequestPermissionRequest) => {
         const session = this.currentSession();
-        return Promise.resolve(handleAcpPermissionRequest(session, params, this.emit));
+        return Promise.resolve(handlePermissionRequest(session, params, this.emit));
       },
     };
     if (!this.workerHost) {
@@ -407,8 +389,8 @@ class AcpClientAdapter {
   }
 }
 
-async function openAcpSession(
-  session: AcpSession,
+async function openSession(
+  session: Session,
   resumeId: string | null,
   mcpServers: McpServer[],
 ): Promise<string> {
@@ -472,14 +454,70 @@ async function openAcpSession(
   return created.sessionId;
 }
 
+async function writeProviderConfig(
+  agentConfig: AgentConfig,
+  agentKind: string,
+  workspace: string,
+  workerHost: string | null,
+): Promise<void> {
+  if (!agentConfig.providerConfig) return;
+
+  const isClaudeBridge = agentKind === "claude";
+  const relativePath = isClaudeBridge ? ".claude/settings.local.json" : ".codex/config.toml";
+  const content = isClaudeBridge
+    ? JSON.stringify(agentConfig.providerConfig, null, 2)
+    : toToml(agentConfig.providerConfig);
+
+  const filePath = path.join(workspace, relativePath);
+  if (workerHost) {
+    const escaped = shellEscape(content);
+    const mkdirCmd = `mkdir -p ${shellEscape(path.dirname(filePath))} && printf '%s' ${escaped} > ${shellEscape(filePath)}`;
+    const proc = startSshProcess(workerHost, mkdirCmd);
+    await new Promise<void>((resolve, reject) => {
+      proc.on("close", (code) =>
+        code === 0
+          ? resolve()
+          : reject(new Error(`failed to write provider config (exit ${code})`)),
+      );
+      proc.on("error", reject);
+    });
+  } else {
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
+    await fs.writeFile(filePath, content);
+  }
+}
+
+function toToml(obj: Record<string, unknown>, prefix = ""): string {
+  const lines: string[] = [];
+  const sections: [string, Record<string, unknown>][] = [];
+  for (const [key, value] of Object.entries(obj)) {
+    if (value === null || value === undefined) continue;
+    if (typeof value === "object" && !Array.isArray(value)) {
+      sections.push([prefix ? `${prefix}.${key}` : key, value as Record<string, unknown>]);
+    } else {
+      lines.push(`${key} = ${toTomlValue(value)}`);
+    }
+  }
+  for (const [section, nested] of sections) {
+    lines.push(`\n[${section}]`);
+    lines.push(toToml(nested, section).trim());
+  }
+  return lines.join("\n") + "\n";
+}
+
+function toTomlValue(value: unknown): string {
+  if (typeof value === "string") return JSON.stringify(value);
+  if (typeof value === "boolean" || typeof value === "number") return String(value);
+  if (Array.isArray(value)) return `[${value.map(toTomlValue).join(", ")}]`;
+  return JSON.stringify(value);
+}
+
 function startBridgeProcess(
-  agentConfig: AcpAgentConfig,
+  agentConfig: AgentConfig,
   workspace: string,
   workerHost: string | null,
 ): ChildProcessWithoutNullStreams {
-  const command = `exec ${[agentConfig.bridgeCommand, ...agentConfig.bridgeArgs]
-    .map(shellEscape)
-    .join(" ")}`;
+  const command = `exec ${agentConfig.bridgeCommand}`;
   if (workerHost) {
     return startSshProcess(workerHost, `cd ${shellEscape(workspace)} && ${command}`);
   }
@@ -492,7 +530,7 @@ function startBridgeProcess(
   }) as unknown as ChildProcessWithoutNullStreams;
 }
 
-function wireProcessEvents(session: AcpSession): void {
+function wireProcessEvents(session: Session): void {
   let stderr = "";
   session.process.stderr.setEncoding("utf8");
   session.process.stderr.on("data", (chunk: string) => {
@@ -525,82 +563,87 @@ function clientCapabilities(workerHost: string | null): ClientCapabilities {
   return capabilities;
 }
 
-function eventTypeForAcpUpdate(update: SessionNotification["update"]): AgentUpdateType {
-  switch (update.sessionUpdate) {
-    case "agent_message_chunk":
-      return "assistant_message";
-    case "user_message_chunk":
-      return "user_message";
-    case "agent_thought_chunk":
-      return "agent_thought";
-    case "tool_call":
-      return "tool_use_requested";
-    case "tool_call_update":
-      if (update.status === "completed") return "tool_result";
-      if (update.status === "failed") return "tool_call_failed";
-      return "tool_call_update";
-    case "usage_update":
-      return "usage";
-    case "plan":
-      return "plan";
-    case "available_commands_update":
-    case "current_mode_update":
-    case "config_option_update":
-    case "session_info_update":
-      return "notification";
-  }
-}
-
 function acpProtocolUpdate(
-  session: AcpSession,
+  session: Session,
   type: AgentUpdateType,
   message: unknown,
-  usage?: Partial<UsageTotals>,
 ): NonNullable<AgentUpdate["sessionUpdate"]> {
-  const base = {
-    kind: acpProtocolKind(type),
+  return {
+    kind: type,
     sessionId: session.sessionId,
     agentKind: session.agentKind,
     message,
     at: new Date(),
     _meta: {
       executorPid: session.executorPid,
-      usage,
     },
   };
-  if (type === "usage" && usage) return { ...base, kind: "usage_update", usage };
-  return base;
 }
 
-function acpProtocolKind(type: AgentUpdateType): SessionUpdateKind {
-  if (type === "tool_use_requested") return "tool_call";
-  if (type === "tool_result" || type === "tool_call_failed") return "tool_result";
-  if (type === "turn_cancelled") return "turn_cancelled";
-  if (type === "turn_completed") return "turn_completed";
-  if (type === "turn_failed") return "turn_failed";
-  if (type === "turn_started") return "turn_started";
-  if (type === "session_started") return "session_started";
-  return "notification";
-}
-
-function extractUsageUpdate(
-  update: SessionNotification["update"],
-): Partial<UsageTotals> | undefined {
-  if (update.sessionUpdate !== "usage_update") return undefined;
-  if (typeof update.used !== "number" || !Number.isFinite(update.used)) return undefined;
-  return { totalTokens: update.used };
-}
-
-function extractAcpUsage(usage: Usage | undefined): Partial<UsageTotals> | undefined {
+function extractUsage(usage: Usage | undefined): Partial<UsageTotals> | undefined {
   if (!usage) return undefined;
+  const inputTokens =
+    nonNegativeFinite(usage.inputTokens) +
+    nonNegativeFinite(usage.cachedReadTokens) +
+    nonNegativeFinite(usage.cachedWriteTokens);
+  const outputTokens = nonNegativeFinite(usage.outputTokens);
+  const totalTokens = nonNegativeUsageValue(usage.totalTokens) ?? inputTokens + outputTokens;
   return {
-    inputTokens: usage.inputTokens,
-    outputTokens: usage.outputTokens,
-    totalTokens: usage.totalTokens,
+    inputTokens,
+    outputTokens,
+    totalTokens,
   };
 }
 
-function acpAgentConfig(settings: Settings, kind: AgentKind): AcpAgentConfig {
+function normalizeSessionUsage(
+  session: Session,
+  usage: Partial<UsageTotals> | undefined,
+): Partial<UsageTotals> | undefined {
+  if (!usage) return undefined;
+  if (session.agentConfig.usageAccounting === "cumulative") {
+    session.usageTotals = {
+      inputTokens: Math.max(session.usageTotals.inputTokens, usage.inputTokens ?? 0),
+      outputTokens: Math.max(session.usageTotals.outputTokens, usage.outputTokens ?? 0),
+      totalTokens: Math.max(session.usageTotals.totalTokens, usage.totalTokens ?? 0),
+      secondsRunning: session.usageTotals.secondsRunning,
+    };
+    return {
+      inputTokens: session.usageTotals.inputTokens,
+      outputTokens: session.usageTotals.outputTokens,
+      totalTokens: session.usageTotals.totalTokens,
+    };
+  }
+  session.usageTotals = {
+    inputTokens: session.usageTotals.inputTokens + (usage.inputTokens ?? 0),
+    outputTokens: session.usageTotals.outputTokens + (usage.outputTokens ?? 0),
+    totalTokens: session.usageTotals.totalTokens + (usage.totalTokens ?? 0),
+    secondsRunning: session.usageTotals.secondsRunning,
+  };
+  return {
+    inputTokens: session.usageTotals.inputTokens,
+    outputTokens: session.usageTotals.outputTokens,
+    totalTokens: session.usageTotals.totalTokens,
+  };
+}
+
+function emptyUsageTotals(): UsageTotals {
+  return {
+    inputTokens: 0,
+    outputTokens: 0,
+    totalTokens: 0,
+    secondsRunning: 0,
+  };
+}
+
+function nonNegativeFinite(value: number | null | undefined): number {
+  return nonNegativeUsageValue(value) ?? 0;
+}
+
+function nonNegativeUsageValue(value: number | null | undefined): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
+function resolveAgentConfig(settings: Settings, kind: AgentKind): AgentConfig {
   const agent = settings.agents[kind];
   if (!agent) throw new Error(`agents.${kind} is required`);
   if (agent.executor !== "acp") throw new Error(`agents.${kind}.executor must be acp`);
@@ -615,7 +658,7 @@ function supportsClose(init: InitializeResponse): boolean {
   return Boolean(init.agentCapabilities?.sessionCapabilities?.close);
 }
 
-function requireAcpSessionId(session: AcpSession): string {
+function requireSessionId(session: Session): string {
   if (!session.sessionId) throw new Error("acp session not started");
   return session.sessionId;
 }

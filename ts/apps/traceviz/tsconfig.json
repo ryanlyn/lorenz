@@ -1,0 +1,15 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": ".",
+    "outDir": "dist",
+    "tsBuildInfoFile": "dist/tsconfig.tsbuildinfo",
+    "noEmit": true
+  },
+  "include": ["*.ts"],
+  "references": [
+    {
+      "path": "../../packages/traceviz-server"
+    }
+  ]
+}
