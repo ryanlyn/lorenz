@@ -202,6 +202,7 @@ export class Executor implements AgentExecutor {
           prompt: [{ type: "text", text: prompt }],
         })
         .then((response) => {
+          if (settled) return;
           const usage = normalizeSessionUsage(session, extractUsage(response.usage ?? undefined));
           const action = actionForStopReason(response.stopReason);
           const base = {
@@ -225,6 +226,7 @@ export class Executor implements AgentExecutor {
           }
         })
         .catch((error: unknown) => {
+          if (settled) return;
           const message = error instanceof Error ? error.message : String(error);
           this.emit(session, {
             type: "turn_failed",
