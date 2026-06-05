@@ -718,6 +718,9 @@ importers:
       "@symphony/retry-scheduler":
         specifier: workspace:*
         version: link:../retry-scheduler
+      "@symphony/workflow":
+        specifier: workspace:*
+        version: link:../workflow
 
   packages/runtime-events:
     dependencies:
