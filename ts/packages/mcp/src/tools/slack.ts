@@ -106,6 +106,7 @@ export async function executeSlackTool(
         if (!target) {
           return failure(`No emoji configured for status '${status}'.`);
         }
+        const canonicalState = map[target] ?? status;
         // Trust-boundary check: the agent-supplied issueId must point at a watched channel
         // and a message that is actually a tracked bot-mention issue before we mutate it.
         const message = await ensureTrackedMessage(settings, transport, channel, ts);
@@ -136,7 +137,10 @@ export async function executeSlackTool(
             }
           }
         };
-        if (!present.includes(target)) {
+        // Slack custom emoji aliases are returned under their canonical name. Treat any managed
+        // reaction mapped to the requested state as the target so an alias such as `check_mark`
+        // -> `green-check-mark` is not re-added and then removed as stale.
+        if (!present.some((reaction) => sameState(map[reaction]!, canonicalState))) {
           try {
             await transport.addReaction(channel, ts, target);
             added = true;
@@ -146,7 +150,7 @@ export async function executeSlackTool(
             return failure((error as Error).message);
           }
         }
-        const stale = present.filter((r) => r !== target);
+        const stale = present.filter((reaction) => !sameState(map[reaction]!, canonicalState));
         for (const reaction of stale) {
           try {
             await transport.removeReaction(channel, ts, reaction);
@@ -198,7 +202,6 @@ export async function executeSlackTool(
         // caller passing "done" instead of "Done" would otherwise fail this exact-string equality
         // check on the success path even though the swap took effect, falsely reporting that a
         // correctly-applied update did not take effect.
-        const canonicalState = map[target] ?? status;
         const effective = await currentManagedReactions(transport, channel, ts, map);
         if (effective && sameState(stateFromReactions(effective, map), canonicalState)) {
           return { success: true, result: { ok: true, status: canonicalState } };

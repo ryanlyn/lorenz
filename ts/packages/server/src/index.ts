@@ -130,7 +130,7 @@ function buildObservabilityApp(
 ): BuildResult {
   const app = new Hono();
   const settings = runtimeSettings(runtime);
-  if (settings) mountClaudeMcp(app, settings);
+  if (settings) mountClaudeMcp(app, () => runtimeSettings(runtime) ?? settings);
 
   // Health endpoint
   app.get("/health", () => jsonResponse({ status: "ok" }));
@@ -231,7 +231,7 @@ function runtimeSettings(runtime: RuntimeServerSource): Settings | null {
 
 function buildClaudeMcpApp(settings: Settings): Hono {
   const app = new Hono();
-  mountClaudeMcp(app, settings);
+  mountClaudeMcp(app, () => settings);
   app.notFound((c) =>
     c.req.method === "GET"
       ? errorResponse(404, "not_found", "Route not found")
@@ -240,7 +240,7 @@ function buildClaudeMcpApp(settings: Settings): Hono {
   return app;
 }
 
-function mountClaudeMcp(app: Hono, settings: Settings): void {
+function mountClaudeMcp(app: Hono, settings: () => Settings): void {
   app.use("/claude-mcp", async (c, next) => {
     if (c.req.method !== "POST") {
       await next();
@@ -259,7 +259,7 @@ function mountClaudeMcp(app: Hono, settings: Settings): void {
     }
     await next();
   });
-  app.post("/claude-mcp", async (c) => handleClaudeMcp(settings, c));
+  app.post("/claude-mcp", async (c) => handleClaudeMcp(settings(), c));
   app.all("/claude-mcp", () => errorResponse(405, "method_not_allowed", "Method not allowed"));
 }
 

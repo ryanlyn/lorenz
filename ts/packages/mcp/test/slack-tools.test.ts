@@ -17,6 +17,24 @@ function settings() {
   );
 }
 
+function aliasedDoneSettings() {
+  return parseConfig(
+    {
+      tracker: {
+        kind: "slack",
+        channels: ["C1"],
+        bot_user_id: "U1",
+        emoji_states: {
+          white_check_mark: "Ignored",
+          check_mark: "Done",
+          "green-check-mark": "Done",
+        },
+      },
+    },
+    { SLACK_BOT_TOKEN: "xoxb" },
+  );
+}
+
 test("slack toolSpecs lists update_status, comment, read_thread, and query", () => {
   assert.deepEqual(
     toolSpecs(settings()).map((t) => t.name),
@@ -285,6 +303,57 @@ test("slack_update_status is a no-op when the target emoji is already present", 
   assert.deepEqual(calls, []);
   const msg = await transport.getMessage("C1", "1.1");
   assert.deepEqual(msg!.reactions, ["white_check_mark"]);
+});
+
+test("slack_update_status is a no-op when a target-state emoji alias is already present", async () => {
+  const transport = new InMemorySlackTransport({
+    C1: [{ ts: "1.1", text: "<@U1> do the thing", reactions: ["green-check-mark"] }],
+  });
+  const calls: Array<{ kind: string; name: string }> = [];
+  const add = transport.addReaction.bind(transport);
+  const remove = transport.removeReaction.bind(transport);
+  transport.addReaction = async (channel, ts, name) => {
+    calls.push({ kind: "add", name });
+    return add(channel, ts, name);
+  };
+  transport.removeReaction = async (channel, ts, name) => {
+    calls.push({ kind: "remove", name });
+    return remove(channel, ts, name);
+  };
+
+  const result = await executeTool(
+    "slack_update_status",
+    { issueId: "C1:1.1", status: "Done" },
+    aliasedDoneSettings(),
+    fetch,
+    { slackTransport: transport },
+  );
+
+  assert.equal(result.success, true);
+  assert.deepEqual(calls, []);
+  const msg = await transport.getMessage("C1", "1.1");
+  assert.deepEqual(msg!.reactions, ["green-check-mark"]);
+});
+
+test("slack_update_status accepts Slack canonicalizing a configured emoji alias", async () => {
+  const transport = new InMemorySlackTransport({
+    C1: [{ ts: "1.1", text: "<@U1> do the thing", reactions: ["eyes"] }],
+  });
+  const add = transport.addReaction.bind(transport);
+  transport.addReaction = async (channel, ts, name) =>
+    add(channel, ts, name === "check_mark" ? "green-check-mark" : name);
+
+  const result = await executeTool(
+    "slack_update_status",
+    { issueId: "C1:1.1", status: "Done" },
+    aliasedDoneSettings(),
+    fetch,
+    { slackTransport: transport },
+  );
+
+  assert.equal(result.success, true);
+  const msg = await transport.getMessage("C1", "1.1");
+  assert.deepEqual(msg!.reactions, ["green-check-mark"]);
 });
 
 test("slack_update_status fails when the status has no configured emoji", async () => {

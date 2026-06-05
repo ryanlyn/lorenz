@@ -327,6 +327,57 @@ test("Claude MCP endpoint authorizes bearer tokens and executes Linear tools", a
   }
 });
 
+test("observability Claude MCP endpoint uses workflow settings reloaded by the runtime", async () => {
+  const initialWorkflow = workflowFixture();
+  let currentWorkflow = initialWorkflow;
+  const runtime = new SymphonyRuntime({
+    workflow: initialWorkflow,
+    reloadWorkflow: async () => currentWorkflow,
+    client: {
+      fetchCandidateIssues: async () => [],
+      fetchIssuesByIds: async () => [],
+    },
+  });
+  const server = await startObservabilityServer(runtime, { host: "127.0.0.1", port: 0 });
+  const token = issueMcpToken();
+
+  try {
+    const initialTools = await postMcp(
+      server.url("/claude-mcp"),
+      { jsonrpc: "2.0", id: 1, method: "tools/list" },
+      200,
+      token,
+    );
+    assert.deepEqual(
+      initialTools.result.tools.map((tool: { name: string }) => tool.name),
+      ["linear_graphql"],
+    );
+
+    currentWorkflow = {
+      ...initialWorkflow,
+      settings: parseConfig(
+        { tracker: { kind: "slack", channels: ["C1"], bot_user_id: "U1" } },
+        { SLACK_BOT_TOKEN: "xoxb" },
+      ),
+    };
+    await runtime.pollOnce({ dryRun: true });
+
+    const reloadedTools = await postMcp(
+      server.url("/claude-mcp"),
+      { jsonrpc: "2.0", id: 2, method: "tools/list" },
+      200,
+      token,
+    );
+    assert.deepEqual(
+      reloadedTools.result.tools.map((tool: { name: string }) => tool.name),
+      ["slack_update_status", "slack_comment", "slack_read_thread", "slack_query"],
+    );
+  } finally {
+    revokeMcpToken(token);
+    await server.stop();
+  }
+});
+
 function workflowFixture(): WorkflowDefinition {
   const settings = parseConfig({
     tracker: {
