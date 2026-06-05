@@ -193,6 +193,37 @@ test("ACP executor times out stalled bridge turns and emits a typed failure", as
   assert.ok(traceEvents.some((event) => event.method === "cancel"));
 });
 
+test("ACP executor suppresses late terminal updates after turn timeout", async () => {
+  const root = await tempDir("symphony-ts-acp-late-timeout");
+  const fake = await writeFakeBridge(root);
+  const trace = path.join(root, "trace.jsonl");
+  const settings = acpSettings(root, fake, trace, "late-complete-after-timeout", 50);
+  const updates: AgentUpdate[] = [];
+  const executor = new Executor("claude");
+  const session = await executor.startSession({
+    workspace: root,
+    settings,
+    issue: sampleIssue,
+    onUpdate: (update) => updates.push(update),
+  });
+  try {
+    await assert.rejects(
+      () => executor.runTurn(session, "hello", sampleIssue),
+      /acp turn timed out/,
+    );
+    await waitForTraceEvent(trace, "promptResolvedAfterCancel");
+  } finally {
+    await session.stop();
+  }
+
+  const traceEvents = await readTrace(trace);
+  assert.ok(traceEvents.some((event) => event.method === "cancel"));
+  assert.equal(
+    updates.some((update) => update.type === "turn_completed" || update.type === "turn_cancelled"),
+    false,
+  );
+});
+
 test("ACP MCP endpoint leases reuse one reverse tunnel per worker host with per-session tokens", async () => {
   const root = await tempDir("symphony-ts-acp-remote-mcp");
   const trace = path.join(root, "ssh.trace");
@@ -371,6 +402,8 @@ class FakeAgent {
   constructor(connection) {
     this.connection = connection;
     this.promptCount = 0;
+    this.cancelled = false;
+    this.cancelWaiters = [];
   }
 
   async initialize(params) {
@@ -412,6 +445,21 @@ class FakeAgent {
     this.promptCount += 1;
     if (mode === "stall") {
       await new Promise(() => {});
+    }
+    if (mode === "late-complete-after-timeout") {
+      await this.waitForCancel();
+      record({ method: "promptResolvedAfterCancel", params });
+      return {
+        stopReason: "end_turn",
+        usage: {
+          inputTokens: 2,
+          cachedReadTokens: 4,
+          cachedWriteTokens: 1,
+          outputTokens: 3,
+          thoughtTokens: 9,
+          totalTokens: 10
+        }
+      };
     }
     const read = await this.connection.readTextFile({
       sessionId: params.sessionId,
@@ -486,11 +534,22 @@ class FakeAgent {
 
   async cancel(params) {
     record({ method: "cancel", params });
+    this.cancelled = true;
+    const waiters = this.cancelWaiters;
+    this.cancelWaiters = [];
+    for (const resolve of waiters) resolve();
   }
 
   async closeSession(params) {
     record({ method: "closeSession", params });
     return {};
+  }
+
+  async waitForCancel() {
+    if (this.cancelled) return;
+    await new Promise((resolve) => {
+      this.cancelWaiters.push(resolve);
+    });
   }
 }
 
@@ -550,6 +609,15 @@ async function waitForTunnelTrace(tracePath: string, count: number): Promise<voi
   await vi.waitFor(
     async () => {
       assert.equal(tunnelTraceCount(await fs.readFile(tracePath, "utf8")), count);
+    },
+    { timeout: 10_000, interval: 100 },
+  );
+}
+
+async function waitForTraceEvent(tracePath: string, method: string): Promise<void> {
+  await vi.waitFor(
+    async () => {
+      assert.ok((await readTrace(tracePath)).some((event) => event.method === method));
     },
     { timeout: 10_000, interval: 100 },
   );
