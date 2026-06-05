@@ -277,6 +277,44 @@ test("orchestrator assigns SSH worker hosts by least loaded capacity", () => {
   assert.equal(orchestrator.claim(thirdIssue)?.workerHost, "worker-a:2200");
 });
 
+test("orchestrator retries on the previous worker host while it has capacity", () => {
+  const settings = parseConfig({
+    worker: { ssh_hosts: ["worker-a", "worker-b"], max_concurrent_agents_per_host: 2 },
+    agent: { max_concurrent_agents: 4 },
+  });
+  const orchestrator = new Orchestrator(settings);
+  const runningIssue = normalizeIssue({
+    id: "running",
+    identifier: "MT-RUNNING",
+    title: "Running",
+    state: { name: "Todo", type: "unstarted" },
+  });
+  const retryIssue = normalizeIssue({
+    id: "retry-sticky-host",
+    identifier: "MT-RETRY-STICKY",
+    title: "Retry sticky host",
+    state: { name: "Todo", type: "unstarted" },
+  });
+
+  assert.equal(orchestrator.claim(runningIssue)?.workerHost, "worker-a");
+  orchestrator.state.retryAttempts.set(retryIssue.id, {
+    issueId: retryIssue.id,
+    identifier: retryIssue.identifier,
+    attempt: 1,
+    monotonicDeadlineMs: 0,
+    dueAtIso: new Date(Date.now() - 1).toISOString(),
+    slotIndex: 0,
+    workerHost: "worker-a",
+    workspacePath: "/work/worker-a/MT-RETRY-STICKY",
+    error: "agent exited",
+  });
+
+  const retryClaim = orchestrator.claim(retryIssue);
+
+  assert.equal(retryClaim?.workerHost, "worker-a");
+  assert.equal(retryClaim?.retryAttempt, 1);
+});
+
 test("config reload that adds worker pools leaves running workspaces in place", () => {
   // Mirrors runtime.reloadWorkflowIfConfigured, which swaps orchestrator.settings in place.
   const orchestrator = new Orchestrator(
