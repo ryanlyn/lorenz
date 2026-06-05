@@ -2,6 +2,19 @@ import type { Settings } from "@symphony/domain";
 
 import type { ToolResult, ToolSpec } from "../tools.js";
 
+const LINEAR_MAX_RETRIES = 4;
+const MAX_ERROR_BODY_LOG_BYTES = 1000;
+
+interface LinearToolLogger {
+  warn(message: string): void;
+  error(message: string): void;
+}
+
+const defaultLinearToolLogger: LinearToolLogger = {
+  warn: (message) => console.warn(message),
+  error: (message) => console.error(message),
+};
+
 export function linearToolSpecs(): ToolSpec[] {
   return [
     {
@@ -9,9 +22,17 @@ export function linearToolSpecs(): ToolSpec[] {
       description: "Run a Linear GraphQL operation using Symphony tracker credentials.",
       inputSchema: {
         type: "object",
+        additionalProperties: false,
         properties: {
-          query: { type: "string" },
-          variables: { type: "object" },
+          query: {
+            type: "string",
+            description: "GraphQL query or mutation document to execute against Linear.",
+          },
+          variables: {
+            type: ["object", "null"],
+            description: "Optional GraphQL variables object.",
+            additionalProperties: true,
+          },
         },
         required: ["query"],
       },
@@ -45,33 +66,41 @@ export async function executeLinearTool(
   }
 
   try {
+    const logger = defaultLinearToolLogger;
     const response = await fetchWithRateLimitRetry(
       fetchImpl,
       settings,
       normalizedInput.query,
       normalizedInput.variables ?? {},
+      logger,
     );
-    let body: unknown;
-    try {
-      body = await response.json();
-    } catch (error) {
-      if (!response.ok)
+    const bodyResult = await readResponseJson(response);
+    if (!bodyResult.ok) {
+      if (!response.ok) {
+        logStatusError(logger, normalizedInput.query, response.status, bodyResult.rawBody);
         return toolFailure(`Linear GraphQL request failed with HTTP ${response.status}.`, {
           status: response.status,
         });
-      return toolFailure(`linear_invalid_json: ${(error as Error).message}`);
+      }
+      return toolFailure(`linear_invalid_json: ${errorMessage(bodyResult.error)}`);
+    }
+    const body = bodyResult.body;
+    if (!response.ok) {
+      logStatusError(logger, normalizedInput.query, response.status, body);
+      return toolFailure(`Linear GraphQL request failed with HTTP ${response.status}.`, {
+        status: response.status,
+      });
     }
     if (isRecord(body) && Array.isArray(body.errors) && body.errors.length > 0) {
       return { success: false, result: body };
     }
-    if (!response.ok)
-      return toolFailure(`Linear GraphQL request failed with HTTP ${response.status}.`, {
-        status: response.status,
-      });
     return { success: true, result: body };
   } catch (error) {
+    defaultLinearToolLogger.error(
+      `Linear GraphQL request failed: ${errorMessage(error)}${linearErrorContext(normalizedInput.query)}`,
+    );
     return toolFailure("Linear GraphQL request failed before receiving a successful response.", {
-      reason: (error as Error).message,
+      reason: errorMessage(error),
     });
   }
 }
@@ -118,6 +147,7 @@ async function fetchWithRateLimitRetry(
   settings: Settings,
   query: string,
   variables: Record<string, unknown>,
+  logger: LinearToolLogger,
 ): Promise<Response> {
   for (let retryCount = 0; ; retryCount += 1) {
     const response = await fetchImpl(settings.tracker.endpoint, {
@@ -129,8 +159,12 @@ async function fetchWithRateLimitRetry(
       },
       body: JSON.stringify({ query, variables }),
     });
-    if (response.status !== 429 || retryCount >= 4) return response;
-    await sleep(retryDelayMs(response.headers, retryCount));
+    if (response.status !== 429 || retryCount >= LINEAR_MAX_RETRIES) return response;
+    const delayMs = retryDelayMs(response.headers, retryCount);
+    logger.warn(
+      `Linear GraphQL request rate limited status=429 retry=${retryCount + 1}/${LINEAR_MAX_RETRIES} delay_ms=${delayMs}${linearErrorContext(query, await responseBodyForLog(response))}`,
+    );
+    await sleep(delayMs);
   }
 }
 
@@ -147,4 +181,73 @@ function retryDelayMs(headers: Headers, retryCount: number): number {
 
 async function sleep(delayMs: number): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, delayMs));
+}
+
+async function readResponseJson(
+  response: Response,
+): Promise<{ ok: true; body: unknown } | { ok: false; error: unknown; rawBody?: string }> {
+  let rawBody: string;
+  try {
+    rawBody = await response.text();
+  } catch (error) {
+    return { ok: false, error };
+  }
+  try {
+    return { ok: true, body: JSON.parse(rawBody) as unknown };
+  } catch (error) {
+    return { ok: false, error, rawBody };
+  }
+}
+
+async function responseBodyForLog(response: Response): Promise<unknown> {
+  try {
+    const rawBody = await response.clone().text();
+    try {
+      return JSON.parse(rawBody) as unknown;
+    } catch {
+      return rawBody;
+    }
+  } catch {
+    return undefined;
+  }
+}
+
+function logStatusError(
+  logger: LinearToolLogger,
+  query: string,
+  status: number,
+  body: unknown,
+): void {
+  logger.error(`Linear GraphQL request failed status=${status}${linearErrorContext(query, body)}`);
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function linearErrorContext(query: string, body?: unknown): string {
+  const parts: string[] = [];
+  const operation = operationName(query);
+  if (operation) parts.push(`operation=${operation}`);
+  if (body !== undefined) parts.push(`body=${summarizeErrorBody(body)}`);
+  return parts.length === 0 ? "" : ` ${parts.join(" ")}`;
+}
+
+function operationName(query: string): string | null {
+  return /\b(?:query|mutation)\s+([A-Za-z_][A-Za-z0-9_]*)/.exec(query)?.[1] ?? null;
+}
+
+function summarizeErrorBody(body: unknown): string {
+  const text = typeof body === "string" ? body : stringifyErrorBody(body);
+  const compact = text.replace(/\s+/g, " ").trim();
+  if (compact.length <= MAX_ERROR_BODY_LOG_BYTES) return compact;
+  return `${compact.slice(0, MAX_ERROR_BODY_LOG_BYTES)}...<truncated>`;
+}
+
+function stringifyErrorBody(body: unknown): string {
+  try {
+    return JSON.stringify(body) ?? String(body);
+  } catch {
+    return String(body);
+  }
 }
