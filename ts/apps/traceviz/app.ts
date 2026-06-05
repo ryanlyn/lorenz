@@ -37,10 +37,18 @@ export function createTracevizApp({
   });
 
   app.get("/api/v1/tickets/:id/events", (c) => {
+    if (decodeURIComponent(c.req.param("id")) !== issueId) {
+      return c.json({ error: "Ticket not found" }, 404);
+    }
+
     return c.json({ events });
   });
 
   app.get("/api/v1/tickets/:id/stats", (c) => {
+    if (decodeURIComponent(c.req.param("id")) !== issueId) {
+      return c.json({ error: "Ticket not found" }, 404);
+    }
+
     return c.json(stats);
   });
 

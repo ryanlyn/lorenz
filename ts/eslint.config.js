@@ -4,7 +4,7 @@ import importX from "eslint-plugin-import-x";
 
 export default tseslint.config(
   {
-    ignores: ["**/dist/**", "log/**", "node_modules/**", "apps/traceviz/**"],
+    ignores: ["**/dist/**", "log/**", "node_modules/**", "apps/traceviz/dist/**"],
   },
   js.configs.recommended,
   ...tseslint.configs.recommendedTypeChecked,

@@ -1,4 +1,4 @@
-import { test } from "vitest";
+import { test, vi } from "vitest";
 import { LinearClient, parseConfig } from "@symphony/cli";
 
 import { assert } from "../../../test/assert.js";
@@ -78,6 +78,8 @@ test("Linear project lookup reports missing project slug results", async () => {
 
 test("Linear client retries 429 responses using Retry-After before succeeding", async () => {
   const delays: number[] = [];
+  const warnings: string[] = [];
+  const warnSpy = viSpyOnConsoleWarn(warnings);
   const client = new LinearClient(
     settings(),
     fetchSequence(
@@ -92,8 +94,16 @@ test("Linear client retries 429 responses using Retry-After before succeeding", 
     },
   );
 
-  assert.deepEqual(await client.viewer(), { id: "viewer-1" });
-  assert.deepEqual(delays, [2000]);
+  try {
+    assert.deepEqual(await client.viewer(), { id: "viewer-1" });
+    assert.deepEqual(delays, [2000]);
+    assert.equal(warnings.length, 1);
+    assert.match(warnings[0] ?? "", /status=429 retry=1\/4 delay_ms=2000/);
+    assert.match(warnings[0] ?? "", /operation=SymphonyTsViewer/);
+    assert.match(warnings[0] ?? "", /rate limited/);
+  } finally {
+    warnSpy.mockRestore();
+  }
 });
 
 test("Linear client bounds HTTP requests with the Elixir connect timeout", async () => {
@@ -129,6 +139,27 @@ test("Linear client retries 429 responses using exponential backoff without Retr
   assert.deepEqual(delays, [50, 100]);
 });
 
+test("Linear client treats blank Retry-After as missing and backs off", async () => {
+  const delays: number[] = [];
+  const client = new LinearClient(
+    settings(),
+    fetchSequence(
+      jsonResponse({ errors: [{ message: "blank retry hint" }] }, 429, { "retry-after": " \t " }),
+      jsonResponse({ data: { viewer: { id: "viewer-1" } } }),
+    ),
+    {
+      sleep: async (delayMs) => {
+        delays.push(delayMs);
+      },
+      baseDelayMs: 50,
+      maxDelayMs: 1000,
+    },
+  );
+
+  assert.deepEqual(await client.viewer(), { id: "viewer-1" });
+  assert.deepEqual(delays, [50]);
+});
+
 test("Linear client stops retrying 429 responses after retry budget is exhausted", async () => {
   const delays: number[] = [];
   const client = new LinearClient(
@@ -153,6 +184,26 @@ test("Linear client stops retrying 429 responses after retry budget is exhausted
 
   await assert.rejects(() => client.viewer(), /linear api status 429/);
   assert.deepEqual(delays, [2000]);
+});
+
+test("Linear client logs non-200 failures with operation and bounded body", async () => {
+  const errors: string[] = [];
+  const errorSpy = viSpyOnConsoleError(errors);
+  const body = {
+    message: `BAD_USER_INPUT ${"x".repeat(1200)}`,
+  };
+  const client = new LinearClient(settings(), fetchSequence(jsonResponse(body, 500)));
+
+  try {
+    await assert.rejects(() => client.viewer(), /linear api status 500/);
+    assert.equal(errors.length, 1);
+    assert.match(errors[0] ?? "", /Linear GraphQL request failed status=500/);
+    assert.match(errors[0] ?? "", /operation=SymphonyTsViewer/);
+    assert.match(errors[0] ?? "", /BAD_USER_INPUT/);
+    assert.match(errors[0] ?? "", /truncated/);
+  } finally {
+    errorSpy.mockRestore();
+  }
 });
 
 test("Linear candidate polling follows every page in order", async () => {
@@ -189,6 +240,64 @@ test("Linear candidate polling follows every page in order", async () => {
   assert.equal(calls[0]?.body.variables?.after, null);
   assert.match(String(calls[0]?.body.query), /inverseRelations\(first: 50\)/);
   assert.equal(calls[1]?.body.variables?.after, "cursor-1");
+});
+
+test("Linear candidate polling drops malformed issue nodes and keeps healthy nodes", async () => {
+  const client = new LinearClient(
+    settings(),
+    fetchSequence(
+      jsonResponse({
+        data: {
+          issues: {
+            nodes: [
+              linearIssue("id-1", "MT-1"),
+              { ...linearIssue("id-bad", "MT-BAD"), state: { name: "Todo", type: "unknown" } },
+              linearIssue("id-2", "MT-2"),
+            ],
+            pageInfo: { hasNextPage: false, endCursor: null },
+          },
+        },
+      }),
+    ),
+  );
+
+  const issues = await client.fetchCandidateIssues();
+
+  assert.deepEqual(
+    issues.map((issue) => issue.identifier),
+    ["MT-1", "MT-2"],
+  );
+});
+
+test("Linear fetchIssuesByStates drops malformed nodes without losing other pages", async () => {
+  const client = new LinearClient(
+    settings(),
+    fetchSequence(
+      jsonResponse({
+        data: {
+          issues: {
+            nodes: [linearIssue("id-1", "MT-1")],
+            pageInfo: { hasNextPage: true, endCursor: "cursor-1" },
+          },
+        },
+      }),
+      jsonResponse({
+        data: {
+          issues: {
+            nodes: [{ ...linearIssue("id-bad", "MT-BAD"), title: "" }, linearIssue("id-2", "MT-2")],
+            pageInfo: { hasNextPage: false, endCursor: null },
+          },
+        },
+      }),
+    ),
+  );
+
+  const issues = await client.fetchIssuesByStates(["Todo"]);
+
+  assert.deepEqual(
+    issues.map((issue) => issue.identifier),
+    ["MT-1", "MT-2"],
+  );
 });
 
 test("Linear assignee me resolves through viewer before normalizing issues", async () => {
@@ -290,6 +399,39 @@ test("Linear fetchIssuesByIds returns empty without touching the network", async
   assert.equal(calls.length, 0);
 });
 
+test("Linear fetchIssuesByStates returns empty without touching the network", async () => {
+  const calls: FetchCall[] = [];
+  const client = new LinearClient(settings(), (async (input, init) => {
+    calls.push(fetchCall(input, init));
+    return jsonResponse({ data: { issues: { nodes: [] } } });
+  }) as typeof fetch);
+
+  assert.deepEqual(await client.fetchIssuesByStates([]), []);
+  assert.equal(calls.length, 0);
+});
+
+test("Linear fetchIssuesByStates stringifies and deduplicates state names", async () => {
+  const calls: FetchCall[] = [];
+  const client = new LinearClient(
+    settings(),
+    fetchSequence(
+      jsonResponse({
+        data: {
+          issues: {
+            nodes: [],
+            pageInfo: { hasNextPage: false, endCursor: null },
+          },
+        },
+      }),
+      calls,
+    ),
+  );
+
+  await client.fetchIssuesByStates(["Todo", "Todo", 42] as unknown as string[]);
+
+  assert.deepEqual(calls[0]?.body.variables?.stateNames, ["Todo", "42"]);
+});
+
 test("Linear archiveIssue archives by id and reports failed payloads", async () => {
   const calls: FetchCall[] = [];
   await new LinearClient(
@@ -321,6 +463,18 @@ function settings() {
     },
     {},
   );
+}
+
+function viSpyOnConsoleWarn(messages: string[]) {
+  return vi.spyOn(console, "warn").mockImplementation((message) => {
+    messages.push(String(message));
+  });
+}
+
+function viSpyOnConsoleError(messages: string[]) {
+  return vi.spyOn(console, "error").mockImplementation((message) => {
+    messages.push(String(message));
+  });
 }
 
 function fetchSequence(...items: Array<Response | FetchCall[]>): typeof fetch {

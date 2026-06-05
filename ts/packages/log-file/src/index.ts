@@ -1,5 +1,5 @@
 import type { Stats } from "node:fs";
-import { readdirSync, rmSync, symlinkSync } from "node:fs";
+import { readdirSync, renameSync, rmSync, symlinkSync } from "node:fs";
 import fs from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
@@ -34,6 +34,7 @@ export function defaultLogFile(root = process.cwd()): string {
 }
 
 const loggers = new Map<string, Promise<Logger>>();
+let stablePathTempCounter = 0;
 
 export async function configureLogFile(
   logFile: string,
@@ -55,7 +56,7 @@ export async function configureLogFile(
     logger.info({ event: "symphony_ts_started" });
   } catch (error) {
     loggers.delete(logFile);
-    process.stderr.write(`warning: log_file_unavailable ${logFile}: ${errorMessage(error)}\n`);
+    warnLogFileUnavailable(logFile, error);
   }
 }
 
@@ -67,7 +68,7 @@ export async function appendLogEvent(
     const logger = await loggerForLogFile(logFile);
     logger.info(event);
   } catch (error) {
-    process.stderr.write(`warning: log_file_unavailable ${logFile}: ${errorMessage(error)}\n`);
+    warnLogFileUnavailable(logFile, error);
   }
 }
 
@@ -108,9 +109,13 @@ async function createLogger(
   pruneRollFilesSync(logFile, rollStream.file, maxFiles);
   const reopen = rollStream.reopen.bind(rollStream);
   rollStream.reopen = (file: string) => {
-    reopen(file);
-    pointStableLogPathAtCurrentFileSync(logFile, file);
-    pruneRollFilesSync(logFile, file, maxFiles);
+    try {
+      reopen(file);
+      pointStableLogPathAtCurrentFileSync(logFile, file);
+      pruneRollFilesSync(logFile, file, maxFiles);
+    } catch (error) {
+      warnLogFileUnavailable(logFile, error);
+    }
   };
   return pino(
     {
@@ -131,10 +136,7 @@ async function createLogger(
 async function prepareRollBase(logFile: string): Promise<void> {
   const existing = await lstatOrNull(logFile);
   if (!existing) return;
-  if (existing.isSymbolicLink()) {
-    await fs.unlink(logFile);
-    return;
-  }
+  if (existing.isSymbolicLink()) return;
   const nextPath = await nextRollFilePath(logFile);
   await fs.rename(logFile, nextPath);
 }
@@ -143,13 +145,27 @@ async function pointStableLogPathAtCurrentFile(
   logFile: string,
   currentFile: string,
 ): Promise<void> {
-  await fs.rm(logFile, { force: true });
-  await fs.symlink(path.basename(currentFile), logFile);
+  const tempPath = nextStablePathTemp(logFile);
+  try {
+    await fs.rm(tempPath, { force: true });
+    await fs.symlink(path.basename(currentFile), tempPath);
+    await fs.rename(tempPath, logFile);
+  } catch (error) {
+    await removeTempStablePath(tempPath);
+    throw error;
+  }
 }
 
 function pointStableLogPathAtCurrentFileSync(logFile: string, currentFile: string): void {
-  rmSync(logFile, { force: true });
-  symlinkSync(path.basename(currentFile), logFile);
+  const tempPath = nextStablePathTemp(logFile);
+  try {
+    rmSync(tempPath, { force: true });
+    symlinkSync(path.basename(currentFile), tempPath);
+    renameSync(tempPath, logFile);
+  } catch (error) {
+    removeTempStablePathSync(tempPath);
+    throw error;
+  }
 }
 
 async function nextRollFilePath(logFile: string): Promise<string> {
@@ -198,6 +214,30 @@ function rollFilePattern(logFile: string): RegExp {
   return new RegExp(`^${escapedBaseName}\\.(\\d+)$`);
 }
 
+function nextStablePathTemp(logFile: string): string {
+  stablePathTempCounter += 1;
+  return path.join(
+    path.dirname(logFile),
+    `.${path.basename(logFile)}.${process.pid}.${stablePathTempCounter}.tmp`,
+  );
+}
+
+async function removeTempStablePath(tempPath: string): Promise<void> {
+  try {
+    await fs.rm(tempPath, { force: true });
+  } catch (error) {
+    void error;
+  }
+}
+
+function removeTempStablePathSync(tempPath: string): void {
+  try {
+    rmSync(tempPath, { force: true });
+  } catch (error) {
+    void error;
+  }
+}
+
 async function lstatOrNull(filePath: string): Promise<Stats | null> {
   try {
     return await fs.lstat(filePath);
@@ -209,4 +249,8 @@ async function lstatOrNull(filePath: string): Promise<Stats | null> {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function warnLogFileUnavailable(logFile: string, error: unknown): void {
+  process.stderr.write(`warning: log_file_unavailable ${logFile}: ${errorMessage(error)}\n`);
 }

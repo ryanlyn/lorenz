@@ -8,6 +8,9 @@ import {
   type Settings,
 } from "@symphony/domain";
 
+const LINEAR_REQUEST_TIMEOUT_MS = 30_000;
+const MAX_ERROR_BODY_LOG_BYTES = 1000;
+
 const issueFields = `
   id
   identifier
@@ -63,6 +66,7 @@ interface LinearRetryOptions {
   maxRetries?: number | undefined;
   baseDelayMs?: number | undefined;
   maxDelayMs?: number | undefined;
+  requestTimeoutMs?: number | undefined;
   sleep?: ((delayMs: number) => Promise<void>) | undefined;
   now?: (() => Date) | undefined;
 }
@@ -71,13 +75,20 @@ interface ResolvedLinearRetryOptions {
   maxRetries: number;
   baseDelayMs: number;
   maxDelayMs: number;
+  requestTimeoutMs: number;
   sleep: (delayMs: number) => Promise<void>;
   now: () => Date;
+}
+
+export interface LinearClientLogger {
+  warn(message: string): void;
+  error(message: string): void;
 }
 
 export interface LinearClientDeps {
   fetchImpl?: typeof fetch | undefined;
   graphqlClient?: LinearGraphQLClient | undefined;
+  logger?: LinearClientLogger | undefined;
 }
 
 export class LinearClient {
@@ -87,6 +98,7 @@ export class LinearClient {
   private readonly gqlClient: LinearGraphQLClient | null;
   private readonly settings: Settings;
   private readonly fetchImpl: typeof fetch | undefined;
+  private readonly logger: LinearClientLogger;
 
   constructor(
     settings: Settings,
@@ -98,12 +110,17 @@ export class LinearClient {
       maxRetries: retryOptions.maxRetries ?? 4,
       baseDelayMs: retryOptions.baseDelayMs ?? 1_000,
       maxDelayMs: retryOptions.maxDelayMs ?? 30_000,
+      requestTimeoutMs: retryOptions.requestTimeoutMs ?? LINEAR_REQUEST_TIMEOUT_MS,
       sleep: retryOptions.sleep ?? defaultSleep,
       now: retryOptions.now ?? (() => new Date()),
     };
 
     const deps = resolveDeps(fetchImplOrDeps);
     this.fetchImpl = deps.fetchImpl;
+    this.logger = deps.logger ?? {
+      warn: (message) => console.warn(message),
+      error: (message) => console.error(message),
+    };
 
     if (deps.graphqlClient) {
       this.gqlClient = deps.graphqlClient;
@@ -131,33 +148,53 @@ export class LinearClient {
   ): Promise<T> {
     for (let retryCount = 0; ; retryCount += 1) {
       try {
-        return await this.gqlClient!.request<T, Record<string, unknown>>(query, variables);
+        return await withTimeout(
+          this.gqlClient!.request<T, Record<string, unknown>>(query, variables),
+          this.retryOptions.requestTimeoutMs,
+        );
       } catch (error: unknown) {
         if (isRateLimitError(error) && retryCount < this.retryOptions.maxRetries) {
           const delayMs = retryDelayFromError(error, this.retryOptions, retryCount);
+          this.logRateLimitRetry(query, retryCount, delayMs, error);
           await this.retryOptions.sleep(delayMs);
           continue;
         }
-        throw reclassifyError(error);
+        const classified = reclassifyError(error);
+        this.logRequestError(query, classified);
+        throw classified;
       }
     }
   }
 
   private async graphqlWithFetch<T>(query: string, variables: Record<string, unknown>): Promise<T> {
     const response = await this.fetchWithRateLimitRetry(query, variables);
+    const errorBodyText = !response.ok ? await safeResponseText(response) : null;
     let body: unknown;
     try {
       body = await response.json();
     } catch (error) {
-      if (!response.ok) throw new Error(`linear api status ${response.status}`, { cause: error });
+      if (!response.ok) {
+        this.logStatusError(query, response.status, errorBodyText ?? errorMessage(error));
+        throw new Error(`linear api status ${response.status}`, { cause: error });
+      }
       throw new Error(`linear_invalid_json: ${errorMessage(error)}`, { cause: error });
     }
-    if (response.status === 429) throw new Error("linear api status 429");
+    if (response.status === 429) {
+      this.logStatusError(query, response.status, body);
+      throw new Error("linear api status 429");
+    }
     if (isRecord(body) && Array.isArray(body.errors) && body.errors.length > 0) {
+      this.logStatusError(query, response.status, body);
       throw new Error(`linear_graphql_errors: ${JSON.stringify(body.errors)}`);
     }
-    if (!response.ok) throw new Error(`linear api status ${response.status}`);
-    if (!isRecord(body) || !isRecord(body.data)) throw new Error("linear_unknown_payload");
+    if (!response.ok) {
+      this.logStatusError(query, response.status, body);
+      throw new Error(`linear api status ${response.status}`);
+    }
+    if (!isRecord(body) || !isRecord(body.data)) {
+      this.logStatusError(query, response.status, body);
+      throw new Error("linear_unknown_payload");
+    }
     return body.data as T;
   }
 
@@ -166,17 +203,25 @@ export class LinearClient {
     variables: Record<string, unknown>,
   ): Promise<Response> {
     for (let retryCount = 0; ; retryCount += 1) {
-      const response = await this.fetchImpl!(this.settings.tracker.endpoint, {
-        method: "POST",
-        signal: AbortSignal.timeout(30_000),
-        headers: {
-          "content-type": "application/json",
-          authorization: this.settings.tracker.apiKey ?? "",
-        },
-        body: JSON.stringify({ query, variables }),
-      });
+      let response: Response;
+      try {
+        response = await this.fetchImpl!(this.settings.tracker.endpoint, {
+          method: "POST",
+          signal: AbortSignal.timeout(this.retryOptions.requestTimeoutMs),
+          headers: {
+            "content-type": "application/json",
+            authorization: this.settings.tracker.apiKey ?? "",
+          },
+          body: JSON.stringify({ query, variables }),
+        });
+      } catch (error: unknown) {
+        this.logRequestError(query, error);
+        throw error;
+      }
       if (response.status !== 429 || retryCount >= this.retryOptions.maxRetries) return response;
-      await this.retryOptions.sleep(retryDelayMs(response.headers, this.retryOptions, retryCount));
+      const delayMs = retryDelayMs(response.headers, this.retryOptions, retryCount);
+      this.logRateLimitRetry(query, retryCount, delayMs, await safeResponseText(response));
+      await this.retryOptions.sleep(delayMs);
     }
   }
 
@@ -220,6 +265,9 @@ export class LinearClient {
   }
 
   async fetchIssuesByStates(stateNames: string[]): Promise<Issue[]> {
+    const normalizedStateNames = normalizeStateNames(stateNames);
+    if (normalizedStateNames.length === 0) return [];
+
     let after: string | null = null;
     const issues: Issue[] = [];
     const assignee = await this.assigneeFilterValue();
@@ -240,15 +288,13 @@ export class LinearClient {
         }`,
         {
           projectSlugs,
-          stateNames,
+          stateNames: normalizedStateNames,
           first: 50,
           after,
         },
       );
 
-      issues.push(
-        ...data.issues.nodes.map((issue) => normalizeIssue(linearIssuePayload(issue), assignee)),
-      );
+      appendNormalizedIssues(issues, data.issues.nodes, assignee);
       if (!data.issues.pageInfo.hasNextPage) return issues;
       if (!data.issues.pageInfo.endCursor) throw new Error("linear_missing_end_cursor");
       after = data.issues.pageInfo.endCursor;
@@ -274,9 +320,7 @@ export class LinearClient {
         }`,
         { ids: batchIds, first: batchIds.length },
       );
-      issues.push(
-        ...data.issues.nodes.map((issue) => normalizeIssue(linearIssuePayload(issue), assignee)),
-      );
+      appendNormalizedIssues(issues, data.issues.nodes, assignee);
     }
 
     return issues.sort((left, right) => {
@@ -411,18 +455,44 @@ export class LinearClient {
     if (assignee.trim().toLowerCase() !== "me") return assignee;
     return (await this.viewer()).id;
   }
+
+  private logRateLimitRetry(
+    query: string,
+    retryCount: number,
+    delayMs: number,
+    body: unknown,
+  ): void {
+    this.logger.warn(
+      `Linear GraphQL request rate limited status=429 retry=${retryCount + 1}/${this.retryOptions.maxRetries} delay_ms=${delayMs}${linearErrorContext(query, body)}`,
+    );
+  }
+
+  private logStatusError(query: string, status: number, body: unknown): void {
+    this.logger.error(
+      `Linear GraphQL request failed status=${status}${linearErrorContext(query, body)}`,
+    );
+  }
+
+  private logRequestError(query: string, error: unknown): void {
+    this.logger.error(
+      `Linear GraphQL request failed: ${errorMessage(error)}${linearErrorContext(query)}`,
+    );
+  }
 }
 
 function resolveDeps(fetchImplOrDeps?: typeof fetch | LinearClientDeps): {
   fetchImpl: typeof fetch | undefined;
   graphqlClient: LinearGraphQLClient | undefined;
+  logger: LinearClientLogger | undefined;
 } {
-  if (!fetchImplOrDeps) return { fetchImpl: undefined, graphqlClient: undefined };
+  if (!fetchImplOrDeps)
+    return { fetchImpl: undefined, graphqlClient: undefined, logger: undefined };
   if (typeof fetchImplOrDeps === "function")
-    return { fetchImpl: fetchImplOrDeps, graphqlClient: undefined };
+    return { fetchImpl: fetchImplOrDeps, graphqlClient: undefined, logger: undefined };
   return {
     fetchImpl: fetchImplOrDeps.fetchImpl ?? undefined,
     graphqlClient: fetchImplOrDeps.graphqlClient ?? undefined,
+    logger: fetchImplOrDeps.logger ?? undefined,
   };
 }
 
@@ -438,6 +508,30 @@ function linearIssuePayload(issue: Record<string, unknown>): Record<string, unkn
     created_at: issue.createdAt,
     updated_at: issue.updatedAt,
   };
+}
+
+function appendNormalizedIssues(
+  target: Issue[],
+  nodes: unknown[],
+  assignee: string | undefined,
+): void {
+  for (const issue of nodes) {
+    const normalized = normalizeLinearIssue(issue, assignee);
+    if (normalized) target.push(normalized);
+  }
+}
+
+function normalizeLinearIssue(issue: unknown, assignee: string | undefined): Issue | null {
+  if (!isRecord(issue)) return null;
+  try {
+    return normalizeIssue(linearIssuePayload(issue), assignee);
+  } catch {
+    return null;
+  }
+}
+
+function normalizeStateNames(stateNames: unknown[]): string[] {
+  return [...new Set(stateNames.map((stateName) => String(stateName)))];
 }
 
 function parseProject(project: Record<string, unknown>): LinearProject {
@@ -480,11 +574,14 @@ function isRateLimitError(error: unknown): boolean {
 }
 
 function retryDelayFromError(
-  _error: unknown,
+  error: unknown,
   options: ResolvedLinearRetryOptions,
   retryCount: number,
 ): number {
-  return exponentialRetryDelayMs(options, retryCount);
+  return (
+    parseRetryAfterMs(retryAfterHeaderValueFromError(error), options.now) ??
+    exponentialRetryDelayMs(options, retryCount)
+  );
 }
 
 function reclassifyError(error: unknown): Error {
@@ -534,6 +631,71 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+function linearErrorContext(query: string, body?: unknown): string {
+  const parts: string[] = [];
+  const operation = operationName(query);
+  if (operation) parts.push(`operation=${operation}`);
+  if (body !== undefined) parts.push(`body=${summarizeErrorBody(body)}`);
+  return parts.length === 0 ? "" : ` ${parts.join(" ")}`;
+}
+
+function operationName(query: string): string | null {
+  return /\b(?:query|mutation)\s+([A-Za-z_][A-Za-z0-9_]*)/.exec(query)?.[1] ?? null;
+}
+
+function summarizeErrorBody(body: unknown): string {
+  const text = typeof body === "string" ? body : (JSON.stringify(body) ?? String(body));
+  const compact = text.replace(/\s+/g, " ").trim();
+  if (compact.length <= MAX_ERROR_BODY_LOG_BYTES) return compact;
+  return `${compact.slice(0, MAX_ERROR_BODY_LOG_BYTES)}...<truncated>`;
+}
+
+function retryAfterHeaderValueFromError(error: unknown): string | null {
+  if (!isRecord(error)) return null;
+  return headerValue(error.headers, "retry-after") ?? headerValue(error.response, "retry-after");
+}
+
+function headerValue(source: unknown, headerName: string): string | null {
+  if (source instanceof Headers) return source.get(headerName);
+  if (!isRecord(source)) return null;
+  if (source.headers !== undefined) return headerValue(source.headers, headerName);
+  for (const [key, value] of Object.entries(source)) {
+    if (key.toLowerCase() !== headerName) continue;
+    if (Array.isArray(value)) return headerString(value[0]);
+    return headerString(value);
+  }
+  return null;
+}
+
+function headerString(value: unknown): string | null {
+  return typeof value === "string" ? value : null;
+}
+
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_resolve, reject) => {
+        timeout = setTimeout(
+          () => reject(new Error(`linear api timeout after ${timeoutMs}ms`)),
+          timeoutMs,
+        );
+      }),
+    ]);
+  } finally {
+    if (timeout !== undefined) clearTimeout(timeout);
+  }
+}
+
+async function safeResponseText(response: Response): Promise<string> {
+  try {
+    return await response.clone().text();
+  } catch (error) {
+    return errorMessage(error);
+  }
+}
+
 function retryDelayMs(
   headers: Headers,
   options: ResolvedLinearRetryOptions,
@@ -548,6 +710,7 @@ function retryDelayMs(
 function parseRetryAfterMs(retryAfter: string | null, now: () => Date): number | null {
   if (retryAfter === null) return null;
   const trimmed = retryAfter.trim();
+  if (trimmed === "") return null;
   const seconds = Number(trimmed);
   if (Number.isInteger(seconds) && seconds >= 0) return seconds * 1000;
   const dateMs = Date.parse(trimmed);

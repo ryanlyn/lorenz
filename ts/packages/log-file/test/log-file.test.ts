@@ -1,11 +1,35 @@
+import type * as fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 
-import { test, vi } from "vitest";
+import { afterEach, test, vi } from "vitest";
 import { appendLogEvent, configureLogFile, defaultLogFile } from "@symphony/cli";
 
 import { assert } from "../../../test/assert.js";
 import { tempDir } from "../../../test/helpers.js";
+
+const fsSyncMockState = vi.hoisted(() => ({
+  failNextSymlinkSync: false,
+}));
+
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof fsSync>();
+  const symlinkSync: typeof actual.symlinkSync = (...args) => {
+    if (fsSyncMockState.failNextSymlinkSync) {
+      fsSyncMockState.failNextSymlinkSync = false;
+      throw new Error("synthetic stable symlink failure");
+    }
+    return actual.symlinkSync(...args);
+  };
+  return {
+    ...actual,
+    symlinkSync,
+  };
+});
+
+afterEach(() => {
+  fsSyncMockState.failNextSymlinkSync = false;
+});
 
 test("log file configuration uses pino-roll with a stable Elixir-compatible path", async () => {
   const root = await tempDir("symphony-ts-log-file");
@@ -122,6 +146,77 @@ test("log file configuration delegates size rotation to pino-roll", async () => 
   assert.match(await fs.readFile(logFile, "utf8"), /"event":"after_roll"/);
 });
 
+test("rotation filesystem failures warn instead of escaping from the drain callback", async () => {
+  const root = await tempDir("symphony-ts-log-file-roll-warning");
+  const logFile = defaultLogFile(root);
+  await configureLogFile(logFile, {
+    maxBytes: 120,
+    maxFiles: 1,
+    now: () => new Date("2026-05-06T00:00:00.000Z"),
+  });
+
+  const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+  const uncaughtErrors: unknown[] = [];
+  const uncaughtHandler = (error: Error) => {
+    uncaughtErrors.push(error);
+  };
+  process.once("uncaughtException", uncaughtHandler);
+  try {
+    fsSyncMockState.failNextSymlinkSync = true;
+    await appendLogEvent(logFile, {
+      event: "large",
+      message: "x".repeat(160),
+    });
+    await waitForSyntheticSymlinkFailure();
+
+    assert.deepEqual(uncaughtErrors, []);
+    assert.ok(
+      stderrSpy.mock.calls.some((call) =>
+        String(call[0]).includes("synthetic stable symlink failure"),
+      ),
+      "expected rotation failure to be reported to stderr",
+    );
+  } finally {
+    process.removeListener("uncaughtException", uncaughtHandler);
+    stderrSpy.mockRestore();
+  }
+});
+
+test("stable log path remains available if rotation symlink replacement fails", async () => {
+  const root = await tempDir("symphony-ts-log-file-roll-stable");
+  const logFile = defaultLogFile(root);
+  await configureLogFile(logFile, {
+    maxBytes: 120,
+    maxFiles: 1,
+    now: () => new Date("2026-05-06T00:00:00.000Z"),
+  });
+  const previousTarget = await fs.readlink(logFile);
+
+  const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+  const uncaughtHandler = () => {};
+  process.once("uncaughtException", uncaughtHandler);
+  try {
+    fsSyncMockState.failNextSymlinkSync = true;
+    await appendLogEvent(logFile, {
+      event: "large",
+      message: "x".repeat(160),
+    });
+    await waitForSyntheticSymlinkFailure();
+
+    assert.equal((await fs.lstat(logFile)).isSymbolicLink(), true);
+    assert.equal(await fs.readlink(logFile), previousTarget);
+    assert.ok(
+      stderrSpy.mock.calls.some((call) =>
+        String(call[0]).includes("synthetic stable symlink failure"),
+      ),
+      "expected rotation failure to be reported to stderr",
+    );
+  } finally {
+    process.removeListener("uncaughtException", uncaughtHandler);
+    stderrSpy.mockRestore();
+  }
+});
+
 test("log file configuration warns without crashing when the sink is unavailable", async () => {
   const root = await tempDir("symphony-ts-log-file-blocked");
   const blocker = path.join(root, "blocked");
@@ -138,6 +233,15 @@ test("log file configuration warns without crashing when the sink is unavailable
     stderrSpy.mockRestore();
   }
 });
+
+async function waitForSyntheticSymlinkFailure(): Promise<void> {
+  await vi.waitFor(
+    () => {
+      assert.equal(fsSyncMockState.failNextSymlinkSync, false);
+    },
+    { timeout: 2_000, interval: 5 },
+  );
+}
 
 test("appendLogEvent without prior configureLogFile uses default logger path", async () => {
   const root = await tempDir("symphony-ts-log-file-coldstart");

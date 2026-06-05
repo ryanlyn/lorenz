@@ -145,9 +145,6 @@ importers:
       "@eslint/js":
         specifier: "catalog:"
         version: 10.0.1(eslint@10.4.1(jiti@2.7.0))
-      "@hono/node-server":
-        specifier: "catalog:"
-        version: 1.19.14(hono@4.12.23)
       "@symphony/agent-runner":
         specifier: workspace:*
         version: link:packages/agent-runner
@@ -217,9 +214,6 @@ importers:
       "@symphony/traceviz-emitter":
         specifier: workspace:*
         version: link:packages/traceviz-emitter
-      "@symphony/traceviz-server":
-        specifier: workspace:*
-        version: link:packages/traceviz-server
       "@symphony/tui":
         specifier: workspace:*
         version: link:packages/tui
@@ -247,9 +241,6 @@ importers:
       fast-check:
         specifier: "catalog:"
         version: 4.8.0
-      hono:
-        specifier: "catalog:"
-        version: 4.12.23
       ink-testing-library:
         specifier: "catalog:"
         version: 4.0.0(@types/react@19.2.15)
@@ -422,6 +413,28 @@ importers:
       vite:
         specifier: "catalog:"
         version: 6.4.2(@types/node@22.19.19)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.22.3)(yaml@2.9.0)
+
+  apps/traceviz:
+    dependencies:
+      "@hono/node-server":
+        specifier: "catalog:"
+        version: 1.19.14(hono@4.12.23)
+      "@symphony/traceviz-server":
+        specifier: workspace:*
+        version: link:../../packages/traceviz-server
+      hono:
+        specifier: "catalog:"
+        version: 4.12.23
+    devDependencies:
+      "@types/node":
+        specifier: "catalog:"
+        version: 22.19.19
+      tsx:
+        specifier: "catalog:"
+        version: 4.22.3
+      typescript:
+        specifier: "catalog:"
+        version: 5.9.3
 
   packages/acp:
     dependencies:
