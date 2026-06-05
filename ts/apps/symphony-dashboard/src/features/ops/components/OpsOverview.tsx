@@ -4,6 +4,8 @@ import { useOpsStream } from "../hooks/useOpsStream";
 import { cn, formatNumber, formatTimestamp } from "../../../lib/utils";
 import type { OpsRunningEntry, OpsRetryEntry, OpsBlockedEntry } from "../api/types";
 
+import { RecentIssues } from "./RecentIssues";
+
 interface MetricCardProps {
   label: string;
   value: string;
@@ -233,6 +235,9 @@ export function OpsOverview() {
         <RetryTable entries={retrying} />
         <BlockedTable entries={blocked} />
       </div>
+
+      {/* Recent issues */}
+      <RecentIssues />
     </div>
   );
 }
