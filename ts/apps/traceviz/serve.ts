@@ -20,7 +20,8 @@ if (!filePath) {
   process.exit(1);
 }
 
-const resolved = path.resolve(filePath);
+const invocationCwd = process.env.INIT_CWD ?? process.cwd();
+const resolved = path.resolve(invocationCwd, filePath);
 if (!fs.existsSync(resolved)) {
   console.error(`File not found: ${resolved}`);
   process.exit(1);

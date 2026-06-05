@@ -29,12 +29,10 @@
     "dashboard": "pnpm start -- --port 4040 --no-tui --once --dry-run",
     "dashboard:ui": "pnpm --filter @symphony/dashboard dev",
     "dashboard:build": "pnpm --filter @symphony/dashboard build",
-    "traceviz": "tsx apps/traceviz/serve.ts",
+    "traceviz": "pnpm --filter @symphony/traceviz traceviz",
     "lint:versions": "syncpack lint"
   },
   "devDependencies": {
-    "@hono/node-server": "catalog:",
-    "hono": "catalog:",
     "@agentclientprotocol/sdk": "catalog:",
     "@eslint/js": "catalog:",
     "@symphony/agent-runner": "workspace:*",
@@ -60,7 +58,6 @@
     "@symphony/server": "workspace:*",
     "@symphony/ssh": "workspace:*",
     "@symphony/traceviz-emitter": "workspace:*",
-    "@symphony/traceviz-server": "workspace:*",
     "@symphony/tui": "workspace:*",
     "@symphony/worker-host-pool": "workspace:*",
     "@symphony/workflow": "workspace:*",
