@@ -120,11 +120,17 @@ test("ugly retry flow keeps capacity authority in the orchestrator", () => {
   const settings = parseConfig({
     agent: { ensemble_size: 2, max_concurrent_agents: 2, max_retry_backoff_ms: 10_000 },
   });
-  const clock: ClockPort = {
-    now: () => new Date("2026-05-07T00:00:10.000Z"),
-    monotonicMs: () => 10_000,
+  let wallMs = Date.parse("2026-05-07T00:00:10.000Z");
+  let monotonicMs = 10_000;
+  const clock: ClockPort & { advance(ms: number): void } = {
+    now: () => new Date(wallMs),
+    monotonicMs: () => monotonicMs,
     setTimeout: (cb, ms) => setTimeout(cb, ms),
     clearTimeout: (h) => clearTimeout(h as ReturnType<typeof setTimeout>),
+    advance(ms: number) {
+      wallMs += ms;
+      monotonicMs += ms;
+    },
   };
   const orchestrator = new Orchestrator(settings, clock);
   const issue = normalizeIssue({
@@ -149,8 +155,13 @@ test("ugly retry flow keeps capacity authority in the orchestrator", () => {
   assert.deepEqual(orchestrator.eligibleIssues([issue]), []);
   assert.equal(orchestrator.snapshot().running.length, 2);
   assert.equal(orchestrator.snapshot().retrying.length, 1);
+  assert.equal(orchestrator.snapshot().retrying[0]?.attempt, 2);
+  assert.equal(orchestrator.snapshot().retrying[0]?.monotonicDeadlineMs, 20_000);
 
   orchestrator.finish(issue.id, 1, false);
+  assert.deepEqual(orchestrator.eligibleIssues([issue]), []);
+
+  clock.advance(10_000);
   assert.equal(orchestrator.eligibleIssues([issue])[0]?.identifier, issue.identifier);
   assert.equal(orchestrator.claim(issue)?.slotIndex, 1);
   assert.equal(orchestrator.state.claimed.has(slotKey(issue.id, 1)), true);

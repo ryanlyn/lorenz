@@ -7,13 +7,10 @@ import type { ServerType } from "@hono/node-server";
 import { serveStatic } from "@hono/node-server/serve-static";
 import { Hono, type Context } from "hono";
 import { streamSSE } from "hono/streaming";
-import {
-  mountClaudeMcp,
-  startClaudeMcpServer as startStandaloneClaudeMcpServer,
-} from "@symphony/mcp";
+import { httpUrlHost, normalizeHttpBindHost, type Settings } from "@symphony/domain";
+import { mountClaudeMcp } from "@symphony/mcp";
 import { issuePayload, runsPayload, statePayload, type PresenterParams } from "@symphony/presenter";
 import type { RuntimeSnapshot } from "@symphony/runtime-events";
-import type { Settings } from "@symphony/domain";
 import type { TraceWatcher } from "@symphony/traceviz-server";
 
 import { createTraceRoutes } from "./trace-routes.js";
@@ -21,6 +18,7 @@ import { createWsHandler } from "./ws.js";
 import { defaultIssueStorePath, IssueStore } from "./issue-store.js";
 
 export { defaultIssueStorePath, IssueStore };
+export { startClaudeMcpServer } from "@symphony/mcp";
 export type { IssueRecord } from "./issue-store.js";
 
 export interface RuntimeServerSource {
@@ -68,13 +66,6 @@ export async function startObservabilityServer(
   }
 }
 
-export async function startClaudeMcpServer(
-  settings: Settings,
-  options: ObservabilityServerOptions,
-): Promise<ObservabilityServerHandle> {
-  return startStandaloneClaudeMcpServer(settings, { host: options.host, port: options.port });
-}
-
 interface HonoServerInternals {
   injectWebSocket?: (server: unknown) => void;
   stopWatcher?: () => void;
@@ -86,8 +77,9 @@ async function startHonoServer(
   internals?: HonoServerInternals,
 ): Promise<ObservabilityServerHandle> {
   let server!: ServerType;
+  const bindHost = normalizeHttpBindHost(options.host);
   await new Promise<void>((resolve, reject) => {
-    server = serve({ fetch: app.fetch, hostname: options.host, port: options.port }, () => {
+    server = serve({ fetch: app.fetch, hostname: bindHost, port: options.port }, () => {
       server.off("error", reject);
       resolve();
     });
@@ -103,10 +95,10 @@ async function startHonoServer(
   const address = activeServer.address();
   const port = typeof address === "object" && address !== null ? address.port : options.port;
   return {
-    host: options.host,
+    host: bindHost,
     port,
     url(urlPath = "/"): string {
-      return `http://${urlHost(options.host)}:${port}${urlPath}`;
+      return `http://${httpUrlHost(bindHost)}:${port}${urlPath}`;
     },
     stop: async () => {
       internals?.stopWatcher?.();
@@ -329,10 +321,6 @@ async function stopServer(server: ServerType): Promise<void> {
   return new Promise((resolve, reject) => {
     server.close((error) => (error ? reject(error) : resolve()));
   });
-}
-
-function urlHost(host: string): string {
-  return host.includes(":") && !host.startsWith("[") ? `[${host}]` : host;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

@@ -3,7 +3,7 @@ import type { ServerType } from "@hono/node-server";
 import { Hono, type Context } from "hono";
 import { match } from "ts-pattern";
 import { z } from "zod";
-import type { Settings } from "@symphony/domain";
+import { httpUrlHost, normalizeHttpBindHost, type Settings } from "@symphony/domain";
 
 import { validMcpToken } from "./auth.js";
 import { executeTool, toolSpecs } from "./tools.js";
@@ -62,8 +62,9 @@ async function startHonoServer(
   options: ObservabilityServerOptions,
 ): Promise<ObservabilityServerHandle> {
   let server!: ServerType;
+  const bindHost = normalizeHttpBindHost(options.host);
   await new Promise<void>((resolve, reject) => {
-    server = serve({ fetch: app.fetch, hostname: options.host, port: options.port }, () => {
+    server = serve({ fetch: app.fetch, hostname: bindHost, port: options.port }, () => {
       server.off("error", reject);
       resolve();
     });
@@ -73,10 +74,10 @@ async function startHonoServer(
   const address = activeServer.address();
   const port = typeof address === "object" && address !== null ? address.port : options.port;
   return {
-    host: options.host,
+    host: bindHost,
     port,
     url(path = "/"): string {
-      return `http://${urlHost(options.host)}:${port}${path}`;
+      return `http://${httpUrlHost(bindHost)}:${port}${path}`;
     },
     stop: async () => stopServer(activeServer),
   };
@@ -193,11 +194,6 @@ function jsonResponse(body: unknown, status = 200): Response {
 
 function errorResponse(status: number, code: string, message: string): Response {
   return jsonResponse({ error: { code, message } }, status);
-}
-
-function urlHost(host: string): string {
-  if (host === "0.0.0.0" || host === "::") return "127.0.0.1";
-  return host.includes(":") && !host.startsWith("[") ? `[${host}]` : host;
 }
 
 async function stopServer(server: ServerType): Promise<void> {

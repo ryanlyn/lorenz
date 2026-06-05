@@ -34,6 +34,7 @@ import {
   isValidConcurrency,
   isValidMaxTurns,
   isValidEnsembleSize,
+  normalizeHttpBindHost,
 } from "@symphony/domain";
 
 export {
@@ -464,7 +465,7 @@ export function parseConfig(
     observabilityRaw.renderIntervalMs ?? settings.observability.renderIntervalMs;
 
   const serverRaw = parsed.server ?? {};
-  settings.server.host = serverRaw.host ?? settings.server.host;
+  settings.server.host = normalizeHttpBindHost(serverRaw.host ?? settings.server.host);
   if (serverRaw.port !== undefined) settings.server.port = serverRaw.port;
   if (serverRaw.traceDir !== undefined) settings.server.traceDir = serverRaw.traceDir;
   if (serverRaw.staticDir !== undefined) settings.server.staticDir = serverRaw.staticDir;

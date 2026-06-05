@@ -13,6 +13,7 @@ import { mergeMonotonicUsage } from "@symphony/policies/usage";
 import { selectLeastLoadedHost } from "@symphony/policies/workerHost";
 import type {
   AgentUpdate,
+  DispatchBlockReason,
   DispatchBlockEntry,
   Issue,
   RetryEntry,
@@ -103,9 +104,10 @@ export class Orchestrator {
           identifier: issue.identifier,
           state: issue.state,
           reason,
-          workerHost: null,
+          workerHost: retry?.workerHost ?? null,
           issueUrl: issue.url ?? null,
         });
+        if (retry) this.rescheduleRetryAfterDispatchBlock(issue, retry, reason);
         return false;
       }
       return shouldDispatchIssue(issue, this.settings, dispatchState);
@@ -387,10 +389,35 @@ export class Orchestrator {
     };
   }
 
+  private rescheduleRetryAfterDispatchBlock(
+    issue: Issue,
+    retry: RetryEntry,
+    reason: DispatchBlockReason,
+  ): void {
+    const attempt = retry.attempt + 1;
+    const deadline = this.retryDeadline(
+      retryBackoffMs(attempt, this.settings.agent.maxRetryBackoffMs, "failure"),
+    );
+    this.state.retryAttempts.set(issue.id, {
+      ...retry,
+      issueId: issue.id,
+      identifier: issue.identifier,
+      issueUrl: issue.url ?? retry.issueUrl ?? null,
+      attempt,
+      monotonicDeadlineMs: deadline.monotonicDeadlineMs,
+      dueAtIso: deadline.dueAtIso,
+      error: dispatchBlockError(reason),
+    });
+  }
+
   private releaseStaleClaimsForRetry(issueId: string): void {
     for (const key of [...this.state.claimed]) {
       if (!key.startsWith(`${issueId}:`)) continue;
       if (!this.state.running.has(key)) this.state.claimed.delete(key);
     }
   }
+}
+
+function dispatchBlockError(reason: DispatchBlockReason): string {
+  return `dispatch blocked by ${reason.replaceAll("_", " ")}`;
 }

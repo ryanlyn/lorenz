@@ -154,6 +154,35 @@ test("standalone Claude MCP server preserves route and JSON-RPC error contracts"
   }
 });
 
+test("standalone Claude MCP server rejects top-level JSON arrays as parse errors", async () => {
+  const workflow = workflowFixture();
+  const server = await startClaudeMcpServer(workflow.settings, { host: "127.0.0.1", port: 0 });
+  const token = issueMcpToken();
+  try {
+    const topLevelArray = await postRawMcp(server.url("/claude-mcp"), "[]", 400, token);
+    assert.deepEqual(topLevelArray, {
+      jsonrpc: "2.0",
+      id: null,
+      error: { code: -32700, message: "Parse error" },
+    });
+  } finally {
+    revokeMcpToken(token);
+    await server.stop();
+  }
+});
+
+test("standalone Claude MCP server emits connectable URLs for wildcard and empty hosts", async () => {
+  const workflow = workflowFixture();
+  for (const host of ["0.0.0.0", ""] as const) {
+    const server = await startClaudeMcpServer(workflow.settings, { host, port: 0 });
+    try {
+      assert.match(server.url("/claude-mcp"), /^http:\/\/127\.0\.0\.1:\d+\/claude-mcp$/);
+    } finally {
+      await server.stop();
+    }
+  }
+});
+
 test("observability HTTP API serves trace routes when issueStore is provided", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "symphony-http-issue-store-"));
   const traceDir = path.join(root, "traces");

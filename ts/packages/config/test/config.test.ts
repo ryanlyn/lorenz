@@ -237,6 +237,11 @@ test("workspace root falls back to default when env reference is unset or empty"
   assert.equal(override.workspace.rootExpression, fallback);
 });
 
+test("server.host falls back to loopback when configured as an empty string", () => {
+  const settings = parseConfig({ server: { host: "" } });
+  assert.equal(settings.server.host, "127.0.0.1");
+});
+
 test("dispatch config rejects blank routes and normalizes unique route names", () => {
   assert.throws(
     () => parseConfig({ tracker: { dispatch: { only_routes: ["backend", " "] } } }),

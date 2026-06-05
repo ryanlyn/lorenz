@@ -457,6 +457,62 @@ test("orchestrator snapshots capacity-blocked dispatch candidates", () => {
   assert.equal(workerOrchestrator.snapshot().blocked[0]?.reason, "worker_host_capacity");
 });
 
+test("orchestrator reschedules due retries that are still capacity-blocked", () => {
+  const clock = fakeClock(new Date("2026-01-01T00:00:00.000Z"));
+  const settings = parseConfig({
+    agent: { max_concurrent_agents: 1, max_retry_backoff_ms: 60_000 },
+  });
+  const orchestrator = new Orchestrator(settings, clock);
+  const running = normalizeIssue({
+    id: "running",
+    identifier: "MT-RUN",
+    title: "Running",
+    state: { name: "Todo", type: "unstarted" },
+  });
+  const retryIssue = normalizeIssue({
+    id: "capacity-blocked-retry",
+    identifier: "MT-CAPACITY-RETRY",
+    title: "Capacity blocked retry",
+    state: { name: "Todo", type: "unstarted" },
+  });
+
+  assert.ok(orchestrator.claim(running));
+  orchestrator.state.retryAttempts.set(retryIssue.id, {
+    issueId: retryIssue.id,
+    identifier: retryIssue.identifier,
+    attempt: 1,
+    monotonicDeadlineMs: clock.monotonicMs() - 1,
+    dueAtIso: "2025-12-31T23:59:59.999Z",
+    slotIndex: 0,
+    workerHost: null,
+    workspacePath: "/work/MT-CAPACITY-RETRY",
+    issueUrl: retryIssue.url ?? null,
+    error: "agent exited",
+  });
+
+  assert.deepEqual(orchestrator.eligibleIssues([retryIssue]), []);
+  let retry = orchestrator.snapshot().retrying[0];
+  assert.equal(orchestrator.snapshot().blocked[0]?.reason, "global_concurrency_cap");
+  assert.equal(retry?.attempt, 2);
+  assert.equal(retry?.monotonicDeadlineMs, clock.monotonicMs() + 20_000);
+  assert.equal(retry?.dueAtIso, "2026-01-01T00:00:20.000Z");
+  assert.equal(retry?.error, "dispatch blocked by global concurrency cap");
+
+  assert.deepEqual(orchestrator.eligibleIssues([retryIssue]), []);
+  retry = orchestrator.snapshot().retrying[0];
+  assert.equal(orchestrator.snapshot().blocked.length, 0);
+  assert.equal(retry?.attempt, 2);
+  assert.equal(retry?.monotonicDeadlineMs, clock.monotonicMs() + 20_000);
+
+  clock.advance(20_000);
+  assert.deepEqual(orchestrator.eligibleIssues([retryIssue]), []);
+  retry = orchestrator.snapshot().retrying[0];
+  assert.equal(orchestrator.snapshot().blocked[0]?.reason, "global_concurrency_cap");
+  assert.equal(retry?.attempt, 3);
+  assert.equal(retry?.monotonicDeadlineMs, clock.monotonicMs() + 40_000);
+  assert.equal(retry?.dueAtIso, "2026-01-01T00:01:00.000Z");
+});
+
 test("orchestrator gates retry attempts until backoff is due and clears terminal retries", () => {
   const clock = fakeClock();
   const settings = parseConfig({ agent: { max_retry_backoff_ms: 2_000 } });

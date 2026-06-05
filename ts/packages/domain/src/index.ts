@@ -48,6 +48,16 @@ export function isValidEnsembleSize(n: number): boolean {
   return Number.isInteger(n) && n >= 1 && n <= ENSEMBLE_SIZE_MAX;
 }
 
+export function normalizeHttpBindHost(host: string): string {
+  return host.trim() === "" ? "127.0.0.1" : host;
+}
+
+export function httpUrlHost(host: string): string {
+  const normalized = normalizeHttpBindHost(host);
+  if (normalized === "0.0.0.0" || normalized === "::") return "127.0.0.1";
+  return normalized.includes(":") && !normalized.startsWith("[") ? `[${normalized}]` : normalized;
+}
+
 // --- Session protocol types ---
 
 export type StopReason = "end_turn" | "max_tokens" | "max_turn_requests" | "refusal" | "cancelled";
