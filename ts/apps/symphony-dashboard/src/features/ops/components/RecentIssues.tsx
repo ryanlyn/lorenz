@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { ExternalLink } from "lucide-react";
+import { ExternalLink, FileText } from "lucide-react";
 
 import { cn } from "../../../lib/utils";
 import type { IssueRecord } from "../../traceviz/api/types";
@@ -34,27 +34,41 @@ export function RecentIssues() {
       ) : (
         <div className="divide-y divide-border">
           {issues.map((issue) => (
-            <a
+            <div
               key={issue.issueId}
-              href={`#/trace/${encodeURIComponent(issue.issueId)}`}
               className={cn(
                 "flex items-center gap-3 px-4 py-3",
                 "transition-colors hover:bg-surface",
               )}
             >
               <div className="min-w-0 flex-1">
-                <p className="truncate text-sm font-medium text-foreground">
-                  {issue.issueIdentifier}
-                </p>
+                <div className="flex items-center gap-2">
+                  <a
+                    href={`#/trace/${encodeURIComponent(issue.issueId)}`}
+                    className="inline-flex items-center gap-1 truncate font-mono text-sm text-accent-blue hover:underline"
+                    title="View trace"
+                  >
+                    <FileText className="h-3 w-3 shrink-0" />
+                    {issue.issueIdentifier}
+                  </a>
+                  {issue.url && (
+                    <a
+                      href={issue.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center text-muted hover:text-foreground"
+                      title="Open in tracker"
+                    >
+                      <ExternalLink className="h-3.5 w-3.5" />
+                    </a>
+                  )}
+                </div>
                 {issue.title && <p className="truncate text-xs text-muted">{issue.title}</p>}
               </div>
               <span className="shrink-0 text-xs text-muted">
                 {formatRelativeTime(issue.updatedAt)}
               </span>
-              {issue.url && (
-                <ExternalLink aria-hidden="true" className="h-3.5 w-3.5 shrink-0 text-muted" />
-              )}
-            </a>
+            </div>
           ))}
         </div>
       )}
