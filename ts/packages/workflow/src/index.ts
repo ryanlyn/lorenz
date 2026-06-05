@@ -1,10 +1,12 @@
+import { createHash } from "node:crypto";
+import type { Stats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 
 import { Liquid } from "liquidjs";
 import YAML from "yaml";
 import { parseConfig } from "@symphony/config";
-import type { WorkflowDefinition } from "@symphony/domain";
+import type { WorkflowContentStamp, WorkflowDefinition } from "@symphony/domain";
 import type { DefaultSettingsOptions } from "@symphony/config";
 import type { ParsedPromptTemplate } from "@symphony/domain";
 
@@ -40,15 +42,11 @@ export async function loadWorkflow(
 ): Promise<WorkflowDefinition> {
   const absolute = path.resolve(workflowPath ?? workflowFilePath(env));
   let content: string;
+  let stat: Stats;
   try {
-    content = await fs.readFile(absolute, "utf8");
+    [content, stat] = await Promise.all([fs.readFile(absolute, "utf8"), fs.stat(absolute)]);
   } catch (error) {
-    throw new Error(
-      `missing_workflow_file: ${absolute} ${(error as NodeJS.ErrnoException).code ?? ""}`.trim(),
-      {
-        cause: error,
-      },
-    );
+    throw missingWorkflowFileError(absolute, error);
   }
   const { config, body } = parseWorkflowContent(content);
   const settings = parseConfig(config, env, defaults);
@@ -57,8 +55,37 @@ export async function loadWorkflow(
     config,
     promptTemplate: body,
     parsedPromptTemplate: parsePromptTemplate(body),
+    stamp: workflowContentStamp(stat, content),
     settings,
   };
+}
+
+export async function currentWorkflowStamp(workflowPath: string): Promise<WorkflowContentStamp> {
+  const absolute = path.resolve(workflowPath);
+  try {
+    const [content, stat] = await Promise.all([fs.readFile(absolute, "utf8"), fs.stat(absolute)]);
+    return workflowContentStamp(stat, content);
+  } catch (error) {
+    throw missingWorkflowFileError(absolute, error);
+  }
+}
+
+export async function workflowFileChanged(workflow: WorkflowDefinition): Promise<boolean> {
+  if (!workflow.stamp) return true;
+  return !workflowStampsEqual(workflow.stamp, await currentWorkflowStamp(workflow.path));
+}
+
+export function workflowStampsEqual(
+  left: WorkflowContentStamp | undefined,
+  right: WorkflowContentStamp | undefined,
+): boolean {
+  return (
+    left !== undefined &&
+    right !== undefined &&
+    left.mtimeMs === right.mtimeMs &&
+    left.size === right.size &&
+    left.contentHash === right.contentHash
+  );
 }
 
 export function parseWorkflowContent(content: string): {
@@ -113,4 +140,21 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function workflowContentStamp(stat: Stats, content: string): WorkflowContentStamp {
+  return {
+    mtimeMs: stat.mtimeMs,
+    size: stat.size,
+    contentHash: createHash("sha256").update(content).digest("hex"),
+  };
+}
+
+function missingWorkflowFileError(absolute: string, error: unknown): Error {
+  return new Error(
+    `missing_workflow_file: ${absolute} ${(error as NodeJS.ErrnoException).code ?? ""}`.trim(),
+    {
+      cause: error,
+    },
+  );
 }

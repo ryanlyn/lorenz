@@ -446,6 +446,12 @@ export interface PartialRuntimeSettings {
   claude?: Partial<ClaudeSettings> | undefined;
 }
 
+export interface WorkflowContentStamp {
+  mtimeMs: number;
+  size: number;
+  contentHash: string;
+}
+
 /**
  * Opaque parsed representation of a prompt template. Produced by workflow loading and
  * consumed by prompt rendering so callers can avoid reparsing the same template.
@@ -470,6 +476,8 @@ export interface WorkflowDefinition {
   promptTemplate: string;
   /** Parsed form of the effective prompt template, cached for prompt rendering. */
   parsedPromptTemplate?: ParsedPromptTemplate | undefined;
+  /** Last observed file stamp used to skip unchanged reload work. */
+  stamp?: WorkflowContentStamp | undefined;
   /** Normalized, validated runtime settings derived from `config` plus env. */
   settings: Settings;
 }

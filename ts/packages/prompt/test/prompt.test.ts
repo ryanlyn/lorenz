@@ -38,6 +38,21 @@ test("buildPrompt renders issue title and description into template", async () =
   assert.match(result, /Add Redis support for session cache/);
 });
 
+test("buildPrompt frames template parse failures with template context", async () => {
+  const template = "{% if issue.identifier %}";
+  const issue = makeIssue({ identifier: "ENG-BROKEN" });
+
+  await assert.rejects(
+    () => buildPrompt(template, issue),
+    (error: unknown) => {
+      assert.ok(error instanceof Error);
+      assert.match(error.message, /template_parse_error:/);
+      assert.match(error.message, /template="\{% if issue\.identifier %\}"/);
+      return true;
+    },
+  );
+});
+
 test("buildPrompt includes issue URL when present", async () => {
   const template = `URL: {{ issue.url }}`;
   const issue = makeIssue({ url: "https://linear.app/team/issue/ENG-99" });

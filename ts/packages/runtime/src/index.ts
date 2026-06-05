@@ -14,6 +14,7 @@ import { settingsForIssueState, validateDispatchConfig } from "@symphony/config"
 import { runAgentAttempt, type RunResult } from "@symphony/agent-runner";
 import { ProjectionActor } from "@symphony/projections";
 import { RetryScheduler } from "@symphony/retry-scheduler";
+import { workflowFileChanged, workflowStampsEqual } from "@symphony/workflow";
 import { AGENT_UPDATE_TYPES } from "@symphony/domain";
 import type {
   AgentKind,
@@ -547,7 +548,10 @@ export class SymphonyRuntime {
   private async reloadWorkflowIfConfigured(): Promise<void> {
     if (!this.input.reloadWorkflow) return;
     try {
+      if (!(await workflowFileChanged(this.input.workflow))) return;
+      const previous = this.input.workflow;
       const workflow = await this.input.reloadWorkflow();
+      if (workflow === previous || workflowStampsEqual(previous.stamp, workflow.stamp)) return;
       this.input.workflow = workflow;
       this.orchestrator.settings = workflow.settings;
       if (!this.input.client && this.input.clientFactory) {

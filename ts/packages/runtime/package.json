@@ -17,6 +17,7 @@
     "@symphony/orchestrator": "workspace:*",
     "@symphony/policies": "workspace:*",
     "@symphony/projections": "workspace:*",
-    "@symphony/retry-scheduler": "workspace:*"
+    "@symphony/retry-scheduler": "workspace:*",
+    "@symphony/workflow": "workspace:*"
   }
 }

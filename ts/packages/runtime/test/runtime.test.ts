@@ -4,6 +4,7 @@ import path from "node:path";
 import { test, vi } from "vitest";
 import {
   createWorkspaceForIssue,
+  loadWorkflow,
   normalizeIssue,
   Orchestrator,
   parseConfig,
@@ -205,6 +206,91 @@ test("runtime reloads workflow settings on each poll with last-known-good fallba
   assert.equal(runtime.workflow.settings.tracker.dispatch.acceptUnrouted, false);
   assert.ok(
     runtime.snapshot().recentEvents.some((event) => event.type === "workflow_reload_failed"),
+  );
+});
+
+test("runtime skips reload side effects when workflow content is unchanged", async () => {
+  const issue = issueFixture("issue-unchanged-reload", "MT-UNCHANGED-RELOAD");
+  const dir = await tempDir("symphony-runtime-unchanged-workflow");
+  const workflowFile = path.join(dir, "WORKFLOW.md");
+  await fs.writeFile(workflowFile, workflowMarkdown({ intervalMs: 5 }));
+  const workflow = await loadWorkflow(workflowFile, {}, { cwd: dir });
+  let reloads = 0;
+  let clientBuilds = 0;
+  const runtime = new SymphonyRuntime(
+    runtimeOptions({
+      workflow,
+      reloadWorkflow: async () => {
+        reloads += 1;
+        return loadWorkflow(workflowFile, {}, { cwd: dir });
+      },
+      clientFactory: () => {
+        clientBuilds += 1;
+        return {
+          fetchCandidateIssues: async () => [issue],
+          fetchIssuesByIds: async () => [issue],
+        };
+      },
+      runner: async () => {
+        throw new Error("dry-run should not call runner");
+      },
+    }),
+  );
+
+  await runtime.pollOnce({ dryRun: true });
+  await runtime.pollOnce({ dryRun: true });
+
+  assert.equal(reloads, 0);
+  assert.equal(clientBuilds, 1);
+  assert.equal(
+    runtime.snapshot().recentEvents.some((event) => event.type === "workflow_reloaded"),
+    false,
+  );
+});
+
+test("runtime reloads stamped workflow when file content changes", async () => {
+  const issue = issueFixture("issue-changed-reload", "MT-CHANGED-RELOAD");
+  const dir = await tempDir("symphony-runtime-changed-workflow");
+  const workflowFile = path.join(dir, "WORKFLOW.md");
+  await fs.writeFile(workflowFile, workflowMarkdown({ intervalMs: 5 }));
+  const workflow = await loadWorkflow(workflowFile, {}, { cwd: dir });
+  let reloads = 0;
+  let clientBuilds = 0;
+  const runtime = new SymphonyRuntime(
+    runtimeOptions({
+      workflow,
+      reloadWorkflow: async () => {
+        reloads += 1;
+        return loadWorkflow(workflowFile, {}, { cwd: dir });
+      },
+      clientFactory: () => {
+        clientBuilds += 1;
+        return {
+          fetchCandidateIssues: async () => [issue],
+          fetchIssuesByIds: async () => [issue],
+        };
+      },
+      runner: async () => {
+        throw new Error("dry-run should not call runner");
+      },
+    }),
+  );
+
+  await fs.writeFile(
+    workflowFile,
+    workflowMarkdown({ acceptUnrouted: false, intervalMs: 9, prompt: "Changed prompt" }),
+  );
+
+  await runtime.pollOnce({ dryRun: true });
+
+  assert.equal(reloads, 1);
+  assert.equal(clientBuilds, 2);
+  assert.equal(runtime.workflow.promptTemplate, "Changed prompt");
+  assert.equal(runtime.workflow.settings.polling.intervalMs, 9);
+  assert.equal(runtime.snapshot().poll.eligible, 0);
+  assert.equal(
+    runtime.snapshot().recentEvents.some((event) => event.type === "workflow_reloaded"),
+    true,
   );
 });
 
@@ -1177,6 +1263,35 @@ function workflowFixture(root = "/tmp/symphony-ts-runtime-test"): WorkflowDefini
     promptTemplate: "Issue {{ issue.identifier }}",
     settings,
   };
+}
+
+function workflowMarkdown({
+  acceptUnrouted = true,
+  intervalMs = 5,
+  prompt = "Issue {{ issue.identifier }}",
+}: {
+  acceptUnrouted?: boolean;
+  intervalMs?: number;
+  prompt?: string;
+} = {}): string {
+  return [
+    "---",
+    "tracker:",
+    "  kind: linear",
+    "  api_key: linear-token",
+    "  project_slug: mono",
+    "  active_states:",
+    "    - Todo",
+    "    - In Progress",
+    "  terminal_states:",
+    "    - Done",
+    "  dispatch:",
+    `    accept_unrouted: ${acceptUnrouted}`,
+    "polling:",
+    `  interval_ms: ${intervalMs}`,
+    "---",
+    prompt,
+  ].join("\n");
 }
 
 function issueFixture(id: string, identifier: string): Issue {
