@@ -221,7 +221,6 @@ interface OpsOverviewProps {
 }
 
 export function OpsOverview({ state, connected }: OpsOverviewProps) {
-
   const running = state?.running ?? [];
   const retrying = state?.retrying ?? [];
   const blocked = state?.blocked ?? [];

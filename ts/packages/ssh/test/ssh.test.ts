@@ -1,5 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { performance } from "node:perf_hooks";
+import { setTimeout as delay } from "node:timers/promises";
 
 // Tests mutate process.env.PATH and process.env.SYMPHONY_SSH_CONFIG to inject fake
 // ssh binaries and config. This requires sequential execution (enforced by the root
@@ -95,6 +97,37 @@ exit 0
   );
 });
 
+test("SSH timeout rejects near the caller deadline when a child keeps pipes open", async () => {
+  const root = await tempDir("symphony-ts-ssh-timeout");
+  const trace = path.join(root, "ssh.trace");
+
+  await installFakeSsh(
+    root,
+    trace,
+    `#!/bin/sh
+printf 'ARGV:%s\\n' "$*" >> ${shellEscape(trace)}
+node -e 'process.on("SIGTERM", () => {}); setInterval(() => {}, 1000)' &
+child="$!"
+printf 'CHILD:%s\\n' "$child" >> ${shellEscape(trace)}
+wait "$child"
+`,
+  );
+
+  const started = performance.now();
+  await assert.rejects(
+    () => runSsh("localhost", "printf ok", { timeoutMs: 1000 }),
+    /ssh_timeout: localhost 1000/,
+  );
+  const elapsedMs = performance.now() - started;
+
+  if (elapsedMs >= 1_500) throw new Error(`timeout returned after ${Math.round(elapsedMs)}ms`);
+
+  const traceText = await fs.readFile(trace, "utf8");
+  const childMatch = /^CHILD:(\d+)$/m.exec(traceText);
+  if (!childMatch) throw new Error(`fake ssh child pid missing in trace: ${traceText}`);
+  await waitForProcessExit(Number(childMatch[1]), 7_000);
+});
+
 test("SSH writeRemoteFile preserves payload bytes and applies mode", async () => {
   const root = await tempDir("symphony-ts-ssh-write");
   const trace = path.join(root, "ssh.trace");
@@ -130,4 +163,17 @@ async function installFakeSsh(root: string, trace: string, source: string): Prom
 function restoreEnv(key: string, value: string | undefined): void {
   if (value === undefined) delete process.env[key];
   else process.env[key] = value;
+}
+
+async function waitForProcessExit(pid: number, timeoutMs: number): Promise<void> {
+  const deadline = performance.now() + timeoutMs;
+  while (performance.now() < deadline) {
+    try {
+      process.kill(pid, 0);
+    } catch {
+      return;
+    }
+    await delay(50);
+  }
+  throw new Error(`process ${pid} still running after ${timeoutMs}ms`);
 }
