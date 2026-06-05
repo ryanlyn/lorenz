@@ -48,6 +48,12 @@ function extractTextFromNotification(msg: SessionNotification): string {
   return "";
 }
 
+function getToolCallId(update: { toolCallId?: unknown }): string | null {
+  return typeof update.toolCallId === "string" && update.toolCallId.length > 0
+    ? update.toolCallId
+    : null;
+}
+
 /**
  * Parse all lines from a JSONL trace file content into DisplayEvents.
  */
@@ -102,9 +108,10 @@ export function parseTraceLines(lines: string[]): DisplayEvent[] {
             }
           }
         } else if (sessionUpdate === "tool_call") {
+          const id = getToolCallId(update);
+          if (!id) break;
           flushPendingText();
           const name = update.title ?? (update.kind as string) ?? "unknown";
-          const id = update.toolCallId ?? "";
           const input = (update.rawInput as Record<string, unknown>) ?? {};
 
           const toolCall: ToolCallDisplayEvent = {
@@ -119,7 +126,8 @@ export function parseTraceLines(lines: string[]): DisplayEvent[] {
           };
           pendingToolCalls.set(id, { event: toolCall, toolUseId: id, startTs: ts });
         } else if (sessionUpdate === "tool_call_update") {
-          const toolUseId = update.toolCallId ?? "";
+          const toolUseId = getToolCallId(update);
+          if (!toolUseId) break;
           const status = update.status;
 
           if (status === "completed" || status === "failed") {
@@ -147,7 +155,7 @@ export function parseTraceLines(lines: string[]): DisplayEvent[] {
               }
             }
             const isError = status === "failed";
-            const pending = toolUseId ? pendingToolCalls.get(toolUseId) : undefined;
+            const pending = pendingToolCalls.get(toolUseId);
             if (pending) {
               pendingToolCalls.delete(toolUseId);
               const toolCallEvent = pending.event;

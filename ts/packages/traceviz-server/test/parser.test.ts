@@ -274,6 +274,31 @@ describe("parseTraceLines chunk combining", () => {
     expect(events[2]).toMatchObject({ kind: "message", text: "Done." });
   });
 
+  it("skips malformed tool calls without toolCallId", () => {
+    const makeToolCall = (title: string, timestamp: string): string =>
+      JSON.stringify({
+        type: "session_notification",
+        issueId: "id",
+        issueIdentifier: "T-1",
+        timestamp,
+        message: {
+          sessionId: "s1",
+          update: {
+            sessionUpdate: "tool_call",
+            title,
+            rawInput: { command: title },
+          },
+        },
+      });
+
+    const events = parseTraceLines([
+      makeToolCall("First", "2026-01-01T00:00:00Z"),
+      makeToolCall("Second", "2026-01-01T00:00:01Z"),
+    ]);
+
+    expect(events.filter((event) => event.kind === "tool_call")).toHaveLength(0);
+  });
+
   it("flushes pending text before turn_started", () => {
     const lines = [
       makeChunk("agent_message_chunk", "end of turn"),
