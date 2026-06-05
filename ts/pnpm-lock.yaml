@@ -754,12 +754,6 @@ importers:
       hono:
         specifier: "catalog:"
         version: 4.12.23
-      ts-pattern:
-        specifier: "catalog:"
-        version: 5.9.0
-      zod:
-        specifier: "catalog:"
-        version: 4.4.3
     devDependencies:
       "@types/better-sqlite3":
         specifier: "catalog:"

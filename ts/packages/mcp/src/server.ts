@@ -34,7 +34,7 @@ export async function startClaudeMcpServer(
   return startHonoServer(app, options);
 }
 
-function mountClaudeMcp(app: Hono, settings: Settings): void {
+export function mountClaudeMcp(app: Hono, settings: Settings): void {
   app.use("/claude-mcp", async (c, next) => {
     if (c.req.method !== "POST") {
       await next();

@@ -12,5 +12,5 @@ export {
 export type { Filter, OrderBy, Predicate, QuerySpec, Scalar } from "./filter.js";
 export { acquireAgentMcpEndpoint, trackerMcpServerName } from "./agentEndpoint.js";
 export type { AgentMcpEndpointLease } from "./agentEndpoint.js";
-export { startClaudeMcpServer } from "./server.js";
+export { mountClaudeMcp, startClaudeMcpServer } from "./server.js";
 export type { ObservabilityServerHandle, ObservabilityServerOptions } from "./server.js";

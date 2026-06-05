@@ -211,7 +211,22 @@ test("local_query rejects a malformed filter", async () => {
 test("local tools reject unknown names", async () => {
   const { settings } = await localSettings();
   const result = await executeTool("local_bogus", {}, settings);
-  assert.equal(result.success, false);
+  assert.deepEqual(result, {
+    success: false,
+    error: 'Unsupported tool: "local_bogus".',
+    result: {
+      error: {
+        message: 'Unsupported tool: "local_bogus".',
+        supportedTools: [
+          "local_update_status",
+          "local_comment",
+          "local_create_issue",
+          "local_read_issue",
+          "local_query",
+        ],
+      },
+    },
+  });
 });
 
 test("local_create_issue writes under HOME for a ~ path, not a literal ~ under cwd", async () => {

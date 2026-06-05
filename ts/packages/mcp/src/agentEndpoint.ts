@@ -34,6 +34,7 @@ interface LocalMcpServerLease {
 
 const mcpPath = "/claude-mcp";
 const localMcpServers = new Map<string, LocalMcpServerEntry>();
+const localMcpServerLocks = new Map<string, Promise<void>>();
 
 export async function acquireAgentMcpEndpoint(
   settings: Settings,
@@ -84,39 +85,62 @@ async function acquireRemoteMcpEndpoint(
   settings: Settings,
 ): Promise<McpEndpoint> {
   const localServer = await ensureLocalMcpServer(settings);
-  const localHost = "127.0.0.1";
-  const localPort = localServer?.handle.port ?? settings.server.port;
-  if (typeof localPort !== "number" || localPort <= 0) {
-    throw new Error("remote_acp_mcp_requires_server_port");
+  try {
+    const localHost = "127.0.0.1";
+    const localPort = localServer?.handle.port ?? settings.server.port;
+    if (typeof localPort !== "number" || localPort <= 0) {
+      throw new Error("remote_acp_mcp_requires_server_port");
+    }
+    const tunnel = workerHostPool.acquireRemoteMcpTunnel(workerHost, localHost, localPort);
+    return {
+      url: `http://127.0.0.1:${tunnel.remotePort}${mcpPath}`,
+      tunnel,
+      localServer: localServer ?? undefined,
+    };
+  } catch (error) {
+    if (localServer) await releaseLocalMcpServer(localServer);
+    throw error;
   }
-  const tunnel = workerHostPool.acquireRemoteMcpTunnel(workerHost, localHost, localPort);
-  return {
-    url: `http://127.0.0.1:${tunnel.remotePort}${mcpPath}`,
-    tunnel,
-    localServer: localServer ?? undefined,
-  };
 }
 
 async function ensureLocalMcpServer(settings: Settings): Promise<LocalMcpServerLease | null> {
   const configuredPort = settings.server.port;
   if (typeof configuredPort === "number" && configuredPort > 0) {
     const key = `${settings.server.host}:${configuredPort}`;
-    const existing = localMcpServers.get(key);
-    if (existing) {
-      existing.refCount += 1;
-      return { key, handle: existing.handle };
-    }
-    if (await configuredMcpServerReachable(settings)) return null;
-    const handle = await startClaudeMcpServer(settings, {
-      host: settings.server.host,
-      port: configuredPort,
+    return withLocalMcpServerLock(key, async () => {
+      const existing = localMcpServers.get(key);
+      if (existing) {
+        existing.refCount += 1;
+        return { key, handle: existing.handle };
+      }
+      if (await configuredMcpServerReachable(settings)) return null;
+      const handle = await startClaudeMcpServer(settings, {
+        host: settings.server.host,
+        port: configuredPort,
+      });
+      localMcpServers.set(key, { handle, refCount: 1 });
+      return { key, handle };
     });
-    localMcpServers.set(key, { handle, refCount: 1 });
-    return { key, handle };
   }
 
   const handle = await startClaudeMcpServer(settings, { host: settings.server.host, port: 0 });
   return { key: null, handle };
+}
+
+async function withLocalMcpServerLock<T>(key: string, action: () => Promise<T>): Promise<T> {
+  const previous = localMcpServerLocks.get(key) ?? Promise.resolve();
+  let release!: () => void;
+  const current = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  localMcpServerLocks.set(key, current);
+  await previous.catch(() => {});
+  try {
+    return await action();
+  } finally {
+    release();
+    if (localMcpServerLocks.get(key) === current) localMcpServerLocks.delete(key);
+  }
 }
 
 async function releaseLocalMcpServer(lease: LocalMcpServerLease): Promise<void> {

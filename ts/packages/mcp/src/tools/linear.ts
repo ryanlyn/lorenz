@@ -2,6 +2,8 @@ import type { Settings } from "@symphony/domain";
 
 import type { ToolResult, ToolSpec } from "../tools.js";
 
+import { unsupportedToolFailure } from "./failure.js";
+
 export function linearToolSpecs(): ToolSpec[] {
   return [
     {
@@ -26,7 +28,7 @@ export async function executeLinearTool(
   fetchImpl: typeof fetch = fetch,
 ): Promise<ToolResult> {
   if (name !== "linear_graphql") {
-    return toolFailure("Unsupported tool.", { supportedTools: ["linear_graphql"] });
+    return unsupportedToolFailure(name, ["linear_graphql"]);
   }
   const normalizedInput = normalizeLinearGraphqlInput(input);
   if (!normalizedInput.ok) {

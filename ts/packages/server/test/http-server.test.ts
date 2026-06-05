@@ -118,6 +118,13 @@ test("standalone Claude MCP server preserves route and JSON-RPC error contracts"
       error: { code: -32700, message: "Parse error" },
     });
 
+    const arrayBody = await postRawMcp(server.url("/claude-mcp"), "[]", 400, token);
+    assert.deepEqual(arrayBody, {
+      jsonrpc: "2.0",
+      id: null,
+      error: { code: -32700, message: "Parse error" },
+    });
+
     const unknownMethod = await postMcp(
       server.url("/claude-mcp"),
       { jsonrpc: "2.0", id: 10, method: "tools/missing" },

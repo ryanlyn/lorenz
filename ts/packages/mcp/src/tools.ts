@@ -2,6 +2,7 @@ import type { Settings, TrackerKind } from "@symphony/domain";
 
 import { executeLinearTool, linearToolSpecs } from "./tools/linear.js";
 import { executeLocalTool, localToolSpecs } from "./tools/local.js";
+import { unsupportedToolFailure } from "./tools/failure.js";
 
 export interface ToolSpec {
   name: string;
@@ -55,11 +56,7 @@ export async function executeTool(
     case "local":
       return executeLocalTool(name, input, settings);
     case "memory":
-      return {
-        success: false,
-        error: "Unsupported tool.",
-        result: { error: { message: "Unsupported tool.", supportedTools: [] } },
-      };
+      return unsupportedToolFailure(name, []);
     default:
       return assertNever(kind);
   }

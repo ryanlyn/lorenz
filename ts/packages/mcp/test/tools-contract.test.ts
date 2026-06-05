@@ -13,10 +13,10 @@ test("linear_graphql tool validates name, input, and API key before network", as
 
   assert.deepEqual(await executeTool("unknown", {}, settings, fetchImpl), {
     success: false,
-    error: "Unsupported tool.",
+    error: 'Unsupported tool: "unknown".',
     result: {
       error: {
-        message: "Unsupported tool.",
+        message: 'Unsupported tool: "unknown".',
         supportedTools: ["linear_graphql"],
       },
     },
@@ -74,6 +74,22 @@ test("linear_graphql tool rejects non-object variables instead of silently dropp
       result: {
         error: {
           message: "`linear_graphql.variables` must be a JSON object when provided.",
+        },
+      },
+    },
+  );
+});
+
+test("memory tracker unsupported-tool diagnostics include the requested name", async () => {
+  assert.deepEqual(
+    await executeTool("memory_bogus", {}, parseConfig({ tracker: { kind: "memory" } }, {})),
+    {
+      success: false,
+      error: 'Unsupported tool: "memory_bogus".',
+      result: {
+        error: {
+          message: 'Unsupported tool: "memory_bogus".',
+          supportedTools: [],
         },
       },
     },

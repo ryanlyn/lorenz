@@ -17,9 +17,7 @@
     "@symphony/runtime-events": "workspace:*",
     "@symphony/traceviz-server": "workspace:*",
     "better-sqlite3": "catalog:",
-    "hono": "catalog:",
-    "ts-pattern": "catalog:",
-    "zod": "catalog:"
+    "hono": "catalog:"
   },
   "devDependencies": {
     "@types/better-sqlite3": "catalog:"

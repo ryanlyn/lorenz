@@ -4,6 +4,8 @@ import { BoardStore, resolveBoardDir, type BoardStoreOptions } from "@symphony/l
 import { applyQuery, parseQuerySpec, parseSelect, pickFields } from "../filter.js";
 import type { ToolResult, ToolSpec } from "../tools.js";
 
+import { unsupportedToolFailure } from "./failure.js";
+
 const TOOL_NAMES = [
   "local_update_status",
   "local_comment",
@@ -138,11 +140,7 @@ export async function executeLocalTool(
         return { success: true, result: { rows: out, total, skipped } };
       }
       default:
-        return {
-          success: false,
-          error: "Unsupported tool.",
-          result: { error: { message: "Unsupported tool.", supportedTools: [...TOOL_NAMES] } },
-        };
+        return unsupportedToolFailure(name, TOOL_NAMES);
     }
   } catch (error) {
     const message = (error as Error).message;
