@@ -34,7 +34,7 @@ export function App() {
                   : "text-muted hover:text-foreground"
               }`}
             >
-              Traces
+              Issues
             </a>
           </nav>
         </div>
