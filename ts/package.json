@@ -5,7 +5,7 @@
   "type": "module",
   "description": "Symphony TypeScript orchestration contracts.",
   "scripts": {
-    "dev": "pnpm dashboard:build && pnpm start",
+    "dev": "pnpm build && pnpm start",
     "start": "pnpm exec node apps/cli/dist/bin/cli.js",
     "start:once": "pnpm exec node apps/cli/dist/bin/cli.js --once",
     "runs": "pnpm exec node apps/cli/dist/bin/cli.js runs",
