@@ -105,6 +105,7 @@ export interface RuntimeRunningEntry {
   runId?: string | undefined;
   issueId: string;
   issueIdentifier: string;
+  issueUrl?: string | null | undefined;
   title: string;
   state: string;
   slotIndex: number;
@@ -127,6 +128,7 @@ export interface RuntimeRunningEntry {
 export interface RuntimeRetryEntry {
   issueId: string;
   identifier: string;
+  issueUrl?: string | null | undefined;
   attempt: number;
   dueAtIso: string;
   monotonicDeadlineMs: number;
@@ -862,6 +864,7 @@ function runtimeRunningEntry(entry: RunningEntry, runId: string | undefined): Ru
     runId,
     issueId: entry.issue.id,
     issueIdentifier: entry.identifier,
+    issueUrl: entry.issue.url ?? null,
     title: entry.issue.title,
     state: entry.issue.state,
     slotIndex: entry.slotIndex,
@@ -885,6 +888,7 @@ function runtimeRunningEntry(entry: RunningEntry, runId: string | undefined): Ru
 function runtimeRetryEntry(entry: {
   issueId: string;
   identifier: string;
+  issueUrl?: string | null | undefined;
   attempt: number;
   dueAtIso: string;
   monotonicDeadlineMs: number;
@@ -896,6 +900,7 @@ function runtimeRetryEntry(entry: {
   return {
     issueId: entry.issueId,
     identifier: entry.identifier,
+    issueUrl: entry.issueUrl ?? null,
     attempt: entry.attempt,
     dueAtIso: entry.dueAtIso,
     monotonicDeadlineMs: entry.monotonicDeadlineMs,

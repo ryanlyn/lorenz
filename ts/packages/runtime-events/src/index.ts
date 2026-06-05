@@ -68,6 +68,7 @@ export interface RuntimeRunningEntry {
   runId?: string | undefined;
   issueId: string;
   issueIdentifier: string;
+  issueUrl?: string | null | undefined;
   title: string;
   state: string;
   slotIndex: number;
@@ -90,6 +91,7 @@ export interface RuntimeRunningEntry {
 export interface RuntimeRetryEntry {
   issueId: string;
   identifier: string;
+  issueUrl?: string | null | undefined;
   attempt: number;
   dueAtIso: string;
   monotonicDeadlineMs: number;

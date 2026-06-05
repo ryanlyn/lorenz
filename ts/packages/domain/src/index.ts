@@ -510,6 +510,7 @@ export interface RetryEntry {
   slotIndex?: number | undefined;
   workerHost?: string | null | undefined;
   workspacePath?: string | null | undefined;
+  issueUrl?: string | null | undefined;
 }
 
 /**
@@ -534,6 +535,7 @@ export interface DispatchBlockEntry {
   state: string;
   reason: DispatchBlockReason;
   workerHost?: string | null | undefined;
+  issueUrl?: string | null | undefined;
 }
 
 /**

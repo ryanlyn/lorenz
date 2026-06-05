@@ -104,6 +104,7 @@ export class Orchestrator {
           state: issue.state,
           reason,
           workerHost: null,
+          issueUrl: issue.url ?? null,
         });
         return false;
       }
@@ -240,6 +241,7 @@ export class Orchestrator {
       this.state.retryAttempts.set(issueId, {
         issueId,
         identifier: entry.identifier,
+        issueUrl: entry.issue.url ?? null,
         attempt,
         monotonicDeadlineMs: deadline.monotonicDeadlineMs,
         dueAtIso: deadline.dueAtIso,
