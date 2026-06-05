@@ -1,4 +1,5 @@
 import path from "node:path";
+import { accessSync, constants } from "node:fs";
 import { setTimeout, clearTimeout } from "node:timers";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 
@@ -6,6 +7,21 @@ import { execa } from "execa";
 
 const DEFAULT_SSH_TIMEOUT_MS = 60_000;
 const FORCE_KILL_DELAY_MS = 5_000;
+
+function requireSshExecutable(): string {
+  const pathValue = process.env.PATH ?? "";
+  for (const directory of pathValue.split(path.delimiter)) {
+    if (!directory) continue;
+    const executable = path.join(directory, "ssh");
+    try {
+      accessSync(executable, constants.X_OK);
+      return executable;
+    } catch {
+      continue;
+    }
+  }
+  throw new Error("ssh_not_found");
+}
 
 export interface SshRunOptions {
   timeoutMs?: number | undefined;
@@ -94,7 +110,7 @@ export function startReverseTunnel(
   localHost: string,
   localPort: number,
 ): ChildProcessWithoutNullStreams {
-  return execa("ssh", reverseTunnelArgs(host, remotePort, localHost, localPort), {
+  return execa(requireSshExecutable(), reverseTunnelArgs(host, remotePort, localHost, localPort), {
     stdin: "pipe",
     stdout: "pipe",
     stderr: "pipe",

@@ -65,6 +65,36 @@ test("INVARIANT: When the host list is empty, null SHALL be returned", () => {
   );
 });
 
+test("selectLeastLoadedHost keeps an available preferred host even when another host is less loaded", () => {
+  const input = {
+    hosts: ["worker-a", "worker-b"],
+    runningCounts: new Map([
+      ["worker-a", 1],
+      ["worker-b", 0],
+    ]),
+    cap: 2,
+    preferredHost: "worker-a",
+  };
+  const result = selectLeastLoadedHost(input);
+
+  assert.equal(result, "worker-a");
+});
+
+test("selectLeastLoadedHost falls back when the preferred host is at capacity", () => {
+  const input = {
+    hosts: ["worker-a", "worker-b"],
+    runningCounts: new Map([
+      ["worker-a", 2],
+      ["worker-b", 0],
+    ]),
+    cap: 2,
+    preferredHost: "worker-a",
+  };
+  const result = selectLeastLoadedHost(input);
+
+  assert.equal(result, "worker-b");
+});
+
 test("INVARIANT: When at least one host is below the cap, the system SHALL always select a host", () => {
   fc.assert(
     fc.property(

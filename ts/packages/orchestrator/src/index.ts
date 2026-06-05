@@ -138,7 +138,7 @@ export class Orchestrator {
       retry?.slotIndex,
     );
     if (slotIndex === null) return null;
-    const workerHost = this.selectWorkerHost();
+    const workerHost = this.selectWorkerHost(retry?.workerHost);
     if (workerHost === undefined) return null;
 
     const effective = settingsForIssueState(this.settings, issue.state);
@@ -173,7 +173,7 @@ export class Orchestrator {
     return entry;
   }
 
-  private selectWorkerHost(): string | null | undefined {
+  private selectWorkerHost(preferredHost?: string | null): string | null | undefined {
     const counts = new Map<string, number>();
     for (const entry of this.state.running.values()) {
       if (entry.workerHost) counts.set(entry.workerHost, (counts.get(entry.workerHost) ?? 0) + 1);
@@ -183,6 +183,7 @@ export class Orchestrator {
       runningCounts: counts,
       cap:
         this.settings.worker.maxConcurrentAgentsPerHost ?? this.settings.agent.maxConcurrentAgents,
+      preferredHost,
     });
   }
 
