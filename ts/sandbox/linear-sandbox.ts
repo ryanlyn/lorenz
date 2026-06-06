@@ -115,10 +115,7 @@ export async function setupLinearSandbox(): Promise<LinearSandboxContext> {
       },
       codex: {
         command: "echo codex",
-        approvalPolicy: "never",
-        threadSandbox: "workspace-write",
         turnTimeoutMs: 60_000,
-        readTimeoutMs: 5_000,
         stallTimeoutMs: 30_000,
       },
     },

@@ -33,12 +33,6 @@ agent:
   kind: codex
   max_concurrent_agents: 10
   max_turns: 20
-codex:
-  approval_policy: never
-  thread_sandbox: danger-full-access
-  turn_sandbox_policy:
-    type: dangerFullAccess
-    networkAccess: true
 agents:
   turn_timeout_ms: 3600000
   stall_timeout_ms: 300000

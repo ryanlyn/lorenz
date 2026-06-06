@@ -1,24 +1,13 @@
 import { test } from "vitest";
-import {
-  AGENT_UPDATE_TYPES,
-  CODEX_APPROVAL_POLICY_NAMES,
-  CODEX_SANDBOX_MODES,
-  ISSUE_STATE_TYPES,
-  RUNTIME_EVENT_TYPES,
-} from "@symphony/cli";
+import { AGENT_UPDATE_TYPES, ISSUE_STATE_TYPES, RUNTIME_EVENT_TYPES } from "@symphony/cli";
 import type { AgentUpdate, CodexSettings, Issue, RuntimeEvent } from "@symphony/cli";
 
 import { assert } from "../../../test/assert.js";
 
 const codexSettingsFixture: CodexSettings = {
   command: "codex-acp",
-  approvalPolicy: "never",
-  threadSandbox: "workspace-write",
-  turnSandboxPolicy: null,
   turnTimeoutMs: 1,
-  readTimeoutMs: 1,
   stallTimeoutMs: 0,
-  reasoning: null,
 };
 
 const issueFixture: Issue = {
@@ -51,7 +40,7 @@ test("literal types reject invalid values at compile time", () => {
   };
   // @ts-expect-error Issue state type is normalized to known tracker buckets.
   const _issue: Issue = { ...issueFixture, stateType: "needs-review" };
-  // @ts-expect-error Codex thread sandbox accepts only canonical sandbox mode names.
+  // @ts-expect-error Codex settings only retain command and timeout fields.
   const _codexSettings: CodexSettings = {
     ...codexSettingsFixture,
     threadSandbox: "workspaceWrite",
@@ -61,16 +50,6 @@ test("literal types reject invalid values at compile time", () => {
 test("AGENT_UPDATE_TYPES contains no duplicate entries", () => {
   const unique = new Set(AGENT_UPDATE_TYPES);
   assert.equal(unique.size, AGENT_UPDATE_TYPES.length);
-});
-
-test("CODEX_APPROVAL_POLICY_NAMES contains no duplicate entries", () => {
-  const unique = new Set(CODEX_APPROVAL_POLICY_NAMES);
-  assert.equal(unique.size, CODEX_APPROVAL_POLICY_NAMES.length);
-});
-
-test("CODEX_SANDBOX_MODES contains no duplicate entries", () => {
-  const unique = new Set(CODEX_SANDBOX_MODES);
-  assert.equal(unique.size, CODEX_SANDBOX_MODES.length);
 });
 
 test("ISSUE_STATE_TYPES contains no duplicate entries", () => {
@@ -108,9 +87,6 @@ test("typed fixture values are accepted by their respective runtime arrays", () 
   const agentUpdateTypes = AGENT_UPDATE_TYPES as readonly string[];
   assert.ok(agentUpdateTypes.includes(validAgentUpdate.type));
 
-  const sandboxModes = CODEX_SANDBOX_MODES as readonly string[];
-  assert.ok(sandboxModes.includes(codexSettingsFixture.threadSandbox));
-
   const runtimeEventTypes = RUNTIME_EVENT_TYPES as readonly string[];
   assert.ok(runtimeEventTypes.includes(validRuntimeEvent.type));
 
@@ -123,7 +99,6 @@ test("typed fixture values are accepted by their respective runtime arrays", () 
   // If a value is added to or removed from the array without updating the type,
   // the length assertion fails, catching drift that single-value includes checks miss.
   assert.equal(AGENT_UPDATE_TYPES.length, 18, "AGENT_UPDATE_TYPES length mismatch");
-  assert.equal(CODEX_SANDBOX_MODES.length, 3, "CODEX_SANDBOX_MODES length mismatch");
   assert.equal(ISSUE_STATE_TYPES.length, 6, "ISSUE_STATE_TYPES length mismatch");
   // RUNTIME_EVENT_TYPES = AGENT_UPDATE_TYPES + runtime-only entries
   assert.equal(
@@ -131,26 +106,6 @@ test("typed fixture values are accepted by their respective runtime arrays", () 
     AGENT_UPDATE_TYPES.length + 20,
     "RUNTIME_EVENT_TYPES should be AGENT_UPDATE_TYPES plus 20 runtime-only events",
   );
-});
-
-test("CODEX_APPROVAL_POLICY_NAMES covers all expected security policies", () => {
-  // The approval policies represent an escalating trust ladder;
-  // verify the expected ordering from most restrictive to least is present.
-  const policies = CODEX_APPROVAL_POLICY_NAMES as readonly string[];
-  assert.ok(policies.includes("untrusted"));
-  assert.ok(policies.includes("on-failure"));
-  assert.ok(policies.includes("on-request"));
-  assert.ok(policies.includes("never"));
-  // Should contain exactly these four canonical policies.
-  assert.equal(CODEX_APPROVAL_POLICY_NAMES.length, 4);
-});
-
-test("CODEX_SANDBOX_MODES covers all expected isolation levels", () => {
-  const modes = CODEX_SANDBOX_MODES as readonly string[];
-  assert.ok(modes.includes("read-only"));
-  assert.ok(modes.includes("workspace-write"));
-  assert.ok(modes.includes("danger-full-access"));
-  assert.equal(CODEX_SANDBOX_MODES.length, 3);
 });
 
 test("ISSUE_STATE_TYPES covers all tracker state buckets", () => {
@@ -183,11 +138,5 @@ test("runtime arrays reject values outside the canonical vocabulary", () => {
   assert.ok(
     !issueStateTypes.includes("needs-review"),
     "bogus 'needs-review' should not be in ISSUE_STATE_TYPES",
-  );
-
-  const sandboxModes = CODEX_SANDBOX_MODES as readonly string[];
-  assert.ok(
-    !sandboxModes.includes("workspaceWrite"),
-    "bogus 'workspaceWrite' should not be in CODEX_SANDBOX_MODES",
   );
 });

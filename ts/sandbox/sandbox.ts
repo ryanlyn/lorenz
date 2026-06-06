@@ -83,11 +83,7 @@ export function makeSettings(overrides: Record<string, unknown> = {}): Settings 
       },
       codex: {
         command: "echo codex",
-        approvalPolicy: "never",
-        threadSandbox: "workspace-write",
-        turnSandboxPolicy: null,
         turnTimeoutMs: 60_000,
-        readTimeoutMs: 5_000,
         stallTimeoutMs: 30_000,
       },
       claude: {

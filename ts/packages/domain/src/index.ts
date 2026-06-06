@@ -93,19 +93,6 @@ export const PRIORITY_VALUES = [1, 2, 3, 4] as const;
 
 export type Priority = (typeof PRIORITY_VALUES)[number];
 
-export const CODEX_APPROVAL_POLICY_NAMES = [
-  "untrusted",
-  "on-failure",
-  "on-request",
-  "never",
-] as const;
-
-export type CodexApprovalPolicyName = (typeof CODEX_APPROVAL_POLICY_NAMES)[number];
-
-export const CODEX_SANDBOX_MODES = ["read-only", "workspace-write", "danger-full-access"] as const;
-
-export type CodexSandboxMode = (typeof CODEX_SANDBOX_MODES)[number];
-
 /**
  * Minimal reference to a related issue - just enough to identify it and check its state.
  * Used for relationships like blockers where the full issue isn't needed.
@@ -260,39 +247,14 @@ export interface AgentConfig {
   strictMcpConfig?: boolean | undefined;
 }
 
-/**
- * Legacy top-level codex configuration section. Fields `turnTimeoutMs` and `stallTimeoutMs`
- * feed defaults into the `agents.codex` AgentConfig record. Remaining fields are retained
- * for backward compatibility with existing workflow YAML files but are not consumed at runtime.
- */
+/** Legacy top-level codex configuration section that feeds defaults into `agents.codex`. */
 export interface CodexSettings {
   /** Shell command launched per session; invoked via `bash -lc` in the workspace directory. */
   command: string;
-  /**
-   * Codex `AskForApproval` value. Either a named policy string (e.g. `"never"`, `"on-request"`)
-   * or a structured policy map.
-   */
-  approvalPolicy: CodexApprovalPolicyName | Record<string, unknown>;
-  /** Codex `SandboxMode` value applied to the whole thread, e.g. `"workspace-write"`, `"read-only"`, `"danger-full-access"`. */
-  threadSandbox: CodexSandboxMode;
-  /**
-   * Optional Codex `SandboxPolicy` override applied per turn. `null` falls back to a workspace-write
-   * policy scoped to the workspace directory with no network access.
-   */
-  turnSandboxPolicy: Record<string, unknown> | null;
   /** Hard limit (ms) on a single Codex turn before it is treated as timed out. */
   turnTimeoutMs: number;
-  /** Per-request read timeout (ms). Retained for config compatibility; not consumed at runtime. */
-  readTimeoutMs: number;
   /** Inactivity window (ms) before a session with no events is force-aborted as stalled. `<= 0` disables stall detection. */
   stallTimeoutMs: number;
-  /** Reasoning effort/summary configuration passed to `turn/start`. */
-  reasoning: CodexReasoning | null;
-}
-
-export interface CodexReasoning {
-  /** Summary detail level returned in reasoning items (e.g. `"concise"`, `"detailed"`, `"auto"`). */
-  summary: "concise" | "detailed" | "auto";
 }
 
 /**

@@ -1088,7 +1088,7 @@ Scenarios are parametrized across these dimensions:
 **Category:** Retry and Backoff  
 **Invariant:** Stall → exponential backoff retry  
 **What's Being Tested:** Agent stalls, detected by timeout, retry with failure backoff  
-**Sandbox Command:** `npx tsx demo/sandbox.ts --inline '{"issues":[{"id":"x","identifier":"X-1","title":"T","state":"Todo","stateType":"unstarted","labels":[],"blockers":[],"priority":2}],"settingsOverrides":{"agent":{"maxConcurrentAgents":5,"maxRetryBackoffMs":60000},"codex":{"command":"echo","approvalPolicy":"never","threadSandbox":"workspace-write","turnSandboxPolicy":null,"turnTimeoutMs":60000,"readTimeoutMs":5000,"stallTimeoutMs":100}},"runnerConfig":{"defaultBehavior":{"stall":true}},"pollTicks":2,"tickDelayMs":200,"assertions":[{"type":"event_occurred","eventType":"run_stalled","messageContains":"X-1"}]}'`  
+**Sandbox Command:** `npx tsx demo/sandbox.ts --inline '{"issues":[{"id":"x","identifier":"X-1","title":"T","state":"Todo","stateType":"unstarted","labels":[],"blockers":[],"priority":2}],"settingsOverrides":{"agent":{"maxConcurrentAgents":5,"maxRetryBackoffMs":60000},"codex":{"command":"echo","turnTimeoutMs":60000,"stallTimeoutMs":100}},"runnerConfig":{"defaultBehavior":{"stall":true}},"pollTicks":2,"tickDelayMs":200,"assertions":[{"type":"event_occurred","eventType":"run_stalled","messageContains":"X-1"}]}'`
 **Expected:** Stall detected, failure retry scheduled  
 **Status:** PENDING
 

@@ -172,14 +172,8 @@ status_overrides:
 
 codex:
   command: codex-acp # legacy alias for agents.codex.bridge_command
-  approval_policy: never # untrusted, on-failure, on-request, never, or a map
-  thread_sandbox: workspace-write # read-only, workspace-write, danger-full-access
-  turn_sandbox_policy:
-    type: workspaceWrite # passed through to Codex unchanged when set
-    writableRoots:
-      - /path/to/workspace
-    networkAccess: true
-  read_timeout_ms: 5000 # default: 5000
+  turn_timeout_ms: 3600000 # default: 3600000
+  stall_timeout_ms: 300000 # default: 300000
 
 claude:
   command: claude-agent-acp # ACP bridge command
@@ -224,8 +218,6 @@ Notes:
 - `SYMPHONY_SSH_CONFIG` points SSH worker commands at a custom OpenSSH config file.
 - Hooks run through `bash -lc` locally or over SSH with the workspace as `cwd`.
 - `codex.command` runs through `bash -lc`, so shell expansion happens in the launched process.
-- When `codex.turn_sandbox_policy` is omitted, Symphony generates a `workspaceWrite` policy rooted
-  at the issue workspace.
 - If the Markdown body is blank, Symphony uses a default prompt with the issue identifier, title,
   and body.
 

@@ -635,11 +635,9 @@ export class SymphonyRuntime {
       const currentEntry = this.runningEntry(snapshotEntry.issue.id, snapshotEntry.slotIndex);
       if (!currentEntry) continue;
       const effective = settingsForIssueState(this.workflow.settings, currentEntry.issue.state);
-      const timeoutMs =
-        effective.agents[currentEntry.agentKind]?.stallTimeoutMs ??
-        (currentEntry.agentKind === "claude"
-          ? effective.claude.stallTimeoutMs
-          : effective.codex.stallTimeoutMs);
+      const agent = effective.agents[currentEntry.agentKind];
+      if (!agent) throw new Error(`agents.${currentEntry.agentKind} is required`);
+      const timeoutMs = agent.stallTimeoutMs;
       if (timeoutMs <= 0) continue;
       const lastActivity = currentEntry.lastAgentTimestamp ?? currentEntry.startedAt;
       const elapsedMs = this.now().getTime() - lastActivity.getTime();

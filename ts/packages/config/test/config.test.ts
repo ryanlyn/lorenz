@@ -256,40 +256,24 @@ test("dispatch config rejects blank routes and normalizes unique route names", (
   );
 });
 
-test("Codex sandbox config rejects non-parity shapes", () => {
-  assert.throws(
-    () => parseConfig({ codex: { turn_sandbox_policy: "workspace-write" } }),
-    /codex.turn_sandbox_policy must be a map/,
-  );
-  assert.throws(
-    () => parseConfig({ codex: { thread_sandbox: { type: "workspaceWrite" } } }),
-    /codex.thread_sandbox must be a string/,
-  );
-
-  assert.equal(parseConfig().codex.turnSandboxPolicy, null);
-});
-
-test("config validates literal-only backend, approval, and sandbox names", () => {
+test("config validates literal-only backend names and rejects removed Codex keys", () => {
   const settings = parseConfig({
     tracker: { kind: "memory" },
-    codex: { approval_policy: "never", thread_sandbox: "danger-full-access" },
   });
 
   assert.equal(settings.tracker.kind, "memory");
-  assert.equal(settings.codex.approvalPolicy, "never");
-  assert.equal(settings.codex.threadSandbox, "danger-full-access");
 
   assert.throws(
     () => parseConfig({ tracker: { kind: "github" } }),
     /unsupported tracker.kind: github/,
   );
   assert.throws(
-    () => parseConfig({ codex: { approval_policy: "ask-always" } }),
-    /unsupported codex.approval_policy: ask-always/,
+    () => parseConfig({ codex: { approval_policy: "never" } }),
+    /codex contains unsupported keys: approval_policy/,
   );
   assert.throws(
     () => parseConfig({ codex: { thread_sandbox: "workspaceWrite" } }),
-    /unsupported codex.thread_sandbox: workspaceWrite/,
+    /codex contains unsupported keys: thread_sandbox/,
   );
   assert.throws(
     () =>
@@ -298,7 +282,7 @@ test("config validates literal-only backend, approval, and sandbox names", () =>
           Todo: { codex: { thread_sandbox: "workspaceWrite" } },
         },
       }),
-    /unsupported status_overrides\.\*\.codex\.thread_sandbox: workspaceWrite/,
+    /status_overrides.todo.codex contains unsupported keys: thread_sandbox/,
   );
 });
 
@@ -451,12 +435,12 @@ test("known workflow sections reject unsupported nested keys after alias normali
   );
 });
 
-test("status overrides normalize state names and deep merge Codex policy maps", () => {
+test("status overrides normalize state names and merge backend timeout settings", () => {
   const settings = parseConfig({
     status_overrides: {
       "In Progress": {
         agent: { kind: "claude", max_turns: 5 },
-        codex: { approval_policy: { reject: { rules: false } } },
+        codex: { turn_timeout_ms: 120_000 },
       },
     },
   });
@@ -464,13 +448,29 @@ test("status overrides normalize state names and deep merge Codex policy maps", 
   const effective = settingsForIssueState(settings, "in progress");
   assert.equal(effective.agent.kind, "claude");
   assert.equal(effective.agent.maxTurns, 5);
-  assert.deepEqual(effective.codex.approvalPolicy, {
-    reject: {
-      sandbox_approval: true,
-      rules: false,
-      mcp_elicitations: true,
+  assert.equal(effective.codex.turnTimeoutMs, 120_000);
+});
+
+test("status overrides rederive agents timeout records from overridden backend blocks", () => {
+  const settings = parseConfig({
+    status_overrides: {
+      Todo: {
+        codex: { turn_timeout_ms: 120_000, stall_timeout_ms: 45_000 },
+        claude: { turn_timeout_ms: 180_000, stall_timeout_ms: 60_000 },
+      },
     },
   });
+
+  const effective = settingsForIssueState(settings, "todo");
+
+  assert.equal(effective.codex.turnTimeoutMs, 120_000);
+  assert.equal(effective.codex.stallTimeoutMs, 45_000);
+  assert.equal(effective.agents.codex?.turnTimeoutMs, 120_000);
+  assert.equal(effective.agents.codex?.stallTimeoutMs, 45_000);
+  assert.equal(effective.claude.turnTimeoutMs, 180_000);
+  assert.equal(effective.claude.stallTimeoutMs, 60_000);
+  assert.equal(effective.agents.claude?.turnTimeoutMs, 180_000);
+  assert.equal(effective.agents.claude?.stallTimeoutMs, 60_000);
 });
 
 test("dispatch validation preflights backend commands reachable through status overrides", () => {

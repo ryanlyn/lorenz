@@ -17,8 +17,6 @@ import type {
 } from "@symphony/domain";
 import {
   AGENT_USAGE_ACCOUNTING_VALUES,
-  CODEX_APPROVAL_POLICY_NAMES,
-  CODEX_SANDBOX_MODES,
   TRACKER_KINDS,
   PORT_MAX,
   ONE_WEEK_MS,
@@ -109,16 +107,7 @@ const coercedBoolean = z.union([
   z.literal("false").transform(() => false),
 ]);
 
-const approvalPolicySchema = z.union([z.string(), z.record(z.string(), z.unknown())]).optional();
-const sandboxPolicySchema = z.record(z.string(), z.unknown()).nullable().optional();
-
 const optionalHookScript = z.string().nullable().optional();
-
-const reasoningSchema = z
-  .object({
-    summary: z.enum(["concise", "detailed", "auto"]),
-  })
-  .strict();
 
 const usageAccountingSchema = z.enum(AGENT_USAGE_ACCOUNTING_VALUES);
 
@@ -196,13 +185,8 @@ const agentRawSchema = z
 const codexRawSchema = z
   .object({
     command: z.string().optional(),
-    approvalPolicy: approvalPolicySchema,
-    threadSandbox: z.string().optional(),
-    turnSandboxPolicy: sandboxPolicySchema,
     turnTimeoutMs: coercedTimeoutMs.optional(),
-    readTimeoutMs: coercedTimeoutMs.optional(),
     stallTimeoutMs: coercedNonNegativeTimeoutMs.optional(),
-    reasoning: reasoningSchema.nullable().optional(),
   })
   .strict();
 const claudeRawSchema = z
@@ -312,11 +296,7 @@ const agentsAliases = {
   stall_timeout_ms: "stallTimeoutMs",
 };
 const codexAliases = {
-  approval_policy: "approvalPolicy",
-  thread_sandbox: "threadSandbox",
-  turn_sandbox_policy: "turnSandboxPolicy",
   turn_timeout_ms: "turnTimeoutMs",
-  read_timeout_ms: "readTimeoutMs",
   stall_timeout_ms: "stallTimeoutMs",
 };
 const claudeAliases = {
@@ -351,19 +331,8 @@ export const defaultSettings = (options: DefaultSettingsOptions = {}): Settings 
   const workspaceRoot = joinPath(tmpdir, "symphony_workspaces");
   const codex: CodexSettings = {
     command: "codex-acp",
-    approvalPolicy: {
-      reject: {
-        sandbox_approval: true,
-        rules: true,
-        mcp_elicitations: true,
-      },
-    },
-    threadSandbox: "workspace-write",
-    turnSandboxPolicy: null,
     turnTimeoutMs: 3_600_000,
-    readTimeoutMs: 5_000,
     stallTimeoutMs: 300_000,
-    reasoning: { summary: "concise" },
   };
   const claude: ClaudeSettings = {
     command: "claude-agent-acp",
@@ -485,8 +454,9 @@ export function settingsForIssueState(settings: Settings, state: string): Settin
 
   const merged = cloneSettings(settings);
   if (override.agent) merged.agent = { ...merged.agent, ...override.agent };
-  if (override.codex) merged.codex = mergeCodex(merged.codex, override.codex);
+  if (override.codex) merged.codex = { ...merged.codex, ...override.codex };
   if (override.claude) merged.claude = { ...merged.claude, ...override.claude };
+  applyStateBackendOverridesToAgentRecords(merged, override);
   return merged;
 }
 
@@ -753,13 +723,13 @@ function parseAgent(
 }
 
 function defaultAgentRecords(
-  codex: Pick<CodexSettings, "turnTimeoutMs" | "stallTimeoutMs">,
+  codex: Pick<CodexSettings, "command" | "turnTimeoutMs" | "stallTimeoutMs">,
   claude: ClaudeSettings,
 ): Record<string, AgentConfig> {
   return {
     codex: {
       executor: "acp",
-      bridgeCommand: "codex-acp",
+      bridgeCommand: codex.command,
       usageAccounting: "per-turn",
       turnTimeoutMs: codex.turnTimeoutMs,
       stallTimeoutMs: codex.stallTimeoutMs,
@@ -798,25 +768,8 @@ function applyKnownAgentRecords(settings: Settings): void {
 function parseCodex(defaults: CodexSettings, codexRaw: CodexRaw): CodexSettings {
   return {
     command: codexRaw.command ?? defaults.command,
-    approvalPolicy: approvalPolicyValue(
-      codexRaw.approvalPolicy,
-      defaults.approvalPolicy,
-      "codex.approval_policy",
-    ),
-    threadSandbox: sandboxModeValue(
-      codexRaw.threadSandbox,
-      defaults.threadSandbox,
-      "codex.thread_sandbox",
-    ),
-    turnSandboxPolicy: optionalMap(
-      codexRaw.turnSandboxPolicy,
-      defaults.turnSandboxPolicy,
-      "codex.turn_sandbox_policy",
-    ),
     turnTimeoutMs: codexRaw.turnTimeoutMs ?? defaults.turnTimeoutMs,
-    readTimeoutMs: codexRaw.readTimeoutMs ?? defaults.readTimeoutMs,
     stallTimeoutMs: codexRaw.stallTimeoutMs ?? defaults.stallTimeoutMs,
-    reasoning: codexRaw.reasoning !== undefined ? codexRaw.reasoning : defaults.reasoning,
   };
 }
 
@@ -860,31 +813,8 @@ function parsePartialAgent(raw: Partial<AgentRaw>): Partial<AgentSettings> {
 function parsePartialCodex(raw: Partial<CodexRaw>): Partial<CodexSettings> {
   const next: Partial<CodexSettings> = {};
   if (raw.command !== undefined) next.command = raw.command;
-  if (raw.approvalPolicy !== undefined) {
-    next.approvalPolicy = approvalPolicyValue(
-      raw.approvalPolicy,
-      "never",
-      "status_overrides.*.codex.approval_policy",
-    );
-  }
-  if (raw.threadSandbox !== undefined) {
-    next.threadSandbox = sandboxModeValue(
-      raw.threadSandbox,
-      "workspace-write",
-      "status_overrides.*.codex.thread_sandbox",
-    );
-  }
-  if (raw.turnSandboxPolicy !== undefined) {
-    next.turnSandboxPolicy = optionalMap(
-      raw.turnSandboxPolicy,
-      null,
-      "status_overrides.*.codex.turn_sandbox_policy",
-    );
-  }
   if (raw.turnTimeoutMs !== undefined) next.turnTimeoutMs = raw.turnTimeoutMs;
-  if (raw.readTimeoutMs !== undefined) next.readTimeoutMs = raw.readTimeoutMs;
   if (raw.stallTimeoutMs !== undefined) next.stallTimeoutMs = raw.stallTimeoutMs;
-  if (raw.reasoning !== undefined) next.reasoning = raw.reasoning ?? null;
   return next;
 }
 
@@ -896,17 +826,6 @@ function parsePartialClaude(raw: Partial<ClaudeRaw>): Partial<ClaudeSettings> {
   if (raw.stallTimeoutMs !== undefined) next.stallTimeoutMs = raw.stallTimeoutMs;
   if (raw.providerConfig !== undefined) next.providerConfig = raw.providerConfig;
   return next;
-}
-
-function mergeCodex(base: CodexSettings, override: Partial<CodexSettings>): CodexSettings {
-  const merged = { ...base, ...override };
-  if (isPlainRecord(base.approvalPolicy) && isPlainRecord(override.approvalPolicy)) {
-    merged.approvalPolicy = deepMerge(base.approvalPolicy, override.approvalPolicy);
-  }
-  if (isPlainRecord(base.turnSandboxPolicy) && isPlainRecord(override.turnSandboxPolicy)) {
-    merged.turnSandboxPolicy = deepMerge(base.turnSandboxPolicy, override.turnSandboxPolicy);
-  }
-  return merged;
 }
 
 function cloneSettings(settings: Settings): Settings {
@@ -926,6 +845,51 @@ function cloneSettings(settings: Settings): Settings {
     logging: { ...settings.logging },
     statusOverrides: new Map(settings.statusOverrides),
   };
+}
+
+function applyStateBackendOverridesToAgentRecords(
+  settings: Settings,
+  override: PartialRuntimeSettings,
+): void {
+  if (override.codex) {
+    const codex = settings.agents.codex;
+    if (codex) {
+      settings.agents.codex = {
+        ...codex,
+        ...(override.codex.command !== undefined ? { bridgeCommand: settings.codex.command } : {}),
+        ...(override.codex.turnTimeoutMs !== undefined
+          ? { turnTimeoutMs: settings.codex.turnTimeoutMs }
+          : {}),
+        ...(override.codex.stallTimeoutMs !== undefined
+          ? { stallTimeoutMs: settings.codex.stallTimeoutMs }
+          : {}),
+      };
+    }
+  }
+
+  if (override.claude) {
+    const claude = settings.agents.claude;
+    if (claude) {
+      settings.agents.claude = {
+        ...claude,
+        ...(override.claude.command !== undefined
+          ? { bridgeCommand: settings.claude.command }
+          : {}),
+        ...(override.claude.turnTimeoutMs !== undefined
+          ? { turnTimeoutMs: settings.claude.turnTimeoutMs }
+          : {}),
+        ...(override.claude.stallTimeoutMs !== undefined
+          ? { stallTimeoutMs: settings.claude.stallTimeoutMs }
+          : {}),
+        ...(override.claude.strictMcpConfig !== undefined
+          ? { strictMcpConfig: settings.claude.strictMcpConfig }
+          : {}),
+        ...(override.claude.providerConfig !== undefined
+          ? { providerConfig: settings.claude.providerConfig }
+          : {}),
+      };
+    }
+  }
 }
 
 /**
@@ -950,18 +914,6 @@ function cloneAgentRecords(records: Record<string, AgentConfig>): Record<string,
     };
   }
   return cloned;
-}
-
-function deepMerge(
-  left: Record<string, unknown>,
-  right: Record<string, unknown>,
-): Record<string, unknown> {
-  const out: Record<string, unknown> = { ...left };
-  for (const [key, value] of Object.entries(right)) {
-    const existing = out[key];
-    out[key] = isPlainRecord(existing) && isPlainRecord(value) ? deepMerge(existing, value) : value;
-  }
-  return out;
 }
 
 function asRecord(value: unknown, label: string): Record<string, unknown> {
@@ -1101,40 +1053,6 @@ function trackerKindValue(value: unknown, label: string): TrackerKind {
   if (typeof value !== "string") throw new Error(`${label} must be a string`);
   if (isOneOf(value, TRACKER_KINDS)) return value;
   throw new Error(`unsupported ${label}: ${value}`);
-}
-
-function approvalPolicyValue(
-  value: unknown,
-  fallback: CodexSettings["approvalPolicy"],
-  label: string,
-): CodexSettings["approvalPolicy"] {
-  if (value === undefined || value === null) return fallback;
-  if (isPlainRecord(value)) return value;
-  if (typeof value !== "string") throw new Error(`${label} must be a string or map`);
-  if (isOneOf(value, CODEX_APPROVAL_POLICY_NAMES)) return value;
-  throw new Error(`unsupported ${label}: ${value}`);
-}
-
-function sandboxModeValue(
-  value: unknown,
-  fallback: CodexSettings["threadSandbox"],
-  label: string,
-): CodexSettings["threadSandbox"] {
-  if (value === undefined || value === null) return fallback;
-  if (typeof value !== "string") throw new Error(`${label} must be a string`);
-  if (isOneOf(value, CODEX_SANDBOX_MODES)) return value;
-  throw new Error(`unsupported ${label}: ${value}`);
-}
-
-function optionalMap(
-  value: unknown,
-  fallback: Record<string, unknown> | null,
-  label: string,
-): Record<string, unknown> | null {
-  if (value === undefined) return fallback;
-  if (value === null) return null;
-  if (!isPlainRecord(value)) throw new Error(`${label} must be a map`);
-  return value;
 }
 
 function normalizeOnlyRoutes(routes: string[]): string[] {

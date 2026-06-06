@@ -29,9 +29,6 @@ agent:
   max_concurrent_agents: 2
   max_turns: 10
 
-codex:
-  approval_policy: never
-  thread_sandbox: workspace-write
 agents:
   turn_timeout_ms: 120000
   stall_timeout_ms: 60000

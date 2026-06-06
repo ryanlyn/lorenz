@@ -317,7 +317,9 @@ async function executorFor(
 }
 
 function workspaceCreateTimeoutMs(settings: Settings): number {
-  return settings.agents[settings.agent.kind]?.stallTimeoutMs ?? settings.codex.stallTimeoutMs;
+  const agent = settings.agents[settings.agent.kind];
+  if (!agent) throw new Error(`agents.${settings.agent.kind} is required`);
+  return agent.stallTimeoutMs;
 }
 
 function hookStageTimeoutMs(settings: Settings): number {
