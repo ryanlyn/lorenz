@@ -21,7 +21,7 @@ import { RuntimeApp } from "@symphony/tui";
 import { loadWorkflow } from "@symphony/workflow";
 import { TraceEmitter } from "@symphony/traceviz-emitter";
 import { defaultIssueStorePath, IssueStore } from "@symphony/server";
-import type { Settings, WorkflowDefinition } from "@symphony/domain";
+import { errorMessage, type Settings, type WorkflowDefinition } from "@symphony/domain";
 
 import {
   createRunsCommand,
@@ -203,7 +203,7 @@ export async function runDaemon(options: CliOptions): Promise<number> {
     }
     return 0;
   } catch (error) {
-    process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+    process.stderr.write(`${errorMessage(error)}\n`);
     return 1;
   }
 }

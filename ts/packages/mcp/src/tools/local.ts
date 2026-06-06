@@ -1,10 +1,10 @@
-import type { Issue, Settings } from "@symphony/domain";
+import { errorMessage, isRecord, type Issue, type Settings } from "@symphony/domain";
 import { BoardStore, resolveBoardDir, type BoardStoreOptions } from "@symphony/local-tracker";
 
 import { applyQuery, parseQuerySpec, parseSelect, pickFields } from "../filter.js";
 import type { ToolResult, ToolSpec } from "../tools.js";
 
-import { unsupportedToolFailure } from "./failure.js";
+import { toolFailure, toolSuccess, unsupportedToolFailure } from "./result.js";
 
 const TOOL_NAMES = [
   "local_update_status",
@@ -95,11 +95,11 @@ export async function executeLocalTool(
           requireStr(args, "issueId"),
           requireStr(args, "status"),
         );
-        return { success: true, result: { issue } };
+        return toolSuccess({ issue });
       }
       case "local_comment": {
         await store.appendComment(requireStr(args, "issueId"), requireStr(args, "body"));
-        return { success: true, result: { ok: true } };
+        return toolSuccess({ ok: true });
       }
       case "local_create_issue": {
         const body = optStr(args.body);
@@ -109,13 +109,13 @@ export async function executeLocalTool(
           ...(body !== undefined ? { body } : {}),
           ...(status !== undefined ? { status } : {}),
         });
-        return { success: true, result: { issue } };
+        return toolSuccess({ issue });
       }
       case "local_read_issue": {
         const { id, status, title, description, comments } = await store.readContent(
           requireStr(args, "issueId"),
         );
-        return { success: true, result: { issue: { id, status, title, description }, comments } };
+        return toolSuccess({ issue: { id, status, title, description }, comments });
       }
       case "local_query": {
         const spec = parseQuerySpec(args);
@@ -137,14 +137,13 @@ export async function executeLocalTool(
           }
           out.push(projected);
         }
-        return { success: true, result: { rows: out, total, skipped } };
+        return toolSuccess({ rows: out, total, skipped });
       }
       default:
         return unsupportedToolFailure(name, TOOL_NAMES);
     }
   } catch (error) {
-    const message = (error as Error).message;
-    return { success: false, error: message, result: { error: { message } } };
+    return toolFailure(errorMessage(error));
   }
 }
 
@@ -168,10 +167,6 @@ function toLocalRecord(issue: Issue): Record<string, unknown> {
     createdAt: issue.createdAt ?? null,
     updatedAt: issue.updatedAt ?? null,
   };
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function requireStr(args: Record<string, unknown>, key: string): string {

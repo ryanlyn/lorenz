@@ -15,7 +15,7 @@ import { runAgentAttempt, type RunResult } from "@symphony/agent-runner";
 import { ProjectionActor } from "@symphony/projections";
 import { RetryScheduler } from "@symphony/retry-scheduler";
 import { workflowFileChanged, workflowStampsEqual } from "@symphony/workflow";
-import { AGENT_UPDATE_TYPES } from "@symphony/domain";
+import { AGENT_UPDATE_TYPES, durationMs, errorMessage } from "@symphony/domain";
 import type {
   AgentKind,
   AgentUpdate,
@@ -656,6 +656,7 @@ export class SymphonyRuntime {
       this.syncRetryTimer(entry.issue.id);
       activeHandle?.finishExternally();
       await this.invalidateResumeStateForRunningEntry(currentEntry, "stalled");
+      const endedAt = this.now().toISOString();
       this.recordHistory({
         id: runId,
         issueId: entry.issue.id,
@@ -674,8 +675,8 @@ export class SymphonyRuntime {
         workerHost: entry.workerHost,
         usageTotals: entry.usageTotals,
         startedAt: entry.startedAt.toISOString(),
-        endedAt: this.now().toISOString(),
-        durationMs: Math.max(0, this.now().getTime() - entry.startedAt.getTime()),
+        endedAt,
+        durationMs: durationMs(entry.startedAt.toISOString(), endedAt),
         error,
         lastEvent: entry.lastAgentEvent ?? "agent_stalled",
         lastMessage: entry.lastAgentMessage,
@@ -926,12 +927,4 @@ async function delay(ms: number, stopped: () => boolean): Promise<void> {
 
 function missingRuntimeClient(): RuntimeTrackerClient {
   throw new Error("runtime tracker client or clientFactory is required");
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
-function durationMs(startedAt: string, endedAt: string): number {
-  return Math.max(0, new Date(endedAt).getTime() - new Date(startedAt).getTime());
 }

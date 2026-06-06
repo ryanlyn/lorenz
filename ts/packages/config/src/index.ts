@@ -34,6 +34,8 @@ import {
   isValidConcurrency,
   isValidMaxTurns,
   isValidEnsembleSize,
+  isOneOf,
+  isRecord as isPlainRecord,
   normalizeHttpBindHost,
 } from "@symphony/domain";
 
@@ -1199,15 +1201,4 @@ function expandPathVariables(value: string, env: NodeJS.ProcessEnv): string {
 function wholeEnvName(value: string): string | null {
   const match = /^\$([A-Za-z_][A-Za-z0-9_]*)$/.exec(value);
   return match?.[1] ?? null;
-}
-
-function isPlainRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function isOneOf<const Values extends readonly string[]>(
-  value: string,
-  values: Values,
-): value is Values[number] {
-  return (values as readonly string[]).includes(value);
 }

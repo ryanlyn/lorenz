@@ -1,5 +1,7 @@
+import { isRecord } from "@symphony/domain";
+
 /**
- * A small, dependency-free query DSL backing the read tools of the structured trackers
+ * A small query DSL backing the read tools of the structured trackers
  * (`local_query` today). It is the composable, side-effect-free analog of `linear_graphql`'s
  * read power: a query can never mutate the backend, so it carries no trust-boundary or
  * atomicity risk and the agent can filter/project/sort/page freely.
@@ -265,8 +267,4 @@ function isScalar(value: unknown): value is Scalar {
     typeof value === "number" ||
     typeof value === "boolean"
   );
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

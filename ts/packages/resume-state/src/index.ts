@@ -3,8 +3,10 @@ import path from "node:path";
 
 import { execa } from "execa";
 import { runSsh, shellEscape, writeRemoteFile } from "@symphony/ssh";
-import type { AgentKind, Issue } from "@symphony/domain";
+import { isRecord, type AgentKind } from "@symphony/domain";
 import { z } from "zod";
+
+export { resumeStateMatches, type ResumeStateIdentity } from "./matcher.js";
 
 const remoteMissingMarker = "__SYMPHONY_RESUME_STATE_MISSING__";
 
@@ -250,21 +252,6 @@ async function readRemoteResumeState(
   return result.stdout === remoteMissingMarker ? null : result.stdout;
 }
 
-export function resumeStateMatches(
-  state: ResumeState,
-  input: { agentKind: AgentKind; issue: Issue; workspacePath: string; workerHost?: string | null },
-): boolean {
-  return (
-    state.agentKind === input.agentKind &&
-    state.resumeId.trim() !== "" &&
-    storedStringMatches(state.issueId, input.issue.id) &&
-    storedStringMatches(state.issueIdentifier, input.issue.identifier) &&
-    storedStringMatches(state.issueState, input.issue.state) &&
-    storedStringMatches(state.workspacePath, input.workspacePath) &&
-    storedNullableMatches(state.workerHost, input.workerHost ?? null)
-  );
-}
-
 const storedNonBlankStringSchema = z.string().refine((value) => value.trim() !== "");
 const storedNullableStringSchema = z.preprocess(
   (value) => (typeof value === "string" && value !== "" ? value : null),
@@ -324,29 +311,4 @@ function encodeResumeState(state: ResumeState): Record<string, unknown> {
 
 function validResumeState(state: ResumeState): boolean {
   return state.agentKind.trim() !== "" && state.resumeId.trim() !== "";
-}
-
-function storedStringMatches(
-  stored: string | null | undefined,
-  current: string | null | undefined,
-): boolean {
-  return (
-    typeof stored === "string" &&
-    stored.trim() !== "" &&
-    typeof current === "string" &&
-    current.trim() !== "" &&
-    stored === current
-  );
-}
-
-function storedNullableMatches(
-  stored: string | null | undefined,
-  current: string | null | undefined,
-): boolean {
-  if (current === null || current === undefined) return stored === null || stored === undefined;
-  return storedStringMatches(stored, current);
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
