@@ -6,9 +6,14 @@ import path from "node:path";
 import { Liquid } from "liquidjs";
 import YAML from "yaml";
 import { parseConfig } from "@symphony/config";
-import type { WorkflowContentStamp, WorkflowDefinition } from "@symphony/domain";
+import {
+  errorMessage,
+  isRecord,
+  type ParsedPromptTemplate,
+  type WorkflowContentStamp,
+  type WorkflowDefinition,
+} from "@symphony/domain";
 import type { DefaultSettingsOptions } from "@symphony/config";
-import type { ParsedPromptTemplate } from "@symphony/domain";
 
 const promptTemplateEngine = new Liquid({
   strictVariables: true,
@@ -132,14 +137,6 @@ export function parsePromptTemplate(promptTemplate: string): ParsedPromptTemplat
       { cause: error },
     );
   }
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 function workflowContentStamp(stat: Stats, content: string): WorkflowContentStamp {

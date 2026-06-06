@@ -2,7 +2,7 @@ import type { Settings, TrackerKind } from "@symphony/domain";
 
 import { executeLinearTool, linearToolSpecs } from "./tools/linear.js";
 import { executeLocalTool, localToolSpecs } from "./tools/local.js";
-import { unsupportedToolFailure } from "./tools/failure.js";
+import { unsupportedToolFailure } from "./tools/result.js";
 
 export interface ToolSpec {
   name: string;

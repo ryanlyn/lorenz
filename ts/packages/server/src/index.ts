@@ -7,7 +7,13 @@ import type { ServerType } from "@hono/node-server";
 import { serveStatic } from "@hono/node-server/serve-static";
 import { Hono, type Context } from "hono";
 import { streamSSE } from "hono/streaming";
-import { httpUrlHost, normalizeHttpBindHost, type Settings } from "@symphony/domain";
+import {
+  errorMessage,
+  httpUrlHost,
+  isRecord,
+  normalizeHttpBindHost,
+  type Settings,
+} from "@symphony/domain";
 import { mountClaudeMcp } from "@symphony/mcp";
 import { issuePayload, runsPayload, statePayload, type PresenterParams } from "@symphony/presenter";
 import type { RuntimeSnapshot } from "@symphony/runtime-events";
@@ -296,7 +302,7 @@ function observabilityErrorCode(error: unknown): "snapshot_timeout" | "snapshot_
     if (code === "snapshot_timeout" || code === "timeout") return "snapshot_timeout";
     if (code === "snapshot_unavailable" || code === "unavailable") return "snapshot_unavailable";
   }
-  const message = error instanceof Error ? error.message : String(error);
+  const message = errorMessage(error);
   if (message === "snapshot_timeout" || message === "timeout") return "snapshot_timeout";
   return "snapshot_unavailable";
 }
@@ -321,8 +327,4 @@ async function stopServer(server: ServerType): Promise<void> {
   return new Promise((resolve, reject) => {
     server.close((error) => (error ? reject(error) : resolve()));
   });
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
 }

@@ -2,7 +2,9 @@ import { LinearGraphQLClient } from "@linear/sdk";
 export { LinearGraphQLClient } from "@linear/sdk";
 import { normalizeIssue } from "@symphony/issue";
 import {
-  ISSUE_STATE_TYPES,
+  errorMessage,
+  isRecord,
+  normalizeStateType,
   type Issue,
   type IssueStateType,
   type Settings,
@@ -609,26 +611,6 @@ function stringField(record: Record<string, unknown>, key: string): string {
 function asRecord(value: unknown): Record<string, unknown> {
   if (!isRecord(value)) throw new Error("expected Linear object");
   return value;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function normalizeStateType(value: string): IssueStateType | null {
-  const normalized = value.trim().toLowerCase();
-  return isOneOf(normalized, ISSUE_STATE_TYPES) ? normalized : null;
-}
-
-function isOneOf<const Values extends readonly string[]>(
-  value: string,
-  values: Values,
-): value is Values[number] {
-  return (values as readonly string[]).includes(value);
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 function linearErrorContext(query: string, body?: unknown): string {
