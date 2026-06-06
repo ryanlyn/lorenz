@@ -1,9 +1,6 @@
 import { errorMessage, isRecord, type Settings } from "@symphony/domain";
 
-import {
-  type ToolResult,
-  type ToolSpec,
-} from "../tools.js";
+import { type ToolResult, type ToolSpec } from "../tools.js";
 
 import { toolFailure, toolSuccess, unsupportedToolFailure } from "./result.js";
 

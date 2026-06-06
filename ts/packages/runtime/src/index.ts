@@ -464,36 +464,26 @@ export class SymphonyRuntime {
       if (!handle.isActive) return;
       const finalIssue = result.finalIssue ?? (await this.fetchIssueOrSelf(issue));
       if (!handle.isActive) return;
-      const entry = this.orchestrator
-        .snapshot()
-        .running.find((item) => item.issue.id === issue.id && item.slotIndex === slotIndex);
+      const entry = this.runningEntry(issue.id, slotIndex);
       this.orchestrator.finish(issue.id, slotIndex, true, undefined, "continuation");
       this.syncRetryTimer(issue.id);
-      this.recordHistory({
-        id: runId,
-        issueId: issue.id,
-        issueIdentifier: issue.identifier,
-        issueTitle: issue.title,
-        state: finalIssue.state,
-        slotIndex,
-        ensembleSize: entry?.ensembleSize,
-        agentKind,
-        outcome: "success",
-        turnCount: result.turnCount,
-        sessionId: entry?.sessionId,
-        resumeId: result.resumeId,
-        executorPid: entry?.executorPid,
-        workspace: result.workspace,
-        workerHost: entry?.workerHost,
-        usageTotals: entry?.usageTotals,
-        startedAt,
-        endedAt: this.now().toISOString(),
-        durationMs: durationMs(startedAt, this.now().toISOString()),
-        lastEvent: entry?.lastAgentEvent,
-        lastMessage: entry?.lastAgentMessage,
-        lastEventAt: entry?.lastAgentTimestamp?.toISOString() ?? null,
-        retryAttempt: entry?.retryAttempt,
-      });
+      this.recordHistory(
+        buildRunHistoryEntry({
+          id: runId,
+          issue,
+          state: finalIssue.state,
+          slotIndex,
+          agentKind,
+          outcome: "success",
+          turnCount: result.turnCount,
+          runningEntry: entry,
+          resumeId: result.resumeId,
+          workspace: result.workspace,
+          startedAt,
+          endedAt: this.now().toISOString(),
+          durationMs: durationMs(startedAt, this.now().toISOString()),
+        }),
+      );
       this.addEvent("run_completed", `${issue.identifier} turns=${result.turnCount}`);
     } catch (error) {
       // Skip runs that are no longer active: superseded, finished externally, or
@@ -501,39 +491,27 @@ export class SymphonyRuntime {
       // rejects with agent_run_aborted; recording it as a failure would emit a
       // run_failed event the TUI renders as a red error banner on Ctrl+C.
       if (!handle.isActive) return;
-      const entry = this.orchestrator
-        .snapshot()
-        .running.find((item) => item.issue.id === issue.id && item.slotIndex === slotIndex);
+      const entry = this.runningEntry(issue.id, slotIndex);
       await this.invalidateResumeStateForRunningEntry(entry, "failure");
       if (!handle.isActive) return;
       this.orchestrator.finish(issue.id, slotIndex, true, errorMessage(error), "failure");
       this.syncRetryTimer(issue.id);
-      this.recordHistory({
-        id: runId,
-        issueId: issue.id,
-        issueIdentifier: issue.identifier,
-        issueTitle: issue.title,
-        state: issue.state,
-        slotIndex,
-        ensembleSize: entry?.ensembleSize,
-        agentKind,
-        outcome: "failed",
-        turnCount: entry?.turnCount ?? 0,
-        sessionId: entry?.sessionId,
-        resumeId: entry?.resumeId,
-        executorPid: entry?.executorPid,
-        workspace: entry?.workspacePath,
-        workerHost: entry?.workerHost,
-        usageTotals: entry?.usageTotals,
-        startedAt,
-        endedAt: this.now().toISOString(),
-        durationMs: durationMs(startedAt, this.now().toISOString()),
-        error: errorMessage(error),
-        lastEvent: entry?.lastAgentEvent ?? "turn_failed",
-        lastMessage: entry?.lastAgentMessage,
-        lastEventAt: entry?.lastAgentTimestamp?.toISOString() ?? null,
-        retryAttempt: entry?.retryAttempt,
-      });
+      this.recordHistory(
+        buildRunHistoryEntry({
+          id: runId,
+          issue,
+          slotIndex,
+          agentKind,
+          outcome: "failed",
+          turnCount: entry?.turnCount ?? 0,
+          runningEntry: entry,
+          startedAt,
+          endedAt: this.now().toISOString(),
+          durationMs: durationMs(startedAt, this.now().toISOString()),
+          error: errorMessage(error),
+          fallbackLastEvent: "turn_failed",
+        }),
+      );
       this.addEvent("run_failed", `${issue.identifier} ${errorMessage(error)}`);
     } finally {
       handle.release();
@@ -657,32 +635,23 @@ export class SymphonyRuntime {
       activeHandle?.finishExternally();
       await this.invalidateResumeStateForRunningEntry(currentEntry, "stalled");
       const endedAt = this.now().toISOString();
-      this.recordHistory({
-        id: runId,
-        issueId: entry.issue.id,
-        issueIdentifier: entry.identifier,
-        issueTitle: entry.issue.title,
-        state: entry.issue.state,
-        slotIndex: entry.slotIndex,
-        ensembleSize: entry.ensembleSize,
-        agentKind: entry.agentKind,
-        outcome: "stalled",
-        turnCount: entry.turnCount,
-        sessionId: entry.sessionId,
-        resumeId: entry.resumeId,
-        executorPid: entry.executorPid,
-        workspace: entry.workspacePath,
-        workerHost: entry.workerHost,
-        usageTotals: entry.usageTotals,
-        startedAt: entry.startedAt.toISOString(),
-        endedAt,
-        durationMs: durationMs(entry.startedAt.toISOString(), endedAt),
-        error,
-        lastEvent: entry.lastAgentEvent ?? "agent_stalled",
-        lastMessage: entry.lastAgentMessage,
-        lastEventAt: entry.lastAgentTimestamp?.toISOString() ?? null,
-        retryAttempt: entry.retryAttempt,
-      });
+      this.recordHistory(
+        buildRunHistoryEntry({
+          id: runId,
+          issue: entry.issue,
+          issueIdentifier: entry.identifier,
+          slotIndex: entry.slotIndex,
+          agentKind: entry.agentKind,
+          outcome: "stalled",
+          turnCount: entry.turnCount,
+          runningEntry: entry,
+          startedAt: entry.startedAt.toISOString(),
+          endedAt,
+          durationMs: durationMs(entry.startedAt.toISOString(), endedAt),
+          error,
+          fallbackLastEvent: "agent_stalled",
+        }),
+      );
       this.addEvent("run_stalled", `${entry.identifier} ${error}`);
     }
   }
@@ -862,6 +831,58 @@ export class SymphonyRuntime {
       operations: ["poll", "reconcile"],
     };
   }
+}
+
+interface BuildRunHistoryEntryInput {
+  id: string;
+  issue: Issue;
+  issueIdentifier?: string | undefined;
+  state?: RuntimeRunHistoryEntry["state"];
+  slotIndex: number;
+  agentKind: AgentKind;
+  outcome: RuntimeRunOutcome;
+  turnCount: number;
+  runningEntry?: RunningEntry | undefined;
+  resumeId?: RuntimeRunHistoryEntry["resumeId"];
+  workspace?: RuntimeRunHistoryEntry["workspace"];
+  startedAt: string;
+  endedAt: string;
+  durationMs: number;
+  error?: string | undefined;
+  fallbackLastEvent?: RuntimeRunHistoryEntry["lastEvent"];
+}
+
+function buildRunHistoryEntry(input: BuildRunHistoryEntryInput): RuntimeRunHistoryEntry {
+  const entry = input.runningEntry;
+  const resumeId = "resumeId" in input ? input.resumeId : entry?.resumeId;
+  const workspace = "workspace" in input ? input.workspace : entry?.workspacePath;
+
+  return {
+    id: input.id,
+    issueId: input.issue.id,
+    issueIdentifier: input.issueIdentifier ?? input.issue.identifier,
+    issueTitle: input.issue.title,
+    state: "state" in input ? input.state : input.issue.state,
+    slotIndex: input.slotIndex,
+    ensembleSize: entry?.ensembleSize,
+    agentKind: input.agentKind,
+    outcome: input.outcome,
+    turnCount: input.turnCount,
+    sessionId: entry?.sessionId,
+    resumeId,
+    executorPid: entry?.executorPid,
+    workspace,
+    workerHost: entry?.workerHost,
+    usageTotals: entry?.usageTotals,
+    startedAt: input.startedAt,
+    endedAt: input.endedAt,
+    durationMs: input.durationMs,
+    ...(input.error !== undefined ? { error: input.error } : {}),
+    lastEvent: entry?.lastAgentEvent ?? input.fallbackLastEvent,
+    lastMessage: entry?.lastAgentMessage,
+    lastEventAt: entry?.lastAgentTimestamp?.toISOString() ?? null,
+    retryAttempt: entry?.retryAttempt,
+  };
 }
 
 function runtimeRunningEntry(entry: RunningEntry, runId: string | undefined): RuntimeRunningEntry {
