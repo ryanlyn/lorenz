@@ -1,8 +1,8 @@
-import type { Settings } from "@symphony/domain";
+import { errorMessage, isRecord, type Settings } from "@symphony/domain";
 
-import type { ToolResult, ToolSpec } from "../tools.js";
+import { type ToolResult, type ToolSpec } from "../tools.js";
 
-import { unsupportedToolFailure } from "./failure.js";
+import { toolFailure, toolSuccess, unsupportedToolFailure } from "./result.js";
 
 const LINEAR_MAX_RETRIES = 4;
 const MAX_ERROR_BODY_LOG_BYTES = 1000;
@@ -96,7 +96,7 @@ export async function executeLinearTool(
     if (isRecord(body) && Array.isArray(body.errors) && body.errors.length > 0) {
       return { success: false, result: body };
     }
-    return { success: true, result: body };
+    return toolSuccess(body);
   } catch (error) {
     defaultLinearToolLogger.error(
       `Linear GraphQL request failed: ${errorMessage(error)}${linearErrorContext(normalizedInput.query)}`,
@@ -105,18 +105,6 @@ export async function executeLinearTool(
       reason: errorMessage(error),
     });
   }
-}
-
-function toolFailure(message: string, details: Record<string, unknown> = {}): ToolResult {
-  return {
-    success: false,
-    error: message,
-    result: { error: { message, ...details } },
-  };
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function normalizeLinearGraphqlInput(
@@ -221,10 +209,6 @@ function logStatusError(
   body: unknown,
 ): void {
   logger.error(`Linear GraphQL request failed status=${status}${linearErrorContext(query, body)}`);
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 function linearErrorContext(query: string, body?: unknown): string {

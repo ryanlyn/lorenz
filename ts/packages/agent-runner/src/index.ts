@@ -2,24 +2,22 @@ import { settingsForIssueState } from "@symphony/config";
 import { issueIsActive } from "@symphony/dispatch";
 import { ensembleSize } from "@symphony/issue";
 import { buildPrompt, continuationPrompt } from "@symphony/prompt";
-import type {
-  AgentExecutor,
-  AgentSession,
-  AgentUpdate,
-  Issue,
-  Settings,
-  WorkflowDefinition,
+import {
+  resumeStateMatches as canonicalResumeStateMatches,
+  type ResumeStateIdentity,
+} from "@symphony/resume-state/matcher";
+import {
+  errorMessage,
+  type AgentExecutor,
+  type AgentSession,
+  type AgentUpdate,
+  type Issue,
+  type Settings,
+  type WorkflowDefinition,
 } from "@symphony/domain";
 
-interface ResumeStateShape {
-  agentKind: string;
-  resumeId: string;
+interface ResumeStateShape extends ResumeStateIdentity {
   sessionId?: string | null | undefined;
-  issueId?: string | null | undefined;
-  issueIdentifier?: string | null | undefined;
-  issueState?: string | null | undefined;
-  workspacePath?: string | null | undefined;
-  workerHost?: string | null | undefined;
 }
 
 type ResumeReadResult =
@@ -271,7 +269,7 @@ class RunController {
       input.onUpdate?.({
         type: "stderr",
         workspacePath: workspace,
-        message: `Ignoring after_run hook failure (${afterRunHookStage}): ${formatError(error)}`,
+        message: `Ignoring after_run hook failure (${afterRunHookStage}): ${errorMessage(error)}`,
       });
     }
   }
@@ -347,16 +345,12 @@ async function runSetupStage<T>(
     return await Promise.race([fn(), timeoutPromise]);
   } catch (error) {
     if (error instanceof SetupStageTimeoutError) throw error;
-    throw new Error(`agent_runner_setup_crashed: ${stageName}: ${formatError(error)}`, {
+    throw new Error(`agent_runner_setup_crashed: ${stageName}: ${errorMessage(error)}`, {
       cause: error,
     });
   } finally {
     if (timeout) clearTimeout(timeout);
   }
-}
-
-function formatError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 function toError(error: unknown): Error {
@@ -433,14 +427,7 @@ function resumeStateMatches(
   input: { agentKind: string; issue: Issue; workspacePath: string; workerHost: string | null },
 ): boolean {
   if (adapters?.resumeStateMatches) return adapters.resumeStateMatches(state, input);
-  return (
-    state.agentKind === input.agentKind &&
-    state.issueId === input.issue.id &&
-    state.issueIdentifier === input.issue.identifier &&
-    state.issueState === input.issue.state &&
-    state.workspacePath === input.workspacePath &&
-    (state.workerHost ?? null) === input.workerHost
-  );
+  return canonicalResumeStateMatches(state, input);
 }
 
 async function writeResumeState(

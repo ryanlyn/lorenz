@@ -480,6 +480,9 @@ importers:
       "@symphony/prompt":
         specifier: workspace:*
         version: link:../prompt
+      "@symphony/resume-state":
+        specifier: workspace:*
+        version: link:../resume-state
     devDependencies:
       "@agentclientprotocol/sdk":
         specifier: "catalog:"

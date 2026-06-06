@@ -24,16 +24,18 @@ import { actionForStopReason } from "@symphony/policies/stopReason";
 import { shellEscape, startSshProcess } from "@symphony/ssh";
 import { validateWorkspaceCwd } from "@symphony/workspace";
 import { execa } from "execa";
-import type {
-  AgentConfig,
-  AgentKind,
-  AgentExecutor,
-  AgentSession,
-  AgentUpdate,
-  AgentUpdateType,
-  Issue,
-  Settings,
-  UsageTotals,
+import {
+  errorMessage,
+  isRecord,
+  type AgentConfig,
+  type AgentKind,
+  type AgentExecutor,
+  type AgentSession,
+  type AgentUpdate,
+  type AgentUpdateType,
+  type Issue,
+  type Settings,
+  type UsageTotals,
 } from "@symphony/domain";
 
 interface Session extends AgentSession {
@@ -237,7 +239,7 @@ export class Executor implements AgentExecutor {
         })
         .catch((error: unknown) => {
           if (settled) return;
-          const message = error instanceof Error ? error.message : String(error);
+          const message = errorMessage(error);
           this.emit(session, {
             type: "turn_failed",
             sessionId,
@@ -422,7 +424,7 @@ async function openSession(
       session.onUpdate?.({
         type: "resume_state_warning",
         workspacePath: session.workspace,
-        message: `acp_resume_failed: ${error instanceof Error ? error.message : String(error)}`,
+        message: `acp_resume_failed: ${errorMessage(error)}`,
         timestamp: new Date(),
       });
     }
@@ -452,7 +454,7 @@ async function openSession(
       session.onUpdate?.({
         type: "resume_state_warning",
         workspacePath: session.workspace,
-        message: `acp_load_failed: ${error instanceof Error ? error.message : String(error)}`,
+        message: `acp_load_failed: ${errorMessage(error)}`,
         timestamp: new Date(),
       });
     }
@@ -504,8 +506,8 @@ function toToml(obj: Record<string, unknown>, prefix = ""): string {
   const sections: [string, Record<string, unknown>][] = [];
   for (const [key, value] of Object.entries(obj)) {
     if (value === null || value === undefined) continue;
-    if (typeof value === "object" && !Array.isArray(value)) {
-      sections.push([prefix ? `${prefix}.${key}` : key, value as Record<string, unknown>]);
+    if (isRecord(value)) {
+      sections.push([prefix ? `${prefix}.${key}` : key, value]);
     } else {
       lines.push(`${key} = ${toTomlValue(value)}`);
     }

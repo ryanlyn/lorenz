@@ -3,7 +3,7 @@ import type { ServerType } from "@hono/node-server";
 import { Hono, type Context } from "hono";
 import { match } from "ts-pattern";
 import { z } from "zod";
-import { httpUrlHost, normalizeHttpBindHost, type Settings } from "@symphony/domain";
+import { httpUrlHost, isRecord, normalizeHttpBindHost, type Settings } from "@symphony/domain";
 
 import { validMcpToken } from "./auth.js";
 import { executeTool, toolSpecs } from "./tools.js";
@@ -200,8 +200,4 @@ async function stopServer(server: ServerType): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     server.close((error) => (error ? reject(error) : resolve()));
   });
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

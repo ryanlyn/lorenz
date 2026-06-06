@@ -89,6 +89,33 @@ export const ISSUE_STATE_TYPES = [
 
 export type IssueStateType = (typeof ISSUE_STATE_TYPES)[number];
 
+// --- Leaf helpers ---
+
+export function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+export function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+export function isOneOf<const Values extends readonly string[]>(
+  value: string,
+  values: Values,
+): value is Values[number] {
+  return (values as readonly string[]).includes(value);
+}
+
+export function normalizeStateType(value: string | null | undefined): IssueStateType | null {
+  if (value === null || value === undefined) return null;
+  const normalized = value.trim().toLowerCase();
+  return isOneOf(normalized, ISSUE_STATE_TYPES) ? normalized : null;
+}
+
+export function durationMs(startedAt: string, endedAt: string): number {
+  return Math.max(0, new Date(endedAt).getTime() - new Date(startedAt).getTime());
+}
+
 export const PRIORITY_VALUES = [1, 2, 3, 4] as const;
 
 export type Priority = (typeof PRIORITY_VALUES)[number];

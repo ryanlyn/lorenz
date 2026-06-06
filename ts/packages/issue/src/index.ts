@@ -1,6 +1,7 @@
 import {
-  ISSUE_STATE_TYPES,
   PRIORITY_VALUES,
+  isRecord,
+  normalizeStateType,
   type Issue,
   type IssueRef,
   type IssueStateType,
@@ -143,12 +144,6 @@ function optionalString(value: unknown): string | null {
   return value;
 }
 
-function normalizeStateType(value: string | null): IssueStateType | null {
-  if (value === null) return null;
-  const normalized = value.trim().toLowerCase();
-  return isOneOf(normalized, ISSUE_STATE_TYPES) ? normalized : null;
-}
-
 function priorityOrNull(value: unknown): Priority | null {
   if (
     typeof value === "number" &&
@@ -166,15 +161,4 @@ function stringFromPath(input: Record<string, unknown>, path: string[]): string 
     current = current[segment];
   }
   return typeof current === "string" ? current : null;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function isOneOf<const Values extends readonly string[]>(
-  value: string,
-  values: Values,
-): value is Values[number] {
-  return (values as readonly string[]).includes(value);
 }

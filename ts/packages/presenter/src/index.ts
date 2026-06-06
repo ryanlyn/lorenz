@@ -4,7 +4,7 @@ import type {
   RuntimeSnapshot,
 } from "@symphony/runtime-events";
 import { humanizeAgentMessage } from "@symphony/humanize";
-import type { UsageTotals } from "@symphony/domain";
+import { durationMs, type UsageTotals } from "@symphony/domain";
 
 export interface PresenterParams {
   [key: string]: string | boolean | number | undefined;
@@ -260,7 +260,7 @@ function historyRunPayload(entry: RuntimeRunHistoryEntry, logFile: string | null
     last_event_at: entry.lastEventAt ?? null,
     started_at: entry.startedAt,
     ended_at: entry.endedAt,
-    duration_ms: entry.durationMs ?? durationBetween(entry.startedAt, entry.endedAt),
+    duration_ms: entry.durationMs ?? durationMs(entry.startedAt, entry.endedAt),
     cost: { estimated_cost_usd: null },
     tokens: tokenPayload(usage),
     log_hints: logHints(
@@ -512,10 +512,6 @@ function limitParam(value: string | boolean | number | undefined): number {
 
 function durationSince(startedAt: string): number {
   return Math.max(0, Date.now() - new Date(startedAt).getTime());
-}
-
-function durationBetween(startedAt: string, endedAt: string): number {
-  return Math.max(0, new Date(endedAt).getTime() - new Date(startedAt).getTime());
 }
 
 function sum<T>(values: T[], callback: (value: T) => number): number {

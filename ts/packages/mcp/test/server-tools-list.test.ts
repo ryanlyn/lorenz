@@ -59,3 +59,28 @@ test("MCP tools/list still advertises only linear_graphql for a linear tracker",
   const settings = parseConfig({ tracker: { kind: "linear", project_slug: "mono" } }, {});
   assert.deepEqual(await toolsListNames(settings), ["linear_graphql"]);
 });
+
+test("MCP rejects array request bodies as parse errors", async () => {
+  const token = issueMcpToken();
+  let handle: ObservabilityServerHandle | undefined;
+  try {
+    handle = await startClaudeMcpServer(await localSettings(), { host: "127.0.0.1", port: 0 });
+    const response = await fetch(handle.url("/claude-mcp"), {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify([]),
+    });
+    assert.equal(response.status, 400);
+    assert.deepEqual(await response.json(), {
+      jsonrpc: "2.0",
+      id: null,
+      error: { code: -32700, message: "Parse error" },
+    });
+  } finally {
+    revokeMcpToken(token);
+    await handle?.stop();
+  }
+});
