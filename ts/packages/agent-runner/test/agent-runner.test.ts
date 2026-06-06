@@ -1,4 +1,4 @@
-import { vi, test } from "vitest";
+import { afterEach, vi, test } from "vitest";
 import type {
   AgentExecutor,
   AgentSession,
@@ -82,6 +82,69 @@ function fakeAdapters(overrides: Partial<RunAgentAttemptAdapters> = {}): RunAgen
   };
 }
 
+function fakeSettingsWithTimeouts(
+  opts: {
+    setupTimeoutMs?: number | undefined;
+    hookTimeoutMs?: number | undefined;
+    hooks?: Partial<Settings["hooks"]> | undefined;
+  } = {},
+): Settings {
+  const settings = fakeSettings();
+  const agentConfig = settings.agents[settings.agent.kind]!;
+  return {
+    ...settings,
+    agents: {
+      ...settings.agents,
+      [settings.agent.kind]: {
+        ...agentConfig,
+        stallTimeoutMs: opts.setupTimeoutMs ?? agentConfig.stallTimeoutMs,
+      },
+    },
+    hooks: {
+      ...settings.hooks,
+      timeoutMs: opts.hookTimeoutMs ?? settings.hooks.timeoutMs,
+      ...opts.hooks,
+    },
+  };
+}
+
+function never<T>(): Promise<T> {
+  return new Promise<T>(() => {});
+}
+
+type PromiseState<T> =
+  | { status: "pending" }
+  | { status: "resolved"; value: T }
+  | { status: "rejected"; error: unknown };
+
+type SettledPromiseState<T> = Exclude<PromiseState<T>, { status: "pending" }>;
+
+function observePromise<T>(promise: Promise<T>): Promise<SettledPromiseState<T>> {
+  return promise.then(
+    (value) => ({ status: "resolved", value }) as const,
+    (error: unknown) => ({ status: "rejected", error }) as const,
+  );
+}
+
+async function observedPromiseState<T>(
+  observed: Promise<SettledPromiseState<T>>,
+): Promise<PromiseState<T>> {
+  return Promise.race([observed, Promise.resolve({ status: "pending" } as const)]);
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function assertRejected(state: PromiseState<unknown>, expected: string | RegExp): void {
+  assert.equal(state.status, "rejected");
+  if (state.status === "rejected") assert.match(errorMessage(state.error), expected);
+}
+
+afterEach(() => {
+  vi.useRealTimers();
+});
+
 // ---------------------------------------------------------------------------
 // runAgentAttempt
 // ---------------------------------------------------------------------------
@@ -162,6 +225,228 @@ test("runAgentAttempt respects abort signal and stops executor mid-turn", async 
 
   await assert.rejects(() => promise, "agent_run_aborted");
   assert.equal(stopped, true);
+});
+
+test("runAgentAttempt times out a hung workspace creation stage", async () => {
+  vi.useFakeTimers();
+  const issue = fakeIssue();
+  const settings = fakeSettingsWithTimeouts({ setupTimeoutMs: 50 });
+
+  const promise = runAgentAttempt({
+    issue,
+    workflow: { path: "/workflow.md", config: {}, promptTemplate: "Fix it", settings },
+    settings,
+    adapters: fakeAdapters({
+      createWorkspaceForIssue: async () => never(),
+    }),
+  });
+  const observed = observePromise(promise);
+
+  await vi.advanceTimersByTimeAsync(50);
+
+  assertRejected(
+    await observedPromiseState(observed),
+    /agent_runner_timeout.*workspace\.create_for_issue.*50/,
+  );
+});
+
+test("runAgentAttempt reports setup adapter crashes with the setup stage", async () => {
+  const issue = fakeIssue();
+  const settings = fakeSettings();
+
+  await assert.rejects(
+    () =>
+      runAgentAttempt({
+        issue,
+        workflow: { path: "/workflow.md", config: {}, promptTemplate: "Fix it", settings },
+        settings,
+        adapters: fakeAdapters({
+          createWorkspaceForIssue: async () => {
+            throw new Error("adapter exploded");
+          },
+        }),
+      }),
+    /agent_runner_setup_crashed.*workspace\.create_for_issue.*adapter exploded/,
+  );
+});
+
+test("runAgentAttempt times out a hung beforeRun setup stage", async () => {
+  vi.useFakeTimers();
+  const issue = fakeIssue();
+  const settings = fakeSettingsWithTimeouts({
+    hookTimeoutMs: 50,
+    hooks: { beforeRun: "setup" },
+  });
+
+  const promise = runAgentAttempt({
+    issue,
+    workflow: { path: "/workflow.md", config: {}, promptTemplate: "Fix it", settings },
+    settings,
+    adapters: fakeAdapters({
+      runHook: async () => never(),
+    }),
+  });
+  const observed = observePromise(promise);
+
+  await vi.advanceTimersByTimeAsync(1050);
+
+  assertRejected(
+    await observedPromiseState(observed),
+    /agent_runner_timeout.*workspace\.run_before_run_hook.*1050/,
+  );
+});
+
+test("runAgentAttempt times out afterRun and emits a cleanup warning", async () => {
+  vi.useFakeTimers();
+  const issue = fakeIssue();
+  const settings = fakeSettingsWithTimeouts({
+    hookTimeoutMs: 50,
+    hooks: { afterRun: "cleanup" },
+  });
+  const received: AgentUpdate[] = [];
+
+  const promise = runAgentAttempt({
+    issue,
+    workflow: { path: "/workflow.md", config: {}, promptTemplate: "Fix it", settings },
+    settings,
+    onUpdate: (update) => received.push(update),
+    adapters: fakeAdapters({
+      runHook: async () => never(),
+    }),
+  });
+  const observed = observePromise(promise);
+
+  await vi.advanceTimersByTimeAsync(1050);
+
+  const state = await observedPromiseState(observed);
+  assert.equal(state.status, "resolved");
+  assert.ok(
+    received.some(
+      (update) =>
+        update.type === "stderr" &&
+        update.message.includes("Ignoring after_run hook failure") &&
+        update.message.includes("workspace.run_after_run_hook") &&
+        update.message.includes("agent_runner_timeout"),
+    ),
+  );
+});
+
+test("runAgentAttempt emits a cleanup warning when afterRun fails", async () => {
+  const issue = fakeIssue();
+  const settings = fakeSettings({
+    hooks: { ...defaultSettings().hooks, afterRun: "cleanup" },
+  });
+  const received: AgentUpdate[] = [];
+
+  await runAgentAttempt({
+    issue,
+    workflow: { path: "/workflow.md", config: {}, promptTemplate: "Fix it", settings },
+    settings,
+    onUpdate: (update) => received.push(update),
+    adapters: fakeAdapters({
+      runHook: async () => {
+        throw new Error("cleanup exploded");
+      },
+    }),
+  });
+
+  assert.ok(
+    received.some(
+      (update) =>
+        update.type === "stderr" &&
+        update.message.includes("Ignoring after_run hook failure") &&
+        update.message.includes("workspace.run_after_run_hook") &&
+        update.message.includes("cleanup exploded"),
+    ),
+  );
+});
+
+test("runAgentAttempt runs afterRun when beforeRun fails after workspace creation", async () => {
+  const issue = fakeIssue();
+  const settings = fakeSettings({
+    hooks: { ...defaultSettings().hooks, beforeRun: "setup", afterRun: "cleanup" },
+  });
+  const commands: string[] = [];
+
+  await assert.rejects(
+    () =>
+      runAgentAttempt({
+        issue,
+        workflow: { path: "/workflow.md", config: {}, promptTemplate: "Fix it", settings },
+        settings,
+        adapters: fakeAdapters({
+          runHook: async (command) => {
+            commands.push(command);
+            if (command === "setup") throw new Error("setup failed");
+          },
+        }),
+      }),
+    "setup failed",
+  );
+
+  assert.deepEqual(commands, ["setup", "cleanup"]);
+});
+
+test("runAgentAttempt runs afterRun when resume state read fails after workspace creation", async () => {
+  const issue = fakeIssue();
+  const settings = fakeSettings({
+    hooks: { ...defaultSettings().hooks, afterRun: "cleanup" },
+  });
+  const commands: string[] = [];
+
+  await assert.rejects(
+    () =>
+      runAgentAttempt({
+        issue,
+        workflow: { path: "/workflow.md", config: {}, promptTemplate: "Fix it", settings },
+        settings,
+        adapters: fakeAdapters({
+          runHook: async (command) => {
+            commands.push(command);
+          },
+          readResumeState: async () => {
+            throw new Error("resume read failed");
+          },
+        }),
+      }),
+    "resume read failed",
+  );
+
+  assert.deepEqual(commands, ["cleanup"]);
+});
+
+test("runAgentAttempt runs afterRun when startSession fails after workspace creation", async () => {
+  const issue = fakeIssue();
+  const settings = fakeSettings({
+    hooks: { ...defaultSettings().hooks, afterRun: "cleanup" },
+  });
+  const commands: string[] = [];
+
+  await assert.rejects(
+    () =>
+      runAgentAttempt({
+        issue,
+        workflow: { path: "/workflow.md", config: {}, promptTemplate: "Fix it", settings },
+        settings,
+        adapters: fakeAdapters({
+          runHook: async (command) => {
+            commands.push(command);
+          },
+          executorFactory: () => ({
+            kind: "codex",
+            async startSession() {
+              throw new Error("start failed");
+            },
+            async runTurn() {
+              return [{ type: "turn_completed" }];
+            },
+          }),
+        }),
+      }),
+    "start failed",
+  );
+
+  assert.deepEqual(commands, ["cleanup"]);
 });
 
 // ---------------------------------------------------------------------------

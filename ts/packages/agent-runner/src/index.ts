@@ -28,6 +28,11 @@ type ResumeReadResult =
   | { status: "error"; reason: string }
   | { status: "ok"; state: ResumeStateShape };
 
+const workerSetupTimeoutGraceMs = 1_000;
+const workspaceCreateStage = "workspace.create_for_issue";
+const beforeRunHookStage = "workspace.run_before_run_hook";
+const afterRunHookStage = "workspace.run_after_run_hook";
+
 export interface RunAgentAttemptAdapters {
   createWorkspaceForIssue(
     settings: Settings,
@@ -95,70 +100,82 @@ class RunController {
     const size = ensembleSize(issue) ?? settings.agent.ensembleSize;
     const slotIndex = input.slotIndex ?? 0;
     const workerHost = input.workerHost ?? null;
-    const workspace = await createWorkspaceForIssue(input.adapters, runtime, issue, {
-      slotIndex,
-      ensembleSize: size,
-      workerHost,
-    });
+    const workspace = await runSetupStage(
+      workspaceCreateStage,
+      workspaceCreateTimeoutMs(runtime),
+      async () =>
+        createWorkspaceForIssue(input.adapters, runtime, issue, {
+          slotIndex,
+          ensembleSize: size,
+          workerHost,
+        }),
+    );
     input.onUpdate?.({
       type: "workspace_prepared",
       workspacePath: workspace,
       message: `workspace prepared at ${workspace}`,
     });
-    if (runtime.hooks.beforeRun) {
-      await runHook(input.adapters, runtime.hooks.beforeRun, workspace, runtime.hooks, workerHost);
-    }
-
-    // A shared workspace is reused by every issue, so its resume state cannot be tied to one run.
     const resumeEnabled = settings.workspace.isolation !== "none";
     let resumeId: string | null = null;
-    if (resumeEnabled) {
-      const resume = await readResumeState(
-        input.adapters,
-        workspace,
-        workerHost,
-        runtime.worker.sshTimeoutMs,
-      );
-      const resumeMatches =
-        resume.status === "ok" &&
-        resumeStateMatches(input.adapters, resume.state, {
-          agentKind: runtime.agent.kind,
-          issue,
-          workspacePath: workspace,
-          workerHost,
-        });
-      if (resume.status === "error") {
-        input.onUpdate?.({
-          type: "resume_state_warning",
-          workspacePath: workspace,
-          message: resume.reason,
-        });
-      } else if (resume.status === "ok" && !resumeMatches) {
-        input.onUpdate?.({
-          type: "resume_state_warning",
-          workspacePath: workspace,
-          message: "resume_state_identity_mismatch",
-        });
-      }
-      resumeId = resumeMatches ? resume.state.resumeId : null;
-    }
-
-    const executor = await executorFor(input.adapters, runtime);
     const updates: AgentUpdate[] = [];
-    const session = await executor.startSession({
-      workspace,
-      workerHost,
-      issue,
-      settings: runtime,
-      resumeId,
-      onUpdate: (update) => {
-        updates.push(update);
-        input.onUpdate?.(update);
-      },
-    });
+    let session: AgentSession | null = null;
 
     let turnCount = 0;
+    let runError: unknown;
+    let stopError: unknown;
     try {
+      const beforeRun = runtime.hooks.beforeRun;
+      if (beforeRun) {
+        await runSetupStage(beforeRunHookStage, hookStageTimeoutMs(runtime), async () =>
+          runHook(input.adapters, beforeRun, workspace, runtime.hooks, workerHost),
+        );
+      }
+
+      // A shared workspace is reused by every issue, so its resume state cannot be tied to one run.
+      if (resumeEnabled) {
+        const resume = await readResumeState(
+          input.adapters,
+          workspace,
+          workerHost,
+          runtime.worker.sshTimeoutMs,
+        );
+        const resumeMatches =
+          resume.status === "ok" &&
+          resumeStateMatches(input.adapters, resume.state, {
+            agentKind: runtime.agent.kind,
+            issue,
+            workspacePath: workspace,
+            workerHost,
+          });
+        if (resume.status === "error") {
+          input.onUpdate?.({
+            type: "resume_state_warning",
+            workspacePath: workspace,
+            message: resume.reason,
+          });
+        } else if (resume.status === "ok" && !resumeMatches) {
+          input.onUpdate?.({
+            type: "resume_state_warning",
+            workspacePath: workspace,
+            message: "resume_state_identity_mismatch",
+          });
+        }
+        resumeId = resumeMatches ? resume.state.resumeId : null;
+      }
+
+      const executor = await executorFor(input.adapters, runtime);
+      session = await executor.startSession({
+        workspace,
+        workerHost,
+        issue,
+        settings: runtime,
+        resumeId,
+        onUpdate: (update) => {
+          updates.push(update);
+          input.onUpdate?.(update);
+        },
+      });
+
       while (turnCount < runtime.agent.maxTurns) {
         throwIfAborted(input.abortSignal);
         const prompt =
@@ -208,23 +225,22 @@ class RunController {
         }
         runtime = refreshed;
       }
+    } catch (error) {
+      runError = error;
     } finally {
-      await session.stop();
-      if (runtime.hooks.afterRun) {
+      if (session) {
         try {
-          await runHook(
-            input.adapters,
-            runtime.hooks.afterRun,
-            workspace,
-            runtime.hooks,
-            workerHost,
-          );
-        } catch {
-          // after_run is best effort by SPEC.
+          await session.stop();
+        } catch (error) {
+          stopError = error;
         }
       }
+      await this.runAfterRunHook(runtime, workspace, workerHost);
     }
 
+    if (runError) throw toError(runError);
+    if (stopError) throw toError(stopError);
+    if (!session) throw new Error("agent_runner_session_missing");
     if (resumeEnabled) {
       await persistResumeState(input.adapters, session, runtime, issue, workspace, workerHost);
     }
@@ -237,6 +253,27 @@ class RunController {
       agentKind: runtime.agent.kind,
       finalIssue: issue,
     };
+  }
+
+  private async runAfterRunHook(
+    runtime: Settings,
+    workspace: string,
+    workerHost: string | null,
+  ): Promise<void> {
+    const input = this.input;
+    const afterRun = runtime.hooks.afterRun;
+    if (!afterRun) return;
+    try {
+      await runSetupStage(afterRunHookStage, hookStageTimeoutMs(runtime), async () =>
+        runHook(input.adapters, afterRun, workspace, runtime.hooks, workerHost),
+      );
+    } catch (error) {
+      input.onUpdate?.({
+        type: "stderr",
+        workspacePath: workspace,
+        message: `Ignoring after_run hook failure (${afterRunHookStage}): ${formatError(error)}`,
+      });
+    }
   }
 }
 
@@ -277,6 +314,53 @@ async function executorFor(
 ): Promise<AgentExecutor> {
   if (adapters?.executorFactory) return adapters.executorFactory(settings);
   throw new Error("agent_runner_adapter_missing: executorFactory");
+}
+
+function workspaceCreateTimeoutMs(settings: Settings): number {
+  return settings.agents[settings.agent.kind]?.stallTimeoutMs ?? settings.codex.stallTimeoutMs;
+}
+
+function hookStageTimeoutMs(settings: Settings): number {
+  return settings.hooks.timeoutMs + workerSetupTimeoutGraceMs;
+}
+
+class SetupStageTimeoutError extends Error {
+  constructor(
+    readonly stageName: string,
+    readonly timeoutMs: number,
+  ) {
+    super(`agent_runner_timeout: ${stageName} timed out after ${timeoutMs}ms`);
+  }
+}
+
+async function runSetupStage<T>(
+  stageName: string,
+  timeoutMs: number,
+  fn: () => Promise<T>,
+): Promise<T> {
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) return fn();
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const timeoutPromise = new Promise<never>((_resolve, reject) => {
+    timeout = setTimeout(() => reject(new SetupStageTimeoutError(stageName, timeoutMs)), timeoutMs);
+  });
+  try {
+    return await Promise.race([fn(), timeoutPromise]);
+  } catch (error) {
+    if (error instanceof SetupStageTimeoutError) throw error;
+    throw new Error(`agent_runner_setup_crashed: ${stageName}: ${formatError(error)}`, {
+      cause: error,
+    });
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
+}
+
+function formatError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function toError(error: unknown): Error {
+  return error instanceof Error ? error : new Error(String(error));
 }
 
 function backendProfile(settings: Settings): string {
