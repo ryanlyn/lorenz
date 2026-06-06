@@ -14,10 +14,10 @@
       "path": "../domain"
     },
     {
-      "path": "../worker-host-pool"
+      "path": "../local-tracker"
     },
     {
-      "path": "../local-tracker"
+      "path": "../worker-host-pool"
     }
   ]
 }

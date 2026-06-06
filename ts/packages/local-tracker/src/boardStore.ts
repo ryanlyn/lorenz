@@ -27,7 +27,7 @@ const COMMENTS_MARKER = "<!-- symphony:comments -->";
  * separators, "..", or NUL - is rejected before it can reach the filesystem, closing off path
  * traversal via agent-supplied ids.
  */
-export const DEFAULT_ID_PREFIX = "BOARD-";
+const DEFAULT_ID_PREFIX = "BOARD-";
 
 /**
  * Valid id prefixes: an alphanumeric, then alphanumerics / `_` / `-`. Disallowing `.`, `/`, `\`,

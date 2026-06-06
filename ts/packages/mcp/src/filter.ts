@@ -9,9 +9,9 @@
  * Nesting depth and node count are bounded so a hostile or runaway filter cannot blow up.
  */
 
-export type Scalar = string | number | boolean | null;
+type Scalar = string | number | boolean | null;
 
-export type Predicate =
+type Predicate =
   | { field: string; op: "eq" | "ne" | "lt" | "lte" | "gt" | "gte"; value: Scalar }
   | { field: string; op: "in" | "nin"; value: Scalar[] }
   | { field: string; op: "contains"; value: string; ci?: boolean }
@@ -19,7 +19,7 @@ export type Predicate =
 
 export type Filter = Predicate | { and: Filter[] } | { or: Filter[] } | { not: Filter };
 
-export interface OrderBy {
+interface OrderBy {
   field: string;
   dir: "asc" | "desc";
 }

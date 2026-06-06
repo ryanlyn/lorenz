@@ -16,11 +16,6 @@ export interface ToolResult {
   error?: string;
 }
 
-/** Injectables for tests; production builds real clients from settings. */
-export interface ToolDeps {
-  now?: () => Date;
-}
-
 function trackerKind(settings: Settings): TrackerKind {
   return settings.tracker.kind ?? "linear";
 }

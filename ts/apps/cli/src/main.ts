@@ -208,7 +208,7 @@ export async function runDaemon(options: CliOptions): Promise<number> {
   }
 }
 
-export function createDaemonCommand(name = "symphony-ts"): Command {
+function createDaemonCommand(name = "symphony-ts"): Command {
   return new Command(name)
     .description("Run the Symphony TypeScript orchestrator.")
     .allowExcessArguments(false)

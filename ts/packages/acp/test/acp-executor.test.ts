@@ -170,7 +170,7 @@ test("ACP executor times out stalled bridge turns and emits a typed failure", as
   const root = await tempDir("symphony-ts-acp-stall");
   const fake = await writeFakeBridge(root);
   const trace = path.join(root, "trace.jsonl");
-  const settings = acpSettings(root, fake, trace, "stall", 50);
+  const settings = acpSettings(root, fake, trace, "stall", 5_000, { stallTimeoutMs: 50 });
   const updates: AgentUpdate[] = [];
   const executor = new Executor("claude");
   const session = await executor.startSession({
@@ -180,8 +180,9 @@ test("ACP executor times out stalled bridge turns and emits a typed failure", as
     onUpdate: (update) => updates.push(update),
   });
   try {
-    await assert.rejects(
+    await expectRejectsWithin(
       () => executor.runTurn(session, "hello", sampleIssue),
+      500,
       /acp turn timed out/,
     );
   } finally {
@@ -191,6 +192,36 @@ test("ACP executor times out stalled bridge turns and emits a typed failure", as
   assert.ok(updates.some((update) => update.type === "turn_started"));
   const traceEvents = await readTrace(trace);
   assert.ok(traceEvents.some((event) => event.method === "cancel"));
+});
+
+test("ACP executor resets the stall timeout on session notifications", async () => {
+  const root = await tempDir("symphony-ts-acp-active-stall-reset");
+  const fake = await writeFakeBridge(root);
+  const trace = path.join(root, "trace.jsonl");
+  const settings = acpSettings(root, fake, trace, "active-long-turn", 5_000, {
+    stallTimeoutMs: 500,
+  });
+  const updates: AgentUpdate[] = [];
+  const executor = new Executor("claude");
+  const session = await executor.startSession({
+    workspace: root,
+    settings,
+    issue: sampleIssue,
+    onUpdate: (update) => updates.push(update),
+  });
+  try {
+    const turnUpdates = await executor.runTurn(session, "hello", sampleIssue);
+    assert.ok(turnUpdates.some((update) => update.type === "turn_completed"));
+  } finally {
+    await session.stop();
+  }
+
+  assert.ok(updates.some((update) => update.type === "session_notification"));
+  const traceEvents = await readTrace(trace);
+  assert.equal(
+    traceEvents.some((event) => event.method === "cancel"),
+    false,
+  );
 });
 
 test("ACP executor suppresses late terminal updates after turn timeout", async () => {
@@ -359,6 +390,7 @@ function acpSettings(
   opts?: {
     agentKind?: string;
     providerConfig?: Record<string, unknown>;
+    stallTimeoutMs?: number;
     usageAccounting?: "per-turn" | "cumulative";
   },
 ) {
@@ -371,7 +403,7 @@ function acpSettings(
         executor: "acp",
         bridge_command: `${process.execPath} ${fake} ${mode} ${trace}`,
         turn_timeout_ms: turnTimeoutMs,
-        stall_timeout_ms: 0,
+        stall_timeout_ms: opts?.stallTimeoutMs ?? 0,
         ...(opts?.providerConfig ? { provider_config: opts.providerConfig } : {}),
         ...(opts?.usageAccounting ? { usage_accounting: opts.usageAccounting } : {}),
       },
@@ -449,6 +481,29 @@ class FakeAgent {
     if (mode === "late-complete-after-timeout") {
       await this.waitForCancel();
       record({ method: "promptResolvedAfterCancel", params });
+      return {
+        stopReason: "end_turn",
+        usage: {
+          inputTokens: 2,
+          cachedReadTokens: 4,
+          cachedWriteTokens: 1,
+          outputTokens: 3,
+          thoughtTokens: 9,
+          totalTokens: 10
+        }
+      };
+    }
+    if (mode === "active-long-turn") {
+      for (let i = 0; i < 3; i += 1) {
+        await sleep(200);
+        await this.connection.sessionUpdate({
+          sessionId: params.sessionId,
+          update: {
+            sessionUpdate: "agent_message_chunk",
+            content: { type: "text", text: "still working " + i }
+          }
+        });
+      }
       return {
         stopReason: "end_turn",
         usage: {
@@ -553,6 +608,10 @@ class FakeAgent {
   }
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 const stream = acp.ndJsonStream(Writable.toWeb(process.stdout), Readable.toWeb(process.stdin));
 new acp.AgentSideConnection((connection) => new FakeAgent(connection), stream);
 `,
@@ -621,6 +680,33 @@ async function waitForTraceEvent(tracePath: string, method: string): Promise<voi
     },
     { timeout: 10_000, interval: 100 },
   );
+}
+
+async function expectRejectsWithin(
+  fn: () => Promise<unknown>,
+  timeoutMs: number,
+  expected: RegExp,
+): Promise<void> {
+  const promise = fn();
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await assert.rejects(
+      () =>
+        Promise.race([
+          promise,
+          new Promise((_, reject) => {
+            timeout = setTimeout(
+              () => reject(new Error(`promise did not reject within ${timeoutMs}ms`)),
+              timeoutMs,
+            );
+          }),
+        ]),
+      expected,
+    );
+  } finally {
+    if (timeout) clearTimeout(timeout);
+    promise.catch(() => {});
+  }
 }
 
 function reserveTcpPort(): Promise<number> {

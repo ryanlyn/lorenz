@@ -4,6 +4,11 @@ const config: KnipConfig = {
   workspaces: {
     ".": {
       entry: ["test/**/*.test.ts"],
+      paths: {
+        "@symphony/cli": ["apps/cli/src/index.ts"],
+        "@symphony/cli/runs": ["apps/cli/src/runs.ts"],
+        "@symphony/*": ["packages/*/src/index.ts"],
+      },
       ignoreDependencies: [
         "@symphony/dispatch",
         "@symphony/humanize",
@@ -24,6 +29,15 @@ const config: KnipConfig = {
         "@symphony/workspace",
         "playwright",
       ],
+    },
+    "apps/cli": {
+      includeEntryExports: true,
+    },
+    "packages/local-tracker": {
+      includeEntryExports: true,
+    },
+    "packages/mcp": {
+      includeEntryExports: true,
     },
     "packages/*": {
       entry: ["src/index.{ts,tsx}"],

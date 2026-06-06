@@ -11,6 +11,9 @@
   ],
   "references": [
     {
+      "path": "../ports"
+    },
+    {
       "path": "../runtime-events"
     }
   ]
