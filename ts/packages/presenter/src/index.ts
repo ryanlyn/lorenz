@@ -29,7 +29,7 @@ export function statePayload(
     running: snapshot.running.map(runningEntryPayload),
     retrying: snapshot.retrying.map((entry) => ({
       issue_id: entry.issueId,
-      issue_identifier: entry.identifier,
+      issue_identifier: entry.issueIdentifier,
       issue_url: entry.issueUrl ?? null,
       attempt: entry.attempt,
       due_at: entry.dueAtIso,
@@ -48,7 +48,7 @@ export function issuePayload(
   issueIdentifier: string,
 ): { status: "ok"; payload: Record<string, unknown> } | { status: "issue_not_found" } {
   const running = snapshot.running.find((entry) => entry.issueIdentifier === issueIdentifier);
-  const retry = snapshot.retrying.find((entry) => entry.identifier === issueIdentifier);
+  const retry = snapshot.retrying.find((entry) => entry.issueIdentifier === issueIdentifier);
   if (!running && !retry) return { status: "issue_not_found" };
 
   return {
@@ -197,7 +197,7 @@ function runningRunPayload(entry: RuntimeRunningEntry, logFile: string | null): 
     id: entry.runId ?? `running-${entry.issueIdentifier}-${entry.slotIndex}`,
     issue_id: entry.issueId,
     issue_identifier: entry.issueIdentifier,
-    issue_title: entry.title,
+    issue_title: entry.issueTitle,
     state: entry.state,
     slot_index: entry.slotIndex,
     ensemble_size: entry.ensembleSize,
@@ -248,7 +248,7 @@ function historyRunPayload(entry: RuntimeRunHistoryEntry, logFile: string | null
     outcome: entry.outcome,
     retry_attempt: entry.retryAttempt ?? 0,
     worker_host: entry.workerHost ?? null,
-    workspace_path: entry.workspace ?? null,
+    workspace_path: entry.workspacePath ?? null,
     resume_id: entry.resumeId ?? null,
     session_id: entry.sessionId ?? null,
     executor_pid: entry.executorPid ?? null,
@@ -265,7 +265,7 @@ function historyRunPayload(entry: RuntimeRunHistoryEntry, logFile: string | null
     tokens: tokenPayload(usage),
     log_hints: logHints(
       logFile,
-      entry.workspace ?? null,
+      entry.workspacePath ?? null,
       entry.sessionId ?? null,
       entry.issueIdentifier,
     ),

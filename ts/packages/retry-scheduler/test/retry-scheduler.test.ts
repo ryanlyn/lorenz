@@ -50,7 +50,7 @@ test("RetryScheduler fires callback after monotonicDeadlineMs + RETRY_SCHEDULER_
   scheduler.sync(
     {
       issueId: "i1",
-      identifier: "MT-1",
+      issueIdentifier: "MT-1",
       attempt: 1,
       dueAtIso: new Date(clock.tick + 5000).toISOString(),
       monotonicDeadlineMs: clock.tick + 5000,
@@ -75,7 +75,7 @@ test("RetryScheduler cancels pending retry on explicit cancel", () => {
   scheduler.sync(
     {
       issueId: "i2",
-      identifier: "MT-2",
+      issueIdentifier: "MT-2",
       attempt: 1,
       dueAtIso: new Date(clock.tick + 3000).toISOString(),
       monotonicDeadlineMs: clock.tick + 3000,
@@ -99,7 +99,7 @@ test("RetryScheduler resets timer when rescheduled before firing", () => {
   scheduler.sync(
     {
       issueId: "i3",
-      identifier: "MT-3",
+      issueIdentifier: "MT-3",
       attempt: 1,
       dueAtIso: new Date(clock.tick + 2000).toISOString(),
       monotonicDeadlineMs: clock.tick + 2000,
@@ -114,7 +114,7 @@ test("RetryScheduler resets timer when rescheduled before firing", () => {
   scheduler.sync(
     {
       issueId: "i3",
-      identifier: "MT-3",
+      issueIdentifier: "MT-3",
       attempt: 2,
       dueAtIso: new Date(clock.tick + 3000).toISOString(),
       monotonicDeadlineMs: clock.tick + 3000,
@@ -143,7 +143,7 @@ test("RetryScheduler fires after RETRY_SCHEDULER_SYNC_DELAY_MS when monotonicDea
   scheduler.sync(
     {
       issueId: "i-past",
-      identifier: "MT-PAST",
+      issueIdentifier: "MT-PAST",
       attempt: 1,
       dueAtIso: new Date(0).toISOString(),
       monotonicDeadlineMs: 1000,
@@ -177,7 +177,7 @@ test("RetryScheduler does not fire after destroy", () => {
   scheduler.sync(
     {
       issueId: "i4",
-      identifier: "MT-4",
+      issueIdentifier: "MT-4",
       attempt: 1,
       dueAtIso: new Date(clock.tick + 2000).toISOString(),
       monotonicDeadlineMs: clock.tick + 2000,
@@ -188,7 +188,7 @@ test("RetryScheduler does not fire after destroy", () => {
   scheduler.sync(
     {
       issueId: "i5",
-      identifier: "MT-5",
+      issueIdentifier: "MT-5",
       attempt: 1,
       dueAtIso: new Date(clock.tick + 4000).toISOString(),
       monotonicDeadlineMs: clock.tick + 4000,

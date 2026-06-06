@@ -100,7 +100,7 @@ test("ProjectionActor processes runtime snapshot into projection", () => {
       {
         issueId: "issue-1",
         issueIdentifier: "ENG-1",
-        title: "Fix bug",
+        issueTitle: "Fix bug",
         state: "In Progress",
         slotIndex: 0,
         ensembleSize: 1,
@@ -113,7 +113,7 @@ test("ProjectionActor processes runtime snapshot into projection", () => {
     retrying: [
       {
         issueId: "issue-2",
-        identifier: "ENG-2",
+        issueIdentifier: "ENG-2",
         attempt: 2,
         dueAtIso: "2026-01-01T00:02:00Z",
         monotonicDeadlineMs: 120000,
@@ -149,7 +149,7 @@ test("ProjectionActor processes runtime snapshot into projection", () => {
   assert.equal(snap.running[0]!.issueIdentifier, "ENG-1");
   assert.equal(snap.running[0]!.usageTotals.inputTokens, 100);
   assert.equal(snap.retrying.length, 1);
-  assert.equal(snap.retrying[0]!.identifier, "ENG-2");
+  assert.equal(snap.retrying[0]!.issueIdentifier, "ENG-2");
   assert.equal(snap.blocked.length, 1);
   assert.equal(snap.blocked[0]!.reason, "global_concurrency_cap");
   assert.equal(snap.usageTotals.totalTokens, 700);
@@ -231,7 +231,7 @@ test("ProjectionActor preserves previous state when input unchanged", () => {
   snap1.running.push({
     issueId: "mutated",
     issueIdentifier: "MUT-1",
-    title: "Mutated",
+    issueTitle: "Mutated",
     state: "x",
     slotIndex: 0,
     ensembleSize: 1,
@@ -263,7 +263,7 @@ test("ProjectionActor handles null/missing fields defensively", () => {
       {
         issueId: "issue-1",
         issueIdentifier: "ENG-1",
-        title: "Test",
+        issueTitle: "Test",
         state: "In Progress",
         slotIndex: 0,
         ensembleSize: 1,
@@ -285,7 +285,7 @@ test("ProjectionActor handles null/missing fields defensively", () => {
     retrying: [
       {
         issueId: "issue-2",
-        identifier: "ENG-2",
+        issueIdentifier: "ENG-2",
         attempt: 1,
         dueAtIso: "2026-01-01T00:00:00Z",
         monotonicDeadlineMs: 0,

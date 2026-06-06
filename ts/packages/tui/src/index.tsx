@@ -212,7 +212,7 @@ function formatRetryRow(
   const dueIn = formatRetryDue(secondsBetween(new Date(retry.dueAtIso), now));
   const error = stringAt(retry, ["error"]);
   const suffix = error ? `error=${sanitize(error)}` : "error=n/a";
-  return `│  ${s("38;5;208", "↻", ansi)} ${s("31", retry.identifier, ansi)} ${s("33", `attempt=${retry.attempt}`, ansi)}${s("2", " in ", ansi)}${s("36", dueIn, ansi)} ${s("2", suffix, ansi)}`;
+  return `│  ${s("38;5;208", "↻", ansi)} ${s("31", retry.issueIdentifier, ansi)} ${s("33", `attempt=${retry.attempt}`, ansi)}${s("2", " in ", ansi)}${s("36", dueIn, ansi)} ${s("2", suffix, ansi)}`;
 }
 
 function formatDispatchBlockRow(block: unknown, ansi: boolean): string {

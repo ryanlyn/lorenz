@@ -18,6 +18,7 @@
     "@symphony/policies": "workspace:*",
     "@symphony/projections": "workspace:*",
     "@symphony/retry-scheduler": "workspace:*",
+    "@symphony/runtime-events": "workspace:*",
     "@symphony/workflow": "workspace:*"
   }
 }

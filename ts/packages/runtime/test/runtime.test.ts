@@ -10,16 +10,29 @@ import {
   parseConfig,
   runtimeAdapters,
 } from "@symphony/cli";
+import {
+  RUNTIME_EVENT_TYPES as RUNTIME_EVENT_TYPES_FROM_RUNTIME_EVENTS,
+  RUNTIME_RUN_OUTCOMES as RUNTIME_RUN_OUTCOMES_FROM_RUNTIME_EVENTS,
+} from "@symphony/runtime-events";
 import type { Issue, RunResult, SymphonyRuntimeOptions, WorkflowDefinition } from "@symphony/cli";
 
 import { assert } from "../../../test/assert.js";
 import { tempDir, writeExecutable } from "../../../test/helpers.js";
 
-import { SymphonyRuntime } from "@symphony/runtime";
+import {
+  RUNTIME_EVENT_TYPES as RUNTIME_EVENT_TYPES_FROM_RUNTIME,
+  RUNTIME_RUN_OUTCOMES as RUNTIME_RUN_OUTCOMES_FROM_RUNTIME,
+  SymphonyRuntime,
+} from "@symphony/runtime";
 
 function runtimeOptions(options: SymphonyRuntimeOptions): SymphonyRuntimeOptions {
   return { ...runtimeAdapters, ...options };
 }
+
+test("runtime exports canonical runtime-events vocabulary values", () => {
+  assert.equal(RUNTIME_EVENT_TYPES_FROM_RUNTIME, RUNTIME_EVENT_TYPES_FROM_RUNTIME_EVENTS);
+  assert.equal(RUNTIME_RUN_OUTCOMES_FROM_RUNTIME, RUNTIME_RUN_OUTCOMES_FROM_RUNTIME_EVENTS);
+});
 
 test("runtime dry-run polls, computes eligibility, and does not start agents", async () => {
   const issue = issueFixture("issue-1", "MT-1");
@@ -116,7 +129,7 @@ test("runtime schedules continuation retry after normal worker exit even when is
 
   const retry = runtime.snapshot().retrying[0];
   assert.ok(retry);
-  assert.equal(retry.identifier, "MT-INACTIVE-CONTINUATION");
+  assert.equal(retry.issueIdentifier, "MT-INACTIVE-CONTINUATION");
   assert.equal(retry.attempt, 1);
   const delayMs = new Date(retry.dueAtIso).getTime() - beforeRun;
   assert.ok(delayMs >= 900 && delayMs <= 1_500);

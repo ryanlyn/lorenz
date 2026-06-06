@@ -253,7 +253,7 @@ function snapshotFixture(): RuntimeSnapshot {
       {
         issueId: "issue-1",
         issueIdentifier: "MT-1",
-        title: "Build the thing",
+        issueTitle: "Build the thing",
         state: "Todo",
         slotIndex: 0,
         ensembleSize: 1,
@@ -455,7 +455,7 @@ function runningFixture(
   return {
     issueId: identifier,
     issueIdentifier: identifier,
-    title: "Fixture issue",
+    issueTitle: "Fixture issue",
     state,
     slotIndex: 0,
     ensembleSize: 1,
@@ -482,7 +482,7 @@ function retryFixture(
 ): RuntimeSnapshot["retrying"][number] {
   return {
     issueId: identifier,
-    identifier,
+    issueIdentifier: identifier,
     attempt,
     dueAtIso: new Date(new Date(now).getTime() + dueInSeconds * 1000).toISOString(),
     monotonicDeadlineMs: performance.now() + dueInSeconds * 1000,

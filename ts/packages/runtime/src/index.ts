@@ -15,25 +15,42 @@ import { runAgentAttempt, type RunResult } from "@symphony/agent-runner";
 import { ProjectionActor } from "@symphony/projections";
 import { RetryScheduler } from "@symphony/retry-scheduler";
 import { workflowFileChanged, workflowStampsEqual } from "@symphony/workflow";
-import { AGENT_UPDATE_TYPES, durationMs, errorMessage } from "@symphony/domain";
+import { durationMs, errorMessage } from "@symphony/domain";
+import type {
+  RuntimeAppStatus,
+  RuntimeEventType,
+  RuntimePollStatus,
+  RuntimeRetryEntry,
+  RuntimeRunHistoryEntry,
+  RuntimeRunOutcome,
+  RuntimeRunningEntry,
+  RuntimeSnapshot,
+} from "@symphony/runtime-events";
 import type {
   AgentKind,
   AgentUpdate,
-  AgentUpdateType,
-  DispatchBlockEntry,
   Issue,
   RunningEntry,
   RuntimeTrackerClient,
-  UsageTotals,
   WorkflowDefinition,
 } from "@symphony/domain";
 
 export type RuntimeRunner = (input: Parameters<typeof runAgentAttempt>[0]) => Promise<RunResult>;
 
-export type RuntimeAppStatus = "starting" | "idle" | "polling" | "running" | "stopping" | "error";
-export type RuntimePollStatus = "idle" | "checking" | "error";
-export const RUNTIME_RUN_OUTCOMES = ["success", "failed", "stalled", "canceled"] as const;
-export type RuntimeRunOutcome = (typeof RUNTIME_RUN_OUTCOMES)[number];
+export { RUNTIME_EVENT_TYPES, RUNTIME_RUN_OUTCOMES } from "@symphony/runtime-events";
+export type {
+  RuntimeAppStatus,
+  RuntimeBlockedEntry,
+  RuntimeEvent,
+  RuntimeEventType,
+  RuntimePollStatus,
+  RuntimeRetryEntry,
+  RuntimeRunHistoryEntry,
+  RuntimeRunLastEvent,
+  RuntimeRunningEntry,
+  RuntimeRunOutcome,
+  RuntimeSnapshot,
+} from "@symphony/runtime-events";
 export {
   RUNTIME_RECONCILIATION_REASONS,
   type RuntimeReconciliationReason,
@@ -43,124 +60,6 @@ export type RuntimeResumeInvalidationReason =
   | "stalled"
   | "missing"
   | RuntimeReconciliationReason;
-export const RUNTIME_EVENT_TYPES = [
-  ...AGENT_UPDATE_TYPES,
-  "dry_run",
-  "poll_error",
-  "dispatch_skipped",
-  "run_started",
-  "dispatch_refresh_failed",
-  "run_completed",
-  "run_failed",
-  "workflow_reloaded",
-  "workflow_reload_failed",
-  "reconcile_refresh_failed",
-  "workspace_cleanup",
-  "run_reconciled",
-  "run_stalled",
-  "startup_workspace_cleanup",
-  "startup_workspace_cleanup_failed",
-  "resume_state_invalidated",
-  "resume_state_invalidation_failed",
-  "retry_timer_due",
-  "retry_timer_error",
-  "refresh_error",
-] as const;
-export type RuntimeEventType = (typeof RUNTIME_EVENT_TYPES)[number];
-export type RuntimeRunLastEvent = AgentUpdateType | "agent_stalled";
-
-export interface RuntimeEvent {
-  type: RuntimeEventType;
-  message: string;
-  at: string;
-}
-
-export interface RuntimeRunHistoryEntry {
-  id: string;
-  issueId: string;
-  issueIdentifier: string;
-  issueTitle?: string | null | undefined;
-  state?: string | null | undefined;
-  slotIndex: number;
-  ensembleSize?: number | undefined;
-  agentKind: AgentKind;
-  outcome: RuntimeRunOutcome;
-  turnCount: number;
-  sessionId?: string | null | undefined;
-  resumeId?: string | null | undefined;
-  executorPid?: string | null | undefined;
-  workspace?: string | null | undefined;
-  workerHost?: string | null | undefined;
-  usageTotals?: UsageTotals | undefined;
-  startedAt: string;
-  endedAt: string;
-  durationMs?: number | undefined;
-  error?: string | undefined;
-  lastEvent?: RuntimeRunLastEvent | null | undefined;
-  lastMessage?: unknown;
-  lastEventAt?: string | null | undefined;
-  retryAttempt?: number | null | undefined;
-}
-
-export interface RuntimeRunningEntry {
-  runId?: string | undefined;
-  issueId: string;
-  issueIdentifier: string;
-  issueUrl?: string | null | undefined;
-  title: string;
-  state: string;
-  slotIndex: number;
-  ensembleSize: number;
-  agentKind: AgentKind;
-  sessionId?: string | null | undefined;
-  resumeId?: string | null | undefined;
-  executorPid?: string | null | undefined;
-  workerHost?: string | null | undefined;
-  turnCount: number;
-  startedAt: string;
-  lastEvent?: AgentUpdateType | null | undefined;
-  lastMessage?: unknown;
-  lastEventAt?: string | null | undefined;
-  workspacePath?: string | null | undefined;
-  usageTotals: UsageTotals;
-  retryAttempt?: number | null | undefined;
-}
-
-export interface RuntimeRetryEntry {
-  issueId: string;
-  identifier: string;
-  issueUrl?: string | null | undefined;
-  attempt: number;
-  dueAtIso: string;
-  monotonicDeadlineMs: number;
-  error?: string | undefined;
-  slotIndex?: number | undefined;
-  workerHost?: string | null | undefined;
-  workspacePath?: string | null | undefined;
-}
-
-export type RuntimeBlockedEntry = DispatchBlockEntry;
-
-export interface RuntimeSnapshot {
-  appStatus: RuntimeAppStatus;
-  workflowPath: string;
-  poll: {
-    status: RuntimePollStatus;
-    candidates: number;
-    eligible: number;
-    lastPollAt: string | null;
-    nextPollAt: string | null;
-    lastError: string | null;
-  };
-  running: RuntimeRunningEntry[];
-  retrying: RuntimeRetryEntry[];
-  blocked: RuntimeBlockedEntry[];
-  runHistory: RuntimeRunHistoryEntry[];
-  usageTotals: UsageTotals;
-  rateLimits: unknown;
-  logFile: string | null;
-  recentEvents: RuntimeEvent[];
-}
 
 export interface SymphonyRuntimeOptions {
   workflow: WorkflowDefinition;
@@ -478,7 +377,7 @@ export class SymphonyRuntime {
           turnCount: result.turnCount,
           runningEntry: entry,
           resumeId: result.resumeId,
-          workspace: result.workspace,
+          workspacePath: result.workspace,
           startedAt,
           endedAt: this.now().toISOString(),
           durationMs: durationMs(startedAt, this.now().toISOString()),
@@ -745,7 +644,7 @@ export class SymphonyRuntime {
         return;
       }
       if (this.pollInProgress) return;
-      this.addEvent("retry_timer_due", `${scheduled.identifier} attempt=${scheduled.attempt}`);
+      this.addEvent("retry_timer_due", `${scheduled.issueIdentifier} attempt=${scheduled.attempt}`);
       this.pollOnce().catch((error) => {
         this.lastError = errorMessage(error);
         this.addEvent("retry_timer_error", this.lastError);
@@ -842,7 +741,7 @@ interface BuildRunHistoryEntryInput {
   turnCount: number;
   runningEntry?: RunningEntry | undefined;
   resumeId?: RuntimeRunHistoryEntry["resumeId"];
-  workspace?: RuntimeRunHistoryEntry["workspace"];
+  workspacePath?: RuntimeRunHistoryEntry["workspacePath"];
   startedAt: string;
   endedAt: string;
   durationMs: number;
@@ -853,7 +752,7 @@ interface BuildRunHistoryEntryInput {
 function buildRunHistoryEntry(input: BuildRunHistoryEntryInput): RuntimeRunHistoryEntry {
   const entry = input.runningEntry;
   const resumeId = "resumeId" in input ? input.resumeId : entry?.resumeId;
-  const workspace = "workspace" in input ? input.workspace : entry?.workspacePath;
+  const workspacePath = "workspacePath" in input ? input.workspacePath : entry?.workspacePath;
 
   return {
     id: input.id,
@@ -869,7 +768,7 @@ function buildRunHistoryEntry(input: BuildRunHistoryEntryInput): RuntimeRunHisto
     sessionId: entry?.sessionId,
     resumeId,
     executorPid: entry?.executorPid,
-    workspace,
+    workspacePath,
     workerHost: entry?.workerHost,
     usageTotals: entry?.usageTotals,
     startedAt: input.startedAt,
@@ -889,7 +788,7 @@ function runtimeRunningEntry(entry: RunningEntry, runId: string | undefined): Ru
     issueId: entry.issue.id,
     issueIdentifier: entry.identifier,
     issueUrl: entry.issue.url ?? null,
-    title: entry.issue.title,
+    issueTitle: entry.issue.title,
     state: entry.issue.state,
     slotIndex: entry.slotIndex,
     ensembleSize: entry.ensembleSize,
@@ -923,7 +822,7 @@ function runtimeRetryEntry(entry: {
 }): RuntimeRetryEntry {
   return {
     issueId: entry.issueId,
-    identifier: entry.identifier,
+    issueIdentifier: entry.identifier,
     issueUrl: entry.issueUrl ?? null,
     attempt: entry.attempt,
     dueAtIso: entry.dueAtIso,
