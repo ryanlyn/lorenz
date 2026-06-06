@@ -258,6 +258,59 @@ test("remote workspace creation and removal use SSH hooks and validate remote pa
   vi.unstubAllEnvs();
 });
 
+test("remote workspace cwd validation accepts a missing path inside the workspace root", async () => {
+  const root = await tempDir("symphony-ts-remote-missing-workspace");
+  const trace = path.join(root, "ssh.trace");
+  const remoteHome = path.join(root, "remote-home");
+
+  const { canonicalRemoteHome, binDir } = await installEvalSsh(root, trace, remoteHome);
+  vi.stubEnv("PATH", `${binDir}:${process.env.PATH ?? ""}`);
+
+  try {
+    const workspaceRoot = path.join(canonicalRemoteHome, "workspaces");
+    const workspace = path.join(workspaceRoot, "MT-MISSING");
+    await fs.mkdir(workspaceRoot, { recursive: true });
+    const settings = parseConfig({
+      workspace: { root: "~/workspaces" },
+      worker: { ssh_hosts: ["worker-01:2200"], ssh_timeout_ms: 5_000 },
+    });
+
+    const result = await validateWorkspaceCwd(settings, workspace, "worker-01:2200");
+
+    assert.equal(result, workspace);
+  } finally {
+    vi.unstubAllEnvs();
+  }
+});
+
+test("remote workspace cwd validation reports symlink escapes through missing tail paths", async () => {
+  const root = await tempDir("symphony-ts-remote-symlink-escape");
+  const trace = path.join(root, "ssh.trace");
+  const remoteHome = path.join(root, "remote-home");
+
+  const { canonicalRemoteHome, binDir } = await installEvalSsh(root, trace, remoteHome);
+  vi.stubEnv("PATH", `${binDir}:${process.env.PATH ?? ""}`);
+
+  try {
+    const workspaceRoot = path.join(canonicalRemoteHome, "workspaces");
+    const outside = await tempDir("symphony-ts-remote-outside");
+    const link = path.join(workspaceRoot, "link-out");
+    await fs.mkdir(workspaceRoot, { recursive: true });
+    await fs.symlink(outside, link);
+    const settings = parseConfig({
+      workspace: { root: "~/workspaces" },
+      worker: { ssh_hosts: ["worker-01:2200"], ssh_timeout_ms: 5_000 },
+    });
+
+    await assert.rejects(
+      () => validateWorkspaceCwd(settings, path.join(link, "missing"), "worker-01:2200"),
+      /symlink_escape/,
+    );
+  } finally {
+    vi.unstubAllEnvs();
+  }
+});
+
 test("agent attempts run workspace hooks at lifecycle boundaries and tolerate after_run failures", async () => {
   const root = await tempDir("symphony-ts-workspace-agent-hooks");
   const workspaceRoot = path.join(root, "workspaces");
