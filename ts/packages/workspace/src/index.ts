@@ -50,11 +50,10 @@ export async function createWorkspaceForIssue(
   if (sharedWorkspaceRoot(settings)) return canonicalRoot;
 
   const target = workspacePath(canonicalRoot, identifier, slotIndex, ensembleSize);
-  const existed = await exists(target);
-  await ensureDirectoryWithinRoot(canonicalRoot, target);
+  const created = await ensureDirectoryWithinRoot(canonicalRoot, target);
   const canonicalTarget = await validateWorkspaceCwd(settings, target);
 
-  if (!existed && settings.hooks.afterCreate) {
+  if (created && settings.hooks.afterCreate) {
     await runHook(settings.hooks.afterCreate, canonicalTarget, settings.hooks);
   }
 
@@ -202,12 +201,21 @@ export async function validateWorkspaceCwd(
   await rejectFinalSymlink(rootPath);
   const canonicalRoot = await fs.realpath(rootPath);
   const candidate = path.resolve(workspace);
-  if (!(await exists(candidate))) throw new Error(`invalid_workspace_cwd: missing ${candidate}`);
-  await rejectFinalSymlink(candidate);
-  await rejectPathSymlinksWithinRoot(canonicalRoot, candidate);
-  const canonicalTarget = await fs.realpath(candidate);
+  let canonicalTarget;
+  try {
+    canonicalTarget = await fs.realpath(candidate);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT")
+      throw new Error(`invalid_workspace_cwd: missing ${candidate}`, { cause: error });
+    throw error;
+  }
   if (canonicalTarget === canonicalRoot && !sharedWorkspaceRoot(settings))
     throw new Error(`refusing to use workspace root as cwd: ${canonicalRoot}`);
+  const candidateInsideRoot =
+    insideRoot(candidate, rootPath) || insideRoot(candidate, canonicalRoot);
+  if (!insideRoot(canonicalTarget, canonicalRoot) && candidateInsideRoot) {
+    throw new Error(`unsafe symlink in workspace path: ${candidate}`);
+  }
   ensureInsideRoot(canonicalTarget, canonicalRoot);
   return canonicalTarget;
 }
@@ -227,45 +235,40 @@ async function rejectFinalSymlink(filePath: string): Promise<void> {
   if (stat.isSymbolicLink()) throw new Error(`unsafe symlink in workspace path: ${filePath}`);
 }
 
-async function ensureDirectoryWithinRoot(canonicalRoot: string, target: string): Promise<void> {
+async function ensureDirectoryWithinRoot(canonicalRoot: string, target: string): Promise<boolean> {
   ensureInsideRoot(target, canonicalRoot);
   const relative = path.relative(canonicalRoot, target);
-  if (relative === "") return;
+  if (relative === "") return false;
   let current = canonicalRoot;
+  let created = false;
   const segments = relative.split(path.sep).filter((segment) => segment !== "");
   for (const [index, segment] of segments.entries()) {
     current = path.join(current, segment);
-    try {
-      await fs.mkdir(current);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-    }
-    const stat = await fs.lstat(current);
-    if (stat.isSymbolicLink()) throw new Error(`unsafe symlink in workspace path: ${current}`);
-    if (stat.isDirectory()) continue;
-    if (index !== segments.length - 1)
-      throw new Error(`workspace path segment is not a directory: ${current}`);
-    throw new Error(`workspace path segment is not a directory: ${current}`);
-  }
-}
+    while (true) {
+      try {
+        await fs.mkdir(current);
+        created = true;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      }
 
-async function rejectPathSymlinksWithinRoot(
-  canonicalRoot: string,
-  candidate: string,
-): Promise<void> {
-  const relative = path.relative(canonicalRoot, candidate);
-  if (relative === "") return;
-  if (relative.startsWith("..") || path.isAbsolute(relative)) {
-    const canonicalTarget = await fs.realpath(candidate);
-    ensureInsideRoot(canonicalTarget, canonicalRoot);
-    return;
+      let stat;
+      try {
+        stat = await fs.lstat(current);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+        throw error;
+      }
+
+      if (stat.isSymbolicLink()) throw new Error(`unsafe symlink in workspace path: ${current}`);
+      if (stat.isDirectory()) break;
+      if (index !== segments.length - 1)
+        throw new Error(`workspace path segment is not a directory: ${current}`);
+      await fs.rm(current, { recursive: true, force: true });
+      created = true;
+    }
   }
-  let current = canonicalRoot;
-  for (const segment of relative.split(path.sep).filter((item) => item !== "")) {
-    current = path.join(current, segment);
-    const stat = await fs.lstat(current);
-    if (stat.isSymbolicLink()) throw new Error(`unsafe symlink in workspace path: ${current}`);
-  }
+  return created;
 }
 
 async function createRemoteWorkspaceForIssue(
@@ -328,8 +331,36 @@ async function validateRemoteWorkspaceCwd(
     "set -eu",
     `root=${shellEscape(root)}`,
     `workspace=${shellEscape(workspace)}`,
-    'root_real=$(cd "$root" && pwd -P)',
-    'workspace_real=$(cd "$workspace" && pwd -P)',
+    "canonicalize_path() {",
+    '  current="$1"',
+    "  suffix=''",
+    '  while [ ! -e "$current" ] && [ "$current" != "/" ]; do',
+    "    segment=${current##*/}",
+    '    suffix="/$segment$suffix"',
+    "    current=${current%/*}",
+    '    if [ -z "$current" ]; then current="/"; fi',
+    "  done",
+    '  if [ -d "$current" ]; then',
+    '    resolved=$(cd "$current" && pwd -P)',
+    "  else",
+    "    parent=${current%/*}",
+    '    if [ -z "$parent" ]; then parent="/"; fi',
+    "    segment=${current##*/}",
+    '    resolved_parent=$(cd "$parent" && pwd -P)',
+    '    if [ "$resolved_parent" = "/" ]; then',
+    '      resolved="/$segment"',
+    "    else",
+    '      resolved="$resolved_parent/$segment"',
+    "    fi",
+    "  fi",
+    '  if [ "$resolved" = "/" ]; then',
+    '    printf "/%s\\n" "${suffix#/}"',
+    "  else",
+    '    printf "%s\\n" "$resolved$suffix"',
+    "  fi",
+    "}",
+    'root_real=$(canonicalize_path "$root")',
+    'workspace_real=$(canonicalize_path "$workspace")',
     `printf '%s\\t%s\\t%s\\n' ${shellEscape(remoteWorkspaceMarker)} "$root_real" "$workspace_real"`,
   ].join("\n");
   const result = await runSsh(workerHost, script, {
@@ -339,7 +370,11 @@ async function validateRemoteWorkspaceCwd(
   if (result.status !== 0)
     throw new Error(`invalid_workspace_cwd: ${workerHost} ${result.status} ${result.stdout}`);
   const parsed = parseRemoteWorkspaceValidationOutput(result.stdout);
-  ensureRemoteInsideRoot(parsed.workspace, parsed.root);
+  if (!remotePathInsideRoot(parsed.workspace, parsed.root)) {
+    throw new Error(
+      `invalid_workspace_cwd: symlink_escape ${workspace} -> ${parsed.workspace} outside ${parsed.root}`,
+    );
+  }
   if (!shared && normalizeRemotePath(parsed.workspace) === normalizeRemotePath(parsed.root)) {
     throw new Error(`refusing to use workspace root as cwd: ${parsed.root}`);
   }
@@ -405,16 +440,25 @@ function parseRemoteWorkspaceValidationOutput(output: string): { root: string; w
 }
 
 function ensureRemoteInsideRoot(target: string, root: string): void {
+  if (remotePathInsideRoot(target, root)) return;
+  throw new Error(`workspace outside root: ${target}`);
+}
+
+function remotePathInsideRoot(target: string, root: string): boolean {
   const normalizedRoot = normalizeRemotePath(root);
   const normalizedTarget = normalizeRemotePath(target);
-  if (normalizedTarget === normalizedRoot || normalizedTarget.startsWith(`${normalizedRoot}/`))
-    return;
-  throw new Error(`workspace outside root: ${target}`);
+  if (normalizedRoot === "/") return normalizedTarget.startsWith("/");
+  return normalizedTarget === normalizedRoot || normalizedTarget.startsWith(`${normalizedRoot}/`);
 }
 
 function normalizeRemotePath(value: string): string {
   const normalized = path.posix.normalize(value);
   return normalized.endsWith("/") && normalized !== "/" ? normalized.slice(0, -1) : normalized;
+}
+
+function insideRoot(target: string, root: string): boolean {
+  const relative = path.relative(root, target);
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }
 
 function invalidWorkspaceInput(value: string): boolean {
