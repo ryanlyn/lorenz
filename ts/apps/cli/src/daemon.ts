@@ -51,7 +51,7 @@ export function createTrackerClient(
   }
 }
 
-export function createRunAgentAttemptAdapters(): RunAgentAttemptAdapters {
+function createRunAgentAttemptAdapters(): RunAgentAttemptAdapters {
   return {
     createWorkspaceForIssue,
     runHook,

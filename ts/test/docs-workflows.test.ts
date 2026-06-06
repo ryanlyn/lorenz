@@ -69,6 +69,17 @@ test("workspace build script includes the dashboard build", async () => {
   assert.match(packageJson.scripts?.build, /\bpnpm dashboard:build\b/);
 });
 
+test("workspace scripts avoid duplicate parity aliases", async () => {
+  const packageJson = JSON.parse(
+    await fs.readFile(path.join(repoRoot, "ts", "package.json"), "utf8"),
+  ) as {
+    scripts?: Record<string, string>;
+  };
+
+  assert.equal(packageJson.scripts?.["test:parity"], undefined);
+  assert.equal(packageJson.scripts?.["test:parity:live"], undefined);
+});
+
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }

@@ -154,15 +154,23 @@ export class Executor implements AgentExecutor {
     let settled = false;
 
     return new Promise<AgentUpdate[]>((resolve, reject) => {
-      const timer = setTimeout(() => {
+      const cancelTurn = () => {
         void session.connection.cancel({ sessionId: requireSessionId(session) }).catch((err) => {
           process.stderr.write(`session cancel failed: ${err}\n`);
         });
         finishReject(new Error("acp turn timed out"));
-      }, session.agentConfig.turnTimeoutMs);
+      };
+      let stallTimer: ReturnType<typeof setTimeout> | undefined;
+      const resetStallTimer = () => {
+        if (session.agentConfig.stallTimeoutMs <= 0) return;
+        if (stallTimer) clearTimeout(stallTimer);
+        stallTimer = setTimeout(cancelTurn, session.agentConfig.stallTimeoutMs);
+      };
+      const hardTimer = setTimeout(cancelTurn, session.agentConfig.turnTimeoutMs);
 
       const cleanup = () => {
-        clearTimeout(timer);
+        clearTimeout(hardTimer);
+        if (stallTimer) clearTimeout(stallTimer);
         session.onUpdate = previous;
         session.pendingTurn = undefined;
       };
@@ -181,8 +189,10 @@ export class Executor implements AgentExecutor {
         reject(error);
       };
 
+      resetStallTimer();
       session.pendingTurn = { reject: finishReject };
       session.onUpdate = (update) => {
+        resetStallTimer();
         updates.push(update);
         previous?.(update);
       };

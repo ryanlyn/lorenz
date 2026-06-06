@@ -6,7 +6,9 @@
     "tsBuildInfoFile": "dist/tsconfig.tsbuildinfo",
     "noEmit": true
   },
-  "include": ["*.ts"],
+  "include": [
+    "*.ts"
+  ],
   "references": [
     {
       "path": "../../packages/traceviz-server"

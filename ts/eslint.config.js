@@ -17,7 +17,7 @@ export default tseslint.config(
     },
   },
   {
-    files: ["packages/**/*.{ts,tsx}", "apps/**/*.{ts,tsx}", "test/**/*.ts"],
+    files: ["packages/**/*.{ts,tsx}", "apps/**/*.{ts,tsx}", "scripts/**/*.ts", "test/**/*.ts"],
     plugins: {
       "import-x": importX,
     },

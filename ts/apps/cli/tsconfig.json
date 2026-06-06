@@ -32,19 +32,22 @@
       "path": "../../packages/humanize"
     },
     {
-      "path": "../../packages/ssh"
-    },
-    {
-      "path": "../../packages/workspace"
-    },
-    {
       "path": "../../packages/issue"
+    },
+    {
+      "path": "../../packages/linear-tracker"
+    },
+    {
+      "path": "../../packages/local-tracker"
     },
     {
       "path": "../../packages/log-file"
     },
     {
       "path": "../../packages/mcp"
+    },
+    {
+      "path": "../../packages/memory-tracker"
     },
     {
       "path": "../../packages/orchestrator"
@@ -74,19 +77,19 @@
       "path": "../../packages/server"
     },
     {
-      "path": "../../packages/linear-tracker"
+      "path": "../../packages/ssh"
     },
     {
-      "path": "../../packages/local-tracker"
-    },
-    {
-      "path": "../../packages/memory-tracker"
+      "path": "../../packages/traceviz-emitter"
     },
     {
       "path": "../../packages/tui"
     },
     {
       "path": "../../packages/workflow"
+    },
+    {
+      "path": "../../packages/workspace"
     }
   ]
 }

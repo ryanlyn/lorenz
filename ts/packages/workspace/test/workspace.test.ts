@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
-import { test } from "vitest";
+import { test, vi } from "vitest";
 import {
   safeIdentifier,
   workspacePath,
@@ -90,14 +90,30 @@ test('validateWorkspaceCwd — newline in path throws "invalid_workspace_cwd"', 
   );
 });
 
-test("validateWorkspaceCwd — rejects directory targets that are symlinks", async () => {
+test("validateWorkspaceCwd — accepts final symlinks that resolve inside the root", async () => {
   const root = await tempDir("ws-validate");
   const real = path.join(root, "real");
   const link = path.join(root, "link");
   await fs.mkdir(real);
   await fs.symlink(real, link);
   const settings = makeSettings(root);
-  await assert.rejects(() => validateWorkspaceCwd(settings, link), /unsafe symlink/);
+  const result = await validateWorkspaceCwd(settings, link);
+  assert.equal(result, await fs.realpath(real));
+});
+
+test("validateWorkspaceCwd — accepts symlinked components that resolve inside the root", async () => {
+  const root = await tempDir("ws-validate");
+  const canonicalRoot = await fs.realpath(root);
+  const realParent = path.join(canonicalRoot, "real-parent");
+  const workspace = path.join(realParent, "MT-1");
+  const linkParent = path.join(canonicalRoot, "link-parent");
+  await fs.mkdir(workspace, { recursive: true });
+  await fs.symlink(realParent, linkParent);
+
+  const settings = makeSettings(root);
+  const result = await validateWorkspaceCwd(settings, path.join(linkParent, "MT-1"));
+
+  assert.equal(result, await fs.realpath(workspace));
 });
 
 test("validateWorkspaceCwd — rejects workspace equal to workspace root", async () => {
@@ -136,6 +152,49 @@ test("createWorkspaceForIssue — runs afterCreate hook on new workspace", async
   const hookFile = path.join(ws, ".hook-ran");
   const stat = await fs.stat(hookFile);
   assert.ok(stat.isFile());
+});
+
+test("createWorkspaceForIssue — replaces a stale final file and runs afterCreate", async () => {
+  const root = await tempDir("ws-create");
+  const stalePath = path.join(root, safeIdentifier(sampleIssue.identifier));
+  await fs.writeFile(stalePath, "stale");
+  const settings = makeSettings(root, { afterCreate: "touch .hook-ran" });
+
+  const ws = await createWorkspaceForIssue(settings, sampleIssue);
+
+  assert.equal(ws, await fs.realpath(stalePath));
+  assert.ok((await fs.stat(ws)).isDirectory());
+  assert.ok((await fs.stat(path.join(ws, ".hook-ran"))).isFile());
+});
+
+test("createWorkspaceForIssue — retries when an existing segment disappears before lstat", async () => {
+  const root = await tempDir("ws-create");
+  const issueRoot = path.join(root, safeIdentifier(sampleIssue.identifier));
+  await fs.mkdir(issueRoot);
+  const canonicalIssueRoot = await fs.realpath(issueRoot);
+  const realLstat = fs.lstat;
+  let injected = false;
+  const lstatSpy = vi.spyOn(fs, "lstat").mockImplementation(async (filePath, options) => {
+    if (!injected && path.resolve(String(filePath)) === canonicalIssueRoot) {
+      injected = true;
+      throw Object.assign(new Error("transient missing path"), { code: "ENOENT" });
+    }
+    return realLstat(filePath, options);
+  });
+
+  try {
+    const settings = makeSettings(root);
+    const ws = await createWorkspaceForIssue(settings, sampleIssue, {
+      slotIndex: 0,
+      ensembleSize: 2,
+    });
+
+    assert.equal(ws, path.join(canonicalIssueRoot, "0"));
+    assert.ok((await fs.stat(ws)).isDirectory());
+    assert.equal(injected, true);
+  } finally {
+    lstatSpy.mockRestore();
+  }
 });
 
 // --- shared workspace (isolation: "none") ---

@@ -114,7 +114,7 @@ function authorizedMcpHeader(authorization: string | undefined): boolean {
   return validMcpToken(bearer);
 }
 
-async function claudeMcpResponse(
+export async function claudeMcpResponse(
   settings: Settings,
   body: Record<string, unknown>,
 ): Promise<Record<string, unknown> | null> {
@@ -158,7 +158,7 @@ async function claudeMcpResponse(
 const mcpParamsSchema = z.record(z.string(), z.unknown());
 
 const mcpInitializeParamsSchema = z.preprocess(
-  (value) => (isRecord(value) ? value : {}),
+  (value) => (Array.isArray(value) ? value : isRecord(value) ? value : {}),
   z
     .object({
       protocolVersion: z.string().optional(),

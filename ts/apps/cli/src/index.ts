@@ -1,26 +1,5 @@
-export {
-  main,
-  runDaemon,
-  parseCliArgs,
-  createDaemonCommand,
-  projectUrlForSettings,
-} from "./main.js";
-export type { CliOptions, CliParseResult } from "./main.js";
-export {
-  createRunAgentAttemptAdapters,
-  createTrackerClient,
-  runAgentAttempt,
-  runtimeAdapters,
-  runtimeDefaultSettingsOptions,
-} from "./daemon.js";
-export {
-  createRunsCommand,
-  parseRunsArgs,
-  runRunsCommand,
-  runRunsMain,
-  runsOptionsFromCommanderOptions,
-} from "./runs.js";
-export type { RunsCommandOptions, RunsCommanderOptions, RunsParseResult } from "./runs.js";
+export { main, parseCliArgs, projectUrlForSettings } from "./main.js";
+export { createTrackerClient, runAgentAttempt, runtimeAdapters } from "./daemon.js";
 export {
   defaultSettings,
   parseConfig,
@@ -28,18 +7,11 @@ export {
   validateDispatchConfig,
   normalizeStateName,
   normalizeRouteName,
-  ONE_WEEK_MS,
-  PORT_MAX,
-  RENDER_INTERVAL_MAX_MS,
-  CONCURRENCY_MAX,
-  MAX_TURNS_MAX,
-  ENSEMBLE_SIZE_MAX,
 } from "@symphony/config";
 export {
   defaultPromptTemplate,
   effectivePromptTemplate,
   loadWorkflow,
-  parsePromptTemplate,
   parseWorkflowContent,
   workflowFilePath,
 } from "@symphony/workflow";
@@ -52,27 +24,13 @@ export {
   removeWorkspace,
   removeRemoteWorkspace,
   removeIssueWorkspaces,
-  removeRemoteIssueWorkspaces,
-  runHook,
   ensureInsideRoot,
   validateWorkspaceCwd,
 } from "@symphony/workspace";
-export {
-  shellEscape,
-  startSshProcess,
-  startReverseTunnel,
-  sshArgs,
-  reverseTunnelArgs,
-  remoteShellCommand,
-  parseSshTarget,
-  runSsh,
-  writeRemoteFile,
-} from "@symphony/ssh";
+export { shellEscape, runSsh } from "@symphony/ssh";
 export {
   createResumeStateStore,
   readResumeState,
-  writeResumeState,
-  deleteResumeState,
   resumeStateMatches,
 } from "@symphony/resume-state";
 export {
@@ -83,46 +41,18 @@ export {
   validMcpToken,
   acquireAgentMcpEndpoint,
 } from "@symphony/mcp";
-export { LinearClient, LinearGraphQLClient } from "@symphony/linear-tracker";
-export type { LinearClientDeps } from "@symphony/linear-tracker";
+export { LinearClient } from "@symphony/linear-tracker";
 export { MemoryTrackerClient, memoryIssuesFromEnv } from "@symphony/memory-tracker";
 export { configureLogFile, appendLogEvent, defaultLogFile } from "@symphony/log-file";
-export {
-  humanizeAgentMessage,
-  humanizeClaudeMessage,
-  humanizeCodexMessage,
-} from "@symphony/humanize";
-export { Orchestrator, createState } from "@symphony/orchestrator";
-export type { OrchestratorState } from "@symphony/orchestrator";
-export type { RunAgentAttemptInput, RunResult } from "@symphony/agent-runner";
-export {
-  SymphonyRuntime,
-  RUNTIME_EVENT_TYPES,
-  RUNTIME_RECONCILIATION_REASONS,
-  RUNTIME_RUN_OUTCOMES,
-} from "@symphony/runtime";
+export { Orchestrator } from "@symphony/orchestrator";
+export type { RunResult } from "@symphony/agent-runner";
+export { SymphonyRuntime, RUNTIME_EVENT_TYPES } from "@symphony/runtime";
 export type {
-  PollOptions,
-  RuntimeRunner,
-  RuntimeResumeInvalidationReason,
-  RuntimeAppStatus,
-  RuntimePollStatus,
   RuntimeEvent,
-  RuntimeEventType,
   RuntimeRunHistoryEntry,
-  RuntimeRunLastEvent,
-  RuntimeRetryEntry,
-  RuntimeRunningEntry,
-  RuntimeSnapshot,
-  RuntimeStartOptions,
   SymphonyRuntimeOptions,
 } from "@symphony/runtime";
 export { statePayload, issuePayload, runsPayload } from "@symphony/presenter";
-export type { PresenterParams } from "@symphony/presenter";
-export { startObservabilityServer, startClaudeMcpServer } from "@symphony/server";
-export type { ObservabilityServerHandle, ObservabilityServerOptions } from "@symphony/server";
-export { RuntimeApp } from "@symphony/tui";
-export type { StopReason } from "@symphony/domain";
 export {
   retryBackoffMs,
   actionForStopReason,
@@ -130,15 +60,6 @@ export {
   resumeIdentityMatches,
   reconciliationStopReason,
   selectLeastLoadedHost,
-} from "@symphony/policies";
-export type {
-  RetryKind,
-  StopReasonAction,
-  UsageMergeInput,
-  UsageMergeResult,
-  ResumeIdentity,
-  RuntimeReconciliationReason,
-  WorkerHostSelectionInput,
 } from "@symphony/policies";
 export {
   slotKey,
@@ -154,13 +75,11 @@ export {
 } from "@symphony/dispatch";
 export { ProjectionActor } from "@symphony/projections";
 export type { RuntimeProjectionInput } from "@symphony/projections";
-export { RetryScheduler } from "@symphony/retry-scheduler";
 export { Executor } from "@symphony/acp";
 export {
   AGENT_UPDATE_TYPES,
   CODEX_APPROVAL_POLICY_NAMES,
   CODEX_SANDBOX_MODES,
   ISSUE_STATE_TYPES,
-  TRACKER_KINDS,
 } from "@symphony/domain";
 export type * from "@symphony/domain";
