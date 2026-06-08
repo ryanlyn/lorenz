@@ -6,6 +6,18 @@ import type { HooksSettings, Issue, Settings } from "@symphony/domain";
 import { execa } from "execa";
 
 const remoteWorkspaceMarker = "__SYMPHONY_WORKSPACE__";
+const hookForceKillDelayMs = 5_000;
+
+export interface WorkspaceCreateOptions {
+  slotIndex?: number | undefined;
+  ensembleSize?: number | undefined;
+  workerHost?: string | null | undefined;
+  abortSignal?: AbortSignal | undefined;
+}
+
+export interface WorkspaceRunHookOptions {
+  abortSignal?: AbortSignal | undefined;
+}
 
 export function safeIdentifier(identifier: unknown): string {
   if (typeof identifier !== "string") return "";
@@ -31,7 +43,7 @@ export function workspacePath(
 export async function createWorkspaceForIssue(
   settings: Settings,
   issue: Issue | string,
-  options: { slotIndex?: number; ensembleSize?: number; workerHost?: string | null } = {},
+  options: WorkspaceCreateOptions = {},
 ): Promise<string> {
   if (options.workerHost)
     return createRemoteWorkspaceForIssue(settings, issue, options.workerHost, options);
@@ -54,7 +66,9 @@ export async function createWorkspaceForIssue(
   const canonicalTarget = await validateWorkspaceCwd(settings, target);
 
   if (created && settings.hooks.afterCreate) {
-    await runHook(settings.hooks.afterCreate, canonicalTarget, settings.hooks);
+    await runHook(settings.hooks.afterCreate, canonicalTarget, settings.hooks, null, {
+      abortSignal: options.abortSignal,
+    });
   }
 
   return canonicalTarget;
@@ -169,17 +183,77 @@ export async function runHook(
   cwd: string,
   hooks: HooksSettings,
   workerHost?: string | null,
+  options: WorkspaceRunHookOptions = {},
 ): Promise<void> {
-  if (workerHost) return runRemoteHook(workerHost, cwd, command, hooks);
+  if (workerHost) return runRemoteHook(workerHost, cwd, command, hooks, options);
+  if (options.abortSignal?.aborted) throw new Error("hook canceled");
 
-  const result = await execa("bash", ["-lc", command], {
+  const subprocess = execa("bash", ["-lc", command], {
     cwd,
-    timeout: hooks.timeoutMs,
     all: true,
     reject: false,
     stdin: "ignore",
+    detached: true,
   });
-  if (result.timedOut) throw new Error(`hook timed out after ${hooks.timeoutMs}ms`);
+  let timeoutTimer: ReturnType<typeof setTimeout> | undefined;
+  let forceKillTimer: ReturnType<typeof setTimeout> | undefined;
+  let terminationRequested = false;
+  let abortHandler: (() => void) | undefined;
+
+  const killProcessGroup = (signal: NodeJS.Signals): void => {
+    if (subprocess.pid === undefined) return;
+    try {
+      process.kill(-subprocess.pid, signal);
+    } catch {
+      /* process already exited */
+    }
+  };
+
+  const forceKillProcessGroup = (): void => {
+    forceKillTimer ??= setTimeout(() => {
+      killProcessGroup("SIGKILL");
+    }, hookForceKillDelayMs);
+  };
+
+  const clearForceKillTimer = (): void => {
+    if (forceKillTimer !== undefined) clearTimeout(forceKillTimer);
+  };
+
+  const clearTimers = (): void => {
+    if (timeoutTimer !== undefined) clearTimeout(timeoutTimer);
+    if (!terminationRequested) clearForceKillTimer();
+    if (abortHandler) options.abortSignal?.removeEventListener("abort", abortHandler);
+  };
+
+  const terminate = (error: Error, reject: (reason: Error) => void): void => {
+    terminationRequested = true;
+    killProcessGroup("SIGTERM");
+    forceKillProcessGroup();
+    reject(error);
+  };
+
+  const races: Array<Promise<unknown>> = [subprocess];
+  if (Number.isFinite(hooks.timeoutMs) && hooks.timeoutMs > 0) {
+    races.push(
+      new Promise<never>((_resolve, reject) => {
+        timeoutTimer = setTimeout(() => {
+          terminate(new Error(`hook timed out after ${hooks.timeoutMs}ms`), reject);
+        }, hooks.timeoutMs);
+      }),
+    );
+  }
+  if (options.abortSignal) {
+    races.push(
+      new Promise<never>((_resolve, reject) => {
+        abortHandler = () => terminate(new Error("hook canceled"), reject);
+        options.abortSignal?.addEventListener("abort", abortHandler, { once: true });
+      }),
+    );
+  }
+
+  void subprocess.then(clearForceKillTimer, clearForceKillTimer);
+
+  const result = (await Promise.race(races).finally(clearTimers)) as Awaited<typeof subprocess>;
   if (result.exitCode !== 0)
     throw new Error(`hook failed with status ${result.exitCode}: ${(result.all ?? "").trim()}`);
 }
@@ -275,10 +349,10 @@ async function createRemoteWorkspaceForIssue(
   settings: Settings,
   issue: Issue | string,
   workerHost: string,
-  options: { slotIndex?: number; ensembleSize?: number },
+  options: WorkspaceCreateOptions,
 ): Promise<string> {
   const identifier = typeof issue === "string" ? issue : issue.identifier;
-  const root = await remoteWorkspaceRoot(settings, workerHost);
+  const root = await remoteWorkspaceRoot(settings, workerHost, options);
   const workspace = sharedWorkspaceRoot(settings)
     ? root
     : remoteWorkspacePath(root, identifier, options.slotIndex ?? 0, options.ensembleSize ?? 1);
@@ -302,14 +376,26 @@ async function createRemoteWorkspaceForIssue(
   const result = await runSsh(workerHost, script, {
     timeoutMs: settings.hooks.timeoutMs,
     stderrToStdout: true,
+    abortSignal: options.abortSignal,
   });
   if (result.status !== 0)
     throw new Error(`workspace_prepare_failed: ${workerHost} ${result.status} ${result.stdout}`);
   const parsed = parseRemoteWorkspaceOutput(result.stdout);
-  const canonicalWorkspace = await validateWorkspaceCwd(settings, parsed.workspace, workerHost);
+  const canonicalWorkspace = await validateRemoteWorkspaceCwd(
+    settings,
+    parsed.workspace,
+    workerHost,
+    options,
+  );
 
   if (parsed.created && settings.hooks.afterCreate) {
-    await runRemoteHook(workerHost, canonicalWorkspace, settings.hooks.afterCreate, settings.hooks);
+    await runRemoteHook(
+      workerHost,
+      canonicalWorkspace,
+      settings.hooks.afterCreate,
+      settings.hooks,
+      options,
+    );
   }
 
   return canonicalWorkspace;
@@ -319,10 +405,11 @@ async function validateRemoteWorkspaceCwd(
   settings: Settings,
   workspace: string,
   workerHost: string,
+  options: WorkspaceRunHookOptions = {},
 ): Promise<string> {
   if (invalidWorkspaceInput(workspace)) throw new Error("invalid_workspace_cwd: blank");
   const shared = sharedWorkspaceRoot(settings);
-  const root = await remoteWorkspaceRoot(settings, workerHost);
+  const root = await remoteWorkspaceRoot(settings, workerHost, options);
   ensureRemoteInsideRoot(workspace, root);
   if (!shared && normalizeRemotePath(workspace) === normalizeRemotePath(root)) {
     throw new Error(`refusing to use workspace root as cwd: ${root}`);
@@ -366,6 +453,7 @@ async function validateRemoteWorkspaceCwd(
   const result = await runSsh(workerHost, script, {
     timeoutMs: settings.worker.sshTimeoutMs,
     stderrToStdout: true,
+    abortSignal: options.abortSignal,
   });
   if (result.status !== 0)
     throw new Error(`invalid_workspace_cwd: ${workerHost} ${result.status} ${result.stdout}`);
@@ -386,21 +474,28 @@ async function runRemoteHook(
   workspace: string,
   command: string,
   hooks: HooksSettings,
+  options: WorkspaceRunHookOptions = {},
 ): Promise<void> {
   const result = await runSsh(workerHost, `cd ${shellEscape(workspace)} && ${command}`, {
     timeoutMs: hooks.timeoutMs,
     stderrToStdout: true,
+    abortSignal: options.abortSignal,
   });
   if (result.status !== 0)
     throw new Error(`workspace hook failed with status ${result.status}: ${result.stdout.trim()}`);
 }
 
-async function remoteWorkspaceRoot(settings: Settings, workerHost: string): Promise<string> {
+async function remoteWorkspaceRoot(
+  settings: Settings,
+  workerHost: string,
+  options: WorkspaceRunHookOptions = {},
+): Promise<string> {
   const root = settings.workspace.rootExpression ?? settings.workspace.root;
   if (root === "~" || root.startsWith("~/")) {
     const result = await runSsh(workerHost, 'printf "%s\\n" "$HOME"', {
       timeoutMs: settings.worker.sshTimeoutMs,
       stderrToStdout: true,
+      abortSignal: options.abortSignal,
     });
     if (result.status !== 0)
       throw new Error(`remote_home_lookup_failed: ${workerHost} ${result.status} ${result.stdout}`);

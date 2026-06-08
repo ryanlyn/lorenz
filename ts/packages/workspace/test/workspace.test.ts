@@ -10,11 +10,13 @@ import {
   createWorkspaceForIssue,
   removeWorkspace,
   removeIssueWorkspaces,
+  shellEscape,
 } from "@symphony/cli";
 import type { Settings } from "@symphony/domain";
 
 import { assert } from "../../../test/assert.js";
 import { tempDir, sampleIssue } from "../../../test/helpers.js";
+import { runHook } from "../src/index.js";
 
 function makeSettings(
   root: string,
@@ -26,6 +28,16 @@ function makeSettings(
     worker: { sshHosts: [], sshTimeoutMs: 5_000 },
     hooks: { timeoutMs: 5_000, ...hooks },
   } as unknown as Settings;
+}
+
+async function fileExists(filePath: string): Promise<boolean> {
+  try {
+    await fs.access(filePath);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw error;
+  }
 }
 
 // --- safeIdentifier ---
@@ -152,6 +164,33 @@ test("createWorkspaceForIssue — runs afterCreate hook on new workspace", async
   const hookFile = path.join(ws, ".hook-ran");
   const stat = await fs.stat(hookFile);
   assert.ok(stat.isFile());
+});
+
+test("runHook — abort terminates subprocesses before they write later markers", async () => {
+  const root = await tempDir("ws-hook-abort");
+  const settings = makeSettings(root);
+  const started = path.join(root, "started.txt");
+  const marker = path.join(root, "marker.txt");
+  const controller = new AbortController();
+  const command = [
+    `printf started > ${shellEscape(started)}`,
+    `sleep 0.2`,
+    `printf late > ${shellEscape(marker)}`,
+  ].join("\n");
+
+  const promise = runHook(command, root, settings.hooks, null, {
+    abortSignal: controller.signal,
+  });
+
+  await vi.waitFor(async () => {
+    assert.equal(await fileExists(started), true);
+  });
+  controller.abort();
+
+  await assert.rejects(() => promise, /hook canceled/);
+  await new Promise((resolve) => setTimeout(resolve, 350));
+
+  assert.equal(await fileExists(marker), false);
 });
 
 test("createWorkspaceForIssue — replaces a stale final file and runs afterCreate", async () => {

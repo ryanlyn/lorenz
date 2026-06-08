@@ -26,6 +26,7 @@ function requireSshExecutable(): string {
 export interface SshRunOptions {
   timeoutMs?: number | undefined;
   stderrToStdout?: boolean | undefined;
+  abortSignal?: AbortSignal | undefined;
 }
 
 export interface SshRunResult {
@@ -47,6 +48,7 @@ export async function runSsh(
   const timeoutMs = options.timeoutMs ?? DEFAULT_SSH_TIMEOUT_MS;
   if (!Number.isInteger(timeoutMs) || timeoutMs <= 0)
     throw new Error(`invalid_ssh_timeout: ${timeoutMs}`);
+  if (options.abortSignal?.aborted) throw new Error(`ssh_aborted: ${host}`);
 
   try {
     // Spawn in its own process group (detached) so we can kill the entire group on timeout.
@@ -63,7 +65,8 @@ export async function runSsh(
     });
     let timeoutTimer: ReturnType<typeof setTimeout> | undefined;
     let forceKillTimer: ReturnType<typeof setTimeout> | undefined;
-    let timedOut = false;
+    let terminationRequested = false;
+    let abortHandler: (() => void) | undefined;
 
     const killProcessGroup = (signal: NodeJS.Signals): void => {
       try {
@@ -73,27 +76,44 @@ export async function runSsh(
       }
     };
 
+    const forceKillProcessGroup = (): void => {
+      forceKillTimer ??= setTimeout(() => {
+        killProcessGroup("SIGKILL");
+      }, FORCE_KILL_DELAY_MS);
+    };
+
     const clearTimers = (): void => {
       if (timeoutTimer !== undefined) clearTimeout(timeoutTimer);
       // After timeout, descendants can still hold inherited pipes open even if the direct child exits.
-      if (!timedOut && forceKillTimer !== undefined) clearTimeout(forceKillTimer);
+      if (!terminationRequested && forceKillTimer !== undefined) clearTimeout(forceKillTimer);
+      if (abortHandler) options.abortSignal?.removeEventListener("abort", abortHandler);
+    };
+
+    const clearForceKillTimer = (): void => {
+      if (forceKillTimer !== undefined) clearTimeout(forceKillTimer);
+    };
+
+    const terminate = (error: Error, reject: (reason: Error) => void): void => {
+      terminationRequested = true;
+      killProcessGroup("SIGTERM");
+      forceKillProcessGroup();
+      reject(error);
     };
 
     const timeout = new Promise<never>((_, reject) => {
       timeoutTimer = setTimeout(() => {
-        timedOut = true;
-        killProcessGroup("SIGTERM");
-        forceKillTimer = setTimeout(() => {
-          killProcessGroup("SIGKILL");
-        }, FORCE_KILL_DELAY_MS);
-        reject(new Error(`ssh_timeout: ${host} ${timeoutMs}`));
+        terminate(new Error(`ssh_timeout: ${host} ${timeoutMs}`), reject);
       }, timeoutMs);
     });
+    const abort = new Promise<never>((_, reject) => {
+      if (!options.abortSignal) return;
+      abortHandler = () => terminate(new Error(`ssh_aborted: ${host}`), reject);
+      options.abortSignal.addEventListener("abort", abortHandler, { once: true });
+    });
 
-    void subprocess.then(clearTimers, clearTimers);
+    void subprocess.then(clearForceKillTimer, clearForceKillTimer);
 
-    const result = await Promise.race([subprocess, timeout]);
-    clearTimers();
+    const result = await Promise.race([subprocess, timeout, abort]).finally(clearTimers);
     if ((result as { code?: string }).code === "ENOENT") throw new Error("ssh_not_found");
     return {
       stdout: options.stderrToStdout ? (result.all ?? "") : result.stdout,
