@@ -2,5 +2,17 @@
 .antigravitycli/
 *.ndjson
 
+# Local agent settings
+.claude/settings.local.json
+.codex/config*.json
+.codex/config*.toml
+.codex/config*.yaml
+.codex/config*.yml
+.codex/settings*.json
+.codex/settings*.toml
+.codex/settings*.yaml
+.codex/settings*.yml
+.codex/worktree_init.sh
+
 # Local git worktree checkouts
 .claude/worktrees/

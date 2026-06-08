@@ -36,11 +36,14 @@ run = "pnpm exec knip"
 [tasks.lint-versions]
 run = "pnpm lint:versions"
 
+[tasks.agent-settings-policy]
+run = "pnpm agent-settings:check"
+
 [tasks.tsconfig-refs]
 run = "pnpm tsconfig:refs:check"
 
 [tasks.check]
-depends = ["typecheck", "test", "lint", "knip", "lint-versions", "tsconfig-refs"]
+depends = ["typecheck", "test", "lint", "knip", "lint-versions", "tsconfig-refs", "agent-settings-policy"]
 
 [tasks.traceviz]
 run = "pnpm --filter @symphony/dashboard build && pnpm traceviz {{arg(name='file')}}"
