@@ -31,6 +31,16 @@ test("validMcpToken — returns true for actively issued tokens", () => {
   }
 });
 
+test("validMcpToken — returns false when scope does not match", () => {
+  const token = issueMcpToken("scope-a");
+  try {
+    assert.equal(validMcpToken(token, "scope-a"), true);
+    assert.equal(validMcpToken(token, "scope-b"), false);
+  } finally {
+    revokeMcpToken(token);
+  }
+});
+
 test("validMcpToken — returns false for random/fake tokens", () => {
   assert.equal(validMcpToken("not-a-real-token"), false);
   assert.equal(validMcpToken(""), false);

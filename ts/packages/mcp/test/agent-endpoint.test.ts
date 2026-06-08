@@ -62,8 +62,38 @@ test("concurrent local MCP endpoint acquisition starts one configured-port serve
   assert.equal(handle.stop.mock.calls.length, 1);
 });
 
+test("configured-port local MCP endpoint rejects different tracker settings", async () => {
+  const handle = fakeServerHandle(39_003);
+  mockStartClaudeMcpServer.mockResolvedValue(handle);
+
+  const firstLease = await acquireAgentMcpEndpoint(localSettingsWithServerPort(39_003, "board-a"));
+  let secondLease: Awaited<ReturnType<typeof acquireAgentMcpEndpoint>> | undefined;
+  try {
+    try {
+      secondLease = await acquireAgentMcpEndpoint(localSettingsWithServerPort(39_003, "board-b"));
+    } catch (error) {
+      assert.match(String(error), /configured_mcp_server_conflict/);
+      return;
+    }
+    throw new Error("expected conflicting tracker settings to be rejected");
+  } finally {
+    await secondLease?.release();
+    await firstLease.release();
+  }
+
+  assert.equal(mockStartClaudeMcpServer.mock.calls.length, 1);
+  assert.equal(handle.stop.mock.calls.length, 1);
+});
+
 function settingsWithServerPort(port: number): Settings {
   return parseConfig({ server: { host: "127.0.0.1", port } }, {});
+}
+
+function localSettingsWithServerPort(port: number, boardPath: string): Settings {
+  return parseConfig(
+    { tracker: { kind: "local", path: boardPath }, server: { host: "127.0.0.1", port } },
+    {},
+  );
 }
 
 test("local MCP endpoint reports a connectable URL when configured server binds wildcard", async () => {
@@ -90,12 +120,14 @@ test("local MCP endpoint reports a connectable URL when configured server binds 
 function fakeServerHandle(port: number): {
   host: string;
   port: number;
+  authScope: string;
   url(path?: string): string;
   stop: ReturnType<typeof vi.fn>;
 } {
   return {
     host: "127.0.0.1",
     port,
+    authScope: `test:${port}`,
     url(path = "/") {
       return `http://127.0.0.1:${port}${path}`;
     },

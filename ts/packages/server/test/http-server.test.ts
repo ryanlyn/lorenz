@@ -101,7 +101,7 @@ test("observability HTTP API exposes Elixir-shaped state, issue, runs, refresh, 
 test("standalone Claude MCP server preserves route and JSON-RPC error contracts", async () => {
   const workflow = workflowFixture();
   const server = await startClaudeMcpServer(workflow.settings, { host: "127.0.0.1", port: 0 });
-  const token = issueMcpToken();
+  const token = issueMcpToken(server.authScope);
   try {
     const missing = await getJson(server.url("/missing"), 404);
     assert.deepEqual(missing, { error: { code: "not_found", message: "Route not found" } });
@@ -157,7 +157,7 @@ test("standalone Claude MCP server preserves route and JSON-RPC error contracts"
 test("standalone Claude MCP server rejects top-level JSON arrays as parse errors", async () => {
   const workflow = workflowFixture();
   const server = await startClaudeMcpServer(workflow.settings, { host: "127.0.0.1", port: 0 });
-  const token = issueMcpToken();
+  const token = issueMcpToken(server.authScope);
   try {
     const topLevelArray = await postRawMcp(server.url("/claude-mcp"), "[]", 400, token);
     assert.deepEqual(topLevelArray, {
@@ -271,7 +271,7 @@ test("Claude MCP endpoint authorizes bearer tokens and executes Linear tools", a
     },
   });
   const server = await startObservabilityServer(runtime, { host: "127.0.0.1", port: 0 });
-  const token = issueMcpToken();
+  const token = issueMcpToken(server.authScope);
   const originalFetch = globalThis.fetch;
   const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation((async (
     url: string | URL | Request,

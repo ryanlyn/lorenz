@@ -5,19 +5,25 @@ import { match } from "ts-pattern";
 import { z } from "zod";
 import { httpUrlHost, isRecord, normalizeHttpBindHost, type Settings } from "@symphony/domain";
 
-import { validMcpToken } from "./auth.js";
+import { createMcpAuthScope, mcpAuthScopeForSettings, validMcpToken } from "./auth.js";
 import { executeTool, toolSpecs } from "./tools.js";
 
 export interface ObservabilityServerOptions {
   host: string;
   port: number;
+  authScope?: string | undefined;
 }
 
 export interface ObservabilityServerHandle {
   host: string;
   port: number;
+  authScope: string;
   url(path?: string): string;
   stop(): Promise<void>;
+}
+
+export interface ClaudeMcpMountOptions {
+  authScope?: string | undefined;
 }
 
 export async function startClaudeMcpServer(
@@ -25,22 +31,33 @@ export async function startClaudeMcpServer(
   options: ObservabilityServerOptions,
 ): Promise<ObservabilityServerHandle> {
   const app = new Hono();
-  mountClaudeMcp(app, settings);
+  const bindHost = normalizeHttpBindHost(options.host);
+  const authScope =
+    options.authScope ??
+    (options.port > 0
+      ? mcpAuthScopeForSettings(settings, bindHost, options.port)
+      : createMcpAuthScope());
+  mountClaudeMcp(app, settings, { authScope });
   app.notFound((c) =>
     c.req.method === "GET"
       ? errorResponse(404, "not_found", "Route not found")
       : errorResponse(405, "method_not_allowed", "Method not allowed"),
   );
-  return startHonoServer(app, options);
+  return startHonoServer(app, options, authScope);
 }
 
-export function mountClaudeMcp(app: Hono, settings: Settings): void {
+export function mountClaudeMcp(
+  app: Hono,
+  settings: Settings,
+  options: ClaudeMcpMountOptions = {},
+): void {
+  const authScope = options.authScope ?? createMcpAuthScope();
   app.use("/claude-mcp", async (c, next) => {
     if (c.req.method !== "POST") {
       await next();
       return;
     }
-    if (!authorizedMcpHeader(c.req.header("authorization"))) {
+    if (!authorizedMcpHeader(c.req.header("authorization"), authScope)) {
       return jsonResponse(
         {
           error: {
@@ -60,6 +77,7 @@ export function mountClaudeMcp(app: Hono, settings: Settings): void {
 async function startHonoServer(
   app: Hono,
   options: ObservabilityServerOptions,
+  authScope: string,
 ): Promise<ObservabilityServerHandle> {
   let server!: ServerType;
   const bindHost = normalizeHttpBindHost(options.host);
@@ -76,6 +94,7 @@ async function startHonoServer(
   return {
     host: bindHost,
     port,
+    authScope,
     url(path = "/"): string {
       return `http://${httpUrlHost(bindHost)}:${port}${path}`;
     },
@@ -109,9 +128,9 @@ async function requestJson(c: Context): Promise<Record<string, unknown>> {
   return parsed;
 }
 
-function authorizedMcpHeader(authorization: string | undefined): boolean {
+function authorizedMcpHeader(authorization: string | undefined, authScope: string): boolean {
   const bearer = /^Bearer\s+(.+)$/.exec(authorization ?? "")?.[1];
-  return validMcpToken(bearer);
+  return validMcpToken(bearer, authScope);
 }
 
 export async function claudeMcpResponse(

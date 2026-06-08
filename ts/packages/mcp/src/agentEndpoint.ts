@@ -8,7 +8,7 @@ import {
 import type { McpServer } from "@agentclientprotocol/sdk";
 
 import { startClaudeMcpServer, type ObservabilityServerHandle } from "./server.js";
-import { issueMcpToken, revokeMcpToken } from "./auth.js";
+import { issueMcpToken, mcpAuthScopeForSettings, revokeMcpToken } from "./auth.js";
 
 export function trackerMcpServerName(kind: TrackerKind | undefined): string {
   return `symphony_${kind ?? "linear"}`;
@@ -23,12 +23,14 @@ export interface AgentMcpEndpointLease {
 
 interface McpEndpoint {
   url: string;
+  authScope: string;
   tunnel?: RemoteMcpTunnelLease | undefined;
   localServer?: LocalMcpServerLease | undefined;
 }
 
 interface LocalMcpServerEntry {
   handle: ObservabilityServerHandle;
+  identity: string;
   refCount: number;
 }
 
@@ -46,12 +48,13 @@ export async function acquireAgentMcpEndpoint(
   workerHost?: string | null,
 ): Promise<AgentMcpEndpointLease> {
   let endpoint: McpEndpoint | null = null;
-  const token = issueMcpToken();
+  let token: string | null = null;
   let released = false;
   try {
     endpoint = workerHost
       ? await acquireRemoteMcpEndpoint(workerHost, settings)
       : await localMcpEndpoint(settings);
+    token = issueMcpToken(endpoint.authScope);
     return {
       url: endpoint.url,
       token,
@@ -79,8 +82,13 @@ export async function acquireAgentMcpEndpoint(
 
 async function localMcpEndpoint(settings: Settings): Promise<McpEndpoint> {
   const localServer = await ensureLocalMcpServer(settings);
+  const serverHost = normalizeHttpBindHost(settings.server.host);
+  const configuredPort = settings.server.port;
   return {
     url: localServer ? localServer.handle.url(mcpPath) : configuredLocalMcpUrl(settings),
+    authScope:
+      localServer?.handle.authScope ??
+      mcpAuthScopeForSettings(settings, serverHost, configuredPort),
     localServer: localServer ?? undefined,
   };
 }
@@ -99,6 +107,9 @@ async function acquireRemoteMcpEndpoint(
     const tunnel = workerHostPool.acquireRemoteMcpTunnel(workerHost, localHost, localPort);
     return {
       url: `http://127.0.0.1:${tunnel.remotePort}${mcpPath}`,
+      authScope:
+        localServer?.handle.authScope ??
+        mcpAuthScopeForSettings(settings, normalizeHttpBindHost(settings.server.host), localPort),
       tunnel,
       localServer: localServer ?? undefined,
     };
@@ -113,9 +124,13 @@ async function ensureLocalMcpServer(settings: Settings): Promise<LocalMcpServerL
   const serverHost = normalizeHttpBindHost(settings.server.host);
   if (typeof configuredPort === "number" && configuredPort > 0) {
     const key = `${serverHost}:${configuredPort}`;
+    const identity = mcpAuthScopeForSettings(settings, serverHost, configuredPort);
     return withLocalMcpServerLock(key, async () => {
       const existing = localMcpServers.get(key);
       if (existing) {
+        if (existing.identity !== identity) {
+          throw new Error("configured_mcp_server_conflict");
+        }
         existing.refCount += 1;
         return { key, handle: existing.handle };
       }
@@ -123,8 +138,9 @@ async function ensureLocalMcpServer(settings: Settings): Promise<LocalMcpServerL
       const handle = await startClaudeMcpServer(settings, {
         host: serverHost,
         port: configuredPort,
+        authScope: identity,
       });
-      localMcpServers.set(key, { handle, refCount: 1 });
+      localMcpServers.set(key, { handle, identity, refCount: 1 });
       return { key, handle };
     });
   }

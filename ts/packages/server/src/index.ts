@@ -14,7 +14,7 @@ import {
   normalizeHttpBindHost,
   type Settings,
 } from "@symphony/domain";
-import { mountClaudeMcp } from "@symphony/mcp";
+import { createMcpAuthScope, mcpAuthScopeForSettings, mountClaudeMcp } from "@symphony/mcp";
 import { issuePayload, runsPayload, statePayload, type PresenterParams } from "@symphony/presenter";
 import type { RuntimeSnapshot } from "@symphony/runtime-events";
 import type { TraceWatcher } from "@symphony/traceviz-server";
@@ -45,6 +45,7 @@ export interface ObservabilityServerOptions {
 export interface ObservabilityServerHandle {
   host: string;
   port: number;
+  authScope: string;
   url(path?: string): string;
   stop(): Promise<void>;
 }
@@ -53,7 +54,13 @@ export async function startObservabilityServer(
   runtime: RuntimeServerSource,
   options: ObservabilityServerOptions,
 ): Promise<ObservabilityServerHandle> {
-  const { app, watcher } = buildObservabilityApp(runtime, options);
+  const settings = runtimeSettings(runtime);
+  const bindHost = normalizeHttpBindHost(options.host);
+  const authScope =
+    settings && options.port > 0
+      ? mcpAuthScopeForSettings(settings, bindHost, options.port)
+      : createMcpAuthScope();
+  const { app, watcher } = buildObservabilityApp(runtime, options, authScope, settings);
   const internals: HonoServerInternals = {};
 
   try {
@@ -65,7 +72,12 @@ export async function startObservabilityServer(
       };
     }
 
-    return await startHonoServer(app, options, hasInternals(internals) ? internals : undefined);
+    return await startHonoServer(
+      app,
+      options,
+      authScope,
+      hasInternals(internals) ? internals : undefined,
+    );
   } catch (error) {
     internals.stopWatcher?.();
     throw error;
@@ -80,6 +92,7 @@ interface HonoServerInternals {
 async function startHonoServer(
   app: Hono,
   options: ObservabilityServerOptions,
+  authScope: string,
   internals?: HonoServerInternals,
 ): Promise<ObservabilityServerHandle> {
   let server!: ServerType;
@@ -103,6 +116,7 @@ async function startHonoServer(
   return {
     host: bindHost,
     port,
+    authScope,
     url(urlPath = "/"): string {
       return `http://${httpUrlHost(bindHost)}:${port}${urlPath}`;
     },
@@ -125,10 +139,11 @@ interface BuildResult {
 function buildObservabilityApp(
   runtime: RuntimeServerSource,
   options: ObservabilityServerOptions,
+  authScope: string,
+  settings = runtimeSettings(runtime),
 ): BuildResult {
   const app = new Hono();
-  const settings = runtimeSettings(runtime);
-  if (settings) mountClaudeMcp(app, settings);
+  if (settings) mountClaudeMcp(app, settings, { authScope });
 
   // Health endpoint
   app.get("/health", () => jsonResponse({ status: "ok" }));
