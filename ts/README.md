@@ -67,7 +67,8 @@ records a `workflow_reload_failed` event.
 - `packages/*` contains the protocol, domain model, configuration loader, prompt renderer, runtime,
   policies, adapters, dashboards, logging, SSH, and support libraries.
 - `test/` contains workspace-level integration, contract, sandbox, and live tests.
-- Package-owned unit tests live under `packages/<name>/test/` or `apps/<name>/test/`.
+- Package- and app-owned unit tests live under `packages/<name>/test/` or `apps/<name>/test/` as
+  `.test.ts` or `.test.tsx` files.
 
 Create a package when a boundary has a clear owner. Keep curated exports in `src/index.ts` and
 declare internal dependencies as `workspace:*`.
