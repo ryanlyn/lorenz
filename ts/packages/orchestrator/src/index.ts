@@ -26,6 +26,7 @@ import { systemClock, type ClockPort } from "@symphony/ports";
 export interface OrchestratorState {
   running: Map<string, RunningEntry>;
   claimed: Set<string>;
+  /** Retry entries keyed by slotKey(issueId, slotIndex). */
   retryAttempts: Map<string, RetryEntry>;
   completed: Set<string>;
   usageTotals: UsageTotals;
@@ -66,6 +67,10 @@ function deltaNotAlreadyReported(delta: number, reported: number, base: number):
   return Math.max(0, delta - Math.max(0, reported - base));
 }
 
+function retrySlotIndex(retry: RetryEntry): number {
+  return retry.slotIndex ?? 0;
+}
+
 export class Orchestrator {
   readonly state: OrchestratorState;
   private readonly usageDeltaBases = new Map<string, UsageTotals>();
@@ -88,9 +93,11 @@ export class Orchestrator {
     }
 
     return sortForDispatch(issues).filter((issue) => {
-      const retry = this.state.retryAttempts.get(issue.id);
-      if (retry && this.clock.monotonicMs() < retry.monotonicDeadlineMs) return false;
-      if (retry) this.releaseStaleClaimsForRetry(issue.id);
+      const retries = this.retryEntriesForIssue(issue.id);
+      const dueRetries = retries.filter(([, retry]) => this.retryIsDue(retry));
+      if (retries.length > 0 && dueRetries.length === 0) return false;
+      if (dueRetries.length > 0) this.releaseStaleClaimsForRetry(issue.id);
+      const blockedRetry = dueRetries[0]?.[1] ?? retries[0]?.[1];
       const dispatchState = {
         runningCount: this.state.running.size,
         runningByState,
@@ -104,10 +111,11 @@ export class Orchestrator {
           identifier: issue.identifier,
           state: issue.state,
           reason,
-          workerHost: retry?.workerHost ?? null,
+          workerHost: blockedRetry?.workerHost ?? null,
           issueUrl: issue.url ?? null,
         });
-        if (retry) this.rescheduleRetryAfterDispatchBlock(issue, retry, reason);
+        for (const [key, retry] of dueRetries)
+          this.rescheduleRetryAfterDispatchBlock(key, issue, retry, reason);
         return false;
       }
       return shouldDispatchIssue(issue, this.settings, dispatchState);
@@ -115,9 +123,11 @@ export class Orchestrator {
   }
 
   claim(issue: Issue): RunningEntry | null {
-    const retry = this.state.retryAttempts.get(issue.id);
-    if (retry && this.clock.monotonicMs() >= retry.monotonicDeadlineMs)
-      this.releaseStaleClaimsForRetry(issue.id);
+    const retries = this.retryEntriesForIssue(issue.id);
+    const retryEntry = retries.find(([, retry]) => this.retryIsDue(retry)) ?? retries[0];
+    if (retryEntry && this.retryIsDue(retryEntry[1])) this.releaseStaleClaimsForRetry(issue.id);
+    const retryEntryKey = retryEntry?.[0];
+    const retry = retryEntry?.[1];
     const runningByState = new Map<string, number>();
     for (const entry of this.state.running.values()) {
       const key = normalizeStateName(entry.issue.state);
@@ -171,7 +181,7 @@ export class Orchestrator {
     this.state.claimed.add(key);
     this.state.running.set(key, entry);
     this.usageDeltaBases.set(key, zeroUsageTotals());
-    this.state.retryAttempts.delete(issue.id);
+    if (retryEntryKey) this.state.retryAttempts.delete(retryEntryKey);
     return entry;
   }
 
@@ -241,7 +251,7 @@ export class Orchestrator {
       const deadline = this.retryDeadline(
         retryBackoffMs(attempt, this.settings.agent.maxRetryBackoffMs, retryKind),
       );
-      this.state.retryAttempts.set(issueId, {
+      this.state.retryAttempts.set(slotKey(issueId, slotIndex), {
         issueId,
         identifier: entry.identifier,
         issueUrl: entry.issue.url ?? null,
@@ -264,7 +274,7 @@ export class Orchestrator {
         this.usageDeltaBases.delete(key);
       }
     }
-    this.state.retryAttempts.delete(issueId);
+    this.deleteRetryAttemptsForIssue(issueId);
     this.state.completed.add(issueId);
   }
 
@@ -376,7 +386,7 @@ export class Orchestrator {
 
   private cleanupRetryAttempts(issues: Issue[]): void {
     for (const issue of issues) {
-      if (!issueIsActive(issue, this.settings)) this.state.retryAttempts.delete(issue.id);
+      if (!issueIsActive(issue, this.settings)) this.deleteRetryAttemptsForIssue(issue.id);
     }
   }
 
@@ -390,6 +400,7 @@ export class Orchestrator {
   }
 
   private rescheduleRetryAfterDispatchBlock(
+    key: string,
     issue: Issue,
     retry: RetryEntry,
     reason: DispatchBlockReason,
@@ -398,7 +409,7 @@ export class Orchestrator {
     const deadline = this.retryDeadline(
       retryBackoffMs(attempt, this.settings.agent.maxRetryBackoffMs, "failure"),
     );
-    this.state.retryAttempts.set(issue.id, {
+    this.state.retryAttempts.set(key, {
       ...retry,
       issueId: issue.id,
       identifier: issue.identifier,
@@ -414,6 +425,22 @@ export class Orchestrator {
     for (const key of [...this.state.claimed]) {
       if (!key.startsWith(`${issueId}:`)) continue;
       if (!this.state.running.has(key)) this.state.claimed.delete(key);
+    }
+  }
+
+  private retryEntriesForIssue(issueId: string): Array<[string, RetryEntry]> {
+    return [...this.state.retryAttempts.entries()]
+      .filter(([, retry]) => retry.issueId === issueId)
+      .sort((left, right) => retrySlotIndex(left[1]) - retrySlotIndex(right[1]));
+  }
+
+  private retryIsDue(retry: RetryEntry): boolean {
+    return this.clock.monotonicMs() >= retry.monotonicDeadlineMs;
+  }
+
+  private deleteRetryAttemptsForIssue(issueId: string): void {
+    for (const [key, retry] of this.state.retryAttempts.entries()) {
+      if (retry.issueId === issueId) this.state.retryAttempts.delete(key);
     }
   }
 }

@@ -220,8 +220,8 @@ describe("INVARIANT: When a slot is already claimed, a repeated claim for the sa
   });
 });
 
-describe("INVARIANT: When a claim succeeds, the retryAttempts entry for that issue SHALL be deleted", () => {
-  test("successful claim deletes the retryAttempts entry for the issue", () => {
+describe("INVARIANT: When a claim succeeds, the retryAttempts entry for that slot SHALL be deleted", () => {
+  test("successful claim deletes the retryAttempts entry for the claimed slot", () => {
     const clock = makeClock(1000000);
     const settings = makeSettings({ maxConcurrent: 10 });
     const orch = new Orchestrator(settings, clock);
@@ -240,7 +240,7 @@ describe("INVARIANT: When a claim succeeds, the retryAttempts entry for that iss
     const entry2 = orch.claim(issue);
     assert.ok(entry2 !== null);
 
-    assert.equal(orch.state.retryAttempts.has(issue.id), false);
+    assert.equal(orch.state.retryAttempts.has(slotKey(issue.id, 0)), false);
     assert.equal(orch.snapshot().retrying.length, 0);
   });
 });
@@ -299,7 +299,7 @@ describe("INVARIANT: When a retry becomes due, stale claimed slots SHALL be rele
     orch.state.claimed.add(slotKey(issue.id, 0));
 
     // Set a retry entry with monotonicDeadlineMs in the past
-    orch.state.retryAttempts.set(issue.id, {
+    orch.state.retryAttempts.set(slotKey(issue.id, 0), {
       issueId: issue.id,
       identifier: issue.identifier,
       attempt: 1,
@@ -494,13 +494,13 @@ describe("INVARIANT: When an issue is cleaned up, all running entries, claimed s
     // Confirm state before cleanup
     assert.equal(orch.state.running.has(slotKey(issue.id, 1)), true);
     assert.equal(orch.state.claimed.has(slotKey(issue.id, 1)), true);
-    assert.equal(orch.state.retryAttempts.has(issue.id), true);
+    assert.equal(orch.state.retryAttempts.has(slotKey(issue.id, 0)), true);
 
     orch.cleanupIssue(issue.id);
 
     assert.equal(orch.state.running.size, 0);
     assert.equal(orch.state.claimed.size, 0);
-    assert.equal(orch.state.retryAttempts.has(issue.id), false);
+    assert.equal(orch.state.retryAttempts.has(slotKey(issue.id, 0)), false);
     assert.equal(orch.state.completed.has(issue.id), true);
   });
 });
@@ -546,7 +546,7 @@ describe("INVARIANT: When a continuation finish occurs, the issue SHALL be added
     // Issue is tracked in completed set
     assert.equal(orch.state.completed.has(issue.id), true);
     // But retryAttempts still holds the re-dispatch schedule
-    assert.equal(orch.state.retryAttempts.has(issue.id), true);
+    assert.equal(orch.state.retryAttempts.has(slotKey(issue.id, 0)), true);
   });
 });
 

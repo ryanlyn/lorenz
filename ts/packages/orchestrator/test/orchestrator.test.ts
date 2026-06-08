@@ -58,6 +58,69 @@ test("orchestrator claims ensemble slots independently and snapshots backend-neu
   assert.equal(orchestrator.snapshot().retrying[0]?.attempt, 1);
 });
 
+test("orchestrator preserves pending ensemble retries per slot", () => {
+  const clock = fakeClock(new Date("2026-01-01T00:00:00.000Z"));
+  const settings = parseConfig({
+    agent: { ensemble_size: 2, max_retry_backoff_ms: 60_000 },
+    worker: { ssh_hosts: ["worker-a", "worker-b"], max_concurrent_agents_per_host: 2 },
+  });
+  const orchestrator = new Orchestrator(settings, clock);
+  const issue = normalizeIssue({
+    id: "ensemble-retry-collision",
+    identifier: "MT-ENSEMBLE-RETRY-COLLISION",
+    title: "Retry collision",
+    state: { name: "Todo", type: "unstarted" },
+  });
+
+  const first = orchestrator.claim(issue);
+  const second = orchestrator.claim(issue);
+  assert.equal(first?.slotIndex, 0);
+  assert.equal(second?.slotIndex, 1);
+
+  orchestrator.applyUpdate(issue.id, 0, {
+    type: "turn_completed",
+    workspacePath: "/work/slot-0",
+  });
+  orchestrator.applyUpdate(issue.id, 1, {
+    type: "turn_completed",
+    workspacePath: "/work/slot-1",
+  });
+
+  orchestrator.finish(issue.id, 0, true, "slot 0 failed");
+  orchestrator.finish(issue.id, 1, true, "slot 1 failed");
+
+  const pending = orchestrator
+    .snapshot()
+    .retrying.toSorted((left, right) => (left.slotIndex ?? -1) - (right.slotIndex ?? -1));
+  assert.equal(pending.length, 2);
+  assert.equal(pending[0]?.slotIndex, 0);
+  assert.equal(pending[0]?.workerHost, first?.workerHost);
+  assert.equal(pending[0]?.workspacePath, "/work/slot-0");
+  assert.equal(pending[0]?.error, "slot 0 failed");
+  assert.equal(pending[1]?.slotIndex, 1);
+  assert.equal(pending[1]?.workerHost, second?.workerHost);
+  assert.equal(pending[1]?.workspacePath, "/work/slot-1");
+  assert.equal(pending[1]?.error, "slot 1 failed");
+
+  clock.advance(10_000);
+  assert.equal(orchestrator.eligibleIssues([issue])[0]?.identifier, issue.identifier);
+
+  const retryFirst = orchestrator.claim(issue);
+  assert.equal(retryFirst?.slotIndex, 0);
+  assert.equal(retryFirst?.retryAttempt, 1);
+  assert.equal(retryFirst?.workerHost, first?.workerHost);
+  const remaining = orchestrator.snapshot().retrying;
+  assert.equal(remaining.length, 1);
+  assert.equal(remaining[0]?.slotIndex, 1);
+  assert.equal(remaining[0]?.workspacePath, "/work/slot-1");
+
+  const retrySecond = orchestrator.claim(issue);
+  assert.equal(retrySecond?.slotIndex, 1);
+  assert.equal(retrySecond?.retryAttempt, 1);
+  assert.equal(retrySecond?.workerHost, second?.workerHost);
+  assert.equal(orchestrator.snapshot().retrying.length, 0);
+});
+
 test("refreshRunningIssue updates the tracker state of all slots for a running issue", () => {
   const orchestrator = new Orchestrator(parseConfig({ agent: { ensemble_size: 2 } }));
   const issue = normalizeIssue({
@@ -297,7 +360,7 @@ test("orchestrator retries on the previous worker host while it has capacity", (
   });
 
   assert.equal(orchestrator.claim(runningIssue)?.workerHost, "worker-a");
-  orchestrator.state.retryAttempts.set(retryIssue.id, {
+  orchestrator.state.retryAttempts.set(slotKey(retryIssue.id, 0), {
     issueId: retryIssue.id,
     identifier: retryIssue.identifier,
     attempt: 1,
@@ -477,7 +540,7 @@ test("orchestrator reschedules due retries that are still capacity-blocked", () 
   });
 
   assert.ok(orchestrator.claim(running));
-  orchestrator.state.retryAttempts.set(retryIssue.id, {
+  orchestrator.state.retryAttempts.set(slotKey(retryIssue.id, 0), {
     issueId: retryIssue.id,
     identifier: retryIssue.identifier,
     attempt: 1,
@@ -606,7 +669,7 @@ test("orchestrator retry dispatch reopens slots blocked only by stale claims", (
     state: { name: "Todo", type: "unstarted" },
   });
   orchestrator.state.claimed.add(slotKey(issue.id, 0));
-  orchestrator.state.retryAttempts.set(issue.id, {
+  orchestrator.state.retryAttempts.set(slotKey(issue.id, 0), {
     issueId: issue.id,
     identifier: issue.identifier,
     attempt: 1,
@@ -632,7 +695,7 @@ test("orchestrator retries an ensemble issue in its original slot", () => {
     state: { name: "Todo", type: "unstarted" },
   });
 
-  orchestrator.state.retryAttempts.set(issue.id, {
+  orchestrator.state.retryAttempts.set(slotKey(issue.id, 2), {
     issueId: issue.id,
     identifier: issue.identifier,
     attempt: 1,
