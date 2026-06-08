@@ -2,8 +2,11 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, test } from "vitest";
 
+import type { DisplayEvent } from "../src/features/traceviz/api/types";
+import { Timeline } from "../src/features/traceviz/components/Timeline";
 import { ThoughtEvent } from "../src/features/traceviz/components/events/ThoughtEvent";
 import { ToolCallEvent } from "../src/features/traceviz/components/events/ToolCallEvent";
+import { formatTimestamp } from "../src/lib/utils";
 
 describe("trace event markup", () => {
   test("renders long thought markdown outside native buttons", () => {
@@ -51,5 +54,34 @@ describe("trace event markup", () => {
     expect(html).toContain('tabindex="0"');
     expect(html).toContain('aria-expanded="false"');
     expect(html).toContain("Toggle shell details");
+  });
+
+  test("renders unknown timeline events with raw payload", () => {
+    const timestamp = "2026-06-04T10:00:02.000Z";
+    const events: DisplayEvent[] = [
+      {
+        kind: "unknown",
+        timestamp,
+        raw: {
+          kind: "legacy_agent_update",
+          payload: {
+            reason: "parser miss",
+          },
+        },
+      },
+    ];
+
+    const html = renderToStaticMarkup(
+      createElement(Timeline, {
+        events,
+        loading: false,
+      }),
+    );
+
+    expect(html).toContain("Timeline (1 events)");
+    expect(html).toContain("Unknown event");
+    expect(html).toContain(formatTimestamp(timestamp));
+    expect(html).toContain("legacy_agent_update");
+    expect(html).toContain("parser miss");
   });
 });
