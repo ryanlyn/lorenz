@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [ "$#" -ne 1 ]; then
+  printf '%s\n' "Usage: mise run traceviz -- <path-to-trace.jsonl>" >&2
+  exit 1
+fi
+
+trace_file=$1
+
+pnpm --filter @symphony/dashboard build
+pnpm traceviz -- "$trace_file"
