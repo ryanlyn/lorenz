@@ -152,6 +152,7 @@ export function sshArgs(host: string, command: string): string[] {
     ...sshConfigArgs(),
     "-T",
     ...(target.port ? ["-p", target.port] : []),
+    "--",
     target.destination,
     remoteShellCommand(command),
   ];
@@ -173,6 +174,7 @@ export function reverseTunnelArgs(
     ...(target.port ? ["-p", target.port] : []),
     "-R",
     `${remotePort}:${localHost}:${localPort}`,
+    "--",
     target.destination,
   ];
 }
@@ -188,11 +190,12 @@ export function shellEscape(value: string): string {
 export function parseSshTarget(target: string): SshTarget {
   const trimmed = target.trim();
   const match = /^(.*):(\d+)$/.exec(trimmed);
-  if (!match) return { destination: trimmed, port: null };
+  if (!match) return { destination: validateSshDestination(trimmed), port: null };
   const destination = match[1] ?? "";
   const port = match[2] ?? "";
-  if (validPortDestination(destination)) return { destination, port };
-  return { destination: trimmed, port: null };
+  if (validPortDestination(destination))
+    return { destination: validateSshDestination(destination), port };
+  return { destination: validateSshDestination(trimmed), port: null };
 }
 
 function sshConfigArgs(): string[] {
@@ -202,6 +205,12 @@ function sshConfigArgs(): string[] {
 
 function validPortDestination(destination: string): boolean {
   return destination !== "" && (!destination.includes(":") || bracketedHost(destination));
+}
+
+function validateSshDestination(destination: string): string {
+  if (destination === "" || destination.startsWith("-"))
+    throw new Error(`invalid_ssh_destination: ${destination}`);
+  return destination;
 }
 
 function bracketedHost(destination: string): boolean {

@@ -15,6 +15,7 @@ import { tempDir, writeExecutable } from "../../../test/helpers.js";
 import {
   parseSshTarget,
   remoteShellCommand,
+  reverseTunnelArgs,
   runSsh,
   shellEscape,
   sshArgs,
@@ -48,9 +49,34 @@ test("SSH target parsing and command args match Elixir host:port behavior", () =
     "-T",
     "-p",
     "2222",
+    "--",
     "localhost",
     "bash -lc 'echo ready'",
   ]);
+  assert.deepEqual(reverseTunnelArgs("localhost:2222", 9000, "127.0.0.1", 4040), [
+    "-T",
+    "-N",
+    "-o",
+    "ExitOnForwardFailure=yes",
+    "-p",
+    "2222",
+    "-R",
+    "9000:127.0.0.1:4040",
+    "--",
+    "localhost",
+  ]);
+});
+
+test("SSH args reject empty and option-like targets", () => {
+  const unsafeTargets = ["", "   ", "-oProxyCommand=touch /tmp/pwned", "--"];
+
+  for (const target of unsafeTargets) {
+    assert.throws(() => sshArgs(target, "echo ready"), /invalid_ssh_destination/);
+    assert.throws(
+      () => reverseTunnelArgs(target, 9000, "127.0.0.1", 4040),
+      /invalid_ssh_destination/,
+    );
+  }
 });
 
 test("SSH run honors SYMPHONY_SSH_CONFIG, stderr folding, missing ssh, and timeouts", async () => {
@@ -74,7 +100,7 @@ exit 7
   assert.equal(result.stdout, "out\nerr\n");
   assert.equal(result.stderr, "");
   const traceText = await fs.readFile(trace, "utf8");
-  assert.match(traceText, /-F \/tmp\/symphony-test-ssh-config -T -p 2222 localhost bash -lc/);
+  assert.match(traceText, /-F \/tmp\/symphony-test-ssh-config -T -p 2222 -- localhost bash -lc/);
   assert.match(traceText, /echo ready/);
 
   const emptyPath = await tempDir("symphony-ts-ssh-empty-path");

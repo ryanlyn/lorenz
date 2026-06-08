@@ -251,7 +251,7 @@ test("remote workspace creation and removal use SSH hooks and validate remote pa
     /workspace outside root/,
   );
   const traceText = await fs.readFile(trace, "utf8");
-  assert.match(traceText, /-T -p 2200 worker-01 bash -lc/);
+  assert.match(traceText, /-T -p 2200 -- worker-01 bash -lc/);
   assert.match(traceText, /printf "%s\\n" "\$HOME"/);
   assert.match(traceText, /rm -rf/);
 
