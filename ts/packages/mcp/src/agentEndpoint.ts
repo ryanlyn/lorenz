@@ -154,14 +154,17 @@ async function releaseLocalMcpServer(lease: LocalMcpServerLease): Promise<void> 
     await lease.handle.stop();
     return;
   }
-  const entry = localMcpServers.get(lease.key);
-  if (!entry) return;
-  if (entry.refCount > 1) {
-    entry.refCount -= 1;
-    return;
-  }
-  localMcpServers.delete(lease.key);
-  await entry.handle.stop();
+  const key = lease.key;
+  await withLocalMcpServerLock(key, async () => {
+    const entry = localMcpServers.get(key);
+    if (!entry) return;
+    if (entry.refCount > 1) {
+      entry.refCount -= 1;
+      return;
+    }
+    localMcpServers.delete(key);
+    await entry.handle.stop();
+  });
 }
 
 async function configuredMcpServerReachable(settings: Settings): Promise<boolean> {

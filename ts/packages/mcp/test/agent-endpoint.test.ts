@@ -62,6 +62,48 @@ test("concurrent local MCP endpoint acquisition starts one configured-port serve
   assert.equal(handle.stop.mock.calls.length, 1);
 });
 
+test("configured-port acquisition waits for final release stop before replacing local MCP server", async () => {
+  const firstHandle = fakeServerHandle(39_003);
+  const secondHandle = fakeServerHandle(39_003);
+  const stopGate = deferred<void>();
+  firstHandle.stop.mockImplementation(() => stopGate.promise);
+  mockStartClaudeMcpServer.mockResolvedValueOnce(firstHandle).mockResolvedValueOnce(secondHandle);
+  const fetchSpy = vi
+    .spyOn(globalThis, "fetch")
+    .mockResolvedValue(new Response("", { status: 404 }));
+
+  const settings = settingsWithServerPort(39_003);
+  const firstLease = await acquireAgentMcpEndpoint(settings);
+  const releasePromise = firstLease.release();
+  let acquiredBeforeStop = false;
+  let secondLease: { release(): Promise<void> } | undefined;
+  const secondAcquire = acquireAgentMcpEndpoint(settings).then((lease) => {
+    acquiredBeforeStop = true;
+    secondLease = lease;
+    return lease;
+  });
+
+  try {
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(acquiredBeforeStop, false);
+
+    stopGate.resolve();
+    await releasePromise;
+    secondLease = await secondAcquire;
+
+    assert.equal(mockStartClaudeMcpServer.mock.calls.length, 2);
+    assert.equal(secondLease.url, "http://127.0.0.1:39003/claude-mcp");
+  } finally {
+    stopGate.resolve();
+    await releasePromise;
+    if (secondLease) await secondLease.release();
+    fetchSpy.mockRestore();
+  }
+
+  assert.equal(firstHandle.stop.mock.calls.length, 1);
+  assert.equal(secondHandle.stop.mock.calls.length, 1);
+});
+
 function settingsWithServerPort(port: number): Settings {
   return parseConfig({ server: { host: "127.0.0.1", port } }, {});
 }
@@ -101,4 +143,15 @@ function fakeServerHandle(port: number): {
     },
     stop: vi.fn(async () => {}),
   };
+}
+
+function deferred<T>(): {
+  promise: Promise<T>;
+  resolve(value: T): void;
+} {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((innerResolve) => {
+    resolve = innerResolve;
+  });
+  return { promise, resolve };
 }
