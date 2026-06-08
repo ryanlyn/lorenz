@@ -13,7 +13,8 @@ interface RemoteMcpTunnelEntry {
   remotePort: number;
   process: ReturnType<typeof startReverseTunnel>;
   leaseIds: Set<string>;
-  exited: boolean;
+  processEnded: boolean;
+  recyclePortOnProcessEnd: boolean;
 }
 
 export class WorkerHostPool {
@@ -30,7 +31,7 @@ export class WorkerHostPool {
   ): RemoteMcpTunnelLease {
     const endpointKey = this.remoteMcpTunnelEndpointKey(workerHost, localHost, localPort);
     const current = this.remoteMcpTunnelsByEndpoint.get(endpointKey);
-    if (current && !current.exited) {
+    if (current && !current.processEnded) {
       return this.createRemoteMcpTunnelLease(current);
     }
     if (current) this.closeRemoteMcpTunnel(current, true);
@@ -52,21 +53,13 @@ export class WorkerHostPool {
       process,
       leaseIds: new Set(),
       remotePort,
-      exited: false,
+      processEnded: false,
+      recyclePortOnProcessEnd: false,
     };
     this.remoteMcpTunnelsByEndpoint.set(endpointKey, entry);
-    process.on("close", () => {
-      entry.exited = true;
-      if (this.remoteMcpTunnelsByEndpoint.get(endpointKey) === entry) {
-        this.closeRemoteMcpTunnel(entry, true);
-      }
-    });
-    process.on("error", () => {
-      entry.exited = true;
-      if (this.remoteMcpTunnelsByEndpoint.get(endpointKey) === entry) {
-        this.closeRemoteMcpTunnel(entry, true);
-      }
-    });
+    process.on("close", () => this.handleRemoteMcpTunnelProcessEnd(entry, endpointKey));
+    process.on("exit", () => this.handleRemoteMcpTunnelProcessEnd(entry, endpointKey));
+    process.on("error", () => this.handleRemoteMcpTunnelProcessEnd(entry, endpointKey));
     return this.createRemoteMcpTunnelLease(entry);
   }
 
@@ -95,11 +88,26 @@ export class WorkerHostPool {
       this.remoteMcpTunnelEntriesByLeaseId.delete(leaseId);
     }
     entry.leaseIds.clear();
-    if (recyclePort) this.recycleRemoteMcpPort(entry.remotePort);
-    if (!entry.exited) {
-      entry.exited = true;
+    if (recyclePort) {
+      if (entry.processEnded) {
+        this.recycleRemoteMcpPort(entry.remotePort);
+      } else {
+        entry.recyclePortOnProcessEnd = true;
+      }
+    }
+    if (!entry.processEnded) {
       entry.process.kill();
     }
+  }
+
+  private handleRemoteMcpTunnelProcessEnd(entry: RemoteMcpTunnelEntry, endpointKey: string): void {
+    if (entry.processEnded) return;
+    entry.processEnded = true;
+    if (this.remoteMcpTunnelsByEndpoint.get(endpointKey) === entry) {
+      this.closeRemoteMcpTunnel(entry, true);
+      return;
+    }
+    if (entry.recyclePortOnProcessEnd) this.recycleRemoteMcpPort(entry.remotePort);
   }
 
   private recycleRemoteMcpPort(remotePort: number): void {

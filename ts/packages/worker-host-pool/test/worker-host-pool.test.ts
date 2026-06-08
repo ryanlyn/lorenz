@@ -203,7 +203,7 @@ test("acquireRemoteMcpTunnel keeps different local endpoints isolated until leas
 });
 
 test("port recycling returns freed ports in sorted order", () => {
-  setupMock();
+  const processes = setupProcessTrackingMock();
   const pool = new WorkerHostPool();
 
   // Acquire three hosts
@@ -216,7 +216,9 @@ test("port recycling returns freed ports in sorted order", () => {
 
   // Release host-b (port 46001) then host-a (port 46000)
   pool.releaseRemoteMcpTunnel(lease2);
+  processes[1]!.emitter.emit("close");
   pool.releaseRemoteMcpTunnel(lease1);
+  processes[0]!.emitter.emit("close");
 
   // Next acquire should reuse 46000 (lowest available recycled port)
   const lease4 = pool.acquireRemoteMcpTunnel("host-d", "127.0.0.1", 3000);
@@ -227,8 +229,28 @@ test("port recycling returns freed ports in sorted order", () => {
   assert.equal(lease5.remotePort, 46_001);
 });
 
+test("releaseRemoteMcpTunnel waits for process close before recycling the remote port", () => {
+  const processes = setupProcessTrackingMock();
+  const pool = new WorkerHostPool();
+
+  const firstLease = pool.acquireRemoteMcpTunnel("host-a", "127.0.0.1", 3000);
+  assert.equal(firstLease.remotePort, 46_000);
+
+  pool.releaseRemoteMcpTunnel(firstLease);
+
+  assert.equal(processes[0]!.kill.mock.calls.length, 1);
+
+  const secondLease = pool.acquireRemoteMcpTunnel("host-b", "127.0.0.1", 3000);
+  assert.equal(secondLease.remotePort, 46_001);
+
+  processes[0]!.emitter.emit("close");
+
+  const thirdLease = pool.acquireRemoteMcpTunnel("host-c", "127.0.0.1", 3000);
+  assert.equal(thirdLease.remotePort, 46_000);
+});
+
 test("rapid sequential acquire/release of many workers maintains consistent port allocation", () => {
-  setupMock();
+  const processes = setupProcessTrackingMock();
   const pool = new WorkerHostPool();
 
   // Acquire 10 different workers in quick succession
@@ -245,9 +267,10 @@ test("rapid sequential acquire/release of many workers maintains consistent port
     assert.equal(results[i]!.workerHost, `worker-${i}`);
   }
 
-  // Release all workers
-  for (const r of results) {
+  // Release all workers and let the fake child processes finish.
+  for (const [index, r] of results.entries()) {
     pool.releaseRemoteMcpTunnel(r);
+    processes[index]!.emitter.emit("close");
   }
 
   // All ports recycled — next acquire should get lowest recycled port
