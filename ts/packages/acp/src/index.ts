@@ -218,8 +218,14 @@ export class Executor implements AgentExecutor {
           if (settled) return;
           const usage = normalizeSessionUsage(session, extractUsage(response.usage ?? undefined));
           const action = actionForStopReason(response.stopReason);
+          const terminalType =
+            action === "continue"
+              ? "turn_completed"
+              : action === "cancel"
+                ? "turn_cancelled"
+                : "turn_failed";
           const base = {
-            sessionUpdate: acpProtocolUpdate(session, "turn_completed", { response }),
+            sessionUpdate: acpProtocolUpdate(session, terminalType, { response }),
             sessionId: session.sessionId,
             resumeId: session.resumeId,
             executorPid: session.executorPid,

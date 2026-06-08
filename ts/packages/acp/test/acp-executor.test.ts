@@ -9,6 +9,8 @@ import type { AgentUpdate } from "@symphony/cli";
 import { assert } from "../../../test/assert.js";
 import { sampleIssue, tempDir, writeExecutable } from "../../../test/helpers.js";
 
+let nextAcpServerPort = 45_000 + (process.pid % 1_000);
+
 test("ACP executor starts a session, translates updates, approves permissions, and exposes fs", async () => {
   const root = await tempDir("symphony-ts-acp");
   const fake = await writeFakeBridge(root);
@@ -224,6 +226,52 @@ test("ACP executor resets the stall timeout on session notifications", async () 
   );
 });
 
+test("ACP executor emits matching terminal sessionUpdate kinds for cancelled and failed turns", async () => {
+  const cases = [
+    {
+      mode: "cancelled-turn",
+      stopReason: "cancelled",
+      updateType: "turn_cancelled",
+      error: /acp_turn_cancelled/,
+    },
+    {
+      mode: "failed-turn",
+      stopReason: "refusal",
+      updateType: "turn_failed",
+      error: /acp_turn_failed: refusal/,
+    },
+  ] as const;
+
+  for (const testCase of cases) {
+    const root = await tempDir(`symphony-ts-acp-${testCase.mode}`);
+    const fake = await writeFakeBridge(root);
+    const trace = path.join(root, "trace.jsonl");
+    const settings = acpSettings(root, fake, trace, testCase.mode);
+    const updates: AgentUpdate[] = [];
+    const executor = new Executor("claude");
+    const session = await executor.startSession({
+      workspace: root,
+      settings,
+      issue: sampleIssue,
+      onUpdate: (update) => updates.push(update),
+    });
+    try {
+      await assert.rejects(() => executor.runTurn(session, "hello", sampleIssue), testCase.error);
+    } finally {
+      await session.stop();
+    }
+
+    const terminal = updates.find((update) => update.type === testCase.updateType);
+    assert.equal(terminal?.type, testCase.updateType);
+    assert.equal(terminal?.sessionUpdate?.kind, testCase.updateType);
+    assert.equal(
+      (terminal?.message as { response?: { stopReason?: string } } | undefined)?.response
+        ?.stopReason,
+      testCase.stopReason,
+    );
+  }
+});
+
 test("ACP executor suppresses late terminal updates after turn timeout", async () => {
   const root = await tempDir("symphony-ts-acp-late-timeout");
   const fake = await writeFakeBridge(root);
@@ -396,6 +444,7 @@ function acpSettings(
 ) {
   const kind = opts?.agentKind ?? "claude";
   return parseConfig({
+    server: { host: "127.0.0.1", port: nextAcpServerPort++ },
     workspace: { root: path.dirname(root) },
     agent: { kind },
     agents: {
@@ -506,6 +555,32 @@ class FakeAgent {
       }
       return {
         stopReason: "end_turn",
+        usage: {
+          inputTokens: 2,
+          cachedReadTokens: 4,
+          cachedWriteTokens: 1,
+          outputTokens: 3,
+          thoughtTokens: 9,
+          totalTokens: 10
+        }
+      };
+    }
+    if (mode === "cancelled-turn") {
+      return {
+        stopReason: "cancelled",
+        usage: {
+          inputTokens: 2,
+          cachedReadTokens: 4,
+          cachedWriteTokens: 1,
+          outputTokens: 3,
+          thoughtTokens: 9,
+          totalTokens: 10
+        }
+      };
+    }
+    if (mode === "failed-turn") {
+      return {
+        stopReason: "refusal",
         usage: {
           inputTokens: 2,
           cachedReadTokens: 4,
