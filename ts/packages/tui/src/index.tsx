@@ -132,11 +132,11 @@ export function formatElixirStyleDashboard(
     `${b("│ Runtime: ", ansi)}${s("35", formatMinutesSeconds(runtimeSeconds), ansi)}`,
     `${b("│ Tokens: ", ansi)}${s("33", `in ${formatInteger(snapshot.usageTotals.inputTokens)}`, ansi)}${s("90", " | ", ansi)}${s("33", `out ${formatInteger(snapshot.usageTotals.outputTokens)}`, ansi)}${s("90", " | ", ansi)}${s("33", `total ${formatInteger(snapshot.usageTotals.totalTokens)}`, ansi)}`,
     `${b("│ Rate Limits: ", ansi)}${formatTerminalRateLimits(snapshot.rateLimits, ansi)}`,
-    `${b("│ Project: ", ansi)}${s("36", options.projectUrl ?? "https://linear.app/project/project/issues", ansi)}`,
+    `${b("│ Project: ", ansi)}${styledCell("36", options.projectUrl ?? "https://linear.app/project/project/issues", ansi)}`,
   ];
   if (options.dashboardUrl)
     lines.push(
-      `${b("│ Dashboard: ", ansi)}${s("36", normalizeDashboardUrl(options.dashboardUrl), ansi)}`,
+      `${b("│ Dashboard: ", ansi)}${s("36", normalizeDashboardUrl(terminalCell(options.dashboardUrl)), ansi)}`,
     );
   const nextRefresh = formatNextRefresh(snapshot.poll.nextPollAt, now);
   lines.push(
@@ -186,20 +186,21 @@ function formatRunningRow(
   const stage = runningStage(run);
   const ageTurn = `${formatMinutesSeconds(secondsBetween(now, run.startedAt))} / ${run.turnCount}`;
   const event = terminalEvent(run);
+  const session = shortSession(terminalCell(run.sessionId ?? run.resumeId ?? "n/a"));
   const color = rowColor(run.lastEvent);
   const ageWidth = ansi ? 12 : 13;
   const tokenWidth = ansi ? 10 : 9;
   return [
     "│",
     s(color, "●", ansi),
-    s("36", run.issueIdentifier.padEnd(8), ansi),
+    styledCell("36", run.issueIdentifier, ansi, { padEnd: 8 }),
     s("90", String(run.slotIndex).padEnd(5), ansi),
-    s("36", run.agentKind.padEnd(8), ansi),
-    s(color, stage.padEnd(14), ansi),
-    s("33", String(run.executorPid ?? "n/a").padEnd(8), ansi),
+    styledCell("36", run.agentKind, ansi, { padEnd: 8 }),
+    styledCell(color, stage, ansi, { padEnd: 14 }),
+    styledCell("33", String(run.executorPid ?? "n/a"), ansi, { padEnd: 8 }),
     s("35", ageTurn.padEnd(ageWidth), ansi),
     s("33", formatInteger(run.usageTotals.totalTokens).padStart(tokenWidth), ansi),
-    s("36", shortSession(run.sessionId ?? run.resumeId ?? "n/a").padEnd(14), ansi),
+    s("36", session.padEnd(14), ansi),
     s(color, ansi ? event.padEnd(24) : event, ansi),
   ].join(" ");
 }
@@ -211,12 +212,12 @@ function formatRetryRow(
 ): string {
   const dueIn = formatRetryDue(secondsBetween(new Date(retry.dueAtIso), now));
   const error = stringAt(retry, ["error"]);
-  const suffix = error ? `error=${sanitize(error)}` : "error=n/a";
-  return `│  ${s("38;5;208", "↻", ansi)} ${s("31", retry.issueIdentifier, ansi)} ${s("33", `attempt=${retry.attempt}`, ansi)}${s("2", " in ", ansi)}${s("36", dueIn, ansi)} ${s("2", suffix, ansi)}`;
+  const suffix = error ? `error=${terminalCell(error)}` : "error=n/a";
+  return `│  ${s("38;5;208", "↻", ansi)} ${styledCell("31", retry.issueIdentifier, ansi)} ${s("33", `attempt=${retry.attempt}`, ansi)}${s("2", " in ", ansi)}${s("36", dueIn, ansi)} ${s("2", suffix, ansi)}`;
 }
 
 function formatDispatchBlockRow(block: unknown, ansi: boolean): string {
-  if (!isRecord(block)) return `│  ${sanitize(String(block))}`;
+  if (!isRecord(block)) return `│  ${terminalCell(String(block))}`;
   const identifier =
     stringAt(block, ["identifier"]) ??
     stringAt(block, ["issueIdentifier"]) ??
@@ -226,9 +227,9 @@ function formatDispatchBlockRow(block: unknown, ansi: boolean): string {
   const state = stringAt(block, ["state"]) ?? "unknown";
   return [
     `│  ${s("38;5;208", "•", ansi)}`,
-    s("31", sanitize(identifier), ansi),
-    s("33", `state=${sanitize(state)}`, ansi),
-    `${s("2", "reason=", ansi)}${s("36", sanitize(reason), ansi)}`,
+    styledCell("31", identifier, ansi),
+    styledCell("33", `state=${state}`, ansi),
+    `${s("2", "reason=", ansi)}${styledCell("36", reason, ansi)}`,
   ].join(" ");
 }
 
@@ -258,13 +259,13 @@ function terminalEvent(run: RuntimeSnapshot["running"][number]): string {
     (run.lastMessage === null || run.lastMessage === undefined)
   )
     return "pending";
-  return truncate(
+  return terminalCell(
     humanizeAgentMessage({
       agent_kind: run.agentKind,
       event: run.lastEvent,
       message: run.lastMessage,
     }),
-    24,
+    { max: 24 },
   );
 }
 
@@ -275,12 +276,12 @@ function formatTerminalRateLimits(value: unknown, ansi: boolean): string {
   const primary = rateBucket(value, "primary");
   const secondary = rateBucket(value, "secondary");
   const credits = formatCredits(valueAt(value, ["credits"]));
-  if (!model && !primary && !secondary && !credits) return sanitize(JSON.stringify(value));
+  if (!model && !primary && !secondary && !credits) return terminalCell(JSON.stringify(value));
   return [
-    s("33", model ?? "unknown", ansi),
-    primary ? s("36", primary, ansi) : null,
-    secondary ? s("36", secondary, ansi) : null,
-    credits ? s("32", `credits ${credits}`, ansi) : null,
+    styledCell("33", model ?? "unknown", ansi),
+    primary ? styledCell("36", primary, ansi) : null,
+    secondary ? styledCell("36", secondary, ansi) : null,
+    credits ? styledCell("32", `credits ${credits}`, ansi) : null,
   ]
     .filter((part): part is string => part !== null)
     .join(s("90", " | ", ansi));
@@ -420,6 +421,29 @@ function b(value: string, ansi: boolean): string {
 
 function s(code: string, value: string, ansi: boolean): string {
   return ansi ? `\x1b[${code}m${value}\x1b[0m` : value;
+}
+
+interface TerminalCellOptions {
+  max?: number | undefined;
+  padEnd?: number | undefined;
+  padStart?: number | undefined;
+}
+
+function styledCell(
+  code: string,
+  value: string,
+  ansi: boolean,
+  options?: TerminalCellOptions,
+): string {
+  return s(code, terminalCell(value, options), ansi);
+}
+
+function terminalCell(value: string, options?: TerminalCellOptions): string {
+  let cell = sanitize(value);
+  if (options?.max !== undefined) cell = truncate(cell, options.max);
+  if (options?.padEnd !== undefined) cell = cell.padEnd(options.padEnd);
+  if (options?.padStart !== undefined) cell = cell.padStart(options.padStart);
+  return cell;
 }
 
 const escapeCharacter = String.fromCharCode(27);
