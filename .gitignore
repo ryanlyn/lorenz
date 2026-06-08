@@ -12,7 +12,6 @@
 .codex/settings*.toml
 .codex/settings*.yaml
 .codex/settings*.yml
-.codex/worktree_init.sh
 
 # Local git worktree checkouts
 .claude/worktrees/
