@@ -1,4 +1,4 @@
-import { mkdirSync, existsSync, rmSync } from "node:fs";
+import { mkdirSync, rmSync } from "node:fs";
 import { appendFile } from "node:fs/promises";
 import path from "node:path";
 
@@ -9,6 +9,7 @@ export class TraceEmitter {
   private initialized = new Set<string>();
   /** Per-file write queues to avoid unbounded concurrent writes. */
   private writeQueues = new Map<string, Promise<void>>();
+  private writeFailures: Error[] = [];
 
   constructor(traceDir: string) {
     this.traceDir = traceDir;
@@ -16,10 +17,6 @@ export class TraceEmitter {
 
   emit(issueId: string, issueIdentifier: string, update: AgentUpdate): void {
     const dirPath = this.issueDirPath(issueIdentifier);
-    if (!this.initialized.has(dirPath)) {
-      mkdirSync(dirPath, { recursive: true });
-      this.initialized.add(dirPath);
-    }
     const payload: TraceEvent = {
       type: update.type,
       issueId,
@@ -34,25 +31,75 @@ export class TraceEmitter {
     const line = JSON.stringify(payload);
     const filePath = path.join(dirPath, "trace.jsonl");
 
-    const prev = this.writeQueues.get(filePath) ?? Promise.resolve();
-    const next = prev.then(async () =>
-      appendFile(filePath, line + "\n").catch((err: unknown) => {
-        console.error(`[TraceEmitter] Failed to write trace for issue ${issueIdentifier}:`, err);
-      }),
+    this.enqueue(
+      filePath,
+      async () => {
+        if (!this.initialized.has(dirPath)) {
+          mkdirSync(dirPath, { recursive: true });
+          this.initialized.add(dirPath);
+        }
+        await appendFile(filePath, line + "\n");
+      },
+      `[TraceEmitter] Failed to write trace for issue ${issueIdentifier}:`,
     );
-    this.writeQueues.set(filePath, next);
   }
 
   async drain(): Promise<void> {
     await Promise.all([...this.writeQueues.values()]);
+    const failures = this.writeFailures.splice(0);
+    if (failures.length === 1) {
+      throw failures[0]!;
+    }
+    if (failures.length > 1) {
+      throw new AggregateError(failures, "Failed to write trace events");
+    }
   }
 
   clear(issueIdentifier: string): void {
     const dirPath = this.issueDirPath(issueIdentifier);
-    if (existsSync(dirPath)) {
-      rmSync(dirPath, { recursive: true });
+    const filePath = path.join(dirPath, "trace.jsonl");
+    const clearIssueDir = (): void => {
+      rmSync(dirPath, { recursive: true, force: true });
       this.initialized.delete(dirPath);
+    };
+
+    if (!this.writeQueues.has(filePath)) {
+      clearIssueDir();
+      return;
     }
+
+    this.enqueue(
+      filePath,
+      clearIssueDir,
+      `[TraceEmitter] Failed to clear trace for issue ${issueIdentifier}:`,
+    );
+  }
+
+  private enqueue(
+    filePath: string,
+    operation: () => void | Promise<void>,
+    errorMessage: string,
+  ): void {
+    const prev = this.writeQueues.get(filePath) ?? Promise.resolve();
+    const next = prev.then(operation).catch((err: unknown) => {
+      const error = this.asError(err, errorMessage);
+      this.writeFailures.push(error);
+      console.error(error.message, err);
+    });
+    this.writeQueues.set(filePath, next);
+
+    void next.finally(() => {
+      if (this.writeQueues.get(filePath) === next) {
+        this.writeQueues.delete(filePath);
+      }
+    });
+  }
+
+  private asError(err: unknown, message: string): Error {
+    if (err instanceof Error) {
+      return new Error(`${message} ${err.message}`, { cause: err });
+    }
+    return new Error(`${message} ${String(err)}`);
   }
 
   private issueDirPath(issueIdentifier: string): string {

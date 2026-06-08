@@ -2,7 +2,7 @@ import path from "node:path";
 import { mkdirSync, readFileSync, rmSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import type { AgentUpdate } from "@symphony/domain";
 
 import { TraceEmitter } from "../src/index.js";
@@ -92,5 +92,31 @@ describe("TraceEmitter", () => {
 
     emitter.clear("ENG-1");
     expect(existsSync(issueDir)).toBe(false);
+  });
+
+  it("does not keep queued events from before clear", async () => {
+    emitter.emit("id-1", "ENG-1", makeUpdate({ type: "turn_started" }));
+    emitter.clear("ENG-1");
+    emitter.emit("id-1", "ENG-1", makeUpdate({ type: "turn_completed" }));
+    await emitter.drain();
+
+    const filePath = path.join(traceDir, "ENG-1", "trace.jsonl");
+    const lines = readFileSync(filePath, "utf-8").trim().split("\n");
+    expect(lines).toHaveLength(1);
+    expect(JSON.parse(lines[0]!).type).toBe("turn_completed");
+  });
+
+  it("rejects drain when queued writes fail", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      emitter.emit("id-1", "ENG-1", makeUpdate());
+      const filePath = path.join(traceDir, "ENG-1", "trace.jsonl");
+      mkdirSync(path.dirname(filePath), { recursive: true });
+      mkdirSync(filePath, { recursive: true });
+
+      await expect(emitter.drain()).rejects.toThrow(/Failed to write trace/);
+    } finally {
+      consoleError.mockRestore();
+    }
   });
 });
