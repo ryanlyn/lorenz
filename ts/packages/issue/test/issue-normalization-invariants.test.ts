@@ -79,6 +79,23 @@ describe("INVARIANT: When a state value is resolved, the system SHALL accept nes
     );
   });
 
+  test("state resolution skips invalid preferred fields before valid fallback forms", () => {
+    const issueFromSnakeCase = normalizeIssue(
+      validIssueInput({ state: {}, state_name: "Todo", state_type: "unstarted" }),
+    );
+    assert.equal(issueFromSnakeCase.state, "Todo");
+
+    const issueFromCamelCase = normalizeIssue(
+      validIssueInput({
+        state: undefined,
+        state_name: 123,
+        stateName: "In Progress",
+        stateType: "started",
+      }),
+    );
+    assert.equal(issueFromCamelCase.state, "In Progress");
+  });
+
   test("state resolution accepts camelCase stateName", () => {
     fc.assert(
       fc.property(nonBlankString, (stateName) => {
@@ -752,6 +769,18 @@ describe("INVARIANT: When a state type is normalized, only values in the canonic
       ),
       { numRuns: 200 },
     );
+  });
+
+  test("state type resolution skips invalid snake_case before valid camelCase fallback", () => {
+    const issue = normalizeIssue(
+      validIssueInput({
+        state: "Todo",
+        state_type: 123,
+        stateType: "started",
+      }),
+    );
+
+    assert.equal(issue.stateType, "started");
   });
 });
 
