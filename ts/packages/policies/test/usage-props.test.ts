@@ -1,9 +1,10 @@
 import { test } from "vitest";
 import fc from "fast-check";
-import { mergeMonotonicUsage } from "@symphony/cli";
 
 import { assert } from "../../../test/assert.js";
 import { arbUsageTotals } from "../../../test/arbitraries.js";
+
+import { mergeMonotonicUsage } from "@symphony/policies";
 
 const arbPartialUpdate = () =>
   fc.record({

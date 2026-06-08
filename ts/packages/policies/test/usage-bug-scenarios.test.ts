@@ -1,7 +1,8 @@
 import { describe, test } from "vitest";
-import { mergeMonotonicUsage } from "@symphony/cli";
 
 import { assert } from "../../../test/assert.js";
+
+import { mergeMonotonicUsage } from "@symphony/policies";
 
 function makeTotals(input = 10, output = 5, total = 15) {
   return { inputTokens: input, outputTokens: output, totalTokens: total, secondsRunning: 0 };

@@ -1,9 +1,10 @@
 import { describe, test } from "vitest";
 import fc from "fast-check";
-import { mergeMonotonicUsage } from "@symphony/cli";
 
 import { assert } from "../../../test/assert.js";
 import { arbUsageTotals } from "../../../test/arbitraries.js";
+
+import { mergeMonotonicUsage } from "@symphony/policies";
 
 /**
  * This file focuses on invariant tests that add value BEYOND the basic property tests in

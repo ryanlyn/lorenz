@@ -1,8 +1,9 @@
 import { test } from "vitest";
 import fc from "fast-check";
-import { selectLeastLoadedHost } from "@symphony/cli";
 
 import { assert } from "../../../test/assert.js";
+
+import { selectLeastLoadedHost } from "@symphony/policies";
 
 const arbCap = () => fc.integer({ min: 0, max: 20 });
 
