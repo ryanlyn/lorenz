@@ -141,6 +141,43 @@ test("configured-port acquisition waits for final release stop before replacing 
   assert.equal(secondHandle.stop.mock.calls.length, 1);
 });
 
+test("configured-port local MCP endpoint does not reuse an unauthenticated 405 server", async () => {
+  const handle = fakeServerHandle(39_005);
+  mockStartClaudeMcpServer.mockResolvedValue(handle);
+  const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (_input, init) => {
+    if (init?.method === "POST") {
+      return new Response(
+        JSON.stringify({
+          error: {
+            code: "unauthorized",
+            message: "Missing or invalid MCP bearer token",
+          },
+        }),
+        { status: 401 },
+      );
+    }
+    return new Response("", { status: 405 });
+  });
+
+  let lease: Awaited<ReturnType<typeof acquireAgentMcpEndpoint>> | undefined;
+  try {
+    lease = await acquireAgentMcpEndpoint(settingsWithServerPort(39_005));
+
+    assert.equal(mockStartClaudeMcpServer.mock.calls.length, 1);
+    const postCall = fetchSpy.mock.calls.find(([, init]) => init?.method === "POST");
+    assert.ok(postCall, "expected an authenticated POST probe");
+    assert.match(
+      String((postCall[1]?.headers as Record<string, string>).authorization),
+      /^Bearer /,
+    );
+  } finally {
+    await lease?.release();
+    fetchSpy.mockRestore();
+  }
+
+  assert.equal(handle.stop.mock.calls.length, 1);
+});
+
 function settingsWithServerPort(port: number): Settings {
   return parseConfig({ server: { host: "127.0.0.1", port } }, {});
 }
@@ -157,14 +194,23 @@ test("local MCP endpoint reports a connectable URL when configured server binds 
     tracker: { kind: "linear", project_slug: "mono" },
     server: { host: "0.0.0.0", port: 43210 },
   });
-  const fetchSpy = vi
-    .spyOn(globalThis, "fetch")
-    .mockResolvedValue(new Response("", { status: 405 }));
+  const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (_input, init) => {
+    const body = JSON.parse(String(init?.body ?? "{}")) as { id?: unknown };
+    return new Response(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: body.id,
+        result: { tools: [] },
+      }),
+      { status: 200 },
+    );
+  });
 
   try {
     const lease = await acquireAgentMcpEndpoint(settings);
     try {
       assert.equal(lease.url, "http://127.0.0.1:43210/claude-mcp");
+      assert.equal(mockStartClaudeMcpServer.mock.calls.length, 0);
     } finally {
       await lease.release();
     }
