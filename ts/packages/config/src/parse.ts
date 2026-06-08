@@ -371,6 +371,15 @@ function inferUsageAccounting(kind: AgentKind, bridgeCommand: string): AgentUsag
 }
 
 function applyKnownAgentRecords(settings: Settings): void {
+  const codex = settings.agents.codex;
+  if (codex?.executor === "acp") {
+    settings.codex = {
+      command: codex.bridgeCommand,
+      turnTimeoutMs: codex.turnTimeoutMs,
+      stallTimeoutMs: codex.stallTimeoutMs,
+    };
+  }
+
   const claude = settings.agents.claude;
   if (claude?.executor === "acp") {
     settings.claude = {

@@ -578,7 +578,7 @@ test("runtime stall reconciliation uses agents-level stall timeout defaults", as
     workspace: { root },
     agents: { stall_timeout_ms: 50 },
   });
-  assert.equal(settings.codex.stallTimeoutMs, 300_000);
+  assert.equal(settings.codex.stallTimeoutMs, 50);
   assert.equal(settings.agents.codex.stallTimeoutMs, 50);
   const workflow: WorkflowDefinition = {
     path: "/tmp/WORKFLOW.md",

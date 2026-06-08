@@ -298,6 +298,7 @@ test("agents map overrides known runtime settings via ACP records", () => {
       codex: {
         bridge_command: "codex-custom",
         turn_timeout_ms: 120_000,
+        stall_timeout_ms: 42_000,
       },
       claude: {
         bridge_command: "claude-agent-acp",
@@ -313,6 +314,10 @@ test("agents map overrides known runtime settings via ACP records", () => {
 
   assert.equal(settings.agents.codex.bridgeCommand, "codex-custom");
   assert.equal(settings.agents.codex.turnTimeoutMs, 120_000);
+  assert.equal(settings.agents.codex.stallTimeoutMs, 42_000);
+  assert.equal(settings.codex.command, "codex-custom");
+  assert.equal(settings.codex.turnTimeoutMs, 120_000);
+  assert.equal(settings.codex.stallTimeoutMs, 42_000);
   assert.equal(settings.claude.command, "claude-agent-acp");
   assert.deepEqual(settings.claude.providerConfig, { permissions: { defaultMode: "acceptEdits" } });
   assert.deepEqual(settings.agents.pi, {

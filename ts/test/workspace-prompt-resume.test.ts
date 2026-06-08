@@ -340,6 +340,7 @@ new acp.AgentSideConnection((connection) => new FakeAgent(connection), stream);
 `,
   );
   const settings = parseConfig({
+    server: { port: 0 },
     workspace: { root: workspaceRoot },
     hooks: {
       after_create: `echo after_create >> ${JSON.stringify(hookLog)}`,
@@ -412,6 +413,7 @@ new acp.AgentSideConnection((connection) => new FakeAgent(connection), stream);
   );
   const sharedRoot = path.join(root, "shared");
   const settings = parseConfig({
+    server: { port: 0 },
     workspace: { root: sharedRoot, isolation: "none" },
     agents: {
       codex: {
@@ -504,6 +506,7 @@ new acp.AgentSideConnection((connection) => new FakeAgent(connection), stream);
 `,
   );
   const settings = parseConfig({
+    server: { port: 0 },
     workspace: { root: path.join(root, "workspaces") },
     agent: { kind: "claude", max_turns: 2 },
     agents: {
@@ -571,6 +574,7 @@ new acp.AgentSideConnection((connection) => new FakeAgent(connection), stream);
   vi.stubEnv("PATH", `${binDir}:${process.env.PATH ?? ""}`);
 
   const settings = parseConfig({
+    server: { port: 0 },
     workspace: { root: "~/workspaces" },
     worker: { ssh_hosts: ["worker-01:2200"], ssh_timeout_ms: 5_000 },
     hooks: {
@@ -686,6 +690,7 @@ new acp.AgentSideConnection((connection) => new FakeAgent(connection), stream);
 `,
   );
   const settings = parseConfig({
+    server: { port: 0 },
     workspace: { root: workspaceRoot },
     agents: {
       codex: {
@@ -748,6 +753,7 @@ new acp.AgentSideConnection((connection) => new FakeAgent(connection), stream);
   );
 
   const settings = parseConfig({
+    server: { port: 0 },
     workspace: { root: workspaceRoot },
     agents: {
       codex: {
