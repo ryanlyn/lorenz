@@ -99,6 +99,8 @@ interface PollIntent {
   waitForRuns: boolean;
 }
 
+type RetrySnapshotEntry = ReturnType<Orchestrator["snapshot"]>["retrying"][number];
+
 function pollIntent(options: PollOptions = {}): PollIntent {
   return {
     dryRun: options.dryRun === true,
@@ -325,6 +327,7 @@ export class SymphonyRuntime {
       await this.reconcileTrackedIssues();
       const issues = await this.client.fetchCandidateIssues();
       const eligibleIssues = this.orchestrator.eligibleIssues(issues);
+      if (!options.dryRun) this.syncRetryTimersForIssues(issues);
       this.candidates = issues.length;
       this.eligible = eligibleIssues.length;
 
@@ -368,6 +371,7 @@ export class SymphonyRuntime {
       this.addEvent("dispatch_skipped", `${refreshed.identifier} stale_before_dispatch`);
       return [];
     }
+    this.syncRetryTimer(refreshed.id);
     const key = slotKey(refreshed.id, claim.slotIndex);
     const runId = `run-${this.nextRunNumber}`;
     this.nextRunNumber += 1;
@@ -698,6 +702,10 @@ export class SymphonyRuntime {
 
   private syncRetryTimer(issueId: string): void {
     const retry = this.orchestrator.snapshot().retrying.find((entry) => entry.issueId === issueId);
+    this.syncRetryTimerEntry(issueId, retry);
+  }
+
+  private syncRetryTimerEntry(issueId: string, retry: RetrySnapshotEntry | undefined): void {
     if (!retry) {
       this.clearRetryTimer(issueId);
       return;
@@ -727,6 +735,14 @@ export class SymphonyRuntime {
 
   private clearRetryTimer(issueId: string): void {
     this.retryScheduler.clear(issueId);
+  }
+
+  private syncRetryTimersForIssues(issues: Issue[]): void {
+    const retryByIssueId = new Map<string, RetrySnapshotEntry>();
+    for (const retry of this.orchestrator.snapshot().retrying) {
+      if (!retryByIssueId.has(retry.issueId)) retryByIssueId.set(retry.issueId, retry);
+    }
+    for (const issue of issues) this.syncRetryTimerEntry(issue.id, retryByIssueId.get(issue.id));
   }
 
   private recordHistory(entry: RuntimeRunHistoryEntry): void {

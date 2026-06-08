@@ -47,6 +47,8 @@ export interface SandboxScenario {
   mutations?: Record<number, (client: ChaosLinearClient) => void>;
   /** Timed mutations: applied by time offset from scenario start. */
   timedMutations?: TimedMutation[];
+  /** Delay after the last poll tick before runtime shutdown. Default 0. */
+  postRunDelayMs?: number;
   /** Assertions to check after scenario completes. */
   assertions?: Assertion[];
 }
@@ -126,6 +128,9 @@ export async function runScenario(scenario: SandboxScenario): Promise<SandboxRes
       if (scenario.tickDelayMs && scenario.tickDelayMs > 0 && tick < ticks - 1) {
         await sleep(scenario.tickDelayMs);
       }
+    }
+    if (scenario.postRunDelayMs && scenario.postRunDelayMs > 0) {
+      await sleep(scenario.postRunDelayMs);
     }
   } finally {
     for (const timer of timedMutationTimers) {

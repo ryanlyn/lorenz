@@ -181,6 +181,45 @@ describe("Sandbox: Retry and Backoff", () => {
     expect(failedEvents.length).toBeGreaterThanOrEqual(2);
   });
 
+  test("blocked due retry is rescheduled by timer before the next polling tick", async () => {
+    const result = await runScenario({
+      issues: [
+        makeIssue("retry-resync-1", "A-RETRY-RESYNC", { priority: 1 }),
+        makeIssue("capacity-holder-1", "B-CAPACITY-HOLDER", { priority: 2 }),
+      ],
+      settingsOverrides: {
+        polling: { intervalMs: 60_000 },
+        agent: { maxConcurrentAgents: 1, maxRetryBackoffMs: 80 },
+      },
+      runnerConfig: {
+        defaultBehavior: { shouldSucceed: true, turnCount: 1, latencyPerTurnMs: 0 },
+        byId: {
+          "retry-resync-1": {
+            shouldSucceed: false,
+            errorMessage: "retry-resync failure",
+            turnCount: 1,
+            latencyPerTurnMs: 0,
+          },
+          "capacity-holder-1": {
+            shouldSucceed: true,
+            turnCount: 3,
+            latencyPerTurnMs: 120,
+          },
+        },
+      },
+      pollTicks: 2,
+      tickDelayMs: 40,
+      waitForRuns: false,
+      postRunDelayMs: 650,
+    });
+
+    const retryStartedEvents = result.events.filter(
+      (e) => e.type === "run_started" && e.message.includes("A-RETRY-RESYNC"),
+    );
+    expect(retryStartedEvents.length).toBeGreaterThanOrEqual(2);
+    expect(result.events.some((e) => e.type === "retry_timer_due")).toBe(true);
+  });
+
   test("high failure rate (0.5) with retries: system stays stable", async () => {
     const result = await runScenario({
       issues: [
