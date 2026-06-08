@@ -16,7 +16,7 @@ export class TraceEmitter {
   }
 
   emit(issueId: string, issueIdentifier: string, update: AgentUpdate): void {
-    const dirPath = this.issueDirPath(issueIdentifier);
+    const { dirPath, filePath } = this.issueTracePaths(issueId);
     const payload: TraceEvent = {
       type: update.type,
       issueId,
@@ -29,7 +29,6 @@ export class TraceEmitter {
       executorPid: update.executorPid ?? null,
     } as TraceEvent;
     const line = JSON.stringify(payload);
-    const filePath = path.join(dirPath, "trace.jsonl");
 
     this.enqueue(
       filePath,
@@ -55,9 +54,8 @@ export class TraceEmitter {
     }
   }
 
-  clear(issueIdentifier: string): void {
-    const dirPath = this.issueDirPath(issueIdentifier);
-    const filePath = path.join(dirPath, "trace.jsonl");
+  clear(issueId: string): void {
+    const { dirPath, filePath } = this.issueTracePaths(issueId);
     const clearIssueDir = (): void => {
       rmSync(dirPath, { recursive: true, force: true });
       this.initialized.delete(dirPath);
@@ -71,7 +69,7 @@ export class TraceEmitter {
     this.enqueue(
       filePath,
       clearIssueDir,
-      `[TraceEmitter] Failed to clear trace for issue ${issueIdentifier}:`,
+      `[TraceEmitter] Failed to clear trace for issue ${issueId}:`,
     );
   }
 
@@ -102,23 +100,29 @@ export class TraceEmitter {
     return new Error(`${message} ${String(err)}`);
   }
 
-  private issueDirPath(issueIdentifier: string): string {
-    const sanitized = issueIdentifier.replace(/[^a-zA-Z0-9_-]/g, "_");
-    const resolved = path.resolve(this.traceDir, sanitized);
-    const resolvedDir = path.resolve(this.traceDir);
+  private issueTracePaths(issueId: string): { dirPath: string; filePath: string } {
+    return TraceEmitter.resolveIssueTracePaths(this.traceDir, issueId);
+  }
+
+  private static issueDirPath(traceDir: string, issueId: string): string {
+    const storageKey = encodeURIComponent(issueId);
+    const resolved = path.resolve(traceDir, storageKey);
+    const resolvedDir = path.resolve(traceDir);
     if (!resolved.startsWith(resolvedDir + path.sep)) {
-      throw new Error(`Invalid issueIdentifier: path traversal detected`);
+      throw new Error(`Invalid issueId: path traversal detected`);
     }
     return resolved;
   }
 
-  static tracePathForIssue(traceDir: string, issueIdentifier: string): string {
-    const sanitized = issueIdentifier.replace(/[^a-zA-Z0-9_-]/g, "_");
-    const resolved = path.resolve(traceDir, sanitized, "trace.jsonl");
-    const resolvedDir = path.resolve(traceDir);
-    if (!resolved.startsWith(resolvedDir + path.sep)) {
-      throw new Error(`Invalid issueIdentifier: path traversal detected`);
-    }
-    return resolved;
+  private static resolveIssueTracePaths(
+    traceDir: string,
+    issueId: string,
+  ): { dirPath: string; filePath: string } {
+    const dirPath = TraceEmitter.issueDirPath(traceDir, issueId);
+    return { dirPath, filePath: path.join(dirPath, "trace.jsonl") };
+  }
+
+  static tracePathForIssue(traceDir: string, issueId: string): string {
+    return TraceEmitter.resolveIssueTracePaths(traceDir, issueId).filePath;
   }
 }

@@ -5,9 +5,9 @@
  *
  * Directory layout:
  *   traceDir/
- *     CAN-123/
+ *     <issue storage key>/
  *       trace.jsonl
- *     CAN-456/
+ *     <issue storage key>/
  *       trace.jsonl
  */
 

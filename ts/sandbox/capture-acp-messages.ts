@@ -120,7 +120,7 @@ async function captureSession(kind: "claude" | "codex"): Promise<void> {
   } finally {
     await session.stop();
     await traceEmitter.drain();
-    fs.copyFileSync(TraceEmitter.tracePathForIssue(traceDir, issueIdentifier), outFile);
+    fs.copyFileSync(TraceEmitter.tracePathForIssue(traceDir, issueId), outFile);
     fs.rmSync(traceDir, { recursive: true, force: true });
     console.log(`[${kind}] Wrote ${updates.length} updates to ${outFile}`);
   }
