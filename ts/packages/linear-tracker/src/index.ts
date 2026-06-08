@@ -418,10 +418,16 @@ export class LinearClient {
   }
 
   async resolveProjectSlugs(): Promise<string[]> {
-    if (!this.resolvedProjectSlugs) {
-      this.resolvedProjectSlugs = this.doResolveProjectSlugs();
+    if (this.resolvedProjectSlugs) return this.resolvedProjectSlugs;
+
+    const resolution = this.doResolveProjectSlugs();
+    this.resolvedProjectSlugs = resolution;
+    try {
+      return await resolution;
+    } catch (error: unknown) {
+      if (this.resolvedProjectSlugs === resolution) this.resolvedProjectSlugs = undefined;
+      throw error;
     }
-    return this.resolvedProjectSlugs;
   }
 
   private async doResolveProjectSlugs(): Promise<string[]> {
@@ -470,10 +476,16 @@ export class LinearClient {
   }
 
   private async assigneeFilterValue(): Promise<string | undefined> {
-    if (!this.resolvedAssignee) {
-      this.resolvedAssignee = this.resolveAssigneeFilterValue();
+    if (this.resolvedAssignee) return this.resolvedAssignee;
+
+    const resolution = this.resolveAssigneeFilterValue();
+    this.resolvedAssignee = resolution;
+    try {
+      return await resolution;
+    } catch (error: unknown) {
+      if (this.resolvedAssignee === resolution) this.resolvedAssignee = undefined;
+      throw error;
     }
-    return this.resolvedAssignee;
   }
 
   private async resolveAssigneeFilterValue(): Promise<string | undefined> {

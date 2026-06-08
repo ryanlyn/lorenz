@@ -242,6 +242,53 @@ test("Linear client caches resolved project slugs across calls", async () => {
   assert.equal(labelQueries.length, 1);
 });
 
+test("Linear client retries project label resolution after transient failure", async () => {
+  const calls: FetchCall[] = [];
+  const client = new LinearClient(
+    parseConfig(
+      {
+        tracker: {
+          api_key: "linear-token",
+          project_labels: ["team:backend"],
+          active_states: ["Todo"],
+        },
+      },
+      {},
+    ),
+    fetchSequence(
+      jsonResponse({
+        errors: [{ message: "temporary label lookup failure" }],
+      }),
+      jsonResponse({
+        data: {
+          projects: {
+            nodes: [{ slugId: "proj-a" }],
+            pageInfo: { hasNextPage: false, endCursor: null },
+          },
+        },
+      }),
+      jsonResponse({
+        data: {
+          issues: {
+            nodes: [linearIssue("id-1", "PA-1")],
+            pageInfo: { hasNextPage: false, endCursor: null },
+          },
+        },
+      }),
+      calls,
+    ),
+  );
+
+  await assert.rejects(() => client.fetchCandidateIssues(), /temporary label lookup failure/);
+
+  const issues = await client.fetchCandidateIssues();
+
+  assert.equal(issues.length, 1);
+  const labelQueries = calls.filter((c) => String(c.body.query).includes("ProjectsByLabels"));
+  assert.equal(labelQueries.length, 2);
+  assert.deepEqual(calls[2]?.body.variables?.projectSlugs, ["proj-a"]);
+});
+
 test("Linear client throws when no project config is provided", async () => {
   const client = new LinearClient(
     parseConfig(
