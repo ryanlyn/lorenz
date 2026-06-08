@@ -83,6 +83,45 @@ test("config resolves op:// references from env var fallback", async () => {
   assert.equal(settings.tracker.apiKey, "env-secret");
 });
 
+test("non-Linear tracker configs ignore Linear secret env fallbacks", () => {
+  for (const kind of ["local", "memory"] as const) {
+    const settings = parseConfig(
+      { tracker: { kind } },
+      {
+        LINEAR_API_KEY: "op://vault/item/key",
+        LINEAR_ASSIGNEE: "op://vault/item/assignee",
+        PATH: "/nonexistent",
+      },
+    );
+    assert.equal(settings.tracker.kind, kind);
+    assert.equal(settings.tracker.apiKey, undefined);
+    assert.equal(settings.tracker.assignee, undefined);
+  }
+});
+
+test("non-Linear tracker configs still resolve explicitly configured secrets", async () => {
+  const root = await tempDir("symphony-op-mock");
+  const opScript = path.join(root, "op");
+  await fs.writeFile(
+    opScript,
+    '#!/bin/sh\nif [ "$1" = "--version" ]; then echo "2.0.0"; else echo "resolved-secret"; fi\n',
+  );
+  await fs.chmod(opScript, 0o755);
+
+  const settings = parseConfig(
+    {
+      tracker: {
+        kind: "local",
+        api_key: "op://vault/item/key",
+        assignee: "op://vault/item/assignee",
+      },
+    },
+    { PATH: `${root}:${process.env.PATH}` },
+  );
+  assert.equal(settings.tracker.apiKey, "resolved-secret");
+  assert.equal(settings.tracker.assignee, "resolved-secret");
+});
+
 test("config throws when op:// reference used but op CLI not installed", () => {
   assert.throws(
     () => parseConfig({ tracker: { api_key: "op://vault/item/field" } }, { PATH: "/nonexistent" }),
