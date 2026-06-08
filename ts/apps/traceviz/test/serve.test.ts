@@ -1,6 +1,5 @@
 import type * as NodeFs from "node:fs";
 import { fileURLToPath } from "node:url";
-import type * as NodeFs from "node:fs";
 
 import { describe, expect, it, vi } from "vitest";
 
