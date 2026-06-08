@@ -16,8 +16,8 @@ function applyErrorExpectation(error: unknown, expected?: ErrorExpectation): voi
 }
 
 export const assert = {
-  equal(actual: unknown, expected: unknown): void {
-    expect(actual).toBe(expected);
+  equal(actual: unknown, expected: unknown, message?: string): void {
+    expect(actual, message).toBe(expected);
   },
   notEqual(actual: unknown, expected: unknown): void {
     expect(actual).not.toBe(expected);
