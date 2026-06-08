@@ -250,6 +250,53 @@ test("runAgentAttempt times out a hung workspace creation stage", async () => {
   );
 });
 
+test("runAgentAttempt cancels workspace creation when setup timeout fires", async () => {
+  vi.useFakeTimers();
+  const issue = fakeIssue();
+  const settings = fakeSettingsWithTimeouts({ setupTimeoutMs: 50 });
+  let markerWritten = false;
+  let signalSeen = false;
+
+  const promise = runAgentAttempt({
+    issue,
+    workflow: { path: "/workflow.md", config: {}, promptTemplate: "Fix it", settings },
+    settings,
+    adapters: fakeAdapters({
+      createWorkspaceForIssue: async (_settings, _issue, options) => {
+        const signal = (options as typeof options & { abortSignal?: AbortSignal }).abortSignal;
+        signalSeen = signal instanceof AbortSignal;
+        return new Promise<string>((resolve, reject) => {
+          const markerTimer = setTimeout(() => {
+            markerWritten = true;
+            resolve("/tmp/workspace/TEST-1");
+          }, 100);
+          signal?.addEventListener(
+            "abort",
+            () => {
+              clearTimeout(markerTimer);
+              reject(new Error("workspace setup canceled"));
+            },
+            { once: true },
+          );
+        });
+      },
+    }),
+  });
+  const observed = observePromise(promise);
+
+  await vi.advanceTimersByTimeAsync(50);
+
+  assertRejected(
+    await observedPromiseState(observed),
+    /agent_runner_timeout.*workspace\.create_for_issue.*50/,
+  );
+
+  await vi.advanceTimersByTimeAsync(100);
+
+  assert.equal(signalSeen, true);
+  assert.equal(markerWritten, false);
+});
+
 test("runAgentAttempt reports setup adapter crashes with the setup stage", async () => {
   const issue = fakeIssue();
   const settings = fakeSettings();
@@ -294,6 +341,62 @@ test("runAgentAttempt times out a hung beforeRun setup stage", async () => {
     await observedPromiseState(observed),
     /agent_runner_timeout.*workspace\.run_before_run_hook.*1050/,
   );
+});
+
+test("runAgentAttempt cancels beforeRun hook when setup timeout fires", async () => {
+  vi.useFakeTimers();
+  const issue = fakeIssue();
+  const settings = fakeSettingsWithTimeouts({
+    hookTimeoutMs: 50,
+    hooks: { beforeRun: "setup" },
+  });
+  let markerWritten = false;
+  let signalSeen = false;
+
+  const promise = runAgentAttempt({
+    issue,
+    workflow: { path: "/workflow.md", config: {}, promptTemplate: "Fix it", settings },
+    settings,
+    adapters: fakeAdapters({
+      runHook: async (
+        _command,
+        _workspace,
+        _hooks,
+        _workerHost,
+        options?: { abortSignal?: AbortSignal },
+      ) => {
+        const signal = options?.abortSignal;
+        signalSeen = signal instanceof AbortSignal;
+        return new Promise<void>((resolve, reject) => {
+          const markerTimer = setTimeout(() => {
+            markerWritten = true;
+            resolve();
+          }, 1_100);
+          signal?.addEventListener(
+            "abort",
+            () => {
+              clearTimeout(markerTimer);
+              reject(new Error("hook setup canceled"));
+            },
+            { once: true },
+          );
+        });
+      },
+    }),
+  });
+  const observed = observePromise(promise);
+
+  await vi.advanceTimersByTimeAsync(1_050);
+
+  assertRejected(
+    await observedPromiseState(observed),
+    /agent_runner_timeout.*workspace\.run_before_run_hook.*1050/,
+  );
+
+  await vi.advanceTimersByTimeAsync(1_100);
+
+  assert.equal(signalSeen, true);
+  assert.equal(markerWritten, false);
 });
 
 test("runAgentAttempt times out afterRun and emits a cleanup warning", async () => {
