@@ -94,6 +94,44 @@ export interface PollOptions {
   waitForRuns?: boolean | undefined;
 }
 
+interface PollIntent {
+  dryRun: boolean;
+  waitForRuns: boolean;
+}
+
+function pollIntent(options: PollOptions = {}): PollIntent {
+  return {
+    dryRun: options.dryRun === true,
+    waitForRuns: options.waitForRuns === true,
+  };
+}
+
+function pollOptionsFromIntent(intent: PollIntent): PollOptions {
+  const options: PollOptions = {};
+  if (intent.dryRun) options.dryRun = true;
+  if (intent.waitForRuns) options.waitForRuns = true;
+  return options;
+}
+
+function pollOptionsCover(active: PollOptions, requested: PollOptions): boolean {
+  const activeIntent = pollIntent(active);
+  const requestedIntent = pollIntent(requested);
+  return (
+    (!activeIntent.dryRun || requestedIntent.dryRun) &&
+    (activeIntent.waitForRuns || !requestedIntent.waitForRuns)
+  );
+}
+
+function mergePollOptions(existing: PollOptions | null, requested: PollOptions): PollOptions {
+  if (!existing) return pollOptionsFromIntent(pollIntent(requested));
+  const existingIntent = pollIntent(existing);
+  const requestedIntent = pollIntent(requested);
+  return pollOptionsFromIntent({
+    dryRun: existingIntent.dryRun && requestedIntent.dryRun,
+    waitForRuns: existingIntent.waitForRuns || requestedIntent.waitForRuns,
+  });
+}
+
 class ActiveRunHandle {
   readonly controller = new AbortController();
 
@@ -146,6 +184,8 @@ export class SymphonyRuntime {
   private startupCleanupDone = false;
   private nextRunNumber = 1;
   private pollInProgress: Promise<void> | null = null;
+  private activePollOptions: PollOptions | null = null;
+  private pendingPollOptions: PollOptions | null = null;
 
   constructor(private readonly input: SymphonyRuntimeOptions) {
     this.client =
@@ -218,6 +258,7 @@ export class SymphonyRuntime {
   stop(): void {
     this.stopped = true;
     this.appStatus = "stopping";
+    this.pendingPollOptions = null;
     // finishExternally (abort + release) mirrors the other abort sites and clears
     // isActive, so the resulting agent_run_aborted rejection is treated as a clean
     // shutdown in runClaim rather than recorded as a failed run.
@@ -228,15 +269,44 @@ export class SymphonyRuntime {
 
   async pollOnce(options: PollOptions = {}): Promise<void> {
     if (this.pollInProgress) {
+      this.queuePendingPoll(options);
       return this.pollInProgress;
     }
-    const poll = this.pollOnceUnlocked(options);
+    const poll = this.pollUntilQueueDrained(options);
     this.pollInProgress = poll;
     try {
       await poll;
     } finally {
-      if (this.pollInProgress === poll) this.pollInProgress = null;
+      if (this.pollInProgress === poll) {
+        this.pollInProgress = null;
+        this.activePollOptions = null;
+        this.pendingPollOptions = null;
+      }
     }
+  }
+
+  private async pollUntilQueueDrained(options: PollOptions): Promise<void> {
+    let nextOptions = options;
+    while (true) {
+      this.activePollOptions = nextOptions;
+      await this.pollOnceUnlocked(nextOptions);
+      this.activePollOptions = null;
+      const pending = this.pendingPollOptions;
+      this.pendingPollOptions = null;
+      if (!pending) return;
+      nextOptions = pending;
+    }
+  }
+
+  private queuePendingPoll(options: PollOptions = {}, force = false): void {
+    if (
+      !force &&
+      ((this.activePollOptions && pollOptionsCover(this.activePollOptions, options)) ||
+        (this.pendingPollOptions && pollOptionsCover(this.pendingPollOptions, options)))
+    ) {
+      return;
+    }
+    this.pendingPollOptions = mergePollOptions(this.pendingPollOptions, options);
   }
 
   private async pollOnceUnlocked(options: PollOptions = {}): Promise<void> {
@@ -643,8 +713,11 @@ export class SymphonyRuntime {
       ) {
         return;
       }
-      if (this.pollInProgress) return;
       this.addEvent("retry_timer_due", `${scheduled.issueIdentifier} attempt=${scheduled.attempt}`);
+      if (this.pollInProgress) {
+        this.queuePendingPoll({}, true);
+        return;
+      }
       this.pollOnce().catch((error) => {
         this.lastError = errorMessage(error);
         this.addEvent("retry_timer_error", this.lastError);
