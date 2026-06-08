@@ -23,7 +23,10 @@ const issueFields = `
   branchName
   url
   assignee { id }
-  labels { nodes { name } }
+  labels(first: 50) {
+    nodes { name }
+    pageInfo { hasNextPage endCursor }
+  }
   inverseRelations(first: 50) {
     nodes {
       type
@@ -33,6 +36,7 @@ const issueFields = `
         state { name type }
       }
     }
+    pageInfo { hasNextPage endCursor }
   }
   createdAt
   updatedAt
@@ -62,6 +66,11 @@ export interface LinearProject {
   name: string;
   slugId: string;
   teams: LinearTeam[];
+}
+
+interface LinearPageInfo {
+  hasNextPage: boolean;
+  endCursor?: string | null | undefined;
 }
 
 interface LinearRetryOptions {
@@ -249,8 +258,12 @@ export class LinearClient {
                 id
                 key
                 name
-                states(first: 50) { nodes { id name type } }
+                states(first: 50) {
+                  nodes { id name type }
+                  pageInfo { hasNextPage endCursor }
+                }
               }
+              pageInfo { hasNextPage endCursor }
             }
           }
         }
@@ -423,17 +436,29 @@ export class LinearClient {
   }
 
   private async resolveProjectSlugsByLabels(labels: string[]): Promise<string[]> {
-    const data = await this.graphql<{
-      projects: { nodes: Array<{ slugId: string }> };
-    }>(
-      `query SymphonyTsProjectsByLabels($labels: [String!]!) {
-        projects(filter: {labels: {name: {in: $labels}}}, first: 100) {
-          nodes { slugId }
-        }
-      }`,
-      { labels },
-    );
-    const slugs = data.projects.nodes.map((p) => p.slugId);
+    let after: string | null = null;
+    const slugs: string[] = [];
+    for (;;) {
+      const data: {
+        projects: {
+          nodes: Array<{ slugId: string }>;
+          pageInfo?: LinearPageInfo | undefined;
+        };
+      } = await this.graphql(
+        `query SymphonyTsProjectsByLabels($labels: [String!]!, $first: Int!, $after: String) {
+          projects(filter: {labels: {name: {in: $labels}}}, first: $first, after: $after) {
+            nodes { slugId }
+            pageInfo { hasNextPage endCursor }
+          }
+        }`,
+        { labels, first: 100, after },
+      );
+      slugs.push(...data.projects.nodes.map((p) => p.slugId));
+      if (!data.projects.pageInfo?.hasNextPage) break;
+      if (!data.projects.pageInfo.endCursor)
+        throw new Error("linear_missing_end_cursor: projectsByLabels");
+      after = data.projects.pageInfo.endCursor;
+    }
     if (slugs.length === 0)
       throw new Error(`no linear projects found for labels: ${labels.join(", ")}`);
     return slugs;
@@ -505,8 +530,8 @@ function linearIssuePayload(issue: Record<string, unknown>): Record<string, unkn
     state_type: isRecord(issue.state) ? issue.state.type : null,
     branch_name: issue.branchName,
     assignee_id: isRecord(issue.assignee) ? issue.assignee.id : null,
-    labels: isConnection(issue.labels) ? issue.labels.nodes : [],
-    relations: isConnection(issue.inverseRelations) ? issue.inverseRelations.nodes : [],
+    labels: nodesFromConnection(issue.labels, "issue.labels"),
+    relations: nodesFromConnection(issue.inverseRelations, "issue.inverseRelations"),
     created_at: issue.createdAt,
     updated_at: issue.updatedAt,
   };
@@ -527,7 +552,8 @@ function normalizeLinearIssue(issue: unknown, assignee: string | undefined): Iss
   if (!isRecord(issue)) return null;
   try {
     return normalizeIssue(linearIssuePayload(issue), assignee);
-  } catch {
+  } catch (error) {
+    if (isLinearConnectionTruncatedError(error)) throw error;
     return null;
   }
 }
@@ -537,14 +563,14 @@ function normalizeStateNames(stateNames: unknown[]): string[] {
 }
 
 function parseProject(project: Record<string, unknown>): LinearProject {
-  const teams = isConnection(project.teams) ? project.teams.nodes : [];
+  const teams = nodesFromConnection(project.teams, "project.teams");
   return {
     id: stringField(project, "id"),
     name: stringField(project, "name"),
     slugId: stringField(project, "slugId"),
     teams: teams.map((team) => {
       const teamRecord = asRecord(team);
-      const states = isConnection(teamRecord.states) ? teamRecord.states.nodes : [];
+      const states = nodesFromConnection(teamRecord.states, "project.team.states");
       return {
         id: stringField(teamRecord, "id"),
         key: stringField(teamRecord, "key"),
@@ -598,7 +624,26 @@ function reclassifyError(error: unknown): Error {
   return new Error(String(error));
 }
 
-function isConnection(value: unknown): value is { nodes: unknown[] } {
+class LinearConnectionTruncatedError extends Error {
+  constructor(connectionName: string) {
+    super(`linear_truncated_connection: ${connectionName}`);
+    this.name = "LinearConnectionTruncatedError";
+  }
+}
+
+function isLinearConnectionTruncatedError(error: unknown): error is LinearConnectionTruncatedError {
+  return error instanceof LinearConnectionTruncatedError;
+}
+
+function nodesFromConnection(value: unknown, connectionName: string): unknown[] {
+  if (!isConnection(value)) return [];
+  if (isRecord(value.pageInfo) && value.pageInfo.hasNextPage === true) {
+    throw new LinearConnectionTruncatedError(connectionName);
+  }
+  return value.nodes;
+}
+
+function isConnection(value: unknown): value is { nodes: unknown[]; pageInfo?: unknown } {
   return isRecord(value) && Array.isArray(value.nodes);
 }
 

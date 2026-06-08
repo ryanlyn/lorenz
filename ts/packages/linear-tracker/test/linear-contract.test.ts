@@ -352,6 +352,101 @@ test("Linear candidate polling rejects a continued page without a cursor", async
   await assert.rejects(() => client.fetchCandidateIssues(), /linear_missing_end_cursor/);
 });
 
+test("Linear candidate polling rejects truncated inverse relation pages", async () => {
+  const client = new LinearClient(
+    settings(),
+    fetchSequence(
+      jsonResponse({
+        data: {
+          issues: {
+            nodes: [
+              {
+                ...linearIssue("id-1", "MT-1"),
+                inverseRelations: {
+                  nodes: [],
+                  pageInfo: { hasNextPage: true, endCursor: "relation-cursor-1" },
+                },
+              },
+            ],
+            pageInfo: { hasNextPage: false, endCursor: null },
+          },
+        },
+      }),
+    ),
+  );
+
+  await assert.rejects(
+    () => client.fetchCandidateIssues(),
+    /linear_truncated_connection: issue.inverseRelations/,
+  );
+});
+
+test("Linear project lookup rejects truncated teams and states", async () => {
+  await assert.rejects(
+    () =>
+      new LinearClient(
+        settings(),
+        fetchSequence(
+          jsonResponse({
+            data: {
+              projects: {
+                nodes: [
+                  {
+                    id: "proj-1",
+                    name: "My Project",
+                    slugId: "my-proj",
+                    teams: {
+                      nodes: [],
+                      pageInfo: { hasNextPage: true, endCursor: "team-cursor-1" },
+                    },
+                  },
+                ],
+              },
+            },
+          }),
+        ),
+      ).projectBySlug("my-proj"),
+    /linear_truncated_connection: project.teams/,
+  );
+
+  await assert.rejects(
+    () =>
+      new LinearClient(
+        settings(),
+        fetchSequence(
+          jsonResponse({
+            data: {
+              projects: {
+                nodes: [
+                  {
+                    id: "proj-1",
+                    name: "My Project",
+                    slugId: "my-proj",
+                    teams: {
+                      nodes: [
+                        {
+                          id: "team-1",
+                          key: "MP",
+                          name: "My Team",
+                          states: {
+                            nodes: [],
+                            pageInfo: { hasNextPage: true, endCursor: "state-cursor-1" },
+                          },
+                        },
+                      ],
+                      pageInfo: { hasNextPage: false, endCursor: null },
+                    },
+                  },
+                ],
+              },
+            },
+          }),
+        ),
+      ).projectBySlug("my-proj"),
+    /linear_truncated_connection: project.team.states/,
+  );
+});
+
 test("Linear fetchIssuesByIds dedupes, batches, and restores requested order", async () => {
   const uniqueIds = Array.from({ length: 51 }, (_, index) => `id-${index}`);
   const requestedIds = [uniqueIds[0] ?? "", ...uniqueIds];

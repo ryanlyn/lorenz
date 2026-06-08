@@ -91,6 +91,7 @@ test("Linear client resolves project slugs from labels via API", async () => {
         data: {
           projects: {
             nodes: [{ slugId: "proj-a" }, { slugId: "proj-b" }],
+            pageInfo: { hasNextPage: false, endCursor: null },
           },
         },
       }),
@@ -114,6 +115,57 @@ test("Linear client resolves project slugs from labels via API", async () => {
   assert.deepEqual(calls[1]?.body.variables?.projectSlugs, ["proj-a", "proj-b"]);
 });
 
+test("Linear client resolves project slugs from labels across every page", async () => {
+  const calls: FetchCall[] = [];
+  const client = new LinearClient(
+    parseConfig(
+      {
+        tracker: {
+          api_key: "linear-token",
+          project_labels: ["team:backend"],
+          active_states: ["Todo"],
+        },
+      },
+      {},
+    ),
+    fetchSequence(
+      jsonResponse({
+        data: {
+          projects: {
+            nodes: [{ slugId: "proj-a" }],
+            pageInfo: { hasNextPage: true, endCursor: "project-cursor-1" },
+          },
+        },
+      }),
+      jsonResponse({
+        data: {
+          projects: {
+            nodes: [{ slugId: "proj-b" }],
+            pageInfo: { hasNextPage: false, endCursor: null },
+          },
+        },
+      }),
+      jsonResponse({
+        data: {
+          issues: {
+            nodes: [linearIssue("id-1", "PA-1")],
+            pageInfo: { hasNextPage: false, endCursor: null },
+          },
+        },
+      }),
+      calls,
+    ),
+  );
+
+  const issues = await client.fetchCandidateIssues();
+
+  assert.equal(issues.length, 1);
+  assert.match(String(calls[0]?.body.query), /ProjectsByLabels/);
+  assert.equal(calls[0]?.body.variables?.after, null);
+  assert.equal(calls[1]?.body.variables?.after, "project-cursor-1");
+  assert.deepEqual(calls[2]?.body.variables?.projectSlugs, ["proj-a", "proj-b"]);
+});
+
 test("Linear client throws when label resolution returns no projects", async () => {
   const client = new LinearClient(
     parseConfig(
@@ -129,7 +181,7 @@ test("Linear client throws when label resolution returns no projects", async () 
     fetchSequence(
       jsonResponse({
         data: {
-          projects: { nodes: [] },
+          projects: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
         },
       }),
     ),
@@ -156,7 +208,12 @@ test("Linear client caches resolved project slugs across calls", async () => {
     ),
     fetchSequence(
       jsonResponse({
-        data: { projects: { nodes: [{ slugId: "proj-a" }] } },
+        data: {
+          projects: {
+            nodes: [{ slugId: "proj-a" }],
+            pageInfo: { hasNextPage: false, endCursor: null },
+          },
+        },
       }),
       jsonResponse({
         data: {
