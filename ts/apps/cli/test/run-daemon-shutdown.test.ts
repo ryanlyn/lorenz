@@ -104,6 +104,13 @@ function addedProcessListeners(
   return process.listeners(event).filter((listener) => !known.has(listener));
 }
 
+function assertNoAddedProcessListeners(
+  event: ProcessEvent,
+  baseline: ReadonlyArray<ProcessListener>,
+): void {
+  assert.deepEqual(addedProcessListeners(event, baseline), []);
+}
+
 async function workflowFixture() {
   const root = await tempDir("symphony-cli-shutdown");
   const settings = parseConfig(
@@ -208,11 +215,8 @@ test("runDaemon stops gracefully on the first SIGINT and returns success", async
     stderrWriteSpy.mock.calls.some((call) => String(call[0]).includes("ELIFECYCLE")),
     false,
   );
-
-  process.off("SIGINT", sigintHandler as ProcessListener);
-  for (const handler of sigtermHandlers) {
-    process.off("SIGTERM", handler as ProcessListener);
-  }
+  assertNoAddedProcessListeners("SIGINT", sigintBaseline);
+  assertNoAddedProcessListeners("SIGTERM", sigtermBaseline);
 });
 
 test("runDaemon still reports real startup failures", async () => {
@@ -237,11 +241,6 @@ test("runDaemon still reports real startup failures", async () => {
     stderrWriteSpy.mock.calls.some((call) => String(call[0]).includes("listen failed")),
     true,
   );
-
-  for (const handler of addedProcessListeners("SIGINT", sigintBaseline)) {
-    process.off("SIGINT", handler as ProcessListener);
-  }
-  for (const handler of addedProcessListeners("SIGTERM", sigtermBaseline)) {
-    process.off("SIGTERM", handler as ProcessListener);
-  }
+  assertNoAddedProcessListeners("SIGINT", sigintBaseline);
+  assertNoAddedProcessListeners("SIGTERM", sigtermBaseline);
 });
