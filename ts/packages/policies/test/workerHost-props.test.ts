@@ -101,10 +101,14 @@ test("INVARIANT: When at least one host is below the cap, the system SHALL alway
     fc.property(
       fc.integer({ min: 1, max: 20 }).chain((cap) =>
         fc
-          .array(fc.tuple(fc.string({ minLength: 1, maxLength: 10 }), fc.nat({ max: cap + 5 })), {
-            minLength: 1,
-            maxLength: 8,
-          })
+          .uniqueArray(
+            fc.tuple(fc.string({ minLength: 1, maxLength: 10 }), fc.nat({ max: cap + 5 })),
+            {
+              minLength: 1,
+              maxLength: 8,
+              selector: ([host]) => host,
+            },
+          )
           .map((pairs) => ({
             hosts: pairs.map((p) => p[0]),
             counts: pairs.map((p) => p[1]),
