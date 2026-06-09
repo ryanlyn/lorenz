@@ -27,6 +27,6 @@ export interface IssueRecord {
 
 export type WsMessage =
   | { type: "init"; tickets: TicketInfo[] }
-  | { type: "update"; issueId: string; events: DisplayEvent[]; tickets: TicketInfo[] }
+  | { type: "update"; issueId: string; tickets: TicketInfo[] }
   | { type: "events"; issueId: string; events: DisplayEvent[] }
   | { type: "ping" };

@@ -67,16 +67,14 @@ export function useTraceData() {
     } else if (msg.type === "update") {
       setTickets(msg.tickets);
       if (msg.issueId === selectedTicketId) {
-        setEvents(msg.events);
-        setStats(computeStatsFromEvents(msg.events));
-        setTraceExists(true);
+        void loadTicketData(msg.issueId);
       }
     } else if (msg.type === "events" && msg.issueId === selectedTicketId) {
       setEvents(msg.events);
       setStats(computeStatsFromEvents(msg.events));
       setTraceExists(true);
     }
-  }, [lastMessage, selectedTicketId]);
+  }, [lastMessage, loadTicketData, selectedTicketId]);
 
   return {
     tickets,

@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 import { TraceWatcher } from "@symphony/traceviz-server";
 
 describe("TraceWatcher broadcast callback", () => {
-  it("invokes callback with issueId and full events array when lines change", async () => {
+  it("invokes callback with issueId and compact ticket info when lines change", async () => {
     const { mkdirSync, writeFileSync, rmSync } = await import("node:fs");
     const { join } = await import("node:path");
     const { tmpdir } = await import("node:os");
@@ -39,12 +39,15 @@ describe("TraceWatcher broadcast callback", () => {
     watcher.stop();
 
     expect(callback).toHaveBeenCalledTimes(1);
-    const [issueId, events] = callback.mock.calls[0]!;
+    const [issueId, ticket] = callback.mock.calls[0]!;
     expect(issueId).toBe("ws-id-1");
-    expect(Array.isArray(events)).toBe(true);
-    expect(events.length).toBeGreaterThan(0);
-    expect(events.some((e: { kind: string }) => e.kind === "turn_started")).toBe(true);
-    expect(events.some((e: { kind: string }) => e.kind === "message")).toBe(true);
+    expect(Array.isArray(ticket)).toBe(false);
+    expect(ticket).toMatchObject({
+      issueId: "ws-id-1",
+      identifier: "WS-1",
+      status: "running",
+      turnCount: 1,
+    });
 
     rmSync(dir, { recursive: true, force: true });
   });

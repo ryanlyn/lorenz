@@ -63,11 +63,10 @@ export function createWsHandler(app: Hono, watcher: TraceWatcher): WsSetupResult
   );
 
   // Wire up the watcher to broadcast updates
-  watcher.start((issueId, events) => {
+  watcher.start((issueId) => {
     const message = JSON.stringify({
       type: "update",
       issueId,
-      events,
       tickets: watcher.getTickets(),
     });
     for (const ws of connections) {
