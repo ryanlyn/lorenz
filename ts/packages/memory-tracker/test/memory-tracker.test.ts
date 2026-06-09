@@ -135,6 +135,21 @@ test("returned issues are copies, not references to internal state", async () =>
   assert.equal(refetched!.blockers.length, 1);
 });
 
+test("constructor snapshots blocker entries from caller-owned issues", async () => {
+  const original = makeIssue({
+    id: "1",
+    identifier: "MT-1",
+    blockers: [{ id: "b1", state: "Todo" }],
+  });
+
+  const client = new MemoryTrackerClient([original]);
+
+  original.blockers[0]!.state = "Done";
+
+  const [fetched] = await client.fetchIssuesByIds(["1"]);
+  assert.equal(fetched!.blockers[0]!.state, "Todo");
+});
+
 // --- empty results ---
 
 test("returns empty array when no issues match filter", async () => {

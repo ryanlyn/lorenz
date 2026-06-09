@@ -306,7 +306,7 @@ function parseAgents(
       { ...recordRaw, executor: "acp" },
       `agents.${normalized}`,
     );
-    const defaults = baseAgents[normalized] ?? claudeDefaults;
+    const defaults = baseAgents[normalized] ?? customAgentDefaultsForBridge(parsed, claudeDefaults);
     agents[normalized] = parseAgent(normalized, parsed, defaults);
   }
   return agents;
@@ -352,6 +352,19 @@ function withAgentTimeoutDefaults(
   );
 }
 
+function customAgentDefaultsForBridge(
+  raw: AcpAgentRecordRaw,
+  claudeDefaults: AgentConfig,
+): AgentConfig {
+  const bridgeCommand = raw.bridgeCommand ?? raw.command ?? claudeDefaults.bridgeCommand;
+  return {
+    ...claudeDefaults,
+    providerConfig: isClaudeCompatibleBridgeCommand(bridgeCommand)
+      ? claudeDefaults.providerConfig
+      : undefined,
+  };
+}
+
 function parseAgentRecordSchema(raw: Record<string, unknown>, label: string) {
   const result = acpAgentRecordSchema.safeParse(raw);
   if (result.success) return result.data;
@@ -375,6 +388,10 @@ function inferUsageAccounting(kind: AgentKind, bridgeCommand: string): AgentUsag
   if (kind === "codex" || kind === "claude") return "per-turn";
   if (/(^|\s|\/)(codex-acp|claude-agent-acp)(\s|$)/.test(bridgeCommand)) return "per-turn";
   return "cumulative";
+}
+
+function isClaudeCompatibleBridgeCommand(bridgeCommand: string): boolean {
+  return /(^|\s|\/)claude-agent-acp(\s|$)/.test(bridgeCommand);
 }
 
 function applyKnownAgentRecords(settings: Settings): void {

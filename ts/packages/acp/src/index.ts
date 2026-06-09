@@ -52,7 +52,7 @@ interface Session extends AgentSession {
   loadingReplay: boolean;
   replayedUpdateCount: number;
   usageTotals: UsageTotals;
-  pendingTurn?: { reject: (error: Error) => void } | undefined;
+  pendingTurn?: { reject: (error: Error) => void; allowSessionIdRotation: boolean } | undefined;
 }
 
 export class Executor implements AgentExecutor {
@@ -193,7 +193,7 @@ export class Executor implements AgentExecutor {
       };
 
       resetStallTimer();
-      session.pendingTurn = { reject: finishReject };
+      session.pendingTurn = { reject: finishReject, allowSessionIdRotation: true };
       session.onUpdate = (update) => {
         resetStallTimer();
         updates.push(update);
@@ -284,6 +284,21 @@ export class Executor implements AgentExecutor {
 }
 
 function handleSessionUpdate(session: Session, notification: SessionNotification): void {
+  const canAcceptRotation =
+    session.pendingTurn?.allowSessionIdRotation === true && Boolean(session.sessionId);
+  if (session.sessionId && notification.sessionId !== session.sessionId && !canAcceptRotation) {
+    session.onUpdate?.({
+      type: "malformed",
+      sessionUpdate: acpProtocolUpdate(session, "malformed", notification),
+      sessionId: session.sessionId,
+      resumeId: session.resumeId,
+      executorPid: session.executorPid,
+      message: `acp_session_update_mismatch: active session ${session.sessionId}, notification session ${notification.sessionId}`,
+      timestamp: new Date(),
+    });
+    return;
+  }
+  if (session.pendingTurn) session.pendingTurn.allowSessionIdRotation = false;
   session.sessionId = notification.sessionId;
   session.resumeId = notification.sessionId;
   if (session.loadingReplay) {

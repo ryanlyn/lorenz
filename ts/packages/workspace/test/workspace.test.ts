@@ -166,6 +166,40 @@ test("createWorkspaceForIssue — runs afterCreate hook on new workspace", async
   assert.ok(stat.isFile());
 });
 
+test("createWorkspaceForIssue — refuses afterCreate when cwd is swapped to an out-of-root symlink", async () => {
+  const root = await tempDir("ws-create");
+  const canonicalRoot = await fs.realpath(root);
+  const outside = await tempDir("ws-create-outside");
+  const marker = path.join(outside, "hook-ran");
+  const workspace = path.join(canonicalRoot, safeIdentifier(sampleIssue.identifier));
+  const realRealpath = fs.realpath;
+  let swapped = false;
+  const realpathSpy = vi.spyOn(fs, "realpath").mockImplementation(async (filePath, options) => {
+    const resolved = await realRealpath(filePath, options);
+    if (!swapped && path.resolve(String(filePath)) === workspace) {
+      swapped = true;
+      await fs.rm(workspace, { recursive: true, force: true });
+      await fs.symlink(outside, workspace);
+    }
+    return resolved;
+  });
+
+  try {
+    const settings = makeSettings(root, {
+      afterCreate: `touch ${JSON.stringify(marker)}`,
+    });
+
+    await assert.rejects(
+      () => createWorkspaceForIssue(settings, sampleIssue),
+      /unsafe symlink in workspace path|workspace outside root/,
+    );
+    assert.equal(swapped, true);
+    assert.equal(await fileExists(marker), false);
+  } finally {
+    realpathSpy.mockRestore();
+  }
+});
+
 test("runHook — abort terminates subprocesses before they write later markers", async () => {
   const root = await tempDir("ws-hook-abort");
   const settings = makeSettings(root);

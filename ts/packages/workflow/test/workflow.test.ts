@@ -24,7 +24,13 @@ test("workflowFilePath returns default path when none specified", () => {
 test("workflowFilePath resolves relative path against project root", () => {
   const env = { SYMPHONY_WORKFLOW: "custom/workflow.md" };
   const result = workflowFilePath(env, "/projects/my-app");
-  assert.equal(result, "custom/workflow.md");
+  assert.equal(result, path.join("/projects/my-app", "custom/workflow.md"));
+});
+
+test("workflowFilePath keeps absolute path from environment", () => {
+  const absolute = path.join("/projects/my-app", "custom/workflow.md");
+  const result = workflowFilePath({ SYMPHONY_WORKFLOW: absolute }, "/other/project");
+  assert.equal(result, absolute);
 });
 
 // --- loadWorkflow ---
@@ -41,6 +47,29 @@ test("loadWorkflow reads and parses YAML workflow file", async () => {
   assert.equal(result.path, workflowFile);
   assert.deepEqual(result.config, { ensemble_size: 2 });
   assert.equal(result.promptTemplate, "Hello {{ issue.identifier }}");
+});
+
+test("loadWorkflow resolves relative env workflow path against project root", async () => {
+  const dir = await tempDir("symphony-workflow-env-cwd");
+  const outside = await tempDir("symphony-workflow-env-outside");
+  const workflowFile = path.join(dir, "custom", "workflow.md");
+  await fs.mkdir(path.dirname(workflowFile), { recursive: true });
+  await fs.writeFile(workflowFile, "Project root workflow");
+
+  const originalCwd = process.cwd();
+  try {
+    process.chdir(outside);
+    const result = await loadWorkflow(
+      undefined,
+      { SYMPHONY_WORKFLOW: "custom/workflow.md" },
+      { cwd: dir },
+    );
+
+    assert.equal(result.path, workflowFile);
+    assert.equal(result.promptTemplate, "Project root workflow");
+  } finally {
+    process.chdir(originalCwd);
+  }
 });
 
 test("loadWorkflow validates Liquid prompt templates with prompt context", async () => {

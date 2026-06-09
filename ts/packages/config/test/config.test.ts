@@ -374,12 +374,19 @@ test("custom ACP agents default to cumulative usage unless using a known per-tur
   const settings = parseConfig({
     agents: {
       pi: { bridge_command: "pi-acp" },
+      codex_alias: { bridge_command: "codex-acp" },
       claude_alias: { bridge_command: "claude-agent-acp" },
     },
   });
 
   assert.equal(settings.agents.pi.usageAccounting, "cumulative");
+  assert.equal(settings.agents.pi.providerConfig, undefined);
+  assert.equal(settings.agents.codex_alias.usageAccounting, "per-turn");
+  assert.equal(settings.agents.codex_alias.providerConfig, undefined);
   assert.equal(settings.agents.claude_alias.usageAccounting, "per-turn");
+  assert.deepEqual(settings.agents.claude_alias.providerConfig, {
+    permissions: { defaultMode: "dontAsk" },
+  });
 });
 
 test("agents map accepts shared timeout defaults with legacy per-agent overrides", () => {

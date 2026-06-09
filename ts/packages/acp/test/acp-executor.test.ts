@@ -103,6 +103,50 @@ test("ACP executor can pass through cumulative bridge usage without double count
   });
 });
 
+test("ACP executor ignores session updates for a different active session", async () => {
+  const root = await tempDir("symphony-ts-acp-session-mismatch");
+  const fake = await writeFakeBridge(root);
+  const trace = path.join(root, "trace.jsonl");
+  const settings = acpSettings(root, fake, trace, "wrong-session-update");
+  const updates: AgentUpdate[] = [];
+  const executor = new Executor("claude");
+  const session = await executor.startSession({
+    workspace: root,
+    settings,
+    issue: sampleIssue,
+    onUpdate: (update) => updates.push(update),
+  });
+  try {
+    const turnUpdates = await executor.runTurn(session, "hello", sampleIssue);
+    assert.ok(turnUpdates.some((update) => update.type === "turn_completed"));
+  } finally {
+    await session.stop();
+  }
+
+  assert.equal(session.sessionId, "acp-new");
+  assert.equal(session.resumeId, "acp-new");
+  assert.ok(
+    updates.some(
+      (update) => update.type === "session_notification" && update.message.sessionId === "acp-new",
+    ),
+  );
+  assert.equal(
+    updates.some(
+      (update) =>
+        update.type === "session_notification" && update.message.sessionId === "wrong-session",
+    ),
+    false,
+  );
+  const mismatch = updates.find(
+    (update) => update.type === "malformed" && String(update.message).includes("wrong-session"),
+  );
+  assert.equal(mismatch?.sessionId, "acp-new");
+  assert.equal(mismatch?.resumeId, "acp-new");
+  const traceEvents = await readTrace(trace);
+  const closeSession = traceEvents.find((event) => event.method === "closeSession");
+  assert.equal(closeSession?.params?.sessionId, "acp-new");
+});
+
 test("ACP executor prefers session/resume when the agent advertises resume support", async () => {
   const root = await tempDir("symphony-ts-acp-resume");
   const fake = await writeFakeBridge(root);
@@ -591,6 +635,33 @@ class FakeAgent {
     if (mode === "failed-turn") {
       return {
         stopReason: "refusal",
+        usage: {
+          inputTokens: 2,
+          cachedReadTokens: 4,
+          cachedWriteTokens: 1,
+          outputTokens: 3,
+          thoughtTokens: 9,
+          totalTokens: 10
+        }
+      };
+    }
+    if (mode === "wrong-session-update") {
+      await this.connection.sessionUpdate({
+        sessionId: params.sessionId,
+        update: {
+          sessionUpdate: "agent_message_chunk",
+          content: { type: "text", text: "valid session" }
+        }
+      });
+      await this.connection.sessionUpdate({
+        sessionId: "wrong-session",
+        update: {
+          sessionUpdate: "agent_message_chunk",
+          content: { type: "text", text: "wrong session" }
+        }
+      });
+      return {
+        stopReason: "end_turn",
         usage: {
           inputTokens: 2,
           cachedReadTokens: 4,
