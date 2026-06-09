@@ -1,6 +1,7 @@
 import type * as NodeFs from "node:fs";
 import { fileURLToPath } from "node:url";
 
+import type { TicketTraceResponse } from "@symphony/traceviz-server";
 import { describe, expect, it, vi } from "vitest";
 
 const serverMock = vi.hoisted(() => ({
@@ -73,7 +74,9 @@ describe("standalone traceviz routes", () => {
       new Request("http://localhost/api/v1/tickets/test-id/events"),
     );
     expect(eventsResponse.status).toBe(200);
-    const eventsBody = (await eventsResponse.json()) as { events: unknown[] };
+    const eventsBody = (await eventsResponse.json()) as TicketTraceResponse;
+    expect(eventsBody.issueId).toBe("test-id");
+    expect(eventsBody.identifier).toBe("TEST-1");
     expect(eventsBody.events.length).toBeGreaterThan(0);
 
     const statsResponse = await fetch(new Request("http://localhost/api/v1/tickets/test-id/stats"));
