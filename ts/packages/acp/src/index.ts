@@ -34,6 +34,7 @@ import {
   type AgentUpdateType,
   type Issue,
   type Settings,
+  type UsageTokenUpdate,
   type UsageTotals,
 } from "@symphony/domain";
 
@@ -591,7 +592,7 @@ function acpProtocolUpdate(
   };
 }
 
-function extractUsage(usage: Usage | undefined): Partial<UsageTotals> | undefined {
+function extractUsage(usage: Usage | undefined): UsageTokenUpdate | undefined {
   if (!usage) return undefined;
   const inputTokens =
     nonNegativeFinite(usage.inputTokens) +
@@ -608,8 +609,8 @@ function extractUsage(usage: Usage | undefined): Partial<UsageTotals> | undefine
 
 function normalizeSessionUsage(
   session: Session,
-  usage: Partial<UsageTotals> | undefined,
-): Partial<UsageTotals> | undefined {
+  usage: UsageTokenUpdate | undefined,
+): UsageTokenUpdate | undefined {
   if (!usage) return undefined;
   if (session.agentConfig.usageAccounting === "cumulative") {
     session.usageTotals = {

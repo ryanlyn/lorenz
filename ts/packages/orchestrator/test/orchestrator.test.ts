@@ -45,7 +45,7 @@ test("orchestrator claims ensemble slots independently and snapshots backend-neu
     sessionId: "session-1",
     resumeId: "resume-1",
     executorPid: "123",
-    usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15, secondsRunning: 0 },
+    usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 },
   });
 
   const snapshot = orchestrator.snapshot();

@@ -565,6 +565,10 @@ export interface UsageTotals {
   secondsRunning: number;
 }
 
+export type UsageTokenUpdate = Partial<
+  Pick<UsageTotals, "inputTokens" | "outputTokens" | "totalTokens">
+>;
+
 export type UsageUpdateKind = "cumulative" | "delta";
 
 /**
@@ -619,7 +623,7 @@ export interface AgentUpdateBase {
   executorPid?: string | null | undefined;
   timestamp?: Date | undefined;
   message?: unknown;
-  usage?: Partial<UsageTotals> | undefined;
+  usage?: UsageTokenUpdate | undefined;
   /** Whether usage fields are cumulative session high-water marks or per-update deltas. */
   usageKind?: UsageUpdateKind | undefined;
   rateLimits?: unknown;
@@ -660,17 +664,17 @@ export interface TurnStartedUpdate extends AgentUpdateBase {
 export interface TurnCompletedUpdate extends AgentUpdateBase {
   type: "turn_completed";
   message: { response: PromptResponse };
-  usage?: Partial<UsageTotals>;
+  usage?: UsageTokenUpdate;
 }
 export interface TurnCancelledUpdate extends AgentUpdateBase {
   type: "turn_cancelled";
   message: { response: PromptResponse };
-  usage?: Partial<UsageTotals>;
+  usage?: UsageTokenUpdate;
 }
 export interface TurnFailedUpdate extends AgentUpdateBase {
   type: "turn_failed";
   message: string | { response: PromptResponse };
-  usage?: Partial<UsageTotals>;
+  usage?: UsageTokenUpdate;
 }
 
 export interface ApprovalRequiredUpdate extends AgentUpdateBase {
@@ -757,7 +761,7 @@ export type TraceEvent = {
     issueIdentifier: string;
     timestamp: string | null;
     message: AgentUpdateMessage<K> | null;
-    usage: Partial<UsageTotals> | null;
+    usage: UsageTokenUpdate | null;
     workspacePath: string | null;
     sessionId: string | null;
     executorPid: string | null;

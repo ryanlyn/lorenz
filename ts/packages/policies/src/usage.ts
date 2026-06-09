@@ -1,10 +1,10 @@
-import type { UsageTotals } from "@symphony/domain";
+import type { UsageTokenUpdate, UsageTotals } from "@symphony/domain";
 
 export interface UsageMergeInput {
   entryTotals: UsageTotals;
   reportedTotals: UsageTotals;
   globalTotals: UsageTotals;
-  update: Partial<UsageTotals>;
+  update: UsageTokenUpdate;
 }
 
 export interface UsageMergeResult {

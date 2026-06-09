@@ -19,6 +19,7 @@ import type {
   RetryEntry,
   RunningEntry,
   Settings,
+  UsageTokenUpdate,
   UsageTotals,
 } from "@symphony/domain";
 import { systemClock, type ClockPort } from "@symphony/ports";
@@ -303,7 +304,7 @@ export class Orchestrator {
     this.applyCumulativeUsage(entry, update.usage);
   }
 
-  private applyCumulativeUsage(entry: RunningEntry, usage: Partial<UsageTotals>): void {
+  private applyCumulativeUsage(entry: RunningEntry, usage: UsageTokenUpdate): void {
     const merged = mergeMonotonicUsage({
       entryTotals: entry.usageTotals,
       reportedTotals: {
@@ -323,11 +324,7 @@ export class Orchestrator {
     this.state.usageTotals = merged.globalTotals;
   }
 
-  private applyIncrementalUsage(
-    key: string,
-    entry: RunningEntry,
-    usage: Partial<UsageTotals>,
-  ): void {
+  private applyIncrementalUsage(key: string, entry: RunningEntry, usage: UsageTokenUpdate): void {
     const base = this.usageDeltaBases.get(key) ?? reportedUsageTotals(entry);
     const inputDelta = usageDelta(usage.inputTokens);
     const outputDelta = usageDelta(usage.outputTokens);
