@@ -182,7 +182,7 @@ describe("linear-sandbox: eligibility & concurrency", () => {
         issues: [
           { title: "Single slot A", priority: 1 },
           { title: "Single slot B", priority: 2 },
-          { title: "Single slot C", priority: 3 },
+          { title: "Single slot C - linear-sandbox-1780965181315-hg8w6e", priority: 3 },
         ],
         pollTicks: 3,
         tickDelayMs: 2000,
