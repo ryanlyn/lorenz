@@ -79,6 +79,7 @@ export class TraceWatcher {
   private readonly traceDir: string;
   private readonly pollIntervalMs: number;
   private fileStates = new Map<string, FileState>();
+  private fileStatesByPath = new Map<string, FileState>();
   private timer: ReturnType<typeof setInterval> | null = null;
   private stopped = false;
   private scanning = false;
@@ -165,7 +166,8 @@ export class TraceWatcher {
           if (!dirStat.isDirectory()) continue;
 
           const fileStat = await stat(filePath);
-          const existing = this.fileStates.get(entry);
+          const fileCacheKey = path.resolve(filePath);
+          const existing = this.fileStatesByPath.get(fileCacheKey);
 
           if (existing && fileStat.mtimeMs <= existing.lastModified) {
             continue;
@@ -175,6 +177,7 @@ export class TraceWatcher {
           if (result) {
             const canonicalKey = result.state.issueId;
             const existingByKey = this.fileStates.get(canonicalKey);
+            this.fileStatesByPath.set(fileCacheKey, result.state);
             if (result.state.lineCount !== (existingByKey?.lineCount ?? 0)) {
               this.fileStates.set(canonicalKey, result.state);
               callback(canonicalKey, result.events);

@@ -1,11 +1,20 @@
 import { mkdirSync, appendFileSync, rmSync } from "node:fs";
 import path from "node:path";
 import { tmpdir } from "node:os";
+import * as fsPromises from "node:fs/promises";
 
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 
 import { TraceWatcher } from "../src/watcher.js";
 import type { DisplayEvent } from "../src/models/display-events.js";
+
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof fsPromises>();
+  return {
+    ...actual,
+    readFile: vi.fn(actual.readFile),
+  };
+});
 
 function makeTraceDir(): string {
   const dir = path.join(
@@ -22,13 +31,26 @@ function writeTraceLine(traceDir: string, issueId: string, line: Record<string, 
   appendFileSync(path.join(issueDir, "trace.jsonl"), JSON.stringify(line) + "\n");
 }
 
+interface TestScanner {
+  scan(callback: (issueId: string, events: DisplayEvent[]) => void): Promise<void>;
+}
+
+async function scanOnce(
+  watcher: TraceWatcher,
+  callback: (issueId: string, events: DisplayEvent[]) => void,
+): Promise<void> {
+  await (watcher as unknown as TestScanner).scan(callback);
+}
+
 describe("TraceWatcher", () => {
   let traceDir: string;
   let watcher: TraceWatcher;
+  const readFileSpy = vi.mocked(fsPromises.readFile);
 
   beforeEach(() => {
     traceDir = makeTraceDir();
     watcher = new TraceWatcher(traceDir, 50);
+    readFileSpy.mockClear();
   });
 
   afterEach(() => {
@@ -108,6 +130,32 @@ describe("TraceWatcher", () => {
     expect(callbacks.length).toBeGreaterThan(countAfterFirst);
     const latest = callbacks[callbacks.length - 1]!;
     expect(latest.events.length).toBeGreaterThan(callbacks[0]!.events.length);
+  });
+
+  it("skips reading unchanged trace files when directory name differs from issueId", async () => {
+    const callbacks: Array<{ issueId: string; events: DisplayEvent[] }> = [];
+
+    writeTraceLine(traceDir, "TEST-5", {
+      type: "turn_started",
+      issueId: "id-5",
+      issueIdentifier: "TEST-5",
+      timestamp: "2026-01-01T00:00:00Z",
+    });
+
+    const callback = (issueId: string, events: DisplayEvent[]) => {
+      callbacks.push({ issueId, events: [...events] });
+    };
+
+    await scanOnce(watcher, callback);
+
+    expect(readFileSpy).toHaveBeenCalledTimes(1);
+    expect(callbacks).toHaveLength(1);
+    expect(callbacks[0]!.issueId).toBe("id-5");
+
+    await scanOnce(watcher, callback);
+
+    expect(readFileSpy).toHaveBeenCalledTimes(1);
+    expect(callbacks).toHaveLength(1);
   });
 
   it("provides full event list on each callback (not just delta)", async () => {
