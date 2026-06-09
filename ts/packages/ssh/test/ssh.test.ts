@@ -155,6 +155,52 @@ wait "$child"
   await waitForProcessExit(Number(childMatch[1]), 7_000);
 });
 
+test("SSH run reports signaled subprocesses as failures", async () => {
+  const root = await tempDir("symphony-ts-ssh-signaled");
+  const trace = path.join(root, "ssh.trace");
+
+  await installFakeSsh(
+    root,
+    trace,
+    `#!/bin/sh
+printf 'ARGV:%s\\n' "$*" >> ${shellEscape(trace)}
+kill -TERM $$
+`,
+  );
+
+  const outcome = await runSsh("localhost", "printf ok", { stderrToStdout: true }).then(
+    (result) => ({ status: result.status }),
+    (error: unknown) => ({ error }),
+  );
+
+  if ("error" in outcome) {
+    assert.match(String(outcome.error), /ssh_failed_without_exit_code: localhost/);
+    assert.match(String(outcome.error), /signal=SIGTERM/);
+    assert.match(String(outcome.error), /killed=true/);
+  } else {
+    assert.notEqual(outcome.status, 0);
+  }
+});
+
+test("SSH writeRemoteFile rejects signaled subprocesses", async () => {
+  const root = await tempDir("symphony-ts-ssh-write-signaled");
+  const trace = path.join(root, "ssh.trace");
+
+  await installFakeSsh(
+    root,
+    trace,
+    `#!/bin/sh
+printf 'ARGV:%s\\n' "$*" >> ${shellEscape(trace)}
+kill -TERM $$
+`,
+  );
+
+  await assert.rejects(
+    () => writeRemoteFile("localhost", path.join(root, "remote.txt"), "payload"),
+    /ssh.*SIGTERM|remote_write_failed/,
+  );
+});
+
 test("SSH writeRemoteFile preserves payload bytes and applies mode", async () => {
   const root = await tempDir("symphony-ts-ssh-write");
   const trace = path.join(root, "ssh.trace");
