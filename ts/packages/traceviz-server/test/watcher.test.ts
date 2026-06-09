@@ -1,4 +1,4 @@
-import { mkdirSync, appendFileSync, rmSync } from "node:fs";
+import { mkdirSync, appendFileSync, rmSync, symlinkSync } from "node:fs";
 import path from "node:path";
 import { tmpdir } from "node:os";
 
@@ -66,6 +66,34 @@ describe("TraceWatcher", () => {
     expect(callbacks.length).toBeGreaterThan(0);
     const first = callbacks[0]!;
     expect(first.events.some((e) => e.kind === "message")).toBe(true);
+  });
+
+  it("ignores symlinked ticket directories that resolve outside the trace root", async () => {
+    const callbacks: Array<{ issueId: string; events: DisplayEvent[] }> = [];
+    const outsideTraceDir = makeTraceDir();
+
+    try {
+      writeTraceLine(outsideTraceDir, "ESCAPE-1", {
+        type: "turn_started",
+        issueId: "outside-id",
+        issueIdentifier: "ESCAPE-1",
+        timestamp: "2026-01-01T00:00:00Z",
+      });
+
+      symlinkSync(path.join(outsideTraceDir, "ESCAPE-1"), path.join(traceDir, "ESCAPE-1"), "dir");
+
+      watcher.start((issueId, events) => {
+        callbacks.push({ issueId, events: [...events] });
+      });
+
+      await new Promise((r) => setTimeout(r, 150));
+      watcher.stop();
+
+      expect(watcher.getTickets()).toEqual([]);
+      expect(callbacks).toEqual([]);
+    } finally {
+      rmSync(outsideTraceDir, { recursive: true, force: true });
+    }
   });
 
   it("only calls back when new lines are appended", async () => {

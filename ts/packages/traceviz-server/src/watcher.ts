@@ -11,8 +11,8 @@
  *       trace.jsonl
  */
 
-import { readFileSync } from "node:fs";
-import { access, readdir, readFile, stat } from "node:fs/promises";
+import { readFileSync, realpathSync } from "node:fs";
+import { access, lstat, readdir, readFile, realpath, stat } from "node:fs/promises";
 import path from "node:path";
 
 import type { DisplayEvent } from "./models/display-events.js";
@@ -20,6 +20,11 @@ import type { TicketInfo } from "./models/api.js";
 import { parseTraceLines, extractTicketMetadata } from "./parser.js";
 
 const DEFAULT_POLL_INTERVAL_MS = 500;
+
+function isWithinRoot(candidate: string, root: string): boolean {
+  const relative = path.relative(root, candidate);
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
 
 interface FileState {
   issueId: string;
@@ -124,7 +129,11 @@ export class TraceWatcher {
 
   private readAndParseSync(filePath: string): DisplayEvent[] {
     try {
-      const content = readFileSync(filePath, "utf-8");
+      const realTraceDir = realpathSync(this.traceDir);
+      const realFilePath = realpathSync(filePath);
+      if (!isWithinRoot(realFilePath, realTraceDir)) return [];
+
+      const content = readFileSync(realFilePath, "utf-8");
       const lines = content.split("\n").filter((l) => l.trim().length > 0);
       return parseTraceLines(lines);
     } catch {
@@ -151,6 +160,12 @@ export class TraceWatcher {
       }
 
       const resolvedDir = path.resolve(this.traceDir);
+      let realTraceDir: string;
+      try {
+        realTraceDir = await realpath(this.traceDir);
+      } catch {
+        return;
+      }
 
       for (const entry of entries) {
         const dirPath = path.join(this.traceDir, entry);
@@ -158,20 +173,26 @@ export class TraceWatcher {
         const resolvedDirPath = path.resolve(dirPath);
         if (!resolvedDirPath.startsWith(resolvedDir + path.sep)) continue;
 
-        const filePath = path.join(dirPath, "trace.jsonl");
-
         try {
-          const dirStat = await stat(dirPath);
+          const dirStat = await lstat(dirPath);
+          if (dirStat.isSymbolicLink()) continue;
           if (!dirStat.isDirectory()) continue;
 
-          const fileStat = await stat(filePath);
+          const realDirPath = await realpath(dirPath);
+          if (!isWithinRoot(realDirPath, realTraceDir)) continue;
+
+          const filePath = path.join(dirPath, "trace.jsonl");
+          const realFilePath = await realpath(filePath);
+          if (!isWithinRoot(realFilePath, realTraceDir)) continue;
+
+          const fileStat = await stat(realFilePath);
           const existing = this.fileStates.get(entry);
 
           if (existing && fileStat.mtimeMs <= existing.lastModified) {
             continue;
           }
 
-          const result = await this.readFile(filePath, entry, fileStat.mtimeMs);
+          const result = await this.readFile(realFilePath, entry, fileStat.mtimeMs);
           if (result) {
             const canonicalKey = result.state.issueId;
             const existingByKey = this.fileStates.get(canonicalKey);
@@ -197,9 +218,13 @@ export class TraceWatcher {
     mtimeMs?: number,
   ): Promise<{ state: FileState; events: DisplayEvent[] } | null> {
     try {
-      const content = await readFile(filePath, "utf-8");
+      const realTraceDir = await realpath(this.traceDir);
+      const realFilePath = await realpath(filePath);
+      if (!isWithinRoot(realFilePath, realTraceDir)) return null;
+
+      const content = await readFile(realFilePath, "utf-8");
       const lines = content.split("\n").filter((l) => l.trim().length > 0);
-      const lastModified = mtimeMs ?? (await stat(filePath)).mtimeMs;
+      const lastModified = mtimeMs ?? (await stat(realFilePath)).mtimeMs;
       const events = parseTraceLines(lines);
       const metadata = extractTicketMetadata(lines);
       const resolvedIssueId = metadata?.issueId ?? issueId;
@@ -210,7 +235,7 @@ export class TraceWatcher {
         issueIdentifier: resolvedIdentifier,
         lineCount: lines.length,
         lastModified,
-        filePath,
+        filePath: realFilePath,
         cachedTicketInfo: computeTicketInfo({
           issueId: resolvedIssueId,
           issueIdentifier: resolvedIdentifier,
