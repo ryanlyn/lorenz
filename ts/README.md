@@ -217,7 +217,9 @@ Notes:
 - `workspace.root` supports `~` and whole-value `$VAR` expansion. `SYMPHONY_WORKSPACE_ROOT`
   overrides `workspace.root` at runtime.
 - `SYMPHONY_SSH_CONFIG` points SSH worker commands at a custom OpenSSH config file.
-- Hooks run through `bash -lc` locally or over SSH with the workspace as `cwd`.
+- Hooks run through `bash -lc` locally or over SSH with the workspace as `cwd`. Use
+  fail-fast shell options in bootstrap hooks so clone and dependency setup failures stop workspace
+  creation immediately.
 - `codex.command` runs through `bash -lc`, so shell expansion happens in the launched process.
 - If the Markdown body is blank, Symphony uses a default prompt with the issue identifier, title,
   and body.

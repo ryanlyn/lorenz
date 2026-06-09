@@ -1,9 +1,11 @@
+import { execFile, type ExecFileException } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 
 import { test } from "vitest";
 
 import { assert } from "./assert.js";
+import { tempDir, writeExecutable } from "./helpers.js";
 
 const repoRoot = path.resolve(import.meta.dirname, "..", "..");
 const linearWorkflowFiles = ["WORKFLOW.md", "WORKFLOW_FULL_ACCESS.md"];
@@ -19,6 +21,33 @@ test("packaged workflow files use TypeScript workspace bootstrap hooks", async (
     assert.notMatch(workflow, /cd elixir/);
     assert.notMatch(workflow, /mix deps\.get/);
     assert.notMatch(workflow, /workspace\.before_remove/);
+  }
+});
+
+test("workspace bootstrap hooks fail when clone fails without mise", async () => {
+  for (const filename of workflowFiles) {
+    const workflow = await fs.readFile(path.join(repoRoot, "ts", filename), "utf8");
+    const hookBody = extractAfterCreateHook(workflow);
+    const temp = await tempDir("symphony-workflow-bootstrap");
+
+    try {
+      const fakeBin = path.join(temp, "bin");
+      const workspace = path.join(temp, "workspace");
+      await fs.mkdir(workspace);
+      await writeExecutable(path.join(fakeBin, "git"), "#!/bin/sh\nexit 42\n");
+
+      const result = await runLoginShell(
+        [`PATH=${shellQuote(fakeBin)}`, `cd ${shellQuote(workspace)}`, hookBody].join("\n"),
+      );
+
+      assert.equal(
+        result.exitCode,
+        42,
+        `${filename} should preserve clone failures when mise is unavailable`,
+      );
+    } finally {
+      await fs.rm(temp, { recursive: true, force: true });
+    }
   }
 });
 
@@ -82,4 +111,45 @@ test("workspace scripts avoid duplicate parity aliases", async () => {
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function extractAfterCreateHook(workflow: string): string {
+  const marker = "  after_create: |\n";
+  const start = workflow.indexOf(marker);
+  assert.notEqual(start, -1);
+
+  const hookBlock = workflow.slice(start + marker.length);
+  const lines: string[] = [];
+  for (const line of hookBlock.split("\n")) {
+    if (line.startsWith("    ")) {
+      lines.push(line.slice(4));
+      continue;
+    }
+
+    if (line.length === 0) {
+      lines.push(line);
+      continue;
+    }
+
+    break;
+  }
+
+  return lines.join("\n").trimEnd();
+}
+
+function runLoginShell(script: string): Promise<{ exitCode: number }> {
+  return new Promise((resolve, reject) => {
+    execFile("/bin/bash", ["-lc", script], { timeout: 5000 }, (error: ExecFileException | null) => {
+      if (error?.killed || error?.signal) {
+        reject(error);
+        return;
+      }
+
+      resolve({ exitCode: typeof error?.code === "number" ? error.code : 0 });
+    });
+  });
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", "'\\''")}'`;
 }
