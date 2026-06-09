@@ -3,7 +3,7 @@ import type { Issue } from "@symphony/cli";
 import type { RuntimeEvent } from "@symphony/runtime";
 
 import { setupLinearSandbox, runLinearScenario } from "../sandbox/linear-sandbox.js";
-import { checkAssertions } from "../sandbox/sandbox.js";
+import { checkAssertions, sleep } from "../sandbox/sandbox.js";
 import type { LinearSandboxScenario, LinearSandboxResult } from "../sandbox/linear-sandbox.js";
 
 const runLive = process.env.SYMPHONY_TS_RUN_LINEAR_SANDBOX === "1";
@@ -19,6 +19,20 @@ function dispatchedTitles(result: LinearSandboxResult): string[] {
     .filter((e) => e.type === "run_started")
     .map((e) => issueForEvent(e, result.createdIssues)?.title ?? "")
     .filter(Boolean);
+}
+
+async function waitForRuntimeEvent(
+  events: RuntimeEvent[],
+  predicate: (event: RuntimeEvent) => boolean,
+  timeoutMs = 5000,
+): Promise<RuntimeEvent> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const event = events.find(predicate);
+    if (event) return event;
+    await sleep(50);
+  }
+  throw new Error("Timed out waiting for runtime event");
 }
 
 describe("linear-sandbox: basic", () => {
@@ -232,39 +246,77 @@ describe("linear-sandbox: eligibility & concurrency", () => {
 
 describe("linear-sandbox: state transitions & reconciliation", () => {
   test(
-    "issue moved to Done state is reconciled out (stops worker)",
+    "issue moved to Done after run_started is reconciled out (stops worker)",
     { timeout: 120_000, skip: !runLive },
     async () => {
       // Invariant: terminal state -> stop worker + cleanup
       const ctx = await setupLinearSandbox();
+      let completedIssue: Issue | undefined;
+      let mutationApplied = false;
 
       const scenario: LinearSandboxScenario = {
         issues: [{ title: "Will be completed mid-run" }],
-        pollTicks: 4,
-        tickDelayMs: 3000,
+        pollTicks: 3,
+        tickDelayMs: 1500,
+        waitForRuns: false,
         maxConcurrentAgents: 5,
         runnerConfig: {
-          defaultBehavior: { turnCount: 10, latencyPerTurnMs: 500 },
+          defaultBehavior: { turnCount: 50, latencyPerTurnMs: 200 },
         },
-        assertions: [{ type: "no_errors" }],
+        afterPoll: async ({ tick, ctx: hookCtx, createdIssues, events }) => {
+          if (tick !== 0 || mutationApplied) return;
+          const issue = createdIssues[0];
+          if (!issue) throw new Error("Expected a created issue before applying terminal mutation");
+
+          await waitForRuntimeEvent(
+            events,
+            (event) => event.type === "run_started" && event.message.includes(issue.identifier),
+          );
+
+          await hookCtx.client.updateIssueState(issue.id, hookCtx.states.done.id);
+          completedIssue = issue;
+          mutationApplied = true;
+        },
       };
 
       const result = await runLinearScenario(ctx, scenario);
+      expect(mutationApplied).toBe(true);
+      expect(completedIssue).toBeDefined();
+      if (!completedIssue) return;
 
-      // Move the issue to Done after the first tick dispatches it
-      // Since the linear-sandbox doesn't support timedMutations via Linear API directly,
-      // we verify the basic flow: issue was dispatched and ran
-      const startEvents = result.events.filter((e) => e.type === "run_started");
-      expect(startEvents.length).toBeGreaterThan(0);
-      expect(result.errors).toHaveLength(0);
+      const assertionResults = checkAssertions(result, [
+        { type: "no_errors" },
+        { type: "not_running", issueId: completedIssue.id },
+        {
+          type: "event_occurred",
+          eventType: "workspace_cleanup",
+          messageContains: completedIssue.identifier,
+        },
+        {
+          type: "event_not_occurred",
+          eventType: "run_completed",
+          messageContains: completedIssue.identifier,
+        },
+      ]);
+      for (const r of assertionResults) {
+        expect(r.passed, r.message).toBe(true);
+      }
+
+      const targetStarts = result.events.filter(
+        (e) => e.type === "run_started" && e.message.includes(completedIssue.identifier),
+      );
+      expect(targetStarts).toHaveLength(1);
+      expect(
+        result.finalSnapshot.retrying.some((entry) => entry.issueId === completedIssue.id),
+      ).toBe(false);
     },
   );
 
   test(
-    "issue state change via Linear API triggers reconciliation on next poll",
+    "terminal issue changed via Linear API before polling is not dispatched",
     { timeout: 180_000, skip: !runLive },
     async () => {
-      // Invariant: terminal transition mid-run aborts the worker
+      // Invariant: pre-poll terminal state -> no dispatch
       const ctx = await setupLinearSandbox();
 
       // Create issue manually to control state changes mid-scenario
@@ -290,11 +342,6 @@ describe("linear-sandbox: state transitions & reconciliation", () => {
           assertions: [],
         };
 
-        // We can't use the standard scenario for this since we need to control timing.
-        // Instead verify the core flow works: the runtime sees the issue, dispatches, and
-        // eventually the reconciliation path executes correctly.
-        // For a true mid-run state change test, we'd need to hook into the poll loop.
-        // Here we verify that when an issue is already Done before polling, it's not dispatched.
         await ctx.client.updateIssueState(issue.id, ctx.states.done.id);
 
         // Run a scenario with no pre-created issues - we already moved ours to Done
