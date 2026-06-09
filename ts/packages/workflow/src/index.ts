@@ -15,6 +15,10 @@ import {
 } from "@symphony/domain";
 import type { DefaultSettingsOptions } from "@symphony/config";
 
+type WorkflowLoadOptions = DefaultSettingsOptions & {
+  cwd?: string | undefined;
+};
+
 const promptTemplateEngine = new Liquid({
   strictVariables: true,
   strictFilters: true,
@@ -37,15 +41,17 @@ export function workflowFilePath(
   env: NodeJS.ProcessEnv = process.env,
   cwd = process.cwd(),
 ): string {
-  return env.SYMPHONY_WORKFLOW || path.join(cwd, "WORKFLOW.md");
+  const workflow = env.SYMPHONY_WORKFLOW;
+  if (!workflow) return path.join(cwd, "WORKFLOW.md");
+  return path.isAbsolute(workflow) ? workflow : path.join(cwd, workflow);
 }
 
 export async function loadWorkflow(
   workflowPath?: string,
   env: NodeJS.ProcessEnv = process.env,
-  defaults: DefaultSettingsOptions = {},
+  defaults: WorkflowLoadOptions = {},
 ): Promise<WorkflowDefinition> {
-  const absolute = path.resolve(workflowPath ?? workflowFilePath(env));
+  const absolute = path.resolve(workflowPath ?? workflowFilePath(env, defaults.cwd));
   let content: string;
   let stat: Stats;
   try {
