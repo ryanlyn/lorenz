@@ -20,6 +20,11 @@ test("local toolSpecs lists the board read and write tools", async () => {
   assert.deepEqual(
     toolSpecs(settings).map((t) => t.name),
     [
+      "tracker_read_issue",
+      "tracker_query",
+      "tracker_update_status",
+      "tracker_comment",
+      "tracker_create_issue",
       "local_update_status",
       "local_comment",
       "local_create_issue",
@@ -56,6 +61,42 @@ test("local tools create, update status, and comment on the board", async () => 
   const file = await readFile(path.join(dir, "BOARD-1.md"), "utf8");
   assert.match(file, /status: In Progress/);
   assert.match(file, /agent: opened PR/);
+});
+
+test("common tracker tools work against the local board provider", async () => {
+  const { settings } = await localSettings();
+
+  const created = await executeTool(
+    "tracker_create_issue",
+    { title: "Common", body: "details", status: "Todo" },
+    settings,
+  );
+  assert.equal(created.success, true);
+
+  const moved = await executeTool(
+    "tracker_update_status",
+    { issueId: "BOARD-1", status: "In Progress" },
+    settings,
+  );
+  assert.equal(moved.success, true);
+
+  const commented = await executeTool(
+    "tracker_comment",
+    { issueId: "BOARD-1", body: "using common tools" },
+    settings,
+  );
+  assert.equal(commented.success, true);
+
+  const read = await executeTool("tracker_read_issue", { issueId: "BOARD-1" }, settings);
+  assert.equal(read.success, true);
+  assert.equal((read.result as { issue: { state: string } }).issue.state, "In Progress");
+
+  const queried = await executeTool("tracker_query", { select: ["id", "state"] }, settings);
+  assert.equal(queried.success, true);
+  assert.deepEqual((queried.result as { rows: Array<{ id: string }> }).rows[0], {
+    id: "BOARD-1",
+    state: "In Progress",
+  });
 });
 
 test("local_create_issue persists the body so it round-trips as the issue description", async () => {
@@ -217,6 +258,11 @@ test("local tools reject unknown names", async () => {
       error: {
         message: 'Unsupported tool: "local_bogus".',
         supportedTools: [
+          "tracker_read_issue",
+          "tracker_query",
+          "tracker_update_status",
+          "tracker_comment",
+          "tracker_create_issue",
           "local_update_status",
           "local_comment",
           "local_create_issue",

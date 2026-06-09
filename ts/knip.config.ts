@@ -12,6 +12,7 @@ const config: KnipConfig = {
       ignoreDependencies: [
         "@symphony/dispatch",
         "@symphony/humanize",
+        "@symphony/jira-tracker",
         "@symphony/log-file",
         "@symphony/mcp",
         "@symphony/memory-tracker",

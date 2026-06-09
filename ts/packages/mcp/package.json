@@ -15,6 +15,8 @@
     "ts-pattern": "catalog:",
     "zod": "catalog:",
     "@symphony/domain": "workspace:*",
+    "@symphony/issue": "workspace:*",
+    "@symphony/jira-tracker": "workspace:*",
     "@symphony/local-tracker": "workspace:*",
     "@symphony/worker-host-pool": "workspace:*"
   }

@@ -35,6 +35,9 @@
       "path": "../../packages/issue"
     },
     {
+      "path": "../../packages/jira-tracker"
+    },
+    {
       "path": "../../packages/linear-tracker"
     },
     {

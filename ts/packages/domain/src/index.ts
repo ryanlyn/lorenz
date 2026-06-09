@@ -74,7 +74,7 @@ export const AGENT_USAGE_ACCOUNTING_VALUES = ["per-turn", "cumulative"] as const
 
 export type AgentUsageAccounting = (typeof AGENT_USAGE_ACCOUNTING_VALUES)[number];
 
-export const TRACKER_KINDS = ["linear", "memory", "local"] as const;
+export const TRACKER_KINDS = ["linear", "memory", "local", "jira", "jira-mcp"] as const;
 
 export type TrackerKind = (typeof TRACKER_KINDS)[number];
 
@@ -213,12 +213,26 @@ export interface TrackerSettings {
   kind?: TrackerKind | undefined;
   endpoint: string;
   apiKey?: string | undefined;
+  /** Base URL for REST-backed trackers such as Jira Cloud, e.g. `https://example.atlassian.net`. */
+  baseUrl?: string | undefined;
+  /** Account email for trackers that use email+token authentication, such as Jira Cloud basic auth. */
+  email?: string | undefined;
+  /** API token for trackers that distinguish token auth from a generic API key. */
+  apiToken?: string | undefined;
   /** @deprecated Use `projectSlugs` instead. Single Linear project slug; required when `kind === "linear"`. */
   projectSlug?: string | undefined;
   /** Linear project slugs to monitor. Mutually exclusive with `projectLabels`. */
   projectSlugs?: string[] | undefined;
   /** Linear project labels for dynamic discovery. Mutually exclusive with `projectSlugs`. */
   projectLabels?: string[] | undefined;
+  /** Project keys monitored by key-based trackers such as Jira. */
+  projectKeys?: string[] | undefined;
+  /** Provider-native query used to scope candidate issues, e.g. Jira JQL. */
+  jql?: string | undefined;
+  /** Default issue type used when creating issues on trackers that require one. */
+  issueType?: string | undefined;
+  /** External MCP settings for tracker adapters that proxy through another MCP server. */
+  mcp?: TrackerMcpSettings | undefined;
   /** Tracker assignee identity (or `$VAR`) used to scope candidate queries to one user. */
   assignee?: string | undefined;
   /** Local tracker board directory (e.g. `.symphony/local`). Used when `kind === "local"`. */
@@ -233,6 +247,25 @@ export interface TrackerSettings {
   /** Tracker state names that mark an issue as finished; running agents on these issues are stopped and their workspaces cleaned up. */
   terminalStates: string[];
   dispatch: DispatchSettings;
+}
+
+export interface TrackerMcpSettings {
+  /** JSON-RPC endpoint for an external tracker MCP server. */
+  url?: string | undefined;
+  /** Optional bearer token for the external MCP server. */
+  token?: string | undefined;
+  /** Extra headers to send to the external MCP server. */
+  headers?: Record<string, string> | undefined;
+  /** Tool names exposed by the external MCP server for Symphony's tracker operations. */
+  tools?: TrackerMcpToolMap | undefined;
+}
+
+export interface TrackerMcpToolMap {
+  search?: string | undefined;
+  readIssue?: string | undefined;
+  updateStatus?: string | undefined;
+  comment?: string | undefined;
+  createIssue?: string | undefined;
 }
 
 /**

@@ -49,6 +49,11 @@ async function toolsListNames(settings: Settings): Promise<string[]> {
 
 test("MCP tools/list advertises the local board tools for a local tracker", async () => {
   assert.deepEqual(await toolsListNames(await localSettings()), [
+    "tracker_read_issue",
+    "tracker_query",
+    "tracker_update_status",
+    "tracker_comment",
+    "tracker_create_issue",
     "local_update_status",
     "local_comment",
     "local_create_issue",
@@ -57,9 +62,16 @@ test("MCP tools/list advertises the local board tools for a local tracker", asyn
   ]);
 });
 
-test("MCP tools/list still advertises only linear_graphql for a linear tracker", async () => {
+test("MCP tools/list advertises common and legacy tools for a linear tracker", async () => {
   const settings = parseConfig({ tracker: { kind: "linear", project_slug: "mono" } }, {});
-  assert.deepEqual(await toolsListNames(settings), ["linear_graphql"]);
+  assert.deepEqual(await toolsListNames(settings), [
+    "tracker_read_issue",
+    "tracker_query",
+    "tracker_update_status",
+    "tracker_comment",
+    "tracker_create_issue",
+    "linear_graphql",
+  ]);
 });
 
 test("MCP server rejects bearer tokens issued for another server instance", async () => {

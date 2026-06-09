@@ -11,6 +11,7 @@ import type { DefaultSettingsOptions } from "@symphony/config";
 import type { RuntimeTrackerClient, Settings } from "@symphony/domain";
 import { createWorkspaceForIssue, removeIssueWorkspaces, runHook } from "@symphony/workspace";
 import { appendLogEvent } from "@symphony/log-file";
+import { JiraClient, JiraMcpClient } from "@symphony/jira-tracker";
 import {
   deleteResumeState,
   readResumeState,
@@ -46,6 +47,10 @@ export function createTrackerClient(
     }
     case "local":
       return new LocalTrackerClient(settings);
+    case "jira":
+      return new JiraClient(settings);
+    case "jira-mcp":
+      return new JiraMcpClient(settings);
     default:
       return assertNever(kind);
   }

@@ -2,12 +2,21 @@ import { isRecord as isPlainRecord } from "@symphony/domain";
 
 const trackerAliases = {
   api_key: "apiKey",
+  api_token: "apiToken",
+  base_url: "baseUrl",
   project_slug: "projectSlug",
   id_prefix: "idPrefix",
   project_slugs: "projectSlugs",
   project_labels: "projectLabels",
+  project_keys: "projectKeys",
   active_states: "activeStates",
   terminal_states: "terminalStates",
+  issue_type: "issueType",
+};
+const trackerMcpAliases = {
+  read_issue: "readIssue",
+  update_status: "updateStatus",
+  create_issue: "createIssue",
 };
 const dispatchAliases = {
   accept_unrouted: "acceptUnrouted",
@@ -85,6 +94,10 @@ export function normalizeWorkflowConfig(value: unknown): unknown {
 
   if (isPlainRecord(normalized.tracker)) {
     normalizeNested(normalized.tracker, "dispatch", dispatchAliases);
+    normalizeNested(normalized.tracker, "mcp", {});
+    if (isPlainRecord(normalized.tracker.mcp)) {
+      normalizeNested(normalized.tracker.mcp, "tools", trackerMcpAliases);
+    }
   }
   if (isPlainRecord(normalized.agents)) {
     normalized.agents = Object.fromEntries(

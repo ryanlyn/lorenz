@@ -258,6 +258,13 @@ function applyCliOverrides(workflow: WorkflowDefinition, options: CliOptions): v
 }
 
 export function projectUrlForSettings(settings: Settings): string | undefined {
+  if (settings.tracker.kind === "jira" || settings.tracker.kind === "jira-mcp") {
+    const baseUrl = settings.tracker.baseUrl?.replace(/\/+$/, "");
+    const projectKey = settings.tracker.projectKeys?.[0]?.trim();
+    return baseUrl && projectKey
+      ? `${baseUrl}/jira/software/c/projects/${encodeURIComponent(projectKey)}/issues`
+      : undefined;
+  }
   const slug = settings.tracker.projectSlug?.trim();
   if (!slug) return undefined;
   return `https://linear.app/project/${encodeURIComponent(slug)}/issues`;

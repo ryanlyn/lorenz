@@ -54,7 +54,7 @@ claude:
       defaultMode: dontAsk
 ---
 
-You are working on a Linear ticket `{{ issue.identifier }}`
+You are working on a tracker issue `{{ issue.identifier }}`
 
 {% if attempt %}
 Continuation context:
@@ -87,9 +87,9 @@ Instructions:
 
 Work only in the provided repository copy. Do not touch any other path.
 
-## Prerequisite: Linear MCP or `linear_graphql` tool is available
+## Prerequisite: tracker tools are available
 
-The agent should be able to talk to Linear, either via a configured Linear MCP server or injected `linear_graphql` tool. If none are present, stop and ask the user to configure Linear.
+The agent should be able to talk to the configured tracker through `tracker_*` MCP tools. Linear-backed runs may also expose the legacy `linear_graphql` tool. If no tracker tools are present, stop and ask the user to configure the tracker MCP endpoint.
 
 ## Default posture
 
@@ -97,8 +97,8 @@ The agent should be able to talk to Linear, either via a configured Linear MCP s
 - Start every task by opening the tracking workpad comment and bringing it up to date before doing new implementation work.
 - Spend extra effort up front on planning and verification design before implementation.
 - Reproduce first: always confirm the current behavior/issue signal before changing code so the fix target is explicit.
-- Keep ticket metadata current (state, checklist, acceptance criteria, links).
-- Treat a single persistent Linear comment as the source of truth for progress.
+- Keep issue metadata current (state, checklist, acceptance criteria, links).
+- Treat a single persistent tracker comment as the source of truth for progress.
 - Use that single workpad comment for all progress and handoff notes; do not post separate "done"/summary comments.
 - Treat any ticket-authored `Validation`, `Test Plan`, or `Testing` section as non-negotiable acceptance input: mirror it in the workpad and execute it before considering the work complete.
 - When meaningful out-of-scope improvements are discovered during execution,
@@ -113,7 +113,8 @@ The agent should be able to talk to Linear, either via a configured Linear MCP s
 
 ## Related skills
 
-- `symphony-linear`: interact with Linear.
+- Tracker MCP tools: use `tracker_*` tools for issue reads, comments, and status changes.
+- `symphony-linear`: interact with Linear-specific fields when this workflow is Linear-backed.
 - `symphony-commit`: produce clean, logical commits during implementation.
 - `simplify`: review changed code for reuse, quality, and efficiency before committing.
 - `symphony-push`: keep remote branch current and publish updates.

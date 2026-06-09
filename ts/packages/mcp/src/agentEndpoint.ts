@@ -12,7 +12,7 @@ import { startClaudeMcpServer, type ObservabilityServerHandle } from "./server.j
 import { issueMcpToken, mcpAuthScopeForSettings, revokeMcpToken } from "./auth.js";
 
 export function trackerMcpServerName(kind: TrackerKind | undefined): string {
-  return `symphony_${kind ?? "linear"}`;
+  return `symphony_${(kind ?? "linear").replace(/[^A-Za-z0-9_]/g, "_")}`;
 }
 
 export interface AgentMcpEndpointLease {

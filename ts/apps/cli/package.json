@@ -30,6 +30,7 @@
     "@symphony/domain": "workspace:*",
     "@symphony/humanize": "workspace:*",
     "@symphony/issue": "workspace:*",
+    "@symphony/jira-tracker": "workspace:*",
     "@symphony/linear-tracker": "workspace:*",
     "@symphony/local-tracker": "workspace:*",
     "@symphony/log-file": "workspace:*",

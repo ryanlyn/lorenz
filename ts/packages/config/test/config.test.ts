@@ -120,6 +120,56 @@ test("non-Linear tracker configs still resolve explicitly configured secrets", a
   assert.equal(settings.tracker.assignee, "resolved-secret");
 });
 
+test("jira tracker config resolves canonical env fallbacks", () => {
+  const settings = parseConfig(
+    {
+      tracker: {
+        kind: "jira",
+        project_keys: ["ENG"],
+      },
+    },
+    {
+      JIRA_BASE_URL: "https://example.atlassian.net",
+      JIRA_EMAIL: "bot@example.com",
+      JIRA_API_TOKEN: "jira-token",
+    },
+  );
+
+  assert.equal(settings.tracker.baseUrl, "https://example.atlassian.net");
+  assert.equal(settings.tracker.email, "bot@example.com");
+  assert.equal(settings.tracker.apiToken, "jira-token");
+  assert.deepEqual(settings.tracker.projectKeys, ["ENG"]);
+  validateDispatchConfig(settings);
+});
+
+test("jira-mcp tracker config parses MCP settings and tool aliases", () => {
+  const settings = parseConfig(
+    {
+      tracker: {
+        kind: "jira-mcp",
+        project_keys: ["ENG"],
+        mcp: {
+          url: "http://127.0.0.1:5123/mcp",
+          token: "$MCP_TOKEN",
+          tools: {
+            read_issue: "jira_get",
+            update_status: "jira_transition",
+            create_issue: "jira_create",
+          },
+        },
+      },
+    },
+    { MCP_TOKEN: "mcp-token" },
+  );
+
+  assert.equal(settings.tracker.mcp?.url, "http://127.0.0.1:5123/mcp");
+  assert.equal(settings.tracker.mcp?.token, "mcp-token");
+  assert.equal(settings.tracker.mcp?.tools?.readIssue, "jira_get");
+  assert.equal(settings.tracker.mcp?.tools?.updateStatus, "jira_transition");
+  assert.equal(settings.tracker.mcp?.tools?.createIssue, "jira_create");
+  validateDispatchConfig(settings);
+});
+
 test("config throws when op:// reference used but op CLI not installed", () => {
   assert.throws(
     () => parseConfig({ tracker: { api_key: "op://vault/item/field" } }, { PATH: "/nonexistent" }),

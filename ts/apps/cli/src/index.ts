@@ -42,6 +42,7 @@ export {
   acquireAgentMcpEndpoint,
 } from "@symphony/mcp";
 export { LinearClient } from "@symphony/linear-tracker";
+export { JiraClient, JiraMcpClient } from "@symphony/jira-tracker";
 export { MemoryTrackerClient, memoryIssuesFromEnv } from "@symphony/memory-tracker";
 export { configureLogFile, appendLogEvent, defaultLogFile } from "@symphony/log-file";
 export { Orchestrator } from "@symphony/orchestrator";

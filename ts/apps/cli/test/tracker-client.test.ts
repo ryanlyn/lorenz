@@ -8,6 +8,8 @@ import { assert } from "@symphony/test-utils";
 
 import {
   createTrackerClient,
+  JiraClient,
+  JiraMcpClient,
   memoryIssuesFromEnv,
   MemoryTrackerClient,
   parseConfig,
@@ -80,6 +82,34 @@ test("tracker factory selects local adapter from the workflow-local fixture", as
   const settings = parseConfig(frontmatter(raw), {});
   assert.equal(settings.tracker.kind, "local");
   assert.ok(createTrackerClient(settings) instanceof LocalTrackerClient);
+});
+
+test("tracker factory selects Jira adapters from workflow settings", () => {
+  const jira = parseConfig(
+    {
+      tracker: {
+        kind: "jira",
+        base_url: "https://example.atlassian.net",
+        email: "bot@example.com",
+        api_token: "jira-token",
+        project_keys: ["ENG"],
+      },
+    },
+    {},
+  );
+  assert.ok(createTrackerClient(jira) instanceof JiraClient);
+
+  const jiraMcp = parseConfig(
+    {
+      tracker: {
+        kind: "jira-mcp",
+        project_keys: ["ENG"],
+        mcp: { url: "http://127.0.0.1:5123/mcp" },
+      },
+    },
+    {},
+  );
+  assert.ok(createTrackerClient(jiraMcp) instanceof JiraMcpClient);
 });
 
 test("shipped WORKFLOW.local.md selects a local tracker client with a real playbook body", async () => {

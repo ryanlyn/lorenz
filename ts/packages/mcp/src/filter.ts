@@ -1,8 +1,8 @@
 import { isRecord } from "@symphony/domain";
 
 /**
- * A small query DSL backing the read tools of the structured trackers
- * (`local_query` today). It is the composable, side-effect-free analog of `linear_graphql`'s
+ * A small query DSL backing the read tools of the structured trackers. It is the composable,
+ * side-effect-free analog of provider-native raw query tools like `linear_graphql`'s
  * read power: a query can never mutate the backend, so it carries no trust-boundary or
  * atomicity risk and the agent can filter/project/sort/page freely.
  *

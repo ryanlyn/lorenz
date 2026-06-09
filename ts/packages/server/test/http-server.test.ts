@@ -325,7 +325,17 @@ test("Claude MCP endpoint authorizes bearer tokens and executes Linear tools", a
       200,
       token,
     );
-    assert.equal(tools.result.tools[0].name, "linear_graphql");
+    assert.deepEqual(
+      tools.result.tools.map((tool: { name: string }) => tool.name),
+      [
+        "tracker_read_issue",
+        "tracker_query",
+        "tracker_update_status",
+        "tracker_comment",
+        "tracker_create_issue",
+        "linear_graphql",
+      ],
+    );
 
     const toolCall = await postMcp(
       server.url("/claude-mcp"),

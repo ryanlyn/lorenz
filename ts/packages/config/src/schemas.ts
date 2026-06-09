@@ -86,6 +86,25 @@ const optionalHookScript = z.string().nullable().optional();
 
 const usageAccountingSchema = z.enum(AGENT_USAGE_ACCOUNTING_VALUES);
 
+const trackerMcpToolMapSchema = z
+  .object({
+    search: z.string().optional(),
+    readIssue: z.string().optional(),
+    updateStatus: z.string().optional(),
+    comment: z.string().optional(),
+    createIssue: z.string().optional(),
+  })
+  .strict();
+
+const trackerMcpRawSchema = z
+  .object({
+    url: z.string().optional(),
+    token: z.string().optional(),
+    headers: z.record(z.string(), z.string()).optional(),
+    tools: trackerMcpToolMapSchema.optional(),
+  })
+  .strict();
+
 export const acpAgentRecordSchema = z
   .object({
     executor: z.literal("acp"),
@@ -105,9 +124,16 @@ const trackerRawSchema = z
     kind: z.string().optional(),
     endpoint: z.string().optional(),
     apiKey: z.string().optional(),
+    baseUrl: z.string().optional(),
+    email: z.string().optional(),
+    apiToken: z.string().optional(),
     projectSlug: z.string().optional(),
     projectSlugs: z.array(z.string()).optional(),
     projectLabels: z.array(z.string()).optional(),
+    projectKeys: z.array(z.string()).optional(),
+    jql: z.string().optional(),
+    issueType: z.string().optional(),
+    mcp: trackerMcpRawSchema.optional(),
     assignee: z.string().optional(),
     path: z.string().optional(),
     idPrefix: z.string().optional(),
