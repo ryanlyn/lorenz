@@ -3,7 +3,7 @@ import path from "node:path";
 
 import { Hono } from "hono";
 import { serveStatic } from "@hono/node-server/serve-static";
-import type { DisplayEvent, TraceStats } from "@symphony/traceviz-server";
+import type { DisplayEvent, TicketTraceResponse, TraceStats } from "@symphony/traceviz-server";
 
 export type TracevizAppOptions = {
   dashboardDist: string;
@@ -41,7 +41,8 @@ export function createTracevizApp({
       return c.json({ error: "Ticket not found" }, 404);
     }
 
-    return c.json({ events });
+    const response: TicketTraceResponse = { issueId, identifier, events };
+    return c.json(response);
   });
 
   app.get("/api/v1/tickets/:id/stats", (c) => {

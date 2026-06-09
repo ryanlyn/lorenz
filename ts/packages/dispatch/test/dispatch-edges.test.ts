@@ -448,6 +448,13 @@ describe("firstUnclaimedSlot", () => {
     const claimed = new Set<string>();
     assert.equal(firstUnclaimedSlot(issue, settings, claimed, -1), 0);
   });
+
+  test("fractional preferred slot falls through to linear scan", () => {
+    const settings = makeSettings({ agent: { ensemble_size: 2 } });
+    const issue = makeIssue();
+    const claimed = new Set<string>();
+    assert.equal(firstUnclaimedSlot(issue, settings, claimed, 0.5), 0);
+  });
 });
 
 describe("dispatchBlockReason", () => {

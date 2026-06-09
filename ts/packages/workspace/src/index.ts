@@ -17,6 +17,7 @@ export interface WorkspaceCreateOptions {
 
 export interface WorkspaceRunHookOptions {
   abortSignal?: AbortSignal | undefined;
+  validateCwd?: (() => Promise<string>) | undefined;
 }
 
 export function safeIdentifier(identifier: unknown): string {
@@ -68,6 +69,7 @@ export async function createWorkspaceForIssue(
   if (created && settings.hooks.afterCreate) {
     await runHook(settings.hooks.afterCreate, canonicalTarget, settings.hooks, null, {
       abortSignal: options.abortSignal,
+      validateCwd: async () => validateWorkspaceCwd(settings, canonicalTarget),
     });
   }
 
@@ -91,7 +93,9 @@ export async function removeWorkspace(settings: Settings, workspace: string): Pr
 
   if (settings.hooks.beforeRemove) {
     try {
-      await runHook(settings.hooks.beforeRemove, canonicalTarget, settings.hooks);
+      await runHook(settings.hooks.beforeRemove, canonicalTarget, settings.hooks, null, {
+        validateCwd: async () => validateWorkspaceCwd(settings, canonicalTarget),
+      });
     } catch {
       // before_remove is best effort; cleanup should continue.
     }
@@ -187,9 +191,11 @@ export async function runHook(
 ): Promise<void> {
   if (workerHost) return runRemoteHook(workerHost, cwd, command, hooks, options);
   if (options.abortSignal?.aborted) throw new Error("hook canceled");
+  const hookCwd = options.validateCwd ? await options.validateCwd() : cwd;
+  if (options.abortSignal?.aborted) throw new Error("hook canceled");
 
   const subprocess = execa("bash", ["-lc", command], {
-    cwd,
+    cwd: hookCwd,
     all: true,
     reject: false,
     stdin: "ignore",

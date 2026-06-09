@@ -48,6 +48,18 @@ export interface SshTarget {
   port: string | null;
 }
 
+interface SshExitMetadata {
+  exitCode?: number | undefined;
+  signal?: string | undefined;
+  signalDescription?: string | undefined;
+  isTerminated?: boolean | undefined;
+  isForcefullyTerminated?: boolean | undefined;
+  killed?: boolean | undefined;
+  timedOut?: boolean | undefined;
+  isCanceled?: boolean | undefined;
+  failed?: boolean | undefined;
+}
+
 export interface RemoteTcpPortWaitOptions {
   timeoutMs?: number | undefined;
   intervalMs?: number | undefined;
@@ -129,10 +141,11 @@ export async function runSsh(
 
     const result = await Promise.race([subprocess, timeout, abort]).finally(clearTimers);
     if ((result as { code?: string }).code === "ENOENT") throw new Error("ssh_not_found");
+    if (typeof result.exitCode !== "number") throw sshMissingExitCodeError(host, result);
     return {
       stdout: options.stderrToStdout ? (result.all ?? "") : result.stdout,
       stderr: options.stderrToStdout ? "" : result.stderr,
-      status: result.exitCode ?? 0,
+      status: result.exitCode,
     };
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
@@ -275,6 +288,26 @@ export function parseSshTarget(target: string): SshTarget {
   if (validPortDestination(destination))
     return { destination: validateSshDestination(destination), port };
   return { destination: validateSshDestination(trimmed), port: null };
+}
+
+function sshMissingExitCodeError(host: string, result: SshExitMetadata): Error {
+  const killed = result.killed ?? result.isTerminated ?? result.isForcefullyTerminated ?? false;
+  const metadata = [
+    `signal=${result.signal ?? "none"}`,
+    result.signalDescription
+      ? `signalDescription=${JSON.stringify(result.signalDescription)}`
+      : null,
+    `terminated=${Boolean(result.isTerminated)}`,
+    `killed=${Boolean(killed)}`,
+    `forcefullyTerminated=${Boolean(result.isForcefullyTerminated)}`,
+    `timedOut=${Boolean(result.timedOut)}`,
+    `canceled=${Boolean(result.isCanceled)}`,
+    `failed=${Boolean(result.failed)}`,
+  ].filter((entry) => entry !== null);
+
+  return new Error(`ssh_failed_without_exit_code: ${host} ${metadata.join(" ")}`, {
+    cause: result,
+  });
 }
 
 function sshConfigArgs(): string[] {
