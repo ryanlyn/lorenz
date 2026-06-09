@@ -18,7 +18,7 @@ import { assert } from "../../../test/assert.js";
 import { IssueStore, startObservabilityServer } from "@symphony/server";
 import { startClaudeMcpServer } from "@symphony/server";
 
-test("observability HTTP API exposes Elixir-shaped state, issue, runs, refresh, and errors", async () => {
+test("observability HTTP API exposes state, issue, runs, refresh, and errors", async () => {
   const workflow = workflowFixture();
   const orchestrator = new Orchestrator(workflow.settings);
   const issue = normalizeIssue({
@@ -233,7 +233,7 @@ test("observability HTTP API returns structured 400 for malformed issue identifi
   }
 });
 
-test("observability HTTP API matches Elixir snapshot timeout and unavailable branches", async () => {
+test("observability HTTP API matches snapshot timeout and unavailable branches", async () => {
   const unavailable = await startObservabilityServer(fakeRuntime("snapshot_unavailable"), {
     host: "127.0.0.1",
     port: 0,

@@ -106,7 +106,7 @@ test("Linear client retries 429 responses using Retry-After before succeeding", 
   }
 });
 
-test("Linear client bounds HTTP requests with the Elixir connect timeout", async () => {
+test("Linear client bounds HTTP requests with the configured connect timeout", async () => {
   const signals: Array<boolean> = [];
   const client = new LinearClient(settings(), (async (_input, init) => {
     signals.push(init?.signal instanceof AbortSignal);

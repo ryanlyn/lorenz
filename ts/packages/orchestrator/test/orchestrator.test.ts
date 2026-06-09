@@ -606,7 +606,7 @@ test("orchestrator gates retry attempts until backoff is due and clears terminal
   assert.equal(orchestrator.snapshot().retrying.length, 0);
 });
 
-test("orchestrator uses Elixir retry delays for failures and active continuations", () => {
+test("orchestrator uses configured retry delays for failures and active continuations", () => {
   const settings = parseConfig({ agent: { max_retry_backoff_ms: 60_000 } });
   const orchestrator = new Orchestrator(settings);
   const issue = normalizeIssue({

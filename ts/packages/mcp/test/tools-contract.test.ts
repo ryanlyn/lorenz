@@ -125,7 +125,7 @@ test("linear_graphql tool accepts null variables and rejects blank queries", asy
   assert.deepEqual(calls[0]?.variables, {});
 });
 
-test("linear_graphql tool advertises the Elixir-compatible input schema", () => {
+test("linear_graphql tool advertises the expected input schema", () => {
   assert.deepEqual(toolSpecs(linearSettings())[0]?.inputSchema, {
     type: "object",
     additionalProperties: false,

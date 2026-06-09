@@ -31,7 +31,7 @@ afterEach(() => {
   fsSyncMockState.failNextSymlinkSync = false;
 });
 
-test("log file configuration uses pino-roll with a stable Elixir-compatible path", async () => {
+test("log file configuration uses pino-roll with a stable path", async () => {
   const root = await tempDir("symphony-ts-log-file");
   const logFile = defaultLogFile(root);
   assert.equal(logFile, path.join(root, "log", "symphony.log"));

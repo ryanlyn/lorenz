@@ -5,7 +5,7 @@ import { assert } from "../../../test/assert.js";
 
 import { main, parseCliArgs, projectUrlForSettings } from "@symphony/cli";
 
-test("CLI accepts Elixir-compatible workflow path and TS runtime flags", () => {
+test("CLI accepts workflow path and TS runtime flags", () => {
   assert.deepEqual(
     parseCliArgs(["--once", "--dry-run", "--no-tui", "--port", "4100", "WORKFLOW_FULL_ACCESS.md"]),
     {

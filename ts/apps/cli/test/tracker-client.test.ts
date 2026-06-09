@@ -24,7 +24,7 @@ function body(raw: string): string {
   return raw.slice(raw.indexOf("\n", end + 1) + 1).trim();
 }
 
-test("memory tracker adapter returns configured issues and filters by id like Elixir", async () => {
+test("memory tracker adapter returns configured issues and filters by id", async () => {
   const client = new MemoryTrackerClient([
     {
       id: "one",

@@ -68,7 +68,7 @@ test("prompt rendering is strict and exposes ensemble context", async () => {
   );
 });
 
-test("empty workflow prompt uses the Elixir default prompt template", async () => {
+test("empty workflow prompt uses the default prompt template", async () => {
   const prompt = await buildPrompt("", { ...sampleIssue, description: null });
 
   assert.match(prompt, /You are working on an issue from the configured tracker\./);
@@ -76,7 +76,7 @@ test("empty workflow prompt uses the Elixir default prompt template", async () =
   assert.match(prompt, /No description provided\./);
 });
 
-test("continuation prompt matches the Elixir runner guidance", () => {
+test("continuation prompt matches the runner guidance", () => {
   assert.equal(
     continuationPrompt(2, 3),
     `Continuation guidance:
@@ -107,7 +107,7 @@ test("workspace path is safe, per-slot, and runs after_create in the slot direct
   assert.equal((await fs.readFile(path.join(workspace, "created.cwd"), "utf8")).trim(), workspace);
 });
 
-test("workspace identifiers preserve Elixir safe_identifier semantics", async () => {
+test("workspace identifiers preserve safe identifier semantics", async () => {
   assert.equal(safeIdentifier("  A B  "), "__A_B__");
   assert.equal(safeIdentifier(""), "");
   assert.equal(safeIdentifier(null), "");

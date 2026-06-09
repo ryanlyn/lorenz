@@ -18,7 +18,7 @@ interface PromptParityFixture {
   expected: string;
 }
 
-test("shared prompt fixtures render with Liquid exactly like Elixir Solid", async () => {
+test("shared prompt fixtures render with Liquid as expected", async () => {
   const fixtures = JSON.parse(
     await fs.readFile(new URL("./fixtures/prompt-parity.json", import.meta.url), "utf8"),
   ) as PromptParityFixture[];

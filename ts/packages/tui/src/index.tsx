@@ -79,7 +79,7 @@ export function RuntimeDashboard({
   return (
     <Box flexDirection="column" marginTop={1}>
       <Text>
-        {formatElixirStyleDashboard(snapshot, {
+        {formatDashboard(snapshot, {
           dashboardUrl,
           projectUrl,
           throughputTps,
@@ -115,7 +115,7 @@ export interface DashboardFormatOptions {
   throughputTps?: number | undefined;
 }
 
-export function formatElixirStyleDashboard(
+export function formatDashboard(
   snapshot: RuntimeSnapshot,
   options: DashboardFormatOptions = {},
 ): string {

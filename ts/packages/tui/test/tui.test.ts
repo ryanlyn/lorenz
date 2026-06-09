@@ -9,7 +9,7 @@ import type { RuntimeSnapshot } from "@symphony/runtime";
 import { assert } from "../../../test/assert.js";
 
 import {
-  formatElixirStyleDashboard,
+  formatDashboard,
   humanizeAgentMessage,
   humanizeCodexMessage,
   rollingThroughput,
@@ -17,7 +17,7 @@ import {
   updateTokenSamples,
 } from "@symphony/tui";
 
-test("Ink dashboard renders Elixir-style operational sections", () => {
+test("Ink dashboard renders operational sections", () => {
   const { lastFrame } = render(
     React.createElement(RuntimeDashboard, { snapshot: snapshotFixture() }),
   );
@@ -37,14 +37,14 @@ function stripAnsi(value: string): string {
   return value.replace(/\x1b\[[0-9;]*[A-Za-z]/g, "");
 }
 
-test("terminal dashboard formatter matches exported Elixir golden fixtures", () => {
+test("terminal dashboard formatter matches exported golden fixtures", () => {
   for (const scenario of dashboardScenarios()) {
     assert.equal(
-      formatElixirStyleDashboard(scenario.snapshot, scenario.options),
+      formatDashboard(scenario.snapshot, scenario.options),
       readEvidence(scenario.name),
       `${scenario.name} plain fixture`,
     );
-    const ansiOutput = formatElixirStyleDashboard(scenario.snapshot, {
+    const ansiOutput = formatDashboard(scenario.snapshot, {
       ...scenario.options,
       ansi: true,
     });
@@ -55,7 +55,7 @@ test("terminal dashboard formatter matches exported Elixir golden fixtures", () 
 });
 
 test("terminal dashboard preserves tracker states in the running stage column", () => {
-  const rendered = formatElixirStyleDashboard(
+  const rendered = formatDashboard(
     dashboardSnapshot({
       now: "2026-05-05T02:00:00.000Z",
       running: [
@@ -80,7 +80,7 @@ test("terminal dashboard preserves tracker states in the running stage column", 
 });
 
 test("terminal dashboard renders pending for claimed runs before agent events arrive", () => {
-  const rendered = formatElixirStyleDashboard(
+  const rendered = formatDashboard(
     dashboardSnapshot({
       now: "2026-05-05T02:00:00.000Z",
       running: [
@@ -107,7 +107,7 @@ test("terminal dashboard renders pending for claimed runs before agent events ar
 
 test("terminal dashboard sanitizes snapshot-derived strings before rendering", () => {
   const now = "2026-05-05T02:00:00.000Z";
-  const rendered = formatElixirStyleDashboard(
+  const rendered = formatDashboard(
     dashboardSnapshot({
       now,
       running: [
@@ -171,7 +171,7 @@ test("Runtime field tracks live elapsed time of active runs as the clock advance
 
   // No new snapshot is emitted between frames; only the wall clock advances.
   const runtimeLine = (now: string): string => {
-    const frame = formatElixirStyleDashboard(snapshot, { now });
+    const frame = formatDashboard(snapshot, { now });
     return (frame.split("\n").find((line) => line.includes("Runtime:")) ?? "").trim();
   };
 
@@ -198,12 +198,12 @@ test("Runtime field adds active-run elapsed on top of completion-accumulated sec
       ),
     ],
   });
-  const frame = formatElixirStyleDashboard(snapshot, { now: "2026-05-05T00:00:30.000Z" });
+  const frame = formatDashboard(snapshot, { now: "2026-05-05T00:00:30.000Z" });
   // 120 banked + 30 live = 150s = 2m 30s.
   assert.match(frame, /Runtime: 2m 30s/);
 });
 
-test("TUI humanizes Codex and Claude event variants like the Elixir dashboard", () => {
+test("TUI humanizes Codex and Claude event variants", () => {
   assert.equal(
     humanizeCodexMessage({
       event: "approval_auto_approved",
@@ -266,7 +266,7 @@ test("TUI humanizes Codex and Claude event variants like the Elixir dashboard", 
   );
 });
 
-test("terminal throughput uses Elixir-style rolling token samples", () => {
+test("terminal throughput uses rolling token samples", () => {
   let samples = updateTokenSamples([], 10_000, 100);
   assert.equal(rollingThroughput(samples, 10_000, 100), 0);
 
@@ -327,7 +327,7 @@ function snapshotFixture(): RuntimeSnapshot {
 function dashboardScenarios(): Array<{
   name: string;
   snapshot: RuntimeSnapshot;
-  options: Parameters<typeof formatElixirStyleDashboard>[1];
+  options: Parameters<typeof formatDashboard>[1];
 }> {
   const idle = dashboardSnapshot({
     now: "2026-05-05T00:00:00.000Z",
@@ -565,5 +565,5 @@ function readAnsiSnapshot(name: string): string {
 }
 
 function fixturePath(filename: string): string {
-  return path.join(import.meta.dirname, "../../../test/fixtures/elixir-dashboard", filename);
+  return path.join(import.meta.dirname, "../../../test/fixtures/dashboard", filename);
 }

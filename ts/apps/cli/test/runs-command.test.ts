@@ -9,7 +9,7 @@ import { tempDir } from "../../../test/helpers.js";
 
 import { parseRunsArgs, runRunsCommand, runRunsMain } from "@symphony/cli/runs";
 
-test("runs command parses Elixir mix task filters", () => {
+test("runs command parses run-history filters", () => {
   assert.deepEqual(
     parseRunsArgs(["--issue", "MONO-171", "--failed", "--limit", "5", "--port", "4100"]),
     {
@@ -243,7 +243,7 @@ test("runs command renders cost, retries, run detail, and JSON branches", async 
   }
 });
 
-test("runs command reports Elixir-shaped 404 and 503 errors", async () => {
+test("runs command reports 404 and 503 errors", async () => {
   const server = http.createServer((request, response) => {
     if (request.url === "/api/v1/runs?id=missing") {
       response.writeHead(404, { "content-type": "application/json" });

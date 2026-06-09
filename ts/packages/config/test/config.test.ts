@@ -149,7 +149,7 @@ test("config falls back to canonical env vars when explicit env refs resolve emp
   assert.equal(settings.tracker.assignee, "fallback@example.com");
 });
 
-test("config defaults and validation match Elixir parity", () => {
+test("config defaults and validation match expected defaults", () => {
   const settings = parseConfig({}, {});
 
   assert.equal(settings.tracker.kind, undefined);
@@ -660,7 +660,7 @@ test("copied workflow examples load independently in the TypeScript port", async
   }
 });
 
-test("workflow path defaults match Elixir SYMPHONY_WORKFLOW then cwd WORKFLOW.md", async () => {
+test("workflow path defaults match SYMPHONY_WORKFLOW then cwd WORKFLOW.md", async () => {
   const root = await tempDir("symphony-ts-workflow-env");
   const workflowPath = path.join(root, "CUSTOM_WORKFLOW.md");
   await fs.writeFile(workflowPath, "plain prompt");
@@ -682,7 +682,7 @@ test("workflow path defaults match Elixir SYMPHONY_WORKFLOW then cwd WORKFLOW.md
   );
 });
 
-test("workflow parsing treats front matter as optional like Elixir", () => {
+test("workflow parsing treats front matter as optional", () => {
   assert.deepEqual(parseWorkflowContent(" plain prompt\n"), {
     config: {},
     body: "plain prompt",
