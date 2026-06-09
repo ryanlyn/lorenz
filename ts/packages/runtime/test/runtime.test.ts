@@ -9,6 +9,7 @@ import {
   Orchestrator,
   parseConfig,
   runtimeAdapters,
+  slotKey,
 } from "@symphony/cli";
 import {
   RUNTIME_EVENT_TYPES as RUNTIME_EVENT_TYPES_FROM_RUNTIME_EVENTS,
@@ -1212,7 +1213,7 @@ test("runtime records failed attempts as retryable work and keeps polling", asyn
   assert.equal(snapshot.retrying[0]?.attempt, 1);
   assert.equal(snapshot.retrying[0]?.error, "agent exited: boom");
 
-  const retry = orchestrator.snapshot().retrying[0];
+  const retry = orchestrator.state.retryAttempts.get(slotKey(issue.id, 0));
   assert.ok(retry);
   retry.dueAtIso = new Date(Date.now() - 1).toISOString();
   retry.monotonicDeadlineMs = 0;

@@ -563,9 +563,15 @@ describe("INVARIANT: When a snapshot is taken, its arrays and objects SHALL be i
 
     // Take first snapshot and mutate it
     const snap1 = orch.snapshot();
+    const retry1 = snap1.retrying[0]!;
+    const expectedRetry = { ...retry1 };
     snap1.running.push({} as RunningEntry);
     snap1.usageTotals.inputTokens = 99999;
     snap1.blocked.push({} as any);
+    retry1.attempt = 99;
+    retry1.monotonicDeadlineMs = -1;
+    retry1.slotIndex = 7;
+    retry1.workerHost = "mutated-worker";
     snap1.retrying.push({} as any);
 
     // Take second snapshot - should be unaffected
@@ -574,8 +580,10 @@ describe("INVARIANT: When a snapshot is taken, its arrays and objects SHALL be i
     assert.equal(snap2.usageTotals.inputTokens, 0);
     assert.equal(snap2.blocked.length, 0);
     assert.equal(snap2.retrying.length, 1); // only the real retry entry
+    assert.deepEqual(snap2.retrying[0], expectedRetry);
 
     // Also verify internal state was not affected
     assert.notEqual(orch.state.usageTotals.inputTokens, 99999);
+    assert.deepEqual(orch.state.retryAttempts.get(slotKey(issue.id, 0)), expectedRetry);
   });
 });

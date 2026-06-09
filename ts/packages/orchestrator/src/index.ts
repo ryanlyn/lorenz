@@ -287,7 +287,7 @@ export class Orchestrator {
   } {
     return {
       running: [...this.state.running.values()],
-      retrying: [...this.state.retryAttempts.values()],
+      retrying: [...this.state.retryAttempts.values()].map((entry) => ({ ...entry })),
       blocked: this.state.blockedDispatches.map((entry) => ({ ...entry })),
       usageTotals: { ...this.state.usageTotals },
       rateLimits: this.state.rateLimits,
