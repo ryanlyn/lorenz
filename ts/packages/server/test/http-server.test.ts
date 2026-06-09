@@ -64,6 +64,10 @@ test("observability HTTP API exposes Elixir-shaped state, issue, runs, refresh, 
     assert.equal(issuePayload.status, "running");
     assert.equal(issuePayload.running.session_id, "thread-http");
 
+    const encodedIssuePayload = await getJson(server.url("/api/v1/MT%2DHTTP"));
+    assert.equal(encodedIssuePayload.status, "running");
+    assert.equal(encodedIssuePayload.running.session_id, "thread-http");
+
     const runs = await getJson(server.url("/api/v1/runs"));
     assert.equal(runs.view, "runs");
     assert.equal(runs.summary.running, 1);
@@ -207,6 +211,25 @@ test("observability HTTP API serves trace routes when issueStore is provided", a
     await server?.stop();
     issueStore.close();
     await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("observability HTTP API returns structured 400 for malformed issue identifiers", async () => {
+  const server = await startObservabilityServer(fakeRuntime("snapshot_unavailable"), {
+    host: "127.0.0.1",
+    port: 0,
+    staticDir: "/tmp/nonexistent-dashboard-dist",
+  });
+  try {
+    const malformed = await getJson(server.url("/api/v1/%E0%A4%A"), 400);
+    assert.deepEqual(malformed, {
+      error: {
+        code: "invalid_path_parameter",
+        message: "Malformed percent encoding in path parameter",
+      },
+    });
+  } finally {
+    await server.stop();
   }
 });
 

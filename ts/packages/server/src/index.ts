@@ -22,6 +22,7 @@ import type { TraceWatcher } from "@symphony/traceviz-server";
 import { createTraceRoutes } from "./trace-routes.js";
 import { createWsHandler } from "./ws.js";
 import { defaultIssueStorePath, IssueStore } from "./issue-store.js";
+import { decodePathParam, invalidPathParameterError } from "./path-params.js";
 
 export { defaultIssueStorePath, IssueStore };
 export { startClaudeMcpServer } from "@symphony/mcp";
@@ -219,7 +220,10 @@ function buildObservabilityApp(
   }
 
   app.get("/api/v1/:identifier", (c) => {
-    const issueIdentifier = decodeURIComponent(c.req.param("identifier"));
+    const issueIdentifier = decodePathParam(c.req.param("identifier"));
+    if (issueIdentifier === null) {
+      return errorResponse(400, invalidPathParameterError.code, invalidPathParameterError.message);
+    }
     const snapshot = snapshotResult(runtime);
     if (snapshot.status !== "ok") {
       return errorResponse(404, "issue_not_found", "Issue not found");

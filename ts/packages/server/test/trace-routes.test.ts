@@ -56,9 +56,10 @@ describe("trace routes with IssueStore enrichment", () => {
     rmSync(traceDir, { recursive: true, force: true });
   });
 
-  async function getJson(path: string): Promise<unknown> {
+  async function getJson(path: string, expectedStatus = 200): Promise<unknown> {
     const req = new Request(`http://localhost${path}`);
     const res = await app.fetch(req);
+    expect(res.status).toBe(expectedStatus);
     return res.json();
   }
 
@@ -114,12 +115,41 @@ describe("trace routes with IssueStore enrichment", () => {
     expect(data.identifier).toBe("RENAMED-1");
   });
 
+  it("GET /api/v1/tickets/:id/events decodes valid encoded ticket ids", async () => {
+    issueStore.upsert({ issueId: "id-1", issueIdentifier: "RENAMED-1", title: "Title", url: null });
+
+    watcher.start(() => {});
+    await new Promise((r) => setTimeout(r, 150));
+
+    const data = (await getJson("/api/v1/tickets/id%2D1/events")) as Record<string, unknown>;
+    expect(data.issueId).toBe("id-1");
+    expect(data.identifier).toBe("RENAMED-1");
+  });
+
   it("GET /api/v1/tickets/:id/events falls back to watcher identifier", async () => {
     watcher.start(() => {});
     await new Promise((r) => setTimeout(r, 150));
 
     const data = (await getJson("/api/v1/tickets/id-1/events")) as Record<string, unknown>;
     expect(data.identifier).toBe("TEST-1");
+  });
+
+  it.each([
+    "/api/v1/tickets/%E0%A4%A/exists",
+    "/api/v1/tickets/%E0%A4%A/events",
+    "/api/v1/tickets/%E0%A4%A/stats",
+  ])("GET %s returns structured 400 for malformed ticket ids", async (path) => {
+    const req = new Request(`http://localhost${path}`);
+    const res = await app.fetch(req);
+
+    expect(res.status).toBe(400);
+    expect(res.headers.get("content-type")).toMatch(/^application\/json/i);
+    expect(await res.json()).toEqual({
+      error: {
+        code: "invalid_path_parameter",
+        message: "Malformed percent encoding in path parameter",
+      },
+    });
   });
 
   it("GET /api/v1/tickets/:id/exists returns true for known ticket", async () => {
