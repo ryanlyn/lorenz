@@ -295,6 +295,69 @@ test("SDK path fetchCandidateIssues resolves viewer and paginates", async () => 
   assert.deepEqual(issues[0]?.labels, ["symphony:backend"]);
 });
 
+test("SDK path retries assignee viewer lookup after transient failure", async () => {
+  let requestIndex = 0;
+  const mockRequest = vi.fn(async (query: unknown) => {
+    requestIndex += 1;
+    if (requestIndex === 1) {
+      throw new Error("network down");
+    }
+    if (String(query).includes("viewer")) {
+      return { viewer: { id: "user-1", name: "Worker", email: "w@x.com" } };
+    }
+    return {
+      issues: {
+        nodes: [
+          {
+            id: "issue-1",
+            identifier: "MT-1",
+            title: "Test issue",
+            description: "Test desc",
+            priority: 2,
+            state: { id: "state-1", name: "Todo", type: "unstarted" },
+            branchName: "mt-1-branch",
+            url: "https://linear.app/test/issue/MT-1",
+            assignee: { id: "user-1" },
+            labels: { nodes: [{ name: "Symphony:Backend" }] },
+            inverseRelations: { nodes: [] },
+            createdAt: "2026-05-04T00:00:00.000Z",
+            updatedAt: "2026-05-04T00:01:00.000Z",
+          },
+        ],
+        pageInfo: { hasNextPage: false, endCursor: null },
+      },
+    };
+  });
+
+  const settings = parseConfig(
+    {
+      tracker: {
+        api_key: "lin_api_test",
+        project_slug: "mono",
+        active_states: ["Todo"],
+        assignee: "me",
+      },
+    },
+    {},
+  );
+  const client = new LinearClient(
+    settings,
+    { graphqlClient: mockGraphqlClient(mockRequest) },
+    { maxRetries: 0 },
+  );
+
+  await assert.rejects(() => client.fetchCandidateIssues(), /network down/);
+
+  const issues = await client.fetchCandidateIssues();
+
+  assert.equal(issues.length, 1);
+  assert.equal(issues[0]?.assignedToWorker, true);
+  const viewerQueries = mockRequest.mock.calls.filter(([query]) =>
+    String(query).includes("viewer"),
+  );
+  assert.equal(viewerQueries.length, 2);
+});
+
 test("SDK path createIssue sends mutation and normalizes response", async () => {
   const mockRequest = vi.fn(async () => ({
     issueCreate: {

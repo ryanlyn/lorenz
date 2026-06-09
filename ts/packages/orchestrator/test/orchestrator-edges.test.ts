@@ -68,7 +68,7 @@ test("claim — preferred slot honored on retry", () => {
   const orchestrator = new Orchestrator(settings);
   const issue = makeIssue();
 
-  orchestrator.state.retryAttempts.set(issue.id, {
+  orchestrator.state.retryAttempts.set(slotKey(issue.id, 2), {
     issueId: issue.id,
     identifier: issue.identifier,
     attempt: 1,

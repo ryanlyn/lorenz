@@ -102,6 +102,7 @@ export function firstUnclaimedSlot(
   if (
     preferredSlotIndex !== undefined &&
     preferredSlotIndex !== null &&
+    Number.isInteger(preferredSlotIndex) &&
     preferredSlotIndex >= 0 &&
     preferredSlotIndex < size &&
     !claimedSlots.has(slotKey(issue.id, preferredSlotIndex))

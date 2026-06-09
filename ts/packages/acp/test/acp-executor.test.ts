@@ -9,6 +9,8 @@ import type { AgentUpdate } from "@symphony/cli";
 import { assert } from "../../../test/assert.js";
 import { sampleIssue, tempDir, writeExecutable } from "../../../test/helpers.js";
 
+let nextAcpServerPort = 45_000 + (process.pid % 1_000);
+
 test("ACP executor starts a session, translates updates, approves permissions, and exposes fs", async () => {
   const root = await tempDir("symphony-ts-acp");
   const fake = await writeFakeBridge(root);
@@ -99,6 +101,50 @@ test("ACP executor can pass through cumulative bridge usage without double count
     outputTokens: 6,
     totalTokens: 20,
   });
+});
+
+test("ACP executor ignores session updates for a different active session", async () => {
+  const root = await tempDir("symphony-ts-acp-session-mismatch");
+  const fake = await writeFakeBridge(root);
+  const trace = path.join(root, "trace.jsonl");
+  const settings = acpSettings(root, fake, trace, "wrong-session-update");
+  const updates: AgentUpdate[] = [];
+  const executor = new Executor("claude");
+  const session = await executor.startSession({
+    workspace: root,
+    settings,
+    issue: sampleIssue,
+    onUpdate: (update) => updates.push(update),
+  });
+  try {
+    const turnUpdates = await executor.runTurn(session, "hello", sampleIssue);
+    assert.ok(turnUpdates.some((update) => update.type === "turn_completed"));
+  } finally {
+    await session.stop();
+  }
+
+  assert.equal(session.sessionId, "acp-new");
+  assert.equal(session.resumeId, "acp-new");
+  assert.ok(
+    updates.some(
+      (update) => update.type === "session_notification" && update.message.sessionId === "acp-new",
+    ),
+  );
+  assert.equal(
+    updates.some(
+      (update) =>
+        update.type === "session_notification" && update.message.sessionId === "wrong-session",
+    ),
+    false,
+  );
+  const mismatch = updates.find(
+    (update) => update.type === "malformed" && String(update.message).includes("wrong-session"),
+  );
+  assert.equal(mismatch?.sessionId, "acp-new");
+  assert.equal(mismatch?.resumeId, "acp-new");
+  const traceEvents = await readTrace(trace);
+  const closeSession = traceEvents.find((event) => event.method === "closeSession");
+  assert.equal(closeSession?.params?.sessionId, "acp-new");
 });
 
 test("ACP executor prefers session/resume when the agent advertises resume support", async () => {
@@ -224,6 +270,52 @@ test("ACP executor resets the stall timeout on session notifications", async () 
   );
 });
 
+test("ACP executor emits matching terminal sessionUpdate kinds for cancelled and failed turns", async () => {
+  const cases = [
+    {
+      mode: "cancelled-turn",
+      stopReason: "cancelled",
+      updateType: "turn_cancelled",
+      error: /acp_turn_cancelled/,
+    },
+    {
+      mode: "failed-turn",
+      stopReason: "refusal",
+      updateType: "turn_failed",
+      error: /acp_turn_failed: refusal/,
+    },
+  ] as const;
+
+  for (const testCase of cases) {
+    const root = await tempDir(`symphony-ts-acp-${testCase.mode}`);
+    const fake = await writeFakeBridge(root);
+    const trace = path.join(root, "trace.jsonl");
+    const settings = acpSettings(root, fake, trace, testCase.mode);
+    const updates: AgentUpdate[] = [];
+    const executor = new Executor("claude");
+    const session = await executor.startSession({
+      workspace: root,
+      settings,
+      issue: sampleIssue,
+      onUpdate: (update) => updates.push(update),
+    });
+    try {
+      await assert.rejects(() => executor.runTurn(session, "hello", sampleIssue), testCase.error);
+    } finally {
+      await session.stop();
+    }
+
+    const terminal = updates.find((update) => update.type === testCase.updateType);
+    assert.equal(terminal?.type, testCase.updateType);
+    assert.equal(terminal?.sessionUpdate?.kind, testCase.updateType);
+    assert.equal(
+      (terminal?.message as { response?: { stopReason?: string } } | undefined)?.response
+        ?.stopReason,
+      testCase.stopReason,
+    );
+  }
+});
+
 test("ACP executor suppresses late terminal updates after turn timeout", async () => {
   const root = await tempDir("symphony-ts-acp-late-timeout");
   const fake = await writeFakeBridge(root);
@@ -319,7 +411,12 @@ test("writeProviderConfig writes .codex/config.toml for codex bridge", async () 
   const root = await tempDir("symphony-ts-acp-provider-codex");
   const fake = await writeFakeBridge(root);
   const trace = path.join(root, "trace.jsonl");
-  const providerConfig = { model: "gpt-5.5", model_reasoning_effort: "xhigh" };
+  const providerConfig = {
+    "bad key": "literal-space",
+    model: "gpt-5.5",
+    "model.provider": "literal-dot",
+    model_reasoning_effort: "xhigh",
+  };
   const settings = acpSettings(root, fake, trace, "new", 5_000, {
     agentKind: "codex",
     providerConfig,
@@ -333,7 +430,9 @@ test("writeProviderConfig writes .codex/config.toml for codex bridge", async () 
   await session.stop();
 
   const toml = await fs.readFile(path.join(root, ".codex", "config.toml"), "utf8");
+  assert.match(toml, /"bad key" = "literal-space"/);
   assert.match(toml, /model = "gpt-5.5"/);
+  assert.match(toml, /"model.provider" = "literal-dot"/);
   assert.match(toml, /model_reasoning_effort = "xhigh"/);
 });
 
@@ -343,7 +442,8 @@ test("writeProviderConfig writes nested TOML sections", async () => {
   const trace = path.join(root, "trace.jsonl");
   const providerConfig = {
     model: "gpt-5.5",
-    history: { max_entries: 100, persistence: true },
+    history: { "max.entries": 100, persistence: true },
+    "history.options": { "save mode": "all" },
   };
   const settings = acpSettings(root, fake, trace, "new", 5_000, {
     agentKind: "codex",
@@ -360,8 +460,10 @@ test("writeProviderConfig writes nested TOML sections", async () => {
   const toml = await fs.readFile(path.join(root, ".codex", "config.toml"), "utf8");
   assert.match(toml, /model = "gpt-5.5"/);
   assert.match(toml, /\[history\]/);
-  assert.match(toml, /max_entries = 100/);
+  assert.match(toml, /"max.entries" = 100/);
   assert.match(toml, /persistence = true/);
+  assert.match(toml, /\["history.options"\]/);
+  assert.match(toml, /"save mode" = "all"/);
 });
 
 test("writeProviderConfig is skipped when providerConfig is absent from agent config", async () => {
@@ -396,6 +498,7 @@ function acpSettings(
 ) {
   const kind = opts?.agentKind ?? "claude";
   return parseConfig({
+    server: { host: "127.0.0.1", port: nextAcpServerPort++ },
     workspace: { root: path.dirname(root) },
     agent: { kind },
     agents: {
@@ -504,6 +607,59 @@ class FakeAgent {
           }
         });
       }
+      return {
+        stopReason: "end_turn",
+        usage: {
+          inputTokens: 2,
+          cachedReadTokens: 4,
+          cachedWriteTokens: 1,
+          outputTokens: 3,
+          thoughtTokens: 9,
+          totalTokens: 10
+        }
+      };
+    }
+    if (mode === "cancelled-turn") {
+      return {
+        stopReason: "cancelled",
+        usage: {
+          inputTokens: 2,
+          cachedReadTokens: 4,
+          cachedWriteTokens: 1,
+          outputTokens: 3,
+          thoughtTokens: 9,
+          totalTokens: 10
+        }
+      };
+    }
+    if (mode === "failed-turn") {
+      return {
+        stopReason: "refusal",
+        usage: {
+          inputTokens: 2,
+          cachedReadTokens: 4,
+          cachedWriteTokens: 1,
+          outputTokens: 3,
+          thoughtTokens: 9,
+          totalTokens: 10
+        }
+      };
+    }
+    if (mode === "wrong-session-update") {
+      await this.connection.sessionUpdate({
+        sessionId: params.sessionId,
+        update: {
+          sessionUpdate: "agent_message_chunk",
+          content: { type: "text", text: "valid session" }
+        }
+      });
+      await this.connection.sessionUpdate({
+        sessionId: "wrong-session",
+        update: {
+          sessionUpdate: "agent_message_chunk",
+          content: { type: "text", text: "wrong session" }
+        }
+      });
       return {
         stopReason: "end_turn",
         usage: {
@@ -644,6 +800,9 @@ if [ "$is_tunnel" = "1" ]; then
   trap 'exit 0' TERM INT
   while :; do sleep 1; done
 fi
+case "$last_arg" in
+  *'/dev/tcp/127.0.0.1/'*) exit 0 ;;
+esac
 eval "$last_arg"
 `,
   );

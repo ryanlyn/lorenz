@@ -1,8 +1,8 @@
-import { mkdirSync, appendFileSync, rmSync } from "node:fs";
+import { mkdirSync, appendFileSync, rmSync, symlinkSync } from "node:fs";
 import path from "node:path";
 import { tmpdir } from "node:os";
 
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 
 import { TraceWatcher } from "../src/watcher.js";
 import type { TicketInfo } from "../src/models/api.js";
@@ -20,6 +20,17 @@ function writeTraceLine(traceDir: string, issueId: string, line: Record<string, 
   const issueDir = path.join(traceDir, issueId);
   mkdirSync(issueDir, { recursive: true });
   appendFileSync(path.join(issueDir, "trace.jsonl"), JSON.stringify(line) + "\n");
+}
+
+interface TestScanner {
+  scan(callback: (issueId: string, ticket: TicketInfo) => void): Promise<void>;
+}
+
+async function scanOnce(
+  watcher: TraceWatcher,
+  callback: (issueId: string, ticket: TicketInfo) => void,
+): Promise<void> {
+  await (watcher as unknown as TestScanner).scan(callback);
 }
 
 describe("TraceWatcher", () => {
@@ -77,6 +88,50 @@ describe("TraceWatcher", () => {
     expect(watcher.getEventsForTicket("id-1").some((e) => e.kind === "message")).toBe(true);
   });
 
+  it("clears the active interval after start is called twice", () => {
+    vi.useFakeTimers();
+    try {
+      watcher.start(() => {});
+      watcher.start(() => {});
+
+      expect(vi.getTimerCount()).toBe(1);
+      watcher.stop();
+      vi.advanceTimersByTime(50);
+
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("ignores symlinked ticket directories that resolve outside the trace root", async () => {
+    const callbacks: Array<{ issueId: string; ticket: TicketInfo }> = [];
+    const outsideTraceDir = makeTraceDir();
+
+    try {
+      writeTraceLine(outsideTraceDir, "ESCAPE-1", {
+        type: "turn_started",
+        issueId: "outside-id",
+        issueIdentifier: "ESCAPE-1",
+        timestamp: "2026-01-01T00:00:00Z",
+      });
+
+      symlinkSync(path.join(outsideTraceDir, "ESCAPE-1"), path.join(traceDir, "ESCAPE-1"), "dir");
+
+      watcher.start((issueId, ticket) => {
+        callbacks.push({ issueId, ticket });
+      });
+
+      await new Promise((r) => setTimeout(r, 150));
+      watcher.stop();
+
+      expect(watcher.getTickets()).toEqual([]);
+      expect(callbacks).toEqual([]);
+    } finally {
+      rmSync(outsideTraceDir, { recursive: true, force: true });
+    }
+  });
+
   it("only calls back when new lines are appended", async () => {
     const callbacks: Array<{ issueId: string; ticket: TicketInfo }> = [];
 
@@ -95,11 +150,9 @@ describe("TraceWatcher", () => {
     const countAfterFirst = callbacks.length;
     expect(countAfterFirst).toBeGreaterThan(0);
 
-    // Wait another poll cycle without changes — no new callback
     await new Promise((r) => setTimeout(r, 150));
     expect(callbacks.length).toBe(countAfterFirst);
 
-    // Now append a new line
     writeTraceLine(traceDir, "TEST-2", {
       type: "session_notification",
       issueId: "id-2",
@@ -128,7 +181,37 @@ describe("TraceWatcher", () => {
     expect(watcher.getEventsForTicket("id-2").some((e) => e.kind === "message")).toBe(true);
   });
 
-  it("updates ticket info when new lines are appended", async () => {
+  it("skips notifying unchanged trace files when directory name differs from issueId", async () => {
+    const callbacks: Array<{ issueId: string; ticket: TicketInfo }> = [];
+
+    writeTraceLine(traceDir, "TEST-5", {
+      type: "turn_started",
+      issueId: "id-5",
+      issueIdentifier: "TEST-5",
+      timestamp: "2026-01-01T00:00:00Z",
+    });
+
+    const callback = (issueId: string, ticket: TicketInfo) => {
+      callbacks.push({ issueId, ticket });
+    };
+
+    await scanOnce(watcher, callback);
+
+    expect(callbacks).toHaveLength(1);
+    expect(callbacks[0]).toMatchObject({
+      issueId: "id-5",
+      ticket: {
+        issueId: "id-5",
+        identifier: "TEST-5",
+      },
+    });
+
+    await scanOnce(watcher, callback);
+
+    expect(callbacks).toHaveLength(1);
+  });
+
+  it("updates ticket info while preserving lazy event reads", async () => {
     const callbacks: Array<{ issueId: string; ticket: TicketInfo }> = [];
 
     writeTraceLine(traceDir, "TEST-3", {
@@ -166,53 +249,11 @@ describe("TraceWatcher", () => {
         identifier: "TEST-3",
         status: "running",
         turnCount: 1,
+        startedAt: "2026-01-01T00:00:00Z",
       },
     });
     const events = watcher.getEventsForTicket("id-3");
     expect(events.some((e) => e.kind === "turn_started")).toBe(true);
-    expect(events.some((e) => e.kind === "message")).toBe(true);
-  });
-
-  it("notifies with compact ticket info while preserving lazy event reads", async () => {
-    const callbacks: Array<{ issueId: string; ticket: unknown }> = [];
-
-    writeTraceLine(traceDir, "TEST-5", {
-      type: "turn_started",
-      issueId: "id-5",
-      issueIdentifier: "TEST-5",
-      timestamp: "2026-01-01T00:00:00Z",
-    });
-    writeTraceLine(traceDir, "TEST-5", {
-      type: "session_notification",
-      issueId: "id-5",
-      issueIdentifier: "TEST-5",
-      timestamp: "2026-01-01T00:00:01Z",
-      message: {
-        sessionId: "s1",
-        update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Test" } },
-      },
-    });
-
-    watcher.start((issueId, ticket) => {
-      callbacks.push({ issueId, ticket });
-    });
-
-    await new Promise((r) => setTimeout(r, 150));
-    watcher.stop();
-
-    expect(callbacks.length).toBeGreaterThan(0);
-    const first = callbacks[0]!;
-    expect(first.issueId).toBe("id-5");
-    expect(Array.isArray(first.ticket)).toBe(false);
-    expect(first.ticket).toMatchObject({
-      issueId: "id-5",
-      identifier: "TEST-5",
-      status: "running",
-      turnCount: 1,
-      startedAt: "2026-01-01T00:00:00Z",
-    });
-
-    const events = watcher.getEventsForTicket("id-5");
     expect(events.some((e) => e.kind === "message")).toBe(true);
   });
 

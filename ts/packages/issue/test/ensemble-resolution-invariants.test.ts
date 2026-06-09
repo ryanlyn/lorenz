@@ -1,6 +1,6 @@
 import { test, describe } from "vitest";
 import fc from "fast-check";
-import type { Issue } from "@symphony/domain";
+import { ENSEMBLE_SIZE_MAX, type Issue } from "@symphony/domain";
 
 import { assert } from "../../../test/assert.js";
 
@@ -77,11 +77,11 @@ const randomCaseEnsembleArb = fc.array(fc.boolean(), { minLength: 8, maxLength: 
     .join("");
 });
 
-describe("INVARIANT: When a valid label with a positive integer is present, the system SHALL use that integer as ensemble size", () => {
-  test("valid label with positive integer is used as ensemble size", () => {
+describe("INVARIANT: When a valid label within the domain range is present, the system SHALL use that integer as ensemble size", () => {
+  test("valid label within the domain range is used as ensemble size", () => {
     fc.assert(
       fc.property(
-        fc.integer({ min: 1, max: 10000 }),
+        fc.integer({ min: 1, max: ENSEMBLE_SIZE_MAX }),
         fc.array(nonEnsembleLabelArb, { minLength: 0, maxLength: 5 }),
         (n, noise) => {
           // Place the valid label among noise labels at the front
@@ -97,19 +97,32 @@ describe("INVARIANT: When a valid label with a positive integer is present, the 
     );
   });
 
-  test("very large positive integers are accepted", () => {
+  test("positive integers above the domain maximum are ignored", () => {
     fc.assert(
-      fc.property(fc.integer({ min: 1, max: 2_000_000 }), (n) => {
+      fc.property(fc.integer({ min: ENSEMBLE_SIZE_MAX + 1, max: 2_000_000 }), (n) => {
         const issue = issueWith([`ensemble:${n}`]);
         const result = ensembleSize(issue);
-        assert.equal(result, n);
+        assert.equal(result, null);
       }),
+    );
+  });
+
+  test("oversized labels are skipped before a later valid label", () => {
+    fc.assert(
+      fc.property(
+        fc.integer({ min: ENSEMBLE_SIZE_MAX + 1, max: 2_000_000 }),
+        fc.integer({ min: 1, max: ENSEMBLE_SIZE_MAX }),
+        (oversized, valid) => {
+          const issue = issueWith([`ensemble:${oversized}`, `ensemble:${valid}`]);
+          assert.equal(ensembleSize(issue), valid);
+        },
+      ),
     );
   });
 
   test("leading zeros in the number are accepted (parsed as decimal)", () => {
     fc.assert(
-      fc.property(fc.integer({ min: 1, max: 999 }), (n) => {
+      fc.property(fc.integer({ min: 1, max: ENSEMBLE_SIZE_MAX }), (n) => {
         // e.g. "ensemble:007" should parse as 7
         const padded = String(n).padStart(3, "0");
         const issue = issueWith([`ensemble:${padded}`]);
@@ -414,6 +427,7 @@ describe("INVARIANT: When ensembleSize returns a value, it SHALL be a positive i
           assert.ok(Number.isFinite(result));
           assert.ok(Number.isInteger(result));
           assert.ok(result > 0);
+          assert.ok(result <= ENSEMBLE_SIZE_MAX);
         },
       ),
       { numRuns: 300 },

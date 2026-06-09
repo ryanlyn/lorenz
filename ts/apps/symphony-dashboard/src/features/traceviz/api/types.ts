@@ -8,6 +8,7 @@ export type {
   TurnCompletedDisplayEvent as TurnCompletedEvent,
   TurnFailedDisplayEvent as TurnFailedEvent,
   NotificationDisplayEvent as NotificationEvent,
+  UnknownDisplayEvent as UnknownEvent,
 } from "@symphony/traceviz-server";
 
 export type {

@@ -182,14 +182,21 @@ function parseTracker(
   env: NodeJS.ProcessEnv,
 ): TrackerSettings {
   const kindRaw = trackerRaw.kind;
-  const kind =
-    kindRaw === undefined || kindRaw === null
-      ? defaults.kind
-      : trackerKindValue(kindRaw, "tracker.kind");
+  const kindUnspecified = kindRaw === undefined || kindRaw === null;
+  const kind = kindUnspecified ? defaults.kind : trackerKindValue(kindRaw, "tracker.kind");
 
-  const apiKey = resolveConfiguredSecret(trackerRaw.apiKey, env, "LINEAR_API_KEY");
+  const resolveLinearFallbacks = kindUnspecified || kind === "linear";
+  const apiKey = resolveConfiguredSecret(
+    trackerRaw.apiKey,
+    env,
+    resolveLinearFallbacks ? "LINEAR_API_KEY" : undefined,
+  );
   const projectSlug = resolveEnv(trackerRaw.projectSlug ?? "", env) || undefined;
-  const assignee = resolveConfiguredSecret(trackerRaw.assignee, env, "LINEAR_ASSIGNEE");
+  const assignee = resolveConfiguredSecret(
+    trackerRaw.assignee,
+    env,
+    resolveLinearFallbacks ? "LINEAR_ASSIGNEE" : undefined,
+  );
   const idPrefix = trackerRaw.idPrefix ?? defaults.idPrefix ?? "BOARD-";
   assertValidLocalIdPrefix(idPrefix);
 
@@ -299,7 +306,7 @@ function parseAgents(
       { ...recordRaw, executor: "acp" },
       `agents.${normalized}`,
     );
-    const defaults = baseAgents[normalized] ?? claudeDefaults;
+    const defaults = baseAgents[normalized] ?? customAgentDefaultsForBridge(parsed, claudeDefaults);
     agents[normalized] = parseAgent(normalized, parsed, defaults);
   }
   return agents;
@@ -345,6 +352,19 @@ function withAgentTimeoutDefaults(
   );
 }
 
+function customAgentDefaultsForBridge(
+  raw: AcpAgentRecordRaw,
+  claudeDefaults: AgentConfig,
+): AgentConfig {
+  const bridgeCommand = raw.bridgeCommand ?? raw.command ?? claudeDefaults.bridgeCommand;
+  return {
+    ...claudeDefaults,
+    providerConfig: isClaudeCompatibleBridgeCommand(bridgeCommand)
+      ? claudeDefaults.providerConfig
+      : undefined,
+  };
+}
+
 function parseAgentRecordSchema(raw: Record<string, unknown>, label: string) {
   const result = acpAgentRecordSchema.safeParse(raw);
   if (result.success) return result.data;
@@ -370,7 +390,20 @@ function inferUsageAccounting(kind: AgentKind, bridgeCommand: string): AgentUsag
   return "cumulative";
 }
 
+function isClaudeCompatibleBridgeCommand(bridgeCommand: string): boolean {
+  return /(^|\s|\/)claude-agent-acp(\s|$)/.test(bridgeCommand);
+}
+
 function applyKnownAgentRecords(settings: Settings): void {
+  const codex = settings.agents.codex;
+  if (codex?.executor === "acp") {
+    settings.codex = {
+      command: codex.bridgeCommand,
+      turnTimeoutMs: codex.turnTimeoutMs,
+      stallTimeoutMs: codex.stallTimeoutMs,
+    };
+  }
+
   const claude = settings.agents.claude;
   if (claude?.executor === "acp") {
     settings.claude = {
@@ -568,14 +601,14 @@ function resolveEnv(value: string, env: NodeJS.ProcessEnv): string {
 function resolveConfiguredSecret(
   value: string | undefined,
   env: NodeJS.ProcessEnv,
-  fallbackEnvName: string,
+  fallbackEnvName?: string,
 ): string | undefined {
+  const fallback = fallbackEnvName === undefined ? undefined : nonEmptyString(env[fallbackEnvName]);
   if (value === undefined) {
-    const fallback = nonEmptyString(env[fallbackEnvName]);
     return resolveOnePasswordRef(fallback, env);
   }
   const resolved = resolveEnv(value, env);
-  const secret = nonEmptyString(resolved) ?? nonEmptyString(env[fallbackEnvName]);
+  const secret = nonEmptyString(resolved) ?? fallback;
   return resolveOnePasswordRef(secret, env);
 }
 

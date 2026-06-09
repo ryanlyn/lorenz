@@ -30,7 +30,8 @@
     "dashboard:ui": "pnpm --filter @symphony/dashboard dev",
     "dashboard:build": "pnpm --filter @symphony/dashboard build",
     "traceviz": "pnpm --filter @symphony/traceviz traceviz",
-    "lint:versions": "syncpack lint"
+    "lint:versions": "syncpack lint",
+    "agent-settings:check": "tsx scripts/check-agent-settings-policy.ts"
   },
   "devDependencies": {
     "@agentclientprotocol/sdk": "catalog:",

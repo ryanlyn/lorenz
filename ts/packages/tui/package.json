@@ -9,9 +9,10 @@
     ".": "./dist/index.js"
   },
   "dependencies": {
-    "ink": "catalog:",
-    "react": "catalog:",
+    "@symphony/domain": "workspace:*",
     "@symphony/humanize": "workspace:*",
-    "@symphony/runtime-events": "workspace:*"
+    "@symphony/runtime-events": "workspace:*",
+    "ink": "catalog:",
+    "react": "catalog:"
   }
 }

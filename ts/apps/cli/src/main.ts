@@ -158,50 +158,55 @@ export async function runDaemon(options: CliOptions): Promise<number> {
     process.on("SIGTERM", requestStop);
 
     let server: Awaited<ReturnType<typeof startObservabilityServer>> | null = null;
-    if (options.dashboard) {
-      server = await startObservabilityServer(runtime, {
-        host: workflow.settings.server.host,
-        port: workflow.settings.server.port ?? 0,
-        ...(workflow.settings.server.traceDir !== undefined && {
-          traceDir: workflow.settings.server.traceDir,
-        }),
-        ...(workflow.settings.server.staticDir !== undefined && {
-          staticDir: workflow.settings.server.staticDir,
-        }),
-        issueStore,
-      });
-      workflow.settings.server.port = server.port;
-      boundServerPort = server.port;
-      process.stderr.write(`Observability API listening on ${server.url("/")}\n`);
-    }
-
-    instance =
-      options.tui && process.stdout.isTTY
-        ? render(
-            React.createElement(RuntimeApp, {
-              runtime,
-              dashboardUrl: server?.url("/") ?? null,
-              projectUrl: projectUrlForSettings(workflow.settings),
-            }),
-          )
-        : null;
-
-    if (!instance) {
-      runtime.subscribe((snapshot) => {
-        process.stdout.write(`${JSON.stringify(snapshot, null, 2)}\n`);
-      });
-    }
-
     try {
+      if (options.dashboard) {
+        server = await startObservabilityServer(runtime, {
+          host: workflow.settings.server.host,
+          port: workflow.settings.server.port ?? 0,
+          ...(workflow.settings.server.traceDir !== undefined && {
+            traceDir: workflow.settings.server.traceDir,
+          }),
+          ...(workflow.settings.server.staticDir !== undefined && {
+            staticDir: workflow.settings.server.staticDir,
+          }),
+          issueStore,
+        });
+        workflow.settings.server.port = server.port;
+        boundServerPort = server.port;
+        process.stderr.write(`Observability API listening on ${server.url("/")}\n`);
+      }
+
+      instance =
+        options.tui && process.stdout.isTTY
+          ? render(
+              React.createElement(RuntimeApp, {
+                runtime,
+                dashboardUrl: server?.url("/") ?? null,
+                projectUrl: projectUrlForSettings(workflow.settings),
+              }),
+            )
+          : null;
+
+      if (!instance) {
+        runtime.subscribe((snapshot) => {
+          process.stdout.write(`${JSON.stringify(snapshot, null, 2)}\n`);
+        });
+      }
+
       await runtime.start({ once: options.once, dryRun: options.dryRun });
+      return 0;
     } finally {
       // Leave the signal handlers attached through teardown so a second Ctrl+C
       // can't slip past them and kill the process mid-shutdown.
-      instance?.unmount();
-      await server?.stop();
-      issueStore.close();
+      try {
+        instance?.unmount();
+        await server?.stop();
+        issueStore.close();
+      } finally {
+        process.off("SIGINT", requestStop);
+        process.off("SIGTERM", requestStop);
+      }
     }
-    return 0;
   } catch (error) {
     process.stderr.write(`${errorMessage(error)}\n`);
     return 1;

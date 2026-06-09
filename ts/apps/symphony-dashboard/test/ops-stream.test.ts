@@ -1,4 +1,4 @@
-import { expect, test, vi } from "vitest";
+import { afterEach, expect, test, vi } from "vitest";
 
 import type { OpsState } from "../src/features/ops/api/types";
 import { wireOpsStream } from "../src/features/ops/hooks/useOpsStream";
@@ -26,6 +26,12 @@ class FakeEventSource {
     for (const listener of this.listeners.get(type) ?? []) listener(event);
   }
 }
+
+afterEach(() => {
+  vi.doUnmock("react");
+  vi.resetModules();
+  vi.unstubAllGlobals();
+});
 
 test("wireOpsStream updates dashboard state from named state events", () => {
   const stream = new FakeEventSource();
@@ -63,4 +69,46 @@ test("wireOpsStream updates dashboard state from named state events", () => {
   expect(setConnected).toHaveBeenCalledWith(false);
   expect(stream.closed).toBe(true);
   expect(scheduleReconnect).toHaveBeenCalledOnce();
+});
+
+test("useOpsStream initial fetch failure does not emit an unhandled rejection", async () => {
+  const unhandledReasons: unknown[] = [];
+  const onUnhandledRejection = (reason: unknown) => {
+    unhandledReasons.push(reason);
+  };
+  const cleanupEffects: Array<() => void> = [];
+  const stateUpdates: unknown[] = [];
+  let stateHookIndex = 0;
+
+  process.on("unhandledRejection", onUnhandledRejection);
+  vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("network down")));
+  vi.stubGlobal("EventSource", FakeEventSource);
+  vi.doMock("react", () => ({
+    useCallback: (callback: () => void) => callback,
+    useEffect: (effect: () => void | (() => void)) => {
+      const cleanup = effect();
+      if (cleanup) cleanupEffects.push(cleanup);
+    },
+    useRef: <T>(initial: T) => ({ current: initial }),
+    useState: <T>(initial: T) => {
+      const hookIndex = stateHookIndex;
+      stateHookIndex += 1;
+      const setter = vi.fn((value: T) => {
+        if (hookIndex === 0) stateUpdates.push(value);
+      });
+      return [initial, setter] as const;
+    },
+  }));
+
+  try {
+    const { useOpsStream } = await import("../src/features/ops/hooks/useOpsStream");
+    useOpsStream();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(unhandledReasons).toEqual([]);
+    expect(stateUpdates).toEqual([]);
+  } finally {
+    for (const cleanup of cleanupEffects) cleanup();
+    process.off("unhandledRejection", onUnhandledRejection);
+  }
 });

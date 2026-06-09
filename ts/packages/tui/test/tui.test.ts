@@ -105,6 +105,50 @@ test("terminal dashboard renders pending for claimed runs before agent events ar
   assert.notMatch(rendered, /\bundefined\b/);
 });
 
+test("terminal dashboard sanitizes snapshot-derived strings before rendering", () => {
+  const now = "2026-05-05T02:00:00.000Z";
+  const rendered = formatElixirStyleDashboard(
+    dashboardSnapshot({
+      now,
+      running: [
+        runningFixture(
+          "MT-1\n│ spoofed",
+          "codex\n│ agent-kind\x1b[2J",
+          "In Progress\x1b[2J",
+          "4242",
+          0,
+          1,
+          0,
+          "boom\n│ fake-event\x1b[2J",
+          now,
+          "turn_ended_with_error",
+        ),
+      ],
+      retrying: [retryFixture("MT-RETRY\n│ fake-retry\x1b[2J", 1, 1, "retry\n│ fake-error", now)],
+      rateLimits: {
+        model: "gpt-5\n│ fake-rate\x1b[2J",
+        primary: { used: 1, limit: 2, resetSeconds: 3 },
+        credits: "none\n│ fake-credit\x1b[2J",
+      },
+    }),
+    {
+      now,
+      dashboardUrl: "http://127.0.0.1:4000\n│ fake-dashboard\x1b[2J",
+      projectUrl: "https://linear.app/project\n│ fake-project\x1b[2J",
+      runtimeSeconds: 0,
+      throughputTps: 0,
+    },
+  );
+
+  assert.match(rendered, /MT-1/);
+  assert.match(rendered, /codex/);
+  assert.match(rendered, /In Progress/);
+  assert.match(rendered, /MT-RETRY/);
+  assert.match(rendered, /gpt-5/);
+  assert.equal(rendered.includes("\x1b[2J"), false);
+  assert.notMatch(rendered, /\n│ (agent-kind|fake-\w+|spoofed)/);
+});
+
 test("Runtime field tracks live elapsed time of active runs as the clock advances", () => {
   // A single run started at 00:00:00 with no completion-accumulated seconds.
   const snapshot = dashboardSnapshot({

@@ -9,6 +9,7 @@ import {
   Orchestrator,
   parseConfig,
   runtimeAdapters,
+  slotKey,
 } from "@symphony/cli";
 import {
   RUNTIME_EVENT_TYPES as RUNTIME_EVENT_TYPES_FROM_RUNTIME_EVENTS,
@@ -578,7 +579,7 @@ test("runtime stall reconciliation uses agents-level stall timeout defaults", as
     workspace: { root },
     agents: { stall_timeout_ms: 50 },
   });
-  assert.equal(settings.codex.stallTimeoutMs, 300_000);
+  assert.equal(settings.codex.stallTimeoutMs, 50);
   assert.equal(settings.agents.codex.stallTimeoutMs, 50);
   const workflow: WorkflowDefinition = {
     path: "/tmp/WORKFLOW.md",
@@ -905,6 +906,59 @@ test("runtime coalesces overlapping pollOnce calls", async () => {
   await Promise.all([first, second]);
 });
 
+test("runtime preserves stronger overlapping pollOnce dispatch intent", async () => {
+  const issue = issueFixture("issue-overlap-dispatch", "MT-OVERLAP-DISPATCH");
+  const doneIssue: Issue = { ...issue, state: "Done", stateType: "completed" };
+  const fetchControl: { release?: () => void } = {};
+  let fetches = 0;
+  let runnerCalls = 0;
+  const runtime = new SymphonyRuntime(
+    runtimeOptions({
+      workflow: workflowFixture(),
+      client: {
+        fetchCandidateIssues: async () => {
+          fetches += 1;
+          if (fetches === 1) {
+            await new Promise<void>((resolve) => {
+              fetchControl.release = resolve;
+            });
+          }
+          return [issue];
+        },
+        fetchIssuesByIds: async () => [issue],
+      },
+      runner: async () => {
+        runnerCalls += 1;
+        return {
+          workspace: "/tmp/symphony/MT-OVERLAP-DISPATCH",
+          turnCount: 1,
+          updates: [],
+          resumeId: "overlap-dispatch",
+          agentKind: "codex",
+          finalIssue: doneIssue,
+        };
+      },
+    }),
+  );
+
+  try {
+    const first = runtime.pollOnce({ dryRun: true });
+    await waitFor(() => fetches === 1, 1_000);
+    const second = runtime.pollOnce({ waitForRuns: true });
+    await vi.waitFor(() => assert.equal(fetches, 1));
+
+    const unblockFetch = fetchControl.release;
+    assert.ok(unblockFetch);
+    unblockFetch();
+    await Promise.all([first, second]);
+
+    assert.equal(fetches, 2);
+    assert.equal(runnerCalls, 1);
+  } finally {
+    runtime.stop();
+  }
+});
+
 test("runtime keeps polling after a candidate fetch throws in the recurring loop", async () => {
   let fetches = 0;
   const runtime = new SymphonyRuntime(
@@ -1159,7 +1213,7 @@ test("runtime records failed attempts as retryable work and keeps polling", asyn
   assert.equal(snapshot.retrying[0]?.attempt, 1);
   assert.equal(snapshot.retrying[0]?.error, "agent exited: boom");
 
-  const retry = orchestrator.snapshot().retrying[0];
+  const retry = orchestrator.state.retryAttempts.get(slotKey(issue.id, 0));
   assert.ok(retry);
   retry.dueAtIso = new Date(Date.now() - 1).toISOString();
   retry.monotonicDeadlineMs = 0;
@@ -1256,6 +1310,71 @@ test("runtime schedules retry refresh timers independently of the poll cadence",
     true,
   );
   runtime.stop();
+});
+
+test("runtime replays retry timer due while a poll is active", async () => {
+  const issue = issueFixture("issue-timer-overlap", "MT-TIMER-OVERLAP");
+  const doneIssue: Issue = { ...issue, state: "Done", stateType: "completed" };
+  const workflow = workflowFixture();
+  workflow.settings.polling.intervalMs = 60_000;
+  workflow.settings.agent.maxRetryBackoffMs = 1;
+  const fetchControl: { release?: () => void } = {};
+  let attempts = 0;
+  let blockCandidateFetch = false;
+  let candidateFetches = 0;
+  const runtime = new SymphonyRuntime(
+    runtimeOptions({
+      workflow,
+      client: {
+        fetchCandidateIssues: async () => {
+          candidateFetches += 1;
+          if (blockCandidateFetch) {
+            blockCandidateFetch = false;
+            await new Promise<void>((resolve) => {
+              fetchControl.release = resolve;
+            });
+          }
+          return [issue];
+        },
+        fetchIssuesByIds: async () => (attempts >= 2 ? [doneIssue] : [issue]),
+      },
+      runner: async () => {
+        attempts += 1;
+        if (attempts === 1) throw new Error("agent exited: retry me");
+        return {
+          workspace: "/tmp/symphony/MT-TIMER-OVERLAP",
+          turnCount: 1,
+          updates: [],
+          resumeId: "timer-overlap",
+          agentKind: "codex",
+          finalIssue: doneIssue,
+        };
+      },
+    }),
+  );
+
+  try {
+    await runtime.pollOnce({ waitForRuns: true });
+    assert.equal(attempts, 1);
+    blockCandidateFetch = true;
+
+    const dryPoll = runtime.pollOnce({ dryRun: true });
+    await waitFor(() => candidateFetches === 2, 1_000);
+    await new Promise<void>((resolve) => setTimeout(resolve, 50));
+
+    const unblockFetch = fetchControl.release;
+    assert.ok(unblockFetch);
+    unblockFetch();
+    await dryPoll;
+
+    await waitFor(() => attempts === 2, 1_000);
+    assert.equal(
+      runtime.snapshot().recentEvents.some((event) => event.type === "retry_timer_due"),
+      true,
+    );
+  } finally {
+    runtime.stop();
+  }
 });
 
 function workflowFixture(root = "/tmp/symphony-ts-runtime-test"): WorkflowDefinition {

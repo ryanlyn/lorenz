@@ -4,6 +4,24 @@ import { runScenario, makeIssue, checkAssertions } from "../sandbox/sandbox.js";
 import type { ChaosLinearClient } from "../sandbox/sandbox.js";
 
 describe("Sandbox: Reconciliation", () => {
+  test("stalled fake runner with default waitForRuns returns a stall error", async () => {
+    const result = await Promise.race([
+      runScenario({
+        issues: [makeIssue("stall", "STALL-1", { state: "Todo", stateType: "unstarted" })],
+        settingsOverrides: { codex: { stallTimeoutMs: 25 } },
+        runnerConfig: { defaultBehavior: { stall: true } },
+        pollTicks: 1,
+      }),
+      new Promise<"timed-out">((resolve) => setTimeout(() => resolve("timed-out"), 500)),
+    ]);
+
+    expect(result).not.toBe("timed-out");
+    if (result === "timed-out") return;
+
+    expect(result.ticksExecuted).toBe(1);
+    expect(result.errors.map((error) => error.message).join("\n")).toContain("stall timeout");
+  });
+
   test("terminal state detected during reconcile -> abort + cleanup", async () => {
     const result = await runScenario({
       issues: [makeIssue("x", "X-1", { state: "In Progress", stateType: "started" })],

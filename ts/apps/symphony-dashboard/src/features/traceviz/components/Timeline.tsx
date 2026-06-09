@@ -17,17 +17,24 @@ import { MessageEvent } from "./events/MessageEvent";
 import { ToolCallEvent } from "./events/ToolCallEvent";
 import { TurnCompletedEvent } from "./events/TurnCompletedEvent";
 import { NotificationEvent } from "./events/NotificationEvent";
+import { UnknownEvent } from "./events/UnknownEvent";
 
 interface TimelineProps {
   events: DisplayEvent[];
   loading: boolean;
 }
 
-function eventKey(event: DisplayEvent, index: number): string {
+type TimelineDisplayEvent = Exclude<DisplayEvent, { kind: "turn_started" }>;
+
+function assertNever(event: never): never {
+  throw new Error(`Unhandled display event: ${JSON.stringify(event)}`);
+}
+
+function eventKey(event: TimelineDisplayEvent, index: number): string {
   return `${event.kind}-${event.timestamp}-${index}`;
 }
 
-function renderEvent(event: DisplayEvent, index: number) {
+function renderEvent(event: TimelineDisplayEvent, index: number) {
   const key = eventKey(event, index);
   switch (event.kind) {
     case "thought":
@@ -41,20 +48,22 @@ function renderEvent(event: DisplayEvent, index: number) {
     case "turn_failed":
     case "notification":
       return <NotificationEvent key={key} event={event} />;
+    case "unknown":
+      return <UnknownEvent key={key} event={event} />;
     default:
-      return null;
+      return assertNever(event);
   }
 }
 
 interface TurnGroup {
   turnIndex: number;
-  events: DisplayEvent[];
+  events: TimelineDisplayEvent[];
 }
 
 function groupByTurn(events: DisplayEvent[]): TurnGroup[] {
   const groups: TurnGroup[] = [];
   let currentTurn = 0;
-  let currentEvents: DisplayEvent[] = [];
+  let currentEvents: TimelineDisplayEvent[] = [];
 
   for (const event of events) {
     if (event.kind === "turn_started") {

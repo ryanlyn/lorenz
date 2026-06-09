@@ -147,6 +147,68 @@ test("presenter humanizes structured agent messages at the JSON API boundary", (
   );
 });
 
+test("presenter shows retry attempts for active running retries", () => {
+  const snapshot = snapshotFixture();
+  snapshot.running[0]!.retryAttempt = 2;
+
+  const issue = issuePayload(snapshot, "MT-RUNNING");
+
+  assert.equal(issue.status, "ok");
+  if (issue.status !== "ok") throw new Error("running issue payload should exist");
+  assert.deepEqual(issue.payload.attempts, {
+    restart_count: 1,
+    current_retry_attempt: 2,
+  });
+  assert.equal((issue.payload.running as any).retry_attempt, 2);
+});
+
+test("presenter does not treat ensemble slots as retry attempts", () => {
+  const snapshot = snapshotFixture();
+  snapshot.runHistory.push(
+    {
+      id: "ensemble-slot-0",
+      issueId: "ensemble-1",
+      issueIdentifier: "MT-ENSEMBLE",
+      issueTitle: "Parallel slots",
+      state: "Todo",
+      slotIndex: 0,
+      ensembleSize: 2,
+      agentKind: "codex",
+      outcome: "success",
+      turnCount: 1,
+      usageTotals: { inputTokens: 1, outputTokens: 1, totalTokens: 2, secondsRunning: 1 },
+      startedAt: "2026-05-06T00:00:00.000Z",
+      endedAt: "2026-05-06T00:00:10.000Z",
+      retryAttempt: 0,
+    },
+    {
+      id: "ensemble-slot-1",
+      issueId: "ensemble-1",
+      issueIdentifier: "MT-ENSEMBLE",
+      issueTitle: "Parallel slots",
+      state: "Todo",
+      slotIndex: 1,
+      ensembleSize: 2,
+      agentKind: "claude",
+      outcome: "success",
+      turnCount: 1,
+      usageTotals: { inputTokens: 1, outputTokens: 1, totalTokens: 2, secondsRunning: 1 },
+      startedAt: "2026-05-06T00:00:01.000Z",
+      endedAt: "2026-05-06T00:00:11.000Z",
+      retryAttempt: 0,
+    },
+  );
+
+  const retries = runsPayload(snapshot, { retries: true });
+
+  assert.equal(retries.status, "ok");
+  if (retries.status !== "ok") throw new Error("retry payload should exist");
+  assert.deepEqual(
+    (retries.payload.issues as any[]).map((issue) => issue.issue_identifier),
+    ["MT-RETRY"],
+  );
+});
+
 test("presenter does not depend on the Ink TUI module for API projections", () => {
   const source = fs.readFileSync(path.join(import.meta.dirname, "..", "src", "index.ts"), "utf8");
   assert.notMatch(source, /from "\.\/tui\.js"/);

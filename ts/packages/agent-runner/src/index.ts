@@ -31,17 +31,27 @@ const workspaceCreateStage = "workspace.create_for_issue";
 const beforeRunHookStage = "workspace.run_before_run_hook";
 const afterRunHookStage = "workspace.run_after_run_hook";
 
+interface SetupStageSignalOptions {
+  abortSignal?: AbortSignal | undefined;
+}
+
 export interface RunAgentAttemptAdapters {
   createWorkspaceForIssue(
     settings: Settings,
     issue: Issue,
-    options: { slotIndex: number; ensembleSize: number; workerHost: string | null },
+    options: {
+      slotIndex: number;
+      ensembleSize: number;
+      workerHost: string | null;
+      abortSignal?: AbortSignal | undefined;
+    },
   ): Promise<string>;
   runHook(
     command: string,
     workspace: string,
     hooks: Settings["hooks"],
     workerHost: string | null,
+    options?: SetupStageSignalOptions,
   ): Promise<void>;
   readResumeState(
     workspace: string,
@@ -101,12 +111,14 @@ class RunController {
     const workspace = await runSetupStage(
       workspaceCreateStage,
       workspaceCreateTimeoutMs(runtime),
-      async () =>
+      async ({ abortSignal }) =>
         createWorkspaceForIssue(input.adapters, runtime, issue, {
           slotIndex,
           ensembleSize: size,
           workerHost,
+          abortSignal,
         }),
+      input.abortSignal,
     );
     input.onUpdate?.({
       type: "workspace_prepared",
@@ -124,8 +136,14 @@ class RunController {
     try {
       const beforeRun = runtime.hooks.beforeRun;
       if (beforeRun) {
-        await runSetupStage(beforeRunHookStage, hookStageTimeoutMs(runtime), async () =>
-          runHook(input.adapters, beforeRun, workspace, runtime.hooks, workerHost),
+        await runSetupStage(
+          beforeRunHookStage,
+          hookStageTimeoutMs(runtime),
+          async ({ abortSignal }) =>
+            runHook(input.adapters, beforeRun, workspace, runtime.hooks, workerHost, {
+              abortSignal,
+            }),
+          input.abortSignal,
         );
       }
 
@@ -262,8 +280,10 @@ class RunController {
     const afterRun = runtime.hooks.afterRun;
     if (!afterRun) return;
     try {
-      await runSetupStage(afterRunHookStage, hookStageTimeoutMs(runtime), async () =>
-        runHook(input.adapters, afterRun, workspace, runtime.hooks, workerHost),
+      await runSetupStage(afterRunHookStage, hookStageTimeoutMs(runtime), async ({ abortSignal }) =>
+        runHook(input.adapters, afterRun, workspace, runtime.hooks, workerHost, {
+          abortSignal,
+        }),
       );
     } catch (error) {
       input.onUpdate?.({
@@ -336,22 +356,58 @@ class SetupStageTimeoutError extends Error {
 async function runSetupStage<T>(
   stageName: string,
   timeoutMs: number,
-  fn: () => Promise<T>,
+  fn: (options: { abortSignal: AbortSignal }) => Promise<T>,
+  parentAbortSignal?: AbortSignal,
 ): Promise<T> {
-  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) return fn();
+  const controller = new AbortController();
   let timeout: ReturnType<typeof setTimeout> | undefined;
-  const timeoutPromise = new Promise<never>((_resolve, reject) => {
-    timeout = setTimeout(() => reject(new SetupStageTimeoutError(stageName, timeoutMs)), timeoutMs);
-  });
+  let timeoutError: SetupStageTimeoutError | undefined;
+  let abortError: Error | undefined;
+  let onParentAbort: (() => void) | undefined;
+  const races: Promise<T>[] = [
+    Promise.resolve().then(async () => fn({ abortSignal: controller.signal })),
+  ];
+
+  if (Number.isFinite(timeoutMs) && timeoutMs > 0) {
+    races.push(
+      new Promise<never>((_resolve, reject) => {
+        timeout = setTimeout(() => {
+          timeoutError = new SetupStageTimeoutError(stageName, timeoutMs);
+          controller.abort(timeoutError);
+          reject(timeoutError);
+        }, timeoutMs);
+      }),
+    );
+  }
+  if (parentAbortSignal) {
+    races.push(
+      new Promise<never>((_resolve, reject) => {
+        onParentAbort = () => {
+          abortError = new Error("agent_run_aborted");
+          controller.abort(abortError);
+          reject(abortError);
+        };
+        if (parentAbortSignal.aborted) {
+          onParentAbort();
+        } else {
+          parentAbortSignal.addEventListener("abort", onParentAbort, { once: true });
+        }
+      }),
+    );
+  }
+
   try {
-    return await Promise.race([fn(), timeoutPromise]);
+    return await Promise.race(races);
   } catch (error) {
+    if (timeoutError) throw timeoutError;
+    if (abortError) throw abortError;
     if (error instanceof SetupStageTimeoutError) throw error;
     throw new Error(`agent_runner_setup_crashed: ${stageName}: ${errorMessage(error)}`, {
       cause: error,
     });
   } finally {
     if (timeout) clearTimeout(timeout);
+    if (onParentAbort) parentAbortSignal?.removeEventListener("abort", onParentAbort);
   }
 }
 
@@ -394,7 +450,12 @@ async function createWorkspaceForIssue(
   adapters: Partial<RunAgentAttemptAdapters> | undefined,
   settings: Settings,
   issue: Issue,
-  options: { slotIndex: number; ensembleSize: number; workerHost: string | null },
+  options: {
+    slotIndex: number;
+    ensembleSize: number;
+    workerHost: string | null;
+    abortSignal?: AbortSignal | undefined;
+  },
 ): Promise<string> {
   if (adapters?.createWorkspaceForIssue)
     return adapters.createWorkspaceForIssue(settings, issue, options);
@@ -407,8 +468,10 @@ async function runHook(
   workspacePath: string,
   hooks: Settings["hooks"],
   workerHost: string | null,
+  options?: SetupStageSignalOptions,
 ): Promise<void> {
-  if (adapters?.runHook) return adapters.runHook(command, workspacePath, hooks, workerHost);
+  if (adapters?.runHook)
+    return adapters.runHook(command, workspacePath, hooks, workerHost, options);
   throw new Error("agent_runner_adapter_missing: runHook");
 }
 

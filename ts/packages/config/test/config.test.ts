@@ -83,6 +83,45 @@ test("config resolves op:// references from env var fallback", async () => {
   assert.equal(settings.tracker.apiKey, "env-secret");
 });
 
+test("non-Linear tracker configs ignore Linear secret env fallbacks", () => {
+  for (const kind of ["local", "memory"] as const) {
+    const settings = parseConfig(
+      { tracker: { kind } },
+      {
+        LINEAR_API_KEY: "op://vault/item/key",
+        LINEAR_ASSIGNEE: "op://vault/item/assignee",
+        PATH: "/nonexistent",
+      },
+    );
+    assert.equal(settings.tracker.kind, kind);
+    assert.equal(settings.tracker.apiKey, undefined);
+    assert.equal(settings.tracker.assignee, undefined);
+  }
+});
+
+test("non-Linear tracker configs still resolve explicitly configured secrets", async () => {
+  const root = await tempDir("symphony-op-mock");
+  const opScript = path.join(root, "op");
+  await fs.writeFile(
+    opScript,
+    '#!/bin/sh\nif [ "$1" = "--version" ]; then echo "2.0.0"; else echo "resolved-secret"; fi\n',
+  );
+  await fs.chmod(opScript, 0o755);
+
+  const settings = parseConfig(
+    {
+      tracker: {
+        kind: "local",
+        api_key: "op://vault/item/key",
+        assignee: "op://vault/item/assignee",
+      },
+    },
+    { PATH: `${root}:${process.env.PATH}` },
+  );
+  assert.equal(settings.tracker.apiKey, "resolved-secret");
+  assert.equal(settings.tracker.assignee, "resolved-secret");
+});
+
 test("config throws when op:// reference used but op CLI not installed", () => {
   assert.throws(
     () => parseConfig({ tracker: { api_key: "op://vault/item/field" } }, { PATH: "/nonexistent" }),
@@ -298,6 +337,7 @@ test("agents map overrides known runtime settings via ACP records", () => {
       codex: {
         bridge_command: "codex-custom",
         turn_timeout_ms: 120_000,
+        stall_timeout_ms: 42_000,
       },
       claude: {
         bridge_command: "claude-agent-acp",
@@ -313,6 +353,10 @@ test("agents map overrides known runtime settings via ACP records", () => {
 
   assert.equal(settings.agents.codex.bridgeCommand, "codex-custom");
   assert.equal(settings.agents.codex.turnTimeoutMs, 120_000);
+  assert.equal(settings.agents.codex.stallTimeoutMs, 42_000);
+  assert.equal(settings.codex.command, "codex-custom");
+  assert.equal(settings.codex.turnTimeoutMs, 120_000);
+  assert.equal(settings.codex.stallTimeoutMs, 42_000);
   assert.equal(settings.claude.command, "claude-agent-acp");
   assert.deepEqual(settings.claude.providerConfig, { permissions: { defaultMode: "acceptEdits" } });
   assert.deepEqual(settings.agents.pi, {
@@ -330,12 +374,19 @@ test("custom ACP agents default to cumulative usage unless using a known per-tur
   const settings = parseConfig({
     agents: {
       pi: { bridge_command: "pi-acp" },
+      codex_alias: { bridge_command: "codex-acp" },
       claude_alias: { bridge_command: "claude-agent-acp" },
     },
   });
 
   assert.equal(settings.agents.pi.usageAccounting, "cumulative");
+  assert.equal(settings.agents.pi.providerConfig, undefined);
+  assert.equal(settings.agents.codex_alias.usageAccounting, "per-turn");
+  assert.equal(settings.agents.codex_alias.providerConfig, undefined);
   assert.equal(settings.agents.claude_alias.usageAccounting, "per-turn");
+  assert.deepEqual(settings.agents.claude_alias.providerConfig, {
+    permissions: { defaultMode: "dontAsk" },
+  });
 });
 
 test("agents map accepts shared timeout defaults with legacy per-agent overrides", () => {

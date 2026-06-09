@@ -67,7 +67,8 @@ records a `workflow_reload_failed` event.
 - `packages/*` contains the protocol, domain model, configuration loader, prompt renderer, runtime,
   policies, adapters, dashboards, logging, SSH, and support libraries.
 - `test/` contains workspace-level integration, contract, sandbox, and live tests.
-- Package-owned unit tests live under `packages/<name>/test/` or `apps/<name>/test/`.
+- Package- and app-owned unit tests live under `packages/<name>/test/` or `apps/<name>/test/` as
+  `.test.ts` or `.test.tsx` files.
 
 Create a package when a boundary has a clear owner. Keep curated exports in `src/index.ts` and
 declare internal dependencies as `workspace:*`.
@@ -216,7 +217,9 @@ Notes:
 - `workspace.root` supports `~` and whole-value `$VAR` expansion. `SYMPHONY_WORKSPACE_ROOT`
   overrides `workspace.root` at runtime.
 - `SYMPHONY_SSH_CONFIG` points SSH worker commands at a custom OpenSSH config file.
-- Hooks run through `bash -lc` locally or over SSH with the workspace as `cwd`.
+- Hooks run through `bash -lc` locally or over SSH with the workspace as `cwd`. Use
+  fail-fast shell options in bootstrap hooks so clone and dependency setup failures stop workspace
+  creation immediately.
 - `codex.command` runs through `bash -lc`, so shell expansion happens in the launched process.
 - If the Markdown body is blank, Symphony uses a default prompt with the issue identifier, title,
   and body.

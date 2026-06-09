@@ -15,9 +15,11 @@ import { tempDir, writeExecutable } from "../../../test/helpers.js";
 import {
   parseSshTarget,
   remoteShellCommand,
+  reverseTunnelArgs,
   runSsh,
   shellEscape,
   sshArgs,
+  waitForRemoteTcpPort,
   writeRemoteFile,
 } from "@symphony/ssh";
 
@@ -48,9 +50,34 @@ test("SSH target parsing and command args match Elixir host:port behavior", () =
     "-T",
     "-p",
     "2222",
+    "--",
     "localhost",
     "bash -lc 'echo ready'",
   ]);
+  assert.deepEqual(reverseTunnelArgs("localhost:2222", 9000, "127.0.0.1", 4040), [
+    "-T",
+    "-N",
+    "-o",
+    "ExitOnForwardFailure=yes",
+    "-p",
+    "2222",
+    "-R",
+    "9000:127.0.0.1:4040",
+    "--",
+    "localhost",
+  ]);
+});
+
+test("SSH args reject empty and option-like targets", () => {
+  const unsafeTargets = ["", "   ", "-oProxyCommand=touch /tmp/pwned", "--"];
+
+  for (const target of unsafeTargets) {
+    assert.throws(() => sshArgs(target, "echo ready"), /invalid_ssh_destination/);
+    assert.throws(
+      () => reverseTunnelArgs(target, 9000, "127.0.0.1", 4040),
+      /invalid_ssh_destination/,
+    );
+  }
 });
 
 test("SSH run honors SYMPHONY_SSH_CONFIG, stderr folding, missing ssh, and timeouts", async () => {
@@ -74,7 +101,7 @@ exit 7
   assert.equal(result.stdout, "out\nerr\n");
   assert.equal(result.stderr, "");
   const traceText = await fs.readFile(trace, "utf8");
-  assert.match(traceText, /-F \/tmp\/symphony-test-ssh-config -T -p 2222 localhost bash -lc/);
+  assert.match(traceText, /-F \/tmp\/symphony-test-ssh-config -T -p 2222 -- localhost bash -lc/);
   assert.match(traceText, /echo ready/);
 
   const emptyPath = await tempDir("symphony-ts-ssh-empty-path");
@@ -128,6 +155,52 @@ wait "$child"
   await waitForProcessExit(Number(childMatch[1]), 7_000);
 });
 
+test("SSH run reports signaled subprocesses as failures", async () => {
+  const root = await tempDir("symphony-ts-ssh-signaled");
+  const trace = path.join(root, "ssh.trace");
+
+  await installFakeSsh(
+    root,
+    trace,
+    `#!/bin/sh
+printf 'ARGV:%s\\n' "$*" >> ${shellEscape(trace)}
+kill -TERM $$
+`,
+  );
+
+  const outcome = await runSsh("localhost", "printf ok", { stderrToStdout: true }).then(
+    (result) => ({ status: result.status }),
+    (error: unknown) => ({ error }),
+  );
+
+  if ("error" in outcome) {
+    assert.match(String(outcome.error), /ssh_failed_without_exit_code: localhost/);
+    assert.match(String(outcome.error), /signal=SIGTERM/);
+    assert.match(String(outcome.error), /killed=true/);
+  } else {
+    assert.notEqual(outcome.status, 0);
+  }
+});
+
+test("SSH writeRemoteFile rejects signaled subprocesses", async () => {
+  const root = await tempDir("symphony-ts-ssh-write-signaled");
+  const trace = path.join(root, "ssh.trace");
+
+  await installFakeSsh(
+    root,
+    trace,
+    `#!/bin/sh
+printf 'ARGV:%s\\n' "$*" >> ${shellEscape(trace)}
+kill -TERM $$
+`,
+  );
+
+  await assert.rejects(
+    () => writeRemoteFile("localhost", path.join(root, "remote.txt"), "payload"),
+    /ssh.*SIGTERM|remote_write_failed/,
+  );
+});
+
 test("SSH writeRemoteFile preserves payload bytes and applies mode", async () => {
   const root = await tempDir("symphony-ts-ssh-write");
   const trace = path.join(root, "ssh.trace");
@@ -150,6 +223,87 @@ eval "$last_arg"
   const traceText = await fs.readFile(trace, "utf8");
   assert.match(traceText, /printf/);
   assert.notMatch(traceText, /cat <<'__SYMPHONY_SSH_WRITE_PAYLOAD__'/);
+});
+
+test("SSH waitForRemoteTcpPort probes the remote loopback port", async () => {
+  const root = await tempDir("symphony-ts-ssh-port-probe");
+  const trace = path.join(root, "ssh.trace");
+
+  await installFakeSsh(
+    root,
+    trace,
+    `#!/bin/sh
+printf 'ARGV:%s\\n' "$*" >> ${shellEscape(trace)}
+for arg in "$@"; do last_arg="$arg"; done
+case "$last_arg" in
+  *'/dev/tcp/127.0.0.1/46000'*) exit 0 ;;
+  *) exit 13 ;;
+esac
+`,
+  );
+
+  await waitForRemoteTcpPort("localhost:2222", 46_000, {
+    timeoutMs: 2_000,
+    intervalMs: 100,
+    attemptTimeoutMs: 1_000,
+  });
+
+  const traceText = await fs.readFile(trace, "utf8");
+  assert.match(traceText, /-T -p 2222 -- localhost bash -lc/);
+  assert.match(traceText, /\/dev\/tcp\/127\.0\.0\.1\/46000/);
+});
+
+test("SSH writeRemoteFile rejects unsafe string modes without executing them", async () => {
+  const root = await tempDir("symphony-ts-ssh-unsafe-mode");
+  const trace = path.join(root, "ssh.trace");
+  const marker = path.join(root, "marker");
+  const remotePath = path.join(root, "script.sh");
+
+  await installFakeSsh(
+    root,
+    trace,
+    `#!/bin/sh
+printf 'ARGV:%s\\n' "$*" >> ${shellEscape(trace)}
+for arg in "$@"; do last_arg="$arg"; done
+eval "$last_arg"
+`,
+  );
+
+  let writeError: unknown;
+  try {
+    await writeRemoteFile("localhost", remotePath, "echo ready\n", {
+      mode: `u+x; printf pwned > ${shellEscape(marker)}`,
+    });
+  } catch (error) {
+    writeError = error;
+  }
+
+  await assertMissing(marker, "unsafe chmod mode created marker");
+  assert.match(String(writeError), /invalid_chmod_mode/);
+});
+
+test("SSH writeRemoteFile shell-quotes string modes and protects dash-leading paths", async () => {
+  const root = await tempDir("symphony-ts-ssh-string-mode");
+  const trace = path.join(root, "ssh.trace");
+  const remotePath = "-script.sh";
+
+  await installFakeSsh(
+    root,
+    trace,
+    `#!/bin/sh
+printf 'ARGV:%s\\n' "$*" >> ${shellEscape(trace)}
+for arg in "$@"; do last_arg="$arg"; done
+cd ${shellEscape(root)}
+eval "$last_arg"
+`,
+  );
+
+  await writeRemoteFile("localhost", remotePath, "echo ready\n", { mode: "u+x" });
+
+  const stat = await fs.stat(path.join(root, remotePath));
+  assert.equal(stat.mode & 0o777, 0o744);
+  const traceText = await fs.readFile(trace, "utf8");
+  assert.match(traceText, /chmod '"'"'u\+x'"'"' '"'"'\.\/-script\.sh'"'"'/);
 });
 
 async function installFakeSsh(root: string, trace: string, source: string): Promise<void> {
@@ -176,4 +330,14 @@ async function waitForProcessExit(pid: number, timeoutMs: number): Promise<void>
     await delay(50);
   }
   throw new Error(`process ${pid} still running after ${timeoutMs}ms`);
+}
+
+async function assertMissing(filePath: string, message: string): Promise<void> {
+  try {
+    await fs.access(filePath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+    throw error;
+  }
+  throw new Error(message);
 }

@@ -2,11 +2,24 @@ import { useState, useEffect, useCallback } from "react";
 
 export type Route = { view: "overview" } | { view: "trace"; issueId: string };
 
+function decodeTraceIssueId(issueId: string | undefined): string | null {
+  if (!issueId) return "";
+
+  try {
+    return decodeURIComponent(issueId);
+  } catch (error) {
+    if (error instanceof URIError) return null;
+    throw error;
+  }
+}
+
 function parseHash(hash: string): Route {
   const path = hash.replace(/^#/, "") || "/";
   const traceMatch = path.match(/^\/trace(?:\/(.+)?)?$/);
   if (traceMatch) {
-    return { view: "trace", issueId: traceMatch[1] ? decodeURIComponent(traceMatch[1]) : "" };
+    const issueId = decodeTraceIssueId(traceMatch[1]);
+    if (issueId === null) return { view: "overview" };
+    return { view: "trace", issueId };
   }
   return { view: "overview" };
 }

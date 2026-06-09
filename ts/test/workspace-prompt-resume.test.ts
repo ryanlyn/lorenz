@@ -251,7 +251,7 @@ test("remote workspace creation and removal use SSH hooks and validate remote pa
     /workspace outside root/,
   );
   const traceText = await fs.readFile(trace, "utf8");
-  assert.match(traceText, /-T -p 2200 worker-01 bash -lc/);
+  assert.match(traceText, /-T -p 2200 -- worker-01 bash -lc/);
   assert.match(traceText, /printf "%s\\n" "\$HOME"/);
   assert.match(traceText, /rm -rf/);
 
@@ -340,6 +340,7 @@ new acp.AgentSideConnection((connection) => new FakeAgent(connection), stream);
 `,
   );
   const settings = parseConfig({
+    server: { port: 0 },
     workspace: { root: workspaceRoot },
     hooks: {
       after_create: `echo after_create >> ${JSON.stringify(hookLog)}`,
@@ -412,6 +413,7 @@ new acp.AgentSideConnection((connection) => new FakeAgent(connection), stream);
   );
   const sharedRoot = path.join(root, "shared");
   const settings = parseConfig({
+    server: { port: 0 },
     workspace: { root: sharedRoot, isolation: "none" },
     agents: {
       codex: {
@@ -504,6 +506,7 @@ new acp.AgentSideConnection((connection) => new FakeAgent(connection), stream);
 `,
   );
   const settings = parseConfig({
+    server: { port: 0 },
     workspace: { root: path.join(root, "workspaces") },
     agent: { kind: "claude", max_turns: 2 },
     agents: {
@@ -571,6 +574,7 @@ new acp.AgentSideConnection((connection) => new FakeAgent(connection), stream);
   vi.stubEnv("PATH", `${binDir}:${process.env.PATH ?? ""}`);
 
   const settings = parseConfig({
+    server: { port: 0 },
     workspace: { root: "~/workspaces" },
     worker: { ssh_hosts: ["worker-01:2200"], ssh_timeout_ms: 5_000 },
     hooks: {
@@ -686,6 +690,7 @@ new acp.AgentSideConnection((connection) => new FakeAgent(connection), stream);
 `,
   );
   const settings = parseConfig({
+    server: { port: 0 },
     workspace: { root: workspaceRoot },
     agents: {
       codex: {
@@ -748,6 +753,7 @@ new acp.AgentSideConnection((connection) => new FakeAgent(connection), stream);
   );
 
   const settings = parseConfig({
+    server: { port: 0 },
     workspace: { root: workspaceRoot },
     agents: {
       codex: {
@@ -879,12 +885,21 @@ async function installEvalSsh(
     path.join(bin, "ssh"),
     `#!/bin/sh
 printf 'ARGV:%s\\n' "$*" >> ${shellEscape(trace)}
-for arg in "$@"; do last_arg="$arg"; done
+is_tunnel=0
+for arg in "$@"; do
+  if [ "$arg" = "-N" ]; then is_tunnel=1; fi
+  last_arg="$arg"
+done
+if [ "$is_tunnel" = "1" ]; then
+  trap 'exit 0' TERM INT
+  while :; do sleep 1; done
+fi
 case "$last_arg" in
   *'printf "%s\\n" "$HOME"'*)
     printf '%s\\n' ${shellEscape(canonicalRemoteHome)}
     exit 0
     ;;
+  *'/dev/tcp/127.0.0.1/'*) exit 0 ;;
 esac
 export HOME=${shellEscape(canonicalRemoteHome)}
 eval "$last_arg"

@@ -6,18 +6,25 @@ import {
   type IssueRef,
   type IssueStateType,
   type Priority,
+  isValidEnsembleSize,
 } from "@symphony/domain";
 
 export function normalizeIssue(input: Record<string, unknown>, assignee?: string): Issue {
   const id = requiredString(input, "id");
   const identifier = requiredString(input, "identifier");
   const title = requiredString(input, "title");
-  const state =
-    stringFromPath(input, ["state", "name"]) ??
-    optionalString(input.state ?? input.state_name ?? input.stateName);
+  const state = firstOptionalString(
+    stringFromPath(input, ["state", "name"]),
+    input.state,
+    input.state_name,
+    input.stateName,
+  );
   if (state === null || state.trim() === "") throw new Error("issue.state is required");
-  const rawStateType =
-    stringFromPath(input, ["state", "type"]) ?? optionalString(input.state_type ?? input.stateType);
+  const rawStateType = firstOptionalString(
+    stringFromPath(input, ["state", "type"]),
+    input.state_type,
+    input.stateType,
+  );
   const stateType = normalizeStateType(rawStateType);
   if (stateType === null) throw new Error("issue.stateType is required");
   const assigneeId =
@@ -73,7 +80,7 @@ export function ensembleSize(issue: Issue): number | null {
     const match = /^ensemble:(\d+)$/.exec(label.trim().toLowerCase());
     if (!match) continue;
     const size = Number(match[1]);
-    if (Number.isInteger(size) && size > 0) return size;
+    if (isValidEnsembleSize(size)) return size;
   }
   return null;
 }
@@ -125,8 +132,11 @@ function normalizeIssueRef(value: unknown): IssueRef {
     identifier: optionalString(value.identifier) ?? undefined,
     state: stringFromPath(value, ["state", "name"]) ?? optionalString(value.state) ?? undefined,
     stateType: normalizeStateType(
-      stringFromPath(value, ["state", "type"]) ??
-        optionalString(value.state_type ?? value.stateType),
+      firstOptionalString(
+        stringFromPath(value, ["state", "type"]),
+        value.state_type,
+        value.stateType,
+      ),
     ),
   };
 }
@@ -142,6 +152,14 @@ function requiredString(input: Record<string, unknown>, key: string): string {
 function optionalString(value: unknown): string | null {
   if (typeof value !== "string") return null;
   return value;
+}
+
+function firstOptionalString(...values: unknown[]): string | null {
+  for (const value of values) {
+    const stringValue = optionalString(value);
+    if (stringValue !== null) return stringValue;
+  }
+  return null;
 }
 
 function priorityOrNull(value: unknown): Priority | null {

@@ -52,6 +52,22 @@ test("create allocates incrementing BOARD ids and round-trips", async () => {
   assert.match(file, /# First/);
 });
 
+test("create rejects a blank status before publishing a board file", async () => {
+  const dir = await tempBoard();
+  const store = new BoardStore(dir);
+
+  await assert.rejects(() => store.create({ title: "Bad", status: "   " }), /status/);
+  assert.deepEqual(
+    (await readdir(dir)).filter((f) => /^BOARD-\d+\.md$/.test(f)),
+    [],
+  );
+
+  const issue = await store.create({ title: "Ready", status: "  In Progress  " });
+  assert.equal(issue.identifier, "BOARD-1");
+  assert.equal(issue.state, "In Progress");
+  assert.match(await readFile(path.join(dir, "BOARD-1.md"), "utf8"), /status: In Progress/);
+});
+
 test("updateStatus rewrites only the status and preserves body", async () => {
   const dir = await tempBoard();
   const store = new BoardStore(dir);

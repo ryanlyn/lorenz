@@ -1,5 +1,6 @@
 import { test } from "vitest";
 import type { Issue } from "@symphony/domain";
+import { ensembleSize } from "@symphony/issue";
 
 import { assert } from "../../../test/assert.js";
 
@@ -134,6 +135,21 @@ test("returned issues are copies, not references to internal state", async () =>
   assert.equal(refetched!.blockers.length, 1);
 });
 
+test("constructor snapshots blocker entries from caller-owned issues", async () => {
+  const original = makeIssue({
+    id: "1",
+    identifier: "MT-1",
+    blockers: [{ id: "b1", state: "Todo" }],
+  });
+
+  const client = new MemoryTrackerClient([original]);
+
+  original.blockers[0]!.state = "Done";
+
+  const [fetched] = await client.fetchIssuesByIds(["1"]);
+  assert.equal(fetched!.blockers[0]!.state, "Todo");
+});
+
 // --- empty results ---
 
 test("returns empty array when no issues match filter", async () => {
@@ -166,6 +182,33 @@ test("constructor normalizes raw record objects into Issue instances", async () 
   assert.equal(issue!.identifier, "MT-99");
   assert.equal(issue!.state, "Backlog");
   assert.deepEqual(issue!.labels, ["feature"]);
+});
+
+test("constructor normalizes raw records with top-level state and object labels", async () => {
+  const raw = {
+    id: "raw-2",
+    identifier: "MT-100",
+    title: "Raw with top-level state",
+    state: "Todo",
+    stateType: "unstarted",
+    labels: [{ name: "ensemble:2" }],
+    blockers: [
+      {
+        id: "raw-blocker",
+        identifier: "MT-99",
+        state: { name: "Todo", type: "unstarted" },
+      },
+    ],
+  };
+
+  const client = new MemoryTrackerClient([raw]);
+
+  const [issue] = await client.fetchCandidateIssues();
+  assert.deepEqual(issue!.labels, ["ensemble:2"]);
+  assert.equal(ensembleSize(issue!), 2);
+  assert.deepEqual(issue!.blockers, [
+    { id: "raw-blocker", identifier: "MT-99", state: "Todo", stateType: "unstarted" },
+  ]);
 });
 
 // --- memoryIssuesFromEnv ---

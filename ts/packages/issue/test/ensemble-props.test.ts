@@ -38,6 +38,15 @@ test("INVARIANT: When a valid ensemble label with a positive integer is present,
   );
 });
 
+test("INVARIANT: When an ensemble label exceeds the domain maximum, ensembleSize SHALL return null.", () => {
+  fc.assert(
+    fc.property(fc.integer({ min: ENSEMBLE_SIZE_MAX + 1, max: 2_000_000 }), (n) => {
+      const issue = issueWith([`ensemble:${n}`]);
+      assert.equal(ensembleSize(issue), null);
+    }),
+  );
+});
+
 test("INVARIANT: When multiple valid ensemble labels are present, ensembleSize SHALL use the first encountered.", () => {
   fc.assert(
     fc.property(

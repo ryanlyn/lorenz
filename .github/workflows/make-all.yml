@@ -62,18 +62,16 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-pnpm-store-
 
-      - name: Cache node_modules and build artifacts
+      - name: Cache node_modules
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: |
             ts/node_modules
             ts/apps/*/node_modules
             ts/packages/*/node_modules
-            ts/apps/*/dist
-            ts/packages/*/dist
-          key: ${{ runner.os }}-ts-deps-build-${{ hashFiles('ts/pnpm-lock.yaml') }}
+          key: ${{ runner.os }}-ts-deps-${{ hashFiles('ts/pnpm-lock.yaml') }}
           restore-keys: |
-            ${{ runner.os }}-ts-deps-build-
+            ${{ runner.os }}-ts-deps-
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile

@@ -10,11 +10,13 @@ import {
   createWorkspaceForIssue,
   removeWorkspace,
   removeIssueWorkspaces,
+  shellEscape,
 } from "@symphony/cli";
 import type { Settings } from "@symphony/domain";
 
 import { assert } from "../../../test/assert.js";
 import { tempDir, sampleIssue } from "../../../test/helpers.js";
+import { runHook } from "../src/index.js";
 
 function makeSettings(
   root: string,
@@ -26,6 +28,16 @@ function makeSettings(
     worker: { sshHosts: [], sshTimeoutMs: 5_000 },
     hooks: { timeoutMs: 5_000, ...hooks },
   } as unknown as Settings;
+}
+
+async function fileExists(filePath: string): Promise<boolean> {
+  try {
+    await fs.access(filePath);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw error;
+  }
 }
 
 // --- safeIdentifier ---
@@ -152,6 +164,67 @@ test("createWorkspaceForIssue — runs afterCreate hook on new workspace", async
   const hookFile = path.join(ws, ".hook-ran");
   const stat = await fs.stat(hookFile);
   assert.ok(stat.isFile());
+});
+
+test("createWorkspaceForIssue — refuses afterCreate when cwd is swapped to an out-of-root symlink", async () => {
+  const root = await tempDir("ws-create");
+  const canonicalRoot = await fs.realpath(root);
+  const outside = await tempDir("ws-create-outside");
+  const marker = path.join(outside, "hook-ran");
+  const workspace = path.join(canonicalRoot, safeIdentifier(sampleIssue.identifier));
+  const realRealpath = fs.realpath;
+  let swapped = false;
+  const realpathSpy = vi.spyOn(fs, "realpath").mockImplementation(async (filePath, options) => {
+    const resolved = await realRealpath(filePath, options);
+    if (!swapped && path.resolve(String(filePath)) === workspace) {
+      swapped = true;
+      await fs.rm(workspace, { recursive: true, force: true });
+      await fs.symlink(outside, workspace);
+    }
+    return resolved;
+  });
+
+  try {
+    const settings = makeSettings(root, {
+      afterCreate: `touch ${JSON.stringify(marker)}`,
+    });
+
+    await assert.rejects(
+      () => createWorkspaceForIssue(settings, sampleIssue),
+      /unsafe symlink in workspace path|workspace outside root/,
+    );
+    assert.equal(swapped, true);
+    assert.equal(await fileExists(marker), false);
+  } finally {
+    realpathSpy.mockRestore();
+  }
+});
+
+test("runHook — abort terminates subprocesses before they write later markers", async () => {
+  const root = await tempDir("ws-hook-abort");
+  const settings = makeSettings(root);
+  const started = path.join(root, "started.txt");
+  const marker = path.join(root, "marker.txt");
+  const controller = new AbortController();
+  const command = [
+    `printf started > ${shellEscape(started)}`,
+    `sleep 0.2`,
+    `printf late > ${shellEscape(marker)}`,
+  ].join("\n");
+
+  const promise = runHook(command, root, settings.hooks, null, {
+    abortSignal: controller.signal,
+  });
+
+  await vi.waitFor(async () => {
+    assert.equal(await fileExists(started), true);
+  });
+  controller.abort();
+
+  await assert.rejects(() => promise, /hook canceled/);
+  await new Promise((resolve) => setTimeout(resolve, 350));
+
+  assert.equal(await fileExists(marker), false);
 });
 
 test("createWorkspaceForIssue — replaces a stale final file and runs afterCreate", async () => {

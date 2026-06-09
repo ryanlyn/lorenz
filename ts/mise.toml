@@ -3,7 +3,7 @@ node = "24"
 pnpm = "9"
 
 [hooks]
-enter = "pnpm install --frozen-lockfile || true"
+enter = "pnpm install --frozen-lockfile"
 
 [settings]
 experimental = true
@@ -36,15 +36,14 @@ run = "pnpm exec knip"
 [tasks.lint-versions]
 run = "pnpm lint:versions"
 
+[tasks.agent-settings-policy]
+run = "pnpm agent-settings:check"
+
 [tasks.tsconfig-refs]
 run = "pnpm tsconfig:refs:check"
 
 [tasks.check]
-depends = ["typecheck", "test", "lint", "knip", "lint-versions", "tsconfig-refs"]
-
-[tasks.traceviz]
-run = "pnpm --filter @symphony/dashboard build && pnpm traceviz {{arg(name='file')}}"
-description = "Open standalone trace viewer for a JSONL trace file"
+depends = ["typecheck", "test", "lint", "knip", "lint-versions", "tsconfig-refs", "agent-settings-policy"]
 
 [tasks."e2e:setup"]
 run = "pnpm exec playwright install chromium"

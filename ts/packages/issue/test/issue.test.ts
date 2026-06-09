@@ -1,6 +1,6 @@
 import { test } from "vitest";
 import { normalizeIssue, ensembleSize, isTerminalState } from "@symphony/cli";
-import type { Issue } from "@symphony/domain";
+import { ENSEMBLE_SIZE_MAX, type Issue } from "@symphony/domain";
 
 import { assert } from "../../../test/assert.js";
 
@@ -107,6 +107,35 @@ test("ensembleSize — parses ensemble:X label to return X", () => {
   });
 
   assert.equal(ensembleSize(issue), 3);
+});
+
+test("ensembleSize — rejects ensemble labels above the domain maximum", () => {
+  const atMax: Issue = normalizeIssue({
+    id: "i1",
+    identifier: "MT-1",
+    title: "Title",
+    state: { name: "Todo", type: "unstarted" },
+    labels: [`ensemble:${ENSEMBLE_SIZE_MAX}`],
+  });
+  assert.equal(ensembleSize(atMax), ENSEMBLE_SIZE_MAX);
+
+  const aboveMax: Issue = normalizeIssue({
+    id: "i2",
+    identifier: "MT-2",
+    title: "Title",
+    state: { name: "Todo", type: "unstarted" },
+    labels: [`ensemble:${ENSEMBLE_SIZE_MAX + 1}`],
+  });
+  assert.equal(ensembleSize(aboveMax), null);
+
+  const veryLarge: Issue = normalizeIssue({
+    id: "i3",
+    identifier: "MT-3",
+    title: "Title",
+    state: { name: "Todo", type: "unstarted" },
+    labels: ["ensemble:100000"],
+  });
+  assert.equal(ensembleSize(veryLarge), null);
 });
 
 test("ensembleSize — returns null if no ensemble label or malformed value", () => {

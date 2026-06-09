@@ -271,8 +271,10 @@ export class BoardStore {
   }
 
   async create(input: { title: string; body?: string; status?: string }): Promise<Issue> {
+    const status = input.status === undefined ? "Todo" : input.status.trim();
+    if (status === "") throw new Error("board issue status must not be empty");
     const parsed: ParsedFile = {
-      status: input.status ?? "Todo",
+      status,
       labels: [],
       title: input.title,
       description: input.body ?? "",

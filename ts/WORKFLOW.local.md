@@ -21,6 +21,7 @@ worker:
   ssh_timeout_ms: 60000
 hooks:
   after_create: |
+    set -euo pipefail
     git clone --depth 1 https://github.com/ryanlyn/symphony .
     if command -v mise >/dev/null 2>&1; then
       mise trust

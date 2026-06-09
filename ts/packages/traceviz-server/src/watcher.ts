@@ -5,14 +5,14 @@
  *
  * Directory layout:
  *   traceDir/
- *     CAN-123/
+ *     <issue storage key>/
  *       trace.jsonl
- *     CAN-456/
+ *     <issue storage key>/
  *       trace.jsonl
  */
 
-import { closeSync, createReadStream, openSync, readSync } from "node:fs";
-import { access, readdir, stat } from "node:fs/promises";
+import { closeSync, createReadStream, openSync, readSync, realpathSync } from "node:fs";
+import { access, lstat, readdir, realpath, stat } from "node:fs/promises";
 import path from "node:path";
 
 import type { DisplayEvent } from "./models/display-events.js";
@@ -21,6 +21,11 @@ import { parseTraceLines } from "./parser.js";
 
 const DEFAULT_POLL_INTERVAL_MS = 500;
 const READ_CHUNK_SIZE = 64 * 1024;
+
+function isWithinRoot(candidate: string, root: string): boolean {
+  const relative = path.relative(root, candidate);
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
 
 interface FileState {
   issueId: string;
@@ -91,9 +96,12 @@ function updateSummaryFromLine(summary: TraceSummary, line: string): void {
     }
 
     const timestamp = typeof record.timestamp === "string" ? record.timestamp : undefined;
+    if (summary.startedAt === undefined && timestamp !== undefined) {
+      summary.startedAt = timestamp;
+    }
+
     if (record.type === "turn_started") {
       summary.turnStartedCount++;
-      if (summary.startedAt === undefined) summary.startedAt = timestamp;
     } else if (record.type === "turn_completed") {
       summary.turnCompletedCount++;
     } else if (record.type === "turn_failed") {
@@ -127,7 +135,7 @@ export class TraceWatcher {
   private readonly traceDir: string;
   private readonly pollIntervalMs: number;
   private fileStates = new Map<string, FileState>();
-  private fileStateIssueIdsByPath = new Map<string, string>();
+  private fileStatesByPath = new Map<string, FileState>();
   private timer: ReturnType<typeof setInterval> | null = null;
   private stopped = false;
   private scanning = false;
@@ -138,6 +146,7 @@ export class TraceWatcher {
   }
 
   start(callback: WatcherCallback): void {
+    if (this.timer !== null) return;
     this.stopped = false;
     void this.scan(callback);
     this.timer = setInterval(() => {
@@ -173,7 +182,11 @@ export class TraceWatcher {
 
   private readAndParseSync(filePath: string): DisplayEvent[] {
     try {
-      const lines = this.readLinesSync(filePath);
+      const realTraceDir = realpathSync(this.traceDir);
+      const realFilePath = realpathSync(filePath);
+      if (!isWithinRoot(realFilePath, realTraceDir)) return [];
+
+      const lines = this.readLinesSync(realFilePath);
       return parseTraceLines(lines);
     } catch {
       return [];
@@ -199,6 +212,12 @@ export class TraceWatcher {
       }
 
       const resolvedDir = path.resolve(this.traceDir);
+      let realTraceDir: string;
+      try {
+        realTraceDir = await realpath(this.traceDir);
+      } catch {
+        return;
+      }
 
       for (const entry of entries) {
         const dirPath = path.join(this.traceDir, entry);
@@ -206,14 +225,20 @@ export class TraceWatcher {
         const resolvedDirPath = path.resolve(dirPath);
         if (!resolvedDirPath.startsWith(resolvedDir + path.sep)) continue;
 
-        const filePath = path.join(dirPath, "trace.jsonl");
-
         try {
-          const dirStat = await stat(dirPath);
+          const dirStat = await lstat(dirPath);
+          if (dirStat.isSymbolicLink()) continue;
           if (!dirStat.isDirectory()) continue;
 
-          const fileStat = await stat(filePath);
-          const existing = this.getFileStateByPath(filePath);
+          const realDirPath = await realpath(dirPath);
+          if (!isWithinRoot(realDirPath, realTraceDir)) continue;
+
+          const filePath = path.join(dirPath, "trace.jsonl");
+          const realFilePath = await realpath(filePath);
+          if (!isWithinRoot(realFilePath, realTraceDir)) continue;
+
+          const fileStat = await stat(realFilePath);
+          const existing = this.fileStatesByPath.get(realFilePath);
 
           if (
             existing &&
@@ -223,14 +248,14 @@ export class TraceWatcher {
             continue;
           }
 
-          const result = await this.readFile(filePath, entry, {
+          const result = await this.readFile(realFilePath, entry, {
             mtimeMs: fileStat.mtimeMs,
             size: fileStat.size,
             existing,
           });
           if (result) {
             const previousLineCount = existing?.lineCount ?? 0;
-            this.setFileState(result.state);
+            this.setFileState(realFilePath, result.state);
             if (result.state.lineCount !== previousLineCount) {
               callback(result.state.issueId, result.state.cachedTicketInfo);
             }
@@ -244,18 +269,13 @@ export class TraceWatcher {
     }
   }
 
-  private getFileStateByPath(filePath: string): FileState | undefined {
-    const issueId = this.fileStateIssueIdsByPath.get(filePath);
-    return issueId ? this.fileStates.get(issueId) : undefined;
-  }
-
-  private setFileState(state: FileState): void {
-    const previousIssueId = this.fileStateIssueIdsByPath.get(state.filePath);
-    if (previousIssueId && previousIssueId !== state.issueId) {
-      this.fileStates.delete(previousIssueId);
+  private setFileState(filePath: string, state: FileState): void {
+    const previous = this.fileStatesByPath.get(filePath);
+    if (previous && previous.issueId !== state.issueId) {
+      this.fileStates.delete(previous.issueId);
     }
     this.fileStates.set(state.issueId, state);
-    this.fileStateIssueIdsByPath.set(state.filePath, state.issueId);
+    this.fileStatesByPath.set(filePath, state);
   }
 
   private async readFile(
@@ -264,13 +284,17 @@ export class TraceWatcher {
     fileStat: { mtimeMs: number; size: number; existing?: FileState | undefined },
   ): Promise<{ state: FileState } | null> {
     try {
+      const realTraceDir = await realpath(this.traceDir);
+      const realFilePath = await realpath(filePath);
+      if (!isWithinRoot(realFilePath, realTraceDir)) return null;
+
       const { existing } = fileStat;
       const canReadAppend = existing && fileStat.size > existing.fileSize;
       const summary =
         canReadAppend && existing ? summaryFromState(existing) : createInitialSummary(issueId);
       const start = canReadAppend && existing ? existing.fileSize : 0;
 
-      await this.readLines(filePath, start, fileStat.size, (line) => {
+      await this.readLines(realFilePath, start, fileStat.size, (line) => {
         updateSummaryFromLine(summary, line);
       });
 
@@ -280,7 +304,7 @@ export class TraceWatcher {
         lineCount: summary.lineCount,
         lastModified: fileStat.mtimeMs,
         fileSize: fileStat.size,
-        filePath,
+        filePath: realFilePath,
         cachedTicketInfo: computeTicketInfo(summary),
         turnStartedCount: summary.turnStartedCount,
         turnCompletedCount: summary.turnCompletedCount,

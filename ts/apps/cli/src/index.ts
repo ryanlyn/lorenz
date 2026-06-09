@@ -58,8 +58,6 @@ export {
   actionForStopReason,
   mergeMonotonicUsage,
   resumeIdentityMatches,
-  reconciliationStopReason,
-  selectLeastLoadedHost,
 } from "@symphony/policies";
 export {
   slotKey,

@@ -50,6 +50,7 @@ export function issuePayload(
   const running = snapshot.running.find((entry) => entry.issueIdentifier === issueIdentifier);
   const retry = snapshot.retrying.find((entry) => entry.issueIdentifier === issueIdentifier);
   if (!running && !retry) return { status: "issue_not_found" };
+  const currentRetryAttempt = issueCurrentRetryAttempt(running, retry);
 
   return {
     status: "ok",
@@ -62,8 +63,8 @@ export function issuePayload(
         host: running?.workerHost ?? retry?.workerHost ?? null,
       },
       attempts: {
-        restart_count: retry ? Math.max(retry.attempt - 1, 0) : 0,
-        current_retry_attempt: retry?.attempt ?? 0,
+        restart_count: Math.max(currentRetryAttempt - 1, 0),
+        current_retry_attempt: currentRetryAttempt,
       },
       running: running ? runningIssuePayload(running) : null,
       retry: retry
@@ -89,6 +90,13 @@ export function issuePayload(
       tracked: {},
     },
   };
+}
+
+function issueCurrentRetryAttempt(
+  running: RuntimeRunningEntry | undefined,
+  retry: RuntimeSnapshot["retrying"][number] | undefined,
+): number {
+  return running?.retryAttempt ?? retry?.attempt ?? 0;
 }
 
 export function runsPayload(
@@ -312,6 +320,7 @@ function runningIssuePayload(entry: RuntimeRunningEntry): Record<string, unknown
   return {
     slot_index: entry.slotIndex,
     ensemble_size: entry.ensembleSize,
+    retry_attempt: entry.retryAttempt ?? 0,
     worker_host: entry.workerHost ?? null,
     workspace_path: entry.workspacePath ?? null,
     session_id: entry.sessionId ?? null,
@@ -394,15 +403,20 @@ function retriesPayload(runs: RunPayload[]): Array<Record<string, unknown>> {
   for (const run of runs)
     grouped.set(run.issue_identifier, [...(grouped.get(run.issue_identifier) ?? []), run]);
   return [...grouped.entries()]
-    .filter(([, issueRuns]) => issueRuns.length > 1)
-    .map(([identifier, issueRuns]) => {
+    .map(([identifier, issueRuns]) => ({
+      identifier,
+      issueRuns,
+      retryAttempts: distinctRetryAttempts(issueRuns),
+    }))
+    .filter(({ retryAttempts }) => retryAttempts.some((attempt) => attempt > 0))
+    .map(({ identifier, issueRuns, retryAttempts }) => {
       const sortedRuns = [...issueRuns].sort(compareLatestRun);
       const latest = sortedRuns[0];
       return {
         issue_identifier: identifier,
         issue_id: latest?.issue_id ?? null,
         issue_title: latest?.issue_title ?? null,
-        attempts: issueRuns.length,
+        attempts: retryAttempts.length,
         latest_outcome: latest?.outcome ?? "unknown",
         total_tokens: sum(issueRuns, (run) => run.tokens.total_tokens),
         latest_run_id: latest?.id ?? null,
@@ -416,6 +430,10 @@ function retriesPayload(runs: RunPayload[]): Array<Record<string, unknown>> {
       if (tokenDelta !== 0) return tokenDelta;
       return String(left.issue_identifier).localeCompare(String(right.issue_identifier));
     });
+}
+
+function distinctRetryAttempts(runs: RunPayload[]): number[] {
+  return [...new Set(runs.map((run) => run.retry_attempt))].sort((left, right) => left - right);
 }
 
 function usagePayload(usage: UsageTotals): {

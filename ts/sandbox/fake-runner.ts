@@ -90,8 +90,14 @@ export function createFakeAgentRunner(config: FakeRunnerConfig = {}): RuntimeRun
     allUpdates.push(sessionUpdate);
 
     if (behavior.stall) {
-      return new Promise<RunResult>(() => {
-        // Intentionally never resolves
+      return new Promise<RunResult>((_resolve, reject) => {
+        if (!abortSignal) return;
+        const abort = () => reject(new Error("FakeAgentRunner: aborted"));
+        if (abortSignal.aborted) {
+          abort();
+          return;
+        }
+        abortSignal.addEventListener("abort", abort, { once: true });
       });
     }
 
