@@ -12,9 +12,7 @@ export class MemoryTrackerClient implements RuntimeTrackerClient {
 
   constructor(issues: Array<Issue | Record<string, unknown>> = []) {
     this.issues = issues.map((issue) =>
-      isIssue(issue)
-        ? { ...issue, labels: [...issue.labels], blockers: [...issue.blockers] }
-        : normalizeIssue(issue),
+      isIssue(issue) ? cloneIssue(issue) : normalizeIssue(issue),
     );
   }
 
