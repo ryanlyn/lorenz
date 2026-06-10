@@ -33,6 +33,10 @@ so they ride the protocol's sanctioned extension point:
 - `session/new`, `session/resume`, `session/load` request
   `_meta["symphony/config"]` (codex) — per-session codex config overrides
   (same shape as `config.toml`), merged into the thread config.
+- `session/new` request `_meta["symphony/settings"]` (claude) — per-session
+  settings overlay (same shape as `settings.json`), merged over the resolved
+  file settings so `model`, `permissions.defaultMode`, `effortLevel`, and
+  `availableModels` work without writing settings files into the workspace.
 
 ## Refreshing from upstream
 

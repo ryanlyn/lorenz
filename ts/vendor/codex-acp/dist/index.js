@@ -16885,6 +16885,13 @@ function toTokenCount(usage) {
     reasoningOutputTokens: usage.reasoningOutputTokens
   };
 }
+// symphony-patch: per-session codex config overrides (config.toml shape as
+// JSON) supplied by the client on session/new, session/resume and
+// session/load via _meta["symphony/config"].
+function symphonySessionConfig(request) {
+  const config = request._meta?.["symphony/config"];
+  return typeof config === "object" && config !== null && !Array.isArray(config) ? config : void 0;
+}
 // symphony-patch: map a TokenCount to the symphony/_meta usage bucket shape.
 // inputTokens is already cache-subtracted and outputTokens already includes
 // reasoning tokens, so totalTokens = input + cachedRead + output holds.
@@ -19201,7 +19208,7 @@ var CodexAcpClient = class {
       approvalPolicy: null,
       sandbox: null,
       baseInstructions: null,
-      config: await this.createSessionConfig(request.cwd, request.mcpServers ?? []),
+      config: await this.createSessionConfig(request.cwd, request.mcpServers ?? [], symphonySessionConfig(request)),
       cwd: request.cwd,
       developerInstructions: null,
       model: null,
@@ -19222,7 +19229,7 @@ var CodexAcpClient = class {
       approvalPolicy: null,
       sandbox: null,
       baseInstructions: null,
-      config: await this.createSessionConfig(request.cwd, request.mcpServers ?? []),
+      config: await this.createSessionConfig(request.cwd, request.mcpServers ?? [], symphonySessionConfig(request)),
       cwd: request.cwd,
       developerInstructions: null,
       model: null,
@@ -19242,7 +19249,7 @@ var CodexAcpClient = class {
   async newSession(request) {
     await this.refreshSkills(request.cwd, request._meta);
     const response = await this.codexClient.threadStart({
-      config: await this.createSessionConfig(request.cwd, request.mcpServers),
+      config: await this.createSessionConfig(request.cwd, request.mcpServers, symphonySessionConfig(request)),
       modelProvider: this.getModelProvider(),
       model: null,
       cwd: request.cwd,
@@ -19270,9 +19277,12 @@ var CodexAcpClient = class {
   getMcpServerStartupVersion() {
     return this.codexClient.getMcpServerStartupVersion();
   }
-  async createSessionConfig(projectPath, mcpServers) {
+  async createSessionConfig(projectPath, mcpServers, sessionConfig) {
     const mergedConfig = {
       ...mergeGatewayConfig(this.config, this.gatewayConfig),
+      // symphony-patch: per-session config overrides (config.toml shape)
+      // supplied via session _meta["symphony/config"].
+      ...sessionConfig ?? {},
       projects: {
         [projectPath]: {
           trust_level: "trusted"
@@ -19287,9 +19297,15 @@ var CodexAcpClient = class {
     if (uniqueServers.length === 0) {
       return mergedConfig;
     }
+    const configMcpServers = mergedConfig["mcp_servers"];
     return {
       ...mergedConfig,
-      "mcp_servers": Object.fromEntries(uniqueServers.map((mcp) => [mcp.name, this.createMcpSeverConfig(mcp)]))
+      // symphony-patch: keep session-config mcp servers alongside the
+      // client-injected ones instead of clobbering them.
+      "mcp_servers": {
+        ...typeof configMcpServers === "object" && configMcpServers !== null ? configMcpServers : {},
+        ...Object.fromEntries(uniqueServers.map((mcp) => [mcp.name, this.createMcpSeverConfig(mcp)]))
+      }
     };
   }
   async getConfigMcpServerNames(projectPath) {
