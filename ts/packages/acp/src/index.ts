@@ -54,6 +54,10 @@ interface Session extends AgentSession {
   loadingReplay: boolean;
   replayedUpdateCount: number;
   usageTotals: UsageTotals;
+  sawCallUsageThisTurn: boolean;
+  turnStartTotals: UsageTotals;
+  lastCallUsageSeq: number;
+  callUsageBaseline?: UsageTokenUpdate | undefined;
   pendingTurn?: { reject: (error: Error) => void; allowSessionIdRotation: boolean } | undefined;
 }
 
@@ -121,6 +125,9 @@ export class Executor implements AgentExecutor {
         loadingReplay: false,
         replayedUpdateCount: 0,
         usageTotals: emptyUsageTotals(),
+        sawCallUsageThisTurn: false,
+        turnStartTotals: emptyUsageTotals(),
+        lastCallUsageSeq: 0,
         stop: async () => {
           await this.stopSession(nextSession);
         },
@@ -195,6 +202,8 @@ export class Executor implements AgentExecutor {
       };
 
       resetStallTimer();
+      session.sawCallUsageThisTurn = false;
+      session.turnStartTotals = { ...session.usageTotals };
       session.pendingTurn = { reject: finishReject, allowSessionIdRotation: true };
       session.onUpdate = (update) => {
         resetStallTimer();
@@ -218,7 +227,7 @@ export class Executor implements AgentExecutor {
         })
         .then((response) => {
           if (settled) return;
-          const usage = normalizeSessionUsage(session, extractUsage(response.usage ?? undefined));
+          const usage = finalizeTurnUsage(session, extractUsage(response.usage ?? undefined));
           const action = actionForStopReason(response.stopReason);
           const terminalType =
             action === "continue"
@@ -307,6 +316,7 @@ function handleSessionUpdate(session: Session, notification: SessionNotification
     session.replayedUpdateCount += 1;
     return;
   }
+  const usage = consumeCallUsage(session, notification);
   session.onUpdate?.({
     type: "session_notification",
     sessionUpdate: acpProtocolUpdate(session, "session_notification", notification),
@@ -315,7 +325,124 @@ function handleSessionUpdate(session: Session, notification: SessionNotification
     executorPid: session.executorPid,
     message: notification,
     timestamp: new Date(),
+    ...(usage && { usage, usageKind: "cumulative" as const }),
   });
+}
+
+/**
+ * Patched bridges attach a per-model-call token bucket to usage_update
+ * notifications under _meta["symphony/callUsage"] (see ts/vendor/README.md).
+ * Buckets are deltas for exactly one call, so they accumulate additively
+ * regardless of the agent's turn-level usage accounting mode. Returns the
+ * running session totals when a new bucket was consumed.
+ */
+function consumeCallUsage(
+  session: Session,
+  notification: SessionNotification,
+): UsageTokenUpdate | undefined {
+  if (notification.update?.sessionUpdate !== "usage_update") return undefined;
+  const meta = (notification.update as { _meta?: Record<string, unknown> | null })._meta;
+  if (!meta) return undefined;
+  const rawCall = meta["symphony/callUsage"];
+  const call = parseUsageBucket(rawCall);
+  if (!call) return undefined;
+  const seq = bucketSeq(rawCall);
+  if (seq !== null) {
+    if (seq <= session.lastCallUsageSeq) return undefined;
+    session.lastCallUsageSeq = seq;
+  }
+  session.sawCallUsageThisTurn = true;
+  addUsageTotals(session, call);
+  const total = parseUsageBucket(meta["symphony/totalUsage"]);
+  if (total) {
+    // The bridge also reports its own cumulative counter; use it as a floor
+    // so missed bucket notifications cannot under-count the session.
+    // The baseline captures spend that predates this session (resumed
+    // threads), measured before the first observed call.
+    session.callUsageBaseline ??= subtractUsage(total, call);
+    maxUsageTotals(session, subtractUsage(total, session.callUsageBaseline));
+  }
+  return usageSnapshot(session);
+}
+
+/**
+ * Turn-end usage. When per-call buckets drove the accounting this turn, the
+ * bridge's turn-level report is only used to reconcile gaps: cumulative
+ * reports act as a floor, per-turn reports top up any shortfall against the
+ * sum of buckets observed this turn. Without buckets the prior turn-level
+ * accounting applies unchanged.
+ */
+function finalizeTurnUsage(
+  session: Session,
+  reported: UsageTokenUpdate | undefined,
+): UsageTokenUpdate | undefined {
+  if (!session.sawCallUsageThisTurn) return normalizeSessionUsage(session, reported);
+  if (reported) {
+    if (session.agentConfig.usageAccounting === "cumulative") {
+      maxUsageTotals(session, reported);
+    } else {
+      const turnDelta = subtractUsage(usageSnapshot(session), session.turnStartTotals);
+      addUsageTotals(session, subtractUsage(reported, turnDelta));
+    }
+  }
+  return usageSnapshot(session);
+}
+
+function parseUsageBucket(value: unknown): UsageTokenUpdate | undefined {
+  if (typeof value !== "object" || value === null) return undefined;
+  const bucket = value as Record<string, unknown>;
+  const field = (key: string): number => {
+    const raw = bucket[key];
+    return typeof raw === "number" ? nonNegativeFinite(raw) : 0;
+  };
+  const inputTokens =
+    field("inputTokens") + field("cachedReadTokens") + field("cachedWriteTokens");
+  const outputTokens = field("outputTokens");
+  const rawTotal = bucket["totalTokens"];
+  const totalTokens =
+    (typeof rawTotal === "number" ? nonNegativeUsageValue(rawTotal) : undefined) ??
+    inputTokens + outputTokens;
+  return { inputTokens, outputTokens, totalTokens };
+}
+
+function bucketSeq(value: unknown): number | null {
+  if (typeof value !== "object" || value === null) return null;
+  const seq = (value as Record<string, unknown>)["seq"];
+  return typeof seq === "number" && Number.isFinite(seq) ? seq : null;
+}
+
+function addUsageTotals(session: Session, usage: UsageTokenUpdate): void {
+  session.usageTotals = {
+    inputTokens: session.usageTotals.inputTokens + (usage.inputTokens ?? 0),
+    outputTokens: session.usageTotals.outputTokens + (usage.outputTokens ?? 0),
+    totalTokens: session.usageTotals.totalTokens + (usage.totalTokens ?? 0),
+    secondsRunning: session.usageTotals.secondsRunning,
+  };
+}
+
+function maxUsageTotals(session: Session, usage: UsageTokenUpdate): void {
+  session.usageTotals = {
+    inputTokens: Math.max(session.usageTotals.inputTokens, usage.inputTokens ?? 0),
+    outputTokens: Math.max(session.usageTotals.outputTokens, usage.outputTokens ?? 0),
+    totalTokens: Math.max(session.usageTotals.totalTokens, usage.totalTokens ?? 0),
+    secondsRunning: session.usageTotals.secondsRunning,
+  };
+}
+
+function subtractUsage(left: UsageTokenUpdate, right: UsageTokenUpdate): UsageTokenUpdate {
+  return {
+    inputTokens: Math.max((left.inputTokens ?? 0) - (right.inputTokens ?? 0), 0),
+    outputTokens: Math.max((left.outputTokens ?? 0) - (right.outputTokens ?? 0), 0),
+    totalTokens: Math.max((left.totalTokens ?? 0) - (right.totalTokens ?? 0), 0),
+  };
+}
+
+function usageSnapshot(session: Session): UsageTokenUpdate {
+  return {
+    inputTokens: session.usageTotals.inputTokens,
+    outputTokens: session.usageTotals.outputTokens,
+    totalTokens: session.usageTotals.totalTokens,
+  };
 }
 
 function handlePermissionRequest(
