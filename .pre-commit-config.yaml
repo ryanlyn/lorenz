@@ -1,5 +1,5 @@
 # Pre-commit config for prek (https://github.com/j178/prek)
-# Install hooks: prek install
+# Install hooks: prek install --hook-type pre-push
 repos:
   - repo: local
     hooks:
@@ -8,3 +8,4 @@ repos:
         entry: bash -c 'cd ts && mise run check'
         language: system
         pass_filenames: false
+        stages: [pre-push]

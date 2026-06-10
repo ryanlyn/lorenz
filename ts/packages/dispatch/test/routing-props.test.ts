@@ -54,24 +54,52 @@ function issueWith(overrides: Partial<Issue>): Issue {
 
 // --- routeNames ---
 
-test("routeNames — returned routes are derived from issue labels", () => {
+test("INVARIANT: When route labels are present, routeNames SHALL return the normalized suffix of each matching label.", () => {
   fc.assert(
     fc.property(
-      fc.array(fc.string({ minLength: 1, maxLength: 30 }), { maxLength: 5 }),
+      fc.array(
+        fc.string({ minLength: 1, maxLength: 20 }).map((s) => "Symphony:" + s),
+        { minLength: 1, maxLength: 5 },
+      ),
       (labels) => {
+        const prefix = "Symphony:";
         const issue = issueWith({ labels });
-        const settings = makeSettings();
+        const settings = makeSettings({ routeLabelPrefix: prefix });
         const routes = routeNames(issue, settings);
-        for (const route of routes) {
-          assert.ok(typeof route === "string");
-          assert.ok(route.length > 0);
+        // Each route should be the normalized suffix after stripping the prefix
+        const expected = labels
+          .map((label) => normalizeRouteName(label.slice(prefix.length)))
+          .filter((route) => route !== "");
+        assert.deepEqual(routes, expected);
+        // Also verify each route individually matches the derivation
+        for (let i = 0; i < routes.length; i++) {
+          assert.equal(routes[i], expected[i]);
         }
       },
     ),
   );
 });
 
-test("routeNames — blank suffix after prefix yields no routes", () => {
+test("INVARIANT: When labels do not match the configured prefix, routeNames SHALL return an empty array.", () => {
+  fc.assert(
+    fc.property(
+      fc.array(
+        fc
+          .string({ minLength: 1, maxLength: 20 })
+          .filter((s) => !s.toLowerCase().startsWith("symphony:")),
+        { minLength: 1, maxLength: 5 },
+      ),
+      (labels) => {
+        const issue = issueWith({ labels });
+        const settings = makeSettings({ routeLabelPrefix: "Symphony:" });
+        const routes = routeNames(issue, settings);
+        assert.equal(routes.length, 0);
+      },
+    ),
+  );
+});
+
+test("INVARIANT: When the suffix after the route prefix is blank, routeNames SHALL return an empty array.", () => {
   fc.assert(
     fc.property(fc.constantFrom("Symphony:", "Route:", "Team:"), (prefix) => {
       const issue = issueWith({ labels: [prefix, `${prefix}  `, `${prefix}\t`] });
@@ -82,7 +110,7 @@ test("routeNames — blank suffix after prefix yields no routes", () => {
   );
 });
 
-test("routeNames — case insensitive prefix matching", () => {
+test("INVARIANT: When prefix matching is performed, matching SHALL be case-insensitive.", () => {
   fc.assert(
     fc.property(
       fc
@@ -109,7 +137,7 @@ test("routeNames — case insensitive prefix matching", () => {
 
 // --- normalizeRouteName ---
 
-test("normalizeRouteName — idempotent", () => {
+test("INVARIANT: When route name normalization is applied twice, the result SHALL be the same (idempotent).", () => {
   fc.assert(
     fc.property(fc.string({ maxLength: 30 }), (input) => {
       const once = normalizeRouteName(input);
@@ -119,7 +147,7 @@ test("normalizeRouteName — idempotent", () => {
   );
 });
 
-test("normalizeRouteName — case folding", () => {
+test("INVARIANT: When route names are normalized, normalization SHALL be case-insensitive.", () => {
   fc.assert(
     fc.property(fc.string({ minLength: 1, maxLength: 20 }), (input) => {
       assert.equal(
@@ -130,7 +158,7 @@ test("normalizeRouteName — case folding", () => {
   );
 });
 
-test("normalizeRouteName — trim invariant", () => {
+test("INVARIANT: When route names are normalized, leading and trailing whitespace SHALL be stripped.", () => {
   fc.assert(
     fc.property(fc.string({ minLength: 1, maxLength: 20 }), (input) => {
       assert.equal(normalizeRouteName(`  ${input}  `), normalizeRouteName(input));
@@ -140,7 +168,7 @@ test("normalizeRouteName — trim invariant", () => {
 
 // --- routedToThisWorker ---
 
-test("routedToThisWorker — onlyRoutes null accepts all valid routed issues", () => {
+test("INVARIANT: When the allowlist is null, the system SHALL accept all routes.", () => {
   fc.assert(
     fc.property(
       fc
@@ -155,7 +183,7 @@ test("routedToThisWorker — onlyRoutes null accepts all valid routed issues", (
   );
 });
 
-test("routedToThisWorker — onlyRoutes empty rejects all routed issues", () => {
+test("INVARIANT: When the allowlist is empty, the system SHALL reject all routes.", () => {
   fc.assert(
     fc.property(
       fc
@@ -170,7 +198,7 @@ test("routedToThisWorker — onlyRoutes empty rejects all routed issues", () => 
   );
 });
 
-test("routedToThisWorker — unrouted issues rejected when acceptUnrouted is false", () => {
+test("INVARIANT: When no route label is present and unrouted dispatch is disabled, the dispatch SHALL be ineligible.", () => {
   fc.assert(
     fc.property(
       fc.array(
@@ -188,7 +216,7 @@ test("routedToThisWorker — unrouted issues rejected when acceptUnrouted is fal
   );
 });
 
-test("routedToThisWorker — assignedToWorker false always rejects", () => {
+test("INVARIANT: When an issue is not assigned to the worker, routing SHALL always reject regardless of other settings.", () => {
   fc.assert(
     fc.property(
       fc.array(fc.string({ minLength: 1, maxLength: 15 }), { maxLength: 3 }),
@@ -204,11 +232,10 @@ test("routedToThisWorker — assignedToWorker false always rejects", () => {
 
 // --- issueHasOpenBlockers ---
 
-test("issueHasOpenBlockers — non-unstarted issues never blocked", () => {
+test("INVARIANT: When an unstarted issue has non-terminal blockers, it SHALL be considered blocked.", () => {
   fc.assert(
     fc.property(
-      fc.constantFrom("started", "completed", null),
-      fc.constantFrom("In Progress", "Done", "Review"),
+      fc.constantFrom("Todo", "In Progress", "Review"),
       fc.array(
         fc.record({
           id: fc.constant("b1"),
@@ -218,29 +245,48 @@ test("issueHasOpenBlockers — non-unstarted issues never blocked", () => {
         }),
         { minLength: 1, maxLength: 3 },
       ),
-      (stateType, state, blockers) => {
-        const issue = issueWith({ state, stateType, blockers });
+      (state, blockers) => {
+        const issue = issueWith({ state, stateType: "unstarted", blockers });
         const settings = makeSettings();
-        assert.ok(!issueHasOpenBlockers(issue, settings));
+        assert.ok(issueHasOpenBlockers(issue, settings));
       },
     ),
   );
 });
 
-test("issueHasOpenBlockers — all-terminal blockers do not block", () => {
+test("INVARIANT: When all blockers are in terminal states, the issue SHALL NOT be considered blocked.", () => {
+  const terminalStates = ["Done", "Closed", "Cancelled"];
   fc.assert(
     fc.property(
       fc.array(
         fc.record({
           id: fc.constant("b1"),
           identifier: fc.constant("B-1"),
-          state: fc.constantFrom("Done", "Closed", "Cancelled"),
+          state: fc.constantFrom(...terminalStates),
           stateType: fc.constant(null as string | null),
         }),
         { minLength: 1, maxLength: 3 },
       ),
       (blockers) => {
         const issue = issueWith({ state: "Todo", stateType: "unstarted", blockers });
+        const settings = makeSettings({ terminalStates });
+        assert.ok(!issueHasOpenBlockers(issue, settings));
+      },
+    ),
+  );
+});
+
+test("issueHasOpenBlockers - non-unstarted issues with open blockers are not blocked", () => {
+  fc.assert(
+    fc.property(
+      fc.constantFrom("Todo", "In Progress", "Review"),
+      fc.constantFrom("started", "completed", null),
+      (blockerState, stateType) => {
+        const issue = issueWith({
+          state: "Todo",
+          stateType,
+          blockers: [{ id: "b1", identifier: "B-1", state: blockerState, stateType: null }],
+        });
         const settings = makeSettings();
         assert.ok(!issueHasOpenBlockers(issue, settings));
       },
@@ -248,23 +294,9 @@ test("issueHasOpenBlockers — all-terminal blockers do not block", () => {
   );
 });
 
-test("issueHasOpenBlockers — any non-terminal blocker blocks unstarted issue", () => {
-  fc.assert(
-    fc.property(fc.constantFrom("Todo", "In Progress", "Review"), (blockerState) => {
-      const issue = issueWith({
-        state: "Todo",
-        stateType: "unstarted",
-        blockers: [{ id: "b1", identifier: "B-1", state: blockerState, stateType: null }],
-      });
-      const settings = makeSettings();
-      assert.ok(issueHasOpenBlockers(issue, settings));
-    }),
-  );
-});
-
 // --- shouldDispatchIssue / dispatchBlockReason consistency ---
 
-test("shouldDispatchIssue — missing required fields never eligible", () => {
+test("INVARIANT: When an issue is missing required fields, it SHALL never be eligible for dispatch.", () => {
   fc.assert(
     fc.property(fc.constantFrom("id", "identifier", "title", "state"), (field) => {
       const issue = issueWith({ [field]: "" });
@@ -275,7 +307,7 @@ test("shouldDispatchIssue — missing required fields never eligible", () => {
   );
 });
 
-test("shouldDispatchIssue — terminal state never eligible", () => {
+test("INVARIANT: When an issue is in a terminal state, it SHALL never be eligible for dispatch.", () => {
   fc.assert(
     fc.property(
       fc.constantFrom("Done", "Closed", "Cancelled", "Canceled", "Duplicate"),
@@ -289,7 +321,7 @@ test("shouldDispatchIssue — terminal state never eligible", () => {
   );
 });
 
-test("shouldDispatchIssue — concurrency cap blocks dispatch", () => {
+test("INVARIANT: When the concurrency cap is reached, dispatch SHALL be blocked.", () => {
   fc.assert(
     fc.property(fc.integer({ min: 1, max: 20 }), (cap) => {
       const issue = issueWith({ state: "Todo", stateType: "unstarted", blockers: [] });
@@ -302,13 +334,22 @@ test("shouldDispatchIssue — concurrency cap blocks dispatch", () => {
   );
 });
 
-test("dispatchBlockReason — null iff shouldDispatch would be true (given unclaimed slot)", () => {
+test("INVARIANT: dispatchBlockReason SHALL return null if and only if shouldDispatchIssue returns true (given unclaimed slots).", () => {
+  // Terminal states that must be excluded from the generated issue state to ensure
+  // the issue passes the issueIsActive check (which requires state in activeStates
+  // AND state NOT in terminalStates).
+  const terminalStates = ["Done", "Cancelled", "Canceled", "Closed", "Duplicate"];
+
   const arbTestIssue = (): fc.Arbitrary<Issue> =>
     fc.record({
       id: fc.string({ minLength: 1, maxLength: 15 }),
       identifier: fc.string({ minLength: 1, maxLength: 10 }),
       title: fc.string({ minLength: 1, maxLength: 20 }),
-      state: fc.string({ minLength: 1, maxLength: 15 }),
+      state: fc
+        .string({ minLength: 1, maxLength: 15 })
+        .filter(
+          (s) => !terminalStates.some((t) => t.trim().toLowerCase() === s.trim().toLowerCase()),
+        ),
       stateType: fc.option(fc.constantFrom("unstarted", "started", "completed", "cancelled"), {
         nil: null,
       }),
@@ -329,13 +370,43 @@ test("dispatchBlockReason — null iff shouldDispatch would be true (given uncla
 
   fc.assert(
     fc.property(arbTestIssue(), (issue) => {
-      const settings = makeSettings({ activeStates: ["Todo", "In Progress", issue.state] });
+      const settings = makeSettings({
+        activeStates: ["Todo", "In Progress", issue.state],
+        terminalStates,
+      });
+      // Use empty claimedSlots so the slot-claiming logic in shouldDispatchIssue
+      // does not reject (since dispatchBlockReason does not check slots)
       const state = { runningCount: 0, claimedSlots: new Set<string>() };
       const blocked = dispatchBlockReason(issue, settings, state);
       const shouldDispatch = shouldDispatchIssue(issue, settings, state);
+
+      // Forward direction: if blocked, then should not dispatch
       if (blocked !== null) {
         assert.ok(!shouldDispatch);
       }
+      // Converse: if not blocked, then shouldDispatch should be true
+      // (because claimedSlots is empty, the slot check always succeeds)
+      if (blocked === null) {
+        assert.ok(shouldDispatch);
+      }
+    }),
+  );
+});
+
+test("dispatchBlockReason — returns null for issues that fail preconditions (missing fields, inactive, unrouted)", () => {
+  // dispatchBlockReason returns null early for issues that fail preconditions
+  // (missing fields, not active, not routed, has blockers) - these are NOT dispatchable
+  // but dispatchBlockReason returns null because it only reports capacity blocks
+  fc.assert(
+    fc.property(fc.constantFrom("id", "identifier", "title", "state"), (field) => {
+      const issue = issueWith({ [field]: "" });
+      const settings = makeSettings();
+      const state = { runningCount: 0, claimedSlots: new Set<string>() };
+      // dispatchBlockReason returns null (no capacity block) but shouldDispatch returns false
+      const blocked = dispatchBlockReason(issue, settings, state);
+      const shouldDispatch = shouldDispatchIssue(issue, settings, state);
+      assert.equal(blocked, null);
+      assert.ok(!shouldDispatch);
     }),
   );
 });

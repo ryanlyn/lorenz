@@ -1,18 +1,80 @@
+import type {
+  PermissionOption,
+  PromptResponse,
+  RequestPermissionRequest,
+  SessionNotification,
+} from "@agentclientprotocol/sdk";
+
+// --- Bounds constants ---
+
+export const PORT_MAX = 65535;
+export const ONE_WEEK_MS = 604_800_000;
+export const RENDER_INTERVAL_MAX_MS = 60_000;
+export const CONCURRENCY_MAX = 1000;
+export const MAX_TURNS_MAX = 10_000;
+export const ENSEMBLE_SIZE_MAX = 100;
+
+// --- Bounds validators ---
+
+export function isValidPort(n: number): boolean {
+  return Number.isInteger(n) && n >= 0 && n <= PORT_MAX;
+}
+
+export function isValidTimeoutMs(n: number): boolean {
+  return Number.isInteger(n) && n >= 1 && n <= ONE_WEEK_MS;
+}
+
+export function isValidNonNegativeTimeoutMs(n: number): boolean {
+  return Number.isInteger(n) && n >= 0 && n <= ONE_WEEK_MS;
+}
+
+export function isValidIntervalMs(n: number): boolean {
+  return Number.isInteger(n) && n >= 1 && n <= ONE_WEEK_MS;
+}
+
+export function isValidRenderIntervalMs(n: number): boolean {
+  return Number.isInteger(n) && n >= 1 && n <= RENDER_INTERVAL_MAX_MS;
+}
+
+export function isValidConcurrency(n: number): boolean {
+  return Number.isInteger(n) && n >= 1 && n <= CONCURRENCY_MAX;
+}
+
+export function isValidMaxTurns(n: number): boolean {
+  return Number.isInteger(n) && n >= 1 && n <= MAX_TURNS_MAX;
+}
+
+export function isValidEnsembleSize(n: number): boolean {
+  return Number.isInteger(n) && n >= 1 && n <= ENSEMBLE_SIZE_MAX;
+}
+
+export function normalizeHttpBindHost(host: string): string {
+  return host.trim() === "" ? "127.0.0.1" : host;
+}
+
+export function httpUrlHost(host: string): string {
+  const normalized = normalizeHttpBindHost(host);
+  if (normalized === "0.0.0.0" || normalized === "::") return "127.0.0.1";
+  return normalized.includes(":") && !normalized.startsWith("[") ? `[${normalized}]` : normalized;
+}
+
+// --- Session protocol types ---
+
+export type StopReason = "end_turn" | "max_tokens" | "max_turn_requests" | "refusal" | "cancelled";
+
+// --- Domain types ---
+
 /**
  * Identifies a configured agent backend by name (e.g. `"codex"`, `"claude"`).
  * Matches a key in {@link Settings.agents} and is open-ended because operators define their own.
  */
 export type AgentKind = string;
 
-export const AGENT_EXECUTOR_KINDS = ["appserver", "acp"] as const;
+export const AGENT_USAGE_ACCOUNTING_VALUES = ["per-turn", "cumulative"] as const;
 
-/**
- * Transport used to drive an agent process: `"appserver"` speaks Codex's JSON-RPC
- * app-server protocol, `"acp"` speaks the Agent Client Protocol bridge.
- */
-export type AgentExecutorKind = (typeof AGENT_EXECUTOR_KINDS)[number];
+export type AgentUsageAccounting = (typeof AGENT_USAGE_ACCOUNTING_VALUES)[number];
 
-export const TRACKER_KINDS = ["linear", "memory"] as const;
+export const TRACKER_KINDS = ["linear", "memory", "local"] as const;
 
 export type TrackerKind = (typeof TRACKER_KINDS)[number];
 
@@ -40,51 +102,36 @@ export const ISSUE_STATE_TYPES = [
 
 export type IssueStateType = (typeof ISSUE_STATE_TYPES)[number];
 
-export const CODEX_APPROVAL_POLICY_NAMES = [
-  "untrusted",
-  "on-failure",
-  "on-request",
-  "never",
-] as const;
+// --- Leaf helpers ---
 
-export type CodexApprovalPolicyName = (typeof CODEX_APPROVAL_POLICY_NAMES)[number];
+export function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
 
-export const CODEX_SANDBOX_MODES = ["read-only", "workspace-write", "danger-full-access"] as const;
+export function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
 
-export type CodexSandboxMode = (typeof CODEX_SANDBOX_MODES)[number];
+export function isOneOf<const Values extends readonly string[]>(
+  value: string,
+  values: Values,
+): value is Values[number] {
+  return (values as readonly string[]).includes(value);
+}
 
-export const AGENT_UPDATE_TYPES = [
-  "workspace_prepared",
-  "session_started",
-  "turn_started",
-  "turn_completed",
-  "turn_failed",
-  "turn_cancelled",
-  "turn_input_required",
-  "approval_required",
-  "approval_auto_approved",
-  "tool_input_auto_answered",
-  "usage",
-  "rate_limit",
-  "notification",
-  "stderr",
-  "malformed",
-  "process_exit",
-  "resume_state_warning",
-  "session_replay_suppressed",
-  "fs_write",
-  "assistant_message",
-  "user_message",
-  "agent_thought",
-  "tool_use_requested",
-  "tool_result",
-  "tool_call_failed",
-  "tool_call_update",
-  "tool_call_completed",
-  "plan",
-] as const;
+export function normalizeStateType(value: string | null | undefined): IssueStateType | null {
+  if (value === null || value === undefined) return null;
+  const normalized = value.trim().toLowerCase();
+  return isOneOf(normalized, ISSUE_STATE_TYPES) ? normalized : null;
+}
 
-export type AgentUpdateType = (typeof AGENT_UPDATE_TYPES)[number];
+export function durationMs(startedAt: string, endedAt: string): number {
+  return Math.max(0, new Date(endedAt).getTime() - new Date(startedAt).getTime());
+}
+
+export const PRIORITY_VALUES = [1, 2, 3, 4] as const;
+
+export type Priority = (typeof PRIORITY_VALUES)[number];
 
 /**
  * Minimal reference to a related issue - just enough to identify it and check its state.
@@ -112,11 +159,11 @@ export interface Issue {
   description?: string | null | undefined;
   /** Display name of the workflow state (e.g. `"In Progress"`). Used as a lookup key for per-state setting overrides. */
   state: string;
-  /** Category bucket from the tracker: typically `"unstarted" | "started" | "completed" | "canceled" | "backlog" | "triage"`. */
-  stateType?: IssueStateType | null | undefined;
+  /** Category bucket from the tracker: `"unstarted" | "started" | "completed" | "canceled" | "backlog" | "triage"`. All trackers must provide this. */
+  stateType: IssueStateType;
   branchName?: string | null | undefined;
   url?: string | null | undefined;
-  priority?: number | null | undefined;
+  priority?: Priority | null | undefined;
   /** ISO-8601 timestamp string as returned by the tracker; not parsed into a Date. */
   createdAt?: string | null | undefined;
   /** ISO-8601 timestamp string as returned by the tracker; not parsed into a Date. */
@@ -159,10 +206,21 @@ export interface TrackerSettings {
   kind?: TrackerKind | undefined;
   endpoint: string;
   apiKey?: string | undefined;
-  /** Linear project slug; required when `kind === "linear"`. */
+  /** @deprecated Use `projectSlugs` instead. Single Linear project slug; required when `kind === "linear"`. */
   projectSlug?: string | undefined;
+  /** Linear project slugs to monitor. Mutually exclusive with `projectLabels`. */
+  projectSlugs?: string[] | undefined;
+  /** Linear project labels for dynamic discovery. Mutually exclusive with `projectSlugs`. */
+  projectLabels?: string[] | undefined;
   /** Tracker assignee identity (or `$VAR`) used to scope candidate queries to one user. */
   assignee?: string | undefined;
+  /** Local tracker board directory (e.g. `.symphony/local`). Used when `kind === "local"`. */
+  path?: string | undefined;
+  /**
+   * Local tracker issue-id prefix (e.g. `"BOARD-"`, `"XXX-"`). Issue files are `<prefix><n>.md`
+   * and new ids are minted with this prefix. Defaults to `"BOARD-"`. Used when `kind === "local"`.
+   */
+  idPrefix?: string | undefined;
   /** Tracker state names considered eligible for dispatch (case-insensitive match). */
   activeStates: string[];
   /** Tracker state names that mark an issue as finished; running agents on these issues are stopped and their workspaces cleaned up. */
@@ -334,27 +392,17 @@ export interface AgentSettings {
 }
 
 /**
- * Agent record selecting the in-process Codex app-server executor. Inherits all Codex runtime
- * knobs since the executor speaks Codex's JSON-RPC app-server protocol directly over stdio.
- */
-export interface AppServerAgentConfig extends CodexSettings {
-  executor: "appserver";
-}
-
-/**
  * Agent record selecting the Agent Client Protocol (ACP) executor, which drives an external
  * bridge subprocess (e.g. Claude Code) over stdio using the ACP JSON-RPC schema.
  */
-export interface AcpAgentConfig {
+export interface AgentConfig {
   executor: "acp";
-  /** Shell command launched per session (run via `bash -lc` in the workspace, or over SSH on remote workers). */
+  /** Shell command launched per session (run via `bash -lc` in the workspace, or over SSH on remote workers). Also determines the provider config format: `claude-agent-acp` → `.claude/settings.local.json`, `codex-acp` → `.codex/config.toml`. */
   bridgeCommand: string;
-  /** Additional argv appended to `bridgeCommand` when launching the bridge process. */
-  bridgeArgs: string[];
-  /** Informational model identifier passed to bridge defaults; not interpreted by the ACP executor itself. */
-  model?: string | undefined;
-  /** Informational permission-mode string for the bridge (e.g. Claude's `"dontAsk"`); not interpreted by ACP directly. */
-  permissionMode?: string | undefined;
+  /** Shape of `PromptResponse.usage` emitted by this ACP bridge. Symphony always converts it to cumulative per-run totals before handing it to the orchestrator. */
+  usageAccounting: AgentUsageAccounting;
+  /** Free-form provider configuration written to the workspace before launching the bridge. The file path and format are derived from {@link bridgeCommand}. */
+  providerConfig?: Record<string, unknown> | undefined;
   /** Hard limit (ms) on a single ACP turn before it is force-cancelled. */
   turnTimeoutMs: number;
   /** Inactivity window (ms) after which a session with no agent events is treated as stalled and aborted. `<= 0` disables stall detection. */
@@ -363,56 +411,31 @@ export interface AcpAgentConfig {
   strictMcpConfig?: boolean | undefined;
 }
 
-/**
- * Per-agent backend configuration keyed by agent kind in {@link Settings.agents}.
- * Discriminated by `executor`: `"appserver"` runs Codex directly, `"acp"` spawns an ACP bridge.
- */
-export type AgentConfig = AppServerAgentConfig | AcpAgentConfig;
-
-/**
- * Runtime knobs for the Codex app-server executor. Policy/sandbox fields are pass-through values
- * matching the installed Codex schema (inspect via `codex app-server generate-json-schema`).
- */
+/** Legacy top-level codex configuration section that feeds defaults into `agents.codex`. */
 export interface CodexSettings {
   /** Shell command launched per session; invoked via `bash -lc` in the workspace directory. */
   command: string;
-  /**
-   * Codex `AskForApproval` value. Either a named policy string (e.g. `"never"`, `"on-request"`)
-   * or a structured policy map.
-   */
-  approvalPolicy: CodexApprovalPolicyName | Record<string, unknown>;
-  /** Codex `SandboxMode` value applied to the whole thread, e.g. `"workspace-write"`, `"read-only"`, `"danger-full-access"`. */
-  threadSandbox: CodexSandboxMode;
-  /**
-   * Optional Codex `SandboxPolicy` override applied per turn. `null` falls back to a workspace-write
-   * policy scoped to the workspace directory with no network access.
-   */
-  turnSandboxPolicy: Record<string, unknown> | null;
   /** Hard limit (ms) on a single Codex turn before it is treated as timed out. */
   turnTimeoutMs: number;
-  /** Per-request JSON-RPC read timeout (ms) for app-server method calls. */
-  readTimeoutMs: number;
   /** Inactivity window (ms) before a session with no events is force-aborted as stalled. `<= 0` disables stall detection. */
   stallTimeoutMs: number;
 }
 
 /**
  * Runtime knobs for the Claude Code backend, driven via an ACP bridge subprocess.
- * Mirrored into the `claude` entry of {@link Settings.agents} as an {@link AcpAgentConfig}.
+ * Mirrored into the `claude` entry of {@link Settings.agents} as an {@link AgentConfig}.
  */
 export interface ClaudeSettings {
   /** Shell command for the Claude Code ACP bridge; invoked via `bash -lc` in the workspace. */
   command: string;
-  /** Claude model identifier passed to the bridge, e.g. `"claude-opus-4-6[1m]"`. */
-  model: string;
-  /** Claude Code permission mode forwarded to the bridge, e.g. `"dontAsk"`, `"acceptEdits"`, `"plan"`. */
-  permissionMode: string;
   /** Hard limit (ms) on a single Claude turn before it is force-cancelled. */
   turnTimeoutMs: number;
   /** Inactivity window (ms) before a stalled session is aborted. `<= 0` disables stall detection. */
   stallTimeoutMs: number;
   /** When true, launch Claude with only Symphony's injected MCP servers (ignore user MCP config). */
   strictMcpConfig: boolean;
+  /** Provider-specific settings written to `.claude/settings.local.json` in the workspace. */
+  providerConfig?: Record<string, unknown> | undefined;
 }
 
 /**
@@ -437,6 +460,10 @@ export interface ServerSettings {
    * (e.g. Claude, which needs the MCP endpoint). `0` requests an ephemeral local port.
    */
   port?: number | undefined;
+  /** Directory containing JSONL trace files (same directory TraceEmitter writes to). */
+  traceDir?: string | undefined;
+  /** Built frontend assets directory (override for dashboard SPA). */
+  staticDir?: string | undefined;
 }
 
 /**
@@ -488,6 +515,14 @@ export interface WorkspaceSettings {
    * where home-directory and env-var expansion must happen on the worker host, not locally.
    */
   rootExpression?: string | undefined;
+  /**
+   * Controls whether each agent run gets its own `<root>/<safe-identifier>` subfolder
+   * (`"per-agent"`, the default) or all runs share `root` directly (`"none"`). Selected via the
+   * `workspace.isolation` config key. With `"none"`, session resumption is disabled and the
+   * shared folder is never auto-removed; intended for high-touchpoint setups where co-located
+   * agents are desired.
+   */
+  isolation: "per-agent" | "none";
 }
 
 /**
@@ -537,6 +572,18 @@ export interface PartialRuntimeSettings {
   claude?: Partial<ClaudeSettings> | undefined;
 }
 
+export interface WorkflowContentStamp {
+  mtimeMs: number;
+  size: number;
+  contentHash: string;
+}
+
+/**
+ * Opaque parsed representation of a prompt template. Produced by workflow loading and
+ * consumed by prompt rendering so callers can avoid reparsing the same template.
+ */
+export type ParsedPromptTemplate = unknown[];
+
 /**
  * Parsed contents of a workflow file - a Markdown document with YAML front matter delimited
  * by `---` lines. The front matter becomes `config` (and is normalized into `settings`); the
@@ -553,6 +600,10 @@ export interface WorkflowDefinition {
    * slot index and size. Empty bodies fall back to a built-in default.
    */
   promptTemplate: string;
+  /** Parsed form of the effective prompt template, cached for prompt rendering. */
+  parsedPromptTemplate?: ParsedPromptTemplate | undefined;
+  /** Last observed file stamp used to skip unchanged reload work. */
+  stamp?: WorkflowContentStamp | undefined;
   /** Normalized, validated runtime settings derived from `config` plus env. */
   settings: Settings;
 }
@@ -594,21 +645,24 @@ export interface EnsembleContext {
 
 /**
  * Scheduled retry or continuation for an issue that just finished a run.
- * Held in the orchestrator until `dueAt` elapses, then the issue becomes dispatchable again.
+ * Held in the orchestrator until the monotonic deadline elapses, then the issue becomes dispatchable again.
  */
 export interface RetryEntry {
   issueId: string;
   identifier: string;
   /** 1-based attempt counter; bumped each time a failure retry is recorded, reset to 1 for continuation retries. */
   attempt: number;
-  /** Absolute wall-clock time when the issue is eligible for re-dispatch; backoff comes from `maxRetryBackoffMs`. */
-  dueAt: Date;
+  /** Monotonic clock deadline (ms) — drives timer scheduling; immune to wall-clock adjustments. */
+  monotonicDeadlineMs: number;
+  /** Wall-clock estimate (ISO-8601) for display/serialization only. */
+  dueAtIso: string;
   /** Last error message, when the previous run failed. */
   error?: string | undefined;
   /** Slot this retry prefers to reclaim so ensemble slots stay stable across attempts. */
   slotIndex?: number | undefined;
   workerHost?: string | null | undefined;
   workspacePath?: string | null | undefined;
+  issueUrl?: string | null | undefined;
 }
 
 /**
@@ -633,6 +687,7 @@ export interface DispatchBlockEntry {
   state: string;
   reason: DispatchBlockReason;
   workerHost?: string | null | undefined;
+  issueUrl?: string | null | undefined;
 }
 
 /**
@@ -646,6 +701,12 @@ export interface UsageTotals {
   /** Wall-clock runtime accumulated in seconds (note: unlike timeout settings which use ms). */
   secondsRunning: number;
 }
+
+export type UsageTokenUpdate = Partial<
+  Pick<UsageTotals, "inputTokens" | "outputTokens" | "totalTokens">
+>;
+
+export type UsageUpdateKind = "cumulative" | "delta";
 
 /**
  * Live state of one agent slot currently executing an issue. Mutated as agent updates stream in.
@@ -695,33 +756,160 @@ export interface RunningEntry {
 }
 
 /**
- * Single event from an agent executor: session lifecycle, turn progress, usage, errors, or raw notifications.
- * Streamed via the `onUpdate` callback and also returned in batches from {@link AgentExecutor.runTurn}.
+ * Common fields present on every agent update.
  */
-export interface AgentUpdate {
-  /**
-   * Event discriminator. Known values include `workspace_prepared`, `session_started`,
-   * `turn_started`, `turn_completed`, `turn_failed`, `turn_cancelled`, `turn_input_required`,
-   * `approval_required`, `approval_auto_approved`, `tool_input_auto_answered`, `usage`,
-   * `rate_limit`, `notification`, `stderr`, `malformed`, `process_exit`,
-   * `resume_state_warning`, `session_replay_suppressed`, `fs_write`.
-   */
-  type: AgentUpdateType;
-  /** Structured update conforming to the cross-language session protocol; populated for events that map cleanly to it. */
+export interface AgentUpdateBase {
   sessionUpdate?: unknown;
   workspacePath?: string | null | undefined;
   sessionId?: string | null | undefined;
   resumeId?: string | null | undefined;
   executorPid?: string | null | undefined;
-  /** Free-form payload; string for stderr/process_exit, structured object for protocol events. */
-  message?: unknown;
-  /** Partial usage snapshot from the provider; merged monotonically into the run's totals. */
-  usage?: Partial<UsageTotals> | undefined;
-  /** Provider-specific rate-limit payload (e.g. Codex `rate_limit` notification); stored on orchestrator state as-is. */
-  rateLimits?: unknown;
-  /** When the executor observed the event; defaults to `new Date()` if omitted. */
   timestamp?: Date | undefined;
+  message?: unknown;
+  usage?: UsageTokenUpdate | undefined;
+  /** Whether usage fields are cumulative session high-water marks or per-update deltas. */
+  usageKind?: UsageUpdateKind | undefined;
+  rateLimits?: unknown;
 }
+
+// --- Typed message variants per AgentUpdate.type ---
+
+export interface AgentSessionNotificationUpdate extends AgentUpdateBase {
+  type: "session_notification";
+  message: SessionNotification;
+}
+
+export type StringMessageUpdateType =
+  | "stderr"
+  | "process_exit"
+  | "resume_state_warning"
+  | "session_started"
+  | "workspace_prepared"
+  | "rate_limit"
+  | "turn_input_required"
+  | "tool_input_auto_answered"
+  | "malformed";
+
+export interface StringMessageUpdate extends AgentUpdateBase {
+  type: StringMessageUpdateType;
+  message: string;
+}
+
+export interface SessionReplaySuppressedUpdate extends AgentUpdateBase {
+  type: "session_replay_suppressed";
+  message: { replayedUpdateCount: number };
+}
+
+export interface TurnStartedUpdate extends AgentUpdateBase {
+  type: "turn_started";
+  message: { prompt: Array<{ type: string; text: string }> };
+}
+export interface TurnCompletedUpdate extends AgentUpdateBase {
+  type: "turn_completed";
+  message: { response: PromptResponse };
+  usage?: UsageTokenUpdate;
+}
+export interface TurnCancelledUpdate extends AgentUpdateBase {
+  type: "turn_cancelled";
+  message: { response: PromptResponse };
+  usage?: UsageTokenUpdate;
+}
+export interface TurnFailedUpdate extends AgentUpdateBase {
+  type: "turn_failed";
+  message: string | { response: PromptResponse };
+  usage?: UsageTokenUpdate;
+}
+
+export interface ApprovalRequiredUpdate extends AgentUpdateBase {
+  type: "approval_required";
+  message: { request: RequestPermissionRequest; selected: PermissionOption | null };
+}
+export interface ApprovalAutoApprovedUpdate extends AgentUpdateBase {
+  type: "approval_auto_approved";
+  message: { request: RequestPermissionRequest; selected: PermissionOption };
+}
+
+export interface FsWriteUpdate extends AgentUpdateBase {
+  type: "fs_write";
+  message: { path: string };
+}
+
+/**
+ * Single event from an agent executor: session lifecycle, turn progress, usage, errors, or raw notifications.
+ * Streamed via the `onUpdate` callback and also returned in batches from {@link AgentExecutor.runTurn}.
+ *
+ * Discriminated on `type`.
+ */
+export type AgentUpdate =
+  | AgentSessionNotificationUpdate
+  | StringMessageUpdate
+  | SessionReplaySuppressedUpdate
+  | TurnStartedUpdate
+  | TurnCompletedUpdate
+  | TurnCancelledUpdate
+  | TurnFailedUpdate
+  | ApprovalRequiredUpdate
+  | ApprovalAutoApprovedUpdate
+  | FsWriteUpdate;
+
+// Derived from the AgentUpdate discriminated union — no separate source of truth.
+export type AgentUpdateType = AgentUpdate["type"];
+
+// `satisfies` rejects any array entry that isn't in AgentUpdateType (catches typos/stale entries).
+export const AGENT_UPDATE_TYPES = [
+  "workspace_prepared",
+  "session_started",
+  "turn_started",
+  "turn_completed",
+  "turn_failed",
+  "turn_cancelled",
+  "turn_input_required",
+  "approval_required",
+  "approval_auto_approved",
+  "tool_input_auto_answered",
+  "rate_limit",
+  "stderr",
+  "malformed",
+  "process_exit",
+  "resume_state_warning",
+  "session_replay_suppressed",
+  "fs_write",
+  "session_notification",
+] as const satisfies readonly AgentUpdateType[];
+
+// Fails to compile if a union member is missing from the array (catches forgotten entries).
+type _AllAgentTypesPresent = [
+  Exclude<AgentUpdateType, (typeof AGENT_UPDATE_TYPES)[number]>,
+] extends [never]
+  ? true
+  : never;
+const _allAgentTypesPresent: _AllAgentTypesPresent = true;
+
+type AgentUpdateMessage<K extends AgentUpdateType> = K extends "session_notification"
+  ? SessionNotification
+  : K extends StringMessageUpdateType
+    ? string
+    : Extract<AgentUpdate, { type: K }> extends { message: infer M }
+      ? M
+      : undefined;
+
+/**
+ * Wire format of a single JSONL trace line as written by TraceEmitter.
+ * Mapped union: switching on `type` narrows `message` to the variant's specific shape.
+ */
+export type TraceEvent = {
+  [K in AgentUpdateType]: {
+    type: K;
+    issueId: string;
+    issueIdentifier: string;
+    timestamp: string | null;
+    message: AgentUpdateMessage<K> | null;
+    usage: UsageTokenUpdate | null;
+    workspacePath: string | null;
+    sessionId: string | null;
+    executorPid: string | null;
+  };
+}[AgentUpdateType];
 
 /**
  * Handle to a started agent process, returned by {@link AgentExecutor.startSession}.

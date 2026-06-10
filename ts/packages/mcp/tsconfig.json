@@ -14,6 +14,9 @@
       "path": "../domain"
     },
     {
+      "path": "../local-tracker"
+    },
+    {
       "path": "../worker-host-pool"
     }
   ]

@@ -1,6 +1,7 @@
+import { Liquid } from "liquidjs";
 import { test } from "vitest";
 import { buildPrompt, continuationPrompt } from "@symphony/cli";
-import type { Issue } from "@symphony/domain";
+import type { Issue, ParsedPromptTemplate } from "@symphony/domain";
 
 import { assert } from "../../../test/assert.js";
 
@@ -37,6 +38,21 @@ test("buildPrompt renders issue title and description into template", async () =
   assert.match(result, /Add Redis support for session cache/);
 });
 
+test("buildPrompt frames template parse failures with template context", async () => {
+  const template = "{% if issue.identifier %}";
+  const issue = makeIssue({ identifier: "ENG-BROKEN" });
+
+  await assert.rejects(
+    () => buildPrompt(template, issue),
+    (error: unknown) => {
+      assert.ok(error instanceof Error);
+      assert.match(error.message, /template_parse_error:/);
+      assert.match(error.message, /template="\{% if issue\.identifier %\}"/);
+      return true;
+    },
+  );
+});
+
 test("buildPrompt includes issue URL when present", async () => {
   const template = `URL: {{ issue.url }}`;
   const issue = makeIssue({ url: "https://linear.app/team/issue/ENG-99" });
@@ -57,6 +73,66 @@ test("buildPrompt handles missing optional fields (no description, no URL)", asy
   assert.notMatch(result, /URL:/);
 });
 
+test("buildPrompt surfaces invalid template content with prompt context", async () => {
+  const template = "{% if issue.identifier %}";
+  const issue = makeIssue({
+    identifier: "MONO-365",
+    title: "Broken prompt",
+  });
+
+  await assert.rejects(() => buildPrompt(template, issue), /template_parse_error:.*template="/s);
+});
+
+test("buildPrompt caches repeated template string parsing", async () => {
+  const template = "Ticket {{ issue.identifier }} cached={{ attempt }}";
+  const issue = makeIssue({ identifier: "MONO-365" });
+  const originalParse = Liquid.prototype.parse;
+  let parseCalls = 0;
+  Liquid.prototype.parse = function (...args) {
+    parseCalls += 1;
+    return originalParse.apply(this, args);
+  };
+
+  try {
+    assert.equal(await buildPrompt(template, issue, { attempt: 1 }), "Ticket MONO-365 cached=1");
+    assert.equal(await buildPrompt(template, issue, { attempt: 2 }), "Ticket MONO-365 cached=2");
+  } finally {
+    Liquid.prototype.parse = originalParse;
+  }
+
+  assert.equal(parseCalls, 1);
+});
+
+test("buildPrompt renders parsed templates without reparsing", async () => {
+  const template = "Ticket {{ issue.identifier }} attempt={{ attempt }}";
+  const parsedTemplate = new Liquid({
+    strictVariables: true,
+    strictFilters: true,
+  }).parse(template);
+  const issue = makeIssue({ identifier: "MONO-365" });
+  const originalParse = Liquid.prototype.parse;
+  let parseCalls = 0;
+  Liquid.prototype.parse = function (...args) {
+    parseCalls += 1;
+    return originalParse.apply(this, args);
+  };
+
+  try {
+    assert.equal(
+      await buildPrompt(parsedTemplate as ParsedPromptTemplate, issue, { attempt: 1 }),
+      "Ticket MONO-365 attempt=1",
+    );
+    assert.equal(
+      await buildPrompt(parsedTemplate as ParsedPromptTemplate, issue, { attempt: 2 }),
+      "Ticket MONO-365 attempt=2",
+    );
+  } finally {
+    Liquid.prototype.parse = originalParse;
+  }
+
+  assert.equal(parseCalls, 0);
+});
+
 // --- continuationPrompt ---
 
 test("continuationPrompt includes prior context and continuation reason", () => {
@@ -67,7 +143,7 @@ test("continuationPrompt includes prior context and continuation reason", () => 
   assert.match(result, /still in an active state/);
 });
 
-test("continuationPrompt references resume state when available", () => {
+test("continuationPrompt includes resume-from-workspace guidance in output", () => {
   const result = continuationPrompt(1, 3);
 
   assert.match(result, /Resume from the current workspace and workpad state/);

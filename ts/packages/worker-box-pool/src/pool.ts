@@ -744,7 +744,10 @@ class BoxPoolImpl implements BoxPool {
    * Probe faults are treated as not-ready (never thrown). Returns false when the box
    * never becomes ready; the caller destroys it.
    */
-  private async probeUntilReady(descriptor: BoxDescriptor, provider: BoxProvider): Promise<boolean> {
+  private async probeUntilReady(
+    descriptor: BoxDescriptor,
+    provider: BoxProvider,
+  ): Promise<boolean> {
     let lastReason = "not_ready";
     for (let attempt = 1; attempt <= PROBE_READY_ATTEMPTS; attempt += 1) {
       try {

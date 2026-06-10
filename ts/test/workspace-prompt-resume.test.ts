@@ -1,12 +1,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
-import { test } from "vitest";
+import { test, vi } from "vitest";
 import {
   buildPrompt,
   continuationPrompt,
+  createResumeStateStore,
   createWorkspaceForIssue,
-  deleteResumeState,
   parseConfig,
   readResumeState,
   removeIssueWorkspaces,
@@ -17,11 +17,41 @@ import {
   safeIdentifier,
   shellEscape,
   validateWorkspaceCwd,
-  writeResumeState,
 } from "@symphony/cli";
+import type { ResumeState } from "@symphony/resume-state";
 
 import { assert } from "./assert.js";
-import { initGitRepo, sampleIssue, tempDir, writeExecutable } from "./helpers.js";
+import { sampleIssue, tempDir, writeExecutable } from "./helpers.js";
+
+function resumeKey(workspace: string, workerHost?: string | null): string {
+  return `${workerHost ?? "local"}\0${workspace}`;
+}
+
+function createMemoryResumeStateAdapters(initial: ResumeState[] = []) {
+  const states = new Map<string, ResumeState>();
+  for (const state of initial) {
+    if (state.workspacePath) states.set(resumeKey(state.workspacePath, state.workerHost), state);
+  }
+
+  return {
+    adapters: {
+      readResumeState: async (workspace: string, workerHost?: string | null) => {
+        const state = states.get(resumeKey(workspace, workerHost));
+        return state ? ({ status: "ok", state } as const) : ({ status: "missing" } as const);
+      },
+      writeResumeState: async (
+        workspace: string,
+        state: ResumeState,
+        workerHost: string | null,
+      ) => {
+        states.set(resumeKey(workspace, workerHost), { ...state, workerHost });
+      },
+      resumeStateMatches,
+    },
+    read: (workspace: string, workerHost?: string | null) =>
+      states.get(resumeKey(workspace, workerHost)),
+  };
+}
 
 test("prompt rendering is strict and exposes ensemble context", async () => {
   const prompt = await buildPrompt(
@@ -38,20 +68,20 @@ test("prompt rendering is strict and exposes ensemble context", async () => {
   );
 });
 
-test("empty workflow prompt uses the Elixir default prompt template", async () => {
+test("empty workflow prompt uses the default prompt template", async () => {
   const prompt = await buildPrompt("", { ...sampleIssue, description: null });
 
-  assert.match(prompt, /You are working on a Linear issue\./);
+  assert.match(prompt, /You are working on an issue from the configured tracker\./);
   assert.match(prompt, /Identifier: MT-1/);
   assert.match(prompt, /No description provided\./);
 });
 
-test("continuation prompt matches the Elixir runner guidance", () => {
+test("continuation prompt matches the runner guidance", () => {
   assert.equal(
     continuationPrompt(2, 3),
     `Continuation guidance:
 
-- The previous agent turn completed normally, but the Linear issue is still in an active state.
+- The previous agent turn completed normally, but the issue is still in an active state.
 - This is continuation turn #2 of 3 for the current agent run.
 - Resume from the current workspace and workpad state instead of restarting from scratch.
 - The original task instructions and prior turn context are already present in this thread, so do not restate them before acting.
@@ -77,14 +107,14 @@ test("workspace path is safe, per-slot, and runs after_create in the slot direct
   assert.equal((await fs.readFile(path.join(workspace, "created.cwd"), "utf8")).trim(), workspace);
 });
 
-test("workspace identifiers preserve Elixir safe_identifier semantics", async () => {
+test("workspace identifiers preserve safe identifier semantics", async () => {
   assert.equal(safeIdentifier("  A B  "), "__A_B__");
   assert.equal(safeIdentifier(""), "");
   assert.equal(safeIdentifier(null), "");
 
   const root = await tempDir("symphony-ts-workspace-empty-identifier");
   const settings = parseConfig({ workspace: { root } });
-  await assert.rejects(() => createWorkspaceForIssue(settings, ""), /workspace root/);
+  await assert.rejects(() => createWorkspaceForIssue(settings, ""), /empty identifier/);
 });
 
 test("workspace cwd validation rejects control characters", async () => {
@@ -189,44 +219,95 @@ test("remote workspace creation and removal use SSH hooks and validate remote pa
   const root = await tempDir("symphony-ts-remote-workspace");
   const trace = path.join(root, "ssh.trace");
   const remoteHome = path.join(root, "remote-home");
-  const oldPath = process.env.PATH;
+
+  const { canonicalRemoteHome, binDir } = await installEvalSsh(root, trace, remoteHome);
+  vi.stubEnv("PATH", `${binDir}:${process.env.PATH ?? ""}`);
+
+  const marker = path.join(root, "remote-before-remove.log");
+  const settings = parseConfig({
+    workspace: { root: "~/workspaces" },
+    worker: { ssh_hosts: ["worker-01:2200"], ssh_timeout_ms: 5_000 },
+    hooks: {
+      after_create: "echo remote-after > after_create.log",
+      before_remove: `echo remote-before > ${shellEscape(marker)}`,
+    },
+  });
+
+  const workspace = await createWorkspaceForIssue(settings, "MT-REMOTE", {
+    workerHost: "worker-01:2200",
+  });
+  assert.equal(workspace, path.join(canonicalRemoteHome, "workspaces", "MT-REMOTE"));
+  assert.equal(
+    (await fs.readFile(path.join(workspace, "after_create.log"), "utf8")).trim(),
+    "remote-after",
+  );
+
+  await removeRemoteWorkspace(settings, workspace, "worker-01:2200");
+  assert.equal(await fileExists(workspace), false);
+  assert.equal((await fs.readFile(marker, "utf8")).trim(), "remote-before");
+
+  await assert.rejects(
+    () => removeRemoteWorkspace(settings, "/tmp/outside-root", "worker-01:2200"),
+    /workspace outside root/,
+  );
+  const traceText = await fs.readFile(trace, "utf8");
+  assert.match(traceText, /-T -p 2200 -- worker-01 bash -lc/);
+  assert.match(traceText, /printf "%s\\n" "\$HOME"/);
+  assert.match(traceText, /rm -rf/);
+
+  vi.unstubAllEnvs();
+});
+
+test("remote workspace cwd validation accepts a missing path inside the workspace root", async () => {
+  const root = await tempDir("symphony-ts-remote-missing-workspace");
+  const trace = path.join(root, "ssh.trace");
+  const remoteHome = path.join(root, "remote-home");
+
+  const { canonicalRemoteHome, binDir } = await installEvalSsh(root, trace, remoteHome);
+  vi.stubEnv("PATH", `${binDir}:${process.env.PATH ?? ""}`);
 
   try {
-    const canonicalRemoteHome = await installEvalSsh(root, trace, remoteHome);
-    const marker = path.join(root, "remote-before-remove.log");
+    const workspaceRoot = path.join(canonicalRemoteHome, "workspaces");
+    const workspace = path.join(workspaceRoot, "MT-MISSING");
+    await fs.mkdir(workspaceRoot, { recursive: true });
     const settings = parseConfig({
       workspace: { root: "~/workspaces" },
       worker: { ssh_hosts: ["worker-01:2200"], ssh_timeout_ms: 5_000 },
-      hooks: {
-        after_create: "echo remote-after > after_create.log",
-        before_remove: `echo remote-before > ${shellEscape(marker)}`,
-      },
     });
 
-    const workspace = await createWorkspaceForIssue(settings, "MT-REMOTE", {
-      workerHost: "worker-01:2200",
-    });
-    assert.equal(workspace, path.join(canonicalRemoteHome, "workspaces", "MT-REMOTE"));
-    assert.equal(
-      (await fs.readFile(path.join(workspace, "after_create.log"), "utf8")).trim(),
-      "remote-after",
-    );
+    const result = await validateWorkspaceCwd(settings, workspace, "worker-01:2200");
 
-    await removeRemoteWorkspace(settings, workspace, "worker-01:2200");
-    assert.equal(await fileExists(workspace), false);
-    assert.equal((await fs.readFile(marker, "utf8")).trim(), "remote-before");
+    assert.equal(result, workspace);
+  } finally {
+    vi.unstubAllEnvs();
+  }
+});
+
+test("remote workspace cwd validation reports symlink escapes through missing tail paths", async () => {
+  const root = await tempDir("symphony-ts-remote-symlink-escape");
+  const trace = path.join(root, "ssh.trace");
+  const remoteHome = path.join(root, "remote-home");
+
+  const { canonicalRemoteHome, binDir } = await installEvalSsh(root, trace, remoteHome);
+  vi.stubEnv("PATH", `${binDir}:${process.env.PATH ?? ""}`);
+
+  try {
+    const workspaceRoot = path.join(canonicalRemoteHome, "workspaces");
+    const outside = await tempDir("symphony-ts-remote-outside");
+    const link = path.join(workspaceRoot, "link-out");
+    await fs.mkdir(workspaceRoot, { recursive: true });
+    await fs.symlink(outside, link);
+    const settings = parseConfig({
+      workspace: { root: "~/workspaces" },
+      worker: { ssh_hosts: ["worker-01:2200"], ssh_timeout_ms: 5_000 },
+    });
 
     await assert.rejects(
-      () => removeRemoteWorkspace(settings, "/tmp/outside-root", "worker-01:2200"),
-      /workspace outside root/,
+      () => validateWorkspaceCwd(settings, path.join(link, "missing"), "worker-01:2200"),
+      /symlink_escape/,
     );
-    const traceText = await fs.readFile(trace, "utf8");
-    assert.match(traceText, /-T -p 2200 worker-01 bash -lc/);
-    assert.match(traceText, /printf "%s\\n" "\$HOME"/);
-    assert.match(traceText, /rm -rf/);
   } finally {
-    if (oldPath === undefined) delete process.env.PATH;
-    else process.env.PATH = oldPath;
+    vi.unstubAllEnvs();
   }
 });
 
@@ -234,10 +315,11 @@ test("remote workspace creation forces the slot suffix for co-resident same-issu
   const root = await tempDir("symphony-ts-remote-coreside");
   const trace = path.join(root, "ssh.trace");
   const remoteHome = path.join(root, "remote-home");
-  const oldPath = process.env.PATH;
+
+  const { canonicalRemoteHome, binDir } = await installEvalSsh(root, trace, remoteHome);
+  vi.stubEnv("PATH", `${binDir}:${process.env.PATH ?? ""}`);
 
   try {
-    const canonicalRemoteHome = await installEvalSsh(root, trace, remoteHome);
     const settings = parseConfig({
       workspace: { root: "~/workspaces" },
       worker: { ssh_hosts: ["worker-01:2200"], ssh_timeout_ms: 5_000 },
@@ -267,40 +349,53 @@ test("remote workspace creation forces the slot suffix for co-resident same-issu
     });
     assert.equal(bare, path.join(canonicalRemoteHome, "workspaces", "MT-REMOTE-BARE"));
   } finally {
-    if (oldPath === undefined) delete process.env.PATH;
-    else process.env.PATH = oldPath;
+    vi.unstubAllEnvs();
   }
 });
 
 test("agent attempts run workspace hooks at lifecycle boundaries and tolerate after_run failures", async () => {
   const root = await tempDir("symphony-ts-workspace-agent-hooks");
   const workspaceRoot = path.join(root, "workspaces");
-  const fakeCodex = path.join(root, "fake-codex.js");
+  const fakeBridge = path.join(root, "fake-acp.mjs");
   const hookLog = path.join(root, "hooks.log");
+  const acpModule = new URL("../node_modules/@agentclientprotocol/sdk/dist/acp.js", import.meta.url)
+    .href;
   await writeExecutable(
-    fakeCodex,
+    fakeBridge,
     `#!/usr/bin/env node
-const readline = require("readline");
-const rl = readline.createInterface({ input: process.stdin });
-rl.on("line", (line) => {
-  const msg = JSON.parse(line);
-  if (msg.id && msg.method === "initialize") console.log(JSON.stringify({ id: msg.id, result: {} }));
-  if (msg.id && msg.method === "thread/start") console.log(JSON.stringify({ id: msg.id, result: { thread: { id: "thread-hooks" } } }));
-  if (msg.id && msg.method === "turn/start") {
-    console.log(JSON.stringify({ id: msg.id, result: { turn: { id: "turn-hooks" } } }));
-    console.log(JSON.stringify({ method: "turn/completed" }));
+import { Readable, Writable } from "node:stream";
+import * as acp from ${JSON.stringify(acpModule)};
+class FakeAgent {
+  constructor(connection) { this.connection = connection; }
+  async initialize() { return { protocolVersion: acp.PROTOCOL_VERSION, agentCapabilities: { sessionCapabilities: { close: {} } } }; }
+  async authenticate() { return {}; }
+  async newSession() { return { sessionId: "hooks-session" }; }
+  async prompt() {
+    await this.connection.sessionUpdate({ sessionId: "hooks-session", update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "done" } } });
+    return { stopReason: "end_turn", usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 } };
   }
-});
+  async cancel() {}
+  async closeSession() { return {}; }
+}
+const stream = acp.ndJsonStream(Writable.toWeb(process.stdout), Readable.toWeb(process.stdin));
+new acp.AgentSideConnection((connection) => new FakeAgent(connection), stream);
 `,
   );
   const settings = parseConfig({
+    server: { port: 0 },
     workspace: { root: workspaceRoot },
     hooks: {
       after_create: `echo after_create >> ${JSON.stringify(hookLog)}`,
       before_run: `echo before_run >> ${JSON.stringify(hookLog)}`,
       after_run: `echo after_run >> ${JSON.stringify(hookLog)}; exit 17`,
     },
-    codex: { command: `${fakeCodex} app-server`, turn_timeout_ms: 5_000 },
+    agents: {
+      codex: {
+        bridge_command: `${process.execPath} ${fakeBridge}`,
+        turn_timeout_ms: 5_000,
+        stall_timeout_ms: 0,
+      },
+    },
     agent: { max_turns: 1 },
   });
   const workflow = {
@@ -318,6 +413,79 @@ rl.on("line", (line) => {
     "before_run",
     "after_run",
   ]);
+});
+
+test('workspace.isolation = "none" rejects every hook and co-locates agents in one folder', async () => {
+  const root = await tempDir("symphony-ts-shared-ws");
+
+  for (const hook of ["after_create", "before_run", "after_run", "before_remove"]) {
+    assert.throws(
+      () =>
+        parseConfig({
+          workspace: { root, isolation: "none" },
+          hooks: { [hook]: "echo hi" },
+        }),
+      /workspace.isolation = "none" does not support hooks/,
+    );
+  }
+
+  const fakeBridge = path.join(root, "fake-acp.mjs");
+  const acpModule = new URL("../node_modules/@agentclientprotocol/sdk/dist/acp.js", import.meta.url)
+    .href;
+  await writeExecutable(
+    fakeBridge,
+    `#!/usr/bin/env node
+import { Readable, Writable } from "node:stream";
+import * as acp from ${JSON.stringify(acpModule)};
+class FakeAgent {
+  constructor(connection) { this.connection = connection; }
+  async initialize() { return { protocolVersion: acp.PROTOCOL_VERSION, agentCapabilities: { sessionCapabilities: { close: {} } } }; }
+  async authenticate() { return {}; }
+  async newSession() { return { sessionId: "shared-session" }; }
+  async prompt() {
+    await this.connection.sessionUpdate({ sessionId: "shared-session", update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "done" } } });
+    return { stopReason: "end_turn", usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 } };
+  }
+  async cancel() {}
+  async closeSession() { return {}; }
+}
+const stream = acp.ndJsonStream(Writable.toWeb(process.stdout), Readable.toWeb(process.stdin));
+new acp.AgentSideConnection((connection) => new FakeAgent(connection), stream);
+`,
+  );
+  const sharedRoot = path.join(root, "shared");
+  const settings = parseConfig({
+    server: { port: 0 },
+    workspace: { root: sharedRoot, isolation: "none" },
+    agents: {
+      codex: {
+        bridge_command: `${process.execPath} ${fakeBridge}`,
+        turn_timeout_ms: 5_000,
+        stall_timeout_ms: 0,
+      },
+    },
+    agent: { max_turns: 1 },
+  });
+  assert.equal(settings.workspace.isolation, "none");
+  const workflow = {
+    path: path.join(root, "WORKFLOW.md"),
+    config: {},
+    promptTemplate: "Issue {{ issue.identifier }}",
+    settings,
+  };
+
+  const first = await runAgentAttempt({ issue: sampleIssue, workflow });
+  const second = await runAgentAttempt({
+    issue: { ...sampleIssue, identifier: "MT-77" },
+    workflow,
+  });
+
+  const canonicalRoot = await fs.realpath(sharedRoot);
+  assert.equal(first.workspace, canonicalRoot);
+  assert.equal(second.workspace, canonicalRoot);
+  const entries = await fs.readdir(canonicalRoot);
+  assert.ok(!entries.includes(safeIdentifier(sampleIssue.identifier)));
+  assert.ok(!entries.includes("MT-77"));
 });
 
 test("agent attempts persist the latest rotated Claude session id", async () => {
@@ -380,18 +548,17 @@ new acp.AgentSideConnection((connection) => new FakeAgent(connection), stream);
 `,
   );
   const settings = parseConfig({
+    server: { port: 0 },
     workspace: { root: path.join(root, "workspaces") },
     agent: { kind: "claude", max_turns: 2 },
     agents: {
       claude: {
         executor: "acp",
-        bridge_command: process.execPath,
-        bridge_args: [fakeClaude],
+        bridge_command: `${process.execPath} ${fakeClaude}`,
         turn_timeout_ms: 5_000,
         stall_timeout_ms: 0,
       },
     },
-    hooks: { after_create: "git init -b main >/dev/null" },
   });
   const workflow = {
     path: path.join(root, "WORKFLOW.md"),
@@ -399,156 +566,71 @@ new acp.AgentSideConnection((connection) => new FakeAgent(connection), stream);
     promptTemplate: "Issue {{ issue.identifier }}",
     settings,
   };
+  const resumeStore = createMemoryResumeStateAdapters();
 
   const result = await runAgentAttempt({
     issue: sampleIssue,
     workflow,
     fetchIssue: async () => sampleIssue,
+    adapters: resumeStore.adapters,
   });
 
-  const resume = await readResumeState(result.workspace);
+  const resume = resumeStore.read(result.workspace);
   assert.equal(result.turnCount, 2);
   assert.equal(result.resumeId, "claude-session-2");
-  assert.equal(resume.status, "ok");
-  assert.equal(resume.status === "ok" && resume.state.resumeId, "claude-session-2");
+  assert.equal(resume?.resumeId, "claude-session-2");
 });
 
 test("remote agent attempts run hooks and persist resume state over SSH", async () => {
   const root = await tempDir("symphony-ts-remote-agent-hooks");
   const trace = path.join(root, "ssh.trace");
   const remoteHome = path.join(root, "remote-home");
-  const fakeCodex = path.join(root, "fake-codex.js");
+  const fakeBridge = path.join(root, "fake-acp.mjs");
   const hookLog = path.join(root, "remote-hooks.log");
-  const oldPath = process.env.PATH;
+  const acpModule = new URL("../node_modules/@agentclientprotocol/sdk/dist/acp.js", import.meta.url)
+    .href;
 
   await writeExecutable(
-    fakeCodex,
+    fakeBridge,
     `#!/usr/bin/env node
-const readline = require("readline");
-const rl = readline.createInterface({ input: process.stdin });
-rl.on("line", (line) => {
-  const msg = JSON.parse(line);
-  if (msg.id && msg.method === "initialize") console.log(JSON.stringify({ id: msg.id, result: {} }));
-  if (msg.id && msg.method === "thread/start") console.log(JSON.stringify({ id: msg.id, result: { thread: { id: "thread-remote-hooks" } } }));
-  if (msg.id && msg.method === "turn/start") {
-    console.log(JSON.stringify({ id: msg.id, result: { turn: { id: "turn-remote-hooks" } } }));
-    console.log(JSON.stringify({ method: "turn/completed" }));
+import { Readable, Writable } from "node:stream";
+import * as acp from ${JSON.stringify(acpModule)};
+class FakeAgent {
+  constructor(connection) { this.connection = connection; }
+  async initialize() { return { protocolVersion: acp.PROTOCOL_VERSION, agentCapabilities: { sessionCapabilities: { close: {} } } }; }
+  async authenticate() { return {}; }
+  async newSession() { return { sessionId: "remote-session" }; }
+  async prompt() {
+    await this.connection.sessionUpdate({ sessionId: "remote-session", update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "done" } } });
+    return { stopReason: "end_turn", usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 } };
   }
-});
+  async cancel() {}
+  async closeSession() { return {}; }
+}
+const stream = acp.ndJsonStream(Writable.toWeb(process.stdout), Readable.toWeb(process.stdin));
+new acp.AgentSideConnection((connection) => new FakeAgent(connection), stream);
 `,
   );
 
-  try {
-    const canonicalRemoteHome = await installEvalSsh(root, trace, remoteHome);
-    const settings = parseConfig({
-      workspace: { root: "~/workspaces" },
-      worker: { ssh_hosts: ["worker-01:2200"], ssh_timeout_ms: 5_000 },
-      hooks: {
-        after_create: `git init -q && echo after_create >> ${shellEscape(hookLog)}`,
-        before_run: `echo before_run >> ${shellEscape(hookLog)}`,
-        after_run: `echo after_run >> ${shellEscape(hookLog)}`,
-      },
-      codex: { command: `${fakeCodex} app-server`, turn_timeout_ms: 5_000 },
-      agent: { max_turns: 1 },
-    });
-    const workflow = {
-      path: path.join(root, "WORKFLOW.md"),
-      config: {},
-      promptTemplate: "Issue {{ issue.identifier }}",
-      settings,
-    };
+  const { canonicalRemoteHome, binDir } = await installEvalSsh(root, trace, remoteHome);
+  vi.stubEnv("PATH", `${binDir}:${process.env.PATH ?? ""}`);
 
-    const result = await runAgentAttempt({
-      issue: sampleIssue,
-      workflow,
-      workerHost: "worker-01:2200",
-    });
-
-    assert.equal(
-      result.workspace,
-      path.join(canonicalRemoteHome, "workspaces", sampleIssue.identifier),
-    );
-    assert.equal(result.turnCount, 1);
-    assert.deepEqual((await fs.readFile(hookLog, "utf8")).trim().split("\n"), [
-      "after_create",
-      "before_run",
-      "after_run",
-    ]);
-
-    const resume = await readResumeState(result.workspace, "worker-01:2200");
-    assert.equal(resume.status, "ok");
-    assert.equal(resume.status === "ok" && resume.state.workerHost, "worker-01:2200");
-    assert.equal(
-      resume.status === "ok" &&
-        resumeStateMatches(resume.state, {
-          agentKind: "codex",
-          issue: sampleIssue,
-          workspacePath: result.workspace,
-          workerHost: "worker-01:2200",
-        }),
-      true,
-    );
-
-    const traceText = await fs.readFile(trace, "utf8");
-    assert.match(traceText, /git -C/);
-    assert.match(traceText, /symphony\/resume.json/);
-  } finally {
-    if (oldPath === undefined) delete process.env.PATH;
-    else process.env.PATH = oldPath;
-  }
-});
-
-test("remote resume-state reads honor the configured SSH timeout", async () => {
-  const root = await tempDir("symphony-ts-remote-resume-timeout");
-  const bin = path.join(root, "bin");
-  const oldPath = process.env.PATH;
-
-  try {
-    await fs.mkdir(bin, { recursive: true });
-    await writeExecutable(
-      path.join(bin, "ssh"),
-      `#!/bin/sh
-sleep 1
-`,
-    );
-    process.env.PATH = `${bin}:${process.env.PATH ?? ""}`;
-
-    const startedAt = Date.now();
-    const result = await readResumeState("/remote/workspace", "worker-01:2200", 20);
-
-    assert.equal(result.status, "unavailable");
-    assert.ok(Date.now() - startedAt < 500);
-  } finally {
-    if (oldPath === undefined) delete process.env.PATH;
-    else process.env.PATH = oldPath;
-  }
-});
-
-test("agent attempts warn and skip invalid resume state files", async () => {
-  const root = await tempDir("symphony-ts-invalid-resume-warning");
-  const workspaceRoot = path.join(root, "workspaces");
-  const fakeCodex = path.join(root, "fake-codex.js");
-  await writeExecutable(
-    fakeCodex,
-    `#!/usr/bin/env node
-const readline = require("readline");
-const rl = readline.createInterface({ input: process.stdin });
-rl.on("line", (line) => {
-  const msg = JSON.parse(line);
-  if (msg.id && msg.method === "initialize") console.log(JSON.stringify({ id: msg.id, result: {} }));
-  if (msg.id && msg.method === "thread/start") console.log(JSON.stringify({ id: msg.id, result: { thread: { id: "thread-invalid-resume" } } }));
-  if (msg.id && msg.method === "thread/resume") console.log(JSON.stringify({ id: msg.id, error: { message: "should not resume invalid state" } }));
-  if (msg.id && msg.method === "turn/start") {
-    console.log(JSON.stringify({ id: msg.id, result: { turn: { id: "turn-invalid-resume" } } }));
-    console.log(JSON.stringify({ method: "turn/completed" }));
-  }
-});
-`,
-  );
   const settings = parseConfig({
-    workspace: { root: workspaceRoot },
-    hooks: { after_create: "git init -q" },
-    codex: { command: `${fakeCodex} app-server`, turn_timeout_ms: 5_000 },
+    server: { port: 0 },
+    workspace: { root: "~/workspaces" },
+    worker: { ssh_hosts: ["worker-01:2200"], ssh_timeout_ms: 5_000 },
+    hooks: {
+      after_create: `echo after_create >> ${shellEscape(hookLog)}`,
+      before_run: `echo before_run >> ${shellEscape(hookLog)}`,
+      after_run: `echo after_run >> ${shellEscape(hookLog)}`,
+    },
+    agents: {
+      codex: {
+        bridge_command: `${process.execPath} ${fakeBridge}`,
+        turn_timeout_ms: 5_000,
+        stall_timeout_ms: 0,
+      },
+    },
     agent: { max_turns: 1 },
   });
   const workflow = {
@@ -557,16 +639,128 @@ rl.on("line", (line) => {
     promptTemplate: "Issue {{ issue.identifier }}",
     settings,
   };
-  const workspace = await createWorkspaceForIssue(settings, sampleIssue);
-  const resumePath = path.join(workspace, ".git", "symphony", "resume.json");
-  await fs.mkdir(path.dirname(resumePath), { recursive: true });
-  await fs.writeFile(resumePath, "{not-json");
+  const resumeStore = createMemoryResumeStateAdapters();
+
+  const result = await runAgentAttempt({
+    issue: sampleIssue,
+    workflow,
+    workerHost: "worker-01:2200",
+    adapters: resumeStore.adapters,
+  });
+
+  assert.equal(
+    result.workspace,
+    path.join(canonicalRemoteHome, "workspaces", sampleIssue.identifier),
+  );
+  assert.equal(result.turnCount, 1);
+  assert.deepEqual((await fs.readFile(hookLog, "utf8")).trim().split("\n"), [
+    "after_create",
+    "before_run",
+    "after_run",
+  ]);
+
+  const resume = resumeStore.read(result.workspace, "worker-01:2200");
+  assert.equal(resume?.workerHost, "worker-01:2200");
+  assert.equal(
+    Boolean(
+      resume &&
+      resumeStateMatches(resume, {
+        agentKind: "codex",
+        issue: sampleIssue,
+        workspacePath: result.workspace,
+        workerHost: "worker-01:2200",
+      }),
+    ),
+    true,
+  );
+
+  const traceText = await fs.readFile(trace, "utf8");
+  assert.match(traceText, /after_create/);
+  assert.match(traceText, /before_run/);
+  assert.match(traceText, /after_run/);
+
+  vi.unstubAllEnvs();
+});
+
+test("remote resume-state reads honor the configured SSH timeout", async () => {
+  const root = await tempDir("symphony-ts-remote-resume-timeout");
+  const bin = path.join(root, "bin");
+
+  await fs.mkdir(bin, { recursive: true });
+  await writeExecutable(
+    path.join(bin, "ssh"),
+    `#!/bin/sh
+sleep 1
+`,
+  );
+  vi.stubEnv("PATH", `${bin}:${process.env.PATH ?? ""}`);
+
+  const startedAt = Date.now();
+  const result = await readResumeState("/remote/workspace", "worker-01:2200", 20);
+
+  assert.equal(result.status, "unavailable");
+  assert.ok(Date.now() - startedAt < 500);
+
+  vi.unstubAllEnvs();
+});
+
+test("agent attempts warn and skip invalid resume state files", async () => {
+  const root = await tempDir("symphony-ts-invalid-resume-warning");
+  const workspaceRoot = path.join(root, "workspaces");
+  const fakeBridge = path.join(root, "fake-acp.mjs");
+  const acpModule = new URL("../node_modules/@agentclientprotocol/sdk/dist/acp.js", import.meta.url)
+    .href;
+  await writeExecutable(
+    fakeBridge,
+    `#!/usr/bin/env node
+import { Readable, Writable } from "node:stream";
+import * as acp from ${JSON.stringify(acpModule)};
+class FakeAgent {
+  constructor(connection) { this.connection = connection; }
+  async initialize() { return { protocolVersion: acp.PROTOCOL_VERSION, agentCapabilities: { sessionCapabilities: { close: {} } } }; }
+  async authenticate() { return {}; }
+  async newSession() { return { sessionId: "resume-session" }; }
+  async prompt() {
+    await this.connection.sessionUpdate({ sessionId: "resume-session", update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "done" } } });
+    return { stopReason: "end_turn", usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 } };
+  }
+  async cancel() {}
+  async closeSession() { return {}; }
+}
+const stream = acp.ndJsonStream(Writable.toWeb(process.stdout), Readable.toWeb(process.stdin));
+new acp.AgentSideConnection((connection) => new FakeAgent(connection), stream);
+`,
+  );
+  const settings = parseConfig({
+    server: { port: 0 },
+    workspace: { root: workspaceRoot },
+    agents: {
+      codex: {
+        bridge_command: `${process.execPath} ${fakeBridge}`,
+        turn_timeout_ms: 5_000,
+        stall_timeout_ms: 0,
+      },
+    },
+    agent: { max_turns: 1 },
+  });
+  const workflow = {
+    path: path.join(root, "WORKFLOW.md"),
+    config: {},
+    promptTemplate: "Issue {{ issue.identifier }}",
+    settings,
+  };
   const updates: string[] = [];
 
   const result = await runAgentAttempt({
     issue: sampleIssue,
     workflow,
     onUpdate: (update) => updates.push(`${update.type}:${String(update.message ?? "")}`),
+    adapters: {
+      readResumeState: async () =>
+        ({ status: "error", reason: "resume_state_decode_failed" }) as const,
+      writeResumeState: async () => {},
+      resumeStateMatches,
+    },
   });
 
   assert.equal(result.turnCount, 1);
@@ -578,29 +772,38 @@ rl.on("line", (line) => {
 test("agent attempts leave stall reconciliation to runtime and preserve resume state on turn failure", async () => {
   const root = await tempDir("symphony-ts-stall-retry");
   const workspaceRoot = path.join(root, "workspaces");
-  const fakeCodex = path.join(root, "fake-stalled-codex.js");
+  const fakeBridge = path.join(root, "fake-stall-acp.mjs");
+  const acpModule = new URL("../node_modules/@agentclientprotocol/sdk/dist/acp.js", import.meta.url)
+    .href;
   await writeExecutable(
-    fakeCodex,
+    fakeBridge,
     `#!/usr/bin/env node
-const readline = require("readline");
-const rl = readline.createInterface({ input: process.stdin });
-rl.on("line", (line) => {
-  const msg = JSON.parse(line);
-  if (msg.id && msg.method === "initialize") console.log(JSON.stringify({ id: msg.id, result: {} }));
-  if (msg.id && (msg.method === "thread/start" || msg.method === "thread/resume")) {
-    console.log(JSON.stringify({ id: msg.id, result: { thread: { id: "thread-stalled" } } }));
-  }
-  if (msg.id && msg.method === "turn/start") {
-    console.log(JSON.stringify({ id: msg.id, result: { turn: { id: "turn-stalled" } } }));
-  }
-});
+import { Readable, Writable } from "node:stream";
+import * as acp from ${JSON.stringify(acpModule)};
+class FakeAgent {
+  constructor(connection) { this.connection = connection; }
+  async initialize() { return { protocolVersion: acp.PROTOCOL_VERSION, agentCapabilities: { sessionCapabilities: { close: {} } } }; }
+  async authenticate() { return {}; }
+  async newSession() { return { sessionId: "stall-session" }; }
+  async prompt() { return new Promise(() => {}); }
+  async cancel() {}
+  async closeSession() { return {}; }
+}
+const stream = acp.ndJsonStream(Writable.toWeb(process.stdout), Readable.toWeb(process.stdin));
+new acp.AgentSideConnection((connection) => new FakeAgent(connection), stream);
 `,
   );
 
   const settings = parseConfig({
+    server: { port: 0 },
     workspace: { root: workspaceRoot },
-    hooks: { after_create: "git init -q" },
-    codex: { command: `${fakeCodex} app-server`, stall_timeout_ms: 30, turn_timeout_ms: 50 },
+    agents: {
+      codex: {
+        bridge_command: `${process.execPath} ${fakeBridge}`,
+        turn_timeout_ms: 50,
+        stall_timeout_ms: 0,
+      },
+    },
     agent: { max_turns: 1 },
   });
   const workflow = {
@@ -610,27 +813,31 @@ rl.on("line", (line) => {
     settings,
   };
   const workspace = await createWorkspaceForIssue(settings, sampleIssue);
-  await writeResumeState(workspace, {
-    agentKind: "codex",
-    resumeId: "thread-stale",
-    issueId: sampleIssue.id,
-    issueIdentifier: sampleIssue.identifier,
-    issueState: sampleIssue.state,
-    workspacePath: workspace,
-  });
+  const resumeStore = createMemoryResumeStateAdapters([
+    {
+      agentKind: "codex",
+      resumeId: "thread-stale",
+      issueId: sampleIssue.id,
+      issueIdentifier: sampleIssue.identifier,
+      issueState: sampleIssue.state,
+      workspacePath: workspace,
+    },
+  ]);
 
   await assert.rejects(
-    () => runAgentAttempt({ issue: sampleIssue, workflow }),
-    /codex turn timed out/,
+    () => runAgentAttempt({ issue: sampleIssue, workflow, adapters: resumeStore.adapters }),
+    /timed out/,
   );
-  assert.equal((await readResumeState(workspace)).status, "ok");
+  assert.equal(resumeStore.read(workspace)?.resumeId, "thread-stale");
 });
 
 test("resume state reads generic agent/session_id shape and matches issue/workspace identity", async () => {
   const workspace = await tempDir("symphony-ts-resume");
-  await initGitRepo(workspace);
+  const gitDir = path.join(workspace, ".git");
+  await fs.mkdir(gitDir, { recursive: true });
+  const store = createResumeStateStore({ resolveGitDir: async () => gitDir });
 
-  await writeResumeState(workspace, {
+  await store.write(workspace, {
     agentKind: "codex",
     resumeId: "thread-1",
     issueId: sampleIssue.id,
@@ -639,7 +846,7 @@ test("resume state reads generic agent/session_id shape and matches issue/worksp
     workspacePath: workspace,
   });
 
-  const result = await readResumeState(workspace);
+  const result = await store.read(workspace);
   assert.equal(result.status, "ok");
   assert.equal(result.status === "ok" && result.state.agentKind, "codex");
   const resumePath = path.join(workspace, ".git", "symphony", "resume.json");
@@ -673,7 +880,7 @@ test("resume state reads generic agent/session_id shape and matches issue/worksp
   );
 
   await assert.rejects(
-    () => writeResumeState(workspace, { agentKind: "" as "codex", resumeId: "bad" }),
+    () => store.write(workspace, { agentKind: "" as "codex", resumeId: "bad" }),
     /invalid_resume_state/,
   );
 
@@ -688,13 +895,13 @@ test("resume state reads generic agent/session_id shape and matches issue/worksp
       workspace_path: workspace,
     })}\n`,
   );
-  const generic = await readResumeState(workspace);
+  const generic = await store.read(workspace);
   assert.equal(generic.status, "ok");
   assert.equal(generic.status === "ok" && generic.state.agentKind, "pi");
   assert.equal(generic.status === "ok" && generic.state.resumeId, "pi-session");
 
-  await deleteResumeState(workspace);
-  assert.equal((await readResumeState(workspace)).status, "missing");
+  await store.delete(workspace);
+  assert.equal((await store.read(workspace)).status, "missing");
 });
 
 async function fileExists(filePath: string): Promise<boolean> {
@@ -707,7 +914,11 @@ async function fileExists(filePath: string): Promise<boolean> {
   }
 }
 
-async function installEvalSsh(root: string, trace: string, remoteHome: string): Promise<string> {
+async function installEvalSsh(
+  root: string,
+  trace: string,
+  remoteHome: string,
+): Promise<{ canonicalRemoteHome: string; binDir: string }> {
   const bin = path.join(root, "bin");
   await fs.mkdir(bin, { recursive: true });
   await fs.mkdir(remoteHome, { recursive: true });
@@ -716,18 +927,26 @@ async function installEvalSsh(root: string, trace: string, remoteHome: string): 
     path.join(bin, "ssh"),
     `#!/bin/sh
 printf 'ARGV:%s\\n' "$*" >> ${shellEscape(trace)}
-for arg in "$@"; do last_arg="$arg"; done
+is_tunnel=0
+for arg in "$@"; do
+  if [ "$arg" = "-N" ]; then is_tunnel=1; fi
+  last_arg="$arg"
+done
+if [ "$is_tunnel" = "1" ]; then
+  trap 'exit 0' TERM INT
+  while :; do sleep 1; done
+fi
 case "$last_arg" in
   *'printf "%s\\n" "$HOME"'*)
     printf '%s\\n' ${shellEscape(canonicalRemoteHome)}
     exit 0
     ;;
+  *'/dev/tcp/127.0.0.1/'*) exit 0 ;;
 esac
 export HOME=${shellEscape(canonicalRemoteHome)}
 eval "$last_arg"
 `,
   );
-  process.env.PATH = `${bin}:${process.env.PATH ?? ""}`;
   await fs.writeFile(trace, "");
-  return canonicalRemoteHome;
+  return { canonicalRemoteHome, binDir: bin };
 }

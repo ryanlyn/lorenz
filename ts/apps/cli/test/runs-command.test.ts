@@ -2,14 +2,14 @@ import fs from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
 
-import { test } from "vitest";
+import { test, vi } from "vitest";
 
 import { assert } from "../../../test/assert.js";
 import { tempDir } from "../../../test/helpers.js";
 
 import { parseRunsArgs, runRunsCommand, runRunsMain } from "@symphony/cli/runs";
 
-test("runs command parses Elixir mix task filters", () => {
+test("runs command parses run-history filters", () => {
   assert.deepEqual(
     parseRunsArgs(["--issue", "MONO-171", "--failed", "--limit", "5", "--port", "4100"]),
     {
@@ -243,7 +243,7 @@ test("runs command renders cost, retries, run detail, and JSON branches", async 
   }
 });
 
-test("runs command reports Elixir-shaped 404 and 503 errors", async () => {
+test("runs command reports 404 and 503 errors", async () => {
   const server = http.createServer((request, response) => {
     if (request.url === "/api/v1/runs?id=missing") {
       response.writeHead(404, { "content-type": "application/json" });
@@ -283,7 +283,6 @@ test("runs command uses workflow-derived default server host and port", async ()
     );
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-  const oldWorkflow = process.env.SYMPHONY_WORKFLOW;
 
   try {
     const address = server.address();
@@ -294,15 +293,88 @@ test("runs command uses workflow-derived default server host and port", async ()
       workflowPath,
       `---\nserver:\n  host: 127.0.0.1\n  port: ${address.port}\n---\nRun it\n`,
     );
-    process.env.SYMPHONY_WORKFLOW = workflowPath;
+    vi.stubEnv("SYMPHONY_WORKFLOW", workflowPath);
 
     const output = await runRunsMain(["--limit", "1"]);
     assert.match(output, /Run History/);
   } finally {
-    if (oldWorkflow === undefined) delete process.env.SYMPHONY_WORKFLOW;
-    else process.env.SYMPHONY_WORKFLOW = oldWorkflow;
+    vi.unstubAllEnvs();
     await new Promise<void>((resolve, reject) =>
       server.close((error) => (error ? reject(error) : resolve())),
     );
   }
 });
+
+test("runs command uses workflow-derived host for explicit positive port", async () => {
+  const fetchSpy = vi.fn(async () => emptyRunsResponse());
+  vi.stubGlobal("fetch", fetchSpy);
+
+  try {
+    const dir = await tempDir("symphony-ts-runs-port-host");
+    const workflowPath = path.join(dir, "WORKFLOW.md");
+    await fs.writeFile(workflowPath, `---\nserver:\n  host: localhost\n  port: 1\n---\nRun it\n`);
+    vi.stubEnv("SYMPHONY_WORKFLOW", workflowPath);
+
+    const output = await runRunsMain(["--port", "43210", "--limit", "1"]);
+    assert.match(output, /Run History/);
+    assert.equal(fetchSpy.mock.calls[0]?.[0], "http://localhost:43210/api/v1/runs?limit=1");
+  } finally {
+    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+  }
+});
+
+test("runs command treats port zero as no explicit port and falls through to workflow port", async () => {
+  const fetchSpy = vi.fn(async () => emptyRunsResponse());
+  vi.stubGlobal("fetch", fetchSpy);
+
+  try {
+    const dir = await tempDir("symphony-ts-runs-port-zero");
+    const workflowPath = path.join(dir, "WORKFLOW.md");
+    await fs.writeFile(
+      workflowPath,
+      `---\nserver:\n  host: 127.0.0.1\n  port: 43211\n---\nRun it\n`,
+    );
+    vi.stubEnv("SYMPHONY_WORKFLOW", workflowPath);
+
+    const output = await runRunsMain(["--port", "0", "--limit", "1"]);
+    assert.match(output, /Run History/);
+    assert.equal(fetchSpy.mock.calls[0]?.[0], "http://127.0.0.1:43211/api/v1/runs?limit=1");
+  } finally {
+    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+  }
+});
+
+test("runs command treats port zero as no explicit port and keeps the no-port configured error", async () => {
+  const fetchSpy = vi.fn(async (url) => {
+    throw new Error(`unexpected fetch ${String(url)}`);
+  });
+  vi.stubGlobal("fetch", fetchSpy);
+  const dir = await tempDir("symphony-ts-runs-port-zero-error");
+  const workflowPath = path.join(dir, "WORKFLOW.md");
+  await fs.writeFile(workflowPath, "---\nserver:\n  host: 127.0.0.1\n  port: 0\n---\nRun it\n");
+  vi.stubEnv("SYMPHONY_WORKFLOW", workflowPath);
+
+  try {
+    await assert.rejects(
+      () => runRunsMain(["--port", "0"]),
+      /No observability server port configured/,
+    );
+    assert.equal(fetchSpy.mock.calls.length, 0);
+  } finally {
+    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+  }
+});
+
+function emptyRunsResponse(): Response {
+  return new Response(
+    JSON.stringify({
+      view: "runs",
+      summary: { total: 0, running: 0, success: 0, failed: 0, stalled: 0, canceled: 0 },
+      runs: [],
+    }),
+    { status: 200, headers: { "content-type": "application/json" } },
+  );
+}

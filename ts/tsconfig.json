@@ -8,10 +8,10 @@
       "path": "./packages/agent-runner"
     },
     {
-      "path": "./packages/cli-kit"
+      "path": "./packages/child-process"
     },
     {
-      "path": "./packages/codex"
+      "path": "./packages/cli-kit"
     },
     {
       "path": "./packages/config"
@@ -29,28 +29,22 @@
       "path": "./packages/humanize"
     },
     {
-      "path": "./packages/child-process"
-    },
-    {
-      "path": "./packages/ssh"
-    },
-    {
-      "path": "./packages/worker-box-pool"
-    },
-    {
-      "path": "./packages/worker-host-pool"
-    },
-    {
-      "path": "./packages/workspace"
-    },
-    {
       "path": "./packages/issue"
+    },
+    {
+      "path": "./packages/linear-tracker"
+    },
+    {
+      "path": "./packages/local-tracker"
     },
     {
       "path": "./packages/log-file"
     },
     {
       "path": "./packages/mcp"
+    },
+    {
+      "path": "./packages/memory-tracker"
     },
     {
       "path": "./packages/orchestrator"
@@ -71,9 +65,6 @@
       "path": "./packages/prompt"
     },
     {
-      "path": "./packages/protocol"
-    },
-    {
       "path": "./packages/resume-state"
     },
     {
@@ -89,19 +80,34 @@
       "path": "./packages/server"
     },
     {
-      "path": "./packages/linear-tracker"
+      "path": "./packages/ssh"
     },
     {
-      "path": "./packages/memory-tracker"
+      "path": "./packages/traceviz-emitter"
+    },
+    {
+      "path": "./packages/traceviz-server"
     },
     {
       "path": "./packages/tui"
     },
     {
+      "path": "./packages/worker-box-pool"
+    },
+    {
+      "path": "./packages/worker-host-pool"
+    },
+    {
       "path": "./packages/workflow"
     },
     {
+      "path": "./packages/workspace"
+    },
+    {
       "path": "./apps/cli"
+    },
+    {
+      "path": "./apps/traceviz"
     }
   ]
 }

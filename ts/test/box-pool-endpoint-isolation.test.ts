@@ -3,8 +3,9 @@
 // the REAL `acquireAgentMcpEndpointForRun` (token + refcounted local mcp server +
 // reverse tunnel behind ONE lease), the concrete per-run `McpEndpointManager`,
 // and the REAL `DispatchCoordinator` over a fake machine `BoxPool`. The ONLY seam
-// replaced is `startReverseTunnel` (the `ssh -N` child), mocked so no real ssh is
-// spawned and so a leaked / surviving child shows up as an un-`kill()`ed fake
+// replaced is `@symphony/ssh` (`startReverseTunnel`'s `ssh -N` child plus its
+// readiness probe), mocked so no real ssh is spawned and so a leaked / surviving
+// child shows up as an un-`kill()`ed fake
 // process. Everything else - the three sub-resources of the endpoint lease, the
 // per-run tunnel keying, the open-after-bind / close-before-settle ordering, the
 // recycle-driven clean fail, and the force-drain endpoint sweep - is the real
@@ -38,13 +39,18 @@
 // runs against tsc --build output).
 
 import EventEmitter from "node:events";
+import { createServer } from "node:net";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 
 import { afterEach, beforeEach, test, vi } from "vitest";
 import { startReverseTunnel } from "@symphony/ssh";
 import { parseConfig } from "@symphony/config";
 import type { BoxPoolSettings } from "@symphony/domain";
-import { acquireAgentMcpEndpointForRun, validMcpToken } from "@symphony/mcp";
+import {
+  acquireAgentMcpEndpointForRun,
+  mcpAuthScopeForSettings,
+  validMcpToken,
+} from "@symphony/mcp";
 import type { AgentMcpEndpointLease } from "@symphony/mcp";
 import { WorkerHostPool, workerHostPool } from "@symphony/worker-host-pool";
 import { createDispatchCoordinator } from "@symphony/cli";
@@ -61,8 +67,12 @@ import { assert } from "./assert.js";
 
 // The reverse-tunnel child is the ONE seam we replace: a fake EventEmitter whose
 // `kill()` is observable, so a surviving (un-killed) child is a leaked ssh -N.
+// The pool awaits remote-port readiness before returning a lease; the fake
+// `waitForRemoteTcpPort` resolves immediately so the suite exercises the lease
+// lifecycle, not the readiness probe.
 vi.mock("@symphony/ssh", () => ({
   startReverseTunnel: vi.fn(),
+  waitForRemoteTcpPort: vi.fn(async () => {}),
 }));
 
 const mockStartReverseTunnel = vi.mocked(startReverseTunnel);
@@ -84,11 +94,32 @@ interface FakeProcess extends EventEmitter {
 
 function makeFakeProcess(processes: FakeProcess[]): ChildProcessWithoutNullStreams {
   const emitter = new EventEmitter() as FakeProcess;
-  emitter.kill = vi.fn();
+  // Port recycling is deferred until the ssh child actually ends, so the fake
+  // child ends (emits close) as soon as it is killed.
+  emitter.kill = vi.fn(() => {
+    emitter.emit("close", null, "SIGTERM");
+    return true;
+  });
   (emitter as unknown as Record<string, unknown>).pid = 4242;
   processes.push(emitter);
   return emitter as unknown as ChildProcessWithoutNullStreams;
 }
+
+// A free localhost TCP port for the refcounted local MCP server, so the suite
+// binds deterministically and never collides with an unrelated listener.
+async function freeLocalPort(): Promise<number> {
+  return new Promise<number>((resolve, reject) => {
+    const probe = createServer();
+    probe.once("error", reject);
+    probe.listen(0, "127.0.0.1", () => {
+      const address = probe.address();
+      const port = typeof address === "object" && address !== null ? address.port : 0;
+      probe.close(() => resolve(port));
+    });
+  });
+}
+
+const mcpServerPort = await freeLocalPort();
 
 // ---------------------------------------------------------------------------
 // The concrete per-run McpEndpointManager: the trivial host-routing adapter over
@@ -216,15 +247,25 @@ function makeFakeMachinePool(
 }
 
 function endpointSettings(): BoxPoolSettings {
-  // A real parsed Settings (server.port unset => ensureLocalMcpServer starts an
-  // ephemeral loopback server, so the WHOLE three-resource lease is exercised for
-  // real). The coordinator only forwards `settings` to the manager, which threads
-  // it to acquireAgentMcpEndpointForRun.
+  // A real parsed Settings pinned to a known-free loopback server port, so the
+  // refcounted local MCP server binds deterministically and the configured token
+  // scope is computable (the WHOLE three-resource lease is exercised for real).
+  // The coordinator only forwards `settings` to the manager, which threads it to
+  // acquireAgentMcpEndpointForRun.
   const full = parseConfig({
     tracker: { kind: "memory", active_states: ["Todo"], terminal_states: ["Done"] },
+    server: { host: "127.0.0.1", port: mcpServerPort },
   });
   return full as unknown as BoxPoolSettings;
 }
+
+// Tokens issued for the configured server port are scoped to the settings
+// identity; validity checks must use the same scope.
+const endpointTokenScope = mcpAuthScopeForSettings(
+  endpointSettings() as unknown as Settings,
+  "127.0.0.1",
+  mcpServerPort,
+);
 
 function makeCoordinator(
   pool: FakeMachinePool,
@@ -293,8 +334,8 @@ test("recycle/poison of run A fails A CLEANLY (token revoked, ssh child killed, 
   // Both endpoints opened real per-run tunnels: two distinct ssh children, both
   // tokens valid.
   assert.equal(processes.length, 2);
-  assert.ok(validMcpToken(tokenA));
-  assert.ok(validMcpToken(tokenB));
+  assert.ok(validMcpToken(tokenA, endpointTokenScope));
+  assert.ok(validMcpToken(tokenB, endpointTokenScope));
   assert.equal(coordinator.snapshot().slots.length, 2);
 
   // The pool recycles run A's box (poison/reaper). The coordinator's registered
@@ -304,7 +345,7 @@ test("recycle/poison of run A fails A CLEANLY (token revoked, ssh child killed, 
   await flushMicrotasks();
 
   // Run A is torn down cleanly end-to-end:
-  assert.equal(validMcpToken(tokenA), false); // token revoked
+  assert.equal(validMcpToken(tokenA, endpointTokenScope), false); // token revoked
   assert.equal(processes[0]!.kill.mock.calls.length, 1); // A's ssh child killed
   assert.deepEqual(pool.leases.get(a.slot.machineLeaseId)!.settles, [
     { kind: "fail", arg: "machine_recycled" },
@@ -312,7 +353,7 @@ test("recycle/poison of run A fails A CLEANLY (token revoked, ssh child killed, 
 
   // Run B is completely untouched: token still valid, child still alive, slot
   // still registered.
-  assert.ok(validMcpToken(tokenB));
+  assert.ok(validMcpToken(tokenB, endpointTokenScope));
   assert.equal(processes[1]!.kill.mock.calls.length, 0);
   const slots = coordinator.snapshot().slots;
   assert.equal(slots.length, 1);
@@ -347,7 +388,7 @@ test("two co-resident runs on ONE machine get DISTINCT per-run tunnels; closing 
   await a.slot.release("healthy");
   assert.equal(processes[0]!.kill.mock.calls.length, 1);
   assert.equal(processes[1]!.kill.mock.calls.length, 0);
-  assert.ok(validMcpToken(b.slot.mcpEndpoint!.token));
+  assert.ok(validMcpToken(b.slot.mcpEndpoint!.token, endpointTokenScope));
   assert.equal(coordinator.snapshot().slots.length, 1);
 });
 
@@ -467,7 +508,7 @@ test("force-drain closes EVERY surviving registry endpoint (no leaked ssh -N chi
   assert.equal(processes.length, 3);
   assert.equal(coordinator.snapshot().slots.length, 3);
   const tokens = slots.map((s) => s.mcpEndpoint!.token);
-  for (const token of tokens) assert.ok(validMcpToken(token));
+  for (const token of tokens) assert.ok(validMcpToken(token, endpointTokenScope));
 
   // Force-drain: the real pool recycles every box on drain (firing the recycle
   // callback per box), so every surviving registry endpoint is closed - no ssh -N
@@ -477,7 +518,7 @@ test("force-drain closes EVERY surviving registry endpoint (no leaked ssh -N chi
 
   for (let i = 0; i < 3; i += 1) {
     assert.equal(processes[i]!.kill.mock.calls.length, 1); // every ssh child killed
-    assert.equal(validMcpToken(tokens[i]!), false); // every token revoked
+    assert.equal(validMcpToken(tokens[i]!, endpointTokenScope), false); // every token revoked
   }
   // Every slot deregistered: the registry is empty after a force-drain.
   assert.equal(coordinator.snapshot().slots.length, 0);
@@ -533,7 +574,7 @@ test("single-slot path opens EXACTLY ONE endpoint per machine (one ssh child, on
   // heartbeat / resume within the run never re-opens.
   r.slot.heartbeat();
   assert.ok(r.slot.mcpEndpoint);
-  assert.ok(validMcpToken(r.slot.mcpEndpoint!.token));
+  assert.ok(validMcpToken(r.slot.mcpEndpoint!.token, endpointTokenScope));
   assert.equal(processes.length, 1);
   assert.equal(coordinator.snapshot().slots.length, 1);
 
@@ -542,7 +583,7 @@ test("single-slot path opens EXACTLY ONE endpoint per machine (one ssh child, on
   const token = r.slot.mcpEndpoint!.token;
   liveEndpoints = [];
   await r.slot.release("healthy");
-  assert.equal(validMcpToken(token), false);
+  assert.equal(validMcpToken(token, endpointTokenScope), false);
   assert.equal(processes[0]!.kill.mock.calls.length, 1);
 });
 

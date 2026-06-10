@@ -2654,13 +2654,19 @@ test("a failed provider.destroy keeps the paid box tracked, then drain reclaims 
     events.some((event) => event.event === "box_pool_destroy_failed" && event.boxId === boxId),
     true,
   );
-  assert.equal((await provider.list()).some((descriptor) => descriptor.boxId === boxId), true);
+  assert.equal(
+    (await provider.list()).some((descriptor) => descriptor.boxId === boxId),
+    true,
+  );
 
   // Once the backend recovers, teardown actually reclaims it - proving the retained
   // box was recoverable, never silently leaked.
   provider.clearDestroyFailure(boxId);
   await pool.drain({ deadlineMs: 1_000 });
-  assert.equal((await provider.list()).some((descriptor) => descriptor.boxId === boxId), false);
+  assert.equal(
+    (await provider.list()).some((descriptor) => descriptor.boxId === boxId),
+    false,
+  );
 });
 
 test("maxBoxesPerIssue is not bypassed when a same-issue sibling settles on a shared box", async () => {

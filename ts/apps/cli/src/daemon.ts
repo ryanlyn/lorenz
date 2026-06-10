@@ -1,15 +1,14 @@
 import os from "node:os";
 import path from "node:path";
 
-import { AcpExecutor } from "@symphony/acp";
+import { Executor } from "@symphony/acp";
 import {
   runAgentAttempt as runAgentAttemptCore,
   type RunAgentAttemptAdapters,
   type RunAgentAttemptInput,
   type RunResult,
 } from "@symphony/agent-runner";
-import { defaultSettings, type DefaultSettingsOptions } from "@symphony/config";
-import { CodexAppServerExecutor } from "@symphony/codex";
+import type { DefaultSettingsOptions } from "@symphony/config";
 import type { RuntimeTrackerClient, Settings } from "@symphony/domain";
 import { systemClock } from "@symphony/ports";
 import { acquireAgentMcpEndpointForRun } from "@symphony/mcp";
@@ -28,23 +27,37 @@ import {
   writeResumeState,
 } from "@symphony/resume-state";
 import { LinearClient } from "@symphony/linear-tracker";
+import { LocalTrackerClient } from "@symphony/local-tracker";
 import { MemoryTrackerClient, memoryIssuesFromEnv } from "@symphony/memory-tracker";
 
-export function runtimeDefaultSettings(): Settings {
-  return defaultSettings(runtimeDefaultSettingsOptions());
+export function runtimeDefaultSettingsOptions(): DefaultSettingsOptions {
+  return { tmpdir: os.tmpdir() };
 }
 
-export function runtimeDefaultSettingsOptions(): DefaultSettingsOptions {
-  return { tmpdir: os.tmpdir(), cwd: process.cwd() };
+function assertNever(value: never): never {
+  throw new Error(`unhandled tracker kind: ${String(value)}`);
 }
 
 export function createTrackerClient(
   settings: Settings,
   env: NodeJS.ProcessEnv = process.env,
 ): RuntimeTrackerClient {
-  if (settings.tracker.kind === "memory") return new MemoryTrackerClient(memoryIssuesFromEnv(env));
-  if (settings.tracker.kind === "linear") return new LinearClient(settings);
-  throw new Error("tracker.kind is required");
+  const kind = settings.tracker.kind;
+  if (kind === undefined) throw new Error("tracker.kind is required");
+  switch (kind) {
+    case "memory":
+      return new MemoryTrackerClient(memoryIssuesFromEnv(env));
+    case "linear": {
+      const client = new LinearClient(settings);
+      // Resolve project slugs (e.g. from project_labels) in the background; from origin/main.
+      void client.resolveProjectSlugs();
+      return client;
+    }
+    case "local":
+      return new LocalTrackerClient(settings);
+    default:
+      return assertNever(kind);
+  }
 }
 
 /**
@@ -112,7 +125,7 @@ export function buildDispatchCoordinator(
   });
 }
 
-export function createRunAgentAttemptAdapters(): RunAgentAttemptAdapters {
+function createRunAgentAttemptAdapters(): RunAgentAttemptAdapters {
   return {
     createWorkspaceForIssue,
     runHook,
@@ -122,9 +135,7 @@ export function createRunAgentAttemptAdapters(): RunAgentAttemptAdapters {
     executorFactory: (settings) => {
       const agent = settings.agents[settings.agent.kind];
       if (!agent) throw new Error(`agents.${settings.agent.kind} is required`);
-      if (agent.executor === "appserver") return new CodexAppServerExecutor();
-      if (agent.executor === "acp") return new AcpExecutor(settings.agent.kind);
-      throw new Error(`unsupported agents.${settings.agent.kind}.executor`);
+      return new Executor(settings.agent.kind);
     },
   };
 }

@@ -98,10 +98,14 @@ function humanizeCodexEvent(event: string, message: unknown, payload: unknown): 
     const base = `${humanizeCodexMethod("item/tool/requestUserInput", payload)} (auto-answered)`;
     return answer ? `${base}: ${inlineText(answer)}` : base;
   }
-  if (event === "tool_call_completed")
-    return humanizeDynamicToolEvent("dynamic tool call completed", payload);
-  if (event === "tool_call_failed")
-    return humanizeDynamicToolEvent("dynamic tool call failed", payload);
+  if (event === "tool_call_update") {
+    const status =
+      (isRecord(payload) ? stringAt(payload, ["status"]) : null) ??
+      (isRecord(payload) ? stringAt(payload, ["params", "status"]) : null);
+    if (status === "completed")
+      return humanizeDynamicToolEvent("dynamic tool call completed", payload);
+    if (status === "failed") return humanizeDynamicToolEvent("dynamic tool call failed", payload);
+  }
   if (event === "unsupported_tool_call")
     return humanizeDynamicToolEvent("unsupported dynamic tool call rejected", payload);
   if (event === "turn_ended_with_error") return `turn ended with error: ${formatReason(message)}`;

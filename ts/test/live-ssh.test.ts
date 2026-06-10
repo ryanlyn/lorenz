@@ -6,15 +6,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 
 import { test, vi } from "vitest";
-import {
-  CodexAppServerExecutor,
-  createWorkspaceForIssue,
-  parseConfig,
-  readResumeState,
-  runAgentAttempt,
-  runSsh,
-  shellEscape,
-} from "@symphony/cli";
+import { parseConfig, readResumeState, runAgentAttempt, runSsh, shellEscape } from "@symphony/cli";
 import type { Issue, WorkflowDefinition } from "@symphony/cli";
 
 import { assert } from "./assert.js";
@@ -23,7 +15,7 @@ import { sampleIssue, tempDir } from "./helpers.js";
 const execFileAsync = promisify(execFile);
 const runLiveSsh = process.env.SYMPHONY_TS_RUN_LIVE_SSH_E2E === "1";
 const requireRemoteClaude = process.env.SYMPHONY_TS_REQUIRE_REMOTE_CLAUDE === "1";
-const remoteClaudeAcpBridge = process.env.SYMPHONY_TS_CLAUDE_ACP_BRIDGE_COMMAND;
+const remoteClaudeBridge = process.env.SYMPHONY_TS_CLAUDE_ACP_BRIDGE_COMMAND;
 
 test(
   "live SSH worker runs remote Codex and remote Claude MCP resume",
@@ -43,7 +35,7 @@ test(
         console.warn("remote Claude canary skipped because no Claude OAuth token was supplied");
         return;
       }
-      if (!remoteClaudeAcpBridge) {
+      if (!remoteClaudeBridge) {
         if (requireRemoteClaude)
           throw new Error("remote Claude canary requires SYMPHONY_TS_CLAUDE_ACP_BRIDGE_COMMAND");
         console.warn("remote Claude canary skipped because no Claude ACP bridge was supplied");
@@ -110,17 +102,8 @@ async function setupLiveWorkers(): Promise<LiveWorkerSetupResult> {
   const configPath = path.join(sshRoot, "config");
   const ports = [await reserveTcpPort(), await reserveTcpPort()];
   const hosts = ports.map((port) => `localhost:${port}`);
-  const dockerSupportDir = path.resolve(
-    import.meta.dirname,
-    "..",
-    "..",
-    "elixir",
-    "test",
-    "support",
-    "live_e2e_docker",
-  );
+  const dockerSupportDir = path.resolve(import.meta.dirname, "support", "live_e2e_docker");
   const projectName = dockerProjectName(runId);
-  const previousSshConfig = process.env.SYMPHONY_SSH_CONFIG;
   const claudeToken =
     process.env.SYMPHONY_LIVE_DOCKER_CLAUDE_CODE_OAUTH_TOKEN ??
     process.env.CLAUDE_CODE_OAUTH_TOKEN ??
@@ -149,11 +132,10 @@ async function setupLiveWorkers(): Promise<LiveWorkerSetupResult> {
       "",
     ].join("\n"),
   );
-  process.env.SYMPHONY_SSH_CONFIG = configPath;
+  vi.stubEnv("SYMPHONY_SSH_CONFIG", configPath);
 
   const cleanup = async () => {
-    if (previousSshConfig === undefined) delete process.env.SYMPHONY_SSH_CONFIG;
-    else process.env.SYMPHONY_SSH_CONFIG = previousSshConfig;
+    vi.unstubAllEnvs();
     await cleanupRemoteRoot(hosts, `~/.${runId}`);
     await execFileAsync(
       "docker",
@@ -206,7 +188,6 @@ async function setupNativeSshdWorker(runId: string): Promise<LiveWorkerSetup> {
   const pidPath = path.join(root, "sshd.pid");
   const port = await reserveTcpPort();
   const host = `localhost:${port}`;
-  const previousSshConfig = process.env.SYMPHONY_SSH_CONFIG;
   const user = os.userInfo().username;
 
   await execFileAsync("ssh-keygen", ["-q", "-t", "ed25519", "-N", "", "-f", keyPath]);
@@ -253,11 +234,10 @@ async function setupNativeSshdWorker(runId: string): Promise<LiveWorkerSetup> {
 
   await execFileAsync("/usr/sbin/sshd", ["-t", "-f", configPath]);
   await execFileAsync("/usr/sbin/sshd", ["-f", configPath, "-E", logPath]);
-  process.env.SYMPHONY_SSH_CONFIG = clientConfigPath;
+  vi.stubEnv("SYMPHONY_SSH_CONFIG", clientConfigPath);
 
   const cleanup = async () => {
-    if (previousSshConfig === undefined) delete process.env.SYMPHONY_SSH_CONFIG;
-    else process.env.SYMPHONY_SSH_CONFIG = previousSshConfig;
+    vi.unstubAllEnvs();
     await cleanupRemoteRoot([host], `~/.${runId}`);
     const pid = await fs.readFile(pidPath, "utf8").catch(() => "");
     if (pid.trim()) {
@@ -309,41 +289,39 @@ async function runRemoteCodexCanary(setup: LiveWorkerSetup): Promise<void> {
     workspace: { root: setup.workspaceRoot },
     worker: { ssh_hosts: setup.hosts, ssh_timeout_ms: 60_000 },
     hooks: { after_create: initRepoHook(), timeout_ms: 60_000 },
-    codex: {
-      command: process.env.SYMPHONY_TS_CODEX_COMMAND ?? "codex app-server",
-      approval_policy: "never",
-      turn_timeout_ms: 300_000,
-      stall_timeout_ms: 300_000,
+    agents: {
+      codex: {
+        bridge_command: process.env.SYMPHONY_TS_CODEX_ACP_COMMAND ?? "codex-acp",
+        turn_timeout_ms: 300_000,
+        stall_timeout_ms: 300_000,
+      },
     },
   });
-  const workspace = await createWorkspaceForIssue(settings, issue, { workerHost: host });
-  const executor = new CodexAppServerExecutor();
-  const session = await executor.startSession({ workspace, workerHost: host, settings, issue });
-  try {
-    const updates = await executor.runTurn(
-      session,
+
+  const result = await runAgentAttempt({
+    issue,
+    workflow: workflow(
+      settings,
       [
         "This is a live TypeScript Symphony remote SSH Codex canary.",
         `Create a file named REMOTE_CODEX_E2E.txt whose only contents are ${marker} followed by a newline.`,
         "Do not create any other files.",
       ].join("\n"),
-      issue,
-    );
-    assert.ok(updates.some((update) => update.type === "turn_completed"));
-  } finally {
-    await session.stop();
-  }
+    ),
+    workerHost: host,
+  });
+  assert.equal(result.turnCount, 1);
 
-  const result = await runSsh(
+  const fileResult = await runSsh(
     host,
-    `cat ${shellEscape(path.posix.join(workspace, "REMOTE_CODEX_E2E.txt"))}`,
+    `cat ${shellEscape(path.posix.join(result.workspace, "REMOTE_CODEX_E2E.txt"))}`,
     {
       timeoutMs: settings.worker.sshTimeoutMs,
       stderrToStdout: true,
     },
   );
-  assert.equal(result.status, 0, result.stdout);
-  assert.equal(result.stdout, `${marker}\n`);
+  assert.equal(fileResult.status, 0, fileResult.stdout);
+  assert.equal(fileResult.stdout, `${marker}\n`);
 }
 
 async function runRemoteClaudeResumeCanary(setup: LiveWorkerSetup): Promise<void> {
@@ -371,8 +349,7 @@ async function runRemoteClaudeResumeCanary(setup: LiveWorkerSetup): Promise<void
     agents: {
       claude: {
         executor: "acp",
-        bridge_command: remoteClaudeAcpBridge ?? "claude-agent-acp",
-        bridge_args: remoteClaudeAcpBridgeArgs(),
+        bridge_command: remoteClaudeBridgeCommand(),
         turn_timeout_ms: 300_000,
         stall_timeout_ms: 300_000,
       },
@@ -504,32 +481,49 @@ async function fileExists(filePath: string): Promise<boolean> {
   }
 }
 
-async function reserveTcpPort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const server = net.createServer();
-    server.listen(0, "127.0.0.1", () => {
-      const address = server.address();
-      const port = typeof address === "object" && address !== null ? address.port : null;
-      server.close((error) => {
-        if (error) reject(error);
-        else if (port === null) reject(new Error("failed to reserve tcp port"));
-        else resolve(port);
+async function reserveTcpPort(retries = 3): Promise<number> {
+  for (let attempt = 0; attempt < retries; attempt++) {
+    const port = await new Promise<number>((resolve, reject) => {
+      const server = net.createServer();
+      server.listen(0, "127.0.0.1", () => {
+        const address = server.address();
+        const p = typeof address === "object" && address !== null ? address.port : null;
+        server.close((error) => {
+          if (error) reject(error);
+          else if (p === null) reject(new Error("failed to reserve tcp port"));
+          else resolve(p);
+        });
+      });
+      server.on("error", reject);
+    });
+    // Verify the port is still available to reduce TOCTOU race window
+    const available = await new Promise<boolean>((resolve) => {
+      const probe = net.createServer();
+      probe.once("error", () => resolve(false));
+      probe.listen(port, "127.0.0.1", () => {
+        probe.close(() => resolve(true));
       });
     });
-    server.on("error", reject);
-  });
+    if (available) return port;
+    if (attempt < retries - 1) {
+      // Small delay before retrying to let ephemeral port churn settle
+      await new Promise((r) => setTimeout(r, 50));
+    }
+  }
+  throw new Error("failed to reserve an available tcp port after retries");
 }
 
 function dockerProjectName(runId: string): string {
   return runId.toLowerCase().replace(/[^a-z0-9_-]/g, "-");
 }
 
-function remoteClaudeAcpBridgeArgs(): string[] {
+function remoteClaudeBridgeCommand(): string {
+  const base = remoteClaudeBridge ?? "claude-agent-acp";
   const raw = process.env.SYMPHONY_TS_CLAUDE_ACP_BRIDGE_ARGS;
-  if (!raw) return [];
+  if (!raw) return base;
   const parsed = JSON.parse(raw) as unknown;
   if (!Array.isArray(parsed) || !parsed.every((item) => typeof item === "string")) {
     throw new Error("SYMPHONY_TS_CLAUDE_ACP_BRIDGE_ARGS must be a JSON string array");
   }
-  return parsed;
+  return [base, ...parsed].join(" ");
 }

@@ -1,0 +1,20 @@
+{
+  "name": "@symphony/traceviz",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "traceviz": "tsx serve.ts",
+    "build": "tsc -b"
+  },
+  "dependencies": {
+    "@hono/node-server": "catalog:",
+    "@symphony/traceviz-server": "workspace:*",
+    "hono": "catalog:"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "tsx": "catalog:",
+    "typescript": "catalog:"
+  }
+}

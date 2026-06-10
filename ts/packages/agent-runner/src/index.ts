@@ -3,24 +3,22 @@ import { issueIsActive } from "@symphony/dispatch";
 import type { AgentMcpEndpointLease } from "@symphony/mcp";
 import { ensembleSize } from "@symphony/issue";
 import { buildPrompt, continuationPrompt } from "@symphony/prompt";
-import type {
-  AgentExecutor,
-  AgentSession,
-  AgentUpdate,
-  Issue,
-  Settings,
-  WorkflowDefinition,
+import {
+  resumeStateMatches as canonicalResumeStateMatches,
+  type ResumeStateIdentity,
+} from "@symphony/resume-state/matcher";
+import {
+  errorMessage,
+  type AgentExecutor,
+  type AgentSession,
+  type AgentUpdate,
+  type Issue,
+  type Settings,
+  type WorkflowDefinition,
 } from "@symphony/domain";
 
-interface ResumeStateShape {
-  agentKind: string;
-  resumeId: string;
+interface ResumeStateShape extends ResumeStateIdentity {
   sessionId?: string | null | undefined;
-  issueId?: string | null | undefined;
-  issueIdentifier?: string | null | undefined;
-  issueState?: string | null | undefined;
-  workspacePath?: string | null | undefined;
-  workerHost?: string | null | undefined;
 }
 
 type ResumeReadResult =
@@ -28,6 +26,15 @@ type ResumeReadResult =
   | { status: "unavailable" }
   | { status: "error"; reason: string }
   | { status: "ok"; state: ResumeStateShape };
+
+const workerSetupTimeoutGraceMs = 1_000;
+const workspaceCreateStage = "workspace.create_for_issue";
+const beforeRunHookStage = "workspace.run_before_run_hook";
+const afterRunHookStage = "workspace.run_after_run_hook";
+
+interface SetupStageSignalOptions {
+  abortSignal?: AbortSignal | undefined;
+}
 
 export interface RunAgentAttemptAdapters {
   createWorkspaceForIssue(
@@ -38,6 +45,7 @@ export interface RunAgentAttemptAdapters {
       ensembleSize: number;
       workerHost: string | null;
       forceSlotSuffix?: boolean;
+      abortSignal?: AbortSignal | undefined;
     },
   ): Promise<string>;
   runHook(
@@ -45,6 +53,7 @@ export interface RunAgentAttemptAdapters {
     workspace: string,
     hooks: Settings["hooks"],
     workerHost: string | null,
+    options?: SetupStageSignalOptions,
   ): Promise<void>;
   readResumeState(
     workspace: string,
@@ -68,10 +77,10 @@ export interface RunAgentAttemptAdapters {
  * The executor `startSession` input EXTENDED with the optional per-run
  * `mcpEndpoint` lease. The base is the shared `AgentExecutor.startSession`
  * parameter (so every required field stays in lockstep with the interface); the
- * extra optional `mcpEndpoint` is carried through to the executors' widened inputs
- * (acp consumes it, codex ignores it). Building the call argument as this type
- * keeps the value assignable to the narrower interface param without an
- * excess-property error on a fresh literal.
+ * extra optional `mcpEndpoint` is carried through to the acp executor's widened
+ * input. Building the call argument as this type keeps the value assignable to
+ * the narrower interface param without an excess-property error on a fresh
+ * literal.
  */
 type StartSessionInput = Parameters<AgentExecutor["startSession"]>[0] & {
   mcpEndpoint?: AgentMcpEndpointLease | null;
@@ -96,9 +105,9 @@ export interface RunAgentAttemptInput {
   /**
    * The dispatch coordinator's per-run MCP endpoint lease for THIS run, threaded
    * straight into `executor.startSession`. When present (non-null) the acp executor
-   * USES it and skips acquiring/releasing its own endpoint (the coordinator owns the
-   * whole lease); the codex executor ignores it. Absent / null on the local /
-   * non-pool path, where acp acquires AND releases its own endpoint byte-for-byte.
+   * USES it and skips acquiring/releasing its own endpoint (the coordinator owns
+   * the whole lease). Absent / null on the local / non-pool path, where acp
+   * acquires AND releases its own endpoint byte-for-byte.
    */
   mcpEndpoint?: AgentMcpEndpointLease | null;
   /**
@@ -120,7 +129,7 @@ export async function runAgentAttempt(input: RunAgentAttemptInput): Promise<RunR
   return new RunController(input).run();
 }
 
-export class RunController {
+class RunController {
   constructor(private readonly input: RunAgentAttemptInput) {}
 
   async run(): Promise<RunResult> {
@@ -131,89 +140,142 @@ export class RunController {
     const size = ensembleSize(issue) ?? settings.agent.ensembleSize;
     const slotIndex = input.slotIndex ?? 0;
     const workerHost = input.workerHost ?? null;
-    const workspace = await createWorkspaceForIssue(input.adapters, runtime, issue, {
-      slotIndex,
-      ensembleSize: size,
-      workerHost,
-      // Gated co-residence: force the slot suffix so two solo same-issue runs that
-      // co-reside on one machine get distinct dirs. Default false keeps the
-      // single-slot bare layout byte-identical.
-      forceSlotSuffix: input.forceSlotSuffix ?? false,
-    });
-    input.onUpdate?.({ type: "workspace_prepared", workspacePath: workspace });
-    if (runtime.hooks.beforeRun) {
-      await runHook(input.adapters, runtime.hooks.beforeRun, workspace, runtime.hooks, workerHost);
-    }
-
-    const resume = await readResumeState(
-      input.adapters,
-      workspace,
-      workerHost,
-      runtime.worker.sshTimeoutMs,
+    const workspace = await runSetupStage(
+      workspaceCreateStage,
+      workspaceCreateTimeoutMs(runtime),
+      async ({ abortSignal }) =>
+        createWorkspaceForIssue(input.adapters, runtime, issue, {
+          slotIndex,
+          ensembleSize: size,
+          workerHost,
+          // Gated co-residence: force the slot suffix so two solo same-issue runs
+          // that co-reside on one machine get distinct dirs. Default false keeps
+          // the single-slot bare layout byte-identical.
+          forceSlotSuffix: input.forceSlotSuffix ?? false,
+          abortSignal,
+        }),
+      input.abortSignal,
     );
-    const resumeMatches =
-      resume.status === "ok" &&
-      resumeStateMatches(input.adapters, resume.state, {
-        agentKind: runtime.agent.kind,
-        issue,
-        workspacePath: workspace,
-        workerHost,
-      });
-    if (resume.status === "error") {
-      input.onUpdate?.({
-        type: "resume_state_warning",
-        workspacePath: workspace,
-        message: resume.reason,
-      });
-    } else if (resume.status === "ok" && !resumeMatches) {
-      input.onUpdate?.({
-        type: "resume_state_warning",
-        workspacePath: workspace,
-        message: "resume_state_identity_mismatch",
-      });
-    }
-    const resumeId = resumeMatches ? resume.state.resumeId : null;
-
-    const executor = await executorFor(input.adapters, runtime);
+    input.onUpdate?.({
+      type: "workspace_prepared",
+      workspacePath: workspace,
+      message: `workspace prepared at ${workspace}`,
+    });
+    const resumeEnabled = settings.workspace.isolation !== "none";
+    let resumeId: string | null = null;
     const updates: AgentUpdate[] = [];
-    // Thread the coordinator's per-run endpoint (or null on the local/non-pool
-    // path) into the executor. acp consumes a non-null lease and skips its own
-    // acquire+release; codex ignores it. Built as a typed value so the optional
-    // `mcpEndpoint` field is carried to the executor's widened input without
-    // tripping the excess-property check on the narrower `AgentExecutor` interface.
-    // The field is a DECLARED optional on `StartSessionInput`, and acp/codex both
-    // read an absent value as null, so the explicit `null` is the deliberate, pinned
-    // disabled-path contract (a strict adapter rejecting a declared optional field
-    // would be its own bug) - we keep it rather than omit the key.
-    const startSessionInput: StartSessionInput = {
-      workspace,
-      workerHost,
-      issue,
-      settings: runtime,
-      resumeId,
-      mcpEndpoint: input.mcpEndpoint ?? null,
-      onUpdate: (update) => {
-        updates.push(update);
-        input.onUpdate?.(update);
-      },
-    };
-    const session = await executor.startSession(startSessionInput);
+    let session: AgentSession | null = null;
 
     let turnCount = 0;
+    let runError: unknown;
+    let stopError: unknown;
     try {
+      const beforeRun = runtime.hooks.beforeRun;
+      if (beforeRun) {
+        await runSetupStage(
+          beforeRunHookStage,
+          hookStageTimeoutMs(runtime),
+          async ({ abortSignal }) =>
+            runHook(input.adapters, beforeRun, workspace, runtime.hooks, workerHost, {
+              abortSignal,
+            }),
+          input.abortSignal,
+        );
+      }
+
+      // A shared workspace is reused by every issue, so its resume state cannot be tied to one run.
+      if (resumeEnabled) {
+        const resume = await readResumeState(
+          input.adapters,
+          workspace,
+          workerHost,
+          runtime.worker.sshTimeoutMs,
+        );
+        const resumeMatches =
+          resume.status === "ok" &&
+          resumeStateMatches(input.adapters, resume.state, {
+            agentKind: runtime.agent.kind,
+            issue,
+            workspacePath: workspace,
+            workerHost,
+          });
+        if (resume.status === "error") {
+          input.onUpdate?.({
+            type: "resume_state_warning",
+            workspacePath: workspace,
+            message: resume.reason,
+          });
+        } else if (resume.status === "ok" && !resumeMatches) {
+          input.onUpdate?.({
+            type: "resume_state_warning",
+            workspacePath: workspace,
+            message: "resume_state_identity_mismatch",
+          });
+        }
+        resumeId = resumeMatches ? resume.state.resumeId : null;
+      }
+
+      const executor = await executorFor(input.adapters, runtime);
+      // Thread the coordinator's per-run endpoint (or null on the local/non-pool
+      // path) into the executor: the acp executor consumes a non-null lease and
+      // skips its own acquire+release. Built as a typed value so the optional
+      // `mcpEndpoint` field is carried to the executor's widened input without
+      // tripping the excess-property check on the narrower `AgentExecutor`
+      // interface. The field is a DECLARED optional on `StartSessionInput`, and
+      // the executor reads an absent value as null, so the explicit `null` is the
+      // deliberate, pinned disabled-path contract (a strict adapter rejecting a
+      // declared optional field would be its own bug) - we keep it rather than
+      // omit the key.
+      const startSessionInput: StartSessionInput = {
+        workspace,
+        workerHost,
+        issue,
+        settings: runtime,
+        resumeId,
+        mcpEndpoint: input.mcpEndpoint ?? null,
+        onUpdate: (update) => {
+          updates.push(update);
+          input.onUpdate?.(update);
+        },
+      };
+      session = await executor.startSession(startSessionInput);
+
       while (turnCount < runtime.agent.maxTurns) {
         throwIfAborted(input.abortSignal);
         const prompt =
           turnCount === 0
-            ? await buildPrompt(input.workflow.promptTemplate, issue, {
-                attempt: input.attempt ?? null,
-                slotIndex,
-                ensembleSize: size,
-              })
+            ? await buildPrompt(
+                input.workflow.parsedPromptTemplate ?? input.workflow.promptTemplate,
+                issue,
+                {
+                  attempt: input.attempt ?? null,
+                  slotIndex,
+                  ensembleSize: size,
+                },
+              )
             : continuationPrompt(turnCount + 1, runtime.agent.maxTurns);
-        await runTurnWithAbort(executor, session, prompt, issue, input.abortSignal);
+        const turnUpdates = await runTurnWithAbort(
+          executor,
+          session,
+          prompt,
+          issue,
+          input.abortSignal,
+        );
         turnCount += 1;
-        await persistResumeState(input.adapters, session, runtime, issue, workspace, workerHost);
+        if (resumeEnabled) {
+          await persistResumeState(input.adapters, session, runtime, issue, workspace, workerHost);
+        }
+
+        if (
+          turnCount > 1 &&
+          runtime.agents[runtime.agent.kind]?.executor === "acp" &&
+          !turnUpdates.some(
+            (u) =>
+              u.type === "session_notification" && u.message.update?.sessionUpdate === "tool_call",
+          )
+        ) {
+          break;
+        }
 
         if (!input.fetchIssue) break;
         issue = await input.fetchIssue(issue);
@@ -227,24 +289,25 @@ export class RunController {
         }
         runtime = refreshed;
       }
+    } catch (error) {
+      runError = error;
     } finally {
-      await session.stop();
-      if (runtime.hooks.afterRun) {
+      if (session) {
         try {
-          await runHook(
-            input.adapters,
-            runtime.hooks.afterRun,
-            workspace,
-            runtime.hooks,
-            workerHost,
-          );
-        } catch {
-          // after_run is best effort by SPEC.
+          await session.stop();
+        } catch (error) {
+          stopError = error;
         }
       }
+      await this.runAfterRunHook(runtime, workspace, workerHost);
     }
 
-    await persistResumeState(input.adapters, session, runtime, issue, workspace, workerHost);
+    if (runError) throw toError(runError);
+    if (stopError) throw toError(stopError);
+    if (!session) throw new Error("agent_runner_session_missing");
+    if (resumeEnabled) {
+      await persistResumeState(input.adapters, session, runtime, issue, workspace, workerHost);
+    }
 
     return {
       workspace,
@@ -254,6 +317,29 @@ export class RunController {
       agentKind: runtime.agent.kind,
       finalIssue: issue,
     };
+  }
+
+  private async runAfterRunHook(
+    runtime: Settings,
+    workspace: string,
+    workerHost: string | null,
+  ): Promise<void> {
+    const input = this.input;
+    const afterRun = runtime.hooks.afterRun;
+    if (!afterRun) return;
+    try {
+      await runSetupStage(afterRunHookStage, hookStageTimeoutMs(runtime), async ({ abortSignal }) =>
+        runHook(input.adapters, afterRun, workspace, runtime.hooks, workerHost, {
+          abortSignal,
+        }),
+      );
+    } catch (error) {
+      input.onUpdate?.({
+        type: "stderr",
+        workspacePath: workspace,
+        message: `Ignoring after_run hook failure (${afterRunHookStage}): ${errorMessage(error)}`,
+      });
+    }
   }
 }
 
@@ -296,6 +382,87 @@ async function executorFor(
   throw new Error("agent_runner_adapter_missing: executorFactory");
 }
 
+function workspaceCreateTimeoutMs(settings: Settings): number {
+  const agent = settings.agents[settings.agent.kind];
+  if (!agent) throw new Error(`agents.${settings.agent.kind} is required`);
+  return agent.stallTimeoutMs;
+}
+
+function hookStageTimeoutMs(settings: Settings): number {
+  return settings.hooks.timeoutMs + workerSetupTimeoutGraceMs;
+}
+
+class SetupStageTimeoutError extends Error {
+  constructor(
+    readonly stageName: string,
+    readonly timeoutMs: number,
+  ) {
+    super(`agent_runner_timeout: ${stageName} timed out after ${timeoutMs}ms`);
+  }
+}
+
+async function runSetupStage<T>(
+  stageName: string,
+  timeoutMs: number,
+  fn: (options: { abortSignal: AbortSignal }) => Promise<T>,
+  parentAbortSignal?: AbortSignal,
+): Promise<T> {
+  const controller = new AbortController();
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  let timeoutError: SetupStageTimeoutError | undefined;
+  let abortError: Error | undefined;
+  let onParentAbort: (() => void) | undefined;
+  const races: Promise<T>[] = [
+    Promise.resolve().then(async () => fn({ abortSignal: controller.signal })),
+  ];
+
+  if (Number.isFinite(timeoutMs) && timeoutMs > 0) {
+    races.push(
+      new Promise<never>((_resolve, reject) => {
+        timeout = setTimeout(() => {
+          timeoutError = new SetupStageTimeoutError(stageName, timeoutMs);
+          controller.abort(timeoutError);
+          reject(timeoutError);
+        }, timeoutMs);
+      }),
+    );
+  }
+  if (parentAbortSignal) {
+    races.push(
+      new Promise<never>((_resolve, reject) => {
+        onParentAbort = () => {
+          abortError = new Error("agent_run_aborted");
+          controller.abort(abortError);
+          reject(abortError);
+        };
+        if (parentAbortSignal.aborted) {
+          onParentAbort();
+        } else {
+          parentAbortSignal.addEventListener("abort", onParentAbort, { once: true });
+        }
+      }),
+    );
+  }
+
+  try {
+    return await Promise.race(races);
+  } catch (error) {
+    if (timeoutError) throw timeoutError;
+    if (abortError) throw abortError;
+    if (error instanceof SetupStageTimeoutError) throw error;
+    throw new Error(`agent_runner_setup_crashed: ${stageName}: ${errorMessage(error)}`, {
+      cause: error,
+    });
+  } finally {
+    if (timeout) clearTimeout(timeout);
+    if (onParentAbort) parentAbortSignal?.removeEventListener("abort", onParentAbort);
+  }
+}
+
+function toError(error: unknown): Error {
+  return error instanceof Error ? error : new Error(String(error));
+}
+
 function backendProfile(settings: Settings): string {
   return JSON.stringify(settings.agents[settings.agent.kind] ?? null);
 }
@@ -336,6 +503,7 @@ async function createWorkspaceForIssue(
     ensembleSize: number;
     workerHost: string | null;
     forceSlotSuffix?: boolean;
+    abortSignal?: AbortSignal | undefined;
   },
 ): Promise<string> {
   if (adapters?.createWorkspaceForIssue)
@@ -349,8 +517,10 @@ async function runHook(
   workspacePath: string,
   hooks: Settings["hooks"],
   workerHost: string | null,
+  options?: SetupStageSignalOptions,
 ): Promise<void> {
-  if (adapters?.runHook) return adapters.runHook(command, workspacePath, hooks, workerHost);
+  if (adapters?.runHook)
+    return adapters.runHook(command, workspacePath, hooks, workerHost, options);
   throw new Error("agent_runner_adapter_missing: runHook");
 }
 
@@ -371,14 +541,7 @@ function resumeStateMatches(
   input: { agentKind: string; issue: Issue; workspacePath: string; workerHost: string | null },
 ): boolean {
   if (adapters?.resumeStateMatches) return adapters.resumeStateMatches(state, input);
-  return (
-    state.agentKind === input.agentKind &&
-    state.issueId === input.issue.id &&
-    state.issueIdentifier === input.issue.identifier &&
-    state.issueState === input.issue.state &&
-    state.workspacePath === input.workspacePath &&
-    (state.workerHost ?? null) === input.workerHost
-  );
+  return canonicalResumeStateMatches(state, input);
 }
 
 async function writeResumeState(

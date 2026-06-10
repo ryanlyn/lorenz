@@ -1,6 +1,6 @@
 import { ensembleSize, isTerminalState } from "@symphony/issue";
-import { normalizeRouteName, settingsForIssueState } from "@symphony/config";
-import type { DispatchBlockReason, Issue, Settings } from "@symphony/domain";
+import { normalizeRouteName, normalizeStateName, settingsForIssueState } from "@symphony/config";
+import type { DispatchBlockReason, Issue, Priority, Settings } from "@symphony/domain";
 
 export function routeNames(issue: Issue, settings: Settings): string[] {
   const prefix = settings.tracker.dispatch.routeLabelPrefix.trim().toLowerCase();
@@ -23,8 +23,8 @@ export function issueIsActive(issue: Issue, settings: Settings): boolean {
 }
 
 export function issueHasOpenBlockers(issue: Issue, settings: Settings): boolean {
-  const unstarted = issue.stateType === "unstarted" || issue.state.trim().toLowerCase() === "todo";
-  if (!unstarted) return false;
+  if (issue.stateType !== "unstarted") return false;
+
   return issue.blockers.some(
     (blocker) => !isTerminalState(blocker.state, settings.tracker.terminalStates),
   );
@@ -60,7 +60,7 @@ export function dispatchBlockReason(
   if (state.runningCount >= settings.agent.maxConcurrentAgents) return "global_concurrency_cap";
 
   const effective = settingsForIssueState(settings, issue.state);
-  const stateCount = state.runningByState?.get(issue.state) ?? 0;
+  const stateCount = state.runningByState?.get(normalizeStateName(issue.state)) ?? 0;
   if (stateCount >= effective.agent.maxConcurrentAgents) return "local_concurrency_cap";
 
   if (state.workerCapacityAvailable === false) return "worker_host_capacity";
@@ -102,6 +102,7 @@ export function firstUnclaimedSlot(
   if (
     preferredSlotIndex !== undefined &&
     preferredSlotIndex !== null &&
+    Number.isInteger(preferredSlotIndex) &&
     preferredSlotIndex >= 0 &&
     preferredSlotIndex < size &&
     !claimedSlots.has(slotKey(issue.id, preferredSlotIndex))
@@ -138,6 +139,6 @@ function stateIn(state: string, states: string[]): boolean {
   return states.some((candidate) => candidate.trim().toLowerCase() === state.trim().toLowerCase());
 }
 
-function prioritySort(priority: number | null | undefined): number {
-  return priority && priority >= 1 && priority <= 4 ? priority : Number.MAX_SAFE_INTEGER;
+function prioritySort(priority: Priority | null | undefined): number {
+  return priority ?? Number.MAX_SAFE_INTEGER;
 }

@@ -1,4 +1,8 @@
-import { test } from "vitest";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+
+import { test, vi } from "vitest";
 import {
   issueMcpToken,
   Orchestrator,
@@ -11,27 +15,27 @@ import type { WorkflowDefinition } from "@symphony/domain";
 
 import { assert } from "../../../test/assert.js";
 
-import { startObservabilityServer } from "@symphony/server";
+import { IssueStore, startObservabilityServer } from "@symphony/server";
 import { startClaudeMcpServer } from "@symphony/server";
 
-test("observability HTTP API exposes Elixir-shaped state, issue, runs, refresh, and errors", async () => {
+test("observability HTTP API exposes state, issue, runs, refresh, and errors", async () => {
   const workflow = workflowFixture();
   const orchestrator = new Orchestrator(workflow.settings);
   const issue = normalizeIssue({
     id: "issue-http",
     identifier: "MT-HTTP",
     title: "HTTP visibility",
-    state: "In Progress",
+    state: { name: "In Progress", type: "started" },
     labels: [],
     blockers: [],
   });
   const claimed = orchestrator.claim(issue);
   assert.ok(claimed);
   orchestrator.applyUpdate(issue.id, 0, {
-    type: "notification",
+    type: "session_notification",
     sessionId: "thread-http",
     resumeId: "thread-http",
-    message: "rendered",
+    message: { sessionId: "thread-http", update: { sessionUpdate: "agent_message_chunk" } },
     usage: { inputTokens: 4, outputTokens: 8, totalTokens: 12 },
     timestamp: new Date("2026-05-05T00:00:01.000Z"),
   });
@@ -44,7 +48,11 @@ test("observability HTTP API exposes Elixir-shaped state, issue, runs, refresh, 
       fetchIssuesByIds: async () => [],
     },
   });
-  const server = await startObservabilityServer(runtime, { host: "127.0.0.1", port: 0 });
+  const server = await startObservabilityServer(runtime, {
+    host: "127.0.0.1",
+    port: 0,
+    staticDir: "/tmp/nonexistent-dashboard-dist",
+  });
 
   try {
     const state = await getJson(server.url("/api/v1/state"));
@@ -56,20 +64,23 @@ test("observability HTTP API exposes Elixir-shaped state, issue, runs, refresh, 
     assert.equal(issuePayload.status, "running");
     assert.equal(issuePayload.running.session_id, "thread-http");
 
+    const encodedIssuePayload = await getJson(server.url("/api/v1/MT%2DHTTP"));
+    assert.equal(encodedIssuePayload.status, "running");
+    assert.equal(encodedIssuePayload.running.session_id, "thread-http");
+
     const runs = await getJson(server.url("/api/v1/runs"));
     assert.equal(runs.view, "runs");
     assert.equal(runs.summary.running, 1);
     assert.equal(runs.runs[0].issue_identifier, "MT-HTTP");
     assert.equal(runs.runs[0].outcome, "running");
 
-    const dashboard = await getText(server.url("/"));
-    assert.match(dashboard, /Symphony Operations Dashboard/);
-    assert.match(dashboard, /Running Sessions/);
-    assert.match(dashboard, /Retry Queue/);
-    assert.match(dashboard, /Dispatch Blocks/);
-    assert.match(dashboard, /id="connection">live/);
-    assert.match(dashboard, /EventSource\('\/api\/v1\/events'\)/);
-    assert.match(dashboard, /MT-HTTP/);
+    const dashboard = await getJson(server.url("/"), 503);
+    assert.deepEqual(dashboard, {
+      error: {
+        code: "dashboard_not_built",
+        message: "Dashboard assets not found. Run: pnpm build",
+      },
+    });
 
     const events = await getEventStream(server.url("/api/v1/events"));
     assert.match(events, /event: state/);
@@ -94,7 +105,7 @@ test("observability HTTP API exposes Elixir-shaped state, issue, runs, refresh, 
 test("standalone Claude MCP server preserves route and JSON-RPC error contracts", async () => {
   const workflow = workflowFixture();
   const server = await startClaudeMcpServer(workflow.settings, { host: "127.0.0.1", port: 0 });
-  const token = issueMcpToken();
+  const token = issueMcpToken(server.authScope);
   try {
     const missing = await getJson(server.url("/missing"), 404);
     assert.deepEqual(missing, { error: { code: "not_found", message: "Route not found" } });
@@ -106,6 +117,13 @@ test("standalone Claude MCP server preserves route and JSON-RPC error contracts"
 
     const badJson = await postRawMcp(server.url("/claude-mcp"), "{", 400, token);
     assert.deepEqual(badJson, {
+      jsonrpc: "2.0",
+      id: null,
+      error: { code: -32700, message: "Parse error" },
+    });
+
+    const arrayBody = await postRawMcp(server.url("/claude-mcp"), "[]", 400, token);
+    assert.deepEqual(arrayBody, {
       jsonrpc: "2.0",
       id: null,
       error: { code: -32700, message: "Parse error" },
@@ -140,10 +158,86 @@ test("standalone Claude MCP server preserves route and JSON-RPC error contracts"
   }
 });
 
-test("observability HTTP API matches Elixir snapshot timeout and unavailable branches", async () => {
+test("standalone Claude MCP server rejects top-level JSON arrays as parse errors", async () => {
+  const workflow = workflowFixture();
+  const server = await startClaudeMcpServer(workflow.settings, { host: "127.0.0.1", port: 0 });
+  const token = issueMcpToken(server.authScope);
+  try {
+    const topLevelArray = await postRawMcp(server.url("/claude-mcp"), "[]", 400, token);
+    assert.deepEqual(topLevelArray, {
+      jsonrpc: "2.0",
+      id: null,
+      error: { code: -32700, message: "Parse error" },
+    });
+  } finally {
+    revokeMcpToken(token);
+    await server.stop();
+  }
+});
+
+test("standalone Claude MCP server emits connectable URLs for wildcard and empty hosts", async () => {
+  const workflow = workflowFixture();
+  for (const host of ["0.0.0.0", ""] as const) {
+    const server = await startClaudeMcpServer(workflow.settings, { host, port: 0 });
+    try {
+      assert.match(server.url("/claude-mcp"), /^http:\/\/127\.0\.0\.1:\d+\/claude-mcp$/);
+    } finally {
+      await server.stop();
+    }
+  }
+});
+
+test("observability HTTP API serves trace routes when issueStore is provided", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "symphony-http-issue-store-"));
+  const traceDir = path.join(root, "traces");
+  await mkdir(traceDir, { recursive: true });
+  const issueStore = new IssueStore(path.join(root, "issues.db"));
+  let server: Awaited<ReturnType<typeof startObservabilityServer>> | null = null;
+
+  try {
+    server = await startObservabilityServer(fakeRuntime("snapshot_unavailable"), {
+      host: "127.0.0.1",
+      port: 0,
+      traceDir,
+      issueStore,
+      staticDir: "/tmp/nonexistent-dashboard-dist",
+    });
+
+    const response = await fetch(server.url("/api/v1/tickets"));
+    assert.equal(response.status, 200);
+    const tickets = await response.json();
+    assert.deepEqual(tickets, { tickets: [] });
+  } finally {
+    await server?.stop();
+    issueStore.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("observability HTTP API returns structured 400 for malformed issue identifiers", async () => {
+  const server = await startObservabilityServer(fakeRuntime("snapshot_unavailable"), {
+    host: "127.0.0.1",
+    port: 0,
+    staticDir: "/tmp/nonexistent-dashboard-dist",
+  });
+  try {
+    const malformed = await getJson(server.url("/api/v1/%E0%A4%A"), 400);
+    assert.deepEqual(malformed, {
+      error: {
+        code: "invalid_path_parameter",
+        message: "Malformed percent encoding in path parameter",
+      },
+    });
+  } finally {
+    await server.stop();
+  }
+});
+
+test("observability HTTP API matches snapshot timeout and unavailable branches", async () => {
   const unavailable = await startObservabilityServer(fakeRuntime("snapshot_unavailable"), {
     host: "127.0.0.1",
     port: 0,
+    staticDir: "/tmp/nonexistent-dashboard-dist",
   });
   try {
     const state = await getJson(unavailable.url("/api/v1/state"));
@@ -163,8 +257,13 @@ test("observability HTTP API matches Elixir snapshot timeout and unavailable bra
       error: { code: "orchestrator_unavailable", message: "Orchestrator is unavailable" },
     });
 
-    const html = await getText(unavailable.url("/"));
-    assert.match(html, /snapshot_unavailable/);
+    const dashboard = await getJson(unavailable.url("/"), 503);
+    assert.deepEqual(dashboard, {
+      error: {
+        code: "dashboard_not_built",
+        message: "Dashboard assets not found. Run: pnpm build",
+      },
+    });
   } finally {
     await unavailable.stop();
   }
@@ -195,18 +294,21 @@ test("Claude MCP endpoint authorizes bearer tokens and executes Linear tools", a
     },
   });
   const server = await startObservabilityServer(runtime, { host: "127.0.0.1", port: 0 });
-  const token = issueMcpToken();
+  const token = issueMcpToken(server.authScope);
   const originalFetch = globalThis.fetch;
-  globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+  const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation((async (
+    url: string | URL | Request,
+    init?: RequestInit,
+  ) => {
     const target = typeof url === "string" ? url : url instanceof URL ? url.toString() : url.url;
-    if (!target.includes("api.linear.app")) return originalFetch(url as any, init);
+    if (!target.includes("api.linear.app")) return originalFetch(url, init);
     const body = JSON.parse(String(init?.body)) as { query: string };
     assert.match(body.query, /viewer/);
     return new Response(JSON.stringify({ data: { viewer: { id: "viewer-1" } } }), {
       status: 200,
       headers: { "content-type": "application/json" },
     });
-  }) as typeof fetch;
+  }) as typeof fetch);
 
   try {
     const initialize = await postMcp(
@@ -279,7 +381,7 @@ test("Claude MCP endpoint authorizes bearer tokens and executes Linear tools", a
     assert.equal(revoked.error.code, "unauthorized");
   } finally {
     revokeMcpToken(token);
-    globalThis.fetch = originalFetch;
+    fetchSpy.mockRestore();
     await server.stop();
   }
 });
@@ -343,13 +445,6 @@ async function postRawMcp(
   assert.equal(response.status, expectedStatus);
   assert.equal(response.headers.get("content-type"), "application/json; charset=utf-8");
   return response.json();
-}
-
-async function getText(url: string, expectedStatus = 200): Promise<string> {
-  const response = await fetch(url);
-  assert.equal(response.status, expectedStatus);
-  assert.equal(response.headers.get("content-type"), "text/html; charset=utf-8");
-  return response.text();
 }
 
 async function getEventStream(url: string): Promise<string> {

@@ -9,12 +9,5 @@
     "src/**/*.ts",
     "src/**/*.tsx"
   ],
-  "references": [
-    {
-      "path": "../domain"
-    },
-    {
-      "path": "../runtime-events"
-    }
-  ]
+  "references": []
 }

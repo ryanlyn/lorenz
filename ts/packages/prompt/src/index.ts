@@ -1,14 +1,18 @@
 import { Liquid } from "liquidjs";
 import type { EnsembleContext, Issue, IssueRef } from "@symphony/domain";
-import { effectivePromptTemplate } from "@symphony/workflow";
+import type { ParsedPromptTemplate } from "@symphony/domain";
+import { effectivePromptTemplate, parsePromptTemplate } from "@symphony/workflow";
+import type { Template } from "liquidjs";
 
 const engine = new Liquid({
   strictVariables: true,
   strictFilters: true,
 });
 
+const parsedTemplateCache = new Map<string, ParsedPromptTemplate>();
+
 export async function buildPrompt(
-  template: string,
+  template: string | ParsedPromptTemplate,
   issue: Issue,
   options: {
     attempt?: number | null;
@@ -17,14 +21,24 @@ export async function buildPrompt(
   } = {},
 ): Promise<string> {
   const ensemble = ensembleContext(options.slotIndex ?? 0, options.ensembleSize ?? 1);
-  return engine.parseAndRender(effectivePromptTemplate(template), {
+  return engine.render(parsedPromptTemplateFor(template) as Template[], {
     issue: issuePromptContext(issue),
     attempt: options.attempt ?? null,
     ensemble,
   }) as Promise<string>;
 }
 
-export function ensembleContext(slotIndex: number, size: number): EnsembleContext {
+function parsedPromptTemplateFor(template: string | ParsedPromptTemplate): ParsedPromptTemplate {
+  if (typeof template !== "string") return template;
+  const effectiveTemplate = effectivePromptTemplate(template);
+  const cached = parsedTemplateCache.get(effectiveTemplate);
+  if (cached) return cached;
+  const parsed = parsePromptTemplate(effectiveTemplate);
+  parsedTemplateCache.set(effectiveTemplate, parsed);
+  return parsed;
+}
+
+function ensembleContext(slotIndex: number, size: number): EnsembleContext {
   return {
     enabled: size > 1,
     slot_index: slotIndex,
@@ -35,7 +49,7 @@ export function ensembleContext(slotIndex: number, size: number): EnsembleContex
 export function continuationPrompt(turnNumber: number, maxTurns: number): string {
   return `Continuation guidance:
 
-- The previous agent turn completed normally, but the Linear issue is still in an active state.
+- The previous agent turn completed normally, but the issue is still in an active state.
 - This is continuation turn #${turnNumber} of ${maxTurns} for the current agent run.
 - Resume from the current workspace and workpad state instead of restarting from scratch.
 - The original task instructions and prior turn context are already present in this thread, so do not restate them before acting.

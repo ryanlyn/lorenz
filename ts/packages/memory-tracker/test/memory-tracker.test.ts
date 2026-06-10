@@ -1,5 +1,6 @@
 import { test } from "vitest";
 import type { Issue } from "@symphony/domain";
+import { ensembleSize } from "@symphony/issue";
 
 import { assert } from "../../../test/assert.js";
 
@@ -9,6 +10,7 @@ function makeIssue(overrides: Partial<Issue> & { id: string; identifier: string 
   return {
     title: "Default title",
     state: "Todo",
+    stateType: "unstarted",
     labels: [],
     blockers: [],
     ...overrides,
@@ -35,8 +37,13 @@ test("stores and retrieves issues by ID", async () => {
 
 test("filters issues by state", async () => {
   const todo = makeIssue({ id: "1", identifier: "MT-1", state: "Todo" });
-  const inProgress = makeIssue({ id: "2", identifier: "MT-2", state: "In Progress" });
-  const done = makeIssue({ id: "3", identifier: "MT-3", state: "Done" });
+  const inProgress = makeIssue({
+    id: "2",
+    identifier: "MT-2",
+    state: "In Progress",
+    stateType: "started",
+  });
+  const done = makeIssue({ id: "3", identifier: "MT-3", state: "Done", stateType: "completed" });
 
   const client = new MemoryTrackerClient([todo, inProgress, done]);
 
@@ -50,7 +57,12 @@ test("filters issues by state", async () => {
 // --- claimIssue equivalent: state filtering transitions ---
 
 test("fetchIssuesByStates matches case-insensitively (claimed state lookup)", async () => {
-  const issue = makeIssue({ id: "1", identifier: "MT-1", state: "In Progress" });
+  const issue = makeIssue({
+    id: "1",
+    identifier: "MT-1",
+    state: "In Progress",
+    stateType: "started",
+  });
 
   const client = new MemoryTrackerClient([issue]);
 
@@ -64,7 +76,12 @@ test("fetchIssuesByStates matches case-insensitively (claimed state lookup)", as
 
 test("fetchCandidateIssues returns all stored issues", async () => {
   const issueA = makeIssue({ id: "a", identifier: "MT-1", state: "Todo" });
-  const issueB = makeIssue({ id: "b", identifier: "MT-2", state: "In Progress" });
+  const issueB = makeIssue({
+    id: "b",
+    identifier: "MT-2",
+    state: "In Progress",
+    stateType: "started",
+  });
 
   const client = new MemoryTrackerClient([issueA, issueB]);
 
@@ -80,8 +97,8 @@ test("fetchCandidateIssues returns all stored issues", async () => {
 test("fetchIssuesByStates finds issues whose state matches any of the provided states", async () => {
   const issues = [
     makeIssue({ id: "1", identifier: "MT-1", state: "Todo" }),
-    makeIssue({ id: "2", identifier: "MT-2", state: "In Progress" }),
-    makeIssue({ id: "3", identifier: "MT-3", state: "Done" }),
+    makeIssue({ id: "2", identifier: "MT-2", state: "In Progress", stateType: "started" }),
+    makeIssue({ id: "3", identifier: "MT-3", state: "Done", stateType: "completed" }),
     makeIssue({ id: "4", identifier: "MT-4", state: "Todo" }),
   ];
 
@@ -118,6 +135,21 @@ test("returned issues are copies, not references to internal state", async () =>
   assert.equal(refetched!.blockers.length, 1);
 });
 
+test("constructor snapshots blocker entries from caller-owned issues", async () => {
+  const original = makeIssue({
+    id: "1",
+    identifier: "MT-1",
+    blockers: [{ id: "b1", state: "Todo" }],
+  });
+
+  const client = new MemoryTrackerClient([original]);
+
+  original.blockers[0]!.state = "Done";
+
+  const [fetched] = await client.fetchIssuesByIds(["1"]);
+  assert.equal(fetched!.blockers[0]!.state, "Todo");
+});
+
 // --- empty results ---
 
 test("returns empty array when no issues match filter", async () => {
@@ -139,7 +171,7 @@ test("constructor normalizes raw record objects into Issue instances", async () 
     id: "raw-1",
     identifier: "MT-99",
     title: "From raw",
-    state: { name: "Backlog" },
+    state: { name: "Backlog", type: "backlog" },
     labels: [{ name: "Feature" }],
   };
 
@@ -150,6 +182,33 @@ test("constructor normalizes raw record objects into Issue instances", async () 
   assert.equal(issue!.identifier, "MT-99");
   assert.equal(issue!.state, "Backlog");
   assert.deepEqual(issue!.labels, ["feature"]);
+});
+
+test("constructor normalizes raw records with top-level state and object labels", async () => {
+  const raw = {
+    id: "raw-2",
+    identifier: "MT-100",
+    title: "Raw with top-level state",
+    state: "Todo",
+    stateType: "unstarted",
+    labels: [{ name: "ensemble:2" }],
+    blockers: [
+      {
+        id: "raw-blocker",
+        identifier: "MT-99",
+        state: { name: "Todo", type: "unstarted" },
+      },
+    ],
+  };
+
+  const client = new MemoryTrackerClient([raw]);
+
+  const [issue] = await client.fetchCandidateIssues();
+  assert.deepEqual(issue!.labels, ["ensemble:2"]);
+  assert.equal(ensembleSize(issue!), 2);
+  assert.deepEqual(issue!.blockers, [
+    { id: "raw-blocker", identifier: "MT-99", state: "Todo", stateType: "unstarted" },
+  ]);
 });
 
 // --- memoryIssuesFromEnv ---

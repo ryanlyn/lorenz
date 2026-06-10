@@ -90,6 +90,74 @@ test("SDK path retries rate limit errors with exponential backoff", async () => 
   assert.deepEqual(delays, [100, 200]);
 });
 
+test("SDK path honors Retry-After headers from rate limit errors", async () => {
+  const delays: number[] = [];
+  let callCount = 0;
+
+  const mockRequest = vi.fn(async () => {
+    callCount += 1;
+    if (callCount === 1) {
+      const error = new Error("Request failed with status code 429");
+      (error as unknown as { status: number }).status = 429;
+      (error as unknown as { response: { status: number; headers: Headers } }).response = {
+        status: 429,
+        headers: new Headers({ "retry-after": "3" }),
+      };
+      throw error;
+    }
+    return { viewer: { id: "viewer-1", name: "Test", email: "test@example.com" } };
+  });
+
+  const settings = parseConfig(
+    {
+      tracker: { api_key: "lin_api_test", project_slug: "mono", active_states: ["Todo"] },
+    },
+    {},
+  );
+  const client = new LinearClient(
+    settings,
+    { graphqlClient: mockGraphqlClient(mockRequest) },
+    {
+      sleep: async (delayMs) => {
+        delays.push(delayMs);
+      },
+      baseDelayMs: 100,
+      maxDelayMs: 5000,
+    },
+  );
+
+  const result = await client.viewer();
+  assert.deepEqual(result, { id: "viewer-1", name: "Test", email: "test@example.com" });
+  assert.equal(callCount, 2);
+  assert.deepEqual(delays, [3000]);
+});
+
+test("SDK path rejects requests that exceed the Linear timeout", async () => {
+  vi.useFakeTimers();
+  let rejection: string | null = null;
+  const mockRequest = vi.fn(async () => new Promise<unknown>(() => {}));
+
+  const settings = parseConfig(
+    {
+      tracker: { api_key: "lin_api_test", project_slug: "mono", active_states: ["Todo"] },
+    },
+    {},
+  );
+  const client = new LinearClient(settings, { graphqlClient: mockGraphqlClient(mockRequest) });
+  void client.viewer().catch((error: unknown) => {
+    rejection = error instanceof Error ? error.message : String(error);
+  });
+
+  await vi.advanceTimersByTimeAsync(30_000);
+  await Promise.resolve();
+
+  try {
+    assert.equal(rejection, "linear api timeout after 30000ms");
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
 test("SDK path stops retrying after max retries exceeded", async () => {
   const delays: number[] = [];
 
@@ -143,6 +211,10 @@ test("SDK path reclassifies GraphQL errors", async () => {
 });
 
 test("SDK path passes non-rate-limit errors through without retrying", async () => {
+  const errors: string[] = [];
+  const errorSpy = vi.spyOn(console, "error").mockImplementation((message) => {
+    errors.push(String(message));
+  });
   const mockRequest = vi.fn(async () => {
     throw new Error("network down");
   });
@@ -159,8 +231,15 @@ test("SDK path passes non-rate-limit errors through without retrying", async () 
     { maxRetries: 2 },
   );
 
-  await assert.rejects(() => client.viewer(), /network down/);
-  assert.equal(mockRequest.mock.calls.length, 1);
+  try {
+    await assert.rejects(() => client.viewer(), /network down/);
+    assert.equal(mockRequest.mock.calls.length, 1);
+    assert.equal(errors.length, 1);
+    assert.match(errors[0] ?? "", /Linear GraphQL request failed: network down/);
+    assert.match(errors[0] ?? "", /operation=SymphonyTsViewer/);
+  } finally {
+    errorSpy.mockRestore();
+  }
 });
 
 test("SDK path fetchCandidateIssues resolves viewer and paginates", async () => {
@@ -214,6 +293,69 @@ test("SDK path fetchCandidateIssues resolves viewer and paginates", async () => 
   assert.equal(issues[0]?.stateType, "unstarted");
   assert.equal(issues[0]?.assignedToWorker, true);
   assert.deepEqual(issues[0]?.labels, ["symphony:backend"]);
+});
+
+test("SDK path retries assignee viewer lookup after transient failure", async () => {
+  let requestIndex = 0;
+  const mockRequest = vi.fn(async (query: unknown) => {
+    requestIndex += 1;
+    if (requestIndex === 1) {
+      throw new Error("network down");
+    }
+    if (String(query).includes("viewer")) {
+      return { viewer: { id: "user-1", name: "Worker", email: "w@x.com" } };
+    }
+    return {
+      issues: {
+        nodes: [
+          {
+            id: "issue-1",
+            identifier: "MT-1",
+            title: "Test issue",
+            description: "Test desc",
+            priority: 2,
+            state: { id: "state-1", name: "Todo", type: "unstarted" },
+            branchName: "mt-1-branch",
+            url: "https://linear.app/test/issue/MT-1",
+            assignee: { id: "user-1" },
+            labels: { nodes: [{ name: "Symphony:Backend" }] },
+            inverseRelations: { nodes: [] },
+            createdAt: "2026-05-04T00:00:00.000Z",
+            updatedAt: "2026-05-04T00:01:00.000Z",
+          },
+        ],
+        pageInfo: { hasNextPage: false, endCursor: null },
+      },
+    };
+  });
+
+  const settings = parseConfig(
+    {
+      tracker: {
+        api_key: "lin_api_test",
+        project_slug: "mono",
+        active_states: ["Todo"],
+        assignee: "me",
+      },
+    },
+    {},
+  );
+  const client = new LinearClient(
+    settings,
+    { graphqlClient: mockGraphqlClient(mockRequest) },
+    { maxRetries: 0 },
+  );
+
+  await assert.rejects(() => client.fetchCandidateIssues(), /network down/);
+
+  const issues = await client.fetchCandidateIssues();
+
+  assert.equal(issues.length, 1);
+  assert.equal(issues[0]?.assignedToWorker, true);
+  const viewerQueries = mockRequest.mock.calls.filter(([query]) =>
+    String(query).includes("viewer"),
+  );
+  assert.equal(viewerQueries.length, 2);
 });
 
 test("SDK path createIssue sends mutation and normalizes response", async () => {

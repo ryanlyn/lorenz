@@ -27,6 +27,9 @@
     },
     {
       "path": "../prompt"
+    },
+    {
+      "path": "../resume-state"
     }
   ]
 }

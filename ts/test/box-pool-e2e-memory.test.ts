@@ -19,12 +19,12 @@ import { tempDir, writeExecutable } from "./helpers.js";
 // Always-on end-to-end demo (T17): the REAL `runDaemon` wiring with a
 // `tracker.kind=memory` client and the REAL `@symphony/worker-box-pool`
 // (provider=fake, max=1, warm=1). No fakes are injected into the runtime - the
-// pool, orchestrator, runner, and codex app-server executor are all the real
-// production code paths. The pool yields `fake://box-<id>` as the workerHost;
-// the runner then drives the codex executor over `ssh fake://box-<id> ...`, so
-// a PATH-shimmed `ssh` evaluates the remote workspace + executor commands
-// locally (HOME pinned to a sandbox), making the demo hermetic while exercising
-// the same code an SSH-addressable box would.
+// pool, orchestrator, runner, and ACP executor are all the real production
+// code paths. The pool yields `fake://box-<id>` as the workerHost; the runner
+// then drives the ACP bridge (and its per-run MCP reverse tunnel) over
+// `ssh fake://box-<id> ...`, so a PATH-shimmed `ssh` evaluates the remote
+// workspace + bridge commands locally (HOME pinned to a sandbox), making the
+// demo hermetic while exercising the same code an SSH-addressable box would.
 // ---------------------------------------------------------------------------
 
 const MEMORY_ENV = "SYMPHONY_MEMORY_TRACKER_ISSUES_JSON";
@@ -170,12 +170,13 @@ async function setupHarness(
 
   // PATH-shimmed `ssh`: the fake box host (`fake://box-<id>`) is not a real SSH
   // target, so the shim evaluates the runner's remote commands locally with
-  // HOME pinned to a sandbox. This is the only seam the demo replaces; the pool,
-  // orchestrator, runner, and codex executor are all real.
+  // HOME pinned to a sandbox (and keeps reverse-tunnel `-N` children alive).
+  // This is the only seam the demo replaces; the pool, orchestrator, runner,
+  // and ACP executor are all real.
   await installEvalSsh(root, remoteHome);
 
-  const fakeCodex = path.join(root, "fake-codex.js");
-  await writeExecutable(fakeCodex, FAKE_CODEX_APP_SERVER);
+  const fakeBridge = path.join(root, "fake-acp.mjs");
+  await writeExecutable(fakeBridge, fakeAcpBridgeSource());
 
   const settings = parseConfig({
     tracker: {
@@ -184,6 +185,8 @@ async function setupHarness(
       terminal_states: ["Done"],
     },
     polling: { interval_ms: 5 },
+    // Ephemeral local MCP server port: the per-run endpoint binds it on demand.
+    server: { port: 0 },
     // `~/workspaces` resolves under the eval-ssh sandbox HOME for the remote path.
     workspace: { root: "~/workspaces" },
     worker: {
@@ -202,7 +205,13 @@ async function setupHarness(
       },
     },
     hooks: { after_create: "git init -q", timeout_ms: 10_000 },
-    codex: { command: `${fakeCodex} app-server`, turn_timeout_ms: 5_000, stall_timeout_ms: 0 },
+    agents: {
+      codex: {
+        bridge_command: `${process.execPath} ${fakeBridge}`,
+        turn_timeout_ms: 5_000,
+        stall_timeout_ms: 0,
+      },
+    },
     agent: { max_turns: 1 },
     logging: { log_file: path.join(root, "symphony.log") },
   });
@@ -269,8 +278,10 @@ function eligibleIssue(id: string, identifier: string): Record<string, unknown> 
 }
 
 // Mirrors workspace-prompt-resume.test.ts's eval-ssh transport: a `bash`-only
-// shim that answers the runner's `$HOME` probe with the sandbox home and
-// otherwise evaluates the last argv (the `bash -lc '<cmd>'` payload) locally.
+// shim that keeps reverse-tunnel (`-N`) children alive until killed, answers
+// the runner's `$HOME` probe with the sandbox home, reports the tunnel's
+// remote-port readiness probe as ready, and otherwise evaluates the last argv
+// (the `bash -lc '<cmd>'` payload) locally.
 async function installEvalSsh(root: string, remoteHome: string): Promise<string> {
   const bin = path.join(root, "bin");
   await fs.mkdir(bin, { recursive: true });
@@ -278,12 +289,21 @@ async function installEvalSsh(root: string, remoteHome: string): Promise<string>
   await writeExecutable(
     path.join(bin, "ssh"),
     `#!/bin/sh
-for arg in "$@"; do last_arg="$arg"; done
+is_tunnel=0
+for arg in "$@"; do
+  if [ "$arg" = "-N" ]; then is_tunnel=1; fi
+  last_arg="$arg"
+done
+if [ "$is_tunnel" = "1" ]; then
+  trap 'exit 0' TERM INT
+  while :; do sleep 1; done
+fi
 case "$last_arg" in
   *'printf "%s\\n" "$HOME"'*)
     printf '%s\\n' '${canonicalRemoteHome}'
     exit 0
     ;;
+  *'/dev/tcp/127.0.0.1/'*) exit 0 ;;
 esac
 export HOME='${canonicalRemoteHome}'
 eval "$last_arg"
@@ -293,21 +313,28 @@ eval "$last_arg"
   return canonicalRemoteHome;
 }
 
-// A minimal codex app-server: completes a single turn so the real runner drives
-// one full session over the eval-ssh shim. Identical protocol to the fixtures in
+// A minimal ACP bridge: completes a single turn so the real runner drives one
+// full session over the eval-ssh shim. Identical protocol to the fixtures in
 // workspace-prompt-resume.test.ts.
-const FAKE_CODEX_APP_SERVER = `#!/usr/bin/env node
-const readline = require("readline");
-const rl = readline.createInterface({ input: process.stdin });
-rl.on("line", (line) => {
-  const msg = JSON.parse(line);
-  if (msg.id && msg.method === "initialize") console.log(JSON.stringify({ id: msg.id, result: {} }));
-  if (msg.id && (msg.method === "thread/start" || msg.method === "thread/resume")) {
-    console.log(JSON.stringify({ id: msg.id, result: { thread: { id: "thread-box-e2e" } } }));
+function fakeAcpBridgeSource(): string {
+  const acpModule = new URL("../node_modules/@agentclientprotocol/sdk/dist/acp.js", import.meta.url)
+    .href;
+  return `#!/usr/bin/env node
+import { Readable, Writable } from "node:stream";
+import * as acp from ${JSON.stringify(acpModule)};
+class FakeAgent {
+  constructor(connection) { this.connection = connection; }
+  async initialize() { return { protocolVersion: acp.PROTOCOL_VERSION, agentCapabilities: { sessionCapabilities: { close: {} } } }; }
+  async authenticate() { return {}; }
+  async newSession() { return { sessionId: "box-e2e-session" }; }
+  async prompt() {
+    await this.connection.sessionUpdate({ sessionId: "box-e2e-session", update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "done" } } });
+    return { stopReason: "end_turn", usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 } };
   }
-  if (msg.id && msg.method === "turn/start") {
-    console.log(JSON.stringify({ id: msg.id, result: { turn: { id: "turn-box-e2e" } } }));
-    console.log(JSON.stringify({ method: "turn/completed" }));
-  }
-});
+  async cancel() {}
+  async closeSession() { return {}; }
+}
+const stream = acp.ndJsonStream(Writable.toWeb(process.stdout), Readable.toWeb(process.stdin));
+new acp.AgentSideConnection((connection) => new FakeAgent(connection), stream);
 `;
+}

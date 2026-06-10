@@ -2,11 +2,16 @@ import { LinearGraphQLClient } from "@linear/sdk";
 export { LinearGraphQLClient } from "@linear/sdk";
 import { normalizeIssue } from "@symphony/issue";
 import {
-  ISSUE_STATE_TYPES,
+  errorMessage,
+  isRecord,
+  normalizeStateType,
   type Issue,
   type IssueStateType,
   type Settings,
 } from "@symphony/domain";
+
+const LINEAR_REQUEST_TIMEOUT_MS = 30_000;
+const MAX_ERROR_BODY_LOG_BYTES = 1000;
 
 const issueFields = `
   id
@@ -18,7 +23,10 @@ const issueFields = `
   branchName
   url
   assignee { id }
-  labels { nodes { name } }
+  labels(first: 50) {
+    nodes { name }
+    pageInfo { hasNextPage endCursor }
+  }
   inverseRelations(first: 50) {
     nodes {
       type
@@ -28,12 +36,13 @@ const issueFields = `
         state { name type }
       }
     }
+    pageInfo { hasNextPage endCursor }
   }
   createdAt
   updatedAt
 `;
 
-export interface LinearViewer {
+interface LinearViewer {
   id: string;
   name?: string;
   email?: string;
@@ -59,10 +68,16 @@ export interface LinearProject {
   teams: LinearTeam[];
 }
 
-export interface LinearRetryOptions {
+interface LinearPageInfo {
+  hasNextPage: boolean;
+  endCursor?: string | null | undefined;
+}
+
+interface LinearRetryOptions {
   maxRetries?: number | undefined;
   baseDelayMs?: number | undefined;
   maxDelayMs?: number | undefined;
+  requestTimeoutMs?: number | undefined;
   sleep?: ((delayMs: number) => Promise<void>) | undefined;
   now?: (() => Date) | undefined;
 }
@@ -71,21 +86,30 @@ interface ResolvedLinearRetryOptions {
   maxRetries: number;
   baseDelayMs: number;
   maxDelayMs: number;
+  requestTimeoutMs: number;
   sleep: (delayMs: number) => Promise<void>;
   now: () => Date;
+}
+
+export interface LinearClientLogger {
+  warn(message: string): void;
+  error(message: string): void;
 }
 
 export interface LinearClientDeps {
   fetchImpl?: typeof fetch | undefined;
   graphqlClient?: LinearGraphQLClient | undefined;
+  logger?: LinearClientLogger | undefined;
 }
 
 export class LinearClient {
   private readonly retryOptions: ResolvedLinearRetryOptions;
   private resolvedAssignee?: Promise<string | undefined> | undefined;
+  private resolvedProjectSlugs?: Promise<string[]> | undefined;
   private readonly gqlClient: LinearGraphQLClient | null;
   private readonly settings: Settings;
   private readonly fetchImpl: typeof fetch | undefined;
+  private readonly logger: LinearClientLogger;
 
   constructor(
     settings: Settings,
@@ -97,12 +121,17 @@ export class LinearClient {
       maxRetries: retryOptions.maxRetries ?? 4,
       baseDelayMs: retryOptions.baseDelayMs ?? 1_000,
       maxDelayMs: retryOptions.maxDelayMs ?? 30_000,
+      requestTimeoutMs: retryOptions.requestTimeoutMs ?? LINEAR_REQUEST_TIMEOUT_MS,
       sleep: retryOptions.sleep ?? defaultSleep,
       now: retryOptions.now ?? (() => new Date()),
     };
 
     const deps = resolveDeps(fetchImplOrDeps);
     this.fetchImpl = deps.fetchImpl;
+    this.logger = deps.logger ?? {
+      warn: (message) => console.warn(message),
+      error: (message) => console.error(message),
+    };
 
     if (deps.graphqlClient) {
       this.gqlClient = deps.graphqlClient;
@@ -130,33 +159,53 @@ export class LinearClient {
   ): Promise<T> {
     for (let retryCount = 0; ; retryCount += 1) {
       try {
-        return await this.gqlClient!.request<T, Record<string, unknown>>(query, variables);
+        return await withTimeout(
+          this.gqlClient!.request<T, Record<string, unknown>>(query, variables),
+          this.retryOptions.requestTimeoutMs,
+        );
       } catch (error: unknown) {
         if (isRateLimitError(error) && retryCount < this.retryOptions.maxRetries) {
           const delayMs = retryDelayFromError(error, this.retryOptions, retryCount);
+          this.logRateLimitRetry(query, retryCount, delayMs, error);
           await this.retryOptions.sleep(delayMs);
           continue;
         }
-        throw reclassifyError(error);
+        const classified = reclassifyError(error);
+        this.logRequestError(query, classified);
+        throw classified;
       }
     }
   }
 
   private async graphqlWithFetch<T>(query: string, variables: Record<string, unknown>): Promise<T> {
     const response = await this.fetchWithRateLimitRetry(query, variables);
+    const errorBodyText = !response.ok ? await safeResponseText(response) : null;
     let body: unknown;
     try {
       body = await response.json();
     } catch (error) {
-      if (!response.ok) throw new Error(`linear api status ${response.status}`, { cause: error });
+      if (!response.ok) {
+        this.logStatusError(query, response.status, errorBodyText ?? errorMessage(error));
+        throw new Error(`linear api status ${response.status}`, { cause: error });
+      }
       throw new Error(`linear_invalid_json: ${errorMessage(error)}`, { cause: error });
     }
-    if (response.status === 429) throw new Error("linear api status 429");
+    if (response.status === 429) {
+      this.logStatusError(query, response.status, body);
+      throw new Error("linear api status 429");
+    }
     if (isRecord(body) && Array.isArray(body.errors) && body.errors.length > 0) {
+      this.logStatusError(query, response.status, body);
       throw new Error(`linear_graphql_errors: ${JSON.stringify(body.errors)}`);
     }
-    if (!response.ok) throw new Error(`linear api status ${response.status}`);
-    if (!isRecord(body) || !isRecord(body.data)) throw new Error("linear_unknown_payload");
+    if (!response.ok) {
+      this.logStatusError(query, response.status, body);
+      throw new Error(`linear api status ${response.status}`);
+    }
+    if (!isRecord(body) || !isRecord(body.data)) {
+      this.logStatusError(query, response.status, body);
+      throw new Error("linear_unknown_payload");
+    }
     return body.data as T;
   }
 
@@ -165,17 +214,25 @@ export class LinearClient {
     variables: Record<string, unknown>,
   ): Promise<Response> {
     for (let retryCount = 0; ; retryCount += 1) {
-      const response = await this.fetchImpl!(this.settings.tracker.endpoint, {
-        method: "POST",
-        signal: AbortSignal.timeout(30_000),
-        headers: {
-          "content-type": "application/json",
-          authorization: this.settings.tracker.apiKey ?? "",
-        },
-        body: JSON.stringify({ query, variables }),
-      });
+      let response: Response;
+      try {
+        response = await this.fetchImpl!(this.settings.tracker.endpoint, {
+          method: "POST",
+          signal: AbortSignal.timeout(this.retryOptions.requestTimeoutMs),
+          headers: {
+            "content-type": "application/json",
+            authorization: this.settings.tracker.apiKey ?? "",
+          },
+          body: JSON.stringify({ query, variables }),
+        });
+      } catch (error: unknown) {
+        this.logRequestError(query, error);
+        throw error;
+      }
       if (response.status !== 429 || retryCount >= this.retryOptions.maxRetries) return response;
-      await this.retryOptions.sleep(retryDelayMs(response.headers, this.retryOptions, retryCount));
+      const delayMs = retryDelayMs(response.headers, this.retryOptions, retryCount);
+      this.logRateLimitRetry(query, retryCount, delayMs, await safeResponseText(response));
+      await this.retryOptions.sleep(delayMs);
     }
   }
 
@@ -201,8 +258,12 @@ export class LinearClient {
                 id
                 key
                 name
-                states(first: 50) { nodes { id name type } }
+                states(first: 50) {
+                  nodes { id name type }
+                  pageInfo { hasNextPage endCursor }
+                }
               }
+              pageInfo { hasNextPage endCursor }
             }
           }
         }
@@ -219,9 +280,13 @@ export class LinearClient {
   }
 
   async fetchIssuesByStates(stateNames: string[]): Promise<Issue[]> {
+    const normalizedStateNames = normalizeStateNames(stateNames);
+    if (normalizedStateNames.length === 0) return [];
+
     let after: string | null = null;
     const issues: Issue[] = [];
     const assignee = await this.assigneeFilterValue();
+    const projectSlugs = await this.resolveProjectSlugs();
 
     for (;;) {
       const data: {
@@ -230,23 +295,21 @@ export class LinearClient {
           pageInfo: { hasNextPage: boolean; endCursor?: string | null };
         };
       } = await this.graphql(
-        `query SymphonyTsPoll($projectSlug: String!, $stateNames: [String!]!, $first: Int!, $after: String) {
-          issues(filter: {project: {slugId: {eq: $projectSlug}}, state: {name: {in: $stateNames}}}, first: $first, after: $after) {
+        `query SymphonyTsPoll($projectSlugs: [String!]!, $stateNames: [String!]!, $first: Int!, $after: String) {
+          issues(filter: {project: {slugId: {in: $projectSlugs}}, state: {name: {in: $stateNames}}}, first: $first, after: $after) {
             nodes { ${issueFields} }
             pageInfo { hasNextPage endCursor }
           }
         }`,
         {
-          projectSlug: this.requiredProjectSlug(),
-          stateNames,
+          projectSlugs,
+          stateNames: normalizedStateNames,
           first: 50,
           after,
         },
       );
 
-      issues.push(
-        ...data.issues.nodes.map((issue) => normalizeIssue(linearIssuePayload(issue), assignee)),
-      );
+      appendNormalizedIssues(issues, data.issues.nodes, assignee);
       if (!data.issues.pageInfo.hasNextPage) return issues;
       if (!data.issues.pageInfo.endCursor) throw new Error("linear_missing_end_cursor");
       after = data.issues.pageInfo.endCursor;
@@ -272,9 +335,7 @@ export class LinearClient {
         }`,
         { ids: batchIds, first: batchIds.length },
       );
-      issues.push(
-        ...data.issues.nodes.map((issue) => normalizeIssue(linearIssuePayload(issue), assignee)),
-      );
+      appendNormalizedIssues(issues, data.issues.nodes, assignee);
     }
 
     return issues.sort((left, right) => {
@@ -291,6 +352,7 @@ export class LinearClient {
     title: string;
     description: string;
     assigneeId?: string;
+    priority?: number;
   }): Promise<Issue> {
     const data = await this.graphql<{
       issueCreate: { success: boolean; issue: Record<string, unknown> | null };
@@ -309,6 +371,7 @@ export class LinearClient {
           title: input.title,
           description: input.description,
           assigneeId: input.assigneeId,
+          ...(input.priority !== undefined ? { priority: input.priority } : {}),
         },
       },
     );
@@ -354,16 +417,75 @@ export class LinearClient {
     if (!data.issueArchive.success) throw new Error("linear issueArchive failed");
   }
 
+  async resolveProjectSlugs(): Promise<string[]> {
+    if (this.resolvedProjectSlugs) return this.resolvedProjectSlugs;
+
+    const resolution = this.doResolveProjectSlugs();
+    this.resolvedProjectSlugs = resolution;
+    try {
+      return await resolution;
+    } catch (error: unknown) {
+      if (this.resolvedProjectSlugs === resolution) this.resolvedProjectSlugs = undefined;
+      throw error;
+    }
+  }
+
+  private async doResolveProjectSlugs(): Promise<string[]> {
+    const { projectSlug, projectSlugs, projectLabels } = this.settings.tracker;
+    if (projectSlugs && projectSlugs.length > 0) return projectSlugs;
+    if (projectLabels && projectLabels.length > 0)
+      return this.resolveProjectSlugsByLabels(projectLabels);
+    if (projectSlug) return [projectSlug];
+    throw new Error(
+      "tracker.project_slug, tracker.project_slugs, or tracker.project_labels is required",
+    );
+  }
+
+  private async resolveProjectSlugsByLabels(labels: string[]): Promise<string[]> {
+    let after: string | null = null;
+    const slugs: string[] = [];
+    for (;;) {
+      const data: {
+        projects: {
+          nodes: Array<{ slugId: string }>;
+          pageInfo?: LinearPageInfo | undefined;
+        };
+      } = await this.graphql(
+        `query SymphonyTsProjectsByLabels($labels: [String!]!, $first: Int!, $after: String) {
+          projects(filter: {labels: {name: {in: $labels}}}, first: $first, after: $after) {
+            nodes { slugId }
+            pageInfo { hasNextPage endCursor }
+          }
+        }`,
+        { labels, first: 100, after },
+      );
+      slugs.push(...data.projects.nodes.map((p) => p.slugId));
+      if (!data.projects.pageInfo?.hasNextPage) break;
+      if (!data.projects.pageInfo.endCursor)
+        throw new Error("linear_missing_end_cursor: projectsByLabels");
+      after = data.projects.pageInfo.endCursor;
+    }
+    if (slugs.length === 0)
+      throw new Error(`no linear projects found for labels: ${labels.join(", ")}`);
+    return slugs;
+  }
+
   private requiredProjectSlug(): string {
     if (!this.settings.tracker.projectSlug) throw new Error("tracker.project_slug is required");
     return this.settings.tracker.projectSlug;
   }
 
   private async assigneeFilterValue(): Promise<string | undefined> {
-    if (!this.resolvedAssignee) {
-      this.resolvedAssignee = this.resolveAssigneeFilterValue();
+    if (this.resolvedAssignee) return this.resolvedAssignee;
+
+    const resolution = this.resolveAssigneeFilterValue();
+    this.resolvedAssignee = resolution;
+    try {
+      return await resolution;
+    } catch (error: unknown) {
+      if (this.resolvedAssignee === resolution) this.resolvedAssignee = undefined;
+      throw error;
     }
-    return this.resolvedAssignee;
   }
 
   private async resolveAssigneeFilterValue(): Promise<string | undefined> {
@@ -372,18 +494,44 @@ export class LinearClient {
     if (assignee.trim().toLowerCase() !== "me") return assignee;
     return (await this.viewer()).id;
   }
+
+  private logRateLimitRetry(
+    query: string,
+    retryCount: number,
+    delayMs: number,
+    body: unknown,
+  ): void {
+    this.logger.warn(
+      `Linear GraphQL request rate limited status=429 retry=${retryCount + 1}/${this.retryOptions.maxRetries} delay_ms=${delayMs}${linearErrorContext(query, body)}`,
+    );
+  }
+
+  private logStatusError(query: string, status: number, body: unknown): void {
+    this.logger.error(
+      `Linear GraphQL request failed status=${status}${linearErrorContext(query, body)}`,
+    );
+  }
+
+  private logRequestError(query: string, error: unknown): void {
+    this.logger.error(
+      `Linear GraphQL request failed: ${errorMessage(error)}${linearErrorContext(query)}`,
+    );
+  }
 }
 
 function resolveDeps(fetchImplOrDeps?: typeof fetch | LinearClientDeps): {
   fetchImpl: typeof fetch | undefined;
   graphqlClient: LinearGraphQLClient | undefined;
+  logger: LinearClientLogger | undefined;
 } {
-  if (!fetchImplOrDeps) return { fetchImpl: undefined, graphqlClient: undefined };
+  if (!fetchImplOrDeps)
+    return { fetchImpl: undefined, graphqlClient: undefined, logger: undefined };
   if (typeof fetchImplOrDeps === "function")
-    return { fetchImpl: fetchImplOrDeps, graphqlClient: undefined };
+    return { fetchImpl: fetchImplOrDeps, graphqlClient: undefined, logger: undefined };
   return {
     fetchImpl: fetchImplOrDeps.fetchImpl ?? undefined,
     graphqlClient: fetchImplOrDeps.graphqlClient ?? undefined,
+    logger: fetchImplOrDeps.logger ?? undefined,
   };
 }
 
@@ -394,22 +542,47 @@ function linearIssuePayload(issue: Record<string, unknown>): Record<string, unkn
     state_type: isRecord(issue.state) ? issue.state.type : null,
     branch_name: issue.branchName,
     assignee_id: isRecord(issue.assignee) ? issue.assignee.id : null,
-    labels: isConnection(issue.labels) ? issue.labels.nodes : [],
-    relations: isConnection(issue.inverseRelations) ? issue.inverseRelations.nodes : [],
+    labels: nodesFromConnection(issue.labels, "issue.labels"),
+    relations: nodesFromConnection(issue.inverseRelations, "issue.inverseRelations"),
     created_at: issue.createdAt,
     updated_at: issue.updatedAt,
   };
 }
 
+function appendNormalizedIssues(
+  target: Issue[],
+  nodes: unknown[],
+  assignee: string | undefined,
+): void {
+  for (const issue of nodes) {
+    const normalized = normalizeLinearIssue(issue, assignee);
+    if (normalized) target.push(normalized);
+  }
+}
+
+function normalizeLinearIssue(issue: unknown, assignee: string | undefined): Issue | null {
+  if (!isRecord(issue)) return null;
+  try {
+    return normalizeIssue(linearIssuePayload(issue), assignee);
+  } catch (error) {
+    if (isLinearConnectionTruncatedError(error)) throw error;
+    return null;
+  }
+}
+
+function normalizeStateNames(stateNames: unknown[]): string[] {
+  return [...new Set(stateNames.map((stateName) => String(stateName)))];
+}
+
 function parseProject(project: Record<string, unknown>): LinearProject {
-  const teams = isConnection(project.teams) ? project.teams.nodes : [];
+  const teams = nodesFromConnection(project.teams, "project.teams");
   return {
     id: stringField(project, "id"),
     name: stringField(project, "name"),
     slugId: stringField(project, "slugId"),
     teams: teams.map((team) => {
       const teamRecord = asRecord(team);
-      const states = isConnection(teamRecord.states) ? teamRecord.states.nodes : [];
+      const states = nodesFromConnection(teamRecord.states, "project.team.states");
       return {
         id: stringField(teamRecord, "id"),
         key: stringField(teamRecord, "key"),
@@ -441,11 +614,14 @@ function isRateLimitError(error: unknown): boolean {
 }
 
 function retryDelayFromError(
-  _error: unknown,
+  error: unknown,
   options: ResolvedLinearRetryOptions,
   retryCount: number,
 ): number {
-  return exponentialRetryDelayMs(options, retryCount);
+  return (
+    parseRetryAfterMs(retryAfterHeaderValueFromError(error), options.now) ??
+    exponentialRetryDelayMs(options, retryCount)
+  );
 }
 
 function reclassifyError(error: unknown): Error {
@@ -460,7 +636,26 @@ function reclassifyError(error: unknown): Error {
   return new Error(String(error));
 }
 
-function isConnection(value: unknown): value is { nodes: unknown[] } {
+class LinearConnectionTruncatedError extends Error {
+  constructor(connectionName: string) {
+    super(`linear_truncated_connection: ${connectionName}`);
+    this.name = "LinearConnectionTruncatedError";
+  }
+}
+
+function isLinearConnectionTruncatedError(error: unknown): error is LinearConnectionTruncatedError {
+  return error instanceof LinearConnectionTruncatedError;
+}
+
+function nodesFromConnection(value: unknown, connectionName: string): unknown[] {
+  if (!isConnection(value)) return [];
+  if (isRecord(value.pageInfo) && value.pageInfo.hasNextPage === true) {
+    throw new LinearConnectionTruncatedError(connectionName);
+  }
+  return value.nodes;
+}
+
+function isConnection(value: unknown): value is { nodes: unknown[]; pageInfo?: unknown } {
   return isRecord(value) && Array.isArray(value.nodes);
 }
 
@@ -475,24 +670,69 @@ function asRecord(value: unknown): Record<string, unknown> {
   return value;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+function linearErrorContext(query: string, body?: unknown): string {
+  const parts: string[] = [];
+  const operation = operationName(query);
+  if (operation) parts.push(`operation=${operation}`);
+  if (body !== undefined) parts.push(`body=${summarizeErrorBody(body)}`);
+  return parts.length === 0 ? "" : ` ${parts.join(" ")}`;
 }
 
-function normalizeStateType(value: string): IssueStateType | null {
-  const normalized = value.trim().toLowerCase();
-  return isOneOf(normalized, ISSUE_STATE_TYPES) ? normalized : null;
+function operationName(query: string): string | null {
+  return /\b(?:query|mutation)\s+([A-Za-z_][A-Za-z0-9_]*)/.exec(query)?.[1] ?? null;
 }
 
-function isOneOf<const Values extends readonly string[]>(
-  value: string,
-  values: Values,
-): value is Values[number] {
-  return (values as readonly string[]).includes(value);
+function summarizeErrorBody(body: unknown): string {
+  const text = typeof body === "string" ? body : (JSON.stringify(body) ?? String(body));
+  const compact = text.replace(/\s+/g, " ").trim();
+  if (compact.length <= MAX_ERROR_BODY_LOG_BYTES) return compact;
+  return `${compact.slice(0, MAX_ERROR_BODY_LOG_BYTES)}...<truncated>`;
 }
 
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+function retryAfterHeaderValueFromError(error: unknown): string | null {
+  if (!isRecord(error)) return null;
+  return headerValue(error.headers, "retry-after") ?? headerValue(error.response, "retry-after");
+}
+
+function headerValue(source: unknown, headerName: string): string | null {
+  if (source instanceof Headers) return source.get(headerName);
+  if (!isRecord(source)) return null;
+  if (source.headers !== undefined) return headerValue(source.headers, headerName);
+  for (const [key, value] of Object.entries(source)) {
+    if (key.toLowerCase() !== headerName) continue;
+    if (Array.isArray(value)) return headerString(value[0]);
+    return headerString(value);
+  }
+  return null;
+}
+
+function headerString(value: unknown): string | null {
+  return typeof value === "string" ? value : null;
+}
+
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_resolve, reject) => {
+        timeout = setTimeout(
+          () => reject(new Error(`linear api timeout after ${timeoutMs}ms`)),
+          timeoutMs,
+        );
+      }),
+    ]);
+  } finally {
+    if (timeout !== undefined) clearTimeout(timeout);
+  }
+}
+
+async function safeResponseText(response: Response): Promise<string> {
+  try {
+    return await response.clone().text();
+  } catch (error) {
+    return errorMessage(error);
+  }
 }
 
 function retryDelayMs(
@@ -509,6 +749,7 @@ function retryDelayMs(
 function parseRetryAfterMs(retryAfter: string | null, now: () => Date): number | null {
   if (retryAfter === null) return null;
   const trimmed = retryAfter.trim();
+  if (trimmed === "") return null;
   const seconds = Number(trimmed);
   if (Number.isInteger(seconds) && seconds >= 0) return seconds * 1000;
   const dateMs = Date.parse(trimmed);

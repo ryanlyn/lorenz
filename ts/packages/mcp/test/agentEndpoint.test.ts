@@ -9,12 +9,16 @@ import type { Settings } from "@symphony/domain";
 
 import { assert } from "../../../test/assert.js";
 import { acquireAgentMcpEndpointForRun } from "../src/agentEndpoint.js";
-import { validMcpToken } from "../src/auth.js";
+import { mcpAuthScopeForSettings, validMcpToken } from "../src/auth.js";
 
 // Avoid spawning a real `ssh -N` reverse tunnel; the per-run tunnel allocation
 // logic in WorkerHostPool is exercised against a fake child process.
 vi.mock("@symphony/ssh", () => ({
   startReverseTunnel: vi.fn(),
+  // The pool awaits remote-port readiness before returning a lease; the fake
+  // resolves immediately so these tests exercise the lease lifecycle, not the
+  // readiness probe.
+  waitForRemoteTcpPort: vi.fn(async () => {}),
 }));
 
 const mockStartReverseTunnel = vi.mocked(startReverseTunnel);
@@ -25,7 +29,12 @@ interface FakeProcess extends EventEmitter {
 
 function makeFakeProcess(): ChildProcessWithoutNullStreams {
   const emitter = new EventEmitter() as FakeProcess;
-  emitter.kill = vi.fn();
+  // Port recycling is deferred until the ssh child actually ends, so the fake
+  // child ends (emits close) as soon as it is killed.
+  emitter.kill = vi.fn(() => {
+    emitter.emit("close", null, "SIGTERM");
+    return true;
+  });
   (emitter as unknown as Record<string, unknown>).pid = 12345;
   return emitter as unknown as ChildProcessWithoutNullStreams;
 }
@@ -58,7 +67,18 @@ async function mcpServerReachable(host: string, port: number): Promise<boolean> 
 }
 
 function settingsWithPort(port: number): Settings {
-  return { server: { host: "127.0.0.1", port } } as unknown as Settings;
+  // The auth scope is keyed by the tracker identity, so the stub must carry a
+  // tracker for mcpAuthScopeForSettings.
+  return {
+    server: { host: "127.0.0.1", port },
+    tracker: { kind: "memory", activeStates: ["Todo"], terminalStates: ["Done"] },
+  } as unknown as Settings;
+}
+
+// Tokens issued for a configured server port are scoped to the settings
+// identity; validity checks must use the same scope.
+function tokenScope(settings: Settings, port: number): string {
+  return mcpAuthScopeForSettings(settings, "127.0.0.1", port);
 }
 
 beforeEach(() => {
@@ -78,7 +98,7 @@ test("acquireAgentMcpEndpointForRun.release() revokes the token, drops the local
   const lease = await acquireAgentMcpEndpointForRun(settings, "worker-1", "run-A");
 
   // Sub-resource (1): an auth token was issued and is currently valid.
-  assert.equal(validMcpToken(lease.token), true);
+  assert.equal(validMcpToken(lease.token, tokenScope(settings, port)), true);
   // Sub-resource (3): a per-run reverse tunnel was opened for this run.
   assert.match(lease.url, new RegExp(`^http://127\\.0\\.0\\.1:\\d+/claude-mcp$`));
   assert.equal(mockStartReverseTunnel.mock.calls.length, 1);
@@ -88,7 +108,7 @@ test("acquireAgentMcpEndpointForRun.release() revokes the token, drops the local
   await lease.release();
 
   // (1) token revoked.
-  assert.equal(validMcpToken(lease.token), false);
+  assert.equal(validMcpToken(lease.token, tokenScope(settings, port)), false);
   // (3) per-run tunnel closed via closeForRun(workerHost, runKey).
   assert.deepEqual(closeForRun.mock.calls[0], ["worker-1", "run-A"]);
   // (2) local-server ref dropped to zero -> server stopped (no longer reachable).
@@ -124,7 +144,7 @@ test("acquireAgentMcpEndpointForRun releases the local-server ref AND revokes th
   // failed attempt left no lingering refcount that would keep the server alive.
   mockStartReverseTunnel.mockImplementation(() => makeFakeProcess());
   const lease = await acquireAgentMcpEndpointForRun(settings, "worker-1", "run-ok");
-  assert.equal(validMcpToken(lease.token), true);
+  assert.equal(validMcpToken(lease.token, tokenScope(settings, port)), true);
   assert.equal(await mcpServerReachable("127.0.0.1", port), true);
   await lease.release();
   // Local server stopped again -> the earlier failed acquire did NOT leave a

@@ -18,7 +18,7 @@
 
 #### Test Plan
 
-- [ ] `make -C elixir all`
+- [ ] `cd ts && mise check`
 - [ ] <!-- Additional targeted checks (list below) -->
 
 #### Proof of Work

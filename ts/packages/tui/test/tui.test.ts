@@ -9,7 +9,7 @@ import type { RuntimeSnapshot } from "@symphony/runtime";
 import { assert } from "../../../test/assert.js";
 
 import {
-  formatElixirStyleDashboard,
+  formatDashboard,
   humanizeAgentMessage,
   humanizeCodexMessage,
   rollingThroughput,
@@ -17,7 +17,7 @@ import {
   updateTokenSamples,
 } from "@symphony/tui";
 
-test("Ink dashboard renders Elixir-style operational sections", () => {
+test("Ink dashboard renders operational sections", () => {
   const { lastFrame } = render(
     React.createElement(RuntimeDashboard, { snapshot: snapshotFixture() }),
   );
@@ -37,14 +37,14 @@ function stripAnsi(value: string): string {
   return value.replace(/\x1b\[[0-9;]*[A-Za-z]/g, "");
 }
 
-test("terminal dashboard formatter matches exported Elixir golden fixtures", () => {
+test("terminal dashboard formatter matches exported golden fixtures", () => {
   for (const scenario of dashboardScenarios()) {
     assert.equal(
-      formatElixirStyleDashboard(scenario.snapshot, scenario.options),
+      formatDashboard(scenario.snapshot, scenario.options),
       readEvidence(scenario.name),
       `${scenario.name} plain fixture`,
     );
-    const ansiOutput = formatElixirStyleDashboard(scenario.snapshot, {
+    const ansiOutput = formatDashboard(scenario.snapshot, {
       ...scenario.options,
       ansi: true,
     });
@@ -55,7 +55,7 @@ test("terminal dashboard formatter matches exported Elixir golden fixtures", () 
 });
 
 test("terminal dashboard preserves tracker states in the running stage column", () => {
-  const rendered = formatElixirStyleDashboard(
+  const rendered = formatDashboard(
     dashboardSnapshot({
       now: "2026-05-05T02:00:00.000Z",
       running: [
@@ -77,6 +77,76 @@ test("terminal dashboard preserves tracker states in the running stage column", 
 
   assert.match(rendered, /codex\s+Agent Review\s+4242/);
   assert.notMatch(rendered, /codex\s+running\s+4242/);
+});
+
+test("terminal dashboard renders pending for claimed runs before agent events arrive", () => {
+  const rendered = formatDashboard(
+    dashboardSnapshot({
+      now: "2026-05-05T02:00:00.000Z",
+      running: [
+        runningFixture(
+          "MT-PEND",
+          "codex",
+          "running",
+          null,
+          0,
+          0,
+          0,
+          null,
+          "2026-05-05T02:00:00.000Z",
+          null,
+        ),
+      ],
+    }),
+    { now: "2026-05-05T02:00:00.000Z", runtimeSeconds: 0, throughputTps: 0 },
+  );
+
+  assert.match(rendered, /MT-PEND[\s\S]*pending/);
+  assert.notMatch(rendered, /\bundefined\b/);
+});
+
+test("terminal dashboard sanitizes snapshot-derived strings before rendering", () => {
+  const now = "2026-05-05T02:00:00.000Z";
+  const rendered = formatDashboard(
+    dashboardSnapshot({
+      now,
+      running: [
+        runningFixture(
+          "MT-1\n│ spoofed",
+          "codex\n│ agent-kind\x1b[2J",
+          "In Progress\x1b[2J",
+          "4242",
+          0,
+          1,
+          0,
+          "boom\n│ fake-event\x1b[2J",
+          now,
+          "turn_ended_with_error",
+        ),
+      ],
+      retrying: [retryFixture("MT-RETRY\n│ fake-retry\x1b[2J", 1, 1, "retry\n│ fake-error", now)],
+      rateLimits: {
+        model: "gpt-5\n│ fake-rate\x1b[2J",
+        primary: { used: 1, limit: 2, resetSeconds: 3 },
+        credits: "none\n│ fake-credit\x1b[2J",
+      },
+    }),
+    {
+      now,
+      dashboardUrl: "http://127.0.0.1:4000\n│ fake-dashboard\x1b[2J",
+      projectUrl: "https://linear.app/project\n│ fake-project\x1b[2J",
+      runtimeSeconds: 0,
+      throughputTps: 0,
+    },
+  );
+
+  assert.match(rendered, /MT-1/);
+  assert.match(rendered, /codex/);
+  assert.match(rendered, /In Progress/);
+  assert.match(rendered, /MT-RETRY/);
+  assert.match(rendered, /gpt-5/);
+  assert.equal(rendered.includes("\x1b[2J"), false);
+  assert.notMatch(rendered, /\n│ (agent-kind|fake-\w+|spoofed)/);
 });
 
 test("Runtime field tracks live elapsed time of active runs as the clock advances", () => {
@@ -101,7 +171,7 @@ test("Runtime field tracks live elapsed time of active runs as the clock advance
 
   // No new snapshot is emitted between frames; only the wall clock advances.
   const runtimeLine = (now: string): string => {
-    const frame = formatElixirStyleDashboard(snapshot, { now });
+    const frame = formatDashboard(snapshot, { now });
     return (frame.split("\n").find((line) => line.includes("Runtime:")) ?? "").trim();
   };
 
@@ -128,12 +198,12 @@ test("Runtime field adds active-run elapsed on top of completion-accumulated sec
       ),
     ],
   });
-  const frame = formatElixirStyleDashboard(snapshot, { now: "2026-05-05T00:00:30.000Z" });
+  const frame = formatDashboard(snapshot, { now: "2026-05-05T00:00:30.000Z" });
   // 120 banked + 30 live = 150s = 2m 30s.
   assert.match(frame, /Runtime: 2m 30s/);
 });
 
-test("TUI humanizes Codex and Claude event variants like the Elixir dashboard", () => {
+test("TUI humanizes Codex and Claude event variants", () => {
   assert.equal(
     humanizeCodexMessage({
       event: "approval_auto_approved",
@@ -149,8 +219,10 @@ test("TUI humanizes Codex and Claude event variants like the Elixir dashboard", 
   );
   assert.equal(
     humanizeCodexMessage({
-      event: "tool_call_failed",
-      message: { payload: { method: "item/tool/call", params: { name: "linear_graphql" } } },
+      event: "tool_call_update",
+      message: {
+        payload: { method: "item/tool/call", params: { name: "linear_graphql", status: "failed" } },
+      },
     }),
     "dynamic tool call failed (linear_graphql)",
   );
@@ -179,7 +251,7 @@ test("TUI humanizes Codex and Claude event variants like the Elixir dashboard", 
   assert.equal(
     humanizeAgentMessage({
       agent_kind: "claude",
-      event: "assistant_message",
+      event: "agent_message_chunk",
       message: { type: "assistant", message: { content: [{ type: "tool_use", name: "Bash" }] } },
     }),
     "tool requested (Bash)",
@@ -194,7 +266,7 @@ test("TUI humanizes Codex and Claude event variants like the Elixir dashboard", 
   );
 });
 
-test("terminal throughput uses Elixir-style rolling token samples", () => {
+test("terminal throughput uses rolling token samples", () => {
   let samples = updateTokenSamples([], 10_000, 100);
   assert.equal(rollingThroughput(samples, 10_000, 100), 0);
 
@@ -225,7 +297,7 @@ function snapshotFixture(): RuntimeSnapshot {
       {
         issueId: "issue-1",
         issueIdentifier: "MT-1",
-        title: "Build the thing",
+        issueTitle: "Build the thing",
         state: "Todo",
         slotIndex: 0,
         ensembleSize: 1,
@@ -255,7 +327,7 @@ function snapshotFixture(): RuntimeSnapshot {
 function dashboardScenarios(): Array<{
   name: string;
   snapshot: RuntimeSnapshot;
-  options: Parameters<typeof formatElixirStyleDashboard>[1];
+  options: Parameters<typeof formatDashboard>[1];
 }> {
   const idle = dashboardSnapshot({
     now: "2026-05-05T00:00:00.000Z",
@@ -320,7 +392,7 @@ function dashboardScenarios(): Array<{
             3_200,
             "thread token usage up...",
             "2026-05-05T00:01:15.000Z",
-            "usage",
+            "session_notification",
           ),
         ],
       }),
@@ -416,18 +488,18 @@ function runningFixture(
   identifier: string,
   agentKind: string,
   state: string,
-  executorPid: string,
+  executorPid: string | null,
   ageSeconds: number,
   turnCount: number,
   totalTokens: number,
-  lastMessage: string,
+  lastMessage: unknown,
   now: string,
-  lastEvent: RuntimeSnapshot["running"][number]["lastEvent"] = "notification",
+  lastEvent: RuntimeSnapshot["running"][number]["lastEvent"] = "session_notification",
 ): RuntimeSnapshot["running"][number] {
   return {
     issueId: identifier,
     issueIdentifier: identifier,
-    title: "Fixture issue",
+    issueTitle: "Fixture issue",
     state,
     slotIndex: 0,
     ensembleSize: 1,
@@ -454,9 +526,10 @@ function retryFixture(
 ): RuntimeSnapshot["retrying"][number] {
   return {
     issueId: identifier,
-    identifier,
+    issueIdentifier: identifier,
     attempt,
-    dueAt: new Date(new Date(now).getTime() + dueInSeconds * 1000).toISOString(),
+    dueAtIso: new Date(new Date(now).getTime() + dueInSeconds * 1000).toISOString(),
+    monotonicDeadlineMs: performance.now() + dueInSeconds * 1000,
     error,
     slotIndex: 0,
   };
@@ -492,5 +565,5 @@ function readAnsiSnapshot(name: string): string {
 }
 
 function fixturePath(filename: string): string {
-  return path.join(import.meta.dirname, "../../../test/fixtures/elixir-dashboard", filename);
+  return path.join(import.meta.dirname, "../../../test/fixtures/dashboard", filename);
 }

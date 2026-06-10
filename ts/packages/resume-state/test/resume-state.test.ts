@@ -2,25 +2,23 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-import { execa } from "execa";
 import { test, beforeEach, afterEach } from "vitest";
-import {
-  readResumeState,
-  writeResumeState,
-  deleteResumeState,
-  resumeStateMatches,
-} from "@symphony/cli";
 import type { Issue } from "@symphony/domain";
 
 import { assert } from "../../../test/assert.js";
 
-import type { ResumeState } from "@symphony/resume-state";
+import { createResumeStateStore, resumeStateMatches } from "@symphony/resume-state";
+import type { ResumeState, ResumeStateStore } from "@symphony/resume-state";
 
 let tmpDir: string;
+let gitDir: string;
+let store: ResumeStateStore;
 
 beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "resume-state-test-"));
-  await execa("git", ["init", tmpDir]);
+  gitDir = path.join(tmpDir, ".git");
+  await fs.mkdir(gitDir, { recursive: true });
+  store = createResumeStateStore({ resolveGitDir: async () => gitDir });
 });
 
 afterEach(async () => {
@@ -40,12 +38,32 @@ function validState(overrides: Partial<ResumeState> = {}): ResumeState {
   };
 }
 
+test("resume state store uses an injected git dir resolver", async () => {
+  const resolvedWorkspaces: string[] = [];
+  const injectedStore = createResumeStateStore({
+    resolveGitDir: async (workspace) => {
+      resolvedWorkspaces.push(workspace);
+      return gitDir;
+    },
+  });
+
+  await injectedStore.write(tmpDir, validState());
+
+  const encoded = JSON.parse(
+    await fs.readFile(path.join(gitDir, "symphony", "resume.json"), "utf8"),
+  ) as Record<string, unknown>;
+  assert.deepEqual(resolvedWorkspaces, [tmpDir]);
+  assert.equal(encoded.agent, "claude");
+  assert.equal(encoded.session_id, "sess-abc-123");
+  assert.equal(encoded.workspace_path, tmpDir);
+});
+
 // --- writeResumeState + readResumeState round-trip ---
 
 test("writeResumeState + readResumeState — round-trip preserves all fields", async () => {
   const state = validState();
-  await writeResumeState(tmpDir, state);
-  const result = await readResumeState(tmpDir);
+  await store.write(tmpDir, state);
+  const result = await store.read(tmpDir);
   assert.equal(result.status, "ok");
   if (result.status !== "ok") return;
   assert.equal(result.state.agentKind, state.agentKind);
@@ -59,24 +77,23 @@ test("writeResumeState + readResumeState — round-trip preserves all fields", a
 // --- readResumeState ---
 
 test('readResumeState — missing file returns { status: "missing" }', async () => {
-  const result = await readResumeState(tmpDir);
+  const result = await store.read(tmpDir);
   assert.equal(result.status, "missing");
 });
 
 test('readResumeState — invalid JSON returns { status: "error" }', async () => {
-  const { stdout } = await execa("git", ["-C", tmpDir, "rev-parse", "--git-dir"]);
-  const gitDir = path.isAbsolute(stdout.trim()) ? stdout.trim() : path.join(tmpDir, stdout.trim());
   const resumePath = path.join(gitDir, "symphony", "resume.json");
   await fs.mkdir(path.dirname(resumePath), { recursive: true });
   await fs.writeFile(resumePath, "not valid json {{{");
-  const result = await readResumeState(tmpDir);
+  const result = await store.read(tmpDir);
   assert.equal(result.status, "error");
 });
 
 test('readResumeState — non-git directory returns { status: "unavailable" }', async () => {
   const nonGitDir = await fs.mkdtemp(path.join(os.tmpdir(), "resume-no-git-"));
+  const nonGitStore = createResumeStateStore({ resolveGitDir: async () => null });
   try {
-    const result = await readResumeState(nonGitDir);
+    const result = await nonGitStore.read(nonGitDir);
     assert.equal(result.status, "unavailable");
   } finally {
     await fs.rm(nonGitDir, { recursive: true, force: true });
@@ -84,8 +101,6 @@ test('readResumeState — non-git directory returns { status: "unavailable" }', 
 });
 
 test("readResumeState — decodes legacy fields correctly (session_id, agent_kind, thread_id)", async () => {
-  const { stdout } = await execa("git", ["-C", tmpDir, "rev-parse", "--git-dir"]);
-  const gitDir = path.isAbsolute(stdout.trim()) ? stdout.trim() : path.join(tmpDir, stdout.trim());
   const resumePath = path.join(gitDir, "symphony", "resume.json");
   await fs.mkdir(path.dirname(resumePath), { recursive: true });
   const legacy = {
@@ -99,7 +114,7 @@ test("readResumeState — decodes legacy fields correctly (session_id, agent_kin
     workspace_path: "/tmp/ws",
   };
   await fs.writeFile(resumePath, JSON.stringify(legacy));
-  const result = await readResumeState(tmpDir);
+  const result = await store.read(tmpDir);
   assert.equal(result.status, "ok");
   if (result.status !== "ok") return;
   assert.equal(result.state.agentKind, "codex");
@@ -111,14 +126,14 @@ test("readResumeState — decodes legacy fields correctly (session_id, agent_kin
 
 test("writeResumeState — rejects empty agentKind", async () => {
   await assert.rejects(
-    () => writeResumeState(tmpDir, validState({ agentKind: "" })),
+    () => store.write(tmpDir, validState({ agentKind: "" })),
     "invalid_resume_state",
   );
 });
 
 test("writeResumeState — rejects empty resumeId", async () => {
   await assert.rejects(
-    () => writeResumeState(tmpDir, validState({ resumeId: "  " })),
+    () => store.write(tmpDir, validState({ resumeId: "  " })),
     "invalid_resume_state",
   );
 });
@@ -126,17 +141,17 @@ test("writeResumeState — rejects empty resumeId", async () => {
 // --- deleteResumeState ---
 
 test("deleteResumeState — removes existing file", async () => {
-  await writeResumeState(tmpDir, validState());
-  const before = await readResumeState(tmpDir);
+  await store.write(tmpDir, validState());
+  const before = await store.read(tmpDir);
   assert.equal(before.status, "ok");
-  await deleteResumeState(tmpDir);
-  const after = await readResumeState(tmpDir);
+  await store.delete(tmpDir);
+  const after = await store.read(tmpDir);
   assert.equal(after.status, "missing");
 });
 
 test("deleteResumeState — no-op when file already absent", async () => {
-  await deleteResumeState(tmpDir);
-  const result = await readResumeState(tmpDir);
+  await store.delete(tmpDir);
+  const result = await store.read(tmpDir);
   assert.equal(result.status, "missing");
 });
 

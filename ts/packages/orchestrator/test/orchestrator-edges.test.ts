@@ -9,17 +9,23 @@ function makeIssue(overrides: Record<string, unknown> = {}) {
     id: "edge-1",
     identifier: "MT-EDGE-1",
     title: "Edge case issue",
-    state: "Todo",
+    state: { name: "Todo", type: "unstarted" },
     ...overrides,
   });
 }
 
-function fakeClock(now = new Date()): ClockPort {
-  return {
-    now: () => now,
+function fakeClock(initial = new Date()) {
+  let tick = initial.getTime();
+  const clock: ClockPort & { advance(ms: number): void } = {
+    now: () => new Date(tick),
+    monotonicMs: () => tick,
     setTimeout: (cb, ms) => setTimeout(cb, ms),
     clearTimeout: (h) => clearTimeout(h as ReturnType<typeof setTimeout>),
+    advance(ms: number) {
+      tick += ms;
+    },
   };
+  return clock;
 }
 
 // --- claim ---
@@ -62,11 +68,12 @@ test("claim — preferred slot honored on retry", () => {
   const orchestrator = new Orchestrator(settings);
   const issue = makeIssue();
 
-  orchestrator.state.retryAttempts.set(issue.id, {
+  orchestrator.state.retryAttempts.set(slotKey(issue.id, 2), {
     issueId: issue.id,
     identifier: issue.identifier,
     attempt: 1,
-    dueAt: new Date(Date.now() - 1),
+    monotonicDeadlineMs: 0,
+    dueAtIso: new Date(Date.now() - 1).toISOString(),
     slotIndex: 2,
     error: "failed",
   });
@@ -116,7 +123,11 @@ test("applyUpdate — rateLimits propagated to state", () => {
   orchestrator.claim(issue);
 
   const limits = { provider: "anthropic", retryAfter: 30 };
-  orchestrator.applyUpdate(issue.id, 0, { type: "rate_limit", rateLimits: limits });
+  orchestrator.applyUpdate(issue.id, 0, {
+    type: "rate_limit",
+    message: "rate limited by anthropic",
+    rateLimits: limits,
+  });
 
   assert.deepEqual(orchestrator.snapshot().rateLimits, limits);
 });
@@ -142,11 +153,11 @@ test("finish — secondsRunning accumulates across multiple finishes", () => {
   const issueB = makeIssue({ id: "b", identifier: "MT-B" });
 
   orchestrator.claim(issueA);
-  clock.now = () => new Date(now.getTime() + 10_000);
+  clock.advance(10_000);
   orchestrator.finish(issueA.id, 0, false);
 
   orchestrator.claim(issueB);
-  clock.now = () => new Date(now.getTime() + 25_000);
+  clock.advance(15_000);
   orchestrator.finish(issueB.id, 0, false);
 
   assert.equal(orchestrator.snapshot().usageTotals.secondsRunning, 25);
@@ -242,7 +253,7 @@ test("eligibleIssues — issue with unresolved blockers excluded", () => {
     id: "blocked",
     identifier: "MT-BLOCKED",
     title: "Blocked",
-    state: "Todo",
+    state: { name: "Todo", type: "unstarted" },
     blockers: [{ id: "dep-1", identifier: "MT-DEP", state: "In Progress" }],
   });
 

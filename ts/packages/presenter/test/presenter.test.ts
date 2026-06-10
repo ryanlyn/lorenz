@@ -16,6 +16,7 @@ test("presenter preserves blocked dispatches, retry errors, run costs, retries, 
   assert.deepEqual((state.running as any[])[0] as Record<string, unknown>, {
     issue_id: "running-1",
     issue_identifier: "MT-RUNNING",
+    issue_url: null,
     state: "Todo",
     slot_index: 0,
     ensemble_size: 1,
@@ -37,6 +38,7 @@ test("presenter preserves blocked dispatches, retry errors, run costs, retries, 
   assert.deepEqual((state.blocked as any[])[0], {
     issue_id: "blocked-1",
     issue_identifier: "MT-BLOCKED",
+    issue_url: null,
     state: "Todo",
     reason: "worker_host_capacity",
     label: "worker host capacity",
@@ -107,17 +109,17 @@ test("presenter preserves blocked dispatches, retry errors, run costs, retries, 
 
 test("presenter humanizes structured agent messages at the JSON API boundary", () => {
   const snapshot = snapshotFixture();
-  snapshot.running[0]!.lastEvent = "assistant_message";
+  snapshot.running[0]!.lastEvent = "session_notification";
   snapshot.running[0]!.lastEventAt = "2026-05-06T00:00:02.000Z";
   snapshot.running[0]!.lastMessage = {
     agent_kind: "claude",
-    event: "assistant_message",
+    event: "agent_message_chunk",
     message: {
       type: "assistant",
       message: { content: [{ type: "text", text: "structured update\nfrom Claude" }] },
     },
   };
-  snapshot.runHistory[0]!.lastEvent = "assistant_message";
+  snapshot.runHistory[0]!.lastEvent = "session_notification";
   snapshot.runHistory[0]!.lastMessage = {
     event: "agent_message_delta",
     message: {
@@ -145,6 +147,68 @@ test("presenter humanizes structured agent messages at the JSON API boundary", (
   );
 });
 
+test("presenter shows retry attempts for active running retries", () => {
+  const snapshot = snapshotFixture();
+  snapshot.running[0]!.retryAttempt = 2;
+
+  const issue = issuePayload(snapshot, "MT-RUNNING");
+
+  assert.equal(issue.status, "ok");
+  if (issue.status !== "ok") throw new Error("running issue payload should exist");
+  assert.deepEqual(issue.payload.attempts, {
+    restart_count: 1,
+    current_retry_attempt: 2,
+  });
+  assert.equal((issue.payload.running as any).retry_attempt, 2);
+});
+
+test("presenter does not treat ensemble slots as retry attempts", () => {
+  const snapshot = snapshotFixture();
+  snapshot.runHistory.push(
+    {
+      id: "ensemble-slot-0",
+      issueId: "ensemble-1",
+      issueIdentifier: "MT-ENSEMBLE",
+      issueTitle: "Parallel slots",
+      state: "Todo",
+      slotIndex: 0,
+      ensembleSize: 2,
+      agentKind: "codex",
+      outcome: "success",
+      turnCount: 1,
+      usageTotals: { inputTokens: 1, outputTokens: 1, totalTokens: 2, secondsRunning: 1 },
+      startedAt: "2026-05-06T00:00:00.000Z",
+      endedAt: "2026-05-06T00:00:10.000Z",
+      retryAttempt: 0,
+    },
+    {
+      id: "ensemble-slot-1",
+      issueId: "ensemble-1",
+      issueIdentifier: "MT-ENSEMBLE",
+      issueTitle: "Parallel slots",
+      state: "Todo",
+      slotIndex: 1,
+      ensembleSize: 2,
+      agentKind: "claude",
+      outcome: "success",
+      turnCount: 1,
+      usageTotals: { inputTokens: 1, outputTokens: 1, totalTokens: 2, secondsRunning: 1 },
+      startedAt: "2026-05-06T00:00:01.000Z",
+      endedAt: "2026-05-06T00:00:11.000Z",
+      retryAttempt: 0,
+    },
+  );
+
+  const retries = runsPayload(snapshot, { retries: true });
+
+  assert.equal(retries.status, "ok");
+  if (retries.status !== "ok") throw new Error("retry payload should exist");
+  assert.deepEqual(
+    (retries.payload.issues as any[]).map((issue) => issue.issue_identifier),
+    ["MT-RETRY"],
+  );
+});
+
 test("presenter does not depend on the Ink TUI module for API projections", () => {
   const source = fs.readFileSync(path.join(import.meta.dirname, "..", "src", "index.ts"), "utf8");
   assert.notMatch(source, /from "\.\/tui\.js"/);
@@ -167,7 +231,7 @@ function snapshotFixture(): RuntimeSnapshot {
         runId: "running-1",
         issueId: "running-1",
         issueIdentifier: "MT-RUNNING",
-        title: "Running",
+        issueTitle: "Running",
         state: "Todo",
         slotIndex: 0,
         ensembleSize: 1,
@@ -184,9 +248,10 @@ function snapshotFixture(): RuntimeSnapshot {
     retrying: [
       {
         issueId: "retry-1",
-        identifier: "MT-RETRY",
+        issueIdentifier: "MT-RETRY",
         attempt: 2,
-        dueAt: "2026-05-06T00:01:00.000Z",
+        dueAtIso: "2026-05-06T00:01:00.000Z",
+        monotonicDeadlineMs: 60000,
         error: "agent exited: boom",
         workspacePath: "/tmp/symphony/MT-RETRY",
       },
@@ -211,7 +276,7 @@ function snapshotFixture(): RuntimeSnapshot {
         agentKind: "claude",
         outcome: "success",
         turnCount: 1,
-        workspace: "/tmp/symphony/MT-RETRY",
+        workspacePath: "/tmp/symphony/MT-RETRY",
         usageTotals: { inputTokens: 3, outputTokens: 3, totalTokens: 6, secondsRunning: 8 },
         startedAt: "2026-05-06T00:00:20.000Z",
         endedAt: "2026-05-06T00:00:30.000Z",
@@ -228,7 +293,7 @@ function snapshotFixture(): RuntimeSnapshot {
         agentKind: "codex",
         outcome: "failed",
         turnCount: 0,
-        workspace: "/tmp/symphony/MT-RETRY",
+        workspacePath: "/tmp/symphony/MT-RETRY",
         usageTotals: { inputTokens: 3, outputTokens: 0, totalTokens: 3, secondsRunning: 1 },
         startedAt: "2026-05-06T00:00:00.000Z",
         endedAt: "2026-05-06T00:00:05.000Z",

@@ -15,12 +15,14 @@ import {
 } from "@symphony/cli-kit";
 import { validateDispatchConfig } from "@symphony/config";
 import { checkSlotsPerMachineGate } from "@symphony/dispatch-coordinator";
-import { startObservabilityServer, type ObservabilityServerHandle } from "@symphony/server";
+import { startObservabilityServer } from "@symphony/server";
 import { configureLogFile } from "@symphony/log-file";
 import { SymphonyRuntime } from "@symphony/runtime";
 import { RuntimeApp } from "@symphony/tui";
 import { loadWorkflow } from "@symphony/workflow";
-import type { Settings, WorkflowDefinition } from "@symphony/domain";
+import { TraceEmitter } from "@symphony/traceviz-emitter";
+import { defaultIssueStorePath, IssueStore } from "@symphony/server";
+import { errorMessage, type Settings, type WorkflowDefinition } from "@symphony/domain";
 
 import {
   createRunsCommand,
@@ -41,6 +43,7 @@ export interface CliOptions {
   once: boolean;
   dryRun: boolean;
   tui: boolean;
+  dashboard: boolean;
   port: number | null;
   logsRoot: string | null;
 }
@@ -49,12 +52,12 @@ interface CliCommanderOptions {
   once?: boolean;
   dryRun?: boolean;
   tui?: boolean;
+  dashboard?: boolean;
   port?: number;
   logsRoot?: string;
 }
 
 export type CliParseResult = ParseResult<CliOptions>;
-export const usageText = createDaemonCommand().helpInformation().trimEnd();
 
 export function parseCliArgs(args: string[]): CliParseResult {
   const command = configureCommandForParse(createDaemonCommand());
@@ -97,8 +100,6 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
   }
 }
 
-export const run = main;
-
 export async function runDaemon(options: CliOptions): Promise<number> {
   try {
     let boundServerPort: number | null = null;
@@ -123,67 +124,110 @@ export async function runDaemon(options: CliOptions): Promise<number> {
     // capability is known only here, after the coordinator exists, so this is the
     // right home for the check (validateDispatchConfig stays capability-free).
     assertSlotsPerMachineGate(workflow.settings, coordinator);
+    const traceDir = workflow.settings.server.traceDir!;
+    const traceEmitter = new TraceEmitter(traceDir);
+    const issueStore = new IssueStore(defaultIssueStorePath());
     const runtime = new SymphonyRuntime({
       workflow,
       clientFactory: createTrackerClient,
       reloadWorkflow: loadRuntimeWorkflow,
       runner: runAgentAttempt,
       coordinator,
+      onAgentUpdate: (issue, update) => {
+        traceEmitter.emit(issue.id, issue.identifier, update);
+      },
+      onIssueDispatched: (issue) => {
+        issueStore.upsert({
+          issueId: issue.id,
+          issueIdentifier: issue.identifier,
+          title: issue.title,
+          url: issue.url ?? null,
+        });
+      },
       ...runtimeAdapters,
     });
     await coordinator?.hydrate();
-    let server: ObservabilityServerHandle | null = null;
-    const stop = () => runtime.stop();
-    process.once("SIGINT", stop);
-    process.once("SIGTERM", stop);
+    let instance: ReturnType<typeof render> | null = null;
+    // Persistent (not once) handlers so the graceful teardown below actually
+    // runs to completion. With process.once, the listener is removed after the
+    // first SIGINT; a second SIGINT — which Node + Ink can surface while the
+    // daemon is still winding down — then hits the default disposition and kills
+    // the process with code 130 mid-shutdown, before Ink restores the terminal.
+    // That abrupt kill is what leaves a garbled/red error state on Ctrl+C.
+    let shuttingDown = false;
+    const requestStop = () => {
+      if (shuttingDown) {
+        // Repeated Ctrl+C: force-quit, but unmount Ink first so the terminal is
+        // left clean rather than mid-render.
+        instance?.unmount();
+        process.exit(130);
+      }
+      shuttingDown = true;
+      runtime.stop();
+    };
+    process.on("SIGINT", requestStop);
+    process.on("SIGTERM", requestStop);
 
-    const shouldStartServer =
-      typeof workflow.settings.server.port === "number" ||
-      workflow.settings.agent.kind === "claude";
-    if (shouldStartServer) {
-      server = await startObservabilityServer(runtime, {
-        host: workflow.settings.server.host,
-        port: workflow.settings.server.port ?? 0,
-      });
-      workflow.settings.server.port = server.port;
-      boundServerPort = server.port;
-      process.stderr.write(`Observability API listening on ${server.url("/")}\n`);
-    }
-
-    const instance =
-      options.tui && process.stdout.isTTY
-        ? render(
-            React.createElement(RuntimeApp, {
-              runtime,
-              dashboardUrl: server?.url("/") ?? null,
-              projectUrl: projectUrlForSettings(workflow.settings),
-            }),
-          )
-        : null;
-
-    if (!instance) {
-      runtime.subscribe((snapshot) => {
-        process.stdout.write(`${JSON.stringify(snapshot, null, 2)}\n`);
-      });
-    }
-
+    let server: Awaited<ReturnType<typeof startObservabilityServer>> | null = null;
     try {
+      if (options.dashboard) {
+        server = await startObservabilityServer(runtime, {
+          host: workflow.settings.server.host,
+          port: workflow.settings.server.port ?? 0,
+          ...(workflow.settings.server.traceDir !== undefined && {
+            traceDir: workflow.settings.server.traceDir,
+          }),
+          ...(workflow.settings.server.staticDir !== undefined && {
+            staticDir: workflow.settings.server.staticDir,
+          }),
+          issueStore,
+        });
+        workflow.settings.server.port = server.port;
+        boundServerPort = server.port;
+        process.stderr.write(`Observability API listening on ${server.url("/")}\n`);
+      }
+
+      instance =
+        options.tui && process.stdout.isTTY
+          ? render(
+              React.createElement(RuntimeApp, {
+                runtime,
+                dashboardUrl: server?.url("/") ?? null,
+                projectUrl: projectUrlForSettings(workflow.settings),
+              }),
+            )
+          : null;
+
+      if (!instance) {
+        runtime.subscribe((snapshot) => {
+          process.stdout.write(`${JSON.stringify(snapshot, null, 2)}\n`);
+        });
+      }
+
       await runtime.start({ once: options.once, dryRun: options.dryRun });
+      return 0;
     } finally {
-      instance?.unmount();
-      // start() returns once stop() flips the runtime to stopped; drain paid
-      // cloud boxes before tearing down the server so they are destroyed on exit.
-      await runtime.drainBoxPool();
-      await server?.stop();
+      // Leave the signal handlers attached through teardown so a second Ctrl+C
+      // can't slip past them and kill the process mid-shutdown.
+      try {
+        instance?.unmount();
+        // start() returns once stop() flips the runtime to stopped; drain paid
+        // cloud boxes before tearing down the server so they are destroyed on exit.
+        await runtime.drainBoxPool();
+        await server?.stop();
+        issueStore.close();
+      } finally {
+        process.off("SIGINT", requestStop);
+        process.off("SIGTERM", requestStop);
+      }
     }
-    return 0;
   } catch (error) {
-    process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+    process.stderr.write(`${errorMessage(error)}\n`);
     return 1;
   }
 }
 
-export function createDaemonCommand(name = "symphony-ts"): Command {
+function createDaemonCommand(name = "symphony-ts"): Command {
   return new Command(name)
     .description("Run the Symphony TypeScript orchestrator.")
     .allowExcessArguments(false)
@@ -191,6 +235,7 @@ export function createDaemonCommand(name = "symphony-ts"): Command {
     .option("--once", "Poll once and exit.")
     .option("--dry-run", "Evaluate candidates without dispatching agents.")
     .option("--no-tui", "Disable the terminal dashboard.")
+    .option("--no-dashboard", "Disable the web dashboard server.")
     .option(
       "--logs-root <path>",
       "Root directory for Symphony logs.",
@@ -209,6 +254,7 @@ function cliOptionsFromCommander(parsed: CliCommanderOptions, workflowPath?: str
     once: parsed.once ?? false,
     dryRun: parsed.dryRun ?? false,
     tui: parsed.tui ?? true,
+    dashboard: parsed.dashboard ?? true,
     port: parsed.port ?? null,
     logsRoot: parsed.logsRoot ?? null,
   };

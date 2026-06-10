@@ -1,4 +1,4 @@
-export { retryBackoffMs } from "./retry.js";
+export { retryBackoffMs, MIN_RETRY_DELAY_MS } from "./retry.js";
 export type { RetryKind } from "./retry.js";
 export { actionForStopReason } from "./stopReason.js";
 export type { StopReasonAction } from "./stopReason.js";

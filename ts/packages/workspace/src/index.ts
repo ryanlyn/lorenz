@@ -6,10 +6,28 @@ import type { HooksSettings, Issue, Settings } from "@symphony/domain";
 import { execa } from "execa";
 
 const remoteWorkspaceMarker = "__SYMPHONY_WORKSPACE__";
+const hookForceKillDelayMs = 5_000;
+
+export interface WorkspaceCreateOptions {
+  slotIndex?: number | undefined;
+  ensembleSize?: number | undefined;
+  workerHost?: string | null | undefined;
+  forceSlotSuffix?: boolean | undefined;
+  abortSignal?: AbortSignal | undefined;
+}
+
+export interface WorkspaceRunHookOptions {
+  abortSignal?: AbortSignal | undefined;
+  validateCwd?: (() => Promise<string>) | undefined;
+}
 
 export function safeIdentifier(identifier: unknown): string {
   if (typeof identifier !== "string") return "";
   return identifier.replace(/[^A-Za-z0-9_.-]/g, "_");
+}
+
+function sharedWorkspaceRoot(settings: Settings): boolean {
+  return settings.workspace.isolation === "none";
 }
 
 /**
@@ -32,19 +50,16 @@ export function workspacePath(
   ensembleSize = 1,
   forceSlotSuffix = false,
 ): string {
-  const issueRoot = path.join(root, safeIdentifier(issueIdentifier));
+  const safe = safeIdentifier(issueIdentifier);
+  if (!safe) throw new Error("empty identifier produces invalid workspace path");
+  const issueRoot = path.join(root, safe);
   return ensembleSize > 1 || forceSlotSuffix ? path.join(issueRoot, String(slotIndex)) : issueRoot;
 }
 
 export async function createWorkspaceForIssue(
   settings: Settings,
   issue: Issue | string,
-  options: {
-    slotIndex?: number;
-    ensembleSize?: number;
-    workerHost?: string | null;
-    forceSlotSuffix?: boolean;
-  } = {},
+  options: WorkspaceCreateOptions = {},
 ): Promise<string> {
   if (options.workerHost)
     return createRemoteWorkspaceForIssue(settings, issue, options.workerHost, options);
@@ -58,13 +73,20 @@ export async function createWorkspaceForIssue(
   await fs.mkdir(rootPath, { recursive: true });
   await rejectFinalSymlink(rootPath);
   const canonicalRoot = await fs.realpath(rootPath);
+
+  // Shared workspaces run no lifecycle hooks (config rejects them); canonicalRoot is already
+  // realpath'd and symlink-checked above, so creation is done.
+  if (sharedWorkspaceRoot(settings)) return canonicalRoot;
+
   const target = workspacePath(canonicalRoot, identifier, slotIndex, ensembleSize, forceSlotSuffix);
-  const existed = await exists(target);
-  await ensureDirectoryWithinRoot(canonicalRoot, target);
+  const created = await ensureDirectoryWithinRoot(canonicalRoot, target);
   const canonicalTarget = await validateWorkspaceCwd(settings, target);
 
-  if (!existed && settings.hooks.afterCreate) {
-    await runHook(settings.hooks.afterCreate, canonicalTarget, settings.hooks);
+  if (created && settings.hooks.afterCreate) {
+    await runHook(settings.hooks.afterCreate, canonicalTarget, settings.hooks, null, {
+      abortSignal: options.abortSignal,
+      validateCwd: async () => validateWorkspaceCwd(settings, canonicalTarget),
+    });
   }
 
   return canonicalTarget;
@@ -87,7 +109,9 @@ export async function removeWorkspace(settings: Settings, workspace: string): Pr
 
   if (settings.hooks.beforeRemove) {
     try {
-      await runHook(settings.hooks.beforeRemove, canonicalTarget, settings.hooks);
+      await runHook(settings.hooks.beforeRemove, canonicalTarget, settings.hooks, null, {
+        validateCwd: async () => validateWorkspaceCwd(settings, canonicalTarget),
+      });
     } catch {
       // before_remove is best effort; cleanup should continue.
     }
@@ -132,6 +156,9 @@ export async function removeIssueWorkspaces(
   workerHost?: string | null,
 ): Promise<void> {
   if (typeof identifier !== "string") return;
+  // The shared workspace is the root itself and is never owned by a single issue, so it must
+  // outlive any individual run; auto-cleanup would wipe other agents' work.
+  if (sharedWorkspaceRoot(settings)) return;
   if (workerHost) {
     try {
       await removeRemoteIssueWorkspaces(settings, identifier, workerHost);
@@ -176,17 +203,79 @@ export async function runHook(
   cwd: string,
   hooks: HooksSettings,
   workerHost?: string | null,
+  options: WorkspaceRunHookOptions = {},
 ): Promise<void> {
-  if (workerHost) return runRemoteHook(workerHost, cwd, command, hooks);
+  if (workerHost) return runRemoteHook(workerHost, cwd, command, hooks, options);
+  if (options.abortSignal?.aborted) throw new Error("hook canceled");
+  const hookCwd = options.validateCwd ? await options.validateCwd() : cwd;
+  if (options.abortSignal?.aborted) throw new Error("hook canceled");
 
-  const result = await execa("bash", ["-lc", command], {
-    cwd,
-    timeout: hooks.timeoutMs,
+  const subprocess = execa("bash", ["-lc", command], {
+    cwd: hookCwd,
     all: true,
     reject: false,
     stdin: "ignore",
+    detached: true,
   });
-  if (result.timedOut) throw new Error(`hook timed out after ${hooks.timeoutMs}ms`);
+  let timeoutTimer: ReturnType<typeof setTimeout> | undefined;
+  let forceKillTimer: ReturnType<typeof setTimeout> | undefined;
+  let terminationRequested = false;
+  let abortHandler: (() => void) | undefined;
+
+  const killProcessGroup = (signal: NodeJS.Signals): void => {
+    if (subprocess.pid === undefined) return;
+    try {
+      process.kill(-subprocess.pid, signal);
+    } catch {
+      /* process already exited */
+    }
+  };
+
+  const forceKillProcessGroup = (): void => {
+    forceKillTimer ??= setTimeout(() => {
+      killProcessGroup("SIGKILL");
+    }, hookForceKillDelayMs);
+  };
+
+  const clearForceKillTimer = (): void => {
+    if (forceKillTimer !== undefined) clearTimeout(forceKillTimer);
+  };
+
+  const clearTimers = (): void => {
+    if (timeoutTimer !== undefined) clearTimeout(timeoutTimer);
+    if (!terminationRequested) clearForceKillTimer();
+    if (abortHandler) options.abortSignal?.removeEventListener("abort", abortHandler);
+  };
+
+  const terminate = (error: Error, reject: (reason: Error) => void): void => {
+    terminationRequested = true;
+    killProcessGroup("SIGTERM");
+    forceKillProcessGroup();
+    reject(error);
+  };
+
+  const races: Array<Promise<unknown>> = [subprocess];
+  if (Number.isFinite(hooks.timeoutMs) && hooks.timeoutMs > 0) {
+    races.push(
+      new Promise<never>((_resolve, reject) => {
+        timeoutTimer = setTimeout(() => {
+          terminate(new Error(`hook timed out after ${hooks.timeoutMs}ms`), reject);
+        }, hooks.timeoutMs);
+      }),
+    );
+  }
+  if (options.abortSignal) {
+    races.push(
+      new Promise<never>((_resolve, reject) => {
+        abortHandler = () => terminate(new Error("hook canceled"), reject);
+        options.abortSignal?.addEventListener("abort", abortHandler, { once: true });
+      }),
+    );
+  }
+
+  void subprocess.then(clearForceKillTimer, clearForceKillTimer);
+
+  const result = (await Promise.race(races).finally(clearTimers)) as Awaited<typeof subprocess>;
   if (result.exitCode !== 0)
     throw new Error(`hook failed with status ${result.exitCode}: ${(result.all ?? "").trim()}`);
 }
@@ -208,11 +297,21 @@ export async function validateWorkspaceCwd(
   await rejectFinalSymlink(rootPath);
   const canonicalRoot = await fs.realpath(rootPath);
   const candidate = path.resolve(workspace);
-  if (!(await exists(candidate))) throw new Error(`invalid_workspace_cwd: missing ${candidate}`);
-  await rejectPathSymlinksWithinRoot(canonicalRoot, candidate);
-  const canonicalTarget = await fs.realpath(candidate);
-  if (canonicalTarget === canonicalRoot)
+  let canonicalTarget;
+  try {
+    canonicalTarget = await fs.realpath(candidate);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT")
+      throw new Error(`invalid_workspace_cwd: missing ${candidate}`, { cause: error });
+    throw error;
+  }
+  if (canonicalTarget === canonicalRoot && !sharedWorkspaceRoot(settings))
     throw new Error(`refusing to use workspace root as cwd: ${canonicalRoot}`);
+  const candidateInsideRoot =
+    insideRoot(candidate, rootPath) || insideRoot(candidate, canonicalRoot);
+  if (!insideRoot(canonicalTarget, canonicalRoot) && candidateInsideRoot) {
+    throw new Error(`unsafe symlink in workspace path: ${candidate}`);
+  }
   ensureInsideRoot(canonicalTarget, canonicalRoot);
   return canonicalTarget;
 }
@@ -232,62 +331,59 @@ async function rejectFinalSymlink(filePath: string): Promise<void> {
   if (stat.isSymbolicLink()) throw new Error(`unsafe symlink in workspace path: ${filePath}`);
 }
 
-async function ensureDirectoryWithinRoot(canonicalRoot: string, target: string): Promise<void> {
+async function ensureDirectoryWithinRoot(canonicalRoot: string, target: string): Promise<boolean> {
   ensureInsideRoot(target, canonicalRoot);
   const relative = path.relative(canonicalRoot, target);
-  if (relative === "") return;
+  if (relative === "") return false;
   let current = canonicalRoot;
+  let created = false;
   const segments = relative.split(path.sep).filter((segment) => segment !== "");
   for (const [index, segment] of segments.entries()) {
     current = path.join(current, segment);
-    try {
-      await fs.mkdir(current);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-    }
-    const stat = await fs.lstat(current);
-    if (stat.isSymbolicLink()) throw new Error(`unsafe symlink in workspace path: ${current}`);
-    if (stat.isDirectory()) continue;
-    if (index !== segments.length - 1)
-      throw new Error(`workspace path segment is not a directory: ${current}`);
-    throw new Error(`workspace path segment is not a directory: ${current}`);
-  }
-}
+    while (true) {
+      try {
+        await fs.mkdir(current);
+        created = true;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      }
 
-async function rejectPathSymlinksWithinRoot(
-  canonicalRoot: string,
-  candidate: string,
-): Promise<void> {
-  const relative = path.relative(canonicalRoot, candidate);
-  if (relative === "") return;
-  if (relative.startsWith("..") || path.isAbsolute(relative)) {
-    const canonicalTarget = await fs.realpath(candidate);
-    ensureInsideRoot(canonicalTarget, canonicalRoot);
-    return;
+      let stat;
+      try {
+        stat = await fs.lstat(current);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+        throw error;
+      }
+
+      if (stat.isSymbolicLink()) throw new Error(`unsafe symlink in workspace path: ${current}`);
+      if (stat.isDirectory()) break;
+      if (index !== segments.length - 1)
+        throw new Error(`workspace path segment is not a directory: ${current}`);
+      await fs.rm(current, { recursive: true, force: true });
+      created = true;
+    }
   }
-  let current = canonicalRoot;
-  for (const segment of relative.split(path.sep).filter((item) => item !== "")) {
-    current = path.join(current, segment);
-    const stat = await fs.lstat(current);
-    if (stat.isSymbolicLink()) throw new Error(`unsafe symlink in workspace path: ${current}`);
-  }
+  return created;
 }
 
 async function createRemoteWorkspaceForIssue(
   settings: Settings,
   issue: Issue | string,
   workerHost: string,
-  options: { slotIndex?: number; ensembleSize?: number; forceSlotSuffix?: boolean },
+  options: WorkspaceCreateOptions,
 ): Promise<string> {
   const identifier = typeof issue === "string" ? issue : issue.identifier;
-  const root = await remoteWorkspaceRoot(settings, workerHost);
-  const workspace = remoteWorkspacePath(
-    root,
-    identifier,
-    options.slotIndex ?? 0,
-    options.ensembleSize ?? 1,
-    options.forceSlotSuffix ?? false,
-  );
+  const root = await remoteWorkspaceRoot(settings, workerHost, options);
+  const workspace = sharedWorkspaceRoot(settings)
+    ? root
+    : remoteWorkspacePath(
+        root,
+        identifier,
+        options.slotIndex ?? 0,
+        options.ensembleSize ?? 1,
+        options.forceSlotSuffix ?? false,
+      );
 
   const script = [
     "set -eu",
@@ -308,14 +404,26 @@ async function createRemoteWorkspaceForIssue(
   const result = await runSsh(workerHost, script, {
     timeoutMs: settings.hooks.timeoutMs,
     stderrToStdout: true,
+    abortSignal: options.abortSignal,
   });
   if (result.status !== 0)
     throw new Error(`workspace_prepare_failed: ${workerHost} ${result.status} ${result.stdout}`);
   const parsed = parseRemoteWorkspaceOutput(result.stdout);
-  const canonicalWorkspace = await validateWorkspaceCwd(settings, parsed.workspace, workerHost);
+  const canonicalWorkspace = await validateRemoteWorkspaceCwd(
+    settings,
+    parsed.workspace,
+    workerHost,
+    options,
+  );
 
   if (parsed.created && settings.hooks.afterCreate) {
-    await runRemoteHook(workerHost, canonicalWorkspace, settings.hooks.afterCreate, settings.hooks);
+    await runRemoteHook(
+      workerHost,
+      canonicalWorkspace,
+      settings.hooks.afterCreate,
+      settings.hooks,
+      options,
+    );
   }
 
   return canonicalWorkspace;
@@ -325,30 +433,65 @@ async function validateRemoteWorkspaceCwd(
   settings: Settings,
   workspace: string,
   workerHost: string,
+  options: WorkspaceRunHookOptions = {},
 ): Promise<string> {
   if (invalidWorkspaceInput(workspace)) throw new Error("invalid_workspace_cwd: blank");
-  const root = await remoteWorkspaceRoot(settings, workerHost);
+  const shared = sharedWorkspaceRoot(settings);
+  const root = await remoteWorkspaceRoot(settings, workerHost, options);
   ensureRemoteInsideRoot(workspace, root);
-  if (normalizeRemotePath(workspace) === normalizeRemotePath(root)) {
+  if (!shared && normalizeRemotePath(workspace) === normalizeRemotePath(root)) {
     throw new Error(`refusing to use workspace root as cwd: ${root}`);
   }
   const script = [
     "set -eu",
     `root=${shellEscape(root)}`,
     `workspace=${shellEscape(workspace)}`,
-    'root_real=$(cd "$root" && pwd -P)',
-    'workspace_real=$(cd "$workspace" && pwd -P)',
+    "canonicalize_path() {",
+    '  current="$1"',
+    "  suffix=''",
+    '  while [ ! -e "$current" ] && [ "$current" != "/" ]; do',
+    "    segment=${current##*/}",
+    '    suffix="/$segment$suffix"',
+    "    current=${current%/*}",
+    '    if [ -z "$current" ]; then current="/"; fi',
+    "  done",
+    '  if [ -d "$current" ]; then',
+    '    resolved=$(cd "$current" && pwd -P)',
+    "  else",
+    "    parent=${current%/*}",
+    '    if [ -z "$parent" ]; then parent="/"; fi',
+    "    segment=${current##*/}",
+    '    resolved_parent=$(cd "$parent" && pwd -P)',
+    '    if [ "$resolved_parent" = "/" ]; then',
+    '      resolved="/$segment"',
+    "    else",
+    '      resolved="$resolved_parent/$segment"',
+    "    fi",
+    "  fi",
+    '  if [ "$resolved" = "/" ]; then',
+    '    printf "/%s\\n" "${suffix#/}"',
+    "  else",
+    '    printf "%s\\n" "$resolved$suffix"',
+    "  fi",
+    "}",
+    'root_real=$(canonicalize_path "$root")',
+    'workspace_real=$(canonicalize_path "$workspace")',
     `printf '%s\\t%s\\t%s\\n' ${shellEscape(remoteWorkspaceMarker)} "$root_real" "$workspace_real"`,
   ].join("\n");
   const result = await runSsh(workerHost, script, {
     timeoutMs: settings.worker.sshTimeoutMs,
     stderrToStdout: true,
+    abortSignal: options.abortSignal,
   });
   if (result.status !== 0)
     throw new Error(`invalid_workspace_cwd: ${workerHost} ${result.status} ${result.stdout}`);
   const parsed = parseRemoteWorkspaceValidationOutput(result.stdout);
-  ensureRemoteInsideRoot(parsed.workspace, parsed.root);
-  if (normalizeRemotePath(parsed.workspace) === normalizeRemotePath(parsed.root)) {
+  if (!remotePathInsideRoot(parsed.workspace, parsed.root)) {
+    throw new Error(
+      `invalid_workspace_cwd: symlink_escape ${workspace} -> ${parsed.workspace} outside ${parsed.root}`,
+    );
+  }
+  if (!shared && normalizeRemotePath(parsed.workspace) === normalizeRemotePath(parsed.root)) {
     throw new Error(`refusing to use workspace root as cwd: ${parsed.root}`);
   }
   return parsed.workspace;
@@ -359,21 +502,28 @@ async function runRemoteHook(
   workspace: string,
   command: string,
   hooks: HooksSettings,
+  options: WorkspaceRunHookOptions = {},
 ): Promise<void> {
   const result = await runSsh(workerHost, `cd ${shellEscape(workspace)} && ${command}`, {
     timeoutMs: hooks.timeoutMs,
     stderrToStdout: true,
+    abortSignal: options.abortSignal,
   });
   if (result.status !== 0)
     throw new Error(`workspace hook failed with status ${result.status}: ${result.stdout.trim()}`);
 }
 
-async function remoteWorkspaceRoot(settings: Settings, workerHost: string): Promise<string> {
+async function remoteWorkspaceRoot(
+  settings: Settings,
+  workerHost: string,
+  options: WorkspaceRunHookOptions = {},
+): Promise<string> {
   const root = settings.workspace.rootExpression ?? settings.workspace.root;
   if (root === "~" || root.startsWith("~/")) {
     const result = await runSsh(workerHost, 'printf "%s\\n" "$HOME"', {
       timeoutMs: settings.worker.sshTimeoutMs,
       stderrToStdout: true,
+      abortSignal: options.abortSignal,
     });
     if (result.status !== 0)
       throw new Error(`remote_home_lookup_failed: ${workerHost} ${result.status} ${result.stdout}`);
@@ -416,16 +566,25 @@ function parseRemoteWorkspaceValidationOutput(output: string): { root: string; w
 }
 
 function ensureRemoteInsideRoot(target: string, root: string): void {
+  if (remotePathInsideRoot(target, root)) return;
+  throw new Error(`workspace outside root: ${target}`);
+}
+
+function remotePathInsideRoot(target: string, root: string): boolean {
   const normalizedRoot = normalizeRemotePath(root);
   const normalizedTarget = normalizeRemotePath(target);
-  if (normalizedTarget === normalizedRoot || normalizedTarget.startsWith(`${normalizedRoot}/`))
-    return;
-  throw new Error(`workspace outside root: ${target}`);
+  if (normalizedRoot === "/") return normalizedTarget.startsWith("/");
+  return normalizedTarget === normalizedRoot || normalizedTarget.startsWith(`${normalizedRoot}/`);
 }
 
 function normalizeRemotePath(value: string): string {
   const normalized = path.posix.normalize(value);
   return normalized.endsWith("/") && normalized !== "/" ? normalized.slice(0, -1) : normalized;
+}
+
+function insideRoot(target: string, root: string): boolean {
+  const relative = path.relative(root, target);
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }
 
 function invalidWorkspaceInput(value: string): boolean {

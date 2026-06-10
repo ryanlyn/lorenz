@@ -1,14 +1,18 @@
 import { normalizeIssue } from "@symphony/issue";
-import type { Issue, RuntimeTrackerClient } from "@symphony/domain";
+import {
+  ISSUE_STATE_TYPES,
+  isRecord,
+  type Issue,
+  type IssueRef,
+  type RuntimeTrackerClient,
+} from "@symphony/domain";
 
 export class MemoryTrackerClient implements RuntimeTrackerClient {
   private readonly issues: Issue[];
 
   constructor(issues: Array<Issue | Record<string, unknown>> = []) {
     this.issues = issues.map((issue) =>
-      isIssue(issue)
-        ? { ...issue, labels: [...issue.labels], blockers: [...issue.blockers] }
-        : normalizeIssue(issue),
+      isIssue(issue) ? cloneIssue(issue) : normalizeIssue(issue),
     );
   }
 
@@ -19,6 +23,13 @@ export class MemoryTrackerClient implements RuntimeTrackerClient {
   async fetchIssuesByIds(ids: string[]): Promise<Issue[]> {
     const wanted = new Set(ids);
     return Promise.resolve(this.issues.filter((issue) => wanted.has(issue.id)).map(cloneIssue));
+  }
+
+  updateIssue(id: string, fields: Partial<Pick<Issue, "state" | "stateType">>): void {
+    const issue = this.issues.find((i) => i.id === id);
+    if (!issue) return;
+    if (fields.state !== undefined) issue.state = fields.state;
+    if (fields.stateType !== undefined) issue.stateType = fields.stateType;
   }
 
   async fetchIssuesByStates(states: string[]): Promise<Issue[]> {
@@ -58,13 +69,35 @@ function isIssue(value: Issue | Record<string, unknown>): value is Issue {
     typeof value.identifier === "string" &&
     typeof value.title === "string" &&
     typeof value.state === "string" &&
+    typeof value.stateType === "string" &&
+    isIssueStateType(value.stateType) &&
     Array.isArray(value.labels) &&
-    Array.isArray(value.blockers)
+    value.labels.every((label) => typeof label === "string") &&
+    Array.isArray(value.blockers) &&
+    value.blockers.every(isIssueRef)
   );
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+function isIssueRef(value: unknown): value is IssueRef {
+  return (
+    isRecord(value) &&
+    isOptionalString(value.id) &&
+    isOptionalString(value.identifier) &&
+    isOptionalString(value.state) &&
+    isOptionalIssueStateType(value.stateType)
+  );
+}
+
+function isOptionalString(value: unknown): boolean {
+  return value === undefined || typeof value === "string";
+}
+
+function isOptionalIssueStateType(value: unknown): boolean {
+  return value === undefined || value === null || isIssueStateType(value);
+}
+
+function isIssueStateType(value: unknown): value is Issue["stateType"] {
+  return typeof value === "string" && (ISSUE_STATE_TYPES as readonly string[]).includes(value);
 }
 
 function normalizeState(value: string): string {

@@ -19,16 +19,18 @@ export async function withTimeout<T>(
 }
 
 export async function stopChild(child: ChildProcessWithoutNullStreams): Promise<void> {
-  if (child.killed) return;
-  child.kill("SIGTERM");
+  if (child.exitCode !== null || child.signalCode !== null) return;
+
   await new Promise<void>((resolve) => {
+    let closed = false;
     const timer = setTimeout(() => {
-      if (!child.killed) child.kill("SIGKILL");
-      resolve();
+      if (!closed) child.kill("SIGKILL");
     }, 1_000);
     child.once("close", () => {
+      closed = true;
       clearTimeout(timer);
       resolve();
     });
+    child.kill("SIGTERM");
   });
 }

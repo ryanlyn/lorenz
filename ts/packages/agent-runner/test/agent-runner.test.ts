@@ -1,5 +1,12 @@
-import { vi, test } from "vitest";
-import type { AgentExecutor, AgentSession, AgentUpdate, Issue, Settings } from "@symphony/domain";
+import { afterEach, vi, test } from "vitest";
+import type {
+  AgentExecutor,
+  AgentSession,
+  AgentUpdate,
+  Issue,
+  SessionNotification,
+  Settings,
+} from "@symphony/domain";
 import { defaultSettings } from "@symphony/config";
 
 import { assert } from "../../../test/assert.js";
@@ -15,6 +22,7 @@ function fakeIssue(overrides: Partial<Issue> = {}): Issue {
     identifier: "TEST-1",
     title: "Test issue",
     state: "Todo",
+    stateType: "unstarted",
     labels: [],
     blockers: [],
     ...overrides,
@@ -47,7 +55,11 @@ function fakeExecutor(
   return {
     kind: "codex",
     async startSession(input) {
-      input.onUpdate?.({ type: "session_started", sessionId: session.sessionId });
+      input.onUpdate?.({
+        type: "session_started",
+        message: `session started (${session.sessionId})`,
+        sessionId: session.sessionId,
+      });
       return session;
     },
     async runTurn(_session, _prompt, _issue) {
@@ -69,6 +81,69 @@ function fakeAdapters(overrides: Partial<RunAgentAttemptAdapters> = {}): RunAgen
     ...overrides,
   };
 }
+
+function fakeSettingsWithTimeouts(
+  opts: {
+    setupTimeoutMs?: number | undefined;
+    hookTimeoutMs?: number | undefined;
+    hooks?: Partial<Settings["hooks"]> | undefined;
+  } = {},
+): Settings {
+  const settings = fakeSettings();
+  const agentConfig = settings.agents[settings.agent.kind]!;
+  return {
+    ...settings,
+    agents: {
+      ...settings.agents,
+      [settings.agent.kind]: {
+        ...agentConfig,
+        stallTimeoutMs: opts.setupTimeoutMs ?? agentConfig.stallTimeoutMs,
+      },
+    },
+    hooks: {
+      ...settings.hooks,
+      timeoutMs: opts.hookTimeoutMs ?? settings.hooks.timeoutMs,
+      ...opts.hooks,
+    },
+  };
+}
+
+function never<T>(): Promise<T> {
+  return new Promise<T>(() => {});
+}
+
+type PromiseState<T> =
+  | { status: "pending" }
+  | { status: "resolved"; value: T }
+  | { status: "rejected"; error: unknown };
+
+type SettledPromiseState<T> = Exclude<PromiseState<T>, { status: "pending" }>;
+
+function observePromise<T>(promise: Promise<T>): Promise<SettledPromiseState<T>> {
+  return promise.then(
+    (value) => ({ status: "resolved", value }) as const,
+    (error: unknown) => ({ status: "rejected", error }) as const,
+  );
+}
+
+async function observedPromiseState<T>(
+  observed: Promise<SettledPromiseState<T>>,
+): Promise<PromiseState<T>> {
+  return Promise.race([observed, Promise.resolve({ status: "pending" } as const)]);
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function assertRejected(state: PromiseState<unknown>, expected: string | RegExp): void {
+  assert.equal(state.status, "rejected");
+  if (state.status === "rejected") assert.match(errorMessage(state.error), expected);
+}
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 // ---------------------------------------------------------------------------
 // runAgentAttempt
@@ -124,7 +199,11 @@ test("runAgentAttempt respects abort signal and stops executor mid-turn", async 
           stopped = true;
         },
       });
-      input.onUpdate?.({ type: "session_started", sessionId: session.sessionId });
+      input.onUpdate?.({
+        type: "session_started",
+        message: `session started (${session.sessionId})`,
+        sessionId: session.sessionId,
+      });
       return session;
     },
     async runTurn() {
@@ -146,6 +225,331 @@ test("runAgentAttempt respects abort signal and stops executor mid-turn", async 
 
   await assert.rejects(() => promise, "agent_run_aborted");
   assert.equal(stopped, true);
+});
+
+test("runAgentAttempt times out a hung workspace creation stage", async () => {
+  vi.useFakeTimers();
+  const issue = fakeIssue();
+  const settings = fakeSettingsWithTimeouts({ setupTimeoutMs: 50 });
+
+  const promise = runAgentAttempt({
+    issue,
+    workflow: { path: "/workflow.md", config: {}, promptTemplate: "Fix it", settings },
+    settings,
+    adapters: fakeAdapters({
+      createWorkspaceForIssue: async () => never(),
+    }),
+  });
+  const observed = observePromise(promise);
+
+  await vi.advanceTimersByTimeAsync(50);
+
+  assertRejected(
+    await observedPromiseState(observed),
+    /agent_runner_timeout.*workspace\.create_for_issue.*50/,
+  );
+});
+
+test("runAgentAttempt cancels workspace creation when setup timeout fires", async () => {
+  vi.useFakeTimers();
+  const issue = fakeIssue();
+  const settings = fakeSettingsWithTimeouts({ setupTimeoutMs: 50 });
+  let markerWritten = false;
+  let signalSeen = false;
+
+  const promise = runAgentAttempt({
+    issue,
+    workflow: { path: "/workflow.md", config: {}, promptTemplate: "Fix it", settings },
+    settings,
+    adapters: fakeAdapters({
+      createWorkspaceForIssue: async (_settings, _issue, options) => {
+        const signal = (options as typeof options & { abortSignal?: AbortSignal }).abortSignal;
+        signalSeen = signal instanceof AbortSignal;
+        return new Promise<string>((resolve, reject) => {
+          const markerTimer = setTimeout(() => {
+            markerWritten = true;
+            resolve("/tmp/workspace/TEST-1");
+          }, 100);
+          signal?.addEventListener(
+            "abort",
+            () => {
+              clearTimeout(markerTimer);
+              reject(new Error("workspace setup canceled"));
+            },
+            { once: true },
+          );
+        });
+      },
+    }),
+  });
+  const observed = observePromise(promise);
+
+  await vi.advanceTimersByTimeAsync(50);
+
+  assertRejected(
+    await observedPromiseState(observed),
+    /agent_runner_timeout.*workspace\.create_for_issue.*50/,
+  );
+
+  await vi.advanceTimersByTimeAsync(100);
+
+  assert.equal(signalSeen, true);
+  assert.equal(markerWritten, false);
+});
+
+test("runAgentAttempt reports setup adapter crashes with the setup stage", async () => {
+  const issue = fakeIssue();
+  const settings = fakeSettings();
+
+  await assert.rejects(
+    () =>
+      runAgentAttempt({
+        issue,
+        workflow: { path: "/workflow.md", config: {}, promptTemplate: "Fix it", settings },
+        settings,
+        adapters: fakeAdapters({
+          createWorkspaceForIssue: async () => {
+            throw new Error("adapter exploded");
+          },
+        }),
+      }),
+    /agent_runner_setup_crashed.*workspace\.create_for_issue.*adapter exploded/,
+  );
+});
+
+test("runAgentAttempt times out a hung beforeRun setup stage", async () => {
+  vi.useFakeTimers();
+  const issue = fakeIssue();
+  const settings = fakeSettingsWithTimeouts({
+    hookTimeoutMs: 50,
+    hooks: { beforeRun: "setup" },
+  });
+
+  const promise = runAgentAttempt({
+    issue,
+    workflow: { path: "/workflow.md", config: {}, promptTemplate: "Fix it", settings },
+    settings,
+    adapters: fakeAdapters({
+      runHook: async () => never(),
+    }),
+  });
+  const observed = observePromise(promise);
+
+  await vi.advanceTimersByTimeAsync(1050);
+
+  assertRejected(
+    await observedPromiseState(observed),
+    /agent_runner_timeout.*workspace\.run_before_run_hook.*1050/,
+  );
+});
+
+test("runAgentAttempt cancels beforeRun hook when setup timeout fires", async () => {
+  vi.useFakeTimers();
+  const issue = fakeIssue();
+  const settings = fakeSettingsWithTimeouts({
+    hookTimeoutMs: 50,
+    hooks: { beforeRun: "setup" },
+  });
+  let markerWritten = false;
+  let signalSeen = false;
+
+  const promise = runAgentAttempt({
+    issue,
+    workflow: { path: "/workflow.md", config: {}, promptTemplate: "Fix it", settings },
+    settings,
+    adapters: fakeAdapters({
+      runHook: async (
+        _command,
+        _workspace,
+        _hooks,
+        _workerHost,
+        options?: { abortSignal?: AbortSignal },
+      ) => {
+        const signal = options?.abortSignal;
+        signalSeen = signal instanceof AbortSignal;
+        return new Promise<void>((resolve, reject) => {
+          const markerTimer = setTimeout(() => {
+            markerWritten = true;
+            resolve();
+          }, 1_100);
+          signal?.addEventListener(
+            "abort",
+            () => {
+              clearTimeout(markerTimer);
+              reject(new Error("hook setup canceled"));
+            },
+            { once: true },
+          );
+        });
+      },
+    }),
+  });
+  const observed = observePromise(promise);
+
+  await vi.advanceTimersByTimeAsync(1_050);
+
+  assertRejected(
+    await observedPromiseState(observed),
+    /agent_runner_timeout.*workspace\.run_before_run_hook.*1050/,
+  );
+
+  await vi.advanceTimersByTimeAsync(1_100);
+
+  assert.equal(signalSeen, true);
+  assert.equal(markerWritten, false);
+});
+
+test("runAgentAttempt times out afterRun and emits a cleanup warning", async () => {
+  vi.useFakeTimers();
+  const issue = fakeIssue();
+  const settings = fakeSettingsWithTimeouts({
+    hookTimeoutMs: 50,
+    hooks: { afterRun: "cleanup" },
+  });
+  const received: AgentUpdate[] = [];
+
+  const promise = runAgentAttempt({
+    issue,
+    workflow: { path: "/workflow.md", config: {}, promptTemplate: "Fix it", settings },
+    settings,
+    onUpdate: (update) => received.push(update),
+    adapters: fakeAdapters({
+      runHook: async () => never(),
+    }),
+  });
+  const observed = observePromise(promise);
+
+  await vi.advanceTimersByTimeAsync(1050);
+
+  const state = await observedPromiseState(observed);
+  assert.equal(state.status, "resolved");
+  assert.ok(
+    received.some(
+      (update) =>
+        update.type === "stderr" &&
+        update.message.includes("Ignoring after_run hook failure") &&
+        update.message.includes("workspace.run_after_run_hook") &&
+        update.message.includes("agent_runner_timeout"),
+    ),
+  );
+});
+
+test("runAgentAttempt emits a cleanup warning when afterRun fails", async () => {
+  const issue = fakeIssue();
+  const settings = fakeSettings({
+    hooks: { ...defaultSettings().hooks, afterRun: "cleanup" },
+  });
+  const received: AgentUpdate[] = [];
+
+  await runAgentAttempt({
+    issue,
+    workflow: { path: "/workflow.md", config: {}, promptTemplate: "Fix it", settings },
+    settings,
+    onUpdate: (update) => received.push(update),
+    adapters: fakeAdapters({
+      runHook: async () => {
+        throw new Error("cleanup exploded");
+      },
+    }),
+  });
+
+  assert.ok(
+    received.some(
+      (update) =>
+        update.type === "stderr" &&
+        update.message.includes("Ignoring after_run hook failure") &&
+        update.message.includes("workspace.run_after_run_hook") &&
+        update.message.includes("cleanup exploded"),
+    ),
+  );
+});
+
+test("runAgentAttempt runs afterRun when beforeRun fails after workspace creation", async () => {
+  const issue = fakeIssue();
+  const settings = fakeSettings({
+    hooks: { ...defaultSettings().hooks, beforeRun: "setup", afterRun: "cleanup" },
+  });
+  const commands: string[] = [];
+
+  await assert.rejects(
+    () =>
+      runAgentAttempt({
+        issue,
+        workflow: { path: "/workflow.md", config: {}, promptTemplate: "Fix it", settings },
+        settings,
+        adapters: fakeAdapters({
+          runHook: async (command) => {
+            commands.push(command);
+            if (command === "setup") throw new Error("setup failed");
+          },
+        }),
+      }),
+    "setup failed",
+  );
+
+  assert.deepEqual(commands, ["setup", "cleanup"]);
+});
+
+test("runAgentAttempt runs afterRun when resume state read fails after workspace creation", async () => {
+  const issue = fakeIssue();
+  const settings = fakeSettings({
+    hooks: { ...defaultSettings().hooks, afterRun: "cleanup" },
+  });
+  const commands: string[] = [];
+
+  await assert.rejects(
+    () =>
+      runAgentAttempt({
+        issue,
+        workflow: { path: "/workflow.md", config: {}, promptTemplate: "Fix it", settings },
+        settings,
+        adapters: fakeAdapters({
+          runHook: async (command) => {
+            commands.push(command);
+          },
+          readResumeState: async () => {
+            throw new Error("resume read failed");
+          },
+        }),
+      }),
+    "resume read failed",
+  );
+
+  assert.deepEqual(commands, ["cleanup"]);
+});
+
+test("runAgentAttempt runs afterRun when startSession fails after workspace creation", async () => {
+  const issue = fakeIssue();
+  const settings = fakeSettings({
+    hooks: { ...defaultSettings().hooks, afterRun: "cleanup" },
+  });
+  const commands: string[] = [];
+
+  await assert.rejects(
+    () =>
+      runAgentAttempt({
+        issue,
+        workflow: { path: "/workflow.md", config: {}, promptTemplate: "Fix it", settings },
+        settings,
+        adapters: fakeAdapters({
+          runHook: async (command) => {
+            commands.push(command);
+          },
+          executorFactory: () => ({
+            kind: "codex",
+            async startSession() {
+              throw new Error("start failed");
+            },
+            async runTurn() {
+              return [{ type: "turn_completed" }];
+            },
+          }),
+        }),
+      }),
+    "start failed",
+  );
+
+  assert.deepEqual(commands, ["cleanup"]);
 });
 
 test("runAgentAttempt forwards a threaded mcpEndpoint into executor.startSession", async () => {
@@ -211,7 +615,7 @@ test("runAgentAttempt threads null mcpEndpoint when none is supplied (local path
 // executorFor
 // ---------------------------------------------------------------------------
 
-test("executorFor selects codex executor for codex backend profile", async () => {
+test("runAgentAttempt invokes executorFactory with resolved settings and reports agentKind from settings", async () => {
   const issue = fakeIssue();
   const settings = fakeSettings();
   let factoryCalledWith: Settings | null = null;
@@ -228,23 +632,34 @@ test("executorFor selects codex executor for codex backend profile", async () =>
     }),
   });
 
+  // Verify executorFactory received the correct settings including agent kind
   assert.ok(factoryCalledWith);
+  assert.equal(factoryCalledWith!.agent.kind, "codex");
+  // Result agentKind comes from settings.agent.kind, not from executor session
   assert.equal(result.agentKind, "codex");
 });
 
-test("executorFor selects ACP executor for claude backend profile", async () => {
+test("runAgentAttempt passes claude agent kind settings to executorFactory and returns it in result", async () => {
   const issue = fakeIssue();
   const settings = fakeSettings({ agent: { ...defaultSettings().agent, kind: "claude" } });
+  let factoryCalledWith: Settings | null = null;
 
   const result = await runAgentAttempt({
     issue,
     workflow: { path: "/workflow.md", config: {}, promptTemplate: "Fix it", settings },
     settings,
     adapters: fakeAdapters({
-      executorFactory: () => fakeExecutor({ session: { agentKind: "claude" } }),
+      executorFactory: (s) => {
+        factoryCalledWith = s;
+        return fakeExecutor({ session: { agentKind: "claude" } });
+      },
     }),
   });
 
+  // Verify executorFactory received settings with claude agent kind
+  assert.ok(factoryCalledWith);
+  assert.equal(factoryCalledWith!.agent.kind, "claude");
+  // Result agentKind reflects the settings.agent.kind value
   assert.equal(result.agentKind, "claude");
 });
 
@@ -561,7 +976,11 @@ test("RunController propagates updates from executor to caller", async () => {
       executorFactory: () => ({
         kind: "codex",
         async startSession(input) {
-          input.onUpdate?.({ type: "session_started", sessionId: "s1" });
+          input.onUpdate?.({
+            type: "session_started",
+            message: "session started (s1)",
+            sessionId: "s1",
+          });
           return fakeSession();
         },
         async runTurn(_session, _prompt, _issue) {
@@ -592,13 +1011,18 @@ test("RunController accumulates usage totals across turns", async () => {
         kind: "codex",
         async startSession(input) {
           sessionOnUpdate = input.onUpdate;
-          input.onUpdate?.({ type: "session_started", sessionId: "s1" });
+          input.onUpdate?.({
+            type: "session_started",
+            message: "session started (s1)",
+            sessionId: "s1",
+          });
           return fakeSession();
         },
         async runTurn() {
           turnNumber += 1;
           const usageUpdate: AgentUpdate = {
-            type: "usage",
+            type: "session_notification",
+            message: {} as SessionNotification,
             usage: {
               inputTokens: 10 * turnNumber,
               outputTokens: 5 * turnNumber,
@@ -615,7 +1039,7 @@ test("RunController accumulates usage totals across turns", async () => {
 
   // The controller runs at least one turn and accumulates updates from onUpdate callback
   assert.ok(result.turnCount >= 1);
-  const usageUpdates = result.updates.filter((u) => u.type === "usage");
+  const usageUpdates = result.updates.filter((u) => u.type === "session_notification" && u.usage);
   assert.ok(usageUpdates.length >= 1);
   // Verify usage fields are passed through
   assert.ok(usageUpdates[0]!.usage);

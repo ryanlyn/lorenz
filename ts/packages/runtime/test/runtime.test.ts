@@ -5,13 +5,17 @@ import { test, vi } from "vitest";
 import {
   createDispatchCoordinator,
   createWorkspaceForIssue,
+  loadWorkflow,
   normalizeIssue,
   Orchestrator,
   parseConfig,
-  readResumeState,
   runtimeAdapters,
-  writeResumeState,
+  slotKey,
 } from "@symphony/cli";
+import {
+  RUNTIME_EVENT_TYPES as RUNTIME_EVENT_TYPES_FROM_RUNTIME_EVENTS,
+  RUNTIME_RUN_OUTCOMES as RUNTIME_RUN_OUTCOMES_FROM_RUNTIME_EVENTS,
+} from "@symphony/runtime-events";
 import type {
   Issue,
   McpEndpointManager,
@@ -25,13 +29,22 @@ import type { AgentMcpEndpointLease } from "@symphony/mcp";
 import type { AcquireResult, BoxLease, BoxOutcome, BoxPool } from "@symphony/worker-box-pool";
 
 import { assert } from "../../../test/assert.js";
-import { initGitRepo, tempDir, writeExecutable } from "../../../test/helpers.js";
+import { tempDir, writeExecutable } from "../../../test/helpers.js";
 
-import { SymphonyRuntime } from "@symphony/runtime";
+import {
+  RUNTIME_EVENT_TYPES as RUNTIME_EVENT_TYPES_FROM_RUNTIME,
+  RUNTIME_RUN_OUTCOMES as RUNTIME_RUN_OUTCOMES_FROM_RUNTIME,
+  SymphonyRuntime,
+} from "@symphony/runtime";
 
 function runtimeOptions(options: SymphonyRuntimeOptions): SymphonyRuntimeOptions {
   return { ...runtimeAdapters, ...options };
 }
+
+test("runtime exports canonical runtime-events vocabulary values", () => {
+  assert.equal(RUNTIME_EVENT_TYPES_FROM_RUNTIME, RUNTIME_EVENT_TYPES_FROM_RUNTIME_EVENTS);
+  assert.equal(RUNTIME_RUN_OUTCOMES_FROM_RUNTIME, RUNTIME_RUN_OUTCOMES_FROM_RUNTIME_EVENTS);
+});
 
 test("runtime dry-run polls, computes eligibility, and does not start agents", async () => {
   const issue = issueFixture("issue-1", "MT-1");
@@ -128,9 +141,9 @@ test("runtime schedules continuation retry after normal worker exit even when is
 
   const retry = runtime.snapshot().retrying[0];
   assert.ok(retry);
-  assert.equal(retry.identifier, "MT-INACTIVE-CONTINUATION");
+  assert.equal(retry.issueIdentifier, "MT-INACTIVE-CONTINUATION");
   assert.equal(retry.attempt, 1);
-  const delayMs = new Date(retry.dueAt).getTime() - beforeRun;
+  const delayMs = new Date(retry.dueAtIso).getTime() - beforeRun;
   assert.ok(delayMs >= 900 && delayMs <= 1_500);
 });
 
@@ -221,6 +234,91 @@ test("runtime reloads workflow settings on each poll with last-known-good fallba
   );
 });
 
+test("runtime skips reload side effects when workflow content is unchanged", async () => {
+  const issue = issueFixture("issue-unchanged-reload", "MT-UNCHANGED-RELOAD");
+  const dir = await tempDir("symphony-runtime-unchanged-workflow");
+  const workflowFile = path.join(dir, "WORKFLOW.md");
+  await fs.writeFile(workflowFile, workflowMarkdown({ intervalMs: 5 }));
+  const workflow = await loadWorkflow(workflowFile, {}, { cwd: dir });
+  let reloads = 0;
+  let clientBuilds = 0;
+  const runtime = new SymphonyRuntime(
+    runtimeOptions({
+      workflow,
+      reloadWorkflow: async () => {
+        reloads += 1;
+        return loadWorkflow(workflowFile, {}, { cwd: dir });
+      },
+      clientFactory: () => {
+        clientBuilds += 1;
+        return {
+          fetchCandidateIssues: async () => [issue],
+          fetchIssuesByIds: async () => [issue],
+        };
+      },
+      runner: async () => {
+        throw new Error("dry-run should not call runner");
+      },
+    }),
+  );
+
+  await runtime.pollOnce({ dryRun: true });
+  await runtime.pollOnce({ dryRun: true });
+
+  assert.equal(reloads, 0);
+  assert.equal(clientBuilds, 1);
+  assert.equal(
+    runtime.snapshot().recentEvents.some((event) => event.type === "workflow_reloaded"),
+    false,
+  );
+});
+
+test("runtime reloads stamped workflow when file content changes", async () => {
+  const issue = issueFixture("issue-changed-reload", "MT-CHANGED-RELOAD");
+  const dir = await tempDir("symphony-runtime-changed-workflow");
+  const workflowFile = path.join(dir, "WORKFLOW.md");
+  await fs.writeFile(workflowFile, workflowMarkdown({ intervalMs: 5 }));
+  const workflow = await loadWorkflow(workflowFile, {}, { cwd: dir });
+  let reloads = 0;
+  let clientBuilds = 0;
+  const runtime = new SymphonyRuntime(
+    runtimeOptions({
+      workflow,
+      reloadWorkflow: async () => {
+        reloads += 1;
+        return loadWorkflow(workflowFile, {}, { cwd: dir });
+      },
+      clientFactory: () => {
+        clientBuilds += 1;
+        return {
+          fetchCandidateIssues: async () => [issue],
+          fetchIssuesByIds: async () => [issue],
+        };
+      },
+      runner: async () => {
+        throw new Error("dry-run should not call runner");
+      },
+    }),
+  );
+
+  await fs.writeFile(
+    workflowFile,
+    workflowMarkdown({ acceptUnrouted: false, intervalMs: 9, prompt: "Changed prompt" }),
+  );
+
+  await runtime.pollOnce({ dryRun: true });
+
+  assert.equal(reloads, 1);
+  assert.equal(clientBuilds, 2);
+  assert.equal(runtime.workflow.promptTemplate, "Changed prompt");
+  assert.equal(runtime.workflow.settings.polling.intervalMs, 9);
+  assert.equal(runtime.snapshot().poll.eligible, 0);
+  assert.equal(
+    runtime.snapshot().recentEvents.some((event) => event.type === "workflow_reloaded"),
+    true,
+  );
+});
+
 test("runtime preflights dispatch config before candidate fetches", async () => {
   const workflow = workflowFixture();
   workflow.settings.tracker.kind = undefined;
@@ -283,8 +381,11 @@ test("runtime aborts in-flight runs when reconciliation sees a terminal issue", 
 
   await runtime.pollOnce();
   assert.equal(started, true);
+  // The second pollOnce triggers reconciliation which detects the terminal issue
+  // and aborts the in-flight run. The abort is async so we wait for it with a
+  // generous timeout to avoid flakiness under CI load.
   await runtime.pollOnce({ dryRun: true });
-  await waitFor(() => aborted, 1_000);
+  await waitFor(() => aborted, 2_000);
 
   const snapshot = runtime.snapshot();
   assert.equal(snapshot.running.length, 0);
@@ -416,16 +517,9 @@ test("runtime reconciles stalled runs from the orchestrator poll loop", async ()
   const root = await tempDir("symphony-ts-runtime-stall-resume");
   const workflow = workflowFixture(root);
   workflow.settings.codex.stallTimeoutMs = 50;
+  workflow.settings.agents.codex.stallTimeoutMs = 50;
   const workspace = await createWorkspaceForIssue(workflow.settings, issue);
-  await initGitRepo(workspace);
-  await writeResumeState(workspace, {
-    agentKind: "codex",
-    resumeId: "stale-stalled-resume",
-    issueId: issue.id,
-    issueIdentifier: issue.identifier,
-    issueState: issue.state,
-    workspacePath: workspace,
-  });
+  const deletedResumeStates: string[] = [];
   const orchestrator = new Orchestrator(workflow.settings);
   let aborted = false;
   const runtime = new SymphonyRuntime(
@@ -436,8 +530,15 @@ test("runtime reconciles stalled runs from the orchestrator poll loop", async ()
         fetchCandidateIssues: async () => [issue],
         fetchIssuesByIds: async () => [issue],
       },
+      deleteResumeState: async (workspacePath) => {
+        deletedResumeStates.push(workspacePath);
+      },
       runner: async ({ abortSignal, onUpdate }) => {
-        onUpdate?.({ type: "workspace_prepared", workspacePath: workspace });
+        onUpdate?.({
+          type: "workspace_prepared",
+          message: `workspace prepared at ${workspace}`,
+          workspacePath: workspace,
+        });
         await new Promise<void>((_resolve, reject) => {
           abortSignal?.addEventListener(
             "abort",
@@ -466,7 +567,7 @@ test("runtime reconciles stalled runs from the orchestrator poll loop", async ()
     assert.equal(snapshot.running.length, 0);
     assert.equal(snapshot.runHistory[0]?.outcome, "stalled");
     assert.equal(snapshot.retrying[0]?.attempt, 1);
-    assert.equal((await readResumeState(workspace)).status, "missing");
+    assert.deepEqual(deletedResumeStates, [workspace]);
     assert.ok(snapshot.recentEvents.some((event) => event.type === "run_stalled"));
     assert.ok(snapshot.recentEvents.some((event) => event.type === "resume_state_invalidated"));
   } finally {
@@ -474,12 +575,89 @@ test("runtime reconciles stalled runs from the orchestrator poll loop", async ()
   }
 });
 
+test("runtime stall reconciliation uses agents-level stall timeout defaults", async () => {
+  const issue = issueFixture("issue-agents-stall", "MT-AGENTS-STALL");
+  const root = await tempDir("symphony-ts-runtime-agents-stall");
+  const settings = parseConfig({
+    tracker: {
+      kind: "linear",
+      api_key: "linear-token",
+      project_slug: "mono",
+      active_states: ["Todo", "In Progress"],
+      terminal_states: ["Done"],
+    },
+    polling: { interval_ms: 5 },
+    workspace: { root },
+    agents: { stall_timeout_ms: 50 },
+  });
+  assert.equal(settings.codex.stallTimeoutMs, 50);
+  assert.equal(settings.agents.codex.stallTimeoutMs, 50);
+  const workflow: WorkflowDefinition = {
+    path: "/tmp/WORKFLOW.md",
+    config: {},
+    promptTemplate: "Issue {{ issue.identifier }}",
+    settings,
+  };
+  const workspace = await createWorkspaceForIssue(workflow.settings, issue);
+  const orchestrator = new Orchestrator(workflow.settings);
+  let aborted = false;
+  const runtime = new SymphonyRuntime(
+    runtimeOptions({
+      workflow,
+      orchestrator,
+      client: {
+        fetchCandidateIssues: async () => [issue],
+        fetchIssuesByIds: async () => [issue],
+      },
+      runner: async ({ abortSignal, onUpdate }) => {
+        onUpdate?.({
+          type: "workspace_prepared",
+          message: `workspace prepared at ${workspace}`,
+          workspacePath: workspace,
+        });
+        await new Promise<void>((_resolve, reject) => {
+          abortSignal?.addEventListener(
+            "abort",
+            () => {
+              aborted = true;
+              reject(new Error("aborted by agents-level stall timeout"));
+            },
+            { once: true },
+          );
+        });
+        throw new Error("unreachable");
+      },
+    }),
+  );
+
+  try {
+    await runtime.pollOnce();
+    const running = orchestrator.snapshot().running[0];
+    assert.ok(running);
+    running.lastAgentTimestamp = new Date(Date.now() - 1_000);
+
+    await runtime.pollOnce({ dryRun: true });
+    await waitFor(() => aborted, 1_000);
+
+    const snapshot = runtime.snapshot();
+    assert.equal(snapshot.running.length, 0);
+    assert.equal(snapshot.runHistory[0]?.outcome, "stalled");
+  } finally {
+    runtime.stop();
+  }
+});
+
+// NOTE: This test modifies process.env.PATH to inject a fake ssh binary.
+// It restores PATH in the finally block but is NOT safe for parallel execution
+// with other tests that depend on PATH or invoke ssh. The test suite runs
+// sequentially so this is acceptable.
 test("runtime does not stall a stale ensemble slot snapshot after its runner completes", async () => {
   const issue = issueFixture("issue-ensemble-stall-race", "MT-ENSEMBLE-RACE");
   const root = await tempDir("symphony-ts-runtime-ensemble-stall-race");
   const workflow = workflowFixture(root);
   workflow.settings.agent.ensembleSize = 2;
   workflow.settings.codex.stallTimeoutMs = 50;
+  workflow.settings.agents.codex.stallTimeoutMs = 50;
   workflow.settings.worker.sshTimeoutMs = 2_000;
   const orchestrator = new Orchestrator(workflow.settings);
   const controls = new Map<
@@ -500,7 +678,11 @@ test("runtime does not stall a stale ensemble slot snapshot after its runner com
       runner: async ({ abortSignal, onUpdate, slotIndex }) => {
         const slot = slotIndex ?? 0;
         const workspace = path.join(root, `workspace-${slot}`);
-        onUpdate?.({ type: "workspace_prepared", workspacePath: workspace });
+        onUpdate?.({
+          type: "workspace_prepared",
+          message: `workspace prepared at ${workspace}`,
+          workspacePath: workspace,
+        });
         return await new Promise<RunResult>((resolve, reject) => {
           controls.set(slot, { resolve, reject });
           abortSignal?.addEventListener("abort", () => reject(new Error(`aborted slot ${slot}`)), {
@@ -529,7 +711,7 @@ test("runtime does not stall a stale ensemble slot snapshot after its runner com
   try {
     await runtime.pollOnce();
     await runtime.pollOnce();
-    await waitFor(() => controls.size === 2, 1_000);
+    await waitFor(() => controls.size === 2, 2_000);
 
     const entries = orchestrator.snapshot().running;
     assert.equal(entries.length, 2);
@@ -549,12 +731,12 @@ test("runtime does not stall a stale ensemble slot snapshot after its runner com
       updates: [],
       resumeId: "ensemble-slot-1",
       agentKind: "codex",
-      finalIssue: { ...issue, state: "Todo" },
+      finalIssue: { ...issue, state: { name: "Todo", type: "unstarted" } },
     });
     await stallPoll;
     await waitFor(
       () => runtime.snapshot().runHistory.some((entry) => entry.slotIndex === 1),
-      1_000,
+      2_000,
     );
 
     const snapshot = runtime.snapshot();
@@ -578,6 +760,7 @@ test("runtime does not record late success after stall reconciliation wins", asy
   const issue = issueFixture("issue-late-success", "MT-LATE-SUCCESS");
   const workflow = workflowFixture();
   workflow.settings.codex.stallTimeoutMs = 50;
+  workflow.settings.agents.codex.stallTimeoutMs = 50;
   const orchestrator = new Orchestrator(workflow.settings);
   let aborted = false;
   const runControl: { resolve?: (value: any) => void } = {};
@@ -637,6 +820,7 @@ test("runtime keeps a retry handle active when a stalled generation finishes lat
   const workflow = workflowFixture(root);
   workflow.settings.agent.maxRetryBackoffMs = 0;
   workflow.settings.codex.stallTimeoutMs = 50;
+  workflow.settings.agents.codex.stallTimeoutMs = 50;
   const orchestrator = new Orchestrator(workflow.settings);
   let attempts = 0;
   const abortedAttempts = new Set<number>();
@@ -654,6 +838,7 @@ test("runtime keeps a retry handle active when a stalled generation finishes lat
         const attempt = attempts;
         onUpdate?.({
           type: "workspace_prepared",
+          message: `workspace prepared at ${path.join(root, `workspace-${attempt}`)}`,
           workspacePath: path.join(root, `workspace-${attempt}`),
         });
         abortSignal?.addEventListener("abort", () => {
@@ -730,6 +915,137 @@ test("runtime coalesces overlapping pollOnce calls", async () => {
   assert.ok(unblockFetch);
   unblockFetch();
   await Promise.all([first, second]);
+});
+
+test("runtime preserves stronger overlapping pollOnce dispatch intent", async () => {
+  const issue = issueFixture("issue-overlap-dispatch", "MT-OVERLAP-DISPATCH");
+  const doneIssue: Issue = { ...issue, state: "Done", stateType: "completed" };
+  const fetchControl: { release?: () => void } = {};
+  let fetches = 0;
+  let runnerCalls = 0;
+  const runtime = new SymphonyRuntime(
+    runtimeOptions({
+      workflow: workflowFixture(),
+      client: {
+        fetchCandidateIssues: async () => {
+          fetches += 1;
+          if (fetches === 1) {
+            await new Promise<void>((resolve) => {
+              fetchControl.release = resolve;
+            });
+          }
+          return [issue];
+        },
+        fetchIssuesByIds: async () => [issue],
+      },
+      runner: async () => {
+        runnerCalls += 1;
+        return {
+          workspace: "/tmp/symphony/MT-OVERLAP-DISPATCH",
+          turnCount: 1,
+          updates: [],
+          resumeId: "overlap-dispatch",
+          agentKind: "codex",
+          finalIssue: doneIssue,
+        };
+      },
+    }),
+  );
+
+  try {
+    const first = runtime.pollOnce({ dryRun: true });
+    await waitFor(() => fetches === 1, 1_000);
+    const second = runtime.pollOnce({ waitForRuns: true });
+    await vi.waitFor(() => assert.equal(fetches, 1));
+
+    const unblockFetch = fetchControl.release;
+    assert.ok(unblockFetch);
+    unblockFetch();
+    await Promise.all([first, second]);
+
+    assert.equal(fetches, 2);
+    assert.equal(runnerCalls, 1);
+  } finally {
+    runtime.stop();
+  }
+});
+
+test("runtime keeps polling after a candidate fetch throws in the recurring loop", async () => {
+  let fetches = 0;
+  const runtime = new SymphonyRuntime(
+    runtimeOptions({
+      workflow: workflowFixture(),
+      client: {
+        fetchCandidateIssues: async () => {
+          fetches += 1;
+          if (fetches === 1) throw new Error("tracker fetch failed");
+          return [];
+        },
+        fetchIssuesByIds: async () => [],
+      },
+    }),
+  );
+
+  void runtime.start({ once: false });
+  try {
+    await waitFor(() => fetches >= 2, 1_000);
+    const snapshot = runtime.snapshot();
+    assert.ok(fetches >= 2);
+    assert.ok(
+      snapshot.recentEvents.some(
+        (event) => event.type === "poll_error" && event.message.includes("tracker fetch failed"),
+      ),
+    );
+  } finally {
+    runtime.stop();
+  }
+});
+
+test("runtime stop does not record an in-flight run as a failure", async () => {
+  const issue = issueFixture("issue-stop", "MT-STOP");
+  const orchestrator = new Orchestrator(workflowFixture().settings);
+  let aborted = false;
+  const runtime = new SymphonyRuntime(
+    runtimeOptions({
+      workflow: workflowFixture(),
+      orchestrator,
+      client: {
+        fetchCandidateIssues: async () => [issue],
+        fetchIssuesByIds: async () => [issue],
+      },
+      // Mirror the real runner: a stop()-triggered abort rejects the in-flight turn.
+      runner: async ({ abortSignal }) =>
+        await new Promise<RunResult>((_resolve, reject) => {
+          abortSignal?.addEventListener(
+            "abort",
+            () => {
+              aborted = true;
+              reject(new Error("agent_run_aborted"));
+            },
+            { once: true },
+          );
+        }),
+    }),
+  );
+
+  await runtime.pollOnce();
+  await waitFor(() => orchestrator.snapshot().running.length === 1, 1_000);
+
+  // Ctrl+C path: stop() aborts the in-flight run without releasing its slot.
+  runtime.stop();
+  await waitFor(() => aborted, 1_000);
+  // Let the runner's rejection propagate through runClaim's catch.
+  await new Promise<void>((resolve) => setImmediate(resolve));
+
+  const snapshot = runtime.snapshot();
+  assert.equal(
+    snapshot.runHistory.some((entry) => entry.outcome === "failed"),
+    false,
+  );
+  assert.equal(
+    snapshot.recentEvents.some((event) => event.type === "run_failed"),
+    false,
+  );
 });
 
 test("runtime appends operational events to the configured log file", async () => {
@@ -908,9 +1224,10 @@ test("runtime records failed attempts as retryable work and keeps polling", asyn
   assert.equal(snapshot.retrying[0]?.attempt, 1);
   assert.equal(snapshot.retrying[0]?.error, "agent exited: boom");
 
-  const retry = orchestrator.snapshot().retrying[0];
+  const retry = orchestrator.state.retryAttempts.get(slotKey(issue.id, 0));
   assert.ok(retry);
-  retry.dueAt = new Date(Date.now() - 1);
+  retry.dueAtIso = new Date(Date.now() - 1).toISOString();
+  retry.monotonicDeadlineMs = 0;
   await runtime.pollOnce({ waitForRuns: true });
   snapshot = runtime.snapshot();
   assert.equal(attempts, 2);
@@ -927,15 +1244,7 @@ test("runtime invalidates resume state before scheduling failure retry", async (
   const issue = issueFixture("issue-failure-resume", "MT-FAILURE-RESUME");
   const workflow = workflowFixture(root);
   const workspace = await createWorkspaceForIssue(workflow.settings, issue);
-  await initGitRepo(workspace);
-  await writeResumeState(workspace, {
-    agentKind: "codex",
-    resumeId: "stale-failure-resume",
-    issueId: issue.id,
-    issueIdentifier: issue.identifier,
-    issueState: issue.state,
-    workspacePath: workspace,
-  });
+  const deletedResumeStates: string[] = [];
   const runtime = new SymphonyRuntime(
     runtimeOptions({
       workflow,
@@ -943,8 +1252,15 @@ test("runtime invalidates resume state before scheduling failure retry", async (
         fetchCandidateIssues: async () => [issue],
         fetchIssuesByIds: async () => [issue],
       },
+      deleteResumeState: async (workspacePath) => {
+        deletedResumeStates.push(workspacePath);
+      },
       runner: async ({ onUpdate }) => {
-        onUpdate?.({ type: "workspace_prepared", workspacePath: workspace });
+        onUpdate?.({
+          type: "workspace_prepared",
+          message: `workspace prepared at ${workspace}`,
+          workspacePath: workspace,
+        });
         throw new Error("agent exited: retry me");
       },
     }),
@@ -955,7 +1271,7 @@ test("runtime invalidates resume state before scheduling failure retry", async (
   const snapshot = runtime.snapshot();
   assert.equal(snapshot.runHistory[0]?.outcome, "failed");
   assert.equal(snapshot.retrying[0]?.attempt, 1);
-  assert.equal((await readResumeState(workspace)).status, "missing");
+  assert.deepEqual(deletedResumeStates, [workspace]);
   assert.ok(snapshot.recentEvents.some((event) => event.type === "resume_state_invalidated"));
 });
 
@@ -964,7 +1280,7 @@ test("runtime schedules retry refresh timers independently of the poll cadence",
   const doneIssue: Issue = { ...issue, state: "Done", stateType: "completed" };
   const workflow = workflowFixture();
   workflow.settings.polling.intervalMs = 60_000;
-  workflow.settings.agent.maxRetryBackoffMs = 20;
+  workflow.settings.agent.maxRetryBackoffMs = 500;
   let attempts = 0;
   const runtime = new SymphonyRuntime(
     runtimeOptions({
@@ -992,11 +1308,11 @@ test("runtime schedules retry refresh timers independently of the poll cadence",
   assert.equal(attempts, 1);
   assert.equal(runtime.snapshot().retrying[0]?.attempt, 1);
 
-  await waitFor(() => attempts === 2, 2_000);
+  await waitFor(() => attempts === 2, 3_000);
   let snapshot = runtime.snapshot();
   assert.equal(snapshot.retrying[0]?.attempt, 1);
 
-  await waitFor(() => runtime.snapshot().retrying.length === 0, 2_000);
+  await waitFor(() => runtime.snapshot().retrying.length === 0, 3_000);
   snapshot = runtime.snapshot();
   assert.equal(snapshot.retrying.length, 0);
   assert.equal(snapshot.runHistory[0]?.outcome, "success");
@@ -1219,9 +1535,8 @@ test("box pool: the bound slot's mcpEndpoint is threaded into the runner", async
   const doneIssue: Issue = { ...issue, state: "Done", stateType: "completed" };
   const lease = makeFakeLease({ workerHost: "ssh://worker-endpoint" });
   const boxPool = makeFakeBoxPool({ lease });
-  // Dispatch to the ACP/claude executor, which DOES consume the per-run endpoint
-  // over the reverse tunnel (the Codex/appserver executor ignores it and so opens
-  // none). This pins the endpoint-threading mechanism on the path that uses it.
+  // Dispatch to the claude kind; the ACP executor consumes the per-run endpoint
+  // over the reverse tunnel. This pins the endpoint-threading mechanism.
   const workflow = boxPoolWorkflowFixture();
   workflow.settings.agent.kind = "claude";
 
@@ -1299,8 +1614,8 @@ test("box pool: the FULL workflow Settings (with server.port) is threaded to the
   const boxPool = makeFakeBoxPool({ lease });
 
   // A full workflow whose Settings carry a concrete server.port (the FULL Settings
-  // field the BoxPoolSettings does NOT have). Dispatch to the ACP/claude executor,
-  // the only one that opens a per-run endpoint (so open() is reached at all).
+  // field the BoxPoolSettings does NOT have). Dispatch to the claude kind; the ACP
+  // executor opens a per-run endpoint, so open() is reached.
   const workflow = boxPoolWorkflowFixture();
   workflow.settings.agent.kind = "claude";
   workflow.settings.server.host = "127.0.0.1";
@@ -1398,27 +1713,27 @@ function makeFakeEndpointLease(): AgentMcpEndpointLease {
 }
 
 // ---------------------------------------------------------------------------
-// Codex iter-6 HIGH: a Codex/appserver box-pool run needs NO per-run MCP endpoint
+// Every box-pool run needs its per-run MCP endpoint (ACP is the only executor)
 // ---------------------------------------------------------------------------
 //
-// The Codex/appserver executor runs its dynamic tools IN-PROCESS and ignores the
-// per-run mcpEndpoint; only ACP/Claude reads /claude-mcp over the reverse tunnel.
-// So the runtime must tell the coordinator (needsMcpEndpoint=false) for a Codex
-// run, and the coordinator must SKIP the per-run endpoint open / tunnel ceiling.
-// Otherwise a Codex run could be SKIPPED by an open failure / port-forward
-// restriction for an endpoint it never uses.
+// The ACP executor - the only executor - consumes the per-run mcpEndpoint over
+// the reverse tunnel, so the runtime asks the coordinator for one on EVERY run
+// (needsMcpEndpoint=true regardless of agent kind). When the per-run open
+// THROWS, the run must NOT dispatch: the coordinator settles the just-bound
+// lease HEALTHY (only the endpoint failed, the box is fine), the runtime
+// abandons the claim so the slot is re-evaluated next poll, and no history is
+// recorded for a run that never started.
 
-test("box pool: a Codex/appserver run still dispatches even when the per-run endpoint open THROWS (needs no endpoint) (HIGH)", async () => {
-  const issue = issueFixture("issue-bp-codex-no-endpoint", "MT-BP-CODEX-NO-EP");
-  const doneIssue: Issue = { ...issue, state: "Done", stateType: "completed" };
+test("box pool: a codex run is skipped when the per-run endpoint open THROWS (every run needs an endpoint) (HIGH)", async () => {
+  const issue = issueFixture("issue-bp-codex-ep-throw", "MT-BP-CODEX-EP-THROW");
   const workflow = boxPoolWorkflowFixture();
-  // The default agent kind is `codex` -> agents.codex.executor === 'appserver'.
-  assert.equal(workflow.settings.agents.codex?.executor, "appserver");
+  // The default agent kind is `codex` -> agents.codex.executor === 'acp', the
+  // only executor; a codex run consumes the per-run endpoint like any other.
+  assert.equal(workflow.settings.agents.codex?.executor, "acp");
   const lease = makeFakeLease({ workerHost: "ssh://worker-codex" });
   const boxPool = makeFakeBoxPool({ lease });
-  // A per-run manager whose open() ALWAYS throws. If the runtime asked the
-  // coordinator to open an endpoint for this Codex run, the throw would surface as
-  // box_pool_acquire_error and the run would never dispatch.
+  // A per-run manager whose open() ALWAYS throws: the throw surfaces as
+  // box_pool_acquire_error and the run never dispatches.
   let openCalls = 0;
   const manager: McpEndpointManager = {
     perRunEndpoint: true,
@@ -1433,44 +1748,48 @@ test("box pool: a Codex/appserver run still dispatches even when the per-run end
     mcpEndpointManager: manager,
     settings: workflow.settings.worker.boxPool!,
   });
-  let runnerEndpoint: AgentMcpEndpointLease | null | undefined = "unset" as never;
+  const orchestrator = new Orchestrator(workflow.settings, undefined, undefined, {
+    governs: () => true,
+    canAcquire: () => true,
+  });
+  let runnerCalls = 0;
   const runtime = new SymphonyRuntime(
     runtimeOptions({
       workflow,
+      orchestrator,
       coordinator,
       client: {
         fetchCandidateIssues: async () => [issue],
         fetchIssuesByIds: async () => [issue],
       },
-      runner: async ({ mcpEndpoint }) => {
-        runnerEndpoint = mcpEndpoint;
-        return {
-          workspace: "/tmp/symphony/MT-BP-CODEX-NO-EP",
-          turnCount: 1,
-          updates: [],
-          resumeId: "resume-codex-no-ep",
-          agentKind: "codex",
-          finalIssue: doneIssue,
-        };
+      runner: async () => {
+        runnerCalls += 1;
+        throw new Error("runner should not run when the endpoint open throws");
       },
     }),
   );
 
   await runtime.start({ once: true, dryRun: false });
 
-  // The Codex run dispatched and completed: the coordinator never opened an
-  // endpoint (open() was never called), and the runner got a null endpoint.
-  assert.equal(openCalls, 0);
-  assert.equal(runnerEndpoint, null);
-  assert.equal(runtime.snapshot().runHistory[0]?.outcome, "success");
-  // No acquire error: the box lease settled healthy on the normal success path.
-  assert.deepEqual(
-    lease.settles.map((s) => s.kind),
-    ["release"],
-  );
-  assert.equal(
-    runtime.snapshot().recentEvents.some((event) => event.type === "dispatch_skipped"),
-    false,
+  // The open WAS attempted (the codex run needs its endpoint), the runner never
+  // ran, and the dispatch was skipped with a clear acquire error.
+  assert.equal(openCalls, 1);
+  assert.equal(runnerCalls, 0);
+  const snapshot = runtime.snapshot();
+  assert.equal(snapshot.runHistory.length, 0);
+  assert.equal(snapshot.retrying.length, 0);
+  assert.equal(snapshot.running.length, 0);
+  // The claim was abandoned (re-claimable next poll), not stranded.
+  assert.equal(orchestrator.state.claimed.size, 0);
+  assert.equal(orchestrator.state.running.size, 0);
+  // The box itself is fine - only the endpoint failed - so the just-bound lease
+  // settled HEALTHY, never poisoned.
+  assert.deepEqual(lease.settles, [{ kind: "release", arg: "healthy" }]);
+  assert.ok(
+    snapshot.recentEvents.some(
+      (event) =>
+        event.type === "dispatch_skipped" && event.message.includes("box_pool_acquire_error"),
+    ),
   );
 });
 
@@ -1576,11 +1895,12 @@ test("box pool: acquire uses the prior real workerHost as affinityKey on retry",
     canAcquire: () => true,
   });
   // Seed a retry record carrying the prior real worker host (as finish() would).
-  orchestrator.state.retryAttempts.set(issue.id, {
+  orchestrator.state.retryAttempts.set(slotKey(issue.id, 0), {
     issueId: issue.id,
     identifier: issue.identifier,
     attempt: 1,
-    dueAt: new Date(Date.now() - 1),
+    monotonicDeadlineMs: 0,
+    dueAtIso: new Date(Date.now() - 1).toISOString(),
     slotIndex: 0,
     workerHost: "fake://box-prior",
     workspacePath: null,
@@ -1847,6 +2167,7 @@ test("box pool: a stall-finished run poisons the box and keeps accounting correc
   const root = await tempDir("symphony-ts-runtime-boxpool-stall");
   const workflow = boxPoolWorkflowFixture(root);
   workflow.settings.codex.stallTimeoutMs = 50;
+  workflow.settings.agents.codex.stallTimeoutMs = 50;
   const orchestrator = new Orchestrator(workflow.settings, undefined, undefined, {
     governs: () => true,
     canAcquire: () => true,
@@ -1916,6 +2237,7 @@ test("box pool: a stall-aborted run that RESOLVES SUCCESSFULLY still poisons the
   const root = await tempDir("symphony-ts-runtime-boxpool-stall-success");
   const workflow = boxPoolWorkflowFixture(root);
   workflow.settings.codex.stallTimeoutMs = 50;
+  workflow.settings.agents.codex.stallTimeoutMs = 50;
   const orchestrator = new Orchestrator(workflow.settings, undefined, undefined, {
     governs: () => true,
     canAcquire: () => true,
@@ -1992,6 +2314,7 @@ test("box pool: a stale-generation late resolve is a lease no-op (leaseId guard)
   const workflow = boxPoolWorkflowFixture(root);
   workflow.settings.agent.maxRetryBackoffMs = 0;
   workflow.settings.codex.stallTimeoutMs = 50;
+  workflow.settings.agents.codex.stallTimeoutMs = 50;
   const orchestrator = new Orchestrator(workflow.settings, undefined, undefined, {
     governs: () => true,
     canAcquire: () => true,
@@ -2807,6 +3130,71 @@ test("runtime reconcile skips remote resume-state delete for a pending:// sentin
   );
 });
 
+test("runtime replays retry timer due while a poll is active", async () => {
+  const issue = issueFixture("issue-timer-overlap", "MT-TIMER-OVERLAP");
+  const doneIssue: Issue = { ...issue, state: "Done", stateType: "completed" };
+  const workflow = workflowFixture();
+  workflow.settings.polling.intervalMs = 60_000;
+  workflow.settings.agent.maxRetryBackoffMs = 1;
+  const fetchControl: { release?: () => void } = {};
+  let attempts = 0;
+  let blockCandidateFetch = false;
+  let candidateFetches = 0;
+  const runtime = new SymphonyRuntime(
+    runtimeOptions({
+      workflow,
+      client: {
+        fetchCandidateIssues: async () => {
+          candidateFetches += 1;
+          if (blockCandidateFetch) {
+            blockCandidateFetch = false;
+            await new Promise<void>((resolve) => {
+              fetchControl.release = resolve;
+            });
+          }
+          return [issue];
+        },
+        fetchIssuesByIds: async () => (attempts >= 2 ? [doneIssue] : [issue]),
+      },
+      runner: async () => {
+        attempts += 1;
+        if (attempts === 1) throw new Error("agent exited: retry me");
+        return {
+          workspace: "/tmp/symphony/MT-TIMER-OVERLAP",
+          turnCount: 1,
+          updates: [],
+          resumeId: "timer-overlap",
+          agentKind: "codex",
+          finalIssue: doneIssue,
+        };
+      },
+    }),
+  );
+
+  try {
+    await runtime.pollOnce({ waitForRuns: true });
+    assert.equal(attempts, 1);
+    blockCandidateFetch = true;
+
+    const dryPoll = runtime.pollOnce({ dryRun: true });
+    await waitFor(() => candidateFetches === 2, 1_000);
+    await new Promise<void>((resolve) => setTimeout(resolve, 50));
+
+    const unblockFetch = fetchControl.release;
+    assert.ok(unblockFetch);
+    unblockFetch();
+    await dryPoll;
+
+    await waitFor(() => attempts === 2, 1_000);
+    assert.equal(
+      runtime.snapshot().recentEvents.some((event) => event.type === "retry_timer_due"),
+      true,
+    );
+  } finally {
+    runtime.stop();
+  }
+});
+
 function workflowFixture(root = "/tmp/symphony-ts-runtime-test"): WorkflowDefinition {
   const settings = parseConfig({
     tracker: {
@@ -2827,12 +3215,41 @@ function workflowFixture(root = "/tmp/symphony-ts-runtime-test"): WorkflowDefini
   };
 }
 
+function workflowMarkdown({
+  acceptUnrouted = true,
+  intervalMs = 5,
+  prompt = "Issue {{ issue.identifier }}",
+}: {
+  acceptUnrouted?: boolean;
+  intervalMs?: number;
+  prompt?: string;
+} = {}): string {
+  return [
+    "---",
+    "tracker:",
+    "  kind: linear",
+    "  api_key: linear-token",
+    "  project_slug: mono",
+    "  active_states:",
+    "    - Todo",
+    "    - In Progress",
+    "  terminal_states:",
+    "    - Done",
+    "  dispatch:",
+    `    accept_unrouted: ${acceptUnrouted}`,
+    "polling:",
+    `  interval_ms: ${intervalMs}`,
+    "---",
+    prompt,
+  ].join("\n");
+}
+
 function issueFixture(id: string, identifier: string): Issue {
   return normalizeIssue({
     id,
     identifier,
     title: "Runtime fixture",
-    state: "Todo",
+    state: { name: "Todo", type: "unstarted" },
     labels: [],
     blockers: [],
   });

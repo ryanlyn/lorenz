@@ -51,7 +51,7 @@ export interface RuntimeRunHistoryEntry {
   sessionId?: string | null | undefined;
   resumeId?: string | null | undefined;
   executorPid?: string | null | undefined;
-  workspace?: string | null | undefined;
+  workspacePath?: string | null | undefined;
   workerHost?: string | null | undefined;
   usageTotals?: UsageTotals | undefined;
   startedAt: string;
@@ -68,7 +68,8 @@ export interface RuntimeRunningEntry {
   runId?: string | undefined;
   issueId: string;
   issueIdentifier: string;
-  title: string;
+  issueUrl?: string | null | undefined;
+  issueTitle: string;
   state: string;
   slotIndex: number;
   ensembleSize: number;
@@ -89,9 +90,11 @@ export interface RuntimeRunningEntry {
 
 export interface RuntimeRetryEntry {
   issueId: string;
-  identifier: string;
+  issueIdentifier: string;
+  issueUrl?: string | null | undefined;
   attempt: number;
-  dueAt: string;
+  dueAtIso: string;
+  monotonicDeadlineMs: number;
   error?: string | undefined;
   slotIndex?: number | undefined;
   workerHost?: string | null | undefined;

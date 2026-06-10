@@ -1,16 +1,24 @@
 #!/usr/bin/env bash
-set -eo pipefail
+set -euo pipefail
 
-script_dir="$(cd "$(dirname "$0")" && pwd)"
-repo_root="$(cd "$script_dir/.." && pwd)"
-project_root="$repo_root/elixir"
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-if ! command -v mise >/dev/null 2>&1; then
-  echo "mise is required. Install it from https://mise.jdx.dev/getting-started.html" >&2
-  exit 1
-fi
+prepare_typescript() {
+  local ts_dir="$repo_root/ts"
 
-cd "$project_root"
-mise trust
+  if [ ! -d "$ts_dir" ]; then
+    echo "TypeScript workspace not found: $ts_dir" >&2
+    exit 1
+  fi
 
-make setup
+  echo "Preparing TypeScript workspace in $ts_dir"
+  (
+    cd "$ts_dir"
+    mise trust
+    mise install
+    mise exec -- pnpm install --frozen-lockfile
+    mise exec -- pnpm build
+  )
+}
+
+prepare_typescript

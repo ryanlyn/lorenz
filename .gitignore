@@ -1,3 +1,18 @@
 .env
 .antigravitycli/
+*.ndjson
+
+# Local agent settings
 .claude/scheduled_tasks.lock
+.claude/settings.local.json
+.codex/config*.json
+.codex/config*.toml
+.codex/config*.yaml
+.codex/config*.yml
+.codex/settings*.json
+.codex/settings*.toml
+.codex/settings*.yaml
+.codex/settings*.yml
+
+# Local git worktree checkouts
+.claude/worktrees/

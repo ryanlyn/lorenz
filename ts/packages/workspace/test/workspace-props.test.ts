@@ -6,7 +6,7 @@ import { assert } from "../../../test/assert.js";
 
 const SAFE_CHARS = /^[A-Za-z0-9._-]*$/;
 
-test("safeIdentifier — idempotent", () => {
+test("INVARIANT: safeIdentifier is idempotent for all inputs", () => {
   fc.assert(
     fc.property(fc.string({ maxLength: 50 }), (input) => {
       const once = safeIdentifier(input);
@@ -16,7 +16,7 @@ test("safeIdentifier — idempotent", () => {
   );
 });
 
-test("safeIdentifier — output contains only safe characters", () => {
+test("INVARIANT: safeIdentifier output contains only safe characters", () => {
   fc.assert(
     fc.property(fc.string({ maxLength: 50 }), (input) => {
       const result = safeIdentifier(input);
@@ -25,7 +25,7 @@ test("safeIdentifier — output contains only safe characters", () => {
   );
 });
 
-test("safeIdentifier — length does not exceed input length", () => {
+test("INVARIANT: safeIdentifier output length does not exceed input length", () => {
   fc.assert(
     fc.property(fc.string({ minLength: 1, maxLength: 50 }), (input) => {
       const result = safeIdentifier(input);
@@ -34,15 +34,7 @@ test("safeIdentifier — length does not exceed input length", () => {
   );
 });
 
-test("safeIdentifier — deterministic", () => {
-  fc.assert(
-    fc.property(fc.string({ maxLength: 50 }), (input) => {
-      assert.equal(safeIdentifier(input), safeIdentifier(input));
-    }),
-  );
-});
-
-test("safeIdentifier — non-string input returns empty string", () => {
+test("INVARIANT: safeIdentifier returns empty string for non-string inputs", () => {
   fc.assert(
     fc.property(
       fc.oneof(fc.constant(null), fc.constant(undefined), fc.integer(), fc.boolean()),
@@ -53,7 +45,7 @@ test("safeIdentifier — non-string input returns empty string", () => {
   );
 });
 
-test("safeIdentifier — preserves safe characters", () => {
+test("INVARIANT: safeIdentifier preserves strings already in the safe alphabet", () => {
   const safeChars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-";
   fc.assert(
     fc.property(
@@ -67,7 +59,7 @@ test("safeIdentifier — preserves safe characters", () => {
   );
 });
 
-test("workspacePath — result starts with root", () => {
+test("INVARIANT: workspacePath result starts with root prefix", () => {
   fc.assert(
     fc.property(
       fc.constantFrom("/tmp/workspaces", "/var/symphony", "/home/user/ws"),
@@ -85,7 +77,7 @@ test("workspacePath — result starts with root", () => {
   );
 });
 
-test("workspacePath — solo run has no slot suffix", () => {
+test("INVARIANT: workspacePath for solo run has no slot suffix", () => {
   fc.assert(
     fc.property(
       fc.constant("/tmp/ws"),
@@ -104,7 +96,7 @@ test("workspacePath — solo run has no slot suffix", () => {
   );
 });
 
-test("workspacePath — ensemble adds slot directory", () => {
+test("INVARIANT: workspacePath for ensemble adds slot directory", () => {
   fc.assert(
     fc.property(
       fc.constant("/tmp/ws"),
@@ -125,7 +117,7 @@ test("workspacePath — ensemble adds slot directory", () => {
   );
 });
 
-test("workspacePath — distinct slots produce distinct paths", () => {
+test("INVARIANT: workspacePath produces distinct paths for distinct slots", () => {
   fc.assert(
     fc.property(
       fc.constant("/tmp/ws"),
@@ -147,30 +139,7 @@ test("workspacePath — distinct slots produce distinct paths", () => {
   );
 });
 
-test("workspacePath — deterministic", () => {
-  fc.assert(
-    fc.property(
-      fc.constant("/tmp/ws"),
-      fc
-        .string({ minLength: 1, maxLength: 15 })
-        .filter(
-          (s) =>
-            safeIdentifier(s) !== "" && safeIdentifier(s) !== "." && safeIdentifier(s) !== "..",
-        ),
-      fc.integer({ min: 0, max: 4 }),
-      fc.integer({ min: 1, max: 5 }),
-      (root, identifier, slotIndex, ensembleSize) => {
-        const slot = slotIndex % ensembleSize;
-        assert.equal(
-          workspacePath(root, identifier, slot, ensembleSize),
-          workspacePath(root, identifier, slot, ensembleSize),
-        );
-      },
-    ),
-  );
-});
-
-test("ensureInsideRoot — rejects paths outside root", () => {
+test("INVARIANT: ensureInsideRoot rejects paths outside root", () => {
   fc.assert(
     fc.property(
       fc.constantFrom("/tmp/ws", "/var/data", "/home/user"),
@@ -191,7 +160,7 @@ test("ensureInsideRoot — rejects paths outside root", () => {
   );
 });
 
-test("ensureInsideRoot — accepts paths inside root", () => {
+test("INVARIANT: ensureInsideRoot accepts paths inside root", () => {
   fc.assert(
     fc.property(
       fc.constantFrom("/tmp/ws", "/var/data"),

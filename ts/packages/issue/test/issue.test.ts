@@ -1,6 +1,6 @@
 import { test } from "vitest";
 import { normalizeIssue, ensembleSize, isTerminalState } from "@symphony/cli";
-import type { Issue } from "@symphony/domain";
+import { ENSEMBLE_SIZE_MAX, type Issue } from "@symphony/domain";
 
 import { assert } from "../../../test/assert.js";
 
@@ -8,21 +8,23 @@ import { assert } from "../../../test/assert.js";
 
 test("normalizeIssue — throws if id is missing", () => {
   assert.throws(
-    () => normalizeIssue({ identifier: "X-1", title: "T", state: { name: "Todo" } }),
+    () =>
+      normalizeIssue({ identifier: "X-1", title: "T", state: { name: "Todo", type: "unstarted" } }),
     /issue\.id is required/,
   );
 });
 
 test("normalizeIssue — throws if identifier is missing", () => {
   assert.throws(
-    () => normalizeIssue({ id: "1", title: "T", state: { name: "Todo" } }),
+    () => normalizeIssue({ id: "1", title: "T", state: { name: "Todo", type: "unstarted" } }),
     /issue\.identifier is required/,
   );
 });
 
 test("normalizeIssue — throws if title is missing", () => {
   assert.throws(
-    () => normalizeIssue({ id: "1", identifier: "X-1", state: { name: "Todo" } }),
+    () =>
+      normalizeIssue({ id: "1", identifier: "X-1", state: { name: "Todo", type: "unstarted" } }),
     /issue\.title is required/,
   );
 });
@@ -39,7 +41,7 @@ test("normalizeIssue — extracts blocker relations (blocks type mapping)", () =
     id: "i1",
     identifier: "MT-1",
     title: "Title",
-    state: { name: "Todo" },
+    state: { name: "Todo", type: "unstarted" },
     relations: [
       {
         type: " Blocks ",
@@ -51,7 +53,7 @@ test("normalizeIssue — extracts blocker relations (blocks type mapping)", () =
       },
       {
         type: "Relates",
-        relatedIssue: { id: "r1", identifier: "MT-2", state: { name: "Todo" } },
+        relatedIssue: { id: "r1", identifier: "MT-2", state: { name: "Todo", type: "unstarted" } },
       },
     ],
   });
@@ -69,7 +71,7 @@ test("normalizeIssue — assigns assignedToWorker=false if assignee does not mat
       id: "i1",
       identifier: "MT-1",
       title: "Title",
-      state: { name: "Todo" },
+      state: { name: "Todo", type: "unstarted" },
       assignee: { id: "alice@example.com" },
     },
     "bob@example.com",
@@ -84,7 +86,7 @@ test("normalizeIssue — assigns assignedToWorker=true if assignee matches (case
       id: "i1",
       identifier: "MT-1",
       title: "Title",
-      state: { name: "Todo" },
+      state: { name: "Todo", type: "unstarted" },
       assignee: { id: "Alice@Example.com" },
     },
     "alice@example.com",
@@ -100,11 +102,40 @@ test("ensembleSize — parses ensemble:X label to return X", () => {
     id: "i1",
     identifier: "MT-1",
     title: "Title",
-    state: { name: "Todo" },
+    state: { name: "Todo", type: "unstarted" },
     labels: ["ensemble:3"],
   });
 
   assert.equal(ensembleSize(issue), 3);
+});
+
+test("ensembleSize — rejects ensemble labels above the domain maximum", () => {
+  const atMax: Issue = normalizeIssue({
+    id: "i1",
+    identifier: "MT-1",
+    title: "Title",
+    state: { name: "Todo", type: "unstarted" },
+    labels: [`ensemble:${ENSEMBLE_SIZE_MAX}`],
+  });
+  assert.equal(ensembleSize(atMax), ENSEMBLE_SIZE_MAX);
+
+  const aboveMax: Issue = normalizeIssue({
+    id: "i2",
+    identifier: "MT-2",
+    title: "Title",
+    state: { name: "Todo", type: "unstarted" },
+    labels: [`ensemble:${ENSEMBLE_SIZE_MAX + 1}`],
+  });
+  assert.equal(ensembleSize(aboveMax), null);
+
+  const veryLarge: Issue = normalizeIssue({
+    id: "i3",
+    identifier: "MT-3",
+    title: "Title",
+    state: { name: "Todo", type: "unstarted" },
+    labels: ["ensemble:100000"],
+  });
+  assert.equal(ensembleSize(veryLarge), null);
 });
 
 test("ensembleSize — returns null if no ensemble label or malformed value", () => {
@@ -112,7 +143,7 @@ test("ensembleSize — returns null if no ensemble label or malformed value", ()
     id: "i1",
     identifier: "MT-1",
     title: "Title",
-    state: { name: "Todo" },
+    state: { name: "Todo", type: "unstarted" },
     labels: ["priority:high"],
   });
   assert.equal(ensembleSize(noLabel), null);
@@ -121,7 +152,7 @@ test("ensembleSize — returns null if no ensemble label or malformed value", ()
     id: "i2",
     identifier: "MT-2",
     title: "Title",
-    state: { name: "Todo" },
+    state: { name: "Todo", type: "unstarted" },
     labels: ["ensemble:abc", "ensemble:", "ensemble:0"],
   });
   assert.equal(ensembleSize(malformed), null);

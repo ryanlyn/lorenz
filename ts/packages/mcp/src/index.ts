@@ -1,11 +1,17 @@
-export { issueMcpToken, revokeMcpToken, validMcpToken } from "./auth.js";
+export {
+  createMcpAuthScope,
+  issueMcpToken,
+  mcpAuthScopeForSettings,
+  revokeMcpToken,
+  validMcpToken,
+} from "./auth.js";
 export { toolSpecs, executeTool } from "./tools.js";
-export type { ToolSpec, ToolResult } from "./tools.js";
+export { applyQuery, matchesFilter, parseFilter, parseQuerySpec, pickFields } from "./filter.js";
 export {
   acquireAgentMcpEndpoint,
   acquireAgentMcpEndpointForRun,
-  mcpConfigContents,
+  trackerMcpServerName,
 } from "./agentEndpoint.js";
 export type { AgentMcpEndpointLease } from "./agentEndpoint.js";
-export { startClaudeMcpServer } from "./server.js";
-export type { ObservabilityServerHandle, ObservabilityServerOptions } from "./server.js";
+export { claudeMcpResponse, mountClaudeMcp, startClaudeMcpServer } from "./server.js";
+export type { ObservabilityServerHandle } from "./server.js";

@@ -41,7 +41,13 @@
       "path": "../retry-scheduler"
     },
     {
+      "path": "../runtime-events"
+    },
+    {
       "path": "../worker-box-pool"
+    },
+    {
+      "path": "../workflow"
     }
   ]
 }

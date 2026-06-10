@@ -106,18 +106,18 @@ test("humanizeCodexMessage — formats dynamic_tool_call with tool name extracti
   assert.equal(humanizeCodexMessage(msg), "dynamic tool call requested (bash)");
 });
 
-test("humanizeCodexMessage — formats tool_call_completed event (dynamic_tool_result success)", () => {
+test("humanizeCodexMessage — formats tool_call_update completed event (dynamic_tool_result success)", () => {
   const msg = {
-    event: "tool_call_completed",
-    message: { params: { tool: "file_write" } },
+    event: "tool_call_update",
+    message: { status: "completed", params: { tool: "file_write" } },
   };
   assert.equal(humanizeCodexMessage(msg), "dynamic tool call completed (file_write)");
 });
 
-test("humanizeCodexMessage — formats tool_call_failed event (dynamic_tool_result failure)", () => {
+test("humanizeCodexMessage — formats tool_call_update failed event (dynamic_tool_result failure)", () => {
   const msg = {
-    event: "tool_call_failed",
-    message: { params: { name: "web_search" } },
+    event: "tool_call_update",
+    message: { status: "failed", params: { name: "web_search" } },
   };
   assert.equal(humanizeCodexMessage(msg), "dynamic tool call failed (web_search)");
 });

@@ -1,20 +1,32 @@
 import {
-  ISSUE_STATE_TYPES,
+  PRIORITY_VALUES,
+  isRecord,
+  normalizeStateType,
   type Issue,
   type IssueRef,
   type IssueStateType,
+  type Priority,
+  isValidEnsembleSize,
 } from "@symphony/domain";
 
 export function normalizeIssue(input: Record<string, unknown>, assignee?: string): Issue {
   const id = requiredString(input, "id");
   const identifier = requiredString(input, "identifier");
   const title = requiredString(input, "title");
-  const state =
-    stringFromPath(input, ["state", "name"]) ??
-    optionalString(input.state ?? input.state_name ?? input.stateName);
+  const state = firstOptionalString(
+    stringFromPath(input, ["state", "name"]),
+    input.state,
+    input.state_name,
+    input.stateName,
+  );
   if (state === null || state.trim() === "") throw new Error("issue.state is required");
-  const stateType =
-    stringFromPath(input, ["state", "type"]) ?? optionalString(input.state_type ?? input.stateType);
+  const rawStateType = firstOptionalString(
+    stringFromPath(input, ["state", "type"]),
+    input.state_type,
+    input.stateType,
+  );
+  const stateType = normalizeStateType(rawStateType);
+  if (stateType === null) throw new Error("issue.stateType is required");
   const assigneeId =
     stringFromPath(input, ["assignee", "id"]) ??
     optionalString(input.assignee_id ?? input.assigneeId);
@@ -34,10 +46,10 @@ export function normalizeIssue(input: Record<string, unknown>, assignee?: string
     title,
     description: optionalString(input.description),
     state,
-    stateType: normalizeStateType(stateType),
+    stateType,
     branchName: optionalString(input.branchName ?? input.branch_name),
     url: optionalString(input.url),
-    priority: numberOrNull(input.priority),
+    priority: priorityOrNull(input.priority),
     createdAt: optionalString(input.created_at ?? input.createdAt),
     updatedAt: optionalString(input.updated_at ?? input.updatedAt),
     labels,
@@ -48,12 +60,27 @@ export function normalizeIssue(input: Record<string, unknown>, assignee?: string
   };
 }
 
+const DEFAULT_STATE_TYPES: Record<string, IssueStateType> = {
+  todo: "unstarted",
+  "in progress": "started",
+  done: "completed",
+  cancelled: "canceled",
+  canceled: "canceled",
+  backlog: "backlog",
+  triage: "triage",
+};
+
+/** Best-effort category for a free-form workflow state name; null when unknown. */
+export function defaultStateType(name: string): IssueStateType | null {
+  return DEFAULT_STATE_TYPES[name.trim().toLowerCase()] ?? null;
+}
+
 export function ensembleSize(issue: Issue): number | null {
   for (const label of issue.labels) {
     const match = /^ensemble:(\d+)$/.exec(label.trim().toLowerCase());
     if (!match) continue;
     const size = Number(match[1]);
-    if (Number.isInteger(size) && size > 0) return size;
+    if (isValidEnsembleSize(size)) return size;
   }
   return null;
 }
@@ -105,8 +132,11 @@ function normalizeIssueRef(value: unknown): IssueRef {
     identifier: optionalString(value.identifier) ?? undefined,
     state: stringFromPath(value, ["state", "name"]) ?? optionalString(value.state) ?? undefined,
     stateType: normalizeStateType(
-      stringFromPath(value, ["state", "type"]) ??
-        optionalString(value.state_type ?? value.stateType),
+      firstOptionalString(
+        stringFromPath(value, ["state", "type"]),
+        value.state_type,
+        value.stateType,
+      ),
     ),
   };
 }
@@ -124,14 +154,21 @@ function optionalString(value: unknown): string | null {
   return value;
 }
 
-function normalizeStateType(value: string | null): IssueStateType | null {
-  if (value === null) return null;
-  const normalized = value.trim().toLowerCase();
-  return isOneOf(normalized, ISSUE_STATE_TYPES) ? normalized : null;
+function firstOptionalString(...values: unknown[]): string | null {
+  for (const value of values) {
+    const stringValue = optionalString(value);
+    if (stringValue !== null) return stringValue;
+  }
+  return null;
 }
 
-function numberOrNull(value: unknown): number | null {
-  if (typeof value === "number" && Number.isInteger(value)) return value;
+function priorityOrNull(value: unknown): Priority | null {
+  if (
+    typeof value === "number" &&
+    Number.isInteger(value) &&
+    (PRIORITY_VALUES as readonly number[]).includes(value)
+  )
+    return value as Priority;
   return null;
 }
 
@@ -142,15 +179,4 @@ function stringFromPath(input: Record<string, unknown>, path: string[]): string 
     current = current[segment];
   }
   return typeof current === "string" ? current : null;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function isOneOf<const Values extends readonly string[]>(
-  value: string,
-  values: Values,
-): value is Values[number] {
-  return (values as readonly string[]).includes(value);
 }

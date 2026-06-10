@@ -14,16 +14,25 @@ import { settingsForIssueState, validateDispatchConfig } from "@symphony/config"
 import { runAgentAttempt, type RunResult } from "@symphony/agent-runner";
 import { ProjectionActor } from "@symphony/projections";
 import { RetryScheduler } from "@symphony/retry-scheduler";
-import { AGENT_UPDATE_TYPES, withDerivedMaxInFlight } from "@symphony/domain";
+import { workflowFileChanged, workflowStampsEqual } from "@symphony/workflow";
+import { durationMs, errorMessage, withDerivedMaxInFlight } from "@symphony/domain";
+import type {
+  RuntimeAppStatus,
+  RuntimeEventType,
+  RuntimePollStatus,
+  RuntimeRetryEntry,
+  RuntimeRunHistoryEntry,
+  RuntimeRunOutcome,
+  RuntimeRunningEntry,
+  RuntimeSnapshot,
+} from "@symphony/runtime-events";
 import type {
   AgentKind,
-  AgentUpdateType,
+  AgentUpdate,
   BoxPoolSettings,
-  DispatchBlockEntry,
   Issue,
   RunningEntry,
   RuntimeTrackerClient,
-  UsageTotals,
   WorkflowDefinition,
 } from "@symphony/domain";
 import type { BoxOutcome, BoxPool } from "@symphony/worker-box-pool";
@@ -38,10 +47,20 @@ import {
 
 export type RuntimeRunner = (input: Parameters<typeof runAgentAttempt>[0]) => Promise<RunResult>;
 
-export type RuntimeAppStatus = "starting" | "idle" | "polling" | "running" | "stopping" | "error";
-export type RuntimePollStatus = "idle" | "checking" | "error";
-export const RUNTIME_RUN_OUTCOMES = ["success", "failed", "stalled", "canceled"] as const;
-export type RuntimeRunOutcome = (typeof RUNTIME_RUN_OUTCOMES)[number];
+export { RUNTIME_EVENT_TYPES, RUNTIME_RUN_OUTCOMES } from "@symphony/runtime-events";
+export type {
+  RuntimeAppStatus,
+  RuntimeBlockedEntry,
+  RuntimeEvent,
+  RuntimeEventType,
+  RuntimePollStatus,
+  RuntimeRetryEntry,
+  RuntimeRunHistoryEntry,
+  RuntimeRunLastEvent,
+  RuntimeRunningEntry,
+  RuntimeRunOutcome,
+  RuntimeSnapshot,
+} from "@symphony/runtime-events";
 export {
   RUNTIME_RECONCILIATION_REASONS,
   type RuntimeReconciliationReason,
@@ -51,121 +70,6 @@ export type RuntimeResumeInvalidationReason =
   | "stalled"
   | "missing"
   | RuntimeReconciliationReason;
-export const RUNTIME_EVENT_TYPES = [
-  ...AGENT_UPDATE_TYPES,
-  "dry_run",
-  "poll_error",
-  "dispatch_skipped",
-  "run_started",
-  "dispatch_refresh_failed",
-  "run_completed",
-  "run_failed",
-  "workflow_reloaded",
-  "workflow_reload_failed",
-  "reconcile_refresh_failed",
-  "workspace_cleanup",
-  "run_reconciled",
-  "run_stalled",
-  "startup_workspace_cleanup",
-  "startup_workspace_cleanup_failed",
-  "resume_state_invalidated",
-  "resume_state_invalidation_failed",
-  "retry_timer_due",
-  "retry_timer_error",
-  "refresh_error",
-] as const;
-export type RuntimeEventType = (typeof RUNTIME_EVENT_TYPES)[number];
-export type RuntimeRunLastEvent = AgentUpdateType | "agent_stalled";
-
-export interface RuntimeEvent {
-  type: RuntimeEventType;
-  message: string;
-  at: string;
-}
-
-export interface RuntimeRunHistoryEntry {
-  id: string;
-  issueId: string;
-  issueIdentifier: string;
-  issueTitle?: string | null | undefined;
-  state?: string | null | undefined;
-  slotIndex: number;
-  ensembleSize?: number | undefined;
-  agentKind: AgentKind;
-  outcome: RuntimeRunOutcome;
-  turnCount: number;
-  sessionId?: string | null | undefined;
-  resumeId?: string | null | undefined;
-  executorPid?: string | null | undefined;
-  workspace?: string | null | undefined;
-  workerHost?: string | null | undefined;
-  usageTotals?: UsageTotals | undefined;
-  startedAt: string;
-  endedAt: string;
-  durationMs?: number | undefined;
-  error?: string | undefined;
-  lastEvent?: RuntimeRunLastEvent | null | undefined;
-  lastMessage?: unknown;
-  lastEventAt?: string | null | undefined;
-  retryAttempt?: number | null | undefined;
-}
-
-export interface RuntimeRunningEntry {
-  runId?: string | undefined;
-  issueId: string;
-  issueIdentifier: string;
-  title: string;
-  state: string;
-  slotIndex: number;
-  ensembleSize: number;
-  agentKind: AgentKind;
-  sessionId?: string | null | undefined;
-  resumeId?: string | null | undefined;
-  executorPid?: string | null | undefined;
-  workerHost?: string | null | undefined;
-  turnCount: number;
-  startedAt: string;
-  lastEvent?: AgentUpdateType | null | undefined;
-  lastMessage?: unknown;
-  lastEventAt?: string | null | undefined;
-  workspacePath?: string | null | undefined;
-  usageTotals: UsageTotals;
-  retryAttempt?: number | null | undefined;
-}
-
-export interface RuntimeRetryEntry {
-  issueId: string;
-  identifier: string;
-  attempt: number;
-  dueAt: string;
-  error?: string | undefined;
-  slotIndex?: number | undefined;
-  workerHost?: string | null | undefined;
-  workspacePath?: string | null | undefined;
-}
-
-export type RuntimeBlockedEntry = DispatchBlockEntry;
-
-export interface RuntimeSnapshot {
-  appStatus: RuntimeAppStatus;
-  workflowPath: string;
-  poll: {
-    status: RuntimePollStatus;
-    candidates: number;
-    eligible: number;
-    lastPollAt: string | null;
-    nextPollAt: string | null;
-    lastError: string | null;
-  };
-  running: RuntimeRunningEntry[];
-  retrying: RuntimeRetryEntry[];
-  blocked: RuntimeBlockedEntry[];
-  runHistory: RuntimeRunHistoryEntry[];
-  usageTotals: UsageTotals;
-  rateLimits: unknown;
-  logFile: string | null;
-  recentEvents: RuntimeEvent[];
-}
 
 export interface SymphonyRuntimeOptions {
   workflow: WorkflowDefinition;
@@ -185,6 +89,8 @@ export interface SymphonyRuntimeOptions {
     | ((workspace: string, workerHost?: string | null, timeoutMs?: number) => Promise<void>)
     | undefined;
   appendLogEvent?: ((logFile: string, event: Record<string, unknown>) => Promise<void>) | undefined;
+  onAgentUpdate?: ((issue: Issue, update: AgentUpdate) => void) | undefined;
+  onIssueDispatched?: ((issue: Issue) => void) | undefined;
   now?: (() => Date) | undefined;
   /**
    * Optional embedded box pool. When present, the orchestrator is constructed with a capacity
@@ -243,6 +149,46 @@ export interface RuntimeStartOptions {
 export interface PollOptions {
   dryRun?: boolean | undefined;
   waitForRuns?: boolean | undefined;
+}
+
+interface PollIntent {
+  dryRun: boolean;
+  waitForRuns: boolean;
+}
+
+type RetrySnapshotEntry = ReturnType<Orchestrator["snapshot"]>["retrying"][number];
+
+function pollIntent(options: PollOptions = {}): PollIntent {
+  return {
+    dryRun: options.dryRun === true,
+    waitForRuns: options.waitForRuns === true,
+  };
+}
+
+function pollOptionsFromIntent(intent: PollIntent): PollOptions {
+  const options: PollOptions = {};
+  if (intent.dryRun) options.dryRun = true;
+  if (intent.waitForRuns) options.waitForRuns = true;
+  return options;
+}
+
+function pollOptionsCover(active: PollOptions, requested: PollOptions): boolean {
+  const activeIntent = pollIntent(active);
+  const requestedIntent = pollIntent(requested);
+  return (
+    (!activeIntent.dryRun || requestedIntent.dryRun) &&
+    (activeIntent.waitForRuns || !requestedIntent.waitForRuns)
+  );
+}
+
+function mergePollOptions(existing: PollOptions | null, requested: PollOptions): PollOptions {
+  if (!existing) return pollOptionsFromIntent(pollIntent(requested));
+  const existingIntent = pollIntent(existing);
+  const requestedIntent = pollIntent(requested);
+  return pollOptionsFromIntent({
+    dryRun: existingIntent.dryRun && requestedIntent.dryRun,
+    waitForRuns: existingIntent.waitForRuns || requestedIntent.waitForRuns,
+  });
 }
 
 class ActiveRunHandle {
@@ -304,6 +250,8 @@ export class SymphonyRuntime {
   private startupCleanupDone = false;
   private nextRunNumber = 1;
   private pollInProgress: Promise<void> | null = null;
+  private activePollOptions: PollOptions | null = null;
+  private pendingPollOptions: PollOptions | null = null;
   private boxPoolDrained = false;
   /**
    * The reload-surviving coordinator singleton. Built ONCE here: either the
@@ -386,8 +334,19 @@ export class SymphonyRuntime {
   async start(options: RuntimeStartOptions = {}): Promise<void> {
     this.stopped = false;
     do {
-      await this.pollOnce({ dryRun: options.dryRun, waitForRuns: options.once });
-      if (options.once) break;
+      if (options.once) {
+        await this.pollOnce({ dryRun: options.dryRun, waitForRuns: true });
+        break;
+      }
+      // A thrown poll (e.g. tracker fetchCandidateIssues rejecting) must not
+      // terminate the recurring daemon loop. pollOnceUnlocked already records a
+      // poll_error event and surfaces the error on the snapshot before rethrowing,
+      // so swallow the rejection here and continue to the next interval.
+      try {
+        await this.pollOnce({ dryRun: options.dryRun });
+      } catch {
+        // Intentionally ignored: the error is already logged as poll_error.
+      }
       await delay(this.workflow.settings.polling.intervalMs, () => this.stopped);
     } while (!this.stopped);
   }
@@ -395,7 +354,11 @@ export class SymphonyRuntime {
   stop(): void {
     this.stopped = true;
     this.appStatus = "stopping";
-    for (const handle of this.activeRuns.values()) handle.abort();
+    this.pendingPollOptions = null;
+    // finishExternally (abort + release) mirrors the other abort sites and clears
+    // isActive, so the resulting agent_run_aborted rejection is treated as a clean
+    // shutdown in runClaim rather than recorded as a failed run.
+    for (const handle of [...this.activeRuns.values()]) handle.finishExternally();
     this.retryScheduler.stop();
     this.emit();
   }
@@ -413,14 +376,45 @@ export class SymphonyRuntime {
   }
 
   async pollOnce(options: PollOptions = {}): Promise<void> {
-    if (this.pollInProgress) return this.pollInProgress;
-    const poll = this.pollOnceUnlocked(options);
+    if (this.pollInProgress) {
+      this.queuePendingPoll(options);
+      return this.pollInProgress;
+    }
+    const poll = this.pollUntilQueueDrained(options);
     this.pollInProgress = poll;
     try {
       await poll;
     } finally {
-      if (this.pollInProgress === poll) this.pollInProgress = null;
+      if (this.pollInProgress === poll) {
+        this.pollInProgress = null;
+        this.activePollOptions = null;
+        this.pendingPollOptions = null;
+      }
     }
+  }
+
+  private async pollUntilQueueDrained(options: PollOptions): Promise<void> {
+    let nextOptions = options;
+    while (true) {
+      this.activePollOptions = nextOptions;
+      await this.pollOnceUnlocked(nextOptions);
+      this.activePollOptions = null;
+      const pending = this.pendingPollOptions;
+      this.pendingPollOptions = null;
+      if (!pending) return;
+      nextOptions = pending;
+    }
+  }
+
+  private queuePendingPoll(options: PollOptions = {}, force = false): void {
+    if (
+      !force &&
+      ((this.activePollOptions && pollOptionsCover(this.activePollOptions, options)) ||
+        (this.pendingPollOptions && pollOptionsCover(this.pendingPollOptions, options)))
+    ) {
+      return;
+    }
+    this.pendingPollOptions = mergePollOptions(this.pendingPollOptions, options);
   }
 
   private async pollOnceUnlocked(options: PollOptions = {}): Promise<void> {
@@ -439,6 +433,7 @@ export class SymphonyRuntime {
       await this.reconcileTrackedIssues();
       const issues = await this.client.fetchCandidateIssues();
       const eligibleIssues = this.orchestrator.eligibleIssues(issues);
+      if (!options.dryRun) this.syncRetryTimersForIssues(issues);
       this.candidates = issues.length;
       this.eligible = eligibleIssues.length;
 
@@ -482,12 +477,14 @@ export class SymphonyRuntime {
       this.addEvent("dispatch_skipped", `${refreshed.identifier} stale_before_dispatch`);
       return [];
     }
+    this.syncRetryTimer(refreshed.id);
     const key = slotKey(refreshed.id, claim.slotIndex);
     const runId = `run-${this.nextRunNumber}`;
     this.nextRunNumber += 1;
     const handle = new ActiveRunHandle(key, runId, this.activeRuns);
     this.activeRuns.set(key, handle);
     this.addEvent("run_started", `${refreshed.identifier} slot=${claim.slotIndex}`);
+    this.input.onIssueDispatched?.(refreshed);
 
     const run = this.runClaim(
       refreshed,
@@ -550,13 +547,12 @@ export class SymphonyRuntime {
           // endpoint manager can build the remote endpoint; the BoxPoolSettings the
           // coordinator holds has no server.port and would fail every acquire.
           settings: this.workflow.settings,
-          // Only the ACP/Claude executor consumes the per-run /claude-mcp endpoint
-          // over the reverse tunnel; the Codex/appserver executor runs its dynamic
-          // tools in-process and IGNORES it. Tell the coordinator so a Codex run
-          // never opens an endpoint (nor takes a tunnel-ceiling reservation) it
-          // would never use - otherwise a Codex box-pool run could be SKIPPED by an
-          // open failure / port-forward restriction / maxConcurrentTunnels.
-          needsMcpEndpoint: this.runNeedsMcpEndpoint(issue, agentKind),
+          // The ACP executor - the only executor - consumes the per-run MCP
+          // endpoint over the reverse tunnel, so every run needs one. The flag
+          // stays on the request so a future executor that runs its tools
+          // in-process can skip minting the endpoint (and its tunnel-ceiling
+          // reservation) without an API change.
+          needsMcpEndpoint: true,
         });
       } catch (error) {
         // acquireRunSlot() REJECTED outside the no_capacity result path (ledger /
@@ -606,6 +602,7 @@ export class SymphonyRuntime {
           heartbeatSlot?.heartbeat();
           this.orchestrator.applyUpdate(issue.id, slotIndex, update);
           this.addEvent(update.type, `${issue.identifier} ${update.type}`);
+          this.input.onAgentUpdate?.(issue, update);
         },
         fetchIssue: async (current) => {
           const refreshed = await this.client.fetchIssuesByIds([current.id]);
@@ -616,36 +613,26 @@ export class SymphonyRuntime {
       if (!handle.isActive) return;
       const finalIssue = result.finalIssue ?? (await this.fetchIssueOrSelf(issue));
       if (!handle.isActive) return;
-      const entry = this.orchestrator
-        .snapshot()
-        .running.find((item) => item.issue.id === issue.id && item.slotIndex === slotIndex);
+      const entry = this.runningEntry(issue.id, slotIndex);
       this.orchestrator.finish(issue.id, slotIndex, true, undefined, "continuation");
       this.syncRetryTimer(issue.id);
-      this.recordHistory({
-        id: runId,
-        issueId: issue.id,
-        issueIdentifier: issue.identifier,
-        issueTitle: issue.title,
-        state: finalIssue.state,
-        slotIndex,
-        ensembleSize: entry?.ensembleSize,
-        agentKind,
-        outcome: "success",
-        turnCount: result.turnCount,
-        sessionId: entry?.sessionId,
-        resumeId: result.resumeId,
-        executorPid: entry?.executorPid,
-        workspace: result.workspace,
-        workerHost: entry?.workerHost,
-        usageTotals: entry?.usageTotals,
-        startedAt,
-        endedAt: this.now().toISOString(),
-        durationMs: durationMs(startedAt, this.now().toISOString()),
-        lastEvent: entry?.lastAgentEvent,
-        lastMessage: entry?.lastAgentMessage,
-        lastEventAt: entry?.lastAgentTimestamp?.toISOString() ?? null,
-        retryAttempt: entry?.retryAttempt,
-      });
+      this.recordHistory(
+        buildRunHistoryEntry({
+          id: runId,
+          issue,
+          state: finalIssue.state,
+          slotIndex,
+          agentKind,
+          outcome: "success",
+          turnCount: result.turnCount,
+          runningEntry: entry,
+          resumeId: result.resumeId,
+          workspacePath: result.workspace,
+          startedAt,
+          endedAt: this.now().toISOString(),
+          durationMs: durationMs(startedAt, this.now().toISOString()),
+        }),
+      );
       this.addEvent("run_completed", `${issue.identifier} turns=${result.turnCount}`);
     } catch (error) {
       // Classify the box outcome BEFORE any early return so a run finished
@@ -653,40 +640,32 @@ export class SymphonyRuntime {
       // `agent_run_aborted`) still poisons the box: a stall-finished run is
       // treated as poison via `handle.reason`, otherwise typed transport faults.
       boxOutcome = handle.reason === "stalled" ? "poison" : classifyBoxOutcome(error);
+      // Skip runs that are no longer active: superseded, finished externally, or
+      // released by stop() during shutdown. In the shutdown case the runner
+      // rejects with agent_run_aborted; recording it as a failure would emit a
+      // run_failed event the TUI renders as a red error banner on Ctrl+C.
       if (!handle.isActive) return;
-      const entry = this.orchestrator
-        .snapshot()
-        .running.find((item) => item.issue.id === issue.id && item.slotIndex === slotIndex);
+      const entry = this.runningEntry(issue.id, slotIndex);
       await this.invalidateResumeStateForRunningEntry(entry, "failure");
       if (!handle.isActive) return;
       this.orchestrator.finish(issue.id, slotIndex, true, errorMessage(error), "failure");
       this.syncRetryTimer(issue.id);
-      this.recordHistory({
-        id: runId,
-        issueId: issue.id,
-        issueIdentifier: issue.identifier,
-        issueTitle: issue.title,
-        state: issue.state,
-        slotIndex,
-        ensembleSize: entry?.ensembleSize,
-        agentKind,
-        outcome: "failed",
-        turnCount: entry?.turnCount ?? 0,
-        sessionId: entry?.sessionId,
-        resumeId: entry?.resumeId,
-        executorPid: entry?.executorPid,
-        workspace: entry?.workspacePath,
-        workerHost: entry?.workerHost,
-        usageTotals: entry?.usageTotals,
-        startedAt,
-        endedAt: this.now().toISOString(),
-        durationMs: durationMs(startedAt, this.now().toISOString()),
-        error: errorMessage(error),
-        lastEvent: entry?.lastAgentEvent ?? "turn_failed",
-        lastMessage: entry?.lastAgentMessage,
-        lastEventAt: entry?.lastAgentTimestamp?.toISOString() ?? null,
-        retryAttempt: entry?.retryAttempt,
-      });
+      this.recordHistory(
+        buildRunHistoryEntry({
+          id: runId,
+          issue,
+          slotIndex,
+          agentKind,
+          outcome: "failed",
+          turnCount: entry?.turnCount ?? 0,
+          runningEntry: entry,
+          startedAt,
+          endedAt: this.now().toISOString(),
+          durationMs: durationMs(startedAt, this.now().toISOString()),
+          error: errorMessage(error),
+          fallbackLastEvent: "turn_failed",
+        }),
+      );
       this.addEvent("run_failed", `${issue.identifier} ${errorMessage(error)}`);
     } finally {
       handle.release();
@@ -712,21 +691,6 @@ export class SymphonyRuntime {
     }
   }
 
-  /**
-   * Whether the run for `agentKind` (resolved against the issue's effective per-state
-   * settings) actually consumes a per-run MCP endpoint. Only the ACP executor reads
-   * the threaded `mcpEndpoint` (its `/claude-mcp` server is reached over the reverse
-   * tunnel); the Codex/appserver executor runs its dynamic tools in-process and
-   * ignores it. Mirrors the daemon's `agents[kind].executor` lookup. An unknown kind
-   * (no `agents` record) defaults to needing the endpoint - the conservative ACP
-   * behaviour - so an unrecognized backend never silently loses its endpoint.
-   */
-  private runNeedsMcpEndpoint(issue: Issue, agentKind: AgentKind): boolean {
-    const effective = settingsForIssueState(this.workflow.settings, issue.state);
-    const executor = effective.agents[agentKind]?.executor;
-    return executor !== "appserver";
-  }
-
   private async fetchIssueOrSelf(issue: Issue): Promise<Issue> {
     const refreshed = await this.client.fetchIssuesByIds([issue.id]);
     return refreshed[0] ?? issue;
@@ -736,7 +700,10 @@ export class SymphonyRuntime {
     if (!this.input.reloadWorkflow) return;
     const prevBoxPool = this.input.workflow.settings.worker.boxPool;
     try {
+      if (!(await workflowFileChanged(this.input.workflow))) return;
+      const previous = this.input.workflow;
       const workflow = await this.input.reloadWorkflow();
+      if (workflow === previous || workflowStampsEqual(previous.stamp, workflow.stamp)) return;
       // Enforce the SAME slots-per-machine co-residence gate the daemon runs at
       // startup. The startup gate runs ONCE; without this a live daemon could
       // reload max_in_flight 1 -> >1 WITHOUT the per-run-endpoint capability OR the
@@ -855,10 +822,9 @@ export class SymphonyRuntime {
       const currentEntry = this.runningEntry(snapshotEntry.issue.id, snapshotEntry.slotIndex);
       if (!currentEntry) continue;
       const effective = settingsForIssueState(this.workflow.settings, currentEntry.issue.state);
-      const timeoutMs =
-        currentEntry.agentKind === "claude"
-          ? effective.claude.stallTimeoutMs
-          : effective.codex.stallTimeoutMs;
+      const agent = effective.agents[currentEntry.agentKind];
+      if (!agent) throw new Error(`agents.${currentEntry.agentKind} is required`);
+      const timeoutMs = agent.stallTimeoutMs;
       if (timeoutMs <= 0) continue;
       const lastActivity = currentEntry.lastAgentTimestamp ?? currentEntry.startedAt;
       const elapsedMs = this.now().getTime() - lastActivity.getTime();
@@ -875,32 +841,24 @@ export class SymphonyRuntime {
       this.syncRetryTimer(entry.issue.id);
       activeHandle?.finishExternally("stalled");
       await this.invalidateResumeStateForRunningEntry(currentEntry, "stalled");
-      this.recordHistory({
-        id: runId,
-        issueId: entry.issue.id,
-        issueIdentifier: entry.identifier,
-        issueTitle: entry.issue.title,
-        state: entry.issue.state,
-        slotIndex: entry.slotIndex,
-        ensembleSize: entry.ensembleSize,
-        agentKind: entry.agentKind,
-        outcome: "stalled",
-        turnCount: entry.turnCount,
-        sessionId: entry.sessionId,
-        resumeId: entry.resumeId,
-        executorPid: entry.executorPid,
-        workspace: entry.workspacePath,
-        workerHost: entry.workerHost,
-        usageTotals: entry.usageTotals,
-        startedAt: entry.startedAt.toISOString(),
-        endedAt: this.now().toISOString(),
-        durationMs: Math.max(0, this.now().getTime() - entry.startedAt.getTime()),
-        error,
-        lastEvent: entry.lastAgentEvent ?? "agent_stalled",
-        lastMessage: entry.lastAgentMessage,
-        lastEventAt: entry.lastAgentTimestamp?.toISOString() ?? null,
-        retryAttempt: entry.retryAttempt,
-      });
+      const endedAt = this.now().toISOString();
+      this.recordHistory(
+        buildRunHistoryEntry({
+          id: runId,
+          issue: entry.issue,
+          issueIdentifier: entry.identifier,
+          slotIndex: entry.slotIndex,
+          agentKind: entry.agentKind,
+          outcome: "stalled",
+          turnCount: entry.turnCount,
+          runningEntry: entry,
+          startedAt: entry.startedAt.toISOString(),
+          endedAt,
+          durationMs: durationMs(entry.startedAt.toISOString(), endedAt),
+          error,
+          fallbackLastEvent: "agent_stalled",
+        }),
+      );
       this.addEvent("run_stalled", `${entry.identifier} ${error}`);
     }
   }
@@ -980,6 +938,10 @@ export class SymphonyRuntime {
 
   private syncRetryTimer(issueId: string): void {
     const retry = this.orchestrator.snapshot().retrying.find((entry) => entry.issueId === issueId);
+    this.syncRetryTimerEntry(issueId, retry);
+  }
+
+  private syncRetryTimerEntry(issueId: string, retry: RetrySnapshotEntry | undefined): void {
     if (!retry) {
       this.clearRetryTimer(issueId);
       return;
@@ -991,12 +953,15 @@ export class SymphonyRuntime {
       if (
         !current ||
         current.attempt !== scheduled.attempt ||
-        current.dueAt.toISOString() !== scheduled.dueAt
+        current.dueAtIso !== scheduled.dueAtIso
       ) {
         return;
       }
-      if (this.pollInProgress) return;
-      this.addEvent("retry_timer_due", `${scheduled.identifier} attempt=${scheduled.attempt}`);
+      this.addEvent("retry_timer_due", `${scheduled.issueIdentifier} attempt=${scheduled.attempt}`);
+      if (this.pollInProgress) {
+        this.queuePendingPoll({}, true);
+        return;
+      }
       this.pollOnce().catch((error) => {
         this.lastError = errorMessage(error);
         this.addEvent("retry_timer_error", this.lastError);
@@ -1006,6 +971,14 @@ export class SymphonyRuntime {
 
   private clearRetryTimer(issueId: string): void {
     this.retryScheduler.clear(issueId);
+  }
+
+  private syncRetryTimersForIssues(issues: Issue[]): void {
+    const retryByIssueId = new Map<string, RetrySnapshotEntry>();
+    for (const retry of this.orchestrator.snapshot().retrying) {
+      if (!retryByIssueId.has(retry.issueId)) retryByIssueId.set(retry.issueId, retry);
+    }
+    for (const issue of issues) this.syncRetryTimerEntry(issue.id, retryByIssueId.get(issue.id));
   }
 
   private recordHistory(entry: RuntimeRunHistoryEntry): void {
@@ -1082,12 +1055,65 @@ export class SymphonyRuntime {
   }
 }
 
+interface BuildRunHistoryEntryInput {
+  id: string;
+  issue: Issue;
+  issueIdentifier?: string | undefined;
+  state?: RuntimeRunHistoryEntry["state"];
+  slotIndex: number;
+  agentKind: AgentKind;
+  outcome: RuntimeRunOutcome;
+  turnCount: number;
+  runningEntry?: RunningEntry | undefined;
+  resumeId?: RuntimeRunHistoryEntry["resumeId"];
+  workspacePath?: RuntimeRunHistoryEntry["workspacePath"];
+  startedAt: string;
+  endedAt: string;
+  durationMs: number;
+  error?: string | undefined;
+  fallbackLastEvent?: RuntimeRunHistoryEntry["lastEvent"];
+}
+
+function buildRunHistoryEntry(input: BuildRunHistoryEntryInput): RuntimeRunHistoryEntry {
+  const entry = input.runningEntry;
+  const resumeId = "resumeId" in input ? input.resumeId : entry?.resumeId;
+  const workspacePath = "workspacePath" in input ? input.workspacePath : entry?.workspacePath;
+
+  return {
+    id: input.id,
+    issueId: input.issue.id,
+    issueIdentifier: input.issueIdentifier ?? input.issue.identifier,
+    issueTitle: input.issue.title,
+    state: "state" in input ? input.state : input.issue.state,
+    slotIndex: input.slotIndex,
+    ensembleSize: entry?.ensembleSize,
+    agentKind: input.agentKind,
+    outcome: input.outcome,
+    turnCount: input.turnCount,
+    sessionId: entry?.sessionId,
+    resumeId,
+    executorPid: entry?.executorPid,
+    workspacePath,
+    workerHost: entry?.workerHost,
+    usageTotals: entry?.usageTotals,
+    startedAt: input.startedAt,
+    endedAt: input.endedAt,
+    durationMs: input.durationMs,
+    ...(input.error !== undefined ? { error: input.error } : {}),
+    lastEvent: entry?.lastAgentEvent ?? input.fallbackLastEvent,
+    lastMessage: entry?.lastAgentMessage,
+    lastEventAt: entry?.lastAgentTimestamp?.toISOString() ?? null,
+    retryAttempt: entry?.retryAttempt,
+  };
+}
+
 function runtimeRunningEntry(entry: RunningEntry, runId: string | undefined): RuntimeRunningEntry {
   return {
     runId,
     issueId: entry.issue.id,
     issueIdentifier: entry.identifier,
-    title: entry.issue.title,
+    issueUrl: entry.issue.url ?? null,
+    issueTitle: entry.issue.title,
     state: entry.issue.state,
     slotIndex: entry.slotIndex,
     ensembleSize: entry.ensembleSize,
@@ -1110,8 +1136,10 @@ function runtimeRunningEntry(entry: RunningEntry, runId: string | undefined): Ru
 function runtimeRetryEntry(entry: {
   issueId: string;
   identifier: string;
+  issueUrl?: string | null | undefined;
   attempt: number;
-  dueAt: Date;
+  dueAtIso: string;
+  monotonicDeadlineMs: number;
   error?: string | undefined;
   slotIndex?: number | undefined;
   workerHost?: string | null | undefined;
@@ -1119,9 +1147,11 @@ function runtimeRetryEntry(entry: {
 }): RuntimeRetryEntry {
   return {
     issueId: entry.issueId,
-    identifier: entry.identifier,
+    issueIdentifier: entry.identifier,
+    issueUrl: entry.issueUrl ?? null,
     attempt: entry.attempt,
-    dueAt: entry.dueAt.toISOString(),
+    dueAtIso: entry.dueAtIso,
+    monotonicDeadlineMs: entry.monotonicDeadlineMs,
     ...(entry.error !== undefined ? { error: entry.error } : {}),
     ...(entry.slotIndex !== undefined ? { slotIndex: entry.slotIndex } : {}),
     ...(entry.workerHost !== undefined ? { workerHost: entry.workerHost } : {}),
@@ -1142,10 +1172,6 @@ function missingRuntimeClient(): RuntimeTrackerClient {
   throw new Error("runtime tracker client or clientFactory is required");
 }
 
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
 /**
  * Normalizes a worker host for workspace/resume-state cleanup. During the claim->acquire window a
  * box-pool slot carries the `pending://<id>/<slot>` sentinel rather than a real address; the cleanup
@@ -1154,10 +1180,6 @@ function errorMessage(error: unknown): string {
  */
 function cleanupWorkerHost(workerHost: string | null | undefined): string | null | undefined {
   return workerHost?.startsWith("pending://") ? null : workerHost;
-}
-
-function durationMs(startedAt: string, endedAt: string): number {
-  return Math.max(0, new Date(endedAt).getTime() - new Date(startedAt).getTime());
 }
 
 /**

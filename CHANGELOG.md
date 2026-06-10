@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-06-09
+
+- Removed the Elixir reference implementation (`elixir/`), leaving the
+  TypeScript port as the sole implementation. Dropped the Elixir CI job,
+  worktree bootstrap step, and PR-template gate, and relocated the live SSH
+  worker Docker fixtures under `ts/test/support/`.
+
 ## 2026-05-27
 
 - Tightened TypeScript port runtime fidelity by tracking live elapsed runtime

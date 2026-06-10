@@ -35,8 +35,6 @@ export interface RunsCommanderOptions {
 }
 
 export type RunsParseResult = ParseResult<RunsCommandOptions>;
-export const runsUsageText = createRunsCommand("symphony-ts runs").helpInformation().trimEnd();
-
 export function createRunsCommand(name = "symphony-ts runs"): Command {
   return new Command(name)
     .description("Query Symphony run history from the observability API.")
@@ -115,8 +113,9 @@ async function runsUrl(options: RunsCommandOptions): Promise<string> {
 
 async function resolveBaseUrl(options: RunsCommandOptions): Promise<string> {
   if (options.url) return trimTrailingSlash(options.url);
-  if (options.port !== null) return `http://127.0.0.1:${options.port}`;
   const workflow = await loadWorkflow();
+  if (options.port !== null && options.port > 0)
+    return `http://${workflow.settings.server.host}:${options.port}`;
   const port = workflow.settings.server.port;
   if (typeof port === "number" && port > 0)
     return `http://${workflow.settings.server.host}:${port}`;

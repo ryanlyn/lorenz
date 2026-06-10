@@ -11,16 +11,10 @@
   ],
   "references": [
     {
-      "path": "../domain"
-    },
-    {
       "path": "../child-process"
     },
     {
-      "path": "../ssh"
-    },
-    {
-      "path": "../workspace"
+      "path": "../domain"
     },
     {
       "path": "../mcp"
@@ -29,7 +23,10 @@
       "path": "../policies"
     },
     {
-      "path": "../protocol"
+      "path": "../ssh"
+    },
+    {
+      "path": "../workspace"
     }
   ]
 }

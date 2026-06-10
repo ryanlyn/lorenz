@@ -1,32 +1,32 @@
 import { http, HttpResponse } from "msw";
 
-export interface FakeLinearState {
+interface FakeLinearState {
   id: string;
   name: string;
   type: string;
 }
 
-export interface FakeLinearTeam {
+interface FakeLinearTeam {
   id: string;
   key: string;
   name: string;
   states: FakeLinearState[];
 }
 
-export interface FakeLinearProject {
+interface FakeLinearProject {
   id: string;
   name: string;
   slugId: string;
   teams: FakeLinearTeam[];
 }
 
-export interface FakeLinearViewer {
+interface FakeLinearViewer {
   id: string;
   name: string;
   email: string;
 }
 
-export interface FakeLinearConfig {
+interface FakeLinearConfig {
   viewer: FakeLinearViewer;
   project: FakeLinearProject;
 }

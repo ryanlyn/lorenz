@@ -1,4 +1,0 @@
-{"type":"system","subtype":"init","session_id":"session-tool"}
-{"type":"assistant","message":{"content":[{"type":"tool_use","name":"mcp__symphony_linear__linear_graphql"}],"usage":{"input_tokens":4,"output_tokens":2}},"session_id":"session-tool"}
-{"type":"user","tool_use_result":{"tool_name":"mcp__symphony_linear__linear_graphql","stdout":"viewer-1"},"session_id":"session-tool"}
-{"type":"result","subtype":"success","is_error":false,"result":"Done.","session_id":"session-tool","usage":{"input_tokens":12,"cache_creation_input_tokens":3,"cache_read_input_tokens":4,"output_tokens":6}}

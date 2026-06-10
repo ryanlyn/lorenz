@@ -1,33 +1,10 @@
 import type {
-  RuntimeAppStatus,
-  RuntimeBlockedEntry,
   RuntimeEvent,
-  RuntimePollStatus,
-  RuntimeRetryEntry,
   RuntimeRunHistoryEntry,
-  RuntimeRunningEntry,
   RuntimeSnapshot,
 } from "@symphony/runtime-events";
-import type { UsageTotals } from "@symphony/domain";
 
-export interface RuntimeProjectionInput {
-  appStatus: RuntimeAppStatus;
-  workflowPath: string;
-  poll: {
-    status: RuntimePollStatus;
-    candidates: number;
-    eligible: number;
-    lastPollAt: string | null;
-    nextPollAt: string | null;
-    lastError: string | null;
-  };
-  running: RuntimeRunningEntry[];
-  retrying: RuntimeRetryEntry[];
-  blocked: RuntimeBlockedEntry[];
-  usageTotals: UsageTotals;
-  rateLimits: unknown;
-  logFile: string | null;
-}
+export type RuntimeProjectionInput = Omit<RuntimeSnapshot, "runHistory" | "recentEvents">;
 
 export class ProjectionActor {
   private recentEvents: RuntimeEvent[] = [];

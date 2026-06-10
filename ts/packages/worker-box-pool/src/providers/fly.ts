@@ -332,7 +332,10 @@ export class FlyBoxProvider implements BoxProvider {
     try {
       return await this.fetch(url, { ...init, signal: AbortSignal.timeout(timeoutMs) });
     } catch (error) {
-      if (error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError")) {
+      if (
+        error instanceof Error &&
+        (error.name === "TimeoutError" || error.name === "AbortError")
+      ) {
         throw new Error(`fly_request_timeout: ${timeoutMs}ms ${init.method ?? "GET"} ${url}`, {
           cause: error,
         });

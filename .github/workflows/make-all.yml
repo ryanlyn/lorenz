@@ -7,36 +7,6 @@ on:
       - main
 
 jobs:
-  make-all:
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: elixir
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-
-      - name: Set up mise tools
-        uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v3
-        with:
-          install: true
-          cache: true
-          working_directory: elixir
-
-      - name: Cache deps and build
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
-        with:
-          path: |
-            elixir/deps
-            elixir/_build
-          key: ${{ runner.os }}-mix-${{ hashFiles('elixir/mix.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-mix-
-
-      - name: Verify make all
-        run: make all
-
   ts-mise-check:
     runs-on: ubuntu-latest
     defaults:
@@ -62,18 +32,16 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-pnpm-store-
 
-      - name: Cache node_modules and build artifacts
+      - name: Cache node_modules
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: |
             ts/node_modules
             ts/apps/*/node_modules
             ts/packages/*/node_modules
-            ts/apps/*/dist
-            ts/packages/*/dist
-          key: ${{ runner.os }}-ts-deps-build-${{ hashFiles('ts/pnpm-lock.yaml') }}
+          key: ${{ runner.os }}-ts-deps-${{ hashFiles('ts/pnpm-lock.yaml') }}
           restore-keys: |
-            ${{ runner.os }}-ts-deps-build-
+            ${{ runner.os }}-ts-deps-
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
