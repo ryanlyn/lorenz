@@ -102,11 +102,7 @@ async function setupLiveWorkers(): Promise<LiveWorkerSetupResult> {
   const configPath = path.join(sshRoot, "config");
   const ports = [await reserveTcpPort(), await reserveTcpPort()];
   const hosts = ports.map((port) => `localhost:${port}`);
-  const dockerSupportDir = path.resolve(
-    import.meta.dirname,
-    "support",
-    "live_e2e_docker",
-  );
+  const dockerSupportDir = path.resolve(import.meta.dirname, "support", "live_e2e_docker");
   const projectName = dockerProjectName(runId);
   const claudeToken =
     process.env.SYMPHONY_LIVE_DOCKER_CLAUDE_CODE_OAUTH_TOKEN ??

@@ -572,7 +572,10 @@ test("resolveBridgeCommand points bare bridge names at the vendored packages", a
 
 test("resolveBridgeCommand preserves arguments, custom commands, and remote hosts", () => {
   assert.match(resolveBridgeCommand("codex-acp --flag value", null), /index\.js'? --flag value$/);
-  assert.equal(resolveBridgeCommand("my-custom-bridge --port 1", null), "my-custom-bridge --port 1");
+  assert.equal(
+    resolveBridgeCommand("my-custom-bridge --port 1", null),
+    "my-custom-bridge --port 1",
+  );
   assert.equal(resolveBridgeCommand("/usr/local/bin/codex-acp", null), "/usr/local/bin/codex-acp");
   assert.equal(resolveBridgeCommand("codex-acp", "worker-1"), "codex-acp");
 });

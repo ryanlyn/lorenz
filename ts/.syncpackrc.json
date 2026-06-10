@@ -9,10 +9,7 @@
     },
     {
       "label": "Vendored ACP bridges use workspace:* protocol",
-      "dependencies": [
-        "@agentclientprotocol/claude-agent-acp",
-        "@agentclientprotocol/codex-acp"
-      ],
+      "dependencies": ["@agentclientprotocol/claude-agent-acp", "@agentclientprotocol/codex-acp"],
       "dependencyTypes": ["!local"],
       "pinVersion": "workspace:*"
     },

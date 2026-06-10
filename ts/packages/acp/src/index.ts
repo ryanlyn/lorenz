@@ -392,8 +392,7 @@ function parseUsageBucket(value: unknown): UsageTokenUpdate | undefined {
     const raw = bucket[key];
     return typeof raw === "number" ? nonNegativeFinite(raw) : 0;
   };
-  const inputTokens =
-    field("inputTokens") + field("cachedReadTokens") + field("cachedWriteTokens");
+  const inputTokens = field("inputTokens") + field("cachedReadTokens") + field("cachedWriteTokens");
   const outputTokens = field("outputTokens");
   const rawTotal = bucket["totalTokens"];
   const totalTokens =
