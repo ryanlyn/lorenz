@@ -35,6 +35,8 @@
   },
   "devDependencies": {
     "@agentclientprotocol/sdk": "catalog:",
+    "@agentclientprotocol/claude-agent-acp": "workspace:*",
+    "@agentclientprotocol/codex-acp": "workspace:*",
     "@eslint/js": "catalog:",
     "@symphony/agent-runner": "workspace:*",
     "@symphony/cli": "workspace:*",
