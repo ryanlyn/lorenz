@@ -1,6 +1,6 @@
 {
   "name": "@agentclientprotocol/codex-acp",
-  "version": "0.0.44",
+  "version": "0.0.45",
   "description": "Vendored ACP bridge for Codex with Symphony extensions",
   "main": "dist/index.js",
   "bin": {
@@ -10,7 +10,7 @@
   "license": "Apache-2.0",
   "private": true,
   "dependencies": {
-    "@agentclientprotocol/sdk": "^0.21.0",
+    "@agentclientprotocol/sdk": "^0.22.1",
     "@openai/codex": "^0.128.0",
     "diff": "^8.0.3",
     "open": "^11.0.0",

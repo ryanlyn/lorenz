@@ -14441,6 +14441,7 @@ var AGENT_METHODS = {
   document_did_save: "document/didSave",
   initialize: "initialize",
   logout: "logout",
+  mcp_message: "mcp/message",
   nes_accept: "nes/accept",
   nes_close: "nes/close",
   nes_reject: "nes/reject",
@@ -14451,6 +14452,7 @@ var AGENT_METHODS = {
   providers_set: "providers/set",
   session_cancel: "session/cancel",
   session_close: "session/close",
+  session_delete: "session/delete",
   session_fork: "session/fork",
   session_list: "session/list",
   session_load: "session/load",
@@ -14466,6 +14468,9 @@ var CLIENT_METHODS = {
   elicitation_create: "elicitation/create",
   fs_read_text_file: "fs/read_text_file",
   fs_write_text_file: "fs/write_text_file",
+  mcp_connect: "mcp/connect",
+  mcp_disconnect: "mcp/disconnect",
+  mcp_message: "mcp/message",
   session_request_permission: "session/request_permission",
   session_update: "session/update",
   terminal_create: "terminal/create",
@@ -14551,6 +14556,9 @@ var zCreateTerminalResponse = external_exports.object({
   _meta: external_exports.record(external_exports.string(), external_exports.unknown()).nullish(),
   terminalId: external_exports.string()
 });
+var zDeleteSessionResponse = external_exports.object({
+  _meta: external_exports.record(external_exports.string(), external_exports.unknown()).nullish()
+});
 var zDiff = external_exports.object({
   _meta: external_exports.record(external_exports.string(), external_exports.unknown()).nullish(),
   newText: external_exports.string(),
@@ -14562,6 +14570,9 @@ var zDisableProvidersRequest = external_exports.object({
   id: external_exports.string()
 });
 var zDisableProvidersResponse = external_exports.object({
+  _meta: external_exports.record(external_exports.string(), external_exports.unknown()).nullish()
+});
+var zDisconnectMcpResponse = external_exports.object({
   _meta: external_exports.record(external_exports.string(), external_exports.unknown()).nullish()
 });
 var zElicitationContentValue = external_exports.union([
@@ -14669,7 +14680,6 @@ var zListProvidersRequest = external_exports.object({
 });
 var zListSessionsRequest = external_exports.object({
   _meta: external_exports.record(external_exports.string(), external_exports.unknown()).nullish(),
-  additionalDirectories: external_exports.array(external_exports.string()).optional(),
   cursor: external_exports.string().nullish(),
   cwd: external_exports.string().nullish()
 });
@@ -14696,8 +14706,28 @@ var zLogoutResponse = external_exports.object({
 });
 var zMcpCapabilities = external_exports.object({
   _meta: external_exports.record(external_exports.string(), external_exports.unknown()).nullish(),
+  acp: external_exports.boolean().optional().default(false),
   http: external_exports.boolean().optional().default(false),
   sse: external_exports.boolean().optional().default(false)
+});
+var zMcpConnectionId = external_exports.string();
+var zConnectMcpResponse = external_exports.object({
+  _meta: external_exports.record(external_exports.string(), external_exports.unknown()).nullish(),
+  connectionId: zMcpConnectionId
+});
+var zDisconnectMcpRequest = external_exports.object({
+  _meta: external_exports.record(external_exports.string(), external_exports.unknown()).nullish(),
+  connectionId: zMcpConnectionId
+});
+var zMcpServerAcpId = external_exports.string();
+var zConnectMcpRequest = external_exports.object({
+  _meta: external_exports.record(external_exports.string(), external_exports.unknown()).nullish(),
+  acpId: zMcpServerAcpId
+});
+var zMcpServerAcp = external_exports.object({
+  _meta: external_exports.record(external_exports.string(), external_exports.unknown()).nullish(),
+  id: zMcpServerAcpId,
+  name: external_exports.string()
 });
 var zMcpServerHttp = external_exports.object({
   _meta: external_exports.record(external_exports.string(), external_exports.unknown()).nullish(),
@@ -14725,8 +14755,24 @@ var zMcpServer = external_exports.union([
   zMcpServerSse.and(external_exports.object({
     type: external_exports.literal("sse")
   })),
+  zMcpServerAcp.and(external_exports.object({
+    type: external_exports.literal("acp")
+  })),
   zMcpServerStdio
 ]);
+var zMessageMcpNotification = external_exports.object({
+  _meta: external_exports.record(external_exports.string(), external_exports.unknown()).nullish(),
+  connectionId: zMcpConnectionId,
+  method: external_exports.string(),
+  params: external_exports.record(external_exports.string(), external_exports.unknown()).nullish()
+});
+var zMessageMcpRequest = external_exports.object({
+  _meta: external_exports.record(external_exports.string(), external_exports.unknown()).nullish(),
+  connectionId: zMcpConnectionId,
+  method: external_exports.string(),
+  params: external_exports.record(external_exports.string(), external_exports.unknown()).nullish()
+});
+var zMessageMcpResponse = external_exports.unknown();
 var zModelId = external_exports.string();
 var zModelInfo = external_exports.object({
   _meta: external_exports.record(external_exports.string(), external_exports.unknown()).nullish(),
@@ -15134,6 +15180,9 @@ var zConfigOptionUpdate = external_exports.object({
   _meta: external_exports.record(external_exports.string(), external_exports.unknown()).nullish(),
   configOptions: external_exports.array(zSessionConfigOption)
 });
+var zSessionDeleteCapabilities = external_exports.object({
+  _meta: external_exports.record(external_exports.string(), external_exports.unknown()).nullish()
+});
 var zSessionForkCapabilities = external_exports.object({
   _meta: external_exports.record(external_exports.string(), external_exports.unknown()).nullish()
 });
@@ -15162,6 +15211,10 @@ var zCreateTerminalRequest = external_exports.object({
   cwd: external_exports.string().nullish(),
   env: external_exports.array(zEnvVariable).optional(),
   outputByteLimit: external_exports.number().nullish(),
+  sessionId: zSessionId
+});
+var zDeleteSessionRequest = external_exports.object({
+  _meta: external_exports.record(external_exports.string(), external_exports.unknown()).nullish(),
   sessionId: zSessionId
 });
 var zDidCloseDocumentNotification = external_exports.object({
@@ -15313,6 +15366,7 @@ var zSessionCapabilities = external_exports.object({
   _meta: external_exports.record(external_exports.string(), external_exports.unknown()).nullish(),
   additionalDirectories: zSessionAdditionalDirectoriesCapabilities.nullish(),
   close: zSessionCloseCapabilities.nullish(),
+  delete: zSessionDeleteCapabilities.nullish(),
   fork: zSessionForkCapabilities.nullish(),
   list: zSessionListCapabilities.nullish(),
   resume: zSessionResumeCapabilities.nullish()
@@ -15455,6 +15509,7 @@ var zClientNotification = external_exports.object({
     zDidFocusDocumentNotification,
     zAcceptNesNotification,
     zRejectNesNotification,
+    zMessageMcpNotification,
     zExtNotification
   ]).nullish()
 });
@@ -15487,7 +15542,11 @@ var zAgentCapabilities = external_exports.object({
   _meta: external_exports.record(external_exports.string(), external_exports.unknown()).nullish(),
   auth: zAgentAuthCapabilities.optional().default({}),
   loadSession: external_exports.boolean().optional().default(false),
-  mcpCapabilities: zMcpCapabilities.optional().default({ http: false, sse: false }),
+  mcpCapabilities: zMcpCapabilities.optional().default({
+    acp: false,
+    http: false,
+    sse: false
+  }),
   nes: zNesCapabilities.nullish(),
   positionEncoding: zPositionEncodingKind.nullish(),
   promptCapabilities: zPromptCapabilities.optional().default({
@@ -15503,7 +15562,11 @@ var zInitializeResponse = external_exports.object({
   agentCapabilities: zAgentCapabilities.optional().default({
     auth: {},
     loadSession: false,
-    mcpCapabilities: { http: false, sse: false },
+    mcpCapabilities: {
+      acp: false,
+      http: false,
+      sse: false
+    },
     promptCapabilities: {
       audio: false,
       embeddedContext: false,
@@ -15734,6 +15797,7 @@ var zAgentResponse = external_exports.union([
       zNewSessionResponse,
       zLoadSessionResponse,
       zListSessionsResponse,
+      zDeleteSessionResponse,
       zForkSessionResponse,
       zResumeSessionResponse,
       zCloseSessionResponse,
@@ -15744,7 +15808,8 @@ var zAgentResponse = external_exports.union([
       zStartNesResponse,
       zSuggestNesResponse,
       zCloseNesResponse,
-      zExtResponse
+      zExtResponse,
+      zMessageMcpResponse
     ])
   }),
   external_exports.object({
@@ -15803,6 +15868,7 @@ var zAgentNotification = external_exports.object({
   params: external_exports.union([
     zSessionNotification,
     zCompleteElicitationNotification,
+    zMessageMcpNotification,
     zExtNotification
   ]).nullish()
 });
@@ -15841,6 +15907,7 @@ var zClientRequest = external_exports.object({
     zNewSessionRequest,
     zLoadSessionRequest,
     zListSessionsRequest,
+    zDeleteSessionRequest,
     zForkSessionRequest,
     zResumeSessionRequest,
     zCloseSessionRequest,
@@ -15851,6 +15918,7 @@ var zClientRequest = external_exports.object({
     zStartNesRequest,
     zSuggestNesRequest,
     zCloseNesRequest,
+    zMessageMcpRequest,
     zExtRequest
   ]).nullish()
 });
@@ -15873,6 +15941,9 @@ var zAgentRequest = external_exports.object({
     zWaitForTerminalExitRequest,
     zKillTerminalRequest,
     zCreateElicitationRequest,
+    zConnectMcpRequest,
+    zMessageMcpRequest,
+    zDisconnectMcpRequest,
     zExtRequest
   ]).nullish()
 });
@@ -15892,7 +15963,10 @@ var zClientResponse = external_exports.union([
       zWaitForTerminalExitResponse,
       zKillTerminalResponse,
       zCreateElicitationResponse,
-      zExtResponse
+      zConnectMcpResponse,
+      zDisconnectMcpResponse,
+      zExtResponse,
+      zMessageMcpResponse
     ])
   }),
   external_exports.object({
@@ -15967,6 +16041,15 @@ function ndJsonStream(output, input) {
 }
 
 // node_modules/@agentclientprotocol/sdk/dist/acp.js
+function emptyObjectResponse(response) {
+  return response ?? {};
+}
+function rejectedPromise(error40) {
+  const promise2 = Promise.reject(error40);
+  promise2.catch(() => {
+  });
+  return promise2;
+}
 var AgentSideConnection = class {
   connection;
   /**
@@ -16006,6 +16089,14 @@ var AgentSideConnection = class {
           }
           const validatedParams = zListSessionsRequest.parse(params);
           return agent.listSessions(validatedParams);
+        }
+        case AGENT_METHODS.session_delete: {
+          if (!agent.unstable_deleteSession) {
+            throw RequestError.methodNotFound(method);
+          }
+          const validatedParams = zDeleteSessionRequest.parse(params);
+          const result = await agent.unstable_deleteSession(validatedParams);
+          return result ?? {};
         }
         case AGENT_METHODS.session_fork: {
           if (!agent.unstable_forkSession) {
@@ -16191,8 +16282,8 @@ var AgentSideConnection = class {
    *
    * See protocol docs: [Agent Reports Output](https://agentclientprotocol.com/protocol/prompt-turn#3-agent-reports-output)
    */
-  async sessionUpdate(params) {
-    return await this.connection.sendNotification(CLIENT_METHODS.session_update, params);
+  sessionUpdate(params) {
+    return this.connection.sendNotification(CLIENT_METHODS.session_update, params);
   }
   /**
    * Requests permission from the user for a tool call operation.
@@ -16206,8 +16297,8 @@ var AgentSideConnection = class {
    *
    * See protocol docs: [Requesting Permission](https://agentclientprotocol.com/protocol/tool-calls#requesting-permission)
    */
-  async requestPermission(params) {
-    return await this.connection.sendRequest(CLIENT_METHODS.session_request_permission, params);
+  requestPermission(params) {
+    return this.connection.sendRequest(CLIENT_METHODS.session_request_permission, params);
   }
   /**
    * Reads content from a text file in the client's file system.
@@ -16217,8 +16308,8 @@ var AgentSideConnection = class {
    *
    * See protocol docs: [Client](https://agentclientprotocol.com/protocol/overview#client)
    */
-  async readTextFile(params) {
-    return await this.connection.sendRequest(CLIENT_METHODS.fs_read_text_file, params);
+  readTextFile(params) {
+    return this.connection.sendRequest(CLIENT_METHODS.fs_read_text_file, params);
   }
   /**
    * Writes content to a text file in the client's file system.
@@ -16228,8 +16319,8 @@ var AgentSideConnection = class {
    *
    * See protocol docs: [Client](https://agentclientprotocol.com/protocol/overview#client)
    */
-  async writeTextFile(params) {
-    return await this.connection.sendRequest(CLIENT_METHODS.fs_write_text_file, params) ?? {};
+  writeTextFile(params) {
+    return this.connection.sendRequest(CLIENT_METHODS.fs_write_text_file, params, emptyObjectResponse);
   }
   /**
    * Executes a command in a new terminal.
@@ -16243,9 +16334,8 @@ var AgentSideConnection = class {
    * @param params - The terminal creation parameters
    * @returns A handle to control and monitor the terminal
    */
-  async createTerminal(params) {
-    const response = await this.connection.sendRequest(CLIENT_METHODS.terminal_create, params);
-    return new TerminalHandle(response.terminalId, params.sessionId, this.connection);
+  createTerminal(params) {
+    return this.connection.sendRequest(CLIENT_METHODS.terminal_create, params, (response) => new TerminalHandle(response.terminalId, params.sessionId, this.connection));
   }
   /**
    * **UNSTABLE**
@@ -16256,8 +16346,8 @@ var AgentSideConnection = class {
    *
    * @experimental
    */
-  async unstable_createElicitation(params) {
-    return await this.connection.sendRequest(CLIENT_METHODS.elicitation_create, params);
+  unstable_createElicitation(params) {
+    return this.connection.sendRequest(CLIENT_METHODS.elicitation_create, params);
   }
   /**
    * **UNSTABLE**
@@ -16268,24 +16358,24 @@ var AgentSideConnection = class {
    *
    * @experimental
    */
-  async unstable_completeElicitation(params) {
-    return await this.connection.sendNotification(CLIENT_METHODS.elicitation_complete, params);
+  unstable_completeElicitation(params) {
+    return this.connection.sendNotification(CLIENT_METHODS.elicitation_complete, params);
   }
   /**
    * Extension method
    *
    * Allows the Agent to send an arbitrary request that is not part of the ACP spec.
    */
-  async extMethod(method, params) {
-    return await this.connection.sendRequest(method, params);
+  extMethod(method, params) {
+    return this.connection.sendRequest(method, params);
   }
   /**
    * Extension notification
    *
    * Allows the Agent to send an arbitrary notification that is not part of the ACP spec.
    */
-  async extNotification(method, params) {
-    return await this.connection.sendNotification(method, params);
+  extNotification(method, params) {
+    return this.connection.sendNotification(method, params);
   }
   /**
    * AbortSignal that aborts when the connection closes.
@@ -16349,8 +16439,8 @@ var TerminalHandle = class {
   /**
    * Gets the current terminal output without waiting for the command to exit.
    */
-  async currentOutput() {
-    return await this.connection.sendRequest(CLIENT_METHODS.terminal_output, {
+  currentOutput() {
+    return this.connection.sendRequest(CLIENT_METHODS.terminal_output, {
       sessionId: this.sessionId,
       terminalId: this.id
     });
@@ -16358,8 +16448,8 @@ var TerminalHandle = class {
   /**
    * Waits for the terminal command to complete and returns its exit status.
    */
-  async waitForExit() {
-    return await this.connection.sendRequest(CLIENT_METHODS.terminal_wait_for_exit, {
+  waitForExit() {
+    return this.connection.sendRequest(CLIENT_METHODS.terminal_wait_for_exit, {
       sessionId: this.sessionId,
       terminalId: this.id
     });
@@ -16374,11 +16464,11 @@ var TerminalHandle = class {
    *
    * Useful for implementing timeouts or cancellation.
    */
-  async kill() {
-    return await this.connection.sendRequest(CLIENT_METHODS.terminal_kill, {
+  kill() {
+    return this.connection.sendRequest(CLIENT_METHODS.terminal_kill, {
       sessionId: this.sessionId,
       terminalId: this.id
-    }) ?? {};
+    }, emptyObjectResponse);
   }
   /**
    * Releases the terminal and frees all associated resources.
@@ -16392,11 +16482,11 @@ var TerminalHandle = class {
    *
    * **Important:** Always call this method when done with the terminal.
    */
-  async release() {
-    return await this.connection.sendRequest(CLIENT_METHODS.terminal_release, {
+  release() {
+    return this.connection.sendRequest(CLIENT_METHODS.terminal_release, {
       sessionId: this.sessionId,
       terminalId: this.id
-    }) ?? {};
+    }, emptyObjectResponse);
   }
   async [Symbol.asyncDispose]() {
     await this.release();
@@ -16581,25 +16671,36 @@ var Connection = class {
       console.error("Got response to unknown request", response.id);
     }
   }
-  sendRequest(method, params) {
-    this.throwIfClosed();
+  sendRequest(method, params, mapResponse) {
+    if (this.abortController.signal.aborted) {
+      return rejectedPromise(this.closedReason());
+    }
     const id = this.nextRequestId++;
     const responsePromise = new Promise((resolve, reject) => {
-      this.pendingResponses.set(id, { resolve, reject });
+      this.pendingResponses.set(id, {
+        resolve: (response) => {
+          try {
+            resolve(mapResponse ? mapResponse(response) : response);
+          } catch (error40) {
+            reject(error40);
+          }
+        },
+        reject
+      });
     });
     responsePromise.catch(() => {
     });
     void this.sendMessage({ jsonrpc: "2.0", id, method, params });
     return responsePromise;
   }
-  async sendNotification(method, params) {
-    this.throwIfClosed();
-    await this.sendMessage({ jsonrpc: "2.0", method, params });
-  }
-  throwIfClosed() {
+  sendNotification(method, params) {
     if (this.abortController.signal.aborted) {
-      throw this.abortController.signal.reason ?? new Error("ACP connection closed");
+      return rejectedPromise(this.closedReason());
     }
+    return this.sendMessage({ jsonrpc: "2.0", method, params });
+  }
+  closedReason() {
+    return this.abortController.signal.reason ?? new Error("ACP connection closed");
   }
   async sendMessage(message) {
     this.writeQueue = this.writeQueue.then(async () => {
@@ -17389,7 +17490,7 @@ function createCommandActionEvent(id, status, cwd, commandAction) {
       toolCallId: id,
       status: acpStatus,
       kind: "read",
-      title: "Read file",
+      title: `Read file '${commandAction.path}'`,
       locations: [{ path: commandAction.path }]
     };
   } else if (commandAction.type === "search") {
@@ -17556,6 +17657,27 @@ var CodexEventHandler = class {
         return null;
       case "thread/tokenUsage/updated":
         return this.createUsageUpdate(notification.params);
+      case "thread/name/updated":
+        return {
+          sessionUpdate: "session_info_update",
+          title: notification.params.threadName ?? null
+        };
+      case "thread/status/changed":
+        return this.createCodexSessionInfoUpdate({
+          threadStatus: notification.params.status
+        });
+      case "thread/archived":
+        return this.createCodexSessionInfoUpdate({
+          archived: true
+        });
+      case "thread/unarchived":
+        return this.createCodexSessionInfoUpdate({
+          archived: false
+        });
+      case "thread/closed":
+        return this.createCodexSessionInfoUpdate({
+          closed: true
+        });
       case "item/commandExecution/outputDelta":
         return this.createCommandOutputDeltaEvent(notification.params);
       case "item/mcpToolCall/progress":
@@ -17602,10 +17724,6 @@ var CodexEventHandler = class {
       case "serverRequest/resolved":
       case "model/verification":
       case "windows/worldWritableWarning":
-      case "thread/status/changed":
-      case "thread/archived":
-      case "thread/unarchived":
-      case "thread/closed":
       case "thread/realtime/started":
       case "thread/realtime/itemAdded":
       case "thread/realtime/transcript/delta":
@@ -17622,7 +17740,6 @@ var CodexEventHandler = class {
       case "externalAgentConfig/import/completed":
       case "rawResponseItem/completed":
       case "thread/started":
-      case "thread/name/updated":
       case "item/plan/delta":
       case "thread/goal/updated":
       case "thread/goal/cleared":
@@ -17630,6 +17747,14 @@ var CodexEventHandler = class {
       case "app/list/updated":
         return null;
     }
+  }
+  createCodexSessionInfoUpdate(codexMetadata) {
+    return {
+      sessionUpdate: "session_info_update",
+      _meta: {
+        codex: codexMetadata
+      }
+    };
   }
   async createTextEvent(event) {
     return {
@@ -18045,12 +18170,19 @@ var CodexApprovalHandler = class {
   }
 };
 
+// src/McpApprovalOptionId.ts
+var McpApprovalOptionId = {
+  AllowOnce: "allow_once",
+  AllowSession: "allow_session",
+  AllowAlways: "allow_always",
+  Decline: "decline"
+};
+
 // src/CodexElicitationHandler.ts
 var ELICITATION_OPTIONS = [
   { optionId: "accept", name: "Accept", kind: "allow_once" },
   { optionId: "decline", name: "Decline", kind: "reject_once" }
 ];
-var OPTION_ALLOW_SESSION = "allow_session";
 function parsePersistOptions(meta) {
   const result = /* @__PURE__ */ new Set();
   if (!meta || typeof meta !== "object") return result;
@@ -18070,15 +18202,15 @@ function isMcpToolCallApproval(meta) {
 }
 function buildToolApprovalOptions(persistOptions) {
   const options = [
-    { optionId: ApprovalOptionId.AllowOnce, name: "Allow", kind: "allow_once" }
+    { optionId: McpApprovalOptionId.AllowOnce, name: "Allow", kind: "allow_once" }
   ];
   if (persistOptions.has("session")) {
-    options.push({ optionId: OPTION_ALLOW_SESSION, name: "Allow for This Session", kind: "allow_always" });
+    options.push({ optionId: McpApprovalOptionId.AllowSession, name: "Allow for This Session", kind: "allow_always" });
   }
   if (persistOptions.has("always")) {
-    options.push({ optionId: ApprovalOptionId.AllowAlways, name: "Allow and Don't Ask Again", kind: "allow_always" });
+    options.push({ optionId: McpApprovalOptionId.AllowAlways, name: "Allow and Don't Ask Again", kind: "allow_always" });
   }
-  options.push({ optionId: "decline", name: "Decline", kind: "reject_once" });
+  options.push({ optionId: McpApprovalOptionId.Decline, name: "Decline", kind: "reject_once" });
   return options;
 }
 var CodexElicitationHandler = class {
@@ -18125,7 +18257,7 @@ var CodexElicitationHandler = class {
       const response = await this.connection.requestPermission(request);
       if (correlatedCallId !== void 0 && response.outcome.outcome !== "cancelled") {
         const optionId = response.outcome.optionId;
-        if (optionId !== "decline") {
+        if (optionId !== McpApprovalOptionId.Decline) {
           await this.connection.sessionUpdate({
             sessionId: this.sessionState.sessionId,
             update: { sessionUpdate: "tool_call_update", toolCallId: correlatedCallId, status: "in_progress" }
@@ -18203,13 +18335,13 @@ var CodexElicitationHandler = class {
       return { action: "cancel", content: null, _meta: null };
     }
     const optionId = response.outcome.optionId;
-    if (optionId === OPTION_ALLOW_SESSION) {
+    if (optionId === McpApprovalOptionId.AllowSession) {
       return { action: "accept", content: null, _meta: { persist: "session" } };
     }
-    if (optionId === ApprovalOptionId.AllowAlways) {
+    if (optionId === McpApprovalOptionId.AllowAlways) {
       return { action: "accept", content: null, _meta: { persist: "always" } };
     }
-    if (optionId === ApprovalOptionId.AllowOnce || optionId === "accept") {
+    if (optionId === McpApprovalOptionId.AllowOnce || optionId === "accept") {
       return { action: "accept", content: null, _meta: null };
     }
     return { action: "decline", content: null, _meta: null };
@@ -19003,7 +19135,7 @@ var package_default = {
   publishConfig: {
     access: "public"
   },
-  version: "0.0.44",
+  version: "0.0.45",
   description: "",
   main: "dist/index.js",
   bin: {
@@ -19061,7 +19193,7 @@ var package_default = {
     vitest: "^4.0.10"
   },
   dependencies: {
-    "@agentclientprotocol/sdk": "^0.21.0",
+    "@agentclientprotocol/sdk": "^0.22.1",
     "@openai/codex": "^0.128.0",
     diff: "^8.0.3",
     open: "^11.0.0",
@@ -19205,36 +19337,9 @@ var CodexAcpClient = class {
   async resumeSession(request) {
     await this.refreshSkills(request.cwd, request._meta);
     const response = await this.codexClient.threadResume({
-      approvalPolicy: null,
-      sandbox: null,
-      baseInstructions: null,
       config: await this.createSessionConfig(request.cwd, request.mcpServers ?? [], symphonySessionConfig(request)),
       cwd: request.cwd,
-      developerInstructions: null,
-      model: null,
       modelProvider: this.getResumeModelProvider(),
-      personality: null,
-      threadId: request.sessionId
-    });
-    const codexModels = await this.fetchAvailableModels();
-    const currentModelId = this.createModelId(codexModels, response.model, response.reasoningEffort).toString();
-    return {
-      sessionId: request.sessionId,
-      currentModelId,
-      models: codexModels
-    };
-  }
-  async loadSession(request) {
-    const response = await this.codexClient.threadResume({
-      approvalPolicy: null,
-      sandbox: null,
-      baseInstructions: null,
-      config: await this.createSessionConfig(request.cwd, request.mcpServers ?? [], symphonySessionConfig(request)),
-      cwd: request.cwd,
-      developerInstructions: null,
-      model: null,
-      modelProvider: this.getResumeModelProvider(),
-      personality: null,
       threadId: request.sessionId
     });
     const codexModels = await this.fetchAvailableModels();
@@ -19243,6 +19348,23 @@ var CodexAcpClient = class {
       sessionId: request.sessionId,
       currentModelId,
       models: codexModels,
+      currentServiceTier: response.serviceTier ?? null
+    };
+  }
+  async loadSession(request) {
+    const response = await this.codexClient.threadResume({
+      config: await this.createSessionConfig(request.cwd, request.mcpServers ?? [], symphonySessionConfig(request)),
+      cwd: request.cwd,
+      modelProvider: this.getResumeModelProvider(),
+      threadId: request.sessionId
+    });
+    const codexModels = await this.fetchAvailableModels();
+    const currentModelId = this.createModelId(codexModels, response.model, response.reasoningEffort).toString();
+    return {
+      sessionId: request.sessionId,
+      currentModelId,
+      models: codexModels,
+      currentServiceTier: response.serviceTier ?? null,
       thread: response.thread
     };
   }
@@ -19251,14 +19373,7 @@ var CodexAcpClient = class {
     const response = await this.codexClient.threadStart({
       config: await this.createSessionConfig(request.cwd, request.mcpServers, symphonySessionConfig(request)),
       modelProvider: this.getModelProvider(),
-      model: null,
-      cwd: request.cwd,
-      approvalPolicy: null,
-      sandbox: null,
-      baseInstructions: null,
-      developerInstructions: null,
-      personality: null,
-      ephemeral: null
+      cwd: request.cwd
     });
     const codexModels = await this.fetchAvailableModels();
     if (codexModels.length === 0) {
@@ -19268,7 +19383,8 @@ var CodexAcpClient = class {
     return {
       sessionId: response.thread.id,
       currentModelId,
-      models: codexModels
+      models: codexModels,
+      currentServiceTier: response.serviceTier ?? null
     };
   }
   async awaitMcpServerStartup(serverNames, afterVersion) {
@@ -19341,13 +19457,17 @@ var CodexAcpClient = class {
    */
   createMcpSeverConfig(mcpServer) {
     if ("type" in mcpServer) {
-      if (mcpServer.type == "sse") {
-        throw RequestError.invalidRequest("Codex doesn't support MCP SSE transport protocol");
+      switch (mcpServer.type) {
+        case "acp":
+          throw RequestError.invalidRequest("Codex doesn't support MCP ACP transport protocol");
+        case "sse":
+          throw RequestError.invalidRequest("Codex doesn't support MCP SSE transport protocol");
+        case "http":
+          return {
+            "url": mcpServer.url,
+            "http_headers": Object.fromEntries(mcpServer.headers.map((h) => [h.name, h.value]))
+          };
       }
-      return {
-        "url": mcpServer.url,
-        "http_headers": Object.fromEntries(mcpServer.headers.map((h) => [h.name, h.value]))
-      };
     }
     return {
       "command": mcpServer.command,
@@ -19371,21 +19491,19 @@ var CodexAcpClient = class {
     this.codexClient.onApprovalRequest(sessionId, approvalHandler);
     this.codexClient.onElicitationRequest(sessionId, elicitationHandler);
   }
-  async sendPrompt(request, agentMode, modelId, disableSummary, cwd) {
+  async sendPrompt(request, agentMode, modelId, serviceTier, disableSummary, cwd) {
     const input = buildPromptItems(request.prompt);
     const effort = modelId.effort;
     await this.refreshSkills(cwd, request._meta);
     return await this.codexClient.runTurn({
-      outputSchema: null,
       threadId: request.sessionId,
       input,
       approvalPolicy: agentMode.approvalPolicy,
       sandboxPolicy: agentMode.sandboxPolicy,
       summary: disableSummary ? "none" : null,
-      personality: null,
-      cwd: null,
       effort,
-      model: modelId.model
+      model: modelId.model,
+      serviceTier
     });
   }
   async listSkills(params) {
@@ -19428,8 +19546,8 @@ var CodexAcpClient = class {
       });
     });
   }
-  async listMcpServers(params = { cursor: null, limit: null }) {
-    return this.codexClient.listMcpServerStatus(params);
+  async listMcpServers() {
+    return this.codexClient.listMcpServerStatus({});
   }
   async listSessions(request) {
     const sourceKinds = [
@@ -19457,11 +19575,8 @@ var CodexAcpClient = class {
     const modelProviders = preferredProvider ? [preferredProvider] : [];
     const listResponse = await this.codexClient.threadList({
       cursor: request.cursor ?? null,
-      limit: null,
-      sortKey: null,
       modelProviders,
-      sourceKinds,
-      archived: null
+      sourceKinds
     });
     if (listResponse.data.length === 0) {
       const diagnostics = await this.runSessionListDiagnostics();
@@ -19470,14 +19585,14 @@ var CodexAcpClient = class {
     let sessions = listResponse.data.map((thread) => ({
       sessionId: thread.id,
       cwd: thread.cwd,
-      title: thread.preview || null,
+      title: (thread.name ?? thread.preview) || null,
       updatedAt: new Date(thread.updatedAt * 1e3).toISOString()
     }));
     if (requestedCwd) {
       const filtered = listResponse.data.filter(filterByCwd).map((thread) => ({
         sessionId: thread.id,
         cwd: thread.cwd,
-        title: thread.preview || null,
+        title: (thread.name ?? thread.preview) || null,
         updatedAt: new Date(thread.updatedAt * 1e3).toISOString()
       }));
       if (filtered.length > 0 || path4.isAbsolute(requestedCwd)) {
@@ -19509,30 +19624,9 @@ var CodexAcpClient = class {
   }
   async runSessionListDiagnostics() {
     const [allProviders, archivedAllProviders, customGateway] = await Promise.all([
-      this.codexClient.threadList({
-        cursor: null,
-        limit: null,
-        sortKey: null,
-        modelProviders: [],
-        sourceKinds: null,
-        archived: null
-      }),
-      this.codexClient.threadList({
-        cursor: null,
-        limit: null,
-        sortKey: null,
-        modelProviders: [],
-        sourceKinds: null,
-        archived: true
-      }),
-      this.codexClient.threadList({
-        cursor: null,
-        limit: null,
-        sortKey: null,
-        modelProviders: ["custom-gateway"],
-        sourceKinds: null,
-        archived: null
-      })
+      this.codexClient.threadList({}),
+      this.codexClient.threadList({ archived: true }),
+      this.codexClient.threadList({ modelProviders: ["custom-gateway"] })
     ]);
     return {
       allProviders: {
@@ -19637,13 +19731,6 @@ var CodexCommands = class {
       logger.error(`Failed to publish available commands for session ${sessionId}`, err);
     }
   }
-  async tryHandle(prompt, sessionState) {
-    const command = this.parseCommand(prompt);
-    if (command) {
-      return this.handleCommand(command, sessionState);
-    }
-    return false;
-  }
   buildAvailableCommands(skillsEntries) {
     const commands = /* @__PURE__ */ new Map();
     for (const builtin of this.getBuiltinCommands()) {
@@ -19690,25 +19777,21 @@ var CodexCommands = class {
       }
     ];
   }
-  parseCommand(prompt) {
-    if (prompt.length !== 1) return null;
-    const [single] = prompt;
-    if (!single) return null;
-    if (single.type !== "text") return null;
-    const trimmed = single.text.trim();
-    if (!trimmed.startsWith("/")) return null;
-    const commandText = trimmed.slice(1).trim();
+  getCommandName(prompt) {
+    const firstBlock = prompt[0];
+    if (!firstBlock || firstBlock.type != "text") return null;
+    const text = firstBlock.text.trim();
+    if (!text.startsWith("/")) return null;
+    const commandText = text.slice(1).trim();
     if (commandText.length === 0) return null;
-    const [name, ...rest] = commandText.split(/\s+/);
-    const input = rest.join(" ").trim();
-    return {
-      name: name.toLowerCase(),
-      input: input.length > 0 ? input : null
-    };
+    const [name] = commandText.split(/\s+/);
+    return name?.toLowerCase() ?? null;
   }
-  async handleCommand(command, sessionState) {
+  async tryHandleCommand(prompt, sessionState) {
+    const commandName = this.getCommandName(prompt);
+    if (commandName === null) return false;
     const sessionId = sessionState.sessionId;
-    switch (command.name) {
+    switch (commandName) {
       case "status": {
         const session = new ACPSessionConnection(this.connection, sessionId);
         const message = this.buildStatusMessage(sessionState);
@@ -19760,7 +19843,7 @@ var CodexCommands = class {
         return true;
       }
       default:
-        await this.sendUnknownCommandMessage(command.name, sessionId);
+        await this.sendUnknownCommandMessage(commandName, sessionId);
         return true;
     }
   }
@@ -19917,8 +20000,47 @@ function isExtMethodRequest(request) {
   return request.method === "authentication/status" || request.method === "authentication/logout";
 }
 
+// src/FastModeConfig.ts
+var FAST_MODE_CONFIG_ID = "fast-mode";
+var FAST_MODE_ON = "on";
+var FAST_MODE_OFF = "off";
+var FAST_MODE_DESCRIPTION = "1.5x speed, increased usage";
+function modelSupportsFast(model) {
+  return model?.additionalSpeedTiers?.includes("fast") ?? false;
+}
+function resolveFastServiceTier(fastModeEnabled, currentModelSupportsFast) {
+  return fastModeEnabled && currentModelSupportsFast ? "fast" : null;
+}
+function createFastModeConfigOption(fastModeEnabled) {
+  return {
+    id: FAST_MODE_CONFIG_ID,
+    name: "Fast mode",
+    description: FAST_MODE_DESCRIPTION,
+    category: FAST_MODE_CONFIG_ID,
+    type: "select",
+    currentValue: fastModeEnabled ? FAST_MODE_ON : FAST_MODE_OFF,
+    options: [
+      {
+        value: FAST_MODE_OFF,
+        name: "Off",
+        description: "Default speed, normal usage"
+      },
+      {
+        value: FAST_MODE_ON,
+        name: "On",
+        description: FAST_MODE_DESCRIPTION
+      }
+    ]
+  };
+}
+
 // src/CodexAcpServer.ts
-var CodexAcpServer = class {
+var CodexAcpServer = class _CodexAcpServer {
+  static MODEL_NAME_TOKEN_OVERRIDES = {
+    gpt: "GPT",
+    mini: "Mini",
+    codex: "Codex"
+  };
   codexAcpClient;
   connection;
   defaultAuthRequest;
@@ -19944,12 +20066,18 @@ var CodexAcpServer = class {
     await this.runWithProcessCheck(() => this.codexAcpClient.initialize(_params));
     return {
       protocolVersion: PROTOCOL_VERSION,
+      agentInfo: {
+        name: package_default.name,
+        title: "Codex",
+        version: package_default.version
+      },
       agentCapabilities: {
         auth: {
           logout: {}
         },
         loadSession: true,
         promptCapabilities: {
+          embeddedContext: true,
           image: true
         },
         sessionCapabilities: {
@@ -19957,6 +20085,7 @@ var CodexAcpServer = class {
           list: {}
         },
         mcpCapabilities: {
+          acp: false,
           http: true,
           sse: false
         }
@@ -19995,6 +20124,23 @@ var CodexAcpServer = class {
     }
   }
   async getOrCreateSession(request) {
+    try {
+      return await this.tryCreateSession(request);
+    } catch (e) {
+      const error40 = e instanceof Error ? e : new Error(String(e));
+      await this.handleError(error40);
+      throw e;
+    }
+  }
+  async handleError(e) {
+    if (e.message.includes("log out")) {
+      await this.runWithProcessCheck(() => this.codexAcpClient.logout());
+      throw RequestError.internalError(`${e.message}
+
+You have been logged out. Please try again.`);
+    }
+  }
+  async tryCreateSession(request) {
     await this.checkAuthorization();
     const requestedMcpServers = request.mcpServers ?? [];
     const mcpServerStartupVersion = requestedMcpServers.length > 0 ? this.codexAcpClient.getMcpServerStartupVersion() : null;
@@ -20010,6 +20156,7 @@ var CodexAcpServer = class {
     const { sessionId, currentModelId, models } = sessionMetadata;
     const sessionMcpServers = this.resolveSessionMcpServers(requestedMcpServers, "sessionId" in request);
     const currentModel = this.findCurrentModel(models, currentModelId);
+    const currentModelSupportsFast = modelSupportsFast(currentModel);
     const sessionState = {
       sessionId,
       currentModelId,
@@ -20023,6 +20170,8 @@ var CodexAcpServer = class {
       rateLimits: null,
       account,
       cwd: request.cwd,
+      fastModeEnabled: sessionMetadata.currentServiceTier === "fast",
+      currentModelSupportsFast,
       sessionMcpServers
     };
     this.sessions.set(sessionId, sessionState);
@@ -20061,7 +20210,8 @@ var CodexAcpServer = class {
     });
     return {
       models: modelState,
-      modes: modeState
+      modes: modeState,
+      configOptions: this.createSessionConfigOptions(this.getSessionState(sessionId))
     };
   }
   async resumeSession(params) {
@@ -20074,7 +20224,8 @@ var CodexAcpServer = class {
     });
     return {
       models: modelState,
-      modes: modeState
+      modes: modeState,
+      configOptions: this.createSessionConfigOptions(this.getSessionState(sessionId))
     };
   }
   async listSessions(params) {
@@ -20093,7 +20244,8 @@ var CodexAcpServer = class {
     return {
       sessionId,
       models: modelState,
-      modes: modeState
+      modes: modeState,
+      configOptions: this.createSessionConfigOptions(this.getSessionState(sessionId))
     };
   }
   async authenticate(_params) {
@@ -20125,6 +20277,24 @@ var CodexAcpServer = class {
     sessionState.agentMode = newMode;
     return {};
   }
+  async setSessionConfigOption(params) {
+    logger.log("Set session config option requested", {
+      sessionId: params.sessionId,
+      configId: params.configId
+    });
+    const sessionState = this.sessions.get(params.sessionId);
+    if (!sessionState) throw new Error(`Session ${params.sessionId} not found`);
+    if (params.configId !== FAST_MODE_CONFIG_ID || "type" in params && params.type === "boolean") {
+      throw RequestError.invalidParams();
+    }
+    if (params.value !== FAST_MODE_ON && params.value !== FAST_MODE_OFF) {
+      throw RequestError.invalidParams();
+    }
+    sessionState.fastModeEnabled = params.value === FAST_MODE_ON;
+    return {
+      configOptions: this.createSessionConfigOptions(sessionState)
+    };
+  }
   async unstable_setSessionModel(params) {
     logger.log("Set session model requested", {
       sessionId: params.sessionId,
@@ -20154,7 +20324,13 @@ var CodexAcpServer = class {
     sessionState.currentModelId = ModelId.fromComponents(model, reasoningEffort).toString();
     sessionState.supportedReasoningEfforts = model.supportedReasoningEfforts;
     sessionState.supportedInputModalities = model.inputModalities;
+    sessionState.currentModelSupportsFast = modelSupportsFast(model);
     return {};
+  }
+  createSessionConfigOptions(sessionState) {
+    return [
+      createFastModeConfigOption(sessionState.fastModeEnabled)
+    ];
   }
   publishAvailableCommandsAsync(sessionId) {
     void this.availableCommands.publish(sessionId);
@@ -20163,11 +20339,14 @@ var CodexAcpServer = class {
     const modelId = ModelId.fromString(currentModelId);
     return models.find((m) => m.id === modelId.model);
   }
+  normalizeModelDisplayName(displayName) {
+    return displayName.split("-").map((token) => _CodexAcpServer.MODEL_NAME_TOKEN_OVERRIDES[token.toLowerCase()] ?? token).join("-");
+  }
   createModelState(availableModels, selectedModelId) {
     const allowedModels = availableModels.flatMap(
       (model) => model.supportedReasoningEfforts.map((effort) => ({
         modelId: ModelId.fromComponents(model, effort.reasoningEffort).toString(),
-        name: `${model.displayName} (${effort.reasoningEffort})`,
+        name: `${this.normalizeModelDisplayName(model.displayName)} (${effort.reasoningEffort})`,
         description: `${model.description} ${effort.description}`
       }))
     );
@@ -20188,6 +20367,7 @@ var CodexAcpServer = class {
     const { sessionId, currentModelId, models, thread } = sessionMetadata;
     const sessionMcpServers = this.resolveSessionMcpServers(requestedMcpServers, true);
     const currentModel = this.findCurrentModel(models, currentModelId);
+    const currentModelSupportsFast = modelSupportsFast(currentModel);
     const sessionState = {
       sessionId,
       currentModelId,
@@ -20201,6 +20381,8 @@ var CodexAcpServer = class {
       rateLimits: null,
       account,
       cwd: request.cwd,
+      fastModeEnabled: sessionMetadata.currentServiceTier === "fast",
+      currentModelSupportsFast,
       sessionMcpServers
     };
     this.sessions.set(sessionId, sessionState);
@@ -20493,7 +20675,7 @@ ${item.text}`
         approvalHandler,
         elicitationHandler
       );
-      if (await this.availableCommands.tryHandle(params.prompt, sessionState)) {
+      if (await this.availableCommands.tryHandleCommand(params.prompt, sessionState)) {
         logger.log("Prompt handled by a command");
         return {
           stopReason: "end_turn",
@@ -20514,8 +20696,12 @@ ${item.text}`
         throw RequestError.invalidRequest("The current model does not support image input");
       }
       const agentMode = sessionState.agentMode;
+      const serviceTier = resolveFastServiceTier(
+        sessionState.fastModeEnabled,
+        sessionState.currentModelSupportsFast
+      );
       const turnCompleted = await this.runWithProcessCheck(
-        () => this.codexAcpClient.sendPrompt(params, agentMode, modelId, disableSummary, sessionState.cwd)
+        () => this.codexAcpClient.sendPrompt(params, agentMode, modelId, serviceTier, disableSummary, sessionState.cwd)
       );
       if (turnCompleted.turn.status === "interrupted") {
         await this.connection.sessionUpdate({
@@ -20761,10 +20947,10 @@ var CodexAppServerClient = class {
       threadResolvers.set(turnId, resolve);
     });
   }
-  async listModels(params = { cursor: null, limit: null }) {
+  async listModels(params) {
     return await this.sendRequest({ method: "model/list", params });
   }
-  async listSkills(params = {}) {
+  async listSkills(params) {
     return await this.sendRequest({ method: "skills/list", params });
   }
   /**
@@ -21009,6 +21195,34 @@ async function runLoginCommand(args) {
   return login(options);
 }
 
+// src/CodexCli.ts
+import { spawn as spawn2 } from "node:child_process";
+import { createRequire as createRequire2 } from "node:module";
+function runCodexCli(codexPath, args) {
+  const child = spawnCodexCli(codexPath, args);
+  return new Promise((resolve, reject) => {
+    child.on("error", reject);
+    child.on("exit", (code, signal) => {
+      if (signal) {
+        process.kill(process.pid, signal);
+        return;
+      }
+      resolve(code ?? 1);
+    });
+  });
+}
+function spawnCodexCli(codexPath, args) {
+  const options = {
+    env: process.env,
+    stdio: "inherit"
+  };
+  if (codexPath) {
+    return spawn2(codexPath, args, { ...options, shell: process.platform === "win32" });
+  }
+  const bundledCodexPath = createRequire2(import.meta.url).resolve("@openai/codex/bin/codex.js");
+  return spawn2(process.execPath, [bundledCodexPath, ...args], options);
+}
+
 // src/index.ts
 if (process.argv.includes("--version")) {
   console.log(`${package_default.name} ${package_default.version}`);
@@ -21018,6 +21232,12 @@ if (process.argv[2] === "login") {
   const args = process.argv.slice(3);
   runLoginCommand(args).then((success2) => process.exit(success2 ? 0 : 1)).catch((error40) => {
     console.error("Login error:", error40.message);
+    process.exit(1);
+  });
+} else if (process.argv[2] === "cli") {
+  const args = process.argv.slice(3);
+  runCodexCli(process.env["CODEX_PATH"], args).then((exitCode) => process.exit(exitCode)).catch((error40) => {
+    console.error("Codex CLI error:", error40.message);
     process.exit(1);
   });
 } else {

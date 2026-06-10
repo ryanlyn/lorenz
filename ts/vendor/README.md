@@ -40,13 +40,26 @@ so they ride the protocol's sanctioned extension point:
 
 ## Refreshing from upstream
 
-1. `npm pack @agentclientprotocol/<name>@<version>` and extract `dist/`,
-   `LICENSE`, `README.md` over the vendored directory. The repo ignores
-   `dist/` globally, so stage any newly added dist files with `git add -f`
-   (already-tracked files commit normally).
-2. Update `version` and `dependencies` in the vendored `package.json` from the
+1. Save the current patch set as a 3-way-applicable diff. `<pristine>` is the
+   commit that last vendored an unpatched dist (`git log ts/vendor` shows the
+   chore(vendor) refresh commits):
+
+   ```sh
+   git diff <pristine> HEAD -- ts/vendor/<name>/dist > /tmp/<name>.patch
+   ```
+
+2. `npm pack @agentclientprotocol/<name>@<version>` and extract `dist/`,
+   `LICENSE`, `README.md` over the vendored directory. Exact-version pack
+   bypasses npm release-age cooldowns; the vendored package's *dependencies*
+   do not, so pick the newest bridge version whose dependency pins are at
+   least as old as the active cooldown window. The repo ignores `dist/`
+   globally, so stage any newly added dist files with `git add -f`.
+3. Update `version` and `dependencies` in the vendored `package.json` from the
    published manifest (keep `private: true` and the trimmed shape).
-3. Re-apply the `symphony-patch` blocks (diff against git history for the
-   previous patched dist).
-4. `pnpm install`, then run the acp executor tests and the live capture
-   harness (`sandbox/capture-acp-messages.ts`) for both agents.
+4. `git add ts/vendor` (the index must hold the new pristine dist), then
+   `git apply -3 /tmp/<name>.patch` and resolve any conflicts; verify with
+   `grep -c symphony-patch` and `node --check`.
+5. `pnpm install`, `pnpm build`, run the acp executor tests, and run the live
+   capture harness (`sandbox/capture-acp-messages.ts`) for both agents:
+   bucket sums must equal the turn-end totals and no `.codex/config.toml` or
+   `.claude/settings.local.json` may appear in the workspace.
