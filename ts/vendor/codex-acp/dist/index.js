@@ -16885,6 +16885,19 @@ function toTokenCount(usage) {
     reasoningOutputTokens: usage.reasoningOutputTokens
   };
 }
+// symphony-patch: map a TokenCount to the symphony/_meta usage bucket shape.
+// inputTokens is already cache-subtracted and outputTokens already includes
+// reasoning tokens, so totalTokens = input + cachedRead + output holds.
+function toSymphonyUsageBucket(tokenCount) {
+  return {
+    inputTokens: tokenCount.inputTokens,
+    outputTokens: tokenCount.outputTokens,
+    cachedReadTokens: tokenCount.cachedInputTokens,
+    cachedWriteTokens: 0,
+    thoughtTokens: tokenCount.reasoningOutputTokens,
+    totalTokens: tokenCount.totalTokens
+  };
+}
 function toPromptUsage(tokenCount) {
   return {
     totalTokens: tokenCount.totalTokens,
@@ -17858,13 +17871,38 @@ ${event.details}` : "";
     this.handleTokenUsageUpdated(params);
     const used = this.sessionState.lastTokenUsage?.totalTokens;
     const size = this.sessionState.modelContextWindow;
-    if (used == null || size == null || size <= 0) {
+    // symphony-patch: codex reports the per-call bucket (tokenUsage.last) and
+    // the thread-cumulative total on every token update; surface both via
+    // _meta and emit even when the context window is unknown (size 0) so
+    // call-by-call accounting never stalls on a missing window size.
+    const meta = this.createSymphonyUsageMeta();
+    if (used == null) {
       return null;
+    }
+    if (size == null || size <= 0) {
+      return meta ? { sessionUpdate: "usage_update", used, size: 0, _meta: meta } : null;
     }
     return {
       sessionUpdate: "usage_update",
       used,
-      size
+      size,
+      ...meta ? { _meta: meta } : {}
+    };
+  }
+  // symphony-patch: per-call and thread-total token buckets for _meta.
+  createSymphonyUsageMeta() {
+    const last = this.sessionState.lastTokenUsage;
+    if (last == null) {
+      return null;
+    }
+    this.sessionState.symphonyCallSeq = (this.sessionState.symphonyCallSeq ?? 0) + 1;
+    const total = this.sessionState.totalTokenUsage;
+    return {
+      "symphony/callUsage": {
+        seq: this.sessionState.symphonyCallSeq,
+        ...toSymphonyUsageBucket(last)
+      },
+      ...total ? { "symphony/totalUsage": toSymphonyUsageBucket(total) } : {}
     };
   }
   handleRateLimitsUpdated(params) {
