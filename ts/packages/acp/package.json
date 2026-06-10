@@ -10,12 +10,13 @@
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "catalog:",
-    "execa": "catalog:",
+    "@symphony/agent-sdk": "workspace:*",
     "@symphony/child-process": "workspace:*",
     "@symphony/domain": "workspace:*",
     "@symphony/mcp": "workspace:*",
     "@symphony/policies": "workspace:*",
     "@symphony/ssh": "workspace:*",
-    "@symphony/workspace": "workspace:*"
+    "@symphony/workspace": "workspace:*",
+    "execa": "catalog:"
   }
 }

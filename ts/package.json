@@ -31,12 +31,14 @@
     "dashboard:build": "pnpm --filter @symphony/dashboard build",
     "traceviz": "pnpm --filter @symphony/traceviz traceviz",
     "lint:versions": "syncpack lint",
-    "agent-settings:check": "tsx scripts/check-agent-settings-policy.ts"
+    "agent-settings:check": "tsx scripts/check-agent-settings-policy.ts",
+    "architecture:check": "tsx scripts/check-architecture.ts"
   },
   "devDependencies": {
     "@agentclientprotocol/sdk": "catalog:",
     "@eslint/js": "catalog:",
     "@symphony/agent-runner": "workspace:*",
+    "@symphony/agent-sdk": "workspace:*",
     "@symphony/cli": "workspace:*",
     "@symphony/config": "workspace:*",
     "@symphony/dispatch": "workspace:*",

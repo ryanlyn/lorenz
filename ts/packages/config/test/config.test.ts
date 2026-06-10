@@ -154,7 +154,9 @@ test("config defaults and validation match expected defaults", () => {
   const settings = parseConfig({}, {});
 
   assert.equal(settings.tracker.kind, undefined);
-  assert.deepEqual(settings.claude.providerConfig, { permissions: { defaultMode: "dontAsk" } });
+  assert.deepEqual(settings.agents.claude.providerConfig, {
+    permissions: { defaultMode: "dontAsk" },
+  });
   assert.equal(settings.observability.renderIntervalMs, 16);
   assert.throws(() => validateDispatchConfig(settings), /tracker.kind is required/);
 });
@@ -355,11 +357,13 @@ test("agents map overrides known runtime settings via ACP records", () => {
   assert.equal(settings.agents.codex.bridgeCommand, "codex-custom");
   assert.equal(settings.agents.codex.turnTimeoutMs, 120_000);
   assert.equal(settings.agents.codex.stallTimeoutMs, 42_000);
-  assert.equal(settings.codex.command, "codex-custom");
-  assert.equal(settings.codex.turnTimeoutMs, 120_000);
-  assert.equal(settings.codex.stallTimeoutMs, 42_000);
-  assert.equal(settings.claude.command, "claude-agent-acp");
-  assert.deepEqual(settings.claude.providerConfig, { permissions: { defaultMode: "acceptEdits" } });
+  assert.equal(settings.agents.codex.bridgeCommand, "codex-custom");
+  assert.equal(settings.agents.codex.turnTimeoutMs, 120_000);
+  assert.equal(settings.agents.codex.stallTimeoutMs, 42_000);
+  assert.equal(settings.agents.claude.bridgeCommand, "claude-agent-acp");
+  assert.deepEqual(settings.agents.claude.providerConfig, {
+    permissions: { defaultMode: "acceptEdits" },
+  });
   assert.deepEqual(settings.agents.pi, {
     executor: "acp",
     bridgeCommand: "pi-acp",
@@ -409,8 +413,8 @@ test("agents map accepts shared timeout defaults with legacy per-agent overrides
   assert.equal(settings.agents.codex.stallTimeoutMs, 0);
   assert.equal(settings.agents.claude.turnTimeoutMs, 120_000);
   assert.equal(settings.agents.claude.stallTimeoutMs, 5_000);
-  assert.equal(settings.claude.turnTimeoutMs, 120_000);
-  assert.equal(settings.claude.stallTimeoutMs, 5_000);
+  assert.equal(settings.agents.claude.turnTimeoutMs, 120_000);
+  assert.equal(settings.agents.claude.stallTimeoutMs, 5_000);
   assert.equal(settings.agents.pi.turnTimeoutMs, 90_000);
   assert.equal(settings.agents.pi.stallTimeoutMs, 0);
 });
@@ -464,7 +468,7 @@ test("undocumented top-level compatibility keys are ignored", () => {
 
   assert.equal(settings.tracker.kind, undefined);
   assert.equal(settings.agent.maxTurns, 20);
-  assert.equal(settings.codex.command, "codex-acp");
+  assert.equal(settings.agents.codex.bridgeCommand, "codex-acp");
   assert.notEqual(settings.workspace.root, "/tmp/legacy-root");
   assert.equal(settings.hooks.beforeRun, null);
 });
@@ -500,7 +504,7 @@ test("status overrides normalize state names and merge backend timeout settings"
   const effective = settingsForIssueState(settings, "in progress");
   assert.equal(effective.agent.kind, "claude");
   assert.equal(effective.agent.maxTurns, 5);
-  assert.equal(effective.codex.turnTimeoutMs, 120_000);
+  assert.equal(effective.agents.codex.turnTimeoutMs, 120_000);
 });
 
 test("status overrides rederive agents timeout records from overridden backend blocks", () => {
@@ -515,12 +519,12 @@ test("status overrides rederive agents timeout records from overridden backend b
 
   const effective = settingsForIssueState(settings, "todo");
 
-  assert.equal(effective.codex.turnTimeoutMs, 120_000);
-  assert.equal(effective.codex.stallTimeoutMs, 45_000);
+  assert.equal(effective.agents.codex.turnTimeoutMs, 120_000);
+  assert.equal(effective.agents.codex.stallTimeoutMs, 45_000);
   assert.equal(effective.agents.codex?.turnTimeoutMs, 120_000);
   assert.equal(effective.agents.codex?.stallTimeoutMs, 45_000);
-  assert.equal(effective.claude.turnTimeoutMs, 180_000);
-  assert.equal(effective.claude.stallTimeoutMs, 60_000);
+  assert.equal(effective.agents.claude.turnTimeoutMs, 180_000);
+  assert.equal(effective.agents.claude.stallTimeoutMs, 60_000);
   assert.equal(effective.agents.claude?.turnTimeoutMs, 180_000);
   assert.equal(effective.agents.claude?.stallTimeoutMs, 60_000);
 });
@@ -581,12 +585,12 @@ test("stall_timeout_ms=0 is accepted as a valid value at top-level and in status
     },
   });
 
-  assert.equal(settings.codex.stallTimeoutMs, 0);
-  assert.equal(settings.claude.stallTimeoutMs, 0);
+  assert.equal(settings.agents.codex.stallTimeoutMs, 0);
+  assert.equal(settings.agents.claude.stallTimeoutMs, 0);
 
   const effective = settingsForIssueState(settings, "Todo");
-  assert.equal(effective.codex.stallTimeoutMs, 0);
-  assert.equal(effective.claude.stallTimeoutMs, 0);
+  assert.equal(effective.agents.codex.stallTimeoutMs, 0);
+  assert.equal(effective.agents.claude.stallTimeoutMs, 0);
 });
 
 test("hooks accept explicit null as disabled", () => {
@@ -615,8 +619,15 @@ test("config reports useful errors for list fields and agent executors", () => {
     /worker.ssh_hosts must be a list of strings/,
   );
   assert.throws(
-    () => parseConfig({ agents: { pi: { executor: "foo" } } }),
-    /unsupported agents\.pi\.executor/,
+    () =>
+      validateDispatchConfig(
+        parseConfig({
+          tracker: { kind: "memory" },
+          agent: { kind: "pi" },
+          agents: { pi: { executor: "foo", bridge_command: "pi-bridge" } },
+        }),
+      ),
+    /unsupported agents\.pi\.executor: foo \(known executors: acp\)/,
   );
 });
 

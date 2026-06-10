@@ -11,25 +11,7 @@
   ],
   "references": [
     {
-      "path": "../agent-sdk"
-    },
-    {
-      "path": "../child-process"
-    },
-    {
       "path": "../domain"
-    },
-    {
-      "path": "../mcp"
-    },
-    {
-      "path": "../policies"
-    },
-    {
-      "path": "../ssh"
-    },
-    {
-      "path": "../workspace"
     }
   ]
 }

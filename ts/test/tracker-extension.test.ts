@@ -1,6 +1,7 @@
 import { test } from "vitest";
 import { parseConfig, validateDispatchConfig } from "@symphony/config";
 import type { Issue, RuntimeTrackerClient, Settings } from "@symphony/domain";
+import { AgentExecutorRegistry, type AgentExecutorProvider } from "@symphony/agent-sdk";
 import { executeTool, toolSpecs } from "@symphony/mcp";
 import {
   TrackerRegistry,
@@ -11,6 +12,21 @@ import {
 } from "@symphony/tracker-sdk";
 
 import { assert } from "./assert.js";
+
+// Stand-in for the composition root's executor registration; the default agent records
+// select the "acp" executor, and this test only needs validation to pass.
+const stubExecutorProvider: AgentExecutorProvider = {
+  executor: "acp",
+  createExecutor: () => {
+    throw new Error("not under test");
+  },
+};
+
+function executorRegistry(): AgentExecutorRegistry {
+  const registry = new AgentExecutorRegistry();
+  registry.register(stubExecutorProvider);
+  return registry;
+}
 
 /**
  * Architectural regression test for the extension contract: a brand-new tracker backend
@@ -106,13 +122,16 @@ test("a new provider's option typos and dispatch requirements are enforced", () 
   );
 
   const missingKey = parseConfig({ tracker: { kind: "fake-jira" } }, {}, {}, registry);
-  assert.throws(() => validateDispatchConfig(missingKey, registry), /tracker.api_key is required/);
+  assert.throws(
+    () => validateDispatchConfig(missingKey, registry, executorRegistry()),
+    /tracker.api_key is required/,
+  );
 });
 
 test("a new provider supplies the runtime client and agent tools without core changes", async () => {
   const registry = registryWithFakeJira();
   const settings = parseFakeJira({ FAKE_JIRA_API_KEY: "jira-token" }, registry);
-  validateDispatchConfig(settings, registry);
+  validateDispatchConfig(settings, registry, executorRegistry());
 
   const client = registry.require(settings.tracker.kind).createClient(settings, { env: {} });
   assert.deepEqual(
@@ -147,7 +166,7 @@ test("unknown kinds parse leniently and fail dispatch validation with the known-
   const settings = parseConfig({ tracker: { kind: "github", anything: true } }, {}, {}, registry);
   assert.deepEqual(settings.tracker.options, { anything: true });
   assert.throws(
-    () => validateDispatchConfig(settings, registry),
+    () => validateDispatchConfig(settings, registry, executorRegistry()),
     /unsupported tracker.kind: github \(known kinds: fake-jira\)/,
   );
 });

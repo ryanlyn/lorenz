@@ -19,6 +19,8 @@ import { configureLogFile } from "@symphony/log-file";
 import { SymphonyRuntime } from "@symphony/runtime";
 import { RuntimeApp } from "@symphony/tui";
 import { loadWorkflow } from "@symphony/workflow";
+import { acpExecutorProvider } from "@symphony/acp";
+import { defaultAgentExecutorRegistry } from "@symphony/agent-sdk";
 import { defaultTrackerRegistry } from "@symphony/tracker-sdk";
 import { registerBuiltinTrackerProviders } from "@symphony/trackers";
 import { TraceEmitter } from "@symphony/traceviz-emitter";
@@ -38,8 +40,10 @@ import {
   runtimeDefaultSettingsOptions,
 } from "./daemon.js";
 
-// Composition root: the CLI decides which tracker backends this binary supports.
+// Composition root: the CLI decides which tracker backends and agent executors this
+// binary supports.
 registerBuiltinTrackerProviders();
+defaultAgentExecutorRegistry.register(acpExecutorProvider);
 
 export interface CliOptions {
   workflowPath: string | null;

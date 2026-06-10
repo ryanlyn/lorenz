@@ -1,6 +1,6 @@
 import { homedir } from "node:os";
 
-import type { AgentConfig, ClaudeSettings, CodexSettings, Settings } from "@symphony/domain";
+import type { AgentConfig, Settings } from "@symphony/domain";
 
 import { joinPath } from "./leaf-utils.js";
 
@@ -11,20 +11,6 @@ export interface DefaultSettingsOptions {
 export const defaultSettings = (options: DefaultSettingsOptions = {}): Settings => {
   const tmpdir = options.tmpdir ?? "/tmp";
   const workspaceRoot = joinPath(tmpdir, "symphony_workspaces");
-  const codex: CodexSettings = {
-    command: "codex-acp",
-    turnTimeoutMs: 3_600_000,
-    stallTimeoutMs: 300_000,
-  };
-  const claude: ClaudeSettings = {
-    command: "claude-agent-acp",
-    turnTimeoutMs: 3_600_000,
-    stallTimeoutMs: 300_000,
-    strictMcpConfig: true,
-    providerConfig: {
-      permissions: { defaultMode: "dontAsk" },
-    },
-  };
   return {
     tracker: {
       kind: undefined,
@@ -52,9 +38,7 @@ export const defaultSettings = (options: DefaultSettingsOptions = {}): Settings 
       maxRetryBackoffMs: 300_000,
       ensembleSize: 1,
     },
-    agents: defaultAgentRecords(codex, claude),
-    codex,
-    claude,
+    agents: defaultAgentRecords(),
     observability: {
       dashboardEnabled: true,
       refreshMs: 1_000,
@@ -66,26 +50,25 @@ export const defaultSettings = (options: DefaultSettingsOptions = {}): Settings 
   };
 };
 
-export function defaultAgentRecords(
-  codex: Pick<CodexSettings, "command" | "turnTimeoutMs" | "stallTimeoutMs">,
-  claude: ClaudeSettings,
-): Record<string, AgentConfig> {
+export function defaultAgentRecords(): Record<string, AgentConfig> {
   return {
     codex: {
       executor: "acp",
-      bridgeCommand: codex.command,
+      bridgeCommand: "codex-acp",
       usageAccounting: "per-turn",
-      turnTimeoutMs: codex.turnTimeoutMs,
-      stallTimeoutMs: codex.stallTimeoutMs,
+      turnTimeoutMs: 3_600_000,
+      stallTimeoutMs: 300_000,
     },
     claude: {
       executor: "acp",
-      bridgeCommand: claude.command,
+      bridgeCommand: "claude-agent-acp",
       usageAccounting: "per-turn",
-      providerConfig: claude.providerConfig,
-      turnTimeoutMs: claude.turnTimeoutMs,
-      stallTimeoutMs: claude.stallTimeoutMs,
-      strictMcpConfig: claude.strictMcpConfig,
+      providerConfig: {
+        permissions: { defaultMode: "dontAsk" },
+      },
+      turnTimeoutMs: 3_600_000,
+      stallTimeoutMs: 300_000,
+      strictMcpConfig: true,
     },
   };
 }

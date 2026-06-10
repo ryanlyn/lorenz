@@ -505,7 +505,6 @@ test("runtime reconciles stalled runs from the orchestrator poll loop", async ()
   const issue = issueFixture("issue-stalled", "MT-STALLED");
   const root = await tempDir("symphony-ts-runtime-stall-resume");
   const workflow = workflowFixture(root);
-  workflow.settings.codex.stallTimeoutMs = 50;
   workflow.settings.agents.codex.stallTimeoutMs = 50;
   const workspace = await createWorkspaceForIssue(workflow.settings, issue);
   const deletedResumeStates: string[] = [];
@@ -579,7 +578,6 @@ test("runtime stall reconciliation uses agents-level stall timeout defaults", as
     workspace: { root },
     agents: { stall_timeout_ms: 50 },
   });
-  assert.equal(settings.codex.stallTimeoutMs, 50);
   assert.equal(settings.agents.codex.stallTimeoutMs, 50);
   const workflow: WorkflowDefinition = {
     path: "/tmp/WORKFLOW.md",
@@ -645,7 +643,6 @@ test("runtime does not stall a stale ensemble slot snapshot after its runner com
   const root = await tempDir("symphony-ts-runtime-ensemble-stall-race");
   const workflow = workflowFixture(root);
   workflow.settings.agent.ensembleSize = 2;
-  workflow.settings.codex.stallTimeoutMs = 50;
   workflow.settings.agents.codex.stallTimeoutMs = 50;
   workflow.settings.worker.sshTimeoutMs = 2_000;
   const orchestrator = new Orchestrator(workflow.settings);
@@ -748,7 +745,6 @@ test("runtime does not stall a stale ensemble slot snapshot after its runner com
 test("runtime does not record late success after stall reconciliation wins", async () => {
   const issue = issueFixture("issue-late-success", "MT-LATE-SUCCESS");
   const workflow = workflowFixture();
-  workflow.settings.codex.stallTimeoutMs = 50;
   workflow.settings.agents.codex.stallTimeoutMs = 50;
   const orchestrator = new Orchestrator(workflow.settings);
   let aborted = false;
@@ -808,7 +804,6 @@ test("runtime keeps a retry handle active when a stalled generation finishes lat
   const root = await tempDir("symphony-ts-runtime-stale-finally");
   const workflow = workflowFixture(root);
   workflow.settings.agent.maxRetryBackoffMs = 0;
-  workflow.settings.codex.stallTimeoutMs = 50;
   workflow.settings.agents.codex.stallTimeoutMs = 50;
   const orchestrator = new Orchestrator(workflow.settings);
   let attempts = 0;

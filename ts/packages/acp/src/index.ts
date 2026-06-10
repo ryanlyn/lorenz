@@ -37,6 +37,7 @@ import {
   type UsageTokenUpdate,
   type UsageTotals,
 } from "@symphony/domain";
+import type { AgentExecutorProvider } from "@symphony/agent-sdk";
 
 import { toToml } from "./toml.js";
 
@@ -55,6 +56,24 @@ interface Session extends AgentSession {
   usageTotals: UsageTotals;
   pendingTurn?: { reject: (error: Error) => void; allowSessionIdRotation: boolean } | undefined;
 }
+
+/**
+ * The ACP executor: drives an external bridge subprocess (e.g. `codex-acp`,
+ * `claude-agent-acp`) over the Agent Client Protocol, locally or via SSH.
+ */
+export const acpExecutorProvider: AgentExecutorProvider = {
+  executor: "acp",
+  validateAgent(kind, config) {
+    if (!config.bridgeCommand.trim()) {
+      throw new Error(
+        kind === "claude"
+          ? "claude.command is required"
+          : `agents.${kind}.bridgeCommand is required`,
+      );
+    }
+  },
+  createExecutor: (kind) => new Executor(kind),
+};
 
 export class Executor implements AgentExecutor {
   readonly kind: AgentKind;

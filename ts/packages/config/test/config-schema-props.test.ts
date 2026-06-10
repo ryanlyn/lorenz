@@ -76,7 +76,7 @@ test("INVARIANT: coercedNonNegativeInt SHALL accept zero and positive integers",
   fc.assert(
     fc.property(fc.integer({ min: 0, max: ONE_WEEK_MS }), (n) => {
       const settings = parseConfig({ codex: { stall_timeout_ms: n } });
-      assert.equal(settings.codex.stallTimeoutMs, n);
+      assert.equal(settings.agents.codex!.stallTimeoutMs, n);
     }),
   );
 });
@@ -85,7 +85,7 @@ test("coercedNonNegativeInt — accepts non-negative integer as string", () => {
   fc.assert(
     fc.property(fc.integer({ min: 0, max: ONE_WEEK_MS }), (n) => {
       const settings = parseConfig({ codex: { stall_timeout_ms: String(n) } });
-      assert.equal(settings.codex.stallTimeoutMs, n);
+      assert.equal(settings.agents.codex!.stallTimeoutMs, n);
     }),
   );
 });

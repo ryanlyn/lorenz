@@ -100,6 +100,14 @@ export function normalizeWorkflowConfig(value: unknown): unknown {
         normalizeNested(normalizedOverride, "agent", agentAliases);
         normalizeNested(normalizedOverride, "codex", codexAliases);
         normalizeNested(normalizedOverride, "claude", claudeAliases);
+        if (isPlainRecord(normalizedOverride.agents)) {
+          normalizedOverride.agents = Object.fromEntries(
+            Object.entries(normalizedOverride.agents).map(([name, agent]) => [
+              name,
+              isPlainRecord(agent) ? normalizeAliases(agent, agentRecordAliases) : agent,
+            ]),
+          );
+        }
         return [state, normalizedOverride];
       }),
     );

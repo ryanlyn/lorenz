@@ -21,6 +21,7 @@
   "dependencies": {
     "@symphony/acp": "workspace:*",
     "@symphony/agent-runner": "workspace:*",
+    "@symphony/agent-sdk": "workspace:*",
     "@symphony/cli-kit": "workspace:*",
     "@symphony/config": "workspace:*",
     "@symphony/dispatch": "workspace:*",

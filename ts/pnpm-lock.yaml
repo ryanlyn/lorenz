@@ -148,6 +148,9 @@ importers:
       "@symphony/agent-runner":
         specifier: workspace:*
         version: link:packages/agent-runner
+      "@symphony/agent-sdk":
+        specifier: workspace:*
+        version: link:packages/agent-sdk
       "@symphony/cli":
         specifier: workspace:*
         version: link:apps/cli
@@ -289,6 +292,9 @@ importers:
       "@symphony/agent-runner":
         specifier: workspace:*
         version: link:../../packages/agent-runner
+      "@symphony/agent-sdk":
+        specifier: workspace:*
+        version: link:../../packages/agent-sdk
       "@symphony/cli-kit":
         specifier: workspace:*
         version: link:../../packages/cli-kit
@@ -453,6 +459,9 @@ importers:
       "@agentclientprotocol/sdk":
         specifier: "catalog:"
         version: 0.21.1(zod@4.4.3)
+      "@symphony/agent-sdk":
+        specifier: workspace:*
+        version: link:../agent-sdk
       "@symphony/child-process":
         specifier: workspace:*
         version: link:../child-process
@@ -500,6 +509,12 @@ importers:
         specifier: "catalog:"
         version: 0.21.1(zod@4.4.3)
 
+  packages/agent-sdk:
+    dependencies:
+      "@symphony/domain":
+        specifier: workspace:*
+        version: link:../domain
+
   packages/child-process: {}
 
   packages/cli-kit:
@@ -510,6 +525,9 @@ importers:
 
   packages/config:
     dependencies:
+      "@symphony/agent-sdk":
+        specifier: workspace:*
+        version: link:../agent-sdk
       "@symphony/domain":
         specifier: workspace:*
         version: link:../domain

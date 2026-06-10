@@ -1,6 +1,7 @@
 import os from "node:os";
 
-import { Executor } from "@symphony/acp";
+import { acpExecutorProvider } from "@symphony/acp";
+import { defaultAgentExecutorRegistry } from "@symphony/agent-sdk";
 import {
   runAgentAttempt as runAgentAttemptCore,
   type RunAgentAttemptAdapters,
@@ -20,9 +21,11 @@ import {
 import { defaultTrackerRegistry } from "@symphony/tracker-sdk";
 import { registerBuiltinTrackerProviders } from "@symphony/trackers";
 
-// Composition root: the CLI decides which tracker backends this binary supports. Everything
-// downstream (config parsing, dispatch, MCP tools) resolves them through the registry.
+// Composition root: the CLI decides which tracker backends and agent executors this
+// binary supports. Everything downstream (config parsing, dispatch validation, MCP tools,
+// executor selection) resolves them through the registries.
 registerBuiltinTrackerProviders();
+defaultAgentExecutorRegistry.register(acpExecutorProvider);
 
 export function runtimeDefaultSettingsOptions(): DefaultSettingsOptions {
   return { tmpdir: os.tmpdir() };
@@ -42,10 +45,11 @@ function createRunAgentAttemptAdapters(): RunAgentAttemptAdapters {
     readResumeState,
     resumeStateMatches,
     writeResumeState,
-    executorFactory: (settings) => {
-      const agent = settings.agents[settings.agent.kind];
-      if (!agent) throw new Error(`agents.${settings.agent.kind} is required`);
-      return new Executor(settings.agent.kind);
+    executorFactory: async (settings) => {
+      const kind = settings.agent.kind;
+      const agent = settings.agents[kind];
+      if (!agent) throw new Error(`agents.${kind} is required`);
+      return defaultAgentExecutorRegistry.require(agent.executor).createExecutor(kind, settings);
     },
   };
 }
