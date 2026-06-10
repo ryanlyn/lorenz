@@ -142,13 +142,17 @@ export interface WarmupStrategy {
 /**
  * Lifecycle state of a box inside the pool inventory. Internal to the pool;
  * surfaced (read-only) via `BoxPoolSnapshot` for tests/observability.
+ *
+ * `WARMING` and `DRAINING` are never assigned by the current pool (provisioning
+ * probes inline and drain is a pool-level flag); they stay in the vocabulary for
+ * a future async warmup strategy / per-box drain marker, and the leasable/reap
+ * guards already treat them correctly.
  */
 export type BoxState =
   | "PROVISIONING"
   | "WARMING"
   | "WARM_IDLE"
   | "LEASED"
-  | "RETURNING"
   | "DEGRADED"
   | "DESTROYING"
   | "DESTROYED"

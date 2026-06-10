@@ -14,13 +14,11 @@
 //     re-reads live pool state each call, so an orchestrator that captured the
 //     probe in its ctor is never stranded by a reload.
 //   - isEnabled/reconcile/drain/hydrate delegate verbatim; snapshot is the pool
-//     snapshot extended with an empty `slots` array (the STEP 1 stub; live slot
-//     accounting lands with per-run endpoints in later steps).
+//     snapshot extended with a `slots` view derived from the live registry.
 //
-// The coordinator owns the authoritative per-slot registry so later steps can do
-// per-issue fairness and recycle-driven fail-fast; in STEP 1 the registry only
-// ever holds slots that were minted and not yet settled, and feeds the (empty in
-// practice) snapshot.slots view.
+// The coordinator owns the authoritative per-slot registry (minted-but-unsettled
+// slots) used for collision detection, recycle-driven fail-fast, the tunnel
+// ceiling, and the snapshot.slots view.
 
 import type { BoxPoolSettings, Settings } from "@symphony/domain";
 import type {
@@ -30,6 +28,7 @@ import type {
   BoxPool,
   BoxPoolSnapshot,
 } from "@symphony/worker-box-pool";
+import type { AgentMcpEndpointLease } from "@symphony/mcp";
 
 import type { AcquireRunSlotRequest, McpEndpointManager, RunSlot } from "./types.js";
 
@@ -620,11 +619,26 @@ export function createDispatchCoordinator(
           issueId: slot.issueId,
           slotIndex: slot.slotIndex,
           workerHost: slot.workerHost,
-          // STEP 1 has no per-run endpoint, so no remote port is bound.
-          remotePort: null,
+          remotePort: remotePortFromEndpoint(slot.mcpEndpoint),
         });
       }
       return { ...base, slots: slotEntries };
     },
   };
+}
+
+/**
+ * The remote port a slot's per-run MCP endpoint is bound to, derived from the
+ * lease URL (`http://127.0.0.1:<remotePort>/...` on the worker side). `null`
+ * when no endpoint is bound (null endpoint manager, local worker host, or a
+ * URL without an explicit port).
+ */
+function remotePortFromEndpoint(endpoint: AgentMcpEndpointLease | null): number | null {
+  if (!endpoint) return null;
+  try {
+    const port = Number(new URL(endpoint.url).port);
+    return Number.isInteger(port) && port > 0 ? port : null;
+  } catch {
+    return null;
+  }
 }

@@ -121,6 +121,11 @@ export function buildDispatchCoordinator(
     mcpEndpointManager: createPerRunEndpointManager({
       acquireForRun: acquireAgentMcpEndpointForRun,
     }),
+    // Same structured-event sink as the pool so coordinator faults (e.g.
+    // box_pool_endpoint_release_failed) reach the log file instead of being
+    // silently dropped by the no-op default.
+    logEvent: (event: Record<string, unknown>) =>
+      void appendLogEvent(settings.logging.logFile, event),
     settings: boxPoolSettings,
   });
 }

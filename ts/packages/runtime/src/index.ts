@@ -594,10 +594,15 @@ export class SymphonyRuntime {
         workerHost: effectiveWorkerHost,
         slotIndex,
         // Thread the bound slot's per-run MCP endpoint (or null on the local /
-        // non-pool / null-manager path) into the runner so acp consumes it and
-        // SKIPS its own acquire+release; codex ignores it. The coordinator owns the
+        // non-pool / null-manager path) into the runner so the ACP executor
+        // consumes it and SKIPS its own acquire+release. The coordinator owns the
         // whole lease and closes it via slot.release in this run's finally.
         mcpEndpoint: slot?.mcpEndpoint ?? null,
+        // With more than one run slot per machine, two solo runs of the SAME
+        // issue could land on one box and would otherwise share a workspace
+        // path; force the per-slot suffix whenever co-residence is possible.
+        // Single-tenant (default) keeps the bare path.
+        forceSlotSuffix: (this.workflow.settings.worker.boxPool?.slotsPerMachine ?? 1) > 1,
         onUpdate: (update) => {
           heartbeatSlot?.heartbeat();
           this.orchestrator.applyUpdate(issue.id, slotIndex, update);
@@ -1191,7 +1196,11 @@ function cleanupWorkerHost(workerHost: string | null | undefined): string | null
  */
 function disabledBoxPoolSettings(prev: BoxPoolSettings | undefined): BoxPoolSettings | undefined {
   if (!prev) return undefined;
-  return { ...prev, enabled: false };
+  // A bare spread would copy the enumerable `maxInFlight` getter as a plain data property that
+  // could drift from `slotsPerMachine`; strip it and re-install the derived accessor, matching
+  // the config package's parse/clone paths.
+  const { maxInFlight: _maxInFlight, ...rest } = prev;
+  return withDerivedMaxInFlight({ ...rest, enabled: false });
 }
 
 /**
