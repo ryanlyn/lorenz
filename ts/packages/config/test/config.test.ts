@@ -686,6 +686,27 @@ test("top-level tool_options parses per-pack option bags and deep-copies them", 
   assert.equal(parseConfig({ tracker: { kind: "memory" } }).toolOptions, undefined);
 });
 
+test("tool_options secret references resolve at parse time; unresolvable refs are omitted", () => {
+  const settings = parseConfig(
+    {
+      tracker: { kind: "memory" },
+      tool_options: { linear: { api_key: "$PACK_KEY", endpoint: "https://linear.example" } },
+    },
+    { PACK_KEY: "resolved-token" },
+  );
+  assert.equal(settings.toolOptions?.["linear"]?.api_key, "resolved-token");
+
+  const unresolved = parseConfig(
+    {
+      tracker: { kind: "memory" },
+      tool_options: { linear: { api_key: "$PACK_KEY", endpoint: "https://linear.example" } },
+    },
+    {},
+  );
+  assert.equal("api_key" in (unresolved.toolOptions?.["linear"] ?? {}), false);
+  assert.equal(unresolved.toolOptions?.["linear"]?.endpoint, "https://linear.example");
+});
+
 test("tool_options for an unknown pack fails dispatch validation with the known pack list", () => {
   const settings = parseConfig({
     tracker: { kind: "memory" },

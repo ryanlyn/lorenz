@@ -167,7 +167,10 @@ async function queryJiraIssues(
 ): Promise<Issue[]> {
   const issueIds = stringArray(args.issueIds);
   if (issueIds) return client.fetchIssuesByIds(issueIds);
-  if (typeof args.jql === "string" && args.jql.trim() !== "") return client.searchIssues(args.jql);
+  const nativeQuery = typeof args.query === "string" ? args.query : args.jql;
+  if (typeof nativeQuery === "string" && nativeQuery.trim() !== "") {
+    return client.searchIssues(nativeQuery);
+  }
   const states = stringArray(args.states);
   if (states) return client.fetchIssuesByStates(states);
   if (settings.tracker.activeStates.length > 0) return client.fetchCandidateIssues();

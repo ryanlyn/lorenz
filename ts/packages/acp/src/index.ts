@@ -87,18 +87,24 @@ interface Session extends AgentSession {
  * The ACP executor: drives an external bridge subprocess (e.g. `codex-acp`,
  * `claude-agent-acp`) over the Agent Client Protocol, locally or via SSH.
  */
+/** Fold the legacy `command` spelling into `bridgeCommand`; the canonical key wins. */
+function normalizeLegacyCommand(options: Record<string, unknown>): Record<string, unknown> {
+  if (!("command" in options)) return options;
+  const { command, ...rest } = options;
+  return { bridgeCommand: rest.bridgeCommand ?? command, ...rest };
+}
+
 export const acpExecutorProvider: AgentExecutorProvider = {
   executor: "acp",
   // `command` is the legacy spelling of `bridge_command`; it is listed first so the
   // canonical key wins when a record configures both.
   configAliases: {
-    command: "bridgeCommand",
     bridge_command: "bridgeCommand",
     usage_accounting: "usageAccounting",
     provider_config: "providerConfig",
     strict_mcp_config: "strictMcpConfig",
   },
-  parseOptions: (options) => parseAcpAgentOptions(options),
+  parseOptions: (options) => parseAcpAgentOptions(normalizeLegacyCommand(options)),
   validateAgent(kind, config) {
     if (!acpAgentOptions(config).bridgeCommand.trim()) {
       throw new Error(

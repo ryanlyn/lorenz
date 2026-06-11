@@ -669,10 +669,11 @@ function resolveToolOptionReferences(
   const resolved: Record<string, Record<string, unknown>> = {};
   for (const [pack, options] of Object.entries(toolOptions)) {
     resolved[pack] = Object.fromEntries(
-      Object.entries(structuredClone(options)).map(([key, value]) => [
-        key,
-        typeof value === "string" ? (resolveConfiguredSecret(value, env) ?? value) : value,
-      ]),
+      Object.entries(structuredClone(options)).flatMap(([key, value]) => {
+        if (typeof value !== "string") return [[key, value]];
+        const secret = resolveConfiguredSecret(value, env);
+        return secret === undefined ? [] : [[key, secret]];
+      }),
     );
   }
   return resolved;
