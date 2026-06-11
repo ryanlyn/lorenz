@@ -18,6 +18,7 @@ export const sampleIssue = {
   title: "Test issue",
   description: "Ship it",
   state: "Todo",
+  stateType: "unstarted" as const,
   labels: ["Symphony:Backend"],
   blockers: [],
 };

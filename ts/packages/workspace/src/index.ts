@@ -10,6 +10,16 @@ const remoteWorkspaceMarker = "__SYMPHONY_WORKSPACE__";
 const hookForceKillDelayMs = 5_000;
 
 const liquidEngine = new Liquid({ strictVariables: false, strictFilters: true });
+liquidEngine.registerFilter("shell_escape", (v: unknown) =>
+  shellEscape(typeof v === "string" ? v : JSON.stringify(v ?? "")),
+);
+
+function shellEscapeValue(v: unknown): string {
+  if (v == null) return "''";
+  if (Array.isArray(v)) return shellEscape(v.join(","));
+  if (typeof v === "string") return shellEscape(v);
+  return shellEscape(JSON.stringify(v));
+}
 
 export interface HookTemplateContext {
   issue?: Issue | undefined;
@@ -17,18 +27,19 @@ export interface HookTemplateContext {
 
 async function renderHookCommand(command: string, context: HookTemplateContext): Promise<string> {
   if (!context.issue) return command;
+  const issue = context.issue;
   return liquidEngine.parseAndRender(command, {
     issue: {
-      id: context.issue.id,
-      identifier: context.issue.identifier,
-      title: context.issue.title,
-      description: context.issue.description ?? null,
-      priority: context.issue.priority ?? null,
-      state: context.issue.state,
-      state_type: context.issue.stateType ?? null,
-      branch_name: context.issue.branchName ?? null,
-      url: context.issue.url ?? null,
-      labels: context.issue.labels,
+      id: shellEscapeValue(issue.id),
+      identifier: shellEscapeValue(issue.identifier),
+      title: shellEscapeValue(issue.title),
+      description: shellEscapeValue(issue.description),
+      priority: shellEscapeValue(issue.priority),
+      state: shellEscapeValue(issue.state),
+      state_type: shellEscapeValue(issue.stateType),
+      branch_name: shellEscapeValue(issue.branchName),
+      url: shellEscapeValue(issue.url),
+      labels: shellEscapeValue(issue.labels),
     },
   }) as Promise<string>;
 }
