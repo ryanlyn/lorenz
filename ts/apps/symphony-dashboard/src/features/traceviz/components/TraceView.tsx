@@ -71,7 +71,7 @@ export function TraceView({ issueId, onBack }: TraceViewProps) {
       {hasNewUpdates && (
         <button
           onClick={scrollToTop}
-          className="sticky top-3 z-10 mx-auto flex items-center gap-1.5 rounded-full border border-accent-purple/30 bg-accent-purple/10 px-3 py-1.5 text-xs font-medium text-accent-purple backdrop-blur-sm transition-all hover:bg-accent-purple/20 hover:border-accent-purple/50"
+          className="sticky top-[4.5rem] z-20 mx-auto flex items-center gap-1.5 rounded-full border border-accent-purple/30 bg-accent-purple/10 px-3 py-1.5 text-xs font-medium text-accent-purple backdrop-blur-sm transition-all hover:bg-accent-purple/20 hover:border-accent-purple/50"
         >
           <ArrowUp className="h-3 w-3" />
           New updates available

@@ -18,6 +18,7 @@ type WsServerMessage =
   | { type: "init"; tickets: TicketInfo[] }
   | { type: "update"; issueId: string; tickets: TicketInfo[] }
   | { type: "events"; issueId: string; events: DisplayEvent[] }
+  | { type: "events_append"; issueId: string; events: DisplayEvent[]; fromIndex: number }
   | { type: "ops_state"; state: OpsStatePayload };
 
 export interface WsSetupResult {
@@ -35,6 +36,11 @@ export interface WsSetupResult {
  * - On message "subscribe" with { issueId }: sends events for that ticket
  * - Broadcasts watcher updates and runtime ops-state updates to all clients
  */
+interface ClientState {
+  subscribedIssueId: string | null;
+  eventCursor: number;
+}
+
 export function createWsHandler(
   app: Hono,
   runtime: RuntimeServerSource,
@@ -43,7 +49,7 @@ export function createWsHandler(
   // eslint-disable-next-line @typescript-eslint/unbound-method
   const { injectWebSocket, upgradeWebSocket } = createNodeWebSocket({ app });
 
-  const connections = new Set<WSContext>();
+  const connections = new Map<WSContext, ClientState>();
 
   const send = (ws: WSContext, message: WsServerMessage) => {
     ws.send(JSON.stringify(message));
@@ -51,21 +57,29 @@ export function createWsHandler(
 
   const broadcast = (message: WsServerMessage) => {
     const data = JSON.stringify(message);
-    for (const ws of connections) {
+    for (const [ws] of connections) {
       try {
         ws.send(data);
       } catch {
-        connections.delete(ws);
+        cleanupClient(ws);
       }
     }
   };
+
+  function cleanupClient(ws: WSContext) {
+    const state = connections.get(ws);
+    if (state?.subscribedIssueId && watcher) {
+      watcher.unsubscribe(state.subscribedIssueId);
+    }
+    connections.delete(ws);
+  }
 
   // Register the WebSocket upgrade route
   app.get(
     "/ws",
     upgradeWebSocket(() => ({
       onOpen(_event: unknown, ws: WSContext) {
-        connections.add(ws);
+        connections.set(ws, { subscribedIssueId: null, eventCursor: 0 });
         send(ws, { type: "init", tickets: watcher?.getTickets() ?? [] });
         const state = currentOpsState(runtime);
         if (state) send(ws, { type: "ops_state", state });
@@ -75,7 +89,19 @@ export function createWsHandler(
           const data = typeof event.data === "string" ? event.data : String(event.data);
           const message = JSON.parse(data) as Record<string, unknown>;
           if (watcher && message.type === "subscribe" && typeof message.issueId === "string") {
+            const clientState = connections.get(ws);
+            if (!clientState) return;
+
+            // Unsubscribe from previous ticket
+            if (clientState.subscribedIssueId && clientState.subscribedIssueId !== message.issueId) {
+              watcher.unsubscribe(clientState.subscribedIssueId);
+            }
+
+            // Subscribe to new ticket
+            watcher.subscribe(message.issueId);
             const events = watcher.getEventsForTicket(message.issueId);
+            clientState.subscribedIssueId = message.issueId;
+            clientState.eventCursor = events.length;
             send(ws, { type: "events", issueId: message.issueId, events });
           }
         } catch {
@@ -83,14 +109,38 @@ export function createWsHandler(
         }
       },
       onClose(_event: unknown, ws: WSContext) {
-        connections.delete(ws);
+        cleanupClient(ws);
       },
     })),
   );
 
   // Wire up the watcher to broadcast trace updates
   watcher?.start((issueId) => {
-    broadcast({ type: "update", issueId, tickets: watcher.getTickets() });
+    const tickets = watcher.getTickets();
+    const totalCount = watcher.getEventCount(issueId);
+
+    for (const [ws, clientState] of connections) {
+      try {
+        // Always send the ticket list update
+        send(ws, { type: "update", issueId, tickets });
+
+        // Send delta events to subscribed clients
+        if (clientState.subscribedIssueId === issueId && totalCount > clientState.eventCursor) {
+          const newEvents = watcher.getEventsSince(issueId, clientState.eventCursor);
+          if (newEvents.length > 0) {
+            send(ws, {
+              type: "events_append",
+              issueId,
+              events: newEvents,
+              fromIndex: clientState.eventCursor,
+            });
+            clientState.eventCursor = totalCount;
+          }
+        }
+      } catch {
+        cleanupClient(ws);
+      }
+    }
   });
 
   // Wire up the runtime to broadcast ops-state updates

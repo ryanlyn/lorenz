@@ -99,17 +99,17 @@ export function Timeline({ events, loading, following = false }: TimelineProps) 
   }, [events, sortNewest]);
 
   // Auto-expand the latest turn in follow mode
+  const latestTurnIndex = grouped[0]?.turnIndex;
   useEffect(() => {
-    if (following && sortNewest && grouped.length > 0) {
-      const latestTurn = grouped[0].turnIndex;
+    if (following && sortNewest && latestTurnIndex != null) {
       setExpandedTurns((prev) => {
-        if (prev.has(latestTurn)) return prev;
+        if (prev.has(latestTurnIndex)) return prev;
         const next = new Set(prev);
-        next.add(latestTurn);
+        next.add(latestTurnIndex);
         return next;
       });
     }
-  }, [following, sortNewest, grouped]);
+  }, [following, sortNewest, latestTurnIndex]);
 
   const allExpanded = useMemo(
     () => grouped.length > 0 && grouped.every((g) => expandedTurns.has(g.turnIndex)),

@@ -4,7 +4,7 @@ import { computeStats } from "@symphony/traceviz-server/stats";
 
 import { useWebSocket } from "../../../shared/hooks/useWebSocket";
 import type { TicketInfo, DisplayEvent, Stats } from "../api/types";
-import { fetchTickets, fetchEvents, fetchStats } from "../api/client";
+import { fetchTickets, fetchEvents } from "../api/client";
 
 const FOLLOW_THRESHOLD_PX = 50;
 
@@ -40,11 +40,13 @@ export function useTraceData() {
   const [error, setError] = useState<string | null>(null);
   const [traceExists, setTraceExists] = useState<boolean | null>(null);
 
-  const { status: wsStatus, lastMessage } = useWebSocket();
+  const { status: wsStatus, lastMessage, sendMessage } = useWebSocket();
   const { following, hasNewUpdates, markNewUpdates, scrollToTop } = useFollowMode();
   const followingRef = useRef(following);
   followingRef.current = following;
   const needsCatchUpRef = useRef(false);
+  const eventsRef = useRef(events);
+  eventsRef.current = events;
 
   const loadTickets = useCallback(async () => {
     const data = await fetchTickets();
@@ -56,12 +58,9 @@ export function useTraceData() {
     setTraceExists(null);
     try {
       setError(null);
-      const [eventsData, statsData] = await Promise.all([
-        fetchEvents(issueId),
-        fetchStats(issueId),
-      ]);
+      const eventsData = await fetchEvents(issueId);
       setEvents(eventsData);
-      setStats(statsData);
+      setStats(computeStats(eventsData));
       setTraceExists(eventsData.length > 0);
     } catch {
       setError("Failed to load trace data");
@@ -75,12 +74,9 @@ export function useTraceData() {
 
   const refreshTicketData = useCallback(async (issueId: string) => {
     try {
-      const [eventsData, statsData] = await Promise.all([
-        fetchEvents(issueId),
-        fetchStats(issueId),
-      ]);
+      const eventsData = await fetchEvents(issueId);
       setEvents(eventsData);
-      setStats(statsData);
+      setStats(computeStats(eventsData));
       setTraceExists(eventsData.length > 0);
     } catch {
       // Stale data is better than flickering
@@ -94,12 +90,13 @@ export function useTraceData() {
   useEffect(() => {
     if (selectedTicketId) {
       void loadTicketData(selectedTicketId);
+      sendMessage({ type: "subscribe", issueId: selectedTicketId });
     } else {
       setEvents([]);
       setStats(null);
       setTraceExists(null);
     }
-  }, [selectedTicketId, loadTicketData]);
+  }, [selectedTicketId, loadTicketData, sendMessage]);
 
   // Catch up when user scrolls back to top
   useEffect(() => {
@@ -117,15 +114,8 @@ export function useTraceData() {
       setTickets(msg.tickets);
     } else if (msg.type === "update") {
       setTickets(msg.tickets);
-      if (msg.issueId === selectedTicketId) {
-        if (followingRef.current) {
-          void refreshTicketData(msg.issueId);
-        } else {
-          needsCatchUpRef.current = true;
-          markNewUpdates();
-        }
-      }
     } else if (msg.type === "events" && msg.issueId === selectedTicketId) {
+      // Full event payload (initial subscribe response)
       if (followingRef.current) {
         setEvents(msg.events);
         setStats(computeStats(msg.events));
@@ -134,8 +124,23 @@ export function useTraceData() {
         needsCatchUpRef.current = true;
         markNewUpdates();
       }
+    } else if (msg.type === "events_append" && msg.issueId === selectedTicketId) {
+      // Delta: only new events since our last known index
+      if (followingRef.current) {
+        const current = eventsRef.current;
+        const merged =
+          msg.fromIndex === current.length
+            ? [...current, ...msg.events]
+            : [...current.slice(0, msg.fromIndex), ...msg.events];
+        setEvents(merged);
+        setStats(computeStats(merged));
+        setTraceExists(true);
+      } else {
+        needsCatchUpRef.current = true;
+        markNewUpdates();
+      }
     }
-  }, [lastMessage, refreshTicketData, selectedTicketId, markNewUpdates]);
+  }, [lastMessage, selectedTicketId, markNewUpdates]);
 
   return {
     tickets,

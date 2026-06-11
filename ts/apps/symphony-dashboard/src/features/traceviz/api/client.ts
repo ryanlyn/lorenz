@@ -1,4 +1,4 @@
-import type { TicketInfo, DisplayEvent, Stats, IssueRecord } from "./types";
+import type { TicketInfo, DisplayEvent, IssueRecord } from "./types";
 
 export async function fetchTickets(): Promise<TicketInfo[]> {
   const res = await fetch("/api/v1/tickets");
@@ -12,12 +12,6 @@ export async function fetchEvents(issueId: string): Promise<DisplayEvent[]> {
   if (!res.ok) return [];
   const data = (await res.json()) as { events: DisplayEvent[] };
   return data.events;
-}
-
-export async function fetchStats(issueId: string): Promise<Stats | null> {
-  const res = await fetch(`/api/v1/tickets/${encodeURIComponent(issueId)}/stats`);
-  if (!res.ok) return null;
-  return res.json() as Promise<Stats>;
 }
 
 export async function fetchRecentIssues(limit = 5): Promise<IssueRecord[]> {

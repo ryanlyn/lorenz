@@ -7,6 +7,7 @@ export type WsMessage =
   | { type: "init"; tickets: TicketInfo[] }
   | { type: "update"; issueId: string; tickets: TicketInfo[] }
   | { type: "events"; issueId: string; events: DisplayEvent[] }
+  | { type: "events_append"; issueId: string; events: DisplayEvent[]; fromIndex: number }
   | { type: "ops_state"; state: OpsStatePayload }
   | { type: "ping" };
 
@@ -61,6 +62,12 @@ export function useWebSocket() {
     };
   }, []);
 
+  const sendMessage = useCallback((data: Record<string, unknown>) => {
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify(data));
+    }
+  }, []);
+
   useEffect(() => {
     disposedRef.current = false;
     connect();
@@ -73,5 +80,5 @@ export function useWebSocket() {
     };
   }, [connect]);
 
-  return { status, lastMessage };
+  return { status, lastMessage, sendMessage };
 }
