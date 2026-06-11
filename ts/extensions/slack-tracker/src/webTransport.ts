@@ -1,4 +1,4 @@
-import type { Settings } from "@symphony/domain";
+import { errorMessage, type Settings } from "@symphony/domain";
 
 import { isBotMention } from "./mapping.js";
 import { slackEndpoint, slackTrackerOptions } from "./options.js";
@@ -18,6 +18,19 @@ interface RawSlackMessage {
 // ~100k messages per channel per poll.
 const MAX_HISTORY_PAGES = 500;
 const MAX_RETRIES = 4;
+/**
+ * Upper bound on a single retry sleep, including Retry-After-driven ones. Slack's real
+ * Retry-After values are short; an unbounded header (or a far-future HTTP-date injected by an
+ * intermediary) must not park the poll loop or an agent tool call on an un-abortable timer.
+ */
+const MAX_RETRY_DELAY_MS = 60_000;
+
+/**
+ * Workspace base URLs (auth.test `url`) keyed by endpoint+token and shared across transport
+ * instances: the tool packs construct a fresh transport per call, and the workspace URL never
+ * changes over a token's lifetime.
+ */
+const teamUrlByAuth = new Map<string, string | null>();
 
 type Sleep = (delayMs: number) => Promise<void>;
 
@@ -78,77 +91,101 @@ export class SlackWebTransport implements SlackTransport {
       }
       return [];
     }
+    // Channels are scanned CONCURRENTLY: Slack rate-limits conversations.history per channel,
+    // and the per-channel isolation below makes the scans independent, so poll wall-time is the
+    // slowest single channel rather than the sum of every channel's pagination and backoff.
+    const results = await Promise.all(
+      channels.map(async (channel) => {
+        // Isolate per-channel failures: a single unreadable channel (e.g. not_in_channel,
+        // missing_scope, or a persistent 429) must not blind candidate discovery across the
+        // other channels. Skip-and-log the bad channel and keep the rest.
+        //
+        // Crucially, a channel's mentions are buffered and only merged once that channel's scan
+        // COMPLETES (Slack exhausts its history, or we hit the page-cap truncation bound which is
+        // loudly surfaced in the scan). If pagination fails partway through, the partial buffer
+        // is DISCARDED: a partial scan must never masquerade as a complete one, because every
+        // mention beyond the failed page would otherwise vanish silently from candidate discovery
+        // and terminal cleanup.
+        try {
+          return { channel, messages: await this.scanChannelMentions(channel) };
+        } catch (error) {
+          // A page failed after the transport's own retries: treat the whole channel as failed
+          // and discard its partial buffer. One bad channel must not abort the others.
+          const message = errorMessage(error);
+          this.logger.warn(
+            `slack tracker: channel ${channel} scan failed before completing; discarding its ` +
+              `partial results this poll: ${message}`,
+          );
+          return { channel, failure: message };
+        }
+      }),
+    );
     const out: SlackMessage[] = [];
     const failures: string[] = [];
-    let completedCount = 0;
-    for (const channel of channels) {
-      // Isolate per-channel failures: a single unreadable channel (e.g. not_in_channel,
-      // missing_scope, or a persistent 429) must not blind candidate discovery across the
-      // other channels. Skip-and-log the bad channel and keep scanning the rest.
-      //
-      // Crucially, a channel's mentions are accumulated into a LOCAL buffer and only merged into
-      // `out` once that channel's scan COMPLETES (Slack exhausts its history, or we hit the
-      // page-cap truncation bound which is loudly surfaced below). If pagination fails partway
-      // through, the partial buffer is DISCARDED: a partial scan must never masquerade as a
-      // complete one, because every mention beyond the failed page would otherwise vanish silently
-      // from candidate discovery and terminal cleanup. Only channels that completed count toward a
-      // healthy poll; if no channel completes at all, we re-throw so the runtime records a
-      // poll_error instead of returning a healthy-looking partial/empty result.
-      try {
-        const buffer: SlackMessage[] = [];
-        let cursor: string | undefined;
-        // Page until Slack stops returning a next_cursor: full exhaustion is the normal terminal
-        // condition. The page count only guards against a pathological non-terminating cursor.
-        let page = 0;
-        for (; page < this.maxHistoryPages; page += 1) {
-          const params: Record<string, string> = { channel, limit: "200" };
-          if (cursor) params.cursor = cursor;
-          const body = await this.get("conversations.history", params);
-          const messages = Array.isArray(body.messages) ? (body.messages as RawSlackMessage[]) : [];
-          for (const m of messages) {
-            if (typeof m.ts !== "string") continue;
-            if (!isBotMention(m.text ?? "", this.botUserId)) continue;
-            buffer.push(toMessage(channel, m));
-          }
-          cursor = nextCursor(body);
-          if (!cursor) break;
-        }
-        // Hitting the safety cap with a cursor STILL present means we stopped before exhausting the
-        // channel's history. Older bot mentions beyond this point are silently invisible to candidate
-        // discovery and terminal cleanup, so make the truncation loud rather than dropping them quietly.
-        // Truncation is an intentional, surfaced bound, so the scan still counts as complete-enough:
-        // we keep the buffer collected up to the cap.
-        if (cursor) {
-          this.logger.warn(
-            `slack tracker: channel ${channel} history scan hit the ${this.maxHistoryPages}-page ` +
-              "safety cap with more pages remaining; truncating scan. Older bot mentions in this " +
-              "channel may be missed this poll.",
-          );
-        }
-        // The channel scan completed (full exhaustion or surfaced truncation): merge its buffer.
-        out.push(...buffer);
-        completedCount += 1;
-      } catch (error) {
-        // A page failed after the transport's own retries: treat the whole channel as failed and
-        // DISCARD its partial buffer (it is never merged into `out`). Log a per-channel warning and
-        // continue to the next channel - one bad channel must not abort the others.
-        const message = (error as Error).message;
-        failures.push(`${channel}: ${message}`);
-        this.logger.warn(
-          `slack tracker: channel ${channel} scan failed before completing; discarding its ` +
-            `partial results this poll: ${message}`,
-        );
-      }
+    for (const result of results) {
+      if ("messages" in result) out.push(...result.messages);
+      else failures.push(`${result.channel}: ${result.failure}`);
     }
     // If there were channels to scan but NONE completed, surface the failure (preserving the
     // reject contract the runtime relies on for poll_error) rather than silently reporting a
     // healthy-looking partial/empty result.
-    if (completedCount === 0 && failures.length > 0) {
+    if (failures.length > 0 && failures.length === channels.length) {
       throw new Error(
         `slack conversations.history failed for all channels: ${failures.join("; ")}`,
       );
     }
     return out;
+  }
+
+  /** Scan one channel's full history for bot mentions; throws when pagination fails partway. */
+  private async scanChannelMentions(channel: string): Promise<SlackMessage[]> {
+    const buffer: SlackMessage[] = [];
+    let cursor: string | undefined;
+    // Page until Slack stops returning a next_cursor: full exhaustion is the normal terminal
+    // condition. The page count only guards against a pathological non-terminating cursor.
+    for (let page = 0; page < this.maxHistoryPages; page += 1) {
+      const params: Record<string, string> = { channel, limit: "200" };
+      if (cursor) params.cursor = cursor;
+      const body = await this.get("conversations.history", params);
+      const messages = Array.isArray(body.messages) ? (body.messages as RawSlackMessage[]) : [];
+      for (const m of messages) {
+        if (typeof m.ts !== "string") continue;
+        if (!isBotMention(m.text ?? "", this.botUserId)) continue;
+        buffer.push(toMessage(channel, m));
+      }
+      cursor = nextCursor(body);
+      if (!cursor) break;
+    }
+    // Hitting the safety cap with a cursor STILL present means we stopped before exhausting the
+    // channel's history. Older bot mentions beyond this point are silently invisible to candidate
+    // discovery and terminal cleanup, so make the truncation loud rather than dropping them
+    // quietly. Truncation is an intentional, surfaced bound, so the scan still counts as
+    // complete-enough: we keep the buffer collected up to the cap.
+    if (cursor) {
+      this.logger.warn(
+        `slack tracker: channel ${channel} history scan hit the ${this.maxHistoryPages}-page ` +
+          "safety cap with more pages remaining; truncating scan. Older bot mentions in this " +
+          "channel may be missed this poll.",
+      );
+    }
+    return buffer;
+  }
+
+  async teamUrl(): Promise<string | null> {
+    const cacheKey = `${this.endpoint} ${this.token}`;
+    const cached = teamUrlByAuth.get(cacheKey);
+    if (cached !== undefined) return cached;
+    try {
+      const body = await this.get("auth.test", {});
+      const url =
+        typeof body.url === "string" && body.url !== "" ? body.url.replace(/\/+$/, "") : null;
+      teamUrlByAuth.set(cacheKey, url);
+      return url;
+    } catch {
+      // Permalinks are decoration: never let a transient auth.test failure break a read path,
+      // and don't cache the failure so a later call can succeed.
+      return null;
+    }
   }
 
   async getMessage(channel: string, ts: string): Promise<SlackMessage | null> {
@@ -181,6 +218,14 @@ export class SlackWebTransport implements SlackTransport {
       }
       cursor = nextCursor(body);
       if (!cursor) break;
+    }
+    // Same loud-truncation contract as the history scan: a silently partial thread would let a
+    // continuation agent recover incomplete progress notes with no signal anything was dropped.
+    if (cursor) {
+      this.logger.warn(
+        `slack tracker: thread ${channel}:${ts} hit the ${this.maxHistoryPages}-page safety cap ` +
+          "with more replies remaining; returning a truncated thread.",
+      );
     }
     return out;
   }
@@ -261,7 +306,7 @@ export class SlackWebTransport implements SlackTransport {
       try {
         response = await send();
       } catch (error) {
-        throw new Error(`slack ${method} request failed: ${(error as Error).message}`, {
+        throw new Error(`slack ${method} request failed: ${errorMessage(error)}`, {
           cause: error,
         });
       }
@@ -310,9 +355,13 @@ function retryDelayMs(headers: Headers, retryCount: number): number {
   const retryAfter = headers.get("retry-after");
   if (retryAfter !== null) {
     const seconds = Number(retryAfter.trim());
-    if (Number.isInteger(seconds) && seconds >= 0) return seconds * 1000;
+    if (Number.isInteger(seconds) && seconds >= 0) {
+      return Math.min(seconds * 1000, MAX_RETRY_DELAY_MS);
+    }
     const dateMs = Date.parse(retryAfter.trim());
-    if (!Number.isNaN(dateMs)) return Math.max(0, dateMs - Date.now());
+    if (!Number.isNaN(dateMs)) {
+      return Math.min(Math.max(0, dateMs - Date.now()), MAX_RETRY_DELAY_MS);
+    }
   }
   return Math.min(1_000 * 2 ** retryCount, 30_000);
 }

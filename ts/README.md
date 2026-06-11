@@ -485,9 +485,15 @@ mentions: only messages that mention that exact user become issues, and only tha
 is stripped from the title. It is required so that ordinary human-to-human `<@U...>` mentions in a
 watched channel never spawn agents or expose their text to workers. If it is unset or resolves
 empty, config validation fails and the production transport fails closed (it scans nothing).
+Channel entries resolve `$VAR` references the same way `bot_user_id` does. `tracker.assignee` is
+rejected for `kind: slack`: messages carry no assignee, so an assignee-partitioned deployment
+would otherwise silently dispatch everything everywhere.
 
 The issue identifier is the message reference in `<channel>:<ts>` form (for example
-`C0123456789:1717000000.000100`); that is the `issueId` passed to the write tools.
+`C0123456789:1717000000.000100`); that is the `issueId` passed to the write tools. Issues also
+carry a permalink (`{{ issue.url }}`, dashboard links) built from the workspace URL that
+`auth.test` reports, and `slack_read_thread` returns the same permalink for linking the source
+message from commits and PRs.
 
 Status is shown as an emoji reaction on the source message, controlled by `emoji_states` (emoji
 name to state name). The default map is:

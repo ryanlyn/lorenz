@@ -188,3 +188,68 @@ test("with botUserId only mentions of the bot become candidates", async () => {
     ["C1:1700000000.000200", "C1:1700000000.000300"],
   );
 });
+
+test("issue identifiers keep the channel: equal ts values in two channels stay distinct", async () => {
+  const transport = new InMemorySlackTransport({
+    C1: [{ ts: "1700000000.000100", text: "<@U_BOT> in channel one", reactions: [] }],
+    C2: [{ ts: "1700000000.000100", text: "<@U_BOT> in channel two", reactions: [] }],
+  });
+  const settings = parseSlackConfig(
+    { tracker: { kind: "slack", channels: ["C1", "C2"], active_states: ["Todo"] } },
+    { SLACK_BOT_TOKEN: "xoxb-test" },
+  );
+  const client = new SlackTrackerClient(settings, transport);
+
+  const identifiers = (await client.fetchCandidateIssues()).map((i) => i.identifier);
+  // Workspace directories and terminal cleanup are keyed by identifier downstream, so a
+  // cross-channel ts collision must not collapse two issues into one workspace.
+  assert.deepEqual(identifiers, ["SLK-C1-1700000000-000100", "SLK-C2-1700000000-000100"]);
+});
+
+test("issues carry a permalink and creation time derived from the message", async () => {
+  const transport = new InMemorySlackTransport({
+    C1: [{ ts: "1700000000.000100", text: "<@U_BOT> link me", reactions: [] }],
+  });
+  const client = new SlackTrackerClient(settings(), transport);
+
+  const [issue] = await client.fetchCandidateIssues();
+  assert.equal(issue!.url, "https://example.slack.com/archives/C1/p1700000000000100");
+  assert.equal(issue!.createdAt, new Date(1700000000000).toISOString());
+});
+
+test("hashtags inside link captions are not labels", async () => {
+  const transport = new InMemorySlackTransport({
+    C1: [
+      {
+        ts: "1700000000.000600",
+        text: "<@U_BOT> see <https://wiki/x|the #route-prod runbook> then fix #backend",
+        reactions: [],
+      },
+    ],
+  });
+  const client = new SlackTrackerClient(settings(), transport);
+
+  const candidates = await client.fetchCandidateIssues();
+  // The link caption's hashtag must not leak in as a label (it could even become a dispatch
+  // route); the plain-text hashtag outside the link still does.
+  assert.deepEqual(candidates[0]!.labels, ["backend"]);
+});
+
+test("one mention scan serves the back-to-back reads of a single poll cycle", async () => {
+  const transport = new InMemorySlackTransport({
+    C1: [{ ts: "1700000000.000700", text: "<@U_BOT> cache me", reactions: [] }],
+  });
+  let scans = 0;
+  const original = transport.listMentions.bind(transport);
+  transport.listMentions = async (channels) => {
+    scans += 1;
+    return original(channels);
+  };
+  const client = new SlackTrackerClient(settings(), transport);
+
+  // The runtime triggers terminal-state reconciliation and candidate discovery back-to-back
+  // in one cycle; both must share a single full-history scan.
+  await client.fetchIssuesByStates(["Done", "Cancelled"]);
+  await client.fetchCandidateIssues();
+  assert.equal(scans, 1);
+});

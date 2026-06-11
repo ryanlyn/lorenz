@@ -45,16 +45,28 @@ export function stripLeadingMention(text: string, botUserId?: string): string {
   return text.replace(new RegExp(source), "");
 }
 
+/**
+ * The emoji-name → state map for the workflow. Built on a null prototype: reaction names come
+ * straight from Slack and are used as lookup keys, so an emoji named `constructor` or
+ * `__proto__` must read as "unmapped" rather than resolving to an inherited Object member.
+ */
 export function statusEmojiMap(settings: Settings): Record<string, string> {
-  return { ...DEFAULT_EMOJI_STATES, ...(slackTrackerOptions(settings).emojiStates ?? {}) };
+  return Object.assign(
+    Object.create(null) as Record<string, string>,
+    DEFAULT_EMOJI_STATES,
+    slackTrackerOptions(settings).emojiStates ?? {},
+  );
 }
 
 /**
  * Rank a status by category so a more-advanced state wins over a less-advanced one. Canceled
  * outranks completed so that a cancellation deterministically overrides a completion when both
- * reactions are present, regardless of reaction order.
+ * reactions are present, regardless of reaction order. Custom state names (no known category)
+ * rank by their configured role: terminal states rank with completed and active states with
+ * started, so a human-applied custom terminal reaction still closes an issue the agent marked
+ * in-progress.
  */
-function stateRank(state: string): number {
+function stateRank(state: string, settings?: Settings): number {
   switch (defaultStateType(state)) {
     case "canceled":
       return 4;
@@ -67,21 +79,32 @@ function stateRank(state: string): number {
     case "triage":
       return 1;
     default:
-      return 0;
+      break;
   }
+  if (settings) {
+    const target = state.trim().toLowerCase();
+    if (settings.tracker.terminalStates.some((s) => s.trim().toLowerCase() === target)) return 3;
+    if (settings.tracker.activeStates.some((s) => s.trim().toLowerCase() === target)) return 2;
+  }
+  return 0;
 }
 
 /**
  * Derive state from the reactions present; the most-advanced mapped status wins (ties
- * broken by reaction order), else "Todo".
+ * broken by reaction order), else "Todo". Pass `settings` so custom state names rank by
+ * their configured active/terminal role instead of falling to the bottom.
  */
-export function stateFromReactions(reactions: string[], map: Record<string, string>): string {
+export function stateFromReactions(
+  reactions: string[],
+  map: Record<string, string>,
+  settings?: Settings,
+): string {
   let best: string | null = null;
   let bestRank = -1;
   for (const reaction of reactions) {
     const state = map[reaction];
-    if (!state) continue;
-    const rank = stateRank(state);
+    if (typeof state !== "string") continue;
+    const rank = stateRank(state, settings);
     if (rank > bestRank) {
       best = state;
       bestRank = rank;

@@ -100,7 +100,7 @@ This workflow is backed by **Slack**, not Linear. There is **no Linear and no `l
 - `tracker.bot_user_id` (`SLACK_BOT_USER_ID`) is **required**. It scopes issue creation to the bot's own mentions: only messages that @-mention this exact user become issues. Without it the tracker refuses to run (config validation fails) and the production transport fails closed (matches nothing), so ordinary human-to-human `<@U...>` mentions never spawn agents or expose their text to workers.
 - A task is created when someone **@-mentions the bot** (`$SLACK_BOT_USER_ID`) in one of the watched `tracker.channels`. That message is the issue.
 - The mentioned message's text **is the issue description/title**; threaded replies on that message are the discussion/context.
-- The issue id is the Slack message reference in `<channel>:<ts>` form (for example `C0123456789:1717000000.000100`). This is the `{{ issue.id }}` you operate on and the `issueId` you pass to `slack_update_status` / `slack_comment`. The display label `{{ issue.identifier }}` (for example `SLK-1717000000-000100`) is for reference only and is **not** a valid `issueId`; never pass it to a tool.
+- The issue id is the Slack message reference in `<channel>:<ts>` form (for example `C0123456789:1717000000.000100`). This is the `{{ issue.id }}` you operate on and the `issueId` you pass to `slack_update_status` / `slack_comment`. The display label `{{ issue.identifier }}` (for example `SLK-C0123456789-1717000000-000100`) is for reference only and is **not** a valid `issueId`; never pass it to a tool.
 - **Status is shown as an emoji reaction** on the source message. You never edit frontmatter or a file; you change a reaction.
 
 ## Routing with hashtags

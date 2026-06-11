@@ -740,3 +740,79 @@ test("a 200 response with ok:false surfaces the slack error reason", async () =>
     /chat\.postMessage failed: channel_not_found/,
   );
 });
+
+test("a hostile Retry-After header is capped instead of parking the poll for hours", async () => {
+  const sleeps: number[] = [];
+  let attempts = 0;
+  const fetchImpl = (async () => {
+    attempts += 1;
+    if (attempts === 1) {
+      return new Response("{}", { status: 429, headers: { "retry-after": "86400" } });
+    }
+    return new Response(JSON.stringify({ ok: true, messages: [] }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  }) as typeof fetch;
+
+  const transport = new SlackWebTransport(settings(), fetchImpl, async (ms) => {
+    sleeps.push(ms);
+  });
+  await transport.listMentions(["C1"]);
+
+  // The 24h header is honored in direction but bounded: an un-abortable multi-hour sleep
+  // would hang the serial poll loop and every agent tool call behind it.
+  assert.deepEqual(sleeps, [60_000]);
+});
+
+test("getThread warns when the page cap truncates a thread", async () => {
+  const fetchImpl = (async () => {
+    return new Response(
+      JSON.stringify({
+        ok: true,
+        messages: [{ ts: "1.9", text: "reply", user: "U2" }],
+        response_metadata: { next_cursor: "MORE" },
+      }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+  }) as typeof fetch;
+
+  const warnings: string[] = [];
+  const transport = new SlackWebTransport(
+    settings(),
+    fetchImpl,
+    () => Promise.resolve(),
+    { warn: (m) => warnings.push(m) },
+    { maxHistoryPages: 2 },
+  );
+  const replies = await transport.getThread("C1", "1.1");
+
+  // Same loud-truncation contract as the history scan: a silently partial thread would let a
+  // continuation agent recover incomplete progress notes with no signal.
+  assert.equal(replies.length, 2);
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0]!, /truncated thread/);
+});
+
+test("teamUrl reports the auth.test workspace URL and caches it per token", async () => {
+  let calls = 0;
+  const fetchImpl = (async (url: string | URL) => {
+    assert.match(String(url), /auth\.test/);
+    calls += 1;
+    return new Response(JSON.stringify({ ok: true, url: "https://acme.slack.com/" }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  }) as typeof fetch;
+
+  const transport = new SlackWebTransport(
+    parseSlackConfig(
+      { tracker: { kind: "slack", channels: ["C1"], bot_user_id: "U1" } },
+      { SLACK_BOT_TOKEN: "xoxb-team-url-test" },
+    ),
+    fetchImpl,
+  );
+  assert.equal(await transport.teamUrl(), "https://acme.slack.com");
+  assert.equal(await transport.teamUrl(), "https://acme.slack.com");
+  assert.equal(calls, 1);
+});

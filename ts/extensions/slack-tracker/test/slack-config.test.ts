@@ -148,3 +148,70 @@ test("slack tracker requires bot_user_id so mentions are scoped to the bot (fail
     ),
   );
 });
+
+test("channel entries resolve $VAR references like bot_user_id does", () => {
+  const settings = parseSlackConfig(
+    { tracker: { kind: "slack", channels: ["$SLACK_CHANNEL_ID", "C2"], bot_user_id: "U1" } },
+    { SLACK_BOT_TOKEN: "xoxb", SLACK_CHANNEL_ID: "C1" },
+  );
+  assert.deepEqual(slackTrackerOptions(settings).channels, ["C1", "C2"]);
+
+  // An unresolved reference collapses to empty and is dropped, so dispatch validation fails
+  // loudly instead of the poll loop querying a literal "$SLACK_CHANNEL_ID" forever.
+  const unresolved = parseSlackConfig(
+    { tracker: { kind: "slack", channels: ["$SLACK_CHANNEL_ID"], bot_user_id: "U1" } },
+    { SLACK_BOT_TOKEN: "xoxb" },
+  );
+  assert.deepEqual(slackTrackerOptions(unresolved).channels, []);
+  assert.throws(() => validateSlackDispatch(unresolved), /channels is required/);
+});
+
+test("slack tracker rejects an assignee: messages have no assignee to filter on", () => {
+  // Silently accepting it would mark every issue dispatchable on every instance, defeating
+  // an assignee-partitioned deployment.
+  assert.throws(
+    () =>
+      validateSlackDispatch(
+        parseSlackConfig(
+          {
+            tracker: {
+              kind: "slack",
+              channels: ["C1"],
+              bot_user_id: "U1",
+              assignee: "worker@example.com",
+            },
+          },
+          { SLACK_BOT_TOKEN: "xoxb" },
+        ),
+      ),
+    /assignee is not supported/,
+  );
+});
+
+test("emoji_states parses to the same options identity regardless of YAML key order", () => {
+  // The MCP auth scope hashes nested option records in insertion order; a semantically
+  // identical reorder of the workflow file must not change the parsed identity.
+  const a = parseSlackConfig(
+    {
+      tracker: {
+        kind: "slack",
+        channels: ["C1"],
+        bot_user_id: "U1",
+        emoji_states: { rocket: "Shipped", wrench: "Rework" },
+      },
+    },
+    { SLACK_BOT_TOKEN: "xoxb" },
+  );
+  const b = parseSlackConfig(
+    {
+      tracker: {
+        kind: "slack",
+        channels: ["C1"],
+        bot_user_id: "U1",
+        emoji_states: { wrench: "Rework", rocket: "Shipped" },
+      },
+    },
+    { SLACK_BOT_TOKEN: "xoxb" },
+  );
+  assert.equal(JSON.stringify(a.tracker.options), JSON.stringify(b.tracker.options));
+});

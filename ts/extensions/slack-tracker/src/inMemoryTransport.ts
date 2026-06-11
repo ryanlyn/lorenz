@@ -43,6 +43,10 @@ export class InMemorySlackTransport implements SlackTransport {
     return Promise.resolve(out);
   }
 
+  async teamUrl(): Promise<string | null> {
+    return Promise.resolve("https://example.slack.com");
+  }
+
   async getMessage(channel: string, ts: string): Promise<SlackMessage | null> {
     const found = (this.messages.get(channel) ?? []).find((m) => m.ts === ts);
     return Promise.resolve(

@@ -74,3 +74,42 @@ test("statusEmojiMap merges config overrides over defaults", () => {
   assert.equal(map.rocket, "Shipped");
   assert.equal(map.eyes, "In Progress");
 });
+
+test("reactions named after Object prototype members are unmapped, not inherited members", () => {
+  // Slack custom emoji can legally be named `constructor` or `__proto__`; a truthy bracket
+  // lookup on a prototype-bearing map would resolve them to inherited functions and crash
+  // state derivation for the whole channel.
+  const settings = parseSlackConfig(
+    { tracker: { kind: "slack", channels: ["C1"], bot_user_id: "U1" } },
+    { SLACK_BOT_TOKEN: "xoxb-test" },
+  );
+  const map = statusEmojiMap(settings);
+  assert.equal(stateFromReactions(["constructor", "__proto__"], map), "Todo");
+  assert.equal(stateFromReactions(["constructor", "eyes"], map), "In Progress");
+  // The exported default map is a plain object; the lookup guard must hold there too.
+  assert.equal(stateFromReactions(["constructor"], DEFAULT_EMOJI_STATES), "Todo");
+});
+
+test("custom state names rank by their configured terminal/active role", () => {
+  // A human closing an issue with a custom terminal reaction must outrank the agent's
+  // lingering :eyes:, or the runtime re-dispatches a finished issue forever.
+  const settings = parseSlackConfig(
+    {
+      tracker: {
+        kind: "slack",
+        channels: ["C1"],
+        bot_user_id: "U1",
+        emoji_states: { rocket: "Shipped", wrench: "Rework" },
+        active_states: ["Todo", "In Progress", "Rework"],
+        terminal_states: ["Shipped"],
+      },
+    },
+    { SLACK_BOT_TOKEN: "xoxb-test" },
+  );
+  const map = statusEmojiMap(settings);
+  assert.equal(stateFromReactions(["eyes", "rocket"], map, settings), "Shipped");
+  assert.equal(stateFromReactions(["rocket", "eyes"], map, settings), "Shipped");
+  // A custom ACTIVE state ranks with started: it beats Todo but not a terminal reaction.
+  assert.equal(stateFromReactions(["wrench"], map, settings), "Rework");
+  assert.equal(stateFromReactions(["wrench", "x"], map, settings), "Cancelled");
+});

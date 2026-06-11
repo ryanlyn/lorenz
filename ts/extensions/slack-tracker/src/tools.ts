@@ -12,9 +12,9 @@ import {
   type ToolSpec,
 } from "@symphony/tool-sdk";
 
-import { slackMessageToRow, splitIssueId } from "./client.js";
+import { slackMessageToRow, slackPermalink, splitIssueId } from "./client.js";
 import { stateFromReactions, statusEmojiMap } from "./mapping.js";
-import { requireTrackedMessage, updateSlackStatus } from "./operations.js";
+import { requireBotUserId, requireTrackedMessage, updateSlackStatus } from "./operations.js";
 import { slackTrackerOptions } from "./options.js";
 import type { SlackTransport } from "./transport.js";
 import { SlackWebTransport } from "./webTransport.js";
@@ -128,11 +128,13 @@ export async function executeSlackTool(
         // Same trust-boundary check as the write tools: only read a watched, tracked issue.
         const message = await requireTrackedMessage(settings, transport, channel, ts);
         const map = statusEmojiMap(settings);
+        const base = await transport.teamUrl();
         return toolSuccess({
           issueId: `${channel}:${ts}`,
-          status: stateFromReactions(message.reactions, map),
+          status: stateFromReactions(message.reactions, map, settings),
           text: message.text,
           reactions: message.reactions,
+          ...(base ? { permalink: slackPermalink(base, channel, ts) } : {}),
           replies: await transport.getThread(channel, ts),
         });
       }
@@ -169,15 +171,21 @@ async function executeSlackQuery(
   settings: Settings,
   transport: SlackTransport,
 ): Promise<ToolResult> {
+  // Fail loudly on a missing bot user id: the transport would scan nothing (fail closed), and a
+  // silent empty result would read as "no issues" rather than "misconfigured tracker".
+  requireBotUserId(settings);
   const spec = parseQuerySpec(args);
   const select = parseSelect(args.select) ?? DEFAULT_SLACK_SELECT;
   const expand = parseSlackExpand(args.expand);
   const allow = slackTrackerOptions(settings).channels;
   const requested = parseStringArray(args.channels, "channels");
   const channels = requested ? requested.filter((c) => allow.includes(c)) : allow;
-  const messages = await transport.listMentions(channels);
+  const [messages, base] = await Promise.all([
+    transport.listMentions(channels),
+    transport.teamUrl(),
+  ]);
   const records = messages.map(
-    (m) => slackMessageToRow(m, settings) as unknown as Record<string, unknown>,
+    (m) => slackMessageToRow(m, settings, base) as unknown as Record<string, unknown>,
   );
   const { rows, total } = applyQuery(records, spec);
   const out: Array<Record<string, unknown>> = [];

@@ -61,11 +61,17 @@ test("neutral tracker ops read, query, comment, and update status over the slack
   assert.equal(issue.state, "In Progress");
   assert.deepEqual(issue.labels, ["backend"]);
 
-  const all = await ops.queryIssues!({});
+  // The no-arg query is candidate-scoped like the other trackers: only active states return.
+  const candidates = await ops.queryIssues!({});
   assert.deepEqual(
-    all.map((i) => i.id),
-    ["C1:1.1", "C1:1.2"],
+    candidates.map((i) => i.id),
+    ["C1:1.1"],
   );
+  // Permalinks come from the workspace base URL the transport reports.
+  assert.equal(candidates[0]!.url, "https://example.slack.com/archives/C1/p11");
+  assert.equal(candidates[0]!.identifier, "SLK-C1-1-1");
+  // jql is Jira's surface: reject loudly instead of returning unfiltered rows as if filtered.
+  await assert.rejects(() => ops.queryIssues!({ jql: "status = Done" }), /not supported/);
   const done = await ops.queryIssues!({ states: ["Done"] });
   assert.deepEqual(
     done.map((i) => i.id),

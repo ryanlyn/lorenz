@@ -23,12 +23,13 @@ export function splitIssueId(id: string): [string, string] | null {
  * The `#` must be at a boundary (start of string or preceded by whitespace) so in-token `#`s -
  * a URL fragment (`http://x#frag`) or a hex color (`color:#fff`) - do not leak in as bogus labels.
  *
- * Slack channel references (`<#C0ABC|general>`) and user mentions (`<@U123|alice>`) embed an
- * id behind `#`/`@` inside angle brackets; those are stripped first so they cannot leak in as
- * bogus labels (e.g. `c0abc`).
+ * Every mrkdwn angle-bracket token is stripped first: channel references (`<#C0ABC|general>`)
+ * and user mentions (`<@U123|alice>`) embed an id behind `#`/`@`, and links (`<url|caption>`)
+ * can carry a `#hashtag` inside their display caption - none of those are author-intended tags,
+ * and a leaked one could even become a dispatch route.
  */
 function deriveLabels(text: string): string[] {
-  const stripped = text.replace(/<[#@][^>]*>/g, " ");
+  const stripped = text.replace(/<[^>]*>/g, " ");
   const labels: string[] = [];
   const seen = new Set<string>();
   for (const match of stripped.matchAll(/(?<=^|\s)#([a-z0-9][a-z0-9_-]*)/gi)) {
@@ -59,15 +60,30 @@ export interface SlackIssueRow {
   /** Full message text. */
   text: string;
   reactions: string[];
+  /** Permalink to the source message, when the workspace URL is known. */
+  url?: string | undefined;
+}
+
+/**
+ * Permalink to a message: `<workspace base>/archives/<channel>/p<ts without the dot>` - the
+ * same shape Slack's own "copy link" produces.
+ */
+export function slackPermalink(base: string, channel: string, ts: string): string {
+  return `${base.replace(/\/+$/, "")}/archives/${encodeURIComponent(channel)}/p${ts.replace(".", "")}`;
 }
 
 /**
  * Map a Slack message onto the flat {@link SlackIssueRow} view using the same status/title/label
- * derivation the tracker uses for candidate issues. Pure; performs no IO.
+ * derivation the tracker uses for candidate issues. Pure; performs no IO - callers that want a
+ * permalink pass the workspace base URL (`SlackTransport.teamUrl()`).
  */
-export function slackMessageToRow(message: SlackMessage, settings: Settings): SlackIssueRow {
+export function slackMessageToRow(
+  message: SlackMessage,
+  settings: Settings,
+  permalinkBase?: string | null,
+): SlackIssueRow {
   const map = statusEmojiMap(settings);
-  const state = stateFromReactions(message.reactions, map);
+  const state = stateFromReactions(message.reactions, map, settings);
   const firstLine = (message.text.split("\n")[0] ?? "").trim();
   const title =
     stripLeadingMention(firstLine, slackTrackerOptions(settings).botUserId).trim() || message.ts;
@@ -84,43 +100,61 @@ export function slackMessageToRow(message: SlackMessage, settings: Settings): Sl
     labels: deriveLabels(message.text),
     text: message.text,
     reactions: [...message.reactions],
+    ...(permalinkBase ? { url: slackPermalink(permalinkBase, message.channel, message.ts) } : {}),
   };
 }
 
 /**
  * Map a Slack message onto a normalized tracker {@link Issue}. Shared by the runtime client
  * and the tracker tool operations so candidate discovery and agent tools never drift on how a
- * message becomes an issue.
+ * message becomes an issue. The identifier keeps the channel: Slack ts values are only unique
+ * per channel, and workspace directories and cleanup are keyed by identifier downstream.
  */
-export function slackMessageToIssue(message: SlackMessage, settings: Settings): Issue {
-  const row = slackMessageToRow(message, settings);
+export function slackMessageToIssue(
+  message: SlackMessage,
+  settings: Settings,
+  permalinkBase?: string | null,
+): Issue {
+  const row = slackMessageToRow(message, settings, permalinkBase);
+  const createdAtMs = Math.floor(Number.parseFloat(message.ts) * 1000);
   return normalizeIssue({
     id: row.issueId,
-    identifier: `SLK-${message.ts.replace(/\./g, "-")}`,
+    identifier: `SLK-${message.channel}-${message.ts.replace(/\./g, "-")}`,
     title: row.title,
     description: message.text,
     state: row.state,
     state_type: row.stateType,
     labels: row.labels,
+    ...(row.url !== undefined ? { url: row.url } : {}),
+    ...(Number.isFinite(createdAtMs) ? { created_at: new Date(createdAtMs).toISOString() } : {}),
     raw: message,
   });
 }
 
+/**
+ * One mention scan serves every read within a poll cycle: the runtime triggers two
+ * back-to-back full scans per cycle (terminal-state reconciliation, then candidates), and each
+ * scan pages the full channel history against a tightly rate-limited API. Comfortably shorter
+ * than any real poll interval, so cross-poll staleness stays bounded.
+ */
+const MENTIONS_CACHE_TTL_MS = 10_000;
+
 export class SlackTrackerClient implements RuntimeTrackerClient {
+  private mentionsCache: { at: number; key: string; messages: SlackMessage[] } | null = null;
+
   constructor(
     private readonly settings: Settings,
     private readonly transport: SlackTransport,
   ) {}
 
   async fetchCandidateIssues(): Promise<Issue[]> {
-    const issues = (await this.transport.listMentions(this.channels())).map((m) => this.toIssue(m));
-    const active = new Set(this.settings.tracker.activeStates.map((s) => s.trim().toLowerCase()));
-    return issues.filter((i) => active.has(i.state.trim().toLowerCase()));
+    return this.fetchIssuesByStates(this.settings.tracker.activeStates);
   }
 
   async fetchIssuesByIds(ids: string[]): Promise<Issue[]> {
     const channels = new Set(this.channels());
     const botUserId = slackTrackerOptions(this.settings).botUserId;
+    const base = await this.transport.teamUrl();
     const out: Issue[] = [];
     for (const id of ids) {
       const parts = splitIssueId(id);
@@ -133,22 +167,41 @@ export class SlackTrackerClient implements RuntimeTrackerClient {
       const msg = await this.transport.getMessage(channel, ts);
       if (!msg) continue;
       if (!isBotMention(msg.text, botUserId)) continue;
-      out.push(this.toIssue(msg));
+      out.push(slackMessageToIssue(msg, this.settings, base));
     }
     return out;
   }
 
   async fetchIssuesByStates(states: string[]): Promise<Issue[]> {
     const wanted = new Set(states.map((s) => s.trim().toLowerCase()));
-    const issues = (await this.transport.listMentions(this.channels())).map((m) => this.toIssue(m));
+    const issues = await this.allMentionIssues();
     return issues.filter((i) => wanted.has(i.state.trim().toLowerCase()));
+  }
+
+  private async allMentionIssues(): Promise<Issue[]> {
+    const [messages, base] = await Promise.all([
+      this.listMentionsCached(),
+      this.transport.teamUrl(),
+    ]);
+    return messages.map((m) => slackMessageToIssue(m, this.settings, base));
+  }
+
+  private async listMentionsCached(): Promise<SlackMessage[]> {
+    const key = this.channels().join(",");
+    const now = Date.now();
+    if (
+      this.mentionsCache &&
+      this.mentionsCache.key === key &&
+      now - this.mentionsCache.at < MENTIONS_CACHE_TTL_MS
+    ) {
+      return this.mentionsCache.messages;
+    }
+    const messages = await this.transport.listMentions(this.channels());
+    this.mentionsCache = { at: Date.now(), key, messages };
+    return messages;
   }
 
   private channels(): string[] {
     return slackTrackerOptions(this.settings).channels;
-  }
-
-  private toIssue(message: SlackMessage): Issue {
-    return slackMessageToIssue(message, this.settings);
   }
 }

@@ -175,6 +175,7 @@ test("slack_read_thread returns text, derived status, reactions, and the thread 
     status: "In Progress",
     text: "<@U1> do the thing",
     reactions: ["eyes"],
+    permalink: "https://example.slack.com/archives/C1/p11",
     replies: [{ ts: "1.2", text: "on it", user: "U2" }],
   });
 });
@@ -715,4 +716,25 @@ test("slack_comment fails when the message is not a bot mention", async () => {
   assert.equal(result.success, false);
   assert.match(result.error ?? "", /not a tracked bot-mention/);
   assert.deepEqual(transport.replies, []);
+});
+
+test("slack tools fail loudly when bot_user_id is not configured", async () => {
+  // Settings can reach a mounted tool pack without dispatch validation. The transport fails
+  // closed (scans nothing), so without this guard the agent would see a successful empty
+  // result and conclude there is no work rather than a misconfigured tracker.
+  const noBot = parseSlackConfig(
+    { tracker: { kind: "slack", channels: ["C1"] } },
+    { SLACK_BOT_TOKEN: "xoxb" },
+  );
+  const transport = new InMemorySlackTransport({
+    C1: [{ ts: "1.1", text: "<@U1> tracked", reactions: [] }],
+  });
+
+  const query = await executeSlackTool("slack_query", {}, noBot, transport);
+  assert.equal(query.success, false);
+  assert.match(query.error ?? "", /bot_user_id/);
+
+  const read = await executeSlackTool("slack_read_thread", { issueId: "C1:1.1" }, noBot, transport);
+  assert.equal(read.success, false);
+  assert.match(read.error ?? "", /bot_user_id/);
 });

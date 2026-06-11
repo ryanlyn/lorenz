@@ -13,6 +13,21 @@ export type SlackStatusUpdateOutcome =
   | { ok: false; message: string; currentManagedReactions?: string[] };
 
 /**
+ * The configured bot user id, or a clear configuration error. Every agent-facing read and
+ * write requires it: without one the mention matcher would fall back to matching ANY user
+ * mention, so the tools fail closed instead of operating on (or revealing) untracked messages.
+ */
+export function requireBotUserId(settings: Settings): string {
+  const { botUserId } = slackTrackerOptions(settings);
+  if (!botUserId || botUserId.trim() === "") {
+    throw new Error(
+      "slack tools are unavailable: tracker.bot_user_id (or SLACK_BOT_USER_ID) is not configured",
+    );
+  }
+  return botUserId;
+}
+
+/**
  * Enforce the agent trust boundary: the issueId must reference a configured (watched) channel
  * and an existing message that is a tracked bot-mention. Throws with a caller-facing message
  * otherwise.
@@ -23,7 +38,8 @@ export async function requireTrackedMessage(
   channel: string,
   ts: string,
 ): Promise<SlackMessage> {
-  const { channels, botUserId } = slackTrackerOptions(settings);
+  const { channels } = slackTrackerOptions(settings);
+  const botUserId = requireBotUserId(settings);
   if (!channels.includes(channel)) {
     throw new Error(`channel '${channel}' is not a configured tracker channel`);
   }
@@ -143,17 +159,29 @@ export async function updateSlackStatus(
   // check on the success path even though the swap took effect, falsely reporting that a
   // correctly-applied update did not take effect.
   const effective = await currentManagedReactions(transport, channel, ts, map);
-  if (effective && sameState(stateFromReactions(effective, map), canonicalState)) {
+  if (effective === null) {
+    // Every write succeeded but the verification re-fetch failed, so the end state is UNKNOWN -
+    // distinct from a verified mismatch. Stay fail-closed (a "success" here could mask a
+    // human-authored shadowing reaction), but say what actually happened so the caller re-checks
+    // instead of treating an applied update as a failed one.
+    return {
+      ok: false,
+      message:
+        `status update could not be verified: the reaction writes for '${status}' succeeded but ` +
+        "the message could not be re-fetched; re-check the issue's current status before retrying",
+      currentManagedReactions: [],
+    };
+  }
+  if (sameState(stateFromReactions(effective, map, settings), canonicalState)) {
     return { ok: true, status: canonicalState };
   }
-  const observed = effective ?? [];
   return {
     ok: false,
     message:
       `status update did not take effect; requested '${status}' but current managed ` +
-      `reactions resolve to '${effective ? stateFromReactions(effective, map) : "unknown"}'; ` +
-      `current managed reactions: ${observed.join(", ") || "(unknown)"}`,
-    currentManagedReactions: observed,
+      `reactions resolve to '${stateFromReactions(effective, map, settings)}'; ` +
+      `current managed reactions: ${effective.join(", ") || "(none)"}`,
+    currentManagedReactions: effective,
   };
 }
 

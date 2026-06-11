@@ -17,11 +17,11 @@ beforeAll(() => {
 });
 
 // Canonical Slack issue shape: `id` is the operative `<channel>:<ts>` tool id; `identifier`
-// is a non-operative `SLK-<ts>` display label that the slack tools reject.
+// is a non-operative `SLK-<channel>-<ts>` display label that the slack tools reject.
 const CHANNEL = "C0123456789";
 const TS = "1717000000.000100";
 const ISSUE_ID = `${CHANNEL}:${TS}`;
-const IDENTIFIER = "SLK-1717000000-000100";
+const IDENTIFIER = "SLK-C0123456789-1717000000-000100";
 
 function slackIssue(): Issue {
   return {
@@ -55,8 +55,8 @@ test("WORKFLOW.slack.md renders the canonical issue id (not the SLK identifier) 
   // The canonical `<channel>:<ts>` id is present and labelled as the issueId to pass to tools.
   assert.match(rendered, /Issue id \(pass this as issueId\): C0123456789:1717000000\.000100/);
   // The SLK display label must never be presented as the value to pass to tools.
-  assert.notMatch(rendered, /SLK-1717000000-000100`?\s+you operate on/);
-  assert.notMatch(rendered, /issueId you pass to tools[^]*SLK-1717000000-000100/);
+  assert.notMatch(rendered, /SLK-C0123456789-1717000000-000100`?\s+you operate on/);
+  assert.notMatch(rendered, /issueId you pass to tools[^]*SLK-C0123456789-1717000000-000100/);
 });
 
 test("the id rendered into WORKFLOW.slack.md is accepted by slack_update_status", async () => {

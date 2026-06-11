@@ -41,7 +41,9 @@ export function emojiStatesValue(value: unknown): Record<string, string> | undef
     throw new Error("tracker.emoji_states must be a mapping of emoji name to state name");
   }
   const out: Record<string, string> = {};
-  for (const [emoji, state] of Object.entries(value)) {
+  // Sorted keys: nested option records are hashed in insertion order by the MCP auth scope, so
+  // a semantically identical YAML reorder must not change the parsed identity.
+  for (const [emoji, state] of Object.entries(value).sort(([a], [b]) => (a < b ? -1 : 1))) {
     if (typeof state !== "string")
       throw new Error(`tracker.emoji_states.${emoji} must be a string`);
     out[emoji] = state;

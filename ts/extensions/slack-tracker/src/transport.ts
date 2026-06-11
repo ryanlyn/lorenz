@@ -17,6 +17,11 @@ export interface SlackTransport {
   // active window each loop; pagination is bounded by MAX_HISTORY_PAGES, not a time cursor.
   listMentions(channels: string[]): Promise<SlackMessage[]>;
   getMessage(channel: string, ts: string): Promise<SlackMessage | null>;
+  /**
+   * Base URL of the Slack workspace (e.g. `https://acme.slack.com`) for building message
+   * permalinks, or `null` when it cannot be determined. Implementations cache the lookup.
+   */
+  teamUrl(): Promise<string | null>;
   /** Return the thread replies for the message at `ts`, EXCLUDING the parent (root) message. */
   getThread(channel: string, ts: string): Promise<SlackThreadReply[]>;
   addReaction(channel: string, ts: string, name: string): Promise<void>;

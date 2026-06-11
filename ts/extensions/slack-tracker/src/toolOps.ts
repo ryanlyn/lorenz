@@ -3,7 +3,6 @@ import type { TrackerOpsContext, TrackerToolOps } from "@symphony/tracker-sdk";
 
 import { slackMessageToIssue, SlackTrackerClient, splitIssueId } from "./client.js";
 import { requireTrackedMessage, updateSlackStatus } from "./operations.js";
-import { slackTrackerOptions } from "./options.js";
 import type { SlackTransport } from "./transport.js";
 import { SlackWebTransport } from "./webTransport.js";
 
@@ -23,7 +22,7 @@ export function slackToolOpsWith(settings: Settings, transport: SlackTransport):
     readIssue: async (issueId) => {
       const [channel, ts] = requireIssueIdParts(issueId);
       const message = await requireTrackedMessage(settings, transport, channel, ts);
-      return slackMessageToIssue(message, settings);
+      return slackMessageToIssue(message, settings, await transport.teamUrl());
     },
     queryIssues: async (args) => querySlackIssues(settings, transport, args),
     updateStatus: async (issueId, status) => {
@@ -31,7 +30,7 @@ export function slackToolOpsWith(settings: Settings, transport: SlackTransport):
       const outcome = await updateSlackStatus(settings, transport, channel, ts, status);
       if (!outcome.ok) throw new Error(outcome.message);
       const message = await requireTrackedMessage(settings, transport, channel, ts);
-      return slackMessageToIssue(message, settings);
+      return slackMessageToIssue(message, settings, await transport.teamUrl());
     },
     addComment: async (issueId, body) => {
       const [channel, ts] = requireIssueIdParts(issueId);
@@ -46,13 +45,18 @@ async function querySlackIssues(
   transport: SlackTransport,
   args: Record<string, unknown>,
 ): Promise<Issue[]> {
+  if (typeof args.jql === "string" && args.jql.trim() !== "") {
+    // Reject rather than silently ignore: a "filtered" result that ignored the filter would
+    // hand the agent terminal/stale issues presented as matches.
+    throw new Error("'jql' is not supported by the slack tracker; filter with 'where' instead");
+  }
   const client = new SlackTrackerClient(settings, transport);
   const issueIds = stringArray(args.issueIds);
   if (issueIds) return client.fetchIssuesByIds(issueIds);
   const states = stringArray(args.states);
   if (states) return client.fetchIssuesByStates(states);
-  const messages = await transport.listMentions(slackTrackerOptions(settings).channels);
-  return messages.map((message) => slackMessageToIssue(message, settings));
+  // Match the other trackers' default scope: candidates, not the full mention history.
+  return client.fetchCandidateIssues();
 }
 
 function requireIssueIdParts(issueId: string): [string, string] {
