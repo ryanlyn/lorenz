@@ -5,9 +5,13 @@
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
-  "exports": { ".": "./dist/index.js" },
+  "exports": {
+    ".": "./dist/index.js"
+  },
   "dependencies": {
+    "@symphony/domain": "workspace:*",
     "@symphony/issue": "workspace:*",
-    "@symphony/domain": "workspace:*"
+    "@symphony/tool-sdk": "workspace:*",
+    "@symphony/tracker-sdk": "workspace:*"
   }
 }

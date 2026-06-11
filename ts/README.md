@@ -499,7 +499,8 @@ name to state name). The default map is:
 A message with no managed reaction is effectively new (`Todo`). Setting status swaps the
 reaction: it removes any other status emoji it manages and adds the one for the target state.
 
-Agent tools for `kind: slack` (read and write, symmetric with `linear_graphql`):
+Agent tools for `kind: slack`, served by the `slack` tool pack (mounted by default alongside the
+provider-neutral `tracker` pack):
 
 - `slack_update_status` - set the issue's status by swapping its managed emoji reaction (args:
   `issueId`, `status`).
@@ -508,9 +509,13 @@ Agent tools for `kind: slack` (read and write, symmetric with `linear_graphql`):
 - `slack_read_thread` - read the issue's authoritative state: its source message (text, derived
   status, reactions) and its thread replies (args: `issueId`). Use it to re-read state and recover
   prior progress notes on a continuation turn.
+- `slack_query` - read-only query over the tracked bot-mention issues in the watched channels:
+  filter with the shared JSON predicate DSL, project fields, order, and page; `expand` adds
+  `thread` and `reactions` (args: `channels?`, `where?`, `select?`, `expand?`, `order_by?`,
+  `limit?`, `offset?`).
 
-There is no `slack_create_issue`: issues are created by humans @-mentioning the bot, not by the
-agent.
+There is no `slack_create_issue`, and the neutral `tracker_create_issue` reports itself as
+unavailable on Slack: issues are created by humans @-mentioning the bot, not by the agent.
 
 Routing note: Slack issues carry only hashtag-derived labels (a `#tag` in the message text
 becomes the label `tag`); they are not otherwise routed or assigned. Dispatch treats a label as a

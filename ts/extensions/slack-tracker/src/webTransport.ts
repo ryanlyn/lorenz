@@ -1,6 +1,7 @@
 import type { Settings } from "@symphony/domain";
 
 import { isBotMention } from "./mapping.js";
+import { slackEndpoint, slackTrackerOptions } from "./options.js";
 import type { SlackMessage, SlackThreadReply, SlackTransport } from "./transport.js";
 
 interface RawSlackMessage {
@@ -48,9 +49,9 @@ export class SlackWebTransport implements SlackTransport {
     private readonly logger: SlackTrackerLogger = { warn: (message) => console.warn(message) },
     options: SlackWebTransportOptions = {},
   ) {
-    this.endpoint = (settings.tracker.endpoint || "https://slack.com/api").replace(/\/+$/, "");
+    this.endpoint = slackEndpoint(settings);
     this.token = settings.tracker.apiKey ?? "";
-    this.botUserId = settings.tracker.botUserId;
+    this.botUserId = slackTrackerOptions(settings).botUserId;
     this.maxHistoryPages = options.maxHistoryPages ?? MAX_HISTORY_PAGES;
   }
 

@@ -1,19 +1,19 @@
 import { test } from "vitest";
-import { parseConfig } from "@symphony/config";
+import { assert } from "@symphony/test-utils";
 
-import { assert } from "../../../test/assert.js";
+import { parseSlackConfig } from "./helpers.js";
 
 import { InMemorySlackTransport, SlackTrackerClient } from "@symphony/slack-tracker";
 
 function settings() {
-  return parseConfig(
+  return parseSlackConfig(
     { tracker: { kind: "slack", channels: ["C1"], active_states: ["Todo", "In Progress"] } },
     { SLACK_BOT_TOKEN: "xoxb-test" },
   );
 }
 
 function botSettings() {
-  return parseConfig(
+  return parseSlackConfig(
     {
       tracker: {
         kind: "slack",

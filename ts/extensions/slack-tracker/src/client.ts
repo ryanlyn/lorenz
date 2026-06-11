@@ -7,6 +7,7 @@ import {
   statusEmojiMap,
   stripLeadingMention,
 } from "./mapping.js";
+import { slackTrackerOptions } from "./options.js";
 import type { SlackMessage, SlackTransport } from "./transport.js";
 
 export function splitIssueId(id: string): [string, string] | null {
@@ -68,7 +69,8 @@ export function slackMessageToRow(message: SlackMessage, settings: Settings): Sl
   const map = statusEmojiMap(settings);
   const state = stateFromReactions(message.reactions, map);
   const firstLine = (message.text.split("\n")[0] ?? "").trim();
-  const title = stripLeadingMention(firstLine, settings.tracker.botUserId).trim() || message.ts;
+  const title =
+    stripLeadingMention(firstLine, slackTrackerOptions(settings).botUserId).trim() || message.ts;
   // normalizeIssue requires a stateType. Fall back to "backlog" for custom emoji_states mappings
   // whose state name is not a known category, so an unknown status never crashes the read.
   const stateType = defaultStateType(state) ?? "backlog";
@@ -85,6 +87,25 @@ export function slackMessageToRow(message: SlackMessage, settings: Settings): Sl
   };
 }
 
+/**
+ * Map a Slack message onto a normalized tracker {@link Issue}. Shared by the runtime client
+ * and the tracker tool operations so candidate discovery and agent tools never drift on how a
+ * message becomes an issue.
+ */
+export function slackMessageToIssue(message: SlackMessage, settings: Settings): Issue {
+  const row = slackMessageToRow(message, settings);
+  return normalizeIssue({
+    id: row.issueId,
+    identifier: `SLK-${message.ts.replace(/\./g, "-")}`,
+    title: row.title,
+    description: message.text,
+    state: row.state,
+    state_type: row.stateType,
+    labels: row.labels,
+    raw: message,
+  });
+}
+
 export class SlackTrackerClient implements RuntimeTrackerClient {
   constructor(
     private readonly settings: Settings,
@@ -99,7 +120,7 @@ export class SlackTrackerClient implements RuntimeTrackerClient {
 
   async fetchIssuesByIds(ids: string[]): Promise<Issue[]> {
     const channels = new Set(this.channels());
-    const botUserId = this.settings.tracker.botUserId;
+    const botUserId = slackTrackerOptions(this.settings).botUserId;
     const out: Issue[] = [];
     for (const id of ids) {
       const parts = splitIssueId(id);
@@ -124,20 +145,10 @@ export class SlackTrackerClient implements RuntimeTrackerClient {
   }
 
   private channels(): string[] {
-    return this.settings.tracker.channels ?? [];
+    return slackTrackerOptions(this.settings).channels;
   }
 
   private toIssue(message: SlackMessage): Issue {
-    const row = slackMessageToRow(message, this.settings);
-    return normalizeIssue({
-      id: row.issueId,
-      identifier: `SLK-${message.ts.replace(/\./g, "-")}`,
-      title: row.title,
-      description: message.text,
-      state: row.state,
-      state_type: row.stateType,
-      labels: row.labels,
-      raw: message,
-    });
+    return slackMessageToIssue(message, this.settings);
   }
 }

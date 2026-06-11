@@ -1,6 +1,8 @@
 import type { Settings } from "@symphony/domain";
 import { defaultStateType } from "@symphony/issue";
 
+import { slackTrackerOptions } from "./options.js";
+
 export const DEFAULT_EMOJI_STATES: Record<string, string> = {
   eyes: "In Progress",
   white_check_mark: "Done",
@@ -44,7 +46,7 @@ export function stripLeadingMention(text: string, botUserId?: string): string {
 }
 
 export function statusEmojiMap(settings: Settings): Record<string, string> {
-  return { ...DEFAULT_EMOJI_STATES, ...(settings.tracker.emojiStates ?? {}) };
+  return { ...DEFAULT_EMOJI_STATES, ...(slackTrackerOptions(settings).emojiStates ?? {}) };
 }
 
 /**

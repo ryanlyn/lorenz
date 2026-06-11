@@ -36,9 +36,9 @@
     "architecture:graph": "depcruise --config .dependency-cruiser.cjs --output-type mermaid packages/*/src extensions/*/src apps/*/src"
   },
   "devDependencies": {
-    "@agentclientprotocol/sdk": "catalog:",
     "@agentclientprotocol/claude-agent-acp": "workspace:*",
     "@agentclientprotocol/codex-acp": "workspace:*",
+    "@agentclientprotocol/sdk": "catalog:",
     "@eslint/js": "catalog:",
     "@symphony/acp": "workspace:*",
     "@symphony/agent-runner": "workspace:*",
@@ -63,6 +63,7 @@
     "@symphony/runtime": "workspace:*",
     "@symphony/runtime-events": "workspace:*",
     "@symphony/server": "workspace:*",
+    "@symphony/slack-tracker": "workspace:*",
     "@symphony/ssh": "workspace:*",
     "@symphony/test-utils": "workspace:*",
     "@symphony/tool-sdk": "workspace:*",

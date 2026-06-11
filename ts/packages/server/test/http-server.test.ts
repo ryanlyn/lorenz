@@ -10,9 +10,12 @@ import {
   revokeMcpToken,
   SymphonyRuntime,
 } from "@symphony/cli";
+import { acpExecutorProvider } from "@symphony/acp";
+import { defaultAgentExecutorRegistry } from "@symphony/agent-sdk";
 import { normalizeIssue } from "@symphony/issue";
 import type { WorkflowDefinition } from "@symphony/domain";
 import { registerLinearTracker } from "@symphony/linear-tracker";
+import { registerSlackTracker } from "@symphony/slack-tracker";
 import { defaultToolRegistry } from "@symphony/tool-sdk";
 import { createTrackerToolProvider, defaultTrackerRegistry } from "@symphony/tracker-sdk";
 import { assert } from "@symphony/test-utils";
@@ -23,11 +26,16 @@ import { startClaudeMcpServer } from "@symphony/server";
 // The observability server resolves tool packs and tracker ops through the process-default
 // registries (it offers no injection point), so populate them the same way the CLI
 // composition root does before serving (in a hook rather than at module scope). This suite
-// dispatches on the linear tracker and mounts the neutral tracker pack plus linear's own.
+// dispatches on the linear tracker and mounts the neutral tracker pack plus linear's own;
+// the hot-reload test below switches dispatch to slack and expects its pack to be served.
 beforeAll(() => {
   registerLinearTracker();
+  registerSlackTracker();
   if (defaultToolRegistry.get("tracker") === undefined) {
     defaultToolRegistry.register(createTrackerToolProvider(defaultTrackerRegistry));
+  }
+  if (defaultAgentExecutorRegistry.get(acpExecutorProvider.executor) === undefined) {
+    defaultAgentExecutorRegistry.register(acpExecutorProvider);
   }
 });
 
@@ -417,7 +425,7 @@ test("observability Claude MCP endpoint uses workflow settings reloaded by the r
     },
   });
   const server = await startObservabilityServer(runtime, { host: "127.0.0.1", port: 0 });
-  const token = issueMcpToken();
+  const token = issueMcpToken(server.authScope);
 
   try {
     const initialTools = await postMcp(
@@ -426,9 +434,16 @@ test("observability Claude MCP endpoint uses workflow settings reloaded by the r
       200,
       token,
     );
+    const neutralTools = [
+      "tracker_read_issue",
+      "tracker_query",
+      "tracker_update_status",
+      "tracker_comment",
+      "tracker_create_issue",
+    ];
     assert.deepEqual(
       initialTools.result.tools.map((tool: { name: string }) => tool.name),
-      ["linear_graphql"],
+      [...neutralTools, "linear_graphql"],
     );
 
     currentWorkflow = {
@@ -448,7 +463,7 @@ test("observability Claude MCP endpoint uses workflow settings reloaded by the r
     );
     assert.deepEqual(
       reloadedTools.result.tools.map((tool: { name: string }) => tool.name),
-      ["slack_update_status", "slack_comment", "slack_read_thread", "slack_query"],
+      [...neutralTools, "slack_update_status", "slack_comment", "slack_read_thread", "slack_query"],
     );
   } finally {
     revokeMcpToken(token);

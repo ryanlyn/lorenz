@@ -1,12 +1,12 @@
 import { test } from "vitest";
-import { parseConfig } from "@symphony/config";
+import { assert } from "@symphony/test-utils";
 
-import { assert } from "../../../test/assert.js";
+import { parseSlackConfig } from "./helpers.js";
 
 import { SlackWebTransport } from "@symphony/slack-tracker";
 
 function settings() {
-  return parseConfig(
+  return parseSlackConfig(
     { tracker: { kind: "slack", channels: ["C1"], bot_user_id: "U1" } },
     { SLACK_BOT_TOKEN: "xoxb-abc" },
   );
@@ -54,7 +54,7 @@ test("listMentions filters to the configured bot user when botUserId is set", as
     );
   }) as typeof fetch;
 
-  const settingsWithBot = parseConfig(
+  const settingsWithBot = parseSlackConfig(
     { tracker: { kind: "slack", channels: ["C1"], bot_user_id: "U_BOT" } },
     { SLACK_BOT_TOKEN: "xoxb-abc" },
   );
@@ -90,13 +90,13 @@ test("listMentions fails closed when no botUserId is configured: no mentions, wa
     );
   }) as typeof fetch;
 
-  // Build a slack settings object and then blank out the bot user id, since parseConfig + validate
-  // now require one. This mirrors a misconfigured deployment where SLACK_BOT_USER_ID resolves empty.
-  const noBot = parseConfig(
+  // Build a slack settings object and then blank out the bot user id, since dispatch validation
+  // requires one. This mirrors a misconfigured deployment where SLACK_BOT_USER_ID resolves empty.
+  const noBot = parseSlackConfig(
     { tracker: { kind: "slack", channels: ["C1"], bot_user_id: "U1" } },
     { SLACK_BOT_TOKEN: "xoxb-abc" },
   );
-  delete noBot.tracker.botUserId;
+  delete noBot.tracker.options.botUserId;
 
   const warnings: string[] = [];
   const transport = new SlackWebTransport(noBot, fetchImpl, () => Promise.resolve(), {

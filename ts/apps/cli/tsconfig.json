@@ -83,6 +83,9 @@
       "path": "../../packages/server"
     },
     {
+      "path": "../../extensions/slack-tracker"
+    },
+    {
       "path": "../../packages/ssh"
     },
     {
@@ -93,9 +96,6 @@
     },
     {
       "path": "../../packages/tracker-sdk"
-    },
-    {
-      "path": "../../packages/slack-tracker"
     },
     {
       "path": "../../packages/tui"

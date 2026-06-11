@@ -1,24 +1,25 @@
 import { test } from "vitest";
+import { assert } from "@symphony/test-utils";
+
+import { parseSlackConfig } from "./helpers.js";
+
 import {
+  executeSlackTool,
   InMemorySlackTransport,
+  slackToolSpecs,
   stateFromReactions,
   statusEmojiMap,
 } from "@symphony/slack-tracker";
-import { parseConfig } from "@symphony/config";
-
-import { assert } from "../../../test/assert.js";
-
-import { executeTool, toolSpecs } from "@symphony/mcp";
 
 function settings() {
-  return parseConfig(
+  return parseSlackConfig(
     { tracker: { kind: "slack", channels: ["C1"], bot_user_id: "U1" } },
     { SLACK_BOT_TOKEN: "xoxb" },
   );
 }
 
 function aliasedDoneSettings() {
-  return parseConfig(
+  return parseSlackConfig(
     {
       tracker: {
         kind: "slack",
@@ -37,7 +38,7 @@ function aliasedDoneSettings() {
 
 test("slack toolSpecs lists update_status, comment, read_thread, and query", () => {
   assert.deepEqual(
-    toolSpecs(settings()).map((t) => t.name),
+    slackToolSpecs().map((t) => t.name),
     ["slack_update_status", "slack_comment", "slack_read_thread", "slack_query"],
   );
 });
@@ -51,9 +52,7 @@ test("slack_query lists bot-mention issues with derived state and labels", async
     ],
   });
 
-  const res = await executeTool("slack_query", {}, settings(), fetch, {
-    slackTransport: transport,
-  });
+  const res = await executeSlackTool("slack_query", {}, settings(), transport);
   assert.equal(res.success, true);
   const result = res.result as {
     rows: Array<{ issueId: string; title: string; state: string; labels: string[] }>;
@@ -87,7 +86,7 @@ test("slack_query filters by state, then expands thread and reactions", async ()
     ],
   });
 
-  const res = await executeTool(
+  const res = await executeSlackTool(
     "slack_query",
     {
       where: { field: "state", op: "eq", value: "In Progress" },
@@ -95,8 +94,7 @@ test("slack_query filters by state, then expands thread and reactions", async ()
       expand: ["thread", "reactions"],
     },
     settings(),
-    fetch,
-    { slackTransport: transport },
+    transport,
   );
   assert.equal(res.success, true);
   const result = res.result as {
@@ -126,15 +124,16 @@ test("slack_query only scans allow-listed channels (a requested channel is inter
   });
 
   // Requesting C9 (not in tracker.channels=["C1"]) yields nothing - it is dropped, never fetched.
-  const offLimits = await executeTool("slack_query", { channels: ["C9"] }, settings(), fetch, {
-    slackTransport: transport,
-  });
+  const offLimits = await executeSlackTool(
+    "slack_query",
+    { channels: ["C9"] },
+    settings(),
+    transport,
+  );
   assert.equal((offLimits.result as { total: number }).total, 0);
 
   // The default (no channels arg) scans the allow-list only, never C9.
-  const def = await executeTool("slack_query", { select: ["issueId"] }, settings(), fetch, {
-    slackTransport: transport,
-  });
+  const def = await executeSlackTool("slack_query", { select: ["issueId"] }, settings(), transport);
   assert.deepEqual(
     (def.result as { rows: Array<{ issueId: string }> }).rows.map((r) => r.issueId),
     ["C1:1.1"],
@@ -146,9 +145,7 @@ test("slack_query rejects a malformed expand value", async () => {
     C1: [{ ts: "1.1", text: "<@U1> x", reactions: [] }],
   });
 
-  const res = await executeTool("slack_query", { expand: ["bogus"] }, settings(), fetch, {
-    slackTransport: transport,
-  });
+  const res = await executeSlackTool("slack_query", { expand: ["bogus"] }, settings(), transport);
   assert.equal(res.success, false);
   assert.match(res.error ?? "", /expand items/);
 });
@@ -165,9 +162,12 @@ test("slack_read_thread returns text, derived status, reactions, and the thread 
     ],
   });
 
-  const result = await executeTool("slack_read_thread", { issueId: "C1:1.1" }, settings(), fetch, {
-    slackTransport: transport,
-  });
+  const result = await executeSlackTool(
+    "slack_read_thread",
+    { issueId: "C1:1.1" },
+    settings(),
+    transport,
+  );
 
   assert.equal(result.success, true);
   assert.deepEqual(result.result, {
@@ -184,18 +184,20 @@ test("slack_read_thread reads back a reply posted via slack_comment", async () =
     C1: [{ ts: "1.1", text: "<@U1> do the thing", reactions: ["white_check_mark"] }],
   });
 
-  const replied = await executeTool(
+  const replied = await executeSlackTool(
     "slack_comment",
     { issueId: "C1:1.1", body: "all done" },
     settings(),
-    fetch,
-    { slackTransport: transport },
+    transport,
   );
   assert.equal(replied.success, true);
 
-  const read = await executeTool("slack_read_thread", { issueId: "C1:1.1" }, settings(), fetch, {
-    slackTransport: transport,
-  });
+  const read = await executeSlackTool(
+    "slack_read_thread",
+    { issueId: "C1:1.1" },
+    settings(),
+    transport,
+  );
   assert.equal(read.success, true);
   const result = read.result as {
     status: string;
@@ -215,9 +217,12 @@ test("slack_read_thread rejects a channel that is not in tracker.channels", asyn
     C9: [{ ts: "1.1", text: "<@U1> do the thing", reactions: ["eyes"] }],
   });
 
-  const result = await executeTool("slack_read_thread", { issueId: "C9:1.1" }, settings(), fetch, {
-    slackTransport: transport,
-  });
+  const result = await executeSlackTool(
+    "slack_read_thread",
+    { issueId: "C9:1.1" },
+    settings(),
+    transport,
+  );
 
   assert.equal(result.success, false);
   assert.match(result.error ?? "", /C9/);
@@ -228,9 +233,12 @@ test("slack_read_thread fails when no message exists at the issueId", async () =
     C1: [{ ts: "1.1", text: "<@U1> do the thing", reactions: ["eyes"] }],
   });
 
-  const result = await executeTool("slack_read_thread", { issueId: "C1:9.9" }, settings(), fetch, {
-    slackTransport: transport,
-  });
+  const result = await executeSlackTool(
+    "slack_read_thread",
+    { issueId: "C1:9.9" },
+    settings(),
+    transport,
+  );
 
   assert.equal(result.success, false);
   assert.match(result.error ?? "", /no tracked issue/);
@@ -241,9 +249,12 @@ test("slack_read_thread fails when the message is not a bot mention", async () =
     C1: [{ ts: "1.1", text: "just chatting, no mention here", reactions: ["eyes"] }],
   });
 
-  const result = await executeTool("slack_read_thread", { issueId: "C1:1.1" }, settings(), fetch, {
-    slackTransport: transport,
-  });
+  const result = await executeSlackTool(
+    "slack_read_thread",
+    { issueId: "C1:1.1" },
+    settings(),
+    transport,
+  );
 
   assert.equal(result.success, false);
   assert.match(result.error ?? "", /not a tracked bot-mention/);
@@ -254,23 +265,21 @@ test("slack_update_status swaps the status reaction; slack_comment replies in th
     C1: [{ ts: "1.1", text: "<@U1> do the thing", reactions: ["eyes"] }],
   });
 
-  const moved = await executeTool(
+  const moved = await executeSlackTool(
     "slack_update_status",
     { issueId: "C1:1.1", status: "Done" },
     settings(),
-    fetch,
-    { slackTransport: transport },
+    transport,
   );
   assert.equal(moved.success, true);
   const msg = await transport.getMessage("C1", "1.1");
   assert.deepEqual(msg!.reactions, ["white_check_mark"]);
 
-  const replied = await executeTool(
+  const replied = await executeSlackTool(
     "slack_comment",
     { issueId: "C1:1.1", body: "done!" },
     settings(),
-    fetch,
-    { slackTransport: transport },
+    transport,
   );
   assert.equal(replied.success, true);
   assert.deepEqual(transport.replies, [{ channel: "C1", threadTs: "1.1", body: "done!" }]);
@@ -292,12 +301,11 @@ test("slack_update_status is a no-op when the target emoji is already present", 
     return remove(channel, ts, name);
   };
 
-  const result = await executeTool(
+  const result = await executeSlackTool(
     "slack_update_status",
     { issueId: "C1:1.1", status: "Done" },
     settings(),
-    fetch,
-    { slackTransport: transport },
+    transport,
   );
   assert.equal(result.success, true);
   assert.deepEqual(calls, []);
@@ -321,12 +329,11 @@ test("slack_update_status is a no-op when a target-state emoji alias is already 
     return remove(channel, ts, name);
   };
 
-  const result = await executeTool(
+  const result = await executeSlackTool(
     "slack_update_status",
     { issueId: "C1:1.1", status: "Done" },
     aliasedDoneSettings(),
-    fetch,
-    { slackTransport: transport },
+    transport,
   );
 
   assert.equal(result.success, true);
@@ -343,12 +350,11 @@ test("slack_update_status accepts Slack canonicalizing a configured emoji alias"
   transport.addReaction = async (channel, ts, name) =>
     add(channel, ts, name === "check_mark" ? "green-check-mark" : name);
 
-  const result = await executeTool(
+  const result = await executeSlackTool(
     "slack_update_status",
     { issueId: "C1:1.1", status: "Done" },
     aliasedDoneSettings(),
-    fetch,
-    { slackTransport: transport },
+    transport,
   );
 
   assert.equal(result.success, true);
@@ -361,12 +367,11 @@ test("slack_update_status fails when the status has no configured emoji", async 
     C1: [{ ts: "1.1", text: "<@U1> do the thing", reactions: ["eyes"] }],
   });
 
-  const result = await executeTool(
+  const result = await executeSlackTool(
     "slack_update_status",
     { issueId: "C1:1.1", status: "Shipped" },
     settings(),
-    fetch,
-    { slackTransport: transport },
+    transport,
   );
   assert.equal(result.success, false);
   assert.match(result.error ?? "", /Shipped/);
@@ -410,12 +415,11 @@ test("slack_update_status rolls back to the old status (Cancelled) when removeRe
   // The stale x removal fails; the rollback removal of the just-added white_check_mark succeeds.
   transport.failRemoveOnly = new Set(["x"]);
 
-  const result = await executeTool(
+  const result = await executeSlackTool(
     "slack_update_status",
     { issueId: "C1:1.1", status: "Done" },
     settings(),
-    fetch,
-    { slackTransport: transport },
+    transport,
   );
 
   // Cleanup remove failed: roll back the added target so only the stale x remains and the read
@@ -434,12 +438,11 @@ test("slack_update_status rolls back to the old status (Done) when removeReactio
   // The stale white_check_mark removal fails; the rollback removal of the added eyes succeeds.
   transport.failRemoveOnly = new Set(["white_check_mark"]);
 
-  const result = await executeTool(
+  const result = await executeSlackTool(
     "slack_update_status",
     { issueId: "C1:1.1", status: "In Progress" },
     settings(),
-    fetch,
-    { slackTransport: transport },
+    transport,
   );
 
   // Cleanup remove failed: roll back the added eyes so only the stale white_check_mark remains
@@ -459,12 +462,11 @@ test("slack_update_status restores the full original set when a later multi-stal
   });
   transport.failRemoveOnly = new Set(["eyes"]);
 
-  const result = await executeTool(
+  const result = await executeSlackTool(
     "slack_update_status",
     { issueId: "C1:1.1", status: "Done" },
     settings(),
-    fetch,
-    { slackTransport: transport },
+    transport,
   );
 
   assert.equal(result.success, false);
@@ -488,12 +490,11 @@ test("slack_update_status reports an ambiguous failure when rollback cannot rest
   });
   transport.failRemove = true;
 
-  const result = await executeTool(
+  const result = await executeSlackTool(
     "slack_update_status",
     { issueId: "C1:1.1", status: "Done" },
     settings(),
-    fetch,
-    { slackTransport: transport },
+    transport,
   );
 
   assert.equal(result.success, false);
@@ -521,12 +522,11 @@ test("slack_update_status preserves the old status when addReaction fails", asyn
   });
   transport.failAdd = true;
 
-  const result = await executeTool(
+  const result = await executeSlackTool(
     "slack_update_status",
     { issueId: "C1:1.1", status: "Done" },
     settings(),
-    fetch,
-    { slackTransport: transport },
+    transport,
   );
 
   // The add failed up front: no remove should have been attempted, so the prior status is
@@ -547,12 +547,11 @@ test("slack_update_status fails when a 'successful' remove leaves a human-author
   });
   transport.removeNoOp = new Set(["x"]);
 
-  const result = await executeTool(
+  const result = await executeSlackTool(
     "slack_update_status",
     { issueId: "C1:1.1", status: "Done" },
     settings(),
-    fetch,
-    { slackTransport: transport },
+    transport,
   );
 
   // The swap did not take effect: x lingered, so the effective status is still Cancelled, not Done.
@@ -577,12 +576,11 @@ test("slack_update_status add-before-remove happy path swaps to a single target"
     C1: [{ ts: "1.1", text: "<@U1> do the thing", reactions: ["eyes"] }],
   });
 
-  const result = await executeTool(
+  const result = await executeSlackTool(
     "slack_update_status",
     { issueId: "C1:1.1", status: "Done" },
     settings(),
-    fetch,
-    { slackTransport: transport },
+    transport,
   );
 
   assert.equal(result.success, true);
@@ -600,12 +598,11 @@ test("slack_update_status succeeds for a case-variant status and reports the can
     C1: [{ ts: "1.1", text: "<@U1> do the thing", reactions: ["eyes"] }],
   });
 
-  const result = await executeTool(
+  const result = await executeSlackTool(
     "slack_update_status",
     { issueId: "C1:1.1", status: "done" },
     settings(),
-    fetch,
-    { slackTransport: transport },
+    transport,
   );
 
   assert.equal(result.success, true);
@@ -622,12 +619,11 @@ test("slack_update_status rejects a channel that is not in tracker.channels", as
     C9: [{ ts: "1.1", text: "<@U1> do the thing", reactions: ["eyes"] }],
   });
 
-  const result = await executeTool(
+  const result = await executeSlackTool(
     "slack_update_status",
     { issueId: "C9:1.1", status: "Done" },
     settings(),
-    fetch,
-    { slackTransport: transport },
+    transport,
   );
 
   assert.equal(result.success, false);
@@ -641,12 +637,11 @@ test("slack_comment rejects a channel that is not in tracker.channels", async ()
     C9: [{ ts: "1.1", text: "<@U1> do the thing", reactions: [] }],
   });
 
-  const result = await executeTool(
+  const result = await executeSlackTool(
     "slack_comment",
     { issueId: "C9:1.1", body: "hi" },
     settings(),
-    fetch,
-    { slackTransport: transport },
+    transport,
   );
 
   assert.equal(result.success, false);
@@ -659,12 +654,11 @@ test("slack_update_status fails when no message exists at the issueId", async ()
     C1: [{ ts: "1.1", text: "<@U1> do the thing", reactions: ["eyes"] }],
   });
 
-  const result = await executeTool(
+  const result = await executeSlackTool(
     "slack_update_status",
     { issueId: "C1:9.9", status: "Done" },
     settings(),
-    fetch,
-    { slackTransport: transport },
+    transport,
   );
 
   assert.equal(result.success, false);
@@ -676,12 +670,11 @@ test("slack_comment fails when no message exists at the issueId", async () => {
     C1: [{ ts: "1.1", text: "<@U1> do the thing", reactions: [] }],
   });
 
-  const result = await executeTool(
+  const result = await executeSlackTool(
     "slack_comment",
     { issueId: "C1:9.9", body: "hi" },
     settings(),
-    fetch,
-    { slackTransport: transport },
+    transport,
   );
 
   assert.equal(result.success, false);
@@ -694,12 +687,11 @@ test("slack_update_status fails when the message is not a bot mention", async ()
     C1: [{ ts: "1.1", text: "just chatting, no mention here", reactions: ["eyes"] }],
   });
 
-  const result = await executeTool(
+  const result = await executeSlackTool(
     "slack_update_status",
     { issueId: "C1:1.1", status: "Done" },
     settings(),
-    fetch,
-    { slackTransport: transport },
+    transport,
   );
 
   assert.equal(result.success, false);
@@ -713,12 +705,11 @@ test("slack_comment fails when the message is not a bot mention", async () => {
     C1: [{ ts: "1.1", text: "just chatting, no mention here", reactions: [] }],
   });
 
-  const result = await executeTool(
+  const result = await executeSlackTool(
     "slack_comment",
     { issueId: "C1:1.1", body: "hi" },
     settings(),
-    fetch,
-    { slackTransport: transport },
+    transport,
   );
 
   assert.equal(result.success, false);

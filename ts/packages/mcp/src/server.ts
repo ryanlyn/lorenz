@@ -51,11 +51,17 @@ export async function startClaudeMcpServer(
   return startHonoServer(app, options, authScope);
 }
 
+/**
+ * Mount the Claude MCP endpoint. `settings` may be a thunk so a long-lived mount (the
+ * observability server) serves the runtime's CURRENT workflow settings after a hot reload,
+ * instead of the snapshot taken when the server was built.
+ */
 export function mountClaudeMcp(
   app: Hono,
-  settings: Settings,
+  settings: Settings | (() => Settings),
   options: ClaudeMcpMountOptions = {},
 ): void {
+  const currentSettings = typeof settings === "function" ? settings : () => settings;
   const authScope = options.authScope ?? createMcpAuthScope();
   app.use("/claude-mcp", async (c, next) => {
     if (c.req.method !== "POST") {
@@ -75,7 +81,7 @@ export function mountClaudeMcp(
     }
     await next();
   });
-  app.post("/claude-mcp", async (c) => handleClaudeMcp(settings, c, options.tools));
+  app.post("/claude-mcp", async (c) => handleClaudeMcp(currentSettings(), c, options.tools));
   app.all("/claude-mcp", () => errorResponse(405, "method_not_allowed", "Method not allowed"));
 }
 

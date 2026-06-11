@@ -232,6 +232,9 @@ importers:
       "@symphony/server":
         specifier: workspace:*
         version: link:packages/server
+      "@symphony/slack-tracker":
+        specifier: workspace:*
+        version: link:extensions/slack-tracker
       "@symphony/ssh":
         specifier: workspace:*
         version: link:packages/ssh
@@ -394,6 +397,9 @@ importers:
       "@symphony/server":
         specifier: workspace:*
         version: link:../../packages/server
+      "@symphony/slack-tracker":
+        specifier: workspace:*
+        version: link:../../extensions/slack-tracker
       "@symphony/ssh":
         specifier: workspace:*
         version: link:../../packages/ssh
@@ -552,6 +558,21 @@ importers:
       "@symphony/issue":
         specifier: workspace:*
         version: link:../../packages/issue
+      "@symphony/tracker-sdk":
+        specifier: workspace:*
+        version: link:../../packages/tracker-sdk
+
+  extensions/slack-tracker:
+    dependencies:
+      "@symphony/domain":
+        specifier: workspace:*
+        version: link:../../packages/domain
+      "@symphony/issue":
+        specifier: workspace:*
+        version: link:../../packages/issue
+      "@symphony/tool-sdk":
+        specifier: workspace:*
+        version: link:../../packages/tool-sdk
       "@symphony/tracker-sdk":
         specifier: workspace:*
         version: link:../../packages/tracker-sdk

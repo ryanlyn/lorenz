@@ -1,7 +1,7 @@
 import { test } from "vitest";
-import { parseConfig } from "@symphony/config";
+import { assert } from "@symphony/test-utils";
 
-import { assert } from "../../../test/assert.js";
+import { parseSlackConfig } from "./helpers.js";
 
 import {
   DEFAULT_EMOJI_STATES,
@@ -66,7 +66,7 @@ test("stripLeadingMention removes any leading mention when botUserId is unset", 
 });
 
 test("statusEmojiMap merges config overrides over defaults", () => {
-  const settings = parseConfig(
+  const settings = parseSlackConfig(
     { tracker: { kind: "slack", channels: ["C1"], emoji_states: { rocket: "Shipped" } } },
     { SLACK_BOT_TOKEN: "xoxb-test" },
   );

@@ -31,33 +31,31 @@ worker:
   ssh_timeout_ms: 60000
 hooks:
   after_create: |
+    set -euo pipefail
     git clone --depth 1 https://github.com/ryanlyn/symphony .
     if command -v mise >/dev/null 2>&1; then
-      cd elixir && mise trust && mise exec -- mix deps.get
+      mise trust
+      cd ts && mise trust && mise exec -- pnpm install --frozen-lockfile
     fi
-  before_remove: |
-    cd elixir && mise exec -- mix workspace.before_remove
 agent:
   kind: codex
   max_concurrent_agents: 10
   max_turns: 20
-codex:
-  command: >
-    codex --config shell_environment_policy.inherit=all --config model_reasoning_effort=high --model gpt-5.4 app-server
-  approval_policy: never
-  thread_sandbox: workspace-write
-  turn_sandbox_policy:
-    type: workspaceWrite
-    writableRoots:
-      - /Users/ryan/dev/symphony-workspaces
-    networkAccess: true
-claude:
-  command: claude
+agents:
   turn_timeout_ms: 3600000
   stall_timeout_ms: 300000
+  codex:
+    bridge_command: codex-acp
+    provider_config:
+      shell_environment_policy:
+        inherit: all
+      model_reasoning_effort: high
+      model: gpt-5.4
+claude:
+  command: claude
   strict_mcp_config: true
   provider_config:
-    model: claude-opus-4-6[1m]
+    model: claude-opus-4-6
     permissions:
       defaultMode: dontAsk
 ---
@@ -124,11 +122,12 @@ You set status with `slack_update_status`, which **swaps the reaction**: it remo
 
 ## Available tools
 
-You have three Slack tools (two writes plus one read, symmetric with how `linear_graphql` both reads and writes):
+You have four Slack tools (two writes plus two reads, symmetric with how `linear_graphql` both reads and writes):
 
 - `slack_update_status` - set the issue's status by swapping its status emoji reaction. Args: `issueId` (`<channel>:<ts>`), `status` (one of `In Progress`, `Done`, `Cancelled`). Example: set `In Progress` when you pick it up, `Done` when complete.
 - `slack_comment` - post a threaded reply on the source message. Args: `issueId` (`<channel>:<ts>`), `body`. Use it to post human-visible progress notes. These replies stay human-visible in the thread and are readable later: `slack_read_thread` returns them, so you can recover plan/validation state across turns.
 - `slack_read_thread` - read the issue's authoritative state. Args: `issueId` (`<channel>:<ts>`). Returns the current status, the source message, and its thread replies. Use it to recover your prior progress notes and the latest status on a continuation turn.
+- `slack_query` - read-only query over the tracked bot-mention issues in the watched channels. Args: `channels?`, `where?`, `select?`, `expand?` (`thread`, `reactions`), `order_by?`, `limit?`, `offset?`. Use it to survey related issues; it never mutates anything.
 
 There is **no `linear_graphql`** tool and no Linear MCP server. Do not attempt to call Linear. Do not stop because "Linear is not configured" - this workflow never uses Linear. There is also no `slack_create_issue`: issues are created by humans @-mentioning the bot, not by the agent.
 

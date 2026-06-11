@@ -125,7 +125,15 @@ function buildObservabilityApp(
   settings = runtimeSettings(runtime),
 ): BuildResult {
   const app = new Hono();
-  if (settings) mountClaudeMcp(app, settings, { authScope, tools: options.tools });
+  // Resolve settings per request so the MCP endpoint reflects workflow settings the runtime
+  // has hot-reloaded since the server was built.
+  if (settings) {
+    const initialSettings = settings;
+    mountClaudeMcp(app, () => runtimeSettings(runtime) ?? initialSettings, {
+      authScope,
+      tools: options.tools,
+    });
+  }
 
   // Health endpoint
   app.get("/health", () => jsonResponse({ status: "ok" }));
