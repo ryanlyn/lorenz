@@ -1,9 +1,9 @@
 import { test } from "vitest";
 import type { Issue, Settings } from "@symphony/domain";
 import type { ToolProvider } from "@symphony/tool-sdk";
-import { TrackerRegistry, type TrackerProvider, type TrackerToolOps } from "@symphony/tracker-sdk";
 import { assert, makeSettings } from "@symphony/test-utils";
 
+import { TrackerRegistry, type TrackerProvider, type TrackerToolOps } from "@symphony/tracker-sdk";
 import { createTrackerToolProvider } from "@symphony/tracker-sdk";
 
 const TRACKER_TOOL_NAMES = [

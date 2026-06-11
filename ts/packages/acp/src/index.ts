@@ -673,6 +673,15 @@ const VENDORED_BRIDGE_PACKAGES: Record<string, string> = {
   "claude-agent-acp": "@agentclientprotocol/claude-agent-acp",
 };
 
+interface BridgePackageManifest {
+  bin?: string | Record<string, string> | undefined;
+}
+
+function binTargetForManifest(manifest: BridgePackageManifest, bin: string): string {
+  if (typeof manifest.bin === "string") return manifest.bin;
+  return manifest.bin?.[bin] ?? "dist/index.js";
+}
+
 /**
  * Resolve bare bridge names to the vendored workspace packages so local runs
  * always use Symphony's patched bridges rather than whatever PATH provides.
@@ -682,12 +691,14 @@ const VENDORED_BRIDGE_PACKAGES: Record<string, string> = {
 export function resolveBridgeCommand(bridgeCommand: string, workerHost: string | null): string {
   if (workerHost) return bridgeCommand;
   const [bin, ...args] = bridgeCommand.trim().split(/\s+/);
-  const packageName = bin ? VENDORED_BRIDGE_PACKAGES[bin] : undefined;
+  if (!bin) return bridgeCommand;
+  const packageName = VENDORED_BRIDGE_PACKAGES[bin];
   if (!packageName) return bridgeCommand;
   try {
     const require = createRequire(import.meta.url);
     const manifestPath = require.resolve(`${packageName}/package.json`);
-    const binPath = path.join(path.dirname(manifestPath), "dist", "index.js");
+    const manifest = require(manifestPath) as BridgePackageManifest;
+    const binPath = path.join(path.dirname(manifestPath), binTargetForManifest(manifest, bin));
     return [shellEscape(process.execPath), shellEscape(binPath), ...args].join(" ");
   } catch {
     return bridgeCommand;
