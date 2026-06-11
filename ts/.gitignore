@@ -5,3 +5,5 @@ log/
 .claude/workflows/
 .env
 *.tsbuildinfo
+.eslintcache
+.prettiercache
