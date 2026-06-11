@@ -39,7 +39,6 @@ import {
 } from "@symphony/domain";
 
 import { stopChild, withTimeout } from "./childProcess.js";
-import { toToml } from "./toml.js";
 
 interface Session extends AgentSession {
   connection: ClientSideConnection;
@@ -88,7 +87,6 @@ export class Executor implements AgentExecutor {
     let session: Session | null = null;
     try {
       mcpEndpoint = await acquireAgentMcpEndpoint(input.settings, input.workerHost ?? null);
-      await writeProviderConfig(agentConfig, agentKind, workspace, input.workerHost ?? null);
       child = startBridgeProcess(agentConfig, workspace, input.workerHost ?? null);
       const client = acpClient({
         workspace,
@@ -564,6 +562,7 @@ async function openSession(
   resumeId: string | null,
   mcpServers: McpServer[],
 ): Promise<string> {
+  const meta = providerConfigMeta(session);
   if (resumeId && supportsResume(session.init)) {
     try {
       await withTimeout(
@@ -571,6 +570,7 @@ async function openSession(
           sessionId: resumeId,
           cwd: session.workspace,
           mcpServers,
+          ...(meta && { _meta: meta }),
         }),
         30_000,
         "acp resume timed out",
@@ -590,7 +590,12 @@ async function openSession(
     try {
       session.loadingReplay = true;
       await withTimeout(
-        session.connection.loadSession({ sessionId: resumeId, cwd: session.workspace, mcpServers }),
+        session.connection.loadSession({
+          sessionId: resumeId,
+          cwd: session.workspace,
+          mcpServers,
+          ...(meta && { _meta: meta }),
+        }),
         30_000,
         "acp load timed out",
       );
@@ -617,44 +622,31 @@ async function openSession(
   }
 
   const created = await withTimeout(
-    session.connection.newSession({ cwd: session.workspace, mcpServers }),
+    session.connection.newSession({
+      cwd: session.workspace,
+      mcpServers,
+      ...(meta && { _meta: meta }),
+    }),
     30_000,
     "acp new session timed out",
   );
   return created.sessionId;
 }
 
-async function writeProviderConfig(
-  agentConfig: AgentConfig,
-  agentKind: string,
-  workspace: string,
-  workerHost: string | null,
-): Promise<void> {
-  if (!agentConfig.providerConfig) return;
-
-  const isClaudeBridge = agentKind === "claude";
-  const relativePath = isClaudeBridge ? ".claude/settings.local.json" : ".codex/config.toml";
-  const content = isClaudeBridge
-    ? JSON.stringify(agentConfig.providerConfig, null, 2)
-    : toToml(agentConfig.providerConfig);
-
-  const filePath = path.join(workspace, relativePath);
-  if (workerHost) {
-    const escaped = shellEscape(content);
-    const mkdirCmd = `mkdir -p ${shellEscape(path.dirname(filePath))} && printf '%s' ${escaped} > ${shellEscape(filePath)}`;
-    const proc = startSshProcess(workerHost, mkdirCmd);
-    await new Promise<void>((resolve, reject) => {
-      proc.on("close", (code) =>
-        code === 0
-          ? resolve()
-          : reject(new Error(`failed to write provider config (exit ${code})`)),
-      );
-      proc.on("error", reject);
-    });
-  } else {
-    await fs.mkdir(path.dirname(filePath), { recursive: true });
-    await fs.writeFile(filePath, content);
-  }
+/**
+ * Provider config rides the session request's _meta instead of config files
+ * written into the workspace. The vendored claude bridge consumes a
+ * settings.json-shaped overlay under symphony/settings; the vendored codex
+ * bridge consumes config.toml-shaped overrides under symphony/config (see
+ * ts/vendor/README.md). Bridges that don't know the keys ignore them.
+ */
+function providerConfigMeta(session: Session): Record<string, unknown> | undefined {
+  const providerConfig = session.agentConfig.providerConfig;
+  if (!providerConfig) return undefined;
+  const isClaudeBridge =
+    session.agentKind === "claude" ||
+    /(^|\s|\/)claude-agent-acp(\s|$)/.test(session.agentConfig.bridgeCommand);
+  return { [isClaudeBridge ? "symphony/settings" : "symphony/config"]: providerConfig };
 }
 
 const VENDORED_BRIDGE_PACKAGES: Record<string, string> = {
@@ -664,7 +656,7 @@ const VENDORED_BRIDGE_PACKAGES: Record<string, string> = {
 
 /**
  * Resolve bare bridge names to the vendored workspace packages so local runs
- * always use Symphony's vendored bridges rather than whatever PATH provides.
+ * always use Symphony's patched bridges rather than whatever PATH provides.
  * Remote hosts keep the configured command verbatim (the vendored install
  * only exists locally), as do custom commands and explicit paths.
  */

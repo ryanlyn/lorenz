@@ -61,7 +61,7 @@ function settingsForAgent(kind: "claude" | "codex", workspaceRoot: string): Sett
           executor: "acp",
           bridge_command: "claude-agent-acp",
           provider_config: {
-            permission_mode: "dontAsk",
+            permissions: { defaultMode: "dontAsk" },
           },
           turn_timeout_ms: 120_000,
           stall_timeout_ms: 60_000,

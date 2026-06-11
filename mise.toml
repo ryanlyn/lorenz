@@ -11,8 +11,9 @@ experimental = true
 prek = "0.4.3"
 claude-code = "latest"
 "npm:@openai/codex" = "latest"
-"npm:@agentclientprotocol/claude-agent-acp" = "0.37.0"
-"npm:@agentclientprotocol/codex-acp" = "0.0.44"
+# The ACP bridges are vendored at ts/vendor/ and resolved from the pnpm
+# workspace; local runs do not use PATH installs. Remote SSH worker hosts
+# install their own bridges.
 
 [tasks.check-env]
 run = '''
