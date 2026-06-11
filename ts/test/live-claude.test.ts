@@ -1,6 +1,17 @@
 import { test } from "vitest";
-import { Executor, parseConfig } from "@symphony/cli";
+import { Executor, parseConfig as parseConfigWith } from "@symphony/cli";
+import { acpExecutorProvider } from "@symphony/acp";
+import { AgentExecutorRegistry } from "@symphony/agent-sdk";
 import { assert, sampleIssue, tempDir } from "@symphony/test-utils";
+
+// Parsing resolves the ACP option vocabulary through an explicit registry; the executor
+// under test is constructed directly.
+const executors = new AgentExecutorRegistry();
+executors.register(acpExecutorProvider);
+
+function parseConfig(raw: Record<string, unknown>): ReturnType<typeof parseConfigWith> {
+  return parseConfigWith(raw, {}, {}, undefined, executors);
+}
 
 const claudeBridge = process.env.SYMPHONY_TS_CLAUDE_ACP_BRIDGE_COMMAND;
 const runLiveClaude = process.env.SYMPHONY_TS_RUN_REAL_CLAUDE_E2E === "1" && Boolean(claudeBridge);

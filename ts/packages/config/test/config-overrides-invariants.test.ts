@@ -76,12 +76,18 @@ describe("INVARIANT: When no override is present, the base settings SHALL remain
         assert.equal(result.agent.ensembleSize, settings.agent.ensembleSize);
 
         // Codex settings preserved
-        assert.equal(result.agents.codex.bridgeCommand, settings.agents.codex.bridgeCommand);
+        assert.equal(
+          result.agents.codex.options.bridgeCommand,
+          settings.agents.codex.options.bridgeCommand,
+        );
         assert.equal(result.agents.codex.turnTimeoutMs, settings.agents.codex.turnTimeoutMs);
         assert.equal(result.agents.codex.stallTimeoutMs, settings.agents.codex.stallTimeoutMs);
 
         // Claude settings preserved
-        assert.equal(result.agents.claude.bridgeCommand, settings.agents.claude.bridgeCommand);
+        assert.equal(
+          result.agents.claude.options.bridgeCommand,
+          settings.agents.claude.options.bridgeCommand,
+        );
         assert.equal(result.agents.claude.turnTimeoutMs, settings.agents.claude.turnTimeoutMs);
         assert.equal(result.agents.claude.stallTimeoutMs, settings.agents.claude.stallTimeoutMs);
       }),
@@ -305,7 +311,7 @@ test("multiple distinct overrides each resolve to their own values", () => {
         });
         settings.statusOverrides.set(normB, {
           agent: { maxTurns: turnsB },
-          agents: { claude: { strictMcpConfig: strictMcp } },
+          agents: { claude: { options: { strictMcpConfig: strictMcp } } },
         });
 
         const resultA = settingsForIssueState(settings, stateA);
@@ -313,9 +319,12 @@ test("multiple distinct overrides each resolve to their own values", () => {
 
         assert.equal(resultA.agent.maxTurns, turnsA);
         assert.equal(resultB.agent.maxTurns, turnsB);
-        assert.equal(resultB.agents.claude.strictMcpConfig, strictMcp);
+        assert.equal(resultB.agents.claude.options.strictMcpConfig, strictMcp);
         // State A should not have state B's claude override
-        assert.equal(resultA.agents.claude.strictMcpConfig, settings.agents.claude.strictMcpConfig);
+        assert.equal(
+          resultA.agents.claude.options.strictMcpConfig,
+          settings.agents.claude.options.strictMcpConfig,
+        );
       },
     ),
     { numRuns: 200 },
@@ -385,7 +394,10 @@ test("partial codex override preserves unmentioned codex fields", () => {
       assert.equal(result.agents.codex.turnTimeoutMs, turnTimeoutMs);
 
       // Unmentioned fields preserved
-      assert.equal(result.agents.codex.bridgeCommand, settings.agents.codex.bridgeCommand);
+      assert.equal(
+        result.agents.codex.options.bridgeCommand,
+        settings.agents.codex.options.bridgeCommand,
+      );
       assert.equal(result.agents.codex.stallTimeoutMs, settings.agents.codex.stallTimeoutMs);
     }),
     { numRuns: 200 },
@@ -406,9 +418,15 @@ test("partial claude override preserves unmentioned claude fields", () => {
       assert.equal(result.agents.claude.turnTimeoutMs, turnTimeoutMs);
 
       // Unmentioned fields preserved
-      assert.equal(result.agents.claude.bridgeCommand, settings.agents.claude.bridgeCommand);
+      assert.equal(
+        result.agents.claude.options.bridgeCommand,
+        settings.agents.claude.options.bridgeCommand,
+      );
       assert.equal(result.agents.claude.stallTimeoutMs, settings.agents.claude.stallTimeoutMs);
-      assert.equal(result.agents.claude.strictMcpConfig, settings.agents.claude.strictMcpConfig);
+      assert.equal(
+        result.agents.claude.options.strictMcpConfig,
+        settings.agents.claude.options.strictMcpConfig,
+      );
     }),
     { numRuns: 200 },
   );
@@ -425,12 +443,18 @@ test("override with only agent section leaves codex and claude untouched", () =>
       const result = settingsForIssueState(settings, "agent_only");
 
       // Codex entirely untouched
-      assert.equal(result.agents.codex.bridgeCommand, settings.agents.codex.bridgeCommand);
+      assert.equal(
+        result.agents.codex.options.bridgeCommand,
+        settings.agents.codex.options.bridgeCommand,
+      );
       assert.equal(result.agents.codex.turnTimeoutMs, settings.agents.codex.turnTimeoutMs);
       assert.equal(result.agents.codex.stallTimeoutMs, settings.agents.codex.stallTimeoutMs);
 
       // Claude entirely untouched
-      assert.equal(result.agents.claude.bridgeCommand, settings.agents.claude.bridgeCommand);
+      assert.equal(
+        result.agents.claude.options.bridgeCommand,
+        settings.agents.claude.options.bridgeCommand,
+      );
       assert.equal(result.agents.claude.turnTimeoutMs, settings.agents.claude.turnTimeoutMs);
       assert.equal(result.agents.claude.stallTimeoutMs, settings.agents.claude.stallTimeoutMs);
     }),
@@ -534,8 +558,14 @@ test("Robustness: override with all three sections applies each independently", 
 
         // Unmentioned fields in each section preserved
         assert.equal(result.agent.maxConcurrentAgents, settings.agent.maxConcurrentAgents);
-        assert.equal(result.agents.codex.bridgeCommand, settings.agents.codex.bridgeCommand);
-        assert.equal(result.agents.claude.bridgeCommand, settings.agents.claude.bridgeCommand);
+        assert.equal(
+          result.agents.codex.options.bridgeCommand,
+          settings.agents.codex.options.bridgeCommand,
+        );
+        assert.equal(
+          result.agents.claude.options.bridgeCommand,
+          settings.agents.claude.options.bridgeCommand,
+        );
       },
     ),
     { numRuns: 200 },

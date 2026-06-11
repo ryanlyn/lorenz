@@ -13,7 +13,6 @@
     "@hono/node-server": "catalog:",
     "@symphony/domain": "workspace:*",
     "@symphony/tool-sdk": "workspace:*",
-    "@symphony/worker-host-pool": "workspace:*",
     "hono": "catalog:",
     "ts-pattern": "catalog:",
     "zod": "catalog:"

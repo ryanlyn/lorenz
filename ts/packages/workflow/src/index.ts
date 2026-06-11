@@ -14,6 +14,7 @@ import {
   type WorkflowDefinition,
 } from "@symphony/domain";
 import type { DefaultSettingsOptions } from "@symphony/config";
+import type { AgentExecutorRegistry } from "@symphony/agent-sdk";
 import type { TrackerRegistry } from "@symphony/tracker-sdk";
 
 type WorkflowLoadOptions = DefaultSettingsOptions & {
@@ -24,6 +25,12 @@ type WorkflowLoadOptions = DefaultSettingsOptions & {
    * and env fallbacks apply; when omitted, the process-wide default registry is used.
    */
   trackers?: TrackerRegistry | undefined;
+  /**
+   * Executor providers consulted while parsing `agents.<kind>` config records, the same
+   * way `trackers` backs the `tracker:` section; when omitted, the process-wide default
+   * registry is used.
+   */
+  executors?: AgentExecutorRegistry | undefined;
 };
 
 const promptTemplateEngine = new Liquid({
@@ -67,9 +74,7 @@ export async function loadWorkflow(
     throw missingWorkflowFileError(absolute, error);
   }
   const { config, body } = parseWorkflowContent(content);
-  const settings = defaults.trackers
-    ? parseConfig(config, env, defaults, defaults.trackers)
-    : parseConfig(config, env, defaults);
+  const settings = parseConfig(config, env, defaults, defaults.trackers, defaults.executors);
   return {
     path: absolute,
     config,

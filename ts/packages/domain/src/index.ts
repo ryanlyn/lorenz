@@ -70,10 +70,6 @@ export type StopReason = "end_turn" | "max_tokens" | "max_turn_requests" | "refu
  */
 export type AgentKind = string;
 
-export const AGENT_USAGE_ACCOUNTING_VALUES = ["per-turn", "cumulative"] as const;
-
-export type AgentUsageAccounting = (typeof AGENT_USAGE_ACCOUNTING_VALUES)[number];
-
 /**
  * Identifies a tracker backend by name (e.g. `"linear"`, `"local"`, `"memory"`).
  * Open-ended: the set of supported kinds is whatever the composition root registered
@@ -280,25 +276,24 @@ export interface AgentSettings {
  * Per-kind agent record: how to run sessions for one entry of {@link Settings.agents}.
  *
  * `executor` selects the runtime driver by name and is open-ended - the supported set is
- * whatever the composition root registered in its agent executor registry. The remaining
- * fields are interpreted by that executor; today's built-in `"acp"` executor drives an
- * external bridge subprocess (e.g. Claude Code) over stdio using the ACP JSON-RPC schema.
+ * whatever the composition root registered in its agent executor registry. Only fields every
+ * executor shares live here; executor-specific keys of an `agents.<kind>` config record
+ * (e.g. the ACP executor's `bridge_command`) are normalized and validated by the registered
+ * executor provider and carried opaquely in {@link options}.
  */
 export interface AgentConfig {
   /** Runtime driver selector (e.g. `"acp"`), resolved through the agent executor registry. */
   executor: string;
-  /** Shell command launched per session (run via `bash -lc` in the workspace, or over SSH on remote workers). Also determines the provider config format: `claude-agent-acp` → `.claude/settings.local.json`, `codex-acp` → `.codex/config.toml`. */
-  bridgeCommand: string;
-  /** Shape of `PromptResponse.usage` emitted by this ACP bridge. Symphony always converts it to cumulative per-run totals before handing it to the orchestrator. */
-  usageAccounting: AgentUsageAccounting;
-  /** Free-form provider configuration written to the workspace before launching the bridge. The file path and format are derived from {@link bridgeCommand}. */
-  providerConfig?: Record<string, unknown> | undefined;
-  /** Hard limit (ms) on a single ACP turn before it is force-cancelled. */
+  /** Hard limit (ms) on a single agent turn before it is force-cancelled. */
   turnTimeoutMs: number;
   /** Inactivity window (ms) after which a session with no agent events is treated as stalled and aborted. `<= 0` disables stall detection. */
   stallTimeoutMs: number;
-  /** When true, launch the bridge with only the MCP servers Symphony injected (no user-side MCP config). */
-  strictMcpConfig?: boolean | undefined;
+  /**
+   * Executor-specific settings, normalized and validated by the executor provider registered
+   * for {@link executor}. Read through the executor package's typed accessor (e.g.
+   * `acpAgentOptions(config)`), never by key from core code.
+   */
+  options: Record<string, unknown>;
 }
 
 /**
@@ -416,6 +411,12 @@ export interface Settings {
    * packs can be mounted while a single tracker drives dispatch.
    */
   tools?: string[] | undefined;
+  /**
+   * Per-pack options for mounted tool packs, keyed by pack name; validated by the pack.
+   * Lets a mounted pack carry its own settings (e.g. the local pack's board `path`) even
+   * when a different tracker drives dispatch and owns `tracker.options`.
+   */
+  toolOptions?: Record<string, Record<string, unknown>> | undefined;
   observability: ObservabilitySettings;
   server: ServerSettings;
   logging: LoggingSettings;

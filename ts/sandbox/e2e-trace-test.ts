@@ -28,6 +28,7 @@ import { parseTraceLines } from "@symphony/traceviz-server";
 import { startObservabilityServer } from "@symphony/server";
 import { configureLogFile } from "@symphony/log-file";
 import {
+  registerBuiltinBackends,
   runtimeAdapters,
   runtimeDefaultSettingsOptions,
   createTrackerClient,
@@ -327,6 +328,7 @@ async function screenshotDashboard(traceJsonlPath: string, issueId: string): Pro
 async function main() {
   console.log("=== Symphony E2E Trace Pipeline Test ===\n");
 
+  registerBuiltinBackends();
   await cleanDirs();
 
   const { issueId, issueIdentifier } = await createLinearIssue();

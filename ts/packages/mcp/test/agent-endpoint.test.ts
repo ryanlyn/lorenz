@@ -7,12 +7,10 @@ const mockAcquireRemoteMcpTunnel = vi.fn();
 const mockReleaseRemoteMcpTunnel = vi.fn();
 const mockStartMcpServer = vi.fn();
 
-vi.mock("@symphony/worker-host-pool", () => ({
-  workerHostPool: {
-    acquireRemoteMcpTunnel: mockAcquireRemoteMcpTunnel,
-    releaseRemoteMcpTunnel: mockReleaseRemoteMcpTunnel,
-  },
-}));
+const fakeTunnels = {
+  acquireRemoteMcpTunnel: mockAcquireRemoteMcpTunnel,
+  releaseRemoteMcpTunnel: mockReleaseRemoteMcpTunnel,
+};
 
 vi.mock("../src/server.js", () => ({
   startMcpServer: mockStartMcpServer,
@@ -34,7 +32,7 @@ test("remote endpoint acquisition releases a newly-started local MCP server when
   });
 
   await assert.rejects(
-    () => acquireAgentMcpEndpoint(settingsWithServerPort(39_001), "worker-1"),
+    () => acquireAgentMcpEndpoint(settingsWithServerPort(39_001), "worker-1", fakeTunnels),
     /tunnel failed/,
   );
 
@@ -47,7 +45,11 @@ test("remote endpoint release returns the acquired tunnel lease", async () => {
   mockStartMcpServer.mockResolvedValue(handle);
   mockAcquireRemoteMcpTunnel.mockReturnValue(tunnelLease);
 
-  const lease = await acquireAgentMcpEndpoint(settingsWithServerPort(39_004), "worker-1");
+  const lease = await acquireAgentMcpEndpoint(
+    settingsWithServerPort(39_004),
+    "worker-1",
+    fakeTunnels,
+  );
 
   await lease.release();
 

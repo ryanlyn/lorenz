@@ -36,6 +36,12 @@ export interface ToolContext {
 export interface ToolProvider {
   /** Pack selector matched against entries of the `tools:` config list (e.g. `"linear"`). */
   readonly name: string;
+  /**
+   * Validate this pack's slice of the top-level `tool_options:` config map. Called once at
+   * startup by `validateDispatchConfig` for every pack named in `tool_options`; throw with a
+   * `tool_options.<pack>.<key> ...` message on unknown keys or invalid values.
+   */
+  validateOptions?(options: Record<string, unknown>): void;
   /** Tools this pack advertises for the given settings; may be empty. */
   toolSpecs(settings: Settings): ToolSpec[];
   /** Execute one of the tools declared by {@link toolSpecs}. */

@@ -17,6 +17,7 @@
     "@symphony/mcp": "workspace:*",
     "@symphony/policies": "workspace:*",
     "@symphony/ssh": "workspace:*",
+    "@symphony/worker-host-pool": "workspace:*",
     "@symphony/workspace": "workspace:*",
     "execa": "catalog:"
   }

@@ -9,7 +9,7 @@ import {
   continuationPrompt,
   createResumeStateStore,
   createWorkspaceForIssue,
-  parseConfig,
+  parseConfig as parseConfigWith,
   readResumeState,
   removeIssueWorkspaces,
   removeRemoteWorkspace,
@@ -25,9 +25,14 @@ import type { ResumeState } from "@symphony/resume-state";
 import { assert, sampleIssue, tempDir, writeExecutable } from "@symphony/test-utils";
 
 // Private executor registry standing in for the CLI composition root: attempts resolve
-// the ACP executor through an explicit adapter instead of the process-default registry.
+// the ACP executor through an explicit adapter instead of the process-default registry,
+// and config parsing resolves agent option vocabularies through the same registry.
 const executors = new AgentExecutorRegistry();
 executors.register(acpExecutorProvider);
+
+function parseConfig(raw: Record<string, unknown>): Settings {
+  return parseConfigWith(raw, {}, {}, undefined, executors);
+}
 
 const executorAdapters = {
   executorFactory: async (settings: Settings) => {

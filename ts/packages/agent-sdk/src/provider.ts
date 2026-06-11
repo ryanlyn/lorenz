@@ -14,6 +14,29 @@ export interface AgentExecutorProvider {
   /** Executor selector matched against `agents.<kind>.executor`. */
   readonly executor: string;
   /**
+   * snake_case → camelCase alias map for this executor's keys in an `agents.<kind>` config
+   * record (e.g. `{ bridge_command: "bridgeCommand" }`). Applied before {@link parseOptions}.
+   */
+  readonly configAliases?: Readonly<Record<string, string>> | undefined;
+  /**
+   * Validate and normalize the executor-specific keys of an `agents.<kind>` config record
+   * (aliases already applied). Called at config-parse time; throw with a message naming the
+   * offending option on invalid input. The returned record becomes the record's
+   * `AgentConfig.options`.
+   */
+  parseOptions?(
+    options: Record<string, unknown>,
+    context: {
+      env: NodeJS.ProcessEnv;
+      /**
+       * Config-layer secret resolution (`$VAR` and `op://` references, with an optional
+       * env-var fallback) for executor option values. Present when invoked by the config
+       * parser.
+       */
+      resolveSecret?: (value: string | undefined, fallbackEnvVar?: string) => string | undefined;
+    },
+  ): Record<string, unknown>;
+  /**
    * Throw when an agent record selecting this executor is not runnable (missing command,
    * invalid combination, ...). Called once at startup by `validateDispatchConfig`.
    */

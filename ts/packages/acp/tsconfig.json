@@ -26,6 +26,9 @@
       "path": "../ssh"
     },
     {
+      "path": "../worker-host-pool"
+    },
+    {
       "path": "../workspace"
     }
   ]
