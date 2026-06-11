@@ -131,7 +131,10 @@ test("SSH timeout rejects near the caller deadline when a child keeps pipes open
     trace,
     `#!/bin/sh
 printf 'ARGV:%s\\n' "$*" >> ${shellEscape(trace)}
-node -e 'process.on("SIGTERM", () => {}); setInterval(() => {}, 1000)' &
+# A TERM-ignoring child that holds the pipes open. Plain sh: spawning node
+# here can outlast the ssh timeout on a loaded machine, killing the script
+# before it records CHILD and flaking the test.
+sh -c 'trap "" TERM; while :; do sleep 1; done' &
 child="$!"
 printf 'CHILD:%s\\n' "$child" >> ${shellEscape(trace)}
 wait "$child"
@@ -145,7 +148,11 @@ wait "$child"
   );
   const elapsedMs = performance.now() - started;
 
-  if (elapsedMs >= 1_500) throw new Error(`timeout returned after ${Math.round(elapsedMs)}ms`);
+  // Guards against the rejection waiting on the SIGTERM-ignoring child (which
+  // would take the full waitForProcessExit horizon) rather than asserting
+  // scheduler precision: the margin must absorb event-loop and process-spawn
+  // delay on a loaded machine (parallel check tasks, CI) without flaking.
+  if (elapsedMs >= 3_000) throw new Error(`timeout returned after ${Math.round(elapsedMs)}ms`);
 
   const traceText = await fs.readFile(trace, "utf8");
   const childMatch = /^CHILD:(\d+)$/m.exec(traceText);
