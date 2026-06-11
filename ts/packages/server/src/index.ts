@@ -22,17 +22,12 @@ import { createTraceRoutes } from "./trace-routes.js";
 import { createWsHandler } from "./ws.js";
 import { defaultIssueStorePath, IssueStore } from "./issue-store.js";
 import { decodePathParam, invalidPathParameterError } from "./path-params.js";
+import type { RuntimeServerSource } from "./source.js";
 
 export { defaultIssueStorePath, IssueStore };
 export { startClaudeMcpServer } from "@symphony/mcp";
 export type { IssueRecord } from "./issue-store.js";
-
-export interface RuntimeServerSource {
-  workflow?: { settings?: Settings } | undefined;
-  snapshot(): RuntimeSnapshot;
-  subscribe(listener: (snapshot: RuntimeSnapshot) => void): () => void;
-  requestRefresh(): Record<string, unknown>;
-}
+export type { RuntimeServerSource } from "./source.js";
 
 export interface ObservabilityServerOptions {
   host: string;
