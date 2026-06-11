@@ -74,6 +74,6 @@ export {
 } from "@symphony/dispatch";
 export { ProjectionActor } from "@symphony/projections";
 export type { RuntimeProjectionInput } from "@symphony/projections";
-export { Executor } from "@symphony/acp";
+export { Executor, resolveBridgeCommand } from "@symphony/acp";
 export { AGENT_UPDATE_TYPES, ISSUE_STATE_TYPES } from "@symphony/domain";
 export type * from "@symphony/domain";

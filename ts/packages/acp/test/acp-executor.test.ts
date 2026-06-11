@@ -3,7 +3,13 @@ import net from "node:net";
 import path from "node:path";
 
 import { test, vi } from "vitest";
-import { Executor, acquireAgentMcpEndpoint, parseConfig, shellEscape } from "@symphony/cli";
+import {
+  Executor,
+  acquireAgentMcpEndpoint,
+  parseConfig,
+  resolveBridgeCommand,
+  shellEscape,
+} from "@symphony/cli";
 import type { AgentUpdate } from "@symphony/cli";
 import { assert, sampleIssue, tempDir, writeExecutable } from "@symphony/test-utils";
 
@@ -501,6 +507,27 @@ test("writeProviderConfig is skipped when providerConfig is absent from agent co
   await session.stop();
 
   await assert.rejects(() => fs.access(path.join(root, ".codex", "config.toml")));
+});
+
+test("resolveBridgeCommand points bare bridge names at the vendored packages", async () => {
+  const codex = resolveBridgeCommand("codex-acp", null);
+  assert.notEqual(codex, "codex-acp");
+  assert.match(codex, /vendor\/codex-acp\/dist\/index\.js/);
+  assert.ok(codex.startsWith(shellEscape(process.execPath)));
+  await fs.access(codex.split(" ")[1]?.replace(/^'|'$/g, "") ?? "");
+
+  const claude = resolveBridgeCommand("claude-agent-acp", null);
+  assert.match(claude, /vendor\/claude-agent-acp\/dist\/index\.js/);
+});
+
+test("resolveBridgeCommand preserves arguments, custom commands, and remote hosts", () => {
+  assert.match(resolveBridgeCommand("codex-acp --flag value", null), /index\.js'? --flag value$/);
+  assert.equal(
+    resolveBridgeCommand("my-custom-bridge --port 1", null),
+    "my-custom-bridge --port 1",
+  );
+  assert.equal(resolveBridgeCommand("/usr/local/bin/codex-acp", null), "/usr/local/bin/codex-acp");
+  assert.equal(resolveBridgeCommand("codex-acp", "worker-1"), "codex-acp");
 });
 
 function acpSettings(

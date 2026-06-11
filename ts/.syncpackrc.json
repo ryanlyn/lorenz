@@ -8,6 +8,12 @@
       "pinVersion": "workspace:*"
     },
     {
+      "label": "Vendored ACP bridges use workspace:* protocol",
+      "dependencies": ["@agentclientprotocol/claude-agent-acp", "@agentclientprotocol/codex-acp"],
+      "dependencyTypes": ["!local"],
+      "pinVersion": "workspace:*"
+    },
+    {
       "label": "All deps shared across packages must use catalog:",
       "dependencies": ["**"],
       "dependencyTypes": ["prod", "dev", "peer"],

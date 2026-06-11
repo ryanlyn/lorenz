@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import { createRequire } from "node:module";
 import path from "node:path";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { Readable, Writable } from "node:stream";
@@ -524,12 +525,38 @@ async function writeProviderConfig(
   }
 }
 
+const VENDORED_BRIDGE_PACKAGES: Record<string, string> = {
+  "codex-acp": "@agentclientprotocol/codex-acp",
+  "claude-agent-acp": "@agentclientprotocol/claude-agent-acp",
+};
+
+/**
+ * Resolve bare bridge names to the vendored workspace packages so local runs
+ * always use Symphony's vendored bridges rather than whatever PATH provides.
+ * Remote hosts keep the configured command verbatim (the vendored install
+ * only exists locally), as do custom commands and explicit paths.
+ */
+export function resolveBridgeCommand(bridgeCommand: string, workerHost: string | null): string {
+  if (workerHost) return bridgeCommand;
+  const [bin, ...args] = bridgeCommand.trim().split(/\s+/);
+  const packageName = bin ? VENDORED_BRIDGE_PACKAGES[bin] : undefined;
+  if (!packageName) return bridgeCommand;
+  try {
+    const require = createRequire(import.meta.url);
+    const manifestPath = require.resolve(`${packageName}/package.json`);
+    const binPath = path.join(path.dirname(manifestPath), "dist", "index.js");
+    return [shellEscape(process.execPath), shellEscape(binPath), ...args].join(" ");
+  } catch {
+    return bridgeCommand;
+  }
+}
+
 function startBridgeProcess(
   agentConfig: AgentConfig,
   workspace: string,
   workerHost: string | null,
 ): ChildProcessWithoutNullStreams {
-  const command = `exec ${agentConfig.bridgeCommand}`;
+  const command = `exec ${resolveBridgeCommand(agentConfig.bridgeCommand, workerHost)}`;
   if (workerHost) {
     return startSshProcess(workerHost, `cd ${shellEscape(workspace)} && ${command}`);
   }
