@@ -78,10 +78,9 @@
   per-slot workspaces, prompt and dashboard ensemble context, `ensemble:*`
   label overrides, and a dedicated `WORKFLOW_ENSEMBLE.md` example built around
   independent workpads.
-- Replaced the Claude Python MCP sidecar with Symphony's built-in
-  `/claude-mcp` endpoint, giving the Claude executor shared Symphony-owned
-  tool serving, authenticated remote worker access, and matching Codex/Claude
-  tool behavior.
+- Replaced the Claude Python MCP sidecar with a built-in `/mcp` endpoint,
+  giving the Claude executor shared tool serving, authenticated remote worker
+  access, and matching Codex/Claude tool behavior.
 
 ## 2026-04-06
 

@@ -449,8 +449,8 @@ test("ACP MCP endpoint leases reuse one reverse tunnel per worker host with per-
     const second = await acquireAgentMcpEndpoint(settings, "worker-acp");
     leases.push(second);
 
-    assert.equal(first.url, "http://127.0.0.1:46000/claude-mcp");
-    assert.equal(second.url, "http://127.0.0.1:46000/claude-mcp");
+    assert.equal(first.url, "http://127.0.0.1:46000/mcp");
+    assert.equal(second.url, "http://127.0.0.1:46000/mcp");
     assert.notEqual(first.token, second.token);
     assert.notEqual(acpAuthHeader(first.acpServer()), acpAuthHeader(second.acpServer()));
     await waitForTunnelTrace(trace, 1);

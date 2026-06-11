@@ -1369,7 +1369,7 @@ MCP/tooling contract:
   needed to reach the local MCP endpoint.
 - Raw tracker secrets such as Linear API keys must not be written into generated MCP config.
 - Remote workers may use an SSH tunnel or equivalent local forwarding so the remote Claude process
-  can reach the Symphony-owned MCP endpoint.
+  can reach the local MCP endpoint.
 - Acquired MCP auth tokens and tunnels must be released when startup fails or the session stops.
 
 Stream handling:
@@ -2479,7 +2479,7 @@ Use the same validation profiles as Section 17:
 - Per-state `status_overrides` for `agent`, `codex`, and `claude` runtime settings, including
   state-name normalization and Codex policy map deep merge.
 - Optional Claude Code executor profile with stream-json subprocess IO, strict MCP config,
-  workspace-local Symphony MCP config, usage normalization, and resume support.
+  workspace-local MCP config, usage normalization, and resume support.
 - Optional SSH worker execution honors `worker.ssh_hosts`, `worker.ssh_timeout_ms`, host capacity,
   and host/workspace identity in retries and resume matching.
 - Optional HTTP server honors CLI `--port` over `server.port`, uses a safe default bind host, and

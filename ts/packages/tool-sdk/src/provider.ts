@@ -2,7 +2,7 @@ import type { Settings } from "@symphony/domain";
 
 /**
  * JSON-Schema-shaped declaration of one agent-facing tool, served to agent sessions over
- * the Symphony MCP endpoint.
+ * the MCP endpoint.
  */
 export interface ToolSpec {
   name: string;

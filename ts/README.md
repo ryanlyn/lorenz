@@ -462,7 +462,7 @@ workflow files:
 
 Copy the skills into the target repo's `.codex/skills/` directory when your workflow references
 them. The `symphony-linear` skill uses the injected `linear_graphql` tool for Codex or the
-`/claude-mcp` endpoint for Claude.
+`/mcp` endpoint for Claude.
 
 ## Observability
 
@@ -487,7 +487,7 @@ API routes:
 
 Live updates (ops state and trace events) stream over the `/ws` WebSocket endpoint.
 
-Claude sessions use `/claude-mcp` for injected dynamic tools when the runtime has started an
+Claude sessions use `/mcp` for injected dynamic tools when the runtime has started an
 observability server. The server also starts automatically for Claude workflows so the ACP bridge
 can reach those tools.
 
@@ -536,7 +536,7 @@ Environment knobs:
 - `SYMPHONY_TS_CODEX_ACP_COMMAND` overrides the Codex ACP bridge command for live tests.
 - `SYMPHONY_TS_CLAUDE_ACP_BRIDGE_COMMAND` enables Claude live tests.
 - `SYMPHONY_TS_CLAUDE_ACP_BRIDGE_ARGS` supplies Claude ACP bridge args as a JSON string array.
-- `LINEAR_API_KEY` is required for Linear live tests and Claude MCP canaries.
+- `LINEAR_API_KEY` is required for Linear live tests and MCP canaries.
 - `LINEAR_PROJECT_SLUG` selects the Linear project for `pnpm test:live:linear-codex`.
 - `SYMPHONY_LIVE_SSH_WORKER_HOSTS` is a comma-separated list of real SSH workers.
 - When `SYMPHONY_LIVE_SSH_WORKER_HOSTS` is unset, the SSH live test can use disposable local

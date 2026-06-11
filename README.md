@@ -38,10 +38,10 @@ configuration automatically - no restart needed.
 | Extension | What it adds |
 | --- | --- |
 | Context Ensembles | Adds configurable multi-agent issue fan-out with per-slot workspaces, prompt/dashboard ensemble context, `ensemble:*` label overrides, and a dedicated `WORKFLOW_ENSEMBLE.md` example for independent workpads. |
-| Claude Code executor | Adds `agent.kind: "claude"` support, including Claude CLI execution, JSONL event parsing, built-in `/claude-mcp` tool serving instead of the Python MCP sidecar, authenticated remote worker access, and Claude-specific runtime settings. |
+| Claude Code executor | Adds `agent.kind: "claude"` support, including Claude CLI execution, JSONL event parsing, built-in `/mcp` tool serving instead of the Python MCP sidecar, authenticated remote worker access, and Claude-specific runtime settings. |
 | Session resumption | Persists resume metadata in `.git/symphony/resume.json` so Codex and Claude sessions can continue safely across runs with executor-aware validation. |
 | Workflow and runtime hardening | Defaults Codex workflows to sandboxed `workspace-write`, honors Linear `Retry-After` backoff on `429`, tightens remote workspace path validation, and improves long-running orchestrator reliability. |
-| Claude parity and MCP handling | Routes Claude and Codex through the same Symphony-owned Linear tool backend, removes the Python MCP sidecar, and improves remote cleanup behavior. |
+| Claude parity and MCP handling | Routes Claude and Codex through the same Linear tool backend, removes the Python MCP sidecar, and improves remote cleanup behavior. |
 | Dispatch routing | Adds tracker-scoped static routing with Linear labels such as `Symphony:shard-a`, so multiple Symphony instances can split work by configured route labels. |
 | Run history CLI | Adds an orchestrator run history command (`symphony-ts runs`) exposing completed attempts, retries, token totals, and per-run forensic context beyond live state. |
 | Secret resolution | Resolves `op://` references in workflow secrets (e.g. `LINEAR_API_KEY`) through the 1Password CLI. |
