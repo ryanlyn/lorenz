@@ -232,9 +232,6 @@ importers:
       "@symphony/server":
         specifier: workspace:*
         version: link:packages/server
-      "@symphony/slack-tracker":
-        specifier: workspace:*
-        version: link:extensions/slack-tracker
       "@symphony/ssh":
         specifier: workspace:*
         version: link:packages/ssh

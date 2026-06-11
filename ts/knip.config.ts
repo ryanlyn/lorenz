@@ -26,7 +26,6 @@ const config: KnipConfig = {
         "@symphony/traceviz-emitter",
         "@symphony/tui",
         "@symphony/worker-host-pool",
-        "@symphony/workflow",
         "@symphony/workspace",
         "playwright",
       ],

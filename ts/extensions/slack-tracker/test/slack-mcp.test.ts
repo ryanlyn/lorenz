@@ -1,5 +1,5 @@
 import { test } from "vitest";
-import { toolSpecs } from "@symphony/mcp";
+import { toolSpecs, trackerMcpServerName } from "@symphony/mcp";
 import { ToolRegistry } from "@symphony/tool-sdk";
 import { createTrackerToolProvider, TrackerRegistry } from "@symphony/tracker-sdk";
 import { assert } from "@symphony/test-utils";
@@ -40,6 +40,10 @@ test("slack dispatch mounts the neutral tracker pack plus the slack pack by defa
       "slack_query",
     ],
   );
+});
+
+test("the agent MCP server is named for the slack tracker kind", () => {
+  assert.equal(trackerMcpServerName("slack"), "symphony_slack");
 });
 
 test("neutral tracker ops read, query, comment, and update status over the slack transport", async () => {
