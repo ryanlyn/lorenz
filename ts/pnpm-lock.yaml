@@ -54,6 +54,9 @@ catalogs:
     commander:
       specifier: ^14.0.3
       version: 14.0.3
+    dependency-cruiser:
+      specifier: ^17.4.3
+      version: 17.4.3
     eslint:
       specifier: ^10.3.0
       version: 10.4.1
@@ -160,9 +163,15 @@ importers:
       "@eslint/js":
         specifier: "catalog:"
         version: 10.0.1(eslint@10.4.1(jiti@2.7.0))
+      "@symphony/acp":
+        specifier: workspace:*
+        version: link:packages/acp
       "@symphony/agent-runner":
         specifier: workspace:*
         version: link:packages/agent-runner
+      "@symphony/agent-sdk":
+        specifier: workspace:*
+        version: link:packages/agent-sdk
       "@symphony/cli":
         specifier: workspace:*
         version: link:apps/cli
@@ -172,6 +181,9 @@ importers:
       "@symphony/dispatch":
         specifier: workspace:*
         version: link:packages/dispatch
+      "@symphony/domain":
+        specifier: workspace:*
+        version: link:packages/domain
       "@symphony/humanize":
         specifier: workspace:*
         version: link:packages/humanize
@@ -180,13 +192,13 @@ importers:
         version: link:packages/issue
       "@symphony/jira-tracker":
         specifier: workspace:*
-        version: link:packages/jira-tracker
+        version: link:extensions/jira-tracker
       "@symphony/linear-tracker":
         specifier: workspace:*
-        version: link:packages/linear-tracker
+        version: link:extensions/linear-tracker
       "@symphony/local-tracker":
         specifier: workspace:*
-        version: link:packages/local-tracker
+        version: link:extensions/local-tracker
       "@symphony/log-file":
         specifier: workspace:*
         version: link:packages/log-file
@@ -195,7 +207,7 @@ importers:
         version: link:packages/mcp
       "@symphony/memory-tracker":
         specifier: workspace:*
-        version: link:packages/memory-tracker
+        version: link:extensions/memory-tracker
       "@symphony/orchestrator":
         specifier: workspace:*
         version: link:packages/orchestrator
@@ -226,9 +238,15 @@ importers:
       "@symphony/test-utils":
         specifier: workspace:*
         version: link:packages/test-utils
+      "@symphony/tool-sdk":
+        specifier: workspace:*
+        version: link:packages/tool-sdk
       "@symphony/traceviz-emitter":
         specifier: workspace:*
         version: link:packages/traceviz-emitter
+      "@symphony/tracker-sdk":
+        specifier: workspace:*
+        version: link:packages/tracker-sdk
       "@symphony/tui":
         specifier: workspace:*
         version: link:packages/tui
@@ -253,6 +271,9 @@ importers:
       "@types/react":
         specifier: "catalog:"
         version: 19.2.15
+      dependency-cruiser:
+        specifier: "catalog:"
+        version: 17.4.3
       eslint:
         specifier: "catalog:"
         version: 10.4.1(jiti@2.7.0)
@@ -307,6 +328,9 @@ importers:
       "@symphony/agent-runner":
         specifier: workspace:*
         version: link:../../packages/agent-runner
+      "@symphony/agent-sdk":
+        specifier: workspace:*
+        version: link:../../packages/agent-sdk
       "@symphony/cli-kit":
         specifier: workspace:*
         version: link:../../packages/cli-kit
@@ -327,13 +351,13 @@ importers:
         version: link:../../packages/issue
       "@symphony/jira-tracker":
         specifier: workspace:*
-        version: link:../../packages/jira-tracker
+        version: link:../../extensions/jira-tracker
       "@symphony/linear-tracker":
         specifier: workspace:*
-        version: link:../../packages/linear-tracker
+        version: link:../../extensions/linear-tracker
       "@symphony/local-tracker":
         specifier: workspace:*
-        version: link:../../packages/local-tracker
+        version: link:../../extensions/local-tracker
       "@symphony/log-file":
         specifier: workspace:*
         version: link:../../packages/log-file
@@ -342,7 +366,7 @@ importers:
         version: link:../../packages/mcp
       "@symphony/memory-tracker":
         specifier: workspace:*
-        version: link:../../packages/memory-tracker
+        version: link:../../extensions/memory-tracker
       "@symphony/orchestrator":
         specifier: workspace:*
         version: link:../../packages/orchestrator
@@ -373,9 +397,15 @@ importers:
       "@symphony/ssh":
         specifier: workspace:*
         version: link:../../packages/ssh
+      "@symphony/tool-sdk":
+        specifier: workspace:*
+        version: link:../../packages/tool-sdk
       "@symphony/traceviz-emitter":
         specifier: workspace:*
         version: link:../../packages/traceviz-emitter
+      "@symphony/tracker-sdk":
+        specifier: workspace:*
+        version: link:../../packages/tracker-sdk
       "@symphony/tui":
         specifier: workspace:*
         version: link:../../packages/tui
@@ -466,6 +496,66 @@ importers:
         specifier: "catalog:"
         version: 5.9.3
 
+  extensions/jira-tracker:
+    dependencies:
+      "@symphony/domain":
+        specifier: workspace:*
+        version: link:../../packages/domain
+      "@symphony/issue":
+        specifier: workspace:*
+        version: link:../../packages/issue
+      "@symphony/tracker-sdk":
+        specifier: workspace:*
+        version: link:../../packages/tracker-sdk
+
+  extensions/linear-tracker:
+    dependencies:
+      "@linear/sdk":
+        specifier: "catalog:"
+        version: 84.0.0(graphql@16.14.0)
+      "@symphony/domain":
+        specifier: workspace:*
+        version: link:../../packages/domain
+      "@symphony/issue":
+        specifier: workspace:*
+        version: link:../../packages/issue
+      "@symphony/tool-sdk":
+        specifier: workspace:*
+        version: link:../../packages/tool-sdk
+      "@symphony/tracker-sdk":
+        specifier: workspace:*
+        version: link:../../packages/tracker-sdk
+
+  extensions/local-tracker:
+    dependencies:
+      "@symphony/domain":
+        specifier: workspace:*
+        version: link:../../packages/domain
+      "@symphony/issue":
+        specifier: workspace:*
+        version: link:../../packages/issue
+      "@symphony/tool-sdk":
+        specifier: workspace:*
+        version: link:../../packages/tool-sdk
+      "@symphony/tracker-sdk":
+        specifier: workspace:*
+        version: link:../../packages/tracker-sdk
+      yaml:
+        specifier: "catalog:"
+        version: 2.9.0
+
+  extensions/memory-tracker:
+    dependencies:
+      "@symphony/domain":
+        specifier: workspace:*
+        version: link:../../packages/domain
+      "@symphony/issue":
+        specifier: workspace:*
+        version: link:../../packages/issue
+      "@symphony/tracker-sdk":
+        specifier: workspace:*
+        version: link:../../packages/tracker-sdk
+
   packages/acp:
     dependencies:
       "@agentclientprotocol/claude-agent-acp":
@@ -477,6 +567,9 @@ importers:
       "@agentclientprotocol/sdk":
         specifier: "catalog:"
         version: 0.21.1(zod@4.4.3)
+      "@symphony/agent-sdk":
+        specifier: workspace:*
+        version: link:../agent-sdk
       "@symphony/domain":
         specifier: workspace:*
         version: link:../domain
@@ -521,6 +614,12 @@ importers:
         specifier: "catalog:"
         version: 0.21.1(zod@4.4.3)
 
+  packages/agent-sdk:
+    dependencies:
+      "@symphony/domain":
+        specifier: workspace:*
+        version: link:../domain
+
   packages/cli-kit:
     dependencies:
       commander:
@@ -529,9 +628,18 @@ importers:
 
   packages/config:
     dependencies:
+      "@symphony/agent-sdk":
+        specifier: workspace:*
+        version: link:../agent-sdk
       "@symphony/domain":
         specifier: workspace:*
         version: link:../domain
+      "@symphony/tool-sdk":
+        specifier: workspace:*
+        version: link:../tool-sdk
+      "@symphony/tracker-sdk":
+        specifier: workspace:*
+        version: link:../tracker-sdk
       execa:
         specifier: "catalog:"
         version: 9.6.1
@@ -565,39 +673,6 @@ importers:
         specifier: workspace:*
         version: link:../domain
 
-  packages/jira-tracker:
-    dependencies:
-      "@symphony/domain":
-        specifier: workspace:*
-        version: link:../domain
-      "@symphony/issue":
-        specifier: workspace:*
-        version: link:../issue
-
-  packages/linear-tracker:
-    dependencies:
-      "@linear/sdk":
-        specifier: "catalog:"
-        version: 84.0.0(graphql@16.14.0)
-      "@symphony/domain":
-        specifier: workspace:*
-        version: link:../domain
-      "@symphony/issue":
-        specifier: workspace:*
-        version: link:../issue
-
-  packages/local-tracker:
-    dependencies:
-      "@symphony/domain":
-        specifier: workspace:*
-        version: link:../domain
-      "@symphony/issue":
-        specifier: workspace:*
-        version: link:../issue
-      yaml:
-        specifier: "catalog:"
-        version: 2.9.0
-
   packages/log-file:
     dependencies:
       pino:
@@ -618,15 +693,9 @@ importers:
       "@symphony/domain":
         specifier: workspace:*
         version: link:../domain
-      "@symphony/issue":
+      "@symphony/tool-sdk":
         specifier: workspace:*
-        version: link:../issue
-      "@symphony/jira-tracker":
-        specifier: workspace:*
-        version: link:../jira-tracker
-      "@symphony/local-tracker":
-        specifier: workspace:*
-        version: link:../local-tracker
+        version: link:../tool-sdk
       "@symphony/worker-host-pool":
         specifier: workspace:*
         version: link:../worker-host-pool
@@ -639,15 +708,28 @@ importers:
       zod:
         specifier: "catalog:"
         version: 4.4.3
-
-  packages/memory-tracker:
-    dependencies:
-      "@symphony/domain":
+    devDependencies:
+      "@symphony/config":
         specifier: workspace:*
-        version: link:../domain
-      "@symphony/issue":
+        version: link:../config
+      "@symphony/jira-tracker":
         specifier: workspace:*
-        version: link:../issue
+        version: link:../../extensions/jira-tracker
+      "@symphony/linear-tracker":
+        specifier: workspace:*
+        version: link:../../extensions/linear-tracker
+      "@symphony/local-tracker":
+        specifier: workspace:*
+        version: link:../../extensions/local-tracker
+      "@symphony/memory-tracker":
+        specifier: workspace:*
+        version: link:../../extensions/memory-tracker
+      "@symphony/test-utils":
+        specifier: workspace:*
+        version: link:../test-utils
+      "@symphony/tracker-sdk":
+        specifier: workspace:*
+        version: link:../tracker-sdk
 
   packages/orchestrator:
     dependencies:
@@ -840,6 +922,12 @@ importers:
         specifier: "catalog:"
         version: 4.1.7(@types/node@22.19.19)(jsdom@26.1.0)(msw@2.14.6(@types/node@22.19.19)(typescript@5.9.3))(vite@6.4.2(@types/node@22.19.19)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.22.3)(yaml@2.9.0))
 
+  packages/tool-sdk:
+    dependencies:
+      "@symphony/domain":
+        specifier: workspace:*
+        version: link:../domain
+
   packages/traceviz-emitter:
     dependencies:
       "@symphony/domain":
@@ -864,6 +952,15 @@ importers:
       typescript:
         specifier: "catalog:"
         version: 5.9.3
+
+  packages/tracker-sdk:
+    dependencies:
+      "@symphony/domain":
+        specifier: workspace:*
+        version: link:../domain
+      "@symphony/tool-sdk":
+        specifier: workspace:*
+        version: link:../tool-sdk
 
   packages/tui:
     dependencies:
@@ -897,6 +994,9 @@ importers:
       "@symphony/domain":
         specifier: workspace:*
         version: link:../domain
+      "@symphony/tracker-sdk":
+        specifier: workspace:*
+        version: link:../tracker-sdk
       liquidjs:
         specifier: "catalog:"
         version: 10.27.0
@@ -3354,6 +3454,12 @@ packages:
       }
     engines: { node: ">= 0.6" }
 
+  acorn-jsx-walk@2.0.0:
+    resolution:
+      {
+        integrity: sha512-uuo6iJj4D4ygkdzd6jPtcxs8vZgDX9YFIkqczGImoypX2fQ4dVImmu3UzA4ynixCIMTrEOWW+95M2HuBaCEOVA==,
+      }
+
   acorn-jsx@5.3.2:
     resolution:
       {
@@ -3361,6 +3467,20 @@ packages:
       }
     peerDependencies:
       acorn: ^6.0.0 || ^7.0.0 || ^8.0.0
+
+  acorn-loose@8.5.2:
+    resolution:
+      {
+        integrity: sha512-PPvV6g8UGMGgjrMu+n/f9E/tCSkNQ2Y97eFvuVdJfG11+xdIeDcLyNdC8SHcrHbRqkfwLASdplyR6B6sKM1U4A==,
+      }
+    engines: { node: ">=0.4.0" }
+
+  acorn-walk@8.3.5:
+    resolution:
+      {
+        integrity: sha512-HEHNfbars9v4pgpW6SO1KSPkfoS0xVOM/9UzkJltjlsHZmJasxg8aXkuZa7SMf8vKGIBhpUsPluQSqhJFCqebw==,
+      }
+    engines: { node: ">=0.4.0" }
 
   acorn@8.16.0:
     resolution:
@@ -3589,6 +3709,13 @@ packages:
         integrity: sha512-NUPRluOfOiTKBKvWPtSD4PhFvWCqOi0BGStNWs57X9js7XGTprSmFoz5F0tWhR4WPjNeR9jXqdC7/UpSJTnlRg==,
       }
     engines: { node: ">=18" }
+
+  chalk@4.1.2:
+    resolution:
+      {
+        integrity: sha512-oKnbhFyRIXpUuez8iBMmyEa4nbj4IOQyuhc/wy9kY7/WVPcwIO9VA668Pu8RkO7+0G76SLROeyw9CpQ061i4mA==,
+      }
+    engines: { node: ">=10" }
 
   chalk@5.6.2:
     resolution:
@@ -3882,6 +4009,14 @@ packages:
         integrity: sha512-g7nH6P6dyDioJogAAGprGpCtVImJhpPk/roCzdb3fIh61/s/nPsfR6onyMwkCAR/OlC3yBC0lESvUoQEAssIrw==,
       }
     engines: { node: ">= 0.8" }
+
+  dependency-cruiser@17.4.3:
+    resolution:
+      {
+        integrity: sha512-L4GLuAvmXevWnPCIaFfOz6eD92c+yY+pDgVqgufrLDnW3xYA799CSZQlly2r2N13nhAlnZY6VzY7Rx5pHNvk2w==,
+      }
+    engines: { node: ^20.12||^22||>=24 }
+    hasBin: true
 
   dequal@2.0.3:
     resolution:
@@ -4455,6 +4590,13 @@ packages:
       }
     engines: { node: ">=10.13.0" }
 
+  global-directory@4.0.1:
+    resolution:
+      {
+        integrity: sha512-wHTUcDUoZ1H5/0iVqEudYW4/kAlN5cZ3j/bXn0Dpbizl9iaUVeWSHqiOjsgk6OW2bkLclbBjzewBz6weQ1zA2Q==,
+      }
+    engines: { node: ">=18" }
+
   gopd@1.2.0:
     resolution:
       {
@@ -4474,6 +4616,13 @@ packages:
         integrity: sha512-BBvQ/406p+4CZbTpCbVPSxfzrZrbnuWSP1ELYgyS6B+hNeKzgrdB4JczCa5VZUBQrDa9hUngm0KnexY6pJRN5Q==,
       }
     engines: { node: ^12.22.0 || ^14.16.0 || ^16.0.0 || >=17.0.0 }
+
+  has-flag@4.0.0:
+    resolution:
+      {
+        integrity: sha512-EykJT/Q1KjTWctppgIAgfSO0tKVuZUjhgMr17kqTumMl6Afv3EISleU7qZUzoXDFTAHTDC4NOoG/ZxU3EvlMPQ==,
+      }
+    engines: { node: ">=8" }
 
   has-symbols@1.1.0:
     resolution:
@@ -4615,6 +4764,13 @@ packages:
         integrity: sha512-JV/yugV2uzW5iMRSiZAyDtQd+nxtUnjeLt0acNdw98kKLrvuRVyB80tsREOE7yvGVgalhZ6RNXCmEHkUKBKxew==,
       }
 
+  ini@4.1.1:
+    resolution:
+      {
+        integrity: sha512-QQnnxNyfvmHFIsj7gkPcYymR8Jdw/o7mp5ZFihxn6h8Ci6fh3Dx4E1gPjpQEpIuPo9XVNY/ZUwh4BPMjGyL01g==,
+      }
+    engines: { node: ^14.17.0 || ^16.13.0 || >=18.0.0 }
+
   ink-testing-library@4.0.0:
     resolution:
       {
@@ -4649,6 +4805,13 @@ packages:
         integrity: sha512-Nb2ctOyNR8DqQoR0OwRG95uNWIC0C1lCgf5Naz5H6Ji72KZ8OcFZLz2P5sNgwlyoJ8Yif11oMuYs5pBQa86csA==,
       }
 
+  interpret@3.1.1:
+    resolution:
+      {
+        integrity: sha512-6xwYfHbajpoF0xLW+iwLkhwgvLoZDfjYfoFNu8ftMoXINzwuymNLd9u/KmwtdT2GbR+/Cz66otEGEVVUHX9QLQ==,
+      }
+    engines: { node: ">=10.13.0" }
+
   ip-address@10.2.0:
     resolution:
       {
@@ -4674,6 +4837,13 @@ packages:
       {
         integrity: sha512-hmbYhX/9MUMF5uh7tOXyK/n0ZvWpad5caBA17GsC6vyuCqaWliRG5K1qS9inmUhEMaOBIW7/whAnSwveW/LtZw==,
       }
+
+  is-core-module@2.16.2:
+    resolution:
+      {
+        integrity: sha512-evOr8xfXKxE6qSR0hSXL2r3sd7ALj8+7jQEUvPYcm5sgZFdJ+AYzT6yNmJenvIYQBgIGwfwz08sL8zoL7yq2BA==,
+      }
+    engines: { node: ">= 0.4" }
 
   is-decimal@2.0.1:
     resolution:
@@ -4746,11 +4916,25 @@ packages:
     engines: { node: ">=14.16" }
     hasBin: true
 
+  is-installed-globally@1.0.0:
+    resolution:
+      {
+        integrity: sha512-K55T22lfpQ63N4KEN57jZUAaAYqYHEe8veb/TycJRk9DdSCLLcovXz/mL6mOnhQaZsQGwPhuFopdQIlqGSEjiQ==,
+      }
+    engines: { node: ">=18" }
+
   is-node-process@1.2.0:
     resolution:
       {
         integrity: sha512-Vg4o6/fqPxIjtxgUH5QLJhwZ7gW5diGCVlXpuUfELC62CuxM1iHcRe51f2W1FDy04Ai4KJkagKjx3XaqyfRKXw==,
       }
+
+  is-path-inside@4.0.0:
+    resolution:
+      {
+        integrity: sha512-lJJV/5dYS+RcL8uQdBDW9c9uWFLLBNRyFhnAKXw5tVqLlKZ4RMGZKv+YQ/IA3OhD+RpbJa1LLFM1FQPGyIXvOA==,
+      }
+    engines: { node: ">=12" }
 
   is-plain-obj@4.1.0:
     resolution:
@@ -4887,6 +5071,13 @@ packages:
       {
         integrity: sha512-oxVHkHR/EJf2CNXnWxRLW6mg7JyCCUcG0DtEGmL2ctUo1PNTin1PUil+r/+4r5MpVgC/fn1kjsx7mjSujKqIpw==,
       }
+
+  kleur@3.0.3:
+    resolution:
+      {
+        integrity: sha512-eTIzlVOSUR+JxdDFepEYcBMtZ9Qqdef+rnzWdRZuMbOywu5tO2w2N7rqjoANZ5k9vywhL6Br1VRjUIgTQx4E8w==,
+      }
+    engines: { node: ">=6" }
 
   knip@6.15.0:
     resolution:
@@ -5545,6 +5736,12 @@ packages:
       }
     engines: { node: ">=12" }
 
+  path-parse@1.0.7:
+    resolution:
+      {
+        integrity: sha512-LDJzPVEEEPR+y48z93A0Ed0yXb8pAByGWo/k5YYdYgpY2/2EsOsksJrq7lOHxryrVOn1ejG6oAp8ahvOIQD8sw==,
+      }
+
   path-to-regexp@6.3.0:
     resolution:
       {
@@ -5682,6 +5879,13 @@ packages:
         integrity: sha512-a39t9ApHNx2L4+HBnQKqxxHNs1r7KF+Intd8Q/g1bUh6q0WIp9voPXJ/x0j+ZL45KF1pJd9+q2jLIRMfvEshkA==,
       }
 
+  prompts@2.4.2:
+    resolution:
+      {
+        integrity: sha512-NxNv/kLguCA7p3jE8oL2aEBsrJWgAakBpgmgK6lpPWV+WuOmY6r2/zbAVnP+T8bQlA0nzHXSJSJW0Hq7ylaD2Q==,
+      }
+    engines: { node: ">= 6" }
+
   property-information@7.2.0:
     resolution:
       {
@@ -5808,6 +6012,20 @@ packages:
       }
     engines: { node: ">= 12.13.0" }
 
+  rechoir@0.8.0:
+    resolution:
+      {
+        integrity: sha512-/vxpCXddiX8NGfGO/mTafwjq4aFa/71pvamip0++IQk3zG8cbCj0fifNPrjjF1XMXUne91jL9OoxmdykoEtifQ==,
+      }
+    engines: { node: ">= 10.13.0" }
+
+  regexp-tree@0.1.27:
+    resolution:
+      {
+        integrity: sha512-iETxpjK6YoRWJG5o6hXLwvjYAoW+FEZn9os0PD/b6AP6xQwsa/Y7lCVgIixBbUPMfhu+i2LtdeAqVTgGlQarfA==,
+      }
+    hasBin: true
+
   remark-parse@11.0.0:
     resolution:
       {
@@ -5839,6 +6057,14 @@ packages:
       {
         integrity: sha512-seS2Tj26TBVOC2NIc2rOe2y2ZO7efxITtLZcGSOnHHNOQ7CkiUBfw0Iw2ck6xkIhPwLhKNLS8BO+hEpngQlqzw==,
       }
+
+  resolve@1.22.12:
+    resolution:
+      {
+        integrity: sha512-TyeJ1zif53BPfHootBGwPRYT1RUt6oGWsaQr8UyZW/eAm9bKoijtvruSDEmZHm92CwS9nj7/fWttqPCgzep8CA==,
+      }
+    engines: { node: ">= 0.4" }
+    hasBin: true
 
   restore-cursor@4.0.0:
     resolution:
@@ -5885,6 +6111,12 @@ packages:
     resolution:
       {
         integrity: sha512-rp3So07KcdmmKbGvgaNxQSJr7bGVSVk5S9Eq1F+ppbRo70+YeaDxkw5Dd8NPN+GD6bjnYm2VuPuCXmpuYvmCXQ==,
+      }
+
+  safe-regex@2.1.1:
+    resolution:
+      {
+        integrity: sha512-rx+x8AMzKb5Q5lQ95Zoi6ZbJqwCLkqi3XuJXp5P3rT8OEc6sZCJG5AE5dU3lsgRr/F4Bs31jSlVN+j5KrsGu9A==,
       }
 
   safe-stable-stringify@2.5.0:
@@ -6027,6 +6259,12 @@ packages:
         integrity: sha512-brv7p5WgH0jmQJr1ZDDfKDOSeWWg+OVypG99A/5vYGPqJ6pxiaHLy8nxtFjBA7oMa01ebA9gfh1uMCFqOuXxvA==,
       }
 
+  sisteransi@1.0.5:
+    resolution:
+      {
+        integrity: sha512-bLGGlR1QxBcynn2d5YmDX4MGjlZvy2MRBDRNHLJ8VI6l6+9FUiyTFNJ0IveOSP0bcXgVDPRcfGqA0pjaqUpfVg==,
+      }
+
   slice-ansi@9.0.0:
     resolution:
       {
@@ -6152,6 +6390,13 @@ packages:
       }
     engines: { node: ">=12" }
 
+  strip-bom@3.0.0:
+    resolution:
+      {
+        integrity: sha512-vavAMRXOgBVNF6nyEEmL3DBK19iRpDcoIwW+swQ+CbGiu7lju6t+JklA1MHweoWtadgt4ISVUsXLyDq34ddcwA==,
+      }
+    engines: { node: ">=4" }
+
   strip-final-newline@4.0.0:
     resolution:
       {
@@ -6184,6 +6429,20 @@ packages:
       {
         integrity: sha512-LIN7rULI0jBscWQYaSswptyderlarFkjQ+t79nzty8tcIAceVomEVlLzH5VP4Cmsv6MtKhs7qaAiwlcp+Mgaxw==,
       }
+
+  supports-color@7.2.0:
+    resolution:
+      {
+        integrity: sha512-qpCAvRl9stuOHveKsn7HncJRvv501qIacKzQlO/+Lwxc9+0q2wLyv4Dfvt80/DPn2pqOBsJdDiogXGR9+OvwRw==,
+      }
+    engines: { node: ">=8" }
+
+  supports-preserve-symlinks-flag@1.0.0:
+    resolution:
+      {
+        integrity: sha512-ot0WnXS9fgdkgIcePe6RHNk1WA8+muPa6cSjeR3V8K27q9BB1rTE3R1p7Hv0z1ZyAc8s6Vvv8DIyWf681MAt0w==,
+      }
+    engines: { node: ">= 0.4" }
 
   symbol-tree@3.2.4:
     resolution:
@@ -6435,6 +6694,20 @@ packages:
       {
         integrity: sha512-6s5V71mX8qBUmlgbrfL33xDUwO0fq48rxAu2LBE11WBeGdpCPOsXksQbZJHvHwhrd3QjUusd3mAOM5Gg0mFBLg==,
       }
+
+  tsconfig-paths-webpack-plugin@4.2.0:
+    resolution:
+      {
+        integrity: sha512-zbem3rfRS8BgeNK50Zz5SIQgXzLafiHjOwUAvk/38/o1jHn/V5QAgVUcz884or7WYcPaH3N2CIfUc2u0ul7UcA==,
+      }
+    engines: { node: ">=10.13.0" }
+
+  tsconfig-paths@4.2.0:
+    resolution:
+      {
+        integrity: sha512-NoZ4roiN7LnbKn9QqE1amc9DJfzvZXxF4xDavcOWt1BPkdx+m+0gJuPM+S0vCe7zTJMYUP0R8pO2XMr+Y8oLIg==,
+      }
+    engines: { node: ">=6" }
 
   tslib@2.8.1:
     resolution:
@@ -6717,6 +6990,14 @@ packages:
         integrity: sha512-3hu+tD8YzSLGuFYtPRb48vdhKMi0KQV5sn+uWr8+7dMEq/2G/dtLrdDinkLjqq5TIbIBjYJ4Ax/n3YiaW7QM8A==,
       }
     engines: { node: 20 || >=22 }
+
+  watskeburt@5.0.3:
+    resolution:
+      {
+        integrity: sha512-g9CXukMjazlJJVQ3OHzXsnG25KFYgSgKMIyoJrD8ggr0DbS9UNF7OzIqWmmKKBMedkxj3T01uqEaGnn+y7QhMA==,
+      }
+    engines: { node: ^20.12||^22.13||>=24.0 }
+    hasBin: true
 
   webidl-conversions@7.0.0:
     resolution:
@@ -8094,7 +8375,17 @@ snapshots:
       mime-types: 3.0.2
       negotiator: 1.0.0
 
+  acorn-jsx-walk@2.0.0: {}
+
   acorn-jsx@5.3.2(acorn@8.16.0):
+    dependencies:
+      acorn: 8.16.0
+
+  acorn-loose@8.5.2:
+    dependencies:
+      acorn: 8.16.0
+
+  acorn-walk@8.3.5:
     dependencies:
       acorn: 8.16.0
 
@@ -8222,6 +8513,11 @@ snapshots:
 
   chai@6.2.2: {}
 
+  chalk@4.1.2:
+    dependencies:
+      ansi-styles: 4.3.0
+      supports-color: 7.2.0
+
   chalk@5.6.2: {}
 
   character-entities-html4@2.1.0: {}
@@ -8342,6 +8638,27 @@ snapshots:
   define-lazy-prop@3.0.0: {}
 
   depd@2.0.0: {}
+
+  dependency-cruiser@17.4.3:
+    dependencies:
+      acorn: 8.16.0
+      acorn-jsx: 5.3.2(acorn@8.16.0)
+      acorn-jsx-walk: 2.0.0
+      acorn-loose: 8.5.2
+      acorn-walk: 8.3.5
+      commander: 14.0.3
+      enhanced-resolve: 5.22.1
+      ignore: 7.0.5
+      interpret: 3.1.1
+      is-installed-globally: 1.0.0
+      json5: 2.2.3
+      picomatch: 4.0.4
+      prompts: 2.4.2
+      rechoir: 0.8.0
+      safe-regex: 2.1.1
+      semver: 7.8.1
+      tsconfig-paths-webpack-plugin: 4.2.0
+      watskeburt: 5.0.3
 
   dequal@2.0.3: {}
 
@@ -8746,11 +9063,17 @@ snapshots:
     dependencies:
       is-glob: 4.0.3
 
+  global-directory@4.0.1:
+    dependencies:
+      ini: 4.1.1
+
   gopd@1.2.0: {}
 
   graceful-fs@4.2.11: {}
 
   graphql@16.14.0: {}
+
+  has-flag@4.0.0: {}
 
   has-symbols@1.1.0: {}
 
@@ -8841,6 +9164,8 @@ snapshots:
 
   ini@1.3.8: {}
 
+  ini@4.1.1: {}
+
   ink-testing-library@4.0.0(@types/react@19.2.15):
     optionalDependencies:
       "@types/react": 19.2.15
@@ -8881,6 +9206,8 @@ snapshots:
 
   inline-style-parser@0.2.7: {}
 
+  interpret@3.1.1: {}
+
   ip-address@10.2.0: {}
 
   ipaddr.js@1.9.1: {}
@@ -8891,6 +9218,10 @@ snapshots:
     dependencies:
       is-alphabetical: 2.0.1
       is-decimal: 2.0.1
+
+  is-core-module@2.16.2:
+    dependencies:
+      hasown: 2.0.4
 
   is-decimal@2.0.1: {}
 
@@ -8918,7 +9249,14 @@ snapshots:
     dependencies:
       is-docker: 3.0.0
 
+  is-installed-globally@1.0.0:
+    dependencies:
+      global-directory: 4.0.1
+      is-path-inside: 4.0.0
+
   is-node-process@1.2.0: {}
+
+  is-path-inside@4.0.0: {}
 
   is-plain-obj@4.1.0: {}
 
@@ -8991,6 +9329,8 @@ snapshots:
   keyv@4.5.4:
     dependencies:
       json-buffer: 3.0.1
+
+  kleur@3.0.3: {}
 
   knip@6.15.0:
     dependencies:
@@ -9508,6 +9848,8 @@ snapshots:
 
   path-key@4.0.0: {}
 
+  path-parse@1.0.7: {}
+
   path-to-regexp@6.3.0: {}
 
   path-to-regexp@8.4.2: {}
@@ -9592,6 +9934,11 @@ snapshots:
 
   process-warning@5.0.0: {}
 
+  prompts@2.4.2:
+    dependencies:
+      kleur: 3.0.3
+      sisteransi: 1.0.5
+
   property-information@7.2.0: {}
 
   proxy-addr@2.0.7:
@@ -9672,6 +10019,12 @@ snapshots:
 
   real-require@0.2.0: {}
 
+  rechoir@0.8.0:
+    dependencies:
+      resolve: 1.22.12
+
+  regexp-tree@0.1.27: {}
+
   remark-parse@11.0.0:
     dependencies:
       "@types/mdast": 4.0.4
@@ -9694,6 +10047,13 @@ snapshots:
   require-from-string@2.0.2: {}
 
   resolve-pkg-maps@1.0.0: {}
+
+  resolve@1.22.12:
+    dependencies:
+      es-errors: 1.3.0
+      is-core-module: 2.16.2
+      path-parse: 1.0.7
+      supports-preserve-symlinks-flag: 1.0.0
 
   restore-cursor@4.0.0:
     dependencies:
@@ -9748,6 +10108,10 @@ snapshots:
   run-applescript@7.1.0: {}
 
   safe-buffer@5.2.1: {}
+
+  safe-regex@2.1.1:
+    dependencies:
+      regexp-tree: 0.1.27
 
   safe-stable-stringify@2.5.0: {}
 
@@ -9840,6 +10204,8 @@ snapshots:
       once: 1.4.0
       simple-concat: 1.0.1
 
+  sisteransi@1.0.5: {}
+
   slice-ansi@9.0.0:
     dependencies:
       ansi-styles: 6.2.3
@@ -9904,6 +10270,8 @@ snapshots:
     dependencies:
       ansi-regex: 6.2.2
 
+  strip-bom@3.0.0: {}
+
   strip-final-newline@4.0.0: {}
 
   strip-json-comments@2.0.1: {}
@@ -9917,6 +10285,12 @@ snapshots:
   style-to-object@1.0.14:
     dependencies:
       inline-style-parser: 0.2.7
+
+  supports-color@7.2.0:
+    dependencies:
+      has-flag: 4.0.0
+
+  supports-preserve-symlinks-flag@1.0.0: {}
 
   symbol-tree@3.2.4: {}
 
@@ -10037,6 +10411,19 @@ snapshots:
       typescript: 5.9.3
 
   ts-pattern@5.9.0: {}
+
+  tsconfig-paths-webpack-plugin@4.2.0:
+    dependencies:
+      chalk: 4.1.2
+      enhanced-resolve: 5.22.1
+      tapable: 2.3.3
+      tsconfig-paths: 4.2.0
+
+  tsconfig-paths@4.2.0:
+    dependencies:
+      json5: 2.2.3
+      minimist: 1.2.8
+      strip-bom: 3.0.0
 
   tslib@2.8.1:
     optional: true
@@ -10223,6 +10610,8 @@ snapshots:
       xml-name-validator: 5.0.0
 
   walk-up-path@4.0.0: {}
+
+  watskeburt@5.0.3: {}
 
   webidl-conversions@7.0.0: {}
 

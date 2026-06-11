@@ -1,21 +1,11 @@
 import { isRecord as isPlainRecord } from "@symphony/domain";
 
+// Common tracker keys only; provider-specific aliases (e.g. project_slug) are declared by
+// each tracker provider via `TrackerProvider.configAliases` and applied during parsing.
 const trackerAliases = {
   api_key: "apiKey",
-  base_url: "baseUrl",
-  project_slug: "projectSlug",
-  id_prefix: "idPrefix",
-  project_slugs: "projectSlugs",
-  project_labels: "projectLabels",
-  project_keys: "projectKeys",
   active_states: "activeStates",
   terminal_states: "terminalStates",
-  issue_type: "issueType",
-};
-const trackerMcpAliases = {
-  read_issue: "readIssue",
-  update_status: "updateStatus",
-  create_issue: "createIssue",
 };
 const dispatchAliases = {
   accept_unrouted: "acceptUnrouted",
@@ -93,10 +83,6 @@ export function normalizeWorkflowConfig(value: unknown): unknown {
 
   if (isPlainRecord(normalized.tracker)) {
     normalizeNested(normalized.tracker, "dispatch", dispatchAliases);
-    normalizeNested(normalized.tracker, "mcp", {});
-    if (isPlainRecord(normalized.tracker.mcp)) {
-      normalizeNested(normalized.tracker.mcp, "tools", trackerMcpAliases);
-    }
   }
   if (isPlainRecord(normalized.agents)) {
     normalized.agents = Object.fromEntries(
@@ -114,6 +100,14 @@ export function normalizeWorkflowConfig(value: unknown): unknown {
         normalizeNested(normalizedOverride, "agent", agentAliases);
         normalizeNested(normalizedOverride, "codex", codexAliases);
         normalizeNested(normalizedOverride, "claude", claudeAliases);
+        if (isPlainRecord(normalizedOverride.agents)) {
+          normalizedOverride.agents = Object.fromEntries(
+            Object.entries(normalizedOverride.agents).map(([name, agent]) => [
+              name,
+              isPlainRecord(agent) ? normalizeAliases(agent, agentRecordAliases) : agent,
+            ]),
+          );
+        }
         return [state, normalizedOverride];
       }),
     );
@@ -129,7 +123,7 @@ function normalizeNested(
   if (isPlainRecord(raw[key])) raw[key] = normalizeAliases(raw[key], aliases);
 }
 
-function normalizeAliases(
+export function normalizeAliases(
   raw: Record<string, unknown>,
   aliases: Record<string, string>,
 ): Record<string, unknown> {

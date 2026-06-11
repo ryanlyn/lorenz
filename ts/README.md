@@ -61,11 +61,22 @@ records a `workflow_reload_failed` event.
 
 ## Workspace Layout
 
-- `apps/cli` wires configuration, tracker clients, agent runners, the runtime, the TUI, and the
-  observability server into the shipped binary.
+See [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) for the layering rules and the tracker extension
+contract (including the recipe for adding a new tracker backend).
+
+- `apps/cli` is the composition root: it invokes the built-in extensions' registration and wires
+  configuration, agent runners, the runtime, the TUI, and the observability server into the
+  shipped binary.
 - `apps/traceviz` renders trace event streams for local inspection.
-- `packages/*` contains the protocol, domain model, configuration loader, prompt renderer, runtime,
-  policies, adapters, dashboards, logging, SSH, and support libraries.
+- `packages/tracker-sdk` is the extension SDK: the `TrackerProvider` contract, the provider
+  registry, and the helpers tracker backends build on.
+- `extensions/*` are the backend extensions: `linear-tracker`, `local-tracker`,
+  `memory-tracker`, and `jira-tracker` are self-contained tracker providers (config
+  parsing, runtime client, tool packs) that each export their own registration; the CLI
+  invokes the built-in set at its composition root.
+- The remaining `packages/*` are the provider-agnostic engine: domain model, configuration
+  loader, prompt renderer, runtime, policies, MCP server, dashboards, logging, SSH, and
+  support libraries.
 - `test/` contains workspace-level integration, contract, sandbox, and live tests.
 - Package- and app-owned unit tests live under `packages/<name>/test/` or `apps/<name>/test/` as
   `.test.ts` or `.test.tsx` files.

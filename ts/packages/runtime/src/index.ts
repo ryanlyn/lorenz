@@ -83,6 +83,11 @@ export interface SymphonyRuntimeOptions {
   onAgentUpdate?: ((issue: Issue, update: AgentUpdate) => void) | undefined;
   onIssueDispatched?: ((issue: Issue) => void) | undefined;
   clock?: ClockPort | undefined;
+  /**
+   * Settings validation run before each poll, after any workflow reload. The composition
+   * root binds this to its registries; the default validates against the process-wide ones.
+   */
+  validateDispatch?: ((settings: WorkflowDefinition["settings"]) => void) | undefined;
 }
 
 export interface RuntimeStartOptions {
@@ -171,6 +176,7 @@ export class SymphonyRuntime {
   private readonly orchestrator: Orchestrator;
   private readonly runner: RuntimeRunner;
   private readonly clock: ClockPort;
+  private readonly validateDispatch: (settings: WorkflowDefinition["settings"]) => void;
   private readonly listeners = new Set<(snapshot: RuntimeSnapshot) => void>();
   private readonly retryScheduler: RetryScheduler;
   private readonly inFlight = new Set<Promise<void>>();
@@ -196,6 +202,7 @@ export class SymphonyRuntime {
     this.clock = input.clock ?? systemClock;
     this.orchestrator = input.orchestrator ?? new Orchestrator(input.workflow.settings, this.clock);
     this.runner = input.runner ?? runAgentAttempt;
+    this.validateDispatch = input.validateDispatch ?? validateDispatchConfig;
     this.retryScheduler = new RetryScheduler(this.clock);
     this.appStatus = "idle";
   }
@@ -323,7 +330,7 @@ export class SymphonyRuntime {
     const dispatched: Array<Promise<void>> = [];
     try {
       await this.reloadWorkflowIfConfigured();
-      validateDispatchConfig(this.workflow.settings);
+      this.validateDispatch(this.workflow.settings);
       await this.cleanupTerminalWorkspacesOnce();
       await this.reconcileStalledRuns();
       await this.reconcileTrackedIssues();

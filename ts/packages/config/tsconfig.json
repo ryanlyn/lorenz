@@ -11,7 +11,16 @@
   ],
   "references": [
     {
+      "path": "../agent-sdk"
+    },
+    {
       "path": "../domain"
+    },
+    {
+      "path": "../tool-sdk"
+    },
+    {
+      "path": "../tracker-sdk"
     }
   ]
 }

@@ -5,32 +5,29 @@ import type {
   AgentKind,
   AgentSettings,
   AgentUsageAccounting,
-  ClaudeSettings,
-  CodexSettings,
   HooksSettings,
   PartialRuntimeSettings,
   Settings,
-  TrackerKind,
   TrackerSettings,
 } from "@symphony/domain";
-import {
-  TRACKER_KINDS,
-  isOneOf,
-  isRecord as isPlainRecord,
-  normalizeHttpBindHost,
-} from "@symphony/domain";
+import { isRecord as isPlainRecord, normalizeHttpBindHost } from "@symphony/domain";
+import { defaultAgentExecutorRegistry, type AgentExecutorRegistry } from "@symphony/agent-sdk";
+import type { ToolRegistry } from "@symphony/tool-sdk";
+import { defaultTrackerRegistry, type TrackerRegistry } from "@symphony/tracker-sdk";
 
-import { hooksAliases } from "./aliases.js";
+import { hooksAliases, normalizeAliases } from "./aliases.js";
 import { defaultAgentRecords, defaultSettings, type DefaultSettingsOptions } from "./defaults.js";
 import { configErrorMessage } from "./errors.js";
 import { joinPath, nonEmptyString } from "./leaf-utils.js";
 import {
-  acpAgentRecordSchema,
+  agentRecordOverrideSchema,
+  agentRecordSchema,
   coercedNonNegativeTimeoutMs,
   coercedTimeoutMs,
   workflowConfigSchema,
-  type AcpAgentRecordRaw,
   type AgentRaw,
+  type AgentRecordOverrideRaw,
+  type AgentRecordRaw,
   type AgentsRaw,
   type ClaudeRaw,
   type CodexRaw,
@@ -45,12 +42,14 @@ export function parseConfig(
   raw: Record<string, unknown> = {},
   env: NodeJS.ProcessEnv = {},
   defaults: DefaultSettingsOptions = {},
+  registry: TrackerRegistry = defaultTrackerRegistry,
 ): Settings {
   const settings = defaultSettings(defaults);
   const parsed = parseWorkflowConfig(raw);
 
   const trackerRaw = parsed.tracker ?? {};
-  settings.tracker = parseTracker(settings.tracker, trackerRaw, env);
+  settings.tracker = parseTracker(settings.tracker, trackerRaw, env, registry);
+  if (parsed.tools !== undefined) settings.tools = [...parsed.tools];
 
   const pollingRaw = parsed.polling ?? {};
   settings.polling.intervalMs = pollingRaw.intervalMs ?? settings.polling.intervalMs;
@@ -76,10 +75,10 @@ export function parseConfig(
   settings.hooks = parseHooks(settings.hooks, parsed.hooks ?? {});
   if (settings.workspace.isolation === "none") assertNoWorkspaceHooks(settings.hooks);
   settings.agent = parseAgentSettings(settings.agent, parsed.agent ?? {});
-  settings.codex = parseCodex(settings.codex, parsed.codex ?? {});
-  settings.claude = parseClaude(settings.claude, parsed.claude ?? {});
-  settings.agents = parseAgents(parsed.agents ?? {}, settings.codex, settings.claude);
-  applyKnownAgentRecords(settings);
+  settings.agents = parseAgents(
+    parsed.agents ?? {},
+    legacyAgentRecordOverrides(parsed.codex ?? {}, parsed.claude ?? {}),
+  );
 
   const observabilityRaw = parsed.observability ?? {};
   settings.observability.dashboardEnabled =
@@ -94,7 +93,7 @@ export function parseConfig(
   if (serverRaw.traceDir !== undefined) settings.server.traceDir = serverRaw.traceDir;
   if (serverRaw.staticDir !== undefined) settings.server.staticDir = serverRaw.staticDir;
 
-  settings.statusOverrides = parseStatusOverrides(parsed.statusOverrides ?? {});
+  settings.statusOverrides = parseStatusOverrides(parsed.statusOverrides ?? {}, settings.agents);
   return settings;
 }
 
@@ -104,57 +103,27 @@ export function settingsForIssueState(settings: Settings, state: string): Settin
 
   const merged = cloneSettings(settings);
   if (override.agent) merged.agent = { ...merged.agent, ...override.agent };
-  if (override.codex) merged.codex = { ...merged.codex, ...override.codex };
-  if (override.claude) merged.claude = mergeClaudeOverride(merged.claude, override.claude);
-  applyStateBackendOverridesToAgentRecords(merged, override);
-  return merged;
-}
-
-function mergeClaudeOverride(
-  base: ClaudeSettings,
-  override: Partial<ClaudeSettings>,
-): ClaudeSettings {
-  const merged = { ...base, ...override };
-  // A model override re-pins the provider config unless the override supplies its own.
-  if (override.model !== undefined && override.providerConfig === undefined) {
-    merged.providerConfig = { ...base.providerConfig, model: merged.model };
-  }
-  return merged;
-}
-
-export function validateDispatchConfig(settings: Settings): void {
-  if (!settings.tracker.kind) throw new Error("tracker.kind is required");
-  if (settings.tracker.kind === "linear") {
-    if (!settings.tracker.apiKey) throw new Error("tracker.api_key is required");
-    const { projectSlug, projectSlugs, projectLabels } = settings.tracker;
-    const hasSlug = !!projectSlug;
-    const hasSlugs = !!projectSlugs && projectSlugs.length > 0;
-    const hasLabels = !!projectLabels && projectLabels.length > 0;
-    const count = [hasSlug, hasSlugs, hasLabels].filter(Boolean).length;
-    if (count === 0)
-      throw new Error(
-        "tracker.project_slug, tracker.project_slugs, or tracker.project_labels is required",
-      );
-    if (count > 1)
-      throw new Error(
-        "tracker.project_slug, tracker.project_slugs, and tracker.project_labels are mutually exclusive",
-      );
-  }
-  if (settings.tracker.kind === "local") {
-    if (!settings.tracker.path || settings.tracker.path.trim() === "") {
-      throw new Error("tracker.path (board directory) is required for the local tracker");
+  if (override.agents) {
+    for (const [kind, fragment] of Object.entries(override.agents)) {
+      const base = merged.agents[kind];
+      if (!base) continue;
+      merged.agents[kind] = { ...base, ...fragment };
     }
   }
-  if (settings.tracker.kind === "jira") {
-    if (!settings.tracker.baseUrl) throw new Error("tracker.base_url is required for jira tracker");
-    if (!settings.tracker.email) throw new Error("tracker.email is required for jira tracker");
-    if (!settings.tracker.apiKey) throw new Error("tracker.api_key is required for jira tracker");
-    assertJiraScopeConfig(settings);
-  }
-  if (settings.tracker.kind === "jira-mcp") {
-    if (!settings.tracker.mcp?.url)
-      throw new Error("tracker.mcp.url is required for jira-mcp tracker");
-    assertJiraScopeConfig(settings);
+  return merged;
+}
+
+export function validateDispatchConfig(
+  settings: Settings,
+  trackers: TrackerRegistry = defaultTrackerRegistry,
+  executors: AgentExecutorRegistry = defaultAgentExecutorRegistry,
+  tools?: ToolRegistry,
+): void {
+  const provider = trackers.require(settings.tracker.kind);
+  provider.validateDispatch?.(settings);
+
+  if (tools && settings.tools !== undefined) {
+    for (const name of settings.tools) tools.require(name);
   }
 
   const requiredBackends = new Set<AgentKind>([settings.agent.kind]);
@@ -164,13 +133,13 @@ export function validateDispatchConfig(settings: Settings): void {
   for (const kind of requiredBackends) {
     const agent = settings.agents[kind];
     if (!agent) throw new Error(`agents.${kind} is required`);
-    if (!agent.bridgeCommand.trim()) {
-      throw new Error(
-        kind === "claude"
-          ? "claude.command is required"
-          : `agents.${kind}.bridgeCommand is required`,
-      );
+    const executorProvider = executors.get(agent.executor);
+    if (!executorProvider) {
+      const known = executors.executors();
+      const hint = known.length > 0 ? ` (known executors: ${known.join(", ")})` : "";
+      throw new Error(`unsupported agents.${kind}.executor: ${agent.executor}${hint}`);
     }
+    executorProvider.validateAgent?.(kind, agent, settings);
   }
 }
 
@@ -184,116 +153,58 @@ export function normalizeRouteName(value: unknown): string {
   return String(value).trim().toLowerCase();
 }
 
-/**
- * Local-tracker issue-id prefixes must be filesystem-safe so `<prefix><n>.md` can never escape the
- * board dir. Mirrors BoardStore's own guard (config must not import the tracker packages, so the
- * rule is duplicated here as the user-facing validation). Default "BOARD-" satisfies it.
- */
-const LOCAL_ID_PREFIX_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
-function assertValidLocalIdPrefix(prefix: string): void {
-  if (!LOCAL_ID_PREFIX_PATTERN.test(prefix)) {
-    throw new Error(
-      `tracker.id_prefix ${JSON.stringify(prefix)} is invalid: ` +
-        `must start alphanumeric, then only letters, digits, "_" or "-"`,
-    );
-  }
-}
-
-function assertJiraScopeConfig(settings: Settings): void {
-  const hasJql = !!settings.tracker.jql?.trim();
-  const hasProjectKeys = !!settings.tracker.projectKeys && settings.tracker.projectKeys.length > 0;
-  if (!hasJql && !hasProjectKeys) {
-    throw new Error("tracker.jql or tracker.project_keys is required for jira trackers");
-  }
-}
+/** Keys of the tracker config section owned by the core; everything else belongs to the provider. */
+const TRACKER_COMMON_KEYS = new Set([
+  "kind",
+  "endpoint",
+  "apiKey",
+  "assignee",
+  "activeStates",
+  "terminalStates",
+  "dispatch",
+]);
 
 function parseTracker(
   defaults: TrackerSettings,
   trackerRaw: TrackerRaw,
   env: NodeJS.ProcessEnv,
+  registry: TrackerRegistry,
 ): TrackerSettings {
-  const kindRaw = trackerRaw.kind;
-  const kindUnspecified = kindRaw === undefined || kindRaw === null;
-  const kind = kindUnspecified ? defaults.kind : trackerKindValue(kindRaw, "tracker.kind");
+  const kind = trackerKindValue(trackerRaw.kind) ?? defaults.kind;
+  // Unregistered kinds parse generically (options pass through unvalidated) and are
+  // rejected with the full list of known kinds by validateDispatchConfig.
+  const provider = registry.get(kind);
 
-  const resolveLinearFallbacks = kindUnspecified || kind === "linear";
-  const resolveJiraFallbacks = kind === "jira" || kind === "jira-mcp";
-  const apiKey = resolveConfiguredSecret(trackerRaw.apiKey, env, apiKeyFallback(kind));
-  const baseUrl =
-    resolveEnv(trackerRaw.baseUrl ?? (resolveJiraFallbacks ? "$JIRA_BASE_URL" : ""), env) ||
-    undefined;
-  const email = resolveConfiguredSecret(
-    trackerRaw.email,
-    env,
-    resolveJiraFallbacks ? "JIRA_EMAIL" : undefined,
-  );
-  const projectSlug = resolveEnv(trackerRaw.projectSlug ?? "", env) || undefined;
+  const apiKey = resolveConfiguredSecret(trackerRaw.apiKey, env, provider?.envFallbacks?.apiKey);
   const assignee = resolveConfiguredSecret(
     trackerRaw.assignee,
     env,
-    resolveLinearFallbacks ? "LINEAR_ASSIGNEE" : undefined,
+    provider?.envFallbacks?.assignee,
   );
-  const idPrefix = trackerRaw.idPrefix ?? defaults.idPrefix ?? "BOARD-";
-  assertValidLocalIdPrefix(idPrefix);
+  const endpoint = trackerRaw.endpoint ?? provider?.defaultEndpoint ?? defaults.endpoint;
 
-  const projectSlugs = trackerRaw.projectSlugs?.length ? trackerRaw.projectSlugs : undefined;
-  const projectLabels = trackerRaw.projectLabels?.length ? trackerRaw.projectLabels : undefined;
-  const projectKeys = trackerRaw.projectKeys?.length ? trackerRaw.projectKeys : undefined;
+  const providerRaw: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(trackerRaw)) {
+    if (!TRACKER_COMMON_KEYS.has(key)) providerRaw[key] = value;
+  }
+  const aliased = normalizeAliases(providerRaw, { ...(provider?.configAliases ?? {}) });
+  const options = provider?.parseOptions
+    ? provider.parseOptions(aliased, {
+        env,
+        resolveSecret: (value, fallbackEnvVar) =>
+          resolveConfiguredSecret(value, env, fallbackEnvVar),
+      })
+    : aliased;
 
   return {
-    ...defaults,
     kind,
-    endpoint: trackerRaw.endpoint ?? defaults.endpoint,
-    baseUrl,
-    email,
-    path: trackerRaw.path ?? defaults.path ?? ".symphony/local",
-    idPrefix,
+    endpoint,
     apiKey,
-    projectSlug,
-    projectSlugs,
-    projectLabels,
-    projectKeys,
-    jql: trackerRaw.jql ?? defaults.jql,
-    issueType: trackerRaw.issueType ?? defaults.issueType,
-    mcp: parseTrackerMcp(defaults.mcp, trackerRaw.mcp, env),
     assignee,
     activeStates: trackerRaw.activeStates ?? defaults.activeStates,
     terminalStates: trackerRaw.terminalStates ?? defaults.terminalStates,
     dispatch: parseDispatch(defaults.dispatch, trackerRaw.dispatch ?? {}),
-  };
-}
-
-function apiKeyFallback(kind: TrackerSettings["kind"]): string | undefined {
-  if (kind === undefined || kind === "linear") return "LINEAR_API_KEY";
-  if (kind === "jira") return "JIRA_API_KEY";
-  return undefined;
-}
-
-function parseTrackerMcp(
-  defaults: TrackerSettings["mcp"],
-  raw: TrackerRaw["mcp"],
-  env: NodeJS.ProcessEnv,
-): TrackerSettings["mcp"] {
-  if (!raw && !defaults) return undefined;
-  const source = raw ?? {};
-  return {
-    ...(defaults ?? {}),
-    ...(source.url !== undefined ? { url: resolveEnv(source.url, env) || undefined } : {}),
-    ...(source.token !== undefined
-      ? { token: resolveConfiguredSecret(source.token, env) }
-      : defaults?.token !== undefined
-        ? { token: defaults.token }
-        : {}),
-    ...(source.headers !== undefined
-      ? { headers: { ...source.headers } }
-      : defaults?.headers !== undefined
-        ? { headers: { ...defaults.headers } }
-        : {}),
-    ...(source.tools !== undefined
-      ? { tools: { ...source.tools } }
-      : defaults?.tools !== undefined
-        ? { tools: { ...defaults.tools } }
-        : {}),
+    options,
   };
 }
 
@@ -361,28 +272,69 @@ function parseAgentSettings(defaults: AgentSettings, agentRaw: AgentRaw): AgentS
   };
 }
 
+/**
+ * Map a legacy top-level `codex:` / `claude:` workflow section onto the matching
+ * {@link Settings.agents} record. The sections are parse-time conveniences only;
+ * `agents` is the single source of truth at runtime.
+ */
+function legacyAgentRecordOverrides(
+  codexRaw: CodexRaw,
+  claudeRaw: ClaudeRaw,
+): Record<string, Partial<AgentConfig>> {
+  const overrides: Record<string, Partial<AgentConfig>> = {};
+  const codex = agentRecordFragment(codexRaw);
+  if (Object.keys(codex).length > 0) overrides.codex = codex;
+  const claude = claudeRecordFragment(defaultAgentRecords().claude!, claudeRaw);
+  if (Object.keys(claude).length > 0) overrides.claude = claude;
+  return overrides;
+}
+
+/** Translate legacy backend-section keys (`command`, ...) into agent-record fields. */
+function agentRecordFragment(raw: Partial<CodexRaw & ClaudeRaw>): Partial<AgentConfig> {
+  return {
+    ...(raw.command !== undefined ? { bridgeCommand: raw.command } : {}),
+    ...(raw.turnTimeoutMs !== undefined ? { turnTimeoutMs: raw.turnTimeoutMs } : {}),
+    ...(raw.stallTimeoutMs !== undefined ? { stallTimeoutMs: raw.stallTimeoutMs } : {}),
+    ...(raw.strictMcpConfig !== undefined ? { strictMcpConfig: raw.strictMcpConfig } : {}),
+    ...(raw.providerConfig !== undefined ? { providerConfig: raw.providerConfig } : {}),
+  };
+}
+
+/**
+ * Like {@link agentRecordFragment}, plus the top-level `claude.model` handling: the model
+ * setting pins the `model` key of the record's provider config; an explicit `model` key
+ * inside a configured provider config takes precedence.
+ */
+function claudeRecordFragment(base: AgentConfig, raw: ClaudeRaw): Partial<AgentConfig> {
+  const fragment = agentRecordFragment(raw);
+  if (raw.model === undefined && raw.providerConfig === undefined) return fragment;
+  const baseModel = base.providerConfig?.model;
+  const model = raw.model ?? baseModel;
+  fragment.providerConfig = raw.providerConfig
+    ? { ...(model !== undefined ? { model } : {}), ...raw.providerConfig }
+    : { ...base.providerConfig, ...(model !== undefined ? { model } : {}) };
+  return fragment;
+}
+
 function parseAgents(
   raw: AgentsRaw,
-  codex: CodexSettings,
-  claude: ClaudeSettings,
+  legacyOverrides: Record<string, Partial<AgentConfig>>,
 ): Record<string, AgentConfig> {
   const { timeoutDefaults, records } = parseAgentsRaw(raw);
+  const base = defaultAgentRecords();
+  for (const [kind, fragment] of Object.entries(legacyOverrides)) {
+    const record = base[kind];
+    if (record) base[kind] = { ...record, ...fragment };
+  }
   // TODO: Remove legacy top-level codex/claude timeout fallbacks after configs use shared agents-level timeout defaults.
-  const baseAgents = withAgentTimeoutDefaults(defaultAgentRecords(codex, claude), timeoutDefaults);
+  const baseAgents = withAgentTimeoutDefaults(base, timeoutDefaults);
   const agents = cloneAgentRecords(baseAgents);
   const claudeDefaults = baseAgents.claude!;
   for (const [name, value] of Object.entries(records)) {
     const normalized = name.trim();
     if (!normalized) throw new Error("agents names must not be blank");
     const recordRaw = asRecord(value, `agents.${normalized}`);
-    const executor = recordRaw.executor;
-    if (executor !== undefined && executor !== "acp") {
-      throw new Error(`unsupported agents.${normalized}.executor: ${JSON.stringify(executor)}`);
-    }
-    const parsed = parseAgentRecordSchema(
-      { ...recordRaw, executor: "acp" },
-      `agents.${normalized}`,
-    );
+    const parsed = parseAgentRecordSchema(recordRaw, `agents.${normalized}`);
     const defaults = baseAgents[normalized] ?? customAgentDefaultsForBridge(parsed, claudeDefaults);
     agents[normalized] = parseAgent(normalized, parsed, defaults);
   }
@@ -430,7 +382,7 @@ function withAgentTimeoutDefaults(
 }
 
 function customAgentDefaultsForBridge(
-  raw: AcpAgentRecordRaw,
+  raw: AgentRecordRaw,
   claudeDefaults: AgentConfig,
 ): AgentConfig {
   const bridgeCommand = raw.bridgeCommand ?? raw.command ?? claudeDefaults.bridgeCommand;
@@ -443,15 +395,15 @@ function customAgentDefaultsForBridge(
 }
 
 function parseAgentRecordSchema(raw: Record<string, unknown>, label: string) {
-  const result = acpAgentRecordSchema.safeParse(raw);
+  const result = agentRecordSchema.safeParse(raw);
   if (result.success) return result.data;
   throw new Error(configErrorMessage(result.error, label));
 }
 
-function parseAgent(kind: AgentKind, raw: AcpAgentRecordRaw, defaults: AgentConfig): AgentConfig {
+function parseAgent(kind: AgentKind, raw: AgentRecordRaw, defaults: AgentConfig): AgentConfig {
   const bridgeCommand = raw.bridgeCommand ?? raw.command ?? defaults.bridgeCommand;
   return {
-    executor: "acp",
+    executor: raw.executor ?? defaults.executor,
     bridgeCommand,
     usageAccounting: raw.usageAccounting ?? inferUsageAccounting(kind, bridgeCommand),
     providerConfig: raw.providerConfig ?? defaults.providerConfig,
@@ -471,55 +423,10 @@ function isClaudeCompatibleBridgeCommand(bridgeCommand: string): boolean {
   return /(^|\s|\/)claude-agent-acp(\s|$)/.test(bridgeCommand);
 }
 
-function applyKnownAgentRecords(settings: Settings): void {
-  const codex = settings.agents.codex;
-  if (codex?.executor === "acp") {
-    settings.codex = {
-      command: codex.bridgeCommand,
-      turnTimeoutMs: codex.turnTimeoutMs,
-      stallTimeoutMs: codex.stallTimeoutMs,
-    };
-  }
-
-  const claude = settings.agents.claude;
-  if (claude?.executor === "acp") {
-    settings.claude = {
-      command: claude.bridgeCommand,
-      model: settings.claude.model,
-      turnTimeoutMs: claude.turnTimeoutMs,
-      stallTimeoutMs: claude.stallTimeoutMs,
-      strictMcpConfig: claude.strictMcpConfig ?? settings.claude.strictMcpConfig,
-      providerConfig: claude.providerConfig ?? settings.claude.providerConfig,
-    };
-  }
-}
-
-function parseCodex(defaults: CodexSettings, codexRaw: CodexRaw): CodexSettings {
-  return {
-    command: codexRaw.command ?? defaults.command,
-    turnTimeoutMs: codexRaw.turnTimeoutMs ?? defaults.turnTimeoutMs,
-    stallTimeoutMs: codexRaw.stallTimeoutMs ?? defaults.stallTimeoutMs,
-  };
-}
-
-function parseClaude(defaults: ClaudeSettings, claudeRaw: ClaudeRaw): ClaudeSettings {
-  const model = claudeRaw.model ?? defaults.model;
-  // The model setting pins the `model` key of the provider config; an explicit `model` key
-  // inside a configured provider config takes precedence.
-  const providerConfig = claudeRaw.providerConfig
-    ? { model, ...claudeRaw.providerConfig }
-    : { ...defaults.providerConfig, model };
-  return {
-    command: claudeRaw.command ?? defaults.command,
-    model,
-    turnTimeoutMs: claudeRaw.turnTimeoutMs ?? defaults.turnTimeoutMs,
-    stallTimeoutMs: claudeRaw.stallTimeoutMs ?? defaults.stallTimeoutMs,
-    strictMcpConfig: claudeRaw.strictMcpConfig ?? defaults.strictMcpConfig,
-    providerConfig,
-  };
-}
-
-function parseStatusOverrides(raw: StatusOverridesRaw): Map<string, PartialRuntimeSettings> {
+function parseStatusOverrides(
+  raw: StatusOverridesRaw,
+  baseAgents: Record<string, AgentConfig>,
+): Map<string, PartialRuntimeSettings> {
   const overrides = new Map<string, PartialRuntimeSettings>();
 
   for (const [stateName, value] of Object.entries(raw)) {
@@ -528,8 +435,8 @@ function parseStatusOverrides(raw: StatusOverridesRaw): Map<string, PartialRunti
 
     const next: PartialRuntimeSettings = {};
     if (value.agent !== undefined) next.agent = parsePartialAgent(value.agent);
-    if (value.codex !== undefined) next.codex = parsePartialCodex(value.codex);
-    if (value.claude !== undefined) next.claude = parsePartialClaude(value.claude);
+    const agents = parseStatusOverrideAgents(normalizedState, value, baseAgents);
+    if (Object.keys(agents).length > 0) next.agents = agents;
     overrides.set(normalizedState, next);
   }
 
@@ -546,23 +453,48 @@ function parsePartialAgent(raw: Partial<AgentRaw>): Partial<AgentSettings> {
   return next;
 }
 
-function parsePartialCodex(raw: Partial<CodexRaw>): Partial<CodexSettings> {
-  const next: Partial<CodexSettings> = {};
-  if (raw.command !== undefined) next.command = raw.command;
-  if (raw.turnTimeoutMs !== undefined) next.turnTimeoutMs = raw.turnTimeoutMs;
-  if (raw.stallTimeoutMs !== undefined) next.stallTimeoutMs = raw.stallTimeoutMs;
-  return next;
+/**
+ * Collect per-kind agent record overrides for one state: the explicit `agents:` map plus
+ * the legacy `codex:` / `claude:` sugar sections, all normalized into agent-record fields.
+ */
+function parseStatusOverrideAgents(
+  state: string,
+  value: StatusOverridesRaw[string],
+  baseAgents: Record<string, AgentConfig>,
+): Record<string, Partial<AgentConfig>> {
+  const agents: Record<string, Partial<AgentConfig>> = {};
+  for (const [kind, recordRaw] of Object.entries(value.agents ?? {})) {
+    const normalizedKind = kind.trim();
+    if (!normalizedKind) throw new Error("status_overrides agents names must not be blank");
+    const result = agentRecordOverrideSchema.safeParse(recordRaw);
+    if (!result.success) {
+      throw new Error(
+        configErrorMessage(result.error, `status_overrides.${state}.agents.${normalizedKind}`),
+      );
+    }
+    agents[normalizedKind] = agentRecordOverrideFragment(result.data);
+  }
+  if (value.codex !== undefined) {
+    agents.codex = { ...agentRecordFragment(value.codex), ...agents.codex };
+  }
+  if (value.claude !== undefined) {
+    const fragment = agentRecordFragment(value.claude);
+    // A model override re-pins the provider config unless the override supplies its own.
+    const base = baseAgents.claude;
+    if (value.claude.model !== undefined && value.claude.providerConfig === undefined && base) {
+      fragment.providerConfig = { ...base.providerConfig, model: value.claude.model };
+    }
+    agents.claude = { ...fragment, ...agents.claude };
+  }
+  return agents;
 }
 
-function parsePartialClaude(raw: Partial<ClaudeRaw>): Partial<ClaudeSettings> {
-  const next: Partial<ClaudeSettings> = {};
-  if (raw.command !== undefined) next.command = raw.command;
-  if (raw.model !== undefined) next.model = raw.model;
-  if (raw.strictMcpConfig !== undefined) next.strictMcpConfig = raw.strictMcpConfig;
-  if (raw.turnTimeoutMs !== undefined) next.turnTimeoutMs = raw.turnTimeoutMs;
-  if (raw.stallTimeoutMs !== undefined) next.stallTimeoutMs = raw.stallTimeoutMs;
-  if (raw.providerConfig !== undefined) next.providerConfig = raw.providerConfig;
-  return next;
+function agentRecordOverrideFragment(raw: AgentRecordOverrideRaw): Partial<AgentConfig> {
+  return {
+    ...agentRecordFragment(raw),
+    ...(raw.bridgeCommand !== undefined ? { bridgeCommand: raw.bridgeCommand } : {}),
+    ...(raw.usageAccounting !== undefined ? { usageAccounting: raw.usageAccounting } : {}),
+  };
 }
 
 function cloneSettings(settings: Settings): Settings {
@@ -575,8 +507,6 @@ function cloneSettings(settings: Settings): Settings {
     hooks: { ...settings.hooks },
     agent: { ...settings.agent },
     agents: cloneAgentRecords(settings.agents),
-    codex: { ...settings.codex },
-    claude: { ...settings.claude },
     observability: { ...settings.observability },
     server: { ...settings.server },
     logging: { ...settings.logging },
@@ -584,54 +514,9 @@ function cloneSettings(settings: Settings): Settings {
   };
 }
 
-function applyStateBackendOverridesToAgentRecords(
-  settings: Settings,
-  override: PartialRuntimeSettings,
-): void {
-  if (override.codex) {
-    const codex = settings.agents.codex;
-    if (codex) {
-      settings.agents.codex = {
-        ...codex,
-        ...(override.codex.command !== undefined ? { bridgeCommand: settings.codex.command } : {}),
-        ...(override.codex.turnTimeoutMs !== undefined
-          ? { turnTimeoutMs: settings.codex.turnTimeoutMs }
-          : {}),
-        ...(override.codex.stallTimeoutMs !== undefined
-          ? { stallTimeoutMs: settings.codex.stallTimeoutMs }
-          : {}),
-      };
-    }
-  }
-
-  if (override.claude) {
-    const claude = settings.agents.claude;
-    if (claude) {
-      settings.agents.claude = {
-        ...claude,
-        ...(override.claude.command !== undefined
-          ? { bridgeCommand: settings.claude.command }
-          : {}),
-        ...(override.claude.turnTimeoutMs !== undefined
-          ? { turnTimeoutMs: settings.claude.turnTimeoutMs }
-          : {}),
-        ...(override.claude.stallTimeoutMs !== undefined
-          ? { stallTimeoutMs: settings.claude.stallTimeoutMs }
-          : {}),
-        ...(override.claude.strictMcpConfig !== undefined
-          ? { strictMcpConfig: settings.claude.strictMcpConfig }
-          : {}),
-        ...(override.claude.providerConfig !== undefined || override.claude.model !== undefined
-          ? { providerConfig: settings.claude.providerConfig }
-          : {}),
-      };
-    }
-  }
-}
-
 /**
- * Deep-copy mutable tracker collections (dispatch and state lists) so per-issue-state clones
- * cannot mutate the shared base config.
+ * Deep-copy mutable tracker collections (dispatch, state lists, provider options) so
+ * per-issue-state clones cannot mutate the shared base config.
  */
 function cloneTracker(tracker: TrackerSettings): TrackerSettings {
   return {
@@ -639,16 +524,7 @@ function cloneTracker(tracker: TrackerSettings): TrackerSettings {
     dispatch: { ...tracker.dispatch },
     activeStates: [...tracker.activeStates],
     terminalStates: [...tracker.terminalStates],
-    projectSlugs: tracker.projectSlugs ? [...tracker.projectSlugs] : undefined,
-    projectLabels: tracker.projectLabels ? [...tracker.projectLabels] : undefined,
-    projectKeys: tracker.projectKeys ? [...tracker.projectKeys] : undefined,
-    mcp: tracker.mcp
-      ? {
-          ...tracker.mcp,
-          headers: tracker.mcp.headers ? { ...tracker.mcp.headers } : undefined,
-          tools: tracker.mcp.tools ? { ...tracker.mcp.tools } : undefined,
-        }
-      : undefined,
+    options: structuredClone(tracker.options),
   };
 }
 
@@ -674,10 +550,10 @@ function parseWorkflowConfig(raw: Record<string, unknown>): WorkflowConfigRaw {
   throw new Error(configErrorMessage(result.error));
 }
 
-function trackerKindValue(value: unknown, label: string): TrackerKind {
-  if (typeof value !== "string") throw new Error(`${label} must be a string`);
-  if (isOneOf(value, TRACKER_KINDS)) return value;
-  throw new Error(`unsupported ${label}: ${value}`);
+function trackerKindValue(value: string | null | undefined): string | undefined {
+  if (value === undefined || value === null) return undefined;
+  const kind = value.trim();
+  return kind === "" ? undefined : kind;
 }
 
 function normalizeOnlyRoutes(routes: string[]): string[] {

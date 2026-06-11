@@ -2,6 +2,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 import { test, vi } from "vitest";
+import { acpExecutorProvider } from "@symphony/acp";
+import { AgentExecutorRegistry } from "@symphony/agent-sdk";
 import {
   buildPrompt,
   continuationPrompt,
@@ -18,8 +20,23 @@ import {
   shellEscape,
   validateWorkspaceCwd,
 } from "@symphony/cli";
+import type { Settings } from "@symphony/cli";
 import type { ResumeState } from "@symphony/resume-state";
 import { assert, sampleIssue, tempDir, writeExecutable } from "@symphony/test-utils";
+
+// Private executor registry standing in for the CLI composition root: attempts resolve
+// the ACP executor through an explicit adapter instead of the process-default registry.
+const executors = new AgentExecutorRegistry();
+executors.register(acpExecutorProvider);
+
+const executorAdapters = {
+  executorFactory: async (settings: Settings) => {
+    const kind = settings.agent.kind;
+    const agent = settings.agents[kind];
+    if (!agent) throw new Error(`agents.${kind} is required`);
+    return executors.require(agent.executor).createExecutor(kind, settings);
+  },
+};
 
 function resumeKey(workspace: string, workerHost?: string | null): string {
   return `${workerHost ?? "local"}\0${workspace}`;
@@ -361,7 +378,11 @@ new acp.AgentSideConnection((connection) => new FakeAgent(connection), stream);
     settings,
   };
 
-  const result = await runAgentAttempt({ issue: sampleIssue, workflow });
+  const result = await runAgentAttempt({
+    issue: sampleIssue,
+    workflow,
+    adapters: executorAdapters,
+  });
 
   assert.equal(result.turnCount, 1);
   assert.deepEqual((await fs.readFile(hookLog, "utf8")).trim().split("\n"), [
@@ -430,10 +451,11 @@ new acp.AgentSideConnection((connection) => new FakeAgent(connection), stream);
     settings,
   };
 
-  const first = await runAgentAttempt({ issue: sampleIssue, workflow });
+  const first = await runAgentAttempt({ issue: sampleIssue, workflow, adapters: executorAdapters });
   const second = await runAgentAttempt({
     issue: { ...sampleIssue, identifier: "MT-77" },
     workflow,
+    adapters: executorAdapters,
   });
 
   const canonicalRoot = await fs.realpath(sharedRoot);
@@ -528,7 +550,7 @@ new acp.AgentSideConnection((connection) => new FakeAgent(connection), stream);
     issue: sampleIssue,
     workflow,
     fetchIssue: async () => sampleIssue,
-    adapters: resumeStore.adapters,
+    adapters: { ...resumeStore.adapters, ...executorAdapters },
   });
 
   const resume = resumeStore.read(result.workspace);
@@ -601,7 +623,7 @@ new acp.AgentSideConnection((connection) => new FakeAgent(connection), stream);
     issue: sampleIssue,
     workflow,
     workerHost: "worker-01:2200",
-    adapters: resumeStore.adapters,
+    adapters: { ...resumeStore.adapters, ...executorAdapters },
   });
 
   assert.equal(
@@ -712,6 +734,7 @@ new acp.AgentSideConnection((connection) => new FakeAgent(connection), stream);
     workflow,
     onUpdate: (update) => updates.push(`${update.type}:${String(update.message ?? "")}`),
     adapters: {
+      ...executorAdapters,
       readResumeState: async () =>
         ({ status: "error", reason: "resume_state_decode_failed" }) as const,
       writeResumeState: async () => {},
@@ -781,7 +804,12 @@ new acp.AgentSideConnection((connection) => new FakeAgent(connection), stream);
   ]);
 
   await assert.rejects(
-    () => runAgentAttempt({ issue: sampleIssue, workflow, adapters: resumeStore.adapters }),
+    () =>
+      runAgentAttempt({
+        issue: sampleIssue,
+        workflow,
+        adapters: { ...resumeStore.adapters, ...executorAdapters },
+      }),
     /timed out/,
   );
   assert.equal(resumeStore.read(workspace)?.resumeId, "thread-stale");

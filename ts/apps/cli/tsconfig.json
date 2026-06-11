@@ -17,6 +17,9 @@
       "path": "../../packages/agent-runner"
     },
     {
+      "path": "../../packages/agent-sdk"
+    },
+    {
       "path": "../../packages/cli-kit"
     },
     {
@@ -35,13 +38,13 @@
       "path": "../../packages/issue"
     },
     {
-      "path": "../../packages/jira-tracker"
+      "path": "../../extensions/jira-tracker"
     },
     {
-      "path": "../../packages/linear-tracker"
+      "path": "../../extensions/linear-tracker"
     },
     {
-      "path": "../../packages/local-tracker"
+      "path": "../../extensions/local-tracker"
     },
     {
       "path": "../../packages/log-file"
@@ -50,7 +53,7 @@
       "path": "../../packages/mcp"
     },
     {
-      "path": "../../packages/memory-tracker"
+      "path": "../../extensions/memory-tracker"
     },
     {
       "path": "../../packages/orchestrator"
@@ -83,7 +86,13 @@
       "path": "../../packages/ssh"
     },
     {
+      "path": "../../packages/tool-sdk"
+    },
+    {
       "path": "../../packages/traceviz-emitter"
+    },
+    {
+      "path": "../../packages/tracker-sdk"
     },
     {
       "path": "../../packages/tui"

@@ -14,16 +14,31 @@
       "path": "../domain"
     },
     {
-      "path": "../issue"
-    },
-    {
-      "path": "../jira-tracker"
-    },
-    {
-      "path": "../local-tracker"
+      "path": "../tool-sdk"
     },
     {
       "path": "../worker-host-pool"
+    },
+    {
+      "path": "../config"
+    },
+    {
+      "path": "../../extensions/jira-tracker"
+    },
+    {
+      "path": "../../extensions/linear-tracker"
+    },
+    {
+      "path": "../../extensions/local-tracker"
+    },
+    {
+      "path": "../../extensions/memory-tracker"
+    },
+    {
+      "path": "../test-utils"
+    },
+    {
+      "path": "../tracker-sdk"
     }
   ]
 }

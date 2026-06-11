@@ -11,13 +11,20 @@
   "dependencies": {
     "@agentclientprotocol/sdk": "catalog:",
     "@hono/node-server": "catalog:",
+    "@symphony/domain": "workspace:*",
+    "@symphony/tool-sdk": "workspace:*",
+    "@symphony/worker-host-pool": "workspace:*",
     "hono": "catalog:",
     "ts-pattern": "catalog:",
-    "zod": "catalog:",
-    "@symphony/domain": "workspace:*",
-    "@symphony/issue": "workspace:*",
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@symphony/config": "workspace:*",
     "@symphony/jira-tracker": "workspace:*",
+    "@symphony/linear-tracker": "workspace:*",
     "@symphony/local-tracker": "workspace:*",
-    "@symphony/worker-host-pool": "workspace:*"
+    "@symphony/memory-tracker": "workspace:*",
+    "@symphony/test-utils": "workspace:*",
+    "@symphony/tracker-sdk": "workspace:*"
   }
 }

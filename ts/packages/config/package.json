@@ -9,8 +9,11 @@
     ".": "./dist/index.js"
   },
   "dependencies": {
+    "@symphony/agent-sdk": "workspace:*",
+    "@symphony/domain": "workspace:*",
+    "@symphony/tool-sdk": "workspace:*",
+    "@symphony/tracker-sdk": "workspace:*",
     "execa": "catalog:",
-    "zod": "catalog:",
-    "@symphony/domain": "workspace:*"
+    "zod": "catalog:"
   }
 }

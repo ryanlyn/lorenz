@@ -67,7 +67,7 @@ test("ACP executor starts a session, translates updates, approves permissions, a
   const newSession = traceEvents.find((event) => event.method === "newSession");
   assert.ok(newSession);
   assert.match(JSON.stringify(newSession.params), /"type":"http"/);
-  assert.match(JSON.stringify(newSession.params), /"name":"symphony_linear"/);
+  assert.match(JSON.stringify(newSession.params), /"name":"symphony_tracker"/);
   assert.match(
     JSON.stringify(newSession.params),
     /"headers":\[\{"name":"Authorization","value":"Bearer /,

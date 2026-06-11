@@ -4,6 +4,8 @@ import { parseConfig } from "@symphony/config";
 import { afterEach, beforeEach, test, vi } from "vitest";
 import { assert, tempDir } from "@symphony/test-utils";
 
+import type * as daemonModule from "../src/daemon.js";
+
 const mocks = vi.hoisted(() => ({
   loadWorkflow: vi.fn(),
   configureLogFile: vi.fn(async () => {}),
@@ -57,6 +59,7 @@ vi.mock("@symphony/workflow", () => ({
 
 vi.mock("@symphony/log-file", () => ({
   configureLogFile: mocks.configureLogFile,
+  appendLogEvent: vi.fn(),
 }));
 
 vi.mock("@symphony/server", () => ({
@@ -82,7 +85,10 @@ vi.mock("@symphony/traceviz-emitter", () => ({
   },
 }));
 
-vi.mock("../src/daemon.js", () => ({
+// Keep the real registerBuiltinBackends so runDaemon populates the default registries the
+// same way the CLI entrypoints do; only the runtime-facing adapters are stubbed.
+vi.mock("../src/daemon.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof daemonModule>()),
   createTrackerClient: mocks.createTrackerClient,
   runAgentAttempt: mocks.runAgentAttempt,
   runtimeAdapters: {},

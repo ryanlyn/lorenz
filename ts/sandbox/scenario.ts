@@ -1,10 +1,9 @@
+import { acpExecutorProvider } from "@symphony/acp";
+import { defaultAgentExecutorRegistry } from "@symphony/agent-sdk";
+import { registerMemoryTracker } from "@symphony/memory-tracker";
 import { SymphonyRuntime } from "@symphony/runtime";
 import type { Issue, IssueStateType, Settings, WorkflowDefinition } from "@symphony/cli";
-import type {
-  RuntimeEvent,
-  RuntimeSnapshot,
-  SymphonyRuntimeOptions,
-} from "@symphony/runtime";
+import type { RuntimeEvent, RuntimeSnapshot, SymphonyRuntimeOptions } from "@symphony/runtime";
 
 import { ChaosLinearClient, type ChaosConfig } from "./chaos-client.js";
 import { createFakeClock, type FakeClock } from "./fake-clock.js";
@@ -62,11 +61,25 @@ export interface SandboxScenario {
 }
 
 /**
+ * The sandbox harness is its own composition root: the runtime validates dispatch
+ * config against the process-default registries on every poll. Scenario settings
+ * always dispatch on the memory tracker, so that backend and the ACP executor must
+ * be registered before a scenario runs. Idempotent.
+ */
+function registerSandboxBackends(): void {
+  registerMemoryTracker();
+  if (defaultAgentExecutorRegistry.get(acpExecutorProvider.executor) === undefined) {
+    defaultAgentExecutorRegistry.register(acpExecutorProvider);
+  }
+}
+
+/**
  * Run a sandbox scenario: sets up the runtime with the chaos client and fake
  * runner, executes poll ticks, collects all events and snapshots, and returns
  * the full history.
  */
 export async function runScenario(scenario: SandboxScenario): Promise<SandboxResult> {
+  registerSandboxBackends();
   const settings = makeSettings(scenario.settingsOverrides ?? {});
   const client = new ChaosLinearClient(scenario.issues, scenario.chaosConfig);
   const fakeClock = (scenario.clockMode ?? "fake") === "fake" ? createFakeClock() : undefined;
@@ -103,7 +116,9 @@ export async function runScenario(scenario: SandboxScenario): Promise<SandboxRes
     snapshots.push(snapshot);
     for (const event of snapshot.recentEvents) {
       if (
-        !events.some((e) => e.at === event.at && e.type === event.type && e.message === event.message)
+        !events.some(
+          (e) => e.at === event.at && e.type === event.type && e.message === event.message,
+        )
       ) {
         events.push(event);
       }
@@ -152,11 +167,15 @@ export async function runScenario(scenario: SandboxScenario): Promise<SandboxRes
             timeoutMs: scenarioPollTimeoutMs(settings, waitForRuns),
           });
         } else {
-          await pollOnceWithScenarioTimeout(runtime, { waitForRuns }, {
-            tick,
-            timeoutMs: scenarioPollTimeoutMs(settings, waitForRuns),
-            lastActivityAt: () => lastAgentActivityAt,
-          });
+          await pollOnceWithScenarioTimeout(
+            runtime,
+            { waitForRuns },
+            {
+              tick,
+              timeoutMs: scenarioPollTimeoutMs(settings, waitForRuns),
+              lastActivityAt: () => lastAgentActivityAt,
+            },
+          );
         }
       } catch (err) {
         errors.push(err instanceof Error ? err : new Error(String(err)));

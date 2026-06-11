@@ -17,7 +17,7 @@ import type {
 } from "@symphony/traceviz-server";
 import type { WSContext } from "hono/ws";
 
-import type { RuntimeServerSource } from "./index.js";
+import type { RuntimeServerSource } from "./source.js";
 
 type WsServerMessage =
   | { type: "init"; tickets: TicketInfo[] }

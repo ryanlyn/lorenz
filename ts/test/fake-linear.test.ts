@@ -3,9 +3,20 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, test } from "vitest";
 import { setupServer } from "msw/node";
 import { executeTool, LinearClient, parseConfig } from "@symphony/cli";
+import { registerLinearTracker } from "@symphony/linear-tracker";
 import { assert, tempDir } from "@symphony/test-utils";
+import { ToolRegistry } from "@symphony/tool-sdk";
+import { createTrackerToolProvider, TrackerRegistry } from "@symphony/tracker-sdk";
 
 import { createFakeLinearHandlers } from "./fake-linear-server.js";
+
+// Private registries with the linear backend and the neutral tracker pack, so config
+// parsing applies the Linear provider's aliases/validation and tool calls mount the
+// default packs.
+const trackers = new TrackerRegistry();
+const tools = new ToolRegistry();
+registerLinearTracker({ trackers, tools });
+tools.register(createTrackerToolProvider(trackers));
 
 const fakeViewer = { id: "viewer-001", name: "Fake User", email: "fake@example.com" };
 const fakeProject = {
@@ -49,6 +60,8 @@ describe("fake Linear MSW tests", () => {
         },
       },
       { LINEAR_API_KEY: "fake-api-key" },
+      {},
+      trackers,
     );
 
     const client = new LinearClient(settings);
@@ -119,6 +132,8 @@ describe("fake Linear MSW tests", () => {
         variables: { ids: [created.id], first: 1 },
       },
       settings,
+      fetch,
+      tools,
     );
     assert.deepEqual(
       { success: dynamicToolResult.success, error: dynamicToolResult.error },
@@ -126,7 +141,7 @@ describe("fake Linear MSW tests", () => {
     );
     assert.match(JSON.stringify(dynamicToolResult.result), new RegExp(created.identifier));
 
-    const unsupportedTool = await executeTool("not_a_real_tool", {}, settings);
+    const unsupportedTool = await executeTool("not_a_real_tool", {}, settings, fetch, tools);
     assert.equal(unsupportedTool.success, false);
     assert.match(unsupportedTool.error ?? "", /Unsupported tool/);
 

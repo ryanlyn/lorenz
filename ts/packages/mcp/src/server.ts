@@ -4,6 +4,7 @@ import { Hono, type Context } from "hono";
 import { match } from "ts-pattern";
 import { z } from "zod";
 import { httpUrlHost, isRecord, normalizeHttpBindHost, type Settings } from "@symphony/domain";
+import { defaultToolRegistry, type ToolRegistry } from "@symphony/tool-sdk";
 
 import { createMcpAuthScope, mcpAuthScopeForSettings, validMcpToken } from "./auth.js";
 import { executeTool, toolSpecs } from "./tools.js";
@@ -12,6 +13,8 @@ export interface ObservabilityServerOptions {
   host: string;
   port: number;
   authScope?: string | undefined;
+  /** Tool packs available to this endpoint; defaults to the process-wide registry. */
+  tools?: ToolRegistry | undefined;
 }
 
 export interface ObservabilityServerHandle {
@@ -24,6 +27,8 @@ export interface ObservabilityServerHandle {
 
 export interface ClaudeMcpMountOptions {
   authScope?: string | undefined;
+  /** Tool packs available to this endpoint; defaults to the process-wide registry. */
+  tools?: ToolRegistry | undefined;
 }
 
 export async function startClaudeMcpServer(
@@ -37,7 +42,7 @@ export async function startClaudeMcpServer(
     (options.port > 0
       ? mcpAuthScopeForSettings(settings, bindHost, options.port)
       : createMcpAuthScope());
-  mountClaudeMcp(app, settings, { authScope });
+  mountClaudeMcp(app, settings, { authScope, tools: options.tools });
   app.notFound((c) =>
     c.req.method === "GET"
       ? errorResponse(404, "not_found", "Route not found")
@@ -70,7 +75,7 @@ export function mountClaudeMcp(
     }
     await next();
   });
-  app.post("/claude-mcp", async (c) => handleClaudeMcp(settings, c));
+  app.post("/claude-mcp", async (c) => handleClaudeMcp(settings, c, options.tools));
   app.all("/claude-mcp", () => errorResponse(405, "method_not_allowed", "Method not allowed"));
 }
 
@@ -102,7 +107,11 @@ async function startHonoServer(
   };
 }
 
-async function handleClaudeMcp(settings: Settings, c: Context): Promise<Response> {
+async function handleClaudeMcp(
+  settings: Settings,
+  c: Context,
+  tools?: ToolRegistry,
+): Promise<Response> {
   let body: Record<string, unknown>;
   try {
     body = await requestJson(c);
@@ -117,7 +126,7 @@ async function handleClaudeMcp(settings: Settings, c: Context): Promise<Response
     );
   }
 
-  const mcpResponse = await claudeMcpResponse(settings, body);
+  const mcpResponse = await claudeMcpResponse(settings, body, tools);
   if (mcpResponse === null) return new Response("", { status: 204 });
   return jsonResponse(mcpResponse);
 }
@@ -136,6 +145,7 @@ function authorizedMcpHeader(authorization: string | undefined, authScope: strin
 export async function claudeMcpResponse(
   settings: Settings,
   body: Record<string, unknown>,
+  tools: ToolRegistry = defaultToolRegistry,
 ): Promise<Record<string, unknown> | null> {
   const method = typeof body.method === "string" ? body.method : "";
   const id = body.id ?? null;
@@ -154,11 +164,21 @@ export async function claudeMcpResponse(
         },
       };
     })
-    .with("tools/list", () => ({ jsonrpc: "2.0", id, result: { tools: toolSpecs(settings) } }))
+    .with("tools/list", () => ({
+      jsonrpc: "2.0",
+      id,
+      result: { tools: toolSpecs(settings, tools) },
+    }))
     .with("tools/call", async () => {
       const parsed = mcpToolsCallParamsSchema.safeParse(body.params);
       if (!parsed.success) return jsonRpcError(id, -32602, "Invalid params");
-      const result = await executeTool(parsed.data.name, parsed.data.arguments, settings);
+      const result = await executeTool(
+        parsed.data.name,
+        parsed.data.arguments,
+        settings,
+        fetch,
+        tools,
+      );
       const payload = result.success
         ? (result.result ?? {})
         : (result.result ?? { error: { message: result.error ?? "dynamic tool failed" } });

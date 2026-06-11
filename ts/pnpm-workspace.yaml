@@ -1,5 +1,6 @@
 packages:
   - "packages/*"
+  - "extensions/*"
   - "apps/*"
   - "vendor/*"
 allowBuilds:
@@ -28,6 +29,7 @@ catalog:
   eslint: "^10.3.0"
   eslint-plugin-import-x: "^4.12.2"
   commander: "^14.0.3"
+  dependency-cruiser: "^17.4.3"
   execa: "^9.6.1"
   fast-check: "^4.8.0"
   hono: "^4.12.18"

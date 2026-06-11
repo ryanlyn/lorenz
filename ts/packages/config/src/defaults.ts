@@ -1,6 +1,6 @@
 import { homedir } from "node:os";
 
-import type { AgentConfig, ClaudeSettings, CodexSettings, Settings } from "@symphony/domain";
+import type { AgentConfig, Settings } from "@symphony/domain";
 
 import { joinPath } from "./leaf-utils.js";
 
@@ -14,28 +14,9 @@ const DEFAULT_CLAUDE_MODEL = "claude-opus-4-6[1m]";
 export const defaultSettings = (options: DefaultSettingsOptions = {}): Settings => {
   const tmpdir = options.tmpdir ?? "/tmp";
   const workspaceRoot = joinPath(tmpdir, "symphony_workspaces");
-  const codex: CodexSettings = {
-    command: "codex-acp",
-    turnTimeoutMs: 3_600_000,
-    stallTimeoutMs: 300_000,
-  };
-  const claude: ClaudeSettings = {
-    command: "claude-agent-acp",
-    model: DEFAULT_CLAUDE_MODEL,
-    turnTimeoutMs: 3_600_000,
-    stallTimeoutMs: 300_000,
-    strictMcpConfig: true,
-    providerConfig: {
-      model: DEFAULT_CLAUDE_MODEL,
-      permissions: { defaultMode: "dontAsk" },
-    },
-  };
   return {
     tracker: {
       kind: undefined,
-      endpoint: "https://api.linear.app/graphql",
-      path: ".symphony/local",
-      idPrefix: "BOARD-",
       activeStates: ["Todo", "In Progress"],
       terminalStates: ["Closed", "Cancelled", "Canceled", "Duplicate", "Done"],
       dispatch: {
@@ -43,6 +24,7 @@ export const defaultSettings = (options: DefaultSettingsOptions = {}): Settings 
         onlyRoutes: null,
         routeLabelPrefix: "Symphony:",
       },
+      options: {},
     },
     polling: { intervalMs: 30_000 },
     workspace: {
@@ -59,9 +41,7 @@ export const defaultSettings = (options: DefaultSettingsOptions = {}): Settings 
       maxRetryBackoffMs: 300_000,
       ensembleSize: 1,
     },
-    agents: defaultAgentRecords(codex, claude),
-    codex,
-    claude,
+    agents: defaultAgentRecords(),
     observability: {
       dashboardEnabled: true,
       refreshMs: 1_000,
@@ -73,26 +53,26 @@ export const defaultSettings = (options: DefaultSettingsOptions = {}): Settings 
   };
 };
 
-export function defaultAgentRecords(
-  codex: Pick<CodexSettings, "command" | "turnTimeoutMs" | "stallTimeoutMs">,
-  claude: ClaudeSettings,
-): Record<string, AgentConfig> {
+export function defaultAgentRecords(): Record<string, AgentConfig> {
   return {
     codex: {
       executor: "acp",
-      bridgeCommand: codex.command,
+      bridgeCommand: "codex-acp",
       usageAccounting: "per-turn",
-      turnTimeoutMs: codex.turnTimeoutMs,
-      stallTimeoutMs: codex.stallTimeoutMs,
+      turnTimeoutMs: 3_600_000,
+      stallTimeoutMs: 300_000,
     },
     claude: {
       executor: "acp",
-      bridgeCommand: claude.command,
+      bridgeCommand: "claude-agent-acp",
       usageAccounting: "per-turn",
-      providerConfig: claude.providerConfig,
-      turnTimeoutMs: claude.turnTimeoutMs,
-      stallTimeoutMs: claude.stallTimeoutMs,
-      strictMcpConfig: claude.strictMcpConfig,
+      providerConfig: {
+        model: DEFAULT_CLAUDE_MODEL,
+        permissions: { defaultMode: "dontAsk" },
+      },
+      turnTimeoutMs: 3_600_000,
+      stallTimeoutMs: 300_000,
+      strictMcpConfig: true,
     },
   };
 }

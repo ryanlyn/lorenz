@@ -17,7 +17,13 @@ export default tseslint.config(
     },
   },
   {
-    files: ["packages/**/*.{ts,tsx}", "apps/**/*.{ts,tsx}", "scripts/**/*.ts", "test/**/*.ts"],
+    files: [
+      "packages/**/*.{ts,tsx}",
+      "extensions/**/*.{ts,tsx}",
+      "apps/**/*.{ts,tsx}",
+      "scripts/**/*.ts",
+      "test/**/*.ts",
+    ],
     plugins: {
       "import-x": importX,
     },
@@ -38,7 +44,7 @@ export default tseslint.config(
     },
   },
   {
-    files: ["packages/*/test/**/*.ts", "apps/*/test/**/*.ts", "test/**/*.ts"],
+    files: ["packages/*/test/**/*.ts", "extensions/*/test/**/*.ts", "apps/*/test/**/*.ts", "test/**/*.ts"],
     ...tseslint.configs.disableTypeChecked,
     rules: {
       ...tseslint.configs.disableTypeChecked.rules,

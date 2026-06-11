@@ -39,11 +39,16 @@ run = "pnpm lint:versions"
 [tasks.agent-settings-policy]
 run = "pnpm agent-settings:check"
 
+[tasks.architecture]
+run = "pnpm architecture:check"
+# dependency-cruiser resolves workspace imports through each package's built dist/.
+depends = ["build"]
+
 [tasks.tsconfig-refs]
 run = "pnpm tsconfig:refs:check"
 
 [tasks.check]
-depends = ["typecheck", "test", "lint", "knip", "lint-versions", "tsconfig-refs", "agent-settings-policy"]
+depends = ["typecheck", "test", "lint", "knip", "lint-versions", "tsconfig-refs", "agent-settings-policy", "architecture"]
 
 [tasks."e2e:setup"]
 run = "pnpm exec playwright install chromium"

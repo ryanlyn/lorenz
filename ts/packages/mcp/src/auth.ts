@@ -18,28 +18,26 @@ export function mcpAuthScopeForSettings(
   const identity = JSON.stringify({
     host,
     port,
+    tools: settings.tools ?? null,
     tracker: {
-      kind: tracker.kind ?? "linear",
-      endpoint: tracker.endpoint,
+      kind: tracker.kind ?? null,
+      endpoint: tracker.endpoint ?? null,
       apiKey: tracker.apiKey ?? null,
-      baseUrl: tracker.baseUrl ?? null,
-      email: tracker.email ?? null,
-      projectSlug: tracker.projectSlug ?? null,
-      projectSlugs: tracker.projectSlugs ?? null,
-      projectLabels: tracker.projectLabels ?? null,
-      projectKeys: tracker.projectKeys ?? null,
-      jql: tracker.jql ?? null,
-      issueType: tracker.issueType ?? null,
-      mcp: tracker.mcp ?? null,
       assignee: tracker.assignee ?? null,
-      path: tracker.path ?? null,
-      idPrefix: tracker.idPrefix ?? null,
+      options: canonicalRecord(tracker.options),
       activeStates: tracker.activeStates,
       terminalStates: tracker.terminalStates,
       dispatch: tracker.dispatch,
     },
   });
   return `mcp:${createHash("sha256").update(identity).digest("base64url")}`;
+}
+
+/** Key-sorted copy of a provider options record so equivalent configs hash identically. */
+function canonicalRecord(record: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(record).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)),
+  );
 }
 
 export function issueMcpToken(scope = defaultMcpAuthScope): string {

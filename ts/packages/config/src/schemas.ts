@@ -86,28 +86,11 @@ const optionalHookScript = z.string().nullable().optional();
 
 const usageAccountingSchema = z.enum(AGENT_USAGE_ACCOUNTING_VALUES);
 
-const trackerMcpToolMapSchema = z
+// The executor selector is open-ended; whether it is supported is decided by the agent
+// executor registry at dispatch validation, not by the schema.
+export const agentRecordSchema = z
   .object({
-    search: z.string().optional(),
-    readIssue: z.string().optional(),
-    updateStatus: z.string().optional(),
-    comment: z.string().optional(),
-    createIssue: z.string().optional(),
-  })
-  .strict();
-
-const trackerMcpRawSchema = z
-  .object({
-    url: z.string().optional(),
-    token: z.string().optional(),
-    headers: z.record(z.string(), z.string()).optional(),
-    tools: trackerMcpToolMapSchema.optional(),
-  })
-  .strict();
-
-export const acpAgentRecordSchema = z
-  .object({
-    executor: z.literal("acp"),
+    executor: z.string().min(1).optional(),
     bridgeCommand: z.string().optional(),
     command: z.string().optional(),
     usageAccounting: usageAccountingSchema.optional(),
@@ -119,23 +102,17 @@ export const acpAgentRecordSchema = z
   })
   .strict();
 
+/** Per-state agent record override: like an agent record, minus the executor selector. */
+export const agentRecordOverrideSchema = agentRecordSchema.omit({ executor: true }).strict();
+
+// Common keys are validated here; any other key in the tracker section is provider-specific
+// and is passed through (`catchall`) to the registered tracker provider's option parser.
 const trackerRawSchema = z
   .object({
     kind: z.string().optional(),
     endpoint: z.string().optional(),
     apiKey: z.string().optional(),
-    baseUrl: z.string().optional(),
-    email: z.string().optional(),
-    projectSlug: z.string().optional(),
-    projectSlugs: z.array(z.string()).optional(),
-    projectLabels: z.array(z.string()).optional(),
-    projectKeys: z.array(z.string()).optional(),
-    jql: z.string().optional(),
-    issueType: z.string().optional(),
-    mcp: trackerMcpRawSchema.optional(),
     assignee: z.string().optional(),
-    path: z.string().optional(),
-    idPrefix: z.string().optional(),
     activeStates: z.array(z.string()).optional(),
     terminalStates: z.array(z.string()).optional(),
     dispatch: z
@@ -147,7 +124,7 @@ const trackerRawSchema = z
       .strict()
       .optional(),
   })
-  .strict();
+  .catchall(z.unknown());
 
 const pollingRawSchema = z.object({ intervalMs: coercedIntervalMs.optional() }).strict();
 const workspaceRawSchema = z
@@ -221,6 +198,7 @@ const partialClaudeRawSchema = claudeRawSchema.partial().strict();
 const statusOverrideRawSchema = z
   .object({
     agent: partialAgentRawSchema.optional(),
+    agents: z.record(z.string(), z.unknown()).optional(),
     codex: partialCodexRawSchema.optional(),
     claude: partialClaudeRawSchema.optional(),
   })
@@ -242,6 +220,7 @@ export const workflowConfigSchema = z.preprocess(
       observability: observabilityRawSchema.optional(),
       server: serverRawSchema.optional(),
       logging: loggingRawSchema.optional(),
+      tools: z.array(z.string()).optional(),
       statusOverrides: z.record(z.string(), statusOverrideRawSchema).optional(),
     })
     .passthrough(),
@@ -256,4 +235,5 @@ export type AgentsRaw = z.infer<typeof agentsRawSchema>;
 export type CodexRaw = z.infer<typeof codexRawSchema>;
 export type ClaudeRaw = z.infer<typeof claudeRawSchema>;
 export type StatusOverridesRaw = NonNullable<WorkflowConfigRaw["statusOverrides"]>;
-export type AcpAgentRecordRaw = z.infer<typeof acpAgentRecordSchema>;
+export type AgentRecordRaw = z.infer<typeof agentRecordSchema>;
+export type AgentRecordOverrideRaw = z.infer<typeof agentRecordOverrideSchema>;

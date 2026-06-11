@@ -19,11 +19,9 @@
     "runs": "node dist/bin/cli.js runs"
   },
   "dependencies": {
-    "commander": "catalog:",
-    "ink": "catalog:",
-    "react": "catalog:",
     "@symphony/acp": "workspace:*",
     "@symphony/agent-runner": "workspace:*",
+    "@symphony/agent-sdk": "workspace:*",
     "@symphony/cli-kit": "workspace:*",
     "@symphony/config": "workspace:*",
     "@symphony/dispatch": "workspace:*",
@@ -46,9 +44,14 @@
     "@symphony/runtime": "workspace:*",
     "@symphony/server": "workspace:*",
     "@symphony/ssh": "workspace:*",
+    "@symphony/tool-sdk": "workspace:*",
     "@symphony/traceviz-emitter": "workspace:*",
+    "@symphony/tracker-sdk": "workspace:*",
     "@symphony/tui": "workspace:*",
     "@symphony/workflow": "workspace:*",
-    "@symphony/workspace": "workspace:*"
+    "@symphony/workspace": "workspace:*",
+    "commander": "catalog:",
+    "ink": "catalog:",
+    "react": "catalog:"
   }
 }

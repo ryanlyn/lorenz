@@ -39,6 +39,7 @@ jobs:
             ts/node_modules
             ts/apps/*/node_modules
             ts/packages/*/node_modules
+            ts/extensions/*/node_modules
           key: ${{ runner.os }}-ts-deps-${{ hashFiles('ts/pnpm-lock.yaml') }}
           restore-keys: |
             ${{ runner.os }}-ts-deps-

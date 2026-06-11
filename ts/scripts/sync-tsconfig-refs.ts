@@ -34,7 +34,7 @@ const dependencySections: DependencySection[] = [
   "optionalDependencies",
 ];
 
-const workspaceProjectRoots = ["packages", "apps"];
+const workspaceProjectRoots = ["packages", "extensions", "apps"];
 const workspaceRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const mode = process.argv.includes("--write") ? "write" : "check";
 

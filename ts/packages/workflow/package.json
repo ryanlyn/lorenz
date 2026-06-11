@@ -9,9 +9,10 @@
     ".": "./dist/index.js"
   },
   "dependencies": {
-    "yaml": "catalog:",
-    "liquidjs": "catalog:",
     "@symphony/config": "workspace:*",
-    "@symphony/domain": "workspace:*"
+    "@symphony/domain": "workspace:*",
+    "@symphony/tracker-sdk": "workspace:*",
+    "liquidjs": "catalog:",
+    "yaml": "catalog:"
   }
 }

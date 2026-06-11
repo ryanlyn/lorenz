@@ -14,6 +14,7 @@ import {
   type Settings,
 } from "@symphony/domain";
 import { createMcpAuthScope, mcpAuthScopeForSettings, mountClaudeMcp } from "@symphony/mcp";
+import type { ToolRegistry } from "@symphony/tool-sdk";
 import { issuePayload, runsPayload, statePayload, type PresenterParams } from "@symphony/presenter";
 import type { RuntimeSnapshot } from "@symphony/runtime-events";
 import type { TraceWatcher } from "@symphony/traceviz-server";
@@ -22,17 +23,12 @@ import { createTraceRoutes } from "./trace-routes.js";
 import { createWsHandler } from "./ws.js";
 import { defaultIssueStorePath, IssueStore } from "./issue-store.js";
 import { decodePathParam, invalidPathParameterError } from "./path-params.js";
+import type { RuntimeServerSource } from "./source.js";
 
 export { defaultIssueStorePath, IssueStore };
 export { startClaudeMcpServer } from "@symphony/mcp";
 export type { IssueRecord } from "./issue-store.js";
-
-export interface RuntimeServerSource {
-  workflow?: { settings?: Settings } | undefined;
-  snapshot(): RuntimeSnapshot;
-  subscribe(listener: (snapshot: RuntimeSnapshot) => void): () => void;
-  requestRefresh(): Record<string, unknown>;
-}
+export type { RuntimeServerSource } from "./source.js";
 
 export interface ObservabilityServerOptions {
   host: string;
@@ -40,6 +36,8 @@ export interface ObservabilityServerOptions {
   traceDir?: string;
   staticDir?: string;
   issueStore?: IssueStore;
+  /** Tool packs served on the Claude MCP mount; defaults to the process-wide registry. */
+  tools?: ToolRegistry;
 }
 
 export interface ObservabilityServerHandle {
@@ -127,7 +125,7 @@ function buildObservabilityApp(
   settings = runtimeSettings(runtime),
 ): BuildResult {
   const app = new Hono();
-  if (settings) mountClaudeMcp(app, settings, { authScope });
+  if (settings) mountClaudeMcp(app, settings, { authScope, tools: options.tools });
 
   // Health endpoint
   app.get("/health", () => jsonResponse({ status: "ok" }));

@@ -34,7 +34,6 @@ export {
   resumeStateMatches,
 } from "@symphony/resume-state";
 export {
-  toolSpecs,
   executeTool,
   issueMcpToken,
   revokeMcpToken,

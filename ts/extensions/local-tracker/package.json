@@ -1,0 +1,18 @@
+{
+  "name": "@symphony/local-tracker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "dependencies": {
+    "@symphony/domain": "workspace:*",
+    "@symphony/issue": "workspace:*",
+    "@symphony/tool-sdk": "workspace:*",
+    "@symphony/tracker-sdk": "workspace:*",
+    "yaml": "catalog:"
+  }
+}
