@@ -38,7 +38,16 @@ export interface WsSetupResult {
  */
 interface ClientState {
   subscribedIssueId: string | null;
-  eventCursor: number;
+  sentEvents: DisplayEvent[];
+}
+
+function findFirstChangedEventIndex(previous: DisplayEvent[], next: DisplayEvent[]): number | null {
+  const commonLength = Math.min(previous.length, next.length);
+  for (let index = 0; index < commonLength; index++) {
+    if (JSON.stringify(previous[index]) !== JSON.stringify(next[index])) return index;
+  }
+
+  return previous.length === next.length ? null : commonLength;
 }
 
 export function createWsHandler(
@@ -79,7 +88,7 @@ export function createWsHandler(
     "/ws",
     upgradeWebSocket(() => ({
       onOpen(_event: unknown, ws: WSContext) {
-        connections.set(ws, { subscribedIssueId: null, eventCursor: 0 });
+        connections.set(ws, { subscribedIssueId: null, sentEvents: [] });
         send(ws, { type: "init", tickets: watcher?.getTickets() ?? [] });
         const state = currentOpsState(runtime);
         if (state) send(ws, { type: "ops_state", state });
@@ -105,7 +114,7 @@ export function createWsHandler(
             }
 
             const events = watcher.getEventsForTicket(message.issueId);
-            clientState.eventCursor = events.length;
+            clientState.sentEvents = events;
             send(ws, { type: "events", issueId: message.issueId, events });
           }
         } catch {
@@ -121,7 +130,6 @@ export function createWsHandler(
   // Wire up the watcher to broadcast trace updates
   watcher?.start((issueId) => {
     const tickets = watcher.getTickets();
-    const totalCount = watcher.getEventCount(issueId);
 
     for (const [ws, clientState] of connections) {
       try {
@@ -129,16 +137,17 @@ export function createWsHandler(
         send(ws, { type: "update", issueId, tickets });
 
         // Send delta events to subscribed clients
-        if (clientState.subscribedIssueId === issueId && totalCount > clientState.eventCursor) {
-          const newEvents = watcher.getEventsSince(issueId, clientState.eventCursor);
-          if (newEvents.length > 0) {
+        if (clientState.subscribedIssueId === issueId) {
+          const events = watcher.getEventsForTicket(issueId);
+          const fromIndex = findFirstChangedEventIndex(clientState.sentEvents, events);
+          if (fromIndex !== null) {
             send(ws, {
               type: "events_append",
               issueId,
-              events: newEvents,
-              fromIndex: clientState.eventCursor,
+              events: events.slice(fromIndex),
+              fromIndex,
             });
-            clientState.eventCursor = totalCount;
+            clientState.sentEvents = events;
           }
         }
       } catch {

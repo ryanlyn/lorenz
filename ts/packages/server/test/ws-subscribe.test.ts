@@ -54,6 +54,79 @@ describe("observability /ws trace subscriptions", () => {
     expect(fake.unsubscribe).toHaveBeenCalledWith("issue-1");
   });
 
+  test("sends a suffix replacement when a display event mutates without growing", async () => {
+    const firstEvent = eventFixture("message", "2026-01-01T00:00:00.000Z", "a");
+    const updatedEvent = eventFixture("message", "2026-01-01T00:00:00.000Z", "ab");
+    const fake = createFakeWatcher([firstEvent]);
+    const server = await startWsTestServer(fake.watcher);
+    const ws = new WebSocket(server.url);
+    const messages: Array<Record<string, unknown>> = [];
+    ws.addEventListener("message", (event) => {
+      messages.push(JSON.parse(String(event.data)) as Record<string, unknown>);
+    });
+    const closed = new Promise<void>((resolve) => ws.addEventListener("close", () => resolve()));
+
+    try {
+      await waitFor(() => messages.some((message) => message.type === "init"));
+
+      ws.send(JSON.stringify({ type: "subscribe", issueId: "issue-1" }));
+      await waitFor(() => messages.some((message) => message.type === "events"));
+
+      fake.setEvents([updatedEvent]);
+      fake.emit();
+
+      await waitFor(() => messages.some((message) => message.type === "events_append"));
+      expect(messages.find((message) => message.type === "events_append")).toMatchObject({
+        type: "events_append",
+        issueId: "issue-1",
+        events: [updatedEvent],
+        fromIndex: 0,
+      });
+      ws.close();
+      await closed;
+    } finally {
+      if (ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.OPEN) ws.close();
+      await server.stop();
+    }
+  });
+
+  test("starts the delta at the first changed event when a mutation and append are batched", async () => {
+    const firstEvent = eventFixture("message", "2026-01-01T00:00:00.000Z", "a");
+    const updatedEvent = eventFixture("message", "2026-01-01T00:00:00.000Z", "ab");
+    const appendedEvent = eventFixture("message", "2026-01-01T00:00:01.000Z", "next");
+    const fake = createFakeWatcher([firstEvent]);
+    const server = await startWsTestServer(fake.watcher);
+    const ws = new WebSocket(server.url);
+    const messages: Array<Record<string, unknown>> = [];
+    ws.addEventListener("message", (event) => {
+      messages.push(JSON.parse(String(event.data)) as Record<string, unknown>);
+    });
+    const closed = new Promise<void>((resolve) => ws.addEventListener("close", () => resolve()));
+
+    try {
+      await waitFor(() => messages.some((message) => message.type === "init"));
+
+      ws.send(JSON.stringify({ type: "subscribe", issueId: "issue-1" }));
+      await waitFor(() => messages.some((message) => message.type === "events"));
+
+      fake.setEvents([updatedEvent, appendedEvent]);
+      fake.emit();
+
+      await waitFor(() => messages.some((message) => message.type === "events_append"));
+      expect(messages.find((message) => message.type === "events_append")).toMatchObject({
+        type: "events_append",
+        issueId: "issue-1",
+        events: [updatedEvent, appendedEvent],
+        fromIndex: 0,
+      });
+      ws.close();
+      await closed;
+    } finally {
+      if (ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.OPEN) ws.close();
+      await server.stop();
+    }
+  });
+
   test("does not increment watcher refs for duplicate same-ticket subscribe messages", async () => {
     const fake = createFakeWatcher([eventFixture("turn_started", "2026-01-01T00:00:00.000Z")]);
     const server = await startWsTestServer(fake.watcher);
@@ -184,9 +257,13 @@ function unavailableRuntime(): RuntimeServerSource {
   };
 }
 
-function eventFixture(kind: "turn_started" | "message", timestamp: string): DisplayEvent {
+function eventFixture(
+  kind: "turn_started" | "message",
+  timestamp: string,
+  text = "hello",
+): DisplayEvent {
   if (kind === "turn_started") return { kind, turnIndex: 0, timestamp };
-  return { kind, text: "hello", timestamp };
+  return { kind, text, timestamp };
 }
 
 async function waitFor(predicate: () => boolean, timeoutMs = 5_000): Promise<void> {

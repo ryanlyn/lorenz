@@ -18,11 +18,11 @@ export function reconcileEventAppend(
   appended: DisplayEvent[],
   fromIndex: number,
 ): EventAppendReconcileResult {
-  if (fromIndex !== current.length) {
+  if (fromIndex < 0 || fromIndex > current.length) {
     return { events: current, needsRefresh: true };
   }
 
-  return { events: [...current, ...appended], needsRefresh: false };
+  return { events: [...current.slice(0, fromIndex), ...appended], needsRefresh: false };
 }
 
 function useFollowMode() {
@@ -193,7 +193,7 @@ export function useTraceData() {
         markNewUpdates();
       }
     } else if (msg.type === "events_append" && msg.issueId === selectedTicketId) {
-      // Delta: only new events since our last known index
+      // Delta: replace the display-event suffix starting at fromIndex.
       if (followingRef.current) {
         const current = eventsRef.current;
         const result = reconcileEventAppend(current, msg.events, msg.fromIndex);

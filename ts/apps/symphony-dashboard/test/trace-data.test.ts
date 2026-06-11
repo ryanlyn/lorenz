@@ -21,19 +21,24 @@ afterEach(() => {
 });
 
 describe("reconcileEventAppend", () => {
-  test("appends only when the server cursor matches the current event length", async () => {
+  test("replaces the local event suffix from the server cursor", async () => {
     const { reconcileEventAppend } = await setupTraceDataTest();
     const first = eventFixture("first");
     const second = eventFixture("second");
+    const updatedSecond = eventFixture("updated second");
     const third = eventFixture("third");
 
     expect(reconcileEventAppend([first, second], [third], 2)).toEqual({
       events: [first, second, third],
       needsRefresh: false,
     });
-    expect(reconcileEventAppend([first, second], [third], 1)).toEqual({
-      events: [first, second],
-      needsRefresh: true,
+    expect(reconcileEventAppend([first, second], [updatedSecond, third], 1)).toEqual({
+      events: [first, updatedSecond, third],
+      needsRefresh: false,
+    });
+    expect(reconcileEventAppend([first, second], [], 1)).toEqual({
+      events: [first],
+      needsRefresh: false,
     });
     expect(reconcileEventAppend([first, second], [third], 3)).toEqual({
       events: [first, second],
@@ -119,14 +124,12 @@ describe("useTraceData", () => {
     expect(traceData.events).toEqual([first, second, third]);
   });
 
-  test("refreshes from REST when an append cursor does not match local events", async () => {
+  test("applies suffix replacements from WebSocket deltas", async () => {
     const first = eventFixture("first");
-    const second = eventFixture("second");
+    const updatedFirst = eventFixture("updated first");
     const third = eventFixture("third");
     const { renderer, ws, fetchEvents } = await setupTraceDataTest({ status: "connected" });
-    fetchEvents
-      .mockResolvedValueOnce([first, second])
-      .mockResolvedValueOnce([first, second, third]);
+    fetchEvents.mockResolvedValueOnce([first]);
 
     let traceData = renderer.render();
     traceData.setSelectedTicketId("issue-1");
@@ -134,9 +137,37 @@ describe("useTraceData", () => {
     await flushAsync();
     traceData = renderer.render();
 
-    expect(traceData.events).toEqual([first, second]);
+    expect(traceData.events).toEqual([first]);
 
-    ws.lastMessage = { type: "events_append", issueId: "issue-1", events: [third], fromIndex: 1 };
+    ws.lastMessage = {
+      type: "events_append",
+      issueId: "issue-1",
+      events: [updatedFirst, third],
+      fromIndex: 0,
+    };
+    renderer.render();
+    traceData = renderer.render();
+
+    expect(fetchEvents).toHaveBeenCalledTimes(1);
+    expect(traceData.events).toEqual([updatedFirst, third]);
+  });
+
+  test("refreshes from REST when a delta cursor is beyond local events", async () => {
+    const first = eventFixture("first");
+    const second = eventFixture("second");
+    const third = eventFixture("third");
+    const { renderer, ws, fetchEvents } = await setupTraceDataTest({ status: "connected" });
+    fetchEvents.mockResolvedValueOnce([first]).mockResolvedValueOnce([first, second, third]);
+
+    let traceData = renderer.render();
+    traceData.setSelectedTicketId("issue-1");
+    renderer.render();
+    await flushAsync();
+    traceData = renderer.render();
+
+    expect(traceData.events).toEqual([first]);
+
+    ws.lastMessage = { type: "events_append", issueId: "issue-1", events: [third], fromIndex: 2 };
     renderer.render();
     await flushAsync();
     traceData = renderer.render();
