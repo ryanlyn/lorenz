@@ -15,7 +15,12 @@ import { registerLinearTracker } from "@symphony/linear-tracker";
 import { registerLocalTracker } from "@symphony/local-tracker";
 import { registerMemoryTracker } from "@symphony/memory-tracker";
 import { registerSlackTracker } from "@symphony/slack-tracker";
-import { createWorkspaceForIssue, removeIssueWorkspaces, runHook } from "@symphony/workspace";
+import {
+  createWorkspaceForIssue,
+  listIssueWorkspaceIdentifiers,
+  removeIssueWorkspaces,
+  runHook,
+} from "@symphony/workspace";
 import { appendLogEvent } from "@symphony/log-file";
 import {
   deleteResumeState,
@@ -97,6 +102,7 @@ export async function runAgentAttempt(input: RunAgentAttemptInput): Promise<RunR
 
 export const runtimeAdapters = {
   removeIssueWorkspaces,
+  listIssueWorkspaces: listIssueWorkspaceIdentifiers,
   deleteResumeState,
   appendLogEvent,
 };

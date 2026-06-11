@@ -16,7 +16,7 @@ const requireRemoteClaude = process.env.SYMPHONY_TS_REQUIRE_REMOTE_CLAUDE === "1
 const remoteClaudeBridge = process.env.SYMPHONY_TS_CLAUDE_ACP_BRIDGE_COMMAND;
 
 test(
-  "live SSH worker runs remote Codex and remote Claude MCP resume",
+  "live SSH worker runs remote Codex and remote MCP resume",
   { timeout: 900_000, skip: !runLiveSsh },
   async (t) => {
     const setup = await setupLiveWorkers();
@@ -325,7 +325,7 @@ async function runRemoteCodexCanary(setup: LiveWorkerSetup): Promise<void> {
 async function runRemoteClaudeResumeCanary(setup: LiveWorkerSetup): Promise<void> {
   const host = setup.hosts[0];
   assert.ok(host);
-  assert.ok(process.env.LINEAR_API_KEY, "LINEAR_API_KEY is required for remote Claude MCP canary");
+  assert.ok(process.env.LINEAR_API_KEY, "LINEAR_API_KEY is required for remote MCP canary");
   const issue: Issue = {
     ...sampleIssue,
     id: "issue-remote-claude",
@@ -397,7 +397,7 @@ function workflow(
 
 function firstClaudePrompt(): string {
   return [
-    "This is a live TypeScript Symphony remote Claude MCP canary.",
+    "This is a live TypeScript remote MCP canary.",
     "Use the mcp__symphony_linear__linear_graphql tool once with this exact query:",
     "query SymphonyTsRemoteClaudeCanary { viewer { id } }",
     "Then create a file named REMOTE_CLAUDE_ONE.txt whose only contents are TS_REMOTE_CLAUDE_ONE followed by a newline.",

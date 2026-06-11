@@ -29,6 +29,7 @@ import type {
 import type {
   AgentKind,
   AgentUpdate,
+  HookExecutionMessage,
   Issue,
   RunningEntry,
   RuntimeTrackerClient,
@@ -74,7 +75,11 @@ export interface SymphonyRuntimeOptions {
         issueIdentifier?: string | null,
         workerHost?: string | null,
         issue?: Issue,
+        options?: { onHookEvent?: ((event: HookExecutionMessage) => void) | undefined },
       ) => Promise<void>)
+    | undefined;
+  listIssueWorkspaces?:
+    | ((settings: WorkflowDefinition["settings"]) => Promise<string[]>)
     | undefined;
   deleteResumeState?:
     | ((workspace: string, workerHost?: string | null, timeoutMs?: number) => Promise<void>)
@@ -434,7 +439,7 @@ export class SymphonyRuntime {
         slotIndex,
         onUpdate: (update) => {
           this.orchestrator.applyUpdate(issue.id, slotIndex, update);
-          this.addEvent(update.type, `${issue.identifier} ${update.type}`);
+          this.addEvent(update.type, agentUpdateRuntimeMessage(issue.identifier, update));
           this.input.onAgentUpdate?.(issue, update);
         },
         fetchIssue: async (current) => {
@@ -643,16 +648,21 @@ export class SymphonyRuntime {
       .running.find((entry) => entry.issue.id === issueId && entry.slotIndex === slotIndex);
   }
 
+  // Cleanup is driven by what is actually on disk: list existing per-issue workspace
+  // directories and look up just those issues, instead of enumerating every terminal
+  // issue the tracker has ever seen (which scales with project history, not with
+  // leftover workspaces, and can blow the tracker request budget on large projects).
   private async cleanupTerminalWorkspacesOnce(): Promise<void> {
     if (this.startupCleanupDone) return;
     this.startupCleanupDone = true;
-    if (!this.client.fetchIssuesByStates) return;
+    if (!this.input.listIssueWorkspaces) return;
     try {
-      const terminalIssues = await this.client.fetchIssuesByStates(
-        this.workflow.settings.tracker.terminalStates,
-      );
+      const identifiers = await this.input.listIssueWorkspaces(this.workflow.settings);
+      if (identifiers.length === 0) return;
+      const issues = await this.client.fetchIssuesByIds(identifiers);
       let cleaned = 0;
-      for (const issue of terminalIssues) {
+      for (const issue of issues) {
+        if (!isTerminalState(issue.state, this.workflow.settings.tracker.terminalStates)) continue;
         await this.removeIssueWorkspaces(
           this.workflow.settings,
           issue.identifier,
@@ -784,7 +794,13 @@ export class SymphonyRuntime {
     issue?: Issue,
   ): Promise<void> {
     if (this.input.removeIssueWorkspaces) {
-      return this.input.removeIssueWorkspaces(settings, issueIdentifier, workerHost, issue);
+      return this.input.removeIssueWorkspaces(settings, issueIdentifier, workerHost, issue, {
+        onHookEvent: (message) =>
+          this.addEvent(
+            "hook_execution",
+            hookExecutionRuntimeMessage(issue?.identifier ?? issueIdentifier ?? "unknown", message),
+          ),
+      });
     }
     throw new Error("runtime_adapter_missing: removeIssueWorkspaces");
   }
@@ -937,6 +953,36 @@ function runtimeRetryEntry(entry: {
     ...(entry.workerHost !== undefined ? { workerHost: entry.workerHost } : {}),
     ...(entry.workspacePath !== undefined ? { workspacePath: entry.workspacePath } : {}),
   };
+}
+
+function agentUpdateRuntimeMessage(issueIdentifier: string, update: AgentUpdate): string {
+  if (update.type !== "hook_execution") return `${issueIdentifier} ${update.type}`;
+  return hookExecutionRuntimeMessage(issueIdentifier, update.message);
+}
+
+function hookExecutionRuntimeMessage(
+  issueIdentifier: string,
+  message: HookExecutionMessage,
+): string {
+  const hookName = message.hookName ?? "hook";
+  const parts = [
+    `${issueIdentifier} ${hookName} hook ${message.status}`,
+    `command=${inlineLogValue(message.command)}`,
+  ];
+  if (message.exitCode !== undefined) parts.push(`exit_code=${message.exitCode ?? "unknown"}`);
+  if (message.error) {
+    const suffix = message.errorTruncated ? " (truncated)" : "";
+    parts.push(`error=${inlineLogValue(message.error)}${suffix}`);
+  }
+  if (message.output) {
+    const suffix = message.outputTruncated ? " (truncated)" : "";
+    parts.push(`output=${inlineLogValue(message.output)}${suffix}`);
+  }
+  return parts.join(" ");
+}
+
+function inlineLogValue(value: string): string {
+  return JSON.stringify(value.replace(/\s+/g, " ").trim());
 }
 
 async function delay(clock: ClockPort, ms: number, stopped: () => boolean): Promise<void> {

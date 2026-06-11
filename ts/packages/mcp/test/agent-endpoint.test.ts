@@ -5,7 +5,7 @@ import { assert } from "@symphony/test-utils";
 
 const mockAcquireRemoteMcpTunnel = vi.fn();
 const mockReleaseRemoteMcpTunnel = vi.fn();
-const mockStartClaudeMcpServer = vi.fn();
+const mockStartMcpServer = vi.fn();
 
 vi.mock("@symphony/worker-host-pool", () => ({
   workerHostPool: {
@@ -15,7 +15,7 @@ vi.mock("@symphony/worker-host-pool", () => ({
 }));
 
 vi.mock("../src/server.js", () => ({
-  startClaudeMcpServer: mockStartClaudeMcpServer,
+  startMcpServer: mockStartMcpServer,
 }));
 
 const { acquireAgentMcpEndpoint } = await import("../src/agentEndpoint.js");
@@ -23,12 +23,12 @@ const { acquireAgentMcpEndpoint } = await import("../src/agentEndpoint.js");
 afterEach(() => {
   mockAcquireRemoteMcpTunnel.mockReset();
   mockReleaseRemoteMcpTunnel.mockReset();
-  mockStartClaudeMcpServer.mockReset();
+  mockStartMcpServer.mockReset();
 });
 
 test("remote endpoint acquisition releases a newly-started local MCP server when tunnel acquisition fails", async () => {
   const handle = fakeServerHandle(39_001);
-  mockStartClaudeMcpServer.mockResolvedValue(handle);
+  mockStartMcpServer.mockResolvedValue(handle);
   mockAcquireRemoteMcpTunnel.mockImplementation(() => {
     throw new Error("tunnel failed");
   });
@@ -44,7 +44,7 @@ test("remote endpoint acquisition releases a newly-started local MCP server when
 test("remote endpoint release returns the acquired tunnel lease", async () => {
   const handle = fakeServerHandle(39_004);
   const tunnelLease = { leaseId: "lease-1", workerHost: "worker-1", remotePort: 46_000 };
-  mockStartClaudeMcpServer.mockResolvedValue(handle);
+  mockStartMcpServer.mockResolvedValue(handle);
   mockAcquireRemoteMcpTunnel.mockReturnValue(tunnelLease);
 
   const lease = await acquireAgentMcpEndpoint(settingsWithServerPort(39_004), "worker-1");
@@ -57,7 +57,7 @@ test("remote endpoint release returns the acquired tunnel lease", async () => {
 
 test("concurrent local MCP endpoint acquisition starts one configured-port server", async () => {
   const handle = fakeServerHandle(39_002);
-  mockStartClaudeMcpServer.mockResolvedValue(handle);
+  mockStartMcpServer.mockResolvedValue(handle);
 
   const settings = settingsWithServerPort(39_002);
   const first = acquireAgentMcpEndpoint(settings);
@@ -65,9 +65,9 @@ test("concurrent local MCP endpoint acquisition starts one configured-port serve
   const leases = await Promise.all([first, second]);
 
   try {
-    assert.equal(mockStartClaudeMcpServer.mock.calls.length, 1);
-    assert.equal(leases[0]!.url, "http://127.0.0.1:39002/claude-mcp");
-    assert.equal(leases[1]!.url, "http://127.0.0.1:39002/claude-mcp");
+    assert.equal(mockStartMcpServer.mock.calls.length, 1);
+    assert.equal(leases[0]!.url, "http://127.0.0.1:39002/mcp");
+    assert.equal(leases[1]!.url, "http://127.0.0.1:39002/mcp");
   } finally {
     await Promise.all(leases.map((lease) => lease.release()));
   }
@@ -77,7 +77,7 @@ test("concurrent local MCP endpoint acquisition starts one configured-port serve
 
 test("configured-port local MCP endpoint rejects different tracker settings", async () => {
   const handle = fakeServerHandle(39_003);
-  mockStartClaudeMcpServer.mockResolvedValue(handle);
+  mockStartMcpServer.mockResolvedValue(handle);
 
   const firstLease = await acquireAgentMcpEndpoint(localSettingsWithServerPort(39_003, "board-a"));
   let secondLease: Awaited<ReturnType<typeof acquireAgentMcpEndpoint>> | undefined;
@@ -94,7 +94,7 @@ test("configured-port local MCP endpoint rejects different tracker settings", as
     await firstLease.release();
   }
 
-  assert.equal(mockStartClaudeMcpServer.mock.calls.length, 1);
+  assert.equal(mockStartMcpServer.mock.calls.length, 1);
   assert.equal(handle.stop.mock.calls.length, 1);
 });
 
@@ -103,7 +103,7 @@ test("configured-port acquisition waits for final release stop before replacing 
   const secondHandle = fakeServerHandle(39_004);
   const stopGate = deferred<void>();
   firstHandle.stop.mockImplementation(() => stopGate.promise);
-  mockStartClaudeMcpServer.mockResolvedValueOnce(firstHandle).mockResolvedValueOnce(secondHandle);
+  mockStartMcpServer.mockResolvedValueOnce(firstHandle).mockResolvedValueOnce(secondHandle);
   const fetchSpy = vi
     .spyOn(globalThis, "fetch")
     .mockResolvedValue(new Response("", { status: 404 }));
@@ -127,8 +127,8 @@ test("configured-port acquisition waits for final release stop before replacing 
     await releasePromise;
     secondLease = await secondAcquire;
 
-    assert.equal(mockStartClaudeMcpServer.mock.calls.length, 2);
-    assert.equal(secondLease.url, "http://127.0.0.1:39004/claude-mcp");
+    assert.equal(mockStartMcpServer.mock.calls.length, 2);
+    assert.equal(secondLease.url, "http://127.0.0.1:39004/mcp");
   } finally {
     stopGate.resolve();
     await releasePromise;
@@ -142,7 +142,7 @@ test("configured-port acquisition waits for final release stop before replacing 
 
 test("configured-port local MCP endpoint does not reuse an unauthenticated 405 server", async () => {
   const handle = fakeServerHandle(39_005);
-  mockStartClaudeMcpServer.mockResolvedValue(handle);
+  mockStartMcpServer.mockResolvedValue(handle);
   const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (_input, init) => {
     if (init?.method === "POST") {
       return new Response(
@@ -162,7 +162,7 @@ test("configured-port local MCP endpoint does not reuse an unauthenticated 405 s
   try {
     lease = await acquireAgentMcpEndpoint(settingsWithServerPort(39_005));
 
-    assert.equal(mockStartClaudeMcpServer.mock.calls.length, 1);
+    assert.equal(mockStartMcpServer.mock.calls.length, 1);
     const postCall = fetchSpy.mock.calls.find(([, init]) => init?.method === "POST");
     assert.ok(postCall, "expected an authenticated POST probe");
     assert.match(
@@ -208,8 +208,8 @@ test("local MCP endpoint reports a connectable URL when configured server binds 
   try {
     const lease = await acquireAgentMcpEndpoint(settings);
     try {
-      assert.equal(lease.url, "http://127.0.0.1:43210/claude-mcp");
-      assert.equal(mockStartClaudeMcpServer.mock.calls.length, 0);
+      assert.equal(lease.url, "http://127.0.0.1:43210/mcp");
+      assert.equal(mockStartMcpServer.mock.calls.length, 0);
     } finally {
       await lease.release();
     }

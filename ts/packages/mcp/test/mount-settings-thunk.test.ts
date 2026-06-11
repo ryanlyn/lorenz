@@ -12,7 +12,7 @@ import { Hono } from "hono";
 import { test } from "vitest";
 import { assert } from "@symphony/test-utils";
 
-import { createMcpAuthScope, issueMcpToken, mountClaudeMcp, revokeMcpToken } from "@symphony/mcp";
+import { createMcpAuthScope, issueMcpToken, mountMcp, revokeMcpToken } from "@symphony/mcp";
 
 // Private registries so the mount is exercised without mutating the process defaults.
 const trackers = new TrackerRegistry();
@@ -45,7 +45,7 @@ async function localSettings(): Promise<Settings> {
 }
 
 async function toolsListNames(app: Hono, token: string): Promise<string[]> {
-  const response = await app.request("/claude-mcp", {
+  const response = await app.request("/mcp", {
     method: "POST",
     headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
     body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
@@ -55,7 +55,7 @@ async function toolsListNames(app: Hono, token: string): Promise<string[]> {
   return (body.result?.tools ?? []).map((tool) => tool.name ?? "");
 }
 
-test("mountClaudeMcp resolves a settings thunk on every request", async () => {
+test("mountMcp resolves a settings thunk on every request", async () => {
   // A long-lived mount (the observability server) must serve the workflow settings the
   // runtime has CURRENTLY loaded, not the snapshot taken when the app was built: agent
   // sessions are routed to that mount whenever the configured server port is already
@@ -63,7 +63,7 @@ test("mountClaudeMcp resolves a settings thunk on every request", async () => {
   let current = linearSettings();
   const app = new Hono();
   const authScope = createMcpAuthScope();
-  mountClaudeMcp(app, () => current, { authScope, tools });
+  mountMcp(app, () => current, { authScope, tools });
   const token = issueMcpToken(authScope);
 
   try {
@@ -83,10 +83,10 @@ test("mountClaudeMcp resolves a settings thunk on every request", async () => {
   }
 });
 
-test("mountClaudeMcp serves plain settings unchanged", async () => {
+test("mountMcp serves plain settings unchanged", async () => {
   const app = new Hono();
   const authScope = createMcpAuthScope();
-  mountClaudeMcp(app, linearSettings(), { authScope, tools });
+  mountMcp(app, linearSettings(), { authScope, tools });
   const token = issueMcpToken(authScope);
 
   try {

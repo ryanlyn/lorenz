@@ -25,13 +25,15 @@ export interface ObservabilityServerHandle {
   stop(): Promise<void>;
 }
 
-export interface ClaudeMcpMountOptions {
+export interface McpMountOptions {
   authScope?: string | undefined;
   /** Tool packs available to this endpoint; defaults to the process-wide registry. */
   tools?: ToolRegistry | undefined;
 }
 
-export async function startClaudeMcpServer(
+const mcpPath = "/mcp";
+
+export async function startMcpServer(
   settings: Settings,
   options: ObservabilityServerOptions,
 ): Promise<ObservabilityServerHandle> {
@@ -42,7 +44,7 @@ export async function startClaudeMcpServer(
     (options.port > 0
       ? mcpAuthScopeForSettings(settings, bindHost, options.port)
       : createMcpAuthScope());
-  mountClaudeMcp(app, settings, { authScope, tools: options.tools });
+  mountMcp(app, settings, { authScope, tools: options.tools });
   app.notFound((c) =>
     c.req.method === "GET"
       ? errorResponse(404, "not_found", "Route not found")
@@ -52,18 +54,18 @@ export async function startClaudeMcpServer(
 }
 
 /**
- * Mount the Claude MCP endpoint. `settings` may be a thunk so a long-lived mount (the
+ * Mount the MCP endpoint. `settings` may be a thunk so a long-lived mount (the
  * observability server) serves the runtime's CURRENT workflow settings after a hot reload,
  * instead of the snapshot taken when the server was built.
  */
-export function mountClaudeMcp(
+export function mountMcp(
   app: Hono,
   settings: Settings | (() => Settings),
-  options: ClaudeMcpMountOptions = {},
+  options: McpMountOptions = {},
 ): void {
   const currentSettings = typeof settings === "function" ? settings : () => settings;
   const authScope = options.authScope ?? createMcpAuthScope();
-  app.use("/claude-mcp", async (c, next) => {
+  app.use(mcpPath, async (c, next) => {
     if (c.req.method !== "POST") {
       await next();
       return;
@@ -81,8 +83,8 @@ export function mountClaudeMcp(
     }
     await next();
   });
-  app.post("/claude-mcp", async (c) => handleClaudeMcp(currentSettings(), c, options.tools));
-  app.all("/claude-mcp", () => errorResponse(405, "method_not_allowed", "Method not allowed"));
+  app.post(mcpPath, async (c) => handleMcp(currentSettings(), c, options.tools));
+  app.all(mcpPath, () => errorResponse(405, "method_not_allowed", "Method not allowed"));
 }
 
 async function startHonoServer(
@@ -113,11 +115,7 @@ async function startHonoServer(
   };
 }
 
-async function handleClaudeMcp(
-  settings: Settings,
-  c: Context,
-  tools?: ToolRegistry,
-): Promise<Response> {
+async function handleMcp(settings: Settings, c: Context, tools?: ToolRegistry): Promise<Response> {
   let body: Record<string, unknown>;
   try {
     body = await requestJson(c);
@@ -132,9 +130,9 @@ async function handleClaudeMcp(
     );
   }
 
-  const mcpResponse = await claudeMcpResponse(settings, body, tools);
-  if (mcpResponse === null) return new Response("", { status: 204 });
-  return jsonResponse(mcpResponse);
+  const response = await mcpResponse(settings, body, tools);
+  if (response === null) return new Response("", { status: 204 });
+  return jsonResponse(response);
 }
 
 async function requestJson(c: Context): Promise<Record<string, unknown>> {
@@ -148,7 +146,7 @@ function authorizedMcpHeader(authorization: string | undefined, authScope: strin
   return validMcpToken(bearer, authScope);
 }
 
-export async function claudeMcpResponse(
+export async function mcpResponse(
   settings: Settings,
   body: Record<string, unknown>,
   tools: ToolRegistry = defaultToolRegistry,
@@ -166,7 +164,7 @@ export async function claudeMcpResponse(
         result: {
           protocolVersion: parsed.data.protocolVersion ?? "2025-11-25",
           capabilities: { tools: {} },
-          serverInfo: { name: "symphony-claude-mcp", version: "0.1.0" },
+          serverInfo: { name: "mcp", version: "0.1.0" },
         },
       };
     })

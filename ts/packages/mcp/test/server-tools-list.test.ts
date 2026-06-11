@@ -16,7 +16,7 @@ import {
   issueMcpToken,
   mcpAuthScopeForSettings,
   revokeMcpToken,
-  startClaudeMcpServer,
+  startMcpServer,
   type ObservabilityServerHandle,
 } from "@symphony/mcp";
 
@@ -43,9 +43,9 @@ async function toolsListNames(settings: Settings): Promise<string[]> {
   let token: string | undefined;
   let handle: ObservabilityServerHandle | undefined;
   try {
-    handle = await startClaudeMcpServer(settings, { host: "127.0.0.1", port: 0, tools });
+    handle = await startMcpServer(settings, { host: "127.0.0.1", port: 0, tools });
     token = issueMcpToken(handle.authScope);
-    const response = await fetch(handle.url("/claude-mcp"), {
+    const response = await fetch(handle.url("/mcp"), {
       method: "POST",
       headers: {
         authorization: `Bearer ${token}`,
@@ -97,12 +97,12 @@ test("MCP server rejects bearer tokens issued for another server instance", asyn
   let localToken: string | undefined;
   let linearToken: string | undefined;
   try {
-    localHandle = await startClaudeMcpServer(await localSettings(), {
+    localHandle = await startMcpServer(await localSettings(), {
       host: "127.0.0.1",
       port: 0,
       tools,
     });
-    linearHandle = await startClaudeMcpServer(
+    linearHandle = await startMcpServer(
       parseConfig({ tracker: { kind: "linear", project_slug: "mono" } }, {}),
       { host: "127.0.0.1", port: 0, tools },
     );
@@ -126,7 +126,7 @@ test("fixed-port MCP server accepts deterministic settings-scoped tokens", async
   let handle: ObservabilityServerHandle | undefined;
   let token: string | undefined;
   try {
-    handle = await startClaudeMcpServer(settings, { host: "127.0.0.1", port, tools });
+    handle = await startMcpServer(settings, { host: "127.0.0.1", port, tools });
     token = issueMcpToken(mcpAuthScopeForSettings(settings, "127.0.0.1", port));
 
     assert.equal(handle.authScope, mcpAuthScopeForSettings(settings, "127.0.0.1", port));
@@ -141,13 +141,13 @@ test("MCP rejects array request bodies as parse errors", async () => {
   let token: string | undefined;
   let handle: ObservabilityServerHandle | undefined;
   try {
-    handle = await startClaudeMcpServer(await localSettings(), {
+    handle = await startMcpServer(await localSettings(), {
       host: "127.0.0.1",
       port: 0,
       tools,
     });
     token = issueMcpToken(handle.authScope);
-    const response = await fetch(handle.url("/claude-mcp"), {
+    const response = await fetch(handle.url("/mcp"), {
       method: "POST",
       headers: {
         authorization: `Bearer ${token}`,
@@ -171,7 +171,7 @@ async function toolsListStatus(
   handle: ObservabilityServerHandle,
   token: string | undefined,
 ): Promise<number> {
-  const response = await fetch(handle.url("/claude-mcp"), {
+  const response = await fetch(handle.url("/mcp"), {
     method: "POST",
     headers: {
       ...(token ? { authorization: `Bearer ${token}` } : {}),

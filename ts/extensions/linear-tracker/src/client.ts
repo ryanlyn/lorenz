@@ -15,6 +15,8 @@ import { linearEndpoint, linearTrackerOptions } from "./options.js";
 const LINEAR_REQUEST_TIMEOUT_MS = 30_000;
 const MAX_ERROR_BODY_LOG_BYTES = 1000;
 
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 const issueFields = `
   id
   identifier
@@ -327,22 +329,53 @@ export class LinearClient {
     const issues: Issue[] = [];
     for (let index = 0; index < uniqueIds.length; index += 50) {
       const batchIds = uniqueIds.slice(index, index + 50);
-      const data = await this.graphql<{
-        issues: { nodes: Array<Record<string, unknown>> };
-      }>(
-        `query SymphonyTsIssuesById($ids: [ID!]!, $first: Int!) {
-          issues(filter: {id: {in: $ids}}, first: $first) {
-            nodes { ${issueFields} }
-          }
-        }`,
-        { ids: batchIds, first: batchIds.length },
-      );
-      appendNormalizedIssues(issues, data.issues.nodes, assignee);
+      try {
+        const data = await this.graphql<{
+          issues: { nodes: Array<Record<string, unknown>> };
+        }>(
+          `query SymphonyTsIssuesById($ids: [ID!]!, $first: Int!) {
+            issues(filter: {id: {in: $ids}}, first: $first) {
+              nodes { ${issueFields} }
+            }
+          }`,
+          { ids: batchIds, first: batchIds.length },
+        );
+        appendNormalizedIssues(issues, data.issues.nodes, assignee);
+      } catch (error) {
+        // Identifier-shaped inputs ("MT-32" from workspace directory names) can make
+        // the id filter reject the whole batch; those resolve via the fallback below.
+        // A batch of well-formed ids failing is a real error and must surface.
+        if (batchIds.every((id) => UUID_PATTERN.test(id))) throw error;
+      }
+    }
+
+    // Workspace cleanup passes issue identifiers (directory names), which the id filter
+    // cannot match. Resolve whatever the bulk lookup missed through the singular
+    // issue(id:) query, which accepts identifiers; unknown names (stray directories,
+    // deleted issues) are skipped rather than failing the lookup.
+    const found = new Set(issues.flatMap((issue) => [issue.id, issue.identifier]));
+    for (const id of uniqueIds) {
+      if (found.has(id) || UUID_PATTERN.test(id)) continue;
+      try {
+        const data = await this.graphql<{ issue: Record<string, unknown> | null }>(
+          `query SymphonyTsIssueByIdentifier($id: String!) {
+            issue(id: $id) {
+              ${issueFields}
+            }
+          }`,
+          { id },
+        );
+        if (data.issue) appendNormalizedIssues(issues, [data.issue], assignee);
+      } catch {
+        // Best-effort identifier resolution.
+      }
     }
 
     return issues.sort((left, right) => {
-      const leftIndex = issueOrder.get(left.id) ?? issueOrder.size;
-      const rightIndex = issueOrder.get(right.id) ?? issueOrder.size;
+      const leftIndex =
+        issueOrder.get(left.id) ?? issueOrder.get(left.identifier) ?? issueOrder.size;
+      const rightIndex =
+        issueOrder.get(right.id) ?? issueOrder.get(right.identifier) ?? issueOrder.size;
       return leftIndex - rightIndex;
     });
   }

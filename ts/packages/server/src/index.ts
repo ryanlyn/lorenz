@@ -13,7 +13,7 @@ import {
   normalizeHttpBindHost,
   type Settings,
 } from "@symphony/domain";
-import { createMcpAuthScope, mcpAuthScopeForSettings, mountClaudeMcp } from "@symphony/mcp";
+import { createMcpAuthScope, mcpAuthScopeForSettings, mountMcp } from "@symphony/mcp";
 import type { ToolRegistry } from "@symphony/tool-sdk";
 import { issuePayload, runsPayload, statePayload, type PresenterParams } from "@symphony/presenter";
 import type { RuntimeSnapshot } from "@symphony/runtime-events";
@@ -26,7 +26,7 @@ import { decodePathParam, invalidPathParameterError } from "./path-params.js";
 import type { RuntimeServerSource } from "./source.js";
 
 export { defaultIssueStorePath, IssueStore };
-export { startClaudeMcpServer } from "@symphony/mcp";
+export { startMcpServer } from "@symphony/mcp";
 export type { IssueRecord } from "./issue-store.js";
 export type { RuntimeServerSource } from "./source.js";
 
@@ -36,7 +36,7 @@ export interface ObservabilityServerOptions {
   traceDir?: string;
   staticDir?: string;
   issueStore?: IssueStore;
-  /** Tool packs served on the Claude MCP mount; defaults to the process-wide registry. */
+  /** Tool packs served on the MCP mount; defaults to the process-wide registry. */
   tools?: ToolRegistry;
 }
 
@@ -129,7 +129,7 @@ function buildObservabilityApp(
   // has hot-reloaded since the server was built.
   if (settings) {
     const initialSettings = settings;
-    mountClaudeMcp(app, () => runtimeSettings(runtime) ?? initialSettings, {
+    mountMcp(app, () => runtimeSettings(runtime) ?? initialSettings, {
       authScope,
       tools: options.tools,
     });

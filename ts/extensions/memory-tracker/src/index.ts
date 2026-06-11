@@ -28,7 +28,13 @@ export class MemoryTrackerClient implements RuntimeTrackerClient {
 
   async fetchIssuesByIds(ids: string[]): Promise<Issue[]> {
     const wanted = new Set(ids);
-    return Promise.resolve(this.issues.filter((issue) => wanted.has(issue.id)).map(cloneIssue));
+    // Workspace cleanup looks issues up by identifier (directory name); mirror the
+    // Jira and Linear clients, which accept both ids and identifiers.
+    return Promise.resolve(
+      this.issues
+        .filter((issue) => wanted.has(issue.id) || wanted.has(issue.identifier))
+        .map(cloneIssue),
+    );
   }
 
   updateIssue(id: string, fields: Partial<Pick<Issue, "state" | "stateType">>): void {

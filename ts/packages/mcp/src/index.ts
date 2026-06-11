@@ -8,5 +8,5 @@ export {
 export { executeTool, toolSpecs } from "./tools.js";
 export { acquireAgentMcpEndpoint, trackerMcpServerName } from "./agentEndpoint.js";
 export type { AgentMcpEndpointLease } from "./agentEndpoint.js";
-export { claudeMcpResponse, mountClaudeMcp, startClaudeMcpServer } from "./server.js";
+export { mountMcp, startMcpServer, mcpResponse } from "./server.js";
 export type { ObservabilityServerHandle } from "./server.js";

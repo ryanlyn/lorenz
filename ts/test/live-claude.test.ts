@@ -21,11 +21,11 @@ test("live Claude ACP bridge smoke", { timeout: 180_000, skip: !runLiveClaude },
 });
 
 test(
-  "live Claude ACP bridge uses Symphony MCP tool endpoint",
+  "live Claude ACP bridge uses MCP tool endpoint",
   { timeout: 240_000, skip: !runLiveClaude },
   async () => {
-    assert.ok(process.env.LINEAR_API_KEY, "LINEAR_API_KEY is required for live Claude MCP E2E");
-    const workspace = await tempDir("symphony-ts-live-claude-mcp");
+    assert.ok(process.env.LINEAR_API_KEY, "LINEAR_API_KEY is required for live MCP E2E");
+    const workspace = await tempDir("symphony-ts-live-mcp");
     const settings = liveClaudeSettings(240_000, {
       tracker: {
         api_key: "$LINEAR_API_KEY",

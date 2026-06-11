@@ -873,6 +873,53 @@ test("runHook executes afterCreate hook with workspace path", async () => {
   assert.equal(hookWorkspace, "/tmp/workspace/TEST-1");
 });
 
+test("runAgentAttempt emits hook execution updates from beforeRun hooks", async () => {
+  const issue = fakeIssue();
+  const settings = fakeSettings({
+    hooks: { ...defaultSettings().hooks, beforeRun: "echo setup" },
+  });
+  const received: AgentUpdate[] = [];
+
+  await runAgentAttempt({
+    issue,
+    workflow: { path: "/workflow.md", config: {}, promptTemplate: "Fix it", settings },
+    settings,
+    onUpdate: (update) => received.push(update),
+    adapters: fakeAdapters({
+      runHook: async (command, workspace, _hooks, _workerHost, options) => {
+        options?.onHookEvent?.({
+          status: "started",
+          command,
+          cwd: workspace,
+          hookName: options.hookName,
+        });
+        options?.onHookEvent?.({
+          status: "completed",
+          command,
+          cwd: workspace,
+          hookName: options.hookName,
+          exitCode: 0,
+          output: "setup ok",
+          outputTruncated: false,
+        });
+      },
+    }),
+  });
+
+  const hookUpdates = received.filter(
+    (update): update is Extract<AgentUpdate, { type: "hook_execution" }> =>
+      update.type === "hook_execution",
+  );
+  assert.deepEqual(
+    hookUpdates.map((update) => update.message.status),
+    ["started", "completed"],
+  );
+  assert.equal(hookUpdates[0]!.message.hookName, "before_run");
+  assert.equal(hookUpdates[0]!.workspacePath, "/tmp/workspace/TEST-1");
+  assert.equal(hookUpdates[1]!.message.exitCode, 0);
+  assert.equal(hookUpdates[1]!.message.output, "setup ok");
+});
+
 test("runHook skips execution when hook is undefined", async () => {
   const issue = fakeIssue();
   const settings = fakeSettings({

@@ -449,8 +449,8 @@ test("ACP MCP endpoint leases reuse one reverse tunnel per worker host with per-
     const second = await acquireAgentMcpEndpoint(settings, "worker-acp");
     leases.push(second);
 
-    assert.equal(first.url, "http://127.0.0.1:46000/claude-mcp");
-    assert.equal(second.url, "http://127.0.0.1:46000/claude-mcp");
+    assert.equal(first.url, "http://127.0.0.1:46000/mcp");
+    assert.equal(second.url, "http://127.0.0.1:46000/mcp");
     assert.notEqual(first.token, second.token);
     assert.notEqual(acpAuthHeader(first.acpServer()), acpAuthHeader(second.acpServer()));
     await waitForTunnelTrace(trace, 1);
@@ -585,11 +585,16 @@ test("resolveBridgeCommand points bare bridge names at the vendored packages", a
   await fs.access(codex.split(" ")[1]?.replace(/^'|'$/g, "") ?? "");
 
   const claude = resolveBridgeCommand("claude-agent-acp", null);
-  assert.match(claude, /vendor\/claude-agent-acp\/dist\/index\.js/);
+  assert.match(claude, /vendor\/claude-agent-acp\/dist\/bundle\.js/);
+  await fs.access(claude.split(" ")[1]?.replace(/^'|'$/g, "") ?? "");
 });
 
 test("resolveBridgeCommand preserves arguments, custom commands, and remote hosts", () => {
   assert.match(resolveBridgeCommand("codex-acp --flag value", null), /index\.js'? --flag value$/);
+  assert.match(
+    resolveBridgeCommand("claude-agent-acp --flag value", null),
+    /bundle\.js'? --flag value$/,
+  );
   assert.equal(
     resolveBridgeCommand("my-custom-bridge --port 1", null),
     "my-custom-bridge --port 1",

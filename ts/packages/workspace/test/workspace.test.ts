@@ -8,11 +8,12 @@ import {
   ensureInsideRoot,
   validateWorkspaceCwd,
   createWorkspaceForIssue,
+  listIssueWorkspaceIdentifiers,
   removeWorkspace,
   removeIssueWorkspaces,
   shellEscape,
 } from "@symphony/cli";
-import type { Settings } from "@symphony/domain";
+import type { HookExecutionMessage, Settings } from "@symphony/domain";
 import { assert, tempDir, sampleIssue } from "@symphony/test-utils";
 
 import { runHook } from "../src/index.js";
@@ -347,6 +348,54 @@ test("runHook — passes command through unmodified when no issue context", asyn
   assert.equal(content, "{{ issue.identifier }}");
 });
 
+test("runHook — emits start and completion hook execution events", async () => {
+  const root = await tempDir("ws-hook-events");
+  const settings = makeSettings(root);
+  const events: HookExecutionMessage[] = [];
+  const command = `printf "%s" "ok"`;
+
+  await runHook(command, root, settings.hooks, null, {
+    hookName: "before_run",
+    onHookEvent: (event) => events.push(event),
+  });
+
+  assert.deepEqual(
+    events.map((event) => event.status),
+    ["started", "completed"],
+  );
+  assert.equal(events[0]!.command, command);
+  assert.equal(events[0]!.cwd, root);
+  assert.equal(events[0]!.hookName, "before_run");
+  assert.equal(events[1]!.exitCode, 0);
+  assert.equal(events[1]!.output, "ok");
+  assert.equal(events[1]!.outputTruncated, false);
+});
+
+test("runHook — emits exit code and error details on hook failure", async () => {
+  const root = await tempDir("ws-hook-failure-events");
+  const settings = makeSettings(root);
+  const events: HookExecutionMessage[] = [];
+  const command = `printf "%s" "failed"; exit 17`;
+
+  await assert.rejects(
+    () =>
+      runHook(command, root, settings.hooks, null, {
+        hookName: "after_run",
+        onHookEvent: (event) => events.push(event),
+      }),
+    /hook failed with status 17: failed/,
+  );
+
+  assert.deepEqual(
+    events.map((event) => event.status),
+    ["started", "failed"],
+  );
+  assert.equal(events[1]!.hookName, "after_run");
+  assert.equal(events[1]!.exitCode, 17);
+  assert.equal(events[1]!.output, "failed");
+  assert.match(events[1]!.error ?? "", /hook failed with status 17: failed/);
+});
+
 test("createWorkspaceForIssue — refuses afterCreate when cwd is swapped to an out-of-root symlink", async () => {
   const root = await tempDir("ws-create");
   const canonicalRoot = await fs.realpath(root);
@@ -530,13 +579,22 @@ test("removeWorkspace — refuses to remove workspace root", async () => {
 test("removeWorkspace — runs beforeRemove hook before deletion", async () => {
   const root = await tempDir("ws-remove");
   const markerFile = path.join(root, "hook-marker");
+  const events: HookExecutionMessage[] = [];
   const settings = makeSettings(root, {
     beforeRemove: `touch ${JSON.stringify(markerFile)}`,
   });
   const ws = await createWorkspaceForIssue(settings, sampleIssue);
-  await removeWorkspace(settings, ws);
+  await removeWorkspace(settings, ws, undefined, {
+    onHookEvent: (event) => events.push(event),
+  });
   const stat = await fs.stat(markerFile);
   assert.ok(stat.isFile());
+  assert.deepEqual(
+    events.map((event) => event.status),
+    ["started", "completed"],
+  );
+  assert.equal(events[0]!.hookName, "before_remove");
+  assert.equal(events[1]!.exitCode, 0);
 });
 
 test("removeIssueWorkspaces — passes issue context to beforeRemove hook", async () => {
@@ -558,4 +616,25 @@ test("removeWorkspace — nonexistent workspace returns empty array", async () =
   const settings = makeSettings(root);
   const result = await removeWorkspace(settings, path.join(root, "does-not-exist"));
   assert.deepEqual(result, []);
+});
+
+test("listIssueWorkspaceIdentifiers returns existing workspace directory names", async () => {
+  const root = await tempDir("ws-list");
+  const settings = makeSettings(root);
+  await createWorkspaceForIssue(settings, "MT-7");
+  await createWorkspaceForIssue(settings, "MT-9");
+  await fs.writeFile(path.join(root, "not-a-workspace.txt"), "ignore me\n");
+
+  const names = await listIssueWorkspaceIdentifiers(settings);
+  assert.deepEqual(names.sort(), ["MT-7", "MT-9"]);
+});
+
+test("listIssueWorkspaceIdentifiers is empty for missing roots and shared workspaces", async () => {
+  const missing = makeSettings(path.join(await tempDir("ws-list-missing"), "nope"));
+  assert.deepEqual(await listIssueWorkspaceIdentifiers(missing), []);
+
+  const sharedRoot = await tempDir("ws-list-shared");
+  const shared = makeSettings(sharedRoot, {}, { isolation: "none" });
+  await fs.mkdir(path.join(sharedRoot, "MT-1"), { recursive: true });
+  assert.deepEqual(await listIssueWorkspaceIdentifiers(shared), []);
 });

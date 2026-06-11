@@ -2,12 +2,12 @@ import { parseConfig } from "@symphony/config";
 import { test } from "vitest";
 import { assert } from "@symphony/test-utils";
 
-import { claudeMcpResponse } from "@symphony/mcp";
+import { mcpResponse } from "@symphony/mcp";
 
 const settings = parseConfig({ tracker: { kind: "linear", project_slug: "mono" } }, {});
 
 test("MCP initialize accepts omitted params and uses the default protocol version", async () => {
-  const response = await claudeMcpResponse(settings, {
+  const response = await mcpResponse(settings, {
     jsonrpc: "2.0",
     id: 1,
     method: "initialize",
@@ -19,13 +19,13 @@ test("MCP initialize accepts omitted params and uses the default protocol versio
     result: {
       protocolVersion: "2025-11-25",
       capabilities: { tools: {} },
-      serverInfo: { name: "symphony-claude-mcp", version: "0.1.0" },
+      serverInfo: { name: "mcp", version: "0.1.0" },
     },
   });
 });
 
 test("MCP initialize rejects array-shaped params instead of treating them as omitted", async () => {
-  const response = await claudeMcpResponse(settings, {
+  const response = await mcpResponse(settings, {
     jsonrpc: "2.0",
     id: 2,
     method: "initialize",

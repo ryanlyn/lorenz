@@ -37,7 +37,7 @@ function defaultPackNames(settings: Settings, registry: ToolRegistry): string[] 
   return names;
 }
 
-/** Tools advertised over the Symphony MCP endpoint for the mounted packs. */
+/** Tools advertised over the MCP endpoint for the mounted packs. */
 export function toolSpecs(
   settings: Settings,
   registry: ToolRegistry = defaultToolRegistry,

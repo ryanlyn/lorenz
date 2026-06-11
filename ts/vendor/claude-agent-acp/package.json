@@ -4,8 +4,11 @@
   "description": "Vendored ACP bridge for Claude with Symphony extensions",
   "main": "dist/lib.js",
   "types": "dist/lib.d.ts",
+  "scripts": {
+    "bundle": "node build.mjs"
+  },
   "bin": {
-    "claude-agent-acp": "dist/index.js"
+    "claude-agent-acp": "dist/bundle.js"
   },
   "type": "module",
   "license": "Apache-2.0",
@@ -21,5 +24,8 @@
     "@agentclientprotocol/sdk": "0.24.0",
     "@anthropic-ai/claude-agent-sdk": "0.3.160",
     "zod": "^3.25.0 || ^4.0.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.0"
   }
 }

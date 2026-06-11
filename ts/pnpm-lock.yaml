@@ -1048,6 +1048,10 @@ importers:
       zod:
         specifier: ^3.25.0 || ^4.0.0
         version: 4.4.3
+    devDependencies:
+      esbuild:
+        specifier: ^0.28.0
+        version: 0.28.0
 
   vendor/codex-acp:
     dependencies:
