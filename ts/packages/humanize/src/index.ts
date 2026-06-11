@@ -119,6 +119,8 @@ function humanizeCodexEvent(event: string, message: unknown, payload: unknown): 
 
 function humanizeCodexPayload(payload: unknown): string {
   if (isRecord(payload)) {
+    const hookExecution = humanizeHookExecution(payload);
+    if (hookExecution) return hookExecution;
     const method = stringAt(payload, ["method"]);
     if (method) return humanizeCodexMethod(method, payload);
     const sessionId = stringAt(payload, ["session_id"]) ?? stringAt(payload, ["sessionId"]);
@@ -127,6 +129,18 @@ function humanizeCodexPayload(payload: unknown): string {
     return sanitize(JSON.stringify(payload));
   }
   return sanitize(String(payload));
+}
+
+function humanizeHookExecution(payload: Record<string, unknown>): string | null {
+  const status = stringAt(payload, ["status"]);
+  const command = stringAt(payload, ["command"]);
+  if (!status || !command) return null;
+  const hookName = stringAt(payload, ["hookName"]) ?? "hook";
+  const exitCode = numberAt(payload, ["exitCode"]);
+  const error = stringAt(payload, ["error"]);
+  const suffix =
+    exitCode !== null ? ` exit ${exitCode}` : error ? ` error: ${inlineText(error)}` : "";
+  return `${hookName} hook ${status}: ${inlineText(command)}${suffix}`;
 }
 
 function humanizeCodexMethod(method: string, payload: unknown): string {

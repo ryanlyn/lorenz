@@ -657,6 +657,27 @@ export interface StringMessageUpdate extends AgentUpdateBase {
   message: string;
 }
 
+export type WorkspaceHookName = "after_create" | "before_run" | "after_run" | "before_remove";
+export type HookExecutionStatus = "started" | "completed" | "failed";
+
+export interface HookExecutionMessage {
+  status: HookExecutionStatus;
+  command: string;
+  cwd: string;
+  hookName?: WorkspaceHookName | undefined;
+  workerHost?: string | null | undefined;
+  exitCode?: number | null | undefined;
+  output?: string | undefined;
+  outputTruncated?: boolean | undefined;
+  error?: string | undefined;
+  errorTruncated?: boolean | undefined;
+}
+
+export interface HookExecutionUpdate extends AgentUpdateBase {
+  type: "hook_execution";
+  message: HookExecutionMessage;
+}
+
 export interface SessionReplaySuppressedUpdate extends AgentUpdateBase {
   type: "session_replay_suppressed";
   message: { replayedUpdateCount: number };
@@ -705,6 +726,7 @@ export interface FsWriteUpdate extends AgentUpdateBase {
 export type AgentUpdate =
   | AgentSessionNotificationUpdate
   | StringMessageUpdate
+  | HookExecutionUpdate
   | SessionReplaySuppressedUpdate
   | TurnStartedUpdate
   | TurnCompletedUpdate
@@ -736,6 +758,7 @@ export const AGENT_UPDATE_TYPES = [
   "resume_state_warning",
   "session_replay_suppressed",
   "fs_write",
+  "hook_execution",
   "session_notification",
 ] as const satisfies readonly AgentUpdateType[];
 

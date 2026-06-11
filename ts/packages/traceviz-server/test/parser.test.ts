@@ -551,6 +551,38 @@ describe("parseTraceLines turn handling", () => {
 });
 
 describe("parseTraceLines noise filtering", () => {
+  it("emits hook execution notifications with command results", () => {
+    const lines = [
+      JSON.stringify({
+        type: "hook_execution",
+        issueId: "id",
+        issueIdentifier: "T-1",
+        timestamp: "2026-01-01T00:00:00Z",
+        message: {
+          status: "failed",
+          hookName: "before_run",
+          command: "mise run check",
+          exitCode: 17,
+          output: "tests failed",
+          error: "hook failed with status 17: tests failed",
+        },
+      }),
+    ];
+
+    const events = parseTraceLines(lines);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      kind: "notification",
+      text: expect.stringContaining("before_run hook failed"),
+    });
+    expect(events[0]).toMatchObject({
+      text: expect.stringContaining("exit code: 17"),
+    });
+    expect(events[0]).toMatchObject({
+      text: expect.stringContaining("output: tests failed"),
+    });
+  });
+
   it("does not emit unknown events for usage/session/workspace/stderr/process_exit", () => {
     const lines = [
       JSON.stringify({

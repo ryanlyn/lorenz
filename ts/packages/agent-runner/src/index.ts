@@ -11,6 +11,7 @@ import {
   type AgentExecutor,
   type AgentSession,
   type AgentUpdate,
+  type HookExecutionMessage,
   type Issue,
   type Settings,
   type WorkflowDefinition,
@@ -33,6 +34,8 @@ const afterRunHookStage = "workspace.run_after_run_hook";
 
 interface SetupStageSignalOptions {
   abortSignal?: AbortSignal | undefined;
+  hookName?: HookExecutionMessage["hookName"] | undefined;
+  onHookEvent?: ((message: HookExecutionMessage) => void) | undefined;
 }
 
 export interface RunAgentAttemptAdapters {
@@ -44,6 +47,7 @@ export interface RunAgentAttemptAdapters {
       ensembleSize: number;
       workerHost: string | null;
       abortSignal?: AbortSignal | undefined;
+      onHookEvent?: ((message: HookExecutionMessage) => void) | undefined;
     },
   ): Promise<string>;
   runHook(
@@ -118,6 +122,7 @@ class RunController {
           ensembleSize: size,
           workerHost,
           abortSignal,
+          onHookEvent: (message) => this.emitHookUpdate(message),
         }),
       input.abortSignal,
     );
@@ -149,6 +154,8 @@ class RunController {
               workerHost,
               {
                 abortSignal,
+                hookName: "before_run",
+                onHookEvent: (message) => this.emitHookUpdate(message),
               },
               issue,
             ),
@@ -299,6 +306,8 @@ class RunController {
           workerHost,
           {
             abortSignal,
+            hookName: "after_run",
+            onHookEvent: (message) => this.emitHookUpdate(message),
           },
           issue,
         ),
@@ -310,6 +319,15 @@ class RunController {
         message: `Ignoring after_run hook failure (${afterRunHookStage}): ${errorMessage(error)}`,
       });
     }
+  }
+
+  private emitHookUpdate(message: HookExecutionMessage): void {
+    this.input.onUpdate?.({
+      type: "hook_execution",
+      message,
+      workspacePath: message.cwd,
+      timestamp: new Date(),
+    });
   }
 }
 
@@ -473,6 +491,7 @@ async function createWorkspaceForIssue(
     ensembleSize: number;
     workerHost: string | null;
     abortSignal?: AbortSignal | undefined;
+    onHookEvent?: ((message: HookExecutionMessage) => void) | undefined;
   },
 ): Promise<string> {
   if (adapters?.createWorkspaceForIssue)

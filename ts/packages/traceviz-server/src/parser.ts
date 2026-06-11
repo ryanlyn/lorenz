@@ -55,6 +55,36 @@ function extractTextFromUpdate(update: Record<string, unknown>): string {
   return "";
 }
 
+function formatHookExecutionMessage(message: unknown): string {
+  if (!isRecord(message)) return "Hook execution update";
+  const status = typeof message.status === "string" ? message.status : "updated";
+  const hookName = typeof message.hookName === "string" ? message.hookName : "hook";
+  const parts = [`${hookName} hook ${status}`];
+  if (typeof message.command === "string" && message.command.length > 0) {
+    parts.push(`command: ${inlineText(message.command)}`);
+  }
+  if ("exitCode" in message) {
+    parts.push(`exit code: ${hookExitCodeText(message.exitCode)}`);
+  }
+  if (typeof message.error === "string" && message.error.length > 0) {
+    const suffix = message.errorTruncated === true ? " (truncated)" : "";
+    parts.push(`error: ${inlineText(message.error)}${suffix}`);
+  }
+  if (typeof message.output === "string" && message.output.length > 0) {
+    const suffix = message.outputTruncated === true ? " (truncated)" : "";
+    parts.push(`output: ${inlineText(message.output)}${suffix}`);
+  }
+  return parts.join("; ");
+}
+
+function inlineText(value: string): string {
+  return value.replace(/\s+/g, " ").trim();
+}
+
+function hookExitCodeText(value: unknown): string {
+  return typeof value === "number" && Number.isFinite(value) ? String(value) : "unknown";
+}
+
 function getToolCallId(update: { toolCallId?: unknown }): string | null {
   return typeof update.toolCallId === "string" && update.toolCallId.length > 0
     ? update.toolCallId
@@ -300,6 +330,16 @@ export function parseTraceLines(lines: string[]): DisplayEvent[] {
             typeof stopReason === "string" && stopReason.length > 0
               ? `Turn cancelled: ${stopReason}`
               : "Turn cancelled",
+          timestamp: ts,
+        });
+        break;
+      }
+
+      case "hook_execution": {
+        flushPendingText();
+        events.push({
+          kind: "notification",
+          text: formatHookExecutionMessage(raw.message),
           timestamp: ts,
         });
         break;
