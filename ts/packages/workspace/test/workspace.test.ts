@@ -8,6 +8,7 @@ import {
   ensureInsideRoot,
   validateWorkspaceCwd,
   createWorkspaceForIssue,
+  listIssueWorkspaceIdentifiers,
   removeWorkspace,
   removeIssueWorkspaces,
   shellEscape,
@@ -558,4 +559,25 @@ test("removeWorkspace — nonexistent workspace returns empty array", async () =
   const settings = makeSettings(root);
   const result = await removeWorkspace(settings, path.join(root, "does-not-exist"));
   assert.deepEqual(result, []);
+});
+
+test("listIssueWorkspaceIdentifiers returns existing workspace directory names", async () => {
+  const root = await tempDir("ws-list");
+  const settings = makeSettings(root);
+  await createWorkspaceForIssue(settings, "MT-7");
+  await createWorkspaceForIssue(settings, "MT-9");
+  await fs.writeFile(path.join(root, "not-a-workspace.txt"), "ignore me\n");
+
+  const names = await listIssueWorkspaceIdentifiers(settings);
+  assert.deepEqual(names.sort(), ["MT-7", "MT-9"]);
+});
+
+test("listIssueWorkspaceIdentifiers is empty for missing roots and shared workspaces", async () => {
+  const missing = makeSettings(path.join(await tempDir("ws-list-missing"), "nope"));
+  assert.deepEqual(await listIssueWorkspaceIdentifiers(missing), []);
+
+  const sharedRoot = await tempDir("ws-list-shared");
+  const shared = makeSettings(sharedRoot, {}, { isolation: "none" });
+  await fs.mkdir(path.join(sharedRoot, "MT-1"), { recursive: true });
+  assert.deepEqual(await listIssueWorkspaceIdentifiers(shared), []);
 });

@@ -269,6 +269,49 @@ export async function removeRemoteIssueWorkspaces(
   );
 }
 
+/**
+ * Names of per-issue workspace directories that currently exist under the workspace root,
+ * locally and on every configured SSH worker. Directories are created as
+ * `safeIdentifier(issue.identifier)`, so the returned names are the (sanitized) issue
+ * identifiers that may still own a workspace. Hosts that cannot be listed are skipped:
+ * the result feeds best-effort cleanup, never correctness.
+ */
+export async function listIssueWorkspaceIdentifiers(settings: Settings): Promise<string[]> {
+  if (sharedWorkspaceRoot(settings)) return [];
+  const names = new Set<string>();
+
+  if (await exists(settings.workspace.root)) {
+    try {
+      const canonicalRoot = await fs.realpath(settings.workspace.root);
+      for (const entry of await fs.readdir(canonicalRoot, { withFileTypes: true })) {
+        if (entry.isDirectory()) names.add(entry.name);
+      }
+    } catch {
+      // Local listing is best effort.
+    }
+  }
+
+  for (const host of settings.worker.sshHosts) {
+    try {
+      const root = await remoteWorkspaceRoot(settings, host);
+      const result = await runSsh(
+        host,
+        `[ -d ${shellEscape(root)} ] && find ${shellEscape(root)} -mindepth 1 -maxdepth 1 -type d -exec basename {} \\; || true`,
+        { timeoutMs: settings.worker.sshTimeoutMs, stderrToStdout: false },
+      );
+      if (result.status !== 0) continue;
+      for (const line of result.stdout.split("\n")) {
+        const name = line.trim();
+        if (name) names.add(name);
+      }
+    } catch {
+      // Continue listing other worker hosts.
+    }
+  }
+
+  return [...names];
+}
+
 export async function runHook(
   command: string,
   cwd: string,

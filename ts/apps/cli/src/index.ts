@@ -21,6 +21,7 @@ export {
   safeIdentifier,
   workspacePath,
   createWorkspaceForIssue,
+  listIssueWorkspaceIdentifiers,
   removeWorkspace,
   removeRemoteWorkspace,
   removeIssueWorkspaces,

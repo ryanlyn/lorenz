@@ -495,6 +495,28 @@ test("Linear fetchIssuesByIds dedupes, batches, and restores requested order", a
   );
 });
 
+test("Linear fetchIssuesByIds resolves identifier-shaped inputs through singular issue lookup", async () => {
+  const calls: FetchCall[] = [];
+  const client = new LinearClient(
+    settings(),
+    fetchSequence(
+      jsonResponse({ data: { issues: { nodes: [] } } }),
+      jsonResponse({ data: { issue: linearIssue("uuid-9", "MT-9") } }),
+      jsonResponse({ data: { issue: null } }),
+      calls,
+    ),
+  );
+
+  const issues = await client.fetchIssuesByIds(["MT-9", "MT-GONE"]);
+
+  assert.equal(calls[1]?.body.variables?.id, "MT-9");
+  assert.equal(calls[2]?.body.variables?.id, "MT-GONE");
+  assert.deepEqual(
+    issues.map((issue) => issue.identifier),
+    ["MT-9"],
+  );
+});
+
 test("Linear fetchIssuesByIds returns empty without touching the network", async () => {
   const calls: FetchCall[] = [];
   const client = new LinearClient(settings(), (async (input, init) => {

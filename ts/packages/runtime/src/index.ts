@@ -76,6 +76,7 @@ export interface SymphonyRuntimeOptions {
         issue?: Issue,
       ) => Promise<void>)
     | undefined;
+  listIssueWorkspaces?: ((settings: WorkflowDefinition["settings"]) => Promise<string[]>) | undefined;
   deleteResumeState?:
     | ((workspace: string, workerHost?: string | null, timeoutMs?: number) => Promise<void>)
     | undefined;
@@ -643,16 +644,21 @@ export class SymphonyRuntime {
       .running.find((entry) => entry.issue.id === issueId && entry.slotIndex === slotIndex);
   }
 
+  // Cleanup is driven by what is actually on disk: list existing per-issue workspace
+  // directories and look up just those issues, instead of enumerating every terminal
+  // issue the tracker has ever seen (which scales with project history, not with
+  // leftover workspaces, and can blow the tracker request budget on large projects).
   private async cleanupTerminalWorkspacesOnce(): Promise<void> {
     if (this.startupCleanupDone) return;
     this.startupCleanupDone = true;
-    if (!this.client.fetchIssuesByStates) return;
+    if (!this.input.listIssueWorkspaces) return;
     try {
-      const terminalIssues = await this.client.fetchIssuesByStates(
-        this.workflow.settings.tracker.terminalStates,
-      );
+      const identifiers = await this.input.listIssueWorkspaces(this.workflow.settings);
+      if (identifiers.length === 0) return;
+      const issues = await this.client.fetchIssuesByIds(identifiers);
       let cleaned = 0;
-      for (const issue of terminalIssues) {
+      for (const issue of issues) {
+        if (!isTerminalState(issue.state, this.workflow.settings.tracker.terminalStates)) continue;
         await this.removeIssueWorkspaces(
           this.workflow.settings,
           issue.identifier,
