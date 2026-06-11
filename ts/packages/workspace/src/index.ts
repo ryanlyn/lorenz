@@ -1,12 +1,37 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
+import { Liquid } from "liquidjs";
 import { runSsh, shellEscape } from "@symphony/ssh";
 import type { HooksSettings, Issue, Settings } from "@symphony/domain";
 import { execa } from "execa";
 
 const remoteWorkspaceMarker = "__SYMPHONY_WORKSPACE__";
 const hookForceKillDelayMs = 5_000;
+
+const liquidEngine = new Liquid({ strictVariables: false, strictFilters: true });
+
+export interface HookTemplateContext {
+  issue?: Issue | undefined;
+}
+
+async function renderHookCommand(command: string, context: HookTemplateContext): Promise<string> {
+  if (!context.issue) return command;
+  return liquidEngine.parseAndRender(command, {
+    issue: {
+      id: context.issue.id,
+      identifier: context.issue.identifier,
+      title: context.issue.title,
+      description: context.issue.description ?? null,
+      priority: context.issue.priority ?? null,
+      state: context.issue.state,
+      state_type: context.issue.stateType ?? null,
+      branch_name: context.issue.branchName ?? null,
+      url: context.issue.url ?? null,
+      labels: context.issue.labels,
+    },
+  }) as Promise<string>;
+}
 
 export interface WorkspaceCreateOptions {
   slotIndex?: number | undefined;
@@ -67,16 +92,27 @@ export async function createWorkspaceForIssue(
   const canonicalTarget = await validateWorkspaceCwd(settings, target);
 
   if (created && settings.hooks.afterCreate) {
-    await runHook(settings.hooks.afterCreate, canonicalTarget, settings.hooks, null, {
-      abortSignal: options.abortSignal,
-      validateCwd: async () => validateWorkspaceCwd(settings, canonicalTarget),
-    });
+    await runHook(
+      settings.hooks.afterCreate,
+      canonicalTarget,
+      settings.hooks,
+      null,
+      {
+        abortSignal: options.abortSignal,
+        validateCwd: async () => validateWorkspaceCwd(settings, canonicalTarget),
+      },
+      typeof issue === "string" ? undefined : issue,
+    );
   }
 
   return canonicalTarget;
 }
 
-export async function removeWorkspace(settings: Settings, workspace: string): Promise<string[]> {
+export async function removeWorkspace(
+  settings: Settings,
+  workspace: string,
+  issue?: Issue,
+): Promise<string[]> {
   if (!(await exists(settings.workspace.root))) return [];
   const candidate = path.resolve(workspace);
   const canonicalRoot = await fs.realpath(settings.workspace.root);
@@ -93,9 +129,16 @@ export async function removeWorkspace(settings: Settings, workspace: string): Pr
 
   if (settings.hooks.beforeRemove) {
     try {
-      await runHook(settings.hooks.beforeRemove, canonicalTarget, settings.hooks, null, {
-        validateCwd: async () => validateWorkspaceCwd(settings, canonicalTarget),
-      });
+      await runHook(
+        settings.hooks.beforeRemove,
+        canonicalTarget,
+        settings.hooks,
+        null,
+        {
+          validateCwd: async () => validateWorkspaceCwd(settings, canonicalTarget),
+        },
+        issue,
+      );
     } catch {
       // before_remove is best effort; cleanup should continue.
     }
@@ -109,6 +152,7 @@ export async function removeRemoteWorkspace(
   settings: Settings,
   workspace: string,
   workerHost: string,
+  issue?: Issue,
 ): Promise<string[]> {
   const canonicalWorkspace = await validateWorkspaceCwd(settings, workspace, workerHost);
 
@@ -119,9 +163,11 @@ export async function removeRemoteWorkspace(
         canonicalWorkspace,
         settings.hooks.beforeRemove,
         settings.hooks,
+        {},
+        { issue },
       );
     } catch {
-      // before_remove is best effort; cleanup should continue.
+      // before_remove is best-effort; cleanup should continue.
     }
   }
 
@@ -188,13 +234,16 @@ export async function runHook(
   hooks: HooksSettings,
   workerHost?: string | null,
   options: WorkspaceRunHookOptions = {},
+  issue?: Issue,
 ): Promise<void> {
-  if (workerHost) return runRemoteHook(workerHost, cwd, command, hooks, options);
+  const templateContext: HookTemplateContext = { issue };
+  if (workerHost) return runRemoteHook(workerHost, cwd, command, hooks, options, templateContext);
   if (options.abortSignal?.aborted) throw new Error("hook canceled");
   const hookCwd = options.validateCwd ? await options.validateCwd() : cwd;
   if (options.abortSignal?.aborted) throw new Error("hook canceled");
 
-  const subprocess = execa("bash", ["-lc", command], {
+  const rendered = await renderHookCommand(command, templateContext);
+  const subprocess = execa("bash", ["-lc", rendered], {
     cwd: hookCwd,
     all: true,
     reject: false,
@@ -401,6 +450,7 @@ async function createRemoteWorkspaceForIssue(
       settings.hooks.afterCreate,
       settings.hooks,
       options,
+      { issue: typeof issue === "string" ? undefined : issue },
     );
   }
 
@@ -481,8 +531,10 @@ async function runRemoteHook(
   command: string,
   hooks: HooksSettings,
   options: WorkspaceRunHookOptions = {},
+  templateContext: HookTemplateContext = {},
 ): Promise<void> {
-  const result = await runSsh(workerHost, `cd ${shellEscape(workspace)} && ${command}`, {
+  const rendered = await renderHookCommand(command, templateContext);
+  const result = await runSsh(workerHost, `cd ${shellEscape(workspace)} && ${rendered}`, {
     timeoutMs: hooks.timeoutMs,
     stderrToStdout: true,
     abortSignal: options.abortSignal,

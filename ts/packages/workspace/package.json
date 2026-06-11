@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "execa": "catalog:",
+    "liquidjs": "catalog:",
     "@symphony/domain": "workspace:*",
     "@symphony/ssh": "workspace:*"
   }

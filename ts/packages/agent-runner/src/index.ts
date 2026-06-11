@@ -52,6 +52,7 @@ export interface RunAgentAttemptAdapters {
     hooks: Settings["hooks"],
     workerHost: string | null,
     options?: SetupStageSignalOptions,
+    issue?: Issue,
   ): Promise<void>;
   readResumeState(
     workspace: string,
@@ -140,9 +141,17 @@ class RunController {
           beforeRunHookStage,
           hookStageTimeoutMs(runtime),
           async ({ abortSignal }) =>
-            runHook(input.adapters, beforeRun, workspace, runtime.hooks, workerHost, {
-              abortSignal,
-            }),
+            runHook(
+              input.adapters,
+              beforeRun,
+              workspace,
+              runtime.hooks,
+              workerHost,
+              {
+                abortSignal,
+              },
+              issue,
+            ),
           input.abortSignal,
         );
       }
@@ -251,7 +260,7 @@ class RunController {
           stopError = error;
         }
       }
-      await this.runAfterRunHook(runtime, workspace, workerHost);
+      await this.runAfterRunHook(runtime, workspace, workerHost, issue);
     }
 
     if (runError) throw toError(runError);
@@ -275,15 +284,24 @@ class RunController {
     runtime: Settings,
     workspace: string,
     workerHost: string | null,
+    issue: Issue,
   ): Promise<void> {
     const input = this.input;
     const afterRun = runtime.hooks.afterRun;
     if (!afterRun) return;
     try {
       await runSetupStage(afterRunHookStage, hookStageTimeoutMs(runtime), async ({ abortSignal }) =>
-        runHook(input.adapters, afterRun, workspace, runtime.hooks, workerHost, {
-          abortSignal,
-        }),
+        runHook(
+          input.adapters,
+          afterRun,
+          workspace,
+          runtime.hooks,
+          workerHost,
+          {
+            abortSignal,
+          },
+          issue,
+        ),
       );
     } catch (error) {
       input.onUpdate?.({
@@ -469,9 +487,10 @@ async function runHook(
   hooks: Settings["hooks"],
   workerHost: string | null,
   options?: SetupStageSignalOptions,
+  issue?: Issue,
 ): Promise<void> {
   if (adapters?.runHook)
-    return adapters.runHook(command, workspacePath, hooks, workerHost, options);
+    return adapters.runHook(command, workspacePath, hooks, workerHost, options, issue);
   throw new Error("agent_runner_adapter_missing: runHook");
 }
 

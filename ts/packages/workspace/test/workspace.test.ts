@@ -165,6 +165,45 @@ test("createWorkspaceForIssue — runs afterCreate hook on new workspace", async
   assert.ok(stat.isFile());
 });
 
+test("createWorkspaceForIssue — renders Liquid template variables in afterCreate hook", async () => {
+  const root = await tempDir("ws-create-tpl");
+  const settings = makeSettings(root, {
+    afterCreate: 'printf "%s" "{{ issue.identifier }}" > .issue-id',
+  });
+  const ws = await createWorkspaceForIssue(settings, sampleIssue);
+  const content = await fs.readFile(path.join(ws, ".issue-id"), "utf8");
+  assert.equal(content, sampleIssue.identifier);
+});
+
+test("runHook — renders Liquid template variables when issue is provided", async () => {
+  const root = await tempDir("ws-hook-tpl");
+  const settings = makeSettings(root);
+  const outFile = path.join(root, "title.txt");
+  await runHook(
+    `printf "%s" "{{ issue.title }}" > ${JSON.stringify(outFile)}`,
+    root,
+    settings.hooks,
+    null,
+    {},
+    sampleIssue as any,
+  );
+  const content = await fs.readFile(outFile, "utf8");
+  assert.equal(content, sampleIssue.title);
+});
+
+test("runHook — passes command through unmodified when no issue context", async () => {
+  const root = await tempDir("ws-hook-no-tpl");
+  const settings = makeSettings(root);
+  const outFile = path.join(root, "raw.txt");
+  await runHook(
+    `printf "%s" "{{ issue.identifier }}" > ${JSON.stringify(outFile)}`,
+    root,
+    settings.hooks,
+  );
+  const content = await fs.readFile(outFile, "utf8");
+  assert.equal(content, "{{ issue.identifier }}");
+});
+
 test("createWorkspaceForIssue — refuses afterCreate when cwd is swapped to an out-of-root symlink", async () => {
   const root = await tempDir("ws-create");
   const canonicalRoot = await fs.realpath(root);

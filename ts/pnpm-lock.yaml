@@ -885,6 +885,9 @@ importers:
       execa:
         specifier: "catalog:"
         version: 9.6.1
+      liquidjs:
+        specifier: "catalog:"
+        version: 10.27.0
 
 packages:
   "@agentclientprotocol/sdk@0.21.1":
