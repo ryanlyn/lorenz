@@ -15,7 +15,7 @@ import { defaultAgentExecutorRegistry } from "@symphony/agent-sdk";
 import { normalizeIssue } from "@symphony/issue";
 import type { WorkflowDefinition } from "@symphony/domain";
 import { registerLinearTracker } from "@symphony/linear-tracker";
-import { registerSlackTracker } from "@symphony/slack-tracker";
+import { registerLocalTracker } from "@symphony/local-tracker";
 import { defaultToolRegistry } from "@symphony/tool-sdk";
 import { createTrackerToolProvider, defaultTrackerRegistry } from "@symphony/tracker-sdk";
 import { assert } from "@symphony/test-utils";
@@ -27,10 +27,10 @@ import { startClaudeMcpServer } from "@symphony/server";
 // registries (it offers no injection point), so populate them the same way the CLI
 // composition root does before serving (in a hook rather than at module scope). This suite
 // dispatches on the linear tracker and mounts the neutral tracker pack plus linear's own;
-// the hot-reload test below switches dispatch to slack and expects its pack to be served.
+// the hot-reload test below switches dispatch to the local tracker and expects its pack.
 beforeAll(() => {
   registerLinearTracker();
-  registerSlackTracker();
+  registerLocalTracker();
   if (defaultToolRegistry.get("tracker") === undefined) {
     defaultToolRegistry.register(createTrackerToolProvider(defaultTrackerRegistry));
   }
@@ -428,12 +428,6 @@ test("observability Claude MCP endpoint uses workflow settings reloaded by the r
   const token = issueMcpToken(server.authScope);
 
   try {
-    const initialTools = await postMcp(
-      server.url("/claude-mcp"),
-      { jsonrpc: "2.0", id: 1, method: "tools/list" },
-      200,
-      token,
-    );
     const neutralTools = [
       "tracker_read_issue",
       "tracker_query",
@@ -441,17 +435,25 @@ test("observability Claude MCP endpoint uses workflow settings reloaded by the r
       "tracker_comment",
       "tracker_create_issue",
     ];
+    const initialTools = await postMcp(
+      server.url("/claude-mcp"),
+      { jsonrpc: "2.0", id: 1, method: "tools/list" },
+      200,
+      token,
+    );
     assert.deepEqual(
       initialTools.result.tools.map((tool: { name: string }) => tool.name),
       [...neutralTools, "linear_graphql"],
     );
 
+    const boardDir = await mkdtemp(path.join(tmpdir(), "http-server-reload-local-"));
     currentWorkflow = {
       ...initialWorkflow,
-      settings: parseConfig(
-        { tracker: { kind: "slack", channels: ["C1"], bot_user_id: "U1" } },
-        { SLACK_BOT_TOKEN: "xoxb" },
-      ),
+      settings: parseConfig({
+        tracker: { kind: "local", path: boardDir },
+        polling: { interval_ms: 5 },
+        workspace: { root: "/tmp/symphony-ts-http-test" },
+      }),
     };
     await runtime.pollOnce({ dryRun: true });
 
@@ -463,7 +465,14 @@ test("observability Claude MCP endpoint uses workflow settings reloaded by the r
     );
     assert.deepEqual(
       reloadedTools.result.tools.map((tool: { name: string }) => tool.name),
-      [...neutralTools, "slack_update_status", "slack_comment", "slack_read_thread", "slack_query"],
+      [
+        ...neutralTools,
+        "local_update_status",
+        "local_comment",
+        "local_create_issue",
+        "local_read_issue",
+        "local_query",
+      ],
     );
   } finally {
     revokeMcpToken(token);
