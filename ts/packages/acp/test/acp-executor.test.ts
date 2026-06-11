@@ -107,6 +107,89 @@ test("ACP executor can pass through cumulative bridge usage without double count
   });
 });
 
+test("ACP executor accumulates per-call usage buckets incrementally", async () => {
+  const root = await tempDir("symphony-ts-acp-call-usage");
+  const fake = await writeFakeBridge(root);
+  const trace = path.join(root, "trace.jsonl");
+  const settings = acpSettings(root, fake, trace, "call-usage");
+  const executor = new Executor("claude");
+  const updates: AgentUpdate[] = [];
+  const session = await executor.startSession({
+    workspace: root,
+    settings,
+    issue: sampleIssue,
+    onUpdate: (update) => updates.push(update),
+  });
+  const firstTurn = await executor.runTurn(session, "hello", sampleIssue);
+  const secondTurn = await executor.runTurn(session, "hello again", sampleIssue);
+  await session.stop();
+
+  // Three unique buckets stream during the first turn (the duplicate seq and
+  // the plain usage_update carry no usage), each carrying running totals.
+  const firstTurnUsage = firstTurn
+    .filter((update) => update.type === "session_notification" && update.usage)
+    .map((update) => update.usage);
+  assert.deepEqual(firstTurnUsage, [
+    { inputTokens: 7, outputTokens: 3, totalTokens: 10 },
+    { inputTokens: 14, outputTokens: 6, totalTokens: 20 },
+    { inputTokens: 21, outputTokens: 9, totalTokens: 30 },
+  ]);
+  assert.ok(
+    firstTurn
+      .filter((update) => update.type === "session_notification" && update.usage)
+      .every((update) => update.usageKind === "cumulative"),
+  );
+
+  // Turn end must not re-add the bridge's turn aggregate on top of buckets.
+  const firstCompleted = firstTurn.find((update) => update.type === "turn_completed");
+  assert.equal(firstCompleted?.usageKind, "cumulative");
+  assert.deepEqual(firstCompleted?.usage, { inputTokens: 21, outputTokens: 9, totalTokens: 30 });
+
+  // The second turn's bucket accumulates on top of the first turn.
+  const secondCompleted = secondTurn.find((update) => update.type === "turn_completed");
+  assert.deepEqual(secondCompleted?.usage, { inputTokens: 28, outputTokens: 12, totalTokens: 40 });
+});
+
+test("ACP executor reconciles bucket undercount against the turn aggregate", async () => {
+  const root = await tempDir("symphony-ts-acp-call-usage-undercount");
+  const fake = await writeFakeBridge(root);
+  const trace = path.join(root, "trace.jsonl");
+  const settings = acpSettings(root, fake, trace, "call-usage-undercount");
+  const executor = new Executor("claude");
+  const session = await executor.startSession({ workspace: root, settings, issue: sampleIssue });
+  const turnUpdates = await executor.runTurn(session, "hello", sampleIssue);
+  await session.stop();
+
+  // Two buckets arrived (20 tokens) but the bridge reported a 30-token turn;
+  // the shortfall tops the totals up instead of being dropped or re-added.
+  assert.deepEqual(turnUpdates.find((update) => update.type === "turn_completed")?.usage, {
+    inputTokens: 21,
+    outputTokens: 9,
+    totalTokens: 30,
+  });
+});
+
+test("ACP executor floors bucket totals with the bridge cumulative counter", async () => {
+  const root = await tempDir("symphony-ts-acp-call-usage-floor");
+  const fake = await writeFakeBridge(root);
+  const trace = path.join(root, "trace.jsonl");
+  const settings = acpSettings(root, fake, trace, "call-usage-total-floor", 5_000, {
+    agentKind: "codex",
+  });
+  const executor = new Executor("codex");
+  const session = await executor.startSession({ workspace: root, settings, issue: sampleIssue });
+  const turnUpdates = await executor.runTurn(session, "hello", sampleIssue);
+  await session.stop();
+
+  // The seq-2 bucket never arrived and the bridge reported no turn usage, but
+  // symphony/totalUsage recovers the missing call.
+  assert.deepEqual(turnUpdates.find((update) => update.type === "turn_completed")?.usage, {
+    inputTokens: 21,
+    outputTokens: 9,
+    totalTokens: 30,
+  });
+});
+
 test("ACP executor ignores session updates for a different active session", async () => {
   const root = await tempDir("symphony-ts-acp-session-mismatch");
   const fake = await writeFakeBridge(root);
@@ -625,6 +708,60 @@ class FakeAgent {
   async prompt(params) {
     record({ method: "prompt", params });
     this.promptCount += 1;
+    if (mode.startsWith("call-usage")) {
+      const bucket = (seq) => ({
+        seq,
+        inputTokens: 2,
+        outputTokens: 3,
+        cachedReadTokens: 4,
+        cachedWriteTokens: 1,
+        totalTokens: 10
+      });
+      const turnUsage = (calls) => ({
+        inputTokens: 2 * calls,
+        cachedReadTokens: 4 * calls,
+        cachedWriteTokens: 1 * calls,
+        outputTokens: 3 * calls,
+        totalTokens: 10 * calls
+      });
+      const sendBucket = async (seq, totalUsage) => {
+        await this.connection.sessionUpdate({
+          sessionId: params.sessionId,
+          update: {
+            sessionUpdate: "usage_update",
+            used: 10 * seq,
+            size: 100,
+            _meta: {
+              "symphony/callUsage": bucket(seq),
+              ...(totalUsage ? { "symphony/totalUsage": totalUsage } : {})
+            }
+          }
+        });
+      };
+      if (mode === "call-usage") {
+        if (this.promptCount === 1) {
+          await sendBucket(1);
+          await sendBucket(2);
+          await sendBucket(2);
+          await sendBucket(3);
+          await this.connection.sessionUpdate({
+            sessionId: params.sessionId,
+            update: { sessionUpdate: "usage_update", used: 50, size: 100 }
+          });
+          return { stopReason: "end_turn", usage: turnUsage(3) };
+        }
+        await sendBucket(4);
+        return { stopReason: "end_turn", usage: turnUsage(1) };
+      }
+      if (mode === "call-usage-undercount") {
+        await sendBucket(1);
+        await sendBucket(2);
+        return { stopReason: "end_turn", usage: turnUsage(3) };
+      }
+      await sendBucket(1, turnUsage(1));
+      await sendBucket(3, turnUsage(3));
+      return { stopReason: "end_turn" };
+    }
     if (mode === "stall") {
       await new Promise(() => {});
     }
