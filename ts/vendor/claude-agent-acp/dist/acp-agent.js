@@ -855,6 +855,37 @@ export class ClaudeAcpAgent {
                                 lastAssistantError = message.error;
                             }
                         }
+                        // symphony-patch: every assistant message carries the final token
+                        // usage of exactly one model call (subagent calls included via
+                        // parent_tool_use_id), so surface it as a per-call bucket on
+                        // usage_update._meta for call-by-call accounting downstream.
+                        if (message.type === "assistant" &&
+                            message.message.usage &&
+                            message.message.model !== "<synthetic>") {
+                            const callUsage = message.message.usage;
+                            session.symphonyCallSeq = (session.symphonyCallSeq ?? 0) + 1;
+                            await this.client.sessionUpdate({
+                                sessionId: params.sessionId,
+                                update: {
+                                    sessionUpdate: "usage_update",
+                                    used: lastAssistantTotalUsage ?? 0,
+                                    size: session.contextWindowSize,
+                                    _meta: {
+                                        "symphony/callUsage": {
+                                            seq: session.symphonyCallSeq,
+                                            inputTokens: callUsage.input_tokens ?? 0,
+                                            outputTokens: callUsage.output_tokens ?? 0,
+                                            cachedReadTokens: callUsage.cache_read_input_tokens ?? 0,
+                                            cachedWriteTokens: callUsage.cache_creation_input_tokens ?? 0,
+                                            totalTokens: (callUsage.input_tokens ?? 0) +
+                                                (callUsage.output_tokens ?? 0) +
+                                                (callUsage.cache_read_input_tokens ?? 0) +
+                                                (callUsage.cache_creation_input_tokens ?? 0),
+                                        },
+                                    },
+                                },
+                            });
+                        }
                         // Strip <command-*>/<local-command-stdout> markers and render any
                         // remaining prose. Skill bodies and built-in slash commands (e.g.
                         // /usage, /status, /model) arrive wrapped in these tags; pure-marker
@@ -1465,6 +1496,18 @@ export class ClaudeAcpAgent {
             logger: this.logger,
         });
         await settingsManager.initialize();
+        // symphony-patch: overlay per-session settings supplied via session
+        // _meta (settings.json shape) on top of the resolved file settings.
+        // Everything the bridge derives from settings (permissions.defaultMode,
+        // model, availableModels, effortLevel) then works per session without
+        // writing settings files into the workspace.
+        const symphonySettings = params._meta?.["symphony/settings"];
+        if (symphonySettings &&
+            typeof symphonySettings === "object" &&
+            !Array.isArray(symphonySettings)) {
+            const baseGetSettings = settingsManager.getSettings.bind(settingsManager);
+            settingsManager.getSettings = () => mergeSymphonySettings(baseGetSettings(), symphonySettings);
+        }
         const mcpServers = {};
         if (Array.isArray(params.mcpServers)) {
             for (const server of params.mcpServers) {
@@ -1803,6 +1846,24 @@ function totalTokens(usage) {
  */
 function errorKindData(errorKind) {
     return errorKind ? { errorKind } : undefined;
+}
+// symphony-patch: two-level merge for per-session settings overlays. Nested
+// plain objects (e.g. permissions) merge key-wise so an overlay that only
+// sets permissions.defaultMode keeps the rest of the resolved permissions;
+// every other value replaces the base wholesale.
+function mergeSymphonySettings(base, overlay) {
+    const merged = { ...base };
+    for (const [key, value] of Object.entries(overlay)) {
+        const baseValue = merged[key];
+        const bothPlainObjects = value !== null &&
+            typeof value === "object" &&
+            !Array.isArray(value) &&
+            baseValue !== null &&
+            typeof baseValue === "object" &&
+            !Array.isArray(baseValue);
+        merged[key] = bothPlainObjects ? { ...baseValue, ...value } : value;
+    }
+    return merged;
 }
 /** Project a nullable API usage object into our non-null snapshot shape.
  *  Both SDK message_start and assistant message `usage` have `number | null`
