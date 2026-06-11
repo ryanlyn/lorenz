@@ -51,11 +51,9 @@ export async function executeTool(
   settings: Settings,
   fetchImpl: typeof fetch = fetch,
   registry: ToolRegistry = defaultToolRegistry,
-  env: NodeJS.ProcessEnv = process.env,
 ): Promise<ToolResult> {
   return executeMountedTool(mountedPacks(settings, registry), name, input, {
     settings,
     fetchImpl,
-    env,
   });
 }

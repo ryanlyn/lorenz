@@ -366,7 +366,7 @@ test("linear tool pack routes calls through the package tools", async () => {
   assert.equal(result.success, true);
 });
 
-test("linear_graphql resolves pack credentials from tool_options and env fallbacks", async () => {
+test("linear_graphql resolves pack credentials from tool_options at parse time", async () => {
   const requests: Array<{ url: string; authorization: string | null }> = [];
   const recordingFetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     requests.push({
@@ -376,8 +376,9 @@ test("linear_graphql resolves pack credentials from tool_options and env fallbac
     return jsonResponse({ data: {} });
   }) as typeof fetch;
 
-  // The pack's own tool_options.linear slice wins over the dispatch tracker credential,
-  // resolving whole-value $VAR references against the execution environment.
+  // The pack's own tool_options.linear slice wins over the dispatch tracker credential;
+  // whole-value $VAR references resolve against the parse-time environment, so the
+  // effective credential is fixed in the parsed settings (and in the MCP scope hash).
   const packSettings = parseConfig(
     {
       tracker: { kind: "linear", api_key: "tracker-token", project_slug: "mono" },
@@ -385,14 +386,13 @@ test("linear_graphql resolves pack credentials from tool_options and env fallbac
         linear: { api_key: "$PACK_LINEAR_KEY", endpoint: "https://linear.example/graphql" },
       },
     },
-    {},
+    { PACK_LINEAR_KEY: "pack-token" },
   );
   const packResult = await executeLinearTool(
     "linear_graphql",
     { query: "query { viewer { id } }" },
     packSettings,
     recordingFetch,
-    { PACK_LINEAR_KEY: "pack-token" },
   );
   assert.equal(packResult.success, true);
   assert.deepEqual(requests[0], {
@@ -400,16 +400,16 @@ test("linear_graphql resolves pack credentials from tool_options and env fallbac
     authorization: "pack-token",
   });
 
-  // Without pack options or a linear dispatch credential, LINEAR_API_KEY fills in.
-  const envResult = await executeLinearTool(
+  // Without pack options on a non-linear dispatch tracker there is no credential at all:
+  // the dispatch tracker's token must never be sent to Linear.
+  const foreignResult = await executeLinearTool(
     "linear_graphql",
     { query: "query { viewer { id } }" },
-    parseConfig({ tracker: { kind: "linear", project_slug: "mono" } }, {}),
+    parseConfig({ tracker: { kind: "memory", api_key: "foreign-token" } }, {}),
     recordingFetch,
-    { LINEAR_API_KEY: "env-token" },
   );
-  assert.equal(envResult.success, true);
-  assert.equal(requests[1]?.authorization, "env-token");
+  assert.equal(foreignResult.success, false);
+  assert.equal(requests.length, 1);
 });
 
 test("linear_graphql tool sends variables through unchanged", async () => {

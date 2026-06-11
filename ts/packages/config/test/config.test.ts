@@ -697,6 +697,17 @@ test("tool_options for an unknown pack fails dispatch validation with the known 
   );
 });
 
+test("tool_options for a pack without a validator is rejected rather than silently ignored", () => {
+  const settings = parseConfig({
+    tracker: { kind: "memory" },
+    tool_options: { tracker: { surprise: true } },
+  });
+  assert.throws(
+    () => validateDispatchConfig(settings, tools),
+    /tool_options\.tracker is not supported by the "tracker" pack/,
+  );
+});
+
 test("the local pack rejects unknown tool_options keys and wrong types", () => {
   const unknownKey = parseConfig({
     tracker: { kind: "memory" },

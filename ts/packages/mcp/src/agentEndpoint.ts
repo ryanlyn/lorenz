@@ -96,13 +96,20 @@ export async function acquireAgentMcpEndpoint(
         if (released) return;
         released = true;
         revokeMcpToken(token);
-        endpoint?.releaseTunnel?.();
-        if (endpoint?.localServer) await releaseLocalMcpServer(endpoint.localServer);
+        try {
+          endpoint?.releaseTunnel?.();
+        } finally {
+          if (endpoint?.localServer) await releaseLocalMcpServer(endpoint.localServer);
+        }
       },
     };
   } catch (error) {
     revokeMcpToken(token);
-    endpoint?.releaseTunnel?.();
+    try {
+      endpoint?.releaseTunnel?.();
+    } catch {
+      // The acquisition error below is the actionable failure; tunnel cleanup is best-effort.
+    }
     if (endpoint?.localServer) await releaseLocalMcpServer(endpoint.localServer);
     throw error;
   }

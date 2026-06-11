@@ -54,7 +54,9 @@ export function parseConfig(
   const trackerRaw = parsed.tracker ?? {};
   settings.tracker = parseTracker(settings.tracker, trackerRaw, env, registry);
   if (parsed.tools !== undefined) settings.tools = [...parsed.tools];
-  if (parsed.toolOptions !== undefined) settings.toolOptions = structuredClone(parsed.toolOptions);
+  if (parsed.toolOptions !== undefined) {
+    settings.toolOptions = resolveToolOptionReferences(parsed.toolOptions, env);
+  }
 
   const pollingRaw = parsed.polling ?? {};
   settings.polling.intervalMs = pollingRaw.intervalMs ?? settings.polling.intervalMs;
@@ -140,7 +142,14 @@ export function validateDispatchConfig(
 
   if (tools && settings.toolOptions !== undefined) {
     for (const [pack, options] of Object.entries(settings.toolOptions)) {
-      tools.require(pack).validateOptions?.(options);
+      const provider = tools.require(pack);
+      if (provider.validateOptions === undefined) {
+        if (Object.keys(options).length > 0) {
+          throw new Error(`tool_options.${pack} is not supported by the "${pack}" pack`);
+        }
+        continue;
+      }
+      provider.validateOptions(options);
     }
   }
 
@@ -646,6 +655,27 @@ function sameOptionValue(a: unknown, b: unknown): boolean {
   if (Object.is(a, b)) return true;
   if (typeof a !== "object" || typeof b !== "object" || a === null || b === null) return false;
   return JSON.stringify(a) === JSON.stringify(b);
+}
+
+/**
+ * Copy per-pack tool options, resolving whole-value `$VAR` and `op://` references in
+ * top-level string values at parse time - like shared tracker credentials - so the
+ * effective values are what execution uses and what the MCP server identity hashes.
+ */
+function resolveToolOptionReferences(
+  toolOptions: Record<string, Record<string, unknown>>,
+  env: NodeJS.ProcessEnv,
+): Record<string, Record<string, unknown>> {
+  const resolved: Record<string, Record<string, unknown>> = {};
+  for (const [pack, options] of Object.entries(toolOptions)) {
+    resolved[pack] = Object.fromEntries(
+      Object.entries(structuredClone(options)).map(([key, value]) => [
+        key,
+        typeof value === "string" ? (resolveConfiguredSecret(value, env) ?? value) : value,
+      ]),
+    );
+  }
+  return resolved;
 }
 
 function cloneSettings(settings: Settings): Settings {
