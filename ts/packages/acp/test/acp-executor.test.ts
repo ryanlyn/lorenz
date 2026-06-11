@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import net from "node:net";
 import path from "node:path";
@@ -586,6 +587,28 @@ test("resolveBridgeCommand points bare bridge names at the vendored packages", a
 
   const claude = resolveBridgeCommand("claude-agent-acp", null);
   assert.match(claude, /vendor\/claude-agent-acp\/dist\/index\.js/);
+});
+
+test("resolveBridgeCommand reads the executable from the vendored manifest", async () => {
+  for (const name of ["codex-acp", "claude-agent-acp"] as const) {
+    const resolved = resolveBridgeCommand(name, null);
+    const binPath = resolved.split(" ")[1]?.replace(/^'|'$/g, "") ?? "";
+    // Walk up to the package that owns the resolved executable.
+    let pkgRoot = path.dirname(binPath);
+    while (!existsSync(path.join(pkgRoot, "package.json"))) {
+      const parent = path.dirname(pkgRoot);
+      assert.notEqual(parent, pkgRoot, `no package.json above ${binPath}`);
+      pkgRoot = parent;
+    }
+    const manifest = JSON.parse(await fs.readFile(path.join(pkgRoot, "package.json"), "utf8")) as {
+      bin: Record<string, string>;
+      main?: string;
+    };
+    // The path is derived from the manifest's `bin` entry, not hardcoded and
+    // not `main` (claude's main is dist/lib.js, its bin is dist/index.js).
+    assert.equal(binPath, path.resolve(pkgRoot, manifest.bin[name]));
+    await fs.access(binPath);
+  }
 });
 
 test("resolveBridgeCommand preserves arguments, custom commands, and remote hosts", () => {

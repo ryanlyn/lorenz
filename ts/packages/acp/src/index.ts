@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
@@ -670,12 +670,10 @@ function providerConfigMeta(session: Session): Record<string, unknown> | undefin
   return { [isClaudeBridge ? "symphony/settings" : "symphony/config"]: providerConfig };
 }
 
-const VENDORED_BRIDGES: Record<string, { packageName: string; vendorDir: string }> = {
-  "codex-acp": { packageName: "@agentclientprotocol/codex-acp", vendorDir: "codex-acp" },
-  "claude-agent-acp": {
-    packageName: "@agentclientprotocol/claude-agent-acp",
-    vendorDir: "claude-agent-acp",
-  },
+/** Bare bridge command name → the vendored npm package that provides it. */
+const VENDORED_BRIDGES: Record<string, string> = {
+  "codex-acp": "@agentclientprotocol/codex-acp",
+  "claude-agent-acp": "@agentclientprotocol/claude-agent-acp",
 };
 
 /**
@@ -687,36 +685,59 @@ const VENDORED_BRIDGES: Record<string, { packageName: string; vendorDir: string 
 export function resolveBridgeCommand(bridgeCommand: string, workerHost: string | null): string {
   if (workerHost) return bridgeCommand;
   const [bin, ...args] = bridgeCommand.trim().split(/\s+/);
-  const bridge = bin ? VENDORED_BRIDGES[bin] : undefined;
-  if (!bridge) return bridgeCommand;
-  const binPath = resolveVendoredBridgeBinPath(bridge);
+  const packageName = bin ? VENDORED_BRIDGES[bin] : undefined;
+  if (!bin || !packageName) return bridgeCommand;
+  const binPath = resolveVendoredBridgeBinPath(packageName, bin);
   if (!binPath) return bridgeCommand;
   return [shellEscape(process.execPath), shellEscape(binPath), ...args].join(" ");
 }
 
-function resolveVendoredBridgeBinPath(bridge: {
-  packageName: string;
-  vendorDir: string;
-}): string | null {
-  try {
-    const require = createRequire(import.meta.url);
-    const manifestPath = require.resolve(`${bridge.packageName}/package.json`);
-    const binPath = path.join(path.dirname(manifestPath), "dist", "index.js");
-    if (existsSync(binPath)) return binPath;
-  } catch {
-    // Fall back to the repository workspace layout below.
-  }
+/**
+ * Locate a vendored bridge's executable. The package manifest is found via
+ * Node module resolution first (correct whenever the workspace package is
+ * linked locally or shipped as a real dependency), then by walking up to the
+ * in-repo `vendor/<name>` copy (covers running from source against a stale or
+ * absent node_modules). The executable path is read from the manifest's `bin`
+ * field in both cases, so a refreshed bridge that relocates its entry point is
+ * followed without touching this code.
+ */
+function resolveVendoredBridgeBinPath(packageName: string, binName: string): string | null {
+  const manifestPath = findVendoredManifest(packageName);
+  if (!manifestPath) return null;
+  const binPath = readManifestBin(manifestPath, binName);
+  return binPath && existsSync(binPath) ? binPath : null;
+}
 
-  const sourceDir = path.dirname(fileURLToPath(import.meta.url));
-  const workspaceBinPath = path.resolve(
-    sourceDir,
-    "../../..",
-    "vendor",
-    bridge.vendorDir,
-    "dist",
-    "index.js",
-  );
-  return existsSync(workspaceBinPath) ? workspaceBinPath : null;
+function findVendoredManifest(packageName: string): string | null {
+  try {
+    const manifestPath = createRequire(import.meta.url).resolve(`${packageName}/package.json`);
+    if (existsSync(manifestPath)) return manifestPath;
+  } catch {
+    // Not linked in node_modules; fall back to the in-repo vendor layout below.
+  }
+  // Vendored directories are named after the (unscoped) package; walk up from
+  // this module so the lookup is independent of the compiled output's depth.
+  const vendorDir = packageName.slice(packageName.lastIndexOf("/") + 1);
+  let dir = path.dirname(fileURLToPath(import.meta.url));
+  for (;;) {
+    const candidate = path.join(dir, "vendor", vendorDir, "package.json");
+    if (existsSync(candidate)) return candidate;
+    const parent = path.dirname(dir);
+    if (parent === dir) return null;
+    dir = parent;
+  }
+}
+
+function readManifestBin(manifestPath: string, binName: string): string | null {
+  try {
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as {
+      bin?: string | Record<string, string>;
+    };
+    const entry = typeof manifest.bin === "string" ? manifest.bin : manifest.bin?.[binName];
+    return entry ? path.resolve(path.dirname(manifestPath), entry) : null;
+  } catch {
+    return null;
+  }
 }
 
 function startBridgeProcess(
