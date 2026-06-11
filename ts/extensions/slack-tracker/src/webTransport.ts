@@ -1,14 +1,22 @@
-import { errorMessage, type Settings } from "@symphony/domain";
+import { errorMessage, isRecord, type Settings } from "@symphony/domain";
 
 import { isBotMention } from "./mapping.js";
 import { slackEndpoint, slackTrackerOptions } from "./options.js";
-import type { SlackMessage, SlackThreadReply, SlackTransport } from "./transport.js";
+import type {
+  SlackChannelScan,
+  SlackMessage,
+  SlackThreadReply,
+  SlackTransport,
+  SlackUser,
+} from "./transport.js";
 
 interface RawSlackMessage {
   ts?: string;
   text?: string;
   user?: string;
-  reactions?: Array<{ name?: string }>;
+  reply_count?: number;
+  latest_reply?: string;
+  reactions?: Array<{ name?: string; users?: string[] }>;
 }
 
 // Generous safety cap on conversations.history pages. The normal terminal condition is Slack
@@ -69,6 +77,10 @@ export class SlackWebTransport implements SlackTransport {
   }
 
   async listMentions(channels: string[]): Promise<SlackMessage[]> {
+    return (await this.scanChannels(channels)).mentions;
+  }
+
+  async scanChannels(channels: string[]): Promise<SlackChannelScan> {
     // Each poll scans recent conversations.history from newest backward (no oldest/latest
     // watermark). A per-channel incremental watermark is a DEFERRED enhancement: a naive
     // time-watermark would regress re-discovery of undispatched active issues, because the runtime
@@ -89,7 +101,7 @@ export class SlackWebTransport implements SlackTransport {
             "(fail closed). Set tracker.bot_user_id so only the bot's own mentions create issues.",
         );
       }
-      return [];
+      return { mentions: [], threadedRoots: [] };
     }
     // Channels are scanned CONCURRENTLY: Slack rate-limits conversations.history per channel,
     // and the per-channel isolation below makes the scans independent, so poll wall-time is the
@@ -100,14 +112,14 @@ export class SlackWebTransport implements SlackTransport {
         // missing_scope, or a persistent 429) must not blind candidate discovery across the
         // other channels. Skip-and-log the bad channel and keep the rest.
         //
-        // Crucially, a channel's mentions are buffered and only merged once that channel's scan
+        // Crucially, a channel's results are buffered and only merged once that channel's scan
         // COMPLETES (Slack exhausts its history, or we hit the page-cap truncation bound which is
         // loudly surfaced in the scan). If pagination fails partway through, the partial buffer
         // is DISCARDED: a partial scan must never masquerade as a complete one, because every
         // mention beyond the failed page would otherwise vanish silently from candidate discovery
         // and terminal cleanup.
         try {
-          return { channel, messages: await this.scanChannelMentions(channel) };
+          return { channel, scan: await this.scanChannel(channel) };
         } catch (error) {
           // A page failed after the transport's own retries: treat the whole channel as failed
           // and discard its partial buffer. One bad channel must not abort the others.
@@ -120,11 +132,15 @@ export class SlackWebTransport implements SlackTransport {
         }
       }),
     );
-    const out: SlackMessage[] = [];
+    const out: SlackChannelScan = { mentions: [], threadedRoots: [] };
     const failures: string[] = [];
     for (const result of results) {
-      if ("messages" in result) out.push(...result.messages);
-      else failures.push(`${result.channel}: ${result.failure}`);
+      if ("scan" in result) {
+        out.mentions.push(...result.scan.mentions);
+        out.threadedRoots.push(...result.scan.threadedRoots);
+      } else {
+        failures.push(`${result.channel}: ${result.failure}`);
+      }
     }
     // If there were channels to scan but NONE completed, surface the failure (preserving the
     // reject contract the runtime relies on for poll_error) rather than silently reporting a
@@ -137,9 +153,9 @@ export class SlackWebTransport implements SlackTransport {
     return out;
   }
 
-  /** Scan one channel's full history for bot mentions; throws when pagination fails partway. */
-  private async scanChannelMentions(channel: string): Promise<SlackMessage[]> {
-    const buffer: SlackMessage[] = [];
+  /** Scan one channel's full root-message history; throws when pagination fails partway. */
+  private async scanChannel(channel: string): Promise<SlackChannelScan> {
+    const buffer: SlackChannelScan = { mentions: [], threadedRoots: [] };
     let cursor: string | undefined;
     // Page until Slack stops returning a next_cursor: full exhaustion is the normal terminal
     // condition. The page count only guards against a pathological non-terminating cursor.
@@ -150,8 +166,12 @@ export class SlackWebTransport implements SlackTransport {
       const messages = Array.isArray(body.messages) ? (body.messages as RawSlackMessage[]) : [];
       for (const m of messages) {
         if (typeof m.ts !== "string") continue;
-        if (!isBotMention(m.text ?? "", this.botUserId)) continue;
-        buffer.push(toMessage(channel, m));
+        if (isBotMention(m.text ?? "", this.botUserId)) {
+          buffer.mentions.push(toMessage(channel, m, this.botUserId));
+        } else if ((m.reply_count ?? 0) > 0) {
+          // Non-mention roots that carry a thread: candidates for reply-mention tracking.
+          buffer.threadedRoots.push(toMessage(channel, m, this.botUserId));
+        }
       }
       cursor = nextCursor(body);
       if (!cursor) break;
@@ -197,7 +217,65 @@ export class SlackWebTransport implements SlackTransport {
     });
     const messages = Array.isArray(body.messages) ? (body.messages as RawSlackMessage[]) : [];
     const found = messages.find((m) => m.ts === ts);
-    return found ? toMessage(channel, found) : null;
+    return found ? toMessage(channel, found, this.botUserId) : null;
+  }
+
+  async getUser(userId: string): Promise<SlackUser | null> {
+    let body: Record<string, unknown>;
+    try {
+      body = await this.get("users.info", { user: userId });
+    } catch {
+      // An unknown or unreadable user resolves to null rather than failing the caller's read.
+      return null;
+    }
+    const user = body.user;
+    if (!isRecord(user) || typeof user.id !== "string") return null;
+    const profile = isRecord(user.profile) ? user.profile : {};
+    return {
+      id: user.id,
+      ...(typeof user.name === "string" ? { name: user.name } : {}),
+      ...(typeof user.real_name === "string" ? { realName: user.real_name } : {}),
+      ...(typeof profile.display_name === "string" && profile.display_name !== ""
+        ? { displayName: profile.display_name }
+        : {}),
+      ...(typeof user.is_bot === "boolean" ? { isBot: user.is_bot } : {}),
+    };
+  }
+
+  async listAround(
+    channel: string,
+    ts: string,
+    window: { before: number; after: number },
+  ): Promise<SlackMessage[]> {
+    // Two bounded history reads around the anchor: at-or-before it (latest+inclusive walks
+    // backwards from the anchor) and strictly after it (oldest exclusive). Both are pure reads.
+    const [beforeBody, afterBody] = await Promise.all([
+      window.before > 0
+        ? this.get("conversations.history", {
+            channel,
+            latest: ts,
+            inclusive: "true",
+            limit: String(window.before),
+          })
+        : Promise.resolve<Record<string, unknown>>({}),
+      window.after > 0
+        ? this.get("conversations.history", {
+            channel,
+            oldest: ts,
+            inclusive: "false",
+            limit: String(window.after),
+          })
+        : Promise.resolve<Record<string, unknown>>({}),
+    ]);
+    const collect = (body: Record<string, unknown>): SlackMessage[] =>
+      (Array.isArray(body.messages) ? (body.messages as RawSlackMessage[]) : [])
+        .filter((m) => typeof m.ts === "string")
+        .map((m) => toMessage(channel, m, this.botUserId));
+    const merged = new Map<string, SlackMessage>();
+    for (const message of [...collect(beforeBody), ...collect(afterBody)]) {
+      merged.set(message.ts, message);
+    }
+    return [...merged.values()].sort((a, b) => Number.parseFloat(a.ts) - Number.parseFloat(b.ts));
   }
 
   async getThread(channel: string, ts: string): Promise<SlackThreadReply[]> {
@@ -374,14 +452,23 @@ function nextCursor(body: Record<string, unknown>): string | undefined {
   return cursor;
 }
 
-function toMessage(channel: string, m: RawSlackMessage): SlackMessage {
+function toMessage(channel: string, m: RawSlackMessage, botUserId?: string): SlackMessage {
+  const botReacted =
+    botUserId !== undefined &&
+    (m.reactions ?? []).some((r) => Array.isArray(r.users) && r.users.includes(botUserId));
   return {
     channel,
     ts: m.ts ?? "",
     text: m.text ?? "",
+    ...(typeof m.user === "string" ? { user: m.user } : {}),
     reactions: (m.reactions ?? [])
       .map((r) => r.name)
       .filter((n): n is string => typeof n === "string"),
+    ...(typeof m.reply_count === "number" && m.reply_count > 0
+      ? { replyCount: m.reply_count }
+      : {}),
+    ...(typeof m.latest_reply === "string" ? { latestReply: m.latest_reply } : {}),
+    ...(botReacted ? { botReacted: true } : {}),
   };
 }
 

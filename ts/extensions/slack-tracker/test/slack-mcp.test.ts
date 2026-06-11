@@ -38,6 +38,8 @@ test("slack dispatch mounts the neutral tracker pack plus the slack pack by defa
       "slack_comment",
       "slack_read_thread",
       "slack_query",
+      "slack_user_info",
+      "slack_channel_context",
     ],
   );
 });
@@ -85,10 +87,14 @@ test("neutral tracker ops read, query, comment, and update status over the slack
 
   const updated = await ops.updateStatus!("C1:1.1", "Done");
   assert.equal(updated.state, "Done");
+  // The bot's reaction mirror still reflects the new state for glanceability.
   assert.deepEqual((await transport.getMessage("C1", "1.1"))!.reactions, ["white_check_mark"]);
 
   await ops.addComment!("C1:1.1", "progress note");
-  assert.deepEqual(transport.replies, [{ channel: "C1", threadTs: "1.1", body: "progress note" }]);
+  assert.deepEqual(transport.replies, [
+    { channel: "C1", threadTs: "1.1", body: "status: Done" },
+    { channel: "C1", threadTs: "1.1", body: "progress note" },
+  ]);
 
   // Slack issues are created by humans @-mentioning the bot, never by an agent.
   assert.equal(ops.createIssue, undefined);

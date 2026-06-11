@@ -98,10 +98,10 @@ Work only in the provided repository copy. Do not touch any other path.
 This workflow is backed by **Slack**, not Linear. There is **no Linear and no `linear_graphql` tool**.
 
 - `tracker.bot_user_id` (`SLACK_BOT_USER_ID`) is **required**. It scopes issue creation to the bot's own mentions: only messages that @-mention this exact user become issues. Without it the tracker refuses to run (config validation fails) and the production transport fails closed (matches nothing), so ordinary human-to-human `<@U...>` mentions never spawn agents or expose their text to workers.
-- A task is created when someone **@-mentions the bot** (`$SLACK_BOT_USER_ID`) in one of the watched `tracker.channels`. That message is the issue.
-- The mentioned message's text **is the issue description/title**; threaded replies on that message are the discussion/context.
-- The issue id is the Slack message reference in `<channel>:<ts>` form (for example `C0123456789:1717000000.000100`). This is the `{{ issue.id }}` you operate on and the `issueId` you pass to `slack_update_status` / `slack_comment`. The display label `{{ issue.identifier }}` (for example `SLK-C0123456789-1717000000-000100`) is for reference only and is **not** a valid `issueId`; never pass it to a tool.
-- **Status is shown as an emoji reaction** on the source message. You never edit frontmatter or a file; you change a reaction.
+- A task is created when someone **@-mentions the bot** (`$SLACK_BOT_USER_ID`) in one of the watched `tracker.channels` - in a channel message OR in a thread reply. A channel-message mention is the issue itself; a thread-reply mention tracks that thread as an issue (anchored at the thread root) with the mention reply as the request, and the bot marks the root with its tracking reaction.
+- The request message's text **is the issue description/title**; threaded replies on the root message are the discussion/context.
+- The issue id is the Slack message reference of the THREAD ROOT in `<channel>:<ts>` form (for example `C0123456789:1717000000.000100`). This is the `{{ issue.id }}` you operate on and the `issueId` you pass to `slack_update_status` / `slack_comment`. The display label `{{ issue.identifier }}` (for example `SLK-C0123456789-1717000000-000100`) is for reference only and is **not** a valid `issueId`; never pass it to a tool.
+- **Status lives in the thread**: the latest status event wins, where events are the bot's own `status: <Name>` replies (posted by `slack_update_status`) and human command mentions (`@bot done`, `@bot cancel`, `@bot reopen`, `@bot status <Name>`). Reactions are only the bot's visibility mirror; threads that have never seen a status event fall back to the reaction reading.
 
 ## Routing with hashtags
 
@@ -110,34 +110,36 @@ Slack issues carry only labels derived from hashtags in the message text: a `#ta
 - Tag a message `#route-<name>` to route it. `#route-backend` yields the label `route-backend`, which dispatch resolves to the route `backend`. Set `only_routes` accordingly (for example `only_routes: ["backend"]`) so a given instance only picks up its routes.
 - Plain hashtags such as `#backend` stay **non-route** labels (they do not start with `route-`). With the default `accept_unrouted: true`, those messages are still picked up; an instance with `only_routes` set and `accept_unrouted: false` would skip them.
 
-## Status as emoji reactions
+## Status: thread commands plus a reaction mirror
 
-The `emoji_states` mapping controls how status appears as a reaction on the source message:
+Status transitions are ts-ordered events in the issue's thread; the latest wins:
 
-- `:eyes:` -> `In Progress`
-- `:white_check_mark:` -> `Done`
-- `:x:` -> `Cancelled`
-
-You set status with `slack_update_status`, which **swaps the reaction**: it removes any other status emoji it manages and adds the one for the target status. A message with no managed reaction is effectively new/`Todo`.
+- You (the agent) set status with `slack_update_status`, which posts the bot's authoritative `status: <Name>` thread reply and then mirrors the state onto the bot's own reaction (`emoji_states`: `:eyes:` -> `In Progress`, `:white_check_mark:` -> `Done`, `:x:` -> `Cancelled`) for glanceability.
+- Humans transition status by mentioning the bot with a command reply: `@bot done`, `@bot cancel`, `@bot reopen`, `@bot in progress`, `@bot status <Name>`.
+- A human mention with **no** recognized command re-opens a terminal issue to the first active state: re-mentioning the bot always means "this needs attention again".
+- Reactions are per-author in Slack (the bot cannot remove a human's reaction and vice versa), so reactions are never the source of truth once a status event exists; do not reason about status from reactions.
 
 ## Available tools
 
-You have four Slack tools (two writes plus two reads, symmetric with how `linear_graphql` both reads and writes):
+You have six Slack tools:
 
-- `slack_update_status` - set the issue's status by swapping its status emoji reaction. Args: `issueId` (`<channel>:<ts>`), `status` (one of `In Progress`, `Done`, `Cancelled`). Example: set `In Progress` when you pick it up, `Done` when complete.
+- `slack_update_status` - set the issue's status by posting the bot's `status:` thread reply (and mirroring the bot's reaction). Args: `issueId` (`<channel>:<ts>`), `status` (a configured active/terminal state name, e.g. `In Progress`, `Done`, `Cancelled`). Example: set `In Progress` when you pick it up, `Done` when complete.
 - `slack_comment` - post a threaded reply on the source message. Args: `issueId` (`<channel>:<ts>`), `body`. Use it to post human-visible progress notes. These replies stay human-visible in the thread and are readable later: `slack_read_thread` returns them, so you can recover plan/validation state across turns.
-- `slack_read_thread` - read the issue's authoritative state. Args: `issueId` (`<channel>:<ts>`). Returns the current status, the source message, and its thread replies. Use it to recover your prior progress notes and the latest status on a continuation turn.
-- `slack_query` - read-only query over the tracked bot-mention issues in the watched channels. Args: `channels?`, `where?`, `select?`, `expand?` (`thread`, `reactions`), `order_by?`, `limit?`, `offset?`. Use it to survey related issues; it never mutates anything.
+- `slack_read_thread` - read the issue's authoritative state. Args: `issueId` (`<channel>:<ts>`). Returns the thread-derived status, the source message, the request reply (for thread-tracked issues), reactions, the message permalink, and all thread replies. Use it to recover your prior progress notes, catch new human replies and commands, and confirm the latest status.
+- `slack_query` - read-only query over the tracked issues in the watched channels (bot-mention roots and bot-marked threads), with thread-derived state. Args: `channels?`, `where?`, `select?`, `expand?` (`thread`, `reactions`), `order_by?`, `limit?`, `offset?`. Use it to survey related issues; it never mutates anything.
+- `slack_user_info` - resolve a `U...` user id (from a `<@U...>` mention or a reply's `user` field) to its profile (name, real name, display name, bot flag). Args: `userId`.
+- `slack_channel_context` - read the channel conversation around the issue's source message (read-only, ascending). Args: `issueId`, `before?` (default 10, max 50), `after?` (default 10, max 50). Use it when the request references surrounding discussion ("see the message above").
 
 There is **no `linear_graphql`** tool and no Linear MCP server. Do not attempt to call Linear. Do not stop because "Linear is not configured" - this workflow never uses Linear. There is also no `slack_create_issue`: issues are created by humans @-mentioning the bot, not by the agent.
 
 ## Default posture
 
-- Start by reading the current emoji reaction to determine status, then follow the matching flow. On a continuation turn, call `slack_read_thread(issueId)` to confirm the authoritative status and re-read your prior thread replies before routing.
+- Start with `slack_read_thread(issueId)`: it returns the authoritative thread-derived status, the request, and every reply, including human commands posted since dispatch.
+- Re-check the thread at milestones and ALWAYS before finishing a turn: humans reply mid-run ("stop", "wrong repo", scope changes, `@bot cancel`), and the thread is the only channel they have to reach you. Honor a `Cancelled`/`Done` transition immediately.
 - Post human-visible progress as threaded replies with `slack_comment`. They stay human-visible in the thread and are also readable via `slack_read_thread`, so they double as your continuation notes alongside the restored workspace and the issue's current status.
 - Spend extra effort up front on planning and verification design before implementation.
 - Reproduce first: confirm the current behavior/issue signal before changing code.
-- Move status only when the matching quality bar is met (use `slack_update_status` to swap the reaction).
+- Move status only when the matching quality bar is met (use `slack_update_status`).
 - Operate autonomously end-to-end unless blocked by missing requirements, secrets, or permissions.
 
 ## Related skills
@@ -150,16 +152,16 @@ There is **no `linear_graphql`** tool and no Linear MCP server. Do not attempt t
 
 ## Status map
 
-- No managed reaction / `Todo` -> queued; immediately add the `:eyes:` reaction via `slack_update_status(issueId, "In Progress")` before active work.
-- `In Progress` (`:eyes:`) -> implementation actively underway.
-- `Done` (`:white_check_mark:`) -> terminal; no further action required.
-- `Cancelled` (`:x:`) -> terminal; do not reopen.
+- `Todo` -> queued; immediately call `slack_update_status(issueId, "In Progress")` before active work.
+- `In Progress` -> implementation actively underway.
+- `Done` -> terminal; no further action required. A human re-mention or `@bot reopen` brings it back to `Todo`.
+- `Cancelled` -> terminal; never resume cancelled work on your own - only a human command re-opens it.
 
 ## Step 0: Determine current status and route
 
-1. Read the source message and its current managed reaction to determine status. Call `slack_read_thread(issueId)` to recover the authoritative status, the source message, and your prior thread replies.
+1. Call `slack_read_thread(issueId)` to recover the authoritative thread-derived status, the request, and the thread replies (including any human commands posted since dispatch).
 2. Route to the matching flow:
-   - `Todo` (no managed reaction) -> call `slack_update_status(issueId, "In Progress")`, then start the execution flow.
+   - `Todo` -> call `slack_update_status(issueId, "In Progress")`, then start the execution flow.
    - `In Progress` -> continue the execution flow using your restored workspace (branch/commits and any open PR), the issue's current state, and your prior thread replies from `slack_read_thread(issueId)` as the source of truth for what is done.
    - `Done` / `Cancelled` -> do nothing and shut down.
 3. If a PR already exists for the current branch and it is `CLOSED` or `MERGED`, treat prior branch work as non-reusable. Create a fresh branch from `origin/main` and restart the execution flow.
@@ -182,8 +184,9 @@ There is **no `linear_graphql`** tool and no Linear MCP server. Do not attempt t
 
 ## Step 3: Complete
 
-1. When implementation is complete, validated, and the PR is open and green, set the issue to `Done` with `slack_update_status(issueId, "Done")` (swaps the reaction to `:white_check_mark:`).
-2. If the work is abandoned for a legitimate reason, set `Cancelled` (`:x:`) and post why in a threaded reply.
+1. Re-check the thread one final time (`slack_read_thread`) for late human replies or commands before closing out.
+2. When implementation is complete, validated, and the PR is open and green, set the issue to `Done` with `slack_update_status(issueId, "Done")`.
+3. If the work is abandoned for a legitimate reason, set `Cancelled` and post why in a threaded reply.
 
 ## Completion bar before Done
 
@@ -194,10 +197,10 @@ There is **no `linear_graphql`** tool and no Linear MCP server. Do not attempt t
 ## Guardrails
 
 - Never call Linear or `linear_graphql`; this tracker is Slack-only.
-- Only act on messages that @-mention the configured bot in a watched channel.
-- Status changes happen exclusively through `slack_update_status` (it swaps the managed reaction); never manually add/remove reactions for status by hand.
+- Only act on tracked issues (bot-mention messages or bot-marked threads) in a watched channel.
+- Status changes happen exclusively through `slack_update_status` (it posts the bot's `status:` thread reply); never post `status:`-prefixed comments by hand and never reason about status from reactions.
 - If the branch PR is already closed/merged, create a new branch from `origin/main` and restart from reproduction/planning.
-- Do not reopen terminal (`Done`/`Cancelled`) issues.
+- Do not reopen terminal (`Done`/`Cancelled`) issues on your own initiative; humans reopen by re-mentioning the bot or with `@bot reopen`.
 - Use threaded replies (`slack_comment`) as a human-visible progress log; they stay visible in the thread and are readable via `slack_read_thread`, so they can back your continuation state alongside the git workspace and issue status.
 - If blocked by missing required tools/auth, post one threaded reply via `slack_comment` describing the blocker, its impact, and the next unblock action.
 

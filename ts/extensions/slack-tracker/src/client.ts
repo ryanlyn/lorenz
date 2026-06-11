@@ -1,14 +1,11 @@
 import { defaultStateType, normalizeIssue } from "@symphony/issue";
 import type { Issue, IssueStateType, RuntimeTrackerClient, Settings } from "@symphony/domain";
 
-import {
-  isBotMention,
-  stateFromReactions,
-  statusEmojiMap,
-  stripLeadingMention,
-} from "./mapping.js";
+import { stateFromReactions, statusEmojiMap, stripLeadingMention } from "./mapping.js";
+import { requireTrackedMessage } from "./operations.js";
 import { slackTrackerOptions } from "./options.js";
-import type { SlackMessage, SlackTransport } from "./transport.js";
+import { resolveThreadState, type ThreadState } from "./threadState.js";
+import type { SlackChannelScan, SlackMessage, SlackTransport } from "./transport.js";
 
 export function splitIssueId(id: string): [string, string] | null {
   const idx = id.indexOf(":");
@@ -43,25 +40,34 @@ function deriveLabels(text: string): string[] {
 
 /**
  * A flat, agent-facing view of a Slack issue derived from its source message. Shared by the
- * read tooling (`slack_query`) and {@link SlackTrackerClient.toIssue} so the two never drift on
- * how a message maps to a title/state/labels.
+ * read tooling (`slack_query`) and the runtime client so the two never drift on how a message
+ * maps to a title/state/labels.
  */
 export interface SlackIssueRow {
-  /** `<channel>:<ts>` - the canonical Slack issue id. */
+  /** `<channel>:<ts>` - the canonical Slack issue id (always the thread ROOT). */
   issueId: string;
   channel: string;
   ts: string;
-  /** First line of the message with the leading bot mention stripped (falls back to the ts). */
+  /** First line of the request with the leading bot mention stripped (falls back to the ts). */
   title: string;
-  /** Reaction-derived workflow state (e.g. "In Progress", "Done"), or "Todo" when none. */
+  /** Workflow state: thread-derived when known, else reaction-derived, else "Todo". */
   state: string;
   stateType: IssueStateType;
   labels: string[];
-  /** Full message text. */
+  /** Full root message text. */
   text: string;
   reactions: string[];
   /** Permalink to the source message, when the workspace URL is known. */
   url?: string | undefined;
+}
+
+/** Context a caller already resolved for the row: permalink base and thread-derived state. */
+export interface SlackIssueContext {
+  permalinkBase?: string | null | undefined;
+  /** Thread-derived state; when omitted the row falls back to the reaction-derived reading. */
+  state?: string | undefined;
+  /** The request reply for threads whose root does not mention the bot. */
+  request?: ThreadState["request"];
 }
 
 /**
@@ -73,23 +79,27 @@ export function slackPermalink(base: string, channel: string, ts: string): strin
 }
 
 /**
- * Map a Slack message onto the flat {@link SlackIssueRow} view using the same status/title/label
- * derivation the tracker uses for candidate issues. Pure; performs no IO - callers that want a
- * permalink pass the workspace base URL (`SlackTransport.teamUrl()`).
+ * Map a Slack root message onto the flat {@link SlackIssueRow} view. Pure; performs no IO -
+ * thread-derived state and the workspace base URL come in via {@link SlackIssueContext}.
  */
 export function slackMessageToRow(
   message: SlackMessage,
   settings: Settings,
-  permalinkBase?: string | null,
+  context: SlackIssueContext = {},
 ): SlackIssueRow {
-  const map = statusEmojiMap(settings);
-  const state = stateFromReactions(message.reactions, map, settings);
-  const firstLine = (message.text.split("\n")[0] ?? "").trim();
+  const state =
+    context.state ?? stateFromReactions(message.reactions, statusEmojiMap(settings), settings);
+  // For reply-tracked threads the request reply carries the ask; the root is surrounding
+  // conversation. Title (and routing hashtags) come from the request, labels from both.
+  const requestText = context.request?.text;
+  const titleSource = requestText ?? message.text;
+  const firstLine = (titleSource.split("\n")[0] ?? "").trim();
   const title =
     stripLeadingMention(firstLine, slackTrackerOptions(settings).botUserId).trim() || message.ts;
   // normalizeIssue requires a stateType. Fall back to "backlog" for custom emoji_states mappings
   // whose state name is not a known category, so an unknown status never crashes the read.
   const stateType = defaultStateType(state) ?? "backlog";
+  const base = context.permalinkBase;
   return {
     issueId: `${message.channel}:${message.ts}`,
     channel: message.channel,
@@ -97,31 +107,34 @@ export function slackMessageToRow(
     title,
     state,
     stateType,
-    labels: deriveLabels(message.text),
+    labels: deriveLabels(requestText ? `${message.text}\n${requestText}` : message.text),
     text: message.text,
     reactions: [...message.reactions],
-    ...(permalinkBase ? { url: slackPermalink(permalinkBase, message.channel, message.ts) } : {}),
+    ...(base ? { url: slackPermalink(base, message.channel, message.ts) } : {}),
   };
 }
 
 /**
- * Map a Slack message onto a normalized tracker {@link Issue}. Shared by the runtime client
- * and the tracker tool operations so candidate discovery and agent tools never drift on how a
- * message becomes an issue. The identifier keeps the channel: Slack ts values are only unique
- * per channel, and workspace directories and cleanup are keyed by identifier downstream.
+ * Map a Slack root message onto a normalized tracker {@link Issue}. Shared by the runtime
+ * client and the tracker tool operations so candidate discovery and agent tools never drift on
+ * how a message becomes an issue. The identifier keeps the channel: Slack ts values are only
+ * unique per channel, and workspace directories and cleanup are keyed by identifier downstream.
  */
 export function slackMessageToIssue(
   message: SlackMessage,
   settings: Settings,
-  permalinkBase?: string | null,
+  context: SlackIssueContext = {},
 ): Issue {
-  const row = slackMessageToRow(message, settings, permalinkBase);
+  const row = slackMessageToRow(message, settings, context);
   const createdAtMs = Math.floor(Number.parseFloat(message.ts) * 1000);
+  const description = context.request
+    ? `${context.request.text}\n\n(thread root) ${message.text}`
+    : message.text;
   return normalizeIssue({
     id: row.issueId,
     identifier: `SLK-${message.channel}-${message.ts.replace(/\./g, "-")}`,
     title: row.title,
-    description: message.text,
+    description,
     state: row.state,
     state_type: row.stateType,
     labels: row.labels,
@@ -132,76 +145,138 @@ export function slackMessageToIssue(
 }
 
 /**
- * One mention scan serves every read within a poll cycle: the runtime triggers two
- * back-to-back full scans per cycle (terminal-state reconciliation, then candidates), and each
- * scan pages the full channel history against a tightly rate-limited API. Comfortably shorter
- * than any real poll interval, so cross-poll staleness stays bounded.
+ * Tracked roots of one scan: every bot-mention root, plus every threaded root the bot has
+ * marked with its own reaction (reply-tracked issues recognized across restarts without
+ * re-reading their threads).
  */
-const MENTIONS_CACHE_TTL_MS = 10_000;
+export function trackedRootsOf(scan: SlackChannelScan): SlackMessage[] {
+  return [...scan.mentions, ...scan.threadedRoots.filter((root) => root.botReacted === true)];
+}
+
+/**
+ * One scan serves every read within a poll cycle: the runtime triggers two back-to-back full
+ * scans per cycle (terminal-state reconciliation, then candidates), and each scan pages the
+ * full channel history against a tightly rate-limited API. Comfortably shorter than any real
+ * poll interval, so cross-poll staleness stays bounded.
+ */
+const SCAN_CACHE_TTL_MS = 10_000;
+
+const DEFAULT_REPLY_LOOKBACK_DAYS = 2;
 
 export class SlackTrackerClient implements RuntimeTrackerClient {
-  private mentionsCache: { at: number; key: string; messages: SlackMessage[] } | null = null;
+  private scanCache: { at: number; key: string; scan: SlackChannelScan } | null = null;
+  /**
+   * Oldest thread activity (epoch seconds) considered when hunting for NEW reply-mention
+   * requests in untracked threads. Once tracked, a thread is marked with the bot's reaction
+   * and recognized regardless of age; the floor only bounds first discovery, so a reply
+   * mention posted while the daemon was down longer than the lookback is not picked up.
+   */
+  private readonly replyFloor: number;
 
   constructor(
     private readonly settings: Settings,
     private readonly transport: SlackTransport,
-  ) {}
+  ) {
+    const lookbackDays =
+      slackTrackerOptions(settings).replyLookbackDays ?? DEFAULT_REPLY_LOOKBACK_DAYS;
+    this.replyFloor = Date.now() / 1000 - lookbackDays * 86_400;
+  }
 
   async fetchCandidateIssues(): Promise<Issue[]> {
     return this.fetchIssuesByStates(this.settings.tracker.activeStates);
   }
 
   async fetchIssuesByIds(ids: string[]): Promise<Issue[]> {
-    const channels = new Set(this.channels());
-    const botUserId = slackTrackerOptions(this.settings).botUserId;
     const base = await this.transport.teamUrl();
     const out: Issue[] = [];
     for (const id of ids) {
       const parts = splitIssueId(id);
       if (!parts) continue;
       const [channel, ts] = parts;
-      // Apply the same tracked-message predicate as candidate discovery and the Slack write tools:
-      // only configured channels, and only messages that still mention the bot. If a human edits the
-      // source message to drop the mention, the issue reconciles as gone instead of staying live.
-      if (!channels.has(channel)) continue;
-      const msg = await this.transport.getMessage(channel, ts);
-      if (!msg) continue;
-      if (!isBotMention(msg.text, botUserId)) continue;
-      out.push(slackMessageToIssue(msg, this.settings, base));
+      // Apply the same tracked-message predicate as candidate discovery and the Slack write
+      // tools. If a human edits the request away, the issue reconciles as gone, not live.
+      let root: SlackMessage;
+      try {
+        root = await requireTrackedMessage(this.settings, this.transport, channel, ts);
+      } catch {
+        continue;
+      }
+      const thread = await resolveThreadState(this.settings, this.transport, root);
+      out.push(
+        slackMessageToIssue(root, this.settings, {
+          permalinkBase: base,
+          state: thread.state,
+          request: thread.request,
+        }),
+      );
     }
     return out;
   }
 
   async fetchIssuesByStates(states: string[]): Promise<Issue[]> {
     const wanted = new Set(states.map((s) => s.trim().toLowerCase()));
-    const issues = await this.allMentionIssues();
+    const issues = await this.trackedIssues();
     return issues.filter((i) => wanted.has(i.state.trim().toLowerCase()));
   }
 
-  private async allMentionIssues(): Promise<Issue[]> {
-    const [messages, base] = await Promise.all([
-      this.listMentionsCached(),
-      this.transport.teamUrl(),
-    ]);
-    return messages.map((m) => slackMessageToIssue(m, this.settings, base));
+  private async trackedIssues(): Promise<Issue[]> {
+    const [scan, base] = await Promise.all([this.scanCached(), this.transport.teamUrl()]);
+    const roots = trackedRootsOf(scan);
+    // Hunt for NEW reply-mention requests: untracked threads with activity inside the lookback
+    // window. A thread is tracked once a reply mentions the bot; the bot then marks the root
+    // with its own reaction so later polls (and restarts) recognize it from the scan alone.
+    for (const root of scan.threadedRoots) {
+      if (root.botReacted === true) continue;
+      if (tsValue(root.latestReply) <= this.replyFloor) continue;
+      const thread = await resolveThreadState(this.settings, this.transport, root);
+      if (!thread.request) continue;
+      roots.push(root);
+      try {
+        await this.transport.addReaction(root.channel, root.ts, this.markerEmoji());
+      } catch {
+        // Tracking still works this poll; the marker retries on the next discovery pass.
+      }
+    }
+    const issues: Issue[] = [];
+    for (const root of roots) {
+      const thread = await resolveThreadState(this.settings, this.transport, root);
+      issues.push(
+        slackMessageToIssue(root, this.settings, {
+          permalinkBase: base,
+          state: thread.state,
+          request: thread.request,
+        }),
+      );
+    }
+    return issues;
   }
 
-  private async listMentionsCached(): Promise<SlackMessage[]> {
+  private async scanCached(): Promise<SlackChannelScan> {
     const key = this.channels().join(",");
     const now = Date.now();
     if (
-      this.mentionsCache &&
-      this.mentionsCache.key === key &&
-      now - this.mentionsCache.at < MENTIONS_CACHE_TTL_MS
+      this.scanCache &&
+      this.scanCache.key === key &&
+      now - this.scanCache.at < SCAN_CACHE_TTL_MS
     ) {
-      return this.mentionsCache.messages;
+      return this.scanCache.scan;
     }
-    const messages = await this.transport.listMentions(this.channels());
-    this.mentionsCache = { at: Date.now(), key, messages };
-    return messages;
+    const scan = await this.transport.scanChannels(this.channels());
+    this.scanCache = { at: Date.now(), key, scan };
+    return scan;
   }
 
   private channels(): string[] {
     return slackTrackerOptions(this.settings).channels;
   }
+
+  private markerEmoji(): string {
+    return slackTrackerOptions(this.settings).markerEmoji ?? "robot_face";
+  }
+}
+
+function tsValue(ts: string | undefined): number {
+  if (ts === undefined) return 0;
+  const value = Number.parseFloat(ts);
+  return Number.isFinite(value) ? value : 0;
 }

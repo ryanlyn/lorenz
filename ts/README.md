@@ -273,8 +273,9 @@ Supported kinds:
   Configure `tracker.mcp.url` and either `tracker.project_keys` or `tracker.jql`. Tool names can be
   overridden under `tracker.mcp.tools`.
 - `local` - issues live as Markdown files on disk. No external service required.
-- `slack` - an @-mention of the bot is an issue, an emoji reaction is the status, and a thread
-  reply is a comment.
+- `slack` - an @-mention of the bot (in a channel message or a thread reply) is an issue, the
+  thread carries the status (`@bot` commands and bot `status:` replies), and a thread reply is
+  a comment.
 - `memory` - an in-process tracker used for tests and dry runs.
 
 All non-memory providers expose the provider-neutral agent tools:
@@ -423,11 +424,14 @@ npx tsx sandbox/seed-local.ts /tmp/demo-board 3 XXX-  # seeds XXX-1..XXX-3 (matc
 Point `tracker.path` at the directory you seeded and run Symphony as usual. If you set a custom
 `id_prefix`, pass the same prefix to the seeder so the seeded ids match what the tracker expects.
 
-### Slack tracker (mention + reaction)
+### Slack tracker (mention + thread commands)
 
-The Slack tracker treats an @-mention of a bot as an issue. The mentioned message's text is the
-issue title/description, threaded replies are comments, and a status emoji reaction on the source
-message is the status. See `WORKFLOW.slack.md` for a complete example workflow.
+The Slack tracker treats an @-mention of a bot as an issue - in a channel message or in a thread
+reply (a reply mention tracks its thread, anchored at the root, with the reply as the request).
+The request's text is the issue title/description, threaded replies are comments, and the
+issue's STATUS lives in the thread: the bot posts `status: <Name>` replies and humans transition
+with `@bot` command mentions; the latest event wins, and the bot mirrors the state onto its own
+reaction for glanceability. See `WORKFLOW.slack.md` for a complete example workflow.
 
 Set up a Slack app:
 
@@ -435,9 +439,11 @@ Set up a Slack app:
 2. Under "OAuth & Permissions", add these **bot token scopes**:
    - `channels:history` - read messages in public channels.
    - `groups:history` - read messages in private channels (only if you watch private channels).
-   - `reactions:read` - read the status emoji reactions on a message.
-   - `reactions:write` - set status by adding/removing the managed reaction.
-   - `chat:write` - post threaded replies as comments.
+   - `reactions:read` - read reactions (legacy status fallback and the tracking marker).
+   - `reactions:write` - mirror status onto the bot's own reaction and mark tracked threads.
+   - `chat:write` - post threaded replies (comments and `status:` transitions).
+   - `users:read` - resolve user ids to names for the `slack_user_info` tool (optional but
+     recommended).
 
    Symphony discovers issues by paging `conversations.history` and matching the bot's @-mention
    in message text, so it does not need `app_mentions:read`. Only add that scope if you separately
@@ -495,30 +501,45 @@ carry a permalink (`{{ issue.url }}`, dashboard links) built from the workspace 
 `auth.test` reports, and `slack_read_thread` returns the same permalink for linking the source
 message from commits and PRs.
 
-Status is shown as an emoji reaction on the source message, controlled by `emoji_states` (emoji
-name to state name). The default map is:
+Status is derived from the issue's thread: the bot's own `status: <Name>` replies (posted by
+`slack_update_status`) and human command mentions are ts-ordered events, and the latest wins.
+The human commands are:
 
-- `:eyes:` -> `In Progress`
-- `:white_check_mark:` -> `Done`
-- `:x:` -> `Cancelled`
+- `@bot done` / `@bot cancel` / `@bot in progress` / `@bot todo` - transition to the standard
+  state.
+- `@bot status <Name>` - transition to any configured active/terminal state (custom names too).
+- `@bot reopen` - back to the first active state.
+- Any other `@bot` mention on a terminal issue re-opens it: mentioning the bot again always
+  means "this needs attention".
 
-A message with no managed reaction is effectively new (`Todo`). Setting status swaps the
-reaction: it removes any other status emoji it manages and adds the one for the target state.
+Reactions are per-author in Slack (the bot cannot remove a human's reaction and vice versa), so
+they are only the bot's visibility mirror, controlled by `emoji_states` (`:eyes:` ->
+`In Progress`, `:white_check_mark:` -> `Done`, `:x:` -> `Cancelled` by default). Threads that
+have never seen a status event fall back to the reaction-derived reading, so reaction-managed
+threads keep working. Two optional keys tune tracking: `marker_emoji` (default `robot_face`) is
+the reaction the bot drops on a reply-tracked thread's root, and `reply_lookback_days` (default
+`2`) bounds how far back untracked threads are inspected for new reply-mention requests.
 
 Agent tools for `kind: slack`, served by the `slack` tool pack (mounted by default alongside the
 provider-neutral `tracker` pack):
 
-- `slack_update_status` - set the issue's status by swapping its managed emoji reaction (args:
-  `issueId`, `status`).
+- `slack_update_status` - set the issue's status by posting the bot's authoritative `status:`
+  thread reply, then mirror the bot's reaction (args: `issueId`, `status` - any configured
+  active/terminal state name).
 - `slack_comment` - post a threaded reply on the source message as a comment (args: `issueId`,
   `body`).
-- `slack_read_thread` - read the issue's authoritative state: its source message (text, derived
-  status, reactions) and its thread replies (args: `issueId`). Use it to re-read state and recover
+- `slack_read_thread` - read the issue's authoritative state: thread-derived status, source
+  message, request reply (for thread-tracked issues), reactions, permalink, and all replies
+  (args: `issueId`). Use it to re-read state, catch new human replies/commands, and recover
   prior progress notes on a continuation turn.
-- `slack_query` - read-only query over the tracked bot-mention issues in the watched channels:
-  filter with the shared JSON predicate DSL, project fields, order, and page; `expand` adds
-  `thread` and `reactions` (args: `channels?`, `where?`, `select?`, `expand?`, `order_by?`,
-  `limit?`, `offset?`).
+- `slack_query` - read-only query over the tracked issues in the watched channels (bot-mention
+  roots plus bot-marked threads), with thread-derived state: filter with the shared JSON
+  predicate DSL, project fields, order, and page; `expand` adds `thread` and `reactions` (args:
+  `channels?`, `where?`, `select?`, `expand?`, `order_by?`, `limit?`, `offset?`).
+- `slack_user_info` - resolve a `U...` user id to its profile: name, real name, display name,
+  bot flag (args: `userId`).
+- `slack_channel_context` - read the channel conversation around a tracked issue's source
+  message, ascending (args: `issueId`, `before?` default 10 max 50, `after?` default 10 max 50).
 
 There is no `slack_create_issue`, and the neutral `tracker_create_issue` reports itself as
 unavailable on Slack: issues are created by humans @-mentioning the bot, not by the agent.

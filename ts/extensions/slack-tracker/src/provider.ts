@@ -7,22 +7,37 @@ import {
 } from "@symphony/tracker-sdk";
 
 import { SlackTrackerClient } from "./client.js";
-import { emojiStatesValue, SLACK_DEFAULT_ENDPOINT, slackTrackerOptions } from "./options.js";
+import {
+  emojiStatesValue,
+  numberOption,
+  SLACK_DEFAULT_ENDPOINT,
+  slackTrackerOptions,
+} from "./options.js";
 import { slackToolOps } from "./toolOps.js";
 import { SlackWebTransport } from "./webTransport.js";
 
 /**
- * Slack tracker: an @-mention of the bot is an issue, an emoji reaction is the status, and the
- * message's thread carries progress. Issues are polled from the watched channels over the
- * Slack Web API.
+ * Slack tracker: an @-mention of the bot is an issue, the message's thread carries the status
+ * (human `@bot` commands and bot `status:` replies, latest wins; reactions are a bot-owned
+ * visibility mirror) and the progress discussion. Issues are polled from the watched channels
+ * over the Slack Web API.
  */
 export const slackTrackerProvider: TrackerProvider = {
   kind: "slack",
-  configAliases: { bot_user_id: "botUserId", emoji_states: "emojiStates" },
+  configAliases: {
+    bot_user_id: "botUserId",
+    emoji_states: "emojiStates",
+    marker_emoji: "markerEmoji",
+    reply_lookback_days: "replyLookbackDays",
+  },
   envFallbacks: { apiKey: "SLACK_BOT_TOKEN" },
   defaultEndpoint: SLACK_DEFAULT_ENDPOINT,
   parseOptions(options, context) {
-    rejectUnknownOptions(options, ["channels", "botUserId", "emojiStates"], "slack");
+    rejectUnknownOptions(
+      options,
+      ["channels", "botUserId", "emojiStates", "markerEmoji", "replyLookbackDays"],
+      "slack",
+    );
     // Channel entries resolve `$VAR` references like the documented bot_user_id one line below
     // them; an unresolved reference collapses to empty and is dropped, so an all-empty list
     // fails dispatch validation instead of polling a literal "$SLACK_CHANNEL_ID" forever.
@@ -34,10 +49,14 @@ export const slackTrackerProvider: TrackerProvider = {
       "SLACK_BOT_USER_ID",
     );
     const emojiStates = emojiStatesValue(options.emojiStates);
+    const markerEmoji = stringOption(options, "markerEmoji");
+    const replyLookbackDays = numberOption(options, "replyLookbackDays");
     return {
       ...(channels !== undefined && channels.length > 0 ? { channels } : {}),
       ...(botUserId !== undefined ? { botUserId } : {}),
       ...(emojiStates !== undefined ? { emojiStates } : {}),
+      ...(markerEmoji !== undefined ? { markerEmoji } : {}),
+      ...(replyLookbackDays !== undefined ? { replyLookbackDays } : {}),
     };
   },
   validateDispatch(settings) {
