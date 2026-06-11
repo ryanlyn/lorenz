@@ -91,6 +91,32 @@ describe("trace event markup", () => {
     expect(html).toContain("parser miss");
   });
 
+  test("keeps existing timeline events mounted during a refresh", () => {
+    const events: DisplayEvent[] = [
+      {
+        kind: "turn_started",
+        turnIndex: 1,
+        timestamp: "2026-06-04T09:59:59.000Z",
+      },
+      {
+        kind: "message",
+        timestamp: "2026-06-04T10:00:00.000Z",
+        text: "Existing trace event",
+      },
+    ];
+
+    const html = renderToStaticMarkup(
+      createElement(Timeline, {
+        events,
+        loading: true,
+      }),
+    );
+
+    expect(html).toContain("Timeline (2 events)");
+    expect(html).toContain("Existing trace event");
+    expect(html).not.toContain("Loading events...");
+  });
+
   test("keeps newest-first event rows mounted when an append shifts display order", () => {
     const longThought: DisplayEvent = {
       kind: "thought",

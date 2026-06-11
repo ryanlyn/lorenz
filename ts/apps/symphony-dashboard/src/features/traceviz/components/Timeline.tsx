@@ -145,7 +145,7 @@ export function Timeline({ events, loading }: TimelineProps) {
     window.scrollTo({ top: 0, behavior: "smooth" });
   }, []);
 
-  if (loading) {
+  if (loading && events.length === 0) {
     return (
       <div className="flex items-center justify-center py-16">
         <Loader2 className="h-6 w-6 animate-spin text-accent-purple" />
@@ -165,7 +165,15 @@ export function Timeline({ events, loading }: TimelineProps) {
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between">
-        <h2 className="text-sm font-medium text-muted">Timeline ({events.length} events)</h2>
+        <div className="flex items-center gap-2">
+          <h2 className="text-sm font-medium text-muted">Timeline ({events.length} events)</h2>
+          {loading && (
+            <Loader2
+              aria-label="Loading events"
+              className="h-3.5 w-3.5 animate-spin text-accent-purple"
+            />
+          )}
+        </div>
         <div className="flex items-center gap-2">
           <button
             onClick={() => setSortNewest((p) => !p)}
