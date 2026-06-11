@@ -1,8 +1,10 @@
+import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { Readable, Writable } from "node:stream";
+import { fileURLToPath } from "node:url";
 
 import {
   ClientSideConnection,
@@ -668,9 +670,12 @@ function providerConfigMeta(session: Session): Record<string, unknown> | undefin
   return { [isClaudeBridge ? "symphony/settings" : "symphony/config"]: providerConfig };
 }
 
-const VENDORED_BRIDGE_PACKAGES: Record<string, string> = {
-  "codex-acp": "@agentclientprotocol/codex-acp",
-  "claude-agent-acp": "@agentclientprotocol/claude-agent-acp",
+const VENDORED_BRIDGES: Record<string, { packageName: string; vendorDir: string }> = {
+  "codex-acp": { packageName: "@agentclientprotocol/codex-acp", vendorDir: "codex-acp" },
+  "claude-agent-acp": {
+    packageName: "@agentclientprotocol/claude-agent-acp",
+    vendorDir: "claude-agent-acp",
+  },
 };
 
 /**
@@ -682,16 +687,36 @@ const VENDORED_BRIDGE_PACKAGES: Record<string, string> = {
 export function resolveBridgeCommand(bridgeCommand: string, workerHost: string | null): string {
   if (workerHost) return bridgeCommand;
   const [bin, ...args] = bridgeCommand.trim().split(/\s+/);
-  const packageName = bin ? VENDORED_BRIDGE_PACKAGES[bin] : undefined;
-  if (!packageName) return bridgeCommand;
+  const bridge = bin ? VENDORED_BRIDGES[bin] : undefined;
+  if (!bridge) return bridgeCommand;
+  const binPath = resolveVendoredBridgeBinPath(bridge);
+  if (!binPath) return bridgeCommand;
+  return [shellEscape(process.execPath), shellEscape(binPath), ...args].join(" ");
+}
+
+function resolveVendoredBridgeBinPath(bridge: {
+  packageName: string;
+  vendorDir: string;
+}): string | null {
   try {
     const require = createRequire(import.meta.url);
-    const manifestPath = require.resolve(`${packageName}/package.json`);
+    const manifestPath = require.resolve(`${bridge.packageName}/package.json`);
     const binPath = path.join(path.dirname(manifestPath), "dist", "index.js");
-    return [shellEscape(process.execPath), shellEscape(binPath), ...args].join(" ");
+    if (existsSync(binPath)) return binPath;
   } catch {
-    return bridgeCommand;
+    // Fall back to the repository workspace layout below.
   }
+
+  const sourceDir = path.dirname(fileURLToPath(import.meta.url));
+  const workspaceBinPath = path.resolve(
+    sourceDir,
+    "../../..",
+    "vendor",
+    bridge.vendorDir,
+    "dist",
+    "index.js",
+  );
+  return existsSync(workspaceBinPath) ? workspaceBinPath : null;
 }
 
 function startBridgeProcess(
