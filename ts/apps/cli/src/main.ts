@@ -127,7 +127,11 @@ export async function runDaemon(options: CliOptions): Promise<number> {
     const workflow = await loadRuntimeWorkflow();
     await configureLogFile(workflow.settings.logging.logFile);
 
-    const coordinator = buildDispatchCoordinator(workflow.settings, process.env);
+    // baseDir anchors `./relative` driver module specifiers to the workflow
+    // file's directory - the most predictable anchor for operators.
+    const coordinator = await buildDispatchCoordinator(workflow.settings, process.env, {
+      baseDir: path.dirname(workflow.path),
+    });
     // Post-construction gate: slotsPerMachine>1 is only safe once the coordinator
     // advertises per-run MCP endpoints AND the operator has explicitly opted into
     // co-residence (a poisoned box fails every co-resident run on recycle). The

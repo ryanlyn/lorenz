@@ -21,4 +21,11 @@ export {
 
 export { BoxDriverRegistry, defaultBoxDriverRegistry } from "./registry.js";
 
+export {
+  BOX_DRIVER_SDK_VERSION,
+  assertBoxDriverModule,
+  defineBoxDriver,
+  type BoxDriverModule,
+} from "./module.js";
+
 export { FakeBoxDriver, fakeBoxDriverFactory, registerFakeBoxDriver } from "./fake.js";

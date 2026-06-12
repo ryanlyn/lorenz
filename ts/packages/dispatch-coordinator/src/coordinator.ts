@@ -186,7 +186,14 @@ export interface DispatchCoordinator extends CapacityProbe {
    */
   onCapacityAvailable(cb: () => void): void;
   readonly capabilities: { readonly perRunEndpoint: boolean };
-  reconcile(next: BoxPoolSettings): void;
+  /**
+   * Reconciles the live pool (and the coordinator-owned settings) onto `next`.
+   * Async ONLY for the injected `driverLoader` (out-of-tree driver modules are
+   * dynamic-imported BEFORE the pool reconcile); the pool reconcile itself
+   * stays synchronous and transactional. A rejection (module load failure or a
+   * pool rollback) leaves both the pool and the coordinator on last-good.
+   */
+  reconcile(next: BoxPoolSettings): Promise<void>;
   drain(opts: { deadlineMs: number; signal?: AbortSignal }): Promise<void>;
   hydrate(): Promise<void>;
   snapshot(): DispatchCoordinatorSnapshot;
@@ -206,6 +213,16 @@ export interface CreateDispatchCoordinatorDeps {
    * `(event) => void` shape so observability is uniform across the two layers.
    */
   logEvent?: (event: Record<string, unknown>) => void;
+  /**
+   * Optional out-of-tree driver loader awaited by {@link DispatchCoordinator.reconcile}
+   * BEFORE `pool.reconcile` when the next settings are enabled. The daemon
+   * injects `ensureBoxDriverLoaded` here so a reload that changes
+   * `worker.box_pool.driver` to a module specifier dynamic-imports and
+   * registers it first, keeping the pool's registry resolution synchronous. A
+   * rejection aborts the reconcile (the pool is never touched), so the
+   * runtime's transactional reload keeps last-good settings.
+   */
+  driverLoader?: (driver: string) => Promise<void>;
 }
 
 /**
@@ -593,8 +610,17 @@ export function createDispatchCoordinator(
       pool.onCapacityAvailable?.(cb);
     },
 
-    reconcile(next: BoxPoolSettings): void {
-      // Reconcile the pool FIRST: pool.reconcile -> swapDriver -> registry resolve
+    async reconcile(next: BoxPoolSettings): Promise<void> {
+      // Load any out-of-tree driver module FIRST (only when the next settings are
+      // enabled, mirroring the pool's disable path which skips swapDriver
+      // entirely): the injected loader dynamic-imports + registers the module so
+      // the pool's registry resolution below stays synchronous. A load failure
+      // rejects here, BEFORE the pool is touched - the same transactional
+      // last-good behavior as a pool rollback. A module registered for a
+      // reconcile that later throws is harmless: the registry is a catalog, and
+      // an unused entry is inert.
+      if (next.enabled) await deps.driverLoader?.(next.driver);
+      // Reconcile the pool NEXT: pool.reconcile -> swapDriver -> registry resolve
       // can THROW (e.g. box_pool_driver_unavailable) when a reload changes the
       // driver to an unavailable kind, and the pool rolls itself back to last-good
       // on that throw. Only AFTER it succeeds do we commit the coordinator-owned

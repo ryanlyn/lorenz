@@ -1,5 +1,7 @@
 # Worker Box Pool Provider SDK
 
+Status: implemented in adapted form - the instance registry, extension-hosted drivers, and conformance kit landed as the box-driver extension restructure (driver vocabulary instead of provider), and module-specifier loading landed on top of it (BoxDriverModule + BOX_DRIVER_SDK_VERSION handshake, daemon loader with startup/reload semantics and audit events). The optionsSchema/StandardSchema validation track was not adopted: drivers validate their own options in create().
+
 Design for turning `@symphony/worker-box-pool` into a provider SDK so a third
 party can ship a new box provider (their own cloud, their own VM fleet) without
 touching `@symphony/domain` `PROVIDER_KINDS`, the config zod enum, the

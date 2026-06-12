@@ -848,7 +848,11 @@ export class SymphonyRuntime {
       // disable-and-drain itself.
       if (this.coordinator) {
         const next = workflow.settings.worker.boxPool ?? disabledBoxPoolSettings(prevBoxPool);
-        if (next) this.coordinator.reconcile(next);
+        // Awaited: reconcile is async so the coordinator's injected driverLoader
+        // can dynamic-import an out-of-tree driver module BEFORE the (still
+        // synchronous) pool reconcile. A rejection lands in the catch below,
+        // keeping last-good settings and emitting workflow_reload_failed.
+        if (next) await this.coordinator.reconcile(next);
       }
       this.input.workflow = workflow;
       this.orchestrator.settings = workflow.settings;

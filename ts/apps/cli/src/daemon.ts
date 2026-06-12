@@ -52,6 +52,8 @@ import {
   type TrackerRegistry,
 } from "@symphony/tracker-sdk";
 
+import { ensureBoxDriverLoaded } from "./boxDriverLoader.js";
+
 export interface BackendRegistries {
   trackers?: TrackerRegistry | undefined;
   tools?: ToolRegistry | undefined;
@@ -107,26 +109,44 @@ export function createTrackerClient(
   return defaultTrackerRegistry.require(settings.tracker.kind).createClient(settings, { env });
 }
 
+/** Options for {@link buildBoxPool} / {@link buildDispatchCoordinator}. */
+export interface BuildBoxPoolOptions {
+  /**
+   * Anchor for `./relative` driver module specifiers; the daemon passes
+   * `dirname(workflow.path)` (the most predictable anchor for operators).
+   * Defaults to `process.cwd()`.
+   */
+  baseDir?: string | undefined;
+}
+
 /**
  * Constructs the warm worker box pool when `worker.box_pool.enabled` is set, and
  * returns `undefined` otherwise so the disabled path stays byte-identical to the
  * pre-pool daemon. The pool resolves the configured `driver` against the
- * box-driver registry populated by {@link registerBuiltinBackends}; an
- * unregistered enabled kind throws `box_pool_driver_unavailable`, so an operator
- * misconfiguration fails loud at startup rather than silently disabling the
- * pool. The write-ahead ledger (only consulted by cloud drivers) lives under
- * `<workspace.root>/.symphony/box-pool/`.
+ * box-driver registry populated by {@link registerBuiltinBackends}; a driver
+ * string that is NOT a registered kind is treated as a module specifier and
+ * dynamic-imported into the registry first (see {@link ensureBoxDriverLoaded}),
+ * so third-party drivers load at the same fail-loud startup point - an
+ * unresolvable driver throws `box_pool_driver_unavailable` before the pool, the
+ * runtime, or any provision exists. The write-ahead ledger (only consulted by
+ * cloud drivers) lives under `<workspace.root>/.symphony/box-pool/`.
  */
-export function buildBoxPool(
+export async function buildBoxPool(
   settings: Settings,
   _env: NodeJS.ProcessEnv = process.env,
-): BoxPool | undefined {
+  options: BuildBoxPoolOptions = {},
+): Promise<BoxPool | undefined> {
   const boxPoolSettings = settings.worker.boxPool;
   if (!boxPoolSettings?.enabled) return undefined;
+  const logEvent = (event: Record<string, unknown>): void =>
+    void appendLogEvent(settings.logging.logFile, event);
+  await ensureBoxDriverLoaded(boxPoolSettings.driver, defaultBoxDriverRegistry, {
+    baseDir: options.baseDir ?? process.cwd(),
+    logEvent,
+  });
   return createBoxPool(boxPoolSettings, {
     clock: systemClock,
-    logEvent: (event: Record<string, unknown>) =>
-      void appendLogEvent(settings.logging.logFile, event),
+    logEvent,
     ledgerPath: path.join(settings.workspace.root, ".symphony", "box-pool", "ledger.json"),
     drivers: defaultBoxDriverRegistry,
   });
@@ -151,14 +171,18 @@ export function buildBoxPool(
  * byte-identical to the single-tenant path. `buildBoxPool` stays for the box-pool
  * wiring / e2e tests and for any caller that still wants a bare pool.
  */
-export function buildDispatchCoordinator(
+export async function buildDispatchCoordinator(
   settings: Settings,
   env: NodeJS.ProcessEnv = process.env,
-): DispatchCoordinator | undefined {
+  options: BuildBoxPoolOptions = {},
+): Promise<DispatchCoordinator | undefined> {
   const boxPoolSettings = settings.worker.boxPool;
   if (!boxPoolSettings?.enabled) return undefined;
-  const pool = buildBoxPool(settings, env);
+  const pool = await buildBoxPool(settings, env, options);
   if (!pool) return undefined;
+  const baseDir = options.baseDir ?? process.cwd();
+  const logEvent = (event: Record<string, unknown>): void =>
+    void appendLogEvent(settings.logging.logFile, event);
   return createDispatchCoordinator({
     pool,
     // The concrete manager OWNS each run's whole endpoint lease; it calls the
@@ -171,9 +195,14 @@ export function buildDispatchCoordinator(
     // Same structured-event sink as the pool so coordinator faults (e.g.
     // box_pool_endpoint_release_failed) reach the log file instead of being
     // silently dropped by the no-op default.
-    logEvent: (event: Record<string, unknown>) =>
-      void appendLogEvent(settings.logging.logFile, event),
+    logEvent,
     settings: boxPoolSettings,
+    // Reload path for out-of-tree drivers: the coordinator awaits this loader
+    // BEFORE pool.reconcile, so a reload that changes `driver` to a module
+    // specifier hot-loads it while pool.reconcile/swapDriver stay synchronous
+    // and transactional. A registered-but-unused module is inert.
+    driverLoader: async (driver: string) =>
+      ensureBoxDriverLoaded(driver, defaultBoxDriverRegistry, { baseDir, logEvent }),
   });
 }
 

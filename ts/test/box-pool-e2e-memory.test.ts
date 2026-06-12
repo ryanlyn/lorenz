@@ -226,7 +226,7 @@ async function setupHarness(
 
   // The real production box pool (the fake driver is in the default registry
   // populated by registerBuiltinBackends() above, same as the CLI entrypoint).
-  const pool = buildBoxPool(settings, process.env);
+  const pool = await buildBoxPool(settings, process.env);
   assert.ok(pool);
   if (!pool) throw new Error("box pool was not constructed");
 

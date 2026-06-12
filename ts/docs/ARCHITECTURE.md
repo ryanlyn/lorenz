@@ -190,6 +190,24 @@ pool-owned label round-trip, and probe gating.
    extension's test suite.
 5. Add the package to the workspace plumbing (`pnpm install`, `pnpm tsconfig:refs --write`).
 
+A driver can also ship **out of tree**, without forking the repo:
+`worker.box_pool.driver` accepts a module specifier (an npm package name,
+`@scope/name`, a `./relative` or `/absolute` path, with an optional
+`#exportName` suffix) that the daemon dynamic-imports at startup - and on a
+reload that changes the specifier - and registers into the box-driver registry.
+The module exports `defineBoxDriver({ kind, sdkVersion, create })` from
+`@symphony/box-sdk`; the loader shape-checks it and rejects an `sdkVersion`
+other than `BOX_DRIVER_SDK_VERSION` before it can reach the pool. Trust: a
+dynamic import runs arbitrary code in the daemon process - the same trust
+boundary as workspace hooks, which already execute arbitrary shell from the
+workflow file. Loads happen only at startup and reload, never on the acquire
+path, and a `box_pool_driver_loaded` audit event records exactly which module
+went live from where. Module code is pinned for the daemon lifetime (Node
+never unloads modules): changing driver code requires a daemon restart, while
+changing the config to a different specifier hot-loads the new module, and a
+reload that re-encounters a loaded specifier emits
+`box_pool_driver_module_pinned`.
+
 ## Composition and the default registries
 
 `defaultTrackerRegistry`, `defaultToolRegistry`, and `defaultAgentExecutorRegistry` are

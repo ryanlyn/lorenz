@@ -155,7 +155,7 @@ worker:
   # boxes provisioned by a box driver extension. Disabled by default.
   box_pool:
     enabled: false
-    driver: fake # registered box driver kind: fake | static-ssh | docker | fly | e2b | modal
+    driver: fake # registered box driver kind: fake | static-ssh | docker | fly | e2b | modal | a module specifier (npm name or ./path) loaded at startup
     min: 0 # warm-inventory floor the reaper keeps alive
     max: 1 # ceiling on concurrent boxes
     warm: 1 # pre-warmed idle boxes the reaper tops up toward

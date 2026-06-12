@@ -1,6 +1,6 @@
 # Eliminating the `pending://` sentinel: two-phase slot reservation
 
-Status: accepted design, ready for implementation
+Status: implemented (all five stages; run_reserving lane, capacity-freed poll nudge, and the stall-reconciler regression pin included)
 Scope: `ts/packages/{orchestrator,runtime,dispatch-coordinator,domain,runtime-events}` and `ts/apps/cli`
 
 ## 1. Problem statement

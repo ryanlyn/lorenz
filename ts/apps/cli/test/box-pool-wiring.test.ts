@@ -22,24 +22,24 @@ beforeAll(() => {
   registerBuiltinBackends();
 });
 
-test("buildBoxPool returns undefined when the pool is disabled (byte-identical path)", () => {
+test("buildBoxPool returns undefined when the pool is disabled (byte-identical path)", async () => {
   const settings = parseConfig({}, {});
   assert.equal(settings.worker.boxPool, undefined);
-  assert.equal(buildBoxPool(settings, {}), undefined);
+  assert.equal(await buildBoxPool(settings, {}), undefined);
 });
 
-test("buildBoxPool returns undefined when box_pool is present but enabled:false", () => {
+test("buildBoxPool returns undefined when box_pool is present but enabled:false", async () => {
   const settings = parseConfig({ worker: { box_pool: { enabled: false, driver: "fake" } } }, {});
   assert.equal(settings.worker.boxPool?.enabled, false);
-  assert.equal(buildBoxPool(settings, {}), undefined);
+  assert.equal(await buildBoxPool(settings, {}), undefined);
 });
 
-test("buildBoxPool constructs an enabled fake pool with a workspace-scoped ledger path", () => {
+test("buildBoxPool constructs an enabled fake pool with a workspace-scoped ledger path", async () => {
   const settings = parseConfig(
     { worker: { box_pool: { enabled: true, driver: "fake", max: 2, warm: 1 } } },
     {},
   );
-  const boxPool = buildBoxPool(settings, {});
+  const boxPool = await buildBoxPool(settings, {});
   assert.ok(boxPool);
 
   const snapshot = boxPool!.snapshot();
@@ -51,13 +51,13 @@ test("buildBoxPool constructs an enabled fake pool with a workspace-scoped ledge
   assert.equal(typeof boxPool!.canAcquire, "function");
 });
 
-test("buildBoxPool throws box_pool_driver_unavailable for an unregistered enabled kind", () => {
-  // "nope" is never registered by registerBuiltinBackends, so the registry's
-  // fail-loud `require` aborts pool construction with the known-kinds hint.
+test("buildBoxPool rejects with box_pool_driver_unavailable for an unregistered enabled kind", async () => {
+  // "nope" is never registered by registerBuiltinBackends and resolves as no
+  // module, so the loader aborts pool construction with the known-kinds hint.
   const settings = parseConfig({ worker: { box_pool: { enabled: true, driver: "nope" } } }, {});
-  assert.throws(
+  await assert.rejects(
     () => buildBoxPool(settings, {}),
-    /box_pool_driver_unavailable: nope \(known kinds: .*fake/,
+    /box_pool_driver_unavailable: nope.*(known kinds: .*fake)/,
   );
 });
 
@@ -126,7 +126,7 @@ test("gate: slotsPerMachine>1 with perRunEndpoint AND coResidence passes", () =>
   assertSlotsPerMachineGate(settings, capable);
 });
 
-test("gate: DISABLED pool with max_in_flight>1 does not abort daemon startup", () => {
+test("gate: DISABLED pool with max_in_flight>1 does not abort daemon startup", async () => {
   // A dormant max_in_flight>1 on a DISABLED pool must not gate startup: the pool
   // is off (runs go static/local), so buildDispatchCoordinator returns undefined
   // and assertSlotsPerMachineGate(settings, undefined) must NOT throw. Before the
@@ -134,7 +134,7 @@ test("gate: DISABLED pool with max_in_flight>1 does not abort daemon startup", (
   const settings = gateSettings({ enabled: false, driver: "fake", max_in_flight: 2 });
   assert.equal(settings.worker.boxPool?.enabled, false);
   assert.equal(settings.worker.boxPool?.slotsPerMachine, 2);
-  const coordinator = buildDispatchCoordinator(settings, {});
+  const coordinator = await buildDispatchCoordinator(settings, {});
   assert.equal(coordinator, undefined);
   // Does not throw: daemon startup proceeds on the static/local path.
   assertSlotsPerMachineGate(settings, coordinator);

@@ -466,7 +466,7 @@ test("governs()/canAcquire() delegate to the live pool (isEnabled/canAcquire)", 
   assert.equal(coordinator.canAcquire(), false);
 });
 
-test("governs() re-reads live pool state after reconcile (the captured authority is never stranded)", () => {
+test("governs() re-reads live pool state after reconcile (the captured authority is never stranded)", async () => {
   let enabled = true;
   const pool = makeFakeBoxPool({ isEnabled: () => enabled });
   const coordinator = makeCoordinator(pool);
@@ -476,7 +476,7 @@ test("governs() re-reads live pool state after reconcile (the captured authority
   // pool state.
   assert.equal(coordinator.governs(), true);
 
-  coordinator.reconcile(settingsStub("next"));
+  await coordinator.reconcile(settingsStub("next"));
   enabled = false;
   assert.equal(coordinator.governs(), false);
 });
@@ -510,14 +510,94 @@ test("onCapacityAvailable(cb) is a safe no-op for a pool without the hook (legac
 // reconcile / drain / hydrate delegation
 // ---------------------------------------------------------------------------
 
-test("reconcile(next) delegates to pool.reconcile(next) with the SAME settings reference", () => {
+test("reconcile(next) delegates to pool.reconcile(next) with the SAME settings reference", async () => {
   const pool = makeFakeBoxPool();
   const coordinator = makeCoordinator(pool);
   const next = settingsStub("reconciled");
 
-  coordinator.reconcile(next);
+  await coordinator.reconcile(next);
   assert.equal(pool.reconcileCalls.length, 1);
   assert.equal(pool.reconcileCalls[0], next);
+});
+
+test("reconcile awaits the injected driverLoader BEFORE pool.reconcile when next is enabled", async () => {
+  // Load-before-reconcile: the loader dynamic-imports + registers an
+  // out-of-tree driver module so pool.reconcile -> swapDriver -> registry
+  // resolve stays synchronous and finds the module already registered.
+  const order: string[] = [];
+  const pool = makeFakeBoxPool();
+  const originalReconcile = pool.reconcile.bind(pool);
+  pool.reconcile = (next): void => {
+    order.push("pool.reconcile");
+    originalReconcile(next);
+  };
+  const loadedDrivers: string[] = [];
+  const coordinator = createDispatchCoordinator({
+    pool,
+    mcpEndpointManager: nullEndpointManager,
+    settings: settingsStub("initial"),
+    driverLoader: async (driver) => {
+      order.push("driverLoader");
+      loadedDrivers.push(driver);
+    },
+  });
+
+  await coordinator.reconcile({
+    __tag: "module",
+    enabled: true,
+    driver: "./acme-driver.mjs",
+  } as unknown as BoxPoolSettings);
+  assert.deepEqual(order, ["driverLoader", "pool.reconcile"]);
+  assert.deepEqual(loadedDrivers, ["./acme-driver.mjs"]);
+});
+
+test("reconcile SKIPS the driverLoader when next is disabled (mirrors the pool's disable path)", async () => {
+  // A reload that disables the pool drains it; no driver resolution happens on
+  // that path (the pool skips swapDriver), so no module load may happen either.
+  let loaderCalls = 0;
+  const pool = makeFakeBoxPool();
+  const coordinator = createDispatchCoordinator({
+    pool,
+    mcpEndpointManager: nullEndpointManager,
+    settings: settingsStub("initial"),
+    driverLoader: async () => {
+      loaderCalls += 1;
+    },
+  });
+
+  await coordinator.reconcile({
+    __tag: "disabled",
+    enabled: false,
+    driver: "./acme-driver.mjs",
+  } as unknown as BoxPoolSettings);
+  assert.equal(loaderCalls, 0);
+  assert.equal(pool.reconcileCalls.length, 1);
+});
+
+test("a driverLoader rejection aborts reconcile BEFORE the pool is touched (transactional last-good)", async () => {
+  // A module load failure on reload must reject without reconciling the pool:
+  // the runtime's catch keeps last-good settings and the live pool stays on the
+  // previous (working) driver.
+  const pool = makeFakeBoxPool();
+  const coordinator = createDispatchCoordinator({
+    pool,
+    mcpEndpointManager: nullEndpointManager,
+    settings: settingsStub("initial"),
+    driverLoader: async () => {
+      throw new Error("box_pool_driver_unavailable: ./missing.mjs");
+    },
+  });
+
+  await assert.rejects(
+    () =>
+      coordinator.reconcile({
+        __tag: "load-failure",
+        enabled: true,
+        driver: "./missing.mjs",
+      } as unknown as BoxPoolSettings),
+    /box_pool_driver_unavailable/,
+  );
+  assert.equal(pool.reconcileCalls.length, 0);
 });
 
 test("drain(opts) delegates to pool.drain(opts) with the deadline", async () => {
@@ -1247,7 +1327,10 @@ test("tunnel ceiling: reconcile RAISES the ceiling and the next acquire binds (s
 
   // A config reload raises the ceiling to 2 - the live registry (one slot) is
   // preserved across reconcile, and the ceiling re-reads the new settings.
-  coordinator.reconcile({ __tag: "raised", maxConcurrentTunnels: 2 } as unknown as BoxPoolSettings);
+  await coordinator.reconcile({
+    __tag: "raised",
+    maxConcurrentTunnels: 2,
+  } as unknown as BoxPoolSettings);
   const r1 = await coordinator.acquireRunSlot({ ...acquireReq, issueId: "i", slotIndex: 2 });
   assert.equal(r1.status, "bound");
   assert.equal(coordinator.snapshot().slots.length, 2);
@@ -1273,7 +1356,7 @@ test("tunnel ceiling: a REJECTED reconcile (pool.reconcile throws) does NOT adva
   assert.equal(r0.status, "bound");
 
   // A reload that WOULD raise the ceiling to 5 is rejected by the pool.
-  assert.throws(
+  await assert.rejects(
     () =>
       coordinator.reconcile({
         __tag: "rejected",

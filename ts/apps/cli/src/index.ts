@@ -7,6 +7,18 @@ export {
   runAgentAttempt,
   runtimeAdapters,
 } from "./daemon.js";
+export type { BuildBoxPoolOptions } from "./daemon.js";
+export {
+  ensureBoxDriverLoaded,
+  loadBoxDriverModule,
+  parseBoxDriverRef,
+} from "./boxDriverLoader.js";
+export type {
+  BoxDriverRef,
+  EnsureBoxDriverLoadedOptions,
+  LoadBoxDriverModuleOptions,
+  LoadedBoxDriverModule,
+} from "./boxDriverLoader.js";
 export {
   defaultSettings,
   parseConfig,
@@ -87,12 +99,15 @@ export type * from "@symphony/domain";
 export { createBoxPool } from "@symphony/worker-box-pool";
 export type { BoxPool, BoxLease, BoxPoolSnapshot, AcquireResult } from "@symphony/worker-box-pool";
 export {
+  BOX_DRIVER_SDK_VERSION,
   BoxDriverRegistry,
+  assertBoxDriverModule,
   defaultBoxDriverRegistry,
+  defineBoxDriver,
   FakeBoxDriver,
   registerFakeBoxDriver,
 } from "@symphony/box-sdk";
-export type { BoxDriver, BoxDriverFactory, DriverDeps } from "@symphony/box-sdk";
+export type { BoxDriver, BoxDriverFactory, BoxDriverModule, DriverDeps } from "@symphony/box-sdk";
 export {
   createDispatchCoordinator,
   nullEndpointManager,
