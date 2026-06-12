@@ -3,6 +3,7 @@ import type { TrackerOpsContext, TrackerToolOps } from "@symphony/tracker-sdk";
 
 import { slackMessageToIssue, SlackTrackerClient, splitIssueId } from "./client.js";
 import { requireTrackedMessage, updateSlackStatus } from "./operations.js";
+import { resolveThreadState } from "./threadState.js";
 import type { SlackTransport } from "./transport.js";
 import { SlackWebTransport } from "./webTransport.js";
 
@@ -21,16 +22,24 @@ export function slackToolOpsWith(settings: Settings, transport: SlackTransport):
   return {
     readIssue: async (issueId) => {
       const [channel, ts] = requireIssueIdParts(issueId);
-      const message = await requireTrackedMessage(settings, transport, channel, ts);
-      return slackMessageToIssue(message, settings, await transport.teamUrl());
+      const root = await requireTrackedMessage(settings, transport, channel, ts);
+      const thread = await resolveThreadState(settings, transport, root);
+      return slackMessageToIssue(root, settings, {
+        permalinkBase: await transport.teamUrl(),
+        state: thread.state,
+        request: thread.request,
+      });
     },
     queryIssues: async (args) => querySlackIssues(settings, transport, args),
     updateStatus: async (issueId, status) => {
       const [channel, ts] = requireIssueIdParts(issueId);
       const outcome = await updateSlackStatus(settings, transport, channel, ts, status);
       if (!outcome.ok) throw new Error(outcome.message);
-      const message = await requireTrackedMessage(settings, transport, channel, ts);
-      return slackMessageToIssue(message, settings, await transport.teamUrl());
+      // The posted status reply IS the new authoritative state; no re-read needed.
+      return slackMessageToIssue(outcome.root, settings, {
+        permalinkBase: await transport.teamUrl(),
+        state: outcome.status,
+      });
     },
     addComment: async (issueId, body) => {
       const [channel, ts] = requireIssueIdParts(issueId);

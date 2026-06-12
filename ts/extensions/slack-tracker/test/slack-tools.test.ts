@@ -3,13 +3,7 @@ import { assert } from "@symphony/test-utils";
 
 import { parseSlackConfig } from "./helpers.js";
 
-import {
-  executeSlackTool,
-  InMemorySlackTransport,
-  slackToolSpecs,
-  stateFromReactions,
-  statusEmojiMap,
-} from "@symphony/slack-tracker";
+import { executeSlackTool, InMemorySlackTransport, slackToolSpecs } from "@symphony/slack-tracker";
 
 function settings() {
   return parseSlackConfig(
@@ -18,28 +12,17 @@ function settings() {
   );
 }
 
-function aliasedDoneSettings() {
-  return parseSlackConfig(
-    {
-      tracker: {
-        kind: "slack",
-        channels: ["C1"],
-        bot_user_id: "U1",
-        emoji_states: {
-          white_check_mark: "Ignored",
-          check_mark: "Done",
-          "green-check-mark": "Done",
-        },
-      },
-    },
-    { SLACK_BOT_TOKEN: "xoxb" },
-  );
-}
-
-test("slack toolSpecs lists update_status, comment, read_thread, and query", () => {
+test("slack toolSpecs lists the status, comment, read, query, and context tools", () => {
   assert.deepEqual(
     slackToolSpecs().map((t) => t.name),
-    ["slack_update_status", "slack_comment", "slack_read_thread", "slack_query"],
+    [
+      "slack_update_status",
+      "slack_comment",
+      "slack_read_thread",
+      "slack_query",
+      "slack_user_info",
+      "slack_channel_context",
+    ],
   );
 });
 
@@ -261,10 +244,11 @@ test("slack_read_thread fails when the message is not a bot mention", async () =
   assert.match(result.error ?? "", /not a tracked bot-mention/);
 });
 
-test("slack_update_status swaps the status reaction; slack_comment replies in thread", async () => {
-  const transport = new InMemorySlackTransport({
-    C1: [{ ts: "1.1", text: "<@U1> do the thing", reactions: ["eyes"] }],
-  });
+test("slack_update_status posts the authoritative status reply and mirrors the reaction", async () => {
+  const transport = new InMemorySlackTransport(
+    { C1: [{ ts: "1.1", text: "<@U1> do the thing", reactions: ["eyes"] }] },
+    { botUserId: "U1" },
+  );
 
   const moved = await executeSlackTool(
     "slack_update_status",
@@ -273,6 +257,10 @@ test("slack_update_status swaps the status reaction; slack_comment replies in th
     transport,
   );
   assert.equal(moved.success, true);
+  assert.deepEqual(moved.result, { ok: true, status: "Done" });
+  // The thread reply is the source of truth...
+  assert.deepEqual(transport.replies, [{ channel: "C1", threadTs: "1.1", body: "status: Done" }]);
+  // ...and the bot's reaction mirror tracks it for glanceability.
   const msg = await transport.getMessage("C1", "1.1");
   assert.deepEqual(msg!.reactions, ["white_check_mark"]);
 
@@ -283,321 +271,14 @@ test("slack_update_status swaps the status reaction; slack_comment replies in th
     transport,
   );
   assert.equal(replied.success, true);
-  assert.deepEqual(transport.replies, [{ channel: "C1", threadTs: "1.1", body: "done!" }]);
+  assert.deepEqual(transport.replies[1], { channel: "C1", threadTs: "1.1", body: "done!" });
 });
 
-test("slack_update_status is a no-op when the target emoji is already present", async () => {
-  const transport = new InMemorySlackTransport({
-    C1: [{ ts: "1.1", text: "<@U1> do the thing", reactions: ["white_check_mark"] }],
-  });
-  const calls: Array<{ kind: string; name: string }> = [];
-  const add = transport.addReaction.bind(transport);
-  const remove = transport.removeReaction.bind(transport);
-  transport.addReaction = async (channel, ts, name) => {
-    calls.push({ kind: "add", name });
-    return add(channel, ts, name);
-  };
-  transport.removeReaction = async (channel, ts, name) => {
-    calls.push({ kind: "remove", name });
-    return remove(channel, ts, name);
-  };
-
-  const result = await executeSlackTool(
-    "slack_update_status",
-    { issueId: "C1:1.1", status: "Done" },
-    settings(),
-    transport,
+test("slack_update_status resolves a case-variant status to the canonical name", async () => {
+  const transport = new InMemorySlackTransport(
+    { C1: [{ ts: "1.1", text: "<@U1> do the thing", reactions: [] }] },
+    { botUserId: "U1" },
   );
-  assert.equal(result.success, true);
-  assert.deepEqual(calls, []);
-  const msg = await transport.getMessage("C1", "1.1");
-  assert.deepEqual(msg!.reactions, ["white_check_mark"]);
-});
-
-test("slack_update_status is a no-op when a target-state emoji alias is already present", async () => {
-  const transport = new InMemorySlackTransport({
-    C1: [{ ts: "1.1", text: "<@U1> do the thing", reactions: ["green-check-mark"] }],
-  });
-  const calls: Array<{ kind: string; name: string }> = [];
-  const add = transport.addReaction.bind(transport);
-  const remove = transport.removeReaction.bind(transport);
-  transport.addReaction = async (channel, ts, name) => {
-    calls.push({ kind: "add", name });
-    return add(channel, ts, name);
-  };
-  transport.removeReaction = async (channel, ts, name) => {
-    calls.push({ kind: "remove", name });
-    return remove(channel, ts, name);
-  };
-
-  const result = await executeSlackTool(
-    "slack_update_status",
-    { issueId: "C1:1.1", status: "Done" },
-    aliasedDoneSettings(),
-    transport,
-  );
-
-  assert.equal(result.success, true);
-  assert.deepEqual(calls, []);
-  const msg = await transport.getMessage("C1", "1.1");
-  assert.deepEqual(msg!.reactions, ["green-check-mark"]);
-});
-
-test("slack_update_status accepts Slack canonicalizing a configured emoji alias", async () => {
-  const transport = new InMemorySlackTransport({
-    C1: [{ ts: "1.1", text: "<@U1> do the thing", reactions: ["eyes"] }],
-  });
-  const add = transport.addReaction.bind(transport);
-  transport.addReaction = async (channel, ts, name) =>
-    add(channel, ts, name === "check_mark" ? "green-check-mark" : name);
-
-  const result = await executeSlackTool(
-    "slack_update_status",
-    { issueId: "C1:1.1", status: "Done" },
-    aliasedDoneSettings(),
-    transport,
-  );
-
-  assert.equal(result.success, true);
-  const msg = await transport.getMessage("C1", "1.1");
-  assert.deepEqual(msg!.reactions, ["green-check-mark"]);
-});
-
-test("slack_update_status fails when the status has no configured emoji", async () => {
-  const transport = new InMemorySlackTransport({
-    C1: [{ ts: "1.1", text: "<@U1> do the thing", reactions: ["eyes"] }],
-  });
-
-  const result = await executeSlackTool(
-    "slack_update_status",
-    { issueId: "C1:1.1", status: "Shipped" },
-    settings(),
-    transport,
-  );
-  assert.equal(result.success, false);
-  assert.match(result.error ?? "", /Shipped/);
-});
-
-class FailingSlackTransport extends InMemorySlackTransport {
-  failAdd = false;
-  failRemove = false;
-  // When set, only removals of these reaction names fail. This models a real partial failure
-  // where removing the stale reaction errors but the rollback removal of the target succeeds.
-  failRemoveOnly: Set<string> | null = null;
-  // When set, removals of these reaction names RESOLVE SUCCESSFULLY but do NOT remove the
-  // reaction. This models Slack's reactions.remove "no_reaction" error treated as success when
-  // the requestor is not the reaction's author (a human added the managed emoji, so the bot
-  // cannot remove it): the call appears to succeed yet the stale reaction lingers.
-  removeNoOp: Set<string> | null = null;
-
-  override async addReaction(channel: string, ts: string, name: string): Promise<void> {
-    if (this.failAdd) throw new Error("addReaction failed");
-    return super.addReaction(channel, ts, name);
-  }
-
-  override async removeReaction(channel: string, ts: string, name: string): Promise<void> {
-    if (this.failRemoveOnly ? this.failRemoveOnly.has(name) : this.failRemove) {
-      throw new Error("removeReaction failed");
-    }
-    if (this.removeNoOp?.has(name)) {
-      // Resolve as success (mirroring no_reaction-as-success) without removing the reaction.
-      return Promise.resolve();
-    }
-    return super.removeReaction(channel, ts, name);
-  }
-}
-
-test("slack_update_status rolls back to the old status (Cancelled) when removeReaction fails", async () => {
-  // x ranks higher than white_check_mark; a stale x left next to a newly added Done would
-  // shadow it and report the wrong status, so the rollback must drop the freshly added target.
-  const transport = new FailingSlackTransport({
-    C1: [{ ts: "1.1", text: "<@U1> do the thing", reactions: ["x"] }],
-  });
-  // The stale x removal fails; the rollback removal of the just-added white_check_mark succeeds.
-  transport.failRemoveOnly = new Set(["x"]);
-
-  const result = await executeSlackTool(
-    "slack_update_status",
-    { issueId: "C1:1.1", status: "Done" },
-    settings(),
-    transport,
-  );
-
-  // Cleanup remove failed: roll back the added target so only the stale x remains and the read
-  // path reports the OLD status (Cancelled), never the wrong new status.
-  assert.equal(result.success, false);
-  const msg = await transport.getMessage("C1", "1.1");
-  assert.deepEqual(msg!.reactions, ["x"]);
-});
-
-test("slack_update_status rolls back to the old status (Done) when removeReaction fails", async () => {
-  // Done -> In Progress: a stale white_check_mark left next to a newly added eyes would shadow
-  // it (completed outranks started), so the rollback must drop the freshly added target.
-  const transport = new FailingSlackTransport({
-    C1: [{ ts: "1.1", text: "<@U1> do the thing", reactions: ["white_check_mark"] }],
-  });
-  // The stale white_check_mark removal fails; the rollback removal of the added eyes succeeds.
-  transport.failRemoveOnly = new Set(["white_check_mark"]);
-
-  const result = await executeSlackTool(
-    "slack_update_status",
-    { issueId: "C1:1.1", status: "In Progress" },
-    settings(),
-    transport,
-  );
-
-  // Cleanup remove failed: roll back the added eyes so only the stale white_check_mark remains
-  // and the read path reports the OLD status (Done).
-  assert.equal(result.success, false);
-  const msg = await transport.getMessage("C1", "1.1");
-  assert.deepEqual(msg!.reactions, ["white_check_mark"]);
-});
-
-test("slack_update_status restores the full original set when a later multi-stale remove fails", async () => {
-  // Two stale managed reactions: x (Cancelled, the ranking winner) and eyes (In Progress).
-  // Updating to Done removes x first (succeeds) then eyes (fails). The rollback must re-add the
-  // already-removed x AND drop the just-added target, restoring the ORIGINAL set so the read
-  // path still reports the prior status (Cancelled) rather than a wrong/partial one.
-  const transport = new FailingSlackTransport({
-    C1: [{ ts: "1.1", text: "<@U1> do the thing", reactions: ["x", "eyes"] }],
-  });
-  transport.failRemoveOnly = new Set(["eyes"]);
-
-  const result = await executeSlackTool(
-    "slack_update_status",
-    { issueId: "C1:1.1", status: "Done" },
-    settings(),
-    transport,
-  );
-
-  assert.equal(result.success, false);
-  const msg = await transport.getMessage("C1", "1.1");
-  // The original managed-reaction set is fully restored: both stale reactions present, target not.
-  assert.equal(msg!.reactions.includes("x"), true);
-  assert.equal(msg!.reactions.includes("eyes"), true);
-  assert.equal(msg!.reactions.includes("white_check_mark"), false);
-  // The read path still reports the OLD status (Cancelled), never the wrong new status.
-  assert.equal(stateFromReactions(msg!.reactions, statusEmojiMap(settings())), "Cancelled");
-});
-
-test("slack_update_status reports an ambiguous failure when rollback cannot restore the original set", async () => {
-  // In Progress -> Done with ALL removes failing. add white_check_mark succeeds; removing the
-  // stale eyes fails, triggering rollback. The rollback removeReaction(white_check_mark) ALSO
-  // fails (real outage), so both eyes and white_check_mark linger. The read path ranks Done above
-  // In Progress, so the message would observe as "Done" even though the swap failed: the tool must
-  // NOT claim "status not changed" and must surface the actual managed reactions.
-  const transport = new FailingSlackTransport({
-    C1: [{ ts: "1.1", text: "<@U1> do the thing", reactions: ["eyes"] }],
-  });
-  transport.failRemove = true;
-
-  const result = await executeSlackTool(
-    "slack_update_status",
-    { issueId: "C1:1.1", status: "Done" },
-    settings(),
-    transport,
-  );
-
-  assert.equal(result.success, false);
-  // The error must NOT lie about the state being unchanged.
-  assert.equal(/status not changed/.test(result.error ?? ""), false);
-  // It must report that the update failed and could not be fully rolled back, and include the
-  // ACTUAL current managed reactions so the caller does not trust the prior status.
-  assert.match(result.error ?? "", /could not be fully rolled back/);
-  assert.match(result.error ?? "", /eyes/);
-  assert.match(result.error ?? "", /white_check_mark/);
-  // The actual reactions are surfaced in the result for programmatic callers.
-  const reported = (result.result as { error: { currentManagedReactions: string[] } }).error
-    .currentManagedReactions;
-  assert.equal(reported.includes("eyes"), true);
-  assert.equal(reported.includes("white_check_mark"), true);
-  // Both reactions genuinely lingered on the message.
-  const msg = await transport.getMessage("C1", "1.1");
-  assert.equal(msg!.reactions.includes("eyes"), true);
-  assert.equal(msg!.reactions.includes("white_check_mark"), true);
-});
-
-test("slack_update_status preserves the old status when addReaction fails", async () => {
-  const transport = new FailingSlackTransport({
-    C1: [{ ts: "1.1", text: "<@U1> do the thing", reactions: ["eyes"] }],
-  });
-  transport.failAdd = true;
-
-  const result = await executeSlackTool(
-    "slack_update_status",
-    { issueId: "C1:1.1", status: "Done" },
-    settings(),
-    transport,
-  );
-
-  // The add failed up front: no remove should have been attempted, so the prior status is
-  // fully preserved (existing reactions unchanged).
-  assert.equal(result.success, false);
-  const msg = await transport.getMessage("C1", "1.1");
-  assert.deepEqual(msg!.reactions, ["eyes"]);
-});
-
-test("slack_update_status fails when a 'successful' remove leaves a human-authored reaction lingering", async () => {
-  // A HUMAN added the Cancelled emoji (x), so the bot's reactions.remove returns no_reaction and
-  // resolves as success WITHOUT removing it. Updating to Done adds white_check_mark and "removes"
-  // x (a no-op). Every write resolves, but the message now has BOTH ["x", "white_check_mark"], so
-  // the read path ranks Cancelled above Done and would mis-report the OLD status. The tool must
-  // verify the effective end state, NOT claim success, and surface the actual managed reactions.
-  const transport = new FailingSlackTransport({
-    C1: [{ ts: "1.1", text: "<@U1> do the thing", reactions: ["x"] }],
-  });
-  transport.removeNoOp = new Set(["x"]);
-
-  const result = await executeSlackTool(
-    "slack_update_status",
-    { issueId: "C1:1.1", status: "Done" },
-    settings(),
-    transport,
-  );
-
-  // The swap did not take effect: x lingered, so the effective status is still Cancelled, not Done.
-  assert.equal(result.success, false);
-  assert.match(result.error ?? "", /did not take effect/);
-  assert.match(result.error ?? "", /x/);
-  assert.match(result.error ?? "", /white_check_mark/);
-  // The actual reactions are surfaced for programmatic callers.
-  const reported = (result.result as { error: { currentManagedReactions: string[] } }).error
-    .currentManagedReactions;
-  assert.equal(reported.includes("x"), true);
-  assert.equal(reported.includes("white_check_mark"), true);
-  // Both reactions genuinely linger on the message, so the read path still resolves to Cancelled.
-  const msg = await transport.getMessage("C1", "1.1");
-  assert.equal(msg!.reactions.includes("x"), true);
-  assert.equal(msg!.reactions.includes("white_check_mark"), true);
-  assert.equal(stateFromReactions(msg!.reactions, statusEmojiMap(settings())), "Cancelled");
-});
-
-test("slack_update_status add-before-remove happy path swaps to a single target", async () => {
-  const transport = new InMemorySlackTransport({
-    C1: [{ ts: "1.1", text: "<@U1> do the thing", reactions: ["eyes"] }],
-  });
-
-  const result = await executeSlackTool(
-    "slack_update_status",
-    { issueId: "C1:1.1", status: "Done" },
-    settings(),
-    transport,
-  );
-
-  assert.equal(result.success, true);
-  const msg = await transport.getMessage("C1", "1.1");
-  assert.deepEqual(msg!.reactions, ["white_check_mark"]);
-});
-
-test("slack_update_status succeeds for a case-variant status and reports the canonical state", async () => {
-  // emojiForState resolves the status case-insensitively, so "done" maps to white_check_mark and the
-  // swap takes effect. The success-path verification must compare the effective ranked state against
-  // the target emoji's CANONICAL mapped state ("Done"), not the raw "done" the agent passed - an
-  // exact-string check would otherwise falsely report that the correctly-applied update did not take
-  // effect.
-  const transport = new InMemorySlackTransport({
-    C1: [{ ts: "1.1", text: "<@U1> do the thing", reactions: ["eyes"] }],
-  });
 
   const result = await executeSlackTool(
     "slack_update_status",
@@ -607,10 +288,142 @@ test("slack_update_status succeeds for a case-variant status and reports the can
   );
 
   assert.equal(result.success, true);
-  // The reported status is the canonical mapped name, not the raw lowercase input.
   assert.equal((result.result as { status: string }).status, "Done");
-  const msg = await transport.getMessage("C1", "1.1");
-  assert.deepEqual(msg!.reactions, ["white_check_mark"]);
+  assert.deepEqual(transport.replies, [{ channel: "C1", threadTs: "1.1", body: "status: Done" }]);
+});
+
+test("slack_update_status rejects a status outside the workflow's states", async () => {
+  const transport = new InMemorySlackTransport(
+    { C1: [{ ts: "1.1", text: "<@U1> do the thing", reactions: [] }] },
+    { botUserId: "U1" },
+  );
+
+  const result = await executeSlackTool(
+    "slack_update_status",
+    { issueId: "C1:1.1", status: "Shipped" },
+    settings(),
+    transport,
+  );
+
+  assert.equal(result.success, false);
+  assert.match(result.error ?? "", /unknown status 'Shipped'/);
+  assert.deepEqual(transport.replies, []);
+});
+
+test("slack_update_status works for custom states with no mapped emoji", async () => {
+  // The reaction swap used to fail without an emoji mapping; the thread reply carries the
+  // state regardless, so custom states no longer require an emoji_states entry.
+  const transport = new InMemorySlackTransport(
+    { C1: [{ ts: "1.1", text: "<@U1> ship it", reactions: [] }] },
+    { botUserId: "U1" },
+  );
+  const custom = parseSlackConfig(
+    {
+      tracker: {
+        kind: "slack",
+        channels: ["C1"],
+        bot_user_id: "U1",
+        active_states: ["Todo", "In Progress"],
+        terminal_states: ["Shipped"],
+      },
+    },
+    { SLACK_BOT_TOKEN: "xoxb" },
+  );
+
+  const result = await executeSlackTool(
+    "slack_update_status",
+    { issueId: "C1:1.1", status: "Shipped" },
+    custom,
+    transport,
+  );
+
+  assert.equal(result.success, true);
+  assert.deepEqual(transport.replies, [
+    { channel: "C1", threadTs: "1.1", body: "status: Shipped" },
+  ]);
+
+  const read = await executeSlackTool(
+    "slack_read_thread",
+    { issueId: "C1:1.1" },
+    custom,
+    transport,
+  );
+  assert.equal((read.result as { status: string }).status, "Shipped");
+});
+
+test("a failing reaction mirror never fails the status transition", async () => {
+  const transport = new InMemorySlackTransport(
+    { C1: [{ ts: "1.1", text: "<@U1> do the thing", reactions: ["eyes"] }] },
+    { botUserId: "U1" },
+  );
+  transport.addReaction = async () => {
+    throw new Error("reactions.add exploded");
+  };
+  transport.removeReaction = async () => {
+    throw new Error("reactions.remove exploded");
+  };
+
+  const result = await executeSlackTool(
+    "slack_update_status",
+    { issueId: "C1:1.1", status: "Done" },
+    settings(),
+    transport,
+  );
+
+  assert.equal(result.success, true);
+  assert.deepEqual(transport.replies, [{ channel: "C1", threadTs: "1.1", body: "status: Done" }]);
+});
+
+test("a human command in the thread overrides the reaction reading", async () => {
+  // Reactions are per-author: a human cannot remove the agent's :eyes:. The command thread
+  // reply supersedes it.
+  const transport = new InMemorySlackTransport(
+    {
+      C1: [
+        {
+          ts: "1.1",
+          text: "<@U1> do the thing",
+          reactions: ["eyes"],
+          replies: [{ ts: "1.2", text: "<@U1> !done", user: "U_HUMAN" }],
+        },
+      ],
+    },
+    { botUserId: "U1" },
+  );
+
+  const read = await executeSlackTool(
+    "slack_read_thread",
+    { issueId: "C1:1.1" },
+    settings(),
+    transport,
+  );
+  assert.equal((read.result as { status: string }).status, "Done");
+});
+
+test("a bare re-mention reopens a terminal issue to the default active state", async () => {
+  const transport = new InMemorySlackTransport(
+    {
+      C1: [
+        {
+          ts: "1.1",
+          text: "<@U1> do the thing",
+          reactions: ["white_check_mark"],
+          replies: [
+            { ts: "1.3", text: "<@U1> this broke again, take another look", user: "U_HUMAN" },
+          ],
+        },
+      ],
+    },
+    { botUserId: "U1" },
+  );
+
+  const read = await executeSlackTool(
+    "slack_read_thread",
+    { issueId: "C1:1.1" },
+    settings(),
+    transport,
+  );
+  assert.equal((read.result as { status: string }).status, "Todo");
 });
 
 test("slack_update_status rejects a channel that is not in tracker.channels", async () => {
@@ -737,4 +550,108 @@ test("slack tools fail loudly when bot_user_id is not configured", async () => {
   const read = await executeSlackTool("slack_read_thread", { issueId: "C1:1.1" }, noBot, transport);
   assert.equal(read.success, false);
   assert.match(read.error ?? "", /bot_user_id/);
+});
+
+test("slack_user_info resolves a workspace member and fails on unknown ids", async () => {
+  const transport = new InMemorySlackTransport(
+    { C1: [] },
+    {
+      botUserId: "U1",
+      users: { U_HUMAN: { id: "U_HUMAN", name: "ryan", realName: "Ryan L", isBot: false } },
+    },
+  );
+
+  const found = await executeSlackTool(
+    "slack_user_info",
+    { userId: "U_HUMAN" },
+    settings(),
+    transport,
+  );
+  assert.equal(found.success, true);
+  assert.deepEqual(found.result, {
+    user: { id: "U_HUMAN", name: "ryan", realName: "Ryan L", isBot: false },
+  });
+
+  const missing = await executeSlackTool(
+    "slack_user_info",
+    { userId: "U_NOPE" },
+    settings(),
+    transport,
+  );
+  assert.equal(missing.success, false);
+  assert.match(missing.error ?? "", /unknown slack user/);
+});
+
+test("slack_channel_context reads the window around a tracked issue only", async () => {
+  const transport = new InMemorySlackTransport(
+    {
+      C1: [
+        { ts: "1.0", text: "earlier chatter", user: "U_A", reactions: [] },
+        { ts: "2.0", text: "more context", user: "U_B", reactions: [] },
+        { ts: "3.0", text: "<@U1> fix the thing", user: "U_B", reactions: [] },
+        { ts: "4.0", text: "after the ask", user: "U_A", reactions: [] },
+      ],
+    },
+    { botUserId: "U1" },
+  );
+
+  const result = await executeSlackTool(
+    "slack_channel_context",
+    { issueId: "C1:3.0", before: 2, after: 5 },
+    settings(),
+    transport,
+  );
+  assert.equal(result.success, true);
+  assert.deepEqual(result.result, {
+    anchor: "C1:3.0",
+    messages: [
+      { ts: "2.0", user: "U_B", text: "more context" },
+      { ts: "3.0", user: "U_B", text: "<@U1> fix the thing" },
+      { ts: "4.0", user: "U_A", text: "after the ask" },
+    ],
+  });
+
+  // The anchor must be a tracked issue: surrounding chatter is not a free-roaming read.
+  const untracked = await executeSlackTool(
+    "slack_channel_context",
+    { issueId: "C1:1.0" },
+    settings(),
+    transport,
+  );
+  assert.equal(untracked.success, false);
+  assert.match(untracked.error ?? "", /not a tracked bot-mention issue/);
+});
+
+test("slack_query includes bot-marked reply-tracked threads with thread state", async () => {
+  const transport = new InMemorySlackTransport(
+    {
+      C1: [
+        { ts: "1.1", text: "<@U1> mention-tracked", reactions: [] },
+        {
+          ts: "2.1",
+          text: "background discussion",
+          reactions: [],
+          botReacted: true,
+          replies: [
+            { ts: "2.2", text: "<@U1> please handle #infra", user: "U_HUMAN" },
+            { ts: "2.3", text: "status: In Progress", user: "U1" },
+          ],
+        },
+      ],
+    },
+    { botUserId: "U1" },
+  );
+
+  const res = await executeSlackTool(
+    "slack_query",
+    { select: ["issueId", "title", "state"] },
+    settings(),
+    transport,
+  );
+  assert.equal(res.success, true);
+  const rows = (res.result as { rows: Array<Record<string, unknown>> }).rows;
+  assert.deepEqual(rows, [
+    { issueId: "C1:1.1", title: "mention-tracked", state: "Todo" },
+    { issueId: "C1:2.1", title: "please handle #infra", state: "In Progress" },
+  ]);
 });

@@ -7,7 +7,14 @@ import { InMemorySlackTransport, SlackTrackerClient } from "@symphony/slack-trac
 
 function settings() {
   return parseSlackConfig(
-    { tracker: { kind: "slack", channels: ["C1"], active_states: ["Todo", "In Progress"] } },
+    {
+      tracker: {
+        kind: "slack",
+        channels: ["C1"],
+        bot_user_id: "U_BOT",
+        active_states: ["Todo", "In Progress"],
+      },
+    },
     { SLACK_BOT_TOKEN: "xoxb-test" },
   );
 }
@@ -51,9 +58,9 @@ test("mentions become issues; reactions drive state", async () => {
   );
 });
 
-test("piped mention form <@U123|alice> is detected and stripped from the title", async () => {
+test("piped mention form <@U_BOT|worker> is detected and stripped from the title", async () => {
   const transport = new InMemorySlackTransport({
-    C1: [{ ts: "1700000000.000300", text: "<@U123|alice> do it", reactions: [] }],
+    C1: [{ ts: "1700000000.000300", text: "<@U_BOT|worker> do it", reactions: [] }],
   });
   const client = new SlackTrackerClient(settings(), transport);
 
@@ -240,8 +247,8 @@ test("one mention scan serves the back-to-back reads of a single poll cycle", as
     C1: [{ ts: "1700000000.000700", text: "<@U_BOT> cache me", reactions: [] }],
   });
   let scans = 0;
-  const original = transport.listMentions.bind(transport);
-  transport.listMentions = async (channels) => {
+  const original = transport.scanChannels.bind(transport);
+  transport.scanChannels = async (channels) => {
     scans += 1;
     return original(channels);
   };
@@ -252,4 +259,120 @@ test("one mention scan serves the back-to-back reads of a single poll cycle", as
   await client.fetchIssuesByStates(["Done", "Cancelled"]);
   await client.fetchCandidateIssues();
   assert.equal(scans, 1);
+});
+
+test("a bot mention in a reply tracks the thread: request title, marker, restart survival", async () => {
+  const now = Date.now() / 1000;
+  const rootTs = `${(now - 3600).toFixed(6)}`;
+  const replyTs = `${(now - 1800).toFixed(6)}`;
+  const transport = new InMemorySlackTransport(
+    {
+      C1: [
+        {
+          ts: rootTs,
+          text: "we're seeing flaky deploys in prod",
+          reactions: [],
+          replies: [{ ts: replyTs, text: "<@U_BOT> please fix this #backend", user: "U_HUMAN" }],
+        },
+      ],
+    },
+    { botUserId: "U_BOT" },
+  );
+  const client = new SlackTrackerClient(settings(), transport);
+
+  const candidates = await client.fetchCandidateIssues();
+  assert.deepEqual(
+    candidates.map((i) => i.id),
+    [`C1:${rootTs}`],
+  );
+  // The request reply carries the ask: title and routing labels come from it.
+  assert.equal(candidates[0]!.title, "please fix this #backend");
+  assert.deepEqual(candidates[0]!.labels, ["backend"]);
+  assert.match(candidates[0]!.description ?? "", /flaky deploys in prod/);
+  // The bot marked the root so the thread stays tracked without re-reading replies.
+  assert.equal((await transport.getMessage("C1", rootTs))!.botReacted, true);
+
+  // A fresh client (daemon restart) recognizes the marker even with an expired lookback.
+  const restarted = new SlackTrackerClient(
+    parseSlackConfig(
+      {
+        tracker: {
+          kind: "slack",
+          channels: ["C1"],
+          bot_user_id: "U_BOT",
+          reply_lookback_days: 0,
+          active_states: ["Todo", "In Progress"],
+        },
+      },
+      { SLACK_BOT_TOKEN: "xoxb-test" },
+    ),
+    transport,
+  );
+  assert.deepEqual(
+    (await restarted.fetchCandidateIssues()).map((i) => i.id),
+    [`C1:${rootTs}`],
+  );
+});
+
+test("untracked threads older than the reply lookback are not inspected", async () => {
+  const transport = new InMemorySlackTransport(
+    {
+      C1: [
+        {
+          ts: "1000.000100",
+          text: "ancient conversation",
+          reactions: [],
+          replies: [{ ts: "1000.000200", text: "<@U_BOT> old request", user: "U_HUMAN" }],
+        },
+      ],
+    },
+    { botUserId: "U_BOT" },
+  );
+  const client = new SlackTrackerClient(settings(), transport);
+
+  // The reply ts (epoch ~1000s) is far older than the 2-day lookback floor.
+  assert.deepEqual(await client.fetchCandidateIssues(), []);
+});
+
+test("the bot's reaction mirror self-heals after a human command", async () => {
+  // A human `!done` changes the derived state, but the bot's stale :eyes: mirror lingers
+  // until the bot acts. The poll reconciles the mirror to the thread-derived state - once
+  // per state change, not on every poll (a stale HUMAN reaction is not removable anyway).
+  const transport = new InMemorySlackTransport(
+    {
+      C1: [
+        {
+          ts: "1700000000.000100",
+          text: "<@U_BOT> fix the thing",
+          reactions: ["eyes"],
+          replies: [{ ts: "1700000000.000200", text: "<@U_BOT> !done", user: "U_HUMAN" }],
+        },
+      ],
+    },
+    { botUserId: "U_BOT" },
+  );
+  let reactionCalls = 0;
+  const add = transport.addReaction.bind(transport);
+  const remove = transport.removeReaction.bind(transport);
+  transport.addReaction = async (channel, ts, name) => {
+    reactionCalls += 1;
+    return add(channel, ts, name);
+  };
+  transport.removeReaction = async (channel, ts, name) => {
+    reactionCalls += 1;
+    return remove(channel, ts, name);
+  };
+  const client = new SlackTrackerClient(settings(), transport);
+
+  // Done is terminal, so the issue is not a candidate - but the poll still heals the mirror.
+  assert.deepEqual(await client.fetchCandidateIssues(), []);
+  assert.deepEqual((await transport.getMessage("C1", "1700000000.000100"))!.reactions, [
+    "white_check_mark",
+  ]);
+  assert.ok(reactionCalls > 0);
+
+  // A second poll with an unchanged state attempts no further reaction writes.
+  const afterHeal = reactionCalls;
+  await client.fetchCandidateIssues();
+  assert.equal(reactionCalls, afterHeal);
 });
