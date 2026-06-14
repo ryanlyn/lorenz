@@ -59,6 +59,7 @@ export const linearTrackerProvider: TrackerProvider = {
     return client;
   },
   createToolOps: (settings, context) => linearToolOps(settings, context),
+  defaultToolPacks: () => ["linear"],
   projectUrl(settings) {
     const slug = linearTrackerOptions(settings).projectSlug?.trim();
     if (!slug) return undefined;

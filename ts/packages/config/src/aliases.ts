@@ -62,10 +62,7 @@ const loggingAliases = { log_file: "logFile" };
 
 export function normalizeWorkflowConfig(value: unknown): unknown {
   if (!isPlainRecord(value)) return value;
-  const raw = normalizeAliases(value, {
-    status_overrides: "statusOverrides",
-    tool_options: "toolOptions",
-  });
+  const raw = normalizeAliases(value, { status_overrides: "statusOverrides" });
   const normalized: Record<string, unknown> = { ...raw };
 
   normalizeNested(normalized, "tracker", trackerAliases);
@@ -83,6 +80,19 @@ export function normalizeWorkflowConfig(value: unknown): unknown {
 
   if (isPlainRecord(normalized.tracker)) {
     normalizeNested(normalized.tracker, "dispatch", dispatchAliases);
+  }
+  if (isPlainRecord(normalized.trackers)) {
+    normalized.trackers = Object.fromEntries(
+      Object.entries(normalized.trackers).map(([name, tracker]) => {
+        if (!isPlainRecord(tracker)) return [name, tracker];
+        const normalizedTracker: Record<string, unknown> = normalizeAliases(
+          tracker,
+          trackerAliases,
+        );
+        normalizeNested(normalizedTracker, "dispatch", dispatchAliases);
+        return [name, normalizedTracker];
+      }),
+    );
   }
   if (isPlainRecord(normalized.agents)) {
     normalized.agents = Object.fromEntries(

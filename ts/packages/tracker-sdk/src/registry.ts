@@ -3,8 +3,8 @@ import type { Settings } from "@symphony/domain";
 import type { TrackerProvider } from "./provider.js";
 
 /**
- * Lookup table of {@link TrackerProvider}s keyed by `tracker.kind`. The core resolves the
- * configured kind through a registry instead of hardcoding backends, so the set of
+ * Lookup table of {@link TrackerProvider}s keyed by provider name. The core resolves the
+ * configured tracker through a registry instead of hardcoding backends, so the set of
  * supported trackers is decided by whoever composes the application.
  */
 export class TrackerRegistry {
@@ -25,7 +25,7 @@ export class TrackerRegistry {
     return kind === undefined ? undefined : this.providers.get(kind);
   }
 
-  /** Resolve the provider for parsed settings via `settings.tracker.kind`. */
+  /** Resolve the provider for parsed settings. */
   providerFor(settings: Settings): TrackerProvider | undefined {
     return this.get(settings.tracker.kind);
   }

@@ -37,6 +37,10 @@ import {
   type DispatchRaw,
   type HooksRaw,
   type StatusOverridesRaw,
+  trackerRecordSchema,
+  type TrackerRecordRaw,
+  type TrackersRaw,
+  type ToolsRaw,
   type TrackerRaw,
   type WorkflowConfigRaw,
 } from "./schemas.js";
@@ -52,11 +56,14 @@ export function parseConfig(
   const parsed = parseWorkflowConfig(raw);
 
   const trackerRaw = parsed.tracker ?? {};
-  settings.tracker = parseTracker(settings.tracker, trackerRaw, env, registry);
-  if (parsed.tools !== undefined) settings.tools = [...parsed.tools];
-  if (parsed.toolOptions !== undefined) {
-    settings.toolOptions = resolveToolOptionReferences(parsed.toolOptions, env);
-  }
+  settings.tracker = parseTracker(
+    settings.tracker,
+    trackerRaw,
+    parsed.trackers ?? {},
+    env,
+    registry,
+  );
+  settings.toolOptions = parseToolOptions(parsed.tools, env);
 
   const pollingRaw = parsed.polling ?? {};
   settings.polling.intervalMs = pollingRaw.intervalMs ?? settings.polling.intervalMs;
@@ -136,16 +143,12 @@ export function validateDispatchConfig(
   const provider = trackers.require(settings.tracker.kind);
   provider.validateDispatch?.(settings);
 
-  if (tools && settings.tools !== undefined) {
-    for (const name of settings.tools) tools.require(name);
-  }
-
   if (tools && settings.toolOptions !== undefined) {
     for (const [pack, options] of Object.entries(settings.toolOptions)) {
       const provider = tools.require(pack);
       if (provider.validateOptions === undefined) {
         if (Object.keys(options).length > 0) {
-          throw new Error(`tool_options.${pack} is not supported by the "${pack}" pack`);
+          throw new Error(`tools.${pack} is not supported by the "${pack}" pack`);
         }
         continue;
       }
@@ -180,9 +183,22 @@ export function normalizeRouteName(value: unknown): string {
   return String(value).trim().toLowerCase();
 }
 
-/** Keys of the tracker config section owned by the core; everything else belongs to the provider. */
+/** Shared tracker aliases; provider-specific aliases are declared by each tracker provider. */
+const TRACKER_COMMON_ALIASES = {
+  api_key: "apiKey",
+  active_states: "activeStates",
+  terminal_states: "terminalStates",
+};
+const TRACKER_DISPATCH_ALIASES = {
+  accept_unrouted: "acceptUnrouted",
+  only_routes: "onlyRoutes",
+  route_label_prefix: "routeLabelPrefix",
+};
+
+/** Keys of a selected tracker config record owned by the core; everything else belongs to the provider. */
 const TRACKER_COMMON_KEYS = new Set([
   "kind",
+  "provider",
   "endpoint",
   "apiKey",
   "assignee",
@@ -194,24 +210,33 @@ const TRACKER_COMMON_KEYS = new Set([
 function parseTracker(
   defaults: TrackerSettings,
   trackerRaw: TrackerRaw,
+  trackersRaw: TrackersRaw,
   env: NodeJS.ProcessEnv,
   registry: TrackerRegistry,
 ): TrackerSettings {
-  const kind = trackerKindValue(trackerRaw.kind) ?? defaults.kind;
+  assertTrackerBundleNames(trackersRaw);
+
+  const selectorRecord = parseTrackerRecord(trackerRaw, "tracker");
+  const selectedBundleName = trackerKindValue(selectorRecord.kind) ?? defaults.kind;
+  const trackerRecord =
+    selectedBundleName === undefined
+      ? legacyTrackerRecord(selectorRecord, selectedBundleName, trackersRaw)
+      : trackerRecordForSelection(selectorRecord, selectedBundleName, trackersRaw);
+  const kind = trackerRecord.kind;
   // Unregistered kinds parse generically (options pass through unvalidated) and are
   // rejected with the full list of known kinds by validateDispatchConfig.
   const provider = registry.get(kind);
 
-  const apiKey = resolveConfiguredSecret(trackerRaw.apiKey, env, provider?.envFallbacks?.apiKey);
+  const apiKey = resolveConfiguredSecret(trackerRecord.apiKey, env, provider?.envFallbacks?.apiKey);
   const assignee = resolveConfiguredSecret(
-    trackerRaw.assignee,
+    trackerRecord.assignee,
     env,
     provider?.envFallbacks?.assignee,
   );
-  const endpoint = trackerRaw.endpoint ?? provider?.defaultEndpoint ?? defaults.endpoint;
+  const endpoint = trackerRecord.endpoint ?? provider?.defaultEndpoint ?? defaults.endpoint;
 
   const providerRaw: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(trackerRaw)) {
+  for (const [key, value] of Object.entries(trackerRecord)) {
     if (!TRACKER_COMMON_KEYS.has(key)) providerRaw[key] = value;
   }
   const aliased = normalizeAliases(providerRaw, { ...(provider?.configAliases ?? {}) });
@@ -228,11 +253,64 @@ function parseTracker(
     endpoint,
     apiKey,
     assignee,
-    activeStates: trackerRaw.activeStates ?? defaults.activeStates,
-    terminalStates: trackerRaw.terminalStates ?? defaults.terminalStates,
-    dispatch: parseDispatch(defaults.dispatch, trackerRaw.dispatch ?? {}),
+    activeStates: trackerRecord.activeStates ?? defaults.activeStates,
+    terminalStates: trackerRecord.terminalStates ?? defaults.terminalStates,
+    dispatch: parseDispatch(defaults.dispatch, trackerRecord.dispatch ?? {}),
     options,
   };
+}
+
+function legacyTrackerRecord(
+  selectorRecord: TrackerRecordRaw,
+  selectedBundleName: string | undefined,
+  trackersRaw: TrackersRaw,
+): TrackerRecordRaw {
+  if (selectedBundleName !== undefined && Object.keys(trackersRaw).length > 0) {
+    throw new Error(`trackers.${selectedBundleName} is required by tracker.kind`);
+  }
+  return { ...selectorRecord, kind: selectedBundleName };
+}
+
+function trackerRecordForSelection(
+  selectorRecord: TrackerRecordRaw,
+  selectedBundleName: string,
+  trackersRaw: TrackersRaw,
+): TrackerRecordRaw {
+  const selectedBundleRaw = trackersRaw[selectedBundleName];
+  return selectedBundleRaw === undefined
+    ? legacyTrackerRecord(selectorRecord, selectedBundleName, trackersRaw)
+    : bundledTrackerRecord(selectorRecord, selectedBundleRaw, selectedBundleName);
+}
+
+function bundledTrackerRecord(
+  selectorRecord: TrackerRecordRaw,
+  selectedBundleRaw: Record<string, unknown>,
+  selectedBundleName: string,
+): TrackerRecordRaw {
+  const selectedBundle = parseTrackerRecord(selectedBundleRaw, `trackers.${selectedBundleName}`);
+  const provider = trackerKindValue(selectedBundle.provider);
+  if (provider === undefined) {
+    throw new Error(`trackers.${selectedBundleName}.provider is required`);
+  }
+  const { kind: _selectorKind, provider: _selectorProvider, ...selectorOptions } = selectorRecord;
+  const { kind: _bundleKind, provider: _bundleProvider, ...bundleOptions } = selectedBundle;
+  return { ...selectorOptions, ...bundleOptions, kind: provider };
+}
+
+function assertTrackerBundleNames(trackersRaw: TrackersRaw): void {
+  for (const name of Object.keys(trackersRaw)) {
+    if (!name.trim()) throw new Error("trackers names must not be blank");
+  }
+}
+
+function parseTrackerRecord(raw: Record<string, unknown>, label: string): TrackerRecordRaw {
+  const normalized = normalizeAliases(raw, TRACKER_COMMON_ALIASES);
+  if (isPlainRecord(normalized.dispatch)) {
+    normalized.dispatch = normalizeAliases(normalized.dispatch, TRACKER_DISPATCH_ALIASES);
+  }
+  const result = trackerRecordSchema.safeParse(normalized);
+  if (result.success) return result.data;
+  throw new Error(configErrorMessage(result.error, label));
 }
 
 function expandLocalPath(value: string, env: NodeJS.ProcessEnv): string {
@@ -483,11 +561,7 @@ function parseAgent(
   // rejected with the full list of known executors by validateDispatchConfig.
   const provider = executors.get(executor);
 
-  const providerRaw: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(raw)) {
-    if (!AGENT_COMMON_KEYS.has(key)) providerRaw[key] = value;
-  }
-  const aliased = normalizeAliases(providerRaw, { ...(provider?.configAliases ?? {}) });
+  const aliased = agentOptionsRaw(raw, provider, `agents.${kind}`);
   const defaults = baseAgents[kind] ?? customAgentDefaultsForBridge(aliased, claudeDefaults);
   // Option bags belong to one executor: a record selecting a different executor than its
   // defaults (including the ACP-flavored custom-kind fallback) starts from an empty bag.
@@ -619,12 +693,8 @@ function agentRecordOverrideFragment(
   if ("executor" in raw) {
     throw new Error(`${label} contains unsupported keys: executor`);
   }
-  const providerRaw: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(raw)) {
-    if (!AGENT_COMMON_KEYS.has(key)) providerRaw[key] = value;
-  }
   const provider = executors.get(base?.executor);
-  const aliased = normalizeAliases(providerRaw, { ...(provider?.configAliases ?? {}) });
+  const aliased = agentOptionsRaw(raw, provider, label);
   const options =
     base && Object.keys(aliased).length > 0
       ? sparseOptionsOverlay(
@@ -637,6 +707,25 @@ function agentRecordOverrideFragment(
     ...(raw.stallTimeoutMs !== undefined ? { stallTimeoutMs: raw.stallTimeoutMs } : {}),
     ...(Object.keys(options).length > 0 ? { options } : {}),
   };
+}
+
+function agentOptionsRaw(
+  raw: Record<string, unknown>,
+  provider: AgentExecutorProvider | undefined,
+  _label: string,
+): Record<string, unknown> {
+  const flat = Object.fromEntries(
+    Object.entries(raw).filter(([key]) => !AGENT_COMMON_KEYS.has(key)),
+  );
+  const aliases = { ...(provider?.configAliases ?? {}) };
+  return normalizeLegacyAgentCommand(normalizeAliases(flat, aliases));
+}
+
+/** Fold the legacy `command` spelling into `bridgeCommand`; an explicit canonical key wins. */
+function normalizeLegacyAgentCommand(options: Record<string, unknown>): Record<string, unknown> {
+  if (!("command" in options)) return options;
+  const { command, ...rest } = options;
+  return { bridgeCommand: rest.bridgeCommand ?? command, ...rest };
 }
 
 /** Keys of a parsed options bag whose values differ from the base record's options. */
@@ -655,6 +744,15 @@ function sameOptionValue(a: unknown, b: unknown): boolean {
   if (Object.is(a, b)) return true;
   if (typeof a !== "object" || typeof b !== "object" || a === null || b === null) return false;
   return JSON.stringify(a) === JSON.stringify(b);
+}
+
+function parseToolOptions(
+  tools: ToolsRaw | undefined,
+  env: NodeJS.ProcessEnv,
+): Record<string, Record<string, unknown>> | undefined {
+  if (tools === undefined) return undefined;
+  if (Object.keys(tools).length === 0) return undefined;
+  return resolveToolOptionReferences(tools, env);
 }
 
 /**

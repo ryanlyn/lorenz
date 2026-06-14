@@ -104,11 +104,12 @@ export const agentRecordOverrideSchema = z
   })
   .catchall(z.unknown());
 
-// Common keys are validated here; any other key in the tracker section is provider-specific
-// and is passed through (`catchall`) to the registered tracker provider's option parser.
-const trackerRawSchema = z
+// Common keys are validated after the tracker provider has been selected. This schema is
+// used for the legacy `tracker.kind` form and canonical `trackers.<name>` records.
+export const trackerRecordSchema = z
   .object({
     kind: z.string().optional(),
+    provider: z.string().optional(),
     endpoint: z.string().optional(),
     apiKey: z.string().optional(),
     assignee: z.string().optional(),
@@ -124,6 +125,8 @@ const trackerRawSchema = z
       .optional(),
   })
   .catchall(z.unknown());
+const trackerRawSchema = z.record(z.string(), z.unknown());
+const trackersRawSchema = z.record(z.string(), z.record(z.string(), z.unknown()));
 
 const pollingRawSchema = z.object({ intervalMs: coercedIntervalMs.optional() }).strict();
 const workspaceRawSchema = z
@@ -191,6 +194,7 @@ const serverRawSchema = z
   .strict();
 const loggingRawSchema = z.object({ logFile: z.string().optional() }).strict();
 const agentsRawSchema = z.record(z.string(), z.unknown());
+const toolsRawSchema = z.record(z.string(), z.record(z.string(), z.unknown()));
 const partialAgentRawSchema = agentRawSchema.partial().strict();
 const partialCodexRawSchema = codexRawSchema.partial().strict();
 const partialClaudeRawSchema = claudeRawSchema.partial().strict();
@@ -219,8 +223,8 @@ export const workflowConfigSchema = z.preprocess(
       observability: observabilityRawSchema.optional(),
       server: serverRawSchema.optional(),
       logging: loggingRawSchema.optional(),
-      tools: z.array(z.string()).optional(),
-      toolOptions: z.record(z.string(), z.record(z.string(), z.unknown())).optional(),
+      trackers: trackersRawSchema.optional(),
+      tools: toolsRawSchema.optional(),
       statusOverrides: z.record(z.string(), statusOverrideRawSchema).optional(),
     })
     .passthrough(),
@@ -228,10 +232,13 @@ export const workflowConfigSchema = z.preprocess(
 
 export type WorkflowConfigRaw = z.infer<typeof workflowConfigSchema>;
 export type TrackerRaw = z.infer<typeof trackerRawSchema>;
-export type DispatchRaw = NonNullable<TrackerRaw["dispatch"]>;
+export type TrackersRaw = z.infer<typeof trackersRawSchema>;
+export type TrackerRecordRaw = z.infer<typeof trackerRecordSchema>;
+export type DispatchRaw = NonNullable<TrackerRecordRaw["dispatch"]>;
 export type HooksRaw = z.infer<typeof hooksRawSchema>;
 export type AgentRaw = z.infer<typeof agentRawSchema>;
 export type AgentsRaw = z.infer<typeof agentsRawSchema>;
+export type ToolsRaw = z.infer<typeof toolsRawSchema>;
 export type CodexRaw = z.infer<typeof codexRawSchema>;
 export type ClaudeRaw = z.infer<typeof claudeRawSchema>;
 export type StatusOverridesRaw = NonNullable<WorkflowConfigRaw["statusOverrides"]>;

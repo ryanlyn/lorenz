@@ -66,28 +66,31 @@ test("mcpAuthScopeForSettings — tool options change the server identity, key o
   const scope = (raw: Record<string, unknown>): string =>
     mcpAuthScopeForSettings(parseConfig(raw), "127.0.0.1", 4040);
 
-  const base = { tracker: { kind: "memory" } };
+  const base = {
+    tracker: { kind: "dispatch" },
+    trackers: { dispatch: { provider: "linear", project_slug: "mono" } },
+  };
   const withOptions = {
     ...base,
-    tool_options: { linear: { api_key: "linear-token", endpoint: "https://linear.example" } },
+    tools: { linear: { api_key: "linear-token", endpoint: "https://linear.example" } },
   };
 
   // Mounted pack behavior depends on tool options, so the identity must too.
   assert.notEqual(scope(base), scope(withOptions));
   assert.notEqual(
     scope(withOptions),
-    scope({ ...base, tool_options: { linear: { api_key: "other-token" } } }),
+    scope({ ...base, tools: { linear: { api_key: "other-token" } } }),
   );
 
-  // Equivalent configs hash identically regardless of pack or key order.
+  // Equivalent configs hash identically regardless of key order.
   const reordered = {
     ...base,
-    tool_options: { linear: { endpoint: "https://linear.example", api_key: "linear-token" } },
+    tools: { linear: { endpoint: "https://linear.example", api_key: "linear-token" } },
   };
   assert.equal(scope(withOptions), scope(reordered));
   assert.equal(
-    scope({ ...base, tool_options: { local: { path: "/tmp/b" }, linear: { api_key: "k" } } }),
-    scope({ ...base, tool_options: { linear: { api_key: "k" }, local: { path: "/tmp/b" } } }),
+    scope({ ...base, tools: { linear: { endpoint: "https://linear.example", api_key: "k" } } }),
+    scope({ ...base, tools: { linear: { api_key: "k", endpoint: "https://linear.example" } } }),
   );
 });
 

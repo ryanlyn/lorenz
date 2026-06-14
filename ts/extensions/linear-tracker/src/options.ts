@@ -3,7 +3,7 @@ import { stringListOption, stringOption } from "@symphony/tracker-sdk";
 
 export const LINEAR_DEFAULT_ENDPOINT = "https://api.linear.app/graphql";
 
-/** Linear-specific keys of the `tracker:` config section, validated by the provider. */
+/** Linear-specific keys of the selected tracker bundle, validated by the provider. */
 export interface LinearTrackerOptions {
   /** @deprecated Use `projectSlugs` instead. Single Linear project slug. */
   projectSlug?: string | undefined;
@@ -28,7 +28,7 @@ export function linearEndpoint(settings: Settings): string {
   return settings.tracker.endpoint ?? LINEAR_DEFAULT_ENDPOINT;
 }
 
-/** Keys of the pack's `tool_options.linear` slice, with the snake_case spelling accepted. */
+/** Keys of the pack's `tools.linear` slice. */
 const LINEAR_PACK_OPTION_KEYS: Record<string, "apiKey" | "endpoint"> = {
   apiKey: "apiKey",
   api_key: "apiKey",
@@ -42,11 +42,9 @@ export interface LinearToolPackOptions {
 }
 
 /**
- * Auth resolution for the linear TOOL pack. Prefers the pack's own `tool_options.linear`
- * slice (secret references already resolved at config-parse time), then the dispatch
- * tracker's credential and endpoint only when Linear itself drives dispatch. A pack mounted
- * on a foreign dispatch tracker (e.g. Jira) must never send that tracker's credential to
- * Linear; configure `tool_options.linear.api_key` (e.g. `"$LINEAR_API_KEY"`) instead.
+ * Auth resolution for the linear TOOL pack. Prefers the pack's own `tools.linear` slice
+ * (secret references already resolved at config-parse time), then the dispatch tracker's
+ * credential and endpoint only when Linear itself drives dispatch.
  */
 export function linearToolPackOptions(settings: Settings): LinearToolPackOptions {
   const packOptions = normalizeLinearPackOptions(settings.toolOptions?.["linear"] ?? {});
@@ -61,8 +59,8 @@ export function linearToolPackOptions(settings: Settings): LinearToolPackOptions
 }
 
 /**
- * Validate the pack's `tool_options.linear` slice; backs `linearToolProvider.validateOptions`.
- * Errors name the offending `tool_options.linear.<key>` so config typos fail at startup.
+ * Validate the pack's `tools.linear` slice; backs `linearToolProvider.validateOptions`.
+ * Errors name the offending `tools.linear.<key>` so config typos fail at startup.
  */
 export function validateLinearToolOptions(options: Record<string, unknown>): void {
   normalizeLinearPackOptions(options);
@@ -77,12 +75,12 @@ function normalizeLinearPackOptions(options: Record<string, unknown>): {
     const canonical = LINEAR_PACK_OPTION_KEYS[key];
     if (canonical === undefined) {
       throw new Error(
-        `tool_options.linear.${key} is not supported (known keys: ${Object.keys(LINEAR_PACK_OPTION_KEYS).join(", ")})`,
+        `tools.linear.${key} is not supported (known keys: ${Object.keys(LINEAR_PACK_OPTION_KEYS).join(", ")})`,
       );
     }
     if (value === undefined || value === null) continue;
     if (typeof value !== "string") {
-      throw new Error(`tool_options.linear.${key} must be a string`);
+      throw new Error(`tools.linear.${key} must be a string`);
     }
     normalized[canonical] = value;
   }

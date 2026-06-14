@@ -8,6 +8,7 @@ import {
   type ToolResult,
   type ToolSpec,
 } from "@symphony/tool-sdk";
+import { defaultTrackerRegistry, type TrackerRegistry } from "@symphony/tracker-sdk";
 
 export type { ToolResult, ToolSpec } from "@symphony/tool-sdk";
 
@@ -15,34 +16,51 @@ export type { ToolResult, ToolSpec } from "@symphony/tool-sdk";
 const NEUTRAL_PACK = "tracker";
 
 /**
- * Tool packs mounted for the given settings: the explicit `tools:` list when configured,
- * otherwise the neutral tracker pack plus the dispatch tracker's own pack when one is
- * registered. Several packs can serve one endpoint while a single tracker drives dispatch.
- * Unknown pack names fail loudly with the list of registered packs.
+ * Tool packs mounted for the given settings: the neutral tracker pack, the dispatch
+ * tracker's declared default packs, plus any extra packs explicitly configured by the
+ * workflow's `tools:` map.
  */
 function mountedPacks(
   settings: Settings,
   registry: ToolRegistry = defaultToolRegistry,
+  trackers: TrackerRegistry = defaultTrackerRegistry,
 ): ToolProvider[] {
-  const names = settings.tools ?? defaultPackNames(settings, registry);
+  const names = mountedPackNames(settings, registry, trackers);
   return names.map((name) => registry.require(name));
 }
 
-function defaultPackNames(settings: Settings, registry: ToolRegistry): string[] {
-  const names = [NEUTRAL_PACK];
-  const kind = settings.tracker.kind;
-  if (kind !== undefined && kind !== NEUTRAL_PACK && registry.get(kind) !== undefined) {
-    names.push(kind);
+function mountedPackNames(
+  settings: Settings,
+  registry: ToolRegistry,
+  trackers: TrackerRegistry,
+): string[] {
+  const names = new Set<string>();
+  if (registry.get(NEUTRAL_PACK) !== undefined) names.add(NEUTRAL_PACK);
+
+  const tracker = trackers.get(settings.tracker.kind);
+  const defaultPacks = tracker?.defaultToolPacks?.(settings);
+  if (defaultPacks !== undefined) {
+    for (const pack of defaultPacks) names.add(pack);
+  } else {
+    const kind = settings.tracker.kind;
+    if (kind !== undefined && kind !== NEUTRAL_PACK && registry.get(kind) !== undefined) {
+      names.add(kind);
+    }
   }
-  return names;
+
+  for (const pack of Object.keys(settings.toolOptions ?? {})) {
+    names.add(pack);
+  }
+  return [...names];
 }
 
 /** Tools advertised over the MCP endpoint for the mounted packs. */
 export function toolSpecs(
   settings: Settings,
   registry: ToolRegistry = defaultToolRegistry,
+  trackers: TrackerRegistry = defaultTrackerRegistry,
 ): ToolSpec[] {
-  return mountedToolSpecs(mountedPacks(settings, registry), settings);
+  return mountedToolSpecs(mountedPacks(settings, registry, trackers), settings);
 }
 
 export async function executeTool(
@@ -51,8 +69,9 @@ export async function executeTool(
   settings: Settings,
   fetchImpl: typeof fetch = fetch,
   registry: ToolRegistry = defaultToolRegistry,
+  trackers: TrackerRegistry = defaultTrackerRegistry,
 ): Promise<ToolResult> {
-  return executeMountedTool(mountedPacks(settings, registry), name, input, {
+  return executeMountedTool(mountedPacks(settings, registry, trackers), name, input, {
     settings,
     fetchImpl,
   });

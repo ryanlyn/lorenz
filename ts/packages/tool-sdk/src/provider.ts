@@ -27,19 +27,18 @@ export interface ToolContext {
 }
 
 /**
- * One named pack of agent-facing tools. Packs are registered in a {@link ToolRegistry} and
- * mounted on the MCP endpoint by name via the `tools:` config list; when the list is
- * omitted, the composition root mounts the provider-neutral tracker pack plus the dispatch
- * tracker's own pack. Several packs can be mounted at once while a single tracker drives
- * dispatch, so a deployment can mix tool surfaces freely.
+ * One named pack of agent-facing tools. Packs are registered in a {@link ToolRegistry}. The
+ * MCP endpoint always mounts the provider-neutral tracker pack, mounts the active tracker
+ * provider's declared default packs, and mounts any additional packs explicitly configured
+ * by the workflow's `tools:` map.
  */
 export interface ToolProvider {
-  /** Pack selector matched against entries of the `tools:` config list (e.g. `"linear"`). */
+  /** Pack name used by tracker providers' default mounts or by the workflow `tools:` map. */
   readonly name: string;
   /**
-   * Validate this pack's slice of the top-level `tool_options:` config map. Called once at
-   * startup by `validateDispatchConfig` for every pack named in `tool_options`; throw with a
-   * `tool_options.<pack>.<key> ...` message on unknown keys or invalid values.
+   * Validate this pack's per-pack config slice. Called once at startup by
+   * `validateDispatchConfig` for mounted packs that have configured options; throw with a
+   * `tools.<pack>.<key> ...` message on unknown keys or invalid values.
    */
   validateOptions?(options: Record<string, unknown>): void;
   /** Tools this pack advertises for the given settings; may be empty. */

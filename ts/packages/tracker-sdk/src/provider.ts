@@ -51,11 +51,12 @@ export interface TrackerToolOps {
 
 /**
  * Everything Symphony needs to know about one issue-tracker backend, bundled as a single
- * extension point. A provider owns its slice of the `tracker:` config section, the runtime
+ * extension point. A provider owns its slice of the selected tracker bundle, the runtime
  * client that feeds issues into dispatch, and the normalized operations behind the
  * provider-neutral `tracker_*` tools. Agent-facing tool packs are a separate extension
- * point (`ToolProvider` in `@symphony/tool-sdk`): a tracker package may ship one, and a
- * deployment may mount several packs while this provider drives dispatch.
+ * point (`ToolProvider` in `@symphony/tool-sdk`): a tracker package may ship one, declare
+ * it as a default pack for this tracker, and a workflow may still mount other registered
+ * packs explicitly through its `tools:` map.
  *
  * The core (config parsing, runtime, MCP server, CLI) is provider-agnostic and talks to
  * providers exclusively through this contract via a {@link TrackerRegistry}. Adding a new
@@ -63,11 +64,11 @@ export interface TrackerToolOps {
  * the composition root - no core package changes.
  */
 export interface TrackerProvider {
-  /** Config selector matched against `tracker.kind` (e.g. `"linear"`, `"jira"`). */
+  /** Config selector matched against the tracker provider name (e.g. `"linear"`, `"jira"`). */
   readonly kind: string;
   /**
-   * snake_case → camelCase alias map for this provider's keys in the `tracker:` config
-   * section (e.g. `{ project_slug: "projectSlug" }`). Applied before {@link parseOptions}.
+   * snake_case → camelCase alias map for this provider's keys in the selected tracker
+   * bundle (e.g. `{ project_slug: "projectSlug" }`). Applied before {@link parseOptions}.
    */
   readonly configAliases?: Readonly<Record<string, string>> | undefined;
   /**
@@ -78,9 +79,9 @@ export interface TrackerProvider {
   /** Endpoint used when `tracker.endpoint` is not configured. */
   readonly defaultEndpoint?: string | undefined;
   /**
-   * Validate and normalize the provider-specific keys of the `tracker:` section (aliases
-   * already applied). Called at config-parse time; throw with a `tracker.<key> ...` message
-   * on invalid input. The returned record becomes {@link Settings.tracker.options}.
+   * Validate and normalize the provider-specific keys of the selected tracker bundle
+   * (aliases already applied). Called at config-parse time; throw with a `tracker.<key> ...`
+   * message on invalid input. The returned record becomes {@link Settings.tracker.options}.
    */
   parseOptions?(options: Record<string, unknown>, context: TrackerContext): Record<string, unknown>;
   /**
@@ -95,6 +96,12 @@ export interface TrackerProvider {
    * `undefined` (or omit the member) when the backend exposes no agent-facing operations.
    */
   createToolOps?(settings: Settings, context: TrackerOpsContext): TrackerToolOps | undefined;
+  /**
+   * Provider-specific tool packs mounted by default when this tracker drives dispatch.
+   * The core always mounts the neutral `tracker` pack separately; this hook declares any
+   * additional minimum packs owned by the tracker extension.
+   */
+  defaultToolPacks?(settings: Settings): readonly string[];
   /** Operator-facing URL of the tracked project, shown in dashboards. */
   projectUrl?(settings: Settings): string | undefined;
 }

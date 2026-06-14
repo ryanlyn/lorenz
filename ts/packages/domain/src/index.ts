@@ -207,8 +207,8 @@ export interface DispatchSettings {
 /**
  * Connection and filtering rules for the issue tracker that feeds work into this instance.
  *
- * Only fields every backend shares live here. Provider-specific keys of the `tracker:`
- * config section (e.g. Linear's `project_slug`, the local board's `path`) are normalized
+ * Only fields every backend shares live here. Provider-specific keys from the selected
+ * tracker bundle (e.g. Linear's `project_slug`, the local board's `path`) are normalized
  * and validated by the registered tracker provider and carried opaquely in {@link options}.
  */
 export interface TrackerSettings {
@@ -406,15 +406,10 @@ export interface Settings {
    */
   agents: Record<string, AgentConfig>;
   /**
-   * Tool packs mounted on the MCP endpoint, by pack name. When unset, the composition root
-   * mounts the provider-neutral `tracker` pack plus the dispatch tracker's own pack. Several
-   * packs can be mounted while a single tracker drives dispatch.
-   */
-  tools?: string[] | undefined;
-  /**
-   * Per-pack options for mounted tool packs, keyed by pack name; validated by the pack.
-   * Lets a mounted pack carry its own settings (e.g. the local pack's board `path`) even
-   * when a different tracker drives dispatch and owns `tracker.options`.
+   * Per-pack options from the workflow's `tools:` map, keyed by pack name. Runtime always
+   * mounts the provider-neutral `tracker` pack, mounts the dispatch tracker's declared
+   * default packs, and mounts any additional packs named here. Each configured pack validates
+   * its own option bag.
    */
   toolOptions?: Record<string, Record<string, unknown>> | undefined;
   observability: ObservabilitySettings;

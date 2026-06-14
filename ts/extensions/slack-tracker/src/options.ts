@@ -4,7 +4,7 @@ import { stringListOption, stringOption } from "@symphony/tracker-sdk";
 
 export const SLACK_DEFAULT_ENDPOINT = "https://slack.com/api";
 
-/** Slack-specific keys of the `tracker:` config section, validated by the provider. */
+/** Slack-specific keys of the selected tracker bundle, validated by the provider. */
 export interface SlackTrackerOptions {
   /** Slack channel IDs to watch for mentions. */
   channels: string[];

@@ -43,20 +43,26 @@ const LOCAL_TOOL_NAMES = [
 ];
 
 function settingsFor(
-  tracker: Record<string, unknown>,
+  provider: string,
+  options: Record<string, unknown> = {},
   rest: Record<string, unknown> = {},
 ): Settings {
-  return parseConfig({ tracker, ...rest }, {}, {}, trackers);
+  return parseConfig(
+    { tracker: { kind: "dispatch" }, trackers: { dispatch: { provider, ...options } }, ...rest },
+    {},
+    {},
+    trackers,
+  );
 }
 
 function linearSettings(rest: Record<string, unknown> = {}): Settings {
-  return settingsFor({ kind: "linear", api_key: "linear-token", project_slug: "mono" }, rest);
+  return settingsFor("linear", { api_key: "linear-token", project_slug: "mono" }, rest);
 }
 
 async function localSettings(): Promise<Settings> {
   const dir = await mkdtemp(path.join(tmpdir(), "mcp-tools-contract-"));
   await mkdir(dir, { recursive: true });
-  return settingsFor({ kind: "local", path: dir });
+  return settingsFor("local", { path: dir });
 }
 
 function specNames(settings: Settings): string[] {
@@ -69,29 +75,26 @@ test("default mount advertises the tracker pack plus the dispatch tracker's own 
 
   // Jira backends have no pack of their own; only the neutral tracker pack is mounted.
   assert.deepEqual(
-    specNames(settingsFor({ kind: "jira", base_url: "https://jira.example.com" })),
+    specNames(settingsFor("jira", { base_url: "https://jira.example.com" })),
     TRACKER_TOOL_NAMES,
   );
   assert.deepEqual(
-    specNames(settingsFor({ kind: "jira-mcp", base_url: "https://jira.example.com" })),
+    specNames(settingsFor("jira-mcp", { base_url: "https://jira.example.com" })),
     TRACKER_TOOL_NAMES,
   );
 
   // The neutral pack still mounts for memory, but the backend exposes no tool ops.
-  assert.deepEqual(specNames(settingsFor({ kind: "memory" })), []);
+  assert.deepEqual(specNames(settingsFor("memory")), []);
 });
 
-test("settings.tools overrides the default mount", () => {
-  assert.deepEqual(specNames(linearSettings({ tools: ["tracker"] })), TRACKER_TOOL_NAMES);
-  assert.deepEqual(specNames(linearSettings({ tools: ["linear"] })), ["linear_graphql"]);
-});
-
-test("unknown pack names in settings.tools fail with the registered set", () => {
-  const settings = linearSettings({ tools: ["bogus"] });
-  assert.throws(
-    () => toolSpecs(settings, tools),
-    /unsupported tool pack: bogus \(known tool packs: linear, local, tracker\)/,
-  );
+test("explicit tools map adds extra mounted packs", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "mcp-tools-extra-"));
+  await mkdir(dir, { recursive: true });
+  assert.deepEqual(specNames(linearSettings({ tools: { local: { path: dir } } })), [
+    ...TRACKER_TOOL_NAMES,
+    "linear_graphql",
+    ...LOCAL_TOOL_NAMES,
+  ]);
 });
 
 test("unknown tool names fail listing every mounted tool", async () => {
@@ -107,19 +110,16 @@ test("unknown tool names fail listing every mounted tool", async () => {
   });
 
   // Memory mounts only the neutral pack, which advertises nothing.
-  assert.deepEqual(
-    await executeTool("memory_bogus", {}, settingsFor({ kind: "memory" }), fetch, tools),
-    {
-      success: false,
-      error: 'Unsupported tool: "memory_bogus".',
-      result: {
-        error: {
-          message: 'Unsupported tool: "memory_bogus".',
-          supportedTools: [],
-        },
+  assert.deepEqual(await executeTool("memory_bogus", {}, settingsFor("memory"), fetch, tools), {
+    success: false,
+    error: 'Unsupported tool: "memory_bogus".',
+    result: {
+      error: {
+        message: 'Unsupported tool: "memory_bogus".',
+        supportedTools: [],
       },
     },
-  );
+  });
 });
 
 test("common tracker tools work against the local board provider", async () => {
@@ -157,6 +157,11 @@ test("common tracker tools work against the local board provider", async () => {
 test("a throwing pack surfaces as a failed tool result, not a thrown error", async () => {
   const boomTools = new ToolRegistry();
   boomTools.register({
+    name: "tracker",
+    toolSpecs: () => [],
+    executeTool: async () => ({ success: false }),
+  });
+  boomTools.register({
     name: "boom",
     toolSpecs: () => [
       { name: "boom_tool", description: "always throws", inputSchema: { type: "object" } },
@@ -166,7 +171,7 @@ test("a throwing pack surfaces as a failed tool result, not a thrown error", asy
     },
   });
 
-  const settings = settingsFor({ kind: "memory" }, { tools: ["boom"] });
+  const settings = settingsFor("boom");
   const result = await executeTool("boom_tool", {}, settings, fetch, boomTools);
   assert.equal(result.success, false);
   assert.match(result.error ?? "", /pack exploded/);

@@ -52,14 +52,21 @@ test("config resolves env-backed Linear token and assignee", () => {
   const settings = parseConfig(
     {
       tracker: {
-        api_key: "$LINEAR_API_KEY",
-        project_slug: "mono",
-        assignee: "$LINEAR_ASSIGNEE",
+        kind: "dispatch",
+      },
+      trackers: {
+        dispatch: {
+          provider: "linear",
+          api_key: "$LINEAR_API_KEY",
+          project_slug: "mono",
+          assignee: "$LINEAR_ASSIGNEE",
+        },
       },
     },
     { LINEAR_API_KEY: "linear-token", LINEAR_ASSIGNEE: "worker@example.com" },
   );
 
+  assert.equal(settings.tracker.kind, "linear");
   assert.equal(settings.tracker.apiKey, "linear-token");
   assert.equal(settings.tracker.assignee, "worker@example.com");
   assert.equal(settings.agent.kind, "codex");
@@ -186,8 +193,13 @@ test("jira tracker config resolves canonical env fallbacks", () => {
   const settings = parseConfig(
     {
       tracker: {
-        kind: "jira",
-        project_keys: ["ENG"],
+        kind: "dispatch",
+      },
+      trackers: {
+        dispatch: {
+          provider: "jira",
+          project_keys: ["ENG"],
+        },
       },
     },
     {
@@ -207,15 +219,27 @@ test("jira tracker config resolves canonical env fallbacks", () => {
 
 test("jira tracker options reject wrong types with tracker.<key> messages", () => {
   assert.throws(
-    () => parseConfig({ tracker: { kind: "jira", base_url: 5 } }),
+    () =>
+      parseConfig({
+        tracker: { kind: "dispatch" },
+        trackers: { dispatch: { provider: "jira", base_url: 5 } },
+      }),
     /tracker.baseUrl must be a string/,
   );
   assert.throws(
-    () => parseConfig({ tracker: { kind: "jira", project_keys: "ENG" } }),
+    () =>
+      parseConfig({
+        tracker: { kind: "dispatch" },
+        trackers: { dispatch: { provider: "jira", project_keys: "ENG" } },
+      }),
     /tracker.projectKeys must be a list of strings/,
   );
   assert.throws(
-    () => parseConfig({ tracker: { kind: "jira", issue_type: "Task", surprise: true } }),
+    () =>
+      parseConfig({
+        tracker: { kind: "dispatch" },
+        trackers: { dispatch: { provider: "jira", issue_type: "Task", surprise: true } },
+      }),
     /unsupported tracker option\(s\) for kind "jira": surprise/,
   );
 });
@@ -224,15 +248,20 @@ test("jira-mcp tracker config parses MCP settings and tool aliases", () => {
   const settings = parseConfig(
     {
       tracker: {
-        kind: "jira-mcp",
-        project_keys: ["ENG"],
-        mcp: {
-          url: "http://127.0.0.1:5123/mcp",
-          token: "$MCP_TOKEN",
-          tools: {
-            read_issue: "jira_get",
-            update_status: "jira_transition",
-            create_issue: "jira_create",
+        kind: "dispatch",
+      },
+      trackers: {
+        dispatch: {
+          provider: "jira-mcp",
+          project_keys: ["ENG"],
+          mcp: {
+            url: "http://127.0.0.1:5123/mcp",
+            token: "$MCP_TOKEN",
+            tools: {
+              read_issue: "jira_get",
+              update_status: "jira_transition",
+              create_issue: "jira_create",
+            },
           },
         },
       },
@@ -259,6 +288,56 @@ test("config defaults and validation match expected defaults", () => {
   });
   assert.equal(settings.observability.renderIntervalMs, 16);
   assert.throws(() => validateDispatchConfig(settings), /tracker.kind is required/);
+});
+
+test("tracker.kind selects a named trackers bundle with its own provider", () => {
+  const settings = parseConfig({
+    tracker: { kind: "primary" },
+    trackers: {
+      primary: {
+        provider: "local",
+        path: "/tmp/board",
+        id_prefix: "BOARD-",
+        active_states: ["Ready"],
+        dispatch: { only_routes: ["docs"] },
+      },
+    },
+  });
+
+  assert.equal(settings.tracker.kind, "local");
+  assert.deepEqual(settings.tracker.options, { path: "/tmp/board", idPrefix: "BOARD-" });
+  assert.deepEqual(settings.tracker.activeStates, ["Ready"]);
+  assert.deepEqual(settings.tracker.dispatch.onlyRoutes, ["docs"]);
+
+  assert.throws(
+    () => parseConfig({ tracker: { kind: "primary" }, trackers: { primary: {} } }),
+    /trackers\.primary\.provider is required/,
+  );
+  assert.throws(
+    () => parseConfig({ tracker: { kind: "primary" }, trackers: { dispatch: {} } }),
+    /trackers\.primary is required by tracker\.kind/,
+  );
+  assert.throws(
+    () =>
+      parseConfig({
+        tracker: { kind: "primary" },
+        trackers: { primary: { provider: "linear", active_states: "Todo" } },
+      }),
+    /trackers\.primary\.active_states must be a list of strings/,
+  );
+});
+
+test("unselected trackers bundles can coexist without being validated", () => {
+  const settings = parseConfig({
+    tracker: { kind: "primary", id_prefix: "LEGACY-" },
+    trackers: {
+      primary: { provider: "local", path: "/tmp/board", id_prefix: "BOARD-" },
+      linear: { active_states: "not a list", surprise: true },
+    },
+  });
+
+  assert.equal(settings.tracker.kind, "local");
+  assert.deepEqual(settings.tracker.options, { path: "/tmp/board", idPrefix: "BOARD-" });
 });
 
 test("claude.model overrides the pinned model in the provider config", () => {
@@ -528,6 +607,29 @@ test("agents map overrides known runtime settings via ACP records", () => {
   });
 });
 
+test("agents map accepts flat executor options and legacy command aliases", () => {
+  const settings = parseConfig({
+    agents: {
+      codex: { command: "custom-codex" },
+      claude: {
+        bridge_command: "custom-claude",
+        provider_config: { model: "claude-haiku-4-5" },
+      },
+      pi: {
+        command: "legacy-pi",
+        usage_accounting: "cumulative",
+      },
+    },
+  });
+
+  assert.equal(settings.agents.codex.options.bridgeCommand, "custom-codex");
+  assert.equal(settings.agents.codex.options.providerConfig, undefined);
+  assert.equal(settings.agents.claude.options.bridgeCommand, "custom-claude");
+  assert.deepEqual(settings.agents.claude.options.providerConfig, { model: "claude-haiku-4-5" });
+  assert.equal(settings.agents.pi.options.bridgeCommand, "legacy-pi");
+  assert.equal(settings.agents.pi.options.usageAccounting, "cumulative");
+});
+
 test("custom ACP agents default to cumulative usage unless using a known per-turn bridge", () => {
   const settings = parseConfig({
     agents: {
@@ -651,27 +753,11 @@ test("dispatch validation requires configured agents for active and override sta
   );
 });
 
-test("top-level tools selects tool packs and is validated against the registry", () => {
-  assert.equal(parseConfig({ tracker: { kind: "memory" } }).tools, undefined);
-
-  const settings = parseConfig({ tracker: { kind: "memory" }, tools: ["tracker", "local"] });
-  assert.deepEqual(settings.tools, ["tracker", "local"]);
-
-  validateDispatchConfig(settings, tools);
-
-  const unknown = parseConfig({ tracker: { kind: "memory" }, tools: ["surprise"] });
-  assert.throws(
-    () => validateDispatchConfig(unknown, tools),
-    /unsupported tool pack: surprise \(known tool packs: linear, local, tracker\)/,
-  );
-});
-
-test("top-level tool_options parses per-pack option bags and deep-copies them", () => {
+test("top-level tools map parses per-pack option bags and deep-copies them", () => {
   const rawToolOptions = { local: { path: "/tmp/pack-board", id_prefix: "PACK-" } };
   const settings = parseConfig({
-    tracker: { kind: "memory" },
-    tools: ["tracker", "local"],
-    tool_options: rawToolOptions,
+    tracker: { kind: "local" },
+    tools: rawToolOptions,
   });
 
   assert.deepEqual(settings.toolOptions, {
@@ -686,11 +772,12 @@ test("top-level tool_options parses per-pack option bags and deep-copies them", 
   assert.equal(parseConfig({ tracker: { kind: "memory" } }).toolOptions, undefined);
 });
 
-test("tool_options secret references resolve at parse time; unresolvable refs are omitted", () => {
+test("tools secret references resolve at parse time; unresolvable refs are omitted", () => {
   const settings = parseConfig(
     {
-      tracker: { kind: "memory" },
-      tool_options: { linear: { api_key: "$PACK_KEY", endpoint: "https://linear.example" } },
+      tracker: { kind: "dispatch" },
+      trackers: { dispatch: { provider: "linear", project_slug: "mono" } },
+      tools: { linear: { api_key: "$PACK_KEY", endpoint: "https://linear.example" } },
     },
     { PACK_KEY: "resolved-token" },
   );
@@ -698,8 +785,9 @@ test("tool_options secret references resolve at parse time; unresolvable refs ar
 
   const unresolved = parseConfig(
     {
-      tracker: { kind: "memory" },
-      tool_options: { linear: { api_key: "$PACK_KEY", endpoint: "https://linear.example" } },
+      tracker: { kind: "dispatch" },
+      trackers: { dispatch: { provider: "linear", project_slug: "mono" } },
+      tools: { linear: { api_key: "$PACK_KEY", endpoint: "https://linear.example" } },
     },
     {},
   );
@@ -707,10 +795,19 @@ test("tool_options secret references resolve at parse time; unresolvable refs ar
   assert.equal(unresolved.toolOptions?.["linear"]?.endpoint, "https://linear.example");
 });
 
-test("tool_options for an unknown pack fails dispatch validation with the known pack list", () => {
+test("tools map can explicitly mount a pack outside the dispatch tracker", () => {
   const settings = parseConfig({
     tracker: { kind: "memory" },
-    tool_options: { gitlab: { path: "/tmp/board" } },
+    tools: { local: { path: "/tmp/board" } },
+  });
+  validateDispatchConfig(settings, tools);
+  assert.deepEqual(settings.toolOptions, { local: { path: "/tmp/board" } });
+});
+
+test("tool options for an unknown pack fail with the known pack list", () => {
+  const settings = parseConfig({
+    tracker: { kind: "local" },
+    tools: { gitlab: {} },
   });
   assert.throws(
     () => validateDispatchConfig(settings, tools),
@@ -718,34 +815,34 @@ test("tool_options for an unknown pack fails dispatch validation with the known 
   );
 });
 
-test("tool_options for a pack without a validator is rejected rather than silently ignored", () => {
+test("tools options for a pack without a validator are rejected rather than silently ignored", () => {
   const settings = parseConfig({
     tracker: { kind: "memory" },
-    tool_options: { tracker: { surprise: true } },
+    tools: { tracker: { surprise: true } },
   });
   assert.throws(
     () => validateDispatchConfig(settings, tools),
-    /tool_options\.tracker is not supported by the "tracker" pack/,
+    /tools\.tracker is not supported by the "tracker" pack/,
   );
 });
 
-test("the local pack rejects unknown tool_options keys and wrong types", () => {
+test("the local pack rejects unknown tools keys and wrong types", () => {
   const unknownKey = parseConfig({
-    tracker: { kind: "memory" },
-    tool_options: { local: { surprise: true } },
+    tracker: { kind: "local" },
+    tools: { local: { surprise: true } },
   });
   assert.throws(
     () => validateDispatchConfig(unknownKey, tools),
-    /tool_options\.local\.surprise is not supported \(known keys: path, idPrefix, id_prefix\)/,
+    /tools\.local\.surprise is not supported \(known keys: path, idPrefix, id_prefix\)/,
   );
 
   const wrongType = parseConfig({
-    tracker: { kind: "memory" },
-    tool_options: { local: { path: 5 } },
+    tracker: { kind: "local" },
+    tools: { local: { path: 5 } },
   });
   assert.throws(
     () => validateDispatchConfig(wrongType, tools),
-    /tool_options\.local\.path must be a string/,
+    /tools\.local\.path must be a string/,
   );
 });
 

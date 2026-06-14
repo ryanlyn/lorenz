@@ -85,6 +85,7 @@ export const slackTrackerProvider: TrackerProvider = {
   },
   createClient: (settings) => new SlackTrackerClient(settings, new SlackWebTransport(settings)),
   createToolOps: (settings, context) => slackToolOps(settings, context),
+  defaultToolPacks: () => ["slack"],
   projectUrl(settings) {
     // slack.com/app_redirect opens the channel in whichever workspace the operator is signed
     // into - the only deterministic deep link available without an API round-trip.

@@ -3,7 +3,7 @@ import { stringOption } from "@symphony/tracker-sdk";
 
 import { resolveBoardDir } from "./resolveBoardDir.js";
 
-/** Local-board-specific keys of the `tracker:` config section, validated by the provider. */
+/** Local-board-specific keys of the selected tracker bundle, validated by the provider. */
 export interface LocalTrackerOptions {
   /** Board directory (e.g. `.symphony/local`); resolved relative to cwd when not absolute. */
   path?: string | undefined;
@@ -23,7 +23,7 @@ export function localTrackerOptions(settings: Settings): LocalTrackerOptions {
   };
 }
 
-/** Keys of the pack's `tool_options.local` slice, with the snake_case spelling accepted. */
+/** Keys of the pack's `tools.local` slice. */
 const LOCAL_PACK_OPTION_KEYS: Record<string, "path" | "idPrefix"> = {
   path: "path",
   idPrefix: "idPrefix",
@@ -31,9 +31,8 @@ const LOCAL_PACK_OPTION_KEYS: Record<string, "path" | "idPrefix"> = {
 };
 
 /**
- * Board location for the local TOOL pack. Prefers the pack's own `tool_options.local`
- * slice, so a mounted pack works on any dispatch tracker; falls back to `tracker.options`
- * only when the local board also drives dispatch.
+ * Board location for the local TOOL pack. Prefers the pack's own `tools.local` slice, then
+ * falls back to `tracker.options` when the local board drives dispatch.
  */
 export function localToolPackOptions(settings: Settings): LocalTrackerOptions {
   const packOptions = normalizeLocalPackOptions(settings.toolOptions?.["local"] ?? {});
@@ -46,8 +45,8 @@ export function localToolPackOptions(settings: Settings): LocalTrackerOptions {
 }
 
 /**
- * Validate the pack's `tool_options.local` slice; backs `localToolProvider.validateOptions`.
- * Errors name the offending `tool_options.local.<key>` so config typos fail at startup.
+ * Validate the pack's `tools.local` slice; backs `localToolProvider.validateOptions`.
+ * Errors name the offending `tools.local.<key>` so config typos fail at startup.
  */
 export function validateLocalToolOptions(options: Record<string, unknown>): void {
   normalizeLocalPackOptions(options);
@@ -55,7 +54,7 @@ export function validateLocalToolOptions(options: Record<string, unknown>): void
 
 const LOCAL_ID_PREFIX_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
 
-/** Shared id-prefix validation for the tracker options and the pack's tool_options slice. */
+/** Shared id-prefix validation for the tracker options and the pack's tool options slice. */
 export function assertLocalIdPrefix(prefix: string, label: string): void {
   if (!LOCAL_ID_PREFIX_PATTERN.test(prefix)) {
     throw new Error(
@@ -71,17 +70,17 @@ function normalizeLocalPackOptions(options: Record<string, unknown>): LocalTrack
     const canonical = LOCAL_PACK_OPTION_KEYS[key];
     if (canonical === undefined) {
       throw new Error(
-        `tool_options.local.${key} is not supported (known keys: ${Object.keys(LOCAL_PACK_OPTION_KEYS).join(", ")})`,
+        `tools.local.${key} is not supported (known keys: ${Object.keys(LOCAL_PACK_OPTION_KEYS).join(", ")})`,
       );
     }
     if (value === undefined || value === null) continue;
     if (typeof value !== "string") {
-      throw new Error(`tool_options.local.${key} must be a string`);
+      throw new Error(`tools.local.${key} must be a string`);
     }
     if (canonical === "path" && value.trim() === "") {
-      throw new Error(`tool_options.local.${key} must not be empty`);
+      throw new Error(`tools.local.${key} must not be empty`);
     }
-    if (canonical === "idPrefix") assertLocalIdPrefix(value, `tool_options.local.${key}`);
+    if (canonical === "idPrefix") assertLocalIdPrefix(value, `tools.local.${key}`);
     normalized[canonical] = value;
   }
   return normalized;

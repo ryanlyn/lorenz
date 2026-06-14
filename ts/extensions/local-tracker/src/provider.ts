@@ -34,4 +34,5 @@ export const localTrackerProvider: TrackerProvider = {
     return new LocalTrackerClient(settings, process.cwd(), context.env);
   },
   createToolOps: (settings) => localToolOps(settings),
+  defaultToolPacks: () => ["local"],
 };

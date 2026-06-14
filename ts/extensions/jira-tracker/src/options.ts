@@ -23,7 +23,7 @@ export interface JiraMcpOptions {
   tools?: JiraMcpToolMap | undefined;
 }
 
-/** Jira-specific keys of the `tracker:` config section, validated by the providers. */
+/** Jira-specific keys of the selected tracker bundle, validated by the providers. */
 export interface JiraTrackerOptions {
   /** Base URL of the Jira site, e.g. `https://example.atlassian.net`. */
   baseUrl?: string | undefined;

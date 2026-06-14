@@ -6,8 +6,8 @@ import { toolFailure, unsupportedToolFailure } from "./result.js";
 
 /**
  * Lookup table of {@link ToolProvider}s keyed by pack name. The MCP server resolves the
- * configured `tools:` list through a registry instead of hardcoding tool surfaces, so the
- * set of mountable packs is decided by whoever composes the application.
+ * active tracker's mounted packs through a registry instead of hardcoding tool surfaces, so
+ * the set of mountable packs is decided by whoever composes the application.
  */
 export class ToolRegistry {
   private readonly providers = new Map<string, ToolProvider>();

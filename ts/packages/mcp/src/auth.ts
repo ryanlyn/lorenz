@@ -18,7 +18,6 @@ export function mcpAuthScopeForSettings(
   const identity = JSON.stringify({
     host,
     port,
-    tools: settings.tools ?? null,
     toolOptions: settings.toolOptions ? canonicalToolOptions(settings.toolOptions) : null,
     tracker: {
       kind: tracker.kind ?? null,

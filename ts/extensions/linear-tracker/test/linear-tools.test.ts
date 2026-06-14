@@ -366,7 +366,7 @@ test("linear tool pack routes calls through the package tools", async () => {
   assert.equal(result.success, true);
 });
 
-test("linear_graphql resolves pack credentials from tool_options at parse time", async () => {
+test("linear_graphql resolves pack credentials from tools map at parse time", async () => {
   const requests: Array<{ url: string; authorization: string | null }> = [];
   const recordingFetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     requests.push({
@@ -376,13 +376,16 @@ test("linear_graphql resolves pack credentials from tool_options at parse time",
     return jsonResponse({ data: {} });
   }) as typeof fetch;
 
-  // The pack's own tool_options.linear slice wins over the dispatch tracker credential;
+  // The pack's own tools.linear slice wins over the dispatch tracker credential;
   // whole-value $VAR references resolve against the parse-time environment, so the
   // effective credential is fixed in the parsed settings (and in the MCP scope hash).
   const packSettings = parseConfig(
     {
-      tracker: { kind: "linear", api_key: "tracker-token", project_slug: "mono" },
-      tool_options: {
+      tracker: { kind: "dispatch" },
+      trackers: {
+        dispatch: { provider: "linear", api_key: "tracker-token", project_slug: "mono" },
+      },
+      tools: {
         linear: { api_key: "$PACK_LINEAR_KEY", endpoint: "https://linear.example/graphql" },
       },
     },
@@ -433,7 +436,10 @@ test("linear_graphql tool sends variables through unchanged", async () => {
 
 function linearSettings() {
   return parseConfig(
-    { tracker: { kind: "linear", api_key: "linear-token", project_slug: "mono" } },
+    {
+      tracker: { kind: "dispatch" },
+      trackers: { dispatch: { provider: "linear", api_key: "linear-token", project_slug: "mono" } },
+    },
     {},
   );
 }

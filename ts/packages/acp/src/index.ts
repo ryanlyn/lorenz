@@ -27,9 +27,6 @@ import {
 import { actionForStopReason } from "@symphony/policies/stopReason";
 import { shellEscape, startSshProcess } from "@symphony/ssh";
 import { workerHostPool } from "@symphony/worker-host-pool";
-
-/** The SSH worker-host pool provisions the reverse tunnels behind remote MCP endpoints. */
-const mcpTunnelTransport: RemoteMcpTunnelTransport = workerHostPool;
 import { validateWorkspaceCwd } from "@symphony/workspace";
 import { execa } from "execa";
 import {
@@ -61,6 +58,9 @@ export {
   type AcpAgentOptions,
   type AgentUsageAccounting,
 } from "./options.js";
+
+/** The SSH worker-host pool provisions the reverse tunnels behind remote MCP endpoints. */
+const mcpTunnelTransport: RemoteMcpTunnelTransport = workerHostPool;
 
 interface Session extends AgentSession {
   connection: ClientSideConnection;
