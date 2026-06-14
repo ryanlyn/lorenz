@@ -24,6 +24,10 @@ export class WorkerHostPool {
   private readonly availableRemoteMcpPorts: number[] = [];
   private readonly remoteMcpTunnelsByEndpoint = new Map<string, RemoteMcpTunnelEntry>();
   private readonly remoteMcpTunnelEntriesByLeaseId = new Map<string, RemoteMcpTunnelEntry>();
+  // Per-run tunnels are keyed by `${workerHost}#${runKey}`, NOT host-coalesced,
+  // so each run owns a distinct entry (and distinct remote port). One run's
+  // localPort change can never replace another run's entry.
+  private readonly perRunMcpTunnels = new Map<string, RemoteMcpTunnelEntry>();
 
   async acquireRemoteMcpTunnel(
     workerHost: string,
@@ -78,6 +82,143 @@ export class WorkerHostPool {
     entry.leaseIds.delete(lease.leaseId);
     if (entry.leaseIds.size > 0) return;
     this.closeRemoteMcpTunnel(entry, true);
+  }
+
+  async openForRun(
+    workerHost: string,
+    runKey: string,
+    localHost: string,
+    localPort: number,
+  ): Promise<RemoteMcpTunnelLease> {
+    const key = perRunKey(workerHost, runKey);
+    const current = this.perRunMcpTunnels.get(key);
+    if (
+      current &&
+      !current.processEnded &&
+      current.localHost === localHost &&
+      current.localPort === localPort
+    ) {
+      await this.waitForRemoteMcpTunnelReady(current);
+      return this.createRemoteMcpTunnelLease(current);
+    }
+    if (current) this.closePerRunMcpTunnel(key, current, true);
+
+    const remotePort = this.allocateRemoteMcpPort();
+    const recycledPort = remotePort < this.nextRemoteMcpPort ? remotePort : undefined;
+    let process: ReturnType<typeof startReverseTunnel>;
+    try {
+      process = startReverseTunnel(workerHost, remotePort, localHost, localPort);
+    } catch (error) {
+      if (recycledPort !== undefined) this.recycleRemoteMcpPort(recycledPort);
+      throw error;
+    }
+    if (recycledPort === undefined) this.nextRemoteMcpPort += 1;
+    const entry: RemoteMcpTunnelEntry = {
+      workerHost,
+      localHost,
+      localPort,
+      process,
+      leaseIds: new Set(),
+      readyPromise: Promise.resolve(),
+      remotePort,
+      processEnded: false,
+      recyclePortOnProcessEnd: false,
+    };
+    this.perRunMcpTunnels.set(key, entry);
+    process.on("close", () => this.handlePerRunMcpTunnelProcessEnd(key, entry));
+    process.on("exit", () => this.handlePerRunMcpTunnelProcessEnd(key, entry));
+    process.on("error", () => this.handlePerRunMcpTunnelProcessEnd(key, entry));
+    entry.readyPromise = this.confirmPerRunMcpTunnelReady(key, entry);
+    await this.waitForRemoteMcpTunnelReady(entry);
+    return this.createRemoteMcpTunnelLease(entry);
+  }
+
+  closeForRun(workerHost: string, runKey: string): void {
+    const key = perRunKey(workerHost, runKey);
+    const entry = this.perRunMcpTunnels.get(key);
+    if (!entry) return;
+    // Each openForRun call on this run minted one lease; drop one per close
+    // and keep the tunnel while other holders of the same run remain.
+    const [leaseId] = entry.leaseIds;
+    if (leaseId !== undefined) {
+      entry.leaseIds.delete(leaseId);
+      this.remoteMcpTunnelEntriesByLeaseId.delete(leaseId);
+    }
+    if (entry.leaseIds.size > 0) return;
+    this.closePerRunMcpTunnel(key, entry, true);
+  }
+
+  // Allocate a remote port, reusing a recycled candidate only when no live
+  // entry (host-keyed OR per-run) still holds it. This guards the
+  // recycled-port-vs-stale-entry interaction under N concurrent live ports.
+  private allocateRemoteMcpPort(): number {
+    while (this.availableRemoteMcpPorts.length > 0) {
+      const candidate = this.availableRemoteMcpPorts.shift()!;
+      if (!this.isRemoteMcpPortLive(candidate)) return candidate;
+    }
+    return this.nextRemoteMcpPort;
+  }
+
+  private isRemoteMcpPortLive(remotePort: number): boolean {
+    for (const entry of this.remoteMcpTunnelsByEndpoint.values()) {
+      if (entry.remotePort === remotePort) return true;
+    }
+    for (const entry of this.perRunMcpTunnels.values()) {
+      if (entry.remotePort === remotePort) return true;
+    }
+    return false;
+  }
+
+  private async confirmPerRunMcpTunnelReady(
+    key: string,
+    entry: RemoteMcpTunnelEntry,
+  ): Promise<void> {
+    const processEndWatcher = this.watchRemoteMcpTunnelSetupProcessEnd(entry);
+    try {
+      await Promise.race([
+        waitForRemoteTcpPort(entry.workerHost, entry.remotePort),
+        processEndWatcher.promise,
+      ]);
+    } catch (error) {
+      this.closePerRunMcpTunnel(key, entry, true);
+      throw error;
+    } finally {
+      processEndWatcher.dispose();
+    }
+  }
+
+  private handlePerRunMcpTunnelProcessEnd(key: string, entry: RemoteMcpTunnelEntry): void {
+    if (entry.processEnded) return;
+    entry.processEnded = true;
+    if (this.perRunMcpTunnels.get(key) === entry) {
+      this.closePerRunMcpTunnel(key, entry, true);
+      return;
+    }
+    if (entry.recyclePortOnProcessEnd) this.recycleRemoteMcpPort(entry.remotePort);
+  }
+
+  private closePerRunMcpTunnel(
+    key: string,
+    entry: RemoteMcpTunnelEntry,
+    recyclePort: boolean,
+  ): void {
+    if (this.perRunMcpTunnels.get(key) === entry) {
+      this.perRunMcpTunnels.delete(key);
+    }
+    for (const leaseId of entry.leaseIds) {
+      this.remoteMcpTunnelEntriesByLeaseId.delete(leaseId);
+    }
+    entry.leaseIds.clear();
+    if (recyclePort) {
+      if (entry.processEnded) {
+        this.recycleRemoteMcpPort(entry.remotePort);
+      } else {
+        entry.recyclePortOnProcessEnd = true;
+      }
+    }
+    if (!entry.processEnded) {
+      entry.process.kill();
+    }
   }
 
   private closeRemoteMcpTunnel(entry: RemoteMcpTunnelEntry, recyclePort: boolean): void {
@@ -203,6 +344,10 @@ export class WorkerHostPool {
   ): string {
     return `${workerHost}\0${localHost}\0${localPort}`;
   }
+}
+
+function perRunKey(workerHost: string, runKey: string): string {
+  return `${workerHost}#${runKey}`;
 }
 
 export const workerHostPool = new WorkerHostPool();
