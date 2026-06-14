@@ -24,8 +24,6 @@ export interface ToolResult {
 export interface ToolContext {
   settings: Settings;
   fetchImpl: typeof fetch;
-  /** Process environment used for `$VAR` references and env-var credential fallbacks. */
-  env: NodeJS.ProcessEnv;
 }
 
 /**

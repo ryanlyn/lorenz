@@ -1,5 +1,5 @@
 import type { Settings } from "@symphony/domain";
-import { resolveEnvReference, stringListOption, stringOption } from "@symphony/tracker-sdk";
+import { stringListOption, stringOption } from "@symphony/tracker-sdk";
 
 export const LINEAR_DEFAULT_ENDPOINT = "https://api.linear.app/graphql";
 
@@ -43,21 +43,16 @@ export interface LinearToolPackOptions {
 
 /**
  * Auth resolution for the linear TOOL pack. Prefers the pack's own `tool_options.linear`
- * slice (whole-value `$VAR` references resolved against `env`), then the dispatch tracker's
- * credential and endpoint only when Linear itself drives dispatch, then the `LINEAR_API_KEY`
- * environment variable. A pack mounted on a foreign dispatch tracker (e.g. Jira) must never
- * send that tracker's credential to Linear.
+ * slice (secret references already resolved at config-parse time), then the dispatch
+ * tracker's credential and endpoint only when Linear itself drives dispatch. A pack mounted
+ * on a foreign dispatch tracker (e.g. Jira) must never send that tracker's credential to
+ * Linear; configure `tool_options.linear.api_key` (e.g. `"$LINEAR_API_KEY"`) instead.
  */
-export function linearToolPackOptions(
-  settings: Settings,
-  env: NodeJS.ProcessEnv,
-): LinearToolPackOptions {
+export function linearToolPackOptions(settings: Settings): LinearToolPackOptions {
   const packOptions = normalizeLinearPackOptions(settings.toolOptions?.["linear"] ?? {});
   const dispatchIsLinear = settings.tracker.kind === "linear";
-  const packApiKey =
-    packOptions.apiKey === undefined ? undefined : resolveEnvReference(packOptions.apiKey, env);
   const apiKey =
-    packApiKey || (dispatchIsLinear ? settings.tracker.apiKey : undefined) || env.LINEAR_API_KEY;
+    packOptions.apiKey || (dispatchIsLinear ? settings.tracker.apiKey : undefined) || undefined;
   const endpoint =
     packOptions.endpoint ??
     (dispatchIsLinear ? settings.tracker.endpoint : undefined) ??

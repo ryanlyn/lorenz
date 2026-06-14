@@ -53,6 +53,18 @@ export function validateLocalToolOptions(options: Record<string, unknown>): void
   normalizeLocalPackOptions(options);
 }
 
+const LOCAL_ID_PREFIX_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
+
+/** Shared id-prefix validation for the tracker options and the pack's tool_options slice. */
+export function assertLocalIdPrefix(prefix: string, label: string): void {
+  if (!LOCAL_ID_PREFIX_PATTERN.test(prefix)) {
+    throw new Error(
+      `${label} ${JSON.stringify(prefix)} is invalid: ` +
+        `must start alphanumeric, then only letters, digits, "_" or "-"`,
+    );
+  }
+}
+
 function normalizeLocalPackOptions(options: Record<string, unknown>): LocalTrackerOptions {
   const normalized: { path?: string | undefined; idPrefix?: string | undefined } = {};
   for (const [key, value] of Object.entries(options)) {
@@ -66,6 +78,10 @@ function normalizeLocalPackOptions(options: Record<string, unknown>): LocalTrack
     if (typeof value !== "string") {
       throw new Error(`tool_options.local.${key} must be a string`);
     }
+    if (canonical === "path" && value.trim() === "") {
+      throw new Error(`tool_options.local.${key} must not be empty`);
+    }
+    if (canonical === "idPrefix") assertLocalIdPrefix(value, `tool_options.local.${key}`);
     normalized[canonical] = value;
   }
   return normalized;

@@ -4,7 +4,7 @@ import { rejectUnknownOptions, stringOption } from "@symphony/tracker-sdk";
 import { LocalTrackerClient } from "./client.js";
 import { DEFAULT_BOARD_DIR } from "./resolveBoardDir.js";
 import { DEFAULT_ID_PREFIX } from "./boardStore.js";
-import { localTrackerOptions } from "./options.js";
+import { assertLocalIdPrefix, localTrackerOptions } from "./options.js";
 import { localToolOps } from "./toolOps.js";
 
 /**
@@ -12,16 +12,6 @@ import { localToolOps } from "./toolOps.js";
  * dir. BoardStore re-checks this at runtime; validating here surfaces the error at config
  * load with the user-facing key name.
  */
-const LOCAL_ID_PREFIX_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
-
-function assertValidLocalIdPrefix(prefix: string): void {
-  if (!LOCAL_ID_PREFIX_PATTERN.test(prefix)) {
-    throw new Error(
-      `tracker.id_prefix ${JSON.stringify(prefix)} is invalid: ` +
-        `must start alphanumeric, then only letters, digits, "_" or "-"`,
-    );
-  }
-}
 
 /** Markdown-file board tracker: issues are `<prefix><n>.md` files in a local directory. */
 export const localTrackerProvider: TrackerProvider = {
@@ -31,7 +21,7 @@ export const localTrackerProvider: TrackerProvider = {
     rejectUnknownOptions(options, ["path", "idPrefix"], "local");
     const path = stringOption(options, "path") ?? DEFAULT_BOARD_DIR;
     const idPrefix = stringOption(options, "idPrefix") ?? DEFAULT_ID_PREFIX;
-    assertValidLocalIdPrefix(idPrefix);
+    assertLocalIdPrefix(idPrefix, "tracker.id_prefix");
     return { path, idPrefix };
   },
   validateDispatch(settings) {

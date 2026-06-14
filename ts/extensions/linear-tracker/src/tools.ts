@@ -53,7 +53,6 @@ export async function executeLinearTool(
   input: unknown,
   settings: Settings,
   fetchImpl: typeof fetch = fetch,
-  env: NodeJS.ProcessEnv = {},
 ): Promise<ToolResult> {
   if (name !== "linear_graphql") {
     return unsupportedToolFailure(name, ["linear_graphql"]);
@@ -62,7 +61,7 @@ export async function executeLinearTool(
   if (!normalizedInput.ok) {
     return toolFailure(normalizedInput.error);
   }
-  const { apiKey, endpoint } = linearToolPackOptions(settings, env);
+  const { apiKey, endpoint } = linearToolPackOptions(settings);
   if (!apiKey)
     return toolFailure(
       "Symphony is missing Linear auth. Set `linear.api_key` in `WORKFLOW.md` or export `LINEAR_API_KEY`.",
@@ -121,7 +120,7 @@ export const linearToolProvider: ToolProvider = {
   validateOptions: validateLinearToolOptions,
   toolSpecs: () => linearToolSpecs(),
   executeTool: async (name, input, context) =>
-    executeLinearTool(name, input, context.settings, context.fetchImpl, context.env),
+    executeLinearTool(name, input, context.settings, context.fetchImpl),
 };
 
 function normalizeLinearGraphqlInput(
