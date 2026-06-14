@@ -4,6 +4,7 @@
 
 # Local agent settings
 .claude/settings.local.json
+.claude/workflows/
 .codex/config*.json
 .codex/config*.toml
 .codex/config*.yaml
