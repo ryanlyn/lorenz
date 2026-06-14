@@ -399,25 +399,39 @@ test("workspace root honors SYMPHONY_WORKSPACE_ROOT and expands local tilde path
   assert.equal(settings.workspace.rootExpression, "~/override");
 });
 
-test("workspace skills parse from top-level and workspace config", () => {
+test("agent skills resolve, expand, and dedupe", () => {
   const configDir = path.join(os.tmpdir(), "symphony-config-skills");
   const settings = parseConfig(
     {
-      skills: ["./.codex/skills/symphony-linear", "./.codex/skills/symphony-linear"],
-      workspace: { skills: ["~/shared-skill", "$SKILL_SOURCE"] },
+      agent: {
+        skills: [
+          "./.codex/skills/symphony-linear",
+          "./.codex/skills/symphony-linear",
+          "~/shared-skill",
+          "$SKILL_SOURCE",
+        ],
+      },
     },
     { HOME: "/home/tester", SKILL_SOURCE: "/opt/skill-source" },
     { configDir },
   );
 
-  assert.deepEqual(settings.workspace.skills, [
+  assert.deepEqual(settings.agent.skills, [
     path.join(configDir, ".codex", "skills", "symphony-linear"),
     "/home/tester/shared-skill",
     "/opt/skill-source",
   ]);
 });
 
-test("loadWorkflow resolves workspace skills relative to the workflow file", async () => {
+test("agent skills default to empty and reject per-state overrides", () => {
+  assert.deepEqual(parseConfig({}).agent.skills, []);
+  assert.throws(
+    () => parseConfig({ statusOverrides: { "In Progress": { agent: { skills: ["./x"] } } } }),
+    /skills/,
+  );
+});
+
+test("loadWorkflow resolves agent skills relative to the workflow file", async () => {
   const root = await tempDir("symphony-workflow-skills");
   const workflowDir = path.join(root, "workflows");
   await fs.mkdir(workflowDir);
@@ -425,7 +439,7 @@ test("loadWorkflow resolves workspace skills relative to the workflow file", asy
   await fs.writeFile(
     workflowPath,
     `---
-workspace:
+agent:
   skills:
     - ../.codex/skills/symphony-land
 ---
@@ -436,7 +450,7 @@ Do work.
 
   const workflow = await loadWorkflow(workflowPath);
 
-  assert.deepEqual(workflow.settings.workspace.skills, [
+  assert.deepEqual(workflow.settings.agent.skills, [
     path.join(root, ".codex", "skills", "symphony-land"),
   ]);
 });

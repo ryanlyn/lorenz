@@ -63,6 +63,23 @@ export function toolSpecs(
   return mountedToolSpecs(mountedPacks(settings, registry, trackers), settings);
 }
 
+/**
+ * Skill directories bundled by the mounted tool packs, in mount order and de-duplicated.
+ * The composition root unions these with the configured `agent.skills` before overlaying
+ * them into a prepared workspace, so enabling a tool also ships its companion skill.
+ */
+export function mountedSkillSources(
+  settings: Settings,
+  registry: ToolRegistry = defaultToolRegistry,
+  trackers: TrackerRegistry = defaultTrackerRegistry,
+): string[] {
+  const seen = new Set<string>();
+  for (const pack of mountedPacks(settings, registry, trackers)) {
+    for (const skill of pack.skills ?? []) seen.add(skill);
+  }
+  return [...seen];
+}
+
 export async function executeTool(
   name: string,
   input: unknown,

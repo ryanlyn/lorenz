@@ -19,7 +19,6 @@ import { execa } from "execa";
 const remoteWorkspaceMarker = "__SYMPHONY_WORKSPACE__";
 const hookForceKillDelayMs = 5_000;
 const hookLogMaxChars = 4_096;
-const codexSkillsDir = path.join(".codex", "skills");
 
 const hookTemplateReferencePattern = /(?:\{\{|\{%)[\s\S]*\bissue(?:\.|\[)/;
 
@@ -84,6 +83,20 @@ export interface WorkspaceCreateOptions {
   workerHost?: string | null | undefined;
   abortSignal?: AbortSignal | undefined;
   onHookEvent?: ((event: HookExecutionMessage) => void) | undefined;
+  /**
+   * Skill directories to overlay into the prepared workspace, with the executor-chosen
+   * destination. Assembled by the composition root (configured `agent.skills` unioned with
+   * mounted tool packs' bundled skills); omitted means no overlay runs.
+   */
+  skillOverlay?: WorkspaceSkillOverlay | undefined;
+}
+
+/** Resolved skill overlay: absolute source directories and the workspace-relative destination. */
+export interface WorkspaceSkillOverlay {
+  /** Absolute skill directories; each is copied whole to `<destDir>/<basename>`. */
+  sources: string[];
+  /** Workspace-relative destination, e.g. `.codex/skills` or `.claude/skills`. */
+  destDir: string;
 }
 
 export interface WorkspaceRunHookOptions {
@@ -98,13 +111,14 @@ export interface WorkspaceHookEventOptions {
 }
 
 interface WorkspaceSkillSourcePlan {
+  /** Absolute source directory. */
   source: string;
-  archiveCwd: string;
-  archiveEntry: string;
+  /** Skill directory name placed under the destination (the source basename). */
   target: string;
-  remoteTargetEntries: string[];
-  copyContents: boolean;
-  recursive: boolean;
+  /** Directory to run `tar` from for the remote transfer (the source's parent). */
+  archiveCwd: string;
+  /** Entry archived and extracted into the destination (equals {@link target}). */
+  archiveEntry: string;
 }
 
 export function safeIdentifier(identifier: unknown): string {
@@ -148,7 +162,7 @@ export async function createWorkspaceForIssue(
   // Shared workspaces run no lifecycle hooks (config rejects them); canonicalRoot is already
   // realpath'd and symlink-checked above, so creation is done.
   if (sharedWorkspaceRoot(settings)) {
-    await syncWorkspaceSkills(settings, canonicalRoot, null, options);
+    await applyWorkspaceSkillOverlay(settings, canonicalRoot, null, options);
     return canonicalRoot;
   }
 
@@ -172,28 +186,51 @@ export async function createWorkspaceForIssue(
     );
   }
 
-  await syncWorkspaceSkills(settings, canonicalTarget, null, options);
+  await applyWorkspaceSkillOverlay(settings, canonicalTarget, null, options);
 
   return canonicalTarget;
 }
 
-export async function syncWorkspaceSkills(
+/** Run the configured skill overlay for a prepared workspace, sourcing the SSH timeout from settings. */
+async function applyWorkspaceSkillOverlay(
   settings: Settings,
   workspace: string,
-  workerHost?: string | null,
-  options: { abortSignal?: AbortSignal | undefined } = {},
+  workerHost: string | null,
+  options: WorkspaceCreateOptions,
 ): Promise<void> {
-  if (settings.workspace.skills.length === 0) return;
+  if (!options.skillOverlay) return;
+  await syncWorkspaceSkills(workspace, options.skillOverlay, workerHost, {
+    abortSignal: options.abortSignal,
+    timeoutMs: settings.worker.sshTimeoutMs,
+  });
+}
+
+export async function syncWorkspaceSkills(
+  workspace: string,
+  overlay: WorkspaceSkillOverlay,
+  workerHost?: string | null,
+  options: { abortSignal?: AbortSignal | undefined; timeoutMs?: number | undefined } = {},
+): Promise<void> {
+  if (overlay.sources.length === 0) return;
   if (options.abortSignal?.aborted) throw new Error("workspace_skill_sync_canceled");
-  const plans = await workspaceSkillSourcePlans(settings.workspace.skills);
+  const plans = await workspaceSkillSourcePlans(overlay.sources);
+  const destSegments = skillDestinationSegments(overlay.destDir);
   if (workerHost) {
-    await syncRemoteWorkspaceSkills(workerHost, workspace, plans, {
-      ...options,
-      timeoutMs: settings.worker.sshTimeoutMs,
+    await syncRemoteWorkspaceSkills(workerHost, workspace, plans, destSegments, {
+      abortSignal: options.abortSignal,
+      timeoutMs: options.timeoutMs,
     });
     return;
   }
-  await syncLocalWorkspaceSkills(workspace, plans);
+  await syncLocalWorkspaceSkills(workspace, plans, destSegments);
+}
+
+/** Split an executor-provided destination (e.g. `.codex/skills`) into safe path segments. */
+function skillDestinationSegments(destDir: string): string[] {
+  const segments = destDir.split(/[\\/]+/).filter((segment) => segment !== "");
+  if (segments.length === 0 || segments.some((segment) => segment === "." || segment === ".."))
+    throw new Error(`workspace_skill_destination_invalid: ${destDir}`);
+  return segments;
 }
 
 export async function removeWorkspace(
@@ -624,29 +661,21 @@ async function workspaceSkillSourcePlans(sources: string[]): Promise<WorkspaceSk
     if (stat.isSymbolicLink()) {
       throw new Error(`workspace_skill_source_symlink: ${source}`);
     }
-    const recursive = stat.isDirectory();
-    if (!recursive && !stat.isFile()) {
+    // A skill is a directory; its whole tree ships into `<destDir>/<basename>`.
+    if (!stat.isDirectory()) {
       throw new Error(`workspace_skill_source_unsupported: ${source}`);
     }
 
     const normalized = path.resolve(source);
-    if (recursive) await rejectSourceTreeSymlinks(normalized);
-    const copyContents =
-      recursive &&
-      path.basename(normalized) === "skills" &&
-      path.basename(path.dirname(normalized)) === ".codex";
-    const target = copyContents ? "" : path.basename(normalized);
-    if (!copyContents && target === "")
+    await rejectSourceTreeSymlinks(normalized);
+    const target = path.basename(normalized);
+    if (target === "" || target === "." || target === "..")
       throw new Error(`workspace_skill_source_invalid: ${source}`);
-    const remoteTargetEntries = copyContents ? await fs.readdir(normalized) : [target];
     plans.push({
       source: normalized,
-      archiveCwd: copyContents ? normalized : path.dirname(normalized),
-      archiveEntry: copyContents ? "." : target,
       target,
-      remoteTargetEntries,
-      copyContents,
-      recursive,
+      archiveCwd: path.dirname(normalized),
+      archiveEntry: target,
     });
   }
   return plans;
@@ -663,32 +692,19 @@ async function rejectSourceTreeSymlinks(directory: string): Promise<void> {
 async function syncLocalWorkspaceSkills(
   workspace: string,
   plans: WorkspaceSkillSourcePlan[],
+  destSegments: string[],
 ): Promise<void> {
-  const skillsRoot = path.join(workspace, codexSkillsDir);
+  const skillsRoot = path.join(workspace, ...destSegments);
   await ensureDirectoryPathWithoutSymlinks(workspace, skillsRoot);
   for (const plan of plans) {
-    const target = plan.copyContents ? skillsRoot : path.join(skillsRoot, plan.target);
-    if (plan.copyContents) {
-      for (const entry of plan.remoteTargetEntries) {
-        const entryTarget = path.join(skillsRoot, entry);
-        await rejectExistingSymlink(entryTarget);
-      }
-    } else {
-      await rejectExistingSymlink(target);
-    }
+    const target = path.join(skillsRoot, plan.target);
+    await rejectExistingSymlink(target);
     if (await sameRealPath(plan.source, target)) continue;
-    if (plan.copyContents) {
-      for (const entry of plan.remoteTargetEntries) {
-        const entryTarget = path.join(skillsRoot, entry);
-        await fs.rm(entryTarget, { recursive: true, force: true });
-      }
-    } else {
-      await fs.rm(target, { recursive: true, force: true });
-    }
+    await fs.rm(target, { recursive: true, force: true });
     await fs.cp(plan.source, target, {
       dereference: true,
       force: true,
-      recursive: plan.recursive,
+      recursive: true,
     });
   }
 }
@@ -697,9 +713,10 @@ async function syncRemoteWorkspaceSkills(
   workerHost: string,
   workspace: string,
   plans: WorkspaceSkillSourcePlan[],
-  options: { abortSignal?: AbortSignal | undefined; timeoutMs: number },
+  destSegments: string[],
+  options: { abortSignal?: AbortSignal | undefined; timeoutMs?: number | undefined },
 ): Promise<void> {
-  const skillsRoot = path.posix.join(workspace, ".codex", "skills");
+  const skillsRoot = path.posix.join(workspace, ...destSegments);
   for (const plan of plans) {
     await syncRemoteWorkspaceSkill(workerHost, skillsRoot, plan, options);
   }
@@ -709,34 +726,35 @@ async function syncRemoteWorkspaceSkill(
   workerHost: string,
   skillsRoot: string,
   plan: WorkspaceSkillSourcePlan,
-  options: { abortSignal?: AbortSignal | undefined; timeoutMs: number },
+  options: { abortSignal?: AbortSignal | undefined; timeoutMs?: number | undefined },
 ): Promise<void> {
   if (options.abortSignal?.aborted) throw new Error("workspace_skill_sync_canceled");
-  if (!Number.isInteger(options.timeoutMs) || options.timeoutMs <= 0)
+  if (
+    options.timeoutMs === undefined ||
+    !Number.isInteger(options.timeoutMs) ||
+    options.timeoutMs <= 0
+  )
     throw new Error(`invalid_ssh_timeout: ${options.timeoutMs}`);
-  const codexRoot = path.posix.dirname(skillsRoot);
-  const targetGuard = plan.remoteTargetEntries
-    .map(
-      (entry) => `
-target=${shellEscape(path.posix.join(skillsRoot, entry))}
+  const timeoutMs = options.timeoutMs;
+  const skillsParent = path.posix.dirname(skillsRoot);
+  const targetGuard = `
+target=${shellEscape(path.posix.join(skillsRoot, plan.target))}
 if [ -L "$target" ]; then
   printf '%s\\n' "unsafe symlink in workspace path: $target" >&2
   exit 1
 fi
-rm -rf "$target"`,
-    )
-    .join("\n");
+rm -rf "$target"`;
   const command = [
     "set -eu",
-    `codex_root=${shellEscape(codexRoot)}`,
+    `skills_parent=${shellEscape(skillsParent)}`,
     `skills_root=${shellEscape(skillsRoot)}`,
-    'if [ -L "$codex_root" ] || [ -L "$skills_root" ]; then',
+    'if [ -L "$skills_parent" ] || [ -L "$skills_root" ]; then',
     "  printf '%s\\n' \"unsafe symlink in workspace path: $skills_root\" >&2",
     "  exit 1",
     "fi",
-    'mkdir -p "$codex_root"',
-    'if [ -L "$codex_root" ] || [ ! -d "$codex_root" ]; then',
-    "  printf '%s\\n' \"unsafe workspace skill path: $codex_root\" >&2",
+    'mkdir -p "$skills_parent"',
+    'if [ -L "$skills_parent" ] || [ ! -d "$skills_parent" ]; then',
+    "  printf '%s\\n' \"unsafe workspace skill path: $skills_parent\" >&2",
     "  exit 1",
     "fi",
     'mkdir -p "$skills_root"',
@@ -814,10 +832,10 @@ rm -rf "$target"`,
       new Promise<never>((_resolve, reject) => {
         timeoutTimer = setTimeout(() => {
           terminate(
-            new Error(`workspace_skill_remote_sync_timeout: ${workerHost} ${options.timeoutMs}`),
+            new Error(`workspace_skill_remote_sync_timeout: ${workerHost} ${timeoutMs}`),
             reject,
           );
-        }, options.timeoutMs);
+        }, timeoutMs);
       }),
     );
     if (options.abortSignal) {
@@ -977,7 +995,7 @@ async function createRemoteWorkspaceForIssue(
     );
   }
 
-  await syncWorkspaceSkills(settings, canonicalWorkspace, workerHost, options);
+  await applyWorkspaceSkillOverlay(settings, canonicalWorkspace, workerHost, options);
 
   return canonicalWorkspace;
 }

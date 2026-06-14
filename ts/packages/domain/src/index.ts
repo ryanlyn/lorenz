@@ -270,6 +270,13 @@ export interface AgentSettings {
    * Overridden per-issue by an `ensemble:<n>` label.
    */
   ensembleSize: number;
+  /**
+   * Local skill directories overlaid into each prepared workspace before the agent process
+   * starts. Entries are absolute paths resolved from workflow configuration; the active
+   * executor decides the in-workspace destination (e.g. `.codex/skills` or `.claude/skills`).
+   * Mounted tool packs contribute their bundled skills on top of this list at dispatch time.
+   */
+  skills: string[];
 }
 
 /**
@@ -381,11 +388,6 @@ export interface WorkspaceSettings {
    * agents are desired.
    */
   isolation: "per-agent" | "none";
-  /**
-   * Local skill sources copied into `.codex/skills` in each prepared workspace before the
-   * agent process starts. Entries are absolute paths resolved from workflow configuration.
-   */
-  skills: string[];
 }
 
 /**

@@ -1,3 +1,6 @@
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
 import { errorMessage, isRecord, type Settings } from "@symphony/domain";
 import {
   toolFailure,
@@ -9,6 +12,18 @@ import {
 } from "@symphony/tool-sdk";
 
 import { linearToolPackOptions, validateLinearToolOptions } from "./options.js";
+
+/**
+ * The `symphony-linear` skill ships inside this extension (`skills/symphony-linear`, a sibling
+ * of `src`/`dist`) so mounting the Linear pack also overlays the doc that teaches the agent to
+ * call `linear_graphql`. Resolved from this module so it works from both `src` and `dist`.
+ */
+const symphonyLinearSkillDir = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "..",
+  "skills",
+  "symphony-linear",
+);
 
 const LINEAR_MAX_RETRIES = 4;
 const MAX_ERROR_BODY_LOG_BYTES = 1000;
@@ -117,6 +132,7 @@ export async function executeLinearTool(
 /** The Linear tool pack: raw GraphQL access using the pack's own Linear credentials. */
 export const linearToolProvider: ToolProvider = {
   name: "linear",
+  skills: [symphonyLinearSkillDir],
   validateOptions: validateLinearToolOptions,
   toolSpecs: () => linearToolSpecs(),
   executeTool: async (name, input, context) =>

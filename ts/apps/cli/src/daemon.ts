@@ -20,7 +20,9 @@ import {
   listIssueWorkspaceIdentifiers,
   removeIssueWorkspaces,
   runHook,
+  type WorkspaceSkillOverlay,
 } from "@symphony/workspace";
+import { mountedSkillSources } from "@symphony/mcp";
 import { appendLogEvent } from "@symphony/log-file";
 import {
   deleteResumeState,
@@ -77,9 +79,39 @@ export function createTrackerClient(
   return defaultTrackerRegistry.require(settings.tracker.kind).createClient(settings, { env });
 }
 
+/**
+ * Skill overlay for a prepared workspace: the configured `agent.skills` unioned with the skills
+ * bundled by the mounted tool packs, copied into the destination the active executor reads from
+ * (`.codex/skills` for Codex, `.claude/skills` for Claude). Returns undefined when nothing is
+ * configured so workspace preparation skips the overlay entirely.
+ */
+function resolveSkillOverlay(settings: Settings): WorkspaceSkillOverlay | undefined {
+  const sources = [
+    ...new Set([
+      ...settings.agent.skills,
+      ...mountedSkillSources(settings, defaultToolRegistry, defaultTrackerRegistry),
+    ]),
+  ];
+  if (sources.length === 0) return undefined;
+  return { sources, destDir: resolveSkillsDestination(settings) };
+}
+
+function resolveSkillsDestination(settings: Settings): string {
+  const kind = settings.agent.kind;
+  const agent = settings.agents[kind];
+  if (!agent) return ".codex/skills";
+  return (
+    defaultAgentExecutorRegistry.get(agent.executor)?.skillsDir?.(kind, agent) ?? ".codex/skills"
+  );
+}
+
 function createRunAgentAttemptAdapters(): RunAgentAttemptAdapters {
   return {
-    createWorkspaceForIssue,
+    createWorkspaceForIssue: async (settings, issue, options) =>
+      createWorkspaceForIssue(settings, issue, {
+        ...options,
+        skillOverlay: resolveSkillOverlay(settings),
+      }),
     runHook,
     readResumeState,
     resumeStateMatches,

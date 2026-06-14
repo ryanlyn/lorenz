@@ -32,7 +32,6 @@ export const defaultSettings = (options: DefaultSettingsOptions = {}): Settings 
       root: workspaceRoot,
       rootExpression: workspaceRoot,
       isolation: "per-agent",
-      skills: [],
     },
     worker: { sshHosts: [], sshTimeoutMs: 60_000 },
     hooks: { timeoutMs: 60_000 },
@@ -42,6 +41,7 @@ export const defaultSettings = (options: DefaultSettingsOptions = {}): Settings 
       maxTurns: 20,
       maxRetryBackoffMs: 300_000,
       ensembleSize: 1,
+      skills: [],
     },
     agents: defaultAgentRecords(),
     observability: {

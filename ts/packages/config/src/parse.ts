@@ -80,12 +80,6 @@ export function parseConfig(
   settings.workspace.rootExpression = workspaceRootExpression;
   settings.workspace.root = expandLocalPath(workspaceRootExpression, env);
   settings.workspace.isolation = workspaceRaw.isolation ?? settings.workspace.isolation;
-  settings.workspace.skills = parseSkillSources(
-    parsed.skills,
-    workspaceRaw.skills,
-    env,
-    defaults.configDir,
-  );
 
   const workerRaw = parsed.worker ?? {};
   settings.worker.sshHosts = workerRaw.sshHosts ?? settings.worker.sshHosts;
@@ -96,7 +90,11 @@ export function parseConfig(
 
   settings.hooks = parseHooks(settings.hooks, parsed.hooks ?? {});
   if (settings.workspace.isolation === "none") assertNoWorkspaceHooks(settings.hooks);
-  settings.agent = parseAgentSettings(settings.agent, parsed.agent ?? {});
+  settings.agent = parseAgentSettings(
+    settings.agent,
+    parsed.agent ?? {},
+    parseSkillSources(parsed.agent?.skills, env, defaults.configDir),
+  );
   settings.agents = parseAgents(
     parsed.agents ?? {},
     legacyAgentRecordOverrides(parsed.codex ?? {}, parsed.claude ?? {}),
@@ -330,18 +328,16 @@ function expandLocalPath(value: string, env: NodeJS.ProcessEnv): string {
 }
 
 function parseSkillSources(
-  topLevelSkills: string[] | undefined,
-  workspaceSkills: string[] | undefined,
+  skills: string[] | undefined,
   env: NodeJS.ProcessEnv,
   configDir: string | undefined,
 ): string[] {
-  const sources = [...(topLevelSkills ?? []), ...(workspaceSkills ?? [])];
   const baseDir = configDir ?? process.cwd();
   const seen = new Set<string>();
   const resolved: string[] = [];
-  for (const source of sources) {
+  for (const source of skills ?? []) {
     const expanded = expandLocalPath(source, env);
-    if (!nonEmptyString(expanded)) throw new Error("workspace.skills must not contain blank paths");
+    if (!nonEmptyString(expanded)) throw new Error("agent.skills must not contain blank paths");
     const absolute = path.isAbsolute(expanded)
       ? path.normalize(expanded)
       : path.resolve(baseDir, expanded);
@@ -396,7 +392,11 @@ function parseHooks(defaults: HooksSettings, hooksRaw: HooksRaw): HooksSettings 
   };
 }
 
-function parseAgentSettings(defaults: AgentSettings, agentRaw: AgentRaw): AgentSettings {
+function parseAgentSettings(
+  defaults: AgentSettings,
+  agentRaw: AgentRaw,
+  skills: string[],
+): AgentSettings {
   const kind = agentRaw.kind ?? defaults.kind;
 
   return {
@@ -405,6 +405,7 @@ function parseAgentSettings(defaults: AgentSettings, agentRaw: AgentRaw): AgentS
     maxTurns: agentRaw.maxTurns ?? defaults.maxTurns,
     maxRetryBackoffMs: agentRaw.maxRetryBackoffMs ?? defaults.maxRetryBackoffMs,
     ensembleSize: agentRaw.ensembleSize ?? defaults.ensembleSize,
+    skills: agentRaw.skills ? skills : defaults.skills,
   };
 }
 
@@ -814,9 +815,9 @@ function cloneSettings(settings: Settings): Settings {
     tracker: cloneTracker(settings.tracker),
     polling: { ...settings.polling },
     worker: { ...settings.worker, sshHosts: [...settings.worker.sshHosts] },
-    workspace: { ...settings.workspace, skills: [...settings.workspace.skills] },
+    workspace: { ...settings.workspace },
     hooks: { ...settings.hooks },
-    agent: { ...settings.agent },
+    agent: { ...settings.agent, skills: [...settings.agent.skills] },
     agents: cloneAgentRecords(settings.agents),
     ...(settings.toolOptions !== undefined && {
       toolOptions: structuredClone(settings.toolOptions),

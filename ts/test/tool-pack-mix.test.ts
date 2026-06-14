@@ -1,8 +1,11 @@
+import fs from "node:fs/promises";
+import path from "node:path";
+
 import { test } from "vitest";
 import { parseConfig, validateDispatchConfig } from "@symphony/config";
 import type { Issue, Settings } from "@symphony/domain";
 import { AgentExecutorRegistry, type AgentExecutorProvider } from "@symphony/agent-sdk";
-import { executeTool, toolSpecs } from "@symphony/mcp";
+import { executeTool, mountedSkillSources, toolSpecs } from "@symphony/mcp";
 import { registerJiraTrackers } from "@symphony/jira-tracker";
 import { linearTrackerProvider, registerLinearTracker } from "@symphony/linear-tracker";
 import { registerLocalTracker } from "@symphony/local-tracker";
@@ -94,6 +97,22 @@ function parseLinear(
 function specNames(settings: Settings, tools: ToolRegistry, trackers: TrackerRegistry): string[] {
   return toolSpecs(settings, tools, trackers).map((spec) => spec.name);
 }
+
+test("mounting the linear pack contributes its bundled symphony-linear skill", async () => {
+  const { trackers, tools } = builtinRegistries();
+  const settings = parseJira(trackers, { tools: { linear: { api_key: "linear-token" } } });
+
+  const skills = mountedSkillSources(settings, tools, trackers);
+  const linearSkill = skills.find((dir) => path.basename(dir) === "symphony-linear");
+  assert.ok(linearSkill, "linear pack should bundle the symphony-linear skill");
+  assert.equal((await fs.stat(path.join(linearSkill, "SKILL.md"))).isFile(), true);
+});
+
+test("a workflow without the linear pack contributes no bundled skills", () => {
+  const { trackers, tools } = builtinRegistries();
+  const settings = parseJira(trackers);
+  assert.deepEqual(mountedSkillSources(settings, tools, trackers), []);
+});
 
 test("a jira-dispatch workflow mounts only the neutral tracker pack", () => {
   const { trackers, tools } = builtinRegistries();

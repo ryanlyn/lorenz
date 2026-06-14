@@ -36,6 +36,12 @@ export interface ToolProvider {
   /** Pack name used by tracker providers' default mounts or by the workflow `tools:` map. */
   readonly name: string;
   /**
+   * Absolute skill directories this pack bundles. When the pack is mounted, the composition
+   * root overlays these into the workspace's skills directory alongside the configured
+   * `agent.skills`, so enabling a tool ships the skill that documents how to use it.
+   */
+  readonly skills?: readonly string[];
+  /**
    * Validate this pack's per-pack config slice. Called once at startup by
    * `validateDispatchConfig` for mounted packs that have configured options; throw with a
    * `tools.<pack>.<key> ...` message on unknown keys or invalid values.

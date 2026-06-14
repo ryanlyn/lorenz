@@ -134,7 +134,6 @@ const workspaceRawSchema = z
   .object({
     root: z.string().optional(),
     isolation: z.enum(["per-agent", "none"]).optional(),
-    skills: skillSourceListSchema.optional(),
   })
   .strict();
 const workerRawSchema = z
@@ -160,6 +159,7 @@ const agentRawSchema = z
     maxTurns: coercedMaxTurns.optional(),
     maxRetryBackoffMs: coercedTimeoutMs.optional(),
     ensembleSize: coercedEnsembleSize.optional(),
+    skills: skillSourceListSchema.optional(),
   })
   .strict();
 const codexRawSchema = z
@@ -197,7 +197,10 @@ const serverRawSchema = z
 const loggingRawSchema = z.object({ logFile: z.string().optional() }).strict();
 const agentsRawSchema = z.record(z.string(), z.unknown());
 const toolsRawSchema = z.record(z.string(), z.record(z.string(), z.unknown()));
-const partialAgentRawSchema = agentRawSchema.partial().strict();
+// Skills are resolved once from the base `agent` config; per-state overrides may not retarget
+// them, so they are omitted from the partial override schema (an explicit `skills` key in a
+// status override is rejected by `.strict()`).
+const partialAgentRawSchema = agentRawSchema.omit({ skills: true }).partial().strict();
 const partialCodexRawSchema = codexRawSchema.partial().strict();
 const partialClaudeRawSchema = claudeRawSchema.partial().strict();
 const statusOverrideRawSchema = z
@@ -227,7 +230,6 @@ export const workflowConfigSchema = z.preprocess(
       logging: loggingRawSchema.optional(),
       trackers: trackersRawSchema.optional(),
       tools: toolsRawSchema.optional(),
-      skills: skillSourceListSchema.optional(),
       statusOverrides: z.record(z.string(), statusOverrideRawSchema).optional(),
     })
     .passthrough(),
