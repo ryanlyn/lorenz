@@ -97,13 +97,13 @@ test("typed fixture values are accepted by their respective runtime arrays", () 
   // Exhaustiveness: verify array lengths match expected union member counts.
   // If a value is added to or removed from the array without updating the type,
   // the length assertion fails, catching drift that single-value includes checks miss.
-  assert.equal(AGENT_UPDATE_TYPES.length, 19, "AGENT_UPDATE_TYPES length mismatch");
+  assert.equal(AGENT_UPDATE_TYPES.length, 17, "AGENT_UPDATE_TYPES length mismatch");
   assert.equal(ISSUE_STATE_TYPES.length, 6, "ISSUE_STATE_TYPES length mismatch");
   // RUNTIME_EVENT_TYPES = AGENT_UPDATE_TYPES + runtime-only entries
   assert.equal(
     RUNTIME_EVENT_TYPES.length,
-    AGENT_UPDATE_TYPES.length + 20,
-    "RUNTIME_EVENT_TYPES should be AGENT_UPDATE_TYPES plus 20 runtime-only events",
+    AGENT_UPDATE_TYPES.length + 18,
+    "RUNTIME_EVENT_TYPES should be AGENT_UPDATE_TYPES plus 18 runtime-only events",
   );
 });
 

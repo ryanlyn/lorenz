@@ -23,8 +23,6 @@ export const RUNTIME_EVENT_TYPES = [
   "run_stalled",
   "startup_workspace_cleanup",
   "startup_workspace_cleanup_failed",
-  "resume_state_invalidated",
-  "resume_state_invalidation_failed",
   "retry_timer_due",
   "retry_timer_error",
   "refresh_error",
@@ -49,7 +47,6 @@ export interface RuntimeRunHistoryEntry {
   outcome: RuntimeRunOutcome;
   turnCount: number;
   sessionId?: string | null | undefined;
-  resumeId?: string | null | undefined;
   executorPid?: string | null | undefined;
   workspacePath?: string | null | undefined;
   workerHost?: string | null | undefined;
@@ -75,7 +72,6 @@ export interface RuntimeRunningEntry {
   ensembleSize: number;
   agentKind: AgentKind;
   sessionId?: string | null | undefined;
-  resumeId?: string | null | undefined;
   executorPid?: string | null | undefined;
   workerHost?: string | null | undefined;
   turnCount: number;

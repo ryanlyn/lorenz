@@ -4,10 +4,7 @@ import {
   routedToThisWorker,
   slotKey,
 } from "@symphony/dispatch";
-import {
-  reconciliationStopReason,
-  type RuntimeReconciliationReason,
-} from "@symphony/policies/reconciliation";
+import { reconciliationStopReason } from "@symphony/policies/reconciliation";
 import { isTerminalState } from "@symphony/issue";
 import { Orchestrator } from "@symphony/orchestrator";
 import { settingsForIssueState, validateDispatchConfig } from "@symphony/config";
@@ -56,11 +53,6 @@ export {
   RUNTIME_RECONCILIATION_REASONS,
   type RuntimeReconciliationReason,
 } from "@symphony/policies/reconciliation";
-export type RuntimeResumeInvalidationReason =
-  | "failure"
-  | "stalled"
-  | "missing"
-  | RuntimeReconciliationReason;
 
 export interface SymphonyRuntimeOptions {
   workflow: WorkflowDefinition;
@@ -80,9 +72,6 @@ export interface SymphonyRuntimeOptions {
     | undefined;
   listIssueWorkspaces?:
     | ((settings: WorkflowDefinition["settings"]) => Promise<string[]>)
-    | undefined;
-  deleteResumeState?:
-    | ((workspace: string, workerHost?: string | null, timeoutMs?: number) => Promise<void>)
     | undefined;
   appendLogEvent?: ((logFile: string, event: Record<string, unknown>) => Promise<void>) | undefined;
   onAgentUpdate?: ((issue: Issue, update: AgentUpdate) => void) | undefined;
@@ -337,7 +326,7 @@ export class SymphonyRuntime {
       await this.reloadWorkflowIfConfigured();
       this.validateDispatch(this.workflow.settings);
       await this.cleanupTerminalWorkspacesOnce();
-      await this.reconcileStalledRuns();
+      this.reconcileStalledRuns();
       await this.reconcileTrackedIssues();
       const issues = await this.client.fetchCandidateIssues();
       const eligibleIssues = this.orchestrator.eligibleIssues(issues);
@@ -464,7 +453,6 @@ export class SymphonyRuntime {
           outcome: "success",
           turnCount: result.turnCount,
           runningEntry: entry,
-          resumeId: result.resumeId,
           workspacePath: result.workspace,
           startedAt,
           endedAt: this.clock.now().toISOString(),
@@ -479,7 +467,6 @@ export class SymphonyRuntime {
       // run_failed event the TUI renders as a red error banner on Ctrl+C.
       if (!handle.isActive) return;
       const entry = this.runningEntry(issue.id, slotIndex);
-      await this.invalidateResumeStateForRunningEntry(entry, "failure");
       if (!handle.isActive) return;
       this.orchestrator.finish(issue.id, slotIndex, true, errorMessage(error), "failure");
       this.syncRetryTimer(issue.id);
@@ -582,7 +569,6 @@ export class SymphonyRuntime {
         );
         this.addEvent("workspace_cleanup", `${issue.identifier} ${reason}`);
       } else {
-        await this.invalidateResumeStateForPath(tracked.get(issue.id), reason);
         this.addEvent("run_reconciled", `${issue.identifier} ${reason}`);
       }
     }
@@ -591,12 +577,11 @@ export class SymphonyRuntime {
       this.abortIssueRuns(issueId);
       this.orchestrator.cleanupIssue(issueId);
       this.clearRetryTimer(issueId);
-      await this.invalidateResumeStateForPath(meta, "missing");
       this.addEvent("run_reconciled", `${meta.identifier} missing`);
     }
   }
 
-  private async reconcileStalledRuns(): Promise<void> {
+  private reconcileStalledRuns(): void {
     for (const snapshotEntry of this.orchestrator.snapshot().running) {
       const currentEntry = this.runningEntry(snapshotEntry.issue.id, snapshotEntry.slotIndex);
       if (!currentEntry) continue;
@@ -619,7 +604,6 @@ export class SymphonyRuntime {
       this.orchestrator.finish(entry.issue.id, entry.slotIndex, true, error, "failure");
       this.syncRetryTimer(entry.issue.id);
       activeHandle?.finishExternally();
-      await this.invalidateResumeStateForRunningEntry(currentEntry, "stalled");
       const endedAt = this.clock.now().toISOString();
       this.recordHistory(
         buildRunHistoryEntry({
@@ -681,47 +665,6 @@ export class SymphonyRuntime {
     for (const [key, handle] of this.activeRuns.entries()) {
       if (!key.startsWith(`${issueId}:`)) continue;
       handle.finishExternally();
-    }
-  }
-
-  private async invalidateResumeStateForRunningEntry(
-    entry: RunningEntry | undefined,
-    reason: RuntimeResumeInvalidationReason,
-  ): Promise<void> {
-    if (!entry?.workspacePath) return;
-    await this.invalidateResumeStateForPath(
-      {
-        identifier: entry.identifier,
-        workerHost: entry.workerHost,
-        workspacePath: entry.workspacePath,
-      },
-      reason,
-    );
-  }
-
-  private async invalidateResumeStateForPath(
-    meta:
-      | {
-          identifier: string;
-          workerHost?: string | null | undefined;
-          workspacePath?: string | null | undefined;
-        }
-      | undefined,
-    reason: RuntimeResumeInvalidationReason,
-  ): Promise<void> {
-    if (!meta?.workspacePath) return;
-    try {
-      await this.deleteResumeState(
-        meta.workspacePath,
-        meta.workerHost,
-        this.workflow.settings.worker.sshTimeoutMs,
-      );
-      this.addEvent("resume_state_invalidated", `${meta.identifier} ${reason}`);
-    } catch (error) {
-      this.addEvent(
-        "resume_state_invalidation_failed",
-        `${meta.identifier} ${errorMessage(error)}`,
-      );
     }
   }
 
@@ -805,17 +748,6 @@ export class SymphonyRuntime {
     throw new Error("runtime_adapter_missing: removeIssueWorkspaces");
   }
 
-  private async deleteResumeState(
-    workspacePath: string,
-    workerHost?: string | null,
-    timeoutMs?: number,
-  ): Promise<void> {
-    if (this.input.deleteResumeState) {
-      return this.input.deleteResumeState(workspacePath, workerHost, timeoutMs);
-    }
-    throw new Error("runtime_adapter_missing: deleteResumeState");
-  }
-
   private async appendLogEvent(
     logFile: string | null | undefined,
     event: Record<string, unknown>,
@@ -861,7 +793,6 @@ interface BuildRunHistoryEntryInput {
   outcome: RuntimeRunOutcome;
   turnCount: number;
   runningEntry?: RunningEntry | undefined;
-  resumeId?: RuntimeRunHistoryEntry["resumeId"];
   workspacePath?: RuntimeRunHistoryEntry["workspacePath"];
   startedAt: string;
   endedAt: string;
@@ -872,7 +803,6 @@ interface BuildRunHistoryEntryInput {
 
 function buildRunHistoryEntry(input: BuildRunHistoryEntryInput): RuntimeRunHistoryEntry {
   const entry = input.runningEntry;
-  const resumeId = "resumeId" in input ? input.resumeId : entry?.resumeId;
   const workspacePath = "workspacePath" in input ? input.workspacePath : entry?.workspacePath;
 
   return {
@@ -887,7 +817,6 @@ function buildRunHistoryEntry(input: BuildRunHistoryEntryInput): RuntimeRunHisto
     outcome: input.outcome,
     turnCount: input.turnCount,
     sessionId: entry?.sessionId,
-    resumeId,
     executorPid: entry?.executorPid,
     workspacePath,
     workerHost: entry?.workerHost,
@@ -915,7 +844,6 @@ function runtimeRunningEntry(entry: RunningEntry, runId: string | undefined): Ru
     ensembleSize: entry.ensembleSize,
     agentKind: entry.agentKind,
     sessionId: entry.sessionId,
-    resumeId: entry.resumeId,
     executorPid: entry.executorPid,
     workerHost: entry.workerHost,
     turnCount: entry.turnCount,

@@ -217,9 +217,6 @@ importers:
       "@symphony/projections":
         specifier: workspace:*
         version: link:packages/projections
-      "@symphony/resume-state":
-        specifier: workspace:*
-        version: link:packages/resume-state
       "@symphony/retry-scheduler":
         specifier: workspace:*
         version: link:packages/retry-scheduler
@@ -382,9 +379,6 @@ importers:
       "@symphony/prompt":
         specifier: workspace:*
         version: link:../../packages/prompt
-      "@symphony/resume-state":
-        specifier: workspace:*
-        version: link:../../packages/resume-state
       "@symphony/retry-scheduler":
         specifier: workspace:*
         version: link:../../packages/retry-scheduler
@@ -627,9 +621,6 @@ importers:
       "@symphony/prompt":
         specifier: workspace:*
         version: link:../prompt
-      "@symphony/resume-state":
-        specifier: workspace:*
-        version: link:../resume-state
     devDependencies:
       "@agentclientprotocol/sdk":
         specifier: "catalog:"
@@ -808,21 +799,6 @@ importers:
       liquidjs:
         specifier: "catalog:"
         version: 10.27.0
-
-  packages/resume-state:
-    dependencies:
-      "@symphony/domain":
-        specifier: workspace:*
-        version: link:../domain
-      "@symphony/ssh":
-        specifier: workspace:*
-        version: link:../ssh
-      execa:
-        specifier: "catalog:"
-        version: 9.6.1
-      zod:
-        specifier: "catalog:"
-        version: 4.4.3
 
   packages/retry-scheduler:
     dependencies:

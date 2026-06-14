@@ -22,7 +22,6 @@ test("presenter preserves blocked dispatches, retry errors, run costs, retries, 
     worker_host: null,
     workspace_path: "/tmp/symphony/MT-RUNNING",
     session_id: null,
-    resume_id: "resume-running",
     turn_count: 1,
     agent_kind: "codex",
     executor_pid: "123",
@@ -63,7 +62,6 @@ test("presenter preserves blocked dispatches, retry errors, run costs, retries, 
   assert.equal(runningIssue.payload.status, "running");
   assert.equal((runningIssue.payload.running as any).slot_index, 0);
   assert.equal((runningIssue.payload.running as any).ensemble_size, 1);
-  assert.equal((runningIssue.payload.running as any).resume_id, "resume-running");
 
   const cost = runsPayload(snapshot, { cost: true });
   assert.equal(cost.status, "ok");
@@ -238,7 +236,6 @@ function snapshotFixture(): RuntimeSnapshot {
         turnCount: 1,
         startedAt: "2026-05-06T00:00:00.000Z",
         workspacePath: "/tmp/symphony/MT-RUNNING",
-        resumeId: "resume-running",
         executorPid: "123",
         usageTotals: { inputTokens: 2, outputTokens: 4, totalTokens: 6, secondsRunning: 3 },
         retryAttempt: 0,

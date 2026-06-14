@@ -71,9 +71,6 @@
       "path": "../../packages/prompt"
     },
     {
-      "path": "../../packages/resume-state"
-    },
-    {
       "path": "../../packages/retry-scheduler"
     },
     {

@@ -233,8 +233,6 @@ Fields:
     `<thread_id>-<turn_id>`; other backends may expose a native session ID.
 - `agent_kind` (string)
   - Configured backend name, such as `codex` or `claude`.
-- `resume_id` (string or null)
-  - Backend-specific continuation identifier.
 - `thread_id` (string or null)
 - `turn_id` (string or null)
 - `executor_pid` (string or null)
@@ -1153,9 +1151,6 @@ semantics):
      - `cwd` = absolute workspace path
      - If optional client-side tools are implemented, include their advertised tool specs using the
        protocol mechanism supported by the targeted Codex app-server version.
-   - If a valid Codex resume ID exists for this workspace and issue, `thread/resume` may be used
-     instead of `thread/start`. A conforming resume request should preserve extended history when
-     supported by the target app-server.
 4. `turn/start` request
    - Params include:
      - `threadId`
@@ -1173,7 +1168,6 @@ Session identifiers:
 - Read `turn_id` from each `turn/start` result `result.turn.id`
 - Emit `session_id = "<thread_id>-<turn_id>"`
 - Reuse the same `thread_id` for all continuation turns inside one worker run
-- Persist Codex resume metadata using `resume_id == thread_id`.
 
 ### 10.3 Streaming Turn Processing
 
@@ -1358,7 +1352,6 @@ Launch contract:
 - Use print/stream mode with structured JSON input and output.
 - Pass the configured model and permission mode.
 - Pass an issue title/name when the CLI supports it.
-- If a matching Claude resume ID exists, pass it through the CLI's resume mechanism.
 - If `claude.strict_mcp_config == true`, launch with only the generated MCP config.
 
 MCP/tooling contract:
@@ -1386,35 +1379,10 @@ Stream handling:
 - Usage fields should include cache creation/read input tokens when computing input tokens.
 - Partial trailing lines should be flushed before reporting process exit.
 
-Timeout and resume behavior:
+Timeout behavior:
 
 - `claude.turn_timeout_ms` bounds inactivity while waiting for the next stream event.
 - `claude.stall_timeout_ms` is enforced by the orchestrator from the latest normalized event time.
-- Claude resume metadata should use `agent_kind == "claude"` and the native Claude session/resume
-  ID.
-
-### 10.9 Resume State Contract
-
-Backends may persist resume metadata inside the issue workspace when the workspace is a git
-repository.
-
-Requirements:
-
-- Store resume state under the git directory, for example `.git/symphony/resume.json`.
-- Persist at minimum `agent_kind` and backend-specific `resume_id`.
-- Persist enough issue and runtime identity to avoid unsafe reuse:
-  - `issue_id`
-  - `issue_identifier`
-  - `issue_state`
-  - `workspace_path`
-  - `worker_host`
-- A stored resume state may be reused only when all non-null identity fields match the current run
-  and the stored `agent_kind` matches the selected backend.
-- Missing git metadata should make resume state unavailable, not fatal.
-- Invalid or unreadable resume files should prevent resume for that run and emit an
-  operator-visible warning.
-- Abnormal exits, stalls, and orchestrator-owned retry paths should delete or invalidate stale
-  resume state before retrying.
 
 ## 11. Issue Tracker Integration Contract (Linear-Compatible)
 
@@ -1581,7 +1549,6 @@ should return:
   - `worker_host`
   - `workspace_path`
   - `session_id`
-  - `resume_id`
   - `executor_pid`
   - `turn_count`
   - last event/message/timestamp fields
@@ -1709,7 +1676,6 @@ Minimum endpoints:
           "worker_host": null,
           "workspace_path": "/tmp/symphony_workspaces/MT-649",
           "session_id": "thread-1-turn-1",
-          "resume_id": "thread-1",
           "executor_pid": 4242,
           "turn_count": 7,
           "last_event": "turn_completed",
@@ -1766,7 +1732,6 @@ Minimum endpoints:
         "worker_host": null,
         "workspace_path": "/tmp/symphony_workspaces/MT-649",
         "session_id": "thread-1-turn-1",
-        "resume_id": "thread-1",
         "executor_pid": 4242,
         "turn_count": 7,
         "state": "In Progress",
@@ -2104,7 +2069,6 @@ function dispatch_issue(issue, state, attempt):
     worker_host: selected_worker_host,
     workspace_path: expected_workspace_path(issue, slot_index),
     session_id: null,
-    resume_id: null,
     executor_pid: null,
     last_agent_message: null,
     last_agent_event: null,
@@ -2366,10 +2330,6 @@ Unless otherwise noted, Sections 17.1 through 17.7 are `Core Conformance`. Bulle
   app-server protocol
 - Policy-related startup payloads use the implementation's documented approval/sandbox settings
 - `thread/start` and `turn/start` parse nested IDs and emit `session_started`
-- Existing Codex sessions can be resumed with the persisted resume ID when the app-server protocol
-  supports resume
-- Resume state requires `agent_kind`, issue identity, worker/workspace identity, and a valid
-  backend resume ID; missing or mismatched resume state is ignored with an operator-visible warning
 - Request/response read timeout is enforced
 - Turn timeout is enforced
 - Partial JSON lines are buffered until newline
@@ -2392,7 +2352,7 @@ Unless otherwise noted, Sections 17.1 through 17.7 are `Core Conformance`. Bulle
   - unsupported tool names still fail without stalling the session
 - If the optional Claude Code executor profile is implemented:
   - launch arguments include stream JSON input/output, selected model, permission mode, workspace
-    cwd, strict MCP config when enabled, and resume arguments when available
+    cwd, and strict MCP config when enabled
   - the workspace-local MCP config exposes Symphony tools without writing the raw Linear secret to
     disk
   - one Claude process can receive multiple turns through structured user messages
@@ -2407,7 +2367,7 @@ Unless otherwise noted, Sections 17.1 through 17.7 are `Core Conformance`. Bulle
 - Logging sink failures do not crash orchestration
 - Token/rate-limit aggregation remains correct across repeated agent updates
 - Snapshot/API rows include backend-neutral fields such as `agent_kind`, `slot_index`,
-  `ensemble_size`, `worker_host`, `workspace_path`, `resume_id`, and `executor_pid`
+  `ensemble_size`, `worker_host`, `workspace_path`, and `executor_pid`
 - If a human-readable status surface is implemented, it is driven from orchestrator state and does
   not affect correctness
 - If humanized event summaries are implemented, they cover key wrapper/agent event classes without
@@ -2463,8 +2423,6 @@ Use the same validation profiles as Section 17:
 - Codex app-server subprocess client with JSON line protocol and launch command config
   (`codex.command`, default `codex app-server`)
 - Strict prompt rendering with `issue`, `attempt`, and `ensemble` variables
-- Resume-state persistence that records `agent_kind`, backend resume ID, issue/workspace identity,
-  and rejects stale or incomplete state
 - Exponential retry queue with continuation retries after normal exit
 - Configurable retry backoff cap (`agent.max_retry_backoff_ms`, default 5m)
 - Reconciliation that stops runs on terminal/non-active tracker states
@@ -2479,9 +2437,9 @@ Use the same validation profiles as Section 17:
 - Per-state `status_overrides` for `agent`, `codex`, and `claude` runtime settings, including
   state-name normalization and Codex policy map deep merge.
 - Optional Claude Code executor profile with stream-json subprocess IO, strict MCP config,
-  workspace-local MCP config, usage normalization, and resume support.
+  workspace-local MCP config, and usage normalization.
 - Optional SSH worker execution honors `worker.ssh_hosts`, `worker.ssh_timeout_ms`, host capacity,
-  and host/workspace identity in retries and resume matching.
+  and host/workspace identity in retries.
 - Optional HTTP server honors CLI `--port` over `server.port`, uses a safe default bind host, and
   exposes the baseline endpoints/error semantics in Section 13.7 if shipped.
 - Optional `linear_graphql` client-side tool extension exposes raw Linear GraphQL access through the

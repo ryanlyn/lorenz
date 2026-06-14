@@ -28,7 +28,6 @@ test("live Claude ACP bridge smoke", { timeout: 180_000, skip: !runLiveClaude },
   await session.stop();
 
   assert.ok(updates.some((update) => update.type === "turn_completed"));
-  assert.ok(session.resumeId);
 });
 
 test(

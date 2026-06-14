@@ -141,7 +141,7 @@ function renderRun(body: Record<string, unknown>): string {
     "",
     `issue=${stringField(run, "issue_identifier")} agent=${stringField(run, "agent_kind")} outcome=${stringField(run, "outcome")} attempt=${numberField(run, "retry_attempt")}`,
     `duration=${formatDuration(numberOrNull(run, "duration_ms"))} tokens=${formatInteger(tokenTotal(run))} turns=${numberField(run, "turn_count")}`,
-    `session=${stringField(run, "session_id") || "n/a"} resume=${stringField(run, "resume_id") || "n/a"} worker=${stringField(run, "worker_host") || "local"}`,
+    `session=${stringField(run, "session_id") || "n/a"} worker=${stringField(run, "worker_host") || "local"}`,
     `workspace=${stringField(run, "workspace_path") || "n/a"}`,
     `last_event=${stringField(run, "last_event") || "n/a"} at=${stringField(run, "last_event_at") || "n/a"}`,
     `failure_reason=${stringField(run, "failure_reason") || "n/a"}`,

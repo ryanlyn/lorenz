@@ -55,7 +55,6 @@ test("observability HTTP API exposes state, issue, runs, refresh, and errors", a
   orchestrator.applyUpdate(issue.id, 0, {
     type: "session_notification",
     sessionId: "thread-http",
-    resumeId: "thread-http",
     message: { sessionId: "thread-http", update: { sessionUpdate: "agent_message_chunk" } },
     usage: { inputTokens: 4, outputTokens: 8, totalTokens: 12 },
     timestamp: new Date("2026-05-05T00:00:01.000Z"),

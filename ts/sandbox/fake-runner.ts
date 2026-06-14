@@ -156,7 +156,6 @@ export function createFakeAgentRunner(
       const turnCompleted: AgentUpdate = {
         type: "turn_completed",
         sessionId: `fake-session-${issue.id}`,
-        resumeId: `fake-resume-${issue.id}`,
         usage: { ...behavior.usagePerTurn },
       };
       onUpdate?.(turnCompleted);
@@ -173,7 +172,6 @@ export function createFakeAgentRunner(
       workspace,
       turnCount: completedTurns,
       updates: allUpdates,
-      resumeId: `fake-resume-${issue.id}`,
       agentKind: "codex",
     };
   };

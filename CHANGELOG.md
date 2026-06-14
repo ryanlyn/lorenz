@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-06-14
+
+- Removed session resumption: deleted the `@symphony/resume-state` package and
+  its `.git/symphony/resume.json` persistence, the executor-aware resume
+  validation, the ACP `resumeSession`/`loadSession` paths with their replay
+  suppression, and the now-redundant `resume_id` field (always a duplicate of
+  `session_id`) across the runtime, presenter, dashboard, and run-history
+  surfaces. The live provider `session_id` is unchanged.
+
 ## 2026-06-09
 
 - Removed the Elixir reference implementation (`elixir/`), leaving the

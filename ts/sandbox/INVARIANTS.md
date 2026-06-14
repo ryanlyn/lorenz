@@ -136,11 +136,6 @@ System-level behavioral requirements expressed in EARS (Easy Approach to Require
 - When the backend profile changes between turns, the system SHALL end the session and yield to the orchestrator.
 - When the turn count reaches the maximum, the system SHALL end the session.
 
-## Resume State
-
-- When resume state is evaluated, reuse SHALL occur only when agent kind, issue identity, workspace, and host all match.
-- When a failure, stall, or force-terminate occurs, the system SHALL invalidate resume state before retry.
-
 ## Hooks
 
 - When a fresh workspace is created, the system SHALL run the after-create hook.

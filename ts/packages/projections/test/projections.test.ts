@@ -268,7 +268,6 @@ test("ProjectionActor handles null/missing fields defensively", () => {
         ensembleSize: 1,
         agentKind: "claude",
         sessionId: null,
-        resumeId: null,
         executorPid: null,
         workerHost: null,
         turnCount: 0,
@@ -304,7 +303,6 @@ test("ProjectionActor handles null/missing fields defensively", () => {
   assert.equal(snap.poll.nextPollAt, null);
   assert.equal(snap.poll.lastError, null);
   assert.equal(snap.running[0]!.sessionId, null);
-  assert.equal(snap.running[0]!.resumeId, null);
   assert.equal(snap.running[0]!.executorPid, null);
   assert.equal(snap.running[0]!.workerHost, null);
   assert.equal(snap.retrying[0]!.workerHost, null);

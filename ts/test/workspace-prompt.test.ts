@@ -7,21 +7,17 @@ import { AgentExecutorRegistry } from "@symphony/agent-sdk";
 import {
   buildPrompt,
   continuationPrompt,
-  createResumeStateStore,
   createWorkspaceForIssue,
   parseConfig as parseConfigWith,
-  readResumeState,
   removeIssueWorkspaces,
   removeRemoteWorkspace,
   removeWorkspace,
-  resumeStateMatches,
   runAgentAttempt,
   safeIdentifier,
   shellEscape,
   validateWorkspaceCwd,
 } from "@symphony/cli";
 import type { Settings } from "@symphony/cli";
-import type { ResumeState } from "@symphony/resume-state";
 import { assert, sampleIssue, tempDir, writeExecutable } from "@symphony/test-utils";
 
 // Private executor registry standing in for the CLI composition root: attempts resolve
@@ -42,36 +38,6 @@ const executorAdapters = {
     return executors.require(agent.executor).createExecutor(kind, settings);
   },
 };
-
-function resumeKey(workspace: string, workerHost?: string | null): string {
-  return `${workerHost ?? "local"}\0${workspace}`;
-}
-
-function createMemoryResumeStateAdapters(initial: ResumeState[] = []) {
-  const states = new Map<string, ResumeState>();
-  for (const state of initial) {
-    if (state.workspacePath) states.set(resumeKey(state.workspacePath, state.workerHost), state);
-  }
-
-  return {
-    adapters: {
-      readResumeState: async (workspace: string, workerHost?: string | null) => {
-        const state = states.get(resumeKey(workspace, workerHost));
-        return state ? ({ status: "ok", state } as const) : ({ status: "missing" } as const);
-      },
-      writeResumeState: async (
-        workspace: string,
-        state: ResumeState,
-        workerHost: string | null,
-      ) => {
-        states.set(resumeKey(workspace, workerHost), { ...state, workerHost });
-      },
-      resumeStateMatches,
-    },
-    read: (workspace: string, workerHost?: string | null) =>
-      states.get(resumeKey(workspace, workerHost)),
-  };
-}
 
 test("prompt rendering is strict and exposes ensemble context", async () => {
   const prompt = await buildPrompt(
@@ -471,100 +437,7 @@ new acp.AgentSideConnection((connection) => new FakeAgent(connection), stream);
   assert.ok(!entries.includes("MT-77"));
 });
 
-test("agent attempts persist the latest rotated Claude session id", async () => {
-  const root = await tempDir("symphony-ts-claude-rotated-session");
-  const fakeClaude = path.join(root, "fake-claude-acp.mjs");
-  const acpModule = new URL("../node_modules/@agentclientprotocol/sdk/dist/acp.js", import.meta.url)
-    .href;
-  await writeExecutable(
-    fakeClaude,
-    `#!/usr/bin/env node
-import { Readable, Writable } from "node:stream";
-import * as acp from ${JSON.stringify(acpModule)};
-
-class FakeAgent {
-  constructor(connection) {
-    this.connection = connection;
-    this.turn = 0;
-  }
-
-  async initialize() {
-    return {
-      protocolVersion: acp.PROTOCOL_VERSION,
-      agentCapabilities: { sessionCapabilities: { close: {} } }
-    };
-  }
-
-  async authenticate() {
-    return {};
-  }
-
-  async newSession() {
-    return { sessionId: "claude-session-0" };
-  }
-
-  async prompt(params) {
-    this.turn += 1;
-    const sessionId = "claude-session-" + this.turn;
-    await this.connection.sessionUpdate({
-      sessionId,
-      update: {
-        sessionUpdate: "agent_message_chunk",
-        content: { type: "text", text: "turn " + this.turn }
-      }
-    });
-    return {
-      stopReason: "end_turn",
-      usage: { inputTokens: this.turn, outputTokens: 1, totalTokens: this.turn + 1 }
-    };
-  }
-
-  async cancel() {}
-
-  async closeSession() {
-    return {};
-  }
-}
-
-const stream = acp.ndJsonStream(Writable.toWeb(process.stdout), Readable.toWeb(process.stdin));
-new acp.AgentSideConnection((connection) => new FakeAgent(connection), stream);
-`,
-  );
-  const settings = parseConfig({
-    server: { port: 0 },
-    workspace: { root: path.join(root, "workspaces") },
-    agent: { kind: "claude", max_turns: 2 },
-    agents: {
-      claude: {
-        executor: "acp",
-        bridge_command: `${process.execPath} ${fakeClaude}`,
-        turn_timeout_ms: 5_000,
-        stall_timeout_ms: 0,
-      },
-    },
-  });
-  const workflow = {
-    path: path.join(root, "WORKFLOW.md"),
-    config: {},
-    promptTemplate: "Issue {{ issue.identifier }}",
-    settings,
-  };
-  const resumeStore = createMemoryResumeStateAdapters();
-
-  const result = await runAgentAttempt({
-    issue: sampleIssue,
-    workflow,
-    fetchIssue: async () => sampleIssue,
-    adapters: { ...resumeStore.adapters, ...executorAdapters },
-  });
-
-  const resume = resumeStore.read(result.workspace);
-  assert.equal(result.turnCount, 2);
-  assert.equal(result.resumeId, "claude-session-2");
-  assert.equal(resume?.resumeId, "claude-session-2");
-});
-
-test("remote agent attempts run hooks and persist resume state over SSH", async () => {
+test("remote agent attempts run hooks over SSH", async () => {
   const root = await tempDir("symphony-ts-remote-agent-hooks");
   const trace = path.join(root, "ssh.trace");
   const remoteHome = path.join(root, "remote-home");
@@ -622,13 +495,11 @@ new acp.AgentSideConnection((connection) => new FakeAgent(connection), stream);
     promptTemplate: "Issue {{ issue.identifier }}",
     settings,
   };
-  const resumeStore = createMemoryResumeStateAdapters();
-
   const result = await runAgentAttempt({
     issue: sampleIssue,
     workflow,
     workerHost: "worker-01:2200",
-    adapters: { ...resumeStore.adapters, ...executorAdapters },
+    adapters: executorAdapters,
   });
 
   assert.equal(
@@ -642,21 +513,6 @@ new acp.AgentSideConnection((connection) => new FakeAgent(connection), stream);
     "after_run",
   ]);
 
-  const resume = resumeStore.read(result.workspace, "worker-01:2200");
-  assert.equal(resume?.workerHost, "worker-01:2200");
-  assert.equal(
-    Boolean(
-      resume &&
-      resumeStateMatches(resume, {
-        agentKind: "codex",
-        issue: sampleIssue,
-        workspacePath: result.workspace,
-        workerHost: "worker-01:2200",
-      }),
-    ),
-    true,
-  );
-
   const traceText = await fs.readFile(trace, "utf8");
   assert.match(traceText, /after_create/);
   assert.match(traceText, /before_run/);
@@ -665,95 +521,7 @@ new acp.AgentSideConnection((connection) => new FakeAgent(connection), stream);
   vi.unstubAllEnvs();
 });
 
-test("remote resume-state reads honor the configured SSH timeout", async () => {
-  const root = await tempDir("symphony-ts-remote-resume-timeout");
-  const bin = path.join(root, "bin");
-
-  await fs.mkdir(bin, { recursive: true });
-  await writeExecutable(
-    path.join(bin, "ssh"),
-    `#!/bin/sh
-sleep 1
-`,
-  );
-  vi.stubEnv("PATH", `${bin}:${process.env.PATH ?? ""}`);
-
-  const startedAt = Date.now();
-  const result = await readResumeState("/remote/workspace", "worker-01:2200", 20);
-
-  assert.equal(result.status, "unavailable");
-  assert.ok(Date.now() - startedAt < 500);
-
-  vi.unstubAllEnvs();
-});
-
-test("agent attempts warn and skip invalid resume state files", async () => {
-  const root = await tempDir("symphony-ts-invalid-resume-warning");
-  const workspaceRoot = path.join(root, "workspaces");
-  const fakeBridge = path.join(root, "fake-acp.mjs");
-  const acpModule = new URL("../node_modules/@agentclientprotocol/sdk/dist/acp.js", import.meta.url)
-    .href;
-  await writeExecutable(
-    fakeBridge,
-    `#!/usr/bin/env node
-import { Readable, Writable } from "node:stream";
-import * as acp from ${JSON.stringify(acpModule)};
-class FakeAgent {
-  constructor(connection) { this.connection = connection; }
-  async initialize() { return { protocolVersion: acp.PROTOCOL_VERSION, agentCapabilities: { sessionCapabilities: { close: {} } } }; }
-  async authenticate() { return {}; }
-  async newSession() { return { sessionId: "resume-session" }; }
-  async prompt() {
-    await this.connection.sessionUpdate({ sessionId: "resume-session", update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "done" } } });
-    return { stopReason: "end_turn", usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 } };
-  }
-  async cancel() {}
-  async closeSession() { return {}; }
-}
-const stream = acp.ndJsonStream(Writable.toWeb(process.stdout), Readable.toWeb(process.stdin));
-new acp.AgentSideConnection((connection) => new FakeAgent(connection), stream);
-`,
-  );
-  const settings = parseConfig({
-    server: { port: 0 },
-    workspace: { root: workspaceRoot },
-    agents: {
-      codex: {
-        bridge_command: `${process.execPath} ${fakeBridge}`,
-        turn_timeout_ms: 5_000,
-        stall_timeout_ms: 0,
-      },
-    },
-    agent: { max_turns: 1 },
-  });
-  const workflow = {
-    path: path.join(root, "WORKFLOW.md"),
-    config: {},
-    promptTemplate: "Issue {{ issue.identifier }}",
-    settings,
-  };
-  const updates: string[] = [];
-
-  const result = await runAgentAttempt({
-    issue: sampleIssue,
-    workflow,
-    onUpdate: (update) => updates.push(`${update.type}:${String(update.message ?? "")}`),
-    adapters: {
-      ...executorAdapters,
-      readResumeState: async () =>
-        ({ status: "error", reason: "resume_state_decode_failed" }) as const,
-      writeResumeState: async () => {},
-      resumeStateMatches,
-    },
-  });
-
-  assert.equal(result.turnCount, 1);
-  assert.ok(
-    updates.some((update) => update.includes("resume_state_warning:resume_state_decode_failed")),
-  );
-});
-
-test("agent attempts leave stall reconciliation to runtime and preserve resume state on turn failure", async () => {
+test("agent attempts leave stall reconciliation to runtime", async () => {
   const root = await tempDir("symphony-ts-stall-retry");
   const workspaceRoot = path.join(root, "workspaces");
   const fakeBridge = path.join(root, "fake-stall-acp.mjs");
@@ -796,101 +564,15 @@ new acp.AgentSideConnection((connection) => new FakeAgent(connection), stream);
     promptTemplate: "Issue {{ issue.identifier }}",
     settings,
   };
-  const workspace = await createWorkspaceForIssue(settings, sampleIssue);
-  const resumeStore = createMemoryResumeStateAdapters([
-    {
-      agentKind: "codex",
-      resumeId: "thread-stale",
-      issueId: sampleIssue.id,
-      issueIdentifier: sampleIssue.identifier,
-      issueState: sampleIssue.state,
-      workspacePath: workspace,
-    },
-  ]);
-
   await assert.rejects(
     () =>
       runAgentAttempt({
         issue: sampleIssue,
         workflow,
-        adapters: { ...resumeStore.adapters, ...executorAdapters },
+        adapters: executorAdapters,
       }),
     /timed out/,
   );
-  assert.equal(resumeStore.read(workspace)?.resumeId, "thread-stale");
-});
-
-test("resume state reads generic agent/session_id shape and matches issue/workspace identity", async () => {
-  const workspace = await tempDir("symphony-ts-resume");
-  const gitDir = path.join(workspace, ".git");
-  await fs.mkdir(gitDir, { recursive: true });
-  const store = createResumeStateStore({ resolveGitDir: async () => gitDir });
-
-  await store.write(workspace, {
-    agentKind: "codex",
-    resumeId: "thread-1",
-    issueId: sampleIssue.id,
-    issueIdentifier: sampleIssue.identifier,
-    issueState: sampleIssue.state,
-    workspacePath: workspace,
-  });
-
-  const result = await store.read(workspace);
-  assert.equal(result.status, "ok");
-  assert.equal(result.status === "ok" && result.state.agentKind, "codex");
-  const resumePath = path.join(workspace, ".git", "symphony", "resume.json");
-  const encoded = JSON.parse(await fs.readFile(resumePath, "utf8"));
-  assert.equal(encoded.agent, "codex");
-  assert.equal(encoded.session_id, "thread-1");
-  assert.equal(
-    result.status === "ok" &&
-      resumeStateMatches(result.state, {
-        agentKind: "codex",
-        issue: sampleIssue,
-        workspacePath: workspace,
-      }),
-    true,
-  );
-  assert.equal(
-    result.status === "ok" &&
-      resumeStateMatches(
-        {
-          agentKind: "codex",
-          resumeId: "legacy-thread",
-          workspacePath: workspace,
-        },
-        {
-          agentKind: "codex",
-          issue: sampleIssue,
-          workspacePath: workspace,
-        },
-      ),
-    false,
-  );
-
-  await assert.rejects(
-    () => store.write(workspace, { agentKind: "" as "codex", resumeId: "bad" }),
-    /invalid_resume_state/,
-  );
-
-  await fs.writeFile(
-    resumePath,
-    `${JSON.stringify({
-      agent: "pi",
-      session_id: "pi-session",
-      issue_id: sampleIssue.id,
-      issue_identifier: sampleIssue.identifier,
-      issue_state: sampleIssue.state,
-      workspace_path: workspace,
-    })}\n`,
-  );
-  const generic = await store.read(workspace);
-  assert.equal(generic.status, "ok");
-  assert.equal(generic.status === "ok" && generic.state.agentKind, "pi");
-  assert.equal(generic.status === "ok" && generic.state.resumeId, "pi-session");
-
-  await store.delete(workspace);
-  assert.equal((await store.read(workspace)).status, "missing");
 });
 
 async function fileExists(filePath: string): Promise<boolean> {

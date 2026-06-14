@@ -93,7 +93,6 @@ and would be extremely noisy if it were).
 
 | File | Line | Pattern |
 |------|------|---------|
-| `packages/resume-state/src/index.ts` | 46 | `(error as NodeJS.ErrnoException).code` |
 | `packages/log-file/src/index.ts` | 205 | `(error as NodeJS.ErrnoException).code` |
 | `packages/ssh/src/index.ts` | 76 | `(error as NodeJS.ErrnoException).code` |
 | `packages/workspace/src/index.ts` | 205, 226 | `(error as NodeJS.ErrnoException).code` |

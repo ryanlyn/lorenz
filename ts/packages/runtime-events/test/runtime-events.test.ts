@@ -46,8 +46,6 @@ test("RUNTIME_EVENT_TYPES is a strict superset of AGENT_UPDATE_TYPES with no dup
     "run_stalled",
     "startup_workspace_cleanup",
     "startup_workspace_cleanup_failed",
-    "resume_state_invalidated",
-    "resume_state_invalidation_failed",
     "retry_timer_due",
     "retry_timer_error",
     "refresh_error",
@@ -155,7 +153,7 @@ test("RuntimeRunHistoryEntry serialization preserves undefined fields as absent 
 
 test("RuntimeRunHistoryEntry serialization preserves null fields as null in JSON", () => {
   // null (as opposed to undefined) is preserved in JSON - this matters for fields
-  // like sessionId/resumeId which can be explicitly null vs absent
+  // like sessionId which can be explicitly null vs absent
   const entry: RuntimeRunHistoryEntry = {
     id: "run-002",
     issueId: "issue-2",
@@ -167,7 +165,6 @@ test("RuntimeRunHistoryEntry serialization preserves null fields as null in JSON
     startedAt: "2026-05-26T00:00:00.000Z",
     endedAt: "2026-05-26T00:01:00.000Z",
     sessionId: null,
-    resumeId: null,
     lastEvent: null,
     lastEventAt: null,
     retryAttempt: null,
@@ -178,7 +175,6 @@ test("RuntimeRunHistoryEntry serialization preserves null fields as null in JSON
 
   // null fields are preserved in JSON (unlike undefined)
   assert.equal(parsed.sessionId, null);
-  assert.equal(parsed.resumeId, null);
   assert.equal(parsed.lastEvent, null);
   assert.equal(parsed.lastEventAt, null);
   assert.equal(parsed.retryAttempt, null);

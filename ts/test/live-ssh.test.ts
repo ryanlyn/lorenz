@@ -6,7 +6,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 
 import { test, vi } from "vitest";
-import { parseConfig, readResumeState, runAgentAttempt, runSsh, shellEscape } from "@symphony/cli";
+import { parseConfig, runAgentAttempt, runSsh, shellEscape } from "@symphony/cli";
 import type { Issue, WorkflowDefinition } from "@symphony/cli";
 import { acpExecutorProvider } from "@symphony/acp";
 import { defaultAgentExecutorRegistry } from "@symphony/agent-sdk";
@@ -24,7 +24,7 @@ const requireRemoteClaude = process.env.SYMPHONY_TS_REQUIRE_REMOTE_CLAUDE === "1
 const remoteClaudeBridge = process.env.SYMPHONY_TS_CLAUDE_ACP_BRIDGE_COMMAND;
 
 test(
-  "live SSH worker runs remote Codex and remote MCP resume",
+  "live SSH worker runs remote Codex and remote Claude canaries",
   { timeout: 900_000, skip: !runLiveSsh },
   async (t) => {
     const setup = await setupLiveWorkers();
@@ -47,7 +47,7 @@ test(
         console.warn("remote Claude canary skipped because no Claude ACP bridge was supplied");
         return;
       }
-      await runRemoteClaudeResumeCanary(setup);
+      await runRemoteClaudeCanary(setup);
     } finally {
       await setup.cleanup();
     }
@@ -330,7 +330,7 @@ async function runRemoteCodexCanary(setup: LiveWorkerSetup): Promise<void> {
   assert.equal(fileResult.stdout, `${marker}\n`);
 }
 
-async function runRemoteClaudeResumeCanary(setup: LiveWorkerSetup): Promise<void> {
+async function runRemoteClaudeCanary(setup: LiveWorkerSetup): Promise<void> {
   const host = setup.hosts[0];
   assert.ok(host);
   assert.ok(process.env.LINEAR_API_KEY, "LINEAR_API_KEY is required for remote MCP canary");
@@ -368,14 +368,11 @@ async function runRemoteClaudeResumeCanary(setup: LiveWorkerSetup): Promise<void
     workerHost: host,
   });
   assert.equal(first.turnCount, 1);
-  assert.ok(first.resumeId);
   const firstContents = await readRemoteFile(
     host,
     path.posix.join(first.workspace, "REMOTE_CLAUDE_ONE.txt"),
   );
   assert.equal(firstContents, "TS_REMOTE_CLAUDE_ONE\n");
-  const firstResume = await readResumeState(first.workspace, host);
-  assert.equal(firstResume.status, "ok");
 
   const second = await runAgentAttempt({
     issue,
@@ -383,7 +380,6 @@ async function runRemoteClaudeResumeCanary(setup: LiveWorkerSetup): Promise<void
     workerHost: host,
   });
   assert.equal(second.turnCount, 1);
-  assert.equal(second.resumeId, first.resumeId);
   const secondContents = await readRemoteFile(
     host,
     path.posix.join(second.workspace, "REMOTE_CLAUDE_TWO.txt"),
@@ -416,7 +412,7 @@ function firstClaudePrompt(): string {
 function secondClaudePrompt(): string {
   return [
     "Use the mcp__symphony_linear__linear_graphql tool once with this exact query:",
-    "query SymphonyTsRemoteClaudeResumeCanary { viewer { id } }",
+    "query SymphonyTsRemoteClaudeSecondCanary { viewer { id } }",
     "Then create a file named REMOTE_CLAUDE_TWO.txt whose only contents are TS_REMOTE_CLAUDE_TWO followed by a newline.",
     "Do not create any other files.",
   ].join("\n");

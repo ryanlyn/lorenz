@@ -144,7 +144,6 @@ function opsStateFixture(): OpsState {
         worker_host: "local",
         workspace_path: null,
         session_id: "thread-1",
-        resume_id: null,
         turn_count: 3,
         agent_kind: "codex",
         executor_pid: null,
