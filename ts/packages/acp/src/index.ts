@@ -55,6 +55,7 @@ import {
 export {
   acpAgentOptions,
   AGENT_USAGE_ACCOUNTING_VALUES,
+  isClaudeCompatibleBridgeCommand,
   type AcpAgentOptions,
   type AgentUsageAccounting,
 } from "./options.js";

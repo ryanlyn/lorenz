@@ -33,6 +33,13 @@ import {
   type RunsCommanderOptions,
 } from "./runs.js";
 import {
+  createDoctorCommand,
+  doctorOptionsFromCommanderOptions,
+  renderDoctorReport,
+  runDoctorCommand,
+  type DoctorCommanderOptions,
+} from "./doctor.js";
+import {
   createTrackerClient,
   runAgentAttempt,
   registerBuiltinBackends,
@@ -92,6 +99,16 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
     );
   });
   command.addCommand(runsCommand);
+
+  const doctorCommand = createDoctorCommand("doctor");
+  doctorCommand.action(async (workflowPath: string | undefined, parsed: DoctorCommanderOptions) => {
+    const rootOptions = command.opts<CliCommanderOptions>();
+    const doctorOptions = doctorOptionsFromCommanderOptions(parsed, workflowPath, rootOptions);
+    const report = await runDoctorCommand(doctorOptions);
+    process.stdout.write(renderDoctorReport(report));
+    status = report.status === "error" ? 1 : 0;
+  });
+  command.addCommand(doctorCommand);
 
   try {
     await command.parseAsync(args, { from: "user" });
