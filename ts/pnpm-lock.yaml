@@ -376,6 +376,9 @@ importers:
       "@symphony/memory-tracker":
         specifier: workspace:*
         version: link:../../extensions/memory-tracker
+      "@symphony/modal-worker":
+        specifier: workspace:*
+        version: link:../../extensions/modal-worker
       "@symphony/orchestrator":
         specifier: workspace:*
         version: link:../../packages/orchestrator
@@ -602,6 +605,16 @@ importers:
       "@symphony/tracker-sdk":
         specifier: workspace:*
         version: link:../../packages/tracker-sdk
+
+  extensions/modal-worker:
+    dependencies:
+      "@symphony/worker-sdk":
+        specifier: workspace:*
+        version: link:../../packages/worker-sdk
+    devDependencies:
+      "@symphony/test-utils":
+        specifier: workspace:*
+        version: link:../../packages/test-utils
 
   extensions/slack-tracker:
     dependencies:

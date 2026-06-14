@@ -39,6 +39,7 @@
     "@symphony/log-file": "workspace:*",
     "@symphony/mcp": "workspace:*",
     "@symphony/memory-tracker": "workspace:*",
+    "@symphony/modal-worker": "workspace:*",
     "@symphony/orchestrator": "workspace:*",
     "@symphony/policies": "workspace:*",
     "@symphony/presenter": "workspace:*",

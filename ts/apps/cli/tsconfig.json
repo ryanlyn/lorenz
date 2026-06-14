@@ -71,6 +71,9 @@
       "path": "../../extensions/memory-tracker"
     },
     {
+      "path": "../../extensions/modal-worker"
+    },
+    {
       "path": "../../packages/orchestrator"
     },
     {

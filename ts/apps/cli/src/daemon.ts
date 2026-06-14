@@ -18,6 +18,7 @@ import type { DefaultSettingsOptions } from "@symphony/config";
 import { registerDockerWorkerDriver } from "@symphony/docker-worker";
 import { registerE2bWorkerDriver } from "@symphony/e2b-worker";
 import { registerFlyWorkerDriver } from "@symphony/fly-worker";
+import { registerModalWorkerDriver } from "@symphony/modal-worker";
 import { systemClock, type RuntimeTrackerClient, type Settings } from "@symphony/domain";
 import { registerJiraTrackers } from "@symphony/jira-tracker";
 import { registerLinearTracker } from "@symphony/linear-tracker";
@@ -91,6 +92,8 @@ export function registerBuiltinBackends(registries: BackendRegistries = {}): voi
   // client, so enabling the kind points the operator at the configured
   // registration (registerE2bWorkerDriver(registries, { client })).
   registerE2bWorkerDriver({ workerDrivers });
+  // modal likewise registers a fail-loud factory without an injected transport.
+  registerModalWorkerDriver({ workerDrivers });
 }
 
 export function runtimeDefaultSettingsOptions(): DefaultSettingsOptions {
