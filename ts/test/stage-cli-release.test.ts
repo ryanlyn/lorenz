@@ -42,7 +42,47 @@ test("stages a source-free CLI release tree with rewritten package manifests", a
   const rootPackage = await readJson(path.join(releaseDir, "package.json"));
   assert.equal(rootPackage.private, true);
   assert.deepEqual(rootPackage.bin, { "symphony-ts": "./bin/symphony-ts" });
-  assert.deepEqual(rootPackage.dependencies, { "@symphony/cli": "file:apps/cli" });
+  // The root must declare every workspace package (file:) and every external dependency so that
+  // npm installs the full graph even when the release is installed as a dependency (npx). npm does
+  // not install the registry deps of a file: directory dependency on its own.
+  assert.deepEqual(rootPackage.dependencies, {
+    "@agentclientprotocol/claude-agent-acp": "file:vendor/claude-agent-acp",
+    "@agentclientprotocol/codex-acp": "file:vendor/codex-acp",
+    "@anthropic-ai/claude-agent-sdk": "file:runtime-deps/anthropic-claude-agent-sdk",
+    "@openai/codex": "file:runtime-deps/openai-codex",
+    "@symphony/acp": "file:packages/acp",
+    "@symphony/cli": "file:apps/cli",
+    "@symphony/server": "file:packages/server",
+    "better-sqlite3": "^12.10.0",
+    commander: "^14.0.3",
+    execa: "^9.6.1",
+    hono: "^4.12.18",
+  });
+
+  // Binary-backed SDKs are vendored with their platform binaries stripped, and the bridges point at
+  // the vendored copies so installs never fetch the (hundreds of MB) agent binaries.
+  const vendoredSdk = await readJson(
+    path.join(releaseDir, "runtime-deps/anthropic-claude-agent-sdk/package.json"),
+  );
+  assert.equal("optionalDependencies" in vendoredSdk, false);
+  assert.equal(vendoredSdk.private, true);
+  assert.equal(
+    await exists(path.join(releaseDir, "runtime-deps/anthropic-claude-agent-sdk/sdk.mjs")),
+    true,
+  );
+  const claudeBridge = await readJson(path.join(releaseDir, "vendor/claude-agent-acp/package.json"));
+  assert.deepEqual(claudeBridge.dependencies, {
+    "@anthropic-ai/claude-agent-sdk": "file:../../runtime-deps/anthropic-claude-agent-sdk",
+  });
+
+  // The launcher must resolve @symphony/cli via module resolution, not a fixed node_modules path,
+  // so it survives dependency hoisting, and must resolve the host claude/codex binaries.
+  const entrypointSource = await fs.readFile(path.join(releaseDir, "bin/symphony-ts"), "utf8");
+  assert.match(entrypointSource, /import\.meta\.resolve\("@symphony\/cli"\)/);
+  assert.equal(entrypointSource.includes("../node_modules/"), false);
+  assert.match(entrypointSource, /CLAUDE_CODE_EXECUTABLE/);
+  assert.match(entrypointSource, /CODEX_PATH/);
+  assert.match(entrypointSource, /command -v/);
 
   const cliPackage = await readJson(path.join(releaseDir, "apps/cli/package.json"));
   assert.deepEqual(cliPackage.dependencies, {
@@ -71,6 +111,20 @@ test("stages a source-free CLI release tree with rewritten package manifests", a
   );
   assert.deepEqual(manifest.nativeDependencies, ["better-sqlite3"]);
   assert.equal(manifest.installCommand, "npm install --omit=dev");
+  assert.deepEqual(
+    (manifest.vendoredRuntimeDependencies as Array<{ name: string }>).map((entry) => entry.name),
+    ["@anthropic-ai/claude-agent-sdk", "@openai/codex"],
+  );
+  assert.deepEqual(manifest.hostBinaries, [
+    { env: "CLAUDE_CODE_EXECUTABLE", command: "claude" },
+    { env: "CODEX_PATH", command: "codex" },
+  ]);
+  // Vendored SDKs are shipped as file: packages, not registry installs, so they are not externals.
+  assert.equal(
+    (manifest.externalDependencies as string[]).includes("@anthropic-ai/claude-agent-sdk"),
+    false,
+  );
+  assert.equal((manifest.externalDependencies as string[]).includes("@openai/codex"), false);
 
   const entrypoint = path.join(releaseDir, "bin/symphony-ts");
   const entrypointMode = (await fs.stat(entrypoint)).mode;
@@ -161,9 +215,32 @@ catalog:
     type: "module",
     bin: { "claude-agent-acp": "dist/bundle.js" },
     main: "dist/lib.js",
-    dependencies: {},
+    dependencies: {
+      "@anthropic-ai/claude-agent-sdk": "0.3.160",
+    },
   });
   await writeFile(workspaceRoot, "vendor/claude-agent-acp/dist/bundle.js", "export {};\n");
+  // The vendored SDK ships dependency-free JS plus platform-specific binaries as optionalDeps.
+  await writeFile(
+    workspaceRoot,
+    "vendor/claude-agent-acp/node_modules/@anthropic-ai/claude-agent-sdk/package.json",
+    {
+      name: "@anthropic-ai/claude-agent-sdk",
+      version: "0.3.160",
+      type: "module",
+      main: "sdk.mjs",
+      dependencies: {},
+      optionalDependencies: {
+        "@anthropic-ai/claude-agent-sdk-darwin-arm64": "0.3.160",
+        "@anthropic-ai/claude-agent-sdk-linux-x64": "0.3.160",
+      },
+    },
+  );
+  await writeFile(
+    workspaceRoot,
+    "vendor/claude-agent-acp/node_modules/@anthropic-ai/claude-agent-sdk/sdk.mjs",
+    "export {};\n",
+  );
 
   await seedPackage(workspaceRoot, "vendor/codex-acp", {
     name: "@agentclientprotocol/codex-acp",
@@ -171,8 +248,29 @@ catalog:
     type: "module",
     bin: { "codex-acp": "dist/index.js" },
     main: "dist/index.js",
-    dependencies: {},
+    dependencies: {
+      "@openai/codex": "^0.128.0",
+    },
   });
+  await writeFile(
+    workspaceRoot,
+    "vendor/codex-acp/node_modules/@openai/codex/package.json",
+    {
+      name: "@openai/codex",
+      version: "0.128.0",
+      type: "module",
+      bin: { codex: "bin/codex.js" },
+      dependencies: {},
+      optionalDependencies: {
+        "@openai/codex-darwin-arm64": "npm:@openai/[email protected]",
+      },
+    },
+  );
+  await writeFile(
+    workspaceRoot,
+    "vendor/codex-acp/node_modules/@openai/codex/bin/codex.js",
+    "#!/usr/bin/env node\n",
+  );
 
   await writeFile(workspaceRoot, "apps/symphony-dashboard/dist/index.html", "<div></div>\n");
   await writeFile(workspaceRoot, "README.md", "# Test\n");

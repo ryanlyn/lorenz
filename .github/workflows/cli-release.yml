@@ -1,0 +1,76 @@
+name: cli-release
+
+# Builds the self-contained CLI release tree, packs it into an npm tarball, and attaches it to a
+# GitHub release so it can be run with `npx <release-asset-url>`. Tag-driven; a manual run produces
+# a prerelease from the current branch.
+on:
+  push:
+    tags:
+      - "cli-v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  npx-tarball:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ts
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Set up mise tools
+        uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v3
+        with:
+          install: true
+          cache: true
+          working_directory: ts
+
+      - name: Setup pnpm store cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ~/.local/share/pnpm/store
+          key: ${{ runner.os }}-pnpm-store-${{ hashFiles('ts/pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pnpm-store-
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        run: pnpm build
+
+      - name: Stage CLI release
+        run: pnpm release:stage -- --force
+
+      - name: Pack npx tarball
+        id: pack
+        run: |
+          staged="$(find dist/cli-release -mindepth 1 -maxdepth 1 -type d | head -1)"
+          version="$(node -p "require('./${staged}/RELEASE-MANIFEST.json').version")"
+          tarball="$(npm pack "./${staged}" --pack-destination dist/cli-release | tail -1)"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "tarball=dist/cli-release/${tarball}" >> "$GITHUB_OUTPUT"
+
+      - name: Publish release asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          asset="${{ steps.pack.outputs.tarball }}"
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            tag="${GITHUB_REF_NAME}"
+            prerelease=""
+          else
+            tag="cli-v${{ steps.pack.outputs.version }}-${GITHUB_SHA::7}"
+            prerelease="--prerelease"
+          fi
+          notes="Install with: npx https://github.com/${GITHUB_REPOSITORY}/releases/download/${tag}/$(basename "$asset")"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" "$asset" --clobber
+          else
+            gh release create "$tag" "$asset" --title "symphony-ts ${tag}" --notes "$notes" $prerelease
+          fi

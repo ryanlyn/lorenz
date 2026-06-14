@@ -19,6 +19,7 @@ type PackageJson = {
   exports?: unknown;
   bin?: string | Record<string, string>;
   dependencies?: Record<string, string>;
+  optionalDependencies?: Record<string, string>;
 };
 
 type WorkspacePackage = {
@@ -35,6 +36,8 @@ export type CliReleaseManifest = {
   dashboardDist: string;
   installCommand: string;
   packages: Array<{ name: string; path: string }>;
+  vendoredRuntimeDependencies: Array<{ name: string; path: string }>;
+  hostBinaries: Array<{ env: string; command: string }>;
   externalDependencies: string[];
   nativeDependencies: string[];
 };
@@ -61,6 +64,42 @@ const packageSearchRoots = ["apps", "packages", "extensions", "vendor"];
 const releaseEntrypoint = "bin/symphony-ts";
 const dashboardDist = "apps/symphony-dashboard/dist";
 const nativeDependencyNames = new Set(["better-sqlite3"]);
+
+type VendoredRuntimeDependency = {
+  packageName: string;
+  dependentPackage: string;
+  targetDir: string;
+};
+
+// Some external dependencies are dependency-free JS whose only heavy payload is platform-specific
+// prebuilt agent binaries shipped as optionalDependencies (hundreds of MB each). We vendor that JS
+// into the release with the optional binaries stripped, then point the CLI at the host's own
+// claude/codex (see hostBinaries below). This keeps the install small and deterministic across npx,
+// mise, and manual installs without depending on install flags or npm overrides (which npm only
+// honours for the root project, not for a package installed as a dependency).
+const vendoredRuntimeDependencies: VendoredRuntimeDependency[] = [
+  {
+    packageName: "@anthropic-ai/claude-agent-sdk",
+    dependentPackage: "@agentclientprotocol/claude-agent-acp",
+    targetDir: "runtime-deps/anthropic-claude-agent-sdk",
+  },
+  {
+    packageName: "@openai/codex",
+    dependentPackage: "@agentclientprotocol/codex-acp",
+    targetDir: "runtime-deps/openai-codex",
+  },
+];
+
+const vendoredRuntimeDependencyTargets = new Map(
+  vendoredRuntimeDependencies.map((dependency) => [dependency.packageName, dependency.targetDir]),
+);
+
+// Executables the launcher resolves from the host (instead of bundling them) and exposes to the
+// agent bridges through these environment variables.
+const hostBinaries: Array<{ env: string; command: string }> = [
+  { env: "CLAUDE_CODE_EXECUTABLE", command: "claude" },
+  { env: "CODEX_PATH", command: "codex" },
+];
 
 export async function stageCliRelease(
   options: StageCliReleaseOptions = {},
@@ -91,15 +130,19 @@ export async function stageCliRelease(
     await stageWorkspacePackage(releaseDir, workspacePackage, packages, catalog);
   }
 
+  await stageVendoredRuntimeDependencies(releaseDir, allPackages);
+
   await copyDirectory(
     path.join(workspaceRoot, dashboardDist),
     path.join(releaseDir, dashboardDist),
   );
-  await writeRootPackageJson(releaseDir, version);
+
+  const externalDependencies = collectExternalDependencies(releasePackages, catalog);
+  await writeRootPackageJson(releaseDir, version, releasePackages, externalDependencies);
   await writeEntrypoint(releaseDir);
   await copyReleaseMetadata(workspaceRoot, releaseDir);
 
-  const manifest = releaseManifest(version, releasePackages, catalog);
+  const manifest = releaseManifest(version, releasePackages, externalDependencies);
   await writeJson(path.join(releaseDir, "RELEASE-MANIFEST.json"), manifest);
 
   const archivePath = options.archive
@@ -265,6 +308,50 @@ async function stageWorkspacePackage(
   );
 }
 
+async function stageVendoredRuntimeDependencies(
+  releaseDir: string,
+  allPackages: Map<string, WorkspacePackage>,
+): Promise<void> {
+  for (const dependency of vendoredRuntimeDependencies) {
+    const dependent = allPackages.get(dependency.dependentPackage);
+    if (!dependent) {
+      throw new Error(
+        `Cannot vendor ${dependency.packageName}: ${dependency.dependentPackage} was not found in the workspace.`,
+      );
+    }
+
+    const installedDir = path.join(
+      dependent.absoluteDir,
+      "node_modules",
+      ...dependency.packageName.split("/"),
+    );
+    const sourceDir = await fs.realpath(installedDir).catch((error) => {
+      if (isNodeError(error) && error.code === "ENOENT") {
+        throw new Error(
+          `Cannot vendor ${dependency.packageName}: not installed under ${dependency.dependentPackage}. Run pnpm install from ts/.`,
+        );
+      }
+      throw error;
+    });
+
+    const targetDir = path.join(releaseDir, ...dependency.targetDir.split("/"));
+    await fs.mkdir(path.dirname(targetDir), { recursive: true });
+    await fs.cp(sourceDir, targetDir, {
+      recursive: true,
+      dereference: true,
+      filter: (entry) => !entry.endsWith(".tsbuildinfo"),
+    });
+
+    // Drop the platform-specific binary packages so installs never fetch them; the CLI resolves
+    // the host claude/codex instead.
+    const targetPackageJsonPath = path.join(targetDir, "package.json");
+    const packageJson = await readJson<PackageJson>(targetPackageJsonPath);
+    delete packageJson.optionalDependencies;
+    packageJson.private = true;
+    await writeJson(targetPackageJsonPath, packageJson);
+  }
+}
+
 function releasePackageJson(
   workspacePackage: WorkspacePackage,
   selectedPackages: Map<string, WorkspacePackage>,
@@ -316,6 +403,12 @@ function rewriteDependencies(
       continue;
     }
 
+    const vendoredTarget = vendoredRuntimeDependencyTargets.get(dependencyName);
+    if (vendoredTarget) {
+      rewritten[dependencyName] = fileSpecifierBetween(owner.relativeDir, vendoredTarget);
+      continue;
+    }
+
     rewritten[dependencyName] = resolveCatalogSpecifier(dependencyName, specifier, catalog);
   }
 
@@ -349,7 +442,30 @@ function fileSpecifierBetween(fromRelativeDir: string, toRelativeDir: string): s
   return `file:${relative.startsWith(".") ? relative : `./${relative}`}`;
 }
 
-async function writeRootPackageJson(releaseDir: string, version: string): Promise<void> {
+async function writeRootPackageJson(
+  releaseDir: string,
+  version: string,
+  packages: WorkspacePackage[],
+  externalDependencies: Record<string, string>,
+): Promise<void> {
+  // npm does not install the registry dependencies of a `file:` directory dependency, so a
+  // consumer that runs the release as a dependency (npx, npm install <tarball>) only gets symlinks
+  // to the workspace packages and none of their external deps. Declaring every workspace package
+  // and every external dependency at the root makes npm install the full graph in either layout:
+  // the staged directory used as the install root, or the package hoisted under node_modules.
+  const dependencies = Object.fromEntries(
+    [
+      ...packages.map(
+        (workspacePackage) =>
+          [workspacePackage.name, `file:${workspacePackage.relativeDir}`] as const,
+      ),
+      ...vendoredRuntimeDependencies.map(
+        (dependency) => [dependency.packageName, `file:${dependency.targetDir}`] as const,
+      ),
+      ...Object.entries(externalDependencies),
+    ].sort(([left], [right]) => left.localeCompare(right)),
+  );
+
   await writeJson(path.join(releaseDir, "package.json"), {
     name: "symphony-ts-release",
     version,
@@ -361,9 +477,7 @@ async function writeRootPackageJson(releaseDir: string, version: string): Promis
     scripts: {
       start: "node ./node_modules/@symphony/cli/dist/bin/cli.js",
     },
-    dependencies: {
-      "@symphony/cli": "file:apps/cli",
-    },
+    dependencies,
     engines: {
       node: ">=24",
     },
@@ -373,17 +487,44 @@ async function writeRootPackageJson(releaseDir: string, version: string): Promis
 async function writeEntrypoint(releaseDir: string): Promise<void> {
   const entrypointPath = path.join(releaseDir, releaseEntrypoint);
   await fs.mkdir(path.dirname(entrypointPath), { recursive: true });
+  const hostBinaryEntries = hostBinaries
+    .map(({ env, command }) => `  [${JSON.stringify(env)}, ${JSON.stringify(command)}],`)
+    .join("\n");
   await fs.writeFile(
     entrypointPath,
     `#!/usr/bin/env node
 
-const cliUrl = new URL("../node_modules/@symphony/cli/dist/bin/cli.js", import.meta.url);
+import { execFileSync } from "node:child_process";
 
+// The release does not bundle the claude/codex agent binaries; it resolves them from the host. A
+// login shell is used so the lookup matches the PATH the bridges see when Symphony spawns them via
+// \`bash -lc\`. Existing values win, so an explicit override is respected.
+function hostBinary(command) {
+  try {
+    return execFileSync("bash", ["-lc", \`command -v \${command}\`], { encoding: "utf8" }).trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+for (const [env, command] of [
+${hostBinaryEntries}
+]) {
+  if (!process.env[env]) {
+    const resolved = hostBinary(command);
+    if (resolved) process.env[env] = resolved;
+  }
+}
+
+// Resolve @symphony/cli through Node's module resolution rather than a fixed relative path so the
+// launcher works in both install layouts: the release directory used as the install root, and the
+// release hoisted under a parent node_modules (npx, npm install <tarball>, global install).
 try {
+  const cliUrl = new URL("./bin/cli.js", import.meta.resolve("@symphony/cli"));
   await import(cliUrl.href);
 } catch (error) {
   if (error && typeof error === "object" && "code" in error && error.code === "ERR_MODULE_NOT_FOUND") {
-    console.error("symphony-ts release dependencies are not installed. Run npm install --omit=dev in the release directory.");
+    console.error("symphony-ts could not resolve @symphony/cli. Install the release dependencies with npm install --omit=dev.");
     process.exitCode = 1;
   } else {
     throw error;
@@ -403,26 +544,46 @@ async function copyReleaseMetadata(workspaceRoot: string, releaseDir: string): P
   await copyOptionalFile(path.join(workspaceRoot, "..", "NOTICE"), path.join(releaseDir, "NOTICE"));
 }
 
-function releaseManifest(
-  version: string,
+function collectExternalDependencies(
   packages: WorkspacePackage[],
   catalog: Record<string, string>,
-): CliReleaseManifest {
-  const externalDependencies = new Set<string>();
+): Record<string, string> {
+  const resolved: Record<string, string> = {};
 
   for (const workspacePackage of packages) {
     for (const [dependencyName, specifier] of Object.entries(
       workspacePackage.packageJson.dependencies ?? {},
     )) {
       if (specifier.startsWith("workspace:")) continue;
-      externalDependencies.add(dependencyName);
-      resolveCatalogSpecifier(dependencyName, specifier, catalog);
+      // Vendored runtime deps ship inside the release as file: packages, not registry installs.
+      if (vendoredRuntimeDependencyTargets.has(dependencyName)) continue;
+
+      const version = resolveCatalogSpecifier(dependencyName, specifier, catalog);
+      const existing = resolved[dependencyName];
+      if (existing !== undefined && existing !== version) {
+        // The release hoists every external to a single root version. Workspace packages are
+        // visited in sorted relativeDir order, so the first occurrence (apps/ before vendor/) wins.
+        console.warn(
+          `Multiple versions requested for ${dependencyName}: keeping ${existing}, ignoring ${version} from ${workspacePackage.name}.`,
+        );
+        continue;
+      }
+      resolved[dependencyName] = version;
     }
   }
 
-  const nativeDependencies = [...externalDependencies]
-    .filter((dependencyName) => nativeDependencyNames.has(dependencyName))
-    .sort();
+  return resolved;
+}
+
+function releaseManifest(
+  version: string,
+  packages: WorkspacePackage[],
+  externalDependencies: Record<string, string>,
+): CliReleaseManifest {
+  const externalNames = Object.keys(externalDependencies).sort();
+  const nativeDependencies = externalNames.filter((dependencyName) =>
+    nativeDependencyNames.has(dependencyName),
+  );
 
   return {
     schemaVersion: 1,
@@ -434,7 +595,12 @@ function releaseManifest(
       name: workspacePackage.name,
       path: workspacePackage.relativeDir,
     })),
-    externalDependencies: [...externalDependencies].sort(),
+    vendoredRuntimeDependencies: vendoredRuntimeDependencies.map((dependency) => ({
+      name: dependency.packageName,
+      path: dependency.targetDir,
+    })),
+    hostBinaries: hostBinaries.map(({ env, command }) => ({ env, command })),
+    externalDependencies: externalNames,
     nativeDependencies,
   };
 }

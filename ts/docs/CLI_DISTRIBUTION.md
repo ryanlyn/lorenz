@@ -1,74 +1,117 @@
 # CLI Distribution
 
-## Recommended Lane
+Ship the CLI as a single self-contained artifact built from the monorepo. Two consumer lanes are
+supported from the same artifact:
 
-Ship the CLI as a GitHub release artifact built from the monorepo, not as public npm split
-packages.
+- **`npx <tarball-url>`** - the `npm pack` tarball attached to a GitHub release.
+- **`mise use npm:<name>`** - the same tarball published to an npm registry under one package name.
 
-The release input is a source-free tree staged by `pnpm release:stage`. It preserves the built
-workspace layout that runtime code already expects, including:
-
-- `apps/cli/dist` and the `symphony-ts` bin wrapper
-- transitive built `packages/*`, `extensions/*`, and vendored ACP bridge packages used by the CLI
-- `apps/symphony-dashboard/dist`, which the observability server resolves relative to built
-  package code
-- sanitized package manifests with `workspace:*` dependencies rewritten to local `file:` specs and
-  `catalog:` dependencies rewritten to concrete versions
-
-This keeps package names private and avoids publishing churn while the workspace boundaries and CLI
-name are still settling.
+Both install the artifact as a dependency (not as the root project), which drives most of the design
+below.
 
 ## Build And Stage
 
-Run from `ts/`:
+Run from `ts/` under the Node line in `mise.toml` (Node 24):
 
 ```sh
-mise run build
+mise run build           # or: pnpm build
 pnpm release:stage -- --force --tarball
 ```
 
-The default output is:
+Output:
 
 ```text
-dist/cli-release/symphony-ts-v<version>/
-dist/cli-release/symphony-ts-v<version>.tar.gz
+dist/cli-release/symphony-ts-v<version>/         # staged tree
+dist/cli-release/symphony-ts-v<version>.tar.gz   # with --tarball
 ```
 
-The staged tree intentionally excludes source, tests, `.tsbuildinfo`, logs, and dashboard source.
-It is not a registry package and should remain `private`.
+The staged tree excludes source, tests, `.tsbuildinfo`, and logs. `RELEASE-MANIFEST.json` records the
+package graph, vendored runtime deps, host binaries, and external/native deps.
 
-## Release Asset Shape
+## Artifact Shape
 
-The staging script proves the package graph and file selection. A one-command installer still needs
-the release job to choose one of these final artifact shapes:
+The release is a **flattened, self-contained tree**. The root `package.json` declares:
 
-- Platform-specific runtime tree: run `npm install --omit=dev` inside the staged directory, verify
-  `./bin/symphony-ts --help`, then archive that installed tree as a GitHub release asset. This is
-  the best fit for `mise use github:ryanlyn/symphony` or `ubi:ryanlyn/symphony` because those
-  backends download release assets and put executables on `PATH`.
-- Installable npm tarball: pack the staged tree and install it with npm or npx from a URL. This can
-  work without registry publishing, but it still uses npm install semantics, runs dependency
-  install scripts, and exposes the generated package metadata. Keep it secondary until verified in
-  CI.
+- every workspace package as a local `file:` dependency,
+- every external (registry) dependency at concrete versions (`catalog:` resolved),
+- the vendored runtime SDKs as `file:` dependencies (see Host Binaries).
 
-`better-sqlite3` is a native dependency through `@symphony/server`, so installed runtime archives
-are Node ABI and platform sensitive. Build and verify them under the same Node line declared in
-`ts/mise.toml`.
+This flattening is required, not cosmetic. **npm does not install the registry dependencies of a
+`file:` directory dependency when the package is installed as a dependency** (npx, `npm install
+<tarball>`, `mise use npm:`, global install). Declaring the whole graph at the root makes `npm
+install` resolve all 270-ish packages in either layout: the staged directory used as the install
+root, or the release hoisted under a parent `node_modules`.
 
-## Why Not Direct npm Yet
+The launcher `bin/symphony-ts` resolves `@symphony/cli` through `import.meta.resolve` rather than a
+fixed `../node_modules/...` path, so it works regardless of where npm places the package.
 
-`@symphony/cli` is private and its raw npm pack surface is a development package shape: it includes
-the wrapper, sources, tests, and TypeScript config rather than a runnable CLI artifact. Publishing it
-directly would also force public package naming decisions for internal workspace boundaries.
+## Host Binaries (claude / codex)
 
-`npx` over git is worth revisiting after the staged tree is proven installable from a tarball URL.
-For now, use it only as a compatibility experiment, not as the primary lane.
+The Claude Code and Codex agent binaries are **not bundled**. They ship from upstream as
+platform-specific `optionalDependencies` of `@anthropic-ai/claude-agent-sdk` and `@openai/codex`
+(~200 MB each). The staging script:
 
-## Open Decisions
+- **vendors** the dependency-free SDK JS into `runtime-deps/` with `optionalDependencies` stripped,
+  so no install method ever fetches the binaries, and
+- writes a launcher that resolves the host's own `claude` and `codex` and exposes them to the agent
+  bridges via `CLAUDE_CODE_EXECUTABLE` and `CODEX_PATH` (using a login shell, matching the PATH the
+  bridges see when Symphony spawns them with `bash -lc`). Existing values are respected.
 
-- Asset naming for GitHub release autodetection, including OS, architecture, and Node ABI labels.
-- Whether the release asset should require a system Node 24 or carry a runtime wrapper.
-- Whether the release job should extend `stage-cli-release.ts` with an `--install` mode or keep
-  dependency installation in CI shell steps.
-- Whether `pnpm deploy` can replace part of the staging script after it is validated against the
-  workspace catalog and vendored bridge requirements.
+Result: the installed tree drops from ~544 MB to ~118 MB. **The host must have `claude` and `codex`
+on its login-shell PATH** for agent dispatch to work.
+
+## Requirements On The Host
+
+- **Node >= 24 on PATH** - the launcher is `#!/usr/bin/env node`, and `better-sqlite3` is compiled
+  against the Node 24 ABI. Not bundled.
+- **`claude` and `codex` on PATH** - the release uses the host's agent binaries (see above).
+- **npm install scripts enabled** - `better-sqlite3` builds its native addon via `prebuild-install`
+  (a prebuilt binary for common platforms; otherwise a C toolchain is required). An install run with
+  `ignore-scripts=true` will leave the native addon unbuilt.
+
+`better-sqlite3` is the only natively compiled dependency, so installed trees are Node-ABI, OS, and
+arch sensitive.
+
+## Lane A: npx off a GitHub release
+
+```sh
+npm pack dist/cli-release/symphony-ts-v<version>   # -> symphony-ts-release-<version>.tgz
+# attach the .tgz as a GitHub release asset, then:
+npx https://github.com/<owner>/<repo>/releases/download/<tag>/symphony-ts-release-<version>.tgz
+```
+
+No registry, no `prepare` hook, no build on the consumer: the tarball is prebuilt and its
+dependencies are concrete registry versions plus bundled `file:` packages.
+
+## Lane B: mise use npm
+
+```sh
+mise use npm:<name>     # e.g. mise use npm:symphony-ts
+```
+
+`mise use npm:` installs the package from a registry into a managed prefix and puts the bin on PATH -
+mechanically a global install of the same artifact. Publishing exposes **one** public package name;
+the internal `@symphony/*` packages ship bundled inside the tarball and are never published
+separately. The root package is currently `private: true` and must be made publishable (or a private
+/ scoped registry used) for this lane.
+
+## Validation Status
+
+End-to-end on darwin-arm64, Node 24:
+
+- `npx <tarball-url>` installs and runs the CLI into real runtime logic.
+- `npm install <tarball>` as a dependency and `npm install -g <tarball>` (the `mise use npm:` shape)
+  both resolve the full graph, build `better-sqlite3`, and run.
+- The slim install excludes the agent binaries (118 MB) and the launcher resolves host `claude` /
+  `codex`.
+
+Live agent dispatch (claude/codex producing output) depends on host auth and was not exercised; the
+binary-resolution path is verified.
+
+## Open / Next
+
+- Publish: choose the public npm name (or a private/scoped registry) and flip the root package to
+  publishable for Lane B.
+- CI release job: `mise run build` -> `pnpm release:stage` -> `npm pack` -> upload asset (Lane A)
+  and/or `npm publish` (Lane B), under the `mise.toml` Node line.
+- The literal `mise use npm:<name>` round-trip is validated only once the package is published.
