@@ -1,0 +1,19 @@
+{
+  "name": "@symphony/dispatch-coordinator",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "dependencies": {
+    "@symphony/domain": "workspace:*",
+    "@symphony/mcp": "workspace:*",
+    "@symphony/worker-pool": "workspace:*"
+  },
+  "devDependencies": {
+    "@symphony/test-utils": "workspace:*"
+  }
+}

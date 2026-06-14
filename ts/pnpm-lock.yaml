@@ -681,6 +681,22 @@ importers:
         specifier: workspace:*
         version: link:../issue
 
+  packages/dispatch-coordinator:
+    dependencies:
+      "@symphony/domain":
+        specifier: workspace:*
+        version: link:../domain
+      "@symphony/mcp":
+        specifier: workspace:*
+        version: link:../mcp
+      "@symphony/worker-pool":
+        specifier: workspace:*
+        version: link:../worker-pool
+    devDependencies:
+      "@symphony/test-utils":
+        specifier: workspace:*
+        version: link:../test-utils
+
   packages/domain:
     dependencies:
       "@agentclientprotocol/sdk":

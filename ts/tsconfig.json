@@ -20,6 +20,9 @@
       "path": "./packages/dispatch"
     },
     {
+      "path": "./packages/dispatch-coordinator"
+    },
+    {
       "path": "./packages/domain"
     },
     {
