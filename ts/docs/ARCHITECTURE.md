@@ -77,9 +77,9 @@ selected bundle's `provider` then chooses the registered `TrackerProvider`:
 
 ```yaml
 tracker:
-  kind: dispatch
+  kind: linear
 trackers:
-  dispatch:
+  linear:
     provider: linear
     api_key: "$LINEAR_API_KEY"
     project_slug: ENG
@@ -90,9 +90,9 @@ multiple tracker bundles side by side:
 
 ```yaml
 tracker:
-  kind: dispatch
+  kind: linear
 trackers:
-  dispatch:
+  linear:
     provider: linear
     api_key: "$LINEAR_API_KEY"
     project_slug: ENG
@@ -146,9 +146,9 @@ pack like this:
 
 ```yaml
 tracker:
-  kind: board
+  kind: local
 trackers:
-  board:
+  local:
     provider: local
     path: .symphony/local
 tools:
@@ -160,9 +160,9 @@ Explicit cross-mounts are allowed when the workflow asks for them:
 
 ```yaml
 tracker:
-  kind: dispatch
+  kind: jira
 trackers:
-  dispatch:
+  jira:
     provider: jira
     base_url: https://example.atlassian.net
     email: bot@example.com
