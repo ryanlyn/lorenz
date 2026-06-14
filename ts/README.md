@@ -224,7 +224,7 @@ server:
   host: 127.0.0.1 # default: 127.0.0.1
 
 logging:
-  log_file: ./log/symphony.log # default: ./log/symphony.log
+  log_file: ./log/symphony.log # default: ~/.symphony/log/symphony.log
 ---
 ```
 

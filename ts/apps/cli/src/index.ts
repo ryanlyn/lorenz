@@ -1,4 +1,5 @@
 export { main, parseCliArgs, projectUrlForSettings } from "./main.js";
+export { parseDoctorArgs, renderDoctorReport, runDoctorCommand, runDoctorMain } from "./doctor.js";
 export { createTrackerClient, runAgentAttempt, runtimeAdapters } from "./daemon.js";
 export {
   defaultSettings,

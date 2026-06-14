@@ -90,6 +90,23 @@ test("partial codex agent override preserves bridgeCommand codex-acp", () => {
   assert.equal(codexAgent.options.providerConfig, undefined);
 });
 
+test("config honors logging.log_file with alias and home expansion", () => {
+  const direct = parseConfig({ logging: { log_file: "/var/log/sym/symphony.log" } });
+  assert.equal(direct.logging.logFile, "/var/log/sym/symphony.log");
+
+  const camel = parseConfig({ logging: { logFile: "/var/log/sym/camel.log" } });
+  assert.equal(camel.logging.logFile, "/var/log/sym/camel.log");
+
+  const expanded = parseConfig(
+    { logging: { log_file: "~/logs/symphony.log" } },
+    { HOME: "/home/agent" },
+  );
+  assert.equal(expanded.logging.logFile, "/home/agent/logs/symphony.log");
+
+  const fallback = parseConfig({});
+  assert.match(fallback.logging.logFile, /\.symphony\/log\/symphony\.log$/);
+});
+
 test("config resolves op:// references via 1Password CLI", async () => {
   const root = await tempDir("symphony-op-mock");
   const opScript = path.join(root, "op");
@@ -1038,10 +1055,8 @@ test("config reports useful errors for list fields and agent executors", () => {
   );
 });
 
-test("config ignores custom logging.log_file and uses default path", () => {
-  const settings = parseConfig({
-    logging: { log_file: "tmp/custom/symphony.log" },
-  });
+test("config falls back to the default log path when logging.log_file is unset", () => {
+  const settings = parseConfig({});
 
   assert.equal(settings.logging.logFile, path.join(os.homedir(), ".symphony/log/symphony.log"));
 });

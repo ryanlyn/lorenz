@@ -109,6 +109,11 @@ export function parseConfig(
   if (serverRaw.traceDir !== undefined) settings.server.traceDir = serverRaw.traceDir;
   if (serverRaw.staticDir !== undefined) settings.server.staticDir = serverRaw.staticDir;
 
+  const loggingRaw = parsed.logging ?? {};
+  if (loggingRaw.logFile !== undefined) {
+    settings.logging.logFile = expandLocalPath(loggingRaw.logFile, env);
+  }
+
   settings.statusOverrides = parseStatusOverrides(
     parsed.statusOverrides ?? {},
     settings.agents,
