@@ -156,11 +156,34 @@ workspace:
   root: ~/code/workspaces # default: $TMPDIR/symphony_workspaces
 
 worker:
+  # Either list static SSH hosts here, or set kind to select a top-level workers.<name> profile.
+  # kind: static-prod
   ssh_hosts:
     - worker1.example.com # standard OpenSSH targets and Host aliases work
     - worker2.example.com:2222
   ssh_timeout_ms: 60000 # default: 60000
   max_concurrent_agents_per_host: 2 # optional; defaults to the global agent cap per host
+  # Alternative to ssh_hosts (mutually exclusive): a warm pool of leased workers
+  # provisioned by a worker driver. Disabled by default.
+  worker_pool:
+    enabled: false
+    # driver: fake # compatibility fallback when worker.kind is omitted
+    min: 0 # warm-inventory floor the reaper keeps alive
+    max: 1 # ceiling on concurrent workers
+    warm: 1 # pre-warmed idle workers the reaper tops up toward
+    max_in_flight: 1 # run slots per machine; >1 requires co_residence: true
+    ttl_ms: 3600000 # hard worker lifetime before recycle
+    idle_reap_ms: 300000 # idle window before a warm worker above min is reaped
+    acquire_timeout_ms: 30000 # how long an acquire waits for capacity
+    spend: # optional caps, all in worker count / wall-clock worker-seconds
+      max_concurrent_workers: 4
+      max_worker_seconds: 86400
+      daily_worker_seconds: 28800
+
+workers:
+  static-prod: # selected by worker.kind, options pass through verbatim (snake_case preserved)
+    driver: static-ssh
+    ssh_hosts: ["user@worker1:22"]
 
 agent:
   kind: codex # default: "codex"; "claude" is configured below

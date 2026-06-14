@@ -14,14 +14,16 @@ never from above.
 ```
 apps/cli, apps/traceviz                       composition roots / binaries
 ─────────────────────────────────────────────────────────────────────────
-extensions/{linear,local,memory,jira,slack}-tracker extensions (tracker providers
-                                              and their tool packs)
+extensions/{linear,local,memory,jira,slack}-tracker  extensions (tracker providers,
+extensions/{docker,fly,e2b,modal}-worker             their tool packs, and worker
+packages/static-worker                               drivers)
 ─────────────────────────────────────────────────────────────────────────
-@symphony/config, workflow, runtime,          engine (provider-agnostic)
+@symphony/config, workflow, runtime,          engine (backend-agnostic)
 orchestrator, dispatch, agent-runner, acp,
-mcp, server, tui, presenter, projections, …
+mcp, worker-pool, server, tui, …
 ─────────────────────────────────────────────────────────────────────────
-@symphony/tracker-sdk, tool-sdk, agent-sdk    extension SDKs (contracts + registries)
+@symphony/tracker-sdk, tool-sdk, agent-sdk,   extension SDKs (contracts + registries)
+worker-sdk
 ─────────────────────────────────────────────────────────────────────────
 @symphony/domain, issue, policies, …          pure types, constants, leaf logic
 ```
@@ -42,6 +44,8 @@ mcp, server, tui, presenter, projections, …
   env fallbacks, defaults), the runtime client, its default tool packs and
   `TrackerToolOps`, operator URLs, and its own registration
   (`registerLinearTracker(...)` etc.) - there is no central bundle.
+  Static SSH workers live in `packages/static-worker` because that built-in uses the core SSH
+  path rather than an external provider boundary.
 - **engine** packages never import a provider or pack. They resolve `tracker.kind` through
   a `TrackerRegistry` and tool packs through a `ToolRegistry` (the process-wide defaults
   unless one is injected).
@@ -153,6 +157,72 @@ the executor package's typed accessor (the ACP keys - `bridge_command`, `usage_a
 read `options` keys directly. Records selecting an unregistered executor parse leniently
 (options pass through unvalidated) and are rejected at startup, exactly like unknown
 `tracker.kind` values.
+
+## The worker driver extension point
+
+The warm worker pool (`@symphony/worker-pool`, an engine package) leases
+SSH-addressable machines per run. The machines themselves come from a **worker driver**:
+the backend adapter that provisions, probes, destroys, and lists workers for one
+infrastructure (a cloud API, a container runtime, a fixed host list). "Driver" is
+deliberate - "provider" is reserved for tracker/executor providers and reads as a
+model/agent provider.
+
+`WorkerDriver` and `WorkerDriverFactory` (in `@symphony/worker-sdk`) are the contract:
+
+| Hook | Called by | Purpose |
+| --- | --- | --- |
+| `kind` | registry | `workers.<name>.driver` selector |
+| `create(options, deps)` | pool construction / driver swap | build the driver from selected `workers.<name>` options, validating options fail-loud |
+| `provision` | pool grow / warm top-up | create (or re-adopt, idempotent on `workerId`) one worker |
+| `probe` | pool readiness gate, reaper health pass | cheap reachability check |
+| `destroy` | reaper / recycle / drain | tear one worker down (idempotent, tolerant of already-gone) |
+| `list` | hydrate re-adoption, reaper reconcile | the backend's authoritative inventory |
+| `capabilities` | pool | `sshAddressable` / `ephemeral` / `usesLedger` gates |
+
+Drivers never see the pool's lifecycle state and never import engine packages: SSH
+access arrives through `DriverDeps.runSsh` (injected by the pool, which owns the real
+`@symphony/ssh` dependency), and options arrive verbatim from the selected
+top-level `workers.<name>` profile, excluding its `driver`. The pool owns leasing, reaping, spend caps, the
+write-ahead ledger, and crash recovery; every driver gets them for free.
+
+The `fake` driver ships inside `@symphony/worker-sdk` as the reference implementation and
+the test double the engine suites lease against. The conformance kit
+(`@symphony/worker-sdk/conformance`, `runDriverConformanceSuite`) pins the contract every
+driver must satisfy: provision idempotency, destroy tolerance, list-as-truth,
+pool-owned label round-trip, and probe gating.
+
+### Adding a worker driver
+
+1. Create `extensions/<name>-worker` depending on `@symphony/worker-sdk` (plus
+   `@symphony/domain` if it needs domain types).
+2. Implement `WorkerDriver` and export a `WorkerDriverFactory` whose `create` validates
+   the selected `workers.<name>` options and throws an actionable error when they are unusable.
+3. Export a `register<Name>WorkerDriver(registries?)` function that registers the factory
+   idempotently, and invoke it from `registerBuiltinBackends()` in `apps/cli`. A driver
+   needing an injected transport the binary does not ship (e.g. a cloud SDK client)
+   registers a fail-loud factory by default and accepts the transport as a second
+   argument for configured deployments.
+4. Run `runDriverConformanceSuite` from `@symphony/worker-sdk/conformance` in the
+   extension's test suite.
+5. Add the package to the workspace plumbing (`pnpm install`, `pnpm tsconfig:refs --write`).
+
+A driver can also ship **out of tree**, without forking the repo:
+`workers.<name>.driver` accepts a module specifier (an npm package name,
+`@scope/name`, a `./relative` or `/absolute` path, with an optional
+`#exportName` suffix) that the daemon dynamic-imports at startup - and on a
+reload that changes the specifier - and registers into the worker-driver registry.
+The module exports `defineWorkerDriver({ kind, sdkVersion, create })` from
+`@symphony/worker-sdk`; the loader shape-checks it and rejects an `sdkVersion`
+other than `WORKER_DRIVER_SDK_VERSION` before it can reach the pool. Trust: a
+dynamic import runs arbitrary code in the daemon process - the same trust
+boundary as workspace hooks, which already execute arbitrary shell from the
+workflow file. Loads happen only at startup and reload, never on the acquire
+path, and a `worker_pool_driver_loaded` audit event records exactly which module
+went live from where. Module code is pinned for the daemon lifetime (Node
+never unloads modules): changing driver code requires a daemon restart, while
+changing the config to a different specifier hot-loads the new module, and a
+reload that re-encounters a loaded specifier emits
+`worker_pool_driver_module_pinned`.
 
 ## Composition and the default registries
 
