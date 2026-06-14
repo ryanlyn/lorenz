@@ -297,6 +297,48 @@ test("remote workspace cwd validation reports symlink escapes through missing ta
   }
 });
 
+test("remote workspace creation forces the slot suffix for co-resident same-issue slots", async () => {
+  const root = await tempDir("symphony-ts-remote-coreside");
+  const trace = path.join(root, "ssh.trace");
+  const remoteHome = path.join(root, "remote-home");
+
+  const { canonicalRemoteHome, binDir } = await installEvalSsh(root, trace, remoteHome);
+  vi.stubEnv("PATH", `${binDir}:${process.env.PATH ?? ""}`);
+
+  try {
+    const settings = parseConfig({
+      workspace: { root: "~/workspaces" },
+      worker: { ssh_hosts: ["worker-01:2200"], ssh_timeout_ms: 5_000 },
+    });
+
+    // Both solo (ensembleSize default 1) but co-resident on one host: forceSlotSuffix
+    // must give distinct `<issue>/<slotIndex>` remote dirs, not the shared bare path.
+    const slot0 = await createWorkspaceForIssue(settings, "MT-REMOTE-CO", {
+      workerHost: "worker-01:2200",
+      slotIndex: 0,
+      forceSlotSuffix: true,
+    });
+    const slot1 = await createWorkspaceForIssue(settings, "MT-REMOTE-CO", {
+      workerHost: "worker-01:2200",
+      slotIndex: 1,
+      forceSlotSuffix: true,
+    });
+
+    const issueRoot = path.join(canonicalRemoteHome, "workspaces", "MT-REMOTE-CO");
+    assert.equal(slot0, path.join(issueRoot, "0"));
+    assert.equal(slot1, path.join(issueRoot, "1"));
+    assert.ok(slot0 !== slot1);
+
+    // The default (no forceSlotSuffix) still returns the bare remote issue dir.
+    const bare = await createWorkspaceForIssue(settings, "MT-REMOTE-BARE", {
+      workerHost: "worker-01:2200",
+    });
+    assert.equal(bare, path.join(canonicalRemoteHome, "workspaces", "MT-REMOTE-BARE"));
+  } finally {
+    vi.unstubAllEnvs();
+  }
+});
+
 test("agent attempts run workspace hooks at lifecycle boundaries and tolerate after_run failures", async () => {
   const root = await tempDir("symphony-ts-workspace-agent-hooks");
   const workspaceRoot = path.join(root, "workspaces");

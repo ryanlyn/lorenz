@@ -6,13 +6,13 @@ import { test, vi } from "vitest";
 import {
   Executor,
   acquireAgentMcpEndpoint,
-  hostAgentBinaryEnv,
   parseConfig as parseConfigWith,
   resolveBridgeCommand,
   shellEscape,
 } from "@symphony/cli";
 import type { AgentUpdate } from "@symphony/cli";
 import { AgentExecutorRegistry } from "@symphony/agent-sdk";
+import type { AgentMcpEndpointLease } from "@symphony/mcp";
 import { workerHostPool } from "@symphony/worker-host-pool";
 import { assert, sampleIssue, tempDir, writeExecutable } from "@symphony/test-utils";
 
@@ -28,20 +28,6 @@ function parseConfig(raw: Record<string, unknown>): ReturnType<typeof parseConfi
 }
 
 let nextAcpServerPort = 45_000 + (process.pid % 1_000);
-
-test("hostAgentBinaryEnv resolves missing agent binaries and respects explicit overrides", () => {
-  const lookup = (command: string) => `/host/${command}`;
-  assert.deepEqual(hostAgentBinaryEnv({}, lookup), {
-    CLAUDE_CODE_EXECUTABLE: "/host/claude",
-    CODEX_PATH: "/host/codex",
-  });
-  // An explicit value in the environment is never overwritten.
-  assert.deepEqual(hostAgentBinaryEnv({ CLAUDE_CODE_EXECUTABLE: "/explicit/claude" }, lookup), {
-    CODEX_PATH: "/host/codex",
-  });
-  // Nothing is set when the host has no such binary.
-  assert.deepEqual(hostAgentBinaryEnv({}, () => null), {});
-});
 
 test("ACP executor starts a session, translates updates, approves permissions, and exposes fs", async () => {
   const root = await tempDir("symphony-ts-acp");
@@ -434,6 +420,58 @@ test("ACP MCP endpoint leases reuse one reverse tunnel per worker host with per-
   }
 });
 
+test("ACP executor consumes a threaded mcpEndpoint and SKIPS its own acquire and release", async () => {
+  const root = await tempDir("symphony-ts-acp-threaded");
+  const fake = await writeFakeBridge(root);
+  const trace = path.join(root, "trace.jsonl");
+  await fs.writeFile(path.join(root, "README.md"), "workspace read\n");
+  const settings = acpSettings(root, fake, trace, "new");
+  const lease = makeFakeEndpointLease();
+  const executor = new Executor("claude");
+  const session = await executor.startSession({
+    workspace: root,
+    settings,
+    issue: sampleIssue,
+    mcpEndpoint: lease,
+  });
+  await session.stop();
+
+  // The session must carry the THREADED lease verbatim (not a freshly acquired one).
+  assert.equal(session.mcpEndpoint, lease);
+  // newSession's mcpServers came from the threaded lease's acpServer(), proving acp
+  // did NOT acquire its own endpoint.
+  assert.equal(lease.acpServerCalls > 0, true);
+  const traceEvents = await readTrace(trace);
+  const newSession = traceEvents.find((event) => event.method === "newSession");
+  assert.ok(newSession);
+  assert.match(JSON.stringify(newSession.params), /"name":"threaded_endpoint"/);
+  // The coordinator owns the whole lease, so acp must NOT release it on stop.
+  assert.equal(lease.releaseCalls, 0);
+});
+
+test("ACP executor acquires AND releases its OWN endpoint when no mcpEndpoint is threaded", async () => {
+  const root = await tempDir("symphony-ts-acp-own");
+  const fake = await writeFakeBridge(root);
+  const trace = path.join(root, "trace.jsonl");
+  await fs.writeFile(path.join(root, "README.md"), "workspace read\n");
+  const settings = acpSettings(root, fake, trace, "new");
+  const executor = new Executor("claude");
+  const session = await executor.startSession({
+    workspace: root,
+    settings,
+    issue: sampleIssue,
+  });
+  // acp owns its own endpoint on the local path: it acquired a real one (the
+  // default symphony_tracker server) and releasing the session releases it.
+  assert.match(JSON.stringify(session.mcpEndpoint.acpServer()), /"name":"symphony_tracker"/);
+  await session.stop();
+
+  const traceEvents = await readTrace(trace);
+  const newSession = traceEvents.find((event) => event.method === "newSession");
+  assert.ok(newSession);
+  assert.match(JSON.stringify(newSession.params), /"name":"symphony_tracker"/);
+});
+
 test("provider config rides session/new _meta as a claude settings overlay", async () => {
   const root = await tempDir("symphony-ts-acp-provider-claude");
   const fake = await writeFakeBridge(root);
@@ -543,6 +581,33 @@ test("resolveBridgeCommand preserves arguments, custom commands, and remote host
   assert.equal(resolveBridgeCommand("/usr/local/bin/codex-acp", null), "/usr/local/bin/codex-acp");
   assert.equal(resolveBridgeCommand("codex-acp", "worker-1"), "codex-acp");
 });
+
+interface FakeEndpointLease extends AgentMcpEndpointLease {
+  acpServerCalls: number;
+  releaseCalls: number;
+}
+
+function makeFakeEndpointLease(): FakeEndpointLease {
+  const lease: FakeEndpointLease = {
+    url: "http://127.0.0.1:46999/claude-mcp",
+    token: "threaded-token",
+    acpServerCalls: 0,
+    releaseCalls: 0,
+    acpServer() {
+      lease.acpServerCalls += 1;
+      return {
+        type: "http",
+        name: "threaded_endpoint",
+        url: lease.url,
+        headers: [{ name: "Authorization", value: `Bearer ${lease.token}` }],
+      };
+    },
+    async release() {
+      lease.releaseCalls += 1;
+    },
+  };
+  return lease;
+}
 
 function acpSettings(
   root: string,

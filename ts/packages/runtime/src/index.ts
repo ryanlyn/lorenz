@@ -6,13 +6,19 @@ import {
 } from "@symphony/dispatch";
 import { reconciliationStopReason } from "@symphony/policies/reconciliation";
 import { isTerminalState } from "@symphony/issue";
-import { Orchestrator } from "@symphony/orchestrator";
+import { Orchestrator, type SlotReservation } from "@symphony/orchestrator";
 import { settingsForIssueState, validateDispatchConfig } from "@symphony/config";
 import { runAgentAttempt, type RunResult } from "@symphony/agent-runner";
 import { ProjectionActor } from "@symphony/projections";
 import { RetryScheduler } from "@symphony/retry-scheduler";
 import { workflowFileChanged, workflowStampsEqual } from "@symphony/workflow";
-import { durationMs, errorMessage, systemClock, type ClockPort } from "@symphony/domain";
+import {
+  durationMs,
+  errorMessage,
+  systemClock,
+  withDerivedMaxInFlight,
+  type ClockPort,
+} from "@symphony/domain";
 import type {
   RuntimeAppStatus,
   RuntimeEventType,
@@ -26,12 +32,22 @@ import type {
 import type {
   AgentKind,
   AgentUpdate,
+  WorkerPoolSettings,
   HookExecutionMessage,
   Issue,
   RunningEntry,
   RuntimeTrackerClient,
   WorkflowDefinition,
 } from "@symphony/domain";
+import type { WorkerOutcome, WorkerPool } from "@symphony/worker-pool";
+import {
+  checkSlotsPerMachineGate,
+  createDispatchCoordinator,
+  nullEndpointManager,
+  type AcquireRunSlotResult,
+  type DispatchCoordinator,
+  type RunSlot,
+} from "@symphony/dispatch-coordinator";
 
 export type RuntimeRunner = (input: Parameters<typeof runAgentAttempt>[0]) => Promise<RunResult>;
 
@@ -42,6 +58,7 @@ export type {
   RuntimeEvent,
   RuntimeEventType,
   RuntimePollStatus,
+  RuntimeReservingEntry,
   RuntimeRetryEntry,
   RuntimeRunHistoryEntry,
   RuntimeRunLastEvent,
@@ -82,6 +99,53 @@ export interface SymphonyRuntimeOptions {
    * root binds this to its registries; the default validates against the process-wide ones.
    */
   validateDispatch?: ((settings: WorkflowDefinition["settings"]) => void) | undefined;
+  /**
+   * Optional embedded worker pool. When present, the orchestrator is constructed with a capacity
+   * probe backed by the pool's `canAcquire` (bypassing the static `sshHosts` selection), and
+   * each run acquires a {@link RunSlot} before the runner and releases/fails it in the run's
+   * `finally`. Absent (default) preserves the existing local / `sshHosts` behavior byte-for-byte.
+   *
+   * A bare `workerPool` is wrapped internally in a null-endpoint passthrough
+   * {@link DispatchCoordinator} (see {@link SymphonyRuntimeOptions.coordinator}), so every run
+   * drives the coordinator uniformly while a bare pool injection stays byte-identical at the
+   * runtime boundary (default `slotsPerMachine=1` + `mcpEndpoint=null`). Prefer threading a
+   * pre-built `coordinator`; `workerPool` is the low-churn path that keeps existing injection
+   * sites unchanged. When BOTH are supplied, `coordinator` wins.
+   */
+  workerPool?: WorkerPool | undefined;
+  /**
+   * Optional embedded dispatch coordinator wrapping a machine {@link WorkerPool} plus an injected
+   * per-run MCP endpoint manager. When present it governs capacity and mints a {@link RunSlot}
+   * per run exactly as a wrapped {@link SymphonyRuntimeOptions.workerPool} would; the daemon builds
+   * it once (a reload-surviving singleton) via `buildDispatchCoordinator`. Takes precedence over
+   * `workerPool` when both are supplied.
+   */
+  coordinator?: DispatchCoordinator | undefined;
+}
+
+/**
+ * Classifies a run error into a worker outcome. Returns `poison` ONLY for typed worker-transport faults
+ * (the worker is bad and must be recycled); everything else is `healthy` (a local/config/agent fault
+ * that left the worker reusable). Matches typed PREFIXES, not arbitrary substrings, so that
+ * `invalid_ssh_timeout` (a local config fault) is never mistaken for the `ssh_timeout` transport
+ * fault even though one is a substring of the other.
+ */
+const POISON_WORKER_ERROR_PREFIXES = [
+  "ssh_timeout:",
+  "remote_home_lookup_failed:",
+  "workspace_prepare_failed:",
+  // A REMOTE workspace hook (run over SSH against the worker's workerHost) that exits
+  // non-zero throws `workspace hook failed with status N: ...`. That is a worker-side
+  // fault, so it poisons the worker. The LOCAL hook failure string is
+  // `hook failed with status N` (no `workspace ` prefix) and stays healthy.
+  "workspace hook failed with status ",
+] as const;
+
+export function classifyWorkerOutcome(error: unknown): WorkerOutcome {
+  const message = error instanceof Error ? error.message : String(error);
+  return POISON_WORKER_ERROR_PREFIXES.some((prefix) => message.startsWith(prefix))
+    ? "poison"
+    : "healthy";
 }
 
 export interface RuntimeStartOptions {
@@ -136,6 +200,12 @@ function mergePollOptions(existing: PollOptions | null, requested: PollOptions):
 
 class ActiveRunHandle {
   readonly controller = new AbortController();
+  /**
+   * Set when the run is force-finished externally (e.g. a stall reconciliation aborts it). The
+   * worker pool reads this so a stall-finished run poisons its worker even though the runner surfaces a
+   * generic `agent_run_aborted` (which would otherwise classify as healthy).
+   */
+  reason: "stalled" | null = null;
 
   constructor(
     readonly key: string,
@@ -155,7 +225,8 @@ class ActiveRunHandle {
     this.controller.abort();
   }
 
-  finishExternally(): void {
+  finishExternally(reason: "stalled" | null = null): void {
+    if (reason) this.reason = reason;
     this.abort();
     this.release();
   }
@@ -189,12 +260,49 @@ export class SymphonyRuntime {
   private pollInProgress: Promise<void> | null = null;
   private activePollOptions: PollOptions | null = null;
   private pendingPollOptions: PollOptions | null = null;
+  private workerPoolDrained = false;
+  /**
+   * The reload-surviving coordinator singleton. Built ONCE here: either the
+   * pre-built `input.coordinator` (preferred), or a null-endpoint passthrough
+   * wrapping a bare `input.workerPool` (the low-churn path that keeps every existing
+   * workerPool-injecting site byte-identical at the runtime boundary). `undefined`
+   * when neither is supplied (the static/local path, byte-identical to today).
+   */
+  private readonly coordinator: DispatchCoordinator | undefined;
 
   constructor(private readonly input: SymphonyRuntimeOptions) {
     this.client =
       input.client ?? input.clientFactory?.(input.workflow.settings) ?? missingRuntimeClient();
     this.clock = input.clock ?? systemClock;
-    this.orchestrator = input.orchestrator ?? new Orchestrator(input.workflow.settings, this.clock);
+    // Prefer the pre-built coordinator; otherwise wrap a bare workerPool in a
+    // null-endpoint passthrough so `acquireRunSlot`/`governs`/`canAcquire`/
+    // `reconcile`/`drain` drive a uniform surface (default slotsPerMachine=1 +
+    // mcpEndpoint=null make this a 1:1 passthrough over the pool). Built once: a
+    // reload reconciles it in place, never reconstructs it.
+    this.coordinator =
+      input.coordinator ?? wrapWorkerPoolInCoordinator(input.workerPool, input.workflow.settings);
+    const coordinator = this.coordinator;
+    this.orchestrator =
+      input.orchestrator ??
+      new Orchestrator(
+        input.workflow.settings,
+        this.clock,
+        undefined,
+        // The coordinator IS the orchestrator's capacity authority (it satisfies
+        // the CapacityProbe shape directly). It is installed for the orchestrator's
+        // lifetime whenever it exists, but a reload can disable the underlying pool
+        // (draining it to zero) without tearing the authority down. `governs`
+        // tracks whether the live pool still governs capacity so a disabled pool
+        // falls through to static/local execution instead of permanently blocking
+        // dispatch as worker_host_capacity. The coordinator is a reload-surviving
+        // singleton (stable identity across reconcile) re-reading live pool state
+        // on each call.
+        coordinator,
+      );
+    // Poll nudge: when the pool frees capacity (a worker lands warm after the FIFO
+    // waiters had first claim), re-poll promptly so a capacity-skipped issue
+    // re-dispatches without waiting out polling.intervalMs.
+    coordinator?.onCapacityAvailable(() => this.nudgePollForFreedCapacity());
     this.runner = input.runner ?? runAgentAttempt;
     this.validateDispatch = input.validateDispatch ?? validateDispatchConfig;
     this.retryScheduler = new RetryScheduler(this.clock);
@@ -232,6 +340,9 @@ export class SymphonyRuntime {
           this.activeRuns.get(slotKey(entry.issue.id, entry.slotIndex))?.runId,
         ),
       ),
+      // In-acquire slots, surfaced honestly (host-less) instead of appearing in
+      // `running` with a placeholder host.
+      reserving: orchestration.reserving.map((entry) => ({ ...entry })),
       retrying: orchestration.retrying.map(runtimeRetryEntry),
       blocked: orchestration.blocked.map((entry) => ({ ...entry })),
       usageTotals: orchestration.usageTotals,
@@ -272,6 +383,18 @@ export class SymphonyRuntime {
     this.emit();
   }
 
+  /**
+   * Drains the worker pool once (idempotent). `stop()` stays synchronous (it only flips `stopped` and
+   * aborts handles), so this is invoked by the daemon's `finally` AFTER `start()` resolves to
+   * destroy paid cloud workers before process exit. A no-op when no pool is configured.
+   */
+  async drainWorkerPool(): Promise<void> {
+    if (this.workerPoolDrained) return;
+    this.workerPoolDrained = true;
+    const deadlineMs = this.workflow.settings.worker.workerPool?.drainDeadlineMs ?? 30_000;
+    await this.coordinator?.drain({ deadlineMs });
+  }
+
   async pollOnce(options: PollOptions = {}): Promise<void> {
     if (this.pollInProgress) {
       this.queuePendingPoll(options);
@@ -301,6 +424,27 @@ export class SymphonyRuntime {
       if (!pending) return;
       nextOptions = pending;
     }
+  }
+
+  /**
+   * Requests a prompt re-poll after the worker pool freed capacity. The pool fires the
+   * hook synchronously inside its settle/reconcile paths (under a per-worker mutex), so
+   * the nudge is deferred a microtask to never re-enter them on the same stack. A
+   * poll already in progress gets a FORCED follow-up poll queued (merged via the
+   * pendingPollOptions machinery) because the freed capacity may post-date that
+   * poll's eligibility pass.
+   */
+  private nudgePollForFreedCapacity(): void {
+    queueMicrotask(() => {
+      if (this.stopped) return;
+      if (this.pollInProgress) {
+        this.queuePendingPoll({}, true);
+        return;
+      }
+      this.pollOnce().catch(() => {
+        // Intentionally ignored: pollOnceUnlocked already recorded poll_error.
+      });
+    });
   }
 
   private queuePendingPoll(options: PollOptions = {}, force = false): void {
@@ -375,22 +519,38 @@ export class SymphonyRuntime {
       return [];
     }
     this.syncRetryTimer(refreshed.id);
-    const key = slotKey(refreshed.id, claim.slotIndex);
+    const slotIndex =
+      claim.kind === "running" ? claim.entry.slotIndex : claim.reservation.slotIndex;
+    const key = slotKey(refreshed.id, slotIndex);
     const runId = `run-${this.nextRunNumber}`;
     this.nextRunNumber += 1;
+    // The handle is registered for the WHOLE run lifecycle - including the reserved
+    // path's acquire window - so stop()/reconcile abort an in-acquire run (the
+    // signal reaches the pool's FIFO waiter) exactly as they abort a running one.
     const handle = new ActiveRunHandle(key, runId, this.activeRuns);
     this.activeRuns.set(key, handle);
-    this.addEvent("run_started", `${refreshed.identifier} slot=${claim.slotIndex}`);
+    // On the static/local path the run starts immediately. On the pool-governed
+    // path run_reserving marks dispatch intent and run_started moves AFTER
+    // bindReservation (inside runReservedClaim): a capacity-refused dispatch
+    // never emits a phantom run_started.
+    if (claim.kind === "running") {
+      this.addEvent("run_started", `${refreshed.identifier} slot=${slotIndex}`);
+    } else {
+      this.addEvent("run_reserving", `${refreshed.identifier} slot=${slotIndex}`);
+    }
     this.input.onIssueDispatched?.(refreshed);
 
-    const run = this.runClaim(
-      refreshed,
-      claim.slotIndex,
-      claim.agentKind,
-      runId,
-      claim.workerHost ?? null,
-      handle,
-    );
+    const run =
+      claim.kind === "running"
+        ? this.runClaim(
+            refreshed,
+            claim.entry.slotIndex,
+            claim.entry.agentKind,
+            runId,
+            claim.entry.workerHost ?? null,
+            handle,
+          )
+        : this.runReservedClaim(refreshed, claim.reservation, runId, handle);
     this.inFlight.add(run);
     void run.finally(() => {
       this.inFlight.delete(run);
@@ -411,6 +571,108 @@ export class SymphonyRuntime {
     }
   }
 
+  /**
+   * Phase 1 -> negotiation -> phase 2 for a pool-governed (reserved) claim: drive the
+   * coordinator's acquire inside this detached per-run promise (a cold provision never blocks
+   * the poll thread), then either bind the reservation to the CONCRETE `slot.workerHost` and run,
+   * or cancel the reservation (restoring the consumed retry entry) on a capacity refusal /
+   * acquire fault. `run_started` is only emitted after a successful bind.
+   */
+  private async runReservedClaim(
+    issue: Issue,
+    reservation: SlotReservation,
+    runId: string,
+    handle: ActiveRunHandle,
+  ): Promise<void> {
+    const coordinator = this.coordinator;
+    if (!coordinator) {
+      // A reservation can only be minted while a capacity probe governs, which in
+      // production implies a coordinator. An injected probe without one (test
+      // wiring) is treated like an acquire fault: cancel and skip, never strand.
+      this.addEvent(
+        "dispatch_skipped",
+        `${issue.identifier} worker_pool_acquire_error coordinator_missing`,
+      );
+      this.orchestrator.cancelReservation(reservation);
+      handle.release();
+      return;
+    }
+    let acquired: AcquireRunSlotResult;
+    try {
+      acquired = await coordinator.acquireRunSlot({
+        issueId: issue.id,
+        slotIndex: reservation.slotIndex,
+        labels: issue.labels,
+        // Sticky retry affinity travels on the reservation (the prior run's
+        // CONCRETE host from the consumed retry entry).
+        affinityKey: reservation.affinityHost,
+        timeoutMs: this.workflow.settings.worker.workerPool?.acquireTimeoutMs ?? 30_000,
+        signal: handle.signal,
+        // Thread the FULL workflow Settings (with server.port) so the per-run
+        // endpoint manager can build the remote endpoint; the WorkerPoolSettings the
+        // coordinator holds has no server.port and would fail every acquire.
+        settings: this.workflow.settings,
+        // The ACP executor - the only executor - consumes the per-run MCP
+        // endpoint over the reverse tunnel, so every run needs one. The flag
+        // stays on the request so a future executor that runs its tools
+        // in-process can skip minting the endpoint (and its tunnel-ceiling
+        // reservation) without an API change.
+        needsMcpEndpoint: true,
+      });
+    } catch (error) {
+      // acquireRunSlot() REJECTED outside the no_capacity result path (ledger /
+      // filesystem / driver / endpoint-open fault). Handle it like a failed
+      // dispatch rather than letting the rejection strand the reservation: cancel
+      // it (restoring the consumed retry entry) so the slot is re-evaluated next
+      // poll, release the active handle, surface a clear error event (never
+      // swallowed), and return WITHOUT running or recording history. The
+      // coordinator already settled any just-bound lease healthy before throwing,
+      // so there is nothing to settle here.
+      this.addEvent(
+        "dispatch_skipped",
+        `${issue.identifier} worker_pool_acquire_error ${errorMessage(error)}`,
+      );
+      this.orchestrator.cancelReservation(reservation);
+      this.syncRetryTimer(issue.id);
+      handle.release();
+      return;
+    }
+    if (acquired.status !== "bound") {
+      // No capacity within the acquire window (EVERY typed no_capacity reason maps
+      // to the SAME event - no per-reason differentiation, matching today): cancel
+      // the reservation with NO backoff. The consumed retry entry is RESTORED (its
+      // deadline already passed) so the issue is immediately re-eligible with its
+      // affinity and attempt counter intact; never record history for a run that
+      // did not start.
+      this.addEvent("dispatch_skipped", `${issue.identifier} worker_host_capacity`);
+      this.orchestrator.cancelReservation(reservation);
+      this.syncRetryTimer(issue.id);
+      handle.release();
+      return;
+    }
+    const slot = acquired.slot;
+    const entry = this.orchestrator.bindReservation(reservation, slot.workerHost);
+    if (!entry) {
+      // The reservation was cancelled/expired during the acquire (cleanup, stop,
+      // or the expiry sweep): release the bound worker back to warm inventory (the
+      // slot's settled-once guard makes this exactly-once) and skip the run.
+      await slot.release("healthy");
+      this.addEvent("dispatch_skipped", `${issue.identifier} reservation_lapsed`);
+      handle.release();
+      return;
+    }
+    this.addEvent("run_started", `${issue.identifier} slot=${reservation.slotIndex}`);
+    await this.runClaim(
+      issue,
+      reservation.slotIndex,
+      reservation.agentKind,
+      runId,
+      slot.workerHost,
+      handle,
+      slot,
+    );
+  }
+
   private async runClaim(
     issue: Issue,
     slotIndex: number,
@@ -418,15 +680,30 @@ export class SymphonyRuntime {
     runId: string,
     workerHost: string | null,
     handle: ActiveRunHandle,
+    slot: RunSlot | null = null,
   ): Promise<void> {
     const startedAt = this.clock.now().toISOString();
+    const effectiveWorkerHost = workerHost;
+    let workerOutcome: WorkerOutcome = "healthy";
+    const heartbeatSlot = slot;
     try {
       const result = await this.runner({
         issue,
         workflow: this.workflow,
-        workerHost,
+        workerHost: effectiveWorkerHost,
         slotIndex,
+        // Thread the bound slot's per-run MCP endpoint (or null on the local /
+        // non-pool / null-manager path) into the runner so the ACP executor
+        // consumes it and SKIPS its own acquire+release. The coordinator owns the
+        // whole lease and closes it via slot.release in this run's finally.
+        mcpEndpoint: slot?.mcpEndpoint ?? null,
+        // With more than one run slot per machine, two solo runs of the SAME
+        // issue could land on one worker and would otherwise share a workspace
+        // path; force the per-slot suffix whenever co-residence is possible.
+        // Single-tenant (default) keeps the bare path.
+        forceSlotSuffix: (this.workflow.settings.worker.workerPool?.slotsPerMachine ?? 1) > 1,
         onUpdate: (update) => {
+          heartbeatSlot?.heartbeat();
           this.orchestrator.applyUpdate(issue.id, slotIndex, update);
           this.addEvent(update.type, agentUpdateRuntimeMessage(issue.identifier, update));
           this.input.onAgentUpdate?.(issue, update);
@@ -461,6 +738,11 @@ export class SymphonyRuntime {
       );
       this.addEvent("run_completed", `${issue.identifier} turns=${result.turnCount}`);
     } catch (error) {
+      // Classify the worker outcome BEFORE any early return so a run finished
+      // externally (e.g. a stall reconciliation aborted it -> the runner throws
+      // `agent_run_aborted`) still poisons the worker: a stall-finished run is
+      // treated as poison via `handle.reason`, otherwise typed transport faults.
+      workerOutcome = handle.reason === "stalled" ? "poison" : classifyWorkerOutcome(error);
       // Skip runs that are no longer active: superseded, finished externally, or
       // released by stop() during shutdown. In the shutdown case the runner
       // rejects with agent_run_aborted; recording it as a failure would emit a
@@ -489,6 +771,25 @@ export class SymphonyRuntime {
       this.addEvent("run_failed", `${issue.identifier} ${errorMessage(error)}`);
     } finally {
       handle.release();
+      if (slot) {
+        // A stall reconciliation force-finished this run (handle.reason='stalled').
+        // The CATCH path already poisons on a rejected runner, but a runner that
+        // ignores the abort - or races to a SUCCESSFUL resolve after finishExternally -
+        // takes the success path's early return with workerOutcome still 'healthy'. Poison
+        // the worker here, BEFORE settling, whenever the run was stall-finished,
+        // independent of whether the runner resolved or rejected: a stalled worker must
+        // never be released healthy and reused.
+        if (handle.reason === "stalled") workerOutcome = "poison";
+        // Settle the slot exactly once: close THIS slot's endpoint (a no-op in
+        // STEP 1's null-endpoint passthrough) THEN settle the wrapped lease. Lease
+        // ops are leaseId + settled + worker-state guarded inside the pool, so a stale
+        // generation's late resolve is a no-op that never touches inFlight.
+        if (workerOutcome === "poison") {
+          await slot.fail("worker_poisoned");
+        } else {
+          await slot.release("healthy");
+        }
+      }
     }
   }
 
@@ -499,11 +800,49 @@ export class SymphonyRuntime {
 
   private async reloadWorkflowIfConfigured(): Promise<void> {
     if (!this.input.reloadWorkflow) return;
+    const prevWorkerPool = this.input.workflow.settings.worker.workerPool;
     try {
       if (!(await workflowFileChanged(this.input.workflow))) return;
       const previous = this.input.workflow;
       const workflow = await this.input.reloadWorkflow();
       if (workflow === previous || workflowStampsEqual(previous.stamp, workflow.stamp)) return;
+      // Enforce the SAME slots-per-machine co-residence gate the daemon runs at
+      // startup. The startup gate runs ONCE; without this a live daemon could
+      // reload max_in_flight 1 -> >1 WITHOUT the per-run-endpoint capability OR the
+      // co_residence opt-in, silently widening the shared-machine blast radius the
+      // startup gate rejects. Throwing here lands in the catch below: last-good
+      // settings are KEPT (not applied, the live pool is NOT reconciled onto the
+      // unsafe settings) and a workflow_reload_failed event carries the gate's
+      // message - mirroring the anti-double-capacity guard behavior.
+      const gateMessage = checkSlotsPerMachineGate(
+        workflow.settings.worker.workerPool,
+        this.coordinator?.capabilities,
+      );
+      if (gateMessage !== null) throw new Error(gateMessage);
+      // TRANSACTIONAL reload: run EVERY throwing side effect FIRST (the gate above,
+      // then the coordinator/pool reconcile), and ONLY swap the runtime settings
+      // (this.input.workflow + this.orchestrator.settings + the client) AFTER they
+      // ALL succeed. If reconcile throws (e.g. driver unavailable / invalid
+      // driverOptions) the catch below leaves BOTH the runtime settings AND the
+      // pool/coordinator state on the PREVIOUS config - last-good is never partially
+      // applied, so dispatch can never use settings that do not match the live pool.
+      //
+      // The coordinator (and its pool) is a reload-surviving singleton: diff
+      // prev-vs-next worker-pool settings instead of being reconstructed. When the
+      // reload REMOVES the worker_pool block entirely (next === undefined), reconcile
+      // to a disabled-equivalent of the prior settings so the live pool drains to
+      // zero instead of leaking its (paid) workers unmanaged. A present block (even
+      // one with `enabled: false`) keeps the existing path: reconcile handles the
+      // disable-and-drain itself.
+      if (this.coordinator) {
+        const next =
+          workflow.settings.worker.workerPool ?? disabledWorkerPoolSettings(prevWorkerPool);
+        // Awaited: reconcile is async so the coordinator's injected driverLoader
+        // can dynamic-import an out-of-tree driver module BEFORE the (still
+        // synchronous) pool reconcile. A rejection lands in the catch below,
+        // keeping last-good settings and emitting workflow_reload_failed.
+        if (next) await this.coordinator.reconcile(next);
+      }
       this.input.workflow = workflow;
       this.orchestrator.settings = workflow.settings;
       if (!this.input.client && this.input.clientFactory) {
@@ -511,6 +850,9 @@ export class SymphonyRuntime {
       }
       this.addEvent("workflow_reloaded", workflow.path);
     } catch (error) {
+      // Keeps last-good settings. errorMessage(error) already surfaces the
+      // anti-double-capacity guard message so operators learn why a reload that
+      // tried to enable the pool alongside ssh_hosts did not take effect.
       this.addEvent("workflow_reload_failed", errorMessage(error));
     }
   }
@@ -525,6 +867,15 @@ export class SymphonyRuntime {
         workspacePath?: string | null | undefined;
       }
     >();
+    // Reserving (in-acquire) slots are tracked host-less so an issue that goes
+    // terminal mid-acquire is still aborted and cleaned up; running/retrying
+    // entries below override with their richer metadata when present.
+    for (const entry of snapshot.reserving)
+      tracked.set(entry.issueId, {
+        identifier: entry.identifier,
+        workerHost: null,
+        workspacePath: null,
+      });
     for (const entry of snapshot.running)
       tracked.set(entry.issue.id, {
         identifier: entry.issue.identifier,
@@ -603,7 +954,7 @@ export class SymphonyRuntime {
       if (!entry) continue;
       this.orchestrator.finish(entry.issue.id, entry.slotIndex, true, error, "failure");
       this.syncRetryTimer(entry.issue.id);
-      activeHandle?.finishExternally();
+      activeHandle?.finishExternally("stalled");
       const endedAt = this.clock.now().toISOString();
       this.recordHistory(
         buildRunHistoryEntry({
@@ -924,4 +1275,69 @@ async function delay(clock: ClockPort, ms: number, stopped: () => boolean): Prom
 
 function missingRuntimeClient(): RuntimeTrackerClient {
   throw new Error("runtime tracker client or clientFactory is required");
+}
+
+/**
+ * Builds a disabled-equivalent of the prior worker-pool settings so a reload that REMOVES the
+ * `worker.worker_pool` block (next === undefined) can still reconcile the live pool to a drain
+ * rather than leaking it. Preserves `drainDeadlineMs` from the prior settings so the drain
+ * honors the operator's configured deadline. Returns `undefined` when there were no prior
+ * settings (nothing to drain).
+ */
+function disabledWorkerPoolSettings(
+  prev: WorkerPoolSettings | undefined,
+): WorkerPoolSettings | undefined {
+  if (!prev) return undefined;
+  // A bare spread would copy the enumerable `maxInFlight` getter as a plain data property that
+  // could drift from `slotsPerMachine`; strip it and re-install the derived accessor, matching
+  // the config package's parse/clone paths.
+  const { maxInFlight: _maxInFlight, ...rest } = prev;
+  return withDerivedMaxInFlight({ ...rest, enabled: false });
+}
+
+/**
+ * Wraps a bare {@link WorkerPool} in a null-endpoint passthrough {@link DispatchCoordinator} so the
+ * runtime drives every run through the uniform coordinator surface while a bare-pool injection
+ * stays byte-identical at the runtime boundary. STEP 1's null manager mints nothing
+ * (`perRunEndpoint=false`, every `RunSlot.mcpEndpoint=null`), so this is a 1:1 passthrough over
+ * the pool: `acquireRunSlot` delegates to `pool.acquire`, settle delegates straight to the
+ * `WorkerLease`, and `reconcile`/`drain`/`governs`/`canAcquire` forward verbatim. Returns
+ * `undefined` when no pool is supplied (the static/local path).
+ *
+ * `settings` only needs to satisfy the coordinator's constructor; in STEP 1 the coordinator does
+ * not read it past construction (the pool owns live settings), so the live `worker.workerPool`
+ * settings are passed when present and a disabled placeholder otherwise.
+ */
+function wrapWorkerPoolInCoordinator(
+  pool: WorkerPool | undefined,
+  settings: WorkflowDefinition["settings"],
+): DispatchCoordinator | undefined {
+  if (!pool) return undefined;
+  // A bare workerPool is only ever injected alongside a configured `worker.worker_pool`
+  // block, so its settings are present in practice. The disabled placeholder is a
+  // defensive fallback for the never-in-practice case; STEP 1's coordinator does
+  // not read `settings` past construction (the pool owns live settings), so the
+  // exact values are irrelevant to behavior - only the shape must satisfy the
+  // constructor.
+  const workerPoolSettings: WorkerPoolSettings =
+    settings.worker.workerPool ??
+    withDerivedMaxInFlight({
+      enabled: false,
+      driver: "fake",
+      min: 0,
+      max: 0,
+      warm: 0,
+      slotsPerMachine: 1,
+      ttlMs: 0,
+      idleReapMs: 0,
+      acquireTimeoutMs: 0,
+      reapIntervalMs: 0,
+      staleHeartbeatMs: 0,
+      drainDeadlineMs: 0,
+    });
+  return createDispatchCoordinator({
+    pool,
+    mcpEndpointManager: nullEndpointManager,
+    settings: workerPoolSettings,
+  });
 }

@@ -81,6 +81,7 @@ export interface WorkspaceCreateOptions {
   slotIndex?: number | undefined;
   ensembleSize?: number | undefined;
   workerHost?: string | null | undefined;
+  forceSlotSuffix?: boolean | undefined;
   abortSignal?: AbortSignal | undefined;
   onHookEvent?: ((event: HookExecutionMessage) => void) | undefined;
   /**
@@ -130,16 +131,30 @@ function sharedWorkspaceRoot(settings: Settings): boolean {
   return settings.workspace.isolation === "none";
 }
 
+/**
+ * The local workspace directory for an issue's run.
+ *
+ * By default (`forceSlotSuffix = false`) the slot index is appended ONLY for an
+ * ensemble (`ensembleSize > 1`); a solo run returns the bare `<root>/<identifier>`.
+ *
+ * `forceSlotSuffix` is the gated co-residence override: when two run slots of the
+ * SAME issue may co-reside on one machine (`slotsPerMachine > 1` with the
+ * co-residence opt-in), each is its own solo (`ensembleSize = 1`) run yet must NOT
+ * share the bare path, so the slot suffix is applied UNCONDITIONALLY. It is set
+ * only on the gated co-residence path and NEVER alters the default single-slot
+ * layout (which depends on the bare path).
+ */
 export function workspacePath(
   root: string,
   issueIdentifier: string,
   slotIndex = 0,
   ensembleSize = 1,
+  forceSlotSuffix = false,
 ): string {
   const safe = safeIdentifier(issueIdentifier);
   if (!safe) throw new Error("empty identifier produces invalid workspace path");
   const issueRoot = path.join(root, safe);
-  return ensembleSize > 1 ? path.join(issueRoot, String(slotIndex)) : issueRoot;
+  return ensembleSize > 1 || forceSlotSuffix ? path.join(issueRoot, String(slotIndex)) : issueRoot;
 }
 
 export async function createWorkspaceForIssue(
@@ -153,6 +168,7 @@ export async function createWorkspaceForIssue(
   const identifier = typeof issue === "string" ? issue : issue.identifier;
   const slotIndex = options.slotIndex ?? 0;
   const ensembleSize = options.ensembleSize ?? 1;
+  const forceSlotSuffix = options.forceSlotSuffix ?? false;
 
   const rootPath = path.resolve(settings.workspace.root);
   await fs.mkdir(rootPath, { recursive: true });
@@ -166,7 +182,7 @@ export async function createWorkspaceForIssue(
     return canonicalRoot;
   }
 
-  const target = workspacePath(canonicalRoot, identifier, slotIndex, ensembleSize);
+  const target = workspacePath(canonicalRoot, identifier, slotIndex, ensembleSize, forceSlotSuffix);
   const created = await ensureDirectoryWithinRoot(canonicalRoot, target);
   const canonicalTarget = await validateWorkspaceCwd(settings, target);
 
@@ -951,7 +967,13 @@ async function createRemoteWorkspaceForIssue(
   const root = await remoteWorkspaceRoot(settings, workerHost, options);
   const workspace = sharedWorkspaceRoot(settings)
     ? root
-    : remoteWorkspacePath(root, identifier, options.slotIndex ?? 0, options.ensembleSize ?? 1);
+    : remoteWorkspacePath(
+        root,
+        identifier,
+        options.slotIndex ?? 0,
+        options.ensembleSize ?? 1,
+        options.forceSlotSuffix ?? false,
+      );
 
   const script = [
     "set -eu",
@@ -1191,9 +1213,12 @@ function remoteWorkspacePath(
   identifier: string,
   slotIndex: number,
   ensembleSize: number,
+  forceSlotSuffix = false,
 ): string {
   const issueRoot = path.posix.join(root, safeIdentifier(identifier));
-  return ensembleSize > 1 ? path.posix.join(issueRoot, String(slotIndex)) : issueRoot;
+  return ensembleSize > 1 || forceSlotSuffix
+    ? path.posix.join(issueRoot, String(slotIndex))
+    : issueRoot;
 }
 
 function parseRemoteWorkspaceOutput(output: string): { created: boolean; workspace: string } {

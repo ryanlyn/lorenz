@@ -20,6 +20,9 @@
       "path": "../../packages/agent-sdk"
     },
     {
+      "path": "../../packages/worker-sdk"
+    },
+    {
       "path": "../../packages/cli-kit"
     },
     {
@@ -27,6 +30,12 @@
     },
     {
       "path": "../../packages/dispatch"
+    },
+    {
+      "path": "../../packages/dispatch-coordinator"
+    },
+    {
+      "path": "../../extensions/docker-worker"
     },
     {
       "path": "../../packages/domain"
@@ -86,6 +95,9 @@
       "path": "../../packages/ssh"
     },
     {
+      "path": "../../packages/static-worker"
+    },
+    {
       "path": "../../packages/tool-sdk"
     },
     {
@@ -96,6 +108,12 @@
     },
     {
       "path": "../../packages/tui"
+    },
+    {
+      "path": "../../packages/worker-host-pool"
+    },
+    {
+      "path": "../../packages/worker-pool"
     },
     {
       "path": "../../packages/workflow"

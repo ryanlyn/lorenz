@@ -337,6 +337,12 @@ importers:
       "@symphony/dispatch":
         specifier: workspace:*
         version: link:../../packages/dispatch
+      "@symphony/dispatch-coordinator":
+        specifier: workspace:*
+        version: link:../../packages/dispatch-coordinator
+      "@symphony/docker-worker":
+        specifier: workspace:*
+        version: link:../../extensions/docker-worker
       "@symphony/domain":
         specifier: workspace:*
         version: link:../../packages/domain
@@ -394,6 +400,9 @@ importers:
       "@symphony/ssh":
         specifier: workspace:*
         version: link:../../packages/ssh
+      "@symphony/static-worker":
+        specifier: workspace:*
+        version: link:../../packages/static-worker
       "@symphony/tool-sdk":
         specifier: workspace:*
         version: link:../../packages/tool-sdk
@@ -406,6 +415,15 @@ importers:
       "@symphony/tui":
         specifier: workspace:*
         version: link:../../packages/tui
+      "@symphony/worker-host-pool":
+        specifier: workspace:*
+        version: link:../../packages/worker-host-pool
+      "@symphony/worker-pool":
+        specifier: workspace:*
+        version: link:../../packages/worker-pool
+      "@symphony/worker-sdk":
+        specifier: workspace:*
+        version: link:../../packages/worker-sdk
       "@symphony/workflow":
         specifier: workspace:*
         version: link:../../packages/workflow
@@ -628,6 +646,9 @@ importers:
       "@symphony/issue":
         specifier: workspace:*
         version: link:../issue
+      "@symphony/mcp":
+        specifier: workspace:*
+        version: link:../mcp
       "@symphony/prompt":
         specifier: workspace:*
         version: link:../prompt
@@ -846,6 +867,9 @@ importers:
       "@symphony/dispatch":
         specifier: workspace:*
         version: link:../dispatch
+      "@symphony/dispatch-coordinator":
+        specifier: workspace:*
+        version: link:../dispatch-coordinator
       "@symphony/domain":
         specifier: workspace:*
         version: link:../domain
@@ -867,6 +891,9 @@ importers:
       "@symphony/runtime-events":
         specifier: workspace:*
         version: link:../runtime-events
+      "@symphony/worker-pool":
+        specifier: workspace:*
+        version: link:../worker-pool
       "@symphony/workflow":
         specifier: workspace:*
         version: link:../workflow

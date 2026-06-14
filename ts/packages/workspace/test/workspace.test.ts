@@ -83,6 +83,39 @@ test("workspacePath — ensemble adds slot index subdirectory", () => {
   assert.equal(result, path.join("/root", "MT-1", "2"));
 });
 
+// --- workspacePath forceSlotSuffix (gated co-residence) ---
+
+test("workspacePath — forceSlotSuffix off (default) keeps the bare single-slot layout", () => {
+  // The default (flag absent / false) is byte-identical to today: a solo run
+  // (ensembleSize=1) returns the bare `<root>/<identifier>`, never a slot dir.
+  assert.equal(workspacePath("/root", "MT-1", 0, 1, false), path.join("/root", "MT-1"));
+  assert.equal(workspacePath("/root", "MT-1", 0, 1), path.join("/root", "MT-1"));
+});
+
+test("workspacePath — forceSlotSuffix applies the slot dir UNCONDITIONALLY even when ensembleSize=1", () => {
+  // Co-residence: two slots of ONE issue may co-reside on one machine even though
+  // each is a solo (ensembleSize=1) run, so the suffix must apply unconditionally
+  // to give them distinct dirs.
+  assert.equal(workspacePath("/root", "MT-1", 0, 1, true), path.join("/root", "MT-1", "0"));
+  assert.equal(workspacePath("/root", "MT-1", 1, 1, true), path.join("/root", "MT-1", "1"));
+});
+
+test("workspacePath — forceSlotSuffix gives two co-resident same-issue slots DISTINCT paths", () => {
+  const a = workspacePath("/root", "MT-1", 0, 1, true);
+  const b = workspacePath("/root", "MT-1", 1, 1, true);
+  assert.equal(a, path.join("/root", "MT-1", "0"));
+  assert.equal(b, path.join("/root", "MT-1", "1"));
+  assert.ok(a !== b);
+});
+
+test("workspacePath — forceSlotSuffix does not change the ensemble path (suffix already present)", () => {
+  // When ensembleSize>1 the suffix is already applied; forcing it is a no-op.
+  assert.equal(
+    workspacePath("/root", "MT-1", 2, 4, true),
+    workspacePath("/root", "MT-1", 2, 4, false),
+  );
+});
+
 // --- ensureInsideRoot ---
 
 test("ensureInsideRoot — path within root does not throw", () => {
@@ -179,6 +212,43 @@ test("createWorkspaceForIssue — runs afterCreate hook on new workspace", async
   const hookFile = path.join(ws, ".hook-ran");
   const stat = await fs.stat(hookFile);
   assert.ok(stat.isFile());
+});
+
+test("createWorkspaceForIssue — default (no forceSlotSuffix) returns the bare issue dir", async () => {
+  const root = await tempDir("ws-create-bare");
+  const settings = makeSettings(root);
+  const ws = await createWorkspaceForIssue(settings, sampleIssue, {
+    slotIndex: 0,
+    ensembleSize: 1,
+  });
+  const expected = path.join(await fs.realpath(root), safeIdentifier(sampleIssue.identifier));
+  assert.equal(ws, expected);
+});
+
+test("createWorkspaceForIssue — forceSlotSuffix shards two co-resident same-issue slots into distinct dirs", async () => {
+  const root = await tempDir("ws-create-coreside");
+  const settings = makeSettings(root);
+  const canonicalRoot = await fs.realpath(root);
+  const issueRoot = path.join(canonicalRoot, safeIdentifier(sampleIssue.identifier));
+
+  // Both runs are solo (ensembleSize=1) yet co-reside on one machine: forceSlotSuffix
+  // must give them distinct `<issue>/<slotIndex>` dirs, never the shared bare path.
+  const slot0 = await createWorkspaceForIssue(settings, sampleIssue, {
+    slotIndex: 0,
+    ensembleSize: 1,
+    forceSlotSuffix: true,
+  });
+  const slot1 = await createWorkspaceForIssue(settings, sampleIssue, {
+    slotIndex: 1,
+    ensembleSize: 1,
+    forceSlotSuffix: true,
+  });
+
+  assert.equal(slot0, path.join(issueRoot, "0"));
+  assert.equal(slot1, path.join(issueRoot, "1"));
+  assert.ok(slot0 !== slot1);
+  assert.ok((await fs.stat(slot0)).isDirectory());
+  assert.ok((await fs.stat(slot1)).isDirectory());
 });
 
 test("createWorkspaceForIssue — overlays configured skill directories after afterCreate", async () => {
@@ -519,7 +589,6 @@ test("createWorkspaceForIssue — rejects missing configured skill sources", asy
     /workspace_skill_source_missing/,
   );
 });
-
 test("createWorkspaceForIssue — renders Liquid template variables in afterCreate hook", async () => {
   const root = await tempDir("ws-create-tpl");
   const settings = makeSettings(root, {

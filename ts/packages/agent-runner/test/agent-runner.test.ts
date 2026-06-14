@@ -520,6 +520,65 @@ test("runAgentAttempt runs afterRun when startSession fails after workspace crea
   assert.deepEqual(commands, ["cleanup"]);
 });
 
+test("runAgentAttempt forwards a threaded mcpEndpoint into executor.startSession", async () => {
+  const issue = fakeIssue();
+  const settings = fakeSettings();
+  const lease = {
+    url: "http://127.0.0.1:46999/claude-mcp",
+    token: "threaded",
+    acpServer: () => ({ type: "http" as const, name: "threaded_endpoint", url: "", headers: [] }),
+    release: async () => {},
+  };
+  let received: unknown = "unset";
+
+  await runAgentAttempt({
+    issue,
+    workflow: { path: "/workflow.md", config: {}, promptTemplate: "Fix it", settings },
+    settings,
+    mcpEndpoint: lease,
+    adapters: fakeAdapters({
+      executorFactory: () => ({
+        kind: "codex",
+        async startSession(input) {
+          received = (input as { mcpEndpoint?: unknown }).mcpEndpoint;
+          return fakeSession();
+        },
+        async runTurn() {
+          return [{ type: "turn_completed" }];
+        },
+      }),
+    }),
+  });
+
+  assert.equal(received, lease);
+});
+
+test("runAgentAttempt threads null mcpEndpoint when none is supplied (local path)", async () => {
+  const issue = fakeIssue();
+  const settings = fakeSettings();
+  let received: unknown = "unset";
+
+  await runAgentAttempt({
+    issue,
+    workflow: { path: "/workflow.md", config: {}, promptTemplate: "Fix it", settings },
+    settings,
+    adapters: fakeAdapters({
+      executorFactory: () => ({
+        kind: "codex",
+        async startSession(input) {
+          received = (input as { mcpEndpoint?: unknown }).mcpEndpoint;
+          return fakeSession();
+        },
+        async runTurn() {
+          return [{ type: "turn_completed" }];
+        },
+      }),
+    }),
+  });
+
+  assert.equal(received, null);
+});
+
 // ---------------------------------------------------------------------------
 // executorFor
 // ---------------------------------------------------------------------------

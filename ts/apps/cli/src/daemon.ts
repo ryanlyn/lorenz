@@ -1,4 +1,5 @@
 import os from "node:os";
+import path from "node:path";
 
 import { acpExecutorProvider } from "@symphony/acp";
 import { defaultAgentExecutorRegistry, type AgentExecutorRegistry } from "@symphony/agent-sdk";
@@ -8,13 +9,28 @@ import {
   type RunAgentAttemptInput,
   type RunResult,
 } from "@symphony/agent-runner";
+import {
+  defaultWorkerDriverRegistry,
+  registerFakeWorkerDriver,
+  type WorkerDriverRegistry,
+} from "@symphony/worker-sdk";
 import type { DefaultSettingsOptions } from "@symphony/config";
-import type { RuntimeTrackerClient, Settings } from "@symphony/domain";
+import { registerDockerWorkerDriver } from "@symphony/docker-worker";
+import { systemClock, type RuntimeTrackerClient, type Settings } from "@symphony/domain";
 import { registerJiraTrackers } from "@symphony/jira-tracker";
 import { registerLinearTracker } from "@symphony/linear-tracker";
 import { registerLocalTracker } from "@symphony/local-tracker";
 import { registerMemoryTracker } from "@symphony/memory-tracker";
 import { registerSlackTracker } from "@symphony/slack-tracker";
+import { registerStaticSshWorkerDriver } from "@symphony/static-worker";
+import { acquireAgentMcpEndpointForRun } from "@symphony/mcp";
+import { createWorkerPool, type WorkerPool } from "@symphony/worker-pool";
+import { workerHostPool } from "@symphony/worker-host-pool";
+import {
+  createDispatchCoordinator,
+  createPerRunEndpointManager,
+  type DispatchCoordinator,
+} from "@symphony/dispatch-coordinator";
 import {
   createWorkspaceForIssue,
   listIssueWorkspaceIdentifiers,
@@ -31,10 +47,13 @@ import {
   type TrackerRegistry,
 } from "@symphony/tracker-sdk";
 
+import { ensureWorkerDriverLoaded } from "./workerDriverLoader.js";
+
 export interface BackendRegistries {
   trackers?: TrackerRegistry | undefined;
   tools?: ToolRegistry | undefined;
   executors?: AgentExecutorRegistry | undefined;
+  workerDrivers?: WorkerDriverRegistry | undefined;
 }
 
 /**
@@ -60,6 +79,11 @@ export function registerBuiltinBackends(registries: BackendRegistries = {}): voi
   if (executors.get(acpExecutorProvider.executor) === undefined) {
     executors.register(acpExecutorProvider);
   }
+
+  const workerDrivers = registries.workerDrivers ?? defaultWorkerDriverRegistry;
+  registerFakeWorkerDriver({ workerDrivers });
+  registerStaticSshWorkerDriver({ workerDrivers });
+  registerDockerWorkerDriver({ workerDrivers });
 }
 
 export function runtimeDefaultSettingsOptions(): DefaultSettingsOptions {
@@ -71,6 +95,107 @@ export function createTrackerClient(
   env: NodeJS.ProcessEnv = process.env,
 ): RuntimeTrackerClient {
   return defaultTrackerRegistry.require(settings.tracker.kind).createClient(settings, { env });
+}
+
+/** Options for {@link buildWorkerPool} / {@link buildDispatchCoordinator}. */
+export interface BuildWorkerPoolOptions {
+  /**
+   * Anchor for `./relative` driver module specifiers; the daemon passes
+   * `dirname(workflow.path)` (the most predictable anchor for operators).
+   * Defaults to `process.cwd()`.
+   */
+  baseDir?: string | undefined;
+}
+
+/**
+ * Constructs the warm worker pool when `worker.worker_pool.enabled` is set, and
+ * returns `undefined` otherwise so the disabled path stays byte-identical to the
+ * pre-pool daemon. The pool resolves the configured `driver` against the
+ * worker-driver registry populated by {@link registerBuiltinBackends}; a driver
+ * string that is NOT a registered kind is treated as a module specifier and
+ * dynamic-imported into the registry first (see {@link ensureWorkerDriverLoaded}),
+ * so third-party drivers load at the same fail-loud startup point - an
+ * unresolvable driver throws `worker_pool_driver_unavailable` before the pool, the
+ * runtime, or any provision exists. The write-ahead ledger (only consulted by
+ * cloud drivers) lives under `<workspace.root>/.symphony/worker-pool/`.
+ */
+export async function buildWorkerPool(
+  settings: Settings,
+  _env: NodeJS.ProcessEnv = process.env,
+  options: BuildWorkerPoolOptions = {},
+): Promise<WorkerPool | undefined> {
+  const workerPoolSettings = settings.worker.workerPool;
+  if (!workerPoolSettings?.enabled) return undefined;
+  const logEvent = (event: Record<string, unknown>): void =>
+    void appendLogEvent(settings.logging.logFile, event);
+  await ensureWorkerDriverLoaded(workerPoolSettings.driver, defaultWorkerDriverRegistry, {
+    baseDir: options.baseDir ?? process.cwd(),
+    logEvent,
+  });
+  return createWorkerPool(workerPoolSettings, {
+    clock: systemClock,
+    logEvent,
+    ledgerPath: path.join(settings.workspace.root, ".symphony", "worker-pool", "ledger.json"),
+    drivers: defaultWorkerDriverRegistry,
+  });
+}
+
+/**
+ * Constructs the runtime-facing {@link DispatchCoordinator} when
+ * `worker.worker_pool.enabled` is set, wrapping the same {@link WorkerPool} that
+ * {@link buildWorkerPool} builds and the injected {@link McpEndpointManager}. Returns
+ * `undefined` when the pool is disabled so the disabled path stays byte-identical
+ * to the pre-pool daemon.
+ *
+ * The CONCRETE per-run {@link McpEndpointManager} (`perRunEndpoint=true`) is wired
+ * here: it OWNS the whole per-run MCP endpoint lease (auth token + refcounted local
+ * mcp server + reverse tunnel) via the injected `acquireAgentMcpEndpointForRun`. The
+ * daemon is the right ownership boundary because it already depends on
+ * `@symphony/mcp`, keeping `@symphony/worker-pool` and
+ * `@symphony/dispatch-coordinator` free of any mcp/tunnel runtime dependency
+ * (invariant #8). At the default `slotsPerMachine=1` this opens exactly ONE endpoint
+ * per run (just coordinator-owned), and the manager returns `null` for an empty
+ * (local) worker host so the local path keeps using acp's own endpoint -
+ * byte-identical to the single-tenant path. `buildWorkerPool` stays for the worker-pool
+ * wiring / e2e tests and for any caller that still wants a bare pool.
+ */
+export async function buildDispatchCoordinator(
+  settings: Settings,
+  env: NodeJS.ProcessEnv = process.env,
+  options: BuildWorkerPoolOptions = {},
+): Promise<DispatchCoordinator | undefined> {
+  const workerPoolSettings = settings.worker.workerPool;
+  if (!workerPoolSettings?.enabled) return undefined;
+  const pool = await buildWorkerPool(settings, env, options);
+  if (!pool) return undefined;
+  const baseDir = options.baseDir ?? process.cwd();
+  const logEvent = (event: Record<string, unknown>): void =>
+    void appendLogEvent(settings.logging.logFile, event);
+  return createDispatchCoordinator({
+    pool,
+    // The concrete manager OWNS each run's whole endpoint lease; it calls the
+    // injected `acquireAgentMcpEndpointForRun` (signature-compatible) for an
+    // ssh-addressable host and returns null for an empty (local) host so the
+    // local path keeps using acp's own endpoint.
+    mcpEndpointManager: createPerRunEndpointManager({
+      // The composition root binds the concrete tunnel transport (the shared
+      // worker-host pool), keeping `@symphony/mcp` free of any worker-host-pool
+      // import (invariant #8) while the coordinator stays on the 3-arg acquirer.
+      acquireForRun: async (runSettings, workerHost, runKey) =>
+        acquireAgentMcpEndpointForRun(runSettings, workerHost, runKey, workerHostPool),
+    }),
+    // Same structured-event sink as the pool so coordinator faults (e.g.
+    // worker_pool_endpoint_release_failed) reach the log file instead of being
+    // silently dropped by the no-op default.
+    logEvent,
+    settings: workerPoolSettings,
+    // Reload path for out-of-tree drivers: the coordinator awaits this loader
+    // BEFORE pool.reconcile, so a reload that changes `driver` to a module
+    // specifier hot-loads it while pool.reconcile/swapDriver stay synchronous
+    // and transactional. A registered-but-unused module is inert.
+    driverLoader: async (driver: string) =>
+      ensureWorkerDriverLoaded(driver, defaultWorkerDriverRegistry, { baseDir, logEvent }),
+  });
 }
 
 /**
@@ -98,7 +223,6 @@ function resolveSkillsDestination(settings: Settings): string {
     defaultAgentExecutorRegistry.get(agent.executor)?.skillsDir?.(kind, agent) ?? ".codex/skills"
   );
 }
-
 function createRunAgentAttemptAdapters(): RunAgentAttemptAdapters {
   return {
     createWorkspaceForIssue: async (settings, issue, options) =>

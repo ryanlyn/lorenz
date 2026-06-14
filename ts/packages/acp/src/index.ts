@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
-import { execFileSync, type ChildProcessWithoutNullStreams } from "node:child_process";
+import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { Readable, Writable } from "node:stream";
 
 import {
@@ -72,6 +72,15 @@ interface Session extends AgentSession {
   acpOptions: AcpAgentOptions;
   init: InitializeResponse;
   mcpEndpoint: AgentMcpEndpointLease;
+  /**
+   * True when {@link AcpSession.mcpEndpoint} was THREADED in by the dispatch
+   * coordinator (it owns the whole lease for this run). acp must then SKIP both its
+   * own `acquireAgentMcpEndpoint` AND its own `mcpEndpoint.release()` so the
+   * coordinator's `slot.release` is the single owner (no double-close / orphaned
+   * token+local-server+tunnel). False on the local / non-pool path, where acp
+   * acquires AND releases its own endpoint byte-for-byte as before.
+   */
+  ownsMcpEndpoint: boolean;
   workerHost?: string | null | undefined;
   onUpdate?: ((update: AgentUpdate) => void) | undefined;
   usageTotals: UsageTotals;
@@ -134,6 +143,15 @@ export class Executor implements AgentExecutor {
     issue?: Issue;
     settings: Settings;
     workerHost?: string | null;
+    /**
+     * A pre-resolved per-run MCP endpoint lease threaded in by the dispatch
+     * coordinator (it owns the whole lease for the run). When present (non-null) acp
+     * USES it instead of acquiring its own AND skips releasing it in `stopSession`
+     * (the coordinator's `slot.release` closes it - single ownership). When absent
+     * (null / local / non-pool) acp acquires AND releases its OWN endpoint exactly
+     * as before.
+     */
+    mcpEndpoint?: AgentMcpEndpointLease | null;
     onUpdate?: (update: AgentUpdate) => void;
   }): Promise<Session> {
     const workspace = await validateWorkspaceCwd(
@@ -143,16 +161,22 @@ export class Executor implements AgentExecutor {
     );
     const agentKind = input.settings.agent.kind;
     const agentConfig = resolveAgentConfig(input.settings, agentKind);
+    // The coordinator owns the lease ONLY when one was threaded in; otherwise acp
+    // owns the endpoint it acquires below and must release it on stop.
+    const threadedEndpoint = input.mcpEndpoint ?? null;
+    const ownsMcpEndpoint = threadedEndpoint === null;
     const acpOptions = acpAgentOptions(agentConfig);
     let mcpEndpoint: AgentMcpEndpointLease | null = null;
     let child: ChildProcessWithoutNullStreams | null = null;
     let session: Session | null = null;
     try {
-      mcpEndpoint = await acquireAgentMcpEndpoint(
-        input.settings,
-        input.workerHost ?? null,
-        mcpTunnelTransport,
-      );
+      mcpEndpoint =
+        threadedEndpoint ??
+        (await acquireAgentMcpEndpoint(
+          input.settings,
+          input.workerHost ?? null,
+          mcpTunnelTransport,
+        ));
       child = startBridgeProcess(acpOptions.bridgeCommand, workspace, input.workerHost ?? null);
       const client = acpClient({
         workspace,
@@ -182,6 +206,7 @@ export class Executor implements AgentExecutor {
         acpOptions,
         init,
         mcpEndpoint,
+        ownsMcpEndpoint,
         workerHost: input.workerHost ?? null,
         sessionId: null,
         executorPid,
@@ -211,7 +236,10 @@ export class Executor implements AgentExecutor {
       if (session) await this.stopSession(session);
       else {
         if (child) await stopChild(child);
-        await mcpEndpoint?.release();
+        // Only release the endpoint acp OWNS. A threaded lease belongs to the
+        // coordinator's slot.release, so acp must never release it (even on a
+        // startup error) or it would double-close the token+local-server+tunnel.
+        if (ownsMcpEndpoint) await mcpEndpoint?.release();
       }
       throw error;
     }
@@ -344,7 +372,11 @@ export class Executor implements AgentExecutor {
       // Closing is best effort because the bridge may already be gone.
     } finally {
       await stopChild(session.process);
-      await session.mcpEndpoint.release();
+      // Release ONLY the endpoint acp owns. When the coordinator threaded a
+      // per-run lease in (`ownsMcpEndpoint === false`) the slot.release closes it,
+      // so acp skips its own release to avoid a double-close of the shared
+      // token+local-server+tunnel.
+      if (session.ownsMcpEndpoint) await session.mcpEndpoint.release();
     }
   }
 }
@@ -672,44 +704,6 @@ export function resolveBridgeCommand(bridgeCommand: string, workerHost: string |
   }
 }
 
-// Packaged builds of the CLI do not bundle the claude/codex agent binaries, so the local bridge
-// resolves them from the host. codex already falls back to `codex` on PATH, but claude needs an
-// explicit path, so both are set for consistency. An explicit value in the environment always wins.
-const HOST_AGENT_BINARIES: ReadonlyArray<{ env: string; command: string }> = [
-  { env: "CLAUDE_CODE_EXECUTABLE", command: "claude" },
-  { env: "CODEX_PATH", command: "codex" },
-];
-
-const hostBinaryPaths = new Map<string, string | null>();
-
-function lookupHostBinary(command: string): string | null {
-  const cached = hostBinaryPaths.get(command);
-  if (cached !== undefined) return cached;
-  let resolved: string | null;
-  try {
-    // A login shell matches the PATH the bridge itself sees when it is spawned under `bash -lc`.
-    resolved =
-      execFileSync("bash", ["-lc", `command -v ${command}`], { encoding: "utf8" }).trim() || null;
-  } catch {
-    resolved = null;
-  }
-  hostBinaryPaths.set(command, resolved);
-  return resolved;
-}
-
-export function hostAgentBinaryEnv(
-  currentEnv: NodeJS.ProcessEnv = process.env,
-  lookup: (command: string) => string | null = lookupHostBinary,
-): Record<string, string> {
-  const env: Record<string, string> = {};
-  for (const { env: name, command } of HOST_AGENT_BINARIES) {
-    if (currentEnv[name]) continue;
-    const resolved = lookup(command);
-    if (resolved) env[name] = resolved;
-  }
-  return env;
-}
-
 function startBridgeProcess(
   bridgeCommand: string,
   workspace: string,
@@ -717,7 +711,6 @@ function startBridgeProcess(
 ): ChildProcessWithoutNullStreams {
   const command = `exec ${resolveBridgeCommand(bridgeCommand, workerHost)}`;
   if (workerHost) {
-    // Remote bridges resolve their own binaries on the worker host.
     return startSshProcess(workerHost, `cd ${shellEscape(workspace)} && ${command}`);
   }
   return execa("bash", ["-lc", command], {
@@ -726,7 +719,6 @@ function startBridgeProcess(
     stdout: "pipe",
     stderr: "pipe",
     reject: false,
-    env: hostAgentBinaryEnv(),
   }) as unknown as ChildProcessWithoutNullStreams;
 }
 

@@ -20,6 +20,9 @@
       "path": "../dispatch"
     },
     {
+      "path": "../dispatch-coordinator"
+    },
+    {
       "path": "../domain"
     },
     {
@@ -39,6 +42,9 @@
     },
     {
       "path": "../runtime-events"
+    },
+    {
+      "path": "../worker-pool"
     },
     {
       "path": "../workflow"

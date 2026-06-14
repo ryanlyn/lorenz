@@ -1,5 +1,6 @@
 import { settingsForIssueState } from "@symphony/config";
 import { issueIsActive } from "@symphony/dispatch";
+import type { AgentMcpEndpointLease } from "@symphony/mcp";
 import { ensembleSize } from "@symphony/issue";
 import { buildPrompt, continuationPrompt } from "@symphony/prompt";
 import {
@@ -32,6 +33,7 @@ export interface RunAgentAttemptAdapters {
       slotIndex: number;
       ensembleSize: number;
       workerHost: string | null;
+      forceSlotSuffix?: boolean;
       abortSignal?: AbortSignal | undefined;
       onHookEvent?: ((message: HookExecutionMessage) => void) | undefined;
     },
@@ -46,6 +48,19 @@ export interface RunAgentAttemptAdapters {
   ): Promise<void>;
   executorFactory(settings: Settings): Promise<AgentExecutor> | AgentExecutor;
 }
+
+/**
+ * The executor `startSession` input EXTENDED with the optional per-run
+ * `mcpEndpoint` lease. The base is the shared `AgentExecutor.startSession`
+ * parameter (so every required field stays in lockstep with the interface); the
+ * extra optional `mcpEndpoint` is carried through to the acp executor's widened
+ * input. Building the call argument as this type keeps the value assignable to
+ * the narrower interface param without an excess-property error on a fresh
+ * literal.
+ */
+type StartSessionInput = Parameters<AgentExecutor["startSession"]>[0] & {
+  mcpEndpoint?: AgentMcpEndpointLease | null;
+};
 
 export interface RunResult {
   workspace: string;
@@ -62,6 +77,23 @@ export interface RunAgentAttemptInput {
   workerHost?: string | null;
   slotIndex?: number;
   attempt?: number | null;
+  /**
+   * The dispatch coordinator's per-run MCP endpoint lease for THIS run, threaded
+   * straight into `executor.startSession`. When present (non-null) the acp executor
+   * USES it and skips acquiring/releasing its own endpoint (the coordinator owns
+   * the whole lease). Absent / null on the local / non-pool path, where acp
+   * acquires AND releases its own endpoint byte-for-byte.
+   */
+  mcpEndpoint?: AgentMcpEndpointLease | null;
+  /**
+   * Gated co-residence override for the workspace layout. When `true` the slot
+   * suffix is applied UNCONDITIONALLY (so two solo runs of one issue co-residing on
+   * one machine get distinct `<issue>/<slotIndex>` dirs instead of sharing the bare
+   * path); the coordinator/runtime sets it only when `slotsPerMachine > 1`
+   * co-residence is active. Absent / `false` (the default) keeps the single-slot
+   * bare layout byte-identical.
+   */
+  forceSlotSuffix?: boolean;
   onUpdate?: (update: AgentUpdate) => void;
   fetchIssue?: (issue: Issue) => Promise<Issue>;
   abortSignal?: AbortSignal | undefined;
@@ -91,6 +123,10 @@ class RunController {
           slotIndex,
           ensembleSize: size,
           workerHost,
+          // Gated co-residence: force the slot suffix so two solo same-issue runs
+          // that co-reside on one machine get distinct dirs. Default false keeps
+          // the single-slot bare layout byte-identical.
+          forceSlotSuffix: input.forceSlotSuffix ?? false,
           abortSignal,
           onHookEvent: (message) => this.emitHookUpdate(message),
         }),
@@ -132,16 +168,28 @@ class RunController {
       }
 
       const executor = await executorFor(input.adapters, runtime);
-      session = await executor.startSession({
+      // Thread the coordinator's per-run endpoint (or null on the local/non-pool
+      // path) into the executor: the acp executor consumes a non-null lease and
+      // skips its own acquire+release. Built as a typed value so the optional
+      // `mcpEndpoint` field is carried to the executor's widened input without
+      // tripping the excess-property check on the narrower `AgentExecutor`
+      // interface. The field is a DECLARED optional on `StartSessionInput`, and
+      // the executor reads an absent value as null, so the explicit `null` is the
+      // deliberate, pinned disabled-path contract (a strict adapter rejecting a
+      // declared optional field would be its own bug) - we keep it rather than
+      // omit the key.
+      const startSessionInput: StartSessionInput = {
         workspace,
         workerHost,
         issue,
         settings: runtime,
+        mcpEndpoint: input.mcpEndpoint ?? null,
         onUpdate: (update) => {
           updates.push(update);
           input.onUpdate?.(update);
         },
-      });
+      };
+      session = await executor.startSession(startSessionInput);
 
       while (turnCount < runtime.agent.maxTurns) {
         throwIfAborted(input.abortSignal);
@@ -394,6 +442,7 @@ async function createWorkspaceForIssue(
     slotIndex: number;
     ensembleSize: number;
     workerHost: string | null;
+    forceSlotSuffix?: boolean;
     abortSignal?: AbortSignal | undefined;
     onHookEvent?: ((message: HookExecutionMessage) => void) | undefined;
   },

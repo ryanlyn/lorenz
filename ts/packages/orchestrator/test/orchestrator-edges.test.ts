@@ -1,7 +1,15 @@
 import { test } from "vitest";
 import { Orchestrator, normalizeIssue, parseConfig, slotKey } from "@symphony/cli";
-import type { ClockPort } from "@symphony/domain";
+import type { ClockPort, Issue, RunningEntry } from "@symphony/domain";
 import { assert } from "@symphony/test-utils";
+
+/** Claims on the static/local path, asserting the union arm and unwrapping the entry. */
+function claimEntry(orchestrator: Orchestrator, issue: Issue): RunningEntry | null {
+  const result = orchestrator.claim(issue);
+  if (result === null) return null;
+  assert.equal(result.kind, "running");
+  return result.kind === "running" ? result.entry : null;
+}
 
 function makeIssue(overrides: Record<string, unknown> = {}) {
   return normalizeIssue({
@@ -35,8 +43,8 @@ test("claim — null return when global concurrency cap reached", () => {
   const first = makeIssue({ id: "a", identifier: "MT-A" });
   const second = makeIssue({ id: "b", identifier: "MT-B" });
 
-  assert.ok(orchestrator.claim(first));
-  assert.equal(orchestrator.claim(second), null);
+  assert.ok(claimEntry(orchestrator, first));
+  assert.equal(claimEntry(orchestrator, second), null);
 });
 
 test("claim — null return when all ensemble slots claimed", () => {
@@ -44,9 +52,9 @@ test("claim — null return when all ensemble slots claimed", () => {
   const orchestrator = new Orchestrator(settings);
   const issue = makeIssue();
 
-  assert.ok(orchestrator.claim(issue));
-  assert.ok(orchestrator.claim(issue));
-  assert.equal(orchestrator.claim(issue), null);
+  assert.ok(claimEntry(orchestrator, issue));
+  assert.ok(claimEntry(orchestrator, issue));
+  assert.equal(claimEntry(orchestrator, issue), null);
 });
 
 test("claim — null return when worker hosts at capacity", () => {
@@ -58,8 +66,8 @@ test("claim — null return when worker hosts at capacity", () => {
   const first = makeIssue({ id: "a", identifier: "MT-A" });
   const second = makeIssue({ id: "b", identifier: "MT-B" });
 
-  assert.ok(orchestrator.claim(first));
-  assert.equal(orchestrator.claim(second), null);
+  assert.ok(claimEntry(orchestrator, first));
+  assert.equal(claimEntry(orchestrator, second), null);
 });
 
 test("claim — preferred slot honored on retry", () => {
@@ -77,7 +85,7 @@ test("claim — preferred slot honored on retry", () => {
     error: "failed",
   });
 
-  const claimed = orchestrator.claim(issue);
+  const claimed = claimEntry(orchestrator, issue);
   assert.equal(claimed?.slotIndex, 2);
   assert.equal(claimed?.retryAttempt, 1);
 });
@@ -87,7 +95,7 @@ test("claim — non-existent retry does not interfere with fresh claim", () => {
   const orchestrator = new Orchestrator(settings);
   const issue = makeIssue();
 
-  const claimed = orchestrator.claim(issue);
+  const claimed = claimEntry(orchestrator, issue);
   assert.ok(claimed);
   assert.equal(claimed?.slotIndex, 0);
   assert.equal(claimed?.retryAttempt, null);
@@ -107,7 +115,7 @@ test("applyUpdate — unknown slotKey is silently ignored", () => {
 test("applyUpdate — turnCount increments on each turn_completed", () => {
   const orchestrator = new Orchestrator(parseConfig());
   const issue = makeIssue();
-  orchestrator.claim(issue);
+  claimEntry(orchestrator, issue);
 
   orchestrator.applyUpdate(issue.id, 0, { type: "turn_completed" });
   orchestrator.applyUpdate(issue.id, 0, { type: "turn_completed" });
@@ -119,7 +127,7 @@ test("applyUpdate — turnCount increments on each turn_completed", () => {
 test("applyUpdate — rateLimits propagated to state", () => {
   const orchestrator = new Orchestrator(parseConfig());
   const issue = makeIssue();
-  orchestrator.claim(issue);
+  claimEntry(orchestrator, issue);
 
   const limits = { provider: "anthropic", retryAfter: 30 };
   orchestrator.applyUpdate(issue.id, 0, {
@@ -136,7 +144,7 @@ test("applyUpdate — rateLimits propagated to state", () => {
 test("finish — non-normal finish does not create retry entry", () => {
   const orchestrator = new Orchestrator(parseConfig());
   const issue = makeIssue();
-  orchestrator.claim(issue);
+  claimEntry(orchestrator, issue);
 
   orchestrator.finish(issue.id, 0, false, "crashed");
 
@@ -151,11 +159,11 @@ test("finish — secondsRunning accumulates across multiple finishes", () => {
   const issueA = makeIssue({ id: "a", identifier: "MT-A" });
   const issueB = makeIssue({ id: "b", identifier: "MT-B" });
 
-  orchestrator.claim(issueA);
+  claimEntry(orchestrator, issueA);
   clock.advance(10_000);
   orchestrator.finish(issueA.id, 0, false);
 
-  orchestrator.claim(issueB);
+  claimEntry(orchestrator, issueB);
   clock.advance(15_000);
   orchestrator.finish(issueB.id, 0, false);
 
@@ -165,7 +173,7 @@ test("finish — secondsRunning accumulates across multiple finishes", () => {
 test("finish — finishing same slot twice is idempotent (second is no-op)", () => {
   const orchestrator = new Orchestrator(parseConfig());
   const issue = makeIssue();
-  orchestrator.claim(issue);
+  claimEntry(orchestrator, issue);
 
   orchestrator.finish(issue.id, 0, true);
   const afterFirst = orchestrator.snapshot().usageTotals.secondsRunning;
@@ -179,7 +187,7 @@ test("finish — finishing same slot twice is idempotent (second is no-op)", () 
 test("cleanupIssue — removes running entry and claimed slot", () => {
   const orchestrator = new Orchestrator(parseConfig());
   const issue = makeIssue();
-  orchestrator.claim(issue);
+  claimEntry(orchestrator, issue);
 
   assert.equal(orchestrator.snapshot().running.length, 1);
   orchestrator.cleanupIssue(issue.id);
@@ -190,7 +198,7 @@ test("cleanupIssue — removes running entry and claimed slot", () => {
 test("cleanupIssue — removes retry attempts for issue", () => {
   const orchestrator = new Orchestrator(parseConfig());
   const issue = makeIssue();
-  orchestrator.claim(issue);
+  claimEntry(orchestrator, issue);
   orchestrator.finish(issue.id, 0, true);
   assert.equal(orchestrator.snapshot().retrying.length, 1);
 
@@ -201,7 +209,7 @@ test("cleanupIssue — removes retry attempts for issue", () => {
 test("cleanupIssue — adds issue to completed set", () => {
   const orchestrator = new Orchestrator(parseConfig());
   const issue = makeIssue();
-  orchestrator.claim(issue);
+  claimEntry(orchestrator, issue);
 
   orchestrator.cleanupIssue(issue.id);
   assert.equal(orchestrator.state.completed.has(issue.id), true);
@@ -212,7 +220,7 @@ test("cleanupIssue — adds issue to completed set", () => {
 test("snapshot — returns defensive copy (mutation does not affect state)", () => {
   const orchestrator = new Orchestrator(parseConfig());
   const issue = makeIssue();
-  orchestrator.claim(issue);
+  claimEntry(orchestrator, issue);
 
   const snap = orchestrator.snapshot();
   snap.running.length = 0;
@@ -229,7 +237,7 @@ test("eligibleIssues — inactive issue cleared from retryAttempts", () => {
   const orchestrator = new Orchestrator(settings);
   const issue = makeIssue();
 
-  orchestrator.claim(issue);
+  claimEntry(orchestrator, issue);
   orchestrator.finish(issue.id, 0, true);
   assert.equal(orchestrator.snapshot().retrying.length, 1);
 
@@ -268,6 +276,6 @@ test("Orchestrator — accepts custom ClockPort for deterministic time assertion
   const orchestrator = new Orchestrator(parseConfig(), clock);
   const issue = makeIssue();
 
-  const entry = orchestrator.claim(issue);
+  const entry = claimEntry(orchestrator, issue);
   assert.equal(entry?.startedAt.getTime(), fixedTime.getTime());
 });

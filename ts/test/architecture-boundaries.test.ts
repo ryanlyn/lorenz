@@ -130,7 +130,8 @@ test("ugly retry flow keeps capacity authority in the orchestrator", () => {
 
   clock.advance(10_000);
   assert.equal(orchestrator.eligibleIssues([issue])[0]?.identifier, issue.identifier);
-  assert.equal(orchestrator.claim(issue)?.slotIndex, 1);
+  const reclaimed = orchestrator.claim(issue);
+  assert.equal(reclaimed?.kind === "running" ? reclaimed.entry.slotIndex : null, 1);
   assert.equal(orchestrator.state.claimed.has(slotKey(issue.id, 1)), true);
 });
 

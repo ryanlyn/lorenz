@@ -14,6 +14,7 @@ import {
   type ParseResult,
 } from "@symphony/cli-kit";
 import { validateDispatchConfig } from "@symphony/config";
+import { checkSlotsPerMachineGate } from "@symphony/dispatch-coordinator";
 import { startObservabilityServer } from "@symphony/server";
 import { configureLogFile } from "@symphony/log-file";
 import { SymphonyRuntime } from "@symphony/runtime";
@@ -40,6 +41,7 @@ import {
   type DoctorCommanderOptions,
 } from "./doctor.js";
 import {
+  buildDispatchCoordinator,
   createTrackerClient,
   runAgentAttempt,
   registerBuiltinBackends,
@@ -142,6 +144,17 @@ export async function runDaemon(options: CliOptions): Promise<number> {
     const workflow = await loadRuntimeWorkflow();
     await configureLogFile(workflow.settings.logging.logFile);
 
+    // baseDir anchors `./relative` driver module specifiers to the workflow
+    // file's directory - the most predictable anchor for operators.
+    const coordinator = await buildDispatchCoordinator(workflow.settings, process.env, {
+      baseDir: path.dirname(workflow.path),
+    });
+    // Post-construction gate: slotsPerMachine>1 is only safe once the coordinator
+    // advertises per-run MCP endpoints AND the operator has explicitly opted into
+    // co-residence (a poisoned worker fails every co-resident run on recycle). The
+    // capability is known only here, after the coordinator exists, so this is the
+    // right home for the check (validateDispatchConfig stays capability-free).
+    assertSlotsPerMachineGate(workflow.settings, coordinator);
     const traceDir = workflow.settings.server.traceDir!;
     const traceEmitter = new TraceEmitter(traceDir);
     const issueStore = new IssueStore(defaultIssueStorePath());
@@ -150,6 +163,7 @@ export async function runDaemon(options: CliOptions): Promise<number> {
       clientFactory: createTrackerClient,
       reloadWorkflow: loadRuntimeWorkflow,
       runner: runAgentAttempt,
+      coordinator,
       validateDispatch: (settings) =>
         validateDispatchConfig(
           settings,
@@ -170,6 +184,7 @@ export async function runDaemon(options: CliOptions): Promise<number> {
       },
       ...runtimeAdapters,
     });
+    await coordinator?.hydrate();
     let instance: ReturnType<typeof render> | null = null;
     // Persistent (not once) handlers so the graceful teardown below actually
     // runs to completion. With process.once, the listener is removed after the
@@ -235,6 +250,9 @@ export async function runDaemon(options: CliOptions): Promise<number> {
       // can't slip past them and kill the process mid-shutdown.
       try {
         instance?.unmount();
+        // start() returns once stop() flips the runtime to stopped; drain paid
+        // cloud workers before tearing down the server so they are destroyed on exit.
+        await runtime.drainWorkerPool();
         await server?.stop();
         issueStore.close();
       } finally {
@@ -294,4 +312,33 @@ function applyCliOverrides(workflow: WorkflowDefinition, options: CliOptions): v
 
 export function projectUrlForSettings(settings: Settings): string | undefined {
   return defaultTrackerRegistry.providerFor(settings)?.projectUrl?.(settings);
+}
+
+/**
+ * Post-construction blast-radius gate for `worker.worker_pool.slots_per_machine > 1`
+ * (the canonical field behind the legacy `max_in_flight` key). Co-residence packs
+ * multiple run slots onto one machine, so it requires BOTH:
+ *
+ *  1. a coordinator that advertises `capabilities.perRunEndpoint === true` (each
+ *     RunSlot owns its own MCP endpoint - token + local-server + tunnel - so two
+ *     co-resident runs never share or tear out each other's endpoint), and
+ *  2. an explicit `worker.worker_pool.co_residence` operator opt-in, because a single
+ *     poisoned worker fails every co-resident run on recycle: widening that blast
+ *     radius is a deliberate tradeoff, not just a capability.
+ *
+ * `slotsPerMachine === 1` (the default) always passes - the gate never triggers, so
+ * the single-tenant startup path stays byte-identical. This lives in the daemon
+ * rather than {@link validateDispatchConfig} because the per-run-endpoint capability
+ * only exists once the coordinator has been constructed; the per-poll config
+ * validation must stay capability-free.
+ */
+export function assertSlotsPerMachineGate(
+  settings: Settings,
+  coordinator: { readonly capabilities: { readonly perRunEndpoint: boolean } } | undefined,
+): void {
+  // Delegate to the shared PURE predicate so this STARTUP gate and the runtime
+  // RELOAD guard enforce byte-identical rules (no drift). `null` means safe; a
+  // string is the operator-facing failure message, which the daemon throws.
+  const message = checkSlotsPerMachineGate(settings.worker.workerPool, coordinator?.capabilities);
+  if (message !== null) throw new Error(message);
 }

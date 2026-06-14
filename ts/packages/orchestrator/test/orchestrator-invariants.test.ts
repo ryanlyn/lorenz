@@ -2,12 +2,20 @@ import { test, describe } from "vitest";
 import fc from "fast-check";
 import { defaultSettings, parseConfig } from "@symphony/config";
 import { slotKey } from "@symphony/dispatch";
-import type { RunningEntry, Settings } from "@symphony/domain";
+import type { Issue, RunningEntry, Settings } from "@symphony/domain";
 import { assert, issueWith as makeIssue } from "@symphony/test-utils";
 
 import { Orchestrator } from "@symphony/orchestrator";
 
 // --- Helpers ---
+
+/** Claims on the static/local path, asserting the union arm and unwrapping the entry. */
+function claimEntry(orch: Orchestrator, issue: Issue): RunningEntry | null {
+  const result = orch.claim(issue);
+  if (result === null) return null;
+  assert.equal(result.kind, "running");
+  return result.kind === "running" ? result.entry : null;
+}
 
 function makeClock(baseMs: number) {
   let now = baseMs;
@@ -45,8 +53,8 @@ describe("INVARIANT: When the global concurrency cap is reached, the system SHAL
     const i2 = makeIssue({ id: "i2", identifier: "T-2" });
     const i3 = makeIssue({ id: "i3", identifier: "T-3" });
 
-    assert.ok(orch.claim(i1) !== null);
-    assert.ok(orch.claim(i2) !== null);
+    assert.ok(claimEntry(orch, i1) !== null);
+    assert.ok(claimEntry(orch, i2) !== null);
     assert.equal(orch.state.running.size, 2);
 
     const eligible = orch.eligibleIssues([i3]);
@@ -77,7 +85,7 @@ describe("INVARIANT: When a per-state concurrency cap is reached, the system SHA
     });
     const issueC = makeIssue({ id: "todo-c", identifier: "T-C", state: "Todo" });
 
-    assert.ok(orch.claim(issueA) !== null);
+    assert.ok(claimEntry(orch, issueA) !== null);
 
     const eligible = orch.eligibleIssues([issueC, issueB]);
 
@@ -104,8 +112,8 @@ describe("INVARIANT: When dispatch is evaluated, both global and per-state caps 
       stateType: "started",
     });
 
-    assert.ok(orch.claim(a) !== null);
-    assert.ok(orch.claim(b) !== null);
+    assert.ok(claimEntry(orch, a) !== null);
+    assert.ok(claimEntry(orch, b) !== null);
 
     const eligible = orch.eligibleIssues([c]);
     assert.deepEqual(eligible, []);
@@ -128,13 +136,13 @@ describe("INVARIANT: When all worker hosts are at capacity, the system SHALL NOT
 
     const claimed: RunningEntry[] = [];
     for (let i = 0; i < 4; i++) {
-      const entry = orch.claim(makeIssue({ id: `i${i}`, identifier: `T-${i}` }));
+      const entry = claimEntry(orch, makeIssue({ id: `i${i}`, identifier: `T-${i}` }));
       assert.ok(entry !== null);
       claimed.push(entry!);
     }
 
     // Both hosts should be at capacity (2 each)
-    const fifth = orch.claim(makeIssue({ id: "i4", identifier: "T-4" }));
+    const fifth = claimEntry(orch, makeIssue({ id: "i4", identifier: "T-4" }));
     assert.equal(fifth, null);
 
     // Finish one entry on host-a
@@ -143,7 +151,7 @@ describe("INVARIANT: When all worker hosts are at capacity, the system SHALL NOT
     orch.finish(hostAEntry.issue.id, hostAEntry.slotIndex, false);
 
     // Now a new claim should succeed and go to host-a (freed host)
-    const reclaimed = orch.claim(makeIssue({ id: "i5", identifier: "T-5" }));
+    const reclaimed = claimEntry(orch, makeIssue({ id: "i5", identifier: "T-5" }));
     assert.ok(reclaimed !== null);
     assert.equal(reclaimed!.workerHost, "host-a");
   });
@@ -159,19 +167,19 @@ describe("INVARIANT: When multiple hosts are tied at the lowest load, the system
     const orch = new Orchestrator(settings, clock);
 
     // All hosts at load 0: first in config order wins
-    const entry1 = orch.claim(makeIssue({ id: "i1", identifier: "T-1" }));
+    const entry1 = claimEntry(orch, makeIssue({ id: "i1", identifier: "T-1" }));
     assert.equal(entry1!.workerHost, "host-a");
 
     // host-a:1, host-b:0, host-c:0 -> host-b is least-loaded first in order
-    const entry2 = orch.claim(makeIssue({ id: "i2", identifier: "T-2" }));
+    const entry2 = claimEntry(orch, makeIssue({ id: "i2", identifier: "T-2" }));
     assert.equal(entry2!.workerHost, "host-b");
 
     // host-a:1, host-b:1, host-c:0 -> host-c is least-loaded
-    const entry3 = orch.claim(makeIssue({ id: "i3", identifier: "T-3" }));
+    const entry3 = claimEntry(orch, makeIssue({ id: "i3", identifier: "T-3" }));
     assert.equal(entry3!.workerHost, "host-c");
 
     // host-a:1, host-b:1, host-c:1 -> all tied at 1, first in config order
-    const entry4 = orch.claim(makeIssue({ id: "i4", identifier: "T-4" }));
+    const entry4 = claimEntry(orch, makeIssue({ id: "i4", identifier: "T-4" }));
     assert.equal(entry4!.workerHost, "host-a");
   });
 });
@@ -187,10 +195,10 @@ describe("INVARIANT: When a slot is already claimed, a repeated claim for the sa
     const orch = new Orchestrator(settings, clock);
     const issue = makeIssue();
 
-    const first = orch.claim(issue);
+    const first = claimEntry(orch, issue);
     assert.ok(first !== null);
 
-    const second = orch.claim(issue);
+    const second = claimEntry(orch, issue);
     assert.equal(second, null);
 
     assert.equal(orch.state.claimed.has(slotKey(issue.id, 0)), true);
@@ -205,7 +213,7 @@ describe("INVARIANT: When a claim succeeds, the retryAttempts entry for that slo
     const orch = new Orchestrator(settings, clock);
     const issue = makeIssue();
 
-    const entry = orch.claim(issue);
+    const entry = claimEntry(orch, issue);
     assert.ok(entry !== null);
     clock.advance(1000);
     orch.finish(issue.id, 0, true, undefined, "continuation");
@@ -215,7 +223,7 @@ describe("INVARIANT: When a claim succeeds, the retryAttempts entry for that slo
 
     // Advance past due time
     clock.advance(10000);
-    const entry2 = orch.claim(issue);
+    const entry2 = claimEntry(orch, issue);
     assert.ok(entry2 !== null);
 
     assert.equal(orch.state.retryAttempts.has(slotKey(issue.id, 0)), false);
@@ -230,7 +238,7 @@ describe("INVARIANT: When an entry is finished, its slot key SHALL be removed fr
     const orch = new Orchestrator(settings, clock);
     const issue = makeIssue();
 
-    orch.claim(issue);
+    claimEntry(orch, issue);
     assert.equal(orch.state.running.has(slotKey(issue.id, 0)), true);
     assert.equal(orch.state.claimed.has(slotKey(issue.id, 0)), true);
 
@@ -253,12 +261,12 @@ describe("INVARIANT: When all ensemble slots are claimed, the system SHALL retur
         const issue = makeIssue();
 
         for (let i = 0; i < ensembleSize; i++) {
-          const entry = orch.claim(issue);
+          const entry = claimEntry(orch, issue);
           assert.ok(entry !== null);
           assert.equal(entry!.slotIndex, i);
         }
 
-        assert.equal(orch.claim(issue), null);
+        assert.equal(claimEntry(orch, issue), null);
         assert.equal(orch.eligibleIssues([issue]).length, 0);
       }),
       { numRuns: 200 },
@@ -287,7 +295,7 @@ describe("INVARIANT: When a retry becomes due, stale claimed slots SHALL be rele
     });
 
     // claim should release the stale claim and succeed
-    const claimed = orch.claim(issue);
+    const claimed = claimEntry(orch, issue);
     assert.ok(claimed !== null);
     assert.equal(claimed!.slotIndex, 0);
     assert.equal(orch.snapshot().retrying.length, 0);
@@ -310,7 +318,7 @@ describe("INVARIANT: When an update targets a nonexistent slot key, the system S
           const orch = new Orchestrator(settings, clock);
 
           const existing = makeIssue({ id: "existing-1", identifier: "E-1" });
-          orch.claim(existing);
+          claimEntry(orch, existing);
 
           const snapBefore = JSON.stringify(orch.snapshot());
           if (slotKey(issueId, slotIndex) === slotKey("existing-1", 0)) return;
@@ -339,7 +347,7 @@ describe("INVARIANT: When a turn_completed event is applied, turnCount SHALL inc
         const orch = new Orchestrator(settings, clock);
         const issue = makeIssue();
 
-        orch.claim(issue);
+        claimEntry(orch, issue);
 
         for (let i = 0; i < numTurns; i++) {
           orch.applyUpdate(issue.id, 0, { type: "turn_completed" });
@@ -364,7 +372,7 @@ describe("INVARIANT: When a usage update reports lower values, entry usageTotals
     const orch = new Orchestrator(settings, clock);
     const issue = makeIssue();
 
-    orch.claim(issue);
+    claimEntry(orch, issue);
 
     orch.applyUpdate(issue.id, 0, {
       type: "usage",
@@ -391,7 +399,7 @@ describe("INVARIANT: When global usage totals are updated, growth SHALL be bound
     const orch = new Orchestrator(settings, clock);
     const issue = makeIssue();
 
-    orch.claim(issue);
+    claimEntry(orch, issue);
 
     // First update: global totals become 100/50/150
     orch.applyUpdate(issue.id, 0, {
@@ -432,7 +440,7 @@ describe("INVARIANT: When a running issue is refreshed, the update SHALL propaga
         const issue = makeIssue();
 
         for (let i = 0; i < ensembleSize; i++) {
-          orch.claim(issue);
+          claimEntry(orch, issue);
         }
 
         const updatedIssue = makeIssue({ state: "In Progress", stateType: "started" });
@@ -462,8 +470,8 @@ describe("INVARIANT: When an issue is cleaned up, all running entries, claimed s
     const issue = makeIssue();
 
     // Claim both ensemble slots
-    orch.claim(issue);
-    orch.claim(issue);
+    claimEntry(orch, issue);
+    claimEntry(orch, issue);
 
     // Finish slot 0 to create retry entry
     clock.advance(1000);
@@ -490,14 +498,14 @@ describe("INVARIANT: When an entry is finished, elapsed seconds SHALL be compute
     const orch = new Orchestrator(settings, clock);
 
     const issue1 = makeIssue({ id: "i1", identifier: "T-1" });
-    orch.claim(issue1);
+    claimEntry(orch, issue1);
 
     clock.advance(30_000);
     orch.finish(issue1.id, 0, false);
     assert.equal(orch.snapshot().usageTotals.secondsRunning, 30);
 
     const issue2 = makeIssue({ id: "i2", identifier: "T-2" });
-    orch.claim(issue2);
+    claimEntry(orch, issue2);
 
     clock.advance(15_000);
     orch.finish(issue2.id, 0, false);
@@ -512,7 +520,7 @@ describe("INVARIANT: When a continuation finish occurs, the issue SHALL be added
     const orch = new Orchestrator(settings, clock);
     const issue = makeIssue();
 
-    orch.claim(issue);
+    claimEntry(orch, issue);
     clock.advance(5000);
     orch.finish(issue.id, 0, true, undefined, "continuation");
 
@@ -535,7 +543,7 @@ describe("INVARIANT: When a snapshot is taken, its arrays and objects SHALL be i
     const orch = new Orchestrator(settings, clock);
     const issue = makeIssue();
 
-    orch.claim(issue);
+    claimEntry(orch, issue);
     clock.advance(5000);
     orch.finish(issue.id, 0, true, undefined, "continuation");
 

@@ -13,6 +13,7 @@ import { mergeMonotonicUsage } from "@symphony/policies/usage";
 import { selectLeastLoadedHost } from "@symphony/policies/workerHost";
 import {
   systemClock,
+  type AgentKind,
   type AgentUpdate,
   type ClockPort,
   type DispatchBlockReason,
@@ -25,8 +26,34 @@ import {
   type UsageTotals,
 } from "@symphony/domain";
 
+/**
+ * Internal record of a phase-1 slot hold while the dispatch coordinator negotiates capacity
+ * asynchronously. Keyed by slotKey(issueId, slotIndex) in {@link OrchestratorState.reserved}.
+ * Host-less by design: the orchestrator never stores a non-concrete worker host.
+ */
+export interface ReservationRecord {
+  /** Kept whole so per-state cap accounting (runningByState) works for reservations. */
+  issue: Issue;
+  slotIndex: number;
+  /** Opaque per-reservation token; bind/cancel are no-ops on mismatch (ABA guard). */
+  token: string;
+  agentKind: AgentKind;
+  ensembleSize: number;
+  /** Prior run's concrete host from the consumed retry entry. */
+  affinityHost: string | null;
+  retryAttempt: number | null;
+  reservedAt: Date;
+  /** Defensive expiry, swept by {@link Orchestrator.eligibleIssues}. */
+  expiresAtMonotonicMs: number;
+  /** The due RetryEntry consumed at reserve time, kept so cancel can restore it. */
+  consumedRetry: { key: string; entry: RetryEntry } | null;
+}
+
 export interface OrchestratorState {
   running: Map<string, RunningEntry>;
+  /** Phase-1 slot reservations; counted in EVERY concurrency-cap check. */
+  reserved: Map<string, ReservationRecord>;
+  /** Contains running AND reserved keys. */
   claimed: Set<string>;
   /** Retry entries keyed by slotKey(issueId, slotIndex). */
   retryAttempts: Map<string, RetryEntry>;
@@ -39,6 +66,7 @@ export interface OrchestratorState {
 export function createState(): OrchestratorState {
   return {
     running: new Map(),
+    reserved: new Map(),
     claimed: new Set(),
     retryAttempts: new Map(),
     completed: new Set(),
@@ -46,6 +74,47 @@ export function createState(): OrchestratorState {
     rateLimits: null,
     blockedDispatches: [],
   };
+}
+
+/**
+ * Phase-1 hold on a dispatch slot while the coordinator negotiates capacity.
+ * Host-less by design: the orchestrator never records a non-concrete host.
+ */
+export interface SlotReservation {
+  readonly issueId: string;
+  readonly identifier: string;
+  readonly slotIndex: number;
+  /** Opaque per-reservation token; bind/cancel are no-ops on mismatch (ABA guard). */
+  readonly token: string;
+  readonly agentKind: AgentKind;
+  readonly ensembleSize: number;
+  /**
+   * Prior run's CONCRETE workerHost from the consumed RetryEntry; threads into the
+   * coordinator's acquire as the sticky-retry affinity key.
+   */
+  readonly affinityHost: string | null;
+  readonly retryAttempt: number | null;
+  /** Defensive expiry (acquireTimeoutMs * 2 + 60s grace); swept by eligibleIssues. */
+  readonly expiresAtMonotonicMs: number;
+}
+
+export type ClaimResult =
+  /** Static/local path (no governing pool): the RunningEntry is minted at claim time. */
+  | { kind: "running"; entry: RunningEntry }
+  /**
+   * Pool governs: the slot is held host-less; the concrete host arrives via
+   * {@link Orchestrator.bindReservation} after the coordinator binds a run slot.
+   */
+  | { kind: "reserved"; reservation: SlotReservation };
+
+/** One entry of {@link Orchestrator.snapshot}'s `reserving` lane (in-acquire slots). */
+export interface ReservationSnapshotEntry {
+  issueId: string;
+  identifier: string;
+  slotIndex: number;
+  affinityHost: string | null;
+  retryAttempt: number | null;
+  reservedAtIso: string;
 }
 
 function zeroUsageTotals(): UsageTotals {
@@ -73,26 +142,62 @@ function retrySlotIndex(retry: RetryEntry): number {
   return retry.slotIndex ?? 0;
 }
 
+/**
+ * Optional capacity gate supplied by a configured worker pool. The probe is installed for the
+ * orchestrator's LIFETIME whenever a pool object exists, but a config reload can DISABLE or REMOVE
+ * the pool (it drains to zero) without the probe being torn down. {@link CapacityProbe.governs}
+ * reports whether the live pool currently governs capacity: only while it does are worker-host
+ * decisions delegated to {@link CapacityProbe.canAcquire} and the static `sshHosts` selection
+ * bypassed (claim then holds the slot as a host-less reservation until
+ * {@link Orchestrator.bindReservation} supplies the concrete bound host). Once it no longer
+ * governs (a disabled pool), both paths fall through to the normal static/local logic so a
+ * reload that turns the pool off cannot permanently block dispatch as `worker_host_capacity`.
+ */
+export interface CapacityProbe {
+  governs(): boolean;
+  canAcquire(): boolean;
+}
+
 export class Orchestrator {
   readonly state: OrchestratorState;
   private readonly usageDeltaBases = new Map<string, UsageTotals>();
+  private nextReservationToken = 1;
 
   constructor(
     public settings: Settings,
     private readonly clock: ClockPort = systemClock,
     state: OrchestratorState = createState(),
+    private readonly capacityProbe?: CapacityProbe,
   ) {
     this.state = state;
   }
 
+  /**
+   * Per-state counts of slots holding concurrency capacity: running entries PLUS reserved
+   * (in-acquire) slots. Reservations must count toward every cap or dispatch could exceed
+   * `maxConcurrentAgents` during acquire windows.
+   */
+  private runningByStateCounts(): Map<string, number> {
+    const runningByState = new Map<string, number>();
+    const fold = (issue: Issue): void => {
+      const key = normalizeStateName(issue.state);
+      runningByState.set(key, (runningByState.get(key) ?? 0) + 1);
+    };
+    for (const entry of this.state.running.values()) fold(entry.issue);
+    for (const record of this.state.reserved.values()) fold(record.issue);
+    return runningByState;
+  }
+
+  /** Total slots holding concurrency capacity (running + reserved). */
+  private occupiedSlotCount(): number {
+    return this.state.running.size + this.state.reserved.size;
+  }
+
   eligibleIssues(issues: Issue[]): Issue[] {
+    this.sweepExpiredReservations();
     this.cleanupRetryAttempts(issues);
     this.state.blockedDispatches = [];
-    const runningByState = new Map<string, number>();
-    for (const entry of this.state.running.values()) {
-      const key = normalizeStateName(entry.issue.state);
-      runningByState.set(key, (runningByState.get(key) ?? 0) + 1);
-    }
+    const runningByState = this.runningByStateCounts();
 
     return sortForDispatch(issues).filter((issue) => {
       const retries = this.retryEntriesForIssue(issue.id);
@@ -101,7 +206,7 @@ export class Orchestrator {
       if (dueRetries.length > 0) this.releaseStaleClaimsForRetry(issue.id);
       const blockedRetry = dueRetries[0]?.[1] ?? retries[0]?.[1];
       const dispatchState = {
-        runningCount: this.state.running.size,
+        runningCount: this.occupiedSlotCount(),
         runningByState,
         claimedSlots: this.state.claimed,
         workerCapacityAvailable: this.workerCapacityAvailable(),
@@ -124,21 +229,16 @@ export class Orchestrator {
     });
   }
 
-  claim(issue: Issue): RunningEntry | null {
+  claim(issue: Issue): ClaimResult | null {
     const retries = this.retryEntriesForIssue(issue.id);
     const retryEntry = retries.find(([, retry]) => this.retryIsDue(retry)) ?? retries[0];
     if (retryEntry && this.retryIsDue(retryEntry[1])) this.releaseStaleClaimsForRetry(issue.id);
     const retryEntryKey = retryEntry?.[0];
     const retry = retryEntry?.[1];
-    const runningByState = new Map<string, number>();
-    for (const entry of this.state.running.values()) {
-      const key = normalizeStateName(entry.issue.state);
-      runningByState.set(key, (runningByState.get(key) ?? 0) + 1);
-    }
     if (
       !shouldDispatchIssue(issue, this.settings, {
-        runningCount: this.state.running.size,
-        runningByState,
+        runningCount: this.occupiedSlotCount(),
+        runningByState: this.runningByStateCounts(),
         claimedSlots: this.state.claimed,
         workerCapacityAvailable: this.workerCapacityAvailable(),
       })
@@ -152,8 +252,17 @@ export class Orchestrator {
       retry?.slotIndex,
     );
     if (slotIndex === null) return null;
-    const workerHost = this.selectWorkerHost(retry?.workerHost);
-    if (workerHost === undefined) return null;
+    if (this.capacityProbe?.governs()) {
+      // The pool governs capacity: hold the slot host-less while the coordinator
+      // negotiates a concrete worker asynchronously (bindReservation mints the
+      // RunningEntry only once a real host is bound).
+      return { kind: "reserved", reservation: this.reserveSlot(issue, slotIndex, retryEntry) };
+    }
+    // No pool (or a disabled pool whose probe no longer governs): take the normal
+    // static/local selection, which yields null/local when ssh_hosts is empty.
+    const selected = this.selectWorkerHost(retry?.workerHost);
+    if (selected === undefined) return null;
+    const workerHost = selected;
 
     const effective = settingsForIssueState(this.settings, issue.state);
     const size = ensembleSize(issue) ?? this.settings.agent.ensembleSize;
@@ -183,7 +292,124 @@ export class Orchestrator {
     this.state.running.set(key, entry);
     this.usageDeltaBases.set(key, zeroUsageTotals());
     if (retryEntryKey) this.state.retryAttempts.delete(retryEntryKey);
+    return { kind: "running", entry };
+  }
+
+  /**
+   * Phase 1 of the pool-governed dispatch: registers a host-less {@link ReservationRecord}
+   * holding the dispatch slot (claimed + reserved, NOT running) and consumes the due retry
+   * entry, stashing it on the record so {@link Orchestrator.cancelReservation} can restore it.
+   */
+  private reserveSlot(
+    issue: Issue,
+    slotIndex: number,
+    retryEntry: [string, RetryEntry] | undefined,
+  ): SlotReservation {
+    const effective = settingsForIssueState(this.settings, issue.state);
+    const size = ensembleSize(issue) ?? this.settings.agent.ensembleSize;
+    const key = slotKey(issue.id, slotIndex);
+    const acquireTimeoutMs = this.settings.worker.workerPool?.acquireTimeoutMs ?? 30_000;
+    const record: ReservationRecord = {
+      issue,
+      slotIndex,
+      token: `reservation-${this.nextReservationToken++}`,
+      agentKind: effective.agent.kind,
+      ensembleSize: size,
+      affinityHost: retryEntry?.[1].workerHost ?? null,
+      retryAttempt: retryEntry?.[1].attempt ?? null,
+      reservedAt: this.clock.now(),
+      // Strictly longer than any well-behaved acquire: the pool's waiter timer bounds
+      // the non-grow path at acquireTimeoutMs; the generous grace covers a grow's
+      // provision + readiness probes.
+      expiresAtMonotonicMs: this.clock.monotonicMs() + acquireTimeoutMs * 2 + 60_000,
+      consumedRetry: retryEntry ? { key: retryEntry[0], entry: retryEntry[1] } : null,
+    };
+    this.state.claimed.add(key);
+    this.state.reserved.set(key, record);
+    if (retryEntry) this.state.retryAttempts.delete(retryEntry[0]);
+    return {
+      issueId: issue.id,
+      identifier: issue.identifier,
+      slotIndex,
+      token: record.token,
+      agentKind: record.agentKind,
+      ensembleSize: record.ensembleSize,
+      affinityHost: record.affinityHost,
+      retryAttempt: record.retryAttempt,
+      expiresAtMonotonicMs: record.expiresAtMonotonicMs,
+    };
+  }
+
+  /**
+   * Phase 2: atomically mints the RunningEntry with the CONCRETE bound host and moves the slot
+   * from `reserved` to `running`. Returns null when the reservation was cancelled/expired (or
+   * re-reserved) meanwhile - the token mismatch is the ABA guard - in which case the caller
+   * releases the bound slot healthy. `startedAt` is the bind time, so run seconds never bill
+   * the provision wait.
+   */
+  bindReservation(reservation: SlotReservation, workerHost: string): RunningEntry | null {
+    const key = slotKey(reservation.issueId, reservation.slotIndex);
+    const record = this.state.reserved.get(key);
+    if (!record || record.token !== reservation.token) return null;
+    this.state.reserved.delete(key);
+    const entry: RunningEntry = {
+      issue: record.issue,
+      identifier: record.issue.identifier,
+      slotIndex: record.slotIndex,
+      ensembleSize: record.ensembleSize,
+      agentKind: record.agentKind,
+      workerHost,
+      workspacePath: null,
+      sessionId: null,
+      executorPid: null,
+      turnCount: 0,
+      startedAt: this.clock.now(),
+      lastAgentEvent: null,
+      lastAgentTimestamp: null,
+      usageTotals: { inputTokens: 0, outputTokens: 0, totalTokens: 0, secondsRunning: 0 },
+      lastReportedInputTokens: 0,
+      lastReportedOutputTokens: 0,
+      lastReportedTotalTokens: 0,
+      retryAttempt: record.retryAttempt,
+    };
+    this.state.claimed.add(key);
+    this.state.running.set(key, entry);
+    this.usageDeltaBases.set(key, zeroUsageTotals());
     return entry;
+  }
+
+  /**
+   * Frees a reserved slot with NO backoff and RESTORES the consumed RetryEntry (affinity and
+   * attempt counter survive a capacity miss). Idempotent and token-checked: a stale reservation
+   * (cancelled, expired, or superseded by a re-reserve) is a no-op.
+   */
+  cancelReservation(reservation: SlotReservation): void {
+    const key = slotKey(reservation.issueId, reservation.slotIndex);
+    const record = this.state.reserved.get(key);
+    if (!record || record.token !== reservation.token) return;
+    this.cancelReservationRecord(key, record);
+  }
+
+  /** Shared cancel path for token-checked cancels, the expiry sweep, and cleanupIssue. */
+  private cancelReservationRecord(key: string, record: ReservationRecord): void {
+    this.state.reserved.delete(key);
+    this.state.claimed.delete(key);
+    const consumed = record.consumedRetry;
+    if (consumed && !this.state.retryAttempts.has(consumed.key)) {
+      this.state.retryAttempts.set(consumed.key, consumed.entry);
+    }
+  }
+
+  /**
+   * Cancels (with retry restore) any reservation past its defensive expiry so a hung acquire
+   * (e.g. a wedged endpoint open) cannot strand a concurrency slot until shutdown. A late
+   * successful acquire after the sweep is token-guarded to a null bind.
+   */
+  private sweepExpiredReservations(): void {
+    const nowMs = this.clock.monotonicMs();
+    for (const [key, record] of [...this.state.reserved.entries()]) {
+      if (nowMs >= record.expiresAtMonotonicMs) this.cancelReservationRecord(key, record);
+    }
   }
 
   private selectWorkerHost(preferredHost?: string | null): string | null | undefined {
@@ -201,6 +427,11 @@ export class Orchestrator {
   }
 
   private workerCapacityAvailable(): boolean {
+    // Only honor the probe while the live pool actually governs capacity. A disabled
+    // pool's probe lingers but reports canAcquire() === false; deferring to it would
+    // permanently block dispatch as worker_host_capacity, so fall through to the
+    // static/local logic (local has capacity, ssh_hosts honored) instead.
+    if (this.capacityProbe?.governs()) return this.capacityProbe.canAcquire();
     if (this.settings.worker.sshHosts.length === 0) return true;
     return this.selectWorkerHost() !== undefined;
   }
@@ -208,6 +439,11 @@ export class Orchestrator {
   refreshRunningIssue(issue: Issue): void {
     for (const entry of this.state.running.values()) {
       if (entry.issue.id === issue.id) entry.issue = issue;
+    }
+    // Reserved records feed per-state cap accounting, so a long acquire must not
+    // hold a stale issue state either.
+    for (const record of this.state.reserved.values()) {
+      if (record.issue.id === issue.id) record.issue = issue;
     }
   }
 
@@ -274,12 +510,19 @@ export class Orchestrator {
         this.usageDeltaBases.delete(key);
       }
     }
+    // Cancel any in-acquire reservation (token retired -> a late bind returns null).
+    // The restore-then-delete composition is safe: the subsequent
+    // deleteRetryAttemptsForIssue removes any restored retry entry.
+    for (const [key, record] of [...this.state.reserved.entries()]) {
+      if (record.issue.id === issueId) this.cancelReservationRecord(key, record);
+    }
     this.deleteRetryAttemptsForIssue(issueId);
     this.state.completed.add(issueId);
   }
 
   snapshot(): {
     running: RunningEntry[];
+    reserving: ReservationSnapshotEntry[];
     retrying: RetryEntry[];
     blocked: DispatchBlockEntry[];
     usageTotals: UsageTotals;
@@ -287,6 +530,14 @@ export class Orchestrator {
   } {
     return {
       running: [...this.state.running.values()],
+      reserving: [...this.state.reserved.values()].map((record) => ({
+        issueId: record.issue.id,
+        identifier: record.issue.identifier,
+        slotIndex: record.slotIndex,
+        affinityHost: record.affinityHost,
+        retryAttempt: record.retryAttempt,
+        reservedAtIso: record.reservedAt.toISOString(),
+      })),
       retrying: [...this.state.retryAttempts.values()].map((entry) => ({ ...entry })),
       blocked: this.state.blockedDispatches.map((entry) => ({ ...entry })),
       usageTotals: { ...this.state.usageTotals },
@@ -420,6 +671,10 @@ export class Orchestrator {
   private releaseStaleClaimsForRetry(issueId: string): void {
     for (const key of [...this.state.claimed]) {
       if (!key.startsWith(`${issueId}:`)) continue;
+      // Claimed-without-running is a legitimate state while a reservation holds the
+      // slot; releasing it here would let a due retry on one ensemble slot free
+      // another slot's live reservation and enable duplicate same-slot dispatch.
+      if (this.state.reserved.has(key)) continue;
       if (!this.state.running.has(key)) this.state.claimed.delete(key);
     }
   }

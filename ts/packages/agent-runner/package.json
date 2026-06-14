@@ -13,6 +13,7 @@
     "@symphony/dispatch": "workspace:*",
     "@symphony/domain": "workspace:*",
     "@symphony/issue": "workspace:*",
+    "@symphony/mcp": "workspace:*",
     "@symphony/prompt": "workspace:*"
   },
   "devDependencies": {

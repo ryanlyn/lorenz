@@ -5,6 +5,7 @@ import { beforeAll, test, vi } from "vitest";
 import { acpExecutorProvider } from "@symphony/acp";
 import { defaultAgentExecutorRegistry } from "@symphony/agent-sdk";
 import {
+  createDispatchCoordinator,
   createWorkspaceForIssue,
   listIssueWorkspaceIdentifiers,
   loadWorkflow,
@@ -20,7 +21,17 @@ import {
   RUNTIME_EVENT_TYPES as RUNTIME_EVENT_TYPES_FROM_RUNTIME_EVENTS,
   RUNTIME_RUN_OUTCOMES as RUNTIME_RUN_OUTCOMES_FROM_RUNTIME_EVENTS,
 } from "@symphony/runtime-events";
-import type { Issue, RunResult, SymphonyRuntimeOptions, WorkflowDefinition } from "@symphony/cli";
+import type {
+  Issue,
+  McpEndpointManager,
+  RunResult,
+  Settings,
+  SymphonyRuntimeOptions,
+  WorkflowDefinition,
+} from "@symphony/cli";
+import type { WorkerPoolSettings } from "@symphony/domain";
+import type { AgentMcpEndpointLease } from "@symphony/mcp";
+import type { AcquireResult, WorkerLease, WorkerOutcome, WorkerPool } from "@symphony/worker-pool";
 import { assert, tempDir } from "@symphony/test-utils";
 
 import {
@@ -28,6 +39,7 @@ import {
   RUNTIME_RUN_OUTCOMES as RUNTIME_RUN_OUTCOMES_FROM_RUNTIME,
   SymphonyRuntime,
 } from "@symphony/runtime";
+import type { RuntimeSnapshot } from "@symphony/runtime";
 
 // The runtime validates dispatch config against the process-default registries, which the
 // CLI composition root populates before constructing a runtime. Mirror that wiring here (in
@@ -1194,6 +1206,2252 @@ test("runtime schedules retry refresh timers independently of the poll cadence",
     true,
   );
   runtime.stop();
+});
+
+// ---------------------------------------------------------------------------
+// Worker pool integration (T15)
+// ---------------------------------------------------------------------------
+
+interface AcquireCall {
+  issueId: string;
+  slotIndex: number;
+  labels: ReadonlyArray<string>;
+  affinityKey?: string | null;
+  timeoutMs: number;
+}
+
+interface FakeLease extends WorkerLease {
+  readonly settles: Array<{ kind: "release" | "fail"; arg?: string }>;
+  readonly heartbeats: { count: number };
+}
+
+function makeFakeLease(
+  options: {
+    leaseId?: string;
+    workerId?: string;
+    workerHost?: string;
+    stale?: boolean;
+  } = {},
+): FakeLease {
+  const settles: Array<{ kind: "release" | "fail"; arg?: string }> = [];
+  const heartbeats = { count: 0 };
+  const stale = options.stale ?? false;
+  return {
+    leaseId: options.leaseId ?? "lease-1",
+    workerId: options.workerId ?? "worker-1",
+    workerHost: options.workerHost ?? "fake://worker-worker-1",
+    acquiredAtMs: 0,
+    expiresAtMs: null,
+    settles,
+    heartbeats,
+    async release(outcome?: WorkerOutcome): Promise<void> {
+      // A stale-generation lease guards its own settle: the leaseId no longer
+      // matches the worker record so the op is a no-op that never records.
+      if (stale) return;
+      settles.push({ kind: "release", arg: outcome });
+    },
+    async fail(reason: string): Promise<void> {
+      if (stale) return;
+      settles.push({ kind: "fail", arg: reason });
+    },
+    heartbeat(): void {
+      heartbeats.count += 1;
+    },
+  };
+}
+
+interface FakeWorkerPool extends WorkerPool {
+  readonly acquireCalls: AcquireCall[];
+  readonly reconcileCalls: WorkerPoolSettings[];
+  readonly drainCalls: Array<{ deadlineMs: number }>;
+  lastLease: FakeLease | null;
+  /** Fires every registered onCapacityAvailable callback (test trigger). */
+  triggerCapacityAvailable(): void;
+}
+
+function makeFakeWorkerPool(
+  options: {
+    result?: AcquireResult | (() => AcquireResult | Promise<AcquireResult>);
+    lease?: FakeLease;
+    canAcquire?: boolean | (() => boolean);
+    isEnabled?: boolean | (() => boolean);
+    reconcileError?: string;
+  } = {},
+): FakeWorkerPool {
+  const acquireCalls: AcquireCall[] = [];
+  const reconcileCalls: WorkerPoolSettings[] = [];
+  const drainCalls: Array<{ deadlineMs: number }> = [];
+  const capacityCallbacks: Array<() => void> = [];
+  const pool: FakeWorkerPool = {
+    acquireCalls,
+    reconcileCalls,
+    drainCalls,
+    lastLease: null,
+    async acquire(req): Promise<AcquireResult> {
+      acquireCalls.push({
+        issueId: req.issueId,
+        slotIndex: req.slotIndex,
+        labels: req.labels,
+        affinityKey: req.affinityKey,
+        timeoutMs: req.timeoutMs,
+      });
+      if (options.result) {
+        return typeof options.result === "function" ? options.result() : options.result;
+      }
+      const lease = options.lease ?? makeFakeLease();
+      pool.lastLease = lease;
+      return { status: "leased", lease };
+    },
+    canAcquire(): boolean {
+      return typeof options.canAcquire === "function"
+        ? options.canAcquire()
+        : (options.canAcquire ?? true);
+    },
+    isEnabled(): boolean {
+      return typeof options.isEnabled === "function"
+        ? options.isEnabled()
+        : (options.isEnabled ?? true);
+    },
+    reconcile(next): void {
+      reconcileCalls.push(next);
+      if (options.reconcileError) throw new Error(options.reconcileError);
+    },
+    swapDriver(): void {},
+    onMachineRecycling(): void {},
+    onCapacityAvailable(cb): void {
+      capacityCallbacks.push(cb);
+    },
+    triggerCapacityAvailable(): void {
+      for (const cb of capacityCallbacks) cb();
+    },
+    async hydrate(): Promise<void> {},
+    async drain(opts): Promise<void> {
+      drainCalls.push({ deadlineMs: opts.deadlineMs });
+    },
+    snapshot() {
+      return {
+        enabled: true,
+        driver: "fake",
+        total: 0,
+        warmIdle: 0,
+        leased: 0,
+        provisioning: 0,
+        degraded: 0,
+        inFlight: 0,
+        spend: {
+          concurrentWorkers: 0,
+          workerSecondsUsed: 0,
+          dailyWorkerSecondsUsed: 0,
+          dayKey: "",
+        },
+        workers: [],
+      };
+    },
+  };
+  return pool;
+}
+
+function workerPoolWorkflowFixture(
+  root = "/tmp/symphony-ts-runtime-workerpool",
+  overrides: Record<string, unknown> = {},
+): WorkflowDefinition {
+  const settings = parseConfig({
+    tracker: {
+      kind: "linear",
+      api_key: "linear-token",
+      project_slug: "mono",
+      active_states: ["Todo", "In Progress"],
+      terminal_states: ["Done"],
+    },
+    polling: { interval_ms: 5 },
+    workspace: { root },
+    worker: {
+      worker_pool: {
+        enabled: true,
+        driver: "fake",
+        acquire_timeout_ms: 12_345,
+        drain_deadline_ms: 9_999,
+        ...overrides,
+      },
+    },
+  });
+  return {
+    path: "/tmp/WORKFLOW.md",
+    config: {},
+    promptTemplate: "Issue {{ issue.identifier }}",
+    settings,
+  };
+}
+
+test("worker pool: leased workerHost is written back and passed to the runner; history matches lease", async () => {
+  const issue = issueFixture("issue-bp-lease", "MT-BP-LEASE");
+  const doneIssue: Issue = { ...issue, state: "Done", stateType: "completed" };
+  const lease = makeFakeLease({ workerHost: "fake://worker-bp-lease" });
+  const workerPool = makeFakeWorkerPool({ lease });
+  let runnerWorkerHost: string | null | undefined = "unset";
+  let workerHostDuringRun: string | null | undefined;
+  const runtime = new SymphonyRuntime(
+    runtimeOptions({
+      workflow: workerPoolWorkflowFixture(),
+      workerPool,
+      client: {
+        fetchCandidateIssues: async () => [issue],
+        fetchIssuesByIds: async () => [issue],
+      },
+      runner: async ({ workerHost, issue: runIssue, slotIndex }) => {
+        runnerWorkerHost = workerHost;
+        workerHostDuringRun = runtime
+          .snapshot()
+          .running.find(
+            (entry) => entry.issueId === runIssue.id && entry.slotIndex === slotIndex,
+          )?.workerHost;
+        return {
+          workspace: "/tmp/symphony/MT-BP-LEASE",
+          turnCount: 1,
+          updates: [],
+          resumeId: "resume-bp",
+          agentKind: "codex",
+          finalIssue: doneIssue,
+        };
+      },
+    }),
+  );
+
+  await runtime.start({ once: true, dryRun: false });
+
+  assert.equal(runnerWorkerHost, "fake://worker-bp-lease");
+  assert.equal(workerHostDuringRun, "fake://worker-bp-lease");
+  const snapshot = runtime.snapshot();
+  assert.equal(snapshot.runHistory[0]?.outcome, "success");
+  assert.equal(snapshot.runHistory[0]?.workerHost, "fake://worker-bp-lease");
+  assert.deepEqual(
+    lease.settles.map((s) => s.kind),
+    ["release"],
+  );
+  assert.equal(lease.settles[0]?.arg, "healthy");
+});
+
+test("worker pool: the bound slot's mcpEndpoint is threaded into the runner", async () => {
+  const issue = issueFixture("issue-bp-endpoint", "MT-BP-ENDPOINT");
+  const doneIssue: Issue = { ...issue, state: "Done", stateType: "completed" };
+  const lease = makeFakeLease({ workerHost: "ssh://worker-endpoint" });
+  const workerPool = makeFakeWorkerPool({ lease });
+  // Dispatch to the claude kind; the ACP executor consumes the per-run endpoint
+  // over the reverse tunnel. This pins the endpoint-threading mechanism.
+  const workflow = workerPoolWorkflowFixture();
+  workflow.settings.agent.kind = "claude";
+
+  // A concrete-style manager (perRunEndpoint=true) that opens a recognizable
+  // per-run lease and records its open/release calls so we can assert the
+  // coordinator owns the endpoint lifecycle and the runner consumes it.
+  const endpointLease = makeFakeEndpointLease();
+  const opens: Array<{ workerHost: string; runKey: string }> = [];
+  let releaseCalls = 0;
+  const manager: McpEndpointManager = {
+    perRunEndpoint: true,
+    async open(req) {
+      opens.push({ workerHost: req.workerHost, runKey: req.runKey });
+      return endpointLease;
+    },
+    async release() {
+      releaseCalls += 1;
+    },
+  };
+  const coordinator = createDispatchCoordinator({
+    pool: workerPool,
+    mcpEndpointManager: manager,
+    settings: workflow.settings.worker.workerPool!,
+  });
+
+  let runnerEndpoint: AgentMcpEndpointLease | null | undefined = undefined;
+  const runtime = new SymphonyRuntime(
+    runtimeOptions({
+      workflow,
+      coordinator,
+      client: {
+        fetchCandidateIssues: async () => [issue],
+        fetchIssuesByIds: async () => [issue],
+      },
+      runner: async ({ mcpEndpoint }) => {
+        runnerEndpoint = mcpEndpoint;
+        return {
+          workspace: "/tmp/symphony/MT-BP-ENDPOINT",
+          turnCount: 1,
+          updates: [],
+          resumeId: "resume-bp-endpoint",
+          agentKind: "claude",
+          finalIssue: doneIssue,
+        };
+      },
+    }),
+  );
+
+  await runtime.start({ once: true, dryRun: false });
+
+  // The endpoint was opened AFTER lease-bind for this run's worker host/slot, the
+  // runner received the SAME lease, and the coordinator released it on settle. The
+  // runKey is the issue-scoped `${issueId}#${slotIndex}`.
+  assert.equal(opens.length, 1);
+  assert.equal(opens[0]?.workerHost, "ssh://worker-endpoint");
+  assert.equal(opens[0]?.runKey, "issue-bp-endpoint#0");
+  assert.equal(runnerEndpoint, endpointLease);
+  assert.equal(releaseCalls, 1);
+  assert.deepEqual(
+    lease.settles.map((s) => s.kind),
+    ["release"],
+  );
+});
+
+test("worker pool: the FULL workflow Settings (with server.port) is threaded to the per-run endpoint open, not the WorkerPoolSettings", async () => {
+  // Codex HIGH #1: the coordinator must thread the FULL workflow Settings to
+  // mcpEndpointManager.open so the concrete acquireAgentMcpEndpointForRun can read
+  // settings.server.port. Threading the coordinator's WorkerPoolSettings instead
+  // leaves server.port undefined, so an enabled per-run-endpoint pool fails at
+  // acquire and never dispatches. This test pins that open() receives the FULL
+  // Settings (server.host/server.port present) the workflow carries.
+  const issue = issueFixture("issue-bp-full-settings", "MT-BP-FULL-SETTINGS");
+  const doneIssue: Issue = { ...issue, state: "Done", stateType: "completed" };
+  const lease = makeFakeLease({ workerHost: "ssh://worker-full-settings" });
+  const workerPool = makeFakeWorkerPool({ lease });
+
+  // A full workflow whose Settings carry a concrete server.port (the FULL Settings
+  // field the WorkerPoolSettings does NOT have). Dispatch to the claude kind; the ACP
+  // executor opens a per-run endpoint, so open() is reached.
+  const workflow = workerPoolWorkflowFixture();
+  workflow.settings.agent.kind = "claude";
+  workflow.settings.server.host = "127.0.0.1";
+  workflow.settings.server.port = 51_842;
+
+  let openSettings: unknown;
+  const endpointLease = makeFakeEndpointLease();
+  const manager: McpEndpointManager = {
+    perRunEndpoint: true,
+    async open(req) {
+      openSettings = req.settings;
+      return endpointLease;
+    },
+    async release() {},
+  };
+  const coordinator = createDispatchCoordinator({
+    pool: workerPool,
+    mcpEndpointManager: manager,
+    settings: workflow.settings.worker.workerPool!,
+  });
+
+  const runtime = new SymphonyRuntime(
+    runtimeOptions({
+      workflow,
+      coordinator,
+      client: {
+        fetchCandidateIssues: async () => [issue],
+        fetchIssuesByIds: async () => [issue],
+      },
+      runner: async () => ({
+        workspace: "/tmp/symphony/MT-BP-FULL-SETTINGS",
+        turnCount: 1,
+        updates: [],
+        resumeId: "resume-bp-full-settings",
+        agentKind: "claude",
+        finalIssue: doneIssue,
+      }),
+    }),
+  );
+
+  await runtime.start({ once: true, dryRun: false });
+
+  // The open received the FULL workflow Settings: server.port is the configured
+  // value (NOT undefined, as it would be if the WorkerPoolSettings were passed). This
+  // is the field acquireAgentMcpEndpointForRun reads to build the remote endpoint.
+  const settings = openSettings as Settings;
+  assert.ok(settings.server);
+  assert.equal(settings.server.port, 51_842);
+  assert.equal(settings.server.host, "127.0.0.1");
+});
+
+test("worker pool: a null-manager slot threads a null mcpEndpoint into the runner", async () => {
+  const issue = issueFixture("issue-bp-null-endpoint", "MT-BP-NULL");
+  const doneIssue: Issue = { ...issue, state: "Done", stateType: "completed" };
+  const lease = makeFakeLease({ workerHost: "fake://worker-null-endpoint" });
+  const workerPool = makeFakeWorkerPool({ lease });
+  let runnerEndpoint: AgentMcpEndpointLease | null | undefined = "unset" as never;
+  const runtime = new SymphonyRuntime(
+    runtimeOptions({
+      workflow: workerPoolWorkflowFixture(),
+      workerPool,
+      client: {
+        fetchCandidateIssues: async () => [issue],
+        fetchIssuesByIds: async () => [issue],
+      },
+      runner: async ({ mcpEndpoint }) => {
+        runnerEndpoint = mcpEndpoint;
+        return {
+          workspace: "/tmp/symphony/MT-BP-NULL",
+          turnCount: 1,
+          updates: [],
+          resumeId: "resume-bp-null",
+          agentKind: "codex",
+          finalIssue: doneIssue,
+        };
+      },
+    }),
+  );
+
+  await runtime.start({ once: true, dryRun: false });
+
+  // The bare-workerPool path wraps the pool in the null-endpoint passthrough
+  // coordinator, so the slot carries mcpEndpoint=null and the runner is threaded
+  // null (acp then acquires/releases its own endpoint - byte-identical).
+  assert.equal(runnerEndpoint, null);
+});
+
+function makeFakeEndpointLease(): AgentMcpEndpointLease {
+  return {
+    url: "http://127.0.0.1:46999/claude-mcp",
+    token: "run-token",
+    acpServer: () => ({ type: "http", name: "threaded_endpoint", url: "", headers: [] }),
+    async release() {},
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Every worker-pool run needs its per-run MCP endpoint (ACP is the only executor)
+// ---------------------------------------------------------------------------
+//
+// The ACP executor - the only executor - consumes the per-run mcpEndpoint over
+// the reverse tunnel, so the runtime asks the coordinator for one on EVERY run
+// (needsMcpEndpoint=true regardless of agent kind). When the per-run open
+// THROWS, the run must NOT dispatch: the coordinator settles the just-bound
+// lease HEALTHY (only the endpoint failed, the worker is fine), the runtime
+// cancels the reservation so the slot is re-evaluated next poll, and no history is
+// recorded for a run that never started.
+
+test("worker pool: a codex run is skipped when the per-run endpoint open THROWS (every run needs an endpoint) (HIGH)", async () => {
+  const issue = issueFixture("issue-bp-codex-ep-throw", "MT-BP-CODEX-EP-THROW");
+  const workflow = workerPoolWorkflowFixture();
+  // The default agent kind is `codex` -> agents.codex.executor === 'acp', the
+  // only executor; a codex run consumes the per-run endpoint like any other.
+  assert.equal(workflow.settings.agents.codex?.executor, "acp");
+  const lease = makeFakeLease({ workerHost: "ssh://worker-codex" });
+  const workerPool = makeFakeWorkerPool({ lease });
+  // A per-run manager whose open() ALWAYS throws: the throw surfaces as
+  // worker_pool_acquire_error and the run never dispatches.
+  let openCalls = 0;
+  const manager: McpEndpointManager = {
+    perRunEndpoint: true,
+    async open() {
+      openCalls += 1;
+      throw new Error("mcp_endpoint_open_failed: remote port-forward restricted");
+    },
+    async release() {},
+  };
+  const coordinator = createDispatchCoordinator({
+    pool: workerPool,
+    mcpEndpointManager: manager,
+    settings: workflow.settings.worker.workerPool!,
+  });
+  const orchestrator = new Orchestrator(workflow.settings, undefined, undefined, {
+    governs: () => true,
+    canAcquire: () => true,
+  });
+  let runnerCalls = 0;
+  const runtime = new SymphonyRuntime(
+    runtimeOptions({
+      workflow,
+      orchestrator,
+      coordinator,
+      client: {
+        fetchCandidateIssues: async () => [issue],
+        fetchIssuesByIds: async () => [issue],
+      },
+      runner: async () => {
+        runnerCalls += 1;
+        throw new Error("runner should not run when the endpoint open throws");
+      },
+    }),
+  );
+
+  await runtime.start({ once: true, dryRun: false });
+
+  // The open WAS attempted (the codex run needs its endpoint), the runner never
+  // ran, and the dispatch was skipped with a clear acquire error.
+  assert.equal(openCalls, 1);
+  assert.equal(runnerCalls, 0);
+  const snapshot = runtime.snapshot();
+  assert.equal(snapshot.runHistory.length, 0);
+  assert.equal(snapshot.retrying.length, 0);
+  assert.equal(snapshot.running.length, 0);
+  // The reservation was cancelled (re-claimable next poll), not stranded.
+  assert.equal(orchestrator.state.claimed.size, 0);
+  assert.equal(orchestrator.state.running.size, 0);
+  assert.equal(orchestrator.state.reserved.size, 0);
+  // The worker itself is fine - only the endpoint failed - so the just-bound lease
+  // settled HEALTHY, never poisoned.
+  assert.deepEqual(lease.settles, [{ kind: "release", arg: "healthy" }]);
+  assert.ok(
+    snapshot.recentEvents.some(
+      (event) =>
+        event.type === "dispatch_skipped" && event.message.includes("worker_pool_acquire_error"),
+    ),
+  );
+});
+
+test("worker pool: an ACP/claude run STILL opens its per-run endpoint (the per-run path is unchanged) (HIGH)", async () => {
+  const issue = issueFixture("issue-bp-claude-endpoint", "MT-BP-CLAUDE-EP");
+  const doneIssue: Issue = { ...issue, state: "Done", stateType: "completed" };
+  const workflow = workerPoolWorkflowFixture();
+  // Dispatch this issue to the `claude` kind -> agents.claude.executor === 'acp',
+  // which DOES consume the per-run endpoint over the reverse tunnel.
+  workflow.settings.agent.kind = "claude";
+  assert.equal(workflow.settings.agents.claude?.executor, "acp");
+  const lease = makeFakeLease({ workerHost: "ssh://worker-claude" });
+  const workerPool = makeFakeWorkerPool({ lease });
+  const endpointLease = makeFakeEndpointLease();
+  let openCalls = 0;
+  const manager: McpEndpointManager = {
+    perRunEndpoint: true,
+    async open() {
+      openCalls += 1;
+      return endpointLease;
+    },
+    async release() {},
+  };
+  const coordinator = createDispatchCoordinator({
+    pool: workerPool,
+    mcpEndpointManager: manager,
+    settings: workflow.settings.worker.workerPool!,
+  });
+  let runnerEndpoint: AgentMcpEndpointLease | null | undefined = "unset" as never;
+  const runtime = new SymphonyRuntime(
+    runtimeOptions({
+      workflow,
+      coordinator,
+      client: {
+        fetchCandidateIssues: async () => [issue],
+        fetchIssuesByIds: async () => [issue],
+      },
+      runner: async ({ mcpEndpoint }) => {
+        runnerEndpoint = mcpEndpoint;
+        return {
+          workspace: "/tmp/symphony/MT-BP-CLAUDE-EP",
+          turnCount: 1,
+          updates: [],
+          resumeId: "resume-claude-ep",
+          agentKind: "claude",
+          finalIssue: doneIssue,
+        };
+      },
+    }),
+  );
+
+  await runtime.start({ once: true, dryRun: false });
+
+  // The ACP run opened its per-run endpoint exactly once and the runner consumed it.
+  assert.equal(openCalls, 1);
+  assert.equal(runnerEndpoint, endpointLease);
+  assert.equal(runtime.snapshot().runHistory[0]?.outcome, "success");
+});
+
+test("worker pool: a claim is a host-less reservation between claim and acquire, concrete host after bind", async () => {
+  const issue = issueFixture("issue-bp-reserved", "MT-BP-RESERVED");
+  const doneIssue: Issue = { ...issue, state: "Done", stateType: "completed" };
+  const workflow = workerPoolWorkflowFixture();
+  const orchestrator = new Orchestrator(workflow.settings, undefined, undefined, {
+    governs: () => true,
+    canAcquire: () => true,
+  });
+  const lease = makeFakeLease({ workerHost: "fake://worker-reserved" });
+  let runningDuringAcquire = -1;
+  let reservingDuringAcquire: ReturnType<Orchestrator["snapshot"]>["reserving"] = [];
+  let snapshotReservingDuringAcquire: NonNullable<RuntimeSnapshot["reserving"]> = [];
+  let runStartedDuringAcquire = true;
+  let runReservingDuringAcquire = false;
+  const workerPool = makeFakeWorkerPool({
+    result: () => {
+      // During the acquire window the slot is an honest, host-less reservation:
+      // NOT in running (no fake host anywhere), surfaced in the snapshot's
+      // reserving lane, marked by run_reserving, and no run_started emitted yet.
+      runningDuringAcquire = runtime.snapshot().running.length;
+      reservingDuringAcquire = orchestrator.snapshot().reserving;
+      snapshotReservingDuringAcquire = runtime.snapshot().reserving ?? [];
+      runStartedDuringAcquire = runtime
+        .snapshot()
+        .recentEvents.some((event) => event.type === "run_started");
+      runReservingDuringAcquire = runtime
+        .snapshot()
+        .recentEvents.some((event) => event.type === "run_reserving");
+      return { status: "leased", lease };
+    },
+  });
+  const runtime = new SymphonyRuntime(
+    runtimeOptions({
+      workflow,
+      orchestrator,
+      workerPool,
+      client: {
+        fetchCandidateIssues: async () => [issue],
+        fetchIssuesByIds: async () => [issue],
+      },
+      runner: async () => ({
+        workspace: "/tmp/symphony/MT-BP-RESERVED",
+        turnCount: 1,
+        updates: [],
+        resumeId: "resume",
+        agentKind: "codex",
+        finalIssue: doneIssue,
+      }),
+    }),
+  );
+
+  await runtime.start({ once: true, dryRun: false });
+
+  assert.equal(runningDuringAcquire, 0);
+  assert.equal(reservingDuringAcquire.length, 1);
+  assert.equal(reservingDuringAcquire[0]?.issueId, issue.id);
+  // The runtime snapshot mirrors the orchestrator's reserving lane (host-less).
+  assert.equal(snapshotReservingDuringAcquire.length, 1);
+  assert.equal(snapshotReservingDuringAcquire[0]?.issueId, issue.id);
+  assert.equal(snapshotReservingDuringAcquire[0]?.slotIndex, 0);
+  assert.equal(runStartedDuringAcquire, false);
+  // run_reserving marked dispatch intent before the acquire resolved.
+  assert.equal(runReservingDuringAcquire, true);
+  // run_started fired post-bind, exactly once, and the run carried the bound host.
+  assert.equal(
+    runtime.snapshot().recentEvents.filter((event) => event.type === "run_started").length,
+    1,
+  );
+  assert.equal(runtime.snapshot().runHistory[0]?.workerHost, "fake://worker-reserved");
+  // The bound run left the reserving lane.
+  assert.equal(runtime.snapshot().reserving?.length ?? 0, 0);
+});
+
+test("worker pool: acquire uses the prior real workerHost as affinityKey on retry", async () => {
+  const issue = issueFixture("issue-bp-affinity", "MT-BP-AFFINITY");
+  const workflow = workerPoolWorkflowFixture();
+  const orchestrator = new Orchestrator(workflow.settings, undefined, undefined, {
+    governs: () => true,
+    canAcquire: () => true,
+  });
+  // Seed a retry record carrying the prior real worker host (as finish() would).
+  orchestrator.state.retryAttempts.set(slotKey(issue.id, 0), {
+    issueId: issue.id,
+    identifier: issue.identifier,
+    attempt: 1,
+    monotonicDeadlineMs: 0,
+    dueAtIso: new Date(Date.now() - 1).toISOString(),
+    slotIndex: 0,
+    workerHost: "fake://worker-prior",
+    workspacePath: null,
+  });
+  const doneIssue: Issue = { ...issue, state: "Done", stateType: "completed" };
+  const workerPool = makeFakeWorkerPool({
+    lease: makeFakeLease({ workerHost: "fake://worker-prior" }),
+  });
+  const runtime = new SymphonyRuntime(
+    runtimeOptions({
+      workflow,
+      orchestrator,
+      workerPool,
+      client: {
+        fetchCandidateIssues: async () => [issue],
+        fetchIssuesByIds: async () => [issue],
+      },
+      runner: async () => ({
+        workspace: "/tmp/symphony/MT-BP-AFFINITY",
+        turnCount: 1,
+        updates: [],
+        resumeId: "resume",
+        agentKind: "codex",
+        finalIssue: doneIssue,
+      }),
+    }),
+  );
+
+  await runtime.start({ once: true, dryRun: false });
+
+  assert.equal(workerPool.acquireCalls.length, 1);
+  assert.equal(workerPool.acquireCalls[0]?.affinityKey, "fake://worker-prior");
+  assert.equal(workerPool.acquireCalls[0]?.issueId, issue.id);
+  assert.equal(workerPool.acquireCalls[0]?.slotIndex, 0);
+  assert.equal(workerPool.acquireCalls[0]?.timeoutMs, 12_345);
+});
+
+test("worker pool: no_capacity cancels the reservation, skips the runner, records no history or backoff", async () => {
+  const issue = issueFixture("issue-bp-nocap", "MT-BP-NOCAP");
+  const workflow = workerPoolWorkflowFixture();
+  const orchestrator = new Orchestrator(workflow.settings, undefined, undefined, {
+    governs: () => true,
+    canAcquire: () => true,
+  });
+  let runnerCalls = 0;
+  const workerPool = makeFakeWorkerPool({
+    result: { status: "no_capacity", reason: "acquire_timeout" },
+  });
+  const runtime = new SymphonyRuntime(
+    runtimeOptions({
+      workflow,
+      orchestrator,
+      workerPool,
+      client: {
+        fetchCandidateIssues: async () => [issue],
+        fetchIssuesByIds: async () => [issue],
+      },
+      runner: async () => {
+        runnerCalls += 1;
+        throw new Error("runner should not run on no_capacity");
+      },
+    }),
+  );
+
+  await runtime.start({ once: true, dryRun: false });
+
+  const snapshot = runtime.snapshot();
+  assert.equal(runnerCalls, 0);
+  assert.equal(snapshot.runHistory.length, 0);
+  assert.equal(snapshot.retrying.length, 0);
+  assert.equal(snapshot.running.length, 0);
+  assert.equal(orchestrator.state.claimed.size, 0);
+  assert.equal(orchestrator.state.running.size, 0);
+  assert.equal(orchestrator.state.reserved.size, 0);
+  assert.ok(snapshot.recentEvents.some((event) => event.message.includes("worker_host_capacity")));
+  // The phantom started-then-skipped pair is gone: a capacity-refused dispatch
+  // never emits run_started.
+  assert.equal(
+    snapshot.recentEvents.some((event) => event.type === "run_started"),
+    false,
+  );
+});
+
+test("worker pool: no_capacity restores the consumed retry entry so affinity and attempt survive", async () => {
+  const issue = issueFixture("issue-bp-nocap-retry", "MT-BP-NOCAP-RETRY");
+  const doneIssue: Issue = { ...issue, state: "Done", stateType: "completed" };
+  const workflow = workerPoolWorkflowFixture();
+  const orchestrator = new Orchestrator(workflow.settings, undefined, undefined, {
+    governs: () => true,
+    canAcquire: () => true,
+  });
+  // A due retry carrying the prior run's CONCRETE host and attempt counter.
+  orchestrator.state.retryAttempts.set(slotKey(issue.id, 0), {
+    issueId: issue.id,
+    identifier: issue.identifier,
+    attempt: 3,
+    monotonicDeadlineMs: 0,
+    dueAtIso: new Date(Date.now() - 1).toISOString(),
+    slotIndex: 0,
+    workerHost: "fake://worker-sticky",
+    workspacePath: null,
+    error: "agent exited",
+  });
+  let acquireAttempts = 0;
+  const workerPool = makeFakeWorkerPool({
+    result: () => {
+      acquireAttempts += 1;
+      // The FIRST acquire is capacity-refused; the restored retry entry makes the
+      // issue immediately re-eligible and the SECOND acquire binds.
+      if (acquireAttempts === 1) return { status: "no_capacity", reason: "acquire_timeout" };
+      return { status: "leased", lease: makeFakeLease({ workerHost: "fake://worker-sticky" }) };
+    },
+  });
+  const runtime = new SymphonyRuntime(
+    runtimeOptions({
+      workflow,
+      orchestrator,
+      workerPool,
+      client: {
+        fetchCandidateIssues: async () => [issue],
+        fetchIssuesByIds: async () => [issue],
+      },
+      runner: async () => ({
+        workspace: "/tmp/symphony/MT-BP-NOCAP-RETRY",
+        turnCount: 1,
+        updates: [],
+        resumeId: "resume",
+        agentKind: "codex",
+        finalIssue: doneIssue,
+      }),
+    }),
+  );
+
+  try {
+    await runtime.pollOnce({ waitForRuns: true });
+    // The capacity miss restored the consumed retry entry (still due), so the
+    // retry timer re-polls promptly and the re-claim re-consumes it.
+    await waitFor(() => runtime.snapshot().runHistory.length === 1, 2_000);
+
+    // BOTH acquires carried the sticky affinity key from the (restored) retry
+    // entry - the affinity survived the capacity miss.
+    assert.equal(workerPool.acquireCalls.length, 2);
+    assert.equal(workerPool.acquireCalls[0]?.affinityKey, "fake://worker-sticky");
+    assert.equal(workerPool.acquireCalls[1]?.affinityKey, "fake://worker-sticky");
+    const snapshot = runtime.snapshot();
+    // The attempt counter survived too: the eventual run is attempt 3.
+    assert.equal(snapshot.runHistory[0]?.retryAttempt, 3);
+    assert.equal(snapshot.runHistory[0]?.workerHost, "fake://worker-sticky");
+    // Exactly ONE run_started (post-bind of the successful acquire); the refused
+    // dispatch emitted only worker_host_capacity.
+    assert.equal(snapshot.recentEvents.filter((event) => event.type === "run_started").length, 1);
+    assert.ok(
+      snapshot.recentEvents.some((event) => event.message.includes("worker_host_capacity")),
+    );
+  } finally {
+    runtime.stop();
+  }
+});
+
+test("worker pool: acquire errors rearm a restored due retry timer", async () => {
+  const issue = issueFixture("issue-bp-acq-error-retry", "MT-BP-ACQ-ERR-RETRY");
+  const doneIssue: Issue = { ...issue, state: "Done", stateType: "completed" };
+  const workflow = workerPoolWorkflowFixture();
+  const orchestrator = new Orchestrator(workflow.settings, undefined, undefined, {
+    governs: () => true,
+    canAcquire: () => true,
+  });
+  orchestrator.state.retryAttempts.set(slotKey(issue.id, 0), {
+    issueId: issue.id,
+    identifier: issue.identifier,
+    attempt: 2,
+    monotonicDeadlineMs: 0,
+    dueAtIso: new Date(Date.now() - 1).toISOString(),
+    slotIndex: 0,
+    workerHost: "fake://worker-sticky",
+    workspacePath: null,
+    error: "agent exited",
+  });
+  let acquireAttempts = 0;
+  const workerPool = makeFakeWorkerPool({
+    result: () => {
+      acquireAttempts += 1;
+      if (acquireAttempts === 1) throw new Error("ledger_write_failed: disk full");
+      return { status: "leased", lease: makeFakeLease({ workerHost: "fake://worker-sticky" }) };
+    },
+  });
+  const runtime = new SymphonyRuntime(
+    runtimeOptions({
+      workflow,
+      orchestrator,
+      workerPool,
+      client: {
+        fetchCandidateIssues: async () => [issue],
+        fetchIssuesByIds: async () => [issue],
+      },
+      runner: async () => ({
+        workspace: "/tmp/symphony/MT-BP-ACQ-ERR-RETRY",
+        turnCount: 1,
+        updates: [],
+        resumeId: "resume",
+        agentKind: "codex",
+        finalIssue: doneIssue,
+      }),
+    }),
+  );
+
+  try {
+    await runtime.pollOnce({ waitForRuns: true });
+    await waitFor(() => runtime.snapshot().runHistory.length === 1, 2_000);
+
+    const snapshot = runtime.snapshot();
+    assert.equal(acquireAttempts, 2);
+    assert.equal(workerPool.acquireCalls[0]?.affinityKey, "fake://worker-sticky");
+    assert.equal(workerPool.acquireCalls[1]?.affinityKey, "fake://worker-sticky");
+    assert.equal(snapshot.runHistory[0]?.retryAttempt, 2);
+    assert.equal(snapshot.runHistory[0]?.workerHost, "fake://worker-sticky");
+    assert.ok(
+      snapshot.recentEvents.some(
+        (event) =>
+          event.type === "dispatch_skipped" &&
+          event.message.includes("worker_pool_acquire_error") &&
+          event.message.includes("ledger_write_failed: disk full"),
+      ),
+    );
+    assert.ok(snapshot.recentEvents.some((event) => event.type === "retry_timer_due"));
+  } finally {
+    runtime.stop();
+  }
+});
+
+test("worker pool: freed capacity nudges the poll so a capacity-blocked issue re-dispatches before the interval", async () => {
+  // The pool announces freed capacity (onCapacityAvailable, forwarded by the
+  // coordinator); the runtime must re-poll on its own so a worker_host_capacity
+  // skip re-dispatches within a scheduler turn instead of waiting out
+  // polling.intervalMs (set far beyond the test budget here to prove it).
+  const issue = issueFixture("issue-bp-nudge", "MT-BP-NUDGE");
+  const doneIssue: Issue = { ...issue, state: "Done", stateType: "completed" };
+  const workflow = workerPoolWorkflowFixture("/tmp/symphony-ts-runtime-workerpool-nudge");
+  workflow.settings.polling.intervalMs = 60_000;
+  let capacity = false;
+  const lease = makeFakeLease({ workerHost: "fake://worker-nudge" });
+  const workerPool = makeFakeWorkerPool({
+    canAcquire: () => capacity,
+    lease,
+  });
+  const runtime = new SymphonyRuntime(
+    runtimeOptions({
+      workflow,
+      workerPool,
+      client: {
+        fetchCandidateIssues: async () => [issue],
+        fetchIssuesByIds: async () => [issue],
+      },
+      runner: async () => ({
+        workspace: "/tmp/symphony/MT-BP-NUDGE",
+        turnCount: 1,
+        updates: [],
+        resumeId: "resume",
+        agentKind: "codex",
+        finalIssue: doneIssue,
+      }),
+    }),
+  );
+
+  try {
+    // No capacity: the issue blocks as worker_host_capacity; nothing dispatches.
+    await runtime.pollOnce();
+    assert.equal(workerPool.acquireCalls.length, 0);
+    assert.equal(runtime.snapshot().blocked[0]?.reason, "worker_host_capacity");
+
+    // A worker lands warm: the pool announces capacity. The runtime re-polls and
+    // dispatches WITHOUT any manual poll (start() was never called and the
+    // interval is 60s, so only the nudge can drive this).
+    capacity = true;
+    workerPool.triggerCapacityAvailable();
+    await waitFor(() => runtime.snapshot().runHistory.length === 1, 2_000);
+
+    assert.equal(runtime.snapshot().runHistory[0]?.outcome, "success");
+    assert.equal(runtime.snapshot().runHistory[0]?.workerHost, "fake://worker-nudge");
+    assert.equal(workerPool.acquireCalls.length, 1);
+  } finally {
+    runtime.stop();
+  }
+});
+
+test("worker pool: a thrown acquire rejection cancels the reservation, skips the runner, and re-claims next poll", async () => {
+  // acquire() can REJECT (throw) outside the no_capacity result path (ledger /
+  // filesystem / driver error). That rejection must be handled like a failed
+  // dispatch: release the active handle, cancel the reservation (so the slot is
+  // re-evaluated next poll), emit a clear error event, and return WITHOUT
+  // running and WITHOUT leaving the reservation/handle dangling as a stuck slot.
+  const issue = issueFixture("issue-bp-acq-throw", "MT-BP-ACQ-THROW");
+  const doneIssue: Issue = { ...issue, state: "Done", stateType: "completed" };
+  const workflow = workerPoolWorkflowFixture();
+  const orchestrator = new Orchestrator(workflow.settings, undefined, undefined, {
+    governs: () => true,
+    canAcquire: () => true,
+  });
+  let acquireAttempts = 0;
+  let runnerCalls = 0;
+  const workerPool = makeFakeWorkerPool({
+    result: () => {
+      acquireAttempts += 1;
+      // First acquire throws (driver/ledger fault); the second succeeds so the
+      // re-claim on the next poll can actually run, proving the slot recovered.
+      if (acquireAttempts === 1) throw new Error("ledger_write_failed: disk full");
+      return { status: "leased", lease: makeFakeLease({ workerHost: "fake://worker-recovered" }) };
+    },
+  });
+  const runtime = new SymphonyRuntime(
+    runtimeOptions({
+      workflow,
+      orchestrator,
+      workerPool,
+      client: {
+        fetchCandidateIssues: async () => [issue],
+        fetchIssuesByIds: async () =>
+          acquireAttempts >= 1 && runnerCalls === 0 ? [issue] : [issue],
+      },
+      runner: async () => {
+        runnerCalls += 1;
+        return {
+          workspace: "/tmp/symphony/MT-BP-ACQ-THROW",
+          turnCount: 1,
+          updates: [],
+          resumeId: "resume-acq",
+          agentKind: "codex",
+          finalIssue: doneIssue,
+        };
+      },
+    }),
+  );
+
+  await runtime.pollOnce({ waitForRuns: true });
+
+  // The throw must NOT run the runner, record history, schedule a retry, or leave
+  // the issue stuck 'running' / claimed. The slot must be re-evaluable next poll.
+  let snapshot = runtime.snapshot();
+  assert.equal(acquireAttempts, 1);
+  assert.equal(runnerCalls, 0);
+  assert.equal(snapshot.runHistory.length, 0);
+  assert.equal(snapshot.retrying.length, 0);
+  assert.equal(snapshot.running.length, 0);
+  assert.equal(orchestrator.state.claimed.size, 0);
+  assert.equal(orchestrator.state.running.size, 0);
+  assert.equal(orchestrator.state.reserved.size, 0);
+  // A clear error event surfaces the failure (not swallowed silently): the
+  // message names the acquire error and carries the thrown error text.
+  assert.ok(
+    snapshot.recentEvents.some(
+      (event) =>
+        event.type === "dispatch_skipped" &&
+        event.message.includes("worker_pool_acquire_error") &&
+        event.message.includes("ledger_write_failed: disk full"),
+    ),
+  );
+
+  // A subsequent poll re-claims the slot and runs (no stuck-running): the second
+  // acquire succeeds and the run completes against the recovered worker.
+  await runtime.pollOnce({ waitForRuns: true });
+  snapshot = runtime.snapshot();
+  assert.equal(acquireAttempts, 2);
+  assert.equal(runnerCalls, 1);
+  assert.equal(snapshot.runHistory.length, 1);
+  assert.equal(snapshot.runHistory[0]?.outcome, "success");
+  assert.equal(snapshot.runHistory[0]?.workerHost, "fake://worker-recovered");
+});
+
+test("worker pool: success path releases the lease as healthy", async () => {
+  const issue = issueFixture("issue-bp-success", "MT-BP-SUCCESS");
+  const doneIssue: Issue = { ...issue, state: "Done", stateType: "completed" };
+  const lease = makeFakeLease();
+  const workerPool = makeFakeWorkerPool({ lease });
+  const runtime = new SymphonyRuntime(
+    runtimeOptions({
+      workflow: workerPoolWorkflowFixture(),
+      workerPool,
+      client: {
+        fetchCandidateIssues: async () => [issue],
+        fetchIssuesByIds: async () => [issue],
+      },
+      runner: async () => ({
+        workspace: "/tmp/symphony/MT-BP-SUCCESS",
+        turnCount: 1,
+        updates: [],
+        resumeId: "resume",
+        agentKind: "codex",
+        finalIssue: doneIssue,
+      }),
+    }),
+  );
+
+  await runtime.start({ once: true, dryRun: false });
+
+  assert.deepEqual(lease.settles, [{ kind: "release", arg: "healthy" }]);
+});
+
+async function runWorkerPoolClassifierCase(
+  errorMessage: string,
+  expected: { kind: "release" | "fail"; arg?: string },
+): Promise<void> {
+  const issue = issueFixture(`issue-bp-cls-${expected.kind}`, "MT-BP-CLS");
+  const lease = makeFakeLease();
+  const workerPool = makeFakeWorkerPool({ lease });
+  const runtime = new SymphonyRuntime(
+    runtimeOptions({
+      workflow: workerPoolWorkflowFixture(),
+      workerPool,
+      client: {
+        fetchCandidateIssues: async () => [issue],
+        fetchIssuesByIds: async () => [issue],
+      },
+      runner: async () => {
+        throw new Error(errorMessage);
+      },
+    }),
+  );
+
+  await runtime.start({ once: true, dryRun: false });
+
+  assert.equal(lease.settles.length, 1);
+  assert.equal(lease.settles[0]?.kind, expected.kind);
+  if (expected.kind === "release") assert.equal(lease.settles[0]?.arg, "healthy");
+}
+
+test("worker pool: ssh_timeout failure poisons the worker (lease.fail)", async () => {
+  await runWorkerPoolClassifierCase("ssh_timeout: host 60000", { kind: "fail" });
+});
+
+test("worker pool: workspace_prepare_failed poisons the worker (lease.fail)", async () => {
+  await runWorkerPoolClassifierCase("workspace_prepare_failed: host 1 oops", { kind: "fail" });
+});
+
+test("worker pool: remote_home_lookup_failed poisons the worker (lease.fail)", async () => {
+  await runWorkerPoolClassifierCase("remote_home_lookup_failed: host empty_home", { kind: "fail" });
+});
+
+test("worker pool: a remote workspace hook failure poisons the worker (lease.fail)", async () => {
+  // The remote workspace preparation runs a hook over SSH against the worker's
+  // workerHost; a non-zero hook exit throws `workspace hook failed with status N`.
+  // That is a worker-side fault (the worker's environment is bad), so it must poison the
+  // worker and recycle it - not be returned to WARM_IDLE for re-lease.
+  await runWorkerPoolClassifierCase("workspace hook failed with status 2: setup.sh boom", {
+    kind: "fail",
+  });
+});
+
+test("worker pool: a LOCAL hook failure keeps the worker healthy (not the remote shape)", async () => {
+  // The LOCAL hook failure string is `hook failed with status N` (no `workspace`
+  // prefix) - a local/config fault that leaves the worker reusable. It must stay
+  // healthy so the remote-only poison prefix does not over-match.
+  await runWorkerPoolClassifierCase("hook failed with status 1: local boom", {
+    kind: "release",
+    arg: "healthy",
+  });
+});
+
+test("worker pool: ssh_not_found (local ENOENT) keeps the worker healthy (NOT recycled)", async () => {
+  await runWorkerPoolClassifierCase("ssh_not_found", { kind: "release", arg: "healthy" });
+});
+
+test("worker pool: invalid_ssh_timeout keeps the worker healthy", async () => {
+  await runWorkerPoolClassifierCase("invalid_ssh_timeout: 0", { kind: "release", arg: "healthy" });
+});
+
+test("worker pool: agent_run_aborted keeps the worker healthy", async () => {
+  await runWorkerPoolClassifierCase("agent_run_aborted", { kind: "release", arg: "healthy" });
+});
+
+test("worker pool: an ordinary agent failure keeps the worker healthy", async () => {
+  await runWorkerPoolClassifierCase("agent exited: boom", { kind: "release", arg: "healthy" });
+});
+
+test("worker pool: a stall-finished run poisons the worker and keeps accounting correct", async () => {
+  const issue = issueFixture("issue-bp-stall", "MT-BP-STALL");
+  const root = await tempDir("symphony-ts-runtime-workerpool-stall");
+  const workflow = workerPoolWorkflowFixture(root);
+  workflow.settings.agents.codex.stallTimeoutMs = 50;
+  const orchestrator = new Orchestrator(workflow.settings, undefined, undefined, {
+    governs: () => true,
+    canAcquire: () => true,
+  });
+  const lease = makeFakeLease({ workerHost: "fake://worker-stall" });
+  const workerPool = makeFakeWorkerPool({ lease });
+  let aborted = false;
+  const runtime = new SymphonyRuntime(
+    runtimeOptions({
+      workflow,
+      orchestrator,
+      workerPool,
+      client: {
+        fetchCandidateIssues: async () => [issue],
+        fetchIssuesByIds: async () => [issue],
+      },
+      runner: async ({ abortSignal, onUpdate }) => {
+        onUpdate?.({ type: "workspace_prepared", workspacePath: path.join(root, "workspace") });
+        await new Promise<void>((_resolve, reject) => {
+          abortSignal?.addEventListener(
+            "abort",
+            () => {
+              aborted = true;
+              reject(new Error("agent_run_aborted"));
+            },
+            { once: true },
+          );
+        });
+        throw new Error("unreachable");
+      },
+    }),
+  );
+
+  try {
+    await runtime.pollOnce();
+    // The run dispatches asynchronously; wait until its runner has emitted its
+    // first update (workspace_prepared) so the stale timestamp we set below sticks
+    // rather than being overwritten by a first update that lands on the next poll.
+    await waitFor(() => orchestrator.snapshot().running[0]?.lastAgentTimestamp != null, 1_000);
+    const running = orchestrator.snapshot().running[0];
+    assert.ok(running);
+    running.lastAgentTimestamp = new Date(Date.now() - 1_000);
+
+    await runtime.pollOnce({ dryRun: true });
+    await waitFor(() => aborted, 1_000);
+    await waitFor(() => lease.settles.length === 1, 1_000);
+
+    assert.equal(runtime.snapshot().runHistory[0]?.outcome, "stalled");
+    assert.deepEqual(
+      lease.settles.map((s) => s.kind),
+      ["fail"],
+    );
+  } finally {
+    runtime.stop();
+  }
+});
+
+test("worker pool: a stall-aborted run that RESOLVES SUCCESSFULLY still poisons the worker (MEDIUM)", async () => {
+  // Codex iter-6 MEDIUM: stall reconciliation sets handle.reason='stalled' and
+  // aborts the run, but the runtime only converted that to a poison outcome in the
+  // CATCH path. If the runner ignores the abort and races to a SUCCESSFUL resolve,
+  // the success path early-returns with workerOutcome still 'healthy' -> the finally
+  // releases the slot HEALTHY -> a stalled worker is reused. The finally must override
+  // workerOutcome='poison' whenever handle.reason==='stalled', independent of whether
+  // the runner resolved or rejected.
+  const issue = issueFixture("issue-bp-stall-success", "MT-BP-STALL-SUCCESS");
+  const root = await tempDir("symphony-ts-runtime-workerpool-stall-success");
+  const workflow = workerPoolWorkflowFixture(root);
+  workflow.settings.agents.codex.stallTimeoutMs = 50;
+  const orchestrator = new Orchestrator(workflow.settings, undefined, undefined, {
+    governs: () => true,
+    canAcquire: () => true,
+  });
+  const lease = makeFakeLease({ workerHost: "fake://worker-stall-success" });
+  const workerPool = makeFakeWorkerPool({ lease });
+  let aborted = false;
+  const runControl: { resolve?: (value: RunResult) => void } = {};
+  const doneIssue: Issue = { ...issue, state: "Done", stateType: "completed" };
+  const runtime = new SymphonyRuntime(
+    runtimeOptions({
+      workflow,
+      orchestrator,
+      workerPool,
+      client: {
+        fetchCandidateIssues: async () => [issue],
+        fetchIssuesByIds: async () => [issue],
+      },
+      runner: async ({ abortSignal, onUpdate }) => {
+        onUpdate?.({ type: "workspace_prepared", workspacePath: path.join(root, "workspace") });
+        // The runner RACES to a successful resolve after the abort instead of
+        // rejecting: the stall already finished it externally, so this success must
+        // NOT downgrade the worker to healthy.
+        abortSignal?.addEventListener("abort", () => {
+          aborted = true;
+        });
+        return await new Promise<RunResult>((resolve) => {
+          runControl.resolve = resolve;
+        });
+      },
+    }),
+  );
+
+  try {
+    await runtime.pollOnce();
+    await waitFor(() => orchestrator.snapshot().running[0]?.lastAgentTimestamp != null, 1_000);
+    const running = orchestrator.snapshot().running[0];
+    assert.ok(running);
+    running.lastAgentTimestamp = new Date(Date.now() - 1_000);
+
+    // The stall reconciliation aborts the run (handle.reason='stalled').
+    await runtime.pollOnce({ dryRun: true });
+    await waitFor(() => aborted, 1_000);
+    assert.equal(runtime.snapshot().runHistory[0]?.outcome, "stalled");
+
+    // The runner now resolves SUCCESSFULLY (it ignored the abort / raced past it).
+    runControl.resolve?.({
+      workspace: path.join(root, "workspace"),
+      turnCount: 1,
+      updates: [],
+      resumeId: "stall-then-success",
+      agentKind: "codex",
+      finalIssue: doneIssue,
+    });
+    await waitFor(() => lease.settles.length === 1, 1_000);
+
+    // The worker is POISONED (lease.fail), NOT released healthy: a stalled worker must
+    // never be reused even when the runner reports success after the abort.
+    assert.deepEqual(
+      lease.settles.map((s) => s.kind),
+      ["fail"],
+    );
+    // The stall outcome is unchanged - no late success recorded.
+    assert.equal(runtime.snapshot().runHistory[0]?.outcome, "stalled");
+    assert.equal(runtime.snapshot().runHistory.length, 1);
+  } finally {
+    runtime.stop();
+  }
+});
+
+test("worker pool: a stale-generation late resolve is a lease no-op (leaseId guard)", async () => {
+  const issue = issueFixture("issue-bp-stale-gen", "MT-BP-STALE-GEN");
+  const root = await tempDir("symphony-ts-runtime-workerpool-stale-gen");
+  const workflow = workerPoolWorkflowFixture(root);
+  workflow.settings.agent.maxRetryBackoffMs = 0;
+  workflow.settings.agents.codex.stallTimeoutMs = 50;
+  const orchestrator = new Orchestrator(workflow.settings, undefined, undefined, {
+    governs: () => true,
+    canAcquire: () => true,
+  });
+  // The first run's lease is "stale" - its settle is a guarded no-op (the worker
+  // record's leaseId moved on). The second run's lease settles normally. The retry
+  // binds a FRESH worker generation: the first (poisoned) worker is recycled and a new worker
+  // is provisioned, so the leases carry distinct workerIds. This mirrors production - at
+  // slotsPerMachine=1 the pool never re-leases a worker whose prior slot is still live
+  // (pool inFlight is freed only when the slot settles, which also deregisters it from
+  // the coordinator), so a retry never collides with the still-registered stale slot.
+  const staleLease = makeFakeLease({
+    leaseId: "lease-stale",
+    workerId: "worker-stale",
+    stale: true,
+  });
+  const freshLease = makeFakeLease({ leaseId: "lease-fresh", workerId: "worker-fresh" });
+  const leases = [staleLease, freshLease];
+  let acquireIndex = 0;
+  const workerPool = makeFakeWorkerPool({
+    result: () => {
+      const lease = leases[acquireIndex] ?? freshLease;
+      acquireIndex += 1;
+      return { status: "leased", lease };
+    },
+  });
+  const controls = new Map<number, { resolve: (value: RunResult) => void }>();
+  let attempts = 0;
+  const runtime = new SymphonyRuntime(
+    runtimeOptions({
+      workflow,
+      orchestrator,
+      workerPool,
+      client: {
+        fetchCandidateIssues: async () => [issue],
+        fetchIssuesByIds: async () => [issue],
+      },
+      runner: async ({ abortSignal, onUpdate }) => {
+        attempts += 1;
+        const attempt = attempts;
+        onUpdate?.({
+          type: "workspace_prepared",
+          workspacePath: path.join(root, `workspace-${attempt}`),
+        });
+        abortSignal?.addEventListener("abort", () => {});
+        return await new Promise<RunResult>((resolve) => {
+          controls.set(attempt, { resolve });
+        });
+      },
+    }),
+  );
+
+  try {
+    await runtime.pollOnce();
+    // Wait until the first run's runner has emitted its first update so the stale
+    // timestamp we set below sticks rather than being overwritten by a first update
+    // that lands on the next poll.
+    await waitFor(() => orchestrator.snapshot().running[0]?.lastAgentTimestamp != null, 1_000);
+    const firstEntry = orchestrator.snapshot().running[0];
+    assert.ok(firstEntry);
+    firstEntry.lastAgentTimestamp = new Date(Date.now() - 1_000);
+
+    await runtime.pollOnce({ dryRun: true });
+    assert.equal(runtime.snapshot().runHistory[0]?.outcome, "stalled");
+
+    await runtime.pollOnce();
+    await waitFor(() => attempts === 2, 1_000);
+
+    // The first (stale) generation resolves late; its finally calls the stale
+    // lease whose settle is a guarded no-op.
+    controls.get(1)?.resolve({
+      workspace: path.join(root, "workspace-1"),
+      turnCount: 1,
+      updates: [],
+      resumeId: "stale-late",
+      agentKind: "codex",
+      finalIssue: issue,
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    assert.equal(staleLease.settles.length, 0);
+  } finally {
+    runtime.stop();
+  }
+});
+
+test("worker pool: a reserving (in-acquire) slot is never stall-finished and records no bogus retry host", async () => {
+  // Regression pin: an in-acquire slot must never look like a stalled run. A flow
+  // that placed the slot in `running` with lastAgentTimestamp=null and
+  // startedAt=claim time would let a slow cold provision (longer than
+  // stallTimeoutMs) be stall-finished, persisting a bogus non-concrete host into
+  // RetryEntry.workerHost. A reservation has NO running entry, so the stall
+  // reconciler structurally cannot touch it.
+  const issue = issueFixture("issue-bp-reserving-stall", "MT-BP-RESERVING-STALL");
+  const doneIssue: Issue = { ...issue, state: "Done", stateType: "completed" };
+  const workflow = workerPoolWorkflowFixture();
+  workflow.settings.agents.codex.stallTimeoutMs = 50;
+  const orchestrator = new Orchestrator(workflow.settings, undefined, undefined, {
+    governs: () => true,
+    canAcquire: () => true,
+  });
+  const lease = makeFakeLease({ workerHost: "fake://worker-slow-provision" });
+  const acquireControl: { release?: () => void } = {};
+  const workerPool = makeFakeWorkerPool({
+    result: async () => {
+      // A slow (cold-provision) acquire held open until the test releases it.
+      await new Promise<void>((resolve) => {
+        acquireControl.release = resolve;
+      });
+      return { status: "leased", lease };
+    },
+  });
+  const runtime = new SymphonyRuntime(
+    runtimeOptions({
+      workflow,
+      orchestrator,
+      workerPool,
+      client: {
+        fetchCandidateIssues: async () => [issue],
+        fetchIssuesByIds: async () => [issue],
+      },
+      runner: async () => ({
+        workspace: "/tmp/symphony/MT-BP-RESERVING-STALL",
+        turnCount: 1,
+        updates: [],
+        resumeId: "resume",
+        agentKind: "codex",
+        finalIssue: doneIssue,
+      }),
+    }),
+  );
+
+  try {
+    await runtime.pollOnce();
+    await waitFor(() => orchestrator.snapshot().reserving.length === 1, 1_000);
+
+    // Let the acquire window outlast the stall timeout, then run the reconciler.
+    await new Promise<void>((resolve) => setTimeout(resolve, 80));
+    await runtime.pollOnce({ dryRun: true });
+
+    // The reserving slot was NOT stall-finished: no run_stalled, no retry entry
+    // (and therefore no bogus retry host), the reservation still live.
+    const snapshot = runtime.snapshot();
+    assert.equal(
+      snapshot.recentEvents.some((event) => event.type === "run_stalled"),
+      false,
+    );
+    assert.equal(snapshot.retrying.length, 0);
+    assert.equal(orchestrator.snapshot().reserving.length, 1);
+
+    // The acquire completes; the run binds, executes, and finishes normally with
+    // the CONCRETE host recorded everywhere (RetryEntry.workerHost included).
+    acquireControl.release?.();
+    await waitFor(() => runtime.snapshot().runHistory.length === 1, 2_000);
+    assert.equal(runtime.snapshot().runHistory[0]?.outcome, "success");
+    assert.equal(runtime.snapshot().runHistory[0]?.workerHost, "fake://worker-slow-provision");
+    const retryHosts = orchestrator.snapshot().retrying.map((entry) => entry.workerHost ?? null);
+    for (const host of retryHosts) {
+      assert.equal(host, "fake://worker-slow-provision");
+    }
+  } finally {
+    runtime.stop();
+  }
+});
+
+test("worker pool: a bind after cleanup releases the worker healthy and skips as reservation_lapsed", async () => {
+  // Failure path C: the issue went terminal mid-acquire (cleanupIssue cancelled
+  // the reservation), then the acquire resolves bound. The late bind is token
+  // guarded to null; the runtime releases the just-bound worker HEALTHY (back to
+  // warm inventory) and skips the run with the reservation_lapsed detail.
+  const issue = issueFixture("issue-bp-lapsed", "MT-BP-LAPSED");
+  const doneIssue: Issue = { ...issue, state: "Done", stateType: "completed" };
+  const workflow = workerPoolWorkflowFixture();
+  const orchestrator = new Orchestrator(workflow.settings, undefined, undefined, {
+    governs: () => true,
+    canAcquire: () => true,
+  });
+  const lease = makeFakeLease({ workerHost: "fake://worker-lapsed" });
+  const acquireControl: { release?: () => void } = {};
+  const workerPool = makeFakeWorkerPool({
+    result: async () => {
+      await new Promise<void>((resolve) => {
+        acquireControl.release = resolve;
+      });
+      return { status: "leased", lease };
+    },
+  });
+  let runnerCalls = 0;
+  let fetchedTerminal = false;
+  const runtime = new SymphonyRuntime(
+    runtimeOptions({
+      workflow,
+      orchestrator,
+      workerPool,
+      client: {
+        fetchCandidateIssues: async () => (fetchedTerminal ? [] : [issue]),
+        fetchIssuesByIds: async () => (fetchedTerminal ? [doneIssue] : [issue]),
+      },
+      runner: async () => {
+        runnerCalls += 1;
+        throw new Error("runner should not run after the reservation lapsed");
+      },
+    }),
+  );
+
+  try {
+    await runtime.pollOnce();
+    await waitFor(() => orchestrator.snapshot().reserving.length === 1, 1_000);
+
+    // The issue goes terminal while the acquire is in flight: the reconciler
+    // cancels the reservation (and aborts the run handle).
+    fetchedTerminal = true;
+    await runtime.pollOnce({ dryRun: true });
+    assert.equal(orchestrator.snapshot().reserving.length, 0);
+
+    // The acquire now resolves bound: late bind -> null -> release healthy + skip.
+    acquireControl.release?.();
+    await waitFor(() => lease.settles.length === 1, 2_000);
+
+    assert.deepEqual(lease.settles, [{ kind: "release", arg: "healthy" }]);
+    assert.equal(runnerCalls, 0);
+    const snapshot = runtime.snapshot();
+    assert.equal(snapshot.runHistory.length, 0);
+    assert.equal(
+      snapshot.recentEvents.some(
+        (event) =>
+          event.type === "dispatch_skipped" && event.message.includes("reservation_lapsed"),
+      ),
+      true,
+    );
+    assert.equal(
+      snapshot.recentEvents.some((event) => event.type === "run_started"),
+      false,
+    );
+  } finally {
+    runtime.stop();
+  }
+});
+
+test("worker pool: onUpdate triggers a lease heartbeat", async () => {
+  const issue = issueFixture("issue-bp-heartbeat", "MT-BP-HEARTBEAT");
+  const doneIssue: Issue = { ...issue, state: "Done", stateType: "completed" };
+  const lease = makeFakeLease();
+  const workerPool = makeFakeWorkerPool({ lease });
+  const runtime = new SymphonyRuntime(
+    runtimeOptions({
+      workflow: workerPoolWorkflowFixture(),
+      workerPool,
+      client: {
+        fetchCandidateIssues: async () => [issue],
+        fetchIssuesByIds: async () => [issue],
+      },
+      runner: async ({ onUpdate }) => {
+        onUpdate?.({ type: "turn_completed", sessionId: "s", resumeId: "r" });
+        onUpdate?.({ type: "turn_completed", sessionId: "s", resumeId: "r" });
+        return {
+          workspace: "/tmp/symphony/MT-BP-HEARTBEAT",
+          turnCount: 2,
+          updates: [],
+          resumeId: "r",
+          agentKind: "codex",
+          finalIssue: doneIssue,
+        };
+      },
+    }),
+  );
+
+  await runtime.start({ once: true, dryRun: false });
+
+  assert.equal(lease.heartbeats.count, 2);
+});
+
+test("worker pool: reconcile is called on workflow reload with the next worker-pool settings", async () => {
+  const issue = issueFixture("issue-bp-reload", "MT-BP-RELOAD");
+  const firstWorkflow = workerPoolWorkflowFixture();
+  const secondWorkflow = workerPoolWorkflowFixture("/tmp/symphony-ts-runtime-workerpool-2", {
+    max: 3,
+  });
+  const workerPool = makeFakeWorkerPool({ canAcquire: false });
+  let reloads = 0;
+  const runtime = new SymphonyRuntime(
+    runtimeOptions({
+      workflow: firstWorkflow,
+      workerPool,
+      reloadWorkflow: async () => {
+        reloads += 1;
+        return secondWorkflow;
+      },
+      client: {
+        fetchCandidateIssues: async () => [issue],
+        fetchIssuesByIds: async () => [issue],
+      },
+    }),
+  );
+
+  await runtime.pollOnce({ dryRun: true });
+
+  assert.equal(reloads, 1);
+  assert.equal(workerPool.reconcileCalls.length, 1);
+  assert.equal(workerPool.reconcileCalls[0]?.max, 3);
+});
+
+test("worker pool: a reload that removes the worker_pool block drains the live pool (no leak)", async () => {
+  const issue = issueFixture("issue-bp-remove", "MT-BP-REMOVE");
+  const firstWorkflow = workerPoolWorkflowFixture();
+  // The reloaded workflow has NO worker.worker_pool block at all.
+  const secondWorkflow = workflowFixture("/tmp/symphony-ts-runtime-workerpool-removed");
+  assert.equal(secondWorkflow.settings.worker.workerPool, undefined);
+  const workerPool = makeFakeWorkerPool({ canAcquire: false });
+  let reloads = 0;
+  const runtime = new SymphonyRuntime(
+    runtimeOptions({
+      workflow: firstWorkflow,
+      workerPool,
+      reloadWorkflow: async () => {
+        reloads += 1;
+        return secondWorkflow;
+      },
+      client: {
+        fetchCandidateIssues: async () => [issue],
+        fetchIssuesByIds: async () => [issue],
+      },
+    }),
+  );
+
+  await runtime.pollOnce({ dryRun: true });
+
+  assert.equal(reloads, 1);
+  // Removing the block must still reconcile the live pool to a disabled-equivalent
+  // so it drains to zero instead of leaking its (paid) workers.
+  assert.equal(workerPool.reconcileCalls.length, 1);
+  assert.equal(workerPool.reconcileCalls[0]?.enabled, false);
+});
+
+test("worker pool: a reload that disables the worker_pool block drains the live pool (no leak)", async () => {
+  const issue = issueFixture("issue-bp-disable", "MT-BP-DISABLE");
+  const firstWorkflow = workerPoolWorkflowFixture();
+  const secondWorkflow = workerPoolWorkflowFixture("/tmp/symphony-ts-runtime-workerpool-disabled", {
+    enabled: false,
+  });
+  assert.equal(secondWorkflow.settings.worker.workerPool?.enabled, false);
+  const workerPool = makeFakeWorkerPool({ canAcquire: false });
+  let reloads = 0;
+  const runtime = new SymphonyRuntime(
+    runtimeOptions({
+      workflow: firstWorkflow,
+      workerPool,
+      reloadWorkflow: async () => {
+        reloads += 1;
+        return secondWorkflow;
+      },
+      client: {
+        fetchCandidateIssues: async () => [issue],
+        fetchIssuesByIds: async () => [issue],
+      },
+    }),
+  );
+
+  await runtime.pollOnce({ dryRun: true });
+
+  assert.equal(reloads, 1);
+  // Disabling the block must reconcile so the pool drains to zero.
+  assert.equal(workerPool.reconcileCalls.length, 1);
+  assert.equal(workerPool.reconcileCalls[0]?.enabled, false);
+});
+
+test("worker pool: a reload that disables the pool resumes dispatch via the local path (no lease, not blocked)", async () => {
+  // Reload enabled -> disabled: the pool drains to zero and its canAcquire() now
+  // returns false, but the orchestrator's lifetime probe stays installed. Dispatch
+  // must RESUME via the local path (workerHost null), eligible work must NOT be
+  // blocked as worker_host_capacity, and NO lease must be acquired against the
+  // disabled pool.
+  const issue = issueFixture("issue-bp-disabled-resume", "MT-BP-DISABLED-RESUME");
+  const doneIssue: Issue = { ...issue, state: "Done", stateType: "completed" };
+  const firstWorkflow = workerPoolWorkflowFixture();
+  const secondWorkflow = workerPoolWorkflowFixture(
+    "/tmp/symphony-ts-runtime-workerpool-disabled-resume",
+    { enabled: false },
+  );
+  let poolEnabled = true;
+  // Once disabled the pool drains to zero: canAcquire() is false and the pool no
+  // longer governs (isEnabled() false).
+  const workerPool = makeFakeWorkerPool({
+    isEnabled: () => poolEnabled,
+    canAcquire: () => poolEnabled,
+  });
+  let runnerWorkerHost: string | null | undefined = "unset";
+  let reloads = 0;
+  const runtime = new SymphonyRuntime(
+    runtimeOptions({
+      workflow: firstWorkflow,
+      workerPool,
+      reloadWorkflow: async () => {
+        reloads += 1;
+        // The reconcile (driven below) flips the live pool to disabled.
+        poolEnabled = false;
+        return secondWorkflow;
+      },
+      client: {
+        fetchCandidateIssues: async () => [issue],
+        fetchIssuesByIds: async () => [issue],
+      },
+      runner: async ({ workerHost }) => {
+        runnerWorkerHost = workerHost;
+        return {
+          workspace: "/tmp/symphony/MT-BP-DISABLED-RESUME",
+          turnCount: 1,
+          updates: [],
+          resumeId: "resume",
+          agentKind: "codex",
+          finalIssue: doneIssue,
+        };
+      },
+    }),
+  );
+
+  await runtime.start({ once: true, dryRun: false });
+
+  const snapshot = runtime.snapshot();
+  assert.equal(reloads, 1);
+  // The reload reconciled the pool to disabled.
+  assert.equal(workerPool.reconcileCalls.length, 1);
+  assert.equal(workerPool.reconcileCalls[0]?.enabled, false);
+  // Dispatch resumed via the local path: no lease was acquired against the disabled
+  // pool, and the runner ran with the local workerHost (null), never a reservation.
+  assert.equal(workerPool.acquireCalls.length, 0);
+  assert.equal(runnerWorkerHost, null);
+  // The run completed (not blocked as worker_host_capacity).
+  assert.equal(snapshot.runHistory[0]?.outcome, "success");
+  assert.equal(
+    snapshot.recentEvents.some((event) => event.message.includes("worker_host_capacity")),
+    false,
+  );
+});
+
+test("worker pool: a reload that re-enables the pool governs again and acquires a lease", async () => {
+  // Reload disabled -> re-enabled: the pool governs once more, so a lease is
+  // acquired and the leased workerHost (not the local null) drives the run.
+  const issue = issueFixture("issue-bp-reenable", "MT-BP-REENABLE");
+  const doneIssue: Issue = { ...issue, state: "Done", stateType: "completed" };
+  const firstWorkflow = workerPoolWorkflowFixture(
+    "/tmp/symphony-ts-runtime-workerpool-reenable-1",
+    {
+      enabled: false,
+    },
+  );
+  const secondWorkflow = workerPoolWorkflowFixture(
+    "/tmp/symphony-ts-runtime-workerpool-reenable-2",
+    {
+      enabled: true,
+    },
+  );
+  let poolEnabled = false;
+  const lease = makeFakeLease({ workerHost: "fake://worker-reenabled" });
+  const workerPool = makeFakeWorkerPool({
+    isEnabled: () => poolEnabled,
+    canAcquire: () => poolEnabled,
+    lease,
+  });
+  let runnerWorkerHost: string | null | undefined = "unset";
+  let reloads = 0;
+  const runtime = new SymphonyRuntime(
+    runtimeOptions({
+      workflow: firstWorkflow,
+      workerPool,
+      reloadWorkflow: async () => {
+        reloads += 1;
+        poolEnabled = true;
+        return secondWorkflow;
+      },
+      client: {
+        fetchCandidateIssues: async () => [issue],
+        fetchIssuesByIds: async () => [issue],
+      },
+      runner: async ({ workerHost }) => {
+        runnerWorkerHost = workerHost;
+        return {
+          workspace: "/tmp/symphony/MT-BP-REENABLE",
+          turnCount: 1,
+          updates: [],
+          resumeId: "resume",
+          agentKind: "codex",
+          finalIssue: doneIssue,
+        };
+      },
+    }),
+  );
+
+  await runtime.start({ once: true, dryRun: false });
+
+  const snapshot = runtime.snapshot();
+  assert.equal(reloads, 1);
+  assert.equal(workerPool.reconcileCalls.length, 1);
+  assert.equal(workerPool.reconcileCalls[0]?.enabled, true);
+  // The re-enabled pool governs again: a lease was acquired and drives the run.
+  assert.equal(workerPool.acquireCalls.length, 1);
+  assert.equal(runnerWorkerHost, "fake://worker-reenabled");
+  assert.equal(snapshot.runHistory[0]?.workerHost, "fake://worker-reenabled");
+  assert.deepEqual(
+    lease.settles.map((s) => s.kind),
+    ["release"],
+  );
+});
+
+test("worker pool: a reload that throws the anti-double-capacity guard keeps last-good and surfaces the message", async () => {
+  const issue = issueFixture("issue-bp-guard", "MT-BP-GUARD");
+  const firstWorkflow = workerPoolWorkflowFixture();
+  const workerPool = makeFakeWorkerPool({ canAcquire: false });
+  const runtime = new SymphonyRuntime(
+    runtimeOptions({
+      workflow: firstWorkflow,
+      workerPool,
+      reloadWorkflow: async () => {
+        throw new Error("worker.worker_pool.enabled cannot be combined with worker.ssh_hosts");
+      },
+      client: {
+        fetchCandidateIssues: async () => [issue],
+        fetchIssuesByIds: async () => [issue],
+      },
+    }),
+  );
+
+  await runtime.pollOnce({ dryRun: true });
+
+  // Last-good settings retained: the worker pool is still enabled.
+  assert.equal(runtime.workflow.settings.worker.workerPool?.enabled, true);
+  assert.equal(workerPool.reconcileCalls.length, 0);
+  const reloadFailed = runtime
+    .snapshot()
+    .recentEvents.find((event) => event.type === "workflow_reload_failed");
+  assert.ok(reloadFailed);
+  assert.ok(reloadFailed.message.includes("cannot be combined with worker.ssh_hosts"));
+});
+
+function perRunEndpointManager(): McpEndpointManager {
+  // A concrete-style manager (perRunEndpoint=true) so the coordinator advertises
+  // the per-run-endpoint capability; open() returns null (no real endpoint needed
+  // for the reload-gate tests, which never run an agent).
+  return {
+    perRunEndpoint: true,
+    async open() {
+      return null;
+    },
+    async release() {},
+  };
+}
+
+test("worker pool: a reload to max_in_flight>1 without co_residence is rejected (gate), keeps last-good, NOT reconciled", async () => {
+  // Codex iter-3 HIGH #3: the slots-per-machine co-residence gate ran ONLY at
+  // startup. A live daemon could reload max_in_flight 1 -> >1 WITHOUT co_residence
+  // and silently widen the shared-machine blast radius the startup gate rejects.
+  // The reload path must enforce the SAME gate: keep last-good settings, do NOT
+  // reconcile the live pool onto the unsafe settings, and emit
+  // workflow_reload_failed with the gate's message.
+  const issue = issueFixture("issue-bp-reload-gate", "MT-BP-RELOAD-GATE");
+  const firstWorkflow = workerPoolWorkflowFixture();
+  // The reloaded workflow raises max_in_flight to 2 but supplies NO co_residence
+  // opt-in: the gate must reject it even though the coordinator IS capable.
+  const secondWorkflow = workerPoolWorkflowFixture(
+    "/tmp/symphony-ts-runtime-workerpool-reload-gate",
+    {
+      max_in_flight: 2,
+    },
+  );
+  assert.equal(secondWorkflow.settings.worker.workerPool?.slotsPerMachine, 2);
+  assert.equal(secondWorkflow.settings.worker.workerPool?.coResidence, undefined);
+  const workerPool = makeFakeWorkerPool({ canAcquire: false });
+  const coordinator = createDispatchCoordinator({
+    pool: workerPool,
+    mcpEndpointManager: perRunEndpointManager(),
+    settings: firstWorkflow.settings.worker.workerPool!,
+  });
+  let reloads = 0;
+  const runtime = new SymphonyRuntime(
+    runtimeOptions({
+      workflow: firstWorkflow,
+      coordinator,
+      reloadWorkflow: async () => {
+        reloads += 1;
+        return secondWorkflow;
+      },
+      client: {
+        fetchCandidateIssues: async () => [issue],
+        fetchIssuesByIds: async () => [issue],
+      },
+    }),
+  );
+
+  await runtime.pollOnce({ dryRun: true });
+
+  assert.equal(reloads, 1);
+  // Last-good settings retained: still the original single-slot worker pool.
+  assert.equal(runtime.workflow.settings.worker.workerPool?.slotsPerMachine, 1);
+  // The coordinator must NOT have reconciled onto the unsafe slotsPerMachine>1.
+  assert.equal(workerPool.reconcileCalls.length, 0);
+  const reloadFailed = runtime
+    .snapshot()
+    .recentEvents.find((event) => event.type === "workflow_reload_failed");
+  assert.ok(reloadFailed);
+  assert.match(reloadFailed!.message, /co.?residence/i);
+  // No workflow_reloaded event was emitted for the rejected reload.
+  assert.equal(
+    runtime.snapshot().recentEvents.some((event) => event.type === "workflow_reloaded"),
+    false,
+  );
+});
+
+test("worker pool: a reload to max_in_flight>1 without the per-run-endpoint capability is rejected (gate)", async () => {
+  // A bare workerPool wraps in a null-endpoint coordinator (perRunEndpoint=false), so
+  // even WITH the co_residence opt-in the gate must reject slotsPerMachine>1 for
+  // lack of the per-run-endpoint capability - mirroring the startup gate.
+  const issue = issueFixture("issue-bp-reload-endpoint", "MT-BP-RELOAD-ENDPOINT");
+  const firstWorkflow = workerPoolWorkflowFixture();
+  const secondWorkflow = workerPoolWorkflowFixture(
+    "/tmp/symphony-ts-runtime-workerpool-reload-endpoint",
+    { max_in_flight: 2, co_residence: true },
+  );
+  const workerPool = makeFakeWorkerPool({ canAcquire: false });
+  let reloads = 0;
+  const runtime = new SymphonyRuntime(
+    runtimeOptions({
+      workflow: firstWorkflow,
+      // Bare workerPool -> null-endpoint passthrough coordinator (perRunEndpoint=false).
+      workerPool,
+      reloadWorkflow: async () => {
+        reloads += 1;
+        return secondWorkflow;
+      },
+      client: {
+        fetchCandidateIssues: async () => [issue],
+        fetchIssuesByIds: async () => [issue],
+      },
+    }),
+  );
+
+  await runtime.pollOnce({ dryRun: true });
+
+  assert.equal(reloads, 1);
+  assert.equal(runtime.workflow.settings.worker.workerPool?.slotsPerMachine, 1);
+  assert.equal(workerPool.reconcileCalls.length, 0);
+  const reloadFailed = runtime
+    .snapshot()
+    .recentEvents.find((event) => event.type === "workflow_reload_failed");
+  assert.ok(reloadFailed);
+  assert.match(reloadFailed!.message, /per-run.*endpoint|perRunEndpoint/i);
+});
+
+test("worker pool: a reload to max_in_flight>1 WITH co_residence + per-run-endpoint applies and reconciles", async () => {
+  // The safe widening: a capable coordinator + the explicit co_residence opt-in.
+  // The gate passes, so the reload applies and the live pool is reconciled onto the
+  // new slotsPerMachine>1 settings.
+  const issue = issueFixture("issue-bp-reload-ok", "MT-BP-RELOAD-OK");
+  const firstWorkflow = workerPoolWorkflowFixture();
+  const secondWorkflow = workerPoolWorkflowFixture(
+    "/tmp/symphony-ts-runtime-workerpool-reload-ok",
+    {
+      max_in_flight: 2,
+      co_residence: true,
+    },
+  );
+  const workerPool = makeFakeWorkerPool({ canAcquire: false });
+  const coordinator = createDispatchCoordinator({
+    pool: workerPool,
+    mcpEndpointManager: perRunEndpointManager(),
+    settings: firstWorkflow.settings.worker.workerPool!,
+  });
+  let reloads = 0;
+  const runtime = new SymphonyRuntime(
+    runtimeOptions({
+      workflow: firstWorkflow,
+      coordinator,
+      reloadWorkflow: async () => {
+        reloads += 1;
+        return secondWorkflow;
+      },
+      client: {
+        fetchCandidateIssues: async () => [issue],
+        fetchIssuesByIds: async () => [issue],
+      },
+    }),
+  );
+
+  await runtime.pollOnce({ dryRun: true });
+
+  assert.equal(reloads, 1);
+  // The reload applied: settings now carry slotsPerMachine=2.
+  assert.equal(runtime.workflow.settings.worker.workerPool?.slotsPerMachine, 2);
+  // The live pool was reconciled onto the new settings.
+  assert.equal(workerPool.reconcileCalls.length, 1);
+  assert.equal(workerPool.reconcileCalls[0]?.slotsPerMachine, 2);
+  assert.equal(
+    runtime.snapshot().recentEvents.some((event) => event.type === "workflow_reloaded"),
+    true,
+  );
+});
+
+test("worker pool: a default (slotsPerMachine=1) reload applies unchanged through the gate", async () => {
+  // The byte-identical default path: slotsPerMachine stays 1, the gate never
+  // triggers, the reload applies and reconciles exactly as before.
+  const issue = issueFixture("issue-bp-reload-default", "MT-BP-RELOAD-DEFAULT");
+  const firstWorkflow = workerPoolWorkflowFixture();
+  const secondWorkflow = workerPoolWorkflowFixture(
+    "/tmp/symphony-ts-runtime-workerpool-reload-default",
+    {
+      max: 3,
+    },
+  );
+  assert.equal(secondWorkflow.settings.worker.workerPool?.slotsPerMachine, 1);
+  const workerPool = makeFakeWorkerPool({ canAcquire: false });
+  let reloads = 0;
+  const runtime = new SymphonyRuntime(
+    runtimeOptions({
+      workflow: firstWorkflow,
+      workerPool,
+      reloadWorkflow: async () => {
+        reloads += 1;
+        return secondWorkflow;
+      },
+      client: {
+        fetchCandidateIssues: async () => [issue],
+        fetchIssuesByIds: async () => [issue],
+      },
+    }),
+  );
+
+  await runtime.pollOnce({ dryRun: true });
+
+  assert.equal(reloads, 1);
+  assert.equal(workerPool.reconcileCalls.length, 1);
+  assert.equal(workerPool.reconcileCalls[0]?.max, 3);
+  assert.equal(workerPool.reconcileCalls[0]?.slotsPerMachine, 1);
+  assert.equal(
+    runtime.snapshot().recentEvents.some((event) => event.type === "workflow_reload_failed"),
+    false,
+  );
+});
+
+test("worker pool: a reload whose reconcile throws keeps last-good settings AND the live pool unchanged (transactional)", async () => {
+  // Codex iter-5 HIGH (non-transactional reload): the reload assigned
+  // this.input.workflow + this.orchestrator.settings BEFORE coordinator.reconcile.
+  // If reconcile throws (e.g. driver unavailable / invalid driverOptions), the
+  // catch emits workflow_reload_failed but the runtime has ALREADY switched to the
+  // failed settings - 'last-good' is violated and dispatch uses settings that do not
+  // match the live pool/coordinator. The reload must be transactional: run the
+  // throwing reconcile side effect FIRST and only swap runtime settings AFTER it
+  // succeeds. On failure, BOTH the runtime settings AND the pool state stay on the
+  // PREVIOUS config.
+  const issue = issueFixture("issue-bp-reload-reconcile-throws", "MT-BP-RELOAD-RECONCILE");
+  const firstWorkflow = workerPoolWorkflowFixture();
+  assert.equal(firstWorkflow.settings.worker.workerPool?.max, 1);
+  const secondWorkflow = workerPoolWorkflowFixture(
+    "/tmp/symphony-ts-runtime-workerpool-reload-reconcile",
+    { max: 3 },
+  );
+  assert.equal(secondWorkflow.settings.worker.workerPool?.max, 3);
+  // The pool rejects the reconcile (e.g. driver unavailable on the new settings).
+  const workerPool = makeFakeWorkerPool({
+    canAcquire: false,
+    reconcileError: "driver unavailable",
+  });
+  let reloads = 0;
+  const runtime = new SymphonyRuntime(
+    runtimeOptions({
+      workflow: firstWorkflow,
+      workerPool,
+      reloadWorkflow: async () => {
+        reloads += 1;
+        return secondWorkflow;
+      },
+      client: {
+        fetchCandidateIssues: async () => [issue],
+        fetchIssuesByIds: async () => [issue],
+      },
+    }),
+  );
+
+  await runtime.pollOnce({ dryRun: true });
+
+  assert.equal(reloads, 1);
+  // Last-good is preserved: the runtime still carries the FIRST workflow's settings
+  // (workerPool.max unchanged at 1, NOT the failed reload's 3) and the FIRST workflow.
+  assert.equal(runtime.workflow.settings.worker.workerPool?.max, 1);
+  assert.equal(runtime.workflow.path, firstWorkflow.path);
+  assert.equal(runtime.workflow, firstWorkflow);
+  // The failure surfaced as workflow_reload_failed carrying the reconcile message...
+  const reloadFailed = runtime
+    .snapshot()
+    .recentEvents.find((event) => event.type === "workflow_reload_failed");
+  assert.ok(reloadFailed);
+  assert.ok(reloadFailed.message.includes("driver unavailable"));
+  // ...and NO workflow_reloaded event was emitted for the rejected reload.
+  assert.equal(
+    runtime.snapshot().recentEvents.some((event) => event.type === "workflow_reloaded"),
+    false,
+  );
+});
+
+test("worker pool: drainWorkerPool awaits the pool drain with the configured deadline", async () => {
+  const workerPool = makeFakeWorkerPool();
+  const runtime = new SymphonyRuntime(
+    runtimeOptions({
+      workflow: workerPoolWorkflowFixture(),
+      workerPool,
+      client: {
+        fetchCandidateIssues: async () => [],
+        fetchIssuesByIds: async () => [],
+      },
+    }),
+  );
+
+  await runtime.drainWorkerPool();
+  // Idempotent: a second call does not drain again.
+  await runtime.drainWorkerPool();
+
+  assert.equal(workerPool.drainCalls.length, 1);
+  assert.equal(workerPool.drainCalls[0]?.deadlineMs, 9_999);
+});
+
+test("worker pool: drainWorkerPool resolves as a no-op when no pool is configured", async () => {
+  const runtime = new SymphonyRuntime(
+    runtimeOptions({
+      workflow: workflowFixture(),
+      client: {
+        fetchCandidateIssues: async () => [],
+        fetchIssuesByIds: async () => [],
+      },
+    }),
+  );
+
+  await runtime.drainWorkerPool();
+});
+
+test("worker pool undefined: byte-identical regression (acquire and classifier never invoked)", async () => {
+  const issue = issueFixture("issue-no-bp", "MT-NO-BP");
+  const doneIssue: Issue = { ...issue, state: "Done", stateType: "completed" };
+  let runnerWorkerHost: string | null | undefined = "unset";
+  const runtime = new SymphonyRuntime(
+    runtimeOptions({
+      workflow: workflowFixture(),
+      client: {
+        fetchCandidateIssues: async () => [issue],
+        fetchIssuesByIds: async () => [issue],
+      },
+      runner: async ({ workerHost }) => {
+        runnerWorkerHost = workerHost;
+        return {
+          workspace: "/tmp/symphony/MT-NO-BP",
+          turnCount: 1,
+          updates: [],
+          resumeId: "resume",
+          agentKind: "codex",
+          finalIssue: doneIssue,
+        };
+      },
+    }),
+  );
+
+  await runtime.start({ once: true, dryRun: false });
+
+  // No worker pool means the static local path is taken: workerHost is null, no
+  // pending sentinel, no lease, success recorded exactly as before.
+  assert.equal(runnerWorkerHost, null);
+  const snapshot = runtime.snapshot();
+  assert.equal(snapshot.runHistory[0]?.outcome, "success");
+  assert.equal(snapshot.runHistory[0]?.workerHost ?? null, null);
+});
+
+test("runtime reconcile tracks a reserved (in-acquire) issue with a null workerHost and cleans it up", async () => {
+  const workflow = workflowFixture();
+  // A governing capacity probe makes claim() hold a host-less reservation,
+  // reproducing the claim->acquire window where no real worker is bound yet.
+  const orchestrator = new Orchestrator(workflow.settings, undefined, undefined, {
+    governs: () => true,
+    canAcquire: () => true,
+  });
+  const issue = issueFixture("issue-reserved-terminal", "MT-RESERVED-TERMINAL");
+  const claimed = orchestrator.claim(issue);
+  assert.equal(claimed?.kind, "reserved");
+
+  const doneIssue: Issue = { ...issue, state: "Done", stateType: "completed" };
+  let removeCalls = 0;
+  let observedWorkerHost: string | null | undefined = "unset";
+  const runtime = new SymphonyRuntime(
+    runtimeOptions({
+      workflow,
+      orchestrator,
+      client: {
+        fetchCandidateIssues: async () => [],
+        fetchIssuesByIds: async () => [doneIssue],
+      },
+      removeIssueWorkspaces: async (_settings, _identifier, workerHost) => {
+        removeCalls += 1;
+        observedWorkerHost = workerHost;
+      },
+    }),
+  );
+
+  await runtime.pollOnce({ dryRun: true });
+
+  // The terminal branch must still clean up the (local) workspace, and the
+  // host-less reservation reconciles with a null workerHost - no fake host can
+  // ever reach the cleanup sink's SSH path.
+  assert.equal(removeCalls, 1);
+  assert.equal(observedWorkerHost ?? null, null);
+  assert.equal(
+    runtime.snapshot().recentEvents.some((event) => event.type === "workspace_cleanup"),
+    true,
+  );
+  // cleanupIssue cancelled the reservation, so a late bind is a guarded no-op.
+  assert.equal(orchestrator.state.reserved.size, 0);
+  if (claimed?.kind === "reserved") {
+    assert.equal(orchestrator.bindReservation(claimed.reservation, "ssh://late-worker"), null);
+  }
+});
+
+test("runtime reconcile still passes a real workerHost to remote workspace cleanup", async () => {
+  const workflow = workflowFixture();
+  const orchestrator = new Orchestrator(workflow.settings, undefined, undefined, {
+    governs: () => true,
+    canAcquire: () => true,
+  });
+  const issue = issueFixture("issue-real-terminal", "MT-REAL-TERMINAL");
+  const claimed = orchestrator.claim(issue);
+  assert.equal(claimed?.kind, "reserved");
+  // The acquire resolved: the reservation bound to the concrete worker address.
+  if (claimed?.kind !== "reserved") return;
+  assert.ok(orchestrator.bindReservation(claimed.reservation, "ssh://worker-real"));
+
+  const doneIssue: Issue = { ...issue, state: "Done", stateType: "completed" };
+  let observedWorkerHost: string | null | undefined = "unset";
+  const runtime = new SymphonyRuntime(
+    runtimeOptions({
+      workflow,
+      orchestrator,
+      client: {
+        fetchCandidateIssues: async () => [],
+        fetchIssuesByIds: async () => [doneIssue],
+      },
+      removeIssueWorkspaces: async (_settings, _identifier, workerHost) => {
+        observedWorkerHost = workerHost;
+      },
+    }),
+  );
+
+  await runtime.pollOnce({ dryRun: true });
+
+  assert.equal(observedWorkerHost, "ssh://worker-real");
+});
+
+test("runtime reconcile of a reserved issue cancels the reservation without a remote resume-state delete", async () => {
+  const workflow = workflowFixture();
+  const orchestrator = new Orchestrator(workflow.settings, undefined, undefined, {
+    governs: () => true,
+    canAcquire: () => true,
+  });
+  const issue = issueFixture("issue-reserved-resume", "MT-RESERVED-RESUME");
+  const claimed = orchestrator.claim(issue);
+  assert.equal(claimed?.kind, "reserved");
+
+  // Non-terminal but inactive (state not in active_states, not terminal) -> the
+  // reconciler cleans up the issue. A reservation has no workspace (no agent ever
+  // started), so there is no resume state to invalidate and no host to SSH to.
+  const canceledIssue: Issue = { ...issue, state: "Canceled", stateType: "canceled" };
+  let deleteCalls = 0;
+  const runtime = new SymphonyRuntime(
+    runtimeOptions({
+      workflow,
+      orchestrator,
+      client: {
+        fetchCandidateIssues: async () => [],
+        fetchIssuesByIds: async () => [canceledIssue],
+      },
+      deleteResumeState: async () => {
+        deleteCalls += 1;
+      },
+    }),
+  );
+
+  await runtime.pollOnce({ dryRun: true });
+
+  assert.equal(deleteCalls, 0);
+  assert.equal(orchestrator.state.reserved.size, 0);
+  assert.equal(orchestrator.state.claimed.size, 0);
+  assert.equal(
+    runtime.snapshot().recentEvents.some((event) => event.type === "run_reconciled"),
+    true,
+  );
+  // The in-flight acquire's late bind no-ops against the cancelled reservation.
+  if (claimed?.kind === "reserved") {
+    assert.equal(orchestrator.bindReservation(claimed.reservation, "ssh://late-worker"), null);
+  }
 });
 
 test("runtime replays retry timer due while a poll is active", async () => {

@@ -24,6 +24,7 @@ export class ProjectionActor {
       workflowPath: input.workflowPath,
       poll: { ...input.poll },
       running: input.running.map((entry) => ({ ...entry, usageTotals: { ...entry.usageTotals } })),
+      ...(input.reserving ? { reserving: input.reserving.map((entry) => ({ ...entry })) } : {}),
       retrying: input.retrying.map((entry) => ({ ...entry })),
       blocked: input.blocked.map((entry) => ({ ...entry })),
       runHistory: this.runHistory.map((entry) => ({

@@ -23,6 +23,9 @@
       "path": "../issue"
     },
     {
+      "path": "../mcp"
+    },
+    {
       "path": "../prompt"
     }
   ]

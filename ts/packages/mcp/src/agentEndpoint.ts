@@ -29,7 +29,10 @@ interface RemoteMcpTunnel {
 /**
  * Provisions tunnels from a remote worker host back to the local MCP server. The
  * composition side passes its pool (e.g. the SSH worker-host pool); this package never
- * reaches into transport infrastructure itself.
+ * reaches into transport infrastructure itself. The whole-endpoint path uses the
+ * stateless {@link acquireRemoteMcpTunnel}/{@link releaseRemoteMcpTunnel} pair; the
+ * per-run path keys a tunnel by `(workerHost, runKey)` via {@link openForRun}/{@link
+ * closeForRun} so co-resident runs on one machine each get an isolated tunnel.
  */
 export interface RemoteMcpTunnelTransport {
   acquireRemoteMcpTunnel(
@@ -38,6 +41,13 @@ export interface RemoteMcpTunnelTransport {
     localPort: number,
   ): Promise<RemoteMcpTunnel>;
   releaseRemoteMcpTunnel(tunnel: RemoteMcpTunnel): void;
+  openForRun(
+    workerHost: string,
+    runKey: string,
+    localHost: string,
+    localPort: number,
+  ): Promise<RemoteMcpTunnel>;
+  closeForRun(workerHost: string, runKey: string): void;
 }
 
 interface McpEndpoint {
@@ -115,6 +125,51 @@ export async function acquireAgentMcpEndpoint(
   }
 }
 
+export async function acquireAgentMcpEndpointForRun(
+  settings: Settings,
+  workerHost: string,
+  runKey: string,
+  tunnels: RemoteMcpTunnelTransport,
+): Promise<AgentMcpEndpointLease> {
+  let endpoint: McpEndpoint | null = null;
+  let token: string | null = null;
+  let released = false;
+  try {
+    const configuredToken = issueConfiguredMcpToken(settings);
+    token = configuredToken?.token ?? null;
+    endpoint = await acquirePerRunMcpEndpoint(
+      workerHost,
+      runKey,
+      settings,
+      configuredToken,
+      tunnels,
+    );
+    token ??= issueMcpToken(endpoint.authScope);
+    return {
+      url: endpoint.url,
+      token,
+      acpServer: () => ({
+        type: "http",
+        name: trackerMcpServerName(settings.tracker.kind),
+        url: endpoint?.url ?? "",
+        headers: [{ name: "Authorization", value: `Bearer ${token}` }],
+      }),
+      release: async () => {
+        if (released) return;
+        released = true;
+        revokeMcpToken(token);
+        tunnels.closeForRun(workerHost, runKey);
+        if (endpoint?.localServer) await releaseLocalMcpServer(endpoint.localServer);
+      },
+    };
+  } catch (error) {
+    revokeMcpToken(token);
+    tunnels.closeForRun(workerHost, runKey);
+    if (endpoint?.localServer) await releaseLocalMcpServer(endpoint.localServer);
+    throw error;
+  }
+}
+
 async function localMcpEndpoint(
   settings: Settings,
   configuredToken: IssuedMcpToken | null,
@@ -154,6 +209,41 @@ async function acquireRemoteMcpEndpoint(
         localServer?.handle.authScope ??
         mcpAuthScopeForSettings(settings, normalizeHttpBindHost(settings.server.host), localPort),
       releaseTunnel: () => tunnels.releaseRemoteMcpTunnel(tunnel),
+      localServer: localServer ?? undefined,
+    };
+  } catch (error) {
+    if (localServer) await releaseLocalMcpServer(localServer);
+    throw error;
+  }
+}
+
+async function acquirePerRunMcpEndpoint(
+  workerHost: string,
+  runKey: string,
+  settings: Settings,
+  configuredToken: IssuedMcpToken | null,
+  tunnels: RemoteMcpTunnelTransport,
+): Promise<McpEndpoint> {
+  // The refcounted local MCP server is acquired BEFORE the per-run tunnel is
+  // opened. If anything after this point throws (notably `openForRun` failing
+  // to spawn the reverse tunnel), this function rejects before returning an
+  // McpEndpoint, so the caller never sees `localServer` and cannot release it.
+  // Drop the ref here so repeated tunnel-spawn failures don't leak refcounted
+  // local MCP servers / their listeners.
+  const localServer = await ensureLocalMcpServer(settings, configuredToken);
+  try {
+    const localHost = "127.0.0.1";
+    const localPort = localServer?.handle.port ?? settings.server.port;
+    if (typeof localPort !== "number" || localPort <= 0) {
+      throw new Error("remote_acp_mcp_requires_server_port");
+    }
+    const tunnel = await tunnels.openForRun(workerHost, runKey, localHost, localPort);
+    return {
+      url: `http://127.0.0.1:${tunnel.remotePort}${mcpPath}`,
+      authScope:
+        configuredToken?.authScope ??
+        localServer?.handle.authScope ??
+        mcpAuthScopeForSettings(settings, normalizeHttpBindHost(settings.server.host), localPort),
       localServer: localServer ?? undefined,
     };
   } catch (error) {

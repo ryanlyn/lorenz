@@ -1,6 +1,13 @@
 export { main, parseCliArgs, projectUrlForSettings } from "./main.js";
+export {
+  buildWorkerPool,
+  buildDispatchCoordinator,
+  createTrackerClient,
+  registerBuiltinBackends,
+  runAgentAttempt,
+  runtimeAdapters,
+} from "./daemon.js";
 export { parseDoctorArgs, renderDoctorReport, runDoctorCommand, runDoctorMain } from "./doctor.js";
-export { createTrackerClient, runAgentAttempt, runtimeAdapters } from "./daemon.js";
 export {
   defaultSettings,
   parseConfig,
@@ -65,6 +72,21 @@ export {
 } from "@symphony/dispatch";
 export { ProjectionActor } from "@symphony/projections";
 export type { RuntimeProjectionInput } from "@symphony/projections";
-export { Executor, hostAgentBinaryEnv, resolveBridgeCommand } from "@symphony/acp";
+export { Executor, resolveBridgeCommand } from "@symphony/acp";
 export { AGENT_UPDATE_TYPES, ISSUE_STATE_TYPES } from "@symphony/domain";
 export type * from "@symphony/domain";
+export { createWorkerPool } from "@symphony/worker-pool";
+export type {
+  WorkerPool,
+  WorkerLease,
+  WorkerPoolSnapshot,
+  AcquireResult,
+} from "@symphony/worker-pool";
+export {
+  WorkerDriverRegistry,
+  defaultWorkerDriverRegistry,
+  FakeWorkerDriver,
+  registerFakeWorkerDriver,
+} from "@symphony/worker-sdk";
+export { createDispatchCoordinator } from "@symphony/dispatch-coordinator";
+export type { McpEndpointManager } from "@symphony/dispatch-coordinator";

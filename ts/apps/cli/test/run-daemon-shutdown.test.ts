@@ -14,6 +14,8 @@ const mocks = vi.hoisted(() => ({
   createTrackerClient: vi.fn(),
   runAgentAttempt: vi.fn(),
   runtimeDefaultSettingsOptions: vi.fn(() => ({})),
+  // No worker.worker_pool in the fixture, so the real builder returns undefined.
+  buildDispatchCoordinator: vi.fn(() => undefined),
   runtimeInstances: [] as Array<FakeRuntime>,
 }));
 
@@ -23,6 +25,8 @@ class FakeRuntime {
   });
 
   public readonly subscribe = vi.fn();
+
+  public readonly drainWorkerPool = vi.fn(async () => {});
 
   public startEntered: Promise<void>;
   public stopRequested: Promise<void>;
@@ -93,6 +97,7 @@ vi.mock("../src/daemon.js", async (importOriginal) => ({
   runAgentAttempt: mocks.runAgentAttempt,
   runtimeAdapters: {},
   runtimeDefaultSettingsOptions: mocks.runtimeDefaultSettingsOptions,
+  buildDispatchCoordinator: mocks.buildDispatchCoordinator,
 }));
 
 const { runDaemon } = await import("../src/main.js");
@@ -156,6 +161,7 @@ beforeEach(() => {
   mocks.createTrackerClient.mockReset();
   mocks.runAgentAttempt.mockReset();
   mocks.runtimeDefaultSettingsOptions.mockClear();
+  mocks.buildDispatchCoordinator.mockClear();
   mocks.runtimeInstances.length = 0;
   stderrWriteSpy = vi.spyOn(process.stderr, "write").mockReturnValue(true);
   originalIsTTY = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");

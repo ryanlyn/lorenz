@@ -12,6 +12,7 @@
     "@symphony/agent-runner": "workspace:*",
     "@symphony/config": "workspace:*",
     "@symphony/dispatch": "workspace:*",
+    "@symphony/dispatch-coordinator": "workspace:*",
     "@symphony/domain": "workspace:*",
     "@symphony/issue": "workspace:*",
     "@symphony/orchestrator": "workspace:*",
@@ -19,6 +20,7 @@
     "@symphony/projections": "workspace:*",
     "@symphony/retry-scheduler": "workspace:*",
     "@symphony/runtime-events": "workspace:*",
+    "@symphony/worker-pool": "workspace:*",
     "@symphony/workflow": "workspace:*"
   }
 }
