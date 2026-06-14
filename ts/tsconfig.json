@@ -98,6 +98,9 @@
       "path": "./packages/workspace"
     },
     {
+      "path": "./extensions/docker-worker"
+    },
+    {
       "path": "./extensions/jira-tracker"
     },
     {

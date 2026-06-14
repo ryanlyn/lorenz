@@ -493,6 +493,16 @@ importers:
         specifier: "catalog:"
         version: 5.9.3
 
+  extensions/docker-worker:
+    dependencies:
+      "@symphony/worker-sdk":
+        specifier: workspace:*
+        version: link:../../packages/worker-sdk
+    devDependencies:
+      "@symphony/test-utils":
+        specifier: workspace:*
+        version: link:../../packages/test-utils
+
   extensions/jira-tracker:
     dependencies:
       "@symphony/domain":
