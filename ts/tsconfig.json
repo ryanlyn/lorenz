@@ -65,6 +65,9 @@
       "path": "./packages/ssh"
     },
     {
+      "path": "./packages/static-worker"
+    },
+    {
       "path": "./packages/test-utils"
     },
     {

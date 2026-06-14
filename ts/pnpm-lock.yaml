@@ -898,6 +898,16 @@ importers:
         specifier: "catalog:"
         version: 22.19.19
 
+  packages/static-worker:
+    dependencies:
+      "@symphony/worker-sdk":
+        specifier: workspace:*
+        version: link:../worker-sdk
+    devDependencies:
+      "@symphony/test-utils":
+        specifier: workspace:*
+        version: link:../test-utils
+
   packages/test-utils:
     dependencies:
       "@symphony/config":
