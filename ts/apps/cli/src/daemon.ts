@@ -17,6 +17,7 @@ import {
 import type { DefaultSettingsOptions } from "@symphony/config";
 import { registerDockerWorkerDriver } from "@symphony/docker-worker";
 import { registerE2bWorkerDriver } from "@symphony/e2b-worker";
+import { registerFlyWorkerDriver } from "@symphony/fly-worker";
 import { systemClock, type RuntimeTrackerClient, type Settings } from "@symphony/domain";
 import { registerJiraTrackers } from "@symphony/jira-tracker";
 import { registerLinearTracker } from "@symphony/linear-tracker";
@@ -85,6 +86,7 @@ export function registerBuiltinBackends(registries: BackendRegistries = {}): voi
   registerFakeWorkerDriver({ workerDrivers });
   registerStaticSshWorkerDriver({ workerDrivers });
   registerDockerWorkerDriver({ workerDrivers });
+  registerFlyWorkerDriver({ workerDrivers });
   // e2b registers a fail-loud factory here: the stock daemon ships no E2B
   // client, so enabling the kind points the operator at the configured
   // registration (registerE2bWorkerDriver(registries, { client })).

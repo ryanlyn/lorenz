@@ -349,6 +349,9 @@ importers:
       "@symphony/e2b-worker":
         specifier: workspace:*
         version: link:../../extensions/e2b-worker
+      "@symphony/fly-worker":
+        specifier: workspace:*
+        version: link:../../extensions/fly-worker
       "@symphony/humanize":
         specifier: workspace:*
         version: link:../../packages/humanize
@@ -529,6 +532,16 @@ importers:
       "@symphony/worker-sdk":
         specifier: workspace:*
         version: link:../../packages/worker-sdk
+
+  extensions/fly-worker:
+    dependencies:
+      "@symphony/worker-sdk":
+        specifier: workspace:*
+        version: link:../../packages/worker-sdk
+    devDependencies:
+      "@symphony/test-utils":
+        specifier: workspace:*
+        version: link:../../packages/test-utils
 
   extensions/jira-tracker:
     dependencies:

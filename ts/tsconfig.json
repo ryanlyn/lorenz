@@ -110,6 +110,9 @@
       "path": "./extensions/e2b-worker"
     },
     {
+      "path": "./extensions/fly-worker"
+    },
+    {
       "path": "./extensions/jira-tracker"
     },
     {

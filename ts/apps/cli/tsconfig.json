@@ -44,6 +44,9 @@
       "path": "../../extensions/e2b-worker"
     },
     {
+      "path": "../../extensions/fly-worker"
+    },
+    {
       "path": "../../packages/humanize"
     },
     {

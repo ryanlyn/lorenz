@@ -30,6 +30,7 @@
     "@symphony/docker-worker": "workspace:*",
     "@symphony/domain": "workspace:*",
     "@symphony/e2b-worker": "workspace:*",
+    "@symphony/fly-worker": "workspace:*",
     "@symphony/humanize": "workspace:*",
     "@symphony/issue": "workspace:*",
     "@symphony/jira-tracker": "workspace:*",
