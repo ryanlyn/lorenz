@@ -82,6 +82,7 @@ const coercedBoolean = z.union([
 ]);
 
 const optionalHookScript = z.string().nullable().optional();
+const skillSourceListSchema = z.array(z.string().min(1));
 
 // Shared keys are validated here; any other key in an agents.<kind> record is
 // executor-specific and is passed through (`catchall`) to the registered agent executor
@@ -133,6 +134,7 @@ const workspaceRawSchema = z
   .object({
     root: z.string().optional(),
     isolation: z.enum(["per-agent", "none"]).optional(),
+    skills: skillSourceListSchema.optional(),
   })
   .strict();
 const workerRawSchema = z
@@ -225,6 +227,7 @@ export const workflowConfigSchema = z.preprocess(
       logging: loggingRawSchema.optional(),
       trackers: trackersRawSchema.optional(),
       tools: toolsRawSchema.optional(),
+      skills: skillSourceListSchema.optional(),
       statusOverrides: z.record(z.string(), statusOverrideRawSchema).optional(),
     })
     .passthrough(),

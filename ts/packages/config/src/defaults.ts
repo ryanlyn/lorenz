@@ -6,6 +6,7 @@ import { joinPath } from "./leaf-utils.js";
 
 export interface DefaultSettingsOptions {
   tmpdir?: string | undefined;
+  configDir?: string | undefined;
 }
 
 /** Model id Claude sessions are pinned to unless overridden via `claude.model` or a provider config. */
@@ -31,6 +32,7 @@ export const defaultSettings = (options: DefaultSettingsOptions = {}): Settings 
       root: workspaceRoot,
       rootExpression: workspaceRoot,
       isolation: "per-agent",
+      skills: [],
     },
     worker: { sshHosts: [], sshTimeoutMs: 60_000 },
     hooks: { timeoutMs: 60_000 },

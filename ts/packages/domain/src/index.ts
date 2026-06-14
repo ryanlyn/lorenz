@@ -381,6 +381,11 @@ export interface WorkspaceSettings {
    * agents are desired.
    */
   isolation: "per-agent" | "none";
+  /**
+   * Local skill sources copied into `.codex/skills` in each prepared workspace before the
+   * agent process starts. Entries are absolute paths resolved from workflow configuration.
+   */
+  skills: string[];
 }
 
 /**

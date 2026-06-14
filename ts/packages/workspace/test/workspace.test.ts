@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
-import { test, vi } from "vitest";
+import { afterEach, beforeEach, test, vi } from "vitest";
 import {
   safeIdentifier,
   workspacePath,
@@ -14,9 +14,19 @@ import {
   shellEscape,
 } from "@symphony/cli";
 import type { HookExecutionMessage, Settings } from "@symphony/domain";
-import { assert, tempDir, sampleIssue } from "@symphony/test-utils";
+import { assert, tempDir, sampleIssue, writeExecutable } from "@symphony/test-utils";
 
-import { runHook } from "../src/index.js";
+import { runHook, syncWorkspaceSkills } from "../src/index.js";
+
+let savedPath: string | undefined;
+
+beforeEach(() => {
+  savedPath = process.env.PATH;
+});
+
+afterEach(() => {
+  restoreEnv("PATH", savedPath);
+});
 
 function makeSettings(
   root: string,
@@ -24,7 +34,7 @@ function makeSettings(
   workspace: Partial<Settings["workspace"]> = {},
 ): Settings {
   return {
-    workspace: { root, isolation: "per-agent", ...workspace },
+    workspace: { root, isolation: "per-agent", skills: [], ...workspace },
     worker: { sshHosts: [], sshTimeoutMs: 5_000 },
     hooks: { timeoutMs: 5_000, ...hooks },
   } as unknown as Settings;
@@ -164,6 +174,303 @@ test("createWorkspaceForIssue — runs afterCreate hook on new workspace", async
   const hookFile = path.join(ws, ".hook-ran");
   const stat = await fs.stat(hookFile);
   assert.ok(stat.isFile());
+});
+
+test("createWorkspaceForIssue — overlays configured skill directories after afterCreate", async () => {
+  const root = await tempDir("ws-create-skills");
+  const sources = await tempDir("ws-skill-sources");
+  const skill = path.join(sources, "symphony-land");
+  await fs.mkdir(path.join(skill, "scripts"), { recursive: true });
+  await fs.writeFile(path.join(skill, "SKILL.md"), "from source\n");
+  await fs.writeFile(path.join(skill, "scripts", "land.sh"), "echo land\n");
+  const settings = makeSettings(
+    root,
+    {
+      afterCreate:
+        "mkdir -p .codex/skills/symphony-land && printf hook > .codex/skills/symphony-land/SKILL.md",
+    },
+    { skills: [skill] },
+  );
+
+  const ws = await createWorkspaceForIssue(settings, sampleIssue);
+
+  assert.equal(
+    await fs.readFile(path.join(ws, ".codex", "skills", "symphony-land", "SKILL.md"), "utf8"),
+    "from source\n",
+  );
+  assert.equal(
+    await fs.readFile(
+      path.join(ws, ".codex", "skills", "symphony-land", "scripts", "land.sh"),
+      "utf8",
+    ),
+    "echo land\n",
+  );
+});
+
+test("createWorkspaceForIssue — refreshes skills when reusing an existing workspace", async () => {
+  const root = await tempDir("ws-create-skills-refresh");
+  const sources = await tempDir("ws-skill-sources-refresh");
+  const skill = path.join(sources, "symphony-push");
+  await fs.mkdir(skill, { recursive: true });
+  await fs.writeFile(path.join(skill, "SKILL.md"), "first\n");
+  const settings = makeSettings(root, {}, { skills: [skill] });
+
+  const first = await createWorkspaceForIssue(settings, sampleIssue);
+  await fs.writeFile(path.join(skill, "SKILL.md"), "second\n");
+  const second = await createWorkspaceForIssue(settings, sampleIssue);
+
+  assert.equal(second, first);
+  assert.equal(
+    await fs.readFile(path.join(first, ".codex", "skills", "symphony-push", "SKILL.md"), "utf8"),
+    "second\n",
+  );
+});
+
+test("createWorkspaceForIssue — overlays .codex/skills contents without nesting skills twice", async () => {
+  const root = await tempDir("ws-create-skills-root");
+  const repo = await tempDir("ws-skill-source-repo");
+  const skillsRoot = path.join(repo, ".codex", "skills");
+  await fs.mkdir(path.join(skillsRoot, "symphony-linear"), { recursive: true });
+  await fs.writeFile(path.join(skillsRoot, "symphony-linear", "SKILL.md"), "linear\n");
+  const settings = makeSettings(root, {}, { skills: [skillsRoot] });
+
+  const ws = await createWorkspaceForIssue(settings, sampleIssue);
+
+  assert.equal(
+    await fs.readFile(path.join(ws, ".codex", "skills", "symphony-linear", "SKILL.md"), "utf8"),
+    "linear\n",
+  );
+  assert.equal(await fileExists(path.join(ws, ".codex", "skills", "skills")), false);
+});
+
+test("createWorkspaceForIssue — copies skill source files", async () => {
+  const root = await tempDir("ws-create-skill-file");
+  const sources = await tempDir("ws-skill-file-source");
+  const sourceFile = path.join(sources, "TEAM.md");
+  await fs.writeFile(sourceFile, "team guidance\n");
+  const settings = makeSettings(root, {}, { skills: [sourceFile] });
+
+  const ws = await createWorkspaceForIssue(settings, sampleIssue);
+
+  assert.equal(
+    await fs.readFile(path.join(ws, ".codex", "skills", "TEAM.md"), "utf8"),
+    "team guidance\n",
+  );
+});
+
+test("createWorkspaceForIssue - rejects symlinked skill overlay directories", async () => {
+  const root = await tempDir("ws-create-skills-symlink");
+  const sources = await tempDir("ws-skill-symlink-source");
+  const skill = path.join(sources, "symphony-land");
+  const outside = await tempDir("ws-skill-symlink-outside");
+  const workspace = path.join(await fs.realpath(root), safeIdentifier(sampleIssue.identifier));
+  await fs.mkdir(skill, { recursive: true });
+  await fs.writeFile(path.join(skill, "SKILL.md"), "land\n");
+  await fs.mkdir(workspace, { recursive: true });
+  await fs.symlink(outside, path.join(workspace, ".codex"));
+  const settings = makeSettings(root, {}, { skills: [skill] });
+
+  await assert.rejects(() => createWorkspaceForIssue(settings, sampleIssue), /unsafe symlink/);
+  assert.equal(await fileExists(path.join(outside, "skills", "symphony-land", "SKILL.md")), false);
+});
+
+test("createWorkspaceForIssue - rejects symlinked skill overlay targets", async () => {
+  const root = await tempDir("ws-create-skill-target-symlink");
+  const sources = await tempDir("ws-skill-target-symlink-source");
+  const skill = path.join(sources, "symphony-land");
+  const outside = await tempDir("ws-skill-target-symlink-outside");
+  const workspace = path.join(await fs.realpath(root), safeIdentifier(sampleIssue.identifier));
+  await fs.mkdir(skill, { recursive: true });
+  await fs.writeFile(path.join(skill, "SKILL.md"), "land\n");
+  await fs.mkdir(path.join(workspace, ".codex", "skills"), { recursive: true });
+  await fs.symlink(outside, path.join(workspace, ".codex", "skills", "symphony-land"));
+  const settings = makeSettings(root, {}, { skills: [skill] });
+
+  await assert.rejects(() => createWorkspaceForIssue(settings, sampleIssue), /unsafe symlink/);
+  assert.equal(await fileExists(path.join(outside, "SKILL.md")), false);
+});
+
+test("createWorkspaceForIssue - rejects skill target symlinks that point to the source", async () => {
+  const root = await tempDir("ws-create-skill-target-source-symlink");
+  const sources = await tempDir("ws-skill-target-source-symlink-source");
+  const skill = path.join(sources, "symphony-land");
+  const workspace = path.join(await fs.realpath(root), safeIdentifier(sampleIssue.identifier));
+  await fs.mkdir(skill, { recursive: true });
+  await fs.writeFile(path.join(skill, "SKILL.md"), "land\n");
+  await fs.mkdir(path.join(workspace, ".codex", "skills"), { recursive: true });
+  await fs.symlink(skill, path.join(workspace, ".codex", "skills", "symphony-land"));
+  const settings = makeSettings(root, {}, { skills: [skill] });
+
+  await assert.rejects(() => createWorkspaceForIssue(settings, sampleIssue), /unsafe symlink/);
+});
+
+test("createWorkspaceForIssue - rejects symlinked skill source entries", async () => {
+  const root = await tempDir("ws-create-skill-source-symlink");
+  const sources = await tempDir("ws-skill-source-symlink-source");
+  const outside = await tempDir("ws-skill-source-symlink-outside");
+  const skill = path.join(sources, "symphony-land");
+  const secret = path.join(outside, "secret.txt");
+  await fs.mkdir(skill, { recursive: true });
+  await fs.writeFile(secret, "do not copy\n");
+  await fs.symlink(secret, path.join(skill, "SKILL.md"));
+  const settings = makeSettings(root, {}, { skills: [skill] });
+
+  await assert.rejects(
+    () => createWorkspaceForIssue(settings, sampleIssue),
+    /workspace_skill_source_symlink/,
+  );
+});
+
+test("createWorkspaceForIssue - replaces skill targets before refreshing", async () => {
+  const root = await tempDir("ws-create-skill-nested-symlink");
+  const sources = await tempDir("ws-skill-nested-symlink-source");
+  const outside = await tempDir("ws-skill-nested-symlink-outside");
+  const skill = path.join(sources, "symphony-land");
+  const workspace = path.join(await fs.realpath(root), safeIdentifier(sampleIssue.identifier));
+  await fs.mkdir(path.join(skill, "scripts"), { recursive: true });
+  await fs.writeFile(path.join(skill, "scripts", "land.sh"), "echo land\n");
+  await fs.mkdir(path.join(workspace, ".codex", "skills", "symphony-land"), { recursive: true });
+  await fs.symlink(outside, path.join(workspace, ".codex", "skills", "symphony-land", "scripts"));
+  const settings = makeSettings(root, {}, { skills: [skill] });
+
+  const ws = await createWorkspaceForIssue(settings, sampleIssue);
+
+  const scriptsPath = path.join(ws, ".codex", "skills", "symphony-land", "scripts");
+  assert.equal((await fs.lstat(scriptsPath)).isSymbolicLink(), false);
+  assert.equal(await fs.readFile(path.join(scriptsPath, "land.sh"), "utf8"), "echo land\n");
+  assert.equal(await fileExists(path.join(outside, "land.sh")), false);
+});
+
+test("syncWorkspaceSkills - replaces remote skill targets before extracting", async () => {
+  const root = await tempDir("ws-remote-skill-nested-symlink");
+  const trace = path.join(root, "ssh.trace");
+  const sources = await tempDir("ws-remote-skill-nested-symlink-source");
+  const outside = await tempDir("ws-remote-skill-nested-symlink-outside");
+  const workspace = path.join(root, "remote", "MT-1");
+  const skill = path.join(sources, "symphony-land");
+  await fs.mkdir(path.join(skill, "scripts"), { recursive: true });
+  await fs.writeFile(path.join(skill, "scripts", "land.sh"), "echo land\n");
+  await fs.mkdir(path.join(workspace, ".codex", "skills", "symphony-land"), { recursive: true });
+  await fs.symlink(outside, path.join(workspace, ".codex", "skills", "symphony-land", "scripts"));
+  await installFakeSsh(
+    root,
+    trace,
+    `#!/bin/sh
+for arg in "$@"; do last_arg="$arg"; done
+eval "$last_arg"
+`,
+  );
+  const settings = makeSettings("/remote/workspaces", {}, { skills: [skill] });
+
+  await syncWorkspaceSkills(settings, workspace, "localhost");
+
+  const scriptsPath = path.join(workspace, ".codex", "skills", "symphony-land", "scripts");
+  assert.equal((await fs.lstat(scriptsPath)).isSymbolicLink(), false);
+  assert.equal(await fs.readFile(path.join(scriptsPath, "land.sh"), "utf8"), "echo land\n");
+  assert.equal(await fileExists(path.join(outside, "land.sh")), false);
+});
+
+test("syncWorkspaceSkills - archives remote skill sources with hyphen-prefixed names", async () => {
+  const root = await tempDir("ws-remote-skill-hyphen");
+  const trace = path.join(root, "ssh.trace");
+  const sources = await tempDir("ws-remote-skill-hyphen-source");
+  const workspace = path.join(root, "remote", "MT-1");
+  const skill = path.join(sources, "-team-skill");
+  await fs.mkdir(skill, { recursive: true });
+  await fs.writeFile(path.join(skill, "SKILL.md"), "team\n");
+  await installFakeSsh(
+    root,
+    trace,
+    `#!/bin/sh
+for arg in "$@"; do last_arg="$arg"; done
+eval "$last_arg"
+`,
+  );
+  const settings = makeSettings("/remote/workspaces", {}, { skills: [skill] });
+
+  await syncWorkspaceSkills(settings, workspace, "localhost");
+
+  assert.equal(
+    await fs.readFile(path.join(workspace, ".codex", "skills", "-team-skill", "SKILL.md"), "utf8"),
+    "team\n",
+  );
+});
+
+test("syncWorkspaceSkills - archives overlapping remote skill sources before deleting targets", async () => {
+  const root = await tempDir("ws-remote-skill-overlap");
+  const trace = path.join(root, "ssh.trace");
+  const workspace = path.join(root, "remote", "MT-1");
+  const skillsRoot = path.join(workspace, ".codex", "skills");
+  await fs.mkdir(path.join(skillsRoot, "symphony-land"), { recursive: true });
+  await fs.writeFile(path.join(skillsRoot, "symphony-land", "SKILL.md"), "land\n");
+  await installFakeSsh(
+    root,
+    trace,
+    `#!/bin/sh
+for arg in "$@"; do last_arg="$arg"; done
+eval "$last_arg"
+`,
+  );
+  const settings = makeSettings("/remote/workspaces", {}, { skills: [skillsRoot] });
+
+  await syncWorkspaceSkills(settings, workspace, "localhost");
+
+  assert.equal(
+    await fs.readFile(path.join(skillsRoot, "symphony-land", "SKILL.md"), "utf8"),
+    "land\n",
+  );
+});
+
+test("syncWorkspaceSkills - times out remote skill sync ssh transfers", async () => {
+  const root = await tempDir("ws-remote-skills-timeout");
+  const trace = path.join(root, "ssh.trace");
+  const sources = await tempDir("ws-remote-skill-timeout-source");
+  const skill = path.join(sources, "symphony-land");
+  await fs.mkdir(skill, { recursive: true });
+  await fs.writeFile(path.join(skill, "SKILL.md"), "land\n");
+  await installFakeSsh(
+    root,
+    trace,
+    `#!/bin/sh
+printf 'ARGV:%s\\n' "$*" >> ${shellEscape(trace)}
+while :; do sleep 1; done
+`,
+  );
+  const settings = makeSettings("/remote/workspaces", {}, { skills: [skill] });
+  settings.worker.sshTimeoutMs = 50;
+
+  await assert.rejects(
+    () => syncWorkspaceSkills(settings, "/remote/workspaces/MT-1", "localhost"),
+    /workspace_skill_remote_sync_timeout: localhost 50/,
+  );
+});
+
+test("createWorkspaceForIssue — installs skills into shared workspaces", async () => {
+  const root = await tempDir("ws-shared-skills");
+  const sources = await tempDir("ws-shared-skill-source");
+  const skill = path.join(sources, "symphony-debug");
+  await fs.mkdir(skill);
+  await fs.writeFile(path.join(skill, "SKILL.md"), "debug\n");
+  const settings = makeSettings(root, {}, { isolation: "none", skills: [skill] });
+
+  const ws = await createWorkspaceForIssue(settings, sampleIssue);
+
+  assert.equal(ws, await fs.realpath(root));
+  assert.equal(
+    await fs.readFile(path.join(ws, ".codex", "skills", "symphony-debug", "SKILL.md"), "utf8"),
+    "debug\n",
+  );
+});
+
+test("createWorkspaceForIssue — rejects missing configured skill sources", async () => {
+  const root = await tempDir("ws-create-missing-skill");
+  const missing = path.join(root, "missing-skill");
+  const settings = makeSettings(root, {}, { skills: [missing] });
+
+  await assert.rejects(
+    () => createWorkspaceForIssue(settings, sampleIssue),
+    /workspace_skill_source_missing/,
+  );
 });
 
 test("createWorkspaceForIssue — renders Liquid template variables in afterCreate hook", async () => {
@@ -638,3 +945,16 @@ test("listIssueWorkspaceIdentifiers is empty for missing roots and shared worksp
   await fs.mkdir(path.join(sharedRoot, "MT-1"), { recursive: true });
   assert.deepEqual(await listIssueWorkspaceIdentifiers(shared), []);
 });
+
+async function installFakeSsh(root: string, trace: string, source: string): Promise<void> {
+  const bin = path.join(root, "bin");
+  await fs.mkdir(bin, { recursive: true });
+  await writeExecutable(path.join(bin, "ssh"), source);
+  process.env.PATH = `${bin}:${process.env.PATH ?? ""}`;
+  await fs.writeFile(trace, "");
+}
+
+function restoreEnv(key: string, value: string | undefined): void {
+  if (value === undefined) delete process.env[key];
+  else process.env[key] = value;
+}

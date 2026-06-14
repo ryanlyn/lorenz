@@ -1,3 +1,5 @@
+import path from "node:path";
+
 import { execaSync } from "execa";
 import { z } from "zod";
 import type {
@@ -78,6 +80,12 @@ export function parseConfig(
   settings.workspace.rootExpression = workspaceRootExpression;
   settings.workspace.root = expandLocalPath(workspaceRootExpression, env);
   settings.workspace.isolation = workspaceRaw.isolation ?? settings.workspace.isolation;
+  settings.workspace.skills = parseSkillSources(
+    parsed.skills,
+    workspaceRaw.skills,
+    env,
+    defaults.configDir,
+  );
 
   const workerRaw = parsed.worker ?? {};
   settings.worker.sshHosts = workerRaw.sshHosts ?? settings.worker.sshHosts;
@@ -319,6 +327,29 @@ function expandLocalPath(value: string, env: NodeJS.ProcessEnv): string {
   if (home && expanded === "~") return home;
   if (home && expanded.startsWith("~/")) return joinPath(home, expanded.slice(2));
   return expanded;
+}
+
+function parseSkillSources(
+  topLevelSkills: string[] | undefined,
+  workspaceSkills: string[] | undefined,
+  env: NodeJS.ProcessEnv,
+  configDir: string | undefined,
+): string[] {
+  const sources = [...(topLevelSkills ?? []), ...(workspaceSkills ?? [])];
+  const baseDir = configDir ?? process.cwd();
+  const seen = new Set<string>();
+  const resolved: string[] = [];
+  for (const source of sources) {
+    const expanded = expandLocalPath(source, env);
+    if (!nonEmptyString(expanded)) throw new Error("workspace.skills must not contain blank paths");
+    const absolute = path.isAbsolute(expanded)
+      ? path.normalize(expanded)
+      : path.resolve(baseDir, expanded);
+    if (seen.has(absolute)) continue;
+    seen.add(absolute);
+    resolved.push(absolute);
+  }
+  return resolved;
 }
 
 function resolveWorkspaceRootExpression(
@@ -782,8 +813,8 @@ function cloneSettings(settings: Settings): Settings {
     ...settings,
     tracker: cloneTracker(settings.tracker),
     polling: { ...settings.polling },
-    workspace: { ...settings.workspace },
     worker: { ...settings.worker, sshHosts: [...settings.worker.sshHosts] },
+    workspace: { ...settings.workspace, skills: [...settings.workspace.skills] },
     hooks: { ...settings.hooks },
     agent: { ...settings.agent },
     agents: cloneAgentRecords(settings.agents),

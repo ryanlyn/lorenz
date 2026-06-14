@@ -154,6 +154,8 @@ polling:
 
 workspace:
   root: ~/code/workspaces # default: $TMPDIR/symphony_workspaces
+  skills: # copied into each workspace's .codex/skills before the agent starts
+    - ./.codex/skills
 
 worker:
   ssh_hosts:
@@ -627,9 +629,10 @@ workflow files:
 - `symphony-land` monitors and merges approved PRs.
 - `symphony-debug` investigates stuck runs and execution failures.
 
-Copy the skills into the target repo's `.codex/skills/` directory when your workflow references
-them. The `symphony-linear` skill uses the injected `linear_graphql` tool for Codex or the
-`/mcp` endpoint for Claude.
+List skill sources under `workspace.skills` when your workflow references them. Symphony overlays
+those directories or files into each prepared workspace's `.codex/skills/` directory before the
+agent starts. Relative skill paths resolve from the workflow file directory. The `symphony-linear`
+skill uses the injected `linear_graphql` tool for Codex or the `/mcp` endpoint for Claude.
 
 ## Observability
 

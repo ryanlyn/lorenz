@@ -74,7 +74,8 @@ export async function loadWorkflow(
     throw missingWorkflowFileError(absolute, error);
   }
   const { config, body } = parseWorkflowContent(content);
-  const settings = parseConfig(config, env, defaults, defaults.trackers, defaults.executors);
+  const configDefaults = { ...defaults, configDir: path.dirname(absolute) };
+  const settings = parseConfig(config, env, configDefaults, defaults.trackers, defaults.executors);
   return {
     path: absolute,
     config,

@@ -54,7 +54,7 @@ const config: KnipConfig = {
     },
   },
   ignoreDependencies: ["tsx"],
-  ignoreBinaries: ["op"],
+  ignoreBinaries: ["op", "tar"],
   ignore: ["sandbox/**"],
 };
 
