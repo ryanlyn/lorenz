@@ -30,6 +30,7 @@
     "dashboard:ui": "pnpm --filter @symphony/dashboard dev",
     "dashboard:build": "pnpm --filter @symphony/dashboard build",
     "traceviz": "pnpm --filter @symphony/traceviz traceviz",
+    "release:stage": "tsx scripts/stage-release.ts",
     "lint:versions": "syncpack lint",
     "agent-settings:check": "tsx scripts/check-agent-settings-policy.ts",
     "architecture:check": "depcruise --config .dependency-cruiser.cjs packages/*/src extensions/*/src apps/*/src",

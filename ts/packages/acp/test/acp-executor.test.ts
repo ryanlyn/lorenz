@@ -6,6 +6,7 @@ import { test, vi } from "vitest";
 import {
   Executor,
   acquireAgentMcpEndpoint,
+  hostAgentBinaryEnv,
   parseConfig as parseConfigWith,
   resolveBridgeCommand,
   shellEscape,
@@ -28,6 +29,20 @@ function parseConfig(raw: Record<string, unknown>): ReturnType<typeof parseConfi
 }
 
 let nextAcpServerPort = 45_000 + (process.pid % 1_000);
+
+test("hostAgentBinaryEnv resolves missing agent binaries and respects explicit overrides", () => {
+  const lookup = (command: string) => `/host/${command}`;
+  assert.deepEqual(hostAgentBinaryEnv({}, lookup), {
+    CLAUDE_CODE_EXECUTABLE: "/host/claude",
+    CODEX_PATH: "/host/codex",
+  });
+  // An explicit value in the environment is never overwritten.
+  assert.deepEqual(hostAgentBinaryEnv({ CLAUDE_CODE_EXECUTABLE: "/explicit/claude" }, lookup), {
+    CODEX_PATH: "/host/codex",
+  });
+  // Nothing is set when the host has no such binary.
+  assert.deepEqual(hostAgentBinaryEnv({}, () => null), {});
+});
 
 test("ACP executor starts a session, translates updates, approves permissions, and exposes fs", async () => {
   const root = await tempDir("symphony-ts-acp");

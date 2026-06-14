@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
-import type { ChildProcessWithoutNullStreams } from "node:child_process";
+import { execFileSync, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { Readable, Writable } from "node:stream";
 
 import {
@@ -704,6 +704,44 @@ export function resolveBridgeCommand(bridgeCommand: string, workerHost: string |
   }
 }
 
+// Packaged builds of the CLI do not bundle the claude/codex agent binaries, so the local bridge
+// resolves them from the host. codex already falls back to `codex` on PATH, but claude needs an
+// explicit path, so both are set for consistency. An explicit value in the environment always wins.
+const HOST_AGENT_BINARIES: ReadonlyArray<{ env: string; command: string }> = [
+  { env: "CLAUDE_CODE_EXECUTABLE", command: "claude" },
+  { env: "CODEX_PATH", command: "codex" },
+];
+
+const hostBinaryPaths = new Map<string, string | null>();
+
+function lookupHostBinary(command: string): string | null {
+  const cached = hostBinaryPaths.get(command);
+  if (cached !== undefined) return cached;
+  let resolved: string | null;
+  try {
+    // A login shell matches the PATH the bridge itself sees when it is spawned under `bash -lc`.
+    resolved =
+      execFileSync("bash", ["-lc", `command -v ${command}`], { encoding: "utf8" }).trim() || null;
+  } catch {
+    resolved = null;
+  }
+  hostBinaryPaths.set(command, resolved);
+  return resolved;
+}
+
+export function hostAgentBinaryEnv(
+  currentEnv: NodeJS.ProcessEnv = process.env,
+  lookup: (command: string) => string | null = lookupHostBinary,
+): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const { env: name, command } of HOST_AGENT_BINARIES) {
+    if (currentEnv[name]) continue;
+    const resolved = lookup(command);
+    if (resolved) env[name] = resolved;
+  }
+  return env;
+}
+
 function startBridgeProcess(
   bridgeCommand: string,
   workspace: string,
@@ -711,6 +749,7 @@ function startBridgeProcess(
 ): ChildProcessWithoutNullStreams {
   const command = `exec ${resolveBridgeCommand(bridgeCommand, workerHost)}`;
   if (workerHost) {
+    // Remote bridges resolve their own binaries on the worker host.
     return startSshProcess(workerHost, `cd ${shellEscape(workspace)} && ${command}`);
   }
   return execa("bash", ["-lc", command], {
@@ -719,6 +758,7 @@ function startBridgeProcess(
     stdout: "pipe",
     stderr: "pipe",
     reject: false,
+    env: hostAgentBinaryEnv(),
   }) as unknown as ChildProcessWithoutNullStreams;
 }
 
