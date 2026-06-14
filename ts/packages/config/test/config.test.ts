@@ -41,7 +41,7 @@ function parseConfig(
   env: NodeJS.ProcessEnv = {},
   defaults: DefaultSettingsOptions = {},
 ): Settings {
-  return parseConfigWith(raw, env, defaults, trackers);
+  return parseConfigWith(raw, env, defaults, trackers, executors);
 }
 
 function validateDispatchConfig(settings: Settings, tools?: ToolRegistry): void {
@@ -66,8 +66,7 @@ test("config resolves env-backed Linear token and assignee", () => {
   assert.equal(settings.agent.maxTurns, 20);
   assert.equal(settings.agent.ensembleSize, 1);
   assert.equal(settings.agents.codex?.executor, "acp");
-  const codexAgent = settings.agents.codex as any;
-  assert.equal(codexAgent.bridgeCommand, "codex-acp");
+  assert.equal(settings.agents.codex?.options.bridgeCommand, "codex-acp");
   assert.equal(settings.agents.claude?.executor, "acp");
 });
 
@@ -76,12 +75,12 @@ test("partial codex agent override preserves bridgeCommand codex-acp", () => {
     agents: { codex: { stall_timeout_ms: 60000 } },
   });
 
-  const codexAgent = settings.agents.codex as any;
+  const codexAgent = settings.agents.codex!;
   assert.equal(codexAgent.executor, "acp");
-  assert.equal(codexAgent.bridgeCommand, "codex-acp");
-  assert.equal(codexAgent.usageAccounting, "per-turn");
+  assert.equal(codexAgent.options.bridgeCommand, "codex-acp");
+  assert.equal(codexAgent.options.usageAccounting, "per-turn");
   assert.equal(codexAgent.stallTimeoutMs, 60000);
-  assert.equal(codexAgent.providerConfig, undefined);
+  assert.equal(codexAgent.options.providerConfig, undefined);
 });
 
 test("config resolves op:// references via 1Password CLI", async () => {
@@ -254,7 +253,7 @@ test("config defaults and validation match expected defaults", () => {
   const settings = parseConfig({}, {});
 
   assert.equal(settings.tracker.kind, undefined);
-  assert.deepEqual(settings.agents.claude.providerConfig, {
+  assert.deepEqual(settings.agents.claude.options.providerConfig, {
     model: "claude-opus-4-6[1m]",
     permissions: { defaultMode: "dontAsk" },
   });
@@ -265,7 +264,7 @@ test("config defaults and validation match expected defaults", () => {
 test("claude.model overrides the pinned model in the provider config", () => {
   const settings = parseConfig({ claude: { model: "claude-haiku-4-5" } });
 
-  assert.deepEqual(settings.agents.claude?.providerConfig, {
+  assert.deepEqual(settings.agents.claude?.options.providerConfig, {
     model: "claude-haiku-4-5",
     permissions: { defaultMode: "dontAsk" },
   });
@@ -279,7 +278,7 @@ test("claude provider_config without a model key picks up claude.model", () => {
     },
   });
 
-  assert.deepEqual(settings.agents.claude.providerConfig, {
+  assert.deepEqual(settings.agents.claude.options.providerConfig, {
     model: "claude-haiku-4-5",
     permissions: { defaultMode: "acceptEdits" },
   });
@@ -290,7 +289,7 @@ test("explicit claude provider_config model wins over claude.model", () => {
     claude: { provider_config: { model: "claude-sonnet-4-6" } },
   });
 
-  assert.deepEqual(settings.agents.claude.providerConfig, { model: "claude-sonnet-4-6" });
+  assert.deepEqual(settings.agents.claude.options.providerConfig, { model: "claude-sonnet-4-6" });
 });
 
 test("status override of claude.model re-pins the provider config", () => {
@@ -301,7 +300,7 @@ test("status override of claude.model re-pins the provider config", () => {
   });
 
   const effective = settingsForIssueState(settings, "In Review");
-  assert.deepEqual(effective.agents.claude?.providerConfig, {
+  assert.deepEqual(effective.agents.claude?.options.providerConfig, {
     model: "claude-haiku-4-5",
     permissions: { defaultMode: "dontAsk" },
   });
@@ -509,24 +508,23 @@ test("agents map overrides known runtime settings via ACP records", () => {
     },
   });
 
-  assert.equal(settings.agents.codex.bridgeCommand, "codex-custom");
+  assert.equal(settings.agents.codex.options.bridgeCommand, "codex-custom");
   assert.equal(settings.agents.codex.turnTimeoutMs, 120_000);
   assert.equal(settings.agents.codex.stallTimeoutMs, 42_000);
-  assert.equal(settings.agents.codex.bridgeCommand, "codex-custom");
-  assert.equal(settings.agents.codex.turnTimeoutMs, 120_000);
-  assert.equal(settings.agents.codex.stallTimeoutMs, 42_000);
-  assert.equal(settings.agents.claude.bridgeCommand, "claude-agent-acp");
-  assert.deepEqual(settings.agents.claude.providerConfig, {
+  assert.equal(settings.agents.claude.options.bridgeCommand, "claude-agent-acp");
+  assert.deepEqual(settings.agents.claude.options.providerConfig, {
     permissions: { defaultMode: "acceptEdits" },
   });
   assert.deepEqual(settings.agents.pi, {
     executor: "acp",
-    bridgeCommand: "pi-acp",
-    providerConfig: { safe_mode: true },
-    usageAccounting: "cumulative",
     turnTimeoutMs: 3_600_000,
     stallTimeoutMs: 300_000,
-    strictMcpConfig: true,
+    options: {
+      bridgeCommand: "pi-acp",
+      providerConfig: { safe_mode: true },
+      usageAccounting: "cumulative",
+      strictMcpConfig: true,
+    },
   });
 });
 
@@ -539,12 +537,12 @@ test("custom ACP agents default to cumulative usage unless using a known per-tur
     },
   });
 
-  assert.equal(settings.agents.pi.usageAccounting, "cumulative");
-  assert.equal(settings.agents.pi.providerConfig, undefined);
-  assert.equal(settings.agents.codex_alias.usageAccounting, "per-turn");
-  assert.equal(settings.agents.codex_alias.providerConfig, undefined);
-  assert.equal(settings.agents.claude_alias.usageAccounting, "per-turn");
-  assert.deepEqual(settings.agents.claude_alias.providerConfig, {
+  assert.equal(settings.agents.pi.options.usageAccounting, "cumulative");
+  assert.equal(settings.agents.pi.options.providerConfig, undefined);
+  assert.equal(settings.agents.codex_alias.options.usageAccounting, "per-turn");
+  assert.equal(settings.agents.codex_alias.options.providerConfig, undefined);
+  assert.equal(settings.agents.claude_alias.options.usageAccounting, "per-turn");
+  assert.deepEqual(settings.agents.claude_alias.options.providerConfig, {
     model: "claude-opus-4-6[1m]",
     permissions: { defaultMode: "dontAsk" },
   });
@@ -628,6 +626,57 @@ test("top-level tools selects tool packs and is validated against the registry",
   );
 });
 
+test("top-level tool_options parses per-pack option bags and deep-copies them", () => {
+  const rawToolOptions = { local: { path: "/tmp/pack-board", id_prefix: "PACK-" } };
+  const settings = parseConfig({
+    tracker: { kind: "memory" },
+    tools: ["tracker", "local"],
+    tool_options: rawToolOptions,
+  });
+
+  assert.deepEqual(settings.toolOptions, {
+    local: { path: "/tmp/pack-board", id_prefix: "PACK-" },
+  });
+  validateDispatchConfig(settings, tools);
+
+  // The parsed settings own a copy; later mutation of the raw config must not leak in.
+  rawToolOptions.local.path = "/tmp/elsewhere";
+  assert.equal(settings.toolOptions?.local?.path, "/tmp/pack-board");
+
+  assert.equal(parseConfig({ tracker: { kind: "memory" } }).toolOptions, undefined);
+});
+
+test("tool_options for an unknown pack fails dispatch validation with the known pack list", () => {
+  const settings = parseConfig({
+    tracker: { kind: "memory" },
+    tool_options: { gitlab: { path: "/tmp/board" } },
+  });
+  assert.throws(
+    () => validateDispatchConfig(settings, tools),
+    /unsupported tool pack: gitlab \(known tool packs: linear, local, tracker\)/,
+  );
+});
+
+test("the local pack rejects unknown tool_options keys and wrong types", () => {
+  const unknownKey = parseConfig({
+    tracker: { kind: "memory" },
+    tool_options: { local: { surprise: true } },
+  });
+  assert.throws(
+    () => validateDispatchConfig(unknownKey, tools),
+    /tool_options\.local\.surprise is not supported \(known keys: path, idPrefix, id_prefix\)/,
+  );
+
+  const wrongType = parseConfig({
+    tracker: { kind: "memory" },
+    tool_options: { local: { path: 5 } },
+  });
+  assert.throws(
+    () => validateDispatchConfig(wrongType, tools),
+    /tool_options\.local\.path must be a string/,
+  );
+});
+
 test("undocumented top-level compatibility keys are ignored", () => {
   const settings = parseConfig({
     tracker_kind: "memory",
@@ -639,7 +688,7 @@ test("undocumented top-level compatibility keys are ignored", () => {
 
   assert.equal(settings.tracker.kind, undefined);
   assert.equal(settings.agent.maxTurns, 20);
-  assert.equal(settings.agents.codex.bridgeCommand, "codex-acp");
+  assert.equal(settings.agents.codex.options.bridgeCommand, "codex-acp");
   assert.notEqual(settings.workspace.root, "/tmp/legacy-root");
   assert.equal(settings.hooks.beforeRun, null);
 });
@@ -840,7 +889,7 @@ test("copied workflow examples load independently in the TypeScript port", async
     const workflow = await loadWorkflow(
       path.join(root, "ts", name),
       { LINEAR_API_KEY: "test-token", LINEAR_ASSIGNEE: "worker@example.com" },
-      { trackers },
+      { trackers, executors },
     );
     assert.equal(workflow.settings.tracker.dispatch.acceptUnrouted, true);
     assert.equal(workflow.settings.tracker.dispatch.routeLabelPrefix, "Symphony:");
@@ -859,7 +908,7 @@ test("workflow path defaults match SYMPHONY_WORKFLOW then cwd WORKFLOW.md", asyn
   const workflow = await loadWorkflow(
     undefined,
     { SYMPHONY_WORKFLOW: workflowPath, LINEAR_API_KEY: "test-token" },
-    { trackers },
+    { trackers, executors },
   );
   assert.equal(workflow.path, workflowPath);
   assert.deepEqual(workflow.config, {});

@@ -13,7 +13,8 @@ import {
 } from "@symphony/tool-sdk";
 
 import { BoardStore, type BoardStoreOptions } from "./boardStore.js";
-import { localBoardDir, localTrackerOptions } from "./options.js";
+import { localToolPackOptions, validateLocalToolOptions } from "./options.js";
+import { resolveBoardDir } from "./resolveBoardDir.js";
 
 const TOOL_NAMES = [
   "local_update_status",
@@ -159,13 +160,14 @@ export async function executeLocalTool(
 /** The local board tool pack: read and write `<prefix><n>.md` issues in the board directory. */
 export const localToolProvider: ToolProvider = {
   name: "local",
+  validateOptions: (options) => validateLocalToolOptions(options),
   toolSpecs: () => localToolSpecs(),
   executeTool: async (name, input, context) => executeLocalTool(name, input, context.settings),
 };
 
 function storeFor(settings: Settings, options: BoardStoreOptions = {}): BoardStore {
-  const { idPrefix } = localTrackerOptions(settings);
-  return new BoardStore(localBoardDir(settings), {
+  const { path: boardPath, idPrefix } = localToolPackOptions(settings);
+  return new BoardStore(resolveBoardDir(boardPath), {
     ...(idPrefix !== undefined ? { idPrefix } : {}),
     ...options,
   });

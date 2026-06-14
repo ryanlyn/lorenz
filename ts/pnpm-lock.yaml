@@ -600,6 +600,9 @@ importers:
       "@symphony/ssh":
         specifier: workspace:*
         version: link:../ssh
+      "@symphony/worker-host-pool":
+        specifier: workspace:*
+        version: link:../worker-host-pool
       "@symphony/workspace":
         specifier: workspace:*
         version: link:../workspace
@@ -714,9 +717,6 @@ importers:
       "@symphony/tool-sdk":
         specifier: workspace:*
         version: link:../tool-sdk
-      "@symphony/worker-host-pool":
-        specifier: workspace:*
-        version: link:../worker-host-pool
       hono:
         specifier: "catalog:"
         version: 4.12.23
@@ -1006,6 +1006,9 @@ importers:
 
   packages/workflow:
     dependencies:
+      "@symphony/agent-sdk":
+        specifier: workspace:*
+        version: link:../agent-sdk
       "@symphony/config":
         specifier: workspace:*
         version: link:../config

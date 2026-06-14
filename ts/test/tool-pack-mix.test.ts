@@ -43,7 +43,11 @@ function builtinRegistries(): { trackers: TrackerRegistry; tools: ToolRegistry }
   return { trackers, tools };
 }
 
-function parseJiraWithPacks(packs: string[], trackers: TrackerRegistry): Settings {
+function parseJiraWithPacks(
+  packs: string[],
+  trackers: TrackerRegistry,
+  extraConfig: Record<string, unknown> = {},
+): Settings {
   return parseConfig(
     {
       tracker: {
@@ -55,6 +59,7 @@ function parseJiraWithPacks(packs: string[], trackers: TrackerRegistry): Setting
         active_states: ["To Do"],
       },
       tools: packs,
+      ...extraConfig,
     },
     {},
     {},
@@ -120,12 +125,14 @@ test("a linear tool call routes to the linear pack and uses its transport", asyn
 
 test("local pack tools round-trip a real board directory while jira drives dispatch", async () => {
   const { trackers, tools } = builtinRegistries();
-  const settings = parseJiraWithPacks(["tracker", "linear", "local"], trackers);
   const boardDir = await tempDir("symphony-ts-tool-pack-mix-board");
-  // The local pack reads its board location from `tracker.path`, which a jira-dispatch
-  // config cannot carry (jira rejects unknown tracker options); point it at a temp board
-  // the way a local-dispatch deployment would.
-  settings.tracker.options = { ...settings.tracker.options, path: boardDir };
+  // The mounted local pack carries its own board location via `tool_options.local`; the
+  // jira tracker section never sees the key (jira rejects unknown tracker options), so the
+  // board directory is configured in the workflow YAML rather than patched in afterwards.
+  const settings = parseJiraWithPacks(["tracker", "linear", "local"], trackers, {
+    tool_options: { local: { path: boardDir } },
+  });
+  validateDispatchConfig(settings, trackers, executorRegistry(), tools);
 
   const created = await executeTool(
     "local_create_issue",
@@ -153,8 +160,10 @@ test("local pack tools round-trip a real board directory while jira drives dispa
   assert.equal(readIssue.status, "In Progress");
   assert.equal(readIssue.title, "Sweep the board");
 
-  // Dispatch config is untouched by the tool round trip.
+  // Dispatch config is untouched by the tool round trip: the board location lives in
+  // tool_options, never in the jira tracker's option bag.
   assert.equal(settings.tracker.kind, "jira");
+  assert.equal(settings.tracker.options.path, undefined);
 });
 
 test("an unknown pack name fails dispatch validation with the known pack list", () => {

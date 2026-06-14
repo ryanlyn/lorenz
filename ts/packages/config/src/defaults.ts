@@ -53,26 +53,34 @@ export const defaultSettings = (options: DefaultSettingsOptions = {}): Settings 
   };
 };
 
+/**
+ * Built-in agent records. The option bags are interpreted by the ACP executor provider;
+ * config owns these literals only as parse-time defaults for the well-known kinds.
+ */
 export function defaultAgentRecords(): Record<string, AgentConfig> {
   return {
     codex: {
       executor: "acp",
-      bridgeCommand: "codex-acp",
-      usageAccounting: "per-turn",
       turnTimeoutMs: 3_600_000,
       stallTimeoutMs: 300_000,
+      options: {
+        bridgeCommand: "codex-acp",
+        usageAccounting: "per-turn",
+      },
     },
     claude: {
       executor: "acp",
-      bridgeCommand: "claude-agent-acp",
-      usageAccounting: "per-turn",
-      providerConfig: {
-        model: DEFAULT_CLAUDE_MODEL,
-        permissions: { defaultMode: "dontAsk" },
-      },
       turnTimeoutMs: 3_600_000,
       stallTimeoutMs: 300_000,
-      strictMcpConfig: true,
+      options: {
+        bridgeCommand: "claude-agent-acp",
+        usageAccounting: "per-turn",
+        providerConfig: {
+          model: DEFAULT_CLAUDE_MODEL,
+          permissions: { defaultMode: "dontAsk" },
+        },
+        strictMcpConfig: true,
+      },
     },
   };
 }

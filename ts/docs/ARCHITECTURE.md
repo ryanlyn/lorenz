@@ -93,6 +93,21 @@ A mount is one flat tool namespace: name collisions across mounted packs fail lo
 mount time. A pack that throws surfaces as a failed `ToolResult` (JSON-RPC `isError`),
 never as a transport-level error.
 
+A mounted pack can carry its own settings via the top-level `tool_options:` map, keyed by
+pack name and validated by the pack's optional `validateOptions` hook (unknown pack names
+and unknown keys fail at startup). This is how a pack configures itself when a different
+tracker drives dispatch and owns `tracker.options` - e.g. the local pack's board directory
+on a Jira-dispatch workflow:
+
+```yaml
+tracker:
+  kind: jira
+tools: [tracker, jira, local]
+tool_options:
+  local:
+    path: .symphony/local
+```
+
 The `tracker` pack (`createTrackerToolProvider` in `@symphony/tracker-sdk`) implements the
 five provider-neutral `tracker_*` tools purely against `TrackerToolOps`, so any tracker whose provider implements
 `createToolOps` gets read/query/status/comment/create tools without writing a pack.
@@ -130,15 +145,21 @@ Agents extend along two independent axes:
   `PartialRuntimeSettings.agents`.
 - **Executors** are how an agent record actually runs. `AgentExecutorProvider` (in
   `@symphony/agent-sdk`) is the contract: an `executor` selector (matched against
-  `agents.<kind>.executor`), `validateAgent` for startup validation of records that select
-  it, and `createExecutor` producing the `AgentExecutor` the agent-runner drives. The
-  built-in `"acp"` executor lives in `@symphony/acp`; the CLI registers it at startup.
+  `agents.<kind>.executor`), `configAliases` and `parseOptions` for the executor's slice of
+  an `agents.<kind>` config record, `validateAgent` for startup validation of records that
+  select it, and `createExecutor` producing the `AgentExecutor` the agent-runner drives.
+  The built-in `"acp"` executor lives in `@symphony/acp`; the CLI registers it at startup.
   `validateDispatchConfig` rejects records whose executor selector is unregistered, listing
   the known selectors.
 
-The `AgentConfig` record shape is currently ACP-flavored (`bridgeCommand`,
-`usageAccounting`, ...). Generalizing it into an executor-owned options bag - mirroring
-`TrackerSettings.options` - is the designated next step if a second executor lands.
+`AgentConfig` mirrors `TrackerSettings`: only the fields every executor shares live on the
+record (`executor`, the turn/stall timeouts), and everything else sits in an executor-owned
+`options` bag, validated at parse time by the provider's `parseOptions` and read through
+the executor package's typed accessor (the ACP keys - `bridge_command`, `usage_accounting`,
+`provider_config`, `strict_mcp_config` - via `acpAgentOptions(config)`). Core code must not
+read `options` keys directly. Records selecting an unregistered executor parse leniently
+(options pass through unvalidated) and are rejected at startup, exactly like unknown
+`tracker.kind` values.
 
 ## Composition and the default registries
 

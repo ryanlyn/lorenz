@@ -17,7 +17,14 @@ import os from "node:os";
 import path from "node:path";
 import { parseConfig, Executor } from "@symphony/cli";
 import type { AgentUpdate, Settings } from "@symphony/cli";
+import { acpExecutorProvider } from "@symphony/acp";
+import { defaultAgentExecutorRegistry } from "@symphony/agent-sdk";
 import { TraceEmitter } from "@symphony/traceviz-emitter";
+
+// Agent records parse their ACP option vocabulary through the process-default registry.
+if (defaultAgentExecutorRegistry.get(acpExecutorProvider.executor) === undefined) {
+  defaultAgentExecutorRegistry.register(acpExecutorProvider);
+}
 
 const PROMPT =
   "What is the weather in Australia today (do a web search). Create a new file called weather.txt with the weather report. " +

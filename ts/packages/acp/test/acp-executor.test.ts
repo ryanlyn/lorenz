@@ -6,12 +6,25 @@ import { test, vi } from "vitest";
 import {
   Executor,
   acquireAgentMcpEndpoint,
-  parseConfig,
+  parseConfig as parseConfigWith,
   resolveBridgeCommand,
   shellEscape,
 } from "@symphony/cli";
 import type { AgentUpdate } from "@symphony/cli";
+import { AgentExecutorRegistry } from "@symphony/agent-sdk";
+import { workerHostPool } from "@symphony/worker-host-pool";
 import { assert, sampleIssue, tempDir, writeExecutable } from "@symphony/test-utils";
+
+import { acpExecutorProvider } from "@symphony/acp";
+
+// Private executor registry so agent records parse through the ACP provider's option
+// vocabulary without touching the process-wide default registry.
+const executors = new AgentExecutorRegistry();
+executors.register(acpExecutorProvider);
+
+function parseConfig(raw: Record<string, unknown>): ReturnType<typeof parseConfigWith> {
+  return parseConfigWith(raw, {}, {}, undefined, executors);
+}
 
 let nextAcpServerPort = 45_000 + (process.pid % 1_000);
 
@@ -444,9 +457,9 @@ test("ACP MCP endpoint leases reuse one reverse tunnel per worker host with per-
       server: { host: "127.0.0.1", port: await reserveTcpPort() },
       worker: { ssh_timeout_ms: 5_000 },
     });
-    const first = await acquireAgentMcpEndpoint(settings, "worker-acp");
+    const first = await acquireAgentMcpEndpoint(settings, "worker-acp", workerHostPool);
     leases.push(first);
-    const second = await acquireAgentMcpEndpoint(settings, "worker-acp");
+    const second = await acquireAgentMcpEndpoint(settings, "worker-acp", workerHostPool);
     leases.push(second);
 
     assert.equal(first.url, "http://127.0.0.1:46000/mcp");
@@ -457,7 +470,7 @@ test("ACP MCP endpoint leases reuse one reverse tunnel per worker host with per-
 
     await first.release();
     leases.splice(leases.indexOf(first), 1);
-    const third = await acquireAgentMcpEndpoint(settings, "worker-acp");
+    const third = await acquireAgentMcpEndpoint(settings, "worker-acp", workerHostPool);
     leases.push(third);
     assert.equal(tunnelTraceCount(await fs.readFile(trace, "utf8")), 1);
 
@@ -465,7 +478,7 @@ test("ACP MCP endpoint leases reuse one reverse tunnel per worker host with per-
     leases.splice(leases.indexOf(second), 1);
     await third.release();
     leases.splice(leases.indexOf(third), 1);
-    const fourth = await acquireAgentMcpEndpoint(settings, "worker-acp");
+    const fourth = await acquireAgentMcpEndpoint(settings, "worker-acp", workerHostPool);
     leases.push(fourth);
     await waitForTunnelTrace(trace, 2);
   } finally {
@@ -563,7 +576,7 @@ test("session requests omit _meta when providerConfig is absent", async () => {
   const fake = await writeFakeBridge(root);
   const trace = path.join(root, "trace.jsonl");
   const settings = acpSettings(root, fake, trace, "new", 5_000, { agentKind: "codex" });
-  delete (settings.agents.codex as Record<string, unknown>).providerConfig;
+  delete settings.agents.codex!.options.providerConfig;
   const executor = new Executor("codex");
   const session = await executor.startSession({
     workspace: root,

@@ -46,15 +46,12 @@ const claudeAliases = {
   strict_mcp_config: "strictMcpConfig",
   provider_config: "providerConfig",
 };
-const acpAgentAliases = {
-  bridge_command: "bridgeCommand",
-  usage_accounting: "usageAccounting",
-  provider_config: "providerConfig",
-};
+// Shared agent-record keys only; executor-specific aliases (e.g. bridge_command) are
+// declared by each executor provider via `AgentExecutorProvider.configAliases` and applied
+// during parsing.
 const agentRecordAliases = {
-  ...codexAliases,
-  ...claudeAliases,
-  ...acpAgentAliases,
+  turn_timeout_ms: "turnTimeoutMs",
+  stall_timeout_ms: "stallTimeoutMs",
 };
 const observabilityAliases = {
   dashboard_enabled: "dashboardEnabled",
@@ -65,7 +62,10 @@ const loggingAliases = { log_file: "logFile" };
 
 export function normalizeWorkflowConfig(value: unknown): unknown {
   if (!isPlainRecord(value)) return value;
-  const raw = normalizeAliases(value, { status_overrides: "statusOverrides" });
+  const raw = normalizeAliases(value, {
+    status_overrides: "statusOverrides",
+    tool_options: "toolOptions",
+  });
   const normalized: Record<string, unknown> = { ...raw };
 
   normalizeNested(normalized, "tracker", trackerAliases);

@@ -1,4 +1,3 @@
-import { workerHostPool, type RemoteMcpTunnelLease } from "@symphony/worker-host-pool";
 import {
   httpUrlHost,
   isRecord,
@@ -22,10 +21,29 @@ export interface AgentMcpEndpointLease {
   release(): Promise<void>;
 }
 
+/** One leased remote port that forwards back to the local MCP server. */
+interface RemoteMcpTunnel {
+  remotePort: number;
+}
+
+/**
+ * Provisions tunnels from a remote worker host back to the local MCP server. The
+ * composition side passes its pool (e.g. the SSH worker-host pool); this package never
+ * reaches into transport infrastructure itself.
+ */
+export interface RemoteMcpTunnelTransport {
+  acquireRemoteMcpTunnel(
+    workerHost: string,
+    localHost: string,
+    localPort: number,
+  ): Promise<RemoteMcpTunnel>;
+  releaseRemoteMcpTunnel(tunnel: RemoteMcpTunnel): void;
+}
+
 interface McpEndpoint {
   url: string;
   authScope: string;
-  tunnel?: RemoteMcpTunnelLease | undefined;
+  releaseTunnel?: (() => void) | undefined;
   localServer?: LocalMcpServerLease | undefined;
 }
 
@@ -53,6 +71,7 @@ const localMcpServerLocks = new Map<string, Promise<void>>();
 export async function acquireAgentMcpEndpoint(
   settings: Settings,
   workerHost?: string | null,
+  tunnels?: RemoteMcpTunnelTransport,
 ): Promise<AgentMcpEndpointLease> {
   let endpoint: McpEndpoint | null = null;
   let token: string | null = null;
@@ -61,7 +80,7 @@ export async function acquireAgentMcpEndpoint(
     const configuredToken = issueConfiguredMcpToken(settings);
     token = configuredToken?.token ?? null;
     endpoint = workerHost
-      ? await acquireRemoteMcpEndpoint(workerHost, settings, configuredToken)
+      ? await acquireRemoteMcpEndpoint(workerHost, settings, configuredToken, tunnels)
       : await localMcpEndpoint(settings, configuredToken);
     token ??= issueMcpToken(endpoint.authScope);
     return {
@@ -77,13 +96,13 @@ export async function acquireAgentMcpEndpoint(
         if (released) return;
         released = true;
         revokeMcpToken(token);
-        if (endpoint?.tunnel) workerHostPool.releaseRemoteMcpTunnel(endpoint.tunnel);
+        endpoint?.releaseTunnel?.();
         if (endpoint?.localServer) await releaseLocalMcpServer(endpoint.localServer);
       },
     };
   } catch (error) {
     revokeMcpToken(token);
-    if (endpoint?.tunnel) workerHostPool.releaseRemoteMcpTunnel(endpoint.tunnel);
+    endpoint?.releaseTunnel?.();
     if (endpoint?.localServer) await releaseLocalMcpServer(endpoint.localServer);
     throw error;
   }
@@ -110,7 +129,9 @@ async function acquireRemoteMcpEndpoint(
   workerHost: string,
   settings: Settings,
   configuredToken: IssuedMcpToken | null,
+  tunnels: RemoteMcpTunnelTransport | undefined,
 ): Promise<McpEndpoint> {
+  if (!tunnels) throw new Error("remote_acp_mcp_requires_tunnel_transport");
   const localServer = await ensureLocalMcpServer(settings, configuredToken);
   try {
     const localHost = "127.0.0.1";
@@ -118,14 +139,14 @@ async function acquireRemoteMcpEndpoint(
     if (typeof localPort !== "number" || localPort <= 0) {
       throw new Error("remote_acp_mcp_requires_server_port");
     }
-    const tunnel = await workerHostPool.acquireRemoteMcpTunnel(workerHost, localHost, localPort);
+    const tunnel = await tunnels.acquireRemoteMcpTunnel(workerHost, localHost, localPort);
     return {
       url: `http://127.0.0.1:${tunnel.remotePort}${mcpPath}`,
       authScope:
         configuredToken?.authScope ??
         localServer?.handle.authScope ??
         mcpAuthScopeForSettings(settings, normalizeHttpBindHost(settings.server.host), localPort),
-      tunnel,
+      releaseTunnel: () => tunnels.releaseRemoteMcpTunnel(tunnel),
       localServer: localServer ?? undefined,
     };
   } catch (error) {

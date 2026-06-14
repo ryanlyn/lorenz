@@ -8,7 +8,15 @@ import { promisify } from "node:util";
 import { test, vi } from "vitest";
 import { parseConfig, readResumeState, runAgentAttempt, runSsh, shellEscape } from "@symphony/cli";
 import type { Issue, WorkflowDefinition } from "@symphony/cli";
+import { acpExecutorProvider } from "@symphony/acp";
+import { defaultAgentExecutorRegistry } from "@symphony/agent-sdk";
 import { assert, sampleIssue, tempDir } from "@symphony/test-utils";
+
+// Attempts run through the CLI's default adapters, which resolve executors (and agent
+// option vocabularies at parse time) via the process-default registry.
+if (defaultAgentExecutorRegistry.get(acpExecutorProvider.executor) === undefined) {
+  defaultAgentExecutorRegistry.register(acpExecutorProvider);
+}
 
 const execFileAsync = promisify(execFile);
 const runLiveSsh = process.env.SYMPHONY_TS_RUN_LIVE_SSH_E2E === "1";

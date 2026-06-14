@@ -1,6 +1,5 @@
 import { z } from "zod";
 import {
-  AGENT_USAGE_ACCOUNTING_VALUES,
   CONCURRENCY_MAX,
   ENSEMBLE_SIZE_MAX,
   MAX_TURNS_MAX,
@@ -84,26 +83,26 @@ const coercedBoolean = z.union([
 
 const optionalHookScript = z.string().nullable().optional();
 
-const usageAccountingSchema = z.enum(AGENT_USAGE_ACCOUNTING_VALUES);
-
-// The executor selector is open-ended; whether it is supported is decided by the agent
-// executor registry at dispatch validation, not by the schema.
+// Shared keys are validated here; any other key in an agents.<kind> record is
+// executor-specific and is passed through (`catchall`) to the registered agent executor
+// provider's option parser. The executor selector is open-ended; whether it is supported is
+// decided by the agent executor registry at dispatch validation, not by the schema.
 export const agentRecordSchema = z
   .object({
     executor: z.string().min(1).optional(),
-    bridgeCommand: z.string().optional(),
-    command: z.string().optional(),
-    usageAccounting: usageAccountingSchema.optional(),
-    providerConfig: z.record(z.string(), z.unknown()).optional(),
     // TODO: Remove per-agent timeout fields after configs use shared agents-level timeout defaults.
     turnTimeoutMs: coercedTimeoutMs.optional(),
     stallTimeoutMs: coercedNonNegativeTimeoutMs.optional(),
-    strictMcpConfig: coercedBoolean.optional(),
   })
-  .strict();
+  .catchall(z.unknown());
 
 /** Per-state agent record override: like an agent record, minus the executor selector. */
-export const agentRecordOverrideSchema = agentRecordSchema.omit({ executor: true }).strict();
+export const agentRecordOverrideSchema = z
+  .object({
+    turnTimeoutMs: coercedTimeoutMs.optional(),
+    stallTimeoutMs: coercedNonNegativeTimeoutMs.optional(),
+  })
+  .catchall(z.unknown());
 
 // Common keys are validated here; any other key in the tracker section is provider-specific
 // and is passed through (`catchall`) to the registered tracker provider's option parser.
@@ -221,6 +220,7 @@ export const workflowConfigSchema = z.preprocess(
       server: serverRawSchema.optional(),
       logging: loggingRawSchema.optional(),
       tools: z.array(z.string()).optional(),
+      toolOptions: z.record(z.string(), z.record(z.string(), z.unknown())).optional(),
       statusOverrides: z.record(z.string(), statusOverrideRawSchema).optional(),
     })
     .passthrough(),

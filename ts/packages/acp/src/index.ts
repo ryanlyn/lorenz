@@ -19,9 +19,17 @@ import {
   type Usage,
   type WriteTextFileRequest,
 } from "@agentclientprotocol/sdk";
-import { acquireAgentMcpEndpoint, type AgentMcpEndpointLease } from "@symphony/mcp";
+import {
+  acquireAgentMcpEndpoint,
+  type AgentMcpEndpointLease,
+  type RemoteMcpTunnelTransport,
+} from "@symphony/mcp";
 import { actionForStopReason } from "@symphony/policies/stopReason";
 import { shellEscape, startSshProcess } from "@symphony/ssh";
+import { workerHostPool } from "@symphony/worker-host-pool";
+
+/** The SSH worker-host pool provisions the reverse tunnels behind remote MCP endpoints. */
+const mcpTunnelTransport: RemoteMcpTunnelTransport = workerHostPool;
 import { validateWorkspaceCwd } from "@symphony/workspace";
 import { execa } from "execa";
 import {
@@ -40,6 +48,19 @@ import {
 import type { AgentExecutorProvider } from "@symphony/agent-sdk";
 
 import { stopChild, withTimeout } from "./childProcess.js";
+import {
+  acpAgentOptions,
+  isClaudeCompatibleBridgeCommand,
+  parseAcpAgentOptions,
+  type AcpAgentOptions,
+} from "./options.js";
+
+export {
+  acpAgentOptions,
+  AGENT_USAGE_ACCOUNTING_VALUES,
+  type AcpAgentOptions,
+  type AgentUsageAccounting,
+} from "./options.js";
 
 interface Session extends AgentSession {
   connection: ClientSideConnection;
@@ -47,6 +68,7 @@ interface Session extends AgentSession {
   settings: Settings;
   workspace: string;
   agentConfig: AgentConfig;
+  acpOptions: AcpAgentOptions;
   init: InitializeResponse;
   mcpEndpoint: AgentMcpEndpointLease;
   workerHost?: string | null | undefined;
@@ -67,8 +89,18 @@ interface Session extends AgentSession {
  */
 export const acpExecutorProvider: AgentExecutorProvider = {
   executor: "acp",
+  // `command` is the legacy spelling of `bridge_command`; it is listed first so the
+  // canonical key wins when a record configures both.
+  configAliases: {
+    command: "bridgeCommand",
+    bridge_command: "bridgeCommand",
+    usage_accounting: "usageAccounting",
+    provider_config: "providerConfig",
+    strict_mcp_config: "strictMcpConfig",
+  },
+  parseOptions: (options) => parseAcpAgentOptions(options),
   validateAgent(kind, config) {
-    if (!config.bridgeCommand.trim()) {
+    if (!acpAgentOptions(config).bridgeCommand.trim()) {
       throw new Error(
         kind === "claude"
           ? "claude.command is required"
@@ -101,12 +133,17 @@ export class Executor implements AgentExecutor {
     );
     const agentKind = input.settings.agent.kind;
     const agentConfig = resolveAgentConfig(input.settings, agentKind);
+    const acpOptions = acpAgentOptions(agentConfig);
     let mcpEndpoint: AgentMcpEndpointLease | null = null;
     let child: ChildProcessWithoutNullStreams | null = null;
     let session: Session | null = null;
     try {
-      mcpEndpoint = await acquireAgentMcpEndpoint(input.settings, input.workerHost ?? null);
-      child = startBridgeProcess(agentConfig, workspace, input.workerHost ?? null);
+      mcpEndpoint = await acquireAgentMcpEndpoint(
+        input.settings,
+        input.workerHost ?? null,
+        mcpTunnelTransport,
+      );
+      child = startBridgeProcess(acpOptions.bridgeCommand, workspace, input.workerHost ?? null);
       const client = acpClient({
         workspace,
         workerHost: input.workerHost ?? null,
@@ -132,6 +169,7 @@ export class Executor implements AgentExecutor {
         settings: input.settings,
         workspace,
         agentConfig,
+        acpOptions,
         init,
         mcpEndpoint,
         workerHost: input.workerHost ?? null,
@@ -396,7 +434,7 @@ function finalizeTurnUsage(
 ): UsageTokenUpdate | undefined {
   if (!reported) return session.sawCallUsageThisTurn ? usageSnapshot(session) : undefined;
   const reportedCumulative =
-    session.agentConfig.usageAccounting === "cumulative"
+    session.acpOptions.usageAccounting === "cumulative"
       ? reported
       : addUsage(session.turnStartTotals, reported);
   maxUsageTotals(session, reportedCumulative);
@@ -660,11 +698,11 @@ async function openSession(
  * ts/vendor/README.md). Bridges that don't know the keys ignore them.
  */
 function providerConfigMeta(session: Session): Record<string, unknown> | undefined {
-  const providerConfig = session.agentConfig.providerConfig;
+  const providerConfig = session.acpOptions.providerConfig;
   if (!providerConfig) return undefined;
   const isClaudeBridge =
     session.agentKind === "claude" ||
-    /(^|\s|\/)claude-agent-acp(\s|$)/.test(session.agentConfig.bridgeCommand);
+    isClaudeCompatibleBridgeCommand(session.acpOptions.bridgeCommand);
   return { [isClaudeBridge ? "symphony/settings" : "symphony/config"]: providerConfig };
 }
 
@@ -706,11 +744,11 @@ export function resolveBridgeCommand(bridgeCommand: string, workerHost: string |
 }
 
 function startBridgeProcess(
-  agentConfig: AgentConfig,
+  bridgeCommand: string,
   workspace: string,
   workerHost: string | null,
 ): ChildProcessWithoutNullStreams {
-  const command = `exec ${resolveBridgeCommand(agentConfig.bridgeCommand, workerHost)}`;
+  const command = `exec ${resolveBridgeCommand(bridgeCommand, workerHost)}`;
   if (workerHost) {
     return startSshProcess(workerHost, `cd ${shellEscape(workspace)} && ${command}`);
   }
