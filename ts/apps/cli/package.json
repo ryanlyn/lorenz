@@ -39,7 +39,6 @@
     "@symphony/presenter": "workspace:*",
     "@symphony/projections": "workspace:*",
     "@symphony/prompt": "workspace:*",
-    "@symphony/resume-state": "workspace:*",
     "@symphony/retry-scheduler": "workspace:*",
     "@symphony/runtime": "workspace:*",
     "@symphony/server": "workspace:*",

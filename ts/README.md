@@ -2,7 +2,7 @@
 
 Symphony turns tracker issues into agent runs. It polls for eligible work, prepares a workspace,
 renders the workflow prompt with issue context, starts Codex or Claude, and records the run so
-operators can inspect state, retries, cost, logs, and resume metadata.
+operators can inspect state, retries, cost, and logs.
 
 This workspace owns the TypeScript CLI, runtime packages, tracker adapters, terminal dashboard,
 local observability server, trace viewer packages, and tests.
@@ -689,14 +689,13 @@ Live tests are opt-in and launch real CLIs or services in isolated workspaces.
 
 ```sh
 pnpm test:live:codex
-pnpm test:live:codex-resume
 pnpm test:live:linear-codex
 pnpm test:live:claude
 pnpm test:live:ssh
 pnpm test:live:linear-sandbox
 ```
 
-`pnpm test:live` runs the Codex, Codex resume, Linear plus Codex, and Claude live tests.
+`pnpm test:live` runs the Codex, Linear plus Codex, and Claude live tests.
 
 Environment knobs:
 

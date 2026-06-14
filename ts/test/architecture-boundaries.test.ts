@@ -5,7 +5,6 @@ import {
   mergeMonotonicUsage,
   normalizeIssue,
   parseConfig,
-  resumeIdentityMatches,
   retryBackoffMs,
   Orchestrator,
   slotKey,
@@ -14,7 +13,7 @@ import type { RuntimeProjectionInput, RuntimeRunHistoryEntry } from "@symphony/c
 import type { ClockPort } from "@symphony/domain";
 import { assert } from "@symphony/test-utils";
 
-test("deterministic policies pin retry, stop reason, usage, and resume decisions", () => {
+test("deterministic policies pin retry, stop reason, and usage decisions", () => {
   assert.equal(retryBackoffMs(1, 60_000, "failure"), 10_000);
   assert.equal(retryBackoffMs(3, 60_000, "failure"), 40_000);
   assert.equal(retryBackoffMs(20, 60_000, "failure"), 60_000);
@@ -45,37 +44,6 @@ test("deterministic policies pin retry, stop reason, usage, and resume decisions
     totalTokens: 15,
     secondsRunning: 0,
   });
-
-  const issue = normalizeIssue({
-    id: "issue-resume",
-    identifier: "MT-RESUME",
-    title: "Resume",
-    state: { name: "Todo", type: "unstarted" },
-  });
-  assert.equal(
-    resumeIdentityMatches(
-      {
-        agent: "codex",
-        issueId: issue.id,
-        workspacePath: "/tmp/workspace",
-        workerHost: null,
-      },
-      { agent: "codex", issue, workspacePath: "/tmp/workspace", workerHost: null },
-    ),
-    true,
-  );
-  assert.equal(
-    resumeIdentityMatches(
-      {
-        agent: "codex",
-        issueId: issue.id,
-        workspacePath: "/tmp/workspace",
-        workerHost: null,
-      },
-      { agent: "claude", issue, workspacePath: "/tmp/workspace", workerHost: null },
-    ),
-    false,
-  );
 });
 
 test("projection actor owns bounded read models and snapshots defensively", () => {

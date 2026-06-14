@@ -30,11 +30,6 @@ export {
 } from "@symphony/workspace";
 export { shellEscape, runSsh } from "@symphony/ssh";
 export {
-  createResumeStateStore,
-  readResumeState,
-  resumeStateMatches,
-} from "@symphony/resume-state";
-export {
   executeTool,
   issueMcpToken,
   revokeMcpToken,
@@ -54,12 +49,7 @@ export type {
   SymphonyRuntimeOptions,
 } from "@symphony/runtime";
 export { statePayload, issuePayload, runsPayload } from "@symphony/presenter";
-export {
-  retryBackoffMs,
-  actionForStopReason,
-  mergeMonotonicUsage,
-  resumeIdentityMatches,
-} from "@symphony/policies";
+export { retryBackoffMs, actionForStopReason, mergeMonotonicUsage } from "@symphony/policies";
 export {
   slotKey,
   routeNames,

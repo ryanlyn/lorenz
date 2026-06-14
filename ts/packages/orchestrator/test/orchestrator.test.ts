@@ -42,14 +42,12 @@ test("orchestrator claims ensemble slots independently and snapshots backend-neu
   orchestrator.applyUpdate(issue.id, 0, {
     type: "turn_completed",
     sessionId: "session-1",
-    resumeId: "resume-1",
     executorPid: "123",
     usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 },
   });
 
   const snapshot = orchestrator.snapshot();
   assert.equal(snapshot.running[0]?.sessionId, "session-1");
-  assert.equal(snapshot.running[0]?.resumeId, "resume-1");
   assert.equal(snapshot.running[0]?.executorPid, "123");
   assert.equal(snapshot.usageTotals.totalTokens, 15);
 

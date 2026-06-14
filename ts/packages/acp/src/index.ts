@@ -73,8 +73,6 @@ interface Session extends AgentSession {
   mcpEndpoint: AgentMcpEndpointLease;
   workerHost?: string | null | undefined;
   onUpdate?: ((update: AgentUpdate) => void) | undefined;
-  loadingReplay: boolean;
-  replayedUpdateCount: number;
   usageTotals: UsageTotals;
   sawCallUsageThisTurn: boolean;
   turnStartTotals: UsageTotals;
@@ -128,7 +126,6 @@ export class Executor implements AgentExecutor {
     workspace: string;
     issue?: Issue;
     settings: Settings;
-    resumeId?: string | null;
     workerHost?: string | null;
     onUpdate?: (update: AgentUpdate) => void;
   }): Promise<Session> {
@@ -179,12 +176,9 @@ export class Executor implements AgentExecutor {
         init,
         mcpEndpoint,
         workerHost: input.workerHost ?? null,
-        sessionId: input.resumeId ?? null,
-        resumeId: input.resumeId ?? null,
+        sessionId: null,
         executorPid,
         onUpdate: input.onUpdate,
-        loadingReplay: false,
-        replayedUpdateCount: 0,
         usageTotals: emptyUsageTotals(),
         sawCallUsageThisTurn: false,
         turnStartTotals: emptyUsageTotals(),
@@ -196,16 +190,12 @@ export class Executor implements AgentExecutor {
       session = nextSession;
       wireProcessEvents(session);
 
-      const sessionId = await openSession(session, input.resumeId ?? null, [
-        mcpEndpoint.acpServer(),
-      ]);
+      const sessionId = await openSession(session, [mcpEndpoint.acpServer()]);
       session.sessionId = sessionId;
-      session.resumeId = sessionId;
       this.emit(session, {
         type: "session_started",
         message: `session started (${sessionId})`,
         sessionId,
-        resumeId: sessionId,
         executorPid,
         timestamp: new Date(),
       });
@@ -276,7 +266,6 @@ export class Executor implements AgentExecutor {
       this.emit(session, {
         type: "turn_started",
         sessionId,
-        resumeId: session.resumeId,
         message: { prompt: [{ type: "text", text: prompt }] },
         timestamp: new Date(),
       });
@@ -299,7 +288,6 @@ export class Executor implements AgentExecutor {
           const base = {
             sessionUpdate: acpProtocolUpdate(session, terminalType, { response }),
             sessionId: session.sessionId,
-            resumeId: session.resumeId,
             executorPid: session.executorPid,
             message: { response },
             timestamp: new Date(),
@@ -322,7 +310,6 @@ export class Executor implements AgentExecutor {
           this.emit(session, {
             type: "turn_failed",
             sessionId,
-            resumeId: session.resumeId,
             message,
             timestamp: new Date(),
           });
@@ -363,7 +350,6 @@ function handleSessionUpdate(session: Session, notification: SessionNotification
       type: "malformed",
       sessionUpdate: acpProtocolUpdate(session, "malformed", notification),
       sessionId: session.sessionId,
-      resumeId: session.resumeId,
       executorPid: session.executorPid,
       message: `acp_session_update_mismatch: active session ${session.sessionId}, notification session ${notification.sessionId}`,
       timestamp: new Date(),
@@ -372,17 +358,11 @@ function handleSessionUpdate(session: Session, notification: SessionNotification
   }
   if (session.pendingTurn) session.pendingTurn.allowSessionIdRotation = false;
   session.sessionId = notification.sessionId;
-  session.resumeId = notification.sessionId;
-  if (session.loadingReplay) {
-    session.replayedUpdateCount += 1;
-    return;
-  }
   const usage = consumeCallUsage(session, notification);
   session.onUpdate?.({
     type: "session_notification",
     sessionUpdate: acpProtocolUpdate(session, "session_notification", notification),
     sessionId: session.sessionId,
-    resumeId: session.resumeId,
     executorPid: session.executorPid,
     message: notification,
     timestamp: new Date(),
@@ -417,9 +397,9 @@ function consumeCallUsage(
   const total = parseUsageBucket(meta["symphony/totalUsage"]);
   if (total) {
     // The bridge also reports its own cumulative counter; use it as a floor
-    // so missed bucket notifications cannot under-count the session.
-    // The baseline captures spend that predates this session (resumed
-    // threads), measured before the first observed call.
+    // so missed bucket notifications cannot under-count the session. The
+    // baseline captures any spend already on the counter before the first
+    // observed call.
     session.callUsageBaseline ??= subtractUsage(total, call);
     maxUsageTotals(session, subtractUsage(total, session.callUsageBaseline));
   }
@@ -524,7 +504,6 @@ function handlePermissionRequest(
     emit({
       type: "approval_auto_approved",
       sessionId: request.sessionId,
-      resumeId: session?.resumeId,
       executorPid: session?.executorPid,
       message: { request, selected },
       timestamp: new Date(),
@@ -534,7 +513,6 @@ function handlePermissionRequest(
   emit({
     type: "approval_required",
     sessionId: request.sessionId,
-    resumeId: session?.resumeId,
     executorPid: session?.executorPid,
     message: { request, selected },
     timestamp: new Date(),
@@ -620,70 +598,8 @@ class ClientAdapter {
   }
 }
 
-async function openSession(
-  session: Session,
-  resumeId: string | null,
-  mcpServers: McpServer[],
-): Promise<string> {
+async function openSession(session: Session, mcpServers: McpServer[]): Promise<string> {
   const meta = providerConfigMeta(session);
-  if (resumeId && supportsResume(session.init)) {
-    try {
-      await withTimeout(
-        session.connection.resumeSession({
-          sessionId: resumeId,
-          cwd: session.workspace,
-          mcpServers,
-          ...(meta && { _meta: meta }),
-        }),
-        30_000,
-        "acp resume timed out",
-      );
-      return resumeId;
-    } catch (error) {
-      session.onUpdate?.({
-        type: "resume_state_warning",
-        workspacePath: session.workspace,
-        message: `acp_resume_failed: ${errorMessage(error)}`,
-        timestamp: new Date(),
-      });
-    }
-  }
-
-  if (resumeId && session.init.agentCapabilities?.loadSession) {
-    try {
-      session.loadingReplay = true;
-      await withTimeout(
-        session.connection.loadSession({
-          sessionId: resumeId,
-          cwd: session.workspace,
-          mcpServers,
-          ...(meta && { _meta: meta }),
-        }),
-        30_000,
-        "acp load timed out",
-      );
-      session.loadingReplay = false;
-      if (session.replayedUpdateCount > 0) {
-        session.onUpdate?.({
-          type: "session_replay_suppressed",
-          sessionId: resumeId,
-          resumeId,
-          message: { replayedUpdateCount: session.replayedUpdateCount },
-          timestamp: new Date(),
-        });
-      }
-      return resumeId;
-    } catch (error) {
-      session.loadingReplay = false;
-      session.onUpdate?.({
-        type: "resume_state_warning",
-        workspacePath: session.workspace,
-        message: `acp_load_failed: ${errorMessage(error)}`,
-        timestamp: new Date(),
-      });
-    }
-  }
-
   const created = await withTimeout(
     session.connection.newSession({
       cwd: session.workspace,
@@ -854,10 +770,6 @@ function resolveAgentConfig(settings: Settings, kind: AgentKind): AgentConfig {
   if (!agent) throw new Error(`agents.${kind} is required`);
   if (agent.executor !== "acp") throw new Error(`agents.${kind}.executor must be acp`);
   return agent;
-}
-
-function supportsResume(init: InitializeResponse): boolean {
-  return Boolean(init.agentCapabilities?.sessionCapabilities?.resume);
 }
 
 function supportsClose(init: InitializeResponse): boolean {

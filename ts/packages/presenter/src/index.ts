@@ -30,7 +30,6 @@ export interface RunningEntryPayload {
   worker_host: string | null;
   workspace_path: string | null;
   session_id: string | null;
-  resume_id: string | null;
   turn_count: number;
   agent_kind: string;
   executor_pid: string | null;
@@ -238,7 +237,6 @@ interface RunPayload {
   retry_attempt: number;
   worker_host: string | null;
   workspace_path: string | null;
-  resume_id: string | null;
   session_id: string | null;
   executor_pid: string | null;
   usage_totals: ReturnType<typeof usagePayload>;
@@ -275,7 +273,6 @@ function runningRunPayload(entry: RuntimeRunningEntry, logFile: string | null): 
     retry_attempt: entry.retryAttempt ?? 0,
     worker_host: entry.workerHost ?? null,
     workspace_path: entry.workspacePath ?? null,
-    resume_id: entry.resumeId ?? null,
     session_id: entry.sessionId ?? null,
     executor_pid: entry.executorPid ?? null,
     usage_totals: usagePayload(usage),
@@ -318,7 +315,6 @@ function historyRunPayload(entry: RuntimeRunHistoryEntry, logFile: string | null
     retry_attempt: entry.retryAttempt ?? 0,
     worker_host: entry.workerHost ?? null,
     workspace_path: entry.workspacePath ?? null,
-    resume_id: entry.resumeId ?? null,
     session_id: entry.sessionId ?? null,
     executor_pid: entry.executorPid ?? null,
     usage_totals: usagePayload(usage),
@@ -364,7 +360,6 @@ function runningEntryPayload(entry: RuntimeRunningEntry): RunningEntryPayload {
     worker_host: entry.workerHost ?? null,
     workspace_path: entry.workspacePath ?? null,
     session_id: entry.sessionId ?? null,
-    resume_id: entry.resumeId ?? null,
     turn_count: entry.turnCount,
     agent_kind: entry.agentKind,
     executor_pid: entry.executorPid ?? null,
@@ -385,7 +380,6 @@ function runningIssuePayload(entry: RuntimeRunningEntry): Record<string, unknown
     worker_host: entry.workerHost ?? null,
     workspace_path: entry.workspacePath ?? null,
     session_id: entry.sessionId ?? null,
-    resume_id: entry.resumeId ?? null,
     turn_count: entry.turnCount,
     agent_kind: entry.agentKind,
     executor_pid: entry.executorPid ?? null,

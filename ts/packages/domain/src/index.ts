@@ -590,8 +590,6 @@ export interface RunningEntry {
   workspacePath?: string | null | undefined;
   /** Provider session id reported by the executor (Codex/Claude side). */
   sessionId?: string | null | undefined;
-  /** Token used to resume this session on subsequent runs; persisted to the workspace resume state file. */
-  resumeId?: string | null | undefined;
   /** OS process id of the agent child process, as a string; `null` if not yet spawned or unavailable. */
   executorPid?: string | null | undefined;
   /** Number of completed turns; incremented on each `turn_completed` update. */
@@ -620,7 +618,6 @@ export interface AgentUpdateBase {
   sessionUpdate?: unknown;
   workspacePath?: string | null | undefined;
   sessionId?: string | null | undefined;
-  resumeId?: string | null | undefined;
   executorPid?: string | null | undefined;
   timestamp?: Date | undefined;
   message?: unknown;
@@ -640,7 +637,6 @@ export interface AgentSessionNotificationUpdate extends AgentUpdateBase {
 export type StringMessageUpdateType =
   | "stderr"
   | "process_exit"
-  | "resume_state_warning"
   | "session_started"
   | "workspace_prepared"
   | "rate_limit"
@@ -672,11 +668,6 @@ export interface HookExecutionMessage {
 export interface HookExecutionUpdate extends AgentUpdateBase {
   type: "hook_execution";
   message: HookExecutionMessage;
-}
-
-export interface SessionReplaySuppressedUpdate extends AgentUpdateBase {
-  type: "session_replay_suppressed";
-  message: { replayedUpdateCount: number };
 }
 
 export interface TurnStartedUpdate extends AgentUpdateBase {
@@ -723,7 +714,6 @@ export type AgentUpdate =
   | AgentSessionNotificationUpdate
   | StringMessageUpdate
   | HookExecutionUpdate
-  | SessionReplaySuppressedUpdate
   | TurnStartedUpdate
   | TurnCompletedUpdate
   | TurnCancelledUpdate
@@ -751,8 +741,6 @@ export const AGENT_UPDATE_TYPES = [
   "stderr",
   "malformed",
   "process_exit",
-  "resume_state_warning",
-  "session_replay_suppressed",
   "fs_write",
   "hook_execution",
   "session_notification",
@@ -800,8 +788,6 @@ export interface AgentSession {
   agentKind: AgentKind;
   /** Provider session id; populated once the executor receives it from the backend. */
   sessionId?: string | null | undefined;
-  /** Token persisted to the workspace so a later run can resume this session. */
-  resumeId?: string | null | undefined;
   /** OS pid of the agent child as a string; `null` if not applicable. */
   executorPid?: string | null | undefined;
   /** Closes the session and tears down the underlying process; must be safe to call from a `finally` block. */
@@ -816,14 +802,13 @@ export interface AgentExecutor {
   kind: AgentKind;
   /**
    * Spawns the agent process and prepares it for the first turn.
-   * `resumeId` reuses a prior session when present; `onUpdate` receives every event as it arrives.
+   * `onUpdate` receives every event as it arrives.
    */
   startSession(input: {
     workspace: string;
     workerHost?: string | null | undefined;
     issue?: Issue;
     settings: Settings;
-    resumeId?: string | null;
     onUpdate?: (update: AgentUpdate) => void;
   }): Promise<AgentSession>;
   /** Sends one prompt to the session and resolves with the updates produced during that turn. */

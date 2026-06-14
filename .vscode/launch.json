@@ -34,7 +34,7 @@
         "--no-file-parallelism"
       ],
       "args": [
-        "test/workspace-prompt-resume.test.ts",
+        "test/workspace-prompt.test.ts",
         "-t",
         "refuses unsafe paths"
       ],

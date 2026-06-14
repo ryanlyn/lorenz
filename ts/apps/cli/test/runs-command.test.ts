@@ -173,7 +173,6 @@ test("runs command renders cost, retries, run detail, and JSON branches", async 
             tokens: { total_tokens: 42 },
             turn_count: 4,
             session_id: "thread-detail",
-            resume_id: "resume-detail",
             worker_host: "worker-1",
             workspace_path: "/tmp/work",
             last_event: "turn_completed",

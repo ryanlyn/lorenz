@@ -22,12 +22,6 @@ import {
   runHook,
 } from "@symphony/workspace";
 import { appendLogEvent } from "@symphony/log-file";
-import {
-  deleteResumeState,
-  readResumeState,
-  resumeStateMatches,
-  writeResumeState,
-} from "@symphony/resume-state";
 import { defaultToolRegistry, type ToolRegistry } from "@symphony/tool-sdk";
 import {
   createTrackerToolProvider,
@@ -81,9 +75,6 @@ function createRunAgentAttemptAdapters(): RunAgentAttemptAdapters {
   return {
     createWorkspaceForIssue,
     runHook,
-    readResumeState,
-    resumeStateMatches,
-    writeResumeState,
     executorFactory: async (settings) => {
       const kind = settings.agent.kind;
       const agent = settings.agents[kind];
@@ -103,6 +94,5 @@ export async function runAgentAttempt(input: RunAgentAttemptInput): Promise<RunR
 export const runtimeAdapters = {
   removeIssueWorkspaces,
   listIssueWorkspaces: listIssueWorkspaceIdentifiers,
-  deleteResumeState,
   appendLogEvent,
 };

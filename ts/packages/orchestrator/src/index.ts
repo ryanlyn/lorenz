@@ -167,7 +167,6 @@ export class Orchestrator {
       workerHost,
       workspacePath: null,
       sessionId: null,
-      resumeId: null,
       executorPid: null,
       turnCount: 0,
       startedAt: this.clock.now(),
@@ -221,7 +220,6 @@ export class Orchestrator {
     entry.lastAgentMessage = update.message;
     entry.lastAgentTimestamp = update.timestamp ?? this.clock.now();
     if (update.sessionId !== undefined) entry.sessionId = update.sessionId;
-    if (update.resumeId !== undefined) entry.resumeId = update.resumeId;
     if (update.executorPid !== undefined) entry.executorPid = update.executorPid;
     if (update.workspacePath !== undefined) entry.workspacePath = update.workspacePath;
     if (update.type === "turn_completed") entry.turnCount += 1;

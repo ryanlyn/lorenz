@@ -44,7 +44,6 @@ function fakeSession(overrides: Partial<AgentSession> = {}): AgentSession {
   return {
     agentKind: "codex",
     sessionId: "session-1",
-    resumeId: "resume-1",
     executorPid: "999",
     stop: async () => {},
     ...overrides,
@@ -55,9 +54,6 @@ function fakeAdapters(overrides: Partial<RunAgentAttemptAdapters> = {}): RunAgen
   return {
     createWorkspaceForIssue: async () => "/tmp/workspace/TEST-1",
     runHook: async () => {},
-    readResumeState: async () => ({ status: "missing" }),
-    resumeStateMatches: () => false,
-    writeResumeState: async () => {},
     executorFactory: () => ({
       kind: "codex",
       async startSession(input) {

@@ -13,8 +13,7 @@
     "@symphony/dispatch": "workspace:*",
     "@symphony/domain": "workspace:*",
     "@symphony/issue": "workspace:*",
-    "@symphony/prompt": "workspace:*",
-    "@symphony/resume-state": "workspace:*"
+    "@symphony/prompt": "workspace:*"
   },
   "devDependencies": {
     "@agentclientprotocol/sdk": "catalog:"

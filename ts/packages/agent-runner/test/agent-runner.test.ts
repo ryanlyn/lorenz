@@ -37,7 +37,6 @@ function fakeSession(overrides: Partial<AgentSession> = {}): AgentSession {
   return {
     agentKind: "codex",
     sessionId: "session-1",
-    resumeId: "resume-1",
     executorPid: "999",
     stop: async () => {},
     ...overrides,
@@ -74,9 +73,6 @@ function fakeAdapters(overrides: Partial<RunAgentAttemptAdapters> = {}): RunAgen
   return {
     createWorkspaceForIssue: async () => "/tmp/workspace/TEST-1",
     runHook: async () => {},
-    readResumeState: async () => ({ status: "missing" }),
-    resumeStateMatches: () => false,
-    writeResumeState: async () => {},
     executorFactory: () => fakeExecutor(),
     ...overrides,
   };
@@ -490,34 +486,6 @@ test("runAgentAttempt runs afterRun when beforeRun fails after workspace creatio
   assert.deepEqual(commands, ["setup", "cleanup"]);
 });
 
-test("runAgentAttempt runs afterRun when resume state read fails after workspace creation", async () => {
-  const issue = fakeIssue();
-  const settings = fakeSettings({
-    hooks: { ...defaultSettings().hooks, afterRun: "cleanup" },
-  });
-  const commands: string[] = [];
-
-  await assert.rejects(
-    () =>
-      runAgentAttempt({
-        issue,
-        workflow: { path: "/workflow.md", config: {}, promptTemplate: "Fix it", settings },
-        settings,
-        adapters: fakeAdapters({
-          runHook: async (command) => {
-            commands.push(command);
-          },
-          readResumeState: async () => {
-            throw new Error("resume read failed");
-          },
-        }),
-      }),
-    "resume read failed",
-  );
-
-  assert.deepEqual(commands, ["cleanup"]);
-});
-
 test("runAgentAttempt runs afterRun when startSession fails after workspace creation", async () => {
   const issue = fakeIssue();
   const settings = fakeSettings({
@@ -617,9 +585,6 @@ test("executorFor throws on unknown backend", async () => {
         adapters: {
           createWorkspaceForIssue: async () => "/tmp/workspace/TEST-1",
           runHook: async () => {},
-          readResumeState: async () => ({ status: "missing" }),
-          resumeStateMatches: () => false,
-          writeResumeState: async () => {},
           // No executorFactory provided - should throw adapter missing error
         },
       }),
@@ -659,190 +624,6 @@ test("createWorkspaceForIssue calls workspace adapter with correct issue/ensembl
   assert.equal(capturedOptions!.slotIndex, 2);
   assert.equal(capturedOptions!.ensembleSize, 3);
   assert.equal(capturedOptions!.workerHost, null);
-});
-
-test("createWorkspaceForIssue reuses existing workspace when resume state matches", async () => {
-  const issue = fakeIssue();
-  const settings = fakeSettings();
-  let createCalls = 0;
-
-  const result = await runAgentAttempt({
-    issue,
-    workflow: { path: "/workflow.md", config: {}, promptTemplate: "Fix it", settings },
-    settings,
-    adapters: fakeAdapters({
-      createWorkspaceForIssue: async () => {
-        createCalls += 1;
-        return "/tmp/workspace/TEST-1";
-      },
-      readResumeState: async () => ({
-        status: "ok",
-        state: {
-          agentKind: "codex",
-          resumeId: "existing-resume",
-          issueId: issue.id,
-          issueIdentifier: issue.identifier,
-          issueState: issue.state,
-          workspacePath: "/tmp/workspace/TEST-1",
-          workerHost: null,
-        },
-      }),
-      resumeStateMatches: () => true,
-      executorFactory: () => fakeExecutor({ session: { resumeId: "existing-resume" } }),
-    }),
-  });
-
-  // createWorkspaceForIssue is still called (it determines the path),
-  // but the resume state match means the executor receives the resumeId
-  assert.equal(createCalls, 1);
-  assert.equal(result.resumeId, "existing-resume");
-});
-
-// ---------------------------------------------------------------------------
-// persistResumeState
-// ---------------------------------------------------------------------------
-
-test("persistResumeState writes agentKind, resumeId, and backend fields", async () => {
-  const issue = fakeIssue();
-  const settings = fakeSettings();
-  let writtenState: Record<string, unknown> | null = null;
-
-  await runAgentAttempt({
-    issue,
-    workflow: { path: "/workflow.md", config: {}, promptTemplate: "Fix it", settings },
-    settings,
-    adapters: fakeAdapters({
-      executorFactory: () =>
-        fakeExecutor({ session: { resumeId: "persist-id", agentKind: "codex" } }),
-      writeResumeState: async (_workspace, state) => {
-        writtenState = state as unknown as Record<string, unknown>;
-      },
-    }),
-  });
-
-  assert.ok(writtenState);
-  assert.equal(writtenState!.agentKind, "codex");
-  assert.equal(writtenState!.resumeId, "persist-id");
-  assert.equal(writtenState!.issueId, issue.id);
-});
-
-// ---------------------------------------------------------------------------
-// readResumeState
-// ---------------------------------------------------------------------------
-
-test("readResumeState returns null when no state file exists", async () => {
-  const issue = fakeIssue();
-  const settings = fakeSettings();
-  let executorReceivedResumeId: string | null | undefined = "not-set";
-
-  await runAgentAttempt({
-    issue,
-    workflow: { path: "/workflow.md", config: {}, promptTemplate: "Fix it", settings },
-    settings,
-    adapters: fakeAdapters({
-      readResumeState: async () => ({ status: "missing" }),
-      executorFactory: () => ({
-        kind: "codex",
-        async startSession(input) {
-          executorReceivedResumeId = input.resumeId;
-          return fakeSession({ resumeId: null });
-        },
-        async runTurn() {
-          return [{ type: "turn_completed" }];
-        },
-      }),
-    }),
-  });
-
-  assert.equal(executorReceivedResumeId, null);
-});
-
-// ---------------------------------------------------------------------------
-// resumeStateMatches
-// ---------------------------------------------------------------------------
-
-test("resumeStateMatches returns true for matching agentKind + resumeId", async () => {
-  const issue = fakeIssue();
-  const settings = fakeSettings();
-  let executorReceivedResumeId: string | null | undefined = null;
-
-  await runAgentAttempt({
-    issue,
-    workflow: { path: "/workflow.md", config: {}, promptTemplate: "Fix it", settings },
-    settings,
-    adapters: fakeAdapters({
-      readResumeState: async () => ({
-        status: "ok",
-        state: {
-          agentKind: "codex",
-          resumeId: "matched-resume",
-          issueId: issue.id,
-          issueIdentifier: issue.identifier,
-          issueState: issue.state,
-          workspacePath: "/tmp/workspace/TEST-1",
-          workerHost: null,
-        },
-      }),
-      resumeStateMatches: (state, input) => {
-        return state.agentKind === input.agentKind && state.resumeId === "matched-resume";
-      },
-      executorFactory: () => ({
-        kind: "codex",
-        async startSession(input) {
-          executorReceivedResumeId = input.resumeId;
-          return fakeSession({ resumeId: "matched-resume" });
-        },
-        async runTurn() {
-          return [{ type: "turn_completed" }];
-        },
-      }),
-    }),
-  });
-
-  assert.equal(executorReceivedResumeId, "matched-resume");
-});
-
-test("resumeStateMatches returns false on agentKind mismatch", async () => {
-  const issue = fakeIssue();
-  const settings = fakeSettings();
-  let executorReceivedResumeId: string | null | undefined = "not-set";
-
-  await runAgentAttempt({
-    issue,
-    workflow: { path: "/workflow.md", config: {}, promptTemplate: "Fix it", settings },
-    settings,
-    adapters: fakeAdapters({
-      readResumeState: async () => ({
-        status: "ok",
-        state: {
-          agentKind: "claude",
-          resumeId: "old-resume",
-          issueId: issue.id,
-          issueIdentifier: issue.identifier,
-          issueState: issue.state,
-          workspacePath: "/tmp/workspace/TEST-1",
-          workerHost: null,
-        },
-      }),
-      resumeStateMatches: (state, input) => {
-        // Mismatched agentKind: state says "claude", input says "codex"
-        return state.agentKind === input.agentKind;
-      },
-      executorFactory: () => ({
-        kind: "codex",
-        async startSession(input) {
-          executorReceivedResumeId = input.resumeId;
-          return fakeSession({ resumeId: null });
-        },
-        async runTurn() {
-          return [{ type: "turn_completed" }];
-        },
-      }),
-    }),
-  });
-
-  // When resumeStateMatches returns false, executor should receive null resumeId
-  assert.equal(executorReceivedResumeId, null);
 });
 
 // ---------------------------------------------------------------------------

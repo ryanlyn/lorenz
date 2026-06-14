@@ -187,7 +187,7 @@ function formatRunningRow(
   const stage = runningStage(run);
   const ageTurn = `${formatMinutesSeconds(secondsBetween(now, run.startedAt))} / ${run.turnCount}`;
   const event = terminalEvent(run);
-  const session = shortSession(terminalCell(run.sessionId ?? run.resumeId ?? "n/a"));
+  const session = shortSession(terminalCell(run.sessionId ?? "n/a"));
   const color = rowColor(run.lastEvent);
   const ageWidth = ansi ? 12 : 13;
   const tokenWidth = ansi ? 10 : 9;

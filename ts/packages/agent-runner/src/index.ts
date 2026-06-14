@@ -3,10 +3,6 @@ import { issueIsActive } from "@symphony/dispatch";
 import { ensembleSize } from "@symphony/issue";
 import { buildPrompt, continuationPrompt } from "@symphony/prompt";
 import {
-  resumeStateMatches as canonicalResumeStateMatches,
-  type ResumeStateIdentity,
-} from "@symphony/resume-state/matcher";
-import {
   errorMessage,
   type AgentExecutor,
   type AgentSession,
@@ -16,16 +12,6 @@ import {
   type Settings,
   type WorkflowDefinition,
 } from "@symphony/domain";
-
-interface ResumeStateShape extends ResumeStateIdentity {
-  sessionId?: string | null | undefined;
-}
-
-type ResumeReadResult =
-  | { status: "missing" }
-  | { status: "unavailable" }
-  | { status: "error"; reason: string }
-  | { status: "ok"; state: ResumeStateShape };
 
 const workerSetupTimeoutGraceMs = 1_000;
 const workspaceCreateStage = "workspace.create_for_issue";
@@ -58,21 +44,6 @@ export interface RunAgentAttemptAdapters {
     options?: SetupStageSignalOptions,
     issue?: Issue,
   ): Promise<void>;
-  readResumeState(
-    workspace: string,
-    workerHost?: string | null,
-    timeoutMs?: number,
-  ): Promise<ResumeReadResult>;
-  resumeStateMatches(
-    state: ResumeStateShape,
-    input: { agentKind: string; issue: Issue; workspacePath: string; workerHost: string | null },
-  ): boolean;
-  writeResumeState(
-    workspace: string,
-    state: ResumeStateShape,
-    workerHost: string | null,
-    timeoutMs: number,
-  ): Promise<void>;
   executorFactory(settings: Settings): Promise<AgentExecutor> | AgentExecutor;
 }
 
@@ -80,7 +51,6 @@ export interface RunResult {
   workspace: string;
   turnCount: number;
   updates: AgentUpdate[];
-  resumeId?: string | null | undefined;
   agentKind: string;
   finalIssue?: Issue | undefined;
 }
@@ -131,8 +101,6 @@ class RunController {
       workspacePath: workspace,
       message: `workspace prepared at ${workspace}`,
     });
-    const resumeEnabled = settings.workspace.isolation !== "none";
-    let resumeId: string | null = null;
     const updates: AgentUpdate[] = [];
     let session: AgentSession | null = null;
 
@@ -163,45 +131,12 @@ class RunController {
         );
       }
 
-      // A shared workspace is reused by every issue, so its resume state cannot be tied to one run.
-      if (resumeEnabled) {
-        const resume = await readResumeState(
-          input.adapters,
-          workspace,
-          workerHost,
-          runtime.worker.sshTimeoutMs,
-        );
-        const resumeMatches =
-          resume.status === "ok" &&
-          resumeStateMatches(input.adapters, resume.state, {
-            agentKind: runtime.agent.kind,
-            issue,
-            workspacePath: workspace,
-            workerHost,
-          });
-        if (resume.status === "error") {
-          input.onUpdate?.({
-            type: "resume_state_warning",
-            workspacePath: workspace,
-            message: resume.reason,
-          });
-        } else if (resume.status === "ok" && !resumeMatches) {
-          input.onUpdate?.({
-            type: "resume_state_warning",
-            workspacePath: workspace,
-            message: "resume_state_identity_mismatch",
-          });
-        }
-        resumeId = resumeMatches ? resume.state.resumeId : null;
-      }
-
       const executor = await executorFor(input.adapters, runtime);
       session = await executor.startSession({
         workspace,
         workerHost,
         issue,
         settings: runtime,
-        resumeId,
         onUpdate: (update) => {
           updates.push(update);
           input.onUpdate?.(update);
@@ -230,9 +165,6 @@ class RunController {
           input.abortSignal,
         );
         turnCount += 1;
-        if (resumeEnabled) {
-          await persistResumeState(input.adapters, session, runtime, issue, workspace, workerHost);
-        }
 
         // Known seam leak: turn-continuation is decided from ACP event vocabulary here
         // instead of an executor-owned hook. Generalize onto the session contract (a
@@ -276,15 +208,11 @@ class RunController {
     if (runError) throw toError(runError);
     if (stopError) throw toError(stopError);
     if (!session) throw new Error("agent_runner_session_missing");
-    if (resumeEnabled) {
-      await persistResumeState(input.adapters, session, runtime, issue, workspace, workerHost);
-    }
 
     return {
       workspace,
       turnCount,
       updates,
-      resumeId: session.resumeId,
       agentKind: runtime.agent.kind,
       finalIssue: issue,
     };
@@ -458,33 +386,6 @@ function backendProfile(settings: Settings): string {
   return JSON.stringify(settings.agents[settings.agent.kind] ?? null);
 }
 
-async function persistResumeState(
-  adapters: Partial<RunAgentAttemptAdapters> | undefined,
-  session: AgentSession,
-  runtime: Settings,
-  issue: Issue,
-  workspace: string,
-  workerHost: string | null,
-): Promise<void> {
-  if (!session.resumeId) return;
-  await writeResumeState(
-    adapters,
-    workspace,
-    {
-      agentKind: runtime.agent.kind,
-      resumeId: session.resumeId,
-      sessionId: session.sessionId,
-      issueId: issue.id,
-      issueIdentifier: issue.identifier,
-      issueState: issue.state,
-      workspacePath: workspace,
-      workerHost,
-    },
-    workerHost,
-    runtime.worker.sshTimeoutMs,
-  );
-}
-
 async function createWorkspaceForIssue(
   adapters: Partial<RunAgentAttemptAdapters> | undefined,
   settings: Settings,
@@ -514,37 +415,4 @@ async function runHook(
   if (adapters?.runHook)
     return adapters.runHook(command, workspacePath, hooks, workerHost, options, issue);
   throw new Error("agent_runner_adapter_missing: runHook");
-}
-
-async function readResumeState(
-  adapters: Partial<RunAgentAttemptAdapters> | undefined,
-  workspacePath: string,
-  workerHost: string | null,
-  timeoutMs: number,
-): Promise<ResumeReadResult> {
-  if (adapters?.readResumeState)
-    return adapters.readResumeState(workspacePath, workerHost, timeoutMs);
-  throw new Error("agent_runner_adapter_missing: readResumeState");
-}
-
-function resumeStateMatches(
-  adapters: Partial<RunAgentAttemptAdapters> | undefined,
-  state: ResumeStateShape,
-  input: { agentKind: string; issue: Issue; workspacePath: string; workerHost: string | null },
-): boolean {
-  if (adapters?.resumeStateMatches) return adapters.resumeStateMatches(state, input);
-  return canonicalResumeStateMatches(state, input);
-}
-
-async function writeResumeState(
-  adapters: Partial<RunAgentAttemptAdapters> | undefined,
-  workspacePath: string,
-  state: ResumeStateShape,
-  workerHost: string | null,
-  timeoutMs: number,
-): Promise<void> {
-  if (adapters?.writeResumeState) {
-    return adapters.writeResumeState(workspacePath, state, workerHost, timeoutMs);
-  }
-  throw new Error("agent_runner_adapter_missing: writeResumeState");
 }

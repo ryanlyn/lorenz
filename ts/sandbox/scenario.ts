@@ -102,7 +102,6 @@ export async function runScenario(scenario: SandboxScenario): Promise<SandboxRes
     runner,
     clock: fakeClock,
     removeIssueWorkspaces: async () => {},
-    deleteResumeState: async () => {},
     appendLogEvent: async () => {},
     onAgentUpdate: () => {
       lastAgentActivityAt = Date.now();

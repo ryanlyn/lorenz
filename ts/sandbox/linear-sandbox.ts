@@ -208,7 +208,6 @@ function createSandboxExecutor(config: FakeRunnerConfig): AgentExecutor {
       const session: AgentSession = {
         agentKind: "codex",
         sessionId,
-        resumeId: input.resumeId ?? null,
         executorPid: null,
         async stop() {
           turnsBySession.delete(sessionId);
@@ -253,13 +252,6 @@ function createSandboxRunnerAdapters(executor: AgentExecutor): RunAgentAttemptAd
       return `/tmp/linear-sandbox-workspaces/${issue.identifier}-${workspaceCounter}`;
     },
     async runHook() {},
-    async readResumeState() {
-      return { status: "missing" as const };
-    },
-    resumeStateMatches() {
-      return false;
-    },
-    async writeResumeState() {},
     executorFactory: () => executor,
   };
 }
@@ -327,7 +319,6 @@ export async function runLinearScenario(
       clientFactory: () => ctx.client,
       runner,
       removeIssueWorkspaces: async () => {},
-      deleteResumeState: async () => {},
       appendLogEvent: async () => {},
     };
 

@@ -348,13 +348,11 @@ export function parseTraceLines(lines: string[]): DisplayEvent[] {
       case "rate_limit":
       case "workspace_prepared":
       case "session_started":
-      case "session_replay_suppressed":
       case "process_exit":
       case "stderr":
       case "fs_write":
       case "approval_auto_approved":
-      case "approval_required":
-      case "resume_state_warning": {
+      case "approval_required": {
         break;
       }
 
