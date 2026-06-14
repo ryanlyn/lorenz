@@ -11,6 +11,7 @@ export const RUNTIME_EVENT_TYPES = [
   "dry_run",
   "poll_error",
   "dispatch_skipped",
+  "run_reserving",
   "run_started",
   "dispatch_refresh_failed",
   "run_completed",
@@ -99,6 +100,21 @@ export interface RuntimeRetryEntry {
 
 export type RuntimeBlockedEntry = DispatchBlockEntry;
 
+/**
+ * One in-acquire (reserved) slot: the dispatch slot is held while the worker pool
+ * negotiates a concrete worker host, so it is deliberately HOST-LESS. Mirrors the
+ * orchestrator's reservation snapshot shape.
+ */
+export interface RuntimeReservingEntry {
+  issueId: string;
+  identifier: string;
+  slotIndex: number;
+  /** Prior run's concrete host preferred for sticky re-acquire; null on a first run. */
+  affinityHost: string | null;
+  retryAttempt: number | null;
+  reservedAtIso: string;
+}
+
 export interface RuntimeSnapshot {
   appStatus: RuntimeAppStatus;
   workflowPath: string;
@@ -111,6 +127,8 @@ export interface RuntimeSnapshot {
     lastError: string | null;
   };
   running: RuntimeRunningEntry[];
+  /** In-acquire (reserved) slots; additive, absent from snapshots predating the lane. */
+  reserving?: RuntimeReservingEntry[];
   retrying: RuntimeRetryEntry[];
   blocked: RuntimeBlockedEntry[];
   runHistory: RuntimeRunHistoryEntry[];

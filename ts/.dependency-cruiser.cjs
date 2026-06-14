@@ -7,7 +7,7 @@
  *   apps        apps/*                              - anything
  *   extension   extensions/*                        - SDKs + extension support + leaf
  *   engine      every other packages/*              - engine + SDKs + support + leaf
- *   sdk         packages/{tracker,tool,agent}-sdk   - leaf only
+ *   sdk         packages/{tracker,tool,agent,worker}-sdk - leaf only
  *   support     packages/issue                      - leaf only
  *   leaf        packages/domain                     - no workspace dependencies
  *
@@ -21,7 +21,7 @@
  */
 
 const LEAF = "packages/domain/";
-const SDK = "packages/(?:tracker-sdk|tool-sdk|agent-sdk)/";
+const SDK = "packages/(?:tracker-sdk|tool-sdk|agent-sdk|worker-sdk)/";
 const SUPPORT = "packages/issue/";
 
 module.exports = {
@@ -70,7 +70,7 @@ module.exports = {
         "Extension SDKs sit directly on the domain and may build on each other (tracker-sdk " +
         "uses tool-sdk's tool contract; no-circular keeps that a DAG). They stay engine-free.",
       severity: "error",
-      from: { path: "^(packages/(?:tracker-sdk|tool-sdk|agent-sdk))/" },
+      from: { path: "^(packages/(?:tracker-sdk|tool-sdk|agent-sdk|worker-sdk))/" },
       to: { path: "^(?:packages|extensions|apps)/", pathNot: ["^$1/", `^${LEAF}`, `^${SDK}`] },
     },
     {

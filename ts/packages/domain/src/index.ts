@@ -77,6 +77,13 @@ export type AgentKind = string;
  */
 export type TrackerKind = string;
 
+/**
+ * Selector for the worker driver backend; keys into the worker-driver registry the
+ * composition root assembles, so the set of supported kinds is open-ended
+ * (an unregistered kind fails loud at pool construction).
+ */
+export type WorkerDriverKind = string;
+
 export const ISSUE_STATE_TYPES = [
   "backlog",
   "unstarted",
@@ -234,10 +241,130 @@ export interface TrackerSettings {
 }
 
 /**
+ * Configuration for the embedded warm worker/executor worker pool. When present and `enabled`,
+ * the runtime leases an SSH-addressable worker per run (producing the run's `workerHost`) instead
+ * of selecting from a static {@link WorkerSettings.sshHosts} list. Absent or disabled means the
+ * pool is off and behavior is identical to the static-host path. Durations are milliseconds;
+ * spend caps are seconds (matching {@link UsageTotals.secondsRunning}).
+ */
+export interface WorkerPoolSettings {
+  /** Master switch. When false the pool is constructed-but-inert (or not constructed at all). */
+  enabled: boolean;
+  /** Worker driver backend that provisions, probes, and destroys workers. */
+  driver: WorkerDriverKind;
+  /** Floor on warm inventory the reaper keeps alive (never reaped below this count). */
+  min: number;
+  /** Ceiling on total workers the pool may provision at once. */
+  max: number;
+  /** Target number of pre-warmed idle workers the reaper tops up toward, within budget. */
+  warm: number;
+  /**
+   * Concurrent run slots a single machine may serve. Defaults to `1`. Values `> 1` are
+   * safe once each RunSlot owns its own MCP endpoint (token + local-server + tunnel); `> 1`
+   * is gated by a runtime capability + an explicit co-residence opt-in.
+   *
+   * This is the single canonical own field. {@link WorkerPoolSettings.maxInFlight} is a derived,
+   * read-only getter over this value (installed by {@link withDerivedMaxInFlight}) so the two
+   * can never drift: there is no second writable field a fixture could set independently.
+   */
+  slotsPerMachine: number;
+  /**
+   * @deprecated Read-only alias of {@link WorkerPoolSettings.slotsPerMachine}. Declared as a get
+   * accessor (not a writable field) and installed by {@link withDerivedMaxInFlight}, so it always
+   * mirrors `slotsPerMachine` and can never drift. Assigning it is a type error; write
+   * `slotsPerMachine` instead.
+   */
+  get maxInFlight(): number;
+  /** Hard lifetime (ms) of a worker before it is recycled, even while idle. */
+  ttlMs: number;
+  /** Idle window (ms) after which a warm worker above `min` is reaped. */
+  idleReapMs: number;
+  /** How long (ms) `acquire` blocks for capacity before returning `no_capacity:acquire_timeout`. */
+  acquireTimeoutMs: number;
+  /** Cadence (ms) of the single serial reaper tick. */
+  reapIntervalMs: number;
+  /** Heartbeat staleness threshold (ms) past which a lease whose run is gone is treated as orphaned. */
+  staleHeartbeatMs: number;
+  /** Deadline (ms) `drain` waits for in-flight leases before force-destroying all workers on shutdown. */
+  drainDeadlineMs: number;
+  /** Optional fairness cap on how many workers one issue's slots may hold, so an ensemble cannot monopolize the pool. */
+  maxWorkersPerIssue?: number | undefined;
+  /**
+   * Explicit operator opt-in for co-residence (multiple run slots sharing one machine). Required
+   * alongside the runtime per-run-endpoint capability before {@link WorkerPoolSettings.slotsPerMachine}
+   * may exceed `1`: a single poisoned worker fails every co-resident run on recycle, so widening the
+   * blast radius is an explicit operator tradeoff, not just a capability. Absent (the default) keeps
+   * the single-tenant layout. Enforced by the post-construction gate in the CLI, never here.
+   */
+  coResidence?: boolean | undefined;
+  /**
+   * Optional ceiling on concurrent per-run MCP tunnels (reverse `ssh -N` children / remote ports).
+   * When the pool fans out N run slots per machine the tunnel count grows from `1/host` to `N/host`;
+   * exhausting this ceiling surfaces as a typed `no_capacity` rather than an unhandled throw. Absent
+   * lets the worker-host-pool derive a default from its remote-port range.
+   */
+  maxConcurrentTunnels?: number | undefined;
+  /** Optional spend caps. Worker counts are absolute; worker-seconds are wall-clock seconds. */
+  spend?:
+    | {
+        /** Maximum workers that may exist concurrently (independent of `max`). */
+        maxConcurrentWorkers?: number;
+        /** Maximum cumulative worker-seconds for the process lifetime. */
+        maxWorkerSeconds?: number;
+        /** Maximum worker-seconds per UTC day; persisted across restart via a `spend.json` sidecar. */
+        dailyWorkerSeconds?: number;
+      }
+    | undefined;
+  /**
+   * Driver-specific options from the selected `workers.<name>` profile, passed through
+   * un-normalized without the profile's `driver`. Example: `workers.static.ssh_hosts` becomes
+   * `{ ssh_hosts: ["user@host:22"] }`.
+   */
+  driverOptions?: Record<string, unknown> | undefined;
+}
+
+/**
+ * Shape callers construct: all of {@link WorkerPoolSettings} except the derived `maxInFlight`
+ * getter, which {@link withDerivedMaxInFlight} installs. Use this for the literal you hand to
+ * {@link withDerivedMaxInFlight} so you set `slotsPerMachine` only and never the derived alias.
+ */
+export type WorkerPoolSettingsInput = Omit<WorkerPoolSettings, "maxInFlight">;
+
+/**
+ * Installs the derived, read-only `maxInFlight` getter over `slotsPerMachine` so the two can
+ * never drift. This is the single sanctioned constructor for {@link WorkerPoolSettings}: the input
+ * carries `slotsPerMachine` as its only own field, and the returned object exposes `maxInFlight`
+ * as an enumerable accessor that re-reads `slotsPerMachine` on every access (so it tracks any
+ * later mutation of `slotsPerMachine` and can never hold a stale, drifted copy).
+ *
+ * Mutates `input` in place (and returns it) rather than allocating a wrapper, so the object stays
+ * structurally a plain `WorkerPoolSettings` for callers that spread or snapshot it.
+ *
+ * Clone interaction (documented per task note): the accessor is defined `enumerable: true`, so a
+ * shallow spread (`{ ...workerPool }`, as used by `cloneSettings`/`cloneWorkerPool`) or
+ * `structuredClone` copies `maxInFlight` as a *plain data property* holding the current value -
+ * it does not copy the getter. That is fine and stays drift-proof: the clone path is expected to
+ * re-run `withDerivedMaxInFlight` on the cloned `slotsPerMachine` to re-install the accessor (the
+ * config clone helper owns that). The derived value is identical either way because cloning copies
+ * `slotsPerMachine` unchanged, so the byte-identity deep-equal-clone regression is unaffected.
+ */
+export function withDerivedMaxInFlight(input: WorkerPoolSettingsInput): WorkerPoolSettings {
+  return Object.defineProperty(input, "maxInFlight", {
+    get(this: WorkerPoolSettingsInput): number {
+      return this.slotsPerMachine;
+    },
+    enumerable: true,
+    configurable: true,
+  }) as WorkerPoolSettings;
+}
+
+/**
  * Where agent runs execute. With no hosts configured, runs happen on the local machine;
  * with hosts configured, work is sharded over SSH onto remote workers.
  */
 export interface WorkerSettings {
+  /** Optional named worker profile selected from top-level `workers.<name>`. */
+  kind?: string | undefined;
   /**
    * SSH destinations in standard OpenSSH form, e.g. `host`, `user@host`, `user@host:2222`,
    * or any `Host` alias resolved via `~/.ssh/config` (or `$SYMPHONY_SSH_CONFIG`).
@@ -251,6 +378,12 @@ export interface WorkerSettings {
    * instead of running locally. Undefined means the global {@link AgentSettings.maxConcurrentAgents} applies per host.
    */
   maxConcurrentAgentsPerHost?: number | undefined;
+  /**
+   * Optional embedded worker-pool configuration. Absent (the default) leaves the static-host path
+   * unchanged. When `enabled`, the pool leases SSH-addressable workers to produce each run's
+   * `workerHost`; it cannot be combined with a non-empty {@link WorkerSettings.sshHosts}.
+   */
+  workerPool?: WorkerPoolSettings | undefined;
 }
 
 /**
@@ -591,7 +724,7 @@ export interface RunningEntry {
   ensembleSize: number;
   /** Backend selected for this run (resolved against per-state setting overrides at claim time). */
   agentKind: AgentKind;
-  /** SSH host the agent runs on; `null` for local execution. */
+  /** SSH host the agent runs on; `null` for local execution. Always concrete or null. */
   workerHost?: string | null | undefined;
   /** Absolute workspace path on the worker; set once the executor emits `workspace_prepared`. */
   workspacePath?: string | null | undefined;

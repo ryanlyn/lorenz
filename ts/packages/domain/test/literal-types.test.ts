@@ -102,8 +102,8 @@ test("typed fixture values are accepted by their respective runtime arrays", () 
   // RUNTIME_EVENT_TYPES = AGENT_UPDATE_TYPES + runtime-only entries
   assert.equal(
     RUNTIME_EVENT_TYPES.length,
-    AGENT_UPDATE_TYPES.length + 18,
-    "RUNTIME_EVENT_TYPES should be AGENT_UPDATE_TYPES plus 18 runtime-only events",
+    AGENT_UPDATE_TYPES.length + 19,
+    "RUNTIME_EVENT_TYPES should be AGENT_UPDATE_TYPES plus 19 runtime-only events",
   );
 });
 

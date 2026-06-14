@@ -1316,3 +1316,451 @@ test("config validation rejects when multiple project configs are provided", () 
     /tracker.project_slug, tracker.project_slugs, and tracker.project_labels are mutually exclusive/,
   );
 });
+
+test("worker.worker_pool parses all keys with snake_case aliasing", () => {
+  const settings = parseConfig({
+    worker: {
+      kind: "static-prod",
+      worker_pool: {
+        enabled: true,
+        min: 1,
+        max: 4,
+        warm: 2,
+        max_in_flight: 3,
+        ttl_ms: 7_200_000,
+        idle_reap_ms: 120_000,
+        acquire_timeout_ms: 45_000,
+        reap_interval_ms: 10_000,
+        stale_heartbeat_ms: 900_000,
+        drain_deadline_ms: 20_000,
+        max_workers_per_issue: 2,
+        spend: {
+          max_concurrent_workers: 5,
+          max_worker_seconds: 7_200,
+          daily_worker_seconds: 86_400,
+        },
+      },
+    },
+    workers: {
+      "static-prod": {
+        driver: "static-ssh",
+        ssh_hosts: ["user@host-a:22", "user@host-b:22"],
+      },
+    },
+  });
+
+  const workerPool = settings.worker.workerPool;
+  assert.equal(settings.worker.kind, "static-prod");
+  assert.ok(workerPool);
+  assert.equal(workerPool?.enabled, true);
+  assert.equal(workerPool?.driver, "static-ssh");
+  assert.equal(workerPool?.min, 1);
+  assert.equal(workerPool?.max, 4);
+  assert.equal(workerPool?.warm, 2);
+  assert.equal(workerPool?.slotsPerMachine, 3);
+  assert.equal(workerPool?.maxInFlight, 3);
+  assert.equal(workerPool?.ttlMs, 7_200_000);
+  assert.equal(workerPool?.idleReapMs, 120_000);
+  assert.equal(workerPool?.acquireTimeoutMs, 45_000);
+  assert.equal(workerPool?.reapIntervalMs, 10_000);
+  assert.equal(workerPool?.staleHeartbeatMs, 900_000);
+  assert.equal(workerPool?.drainDeadlineMs, 20_000);
+  assert.equal(workerPool?.maxWorkersPerIssue, 2);
+  assert.deepEqual(workerPool?.spend, {
+    maxConcurrentWorkers: 5,
+    maxWorkerSeconds: 7_200,
+    dailyWorkerSeconds: 86_400,
+  });
+  assert.deepEqual(workerPool?.driverOptions, {
+    ssh_hosts: ["user@host-a:22", "user@host-b:22"],
+  });
+});
+
+test("worker.worker_pool parses co_residence and max_concurrent_tunnels (snake->camel)", () => {
+  const settings = parseConfig({
+    worker: {
+      worker_pool: {
+        enabled: true,
+        driver: "fake",
+        max_in_flight: 2,
+        co_residence: true,
+        max_concurrent_tunnels: 8,
+      },
+    },
+  });
+
+  const workerPool = settings.worker.workerPool;
+  assert.ok(workerPool);
+  assert.equal(workerPool?.coResidence, true);
+  assert.equal(workerPool?.maxConcurrentTunnels, 8);
+
+  // cloneSettings (via the issue-state clone) copies both new optionals.
+  const clone = settingsForIssueState(settings, "Todo").worker.workerPool;
+  assert.ok(clone);
+  assert.equal(clone?.coResidence, true);
+  assert.equal(clone?.maxConcurrentTunnels, 8);
+});
+
+test("worker.worker_pool co_residence and max_concurrent_tunnels default absent", () => {
+  const settings = parseConfig({
+    worker: { worker_pool: { enabled: true, driver: "fake" } },
+  });
+
+  const workerPool = settings.worker.workerPool;
+  assert.ok(workerPool);
+  assert.equal(workerPool?.coResidence, undefined);
+  assert.equal(workerPool?.maxConcurrentTunnels, undefined);
+  assert.equal("coResidence" in workerPool!, false);
+  assert.equal("maxConcurrentTunnels" in workerPool!, false);
+});
+
+test("worker.worker_pool rejects non-positive max_concurrent_tunnels", () => {
+  assert.throws(
+    () => parseConfig({ worker: { worker_pool: { max_concurrent_tunnels: 0 } } }),
+    /worker\.worker_pool\.max_concurrent_tunnels must be a positive integer/,
+  );
+});
+
+test("worker.worker_pool applies defaults when keys omitted", () => {
+  const settings = parseConfig({
+    worker: {
+      worker_pool: { enabled: true, driver: "fake" },
+    },
+  });
+
+  const workerPool = settings.worker.workerPool;
+  assert.ok(workerPool);
+  assert.equal(workerPool?.enabled, true);
+  assert.equal(workerPool?.driver, "fake");
+  assert.equal(workerPool?.min, 0);
+  assert.equal(workerPool?.max, 1);
+  assert.equal(workerPool?.warm, 1);
+  assert.equal(workerPool?.slotsPerMachine, 1);
+  assert.equal(workerPool?.maxInFlight, 1);
+  assert.equal(workerPool?.ttlMs, 3_600_000);
+  assert.equal(workerPool?.idleReapMs, 300_000);
+  assert.equal(workerPool?.acquireTimeoutMs, 30_000);
+  assert.equal(workerPool?.reapIntervalMs, 15_000);
+  assert.equal(workerPool?.staleHeartbeatMs, 600_000);
+  assert.equal(workerPool?.drainDeadlineMs, 30_000);
+  assert.equal(workerPool?.maxWorkersPerIssue, undefined);
+  assert.equal(workerPool?.spend, undefined);
+  assert.equal(workerPool?.driverOptions, undefined);
+});
+
+test("worker.worker_pool max_in_flight parses into slotsPerMachine with maxInFlight mirroring it", () => {
+  const settings = parseConfig({
+    worker: {
+      worker_pool: { enabled: true, driver: "fake", max_in_flight: 3 },
+    },
+  });
+
+  const workerPool = settings.worker.workerPool;
+  assert.ok(workerPool);
+  assert.equal(workerPool?.slotsPerMachine, 3);
+  assert.equal(workerPool?.maxInFlight, 3);
+  assert.equal(workerPool?.maxInFlight, workerPool?.slotsPerMachine);
+
+  const clone = settingsForIssueState(settings, "Todo").worker.workerPool;
+  assert.ok(clone);
+  assert.equal(clone?.slotsPerMachine, 3);
+  assert.equal(clone?.maxInFlight, 3);
+  assert.equal(clone?.maxInFlight, clone?.slotsPerMachine);
+});
+
+test("absent worker_pool leaves settings.worker.workerPool undefined", () => {
+  const settings = parseConfig({ worker: { ssh_timeout_ms: 1_000 } });
+  assert.equal(settings.worker.workerPool, undefined);
+  assert.equal("workerPool" in settings.worker, false);
+});
+
+test("REGRESSION: absent worker_pool Settings clone deep-equals the issue-state clone", () => {
+  const settings = parseConfig({});
+  const clone = settingsForIssueState(settings, "Todo");
+  assert.deepEqual(clone, settings);
+  assert.equal("workerPool" in clone.worker, false);
+});
+
+test("worker.worker_pool driver is an open string resolved by the registry", () => {
+  // Unknown kinds parse leniently (mirroring tracker.kind): whether the kind is
+  // supported is the worker-driver registry's call at pool construction, which
+  // fails loud with worker_pool_driver_unavailable and the registered set.
+  const settings = parseConfig({ worker: { worker_pool: { driver: "acme-cloud" } } });
+  assert.equal(settings.worker.workerPool?.driver, "acme-cloud");
+
+  for (const kind of ["fake", "static-ssh", "docker", "fly", "e2b", "modal"]) {
+    const parsed = parseConfig({ worker: { worker_pool: { driver: kind } } });
+    assert.equal(parsed.worker.workerPool?.driver, kind);
+  }
+
+  // A blank driver is still a schema error.
+  assert.throws(() => parseConfig({ worker: { worker_pool: { driver: "" } } }));
+});
+
+test("workers.<name> options are accepted for open driver names", () => {
+  const settings = parseConfig({
+    worker: {
+      kind: "antarctica",
+      worker_pool: { enabled: true },
+    },
+    workers: {
+      antarctica: {
+        driver: "acme-cloud",
+        region: "antarctica-1",
+        image_id: "img-123",
+      },
+    },
+  });
+
+  assert.deepEqual(settings.worker.workerPool?.driverOptions, {
+    region: "antarctica-1",
+    image_id: "img-123",
+  });
+});
+
+test("worker.kind without an explicit worker_pool creates an enabled default worker pool", () => {
+  const settings = parseConfig({
+    worker: { kind: "docker-prod" },
+    workers: { "docker-prod": { driver: "docker", image: "symphony-worker:latest" } },
+  });
+
+  assert.equal(settings.worker.kind, "docker-prod");
+  assert.equal(settings.worker.workerPool?.enabled, true);
+  assert.equal(settings.worker.workerPool?.driver, "docker");
+  assert.deepEqual(settings.worker.workerPool?.driverOptions, {
+    image: "symphony-worker:latest",
+  });
+});
+
+test("worker.worker_pool rejects max < min", () => {
+  assert.throws(
+    () => parseConfig({ worker: { worker_pool: { min: 3, max: 2 } } }),
+    /worker\.worker_pool\.max must be >= worker\.worker_pool\.min/,
+  );
+});
+
+test("worker.worker_pool rejects warm > max", () => {
+  assert.throws(
+    () => parseConfig({ worker: { worker_pool: { max: 2, warm: 3 } } }),
+    /worker\.worker_pool\.warm must be <= worker\.worker_pool\.max/,
+  );
+});
+
+test("worker.worker_pool rejects non-positive integers where positive is required", () => {
+  assert.throws(
+    () => parseConfig({ worker: { worker_pool: { max: 0 } } }),
+    /worker\.worker_pool\.max must be a positive integer/,
+  );
+  assert.throws(
+    () => parseConfig({ worker: { worker_pool: { max_in_flight: -1 } } }),
+    /worker\.worker_pool\.max_in_flight must be a positive integer/,
+  );
+  assert.throws(
+    () => parseConfig({ worker: { worker_pool: { drain_deadline_ms: 0 } } }),
+    /worker\.worker_pool\.drain_deadline_ms must be a positive integer/,
+  );
+});
+
+test("worker.worker_pool enabled cannot be combined with non-empty ssh_hosts", () => {
+  assert.throws(
+    () =>
+      parseConfig({
+        worker: {
+          ssh_hosts: ["user@host:22"],
+          worker_pool: { enabled: true, driver: "fake" },
+        },
+      }),
+    /worker\.worker_pool\.enabled cannot be combined with worker\.ssh_hosts/,
+  );
+
+  const ok = parseConfig({
+    worker: {
+      ssh_hosts: ["user@host:22"],
+      worker_pool: { enabled: false, driver: "fake" },
+    },
+  });
+  assert.deepEqual(ok.worker.sshHosts, ["user@host:22"]);
+  assert.equal(ok.worker.workerPool?.enabled, false);
+});
+
+test("worker.kind cannot be combined with non-empty ssh_hosts", () => {
+  assert.throws(
+    () =>
+      parseConfig({
+        worker: {
+          kind: "static-prod",
+          ssh_hosts: ["user@host:22"],
+        },
+        workers: { "static-prod": { driver: "static-ssh", ssh_hosts: ["user@worker:22"] } },
+      }),
+    /worker\.kind cannot be combined with worker\.ssh_hosts/,
+  );
+});
+
+test("static-ssh ssh_hosts validation belongs to the driver, not the parser", () => {
+  // The static-ssh driver validates its own workers.<name> profile at pool construction
+  // (the same fail-loud startup point as an unregistered kind); config parsing
+  // passes the options through untouched, including camelCase spellings.
+  const parsed = parseConfig({
+    worker: { kind: "static-prod", worker_pool: { enabled: true } },
+    workers: { "static-prod": { driver: "static-ssh" } },
+  });
+  assert.equal(parsed.worker.workerPool?.driverOptions, undefined);
+
+  const camel = parseConfig({
+    worker: { kind: "static-prod", worker_pool: { enabled: true } },
+    workers: {
+      "static-prod": { driver: "static-ssh", sshHosts: ["user@host:22"] },
+    },
+  });
+  assert.deepEqual(camel.worker.workerPool?.driverOptions, {
+    sshHosts: ["user@host:22"],
+  });
+});
+
+test("unknown key under worker_pool throws (strict schema)", () => {
+  assert.throws(
+    () => parseConfig({ worker: { worker_pool: { driver: "fake", bogus: 1 } } }),
+    /unsupported keys: bogus/,
+  );
+});
+
+test("worker.worker_pool.driver_options is not supported", () => {
+  assert.throws(
+    () =>
+      parseConfig({
+        worker: {
+          worker_pool: {
+            driver: "static-ssh",
+            driver_options: { ssh_hosts: ["user@host:22"] },
+          },
+        },
+      }),
+    /worker\.worker_pool contains unsupported keys: driver_options/,
+  );
+});
+
+test("driver options are not supported under worker", () => {
+  assert.throws(
+    () =>
+      parseConfig({
+        worker: {
+          worker_pool: { driver: "static-ssh" },
+          "static-ssh": { ssh_hosts: ["user@host:22"] },
+        },
+      }),
+    /worker contains unsupported keys: static-ssh/,
+  );
+});
+
+test("worker.kind must select an existing workers entry", () => {
+  assert.throws(
+    () => parseConfig({ worker: { kind: "missing" } }),
+    /worker\.kind "missing" does not match any workers entry/,
+  );
+});
+
+test("worker.kind cannot be combined with worker.worker_pool.driver", () => {
+  assert.throws(
+    () =>
+      parseConfig({
+        worker: {
+          kind: "docker-prod",
+          worker_pool: { driver: "docker" },
+        },
+        workers: { "docker-prod": { driver: "docker", image: "symphony-worker:latest" } },
+      }),
+    /worker\.kind cannot be combined with worker\.worker_pool\.driver/,
+  );
+});
+
+test("cloneSettings deep-copies driverOptions nested ssh_hosts array", () => {
+  const settings = parseConfig({
+    worker: {
+      kind: "static-prod",
+      worker_pool: {
+        enabled: true,
+      },
+    },
+    workers: {
+      "static-prod": {
+        driver: "static-ssh",
+        ssh_hosts: ["user@host-a:22", "user@host-b:22"],
+      },
+    },
+  });
+
+  const clone = settingsForIssueState(settings, "Todo");
+  const cloneHosts = clone.worker.workerPool?.driverOptions?.ssh_hosts as string[];
+  cloneHosts[0] = "mutated@host:22";
+
+  const originalHosts = settings.worker.workerPool?.driverOptions?.ssh_hosts as string[];
+  assert.equal(originalHosts[0], "user@host-a:22");
+  assert.notEqual(clone.worker.workerPool, settings.worker.workerPool);
+  assert.notEqual(
+    clone.worker.workerPool?.driverOptions,
+    settings.worker.workerPool?.driverOptions,
+  );
+});
+
+test("cloneSettings deep-copies spend so mutating the clone leaves the original intact", () => {
+  const settings = parseConfig({
+    worker: {
+      worker_pool: {
+        enabled: true,
+        driver: "fake",
+        spend: { max_worker_seconds: 7_200 },
+      },
+    },
+  });
+
+  const clone = settingsForIssueState(settings, "Todo");
+  assert.notEqual(clone.worker.workerPool?.spend, settings.worker.workerPool?.spend);
+  if (clone.worker.workerPool?.spend) clone.worker.workerPool.spend.maxWorkerSeconds = 1;
+  assert.equal(settings.worker.workerPool?.spend?.maxWorkerSeconds, 7_200);
+});
+
+test("worker.worker_pool spend.* parse in seconds while ttl/idle/drain stay in ms", () => {
+  const settings = parseConfig({
+    worker: {
+      worker_pool: {
+        enabled: true,
+        driver: "fake",
+        ttl_ms: 1_800_000,
+        idle_reap_ms: 60_000,
+        drain_deadline_ms: 15_000,
+        spend: { max_worker_seconds: 600, daily_worker_seconds: 3_600 },
+      },
+    },
+  });
+
+  const workerPool = settings.worker.workerPool;
+  assert.equal(workerPool?.ttlMs, 1_800_000);
+  assert.equal(workerPool?.idleReapMs, 60_000);
+  assert.equal(workerPool?.drainDeadlineMs, 15_000);
+  assert.equal(workerPool?.spend?.maxWorkerSeconds, 600);
+  assert.equal(workerPool?.spend?.dailyWorkerSeconds, 3_600);
+});
+
+test("workers.<name> option keys pass through un-normalized", () => {
+  const settings = parseConfig({
+    worker: {
+      kind: "static-prod",
+      worker_pool: { enabled: true },
+    },
+    workers: {
+      "static-prod": {
+        driver: "static-ssh",
+        ssh_hosts: ["user@host:22"],
+        max_in_flight: 9,
+        nested: { deep_key: "value" },
+      },
+    },
+  });
+
+  assert.deepEqual(settings.worker.workerPool?.driverOptions, {
+    ssh_hosts: ["user@host:22"],
+    max_in_flight: 9,
+    nested: { deep_key: "value" },
+  });
+});

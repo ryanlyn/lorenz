@@ -18,6 +18,24 @@ const workerAliases = {
   ssh_hosts: "sshHosts",
   ssh_timeout_ms: "sshTimeoutMs",
   max_concurrent_agents_per_host: "maxConcurrentAgentsPerHost",
+  worker_pool: "workerPool",
+};
+const workerPoolAliases = {
+  max_in_flight: "maxInFlight",
+  ttl_ms: "ttlMs",
+  idle_reap_ms: "idleReapMs",
+  acquire_timeout_ms: "acquireTimeoutMs",
+  reap_interval_ms: "reapIntervalMs",
+  stale_heartbeat_ms: "staleHeartbeatMs",
+  drain_deadline_ms: "drainDeadlineMs",
+  max_workers_per_issue: "maxWorkersPerIssue",
+  co_residence: "coResidence",
+  max_concurrent_tunnels: "maxConcurrentTunnels",
+};
+const workerPoolSpendAliases = {
+  max_concurrent_workers: "maxConcurrentWorkers",
+  max_worker_seconds: "maxWorkerSeconds",
+  daily_worker_seconds: "dailyWorkerSeconds",
 };
 export const hooksAliases = {
   after_create: "afterCreate",
@@ -80,6 +98,12 @@ export function normalizeWorkflowConfig(value: unknown): unknown {
 
   if (isPlainRecord(normalized.tracker)) {
     normalizeNested(normalized.tracker, "dispatch", dispatchAliases);
+  }
+  if (isPlainRecord(normalized.worker)) {
+    normalizeNested(normalized.worker, "workerPool", workerPoolAliases);
+    if (isPlainRecord(normalized.worker.workerPool)) {
+      normalizeNested(normalized.worker.workerPool, "spend", workerPoolSpendAliases);
+    }
   }
   if (isPlainRecord(normalized.trackers)) {
     normalized.trackers = Object.fromEntries(

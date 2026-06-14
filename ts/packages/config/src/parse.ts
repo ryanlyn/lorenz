@@ -10,8 +10,16 @@ import type {
   PartialRuntimeSettings,
   Settings,
   TrackerSettings,
+  WorkerPoolSettings,
+  WorkerPoolSettingsInput,
+  WorkerSettings,
 } from "@symphony/domain";
-import { errorMessage, isRecord as isPlainRecord, normalizeHttpBindHost } from "@symphony/domain";
+import {
+  errorMessage,
+  isRecord as isPlainRecord,
+  normalizeHttpBindHost,
+  withDerivedMaxInFlight,
+} from "@symphony/domain";
 import {
   defaultAgentExecutorRegistry,
   type AgentExecutorProvider,
@@ -34,6 +42,7 @@ import {
   type AgentRecordOverrideRaw,
   type AgentRecordRaw,
   type AgentsRaw,
+  type WorkerPoolRaw,
   type ClaudeRaw,
   type CodexRaw,
   type DispatchRaw,
@@ -45,6 +54,7 @@ import {
   type ToolsRaw,
   type TrackerRaw,
   type WorkflowConfigRaw,
+  type WorkersRaw,
 } from "./schemas.js";
 
 export function parseConfig(
@@ -82,10 +92,19 @@ export function parseConfig(
   settings.workspace.isolation = workspaceRaw.isolation ?? settings.workspace.isolation;
 
   const workerRaw = parsed.worker ?? {};
+  if (workerRaw.kind !== undefined) settings.worker.kind = workerRaw.kind;
   settings.worker.sshHosts = workerRaw.sshHosts ?? settings.worker.sshHosts;
   settings.worker.sshTimeoutMs = workerRaw.sshTimeoutMs ?? settings.worker.sshTimeoutMs;
   if (workerRaw.maxConcurrentAgentsPerHost !== undefined) {
     settings.worker.maxConcurrentAgentsPerHost = workerRaw.maxConcurrentAgentsPerHost;
+  }
+  if (workerRaw.kind !== undefined && settings.worker.sshHosts.length > 0) {
+    throw new Error("worker.kind cannot be combined with worker.ssh_hosts");
+  }
+  const workerPool = parseWorkerPool(workerRaw.workerPool, workerRaw, parsed.workers ?? {});
+  if (workerPool) settings.worker.workerPool = workerPool;
+  if (workerPool?.enabled && settings.worker.sshHosts.length > 0) {
+    throw new Error("worker.worker_pool.enabled cannot be combined with worker.ssh_hosts");
   }
 
   settings.hooks = parseHooks(settings.hooks, parsed.hooks ?? {});
@@ -385,6 +404,98 @@ function assertNoWorkspaceHooks(hooks: HooksSettings): void {
   throw new Error(
     `workspace.isolation = "none" does not support hooks; remove ${configured.join(", ")}`,
   );
+}
+
+function parseWorkerPool(
+  raw: WorkerPoolRaw | null | undefined,
+  workerRaw: NonNullable<WorkflowConfigRaw["worker"]>,
+  workersRaw: WorkersRaw,
+): WorkerPoolSettings | undefined {
+  const selectedWorker = selectedWorkerProfile(workerRaw.kind, workersRaw);
+  if ((raw === undefined || raw === null) && selectedWorker === undefined) return undefined;
+  if (selectedWorker !== undefined && raw?.driver !== undefined) {
+    throw new Error("worker.kind cannot be combined with worker.worker_pool.driver");
+  }
+
+  const enabled = raw?.enabled ?? selectedWorker !== undefined;
+  const driver = selectedWorker?.driver ?? raw?.driver ?? "fake";
+  const min = raw?.min ?? 0;
+  const max = raw?.max ?? 1;
+  const warm = raw?.warm ?? 1;
+
+  if (max < min) {
+    throw new Error("worker.worker_pool.max must be >= worker.worker_pool.min");
+  }
+  if (warm > max) {
+    throw new Error("worker.worker_pool.warm must be <= worker.worker_pool.max");
+  }
+
+  // `maxInFlight` is a derived getter over `slotsPerMachine` (domain `withDerivedMaxInFlight`),
+  // so the constructed object carries exactly ONE own field (`slotsPerMachine`). The config key
+  // `worker.worker_pool.max_in_flight` is unchanged; it parses into `slotsPerMachine`.
+  const input: WorkerPoolSettingsInput = {
+    enabled,
+    driver,
+    min,
+    max,
+    warm,
+    slotsPerMachine: raw?.maxInFlight ?? 1,
+    ttlMs: raw?.ttlMs ?? 3_600_000,
+    idleReapMs: raw?.idleReapMs ?? 300_000,
+    acquireTimeoutMs: raw?.acquireTimeoutMs ?? 30_000,
+    reapIntervalMs: raw?.reapIntervalMs ?? 15_000,
+    staleHeartbeatMs: raw?.staleHeartbeatMs ?? 600_000,
+    drainDeadlineMs: raw?.drainDeadlineMs ?? 30_000,
+  };
+
+  const settings = withDerivedMaxInFlight(input);
+
+  // Co-residence opt-in, tunnel ceiling, and fairness cap stay absent unless explicitly set, so
+  // a default config's settings object keeps exactly the same own fields (the absent-worker_pool
+  // deep-equal-clone holds).
+  if (raw?.maxWorkersPerIssue !== undefined) settings.maxWorkersPerIssue = raw.maxWorkersPerIssue;
+  if (raw?.coResidence !== undefined) settings.coResidence = raw.coResidence;
+  if (raw?.maxConcurrentTunnels !== undefined)
+    settings.maxConcurrentTunnels = raw.maxConcurrentTunnels;
+
+  const spend = parseWorkerPoolSpend(raw?.spend);
+  if (spend) settings.spend = spend;
+  const driverOptions =
+    selectedWorker === undefined ? undefined : selectedWorkerDriverOptions(selectedWorker);
+  if (driverOptions !== undefined) settings.driverOptions = driverOptions;
+
+  // Driver-specific option validation (e.g. static-ssh's required ssh_hosts)
+  // lives with the registered driver and runs at pool construction - the same
+  // fail-loud startup point as an unregistered kind.
+  return settings;
+}
+
+function selectedWorkerProfile(
+  workerKind: string | undefined,
+  workersRaw: WorkersRaw,
+): WorkersRaw[string] | undefined {
+  if (workerKind === undefined) return undefined;
+  const selected = workersRaw[workerKind];
+  if (selected === undefined) {
+    throw new Error(`worker.kind "${workerKind}" does not match any workers entry`);
+  }
+  return selected;
+}
+
+function selectedWorkerDriverOptions(
+  worker: WorkersRaw[string],
+): Record<string, unknown> | undefined {
+  const { driver: _driver, ...driverOptions } = worker;
+  return Object.keys(driverOptions).length === 0 ? undefined : driverOptions;
+}
+
+function parseWorkerPoolSpend(raw: WorkerPoolRaw["spend"]): WorkerPoolSettings["spend"] {
+  if (raw === undefined) return undefined;
+  const spend: NonNullable<WorkerPoolSettings["spend"]> = {};
+  if (raw.maxConcurrentWorkers !== undefined) spend.maxConcurrentWorkers = raw.maxConcurrentWorkers;
+  if (raw.maxWorkerSeconds !== undefined) spend.maxWorkerSeconds = raw.maxWorkerSeconds;
+  if (raw.dailyWorkerSeconds !== undefined) spend.dailyWorkerSeconds = raw.dailyWorkerSeconds;
+  return spend;
 }
 
 function parseHooks(defaults: HooksSettings, hooksRaw: HooksRaw): HooksSettings {
@@ -819,8 +930,8 @@ function cloneSettings(settings: Settings): Settings {
     ...settings,
     tracker: cloneTracker(settings.tracker),
     polling: { ...settings.polling },
-    worker: { ...settings.worker, sshHosts: [...settings.worker.sshHosts] },
     workspace: { ...settings.workspace },
+    worker: cloneWorkerSettings(settings.worker),
     hooks: { ...settings.hooks },
     agent: { ...settings.agent, skills: [...settings.agent.skills] },
     agents: cloneAgentRecords(settings.agents),
@@ -832,6 +943,31 @@ function cloneSettings(settings: Settings): Settings {
     logging: { ...settings.logging },
     statusOverrides: new Map(settings.statusOverrides),
   };
+}
+
+function cloneWorkerSettings(worker: WorkerSettings): WorkerSettings {
+  const cloned: WorkerSettings = { ...worker, sshHosts: [...worker.sshHosts] };
+  if (worker.workerPool === undefined) {
+    delete cloned.workerPool;
+  } else {
+    cloned.workerPool = cloneWorkerPool(worker.workerPool);
+  }
+  return cloned;
+}
+
+function cloneWorkerPool(workerPool: WorkerPoolSettings): WorkerPoolSettings {
+  // A shallow spread copies the enumerable `maxInFlight` getter as a plain data property; strip it
+  // and re-install the derived accessor over the cloned `slotsPerMachine` so the clone stays
+  // drift-proof (single own field) exactly like the parse path.
+  const { maxInFlight: _maxInFlight, ...rest } = workerPool;
+  const input: WorkerPoolSettingsInput = { ...rest };
+  if (workerPool.spend !== undefined) input.spend = { ...workerPool.spend };
+  if (workerPool.driverOptions !== undefined) {
+    // structuredClone guarantees nested arrays/objects (e.g. ssh_hosts) are copied,
+    // so a per-issue settings clone never aliases the source driverOptions.
+    input.driverOptions = structuredClone(workerPool.driverOptions);
+  }
+  return withDerivedMaxInFlight(input);
 }
 
 /**

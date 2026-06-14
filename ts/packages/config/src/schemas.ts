@@ -81,6 +81,14 @@ const coercedBoolean = z.union([
   z.literal("false").transform(() => false),
 ]);
 
+const coercedPositiveCount = numericInput
+  .refine((n) => Number.isInteger(n) && n >= 1, { message: "must be a positive integer" })
+  .describe("positive");
+
+const coercedNonNegativeCount = numericInput
+  .refine((n) => Number.isInteger(n) && n >= 0, { message: "must be a non-negative integer" })
+  .describe("non-negative");
+
 const optionalHookScript = z.string().nullable().optional();
 const skillSourceListSchema = z.array(z.string().min(1));
 
@@ -136,13 +144,52 @@ const workspaceRawSchema = z
     isolation: z.enum(["per-agent", "none"]).optional(),
   })
   .strict();
+const workerPoolSpendRawSchema = z
+  .object({
+    maxConcurrentWorkers: coercedPositiveCount.optional(),
+    maxWorkerSeconds: coercedPositiveCount.optional(),
+    dailyWorkerSeconds: coercedPositiveCount.optional(),
+  })
+  .strict();
+const workerPoolRawSchema = z
+  .object({
+    enabled: coercedBoolean.optional(),
+    // The driver selector is open-ended; whether the kind is supported is decided by the
+    // worker-driver registry at pool construction, not by the schema.
+    driver: z.string().min(1).optional(),
+    min: coercedNonNegativeCount.optional(),
+    max: coercedPositiveCount.optional(),
+    warm: coercedNonNegativeCount.optional(),
+    maxInFlight: coercedPositiveCount.optional(),
+    ttlMs: coercedTimeoutMs.optional(),
+    idleReapMs: coercedTimeoutMs.optional(),
+    acquireTimeoutMs: coercedTimeoutMs.optional(),
+    reapIntervalMs: coercedTimeoutMs.optional(),
+    staleHeartbeatMs: coercedTimeoutMs.optional(),
+    drainDeadlineMs: coercedTimeoutMs.optional(),
+    maxWorkersPerIssue: coercedPositiveCount.optional(),
+    coResidence: coercedBoolean.optional(),
+    maxConcurrentTunnels: coercedPositiveCount.optional(),
+    spend: workerPoolSpendRawSchema.optional(),
+  })
+  .strict();
 const workerRawSchema = z
   .object({
+    kind: z.string().min(1).optional(),
     sshHosts: z.array(z.string()).optional(),
     sshTimeoutMs: coercedTimeoutMs.optional(),
     maxConcurrentAgentsPerHost: coercedConcurrency.optional(),
+    workerPool: workerPoolRawSchema.nullish(),
   })
   .strict();
+const workerProfileRawSchema = z
+  .object({
+    // The driver selector is open-ended; whether the kind is supported is decided by the
+    // worker-driver registry at pool construction, not by the schema.
+    driver: z.string().min(1),
+  })
+  .catchall(z.unknown());
+const workersRawSchema = z.record(z.string(), workerProfileRawSchema);
 const hooksRawSchema = z
   .object({
     afterCreate: optionalHookScript,
@@ -220,6 +267,7 @@ export const workflowConfigSchema = z.preprocess(
       polling: pollingRawSchema.optional(),
       workspace: workspaceRawSchema.optional(),
       worker: workerRawSchema.optional(),
+      workers: workersRawSchema.optional(),
       hooks: hooksRawSchema.optional(),
       agent: agentRawSchema.optional(),
       agents: agentsRawSchema.optional(),
@@ -236,6 +284,7 @@ export const workflowConfigSchema = z.preprocess(
 );
 
 export type WorkflowConfigRaw = z.infer<typeof workflowConfigSchema>;
+export type WorkersRaw = z.infer<typeof workersRawSchema>;
 export type TrackerRaw = z.infer<typeof trackerRawSchema>;
 export type TrackersRaw = z.infer<typeof trackersRawSchema>;
 export type TrackerRecordRaw = z.infer<typeof trackerRecordSchema>;
@@ -249,3 +298,4 @@ export type ClaudeRaw = z.infer<typeof claudeRawSchema>;
 export type StatusOverridesRaw = NonNullable<WorkflowConfigRaw["statusOverrides"]>;
 export type AgentRecordRaw = z.infer<typeof agentRecordSchema>;
 export type AgentRecordOverrideRaw = z.infer<typeof agentRecordOverrideSchema>;
+export type WorkerPoolRaw = z.infer<typeof workerPoolRawSchema>;
