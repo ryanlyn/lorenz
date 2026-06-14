@@ -50,11 +50,11 @@ jobs:
       - name: Pack npx tarball
         id: pack
         run: |
-          staged="$(find dist/cli-release -mindepth 1 -maxdepth 1 -type d | head -1)"
+          staged="$(find dist/release -mindepth 1 -maxdepth 1 -type d | head -1)"
           version="$(node -p "require('./${staged}/RELEASE-MANIFEST.json').version")"
-          tarball="$(npm pack "./${staged}" --pack-destination dist/cli-release | tail -1)"
+          tarball="$(npm pack "./${staged}" --pack-destination dist/release | tail -1)"
           echo "version=${version}" >> "$GITHUB_OUTPUT"
-          echo "tarball=dist/cli-release/${tarball}" >> "$GITHUB_OUTPUT"
+          echo "tarball=dist/release/${tarball}" >> "$GITHUB_OUTPUT"
 
       - name: Publish release asset
         env:

@@ -5,12 +5,12 @@ import path from "node:path";
 
 import { afterEach, beforeEach, test } from "vitest";
 
-import { stageCliRelease } from "../scripts/stage-cli-release.ts";
+import { stageRelease } from "../scripts/stage-release.ts";
 
 let tempRoot: string;
 
 beforeEach(async () => {
-  tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "symphony-cli-release-test-"));
+  tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "symphony-release-test-"));
 });
 
 afterEach(async () => {
@@ -21,7 +21,7 @@ test("stages a source-free CLI release tree with rewritten package manifests", a
   const workspaceRoot = path.join(tempRoot, "workspace");
   await seedWorkspace(workspaceRoot);
 
-  const result = await stageCliRelease({
+  const result = await stageRelease({
     workspaceRoot,
     outputRoot: path.join(tempRoot, "out"),
     releaseName: "symphony-ts-test",
@@ -76,13 +76,10 @@ test("stages a source-free CLI release tree with rewritten package manifests", a
   });
 
   // The launcher must resolve @symphony/cli via module resolution, not a fixed node_modules path,
-  // so it survives dependency hoisting, and must resolve the host claude/codex binaries.
+  // so it survives dependency hoisting.
   const entrypointSource = await fs.readFile(path.join(releaseDir, "bin/symphony-ts"), "utf8");
   assert.match(entrypointSource, /import\.meta\.resolve\("@symphony\/cli"\)/);
   assert.equal(entrypointSource.includes("../node_modules/"), false);
-  assert.match(entrypointSource, /CLAUDE_CODE_EXECUTABLE/);
-  assert.match(entrypointSource, /CODEX_PATH/);
-  assert.match(entrypointSource, /command -v/);
 
   const cliPackage = await readJson(path.join(releaseDir, "apps/cli/package.json"));
   assert.deepEqual(cliPackage.dependencies, {
@@ -115,10 +112,6 @@ test("stages a source-free CLI release tree with rewritten package manifests", a
     (manifest.vendoredRuntimeDependencies as Array<{ name: string }>).map((entry) => entry.name),
     ["@anthropic-ai/claude-agent-sdk", "@openai/codex"],
   );
-  assert.deepEqual(manifest.hostBinaries, [
-    { env: "CLAUDE_CODE_EXECUTABLE", command: "claude" },
-    { env: "CODEX_PATH", command: "codex" },
-  ]);
   // Vendored SDKs are shipped as file: packages, not registry installs, so they are not externals.
   assert.equal(
     (manifest.externalDependencies as string[]).includes("@anthropic-ai/claude-agent-sdk"),
@@ -140,7 +133,7 @@ test("reports missing build outputs before writing a release tree", async () => 
   });
 
   await assert.rejects(
-    stageCliRelease({
+    stageRelease({
       workspaceRoot,
       outputRoot: path.join(tempRoot, "out"),
       releaseName: "symphony-ts-test",

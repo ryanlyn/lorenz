@@ -29,7 +29,7 @@ type WorkspacePackage = {
   packageJson: PackageJson;
 };
 
-export type CliReleaseManifest = {
+export type ReleaseManifest = {
   schemaVersion: 1;
   version: string;
   entrypoint: string;
@@ -37,12 +37,11 @@ export type CliReleaseManifest = {
   installCommand: string;
   packages: Array<{ name: string; path: string }>;
   vendoredRuntimeDependencies: Array<{ name: string; path: string }>;
-  hostBinaries: Array<{ env: string; command: string }>;
   externalDependencies: string[];
   nativeDependencies: string[];
 };
 
-export type StageCliReleaseOptions = {
+export type StageReleaseOptions = {
   workspaceRoot?: string;
   outputRoot?: string;
   releaseName?: string;
@@ -51,10 +50,10 @@ export type StageCliReleaseOptions = {
   archive?: boolean;
 };
 
-export type StagedCliRelease = {
+export type StagedRelease = {
   releaseDir: string;
   archivePath?: string;
-  manifest: CliReleaseManifest;
+  manifest: ReleaseManifest;
 };
 
 const execFileAsync = promisify(execFile);
@@ -94,16 +93,9 @@ const vendoredRuntimeDependencyTargets = new Map(
   vendoredRuntimeDependencies.map((dependency) => [dependency.packageName, dependency.targetDir]),
 );
 
-// Executables the launcher resolves from the host (instead of bundling them) and exposes to the
-// agent bridges through these environment variables.
-const hostBinaries: Array<{ env: string; command: string }> = [
-  { env: "CLAUDE_CODE_EXECUTABLE", command: "claude" },
-  { env: "CODEX_PATH", command: "codex" },
-];
-
-export async function stageCliRelease(
-  options: StageCliReleaseOptions = {},
-): Promise<StagedCliRelease> {
+export async function stageRelease(
+  options: StageReleaseOptions = {},
+): Promise<StagedRelease> {
   const workspaceRoot = path.resolve(options.workspaceRoot ?? defaultWorkspaceRoot);
   const allPackages = await readWorkspacePackages(workspaceRoot);
   const cliPackage = allPackages.get("@symphony/cli");
@@ -114,7 +106,7 @@ export async function stageCliRelease(
   const version = options.version ?? cliPackage.packageJson.version ?? "0.0.0";
   const releaseName = options.releaseName ?? `symphony-ts-v${version}`;
   const outputRoot = path.resolve(
-    options.outputRoot ?? path.join(workspaceRoot, "dist", "cli-release"),
+    options.outputRoot ?? path.join(workspaceRoot, "dist", "release"),
   );
   const releaseDir = path.join(outputRoot, releaseName);
   const catalog = await readDefaultCatalog(workspaceRoot);
@@ -487,34 +479,9 @@ async function writeRootPackageJson(
 async function writeEntrypoint(releaseDir: string): Promise<void> {
   const entrypointPath = path.join(releaseDir, releaseEntrypoint);
   await fs.mkdir(path.dirname(entrypointPath), { recursive: true });
-  const hostBinaryEntries = hostBinaries
-    .map(({ env, command }) => `  [${JSON.stringify(env)}, ${JSON.stringify(command)}],`)
-    .join("\n");
   await fs.writeFile(
     entrypointPath,
     `#!/usr/bin/env node
-
-import { execFileSync } from "node:child_process";
-
-// The release does not bundle the claude/codex agent binaries; it resolves them from the host. A
-// login shell is used so the lookup matches the PATH the bridges see when Symphony spawns them via
-// \`bash -lc\`. Existing values win, so an explicit override is respected.
-function hostBinary(command) {
-  try {
-    return execFileSync("bash", ["-lc", \`command -v \${command}\`], { encoding: "utf8" }).trim() || null;
-  } catch {
-    return null;
-  }
-}
-
-for (const [env, command] of [
-${hostBinaryEntries}
-]) {
-  if (!process.env[env]) {
-    const resolved = hostBinary(command);
-    if (resolved) process.env[env] = resolved;
-  }
-}
 
 // Resolve @symphony/cli through Node's module resolution rather than a fixed relative path so the
 // launcher works in both install layouts: the release directory used as the install root, and the
@@ -579,7 +546,7 @@ function releaseManifest(
   version: string,
   packages: WorkspacePackage[],
   externalDependencies: Record<string, string>,
-): CliReleaseManifest {
+): ReleaseManifest {
   const externalNames = Object.keys(externalDependencies).sort();
   const nativeDependencies = externalNames.filter((dependencyName) =>
     nativeDependencyNames.has(dependencyName),
@@ -599,7 +566,6 @@ function releaseManifest(
       name: dependency.packageName,
       path: dependency.targetDir,
     })),
-    hostBinaries: hostBinaries.map(({ env, command }) => ({ env, command })),
     externalDependencies: externalNames,
     nativeDependencies,
   };
@@ -679,7 +645,7 @@ function isNodeError(error: unknown): error is NodeJS.ErrnoException {
 }
 
 function printHelp(): void {
-  console.log(`Usage: tsx scripts/stage-cli-release.ts [options]
+  console.log(`Usage: tsx scripts/stage-release.ts [options]
 
 Options:
   --out-dir <path>   Directory that receives the staged release
@@ -691,8 +657,8 @@ Options:
 `);
 }
 
-function parseArgs(args: string[]): StageCliReleaseOptions & { help?: boolean } {
-  const options: StageCliReleaseOptions & { help?: boolean } = {};
+function parseArgs(args: string[]): StageReleaseOptions & { help?: boolean } {
+  const options: StageReleaseOptions & { help?: boolean } = {};
 
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
@@ -740,7 +706,7 @@ async function runCli(): Promise<void> {
     return;
   }
 
-  const result = await stageCliRelease(options);
+  const result = await stageRelease(options);
   console.log(`Staged Symphony CLI release at ${result.releaseDir}`);
   if (result.archivePath) {
     console.log(`Created archive at ${result.archivePath}`);
