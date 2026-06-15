@@ -52,7 +52,7 @@ export interface TrackerToolOps {
 }
 
 /**
- * Everything Symphony needs to know about one issue-tracker backend, bundled as a single
+ * Everything Lorenz needs to know about one issue-tracker backend, bundled as a single
  * extension point. A provider owns its slice of the selected tracker bundle, the runtime
  * client that feeds issues into dispatch, and the normalized operations behind the
  * provider-neutral `tracker_*` tools. Agent-facing tool packs are a separate extension

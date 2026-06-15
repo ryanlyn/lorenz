@@ -17,11 +17,11 @@ EOF
   chmod 600 /root/.bash_profile
 fi
 
-if [ ! -s /run/symphony/ssh/authorized_key.pub ]; then
-  echo "missing authorized key at /run/symphony/ssh/authorized_key.pub" >&2
+if [ ! -s /run/lorenz/ssh/authorized_key.pub ]; then
+  echo "missing authorized key at /run/lorenz/ssh/authorized_key.pub" >&2
   exit 1
 fi
 
-install -m 600 /run/symphony/ssh/authorized_key.pub /root/.ssh/authorized_keys
+install -m 600 /run/lorenz/ssh/authorized_key.pub /root/.ssh/authorized_keys
 
 exec /usr/sbin/sshd -D -e

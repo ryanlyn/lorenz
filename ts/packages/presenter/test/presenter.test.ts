@@ -20,7 +20,7 @@ test("presenter preserves blocked dispatches, retry errors, run costs, retries, 
     slot_index: 0,
     ensemble_size: 1,
     worker_host: null,
-    workspace_path: "/tmp/symphony/MT-RUNNING",
+    workspace_path: "/tmp/lorenz/MT-RUNNING",
     session_id: null,
     turn_count: 1,
     agent_kind: "codex",
@@ -53,7 +53,7 @@ test("presenter preserves blocked dispatches, retry errors, run costs, retries, 
     due_at: "2026-05-06T00:01:00.000Z",
     error: "agent exited: boom",
     worker_host: null,
-    workspace_path: "/tmp/symphony/MT-RETRY",
+    workspace_path: "/tmp/lorenz/MT-RETRY",
   });
 
   const runningIssue = issuePayload(snapshot, "MT-RUNNING");
@@ -101,7 +101,7 @@ test("presenter preserves blocked dispatches, retry errors, run costs, retries, 
   if (detail.status !== "ok") throw new Error("detail payload should exist");
   assert.equal((detail.payload.run as any).retry_attempt, 1);
   assert.equal((detail.payload.run as any).last_event, null);
-  assert.equal((detail.payload.run as any).log_hints.symphony_log_file, "/tmp/symphony.log");
+  assert.equal((detail.payload.run as any).log_hints.lorenz_log_file, "/tmp/lorenz.log");
 });
 
 test("presenter humanizes structured agent messages at the JSON API boundary", () => {
@@ -235,7 +235,7 @@ function snapshotFixture(): RuntimeSnapshot {
         agentKind: "codex",
         turnCount: 1,
         startedAt: "2026-05-06T00:00:00.000Z",
-        workspacePath: "/tmp/symphony/MT-RUNNING",
+        workspacePath: "/tmp/lorenz/MT-RUNNING",
         executorPid: "123",
         usageTotals: { inputTokens: 2, outputTokens: 4, totalTokens: 6, secondsRunning: 3 },
         retryAttempt: 0,
@@ -249,7 +249,7 @@ function snapshotFixture(): RuntimeSnapshot {
         dueAtIso: "2026-05-06T00:01:00.000Z",
         monotonicDeadlineMs: 60000,
         error: "agent exited: boom",
-        workspacePath: "/tmp/symphony/MT-RETRY",
+        workspacePath: "/tmp/lorenz/MT-RETRY",
       },
     ],
     blocked: [
@@ -272,7 +272,7 @@ function snapshotFixture(): RuntimeSnapshot {
         agentKind: "claude",
         outcome: "success",
         turnCount: 1,
-        workspacePath: "/tmp/symphony/MT-RETRY",
+        workspacePath: "/tmp/lorenz/MT-RETRY",
         usageTotals: { inputTokens: 3, outputTokens: 3, totalTokens: 6, secondsRunning: 8 },
         startedAt: "2026-05-06T00:00:20.000Z",
         endedAt: "2026-05-06T00:00:30.000Z",
@@ -289,7 +289,7 @@ function snapshotFixture(): RuntimeSnapshot {
         agentKind: "codex",
         outcome: "failed",
         turnCount: 0,
-        workspacePath: "/tmp/symphony/MT-RETRY",
+        workspacePath: "/tmp/lorenz/MT-RETRY",
         usageTotals: { inputTokens: 3, outputTokens: 0, totalTokens: 3, secondsRunning: 1 },
         startedAt: "2026-05-06T00:00:00.000Z",
         endedAt: "2026-05-06T00:00:05.000Z",
@@ -298,7 +298,7 @@ function snapshotFixture(): RuntimeSnapshot {
     ],
     usageTotals: { inputTokens: 8, outputTokens: 7, totalTokens: 15, secondsRunning: 12 },
     rateLimits: null,
-    logFile: "/tmp/symphony.log",
+    logFile: "/tmp/lorenz.log",
     recentEvents: [],
   };
 }

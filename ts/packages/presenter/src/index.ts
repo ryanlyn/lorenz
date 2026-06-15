@@ -251,7 +251,7 @@ interface RunPayload {
   cost: { estimated_cost_usd: number | null };
   tokens: ReturnType<typeof tokenPayload>;
   log_hints: {
-    symphony_log_file: string | null;
+    lorenz_log_file: string | null;
     workspace_path: string | null;
     session_id: string | null;
     issue_identifier: string;
@@ -515,7 +515,7 @@ function logHints(
   issueIdentifier: string,
 ) {
   return {
-    symphony_log_file: logFile,
+    lorenz_log_file: logFile,
     workspace_path: workspacePath,
     session_id: sessionId,
     issue_identifier: issueIdentifier,

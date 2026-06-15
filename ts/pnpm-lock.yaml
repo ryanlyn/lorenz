@@ -440,7 +440,7 @@ importers:
         specifier: "catalog:"
         version: 19.2.6
 
-  apps/symphony-dashboard:
+  apps/lorenz-dashboard:
     dependencies:
       "@lorenz/presenter":
         specifier: workspace:*

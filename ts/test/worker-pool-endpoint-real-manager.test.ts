@@ -57,7 +57,7 @@ function makeFakeEndpoint(port: number): AgentMcpEndpointLease & { readonly loca
   return {
     url: `http://127.0.0.1:46000/mcp#${port}`,
     token: `tok-${port}`,
-    acpServer: () => ({ type: "http", name: "symphony_linear", url: "", headers: [] }),
+    acpServer: () => ({ type: "http", name: "lorenz_linear", url: "", headers: [] }),
     localPort: port,
     async release(): Promise<void> {},
   };

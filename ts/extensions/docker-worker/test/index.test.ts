@@ -39,8 +39,8 @@ function makeDeps(runSsh: DriverDeps["runSsh"] = okRunSsh): DriverDeps {
 
 const IMAGE = "ghcr.io/org/worker:latest";
 
-const LABEL_POOL = "symphony.worker-pool";
-const LABEL_ID = "symphony.worker-id";
+const LABEL_POOL = "lorenz.worker-pool";
+const LABEL_ID = "lorenz.worker-id";
 
 // ---------------------------------------------------------------------------
 // A scripted fake `docker` CLI seam. It records every argv it is handed and
@@ -270,7 +270,7 @@ describe("DockerWorkerDriver command construction", () => {
   test("provision is idempotent across instances via the pool label on the live daemon", async () => {
     // Two driver instances share one fake daemon: a second provision of the
     // same workerId must adopt the surviving container (no duplicate `docker run`),
-    // because idempotency is keyed on the symphony.worker-id label, not in-memory.
+    // because idempotency is keyed on the lorenz.worker-id label, not in-memory.
     const fake = fakeDocker({ startPort: 41_000 });
     const a = new DockerWorkerDriver({ image: IMAGE }, makeDeps(), fake.override);
     const first = await a.provision({
@@ -455,7 +455,7 @@ describe("DockerWorkerDriver over a PATH-shimmed fake docker binary", () => {
   let root: string;
 
   beforeEach(async () => {
-    root = await fs.mkdtemp(path.join(os.tmpdir(), "symphony-docker-"));
+    root = await fs.mkdtemp(path.join(os.tmpdir(), "lorenz-docker-"));
     oldPath = process.env.PATH;
     const bin = path.join(root, "bin");
     const state = path.join(root, "state");
@@ -473,7 +473,7 @@ case "$sub" in
   run)
     workerid=""
     for a in "$@"; do
-      case "$a" in symphony.worker-id=*) workerid="\${a#symphony.worker-id=}";; esac
+      case "$a" in lorenz.worker-id=*) workerid="\${a#lorenz.worker-id=}";; esac
     done
     n=$(ls "$state" | wc -l | tr -d ' ')
     id="c$((n+1))$(printf '%0.sf' 1 2 3 4 5 6 7 8 9)"
@@ -548,14 +548,14 @@ esac
 
 // ---------------------------------------------------------------------------
 // Gated live slice: runs the shared conformance suite against the REAL docker
-// daemon. Collected-but-skipped unless SYMPHONY_TS_RUN_LIVE_DOCKER_E2E=1.
+// daemon. Collected-but-skipped unless LORENZ_TS_RUN_LIVE_DOCKER_E2E=1.
 // ---------------------------------------------------------------------------
-const LIVE = process.env.SYMPHONY_TS_RUN_LIVE_DOCKER_E2E === "1";
+const LIVE = process.env.LORENZ_TS_RUN_LIVE_DOCKER_E2E === "1";
 const liveImage =
-  process.env.SYMPHONY_TS_DOCKER_E2E_IMAGE ?? "lscr.io/linuxserver/openssh-server:latest";
+  process.env.LORENZ_TS_DOCKER_E2E_IMAGE ?? "lscr.io/linuxserver/openssh-server:latest";
 
 describe.skipIf(!LIVE)(
-  "DockerWorkerDriver live conformance (SYMPHONY_TS_RUN_LIVE_DOCKER_E2E=1)",
+  "DockerWorkerDriver live conformance (LORENZ_TS_RUN_LIVE_DOCKER_E2E=1)",
   () => {
     runDriverConformanceSuite(
       () =>
@@ -570,7 +570,7 @@ describe.skipIf(!LIVE)(
         ),
       {
         suiteName: "DockerWorkerDriver (live docker)",
-        workerIds: ["symphony-live-a", "symphony-live-b"],
+        workerIds: ["lorenz-live-a", "lorenz-live-b"],
         provisionTimeoutMs: 120_000,
         probeTimeoutMs: 30_000,
         destroyTimeoutMs: 30_000,

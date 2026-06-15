@@ -34,7 +34,7 @@ import {
 import type { DriverCapabilities, ProvisionRequest } from "../packages/worker-sdk/dist/index.js";
 
 const execFileAsync = promisify(execFile);
-const runLiveSsh = process.env.SYMPHONY_TS_RUN_LIVE_SSH_E2E === "1";
+const runLiveSsh = process.env.LORENZ_TS_RUN_LIVE_SSH_E2E === "1";
 
 // The kind the live adapter registers under in this test's LOCAL registry. The
 // name mirrors the SSH-addressable extension kind; the driver itself declares
@@ -191,7 +191,7 @@ test(
       return;
     }
     if (setup.hosts.length < 2) {
-      t.skip("multi-worker case requires SYMPHONY_LIVE_SSH_WORKER_HOSTS with >1 host");
+      t.skip("multi-worker case requires LORENZ_LIVE_SSH_WORKER_HOSTS with >1 host");
       await setup.cleanup();
       return;
     }
@@ -430,7 +430,7 @@ function acquireReq(issueId: string, slotIndex: number, affinityKey?: string | n
   return {
     issueId,
     slotIndex,
-    labels: [`symphony.issue=${issueId}`],
+    labels: [`lorenz.issue=${issueId}`],
     timeoutMs: 60_000,
     ...(affinityKey ? { affinityKey } : {}),
   };
@@ -450,8 +450,8 @@ async function acquireLeased(
 
 // ---------------------------------------------------------------------------
 // Worker setup: a real native sshd over loopback by default, or BYO hosts when
-// SYMPHONY_LIVE_SSH_WORKER_HOSTS is set. Mirrors live-ssh.test.ts so this test
-// is collected-but-skipped without SYMPHONY_TS_RUN_LIVE_SSH_E2E=1.
+// LORENZ_LIVE_SSH_WORKER_HOSTS is set. Mirrors live-ssh.test.ts so this test
+// is collected-but-skipped without LORENZ_TS_RUN_LIVE_SSH_E2E=1.
 // ---------------------------------------------------------------------------
 
 interface WorkerSetup {
@@ -470,7 +470,7 @@ function multiHostsConfigured(): boolean {
 }
 
 function configuredHosts(): string[] {
-  return (process.env.SYMPHONY_LIVE_SSH_WORKER_HOSTS ?? "")
+  return (process.env.LORENZ_LIVE_SSH_WORKER_HOSTS ?? "")
     .split(",")
     .map((host) => host.trim())
     .filter(Boolean);
@@ -498,12 +498,12 @@ async function setupWorkers(): Promise<WorkerSetupResult> {
 
   return {
     status: "skip",
-    reason: "local sshd is unavailable and SYMPHONY_LIVE_SSH_WORKER_HOSTS is unset",
+    reason: "local sshd is unavailable and LORENZ_LIVE_SSH_WORKER_HOSTS is unset",
   };
 }
 
 // Replicated from live-ssh.test.ts (~line 195): a throwaway native sshd on
-// loopback authorized with a generated keypair, wired via SYMPHONY_SSH_CONFIG so
+// loopback authorized with a generated keypair, wired via LORENZ_SSH_CONFIG so
 // runSsh(host, ...) resolves the loopback worker.
 async function setupNativeSshdWorker(runId: string): Promise<WorkerSetup> {
   if (!(await fileExists("/usr/sbin/sshd"))) throw new Error("local sshd is unavailable");
@@ -520,7 +520,7 @@ async function setupNativeSshdWorker(runId: string): Promise<WorkerSetup> {
   const port = await reserveTcpPort();
   const host = `localhost:${port}`;
   const runRoot = `~/.${runId}`;
-  const previousSshConfig = process.env.SYMPHONY_SSH_CONFIG;
+  const previousSshConfig = process.env.LORENZ_SSH_CONFIG;
   const user = os.userInfo().username;
 
   await execFileAsync("ssh-keygen", ["-q", "-t", "ed25519", "-N", "", "-f", keyPath]);
@@ -565,11 +565,11 @@ async function setupNativeSshdWorker(runId: string): Promise<WorkerSetup> {
 
   await execFileAsync("/usr/sbin/sshd", ["-t", "-f", configPath]);
   await execFileAsync("/usr/sbin/sshd", ["-f", configPath, "-E", logPath]);
-  process.env.SYMPHONY_SSH_CONFIG = clientConfigPath;
+  process.env.LORENZ_SSH_CONFIG = clientConfigPath;
 
   const cleanup = async () => {
-    if (previousSshConfig === undefined) delete process.env.SYMPHONY_SSH_CONFIG;
-    else process.env.SYMPHONY_SSH_CONFIG = previousSshConfig;
+    if (previousSshConfig === undefined) delete process.env.LORENZ_SSH_CONFIG;
+    else process.env.LORENZ_SSH_CONFIG = previousSshConfig;
     await cleanupRemoteRoot([host], runRoot);
     const pid = await fs.readFile(pidPath, "utf8").catch(() => "");
     if (pid.trim()) {

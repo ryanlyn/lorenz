@@ -34,7 +34,7 @@ export function makeSettings(overrides: Record<string, unknown> = {}): Settings 
         dispatch: {
           acceptUnrouted: true,
           onlyRoutes: null,
-          routeLabelPrefix: "Symphony:",
+          routeLabelPrefix: "Lorenz:",
         },
       },
       polling: { intervalMs: 100 },
@@ -102,7 +102,7 @@ export function settingsWith(
   const settings = defaultSettings();
   settings.tracker.dispatch.acceptUnrouted = overrides.acceptUnrouted ?? true;
   settings.tracker.dispatch.onlyRoutes = overrides.onlyRoutes ?? null;
-  settings.tracker.dispatch.routeLabelPrefix = overrides.routeLabelPrefix ?? "Symphony:";
+  settings.tracker.dispatch.routeLabelPrefix = overrides.routeLabelPrefix ?? "Lorenz:";
   if (overrides.activeStates) settings.tracker.activeStates = overrides.activeStates;
   if (overrides.terminalStates) settings.tracker.terminalStates = overrides.terminalStates;
   if (overrides.maxConcurrentAgents !== undefined)

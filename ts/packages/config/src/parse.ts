@@ -83,7 +83,7 @@ export function parseConfig(
   const workspaceRaw = parsed.workspace ?? {};
   const workspaceRootFallback = settings.workspace.rootExpression ?? settings.workspace.root;
   const workspaceRootExpression = resolveWorkspaceRootExpression(
-    nonEmptyString(env.SYMPHONY_WORKSPACE_ROOT) ?? workspaceRaw.root,
+    nonEmptyString(env.LORENZ_WORKSPACE_ROOT) ?? workspaceRaw.root,
     workspaceRootFallback,
     env,
   );

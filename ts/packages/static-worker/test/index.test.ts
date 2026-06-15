@@ -64,7 +64,7 @@ runDriverConformanceSuite(() => new StaticSshWorkerDriver({ ssh_hosts: [...HOSTS
   workerIds: HOSTS,
   makeProvisionRequest: (workerId): ProvisionRequest => ({
     workerId,
-    labels: ["symphony.worker-pool"],
+    labels: ["lorenz.worker-pool"],
     timeoutMs: 30_000,
   }),
   makeUnreachable: () => {
@@ -109,12 +109,12 @@ test("provision hands out fixed addresses idempotently (min==max==len)", async (
 
   const first = await driver.provision({
     workerId: HOSTS[0],
-    labels: ["symphony.worker-pool"],
+    labels: ["lorenz.worker-pool"],
     timeoutMs: 30_000,
   });
   const second = await driver.provision({
     workerId: HOSTS[0],
-    labels: ["symphony.worker-pool"],
+    labels: ["lorenz.worker-pool"],
     timeoutMs: 30_000,
   });
 
@@ -163,7 +163,7 @@ test("probe runs deps.runSsh printf-ready with the opts.timeoutMs (worker.sshTim
 
   const worker = await driver.provision({
     workerId: HOSTS[0],
-    labels: ["symphony.worker-pool"],
+    labels: ["lorenz.worker-pool"],
     timeoutMs: 30_000,
   });
 
@@ -181,7 +181,7 @@ test("probe sends ONLY the readiness command (no workspace/hook commands)", asyn
   const driver = new StaticSshWorkerDriver({ ssh_hosts: [...HOSTS] }, makeDeps(ssh.runSsh));
   const worker = await driver.provision({
     workerId: HOSTS[0],
-    labels: ["symphony.worker-pool"],
+    labels: ["lorenz.worker-pool"],
     timeoutMs: 30_000,
   });
 
@@ -202,7 +202,7 @@ test("destroy forgets the host, runs NO hooks, and never deletes the machine", a
   const driver = new StaticSshWorkerDriver({ ssh_hosts: [...HOSTS] }, makeDeps(ssh.runSsh));
   const worker = await driver.provision({
     workerId: HOSTS[0],
-    labels: ["symphony.worker-pool"],
+    labels: ["lorenz.worker-pool"],
     timeoutMs: 30_000,
   });
 
@@ -220,7 +220,7 @@ test("destroy forgets the host, runs NO hooks, and never deletes the machine", a
   // thrown static_ssh_unknown_host if destroy had removed it from the host set).
   const reprovisioned = await driver.provision({
     workerId: HOSTS[0],
-    labels: ["symphony.worker-pool"],
+    labels: ["lorenz.worker-pool"],
     timeoutMs: 30_000,
   });
   assert.equal(reprovisioned.workerHost, HOSTS[0]);

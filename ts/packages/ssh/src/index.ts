@@ -311,7 +311,7 @@ function sshMissingExitCodeError(host: string, result: SshExitMetadata): Error {
 }
 
 function sshConfigArgs(): string[] {
-  const configPath = process.env.SYMPHONY_SSH_CONFIG;
+  const configPath = process.env.LORENZ_SSH_CONFIG;
   return configPath ? ["-F", configPath] : [];
 }
 

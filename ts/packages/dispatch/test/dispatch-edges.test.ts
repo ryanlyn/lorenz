@@ -143,7 +143,7 @@ describe("shouldDispatchIssue", () => {
         dispatch: { only_routes: ["frontend"] },
       },
     });
-    const issue = makeIssue({ labels: ["Symphony:Backend"] });
+    const issue = makeIssue({ labels: ["Lorenz:Backend"] });
     const state = { runningCount: 0, claimedSlots: new Set<string>() };
     assert.equal(shouldDispatchIssue(issue, settings, state), false);
   });
@@ -197,7 +197,7 @@ describe("routedToThisWorker", () => {
         dispatch: { only_routes: [] },
       },
     });
-    const issue = makeIssue({ labels: ["Symphony:Backend"] });
+    const issue = makeIssue({ labels: ["Lorenz:Backend"] });
     assert.equal(routedToThisWorker(issue, settings), false);
   });
 
@@ -209,7 +209,7 @@ describe("routedToThisWorker", () => {
         dispatch: { only_routes: null },
       },
     });
-    const issue = makeIssue({ labels: ["Symphony:Backend"] });
+    const issue = makeIssue({ labels: ["Lorenz:Backend"] });
     assert.equal(routedToThisWorker(issue, settings), true);
   });
 
@@ -221,7 +221,7 @@ describe("routedToThisWorker", () => {
         dispatch: { only_routes: ["backend", "infra"] },
       },
     });
-    const issue = makeIssue({ labels: ["Symphony:Backend"] });
+    const issue = makeIssue({ labels: ["Lorenz:Backend"] });
     assert.equal(routedToThisWorker(issue, settings), true);
   });
 
@@ -233,7 +233,7 @@ describe("routedToThisWorker", () => {
         dispatch: { only_routes: ["frontend"] },
       },
     });
-    const issue = makeIssue({ labels: ["Symphony:Backend"] });
+    const issue = makeIssue({ labels: ["Lorenz:Backend"] });
     assert.equal(routedToThisWorker(issue, settings), false);
   });
 
@@ -257,10 +257,10 @@ describe("routedToThisWorker", () => {
         dispatch: { accept_unrouted: true, only_routes: null },
       },
     });
-    // "Symphony:" is a route label (hasRouteLabel returns true) but routeNames returns []
+    // "Lorenz:" is a route label (hasRouteLabel returns true) but routeNames returns []
     // because the suffix is empty after trimming. So this goes into the hasRouteLabel branch
     // and returns false.
-    const issue = makeIssue({ labels: ["Symphony:"] });
+    const issue = makeIssue({ labels: ["Lorenz:"] });
     assert.equal(routedToThisWorker(issue, settings), false);
   });
 
@@ -272,7 +272,7 @@ describe("routedToThisWorker", () => {
         dispatch: { only_routes: ["BACKEND"] },
       },
     });
-    const issue = makeIssue({ labels: ["symphony:backend"] });
+    const issue = makeIssue({ labels: ["lorenz:backend"] });
     assert.equal(routedToThisWorker(issue, settings), true);
   });
 });

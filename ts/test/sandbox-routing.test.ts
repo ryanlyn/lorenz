@@ -17,7 +17,7 @@ describe("sandbox routing integration tests", () => {
         makeIssue("r1", "R-1", {
           state: "In Progress",
           stateType: "started",
-          labels: ["symphony:backend"],
+          labels: ["lorenz:backend"],
         }),
       ],
       settingsOverrides: {
@@ -26,7 +26,7 @@ describe("sandbox routing integration tests", () => {
           dispatch: {
             acceptUnrouted: false,
             onlyRoutes: ["backend"],
-            routeLabelPrefix: "Symphony:",
+            routeLabelPrefix: "Lorenz:",
           },
         },
       },
@@ -46,7 +46,7 @@ describe("sandbox routing integration tests", () => {
         makeIssue("r2", "R-2", {
           state: "In Progress",
           stateType: "started",
-          labels: ["symphony:frontend"],
+          labels: ["lorenz:frontend"],
         }),
       ],
       settingsOverrides: {
@@ -55,7 +55,7 @@ describe("sandbox routing integration tests", () => {
           dispatch: {
             acceptUnrouted: false,
             onlyRoutes: ["backend"],
-            routeLabelPrefix: "Symphony:",
+            routeLabelPrefix: "Lorenz:",
           },
         },
       },
@@ -84,7 +84,7 @@ describe("sandbox routing integration tests", () => {
           dispatch: {
             acceptUnrouted: true,
             onlyRoutes: ["backend"],
-            routeLabelPrefix: "Symphony:",
+            routeLabelPrefix: "Lorenz:",
           },
         },
       },
@@ -113,7 +113,7 @@ describe("sandbox routing integration tests", () => {
           dispatch: {
             acceptUnrouted: false,
             onlyRoutes: ["backend"],
-            routeLabelPrefix: "Symphony:",
+            routeLabelPrefix: "Lorenz:",
           },
         },
       },
@@ -133,13 +133,13 @@ describe("sandbox routing integration tests", () => {
         makeIssue("r5", "R-5", {
           state: "In Progress",
           stateType: "started",
-          labels: ["symphony:anything-random"],
+          labels: ["lorenz:anything-random"],
         }),
       ],
       settingsOverrides: {
         tracker: {
           ...trackerBase,
-          dispatch: { acceptUnrouted: false, onlyRoutes: null, routeLabelPrefix: "Symphony:" },
+          dispatch: { acceptUnrouted: false, onlyRoutes: null, routeLabelPrefix: "Lorenz:" },
         },
       },
       runnerConfig: { defaultBehavior: { turnCount: 1, latencyPerTurnMs: 0 } },
@@ -158,13 +158,13 @@ describe("sandbox routing integration tests", () => {
         makeIssue("r6", "R-6", {
           state: "In Progress",
           stateType: "started",
-          labels: ["symphony:backend"],
+          labels: ["lorenz:backend"],
         }),
       ],
       settingsOverrides: {
         tracker: {
           ...trackerBase,
-          dispatch: { acceptUnrouted: true, onlyRoutes: [], routeLabelPrefix: "Symphony:" },
+          dispatch: { acceptUnrouted: true, onlyRoutes: [], routeLabelPrefix: "Lorenz:" },
         },
       },
       runnerConfig: { defaultBehavior: { turnCount: 1, latencyPerTurnMs: 0 } },
@@ -183,7 +183,7 @@ describe("sandbox routing integration tests", () => {
         makeIssue("r7", "R-7", {
           state: "In Progress",
           stateType: "started",
-          labels: ["symphony:frontend", "symphony:backend"],
+          labels: ["lorenz:frontend", "lorenz:backend"],
         }),
       ],
       settingsOverrides: {
@@ -192,7 +192,7 @@ describe("sandbox routing integration tests", () => {
           dispatch: {
             acceptUnrouted: false,
             onlyRoutes: ["backend"],
-            routeLabelPrefix: "Symphony:",
+            routeLabelPrefix: "Lorenz:",
           },
         },
       },
@@ -212,7 +212,7 @@ describe("sandbox routing integration tests", () => {
         makeIssue("r8", "R-8", {
           state: "In Progress",
           stateType: "started",
-          labels: ["SYMPHONY:BACKEND"],
+          labels: ["LORENZ:BACKEND"],
         }),
       ],
       settingsOverrides: {
@@ -221,7 +221,7 @@ describe("sandbox routing integration tests", () => {
           dispatch: {
             acceptUnrouted: false,
             onlyRoutes: ["Backend"],
-            routeLabelPrefix: "Symphony:",
+            routeLabelPrefix: "Lorenz:",
           },
         },
       },
@@ -241,7 +241,7 @@ describe("sandbox routing integration tests", () => {
     const issue = makeIssue("r9", "R-9", {
       state: "In Progress",
       stateType: "started",
-      labels: ["symphony:backend"],
+      labels: ["lorenz:backend"],
     });
     (issue as { assignedToWorker: boolean }).assignedToWorker = false;
 
@@ -253,7 +253,7 @@ describe("sandbox routing integration tests", () => {
           dispatch: {
             acceptUnrouted: true,
             onlyRoutes: ["backend"],
-            routeLabelPrefix: "Symphony:",
+            routeLabelPrefix: "Lorenz:",
           },
         },
       },
@@ -273,13 +273,13 @@ describe("sandbox routing integration tests", () => {
         makeIssue("r10", "R-10", {
           state: "In Progress",
           stateType: "started",
-          labels: ["symphony:   "],
+          labels: ["lorenz:   "],
         }),
       ],
       settingsOverrides: {
         tracker: {
           ...trackerBase,
-          dispatch: { acceptUnrouted: true, onlyRoutes: null, routeLabelPrefix: "Symphony:" },
+          dispatch: { acceptUnrouted: true, onlyRoutes: null, routeLabelPrefix: "Lorenz:" },
         },
       },
       runnerConfig: { defaultBehavior: { turnCount: 1, latencyPerTurnMs: 0 } },
@@ -313,7 +313,7 @@ describe("sandbox routing: route label change mid-run triggers reconciliation st
           makeIssue("routed-1", "ROUTE-1", {
             state: "In Progress",
             stateType: "started",
-            labels: ["Symphony:team-alpha"],
+            labels: ["Lorenz:team-alpha"],
           }),
         ],
         settingsOverrides: {
@@ -325,7 +325,7 @@ describe("sandbox routing: route label change mid-run triggers reconciliation st
             dispatch: {
               acceptUnrouted: false,
               onlyRoutes: ["team-alpha"],
-              routeLabelPrefix: "Symphony:",
+              routeLabelPrefix: "Lorenz:",
             },
           },
         },
@@ -365,7 +365,7 @@ describe("sandbox routing: route label change mid-run triggers reconciliation st
           makeIssue("routed-2", "ROUTE-2", {
             state: "In Progress",
             stateType: "started",
-            labels: ["Symphony:team-alpha"],
+            labels: ["Lorenz:team-alpha"],
           }),
         ],
         settingsOverrides: {
@@ -377,7 +377,7 @@ describe("sandbox routing: route label change mid-run triggers reconciliation st
             dispatch: {
               acceptUnrouted: false,
               onlyRoutes: ["team-alpha"],
-              routeLabelPrefix: "Symphony:",
+              routeLabelPrefix: "Lorenz:",
             },
           },
         },
@@ -392,7 +392,7 @@ describe("sandbox routing: route label change mid-run triggers reconciliation st
             mutate: {
               type: "change_labels",
               issueId: "routed-2",
-              labels: ["Symphony:team-beta"],
+              labels: ["Lorenz:team-beta"],
             },
           },
         ],
@@ -420,7 +420,7 @@ describe("sandbox routing: route label change mid-run triggers reconciliation st
           makeIssue("routed-3", "ROUTE-3", {
             state: "In Progress",
             stateType: "started",
-            labels: ["Symphony:team-alpha"],
+            labels: ["Lorenz:team-alpha"],
           }),
         ],
         settingsOverrides: {
@@ -432,7 +432,7 @@ describe("sandbox routing: route label change mid-run triggers reconciliation st
             dispatch: {
               acceptUnrouted: false,
               onlyRoutes: ["team-alpha"],
-              routeLabelPrefix: "Symphony:",
+              routeLabelPrefix: "Lorenz:",
             },
           },
         },
@@ -478,7 +478,7 @@ describe("sandbox routing: route label change mid-run triggers reconciliation st
             dispatch: {
               acceptUnrouted: false,
               onlyRoutes: ["team-alpha"],
-              routeLabelPrefix: "Symphony:",
+              routeLabelPrefix: "Lorenz:",
             },
           },
         },
@@ -525,7 +525,7 @@ describe("sandbox routing: route label change mid-run triggers reconciliation st
             dispatch: {
               acceptUnrouted: true,
               onlyRoutes: null,
-              routeLabelPrefix: "Symphony:",
+              routeLabelPrefix: "Lorenz:",
             },
           },
         },
@@ -540,7 +540,7 @@ describe("sandbox routing: route label change mid-run triggers reconciliation st
             mutate: {
               type: "change_labels",
               issueId: "noroutelabel-1",
-              labels: ["Symphony:team-beta"],
+              labels: ["Lorenz:team-beta"],
             },
           },
         ],
@@ -569,12 +569,12 @@ describe("sandbox routing: route label change mid-run triggers reconciliation st
           makeIssue("multi-a", "MULTI-A", {
             state: "In Progress",
             stateType: "started",
-            labels: ["Symphony:team-alpha"],
+            labels: ["Lorenz:team-alpha"],
           }),
           makeIssue("multi-b", "MULTI-B", {
             state: "In Progress",
             stateType: "started",
-            labels: ["Symphony:team-alpha"],
+            labels: ["Lorenz:team-alpha"],
           }),
         ],
         settingsOverrides: {
@@ -586,7 +586,7 @@ describe("sandbox routing: route label change mid-run triggers reconciliation st
             dispatch: {
               acceptUnrouted: false,
               onlyRoutes: ["team-alpha"],
-              routeLabelPrefix: "Symphony:",
+              routeLabelPrefix: "Lorenz:",
             },
           },
         },
@@ -598,7 +598,7 @@ describe("sandbox routing: route label change mid-run triggers reconciliation st
         mutations: {
           1: (client: ChaosLinearClient) => {
             // Re-route only multi-a to team-beta
-            client.updateIssue("multi-a", { labels: ["Symphony:team-beta"] });
+            client.updateIssue("multi-a", { labels: ["Lorenz:team-beta"] });
           },
         },
       });

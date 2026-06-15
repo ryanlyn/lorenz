@@ -135,7 +135,7 @@ function poolSettings(dir: string, driver: string): Settings {
   return parseConfig(
     {
       workspace: { root: path.join(dir, "workspaces") },
-      logging: { log_file: path.join(dir, "symphony.log") },
+      logging: { log_file: path.join(dir, "lorenz.log") },
       worker: {
         worker_pool: {
           enabled: true,

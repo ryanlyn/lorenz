@@ -54,7 +54,7 @@ describe("INVARIANT: When a route name after prefix removal is whitespace-only, 
   test("routeNames - whitespace-only suffix is not valid", () => {
     fc.assert(
       fc.property(
-        fc.constantFrom("Symphony:", "Route:", "Team:", "X:"),
+        fc.constantFrom("Lorenz:", "Route:", "Team:", "X:"),
         arbWhitespace,
         (prefix, ws) => {
           assert.equal(
@@ -76,7 +76,7 @@ describe("INVARIANT: When prefix matching is performed, matching SHALL be case-i
     fc.assert(
       fc.property(
         arbRouteNameNoColon,
-        fc.constantFrom("Symphony:", "Route:", "Team:"),
+        fc.constantFrom("Lorenz:", "Route:", "Team:"),
         (routeSuffix, prefix) => {
           const prefixBase = prefix.slice(0, -1);
           const s = makeSettings({ routeLabelPrefix: prefix });
@@ -113,8 +113,8 @@ describe("INVARIANT: When routes are extracted from labels, the output SHALL alw
         fc.string({ minLength: 1, maxLength: 20 }).filter((s) => s.trim().length > 0),
         (routeSuffix) => {
           const routes = routeNames(
-            issueWith({ labels: [`Symphony:${routeSuffix}`] }),
-            makeSettings({ routeLabelPrefix: "Symphony:" }),
+            issueWith({ labels: [`Lorenz:${routeSuffix}`] }),
+            makeSettings({ routeLabelPrefix: "Lorenz:" }),
           );
           for (const route of routes) {
             assert.equal(route, route.toLowerCase());
@@ -133,7 +133,7 @@ describe("INVARIANT: When the allowlist is null, the system SHALL accept all rou
       fc.property(arbRouteName, (routeName) => {
         assert.ok(
           routedToThisWorker(
-            issueWith({ labels: [`Symphony:${routeName}`] }),
+            issueWith({ labels: [`Lorenz:${routeName}`] }),
             makeSettings({ onlyRoutes: null }),
           ),
         );
@@ -149,7 +149,7 @@ describe("INVARIANT: When the allowlist is empty, the system SHALL reject all ro
       fc.property(arbRouteName, (routeName) => {
         assert.ok(
           !routedToThisWorker(
-            issueWith({ labels: [`Symphony:${routeName}`] }),
+            issueWith({ labels: [`Lorenz:${routeName}`] }),
             makeSettings({ onlyRoutes: [] }),
           ),
         );
@@ -166,7 +166,7 @@ describe("INVARIANT: When no route label is present and unrouted dispatch is dis
         fc.array(
           fc
             .string({ minLength: 1, maxLength: 20 })
-            .filter((l) => !l.toLowerCase().startsWith("symphony:")),
+            .filter((l) => !l.toLowerCase().startsWith("lorenz:")),
           { maxLength: 5 },
         ),
         (labels) => {
@@ -187,7 +187,7 @@ describe("INVARIANT: When no route label is present and unrouted dispatch is ena
         fc.array(
           fc
             .string({ minLength: 1, maxLength: 20 })
-            .filter((l) => !l.toLowerCase().startsWith("symphony:")),
+            .filter((l) => !l.toLowerCase().startsWith("lorenz:")),
           { maxLength: 5 },
         ),
         (labels) => {
@@ -207,7 +207,7 @@ describe("INVARIANT: When prefix matching succeeds but the remaining name is whi
       .array(fc.constantFrom(" ", "\t", "\n", "\r"), { minLength: 0, maxLength: 5 })
       .map((a) => a.join(""));
     fc.assert(
-      fc.property(fc.constantFrom("Symphony:", "Route:", "Team:"), arbWs, (prefix, ws) => {
+      fc.property(fc.constantFrom("Lorenz:", "Route:", "Team:"), arbWs, (prefix, ws) => {
         assert.ok(
           !routedToThisWorker(
             issueWith({ labels: [`${prefix}${ws}`] }),
@@ -224,7 +224,7 @@ describe("INVARIANT: When allowlist matching is performed, matching SHALL be cas
   test("routedToThisWorker - allowlist matching is case-insensitive", () => {
     fc.assert(
       fc.property(arbRouteNameNoColon, (routeName) => {
-        const issue = issueWith({ labels: [`Symphony:${routeName}`] });
+        const issue = issueWith({ labels: [`Lorenz:${routeName}`] });
         assert.ok(
           routedToThisWorker(issue, makeSettings({ onlyRoutes: [routeName.toUpperCase()] })),
         );
@@ -270,7 +270,7 @@ describe("INVARIANT: When an issue's route appears in the allowlist, the dispatc
         (routeName, others) => {
           assert.ok(
             routedToThisWorker(
-              issueWith({ labels: [`Symphony:${routeName}`] }),
+              issueWith({ labels: [`Lorenz:${routeName}`] }),
               makeSettings({ onlyRoutes: [routeName, ...others] }),
             ),
           );
@@ -292,7 +292,7 @@ describe("INVARIANT: When an issue's route does not appear in the allowlist, the
         (routeName, allowlist) => {
           assert.ok(
             !routedToThisWorker(
-              issueWith({ labels: [`Symphony:${routeName}`] }),
+              issueWith({ labels: [`Lorenz:${routeName}`] }),
               makeSettings({ onlyRoutes: allowlist }),
             ),
           );
@@ -316,7 +316,7 @@ describe("INVARIANT: When multiple route labels are present, matching ANY route 
           assert.ok(
             routedToThisWorker(
               issueWith({
-                labels: [...nonColliding.map((r) => `Symphony:${r}`), `Symphony:${allowedRoute}`],
+                labels: [...nonColliding.map((r) => `Lorenz:${r}`), `Lorenz:${allowedRoute}`],
               }),
               makeSettings({ onlyRoutes: [allowedRoute] }),
             ),
@@ -332,13 +332,11 @@ describe("INVARIANT: When labels do not match the route prefix, they SHALL not p
   test("routeNames - non-matching labels are ignored", () => {
     fc.assert(
       fc.property(
-        fc.constantFrom("Symphony:", "Route:", "Team:"),
+        fc.constantFrom("Lorenz:", "Route:", "Team:"),
         fc.array(
           fc.string({ minLength: 1, maxLength: 20 }).filter((l) => {
             const lo = l.toLowerCase();
-            return (
-              !lo.startsWith("symphony:") && !lo.startsWith("route:") && !lo.startsWith("team:")
-            );
+            return !lo.startsWith("lorenz:") && !lo.startsWith("route:") && !lo.startsWith("team:");
           }),
           { minLength: 1, maxLength: 5 },
         ),

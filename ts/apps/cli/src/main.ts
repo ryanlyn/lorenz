@@ -17,7 +17,7 @@ import { validateDispatchConfig } from "@lorenz/config";
 import { checkSlotsPerMachineGate } from "@lorenz/dispatch-coordinator";
 import { startObservabilityServer } from "@lorenz/server";
 import { configureLogFile } from "@lorenz/log-file";
-import { SymphonyRuntime } from "@lorenz/runtime";
+import { LorenzRuntime } from "@lorenz/runtime";
 import { RuntimeApp } from "@lorenz/tui";
 import { loadWorkflow } from "@lorenz/workflow";
 import { defaultAgentExecutorRegistry } from "@lorenz/agent-sdk";
@@ -158,7 +158,7 @@ export async function runDaemon(options: CliOptions): Promise<number> {
     const traceDir = workflow.settings.server.traceDir!;
     const traceEmitter = new TraceEmitter(traceDir);
     const issueStore = new IssueStore(defaultIssueStorePath());
-    const runtime = new SymphonyRuntime({
+    const runtime = new LorenzRuntime({
       workflow,
       clientFactory: createTrackerClient,
       reloadWorkflow: loadRuntimeWorkflow,
@@ -268,7 +268,7 @@ export async function runDaemon(options: CliOptions): Promise<number> {
 
 function createDaemonCommand(name = "lorenz"): Command {
   return new Command(name)
-    .description("Run the Symphony TypeScript orchestrator.")
+    .description("Run the Lorenz TypeScript orchestrator.")
     .allowExcessArguments(false)
     .argument("[workflowPath]", "Workflow markdown file.")
     .option("--once", "Poll once and exit.")
@@ -277,7 +277,7 @@ function createDaemonCommand(name = "lorenz"): Command {
     .option("--no-dashboard", "Disable the web dashboard server.")
     .option(
       "--logs-root <path>",
-      "Root directory for Symphony logs.",
+      "Root directory for Lorenz logs.",
       parseRequiredValue("--logs-root", "path"),
     )
     .option("--port <port>", "Observability API port.", parseNonNegativeInteger("--port"));
@@ -305,7 +305,7 @@ function applyCliOverrides(workflow: WorkflowDefinition, options: CliOptions): v
     workflow.settings.logging.logFile = path.join(
       path.resolve(options.logsRoot),
       "log",
-      "symphony.log",
+      "lorenz.log",
     );
   }
 }

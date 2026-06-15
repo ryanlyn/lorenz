@@ -6,7 +6,7 @@ import { setupLinearSandbox, runLinearScenario } from "../sandbox/linear-sandbox
 import { checkAssertions, sleep } from "../sandbox/sandbox.js";
 import type { LinearSandboxScenario, LinearSandboxResult } from "../sandbox/linear-sandbox.js";
 
-const runLive = process.env.SYMPHONY_TS_RUN_LINEAR_SANDBOX === "1";
+const runLive = process.env.LORENZ_TS_RUN_LINEAR_SANDBOX === "1";
 
 /** Map an issue identifier from a run_started event to its title via createdIssues. */
 function issueForEvent(event: RuntimeEvent, createdIssues: Issue[]): Issue | undefined {

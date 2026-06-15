@@ -8,11 +8,11 @@ export type AgentUsageAccounting = (typeof AGENT_USAGE_ACCOUNTING_VALUES)[number
 export interface AcpAgentOptions {
   /** Shell command launched per session (run via `bash -lc` in the workspace, or over SSH on remote workers). Also selects the provider-config overlay format: `claude-agent-acp` consumes a settings.json-shaped overlay, anything else config.toml-shaped overrides. */
   bridgeCommand: string;
-  /** Shape of `PromptResponse.usage` emitted by this ACP bridge. Symphony always converts it to cumulative per-run totals before handing it to the orchestrator. */
+  /** Shape of `PromptResponse.usage` emitted by this ACP bridge. Lorenz always converts it to cumulative per-run totals before handing it to the orchestrator. */
   usageAccounting: AgentUsageAccounting;
   /** Free-form provider configuration delivered to the bridge via the session request's `_meta`. */
   providerConfig?: Record<string, unknown> | undefined;
-  /** When true, launch the bridge with only the MCP servers Symphony injected (no user-side MCP config). */
+  /** When true, launch the bridge with only the MCP servers Lorenz injected (no user-side MCP config). */
   strictMcpConfig?: boolean | undefined;
 }
 

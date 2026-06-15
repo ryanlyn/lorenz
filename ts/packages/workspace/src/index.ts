@@ -16,7 +16,7 @@ import {
 } from "@lorenz/domain";
 import { execa } from "execa";
 
-const remoteWorkspaceMarker = "__SYMPHONY_WORKSPACE__";
+const remoteWorkspaceMarker = "__LORENZ_WORKSPACE__";
 const hookForceKillDelayMs = 5_000;
 const hookLogMaxChars = 4_096;
 
@@ -783,7 +783,7 @@ rm -rf "$target"`;
   ]
     .filter(Boolean)
     .join("\n");
-  const archiveDir = await fs.mkdtemp(path.join(os.tmpdir(), "symphony-skill-archive-"));
+  const archiveDir = await fs.mkdtemp(path.join(os.tmpdir(), "lorenz-skill-archive-"));
   const archivePath = path.join(archiveDir, "skill.tar");
 
   let timeoutTimer: ReturnType<typeof setTimeout> | undefined;

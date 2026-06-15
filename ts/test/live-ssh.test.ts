@@ -19,9 +19,9 @@ if (defaultAgentExecutorRegistry.get(acpExecutorProvider.executor) === undefined
 }
 
 const execFileAsync = promisify(execFile);
-const runLiveSsh = process.env.SYMPHONY_TS_RUN_LIVE_SSH_E2E === "1";
-const requireRemoteClaude = process.env.SYMPHONY_TS_REQUIRE_REMOTE_CLAUDE === "1";
-const remoteClaudeBridge = process.env.SYMPHONY_TS_CLAUDE_ACP_BRIDGE_COMMAND;
+const runLiveSsh = process.env.LORENZ_TS_RUN_LIVE_SSH_E2E === "1";
+const requireRemoteClaude = process.env.LORENZ_TS_REQUIRE_REMOTE_CLAUDE === "1";
+const remoteClaudeBridge = process.env.LORENZ_TS_CLAUDE_ACP_BRIDGE_COMMAND;
 
 test(
   "live SSH worker runs remote Codex and remote Claude canaries",
@@ -43,7 +43,7 @@ test(
       }
       if (!remoteClaudeBridge) {
         if (requireRemoteClaude)
-          throw new Error("remote Claude canary requires SYMPHONY_TS_CLAUDE_ACP_BRIDGE_COMMAND");
+          throw new Error("remote Claude canary requires LORENZ_TS_CLAUDE_ACP_BRIDGE_COMMAND");
         console.warn("remote Claude canary skipped because no Claude ACP bridge was supplied");
         return;
       }
@@ -66,7 +66,7 @@ interface LiveWorkerSetup {
 type LiveWorkerSetupResult = LiveWorkerSetup | { status: "skip"; reason: string };
 
 async function setupLiveWorkers(): Promise<LiveWorkerSetupResult> {
-  const configuredHosts = (process.env.SYMPHONY_LIVE_SSH_WORKER_HOSTS ?? "")
+  const configuredHosts = (process.env.LORENZ_LIVE_SSH_WORKER_HOSTS ?? "")
     .split(",")
     .map((host) => host.trim())
     .filter(Boolean);
@@ -91,13 +91,13 @@ async function setupLiveWorkers(): Promise<LiveWorkerSetupResult> {
   if (!(await commandExists("docker")))
     return {
       status: "skip",
-      reason: "docker is required when SYMPHONY_LIVE_SSH_WORKER_HOSTS is unset",
+      reason: "docker is required when LORENZ_LIVE_SSH_WORKER_HOSTS is unset",
     };
   if (!(await commandExists("ssh-keygen")))
     return { status: "skip", reason: "ssh-keygen is required for docker SSH workers" };
 
   const authJsonPath =
-    process.env.SYMPHONY_LIVE_DOCKER_CODEX_AUTH_JSON ??
+    process.env.LORENZ_LIVE_DOCKER_CODEX_AUTH_JSON ??
     path.join(os.homedir(), ".codex", "auth.json");
   if (!(await fileExists(authJsonPath)))
     return { status: "skip", reason: `missing Codex auth json at ${authJsonPath}` };
@@ -111,16 +111,16 @@ async function setupLiveWorkers(): Promise<LiveWorkerSetupResult> {
   const dockerSupportDir = path.resolve(import.meta.dirname, "support", "live_e2e_docker");
   const projectName = dockerProjectName(runId);
   const claudeToken =
-    process.env.SYMPHONY_LIVE_DOCKER_CLAUDE_CODE_OAUTH_TOKEN ??
+    process.env.LORENZ_LIVE_DOCKER_CLAUDE_CODE_OAUTH_TOKEN ??
     process.env.CLAUDE_CODE_OAUTH_TOKEN ??
     "";
   const composeEnv = {
     ...process.env,
-    SYMPHONY_LIVE_DOCKER_CODEX_AUTH_JSON: authJsonPath,
-    SYMPHONY_LIVE_DOCKER_AUTHORIZED_KEY: `${keyPath}.pub`,
-    SYMPHONY_LIVE_DOCKER_WORKER_1_PORT: String(ports[0]),
-    SYMPHONY_LIVE_DOCKER_WORKER_2_PORT: String(ports[1]),
-    SYMPHONY_LIVE_DOCKER_CLAUDE_CODE_OAUTH_TOKEN: claudeToken,
+    LORENZ_LIVE_DOCKER_CODEX_AUTH_JSON: authJsonPath,
+    LORENZ_LIVE_DOCKER_AUTHORIZED_KEY: `${keyPath}.pub`,
+    LORENZ_LIVE_DOCKER_WORKER_1_PORT: String(ports[0]),
+    LORENZ_LIVE_DOCKER_WORKER_2_PORT: String(ports[1]),
+    LORENZ_LIVE_DOCKER_CLAUDE_CODE_OAUTH_TOKEN: claudeToken,
   };
 
   await fs.mkdir(sshRoot, { recursive: true });
@@ -138,7 +138,7 @@ async function setupLiveWorkers(): Promise<LiveWorkerSetupResult> {
       "",
     ].join("\n"),
   );
-  vi.stubEnv("SYMPHONY_SSH_CONFIG", configPath);
+  vi.stubEnv("LORENZ_SSH_CONFIG", configPath);
 
   const cleanup = async () => {
     vi.unstubAllEnvs();
@@ -240,7 +240,7 @@ async function setupNativeSshdWorker(runId: string): Promise<LiveWorkerSetup> {
 
   await execFileAsync("/usr/sbin/sshd", ["-t", "-f", configPath]);
   await execFileAsync("/usr/sbin/sshd", ["-f", configPath, "-E", logPath]);
-  vi.stubEnv("SYMPHONY_SSH_CONFIG", clientConfigPath);
+  vi.stubEnv("LORENZ_SSH_CONFIG", clientConfigPath);
 
   const cleanup = async () => {
     vi.unstubAllEnvs();
@@ -297,7 +297,7 @@ async function runRemoteCodexCanary(setup: LiveWorkerSetup): Promise<void> {
     hooks: { after_create: initRepoHook(), timeout_ms: 60_000 },
     agents: {
       codex: {
-        bridge_command: process.env.SYMPHONY_TS_CODEX_ACP_COMMAND ?? "codex-acp",
+        bridge_command: process.env.LORENZ_TS_CODEX_ACP_COMMAND ?? "codex-acp",
         turn_timeout_ms: 300_000,
         stall_timeout_ms: 300_000,
       },
@@ -309,7 +309,7 @@ async function runRemoteCodexCanary(setup: LiveWorkerSetup): Promise<void> {
     workflow: workflow(
       settings,
       [
-        "This is a live TypeScript Symphony remote SSH Codex canary.",
+        "This is a live TypeScript Lorenz remote SSH Codex canary.",
         `Create a file named REMOTE_CODEX_E2E.txt whose only contents are ${marker} followed by a newline.`,
         "Do not create any other files.",
       ].join("\n"),
@@ -346,7 +346,7 @@ async function runRemoteClaudeCanary(setup: LiveWorkerSetup): Promise<void> {
   const settings = parseConfig({
     tracker: {
       api_key: "$LINEAR_API_KEY",
-      project_slug: "symphony-414bf2e49ff2",
+      project_slug: "lorenz-414bf2e49ff2",
     },
     workspace: { root: setup.workspaceRoot },
     worker: { ssh_hosts: setup.hosts, ssh_timeout_ms: 60_000 },
@@ -402,8 +402,8 @@ function workflow(
 function firstClaudePrompt(): string {
   return [
     "This is a live TypeScript remote MCP canary.",
-    "Use the mcp__symphony_linear__linear_graphql tool once with this exact query:",
-    "query SymphonyTsRemoteClaudeCanary { viewer { id } }",
+    "Use the mcp__lorenz_linear__linear_graphql tool once with this exact query:",
+    "query LorenzTsRemoteClaudeCanary { viewer { id } }",
     "Then create a file named REMOTE_CLAUDE_ONE.txt whose only contents are TS_REMOTE_CLAUDE_ONE followed by a newline.",
     "Do not create any other files.",
   ].join("\n");
@@ -411,8 +411,8 @@ function firstClaudePrompt(): string {
 
 function secondClaudePrompt(): string {
   return [
-    "Use the mcp__symphony_linear__linear_graphql tool once with this exact query:",
-    "query SymphonyTsRemoteClaudeSecondCanary { viewer { id } }",
+    "Use the mcp__lorenz_linear__linear_graphql tool once with this exact query:",
+    "query LorenzTsRemoteClaudeSecondCanary { viewer { id } }",
     "Then create a file named REMOTE_CLAUDE_TWO.txt whose only contents are TS_REMOTE_CLAUDE_TWO followed by a newline.",
     "Do not create any other files.",
   ].join("\n");
@@ -421,8 +421,8 @@ function secondClaudePrompt(): string {
 function initRepoHook(): string {
   return [
     "git init -q -b main || git init -q",
-    "git config user.name 'Symphony Test User'",
-    "git config user.email 'symphony-test@example.com'",
+    "git config user.name 'Lorenz Test User'",
+    "git config user.email 'lorenz-test@example.com'",
     "printf '# remote e2e\\n' > README.md",
     "git add README.md",
     "git commit -m init >/dev/null 2>&1 || true",
@@ -521,11 +521,11 @@ function dockerProjectName(runId: string): string {
 
 function remoteClaudeBridgeCommand(): string {
   const base = remoteClaudeBridge ?? "claude-agent-acp";
-  const raw = process.env.SYMPHONY_TS_CLAUDE_ACP_BRIDGE_ARGS;
+  const raw = process.env.LORENZ_TS_CLAUDE_ACP_BRIDGE_ARGS;
   if (!raw) return base;
   const parsed = JSON.parse(raw) as unknown;
   if (!Array.isArray(parsed) || !parsed.every((item) => typeof item === "string")) {
-    throw new Error("SYMPHONY_TS_CLAUDE_ACP_BRIDGE_ARGS must be a JSON string array");
+    throw new Error("LORENZ_TS_CLAUDE_ACP_BRIDGE_ARGS must be a JSON string array");
   }
   return [base, ...parsed].join(" ");
 }

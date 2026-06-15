@@ -98,7 +98,7 @@ test("ACP executor starts a session, translates updates, approves permissions, a
   const newSession = traceEvents.find((event) => event.method === "newSession");
   assert.ok(newSession);
   assert.match(JSON.stringify(newSession.params), /"type":"http"/);
-  assert.match(JSON.stringify(newSession.params), /"name":"symphony_tracker"/);
+  assert.match(JSON.stringify(newSession.params), /"name":"lorenz_tracker"/);
   assert.match(
     JSON.stringify(newSession.params),
     /"headers":\[\{"name":"Authorization","value":"Bearer /,
@@ -480,14 +480,14 @@ test("ACP executor acquires AND releases its OWN endpoint when no mcpEndpoint is
     issue: sampleIssue,
   });
   // acp owns its own endpoint on the local path: it acquired a real one (the
-  // default symphony_tracker server) and releasing the session releases it.
-  assert.match(JSON.stringify(session.mcpEndpoint.acpServer()), /"name":"symphony_tracker"/);
+  // default lorenz_tracker server) and releasing the session releases it.
+  assert.match(JSON.stringify(session.mcpEndpoint.acpServer()), /"name":"lorenz_tracker"/);
   await session.stop();
 
   const traceEvents = await readTrace(trace);
   const newSession = traceEvents.find((event) => event.method === "newSession");
   assert.ok(newSession);
-  assert.match(JSON.stringify(newSession.params), /"name":"symphony_tracker"/);
+  assert.match(JSON.stringify(newSession.params), /"name":"lorenz_tracker"/);
 });
 
 test("provider config rides session/new _meta as a claude settings overlay", async () => {

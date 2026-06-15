@@ -3,7 +3,7 @@ import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { setTimeout as delay } from "node:timers/promises";
 
-// Tests mutate process.env.PATH and process.env.SYMPHONY_SSH_CONFIG to inject fake
+// Tests mutate process.env.PATH and process.env.LORENZ_SSH_CONFIG to inject fake
 // ssh binaries and config. This requires sequential execution (enforced by the root
 // vitest.config.ts `sequence: { concurrent: false }`). The afterEach hook guarantees
 // env restoration even when assertions fail mid-test.
@@ -21,18 +21,18 @@ import {
   writeRemoteFile,
 } from "@lorenz/ssh";
 
-let savedEnv: { PATH: string | undefined; SYMPHONY_SSH_CONFIG: string | undefined };
+let savedEnv: { PATH: string | undefined; LORENZ_SSH_CONFIG: string | undefined };
 
 beforeEach(() => {
   savedEnv = {
     PATH: process.env.PATH,
-    SYMPHONY_SSH_CONFIG: process.env.SYMPHONY_SSH_CONFIG,
+    LORENZ_SSH_CONFIG: process.env.LORENZ_SSH_CONFIG,
   };
 });
 
 afterEach(() => {
   restoreEnv("PATH", savedEnv.PATH);
-  restoreEnv("SYMPHONY_SSH_CONFIG", savedEnv.SYMPHONY_SSH_CONFIG);
+  restoreEnv("LORENZ_SSH_CONFIG", savedEnv.LORENZ_SSH_CONFIG);
 });
 
 test("SSH target parsing and command args match host:port behavior", () => {
@@ -78,7 +78,7 @@ test("SSH args reject empty and option-like targets", () => {
   }
 });
 
-test("SSH run honors SYMPHONY_SSH_CONFIG, stderr folding, missing ssh, and timeouts", async () => {
+test("SSH run honors LORENZ_SSH_CONFIG, stderr folding, missing ssh, and timeouts", async () => {
   const root = await tempDir("lorenz-ssh");
   const trace = path.join(root, "ssh.trace");
 
@@ -92,14 +92,14 @@ printf 'err\\n' >&2
 exit 7
 `,
   );
-  process.env.SYMPHONY_SSH_CONFIG = "/tmp/symphony-test-ssh-config";
+  process.env.LORENZ_SSH_CONFIG = "/tmp/lorenz-test-ssh-config";
 
   const result = await runSsh("localhost:2222", "echo ready", { stderrToStdout: true });
   assert.equal(result.status, 7);
   assert.equal(result.stdout, "out\nerr\n");
   assert.equal(result.stderr, "");
   const traceText = await fs.readFile(trace, "utf8");
-  assert.match(traceText, /-F \/tmp\/symphony-test-ssh-config -T -p 2222 -- localhost bash -lc/);
+  assert.match(traceText, /-F \/tmp\/lorenz-test-ssh-config -T -p 2222 -- localhost bash -lc/);
   assert.match(traceText, /echo ready/);
 
   const emptyPath = await tempDir("lorenz-ssh-empty-path");
@@ -220,14 +220,14 @@ for arg in "$@"; do last_arg="$arg"; done
 eval "$last_arg"
 `,
   );
-  const payload = "#!/bin/bash\necho ready\n__SYMPHONY_SSH_WRITE_PAYLOAD__\n";
+  const payload = "#!/bin/bash\necho ready\n__LORENZ_SSH_WRITE_PAYLOAD__\n";
   await writeRemoteFile("localhost", remotePath, payload, { mode: 0o755 });
   assert.equal(await fs.readFile(remotePath, "utf8"), payload);
   const stat = await fs.stat(remotePath);
   assert.equal(stat.mode & 0o777, 0o755);
   const traceText = await fs.readFile(trace, "utf8");
   assert.match(traceText, /printf/);
-  assert.notMatch(traceText, /cat <<'__SYMPHONY_SSH_WRITE_PAYLOAD__'/);
+  assert.notMatch(traceText, /cat <<'__LORENZ_SSH_WRITE_PAYLOAD__'/);
 });
 
 test("SSH waitForRemoteTcpPort probes the remote loopback port", async () => {

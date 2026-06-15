@@ -14,7 +14,7 @@ export interface IssueRecord {
 }
 
 export function defaultIssueStorePath(homeDir = os.homedir()): string {
-  return path.join(homeDir, ".symphony", "issues.db");
+  return path.join(homeDir, ".lorenz", "issues.db");
 }
 
 export class IssueStore {

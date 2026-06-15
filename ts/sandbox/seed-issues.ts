@@ -1,6 +1,6 @@
 #!/usr/bin/env npx tsx
 /**
- * Seeds pre-baked Linear issues for a Symphony demo run.
+ * Seeds pre-baked Linear issues for a Lorenz demo run.
  *
  * Usage:
  *   LINEAR_API_KEY=... LINEAR_PROJECT_SLUG=... npx tsx demo/seed-issues.ts
@@ -39,7 +39,7 @@ const issues = [
       "Create a `README.md` file in the repo root with:",
       "",
       "- A title: `# Demo Workspace`",
-      "- A one-line description: `This workspace is used for Symphony demo runs.`",
+      "- A one-line description: `This workspace is used for Lorenz demo runs.`",
       "- A section `## Scripts` listing `hello_world.py` and `fibonacci.py`",
     ].join("\n"),
   },
@@ -98,7 +98,7 @@ async function main() {
   }
 
   console.log(`\nDone! Created ${toCreate.length} issues in "${todoState.name}" state.`);
-  console.log("Run Symphony with: pnpm start demo/DEMO_WORKFLOW.md --port 4040");
+  console.log("Run Lorenz with: pnpm start demo/DEMO_WORKFLOW.md --port 4040");
 }
 
 main().catch((err) => {

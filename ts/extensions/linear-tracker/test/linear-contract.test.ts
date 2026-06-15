@@ -110,7 +110,7 @@ test("Linear client retries 429 responses using Retry-After before succeeding", 
     assert.deepEqual(delays, [2000]);
     assert.equal(warnings.length, 1);
     assert.match(warnings[0] ?? "", /status=429 retry=1\/4 delay_ms=2000/);
-    assert.match(warnings[0] ?? "", /operation=SymphonyTsViewer/);
+    assert.match(warnings[0] ?? "", /operation=LorenzTsViewer/);
     assert.match(warnings[0] ?? "", /rate limited/);
   } finally {
     warnSpy.mockRestore();
@@ -209,7 +209,7 @@ test("Linear client logs non-200 failures with operation and bounded body", asyn
     await assert.rejects(() => client.viewer(), /linear api status 500/);
     assert.equal(errors.length, 1);
     assert.match(errors[0] ?? "", /Linear GraphQL request failed status=500/);
-    assert.match(errors[0] ?? "", /operation=SymphonyTsViewer/);
+    assert.match(errors[0] ?? "", /operation=LorenzTsViewer/);
     assert.match(errors[0] ?? "", /BAD_USER_INPUT/);
     assert.match(errors[0] ?? "", /truncated/);
   } finally {
@@ -647,7 +647,7 @@ function linearIssue(id: string, identifier: string): Record<string, unknown> {
     branchName: `${identifier.toLowerCase()}-branch`,
     url: `https://linear.app/test/issue/${identifier}`,
     assignee: { id: "user-1", email: "worker@example.com" },
-    labels: { nodes: [{ name: "Symphony:Backend" }] },
+    labels: { nodes: [{ name: "Lorenz:Backend" }] },
     inverseRelations: {
       nodes: [
         { type: "blocks", issue: { id: "blocker-1", identifier: "MT-0", state: { name: "Done" } } },

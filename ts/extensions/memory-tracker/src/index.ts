@@ -55,11 +55,11 @@ export class MemoryTrackerClient implements RuntimeTrackerClient {
 export function memoryIssuesFromEnv(
   env: NodeJS.ProcessEnv = process.env,
 ): Record<string, unknown>[] {
-  const json = env.SYMPHONY_MEMORY_TRACKER_ISSUES_JSON ?? env.SYMPHONY_MEMORY_TRACKER_ISSUES;
+  const json = env.LORENZ_MEMORY_TRACKER_ISSUES_JSON ?? env.LORENZ_MEMORY_TRACKER_ISSUES;
   if (!json || json.trim() === "") return [];
   const parsed = JSON.parse(json) as unknown;
   if (!Array.isArray(parsed))
-    throw new Error("SYMPHONY_MEMORY_TRACKER_ISSUES_JSON must be a JSON array");
+    throw new Error("LORENZ_MEMORY_TRACKER_ISSUES_JSON must be a JSON array");
   return parsed.map((entry, index) => {
     if (!isRecord(entry)) throw new Error(`memory tracker issue ${index} must be an object`);
     return entry;
@@ -117,7 +117,7 @@ function normalizeState(value: string): string {
 }
 
 /**
- * In-process tracker fixture: issues come from `SYMPHONY_MEMORY_TRACKER_ISSUES_JSON`.
+ * In-process tracker fixture: issues come from `LORENZ_MEMORY_TRACKER_ISSUES_JSON`.
  * Used by tests and sandboxes; exposes no agent tools.
  */
 export const memoryTrackerProvider: TrackerProvider = {

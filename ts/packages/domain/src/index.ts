@@ -192,7 +192,7 @@ export interface Issue {
 }
 
 /**
- * Rules for which tracker issues this Symphony instance picks up based on label routing.
+ * Rules for which tracker issues this Lorenz instance picks up based on label routing.
  * Routing lets multiple instances cooperate on the same project by claiming disjoint label sets.
  */
 export interface DispatchSettings {
@@ -205,8 +205,8 @@ export interface DispatchSettings {
   onlyRoutes: string[] | null;
   /**
    * Label prefix that designates a route. Labels starting with this prefix have the prefix stripped
-   * and the remainder (trimmed, lowercased) used as the route name; e.g. `"Symphony:"` turns
-   * `Symphony:backend` into route `backend`.
+   * and the remainder (trimmed, lowercased) used as the route name; e.g. `"Lorenz:"` turns
+   * `Lorenz:backend` into route `backend`.
    */
   routeLabelPrefix: string;
 }
@@ -367,7 +367,7 @@ export interface WorkerSettings {
   kind?: string | undefined;
   /**
    * SSH destinations in standard OpenSSH form, e.g. `host`, `user@host`, `user@host:2222`,
-   * or any `Host` alias resolved via `~/.ssh/config` (or `$SYMPHONY_SSH_CONFIG`).
+   * or any `Host` alias resolved via `~/.ssh/config` (or `$LORENZ_SSH_CONFIG`).
    * Empty list means runs happen locally.
    */
   sshHosts: string[];
@@ -524,7 +524,7 @@ export interface WorkspaceSettings {
 }
 
 /**
- * Root configuration for a Symphony runtime instance. Built from the YAML front matter of a
+ * Root configuration for a Lorenz runtime instance. Built from the YAML front matter of a
  * workflow file plus environment-variable fallbacks, then held immutable for the lifetime of
  * the process. Every subsystem reads its slice from here. State-specific tweaks live in
  * `statusOverrides` and are layered on top per issue.

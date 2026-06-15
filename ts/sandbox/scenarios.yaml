@@ -928,7 +928,7 @@ scenarios:
   - id: S-056
     category: Routing
     invariant: "Valid route in allowlist -> eligible"
-    setup: 'Issue(labels=["symphony:backend"]), onlyRoutes=["backend"]'
+    setup: 'Issue(labels=["lorenz:backend"]), onlyRoutes=["backend"]'
     action: "routedToThisWorker(issue, settings)"
     expected: "true"
     status: PENDING
@@ -936,7 +936,7 @@ scenarios:
   - id: S-057
     category: Routing
     invariant: Case-insensitive
-    setup: 'Issue(labels=["SYMPHONY:BACKEND"]), prefix="Symphony:", onlyRoutes=["backend"]'
+    setup: 'Issue(labels=["LORENZ:BACKEND"]), prefix="Lorenz:", onlyRoutes=["backend"]'
     action: "routedToThisWorker(issue, settings)"
     expected: "true (labels are lowercased during normalization)"
     status: PENDING
@@ -944,7 +944,7 @@ scenarios:
   - id: S-058
     category: Routing
     invariant: "Whitespace-only name -> not valid"
-    setup: 'Issue(labels=["symphony: "]), acceptUnrouted=true'
+    setup: 'Issue(labels=["lorenz: "]), acceptUnrouted=true'
     action: "routedToThisWorker(issue, settings)"
     expected: "false (hasRouteLabel=true, but routeNames=[], treated as routed-but-invalid)"
     status: PENDING
@@ -968,7 +968,7 @@ scenarios:
   - id: S-061
     category: Routing
     invariant: "Route not in list -> rejected"
-    setup: 'Issue(labels=["symphony:frontend"]), onlyRoutes=["backend"]'
+    setup: 'Issue(labels=["lorenz:frontend"]), onlyRoutes=["backend"]'
     action: "routedToThisWorker(issue, settings)"
     expected: "false"
     status: PENDING
@@ -976,7 +976,7 @@ scenarios:
   - id: S-062
     category: Routing
     invariant: "Null allowlist -> accept all"
-    setup: 'Issue(labels=["symphony:anything"]), onlyRoutes=null'
+    setup: 'Issue(labels=["lorenz:anything"]), onlyRoutes=null'
     action: "routedToThisWorker(issue, settings)"
     expected: "true"
     status: PENDING
@@ -984,7 +984,7 @@ scenarios:
   - id: S-063
     category: Routing
     invariant: "Empty allowlist -> reject all"
-    setup: 'Issue(labels=["symphony:backend"]), onlyRoutes=[]'
+    setup: 'Issue(labels=["lorenz:backend"]), onlyRoutes=[]'
     action: "routedToThisWorker(issue, settings)"
     expected: "false"
     status: PENDING
@@ -992,7 +992,7 @@ scenarios:
   - id: S-064
     category: Routing
     invariant: "Any matching route suffices"
-    setup: 'Issue(labels=["symphony:frontend","symphony:backend"]), onlyRoutes=["backend"]'
+    setup: 'Issue(labels=["lorenz:frontend","lorenz:backend"]), onlyRoutes=["backend"]'
     action: "routedToThisWorker(issue, settings)"
     expected: "true"
     status: PENDING
@@ -1000,7 +1000,7 @@ scenarios:
   - id: S-065
     category: Routing
     invariant: "Prefix matching case-insensitive"
-    setup: 'routeLabelPrefix="Symphony:", issue has label "symphony:backend"'
+    setup: 'routeLabelPrefix="Lorenz:", issue has label "lorenz:backend"'
     action: "routeNames(issue, settings)"
     expected: '["backend"]'
     status: PENDING
@@ -1040,7 +1040,7 @@ scenarios:
   - id: S-070
     category: Routing
     invariant: "Whitespace stripping"
-    setup: 'Issue(labels=["symphony:  backend  "])'
+    setup: 'Issue(labels=["lorenz:  backend  "])'
     action: "routeNames(issue, settings)"
     expected: '["backend"] (trimmed after prefix removal)'
     status: PENDING
@@ -1048,7 +1048,7 @@ scenarios:
   - id: S-071
     category: Routing
     invariant: "Empty name after prefix -> not valid"
-    setup: 'Issue(labels=["symphony:"])'
+    setup: 'Issue(labels=["lorenz:"])'
     action: "routeNames(issue, settings)"
     expected: "[] (empty string after normalizeRouteName is filtered out)"
     status: PENDING
@@ -1056,7 +1056,7 @@ scenarios:
   - id: S-072
     category: Routing
     invariant: "Routed-but-invalid -> rejected"
-    setup: 'Issue(labels=["symphony:   "])'
+    setup: 'Issue(labels=["lorenz:   "])'
     action: "hasRouteLabel=true, routeNames=[], routedToThisWorker returns false"
     expected: "false regardless of acceptUnrouted"
     status: PENDING
@@ -1072,7 +1072,7 @@ scenarios:
   - id: S-074
     category: Routing
     invariant: "Allowlist comparison uses normalizeRouteName"
-    setup: 'onlyRoutes=["Backend"], issue label "symphony:backend"'
+    setup: 'onlyRoutes=["Backend"], issue label "lorenz:backend"'
     action: "routedToThisWorker(issue, settings)"
     expected: "true (allowlist entries are normalized)"
     status: PENDING
@@ -1080,7 +1080,7 @@ scenarios:
   - id: S-075
     category: Routing
     invariant: "Assignment check before routing"
-    setup: 'Issue(assignedToWorker=false, labels=["symphony:backend"]), onlyRoutes=["backend"]'
+    setup: 'Issue(assignedToWorker=false, labels=["lorenz:backend"]), onlyRoutes=["backend"]'
     action: "routedToThisWorker(issue, settings)"
     expected: "false"
     status: PENDING
@@ -2886,7 +2886,7 @@ scenarios:
   - id: S-453
     category: Routing
     invariant: "Unrouted accepted when enabled"
-    what_is_being_tested: "No symphony label present"
+    what_is_being_tested: "No lorenz label present"
     expected: "Dispatched (unrouted accepted)"
     status: PENDING
 
@@ -2921,21 +2921,21 @@ scenarios:
   - id: S-458
     category: Routing
     invariant: "Prefix matching is case-insensitive"
-    what_is_being_tested: "\"symphony:\" prefix matches \"Symphony:\" config"
+    what_is_being_tested: "\"lorenz:\" prefix matches \"Lorenz:\" config"
     expected: "Dispatched"
     status: PENDING
 
   - id: S-459
     category: Routing
     invariant: "Leading/trailing whitespace stripped"
-    what_is_being_tested: "\"Symphony:  backend  \" normalizes to \"backend\""
+    what_is_being_tested: "\"Lorenz:  backend  \" normalizes to \"backend\""
     expected: "Dispatched (whitespace trimmed)"
     status: PENDING
 
   - id: S-460
     category: Routing
     invariant: "Whitespace-only name after prefix -> not valid"
-    what_is_being_tested: "\"Symphony:   \" has route label but empty name"
+    what_is_being_tested: "\"Lorenz:   \" has route label but empty name"
     expected: "Not dispatched (routed-but-invalid)"
     status: PENDING
 
@@ -2963,7 +2963,7 @@ scenarios:
   - id: S-464
     category: Routing
     invariant: "Allowlist entries normalized"
-    what_is_being_tested: "onlyRoutes=[\"Backend\"] matches label \"symphony:backend\""
+    what_is_being_tested: "onlyRoutes=[\"Backend\"] matches label \"lorenz:backend\""
     expected: "Dispatched (both sides normalized)"
     status: PENDING
 

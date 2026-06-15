@@ -117,7 +117,7 @@ export interface BuildWorkerPoolOptions {
  * so third-party drivers load at the same fail-loud startup point - an
  * unresolvable driver throws `worker_pool_driver_unavailable` before the pool, the
  * runtime, or any provision exists. The write-ahead ledger (only consulted by
- * cloud drivers) lives under `<workspace.root>/.symphony/worker-pool/`.
+ * cloud drivers) lives under `<workspace.root>/.lorenz/worker-pool/`.
  */
 export async function buildWorkerPool(
   settings: Settings,
@@ -135,7 +135,7 @@ export async function buildWorkerPool(
   return createWorkerPool(workerPoolSettings, {
     clock: systemClock,
     logEvent,
-    ledgerPath: path.join(settings.workspace.root, ".symphony", "worker-pool", "ledger.json"),
+    ledgerPath: path.join(settings.workspace.root, ".lorenz", "worker-pool", "ledger.json"),
     drivers: defaultWorkerDriverRegistry,
   });
 }

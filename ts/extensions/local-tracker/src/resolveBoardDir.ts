@@ -1,7 +1,7 @@
 import path from "node:path";
 
 /** The board directory used when no tracker.path is configured. */
-export const DEFAULT_BOARD_DIR = ".symphony/local";
+export const DEFAULT_BOARD_DIR = ".lorenz/local";
 
 /**
  * Resolve the on-disk board directory from a configured tracker.path.
@@ -13,7 +13,7 @@ export const DEFAULT_BOARD_DIR = ".symphony/local";
  * forever.
  *
  * The resolution mirrors workspace.root's path handling:
- *   1. defaults to ".symphony/local" when unset,
+ *   1. defaults to ".lorenz/local" when unset,
  *   2. expands a leading "~" (the operator's HOME) and embedded environment
  *      variables ("$VAR" or "${VAR}") - unknown variables expand to empty,
  *      matching shell substitution; the leading "~" is only honored when it

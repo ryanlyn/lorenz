@@ -14,15 +14,15 @@ import {
 import { linearToolPackOptions, validateLinearToolOptions } from "./options.js";
 
 /**
- * The `symphony-linear` skill ships inside this extension (`skills/symphony-linear`, a sibling
+ * The `lorenz-linear` skill ships inside this extension (`skills/lorenz-linear`, a sibling
  * of `src`/`dist`) so mounting the Linear pack also overlays the doc that teaches the agent to
  * call `linear_graphql`. Resolved from this module so it works from both `src` and `dist`.
  */
-const symphonyLinearSkillDir = path.resolve(
+const lorenzLinearSkillDir = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "..",
   "skills",
-  "symphony-linear",
+  "lorenz-linear",
 );
 
 const LINEAR_MAX_RETRIES = 4;
@@ -42,7 +42,7 @@ export function linearToolSpecs(): ToolSpec[] {
   return [
     {
       name: "linear_graphql",
-      description: "Run a Linear GraphQL operation using Symphony's configured Linear credentials.",
+      description: "Run a Linear GraphQL operation using Lorenz's configured Linear credentials.",
       inputSchema: {
         type: "object",
         additionalProperties: false,
@@ -79,7 +79,7 @@ export async function executeLinearTool(
   const { apiKey, endpoint } = linearToolPackOptions(settings);
   if (!apiKey)
     return toolFailure(
-      "Symphony is missing Linear auth. Set `linear.api_key` in `WORKFLOW.md` or export `LINEAR_API_KEY`.",
+      "Lorenz is missing Linear auth. Set `linear.api_key` in `WORKFLOW.md` or export `LINEAR_API_KEY`.",
     );
   if (
     normalizedInput.variables !== undefined &&
@@ -132,7 +132,7 @@ export async function executeLinearTool(
 /** The Linear tool pack: raw GraphQL access using the pack's own Linear credentials. */
 export const linearToolProvider: ToolProvider = {
   name: "linear",
-  skills: [symphonyLinearSkillDir],
+  skills: [lorenzLinearSkillDir],
   validateOptions: validateLinearToolOptions,
   toolSpecs: () => linearToolSpecs(),
   executeTool: async (name, input, context) =>

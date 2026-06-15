@@ -7,14 +7,14 @@
  *   npx tsx sandbox/seed-local.ts [dir] [count] [idPrefix]
  *
  * Arguments (all optional):
- *   dir       target board directory (default: .symphony/local)
+ *   dir       target board directory (default: .lorenz/local)
  *   count     how many of the sample issues to create (default: all of them)
  *   idPrefix  issue-id prefix to mint with (default: BOARD-); match your workflow's tracker.id_prefix
  *
  * Examples:
- *   npx tsx sandbox/seed-local.ts                       # seeds ./.symphony/local
+ *   npx tsx sandbox/seed-local.ts                       # seeds ./.lorenz/local
  *   npx tsx sandbox/seed-local.ts /tmp/demo-board       # seeds an explicit dir
- *   npx tsx sandbox/seed-local.ts .symphony/local 2     # seeds only the first 2 issues
+ *   npx tsx sandbox/seed-local.ts .lorenz/local 2     # seeds only the first 2 issues
  *   npx tsx sandbox/seed-local.ts /tmp/demo-board 3 XXX- # seeds XXX-1..XXX-3
  *
  * Issues are written as `BOARD-<n>.md` files via @lorenz/local-tracker's BoardStore so
@@ -69,7 +69,7 @@ export const SEED_ISSUES: readonly SeedIssue[] = [
       "Create a `README.md` file in the repo root with:",
       "",
       "- A title: `# Demo Workspace`",
-      "- A one-line description: `This workspace is used for Symphony demo runs.`",
+      "- A one-line description: `This workspace is used for Lorenz demo runs.`",
       "- A section `## Scripts` listing `hello_world.py` and `fibonacci.py`",
     ].join("\n"),
   },
@@ -99,7 +99,7 @@ export async function seedLocalBoard(
 }
 
 async function main(): Promise<void> {
-  const dir = process.argv[2] ?? ".symphony/local";
+  const dir = process.argv[2] ?? ".lorenz/local";
   const count = process.argv[3] ? parseInt(process.argv[3], 10) : SEED_ISSUES.length;
   const idPrefix = process.argv[4];
 
@@ -109,7 +109,7 @@ async function main(): Promise<void> {
   }
 
   console.log(`\nDone! Wrote ${created.length} board issue(s) to ${dir}.`);
-  console.log("Point tracker.path at this directory and run Symphony with kind: local.");
+  console.log("Point tracker.path at this directory and run Lorenz with kind: local.");
 }
 
 // Only run when invoked directly (e.g. `npx tsx sandbox/seed-local.ts`), not when imported

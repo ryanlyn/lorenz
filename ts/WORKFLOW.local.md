@@ -1,7 +1,7 @@
 ---
 tracker:
   kind: local
-  path: .symphony/local/symphony
+  path: .lorenz/local/lorenz
   id_prefix: "BOARD-" # optional, default "BOARD-"; sets the <prefix><n> issue-id shape
   active_states:
     - Todo
@@ -12,11 +12,11 @@ tracker:
   dispatch:
     accept_unrouted: true
     only_routes: null
-    route_label_prefix: "Symphony:"
+    route_label_prefix: "Lorenz:"
 polling:
   interval_ms: 5000
 workspace:
-  root: ~/dev/symphony-workspaces
+  root: ~/dev/lorenz-workspaces
 worker:
   ssh_timeout_ms: 60000
 hooks:
@@ -85,9 +85,9 @@ Work only in the provided repository copy. Do not touch any other path.
 
 ## Tracker: local Markdown board
 
-This workflow is backed by a **local board**, not Linear. There is **no Linear and no `linear_graphql` tool**. Issues live as Markdown files on disk under the board directory configured in `tracker.path` (default `.symphony/local/`).
+This workflow is backed by a **local board**, not Linear. There is **no Linear and no `linear_graphql` tool**. Issues live as Markdown files on disk under the board directory configured in `tracker.path` (default `.lorenz/local/`).
 
-- On the daemon side each issue is a Markdown file named `BOARD-<n>.md` (for example `.symphony/local/BOARD-7.md`). That board directory lives outside your cloned repo workspace, so you never open the file directly - you read its state through the `local_read_issue` tool instead.
+- On the daemon side each issue is a Markdown file named `BOARD-<n>.md` (for example `.lorenz/local/BOARD-7.md`). That board directory lives outside your cloned repo workspace, so you never open the file directly - you read its state through the `local_read_issue` tool instead.
 - The issue's status, title, and description are surfaced to you in the rendered issue context above (use the `Current status` line for status). To re-read authoritative state at any point, call `local_read_issue(issueId)`, which returns the current status, title, description, and comments.
 - Comments are appended to the issue file by the `local_comment` tool as human-visible progress notes. They are readable: `local_read_issue(issueId)` returns your prior comments, so you can recover plan and validation notes you posted on earlier turns.
 
@@ -116,11 +116,11 @@ There is **no `linear_graphql`** tool and no Linear MCP server. Do not attempt t
 
 ## Related skills
 
-- `symphony-commit`: produce clean, logical commits during implementation.
+- `lorenz-commit`: produce clean, logical commits during implementation.
 - `simplify`: review changed code for reuse, quality, and efficiency before committing.
-- `symphony-push`: keep remote branch current and open/update the pull request.
-- `symphony-pull`: keep branch updated with latest `origin/main` before handoff.
-- `symphony-land`: when the work is approved, follow the `land` loop to merge the PR.
+- `lorenz-push`: keep remote branch current and open/update the pull request.
+- `lorenz-pull`: keep branch updated with latest `origin/main` before handoff.
+- `lorenz-land`: when the work is approved, follow the `land` loop to merge the PR.
 
 ## Status map
 
@@ -144,14 +144,14 @@ There is **no `linear_graphql`** tool and no Linear MCP server. Do not attempt t
 2. If arriving from `Todo`, ensure the issue is already `In Progress` (you moved it in Step 0).
 3. Add a compact environment stamp at the top of the workpad as a code fence line: `<host>:<abs-workdir>@<short-sha>`.
 4. Capture a concrete reproduction signal and record it in the workpad before implementing.
-5. Run the `symphony-pull` skill to sync with latest `origin/main` before code edits, and record the result in the workpad.
+5. Run the `lorenz-pull` skill to sync with latest `origin/main` before code edits, and record the result in the workpad.
 
 ## Step 2: Implement and validate
 
 1. Implement against the plan, checking off completed items in the workpad via `local_comment` updates.
 2. Run validation/tests/proof-of-work for the scope. Prefer a targeted proof that demonstrates the behavior you changed.
 3. Re-check all acceptance criteria and close any gaps.
-4. Before every `git commit`, run the `simplify` skill, then the `symphony-commit` skill to commit and `symphony-push` to push and open/update the PR.
+4. Before every `git commit`, run the `simplify` skill, then the `lorenz-commit` skill to commit and `lorenz-push` to push and open/update the PR.
 5. Update the workpad with the final checklist status and validation notes via `local_comment`.
 
 ## Step 3: Complete
@@ -179,7 +179,7 @@ There is **no `linear_graphql`** tool and no Linear MCP server. Do not attempt t
 Use this structure for the first `local_comment` progress note and keep follow-ups consistent. These comments are human-visible notes and are readable back via `local_read_issue`:
 
 ````md
-## Symphony Workpad
+## Lorenz Workpad
 
 ```text
 <hostname>:<abs-path>@<short-sha>

@@ -11,7 +11,7 @@ import { startMcpServer, type ObservabilityServerHandle } from "./server.js";
 import { issueMcpToken, mcpAuthScopeForSettings, revokeMcpToken } from "./auth.js";
 
 export function trackerMcpServerName(kind: TrackerKind | undefined): string {
-  return `symphony_${(kind ?? "tracker").replace(/[^A-Za-z0-9_]/g, "_")}`;
+  return `lorenz_${(kind ?? "tracker").replace(/[^A-Za-z0-9_]/g, "_")}`;
 }
 
 export interface AgentMcpEndpointLease {
@@ -74,7 +74,7 @@ interface IssuedMcpToken {
 }
 
 const mcpPath = "/mcp";
-const configuredMcpProbeId = "symphony-configured-mcp-probe";
+const configuredMcpProbeId = "lorenz-configured-mcp-probe";
 const localMcpServers = new Map<string, LocalMcpServerEntry>();
 const localMcpServerLocks = new Map<string, Promise<void>>();
 

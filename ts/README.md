@@ -47,13 +47,13 @@ lorenz runs [--issue ID] [--failed] [--cost] [--retries] [--id RUN_ID] [--limit 
 
 Optional flags:
 
-- `--logs-root <path>` writes logs under `<path>/log/symphony.log`.
+- `--logs-root <path>` writes logs under `<path>/log/lorenz.log`.
 - `--port <port>` starts the local observability dashboard and JSON API.
 - `--once` polls once and exits.
 - `--dry-run` evaluates candidates without dispatching agents.
 - `--no-tui` disables the terminal dashboard and prints JSON snapshots.
 
-With no workflow path, the CLI reads `SYMPHONY_WORKFLOW`, then `./WORKFLOW.md`.
+With no workflow path, the CLI reads `LORENZ_WORKFLOW`, then `./WORKFLOW.md`.
 
 The runtime reloads the workflow before each poll. If startup cannot read or parse the workflow,
 the CLI exits with an error. If a later reload fails, the runtime keeps the last good workflow and
@@ -143,17 +143,17 @@ trackers:
     dispatch:
       accept_unrouted: true # accept issues without a route label; default: true
       only_routes: null # null accepts any route, [] accepts none
-      route_label_prefix: "Symphony:" # route labels look like "Symphony:backend"
+      route_label_prefix: "Lorenz:" # route labels look like "Lorenz:backend"
 
 tools:
   local:
-    path: .symphony/local # explicit extra pack config; not needed for Linear-owned tools
+    path: .lorenz/local # explicit extra pack config; not needed for Linear-owned tools
 
 polling:
   interval_ms: 30000 # default: 30000
 
 workspace:
-  root: ~/code/workspaces # default: $TMPDIR/symphony_workspaces
+  root: ~/code/workspaces # default: $TMPDIR/lorenz_workspaces
 
 worker:
   # Either list static SSH hosts here, or set kind to select a top-level workers.<name> profile.
@@ -192,7 +192,7 @@ agent:
   max_retry_backoff_ms: 300000 # default: 300000
   ensemble_size: 1 # default: 1
   skills: # skill directories overlaid into each workspace before the agent starts
-    - ./.codex/skills/symphony-land # one entry per skill directory
+    - ./.codex/skills/lorenz-land # one entry per skill directory
 
 agents:
   turn_timeout_ms: 3600000 # default: 3600000
@@ -249,7 +249,7 @@ server:
   host: 127.0.0.1 # default: 127.0.0.1
 
 logging:
-  log_file: ./log/symphony.log # default: ~/.symphony/log/symphony.log
+  log_file: ./log/lorenz.log # default: ~/.lorenz/log/lorenz.log
 ---
 ```
 
@@ -265,9 +265,9 @@ Notes:
 - Shared tracker secrets can use `op://` references when the 1Password CLI is installed.
 - `tools.<pack>` mounts or configures extra tool packs. Tracker-owned tools are implicit, so a
   Linear tracker does not need a matching `tools.linear` entry.
-- `workspace.root` supports `~` and whole-value `$VAR` expansion. `SYMPHONY_WORKSPACE_ROOT`
+- `workspace.root` supports `~` and whole-value `$VAR` expansion. `LORENZ_WORKSPACE_ROOT`
   overrides `workspace.root` at runtime.
-- `SYMPHONY_SSH_CONFIG` points SSH worker commands at a custom OpenSSH config file.
+- `LORENZ_SSH_CONFIG` points SSH worker commands at a custom OpenSSH config file.
 - Hooks run through `bash -lc` locally or over SSH with the workspace as `cwd`. Use
   fail-fast shell options in bootstrap hooks so clone and dependency setup failures stop workspace
   creation immediately.
@@ -288,7 +288,7 @@ Prerequisites:
    `terminal_states` to match your team.
 
 Route labels let multiple Lorenz instances share one Linear project. With the default
-`route_label_prefix`, labels such as `Symphony:backend` and `Symphony:frontend` become route names.
+`route_label_prefix`, labels such as `Lorenz:backend` and `Lorenz:frontend` become route names.
 
 ## Trackers
 
@@ -341,7 +341,7 @@ trackers:
     dispatch:
       accept_unrouted: true # process issues that carry no matching route label (default)
       only_routes: null # or a list of route names this instance handles
-      route_label_prefix: "Symphony:" # the label prefix that names a route
+      route_label_prefix: "Lorenz:" # the label prefix that names a route
 ```
 
 ### Jira tracker
@@ -367,7 +367,7 @@ trackers:
     api_key: $JIRA_API_KEY
     project_keys: ["ENG"]
     # Optional provider-native scope. When present, Lorenz combines it with active_states.
-    # jql: 'project = ENG AND labels in ("symphony")'
+    # jql: 'project = ENG AND labels in ("lorenz")'
 ```
 
 Jira via an external MCP server:
@@ -396,7 +396,7 @@ trackers:
 The local tracker runs Lorenz against a directory of Markdown files, with no Linear API key or
 workspace. See `WORKFLOW.local.md` for a complete example workflow.
 
-Configure it with `kind: local` and a board `path` (default `.symphony/local`):
+Configure it with `kind: local` and a board `path` (default `.lorenz/local`):
 
 ```yaml
 tracker:
@@ -404,7 +404,7 @@ tracker:
 trackers:
   local:
     provider: local
-    path: .symphony/local
+    path: .lorenz/local
     id_prefix: "BOARD-" # optional, default "BOARD-"
     active_states:
       - Todo
@@ -421,8 +421,8 @@ and another `XXX-1`, `FEAT-1`, etc. It must be filesystem-safe (start alphanumer
 letters, digits, `_` or `-`); an unsafe prefix is rejected at config load. Changing the prefix of an
 existing board orphans files written under the old prefix (they stop matching), so set it up front.
 
-Each issue is one file named `<prefix><n>.md` (for example `.symphony/local/BOARD-7.md`, or
-`.symphony/local/XXX-7.md` with `id_prefix: "XXX-"`). The identifier is the file stem (`BOARD-7`).
+Each issue is one file named `<prefix><n>.md` (for example `.lorenz/local/BOARD-7.md`, or
+`.lorenz/local/XXX-7.md` with `id_prefix: "XXX-"`). The identifier is the file stem (`BOARD-7`).
 The format is YAML front matter followed by a `# Title`
 heading, the description, and an optional `## Comments` section:
 
@@ -438,7 +438,7 @@ labels:
 
 The retry slot is not released when a worker fails.
 
-<!-- symphony:comments -->
+<!-- lorenz:comments -->
 ## Comments
 - 2026-05-29T12:00:00.000Z agent: Reproduced the leak; fix in progress.
 ```
@@ -449,7 +449,7 @@ The retry slot is not released when a worker fails.
 - `labels` (optional) is a YAML list. Labels feed dispatch routing the same way Linear labels do.
 - The `# Title` heading is the issue title; the text below it is the description.
 - The `## Comments` section is managed by the `local_comment` tool. The hidden
-  `<!-- symphony:comments -->` marker delimits it so a description that itself contains a
+  `<!-- lorenz:comments -->` marker delimits it so a description that itself contains a
   `## Comments` heading is never misparsed; treat the most recent comment block as the live
   workpad.
 
@@ -473,9 +473,9 @@ To seed a board so you can try `kind: local` immediately, use the demo seeder, w
 sample `BOARD-<n>.md` files through the same `BoardStore` the running tracker uses:
 
 ```sh
-npx tsx sandbox/seed-local.ts                    # seeds ./.symphony/local
+npx tsx sandbox/seed-local.ts                    # seeds ./.lorenz/local
 npx tsx sandbox/seed-local.ts /tmp/demo-board    # seeds an explicit directory
-npx tsx sandbox/seed-local.ts .symphony/local 2  # seeds only the first 2 issues
+npx tsx sandbox/seed-local.ts .lorenz/local 2  # seeds only the first 2 issues
 npx tsx sandbox/seed-local.ts /tmp/demo-board 3 XXX-  # seeds XXX-1..XXX-3 (match trackers.local.id_prefix)
 ```
 
@@ -648,21 +648,21 @@ Workspace tests render representative Liquid constructs: conditionals, null fall
 The `.codex/skills/` directory in this repo contains orchestration skills referenced by the example
 workflow files:
 
-- `symphony-commit` produces clean, logical commits.
-- `symphony-push` pushes branches and creates or updates PRs.
-- `symphony-pull` merges the latest `origin/main` into a working branch.
-- `symphony-land` monitors and merges approved PRs.
-- `symphony-debug` investigates stuck runs and execution failures.
+- `lorenz-commit` produces clean, logical commits.
+- `lorenz-push` pushes branches and creates or updates PRs.
+- `lorenz-pull` merges the latest `origin/main` into a working branch.
+- `lorenz-land` monitors and merges approved PRs.
+- `lorenz-debug` investigates stuck runs and execution failures.
 
 Lorenz overlays skills into each prepared workspace before the agent starts, copying each
 configured directory whole into the agent's skills directory - `.codex/skills/` for Codex,
 `.claude/skills/` for Claude (the active executor chooses). Skills come from two places:
 
 - **`agent.skills`** - a list of skill directories you maintain. Each entry is one skill directory
-  (e.g. `./.codex/skills/symphony-land`) and is copied to `<skills>/<directory-name>`. Relative
+  (e.g. `./.codex/skills/lorenz-land`) and is copied to `<skills>/<directory-name>`. Relative
   paths resolve from the workflow file directory.
 - **Tool packs** - a mounted tool pack can bundle the skill that documents it, so the skill ships
-  automatically when the tool is in use. The Linear pack bundles `symphony-linear` (raw Linear
+  automatically when the tool is in use. The Linear pack bundles `lorenz-linear` (raw Linear
   access via the injected `linear_graphql` tool for Codex or the `/mcp` endpoint for Claude), so
   enabling Linear tools overlays that skill without listing it under `agent.skills`.
 
@@ -734,19 +734,19 @@ pnpm test:live:linear-sandbox
 
 Environment knobs:
 
-- `SYMPHONY_TS_CODEX_ACP_COMMAND` overrides the Codex ACP bridge command for live tests.
-- `SYMPHONY_TS_CLAUDE_ACP_BRIDGE_COMMAND` enables Claude live tests.
-- `SYMPHONY_TS_CLAUDE_ACP_BRIDGE_ARGS` supplies Claude ACP bridge args as a JSON string array.
+- `LORENZ_TS_CODEX_ACP_COMMAND` overrides the Codex ACP bridge command for live tests.
+- `LORENZ_TS_CLAUDE_ACP_BRIDGE_COMMAND` enables Claude live tests.
+- `LORENZ_TS_CLAUDE_ACP_BRIDGE_ARGS` supplies Claude ACP bridge args as a JSON string array.
 - `LINEAR_API_KEY` is required for Linear live tests and MCP canaries.
 - `LINEAR_PROJECT_SLUG` selects the Linear project for `pnpm test:live:linear-codex`.
-- `SYMPHONY_LIVE_SSH_WORKER_HOSTS` is a comma-separated list of real SSH workers.
-- When `SYMPHONY_LIVE_SSH_WORKER_HOSTS` is unset, the SSH live test can use disposable local
+- `LORENZ_LIVE_SSH_WORKER_HOSTS` is a comma-separated list of real SSH workers.
+- When `LORENZ_LIVE_SSH_WORKER_HOSTS` is unset, the SSH live test can use disposable local
   workers if Docker, `ssh-keygen`, and Codex auth are available.
-- `SYMPHONY_LIVE_DOCKER_CODEX_AUTH_JSON` points disposable workers at a Codex auth file. The
+- `LORENZ_LIVE_DOCKER_CODEX_AUTH_JSON` points disposable workers at a Codex auth file. The
   default is `~/.codex/auth.json`.
-- `CLAUDE_CODE_OAUTH_TOKEN` or `SYMPHONY_LIVE_DOCKER_CLAUDE_CODE_OAUTH_TOKEN` lets disposable
+- `CLAUDE_CODE_OAUTH_TOKEN` or `LORENZ_LIVE_DOCKER_CLAUDE_CODE_OAUTH_TOKEN` lets disposable
   workers run the remote Claude canary.
-- `SYMPHONY_TS_REQUIRE_REMOTE_CLAUDE=1` makes the remote Claude canary mandatory in the SSH live
+- `LORENZ_TS_REQUIRE_REMOTE_CLAUDE=1` makes the remote Claude canary mandatory in the SSH live
   test.
 
 ## Packaging

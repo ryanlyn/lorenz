@@ -1,4 +1,4 @@
-# Symphony Extended Invariant Tests — Round 3
+# Lorenz Extended Invariant Tests — Round 3
 
 **Date:** 2026-05-30  
 **Total New Scenarios Tested:** 20  

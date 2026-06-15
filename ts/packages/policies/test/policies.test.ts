@@ -67,7 +67,7 @@ function makeSettings(
       dispatch: {
         acceptUnrouted: overrides.acceptUnrouted ?? true,
         onlyRoutes: overrides.onlyRoutes !== undefined ? overrides.onlyRoutes : null,
-        routeLabelPrefix: "Symphony:",
+        routeLabelPrefix: "Lorenz:",
       },
       endpoint: "",
     },
@@ -160,12 +160,12 @@ test('reconciliationStopReason — state not in activeStates returns "terminal"'
 });
 
 test('reconciliationStopReason — unrouted via route label mismatch returns "unrouted"', () => {
-  // Issue has a Symphony: route label but dispatch has onlyRoutes set to different routes,
+  // Issue has a Lorenz: route label but dispatch has onlyRoutes set to different routes,
   // so routedToThisWorker returns false.
   const issue = makeIssue({
     state: "In Progress",
     stateType: "started",
-    labels: ["symphony:backend"],
+    labels: ["lorenz:backend"],
   });
   const settings = makeSettings({ onlyRoutes: ["frontend"] });
   assert.equal(reconciliationStopReason(issue, settings), "unrouted");

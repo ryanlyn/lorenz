@@ -17,7 +17,7 @@ polling:
   interval_ms: 5000
 
 workspace:
-  root: /tmp/symphony-demo-workspaces
+  root: /tmp/lorenz-demo-workspaces
 
 hooks:
   after_create: |

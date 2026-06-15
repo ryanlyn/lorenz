@@ -91,24 +91,24 @@ test("partial codex agent override preserves bridgeCommand codex-acp", () => {
 });
 
 test("config honors logging.log_file with alias and home expansion", () => {
-  const direct = parseConfig({ logging: { log_file: "/var/log/sym/symphony.log" } });
-  assert.equal(direct.logging.logFile, "/var/log/sym/symphony.log");
+  const direct = parseConfig({ logging: { log_file: "/var/log/sym/lorenz.log" } });
+  assert.equal(direct.logging.logFile, "/var/log/sym/lorenz.log");
 
   const camel = parseConfig({ logging: { logFile: "/var/log/sym/camel.log" } });
   assert.equal(camel.logging.logFile, "/var/log/sym/camel.log");
 
   const expanded = parseConfig(
-    { logging: { log_file: "~/logs/symphony.log" } },
+    { logging: { log_file: "~/logs/lorenz.log" } },
     { HOME: "/home/agent" },
   );
-  assert.equal(expanded.logging.logFile, "/home/agent/logs/symphony.log");
+  assert.equal(expanded.logging.logFile, "/home/agent/logs/lorenz.log");
 
   const fallback = parseConfig({});
-  assert.match(fallback.logging.logFile, /\.symphony\/log\/symphony\.log$/);
+  assert.match(fallback.logging.logFile, /\.lorenz\/log\/lorenz\.log$/);
 });
 
 test("config resolves op:// references via 1Password CLI", async () => {
-  const root = await tempDir("symphony-op-mock");
+  const root = await tempDir("lorenz-op-mock");
   const opScript = path.join(root, "op");
   await fs.writeFile(
     opScript,
@@ -124,7 +124,7 @@ test("config resolves op:// references via 1Password CLI", async () => {
 });
 
 test("config resolves op:// references from env var fallback", async () => {
-  const root = await tempDir("symphony-op-mock");
+  const root = await tempDir("lorenz-op-mock");
   const opScript = path.join(root, "op");
   await fs.writeFile(
     opScript,
@@ -156,7 +156,7 @@ test("non-Linear tracker configs ignore Linear secret env fallbacks", () => {
 });
 
 test("non-Linear tracker configs still resolve explicitly configured secrets", async () => {
-  const root = await tempDir("symphony-op-mock");
+  const root = await tempDir("lorenz-op-mock");
   const opScript = path.join(root, "op");
   await fs.writeFile(
     opScript,
@@ -402,14 +402,14 @@ test("status override of claude.model re-pins the provider config", () => {
   });
 });
 
-test("workspace root honors SYMPHONY_WORKSPACE_ROOT and expands local tilde paths", () => {
+test("workspace root honors LORENZ_WORKSPACE_ROOT and expands local tilde paths", () => {
   const configured = parseConfig({ workspace: { root: "~/configured" } }, { HOME: os.homedir() });
   assert.equal(configured.workspace.root, path.join(os.homedir(), "configured"));
   assert.equal(configured.workspace.rootExpression, "~/configured");
 
   const settings = parseConfig(
     { workspace: { root: "~/configured" } },
-    { HOME: os.homedir(), SYMPHONY_WORKSPACE_ROOT: "~/override" },
+    { HOME: os.homedir(), LORENZ_WORKSPACE_ROOT: "~/override" },
   );
 
   assert.equal(settings.workspace.root, path.join(os.homedir(), "override"));
@@ -417,13 +417,13 @@ test("workspace root honors SYMPHONY_WORKSPACE_ROOT and expands local tilde path
 });
 
 test("agent skills resolve, expand, and dedupe", () => {
-  const configDir = path.join(os.tmpdir(), "symphony-config-skills");
+  const configDir = path.join(os.tmpdir(), "lorenz-config-skills");
   const settings = parseConfig(
     {
       agent: {
         skills: [
-          "./.codex/skills/symphony-linear",
-          "./.codex/skills/symphony-linear",
+          "./.codex/skills/lorenz-linear",
+          "./.codex/skills/lorenz-linear",
           "~/shared-skill",
           "$SKILL_SOURCE",
         ],
@@ -434,7 +434,7 @@ test("agent skills resolve, expand, and dedupe", () => {
   );
 
   assert.deepEqual(settings.agent.skills, [
-    path.join(configDir, ".codex", "skills", "symphony-linear"),
+    path.join(configDir, ".codex", "skills", "lorenz-linear"),
     "/home/tester/shared-skill",
     "/opt/skill-source",
   ]);
@@ -449,7 +449,7 @@ test("agent skills default to empty and reject per-state overrides", () => {
 });
 
 test("loadWorkflow resolves agent skills relative to the workflow file", async () => {
-  const root = await tempDir("symphony-workflow-skills");
+  const root = await tempDir("lorenz-workflow-skills");
   const workflowDir = path.join(root, "workflows");
   await fs.mkdir(workflowDir);
   const workflowPath = path.join(workflowDir, "WORKFLOW.md");
@@ -458,7 +458,7 @@ test("loadWorkflow resolves agent skills relative to the workflow file", async (
     `---
 agent:
   skills:
-    - ../.codex/skills/symphony-land
+    - ../.codex/skills/lorenz-land
 ---
 
 Do work.
@@ -468,7 +468,7 @@ Do work.
   const workflow = await loadWorkflow(workflowPath);
 
   assert.deepEqual(workflow.settings.agent.skills, [
-    path.join(root, ".codex", "skills", "symphony-land"),
+    path.join(root, ".codex", "skills", "lorenz-land"),
   ]);
 });
 
@@ -542,10 +542,10 @@ test("workspace root resolves only whole-string env references", () => {
   const resolved = parseConfig(
     { workspace: { root: "$WORKSPACE_ROOT" } },
     {
-      WORKSPACE_ROOT: "/tmp/symphony-env-root",
+      WORKSPACE_ROOT: "/tmp/lorenz-env-root",
     },
   );
-  assert.equal(resolved.workspace.root, "/tmp/symphony-env-root");
+  assert.equal(resolved.workspace.root, "/tmp/lorenz-env-root");
 
   const literal = parseConfig(
     { workspace: { root: "/tmp/$WORKSPACE_ROOT/work" } },
@@ -557,7 +557,7 @@ test("workspace root resolves only whole-string env references", () => {
 });
 
 test("workspace root falls back to default when env reference is unset or empty", () => {
-  const fallback = path.join(os.tmpdir(), "symphony_workspaces");
+  const fallback = path.join(os.tmpdir(), "lorenz_workspaces");
 
   for (const env of [{}, { WORKSPACE_ROOT: "" }]) {
     const settings = parseConfig({ workspace: { root: "$WORKSPACE_ROOT" } }, env, {
@@ -569,7 +569,7 @@ test("workspace root falls back to default when env reference is unset or empty"
 
   const override = parseConfig(
     { workspace: { root: "/tmp/configured-root" } },
-    { SYMPHONY_WORKSPACE_ROOT: "$UNSET_WORKSPACE_ROOT" },
+    { LORENZ_WORKSPACE_ROOT: "$UNSET_WORKSPACE_ROOT" },
     { tmpdir: os.tmpdir() },
   );
   assert.equal(override.workspace.root, fallback);
@@ -1114,7 +1114,7 @@ test("config reports useful errors for list fields and agent executors", () => {
 test("config falls back to the default log path when logging.log_file is unset", () => {
   const settings = parseConfig({});
 
-  assert.equal(settings.logging.logFile, path.join(os.homedir(), ".symphony/log/symphony.log"));
+  assert.equal(settings.logging.logFile, path.join(os.homedir(), ".lorenz/log/lorenz.log"));
 });
 
 test("status overrides reject legacy per-state map and unknown sections", () => {
@@ -1150,22 +1150,22 @@ test("copied workflow examples load independently in the TypeScript port", async
       { trackers, executors },
     );
     assert.equal(workflow.settings.tracker.dispatch.acceptUnrouted, true);
-    assert.equal(workflow.settings.tracker.dispatch.routeLabelPrefix, "Symphony:");
+    assert.equal(workflow.settings.tracker.dispatch.routeLabelPrefix, "Lorenz:");
     assert.ok(workflow.promptTemplate.length > 100);
   }
 });
 
-test("workflow path defaults match SYMPHONY_WORKFLOW then cwd WORKFLOW.md", async () => {
+test("workflow path defaults match LORENZ_WORKFLOW then cwd WORKFLOW.md", async () => {
   const root = await tempDir("lorenz-workflow-env");
   const workflowPath = path.join(root, "CUSTOM_WORKFLOW.md");
   await fs.writeFile(workflowPath, "plain prompt");
 
-  assert.equal(workflowFilePath({ SYMPHONY_WORKFLOW: workflowPath }, root), workflowPath);
+  assert.equal(workflowFilePath({ LORENZ_WORKFLOW: workflowPath }, root), workflowPath);
   assert.equal(workflowFilePath({}, root), path.join(root, "WORKFLOW.md"));
 
   const workflow = await loadWorkflow(
     undefined,
-    { SYMPHONY_WORKFLOW: workflowPath, LINEAR_API_KEY: "test-token" },
+    { LORENZ_WORKFLOW: workflowPath, LINEAR_API_KEY: "test-token" },
     { trackers, executors },
   );
   assert.equal(workflow.path, workflowPath);
@@ -1211,11 +1211,11 @@ test("workflow parsing treats front matter as optional", () => {
 
 test("parses local tracker config with path", () => {
   const settings = parseConfig(
-    { tracker: { kind: "local", path: ".symphony/local", active_states: ["Todo"] } },
+    { tracker: { kind: "local", path: ".lorenz/local", active_states: ["Todo"] } },
     {},
   );
   assert.equal(settings.tracker.kind, "local");
-  assert.equal(settings.tracker.options.path, ".symphony/local");
+  assert.equal(settings.tracker.options.path, ".lorenz/local");
 });
 
 test("local tracker id_prefix defaults to BOARD- and can be overridden", () => {
@@ -1521,14 +1521,14 @@ test("workers.<name> options are accepted for open driver names", () => {
 test("worker.kind without an explicit worker_pool creates an enabled default worker pool", () => {
   const settings = parseConfig({
     worker: { kind: "docker-prod" },
-    workers: { "docker-prod": { driver: "docker", image: "symphony-worker:latest" } },
+    workers: { "docker-prod": { driver: "docker", image: "lorenz-worker:latest" } },
   });
 
   assert.equal(settings.worker.kind, "docker-prod");
   assert.equal(settings.worker.workerPool?.enabled, true);
   assert.equal(settings.worker.workerPool?.driver, "docker");
   assert.deepEqual(settings.worker.workerPool?.driverOptions, {
-    image: "symphony-worker:latest",
+    image: "lorenz-worker:latest",
   });
 });
 
@@ -1668,7 +1668,7 @@ test("worker.kind cannot be combined with worker.worker_pool.driver", () => {
           kind: "docker-prod",
           worker_pool: { driver: "docker" },
         },
-        workers: { "docker-prod": { driver: "docker", image: "symphony-worker:latest" } },
+        workers: { "docker-prod": { driver: "docker", image: "lorenz-worker:latest" } },
       }),
     /worker\.kind cannot be combined with worker\.worker_pool\.driver/,
   );

@@ -26,7 +26,7 @@ polling:
   # cover transient limits on top of this.
   interval_ms: 60000
 workspace:
-  root: ~/dev/symphony-workspaces
+  root: ~/dev/lorenz-workspaces
 worker:
   ssh_timeout_ms: 60000
 hooks:
@@ -144,11 +144,11 @@ There is **no `linear_graphql`** tool and no Linear MCP server. Do not attempt t
 
 ## Related skills
 
-- `symphony-commit`: produce clean, logical commits during implementation.
+- `lorenz-commit`: produce clean, logical commits during implementation.
 - `simplify`: review changed code for reuse, quality, and efficiency before committing.
-- `symphony-push`: keep remote branch current and open/update the pull request.
-- `symphony-pull`: keep branch updated with latest `origin/main` before handoff.
-- `symphony-land`: when the work is approved, follow the `land` loop to merge the PR.
+- `lorenz-push`: keep remote branch current and open/update the pull request.
+- `lorenz-pull`: keep branch updated with latest `origin/main` before handoff.
+- `lorenz-land`: when the work is approved, follow the `land` loop to merge the PR.
 
 ## Status map
 
@@ -172,14 +172,14 @@ There is **no `linear_graphql`** tool and no Linear MCP server. Do not attempt t
 2. If arriving from `Todo`, ensure the `:eyes:` (`In Progress`) reaction is set (you set it in Step 0).
 3. Include a compact environment stamp in the first workpad reply: `<host>:<abs-workdir>@<short-sha>`.
 4. Capture a concrete reproduction signal and record it in a threaded reply before implementing.
-5. Run the `symphony-pull` skill to sync with latest `origin/main` before code edits, and record the result via `slack_comment`.
+5. Run the `lorenz-pull` skill to sync with latest `origin/main` before code edits, and record the result via `slack_comment`.
 
 ## Step 2: Implement and validate
 
 1. Implement against the plan, posting milestone updates as threaded replies via `slack_comment`.
 2. Run validation/tests/proof-of-work for the scope. Prefer a targeted proof that demonstrates the behavior you changed.
 3. Re-check all acceptance criteria and close any gaps.
-4. Before every `git commit`, run the `simplify` skill, then the `symphony-commit` skill to commit and `symphony-push` to push and open/update the PR.
+4. Before every `git commit`, run the `simplify` skill, then the `lorenz-commit` skill to commit and `lorenz-push` to push and open/update the PR.
 5. Post the final checklist status and validation notes as a threaded reply.
 
 ## Step 3: Complete
@@ -209,7 +209,7 @@ There is **no `linear_graphql`** tool and no Linear MCP server. Do not attempt t
 Use this structure for the first `slack_comment` progress reply and keep follow-ups consistent. These replies are human-visible notes and are readable back via `slack_read_thread`:
 
 ````md
-## Symphony Workpad
+## Lorenz Workpad
 
 ```text
 <hostname>:<abs-path>@<short-sha>

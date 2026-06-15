@@ -1,5 +1,5 @@
 /**
- * Linear sandbox: exercises SymphonyRuntime against a REAL Linear project.
+ * Linear sandbox: exercises LorenzRuntime against a REAL Linear project.
  *
  * Unlike the in-memory sandbox (sandbox.ts), this variant:
  * - Creates real Linear issues via the API as test fixtures
@@ -21,13 +21,13 @@ import {
   type RunAgentAttemptInput,
   type RunResult,
 } from "@lorenz/agent-runner";
-import { SymphonyRuntime } from "@lorenz/runtime";
+import { LorenzRuntime } from "@lorenz/runtime";
 import type { Issue, Settings, WorkflowDefinition, AgentExecutor, AgentSession } from "@lorenz/cli";
 import type {
   RuntimeRunner,
   RuntimeSnapshot,
   RuntimeEvent,
-  SymphonyRuntimeOptions,
+  LorenzRuntimeOptions,
 } from "@lorenz/runtime";
 import type { LinearProject, LinearTeam, LinearState } from "@lorenz/linear-tracker";
 
@@ -314,7 +314,7 @@ export async function runLinearScenario(
     const events: RuntimeEvent[] = [];
     const errors: Error[] = [];
 
-    const runtimeOptions: SymphonyRuntimeOptions = {
+    const runtimeOptions: LorenzRuntimeOptions = {
       workflow,
       clientFactory: () => ctx.client,
       runner,
@@ -322,7 +322,7 @@ export async function runLinearScenario(
       appendLogEvent: async () => {},
     };
 
-    const runtime = new SymphonyRuntime(runtimeOptions);
+    const runtime = new LorenzRuntime(runtimeOptions);
 
     const unsubscribe = runtime.subscribe((snapshot) => {
       snapshots.push(snapshot);

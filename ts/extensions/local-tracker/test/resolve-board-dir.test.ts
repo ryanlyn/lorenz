@@ -5,7 +5,7 @@ import { assert } from "@lorenz/test-utils";
 
 import { DEFAULT_BOARD_DIR, resolveBoardDir } from "@lorenz/local-tracker";
 
-test("resolveBoardDir defaults to .symphony/local under cwd", () => {
+test("resolveBoardDir defaults to .lorenz/local under cwd", () => {
   const cwd = "/work/project";
   assert.equal(resolveBoardDir(undefined, { cwd, env: {} }), path.join(cwd, DEFAULT_BOARD_DIR));
 });

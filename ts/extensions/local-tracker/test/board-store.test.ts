@@ -210,12 +210,12 @@ test("labels parse from frontmatter and lower-case; title falls back to id", asy
   const dir = await tempBoard();
   await writeFile(
     path.join(dir, "BOARD-7.md"),
-    "---\nstatus: Todo\nlabels:\n  - Backend\n  - Symphony:API\n---\n\nNo heading body\n",
+    "---\nstatus: Todo\nlabels:\n  - Backend\n  - Lorenz:API\n---\n\nNo heading body\n",
     "utf8",
   );
   const store = new BoardStore(dir);
   const issue = (await store.getByIds(["BOARD-7"]))[0]!;
-  assert.deepEqual(issue.labels, ["backend", "symphony:api"]);
+  assert.deepEqual(issue.labels, ["backend", "lorenz:api"]);
   assert.equal(issue.title, "BOARD-7");
   assert.equal(issue.description, "No heading body");
 });

@@ -178,7 +178,7 @@ test("runs command renders cost, retries, run detail, and JSON branches", async 
             last_event: "turn_completed",
             last_event_at: "2026-05-05T00:00:02.000Z",
             failure_reason: null,
-            log_hints: { symphony_log_file: "/tmp/symphony.log" },
+            log_hints: { lorenz_log_file: "/tmp/lorenz.log" },
           },
           related_runs: [
             {
@@ -290,7 +290,7 @@ test("runs command uses workflow-derived default server host and port", async ()
       workflowPath,
       `---\nserver:\n  host: 127.0.0.1\n  port: ${address.port}\n---\nRun it\n`,
     );
-    vi.stubEnv("SYMPHONY_WORKFLOW", workflowPath);
+    vi.stubEnv("LORENZ_WORKFLOW", workflowPath);
 
     const output = await runRunsMain(["--limit", "1"]);
     assert.match(output, /Run History/);
@@ -310,7 +310,7 @@ test("runs command uses workflow-derived host for explicit positive port", async
     const dir = await tempDir("lorenz-runs-port-host");
     const workflowPath = path.join(dir, "WORKFLOW.md");
     await fs.writeFile(workflowPath, `---\nserver:\n  host: localhost\n  port: 1\n---\nRun it\n`);
-    vi.stubEnv("SYMPHONY_WORKFLOW", workflowPath);
+    vi.stubEnv("LORENZ_WORKFLOW", workflowPath);
 
     const output = await runRunsMain(["--port", "43210", "--limit", "1"]);
     assert.match(output, /Run History/);
@@ -332,7 +332,7 @@ test("runs command treats port zero as no explicit port and falls through to wor
       workflowPath,
       `---\nserver:\n  host: 127.0.0.1\n  port: 43211\n---\nRun it\n`,
     );
-    vi.stubEnv("SYMPHONY_WORKFLOW", workflowPath);
+    vi.stubEnv("LORENZ_WORKFLOW", workflowPath);
 
     const output = await runRunsMain(["--port", "0", "--limit", "1"]);
     assert.match(output, /Run History/);
@@ -351,7 +351,7 @@ test("runs command treats port zero as no explicit port and keeps the no-port co
   const dir = await tempDir("lorenz-runs-port-zero-error");
   const workflowPath = path.join(dir, "WORKFLOW.md");
   await fs.writeFile(workflowPath, "---\nserver:\n  host: 127.0.0.1\n  port: 0\n---\nRun it\n");
-  vi.stubEnv("SYMPHONY_WORKFLOW", workflowPath);
+  vi.stubEnv("LORENZ_WORKFLOW", workflowPath);
 
   try {
     await assert.rejects(

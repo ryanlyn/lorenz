@@ -14,7 +14,7 @@ const DEFAULT_CLAUDE_MODEL = "claude-opus-4-6[1m]";
 
 export const defaultSettings = (options: DefaultSettingsOptions = {}): Settings => {
   const tmpdir = options.tmpdir ?? "/tmp";
-  const workspaceRoot = joinPath(tmpdir, "symphony_workspaces");
+  const workspaceRoot = joinPath(tmpdir, "lorenz_workspaces");
   return {
     tracker: {
       kind: undefined,
@@ -23,7 +23,7 @@ export const defaultSettings = (options: DefaultSettingsOptions = {}): Settings 
       dispatch: {
         acceptUnrouted: true,
         onlyRoutes: null,
-        routeLabelPrefix: "Symphony:",
+        routeLabelPrefix: "Lorenz:",
       },
       options: {},
     },
@@ -49,8 +49,8 @@ export const defaultSettings = (options: DefaultSettingsOptions = {}): Settings 
       refreshMs: 1_000,
       renderIntervalMs: 16,
     },
-    server: { host: "127.0.0.1", port: 4040, traceDir: joinPath(homedir(), ".symphony/issues") },
-    logging: { logFile: joinPath(homedir(), ".symphony/log/symphony.log") },
+    server: { host: "127.0.0.1", port: 4040, traceDir: joinPath(homedir(), ".lorenz/issues") },
+    logging: { logFile: joinPath(homedir(), ".lorenz/log/lorenz.log") },
     statusOverrides: new Map(),
   };
 };

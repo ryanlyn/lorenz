@@ -1,9 +1,9 @@
 import { acpExecutorProvider } from "@lorenz/acp";
 import { defaultAgentExecutorRegistry } from "@lorenz/agent-sdk";
 import { registerMemoryTracker } from "@lorenz/memory-tracker";
-import { SymphonyRuntime } from "@lorenz/runtime";
+import { LorenzRuntime } from "@lorenz/runtime";
 import type { Issue, IssueStateType, Settings, WorkflowDefinition } from "@lorenz/cli";
-import type { RuntimeEvent, RuntimeSnapshot, SymphonyRuntimeOptions } from "@lorenz/runtime";
+import type { RuntimeEvent, RuntimeSnapshot, LorenzRuntimeOptions } from "@lorenz/runtime";
 
 import { ChaosLinearClient, type ChaosConfig } from "./chaos-client.js";
 import { createFakeClock, type FakeClock } from "./fake-clock.js";
@@ -96,7 +96,7 @@ export async function runScenario(scenario: SandboxScenario): Promise<SandboxRes
   const events: RuntimeEvent[] = [];
   const errors: Error[] = [];
 
-  const runtimeOptions: SymphonyRuntimeOptions = {
+  const runtimeOptions: LorenzRuntimeOptions = {
     workflow,
     client,
     runner,
@@ -109,7 +109,7 @@ export async function runScenario(scenario: SandboxScenario): Promise<SandboxRes
   };
 
   let lastAgentActivityAt = Date.now();
-  const runtime = new SymphonyRuntime(runtimeOptions);
+  const runtime = new LorenzRuntime(runtimeOptions);
 
   const unsubscribe = runtime.subscribe((snapshot) => {
     snapshots.push(snapshot);
@@ -226,7 +226,7 @@ export async function runScenario(scenario: SandboxScenario): Promise<SandboxRes
  * without waiting out the wall clock.
  */
 async function pollOnceWithFakeClock(
-  runtime: SymphonyRuntime,
+  runtime: LorenzRuntime,
   options: { waitForRuns: boolean },
   clock: FakeClock,
   stall: { tick: number; timeoutMs: number },
@@ -272,7 +272,7 @@ async function pollOnceWithFakeClock(
 }
 
 async function pollOnceWithScenarioTimeout(
-  runtime: SymphonyRuntime,
+  runtime: LorenzRuntime,
   options: { waitForRuns: boolean },
   timeout: { tick: number; timeoutMs: number; lastActivityAt: () => number },
 ): Promise<void> {

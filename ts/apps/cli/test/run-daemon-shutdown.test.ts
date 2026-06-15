@@ -72,7 +72,7 @@ vi.mock("@lorenz/server", () => ({
     upsert() {}
     close() {}
   },
-  defaultIssueStorePath: () => "/tmp/symphony-test-issues.db",
+  defaultIssueStorePath: () => "/tmp/lorenz-test-issues.db",
 }));
 
 vi.mock("ink", () => ({
@@ -80,7 +80,7 @@ vi.mock("ink", () => ({
 }));
 
 vi.mock("@lorenz/runtime", () => ({
-  SymphonyRuntime: FakeRuntime,
+  LorenzRuntime: FakeRuntime,
 }));
 
 vi.mock("@lorenz/traceviz-emitter", () => ({
@@ -121,17 +121,17 @@ function assertNoAddedProcessListeners(
 }
 
 async function workflowFixture() {
-  const root = await tempDir("symphony-cli-shutdown");
+  const root = await tempDir("lorenz-cli-shutdown");
   const settings = parseConfig(
     {
       tracker: {
         kind: "local",
-        path: path.join(root, ".symphony/local"),
+        path: path.join(root, ".lorenz/local"),
         active_states: ["Todo", "In Progress"],
         terminal_states: ["Done"],
       },
       workspace: { root },
-      logging: { log_file: path.join(root, "log", "symphony.log") },
+      logging: { log_file: path.join(root, "log", "lorenz.log") },
       server: {
         host: "127.0.0.1",
         port: 4040,

@@ -15,7 +15,7 @@ export function App() {
         <div className="mx-auto flex h-14 max-w-7xl items-center gap-4 px-4">
           <div className="flex items-center gap-2">
             <Activity className="h-5 w-5 text-accent-purple" />
-            <h1 className="text-lg font-semibold">Symphony</h1>
+            <h1 className="text-lg font-semibold">Lorenz</h1>
           </div>
           <nav className="flex items-center gap-1 text-sm">
             <a

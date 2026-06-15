@@ -134,7 +134,7 @@ test("ProjectionActor processes runtime snapshot into projection", () => {
       secondsRunning: 120,
     }),
     rateLimits: { remaining: 10 },
-    logFile: "/tmp/symphony.log",
+    logFile: "/tmp/lorenz.log",
   });
 
   const snap = actor.snapshot(input);
@@ -153,7 +153,7 @@ test("ProjectionActor processes runtime snapshot into projection", () => {
   assert.equal(snap.blocked[0]!.reason, "global_concurrency_cap");
   assert.equal(snap.usageTotals.totalTokens, 700);
   assert.deepEqual(snap.rateLimits, { remaining: 10 });
-  assert.equal(snap.logFile, "/tmp/symphony.log");
+  assert.equal(snap.logFile, "/tmp/lorenz.log");
 });
 
 // --- ProjectionActor updates projection on new events ---

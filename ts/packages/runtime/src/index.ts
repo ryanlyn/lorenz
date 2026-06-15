@@ -66,7 +66,7 @@ export {
   type RuntimeReconciliationReason,
 } from "@lorenz/policies/reconciliation";
 
-export interface SymphonyRuntimeOptions {
+export interface LorenzRuntimeOptions {
   workflow: WorkflowDefinition;
   client?: RuntimeTrackerClient | undefined;
   clientFactory?: ((settings: WorkflowDefinition["settings"]) => RuntimeTrackerClient) | undefined;
@@ -101,7 +101,7 @@ export interface SymphonyRuntimeOptions {
    * `finally`. Absent (default) preserves the existing local / `sshHosts` behavior byte-for-byte.
    *
    * A bare `workerPool` is wrapped internally in a null-endpoint passthrough
-   * {@link DispatchCoordinator} (see {@link SymphonyRuntimeOptions.coordinator}), so every run
+   * {@link DispatchCoordinator} (see {@link LorenzRuntimeOptions.coordinator}), so every run
    * drives the coordinator uniformly while a bare pool injection stays byte-identical at the
    * runtime boundary (default `slotsPerMachine=1` + `mcpEndpoint=null`). Prefer threading a
    * pre-built `coordinator`; `workerPool` is the low-churn path that keeps existing injection
@@ -111,7 +111,7 @@ export interface SymphonyRuntimeOptions {
   /**
    * Optional embedded dispatch coordinator wrapping a machine {@link WorkerPool} plus an injected
    * per-run MCP endpoint manager. When present it governs capacity and mints a {@link RunSlot}
-   * per run exactly as a wrapped {@link SymphonyRuntimeOptions.workerPool} would; the daemon builds
+   * per run exactly as a wrapped {@link LorenzRuntimeOptions.workerPool} would; the daemon builds
    * it once (a reload-surviving singleton) via `buildDispatchCoordinator`. Takes precedence over
    * `workerPool` when both are supplied.
    */
@@ -231,7 +231,7 @@ class ActiveRunHandle {
   }
 }
 
-export class SymphonyRuntime {
+export class LorenzRuntime {
   private client: RuntimeTrackerClient;
   private readonly orchestrator: Orchestrator;
   private readonly runner: RuntimeRunner;
@@ -265,7 +265,7 @@ export class SymphonyRuntime {
    */
   private readonly coordinator: DispatchCoordinator | undefined;
 
-  constructor(private readonly input: SymphonyRuntimeOptions) {
+  constructor(private readonly input: LorenzRuntimeOptions) {
     this.client =
       input.client ?? input.clientFactory?.(input.workflow.settings) ?? missingRuntimeClient();
     this.clock = input.clock ?? systemClock;

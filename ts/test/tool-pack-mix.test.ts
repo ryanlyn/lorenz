@@ -98,13 +98,13 @@ function specNames(settings: Settings, tools: ToolRegistry, trackers: TrackerReg
   return toolSpecs(settings, tools, trackers).map((spec) => spec.name);
 }
 
-test("mounting the linear pack contributes its bundled symphony-linear skill", async () => {
+test("mounting the linear pack contributes its bundled lorenz-linear skill", async () => {
   const { trackers, tools } = builtinRegistries();
   const settings = parseJira(trackers, { tools: { linear: { api_key: "linear-token" } } });
 
   const skills = mountedSkillSources(settings, tools, trackers);
-  const linearSkill = skills.find((dir) => path.basename(dir) === "symphony-linear");
-  assert.ok(linearSkill, "linear pack should bundle the symphony-linear skill");
+  const linearSkill = skills.find((dir) => path.basename(dir) === "lorenz-linear");
+  assert.ok(linearSkill, "linear pack should bundle the lorenz-linear skill");
   assert.equal((await fs.stat(path.join(linearSkill, "SKILL.md"))).isFile(), true);
 });
 

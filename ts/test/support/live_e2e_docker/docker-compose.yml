@@ -4,21 +4,21 @@ services:
       context: .
       dockerfile: Dockerfile
     ports:
-      - "${SYMPHONY_LIVE_DOCKER_WORKER_1_PORT}:22"
+      - "${LORENZ_LIVE_DOCKER_WORKER_1_PORT}:22"
     volumes:
-      - ${SYMPHONY_LIVE_DOCKER_AUTHORIZED_KEY}:/run/symphony/ssh/authorized_key.pub:ro
-      - ${SYMPHONY_LIVE_DOCKER_CODEX_AUTH_JSON}:/root/.codex/auth.json:ro
+      - ${LORENZ_LIVE_DOCKER_AUTHORIZED_KEY}:/run/lorenz/ssh/authorized_key.pub:ro
+      - ${LORENZ_LIVE_DOCKER_CODEX_AUTH_JSON}:/root/.codex/auth.json:ro
     environment:
-      CLAUDE_CODE_OAUTH_TOKEN: ${SYMPHONY_LIVE_DOCKER_CLAUDE_CODE_OAUTH_TOKEN}
+      CLAUDE_CODE_OAUTH_TOKEN: ${LORENZ_LIVE_DOCKER_CLAUDE_CODE_OAUTH_TOKEN}
 
   worker2:
     build:
       context: .
       dockerfile: Dockerfile
     ports:
-      - "${SYMPHONY_LIVE_DOCKER_WORKER_2_PORT}:22"
+      - "${LORENZ_LIVE_DOCKER_WORKER_2_PORT}:22"
     volumes:
-      - ${SYMPHONY_LIVE_DOCKER_AUTHORIZED_KEY}:/run/symphony/ssh/authorized_key.pub:ro
-      - ${SYMPHONY_LIVE_DOCKER_CODEX_AUTH_JSON}:/root/.codex/auth.json:ro
+      - ${LORENZ_LIVE_DOCKER_AUTHORIZED_KEY}:/run/lorenz/ssh/authorized_key.pub:ro
+      - ${LORENZ_LIVE_DOCKER_CODEX_AUTH_JSON}:/root/.codex/auth.json:ro
     environment:
-      CLAUDE_CODE_OAUTH_TOKEN: ${SYMPHONY_LIVE_DOCKER_CLAUDE_CODE_OAUTH_TOKEN}
+      CLAUDE_CODE_OAUTH_TOKEN: ${LORENZ_LIVE_DOCKER_CLAUDE_CODE_OAUTH_TOKEN}

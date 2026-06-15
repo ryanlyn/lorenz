@@ -76,13 +76,13 @@ export function createFakeLinearHandlers(config: FakeLinearConfig) {
       const { query, variables } = body;
       const operationName = extractOperationName(query);
 
-      if (operationName === "SymphonyTsViewer") {
+      if (operationName === "LorenzTsViewer") {
         return HttpResponse.json({
           data: { viewer: config.viewer },
         });
       }
 
-      if (operationName === "SymphonyTsProject") {
+      if (operationName === "LorenzTsProject") {
         const slug = variables?.slug as string | undefined;
         if (slug !== config.project.slugId) {
           return HttpResponse.json({ data: { projects: { nodes: [] } } });
@@ -116,7 +116,7 @@ export function createFakeLinearHandlers(config: FakeLinearConfig) {
         });
       }
 
-      if (operationName === "SymphonyTsCreateIssue") {
+      if (operationName === "LorenzTsCreateIssue") {
         const input = variables?.input as Record<string, unknown>;
         issueCounter += 1;
         const team =
@@ -147,7 +147,7 @@ export function createFakeLinearHandlers(config: FakeLinearConfig) {
         });
       }
 
-      if (operationName === "SymphonyTsPoll") {
+      if (operationName === "LorenzTsPoll") {
         const stateNames = (variables?.stateNames as string[]) ?? [];
         const first = (variables?.first as number) ?? 50;
         const after = (variables?.after as string | null) ?? null;
@@ -168,7 +168,7 @@ export function createFakeLinearHandlers(config: FakeLinearConfig) {
         });
       }
 
-      if (operationName === "SymphonyTsIssuesById") {
+      if (operationName === "LorenzTsIssuesById") {
         const ids = (variables?.ids as string[]) ?? [];
         const matched = issues.filter((i) => ids.includes(i.id));
         return HttpResponse.json({
@@ -178,7 +178,7 @@ export function createFakeLinearHandlers(config: FakeLinearConfig) {
         });
       }
 
-      if (operationName === "SymphonyTsUpdateIssue") {
+      if (operationName === "LorenzTsUpdateIssue") {
         const id = variables?.id as string;
         const input = variables?.input as Record<string, unknown>;
         const issue = issues.find((i) => i.id === id);
@@ -200,7 +200,7 @@ export function createFakeLinearHandlers(config: FakeLinearConfig) {
         });
       }
 
-      if (operationName === "SymphonyTsArchiveIssue") {
+      if (operationName === "LorenzTsArchiveIssue") {
         const id = variables?.id as string;
         const issue = issues.find((i) => i.id === id);
         if (!issue) {

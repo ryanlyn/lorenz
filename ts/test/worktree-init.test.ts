@@ -27,7 +27,7 @@ test("worktree initializer prepares the TypeScript workspace", async () => {
 });
 
 async function createCheckout(): Promise<string> {
-  const checkout = await tempDir("symphony-worktree-init");
+  const checkout = await tempDir("lorenz-worktree-init");
 
   await fs.mkdir(path.join(checkout, ".codex"), { recursive: true });
   await fs.copyFile(

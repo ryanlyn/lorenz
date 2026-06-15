@@ -13,8 +13,8 @@ function parseConfig(raw: Record<string, unknown>): ReturnType<typeof parseConfi
   return parseConfigWith(raw, {}, {}, undefined, executors);
 }
 
-const claudeBridge = process.env.SYMPHONY_TS_CLAUDE_ACP_BRIDGE_COMMAND;
-const runLiveClaude = process.env.SYMPHONY_TS_RUN_REAL_CLAUDE_E2E === "1" && Boolean(claudeBridge);
+const claudeBridge = process.env.LORENZ_TS_CLAUDE_ACP_BRIDGE_COMMAND;
+const runLiveClaude = process.env.LORENZ_TS_RUN_REAL_CLAUDE_E2E === "1" && Boolean(claudeBridge);
 
 test("live Claude ACP bridge smoke", { timeout: 180_000, skip: !runLiveClaude }, async () => {
   const workspace = await tempDir("lorenz-live-claude");
@@ -39,7 +39,7 @@ test(
     const settings = liveClaudeSettings(240_000, {
       tracker: {
         api_key: "$LINEAR_API_KEY",
-        project_slug: "symphony-414bf2e49ff2",
+        project_slug: "lorenz-414bf2e49ff2",
       },
     });
     const executor = new Executor("claude");
@@ -48,16 +48,16 @@ test(
       const updates = await executor.runTurn(
         session,
         [
-          "This is a live Symphony TypeScript MCP canary.",
-          "Use the mcp__symphony_linear__linear_graphql tool once with this exact query:",
-          "query SymphonyTsClaudeMcpCanary { viewer { id } }",
+          "This is a live Lorenz TypeScript MCP canary.",
+          "Use the mcp__lorenz_linear__linear_graphql tool once with this exact query:",
+          "query LorenzTsClaudeMcpCanary { viewer { id } }",
           "After the tool result returns, reply exactly TS_CLAUDE_MCP_E2E_OK and do not modify files.",
         ].join("\n"),
       );
 
       const serialized = JSON.stringify(updates);
       assert.ok(updates.some((update) => update.type === "turn_completed"));
-      assert.match(serialized, /linear_graphql|mcp__symphony_linear/);
+      assert.match(serialized, /linear_graphql|mcp__lorenz_linear/);
       assert.match(serialized, /viewer|TS_CLAUDE_MCP_E2E_OK/);
     } finally {
       await session.stop();
@@ -82,11 +82,11 @@ function liveClaudeSettings(timeoutMs: number, extra: Record<string, unknown> = 
 
 function claudeBridgeCommand(): string {
   const base = claudeBridge ?? "claude-agent-acp";
-  const raw = process.env.SYMPHONY_TS_CLAUDE_ACP_BRIDGE_ARGS;
+  const raw = process.env.LORENZ_TS_CLAUDE_ACP_BRIDGE_ARGS;
   if (!raw) return base;
   const parsed = JSON.parse(raw) as unknown;
   if (!Array.isArray(parsed) || !parsed.every((item) => typeof item === "string")) {
-    throw new Error("SYMPHONY_TS_CLAUDE_ACP_BRIDGE_ARGS must be a JSON string array");
+    throw new Error("LORENZ_TS_CLAUDE_ACP_BRIDGE_ARGS must be a JSON string array");
   }
   return [base, ...parsed].join(" ");
 }

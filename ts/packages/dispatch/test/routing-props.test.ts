@@ -16,11 +16,11 @@ test("INVARIANT: When route labels are present, routeNames SHALL return the norm
   fc.assert(
     fc.property(
       fc.array(
-        fc.string({ minLength: 1, maxLength: 20 }).map((s) => "Symphony:" + s),
+        fc.string({ minLength: 1, maxLength: 20 }).map((s) => "Lorenz:" + s),
         { minLength: 1, maxLength: 5 },
       ),
       (labels) => {
-        const prefix = "Symphony:";
+        const prefix = "Lorenz:";
         const issue = issueWith({ labels });
         const settings = makeSettings({ routeLabelPrefix: prefix });
         const routes = routeNames(issue, settings);
@@ -44,12 +44,12 @@ test("INVARIANT: When labels do not match the configured prefix, routeNames SHAL
       fc.array(
         fc
           .string({ minLength: 1, maxLength: 20 })
-          .filter((s) => !s.toLowerCase().startsWith("symphony:")),
+          .filter((s) => !s.toLowerCase().startsWith("lorenz:")),
         { minLength: 1, maxLength: 5 },
       ),
       (labels) => {
         const issue = issueWith({ labels });
-        const settings = makeSettings({ routeLabelPrefix: "Symphony:" });
+        const settings = makeSettings({ routeLabelPrefix: "Lorenz:" });
         const routes = routeNames(issue, settings);
         assert.equal(routes.length, 0);
       },
@@ -59,7 +59,7 @@ test("INVARIANT: When labels do not match the configured prefix, routeNames SHAL
 
 test("INVARIANT: When the suffix after the route prefix is blank, routeNames SHALL return an empty array.", () => {
   fc.assert(
-    fc.property(fc.constantFrom("Symphony:", "Route:", "Team:"), (prefix) => {
+    fc.property(fc.constantFrom("Lorenz:", "Route:", "Team:"), (prefix) => {
       const issue = issueWith({ labels: [prefix, `${prefix}  `, `${prefix}\t`] });
       const settings = makeSettings({ routeLabelPrefix: prefix });
       const routes = routeNames(issue, settings);
@@ -75,12 +75,8 @@ test("INVARIANT: When prefix matching is performed, matching SHALL be case-insen
         .array(fc.constantFrom(..."abcdefghijklmnopqrstuvwxyz"), { minLength: 1, maxLength: 8 })
         .map((a) => a.join("")),
       (routeName) => {
-        const prefix = "Symphony:";
-        const variations = [
-          `symphony:${routeName}`,
-          `SYMPHONY:${routeName}`,
-          `Symphony:${routeName}`,
-        ];
+        const prefix = "Lorenz:";
+        const variations = [`lorenz:${routeName}`, `LORENZ:${routeName}`, `Lorenz:${routeName}`];
         for (const label of variations) {
           const issue = issueWith({ labels: [label] });
           const settings = makeSettings({ routeLabelPrefix: prefix });
@@ -133,7 +129,7 @@ test("INVARIANT: When the allowlist is null, the system SHALL accept all routes.
         .array(fc.constantFrom(..."abcdefghijklmnop"), { minLength: 1, maxLength: 8 })
         .map((a) => a.join("")),
       (routeName) => {
-        const issue = issueWith({ labels: [`symphony:${routeName}`] });
+        const issue = issueWith({ labels: [`lorenz:${routeName}`] });
         const settings = makeSettings({ onlyRoutes: null });
         assert.ok(routedToThisWorker(issue, settings));
       },
@@ -148,7 +144,7 @@ test("INVARIANT: When the allowlist is empty, the system SHALL reject all routes
         .array(fc.constantFrom(..."abcdefghijklmnop"), { minLength: 1, maxLength: 8 })
         .map((a) => a.join("")),
       (routeName) => {
-        const issue = issueWith({ labels: [`symphony:${routeName}`] });
+        const issue = issueWith({ labels: [`lorenz:${routeName}`] });
         const settings = makeSettings({ onlyRoutes: [] });
         assert.ok(!routedToThisWorker(issue, settings));
       },
@@ -162,7 +158,7 @@ test("INVARIANT: When no route label is present and unrouted dispatch is disable
       fc.array(
         fc
           .string({ minLength: 1, maxLength: 15 })
-          .filter((l) => !l.toLowerCase().startsWith("symphony:")),
+          .filter((l) => !l.toLowerCase().startsWith("lorenz:")),
         { maxLength: 3 },
       ),
       (labels) => {

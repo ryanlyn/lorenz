@@ -10,7 +10,7 @@ import { stageRelease } from "../scripts/stage-release.ts";
 let tempRoot: string;
 
 beforeEach(async () => {
-  tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "symphony-release-test-"));
+  tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "lorenz-release-test-"));
 });
 
 afterEach(async () => {
@@ -33,10 +33,7 @@ test("stages a source-free CLI release tree with rewritten package manifests", a
   assert.equal(await exists(path.join(releaseDir, "apps/cli/test/cli.test.ts")), false);
   assert.equal(await exists(path.join(releaseDir, "apps/cli/dist/tsconfig.tsbuildinfo")), false);
   assert.equal(await exists(path.join(releaseDir, "apps/cli/dist/bin/cli.js")), true);
-  assert.equal(
-    await exists(path.join(releaseDir, "apps/symphony-dashboard/dist/index.html")),
-    true,
-  );
+  assert.equal(await exists(path.join(releaseDir, "apps/lorenz-dashboard/dist/index.html")), true);
   assert.equal(await exists(result.archivePath ?? ""), true);
 
   const rootPackage = await readJson(path.join(releaseDir, "package.json"));
@@ -131,7 +128,7 @@ test("stages a source-free CLI release tree with rewritten package manifests", a
 test("reports missing build outputs before writing a release tree", async () => {
   const workspaceRoot = path.join(tempRoot, "workspace");
   await seedWorkspace(workspaceRoot);
-  await fs.rm(path.join(workspaceRoot, "apps/symphony-dashboard/dist"), {
+  await fs.rm(path.join(workspaceRoot, "apps/lorenz-dashboard/dist"), {
     recursive: true,
     force: true,
   });
@@ -142,7 +139,7 @@ test("reports missing build outputs before writing a release tree", async () => 
       outputRoot: path.join(tempRoot, "out"),
       releaseName: "lorenz-test",
     }),
-    /apps\/symphony-dashboard\/dist/,
+    /apps\/lorenz-dashboard\/dist/,
   );
   assert.equal(await exists(path.join(tempRoot, "out", "lorenz-test")), false);
 });
@@ -265,7 +262,7 @@ catalog:
     "#!/usr/bin/env node\n",
   );
 
-  await writeFile(workspaceRoot, "apps/symphony-dashboard/dist/index.html", "<div></div>\n");
+  await writeFile(workspaceRoot, "apps/lorenz-dashboard/dist/index.html", "<div></div>\n");
   await writeFile(workspaceRoot, "README.md", "# Test\n");
 }
 

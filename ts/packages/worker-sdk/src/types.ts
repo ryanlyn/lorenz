@@ -20,7 +20,7 @@ import type { ClockPort } from "@lorenz/domain";
  * driver's `list()` MUST surface it on the descriptors it returns (the pool's
  * ownership gate keys on it).
  */
-export const POOL_OWNED_LABEL = "symphony.pool=worker-pool";
+export const POOL_OWNED_LABEL = "lorenz.pool=worker-pool";
 
 /**
  * Why a worker is being torn down. Drives driver `destroy` and the pool's

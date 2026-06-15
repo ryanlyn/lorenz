@@ -45,7 +45,7 @@ test("slack dispatch mounts the neutral tracker pack plus the slack pack by defa
 });
 
 test("the agent MCP server is named for the slack tracker kind", () => {
-  assert.equal(trackerMcpServerName("slack"), "symphony_slack");
+  assert.equal(trackerMcpServerName("slack"), "lorenz_slack");
 });
 
 test("neutral tracker ops read, query, comment, and update status over the slack transport", async () => {

@@ -487,7 +487,7 @@ function jiraIssue(
         name: overrides.statusName ?? "To Do",
         statusCategory: { key: overrides.statusCategory ?? "new" },
       },
-      labels: ["Symphony:Backend"],
+      labels: ["Lorenz:Backend"],
       assignee: { accountId: overrides.assigneeAccountId ?? "account-1" },
       priority: { name: "High" },
       created: "2026-06-01T00:00:00.000+0000",

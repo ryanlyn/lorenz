@@ -25,7 +25,7 @@ vi.mock("@hono/node-server/serve-static", () => ({
 vi.mock("node:fs", async (importOriginal) => {
   const actual = await importOriginal<typeof NodeFs>();
   const existsSync = (target: Parameters<typeof actual.existsSync>[0]): boolean => {
-    if (target.toString().endsWith("apps/symphony-dashboard/dist")) {
+    if (target.toString().endsWith("apps/lorenz-dashboard/dist")) {
       return true;
     }
     return actual.existsSync(target);

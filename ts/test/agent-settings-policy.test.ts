@@ -46,7 +46,7 @@ describe("agent settings policy", () => {
   test("ignores committed skill files", () => {
     const violations = findAgentSettingsPolicyViolations([
       {
-        path: ".codex/skills/symphony-land/SKILL.md",
+        path: ".codex/skills/lorenz-land/SKILL.md",
         content: "Use `Bash(ln:*)` only as an example.",
       },
       {

@@ -23,7 +23,7 @@ test("normalizes Linear issue fields used by dispatch", () => {
       description: "Body",
       state: { name: "Todo", type: "unstarted" },
       assignee: { id: "worker@example.com" },
-      labels: [{ name: "Symphony:Backend" }, { name: "ENSEMBLE:3" }],
+      labels: [{ name: "Lorenz:Backend" }, { name: "ENSEMBLE:3" }],
       relations: [
         {
           type: " Blocks ",
@@ -41,7 +41,7 @@ test("normalizes Linear issue fields used by dispatch", () => {
   assert.equal(issue.stateType, "unstarted");
   assert.equal(issue.assigneeId, "worker@example.com");
   assert.equal(issue.assignedToWorker, true);
-  assert.deepEqual(issue.labels, ["symphony:backend", "ensemble:3"]);
+  assert.deepEqual(issue.labels, ["lorenz:backend", "ensemble:3"]);
   assert.equal(issue.blockers[0]?.state, "Closed");
   assert.equal(issue.blockers[0]?.stateType, "completed");
   assert.throws(
@@ -133,7 +133,7 @@ test("route and assignee rules match the SPEC", () => {
     identifier: "MT-1",
     title: "Title",
     state: { name: "Todo", type: "unstarted" },
-    labels: ["Symphony:Backend"],
+    labels: ["Lorenz:Backend"],
   });
 
   assert.deepEqual(routeNames(issue, settings), ["backend"]);
@@ -202,7 +202,7 @@ test("empty route labels are routed labels but are not dispatchable as unrouted"
     identifier: "MT-EMPTY",
     title: "Empty route",
     state: { name: "Todo", type: "unstarted" },
-    labels: ["Symphony:"],
+    labels: ["Lorenz:"],
   });
 
   assert.equal(hasRouteLabel(issue, settings), true);
@@ -246,7 +246,7 @@ test("dispatch block reasons classify capacity gates without hiding routing fail
     "worker_host_capacity",
   );
 
-  const misrouted = normalizeIssue({ ...issue, labels: ["Symphony:"] });
+  const misrouted = normalizeIssue({ ...issue, labels: ["Lorenz:"] });
   assert.equal(dispatchBlockReason(misrouted, settings, { runningCount: 1, runningByState }), null);
 });
 

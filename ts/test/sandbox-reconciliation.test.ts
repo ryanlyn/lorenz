@@ -75,7 +75,7 @@ describe("Sandbox: Reconciliation", () => {
         makeIssue("x", "X-1", {
           state: "In Progress",
           stateType: "started",
-          labels: ["symphony:backend"],
+          labels: ["lorenz:backend"],
         }),
       ],
       settingsOverrides: {
@@ -87,7 +87,7 @@ describe("Sandbox: Reconciliation", () => {
           dispatch: {
             acceptUnrouted: false,
             onlyRoutes: ["backend"],
-            routeLabelPrefix: "Symphony:",
+            routeLabelPrefix: "Lorenz:",
           },
         },
       },
@@ -98,7 +98,7 @@ describe("Sandbox: Reconciliation", () => {
       timedMutations: [
         {
           afterMs: 50,
-          mutate: { type: "change_labels", issueId: "x", labels: ["symphony:frontend"] },
+          mutate: { type: "change_labels", issueId: "x", labels: ["lorenz:frontend"] },
         },
       ],
     });

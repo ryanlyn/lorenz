@@ -101,7 +101,7 @@ function isPathSpecifier(specifier: string): boolean {
  * Dynamic-imports a worker-driver module and validates it. Relative and absolute
  * paths resolve against `baseDir` via `pathToFileURL`; bare names resolve
  * through the daemon's module graph (the operator installs the driver package
- * next to symphony; `./path` is the escape hatch). The imported namespace is
+ * next to lorenz; `./path` is the escape hatch). The imported namespace is
  * unwrapped (`default`, the transpiled-CJS `default.default` shape, or the
  * selected named export) and passed through `assertWorkerDriverModule`, so a
  * malformed module or an SDK version mismatch fails loud here - before the

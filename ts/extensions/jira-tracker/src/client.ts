@@ -352,7 +352,7 @@ export class JiraMcpClient implements RuntimeTrackerClient {
       },
       body: JSON.stringify({
         jsonrpc: "2.0",
-        id: `symphony-jira-mcp-${Date.now()}`,
+        id: `lorenz-jira-mcp-${Date.now()}`,
         method: "tools/call",
         params: { name, arguments: args },
       }),
@@ -372,7 +372,7 @@ export class JiraMcpClient implements RuntimeTrackerClient {
 
 /**
  * JQL selecting issues eligible for dispatch. Candidates are always restricted to issues
- * assigned to the worker's user and labeled {@link AGENT_LABEL}, so Symphony never picks up
+ * assigned to the worker's user and labeled {@link AGENT_LABEL}, so Lorenz never picks up
  * work that was not explicitly delegated to it — even when `tracker.jql` widens the scope.
  */
 function candidateJql(settings: Settings): string {

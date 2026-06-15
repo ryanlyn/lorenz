@@ -1,7 +1,7 @@
 /**
  * End-to-end trace pipeline test.
  *
- * Runs a real agent (codex or claude) via the Symphony orchestrator against
+ * Runs a real agent (codex or claude) via the Lorenz orchestrator against
  * a real Linear issue, captures:
  *   1. Raw JSONL trace (all events, unfiltered) from the log file
  *   2. Filtered JSONL trace (from the TraceEmitter output)
@@ -14,15 +14,15 @@
  *   LINEAR_PROJECT_SLUG     - Linear project slug
  *
  * Usage:
- *   SYMPHONY_E2E_AGENT_KIND=codex npx tsx sandbox/e2e-trace-test.ts
- *   SYMPHONY_E2E_AGENT_KIND=claude npx tsx sandbox/e2e-trace-test.ts
+ *   LORENZ_E2E_AGENT_KIND=codex npx tsx sandbox/e2e-trace-test.ts
+ *   LORENZ_E2E_AGENT_KIND=claude npx tsx sandbox/e2e-trace-test.ts
  */
 
 import fs from "node:fs/promises";
 import path from "node:path";
 
 import { LinearClient, parseConfig, loadWorkflow } from "@lorenz/cli";
-import { SymphonyRuntime } from "@lorenz/runtime";
+import { LorenzRuntime } from "@lorenz/runtime";
 import { TraceEmitter } from "@lorenz/traceviz-emitter";
 import { parseTraceLines } from "@lorenz/traceviz-server";
 import { startObservabilityServer } from "@lorenz/server";
@@ -37,10 +37,10 @@ import { runAgentAttempt } from "../apps/cli/src/daemon.js";
 
 const TASK_DESCRIPTION = `Create a pyproject.toml file with httpx as a dependency, then echo the current datetime to stdout. When done, mark the linear issue as Done`;
 
-const TRACE_DIR = "/tmp/symphony-e2e-traces";
-const WORKSPACE_ROOT = "/tmp/symphony-e2e-workspaces";
-const LOG_DIR = "/tmp/symphony-e2e-logs";
-const SCREENSHOT_DIR = "/tmp/symphony-e2e-screenshots";
+const TRACE_DIR = "/tmp/lorenz-e2e-traces";
+const WORKSPACE_ROOT = "/tmp/lorenz-e2e-workspaces";
+const LOG_DIR = "/tmp/lorenz-e2e-logs";
+const SCREENSHOT_DIR = "/tmp/lorenz-e2e-screenshots";
 
 async function cleanDirs() {
   for (const dir of [TRACE_DIR, WORKSPACE_ROOT, LOG_DIR, SCREENSHOT_DIR]) {
@@ -71,7 +71,7 @@ polling:
   interval_ms: 2000
 
 workspace:
-  root: /tmp/symphony-e2e-workspaces
+  root: /tmp/lorenz-e2e-workspaces
 
 hooks:
   after_create: |
@@ -97,7 +97,7 @@ agents:
 
 server:
   port: 0
-  traceDir: /tmp/symphony-e2e-traces
+  traceDir: /tmp/lorenz-e2e-traces
 ---
 
 You are working on issue {{ issue.identifier }}: {{ issue.title }}
@@ -152,7 +152,7 @@ async function createLinearIssue(): Promise<{ issueId: string; issueIdentifier: 
       TASK_DESCRIPTION,
       "",
       `Marker: ${marker}`,
-      "Temporary issue created by Symphony E2E trace test. Will be archived on completion.",
+      "Temporary issue created by Lorenz E2E trace test. Will be archived on completion.",
     ].join("\n"),
   });
 
@@ -164,10 +164,10 @@ async function runOrchestrator(
   issueId: string,
   issueIdentifier: string,
 ): Promise<{ rawLogPath: string; traceJsonlPath: string }> {
-  const agentKind = process.env.SYMPHONY_E2E_AGENT_KIND ?? "codex";
+  const agentKind = process.env.LORENZ_E2E_AGENT_KIND ?? "codex";
   console.log(`[e2e] Agent kind: ${agentKind}`);
 
-  const rawLogPath = path.join(LOG_DIR, "log", "symphony.log");
+  const rawLogPath = path.join(LOG_DIR, "log", "lorenz.log");
 
   const workflowPath = path.join(LOG_DIR, "WORKFLOW.md");
   await fs.writeFile(workflowPath, renderWorkflowContent(agentKind));
@@ -181,7 +181,7 @@ async function runOrchestrator(
   const traceEmitter = new TraceEmitter(TRACE_DIR);
 
   const trackerClient = createTrackerClient(workflow.settings, process.env);
-  const runtime = new SymphonyRuntime({
+  const runtime = new LorenzRuntime({
     workflow,
     clientFactory: () => trackerClient,
     reloadWorkflow: async () => workflow,
@@ -326,7 +326,7 @@ async function screenshotDashboard(traceJsonlPath: string, issueId: string): Pro
 }
 
 async function main() {
-  console.log("=== Symphony E2E Trace Pipeline Test ===\n");
+  console.log("=== Lorenz E2E Trace Pipeline Test ===\n");
 
   registerBuiltinBackends();
   await cleanDirs();

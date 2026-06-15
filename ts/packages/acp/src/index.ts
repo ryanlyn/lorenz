@@ -683,7 +683,7 @@ function binTargetForManifest(manifest: BridgePackageManifest, bin: string): str
 
 /**
  * Resolve bare bridge names to the vendored workspace packages so local runs
- * always use Symphony's patched bridges rather than whatever PATH provides.
+ * always use Lorenz's patched bridges rather than whatever PATH provides.
  * Remote hosts keep the configured command verbatim (the vendored install
  * only exists locally), as do custom commands and explicit paths.
  */

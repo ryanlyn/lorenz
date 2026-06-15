@@ -61,7 +61,7 @@ test("INVARIANT: safeIdentifier preserves strings already in the safe alphabet",
 test("INVARIANT: workspacePath result starts with root prefix", () => {
   fc.assert(
     fc.property(
-      fc.constantFrom("/tmp/workspaces", "/var/symphony", "/home/user/ws"),
+      fc.constantFrom("/tmp/workspaces", "/var/lorenz", "/home/user/ws"),
       fc
         .string({ minLength: 1, maxLength: 15 })
         .filter(

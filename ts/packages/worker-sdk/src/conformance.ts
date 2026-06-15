@@ -45,7 +45,7 @@ export interface ConformanceSuiteOptions {
   /**
    * Builds a {@link ProvisionRequest} for a given worker id. Lets a driver supply
    * its own `labels`/`driverOptions`. Defaults to a minimal request with a
-   * single `symphony.worker-pool` label and the configured `provisionTimeoutMs`.
+   * single `lorenz.worker-pool` label and the configured `provisionTimeoutMs`.
    */
   makeProvisionRequest?: (workerId: string) => ProvisionRequest;
   /**
@@ -86,7 +86,7 @@ export function runDriverConformanceSuite(
   const provisionRequest = (workerId: string): ProvisionRequest =>
     opts.makeProvisionRequest?.(workerId) ?? {
       workerId,
-      labels: ["symphony.worker-pool"],
+      labels: ["lorenz.worker-pool"],
       timeoutMs: provisionTimeoutMs,
     };
 
@@ -166,7 +166,7 @@ export function runDriverConformanceSuite(
         workerHost: "unknown",
         driverRef: "unknown",
         createdAtMs: 0,
-        labels: ["symphony.worker-pool"],
+        labels: ["lorenz.worker-pool"],
         metadata: {},
       };
 

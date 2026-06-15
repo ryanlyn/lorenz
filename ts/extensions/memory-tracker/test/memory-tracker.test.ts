@@ -214,7 +214,7 @@ test("constructor normalizes raw records with top-level state and object labels"
 
 test("memoryIssuesFromEnv parses JSON from environment variable", () => {
   const env = {
-    SYMPHONY_MEMORY_TRACKER_ISSUES_JSON: JSON.stringify([
+    LORENZ_MEMORY_TRACKER_ISSUES_JSON: JSON.stringify([
       { id: "e1", identifier: "MT-1", title: "Env issue", state: { name: "Todo" } },
     ]),
   } as unknown as NodeJS.ProcessEnv;
@@ -232,7 +232,7 @@ test("memoryIssuesFromEnv returns empty array when env var is not set", () => {
 
 test("memoryIssuesFromEnv throws when JSON is not an array", () => {
   const env = {
-    SYMPHONY_MEMORY_TRACKER_ISSUES_JSON: JSON.stringify({ not: "array" }),
+    LORENZ_MEMORY_TRACKER_ISSUES_JSON: JSON.stringify({ not: "array" }),
   } as unknown as NodeJS.ProcessEnv;
 
   assert.throws(() => memoryIssuesFromEnv(env), /must be a JSON array/);

@@ -61,7 +61,7 @@ const scriptPath = fileURLToPath(import.meta.url);
 const defaultWorkspaceRoot = path.resolve(path.dirname(scriptPath), "..");
 const packageSearchRoots = ["apps", "packages", "extensions", "vendor"];
 const releaseEntrypoint = "bin/lorenz";
-const dashboardDist = "apps/symphony-dashboard/dist";
+const dashboardDist = "apps/lorenz-dashboard/dist";
 const nativeDependencyNames = new Set(["better-sqlite3"]);
 
 type VendoredRuntimeDependency = {
@@ -459,7 +459,8 @@ async function writeRootPackageJson(
   await writeJson(path.join(releaseDir, "package.json"), {
     name: "lorenz",
     version,
-    description: "Lorenz is a control plane for dispatching and structuring order across dynamic agent systems.",
+    description:
+      "Lorenz is a control plane for dispatching and structuring order across dynamic agent systems.",
     license: "Apache-2.0",
     repository: {
       type: "git",
@@ -713,7 +714,7 @@ async function runCli(): Promise<void> {
   }
 
   const result = await stageRelease(options);
-  console.log(`Staged Symphony CLI release at ${result.releaseDir}`);
+  console.log(`Staged Lorenz CLI release at ${result.releaseDir}`);
   if (result.archivePath) {
     console.log(`Created archive at ${result.archivePath}`);
   }

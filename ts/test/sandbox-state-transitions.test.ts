@@ -221,7 +221,7 @@ describe("Sandbox: State Transitions", () => {
           makeIssue("route-1", "RTE-1", {
             state: "In Progress",
             stateType: "started",
-            labels: ["Symphony:backend"],
+            labels: ["Lorenz:backend"],
           }),
         ],
         settingsOverrides: {
@@ -233,7 +233,7 @@ describe("Sandbox: State Transitions", () => {
             dispatch: {
               acceptUnrouted: false,
               onlyRoutes: ["backend"],
-              routeLabelPrefix: "Symphony:",
+              routeLabelPrefix: "Lorenz:",
             },
           },
         },
@@ -244,7 +244,7 @@ describe("Sandbox: State Transitions", () => {
         timedMutations: [
           {
             afterMs: 50,
-            mutate: { type: "change_labels", issueId: "route-1", labels: ["Symphony:frontend"] },
+            mutate: { type: "change_labels", issueId: "route-1", labels: ["Lorenz:frontend"] },
           },
         ],
       });
@@ -264,7 +264,7 @@ describe("Sandbox: State Transitions", () => {
           makeIssue("route-2", "RTE-2", {
             state: "In Progress",
             stateType: "started",
-            labels: ["Symphony:backend"],
+            labels: ["Lorenz:backend"],
           }),
         ],
         settingsOverrides: {
@@ -276,7 +276,7 @@ describe("Sandbox: State Transitions", () => {
             dispatch: {
               acceptUnrouted: false,
               onlyRoutes: ["backend"],
-              routeLabelPrefix: "Symphony:",
+              routeLabelPrefix: "Lorenz:",
             },
           },
         },
@@ -304,7 +304,7 @@ describe("Sandbox: State Transitions", () => {
           makeIssue("route-3", "RTE-3", {
             state: "In Progress",
             stateType: "started",
-            labels: ["Symphony:backend"],
+            labels: ["Lorenz:backend"],
           }),
         ],
         settingsOverrides: {
@@ -316,7 +316,7 @@ describe("Sandbox: State Transitions", () => {
             dispatch: {
               acceptUnrouted: false,
               onlyRoutes: ["backend"],
-              routeLabelPrefix: "Symphony:",
+              routeLabelPrefix: "Lorenz:",
             },
           },
         },
@@ -336,7 +336,7 @@ describe("Sandbox: State Transitions", () => {
         ],
       });
 
-      // Without any Symphony: prefixed label, acceptUnrouted=false means not routed here
+      // Without any Lorenz: prefixed label, acceptUnrouted=false means not routed here
       expect(result.finalSnapshot.running).toHaveLength(0);
       expect(result.events.some((e) => e.type === "run_reconciled")).toBe(true);
     }, 10_000);

@@ -32,7 +32,7 @@ afterEach(() => {
 test("log file configuration uses pino-roll with a stable path", async () => {
   const root = await tempDir("lorenz-log-file");
   const logFile = defaultLogFile(root);
-  assert.equal(logFile, path.join(root, "log", "symphony.log"));
+  assert.equal(logFile, path.join(root, "log", "lorenz.log"));
 
   await fs.mkdir(path.dirname(logFile), { recursive: true });
   await fs.writeFile(logFile, "0123456789\n");
@@ -51,7 +51,7 @@ test("log file configuration uses pino-roll with a stable path", async () => {
   const started = JSON.parse(startedLine ?? "");
   assert.deepEqual(started, {
     at: "2026-05-06T00:00:00.000Z",
-    event: "symphony_ts_started",
+    event: "lorenz_ts_started",
   });
 
   await appendLogEvent(logFile, {
@@ -116,7 +116,7 @@ test("log file configuration delegates size rotation to pino-roll", async () => 
   );
 
   const files = await fs.readdir(path.dirname(logFile));
-  const numberedLogs = files.filter((file) => /^symphony\.log\.\d+$/.test(file));
+  const numberedLogs = files.filter((file) => /^lorenz\.log\.\d+$/.test(file));
   // pruneRollFilesSync keeps at most maxFiles+1 numbered roll files (keepCount).
   // With maxFiles=1, that means at most 2 numbered files remain.
   assert.equal(
@@ -124,22 +124,10 @@ test("log file configuration delegates size rotation to pino-roll", async () => 
     true,
     `Expected at most ${maxFiles + 1} numbered log files, got ${numberedLogs.length}: ${numberedLogs.join(", ")}`,
   );
-  // The stale pre-existing files (symphony.log.1, .2, .3) must have been pruned.
-  assert.equal(
-    numberedLogs.includes("symphony.log.1"),
-    false,
-    "stale symphony.log.1 should be pruned",
-  );
-  assert.equal(
-    numberedLogs.includes("symphony.log.2"),
-    false,
-    "stale symphony.log.2 should be pruned",
-  );
-  assert.equal(
-    numberedLogs.includes("symphony.log.3"),
-    false,
-    "stale symphony.log.3 should be pruned",
-  );
+  // The stale pre-existing files (lorenz.log.1, .2, .3) must have been pruned.
+  assert.equal(numberedLogs.includes("lorenz.log.1"), false, "stale lorenz.log.1 should be pruned");
+  assert.equal(numberedLogs.includes("lorenz.log.2"), false, "stale lorenz.log.2 should be pruned");
+  assert.equal(numberedLogs.includes("lorenz.log.3"), false, "stale lorenz.log.3 should be pruned");
   assert.equal((await fs.lstat(logFile)).isSymbolicLink(), true);
   assert.match(await fs.readFile(logFile, "utf8"), /"event":"after_roll"/);
 });
@@ -222,7 +210,7 @@ test("log file configuration warns without crashing when the sink is unavailable
 
   const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
   try {
-    await configureLogFile(path.join(blocker, "symphony.log"));
+    await configureLogFile(path.join(blocker, "lorenz.log"));
     assert.ok(stderrSpy.mock.calls.length > 0);
     const warning = String(stderrSpy.mock.calls[0]?.[0]);
     assert.match(warning, /log_file_unavailable/);
@@ -243,7 +231,7 @@ async function waitForSyntheticSymlinkFailure(): Promise<void> {
 
 test("appendLogEvent without prior configureLogFile uses default logger path", async () => {
   const root = await tempDir("lorenz-log-file-coldstart");
-  const logFile = path.join(root, "log", "symphony.log");
+  const logFile = path.join(root, "log", "lorenz.log");
 
   await appendLogEvent(logFile, {
     at: "2026-05-06T12:00:00.000Z",
@@ -266,14 +254,14 @@ test("appendLogEvent without prior configureLogFile uses default logger path", a
 
 test("appendLogEvent emits stderr warning when writing fails after configuration", async () => {
   const root = await tempDir("lorenz-log-file-write-fail");
-  const logFile = path.join(root, "log", "symphony.log");
+  const logFile = path.join(root, "log", "lorenz.log");
   await fs.mkdir(path.dirname(logFile), { recursive: true });
 
   // Use a path nested under a file (not a directory) to force mkdir to fail
   // when the default logger tries to create the directory.
   const blocker = path.join(root, "nope");
   await fs.writeFile(blocker, "not a directory");
-  const badLogFile = path.join(blocker, "sub", "symphony.log");
+  const badLogFile = path.join(blocker, "sub", "lorenz.log");
 
   const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
   try {

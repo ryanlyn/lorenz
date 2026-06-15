@@ -5,7 +5,7 @@ import { resolveBoardDir } from "./resolveBoardDir.js";
 
 /** Local-board-specific keys of the selected tracker bundle, validated by the provider. */
 export interface LocalTrackerOptions {
-  /** Board directory (e.g. `.symphony/local`); resolved relative to cwd when not absolute. */
+  /** Board directory (e.g. `.lorenz/local`); resolved relative to cwd when not absolute. */
   path?: string | undefined;
   /**
    * Issue-id prefix (e.g. `"BOARD-"`, `"XXX-"`). Issue files are `<prefix><n>.md` and new

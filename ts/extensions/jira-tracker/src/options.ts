@@ -2,7 +2,7 @@ import type { Settings } from "@lorenz/domain";
 import { isRecord } from "@lorenz/domain";
 import { stringListOption, stringOption } from "@lorenz/tracker-sdk";
 
-/** Tool names exposed by the external MCP server for Symphony's tracker operations. */
+/** Tool names exposed by the external MCP server for Lorenz's tracker operations. */
 export interface JiraMcpToolMap {
   search?: string | undefined;
   readIssue?: string | undefined;
@@ -19,7 +19,7 @@ export interface JiraMcpOptions {
   token?: string | undefined;
   /** Extra headers to send to the external MCP server. */
   headers?: Record<string, string> | undefined;
-  /** Tool names exposed by the external MCP server for Symphony's tracker operations. */
+  /** Tool names exposed by the external MCP server for Lorenz's tracker operations. */
   tools?: JiraMcpToolMap | undefined;
 }
 

@@ -94,7 +94,7 @@ test("Linear client resolves project slugs from labels via API", async () => {
         tracker: {
           kind: "linear",
           api_key: "linear-token",
-          project_labels: ["team:backend", "symphony-managed"],
+          project_labels: ["team:backend", "lorenz-managed"],
           active_states: ["Todo"],
         },
       },
@@ -125,7 +125,7 @@ test("Linear client resolves project slugs from labels via API", async () => {
 
   assert.equal(issues.length, 1);
   assert.match(String(calls[0]?.body.query), /ProjectsByLabels/);
-  assert.deepEqual(calls[0]?.body.variables?.labels, ["team:backend", "symphony-managed"]);
+  assert.deepEqual(calls[0]?.body.variables?.labels, ["team:backend", "lorenz-managed"]);
   assert.deepEqual(calls[1]?.body.variables?.projectSlugs, ["proj-a", "proj-b"]);
 });
 
@@ -368,7 +368,7 @@ function linearIssue(id: string, identifier: string): Record<string, unknown> {
     branchName: `${identifier.toLowerCase()}-branch`,
     url: `https://linear.app/test/issue/${identifier}`,
     assignee: { id: "user-1", email: "worker@example.com" },
-    labels: { nodes: [{ name: "Symphony:Backend" }] },
+    labels: { nodes: [{ name: "Lorenz:Backend" }] },
     inverseRelations: {
       nodes: [
         { type: "blocks", issue: { id: "blocker-1", identifier: "MT-0", state: { name: "Done" } } },

@@ -53,7 +53,7 @@ test("doctor command reports help and invalid arguments", () => {
 
 test("doctor uses default workflow resolution and reports healthy local checks", async () => {
   const fixture = await doctorFixture({ withDashboard: true });
-  vi.stubEnv("SYMPHONY_WORKFLOW", fixture.workflowPath);
+  vi.stubEnv("LORENZ_WORKFLOW", fixture.workflowPath);
 
   const report = await runDoctorCommand({
     workflowPath: null,
@@ -75,7 +75,7 @@ test("doctor renders a text report via runDoctorMain", async () => {
   const fixture = await doctorFixture({ withDashboard: true });
   const output = await runDoctorMain([fixture.workflowPath]);
 
-  assert.match(output, /^Symphony doctor$/m);
+  assert.match(output, /^Lorenz doctor$/m);
   assert.match(output, /^status=ok$/m);
   assert.equal(output.includes(`workflow=${fixture.workflowPath}`), true);
 });
@@ -83,7 +83,7 @@ test("doctor renders a text report via runDoctorMain", async () => {
 test("doctor returns warnings without failing the CLI process", async () => {
   const fixture = await doctorFixture({
     withDashboard: false,
-    bridgeCommand: "missing-symphony-test-acp",
+    bridgeCommand: "missing-lorenz-test-acp",
   });
   const spy = vi.spyOn(process.stdout, "write").mockReturnValue(true);
 
@@ -101,7 +101,7 @@ test("doctor returns warnings without failing the CLI process", async () => {
 test("doctor checks status override bridge commands for the active agent", async () => {
   const fixture = await doctorFixture({
     withDashboard: true,
-    statusOverrideBridgeCommand: "missing-symphony-status-acp",
+    statusOverrideBridgeCommand: "missing-lorenz-status-acp",
   });
 
   const report = await runDoctorCommand({
@@ -144,7 +144,7 @@ test("doctor checks node bridge target files", async () => {
 test("doctor checks env-wrapped bridge commands", async () => {
   const fixture = await doctorFixture({
     withDashboard: true,
-    bridgeCommand: 'env CODEX_PATH="$(command -v codex)" missing-symphony-env-acp',
+    bridgeCommand: 'env CODEX_PATH="$(command -v codex)" missing-lorenz-env-acp',
   });
 
   const report = await runDoctorCommand({
@@ -157,7 +157,7 @@ test("doctor checks env-wrapped bridge commands", async () => {
   assert.equal(statusFor(report, "agent_bridge_codex"), "warning");
   assert.match(
     messageFor(report, "agent_bridge_codex"),
-    /Agent bridge command was not found for codex: missing-symphony-env-acp/,
+    /Agent bridge command was not found for codex: missing-lorenz-env-acp/,
   );
 });
 
@@ -311,7 +311,7 @@ async function doctorFixture(options: {
   const root = await tempDir("lorenz-doctor");
   const workflowPath = path.join(root, "WORKFLOW.md");
   const boardDir = path.join(root, "board");
-  const logFile = path.join(root, "log", "symphony.log");
+  const logFile = path.join(root, "log", "lorenz.log");
   const dashboardDir = path.join(root, "dashboard");
   const bridgeCommand = options.bridgeCommand ?? path.join(root, "bin", "test-acp");
   if (options.bridgeCommand === undefined) {

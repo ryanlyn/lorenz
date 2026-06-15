@@ -18,7 +18,7 @@ interface ParsedFile {
  * immediately before the human-readable "## Comments" heading so a description that
  * legitimately contains a "## Comments" heading is never misparsed.
  */
-const COMMENTS_MARKER = "<!-- symphony:comments -->";
+const COMMENTS_MARKER = "<!-- lorenz:comments -->";
 
 /**
  * Default issue-id prefix. {@link BoardStore} mints ids shaped `<prefix><n>` (see
@@ -60,7 +60,7 @@ function assertValidIdPrefix(prefix: string): void {
  * that key have finished. {@link withLock} appends its work to the chain so read-modify-write
  * cycles on the same file (or id allocation in the same dir) serialize instead of interleaving
  * and losing an update. This is IN-PROCESS serialization only: it covers concurrent agents and
- * ensemble slots inside the single Symphony daemon, but assumes no external process is editing
+ * ensemble slots inside the single Lorenz daemon, but assumes no external process is editing
  * the board files concurrently (that is out of scope - see ts/README.md).
  */
 const pathLocks = new Map<string, Promise<unknown>>();
@@ -307,7 +307,7 @@ export class BoardStore {
       // mistaken for an issue; the id is not part of the name because one temp serves every retry.
       const tmp = path.join(
         this.dir,
-        `.symphony-create.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`,
+        `.lorenz-create.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`,
       );
       try {
         await fs.writeFile(tmp, contents, "utf8");
@@ -346,7 +346,7 @@ export class BoardStore {
    * Create the board directory durably so a freshly-created board survives a crash. mkdir alone
    * is not enough: fsyncing this.dir after publishing a file persists the entries INSIDE it, but
    * NOT the directory entry in the PARENT that makes a newly-created board dir reachable. On a
-   * first-run board (the .symphony/local path did not exist) a crash right after create() could
+   * first-run board (the .lorenz/local path did not exist) a crash right after create() could
    * otherwise lose the entire new directory and the acknowledged issue even though the file and
    * the board dir were synced.
    *

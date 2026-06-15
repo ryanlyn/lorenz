@@ -234,7 +234,7 @@ function runtimeSettings(runtime: RuntimeServerSource): Settings | null {
 
 function resolveStaticDir(): string {
   const thisFile = fileURLToPath(import.meta.url);
-  return path.resolve(path.dirname(thisFile), "../../../apps/symphony-dashboard/dist");
+  return path.resolve(path.dirname(thisFile), "../../../apps/lorenz-dashboard/dist");
 }
 
 function jsonResponse(body: unknown, status = 200): Response {

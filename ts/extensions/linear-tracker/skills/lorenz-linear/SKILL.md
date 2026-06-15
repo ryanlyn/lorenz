@@ -1,18 +1,18 @@
 ---
-name: symphony-linear
+name: lorenz-linear
 description: |
-  Use Symphony's `linear_graphql` client tool for raw Linear GraphQL
+  Use Lorenz's `linear_graphql` client tool for raw Linear GraphQL
   operations such as comment editing and upload flows.
 ---
 
 # Linear GraphQL
 
-Use this skill for raw Linear GraphQL work during Symphony app-server sessions.
+Use this skill for raw Linear GraphQL work during Lorenz app-server sessions.
 
 ## Primary tool
 
-Use the `linear_graphql` client tool exposed by Symphony's app-server session.
-It reuses Symphony's configured Linear auth for the session.
+Use the `linear_graphql` client tool exposed by Lorenz's app-server session.
+It reuses Lorenz's configured Linear auth for the session.
 
 Tool input:
 

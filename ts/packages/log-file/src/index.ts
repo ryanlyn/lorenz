@@ -30,7 +30,7 @@ interface RollStream {
 }
 
 export function defaultLogFile(root = process.cwd()): string {
-  return path.join(root, "log", "symphony.log");
+  return path.join(root, "log", "lorenz.log");
 }
 
 const loggers = new Map<string, Promise<Logger>>();
@@ -53,7 +53,7 @@ export async function configureLogFile(
     );
     loggers.set(logFile, loggerPromise);
     const logger = await loggerPromise;
-    logger.info({ event: "symphony_ts_started" });
+    logger.info({ event: "lorenz_ts_started" });
   } catch (error) {
     loggers.delete(logFile);
     warnLogFileUnavailable(logFile, error);

@@ -22,7 +22,7 @@ const validIdentifier = fc.string({ minLength: 1, maxLength: 60 }).filter((s) =>
 const absoluteRoot = fc.oneof(
   fc.constantFrom(
     "/tmp/workspaces",
-    "/var/symphony/ws",
+    "/var/lorenz/ws",
     "/home/user/projects",
     "/opt/agent/runs",
     "/a",

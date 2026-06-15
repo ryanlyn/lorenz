@@ -50,8 +50,8 @@ export { MemoryTrackerClient, memoryIssuesFromEnv } from "@lorenz/memory-tracker
 export { configureLogFile, appendLogEvent, defaultLogFile } from "@lorenz/log-file";
 export { Orchestrator } from "@lorenz/orchestrator";
 export type { RunResult } from "@lorenz/agent-runner";
-export { SymphonyRuntime, RUNTIME_EVENT_TYPES } from "@lorenz/runtime";
-export type { RuntimeEvent, RuntimeRunHistoryEntry, SymphonyRuntimeOptions } from "@lorenz/runtime";
+export { LorenzRuntime, RUNTIME_EVENT_TYPES } from "@lorenz/runtime";
+export type { RuntimeEvent, RuntimeRunHistoryEntry, LorenzRuntimeOptions } from "@lorenz/runtime";
 export { statePayload, issuePayload, runsPayload } from "@lorenz/presenter";
 export { retryBackoffMs, actionForStopReason, mergeMonotonicUsage } from "@lorenz/policies";
 export {

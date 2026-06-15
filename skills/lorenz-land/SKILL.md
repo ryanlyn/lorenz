@@ -1,5 +1,5 @@
 ---
-name: symphony-land
+name: lorenz-land
 description:
   Land a PR by monitoring conflicts, resolving them, waiting for checks, and
   squash-merging when green; use when asked to land, merge, or shepherd a PR to
@@ -27,16 +27,16 @@ description:
 
 1. Locate the PR for the current branch.
 2. Confirm the full gauntlet is green locally before any push.
-3. If the working tree has uncommitted changes, commit with the `symphony-commit` skill
-   and push with the `symphony-push` skill before proceeding.
+3. If the working tree has uncommitted changes, commit with the `lorenz-commit` skill
+   and push with the `lorenz-push` skill before proceeding.
 4. Check mergeability and conflicts against main.
-5. If conflicts exist, use the `symphony-pull` skill to fetch/merge `origin/main` and
-   resolve conflicts, then use the `symphony-push` skill to publish the updated branch.
+5. If conflicts exist, use the `lorenz-pull` skill to fetch/merge `origin/main` and
+   resolve conflicts, then use the `lorenz-push` skill to publish the updated branch.
 6. Ensure Codex review comments (if present) are acknowledged and any required
    fixes are handled before merging.
 7. Watch checks until complete.
-8. If checks fail, pull logs, fix the issue, commit with the `symphony-commit` skill,
-   push with the `symphony-push` skill, and re-run checks.
+8. If checks fail, pull logs, fix the issue, commit with the `lorenz-commit` skill,
+   push with the `lorenz-push` skill, and re-run checks.
 9. When all checks are green and review feedback is addressed, squash-merge and
    delete the branch using the PR title/body for the merge subject/body.
 10. **Context guard:** Before implementing review feedback, confirm it does not
@@ -68,17 +68,17 @@ pr_body=$(gh pr view --json body -q .body)
 mergeable=$(gh pr view --json mergeable -q .mergeable)
 
 if [ "$mergeable" = "CONFLICTING" ]; then
-  # Run the `symphony-pull` skill to handle fetch + merge + conflict resolution.
-  # Then run the `symphony-push` skill to publish the updated branch.
+  # Run the `lorenz-pull` skill to handle fetch + merge + conflict resolution.
+  # Then run the `lorenz-push` skill to publish the updated branch.
 fi
 
 # Preferred: use the Async Watch Helper below. The manual loop is a fallback
 # when Python cannot run or the helper script is unavailable.
 # Wait for review feedback: agent reviews arrive as issue comments whose body
-# starts with "## <Agent> Review — <persona>" (e.g. "## Symphony Review",
-# "## Codex Review", "## Claude Review"). Symphony's own reviews use
-# "## Symphony Review — <persona>". Treat any agent review as reviewer
-# feedback: reply with a `[symphony]` issue comment acknowledging the
+# starts with "## <Agent> Review — <persona>" (e.g. "## Lorenz Review",
+# "## Codex Review", "## Claude Review"). Lorenz's own reviews use
+# "## Lorenz Review — <persona>". Treat any agent review as reviewer
+# feedback: reply with a `[lorenz]` issue comment acknowledging the
 # findings and whether you're addressing or deferring them.
 while true; do
   gh api repos/{owner}/{repo}/issues/"$pr_number"/comments \
@@ -106,7 +106,7 @@ Preferred: use the asyncio watcher to monitor review comments, CI, and head
 updates in parallel:
 
 ```
-python3 .codex/skills/symphony-land/land_watch.py
+python3 .codex/skills/lorenz-land/land_watch.py
 ```
 
 Exit codes:
@@ -118,7 +118,7 @@ Exit codes:
 ## Failure Handling
 
 - If checks fail, pull details with `gh pr checks` and `gh run view --log`, then
-  fix locally, commit with the `symphony-commit` skill, push with the `symphony-push` skill, and
+  fix locally, commit with the `lorenz-commit` skill, push with the `lorenz-push` skill, and
   re-run the watch.
 - Use judgment to identify flaky failures. If a failure is a flake (e.g., a
   timeout on only one platform), you may proceed without fixing it.
@@ -132,7 +132,7 @@ Exit codes:
 - Do not merge while review comments (human or Codex review) are outstanding.
 - Agent review jobs retry on failure and are non-blocking; use the presence of
   issue comments whose body starts with `## <Agent> Review — <persona>` (e.g.
-  `## Symphony Review — <persona>`) as the signal that review feedback is
+  `## Lorenz Review — <persona>`) as the signal that review feedback is
   available, not the job status.
 - Do not enable auto-merge; this repo has no required checks so auto-merge can
   skip tests.
@@ -143,7 +143,7 @@ Exit codes:
 ## Review Handling
 
 - Agent reviews arrive as issue comments posted by GitHub Actions. Their body
-  starts with `## <Agent> Review — <persona>` (e.g. `## Symphony Review`,
+  starts with `## <Agent> Review — <persona>` (e.g. `## Lorenz Review`,
   `## Codex Review`, `## Claude Review`) and includes the reviewer's
   methodology + guardrails used. Treat any agent review as feedback that must
   be acknowledged before merge.
@@ -164,7 +164,7 @@ Exit codes:
   - Reply to a specific review comment:
     ```
     gh api -X POST /repos/{owner}/{repo}/pulls/<pr_number>/comments \
-      -f body='[symphony] <response>' -F in_reply_to=<comment_id>
+      -f body='[lorenz] <response>' -F in_reply_to=<comment_id>
     ```
 - `in_reply_to` must be the numeric review comment id (e.g., `2710521800`), not
   the GraphQL node id (e.g., `PRRC_...`), and the endpoint must include the PR
@@ -173,31 +173,31 @@ Exit codes:
 - A 404 on reply typically means the wrong endpoint (missing PR number) or
   insufficient scope; verify by listing comments first.
 - All GitHub comments generated by this agent must be prefixed with
-  `[symphony]`.
+  `[lorenz]`.
 - For agent review issue comments, reply in the issue thread (not a review
-  thread) with `[symphony]` and state whether you will address the feedback now
+  thread) with `[lorenz]` and state whether you will address the feedback now
   or defer it (include rationale).
 - If feedback requires changes:
   - For inline review comments (human), reply with intended fixes
-    (`[symphony] ...`) **as an inline reply to the original review comment**
+    (`[lorenz] ...`) **as an inline reply to the original review comment**
     using the review comment endpoint and `in_reply_to` (do not use issue
     comments for this).
   - Implement fixes, commit, push.
-  - Reply with the fix details and commit sha (`[symphony] ...`) in the same
+  - Reply with the fix details and commit sha (`[lorenz] ...`) in the same
     place you acknowledged the feedback (issue comment for agent reviews,
     inline reply for review comments).
   - The land watcher treats agent review issue comments as unresolved until a
-    newer `[symphony]` issue comment is posted acknowledging the findings.
+    newer `[lorenz]` issue comment is posted acknowledging the findings.
 - Only request a new agent review when you need a rerun (e.g., after new
   commits). Do not request one without changes since the last review.
   - Before requesting a new agent review, re-run the land watcher and ensure
-    there are zero outstanding review comments (all have `[symphony]` inline
+    there are zero outstanding review comments (all have `[lorenz]` inline
     replies).
   - After pushing new commits, the agent review workflow will rerun on PR
     synchronization (or you can re-run the workflow manually). Post a concise
     root-level summary comment so reviewers have the latest delta:
     ```
-    [symphony] Changes since last review:
+    [lorenz] Changes since last review:
     - <short bullets of deltas>
     Commits: <sha>, <sha>
     Tests: <commands run>
@@ -212,7 +212,7 @@ Exit codes:
   just the most recent fix.
 - If review feedback expands scope, decide whether to include it now or defer
   it. You can accept, defer, or decline feedback. If deferring or declining,
-  call it out in the root-level `[symphony]` update with a brief reason (e.g.,
+  call it out in the root-level `[lorenz]` update with a brief reason (e.g.,
   out-of-scope, conflicts with intent, unnecessary).
 - Correctness issues raised in review comments should be addressed. If you plan
   to defer or decline a correctness concern, validate first and explain why the

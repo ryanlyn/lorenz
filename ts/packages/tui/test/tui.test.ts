@@ -22,7 +22,7 @@ test("Ink dashboard renders operational sections", () => {
   );
   const frame = stripAnsi(lastFrame() ?? "");
 
-  assert.match(frame, /SYMPHONY STATUS/);
+  assert.match(frame, /LORENZ STATUS/);
   assert.match(frame, /Agents: 1\/10/);
   assert.match(frame, /Throughput:/);
   assert.match(frame, /Running/);
@@ -306,7 +306,7 @@ function snapshotFixture(): RuntimeSnapshot {
         turnCount: 1,
         startedAt: "2026-05-05T00:00:00.000Z",
         lastEvent: "turn_completed",
-        workspacePath: "/tmp/symphony/MT-1",
+        workspacePath: "/tmp/lorenz/MT-1",
         usageTotals: { inputTokens: 10, outputTokens: 5, totalTokens: 15, secondsRunning: 4 },
       },
     ],
@@ -510,7 +510,7 @@ function runningFixture(
     lastEvent,
     lastMessage,
     lastEventAt: now,
-    workspacePath: `/tmp/symphony/${identifier}`,
+    workspacePath: `/tmp/lorenz/${identifier}`,
     usageTotals: { inputTokens: 0, outputTokens: 0, totalTokens, secondsRunning: ageSeconds },
   };
 }

@@ -242,7 +242,7 @@ export class LinearClient {
 
   async viewer(): Promise<LinearViewer> {
     const data = await this.graphql<{ viewer: LinearViewer }>(
-      `query SymphonyTsViewer { viewer { id name email } }`,
+      `query LorenzTsViewer { viewer { id name email } }`,
     );
     return data.viewer;
   }
@@ -251,7 +251,7 @@ export class LinearClient {
     const data = await this.graphql<{
       projects: { nodes: Array<Record<string, unknown>> };
     }>(
-      `query SymphonyTsProject($slug: String!) {
+      `query LorenzTsProject($slug: String!) {
         projects(filter: {slugId: {eq: $slug}}, first: 1) {
           nodes {
             id
@@ -299,7 +299,7 @@ export class LinearClient {
           pageInfo: { hasNextPage: boolean; endCursor?: string | null };
         };
       } = await this.graphql(
-        `query SymphonyTsPoll($projectSlugs: [String!]!, $stateNames: [String!]!, $first: Int!, $after: String) {
+        `query LorenzTsPoll($projectSlugs: [String!]!, $stateNames: [String!]!, $first: Int!, $after: String) {
           issues(filter: {project: {slugId: {in: $projectSlugs}}, state: {name: {in: $stateNames}}}, first: $first, after: $after) {
             nodes { ${issueFields} }
             pageInfo { hasNextPage endCursor }
@@ -333,7 +333,7 @@ export class LinearClient {
         const data = await this.graphql<{
           issues: { nodes: Array<Record<string, unknown>> };
         }>(
-          `query SymphonyTsIssuesById($ids: [ID!]!, $first: Int!) {
+          `query LorenzTsIssuesById($ids: [ID!]!, $first: Int!) {
             issues(filter: {id: {in: $ids}}, first: $first) {
               nodes { ${issueFields} }
             }
@@ -358,7 +358,7 @@ export class LinearClient {
       if (found.has(id) || UUID_PATTERN.test(id)) continue;
       try {
         const data = await this.graphql<{ issue: Record<string, unknown> | null }>(
-          `query SymphonyTsIssueByIdentifier($id: String!) {
+          `query LorenzTsIssueByIdentifier($id: String!) {
             issue(id: $id) {
               ${issueFields}
             }
@@ -392,7 +392,7 @@ export class LinearClient {
     const data = await this.graphql<{
       issueCreate: { success: boolean; issue: Record<string, unknown> | null };
     }>(
-      `mutation SymphonyTsCreateIssue($input: IssueCreateInput!) {
+      `mutation LorenzTsCreateIssue($input: IssueCreateInput!) {
         issueCreate(input: $input) {
           success
           issue { ${issueFields} }
@@ -422,7 +422,7 @@ export class LinearClient {
     const data = await this.graphql<{
       issueUpdate: { success: boolean; issue: Record<string, unknown> | null };
     }>(
-      `mutation SymphonyTsUpdateIssue($id: String!, $input: IssueUpdateInput!) {
+      `mutation LorenzTsUpdateIssue($id: String!, $input: IssueUpdateInput!) {
         issueUpdate(id: $id, input: $input) {
           success
           issue { ${issueFields} }
@@ -442,7 +442,7 @@ export class LinearClient {
     const data = await this.graphql<{
       issueArchive: { success: boolean };
     }>(
-      `mutation SymphonyTsArchiveIssue($id: String!) {
+      `mutation LorenzTsArchiveIssue($id: String!) {
         issueArchive(id: $id) {
           success
         }
@@ -486,7 +486,7 @@ export class LinearClient {
           pageInfo?: LinearPageInfo | undefined;
         };
       } = await this.graphql(
-        `query SymphonyTsProjectsByLabels($labels: [String!]!, $first: Int!, $after: String) {
+        `query LorenzTsProjectsByLabels($labels: [String!]!, $first: Int!, $after: String) {
           projects(filter: {labels: {name: {in: $labels}}}, first: $first, after: $after) {
             nodes { slugId }
             pageInfo { hasNextPage endCursor }

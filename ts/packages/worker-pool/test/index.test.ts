@@ -71,7 +71,7 @@ test("the barrel re-exports the SDK driver surface as usable values", () => {
   assert.equal(typeof FakeWorkerDriver, "function");
   assert.equal(typeof registerFakeWorkerDriver, "function");
   assert.equal(typeof createMutex, "function");
-  assert.equal(POOL_OWNED_LABEL, "symphony.pool=worker-pool");
+  assert.equal(POOL_OWNED_LABEL, "lorenz.pool=worker-pool");
   assert.ok(defaultWorkerDriverRegistry instanceof WorkerDriverRegistry);
 });
 

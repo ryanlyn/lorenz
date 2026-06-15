@@ -37,7 +37,7 @@ export interface RunsCommanderOptions {
 export type RunsParseResult = ParseResult<RunsCommandOptions>;
 export function createRunsCommand(name = "lorenz runs"): Command {
   return new Command(name)
-    .description("Query Symphony run history from the observability API.")
+    .description("Query Lorenz run history from the observability API.")
     .allowExcessArguments(false)
     .option("--issue <id>", "Filter by issue identifier.", parseRequiredValue("--issue"))
     .option("--failed", "Show failed runs.")
@@ -145,7 +145,7 @@ function renderRun(body: Record<string, unknown>): string {
     `workspace=${stringField(run, "workspace_path") || "n/a"}`,
     `last_event=${stringField(run, "last_event") || "n/a"} at=${stringField(run, "last_event_at") || "n/a"}`,
     `failure_reason=${stringField(run, "failure_reason") || "n/a"}`,
-    `log_file=${stringField(recordField(run, "log_hints"), "symphony_log_file") || "n/a"}`,
+    `log_file=${stringField(recordField(run, "log_hints"), "lorenz_log_file") || "n/a"}`,
   ];
   const related = arrayField(body, "related_runs");
   if (related.length === 0) return `${lines.join("\n")}\n`;

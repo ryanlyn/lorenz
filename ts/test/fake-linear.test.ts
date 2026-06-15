@@ -123,7 +123,7 @@ describe("fake Linear MSW tests", () => {
       "linear_graphql",
       {
         query: `
-          query SymphonyTsIssuesById($ids: [ID!]!, $first: Int!) {
+          query LorenzTsIssuesById($ids: [ID!]!, $first: Int!) {
             issues(filter: {id: {in: $ids}}, first: $first) {
               nodes { id identifier title }
             }

@@ -16,7 +16,7 @@
       "assignedToWorker": true,
       "createdAt": "2026-05-06T10:00:00Z",
       "updatedAt": "2026-05-06T10:05:00Z",
-      "labels": ["Symphony:Backend"],
+      "labels": ["Lorenz:Backend"],
       "blockers": []
     },
     "options": { "attempt": 3, "slotIndex": 2, "ensembleSize": 4 },
@@ -62,11 +62,11 @@
       "assignedToWorker": true,
       "createdAt": null,
       "updatedAt": null,
-      "labels": ["Symphony:Backend", "URGENT"],
+      "labels": ["Lorenz:Backend", "URGENT"],
       "blockers": []
     },
     "options": { "attempt": 1, "slotIndex": 0, "ensembleSize": 1 },
-    "expected": "1=symphony/backend;2=urgent"
+    "expected": "1=lorenz/backend;2=urgent"
   },
   {
     "name": "nested blockers and default filter",

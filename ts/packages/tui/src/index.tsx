@@ -126,7 +126,7 @@ export function formatDashboard(
   const throughputTps =
     options.throughputTps ?? throughput(snapshot.usageTotals.totalTokens, runtimeSeconds);
   const lines = [
-    b("╭─ SYMPHONY STATUS", ansi),
+    b("╭─ LORENZ STATUS", ansi),
     `${b("│ Agents: ", ansi)}${s("32", String(snapshot.running.length), ansi)}${s("90", "/", ansi)}${s("90", String(maxAgents), ansi)}`,
     `${b("│ Throughput: ", ansi)}${s("36", `${formatInteger(throughputTps)} tps`, ansi)}`,
     `${b("│ Runtime: ", ansi)}${s("35", formatMinutesSeconds(runtimeSeconds), ansi)}`,

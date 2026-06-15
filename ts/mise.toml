@@ -61,14 +61,14 @@ pnpm --filter @lorenz/dashboard build && \
 npx tsx sandbox/e2e-trace-test.ts
 """
 description = "Run end-to-end trace pipeline test (requires a real agent)"
-env = { SYMPHONY_E2E_AGENT_KIND = "{{env.SYMPHONY_E2E_AGENT_KIND | default(value='codex')}}" }
+env = { LORENZ_E2E_AGENT_KIND = "{{env.LORENZ_E2E_AGENT_KIND | default(value='codex')}}" }
 
 [tasks."e2e:trace:codex"]
 run = "mise run e2e:trace"
 description = "Run E2E trace test with Codex agent"
-env = { SYMPHONY_E2E_AGENT_KIND = "codex" }
+env = { LORENZ_E2E_AGENT_KIND = "codex" }
 
 [tasks."e2e:trace:claude"]
 run = "mise run e2e:trace"
 description = "Run E2E trace test with Claude agent"
-env = { SYMPHONY_E2E_AGENT_KIND = "claude" }
+env = { LORENZ_E2E_AGENT_KIND = "claude" }

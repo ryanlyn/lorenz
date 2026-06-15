@@ -251,7 +251,7 @@ describe("Sandbox: Dispatch Eligibility", () => {
           endpoint: "memory://test",
           activeStates: ["Todo", "In Progress"],
           terminalStates: ["Done", "Cancelled"],
-          dispatch: { acceptUnrouted: true, onlyRoutes: null, routeLabelPrefix: "Symphony:" },
+          dispatch: { acceptUnrouted: true, onlyRoutes: null, routeLabelPrefix: "Lorenz:" },
         },
       },
       pollTicks: 1,

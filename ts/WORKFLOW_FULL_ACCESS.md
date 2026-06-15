@@ -1,7 +1,7 @@
 ---
 tracker:
   kind: linear
-  project_slug: "symphony-414bf2e49ff2"
+  project_slug: "lorenz-414bf2e49ff2"
   active_states:
     - Todo
     - In Progress
@@ -17,11 +17,11 @@ tracker:
   dispatch:
     accept_unrouted: true
     only_routes: null
-    route_label_prefix: "Symphony:"
+    route_label_prefix: "Lorenz:"
 polling:
   interval_ms: 5000
 workspace:
-  root: ~/dev/symphony-workspaces
+  root: ~/dev/lorenz-workspaces
 hooks:
   after_create: |
     set -euo pipefail
@@ -118,12 +118,12 @@ The agent should be able to talk to Linear, either via a configured Linear MCP s
 
 ## Related skills
 
-- `symphony-linear`: interact with Linear.
-- `symphony-commit`: produce clean, logical commits during implementation.
+- `lorenz-linear`: interact with Linear.
+- `lorenz-commit`: produce clean, logical commits during implementation.
 - `simplify`: review changed code for reuse, quality, and efficiency before committing.
-- `symphony-push`: keep remote branch current and publish updates.
-- `symphony-pull`: keep branch updated with latest `origin/main` before handoff.
-- `symphony-land`: when ticket reaches `Merging`, explicitly open and follow `.codex/skills/symphony-land/SKILL.md`, which includes the `land` loop.
+- `lorenz-push`: keep remote branch current and publish updates.
+- `lorenz-pull`: keep branch updated with latest `origin/main` before handoff.
+- `lorenz-land`: when ticket reaches `Merging`, explicitly open and follow `.codex/skills/lorenz-land/SKILL.md`, which includes the `land` loop.
 
 ## Status map
 
@@ -133,7 +133,7 @@ The agent should be able to talk to Linear, either via a configured Linear MCP s
 - `In Progress` -> implementation actively underway.
 - `Agent Review` -> autonomous mergeability review with a bias toward merging; escalate only for blockers or explicit decisions/risk.
 - `Human Review` -> exception-only path for ambiguous blockers, risk acceptance, or external blockers that cannot be resolved autonomously.
-- `Merging` -> approved; execute the `symphony-land` skill flow (do not call `gh pr merge` directly).
+- `Merging` -> approved; execute the `lorenz-land` skill flow (do not call `gh pr merge` directly).
 - `Rework` -> reviewer requested changes; planning + implementation required.
 - `Done` -> terminal state; no further action required.
 
@@ -148,7 +148,7 @@ The agent should be able to talk to Linear, either via a configured Linear MCP s
    - `In Progress` -> continue execution flow from current scratchpad comment.
    - `Agent Review` -> run the autonomous review protocol.
    - `Human Review` -> wait and poll for decision/review updates.
-   - `Merging` -> on entry, open and follow `.codex/skills/symphony-land/SKILL.md`; do not call `gh pr merge` directly.
+   - `Merging` -> on entry, open and follow `.codex/skills/lorenz-land/SKILL.md`; do not call `gh pr merge` directly.
    - `Rework` -> run rework flow.
    - `Done` -> do nothing and shut down.
 4. Check whether a PR already exists for the current branch and whether it is closed.
@@ -176,7 +176,7 @@ The agent should be able to talk to Linear, either via a configured Linear MCP s
 4.  Start work by writing/updating a hierarchical plan in the workpad comment.
 5.  Ensure the workpad includes a compact environment stamp at the top as a code fence line:
     - Format: `<host>:<abs-workdir>@<short-sha>`
-    - Example: `devbox-01:/home/dev-user/code/symphony-workspaces/MT-32@7bdde33bc`
+    - Example: `devbox-01:/home/dev-user/code/lorenz-workspaces/MT-32@7bdde33bc`
     - Do not include metadata already inferable from Linear issue fields (`issue ID`, `status`, `branch`, `PR link`).
 6.  Add explicit acceptance criteria and TODOs in checklist form in the same comment.
     - If changes are user-facing, include a UI walkthrough acceptance criterion that describes the end-to-end user path to validate.
@@ -184,7 +184,7 @@ The agent should be able to talk to Linear, either via a configured Linear MCP s
     - If the ticket description/comment context includes `Validation`, `Test Plan`, or `Testing` sections, copy those requirements into the workpad `Acceptance Criteria` and `Validation` sections as required checkboxes (no optional downgrade).
 7.  Run a principal-style self-review of the plan and refine it in the comment.
 8.  Before implementing, capture a concrete reproduction signal and record it in the workpad `Notes` section (command/output, screenshot, or deterministic UI behavior).
-9.  Run the `symphony-pull` skill to sync with latest `origin/main` before any code edits, then record the pull/sync result in the workpad `Notes`.
+9.  Run the `lorenz-pull` skill to sync with latest `origin/main` before any code edits, then record the pull/sync result in the workpad `Notes`.
     - Include a `pull skill evidence` note with:
       - merge source(s),
       - result (`clean` or `conflicts resolved`),
@@ -245,9 +245,9 @@ Use this only when completion is blocked by missing required tools or missing au
     - Document these temporary proof steps and outcomes in the workpad `Validation`/`Notes` sections so reviewers can follow the evidence.
     - If app-touching, run `launch-app` validation and capture/upload media via `github-pr-media` before handoff.
 6.  Re-check all acceptance criteria and close any gaps.
-7.  Before every `git commit`, run the `simplify` skill to review changed code for reuse, quality, and efficiency. Then invoke the `symphony-commit` skill to commit and the `symphony-push` skill to push.
+7.  Before every `git commit`, run the `simplify` skill to review changed code for reuse, quality, and efficiency. Then invoke the `lorenz-commit` skill to commit and the `lorenz-push` skill to push.
 8.  Attach PR URL to the issue (prefer attachment; use the workpad comment only if attachment is unavailable).
-    - Ensure the GitHub PR has label `symphony` (add it if missing).
+    - Ensure the GitHub PR has label `lorenz` (add it if missing).
 9.  Update the workpad comment with final checklist status and validation notes.
     - Mark completed plan/acceptance/validation checklist items as checked.
     - Add final handoff notes (commit + validation summary) in the same workpad comment.
@@ -308,7 +308,7 @@ Use this only when completion is blocked by missing required tools or missing au
 
 ## Step 5: Merging
 
-1. When the issue is in `Merging`, open and follow `.codex/skills/symphony-land/SKILL.md`, then run the `symphony-land` skill in a loop until the PR is merged. Do not call `gh pr merge` directly.
+1. When the issue is in `Merging`, open and follow `.codex/skills/lorenz-land/SKILL.md`, then run the `lorenz-land` skill in a loop until the PR is merged. Do not call `gh pr merge` directly.
 2. After merge is complete, move the issue to `Done`.
 
 ## Step 6: Rework handling
@@ -330,7 +330,7 @@ Use this only when completion is blocked by missing required tools or missing au
 - Validation/tests are green for the latest commit.
 - PR feedback sweep is complete and no actionable comments remain.
 - PR checks are green, branch is pushed, and PR is linked on the issue.
-- Required PR metadata is present (`symphony` label).
+- Required PR metadata is present (`lorenz` label).
 - If app-touching, runtime validation/media requirements from `App runtime validation (required)` are complete.
 
 ## Guardrails

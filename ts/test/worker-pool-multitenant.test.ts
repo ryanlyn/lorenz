@@ -155,7 +155,7 @@ function makeDistinctPortManager(
       const endpoint: FakeEndpoint = {
         url: `http://127.0.0.1:${remotePort}/mcp`,
         token: `tok-${key}`,
-        acpServer: () => ({ type: "http", name: "symphony_linear", url: "", headers: [] }),
+        acpServer: () => ({ type: "http", name: "lorenz_linear", url: "", headers: [] }),
         remotePort,
         workerHost: req.workerHost,
         runKey: req.runKey,

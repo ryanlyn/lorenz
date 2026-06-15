@@ -684,7 +684,7 @@ function makeFakeEndpoint(id: string): AgentMcpEndpointLease & { released: { cou
   return {
     url: `http://127.0.0.1:46000/mcp#${id}`,
     token: `tok-${id}`,
-    acpServer: () => ({ type: "http", name: "symphony_linear", url: "", headers: [] }),
+    acpServer: () => ({ type: "http", name: "lorenz_linear", url: "", headers: [] }),
     async release(): Promise<void> {
       released.count += 1;
     },

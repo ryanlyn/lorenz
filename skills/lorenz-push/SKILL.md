@@ -1,5 +1,5 @@
 ---
-name: symphony-push
+name: lorenz-push
 description:
   Push current branch changes to origin and create or update the corresponding
   pull request; use when asked to push, publish updates, or create pull request.
@@ -20,7 +20,7 @@ description:
 
 ## Related Skills
 
-- `symphony-pull`: use this when push is rejected or sync is not clean (non-fast-forward,
+- `lorenz-pull`: use this when push is rejected or sync is not clean (non-fast-forward,
   merge conflict risk, or stale branch).
 
 ## Steps
@@ -138,6 +138,6 @@ gh pr view --json url -q .url
 
 - Do not use `--force`; only use `--force-with-lease` as the last resort.
 - Distinguish sync problems from remote auth/permission problems:
-  - Use the `symphony-pull` skill for non-fast-forward or stale-branch issues.
+  - Use the `lorenz-pull` skill for non-fast-forward or stale-branch issues.
   - Surface auth, permissions, or workflow restrictions directly instead of
     changing remotes or protocols.

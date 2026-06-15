@@ -42,7 +42,7 @@ test("memory tracker adapter returns configured issues and filters by id", async
       title: "One",
       state: "Todo",
       stateType: "unstarted",
-      labels: ["Symphony:Backend"],
+      labels: ["Lorenz:Backend"],
     },
     { id: "two", identifier: "MT-2", title: "Two", state: "Done", stateType: "completed" },
   ]);
@@ -52,7 +52,7 @@ test("memory tracker adapter returns configured issues and filters by id", async
     candidates.map((issue) => issue.identifier),
     ["MT-1", "MT-2"],
   );
-  assert.deepEqual(candidates[0]?.labels, ["symphony:backend"]);
+  assert.deepEqual(candidates[0]?.labels, ["lorenz:backend"]);
 
   candidates[0]!.labels.push("mutated");
   const byId = await client.fetchIssuesByIds(["two", "missing", "one"]);
@@ -60,13 +60,13 @@ test("memory tracker adapter returns configured issues and filters by id", async
     byId.map((issue) => issue.identifier),
     ["MT-1", "MT-2"],
   );
-  assert.deepEqual((await client.fetchCandidateIssues())[0]?.labels, ["symphony:backend"]);
+  assert.deepEqual((await client.fetchCandidateIssues())[0]?.labels, ["lorenz:backend"]);
 });
 
 test("tracker factory selects memory adapter from workflow settings and JSON env", async () => {
   const settings = parseConfig({ tracker: { kind: "memory" } }, {});
   const client = createTrackerClient(settings, {
-    SYMPHONY_MEMORY_TRACKER_ISSUES_JSON: JSON.stringify([
+    LORENZ_MEMORY_TRACKER_ISSUES_JSON: JSON.stringify([
       { id: "env", identifier: "MT-ENV", title: "Env", state: "Todo", stateType: "unstarted" },
     ]),
   });
@@ -76,9 +76,9 @@ test("tracker factory selects memory adapter from workflow settings and JSON env
     (await client.fetchCandidateIssues()).map((issue) => issue.identifier),
     ["MT-ENV"],
   );
-  assert.deepEqual(memoryIssuesFromEnv({ SYMPHONY_MEMORY_TRACKER_ISSUES_JSON: "[]" }), []);
+  assert.deepEqual(memoryIssuesFromEnv({ LORENZ_MEMORY_TRACKER_ISSUES_JSON: "[]" }), []);
   assert.throws(
-    () => memoryIssuesFromEnv({ SYMPHONY_MEMORY_TRACKER_ISSUES_JSON: "{}" }),
+    () => memoryIssuesFromEnv({ LORENZ_MEMORY_TRACKER_ISSUES_JSON: "{}" }),
     /must be a JSON array/,
   );
 });
@@ -133,7 +133,7 @@ test("shipped WORKFLOW.local.md selects a local tracker client with a real playb
   const raw = await readFile(path.join(import.meta.dirname, "../../../WORKFLOW.local.md"), "utf8");
   const settings = parseConfig(frontmatter(raw), {});
   assert.equal(settings.tracker.kind, "local");
-  assert.equal(settings.tracker.options.path, ".symphony/local/symphony");
+  assert.equal(settings.tracker.options.path, ".lorenz/local/lorenz");
   assert.ok(createTrackerClient(settings) instanceof LocalTrackerClient);
 
   const prose = body(raw);

@@ -53,7 +53,7 @@ async function readLinearIssue(
 ): Promise<Issue> {
   const data = await linearData<{ issue?: Record<string, unknown> | null }>(
     settings,
-    `query SymphonyTrackerReadIssue($id: String!) {
+    `query LorenzTrackerReadIssue($id: String!) {
       issue(id: $id) { ${linearIssueFields} }
     }`,
     { id: issueId },
@@ -72,7 +72,7 @@ async function queryLinearIssues(
   if (issueIds) {
     const data = await linearData<{ issues: { nodes: Array<Record<string, unknown>> } }>(
       settings,
-      `query SymphonyTrackerIssuesById($ids: [ID!]!, $first: Int!) {
+      `query LorenzTrackerIssuesById($ids: [ID!]!, $first: Int!) {
         issues(filter: {id: {in: $ids}}, first: $first) { nodes { ${linearIssueFields} } }
       }`,
       { ids: issueIds, first: issueIds.length },
@@ -85,7 +85,7 @@ async function queryLinearIssues(
   const projectSlugs = options.projectSlugs ?? (options.projectSlug ? [options.projectSlug] : []);
   const data = await linearData<{ issues: { nodes: Array<Record<string, unknown>> } }>(
     settings,
-    `query SymphonyTrackerQuery($projectSlugs: [String!]!, $stateNames: [String!]!, $first: Int!) {
+    `query LorenzTrackerQuery($projectSlugs: [String!]!, $stateNames: [String!]!, $first: Int!) {
       issues(filter: {project: {slugId: {in: $projectSlugs}}, state: {name: {in: $stateNames}}}, first: $first) {
         nodes { ${linearIssueFields} }
       }
@@ -106,7 +106,7 @@ async function updateLinearStatus(
     issue?: { team?: { states?: { nodes?: Array<{ id: string; name: string }> } } } | null;
   }>(
     settings,
-    `query SymphonyTrackerLinearStates($id: String!) {
+    `query LorenzTrackerLinearStates($id: String!) {
       issue(id: $id) { team { states(first: 100) { nodes { id name } } } }
     }`,
     { id: issueId },
@@ -120,7 +120,7 @@ async function updateLinearStatus(
     issueUpdate: { success: boolean; issue: Record<string, unknown> | null };
   }>(
     settings,
-    `mutation SymphonyTrackerLinearUpdate($id: String!, $input: IssueUpdateInput!) {
+    `mutation LorenzTrackerLinearUpdate($id: String!, $input: IssueUpdateInput!) {
       issueUpdate(id: $id, input: $input) { success issue { ${linearIssueFields} } }
     }`,
     { id: issueId, input: { stateId: state.id } },
@@ -139,7 +139,7 @@ async function createLinearComment(
 ): Promise<void> {
   const data = await linearData<{ commentCreate: { success: boolean } }>(
     settings,
-    `mutation SymphonyTrackerLinearComment($input: CommentCreateInput!) {
+    `mutation LorenzTrackerLinearComment($input: CommentCreateInput!) {
       commentCreate(input: $input) { success }
     }`,
     { input: { issueId, body } },
@@ -170,7 +170,7 @@ async function createLinearIssue(
     };
   }>(
     settings,
-    `query SymphonyTrackerLinearProject($slug: String!) {
+    `query LorenzTrackerLinearProject($slug: String!) {
       projects(filter: {slugId: {eq: $slug}}, first: 1) {
         nodes { id teams(first: 1) { nodes { id states(first: 100) { nodes { id name type } } } } }
       }
@@ -191,7 +191,7 @@ async function createLinearIssue(
     issueCreate: { success: boolean; issue: Record<string, unknown> | null };
   }>(
     settings,
-    `mutation SymphonyTrackerLinearCreate($input: IssueCreateInput!) {
+    `mutation LorenzTrackerLinearCreate($input: IssueCreateInput!) {
       issueCreate(input: $input) { success issue { ${linearIssueFields} } }
     }`,
     {

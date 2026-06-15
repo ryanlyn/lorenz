@@ -19,6 +19,6 @@ export const sampleIssue = {
   description: "Ship it",
   state: "Todo",
   stateType: "unstarted" as const,
-  labels: ["Symphony:Backend"],
+  labels: ["Lorenz:Backend"],
   blockers: [],
 };

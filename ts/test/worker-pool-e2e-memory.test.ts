@@ -10,7 +10,7 @@ import {
   registerBuiltinBackends,
   runAgentAttempt,
   runtimeAdapters,
-  SymphonyRuntime,
+  LorenzRuntime,
 } from "@lorenz/cli";
 import type { WorkerLease, WorkerPool, Settings, WorkflowDefinition } from "@lorenz/cli";
 
@@ -30,7 +30,7 @@ registerBuiltinBackends();
 // demo hermetic while exercising the same code an SSH-addressable worker would.
 // ---------------------------------------------------------------------------
 
-const MEMORY_ENV = "SYMPHONY_MEMORY_TRACKER_ISSUES_JSON";
+const MEMORY_ENV = "LORENZ_MEMORY_TRACKER_ISSUES_JSON";
 
 interface Harness {
   root: string;
@@ -38,7 +38,7 @@ interface Harness {
   settings: Settings;
   workflow: WorkflowDefinition;
   pool: WorkerPool;
-  runtime: SymphonyRuntime;
+  runtime: LorenzRuntime;
   restoreEnv(): void;
 }
 
@@ -157,7 +157,7 @@ test("stop then drainWorkerPool destroys every worker (zero workers remain)", as
 
 // ---------------------------------------------------------------------------
 // Harness: wires the SAME objects `runDaemon` constructs (buildWorkerPool +
-// SymphonyRuntime with the real daemon adapters + hydrate), but drives polling
+// LorenzRuntime with the real daemon adapters + hydrate), but drives polling
 // deterministically instead of spinning the daemon's interval loop / TUI.
 // ---------------------------------------------------------------------------
 
@@ -169,7 +169,7 @@ async function setupHarness(
     .mkdir(path.join(root, "remote-home"), { recursive: true })
     .then(() => path.join(root, "remote-home"));
   const previousPath = process.env.PATH;
-  const previousSshConfig = process.env.SYMPHONY_SSH_CONFIG;
+  const previousSshConfig = process.env.LORENZ_SSH_CONFIG;
 
   // PATH-shimmed `ssh`: the fake worker host (`fake://worker-<id>`) is not a real SSH
   // target, so the shim evaluates the runner's remote commands locally with
@@ -216,7 +216,7 @@ async function setupHarness(
       },
     },
     agent: { max_turns: 1 },
-    logging: { log_file: path.join(root, "symphony.log") },
+    logging: { log_file: path.join(root, "lorenz.log") },
   });
 
   const workflow: WorkflowDefinition = {
@@ -234,13 +234,13 @@ async function setupHarness(
 
   // The memory tracker client reads the env once at construction (via the
   // clientFactory below), so the issue set must be in place before the runtime
-  // is built - exactly as `runDaemon` sees `SYMPHONY_MEMORY_TRACKER_ISSUES_JSON`
+  // is built - exactly as `runDaemon` sees `LORENZ_MEMORY_TRACKER_ISSUES_JSON`
   // at startup.
   process.env[MEMORY_ENV] = JSON.stringify(options.issues ?? []);
 
   // Identical construction to runDaemon: real tracker client factory (reads the
   // memory env), real runner, the real pool, and the real daemon adapters.
-  const runtime = new SymphonyRuntime({
+  const runtime = new LorenzRuntime({
     workflow,
     clientFactory: (s) => createTrackerClient(s, process.env),
     runner: runAgentAttempt,
@@ -259,8 +259,8 @@ async function setupHarness(
     restoreEnv: () => {
       if (previousPath === undefined) delete process.env.PATH;
       else process.env.PATH = previousPath;
-      if (previousSshConfig === undefined) delete process.env.SYMPHONY_SSH_CONFIG;
-      else process.env.SYMPHONY_SSH_CONFIG = previousSshConfig;
+      if (previousSshConfig === undefined) delete process.env.LORENZ_SSH_CONFIG;
+      else process.env.LORENZ_SSH_CONFIG = previousSshConfig;
       delete process.env[MEMORY_ENV];
     },
   };

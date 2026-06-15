@@ -77,13 +77,13 @@ export type DoctorParseResult = ParseResult<DoctorCommandOptions>;
 
 export function createDoctorCommand(name = "lorenz doctor"): Command {
   return new Command(name)
-    .description("Validate a Symphony workflow and local runtime prerequisites.")
+    .description("Validate a Lorenz workflow and local runtime prerequisites.")
     .allowExcessArguments(false)
     .argument("[workflowPath]", "Workflow markdown file.")
     .option("--no-dashboard", "Skip dashboard static asset checks.")
     .option(
       "--logs-root <path>",
-      "Root directory for Symphony logs.",
+      "Root directory for Lorenz logs.",
       parseRequiredValue("--logs-root", "path"),
     );
 }
@@ -175,7 +175,7 @@ export async function runDoctorCommand(
 
 export function renderDoctorReport(report: DoctorReport): string {
   return `${[
-    "Symphony doctor",
+    "Lorenz doctor",
     `status=${report.status}`,
     `workflow=${report.workflowPath}`,
     "",
@@ -698,12 +698,12 @@ async function statOrNull(filePath: string) {
 }
 
 function defaultDashboardStaticDir(): string {
-  return path.resolve(import.meta.dirname, "../../symphony-dashboard/dist");
+  return path.resolve(import.meta.dirname, "../../lorenz-dashboard/dist");
 }
 
 function applyDoctorOverrides(settings: Settings, options: DoctorCommandOptions): void {
   if (options.logsRoot !== null) {
-    settings.logging.logFile = path.join(path.resolve(options.logsRoot), "log", "symphony.log");
+    settings.logging.logFile = path.join(path.resolve(options.logsRoot), "log", "lorenz.log");
   }
 }
 

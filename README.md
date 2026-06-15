@@ -13,11 +13,11 @@ dashboard (TUI) and a web dashboard served by the observability API.
 
 ### Terminal dashboard (TUI)
 
-![Lorenz terminal dashboard](docs/images/symphony-tui.png)
+![Lorenz terminal dashboard](docs/images/lorenz-tui.png)
 
 ### Web dashboard
 
-![Lorenz web dashboard](docs/images/symphony-dashboard.png)
+![Lorenz web dashboard](docs/images/lorenz-dashboard.png)
 
 ## How it works
 

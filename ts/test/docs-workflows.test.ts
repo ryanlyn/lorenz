@@ -26,7 +26,7 @@ test("workspace bootstrap hooks fail when clone fails without mise", async () =>
   for (const filename of workflowFiles) {
     const workflow = await fs.readFile(path.join(repoRoot, "ts", filename), "utf8");
     const hookBody = extractAfterCreateHook(workflow);
-    const temp = await tempDir("symphony-workflow-bootstrap");
+    const temp = await tempDir("lorenz-workflow-bootstrap");
 
     try {
       const fakeBin = path.join(temp, "bin");
@@ -68,8 +68,8 @@ test("TS package docs describe the durable workspace contracts", async () => {
     "## Compatibility Contracts",
     "## License",
     "--logs-root",
-    "SYMPHONY_WORKSPACE_ROOT",
-    "SYMPHONY_LIVE_SSH_WORKER_HOSTS",
+    "LORENZ_WORKSPACE_ROOT",
+    "LORENZ_LIVE_SSH_WORKER_HOSTS",
   ]) {
     assert.match(readme, new RegExp(escapeRegExp(required)));
   }

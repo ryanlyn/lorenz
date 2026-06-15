@@ -16,7 +16,7 @@ CODEX_BOTS = {
     "app/codex-gc-app",
 }
 AGENT_REVIEW_HEADER_RE = re.compile(r"^## [A-Za-z][\w-]* Review\b")
-AGENT_REPLY_PREFIX = "[symphony]"
+AGENT_REPLY_PREFIX = "[lorenz]"
 MAX_GH_RETRIES = 5
 BASE_GH_BACKOFF_SECONDS = 2
 

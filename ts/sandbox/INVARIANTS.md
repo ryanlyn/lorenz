@@ -1,4 +1,4 @@
-# Symphony Behavioral Invariants (EARS Format)
+# Lorenz Behavioral Invariants (EARS Format)
 
 System-level behavioral requirements expressed in EARS (Easy Approach to Requirements Syntax). These are implementation-agnostic properties that any conforming implementation must satisfy.
 

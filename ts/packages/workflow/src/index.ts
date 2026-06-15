@@ -55,7 +55,7 @@ export function workflowFilePath(
   env: NodeJS.ProcessEnv = process.env,
   cwd = process.cwd(),
 ): string {
-  const workflow = env.SYMPHONY_WORKFLOW;
+  const workflow = env.LORENZ_WORKFLOW;
   if (!workflow) return path.join(cwd, "WORKFLOW.md");
   return path.isAbsolute(workflow) ? workflow : path.join(cwd, workflow);
 }

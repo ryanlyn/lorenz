@@ -1,7 +1,7 @@
 ---
 tracker:
   kind: local
-  path: .symphony/local
+  path: .lorenz/local
   active_states:
     - Todo
     - In Progress

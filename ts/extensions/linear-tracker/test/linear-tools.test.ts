@@ -51,11 +51,11 @@ test("linear_graphql tool validates name, input, and API key before network", as
     {
       success: false,
       error:
-        "Symphony is missing Linear auth. Set `linear.api_key` in `WORKFLOW.md` or export `LINEAR_API_KEY`.",
+        "Lorenz is missing Linear auth. Set `linear.api_key` in `WORKFLOW.md` or export `LINEAR_API_KEY`.",
       result: {
         error: {
           message:
-            "Symphony is missing Linear auth. Set `linear.api_key` in `WORKFLOW.md` or export `LINEAR_API_KEY`.",
+            "Lorenz is missing Linear auth. Set `linear.api_key` in `WORKFLOW.md` or export `LINEAR_API_KEY`.",
         },
       },
     },
@@ -70,11 +70,11 @@ test("linear_graphql tool validates name, input, and API key before network", as
     {
       success: false,
       error:
-        "Symphony is missing Linear auth. Set `linear.api_key` in `WORKFLOW.md` or export `LINEAR_API_KEY`.",
+        "Lorenz is missing Linear auth. Set `linear.api_key` in `WORKFLOW.md` or export `LINEAR_API_KEY`.",
       result: {
         error: {
           message:
-            "Symphony is missing Linear auth. Set `linear.api_key` in `WORKFLOW.md` or export `LINEAR_API_KEY`.",
+            "Lorenz is missing Linear auth. Set `linear.api_key` in `WORKFLOW.md` or export `LINEAR_API_KEY`.",
         },
       },
     },
@@ -244,7 +244,7 @@ test("linear_graphql tool logs 429 retries with operation and bounded body", asy
   try {
     const result = await executeLinearTool(
       "linear_graphql",
-      { query: "query SymphonyTsViewer { viewer { id } }" },
+      { query: "query LorenzTsViewer { viewer { id } }" },
       linearSettings(),
       fetchSequence(
         jsonResponse({ errors: [{ message: "rate limited" }] }, 429, { "retry-after": "0" }),
@@ -255,7 +255,7 @@ test("linear_graphql tool logs 429 retries with operation and bounded body", asy
     assert.equal(result.success, true);
     assert.equal(warnings.length, 1);
     assert.match(warnings[0] ?? "", /status=429 retry=1\/4 delay_ms=0/);
-    assert.match(warnings[0] ?? "", /operation=SymphonyTsViewer/);
+    assert.match(warnings[0] ?? "", /operation=LorenzTsViewer/);
     assert.match(warnings[0] ?? "", /rate limited/);
   } finally {
     warnSpy.mockRestore();
@@ -271,7 +271,7 @@ test("linear_graphql tool logs non-200 and transport failures with context", asy
     assert.deepEqual(
       await executeLinearTool(
         "linear_graphql",
-        { query: "query SymphonyTsViewer { viewer { id } }" },
+        { query: "query LorenzTsViewer { viewer { id } }" },
         linearSettings(),
         fetchSequence(jsonResponse(body, 500)),
       ),
@@ -288,7 +288,7 @@ test("linear_graphql tool logs non-200 and transport failures with context", asy
     );
     assert.equal(errors.length, 1);
     assert.match(errors[0] ?? "", /Linear GraphQL request failed status=500/);
-    assert.match(errors[0] ?? "", /operation=SymphonyTsViewer/);
+    assert.match(errors[0] ?? "", /operation=LorenzTsViewer/);
     assert.match(errors[0] ?? "", /BAD_USER_INPUT/);
     assert.match(errors[0] ?? "", /truncated/);
 
@@ -296,7 +296,7 @@ test("linear_graphql tool logs non-200 and transport failures with context", asy
       (
         await executeLinearTool(
           "linear_graphql",
-          { query: "query SymphonyTsViewer { viewer { id } }" },
+          { query: "query LorenzTsViewer { viewer { id } }" },
           linearSettings(),
           (async () => {
             throw new Error("socket closed");
@@ -307,7 +307,7 @@ test("linear_graphql tool logs non-200 and transport failures with context", asy
     );
     assert.equal(errors.length, 2);
     assert.match(errors[1] ?? "", /Linear GraphQL request failed: socket closed/);
-    assert.match(errors[1] ?? "", /operation=SymphonyTsViewer/);
+    assert.match(errors[1] ?? "", /operation=LorenzTsViewer/);
   } finally {
     errorSpy.mockRestore();
   }

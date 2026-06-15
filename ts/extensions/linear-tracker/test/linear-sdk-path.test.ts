@@ -287,7 +287,7 @@ test("SDK path passes non-rate-limit errors through without retrying", async () 
     assert.equal(mockRequest.mock.calls.length, 1);
     assert.equal(errors.length, 1);
     assert.match(errors[0] ?? "", /Linear GraphQL request failed: network down/);
-    assert.match(errors[0] ?? "", /operation=SymphonyTsViewer/);
+    assert.match(errors[0] ?? "", /operation=LorenzTsViewer/);
   } finally {
     errorSpy.mockRestore();
   }
@@ -313,7 +313,7 @@ test("SDK path fetchCandidateIssues resolves viewer and paginates", async () => 
             branchName: "mt-1-branch",
             url: "https://linear.app/test/issue/MT-1",
             assignee: { id: "user-1" },
-            labels: { nodes: [{ name: "Symphony:Backend" }] },
+            labels: { nodes: [{ name: "Lorenz:Backend" }] },
             inverseRelations: { nodes: [] },
             createdAt: "2026-05-04T00:00:00.000Z",
             updatedAt: "2026-05-04T00:01:00.000Z",
@@ -344,7 +344,7 @@ test("SDK path fetchCandidateIssues resolves viewer and paginates", async () => 
   assert.equal(issues[0]?.state, "Todo");
   assert.equal(issues[0]?.stateType, "unstarted");
   assert.equal(issues[0]?.assignedToWorker, true);
-  assert.deepEqual(issues[0]?.labels, ["symphony:backend"]);
+  assert.deepEqual(issues[0]?.labels, ["lorenz:backend"]);
 });
 
 test("SDK path retries assignee viewer lookup after transient failure", async () => {
@@ -370,7 +370,7 @@ test("SDK path retries assignee viewer lookup after transient failure", async ()
             branchName: "mt-1-branch",
             url: "https://linear.app/test/issue/MT-1",
             assignee: { id: "user-1" },
-            labels: { nodes: [{ name: "Symphony:Backend" }] },
+            labels: { nodes: [{ name: "Lorenz:Backend" }] },
             inverseRelations: { nodes: [] },
             createdAt: "2026-05-04T00:00:00.000Z",
             updatedAt: "2026-05-04T00:01:00.000Z",

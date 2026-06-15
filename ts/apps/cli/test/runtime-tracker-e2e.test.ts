@@ -13,8 +13,8 @@ import {
   createTrackerClient,
   parseConfig,
   runtimeAdapters,
-  SymphonyRuntime,
-  type SymphonyRuntimeOptions,
+  LorenzRuntime,
+  type LorenzRuntimeOptions,
   type WorkflowDefinition,
 } from "@lorenz/cli";
 
@@ -24,7 +24,7 @@ beforeAll(() => {
   registerBuiltinBackends();
 });
 
-function runtimeOptions(options: SymphonyRuntimeOptions): SymphonyRuntimeOptions {
+function runtimeOptions(options: LorenzRuntimeOptions): LorenzRuntimeOptions {
   return { ...runtimeAdapters, ...options };
 }
 
@@ -62,7 +62,7 @@ test("runtime discovers a Todo issue from a real local board via createTrackerCl
   );
 
   let runnerCalls = 0;
-  const runtime = new SymphonyRuntime(
+  const runtime = new LorenzRuntime(
     runtimeOptions({
       workflow: workflow(settings),
       client,
@@ -122,7 +122,7 @@ test("runtime discovers a bot-mention issue from a real Slack transport via crea
   );
 
   let runnerCalls = 0;
-  const runtime = new SymphonyRuntime(
+  const runtime = new LorenzRuntime(
     runtimeOptions({
       workflow: workflow(settings),
       client,

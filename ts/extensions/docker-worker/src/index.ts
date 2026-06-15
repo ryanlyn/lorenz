@@ -32,10 +32,10 @@ const CAPABILITIES: DriverCapabilities = {
  * `docker ps --filter label=<this>` enumerates only our containers and never
  * adopts an unrelated one.
  */
-const LABEL_POOL = "symphony.worker-pool";
+const LABEL_POOL = "lorenz.worker-pool";
 
 /** The label that records the pool's idempotency key (workerId) on each container. */
-const LABEL_WORKER_ID = "symphony.worker-id";
+const LABEL_WORKER_ID = "lorenz.worker-id";
 
 /** The container's sshd port that the run publishes to a loopback host port. */
 const CONTAINER_SSH_PORT = "22";
@@ -158,8 +158,8 @@ export class DockerWorkerDriver implements WorkerDriver {
    * {@link LABEL_WORKER_ID} label on the live daemon: if a labelled container
    * already exists it is adopted (no `docker run`), so two driver instances
    * sharing one daemon never double-launch. Otherwise it runs
-   * `docker run -d -p 127.0.0.1::22 --label symphony.worker-pool= --label
-   * symphony.worker-id=<workerId> [--label <caller label>...] <image>`, then resolves
+   * `docker run -d -p 127.0.0.1::22 --label lorenz.worker-pool= --label
+   * lorenz.worker-id=<workerId> [--label <caller label>...] <image>`, then resolves
    * the published loopback port via `docker port`. Rejects with
    * `docker_image_required` when the `image` driver option is unset and
    * `docker_run_failed` on a non-zero `docker run` exit.

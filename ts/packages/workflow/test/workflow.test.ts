@@ -20,21 +20,21 @@ test("workflowFilePath returns default path when none specified", () => {
 });
 
 test("workflowFilePath resolves relative path against project root", () => {
-  const env = { SYMPHONY_WORKFLOW: "custom/workflow.md" };
+  const env = { LORENZ_WORKFLOW: "custom/workflow.md" };
   const result = workflowFilePath(env, "/projects/my-app");
   assert.equal(result, path.join("/projects/my-app", "custom/workflow.md"));
 });
 
 test("workflowFilePath keeps absolute path from environment", () => {
   const absolute = path.join("/projects/my-app", "custom/workflow.md");
-  const result = workflowFilePath({ SYMPHONY_WORKFLOW: absolute }, "/other/project");
+  const result = workflowFilePath({ LORENZ_WORKFLOW: absolute }, "/other/project");
   assert.equal(result, absolute);
 });
 
 // --- loadWorkflow ---
 
 test("loadWorkflow reads and parses YAML workflow file", async () => {
-  const dir = await tempDir("symphony-workflow-load");
+  const dir = await tempDir("lorenz-workflow-load");
   const workflowFile = path.join(dir, "WORKFLOW.md");
   await fs.writeFile(
     workflowFile,
@@ -48,8 +48,8 @@ test("loadWorkflow reads and parses YAML workflow file", async () => {
 });
 
 test("loadWorkflow resolves relative env workflow path against project root", async () => {
-  const dir = await tempDir("symphony-workflow-env-cwd");
-  const outside = await tempDir("symphony-workflow-env-outside");
+  const dir = await tempDir("lorenz-workflow-env-cwd");
+  const outside = await tempDir("lorenz-workflow-env-outside");
   const workflowFile = path.join(dir, "custom", "workflow.md");
   await fs.mkdir(path.dirname(workflowFile), { recursive: true });
   await fs.writeFile(workflowFile, "Project root workflow");
@@ -59,7 +59,7 @@ test("loadWorkflow resolves relative env workflow path against project root", as
     process.chdir(outside);
     const result = await loadWorkflow(
       undefined,
-      { SYMPHONY_WORKFLOW: "custom/workflow.md" },
+      { LORENZ_WORKFLOW: "custom/workflow.md" },
       { cwd: dir },
     );
 
@@ -71,7 +71,7 @@ test("loadWorkflow resolves relative env workflow path against project root", as
 });
 
 test("loadWorkflow validates Liquid prompt templates with prompt context", async () => {
-  const dir = await tempDir("symphony-workflow-invalid-prompt");
+  const dir = await tempDir("lorenz-workflow-invalid-prompt");
   const workflowFile = path.join(dir, "WORKFLOW.md");
   await fs.writeFile(workflowFile, "{% if issue.identifier %}");
 
@@ -82,7 +82,7 @@ test("loadWorkflow validates Liquid prompt templates with prompt context", async
 });
 
 test("loadWorkflow caches the parsed effective prompt template", async () => {
-  const dir = await tempDir("symphony-workflow-parsed-prompt");
+  const dir = await tempDir("lorenz-workflow-parsed-prompt");
   const workflowFile = path.join(dir, "WORKFLOW.md");
   await fs.writeFile(workflowFile, "Hello {{ issue.identifier }}");
 
@@ -95,14 +95,14 @@ test("loadWorkflow caches the parsed effective prompt template", async () => {
 });
 
 test("loadWorkflow returns error for missing file", async () => {
-  const dir = await tempDir("symphony-workflow-missing");
+  const dir = await tempDir("lorenz-workflow-missing");
   const missing = path.join(dir, "DOES_NOT_EXIST.md");
 
   await assert.rejects(() => loadWorkflow(missing, {}, { cwd: dir }), /missing_workflow_file/);
 });
 
 test("loadWorkflow returns error for malformed YAML", async () => {
-  const dir = await tempDir("symphony-workflow-malformed");
+  const dir = await tempDir("lorenz-workflow-malformed");
   const workflowFile = path.join(dir, "WORKFLOW.md");
   await fs.writeFile(workflowFile, ["---", "bad: yaml: [unterminated", "---", "body"].join("\n"));
 

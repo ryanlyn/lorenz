@@ -8,7 +8,7 @@ import {
   Orchestrator,
   parseConfig,
   revokeMcpToken,
-  SymphonyRuntime,
+  LorenzRuntime,
 } from "@lorenz/cli";
 import { acpExecutorProvider } from "@lorenz/acp";
 import { defaultAgentExecutorRegistry } from "@lorenz/agent-sdk";
@@ -60,7 +60,7 @@ test("observability HTTP API exposes state, issue, runs, refresh, and errors", a
     timestamp: new Date("2026-05-05T00:00:01.000Z"),
   });
 
-  const runtime = new SymphonyRuntime({
+  const runtime = new LorenzRuntime({
     workflow,
     orchestrator,
     client: {
@@ -204,7 +204,7 @@ test("standalone MCP server emits connectable URLs for wildcard and empty hosts"
 });
 
 test("observability HTTP API serves trace routes when issueStore is provided", async () => {
-  const root = await mkdtemp(path.join(tmpdir(), "symphony-http-issue-store-"));
+  const root = await mkdtemp(path.join(tmpdir(), "lorenz-http-issue-store-"));
   const traceDir = path.join(root, "traces");
   await mkdir(traceDir, { recursive: true });
   const issueStore = new IssueStore(path.join(root, "issues.db"));
@@ -302,7 +302,7 @@ test("observability HTTP API matches snapshot timeout and unavailable branches",
 
 test("MCP endpoint authorizes bearer tokens and executes Linear tools", async () => {
   const workflow = workflowFixture();
-  const runtime = new SymphonyRuntime({
+  const runtime = new LorenzRuntime({
     workflow,
     client: {
       fetchCandidateIssues: async () => [],
@@ -415,7 +415,7 @@ test("MCP endpoint authorizes bearer tokens and executes Linear tools", async ()
 test("observability MCP endpoint uses workflow settings reloaded by the runtime", async () => {
   const initialWorkflow = workflowFixture();
   let currentWorkflow = initialWorkflow;
-  const runtime = new SymphonyRuntime({
+  const runtime = new LorenzRuntime({
     workflow: initialWorkflow,
     reloadWorkflow: async () => currentWorkflow,
     client: {
@@ -541,7 +541,7 @@ async function postRawMcp(
   return response.json();
 }
 
-function fakeRuntime(code: "snapshot_timeout" | "snapshot_unavailable"): SymphonyRuntime {
+function fakeRuntime(code: "snapshot_timeout" | "snapshot_unavailable"): LorenzRuntime {
   return {
     snapshot() {
       const error = new Error(code) as Error & { code: string };
@@ -553,5 +553,5 @@ function fakeRuntime(code: "snapshot_timeout" | "snapshot_unavailable"): Symphon
       error.code = "orchestrator_unavailable";
       throw error;
     },
-  } as unknown as SymphonyRuntime;
+  } as unknown as LorenzRuntime;
 }

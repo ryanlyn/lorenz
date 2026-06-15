@@ -26,7 +26,7 @@ import type {
   McpEndpointManager,
   RunResult,
   Settings,
-  SymphonyRuntimeOptions,
+  LorenzRuntimeOptions,
   WorkflowDefinition,
 } from "@lorenz/cli";
 import type { WorkerPoolSettings } from "@lorenz/domain";
@@ -37,7 +37,7 @@ import { assert, tempDir } from "@lorenz/test-utils";
 import {
   RUNTIME_EVENT_TYPES as RUNTIME_EVENT_TYPES_FROM_RUNTIME,
   RUNTIME_RUN_OUTCOMES as RUNTIME_RUN_OUTCOMES_FROM_RUNTIME,
-  SymphonyRuntime,
+  LorenzRuntime,
 } from "@lorenz/runtime";
 import type { RuntimeSnapshot } from "@lorenz/runtime";
 
@@ -53,7 +53,7 @@ beforeAll(() => {
   }
 });
 
-function runtimeOptions(options: SymphonyRuntimeOptions): SymphonyRuntimeOptions {
+function runtimeOptions(options: LorenzRuntimeOptions): LorenzRuntimeOptions {
   // Startup cleanup scans the workspace root and consumes a fetchIssuesByIds call;
   // default it off so call-counting tests stay deterministic. Cleanup tests pass the
   // real lister explicitly.
@@ -68,7 +68,7 @@ test("runtime exports canonical runtime-events vocabulary values", () => {
 test("runtime dry-run polls, computes eligibility, and does not start agents", async () => {
   const issue = issueFixture("issue-1", "MT-1");
   let runnerCalls = 0;
-  const runtime = new SymphonyRuntime(
+  const runtime = new LorenzRuntime(
     runtimeOptions({
       workflow: workflowFixture(),
       client: {
@@ -94,7 +94,7 @@ test("runtime dry-run polls, computes eligibility, and does not start agents", a
 test("runtime once claims an eligible issue, applies updates, and records completion", async () => {
   const issue = issueFixture("issue-1", "MT-1");
   const doneIssue: Issue = { ...issue, state: "Done", stateType: "completed" };
-  const runtime = new SymphonyRuntime(
+  const runtime = new LorenzRuntime(
     runtimeOptions({
       workflow: workflowFixture(),
       client: {
@@ -111,7 +111,7 @@ test("runtime once claims an eligible issue, applies updates, and records comple
           usage: { inputTokens: 4, outputTokens: 6, totalTokens: 10 },
         });
         return {
-          workspace: "/tmp/symphony/MT-1",
+          workspace: "/tmp/lorenz/MT-1",
           turnCount: 1,
           updates: [],
           agentKind: "codex",
@@ -135,7 +135,7 @@ test("runtime once claims an eligible issue, applies updates, and records comple
 test("runtime schedules continuation retry after normal worker exit even when issue is inactive", async () => {
   const issue = issueFixture("issue-inactive-continuation", "MT-INACTIVE-CONTINUATION");
   const doneIssue: Issue = { ...issue, state: "Done", stateType: "completed" };
-  const runtime = new SymphonyRuntime(
+  const runtime = new LorenzRuntime(
     runtimeOptions({
       workflow: workflowFixture(),
       client: {
@@ -143,7 +143,7 @@ test("runtime schedules continuation retry after normal worker exit even when is
         fetchIssuesByIds: async () => [issue],
       },
       runner: async () => ({
-        workspace: "/tmp/symphony/MT-INACTIVE-CONTINUATION",
+        workspace: "/tmp/lorenz/MT-INACTIVE-CONTINUATION",
         turnCount: 1,
         updates: [],
         agentKind: "codex",
@@ -168,7 +168,7 @@ test("runtime refetches before dispatch and skips stale or missing issues", asyn
   const missingIssue = issueFixture("issue-missing", "MT-MISSING");
   const staleDoneIssue: Issue = { ...staleIssue, state: "Done", stateType: "completed" };
   let runnerCalls = 0;
-  const runtime = new SymphonyRuntime(
+  const runtime = new LorenzRuntime(
     runtimeOptions({
       workflow: workflowFixture(),
       client: {
@@ -220,7 +220,7 @@ test("runtime reloads workflow settings on each poll with last-known-good fallba
     }),
   };
   let reloads = 0;
-  const runtime = new SymphonyRuntime(
+  const runtime = new LorenzRuntime(
     runtimeOptions({
       workflow: firstWorkflow,
       reloadWorkflow: async () => {
@@ -252,13 +252,13 @@ test("runtime reloads workflow settings on each poll with last-known-good fallba
 
 test("runtime skips reload side effects when workflow content is unchanged", async () => {
   const issue = issueFixture("issue-unchanged-reload", "MT-UNCHANGED-RELOAD");
-  const dir = await tempDir("symphony-runtime-unchanged-workflow");
+  const dir = await tempDir("lorenz-runtime-unchanged-workflow");
   const workflowFile = path.join(dir, "WORKFLOW.md");
   await fs.writeFile(workflowFile, workflowMarkdown({ intervalMs: 5 }));
   const workflow = await loadWorkflow(workflowFile, {}, { cwd: dir });
   let reloads = 0;
   let clientBuilds = 0;
-  const runtime = new SymphonyRuntime(
+  const runtime = new LorenzRuntime(
     runtimeOptions({
       workflow,
       reloadWorkflow: async () => {
@@ -291,13 +291,13 @@ test("runtime skips reload side effects when workflow content is unchanged", asy
 
 test("runtime reloads stamped workflow when file content changes", async () => {
   const issue = issueFixture("issue-changed-reload", "MT-CHANGED-RELOAD");
-  const dir = await tempDir("symphony-runtime-changed-workflow");
+  const dir = await tempDir("lorenz-runtime-changed-workflow");
   const workflowFile = path.join(dir, "WORKFLOW.md");
   await fs.writeFile(workflowFile, workflowMarkdown({ intervalMs: 5 }));
   const workflow = await loadWorkflow(workflowFile, {}, { cwd: dir });
   let reloads = 0;
   let clientBuilds = 0;
-  const runtime = new SymphonyRuntime(
+  const runtime = new LorenzRuntime(
     runtimeOptions({
       workflow,
       reloadWorkflow: async () => {
@@ -339,7 +339,7 @@ test("runtime preflights dispatch config before candidate fetches", async () => 
   const workflow = workflowFixture();
   workflow.settings.tracker.kind = undefined;
   let candidateFetches = 0;
-  const runtime = new SymphonyRuntime(
+  const runtime = new LorenzRuntime(
     runtimeOptions({
       workflow,
       client: {
@@ -368,7 +368,7 @@ test("runtime aborts in-flight runs when reconciliation sees a terminal issue", 
   let fetches = 0;
   let aborted = false;
   let started = false;
-  const runtime = new SymphonyRuntime(
+  const runtime = new LorenzRuntime(
     runtimeOptions({
       workflow: workflowFixture(),
       client: {
@@ -431,12 +431,12 @@ test("runtime aborts in-flight runs when reconciliation sees missing or unrouted
             workspace: { root },
           })
         : workflowFixture(root).settings;
-    const routedIssue = mode === "unrouted" ? { ...issue, labels: ["symphony:backend"] } : issue;
-    const staleIssue = mode === "unrouted" ? { ...issue, labels: ["symphony:frontend"] } : null;
+    const routedIssue = mode === "unrouted" ? { ...issue, labels: ["lorenz:backend"] } : issue;
+    const staleIssue = mode === "unrouted" ? { ...issue, labels: ["lorenz:frontend"] } : null;
     const workspace = await createWorkspaceForIssue(settings, routedIssue);
     let fetches = 0;
     let aborted = false;
-    const runtime = new SymphonyRuntime(
+    const runtime = new LorenzRuntime(
       runtimeOptions({
         workflow: {
           path: "/tmp/WORKFLOW.md",
@@ -494,7 +494,7 @@ test("runtime keeps tracked work running when tracker refresh fails during recon
   const orchestrator = new Orchestrator(workflow.settings);
   assert.ok(orchestrator.claim(issue));
   let candidateFetches = 0;
-  const runtime = new SymphonyRuntime(
+  const runtime = new LorenzRuntime(
     runtimeOptions({
       workflow,
       orchestrator,
@@ -536,7 +536,7 @@ test("runtime reconciles stalled runs from the orchestrator poll loop", async ()
   const workspace = await createWorkspaceForIssue(workflow.settings, issue);
   const orchestrator = new Orchestrator(workflow.settings);
   let aborted = false;
-  const runtime = new SymphonyRuntime(
+  const runtime = new LorenzRuntime(
     runtimeOptions({
       workflow,
       orchestrator,
@@ -609,7 +609,7 @@ test("runtime stall reconciliation uses agents-level stall timeout defaults", as
   const workspace = await createWorkspaceForIssue(workflow.settings, issue);
   const orchestrator = new Orchestrator(workflow.settings);
   let aborted = false;
-  const runtime = new SymphonyRuntime(
+  const runtime = new LorenzRuntime(
     runtimeOptions({
       workflow,
       orchestrator,
@@ -662,7 +662,7 @@ test("runtime does not record late success after stall reconciliation wins", asy
   const orchestrator = new Orchestrator(workflow.settings);
   let aborted = false;
   const runControl: { resolve?: (value: any) => void } = {};
-  const runtime = new SymphonyRuntime(
+  const runtime = new LorenzRuntime(
     runtimeOptions({
       workflow,
       orchestrator,
@@ -695,7 +695,7 @@ test("runtime does not record late success after stall reconciliation wins", asy
     assert.ok(completeRun);
     const completeIssue: Issue = { ...issue, state: "Done", stateType: "completed" };
     completeRun({
-      workspace: "/tmp/symphony/MT-LATE-SUCCESS",
+      workspace: "/tmp/lorenz/MT-LATE-SUCCESS",
       turnCount: 1,
       updates: [],
       agentKind: "codex",
@@ -721,7 +721,7 @@ test("runtime keeps a retry handle active when a stalled generation finishes lat
   let attempts = 0;
   const abortedAttempts = new Set<number>();
   const controls = new Map<number, { resolve: (value: RunResult) => void }>();
-  const runtime = new SymphonyRuntime(
+  const runtime = new LorenzRuntime(
     runtimeOptions({
       workflow,
       orchestrator,
@@ -785,7 +785,7 @@ test("runtime keeps a retry handle active when a stalled generation finishes lat
 test("runtime coalesces overlapping pollOnce calls", async () => {
   const fetchControl: { release?: () => void } = {};
   let fetches = 0;
-  const runtime = new SymphonyRuntime(
+  const runtime = new LorenzRuntime(
     runtimeOptions({
       workflow: workflowFixture(),
       client: {
@@ -818,7 +818,7 @@ test("runtime preserves stronger overlapping pollOnce dispatch intent", async ()
   const fetchControl: { release?: () => void } = {};
   let fetches = 0;
   let runnerCalls = 0;
-  const runtime = new SymphonyRuntime(
+  const runtime = new LorenzRuntime(
     runtimeOptions({
       workflow: workflowFixture(),
       client: {
@@ -836,7 +836,7 @@ test("runtime preserves stronger overlapping pollOnce dispatch intent", async ()
       runner: async () => {
         runnerCalls += 1;
         return {
-          workspace: "/tmp/symphony/MT-OVERLAP-DISPATCH",
+          workspace: "/tmp/lorenz/MT-OVERLAP-DISPATCH",
           turnCount: 1,
           updates: [],
           agentKind: "codex",
@@ -866,7 +866,7 @@ test("runtime preserves stronger overlapping pollOnce dispatch intent", async ()
 
 test("runtime keeps polling after a candidate fetch throws in the recurring loop", async () => {
   let fetches = 0;
-  const runtime = new SymphonyRuntime(
+  const runtime = new LorenzRuntime(
     runtimeOptions({
       workflow: workflowFixture(),
       client: {
@@ -899,7 +899,7 @@ test("runtime stop does not record an in-flight run as a failure", async () => {
   const issue = issueFixture("issue-stop", "MT-STOP");
   const orchestrator = new Orchestrator(workflowFixture().settings);
   let aborted = false;
-  const runtime = new SymphonyRuntime(
+  const runtime = new LorenzRuntime(
     runtimeOptions({
       workflow: workflowFixture(),
       orchestrator,
@@ -945,7 +945,7 @@ test("runtime stop does not record an in-flight run as a failure", async () => {
 test("runtime appends operational events to the configured log file", async () => {
   const root = await tempDir("lorenz-runtime-event-log");
   const workflow = workflowFixture(root);
-  const runtime = new SymphonyRuntime(
+  const runtime = new LorenzRuntime(
     runtimeOptions({
       workflow,
       client: {
@@ -978,7 +978,7 @@ test("runtime reconciliation removes terminal retry workspaces before polling", 
   orchestrator.finish(activeIssue.id, 0, true);
   const cleanupIssues: Array<Issue | undefined> = [];
 
-  const runtime = new SymphonyRuntime(
+  const runtime = new LorenzRuntime(
     runtimeOptions({
       workflow,
       orchestrator,
@@ -1008,7 +1008,7 @@ test("runtime reconcile refreshes the running stage when the tracker state chang
   assert.ok(orchestrator.claim(issueFixture("issue-1", "MT-1")));
 
   const moved: Issue = { ...issueFixture("issue-1", "MT-1"), state: "In Progress" };
-  const runtime = new SymphonyRuntime(
+  const runtime = new LorenzRuntime(
     runtimeOptions({
       workflow,
       orchestrator,
@@ -1040,7 +1040,7 @@ test("runtime startup cleanup looks up only on-disk workspaces and removes termi
   const activeWorkspace = await createWorkspaceForIssue(workflow.settings, activeIssue);
   const lookups: string[][] = [];
 
-  const runtime = new SymphonyRuntime(
+  const runtime = new LorenzRuntime(
     runtimeOptions({
       workflow,
       listIssueWorkspaces: listIssueWorkspaceIdentifiers,
@@ -1070,7 +1070,7 @@ test("runtime startup cleanup looks up only on-disk workspaces and removes termi
 test("runtime startup cleanup skips the tracker entirely when no workspaces exist", async () => {
   const root = await tempDir("lorenz-runtime-startup-cleanup-empty");
   let lookups = 0;
-  const runtime = new SymphonyRuntime(
+  const runtime = new LorenzRuntime(
     runtimeOptions({
       workflow: workflowFixture(root),
       listIssueWorkspaces: listIssueWorkspaceIdentifiers,
@@ -1089,7 +1089,7 @@ test("runtime startup cleanup skips the tracker entirely when no workspaces exis
 });
 
 test("runtime treats startup cleanup lookup failures as non-fatal", async () => {
-  const runtime = new SymphonyRuntime(
+  const runtime = new LorenzRuntime(
     runtimeOptions({
       workflow: workflowFixture(),
       listIssueWorkspaces: async () => ["MT-STALE"],
@@ -1117,7 +1117,7 @@ test("runtime records failed attempts as retryable work and keeps polling", asyn
   const workflow = workflowFixture();
   const orchestrator = new Orchestrator(workflow.settings);
   let attempts = 0;
-  const runtime = new SymphonyRuntime(
+  const runtime = new LorenzRuntime(
     runtimeOptions({
       workflow,
       orchestrator,
@@ -1129,7 +1129,7 @@ test("runtime records failed attempts as retryable work and keeps polling", asyn
         attempts += 1;
         if (attempts === 1) throw new Error("agent exited: boom");
         return {
-          workspace: "/tmp/symphony/MT-RETRYABLE",
+          workspace: "/tmp/lorenz/MT-RETRYABLE",
           turnCount: 1,
           updates: [],
           agentKind: "codex",
@@ -1168,7 +1168,7 @@ test("runtime schedules retry refresh timers independently of the poll cadence",
   workflow.settings.polling.intervalMs = 60_000;
   workflow.settings.agent.maxRetryBackoffMs = 500;
   let attempts = 0;
-  const runtime = new SymphonyRuntime(
+  const runtime = new LorenzRuntime(
     runtimeOptions({
       workflow,
       client: {
@@ -1179,7 +1179,7 @@ test("runtime schedules retry refresh timers independently of the poll cadence",
         attempts += 1;
         if (attempts === 1) throw new Error("agent exited: retry me");
         return {
-          workspace: "/tmp/symphony/MT-TIMER",
+          workspace: "/tmp/lorenz/MT-TIMER",
           turnCount: 1,
           updates: [],
           agentKind: "codex",
@@ -1390,7 +1390,7 @@ test("worker pool: leased workerHost is written back and passed to the runner; h
   const workerPool = makeFakeWorkerPool({ lease });
   let runnerWorkerHost: string | null | undefined = "unset";
   let workerHostDuringRun: string | null | undefined;
-  const runtime = new SymphonyRuntime(
+  const runtime = new LorenzRuntime(
     runtimeOptions({
       workflow: workerPoolWorkflowFixture(),
       workerPool,
@@ -1406,7 +1406,7 @@ test("worker pool: leased workerHost is written back and passed to the runner; h
             (entry) => entry.issueId === runIssue.id && entry.slotIndex === slotIndex,
           )?.workerHost;
         return {
-          workspace: "/tmp/symphony/MT-BP-LEASE",
+          workspace: "/tmp/lorenz/MT-BP-LEASE",
           turnCount: 1,
           updates: [],
           resumeId: "resume-bp",
@@ -1464,7 +1464,7 @@ test("worker pool: the bound slot's mcpEndpoint is threaded into the runner", as
   });
 
   let runnerEndpoint: AgentMcpEndpointLease | null | undefined = undefined;
-  const runtime = new SymphonyRuntime(
+  const runtime = new LorenzRuntime(
     runtimeOptions({
       workflow,
       coordinator,
@@ -1475,7 +1475,7 @@ test("worker pool: the bound slot's mcpEndpoint is threaded into the runner", as
       runner: async ({ mcpEndpoint }) => {
         runnerEndpoint = mcpEndpoint;
         return {
-          workspace: "/tmp/symphony/MT-BP-ENDPOINT",
+          workspace: "/tmp/lorenz/MT-BP-ENDPOINT",
           turnCount: 1,
           updates: [],
           resumeId: "resume-bp-endpoint",
@@ -1538,7 +1538,7 @@ test("worker pool: the FULL workflow Settings (with server.port) is threaded to 
     settings: workflow.settings.worker.workerPool!,
   });
 
-  const runtime = new SymphonyRuntime(
+  const runtime = new LorenzRuntime(
     runtimeOptions({
       workflow,
       coordinator,
@@ -1547,7 +1547,7 @@ test("worker pool: the FULL workflow Settings (with server.port) is threaded to 
         fetchIssuesByIds: async () => [issue],
       },
       runner: async () => ({
-        workspace: "/tmp/symphony/MT-BP-FULL-SETTINGS",
+        workspace: "/tmp/lorenz/MT-BP-FULL-SETTINGS",
         turnCount: 1,
         updates: [],
         resumeId: "resume-bp-full-settings",
@@ -1574,7 +1574,7 @@ test("worker pool: a null-manager slot threads a null mcpEndpoint into the runne
   const lease = makeFakeLease({ workerHost: "fake://worker-null-endpoint" });
   const workerPool = makeFakeWorkerPool({ lease });
   let runnerEndpoint: AgentMcpEndpointLease | null | undefined = "unset" as never;
-  const runtime = new SymphonyRuntime(
+  const runtime = new LorenzRuntime(
     runtimeOptions({
       workflow: workerPoolWorkflowFixture(),
       workerPool,
@@ -1585,7 +1585,7 @@ test("worker pool: a null-manager slot threads a null mcpEndpoint into the runne
       runner: async ({ mcpEndpoint }) => {
         runnerEndpoint = mcpEndpoint;
         return {
-          workspace: "/tmp/symphony/MT-BP-NULL",
+          workspace: "/tmp/lorenz/MT-BP-NULL",
           turnCount: 1,
           updates: [],
           resumeId: "resume-bp-null",
@@ -1654,7 +1654,7 @@ test("worker pool: a codex run is skipped when the per-run endpoint open THROWS 
     canAcquire: () => true,
   });
   let runnerCalls = 0;
-  const runtime = new SymphonyRuntime(
+  const runtime = new LorenzRuntime(
     runtimeOptions({
       workflow,
       orchestrator,
@@ -1721,7 +1721,7 @@ test("worker pool: an ACP/claude run STILL opens its per-run endpoint (the per-r
     settings: workflow.settings.worker.workerPool!,
   });
   let runnerEndpoint: AgentMcpEndpointLease | null | undefined = "unset" as never;
-  const runtime = new SymphonyRuntime(
+  const runtime = new LorenzRuntime(
     runtimeOptions({
       workflow,
       coordinator,
@@ -1732,7 +1732,7 @@ test("worker pool: an ACP/claude run STILL opens its per-run endpoint (the per-r
       runner: async ({ mcpEndpoint }) => {
         runnerEndpoint = mcpEndpoint;
         return {
-          workspace: "/tmp/symphony/MT-BP-CLAUDE-EP",
+          workspace: "/tmp/lorenz/MT-BP-CLAUDE-EP",
           turnCount: 1,
           updates: [],
           resumeId: "resume-claude-ep",
@@ -1782,7 +1782,7 @@ test("worker pool: a claim is a host-less reservation between claim and acquire,
       return { status: "leased", lease };
     },
   });
-  const runtime = new SymphonyRuntime(
+  const runtime = new LorenzRuntime(
     runtimeOptions({
       workflow,
       orchestrator,
@@ -1792,7 +1792,7 @@ test("worker pool: a claim is a host-less reservation between claim and acquire,
         fetchIssuesByIds: async () => [issue],
       },
       runner: async () => ({
-        workspace: "/tmp/symphony/MT-BP-RESERVED",
+        workspace: "/tmp/lorenz/MT-BP-RESERVED",
         turnCount: 1,
         updates: [],
         resumeId: "resume",
@@ -1846,7 +1846,7 @@ test("worker pool: acquire uses the prior real workerHost as affinityKey on retr
   const workerPool = makeFakeWorkerPool({
     lease: makeFakeLease({ workerHost: "fake://worker-prior" }),
   });
-  const runtime = new SymphonyRuntime(
+  const runtime = new LorenzRuntime(
     runtimeOptions({
       workflow,
       orchestrator,
@@ -1856,7 +1856,7 @@ test("worker pool: acquire uses the prior real workerHost as affinityKey on retr
         fetchIssuesByIds: async () => [issue],
       },
       runner: async () => ({
-        workspace: "/tmp/symphony/MT-BP-AFFINITY",
+        workspace: "/tmp/lorenz/MT-BP-AFFINITY",
         turnCount: 1,
         updates: [],
         resumeId: "resume",
@@ -1886,7 +1886,7 @@ test("worker pool: no_capacity cancels the reservation, skips the runner, record
   const workerPool = makeFakeWorkerPool({
     result: { status: "no_capacity", reason: "acquire_timeout" },
   });
-  const runtime = new SymphonyRuntime(
+  const runtime = new LorenzRuntime(
     runtimeOptions({
       workflow,
       orchestrator,
@@ -1951,7 +1951,7 @@ test("worker pool: no_capacity restores the consumed retry entry so affinity and
       return { status: "leased", lease: makeFakeLease({ workerHost: "fake://worker-sticky" }) };
     },
   });
-  const runtime = new SymphonyRuntime(
+  const runtime = new LorenzRuntime(
     runtimeOptions({
       workflow,
       orchestrator,
@@ -1961,7 +1961,7 @@ test("worker pool: no_capacity restores the consumed retry entry so affinity and
         fetchIssuesByIds: async () => [issue],
       },
       runner: async () => ({
-        workspace: "/tmp/symphony/MT-BP-NOCAP-RETRY",
+        workspace: "/tmp/lorenz/MT-BP-NOCAP-RETRY",
         turnCount: 1,
         updates: [],
         resumeId: "resume",
@@ -2024,7 +2024,7 @@ test("worker pool: acquire errors rearm a restored due retry timer", async () =>
       return { status: "leased", lease: makeFakeLease({ workerHost: "fake://worker-sticky" }) };
     },
   });
-  const runtime = new SymphonyRuntime(
+  const runtime = new LorenzRuntime(
     runtimeOptions({
       workflow,
       orchestrator,
@@ -2034,7 +2034,7 @@ test("worker pool: acquire errors rearm a restored due retry timer", async () =>
         fetchIssuesByIds: async () => [issue],
       },
       runner: async () => ({
-        workspace: "/tmp/symphony/MT-BP-ACQ-ERR-RETRY",
+        workspace: "/tmp/lorenz/MT-BP-ACQ-ERR-RETRY",
         turnCount: 1,
         updates: [],
         resumeId: "resume",
@@ -2083,7 +2083,7 @@ test("worker pool: freed capacity nudges the poll so a capacity-blocked issue re
     canAcquire: () => capacity,
     lease,
   });
-  const runtime = new SymphonyRuntime(
+  const runtime = new LorenzRuntime(
     runtimeOptions({
       workflow,
       workerPool,
@@ -2092,7 +2092,7 @@ test("worker pool: freed capacity nudges the poll so a capacity-blocked issue re
         fetchIssuesByIds: async () => [issue],
       },
       runner: async () => ({
-        workspace: "/tmp/symphony/MT-BP-NUDGE",
+        workspace: "/tmp/lorenz/MT-BP-NUDGE",
         turnCount: 1,
         updates: [],
         resumeId: "resume",
@@ -2147,7 +2147,7 @@ test("worker pool: a thrown acquire rejection cancels the reservation, skips the
       return { status: "leased", lease: makeFakeLease({ workerHost: "fake://worker-recovered" }) };
     },
   });
-  const runtime = new SymphonyRuntime(
+  const runtime = new LorenzRuntime(
     runtimeOptions({
       workflow,
       orchestrator,
@@ -2160,7 +2160,7 @@ test("worker pool: a thrown acquire rejection cancels the reservation, skips the
       runner: async () => {
         runnerCalls += 1;
         return {
-          workspace: "/tmp/symphony/MT-BP-ACQ-THROW",
+          workspace: "/tmp/lorenz/MT-BP-ACQ-THROW",
           turnCount: 1,
           updates: [],
           resumeId: "resume-acq",
@@ -2211,7 +2211,7 @@ test("worker pool: success path releases the lease as healthy", async () => {
   const doneIssue: Issue = { ...issue, state: "Done", stateType: "completed" };
   const lease = makeFakeLease();
   const workerPool = makeFakeWorkerPool({ lease });
-  const runtime = new SymphonyRuntime(
+  const runtime = new LorenzRuntime(
     runtimeOptions({
       workflow: workerPoolWorkflowFixture(),
       workerPool,
@@ -2220,7 +2220,7 @@ test("worker pool: success path releases the lease as healthy", async () => {
         fetchIssuesByIds: async () => [issue],
       },
       runner: async () => ({
-        workspace: "/tmp/symphony/MT-BP-SUCCESS",
+        workspace: "/tmp/lorenz/MT-BP-SUCCESS",
         turnCount: 1,
         updates: [],
         resumeId: "resume",
@@ -2242,7 +2242,7 @@ async function runWorkerPoolClassifierCase(
   const issue = issueFixture(`issue-bp-cls-${expected.kind}`, "MT-BP-CLS");
   const lease = makeFakeLease();
   const workerPool = makeFakeWorkerPool({ lease });
-  const runtime = new SymphonyRuntime(
+  const runtime = new LorenzRuntime(
     runtimeOptions({
       workflow: workerPoolWorkflowFixture(),
       workerPool,
@@ -2323,7 +2323,7 @@ test("worker pool: a stall-finished run poisons the worker and keeps accounting 
   const lease = makeFakeLease({ workerHost: "fake://worker-stall" });
   const workerPool = makeFakeWorkerPool({ lease });
   let aborted = false;
-  const runtime = new SymphonyRuntime(
+  const runtime = new LorenzRuntime(
     runtimeOptions({
       workflow,
       orchestrator,
@@ -2394,7 +2394,7 @@ test("worker pool: a stall-aborted run that RESOLVES SUCCESSFULLY still poisons 
   let aborted = false;
   const runControl: { resolve?: (value: RunResult) => void } = {};
   const doneIssue: Issue = { ...issue, state: "Done", stateType: "completed" };
-  const runtime = new SymphonyRuntime(
+  const runtime = new LorenzRuntime(
     runtimeOptions({
       workflow,
       orchestrator,
@@ -2489,7 +2489,7 @@ test("worker pool: a stale-generation late resolve is a lease no-op (leaseId gua
   });
   const controls = new Map<number, { resolve: (value: RunResult) => void }>();
   let attempts = 0;
-  const runtime = new SymphonyRuntime(
+  const runtime = new LorenzRuntime(
     runtimeOptions({
       workflow,
       orchestrator,
@@ -2573,7 +2573,7 @@ test("worker pool: a reserving (in-acquire) slot is never stall-finished and rec
       return { status: "leased", lease };
     },
   });
-  const runtime = new SymphonyRuntime(
+  const runtime = new LorenzRuntime(
     runtimeOptions({
       workflow,
       orchestrator,
@@ -2583,7 +2583,7 @@ test("worker pool: a reserving (in-acquire) slot is never stall-finished and rec
         fetchIssuesByIds: async () => [issue],
       },
       runner: async () => ({
-        workspace: "/tmp/symphony/MT-BP-RESERVING-STALL",
+        workspace: "/tmp/lorenz/MT-BP-RESERVING-STALL",
         turnCount: 1,
         updates: [],
         resumeId: "resume",
@@ -2650,7 +2650,7 @@ test("worker pool: a bind after cleanup releases the worker healthy and skips as
   });
   let runnerCalls = 0;
   let fetchedTerminal = false;
-  const runtime = new SymphonyRuntime(
+  const runtime = new LorenzRuntime(
     runtimeOptions({
       workflow,
       orchestrator,
@@ -2705,7 +2705,7 @@ test("worker pool: onUpdate triggers a lease heartbeat", async () => {
   const doneIssue: Issue = { ...issue, state: "Done", stateType: "completed" };
   const lease = makeFakeLease();
   const workerPool = makeFakeWorkerPool({ lease });
-  const runtime = new SymphonyRuntime(
+  const runtime = new LorenzRuntime(
     runtimeOptions({
       workflow: workerPoolWorkflowFixture(),
       workerPool,
@@ -2717,7 +2717,7 @@ test("worker pool: onUpdate triggers a lease heartbeat", async () => {
         onUpdate?.({ type: "turn_completed", sessionId: "s", resumeId: "r" });
         onUpdate?.({ type: "turn_completed", sessionId: "s", resumeId: "r" });
         return {
-          workspace: "/tmp/symphony/MT-BP-HEARTBEAT",
+          workspace: "/tmp/lorenz/MT-BP-HEARTBEAT",
           turnCount: 2,
           updates: [],
           resumeId: "r",
@@ -2741,7 +2741,7 @@ test("worker pool: reconcile is called on workflow reload with the next worker-p
   });
   const workerPool = makeFakeWorkerPool({ canAcquire: false });
   let reloads = 0;
-  const runtime = new SymphonyRuntime(
+  const runtime = new LorenzRuntime(
     runtimeOptions({
       workflow: firstWorkflow,
       workerPool,
@@ -2771,7 +2771,7 @@ test("worker pool: a reload that removes the worker_pool block drains the live p
   assert.equal(secondWorkflow.settings.worker.workerPool, undefined);
   const workerPool = makeFakeWorkerPool({ canAcquire: false });
   let reloads = 0;
-  const runtime = new SymphonyRuntime(
+  const runtime = new LorenzRuntime(
     runtimeOptions({
       workflow: firstWorkflow,
       workerPool,
@@ -2804,7 +2804,7 @@ test("worker pool: a reload that disables the worker_pool block drains the live 
   assert.equal(secondWorkflow.settings.worker.workerPool?.enabled, false);
   const workerPool = makeFakeWorkerPool({ canAcquire: false });
   let reloads = 0;
-  const runtime = new SymphonyRuntime(
+  const runtime = new LorenzRuntime(
     runtimeOptions({
       workflow: firstWorkflow,
       workerPool,
@@ -2849,7 +2849,7 @@ test("worker pool: a reload that disables the pool resumes dispatch via the loca
   });
   let runnerWorkerHost: string | null | undefined = "unset";
   let reloads = 0;
-  const runtime = new SymphonyRuntime(
+  const runtime = new LorenzRuntime(
     runtimeOptions({
       workflow: firstWorkflow,
       workerPool,
@@ -2866,7 +2866,7 @@ test("worker pool: a reload that disables the pool resumes dispatch via the loca
       runner: async ({ workerHost }) => {
         runnerWorkerHost = workerHost;
         return {
-          workspace: "/tmp/symphony/MT-BP-DISABLED-RESUME",
+          workspace: "/tmp/lorenz/MT-BP-DISABLED-RESUME",
           turnCount: 1,
           updates: [],
           resumeId: "resume",
@@ -2916,7 +2916,7 @@ test("worker pool: a reload that re-enables the pool governs again and acquires 
   });
   let runnerWorkerHost: string | null | undefined = "unset";
   let reloads = 0;
-  const runtime = new SymphonyRuntime(
+  const runtime = new LorenzRuntime(
     runtimeOptions({
       workflow: firstWorkflow,
       workerPool,
@@ -2932,7 +2932,7 @@ test("worker pool: a reload that re-enables the pool governs again and acquires 
       runner: async ({ workerHost }) => {
         runnerWorkerHost = workerHost;
         return {
-          workspace: "/tmp/symphony/MT-BP-REENABLE",
+          workspace: "/tmp/lorenz/MT-BP-REENABLE",
           turnCount: 1,
           updates: [],
           resumeId: "resume",
@@ -2963,7 +2963,7 @@ test("worker pool: a reload that throws the anti-double-capacity guard keeps las
   const issue = issueFixture("issue-bp-guard", "MT-BP-GUARD");
   const firstWorkflow = workerPoolWorkflowFixture();
   const workerPool = makeFakeWorkerPool({ canAcquire: false });
-  const runtime = new SymphonyRuntime(
+  const runtime = new LorenzRuntime(
     runtimeOptions({
       workflow: firstWorkflow,
       workerPool,
@@ -3025,7 +3025,7 @@ test("worker pool: a reload to max_in_flight>1 without co_residence is rejected 
     settings: firstWorkflow.settings.worker.workerPool!,
   });
   let reloads = 0;
-  const runtime = new SymphonyRuntime(
+  const runtime = new LorenzRuntime(
     runtimeOptions({
       workflow: firstWorkflow,
       coordinator,
@@ -3071,7 +3071,7 @@ test("worker pool: a reload to max_in_flight>1 without the per-run-endpoint capa
   );
   const workerPool = makeFakeWorkerPool({ canAcquire: false });
   let reloads = 0;
-  const runtime = new SymphonyRuntime(
+  const runtime = new LorenzRuntime(
     runtimeOptions({
       workflow: firstWorkflow,
       // Bare workerPool -> null-endpoint passthrough coordinator (perRunEndpoint=false).
@@ -3116,7 +3116,7 @@ test("worker pool: a reload to max_in_flight>1 WITH co_residence + per-run-endpo
     settings: firstWorkflow.settings.worker.workerPool!,
   });
   let reloads = 0;
-  const runtime = new SymphonyRuntime(
+  const runtime = new LorenzRuntime(
     runtimeOptions({
       workflow: firstWorkflow,
       coordinator,
@@ -3159,7 +3159,7 @@ test("worker pool: a default (slotsPerMachine=1) reload applies unchanged throug
   assert.equal(secondWorkflow.settings.worker.workerPool?.slotsPerMachine, 1);
   const workerPool = makeFakeWorkerPool({ canAcquire: false });
   let reloads = 0;
-  const runtime = new SymphonyRuntime(
+  const runtime = new LorenzRuntime(
     runtimeOptions({
       workflow: firstWorkflow,
       workerPool,
@@ -3210,7 +3210,7 @@ test("worker pool: a reload whose reconcile throws keeps last-good settings AND 
     reconcileError: "driver unavailable",
   });
   let reloads = 0;
-  const runtime = new SymphonyRuntime(
+  const runtime = new LorenzRuntime(
     runtimeOptions({
       workflow: firstWorkflow,
       workerPool,
@@ -3248,7 +3248,7 @@ test("worker pool: a reload whose reconcile throws keeps last-good settings AND 
 
 test("worker pool: drainWorkerPool awaits the pool drain with the configured deadline", async () => {
   const workerPool = makeFakeWorkerPool();
-  const runtime = new SymphonyRuntime(
+  const runtime = new LorenzRuntime(
     runtimeOptions({
       workflow: workerPoolWorkflowFixture(),
       workerPool,
@@ -3268,7 +3268,7 @@ test("worker pool: drainWorkerPool awaits the pool drain with the configured dea
 });
 
 test("worker pool: drainWorkerPool resolves as a no-op when no pool is configured", async () => {
-  const runtime = new SymphonyRuntime(
+  const runtime = new LorenzRuntime(
     runtimeOptions({
       workflow: workflowFixture(),
       client: {
@@ -3285,7 +3285,7 @@ test("worker pool undefined: byte-identical regression (acquire and classifier n
   const issue = issueFixture("issue-no-bp", "MT-NO-BP");
   const doneIssue: Issue = { ...issue, state: "Done", stateType: "completed" };
   let runnerWorkerHost: string | null | undefined = "unset";
-  const runtime = new SymphonyRuntime(
+  const runtime = new LorenzRuntime(
     runtimeOptions({
       workflow: workflowFixture(),
       client: {
@@ -3295,7 +3295,7 @@ test("worker pool undefined: byte-identical regression (acquire and classifier n
       runner: async ({ workerHost }) => {
         runnerWorkerHost = workerHost;
         return {
-          workspace: "/tmp/symphony/MT-NO-BP",
+          workspace: "/tmp/lorenz/MT-NO-BP",
           turnCount: 1,
           updates: [],
           resumeId: "resume",
@@ -3331,7 +3331,7 @@ test("runtime reconcile tracks a reserved (in-acquire) issue with a null workerH
   const doneIssue: Issue = { ...issue, state: "Done", stateType: "completed" };
   let removeCalls = 0;
   let observedWorkerHost: string | null | undefined = "unset";
-  const runtime = new SymphonyRuntime(
+  const runtime = new LorenzRuntime(
     runtimeOptions({
       workflow,
       orchestrator,
@@ -3379,7 +3379,7 @@ test("runtime reconcile still passes a real workerHost to remote workspace clean
 
   const doneIssue: Issue = { ...issue, state: "Done", stateType: "completed" };
   let observedWorkerHost: string | null | undefined = "unset";
-  const runtime = new SymphonyRuntime(
+  const runtime = new LorenzRuntime(
     runtimeOptions({
       workflow,
       orchestrator,
@@ -3413,7 +3413,7 @@ test("runtime reconcile of a reserved issue cancels the reservation without a re
   // started), so there is no resume state to invalidate and no host to SSH to.
   const canceledIssue: Issue = { ...issue, state: "Canceled", stateType: "canceled" };
   let deleteCalls = 0;
-  const runtime = new SymphonyRuntime(
+  const runtime = new LorenzRuntime(
     runtimeOptions({
       workflow,
       orchestrator,
@@ -3452,7 +3452,7 @@ test("runtime replays retry timer due while a poll is active", async () => {
   let attempts = 0;
   let blockCandidateFetch = false;
   let candidateFetches = 0;
-  const runtime = new SymphonyRuntime(
+  const runtime = new LorenzRuntime(
     runtimeOptions({
       workflow,
       client: {
@@ -3472,7 +3472,7 @@ test("runtime replays retry timer due while a poll is active", async () => {
         attempts += 1;
         if (attempts === 1) throw new Error("agent exited: retry me");
         return {
-          workspace: "/tmp/symphony/MT-TIMER-OVERLAP",
+          workspace: "/tmp/lorenz/MT-TIMER-OVERLAP",
           turnCount: 1,
           updates: [],
           agentKind: "codex",

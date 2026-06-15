@@ -1,7 +1,7 @@
 import type { AgentConfig, AgentExecutor, AgentKind, Settings } from "@lorenz/domain";
 
 /**
- * Everything Symphony needs to know about one way of running agents, bundled as a single
+ * Everything Lorenz needs to know about one way of running agents, bundled as a single
  * extension point. An executor provider owns the runtime driver behind one value of
  * `agents.<kind>.executor` (e.g. `"acp"` drives a bridge subprocess over the Agent Client
  * Protocol) and the validation of agent records that select it.

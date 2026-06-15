@@ -82,7 +82,7 @@ function makeRecord(overrides: Partial<WorkerRecord> = {}): WorkerRecord {
     workerHost,
     driverRef: workerHost,
     state: "WARM_IDLE",
-    labels: ["symphony.pool=worker-pool"],
+    labels: ["lorenz.pool=worker-pool"],
     createdAtMs: 0,
     leaseId: null,
     inFlight: 0,
@@ -154,7 +154,7 @@ function makeInternals(
   const internals: ReaperInternals = {
     settings,
     driver,
-    poolOwnedLabel: options.poolOwnedLabel ?? "symphony.pool=worker-pool",
+    poolOwnedLabel: options.poolOwnedLabel ?? "lorenz.pool=worker-pool",
     now: () => 0,
     inventory,
     mutexFor: (workerId: string): Mutex => {
@@ -386,7 +386,7 @@ test("list() authoritative: labeled pool-owned unknown is destroyed", async () =
   // of it (e.g. a crashed-before-ledger orphan). It must be destroyed.
   await driver.provision({
     workerId: "ghost-0",
-    labels: ["symphony.pool=worker-pool"],
+    labels: ["lorenz.pool=worker-pool"],
     timeoutMs: 1_000,
   });
 
@@ -409,7 +409,7 @@ test("list() pre-hydrate: a labeled survivor is NOT destroyed before hydrate has
   // the reaper but hydrate runs later); otherwise a restart reaps its own survivor.
   await driver.provision({
     workerId: "survivor-0",
-    labels: ["symphony.pool=worker-pool"],
+    labels: ["lorenz.pool=worker-pool"],
     timeoutMs: 1_000,
   });
 

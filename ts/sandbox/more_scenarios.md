@@ -1,4 +1,4 @@
-# Symphony Extended Test Scenarios
+# Lorenz Extended Test Scenarios
 
 **Total Scenarios:** 1040  
 **Date:** 2026-05-30  
@@ -696,7 +696,7 @@ Scenarios are parametrized across these dimensions:
 **Category:** Dispatch Eligibility  
 **Invariant:** Terminal takes precedence  
 **What's Being Tested:** Conflict between active and terminal lists  
-**Sandbox Command:** `npx tsx demo/sandbox.ts --inline '{"issues":[{"id":"x","identifier":"X-1","title":"T","state":"Done","stateType":"completed","labels":[],"blockers":[],"priority":2}],"settingsOverrides":{"tracker":{"kind":"memory","endpoint":"memory://test","activeStates":["Done","Todo"],"terminalStates":["Done","Cancelled"],"dispatch":{"acceptUnrouted":true,"onlyRoutes":null,"routeLabelPrefix":"Symphony:"}}},"pollTicks":1,"assertions":[{"type":"running_count","expected":0}]}'`  
+**Sandbox Command:** `npx tsx demo/sandbox.ts --inline '{"issues":[{"id":"x","identifier":"X-1","title":"T","state":"Done","stateType":"completed","labels":[],"blockers":[],"priority":2}],"settingsOverrides":{"tracker":{"kind":"memory","endpoint":"memory://test","activeStates":["Done","Todo"],"terminalStates":["Done","Cancelled"],"dispatch":{"acceptUnrouted":true,"onlyRoutes":null,"routeLabelPrefix":"Lorenz:"}}},"pollTicks":1,"assertions":[{"type":"running_count","expected":0}]}'`  
 **Expected:** Not dispatched (terminal wins)  
 **Status:** PENDING
 
@@ -776,7 +776,7 @@ Scenarios are parametrized across these dimensions:
 **Category:** Dispatch Eligibility  
 **Invariant:** State must exactly equal "todo" (after trim+lowercase)  
 **What's Being Tested:** "todoist" !== "todo"  
-**Sandbox Command:** `npx tsx demo/sandbox.ts --inline '{"issues":[{"id":"x","identifier":"X-1","title":"T","state":"Todoist","stateType":"started","labels":[],"blockers":[{"id":"b1","identifier":"B-1","state":"Todo","stateType":"unstarted"}],"priority":2}],"settingsOverrides":{"tracker":{"kind":"memory","endpoint":"memory://test","activeStates":["Todo","In Progress","Todoist"],"terminalStates":["Done","Cancelled"],"dispatch":{"acceptUnrouted":true,"onlyRoutes":null,"routeLabelPrefix":"Symphony:"}}},"pollTicks":1,"assertions":[{"type":"event_occurred","eventType":"run_started","messageContains":"X-1"}]}'`  
+**Sandbox Command:** `npx tsx demo/sandbox.ts --inline '{"issues":[{"id":"x","identifier":"X-1","title":"T","state":"Todoist","stateType":"started","labels":[],"blockers":[{"id":"b1","identifier":"B-1","state":"Todo","stateType":"unstarted"}],"priority":2}],"settingsOverrides":{"tracker":{"kind":"memory","endpoint":"memory://test","activeStates":["Todo","In Progress","Todoist"],"terminalStates":["Done","Cancelled"],"dispatch":{"acceptUnrouted":true,"onlyRoutes":null,"routeLabelPrefix":"Lorenz:"}}},"pollTicks":1,"assertions":[{"type":"event_occurred","eventType":"run_started","messageContains":"X-1"}]}'`  
 **Expected:** Dispatched — "todoist" !== "todo"  
 **Status:** PENDING
 
@@ -844,7 +844,7 @@ Scenarios are parametrized across these dimensions:
 **Category:** Routing  
 **Invariant:** Valid route in allowlist → eligible  
 **What's Being Tested:** Basic route matching  
-**Sandbox Command:** `npx tsx demo/sandbox.ts --inline '{"issues":[{"id":"x","identifier":"X-1","title":"T","state":"Todo","stateType":"unstarted","labels":["Symphony:backend"],"blockers":[],"priority":2}],"settingsOverrides":{"tracker":{"kind":"memory","endpoint":"memory://test","activeStates":["Todo","In Progress"],"terminalStates":["Done","Cancelled"],"dispatch":{"acceptUnrouted":false,"onlyRoutes":["backend"],"routeLabelPrefix":"Symphony:"}}},"pollTicks":1,"assertions":[{"type":"event_occurred","eventType":"run_started","messageContains":"X-1"}]}'`  
+**Sandbox Command:** `npx tsx demo/sandbox.ts --inline '{"issues":[{"id":"x","identifier":"X-1","title":"T","state":"Todo","stateType":"unstarted","labels":["Lorenz:backend"],"blockers":[],"priority":2}],"settingsOverrides":{"tracker":{"kind":"memory","endpoint":"memory://test","activeStates":["Todo","In Progress"],"terminalStates":["Done","Cancelled"],"dispatch":{"acceptUnrouted":false,"onlyRoutes":["backend"],"routeLabelPrefix":"Lorenz:"}}},"pollTicks":1,"assertions":[{"type":"event_occurred","eventType":"run_started","messageContains":"X-1"}]}'`  
 **Expected:** Dispatched  
 **Status:** PENDING
 
@@ -852,15 +852,15 @@ Scenarios are parametrized across these dimensions:
 **Category:** Routing  
 **Invariant:** Route not in list → rejected  
 **What's Being Tested:** Non-matching route  
-**Sandbox Command:** `npx tsx demo/sandbox.ts --inline '{"issues":[{"id":"x","identifier":"X-1","title":"T","state":"Todo","stateType":"unstarted","labels":["Symphony:frontend"],"blockers":[],"priority":2}],"settingsOverrides":{"tracker":{"kind":"memory","endpoint":"memory://test","activeStates":["Todo","In Progress"],"terminalStates":["Done","Cancelled"],"dispatch":{"acceptUnrouted":false,"onlyRoutes":["backend"],"routeLabelPrefix":"Symphony:"}}},"pollTicks":1,"assertions":[{"type":"running_count","expected":0}]}'`  
+**Sandbox Command:** `npx tsx demo/sandbox.ts --inline '{"issues":[{"id":"x","identifier":"X-1","title":"T","state":"Todo","stateType":"unstarted","labels":["Lorenz:frontend"],"blockers":[],"priority":2}],"settingsOverrides":{"tracker":{"kind":"memory","endpoint":"memory://test","activeStates":["Todo","In Progress"],"terminalStates":["Done","Cancelled"],"dispatch":{"acceptUnrouted":false,"onlyRoutes":["backend"],"routeLabelPrefix":"Lorenz:"}}},"pollTicks":1,"assertions":[{"type":"running_count","expected":0}]}'`  
 **Expected:** Not dispatched  
 **Status:** PENDING
 
 ### S-453: No route label + acceptUnrouted=true — eligible
 **Category:** Routing  
 **Invariant:** Unrouted accepted when enabled  
-**What's Being Tested:** No symphony label present  
-**Sandbox Command:** `npx tsx demo/sandbox.ts --inline '{"issues":[{"id":"x","identifier":"X-1","title":"T","state":"Todo","stateType":"unstarted","labels":["bug","feature"],"blockers":[],"priority":2}],"settingsOverrides":{"tracker":{"kind":"memory","endpoint":"memory://test","activeStates":["Todo","In Progress"],"terminalStates":["Done","Cancelled"],"dispatch":{"acceptUnrouted":true,"onlyRoutes":["backend"],"routeLabelPrefix":"Symphony:"}}},"pollTicks":1,"assertions":[{"type":"event_occurred","eventType":"run_started","messageContains":"X-1"}]}'`  
+**What's Being Tested:** No lorenz label present  
+**Sandbox Command:** `npx tsx demo/sandbox.ts --inline '{"issues":[{"id":"x","identifier":"X-1","title":"T","state":"Todo","stateType":"unstarted","labels":["bug","feature"],"blockers":[],"priority":2}],"settingsOverrides":{"tracker":{"kind":"memory","endpoint":"memory://test","activeStates":["Todo","In Progress"],"terminalStates":["Done","Cancelled"],"dispatch":{"acceptUnrouted":true,"onlyRoutes":["backend"],"routeLabelPrefix":"Lorenz:"}}},"pollTicks":1,"assertions":[{"type":"event_occurred","eventType":"run_started","messageContains":"X-1"}]}'`  
 **Expected:** Dispatched (unrouted accepted)  
 **Status:** PENDING
 
@@ -868,7 +868,7 @@ Scenarios are parametrized across these dimensions:
 **Category:** Routing  
 **Invariant:** Unrouted rejected when disabled  
 **What's Being Tested:** Unrouted not accepted  
-**Sandbox Command:** `npx tsx demo/sandbox.ts --inline '{"issues":[{"id":"x","identifier":"X-1","title":"T","state":"Todo","stateType":"unstarted","labels":["bug"],"blockers":[],"priority":2}],"settingsOverrides":{"tracker":{"kind":"memory","endpoint":"memory://test","activeStates":["Todo","In Progress"],"terminalStates":["Done","Cancelled"],"dispatch":{"acceptUnrouted":false,"onlyRoutes":["backend"],"routeLabelPrefix":"Symphony:"}}},"pollTicks":1,"assertions":[{"type":"running_count","expected":0}]}'`  
+**Sandbox Command:** `npx tsx demo/sandbox.ts --inline '{"issues":[{"id":"x","identifier":"X-1","title":"T","state":"Todo","stateType":"unstarted","labels":["bug"],"blockers":[],"priority":2}],"settingsOverrides":{"tracker":{"kind":"memory","endpoint":"memory://test","activeStates":["Todo","In Progress"],"terminalStates":["Done","Cancelled"],"dispatch":{"acceptUnrouted":false,"onlyRoutes":["backend"],"routeLabelPrefix":"Lorenz:"}}},"pollTicks":1,"assertions":[{"type":"running_count","expected":0}]}'`  
 **Expected:** Not dispatched  
 **Status:** PENDING
 
@@ -876,7 +876,7 @@ Scenarios are parametrized across these dimensions:
 **Category:** Routing  
 **Invariant:** Null allowlist → accept all  
 **What's Being Tested:** No filtering when onlyRoutes is null  
-**Sandbox Command:** `npx tsx demo/sandbox.ts --inline '{"issues":[{"id":"x","identifier":"X-1","title":"T","state":"Todo","stateType":"unstarted","labels":["Symphony:anything"],"blockers":[],"priority":2}],"pollTicks":1,"assertions":[{"type":"event_occurred","eventType":"run_started","messageContains":"X-1"}]}'`  
+**Sandbox Command:** `npx tsx demo/sandbox.ts --inline '{"issues":[{"id":"x","identifier":"X-1","title":"T","state":"Todo","stateType":"unstarted","labels":["Lorenz:anything"],"blockers":[],"priority":2}],"pollTicks":1,"assertions":[{"type":"event_occurred","eventType":"run_started","messageContains":"X-1"}]}'`  
 **Expected:** Dispatched (default settings have onlyRoutes=null)  
 **Status:** PENDING
 
@@ -884,7 +884,7 @@ Scenarios are parametrized across these dimensions:
 **Category:** Routing  
 **Invariant:** Empty allowlist → reject all  
 **What's Being Tested:** Empty array blocks everything with a route  
-**Sandbox Command:** `npx tsx demo/sandbox.ts --inline '{"issues":[{"id":"x","identifier":"X-1","title":"T","state":"Todo","stateType":"unstarted","labels":["Symphony:backend"],"blockers":[],"priority":2}],"settingsOverrides":{"tracker":{"kind":"memory","endpoint":"memory://test","activeStates":["Todo","In Progress"],"terminalStates":["Done","Cancelled"],"dispatch":{"acceptUnrouted":true,"onlyRoutes":[],"routeLabelPrefix":"Symphony:"}}},"pollTicks":1,"assertions":[{"type":"running_count","expected":0}]}'`  
+**Sandbox Command:** `npx tsx demo/sandbox.ts --inline '{"issues":[{"id":"x","identifier":"X-1","title":"T","state":"Todo","stateType":"unstarted","labels":["Lorenz:backend"],"blockers":[],"priority":2}],"settingsOverrides":{"tracker":{"kind":"memory","endpoint":"memory://test","activeStates":["Todo","In Progress"],"terminalStates":["Done","Cancelled"],"dispatch":{"acceptUnrouted":true,"onlyRoutes":[],"routeLabelPrefix":"Lorenz:"}}},"pollTicks":1,"assertions":[{"type":"running_count","expected":0}]}'`  
 **Expected:** Not dispatched (empty allowlist rejects)  
 **Status:** PENDING
 
@@ -892,31 +892,31 @@ Scenarios are parametrized across these dimensions:
 **Category:** Routing  
 **Invariant:** Route normalization is case-insensitive  
 **What's Being Tested:** "BACKEND" matches onlyRoutes=["backend"]  
-**Sandbox Command:** `npx tsx demo/sandbox.ts --inline '{"issues":[{"id":"x","identifier":"X-1","title":"T","state":"Todo","stateType":"unstarted","labels":["Symphony:BACKEND"],"blockers":[],"priority":2}],"settingsOverrides":{"tracker":{"kind":"memory","endpoint":"memory://test","activeStates":["Todo","In Progress"],"terminalStates":["Done","Cancelled"],"dispatch":{"acceptUnrouted":false,"onlyRoutes":["backend"],"routeLabelPrefix":"Symphony:"}}},"pollTicks":1,"assertions":[{"type":"event_occurred","eventType":"run_started","messageContains":"X-1"}]}'`  
+**Sandbox Command:** `npx tsx demo/sandbox.ts --inline '{"issues":[{"id":"x","identifier":"X-1","title":"T","state":"Todo","stateType":"unstarted","labels":["Lorenz:BACKEND"],"blockers":[],"priority":2}],"settingsOverrides":{"tracker":{"kind":"memory","endpoint":"memory://test","activeStates":["Todo","In Progress"],"terminalStates":["Done","Cancelled"],"dispatch":{"acceptUnrouted":false,"onlyRoutes":["backend"],"routeLabelPrefix":"Lorenz:"}}},"pollTicks":1,"assertions":[{"type":"event_occurred","eventType":"run_started","messageContains":"X-1"}]}'`  
 **Expected:** Dispatched (case-insensitive)  
 **Status:** PENDING
 
 ### S-458: Case-insensitive prefix matching
 **Category:** Routing  
 **Invariant:** Prefix matching is case-insensitive  
-**What's Being Tested:** "symphony:" prefix matches "Symphony:" config  
-**Sandbox Command:** `npx tsx demo/sandbox.ts --inline '{"issues":[{"id":"x","identifier":"X-1","title":"T","state":"Todo","stateType":"unstarted","labels":["symphony:backend"],"blockers":[],"priority":2}],"settingsOverrides":{"tracker":{"kind":"memory","endpoint":"memory://test","activeStates":["Todo","In Progress"],"terminalStates":["Done","Cancelled"],"dispatch":{"acceptUnrouted":false,"onlyRoutes":["backend"],"routeLabelPrefix":"Symphony:"}}},"pollTicks":1,"assertions":[{"type":"event_occurred","eventType":"run_started","messageContains":"X-1"}]}'`  
+**What's Being Tested:** "lorenz:" prefix matches "Lorenz:" config  
+**Sandbox Command:** `npx tsx demo/sandbox.ts --inline '{"issues":[{"id":"x","identifier":"X-1","title":"T","state":"Todo","stateType":"unstarted","labels":["lorenz:backend"],"blockers":[],"priority":2}],"settingsOverrides":{"tracker":{"kind":"memory","endpoint":"memory://test","activeStates":["Todo","In Progress"],"terminalStates":["Done","Cancelled"],"dispatch":{"acceptUnrouted":false,"onlyRoutes":["backend"],"routeLabelPrefix":"Lorenz:"}}},"pollTicks":1,"assertions":[{"type":"event_occurred","eventType":"run_started","messageContains":"X-1"}]}'`  
 **Expected:** Dispatched  
 **Status:** PENDING
 
 ### S-459: Route label with whitespace after prefix — trimmed
 **Category:** Routing  
 **Invariant:** Leading/trailing whitespace stripped  
-**What's Being Tested:** "Symphony:  backend  " normalizes to "backend"  
-**Sandbox Command:** `npx tsx demo/sandbox.ts --inline '{"issues":[{"id":"x","identifier":"X-1","title":"T","state":"Todo","stateType":"unstarted","labels":["Symphony:  backend  "],"blockers":[],"priority":2}],"settingsOverrides":{"tracker":{"kind":"memory","endpoint":"memory://test","activeStates":["Todo","In Progress"],"terminalStates":["Done","Cancelled"],"dispatch":{"acceptUnrouted":false,"onlyRoutes":["backend"],"routeLabelPrefix":"Symphony:"}}},"pollTicks":1,"assertions":[{"type":"event_occurred","eventType":"run_started","messageContains":"X-1"}]}'`  
+**What's Being Tested:** "Lorenz:  backend  " normalizes to "backend"  
+**Sandbox Command:** `npx tsx demo/sandbox.ts --inline '{"issues":[{"id":"x","identifier":"X-1","title":"T","state":"Todo","stateType":"unstarted","labels":["Lorenz:  backend  "],"blockers":[],"priority":2}],"settingsOverrides":{"tracker":{"kind":"memory","endpoint":"memory://test","activeStates":["Todo","In Progress"],"terminalStates":["Done","Cancelled"],"dispatch":{"acceptUnrouted":false,"onlyRoutes":["backend"],"routeLabelPrefix":"Lorenz:"}}},"pollTicks":1,"assertions":[{"type":"event_occurred","eventType":"run_started","messageContains":"X-1"}]}'`  
 **Expected:** Dispatched (whitespace trimmed)  
 **Status:** PENDING
 
 ### S-460: Route label whitespace-only after prefix — routed-but-invalid
 **Category:** Routing  
 **Invariant:** Whitespace-only name after prefix → not valid  
-**What's Being Tested:** "Symphony:   " has route label but empty name  
-**Sandbox Command:** `npx tsx demo/sandbox.ts --inline '{"issues":[{"id":"x","identifier":"X-1","title":"T","state":"Todo","stateType":"unstarted","labels":["Symphony:   "],"blockers":[],"priority":2}],"settingsOverrides":{"tracker":{"kind":"memory","endpoint":"memory://test","activeStates":["Todo","In Progress"],"terminalStates":["Done","Cancelled"],"dispatch":{"acceptUnrouted":true,"onlyRoutes":["backend"],"routeLabelPrefix":"Symphony:"}}},"pollTicks":1,"assertions":[{"type":"running_count","expected":0}]}'`  
+**What's Being Tested:** "Lorenz:   " has route label but empty name  
+**Sandbox Command:** `npx tsx demo/sandbox.ts --inline '{"issues":[{"id":"x","identifier":"X-1","title":"T","state":"Todo","stateType":"unstarted","labels":["Lorenz:   "],"blockers":[],"priority":2}],"settingsOverrides":{"tracker":{"kind":"memory","endpoint":"memory://test","activeStates":["Todo","In Progress"],"terminalStates":["Done","Cancelled"],"dispatch":{"acceptUnrouted":true,"onlyRoutes":["backend"],"routeLabelPrefix":"Lorenz:"}}},"pollTicks":1,"assertions":[{"type":"running_count","expected":0}]}'`  
 **Expected:** Not dispatched (routed-but-invalid)  
 **Status:** PENDING
 
@@ -924,7 +924,7 @@ Scenarios are parametrized across these dimensions:
 **Category:** Routing  
 **Invariant:** Any matching route suffices  
 **What's Being Tested:** Two route labels, one matches  
-**Sandbox Command:** `npx tsx demo/sandbox.ts --inline '{"issues":[{"id":"x","identifier":"X-1","title":"T","state":"Todo","stateType":"unstarted","labels":["Symphony:frontend","Symphony:backend"],"blockers":[],"priority":2}],"settingsOverrides":{"tracker":{"kind":"memory","endpoint":"memory://test","activeStates":["Todo","In Progress"],"terminalStates":["Done","Cancelled"],"dispatch":{"acceptUnrouted":false,"onlyRoutes":["backend"],"routeLabelPrefix":"Symphony:"}}},"pollTicks":1,"assertions":[{"type":"event_occurred","eventType":"run_started","messageContains":"X-1"}]}'`  
+**Sandbox Command:** `npx tsx demo/sandbox.ts --inline '{"issues":[{"id":"x","identifier":"X-1","title":"T","state":"Todo","stateType":"unstarted","labels":["Lorenz:frontend","Lorenz:backend"],"blockers":[],"priority":2}],"settingsOverrides":{"tracker":{"kind":"memory","endpoint":"memory://test","activeStates":["Todo","In Progress"],"terminalStates":["Done","Cancelled"],"dispatch":{"acceptUnrouted":false,"onlyRoutes":["backend"],"routeLabelPrefix":"Lorenz:"}}},"pollTicks":1,"assertions":[{"type":"event_occurred","eventType":"run_started","messageContains":"X-1"}]}'`  
 **Expected:** Dispatched (second label matches)  
 **Status:** PENDING
 
@@ -932,23 +932,23 @@ Scenarios are parametrized across these dimensions:
 **Category:** Routing  
 **Invariant:** Assignment check before routing  
 **What's Being Tested:** Even with matching route, false assignment blocks  
-**Sandbox Command:** `npx tsx demo/sandbox.ts --inline '{"issues":[{"id":"x","identifier":"X-1","title":"T","state":"Todo","stateType":"unstarted","labels":["Symphony:backend"],"blockers":[],"priority":2,"assignedToWorker":false}],"settingsOverrides":{"tracker":{"kind":"memory","endpoint":"memory://test","activeStates":["Todo","In Progress"],"terminalStates":["Done","Cancelled"],"dispatch":{"acceptUnrouted":true,"onlyRoutes":["backend"],"routeLabelPrefix":"Symphony:"}}},"pollTicks":1,"assertions":[{"type":"running_count","expected":0}]}'`  
+**Sandbox Command:** `npx tsx demo/sandbox.ts --inline '{"issues":[{"id":"x","identifier":"X-1","title":"T","state":"Todo","stateType":"unstarted","labels":["Lorenz:backend"],"blockers":[],"priority":2,"assignedToWorker":false}],"settingsOverrides":{"tracker":{"kind":"memory","endpoint":"memory://test","activeStates":["Todo","In Progress"],"terminalStates":["Done","Cancelled"],"dispatch":{"acceptUnrouted":true,"onlyRoutes":["backend"],"routeLabelPrefix":"Lorenz:"}}},"pollTicks":1,"assertions":[{"type":"running_count","expected":0}]}'`  
 **Expected:** Not dispatched (assignment blocks)  
 **Status:** PENDING
 
-### S-463: Route label prefix-only "Symphony:" with nothing after
+### S-463: Route label prefix-only "Lorenz:" with nothing after
 **Category:** Routing  
 **Invariant:** Empty name after prefix → not valid  
 **What's Being Tested:** Label is exactly the prefix  
-**Sandbox Command:** `npx tsx demo/sandbox.ts --inline '{"issues":[{"id":"x","identifier":"X-1","title":"T","state":"Todo","stateType":"unstarted","labels":["Symphony:"],"blockers":[],"priority":2}],"settingsOverrides":{"tracker":{"kind":"memory","endpoint":"memory://test","activeStates":["Todo","In Progress"],"terminalStates":["Done","Cancelled"],"dispatch":{"acceptUnrouted":true,"onlyRoutes":["backend"],"routeLabelPrefix":"Symphony:"}}},"pollTicks":1,"assertions":[{"type":"running_count","expected":0}]}'`  
+**Sandbox Command:** `npx tsx demo/sandbox.ts --inline '{"issues":[{"id":"x","identifier":"X-1","title":"T","state":"Todo","stateType":"unstarted","labels":["Lorenz:"],"blockers":[],"priority":2}],"settingsOverrides":{"tracker":{"kind":"memory","endpoint":"memory://test","activeStates":["Todo","In Progress"],"terminalStates":["Done","Cancelled"],"dispatch":{"acceptUnrouted":true,"onlyRoutes":["backend"],"routeLabelPrefix":"Lorenz:"}}},"pollTicks":1,"assertions":[{"type":"running_count","expected":0}]}'`  
 **Expected:** Not dispatched (empty route name)  
 **Status:** PENDING
 
 ### S-464: Mixed case allowlist entry matches lowercase label
 **Category:** Routing  
 **Invariant:** Allowlist entries normalized  
-**What's Being Tested:** onlyRoutes=["Backend"] matches label "symphony:backend"  
-**Sandbox Command:** `npx tsx demo/sandbox.ts --inline '{"issues":[{"id":"x","identifier":"X-1","title":"T","state":"Todo","stateType":"unstarted","labels":["Symphony:backend"],"blockers":[],"priority":2}],"settingsOverrides":{"tracker":{"kind":"memory","endpoint":"memory://test","activeStates":["Todo","In Progress"],"terminalStates":["Done","Cancelled"],"dispatch":{"acceptUnrouted":false,"onlyRoutes":["Backend"],"routeLabelPrefix":"Symphony:"}}},"pollTicks":1,"assertions":[{"type":"event_occurred","eventType":"run_started","messageContains":"X-1"}]}'`  
+**What's Being Tested:** onlyRoutes=["Backend"] matches label "lorenz:backend"  
+**Sandbox Command:** `npx tsx demo/sandbox.ts --inline '{"issues":[{"id":"x","identifier":"X-1","title":"T","state":"Todo","stateType":"unstarted","labels":["Lorenz:backend"],"blockers":[],"priority":2}],"settingsOverrides":{"tracker":{"kind":"memory","endpoint":"memory://test","activeStates":["Todo","In Progress"],"terminalStates":["Done","Cancelled"],"dispatch":{"acceptUnrouted":false,"onlyRoutes":["Backend"],"routeLabelPrefix":"Lorenz:"}}},"pollTicks":1,"assertions":[{"type":"event_occurred","eventType":"run_started","messageContains":"X-1"}]}'`  
 **Expected:** Dispatched (both sides normalized)  
 **Status:** PENDING
 
@@ -956,7 +956,7 @@ Scenarios are parametrized across these dimensions:
 **Category:** Routing  
 **Invariant:** Route mismatch → stop worker  
 **What's Being Tested:** Labels changed mid-run causes reconciliation  
-**Sandbox Command:** `npx tsx demo/sandbox.ts --inline '{"issues":[{"id":"x","identifier":"X-1","title":"T","state":"Todo","stateType":"unstarted","labels":["Symphony:backend"],"blockers":[],"priority":2}],"settingsOverrides":{"tracker":{"kind":"memory","endpoint":"memory://test","activeStates":["Todo","In Progress"],"terminalStates":["Done","Cancelled"],"dispatch":{"acceptUnrouted":false,"onlyRoutes":["backend"],"routeLabelPrefix":"Symphony:"}},"agent":{"maxConcurrentAgents":5}},"runnerConfig":{"defaultBehavior":{"turnCount":5,"latencyPerTurnMs":50}},"pollTicks":3,"tickDelayMs":100,"timedMutations":[{"afterMs":50,"mutate":{"type":"change_labels","issueId":"x","labels":["Symphony:frontend"]}}],"assertions":[{"type":"event_occurred","eventType":"run_reconciled","messageContains":"X-1"}]}'`  
+**Sandbox Command:** `npx tsx demo/sandbox.ts --inline '{"issues":[{"id":"x","identifier":"X-1","title":"T","state":"Todo","stateType":"unstarted","labels":["Lorenz:backend"],"blockers":[],"priority":2}],"settingsOverrides":{"tracker":{"kind":"memory","endpoint":"memory://test","activeStates":["Todo","In Progress"],"terminalStates":["Done","Cancelled"],"dispatch":{"acceptUnrouted":false,"onlyRoutes":["backend"],"routeLabelPrefix":"Lorenz:"}},"agent":{"maxConcurrentAgents":5}},"runnerConfig":{"defaultBehavior":{"turnCount":5,"latencyPerTurnMs":50}},"pollTicks":3,"tickDelayMs":100,"timedMutations":[{"afterMs":50,"mutate":{"type":"change_labels","issueId":"x","labels":["Lorenz:frontend"]}}],"assertions":[{"type":"event_occurred","eventType":"run_reconciled","messageContains":"X-1"}]}'`  
 **Expected:** Worker stopped after route label changes to non-matching  
 **Status:** PENDING
 
@@ -1576,7 +1576,7 @@ Scenarios are parametrized across these dimensions:
 **Category:** State Transitions  
 **Invariant:** Route mismatch → stop  
 **What's Being Tested:** Labels changed to different route mid-run  
-**Sandbox Command:** `npx tsx demo/sandbox.ts --inline '{"issues":[{"id":"x","identifier":"X-1","title":"T","state":"Todo","stateType":"unstarted","labels":["Symphony:backend"],"blockers":[],"priority":2}],"settingsOverrides":{"tracker":{"kind":"memory","endpoint":"memory://test","activeStates":["Todo","In Progress"],"terminalStates":["Done","Cancelled"],"dispatch":{"acceptUnrouted":false,"onlyRoutes":["backend"],"routeLabelPrefix":"Symphony:"}},"agent":{"maxConcurrentAgents":5}},"runnerConfig":{"defaultBehavior":{"turnCount":5,"latencyPerTurnMs":100}},"pollTicks":3,"tickDelayMs":200,"timedMutations":[{"afterMs":150,"mutate":{"type":"change_labels","issueId":"x","labels":["Symphony:frontend"]}}],"assertions":[{"type":"event_occurred","eventType":"run_reconciled","messageContains":"X-1"}]}'`  
+**Sandbox Command:** `npx tsx demo/sandbox.ts --inline '{"issues":[{"id":"x","identifier":"X-1","title":"T","state":"Todo","stateType":"unstarted","labels":["Lorenz:backend"],"blockers":[],"priority":2}],"settingsOverrides":{"tracker":{"kind":"memory","endpoint":"memory://test","activeStates":["Todo","In Progress"],"terminalStates":["Done","Cancelled"],"dispatch":{"acceptUnrouted":false,"onlyRoutes":["backend"],"routeLabelPrefix":"Lorenz:"}},"agent":{"maxConcurrentAgents":5}},"runnerConfig":{"defaultBehavior":{"turnCount":5,"latencyPerTurnMs":100}},"pollTicks":3,"tickDelayMs":200,"timedMutations":[{"afterMs":150,"mutate":{"type":"change_labels","issueId":"x","labels":["Lorenz:frontend"]}}],"assertions":[{"type":"event_occurred","eventType":"run_reconciled","messageContains":"X-1"}]}'`  
 **Expected:** Worker stopped after route mismatch  
 **Status:** PENDING
 
