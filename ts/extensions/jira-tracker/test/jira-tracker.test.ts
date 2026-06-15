@@ -61,6 +61,7 @@ test("Jira REST client searches scoped candidates and normalizes Jira fields", a
   assert.equal(issues[0]?.description, "Fix the thing");
   assert.equal(issues[0]?.assignedToWorker, true);
   assert.equal(issues[0]?.url, "https://example.atlassian.net/browse/ENG-1");
+  assert.equal(calls[0]?.url, "https://example.atlassian.net/rest/api/3/search/jql");
   assert.match(String(calls[0]?.body.jql), /project in \("ENG"\)/);
   assert.match(String(calls[0]?.body.jql), /status in \("To Do"\)/);
   assert.match(String(calls[0]?.body.jql), /assignee = "account-1"/);
@@ -69,6 +70,25 @@ test("Jira REST client searches scoped candidates and normalizes Jira fields", a
     calls[0]?.headers.authorization,
     `Basic ${Buffer.from("bot@example.com:jira-token").toString("base64")}`,
   );
+});
+
+test("Jira REST client pages /search/jql via nextPageToken until exhausted", async () => {
+  const calls: FetchCall[] = [];
+  const client = new JiraClient(jiraSettings(), {
+    fetchImpl: fetchSequence(
+      calls,
+      jsonResponse({ issues: [jiraIssue()], nextPageToken: "page-2" }),
+      jsonResponse({ issues: [jiraIssue()] }),
+    ),
+  });
+
+  const issues = await client.searchIssues('project in ("ENG")');
+
+  assert.equal(issues.length, 2);
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0]?.url, "https://example.atlassian.net/rest/api/3/search/jql");
+  assert.equal(calls[0]?.body.nextPageToken, undefined);
+  assert.equal(calls[1]?.body.nextPageToken, "page-2");
 });
 
 test("Jira REST client updates status via the matching transition", async () => {

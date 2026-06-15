@@ -136,16 +136,19 @@ export class JiraClient implements RuntimeTrackerClient {
   }
 
   async searchIssues(jql: string, maxResults = 50): Promise<Issue[]> {
-    let startAt = 0;
     const out: Issue[] = [];
+    // Jira Cloud removed the legacy `/rest/api/3/search` endpoint; the enhanced
+    // `/search/jql` endpoint replaces `startAt`/`total` offset paging with an
+    // opaque `nextPageToken` and omits a total count (pages run until no token).
+    let nextPageToken: string | undefined;
     for (;;) {
-      const page = await this.request<Record<string, unknown>>("/rest/api/3/search", {
+      const page = await this.request<Record<string, unknown>>("/rest/api/3/search/jql", {
         method: "POST",
         body: JSON.stringify({
           jql,
-          startAt,
           maxResults,
           fields: JIRA_FIELDS,
+          ...(nextPageToken !== undefined ? { nextPageToken } : {}),
         }),
       });
       const nodes = Array.isArray(page.issues) ? page.issues : [];
@@ -153,9 +156,9 @@ export class JiraClient implements RuntimeTrackerClient {
         if (isRecord(node))
           out.push(normalizeJiraIssue(node, assigneeFilterValue(this.settings), this.baseUrl()));
       }
-      const total = typeof page.total === "number" ? page.total : out.length;
-      if (nodes.length === 0 || startAt + nodes.length >= total) return out;
-      startAt += nodes.length;
+      const token = typeof page.nextPageToken === "string" ? page.nextPageToken : undefined;
+      if (nodes.length === 0 || token === undefined) return out;
+      nextPageToken = token;
     }
   }
 
