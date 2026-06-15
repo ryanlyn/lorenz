@@ -123,12 +123,6 @@ export const acpExecutorProvider: AgentExecutorProvider = {
     }
   },
   createExecutor: (kind) => new Executor(kind),
-  skillsDir(kind, config) {
-    // Claude reads skills from `.claude/skills`; Codex and other bridges from `.codex/skills`.
-    const isClaudeBridge =
-      kind === "claude" || isClaudeCompatibleBridgeCommand(acpAgentOptions(config).bridgeCommand);
-    return isClaudeBridge ? ".claude/skills" : ".codex/skills";
-  },
 };
 
 export class Executor implements AgentExecutor {

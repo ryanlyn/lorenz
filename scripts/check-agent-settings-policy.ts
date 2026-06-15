@@ -75,9 +75,8 @@ function isAgentSettingsPath(filePath: string): boolean {
   const normalizedPath = filePath.split(path.sep).join("/");
 
   if (
-    normalizedPath === ".claude/skills" ||
-    normalizedPath.startsWith(".claude/skills/") ||
-    normalizedPath.startsWith(".codex/skills/")
+    normalizedPath === ".lorenz/skills" ||
+    normalizedPath.startsWith(".lorenz/skills/")
   ) {
     return false;
   }

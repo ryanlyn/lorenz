@@ -43,13 +43,6 @@ export interface AgentExecutorProvider {
   validateAgent?(kind: AgentKind, config: AgentConfig, settings: Settings): void;
   /** Build the executor that drives sessions for the given agent kind. */
   createExecutor(kind: AgentKind, settings: Settings): AgentExecutor | Promise<AgentExecutor>;
-  /**
-   * Workspace-relative directory this executor's agent reads skills from (e.g. `.codex/skills`
-   * for Codex, `.claude/skills` for Claude). The composition root overlays the resolved
-   * `agent.skills` (plus mounted tool packs' bundled skills) into this directory before launch.
-   * Defaults to `.codex/skills` when a provider does not implement it.
-   */
-  skillsDir?(kind: AgentKind, config: AgentConfig): string;
 }
 
 /** Lookup table of {@link AgentExecutorProvider}s keyed by their `executor` selector. */

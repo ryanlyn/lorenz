@@ -405,9 +405,9 @@ export interface AgentSettings {
   ensembleSize: number;
   /**
    * Local skill directories overlaid into each prepared workspace before the agent process
-   * starts. Entries are absolute paths resolved from workflow configuration; the active
-   * executor decides the in-workspace destination (e.g. `.codex/skills` or `.claude/skills`).
-   * Mounted tool packs contribute their bundled skills on top of this list at dispatch time.
+   * starts. Entries are absolute paths resolved from workflow configuration; skills are
+   * copied to `.lorenz/skills/` with a `.gitignore`. Mounted tool packs contribute their
+   * bundled skills on top of this list at dispatch time.
    */
   skills: string[];
 }

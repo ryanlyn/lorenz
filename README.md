@@ -232,8 +232,8 @@ agent:
   max_turns: 20 # default: 20
   max_retry_backoff_ms: 300000 # default: 300000
   ensemble_size: 1 # default: 1
-  skills: # skill directories overlaid into each workspace before the agent starts
-    - ./.codex/skills/lorenz-land # one entry per skill directory
+  skills: # skill directories copied to .lorenz/skills/ before the agent starts
+    - ./skills/lorenz-land # one entry per skill directory
 
 agents:
   turn_timeout_ms: 3600000 # default: 3600000
@@ -686,7 +686,7 @@ Workspace tests render representative Liquid constructs: conditionals, null fall
 
 ## Skills
 
-The `.codex/skills/` directory in this repo contains orchestration skills referenced by the example
+The `skills/` directory in this repo contains orchestration skills referenced by the example
 workflow files:
 
 - `lorenz-commit` produces clean, logical commits.
@@ -695,17 +695,20 @@ workflow files:
 - `lorenz-land` monitors and merges approved PRs.
 - `lorenz-debug` investigates stuck runs and execution failures.
 
-Lorenz overlays skills into each prepared workspace before the agent starts, copying each
-configured directory whole into the agent's skills directory - `.codex/skills/` for Codex,
-`.claude/skills/` for Claude (the active executor chooses). Skills come from two places:
+Lorenz copies skills into `.lorenz/skills/` in each prepared workspace before the agent starts.
+A `.gitignore` containing `*` is written alongside the copied skills so they are never committed.
+Skills come from two places:
 
 - **`agent.skills`** - a list of skill directories you maintain. Each entry is one skill directory
-  (e.g. `./.codex/skills/lorenz-land`) and is copied to `<skills>/<directory-name>`. Relative
+  (e.g. `./skills/lorenz-land`) and is copied to `.lorenz/skills/<directory-name>`. Relative
   paths resolve from the workflow file directory.
 - **Tool packs** - a mounted tool pack can bundle the skill that documents it, so the skill ships
   automatically when the tool is in use. The Linear pack bundles `lorenz-linear` (raw Linear
   access via the injected `linear_graphql` tool for Codex or the `/mcp` endpoint for Claude), so
   enabling Linear tools overlays that skill without listing it under `agent.skills`.
+
+It is up to the user to reference `.lorenz/skills` in their WORKFLOW.md (or the agent's
+equivalent configuration) so the agent knows where to find the overlaid skills at runtime.
 
 ## Observability
 

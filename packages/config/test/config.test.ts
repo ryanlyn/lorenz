@@ -422,8 +422,8 @@ test("agent skills resolve, expand, and dedupe", () => {
     {
       agent: {
         skills: [
-          "./.codex/skills/lorenz-linear",
-          "./.codex/skills/lorenz-linear",
+          "./skills/lorenz-linear",
+          "./skills/lorenz-linear",
           "~/shared-skill",
           "$SKILL_SOURCE",
         ],
@@ -434,7 +434,7 @@ test("agent skills resolve, expand, and dedupe", () => {
   );
 
   assert.deepEqual(settings.agent.skills, [
-    path.join(configDir, ".codex", "skills", "lorenz-linear"),
+    path.join(configDir, "skills", "lorenz-linear"),
     "/home/tester/shared-skill",
     "/opt/skill-source",
   ]);
@@ -458,7 +458,7 @@ test("loadWorkflow resolves agent skills relative to the workflow file", async (
     `---
 agent:
   skills:
-    - ../.codex/skills/lorenz-land
+    - ../skills/lorenz-land
 ---
 
 Do work.
@@ -468,7 +468,7 @@ Do work.
   const workflow = await loadWorkflow(workflowPath);
 
   assert.deepEqual(workflow.settings.agent.skills, [
-    path.join(root, ".codex", "skills", "lorenz-land"),
+    path.join(root, "skills", "lorenz-land"),
   ]);
 });
 

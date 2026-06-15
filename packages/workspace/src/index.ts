@@ -96,7 +96,7 @@ export interface WorkspaceCreateOptions {
 export interface WorkspaceSkillOverlay {
   /** Absolute skill directories; each is copied whole to `<destDir>/<basename>`. */
   sources: string[];
-  /** Workspace-relative destination, e.g. `.codex/skills` or `.claude/skills`. */
+  /** Workspace-relative destination, e.g. `.lorenz/skills`. */
   destDir: string;
 }
 
@@ -241,7 +241,7 @@ export async function syncWorkspaceSkills(
   await syncLocalWorkspaceSkills(workspace, plans, destSegments);
 }
 
-/** Split an executor-provided destination (e.g. `.codex/skills`) into safe path segments. */
+/** Split a destination path (e.g. `.lorenz/skills`) into safe path segments. */
 function skillDestinationSegments(destDir: string): string[] {
   const segments = destDir.split(/[\\/]+/).filter((segment) => segment !== "");
   if (segments.length === 0 || segments.some((segment) => segment === "." || segment === ".."))
@@ -723,6 +723,8 @@ async function syncLocalWorkspaceSkills(
       recursive: true,
     });
   }
+  const gitignorePath = path.join(skillsRoot, ".gitignore");
+  await fs.writeFile(gitignorePath, "*\n");
 }
 
 async function syncRemoteWorkspaceSkills(

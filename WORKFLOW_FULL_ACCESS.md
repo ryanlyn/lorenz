@@ -123,7 +123,7 @@ The agent should be able to talk to Linear, either via a configured Linear MCP s
 - `simplify`: review changed code for reuse, quality, and efficiency before committing.
 - `lorenz-push`: keep remote branch current and publish updates.
 - `lorenz-pull`: keep branch updated with latest `origin/main` before handoff.
-- `lorenz-land`: when ticket reaches `Merging`, explicitly open and follow `.codex/skills/lorenz-land/SKILL.md`, which includes the `land` loop.
+- `lorenz-land`: when ticket reaches `Merging`, explicitly open and follow `.lorenz/skills/lorenz-land/SKILL.md`, which includes the `land` loop.
 
 ## Status map
 
@@ -148,7 +148,7 @@ The agent should be able to talk to Linear, either via a configured Linear MCP s
    - `In Progress` -> continue execution flow from current scratchpad comment.
    - `Agent Review` -> run the autonomous review protocol.
    - `Human Review` -> wait and poll for decision/review updates.
-   - `Merging` -> on entry, open and follow `.codex/skills/lorenz-land/SKILL.md`; do not call `gh pr merge` directly.
+   - `Merging` -> on entry, open and follow `.lorenz/skills/lorenz-land/SKILL.md`; do not call `gh pr merge` directly.
    - `Rework` -> run rework flow.
    - `Done` -> do nothing and shut down.
 4. Check whether a PR already exists for the current branch and whether it is closed.
@@ -308,7 +308,7 @@ Use this only when completion is blocked by missing required tools or missing au
 
 ## Step 5: Merging
 
-1. When the issue is in `Merging`, open and follow `.codex/skills/lorenz-land/SKILL.md`, then run the `lorenz-land` skill in a loop until the PR is merged. Do not call `gh pr merge` directly.
+1. When the issue is in `Merging`, open and follow `.lorenz/skills/lorenz-land/SKILL.md`, then run the `lorenz-land` skill in a loop until the PR is merged. Do not call `gh pr merge` directly.
 2. After merge is complete, move the issue to `Done`.
 
 ## Step 6: Rework handling

@@ -40,8 +40,8 @@ function makeSettings(
   } as unknown as Settings;
 }
 
-/** A `.codex/skills` overlay from the given source directories. */
-function skillOverlay(sources: string[], destDir = ".codex/skills"): WorkspaceSkillOverlay {
+/** A `.lorenz/skills` overlay from the given source directories. */
+function skillOverlay(sources: string[], destDir = ".lorenz/skills"): WorkspaceSkillOverlay {
   return { sources, destDir };
 }
 
@@ -260,7 +260,7 @@ test("createWorkspaceForIssue — overlays configured skill directories after af
   await fs.writeFile(path.join(skill, "scripts", "land.sh"), "echo land\n");
   const settings = makeSettings(root, {
     afterCreate:
-      "mkdir -p .codex/skills/lorenz-land && printf hook > .codex/skills/lorenz-land/SKILL.md",
+      "mkdir -p .lorenz/skills/lorenz-land && printf hook > .lorenz/skills/lorenz-land/SKILL.md",
   });
 
   const ws = await createWorkspaceForIssue(settings, sampleIssue, {
@@ -268,19 +268,19 @@ test("createWorkspaceForIssue — overlays configured skill directories after af
   });
 
   assert.equal(
-    await fs.readFile(path.join(ws, ".codex", "skills", "lorenz-land", "SKILL.md"), "utf8"),
+    await fs.readFile(path.join(ws, ".lorenz", "skills", "lorenz-land", "SKILL.md"), "utf8"),
     "from source\n",
   );
   assert.equal(
     await fs.readFile(
-      path.join(ws, ".codex", "skills", "lorenz-land", "scripts", "land.sh"),
+      path.join(ws, ".lorenz", "skills", "lorenz-land", "scripts", "land.sh"),
       "utf8",
     ),
     "echo land\n",
   );
 });
 
-test("createWorkspaceForIssue — honors the executor's skills destination", async () => {
+test("createWorkspaceForIssue — writes .gitignore in skills destination", async () => {
   const root = await tempDir("ws-create-skills-dest");
   const sources = await tempDir("ws-skill-sources-dest");
   const skill = path.join(sources, "lorenz-linear");
@@ -289,14 +289,17 @@ test("createWorkspaceForIssue — honors the executor's skills destination", asy
   const settings = makeSettings(root);
 
   const ws = await createWorkspaceForIssue(settings, sampleIssue, {
-    skillOverlay: skillOverlay([skill], ".claude/skills"),
+    skillOverlay: skillOverlay([skill]),
   });
 
   assert.equal(
-    await fs.readFile(path.join(ws, ".claude", "skills", "lorenz-linear", "SKILL.md"), "utf8"),
+    await fs.readFile(path.join(ws, ".lorenz", "skills", "lorenz-linear", "SKILL.md"), "utf8"),
     "linear\n",
   );
-  assert.equal(await fileExists(path.join(ws, ".codex", "skills")), false);
+  assert.equal(
+    await fs.readFile(path.join(ws, ".lorenz", "skills", ".gitignore"), "utf8"),
+    "*\n",
+  );
 });
 
 test("createWorkspaceForIssue — refreshes skills when reusing an existing workspace", async () => {
@@ -314,7 +317,7 @@ test("createWorkspaceForIssue — refreshes skills when reusing an existing work
 
   assert.equal(second, first);
   assert.equal(
-    await fs.readFile(path.join(first, ".codex", "skills", "lorenz-push", "SKILL.md"), "utf8"),
+    await fs.readFile(path.join(first, ".lorenz", "skills", "lorenz-push", "SKILL.md"), "utf8"),
     "second\n",
   );
 });
@@ -333,12 +336,12 @@ test("createWorkspaceForIssue — copies the whole skill directory under its bas
   });
 
   assert.equal(
-    await fs.readFile(path.join(ws, ".codex", "skills", "lorenz-linear", "SKILL.md"), "utf8"),
+    await fs.readFile(path.join(ws, ".lorenz", "skills", "lorenz-linear", "SKILL.md"), "utf8"),
     "linear\n",
   );
   assert.equal(
     await fs.readFile(
-      path.join(ws, ".codex", "skills", "lorenz-linear", "scripts", "run.sh"),
+      path.join(ws, ".lorenz", "skills", "lorenz-linear", "scripts", "run.sh"),
       "utf8",
     ),
     "echo run\n",
@@ -368,7 +371,7 @@ test("createWorkspaceForIssue - rejects symlinked skill overlay directories", as
   await fs.mkdir(skill, { recursive: true });
   await fs.writeFile(path.join(skill, "SKILL.md"), "land\n");
   await fs.mkdir(workspace, { recursive: true });
-  await fs.symlink(outside, path.join(workspace, ".codex"));
+  await fs.symlink(outside, path.join(workspace, ".lorenz"));
   const settings = makeSettings(root);
 
   await assert.rejects(
@@ -386,8 +389,8 @@ test("createWorkspaceForIssue - rejects symlinked skill overlay targets", async 
   const workspace = path.join(await fs.realpath(root), safeIdentifier(sampleIssue.identifier));
   await fs.mkdir(skill, { recursive: true });
   await fs.writeFile(path.join(skill, "SKILL.md"), "land\n");
-  await fs.mkdir(path.join(workspace, ".codex", "skills"), { recursive: true });
-  await fs.symlink(outside, path.join(workspace, ".codex", "skills", "lorenz-land"));
+  await fs.mkdir(path.join(workspace, ".lorenz", "skills"), { recursive: true });
+  await fs.symlink(outside, path.join(workspace, ".lorenz", "skills", "lorenz-land"));
   const settings = makeSettings(root);
 
   await assert.rejects(
@@ -404,8 +407,8 @@ test("createWorkspaceForIssue - rejects skill target symlinks that point to the 
   const workspace = path.join(await fs.realpath(root), safeIdentifier(sampleIssue.identifier));
   await fs.mkdir(skill, { recursive: true });
   await fs.writeFile(path.join(skill, "SKILL.md"), "land\n");
-  await fs.mkdir(path.join(workspace, ".codex", "skills"), { recursive: true });
-  await fs.symlink(skill, path.join(workspace, ".codex", "skills", "lorenz-land"));
+  await fs.mkdir(path.join(workspace, ".lorenz", "skills"), { recursive: true });
+  await fs.symlink(skill, path.join(workspace, ".lorenz", "skills", "lorenz-land"));
   const settings = makeSettings(root);
 
   await assert.rejects(
@@ -439,15 +442,15 @@ test("createWorkspaceForIssue - replaces skill targets before refreshing", async
   const workspace = path.join(await fs.realpath(root), safeIdentifier(sampleIssue.identifier));
   await fs.mkdir(path.join(skill, "scripts"), { recursive: true });
   await fs.writeFile(path.join(skill, "scripts", "land.sh"), "echo land\n");
-  await fs.mkdir(path.join(workspace, ".codex", "skills", "lorenz-land"), { recursive: true });
-  await fs.symlink(outside, path.join(workspace, ".codex", "skills", "lorenz-land", "scripts"));
+  await fs.mkdir(path.join(workspace, ".lorenz", "skills", "lorenz-land"), { recursive: true });
+  await fs.symlink(outside, path.join(workspace, ".lorenz", "skills", "lorenz-land", "scripts"));
   const settings = makeSettings(root);
 
   const ws = await createWorkspaceForIssue(settings, sampleIssue, {
     skillOverlay: skillOverlay([skill]),
   });
 
-  const scriptsPath = path.join(ws, ".codex", "skills", "lorenz-land", "scripts");
+  const scriptsPath = path.join(ws, ".lorenz", "skills", "lorenz-land", "scripts");
   assert.equal((await fs.lstat(scriptsPath)).isSymbolicLink(), false);
   assert.equal(await fs.readFile(path.join(scriptsPath, "land.sh"), "utf8"), "echo land\n");
   assert.equal(await fileExists(path.join(outside, "land.sh")), false);
@@ -462,8 +465,8 @@ test("syncWorkspaceSkills - replaces remote skill targets before extracting", as
   const skill = path.join(sources, "lorenz-land");
   await fs.mkdir(path.join(skill, "scripts"), { recursive: true });
   await fs.writeFile(path.join(skill, "scripts", "land.sh"), "echo land\n");
-  await fs.mkdir(path.join(workspace, ".codex", "skills", "lorenz-land"), { recursive: true });
-  await fs.symlink(outside, path.join(workspace, ".codex", "skills", "lorenz-land", "scripts"));
+  await fs.mkdir(path.join(workspace, ".lorenz", "skills", "lorenz-land"), { recursive: true });
+  await fs.symlink(outside, path.join(workspace, ".lorenz", "skills", "lorenz-land", "scripts"));
   await installFakeSsh(
     root,
     trace,
@@ -475,7 +478,7 @@ eval "$last_arg"
 
   await syncWorkspaceSkills(workspace, skillOverlay([skill]), "localhost", { timeoutMs: 5_000 });
 
-  const scriptsPath = path.join(workspace, ".codex", "skills", "lorenz-land", "scripts");
+  const scriptsPath = path.join(workspace, ".lorenz", "skills", "lorenz-land", "scripts");
   assert.equal((await fs.lstat(scriptsPath)).isSymbolicLink(), false);
   assert.equal(await fs.readFile(path.join(scriptsPath, "land.sh"), "utf8"), "echo land\n");
   assert.equal(await fileExists(path.join(outside, "land.sh")), false);
@@ -501,7 +504,7 @@ eval "$last_arg"
   await syncWorkspaceSkills(workspace, skillOverlay([skill]), "localhost", { timeoutMs: 5_000 });
 
   assert.equal(
-    await fs.readFile(path.join(workspace, ".codex", "skills", "-team-skill", "SKILL.md"), "utf8"),
+    await fs.readFile(path.join(workspace, ".lorenz", "skills", "-team-skill", "SKILL.md"), "utf8"),
     "team\n",
   );
 });
@@ -510,7 +513,7 @@ test("syncWorkspaceSkills - archives overlapping remote skill sources before del
   const root = await tempDir("ws-remote-skill-overlap");
   const trace = path.join(root, "ssh.trace");
   const workspace = path.join(root, "remote", "MT-1");
-  const skillsRoot = path.join(workspace, ".codex", "skills");
+  const skillsRoot = path.join(workspace, ".lorenz", "skills");
   await fs.mkdir(path.join(skillsRoot, "lorenz-land"), { recursive: true });
   await fs.writeFile(path.join(skillsRoot, "lorenz-land", "SKILL.md"), "land\n");
   await installFakeSsh(
@@ -574,7 +577,7 @@ test("createWorkspaceForIssue — installs skills into shared workspaces", async
 
   assert.equal(ws, await fs.realpath(root));
   assert.equal(
-    await fs.readFile(path.join(ws, ".codex", "skills", "lorenz-debug", "SKILL.md"), "utf8"),
+    await fs.readFile(path.join(ws, ".lorenz", "skills", "lorenz-debug", "SKILL.md"), "utf8"),
     "debug\n",
   );
 });

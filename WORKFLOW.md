@@ -122,7 +122,7 @@ The agent should be able to talk to the configured tracker through `tracker_*` M
 - `simplify`: review changed code for reuse, quality, and efficiency before committing.
 - `lorenz-push`: keep remote branch current and publish updates.
 - `lorenz-pull`: keep branch updated with latest `origin/main` before handoff.
-- `lorenz-land`: when ticket reaches `Merging`, explicitly open and follow `.codex/skills/lorenz-land/SKILL.md`, which includes the `land` loop.
+- `lorenz-land`: when ticket reaches `Merging`, explicitly open and follow `.lorenz/skills/lorenz-land/SKILL.md`, which includes the `land` loop.
 
 ## Status map
 
@@ -145,7 +145,7 @@ The agent should be able to talk to the configured tracker through `tracker_*` M
      - If PR is already attached, start by reviewing all open PR comments and deciding required changes vs explicit pushback responses.
    - `In Progress` -> continue execution flow from current scratchpad comment.
    - `Human Review` -> wait and poll for decision/review updates.
-   - `Merging` -> on entry, open and follow `.codex/skills/lorenz-land/SKILL.md`; do not call `gh pr merge` directly.
+   - `Merging` -> on entry, open and follow `.lorenz/skills/lorenz-land/SKILL.md`; do not call `gh pr merge` directly.
    - `Rework` -> run rework flow.
    - `Done` -> do nothing and shut down.
 4. Check whether a PR already exists for the current branch and whether it is closed.
@@ -272,7 +272,7 @@ Use this only when completion is blocked by missing required tools or missing au
 2. Poll for updates as needed, including GitHub PR review comments from humans and bots.
 3. If review feedback requires changes, move the issue to `Rework` and follow the rework flow.
 4. If approved, human moves the issue to `Merging`.
-5. When the issue is in `Merging`, open and follow `.codex/skills/lorenz-land/SKILL.md`, then run the `lorenz-land` skill in a loop until the PR is merged. Do not call `gh pr merge` directly.
+5. When the issue is in `Merging`, open and follow `.lorenz/skills/lorenz-land/SKILL.md`, then run the `lorenz-land` skill in a loop until the PR is merged. Do not call `gh pr merge` directly.
 6. After merge is complete, move the issue to `Done`.
 
 ## Step 4: Rework handling

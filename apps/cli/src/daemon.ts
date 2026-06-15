@@ -200,9 +200,9 @@ export async function buildDispatchCoordinator(
 
 /**
  * Skill overlay for a prepared workspace: the configured `agent.skills` unioned with the skills
- * bundled by the mounted tool packs, copied into the destination the active executor reads from
- * (`.codex/skills` for Codex, `.claude/skills` for Claude). Returns undefined when nothing is
- * configured so workspace preparation skips the overlay entirely.
+ * bundled by the mounted tool packs, copied into `.lorenz/skills` with a `.gitignore` so they
+ * are never committed. Returns undefined when nothing is configured so workspace preparation
+ * skips the overlay entirely.
  */
 function resolveSkillOverlay(settings: Settings): WorkspaceSkillOverlay | undefined {
   const sources = [
@@ -212,16 +212,7 @@ function resolveSkillOverlay(settings: Settings): WorkspaceSkillOverlay | undefi
     ]),
   ];
   if (sources.length === 0) return undefined;
-  return { sources, destDir: resolveSkillsDestination(settings) };
-}
-
-function resolveSkillsDestination(settings: Settings): string {
-  const kind = settings.agent.kind;
-  const agent = settings.agents[kind];
-  if (!agent) return ".codex/skills";
-  return (
-    defaultAgentExecutorRegistry.get(agent.executor)?.skillsDir?.(kind, agent) ?? ".codex/skills"
-  );
+  return { sources, destDir: ".lorenz/skills" };
 }
 function createRunAgentAttemptAdapters(): RunAgentAttemptAdapters {
   return {
