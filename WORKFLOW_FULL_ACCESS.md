@@ -25,7 +25,7 @@ workspace:
 hooks:
   after_create: |
     set -euo pipefail
-    git clone --depth 1 https://github.com/ryanlyn/symphony .
+    git clone --depth 1 https://github.com/ryanlyn/lorenz .
     if command -v mise >/dev/null 2>&1; then
       mise trust
       mise exec -- pnpm install --frozen-lockfile

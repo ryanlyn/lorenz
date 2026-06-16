@@ -2,8 +2,8 @@
 
 ## GitHub
 
-- PRs should be created against `ryanlyn/symphony`, not `openai/symphony`
-  - Use `gh pr create --repo ryanlyn/symphony` to ensure the correct target
+- PRs should be created against `ryanlyn/lorenz`, not `openai/symphony`
+  - Use `gh pr create --repo ryanlyn/lorenz` to ensure the correct target
 
 ## Claude
 

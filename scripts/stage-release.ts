@@ -464,9 +464,9 @@ async function writeRootPackageJson(
     license: "Apache-2.0",
     repository: {
       type: "git",
-      url: "git+https://github.com/ryanlyn/symphony.git",
+      url: "git+https://github.com/ryanlyn/lorenz.git",
     },
-    homepage: "https://github.com/ryanlyn/symphony#readme",
+    homepage: "https://github.com/ryanlyn/lorenz#readme",
     type: "module",
     bin: {
       lorenz: `./${releaseEntrypoint}`,
