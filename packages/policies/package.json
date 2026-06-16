@@ -1,0 +1,21 @@
+{
+  "name": "@lorenz/policies",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": "./dist/index.js",
+    "./retry": "./dist/retry.js",
+    "./stopReason": "./dist/stopReason.js",
+    "./usage": "./dist/usage.js",
+    "./resume": "./dist/resume.js",
+    "./reconciliation": "./dist/reconciliation.js",
+    "./workerHost": "./dist/workerHost.js"
+  },
+  "dependencies": {
+    "@lorenz/dispatch": "workspace:*",
+    "@lorenz/domain": "workspace:*"
+  }
+}

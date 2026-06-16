@@ -1,0 +1,18 @@
+{
+  "name": "@lorenz/ssh",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:"
+  },
+  "dependencies": {
+    "execa": "catalog:",
+    "@lorenz/domain": "workspace:*"
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "name": "@lorenz/acp",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "dependencies": {
+    "@agentclientprotocol/claude-agent-acp": "workspace:*",
+    "@agentclientprotocol/codex-acp": "workspace:*",
+    "@agentclientprotocol/sdk": "catalog:",
+    "@lorenz/agent-sdk": "workspace:*",
+    "@lorenz/domain": "workspace:*",
+    "@lorenz/mcp": "workspace:*",
+    "@lorenz/policies": "workspace:*",
+    "@lorenz/ssh": "workspace:*",
+    "@lorenz/worker-host-pool": "workspace:*",
+    "@lorenz/workspace": "workspace:*",
+    "execa": "catalog:"
+  }
+}

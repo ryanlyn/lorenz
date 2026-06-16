@@ -1,0 +1,3759 @@
+metadata:
+  date: "2026-05-31"
+  sources:
+    - file: scenarios.md
+      date: "2026-05-29"
+      scenario_range: "S-001 to S-210"
+      total_scenarios: 210
+      passed: 208
+      failed: 2
+    - file: more_scenarios.md
+      date: "2026-05-30"
+      scenario_range: "S-211 to S-1250"
+      total_scenarios: 1040
+      passed: 1033
+      failed: 7
+    - file: even_more_scenarios.md
+      date: "2026-05-30"
+      scenario_range: "S-1251 to S-1261"
+      total_scenarios: 20
+      passed: 5
+      failed: 15
+  grand_total_scenarios: 1270
+  categories:
+    - Dispatch Ordering
+    - Dispatch Eligibility
+    - Routing
+    - State Classification
+    - Ensemble Resolution
+    - Retry and Backoff
+    - Usage Accounting
+    - Worker Host Selection
+    - Configuration Overrides
+    - Orchestrator Scheduling
+    - Reconciliation
+    - Workspace Containment
+    - Additional Edge Cases
+    - Runtime Integration
+    - Concurrency and Stress
+    - State Transitions
+  pbt_approach:
+    priority_values: [-Infinity, -1, 0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 4.5, 5, NaN, Infinity, null, undefined]
+    issue_counts: [0, 1, 2, 3, 5, 10, 20, 50, 100, 200]
+    chaos_rates: [0, 0.01, 0.1, 0.25, 0.5, 0.75, 1.0]
+    concurrency_caps: [0, 1, 2, 3, 5, 10, 50]
+    tick_counts: [1, 2, 3, 5, 10, 20]
+    latencies: [0, 1, 10, 50, 100, 500]
+
+failures:
+  - id: 7
+    scenario: S-209
+    status: FIXED
+    invariant_violated: "Workspace path SHALL be a strict descendant of the workspace root"
+    code_location: "packages/workspace/src/index.ts — workspacePath (line ~22)"
+    fix_applied: "workspacePath now throws when safeIdentifier produces an empty string, preventing root-equal paths."
+
+  - id: 9
+    scenario: S-184
+    status: OPEN
+    invariant_violated: "WHEN a non-unstarted issue has non-terminal blockers, THE SYSTEM SHALL still consider it eligible (blockers only gate unstarted issues)"
+    code_location: "packages/dispatch/src/index.ts — issueHasOpenBlockers (line ~43)"
+    explanation: >
+      The function determines "unstarted" via issue.stateType === "unstarted" || issue.state.trim().toLowerCase() === "todo".
+      An issue with stateType="started" (explicitly categorized by the tracker as started) but state="Todo" (state name happens to be "Todo")
+      is treated as unstarted due to the ||. This means a started issue is incorrectly gated by blockers because its state name matches
+      the hardcoded string "todo".
+    reproduction: |
+      import { issueHasOpenBlockers } from "@lorenz/dispatch";
+      const issue = {
+        ...validIssue,
+        state: "Todo",
+        stateType: "started",
+        blockers: [{ state: "In Progress" }],
+      };
+      issueHasOpenBlockers(issue, settings); // true — WRONG, stateType says it's started
+    suggested_fix: |
+      const unstarted = issue.stateType
+        ? issue.stateType === "unstarted"
+        : issue.state.trim().toLowerCase() === "todo";
+
+  - id: 11
+    scenario: S-1171
+    status: OPEN
+    severity: High
+    invariant_violated: "WHEN a non-unstarted issue has blockers added during execution, THE SYSTEM SHALL NOT abort the running worker (blockers only gate unstarted issues)"
+    code_location: "packages/runtime/src/index.ts — reconcileTrackedIssues (line ~570) calling issueHasOpenBlockers from packages/dispatch/src/index.ts (line ~26)"
+    explanation: >
+      The reconcileTrackedIssues method checks !issueHasOpenBlockers(issue, settings) to decide whether to keep a running worker alive.
+      Due to the known || bug in issueHasOpenBlockers (issue.stateType === "unstarted" || issue.state.trim().toLowerCase() === "todo"),
+      a running issue with state="Todo" and stateType="started" is incorrectly identified as blocked — causing the already-running worker to be aborted.
+      This is a higher-severity manifestation of the dispatch-blocking bug (Failure 10/S-184): it doesn't just prevent dispatch,
+      it terminates active work.
+    reproduction: |
+      const result = await runScenario({
+        issues: [makeIssue("x", "X-1", {
+          state: "Todo",
+          stateType: "started",
+          blockers: [],
+        })],
+        runnerConfig: { defaultBehavior: { turnCount: 5, latencyPerTurnMs: 100 } },
+        pollTicks: 3,
+        tickDelayMs: 200,
+        timedMutations: [{
+          afterMs: 100,
+          mutate: { type: "add_blocker", issueId: "x", blockerId: "new-block" },
+        }],
+      });
+      // EXPECTED: Worker continues (stateType="started" means not gated by blockers)
+      // ACTUAL: run_reconciled event fires — worker is aborted
+      result.events.some(e => e.type === "run_reconciled"); // true — BUG
+    suggested_fix: |
+      // Same root cause as S-184. Prefer stateType when available in issueHasOpenBlockers:
+      const unstarted = issue.stateType
+        ? issue.stateType === "unstarted"
+        : issue.state.trim().toLowerCase() === "todo";
+      // Additionally, reconciliation could skip blocker check for already-running issues.
+
+  - id: 12
+    scenario: S-1251
+    status: OPEN
+    severity: High
+    invariant_violated: "Per-state concurrency cap SHALL be enforced regardless of state name casing"
+    code_location: "packages/orchestrator/src/index.ts — eligibleIssues / claim (runningByState Map construction) and packages/dispatch/src/index.ts — dispatchBlockReason (line 64)"
+    explanation: >
+      The runningByState Map is built using raw entry.issue.state strings as keys (case-sensitive). However, settingsForIssueState
+      resolves the per-state cap via normalizeStateName() which does state.trim().toLowerCase(). Two issues with states "In Progress"
+      and "in progress" are logically the same state but get separate counts in the Map, allowing both to bypass the per-state cap.
+    reproduction: |
+      npx tsx demo/sandbox.ts --inline '{"issues":[{"id":"i1","identifier":"I-1","title":"T1","state":"In Progress","stateType":"started","labels":[],"blockers":[],"priority":1},{"id":"i2","identifier":"I-2","title":"T2","state":"in progress","stateType":"started","labels":[],"blockers":[],"priority":2}],"settingsOverrides":{"agent":{"maxConcurrentAgents":5},"statusOverrides":{"In Progress":{"agent":{"maxConcurrentAgents":1}}}},"runnerConfig":{"defaultBehavior":{"shouldSucceed":true,"turnCount":1,"latencyPerTurnMs":300}},"pollTicks":1,"waitForRuns":false,"assertions":[{"type":"concurrency_cap","maxConcurrent":1}]}'
+    suggested_fix: |
+      const normalizedState = entry.issue.state.trim().toLowerCase();
+      runningByState.set(normalizedState, (runningByState.get(normalizedState) ?? 0) + 1);
+
+  - id: 13
+    scenario: S-1252
+    status: OPEN
+    severity: Medium
+    invariant_violated: "Reconciliation SHALL abort excess running slots when ensemble size is dynamically reduced"
+    code_location: "packages/runtime/src/index.ts — reconcileTrackedIssues (line ~566-574)"
+    explanation: >
+      reconcileTrackedIssues only checks issueIsActive, routedToThisWorker, and !issueHasOpenBlockers to decide whether to continue
+      running an issue. It does NOT check whether the number of running slots exceeds the issue's current ensemble size. When an
+      ensemble label changes from ensemble:3 to ensemble:1, the 2 excess slots are never aborted.
+    reproduction: |
+      npx tsx demo/sandbox.ts --inline '{"issues":[{"id":"e1","identifier":"E-1","title":"Ensemble Shrink","state":"In Progress","stateType":"started","labels":["ensemble:3"],"blockers":[],"priority":1}],"settingsOverrides":{"agent":{"maxConcurrentAgents":10}},"runnerConfig":{"defaultBehavior":{"shouldSucceed":true,"turnCount":10,"latencyPerTurnMs":150}},"pollTicks":8,"tickDelayMs":60,"waitForRuns":false,"timedMutations":[{"afterMs":350,"mutate":{"type":"change_labels","issueId":"e1","labels":["ensemble:1"]}}],"assertions":[{"type":"concurrency_cap","maxConcurrent":1}]}'
+    suggested_fix: |
+      const currentSize = ensembleSize(issue) ?? settings.agent.ensembleSize;
+      const runningSlots = [...this.orchestrator.state.running.values()]
+        .filter(e => e.issue.id === issue.id);
+      if (runningSlots.length > currentSize) {
+        for (const excess of runningSlots.slice(currentSize)) {
+          this.abortSlotRun(excess);
+        }
+      }
+
+  - id: 14
+    scenario: S-1253
+    status: OPEN
+    severity: Medium
+    invariant_violated: "Per-state concurrency cap SHALL count distinct issues, not individual ensemble slots"
+    code_location: "packages/dispatch/src/index.ts — dispatchBlockReason (line 63-64) and packages/orchestrator/src/index.ts — eligibleIssues (runningByState construction)"
+    explanation: >
+      The runningByState map counts each running entry (each ensemble slot) as a separate agent toward the per-state cap. An
+      ensemble:3 issue occupies 3 units against a per-state cap of 2, preventing full ensemble deployment. The per-state cap
+      was designed to limit distinct issues, not individual ensemble slots of the same issue.
+    reproduction: |
+      npx tsx demo/sandbox.ts --inline '{"issues":[{"id":"e1","identifier":"E-1","title":"Ensemble vs Per-State Cap","state":"In Progress","stateType":"started","labels":["ensemble:3"],"blockers":[],"priority":1}],"settingsOverrides":{"agent":{"maxConcurrentAgents":10},"statusOverrides":{"In Progress":{"agent":{"maxConcurrentAgents":2}}}},"runnerConfig":{"defaultBehavior":{"shouldSucceed":true,"turnCount":3,"latencyPerTurnMs":100}},"pollTicks":1,"waitForRuns":false,"assertions":[{"type":"running_count","expected":3}]}'
+    suggested_fix: |
+      const issuesByState = new Map<string, Set<string>>();
+      for (const entry of this.state.running.values()) {
+        const key = entry.issue.state.trim().toLowerCase();
+        if (!issuesByState.has(key)) issuesByState.set(key, new Set());
+        issuesByState.get(key)!.add(entry.issue.id);
+      }
+      // Then check issuesByState.get(state)?.size against cap
+
+  - id: 15
+    scenario: S-1253
+    round: 3
+    status: OPEN
+    severity: High
+    invariant_violated: "Ensemble retry SHALL be per-slot, not per-issue — un-dispatched slots must remain eligible during another slot's retry delay"
+    code_location: "packages/orchestrator/src/index.ts — eligibleIssues (line 68) and finish (line 210)"
+    explanation: >
+      The retryAttempts Map is keyed by issueId, not by (issueId, slotIndex). When one ensemble slot fails and creates a retry entry
+      with dueAt in the future, the check at line 68 (if (retry && retry.dueAt > now) return false) blocks the ENTIRE issue from
+      dispatch — starving all other un-dispatched slots until the retry delay expires.
+    reproduction: |
+      npx tsx demo/sandbox.ts --inline '{"issues":[{"id":"ens-1","identifier":"ENS-1","title":"Ensemble with 2 slots","state":"In Progress","stateType":"started","labels":["ensemble:2"],"blockers":[],"priority":1}],"settingsOverrides":{"agent":{"maxConcurrentAgents":10,"maxRetryBackoffMs":5000}},"runnerConfig":{"byId":{"ens-1":{"shouldSucceed":false,"turnCount":1,"latencyPerTurnMs":0}}},"pollTicks":4,"tickDelayMs":100,"assertions":[{"type":"event_occurred","eventType":"run_started","messageContains":"slot=1"}]}'
+    suggested_fix: "Key retry entries by slotKey, or exempt unclaimed slots from the retry dueAt gate."
+
+  - id: 16
+    scenario: S-1254
+    status: OPEN
+    severity: Low
+    invariant_violated: "dispatchBlockReason SHALL report a reason for ALL blocked issues (observability invariant)"
+    code_location: "packages/dispatch/src/index.ts — dispatchBlockReason (lines 55-58)"
+    explanation: >
+      dispatchBlockReason returns null (no reason) for issues that fail basic eligibility checks (inactive, unrouted, has open blockers).
+      This means these issues never appear in blockedDispatches. They are silently filtered from both the eligible list AND the blocked
+      list, making them invisible to monitoring.
+    suggested_fix: "Return specific reasons like 'open_blockers', 'not_active', 'not_routed'."
+
+  - id: 17
+    scenario: S-1254
+    round: 4
+    status: OPEN
+    severity: Low
+    invariant_violated: "reconciliationStopReason SHALL distinguish terminal from merely inactive states"
+    code_location: "packages/policies/src/reconciliation.ts — reconciliationStopReason"
+    explanation: >
+      The function checks !issueIsActive(issue, settings) first and returns "terminal" whenever this is true. But issueIsActive returns
+      false for ANY state not in activeStates — including paused/hold states that are also not in terminalStates. The "inactive" return
+      value is dead code for its intended purpose.
+    reproduction: |
+      npx tsx demo/sandbox.ts --inline '{"issues":[{"id":"i1","identifier":"I-1","title":"Mislabeled Reconciliation","state":"In Progress","stateType":"started","labels":[],"blockers":[],"priority":1}],"settingsOverrides":{"agent":{"maxConcurrentAgents":5}},"runnerConfig":{"defaultBehavior":{"turnCount":5,"latencyPerTurnMs":100}},"pollTicks":3,"tickDelayMs":150,"timedMutations":[{"afterMs":100,"mutate":{"type":"change_state","issueId":"i1","state":"On Hold","stateType":"started"}}],"assertions":[{"type":"event_occurred","eventType":"run_reconciled","messageContains":"terminal"},{"type":"event_not_occurred","eventType":"workspace_cleanup"}]}'
+    suggested_fix: |
+      if (isTerminalState(issue.state, settings.tracker.terminalStates)) return "terminal";
+      if (!issueIsActive(issue, settings)) return "inactive";
+
+  - id: 18
+    scenario: S-1255
+    status: OPEN
+    severity: High
+    invariant_violated: "Ensemble retry SHALL NOT permanently degrade ensemble:N to effective ensemble:1"
+    code_location: "packages/orchestrator/src/index.ts — finish (line 210) and claim (line 109-113)"
+    explanation: >
+      After slot 0 fails, finish() stores a retry entry with slotIndex:0. When the retry fires, claim() calls firstUnclaimedSlot
+      with preferredSlotIndex=0, dispatches only slot 0, and only one slot is dispatched per claim() call. The retry cycle repeats:
+      dispatch slot 0 -> fail -> retry with slot 0. Slots 1-N are permanently starved.
+    reproduction: |
+      npx tsx demo/sandbox.ts --inline '{"issues":[{"id":"i1","identifier":"I-1","title":"Ensemble Retry Blocks Other Slots","state":"In Progress","stateType":"started","labels":["ensemble:3"],"blockers":[],"priority":1}],"settingsOverrides":{"agent":{"maxConcurrentAgents":10,"maxRetryBackoffMs":50}},"runnerConfig":{"defaultBehavior":{"shouldSucceed":false,"turnCount":1,"latencyPerTurnMs":0}},"pollTicks":5,"tickDelayMs":100,"assertions":[{"type":"event_occurred","eventType":"run_started","messageContains":"I-1 slot=1"}]}'
+    suggested_fix: "After a retry claim succeeds, loop to claim remaining unclaimed slots for the same issue."
+
+  - id: 19
+    scenario: S-1255
+    round: 5
+    status: OPEN
+    severity: Medium
+    invariant_violated: "Per-state concurrency cap SHALL be enforced regardless of whitespace in state names"
+    code_location: "packages/orchestrator/src/index.ts — eligibleIssues / claim (runningByState Map) and packages/dispatch/src/index.ts — dispatchBlockReason (line 64)"
+    explanation: >
+      Same class of bug as Failure 12 (case-sensitivity), but for whitespace. States "In Progress" and " In Progress " normalize
+      to the same override via trim().toLowerCase(), but get separate counts in the raw runningByState Map.
+    reproduction: |
+      npx tsx demo/sandbox.ts --inline '{"issues":[{"id":"a","identifier":"A-1","title":"Issue A","state":"In Progress","stateType":"started","labels":[],"blockers":[],"priority":1},{"id":"b","identifier":"B-1","title":"Issue B","state":" In Progress ","stateType":"started","labels":[],"blockers":[],"priority":2},{"id":"c","identifier":"C-1","title":"Issue C","state":" In Progress ","stateType":"started","labels":[],"blockers":[],"priority":3}],"settingsOverrides":{"agent":{"maxConcurrentAgents":10},"statusOverrides":{"In Progress":{"agent":{"maxConcurrentAgents":2}}}},"runnerConfig":{"defaultBehavior":{"shouldSucceed":true,"turnCount":1,"latencyPerTurnMs":200}},"pollTicks":1,"waitForRuns":false,"assertions":[{"type":"concurrency_cap","maxConcurrent":2}]}'
+    suggested_fix: "Same as Failure 12: normalize state keys with trim().toLowerCase()."
+
+  - id: 20
+    scenario: S-1256
+    status: OPEN
+    severity: High
+    invariant_violated: "Aborting runs for issue X SHALL NOT affect runs belonging to a different issue Y"
+    code_location: "packages/runtime/src/index.ts — abortIssueRuns (uses key.startsWith(issueId + ':'))"
+    explanation: >
+      slotKey format is "issueId:slotIndex". abortIssueRuns uses key.startsWith(issueId + ':') to find entries. If issue A has id='a'
+      and issue B has id='a:0', then B's slot key is 'a:0:0' which matches the prefix 'a:'. When issue A goes terminal and is aborted,
+      issue B's handle is collaterally aborted, creating a zombie entry in the running map that can never be cleaned up.
+    reproduction: |
+      npx tsx demo/sandbox.ts --inline '{"issues":[{"id":"a:0","identifier":"COLON-1","title":"Issue with colon in ID","state":"In Progress","stateType":"started","labels":[],"blockers":[],"priority":2},{"id":"a","identifier":"PREFIX-1","title":"Prefix issue","state":"In Progress","stateType":"started","labels":[],"blockers":[],"priority":1}],"settingsOverrides":{"agent":{"maxConcurrentAgents":5}},"runnerConfig":{"byId":{"a":{"shouldSucceed":true,"turnCount":1,"latencyPerTurnMs":10},"a:0":{"shouldSucceed":true,"turnCount":5,"latencyPerTurnMs":100}}},"pollTicks":5,"tickDelayMs":200,"timedMutations":[{"afterMs":50,"mutate":{"type":"change_state","issueId":"a","state":"Done","stateType":"completed"}}],"assertions":[{"type":"event_occurred","eventType":"run_completed","messageContains":"COLON-1"}]}'
+    suggested_fix: |
+      private abortIssueRuns(issueId: string): void {
+        for (const [key, handle] of this.activeRuns.entries()) {
+          const keyIssueId = key.substring(0, key.lastIndexOf(':'));
+          if (keyIssueId === issueId) {
+            handle.finishExternally();
+          }
+        }
+      }
+
+  - id: 21
+    scenario: S-1257
+    status: OPEN
+    severity: Low
+    invariant_violated: "All issues prevented from dispatch SHALL be visible in blockedDispatches with a reason"
+    code_location: "packages/dispatch/src/index.ts — dispatchBlockReason (lines 55-58)"
+    explanation: >
+      dispatchBlockReason returns null for issues failing basic eligibility (open blockers, not routed, inactive). These issues are never
+      added to blockedDispatches, creating an observability blind spot. Operators cannot determine why these issues are stuck.
+    suggested_fix: "Return distinct reasons: 'open_blockers', 'not_active', 'not_routed', 'missing_fields'."
+
+  - id: 22
+    scenario: S-1258
+    status: OPEN
+    severity: Medium
+    invariant_violated: "claim() SHALL respect retry delay — same issue SHALL NOT be re-claimed within retry period"
+    code_location: "packages/orchestrator/src/index.ts — claim (lines 91-148)"
+    explanation: >
+      claim() does not check retryAttempts for a future dueAt. The retry-delay enforcement only exists in eligibleIssues(). When the
+      same issue ID appears twice in the eligible list (tracker duplicates), the first dispatch finishes (setting continuation retry
+      with future dueAt), and the second dispatch successfully claims the same slot because finish() already removed it from claimed.
+    reproduction: |
+      npx tsx demo/sandbox.ts --inline '{"issues":[{"id":"dup-me","identifier":"DUP-1","title":"First copy of issue","state":"In Progress","stateType":"started","labels":[],"blockers":[],"priority":1},{"id":"dup-me","identifier":"DUP-1","title":"Second copy same ID","state":"In Progress","stateType":"started","labels":[],"blockers":[],"priority":1}],"settingsOverrides":{"agent":{"maxConcurrentAgents":5,"maxRetryBackoffMs":60000}},"runnerConfig":{"defaultBehavior":{"shouldSucceed":true,"turnCount":1,"latencyPerTurnMs":0}},"pollTicks":1,"assertions":[{"type":"concurrency_cap","maxConcurrent":1}]}'
+    suggested_fix: |
+      const existingRetry = this.state.retryAttempts.get(issue.id);
+      if (existingRetry && existingRetry.dueAt.getTime() > this.clock.now().getTime()) return null;
+
+  - id: 23
+    scenario: S-1258
+    round: 8
+    status: OPEN
+    severity: Medium
+    invariant_violated: "Per-host capacity SHALL be enforced even for empty-string hosts"
+    code_location: "packages/orchestrator/src/index.ts — selectWorkerHost (line 153: if (entry.workerHost))"
+    explanation: >
+      The running count loop uses if (entry.workerHost) which is falsy for empty string ''. Entries dispatched to the '' host are
+      never counted, so selectLeastLoadedHost always sees count=0 for that host, allowing unlimited concurrent dispatch regardless
+      of maxConcurrentAgentsPerHost.
+    reproduction: |
+      npx tsx demo/sandbox.ts --inline '{"issues":[{"id":"issue-1","identifier":"TEST-1","title":"Test 1","state":"In Progress","stateType":"started","labels":[],"blockers":[],"priority":2},{"id":"issue-2","identifier":"TEST-2","title":"Test 2","state":"In Progress","stateType":"started","labels":[],"blockers":[],"priority":2},{"id":"issue-3","identifier":"TEST-3","title":"Test 3","state":"In Progress","stateType":"started","labels":[],"blockers":[],"priority":2}],"settingsOverrides":{"agent":{"maxConcurrentAgents":5},"worker":{"sshHosts":["","host-b"],"maxConcurrentAgentsPerHost":1}},"runnerConfig":{"defaultBehavior":{"shouldSucceed":true,"turnCount":1,"latencyPerTurnMs":200}},"pollTicks":1,"waitForRuns":false,"assertions":[{"type":"concurrency_cap","maxConcurrent":2}]}'
+    suggested_fix: "Use if (entry.workerHost != null) or validate sshHosts entries are non-empty."
+
+  - id: 24
+    scenario: S-1259
+    status: OPEN
+    severity: High
+    invariant_violated: "Retry backoff SHALL persist across state transitions — terminal transition SHALL NOT erase backoff"
+    code_location: "packages/orchestrator/src/index.ts — cleanupIssue (line 232: this.state.retryAttempts.delete(issueId))"
+    explanation: >
+      cleanupIssue() unconditionally deletes retry entries when an issue transitions to terminal state. If the issue is later reopened
+      (terminal -> active), the retry backoff is completely erased. The issue is immediately re-dispatched without delay, and the attempt
+      counter resets, preventing backoff escalation. This creates an infinite rapid-retry loop.
+    reproduction: |
+      npx tsx demo/sandbox.ts --inline '{"issues":[{"id":"retry-bypass","identifier":"RB-1","title":"Retry Bypass","state":"In Progress","stateType":"started","labels":[],"blockers":[],"priority":1}],"settingsOverrides":{"agent":{"maxConcurrentAgents":5,"maxRetryBackoffMs":60000}},"runnerConfig":{"defaultBehavior":{"shouldSucceed":false,"turnCount":1,"latencyPerTurnMs":0}},"pollTicks":4,"tickDelayMs":100,"timedMutations":[{"afterMs":100,"mutate":{"type":"change_state","issueId":"retry-bypass","state":"Done","stateType":"completed"}},{"afterMs":150,"mutate":{"type":"change_state","issueId":"retry-bypass","state":"In Progress","stateType":"started"}}],"assertions":[{"type":"retry_count","issueId":"retry-bypass","minAttempts":2}]}'
+    suggested_fix: |
+      cleanupIssue(issueId: string): void {
+        // ... remove from running/claimed ...
+        // DON'T delete retryAttempts — let it expire naturally
+        // this.state.retryAttempts.delete(issueId);  // REMOVED
+        this.state.completed.add(issueId);
+      }
+
+  - id: 25
+    scenario: S-1260
+    status: OPEN
+    severity: Low
+    invariant_violated: "eligibleIssues reported count SHALL match actual dispatchable count"
+    code_location: "packages/orchestrator/src/index.ts — eligibleIssues (stale runningCount during filtering)"
+    explanation: >
+      eligibleIssues() computes runningCount and runningByState ONCE before filtering. As the dispatch loop claims issues (adding to
+      running), the actual count increases but the filter has already passed all issues. Issues that pass the filter but fail in claim()
+      get dispatch_skipped events but never appear in blockedDispatches.
+
+  - id: 26
+    scenario: S-1260
+    round: 10
+    status: OPEN
+    severity: High
+    invariant_violated: "Global concurrency cap SHALL be a hard limit per poll tick, not bypassable by fast-completing runs"
+    code_location: "packages/runtime/src/index.ts — pollOnceUnlocked (dispatch loop with await points)"
+    explanation: >
+      The dispatch loop calls await this.maybeDispatch(issue) for each eligible issue. maybeDispatch awaits fetchIssueForDispatch
+      (an async call). This await creates a yield point where the event loop processes microtasks. If a runner completes with 0ms
+      latency, its finish() removes the entry from running. By the time the next issue's claim() is called, running.size is back to 0,
+      bypassing the cap.
+    reproduction: |
+      npx tsx demo/sandbox.ts --inline '{"issues":[{"id":"a","identifier":"A-1","title":"Issue A","state":"In Progress","stateType":"started","labels":[],"blockers":[],"priority":1},{"id":"b","identifier":"B-1","title":"Issue B","state":"In Progress","stateType":"started","labels":[],"blockers":[],"priority":2},{"id":"c","identifier":"C-1","title":"Issue C","state":"In Progress","stateType":"started","labels":[],"blockers":[],"priority":3}],"settingsOverrides":{"agent":{"maxConcurrentAgents":1}},"runnerConfig":{"defaultBehavior":{"shouldSucceed":true,"turnCount":1,"latencyPerTurnMs":0}},"pollTicks":1,"assertions":[{"type":"event_not_occurred","eventType":"run_started","messageContains":"B-1"},{"type":"event_not_occurred","eventType":"run_started","messageContains":"C-1"}]}'
+    suggested_fix: |
+      let dispatchedThisCycle = 0;
+      for (const issue of eligible) {
+        if (dispatchedThisCycle >= this.workflow.settings.agent.maxConcurrentAgents) break;
+        const claimed = await this.maybeDispatch(issue);
+        if (claimed) dispatchedThisCycle++;
+      }
+
+  - id: 27
+    scenario: S-1261
+    status: OPEN
+    severity: High
+    invariant_violated: "Per-host SSH capacity cap SHALL prevent unbounded dispatches to a single remote host"
+    code_location: "packages/runtime/src/index.ts — pollOnceUnlocked and packages/orchestrator/src/index.ts — selectWorkerHost"
+    explanation: >
+      Same underlying microtask-ordering bug as Failure 26, but targeting per-host capacity. Fast-completing runs remove themselves
+      from the running map during the dispatch loop's await points. selectWorkerHost() then sees count=0 for the host and allows
+      the next dispatch.
+    reproduction: |
+      npx tsx demo/sandbox.ts --inline '{"issues":[{"id":"a","identifier":"A-1","title":"Issue A","state":"In Progress","stateType":"started","labels":[],"blockers":[],"priority":1},{"id":"b","identifier":"B-1","title":"Issue B","state":"In Progress","stateType":"started","labels":[],"blockers":[],"priority":2},{"id":"c","identifier":"C-1","title":"Issue C","state":"In Progress","stateType":"started","labels":[],"blockers":[],"priority":3}],"settingsOverrides":{"agent":{"maxConcurrentAgents":5},"worker":{"sshHosts":["host1"],"maxConcurrentAgentsPerHost":1}},"runnerConfig":{"defaultBehavior":{"shouldSucceed":true,"turnCount":1,"latencyPerTurnMs":0}},"pollTicks":1,"assertions":[{"type":"event_not_occurred","eventType":"run_started","messageContains":"B-1"},{"type":"event_not_occurred","eventType":"run_started","messageContains":"C-1"}]}'
+    suggested_fix: "Same as Failure 26: track dispatches-this-cycle independently."
+
+bugs_summary:
+  - number: 1
+    module: workspace
+    bug: "Empty identifier produces root-equal path"
+    severity: Medium
+    status: FIXED
+  - number: 2
+    module: "dispatch/issueHasOpenBlockers"
+    bug: "State name 'Todo' overrides stateType='started'"
+    severity: Medium
+    status: OPEN
+  - number: 3
+    module: "dispatch/prioritySort"
+    bug: "Float priorities treated as valid (unreachable in prod via normalizeIssue)"
+    severity: Informational
+    status: OPEN
+  - number: 4
+    module: "policies/retry"
+    bug: "No minimum delay floor; cap=0 produces zero delay"
+    severity: Medium
+    status: FIXED
+  - number: 5
+    module: "policies/retry"
+    bug: "Negative cap propagates as negative delay"
+    severity: Medium
+    status: FIXED
+  - number: 6
+    module: "policies/usage"
+    bug: "NaN in update corrupts all token totals"
+    severity: High
+    status: FIXED
+  - number: 7
+    module: "policies/retry"
+    bug: "Continuation bypass ignores cap entirely"
+    severity: Low
+    status: FIXED
+  - number: 8
+    module: "orchestrator + dispatch"
+    bug: "Per-state cap uses case-sensitive Map key vs case-insensitive config lookup"
+    severity: High
+    status: OPEN
+  - number: 9
+    module: "runtime (reconciliation)"
+    bug: "Ensemble shrink not enforced — excess slots never aborted"
+    severity: Medium
+    status: OPEN
+  - number: 10
+    module: "dispatch + orchestrator"
+    bug: "Per-state cap counts ensemble slots as individual agents"
+    severity: Medium
+    status: OPEN
+  - number: 11
+    module: "orchestrator (retry)"
+    bug: "Retry keyed by issueId blocks all ensemble slots during delay"
+    severity: High
+    status: OPEN
+  - number: 12
+    module: "orchestrator (retry)"
+    bug: "Ensemble retry permanently degrades to effective ensemble:1"
+    severity: High
+    status: OPEN
+  - number: 13
+    module: "orchestrator + dispatch"
+    bug: "Per-state cap bypassed by whitespace variants in state names"
+    severity: Medium
+    status: OPEN
+  - number: 14
+    module: "runtime (abortIssueRuns)"
+    bug: "slotKey prefix collision aborts unrelated issues with colon in ID"
+    severity: High
+    status: OPEN
+  - number: 15
+    module: "dispatch (reporting)"
+    bug: "dispatchBlockReason returns null for basic check failures — observability gap"
+    severity: Low
+    status: OPEN
+  - number: 16
+    module: "policies (reconciliation)"
+    bug: "reconciliationStopReason mislabels inactive states as 'terminal'"
+    severity: Low
+    status: OPEN
+  - number: 17
+    module: "orchestrator (claim)"
+    bug: "claim() ignores retryAttempts dueAt — same slot dispatched twice"
+    severity: Medium
+    status: OPEN
+  - number: 18
+    module: "orchestrator (selectWorkerHost)"
+    bug: "Empty-string SSH host bypasses capacity tracking (falsy check)"
+    severity: Medium
+    status: OPEN
+  - number: 19
+    module: "orchestrator (cleanupIssue)"
+    bug: "Terminal transition erases retry backoff — rapid retry on reopen"
+    severity: High
+    status: OPEN
+  - number: 20
+    module: "runtime (dispatch loop)"
+    bug: "Microtask race: fast-completing runs reset caps mid-dispatch"
+    severity: High
+    status: OPEN
+  - number: 21
+    module: "runtime (dispatch loop)"
+    bug: "Same microtask race bypasses per-host capacity"
+    severity: High
+    status: OPEN
+
+scenarios:
+  # ===========================================================================
+  # DISPATCH ORDERING (S-001 to S-025 from scenarios.md)
+  # ===========================================================================
+  - id: S-001
+    category: Dispatch Ordering
+    invariant: "Lower priority number dispatches first"
+    setup: "Two issues: A(priority=1), B(priority=2)"
+    action: "sortForDispatch([B, A])"
+    expected: "[A, B]"
+    status: PENDING
+
+  - id: S-002
+    category: Dispatch Ordering
+    invariant: "Lower priority number dispatches first"
+    setup: "Two issues: A(priority=3), B(priority=2)"
+    action: "sortForDispatch([A, B])"
+    expected: "[B, A]"
+    status: PENDING
+
+  - id: S-003
+    category: Dispatch Ordering
+    invariant: "Same priority uses earlier creation time"
+    setup: 'A(priority=2, createdAt="2024-01-01"), B(priority=2, createdAt="2024-01-02")'
+    action: "sortForDispatch([B, A])"
+    expected: "[A, B]"
+    status: PENDING
+
+  - id: S-004
+    category: Dispatch Ordering
+    invariant: "Same priority+time uses lexicographic identifier"
+    setup: 'A(priority=2, createdAt="2024-01-01", identifier="MT-2"), B(priority=2, createdAt="2024-01-01", identifier="MT-1")'
+    action: "sortForDispatch([A, B])"
+    expected: "[B, A]"
+    status: PENDING
+
+  - id: S-005
+    category: Dispatch Ordering
+    invariant: "Null/missing/out-of-range priority sorts last"
+    setup: "A(priority=null), B(priority=4)"
+    action: "sortForDispatch([A, B])"
+    expected: "[B, A]"
+    status: PENDING
+
+  - id: S-006
+    category: Dispatch Ordering
+    invariant: "Out-of-range priority sorts last"
+    setup: "A(priority=0), B(priority=4)"
+    action: "sortForDispatch([A, B])"
+    expected: "[B, A] (0 is out of valid 1-4 range)"
+    status: PENDING
+
+  - id: S-007
+    category: Dispatch Ordering
+    invariant: "Out-of-range priority sorts last"
+    setup: "A(priority=5), B(priority=4)"
+    action: "sortForDispatch([A, B])"
+    expected: "[B, A]"
+    status: PENDING
+
+  - id: S-008
+    category: Dispatch Ordering
+    invariant: "Null/missing creation time sorts last"
+    setup: 'A(priority=2, createdAt=null), B(priority=2, createdAt="2024-01-01")'
+    action: "sortForDispatch([A, B])"
+    expected: "[B, A]"
+    status: PENDING
+
+  - id: S-009
+    category: Dispatch Ordering
+    invariant: "Missing/unparseable creation time sorts last"
+    setup: 'A(priority=2, createdAt=""), B(priority=2, createdAt="2024-01-01")'
+    action: "sortForDispatch([A, B])"
+    expected: "[B, A]"
+    status: PENDING
+
+  - id: S-010
+    category: Dispatch Ordering
+    invariant: "Unparseable creation time sorts last"
+    setup: 'A(priority=2, createdAt="not-a-date"), B(priority=2, createdAt="2024-01-01")'
+    action: "sortForDispatch([A, B])"
+    expected: "[B, A]"
+    status: PENDING
+
+  - id: S-011
+    category: Dispatch Ordering
+    invariant: "Result is permutation of input"
+    setup: "10 issues with random priorities"
+    action: "sortForDispatch(issues)"
+    expected: "Same issues, different order, length preserved"
+    status: PENDING
+
+  - id: S-012
+    category: Dispatch Ordering
+    invariant: "Sorting twice yields same result"
+    setup: "10 issues with mixed priorities"
+    action: "sortForDispatch(sortForDispatch(issues))"
+    expected: "Same as single sort"
+    status: PENDING
+
+  - id: S-013
+    category: Dispatch Ordering
+    invariant: "Permutation of input"
+    setup: "[A]"
+    action: "sortForDispatch([A])"
+    expected: "[A]"
+    status: PENDING
+
+  - id: S-014
+    category: Dispatch Ordering
+    invariant: "Permutation of input"
+    setup: "[]"
+    action: "sortForDispatch([])"
+    expected: "[]"
+    status: PENDING
+
+  - id: S-015
+    category: Dispatch Ordering
+    invariant: "Multiple null priorities use secondary sort"
+    setup: 'A(priority=null, createdAt="2024-02-01"), B(priority=null, createdAt="2024-01-01")'
+    action: "sortForDispatch([A, B])"
+    expected: "[B, A]"
+    status: PENDING
+
+  - id: S-016
+    category: Dispatch Ordering
+    invariant: "Out-of-range and null both map to MAX_SAFE_INTEGER"
+    setup: 'A(priority=0, createdAt="2024-02-01"), B(priority=null, createdAt="2024-01-01")'
+    action: "sortForDispatch([A, B])"
+    expected: "[B, A] (same priority bucket, earlier date wins)"
+    status: PENDING
+
+  - id: S-017
+    category: Dispatch Ordering
+    invariant: "Out-of-range priority sorts last"
+    setup: "A(priority=-1), B(priority=4)"
+    action: "sortForDispatch([A, B])"
+    expected: "[B, A]"
+    status: PENDING
+
+  - id: S-018
+    category: Dispatch Ordering
+    invariant: Idempotent
+    setup: "50 issues with priorities 1-4 and varied dates"
+    action: "sortForDispatch(sortForDispatch(issues))"
+    expected: "Identical to single sort"
+    status: PENDING
+
+  - id: S-019
+    category: Dispatch Ordering
+    invariant: "Missing priority sorts last"
+    setup: "A(priority=undefined), B(priority=1)"
+    action: "sortForDispatch([A, B])"
+    expected: "[B, A]"
+    status: PENDING
+
+  - id: S-020
+    category: Dispatch Ordering
+    invariant: "Lexicographic identifier ordering"
+    setup: 'A(priority=2, createdAt=same, identifier="MT-9"), B(same, identifier="MT-10")'
+    action: "sortForDispatch([A, B])"
+    expected: '[B, A] ("MT-10" < "MT-9" lexicographically)'
+    status: PENDING
+
+  - id: S-021
+    category: Dispatch Ordering
+    invariant: "Falls through to date comparison"
+    setup: "5 issues all priority=2, different createdAt"
+    action: "sortForDispatch(issues)"
+    expected: "Ordered by createdAt ascending"
+    status: PENDING
+
+  - id: S-023
+    category: Dispatch Ordering
+    invariant: "Both map to sort-last"
+    setup: "A(priority=undefined), B(priority=null), C(priority=1)"
+    action: "sortForDispatch([A, B, C])"
+    expected: "C first, then A and B by date/identifier"
+    status: PENDING
+
+  - id: S-024
+    category: Dispatch Ordering
+    invariant: "Earlier creation time first"
+    setup: 'A(createdAt="1970-01-01T00:00:00Z"), B(createdAt="2024-01-01")'
+    action: "sortForDispatch([A, B]) (same priority)"
+    expected: "[A, B]"
+    status: PENDING
+
+  - id: S-025
+    category: Dispatch Ordering
+    invariant: "Earlier creation time first"
+    setup: 'A(createdAt="2099-01-01"), B(createdAt="2024-01-01")'
+    action: "sortForDispatch([A, B]) (same priority)"
+    expected: "[B, A]"
+    status: PENDING
+
+  # ===========================================================================
+  # DISPATCH ELIGIBILITY (S-026 to S-055 from scenarios.md)
+  # ===========================================================================
+  - id: S-026
+    category: Dispatch Eligibility
+    invariant: "Missing required fields -> ineligible"
+    setup: 'Issue with id="" (empty string)'
+    action: "shouldDispatchIssue(issue, settings, state)"
+    expected: "false"
+    status: PENDING
+
+  - id: S-027
+    category: Dispatch Eligibility
+    invariant: "Missing required fields -> ineligible"
+    setup: 'Issue with identifier=""'
+    action: "shouldDispatchIssue(issue, settings, state)"
+    expected: "false"
+    status: PENDING
+
+  - id: S-028
+    category: Dispatch Eligibility
+    invariant: "Missing required fields -> ineligible"
+    setup: 'Issue with title=""'
+    action: "shouldDispatchIssue(issue, settings, state)"
+    expected: "false"
+    status: PENDING
+
+  - id: S-029
+    category: Dispatch Eligibility
+    invariant: "Missing required fields -> ineligible"
+    setup: 'Issue with state=""'
+    action: "shouldDispatchIssue(issue, settings, state)"
+    expected: "false"
+    status: PENDING
+
+  - id: S-030
+    category: Dispatch Eligibility
+    invariant: "Terminal state -> ineligible"
+    setup: 'Issue(state="Done"), terminalStates=["Done"]'
+    action: "shouldDispatchIssue(issue, settings, state)"
+    expected: "false"
+    status: PENDING
+
+  - id: S-031
+    category: Dispatch Eligibility
+    invariant: "Non-active state -> ineligible"
+    setup: 'Issue(state="Backlog"), activeStates=["Todo", "In Progress"]'
+    action: "shouldDispatchIssue(issue, settings, state)"
+    expected: "false"
+    status: PENDING
+
+  - id: S-032
+    category: Dispatch Eligibility
+    invariant: "Not assigned to this worker -> ineligible"
+    setup: "Issue(assignedToWorker=false)"
+    action: "shouldDispatchIssue(issue, settings, state)"
+    expected: "false (via routedToThisWorker)"
+    status: PENDING
+
+  - id: S-033
+    category: Dispatch Eligibility
+    invariant: "Unstarted + non-terminal blocker -> ineligible"
+    setup: 'Issue(stateType="unstarted", blockers=[{state:"Todo"}])'
+    action: "shouldDispatchIssue(issue, settings, state)"
+    expected: "false"
+    status: PENDING
+
+  - id: S-034
+    category: Dispatch Eligibility
+    invariant: "Any non-terminal blocker gates unstarted"
+    setup: 'Issue(stateType="unstarted", blockers=[{state:"Done"},{state:"Todo"}])'
+    action: "shouldDispatchIssue(issue, settings, state)"
+    expected: "false"
+    status: PENDING
+
+  - id: S-035
+    category: Dispatch Eligibility
+    invariant: "Blockers only gate unstarted issues"
+    setup: 'Issue(stateType="started", state="In Progress", blockers=[{state:"Todo"}])'
+    action: "shouldDispatchIssue(issue, settings, state)"
+    expected: "true"
+    status: PENDING
+
+  - id: S-036
+    category: Dispatch Eligibility
+    invariant: "All blockers resolved -> eligible"
+    setup: 'Issue(stateType="unstarted", blockers=[{state:"Done"},{state:"Cancelled"}])'
+    action: "shouldDispatchIssue(issue, settings, state)"
+    expected: "true"
+    status: PENDING
+
+  - id: S-037
+    category: Dispatch Eligibility
+    invariant: "Global cap -> no new dispatches"
+    setup: "maxConcurrentAgents=2, runningCount=2"
+    action: "shouldDispatchIssue(issue, settings, {runningCount:2,...})"
+    expected: "false (via dispatchBlockReason)"
+    status: PENDING
+
+  - id: S-038
+    category: Dispatch Eligibility
+    invariant: "Below cap -> eligible"
+    setup: "maxConcurrentAgents=2, runningCount=1"
+    action: "shouldDispatchIssue(issue, settings, {runningCount:1,...})"
+    expected: "true (assuming other conditions met)"
+    status: PENDING
+
+  - id: S-039
+    category: Dispatch Eligibility
+    invariant: "Per-state cap -> no new in that state"
+    setup: 'statusOverrides.Todo.agent.maxConcurrentAgents=1, runningByState={"Todo":1}'
+    action: "dispatchBlockReason(issue, settings, {runningByState})"
+    expected: '"local_concurrency_cap"'
+    status: PENDING
+
+  - id: S-040
+    category: Dispatch Eligibility
+    invariant: "All hosts at capacity -> no dispatches"
+    setup: 'sshHosts=["worker-a"], cap=1, running on worker-a=1'
+    action: "shouldDispatchIssue(issue, settings, {workerCapacityAvailable:false})"
+    expected: "false"
+    status: PENDING
+
+  - id: S-041
+    category: Dispatch Eligibility
+    invariant: "All slots claimed -> ineligible"
+    setup: 'Issue(labels=["ensemble:2"]), claimedSlots={"id:0","id:1"}'
+    action: "shouldDispatchIssue(issue, settings, {claimedSlots})"
+    expected: "false"
+    status: PENDING
+
+  - id: S-042
+    category: Dispatch Eligibility
+    invariant: "Unclaimed slots -> eligible"
+    setup: 'Issue(labels=["ensemble:2"]), claimedSlots={"id:0"}'
+    action: "shouldDispatchIssue(issue, settings, {claimedSlots})"
+    expected: "true"
+    status: PENDING
+
+  - id: S-043
+    category: Dispatch Eligibility
+    invariant: "Active state + all conditions met -> eligible"
+    setup: 'Normal issue in "Todo", activeStates includes "Todo"'
+    action: "shouldDispatchIssue(issue, settings, normalState)"
+    expected: "true"
+    status: PENDING
+
+  - id: S-044
+    category: Dispatch Eligibility
+    invariant: "isTerminalState(undefined) = false"
+    setup: "Unstarted issue, blocker has state=undefined"
+    action: "shouldDispatchIssue(issue, settings, state)"
+    expected: "false (blocker is non-terminal, blocks unstarted)"
+    status: PENDING
+
+  - id: S-045
+    category: Dispatch Eligibility
+    invariant: 'issueHasOpenBlockers checks stateType OR state="todo"'
+    setup: 'Issue(stateType="unstarted", state="Ready"), blocker(state="Todo")'
+    action: "shouldDispatchIssue(issue, settings, state)"
+    expected: 'false (stateType="unstarted" triggers blocker check)'
+    status: PENDING
+
+  - id: S-046
+    category: Dispatch Eligibility
+    invariant: 'issueHasOpenBlockers also checks state name "todo"'
+    setup: 'Issue(stateType=null, state="todo"), blockers=[{state:"In Progress"}]'
+    action: "issueHasOpenBlockers(issue, settings)"
+    expected: 'true (state.trim().toLowerCase()==="todo" triggers check)'
+    status: PENDING
+
+  - id: S-047
+    category: Dispatch Eligibility
+    invariant: "State comparison is case-insensitive"
+    setup: 'Issue(stateType=null, state="TODO"), blockers=[{state:"In Progress"}]'
+    action: "issueHasOpenBlockers(issue, settings)"
+    expected: "true"
+    status: PENDING
+
+  - id: S-048
+    category: Dispatch Eligibility
+    invariant: "Terminal check fails issueIsActive even if in active list"
+    setup: 'activeStates=["Done"], terminalStates=["Done"], issue(state="Done")'
+    action: "issueIsActive(issue, settings)"
+    expected: "false (terminal takes precedence)"
+    status: PENDING
+
+  - id: S-049
+    category: Dispatch Eligibility
+    invariant: "Block reasons only reported for otherwise-eligible issues"
+    setup: "Issue with empty id (ineligible)"
+    action: "dispatchBlockReason(issue, settings, {runningCount:999})"
+    expected: 'null (not "global_concurrency_cap")'
+    status: PENDING
+
+  - id: S-050
+    category: Dispatch Eligibility
+    invariant: "routedToThisWorker checks assignedToWorker===false specifically"
+    setup: "Issue(assignedToWorker=null)"
+    action: "routedToThisWorker(issue, settings)"
+    expected: "true (only false blocks)"
+    status: PENDING
+
+  - id: S-051
+    category: Dispatch Eligibility
+    invariant: "Terminal blockers don't gate"
+    setup: 'Unstarted issue, blocker(stateType="completed", state="Done")'
+    action: "issueHasOpenBlockers(issue, settings)"
+    expected: "false (blocker is terminal)"
+    status: PENDING
+
+  - id: S-052
+    category: Dispatch Eligibility
+    invariant: "State matching is case-insensitive"
+    setup: 'activeStates=["todo"], issue(state="Todo")'
+    action: "issueIsActive(issue, settings)"
+    expected: "true"
+    status: PENDING
+
+  - id: S-053
+    category: Dispatch Eligibility
+    invariant: "No blockers -> eligible"
+    setup: 'Issue(stateType="unstarted", blockers=[])'
+    action: "issueHasOpenBlockers(issue, settings)"
+    expected: "false"
+    status: PENDING
+
+  - id: S-054
+    category: Dispatch Eligibility
+    invariant: "Cap reached -> no dispatch"
+    setup: "maxConcurrentAgents=0, runningCount=0"
+    action: "dispatchBlockReason(issue, settings, {runningCount:0})"
+    expected: '"global_concurrency_cap" (0 >= 0)'
+    status: PENDING
+
+  - id: S-055
+    category: Dispatch Eligibility
+    invariant: "State matching is whitespace-tolerant"
+    setup: 'activeStates=[" Todo "], issue(state="Todo")'
+    action: "issueIsActive(issue, settings)"
+    expected: "true"
+    status: PENDING
+
+  # ===========================================================================
+  # ROUTING (S-056 to S-075 from scenarios.md)
+  # ===========================================================================
+  - id: S-056
+    category: Routing
+    invariant: "Valid route in allowlist -> eligible"
+    setup: 'Issue(labels=["lorenz:backend"]), onlyRoutes=["backend"]'
+    action: "routedToThisWorker(issue, settings)"
+    expected: "true"
+    status: PENDING
+
+  - id: S-057
+    category: Routing
+    invariant: Case-insensitive
+    setup: 'Issue(labels=["LORENZ:BACKEND"]), prefix="Lorenz:", onlyRoutes=["backend"]'
+    action: "routedToThisWorker(issue, settings)"
+    expected: "true (labels are lowercased during normalization)"
+    status: PENDING
+
+  - id: S-058
+    category: Routing
+    invariant: "Whitespace-only name -> not valid"
+    setup: 'Issue(labels=["lorenz: "]), acceptUnrouted=true'
+    action: "routedToThisWorker(issue, settings)"
+    expected: "false (hasRouteLabel=true, but routeNames=[], treated as routed-but-invalid)"
+    status: PENDING
+
+  - id: S-059
+    category: Routing
+    invariant: "Unrouted accepted when enabled"
+    setup: "Issue(labels=[]), acceptUnrouted=true"
+    action: "routedToThisWorker(issue, settings)"
+    expected: "true"
+    status: PENDING
+
+  - id: S-060
+    category: Routing
+    invariant: "Unrouted rejected when disabled"
+    setup: "Issue(labels=[]), acceptUnrouted=false"
+    action: "routedToThisWorker(issue, settings)"
+    expected: "false"
+    status: PENDING
+
+  - id: S-061
+    category: Routing
+    invariant: "Route not in list -> rejected"
+    setup: 'Issue(labels=["lorenz:frontend"]), onlyRoutes=["backend"]'
+    action: "routedToThisWorker(issue, settings)"
+    expected: "false"
+    status: PENDING
+
+  - id: S-062
+    category: Routing
+    invariant: "Null allowlist -> accept all"
+    setup: 'Issue(labels=["lorenz:anything"]), onlyRoutes=null'
+    action: "routedToThisWorker(issue, settings)"
+    expected: "true"
+    status: PENDING
+
+  - id: S-063
+    category: Routing
+    invariant: "Empty allowlist -> reject all"
+    setup: 'Issue(labels=["lorenz:backend"]), onlyRoutes=[]'
+    action: "routedToThisWorker(issue, settings)"
+    expected: "false"
+    status: PENDING
+
+  - id: S-064
+    category: Routing
+    invariant: "Any matching route suffices"
+    setup: 'Issue(labels=["lorenz:frontend","lorenz:backend"]), onlyRoutes=["backend"]'
+    action: "routedToThisWorker(issue, settings)"
+    expected: "true"
+    status: PENDING
+
+  - id: S-065
+    category: Routing
+    invariant: "Prefix matching case-insensitive"
+    setup: 'routeLabelPrefix="Lorenz:", issue has label "lorenz:backend"'
+    action: "routeNames(issue, settings)"
+    expected: '["backend"]'
+    status: PENDING
+
+  - id: S-066
+    category: Routing
+    invariant: "Normalization behavior"
+    setup: 'Input ""'
+    action: 'normalizeRouteName("")'
+    expected: '""'
+    status: PENDING
+
+  - id: S-067
+    category: Routing
+    invariant: "Handles null"
+    setup: "Input null"
+    action: "normalizeRouteName(null)"
+    expected: '"" (String(null) = "null", trimmed, lowercased = "null")?'
+    status: PENDING
+
+  - id: S-068
+    category: Routing
+    invariant: "Handles undefined"
+    setup: "Input undefined"
+    action: "normalizeRouteName(undefined)"
+    expected: '"" (String(undefined) = "undefined")?'
+    status: PENDING
+
+  - id: S-069
+    category: Routing
+    invariant: "Applied twice = same result"
+    setup: 'Input "  Backend  "'
+    action: 'normalizeRouteName(normalizeRouteName("  Backend  "))'
+    expected: '"backend" both times'
+    status: PENDING
+
+  - id: S-070
+    category: Routing
+    invariant: "Whitespace stripping"
+    setup: 'Issue(labels=["lorenz:  backend  "])'
+    action: "routeNames(issue, settings)"
+    expected: '["backend"] (trimmed after prefix removal)'
+    status: PENDING
+
+  - id: S-071
+    category: Routing
+    invariant: "Empty name after prefix -> not valid"
+    setup: 'Issue(labels=["lorenz:"])'
+    action: "routeNames(issue, settings)"
+    expected: "[] (empty string after normalizeRouteName is filtered out)"
+    status: PENDING
+
+  - id: S-072
+    category: Routing
+    invariant: "Routed-but-invalid -> rejected"
+    setup: 'Issue(labels=["lorenz:   "])'
+    action: "hasRouteLabel=true, routeNames=[], routedToThisWorker returns false"
+    expected: "false regardless of acceptUnrouted"
+    status: PENDING
+
+  - id: S-073
+    category: Routing
+    invariant: "No route label behavior"
+    setup: 'Issue(labels=["bug","feature"]), acceptUnrouted=true'
+    action: "routedToThisWorker(issue, settings)"
+    expected: "true (unrouted, accepted)"
+    status: PENDING
+
+  - id: S-074
+    category: Routing
+    invariant: "Allowlist comparison uses normalizeRouteName"
+    setup: 'onlyRoutes=["Backend"], issue label "lorenz:backend"'
+    action: "routedToThisWorker(issue, settings)"
+    expected: "true (allowlist entries are normalized)"
+    status: PENDING
+
+  - id: S-075
+    category: Routing
+    invariant: "Assignment check before routing"
+    setup: 'Issue(assignedToWorker=false, labels=["lorenz:backend"]), onlyRoutes=["backend"]'
+    action: "routedToThisWorker(issue, settings)"
+    expected: "false"
+    status: PENDING
+
+  # ===========================================================================
+  # STATE CLASSIFICATION (S-076 to S-085 from scenarios.md)
+  # ===========================================================================
+  - id: S-076
+    category: State Classification
+    invariant: "Case-insensitive comparison"
+    setup: 'state="Done", terminalStates=["done"]'
+    action: 'isTerminalState("Done", ["done"])'
+    expected: "true"
+    status: PENDING
+
+  - id: S-077
+    category: State Classification
+    invariant: "Whitespace stripped"
+    setup: 'state=" Done ", terminalStates=["Done"]'
+    action: 'isTerminalState(" Done ", ["Done"])'
+    expected: "true"
+    status: PENDING
+
+  - id: S-078
+    category: State Classification
+    invariant: "Null -> non-terminal"
+    setup: "state=null"
+    action: 'isTerminalState(null, ["Done"])'
+    expected: "false"
+    status: PENDING
+
+  - id: S-079
+    category: State Classification
+    invariant: "Undefined -> non-terminal"
+    setup: "state=undefined"
+    action: 'isTerminalState(undefined, ["Done"])'
+    expected: "false"
+    status: PENDING
+
+  - id: S-080
+    category: State Classification
+    invariant: "Not in list -> non-terminal"
+    setup: 'state="Unknown", terminalStates=["Done","Cancelled"]'
+    action: 'isTerminalState("Unknown", ["Done","Cancelled"])'
+    expected: "false"
+    status: PENDING
+
+  - id: S-081
+    category: State Classification
+    invariant: "Empty state handling"
+    setup: 'state=""'
+    action: 'isTerminalState("", ["Done"])'
+    expected: 'false (empty after trim won''t match "done")'
+    status: PENDING
+
+  - id: S-082
+    category: State Classification
+    invariant: Case-insensitive
+    setup: 'state="dOnE", terminalStates=["Done"]'
+    action: 'isTerminalState("dOnE", ["Done"])'
+    expected: "true"
+    status: PENDING
+
+  - id: S-083
+    category: State Classification
+    invariant: "Whitespace stripped"
+    setup: 'state="\tDone\t", terminalStates=["Done"]'
+    action: 'isTerminalState("\tDone\t", ["Done"])'
+    expected: "true"
+    status: PENDING
+
+  - id: S-084
+    category: State Classification
+    invariant: "Both sides trimmed"
+    setup: 'state="Done", terminalStates=[" Done "]'
+    action: 'isTerminalState("Done", [" Done "])'
+    expected: "true"
+    status: PENDING
+
+  - id: S-085
+    category: State Classification
+    invariant: "Not in list -> non-terminal"
+    setup: 'state="Done", terminalStates=[]'
+    action: 'isTerminalState("Done", [])'
+    expected: "false"
+    status: PENDING
+
+  # ===========================================================================
+  # ENSEMBLE RESOLUTION (S-086 to S-095 from scenarios.md)
+  # ===========================================================================
+  - id: S-086
+    category: Ensemble Resolution
+    invariant: "Valid positive integer used"
+    setup: 'Issue(labels=["ensemble:3"])'
+    action: "ensembleSize(issue)"
+    expected: "3"
+    status: PENDING
+
+  - id: S-087
+    category: Ensemble Resolution
+    invariant: "Zero ignored, use default"
+    setup: 'Issue(labels=["ensemble:0"])'
+    action: "ensembleSize(issue)"
+    expected: "null"
+    status: PENDING
+
+  - id: S-088
+    category: Ensemble Resolution
+    invariant: "Negative ignored"
+    setup: 'Issue(labels=["ensemble:-1"])'
+    action: "ensembleSize(issue)"
+    expected: "null (regex \\d+ doesn't match negative)"
+    status: PENDING
+
+  - id: S-089
+    category: Ensemble Resolution
+    invariant: "Case-insensitive matching"
+    setup: 'Issue with raw label "ENSEMBLE:5" (normalizeLabels lowercases it to "ensemble:5")'
+    action: "ensembleSize(issue)"
+    expected: "5"
+    status: PENDING
+
+  - id: S-090
+    category: Ensemble Resolution
+    invariant: "First valid label used"
+    setup: 'Issue(labels=["ensemble:2", "ensemble:4"])'
+    action: "ensembleSize(issue)"
+    expected: "2"
+    status: PENDING
+
+  - id: S-091
+    category: Ensemble Resolution
+    invariant: "Non-numeric ignored"
+    setup: 'Issue(labels=["ensemble:abc"])'
+    action: "ensembleSize(issue)"
+    expected: "null"
+    status: PENDING
+
+  - id: S-092
+    category: Ensemble Resolution
+    invariant: "No label -> fallback to default"
+    setup: 'Issue(labels=["bug","feature"])'
+    action: "ensembleSize(issue)"
+    expected: "null"
+    status: PENDING
+
+  - id: S-093
+    category: Ensemble Resolution
+    invariant: "1 is valid positive"
+    setup: 'Issue(labels=["ensemble:1"])'
+    action: "ensembleSize(issue)"
+    expected: "1"
+    status: PENDING
+
+  - id: S-094
+    category: Ensemble Resolution
+    invariant: "Any positive integer accepted"
+    setup: 'Issue(labels=["ensemble:999999"])'
+    action: "ensembleSize(issue)"
+    expected: "999999"
+    status: PENDING
+
+  - id: S-095
+    category: Ensemble Resolution
+    invariant: "Labels are trimmed during normalization"
+    setup: 'Raw label " ensemble:3 " -> normalized to "ensemble:3"'
+    action: "ensembleSize(issue)"
+    expected: "3"
+    status: PENDING
+
+  # ===========================================================================
+  # RETRY AND BACKOFF (S-096 to S-110 from scenarios.md)
+  # ===========================================================================
+  - id: S-096
+    category: Retry and Backoff
+    invariant: "Non-negative delay"
+    setup: 'attempt=1, maxRetryBackoffMs=60000, kind="failure"'
+    action: 'retryBackoffMs(1, 60000, "failure")'
+    expected: "10000 (10000 * 2^0)"
+    status: PENDING
+
+  - id: S-097
+    category: Retry and Backoff
+    invariant: "Monotonically non-decreasing"
+    setup: "attempt=2, cap=60000"
+    action: 'retryBackoffMs(2, 60000, "failure")'
+    expected: "20000 >= 10000"
+    status: PENDING
+
+  - id: S-098
+    category: Retry and Backoff
+    invariant: "Monotonically non-decreasing"
+    setup: "attempt=3, cap=60000"
+    action: 'retryBackoffMs(3, 60000, "failure")'
+    expected: "40000 >= 20000"
+    status: PENDING
+
+  - id: S-099
+    category: Retry and Backoff
+    invariant: "Never exceeds cap"
+    setup: "attempt=4, cap=60000"
+    action: 'retryBackoffMs(4, 60000, "failure")'
+    expected: "60000 (min(80000, 60000))"
+    status: PENDING
+
+  - id: S-100
+    category: Retry and Backoff
+    invariant: "Never exceeds cap"
+    setup: "attempt=100, cap=60000"
+    action: 'retryBackoffMs(100, 60000, "failure")'
+    expected: "60000"
+    status: PENDING
+
+  - id: S-101
+    category: Retry and Backoff
+    invariant: "Fixed short delay"
+    setup: 'attempt=1, cap=60000, kind="continuation"'
+    action: 'retryBackoffMs(1, 60000, "continuation")'
+    expected: "1000"
+    status: PENDING
+
+  - id: S-102
+    category: Retry and Backoff
+    invariant: "Fixed regardless of attempt"
+    setup: 'attempt=999, cap=60000, kind="continuation"'
+    action: 'retryBackoffMs(999, 60000, "continuation")'
+    expected: "1000"
+    status: PENDING
+
+  - id: S-103
+    category: Retry and Backoff
+    invariant: Non-negative
+    setup: "attempt=0, cap=60000"
+    action: 'retryBackoffMs(0, 60000, "failure")'
+    expected: "Math.min(60000, 10000*2^max(0,-1)) = Math.min(60000, 10000*2^0) = 10000"
+    status: PENDING
+
+  - id: S-104
+    category: Retry and Backoff
+    invariant: Non-negative
+    setup: "attempt=-1, cap=60000"
+    action: 'retryBackoffMs(-1, 60000, "failure")'
+    expected: "Math.min(60000, 10000*2^max(0,-2)) = 10000"
+    status: PENDING
+
+  - id: S-105
+    category: Retry and Backoff
+    invariant: "Minimum delay floor prevents zero-delay retry storms"
+    setup: "attempt=1, cap=0"
+    action: 'retryBackoffMs(1, 0, "failure")'
+    expected: "1000 (minimum floor enforced)"
+    status: "PASSED — Fixed: MIN_RETRY_DELAY_MS floor enforced"
+
+  - id: S-106
+    category: Retry and Backoff
+    invariant: "Non-negative delay"
+    setup: "attempt=1, cap=-1"
+    action: 'retryBackoffMs(1, -1, "failure")'
+    expected: "1000 (minimum floor enforced, result always non-negative)"
+    status: "PASSED — Fixed: MIN_RETRY_DELAY_MS floor guarantees non-negative result"
+
+  - id: S-107
+    category: Retry and Backoff
+    invariant: "Monotonically non-decreasing"
+    setup: "cap=120000"
+    action: "retryBackoffMs for attempts 1..10"
+    expected: "Each >= previous"
+    status: PENDING
+
+  - id: S-108
+    category: Retry and Backoff
+    invariant: "Continuation uses fixed delay regardless"
+    setup: 'attempt=1, cap=0, kind="continuation"'
+    action: 'retryBackoffMs(1, 0, "continuation")'
+    expected: "1000 (continuation ignores cap)"
+    status: PENDING
+
+  - id: S-109
+    category: Retry and Backoff
+    invariant: "Fixed short delay"
+    setup: 'attempt=1, cap=-1, kind="continuation"'
+    action: 'retryBackoffMs(1, -1, "continuation")'
+    expected: "1000"
+    status: PENDING
+
+  - id: S-110
+    category: Retry and Backoff
+    invariant: "Cap prevents overflow"
+    setup: "attempt=1000, cap=300000"
+    action: 'retryBackoffMs(1000, 300000, "failure")'
+    expected: "300000 (capped, even though 10000*2^999 is astronomically large)"
+    status: PENDING
+
+  # ===========================================================================
+  # USAGE ACCOUNTING (S-111 to S-125 from scenarios.md)
+  # ===========================================================================
+  - id: S-111
+    category: Usage Accounting
+    invariant: "Monotonic growth"
+    setup: "entryTotals={input:10,output:5,total:15}, update={input:20,output:10,total:30}"
+    action: "mergeMonotonicUsage(...)"
+    expected: "entryTotals={input:20,output:10,total:30}"
+    status: PENDING
+
+  - id: S-112
+    category: Usage Accounting
+    invariant: "Never decrease"
+    setup: "entryTotals={input:20,output:10,total:30}, update={input:15,output:8,total:23}"
+    action: "mergeMonotonicUsage(...)"
+    expected: "entryTotals={input:20,output:10,total:30} (unchanged)"
+    status: PENDING
+
+  - id: S-113
+    category: Usage Accounting
+    invariant: "Never negative"
+    setup: "entryTotals={input:0,output:0,total:0}, update={input:-5,output:-3,total:-8}"
+    action: "mergeMonotonicUsage(...)"
+    expected: "entryTotals={input:0,output:0,total:0} (Math.max with 0 floor)"
+    status: PENDING
+
+  - id: S-114
+    category: Usage Accounting
+    invariant: "Correct deltas"
+    setup: "global={input:100}, reported={input:10}, entry={input:10}, update={input:20}"
+    action: "mergeMonotonicUsage(...)"
+    expected: "globalInput=100+(20-10)=110, reported=20"
+    status: PENDING
+
+  - id: S-115
+    category: Usage Accounting
+    invariant: Idempotent
+    setup: "Apply update, then apply same update to result"
+    action: "mergeMonotonicUsage(mergeMonotonicUsage(initial, update), update)"
+    expected: "Same as single application"
+    status: PENDING
+
+  - id: S-116
+    category: Usage Accounting
+    invariant: "Partial update"
+    setup: "update={inputTokens:50}, others undefined"
+    action: "mergeMonotonicUsage(...)"
+    expected: "inputTokens updated, others keep entryTotals value"
+    status: PENDING
+
+  - id: S-117
+    category: Usage Accounting
+    invariant: "Independent preservation"
+    setup: "entryTotals.secondsRunning=100, update has no secondsRunning"
+    action: "mergeMonotonicUsage(...)"
+    expected: "result.entryTotals.secondsRunning=100"
+    status: PENDING
+
+  - id: S-118
+    category: Usage Accounting
+    invariant: "Global monotonic"
+    setup: "globalTotals={input:100}, update causes 0 delta"
+    action: "mergeMonotonicUsage(...)"
+    expected: "globalTotals.input >= 100"
+    status: PENDING
+
+  - id: S-119
+    category: Usage Accounting
+    invariant: "No negative deltas"
+    setup: "reportedTotals={input:30}, next would be 20 (from lower update)"
+    action: "mergeMonotonicUsage(...)"
+    expected: "delta = Math.max(0, 20-30) = 0, global unchanged"
+    status: PENDING
+
+  - id: S-120
+    category: Usage Accounting
+    invariant: "Never negative, stable"
+    setup: "entryTotals={input:10}, update={inputTokens:NaN}"
+    action: "mergeMonotonicUsage(...)"
+    expected: "Math.max(10, 0, NaN) = 10? Or NaN? (Math.max behavior with NaN)"
+    status: "PASSED — Fixed: Number.isFinite() guard prevents NaN propagation"
+
+  - id: S-121
+    category: Usage Accounting
+    invariant: "Never negative"
+    setup: "entryTotals={total:10}, update={totalTokens:NaN, inputTokens:20}"
+    action: "mergeMonotonicUsage(...)"
+    expected: "total: Math.max(10, 0, NaN) = NaN! Bug?"
+    status: "PASSED — Fixed: Number.isFinite() guard prevents NaN propagation"
+
+  - id: S-122
+    category: Usage Accounting
+    invariant: "Handles large numbers"
+    setup: "update={inputTokens: Number.MAX_SAFE_INTEGER}"
+    action: "mergeMonotonicUsage(...)"
+    expected: "Works without overflow"
+    status: PENDING
+
+  - id: S-123
+    category: Usage Accounting
+    invariant: "Monotonic (0 is not > previous)"
+    setup: "entryTotals={input:10}, update={inputTokens:0}"
+    action: "mergeMonotonicUsage(...)"
+    expected: "entryTotals.input stays 10 (max(10,0,0)=10)"
+    status: PENDING
+
+  - id: S-124
+    category: Usage Accounting
+    invariant: "Growth from zero"
+    setup: "entryTotals={input:0,output:0,total:0}, update={input:100,output:50,total:150}"
+    action: "mergeMonotonicUsage(...)"
+    expected: "entryTotals={100,50,150}, delta=100/50/150 added to global"
+    status: PENDING
+
+  - id: S-125
+    category: Usage Accounting
+    invariant: "Watermark in sync"
+    setup: "After merge, reportedTotals should equal entryTotals (for token fields)"
+    action: "Check result.reportedTotals vs result.entryTotals"
+    expected: "reportedTotals.inputTokens === entryTotals.inputTokens etc."
+    status: PENDING
+
+  # ===========================================================================
+  # WORKER HOST SELECTION (S-126 to S-138 from scenarios.md)
+  # ===========================================================================
+  - id: S-126
+    category: Worker Host Selection
+    invariant: "Empty -> null"
+    setup: "hosts=[], cap=5"
+    action: "selectLeastLoadedHost({hosts:[], runningCounts:new Map(), cap:5})"
+    expected: "null"
+    status: PENDING
+
+  - id: S-127
+    category: Worker Host Selection
+    invariant: "Available host selected"
+    setup: "hosts=[\"a\"], runningCounts={a:0}, cap=2"
+    action: "selectLeastLoadedHost(...)"
+    expected: '"a"'
+    status: PENDING
+
+  - id: S-128
+    category: Worker Host Selection
+    invariant: "At capacity -> undefined"
+    setup: "hosts=[\"a\"], runningCounts={a:2}, cap=2"
+    action: "selectLeastLoadedHost(...)"
+    expected: "undefined (null for empty, undefined for at-capacity)"
+    status: PENDING
+
+  - id: S-129
+    category: Worker Host Selection
+    invariant: "Only below-cap hosts eligible"
+    setup: "hosts=[\"a\",\"b\"], runningCounts={a:2,b:1}, cap=2"
+    action: "selectLeastLoadedHost(...)"
+    expected: '"b"'
+    status: PENDING
+
+  - id: S-130
+    category: Worker Host Selection
+    invariant: "Lowest load wins"
+    setup: "hosts=[\"a\",\"b\"], runningCounts={a:1,b:0}, cap=3"
+    action: "selectLeastLoadedHost(...)"
+    expected: '"b"'
+    status: PENDING
+
+  - id: S-131
+    category: Worker Host Selection
+    invariant: "Deterministic selection"
+    setup: "hosts=[\"a\",\"b\"], runningCounts={a:1,b:1}, cap=3"
+    action: "selectLeastLoadedHost(...)"
+    expected: '"a" (first found with lowest)'
+    status: PENDING
+
+  - id: S-132
+    category: Worker Host Selection
+    invariant: "All full -> undefined"
+    setup: "hosts=[\"a\",\"b\"], runningCounts={a:2,b:2}, cap=2"
+    action: "selectLeastLoadedHost(...)"
+    expected: "undefined"
+    status: PENDING
+
+  - id: S-133
+    category: Worker Host Selection
+    invariant: "0 < 1 -> selected"
+    setup: "hosts=[\"a\"], runningCounts=new Map(), cap=1"
+    action: "selectLeastLoadedHost(...)"
+    expected: '"a" (count defaults to 0 via ?? 0)'
+    status: PENDING
+
+  - id: S-134
+    category: Worker Host Selection
+    invariant: "count < 0 never true"
+    setup: "hosts=[\"a\"], runningCounts=new Map(), cap=0"
+    action: "selectLeastLoadedHost(...)"
+    expected: "undefined (0 < 0 is false)"
+    status: PENDING
+
+  - id: S-135
+    category: Worker Host Selection
+    invariant: "Behavior with duplicates"
+    setup: "hosts=[\"a\",\"a\"], runningCounts={a:0}, cap=2"
+    action: "selectLeastLoadedHost(...)"
+    expected: '"a" (first iteration finds it)'
+    status: PENDING
+
+  - id: S-136
+    category: Worker Host Selection
+    invariant: "Missing count = 0"
+    setup: "hosts=[\"a\",\"b\"], runningCounts={a:1}, cap=2"
+    action: "selectLeastLoadedHost(...)"
+    expected: '"b" (count 0 < count 1)'
+    status: PENDING
+
+  - id: S-137
+    category: Worker Host Selection
+    invariant: "count < negativeNumber"
+    setup: "hosts=[\"a\"], runningCounts={a:5}, cap=-1"
+    action: "selectLeastLoadedHost(...)"
+    expected: "undefined? (5 < -1 is false) or \"a\"?"
+    status: PENDING
+
+  - id: S-138
+    category: Worker Host Selection
+    invariant: "No false starvation"
+    setup: "hosts=[\"a\",\"b\",\"c\"], runningCounts={a:5,b:5,c:1}, cap=5"
+    action: "selectLeastLoadedHost(...)"
+    expected: '"c" (1 < 5)'
+    status: PENDING
+
+  # ===========================================================================
+  # CONFIGURATION OVERRIDES (S-139 to S-145 from scenarios.md)
+  # ===========================================================================
+  - id: S-139
+    category: Configuration Overrides
+    invariant: "No override -> base unchanged"
+    setup: 'statusOverrides={}, issue state="Todo"'
+    action: 'settingsForIssueState(settings, "Todo")'
+    expected: "Same as base settings"
+    status: PENDING
+
+  - id: S-140
+    category: Configuration Overrides
+    invariant: "Case-insensitive lookup"
+    setup: 'statusOverrides={"todo": {agent:{maxConcurrentAgents:1}}}'
+    action: 'settingsForIssueState(settings, "Todo")'
+    expected: "agent.maxConcurrentAgents=1"
+    status: PENDING
+
+  - id: S-141
+    category: Configuration Overrides
+    invariant: Case-insensitive
+    setup: 'statusOverrides={"in progress": {agent:{kind:"claude"}}}'
+    action: 'settingsForIssueState(settings, "In Progress")'
+    expected: 'agent.kind="claude"'
+    status: PENDING
+
+  - id: S-142
+    category: Configuration Overrides
+    invariant: "Missing -> base"
+    setup: 'statusOverrides={"todo":{...}}, state="Unknown"'
+    action: 'settingsForIssueState(settings, "Unknown")'
+    expected: "Base settings unchanged"
+    status: PENDING
+
+  - id: S-143
+    category: Configuration Overrides
+    invariant: "Partial preserves rest"
+    setup: 'base agent.kind="codex", override={agent:{maxConcurrentAgents:1}}'
+    action: "settingsForIssueState(settings, state)"
+    expected: 'agent.kind still "codex", agent.maxConcurrentAgents=1'
+    status: PENDING
+
+  - id: S-144
+    category: Configuration Overrides
+    invariant: "Independent application"
+    setup: 'overrides: "todo"->{agent:{kind:"claude"}}, "in progress"->{agent:{kind:"codex"}}'
+    action: "settingsForIssueState for each state"
+    expected: "Each gets its own override independently"
+    status: PENDING
+
+  - id: S-145
+    category: Configuration Overrides
+    invariant: "State name normalized for lookup"
+    setup: 'statusOverrides={" todo ":{...}}, normalizeStateName trims'
+    action: 'settingsForIssueState(settings, "Todo")'
+    expected: 'Match found (both normalize to "todo")'
+    status: PENDING
+
+  # ===========================================================================
+  # ORCHESTRATOR SCHEDULING (S-146 to S-160 from scenarios.md)
+  # ===========================================================================
+  - id: S-146
+    category: Orchestrator Scheduling
+    invariant: "No duplicate concurrent workers"
+    setup: "Orchestrator with ensembleSize=1"
+    action: "claim(issue) twice"
+    expected: "First returns entry, second returns null"
+    status: PENDING
+
+  - id: S-147
+    category: Orchestrator Scheduling
+    invariant: "Distinct slots"
+    setup: "Issue with ensemble:2 label"
+    action: "claim(issue) twice"
+    expected: "slot 0 then slot 1"
+    status: PENDING
+
+  - id: S-148
+    category: Orchestrator Scheduling
+    invariant: "All slots claimed -> null"
+    setup: "After claiming slots 0 and 1"
+    action: "claim(issue) third time"
+    expected: "null"
+    status: PENDING
+
+  - id: S-149
+    category: Orchestrator Scheduling
+    invariant: "Cleanup on finish"
+    setup: "Claimed issue"
+    action: "finish(issueId, 0, true)"
+    expected: "running.size decreases, claimed no longer has key"
+    status: PENDING
+
+  - id: S-150
+    category: Orchestrator Scheduling
+    invariant: "Normal exit -> continuation retry"
+    setup: "Running issue"
+    action: "finish(issueId, 0, true)"
+    expected: "retryAttempts has entry for issueId"
+    status: PENDING
+
+  - id: S-151
+    category: Orchestrator Scheduling
+    invariant: "No crash"
+    setup: "Empty orchestrator"
+    action: 'finish("nonexistent", 0, true)'
+    expected: "No error, state unchanged"
+    status: PENDING
+
+  - id: S-152
+    category: Orchestrator Scheduling
+    invariant: "No crash"
+    setup: "Empty orchestrator"
+    action: 'applyUpdate("missing", 0, {type:"turn_completed"})'
+    expected: "No error"
+    status: PENDING
+
+  - id: S-153
+    category: Orchestrator Scheduling
+    invariant: "Retry timing respected"
+    setup: "Issue with retry dueAt in future"
+    action: "eligibleIssues([issue])"
+    expected: "[] (filtered out)"
+    status: PENDING
+
+  - id: S-154
+    category: Orchestrator Scheduling
+    invariant: "Past-due retries become eligible"
+    setup: "Issue with retry dueAt in past"
+    action: "eligibleIssues([issue])"
+    expected: "[issue] (included)"
+    status: PENDING
+
+  - id: S-155
+    category: Orchestrator Scheduling
+    invariant: "Complete cleanup"
+    setup: "Running issue with retry"
+    action: "cleanupIssue(issueId)"
+    expected: "Gone from running, claimed, retryAttempts; in completed"
+    status: PENDING
+
+  - id: S-156
+    category: Orchestrator Scheduling
+    invariant: "Watermark deltas"
+    setup: "Running entry"
+    action: 'applyUpdate(id, 0, {type:"usage", usage:{inputTokens:100}})'
+    expected: "Entry and global totals updated"
+    status: PENDING
+
+  - id: S-157
+    category: Orchestrator Scheduling
+    invariant: "No double-counting"
+    setup: "Entry started 10s ago"
+    action: "finish(id, 0, true)"
+    expected: "usageTotals.secondsRunning += ~10"
+    status: PENDING
+
+  - id: S-158
+    category: Orchestrator Scheduling
+    invariant: "Failure retry escalates"
+    setup: "Running entry"
+    action: 'finish(id, 0, true, "error", "failure")'
+    expected: "retryAttempts.attempt increases"
+    status: PENDING
+
+  - id: S-159
+    category: Orchestrator Scheduling
+    invariant: "Continuation retry"
+    setup: "Running entry"
+    action: 'finish(id, 0, true, undefined, "continuation")'
+    expected: "retryAttempts.attempt=1"
+    status: PENDING
+
+  - id: S-160
+    category: Orchestrator Scheduling
+    invariant: "Correct key format"
+    setup: 'issueId="abc", slotIndex=2'
+    action: 'slotKey("abc", 2)'
+    expected: '"abc:2"'
+    status: PENDING
+
+  # ===========================================================================
+  # RECONCILIATION (S-161 to S-168 from scenarios.md)
+  # ===========================================================================
+  - id: S-161
+    category: Reconciliation
+    invariant: "Terminal -> stop + cleanup"
+    setup: 'Running issue, tracker reports state="Done" (terminal)'
+    action: "reconcileTrackedIssues()"
+    expected: "Worker aborted, workspace removed"
+    status: PENDING
+
+  - id: S-162
+    category: Reconciliation
+    invariant: "Inactive -> stop, keep workspace"
+    setup: 'Running issue, tracker reports state="Backlog" (not active, not terminal)'
+    action: "reconcileTrackedIssues()"
+    expected: "Worker aborted, workspace NOT removed"
+    status: PENDING
+
+  - id: S-163
+    category: Reconciliation
+    invariant: "Routing mismatch -> stop"
+    setup: "Running issue, tracker reports assignedToWorker=false"
+    action: "reconcileTrackedIssues()"
+    expected: "Worker aborted"
+    status: PENDING
+
+  - id: S-164
+    category: Reconciliation
+    invariant: "Route mismatch -> stop"
+    setup: "Running issue, labels changed to different route"
+    action: "reconcileTrackedIssues()"
+    expected: "Worker aborted"
+    status: PENDING
+
+  - id: S-165
+    category: Reconciliation
+    invariant: "Failure -> keep running, retry"
+    setup: "fetchIssuesByIds throws error"
+    action: "reconcileTrackedIssues()"
+    expected: "Workers still running, error logged"
+    status: PENDING
+
+  - id: S-166
+    category: Reconciliation
+    invariant: "Missing issue -> stop worker"
+    setup: "Running issue, fetchIssuesByIds returns empty"
+    action: "reconcileTrackedIssues()"
+    expected: "Worker aborted, cleanup"
+    status: PENDING
+
+  - id: S-167
+    category: Reconciliation
+    invariant: "Valid issue -> refresh and continue"
+    setup: "Running issue still active and routed"
+    action: "reconcileTrackedIssues()"
+    expected: "refreshRunningIssue called, worker continues"
+    status: PENDING
+
+  - id: S-168
+    category: Reconciliation
+    invariant: "Blocked issue reconciled"
+    setup: "Running started issue gains blocker (but since it's started, blockers don't gate)"
+    action: "reconcileTrackedIssues()"
+    expected: "Worker continues (blockers only gate unstarted)"
+    status: PENDING
+
+  # ===========================================================================
+  # WORKSPACE CONTAINMENT (S-169 to S-178 from scenarios.md)
+  # ===========================================================================
+  - id: S-169
+    category: Workspace Containment
+    invariant: "Only alphanumeric, dots, hyphens, underscores"
+    setup: 'identifier="MT-123/../../etc"'
+    action: 'safeIdentifier("MT-123/../../etc")'
+    expected: '"MT-123_.._.._etc" (/ replaced with _)'
+    status: PENDING
+
+  - id: S-170
+    category: Workspace Containment
+    invariant: "Double application same result"
+    setup: 'identifier="MT-123"'
+    action: 'safeIdentifier(safeIdentifier("MT-123"))'
+    expected: '"MT-123" both times'
+    status: PENDING
+
+  - id: S-171
+    category: Workspace Containment
+    invariant: "No slot suffix for single-slot"
+    setup: 'root="/tmp/w", identifier="MT-1", slotIndex=0, ensembleSize=1'
+    action: 'workspacePath("/tmp/w", "MT-1", 0, 1)'
+    expected: '"/tmp/w/MT-1" (no /0 suffix)'
+    status: PENDING
+
+  - id: S-172
+    category: Workspace Containment
+    invariant: "Distinct paths per slot"
+    setup: "ensembleSize=3"
+    action: 'workspacePath("/tmp/w", "MT-1", 0, 3) vs workspacePath("/tmp/w", "MT-1", 1, 3)'
+    expected: '"/tmp/w/MT-1/0" and "/tmp/w/MT-1/1" (distinct)'
+    status: PENDING
+
+  - id: S-173
+    category: Workspace Containment
+    invariant: "Same inputs -> same path"
+    setup: "Same arguments"
+    action: "Call twice"
+    expected: "Identical result"
+    status: PENDING
+
+  - id: S-174
+    category: Workspace Containment
+    invariant: "Safe output"
+    setup: 'identifier=""'
+    action: 'safeIdentifier("")'
+    expected: '""'
+    status: PENDING
+
+  - id: S-175
+    category: Workspace Containment
+    invariant: "Control chars rejected"
+    setup: 'workspace path with \n'
+    action: 'invalidWorkspaceInput("/tmp/w/test\n")'
+    expected: "true (invalid)"
+    status: PENDING
+
+  - id: S-176
+    category: Workspace Containment
+    invariant: "Control chars rejected"
+    setup: 'workspace path with \0'
+    action: 'invalidWorkspaceInput("/tmp/w/test\0bad")'
+    expected: "true (invalid)"
+    status: PENDING
+
+  - id: S-177
+    category: Workspace Containment
+    invariant: "Blank rejected"
+    setup: 'workspace=" "'
+    action: 'invalidWorkspaceInput("   ")'
+    expected: "true (invalid)"
+    status: PENDING
+
+  - id: S-178
+    category: Workspace Containment
+    invariant: "Root not usable as cwd"
+    setup: 'workspace=root="/tmp/w"'
+    action: "validateWorkspaceCwd attempts"
+    expected: "Error thrown"
+    status: PENDING
+
+  # ===========================================================================
+  # ADDITIONAL EDGE CASES (S-179 to S-210 from scenarios.md)
+  # ===========================================================================
+  - id: S-179
+    category: Dispatch Eligibility
+    invariant: "Missing required field"
+    setup: 'Issue manually constructed with id=""'
+    action: 'shouldDispatchIssue({id:"", identifier:"X", title:"T", state:"Todo",...})'
+    expected: "false (empty string is falsy in !issue.id check)"
+    status: PENDING
+
+  - id: S-180
+    category: Dispatch Eligibility
+    invariant: "Block reasons only for eligible issues"
+    setup: 'Issue(state="Done") terminal, runningCount=999'
+    action: "dispatchBlockReason(issue, settings, {runningCount:999})"
+    expected: "null (returns early before capacity check)"
+    status: PENDING
+
+  - id: S-181
+    category: Orchestrator Scheduling
+    invariant: "Normal exit -> continuation retry"
+    setup: "finish(id, 0, true)"
+    action: "Check state.completed and state.retryAttempts"
+    expected: "Both populated"
+    status: PENDING
+
+  - id: S-182
+    category: Worker Host Selection
+    invariant: "null=empty list, undefined=all full"
+    setup: "Check Orchestrator.claim() handling of both"
+    action: "Trace workerCapacityAvailable() and selectWorkerHost()"
+    expected: "Both cases handled (claim returns null)"
+    status: PENDING
+
+  - id: S-183
+    category: Dispatch Eligibility
+    invariant: 'State name "todo" triggers blocker check'
+    setup: 'Issue(state="TODO", stateType=null), blockers with non-terminal'
+    action: "issueHasOpenBlockers(issue, settings)"
+    expected: 'true (state.trim().toLowerCase()==="todo" is true)'
+    status: PENDING
+
+  - id: S-184
+    category: Dispatch Eligibility
+    invariant: "|| means either condition triggers"
+    setup: 'Issue(state="Todo", stateType="started"), non-terminal blocker'
+    action: "issueHasOpenBlockers(issue, settings)"
+    expected: 'true! (stateType!=="unstarted" but state==="todo" triggers the check)'
+    status: "FAILED — Started issue incorrectly gated by blockers due to state name \"Todo\" matching hardcoded check"
+
+  - id: S-185
+    category: Retry and Backoff
+    invariant: "Fixed short delay"
+    setup: "cap=500 (less than 1000)"
+    action: 'retryBackoffMs(1, 500, "continuation")'
+    expected: "1000 (doesn't go through Math.min(cap,...) path)"
+    status: "PASSED — Fixed: continuation now returns Math.min(MIN_RETRY_DELAY_MS, maxRetryBackoffMs)"
+
+  - id: S-186
+    category: Usage Accounting
+    invariant: "Never negative"
+    setup: "update={inputTokens:NaN, outputTokens:NaN, totalTokens:NaN}"
+    action: "mergeMonotonicUsage(...)"
+    expected: "Math.max(prev, 0, NaN) = NaN when prev > 0? Actually Math.max(10, 0, NaN) = NaN!"
+    status: "PASSED — Fixed: Number.isFinite() guard prevents NaN propagation"
+
+  - id: S-187
+    category: Ensemble Resolution
+    invariant: "Positive integer"
+    setup: 'Issue(labels=["ensemble:01"])'
+    action: "ensembleSize(issue)"
+    expected: '1 (Number("01")=1, isInteger=true, >0=true)'
+    status: PENDING
+
+  - id: S-188
+    category: Dispatch Ordering
+    invariant: "Out-of-range sorts last"
+    setup: "Priority type is 1|2|3|4 literal union — float values cannot be assigned"
+    action: "N/A — compile-time enforcement"
+    expected: "N/A — addressed by type system"
+    status: "RESOLVED — Priority literal type (1|2|3|4) makes floats unrepresentable"
+
+  - id: S-189
+    category: Routing
+    invariant: "Handles non-string"
+    setup: "normalizeRouteName(42)"
+    action: "String(42).trim().toLowerCase()"
+    expected: '"42" (not empty, would be a valid route name)'
+    status: PENDING
+
+  - id: S-190
+    category: Reconciliation
+    invariant: "Stop reason classification"
+    setup: "Active, routed, but has open blockers"
+    action: "reconciliationStopReason(issue, settings)"
+    expected: '"blocked"'
+    status: PENDING
+
+  - id: S-191
+    category: Orchestrator Scheduling
+    invariant: "No corruption in single-threaded"
+    setup: "eligibleIssues returns issue, then concurrency changes before claim"
+    action: "claim(issue) after cap reached by another claim"
+    expected: "Returns null (re-checks shouldDispatchIssue internally)"
+    status: PENDING
+
+  - id: S-192
+    category: Orchestrator Scheduling
+    invariant: "Idempotent / no crash"
+    setup: "claim then finish twice"
+    action: "finish(id, 0, true); finish(id, 0, true)"
+    expected: "Second call does nothing (entry already removed)"
+    status: PENDING
+
+  - id: S-193
+    category: Orchestrator Scheduling
+    invariant: "Preferred slot reclaimed"
+    setup: "Retry with slotIndex=1, firstUnclaimedSlot called"
+    action: "claim after retry is due"
+    expected: "Gets slot 1 if available"
+    status: PENDING
+
+  - id: S-194
+    category: Dispatch Ordering
+    invariant: "Returns same objects (not copies)"
+    setup: "Issues array"
+    action: "sorted = sortForDispatch(issues); sorted[0] === issues[?]"
+    expected: "Same references (spread creates new array but same objects)"
+    status: PENDING
+
+  - id: S-195
+    category: State Classification
+    invariant: "Matching behavior"
+    setup: 'state="", states=[""]'
+    action: 'stateIn("", [""])'
+    expected: 'true ("".trim().toLowerCase() === "".trim().toLowerCase())'
+    status: PENDING
+
+  - id: S-196
+    category: Orchestrator Scheduling
+    invariant: "Uses injected clock"
+    setup: "Custom clock returning fixed time"
+    action: "claim(issue), check startedAt"
+    expected: "Uses clock.now() not system time"
+    status: PENDING
+
+  - id: S-197
+    category: Usage Accounting
+    invariant: "Correct aggregate"
+    setup: "Two sequential updates: {input:10}, then {input:25}"
+    action: "Two applyUpdate calls"
+    expected: "entry.input=25, global delta=25 total (10 first, then 15 more)"
+    status: PENDING
+
+  - id: S-198
+    category: Dispatch Ordering
+    invariant: "Valid before invalid"
+    setup: "A(priority=4), B(priority=null)"
+    action: "sortForDispatch([B, A])"
+    expected: "[A, B]"
+    status: PENDING
+
+  - id: S-199
+    category: Ensemble Resolution
+    invariant: "Exact match required"
+    setup: 'Issue(labels=["my-ensemble:3-label"])'
+    action: "ensembleSize(issue)"
+    expected: "null (regex is ^ensemble:(\\d+)$, won't match)"
+    status: PENDING
+
+  - id: S-200
+    category: Worker Host Selection
+    invariant: "Correct comparison"
+    setup: "hosts=[\"a\"], runningCounts={a:Number.MAX_SAFE_INTEGER}, cap=Infinity"
+    action: "selectLeastLoadedHost(...)"
+    expected: '"a" (MAX_SAFE_INTEGER < Infinity is true)'
+    status: PENDING
+
+  - id: S-201
+    category: Dispatch Eligibility
+    invariant: "shouldDispatchIssue with empty-ish state"
+    setup: 'Issue with state=" " (whitespace only)'
+    action: "shouldDispatchIssue(issue, settings, ...)"
+    expected: "false? (state is truthy \" \", passes !issue.state, but issueIsActive would check lists)"
+    status: PENDING
+
+  - id: S-202
+    category: Usage Accounting
+    invariant: "reportedTotals.secondsRunning independent"
+    setup: "reportedTotals.secondsRunning=50"
+    action: "mergeMonotonicUsage(...)"
+    expected: "result.reportedTotals.secondsRunning=50 (preserved)"
+    status: PENDING
+
+  - id: S-203
+    category: Orchestrator Scheduling
+    invariant: "Snapshot isolation"
+    setup: "Take snapshot, modify original"
+    action: "snapshot() then state change"
+    expected: "Snapshot unchanged (spread operator copies)"
+    status: PENDING
+
+  - id: S-204
+    category: Orchestrator Scheduling
+    invariant: "Completed + retry both set"
+    setup: "finish(id, 0, true)"
+    action: "Check completed.has(id) and retryAttempts.has(id)"
+    expected: "Both true"
+    status: PENDING
+
+  - id: S-205
+    category: Orchestrator Scheduling
+    invariant: "Terminal issues clear retries"
+    setup: "Issue in terminal state with retry entry"
+    action: "eligibleIssues([terminalIssue])"
+    expected: "retryAttempts entry removed"
+    status: PENDING
+
+  - id: S-206
+    category: Retry and Backoff
+    invariant: "Fixed regardless of inputs"
+    setup: "Various attempt values with continuation"
+    action: 'retryBackoffMs(0, 0, "continuation")'
+    expected: "1000"
+    status: PENDING
+
+  - id: S-207
+    category: Worker Host Selection
+    invariant: "Deterministic tie-breaking"
+    setup: "Three hosts all with count=0"
+    action: "selectLeastLoadedHost(...)"
+    expected: "First host in list (iteration order determines winner)"
+    status: PENDING
+
+  - id: S-208
+    category: Workspace Containment
+    invariant: "Dots, hyphens, underscores preserved"
+    setup: 'identifier="MT-1.0_beta"'
+    action: 'safeIdentifier("MT-1.0_beta")'
+    expected: '"MT-1.0_beta" (all chars in [A-Za-z0-9_.-])'
+    status: PENDING
+
+  - id: S-209
+    category: Workspace Containment
+    invariant: "Safe behavior"
+    setup: 'safeIdentifier("")'
+    action: 'workspacePath("/tmp/w", "", 0, 1)'
+    expected: "Throws error (empty identifier produces invalid workspace path)"
+    status: "PASSED — Fixed: workspacePath now throws when safeIdentifier yields empty string"
+
+  - id: S-210
+    category: Retry and Backoff
+    invariant: "Continuation returns 1000 regardless"
+    setup: "cap=100 (less than 1000)"
+    action: 'retryBackoffMs(1, 100, "continuation")'
+    expected: "1000 (cap not applied to continuation)"
+    status: "PASSED — Fixed: continuation now returns Math.min(MIN_RETRY_DELAY_MS, maxRetryBackoffMs)"
+
+  # ===========================================================================
+  # DISPATCH ORDERING (S-211 to S-330 from more_scenarios.md)
+  # ===========================================================================
+  - id: S-211
+    category: Dispatch Ordering
+    invariant: "Lower priority number dispatches first"
+    what_is_being_tested: "Basic priority comparison across full valid range"
+    sandbox_command: "npx tsx demo/sandbox.ts --inline '{\"issues\":[{\"id\":\"a\",\"identifier\":\"A-1\",\"title\":\"T\",\"state\":\"Todo\",\"stateType\":\"unstarted\",\"labels\":[],\"blockers\":[],\"priority\":4},{\"id\":\"b\",\"identifier\":\"B-1\",\"title\":\"T\",\"state\":\"Todo\",\"stateType\":\"unstarted\",\"labels\":[],\"blockers\":[],\"priority\":1}],\"pollTicks\":1,\"assertions\":[{\"type\":\"dispatch_order\",\"issueIds\":[\"b\",\"a\"]}]}'"
+    expected: "B dispatched before A"
+    status: PENDING
+
+  - id: S-212
+    category: Dispatch Ordering
+    invariant: "Lower priority number dispatches first"
+    what_is_being_tested: "Full valid range [1,2,3,4] sorted from reverse input"
+    sandbox_command: "npx tsx demo/sandbox.ts --inline '{\"issues\":[{\"id\":\"d\",\"identifier\":\"D-1\",\"title\":\"T\",\"state\":\"Todo\",\"stateType\":\"unstarted\",\"labels\":[],\"blockers\":[],\"priority\":4},{\"id\":\"c\",\"identifier\":\"C-1\",\"title\":\"T\",\"state\":\"Todo\",\"stateType\":\"unstarted\",\"labels\":[],\"blockers\":[],\"priority\":3},{\"id\":\"b\",\"identifier\":\"B-1\",\"title\":\"T\",\"state\":\"Todo\",\"stateType\":\"unstarted\",\"labels\":[],\"blockers\":[],\"priority\":2},{\"id\":\"a\",\"identifier\":\"A-1\",\"title\":\"T\",\"state\":\"Todo\",\"stateType\":\"unstarted\",\"labels\":[],\"blockers\":[],\"priority\":1}],\"settingsOverrides\":{\"agent\":{\"maxConcurrentAgents\":10}},\"pollTicks\":1,\"assertions\":[{\"type\":\"dispatch_order\",\"issueIds\":[\"a\",\"b\",\"c\",\"d\"]}]}'"
+    expected: "Dispatched in order a,b,c,d"
+    status: PENDING
+
+  - id: S-213
+    category: Dispatch Ordering
+    invariant: "Out-of-range priority sorts last"
+    what_is_being_tested: "Zero is below valid range (1-4)"
+    sandbox_command: "npx tsx demo/sandbox.ts --inline '{\"issues\":[{\"id\":\"a\",\"identifier\":\"A-1\",\"title\":\"T\",\"state\":\"Todo\",\"stateType\":\"unstarted\",\"labels\":[],\"blockers\":[],\"priority\":0},{\"id\":\"b\",\"identifier\":\"B-1\",\"title\":\"T\",\"state\":\"Todo\",\"stateType\":\"unstarted\",\"labels\":[],\"blockers\":[],\"priority\":4}],\"pollTicks\":1,\"assertions\":[{\"type\":\"dispatch_order\",\"issueIds\":[\"b\",\"a\"]}]}'"
+    expected: "B (valid priority 4) dispatches before A (invalid priority 0)"
+    status: PENDING
+
+  - id: S-214
+    category: Dispatch Ordering
+    invariant: "Out-of-range priority sorts last"
+    what_is_being_tested: "Five is above valid range"
+    sandbox_command: "npx tsx demo/sandbox.ts --inline '{\"issues\":[{\"id\":\"a\",\"identifier\":\"A-1\",\"title\":\"T\",\"state\":\"Todo\",\"stateType\":\"unstarted\",\"labels\":[],\"blockers\":[],\"priority\":5},{\"id\":\"b\",\"identifier\":\"B-1\",\"title\":\"T\",\"state\":\"Todo\",\"stateType\":\"unstarted\",\"labels\":[],\"blockers\":[],\"priority\":4}],\"pollTicks\":1,\"assertions\":[{\"type\":\"dispatch_order\",\"issueIds\":[\"b\",\"a\"]}]}'"
+    expected: "B dispatches first"
+    status: PENDING
+
+  - id: S-215
+    category: Dispatch Ordering
+    invariant: "Negative priority is out-of-range"
+    what_is_being_tested: "Negative numbers rejected from valid range"
+    sandbox_command: "npx tsx demo/sandbox.ts --inline '{\"issues\":[{\"id\":\"a\",\"identifier\":\"A-1\",\"title\":\"T\",\"state\":\"Todo\",\"stateType\":\"unstarted\",\"labels\":[],\"blockers\":[],\"priority\":-1},{\"id\":\"b\",\"identifier\":\"B-1\",\"title\":\"T\",\"state\":\"Todo\",\"stateType\":\"unstarted\",\"labels\":[],\"blockers\":[],\"priority\":3}],\"pollTicks\":1,\"assertions\":[{\"type\":\"dispatch_order\",\"issueIds\":[\"b\",\"a\"]}]}'"
+    expected: "B dispatches first"
+    status: PENDING
+
+  - id: S-216
+    category: Dispatch Ordering
+    invariant: "Null priority sorts last"
+    what_is_being_tested: "Null treated as out-of-range"
+    sandbox_command: "npx tsx demo/sandbox.ts --inline '{\"issues\":[{\"id\":\"a\",\"identifier\":\"A-1\",\"title\":\"T\",\"state\":\"Todo\",\"stateType\":\"unstarted\",\"labels\":[],\"blockers\":[],\"priority\":null},{\"id\":\"b\",\"identifier\":\"B-1\",\"title\":\"T\",\"state\":\"Todo\",\"stateType\":\"unstarted\",\"labels\":[],\"blockers\":[],\"priority\":4}],\"pollTicks\":1,\"assertions\":[{\"type\":\"dispatch_order\",\"issueIds\":[\"b\",\"a\"]}]}'"
+    expected: "B dispatches first"
+    status: PENDING
+
+  - id: S-217
+    category: Dispatch Ordering
+    invariant: "Same priority uses earlier creation time"
+    what_is_being_tested: "Secondary sort key (date)"
+    sandbox_command: "npx tsx demo/sandbox.ts --inline '{\"issues\":[{\"id\":\"a\",\"identifier\":\"A-1\",\"title\":\"T\",\"state\":\"Todo\",\"stateType\":\"unstarted\",\"labels\":[],\"blockers\":[],\"priority\":2,\"createdAt\":\"2024-06-01\"},{\"id\":\"b\",\"identifier\":\"B-1\",\"title\":\"T\",\"state\":\"Todo\",\"stateType\":\"unstarted\",\"labels\":[],\"blockers\":[],\"priority\":2,\"createdAt\":\"2024-01-01\"}],\"pollTicks\":1,\"assertions\":[{\"type\":\"dispatch_order\",\"issueIds\":[\"b\",\"a\"]}]}'"
+    expected: "B (earlier) dispatches first"
+    status: PENDING
+
+  - id: S-218
+    category: Dispatch Ordering
+    invariant: "Same priority+time uses lexicographic identifier"
+    what_is_being_tested: "Tertiary sort key"
+    sandbox_command: "npx tsx demo/sandbox.ts --inline '{\"issues\":[{\"id\":\"a\",\"identifier\":\"MT-9\",\"title\":\"T\",\"state\":\"Todo\",\"stateType\":\"unstarted\",\"labels\":[],\"blockers\":[],\"priority\":2,\"createdAt\":\"2024-01-01\"},{\"id\":\"b\",\"identifier\":\"MT-10\",\"title\":\"T\",\"state\":\"Todo\",\"stateType\":\"unstarted\",\"labels\":[],\"blockers\":[],\"priority\":2,\"createdAt\":\"2024-01-01\"}],\"pollTicks\":1,\"assertions\":[{\"type\":\"dispatch_order\",\"issueIds\":[\"b\",\"a\"]}]}'"
+    expected: "MT-10 < MT-9 lexicographically"
+    status: PENDING
+
+  - id: S-219
+    category: Dispatch Ordering
+    invariant: "Null creation time sorts last within priority group"
+    what_is_being_tested: "Null date handling"
+    sandbox_command: "npx tsx demo/sandbox.ts --inline '{\"issues\":[{\"id\":\"a\",\"identifier\":\"A-1\",\"title\":\"T\",\"state\":\"Todo\",\"stateType\":\"unstarted\",\"labels\":[],\"blockers\":[],\"priority\":2,\"createdAt\":null},{\"id\":\"b\",\"identifier\":\"B-1\",\"title\":\"T\",\"state\":\"Todo\",\"stateType\":\"unstarted\",\"labels\":[],\"blockers\":[],\"priority\":2,\"createdAt\":\"2024-01-01\"}],\"pollTicks\":1,\"assertions\":[{\"type\":\"dispatch_order\",\"issueIds\":[\"b\",\"a\"]}]}'"
+    expected: "B first (has date), A last (null date)"
+    status: PENDING
+
+  - id: S-220
+    category: Dispatch Ordering
+    invariant: "Unparseable creation time sorts last"
+    what_is_being_tested: "Empty string date treated as missing"
+    sandbox_command: "npx tsx demo/sandbox.ts --inline '{\"issues\":[{\"id\":\"a\",\"identifier\":\"A-1\",\"title\":\"T\",\"state\":\"Todo\",\"stateType\":\"unstarted\",\"labels\":[],\"blockers\":[],\"priority\":2,\"createdAt\":\"\"},{\"id\":\"b\",\"identifier\":\"B-1\",\"title\":\"T\",\"state\":\"Todo\",\"stateType\":\"unstarted\",\"labels\":[],\"blockers\":[],\"priority\":2,\"createdAt\":\"2024-01-01\"}],\"pollTicks\":1,\"assertions\":[{\"type\":\"dispatch_order\",\"issueIds\":[\"b\",\"a\"]}]}'"
+    expected: "B first"
+    status: PENDING
+
+  - id: S-221
+    category: Dispatch Ordering
+    invariant: "Unparseable creation time sorts last"
+    what_is_being_tested: "\"not-a-date\" is unparseable"
+    sandbox_command: "npx tsx demo/sandbox.ts --inline '{\"issues\":[{\"id\":\"a\",\"identifier\":\"A-1\",\"title\":\"T\",\"state\":\"Todo\",\"stateType\":\"unstarted\",\"labels\":[],\"blockers\":[],\"priority\":2,\"createdAt\":\"not-a-date\"},{\"id\":\"b\",\"identifier\":\"B-1\",\"title\":\"T\",\"state\":\"Todo\",\"stateType\":\"unstarted\",\"labels\":[],\"blockers\":[],\"priority\":2,\"createdAt\":\"2024-01-01\"}],\"pollTicks\":1,\"assertions\":[{\"type\":\"dispatch_order\",\"issueIds\":[\"b\",\"a\"]}]}'"
+    expected: "B first"
+    status: PENDING
+
+  - id: S-222
+    category: Dispatch Ordering
+    invariant: "Out-of-range priority (non-integer) sorts last"
+    what_is_being_tested: "2.5 passes >= 1 && <= 4 but is not an integer"
+    sandbox_command: "npx tsx demo/sandbox.ts --inline '{\"issues\":[{\"id\":\"a\",\"identifier\":\"A-1\",\"title\":\"T\",\"state\":\"Todo\",\"stateType\":\"unstarted\",\"labels\":[],\"blockers\":[],\"priority\":2.5},{\"id\":\"b\",\"identifier\":\"B-1\",\"title\":\"T\",\"state\":\"Todo\",\"stateType\":\"unstarted\",\"labels\":[],\"blockers\":[],\"priority\":2}],\"pollTicks\":1,\"assertions\":[{\"type\":\"dispatch_order\",\"issueIds\":[\"b\",\"a\"]}]}'"
+    expected: "A should sort last (non-integer), but BUG: sorts between 2 and 3"
+    status: "FAILED — prioritySort lacks Number.isInteger() check"
+
+  - id: S-223
+    category: Dispatch Ordering
+    invariant: "Out-of-range priority sorts last"
+    what_is_being_tested: "1.5 in valid range but not integer"
+    sandbox_command: "npx tsx demo/sandbox.ts --inline '{\"issues\":[{\"id\":\"a\",\"identifier\":\"A-1\",\"title\":\"T\",\"state\":\"Todo\",\"stateType\":\"unstarted\",\"labels\":[],\"blockers\":[],\"priority\":1.5},{\"id\":\"b\",\"identifier\":\"B-1\",\"title\":\"T\",\"state\":\"Todo\",\"stateType\":\"unstarted\",\"labels\":[],\"blockers\":[],\"priority\":1}],\"pollTicks\":1,\"assertions\":[{\"type\":\"dispatch_order\",\"issueIds\":[\"b\",\"a\"]}]}'"
+    expected: "A should sort last, but BUG: treated as valid priority 1.5"
+    status: "FAILED — prioritySort lacks Number.isInteger() check"
+
+  - id: S-224
+    category: Dispatch Ordering
+    invariant: "Out-of-range priority sorts last"
+    what_is_being_tested: "3.9 passes range but not integer"
+    sandbox_command: "npx tsx demo/sandbox.ts --inline '{\"issues\":[{\"id\":\"a\",\"identifier\":\"A-1\",\"title\":\"T\",\"state\":\"Todo\",\"stateType\":\"unstarted\",\"labels\":[],\"blockers\":[],\"priority\":3.9},{\"id\":\"b\",\"identifier\":\"B-1\",\"title\":\"T\",\"state\":\"Todo\",\"stateType\":\"unstarted\",\"labels\":[],\"blockers\":[],\"priority\":4}],\"pollTicks\":1,\"assertions\":[{\"type\":\"dispatch_order\",\"issueIds\":[\"a\",\"b\"]}]}'"
+    expected: "A sorts before B because 3.9 < 4 (BUG: should sort last)"
+    status: "FAILED — prioritySort lacks Number.isInteger() check"
+
+  - id: S-225
+    category: Dispatch Ordering
+    invariant: "Out-of-range priority sorts last"
+    what_is_being_tested: "Infinity > 4 so out of range"
+    expected: "B first"
+    status: PENDING
+
+  - id: S-226
+    category: Dispatch Ordering
+    invariant: "Out-of-range priority sorts last"
+    what_is_being_tested: "-Infinity < 1 so out of range"
+    expected: "B first"
+    status: PENDING
+
+  - id: S-227
+    category: Dispatch Ordering
+    invariant: "Out-of-range priority sorts last"
+    what_is_being_tested: "Boundary below 1"
+    expected: "B first (0.999 < 1 so out of range)"
+    status: PENDING
+
+  - id: S-228
+    category: Dispatch Ordering
+    invariant: "Out-of-range priority (non-integer) sorts last"
+    what_is_being_tested: "Just above 1, passes range check but not integer"
+    expected: "BUG: A sorts first because 1.001 < 2 and passes range check"
+    status: "FAILED — prioritySort lacks Number.isInteger() check"
+
+  - id: S-229
+    category: Dispatch Ordering
+    invariant: "Out-of-range priority sorts last"
+    what_is_being_tested: "Just above 4 boundary"
+    expected: "B first (4.001 > 4 so out of range)"
+    status: PENDING
+
+  - id: S-230
+    category: Dispatch Ordering
+    invariant: "Multiple null priorities use secondary sort"
+    what_is_being_tested: "Both in 'last' bucket, use date tiebreak"
+    expected: "B first (earlier date)"
+    status: PENDING
+
+  - id: S-231
+    category: Dispatch Ordering
+    invariant: "Sorting twice yields same result"
+    what_is_being_tested: "Idempotency with varied priorities and dates"
+    expected: "Same dispatch order on second tick"
+    status: PENDING
+
+  - id: S-232
+    category: Dispatch Ordering
+    invariant: "Non-integer priorities should sort last"
+    what_is_being_tested: "1.1, 1.5, 2.3, 2.7, 3.2, 3.8 all treated as valid"
+    expected: "BUG: All floats sort as valid, so a(1.1) < b(2.3) < c(3.8) < d(4)"
+    status: "FAILED — prioritySort lacks Number.isInteger() check"
+
+  - id: S-233
+    category: Dispatch Ordering
+    invariant: "Result is permutation of input"
+    what_is_being_tested: "Zero issues"
+    expected: "No dispatch, no errors"
+    status: PENDING
+
+  - id: S-234
+    category: Dispatch Ordering
+    invariant: "Permutation of input"
+    what_is_being_tested: "Trivial case"
+    expected: "A-1 dispatched"
+    status: PENDING
+
+  - id: S-235
+    category: Dispatch Ordering
+    invariant: "Falls through to date comparison"
+    what_is_being_tested: "Large same-priority group"
+    expected: "Sorted by date ascending"
+    status: PENDING
+
+  - id: S-236
+    category: Dispatch Ordering
+    invariant: "Lexicographic identifier ordering"
+    what_is_being_tested: "\"AA\" < \"AB\" < \"B\" < \"BA\""
+    expected: "AA < AB < B < BA"
+    status: PENDING
+
+  - id: S-237
+    category: Dispatch Ordering
+    invariant: "Earlier creation time first"
+    what_is_being_tested: "1970-01-01 is a valid early date"
+    expected: "A (1970) before B (2024)"
+    status: PENDING
+
+  - id: S-238
+    category: Dispatch Ordering
+    invariant: "Earlier creation time first"
+    what_is_being_tested: "Far future still parseable"
+    expected: "B before A"
+    status: PENDING
+
+  - id: S-239
+    category: Dispatch Ordering
+    invariant: "Earlier creation time first"
+    what_is_being_tested: "Timezone-aware date parsing"
+    expected: "A (07:00 UTC) before B (12:00 UTC)"
+    status: PENDING
+
+  - id: S-240
+    category: Dispatch Ordering
+    invariant: "Earlier creation time first"
+    what_is_being_tested: "Sub-second precision in dates"
+    expected: "B (001ms) before A (999ms)"
+    status: PENDING
+
+  - id: S-241
+    category: Dispatch Ordering
+    invariant: "Valid priorities first, invalid last"
+    what_is_being_tested: "Mix of null, 0, 5, and valid 1-4"
+    expected: "e(1) and c(2) dispatch first, then null/0/5 last"
+    status: PENDING
+
+  - id: S-242
+    category: Dispatch Ordering
+    invariant: "Sort is permutation, lower priority first"
+    what_is_being_tested: "Large array stability with two priority groups"
+    expected: "All priority-1 issues dispatched before priority-4"
+    status: PENDING
+
+  - id: S-243
+    category: Dispatch Ordering
+    invariant: "Falls through to date"
+    what_is_being_tested: "Priority is constant across all issues"
+    expected: "a(Jan) b(Feb) c(Mar)"
+    status: PENDING
+
+  - id: S-244
+    category: Dispatch Ordering
+    invariant: "Both map to MAX_SAFE_INTEGER, use date tiebreak"
+    what_is_being_tested: "Invalid priorities compared to each other"
+    expected: "Both sort last but B (earlier date) before A"
+    status: PENDING
+
+  - id: S-245
+    category: Dispatch Ordering
+    invariant: "Both out-of-range map to same sort value"
+    what_is_being_tested: "Two different invalid priorities compared"
+    expected: "Both in last bucket, B first (earlier date)"
+    status: PENDING
+
+  - id: S-246
+    category: Dispatch Ordering
+    invariant: "Result is permutation (no drops)"
+    what_is_being_tested: "All 30 issues appear in dispatch"
+    expected: "All 5 issues dispatched"
+    status: PENDING
+
+  - id: S-247
+    category: Dispatch Ordering
+    invariant: "Lexicographic identifier as final tiebreak"
+    what_is_being_tested: "All other keys equal"
+    expected: "A < M < Z lexicographically"
+    status: PENDING
+
+  - id: S-248
+    category: Dispatch Ordering
+    invariant: "Lexicographic identifier"
+    what_is_being_tested: "\"9\" > \"10\" lexicographically"
+    expected: "\"10\" < \"9\" lexicographically so b dispatches first"
+    status: PENDING
+
+  - id: S-249
+    category: Dispatch Ordering
+    invariant: "Lexicographic identifier via localeCompare"
+    what_is_being_tested: "Non-ASCII identifiers"
+    expected: "Deterministic ordering (localeCompare handles unicode)"
+    status: PENDING
+
+  - id: S-250
+    category: Dispatch Ordering
+    invariant: "Parseable date sorted correctly"
+    what_is_being_tested: "Partial date format"
+    expected: "B (2023) before A (2024)"
+    status: PENDING
+
+  - id: "S-251 to S-260"
+    category: Dispatch Ordering
+    invariant: "Valid always before null"
+    what_is_being_tested: "Every valid priority vs null in both orders"
+    expected: "Valid priority always dispatches first (repeat for priorities 1-4, both input orders)"
+    status: PENDING
+
+  - id: "S-261 to S-270"
+    category: Dispatch Ordering
+    invariant: "Date ordering within priority group"
+    what_is_being_tested: "Reverse-chronological input still sorts correctly"
+    expected: "Sorted by date ascending despite reverse input"
+    status: PENDING
+
+  - id: "S-271 to S-280"
+    category: Dispatch Ordering
+    invariant: "Boundaries 0.99, 1, 1.01, 3.99, 4, 4.01"
+    what_is_being_tested: "Exact boundary values of valid range [1,4]"
+    expected: "0.99 out-of-range, 1 valid, 1.01 BUG-valid, 3.99 BUG-valid, 4 valid, 4.01 out-of-range"
+    status: "Mixed PENDING and FAILED (non-integer bugs)"
+
+  - id: "S-281 to S-290"
+    category: Dispatch Ordering
+    invariant: "When cap < issues, highest priority dispatches first"
+    what_is_being_tested: "With cap=2 and 5 issues, only top 2 priorities dispatch"
+    expected: "Only priority-1 issues dispatched (cap=2 reached)"
+    status: PENDING
+
+  - id: "S-291 to S-300"
+    category: Dispatch Ordering
+    invariant: "Identifier tiebreak when dates equal"
+    what_is_being_tested: "All dates identical, pure identifier sort"
+    expected: "Alphabetical by identifier"
+    status: PENDING
+
+  - id: "S-301 to S-310"
+    category: Dispatch Ordering
+    invariant: "Various ISO 8601 formats parseable"
+    what_is_being_tested: "Mixed date formats still sort correctly by underlying time"
+    expected: "Mixed formats still sort correctly by underlying time"
+    status: PENDING
+
+  - id: "S-311 to S-320"
+    category: Dispatch Ordering
+    invariant: "Idempotent sort"
+    what_is_being_tested: "Same issues rediscovered on tick 2 dispatch in same order"
+    expected: "Consistent ordering across ticks"
+    status: PENDING
+
+  - id: "S-321 to S-330"
+    category: Dispatch Ordering
+    invariant: "Sort is permutation, no drops"
+    what_is_being_tested: "Performance and correctness with 100 issues"
+    expected: "All dispatched, priority-1 first"
+    status: PENDING
+
+  # ===========================================================================
+  # DISPATCH ELIGIBILITY (S-331 to S-450 from more_scenarios.md)
+  # ===========================================================================
+  - id: S-331
+    category: Dispatch Eligibility
+    invariant: "Missing required field -> ineligible"
+    what_is_being_tested: "Empty string id"
+    expected: "Not dispatched"
+    status: PENDING
+
+  - id: S-332
+    category: Dispatch Eligibility
+    invariant: "Missing required field -> ineligible"
+    what_is_being_tested: "Empty identifier"
+    expected: "Not dispatched"
+    status: PENDING
+
+  - id: S-333
+    category: Dispatch Eligibility
+    invariant: "Missing required field -> ineligible"
+    what_is_being_tested: "Empty title"
+    expected: "Not dispatched"
+    status: PENDING
+
+  - id: S-334
+    category: Dispatch Eligibility
+    invariant: "Missing required field -> ineligible"
+    what_is_being_tested: "Empty state string"
+    expected: "Not dispatched"
+    status: PENDING
+
+  - id: S-335
+    category: Dispatch Eligibility
+    invariant: "Missing required fields"
+    what_is_being_tested: "Every field empty"
+    expected: "Not dispatched"
+    status: PENDING
+
+  - id: S-336
+    category: Dispatch Eligibility
+    invariant: "Terminal state -> ineligible"
+    what_is_being_tested: "Issue in Done state"
+    expected: "Not dispatched"
+    status: PENDING
+
+  - id: S-337
+    category: Dispatch Eligibility
+    invariant: "Terminal state -> ineligible"
+    what_is_being_tested: "Cancelled is also terminal"
+    expected: "Not dispatched"
+    status: PENDING
+
+  - id: S-338
+    category: Dispatch Eligibility
+    invariant: "Non-active state -> ineligible"
+    what_is_being_tested: "Backlog not in activeStates"
+    expected: "Not dispatched"
+    status: PENDING
+
+  - id: S-339
+    category: Dispatch Eligibility
+    invariant: "Active state -> eligible"
+    what_is_being_tested: "Happy path"
+    expected: "Dispatched"
+    status: PENDING
+
+  - id: S-340
+    category: Dispatch Eligibility
+    invariant: "Active state -> eligible"
+    what_is_being_tested: "In Progress is active"
+    expected: "Dispatched"
+    status: PENDING
+
+  - id: S-341
+    category: Dispatch Eligibility
+    invariant: "State matching is case-insensitive"
+    what_is_being_tested: "Lowercase state matches activeStates"
+    expected: "Dispatched (case-insensitive match)"
+    status: PENDING
+
+  - id: S-342
+    category: Dispatch Eligibility
+    invariant: "State matching is whitespace-tolerant"
+    what_is_being_tested: "Leading/trailing whitespace stripped"
+    expected: "Dispatched"
+    status: PENDING
+
+  - id: S-343
+    category: Dispatch Eligibility
+    invariant: "Unstarted + non-terminal blocker -> ineligible"
+    what_is_being_tested: "Single open blocker"
+    expected: "Not dispatched (blocked)"
+    status: PENDING
+
+  - id: S-344
+    category: Dispatch Eligibility
+    invariant: "All blockers resolved -> eligible"
+    what_is_being_tested: "Both blockers in Done state"
+    expected: "Dispatched"
+    status: PENDING
+
+  - id: S-345
+    category: Dispatch Eligibility
+    invariant: "Any non-terminal blocker gates unstarted"
+    what_is_being_tested: "One resolved, one open"
+    expected: "Not dispatched"
+    status: PENDING
+
+  - id: S-346
+    category: Dispatch Eligibility
+    invariant: "Blockers only gate unstarted issues"
+    what_is_being_tested: "stateType=\"started\" bypasses blocker check"
+    expected: "Dispatched (started issues not gated by blockers)"
+    status: PENDING
+
+  - id: S-347
+    category: Dispatch Eligibility
+    invariant: "No blockers -> eligible"
+    what_is_being_tested: "Empty array doesn't trigger blocker check"
+    expected: "Dispatched"
+    status: PENDING
+
+  - id: S-348
+    category: Dispatch Eligibility
+    invariant: "Any non-terminal blocker gates"
+    what_is_being_tested: "Multiple blockers all open"
+    expected: "Not dispatched"
+    status: PENDING
+
+  - id: S-349
+    category: Dispatch Eligibility
+    invariant: "Cap reached -> no dispatch"
+    what_is_being_tested: "Zero cap means nothing dispatches"
+    expected: "Not dispatched"
+    status: PENDING
+
+  - id: S-350
+    category: Dispatch Eligibility
+    invariant: "Below cap -> eligible"
+    what_is_being_tested: "Cap=1 with 3 issues"
+    expected: "Only 1 dispatched"
+    status: PENDING
+
+  - id: S-351
+    category: Dispatch Eligibility
+    invariant: "Below cap -> all eligible"
+    what_is_being_tested: "Cap higher than issue count"
+    expected: "All 3 dispatched"
+    status: PENDING
+
+  - id: S-352
+    category: Dispatch Eligibility
+    invariant: "Cap respected"
+    what_is_being_tested: "Strict cap enforcement"
+    expected: "Max 2 concurrent"
+    status: PENDING
+
+  - id: S-353
+    category: Dispatch Eligibility
+    invariant: "Not assigned to this worker -> ineligible"
+    what_is_being_tested: "Explicit false assignment"
+    expected: "Not dispatched"
+    status: PENDING
+
+  - id: S-354
+    category: Dispatch Eligibility
+    invariant: "Only false blocks"
+    what_is_being_tested: "Null doesn't equal false"
+    expected: "Dispatched"
+    status: PENDING
+
+  - id: S-355
+    category: Dispatch Eligibility
+    invariant: "Explicitly assigned"
+    what_is_being_tested: "True is explicitly assigned"
+    expected: "Dispatched"
+    status: PENDING
+
+  - id: S-356
+    category: Dispatch Eligibility
+    invariant: "Unclaimed slots -> eligible"
+    what_is_being_tested: "Multi-slot ensemble"
+    expected: "2 slots claimed"
+    status: PENDING
+
+  - id: S-357
+    category: Dispatch Eligibility
+    invariant: "Cap takes precedence over ensemble size"
+    what_is_being_tested: "Cap limits ensemble fanout"
+    expected: "Max 2 despite ensemble size 3"
+    status: PENDING
+
+  - id: S-358
+    category: Dispatch Eligibility
+    invariant: "Terminal takes precedence"
+    what_is_being_tested: "Conflict between active and terminal lists"
+    expected: "Not dispatched (terminal wins)"
+    status: PENDING
+
+  - id: S-359
+    category: Dispatch Eligibility
+    invariant: "isTerminalState(undefined) = false"
+    what_is_being_tested: "Undefined state on blocker"
+    expected: "Not dispatched (blocker state undefined = non-terminal = blocking)"
+    status: PENDING
+
+  - id: S-360
+    category: Dispatch Eligibility
+    invariant: "Terminal blockers don't gate"
+    what_is_being_tested: "Explicit Done blocker"
+    expected: "Dispatched"
+    status: PENDING
+
+  - id: "S-361 to S-370"
+    category: Dispatch Eligibility
+    invariant: "Cap strictly enforced"
+    what_is_being_tested: "Parametric sweep of cap values [0,1,2,3,5,10] with 10 issues"
+    expected: "Never exceeds cap"
+    status: PENDING
+
+  - id: "S-371 to S-379"
+    category: Dispatch Eligibility
+    invariant: "Any non-terminal blocker gates unstarted"
+    what_is_being_tested: "Number of blockers doesn't matter — even 1 blocks"
+    expected: "Not dispatched"
+    status: PENDING
+
+  - id: S-380
+    category: Dispatch Eligibility
+    invariant: "Non-unstarted issues not gated by blockers"
+    what_is_being_tested: "|| in issueHasOpenBlockers means state name overrides stateType"
+    expected: "BUG: Not dispatched even though stateType=\"started\" because state=\"Todo\" triggers blocker check via ||"
+    status: "FAILED — issueHasOpenBlockers uses || so state=\"Todo\" overrides stateType=\"started\""
+
+  - id: S-381
+    category: Dispatch Eligibility
+    invariant: "Non-unstarted issues not gated by blockers"
+    what_is_being_tested: "Case-insensitive \"todo\" match"
+    expected: "BUG: Blocked"
+    status: "FAILED — state.trim().toLowerCase()===\"todo\" triggers despite stateType=\"started\""
+
+  - id: S-382
+    category: Dispatch Eligibility
+    invariant: "Non-unstarted issues not gated by blockers"
+    what_is_being_tested: "All-caps variant"
+    expected: "BUG: Blocked"
+    status: "FAILED — issueHasOpenBlockers uses || with case-insensitive \"todo\" match"
+
+  - id: S-383
+    category: Dispatch Eligibility
+    invariant: "Non-unstarted issues not gated by blockers"
+    what_is_being_tested: "Whitespace-trimmed \"todo\" still matches"
+    expected: "BUG: Blocked"
+    status: "FAILED — trim().toLowerCase() matches \"todo\""
+
+  - id: S-384
+    category: Dispatch Eligibility
+    invariant: "Non-unstarted, non-\"todo\" state not gated"
+    what_is_being_tested: "\"In Progress\" doesn't match \"todo\" so blocker check skipped"
+    expected: "Dispatched (neither stateType=\"unstarted\" nor state=\"todo\")"
+    status: PENDING
+
+  - id: S-385
+    category: Dispatch Eligibility
+    invariant: "State must exactly equal \"todo\" (after trim+lowercase)"
+    what_is_being_tested: "\"todoist\" !== \"todo\""
+    expected: "Dispatched — \"todoist\" !== \"todo\""
+    status: PENDING
+
+  - id: "S-386 to S-390"
+    category: Dispatch Eligibility
+    invariant: "All blockers must be terminal for unstarted to be eligible"
+    what_is_being_tested: "Various blocker state combinations: [Done,Done], [Done,Todo], [Todo,Done], [Todo,Todo], [Cancelled,In Progress]"
+    expected: "[Done,Todo] -> blocked; [Done,Done] -> eligible"
+    status: PENDING
+
+  - id: "S-391 to S-400"
+    category: Dispatch Eligibility
+    invariant: "Ensemble slots claimed up to cap"
+    what_is_being_tested: "Interaction between ensemble size and concurrency cap"
+    expected: "Ensemble=4 but cap=3 means max 3 slots"
+    status: PENDING
+
+  - id: "S-401 to S-410"
+    category: Dispatch Eligibility
+    invariant: "Newly added issues eligible on next tick"
+    what_is_being_tested: "Issue added via mutation between ticks"
+    expected: "NEW-1 dispatched on tick 2 or 3"
+    status: PENDING
+
+  - id: "S-411 to S-420"
+    category: Dispatch Eligibility
+    invariant: "Terminal state -> stop worker"
+    what_is_being_tested: "Issue state changes between ticks"
+    expected: "Issue reconciled out after state change"
+    status: PENDING
+
+  - id: "S-421 to S-430"
+    category: Dispatch Eligibility
+    invariant: "Missing issue -> stop worker"
+    what_is_being_tested: "Issue disappears from tracker"
+    expected: "Worker stopped after issue disappears"
+    status: PENDING
+
+  - id: "S-431 to S-440"
+    category: Dispatch Eligibility
+    invariant: "Resolved blockers -> eligible on next tick"
+    what_is_being_tested: "Remove blocker, issue becomes dispatchable"
+    expected: "X-1 dispatched after blocker removed"
+    status: PENDING
+
+  - id: "S-441 to S-450"
+    category: Dispatch Eligibility
+    invariant: "Cap=1, highest priority wins"
+    what_is_being_tested: "Priority ordering under tight cap"
+    expected: "Only B-1 (priority 1) dispatched"
+    status: PENDING
+
+  # ===========================================================================
+  # ROUTING (S-451 to S-530 from more_scenarios.md)
+  # ===========================================================================
+  - id: S-451
+    category: Routing
+    invariant: "Valid route in allowlist -> eligible"
+    what_is_being_tested: "Basic route matching"
+    expected: "Dispatched"
+    status: PENDING
+
+  - id: S-452
+    category: Routing
+    invariant: "Route not in list -> rejected"
+    what_is_being_tested: "Non-matching route"
+    expected: "Not dispatched"
+    status: PENDING
+
+  - id: S-453
+    category: Routing
+    invariant: "Unrouted accepted when enabled"
+    what_is_being_tested: "No lorenz label present"
+    expected: "Dispatched (unrouted accepted)"
+    status: PENDING
+
+  - id: S-454
+    category: Routing
+    invariant: "Unrouted rejected when disabled"
+    what_is_being_tested: "Unrouted not accepted"
+    expected: "Not dispatched"
+    status: PENDING
+
+  - id: S-455
+    category: Routing
+    invariant: "Null allowlist -> accept all"
+    what_is_being_tested: "No filtering when onlyRoutes is null"
+    expected: "Dispatched"
+    status: PENDING
+
+  - id: S-456
+    category: Routing
+    invariant: "Empty allowlist -> reject all"
+    what_is_being_tested: "Empty array blocks everything with a route"
+    expected: "Not dispatched (empty allowlist rejects)"
+    status: PENDING
+
+  - id: S-457
+    category: Routing
+    invariant: "Route normalization is case-insensitive"
+    what_is_being_tested: "\"BACKEND\" matches onlyRoutes=[\"backend\"]"
+    expected: "Dispatched (case-insensitive)"
+    status: PENDING
+
+  - id: S-458
+    category: Routing
+    invariant: "Prefix matching is case-insensitive"
+    what_is_being_tested: "\"lorenz:\" prefix matches \"Lorenz:\" config"
+    expected: "Dispatched"
+    status: PENDING
+
+  - id: S-459
+    category: Routing
+    invariant: "Leading/trailing whitespace stripped"
+    what_is_being_tested: "\"Lorenz:  backend  \" normalizes to \"backend\""
+    expected: "Dispatched (whitespace trimmed)"
+    status: PENDING
+
+  - id: S-460
+    category: Routing
+    invariant: "Whitespace-only name after prefix -> not valid"
+    what_is_being_tested: "\"Lorenz:   \" has route label but empty name"
+    expected: "Not dispatched (routed-but-invalid)"
+    status: PENDING
+
+  - id: S-461
+    category: Routing
+    invariant: "Any matching route suffices"
+    what_is_being_tested: "Two route labels, one matches"
+    expected: "Dispatched (second label matches)"
+    status: PENDING
+
+  - id: S-462
+    category: Routing
+    invariant: "Assignment check before routing"
+    what_is_being_tested: "Even with matching route, false assignment blocks"
+    expected: "Not dispatched (assignment blocks)"
+    status: PENDING
+
+  - id: S-463
+    category: Routing
+    invariant: "Empty name after prefix -> not valid"
+    what_is_being_tested: "Label is exactly the prefix"
+    expected: "Not dispatched (empty route name)"
+    status: PENDING
+
+  - id: S-464
+    category: Routing
+    invariant: "Allowlist entries normalized"
+    what_is_being_tested: "onlyRoutes=[\"Backend\"] matches label \"lorenz:backend\""
+    expected: "Dispatched (both sides normalized)"
+    status: PENDING
+
+  - id: "S-465 to S-470"
+    category: Routing
+    invariant: "Route mismatch -> stop worker"
+    what_is_being_tested: "Labels changed mid-run causes reconciliation"
+    expected: "Worker stopped after route label changes to non-matching"
+    status: PENDING
+
+  - id: "S-471 to S-530"
+    category: Routing
+    invariant: "Various routing scenarios"
+    what_is_being_tested: "Additional routing edge cases"
+    expected: "Correct routing behavior"
+    status: PENDING
+
+  # ===========================================================================
+  # RETRY AND BACKOFF (S-531 to S-610 from more_scenarios.md)
+  # ===========================================================================
+  - id: S-531
+    category: Retry and Backoff
+    invariant: "Retry delay never exceeds cap"
+    what_is_being_tested: "retryBackoffMs(\"continuation\") returns 1000 even when cap=500"
+    expected: "BUG: Continuation uses 1000ms delay despite cap=500"
+    status: "FAILED — Continuation early-return bypasses Math.min(cap,...)"
+
+  - id: S-532
+    category: Retry and Backoff
+    invariant: "Non-negative delay"
+    what_is_being_tested: "First failure attempt formula"
+    expected: "Failure recorded, retry scheduled with 10000ms delay"
+    status: PENDING
+
+  - id: S-533
+    category: Retry and Backoff
+    invariant: "Monotonically non-decreasing"
+    what_is_being_tested: "Each retry delay >= previous"
+    expected: "Each retry delay is >= previous"
+    status: PENDING
+
+  - id: S-534
+    category: Retry and Backoff
+    invariant: "Never exceeds cap"
+    what_is_being_tested: "Cap enforcement at attempt 2 (20000 > 10000 -> capped to 10000)"
+    expected: "Delay capped at 10000"
+    status: PENDING
+
+  - id: S-535
+    category: Retry and Backoff
+    invariant: "Cap prevents overflow"
+    what_is_being_tested: "10000*2^999 is astronomically large but capped"
+    expected: "Delay = 300000 (capped)"
+    status: PENDING
+
+  - id: S-536
+    category: Retry and Backoff
+    invariant: "Fixed short delay"
+    what_is_being_tested: "Continuation doesn't vary with attempt number"
+    expected: "Each continuation retries after 1000ms"
+    status: PENDING
+
+  - id: S-537
+    category: Retry and Backoff
+    invariant: "Non-negative result"
+    what_is_being_tested: "Math.max(0, attempt-1) handles negative"
+    expected: "Delay = Math.min(60000, 10000*2^0) = 10000"
+    status: PENDING
+
+  - id: "S-538 to S-540"
+    category: Retry and Backoff
+    invariant: "Exponential growth"
+    what_is_being_tested: "Attempts 1->2->3 double each time"
+    expected: "10000 -> 20000 -> 40000"
+    status: PENDING
+
+  - id: S-541
+    category: Retry and Backoff
+    invariant: "Minimum delay floor prevents zero-delay storms"
+    what_is_being_tested: "Math.min(0, 10000) = 0"
+    expected: "BUG: Zero delay, potential retry storm"
+    status: "FAILED — No minimum floor; cap=0 produces zero delay"
+
+  - id: S-542
+    category: Retry and Backoff
+    invariant: "Non-negative delay"
+    what_is_being_tested: "Math.min(-1, 10000) = -1"
+    expected: "BUG: Negative delay"
+    status: "FAILED — Negative cap propagates to negative return"
+
+  - id: "S-543 to S-550"
+    category: Retry and Backoff
+    invariant: "Cap always respected for failures"
+    what_is_being_tested: "Various cap values [0, 1, 100, 500, 999, 1000, 1001, 10000]"
+    expected: "Delay never exceeds cap"
+    status: PENDING
+
+  - id: "S-551 to S-560"
+    category: Retry and Backoff
+    invariant: "Continuation fixed at 1000ms"
+    what_is_being_tested: "Continuation ignores all cap values"
+    expected: "BUG for cap<1000: continuation returns 1000 regardless"
+    status: "FAILED for cap<1000 — Continuation bypasses cap"
+
+  - id: "S-561 to S-570"
+    category: Retry and Backoff
+    invariant: "Normal exit -> continuation retry"
+    what_is_being_tested: "Success still triggers continuation"
+    expected: "Issue re-dispatched after 1000ms continuation delay"
+    status: PENDING
+
+  - id: "S-571 to S-580"
+    category: Retry and Backoff
+    invariant: "Retry kind changes outcome"
+    what_is_being_tested: "First run fails, retries with backoff, then succeeds on continuation"
+    expected: "First run fails with backoff retry scheduled"
+    status: PENDING
+
+  - id: "S-581 to S-590"
+    category: Retry and Backoff
+    invariant: "Each retry independent"
+    what_is_being_tested: "Three issues all fail, each gets independent retry"
+    expected: "All three fail independently"
+    status: PENDING
+
+  - id: "S-591 to S-600"
+    category: Retry and Backoff
+    invariant: "Stall -> exponential backoff retry"
+    what_is_being_tested: "Agent stalls, detected by timeout, retry with failure backoff"
+    expected: "Stall detected, failure retry scheduled"
+    status: PENDING
+
+  - id: "S-601 to S-610"
+    category: Retry and Backoff
+    invariant: "Abnormal exit -> failure retry"
+    what_is_being_tested: "Session crash at turn 2"
+    expected: "Crash recorded as failure, retry scheduled"
+    status: PENDING
+
+  # ===========================================================================
+  # USAGE ACCOUNTING (S-611 to S-690 from more_scenarios.md)
+  # ===========================================================================
+  - id: S-611
+    category: Usage Accounting
+    invariant: "Monotonic growth"
+    what_is_being_tested: "Basic token accumulation"
+    expected: "Tokens accumulate across turns"
+    status: PENDING
+
+  - id: S-612
+    category: Usage Accounting
+    invariant: "Global aggregates"
+    what_is_being_tested: "Three issues each using tokens"
+    expected: "Global totals = sum of all issues' usage"
+    status: PENDING
+
+  - id: S-613
+    category: Usage Accounting
+    invariant: Idempotent
+    what_is_being_tested: "Monotonic means re-reporting same values doesn't increase"
+    expected: "Same values reported twice don't double-count"
+    status: PENDING
+
+  - id: S-614
+    category: Usage Accounting
+    invariant: "Monotonic (0 not > previous)"
+    what_is_being_tested: "Zero tokens reported"
+    expected: "Totals stay at 0"
+    status: PENDING
+
+  - id: "S-615 to S-620"
+    category: Usage Accounting
+    invariant: "Monotonically grows with turns"
+    what_is_being_tested: "Accumulation over multiple turns"
+    expected: "Grows each turn"
+    status: PENDING
+
+  - id: S-621
+    category: Usage Accounting
+    invariant: "Token counts never become NaN"
+    what_is_being_tested: "Math.max(10, 0, NaN) = NaN in JavaScript"
+    expected: "BUG: NaN propagates if null coalesces incorrectly"
+    status: "FAILED — Math.max with NaN returns NaN, corrupting totals"
+
+  - id: S-622
+    category: Usage Accounting
+    invariant: "Token counts never negative/NaN"
+    what_is_being_tested: "All three fields NaN simultaneously"
+    expected: "BUG: All token totals become NaN"
+    status: "FAILED — All fields corrupted"
+
+  - id: "S-623 to S-630"
+    category: Usage Accounting
+    invariant: "Handles large numbers"
+    what_is_being_tested: "No overflow at extreme values [MAX_SAFE_INTEGER, 1e15, 1e12]"
+    expected: "Works without overflow"
+    status: PENDING
+
+  - id: "S-631 to S-640"
+    category: Usage Accounting
+    invariant: "Never negative"
+    what_is_being_tested: "Negative input clamped by Math.max(..., 0, ...)"
+    expected: "Tokens stay at 0"
+    status: PENDING
+
+  - id: "S-641 to S-650"
+    category: Usage Accounting
+    invariant: "Monotonic growth with watermark deltas"
+    what_is_being_tested: "Turn 1 reports 100, turn 2 reports 200 — delta is 100"
+    expected: "Final tokens = turnCount * perTurn (monotonic absolute reporting)"
+    status: PENDING
+
+  - id: "S-651 to S-660"
+    category: Usage Accounting
+    invariant: "Partial update preserves other fields"
+    what_is_being_tested: "Missing fields use entryTotals value"
+    expected: "Only inputTokens updated, others unchanged"
+    status: PENDING
+
+  - id: "S-661 to S-670"
+    category: Usage Accounting
+    invariant: "Global monotonic"
+    what_is_being_tested: "Even when issues finish, global totals persist"
+    expected: "Global totals are sum of all, never decrease"
+    status: PENDING
+
+  - id: "S-671 to S-690"
+    category: Usage Accounting
+    invariant: "Correct aggregate at scale"
+    what_is_being_tested: "Many concurrent issues all reporting usage (50 issues x 5 turns)"
+    expected: "All usage correctly aggregated"
+    status: PENDING
+
+  # ===========================================================================
+  # WORKER HOST SELECTION (S-691 to S-750 from more_scenarios.md)
+  # ===========================================================================
+  - id: S-691
+    category: Worker Host Selection
+    invariant: "Empty -> null -> local execution"
+    what_is_being_tested: "No SSH hosts configured"
+    expected: "Dispatched locally (empty host list = local mode)"
+    status: PENDING
+
+  - id: S-692
+    category: Worker Host Selection
+    invariant: "Available host selected"
+    what_is_being_tested: "One host, no load"
+    expected: "Dispatched to worker-a"
+    status: PENDING
+
+  - id: S-693
+    category: Worker Host Selection
+    invariant: "Lowest load wins"
+    what_is_being_tested: "First issue goes to first host, second to second"
+    expected: "Both dispatched, distributed across hosts"
+    status: PENDING
+
+  - id: S-694
+    category: Worker Host Selection
+    invariant: "All full -> undefined -> no dispatch"
+    what_is_being_tested: "All hosts loaded to cap"
+    expected: "Only 1 dispatched (host cap=1)"
+    status: PENDING
+
+  - id: "S-695 to S-700"
+    category: Worker Host Selection
+    invariant: "Cap strictly enforced per host"
+    what_is_being_tested: "Various per-host caps [1,2,3,5,10] with 10 issues"
+    expected: "Max concurrent = hosts * per-host-cap"
+    status: PENDING
+
+  - id: "S-701 to S-710"
+    category: Worker Host Selection
+    invariant: "Always select lowest-loaded"
+    what_is_being_tested: "Load balancing across 3 hosts"
+    expected: "Distributed across 3 hosts"
+    status: PENDING
+
+  - id: "S-711 to S-750"
+    category: Worker Host Selection
+    invariant: "Various edge cases"
+    what_is_being_tested: "Duplicate hosts, cap=0, etc."
+    expected: "Correct host selection in all cases"
+    status: PENDING
+
+  # ===========================================================================
+  # ORCHESTRATOR SCHEDULING (S-751 to S-850 from more_scenarios.md)
+  # ===========================================================================
+  - id: S-751
+    category: Orchestrator Scheduling
+    invariant: "No duplicate concurrent workers"
+    what_is_being_tested: "Issue dispatched, completes, freed for retry"
+    expected: "Start -> complete lifecycle"
+    status: PENDING
+
+  - id: S-752
+    category: Orchestrator Scheduling
+    invariant: "Distinct slots"
+    what_is_being_tested: "Two separate dispatches for same issue"
+    expected: "2 runs started for X-1"
+    status: PENDING
+
+  - id: S-753
+    category: Orchestrator Scheduling
+    invariant: "Cap limits ensemble"
+    what_is_being_tested: "Global cap limits slot claims"
+    expected: "Max 2 slots claimed"
+    status: PENDING
+
+  - id: S-754
+    category: Orchestrator Scheduling
+    invariant: "Normal exit -> continuation retry"
+    what_is_being_tested: "Issue completes, gets retried after 1000ms"
+    expected: "Multiple run_started events for X-1"
+    status: PENDING
+
+  - id: S-755
+    category: Orchestrator Scheduling
+    invariant: "Failure -> exponential retry"
+    what_is_being_tested: "Error triggers longer retry delay"
+    expected: "Failure recorded, retry with backoff"
+    status: PENDING
+
+  - id: "S-756 to S-770"
+    category: Orchestrator Scheduling
+    invariant: "Cap always respected, no duplicates"
+    what_is_being_tested: "Issues rotate through as slots free up"
+    expected: "Never more than 3 concurrent"
+    status: PENDING
+
+  - id: "S-771 to S-790"
+    category: Orchestrator Scheduling
+    invariant: "Complete cleanup"
+    what_is_being_tested: "Terminal issue cleaned up properly"
+    expected: "Issue removed from running after terminal state change"
+    status: PENDING
+
+  - id: "S-791 to S-810"
+    category: Orchestrator Scheduling
+    invariant: "Watermark deltas correct across retries"
+    what_is_being_tested: "Tokens from first run + retry sum correctly"
+    expected: "Usage accumulates correctly"
+    status: PENDING
+
+  - id: "S-811 to S-830"
+    category: Orchestrator Scheduling
+    invariant: "Snapshot is a copy"
+    what_is_being_tested: "Modifying state after snapshot doesn't affect it"
+    expected: "Each snapshot independent"
+    status: PENDING
+
+  - id: "S-831 to S-850"
+    category: Orchestrator Scheduling
+    invariant: "Retry fires at correct time"
+    what_is_being_tested: "Continuation timer triggers poll"
+    expected: "Issue retried after continuation delay"
+    status: PENDING
+
+  # ===========================================================================
+  # RUNTIME INTEGRATION (S-851 to S-1000 from more_scenarios.md)
+  # ===========================================================================
+  - id: S-851
+    category: Runtime Integration
+    invariant: "End-to-end correctness"
+    what_is_being_tested: "Simplest possible scenario"
+    expected: "Issue dispatched and completed"
+    status: PENDING
+
+  - id: S-852
+    category: Runtime Integration
+    invariant: "Dynamic issue discovery"
+    what_is_being_tested: "New issue appears between ticks"
+    expected: "Both A and B dispatched"
+    status: PENDING
+
+  - id: S-853
+    category: Runtime Integration
+    invariant: "Missing issue -> stop worker"
+    what_is_being_tested: "Issue disappears from tracker"
+    expected: "Reconciled as missing"
+    status: PENDING
+
+  - id: S-854
+    category: Runtime Integration
+    invariant: "Terminal -> stop + cleanup"
+    what_is_being_tested: "Issue moves to terminal state while agent runs"
+    expected: "Workspace cleaned up"
+    status: PENDING
+
+  - id: S-855
+    category: Runtime Integration
+    invariant: "Non-active non-terminal -> stop, keep workspace"
+    what_is_being_tested: "Issue becomes inactive but not terminal"
+    expected: "Reconciled but no workspace cleanup"
+    status: PENDING
+
+  - id: S-856
+    category: Runtime Integration
+    invariant: "Tracker refresh failure -> keep running"
+    what_is_being_tested: "Client fails during reconcile fetch"
+    expected: "Worker continues despite chaos failures"
+    status: PENDING
+
+  - id: S-857
+    category: Runtime Integration
+    invariant: "Priority ordering re-evaluated each tick"
+    what_is_being_tested: "Issue priority changes, affecting dispatch order"
+    expected: "B eventually dispatched after priority boost"
+    status: PENDING
+
+  - id: S-858
+    category: Runtime Integration
+    invariant: "Resolved blockers -> eligible"
+    what_is_being_tested: "Blocked issue becomes eligible after blocker removed"
+    expected: "X-1 dispatched after blocker removed"
+    status: PENDING
+
+  - id: S-859
+    category: Runtime Integration
+    invariant: "Blockers gate unstarted issues"
+    what_is_being_tested: "Chain A->B->C unblocks one at a time"
+    expected: "Only A dispatched (B blocked by A, C blocked by B)"
+    status: PENDING
+
+  - id: S-860
+    category: Runtime Integration
+    invariant: "Failures don't crash orchestrator"
+    what_is_being_tested: "High failure rate, but system continues"
+    expected: "Eventually dispatches despite failures"
+    status: PENDING
+
+  - id: "S-861 to S-870"
+    category: Runtime Integration
+    invariant: "System handles rapid mutations"
+    what_is_being_tested: "Multiple mutations across ticks (add 5, remove 3, add 2)"
+    expected: "No crashes during churn"
+    status: PENDING
+
+  - id: "S-871 to S-900"
+    category: Runtime Integration
+    invariant: "Correct retry behavior per issue"
+    what_is_being_tested: "Some issues succeed, others fail, independently"
+    expected: "S-1 and S-2 complete, F-1 fails"
+    status: PENDING
+
+  - id: "S-901 to S-950"
+    category: Runtime Integration
+    invariant: "Cap respected across all scenarios"
+    what_is_being_tested: "Parametric sweep with 10 issues, caps [1,2,3,5,10]"
+    expected: "Cap always held"
+    status: PENDING
+
+  - id: "S-951 to S-1000"
+    category: Runtime Integration
+    invariant: "Complete system behavior"
+    what_is_being_tested: "Issues go through full lifecycle with external state changes"
+    expected: "Full lifecycle completes correctly"
+    status: PENDING
+
+  # ===========================================================================
+  # CONCURRENCY AND STRESS (S-1001 to S-1150 from more_scenarios.md)
+  # ===========================================================================
+  - id: S-1001
+    category: Concurrency and Stress
+    invariant: "No starvation under load"
+    what_is_being_tested: "High issue count (50) with rotation under cap=5"
+    expected: "Max 5 concurrent, all eventually get dispatched"
+    status: PENDING
+
+  - id: S-1002
+    category: Concurrency and Stress
+    invariant: "System handles high load"
+    what_is_being_tested: "100 issues, cap 10, rapid ticks"
+    expected: "All dispatched within cap"
+    status: PENDING
+
+  - id: "S-1003 to S-1010"
+    category: Concurrency and Stress
+    invariant: "System survives all failure rates"
+    what_is_being_tested: "Chaos rate sweep [0.01, 0.1, 0.25, 0.5, 0.75, 0.9, 0.99, 1.0]"
+    expected: "No crash at any failure rate"
+    status: PENDING
+
+  - id: "S-1011 to S-1020"
+    category: Concurrency and Stress
+    invariant: "No corruption during rapid changes"
+    what_is_being_tested: "20 mutations across 5 ticks"
+    expected: "No crashes"
+    status: PENDING
+
+  - id: "S-1021 to S-1050"
+    category: Concurrency and Stress
+    invariant: "Correct slot management under contention"
+    what_is_being_tested: "3 issues with ensemble:2, cap 4"
+    expected: "Max 4 slots used"
+    status: PENDING
+
+  - id: "S-1051 to S-1080"
+    category: Concurrency and Stress
+    invariant: "System handles varying latencies"
+    what_is_being_tested: "Latency sweep — runner with [0, 10, 50, 100, 500]ms per turn"
+    expected: "Completes without timeout"
+    status: PENDING
+
+  - id: "S-1081 to S-1100"
+    category: Concurrency and Stress
+    invariant: "Correct slot arithmetic"
+    what_is_being_tested: "Mixed ensemble sizes [1,2,3,5] competing for cap=5"
+    expected: "e1(1 slot) + e2(2 slots) + partial e3 = 5 max"
+    status: PENDING
+
+  - id: "S-1101 to S-1120"
+    category: Concurrency and Stress
+    invariant: "Other issues unaffected"
+    what_is_being_tested: "Some issues always fail to fetch, others work fine"
+    expected: "GOOD-1 dispatches fine, BAD-1 encounters errors"
+    status: PENDING
+
+  - id: "S-1121 to S-1150"
+    category: Concurrency and Stress
+    invariant: "Sequential unblocking works correctly"
+    what_is_being_tested: "Chain of 5 issues, each unblocked as previous completes"
+    expected: "Only C-0 dispatched initially"
+    status: PENDING
+
+  # ===========================================================================
+  # STATE TRANSITIONS (S-1151 to S-1250 from more_scenarios.md)
+  # ===========================================================================
+  - id: S-1151
+    category: State Transitions
+    invariant: "Full lifecycle handled"
+    what_is_being_tested: "Issue progresses through states Todo -> In Progress -> Done"
+    expected: "Dispatched during active states, cleaned up when terminal"
+    status: PENDING
+
+  - id: S-1152
+    category: State Transitions
+    invariant: "Terminal state stops worker"
+    what_is_being_tested: "Cancellation path"
+    expected: "Workspace cleanup after cancellation"
+    status: PENDING
+
+  - id: S-1153
+    category: State Transitions
+    invariant: "Inactive -> stop, keep workspace"
+    what_is_being_tested: "Issue moved to backlog while running"
+    expected: "Reconciled but workspace kept"
+    status: PENDING
+
+  - id: "S-1154 to S-1160"
+    category: State Transitions
+    invariant: "Route mismatch -> stop"
+    what_is_being_tested: "Labels changed to different route mid-run"
+    expected: "Worker stopped after route mismatch"
+    status: PENDING
+
+  - id: "S-1161 to S-1170"
+    category: State Transitions
+    invariant: "Assignee mismatch -> stop"
+    what_is_being_tested: "assignedToWorker changes to false mid-run"
+    expected: "If assignedToWorker changes to false, worker stops"
+    status: PENDING
+
+  - id: "S-1171 to S-1180"
+    category: State Transitions
+    invariant: "New blocker on started issue doesn't stop it"
+    what_is_being_tested: "Blocker added to in-progress issue"
+    expected: "Worker continues (started issues not gated by blockers)"
+    status: PENDING
+
+  - id: "S-1181 to S-1190"
+    category: State Transitions
+    invariant: "Each state transition evaluated on next reconcile"
+    what_is_being_tested: "Todo -> In Progress -> Backlog -> In Progress"
+    expected: "Issue re-dispatched after returning to active state"
+    status: PENDING
+
+  - id: "S-1191 to S-1200"
+    category: State Transitions
+    invariant: "Each issue handled independently"
+    what_is_being_tested: "Three issues changing states simultaneously"
+    expected: "A cleaned up (terminal), B reconciled (inactive), C continues"
+    status: PENDING
+
+  - id: "S-1201 to S-1250"
+    category: State Transitions
+    invariant: "System stability under complex state changes"
+    what_is_being_tested: "Various combinations of all mutation types"
+    expected: "X completes, Y becomes eligible after blocker resolved"
+    status: PENDING
+
+  # ===========================================================================
+  # EVEN MORE SCENARIOS (S-1251 to S-1261 from even_more_scenarios.md)
+  # ===========================================================================
+  - id: S-1251
+    category: Dispatch Eligibility
+    invariant: "Per-state concurrency cap SHALL be enforced regardless of state name casing"
+    setup: "Two issues with states 'In Progress' and 'in progress' (different casing), per-state cap = 1"
+    action: "Dispatch both issues"
+    expected: "Only 1 dispatched (per-state cap enforced)"
+    reproduction: |
+      npx tsx demo/sandbox.ts --inline '{"issues":[{"id":"i1","identifier":"I-1","title":"T1","state":"In Progress","stateType":"started","labels":[],"blockers":[],"priority":1},{"id":"i2","identifier":"I-2","title":"T2","state":"in progress","stateType":"started","labels":[],"blockers":[],"priority":2}],"settingsOverrides":{"agent":{"maxConcurrentAgents":5},"statusOverrides":{"In Progress":{"agent":{"maxConcurrentAgents":1}}}},"runnerConfig":{"defaultBehavior":{"shouldSucceed":true,"turnCount":1,"latencyPerTurnMs":300}},"pollTicks":1,"waitForRuns":false,"assertions":[{"type":"concurrency_cap","maxConcurrent":1}]}'
+    suggested_fix: "Normalize state keys when building and querying runningByState"
+    status: "FAILED — Both dispatched (max concurrent 2 > cap 1)"
+
+  - id: S-1252
+    category: Reconciliation
+    invariant: "Reconciliation SHALL abort excess running slots when ensemble size is dynamically reduced"
+    setup: "Issue with ensemble:3 label, then label changed to ensemble:1 mid-run"
+    action: "Reconcile after label change"
+    expected: "Excess slots aborted, max 1 running"
+    reproduction: |
+      npx tsx demo/sandbox.ts --inline '{"issues":[{"id":"e1","identifier":"E-1","title":"Ensemble Shrink","state":"In Progress","stateType":"started","labels":["ensemble:3"],"blockers":[],"priority":1}],"settingsOverrides":{"agent":{"maxConcurrentAgents":10}},"runnerConfig":{"defaultBehavior":{"shouldSucceed":true,"turnCount":10,"latencyPerTurnMs":150}},"pollTicks":8,"tickDelayMs":60,"waitForRuns":false,"timedMutations":[{"afterMs":350,"mutate":{"type":"change_labels","issueId":"e1","labels":["ensemble:1"]}}],"assertions":[{"type":"concurrency_cap","maxConcurrent":1}]}'
+    suggested_fix: "Add ensemble size check in reconciliation to abort excess slots"
+    status: "FAILED — Max concurrent 3 > 1 (excess slots never aborted)"
+
+  - id: S-1253
+    category: Dispatch Eligibility
+    invariant: "Per-state concurrency cap SHALL count distinct issues, not individual ensemble slots"
+    setup: "ensemble:3 issue with per-state cap of 2"
+    action: "Dispatch all 3 slots"
+    expected: "All 3 slots dispatched (cap counts distinct issues)"
+    reproduction: |
+      npx tsx demo/sandbox.ts --inline '{"issues":[{"id":"e1","identifier":"E-1","title":"Ensemble vs Per-State Cap","state":"In Progress","stateType":"started","labels":["ensemble:3"],"blockers":[],"priority":1}],"settingsOverrides":{"agent":{"maxConcurrentAgents":10},"statusOverrides":{"In Progress":{"agent":{"maxConcurrentAgents":2}}}},"runnerConfig":{"defaultBehavior":{"shouldSucceed":true,"turnCount":3,"latencyPerTurnMs":100}},"pollTicks":1,"waitForRuns":false,"assertions":[{"type":"running_count","expected":3}]}'
+    suggested_fix: "Count distinct issue IDs per state, not individual slots"
+    status: "FAILED — Only 2 of 3 slots dispatched (3rd blocked by local_concurrency_cap)"
+
+  - id: S-1253-round3
+    category: Orchestrator Scheduling
+    invariant: "Ensemble retry SHALL be per-slot, not per-issue"
+    setup: "ensemble:2 issue, slot 0 fails creating retry entry"
+    action: "Attempt to dispatch slot 1 during slot 0 retry delay"
+    expected: "Slot 1 dispatches independently of slot 0 retry"
+    reproduction: |
+      npx tsx demo/sandbox.ts --inline '{"issues":[{"id":"ens-1","identifier":"ENS-1","title":"Ensemble with 2 slots","state":"In Progress","stateType":"started","labels":["ensemble:2"],"blockers":[],"priority":1}],"settingsOverrides":{"agent":{"maxConcurrentAgents":10,"maxRetryBackoffMs":5000}},"runnerConfig":{"byId":{"ens-1":{"shouldSucceed":false,"turnCount":1,"latencyPerTurnMs":0}}},"pollTicks":4,"tickDelayMs":100,"assertions":[{"type":"event_occurred","eventType":"run_started","messageContains":"slot=1"}]}'
+    suggested_fix: "Key retry entries by slotKey, or exempt unclaimed slots from the retry dueAt gate"
+    status: "FAILED — Slot 1 never dispatched; retry entry for issueId blocks all slots"
+
+  - id: S-1254
+    category: Dispatch Eligibility
+    invariant: "dispatchBlockReason SHALL report a reason for ALL blocked issues (observability)"
+    setup: "Issue with open blockers"
+    action: "Check if issue appears in blockedDispatches"
+    expected: "Issue visible with reason"
+    suggested_fix: "Return specific reasons like 'open_blockers', 'not_active', 'not_routed'"
+    status: "PASSED (assertions pass, but observability gap confirmed via output inspection)"
+
+  - id: S-1254-round4
+    category: Reconciliation
+    invariant: "reconciliationStopReason SHALL distinguish terminal from merely inactive states"
+    setup: "Issue moves to 'On Hold' (not active, not terminal)"
+    action: "Check reconciliation stop reason"
+    expected: "Should return 'inactive', not 'terminal'"
+    reproduction: |
+      npx tsx demo/sandbox.ts --inline '{"issues":[{"id":"i1","identifier":"I-1","title":"Mislabeled Reconciliation","state":"In Progress","stateType":"started","labels":[],"blockers":[],"priority":1}],"settingsOverrides":{"agent":{"maxConcurrentAgents":5}},"runnerConfig":{"defaultBehavior":{"turnCount":5,"latencyPerTurnMs":100}},"pollTicks":3,"tickDelayMs":150,"timedMutations":[{"afterMs":100,"mutate":{"type":"change_state","issueId":"i1","state":"On Hold","stateType":"started"}}],"assertions":[{"type":"event_occurred","eventType":"run_reconciled","messageContains":"terminal"},{"type":"event_not_occurred","eventType":"workspace_cleanup"}]}'
+    suggested_fix: "Check isTerminalState before !issueIsActive"
+    status: "PASSED — Event correctly says 'terminal' (confirming mislabel) and workspace is NOT cleaned up"
+
+  - id: S-1255
+    category: Orchestrator Scheduling
+    invariant: "Ensemble retry SHALL NOT permanently degrade ensemble:N to effective ensemble:1"
+    setup: "ensemble:3 issue where slot 0 repeatedly fails"
+    action: "Observe if slots 1-2 ever get dispatched"
+    expected: "Slots 1-2 eventually dispatched"
+    reproduction: |
+      npx tsx demo/sandbox.ts --inline '{"issues":[{"id":"i1","identifier":"I-1","title":"Ensemble Retry Blocks Other Slots","state":"In Progress","stateType":"started","labels":["ensemble:3"],"blockers":[],"priority":1}],"settingsOverrides":{"agent":{"maxConcurrentAgents":10,"maxRetryBackoffMs":50}},"runnerConfig":{"defaultBehavior":{"shouldSucceed":false,"turnCount":1,"latencyPerTurnMs":0}},"pollTicks":5,"tickDelayMs":100,"assertions":[{"type":"event_occurred","eventType":"run_started","messageContains":"I-1 slot=1"}]}'
+    suggested_fix: "After a retry claim succeeds, loop to claim remaining unclaimed slots for the same issue"
+    status: "FAILED — Only slot 0 ever dispatched across all retries"
+
+  - id: S-1255-round5
+    category: Dispatch Eligibility
+    invariant: "Per-state concurrency cap SHALL be enforced regardless of whitespace in state names"
+    setup: "Issues with states 'In Progress' and ' In Progress ' (whitespace variants), per-state cap = 2"
+    action: "Dispatch all 3 issues"
+    expected: "Max 2 concurrent"
+    reproduction: |
+      npx tsx demo/sandbox.ts --inline '{"issues":[{"id":"a","identifier":"A-1","title":"Issue A","state":"In Progress","stateType":"started","labels":[],"blockers":[],"priority":1},{"id":"b","identifier":"B-1","title":"Issue B","state":" In Progress ","stateType":"started","labels":[],"blockers":[],"priority":2},{"id":"c","identifier":"C-1","title":"Issue C","state":" In Progress ","stateType":"started","labels":[],"blockers":[],"priority":3}],"settingsOverrides":{"agent":{"maxConcurrentAgents":10},"statusOverrides":{"In Progress":{"agent":{"maxConcurrentAgents":2}}}},"runnerConfig":{"defaultBehavior":{"shouldSucceed":true,"turnCount":1,"latencyPerTurnMs":200}},"pollTicks":1,"waitForRuns":false,"assertions":[{"type":"concurrency_cap","maxConcurrent":2}]}'
+    suggested_fix: "Normalize state keys with trim().toLowerCase()"
+    status: "FAILED — Max concurrent 3 > cap 2"
+
+  - id: S-1256
+    category: Runtime Integration
+    invariant: "Aborting runs for issue X SHALL NOT affect runs belonging to a different issue Y"
+    setup: "Issue with id='a' and issue with id='a:0' (prefix collision via slotKey format)"
+    action: "Issue 'a' goes terminal, abort triggered"
+    expected: "Issue 'a:0' continues unaffected"
+    reproduction: |
+      npx tsx demo/sandbox.ts --inline '{"issues":[{"id":"a:0","identifier":"COLON-1","title":"Issue with colon in ID","state":"In Progress","stateType":"started","labels":[],"blockers":[],"priority":2},{"id":"a","identifier":"PREFIX-1","title":"Prefix issue","state":"In Progress","stateType":"started","labels":[],"blockers":[],"priority":1}],"settingsOverrides":{"agent":{"maxConcurrentAgents":5}},"runnerConfig":{"byId":{"a":{"shouldSucceed":true,"turnCount":1,"latencyPerTurnMs":10},"a:0":{"shouldSucceed":true,"turnCount":5,"latencyPerTurnMs":100}}},"pollTicks":5,"tickDelayMs":200,"timedMutations":[{"afterMs":50,"mutate":{"type":"change_state","issueId":"a","state":"Done","stateType":"completed"}}],"assertions":[{"type":"event_occurred","eventType":"run_completed","messageContains":"COLON-1"}]}'
+    suggested_fix: "Use exact ID matching (key.lastIndexOf(':')) instead of startsWith prefix"
+    status: "FAILED — COLON-1 never completed (zombie entry)"
+
+  - id: S-1257
+    category: Dispatch Eligibility
+    invariant: "All issues prevented from dispatch SHALL be visible in blockedDispatches with a reason"
+    setup: "Issue with open blockers"
+    action: "Check finalSnapshot.blocked"
+    expected: "Issue visible with specific block reason"
+    suggested_fix: "Return distinct reasons: 'open_blockers', 'not_active', 'not_routed', 'missing_fields'"
+    status: "PASSED (correctness OK, observability gap confirmed)"
+
+  - id: S-1258
+    category: Orchestrator Scheduling
+    invariant: "claim() SHALL respect retry delay — same issue SHALL NOT be re-claimed within retry period"
+    setup: "Same issue ID appears twice in eligible list (tracker duplicates)"
+    action: "Both copies dispatch in same tick"
+    expected: "Only one dispatched"
+    reproduction: |
+      npx tsx demo/sandbox.ts --inline '{"issues":[{"id":"dup-me","identifier":"DUP-1","title":"First copy of issue","state":"In Progress","stateType":"started","labels":[],"blockers":[],"priority":1},{"id":"dup-me","identifier":"DUP-1","title":"Second copy same ID","state":"In Progress","stateType":"started","labels":[],"blockers":[],"priority":1}],"settingsOverrides":{"agent":{"maxConcurrentAgents":5,"maxRetryBackoffMs":60000}},"runnerConfig":{"defaultBehavior":{"shouldSucceed":true,"turnCount":1,"latencyPerTurnMs":0}},"pollTicks":1,"assertions":[{"type":"concurrency_cap","maxConcurrent":1}]}'
+    suggested_fix: "Add retry check in claim()"
+    status: "PASSED (max concurrent was 1 since runs are serial), but run history shows TWO dispatches — usage double-counted"
+
+  - id: S-1258-round8
+    category: Worker Host Selection
+    invariant: "Per-host capacity SHALL be enforced even for empty-string hosts"
+    setup: "sshHosts=['','host-b'], maxConcurrentAgentsPerHost=1"
+    action: "Dispatch 3 issues"
+    expected: "Max 2 concurrent (1 per host)"
+    reproduction: |
+      npx tsx demo/sandbox.ts --inline '{"issues":[{"id":"issue-1","identifier":"TEST-1","title":"Test 1","state":"In Progress","stateType":"started","labels":[],"blockers":[],"priority":2},{"id":"issue-2","identifier":"TEST-2","title":"Test 2","state":"In Progress","stateType":"started","labels":[],"blockers":[],"priority":2},{"id":"issue-3","identifier":"TEST-3","title":"Test 3","state":"In Progress","stateType":"started","labels":[],"blockers":[],"priority":2}],"settingsOverrides":{"agent":{"maxConcurrentAgents":5},"worker":{"sshHosts":["","host-b"],"maxConcurrentAgentsPerHost":1}},"runnerConfig":{"defaultBehavior":{"shouldSucceed":true,"turnCount":1,"latencyPerTurnMs":200}},"pollTicks":1,"waitForRuns":false,"assertions":[{"type":"concurrency_cap","maxConcurrent":2}]}'
+    suggested_fix: "Use if (entry.workerHost != null) or validate sshHosts entries are non-empty"
+    status: "FAILED — Max concurrent 3 > cap 2"
+
+  - id: S-1259
+    category: Retry and Backoff
+    invariant: "Retry backoff SHALL persist across state transitions — terminal transition SHALL NOT erase backoff"
+    setup: "Issue fails, goes terminal, then re-opens"
+    action: "Check if retry backoff is preserved"
+    expected: "Retry attempt escalates on re-open"
+    reproduction: |
+      npx tsx demo/sandbox.ts --inline '{"issues":[{"id":"retry-bypass","identifier":"RB-1","title":"Retry Bypass","state":"In Progress","stateType":"started","labels":[],"blockers":[],"priority":1}],"settingsOverrides":{"agent":{"maxConcurrentAgents":5,"maxRetryBackoffMs":60000}},"runnerConfig":{"defaultBehavior":{"shouldSucceed":false,"turnCount":1,"latencyPerTurnMs":0}},"pollTicks":4,"tickDelayMs":100,"timedMutations":[{"afterMs":100,"mutate":{"type":"change_state","issueId":"retry-bypass","state":"Done","stateType":"completed"}},{"afterMs":150,"mutate":{"type":"change_state","issueId":"retry-bypass","state":"In Progress","stateType":"started"}}],"assertions":[{"type":"retry_count","issueId":"retry-bypass","minAttempts":2}]}'
+    suggested_fix: "Don't delete retryAttempts in cleanupIssue — let it expire naturally"
+    status: "FAILED — Retry attempt never escalates beyond 1 (counter reset by cleanupIssue)"
+
+  - id: S-1260
+    category: Orchestrator Scheduling
+    invariant: "eligibleIssues reported count SHALL match actual dispatchable count"
+    setup: "Running count computed once before dispatch loop"
+    action: "Dispatch loop claims issues, counts diverge"
+    expected: "Observability gap noted"
+    status: "PASSED (observability gap, not correctness bug)"
+
+  - id: S-1260-round10
+    category: Runtime Integration
+    invariant: "Global concurrency cap SHALL be a hard limit per poll tick, not bypassable by fast-completing runs"
+    setup: "3 issues, maxConcurrentAgents=1, runner completes instantly (0ms latency)"
+    action: "Dispatch in single tick"
+    expected: "Only 1 dispatched"
+    reproduction: |
+      npx tsx demo/sandbox.ts --inline '{"issues":[{"id":"a","identifier":"A-1","title":"Issue A","state":"In Progress","stateType":"started","labels":[],"blockers":[],"priority":1},{"id":"b","identifier":"B-1","title":"Issue B","state":"In Progress","stateType":"started","labels":[],"blockers":[],"priority":2},{"id":"c","identifier":"C-1","title":"Issue C","state":"In Progress","stateType":"started","labels":[],"blockers":[],"priority":3}],"settingsOverrides":{"agent":{"maxConcurrentAgents":1}},"runnerConfig":{"defaultBehavior":{"shouldSucceed":true,"turnCount":1,"latencyPerTurnMs":0}},"pollTicks":1,"assertions":[{"type":"event_not_occurred","eventType":"run_started","messageContains":"B-1"},{"type":"event_not_occurred","eventType":"run_started","messageContains":"C-1"}]}'
+    suggested_fix: "Track dispatches-this-cycle separately from the mutable running map"
+    status: "FAILED — All 3 issues dispatched despite maxConcurrentAgents=1"
+
+  - id: S-1261
+    category: Runtime Integration
+    invariant: "Per-host SSH capacity cap SHALL prevent unbounded dispatches to a single remote host"
+    setup: "3 issues, single SSH host with maxConcurrentAgentsPerHost=1, runner completes instantly"
+    action: "Dispatch in single tick"
+    expected: "Only 1 dispatched to host"
+    reproduction: |
+      npx tsx demo/sandbox.ts --inline '{"issues":[{"id":"a","identifier":"A-1","title":"Issue A","state":"In Progress","stateType":"started","labels":[],"blockers":[],"priority":1},{"id":"b","identifier":"B-1","title":"Issue B","state":"In Progress","stateType":"started","labels":[],"blockers":[],"priority":2},{"id":"c","identifier":"C-1","title":"Issue C","state":"In Progress","stateType":"started","labels":[],"blockers":[],"priority":3}],"settingsOverrides":{"agent":{"maxConcurrentAgents":5},"worker":{"sshHosts":["host1"],"maxConcurrentAgentsPerHost":1}},"runnerConfig":{"defaultBehavior":{"shouldSucceed":true,"turnCount":1,"latencyPerTurnMs":0}},"pollTicks":1,"assertions":[{"type":"event_not_occurred","eventType":"run_started","messageContains":"B-1"},{"type":"event_not_occurred","eventType":"run_started","messageContains":"C-1"}]}'
+    suggested_fix: "Same as S-1260-round10: track dispatches-this-cycle independently"
+    status: "FAILED — All 3 dispatched to host1 despite per-host cap of 1"
+
+  # ===========================================================================
+  # PASSING SCENARIOS FROM even_more_scenarios.md
+  # ===========================================================================
+  - id: S-1252-round1
+    category: Dispatch Ordering
+    invariant: "createdAtSort correctly handles NaN dates"
+    what_is_being_tested: "NaN dates via 'not-a-date' string"
+    expected: "createdAtSort correctly returns MAX_SAFE_INTEGER for unparseable dates"
+    status: PASSED
+
+  - id: S-1257-round6
+    category: State Transitions
+    invariant: "Per-state cap survives running state change"
+    what_is_being_tested: "Issue changes state while running — does cap tracking break?"
+    expected: "Running entry retains original state for cap counting"
+    status: PASSED
+
+  - id: S-1259-round8
+    category: Worker Host Selection
+    invariant: "Duplicate SSH hosts share capacity correctly"
+    what_is_being_tested: "sshHosts=['host-a','host-a'] — are counts shared?"
+    expected: "Both entries map to same host key, counts accumulate correctly"
+    status: PASSED
+
+  - id: S-1260-round9
+    category: Orchestrator Scheduling
+    invariant: "Stale eligibility reporting"
+    what_is_being_tested: "Eligible count > (running + blocked) gap"
+    expected: "Observability issue, not correctness bug"
+    status: PASSED

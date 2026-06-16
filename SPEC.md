@@ -1,4 +1,4 @@
-# Symphony Service Specification
+# Lorenz Service Specification
 
 Status: Draft v1 (language-agnostic)
 
@@ -6,7 +6,7 @@ Purpose: Define a service that orchestrates coding agents to get project work do
 
 ## 1. Problem Statement
 
-Symphony is a long-running automation service that continuously reads work from an issue tracker
+Lorenz is a long-running automation service that continuously reads work from an issue tracker
 (Linear in this specification version), creates an isolated workspace for each issue, and runs a
 coding agent session for that issue inside the workspace.
 
@@ -26,7 +26,7 @@ require stricter approvals or sandboxing.
 
 Important boundary:
 
-- Symphony is a scheduler/runner and tracker reader.
+- Lorenz is a scheduler/runner and tracker reader.
 - Ticket writes (state transitions, comments, PR links) are typically performed by the coding agent
   using tools available in the workflow/runtime environment.
 - A successful run may end at a workflow-defined handoff state (for example `Agent Review`), not
@@ -104,7 +104,7 @@ Important boundary:
 
 ### 3.2 Abstraction Levels
 
-Symphony is easiest to port when kept in these layers:
+Lorenz is easiest to port when kept in these layers:
 
 1. `Policy Layer` (repo-defined)
    - `WORKFLOW.md` prompt body.
@@ -233,8 +233,6 @@ Fields:
     `<thread_id>-<turn_id>`; other backends may expose a native session ID.
 - `agent_kind` (string)
   - Configured backend name, such as `codex` or `claude`.
-- `resume_id` (string or null)
-  - Backend-specific continuation identifier.
 - `thread_id` (string or null)
 - `turn_id` (string or null)
 - `executor_pid` (string or null)
@@ -389,9 +387,9 @@ Fields:
     `route_label_prefix`.
   - `only_routes` (null or list of strings): default `null`; `null` accepts all routed issues,
     `[]` accepts no routed issues, and a non-empty list accepts only matching routes.
-  - `route_label_prefix` (string): default `Symphony:`; labels with this prefix become route
+  - `route_label_prefix` (string): default `Lorenz:`; labels with this prefix become route
     labels after trimming and case-insensitive normalization.
-  - A blank route label such as `Symphony:` is routed but invalid: it does not match any route and
+  - A blank route label such as `Lorenz:` is routed but invalid: it does not match any route and
     does not fall through as unrouted.
 
 #### 5.3.2 `polling` (object)
@@ -407,7 +405,7 @@ Fields:
 Fields:
 
 - `root` (path string or `$VAR`)
-  - Default: `<system-temp>/symphony_workspaces`
+  - Default: `<system-temp>/lorenz_workspaces`
   - `~` and strings containing path separators are expanded.
   - Bare strings without path separators are preserved as-is (relative roots are allowed but
     discouraged).
@@ -688,9 +686,9 @@ This section is intentionally redundant so a coding agent can implement the conf
 - `tracker.terminal_states`: list of strings, default `["Closed", "Cancelled", "Canceled", "Duplicate", "Done"]`
 - `tracker.dispatch.accept_unrouted`: boolean, default `true`
 - `tracker.dispatch.only_routes`: null or list of strings, default `null`
-- `tracker.dispatch.route_label_prefix`: string, default `"Symphony:"`
+- `tracker.dispatch.route_label_prefix`: string, default `"Lorenz:"`
 - `polling.interval_ms`: integer, default `30000`
-- `workspace.root`: path, default `<system-temp>/symphony_workspaces`
+- `workspace.root`: path, default `<system-temp>/lorenz_workspaces`
 - `worker.ssh_hosts` (extension): list of SSH host strings, optional; when omitted, work runs
   locally
 - `worker.ssh_timeout_ms` (extension): integer, default `60000`
@@ -1132,7 +1130,7 @@ Illustrative startup transcript (equivalent payload shapes are acceptable if the
 semantics):
 
 ```json
-{"id":1,"method":"initialize","params":{"clientInfo":{"name":"symphony","version":"1.0"},"capabilities":{}}}
+{"id":1,"method":"initialize","params":{"clientInfo":{"name":"lorenz","version":"1.0"},"capabilities":{}}}
 {"method":"initialized","params":{}}
 {"id":2,"method":"thread/start","params":{"approvalPolicy":"<implementation-defined>","sandbox":"<implementation-defined>","cwd":"/abs/workspace"}}
 {"id":3,"method":"turn/start","params":{"threadId":"<thread-id>","input":[{"type":"text","text":"<rendered prompt-or-continuation-guidance>"}],"cwd":"/abs/workspace","title":"ABC-123: Example","approvalPolicy":"<implementation-defined>","sandboxPolicy":{"type":"<implementation-defined>"}}}
@@ -1153,9 +1151,6 @@ semantics):
      - `cwd` = absolute workspace path
      - If optional client-side tools are implemented, include their advertised tool specs using the
        protocol mechanism supported by the targeted Codex app-server version.
-   - If a valid Codex resume ID exists for this workspace and issue, `thread/resume` may be used
-     instead of `thread/start`. A conforming resume request should preserve extended history when
-     supported by the target app-server.
 4. `turn/start` request
    - Params include:
      - `threadId`
@@ -1173,7 +1168,6 @@ Session identifiers:
 - Read `turn_id` from each `turn/start` result `result.turn.id`
 - Emit `session_id = "<thread_id>-<turn_id>"`
 - Reuse the same `thread_id` for all continuation turns inside one worker run
-- Persist Codex resume metadata using `resume_id == thread_id`.
 
 ### 10.3 Streaming Turn Processing
 
@@ -1265,7 +1259,7 @@ Optional client-side tool extension:
 
 `linear_graphql` extension contract:
 
-- Purpose: execute a raw GraphQL query or mutation against Linear using Symphony's configured
+- Purpose: execute a raw GraphQL query or mutation against Linear using Lorenz's configured
   tracker auth for the current session.
 - Availability: only meaningful when `tracker.kind == "linear"` and valid Linear auth is configured.
 - Preferred input shape:
@@ -1286,7 +1280,7 @@ Optional client-side tool extension:
 - Execute one GraphQL operation per tool call.
 - If the provided document contains multiple operations, reject the tool call as invalid input.
 - `operationName` selection is intentionally out of scope for this extension.
-- Reuse the configured Linear endpoint and auth from the active Symphony workflow/runtime config; do
+- Reuse the configured Linear endpoint and auth from the active Lorenz workflow/runtime config; do
   not require the coding agent to read raw tokens from disk.
 - Tool result semantics:
   - transport success + no top-level GraphQL `errors` -> `success=true`
@@ -1358,14 +1352,13 @@ Launch contract:
 - Use print/stream mode with structured JSON input and output.
 - Pass the configured model and permission mode.
 - Pass an issue title/name when the CLI supports it.
-- If a matching Claude resume ID exists, pass it through the CLI's resume mechanism.
 - If `claude.strict_mcp_config == true`, launch with only the generated MCP config.
 
 MCP/tooling contract:
 
 - The Claude executor may expose the same tool registry through an MCP server instead of Codex
   dynamic tools.
-- Generated MCP config should be workspace-local and contain only the Symphony-issued bearer token
+- Generated MCP config should be workspace-local and contain only the Lorenz-issued bearer token
   needed to reach the local MCP endpoint.
 - Raw tracker secrets such as Linear API keys must not be written into generated MCP config.
 - Remote workers may use an SSH tunnel or equivalent local forwarding so the remote Claude process
@@ -1386,35 +1379,10 @@ Stream handling:
 - Usage fields should include cache creation/read input tokens when computing input tokens.
 - Partial trailing lines should be flushed before reporting process exit.
 
-Timeout and resume behavior:
+Timeout behavior:
 
 - `claude.turn_timeout_ms` bounds inactivity while waiting for the next stream event.
 - `claude.stall_timeout_ms` is enforced by the orchestrator from the latest normalized event time.
-- Claude resume metadata should use `agent_kind == "claude"` and the native Claude session/resume
-  ID.
-
-### 10.9 Resume State Contract
-
-Backends may persist resume metadata inside the issue workspace when the workspace is a git
-repository.
-
-Requirements:
-
-- Store resume state under the git directory, for example `.git/symphony/resume.json`.
-- Persist at minimum `agent_kind` and backend-specific `resume_id`.
-- Persist enough issue and runtime identity to avoid unsafe reuse:
-  - `issue_id`
-  - `issue_identifier`
-  - `issue_state`
-  - `workspace_path`
-  - `worker_host`
-- A stored resume state may be reused only when all non-null identity fields match the current run
-  and the stored `agent_kind` matches the selected backend.
-- Missing git metadata should make resume state unavailable, not fatal.
-- Invalid or unreadable resume files should prevent resume for that run and emit an
-  operator-visible warning.
-- Abnormal exits, stalls, and orchestrator-owned retry paths should delete or invalidate stale
-  resume state before retrying.
 
 ## 11. Issue Tracker Integration Contract (Linear-Compatible)
 
@@ -1491,7 +1459,7 @@ Orchestrator behavior on tracker errors:
 
 ### 11.5 Tracker Writes (Important Boundary)
 
-Symphony does not require first-class tracker write APIs in the orchestrator.
+Lorenz does not require first-class tracker write APIs in the orchestrator.
 
 - Ticket mutations (state transitions, comments, PR metadata) are typically handled by the coding
   agent using tools defined by the workflow prompt.
@@ -1581,7 +1549,6 @@ should return:
   - `worker_host`
   - `workspace_path`
   - `session_id`
-  - `resume_id`
   - `executor_pid`
   - `turn_count`
   - last event/message/timestamp fields
@@ -1707,9 +1674,8 @@ Minimum endpoints:
           "state": "In Progress",
           "agent_kind": "codex",
           "worker_host": null,
-          "workspace_path": "/tmp/symphony_workspaces/MT-649",
+          "workspace_path": "/tmp/lorenz_workspaces/MT-649",
           "session_id": "thread-1-turn-1",
-          "resume_id": "thread-1",
           "executor_pid": 4242,
           "turn_count": 7,
           "last_event": "turn_completed",
@@ -1753,7 +1719,7 @@ Minimum endpoints:
       "issue_id": "abc123",
       "status": "running",
       "workspace": {
-        "path": "/tmp/symphony_workspaces/MT-649"
+        "path": "/tmp/lorenz_workspaces/MT-649"
       },
       "attempts": {
         "restart_count": 1,
@@ -1764,9 +1730,8 @@ Minimum endpoints:
         "ensemble_size": 1,
         "agent_kind": "codex",
         "worker_host": null,
-        "workspace_path": "/tmp/symphony_workspaces/MT-649",
+        "workspace_path": "/tmp/lorenz_workspaces/MT-649",
         "session_id": "thread-1-turn-1",
-        "resume_id": "thread-1",
         "executor_pid": 4242,
         "turn_count": 7,
         "state": "In Progress",
@@ -1785,7 +1750,7 @@ Minimum endpoints:
         "session_logs": [
           {
             "label": "latest",
-            "path": "/var/log/symphony/codex/MT-649/latest.log",
+            "path": "/var/log/lorenz/codex/MT-649/latest.log",
             "url": null
           }
         ]
@@ -2104,7 +2069,6 @@ function dispatch_issue(issue, state, attempt):
     worker_host: selected_worker_host,
     workspace_path: expected_workspace_path(issue, slot_index),
     session_id: null,
-    resume_id: null,
     executor_pid: null,
     last_agent_message: null,
     last_agent_event: null,
@@ -2278,7 +2242,7 @@ Unless otherwise noted, Sections 17.1 through 17.7 are `Core Conformance`. Bulle
   metadata
 - `tracker.dispatch` defaults preserve accepting all issues
 - `tracker.dispatch.only_routes` preserves null versus empty-list semantics
-- `tracker.dispatch.route_label_prefix` defaults to `Symphony:` and accepts custom prefixes
+- `tracker.dispatch.route_label_prefix` defaults to `Lorenz:` and accepts custom prefixes
 - `$VAR` resolution works for tracker API key and path values
 - `~` path expansion works
 - `agent.kind` selects the active backend profile and rejects unsupported values
@@ -2366,10 +2330,6 @@ Unless otherwise noted, Sections 17.1 through 17.7 are `Core Conformance`. Bulle
   app-server protocol
 - Policy-related startup payloads use the implementation's documented approval/sandbox settings
 - `thread/start` and `turn/start` parse nested IDs and emit `session_started`
-- Existing Codex sessions can be resumed with the persisted resume ID when the app-server protocol
-  supports resume
-- Resume state requires `agent_kind`, issue identity, worker/workspace identity, and a valid
-  backend resume ID; missing or mismatched resume state is ignored with an operator-visible warning
 - Request/response read timeout is enforced
 - Turn timeout is enforced
 - Partial JSON lines are buffered until newline
@@ -2392,8 +2352,8 @@ Unless otherwise noted, Sections 17.1 through 17.7 are `Core Conformance`. Bulle
   - unsupported tool names still fail without stalling the session
 - If the optional Claude Code executor profile is implemented:
   - launch arguments include stream JSON input/output, selected model, permission mode, workspace
-    cwd, strict MCP config when enabled, and resume arguments when available
-  - the workspace-local MCP config exposes Symphony tools without writing the raw Linear secret to
+    cwd, and strict MCP config when enabled
+  - the workspace-local MCP config exposes Lorenz tools without writing the raw Linear secret to
     disk
   - one Claude process can receive multiple turns through structured user messages
   - stdout JSON events, stderr/non-JSON lines, trailing partial lines, usage, and unknown event
@@ -2407,7 +2367,7 @@ Unless otherwise noted, Sections 17.1 through 17.7 are `Core Conformance`. Bulle
 - Logging sink failures do not crash orchestration
 - Token/rate-limit aggregation remains correct across repeated agent updates
 - Snapshot/API rows include backend-neutral fields such as `agent_kind`, `slot_index`,
-  `ensemble_size`, `worker_host`, `workspace_path`, `resume_id`, and `executor_pid`
+  `ensemble_size`, `worker_host`, `workspace_path`, and `executor_pid`
 - If a human-readable status surface is implemented, it is driven from orchestrator state and does
   not affect correctness
 - If humanized event summaries are implemented, they cover key wrapper/agent event classes without
@@ -2463,8 +2423,6 @@ Use the same validation profiles as Section 17:
 - Codex app-server subprocess client with JSON line protocol and launch command config
   (`codex.command`, default `codex app-server`)
 - Strict prompt rendering with `issue`, `attempt`, and `ensemble` variables
-- Resume-state persistence that records `agent_kind`, backend resume ID, issue/workspace identity,
-  and rejects stale or incomplete state
 - Exponential retry queue with continuation retries after normal exit
 - Configurable retry backoff cap (`agent.max_retry_backoff_ms`, default 5m)
 - Reconciliation that stops runs on terminal/non-active tracker states
@@ -2479,13 +2437,13 @@ Use the same validation profiles as Section 17:
 - Per-state `status_overrides` for `agent`, `codex`, and `claude` runtime settings, including
   state-name normalization and Codex policy map deep merge.
 - Optional Claude Code executor profile with stream-json subprocess IO, strict MCP config,
-  workspace-local MCP config, usage normalization, and resume support.
+  workspace-local MCP config, and usage normalization.
 - Optional SSH worker execution honors `worker.ssh_hosts`, `worker.ssh_timeout_ms`, host capacity,
-  and host/workspace identity in retries and resume matching.
+  and host/workspace identity in retries.
 - Optional HTTP server honors CLI `--port` over `server.port`, uses a safe default bind host, and
   exposes the baseline endpoints/error semantics in Section 13.7 if shipped.
 - Optional `linear_graphql` client-side tool extension exposes raw Linear GraphQL access through the
-  app-server session using configured Symphony auth.
+  app-server session using configured Lorenz auth.
 - TODO: Persist retry queue and session metadata across process restarts.
 - TODO: Add first-class tracker write APIs (comments/state transitions) in the orchestrator instead
   of only via agent tools.
@@ -2500,7 +2458,7 @@ Use the same validation profiles as Section 17:
 
 ## Appendix A. SSH Worker Extension (Optional)
 
-This appendix describes a common extension profile in which Symphony keeps one central
+This appendix describes a common extension profile in which Lorenz keeps one central
 orchestrator but executes worker runs on one or more remote hosts over SSH.
 
 ### A.1 Execution Model

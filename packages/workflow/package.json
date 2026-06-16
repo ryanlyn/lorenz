@@ -1,0 +1,19 @@
+{
+  "name": "@lorenz/workflow",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "dependencies": {
+    "@lorenz/agent-sdk": "workspace:*",
+    "@lorenz/config": "workspace:*",
+    "@lorenz/domain": "workspace:*",
+    "@lorenz/tracker-sdk": "workspace:*",
+    "liquidjs": "catalog:",
+    "yaml": "catalog:"
+  }
+}

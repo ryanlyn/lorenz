@@ -1,0 +1,99 @@
+import { execFile } from "node:child_process";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { promisify } from "node:util";
+
+import { test } from "vitest";
+import { assert, tempDir, writeExecutable } from "@lorenz/test-utils";
+
+const execFileAsync = promisify(execFile);
+const repoRoot = path.resolve(import.meta.dirname, "..");
+
+test("worktree initializer prepares the TypeScript workspace", async () => {
+  const checkout = await createCheckout();
+  const { binDir, logPath } = await createStubToolchain(checkout);
+
+  await runInitializer(checkout, binDir, logPath);
+
+  await fs.stat(path.join(checkout, "node_modules", ".modules.yaml"));
+  await fs.stat(path.join(checkout, "dist", ".built"));
+
+  const log = await fs.readFile(logPath, "utf8");
+  assert.match(log, commandPattern(checkout, "mise", "trust"));
+  assert.match(log, commandPattern(checkout, "mise", "install"));
+  assert.match(log, commandPattern(checkout, "pnpm", "install --frozen-lockfile"));
+  assert.match(log, commandPattern(checkout, "pnpm", "build"));
+  assert.notMatch(log, /:make:/);
+});
+
+async function createCheckout(): Promise<string> {
+  const checkout = await tempDir("lorenz-worktree-init");
+
+  await fs.mkdir(path.join(checkout, ".codex"), { recursive: true });
+  await fs.copyFile(
+    path.join(repoRoot, ".codex", "worktree_init.sh"),
+    path.join(checkout, ".codex", "worktree_init.sh"),
+  );
+  await fs.chmod(path.join(checkout, ".codex", "worktree_init.sh"), 0o755);
+  await fs.writeFile(path.join(checkout, "package.json"), "{}\n");
+
+  return checkout;
+}
+
+async function createStubToolchain(checkout: string): Promise<{ binDir: string; logPath: string }> {
+  const binDir = path.join(checkout, "bin");
+  const logPath = path.join(checkout, "commands.log");
+
+  await writeExecutable(
+    path.join(binDir, "mise"),
+    `#!/usr/bin/env bash
+set -euo pipefail
+printf '%s:%s:%s\\n' "$PWD" "mise" "$*" >> "$WORKTREE_INIT_LOG"
+if [ "\${1:-}" = "exec" ] && [ "\${2:-}" = "--" ]; then
+  shift 2
+  "$@"
+fi
+`,
+  );
+
+  await writeExecutable(
+    path.join(binDir, "pnpm"),
+    `#!/usr/bin/env bash
+set -euo pipefail
+printf '%s:%s:%s\\n' "$PWD" "pnpm" "$*" >> "$WORKTREE_INIT_LOG"
+case "\${1:-}" in
+  install)
+    mkdir -p node_modules
+    printf 'installed\\n' > node_modules/.modules.yaml
+    ;;
+  build)
+    mkdir -p dist
+    printf 'built\\n' > dist/.built
+    ;;
+esac
+`,
+  );
+
+  return { binDir, logPath };
+}
+
+async function runInitializer(checkout: string, binDir: string, logPath: string): Promise<void> {
+  const pathEnv = process.env.PATH ?? "";
+
+  await execFileAsync(path.join(checkout, ".codex", "worktree_init.sh"), {
+    cwd: path.dirname(checkout),
+    env: {
+      ...process.env,
+      PATH: `${binDir}${path.delimiter}${pathEnv}`,
+      WORKTREE_INIT_LOG: logPath,
+    },
+  });
+}
+
+function commandPattern(checkout: string, command: "mise" | "pnpm", args: string): RegExp {
+  return new RegExp(`${escapeRegExp(checkout)}:${command}:${escapeRegExp(args)}`);
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}

@@ -1,0 +1,85 @@
+name: release
+
+# Builds the self-contained CLI release tree, packs it into an npm tarball, and attaches it to a
+# GitHub release so it can be run with `npx <release-asset-url>`. On tag pushes it also publishes the
+# tree to npm as the unscoped `lorenz` package via OIDC trusted publishing (no stored token). Tag-
+# driven; a manual run produces a prerelease from the current branch and never publishes to npm.
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  id-token: write # required for npm OIDC trusted publishing
+
+jobs:
+  npx-tarball:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Set up mise tools
+        uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v3
+        with:
+          install: true
+          cache: true
+
+      - name: Setup pnpm store cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ~/.local/share/pnpm/store
+          key: ${{ runner.os }}-pnpm-store-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pnpm-store-
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        run: pnpm build
+
+      - name: Stage CLI release
+        run: pnpm release:stage -- --force
+
+      - name: Pack npx tarball
+        id: pack
+        run: |
+          staged="$(find dist/release -mindepth 1 -maxdepth 1 -type d | head -1)"
+          version="$(node -p "require('./${staged}/RELEASE-MANIFEST.json').version")"
+          tarball="$(npm pack "./${staged}" --pack-destination dist/release | tail -1)"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "tarball=dist/release/${tarball}" >> "$GITHUB_OUTPUT"
+          echo "staged=${staged}" >> "$GITHUB_OUTPUT"
+
+      - name: Publish release asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          asset="${{ steps.pack.outputs.tarball }}"
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            tag="${GITHUB_REF_NAME}"
+            prerelease=""
+          else
+            tag="v${{ steps.pack.outputs.version }}-${GITHUB_SHA::7}"
+            prerelease="--prerelease"
+          fi
+          notes="Install with: npx https://github.com/${GITHUB_REPOSITORY}/releases/download/${tag}/$(basename "$asset")"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" "$asset" --clobber
+          else
+            gh release create "$tag" "$asset" --title "lorenz ${tag}" --notes "$notes" $prerelease
+          fi
+
+      - name: Publish to npm
+        # Only real tag releases publish to npm. Auth is OIDC trusted publishing: npm exchanges the
+        # GitHub id-token for a short-lived credential and emits build provenance, so no token is
+        # stored. Configure the trusted publisher on npmjs.com (repo + this workflow file) first. The
+        # staged root package.json already carries the published name (lorenz) and version.
+        if: ${{ github.ref_type == 'tag' }}
+        run: |
+          npm install -g npm@latest # trusted publishing requires npm >= 11.5.1
+          npm publish "${{ steps.pack.outputs.staged }}" --access public --provenance

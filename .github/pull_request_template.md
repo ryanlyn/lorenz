@@ -18,7 +18,7 @@
 
 #### Test Plan
 
-- [ ] `cd ts && mise check`
+- [ ] `mise check`
 - [ ] <!-- Additional targeted checks (list below) -->
 
 #### Proof of Work

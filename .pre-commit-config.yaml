@@ -5,7 +5,7 @@ repos:
     hooks:
       - id: mise-check
         name: mise run check (lint, type-check, tests)
-        entry: bash -c 'cd ts && mise run check'
+        entry: bash -c 'mise run check'
         language: system
         pass_filenames: false
         stages: [pre-push]

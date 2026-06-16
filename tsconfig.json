@@ -1,0 +1,131 @@
+{
+  "files": [],
+  "references": [
+    {
+      "path": "./packages/acp"
+    },
+    {
+      "path": "./packages/agent-runner"
+    },
+    {
+      "path": "./packages/agent-sdk"
+    },
+    {
+      "path": "./packages/cli-kit"
+    },
+    {
+      "path": "./packages/config"
+    },
+    {
+      "path": "./packages/dispatch"
+    },
+    {
+      "path": "./packages/dispatch-coordinator"
+    },
+    {
+      "path": "./packages/domain"
+    },
+    {
+      "path": "./packages/humanize"
+    },
+    {
+      "path": "./packages/issue"
+    },
+    {
+      "path": "./packages/log-file"
+    },
+    {
+      "path": "./packages/mcp"
+    },
+    {
+      "path": "./packages/orchestrator"
+    },
+    {
+      "path": "./packages/policies"
+    },
+    {
+      "path": "./packages/presenter"
+    },
+    {
+      "path": "./packages/projections"
+    },
+    {
+      "path": "./packages/prompt"
+    },
+    {
+      "path": "./packages/retry-scheduler"
+    },
+    {
+      "path": "./packages/runtime"
+    },
+    {
+      "path": "./packages/runtime-events"
+    },
+    {
+      "path": "./packages/server"
+    },
+    {
+      "path": "./packages/ssh"
+    },
+    {
+      "path": "./packages/static-worker"
+    },
+    {
+      "path": "./packages/test-utils"
+    },
+    {
+      "path": "./packages/tool-sdk"
+    },
+    {
+      "path": "./packages/traceviz-emitter"
+    },
+    {
+      "path": "./packages/traceviz-server"
+    },
+    {
+      "path": "./packages/tracker-sdk"
+    },
+    {
+      "path": "./packages/tui"
+    },
+    {
+      "path": "./packages/worker-host-pool"
+    },
+    {
+      "path": "./packages/worker-pool"
+    },
+    {
+      "path": "./packages/worker-sdk"
+    },
+    {
+      "path": "./packages/workflow"
+    },
+    {
+      "path": "./packages/workspace"
+    },
+    {
+      "path": "./extensions/docker-worker"
+    },
+    {
+      "path": "./extensions/jira-tracker"
+    },
+    {
+      "path": "./extensions/linear-tracker"
+    },
+    {
+      "path": "./extensions/local-tracker"
+    },
+    {
+      "path": "./extensions/memory-tracker"
+    },
+    {
+      "path": "./extensions/slack-tracker"
+    },
+    {
+      "path": "./apps/cli"
+    },
+    {
+      "path": "./apps/traceviz"
+    }
+  ]
+}

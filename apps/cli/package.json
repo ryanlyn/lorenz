@@ -1,0 +1,63 @@
+{
+  "name": "@lorenz/cli",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "lorenz": "./bin/lorenz.js"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": "./dist/index.js",
+    "./runs": "./dist/runs.js"
+  },
+  "scripts": {
+    "dev": "tsx src/bin/cli.ts",
+    "start": "node dist/bin/cli.js",
+    "start:once": "node dist/bin/cli.js --once",
+    "runs": "node dist/bin/cli.js runs"
+  },
+  "dependencies": {
+    "@lorenz/acp": "workspace:*",
+    "@lorenz/agent-runner": "workspace:*",
+    "@lorenz/agent-sdk": "workspace:*",
+    "@lorenz/worker-sdk": "workspace:*",
+    "@lorenz/cli-kit": "workspace:*",
+    "@lorenz/config": "workspace:*",
+    "@lorenz/dispatch": "workspace:*",
+    "@lorenz/dispatch-coordinator": "workspace:*",
+    "@lorenz/docker-worker": "workspace:*",
+    "@lorenz/domain": "workspace:*",
+    "@lorenz/humanize": "workspace:*",
+    "@lorenz/issue": "workspace:*",
+    "@lorenz/jira-tracker": "workspace:*",
+    "@lorenz/linear-tracker": "workspace:*",
+    "@lorenz/local-tracker": "workspace:*",
+    "@lorenz/log-file": "workspace:*",
+    "@lorenz/mcp": "workspace:*",
+    "@lorenz/memory-tracker": "workspace:*",
+    "@lorenz/orchestrator": "workspace:*",
+    "@lorenz/policies": "workspace:*",
+    "@lorenz/presenter": "workspace:*",
+    "@lorenz/projections": "workspace:*",
+    "@lorenz/prompt": "workspace:*",
+    "@lorenz/retry-scheduler": "workspace:*",
+    "@lorenz/runtime": "workspace:*",
+    "@lorenz/server": "workspace:*",
+    "@lorenz/slack-tracker": "workspace:*",
+    "@lorenz/ssh": "workspace:*",
+    "@lorenz/static-worker": "workspace:*",
+    "@lorenz/tool-sdk": "workspace:*",
+    "@lorenz/traceviz-emitter": "workspace:*",
+    "@lorenz/tracker-sdk": "workspace:*",
+    "@lorenz/tui": "workspace:*",
+    "@lorenz/worker-host-pool": "workspace:*",
+    "@lorenz/worker-pool": "workspace:*",
+    "@lorenz/workflow": "workspace:*",
+    "@lorenz/workspace": "workspace:*",
+    "commander": "catalog:",
+    "ink": "catalog:",
+    "react": "catalog:"
+  }
+}

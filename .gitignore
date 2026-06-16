@@ -2,9 +2,18 @@
 .antigravitycli/
 *.ndjson
 
+# TypeScript workspace
+node_modules/
+dist/
+vendor/claude-agent-acp/dist/bundle.js
+log/
+*.tsbuildinfo
+.eslintcache
+.prettiercache
+
 # Local agent settings
-.claude/scheduled_tasks.lock
 .claude/settings.local.json
+.claude/workflows/
 .codex/config*.json
 .codex/config*.toml
 .codex/config*.yaml

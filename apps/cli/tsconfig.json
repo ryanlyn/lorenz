@@ -1,0 +1,125 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "dist",
+    "tsBuildInfoFile": "dist/tsconfig.tsbuildinfo"
+  },
+  "include": [
+    "src/**/*.ts",
+    "src/**/*.tsx"
+  ],
+  "references": [
+    {
+      "path": "../../packages/acp"
+    },
+    {
+      "path": "../../packages/agent-runner"
+    },
+    {
+      "path": "../../packages/agent-sdk"
+    },
+    {
+      "path": "../../packages/worker-sdk"
+    },
+    {
+      "path": "../../packages/cli-kit"
+    },
+    {
+      "path": "../../packages/config"
+    },
+    {
+      "path": "../../packages/dispatch"
+    },
+    {
+      "path": "../../packages/dispatch-coordinator"
+    },
+    {
+      "path": "../../extensions/docker-worker"
+    },
+    {
+      "path": "../../packages/domain"
+    },
+    {
+      "path": "../../packages/humanize"
+    },
+    {
+      "path": "../../packages/issue"
+    },
+    {
+      "path": "../../extensions/jira-tracker"
+    },
+    {
+      "path": "../../extensions/linear-tracker"
+    },
+    {
+      "path": "../../extensions/local-tracker"
+    },
+    {
+      "path": "../../packages/log-file"
+    },
+    {
+      "path": "../../packages/mcp"
+    },
+    {
+      "path": "../../extensions/memory-tracker"
+    },
+    {
+      "path": "../../packages/orchestrator"
+    },
+    {
+      "path": "../../packages/policies"
+    },
+    {
+      "path": "../../packages/presenter"
+    },
+    {
+      "path": "../../packages/projections"
+    },
+    {
+      "path": "../../packages/prompt"
+    },
+    {
+      "path": "../../packages/retry-scheduler"
+    },
+    {
+      "path": "../../packages/runtime"
+    },
+    {
+      "path": "../../packages/server"
+    },
+    {
+      "path": "../../extensions/slack-tracker"
+    },
+    {
+      "path": "../../packages/ssh"
+    },
+    {
+      "path": "../../packages/static-worker"
+    },
+    {
+      "path": "../../packages/tool-sdk"
+    },
+    {
+      "path": "../../packages/traceviz-emitter"
+    },
+    {
+      "path": "../../packages/tracker-sdk"
+    },
+    {
+      "path": "../../packages/tui"
+    },
+    {
+      "path": "../../packages/worker-host-pool"
+    },
+    {
+      "path": "../../packages/worker-pool"
+    },
+    {
+      "path": "../../packages/workflow"
+    },
+    {
+      "path": "../../packages/workspace"
+    }
+  ]
+}

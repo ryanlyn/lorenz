@@ -13,12 +13,12 @@
 
 ## Typescript
 
-- When working on the ts/ folder, run `mise run tidy` for linting and formatting autofix
-- When working on the ts/ folder, run `mise run check` to run lint, build, types and tests (this rebuilds automatically)
+- Run `mise run tidy` for linting and formatting autofix
+- Run `mise run check` to run lint, build, types and tests (this rebuilds automatically)
 - When running tests directly with vitest, make sure you rebuild first
 
 ## TraceViz UI debugging
 
-- Start the dashboard with `pnpm --filter @symphony/dashboard dev --host 0.0.0.0` from `ts/`, then drive `http://localhost:5173/#/trace/<issueId>` with Playwright.
+- Start the dashboard with `pnpm --filter @lorenz/dashboard dev --host 0.0.0.0` from the repository root, then drive `http://localhost:5173/#/trace/<issueId>` with Playwright.
 - Mock the REST endpoints and inject a fake `WebSocket` with `page.addInitScript` to emit `events` and `events_append` messages.
 - For visual checks, use `recordVideo`, targeted screenshots, and `requestAnimationFrame` sampling of stable DOM markers.

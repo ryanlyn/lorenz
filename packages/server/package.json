@@ -1,0 +1,25 @@
+{
+  "name": "@lorenz/server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "dependencies": {
+    "@hono/node-server": "catalog:",
+    "@hono/node-ws": "catalog:",
+    "@lorenz/domain": "workspace:*",
+    "@lorenz/mcp": "workspace:*",
+    "@lorenz/presenter": "workspace:*",
+    "@lorenz/runtime-events": "workspace:*",
+    "@lorenz/traceviz-server": "workspace:*",
+    "better-sqlite3": "catalog:",
+    "hono": "catalog:"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "catalog:"
+  }
+}

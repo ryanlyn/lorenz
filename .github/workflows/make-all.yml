@@ -9,9 +9,6 @@ on:
 jobs:
   ts-mise-check:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: ts
 
     steps:
       - name: Checkout
@@ -22,13 +19,12 @@ jobs:
         with:
           install: true
           cache: true
-          working_directory: ts
 
       - name: Setup pnpm store cache
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: ~/.local/share/pnpm/store
-          key: ${{ runner.os }}-pnpm-store-${{ hashFiles('ts/pnpm-lock.yaml') }}
+          key: ${{ runner.os }}-pnpm-store-${{ hashFiles('pnpm-lock.yaml') }}
           restore-keys: |
             ${{ runner.os }}-pnpm-store-
 
@@ -36,11 +32,11 @@ jobs:
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: |
-            ts/node_modules
-            ts/apps/*/node_modules
-            ts/packages/*/node_modules
-            ts/extensions/*/node_modules
-          key: ${{ runner.os }}-ts-deps-${{ hashFiles('ts/pnpm-lock.yaml') }}
+            node_modules
+            apps/*/node_modules
+            packages/*/node_modules
+            extensions/*/node_modules
+          key: ${{ runner.os }}-ts-deps-${{ hashFiles('pnpm-lock.yaml') }}
           restore-keys: |
             ${{ runner.os }}-ts-deps-
 

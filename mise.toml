@@ -2,29 +2,104 @@
 _.file = ".env"
 
 [hooks]
-enter = "mise run check-env && prek install --hook-type pre-push -v"
+enter = "mise run check-env && pnpm install --frozen-lockfile && prek install --hook-type pre-push -v"
 
 [settings]
 experimental = true
 
 [tools]
+node = "24"
+pnpm = "9"
 prek = "0.4.3"
 claude-code = "latest"
 "npm:@openai/codex" = "latest"
-# The ACP bridges are vendored at ts/vendor/ and resolved from the pnpm
+# The ACP bridges are vendored at vendor/ and resolved from the pnpm
 # workspace; local runs do not use PATH installs. Remote SSH worker hosts
 # install their own bridges.
 
 [tasks.check-env]
 run = '''
-if [ -z "$LINEAR_API_KEY" ]; then
-  echo "ERROR: LINEAR_API_KEY is not set. Copy .env.template to .env and fill in values." >&2
+if [ -n "$LINEAR_API_KEY" ] && [ -n "$JIRA_API_KEY" ]; then
+  echo "ERROR: Both LINEAR_API_KEY and JIRA_API_KEY are set. Only one tracker may be configured at a time." >&2
   exit 1
 fi
-if [ -z "$LINEAR_PROJECT_SLUG" ]; then
-  echo "ERROR: LINEAR_PROJECT_SLUG is not set. Copy .env.template to .env and fill in values." >&2
+if [ -z "$LINEAR_API_KEY" ] && [ -z "$JIRA_API_KEY" ]; then
+  echo "ERROR: Neither LINEAR_API_KEY nor JIRA_API_KEY is set. Copy .env.template to .env and fill in values for one tracker." >&2
+  exit 1
+fi
+if [ -n "$LINEAR_API_KEY" ] && [ -z "$LINEAR_PROJECT_SLUG" ]; then
+  echo "ERROR: LINEAR_API_KEY is set but LINEAR_PROJECT_SLUG is missing." >&2
+  exit 1
+fi
+if [ -n "$JIRA_API_KEY" ] && [ -z "$JIRA_EMAIL" ]; then
+  echo "ERROR: JIRA_API_KEY is set but JIRA_EMAIL is missing." >&2
   exit 1
 fi
 '''
 description = "Validate required environment variables"
 quiet = true
+
+[tasks.build]
+run = "pnpm build"
+
+[tasks.format]
+run = "pnpm format"
+
+[tasks.lint-fix]
+run = "pnpm lint:fix"
+
+[tasks.lint]
+run = "pnpm lint"
+
+[tasks.typecheck]
+run = "pnpm typecheck"
+
+[tasks.test]
+run = "pnpm test"
+depends = ["build"]
+
+[tasks.tidy]
+depends = ["format", "lint-fix"]
+
+[tasks.knip]
+run = "pnpm exec knip"
+
+[tasks.lint-versions]
+run = "pnpm lint:versions"
+
+[tasks.agent-settings-policy]
+run = "pnpm agent-settings:check"
+
+[tasks.architecture]
+run = "pnpm architecture:check"
+# dependency-cruiser resolves workspace imports through each package's built dist/.
+depends = ["build"]
+
+[tasks.tsconfig-refs]
+run = "pnpm tsconfig:refs:check"
+
+[tasks.check]
+depends = ["typecheck", "test", "lint", "knip", "lint-versions", "tsconfig-refs", "agent-settings-policy", "architecture"]
+
+[tasks."e2e:setup"]
+run = "pnpm exec playwright install chromium"
+description = "Install Playwright browsers for E2E tests"
+
+[tasks."e2e:trace"]
+run = """
+pnpm build && \
+pnpm --filter @lorenz/dashboard build && \
+npx tsx sandbox/e2e-trace-test.ts
+"""
+description = "Run end-to-end trace pipeline test (requires a real agent)"
+env = { LORENZ_E2E_AGENT_KIND = "{{env.LORENZ_E2E_AGENT_KIND | default(value='codex')}}" }
+
+[tasks."e2e:trace:codex"]
+run = "mise run e2e:trace"
+description = "Run E2E trace test with Codex agent"
+env = { LORENZ_E2E_AGENT_KIND = "codex" }
+
+[tasks."e2e:trace:claude"]
+run = "mise run e2e:trace"
+description = "Run E2E trace test with Claude agent"
+env = { LORENZ_E2E_AGENT_KIND = "claude" }
