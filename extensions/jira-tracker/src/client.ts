@@ -8,6 +8,7 @@ import {
   type Settings,
 } from "@lorenz/domain";
 import { defaultStateType, normalizeIssue } from "@lorenz/issue";
+import type { TrackerComment } from "@lorenz/tracker-sdk";
 
 import { jiraTrackerOptions, type JiraMcpToolMap } from "./options.js";
 
@@ -30,7 +31,9 @@ const DEFAULT_MCP_TOOLS: Required<JiraMcpToolMap> = {
   search: "jira_search",
   readIssue: "jira_get_issue",
   updateStatus: "jira_transition_issue",
+  listComments: "jira_get_comments",
   comment: "jira_add_comment",
+  updateComment: "jira_update_comment",
   createIssue: "jira_create_issue",
 };
 
@@ -98,11 +101,49 @@ export class JiraClient implements RuntimeTrackerClient {
     return this.readIssue(issueIdOrKey);
   }
 
-  async addComment(issueIdOrKey: string, body: string): Promise<void> {
-    await this.request(`/rest/api/3/issue/${encodeURIComponent(issueIdOrKey)}/comment`, {
-      method: "POST",
-      body: JSON.stringify({ body: adfDocument(body) }),
-    });
+  async addComment(issueIdOrKey: string, body: string): Promise<TrackerComment> {
+    const raw = await this.request<Record<string, unknown>>(
+      `/rest/api/3/issue/${encodeURIComponent(issueIdOrKey)}/comment`,
+      {
+        method: "POST",
+        body: JSON.stringify({ body: adfDocument(body) }),
+      },
+    );
+    return normalizeJiraComment(raw);
+  }
+
+  async listComments(issueIdOrKey: string): Promise<TrackerComment[]> {
+    const out: TrackerComment[] = [];
+    let startAt = 0;
+    const maxResults = 100;
+    for (;;) {
+      const page = await this.request<Record<string, unknown>>(
+        `/rest/api/3/issue/${encodeURIComponent(issueIdOrKey)}/comment?startAt=${startAt}&maxResults=${maxResults}`,
+        { method: "GET" },
+      );
+      const comments = Array.isArray(page.comments) ? page.comments : [];
+      for (const comment of comments) {
+        if (isRecord(comment)) out.push(normalizeJiraComment(comment));
+      }
+      const total = typeof page.total === "number" ? page.total : null;
+      if (comments.length === 0 || (total !== null && out.length >= total)) return out;
+      startAt += comments.length;
+    }
+  }
+
+  async updateComment(
+    issueIdOrKey: string,
+    commentId: string,
+    body: string,
+  ): Promise<TrackerComment> {
+    const raw = await this.request<Record<string, unknown>>(
+      `/rest/api/3/issue/${encodeURIComponent(issueIdOrKey)}/comment/${encodeURIComponent(commentId)}`,
+      {
+        method: "PUT",
+        body: JSON.stringify({ body: adfDocument(body) }),
+      },
+    );
+    return normalizeJiraComment(raw);
   }
 
   async createIssue(input: {
@@ -272,20 +313,58 @@ export class JiraMcpClient implements RuntimeTrackerClient {
       ...issueRefArgs(issueIdOrKey),
       status,
     });
-    return (
-      firstIssueFromPayload(payload, assigneeFilterValue(this.settings), this.baseUrlOrNull()) ??
-      this.readIssue(issueIdOrKey)
+    const issue = firstIssueFromPayload(
+      payload,
+      assigneeFilterValue(this.settings),
+      this.baseUrlOrNull(),
     );
+    return issue ?? (await this.readIssue(issueIdOrKey));
   }
 
-  async addComment(issueIdOrKey: string, body: string): Promise<void> {
+  async listComments(issueIdOrKey: string): Promise<TrackerComment[]> {
+    const tool = this.toolName("listComments");
+    const failures: string[] = [];
+    for (const args of issueRefArgVariants(issueIdOrKey)) {
+      try {
+        const payload = await this.callTool(tool, args);
+        const payloadError = mcpToolPayloadError(payload);
+        if (!payloadError) return commentsFromPayload(payload);
+        failures.push(payloadError);
+      } catch (error) {
+        failures.push(errorMessage(error));
+      }
+    }
+    throw new Error(`jira-mcp list comments failed: ${failures.join("; ")}`);
+  }
+
+  async updateComment(
+    issueIdOrKey: string,
+    commentId: string,
+    body: string,
+  ): Promise<TrackerComment> {
+    const tool = this.toolName("updateComment");
+    const failures: string[] = [];
+    for (const args of updateCommentArgs(issueIdOrKey, commentId, body)) {
+      try {
+        const payload = await this.callTool(tool, args);
+        const payloadError = mcpToolPayloadError(payload);
+        if (!payloadError) return firstCommentFromPayload(payload) ?? { id: commentId, body };
+        failures.push(payloadError);
+      } catch (error) {
+        failures.push(errorMessage(error));
+      }
+    }
+    throw new Error(`jira-mcp update comment failed: ${failures.join("; ")}`);
+  }
+
+  async addComment(issueIdOrKey: string, body: string): Promise<TrackerComment | void> {
     const tool = this.toolName("comment");
     const failures: string[] = [];
     for (const args of commentArgs(issueIdOrKey, body)) {
       try {
         const payload = await this.callTool(tool, args);
         const payloadError = mcpToolPayloadError(payload);
-        if (!payloadError) return;
+        if (!payloadError) return createdCommentFromPayload(payload, body);
         failures.push(payloadError);
       } catch (error) {
         failures.push(errorMessage(error));
@@ -459,6 +538,108 @@ function commentArgs(issueIdOrKey: string, body: string): Array<Record<string, u
     { issueId: issueIdOrKey, body },
     { key: issueIdOrKey, body },
   ];
+}
+
+function issueRefArgVariants(issueIdOrKey: string): Array<Record<string, unknown>> {
+  return [
+    { issue_key: issueIdOrKey },
+    { issueKey: issueIdOrKey },
+    { issueIdOrKey },
+    { issueId: issueIdOrKey },
+    { key: issueIdOrKey },
+  ];
+}
+
+function updateCommentArgs(
+  issueIdOrKey: string,
+  commentId: string,
+  body: string,
+): Array<Record<string, unknown>> {
+  const refs = issueRefArgVariants(issueIdOrKey);
+  const ids = [{ comment_id: commentId }, { commentId }, { id: commentId }];
+  const refIds = ids.flatMap((id) => refs.map((ref) => ({ ...ref, ...id })));
+  return [
+    ...refIds.map((args) => ({ ...args, comment: body })),
+    ...refIds.map((args) => ({ ...args, body })),
+  ];
+}
+
+function commentsFromPayload(payload: unknown): TrackerComment[] {
+  return commentNodesFromPayload(payload).flatMap((raw) => {
+    if (!isRecord(raw)) return [];
+    try {
+      return [normalizeJiraComment(raw)];
+    } catch {
+      return [];
+    }
+  });
+}
+
+function commentNodesFromPayload(payload: unknown): unknown[] {
+  if (Array.isArray(payload)) return payload;
+  if (!isRecord(payload)) return [];
+  const comments = payload.comments;
+  const data = isRecord(payload.data) ? payload.data : {};
+  const dataComments = isRecord(data.comments) ? data.comments : {};
+  const dataIssue = isRecord(data.issue) ? data.issue : {};
+  const dataIssueComments = isRecord(dataIssue.comments) ? dataIssue.comments : {};
+  const issue = isRecord(payload.issue) ? payload.issue : {};
+  const issueComments = isRecord(issue.comments) ? issue.comments : {};
+  const candidates = [
+    comments,
+    payload.values,
+    payload.rows,
+    isRecord(comments) ? comments.comments : undefined,
+    isRecord(comments) ? comments.nodes : undefined,
+    data.comments,
+    dataComments.nodes,
+    dataIssue.comments,
+    dataIssueComments.nodes,
+    issue.comments,
+    issueComments.nodes,
+  ];
+  const match = candidates.find((candidate): candidate is unknown[] => Array.isArray(candidate));
+  return match ?? [];
+}
+
+function firstCommentFromPayload(payload: unknown): TrackerComment | null {
+  if (isRecord(payload) && isRecord(payload.comment)) return normalizeJiraComment(payload.comment);
+  if (isRecord(payload) && payload.id !== undefined && payload.body !== undefined) {
+    return normalizeJiraComment(payload);
+  }
+  return commentsFromPayload(payload)[0] ?? null;
+}
+
+function createdCommentFromPayload(payload: unknown, fallbackBody: string): TrackerComment | void {
+  const comment = firstCommentFromPayload(payload);
+  if (comment) return comment;
+  const id =
+    isRecord(payload) &&
+    (stringField(payload, "id") ??
+      stringField(payload, "commentId") ??
+      stringField(payload, "comment_id"));
+  const textId = typeof payload === "string" ? commentIdFromText(payload) : null;
+  const createdId = id || textId;
+  return createdId ? { id: createdId, body: fallbackBody } : undefined;
+}
+
+function commentIdFromText(text: string): string | null {
+  const match = /\b(?:comment\s+)?id\s*[:#]\s*([A-Za-z0-9_-]+)/i.exec(text);
+  return match?.[1] ?? null;
+}
+
+function normalizeJiraComment(comment: Record<string, unknown>): TrackerComment {
+  const id = stringField(comment, "id");
+  if (!id) throw new Error("jira comment id is required");
+  const author = isRecord(comment.author) ? comment.author : {};
+  return {
+    id,
+    body: jiraDescriptionToText(comment.body) ?? "",
+    author: stringField(author, "accountId") ?? stringField(author, "displayName"),
+    createdAt: stringField(comment, "created"),
+    updatedAt: stringField(comment, "updated"),
+    url: stringField(comment, "self"),
+  };
 }
 
 export function normalizeJiraIssue(

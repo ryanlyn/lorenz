@@ -30,7 +30,9 @@ const TRACKER_TOOL_NAMES = [
   "tracker_read_issue",
   "tracker_query",
   "tracker_update_status",
+  "tracker_list_comments",
   "tracker_comment",
+  "tracker_update_comment",
   "tracker_create_issue",
 ];
 
@@ -154,6 +156,140 @@ test("common tracker tools work against the local board provider", async () => {
   });
 });
 
+test("common tracker comment tools work against the Linear provider", async () => {
+  const settings = linearSettings();
+  const calls: Array<{ query: string; variables: Record<string, unknown> }> = [];
+  let commentListCalls = 0;
+  const fakeFetch: typeof fetch = async (_input, init) => {
+    const body = JSON.parse(String(init?.body ?? "{}")) as {
+      query?: string;
+      variables?: Record<string, unknown>;
+    };
+    calls.push({ query: body.query ?? "", variables: body.variables ?? {} });
+
+    if (body.query?.includes("commentCreate")) {
+      return jsonResponse({
+        data: {
+          commentCreate: {
+            success: true,
+            comment: {
+              id: "comment-created",
+              body: "New workpad",
+              createdAt: "2026-06-01T00:00:00Z",
+              updatedAt: "2026-06-01T00:00:00Z",
+              url: "https://linear.app/team/issue/ENG-1#comment-comment-created",
+              user: { id: "user-1", name: "Worker", email: "worker@example.com" },
+            },
+          },
+        },
+      });
+    }
+
+    if (body.query?.includes("LorenzTrackerLinearComments")) {
+      commentListCalls += 1;
+      return jsonResponse({
+        data: {
+          issue: {
+            comments:
+              commentListCalls === 1
+                ? {
+                    nodes: [
+                      {
+                        id: "comment-old",
+                        body: "Older comment",
+                        createdAt: "2026-05-01T00:00:00Z",
+                        updatedAt: "2026-05-01T00:00:00Z",
+                        url: "https://linear.app/team/issue/ENG-1#comment-comment-old",
+                        user: { id: "user-1", name: "Worker", email: "worker@example.com" },
+                      },
+                    ],
+                    pageInfo: { hasNextPage: true, endCursor: "cursor-1" },
+                  }
+                : {
+                    nodes: [
+                      {
+                        id: "comment-1",
+                        body: "## Codex Workpad",
+                        createdAt: "2026-06-01T00:00:00Z",
+                        updatedAt: "2026-06-01T00:00:00Z",
+                        url: "https://linear.app/team/issue/ENG-1#comment-comment-1",
+                        user: { id: "user-1", name: "Worker", email: "worker@example.com" },
+                      },
+                    ],
+                    pageInfo: { hasNextPage: false, endCursor: null },
+                  },
+          },
+        },
+      });
+    }
+
+    return jsonResponse({
+      data: {
+        commentUpdate: {
+          success: true,
+          comment: {
+            id: "comment-1",
+            body: "Updated workpad",
+            createdAt: "2026-06-01T00:00:00Z",
+            updatedAt: "2026-06-02T00:00:00Z",
+            url: "https://linear.app/team/issue/ENG-1#comment-comment-1",
+            user: { id: "user-1", name: "Worker", email: "worker@example.com" },
+          },
+        },
+      },
+    });
+  };
+
+  const created = await executeTool(
+    "tracker_comment",
+    { issueId: "issue-1", body: "New workpad" },
+    settings,
+    fakeFetch,
+    tools,
+  );
+  assert.equal(created.success, true);
+  assert.equal(
+    (created.result as { comment: { id: string; body: string } }).comment.id,
+    "comment-created",
+  );
+
+  const listed = await executeTool(
+    "tracker_list_comments",
+    { issueId: "issue-1" },
+    settings,
+    fakeFetch,
+    tools,
+  );
+  assert.equal(listed.success, true);
+  const comments = (listed.result as { comments: Array<{ id: string; body: string }> }).comments;
+  assert.deepEqual(
+    comments.map((comment) => comment.id),
+    ["comment-old", "comment-1"],
+  );
+  assert.equal(comments[1]?.body, "## Codex Workpad");
+
+  const updated = await executeTool(
+    "tracker_update_comment",
+    { issueId: "issue-1", commentId: "comment-1", body: "Updated workpad" },
+    settings,
+    fakeFetch,
+    tools,
+  );
+  assert.equal(updated.success, true);
+  const comment = (updated.result as { comment: { id: string; body: string } }).comment;
+  assert.equal(comment.id, "comment-1");
+  assert.equal(comment.body, "Updated workpad");
+  assert.deepEqual(
+    calls.map((call) => call.variables),
+    [
+      { input: { issueId: "issue-1", body: "New workpad" } },
+      { id: "issue-1", after: null },
+      { id: "issue-1", after: "cursor-1" },
+      { id: "comment-1", input: { body: "Updated workpad" } },
+    ],
+  );
+});
+
 test("a throwing pack surfaces as a failed tool result, not a thrown error", async () => {
   const boomTools = new ToolRegistry();
   boomTools.register({
@@ -176,3 +312,9 @@ test("a throwing pack surfaces as a failed tool result, not a thrown error", asy
   assert.equal(result.success, false);
   assert.match(result.error ?? "", /pack exploded/);
 });
+
+function jsonResponse(body: unknown): Response {
+  return new Response(JSON.stringify(body), {
+    headers: { "content-type": "application/json" },
+  });
+}

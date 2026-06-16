@@ -31,6 +31,16 @@ export interface TrackerQueryResult {
   skipped?: unknown[] | undefined;
 }
 
+/** Normalized tracker issue comment returned by the provider-neutral comment tools. */
+export interface TrackerComment {
+  id: string;
+  body: string;
+  author?: string | null | undefined;
+  createdAt?: string | null | undefined;
+  updatedAt?: string | null | undefined;
+  url?: string | null | undefined;
+}
+
 /**
  * Normalized issue operations backing the provider-neutral `tracker_*` tool pack. Every
  * member is optional: a missing member makes the corresponding tool report itself as
@@ -47,7 +57,9 @@ export interface TrackerToolOps {
   /** Pre-projected rows for backends with a native query surface; takes precedence over {@link queryIssues}. */
   queryRows?(args: Record<string, unknown>): Promise<TrackerQueryResult>;
   updateStatus?(issueId: string, status: string): Promise<Issue>;
-  addComment?(issueId: string, body: string): Promise<void>;
+  listComments?(issueId: string): Promise<TrackerComment[]>;
+  addComment?(issueId: string, body: string): Promise<TrackerComment | void>;
+  updateComment?(issueId: string, commentId: string, body: string): Promise<TrackerComment>;
   createIssue?(input: TrackerCreateIssueInput): Promise<Issue>;
 }
 

@@ -1,5 +1,6 @@
 export type {
   TrackerContext,
+  TrackerComment,
   TrackerCreateIssueInput,
   TrackerOpsContext,
   TrackerProvider,

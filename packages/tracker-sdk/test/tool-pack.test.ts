@@ -10,7 +10,9 @@ const TRACKER_TOOL_NAMES = [
   "tracker_read_issue",
   "tracker_query",
   "tracker_update_status",
+  "tracker_list_comments",
   "tracker_comment",
+  "tracker_update_comment",
   "tracker_create_issue",
 ];
 
@@ -62,7 +64,7 @@ test("tracker pack advertises no tools when the provider exposes no tool ops", (
   assert.deepEqual(empty.toolSpecs(settings), []);
 });
 
-test("tracker pack advertises the five tracker_* tools when the provider has ops", () => {
+test("tracker pack advertises the tracker_* tools when the provider has ops", () => {
   const { pack, settings } = packFor("stub", {});
   assert.deepEqual(
     pack.toolSpecs(settings).map((spec) => spec.name),
@@ -87,6 +89,20 @@ test("tracker tools fail with a clear message when ops or the specific op are mi
   });
   assert.equal(comment.success, false);
   assert.equal(comment.error, "tracker tools are unavailable for stub tracker");
+
+  const comments = await execute(partial.pack, partial.settings, "tracker_list_comments", {
+    issueId: "STUB-1",
+  });
+  assert.equal(comments.success, false);
+  assert.equal(comments.error, "tracker tools are unavailable for stub tracker");
+
+  const updateComment = await execute(partial.pack, partial.settings, "tracker_update_comment", {
+    issueId: "STUB-1",
+    commentId: "comment-1",
+    body: "hello",
+  });
+  assert.equal(updateComment.success, false);
+  assert.equal(updateComment.error, "tracker tools are unavailable for stub tracker");
 });
 
 test("tracker tools validate arguments and reject unknown names", async () => {
@@ -95,6 +111,20 @@ test("tracker tools validate arguments and reject unknown names", async () => {
   const missingArg = await execute(pack, settings, "tracker_read_issue", {});
   assert.equal(missingArg.success, false);
   assert.equal(missingArg.error, "'issueId' is required");
+
+  const missingBody = await execute(pack, settings, "tracker_update_comment", {
+    issueId: "STUB-1",
+    commentId: "comment-1",
+  });
+  assert.equal(missingBody.success, false);
+  assert.equal(missingBody.error, "'body' is required");
+
+  const missingCommentId = await execute(pack, settings, "tracker_update_comment", {
+    issueId: "STUB-1",
+    body: "Updated",
+  });
+  assert.equal(missingCommentId.success, false);
+  assert.equal(missingCommentId.error, "'commentId' is required");
 
   const unknown = await execute(pack, settings, "tracker_bogus", {});
   assert.deepEqual(unknown, {
@@ -164,6 +194,62 @@ test("tracker_comment returns ok and passes the body through", async () => {
   });
   assert.deepEqual(result, { success: true, result: { ok: true } });
   assert.deepEqual(calls, [["STUB-1", "done"]]);
+});
+
+test("tracker_comment returns a normalized comment when the provider has one", async () => {
+  const comment = {
+    id: "comment-1",
+    body: "done",
+    author: "user-1",
+  };
+  const { pack, settings } = packFor("stub", {
+    addComment: async () => comment,
+  });
+
+  const result = await execute(pack, settings, "tracker_comment", {
+    issueId: "STUB-1",
+    body: "done",
+  });
+
+  assert.deepEqual(result, { success: true, result: { ok: true, comment } });
+});
+
+test("tracker_list_comments and tracker_update_comment return normalized comments", async () => {
+  const calls: unknown[] = [];
+  const comment = {
+    id: "comment-1",
+    body: "## Codex Workpad",
+    author: "user-1",
+    createdAt: "2026-06-01T00:00:00Z",
+    updatedAt: "2026-06-01T00:00:00Z",
+    url: "https://tracker.example/STUB-1?focusedCommentId=comment-1",
+  };
+  const { pack, settings } = packFor("stub", {
+    listComments: async (issueId) => {
+      calls.push(["list", issueId]);
+      return [comment];
+    },
+    updateComment: async (issueId, commentId, body) => {
+      calls.push(["updateComment", issueId, commentId, body]);
+      return { ...comment, body, updatedAt: "2026-06-02T00:00:00Z" };
+    },
+  });
+
+  const listed = await execute(pack, settings, "tracker_list_comments", { issueId: "STUB-1" });
+  assert.deepEqual(listed.result, { comments: [comment] });
+
+  const updated = await execute(pack, settings, "tracker_update_comment", {
+    issueId: "STUB-1",
+    commentId: "comment-1",
+    body: "Updated workpad",
+  });
+  assert.deepEqual(updated.result, {
+    comment: { ...comment, body: "Updated workpad", updatedAt: "2026-06-02T00:00:00Z" },
+  });
+  assert.deepEqual(calls, [
+    ["list", "STUB-1"],
+    ["updateComment", "STUB-1", "comment-1", "Updated workpad"],
+  ]);
 });
 
 test("tracker_query passes natively projected rows through unchanged", async () => {

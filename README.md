@@ -366,7 +366,9 @@ All non-memory providers expose the provider-neutral agent tools:
 - `tracker_read_issue`
 - `tracker_query`
 - `tracker_update_status`
+- `tracker_list_comments`
 - `tracker_comment`
+- `tracker_update_comment`
 - `tracker_create_issue`
 
 Provider-specific tools are compatibility escape hatches, not the preferred workflow contract.
@@ -394,6 +396,11 @@ widens the scope, so issues must be explicitly delegated before Lorenz will disp
 Jira REST issues created through `tracker_create_issue` are assigned to that same owner by
 default. Jira MCP creation forwards a concrete configured or caller-provided `assignee` to the
 external MCP server.
+Jira REST supports the same persistent workpad-comment flow as Linear through
+`tracker_list_comments`, `tracker_comment`, and `tracker_update_comment`. Jira MCP maps those
+neutral comment tools to `jira_get_comments`, `jira_add_comment`, and `jira_update_comment` by
+default; override `trackers.<name>.mcp.tools.list_comments` or `update_comment` when the external
+MCP server uses different tool names.
 
 Direct Jira REST configuration:
 
@@ -428,7 +435,9 @@ trackers:
         search: atlassian_search_jira
         read_issue: atlassian_get_jira_issue
         update_status: atlassian_transition_jira_issue
+        list_comments: atlassian_get_jira_comments
         comment: atlassian_add_jira_comment
+        update_comment: atlassian_update_jira_comment
         create_issue: atlassian_create_jira_issue
 ```
 

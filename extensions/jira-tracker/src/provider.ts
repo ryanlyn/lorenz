@@ -17,7 +17,9 @@ const JIRA_MCP_TOOL_KEYS = new Set([
   "search",
   "readIssue",
   "updateStatus",
+  "listComments",
   "comment",
+  "updateComment",
   "createIssue",
 ]);
 // `tracker.mcp.tools` is nested below the tracker section, so its snake_case aliases cannot
@@ -25,6 +27,8 @@ const JIRA_MCP_TOOL_KEYS = new Set([
 const JIRA_MCP_TOOL_ALIASES: Readonly<Record<string, string>> = {
   read_issue: "readIssue",
   update_status: "updateStatus",
+  list_comments: "listComments",
+  update_comment: "updateComment",
   create_issue: "createIssue",
 };
 
@@ -155,7 +159,10 @@ function jiraToolOps(client: JiraClient | JiraMcpClient, settings: Settings): Tr
     readIssue: async (issueId) => client.readIssue(issueId),
     queryIssues: async (args) => queryJiraIssues(client, settings, args),
     updateStatus: async (issueId, status) => client.updateIssueStatus(issueId, status),
+    listComments: async (issueId) => client.listComments(issueId),
     addComment: async (issueId, body) => client.addComment(issueId, body),
+    updateComment: async (issueId, commentId, body) =>
+      client.updateComment(issueId, commentId, body),
     createIssue: async (input) => client.createIssue(input),
   };
 }

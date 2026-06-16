@@ -115,8 +115,9 @@ test("Jira REST client adds comments as Atlassian document format", async () => 
     fetchImpl: fetchSequence(calls, jsonResponse({ id: "comment-1" })),
   });
 
-  await client.addComment("ENG-1", "First line\n\nSecond line");
+  const comment = await client.addComment("ENG-1", "First line\n\nSecond line");
 
+  assert.equal(comment.id, "comment-1");
   assert.equal(calls[0]?.url, "https://example.atlassian.net/rest/api/3/issue/ENG-1/comment");
   assert.deepEqual(calls[0]?.body, {
     body: {
@@ -126,6 +127,56 @@ test("Jira REST client adds comments as Atlassian document format", async () => 
         { type: "paragraph", content: [{ type: "text", text: "First line" }] },
         { type: "paragraph", content: [] },
         { type: "paragraph", content: [{ type: "text", text: "Second line" }] },
+      ],
+    },
+  });
+});
+
+test("Jira REST client lists comments and normalizes bodies", async () => {
+  const calls: FetchCall[] = [];
+  const client = new JiraClient(jiraSettings(), {
+    fetchImpl: fetchSequence(calls, jsonResponse({ comments: [jiraComment()], total: 1 })),
+  });
+
+  const comments = await client.listComments("ENG-1");
+
+  assert.equal(
+    calls[0]?.url,
+    "https://example.atlassian.net/rest/api/3/issue/ENG-1/comment?startAt=0&maxResults=100",
+  );
+  assert.deepEqual(comments, [
+    {
+      id: "comment-1",
+      body: "## Codex Workpad",
+      author: "account-1",
+      createdAt: "2026-06-01T00:00:00.000+0000",
+      updatedAt: "2026-06-01T00:00:00.000+0000",
+      url: "https://example.atlassian.net/rest/api/3/issue/10001/comment/comment-1",
+    },
+  ]);
+});
+
+test("Jira REST client updates comments as Atlassian document format", async () => {
+  const calls: FetchCall[] = [];
+  const client = new JiraClient(jiraSettings(), {
+    fetchImpl: fetchSequence(calls, jsonResponse(jiraComment({ body: "Updated workpad" }))),
+  });
+
+  const comment = await client.updateComment("ENG-1", "comment-1", "Updated workpad\n\nProof");
+
+  assert.equal(comment.body, "Updated workpad");
+  assert.equal(
+    calls[0]?.url,
+    "https://example.atlassian.net/rest/api/3/issue/ENG-1/comment/comment-1",
+  );
+  assert.deepEqual(calls[0]?.body, {
+    body: {
+      type: "doc",
+      version: 1,
+      content: [
+        { type: "paragraph", content: [{ type: "text", text: "Updated workpad" }] },
+        { type: "paragraph", content: [] },
+        { type: "paragraph", content: [{ type: "text", text: "Proof" }] },
       ],
     },
   });
@@ -257,11 +308,146 @@ test("Jira MCP client adds comments with issue_key and comment args", async () =
     ),
   });
 
-  await client.addComment("ENG-1", "Looks good");
+  const comment = await client.addComment("ENG-1", "Looks good");
 
+  assert.deepEqual(comment, { id: "10000", body: "Looks good" });
   assert.deepEqual(calls[0]?.body.params, {
     name: "jira_add_comment",
     arguments: { issue_key: "ENG-1", comment: "Looks good" },
+  });
+});
+
+test("Jira MCP client lists comments with the configured tool", async () => {
+  const calls: FetchCall[] = [];
+  const settings = parseConfig(
+    {
+      tracker: {
+        kind: "jira-mcp",
+        base_url: "https://example.atlassian.net",
+        project_keys: ["ENG"],
+        mcp: {
+          url: "http://127.0.0.1:5123/mcp",
+          token: "mcp-token",
+          tools: { list_comments: "atlassian_get_jira_comments" },
+        },
+      },
+    },
+    {},
+    {},
+    trackers,
+  );
+  const client = new JiraMcpClient(settings, {
+    fetchImpl: fetchSequence(
+      calls,
+      jsonResponse({
+        jsonrpc: "2.0",
+        id: "1",
+        result: {
+          content: [{ type: "text", text: JSON.stringify({ comments: [jiraComment()] }) }],
+        },
+      }),
+    ),
+  });
+
+  const comments = await client.listComments("ENG-1");
+
+  assert.equal(comments[0]?.id, "comment-1");
+  assert.equal(comments[0]?.body, "## Codex Workpad");
+  assert.deepEqual(calls[0]?.body.params, {
+    name: "atlassian_get_jira_comments",
+    arguments: { issue_key: "ENG-1" },
+  });
+});
+
+test("Jira MCP client updates comments with the configured tool and comment args", async () => {
+  const calls: FetchCall[] = [];
+  const settings = parseConfig(
+    {
+      tracker: {
+        kind: "jira-mcp",
+        base_url: "https://example.atlassian.net",
+        project_keys: ["ENG"],
+        mcp: {
+          url: "http://127.0.0.1:5123/mcp",
+          token: "mcp-token",
+          tools: { update_comment: "atlassian_update_jira_comment" },
+        },
+      },
+    },
+    {},
+    {},
+    trackers,
+  );
+  const client = new JiraMcpClient(settings, {
+    fetchImpl: fetchSequence(
+      calls,
+      jsonResponse({
+        jsonrpc: "2.0",
+        id: "1",
+        result: {
+          content: [
+            { type: "text", text: JSON.stringify({ comment: jiraComment({ body: "Updated" }) }) },
+          ],
+        },
+      }),
+    ),
+  });
+
+  const comment = await client.updateComment("ENG-1", "comment-1", "Updated");
+
+  assert.equal(comment.body, "Updated");
+  assert.deepEqual(calls[0]?.body.params, {
+    name: "atlassian_update_jira_comment",
+    arguments: {
+      issue_key: "ENG-1",
+      comment_id: "comment-1",
+      comment: "Updated",
+    },
+  });
+});
+
+test("Jira MCP client retries comment updates with alternate args on tool payload errors", async () => {
+  const calls: FetchCall[] = [];
+  const settings = jiraMcpSettings();
+  const client = new JiraMcpClient(settings, {
+    fetchImpl: fetchSequence(
+      calls,
+      jsonResponse({
+        jsonrpc: "2.0",
+        id: "1",
+        result: {
+          content: [{ type: "text", text: "Error: issue_key is not accepted" }],
+        },
+      }),
+      jsonResponse({
+        jsonrpc: "2.0",
+        id: "2",
+        result: {
+          content: [
+            { type: "text", text: JSON.stringify({ comment: jiraComment({ body: "Updated" }) }) },
+          ],
+        },
+      }),
+    ),
+  });
+
+  await client.updateComment("ENG-1", "comment-1", "Updated");
+
+  assert.deepEqual(calls[0]?.body.params, {
+    name: "jira_update_comment",
+    arguments: {
+      issue_key: "ENG-1",
+      comment_id: "comment-1",
+      comment: "Updated",
+    },
+  });
+  assert.deepEqual(calls[1]?.body.params, {
+    name: "jira_update_comment",
+    arguments: {
+      issueKey: "ENG-1",
+      comment_id: "comment-1",
+      comment: "Updated",
+    },
   });
 });
 
@@ -471,7 +657,12 @@ function jiraSettings() {
 }
 
 function jiraIssue(
-  overrides: { statusName?: string; statusCategory?: string; assigneeAccountId?: string } = {},
+  overrides: {
+    statusName?: string;
+    statusCategory?: string;
+    assigneeAccountId?: string;
+    description?: string;
+  } = {},
 ): Record<string, unknown> {
   return {
     id: "10001",
@@ -481,7 +672,12 @@ function jiraIssue(
       description: {
         type: "doc",
         version: 1,
-        content: [{ type: "paragraph", content: [{ type: "text", text: "Fix the thing" }] }],
+        content: [
+          {
+            type: "paragraph",
+            content: [{ type: "text", text: overrides.description ?? "Fix the thing" }],
+          },
+        ],
       },
       status: {
         name: overrides.statusName ?? "To Do",
@@ -493,6 +689,27 @@ function jiraIssue(
       created: "2026-06-01T00:00:00.000+0000",
       updated: "2026-06-02T00:00:00.000+0000",
     },
+  };
+}
+
+function jiraComment(overrides: { id?: string; body?: string } = {}): Record<string, unknown> {
+  const id = overrides.id ?? "comment-1";
+  return {
+    id,
+    body: {
+      type: "doc",
+      version: 1,
+      content: [
+        {
+          type: "paragraph",
+          content: [{ type: "text", text: overrides.body ?? "## Codex Workpad" }],
+        },
+      ],
+    },
+    author: { accountId: "account-1", displayName: "Jira Bot" },
+    created: "2026-06-01T00:00:00.000+0000",
+    updated: "2026-06-01T00:00:00.000+0000",
+    self: `https://example.atlassian.net/rest/api/3/issue/10001/comment/${id}`,
   };
 }
 

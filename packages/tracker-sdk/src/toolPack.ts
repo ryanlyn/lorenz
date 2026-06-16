@@ -19,7 +19,9 @@ const TRACKER_TOOL_NAMES = [
   "tracker_read_issue",
   "tracker_query",
   "tracker_update_status",
+  "tracker_list_comments",
   "tracker_comment",
+  "tracker_update_comment",
   "tracker_create_issue",
 ] as const;
 
@@ -93,13 +95,39 @@ function trackerToolSpecs(): ToolSpec[] {
       },
     },
     {
+      name: "tracker_list_comments",
+      description: "List comments on an issue in the configured tracker. Args: issueId.",
+      inputSchema: {
+        type: "object",
+        additionalProperties: false,
+        properties: { issueId: { type: "string" } },
+        required: ["issueId"],
+      },
+    },
+    {
       name: "tracker_comment",
-      description: "Add a comment to an issue in the configured tracker. Args: issueId, body.",
+      description:
+        "Add a comment to an issue in the configured tracker. Args: issueId, body. Returns the created comment when the provider exposes it.",
       inputSchema: {
         type: "object",
         additionalProperties: false,
         properties: { issueId: { type: "string" }, body: { type: "string" } },
         required: ["issueId", "body"],
+      },
+    },
+    {
+      name: "tracker_update_comment",
+      description:
+        "Update a comment on an issue in the configured tracker. Args: issueId, commentId, body.",
+      inputSchema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          issueId: { type: "string" },
+          commentId: { type: "string" },
+          body: { type: "string" },
+        },
+        required: ["issueId", "commentId", "body"],
       },
     },
     {
@@ -146,12 +174,24 @@ async function executeTrackerTool(
         if (!ops?.updateStatus) return unavailableFailure(settings);
         return toolSuccess({ issue: await ops.updateStatus(issueId, status) });
       }
+      case "tracker_list_comments": {
+        const issueId = requireStr(args, "issueId");
+        if (!ops?.listComments) return unavailableFailure(settings);
+        return toolSuccess({ comments: await ops.listComments(issueId) });
+      }
       case "tracker_comment": {
         const issueId = requireStr(args, "issueId");
         const body = requireStr(args, "body");
         if (!ops?.addComment) return unavailableFailure(settings);
-        await ops.addComment(issueId, body);
-        return toolSuccess({ ok: true });
+        const comment = await ops.addComment(issueId, body);
+        return toolSuccess(comment ? { ok: true, comment } : { ok: true });
+      }
+      case "tracker_update_comment": {
+        const issueId = requireStr(args, "issueId");
+        const commentId = requireStr(args, "commentId");
+        const body = requireStr(args, "body");
+        if (!ops?.updateComment) return unavailableFailure(settings);
+        return toolSuccess({ comment: await ops.updateComment(issueId, commentId, body) });
       }
       case "tracker_create_issue": {
         const create = {

@@ -277,7 +277,9 @@ test("jira-mcp tracker config parses MCP settings and tool aliases", () => {
             tools: {
               read_issue: "jira_get",
               update_status: "jira_transition",
+              list_comments: "jira_comments",
               create_issue: "jira_create",
+              update_comment: "jira_update_comment",
             },
           },
         },
@@ -291,7 +293,9 @@ test("jira-mcp tracker config parses MCP settings and tool aliases", () => {
   assert.equal(options.mcp?.token, "mcp-token");
   assert.equal(options.mcp?.tools?.readIssue, "jira_get");
   assert.equal(options.mcp?.tools?.updateStatus, "jira_transition");
+  assert.equal(options.mcp?.tools?.listComments, "jira_comments");
   assert.equal(options.mcp?.tools?.createIssue, "jira_create");
+  assert.equal(options.mcp?.tools?.updateComment, "jira_update_comment");
   validateDispatchConfig(settings);
 });
 
@@ -467,9 +471,7 @@ Do work.
 
   const workflow = await loadWorkflow(workflowPath);
 
-  assert.deepEqual(workflow.settings.agent.skills, [
-    path.join(root, "skills", "lorenz-land"),
-  ]);
+  assert.deepEqual(workflow.settings.agent.skills, [path.join(root, "skills", "lorenz-land")]);
 });
 
 test("workspace defaults to per-agent isolation", () => {

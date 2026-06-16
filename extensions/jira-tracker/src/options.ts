@@ -7,7 +7,9 @@ export interface JiraMcpToolMap {
   search?: string | undefined;
   readIssue?: string | undefined;
   updateStatus?: string | undefined;
+  listComments?: string | undefined;
   comment?: string | undefined;
+  updateComment?: string | undefined;
   createIssue?: string | undefined;
 }
 
@@ -81,7 +83,9 @@ function toolsValue(value: unknown): JiraMcpToolMap | undefined {
     search: nestedStringValue(value, "search", "tracker.mcp.tools.search"),
     readIssue: nestedStringValue(value, "readIssue", "tracker.mcp.tools.readIssue"),
     updateStatus: nestedStringValue(value, "updateStatus", "tracker.mcp.tools.updateStatus"),
+    listComments: nestedStringValue(value, "listComments", "tracker.mcp.tools.listComments"),
     comment: nestedStringValue(value, "comment", "tracker.mcp.tools.comment"),
+    updateComment: nestedStringValue(value, "updateComment", "tracker.mcp.tools.updateComment"),
     createIssue: nestedStringValue(value, "createIssue", "tracker.mcp.tools.createIssue"),
   };
 }

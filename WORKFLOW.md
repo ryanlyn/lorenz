@@ -99,8 +99,9 @@ The agent should be able to talk to the configured tracker through `tracker_*` M
 - Spend extra effort up front on planning and verification design before implementation.
 - Reproduce first: always confirm the current behavior/issue signal before changing code so the fix target is explicit.
 - Keep issue metadata current (state, checklist, acceptance criteria, links).
-- Treat a single persistent tracker comment as the source of truth for progress.
+- Treat a single persistent tracker comment as the source of truth for progress across Linear, Jira, and Jira MCP.
 - Use that single workpad comment for all progress and handoff notes; do not post separate "done"/summary comments.
+- For Linear, Jira, and Jira MCP, manage the workpad through `tracker_list_comments`, `tracker_comment`, and `tracker_update_comment`: find the existing comment by marker, create it only if missing, then update that same comment in place.
 - Treat any ticket-authored `Validation`, `Test Plan`, or `Testing` section as non-negotiable acceptance input: mirror it in the workpad and execute it before considering the work complete.
 - When meaningful out-of-scope improvements are discovered during execution,
   file a separate tracker issue instead of expanding scope. The follow-up issue
@@ -116,7 +117,7 @@ The agent should be able to talk to the configured tracker through `tracker_*` M
 
 ## Related skills
 
-- Tracker MCP tools: use `tracker_*` tools for issue reads, comments, and status changes.
+- Tracker MCP tools: use `tracker_*` tools for issue reads, comments, comment updates, and status changes.
 - `lorenz-linear`: interact with Linear-specific fields when this workflow is Linear-backed.
 - `lorenz-commit`: produce clean, logical commits during implementation.
 - `simplify`: review changed code for reuse, quality, and efficiency before committing.
@@ -160,11 +161,11 @@ The agent should be able to talk to the configured tracker through `tracker_*` M
 ## Step 1: Start/continue execution (Todo or In Progress)
 
 1.  Find or create a single persistent scratchpad comment for the issue:
-    - Search existing comments for a marker header: `## Codex Workpad`.
-    - Ignore resolved comments while searching; only active/unresolved comments are eligible to be reused as the live workpad.
+    - Call `tracker_list_comments(issueId)` and search existing comments for marker header `## Codex Workpad`.
     - If found, reuse that comment; do not create a new workpad comment.
-    - If not found, create one workpad comment and use it for all updates.
-    - Persist the workpad comment ID and only write progress updates to that ID.
+    - If not found, create one comment with `tracker_comment(issueId, body)` using the workpad template. Use the returned comment ID when present; otherwise call `tracker_list_comments(issueId)` again and record the new comment ID.
+    - Persist the workpad comment ID and only write progress updates to that ID with `tracker_update_comment(issueId, commentId, body)`.
+    - If comment listing or updating is unavailable for a Linear/Jira/Jira MCP run, treat that as a tracker capability blocker rather than posting repeated detailed comments.
 2.  If arriving from `Todo`, do not delay on additional status transitions: the issue should already be `In Progress` before this step begins.
 3.  Immediately reconcile the workpad before new edits:
     - Check off items that are already done.
@@ -227,6 +228,7 @@ Use this only when completion is blocked by missing required tools or missing au
     - Add newly discovered items in the appropriate section.
     - Keep parent/child structure intact as scope evolves.
     - Update the workpad immediately after each meaningful milestone (for example: reproduction complete, code change landed, validation run, review feedback addressed).
+    - Update the persistent workpad comment with `tracker_update_comment`; do not post separate progress comments.
     - Never leave completed work unchecked in the plan.
     - For tickets that started as `Todo` with an attached PR, run the full PR feedback sweep protocol immediately after kickoff and before new feature work.
 5.  Run validation/tests/proof-of-work required for the scope.
@@ -280,11 +282,11 @@ Use this only when completion is blocked by missing required tools or missing au
 1. Treat `Rework` as a full approach reset, not incremental patching.
 2. Re-read the full issue body and all human comments; explicitly identify what will be done differently this attempt.
 3. Close the existing PR tied to the issue.
-4. Remove the existing `## Codex Workpad` comment from the issue.
+4. Replace the existing `## Codex Workpad` comment body with a fresh reset workpad for the new attempt; do not create a second workpad comment.
 5. Create a fresh branch from `origin/main`.
 6. Start over from the normal kickoff flow:
    - If current issue state is `Todo`, move it to `In Progress`; otherwise keep the current state.
-   - Create a new bootstrap `## Codex Workpad` comment.
+   - Reuse the single `## Codex Workpad` comment as the bootstrap workpad.
    - Build a fresh plan/checklist and execute end-to-end.
 
 ## Completion bar before Human Review
@@ -304,7 +306,7 @@ Use this only when completion is blocked by missing required tools or missing au
 - If issue state is `Backlog`, do not modify it; wait for human to move to `Todo`.
 - Do not edit the issue body/description for planning or progress tracking.
 - Use exactly one persistent workpad comment (`## Codex Workpad`) per issue.
-- If comment editing is unavailable in-session, use the update script. Only report blocked if both MCP editing and script-based editing are unavailable.
+- If comment editing is unavailable in-session, use the tracker-specific update fallback when documented. Only report blocked if both MCP editing and documented fallback editing are unavailable.
 - Temporary proof edits are allowed only for local verification and must be reverted before commit.
 - If out-of-scope improvements are found, create a separate Backlog issue rather
   than expanding current scope, and include a clear
@@ -340,9 +342,10 @@ Use this exact structure for the persistent workpad comment and keep it updated 
 - [ ] Criterion 1
 - [ ] Criterion 2
 
-### Validation
+### Validation and Proof of Work
 
 - [ ] targeted tests: `<command>`
+- [ ] evidence: `<link, command output summary, screenshot, or commit>`
 
 ### Notes
 

@@ -26,7 +26,9 @@ Default MCP tool names (when using `jira-mcp` kind):
 | Search        | `jira_search`           |
 | Read issue    | `jira_get_issue`        |
 | Transition    | `jira_transition_issue` |
+| List comments | `jira_get_comments`     |
 | Comment       | `jira_add_comment`      |
+| Update comment | `jira_update_comment`   |
 | Create issue  | `jira_create_issue`     |
 
 ## Jira REST API patterns
@@ -151,6 +153,42 @@ Content-Type: application/json
 
 Multi-line text: split on newlines, each line becomes a separate paragraph.
 Empty lines become paragraphs with empty `content` arrays.
+
+### List comments
+
+```
+GET /rest/api/3/issue/{issueIdOrKey}/comment?startAt=0&maxResults=100
+```
+
+Response comments use ADF in `body`. Use comment `id` values with the update endpoint.
+
+### Update a comment
+
+Jira Cloud uses ADF for comment bodies:
+
+```
+PUT /rest/api/3/issue/{issueIdOrKey}/comment/{id}
+Content-Type: application/json
+
+{
+  "body": {
+    "type": "doc",
+    "version": 1,
+    "content": [
+      {
+        "type": "paragraph",
+        "content": [
+          { "type": "text", "text": "Updated comment text" }
+        ]
+      }
+    ]
+  }
+}
+```
+
+For Jira MCP trackers, configure `tracker.mcp.tools.list_comments` or
+`tracker.mcp.tools.update_comment` when the external server does not expose
+the default `jira_get_comments` and `jira_update_comment` tool names.
 
 ### Create an issue
 

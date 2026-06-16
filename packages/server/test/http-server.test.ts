@@ -352,7 +352,9 @@ test("MCP endpoint authorizes bearer tokens and executes Linear tools", async ()
         "tracker_read_issue",
         "tracker_query",
         "tracker_update_status",
+        "tracker_list_comments",
         "tracker_comment",
+        "tracker_update_comment",
         "tracker_create_issue",
         "linear_graphql",
       ],
@@ -431,7 +433,9 @@ test("observability MCP endpoint uses workflow settings reloaded by the runtime"
       "tracker_read_issue",
       "tracker_query",
       "tracker_update_status",
+      "tracker_list_comments",
       "tracker_comment",
+      "tracker_update_comment",
       "tracker_create_issue",
     ];
     const initialTools = await postMcp(

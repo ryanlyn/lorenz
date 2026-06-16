@@ -32,7 +32,9 @@ const TRACKER_TOOL_NAMES = [
   "tracker_read_issue",
   "tracker_query",
   "tracker_update_status",
+  "tracker_list_comments",
   "tracker_comment",
+  "tracker_update_comment",
   "tracker_create_issue",
 ];
 

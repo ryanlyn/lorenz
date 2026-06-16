@@ -183,7 +183,9 @@ test("a new provider supplies the runtime client and tracker tools without core 
       "tracker_read_issue",
       "tracker_query",
       "tracker_update_status",
+      "tracker_list_comments",
       "tracker_comment",
+      "tracker_update_comment",
       "tracker_create_issue",
     ],
   );
