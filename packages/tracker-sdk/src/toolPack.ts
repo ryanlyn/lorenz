@@ -106,7 +106,8 @@ function trackerToolSpecs(): ToolSpec[] {
     },
     {
       name: "tracker_comment",
-      description: "Add a comment to an issue in the configured tracker. Args: issueId, body.",
+      description:
+        "Add a comment to an issue in the configured tracker. Args: issueId, body. Returns the created comment when the provider exposes it.",
       inputSchema: {
         type: "object",
         additionalProperties: false,
@@ -182,8 +183,8 @@ async function executeTrackerTool(
         const issueId = requireStr(args, "issueId");
         const body = requireStr(args, "body");
         if (!ops?.addComment) return unavailableFailure(settings);
-        await ops.addComment(issueId, body);
-        return toolSuccess({ ok: true });
+        const comment = await ops.addComment(issueId, body);
+        return toolSuccess(comment ? { ok: true, comment } : { ok: true });
       }
       case "tracker_update_comment": {
         const issueId = requireStr(args, "issueId");

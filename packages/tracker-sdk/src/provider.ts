@@ -58,7 +58,7 @@ export interface TrackerToolOps {
   queryRows?(args: Record<string, unknown>): Promise<TrackerQueryResult>;
   updateStatus?(issueId: string, status: string): Promise<Issue>;
   listComments?(issueId: string): Promise<TrackerComment[]>;
-  addComment?(issueId: string, body: string): Promise<void>;
+  addComment?(issueId: string, body: string): Promise<TrackerComment | void>;
   updateComment?(issueId: string, commentId: string, body: string): Promise<TrackerComment>;
   createIssue?(input: TrackerCreateIssueInput): Promise<Issue>;
 }

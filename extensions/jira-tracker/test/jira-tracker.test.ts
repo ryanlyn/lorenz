@@ -115,8 +115,9 @@ test("Jira REST client adds comments as Atlassian document format", async () => 
     fetchImpl: fetchSequence(calls, jsonResponse({ id: "comment-1" })),
   });
 
-  await client.addComment("ENG-1", "First line\n\nSecond line");
+  const comment = await client.addComment("ENG-1", "First line\n\nSecond line");
 
+  assert.equal(comment.id, "comment-1");
   assert.equal(calls[0]?.url, "https://example.atlassian.net/rest/api/3/issue/ENG-1/comment");
   assert.deepEqual(calls[0]?.body, {
     body: {
@@ -307,8 +308,9 @@ test("Jira MCP client adds comments with issue_key and comment args", async () =
     ),
   });
 
-  await client.addComment("ENG-1", "Looks good");
+  const comment = await client.addComment("ENG-1", "Looks good");
 
+  assert.deepEqual(comment, { id: "10000", body: "Looks good" });
   assert.deepEqual(calls[0]?.body.params, {
     name: "jira_add_comment",
     arguments: { issue_key: "ENG-1", comment: "Looks good" },

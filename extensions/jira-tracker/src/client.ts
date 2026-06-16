@@ -101,11 +101,15 @@ export class JiraClient implements RuntimeTrackerClient {
     return this.readIssue(issueIdOrKey);
   }
 
-  async addComment(issueIdOrKey: string, body: string): Promise<void> {
-    await this.request(`/rest/api/3/issue/${encodeURIComponent(issueIdOrKey)}/comment`, {
-      method: "POST",
-      body: JSON.stringify({ body: adfDocument(body) }),
-    });
+  async addComment(issueIdOrKey: string, body: string): Promise<TrackerComment> {
+    const raw = await this.request<Record<string, unknown>>(
+      `/rest/api/3/issue/${encodeURIComponent(issueIdOrKey)}/comment`,
+      {
+        method: "POST",
+        body: JSON.stringify({ body: adfDocument(body) }),
+      },
+    );
+    return normalizeJiraComment(raw);
   }
 
   async listComments(issueIdOrKey: string): Promise<TrackerComment[]> {
@@ -353,14 +357,14 @@ export class JiraMcpClient implements RuntimeTrackerClient {
     throw new Error(`jira-mcp update comment failed: ${failures.join("; ")}`);
   }
 
-  async addComment(issueIdOrKey: string, body: string): Promise<void> {
+  async addComment(issueIdOrKey: string, body: string): Promise<TrackerComment | void> {
     const tool = this.toolName("comment");
     const failures: string[] = [];
     for (const args of commentArgs(issueIdOrKey, body)) {
       try {
         const payload = await this.callTool(tool, args);
         const payloadError = mcpToolPayloadError(payload);
-        if (!payloadError) return;
+        if (!payloadError) return createdCommentFromPayload(payload, body);
         failures.push(payloadError);
       } catch (error) {
         failures.push(errorMessage(error));
@@ -604,6 +608,24 @@ function firstCommentFromPayload(payload: unknown): TrackerComment | null {
     return normalizeJiraComment(payload);
   }
   return commentsFromPayload(payload)[0] ?? null;
+}
+
+function createdCommentFromPayload(payload: unknown, fallbackBody: string): TrackerComment | void {
+  const comment = firstCommentFromPayload(payload);
+  if (comment) return comment;
+  const id =
+    isRecord(payload) &&
+    (stringField(payload, "id") ??
+      stringField(payload, "commentId") ??
+      stringField(payload, "comment_id"));
+  const textId = typeof payload === "string" ? commentIdFromText(payload) : null;
+  const createdId = id || textId;
+  return createdId ? { id: createdId, body: fallbackBody } : undefined;
+}
+
+function commentIdFromText(text: string): string | null {
+  const match = /\b(?:comment\s+)?id\s*[:#]\s*([A-Za-z0-9_-]+)/i.exec(text);
+  return match?.[1] ?? null;
 }
 
 function normalizeJiraComment(comment: Record<string, unknown>): TrackerComment {

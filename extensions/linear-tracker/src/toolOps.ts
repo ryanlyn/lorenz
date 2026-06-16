@@ -140,16 +140,31 @@ async function createLinearComment(
   issueId: string,
   body: string,
   fetchImpl: typeof fetch,
-): Promise<void> {
-  const data = await linearData<{ commentCreate: { success: boolean } }>(
+): Promise<TrackerComment> {
+  const data = await linearData<{
+    commentCreate: { success: boolean; comment: Record<string, unknown> | null };
+  }>(
     settings,
     `mutation LorenzTrackerLinearComment($input: CommentCreateInput!) {
-      commentCreate(input: $input) { success }
+      commentCreate(input: $input) {
+        success
+        comment {
+          id
+          body
+          createdAt
+          updatedAt
+          url
+          user { id name email }
+        }
+      }
     }`,
     { input: { issueId, body } },
     fetchImpl,
   );
-  if (!data.commentCreate.success) throw new Error("linear commentCreate failed");
+  if (!data.commentCreate.success || !data.commentCreate.comment) {
+    throw new Error("linear commentCreate failed");
+  }
+  return normalizeLinearComment(data.commentCreate.comment);
 }
 
 async function listLinearComments(
@@ -157,31 +172,43 @@ async function listLinearComments(
   issueId: string,
   fetchImpl: typeof fetch,
 ): Promise<TrackerComment[]> {
-  const data = await linearData<{
-    issue?: {
-      comments?: { nodes?: Array<Record<string, unknown>> };
-    } | null;
-  }>(
-    settings,
-    `query LorenzTrackerLinearComments($id: String!) {
-      issue(id: $id) {
-        comments(first: 100) {
-          nodes {
-            id
-            body
-            createdAt
-            updatedAt
-            url
-            user { id name email }
+  const out: TrackerComment[] = [];
+  let after: string | null = null;
+  for (;;) {
+    const data = await linearData<unknown>(
+      settings,
+      `query LorenzTrackerLinearComments($id: String!, $after: String) {
+        issue(id: $id) {
+          comments(first: 100, after: $after) {
+            nodes {
+              id
+              body
+              createdAt
+              updatedAt
+              url
+              user { id name email }
+            }
+            pageInfo {
+              hasNextPage
+              endCursor
+            }
           }
         }
-      }
-    }`,
-    { id: issueId },
-    fetchImpl,
-  );
-  if (!data.issue) throw new Error(`linear issue not found: ${issueId}`);
-  return (data.issue.comments?.nodes ?? []).map(normalizeLinearComment);
+      }`,
+      { id: issueId, after },
+      fetchImpl,
+    );
+    const issue = isRecord(data) && isRecord(data.issue) ? data.issue : null;
+    if (!issue) throw new Error(`linear issue not found: ${issueId}`);
+    const comments = isRecord(issue.comments) ? issue.comments : {};
+    const nodes = Array.isArray(comments.nodes) ? comments.nodes : [];
+    for (const node of nodes) {
+      if (isRecord(node)) out.push(normalizeLinearComment(node));
+    }
+    const pageInfo = isRecord(comments.pageInfo) ? comments.pageInfo : {};
+    after = stringValue(pageInfo, "endCursor");
+    if (pageInfo.hasNextPage !== true || !after) return out;
+  }
 }
 
 async function updateLinearComment(

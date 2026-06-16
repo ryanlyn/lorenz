@@ -163,7 +163,7 @@ The agent should be able to talk to the configured tracker through `tracker_*` M
 1.  Find or create a single persistent scratchpad comment for the issue:
     - Call `tracker_list_comments(issueId)` and search existing comments for marker header `## Codex Workpad`.
     - If found, reuse that comment; do not create a new workpad comment.
-    - If not found, create one comment with `tracker_comment(issueId, body)` using the workpad template, then call `tracker_list_comments(issueId)` again and record the new comment ID.
+    - If not found, create one comment with `tracker_comment(issueId, body)` using the workpad template. Use the returned comment ID when present; otherwise call `tracker_list_comments(issueId)` again and record the new comment ID.
     - Persist the workpad comment ID and only write progress updates to that ID with `tracker_update_comment(issueId, commentId, body)`.
     - If comment listing or updating is unavailable for a Linear/Jira/Jira MCP run, treat that as a tracker capability blocker rather than posting repeated detailed comments.
 2.  If arriving from `Todo`, do not delay on additional status transitions: the issue should already be `In Progress` before this step begins.

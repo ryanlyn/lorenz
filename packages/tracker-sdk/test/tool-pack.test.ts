@@ -196,6 +196,24 @@ test("tracker_comment returns ok and passes the body through", async () => {
   assert.deepEqual(calls, [["STUB-1", "done"]]);
 });
 
+test("tracker_comment returns a normalized comment when the provider has one", async () => {
+  const comment = {
+    id: "comment-1",
+    body: "done",
+    author: "user-1",
+  };
+  const { pack, settings } = packFor("stub", {
+    addComment: async () => comment,
+  });
+
+  const result = await execute(pack, settings, "tracker_comment", {
+    issueId: "STUB-1",
+    body: "done",
+  });
+
+  assert.deepEqual(result, { success: true, result: { ok: true, comment } });
+});
+
 test("tracker_list_comments and tracker_update_comment return normalized comments", async () => {
   const calls: unknown[] = [];
   const comment = {
