@@ -30,6 +30,7 @@
     "dashboard:ui": "pnpm --filter @lorenz/dashboard dev",
     "dashboard:build": "pnpm --filter @lorenz/dashboard build",
     "traceviz": "pnpm --filter @lorenz/traceviz traceviz",
+    "release:bump-version": "tsx scripts/bump-release-version.ts",
     "release:stage": "tsx scripts/stage-release.ts",
     "release:publish": "pnpm build && tsx scripts/publish-release.ts",
     "lint:versions": "syncpack lint",

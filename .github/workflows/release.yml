@@ -1,18 +1,24 @@
 name: release
 
 # Builds the self-contained CLI release tree, packs it into an npm tarball, and attaches it to a
-# GitHub release so it can be run with `npx <release-asset-url>`. On tag pushes it also publishes the
-# tree to npm as the unscoped `lorenz` package via OIDC trusted publishing (no stored token). Tag-
-# driven; a manual run produces a prerelease from the current branch and never publishes to npm.
+# GitHub release so it can be run with `npx <release-asset-url>`. Tag pushes and scheduled releases
+# publish the tree to npm as the unscoped `lorenz` package via OIDC trusted publishing (no stored
+# token). Manual runs produce prereleases from the current branch and never publish to npm.
 on:
   push:
     tags:
       - "v*"
+  schedule:
+    - cron: "17 9 * * *"
   workflow_dispatch:
 
 permissions:
   contents: write
   id-token: write # required for npm OIDC trusted publishing
+
+concurrency:
+  group: release
+  cancel-in-progress: false
 
 jobs:
   npx-tarball:
@@ -21,14 +27,46 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+
+      - name: Decide scheduled release
+        id: scheduled
+        if: ${{ github.event_name == 'schedule' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          stable_tags="$(git tag --list 'v*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' || true)"
+          latest_tag="$(printf '%s\n' "$stable_tags" | sort -V | tail -n 1)"
+          if [ -n "$latest_tag" ]; then
+            echo "latest_tag=${latest_tag}" >> "$GITHUB_OUTPUT"
+          fi
+
+          if [ -z "$latest_tag" ]; then
+            echo "No stable release tag found; scheduled release will create the first daily release."
+            echo "should_release=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          commits_since_release="$(git rev-list --count "${latest_tag}..HEAD")"
+          if [ "$commits_since_release" = "0" ]; then
+            echo "No commits since ${latest_tag}; skipping scheduled release."
+            echo "should_release=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "Found ${commits_since_release} commit(s) since ${latest_tag}; scheduled release will run."
+          echo "should_release=true" >> "$GITHUB_OUTPUT"
 
       - name: Set up mise tools
+        if: ${{ steps.scheduled.outputs.should_release != 'false' }}
         uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v3
         with:
           install: true
           cache: true
 
       - name: Setup pnpm store cache
+        if: ${{ steps.scheduled.outputs.should_release != 'false' }}
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: ~/.local/share/pnpm/store
@@ -37,16 +75,47 @@ jobs:
             ${{ runner.os }}-pnpm-store-
 
       - name: Install dependencies
+        if: ${{ steps.scheduled.outputs.should_release != 'false' }}
         run: pnpm install --frozen-lockfile
 
+      - name: Bump scheduled release version
+        id: bump
+        if: ${{ github.event_name == 'schedule' && steps.scheduled.outputs.should_release == 'true' }}
+        env:
+          LATEST_TAG: ${{ steps.scheduled.outputs.latest_tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          bump_args=()
+          if [ -n "$LATEST_TAG" ]; then
+            bump_args=(--base-version "${LATEST_TAG#v}")
+          fi
+
+          version="$(pnpm exec tsx scripts/bump-release-version.ts "${bump_args[@]}")"
+          tag="v${version}"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add package.json apps/*/package.json packages/*/package.json extensions/*/package.json
+          git commit -m "chore: release ${tag}"
+          git tag "$tag"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
+          git push origin "$tag"
+
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+
       - name: Build
+        if: ${{ steps.scheduled.outputs.should_release != 'false' }}
         run: pnpm build
 
       - name: Stage CLI release
+        if: ${{ steps.scheduled.outputs.should_release != 'false' }}
         run: pnpm release:stage -- --force
 
       - name: Pack npx tarball
         id: pack
+        if: ${{ steps.scheduled.outputs.should_release != 'false' }}
         run: |
           staged="$(find dist/release -mindepth 1 -maxdepth 1 -type d | head -1)"
           version="$(node -p "require('./${staged}/RELEASE-MANIFEST.json').version")"
@@ -56,11 +125,15 @@ jobs:
           echo "staged=${staged}" >> "$GITHUB_OUTPUT"
 
       - name: Publish release asset
+        if: ${{ steps.scheduled.outputs.should_release != 'false' }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           asset="${{ steps.pack.outputs.tarball }}"
-          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+          if [ "${GITHUB_EVENT_NAME}" = "schedule" ]; then
+            tag="${{ steps.bump.outputs.tag }}"
+            prerelease=""
+          elif [ "${GITHUB_REF_TYPE}" = "tag" ]; then
             tag="${GITHUB_REF_NAME}"
             prerelease=""
           else
@@ -75,11 +148,11 @@ jobs:
           fi
 
       - name: Publish to npm
-        # Only real tag releases publish to npm. Auth is OIDC trusted publishing: npm exchanges the
-        # GitHub id-token for a short-lived credential and emits build provenance, so no token is
-        # stored. Configure the trusted publisher on npmjs.com (repo + this workflow file) first. The
-        # staged root package.json already carries the published name (lorenz) and version.
-        if: ${{ github.ref_type == 'tag' }}
+        # Tag and scheduled releases publish to npm. Auth is OIDC trusted publishing: npm exchanges
+        # the GitHub id-token for a short-lived credential and emits build provenance, so no token is
+        # stored. Configure the trusted publisher on npmjs.com (repo + this workflow file) first.
+        # The staged root package.json already carries the published name (lorenz) and version.
+        if: ${{ github.ref_type == 'tag' || (github.event_name == 'schedule' && steps.scheduled.outputs.should_release == 'true') }}
         run: |
           npm install -g npm@latest # trusted publishing requires npm >= 11.5.1
           npm publish "${{ steps.pack.outputs.staged }}" --access public --provenance
