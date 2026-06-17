@@ -26,6 +26,7 @@ export const slackTrackerProvider: TrackerProvider = {
   kind: "slack",
   configAliases: {
     bot_user_id: "botUserId",
+    app_token: "appToken",
     emoji_states: "emojiStates",
     marker_emoji: "markerEmoji",
     reply_lookback_days: "replyLookbackDays",
@@ -35,7 +36,7 @@ export const slackTrackerProvider: TrackerProvider = {
   parseOptions(options, context) {
     rejectUnknownOptions(
       options,
-      ["channels", "botUserId", "emojiStates", "markerEmoji", "replyLookbackDays"],
+      ["channels", "botUserId", "appToken", "emojiStates", "markerEmoji", "replyLookbackDays"],
       "slack",
     );
     // Channel entries resolve `$VAR` references like the documented bot_user_id one line below
@@ -48,12 +49,16 @@ export const slackTrackerProvider: TrackerProvider = {
       stringOption(options, "botUserId"),
       "SLACK_BOT_USER_ID",
     );
+    // Resolved like the bot token: an explicit `$VAR`/`op://` reference, else the SLACK_APP_TOKEN
+    // env fallback. Left undefined when neither is present, which keeps the tracker pull-only.
+    const appToken = context.resolveSecret?.(stringOption(options, "appToken"), "SLACK_APP_TOKEN");
     const emojiStates = emojiStatesValue(options.emojiStates);
     const markerEmoji = stringOption(options, "markerEmoji");
     const replyLookbackDays = numberOption(options, "replyLookbackDays");
     return {
       ...(channels !== undefined && channels.length > 0 ? { channels } : {}),
       ...(botUserId !== undefined ? { botUserId } : {}),
+      ...(appToken !== undefined && appToken !== "" ? { appToken } : {}),
       ...(emojiStates !== undefined ? { emojiStates } : {}),
       ...(markerEmoji !== undefined ? { markerEmoji } : {}),
       ...(replyLookbackDays !== undefined ? { replyLookbackDays } : {}),

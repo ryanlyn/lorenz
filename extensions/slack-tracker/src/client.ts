@@ -1,5 +1,11 @@
 import { defaultStateType, normalizeIssue } from "@lorenz/issue";
-import type { Issue, IssueStateType, RuntimeTrackerClient, Settings } from "@lorenz/domain";
+import type {
+  Issue,
+  IssueStateType,
+  RuntimeTrackerClient,
+  Settings,
+  TrackerChangeStream,
+} from "@lorenz/domain";
 
 import {
   emojiForState,
@@ -8,7 +14,8 @@ import {
   stripLeadingMention,
 } from "./mapping.js";
 import { mirrorStatusReaction, requireTrackedMessage } from "./operations.js";
-import { slackTrackerOptions } from "./options.js";
+import { slackEndpoint, slackTrackerOptions } from "./options.js";
+import { SlackSocketMode, type SlackSocketModeOptions } from "./socketMode.js";
 import { resolveThreadState, type ThreadState } from "./threadState.js";
 import type { SlackChannelScan, SlackMessage, SlackTransport } from "./transport.js";
 
@@ -183,6 +190,10 @@ export class SlackTrackerClient implements RuntimeTrackerClient {
   constructor(
     private readonly settings: Settings,
     private readonly transport: SlackTransport,
+    // Seam for tests: lets a fake Socket Mode (or one with an injected WebSocket) stand in.
+    private readonly createSocketMode: (options: SlackSocketModeOptions) => SlackSocketMode = (
+      options,
+    ) => new SlackSocketMode(options),
   ) {
     const lookbackDays =
       slackTrackerOptions(settings).replyLookbackDays ?? DEFAULT_REPLY_LOOKBACK_DAYS;
@@ -191,6 +202,27 @@ export class SlackTrackerClient implements RuntimeTrackerClient {
 
   async fetchCandidateIssues(): Promise<Issue[]> {
     return this.fetchIssuesByStates(this.settings.tracker.activeStates);
+  }
+
+  /**
+   * Push capability (see {@link RuntimeTrackerClient.watch}). When an app-level token is
+   * configured, open a Slack Socket Mode connection so a watched mention/reply/reaction nudges the
+   * runtime to re-poll immediately - the dispatch path stays the pull-based scan, this only
+   * collapses the up-to-`polling.intervalMs` wait to ~instant. Returns `null` (pull-only, as
+   * before) when no app token is set or no channels are watched, so push is strictly opt-in and
+   * never changes behavior for existing single-token deployments.
+   */
+  watch(onChange: () => void): TrackerChangeStream | null {
+    const { channels, appToken } = slackTrackerOptions(this.settings);
+    if (!appToken || appToken.trim() === "" || channels.length === 0) return null;
+    const socket = this.createSocketMode({
+      endpoint: slackEndpoint(this.settings),
+      appToken,
+      channels,
+      onChange,
+    });
+    socket.start();
+    return socket;
   }
 
   async fetchIssuesByIds(ids: string[]): Promise<Issue[]> {

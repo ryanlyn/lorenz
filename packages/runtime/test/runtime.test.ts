@@ -895,6 +895,110 @@ test("runtime keeps polling after a candidate fetch throws in the recurring loop
   }
 });
 
+function pushWorkflowFixture(): WorkflowDefinition {
+  // A long poll interval isolates the push path: the recurring loop polls once then sleeps, so a
+  // second fetch within the test window can only come from a watch() nudge.
+  const settings = parseConfig({
+    tracker: {
+      kind: "linear",
+      api_key: "linear-token",
+      project_slug: "mono",
+      active_states: ["Todo", "In Progress"],
+      terminal_states: ["Done"],
+    },
+    polling: { interval_ms: 600_000 },
+    workspace: { root: "/tmp/lorenz-runtime-test" },
+  });
+  return { path: "/tmp/WORKFLOW.md", config: {}, promptTemplate: "x", settings };
+}
+
+test("a tracker push nudges an immediate poll between intervals", async () => {
+  let fetches = 0;
+  let captured: (() => void) | null = null;
+  const runtime = new LorenzRuntime(
+    runtimeOptions({
+      workflow: pushWorkflowFixture(),
+      client: {
+        fetchCandidateIssues: async () => {
+          fetches += 1;
+          return [];
+        },
+        fetchIssuesByIds: async () => [],
+        watch: (onChange) => {
+          captured = onChange;
+          return { close: () => {} };
+        },
+      },
+    }),
+  );
+
+  void runtime.start({ once: false });
+  try {
+    await waitFor(() => captured !== null && fetches >= 1, 1_000);
+    const before = fetches;
+    // Simulate a Slack Socket Mode event: the runtime must re-poll without waiting out the
+    // (10-minute) interval.
+    captured!();
+    await waitFor(() => fetches > before, 1_000);
+    const snapshot = runtime.snapshot();
+    assert.ok(snapshot.recentEvents.some((event) => event.type === "tracker_watch_started"));
+    assert.ok(snapshot.recentEvents.some((event) => event.type === "tracker_push"));
+  } finally {
+    runtime.stop();
+  }
+});
+
+test("the runtime closes the tracker change stream on stop", async () => {
+  let closed = false;
+  const runtime = new LorenzRuntime(
+    runtimeOptions({
+      workflow: pushWorkflowFixture(),
+      client: {
+        fetchCandidateIssues: async () => [],
+        fetchIssuesByIds: async () => [],
+        watch: () => ({
+          close: () => {
+            closed = true;
+          },
+        }),
+      },
+    }),
+  );
+
+  void runtime.start({ once: false });
+  try {
+    await waitFor(
+      () => runtime.snapshot().recentEvents.some((event) => event.type === "tracker_watch_started"),
+      1_000,
+    );
+  } finally {
+    runtime.stop();
+  }
+  await waitFor(() => closed, 1_000);
+});
+
+test("a tracker without watch() polls on the interval alone (no push events)", async () => {
+  const runtime = new LorenzRuntime(
+    runtimeOptions({
+      workflow: workflowFixture(),
+      client: {
+        fetchCandidateIssues: async () => [],
+        fetchIssuesByIds: async () => [],
+      },
+    }),
+  );
+
+  void runtime.start({ once: false });
+  try {
+    await waitFor(() => runtime.snapshot().poll.lastPollAt !== null, 1_000);
+    const snapshot = runtime.snapshot();
+    assert.ok(!snapshot.recentEvents.some((event) => event.type === "tracker_watch_started"));
+    assert.ok(!snapshot.recentEvents.some((event) => event.type === "tracker_push"));
+  } finally {
+    runtime.stop();
+  }
+});
+
 test("runtime stop does not record an in-flight run as a failure", async () => {
   const issue = issueFixture("issue-stop", "MT-STOP");
   const orchestrator = new Orchestrator(workflowFixture().settings);

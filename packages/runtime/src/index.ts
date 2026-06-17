@@ -32,6 +32,7 @@ import type {
   Issue,
   RunningEntry,
   RuntimeTrackerClient,
+  TrackerChangeStream,
   WorkflowDefinition,
 } from "@lorenz/domain";
 import type { WorkerOutcome, WorkerPool } from "@lorenz/worker-pool";
@@ -257,6 +258,14 @@ export class LorenzRuntime {
   private pendingPollOptions: PollOptions | null = null;
   private workerPoolDrained = false;
   /**
+   * Live tracker push subscription (see {@link RuntimeTrackerClient.watch}), opened once in the
+   * recurring `start()` loop and closed on `stop()`. `undefined` for pull-only trackers and the
+   * `--once` path. A tracker that pushes (e.g. Slack Socket Mode) nudges an immediate poll so
+   * new work dispatches without waiting out `polling.intervalMs`.
+   */
+  private changeStream: TrackerChangeStream | undefined;
+  private changeStreamOpening = false;
+  /**
    * The reload-surviving coordinator singleton. Built ONCE here: either the
    * pre-built `input.coordinator` (preferred), or a null-endpoint passthrough
    * wrapping a bare `input.workerPool` (the low-churn path that keeps every existing
@@ -348,6 +357,10 @@ export class LorenzRuntime {
 
   async start(options: RuntimeStartOptions = {}): Promise<void> {
     this.stopped = false;
+    // Open the tracker's push subscription (if any) so a real backend event re-polls
+    // immediately instead of waiting out polling.intervalMs. Skipped for --once (which polls
+    // exactly once and exits) and for pull-only trackers that do not implement watch().
+    if (!options.once) await this.openChangeStream();
     do {
       if (options.once) {
         await this.pollOnce({ dryRun: options.dryRun, waitForRuns: true });
@@ -370,6 +383,10 @@ export class LorenzRuntime {
     this.stopped = true;
     this.appStatus = "stopping";
     this.pendingPollOptions = null;
+    // Fire-and-forget: stop() stays synchronous like its sibling abort sites. The stream's
+    // close() is idempotent, so an in-flight openChangeStream that resolves after this still
+    // closes the freshly-opened stream (it observes this.stopped).
+    void this.closeChangeStream();
     // finishExternally (abort + release) mirrors the other abort sites and clears
     // isActive, so the resulting agent_run_aborted rejection is treated as a clean
     // shutdown in runClaim rather than recorded as a failed run.
@@ -439,6 +456,63 @@ export class LorenzRuntime {
       this.pollOnce().catch(() => {
         // Intentionally ignored: pollOnceUnlocked already recorded poll_error.
       });
+    });
+  }
+
+  /**
+   * Opens the tracker's push subscription (when {@link RuntimeTrackerClient.watch} is
+   * implemented) so a real backend event triggers an immediate poll. Idempotent and
+   * fail-soft: a watch() that rejects (or is absent) leaves the runtime on interval polling
+   * alone, surfaced as a `tracker_watch_error` event rather than aborting startup. A stop()
+   * that races an in-flight open is honored by closing the freshly-opened stream.
+   */
+  private async openChangeStream(): Promise<void> {
+    if (!this.client.watch || this.changeStream || this.changeStreamOpening) return;
+    this.changeStreamOpening = true;
+    try {
+      const stream = await this.client.watch(() => this.nudgePollForTrackerChange());
+      // A null stream means the tracker has no push for this config (e.g. credential unset); stay
+      // on interval polling silently rather than logging it as a failure.
+      if (!stream) return;
+      if (this.stopped) {
+        await stream.close();
+        return;
+      }
+      this.changeStream = stream;
+      this.addEvent("tracker_watch_started", this.workflow.settings.tracker.kind ?? "tracker");
+    } catch (error) {
+      this.addEvent("tracker_watch_error", errorMessage(error));
+    } finally {
+      this.changeStreamOpening = false;
+    }
+  }
+
+  private async closeChangeStream(): Promise<void> {
+    const stream = this.changeStream;
+    this.changeStream = undefined;
+    if (!stream) return;
+    try {
+      await stream.close();
+    } catch (error) {
+      this.addEvent("tracker_watch_error", errorMessage(error));
+    }
+  }
+
+  /**
+   * Re-poll promptly after the tracker pushed a change. Mirrors {@link nudgePollForFreedCapacity}:
+   * a poll already running gets a FORCED follow-up queued so a change that post-dates the active
+   * poll's fetch is not lost, and a burst of pushes collapses into a single follow-up. The
+   * interval poll remains the safety net, so a dropped push is at worst recovered next interval.
+   */
+  private nudgePollForTrackerChange(): void {
+    if (this.stopped) return;
+    this.addEvent("tracker_push", this.workflow.settings.tracker.kind ?? "tracker");
+    if (this.pollInProgress) {
+      this.queuePendingPoll({}, true);
+      return;
+    }
+    this.pollOnce().catch(() => {
+      // Intentionally ignored: pollOnceUnlocked already recorded poll_error.
     });
   }
 

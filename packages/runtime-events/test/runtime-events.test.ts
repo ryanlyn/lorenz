@@ -50,6 +50,9 @@ test("RUNTIME_EVENT_TYPES is a strict superset of AGENT_UPDATE_TYPES with no dup
     "retry_timer_due",
     "retry_timer_error",
     "refresh_error",
+    "tracker_watch_started",
+    "tracker_watch_error",
+    "tracker_push",
   ];
 
   // Every expected runtime-specific type is present

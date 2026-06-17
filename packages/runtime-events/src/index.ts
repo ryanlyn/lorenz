@@ -27,6 +27,9 @@ export const RUNTIME_EVENT_TYPES = [
   "retry_timer_due",
   "retry_timer_error",
   "refresh_error",
+  "tracker_watch_started",
+  "tracker_watch_error",
+  "tracker_push",
 ] as const;
 export type RuntimeEventType = (typeof RUNTIME_EVENT_TYPES)[number];
 

@@ -14,6 +14,14 @@ export interface SlackTrackerOptions {
    * (matches nothing) when it is unset.
    */
   botUserId?: string | undefined;
+  /**
+   * Slack app-level token (`xapp-...`) with the `connections:write` scope, enabling Socket Mode
+   * push: the client opens a WebSocket to Slack and re-polls the instant a watched mention or
+   * thread reply arrives, instead of waiting out `polling.intervalMs`. Optional; when unset the
+   * tracker is pull-only (interval polling), exactly as before. Bot-token reads/writes are
+   * unaffected either way - this token is used ONLY to open the events socket.
+   */
+  appToken?: string | undefined;
   /** Slack emoji-name → workflow-state overrides (merged over the defaults). */
   emojiStates?: Record<string, string> | undefined;
   /** Emoji the bot reacts with to mark a reply-tracked thread root (default `robot_face`). */
@@ -29,12 +37,14 @@ export interface SlackTrackerOptions {
 export function slackTrackerOptions(settings: Settings): SlackTrackerOptions {
   const options = settings.tracker.options;
   const botUserId = stringOption(options, "botUserId");
+  const appToken = stringOption(options, "appToken");
   const emojiStates = emojiStatesValue(options.emojiStates);
   const markerEmoji = stringOption(options, "markerEmoji");
   const replyLookbackDays = numberOption(options, "replyLookbackDays");
   return {
     channels: stringListOption(options, "channels") ?? [],
     ...(botUserId !== undefined ? { botUserId } : {}),
+    ...(appToken !== undefined ? { appToken } : {}),
     ...(emojiStates !== undefined ? { emojiStates } : {}),
     ...(markerEmoji !== undefined ? { markerEmoji } : {}),
     ...(replyLookbackDays !== undefined ? { replyLookbackDays } : {}),
