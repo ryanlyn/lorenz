@@ -25,3 +25,6 @@ log/
 
 # Local git worktree checkouts
 .claude/worktrees/
+
+# Built documentation site (scripts/docs-site/build.cjs)
+_site/
