@@ -45,13 +45,13 @@ test("flags provider options written under tracker in the flat shape", () => {
   );
 });
 
-test("recommends the plural project_slugs for the singular tracker.project_slug", () => {
+test("flags the singular tracker.project_slug as a flat-shape provider option", () => {
   const [deprecation] = collectConfigDeprecations({
     tracker: { kind: "linear", project_slug: "backend" },
   });
   assert.equal(deprecation?.configPath, "tracker.project_slug");
-  assert.equal(deprecation?.replacement, "trackers.linear.project_slugs");
-  assert.match(String(deprecation?.detail), /singular `project_slug` is also deprecated/);
+  assert.equal(deprecation?.replacement, "trackers.linear.project_slug");
+  assert.match(String(deprecation?.detail), /flat shape\) are deprecated/);
 });
 
 test("falls back to a placeholder bundle name when tracker.kind is unset", () => {
