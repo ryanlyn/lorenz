@@ -164,8 +164,6 @@ jobs:
           changelog="$(gh api "repos/${repo}/releases/generate-notes" "${gen_args[@]}" -q .body 2>/dev/null || true)"
 
           {
-            echo "**Lorenz is a control plane for dispatching and structuring order across dynamic agent systems.**"
-            echo
             echo "## Install"
             echo
             echo "Run this release directly with \`npx\`:"

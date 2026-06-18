@@ -463,8 +463,6 @@ async function writeRootPackageJson(
   await writeJson(path.join(releaseDir, "package.json"), {
     name: "lorenz",
     version,
-    description:
-      "Lorenz is a control plane for dispatching and structuring order across dynamic agent systems.",
     license: "Apache-2.0",
     repository: {
       type: "git",
