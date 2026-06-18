@@ -32,7 +32,7 @@ The published documentation site is at **[ryanlyn.github.io/lorenz](https://ryan
 Running Lorenz is as easy as:
 
 ```sh
-npx @lorenz WORKFLOW.md
+npx lorenz WORKFLOW.md
 ```
 
 with full CLI options:
