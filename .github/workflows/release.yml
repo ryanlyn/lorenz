@@ -129,22 +129,72 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          set -euo pipefail
+          repo="${GITHUB_REPOSITORY}"
           asset="${{ steps.pack.outputs.tarball }}"
+          asset_name="$(basename "$asset")"
+          version="${{ steps.pack.outputs.version }}"
+
+          # Resolve the release tag, its predecessor (for the changelog diff), and whether this is a
+          # prerelease. Scheduled and tag-push runs publish a stable release; manual dispatch runs
+          # publish a throwaway prerelease and never reach npm.
+          stable_tags="$(git tag --list 'v*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V || true)"
           if [ "${GITHUB_EVENT_NAME}" = "schedule" ]; then
             tag="${{ steps.bump.outputs.tag }}"
-            prerelease=""
+            prev_tag="${{ steps.scheduled.outputs.latest_tag }}"
+            prerelease=false
           elif [ "${GITHUB_REF_TYPE}" = "tag" ]; then
             tag="${GITHUB_REF_NAME}"
-            prerelease=""
+            prev_tag="$(printf '%s\n' "$stable_tags" | grep -Fx -B1 "$tag" | head -n1 || true)"
+            [ "$prev_tag" = "$tag" ] && prev_tag=""
+            prerelease=false
           else
-            tag="v${{ steps.pack.outputs.version }}-${GITHUB_SHA::7}"
-            prerelease="--prerelease"
+            tag="v${version}-${GITHUB_SHA::7}"
+            prev_tag="$(printf '%s\n' "$stable_tags" | tail -n1 || true)"
+            prerelease=true
           fi
-          notes="Install with: npx https://github.com/${GITHUB_REPOSITORY}/releases/download/${tag}/$(basename "$asset")"
+
+          download_url="https://github.com/${repo}/releases/download/${tag}/${asset_name}"
+
+          # Ask GitHub to generate the "What's Changed" section (merged PRs + full-diff link) for the
+          # range since the previous stable tag. Best-effort: a missing tag or first-ever release just
+          # yields an empty changelog rather than failing the publish.
+          gen_args=(-f tag_name="$tag")
+          [ -n "$prev_tag" ] && gen_args+=(-f previous_tag_name="$prev_tag")
+          changelog="$(gh api "repos/${repo}/releases/generate-notes" "${gen_args[@]}" -q .body 2>/dev/null || true)"
+
+          {
+            echo "**Lorenz is a control plane for dispatching and structuring order across dynamic agent systems.**"
+            echo
+            echo "## Install"
+            echo
+            echo "Run this release directly with \`npx\`:"
+            echo
+            echo '```sh'
+            echo "npx ${download_url}"
+            echo '```'
+            if [ "$prerelease" = false ]; then
+              echo
+              echo "Or install the published npm package:"
+              echo
+              echo '```sh'
+              echo "npm install -g lorenz@${version}"
+              echo '```'
+            fi
+            if [ -n "$changelog" ]; then
+              echo
+              echo "$changelog"
+            fi
+          } > release-notes.md
+
+          create_args=(--title "lorenz ${tag}" --notes-file release-notes.md)
+          [ "$prerelease" = true ] && create_args+=(--prerelease)
+
           if gh release view "$tag" >/dev/null 2>&1; then
             gh release upload "$tag" "$asset" --clobber
+            gh release edit "$tag" --notes-file release-notes.md
           else
-            gh release create "$tag" "$asset" --title "lorenz ${tag}" --notes "$notes" $prerelease
+            gh release create "$tag" "$asset" "${create_args[@]}"
           fi
 
       - name: Publish to npm
