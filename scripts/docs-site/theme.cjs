@@ -275,7 +275,7 @@ a:hover{text-decoration:underline;text-underline-offset:2px}
 }
 
 .searchbox{
-  flex:1 1 auto;max-width:420px;margin:0 auto 0 8px;
+  flex:1 1 auto;min-width:0;max-width:420px;margin:0 auto 0 8px;
   display:flex;align-items:center;gap:9px;
   height:38px;padding:0 12px;
   background:var(--panel);
