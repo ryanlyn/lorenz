@@ -122,6 +122,7 @@ function normalizeState(value: string): string {
  */
 export const memoryTrackerProvider: TrackerProvider = {
   kind: "memory",
+  defaultActiveStates: ["Todo", "In Progress"],
   parseOptions(options) {
     rejectUnknownOptions(options, [], "memory");
     return {};

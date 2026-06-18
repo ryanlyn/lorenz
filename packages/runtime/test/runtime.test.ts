@@ -1365,6 +1365,7 @@ function workerPoolWorkflowFixture(
     },
     polling: { interval_ms: 5 },
     workspace: { root },
+    agent: { kind: "codex" },
     worker: {
       worker_pool: {
         enabled: true,
@@ -3517,6 +3518,7 @@ function workflowFixture(root = "/tmp/lorenz-runtime-test"): WorkflowDefinition 
     },
     polling: { interval_ms: 5 },
     workspace: { root },
+    agent: { kind: "codex" },
   });
   return {
     path: "/tmp/WORKFLOW.md",

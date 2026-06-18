@@ -1,13 +1,16 @@
 import fs from "node:fs/promises";
 import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
+import { promisify } from "node:util";
 
 import { afterEach, beforeEach, test } from "vitest";
 
 import { stageRelease } from "../scripts/stage-release.ts";
 
 let tempRoot: string;
+const execFileAsync = promisify(execFile);
 
 beforeEach(async () => {
   tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "lorenz-release-test-"));
@@ -33,6 +36,7 @@ test("stages a source-free CLI release tree with rewritten package manifests", a
   assert.equal(await exists(path.join(releaseDir, "apps/cli/test/cli.test.ts")), false);
   assert.equal(await exists(path.join(releaseDir, "apps/cli/dist/tsconfig.tsbuildinfo")), false);
   assert.equal(await exists(path.join(releaseDir, "apps/cli/dist/bin/cli.js")), true);
+  assert.equal(await exists(path.join(releaseDir, "apps/cli/dist/bin/config.js")), true);
   assert.equal(await exists(path.join(releaseDir, "apps/lorenz-dashboard/dist/index.html")), true);
   assert.equal(await exists(result.archivePath ?? ""), true);
 
@@ -41,7 +45,10 @@ test("stages a source-free CLI release tree with rewritten package manifests", a
   assert.equal(rootPackage.version, "0.1.0");
   assert.equal(rootPackage.private, undefined);
   assert.deepEqual(rootPackage.publishConfig, { access: "public" });
-  assert.deepEqual(rootPackage.bin, { lorenz: "./bin/lorenz" });
+  assert.deepEqual(rootPackage.bin, {
+    lorenz: "./bin/lorenz",
+    "lorenz-config": "./bin/lorenz-config",
+  });
   // The root must declare every workspace package (file:) and every external dependency so that
   // npm installs the full graph even when the release is installed as a dependency (npx). npm does
   // not install the registry deps of a file: directory dependency on its own.
@@ -82,6 +89,22 @@ test("stages a source-free CLI release tree with rewritten package manifests", a
   const entrypointSource = await fs.readFile(path.join(releaseDir, "bin/lorenz"), "utf8");
   assert.match(entrypointSource, /import\.meta\.resolve\("@lorenz\/cli"\)/);
   assert.equal(entrypointSource.includes("../node_modules/"), false);
+  const configEntrypointSource = await fs.readFile(
+    path.join(releaseDir, "bin/lorenz-config"),
+    "utf8",
+  );
+  assert.match(configEntrypointSource, /\.\/bin\/config\.js/);
+  await fs.mkdir(path.join(releaseDir, "node_modules", "@lorenz"), { recursive: true });
+  await fs.symlink(
+    path.join(releaseDir, "apps", "cli"),
+    path.join(releaseDir, "node_modules", "@lorenz", "cli"),
+  );
+  const configHelp = await execFileAsync(
+    process.execPath,
+    [path.join(releaseDir, "bin", "lorenz-config"), "--help"],
+    { cwd: releaseDir },
+  );
+  assert.equal(configHelp.stdout, "lorenz-config help\n");
 
   const cliPackage = await readJson(path.join(releaseDir, "apps/cli/package.json"));
   assert.equal(cliPackage.version, "9.9.9");
@@ -101,6 +124,10 @@ test("stages a source-free CLI release tree with rewritten package manifests", a
 
   const manifest = await readJson(path.join(releaseDir, "RELEASE-MANIFEST.json"));
   assert.equal(manifest.version, "0.1.0");
+  assert.deepEqual(manifest.entrypoints, {
+    lorenz: "bin/lorenz",
+    "lorenz-config": "bin/lorenz-config",
+  });
   assert.deepEqual(
     manifest.packages.map((entry: { name: string }) => entry.name),
     [
@@ -127,6 +154,8 @@ test("stages a source-free CLI release tree with rewritten package manifests", a
   const entrypoint = path.join(releaseDir, "bin/lorenz");
   const entrypointMode = (await fs.stat(entrypoint)).mode;
   assert.equal((entrypointMode & 0o111) !== 0, true);
+  const configEntrypointMode = (await fs.stat(path.join(releaseDir, "bin/lorenz-config"))).mode;
+  assert.equal((configEntrypointMode & 0o111) !== 0, true);
 });
 
 test("reports missing build outputs before writing a release tree", async () => {
@@ -176,7 +205,10 @@ catalog:
     name: "@lorenz/cli",
     version: "9.9.9",
     type: "module",
-    bin: { lorenz: "./bin/lorenz.js" },
+    bin: {
+      lorenz: "./bin/lorenz.js",
+      "lorenz-config": "./bin/lorenz-config.js",
+    },
     main: "./dist/index.js",
     dependencies: {
       "@lorenz/acp": "workspace:*",
@@ -185,8 +217,14 @@ catalog:
     },
   });
   await writeFile(workspaceRoot, "apps/cli/dist/bin/cli.js", "export {};\n");
+  await writeFile(
+    workspaceRoot,
+    "apps/cli/dist/bin/config.js",
+    'process.stdout.write("lorenz-config help\\n");\n',
+  );
   await writeFile(workspaceRoot, "apps/cli/dist/tsconfig.tsbuildinfo", "build cache\n");
   await writeFile(workspaceRoot, "apps/cli/bin/lorenz.js", "#!/usr/bin/env node\n");
+  await writeFile(workspaceRoot, "apps/cli/bin/lorenz-config.js", "#!/usr/bin/env node\n");
   await writeFile(workspaceRoot, "apps/cli/src/main.ts", "export {};\n");
   await writeFile(workspaceRoot, "apps/cli/test/cli.test.ts", "export {};\n");
 

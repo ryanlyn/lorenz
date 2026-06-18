@@ -17,6 +17,7 @@ import { localToolOps } from "./toolOps.js";
 export const localTrackerProvider: TrackerProvider = {
   kind: "local",
   configAliases: { id_prefix: "idPrefix" },
+  defaultActiveStates: ["Todo", "In Progress"],
   parseOptions(options) {
     rejectUnknownOptions(options, ["path", "idPrefix"], "local");
     const path = stringOption(options, "path") ?? DEFAULT_BOARD_DIR;

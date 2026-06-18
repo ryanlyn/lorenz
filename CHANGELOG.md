@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-06-18
+
+- Changed fresh workflow defaults to Jira and Claude, with Jira-aware active-state defaults.
+- Added the interactive `lorenz config` and `lorenz-config` onboarding commands, including
+  provider-specific prompts, environment-only API secret references, atomic workflow writes, and
+  overwrite protection.
+
 ## 2026-06-14
 
 - Removed session resumption: deleted the `@symphony/resume-state` package and

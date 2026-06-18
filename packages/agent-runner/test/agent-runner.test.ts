@@ -30,7 +30,12 @@ function fakeIssue(overrides: Partial<Issue> = {}): Issue {
 }
 
 function fakeSettings(overrides: Partial<Settings> = {}): Settings {
-  return { ...defaultSettings(), ...overrides };
+  const defaults = defaultSettings();
+  return {
+    ...defaults,
+    agent: { ...defaults.agent, kind: "codex" },
+    ...overrides,
+  };
 }
 
 function fakeSession(overrides: Partial<AgentSession> = {}): AgentSession {

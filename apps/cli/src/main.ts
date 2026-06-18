@@ -41,6 +41,12 @@ import {
   type DoctorCommanderOptions,
 } from "./doctor.js";
 import {
+  configOptionsFromCommanderOptions,
+  createConfigCommand,
+  runConfigCommand,
+  type ConfigCommanderOptions,
+} from "./config.js";
+import {
   buildDispatchCoordinator,
   createTrackerClient,
   runAgentAttempt,
@@ -111,6 +117,13 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
     status = report.status === "error" ? 1 : 0;
   });
   command.addCommand(doctorCommand);
+
+  const configCommand = createConfigCommand("config");
+  configCommand.action(async (workflowPath: string | undefined, parsed: ConfigCommanderOptions) => {
+    assertNoDaemonOptions(configCommand.optsWithGlobals<CliCommanderOptions>(), "config");
+    status = await runConfigCommand(configOptionsFromCommanderOptions(parsed, workflowPath));
+  });
+  command.addCommand(configCommand);
 
   try {
     await command.parseAsync(args, { from: "user" });
@@ -297,6 +310,23 @@ function cliOptionsFromCommander(parsed: CliCommanderOptions, workflowPath?: str
     port: parsed.port ?? null,
     logsRoot: parsed.logsRoot ?? null,
   };
+}
+
+function assertNoDaemonOptions(parsed: CliCommanderOptions, subcommand: string): void {
+  const unsupported = [
+    parsed.once ? "--once" : null,
+    parsed.dryRun ? "--dry-run" : null,
+    parsed.tui === false ? "--no-tui" : null,
+    parsed.dashboard === false ? "--no-dashboard" : null,
+    parsed.logsRoot !== undefined ? "--logs-root" : null,
+    parsed.port !== undefined ? "--port" : null,
+  ].filter((option): option is string => option !== null);
+
+  if (unsupported.length > 0) {
+    throw new Error(
+      `daemon option(s) are not supported by lorenz ${subcommand}: ${unsupported.join(", ")}`,
+    );
+  }
 }
 
 function applyCliOverrides(workflow: WorkflowDefinition, options: CliOptions): void {

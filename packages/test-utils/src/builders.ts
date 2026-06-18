@@ -100,10 +100,11 @@ export function settingsWith(
   } = {},
 ): Settings {
   const settings = defaultSettings();
+  settings.tracker.kind = "memory";
   settings.tracker.dispatch.acceptUnrouted = overrides.acceptUnrouted ?? true;
   settings.tracker.dispatch.onlyRoutes = overrides.onlyRoutes ?? null;
   settings.tracker.dispatch.routeLabelPrefix = overrides.routeLabelPrefix ?? "Lorenz:";
-  if (overrides.activeStates) settings.tracker.activeStates = overrides.activeStates;
+  settings.tracker.activeStates = overrides.activeStates ?? ["Todo", "In Progress"];
   if (overrides.terminalStates) settings.tracker.terminalStates = overrides.terminalStates;
   if (overrides.maxConcurrentAgents !== undefined)
     settings.agent.maxConcurrentAgents = overrides.maxConcurrentAgents;

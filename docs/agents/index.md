@@ -11,7 +11,7 @@ The agent kind sets *what* you run; the executor sets *how* it runs.
 
 - **Agent kind** is pure configuration. Each kind is a record under `agents.<kind>` in your
   `WORKFLOW.md` front matter. The two built-in kinds are `codex` and `claude`. `agent.kind`
-  (default `codex`) selects which record runs.
+  (default `claude`) selects which record runs; an explicit value wins.
 - **Executor** is the runtime that drives a turn, chosen per kind by `agents.<kind>.executor`. One
   built-in executor ships: `acp`, the default for both built-in kinds.
 
@@ -21,7 +21,7 @@ different options, or, as an extension author, register a new executor and selec
 
 ```yaml
 agent:
-  kind: codex
+  kind: claude
 agents:
   codex:
     executor: acp
@@ -107,7 +107,7 @@ single executor.
 | --- | --- | --- |
 | `agent.max_concurrent_agents` | `10` | Global cap on agents running at once. |
 | `agent.max_turns` | `20` | Maximum `runTurn` iterations before the run loop stops. |
-| `agent.kind` | `codex` | Which `agents.<kind>` record a dispatched issue runs. |
+| `agent.kind` | `claude` | Which `agents.<kind>` record a dispatched issue runs. |
 
 The run loop builds the workspace, runs the `before_run` hook, opens a session, loops `runTurn` up
 to `max_turns`, then runs the `after_run` hook on a best-effort basis. It also stops early when the

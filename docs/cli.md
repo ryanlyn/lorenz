@@ -1,16 +1,38 @@
 # CLI
 
-The `lorenz` binary is the only process you run. This page is the operator's task guide to its three commands: the default daemon that polls a tracker and dispatches agents, `lorenz runs` to inspect run history, and `lorenz doctor` to validate a setup before you start it. For the flag-by-flag table, see [reference/cli.md](reference/cli.md).
+The `lorenz` binary is the main entrypoint. This page is the operator's task guide to its four commands: the interactive config wizard, the default daemon, `lorenz runs`, and `lorenz doctor`. The package also exposes the wizard directly as `lorenz-config`. For the flag-by-flag table, see [reference/cli.md](reference/cli.md).
 
-## The three commands
+## The commands
 
 ```sh
+lorenz config [-f] [WORKFLOW.md] # interactive onboarding wizard
 lorenz [flags] [WORKFLOW.md]   # default: the daemon
 lorenz runs [filters]          # query run history from the observability API
 lorenz doctor [WORKFLOW.md]    # validate a workflow and local prerequisites
+lorenz-config [-f] [WORKFLOW.md] # same wizard as `lorenz config`
 ```
 
-`runs` and `doctor` are subcommands. Anything that is not `runs` or `doctor` runs the daemon. If the binary prints `lorenz has not been built yet`, run `pnpm build` first; the npm shim imports the built `dist` output.
+`config`, `runs`, and `doctor` are subcommands. Anything else runs the daemon. If the binary prints `lorenz has not been built yet`, run `pnpm build` first; the npm shim imports the built `dist` output.
+
+## Create a workflow
+
+`lorenz config [workflowPath]` launches the interactive onboarding wizard. The separately installed
+`lorenz-config [workflowPath]` binary calls the same implementation.
+
+```sh
+lorenz config                    # use LORENZ_WORKFLOW, then ./WORKFLOW.md
+lorenz config path/to/FLOW.md    # choose the target
+lorenz config -f FLOW.md         # replace without an overwrite prompt
+```
+
+The initial choices default to Jira and Claude. Explicit choices are written into the workflow and
+therefore override parser defaults. The tracker choices are Jira, Linear, a local Markdown board,
+and Slack. Credential prompts default to environment references and the wizard writes them without
+resolving them. API secret prompts accept environment references only, so literal tokens are not
+written to `WORKFLOW.md`.
+
+The wizard requires an interactive TTY and validates the generated config before writing it. When
+the target already exists, it refuses to replace it. `-f` / `--force` intentionally replaces it.
 
 ## Run the daemon
 
@@ -148,7 +170,7 @@ Tracker credentials resolve through the workflow config, not generic CLI flags. 
 
 ## See also
 - [reference/cli.md](reference/cli.md) - the exhaustive flag, argument, and exit-code reference
-- [getting-started.md](getting-started.md) - first workflow and first run end to end
+- [getting-started.md](getting-started.md) - wizard, first workflow, and first run end to end
 - [workflows.md](workflows.md) - what goes in `WORKFLOW.md` and how it is parsed
 - [observability.md](observability.md) - the dashboard, HTTP API, and TUI the daemon serves
 - [features/run-history.md](features/run-history.md) - what `lorenz runs` is querying

@@ -16,7 +16,7 @@ The math lives in two pure packages. `@lorenz/dispatch` decides eligibility, rou
 *The dispatch eligibility decision tree, evaluated top to bottom; the first failing gate makes the issue ineligible.*
 
 1. **Required fields.** If `issue.id`, `issue.identifier`, `issue.title`, or `issue.state` is missing, the issue is ineligible. A malformed record never dispatches.
-2. **Active state.** `issueIsActive` requires the state to be in `tracker.active_states` (default `['Todo', 'In Progress']`) and not in `tracker.terminal_states` (default `['Closed', 'Cancelled', 'Canceled', 'Duplicate', 'Done']`). Comparison is case-insensitive and trims whitespace. Terminal wins: a state that appears in both lists is treated as inactive.
+2. **Active state.** `issueIsActive` requires the state to be in `tracker.active_states` (Jira default `['To Do', 'In Progress']`; other built-ins `['Todo', 'In Progress']`) and not in `tracker.terminal_states` (default `['Closed', 'Cancelled', 'Canceled', 'Duplicate', 'Done']`). Comparison is case-insensitive and trims whitespace. Terminal wins: a state that appears in both lists is treated as inactive.
 3. **Routed to this worker.** `routedToThisWorker` gates on the assignee and route labels (detailed below).
 4. **Blockers.** `issueHasOpenBlockers` applies only when `issue.stateType === 'unstarted'`. An unstarted issue with any non-terminal blocker is ineligible. Once an issue is started, its blockers are ignored for dispatch gating.
 5. **Concurrency caps.** Global, then per-state, then per-host (detailed below).

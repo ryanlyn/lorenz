@@ -296,10 +296,7 @@ test("createWorkspaceForIssue — writes .gitignore in skills destination", asyn
     await fs.readFile(path.join(ws, ".lorenz", "skills", "lorenz-linear", "SKILL.md"), "utf8"),
     "linear\n",
   );
-  assert.equal(
-    await fs.readFile(path.join(ws, ".lorenz", "skills", ".gitignore"), "utf8"),
-    "*\n",
-  );
+  assert.equal(await fs.readFile(path.join(ws, ".lorenz", "skills", ".gitignore"), "utf8"), "*\n");
 });
 
 test("createWorkspaceForIssue — refreshes skills when reusing an existing workspace", async () => {

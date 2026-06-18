@@ -74,10 +74,7 @@ export function readTrackedAgentSettingsFiles(root = repoRoot): AgentSettingsPol
 function isAgentSettingsPath(filePath: string): boolean {
   const normalizedPath = filePath.split(path.sep).join("/");
 
-  if (
-    normalizedPath === ".lorenz/skills" ||
-    normalizedPath.startsWith(".lorenz/skills/")
-  ) {
+  if (normalizedPath === ".lorenz/skills" || normalizedPath.startsWith(".lorenz/skills/")) {
     return false;
   }
 

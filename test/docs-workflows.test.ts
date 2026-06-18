@@ -55,7 +55,7 @@ test("TS package docs describe the durable workspace contracts", async () => {
     "## Workspace Layout",
     "## Configuration",
     "### Full Reference",
-    "## Linear",
+    "## Defaults",
     "## Workflow Prompt",
     "## Skills",
     "## Observability",

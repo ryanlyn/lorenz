@@ -2,8 +2,13 @@
 
 This page is for operators running Codex as the coding agent behind a Lorenz workflow. It covers the
 `agents.codex` config record, the `codex-acp` bridge, provider config and usage accounting, the
-default sandbox, and prerequisites. Codex is the default agent: `agent.kind` is `codex` out of the
-box, so an unconfigured workflow runs it.
+default sandbox, and prerequisites. Claude is the parser and wizard default; select Codex
+explicitly with `agent.kind: codex`.
+
+```yaml
+agent:
+  kind: codex
+```
 
 ## Prerequisites
 

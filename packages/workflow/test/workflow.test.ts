@@ -8,6 +8,8 @@ import {
   workflowFilePath,
   loadWorkflow,
   parseWorkflowContent,
+  renderWorkflowContent,
+  writeWorkflowFile,
   effectivePromptTemplate,
   defaultPromptTemplate,
 } from "@lorenz/workflow";
@@ -129,6 +131,83 @@ test("parseWorkflowContent handles empty content", () => {
   const result = parseWorkflowContent("");
   assert.deepEqual(result.config, {});
   assert.equal(result.body, "");
+});
+
+// --- renderWorkflowContent ---
+
+test("renderWorkflowContent renders exact YAML front matter and prompt body", () => {
+  const result = renderWorkflowContent(
+    {
+      tracker: { kind: "local" },
+      polling: { interval_ms: 5000 },
+    },
+    "Fix {{ issue.identifier }}.",
+  );
+
+  assert.equal(
+    result,
+    [
+      "---",
+      "tracker:",
+      "  kind: local",
+      "polling:",
+      "  interval_ms: 5000",
+      "---",
+      "",
+      "Fix {{ issue.identifier }}.",
+      "",
+    ].join("\n"),
+  );
+});
+
+// --- writeWorkflowFile ---
+
+test("writeWorkflowFile creates parent directories and returns the absolute path", async () => {
+  const dir = await tempDir("lorenz-workflow-write-parent");
+  const workflowFile = path.join(dir, "nested", "config", "WORKFLOW.md");
+  const config = { tracker: { kind: "local" } };
+  const promptTemplate = "Handle {{ issue.identifier }}.";
+
+  const writtenPath = await writeWorkflowFile(workflowFile, config, promptTemplate);
+
+  assert.equal(writtenPath, path.resolve(workflowFile));
+  assert.equal(
+    await fs.readFile(workflowFile, "utf8"),
+    renderWorkflowContent(config, promptTemplate),
+  );
+});
+
+test("writeWorkflowFile does not clobber an existing workflow by default", async () => {
+  const dir = await tempDir("lorenz-workflow-write-no-clobber");
+  const workflowFile = path.join(dir, "WORKFLOW.md");
+  await fs.writeFile(workflowFile, "existing workflow", "utf8");
+
+  await assert.rejects(
+    () => writeWorkflowFile(workflowFile, { tracker: { kind: "local" } }, "replacement"),
+    /workflow file already exists: .*; pass --force to replace it/,
+  );
+
+  assert.equal(await fs.readFile(workflowFile, "utf8"), "existing workflow");
+  assert.deepEqual(await fs.readdir(dir), ["WORKFLOW.md"]);
+});
+
+test("writeWorkflowFile atomically overwrites an existing workflow when forced", async () => {
+  const dir = await tempDir("lorenz-workflow-write-force");
+  const workflowFile = path.join(dir, "WORKFLOW.md");
+  const config = { tracker: { kind: "linear" } };
+  const promptTemplate = "Replace {{ issue.identifier }}.";
+  await fs.writeFile(workflowFile, "existing workflow", "utf8");
+
+  const writtenPath = await writeWorkflowFile(workflowFile, config, promptTemplate, {
+    force: true,
+  });
+
+  assert.equal(writtenPath, path.resolve(workflowFile));
+  assert.equal(
+    await fs.readFile(workflowFile, "utf8"),
+    renderWorkflowContent(config, promptTemplate),
+  );
+  assert.deepEqual(await fs.readdir(dir), ["WORKFLOW.md"]);
 });
 
 // --- effectivePromptTemplate ---

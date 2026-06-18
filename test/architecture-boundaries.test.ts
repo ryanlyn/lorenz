@@ -85,6 +85,7 @@ test("projection actor owns bounded read models and snapshots defensively", () =
 
 test("ugly retry flow keeps capacity authority in the orchestrator", () => {
   const settings = parseConfig({
+    tracker: { kind: "memory", active_states: ["Todo", "In Progress"] },
     agent: { ensemble_size: 2, max_concurrent_agents: 2, max_retry_backoff_ms: 10_000 },
   });
   let wallMs = Date.parse("2026-05-07T00:00:10.000Z");

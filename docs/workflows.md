@@ -6,6 +6,10 @@ A `WORKFLOW.md` file is the single contract that defines a Lorenz orchestrator: 
 
 One file does two jobs. The YAML front matter configures the runtime; the Markdown body is the agent prompt. Lorenz reads the file, parses the front matter into a typed `Settings` object with every default applied, and parses the body into a Liquid template that renders per issue at dispatch time.
 
+`lorenz config [workflowPath]` and `lorenz-config [workflowPath]` generate this file through the same
+interactive wizard. The wizard defaults to Jira and Claude, defaults credential prompts to
+environment references without resolving them, and rejects literal API secrets.
+
 The runtime locates the file in this order:
 
 1. `LORENZ_WORKFLOW` (absolute path used as-is, relative path joined to the working directory).
@@ -17,9 +21,9 @@ The file structure is fixed:
 ---
 # YAML front matter: the config
 tracker:
-  kind: linear
+  kind: jira
 agent:
-  kind: codex
+  kind: claude
 ---
 # Markdown body: the Liquid prompt template
 You are working on `{{ issue.identifier }}`.
@@ -35,7 +39,7 @@ Each top-level section configures one subsystem. The table lists the section, it
 
 | Section | Configures | Key keys |
 | --- | --- | --- |
-| `tracker` / `trackers` | The issue source to poll and how to dispatch | `tracker.kind` (required), `trackers.<bundle>.provider` (required), `active_states`, `terminal_states`, `dispatch.*` |
+| `tracker` / `trackers` | The issue source to poll and how to dispatch | `tracker.kind`, `trackers.<bundle>.provider`, `active_states`, `terminal_states`, `dispatch.*` |
 | `agent` / `agents` | Which coding agent runs and its limits | `agent.kind`, `agent.max_turns`, `agent.max_concurrent_agents`, `agents.<kind>.bridge_command` |
 | `workspace` | The per-issue filesystem root and isolation | `workspace.root`, `workspace.isolation` |
 | `hooks` | Shell hooks around the workspace lifecycle | `after_create`, `before_run`, `after_run`, `before_remove`, `timeout_ms` |
@@ -51,17 +55,19 @@ A few defaults to know, all from the code:
 
 - `polling.interval_ms` defaults to `30000`.
 - `workspace.root` defaults to `<tmpdir>/lorenz_workspaces`; `workspace.isolation` defaults to `per-agent`.
-- `agent.kind` defaults to `codex`; `agent.max_turns` defaults to `20`; `agent.max_concurrent_agents` defaults to `10`; `agent.ensemble_size` defaults to `1`.
+- `tracker.kind` defaults to `jira`; Jira provider essentials are still required before dispatch.
+- `agent.kind` defaults to `claude`; `agent.max_turns` defaults to `20`; `agent.max_concurrent_agents` defaults to `10`; `agent.ensemble_size` defaults to `1`.
 - `agents.turn_timeout_ms` defaults to `3600000`; `agents.stall_timeout_ms` defaults to `300000`. These apply to every agent record unless a per-kind value overrides them.
 - `hooks.timeout_ms` defaults to `60000`.
 - `server.host` defaults to `127.0.0.1`; `server.port` defaults to `4040`; `server.trace_dir` defaults to `~/.lorenz/issues`.
 - `logging.log_file` defaults to `~/.lorenz/log/lorenz.log`.
 
-There is no default tracker. `tracker.kind` is unset until you set it, and pre-poll validation throws `tracker.kind is required` when it is missing. Treat it as mandatory.
+Explicit workflow values always win over parser defaults. Set `tracker.kind` or `agent.kind` when
+you want a provider other than Jira or an agent other than Claude.
 
 ### Tracker selection
 
-Two shapes select a tracker. The canonical form is the nested bundle: `tracker.kind` selects a bundle declared under `trackers.<bundle>`, and that bundle's required `provider` names the implementation (it does not default to the bundle name):
+Two shapes select a tracker. The canonical form is the nested bundle: `tracker.kind` selects a bundle declared under `trackers.<bundle>`, and that bundle's required `provider` names the implementation (it does not default to the bundle name). When omitted, `tracker.kind` is `jira`:
 
 ```yaml
 tracker:
@@ -78,7 +84,7 @@ The flat form puts options directly under `tracker:` as terse shorthand and work
 
 ### Agent selection
 
-`agent.kind` chooses which `agents.<kind>` record runs. The two built-in records are `codex` and `claude`, both using `executor: acp` over a bridge subprocess (`codex-acp`, `claude-agent-acp`). Per-kind config lives under `agents.<kind>`:
+`agent.kind` chooses which `agents.<kind>` record runs and defaults to `claude`. The two built-in records are `codex` and `claude`, both using `executor: acp` over a bridge subprocess (`codex-acp`, `claude-agent-acp`). Per-kind config lives under `agents.<kind>`:
 
 ```yaml
 agent:
@@ -152,7 +158,7 @@ A reload is transactional. The runtime re-runs its startup gates and reconciliat
 
 ## A minimal workflow
 
-The smallest workflow that dispatches: a tracker, an agent, and a one-line prompt.
+An explicit local tracker plus the default Claude agent and a one-line prompt:
 
 ```md
 ---
@@ -162,8 +168,6 @@ trackers:
   local:
     provider: local
     path: .lorenz/local
-agent:
-  kind: codex
 ---
 You are working on `{{ issue.identifier }}`: {{ issue.title }}.
 

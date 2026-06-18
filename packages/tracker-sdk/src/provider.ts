@@ -92,6 +92,8 @@ export interface TrackerProvider {
   readonly envFallbacks?: Readonly<Record<string, string>> | undefined;
   /** Endpoint used when `tracker.endpoint` is not configured. */
   readonly defaultEndpoint?: string | undefined;
+  /** Dispatch states used when `tracker.active_states` is not configured. */
+  readonly defaultActiveStates?: readonly string[] | undefined;
   /**
    * Validate and normalize the provider-specific keys of the selected tracker bundle
    * (aliases already applied). Called at config-parse time; throw with a `tracker.<key> ...`

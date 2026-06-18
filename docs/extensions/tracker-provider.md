@@ -23,6 +23,7 @@ mandatory; every other hook is optional and the core degrades cleanly when it is
 | `configAliases` | config parse | snake_case to camelCase alias map for this provider's option keys (e.g. `{ project_slug: "projectSlug" }`); applied before `parseOptions` |
 | `envFallbacks` | config parse | env vars consulted for shared `tracker:` fields left unset, keyed by field name (e.g. `{ apiKey: "LINEAR_API_KEY" }`) |
 | `defaultEndpoint` | config parse | endpoint used when `tracker.endpoint` is unset (e.g. `https://api.linear.app/graphql`) |
+| `defaultActiveStates` | config parse | provider-specific active states used when `tracker.active_states` is unset |
 | `parseOptions(options, context)` | config parse | validate and normalize the provider's keys (aliases already applied); the returned record becomes `settings.tracker.options`; throw `tracker.<key> ...` on bad input |
 | `validateDispatch(settings)` | CLI startup (`validateDispatchConfig`) | throw when parsed settings cannot drive dispatch (missing credentials or required options) |
 | `createClient(settings, context)` | runtime | build the `RuntimeTrackerClient` that feeds candidate issues into the dispatch loop |

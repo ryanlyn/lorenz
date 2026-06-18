@@ -18,7 +18,7 @@ installed. See [../agents/acp-bridges.md](../agents/acp-bridges.md).
 
 **Agent kind** - a named per-agent configuration block under `agents.<kind>` (for example
 `agents.codex`, `agents.claude`) selecting which executor runs and carrying that executor's options.
-The active kind comes from `agent.kind` (default `codex`); `AgentKind` is an open `string` alias, not
+The active kind comes from `agent.kind` (default `claude`); `AgentKind` is an open `string` alias, not
 a closed set. See [../agents/index.md](../agents/index.md) and
 [configuration.md](configuration.md).
 

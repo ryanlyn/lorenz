@@ -382,7 +382,7 @@ new acp.AgentSideConnection((connection) => new FakeAgent(connection), stream);
         stall_timeout_ms: 0,
       },
     },
-    agent: { max_turns: 1 },
+    agent: { kind: "codex", max_turns: 1 },
   });
   const workflow = {
     path: path.join(root, "WORKFLOW.md"),
@@ -454,7 +454,7 @@ new acp.AgentSideConnection((connection) => new FakeAgent(connection), stream);
         stall_timeout_ms: 0,
       },
     },
-    agent: { max_turns: 1 },
+    agent: { kind: "codex", max_turns: 1 },
   });
   assert.equal(settings.workspace.isolation, "none");
   const workflow = {
@@ -529,7 +529,7 @@ new acp.AgentSideConnection((connection) => new FakeAgent(connection), stream);
         stall_timeout_ms: 0,
       },
     },
-    agent: { max_turns: 1 },
+    agent: { kind: "codex", max_turns: 1 },
   });
   const workflow = {
     path: path.join(root, "WORKFLOW.md"),
@@ -598,7 +598,7 @@ new acp.AgentSideConnection((connection) => new FakeAgent(connection), stream);
         stall_timeout_ms: 0,
       },
     },
-    agent: { max_turns: 1 },
+    agent: { kind: "codex", max_turns: 1 },
   });
   const workflow = {
     path: path.join(root, "WORKFLOW.md"),

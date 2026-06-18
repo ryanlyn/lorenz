@@ -21,7 +21,7 @@ and a web dashboard served by the observability API.
 
 The published documentation site is at **[ryanlyn.github.io/lorenz](https://ryanlyn.github.io/lorenz/)**, built from [`docs/`](./docs). Start here:
 
-- [Getting started](./docs/getting-started.md) - install, write a `WORKFLOW.md`, run your first issue.
+- [Getting started](./docs/getting-started.md) - install, generate a `WORKFLOW.md`, run your first issue.
 - [How it works](./docs/how-it-works.md) - the polling, dispatch, and run lifecycle.
 - [Configuration reference](./docs/reference/configuration.md) - every front-matter key, default, and meaning.
 - [Trackers](./docs/trackers/index.md) - Linear, Jira, Slack, local, and memory sources of issues.
@@ -32,21 +32,33 @@ The published documentation site is at **[ryanlyn.github.io/lorenz](https://ryan
 Running Lorenz is as easy as:
 
 ```sh
+npx lorenz config WORKFLOW.md
+npx lorenz doctor WORKFLOW.md
 npx lorenz WORKFLOW.md
 ```
 
 with full CLI options:
 
 ```sh
+lorenz config [-f|--force] [path-to-WORKFLOW.md]
 lorenz [--once] [--dry-run] [--no-tui] [--port <port>] [--logs-root <path>] [path-to-WORKFLOW.md]
 lorenz runs [--issue ID] [--failed] [--cost] [--retries] [--id RUN_ID] [--limit N] [--json]
+lorenz doctor [path-to-WORKFLOW.md]
 ```
+
+`lorenz config` launches the interactive onboarding wizard. It defaults to Jira and Claude, asks
+for the selected provider's essentials, and defaults credential answers to environment references
+without resolving them. API secrets must be entered as environment references, not literal values.
+It will not replace an existing workflow unless you pass `--force`. The installed package exposes
+the same wizard as
+`lorenz-config [workflowPath]` (or `npx --package lorenz lorenz-config`).
 
 `--logs-root <path>` writes logs under `<path>/log/lorenz.log`. With no workflow path the CLI reads
 `LORENZ_WORKFLOW`, then `./WORKFLOW.md`. See [CLI](./docs/cli.md) for every flag and command.
 
-Runtime needs depend on the workflow: `LINEAR_API_KEY` for Linear, `codex` on `PATH` for Codex
-runs, a Claude ACP bridge for Claude runs, and SSH access for remote workers. See
+Runtime needs depend on the workflow. The defaults are Jira and Claude, so a default setup needs
+Jira credential references and `claude` on `PATH`; explicit `tracker.kind` and `agent.kind` values
+select other providers and agents. See
 [Getting started](./docs/getting-started.md) for the full list. Run commands from the repository
 root unless a command says otherwise.
 
@@ -62,13 +74,17 @@ Every front-matter key, its type, verified default, and meaning are in the
 [Configuration reference](./docs/reference/configuration.md). `workspace.root` supports `~` and
 whole-value `$VAR` expansion, and `LORENZ_WORKSPACE_ROOT` overrides it at runtime.
 
-## Linear
+## Defaults
 
-Linear is the default tracker: issues live in a Linear project, read access uses `LINEAR_API_KEY`,
-and project selection uses `project_slug`. Route labels such as `Lorenz:backend` let multiple
-instances share one project. Setup and configuration are in
-[Linear tracker](./docs/trackers/linear.md). Other sources (Jira, Slack, local, memory) are covered
-under [Trackers](./docs/trackers/index.md).
+The parser and onboarding wizard default to the Jira tracker and Claude agent. Jira credentials
+stay in environment variables or another supported secret source; the workflow stores references
+such as `$JIRA_API_KEY`. Explicit workflow config always wins, so selecting Linear, Slack, local,
+memory, or Codex works as before. See [Jira](./docs/trackers/jira.md),
+[Agents](./docs/agents/index.md), and [Configuration](./docs/reference/configuration.md).
+
+This changes the behavior of older workflows that omitted either selector. Add explicit
+`tracker.kind` and `agent.kind` values before upgrading when those workflows must remain on their
+previous tracker or agent.
 
 ## Workflow Prompt
 
@@ -152,7 +168,7 @@ pnpm build
 pnpm --filter @lorenz/cli pack --dry-run
 ```
 
-The CLI package includes the built binary. Workspace documentation, workflow fixtures, and test
+The CLI package includes both built binaries. Workspace documentation, workflow fixtures, and test
 evidence stay at the workspace root.
 
 ### Compatibility Contracts

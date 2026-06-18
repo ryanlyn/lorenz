@@ -18,6 +18,10 @@ query, normalization, and the `tracker_*` tool surface. They differ only in tran
 Pick `jira` when Lorenz can reach Jira Cloud directly. Pick `jira-mcp` when an MCP server already
 fronts Jira for you and you want Lorenz to call its tools instead of the REST API.
 
+`lorenz config` defaults to direct Jira. It writes `$JIRA_BASE_URL`, `$JIRA_EMAIL`, and
+`$JIRA_API_KEY` references, asks for project keys, and writes Jira-friendly active states
+`[To Do, In Progress]`.
+
 ## The agent + assignee gate
 
 This is the rule to internalize before anything else: Lorenz only picks up issues that are both
@@ -74,7 +78,7 @@ trackers:
 ```
 
 Use `jql:` instead of `project_keys:` to scope candidates with native JQL (set one, not both).
-`active_states` defaults to `[Todo, In Progress]`, so omit it unless you need other statuses.
+`active_states` defaults to `[To Do, In Progress]`, so omit it unless you need other statuses.
 
 Key reference for `jira`:
 
@@ -87,7 +91,7 @@ Key reference for `jira`:
 | `tracker.jql` | | none | Native JQL replacing the project-key scope. |
 | `tracker.issue_type` | alias `issue_type` -> `issueType` | `Task` | Issue type used when creating issues. |
 | `tracker.assignee` | | unset (`currentUser()`) | Assignee clause; `me` also means `currentUser()`. |
-| `tracker.active_states` | `settings.tracker.activeStates` | `["Todo", "In Progress"]` | Status names added as `status in (...)` to the candidate query. |
+| `tracker.active_states` | `settings.tracker.activeStates` | `["To Do", "In Progress"]` | Status names added as `status in (...)` to the candidate query. |
 
 `jira` requires `base_url`, `email`, and `api_key` at dispatch validation, plus at least one of
 `jql` or `project_keys`. Setting only `jql` or only `project_keys` is fine; setting neither is a

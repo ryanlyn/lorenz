@@ -142,8 +142,9 @@ optional YAML front matter (the config). See [workflows](../workflows.md) and
 
 ### 4.1 Discovery and parsing
 
-Path precedence: an explicit CLI/runtime path, else `WORKFLOW.md` in the process working directory.
-A missing file is a `missing_workflow_file` error.
+Path precedence: an explicit CLI/runtime path, else `LORENZ_WORKFLOW` (absolute as-is, relative to
+the process working directory), else `WORKFLOW.md` in that directory. A missing file is a
+`missing_workflow_file` error.
 
 Parsing: if the file starts with `---`, lines up to the next `---` parse as YAML front matter and the
 rest is the prompt body. Front matter must decode to a map; non-map YAML is an error. With no front
@@ -158,8 +159,8 @@ meaning.
 
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `tracker.kind` | required | Provider selector (`linear`, `jira`, `local`, `slack`, `memory`). |
-| `tracker.active_states` | `[Todo, In Progress]` | States eligible for dispatch. |
+| `tracker.kind` | `jira` | Provider selector (`linear`, `jira`, `jira-mcp`, `local`, `slack`, `memory`). |
+| `tracker.active_states` | Jira: `[To Do, In Progress]`; others: `[Todo, In Progress]` | States eligible for dispatch. |
 | `tracker.terminal_states` | `[Closed, Cancelled, Canceled, Duplicate, Done]` | Terminal states; trigger workspace cleanup. |
 | `tracker.dispatch.route_label_prefix` | `Lorenz:` | Prefix that turns a label into a route. |
 | `tracker.dispatch.accept_unrouted` | `true` | Accept issues with no route label. |
@@ -175,6 +176,7 @@ meaning.
 | `agent.max_turns` | `20` | Back-to-back turns per worker lifetime. |
 | `agent.max_retry_backoff_ms` | `300000` | Failure backoff cap (5 minutes). |
 | `agent.ensemble_size` | `1` | Default slots per issue. |
+| `agent.kind` | `claude` | Active agent record; explicit config wins. |
 | `agents.<kind>.executor` | `acp` | Executor selector for an agent kind. |
 | `agents.<kind>.bridge_command` | required for `acp` | The ACP bridge subprocess command. |
 | `agents.<kind>.usage_accounting` / `provider_config` / `strict_mcp_config` | executor-defined | ACP option keys. |
@@ -227,7 +229,7 @@ In-flight sessions are not restarted on reload. See
 [features/workflow-hot-reload](../features/workflow-hot-reload.md).
 
 Dispatch preflight validation runs at startup (failure fails startup) and before every dispatch
-cycle. It checks that the workflow loads and parses, `tracker.kind` is present and supported, the
+cycle. It checks that the workflow loads and parses, the effective `tracker.kind` is supported, the
 tracker credential resolves after `$` indirection, the tracker project identity is present when the
 provider requires it, and the configured executor command is non-empty.
 

@@ -19,10 +19,14 @@ import { registerLinearTracker } from "@lorenz/linear-tracker";
 import { registerLocalTracker } from "@lorenz/local-tracker";
 import { registerMemoryTracker } from "@lorenz/memory-tracker";
 import { ToolRegistry } from "@lorenz/tool-sdk";
-import { createTrackerToolProvider, TrackerRegistry } from "@lorenz/tracker-sdk";
+import {
+  createTrackerToolProvider,
+  TrackerRegistry,
+  type TrackerProvider,
+} from "@lorenz/tracker-sdk";
 import { assert, tempDir } from "@lorenz/test-utils";
 
-import type { DefaultSettingsOptions } from "@lorenz/config";
+import { defaultSettings, type DefaultSettingsOptions } from "@lorenz/config";
 
 // Private registries keep these tests hermetic: the process-wide default registries belong
 // to the composition root and stay untouched here.
@@ -69,7 +73,7 @@ test("config resolves env-backed Linear token and assignee", () => {
   assert.equal(settings.tracker.kind, "linear");
   assert.equal(settings.tracker.apiKey, "linear-token");
   assert.equal(settings.tracker.assignee, "worker@example.com");
-  assert.equal(settings.agent.kind, "codex");
+  assert.equal(settings.agent.kind, "claude");
   assert.equal(settings.agent.maxTurns, 20);
   assert.equal(settings.agent.ensembleSize, 1);
   assert.equal(settings.agents.codex?.executor, "acp");
@@ -291,6 +295,7 @@ test("jira-mcp tracker config parses MCP settings and tool aliases", () => {
   const options = jiraTrackerOptions(settings);
   assert.equal(options.mcp?.url, "http://127.0.0.1:5123/mcp");
   assert.equal(options.mcp?.token, "mcp-token");
+  assert.deepEqual(settings.tracker.activeStates, ["To Do", "In Progress"]);
   assert.equal(options.mcp?.tools?.readIssue, "jira_get");
   assert.equal(options.mcp?.tools?.updateStatus, "jira_transition");
   assert.equal(options.mcp?.tools?.listComments, "jira_comments");
@@ -300,15 +305,72 @@ test("jira-mcp tracker config parses MCP settings and tool aliases", () => {
 });
 
 test("config defaults and validation match expected defaults", () => {
+  const defaults = defaultSettings();
   const settings = parseConfig({}, {});
 
-  assert.equal(settings.tracker.kind, undefined);
+  assert.equal(defaults.tracker.kind, "jira");
+  assert.deepEqual(defaults.tracker.activeStates, ["To Do", "In Progress"]);
+  assert.equal(defaults.agent.kind, "claude");
+  assert.equal(settings.tracker.kind, "jira");
+  assert.deepEqual(settings.tracker.activeStates, ["To Do", "In Progress"]);
+  assert.equal(settings.agent.kind, "claude");
   assert.deepEqual(settings.agents.claude.options.providerConfig, {
     model: "claude-opus-4-6[1m]",
     permissions: { defaultMode: "dontAsk" },
   });
   assert.equal(settings.observability.renderIntervalMs, 16);
-  assert.throws(() => validateDispatchConfig(settings), /tracker.kind is required/);
+  assert.throws(
+    () => validateDispatchConfig(settings),
+    /tracker.base_url is required for jira tracker/,
+  );
+});
+
+test("explicit tracker and agent kinds override the defaults", () => {
+  const settings = parseConfig({
+    tracker: { kind: "memory" },
+    agent: { kind: "codex" },
+  });
+
+  assert.equal(settings.tracker.kind, "memory");
+  assert.deepEqual(settings.tracker.activeStates, ["Todo", "In Progress"]);
+  assert.equal(settings.agent.kind, "codex");
+});
+
+test("Jira active states do not depend on tracker registry initialization", () => {
+  const settings = parseConfigWith({}, {}, {}, new TrackerRegistry(), executors);
+
+  assert.equal(settings.tracker.kind, "jira");
+  assert.deepEqual(settings.tracker.activeStates, ["To Do", "In Progress"]);
+});
+
+test("tracker providers supply active-state defaults without overriding explicit config", () => {
+  const customTrackers = new TrackerRegistry();
+  const customProvider: TrackerProvider = {
+    kind: "custom",
+    defaultActiveStates: ["Queued", "Working"],
+    createClient: () => {
+      throw new Error("not under test");
+    },
+  };
+  customTrackers.register(customProvider);
+
+  const defaults = parseConfigWith(
+    { tracker: { kind: "custom" } },
+    {},
+    {},
+    customTrackers,
+    executors,
+  );
+  assert.deepEqual(defaults.tracker.activeStates, ["Queued", "Working"]);
+
+  const explicit = parseConfigWith(
+    { tracker: { kind: "custom", active_states: ["Ready"] } },
+    {},
+    {},
+    customTrackers,
+    executors,
+  );
+  assert.deepEqual(explicit.tracker.activeStates, ["Ready"]);
 });
 
 test("tracker.kind selects a named trackers bundle with its own provider", () => {
@@ -930,7 +992,7 @@ test("undocumented top-level compatibility keys are ignored", () => {
     hook_before_run: "echo legacy",
   });
 
-  assert.equal(settings.tracker.kind, undefined);
+  assert.equal(settings.tracker.kind, "jira");
   assert.equal(settings.agent.maxTurns, 20);
   assert.equal(settings.agents.codex.options.bridgeCommand, "codex-acp");
   assert.notEqual(settings.workspace.root, "/tmp/legacy-root");
@@ -1048,11 +1110,7 @@ test("config rejects empty strings and booleans for typed fields", () => {
     () => parseConfig({ observability: { dashboard_enabled: "" } }),
     /expected a boolean/,
   );
-  // A blank kind parses as "unset" and is rejected when dispatch is validated.
-  assert.throws(
-    () => validateDispatchConfig(parseConfig({ tracker: { kind: "" } })),
-    /tracker.kind is required/,
-  );
+  assert.throws(() => parseConfig({ tracker: { kind: "" } }), /tracker.kind must not be blank/);
 });
 
 test("stall_timeout_ms=0 is accepted as a valid value at top-level and in status overrides", () => {

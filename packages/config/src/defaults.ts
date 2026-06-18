@@ -17,8 +17,8 @@ export const defaultSettings = (options: DefaultSettingsOptions = {}): Settings 
   const workspaceRoot = joinPath(tmpdir, "lorenz_workspaces");
   return {
     tracker: {
-      kind: undefined,
-      activeStates: ["Todo", "In Progress"],
+      kind: "jira",
+      activeStates: ["To Do", "In Progress"],
       terminalStates: ["Closed", "Cancelled", "Canceled", "Duplicate", "Done"],
       dispatch: {
         acceptUnrouted: true,
@@ -36,7 +36,7 @@ export const defaultSettings = (options: DefaultSettingsOptions = {}): Settings 
     worker: { sshHosts: [], sshTimeoutMs: 60_000 },
     hooks: { timeoutMs: 60_000 },
     agent: {
-      kind: "codex",
+      kind: "claude",
       maxConcurrentAgents: 10,
       maxTurns: 20,
       maxRetryBackoffMs: 300_000,

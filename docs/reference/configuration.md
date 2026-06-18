@@ -4,19 +4,25 @@ The complete front-matter contract for `WORKFLOW.md`. This page is for integrato
 
 Lorenz reads a single file per repository: `WORKFLOW.md`. The file has two parts. The YAML front matter (between the first `---` and the next `---`) is the config covered here. The Markdown body below it is the agent prompt template, documented in [workflow-prompt.md](workflow-prompt.md). The runtime reloads this file before each poll, so config changes apply without a restart. See [workflow-hot-reload](../features/workflow-hot-reload.md) for the reload semantics.
 
+Run `lorenz config [workflowPath]` (or `lorenz-config [workflowPath]`) to generate this file
+interactively. The wizard and parser defaults are Jira and Claude. Explicit front-matter values
+always win.
+
 ```yaml
 ---
 tracker:
-  kind: linear          # selects the bundle
+  kind: jira            # parser default, written explicitly by the wizard
 trackers:
-  linear:
-    provider: linear    # names the implementation
-    api_key: $LINEAR_API_KEY
-    project_slugs: [backend]
+  jira:
+    provider: jira      # names the implementation
+    base_url: $JIRA_BASE_URL
+    email: $JIRA_EMAIL
+    api_key: $JIRA_API_KEY
+    project_keys: [ENG]
 polling:
   interval_ms: 30000
 agent:
-  kind: codex
+  kind: claude
   max_concurrent_agents: 4
 ---
 You are working on {{ issue.identifier }}: {{ issue.title }}.
@@ -42,6 +48,10 @@ Any string value can be a secret reference. Resolution runs at parse time.
 
 Order: an inline `$VAR` that resolves non-empty wins; otherwise the provider env fallback applies; then any `op://` value is read. A bare `op://` fallback resolves even when no inline value is set. A missing `op` binary throws `1Password CLI (op) is required ... cannot be managed by mise.`; a failed read throws `Failed to resolve 1Password reference: <ref>`. See [secret-resolution](../features/secret-resolution.md).
 
+The config wizard's credential prompts default to these references and write them without
+resolution. API-secret prompts require an environment reference and reject literal credentials so
+tokens are not stored in `WORKFLOW.md`.
+
 *Diagram placeholder: secret resolution decision tree (inline `$VAR` then provider env fallback then `op://` 1Password read), with the empty-string and bare-`op://` edge cases. Caption: how a single string value becomes a resolved secret.*
 
 ## Environment variables
@@ -66,16 +76,18 @@ These are read directly, outside the front matter.
 
 ## `tracker`
 
-The core tracker bundle. `tracker.kind` selects the provider. There is no default kind: `validateDispatchConfig` throws `tracker.kind is required` if it is unset, so this key is effectively mandatory. See [trackers](../trackers/index.md).
+The core tracker bundle. `tracker.kind` selects the provider and defaults to `jira`. Jira still
+requires its provider essentials before dispatch; use the wizard or configure them explicitly. See
+[trackers](../trackers/index.md).
 
 | Key | Type | Default | Meaning |
 | --- | --- | --- | --- |
-| `tracker.kind` | string | (none) | Selects the provider: `linear`, `jira`, `jira-mcp`, `local`, `slack`, `memory`, or `dispatch`. Required. |
+| `tracker.kind` | string | `jira` | Selects the provider: `linear`, `jira`, `jira-mcp`, `local`, `slack`, `memory`, or `dispatch`. An explicit value wins. |
 | `tracker.provider` | string | (none) | Provider name when `kind` names a bundle rather than a provider directly. |
 | `tracker.endpoint` | string | provider default | API base URL. Falls back to the provider's `defaultEndpoint`. |
 | `tracker.api_key` | string (secret) | (none) | API credential. Resolves `$VAR` / `op://` / provider env fallback. |
 | `tracker.assignee` | string | (none) | Restricts dispatch to issues assigned to this value. Per-provider semantics below. |
-| `tracker.active_states` | string[] | `[Todo, In Progress]` | States that make an issue a dispatch candidate. |
+| `tracker.active_states` | string[] | Jira: `[To Do, In Progress]`; others: `[Todo, In Progress]` | States that make an issue a dispatch candidate. |
 | `tracker.terminal_states` | string[] | `[Closed, Cancelled, Canceled, Duplicate, Done]` | Finished states that trigger workspace cleanup. |
 | `tracker.dispatch.accept_unrouted` | boolean | `true` | Dispatch issues that carry no route label. |
 | `tracker.dispatch.only_routes` | string[] \| null | `null` | Restrict dispatch to these routes; `null` means no restriction. |
@@ -85,7 +97,7 @@ The core tracker bundle. `tracker.kind` selects the provider. There is no defaul
 
 ### Bundle and flat shapes
 
-The recommended nested bundle shape names the implementation explicitly: `tracker.kind` selects the bundle and the matching `trackers.<bundle>.provider` names the provider (it does not default to the bundle name). The selector options under `tracker` merge into that bundle.
+The recommended nested bundle shape names the implementation explicitly: `tracker.kind` selects the bundle and the matching `trackers.<bundle>.provider` names the provider (it does not default to the bundle name). The selector options under `tracker` merge into that bundle. If `tracker.kind` is omitted, the selector is `jira`; any explicit selector replaces that default.
 
 The flat shape (`tracker.kind: <provider>` with provider options directly under `tracker`) is a terser shorthand that works when no matching `trackers.<name>` bundle is present. Unregistered kinds parse generically (options pass through unvalidated) and are rejected at dispatch validation.
 
@@ -273,7 +285,7 @@ Run-loop and concurrency settings, independent of which executor runs. See [agen
 
 | Key | Type | Default | Meaning |
 | --- | --- | --- | --- |
-| `agent.kind` | string | `codex` | Which `agents.<kind>` record runs. |
+| `agent.kind` | string | `claude` | Which `agents.<kind>` record runs. An explicit value wins. |
 | `agent.max_concurrent_agents` | integer | `10` | Global cap on concurrent agent runs. |
 | `agent.max_turns` | integer | `20` | Maximum turns per run. |
 | `agent.max_retry_backoff_ms` | integer | `300000` | Ceiling on retry backoff. |
@@ -296,7 +308,7 @@ Executor records keyed by kind, plus shared timeout defaults. The `agents` block
 | `agents.<kind>.provider_config` | record | (none) | Per-session config overlay. Claude receives a `settings.json` shape; everything else a `config.toml` shape. |
 | `agents.<kind>.strict_mcp_config` | boolean | `true` | Parsed and validated but not consumed at runtime today. |
 
-The built-in `codex` record uses `bridge_command: codex-acp`. The built-in `claude` record uses `bridge_command: claude-agent-acp` and a `provider_config` of `{model: claude-opus-4-6[1m], permissions: {defaultMode: dontAsk}}`. That model pin is `DEFAULT_CLAUDE_MODEL` (currently `claude-opus-4-6[1m]`; the authoritative value lives in `packages/config/src/defaults.ts`). The `bridge_command` is a single shell command string split on whitespace; there is no `bridge_args` key. See [codex](../agents/codex.md) and [claude](../agents/claude.md).
+The built-in `codex` record uses `bridge_command: codex-acp`. The default `claude` record uses `bridge_command: claude-agent-acp` and a `provider_config` of `{model: claude-opus-4-6[1m], permissions: {defaultMode: dontAsk}}`. That model pin is `DEFAULT_CLAUDE_MODEL` (currently `claude-opus-4-6[1m]`; the authoritative value lives in `packages/config/src/defaults.ts`). The `bridge_command` is a single shell command string split on whitespace; there is no `bridge_args` key. See [codex](../agents/codex.md) and [claude](../agents/claude.md).
 
 ### Legacy agent sugar
 

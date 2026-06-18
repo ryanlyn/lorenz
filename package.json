@@ -7,6 +7,7 @@
   "scripts": {
     "dev": "pnpm build && pnpm start",
     "start": "pnpm exec node apps/cli/dist/bin/cli.js",
+    "config": "pnpm exec node apps/cli/dist/bin/config.js",
     "start:once": "pnpm exec node apps/cli/dist/bin/cli.js --once",
     "runs": "pnpm exec node apps/cli/dist/bin/cli.js runs",
     "lint": "eslint --cache --cache-strategy content \"packages/**/*.{ts,tsx}\" \"extensions/**/*.{ts,tsx}\" \"apps/**/*.{ts,tsx}\" \"scripts/**/*.ts\" \"test/**/*.ts\"",
@@ -15,7 +16,7 @@
     "format:check": "prettier --cache --check \"packages/**/*.{ts,tsx}\" \"extensions/**/*.{ts,tsx}\" \"apps/**/*.{ts,tsx}\" \"scripts/**/*.{ts,json}\" \"test/**/*.ts\" \"README.md\" \"CONTRIBUTING.md\" \"*.json\" \"*.yaml\"",
     "typecheck": "tsc --build",
     "bundle:bridges": "pnpm --filter @agentclientprotocol/claude-agent-acp bundle",
-    "build": "pnpm bundle:bridges && pnpm dashboard:build && tsc --build && chmod +x apps/cli/dist/bin/cli.js",
+    "build": "pnpm bundle:bridges && pnpm dashboard:build && tsc --build && chmod +x apps/cli/dist/bin/cli.js apps/cli/dist/bin/config.js",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:live:codex": "LORENZ_TS_RUN_REAL_CODEX_E2E=1 vitest run test/live-codex.test.ts",

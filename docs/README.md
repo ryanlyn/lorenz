@@ -53,7 +53,7 @@ Pick the path that matches what you came to do.
 - [How it works](how-it-works.md) - concept-first end-to-end walkthrough
 - [Architecture](architecture.md) - layered package graph and extension axes
 - [Source map](source-map.md) - which package owns which file
-- [CLI](cli.md) - the daemon, `runs`, and `doctor`
+- [CLI](cli.md) - the config wizard, daemon, `runs`, and `doctor`
 - [Workflows](workflows.md) - the `WORKFLOW.md` config and prompt
 - [Dispatch](dispatch.md) - eligibility, ordering, routing, caps, retries
 - [Workspace](workspace.md) - per-issue directories, hooks, and cleanup

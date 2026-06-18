@@ -1,16 +1,49 @@
 # CLI reference
 
-The exact contract for the `lorenz` binary: every command, flag, argument, exit code, and environment variable it reads. This is the man-page for integrators and operators who need precise behavior. For a guided walkthrough, start at [cli.md](../cli.md).
+The exact contract for the shipped CLI entrypoints: every command, flag, argument, exit code, and environment variable they read. This is the man-page for integrators and operators who need precise behavior. For a guided walkthrough, start at [cli.md](../cli.md).
 
-The binary ships three commands:
+The package ships four `lorenz` commands and a direct wizard binary:
 
 | Command | Purpose |
 | --- | --- |
+| `lorenz config [flags] [workflowPath]` | Interactively generate a workflow. |
 | `lorenz [flags] [workflowPath]` | The default daemon: poll the tracker, dispatch agents, serve the dashboard and TUI. |
 | `lorenz runs [flags]` | Query run history from the observability HTTP API. |
 | `lorenz doctor [flags] [workflowPath]` | Validate a workflow and local prerequisites without dispatching. |
+| `lorenz-config [flags] [workflowPath]` | The same interactive wizard as `lorenz config`. |
 
-The `bin` shim at `apps/cli/bin/lorenz.js` imports the built `dist/bin/cli.js`. If the package has not been built, it prints `lorenz has not been built yet. Run pnpm build or mise run build first.` and exits 1.
+The shims at `apps/cli/bin/lorenz.js` and `apps/cli/bin/lorenz-config.js` import
+`dist/bin/cli.js` and `dist/bin/config.js`. If the package has not been built, the selected shim
+prints its command name plus `has not been built yet. Run pnpm build or mise run build first.` and
+exits `1`.
+
+## `lorenz config` / `lorenz-config`
+
+```sh
+lorenz config [-f|--force] [workflowPath]
+lorenz-config [-f|--force] [workflowPath]
+```
+
+Both entrypoints launch the same interactive wizard and produce the same workflow. When
+`workflowPath` is omitted, target resolution uses `LORENZ_WORKFLOW` (absolute as-is, relative
+against the current directory), then `./WORKFLOW.md`.
+
+The wizard defaults its tracker choice to Jira and its agent choice to Claude. Tracker choices are
+Jira, Linear, local, and Slack; agent choices are Claude and Codex. Provider prompts collect Jira
+project keys, Linear project slugs, local board path/id prefix, or Slack channel ids as applicable.
+Credential prompts default to `$JIRA_*`, `$LINEAR_API_KEY`, or `$SLACK_*` references, which are
+written without resolution. API secret prompts accept environment references only and reject
+literal values.
+
+| Argument / flag | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `workflowPath` | path | resolved | Workflow file to create; uses `LORENZ_WORKFLOW`, then `./WORKFLOW.md`. |
+| `-f`, `--force` | boolean | `false` | Replace an existing target. |
+
+Without `--force`, an existing target is left unchanged and the command exits `1`. The command
+requires stdin and stdout to be TTYs; otherwise it exits `1` with
+`Lorenz config requires an interactive terminal`. It validates the generated
+workflow before writing and prints the created path plus a matching `lorenz doctor` command.
 
 ## `lorenz` (daemon)
 

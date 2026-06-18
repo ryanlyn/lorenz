@@ -20,6 +20,7 @@ export const linearTrackerProvider: TrackerProvider = {
   },
   envFallbacks: { apiKey: "LINEAR_API_KEY", assignee: "LINEAR_ASSIGNEE" },
   defaultEndpoint: LINEAR_DEFAULT_ENDPOINT,
+  defaultActiveStates: ["Todo", "In Progress"],
   parseOptions(options, context) {
     rejectUnknownOptions(options, ["projectSlug", "projectSlugs", "projectLabels"], "linear");
     const projectSlugRaw = stringOption(options, "projectSlug");

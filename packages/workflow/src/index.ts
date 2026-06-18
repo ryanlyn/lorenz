@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import type { Stats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -142,6 +142,52 @@ export function parseWorkflowContent(content: string): {
   if (!isRecord(parsed))
     throw new Error("workflow_front_matter_not_a_map: front matter must be a map");
   return { config: parsed, body };
+}
+
+export function renderWorkflowContent(
+  config: Record<string, unknown>,
+  promptTemplate: string,
+): string {
+  const yamlText = YAML.stringify(config).trimEnd();
+  const body = promptTemplate.trim();
+  return `---\n${yamlText}\n---\n\n${body}${body === "" ? "" : "\n"}`;
+}
+
+export async function writeWorkflowFile(
+  filePath: string,
+  config: Record<string, unknown>,
+  promptTemplate: string,
+  options: { force?: boolean } = {},
+): Promise<string> {
+  const absolute = path.resolve(filePath);
+  await fs.mkdir(path.dirname(absolute), { recursive: true });
+
+  const tempPath = `${absolute}.${process.pid}.${randomBytes(8).toString("hex")}.tmp`;
+  try {
+    await fs.writeFile(tempPath, renderWorkflowContent(config, promptTemplate), {
+      encoding: "utf8",
+      flag: "wx",
+    });
+
+    if (options.force) {
+      await fs.rename(tempPath, absolute);
+    } else {
+      try {
+        await fs.link(tempPath, absolute);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "EEXIST") {
+          throw new Error(`workflow file already exists: ${absolute}; pass --force to replace it`, {
+            cause: error,
+          });
+        }
+        throw error;
+      }
+    }
+  } finally {
+    await fs.rm(tempPath, { force: true }).catch(() => {});
+  }
+
+  return absolute;
 }
 
 export function effectivePromptTemplate(promptTemplate: string): string {

@@ -332,6 +332,8 @@ async function doctorFixture(options: {
       "    - Todo",
       "  terminal_states:",
       "    - Done",
+      "agent:",
+      "  kind: codex",
       "agents:",
       "  codex:",
       `    bridge_command: ${JSON.stringify(bridgeCommand)}`,

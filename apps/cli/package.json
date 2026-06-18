@@ -4,7 +4,8 @@
   "private": true,
   "type": "module",
   "bin": {
-    "lorenz": "./bin/lorenz.js"
+    "lorenz": "./bin/lorenz.js",
+    "lorenz-config": "./bin/lorenz-config.js"
   },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -15,6 +16,7 @@
   "scripts": {
     "dev": "tsx src/bin/cli.ts",
     "start": "node dist/bin/cli.js",
+    "config": "node dist/bin/config.js",
     "start:once": "node dist/bin/cli.js --once",
     "runs": "node dist/bin/cli.js runs"
   },

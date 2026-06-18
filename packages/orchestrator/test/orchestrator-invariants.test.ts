@@ -1,6 +1,6 @@
 import { test, describe } from "vitest";
 import fc from "fast-check";
-import { defaultSettings, parseConfig } from "@lorenz/config";
+import { defaultSettings, parseConfig as parseWorkflowConfig } from "@lorenz/config";
 import { slotKey } from "@lorenz/dispatch";
 import type { Issue, RunningEntry, Settings } from "@lorenz/domain";
 import { assert, issueWith as makeIssue } from "@lorenz/test-utils";
@@ -34,9 +34,26 @@ function makeClock(baseMs: number) {
 
 function makeSettings(overrides: { maxConcurrent?: number; ensembleSize?: number } = {}): Settings {
   const s = defaultSettings();
+  s.tracker.kind = "memory";
+  s.tracker.activeStates = ["Todo", "In Progress"];
   if (overrides.maxConcurrent !== undefined) s.agent.maxConcurrentAgents = overrides.maxConcurrent;
   if (overrides.ensembleSize !== undefined) s.agent.ensembleSize = overrides.ensembleSize;
   return s;
+}
+
+function parseConfig(raw: Record<string, unknown> = {}) {
+  const tracker =
+    typeof raw.tracker === "object" && raw.tracker !== null
+      ? (raw.tracker as Record<string, unknown>)
+      : {};
+  return parseWorkflowConfig({
+    ...raw,
+    tracker: {
+      kind: "memory",
+      active_states: ["Todo", "In Progress"],
+      ...tracker,
+    },
+  });
 }
 
 // ============================================================================
@@ -127,7 +144,7 @@ describe("INVARIANT: When dispatch is evaluated, both global and per-state caps 
 
 describe("INVARIANT: When all worker hosts are at capacity, the system SHALL NOT dispatch new work", () => {
   test("worker host running count derived from running map entries per host", () => {
-    const settings = defaultSettings();
+    const settings = makeSettings();
     settings.agent.maxConcurrentAgents = 10;
     settings.worker.sshHosts = ["host-a", "host-b"];
     settings.worker.maxConcurrentAgentsPerHost = 2;
@@ -159,7 +176,7 @@ describe("INVARIANT: When all worker hosts are at capacity, the system SHALL NOT
 
 describe("INVARIANT: When multiple hosts are tied at the lowest load, the system SHALL select the first in config order", () => {
   test("host selection picks first host in config order on equal load tie", () => {
-    const settings = defaultSettings();
+    const settings = makeSettings();
     settings.agent.maxConcurrentAgents = 10;
     settings.worker.sshHosts = ["host-a", "host-b", "host-c"];
     settings.worker.maxConcurrentAgentsPerHost = 3;

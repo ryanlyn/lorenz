@@ -53,7 +53,7 @@ The contract these registries hold:
 - `register(x)` is idempotent for the same instance. Registering the same provider twice is a no-op.
 - `register(x)` throws when a different instance claims a key already taken, for example `tracker provider already registered for kind: <kind>`.
 - A blank key throws, with the message naming that registry's selector: `tracker provider kind must not be blank`, `worker driver kind must not be blank`, `tool provider name must not be blank`, or `agent executor selector must not be blank`.
-- `require(key)` throws a config-style error naming the known keys when the key is missing or unregistered, for example `tracker.kind is required` or `unsupported tracker.kind: <k> (known kinds: ...)`. The worker registry uses `worker_pool_driver_unavailable: <kind>` instead.
+- `require(key)` throws a config-style error naming the known keys when the key is missing or unregistered, for example `tracker.kind is required` or `unsupported tracker.kind: <k> (known kinds: ...)`. Normal workflow parsing supplies the default Jira kind; the missing-key case remains part of the registry API. The worker registry uses `worker_pool_driver_unavailable: <kind>` instead.
 - The key accessor returns a sorted array.
 
 Library code, the config parser, the MCP server, the agent runner, and the pool only read from these registries. They never hardcode a backend. A call site that needs isolation constructs its own registry and passes it explicitly, which is how the tests stay independent.

@@ -37,7 +37,16 @@ function fakeIssue(overrides: Partial<Issue> = {}): Issue {
 /** Settings using the default ACP executor (production path). */
 function fakeSettings(overrides: Partial<Settings> = {}): Settings {
   const base = defaultSettings();
-  return { ...base, ...overrides };
+  return {
+    ...base,
+    ...overrides,
+    tracker: {
+      ...base.tracker,
+      kind: "memory",
+      activeStates: ["Todo", "In Progress"],
+      ...overrides.tracker,
+    },
+  };
 }
 
 function fakeSession(overrides: Partial<AgentSession> = {}): AgentSession {

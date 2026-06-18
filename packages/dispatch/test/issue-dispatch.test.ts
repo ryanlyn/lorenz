@@ -212,6 +212,7 @@ test("empty route labels are routed labels but are not dispatchable as unrouted"
 
 test("dispatch block reasons classify capacity gates without hiding routing failures", () => {
   const settings = parseConfig({
+    tracker: { kind: "memory", active_states: ["Todo", "In Progress"] },
     agent: { max_concurrent_agents: 1 },
     status_overrides: { Todo: { agent: { max_concurrent_agents: 1 } } },
   });
@@ -229,6 +230,7 @@ test("dispatch block reasons classify capacity gates without hiding routing fail
   );
 
   const localSettings = parseConfig({
+    tracker: { kind: "memory", active_states: ["Todo", "In Progress"] },
     agent: { max_concurrent_agents: 5 },
     status_overrides: { Todo: { agent: { max_concurrent_agents: 1 } } },
   });

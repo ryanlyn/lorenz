@@ -1,5 +1,10 @@
 import { test } from "vitest";
-import { Orchestrator, normalizeIssue, parseConfig, slotKey } from "@lorenz/cli";
+import {
+  Orchestrator,
+  normalizeIssue,
+  parseConfig as parseWorkflowConfig,
+  slotKey,
+} from "@lorenz/cli";
 import type { ClockPort, Issue, RunningEntry } from "@lorenz/domain";
 import { assert } from "@lorenz/test-utils";
 
@@ -33,6 +38,21 @@ function fakeClock(initial = new Date()) {
     },
   };
   return clock;
+}
+
+function parseConfig(raw: Record<string, unknown> = {}) {
+  const tracker =
+    typeof raw.tracker === "object" && raw.tracker !== null
+      ? (raw.tracker as Record<string, unknown>)
+      : {};
+  return parseWorkflowConfig({
+    ...raw,
+    tracker: {
+      kind: "memory",
+      active_states: ["Todo", "In Progress"],
+      ...tracker,
+    },
+  });
 }
 
 // --- claim ---

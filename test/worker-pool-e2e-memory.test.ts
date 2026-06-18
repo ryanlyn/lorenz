@@ -215,7 +215,7 @@ async function setupHarness(
         stall_timeout_ms: 0,
       },
     },
-    agent: { max_turns: 1 },
+    agent: { kind: "codex", max_turns: 1 },
     logging: { log_file: path.join(root, "lorenz.log") },
   });
 

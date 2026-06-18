@@ -1,39 +1,93 @@
 # Getting started
 
-This page takes you from nothing installed to your first Lorenz run. It is for operators: you install the CLI, write a small `WORKFLOW.md`, and watch Lorenz poll a tracker and dispatch an agent. The fastest path needs no API key, so start there and add external trackers like Linear once you have seen a run work.
+This page takes you from nothing installed to your first Lorenz run. It is for operators: you install the CLI, generate a small `WORKFLOW.md`, and watch Lorenz poll a tracker and dispatch an agent. The onboarding wizard defaults to Jira and Claude; choose the local tracker when you want a credential-free first run.
 
 ## What you need
 
 - **Node 24 or newer.** The published package declares `engines.node` as `>=24`.
-- **One tracker configured.** Two get you running quickly:
-  - The local filesystem board (`kind: local`) needs no credentials. Issues are Markdown files on disk.
-  - Linear (`kind: linear`) needs `LINEAR_API_KEY`.
-- A coding agent on `PATH` for real runs: `codex` for Codex, or `claude` for Claude Code. You can skip the agent for a `--dry-run`, which evaluates candidates without dispatching.
+- **Tracker access.** The default is Jira. The local filesystem board (`kind: local`) needs no credentials; external providers need their documented environment or secret references.
+- A coding agent on `PATH` for real runs. Claude is the default; set `agent.kind: codex` to use Codex. You can skip the agent for a `--dry-run`, which evaluates candidates without dispatching.
 
 ## Install
 
-Lorenz publishes to npm as the unscoped `lorenz` package, and the `lorenz` binary is its entrypoint. You do not clone the repository or build from source. Run the latest published version straight from npm:
+Lorenz publishes to npm as the unscoped `lorenz` package. You do not clone the repository or build from source. Run the latest published version straight from npm:
 
 ```sh
-npx lorenz WORKFLOW.md
+npx lorenz config WORKFLOW.md
 ```
 
-Or install it globally and call `lorenz` directly:
+Or install it globally and call either wizard entrypoint:
 
 ```sh
 npm install -g lorenz
-lorenz WORKFLOW.md
+lorenz config WORKFLOW.md
+# Equivalent:
+lorenz-config WORKFLOW.md
 ```
 
-Pin a version with `npx lorenz@<version> WORKFLOW.md`. Every GitHub release also attaches a runnable tarball, so `npx https://github.com/ryanlyn/lorenz/releases/download/<tag>/<asset>.tgz WORKFLOW.md` runs a specific build without the npm registry. The package bundles the web dashboard and the ACP bridges, so one `npx lorenz` gives you the CLI, both dashboards, and the tracker and agent integrations.
+Pin a version with `npx lorenz@<version> config WORKFLOW.md`. Every GitHub release also attaches a runnable tarball. The package bundles the web dashboard and ACP bridges, so one install gives you the wizard, daemon, both dashboards, and the tracker and agent integrations.
 
 The examples below use `npx lorenz`. If you installed globally, drop the `npx` and call `lorenz` directly.
 
-## Fastest path: the local board, no API key
+## Generate a workflow
+
+Run the interactive wizard:
+
+```sh
+npx lorenz config WORKFLOW.md
+```
+
+With no path, it uses `LORENZ_WORKFLOW` and then `./WORKFLOW.md`, matching the daemon. Pressing Enter
+on the provider choices selects Jira and Claude. The wizard then asks only for the selected
+provider's required setup. Credential prompts default to environment references such as
+`$JIRA_API_KEY`; those references are written without being resolved, and API secret prompts reject
+literal values.
+
+An existing target is left untouched unless you pass `--force`. Use it only when you intentionally
+want to replace the file:
+
+```sh
+npx lorenz config --force WORKFLOW.md
+```
+
+The standalone `lorenz-config [workflowPath]` binary launches the same wizard with the same
+behavior. Both commands require an interactive terminal.
+
+Parser defaults match the wizard: omitted `tracker.kind` selects `jira`, and omitted `agent.kind`
+selects `claude`. Explicit values in `WORKFLOW.md` always win.
+
+The wizard configures the tracker and agent. Configure `workspace.root` and lifecycle hooks
+separately when agents should work in a cloned or otherwise prepared repository.
+
+## Default path: Jira and Claude
+
+Accept the Jira and Claude choices, enter one or more Jira project keys, and accept or edit the
+credential-reference prompts. Then export the referenced values in the shell that will run Lorenz.
+A typical environment uses
+`JIRA_BASE_URL`, `JIRA_EMAIL`, and `JIRA_API_KEY`; the generated workflow keeps references such as
+`$JIRA_API_KEY`, not the token itself.
+
+Jira issues must be assigned to the active owner and carry the `agent` label before they dispatch.
+Run a preflight before starting:
+
+```sh
+npx lorenz doctor WORKFLOW.md
+npx lorenz --once --dry-run --no-tui WORKFLOW.md
+```
+
+See [the Jira tracker](trackers/jira.md) for project/JQL scope and dispatch gating, and
+[Claude](agents/claude.md) for the default agent requirements.
+
+## Credential-free path: the local board
 
 The local tracker stores each issue as a single Markdown file named `<prefix><n>.md` (default prefix `BOARD-`) under a board directory (default `.lorenz/local`). No network, no credentials.
 
-### 1. Create a board issue
+### 1. Select the local tracker
+
+Run `npx lorenz config WORKFLOW.md`, choose `local`, and accept Claude or select Codex. The wizard's
+explicit selections override the Jira/Claude parser defaults.
+
+### 2. Create a board issue
 
 Make the board directory and a first issue. The format is YAML front matter (at minimum a `status`) followed by a `# Title` and a description:
 
@@ -50,9 +104,9 @@ Add a GET /healthz route that returns 200 and the build SHA.
 
 `status: Todo` is an active state, so Lorenz picks the issue up; `Done` and `Cancelled` are terminal. The file stem (`BOARD-1`) is the issue identifier.
 
-### 2. Write a minimal WORKFLOW.md
+### 3. Check the generated WORKFLOW.md
 
-A `WORKFLOW.md` has two parts: YAML front matter (config, between two `---` lines) and a Markdown body (the agent prompt, rendered as Liquid). `tracker.kind` selects the tracker bundle, and the matching `trackers.<name>` block carries its options; `provider` names the implementation:
+A `WORKFLOW.md` has two parts: YAML front matter (config, between two `---` lines) and a Markdown body (the agent prompt, rendered as Liquid). A compact local/Claude workflow looks like this:
 
 ```md
 ---
@@ -63,7 +117,7 @@ trackers:
     provider: local
     path: .lorenz/local
 agent:
-  kind: codex
+  kind: claude
 ---
 Fix the issue below.
 
@@ -73,7 +127,7 @@ Description: {{ issue.description }}
 
 Prompt variables are snake_case: `issue.title`, `issue.description`, `issue.identifier`, `issue.state`, `issue.branch_name`, and more. Leave the body blank and Lorenz falls back to a built-in default prompt, so a blank prompt is never truly empty.
 
-### 3. Do a safe first run
+### 4. Do a safe first run
 
 Before dispatching a real agent, poll once and inspect what Lorenz would pick up:
 
@@ -95,7 +149,8 @@ Lorenz polls the board, dispatches the agent on each active issue, and writes st
 
 ## Linear quickstart
 
-Once you have seen a local run, point Lorenz at Linear.
+To use Linear instead of the Jira default, select it in the wizard or set `tracker.kind: linear`
+explicitly.
 
 ### 1. Set credentials
 
@@ -119,7 +174,7 @@ trackers:
     project_slugs:
       - my-project
 agent:
-  kind: codex
+  kind: claude
 ---
 Fix the issue below.
 
@@ -161,7 +216,7 @@ With no path argument, the CLI reads `LORENZ_WORKFLOW` (absolute path used as-is
 
 ## See also
 
-- [CLI](cli.md) - every command and flag, exit codes, and the `runs` and `doctor` subcommands.
+- [CLI](cli.md) - every command and flag, including the config wizard, `runs`, and `doctor`.
 - [Workflows](workflows.md) - the full `WORKFLOW.md` format, front matter, and prompt body.
 - [Trackers](trackers/index.md) - the tracker backends and how dispatch reads from them.
 - [Local board](trackers/local.md) - the on-disk format, tools, and options behind `kind: local`.

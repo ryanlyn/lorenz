@@ -13,7 +13,7 @@ fixture all plug into the same contract.
 
 Two config keys select the backend. Both resolve to a registered `TrackerProvider.kind`.
 
-- `tracker.kind` is the selector. It names a bundle under `trackers.<name>`.
+- `tracker.kind` is the selector. It names a bundle under `trackers.<name>` and defaults to `jira`.
 - `trackers.<name>.provider` is the resolved provider kind for that bundle.
 
 The nested bundle form is the recommended shape. The flat form (provider options written directly
@@ -37,8 +37,8 @@ Name a bundle that does not exist under `trackers` and parsing throws
 `trackers.<name>.provider is required`.
 
 An unknown provider fails fast at startup. `TrackerRegistry.require` throws
-`unsupported tracker.kind: <kind> (known kinds: ...)`, and a missing kind throws
-`tracker.kind is required`. The supported set is whatever the composition root registered.
+`unsupported tracker.kind: <kind> (known kinds: ...)`. When no selector is written, the parser uses
+Jira; an explicit selector always wins. The supported set is whatever the composition root registered.
 `registerBuiltinBackends` in `apps/cli/src/daemon.ts` wires the kinds below.
 
 ## The supported kinds
@@ -75,8 +75,8 @@ into the backend directly.
 - `fetchIssuesByStates(states)` lists issues in given states, used for workspace cleanup against
   `tracker.terminal_states`.
 
-Two config keys are core, not provider-specific: `tracker.active_states` (default
-`['Todo', 'In Progress']`) gates which states poll as candidates, and `tracker.terminal_states`
+Two config keys are core, not provider-specific: `tracker.active_states` (Jira default
+`['To Do', 'In Progress']`; other built-ins `['Todo', 'In Progress']`) gates which states poll as candidates, and `tracker.terminal_states`
 (default `['Closed', 'Cancelled', 'Canceled', 'Duplicate', 'Done']`) marks finished states that
 trigger workspace cleanup. Comparison is case-insensitive and trims whitespace. See
 [dispatch.md](../dispatch.md) for the full eligibility chain that consumes these candidates.

@@ -37,6 +37,7 @@ export const jiraTrackerProvider: TrackerProvider = {
   kind: "jira",
   configAliases: { base_url: "baseUrl", project_keys: "projectKeys", issue_type: "issueType" },
   envFallbacks: { apiKey: "JIRA_API_KEY" },
+  defaultActiveStates: ["To Do", "In Progress"],
   parseOptions: (options, context) => parseJiraOptions("jira", options, context),
   validateDispatch(settings) {
     const options = jiraTrackerOptions(settings);
@@ -55,6 +56,7 @@ export const jiraTrackerProvider: TrackerProvider = {
 export const jiraMcpTrackerProvider: TrackerProvider = {
   kind: "jira-mcp",
   configAliases: { base_url: "baseUrl", project_keys: "projectKeys", issue_type: "issueType" },
+  defaultActiveStates: ["To Do", "In Progress"],
   parseOptions: (options, context) => parseJiraOptions("jira-mcp", options, context),
   validateDispatch(settings) {
     const options = jiraTrackerOptions(settings);

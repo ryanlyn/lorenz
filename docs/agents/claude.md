@@ -21,8 +21,8 @@ agents:
     bridge_command: claude-agent-acp
 ```
 
-`agent.kind` defaults to `codex`, so set it explicitly to run Claude. Everything else has a built-in
-default, shown below.
+`agent.kind` defaults to `claude`, so the selection block can be omitted. Keeping it explicit is
+useful when the workflow should be self-describing; any explicit agent kind wins over the default.
 
 ## The `agents.claude` record
 

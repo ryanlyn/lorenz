@@ -33,6 +33,7 @@ export type ReleaseManifest = {
   schemaVersion: 1;
   version: string;
   entrypoint: string;
+  entrypoints: Record<string, string>;
   dashboardDist: string;
   installCommand: string;
   packages: Array<{ name: string; path: string }>;
@@ -60,7 +61,11 @@ const execFileAsync = promisify(execFile);
 const scriptPath = fileURLToPath(import.meta.url);
 const defaultWorkspaceRoot = path.resolve(path.dirname(scriptPath), "..");
 const packageSearchRoots = ["apps", "packages", "extensions", "vendor"];
-const releaseEntrypoint = "bin/lorenz";
+const releaseEntrypoints = {
+  lorenz: "bin/lorenz",
+  "lorenz-config": "bin/lorenz-config",
+} as const;
+const releaseEntrypoint = releaseEntrypoints.lorenz;
 const dashboardDist = "apps/lorenz-dashboard/dist";
 const nativeDependencyNames = new Set(["better-sqlite3"]);
 
@@ -234,7 +239,15 @@ async function assertRequiredBuildOutputs(
 
     if (workspacePackage.name === "@lorenz/cli") {
       await requireFile(path.join(workspacePackage.absoluteDir, "dist", "bin", "cli.js"), missing);
+      await requireFile(
+        path.join(workspacePackage.absoluteDir, "dist", "bin", "config.js"),
+        missing,
+      );
       await requireFile(path.join(workspacePackage.absoluteDir, "bin", "lorenz.js"), missing);
+      await requireFile(
+        path.join(workspacePackage.absoluteDir, "bin", "lorenz-config.js"),
+        missing,
+      );
     }
 
     if (workspacePackage.name === "@agentclientprotocol/claude-agent-acp") {
@@ -294,6 +307,7 @@ async function stageWorkspacePackage(
       path.join(targetDir, "bin"),
     );
     await makeExecutable(path.join(targetDir, "bin", "lorenz.js"));
+    await makeExecutable(path.join(targetDir, "bin", "lorenz-config.js"));
   }
 
   await writeJson(
@@ -473,7 +487,8 @@ async function writeRootPackageJson(
     homepage: "https://github.com/ryanlyn/lorenz#readme",
     type: "module",
     bin: {
-      lorenz: `./${releaseEntrypoint}`,
+      lorenz: `./${releaseEntrypoints.lorenz}`,
+      "lorenz-config": `./${releaseEntrypoints["lorenz-config"]}`,
     },
     scripts: {
       start: "node ./node_modules/@lorenz/cli/dist/bin/cli.js",
@@ -489,7 +504,24 @@ async function writeRootPackageJson(
 }
 
 async function writeEntrypoint(releaseDir: string): Promise<void> {
-  const entrypointPath = path.join(releaseDir, releaseEntrypoint);
+  await Promise.all([
+    writeCliEntrypoint(releaseDir, releaseEntrypoints.lorenz, "cli.js", "lorenz"),
+    writeCliEntrypoint(
+      releaseDir,
+      releaseEntrypoints["lorenz-config"],
+      "config.js",
+      "lorenz-config",
+    ),
+  ]);
+}
+
+async function writeCliEntrypoint(
+  releaseDir: string,
+  relativePath: string,
+  builtEntrypoint: string,
+  commandName: string,
+): Promise<void> {
+  const entrypointPath = path.join(releaseDir, relativePath);
   await fs.mkdir(path.dirname(entrypointPath), { recursive: true });
   await fs.writeFile(
     entrypointPath,
@@ -499,11 +531,11 @@ async function writeEntrypoint(releaseDir: string): Promise<void> {
 // launcher works in both install layouts: the release directory used as the install root, and the
 // release hoisted under a parent node_modules (npx, npm install <tarball>, global install).
 try {
-  const cliUrl = new URL("./bin/cli.js", import.meta.resolve("@lorenz/cli"));
+  const cliUrl = new URL("./bin/${builtEntrypoint}", import.meta.resolve("@lorenz/cli"));
   await import(cliUrl.href);
 } catch (error) {
   if (error && typeof error === "object" && "code" in error && error.code === "ERR_MODULE_NOT_FOUND") {
-    console.error("lorenz could not resolve @lorenz/cli. Install the release dependencies with npm install --omit=dev.");
+    console.error("${commandName} could not resolve @lorenz/cli. Install the release dependencies with npm install --omit=dev.");
     process.exitCode = 1;
   } else {
     throw error;
@@ -567,6 +599,7 @@ function releaseManifest(
     schemaVersion: 1,
     version,
     entrypoint: releaseEntrypoint,
+    entrypoints: { ...releaseEntrypoints },
     dashboardDist,
     installCommand: "npm install --omit=dev",
     packages: packages.map((workspacePackage) => ({

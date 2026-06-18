@@ -32,6 +32,7 @@ export const slackTrackerProvider: TrackerProvider = {
   },
   envFallbacks: { apiKey: "SLACK_BOT_TOKEN" },
   defaultEndpoint: SLACK_DEFAULT_ENDPOINT,
+  defaultActiveStates: ["Todo", "In Progress"],
   parseOptions(options, context) {
     rejectUnknownOptions(
       options,

@@ -247,7 +247,7 @@ function parseTracker(
   assertTrackerBundleNames(trackersRaw);
 
   const selectorRecord = parseTrackerRecord(trackerRaw, "tracker");
-  const selectedBundleName = trackerKindValue(selectorRecord.kind) ?? defaults.kind;
+  const selectedBundleName = trackerKindValue(selectorRecord.kind, "tracker.kind") ?? defaults.kind;
   const trackerRecord =
     selectedBundleName === undefined
       ? legacyTrackerRecord(selectorRecord, selectedBundleName, trackersRaw)
@@ -283,7 +283,9 @@ function parseTracker(
     endpoint,
     apiKey,
     assignee,
-    activeStates: trackerRecord.activeStates ?? defaults.activeStates,
+    activeStates:
+      trackerRecord.activeStates ??
+      (provider?.defaultActiveStates ? [...provider.defaultActiveStates] : defaults.activeStates),
     terminalStates: trackerRecord.terminalStates ?? defaults.terminalStates,
     dispatch: parseDispatch(defaults.dispatch, trackerRecord.dispatch ?? {}),
     options,
@@ -318,7 +320,10 @@ function bundledTrackerRecord(
   selectedBundleName: string,
 ): TrackerRecordRaw {
   const selectedBundle = parseTrackerRecord(selectedBundleRaw, `trackers.${selectedBundleName}`);
-  const provider = trackerKindValue(selectedBundle.provider);
+  const provider = trackerKindValue(
+    selectedBundle.provider,
+    `trackers.${selectedBundleName}.provider`,
+  );
   if (provider === undefined) {
     throw new Error(`trackers.${selectedBundleName}.provider is required`);
   }
@@ -1003,10 +1008,11 @@ function parseWorkflowConfig(raw: Record<string, unknown>): WorkflowConfigRaw {
   throw new Error(configErrorMessage(result.error));
 }
 
-function trackerKindValue(value: string | null | undefined): string | undefined {
+function trackerKindValue(value: string | null | undefined, path: string): string | undefined {
   if (value === undefined || value === null) return undefined;
   const kind = value.trim();
-  return kind === "" ? undefined : kind;
+  if (kind === "") throw new Error(`${path} must not be blank`);
+  return kind;
 }
 
 function normalizeOnlyRoutes(routes: string[]): string[] {

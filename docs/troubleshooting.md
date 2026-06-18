@@ -17,7 +17,7 @@ Lorenz loads `WORKFLOW.md` before every poll. A load failure at startup aborts t
 | `workflow_parse_error: <msg>` | The front matter is not valid YAML. | Fix the YAML syntax `<msg>` points at. Tabs, bad indentation, and unquoted colons are common. |
 | `template_parse_error` (carries the template text) | The Markdown body is not a valid Liquid template. | Fix the Liquid syntax. The body is parsed with `strictVariables` and `strictFilters`, so an unknown variable or filter throws. |
 
-Front matter is delimited by a literal `---` on the first line and a closing `---`. If the first line is not exactly `---`, the whole file is treated as the prompt body with empty config, which usually surfaces later as a config validation failure (no `tracker.kind`), not a parse error.
+Front matter is delimited by a literal `---` on the first line and a closing `---`. If the first line is not exactly `---`, the whole file is treated as the prompt body with empty config. The parser then applies the Jira and Claude defaults, so validation usually fails on missing Jira provider essentials rather than on a missing selector.
 
 An empty or whitespace-only Markdown body is not an error: Lorenz falls back to a built-in default prompt template that renders `issue.identifier`, `issue.title`, and `issue.description`.
 
@@ -29,7 +29,7 @@ Config validation runs at startup and again as the per-reload dispatch hook. Run
 
 | Symptom | Cause | Fix |
 | --- | --- | --- |
-| `tracker.kind is required` | No tracker selected. There is no default tracker. | Set `tracker.kind` (for example `linear`, `local`, `jira`, `memory`). |
+| Jira reports a missing `base_url`, `email`, `api_key`, or project/JQL scope when no tracker was selected | `tracker.kind` defaults to `jira`, but Jira still needs its provider essentials. | Run `lorenz config`, supply Jira references and scope, or set `tracker.kind` explicitly to another provider such as `local`. |
 | `tracker.<key> is not supported` / `<section>.<key> is not supported` | An unknown key in a `.strict()` section. | Remove or rename the key. Provider-specific options pass through under the tracker/agents records; core sections reject unknowns. |
 | `tracker.api_key is required` (Linear) | Linear dispatch has no API key. | Set `tracker.api_key`, or export `LINEAR_API_KEY` (the provider's env fallback). |
 | Linear: exactly-one-of error on `project_slug` / `project_slugs` / `project_labels` | Zero or more than one project selector set. | Set exactly one. `project_slug` is the deprecated single form; `project_slugs` is the explicit list; `project_labels` discovers projects by label. |
@@ -39,11 +39,24 @@ Config validation runs at startup and again as the per-reload dispatch hook. Run
 
 When the same workflow validates here but fails in CI or a different shell, the difference is almost always an unset environment variable used by `$VAR` or an env fallback. See [Secrets won't resolve](#secrets-wont-resolve).
 
+## The config wizard will not overwrite a workflow
+
+`lorenz config [workflowPath]` and `lorenz-config [workflowPath]` run the same onboarding wizard.
+When the target exists, choose a different path or pass `--force` when replacement is intentional.
+
+Credential prompts default to environment references and the wizard writes them without resolving
+them. API secret prompts reject literal values. If the generated workflow later reports a missing
+credential, export the referenced variable in that shell.
+
+Both entrypoints require stdin and stdout to be interactive terminals. The error
+`Lorenz config requires an interactive terminal` means the wizard was launched from a pipe, CI job,
+or other non-TTY context.
+
 ## Nothing dispatches
 
 The daemon is polling, candidates come back, but no run starts. An issue is dispatched only when it passes every eligibility gate. Walk the gates in order.
 
-- **Wrong active states.** Candidates are polled by `tracker.active_states` (default `[Todo, In Progress]`). An issue sitting in any other state is never fetched. Move it to an active state or add that state to `active_states`.
+- **Wrong active states.** Candidates are polled by `tracker.active_states` (Jira default `[To Do, In Progress]`; other built-ins `[Todo, In Progress]`). An issue sitting in any other state is never fetched. Move it to an active state or add that state to `active_states`.
 - **Terminal state.** States in `tracker.terminal_states` (default `[Closed, Cancelled, Canceled, Duplicate, Done]`) are treated as done and trigger workspace cleanup, not dispatch.
 - **Not routed.** With `tracker.dispatch.only_routes` set, an issue must carry a matching route label (prefix `tracker.dispatch.route_label_prefix`, default `Lorenz:`). With `accept_unrouted: false` (default `true`), an unrouted issue is skipped. Reconciliation also stops an in-flight run whose issue becomes `unrouted`.
 - **Blocked.** An issue with open blockers is not dispatched, and an in-flight run is stopped during reconciliation with reason `blocked`. Blockers come from a `blockers` array or from `relations` entries whose type is `blocks`.
@@ -79,6 +92,7 @@ The ACP executor drives an external bridge subprocess. The built-in bridges are 
 | --- | --- | --- |
 | doctor `agent_bridge` warning, runs never start a session | The bridge command is not resolvable. | Ensure `codex-acp` / `claude-agent-acp` is on `PATH`, or set `agents.<kind>.bridge_command` to a resolvable command. Bare names resolve to the vendored workspace packages locally. |
 | doctor `agent_cli` warning | The underlying agent binary is missing. | Install `codex` / `claude`, or point `CODEX_PATH` / `CLAUDE_CODE_EXECUTABLE` at the binary. An explicit env value always wins. |
+| doctor checks Claude when Codex was expected | `agent.kind` now defaults to `claude`. | Set `agent.kind: codex`; explicit workflow config wins over the default. |
 | `agents.claude.bridge_args` rejected as unsupported | There is no `bridge_args` key. The bridge is a single shell command string. | Put any arguments inline in `agents.<kind>.bridge_command`. |
 | `claude.permission_mode` rejected | There is no `permission_mode` key. | Set permissions through `provider_config` (for example `permissions.defaultMode`). |
 
@@ -156,7 +170,7 @@ For a stuck or repeatedly-retrying run, use the `lorenz-debug` skill, which trac
 
 ## See also
 
-- [cli.md](cli.md) - the `lorenz`, `lorenz runs`, and `lorenz doctor` commands and flags.
+- [cli.md](cli.md) - the config wizard, daemon, `runs`, and `doctor` commands and flags.
 - [dispatch.md](dispatch.md) - the eligibility and routing rules behind "nothing dispatches".
 - [observability.md](observability.md) - the dashboards, the trace viewer, and the event stream.
 - [reference/events.md](reference/events.md) - the full catalog of runtime event names.
