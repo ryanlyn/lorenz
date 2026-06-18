@@ -29,6 +29,7 @@ const config: KnipConfig = {
       ],
     },
     "apps/cli": {
+      entry: ["src/bin/config.ts"],
       includeEntryExports: true,
     },
     "extensions/local-tracker": {
