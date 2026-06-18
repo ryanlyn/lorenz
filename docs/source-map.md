@@ -2,7 +2,7 @@
 
 Where things live in the Lorenz repo. This page is for contributors and extension authors who need to find the package that owns a behavior before reading code. It walks the directory tree layer by layer: the leaf/domain packages, the four extension SDKs, the engine, the in-tree extensions, the apps, and the vendored ACP bridges. For the central packages it names the two or three files you open first.
 
-Lorenz derives from OpenAI's Symphony and is a TypeScript monorepo. Three top-level trees hold the code: `packages/` (the SDKs and engine), `extensions/` (in-tree backend implementations), and `apps/` (shipped binaries and the dashboard SPA). Builder-facing contracts live in `packages/`; backend implementations live in `extensions/`. A dependency-cruiser rule named `extensions-depend-on-sdk-layers-only` blocks extensions from reaching into engine packages, so the only path from an extension into the engine is through an SDK.
+Lorenz is a TypeScript monorepo. Three top-level trees hold the code: `packages/` (the SDKs and engine), `extensions/` (in-tree backend implementations), and `apps/` (shipped binaries and the dashboard SPA). Builder-facing contracts live in `packages/`; backend implementations live in `extensions/`. A dependency-cruiser rule named `extensions-depend-on-sdk-layers-only` blocks extensions from reaching into engine packages, so the only path from an extension into the engine is through an SDK.
 
 ## Layering at a glance
 

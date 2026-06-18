@@ -54,8 +54,9 @@ executor owns. The built-in defaults:
 | `agents.codex.stall_timeout_ms` | `300000` | Inactivity cap, reset on every update from the bridge. `0` or below disables stall detection. |
 | `agents.codex.strict_mcp_config` | `true` | Parsed and validated, but not read at runtime today. Treat it as a no-op for now. |
 
-`bridge_command` must be non-blank; a blank value is rejected at config-parse time. The `options` bag
-rejects unknown keys, so a misspelled option fails fast rather than being silently ignored.
+`bridge_command` must be non-blank; a blank value is rejected at config-parse time. The `acp`
+executor rejects unknown option keys (see [index.md](./index.md)), so a misspelled option fails fast
+rather than being silently ignored.
 
 A minimal override that bumps the per-turn ceiling and points at a specific bridge invocation:
 
@@ -67,8 +68,7 @@ agents:
 ```
 
 `bridge_command` is a single shell command string. To pass arguments to the bridge, write them
-inline in that string; there is no separate args key. There is no separate `bridge_args` key; the
-`acp` executor rejects unknown options, so pass bridge flags through `bridge_command`.
+inline in that string; there is no separate `bridge_args` key.
 
 ### The legacy `codex:` block
 
@@ -119,10 +119,8 @@ sandbox tradeoffs see [security.md](../security.md).
 
 ## Provider config
 
-`provider_config` is a free-form map delivered to the Codex bridge as a `config.toml`-shaped
-overlay. The bridge reads it from the session request's `_meta["symphony/config"]` on
-`session/new`, `session/resume`, and `session/load`, and merges it over its own config. Use it to set
-anything the Codex CLI accepts in `config.toml`, keyed the same way:
+For Codex, `provider_config` is a `config.toml`-shaped overlay: it sets anything the Codex CLI
+accepts in `config.toml`, keyed the same way, and the bridge merges it over its own config.
 
 ```yaml
 agents:
@@ -132,15 +130,16 @@ agents:
       model_reasoning_effort: high
 ```
 
-When `provider_config` is absent, Lorenz omits `_meta` from the session request entirely and the
-bridge falls back to its own defaults. Bridge family picks the overlay format: the `config.toml`
-shape applies to Codex; the `claude-agent-acp` bridge consumes a `settings.json`-shaped overlay
-instead (see [claude.md](./claude.md)).
+The general `_meta` overlay mechanism (how the overlay reaches the bridge, and what absent
+`provider_config` means) lives in [acp-bridges.md](./acp-bridges.md). The `config.toml` shape is the
+Codex-specific part; the `claude-agent-acp` bridge consumes a `settings.json`-shaped overlay instead
+(see [claude.md](./claude.md)).
 
 ## Usage accounting
 
-Lorenz tracks token usage per run and always reports session-cumulative totals to the orchestrator,
-regardless of how the bridge counts. The `codex-acp` bridge feeds two signals into that pipeline:
+The session-cumulative usage pipeline (how per-call counts reconcile against `PromptResponse.usage`,
+and what `per-turn` vs `cumulative` mean) lives in [acp-bridges.md](./acp-bridges.md). What is
+specific to Codex is the pair of signals the `codex-acp` bridge feeds into it:
 
 - `_meta["symphony/callUsage"]`: per-call usage buckets, accumulated additively across a turn and
   deduplicated by sequence number. Input tokens sum the prompt, cached-read, and cached-write
@@ -149,15 +148,8 @@ regardless of how the bridge counts. The `codex-acp` bridge feeds two signals in
   Lorenz uses it as a monotonic floor (baseline-subtracted) so the reported total never undercounts
   what the bridge reports. Codex is the bridge that provides this floor; Claude does not.
 
-At turn end, Lorenz reconciles these against the bridge's `PromptResponse.usage` and applies it as a
-maximum floor. With `usage_accounting: per-turn` (the Codex default), each turn's reported usage is a
-delta added to the running totals; with `cumulative`, it is the session-to-date total. Either way the
-orchestrator receives cumulative numbers (`usageKind: "cumulative"`).
-
 If you leave `usage_accounting` unset, Lorenz infers `per-turn` for a bridge command matching
 `codex-acp`, and `cumulative` for anything else. The built-in record sets `per-turn` explicitly.
-
-For the full usage pipeline across both bridges, see [acp-bridges.md](./acp-bridges.md).
 
 ## See also
 - [ACP bridges](./acp-bridges.md) - the turn lifecycle, timeouts, and usage pipeline shared by every ACP agent

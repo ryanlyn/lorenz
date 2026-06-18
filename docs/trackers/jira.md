@@ -37,9 +37,9 @@ The full candidate query is built in this order:
 
 1. Base scope: `(<jql>)` if `tracker.jql` is set, else `project in (<keys>)` from `project_keys`,
    else empty.
-2. Active states: `status in (<active_states>)` when `tracker.active_states` is non-empty. The
-   global default is `["Todo", "In Progress"]`, so candidates are gated to those states unless you
-   override `active_states`.
+2. Active states: `status in (<active_states>)` when `tracker.active_states` is non-empty, gating
+   candidates to those statuses. See the [configuration reference](../reference/configuration.md)
+   for the active/terminal defaults.
 3. Assignee clause (see below).
 4. `labels = "agent"`.
 
@@ -64,15 +64,17 @@ loop.
 ```yaml
 tracker:
   kind: jira
-  base_url: https://example.atlassian.net
-  email: bot@example.com
-  api_key: $JIRA_API_KEY
-  project_keys: [ENG, PLAT]
-  jql: project = ENG AND component = backend
-  issue_type: Task
-  assignee: me
-  active_states: [To Do, In Progress]
+trackers:
+  jira:
+    provider: jira
+    base_url: https://example.atlassian.net
+    email: bot@example.com
+    api_key: $JIRA_API_KEY
+    project_keys: [ENG, PLAT]
 ```
+
+Use `jql:` instead of `project_keys:` to scope candidates with native JQL (set one, not both).
+`active_states` defaults to `[Todo, In Progress]`, so omit it unless you need other statuses.
 
 Key reference for `jira`:
 
@@ -96,24 +98,16 @@ config error.
 ```yaml
 tracker:
   kind: jira-mcp
-  project_keys: [ENG]
-  jql: project = ENG
-  assignee: me
-  active_states: [To Do, In Progress]
-  mcp:
-    url: https://mcp.example.com/jira
-    token: $JIRA_MCP_TOKEN
-    headers:
-      X-Org-Id: acme
-    tools:
-      search: atlassian_search
-      read_issue: atlassian_get_issue
-      update_status: atlassian_transition_issue
-      list_comments: atlassian_get_comments
-      comment: atlassian_add_comment
-      update_comment: atlassian_update_comment
-      create_issue: atlassian_create_issue
+trackers:
+  jira-mcp:
+    provider: jira-mcp
+    project_keys: [ENG]
+    mcp:
+      url: https://mcp.example.com/jira
 ```
+
+Scope with either `project_keys:` or `jql:` (set one). Supply `mcp.token`, `mcp.headers`, and
+`mcp.tools` overrides when your server needs them - see the tool-name map below.
 
 Key reference for `jira-mcp`:
 
@@ -157,25 +151,13 @@ possible.
 
 ## The `tracker_*` tools
 
-Both kinds expose the same provider-neutral tool pack, named `tracker`. The Jira extension ships no
-pack of its own: agent tools come from the neutral pack defined in `@lorenz/tracker-sdk`. The seven
-tools map to client methods:
-
-| Tool | Backing operation |
-| --- | --- |
-| `tracker_read_issue` | `readIssue` |
-| `tracker_query` | `queryIssues` (routes to search / by-ids / by-states / candidates) |
-| `tracker_update_status` | `updateStatus` |
-| `tracker_list_comments` | `listComments` |
-| `tracker_comment` | `addComment` |
-| `tracker_update_comment` | `updateComment` |
-| `tracker_create_issue` | `createIssue` |
+Both kinds expose the same provider-neutral tool pack from `@lorenz/tracker-sdk`; the Jira extension
+ships no pack of its own. See the [trackers overview](index.md) for the shared read surface and
+[reference/tracker-tools](../reference/tracker-tools.md) for the seven tools and their contract.
 
 `tracker_query` routes by its arguments: `issueIds` fetches by id, a `query` or `jql` string runs a
-native search, `states` fetches by status, and otherwise it returns the candidate set. The candidate
-JQL gates on `active_states`, which defaults to `["Todo", "In Progress"]`, so the candidate set is
-scoped to those states unless you override it. The full tool contract lives in
-[reference/tracker-tools](../reference/tracker-tools.md).
+native search, `states` fetches by status, and otherwise it returns the candidate set scoped by
+`active_states`.
 
 ### Workpad comments
 
@@ -211,8 +193,9 @@ omitted otherwise.
 
 Both kinds use a 30-second request timeout (`JIRA_REQUEST_TIMEOUT_MS = 30_000`). A non-2xx REST
 response throws `jira api status <n>: <body>` with the body truncated to 500 characters. When every
-MCP argument-shape variant fails, the call throws `jira-mcp <op> failed: <joined failures>`. Tool
-failures surface to the agent as data (`isError: true`), not as a transport error. See
+MCP argument-shape variant fails, the call throws `jira-mcp <op> failed: <joined failures>`. These
+surface to the agent as tool data, never thrown - see
+[reference/tracker-tools](../reference/tracker-tools.md). See
 [troubleshooting](../troubleshooting.md) for recovery.
 
 ## See also

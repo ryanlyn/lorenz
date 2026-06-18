@@ -12,26 +12,11 @@ Three things partition the work:
 - **Route labels.** A label like `Lorenz:backend` tags an issue for a named route. An instance accepts only the routes it is configured for.
 - **`accept_unrouted`.** Decides what happens to issues that carry no route label at all.
 
-These three combine into one predicate, `routedToThisWorker` in `packages/dispatch/src/index.ts`, evaluated on every candidate issue during each poll.
+These three combine into one predicate, `routedToThisWorker`, evaluated on every candidate issue during each poll: the assignee gate first, then route-label parsing, then the `accept_unrouted` and `only_routes` branches. For that predicate line by line and its decision diagram, see [../dispatch.md](../dispatch.md).
 
 ## The routing decision
 
-`routedToThisWorker` returns `true` when the issue belongs to this instance. It reads three keys under `tracker.dispatch` plus the assignee gate.
-
-<p align="center"><img src="../assets/diagrams/routing-decision.svg" alt="routing decision diagram" width="720" style="width:100%;max-width:720px;height:auto" /></p>
-*`routedToThisWorker`: the assignee gate first, then route-label parsing, then the `accept_unrouted` and `only_routes` branches.*
-
-The branches, in evaluation order:
-
-1. **Assignee.** If `issue.assignedToWorker === false`, return `false`. The issue is assigned to someone other than this instance's `tracker.assignee`, so it is skipped before any label check.
-2. **Parse route labels.** A route label is any issue label whose lowercased text starts with `tracker.dispatch.route_label_prefix`. The default prefix is `Lorenz:`, trailing colon included. The match is case-insensitive. `routeNames` strips the prefix, trims and lowercases the remainder, and drops any route that is empty after stripping.
-3. **No route labels at all.** Return `tracker.dispatch.accept_unrouted` (default `true`). With the default, an unlabeled issue is accepted by every instance, so unlabeled work fans out to whoever has capacity.
-4. **A route label is present but nothing parses** (every prefixed label is whitespace-only after stripping). Return `false`. The issue is treated as routed-but-invalid.
-5. **`only_routes === null`** (the default). Accept any routed issue.
-6. **`only_routes === []`**. Reject every routed issue.
-7. **`only_routes` is a non-empty list.** Accept only when the issue's normalized routes intersect the normalized `only_routes` allowlist.
-
-The `only_routes` values are normalized the same way route labels are (trim, lowercase), so `["Backend"]` and `["backend"]` match the same label.
+Route labels and `only_routes` are normalized the same way (trim, lowercase), so a label `Lorenz:Backend` and an allowlist entry `["backend"]` match. The three keys that turn routing on, all under `tracker.dispatch`:
 
 ### The three dispatch keys
 

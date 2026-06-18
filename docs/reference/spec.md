@@ -7,8 +7,7 @@ exhaustive behavior without reading the source. It states what the TypeScript im
 repository actually does; where a guarantee is grounded in a behavioral invariant, the EARS wording
 is preserved.
 
-Lorenz derives from OpenAI's Symphony. The original `SPEC.md` at the repository root is a
-language-agnostic draft that predates the current extension architecture; this page supersedes it
+The original `SPEC.md` at the repository root is a language-agnostic draft that predates the current extension architecture; this page supersedes it
 and corrects the points where the draft drifted from code. Sections marked **Roadmap** describe
 behavior that is specified but not shipped.
 

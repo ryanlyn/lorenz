@@ -2,8 +2,8 @@
 
 This page is for operators configuring which coding agent Lorenz runs and how. It covers two
 independent axes - the agent *kind* (a config record) and the *executor* (the mechanism that runs a
-turn) - plus the shared knobs that bound every run. Lorenz derives from OpenAI's Symphony; the agent
-layer is where a dispatched issue turns into a live coding session.
+turn) - plus the shared knobs that bound every run. The agent layer is where a dispatched issue turns into
+a live coding session.
 
 ## Two axes: kind and executor
 

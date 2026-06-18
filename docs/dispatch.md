@@ -106,22 +106,13 @@ A retry's deadline carries a monotonic `monotonicDeadlineMs` (the authoritative 
 
 ## The dispatch-slot lifecycle
 
-A single slot (one `${issueId}:${slotIndex}` pair) moves through a small state machine. The orchestrator owns these transitions; the dispatch package answers only whether a transition is allowed.
+A single slot (one `${issueId}:${slotIndex}` pair) moves through a small state machine - unclaimed to claimed/reserved to running to finished, then a continuation or failure retry back to eligible. The dispatch package answers only whether a transition is allowed; the orchestrator owns the transitions, the ABA-token reservation guard, the two-phase reserve/bind pool path, and `preferredSlotIndex` slot affinity across retries. See the slot-lifecycle state machine in [agent-orchestrator.md](agent-orchestrator.md).
 
-<p align="center"><img src="assets/diagrams/slot-state-machine.svg" alt="slot state machine diagram" width="720" style="width:100%;max-width:720px;height:auto" /></p>
-*One dispatch slot's lifecycle: unclaimed to claimed/reserved to running to finished, then a continuation or failure retry back to eligible, with the cancel and expiry-sweep branches.*
-
-- **Unclaimed.** No entry for the slot key. Eligible to be claimed.
-- **Claimed / reserved.** On a static or local path, `claim` mints a running entry immediately. On a pool-governed path, the claim is a host-less reservation that counts against capacity while the coordinator acquires a worker. A reservation carries an ABA token: a late bind or cancel for a stale token is a no-op, and a reservation that outlives its defensive expiry is swept back to unclaimed.
-- **Running.** A bound host and a live agent run. Agent updates flow into the snapshot.
-- **Finished.** The run exits. The orchestrator removes the running entry and always schedules a retry: continuation after a clean exit, failure after a fault.
-- **Eligible again.** Once the retry deadline passes, the slot is eligible. Retries honor `preferredSlotIndex` via `firstUnclaimedSlot`, so a retried run reuses the same slot index when it is free, keeping ensemble slot affinity stable across attempts.
-
-A capacity miss during the reserve window cancels the reservation without applying backoff and restores the consumed retry entry, so the attempt counter and slot affinity survive a transient capacity shortfall.
+One detail that stays here because it is dispatch math: a capacity miss during the reserve window cancels the reservation without applying backoff and restores the consumed retry entry, so the attempt counter and slot affinity survive a transient capacity shortfall.
 
 ## Reconciliation
 
-Starting work is half the loop; reconciliation stops work that should no longer run. On each poll, before dispatching, the runtime refetches tracked issues and re-checks `issueIsActive`, `routedToThisWorker`, and `issueHasOpenBlockers` per issue. An issue that still passes is refreshed in place. An issue that has gone terminal, unrouted, blocked, or inactive has its run stopped; terminal issues also get their workspace removed. A failed refetch keeps everything running and retries next tick. The stop-reason classifier returns one of `terminal`, `unrouted`, `blocked`, or `inactive`. The full reconciliation pass and the poll-tick order live in [agent-orchestrator.md](agent-orchestrator.md).
+Starting work is half the loop; reconciliation stops work that should no longer run by re-checking `issueIsActive`, `routedToThisWorker`, and `issueHasOpenBlockers` per tracked issue and stopping any run that has gone terminal, unrouted, blocked, or inactive. The full reconciliation pass, the stop-reason classifier, and the poll-tick order live in [agent-orchestrator.md](agent-orchestrator.md).
 
 ## Pure versus stateful split
 

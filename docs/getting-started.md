@@ -1,62 +1,67 @@
 # Getting started
 
-This page takes you from a fresh checkout to a first Lorenz run. It is for operators: you install the toolchain, write a small `WORKFLOW.md`, and watch Lorenz poll a tracker and dispatch an agent. The fastest path needs no API key, so start there and add Linear once you have seen a run work.
-
-Lorenz derives from OpenAI's Symphony. It reads issues from a tracker, runs a coding agent against each one in an isolated workspace, and reports progress back to the tracker.
+This page takes you from nothing installed to your first Lorenz run. It is for operators: you install the CLI, write a small `WORKFLOW.md`, and watch Lorenz poll a tracker and dispatch an agent. The fastest path needs no API key, so start there and add external trackers like Linear once you have seen a run work.
 
 ## What you need
 
-- Node 24 and pnpm 9. The repository pins both in `mise.toml`.
-- One tracker configured. Two get you running quickly:
+- **Node 24 or newer.** The published package declares `engines.node` as `>=24`.
+- **One tracker configured.** Two get you running quickly:
   - The local filesystem board (`kind: local`) needs no credentials. Issues are Markdown files on disk.
   - Linear (`kind: linear`) needs `LINEAR_API_KEY`.
-- A coding agent on `PATH` for real runs: `codex` for Codex, or a Claude ACP bridge (`claude-agent-acp`) for Claude. You can skip the agent for a `--dry-run`, which evaluates candidates without dispatching.
+- A coding agent on `PATH` for real runs: `codex` for Codex, or `claude` for Claude Code. You can skip the agent for a `--dry-run`, which evaluates candidates without dispatching.
 
 ## Install
 
-[mise](https://mise.jdx.dev/) manages the toolchain. From the repository root:
+Lorenz publishes to npm as the unscoped `lorenz` package, and the `lorenz` binary is its entrypoint. You do not clone the repository or build from source. Run the latest published version straight from npm:
 
 ```sh
-mise trust
-mise install
-pnpm install
+npx lorenz WORKFLOW.md
 ```
 
-Then build the CLI:
+Or install it globally and call `lorenz` directly:
 
 ```sh
-pnpm build
+npm install -g lorenz
+lorenz WORKFLOW.md
 ```
 
-`pnpm build` produces the `lorenz` binary. If you run `lorenz` before building, it prints `lorenz has not been built yet. Run pnpm build or mise run build first.`
+Pin a version with `npx lorenz@<version> WORKFLOW.md`. Every GitHub release also attaches a runnable tarball, so `npx https://github.com/ryanlyn/lorenz/releases/download/<tag>/<asset>.tgz WORKFLOW.md` runs a specific build without the npm registry. The package bundles the web dashboard and the ACP bridges, so one `npx lorenz` gives you the CLI, both dashboards, and the tracker and agent integrations.
+
+The examples below use `npx lorenz`. If you installed globally, drop the `npx` and call `lorenz` directly.
 
 ## Fastest path: the local board, no API key
 
 The local tracker stores each issue as a single Markdown file named `<prefix><n>.md` (default prefix `BOARD-`) under a board directory (default `.lorenz/local`). No network, no credentials.
 
-### 1. Seed a demo board
+### 1. Create a board issue
 
-The seeder writes three sample issues (two in `Todo`, one in `In Progress`) through the same `BoardStore` the running tracker uses, so the ids and on-disk format match:
+Make the board directory and a first issue. The format is YAML front matter (at minimum a `status`) followed by a `# Title` and a description:
 
-```sh
-npx tsx sandbox/seed-local.ts
+```md
+<!-- .lorenz/local/BOARD-1.md -->
+---
+status: Todo
+---
+
+# Add a healthcheck endpoint
+
+Add a GET /healthz route that returns 200 and the build SHA.
 ```
 
-Seed a different directory or fewer issues by passing arguments:
-
-```sh
-npx tsx sandbox/seed-local.ts /tmp/demo-board 2
-```
+`status: Todo` is an active state, so Lorenz picks the issue up; `Done` and `Cancelled` are terminal. The file stem (`BOARD-1`) is the issue identifier.
 
 ### 2. Write a minimal WORKFLOW.md
 
-A `WORKFLOW.md` has two parts: YAML front matter (config, between two `---` lines) and a Markdown body (the agent prompt, rendered as Liquid). Point `tracker.path` at the directory you seeded.
+A `WORKFLOW.md` has two parts: YAML front matter (config, between two `---` lines) and a Markdown body (the agent prompt, rendered as Liquid). `tracker.kind` selects the tracker bundle, and the matching `trackers.<name>` block carries its options; `provider` names the implementation:
 
 ```md
 ---
 tracker:
   kind: local
-  path: .lorenz/local
+trackers:
+  local:
+    provider: local
+    path: .lorenz/local
 agent:
   kind: codex
 ---
@@ -73,7 +78,7 @@ Prompt variables are snake_case: `issue.title`, `issue.description`, `issue.iden
 Before dispatching a real agent, poll once and inspect what Lorenz would pick up:
 
 ```sh
-lorenz --once --dry-run --no-tui WORKFLOW.md
+npx lorenz --once --dry-run --no-tui WORKFLOW.md
 ```
 
 - `--once` polls a single time and exits instead of looping.
@@ -83,12 +88,10 @@ lorenz --once --dry-run --no-tui WORKFLOW.md
 When the output looks right, run for real:
 
 ```sh
-lorenz WORKFLOW.md
+npx lorenz WORKFLOW.md
 ```
 
-Lorenz polls the board, dispatches the agent on each `Todo` / `In Progress` issue, and writes status and comments back into the `BOARD-<n>.md` files. The agent updates issues through five tools: `local_update_status`, `local_comment`, `local_create_issue`, `local_read_issue`, and `local_query`.
-
-The read path (polling) and the agent write path resolve the board directory the same way, so `tracker.path` must point at the directory you seeded. If they diverge, agent writes never reach the polled directory and the run loop re-dispatches forever.
+Lorenz polls the board, dispatches the agent on each active issue, and writes status and comments back into the `BOARD-<n>.md` files through the `local_*` tools. The board directory the runtime polls and the directory the agent writes to are the same, so keep `trackers.local.path` pointing at the directory that holds your issue files. See [the local board](trackers/local.md) for the file format, the id prefix rules, and the tools.
 
 ## Linear quickstart
 
@@ -100,18 +103,21 @@ Once you have seen a local run, point Lorenz at Linear.
 export LINEAR_API_KEY=lin_api_...
 ```
 
-`tracker.api_key` falls back to `LINEAR_API_KEY`, and `tracker.assignee` falls back to `LINEAR_ASSIGNEE`. The literal assignee `me` resolves to the API key's own user.
+`trackers.linear.api_key` falls back to `LINEAR_API_KEY`, and `trackers.linear.assignee` falls back to `LINEAR_ASSIGNEE`. The literal assignee `me` resolves to the API key's own user.
 
 ### 2. Write the workflow
 
-Linear needs exactly one of `project_slug`, `project_slugs`, or `project_labels`:
+Linear needs exactly one of `project_slugs`, `project_labels`, or `project_slug`. Prefer `project_slugs` (a list); `project_slug` (singular) is the deprecated single-slug form:
 
 ```md
 ---
 tracker:
   kind: linear
-  project_slugs:
-    - my-project
+trackers:
+  linear:
+    provider: linear
+    project_slugs:
+      - my-project
 agent:
   kind: codex
 ---
@@ -126,10 +132,10 @@ The default endpoint is `https://api.linear.app/graphql`. Lorenz polls issues in
 ### 3. Run
 
 ```sh
-lorenz --dry-run --no-tui WORKFLOW.md
+npx lorenz --dry-run --no-tui WORKFLOW.md
 ```
 
-If the credentials and project resolve, drop the flags to run live. `lorenz doctor WORKFLOW.md` validates the workflow, the dispatch config, and that the agent CLI is discoverable before you start.
+If the credentials and project resolve, drop the flags to run live. `npx lorenz doctor WORKFLOW.md` validates the workflow, the dispatch config, and that the agent CLI is discoverable before you start.
 
 ## What a run looks like
 
@@ -146,7 +152,7 @@ Both dashboards run by default. The web dashboard listens on port `4040` (overri
 Query completed runs from a separate shell with `lorenz runs` (it reads the same observability API):
 
 ```sh
-lorenz runs --failed --port 4040
+npx lorenz runs --failed --port 4040
 ```
 
 ## How the CLI resolves the workflow

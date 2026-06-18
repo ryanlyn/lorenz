@@ -40,8 +40,7 @@ executor-owned `options` bag. For the `acp` executor the bag holds `bridge_comma
 | `provider_config` | model pin + `permissions.defaultMode: dontAsk` | Per-session `settings.json` overlay handed to the bridge. |
 | `strict_mcp_config` | `true` | Parsed and validated, but not read at runtime by the executor. |
 
-The `acp` executor rejects unknown keys inside `options`, so a misspelled option fails at parse time
-rather than being silently ignored.
+The `acp` executor rejects unknown keys inside `options`; see [index.md](index.md) for that caveat.
 
 The full built-in record, expanded:
 
@@ -63,21 +62,17 @@ agents:
 ### `bridge_command`
 
 `bridge_command` is one shell command string, not an argument array. The bare name
-`claude-agent-acp` resolves to the vendored workspace bridge package for local runs. On a worker
-host the command runs verbatim against that host's `PATH`. To pass flags to the bridge, write them
-inline in the string, for example `bridge_command: claude-agent-acp --verbose`. There is no separate
-`bridge_args` key; the executor splits `bridge_command` on whitespace and a `bridge_args` key would
-be rejected as unknown.
+`claude-agent-acp` resolves to the vendored workspace bridge package for local runs. To pass flags to
+the bridge, write them inline in the string, for example `bridge_command: claude-agent-acp --verbose`;
+there is no separate `bridge_args` key. How the executor splits the string and resolves the name on a
+worker host lives in [acp-bridges.md](acp-bridges.md).
 
 ### `provider_config`
 
-`provider_config` is a free-form record delivered to the bridge once per session as a
-`settings.json`-shaped overlay. The bridge merges it over the file-based Claude settings, so it
-carries any `settings.json` field: `model`, `permissions`, `env`, and the rest. Lorenz picks the
-overlay format by bridge family. A `claude` kind (or any `bridge_command` matching
-`claude-agent-acp`) ships the overlay under the `_meta` key `symphony/settings`. The Codex family
-ships a `config.toml`-shaped overlay under `symphony/config` instead. Absent a `provider_config`, the
-session request carries no `_meta` overlay at all.
+For a `claude` kind, `provider_config` is a `settings.json`-shaped record delivered to the bridge
+once per session. The bridge merges it over the file-based Claude settings, so it carries any
+`settings.json` field: `model`, `permissions`, `env`, and the rest. How Lorenz wraps it in the
+`_meta` overlay (here under the `symphony/settings` key) is in [acp-bridges.md](acp-bridges.md).
 
 The built-in record sets two fields:
 
@@ -102,11 +97,10 @@ agents:
 
 ### `usage_accounting`
 
-`usage_accounting` controls how the executor folds per-call token counts into the running total. The
-two valid values are `per-turn` and `cumulative`; the built-in record sets `per-turn`. The Claude
-bridge keeps no running cumulative counter: its per-turn aggregate arrives as the ACP
-`PromptResponse.usage` and reconciles at turn end. In either mode, Lorenz emits session-cumulative
-totals to the orchestrator. The token accounting pipeline lives in [acp-bridges.md](acp-bridges.md).
+The built-in record sets `usage_accounting: per-turn`. The Claude bridge keeps no running cumulative
+counter: its per-turn aggregate arrives as the ACP `PromptResponse.usage` and reconciles at turn end.
+The accounting modes and the pipeline that emits session-cumulative totals live in
+[acp-bridges.md](acp-bridges.md).
 
 ### `strict_mcp_config`
 
@@ -147,9 +141,9 @@ auth scope, and endpoint leasing live in [observability.md](../observability.md)
 
 The packaged Lorenz CLI does not bundle the Claude binary. The bridge runs the executable named by
 `CLAUDE_CODE_EXECUTABLE`; if that is unset, Lorenz resolves it from a login shell with
-`command -v claude` and exports the result. An explicit `CLAUDE_CODE_EXECUTABLE` value always wins,
-and resolved paths are cached per command. On a worker host the bridge resolves against that host's
-own `PATH`.
+`command -v claude` and exports the result. An explicit `CLAUDE_CODE_EXECUTABLE` value always wins.
+The general binary/bridge name resolution (per-command caching, worker `PATH`) is in
+[acp-bridges.md](acp-bridges.md).
 
 ## Prerequisites
 

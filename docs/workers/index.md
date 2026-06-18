@@ -101,7 +101,7 @@ Spend caps live under `worker.worker_pool.spend`:
 | `max_worker_seconds` | lifetime ceiling on total worker-seconds |
 | `daily_worker_seconds` | per-UTC-day ceiling, persisted to a `spend.json` sidecar |
 
-A run that cannot get a lease is reported with one of a closed set of reasons: `acquire_timeout`, `spend_cap`, `pool_disabled`, or `driver_error`. See [worker-pool.md](worker-pool.md) for the full lifecycle, ledger, crash recovery, and the spend model.
+A run that cannot get a lease is reported with one of a closed set of `no_capacity` reasons. See [worker-pool.md](worker-pool.md) for those reasons, the acquire path, and the full lifecycle, ledger, crash recovery, and spend model.
 
 ## Concurrency and host selection
 

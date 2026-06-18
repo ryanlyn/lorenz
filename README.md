@@ -1,22 +1,6 @@
 # Lorenz
 
-Lorenz turns tracker issues into agent runs. It polls for eligible work, prepares a workspace,
-renders a workflow prompt with issue context, starts Codex or Claude, and records the run so
-operators can inspect state, retries, cost, and logs.
-
-This repository owns the CLI, runtime packages, tracker adapters, terminal dashboard, local
-observability server, trace viewer, and tests. Lorenz derives from
-[OpenAI's Symphony orchestrator](https://github.com/openai/symphony).
-
-## Documentation
-
-The full docs live in [`docs/`](./docs). Start here:
-
-- [Getting started](./docs/getting-started.md) - install, write a `WORKFLOW.md`, run your first issue.
-- [How it works](./docs/how-it-works.md) - the polling, dispatch, and run lifecycle.
-- [Configuration reference](./docs/reference/configuration.md) - every front-matter key, default, and meaning.
-- [Trackers](./docs/trackers/index.md) - Linear, Jira, Slack, local, and memory sources of issues.
-- [CLI](./docs/cli.md) - commands, flags, and run history.
+Originated from [OpenAI Symphony](https://openai.com/index/open-source-codex-orchestration-symphony/), Lorenz lets you declare work on trackers (in-memory, Obsidian markdown files, Linear, Jira, Slack etc.) and manage the dispatch, execution, and convergence of concurrent agent sessions until they reach a specified terminal state. It is harness-agnostic through the [Agent-Client Protocol](https://agentclientprotocol.com/get-started/introduction) with support for local, static SSH boxes, or (experimental) cloud-brokered VMs. 
 
 ## Screenshots
 
@@ -31,32 +15,25 @@ and a web dashboard served by the observability API.
 
 ![Lorenz web dashboard](docs/images/lorenz-dashboard.png)
 
-## Requirements
+## Documentation
 
-[mise](https://mise.jdx.dev/) manages Node 24 and pnpm 9 from `mise.toml`:
+The full docs live in [`docs/`](./docs). Start here:
 
-```sh
-mise trust
-mise install
-pnpm install
-```
+- [Getting started](./docs/getting-started.md) - install, write a `WORKFLOW.md`, run your first issue.
+- [How it works](./docs/how-it-works.md) - the polling, dispatch, and run lifecycle.
+- [Configuration reference](./docs/reference/configuration.md) - every front-matter key, default, and meaning.
+- [Trackers](./docs/trackers/index.md) - Linear, Jira, Slack, local, and memory sources of issues.
+- [CLI](./docs/cli.md) - commands, flags, and run history.
 
-Runtime needs depend on the workflow: `LINEAR_API_KEY` for Linear, `codex` on `PATH` for Codex
-runs, a Claude ACP bridge for Claude runs, and SSH access for remote workers. See
-[Getting started](./docs/getting-started.md) for the full list. Run commands from the repository
-root unless a command says otherwise.
+## Quickstart
 
-## Run
-
-Build, then run the CLI against a workflow file:
+Running Lorenz is as easy as:
 
 ```sh
-pnpm build
-pnpm start -- WORKFLOW.md
-pnpm start:once -- --dry-run --no-tui WORKFLOW.md
+npx @lorenz WORKFLOW.md
 ```
 
-The built CLI is `lorenz`:
+with full CLI options:
 
 ```sh
 lorenz [--once] [--dry-run] [--no-tui] [--port <port>] [--logs-root <path>] [path-to-WORKFLOW.md]
@@ -66,12 +43,10 @@ lorenz runs [--issue ID] [--failed] [--cost] [--retries] [--id RUN_ID] [--limit 
 `--logs-root <path>` writes logs under `<path>/log/lorenz.log`. With no workflow path the CLI reads
 `LORENZ_WORKFLOW`, then `./WORKFLOW.md`. See [CLI](./docs/cli.md) for every flag and command.
 
-## Workspace Layout
-
-`apps/cli` is the composition root; `packages/*` is the provider-agnostic engine;
-`extensions/*` are the tracker backends; `test/` holds workspace-level tests. The layering rules
-and the recipe for adding a tracker live in [Architecture](./docs/architecture.md) and the
-[Source map](./docs/source-map.md).
+Runtime needs depend on the workflow: `LINEAR_API_KEY` for Linear, `codex` on `PATH` for Codex
+runs, a Claude ACP bridge for Claude runs, and SSH access for remote workers. See
+[Getting started](./docs/getting-started.md) for the full list. Run commands from the repository
+root unless a command says otherwise.
 
 ## Configuration
 
@@ -113,7 +88,36 @@ retry queue, and dispatch blocks. The web dashboard exposes the same runtime sna
 HTTP server, started with `--port` or `server.port`. Routes, the WebSocket stream, and `/mcp` tool
 serving are documented in [Observability](./docs/observability.md).
 
-## Testing
+## Contributing
+
+### Requirements
+
+[mise](https://mise.jdx.dev/) manages Node 24 and pnpm 9 from `mise.toml`:
+
+```sh
+mise trust
+mise install
+pnpm install
+```
+
+### Run
+
+Build, then run the CLI against a workflow file:
+
+```sh
+pnpm build
+pnpm start -- WORKFLOW.md
+pnpm start:once -- --dry-run --no-tui WORKFLOW.md
+```
+
+### Workspace Layout
+
+`apps/cli` is the composition root; `packages/*` is the provider-agnostic engine;
+`extensions/*` are the tracker backends; `test/` holds workspace-level tests. The layering rules
+and the recipe for adding a tracker live in [Architecture](./docs/architecture.md) and the
+[Source map](./docs/source-map.md).
+
+### Testing
 
 ```sh
 mise run tidy
@@ -123,7 +127,7 @@ mise run check
 `mise run tidy` formats and applies lint fixes. `mise run check` runs typecheck, build, tests, and
 lint. When running Vitest directly, rebuild first so tests exercise the current compiled packages.
 
-## Live Tests
+### Live Tests
 
 Live tests are opt-in and launch real CLIs or services in isolated workspaces:
 
@@ -139,7 +143,7 @@ SSH live test can use disposable local workers if Docker, `ssh-keygen`, and Code
 available. `LINEAR_API_KEY` is required for Linear live tests, and
 `LORENZ_TS_CLAUDE_ACP_BRIDGE_COMMAND` enables the Claude live tests.
 
-## Packaging
+### Packaging
 
 ```sh
 pnpm build
@@ -149,7 +153,7 @@ pnpm --filter @lorenz/cli pack --dry-run
 The CLI package includes the built binary. Workspace documentation, workflow fixtures, and test
 evidence stay at the workspace root.
 
-## Compatibility Contracts
+### Compatibility Contracts
 
 The checked-in workflow files (`WORKFLOW.md`, `WORKFLOW_FULL_ACCESS.md`) are executable fixtures.
 `pnpm test` guards workflow docs, prompt rendering, dashboard snapshots, runtime behavior, and CLI
@@ -157,5 +161,4 @@ documentation. Update the fixture and the matching test together when the public
 
 ## License
 
-See [CHANGELOG.md](CHANGELOG.md) for notable fork-specific changes. This project is licensed under
-the [Apache License 2.0](LICENSE).
+See [CHANGELOG.md](CHANGELOG.md) for notable changes. This project is licensed under the [Apache License 2.0](LICENSE).

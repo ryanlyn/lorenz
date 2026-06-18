@@ -35,7 +35,7 @@ Each top-level section configures one subsystem. The table lists the section, it
 
 | Section | Configures | Key keys |
 | --- | --- | --- |
-| `tracker` / `trackers` | The issue source to poll and how to dispatch | `kind` (required), `active_states`, `terminal_states`, `dispatch.*` |
+| `tracker` / `trackers` | The issue source to poll and how to dispatch | `tracker.kind` (required), `trackers.<bundle>.provider` (required), `active_states`, `terminal_states`, `dispatch.*` |
 | `agent` / `agents` | Which coding agent runs and its limits | `agent.kind`, `agent.max_turns`, `agent.max_concurrent_agents`, `agents.<kind>.bridge_command` |
 | `workspace` | The per-issue filesystem root and isolation | `workspace.root`, `workspace.isolation` |
 | `hooks` | Shell hooks around the workspace lifecycle | `after_create`, `before_run`, `after_run`, `before_remove`, `timeout_ms` |
@@ -61,16 +61,20 @@ There is no default tracker. `tracker.kind` is unset until you set it, and pre-p
 
 ### Tracker selection
 
-Two shapes select a tracker. The flat form names a provider directly:
+Two shapes select a tracker. The canonical form is the nested bundle: `tracker.kind` selects a bundle declared under `trackers.<bundle>`, and that bundle's required `provider` names the implementation (it does not default to the bundle name):
 
 ```yaml
 tracker:
   kind: linear
-  api_key: $LINEAR_API_KEY
-  project_slug: "lorenz-414bf2e49ff2"
+trackers:
+  linear:
+    provider: linear
+    api_key: $LINEAR_API_KEY
+    project_slugs:
+      - "lorenz-414bf2e49ff2"
 ```
 
-The bundle form declares named bundles under `trackers.<name>`, each with a required `provider`; the bundle's provider becomes the kind and its options merge under it. The flat `tracker.kind: <provider>` form works only when no matching `trackers` bundle is present. Provider-specific keys (Linear's `project_slug`, Slack's `channels`, the local board's `path`) pass through to the selected provider, which validates them. See [trackers/index.md](trackers/index.md) for the provider list.
+The flat form puts options directly under `tracker:` as terse shorthand and works only when no matching `trackers` bundle is present. Provider-specific keys (Linear's `project_slugs`, Slack's `channels`, the local board's `path`) pass through to the selected provider, which validates them. See [trackers/index.md](trackers/index.md) for the provider list.
 
 ### Agent selection
 
@@ -154,12 +158,10 @@ The smallest workflow that dispatches: a tracker, an agent, and a one-line promp
 ---
 tracker:
   kind: local
-  path: .lorenz/local/board
-  active_states:
-    - Todo
-    - In Progress
-  terminal_states:
-    - Done
+trackers:
+  local:
+    provider: local
+    path: .lorenz/local
 agent:
   kind: codex
 ---
@@ -168,7 +170,7 @@ You are working on `{{ issue.identifier }}`: {{ issue.title }}.
 {% if issue.description %}{{ issue.description }}{% else %}No description provided.{% endif %}
 ```
 
-The local board needs no credentials, which makes it the quickest tracker to start with. See [trackers/local.md](trackers/local.md) and [getting-started.md](getting-started.md).
+The local board needs no credentials, which makes it the quickest tracker to start with. `path` defaults to `.lorenz/local`, `id_prefix` to `BOARD-`, and the active/terminal state lists default too, so the bundle can be even shorter. See [trackers/local.md](trackers/local.md), [getting-started.md](getting-started.md), and [reference/configuration.md](reference/configuration.md) for the default state lists.
 
 ## A fuller workflow
 
@@ -177,20 +179,24 @@ A Linear-backed workflow with secrets, a clone hook, explicit timeouts, and per-
 ```yaml
 tracker:
   kind: linear
-  api_key: $LINEAR_API_KEY
-  project_slug: "lorenz-414bf2e49ff2"
-  active_states:
-    - Todo
-    - In Progress
-    - Rework
-  terminal_states:
-    - Closed
-    - Cancelled
-    - Done
-  dispatch:
-    accept_unrouted: true
-    only_routes: null
-    route_label_prefix: "Lorenz:"
+trackers:
+  linear:
+    provider: linear
+    api_key: $LINEAR_API_KEY
+    project_slugs:
+      - "lorenz-414bf2e49ff2"
+    active_states:
+      - Todo
+      - In Progress
+      - Rework
+    terminal_states:
+      - Closed
+      - Cancelled
+      - Done
+    dispatch:
+      accept_unrouted: true
+      only_routes: null
+      route_label_prefix: "Lorenz:"
 polling:
   interval_ms: 5000
 workspace:
@@ -222,7 +228,7 @@ The repository root ships four example workflows. Each is a complete, runnable f
 
 | File | Tracker | Demonstrates |
 | --- | --- | --- |
-| `WORKFLOW.md` | Linear | The reference Linear flow: `project_slug`, a `Merging`/`Rework` state map, a full multi-step prompt with a `## Codex Workpad` comment protocol and a `lorenz-land` handoff |
+| `WORKFLOW.md` | Linear | The reference Linear flow: `project_slugs`, a `Merging`/`Rework` state map, a full multi-step prompt with a `## Codex Workpad` comment protocol and a `lorenz-land` handoff |
 | `WORKFLOW_FULL_ACCESS.md` | Linear | An `Agent Review` state and an autonomous review protocol; `claude` configured with `bypassPermissions` alongside `codex` |
 | `WORKFLOW.local.md` | Local board | No credentials and no Linear: `tracker.kind: local` with `id_prefix`, the `local_*` tools, and a prompt that reads state through `local_read_issue` |
 | `WORKFLOW.slack.md` | Slack | Issues from bot @-mentions: `channels`, `bot_user_id`, `emoji_states`, hashtag routing with `route_label_prefix: "route-"`, and the `slack_*` tools |

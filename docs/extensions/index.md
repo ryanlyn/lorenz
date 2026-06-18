@@ -20,8 +20,6 @@ All four sit on top of `@lorenz/domain`, the dependency-free vocabulary. Domain 
 <p align="center"><img src="../assets/diagrams/extension-points.svg" alt="extension points diagram" width="920" style="width:100%;max-width:920px;height:auto" /></p>
 *The vocabulary in `@lorenz/domain` flows up through the four SDKs, which extensions implement; the composition root registers them and the engine reads only through the registries, with a dependency-cruiser barrier blocking extensions from reaching into engine packages.*
 
-A short note on lineage: Lorenz derives from OpenAI's Symphony. The extension layout is its own.
-
 ### TrackerProvider
 
 A `TrackerProvider` (`packages/tracker-sdk/src/provider.ts`) connects Lorenz to an issue tracker. The only mandatory members are `kind` (the string selector) and `createClient(settings, ctx)`. The optional hooks cover the rest of the lifecycle: `configAliases`, `envFallbacks`, and `defaultEndpoint` shape config parsing; `parseOptions(options, ctx)` validates the provider-specific `tracker.options.*`; `validateDispatch(settings)` runs once at startup; `createToolOps(settings, ctx)` and `defaultToolPacks(settings)` wire the tracker into the MCP tool surface; `projectUrl(settings)` feeds the UI.

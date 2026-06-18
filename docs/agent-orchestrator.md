@@ -144,7 +144,7 @@ Retries do not wait for the next poll. `RetryScheduler` (`packages/retry-schedul
 
 ## RuntimeSnapshot assembly
 
-`RuntimeSnapshot` (`packages/runtime-events/src/index.ts`) is the one object every UI reads: the TUI, the web dashboard, the HTTP API. `LorenzRuntime.snapshot()` builds it in three layers.
+`RuntimeSnapshot` (`packages/runtime-events/src/index.ts`) is the object the UIs read; for the consumer view (how the TUI, dashboard, and API project it) see [observability.md](observability.md). `LorenzRuntime.snapshot()` builds it in three layers.
 
 1. **Orchestrator.** `orchestrator.snapshot()` supplies the live scheduling state: `running`, `reserving`, `retrying`, `blocked`, `usageTotals`, and `rateLimits`, mapped into the `runtime-events` shapes.
 2. **Runtime live fields.** The runtime layers in `appStatus`, `workflowPath`, the `poll` block (`status`, `candidates`, `eligible`, `lastPollAt`, `nextPollAt`, `lastError`), and `logFile`.

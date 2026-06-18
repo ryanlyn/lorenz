@@ -5,8 +5,8 @@ to the page that owns the concept in full. This page is for integrators who hit 
 want the precise meaning without re-reading the chapter it came from. Names in backticks are
 verbatim: the exact config key, event string, or identifier the engine uses.
 
-Lorenz derives from OpenAI's Symphony, so a few internal identifiers and `_meta` keys still carry the
-`symphony/` prefix even though the user-facing surface is `lorenz`.
+A few internal identifiers and `_meta` keys still carry a `symphony/` prefix for historical reasons,
+even though the user-facing surface is `lorenz`.
 
 ## A
 

@@ -7,9 +7,12 @@ Lorenz reads a single file per repository: `WORKFLOW.md`. The file has two parts
 ```yaml
 ---
 tracker:
-  kind: linear
-  api_key: $LINEAR_API_KEY
-  project_slugs: [backend]
+  kind: linear          # selects the bundle
+trackers:
+  linear:
+    provider: linear    # names the implementation
+    api_key: $LINEAR_API_KEY
+    project_slugs: [backend]
 polling:
   interval_ms: 30000
 agent:
@@ -18,6 +21,8 @@ agent:
 ---
 You are working on {{ issue.identifier }}: {{ issue.title }}.
 ```
+
+The nested bundle form above is the recommended shape: `tracker.kind` selects the bundle and the matching `trackers.<bundle>.provider` names the implementation. The flat form (provider options directly under `tracker`) is a terser shorthand for the same config; see [Bundle and flat shapes](#bundle-and-flat-shapes).
 
 ## How keys are named
 
@@ -78,9 +83,11 @@ The core tracker bundle. `tracker.kind` selects the provider. There is no defaul
 
 `active_states`, `terminal_states`, and the `dispatch.*` keys are core fields shared by every provider, not provider-specific. See [dispatch](../dispatch.md) and [dispatch-routing](../features/dispatch-routing.md).
 
-### Sugar and bundle shapes
+### Bundle and flat shapes
 
-The flat shape (`tracker.kind: <provider>` with provider options under `tracker`) works when no matching `trackers.<name>` bundle is present. When a `trackers.<name>` bundle exists, its `provider` becomes the kind and the selector options merge under it. Unregistered kinds parse generically (options pass through unvalidated) and are rejected at dispatch validation.
+The recommended nested bundle shape names the implementation explicitly: `tracker.kind` selects the bundle and the matching `trackers.<bundle>.provider` names the provider (it does not default to the bundle name). The selector options under `tracker` merge into that bundle.
+
+The flat shape (`tracker.kind: <provider>` with provider options directly under `tracker`) is a terser shorthand that works when no matching `trackers.<name>` bundle is present. Unregistered kinds parse generically (options pass through unvalidated) and are rejected at dispatch validation.
 
 *Diagram placeholder: tracker selection, flat `tracker.kind` versus a `trackers.<name>.provider` bundle, and option passthrough to `provider.parseOptions`. Caption: how the parser picks a provider and hands it its option slice.*
 
@@ -91,7 +98,7 @@ Named tracker bundles, used with the `dispatch` kind or to define multiple track
 | Key | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `trackers.<name>.provider` | string | (required) | The provider this bundle uses. Required when the bundle is present. |
-| `trackers.<name>.*` | provider keys | (passthrough) | Any provider-specific keys (for example `api_key`, `project_slug`, `active_states`). |
+| `trackers.<name>.*` | provider keys | (passthrough) | Any provider-specific keys (for example `api_key`, `project_slugs`, `active_states`). |
 
 ## Per-provider tracker options
 
@@ -99,7 +106,7 @@ The keys below live under `tracker` (flat shape) or `trackers.<name>` (bundle sh
 
 ### `linear`
 
-See [trackers/linear.md](../trackers/linear.md). Requires `api_key` and exactly one of `project_slug`, `project_slugs`, or `project_labels`.
+See [trackers/linear.md](../trackers/linear.md). Requires `api_key` and exactly one of `project_slugs`, `project_labels`, or the deprecated singular `project_slug`.
 
 | Key | Type | Default | Meaning |
 | --- | --- | --- | --- |
@@ -146,7 +153,7 @@ Jira operations proxied as JSON-RPC `tools/call` requests to an external MCP ser
 
 ### `local`
 
-Filesystem board: one Markdown file per issue. See [trackers/local.md](../trackers/local.md). Requires a non-empty `path`.
+Filesystem board: one Markdown file per issue. See [trackers/local.md](../trackers/local.md). `path` is optional and defaults to `.lorenz/local`; an explicitly empty `path` is rejected.
 
 | Key | Type | Default | Meaning |
 | --- | --- | --- | --- |

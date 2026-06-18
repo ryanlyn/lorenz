@@ -20,14 +20,19 @@ agents a raw GraphQL escape hatch.
 
 ## Minimal config
 
-Set the provider kind, the API key, and exactly one project selector. The key reads from the
+Select the bundle with `tracker.kind`, then configure the implementation under
+`trackers.linear`: the API key and exactly one project selector. The key reads from the
 `LINEAR_API_KEY` environment variable when you omit `api_key`.
 
 ```yaml
 tracker:
   kind: linear
-  api_key: ${LINEAR_API_KEY}
-  project_slug: my-project-slug
+trackers:
+  linear:
+    provider: linear
+    api_key: ${LINEAR_API_KEY}
+    project_slugs:
+      - my-project-slug
 ```
 
 This watches `Todo` and `In Progress` issues in one project, dispatches each to an agent, and treats
@@ -36,12 +41,12 @@ every key.
 
 ## Config keys
 
-These keys live under `tracker:`. Snake_case is the config form; the provider aliases each to its
-internal camelCase name.
+These keys live under `trackers.linear:` (the `tracker.kind: linear` selector points at this bundle).
+Snake_case is the config form; the provider aliases each to its internal camelCase name.
 
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `kind` | (required) | Set to `linear` to select this provider. |
+| `provider` | (required) | Set to `linear` to name the implementation. |
 | `api_key` | env `LINEAR_API_KEY` | Personal API key. Required for dispatch. |
 | `endpoint` | `https://api.linear.app/graphql` | Linear GraphQL endpoint. Override only for a proxy or test server. |
 | `assignee` | env `LINEAR_ASSIGNEE` | Filter polled issues by assignee. Blank means no filter. The literal `me` resolves to the API key's own user. |
@@ -96,25 +101,28 @@ names and defaults apply across backends. Linear matches them against the issue'
 - `terminal_states` are the finished states. Reaching one tells the runtime to clean up the issue's
   workspace.
 
-The defaults (`Todo`, `In Progress` active; `Closed`, `Cancelled`, `Canceled`, `Duplicate`, `Done`
-terminal) match Linear's stock workflow. Teams that add intermediate states must list them
+The defaults match Linear's stock workflow (see the active/terminal default lists in
+[configuration](../reference/configuration.md)). Teams that add intermediate states must list them
 explicitly. A team using `Agent Review`, `Rework`, and `Merging` between in-flight and done would set:
 
 ```yaml
 tracker:
   kind: linear
-  api_key: ${LINEAR_API_KEY}
-  project_slugs:
-    - team-alpha
-  active_states:
-    - Todo
-    - In Progress
-    - Rework
-  terminal_states:
-    - Agent Review
-    - Merging
-    - Done
-    - Cancelled
+trackers:
+  linear:
+    provider: linear
+    api_key: ${LINEAR_API_KEY}
+    project_slugs:
+      - team-alpha
+    active_states:
+      - Todo
+      - In Progress
+      - Rework
+    terminal_states:
+      - Agent Review
+      - Merging
+      - Done
+      - Cancelled
 ```
 
 The split is a policy choice. List a state under `active_states` to keep handing the issue back to an
@@ -162,10 +170,8 @@ A missing `api_key` fails before any network call with a `missing Linear API key
 Mounting the Linear backend gives agents two layers of tools over the same Linear credentials.
 
 **Provider-neutral `tracker_*` tools.** The neutral `tracker` pack serves seven tools that behave the
-same against any backend: `tracker_read_issue`, `tracker_query`, `tracker_update_status`,
-`tracker_list_comments`, `tracker_comment`, `tracker_update_comment`, and `tracker_create_issue`.
-The Linear backend implements all seven over GraphQL. Prefer these for portable workflow logic; their
-full contract is in [tracker-tools](../reference/tracker-tools.md).
+same against any backend, all implemented here over GraphQL. Prefer these for portable workflow
+logic; the tool list and their full contract live in [tracker-tools](../reference/tracker-tools.md).
 
 **The `linear_graphql` escape hatch.** The `linear` tool pack adds one tool, `linear_graphql`, for
 raw GraphQL the neutral tools do not cover: comment edits, attachment and upload flows, schema

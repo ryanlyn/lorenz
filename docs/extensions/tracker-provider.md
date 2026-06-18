@@ -70,14 +70,11 @@ Jira client maps Jira `statusCategory.key`. Keep the raw payload on the issue fo
 
 ## The options-bag pattern
 
-Provider-specific config never appears as a named field on `TrackerSettings`. `TrackerSettings`
-exposes only the fields every backend shares (`kind`, `endpoint`, `apiKey`, `activeStates`,
-`terminalStates`, dispatch routing). Everything else lives opaquely in `settings.tracker.options`,
-validated once by `parseOptions` and read back through a typed accessor the provider owns. Core code
-must not read `options` keys directly.
-
-`parseOptions` runs at config-parse time after aliases and env fallbacks are applied. The tracker SDK
-ships the helpers it needs, all in `packages/tracker-sdk/src/options.ts`:
+Like every extension axis, a tracker keeps provider-specific config out of the shared
+`TrackerSettings` type and behind an opaque `settings.tracker.options` bag that `parseOptions`
+validates once and a typed accessor reads back; see [architecture.md](../architecture.md#registries-and-the-options-bag-pattern)
+for the general pattern. The tracker-specific helpers `parseOptions` draws on live in
+`packages/tracker-sdk/src/options.ts`:
 
 - `rejectUnknownOptions(options, known, kind)` throws on a typo'd key.
 - `stringOption(options, key)` reads one string.

@@ -6,8 +6,7 @@ surface every tracker shares, the agent tools that ride on top, and where each b
 exact keys.
 
 Lorenz polls one tracker, turns matching issues into agent runs, and writes results back to that
-same tracker. Lorenz derives from OpenAI's Symphony, which used Linear as its single backend. The
-tracker is an extension point, so Linear, Jira, a local Markdown board, Slack, and an in-process
+same tracker. The tracker is an extension point, so Linear, Jira, a local Markdown board, Slack, and an in-process
 fixture all plug into the same contract.
 
 ## Picking a tracker
@@ -17,7 +16,8 @@ Two config keys select the backend. Both resolve to a registered `TrackerProvide
 - `tracker.kind` is the selector. It names a bundle under `trackers.<name>`.
 - `trackers.<name>.provider` is the resolved provider kind for that bundle.
 
-The bundled form is the one to write:
+The nested bundle form is the recommended shape. The flat form (provider options written directly
+under `tracker:`) is terse shorthand for the same result:
 
 ```yaml
 tracker:

@@ -1,6 +1,6 @@
 # Lorenz docs
 
-Lorenz is a control plane that turns tracker issues into coding-agent runs. It watches a tracker (Linear, Jira, a local board, Slack) for issues in active states, prepares an isolated workspace for each one, renders a prompt, and runs Codex or Claude over the Agent Client Protocol until the issue reaches a terminal state. Lorenz derives from [OpenAI's Symphony](https://github.com/openai/symphony), reimplemented in TypeScript. There is one control-plane process, no database, and a single authoritative in-memory snapshot every dashboard reads.
+Lorenz is a control plane that turns tracker issues into coding-agent runs. It watches a tracker (Linear, Jira, a local board, Slack) for issues in active states, prepares an isolated workspace for each one, renders a prompt, and runs Codex or Claude over the Agent Client Protocol until the issue reaches a terminal state. Lorenz derives from [OpenAI's Symphony](https://github.com/openai/symphony). 
 
 ## Start here
 

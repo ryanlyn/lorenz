@@ -5,11 +5,10 @@ package graph, how dependencies stay pointing down, and the four extension axes 
 tool pack, agent executor, worker driver) that let you add a backend as one package plus one
 registration line.
 
-Lorenz derives from OpenAI's Symphony. The shape below carries that idea into a
-provider-agnostic TypeScript core: a small set of contracts at the bottom, self-contained
+Lorenz is a provider-agnostic TypeScript core: a small set of contracts at the bottom, self-contained
 extensions at the top, and a mechanical gate that keeps the two from tangling.
 
-## The thesis
+## Boundaries
 
 Adding a backend is one new package that implements and registers its own contracts, plus one
 line at the composition root that invokes that registration. It is never a sweep through `domain`,

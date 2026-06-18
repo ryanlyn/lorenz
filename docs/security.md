@@ -4,7 +4,7 @@ What Lorenz trusts, what it isolates, and what it leaves to you. This page is fo
 
 ## The trust boundary
 
-Lorenz derives from OpenAI's Symphony and inherits its stance: the orchestrator is a scheduler and tracker reader, not a policy sandbox. Three things execute with the same authority as the daemon process.
+The orchestrator is a scheduler and tracker reader, not a policy sandbox. Three things execute with the same authority as the daemon process.
 
 - **Workflow hooks.** The four lifecycle hooks (`after_create`, `before_run`, `after_run`, `before_remove`) in [`WORKFLOW.md`](workflows.md) run as arbitrary shell through `bash -lc` (a login shell) with the workspace as the working directory. The SPEC states it plainly: hooks are fully trusted configuration. Anyone who can edit `WORKFLOW.md` can run code on the host.
 - **The coding agent.** The agent (Codex or Claude) runs commands and edits files inside the workspace. Lorenz auto-approves its permission requests by default (see [Approval gating](#approval-gating-what-lorenz-does-not-do) below).

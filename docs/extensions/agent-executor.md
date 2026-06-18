@@ -135,7 +135,7 @@ hook_execution        session_notification
 
 ## The options bag
 
-`AgentConfig` keeps a small shared core and pushes everything executor-specific into an opaque bag:
+`AgentConfig` follows the [options-bag pattern](../architecture.md): a small shared core plus an opaque `options` bag your provider owns.
 
 ```ts
 export interface AgentConfig {
@@ -146,7 +146,7 @@ export interface AgentConfig {
 }
 ```
 
-`executor`, `turnTimeoutMs`, and `stallTimeoutMs` are the cross-executor keys every record carries. `options` is yours. Core code never reads a key out of `options` directly; it goes through your executor package's typed accessor (the `acp` package exposes `acpAgentOptions(config)` for this). The shape of `options` is whatever `parseOptions` returns, so your provider is the only thing that defines and validates those keys.
+`executor`, `turnTimeoutMs`, and `stallTimeoutMs` are the cross-executor keys every record carries. `options` is yours: its shape is whatever your `parseOptions` returns, and core code reads it only through your executor package's typed accessor (the `acp` package exposes `acpAgentOptions(config)` for this), never by raw key.
 
 `turn_timeout_ms` and `stall_timeout_ms` can be set once under the `agents:` block as shared defaults and overridden per kind. A `stall_timeout_ms` of `0` or less disables stall detection. Honoring both timers is your executor's job: nothing outside the executor enforces them.
 

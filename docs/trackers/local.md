@@ -11,11 +11,11 @@ Set `provider: local` and Lorenz polls a board directory, dispatches issues whos
 
 ```yaml
 tracker:
-  kind: board
+  kind: local
 trackers:
-  board:
+  local:
     provider: local
-    path: .lorenz/local
+    # path: .lorenz/local      # optional; defaults to .lorenz/local
     id_prefix: BOARD-
     active_states: [Todo, In Progress]
     terminal_states: [Done, Closed, Cancelled]
@@ -122,40 +122,24 @@ and `id_prefix`. The board directory key is `path` on the tracker and `tools.loc
 ## The agent tools
 
 Two tool surfaces operate on the same board. The provider-neutral `tracker_*` pack works against any
-backend; the `local` pack adds five board-native tools. Both are mounted automatically for a `local`
-dispatch tracker (the provider's `defaultToolPacks` returns `["local"]`).
+backend (see [reference/tracker-tools.md](../reference/tracker-tools.md) for the seven neutral tools,
+their schemas, and the query DSL grammar); the `local` pack adds five board-native tools
+(`local_read_issue`, `local_query`, `local_update_status`, `local_comment`, `local_create_issue`).
+Both are mounted automatically for a `local` dispatch tracker (the provider's `defaultToolPacks`
+returns `["local"]`), and the neutral ops map onto the five `local_*` tools through `localToolOps`
+(`toolOps.ts`) so a workflow written against `tracker_*` runs unchanged on the local board.
 
-### The `local_*` pack
+A few board-native behaviors worth knowing:
 
-| Tool | What it does | Args |
-| --- | --- | --- |
-| `local_read_issue` | Read an issue's current status, title, description, and comments. | `issueId` |
-| `local_query` | Filter, project, sort, and page board issues (read-only). | `where?`, `select?`, `order_by?`, `limit?`, `offset?` |
-| `local_update_status` | Move an issue to a new status. | `issueId`, `status` |
-| `local_comment` | Append a comment line to the issue's `## Comments` section. | `issueId`, `body` |
-| `local_create_issue` | Create a new board issue, minting the next id. | `title`, `body?`, `status?` |
-
-`local_create_issue` defaults `status` to `Todo` when omitted. It does not read `active_states`;
-those states gate dispatch eligibility, not file creation. An empty or whitespace-only status is
-rejected before any file is written.
-
-`local_query` returns `{rows, total, skipped}`. `total` is the row count before paging. The default
-projection is `[id, title, state, stateType, labels]`. The `comments` field is off the base record
-because it costs an extra file read; name it in `select` to include each issue's comment lines. A
-malformed board file does not fail the query; it lands in the `skipped` array so you can see what
-was excluded.
-
-`local_read_issue` returns `{issue: {id, status, title, description}, comments}` and reports the raw
-board status string, not the normalized `stateType`.
-
-### The neutral `tracker_*` ops
-
-The same board backs the provider-neutral pack through `localToolOps` (`toolOps.ts`), which maps
-`tracker_read_issue`, `tracker_query`, `tracker_update_status`, `tracker_comment`, and
-`tracker_create_issue` onto the five `local_*` tools. A workflow written against `tracker_*` runs
-unchanged on the local board, so you prototype on files and later swap in Linear or Jira without
-rewriting the agent prompt. For the neutral tool schemas and the query DSL grammar, see
-[reference/tracker-tools.md](../reference/tracker-tools.md).
+- `local_create_issue` defaults `status` to `Todo` when omitted. It does not read `active_states`;
+  those states gate dispatch eligibility, not file creation. An empty or whitespace-only status is
+  rejected before any file is written.
+- `local_query` returns `{rows, total, skipped}`. `total` is the row count before paging; the default
+  projection is `[id, title, state, stateType, labels]`. The `comments` field is off the base record
+  because it costs an extra file read, so name it in `select` to include each issue's comment lines. A
+  malformed board file does not fail the query; it lands in the `skipped` array.
+- `local_read_issue` returns `{issue: {id, status, title, description}, comments}` and reports the raw
+  board status string, not the normalized `stateType`.
 
 ## Durability and concurrency
 
@@ -212,11 +196,11 @@ tools so it could later move to any backend.
 
 ```yaml
 tracker:
-  kind: board
+  kind: local
 trackers:
-  board:
+  local:
     provider: local
-    path: .lorenz/local
+    # path: .lorenz/local      # optional; defaults to .lorenz/local
     id_prefix: BOARD-
     active_states: [Todo, In Progress]
     terminal_states: [Done, Closed]

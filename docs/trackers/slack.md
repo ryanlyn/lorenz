@@ -51,24 +51,31 @@ The bot needs two distinct identifiers from the app:
 The minimal Slack tracker config names the channels and the bot user id. The token comes from the
 environment.
 
+The canonical form is the nested bundle: `tracker.kind` selects the bundle and `trackers.slack.provider` names the implementation. Options live under `trackers.slack`.
+
 ```yaml
 tracker:
   kind: slack
-  channels:
-    - C0123456789
-  bot_user_id: $SLACK_BOT_USER_ID
+trackers:
+  slack:
+    provider: slack
+    channels:
+      - C0123456789
+    bot_user_id: $SLACK_BOT_USER_ID
 ```
 
 | Key | Env fallback | Default | Meaning |
 | --- | --- | --- | --- |
-| `tracker.kind` | | | Set to `slack`. |
-| `tracker.channels` | | | Required. List of `C...` channel ids. Entries resolve `$VAR` references; an unresolved ref collapses to empty and is dropped. |
-| `tracker.bot_user_id` | `SLACK_BOT_USER_ID` | | Required. The bot's `U...` id. An empty string does not satisfy it. |
-| `tracker.api_key` | `SLACK_BOT_TOKEN` | | The `xoxb-` bot token. |
-| `tracker.endpoint` | | `https://slack.com/api` | Slack Web API base. |
-| `tracker.emoji_states` | | `eyes: In Progress`, `white_check_mark: Done`, `x: Cancelled` | Emoji name to state name, merged over the defaults. |
-| `tracker.marker_emoji` | | `robot_face` | The reaction the bot adds to mark a tracked thread root. |
-| `tracker.reply_lookback_days` | | `2` | How far back to discover new reply-mention threads. |
+| `kind` / `provider` | | | `tracker.kind: slack` selects the bundle; `trackers.slack.provider: slack` names the implementation. |
+| `channels` | | | Required. List of `C...` channel ids. Entries resolve `$VAR` references; an unresolved ref collapses to empty and is dropped. |
+| `bot_user_id` | `SLACK_BOT_USER_ID` | | Required. The bot's `U...` id. An empty string does not satisfy it. |
+| `api_key` | `SLACK_BOT_TOKEN` | | The `xoxb-` bot token. |
+| `endpoint` | | `https://slack.com/api` | Slack Web API base. |
+| `emoji_states` | | `eyes: In Progress`, `white_check_mark: Done`, `x: Cancelled` | Emoji name to state name, merged over the built-in `DEFAULT_EMOJI_STATES`. |
+| `marker_emoji` | | `robot_face` | The reaction the bot adds to mark a tracked thread root. |
+| `reply_lookback_days` | | `2` | How far back to discover new reply-mention threads. |
+
+See [reference/configuration.md](../reference/configuration.md) for the full `tracker.*` key reference and the active/terminal state defaults.
 
 `tracker.assignee` is rejected for the Slack tracker. Slack messages carry no assignee, so an
 assignee-partitioned deployment would double-dispatch every mention. Setting it fails dispatch
@@ -200,16 +207,12 @@ errors are treated as success. Backoff is exponential, honors `Retry-After`, and
 ## The `slack_*` tools
 
 The `slack` tool pack mounts automatically for the Slack tracker (its `defaultToolPacks` returns
-`["slack"]`). It ships six tools.
-
-| Tool | Args | What it does |
-| --- | --- | --- |
-| `slack_update_status` | `issueId`, `status` | Set status by posting the bot's `status:` reply and mirroring the reaction. `status` must be a configured active or terminal state name. |
-| `slack_comment` | `issueId`, `body` | Post a threaded reply on the source message. |
-| `slack_read_thread` | `issueId` | Return the authoritative state: thread-derived status, source message, request reply, reactions, permalink, and all replies. |
-| `slack_query` | `channels?`, `where?`, `select?`, `expand?`, `order_by?`, `limit?`, `offset?` | Read-only query over tracked issues with thread-derived state. |
-| `slack_user_info` | `userId` | Resolve a `U...` id to a profile (name, real name, display name, bot flag). |
-| `slack_channel_context` | `issueId`, `before?`, `after?` | Read the channel conversation around the source message, ascending. `before` and `after` default to 10, max 50. |
+`["slack"]`). Alongside the seven provider-neutral `tracker_*` tools (see
+[reference/tracker-tools.md](../reference/tracker-tools.md)), it adds Slack-native tools that expose
+the thread model directly: `slack_update_status` and `slack_comment` write the bot's reply,
+`slack_read_thread` returns the authoritative thread-derived state, `slack_query` runs the read-only
+`where` DSL, and `slack_user_info` / `slack_channel_context` resolve people and surrounding
+conversation.
 
 Every tool enforces the same trust boundary: a configured `bot_user_id`, a watched channel, and a
 tracked message. `slack_query` rejects `jql` (use the `where` DSL) and always intersects requested
