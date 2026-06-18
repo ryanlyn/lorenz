@@ -1,5 +1,6 @@
 import { constants } from "node:fs";
 import fs from "node:fs/promises";
+import { createRequire } from "node:module";
 import path from "node:path";
 
 import { Command } from "commander";
@@ -723,7 +724,15 @@ async function statOrNull(filePath: string) {
 }
 
 function defaultDashboardStaticDir(): string {
-  return path.resolve(import.meta.dirname, "../../lorenz-dashboard/dist");
+  // Packaged releases ship the dashboard as a bundled `@lorenz/dashboard` package; resolve it via
+  // Node module resolution so doctor checks the same assets the server serves in any layout. The
+  // dev monorepo falls back to the dashboard app's built output.
+  try {
+    const require = createRequire(import.meta.url);
+    return path.dirname(require.resolve("@lorenz/dashboard/dist/index.html"));
+  } catch {
+    return path.resolve(import.meta.dirname, "../../lorenz-dashboard/dist");
+  }
 }
 
 function applyDoctorOverrides(settings: Settings, options: DoctorCommandOptions): void {

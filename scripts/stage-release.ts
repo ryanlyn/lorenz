@@ -61,13 +61,25 @@ const scriptPath = fileURLToPath(import.meta.url);
 const defaultWorkspaceRoot = path.resolve(path.dirname(scriptPath), "..");
 const packageSearchRoots = ["apps", "packages", "extensions", "vendor"];
 const releaseEntrypoint = "bin/lorenz";
-const dashboardDist = "apps/lorenz-dashboard/dist";
+// Where the built dashboard assets live in the workspace.
+const dashboardSourceDist = "apps/lorenz-dashboard/dist";
+// The dashboard ships as a bundled package so the server and doctor can locate it through Node
+// module resolution (`@lorenz/dashboard/dist`) regardless of the consumer's install layout, rather
+// than via a relative path that only holds when packages are symlinked next to it.
+const dashboardPackageName = "@lorenz/dashboard";
+const dashboardStagedDist = "node_modules/@lorenz/dashboard/dist";
 const nativeDependencyNames = new Set(["better-sqlite3"]);
 
 type VendoredRuntimeDependency = {
   packageName: string;
   dependentPackage: string;
   targetDir: string;
+};
+
+type ResolvedVendoredDependency = {
+  packageName: string;
+  sourceDir: string;
+  version: string;
 };
 
 // Some external dependencies are dependency-free JS whose only heavy payload is platform-specific
@@ -120,23 +132,39 @@ export async function stageRelease(options: StageReleaseOptions = {}): Promise<S
   await assertRequiredBuildOutputs(workspaceRoot, releasePackages);
   await prepareOutputDir(releaseDir, Boolean(options.force));
 
+  const vendoredDependencies = await resolveVendoredRuntimeDependencies(allPackages);
+
   for (const workspacePackage of releasePackages) {
-    await stageWorkspacePackage(releaseDir, workspacePackage, packages, catalog);
+    await stageBundledPackage(
+      releaseDir,
+      workspacePackage,
+      packages,
+      catalog,
+      vendoredDependencies,
+    );
   }
 
-  await stageVendoredRuntimeDependencies(releaseDir, allPackages);
-
-  await copyDirectory(
-    path.join(workspaceRoot, dashboardDist),
-    path.join(releaseDir, dashboardDist),
-  );
+  await stageVendoredRuntimeDependencies(releaseDir, vendoredDependencies);
+  const dashboardVersion = await stageDashboardPackage(releaseDir, workspaceRoot, version);
 
   const externalDependencies = collectExternalDependencies(releasePackages, catalog);
-  await writeRootPackageJson(releaseDir, version, releasePackages, externalDependencies);
+  await writeRootPackageJson(
+    releaseDir,
+    version,
+    releasePackages,
+    vendoredDependencies,
+    dashboardVersion,
+    externalDependencies,
+  );
   await writeEntrypoint(releaseDir);
   await copyReleaseMetadata(workspaceRoot, releaseDir);
 
-  const manifest = releaseManifest(version, releasePackages, externalDependencies);
+  const manifest = releaseManifest(
+    version,
+    releasePackages,
+    vendoredDependencies,
+    externalDependencies,
+  );
   await writeJson(path.join(releaseDir, "RELEASE-MANIFEST.json"), manifest);
 
   const archivePath = options.archive
@@ -242,8 +270,8 @@ async function assertRequiredBuildOutputs(
     }
   }
 
-  if (!(await pathExists(path.join(workspaceRoot, dashboardDist)))) {
-    missing.push(dashboardDist);
+  if (!(await pathExists(path.join(workspaceRoot, dashboardSourceDist)))) {
+    missing.push(dashboardSourceDist);
   }
 
   if (missing.length > 0) {
@@ -275,13 +303,19 @@ async function prepareOutputDir(releaseDir: string, force: boolean): Promise<voi
   await fs.mkdir(releaseDir, { recursive: true });
 }
 
-async function stageWorkspacePackage(
+// Stage every workspace package as a real, bundled package under the release's `node_modules`.
+// Shipping them as bundledDependencies (rather than `file:` directory deps) makes npm install them
+// as regular nodes instead of symlinks. npm's bin-link/rebuild phase crashes on symlinked (`Link`)
+// nodes whose target it nulls during reify dedup — "Cannot destructure property 'package' of
+// 'node.target'" (npm/cli#9506) — so avoiding symlinks entirely sidesteps that whole class of bug.
+async function stageBundledPackage(
   releaseDir: string,
   workspacePackage: WorkspacePackage,
   selectedPackages: Map<string, WorkspacePackage>,
   catalog: Record<string, string>,
+  vendored: Map<string, ResolvedVendoredDependency>,
 ): Promise<void> {
-  const targetDir = path.join(releaseDir, workspacePackage.relativeDir);
+  const targetDir = bundledPackageDir(releaseDir, workspacePackage.name);
   await fs.mkdir(targetDir, { recursive: true });
   await copyDirectory(
     path.join(workspacePackage.absoluteDir, "dist"),
@@ -298,14 +332,17 @@ async function stageWorkspacePackage(
 
   await writeJson(
     path.join(targetDir, "package.json"),
-    releasePackageJson(workspacePackage, selectedPackages, catalog),
+    releasePackageJson(workspacePackage, selectedPackages, catalog, vendored),
   );
 }
 
-async function stageVendoredRuntimeDependencies(
-  releaseDir: string,
+// Resolve the on-disk location and version of each vendored runtime dependency from the bridge that
+// installs it, so the bridges can pin an exact version that the bundled copy satisfies.
+async function resolveVendoredRuntimeDependencies(
   allPackages: Map<string, WorkspacePackage>,
-): Promise<void> {
+): Promise<Map<string, ResolvedVendoredDependency>> {
+  const resolved = new Map<string, ResolvedVendoredDependency>();
+
   for (const dependency of vendoredRuntimeDependencies) {
     const dependent = allPackages.get(dependency.dependentPackage);
     if (!dependent) {
@@ -328,9 +365,29 @@ async function stageVendoredRuntimeDependencies(
       throw error;
     });
 
-    const targetDir = path.join(releaseDir, ...dependency.targetDir.split("/"));
+    const manifest = await readJson<PackageJson>(path.join(sourceDir, "package.json"));
+    if (!manifest.version) {
+      throw new Error(`Cannot vendor ${dependency.packageName}: installed copy has no version.`);
+    }
+
+    resolved.set(dependency.packageName, {
+      packageName: dependency.packageName,
+      sourceDir,
+      version: manifest.version,
+    });
+  }
+
+  return resolved;
+}
+
+async function stageVendoredRuntimeDependencies(
+  releaseDir: string,
+  vendored: Map<string, ResolvedVendoredDependency>,
+): Promise<void> {
+  for (const dependency of vendored.values()) {
+    const targetDir = bundledPackageDir(releaseDir, dependency.packageName);
     await fs.mkdir(path.dirname(targetDir), { recursive: true });
-    await fs.cp(sourceDir, targetDir, {
+    await fs.cp(dependency.sourceDir, targetDir, {
       recursive: true,
       dereference: true,
       filter: (entry) => !entry.endsWith(".tsbuildinfo"),
@@ -346,10 +403,47 @@ async function stageVendoredRuntimeDependencies(
   }
 }
 
+// Ship the built dashboard assets as a tiny bundled `@lorenz/dashboard` package so the server and
+// doctor can find them via `require.resolve("@lorenz/dashboard/dist/...")` in any install layout.
+async function stageDashboardPackage(
+  releaseDir: string,
+  workspaceRoot: string,
+  fallbackVersion: string,
+): Promise<string> {
+  const dashboardPackage = await readJson<PackageJson>(
+    path.join(workspaceRoot, "apps/lorenz-dashboard/package.json"),
+  ).catch((error) => {
+    if (isNodeError(error) && error.code === "ENOENT") return null;
+    throw error;
+  });
+  const version = dashboardPackage?.version ?? fallbackVersion;
+
+  const targetDir = bundledPackageDir(releaseDir, dashboardPackageName);
+  await copyDirectory(path.join(workspaceRoot, dashboardSourceDist), path.join(targetDir, "dist"));
+  await writeJson(path.join(targetDir, "package.json"), {
+    name: dashboardPackageName,
+    version,
+    private: true,
+    type: "module",
+    files: ["dist"],
+  });
+
+  return version;
+}
+
+function bundledPackageDir(releaseDir: string, packageName: string): string {
+  return path.join(releaseDir, "node_modules", ...packageName.split("/"));
+}
+
+function bundledPackagePath(packageName: string): string {
+  return path.posix.join("node_modules", ...packageName.split("/"));
+}
+
 function releasePackageJson(
   workspacePackage: WorkspacePackage,
   selectedPackages: Map<string, WorkspacePackage>,
   catalog: Record<string, string>,
+  vendored: Map<string, ResolvedVendoredDependency>,
 ): PackageJson {
   const source = workspacePackage.packageJson;
   const releasePackage = withoutUndefined({
@@ -367,6 +461,7 @@ function releasePackageJson(
     workspacePackage,
     selectedPackages,
     catalog,
+    vendored,
   );
 
   if (Object.keys(dependencies).length > 0) {
@@ -376,11 +471,15 @@ function releasePackageJson(
   return releasePackage;
 }
 
+// Internal workspace and vendored dependencies are bundled alongside this package, so pin them to
+// the exact version of the bundled copy. npm satisfies those edges from the bundle without ever
+// reaching the registry (the packages are private), and every reference resolves to one real node.
 function rewriteDependencies(
   dependencies: Record<string, string>,
   owner: WorkspacePackage,
   selectedPackages: Map<string, WorkspacePackage>,
   catalog: Record<string, string>,
+  vendored: Map<string, ResolvedVendoredDependency>,
 ): Record<string, string> {
   const rewritten: Record<string, string> = {};
 
@@ -392,14 +491,20 @@ function rewriteDependencies(
       if (!dependency) {
         throw new Error(`${owner.name} has unstaged workspace dependency ${dependencyName}.`);
       }
+      const dependencyVersion = dependency.packageJson.version;
+      if (!dependencyVersion) {
+        throw new Error(
+          `Cannot pin ${dependencyName} for ${owner.name}: workspace package has no version.`,
+        );
+      }
 
-      rewritten[dependencyName] = fileSpecifierBetween(owner.relativeDir, dependency.relativeDir);
+      rewritten[dependencyName] = dependencyVersion;
       continue;
     }
 
-    const vendoredTarget = vendoredRuntimeDependencyTargets.get(dependencyName);
-    if (vendoredTarget) {
-      rewritten[dependencyName] = fileSpecifierBetween(owner.relativeDir, vendoredTarget);
+    const vendoredDependency = vendored.get(dependencyName);
+    if (vendoredDependency) {
+      rewritten[dependencyName] = vendoredDependency.version;
       continue;
     }
 
@@ -431,34 +536,39 @@ function resolveCatalogSpecifier(
   return specifier;
 }
 
-function fileSpecifierBetween(fromRelativeDir: string, toRelativeDir: string): string {
-  const relative = path.posix.relative(fromRelativeDir, toRelativeDir);
-  return `file:${relative.startsWith(".") ? relative : `./${relative}`}`;
-}
-
 async function writeRootPackageJson(
   releaseDir: string,
   version: string,
   packages: WorkspacePackage[],
+  vendored: Map<string, ResolvedVendoredDependency>,
+  dashboardVersion: string,
   externalDependencies: Record<string, string>,
 ): Promise<void> {
-  // npm does not install the registry dependencies of a `file:` directory dependency, so a
-  // consumer that runs the release as a dependency (npx, npm install <tarball>) only gets symlinks
-  // to the workspace packages and none of their external deps. Declaring every workspace package
-  // and every external dependency at the root makes npm install the full graph in either layout:
-  // the staged directory used as the install root, or the package hoisted under node_modules.
+  // Every internal workspace package, the vendored runtime deps, and the dashboard ship inside this
+  // package's own node_modules and are declared as bundledDependencies. npm extracts them as real
+  // nodes (never symlinks) and never resolves them from the registry, so npx/install gets the full
+  // private graph deterministically and avoids the symlinked-`Link` reify crash (npm/cli#9506). The
+  // external registry dependencies are declared normally so npm installs and hoists them for the
+  // bundled packages to resolve.
+  const bundledDependencies: Array<readonly [string, string]> = [
+    ...packages.map(
+      (workspacePackage) =>
+        [workspacePackage.name, workspacePackage.packageJson.version ?? version] as const,
+    ),
+    ...[...vendored.values()].map(
+      (dependency) => [dependency.packageName, dependency.version] as const,
+    ),
+    [dashboardPackageName, dashboardVersion] as const,
+  ];
+
   const dependencies = Object.fromEntries(
-    [
-      ...packages.map(
-        (workspacePackage) =>
-          [workspacePackage.name, `file:${workspacePackage.relativeDir}`] as const,
-      ),
-      ...vendoredRuntimeDependencies.map(
-        (dependency) => [dependency.packageName, `file:${dependency.targetDir}`] as const,
-      ),
-      ...Object.entries(externalDependencies),
-    ].sort(([left], [right]) => left.localeCompare(right)),
+    [...bundledDependencies, ...Object.entries(externalDependencies)].sort(([left], [right]) =>
+      left.localeCompare(right),
+    ),
   );
+  const bundleDependencies = bundledDependencies
+    .map(([name]) => name)
+    .sort((left, right) => left.localeCompare(right));
 
   await writeJson(path.join(releaseDir, "package.json"), {
     name: "lorenz",
@@ -477,6 +587,7 @@ async function writeRootPackageJson(
       start: "node ./node_modules/@lorenz/cli/dist/bin/cli.js",
     },
     dependencies,
+    bundleDependencies,
     engines: {
       node: ">=24",
     },
@@ -531,7 +642,7 @@ function collectExternalDependencies(
       workspacePackage.packageJson.dependencies ?? {},
     )) {
       if (specifier.startsWith("workspace:")) continue;
-      // Vendored runtime deps ship inside the release as file: packages, not registry installs.
+      // Vendored runtime deps ship inside the release as bundled packages, not registry installs.
       if (vendoredRuntimeDependencyTargets.has(dependencyName)) continue;
 
       const version = resolveCatalogSpecifier(dependencyName, specifier, catalog);
@@ -554,6 +665,7 @@ function collectExternalDependencies(
 function releaseManifest(
   version: string,
   packages: WorkspacePackage[],
+  vendored: Map<string, ResolvedVendoredDependency>,
   externalDependencies: Record<string, string>,
 ): ReleaseManifest {
   const externalNames = Object.keys(externalDependencies).sort();
@@ -565,15 +677,15 @@ function releaseManifest(
     schemaVersion: 1,
     version,
     entrypoint: releaseEntrypoint,
-    dashboardDist,
+    dashboardDist: dashboardStagedDist,
     installCommand: "npm install --omit=dev",
     packages: packages.map((workspacePackage) => ({
       name: workspacePackage.name,
-      path: workspacePackage.relativeDir,
+      path: bundledPackagePath(workspacePackage.name),
     })),
-    vendoredRuntimeDependencies: vendoredRuntimeDependencies.map((dependency) => ({
+    vendoredRuntimeDependencies: [...vendored.values()].map((dependency) => ({
       name: dependency.packageName,
-      path: dependency.targetDir,
+      path: bundledPackagePath(dependency.packageName),
     })),
     externalDependencies: externalNames,
     nativeDependencies,

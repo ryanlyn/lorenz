@@ -29,11 +29,24 @@ test("stages a source-free CLI release tree with rewritten package manifests", a
   });
 
   const releaseDir = result.releaseDir;
-  assert.equal(await exists(path.join(releaseDir, "apps/cli/src/main.ts")), false);
-  assert.equal(await exists(path.join(releaseDir, "apps/cli/test/cli.test.ts")), false);
-  assert.equal(await exists(path.join(releaseDir, "apps/cli/dist/tsconfig.tsbuildinfo")), false);
-  assert.equal(await exists(path.join(releaseDir, "apps/cli/dist/bin/cli.js")), true);
-  assert.equal(await exists(path.join(releaseDir, "apps/lorenz-dashboard/dist/index.html")), true);
+  // Packages are bundled under node_modules as real, source-free directories.
+  assert.equal(await exists(path.join(releaseDir, "node_modules/@lorenz/cli/src/main.ts")), false);
+  assert.equal(
+    await exists(path.join(releaseDir, "node_modules/@lorenz/cli/test/cli.test.ts")),
+    false,
+  );
+  assert.equal(
+    await exists(path.join(releaseDir, "node_modules/@lorenz/cli/dist/tsconfig.tsbuildinfo")),
+    false,
+  );
+  assert.equal(
+    await exists(path.join(releaseDir, "node_modules/@lorenz/cli/dist/bin/cli.js")),
+    true,
+  );
+  assert.equal(
+    await exists(path.join(releaseDir, "node_modules/@lorenz/dashboard/dist/index.html")),
+    true,
+  );
   assert.equal(await exists(result.archivePath ?? ""), true);
 
   const rootPackage = await readJson(path.join(releaseDir, "package.json"));
@@ -42,39 +55,67 @@ test("stages a source-free CLI release tree with rewritten package manifests", a
   assert.equal(rootPackage.private, undefined);
   assert.deepEqual(rootPackage.publishConfig, { access: "public" });
   assert.deepEqual(rootPackage.bin, { lorenz: "./bin/lorenz" });
-  // The root must declare every workspace package (file:) and every external dependency so that
-  // npm installs the full graph even when the release is installed as a dependency (npx). npm does
-  // not install the registry deps of a file: directory dependency on its own.
+  // Every internal/vendored package plus the dashboard ships bundled (real nodes, never symlinks)
+  // so npm avoids the symlinked-Link reify crash (npm/cli#9506). They are pinned to the bundled
+  // version; external registry deps are declared so npm installs and hoists them.
   assert.deepEqual(rootPackage.dependencies, {
-    "@agentclientprotocol/claude-agent-acp": "file:vendor/claude-agent-acp",
-    "@agentclientprotocol/codex-acp": "file:vendor/codex-acp",
-    "@anthropic-ai/claude-agent-sdk": "file:runtime-deps/anthropic-claude-agent-sdk",
-    "@openai/codex": "file:runtime-deps/openai-codex",
-    "@lorenz/acp": "file:packages/acp",
-    "@lorenz/cli": "file:apps/cli",
-    "@lorenz/server": "file:packages/server",
+    "@agentclientprotocol/claude-agent-acp": "0.40.0",
+    "@agentclientprotocol/codex-acp": "0.0.45",
+    "@anthropic-ai/claude-agent-sdk": "0.3.160",
+    "@openai/codex": "0.128.0",
+    "@lorenz/acp": "0.1.0",
+    "@lorenz/cli": "9.9.9",
+    "@lorenz/dashboard": "2.2.2",
+    "@lorenz/server": "0.1.0",
     "better-sqlite3": "^12.10.0",
     commander: "^14.0.3",
     execa: "^9.6.1",
     hono: "^4.12.18",
   });
+  // The fix hinges on shipping no `file:` directory deps: that is what npm installs as the fragile
+  // symlinked Link nodes. Guard against any regression that reintroduces them.
+  for (const [name, specifier] of Object.entries(
+    rootPackage.dependencies as Record<string, string>,
+  )) {
+    assert.equal(
+      (specifier as string).startsWith("file:"),
+      false,
+      `${name} must not be a file: dependency`,
+    );
+  }
+  assert.deepEqual(rootPackage.bundleDependencies, [
+    "@agentclientprotocol/claude-agent-acp",
+    "@agentclientprotocol/codex-acp",
+    "@anthropic-ai/claude-agent-sdk",
+    "@lorenz/acp",
+    "@lorenz/cli",
+    "@lorenz/dashboard",
+    "@lorenz/server",
+    "@openai/codex",
+  ]);
 
-  // Binary-backed SDKs are vendored with their platform binaries stripped, and the bridges point at
-  // the vendored copies so installs never fetch the (hundreds of MB) agent binaries.
+  const dashboardPackage = await readJson(
+    path.join(releaseDir, "node_modules/@lorenz/dashboard/package.json"),
+  );
+  assert.equal(dashboardPackage.version, "2.2.2");
+  assert.deepEqual(dashboardPackage.files, ["dist"]);
+
+  // Binary-backed SDKs are vendored with their platform binaries stripped, and the bridges depend
+  // on the bundled version so installs never fetch the (hundreds of MB) agent binaries.
   const vendoredSdk = await readJson(
-    path.join(releaseDir, "runtime-deps/anthropic-claude-agent-sdk/package.json"),
+    path.join(releaseDir, "node_modules/@anthropic-ai/claude-agent-sdk/package.json"),
   );
   assert.equal("optionalDependencies" in vendoredSdk, false);
   assert.equal(vendoredSdk.private, true);
   assert.equal(
-    await exists(path.join(releaseDir, "runtime-deps/anthropic-claude-agent-sdk/sdk.mjs")),
+    await exists(path.join(releaseDir, "node_modules/@anthropic-ai/claude-agent-sdk/sdk.mjs")),
     true,
   );
   const claudeBridge = await readJson(
-    path.join(releaseDir, "vendor/claude-agent-acp/package.json"),
+    path.join(releaseDir, "node_modules/@agentclientprotocol/claude-agent-acp/package.json"),
   );
   assert.deepEqual(claudeBridge.dependencies, {
-    "@anthropic-ai/claude-agent-sdk": "file:../../runtime-deps/anthropic-claude-agent-sdk",
+    "@anthropic-ai/claude-agent-sdk": "0.3.160",
   });
 
   // The launcher must resolve @lorenz/cli via module resolution, not a fixed node_modules path,
@@ -83,18 +124,20 @@ test("stages a source-free CLI release tree with rewritten package manifests", a
   assert.match(entrypointSource, /import\.meta\.resolve\("@lorenz\/cli"\)/);
   assert.equal(entrypointSource.includes("../node_modules/"), false);
 
-  const cliPackage = await readJson(path.join(releaseDir, "apps/cli/package.json"));
+  const cliPackage = await readJson(path.join(releaseDir, "node_modules/@lorenz/cli/package.json"));
   assert.equal(cliPackage.version, "9.9.9");
   assert.deepEqual(cliPackage.dependencies, {
-    "@lorenz/acp": "file:../../packages/acp",
-    "@lorenz/server": "file:../../packages/server",
+    "@lorenz/acp": "0.1.0",
+    "@lorenz/server": "0.1.0",
     commander: "^14.0.3",
   });
 
-  const serverPackage = await readJson(path.join(releaseDir, "packages/server/package.json"));
+  const serverPackage = await readJson(
+    path.join(releaseDir, "node_modules/@lorenz/server/package.json"),
+  );
   assert.equal(serverPackage.version, "0.1.0");
   assert.deepEqual(serverPackage.dependencies, {
-    "@lorenz/acp": "file:../acp",
+    "@lorenz/acp": "0.1.0",
     "better-sqlite3": "^12.10.0",
     hono: "^4.12.18",
   });
@@ -113,11 +156,18 @@ test("stages a source-free CLI release tree with rewritten package manifests", a
   );
   assert.deepEqual(manifest.nativeDependencies, ["better-sqlite3"]);
   assert.equal(manifest.installCommand, "npm install --omit=dev");
+  assert.equal(manifest.dashboardDist, "node_modules/@lorenz/dashboard/dist");
+  assert.equal(
+    (manifest.packages as Array<{ name: string; path: string }>).find(
+      (entry) => entry.name === "@lorenz/cli",
+    )?.path,
+    "node_modules/@lorenz/cli",
+  );
   assert.deepEqual(
     (manifest.vendoredRuntimeDependencies as Array<{ name: string }>).map((entry) => entry.name),
     ["@anthropic-ai/claude-agent-sdk", "@openai/codex"],
   );
-  // Vendored SDKs are shipped as file: packages, not registry installs, so they are not externals.
+  // Vendored SDKs are shipped as bundled packages, not registry installs, so they are not externals.
   assert.equal(
     (manifest.externalDependencies as string[]).includes("@anthropic-ai/claude-agent-sdk"),
     false,
@@ -273,6 +323,12 @@ catalog:
     "#!/usr/bin/env node\n",
   );
 
+  await seedPackage(workspaceRoot, "apps/lorenz-dashboard", {
+    name: "@lorenz/dashboard",
+    version: "2.2.2",
+    private: true,
+    type: "module",
+  });
   await writeFile(workspaceRoot, "apps/lorenz-dashboard/dist/index.html", "<div></div>\n");
   await writeFile(workspaceRoot, "README.md", "# Test\n");
 }
