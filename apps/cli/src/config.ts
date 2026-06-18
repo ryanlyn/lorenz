@@ -22,6 +22,7 @@ import {
   writeWorkflowFile,
 } from "@lorenz/workflow";
 import { errorMessage } from "@lorenz/domain";
+import { shellEscape } from "@lorenz/ssh";
 
 import { registerBuiltinBackends } from "./daemon.js";
 
@@ -211,7 +212,7 @@ export async function runConfigCommand(
 
     stdout.write(`Created ${target}\n`);
     stdout.write(`Tracker: ${answers.tracker.kind} | Agent: ${answers.agent}\n`);
-    stdout.write(`Validate: lorenz doctor ${target}\n`);
+    stdout.write(`Validate: lorenz doctor ${shellEscape(target)}\n`);
     return 0;
   } catch (error) {
     stderr.write(`${errorMessage(error)}\n`);
@@ -264,7 +265,8 @@ function validateGeneratedWorkflow(
 ): void {
   const rendered = renderWorkflowContent(config, initialWorkflowPrompt);
   const parsed = parseWorkflowContent(rendered);
-  const settings = parseConfig(parsed.config, validationEnvironment(parsed.config, env));
+  const validationConfig = configForValidation(parsed.config);
+  const settings = parseConfig(validationConfig, validationEnvironment(validationConfig, env));
   validateDispatchConfig(
     settings,
     defaultTrackerRegistry,
@@ -380,13 +382,13 @@ async function collectSecretReference(
   defaultValue: string,
 ): Promise<string> {
   for (;;) {
-    const value = await prompter.input(`${label} environment reference`, {
+    const value = await prompter.input(`${label} secret reference`, {
       defaultValue,
       required: true,
     });
-    if (/^\$[A-Za-z_][A-Za-z0-9_]*$/.test(value)) return value;
+    if (isSecretReference(value)) return value;
     prompter.message(
-      `Enter an environment reference such as ${defaultValue}; literal secrets are not stored.`,
+      `Enter a secret reference such as ${defaultValue} or op://vault/item/field; literal secrets are not stored.`,
     );
   }
 }
@@ -469,6 +471,33 @@ function validationEnvironment(
     if (match && !next[match[1]!]) next[match[1]!] = "configured-for-validation";
   });
   return next;
+}
+
+function configForValidation(config: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(config).map(([key, value]) => [key, valueForValidation(value)]),
+  );
+}
+
+function valueForValidation(value: unknown): unknown {
+  if (typeof value === "string") {
+    return isOnePasswordReference(value) ? "configured-for-validation" : value;
+  }
+  if (Array.isArray(value)) return value.map(valueForValidation);
+  if (typeof value === "object" && value !== null) {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, entry]) => [key, valueForValidation(entry)]),
+    );
+  }
+  return value;
+}
+
+function isSecretReference(value: string): boolean {
+  return /^\$[A-Za-z_][A-Za-z0-9_]*$/.test(value) || isOnePasswordReference(value);
+}
+
+function isOnePasswordReference(value: string): boolean {
+  return value.startsWith("op://");
 }
 
 function visitStrings(value: unknown, visit: (value: string) => void): void {

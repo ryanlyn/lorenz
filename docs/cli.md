@@ -28,8 +28,8 @@ lorenz config -f FLOW.md         # replace without an overwrite prompt
 The initial choices default to Jira and Claude. Explicit choices are written into the workflow and
 therefore override parser defaults. The tracker choices are Jira, Linear, a local Markdown board,
 and Slack. Credential prompts default to environment references and the wizard writes them without
-resolving them. API secret prompts accept environment references only, so literal tokens are not
-written to `WORKFLOW.md`.
+resolving them. API secret prompts accept `$VAR` environment references and `op://` 1Password
+references, so literal tokens are not written to `WORKFLOW.md`.
 
 The wizard requires an interactive TTY and validates the generated config before writing it. When
 the target already exists, it refuses to replace it. `-f` / `--force` intentionally replaces it.

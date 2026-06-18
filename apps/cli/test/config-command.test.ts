@@ -95,6 +95,39 @@ test("config command creates a loadable Jira and Claude workflow", async () => {
   assert.equal(stderr.value, "");
 });
 
+test("config command shell-quotes the doctor workflow path", async () => {
+  const root = await tempDir("lorenz-config-command");
+  const workflowPath = path.join(root, "workflow dir", "team's $WORKFLOW.md");
+  const stdout = new CaptureWriter();
+  const prompter = new ScriptedPrompter([
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    "ENG",
+  ]);
+
+  assert.equal(
+    await runConfigCommand(
+      { workflowPath, force: false },
+      {
+        prompter,
+        stdout,
+        stderr: new CaptureWriter(),
+        env: {},
+        cwd: root,
+      },
+    ),
+    0,
+  );
+
+  const prefix = "Validate: lorenz doctor ";
+  const validateLine = stdout.value.split("\n").find((line) => line.startsWith(prefix));
+  assert.ok(validateLine);
+  assert.equal(validateLine, `${prefix}'${workflowPath.replaceAll("'", `'"'"'`)}'`);
+});
+
 test("config command supports local and Codex alternatives", async () => {
   const root = await tempDir("lorenz-config-local");
   const workflowPath = path.join(root, "WORKFLOW.md");
@@ -196,6 +229,44 @@ test("config command rejects literal API secrets", async () => {
     true,
   );
   assert.match(await fs.readFile(workflowPath, "utf8"), /api_key: \$CUSTOM_JIRA_TOKEN/);
+});
+
+test("config command accepts 1Password secret references without resolving them", async () => {
+  const root = await tempDir("lorenz-config-one-password-reference");
+  const workflowPath = path.join(root, "WORKFLOW.md");
+  const stderr = new CaptureWriter();
+  const prompter = new ScriptedPrompter([
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    "op://Engineering/Jira/api-token",
+    "ENG",
+  ]);
+
+  assert.equal(
+    await runConfigCommand(
+      { workflowPath, force: false },
+      {
+        prompter,
+        stdout: new CaptureWriter(),
+        stderr,
+        env: { PATH: "/nonexistent" },
+        cwd: root,
+      },
+    ),
+    0,
+  );
+
+  assert.equal(stderr.value, "");
+  assert.equal(
+    prompter.messages.some((message) => /literal secrets are not stored/.test(message)),
+    false,
+  );
+  assert.match(
+    await fs.readFile(workflowPath, "utf8"),
+    /api_key: op:\/\/Engineering\/Jira\/api-token/,
+  );
 });
 
 function defaultAnswers(): OnboardingAnswers {

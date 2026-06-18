@@ -48,9 +48,9 @@ lorenz doctor [path-to-WORKFLOW.md]
 
 `lorenz config` launches the interactive onboarding wizard. It defaults to Jira and Claude, asks
 for the selected provider's essentials, and defaults credential answers to environment references
-without resolving them. API secrets must be entered as environment references, not literal values.
-It will not replace an existing workflow unless you pass `--force`. The installed package exposes
-the same wizard as
+without resolving them. API secrets must be entered as `$VAR` or `op://` references, not literal
+values. It will not replace an existing workflow unless you pass `--force`. The installed package
+exposes the same wizard as
 `lorenz-config [workflowPath]` (or `npx --package lorenz lorenz-config`).
 
 `--logs-root <path>` writes logs under `<path>/log/lorenz.log`. With no workflow path the CLI reads

@@ -373,6 +373,34 @@ test("tracker providers supply active-state defaults without overriding explicit
   assert.deepEqual(explicit.tracker.activeStates, ["Ready"]);
 });
 
+test("custom trackers without active-state defaults retain the generic fallback", () => {
+  const customTrackers = new TrackerRegistry();
+  customTrackers.register({
+    kind: "custom",
+    createClient: () => {
+      throw new Error("not under test");
+    },
+  });
+
+  const registered = parseConfigWith(
+    { tracker: { kind: "custom" } },
+    {},
+    {},
+    customTrackers,
+    executors,
+  );
+  assert.deepEqual(registered.tracker.activeStates, ["Todo", "In Progress"]);
+
+  const unregistered = parseConfigWith(
+    { tracker: { kind: "unregistered" } },
+    {},
+    {},
+    customTrackers,
+    executors,
+  );
+  assert.deepEqual(unregistered.tracker.activeStates, ["Todo", "In Progress"]);
+});
+
 test("tracker.kind selects a named trackers bundle with its own provider", () => {
   const settings = parseConfig({
     tracker: { kind: "primary" },

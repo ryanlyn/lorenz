@@ -1,6 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import type { Stats } from "node:fs";
 import fs from "node:fs/promises";
+import type { FileHandle } from "node:fs/promises";
 import path from "node:path";
 
 import { Liquid } from "liquidjs";
@@ -160,17 +161,23 @@ export async function writeWorkflowFile(
   options: { force?: boolean } = {},
 ): Promise<string> {
   const absolute = path.resolve(filePath);
-  await fs.mkdir(path.dirname(absolute), { recursive: true });
+  const directory = path.dirname(absolute);
+  await fs.mkdir(directory, { recursive: true });
 
   const tempPath = `${absolute}.${process.pid}.${randomBytes(8).toString("hex")}.tmp`;
+  let tempExists = false;
+  let operationError: unknown;
+  let operationFailed = false;
+
   try {
-    await fs.writeFile(tempPath, renderWorkflowContent(config, promptTemplate), {
-      encoding: "utf8",
-      flag: "wx",
-    });
+    const tempFile = await fs.open(tempPath, "wx");
+    tempExists = true;
+    await writeAndSyncTempFile(tempFile, tempPath, renderWorkflowContent(config, promptTemplate));
 
     if (options.force) {
       await fs.rename(tempPath, absolute);
+      tempExists = false;
+      await syncDirectory(directory);
     } else {
       try {
         await fs.link(tempPath, absolute);
@@ -182,10 +189,37 @@ export async function writeWorkflowFile(
         }
         throw error;
       }
+      await syncDirectory(directory);
     }
-  } finally {
-    await fs.rm(tempPath, { force: true }).catch(() => {});
+  } catch (error) {
+    operationError = error;
+    operationFailed = true;
   }
+
+  let cleanupError: unknown;
+  let cleanupFailed = false;
+  if (tempExists) {
+    try {
+      await fs.rm(tempPath, { force: true });
+      tempExists = false;
+      await syncDirectory(directory);
+    } catch (error) {
+      cleanupError = error;
+      cleanupFailed = true;
+    }
+  }
+
+  if (operationFailed) {
+    if (cleanupFailed) {
+      throw aggregateWorkflowErrors(
+        operationError,
+        cleanupError,
+        `clean up temporary workflow file ${tempPath}`,
+      );
+    }
+    throw operationError;
+  }
+  if (cleanupFailed) throw cleanupError;
 
   return absolute;
 }
@@ -212,6 +246,93 @@ function workflowContentStamp(stat: Stats, content: string): WorkflowContentStam
     size: stat.size,
     contentHash: createHash("sha256").update(content).digest("hex"),
   };
+}
+
+async function writeAndSyncTempFile(
+  tempFile: FileHandle,
+  tempPath: string,
+  content: string,
+): Promise<void> {
+  let writeError: unknown;
+  let writeFailed = false;
+  try {
+    await tempFile.writeFile(content, { encoding: "utf8" });
+    await tempFile.sync();
+  } catch (error) {
+    writeError = error;
+    writeFailed = true;
+  }
+
+  try {
+    await tempFile.close();
+  } catch (closeError) {
+    if (writeFailed) {
+      throw aggregateWorkflowErrors(
+        writeError,
+        closeError,
+        `close temporary workflow file ${tempPath}`,
+      );
+    }
+    throw closeError;
+  }
+
+  if (writeFailed) throw writeError;
+}
+
+async function syncDirectory(directory: string): Promise<void> {
+  let directoryHandle: FileHandle;
+  try {
+    directoryHandle = await fs.open(directory, "r");
+  } catch (error) {
+    if (isUnsupportedDirectorySyncError(error)) return;
+    throw error;
+  }
+
+  let syncError: unknown;
+  let syncFailed = false;
+  try {
+    await directoryHandle.sync();
+  } catch (error) {
+    if (!isUnsupportedDirectorySyncError(error)) {
+      syncError = error;
+      syncFailed = true;
+    }
+  }
+
+  try {
+    await directoryHandle.close();
+  } catch (closeError) {
+    if (syncFailed) {
+      throw aggregateWorkflowErrors(syncError, closeError, `close workflow directory ${directory}`);
+    }
+    throw closeError;
+  }
+
+  if (syncFailed) throw syncError;
+}
+
+function isUnsupportedDirectorySyncError(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException).code;
+  return (
+    code === "EINVAL" ||
+    code === "ENOTSUP" ||
+    code === "EOPNOTSUPP" ||
+    code === "ENOSYS" ||
+    code === "EISDIR" ||
+    (process.platform === "win32" && (code === "EACCES" || code === "EPERM"))
+  );
+}
+
+function aggregateWorkflowErrors(
+  primaryError: unknown,
+  secondaryError: unknown,
+  secondaryAction: string,
+): AggregateError {
+  return new AggregateError(
+    [primaryError, secondaryError],
+    `${errorMessage(primaryError)}; additionally failed to ${secondaryAction}: ${errorMessage(secondaryError)}`,
+    { cause: primaryError },
+  );
 }
 
 function missingWorkflowFileError(absolute: string, error: unknown): Error {

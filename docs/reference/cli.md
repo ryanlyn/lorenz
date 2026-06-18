@@ -32,8 +32,8 @@ The wizard defaults its tracker choice to Jira and its agent choice to Claude. T
 Jira, Linear, local, and Slack; agent choices are Claude and Codex. Provider prompts collect Jira
 project keys, Linear project slugs, local board path/id prefix, or Slack channel ids as applicable.
 Credential prompts default to `$JIRA_*`, `$LINEAR_API_KEY`, or `$SLACK_*` references, which are
-written without resolution. API secret prompts accept environment references only and reject
-literal values.
+written without resolution. API secret prompts accept `$VAR` environment references and `op://`
+1Password references, and reject literal values.
 
 | Argument / flag | Type | Default | Meaning |
 | --- | --- | --- | --- |

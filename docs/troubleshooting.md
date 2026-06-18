@@ -44,9 +44,10 @@ When the same workflow validates here but fails in CI or a different shell, the 
 `lorenz config [workflowPath]` and `lorenz-config [workflowPath]` run the same onboarding wizard.
 When the target exists, choose a different path or pass `--force` when replacement is intentional.
 
-Credential prompts default to environment references and the wizard writes them without resolving
-them. API secret prompts reject literal values. If the generated workflow later reports a missing
-credential, export the referenced variable in that shell.
+Credential prompts default to environment references and the wizard writes `$VAR` and `op://`
+references without resolving them. API secret prompts reject literal values. If the generated
+workflow later reports a missing credential, export the referenced variable or authenticate the
+1Password CLI in that shell.
 
 Both entrypoints require stdin and stdout to be interactive terminals. The error
 `Lorenz config requires an interactive terminal` means the wizard was launched from a pipe, CI job,

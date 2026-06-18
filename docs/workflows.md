@@ -8,7 +8,8 @@ One file does two jobs. The YAML front matter configures the runtime; the Markdo
 
 `lorenz config [workflowPath]` and `lorenz-config [workflowPath]` generate this file through the same
 interactive wizard. The wizard defaults to Jira and Claude, defaults credential prompts to
-environment references without resolving them, and rejects literal API secrets.
+environment references without resolving them, accepts `op://` 1Password references, and rejects
+literal API secrets.
 
 The runtime locates the file in this order:
 

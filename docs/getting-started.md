@@ -40,8 +40,8 @@ npx lorenz config WORKFLOW.md
 With no path, it uses `LORENZ_WORKFLOW` and then `./WORKFLOW.md`, matching the daemon. Pressing Enter
 on the provider choices selects Jira and Claude. The wizard then asks only for the selected
 provider's required setup. Credential prompts default to environment references such as
-`$JIRA_API_KEY`; those references are written without being resolved, and API secret prompts reject
-literal values.
+`$JIRA_API_KEY`; `$VAR` and `op://` references are written without being resolved, and API secret
+prompts reject literal values.
 
 An existing target is left untouched unless you pass `--force`. Use it only when you intentionally
 want to replace the file:

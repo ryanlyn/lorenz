@@ -49,8 +49,8 @@ Any string value can be a secret reference. Resolution runs at parse time.
 Order: an inline `$VAR` that resolves non-empty wins; otherwise the provider env fallback applies; then any `op://` value is read. A bare `op://` fallback resolves even when no inline value is set. A missing `op` binary throws `1Password CLI (op) is required ... cannot be managed by mise.`; a failed read throws `Failed to resolve 1Password reference: <ref>`. See [secret-resolution](../features/secret-resolution.md).
 
 The config wizard's credential prompts default to these references and write them without
-resolution. API-secret prompts require an environment reference and reject literal credentials so
-tokens are not stored in `WORKFLOW.md`.
+resolution. API-secret prompts require a `$VAR` or `op://` reference and reject literal credentials
+so tokens are not stored in `WORKFLOW.md`.
 
 *Diagram placeholder: secret resolution decision tree (inline `$VAR` then provider env fallback then `op://` 1Password read), with the empty-string and bare-`op://` edge cases. Caption: how a single string value becomes a resolved secret.*
 

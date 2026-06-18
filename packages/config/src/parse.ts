@@ -237,6 +237,8 @@ const TRACKER_COMMON_KEYS = new Set([
   "dispatch",
 ]);
 
+const GENERIC_TRACKER_ACTIVE_STATES = ["Todo", "In Progress"];
+
 function parseTracker(
   defaults: TrackerSettings,
   trackerRaw: TrackerRaw,
@@ -285,7 +287,11 @@ function parseTracker(
     assignee,
     activeStates:
       trackerRecord.activeStates ??
-      (provider?.defaultActiveStates ? [...provider.defaultActiveStates] : defaults.activeStates),
+      (provider?.defaultActiveStates
+        ? [...provider.defaultActiveStates]
+        : kind === defaults.kind
+          ? defaults.activeStates
+          : [...GENERIC_TRACKER_ACTIVE_STATES]),
     terminalStates: trackerRecord.terminalStates ?? defaults.terminalStates,
     dispatch: parseDispatch(defaults.dispatch, trackerRecord.dispatch ?? {}),
     options,
