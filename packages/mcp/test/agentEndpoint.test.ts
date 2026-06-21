@@ -9,7 +9,7 @@ import type { Settings } from "@lorenz/domain";
 import { assert } from "@lorenz/test-utils";
 
 import { acquireAgentMcpEndpointForRun } from "../src/agentEndpoint.js";
-import { mcpAuthScopeForSettings, validMcpToken } from "../src/auth.js";
+import { resolveRunClaim } from "../src/auth.js";
 
 // Avoid spawning a real `ssh -N` reverse tunnel; the per-run tunnel allocation
 // logic in WorkerHostPool is exercised against a fake child process.
@@ -75,12 +75,6 @@ function settingsWithPort(port: number): Settings {
   } as unknown as Settings;
 }
 
-// Tokens issued for a configured server port are scoped to the settings
-// identity; validity checks must use the same scope.
-function tokenScope(settings: Settings, port: number): string {
-  return mcpAuthScopeForSettings(settings, "127.0.0.1", port);
-}
-
 beforeEach(() => {
   mockStartReverseTunnel.mockReset();
   mockStartReverseTunnel.mockImplementation(() => makeFakeProcess());
@@ -97,8 +91,12 @@ test("acquireAgentMcpEndpointForRun.release() revokes the token, drops the local
 
   const lease = await acquireAgentMcpEndpointForRun(settings, "worker-1", "run-A", workerHostPool);
 
-  // Sub-resource (1): an auth token was issued and is currently valid.
-  assert.equal(validMcpToken(lease.token, tokenScope(settings, port)), true);
+  // Sub-resource (1): a per-run Token B was minted and resolves to a claim bound
+  // to THIS run server-side (runKey is resolved from the token, never reported).
+  const claim = resolveRunClaim(lease.token);
+  assert.ok(claim);
+  assert.equal(claim?.runKey, "run-A");
+  assert.equal(claim?.workerHost, "worker-1");
   // Sub-resource (3): a per-run reverse tunnel was opened for this run.
   assert.match(lease.url, new RegExp(`^http://127\\.0\\.0\\.1:\\d+/mcp$`));
   assert.equal(mockStartReverseTunnel.mock.calls.length, 1);
@@ -107,8 +105,8 @@ test("acquireAgentMcpEndpointForRun.release() revokes the token, drops the local
 
   await lease.release();
 
-  // (1) token revoked.
-  assert.equal(validMcpToken(lease.token, tokenScope(settings, port)), false);
+  // (1) Token B revoked: its claim no longer resolves (fails closed).
+  assert.equal(resolveRunClaim(lease.token), undefined);
   // (3) per-run tunnel closed via closeForRun(workerHost, runKey).
   assert.deepEqual(closeForRun.mock.calls[0], ["worker-1", "run-A"]);
   // (2) local-server ref dropped to zero -> server stopped (no longer reachable).
@@ -144,7 +142,7 @@ test("acquireAgentMcpEndpointForRun releases the local-server ref AND revokes th
   // failed attempt left no lingering refcount that would keep the server alive.
   mockStartReverseTunnel.mockImplementation(() => makeFakeProcess());
   const lease = await acquireAgentMcpEndpointForRun(settings, "worker-1", "run-ok", workerHostPool);
-  assert.equal(validMcpToken(lease.token, tokenScope(settings, port)), true);
+  assert.ok(resolveRunClaim(lease.token));
   assert.equal(await mcpServerReachable("127.0.0.1", port), true);
   await lease.release();
   // Local server stopped again -> the earlier failed acquire did NOT leave a
@@ -191,4 +189,48 @@ test("the local MCP server refcount is shared across two per-run endpoints on th
   await b.release();
   assert.equal(await mcpServerReachable("127.0.0.1", port), false);
   assert.deepEqual(stopForRun.mock.calls[1], ["worker-1", "run-B"]);
+});
+
+test("co-resident per-run claims share the live local-server generation", async () => {
+  const port = await freeLocalPort();
+  const settings = settingsWithPort(port);
+
+  // Two runs co-resident on ONE shared local MCP server (the second acquire
+  // reuses the refcounted instance) carry the SAME slot generation in their
+  // claims: the generation tracks the shared endpoint, not the individual run.
+  const a = await acquireAgentMcpEndpointForRun(settings, "worker-1", "run-A", workerHostPool);
+  const b = await acquireAgentMcpEndpointForRun(settings, "worker-1", "run-B", workerHostPool);
+
+  const claimA = resolveRunClaim(a.token);
+  const claimB = resolveRunClaim(b.token);
+  assert.ok(claimA);
+  assert.ok(claimB);
+  assert.equal(claimA?.generation, claimB?.generation);
+
+  await a.release();
+  await b.release();
+});
+
+test("recycling a host:port slot bumps the generation so a fresh claim outranks the recycled one", async () => {
+  const port = await freeLocalPort();
+  const settings = settingsWithPort(port);
+
+  // First run brings the shared local server up; capture its generation.
+  const first = await acquireAgentMcpEndpointForRun(settings, "worker-1", "run-A", workerHostPool);
+  const firstGen = resolveRunClaim(first.token)?.generation;
+  assert.ok(typeof firstGen === "number");
+
+  // Fully release -> refcount hits zero -> the server is torn down (recycle).
+  await first.release();
+  assert.equal(await mcpServerReachable("127.0.0.1", port), false);
+
+  // Re-acquiring the SAME host:port starts a brand-new entry, so its generation
+  // is STRICTLY higher. This is the exact input the per-request liveness fence
+  // uses to reject a Token B minted against the prior, now-recycled generation.
+  const second = await acquireAgentMcpEndpointForRun(settings, "worker-1", "run-B", workerHostPool);
+  const secondGen = resolveRunClaim(second.token)?.generation;
+  assert.ok(typeof secondGen === "number");
+  assert.ok((secondGen as number) > (firstGen as number));
+
+  await second.release();
 });

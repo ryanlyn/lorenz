@@ -8,7 +8,14 @@ import {
 import type { McpServer } from "@agentclientprotocol/sdk";
 
 import { startMcpServer, type ObservabilityServerHandle } from "./server.js";
-import { issueMcpToken, mcpAuthScopeForSettings, revokeMcpToken } from "./auth.js";
+import {
+  issueMcpToken,
+  issueRunMcpToken,
+  mcpAuthScopeForSettings,
+  revokeMcpToken,
+  revokeRunClaim,
+  type RunClaim,
+} from "./auth.js";
 
 export function trackerMcpServerName(kind: TrackerKind | undefined): string {
   return `lorenz_${(kind ?? "tracker").replace(/[^A-Za-z0-9_]/g, "_")}`;
@@ -53,6 +60,13 @@ export interface RemoteMcpTunnelTransport {
 interface McpEndpoint {
   url: string;
   authScope: string;
+  /**
+   * Generation of the shared local MCP server this endpoint was minted against,
+   * captured BEFORE the per-run tunnel was opened so the per-run claim (Token B)
+   * is stamped with the generation that was live at acquire time. Bumped on host
+   * recycle; a later request carrying a stale generation fails the liveness fence.
+   */
+  generation: number;
   releaseTunnel?: (() => void) | undefined;
   localServer?: LocalMcpServerLease | undefined;
 }
@@ -61,11 +75,24 @@ interface LocalMcpServerEntry {
   handle: ObservabilityServerHandle;
   identity: string;
   refCount: number;
+  /**
+   * Monotonic generation for this host:port slot. Bumped each time a brand-new
+   * entry replaces a fully torn-down one (host recycle), so a token minted
+   * against the prior entry resolves to a stale generation and is rejected.
+   */
+  generation: number;
 }
 
 interface LocalMcpServerLease {
   key: string | null;
   handle: ObservabilityServerHandle;
+  /**
+   * The generation captured when this lease was taken. {@link
+   * releaseLocalMcpServer} no-ops when this is older than the live entry's
+   * generation: the entry was recycled and a fresh owner holds the live ref,
+   * so this late release must not decrement the new entry's refcount.
+   */
+  generation: number;
 }
 
 interface IssuedMcpToken {
@@ -77,6 +104,20 @@ const mcpPath = "/mcp";
 const configuredMcpProbeId = "lorenz-configured-mcp-probe";
 const localMcpServers = new Map<string, LocalMcpServerEntry>();
 const localMcpServerLocks = new Map<string, Promise<void>>();
+/**
+ * Monotonic generation per host:port slot, surviving entry teardown so a
+ * recreated entry gets a STRICTLY higher generation than the one it replaces.
+ * The fence (re-checked per request via the injected `isRunLive`) rejects any
+ * Token B minted against a prior, now-recycled generation of the same slot.
+ */
+const localMcpServerGenerations = new Map<string, number>();
+
+/**
+ * Coarse lifetime cap on a per-run claim (Token B). The claim is primarily
+ * run-lifetime-bound via the injected `isRunLive` re-check; this backstop only
+ * bounds a leaked token that somehow outlives both its run and its generation.
+ */
+const runClaimMaxLifetimeMs = 24 * 60 * 60 * 1000;
 
 export async function acquireAgentMcpEndpoint(
   settings: Settings,
@@ -136,7 +177,6 @@ export async function acquireAgentMcpEndpointForRun(
   let released = false;
   try {
     const configuredToken = issueConfiguredMcpToken(settings);
-    token = configuredToken?.token ?? null;
     endpoint = await acquirePerRunMcpEndpoint(
       workerHost,
       runKey,
@@ -144,7 +184,15 @@ export async function acquireAgentMcpEndpointForRun(
       configuredToken,
       tunnels,
     );
-    token ??= issueMcpToken(endpoint.authScope);
+    // The configured external-server bypass (Token A) is closed in C6; for now a
+    // configured token is revoked immediately because the per-run lease is scoped
+    // by Token B below, never by the settings-wide token.
+    revokeMcpToken(configuredToken?.token);
+    // Mint Token B: an opaque per-run token bound to a server-side claim. The
+    // claim's generation was captured BEFORE the `openForRun` await (see
+    // `acquirePerRunMcpEndpoint`), so a host recycle that bumps the slot's
+    // generation strands this token at the per-request liveness fence.
+    token = issueRunMcpToken(runClaimForLease(endpoint, settings, workerHost, runKey));
     return {
       url: endpoint.url,
       token,
@@ -157,17 +205,42 @@ export async function acquireAgentMcpEndpointForRun(
       release: async () => {
         if (released) return;
         released = true;
-        revokeMcpToken(token);
+        revokeRunClaim(token);
         tunnels.closeForRun(workerHost, runKey);
         if (endpoint?.localServer) await releaseLocalMcpServer(endpoint.localServer);
       },
     };
   } catch (error) {
-    revokeMcpToken(token);
+    revokeRunClaim(token);
     tunnels.closeForRun(workerHost, runKey);
     if (endpoint?.localServer) await releaseLocalMcpServer(endpoint.localServer);
     throw error;
   }
+}
+
+/**
+ * Build the server-side per-run claim (Token B) for a freshly-acquired per-run
+ * endpoint. `runKey` is the issue-scoped `${issueId}#${slotIndex}` the
+ * coordinator mints, so `issueId` is recovered as the part before the first
+ * `#`. The generation is the endpoint's captured-before-`openForRun` value, and
+ * `allowedTools` is left unset (the rest of the claim - liveness + generation +
+ * expiry - gates the run; per-tool scoping is layered in later).
+ */
+function runClaimForLease(
+  endpoint: McpEndpoint,
+  settings: Settings,
+  workerHost: string,
+  runKey: string,
+): RunClaim {
+  const issueId = runKey.split("#", 1)[0] ?? runKey;
+  return {
+    runKey,
+    workerHost,
+    issueId,
+    generation: endpoint.generation,
+    expiresAt: Date.now() + runClaimMaxLifetimeMs,
+    settingsScope: endpoint.authScope,
+  };
 }
 
 async function localMcpEndpoint(
@@ -183,6 +256,7 @@ async function localMcpEndpoint(
       configuredToken?.authScope ??
       localServer?.handle.authScope ??
       mcpAuthScopeForSettings(settings, serverHost, configuredPort),
+    generation: localServer?.generation ?? 1,
     localServer: localServer ?? undefined,
   };
 }
@@ -208,6 +282,7 @@ async function acquireRemoteMcpEndpoint(
         configuredToken?.authScope ??
         localServer?.handle.authScope ??
         mcpAuthScopeForSettings(settings, normalizeHttpBindHost(settings.server.host), localPort),
+      generation: localServer?.generation ?? 1,
       releaseTunnel: () => tunnels.releaseRemoteMcpTunnel(tunnel),
       localServer: localServer ?? undefined,
     };
@@ -231,6 +306,13 @@ async function acquirePerRunMcpEndpoint(
   // Drop the ref here so repeated tunnel-spawn failures don't leak refcounted
   // local MCP servers / their listeners.
   const localServer = await ensureLocalMcpServer(settings, configuredToken);
+  // Capture the shared local server's generation BEFORE the `openForRun` await.
+  // The single event loop is single-writer only BETWEEN awaits: stamping the
+  // claim with the generation that was live at this point (rather than re-reading
+  // it after the await, when a recycle may have bumped it) makes a stale token
+  // fail the per-request liveness fence instead of silently inheriting a newer
+  // generation it was never minted against.
+  const generation = localServer?.generation ?? 1;
   try {
     const localHost = "127.0.0.1";
     const localPort = localServer?.handle.port ?? settings.server.port;
@@ -244,6 +326,7 @@ async function acquirePerRunMcpEndpoint(
         configuredToken?.authScope ??
         localServer?.handle.authScope ??
         mcpAuthScopeForSettings(settings, normalizeHttpBindHost(settings.server.host), localPort),
+      generation,
       localServer: localServer ?? undefined,
     };
   } catch (error) {
@@ -271,7 +354,7 @@ async function ensureLocalMcpServer(
           throw new Error("configured_mcp_server_conflict");
         }
         existing.refCount += 1;
-        return { key, handle: existing.handle };
+        return { key, handle: existing.handle, generation: existing.generation };
       }
       if (await configuredMcpServerReachable(settings, configuredToken.token)) return null;
       const handle = await startMcpServer(settings, {
@@ -279,13 +362,21 @@ async function ensureLocalMcpServer(
         port: configuredPort,
         authScope: identity,
       });
-      localMcpServers.set(key, { handle, identity, refCount: 1 });
-      return { key, handle };
+      // Bump the slot's generation when a brand-new entry replaces a torn-down
+      // one. The first entry for a key gets generation 1; each recycle is
+      // strictly higher, so any Token B stamped with the prior generation is
+      // fenced out by the per-request liveness re-check.
+      const generation = (localMcpServerGenerations.get(key) ?? 0) + 1;
+      localMcpServerGenerations.set(key, generation);
+      localMcpServers.set(key, { handle, identity, refCount: 1, generation });
+      return { key, handle, generation };
     });
   }
 
   const handle = await startMcpServer(settings, { host: serverHost, port: 0 });
-  return { key: null, handle };
+  // Ephemeral (port 0) servers are not shared/refcounted, so each lease is its
+  // own generation-1 slot stopped on release; nothing recycles it in place.
+  return { key: null, handle, generation: 1 };
 }
 
 function issueConfiguredMcpToken(settings: Settings): IssuedMcpToken | null {
@@ -321,6 +412,12 @@ async function releaseLocalMcpServer(lease: LocalMcpServerLease): Promise<void> 
   await withLocalMcpServerLock(key, async () => {
     const entry = localMcpServers.get(key);
     if (!entry) return;
+    // Generation fence: this lease was taken against an OLDER entry that has
+    // since been fully torn down and recreated (host recycle bumped the slot's
+    // generation). A fresh owner holds the live entry's ref, so a late release
+    // from the prior generation must NOT decrement the new entry's refcount and
+    // tear down a server that is still in use.
+    if (lease.generation < entry.generation) return;
     if (entry.refCount > 1) {
       entry.refCount -= 1;
       return;
