@@ -242,7 +242,7 @@ function resolveStaticDir(): string {
     return path.dirname(require.resolve("@lorenz/dashboard/dist/index.html"));
   } catch {
     const thisFile = fileURLToPath(import.meta.url);
-    return path.resolve(path.dirname(thisFile), "../../../apps/lorenz-dashboard/dist");
+    return path.resolve(path.dirname(thisFile), "../../../apps/web/dist");
   }
 }
 

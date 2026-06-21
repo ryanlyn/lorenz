@@ -731,7 +731,7 @@ function defaultDashboardStaticDir(): string {
     const require = createRequire(import.meta.url);
     return path.dirname(require.resolve("@lorenz/dashboard/dist/index.html"));
   } catch {
-    return path.resolve(import.meta.dirname, "../../lorenz-dashboard/dist");
+    return path.resolve(import.meta.dirname, "../../web/dist");
   }
 }
 

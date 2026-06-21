@@ -22,7 +22,7 @@
     <rect x="320" y="62" width="118" height="28" rx="7" fill="#FFFFFF" stroke="#F59E0B" stroke-width="1"/>
     <text x="379" y="76" dominant-baseline="middle">apps/cli</text>
     <rect x="448" y="62" width="178" height="28" rx="7" fill="#FFFFFF" stroke="#F59E0B" stroke-width="1"/>
-    <text x="537" y="76" dominant-baseline="middle">apps/lorenz-dashboard</text>
+    <text x="537" y="76" dominant-baseline="middle">apps/web</text>
     <rect x="320" y="98" width="306" height="28" rx="7" fill="#FFFFFF" stroke="#F59E0B" stroke-width="1"/>
     <text x="473" y="112" dominant-baseline="middle">apps/traceviz</text>
   </g>
