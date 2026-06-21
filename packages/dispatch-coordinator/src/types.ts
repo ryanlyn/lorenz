@@ -116,10 +116,13 @@ export interface AcquireRunSlotRequest {
 
 /**
  * The injected port the coordinator uses to own each run's WHOLE MCP endpoint
- * (token + refcounted local server + reverse tunnel) behind ONE lease object.
- * `perRunEndpoint` is the capability the STEP 3 startup gate consumes: the NULL
- * passthrough reports `false` (acp keeps acquiring/releasing its own endpoint,
- * the STEP 1 byte-identical behaviour); a concrete remote manager reports `true`.
+ * (per-run scoped Token B claim + refcounted local server + reverse tunnel) behind
+ * ONE lease object. `perRunClaimEnforcement` is the capability the startup gate
+ * consumes: a concrete remote manager mints per-run scoped Token B claims the shared
+ * gateway re-checks server-side (resolve claim -> owner live -> generation fence ->
+ * allowlist, else fail closed), so it reports `true`; the NULL passthrough enforces
+ * nothing (acp keeps acquiring/releasing its own settings-wide endpoint, the STEP 1
+ * byte-identical behaviour) and reports `false`.
  *
  * `open` returns null when this manager does not mint a per-run endpoint (the
  * NULL passthrough always, or the concrete manager on a local/non-ssh host).
@@ -127,7 +130,7 @@ export interface AcquireRunSlotRequest {
  * is uniform whether or not an endpoint was minted.
  */
 export interface McpEndpointManager {
-  readonly perRunEndpoint: boolean;
+  readonly perRunClaimEnforcement: boolean;
   open(req: {
     settings: Settings;
     workerHost: string;

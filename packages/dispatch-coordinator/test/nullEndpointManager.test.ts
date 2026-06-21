@@ -10,11 +10,11 @@ import type { McpEndpointManager } from "../src/types.js";
 // without dragging in a full config fixture.
 const settingsStub = {} as Settings;
 
-test("null manager advertises perRunEndpoint=false (the STEP-1 passthrough capability)", () => {
-  // perRunEndpoint is the capability the STEP 3 startup gate consumes; the null
+test("null manager advertises perRunClaimEnforcement=false (the STEP-1 passthrough capability)", () => {
+  // perRunClaimEnforcement is the capability the STEP 3 startup gate consumes; the null
   // manager must report `false` so acp keeps owning its own endpoint (the
   // byte-identical STEP 1 behaviour) and slotsPerMachine>1 stays gated off.
-  assert.equal(nullEndpointManager.perRunEndpoint, false);
+  assert.equal(nullEndpointManager.perRunClaimEnforcement, false);
 });
 
 test("null manager satisfies the McpEndpointManager port shape", () => {
@@ -23,7 +23,7 @@ test("null manager satisfies the McpEndpointManager port shape", () => {
   const manager: McpEndpointManager = nullEndpointManager;
   assert.equal(typeof manager.open, "function");
   assert.equal(typeof manager.release, "function");
-  assert.equal(typeof manager.perRunEndpoint, "boolean");
+  assert.equal(typeof manager.perRunClaimEnforcement, "boolean");
 });
 
 test("open() resolves to null for any request (no per-run endpoint minted)", async () => {
@@ -67,7 +67,7 @@ test("release is idempotent: multiple null releases all no-op", async () => {
 
 test("createNullEndpointManager() returns a manager with the same null contract", async () => {
   const manager = createNullEndpointManager();
-  assert.equal(manager.perRunEndpoint, false);
+  assert.equal(manager.perRunClaimEnforcement, false);
   const minted = await manager.open({
     settings: settingsStub,
     workerHost: "ssh://worker-1",
@@ -80,7 +80,7 @@ test("createNullEndpointManager() returns a manager with the same null contract"
 
 test("the shared null manager is frozen (stateless singleton cannot be mutated)", () => {
   // It holds no state, so sharing one frozen instance is safe; freezing makes
-  // an accidental `perRunEndpoint = true` flip a loud TypeError, not a silent
+  // an accidental `perRunClaimEnforcement = true` flip a loud TypeError, not a silent
   // capability escalation that would unlock the slotsPerMachine>1 gate.
   assert.equal(Object.isFrozen(nullEndpointManager), true);
 });

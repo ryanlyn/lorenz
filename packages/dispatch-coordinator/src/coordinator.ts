@@ -2,7 +2,7 @@
 // @lorenz/worker-pool WorkerPool.
 //
 // With the default settings (slotsPerMachine=1) and the NULL McpEndpointManager
-// (perRunEndpoint=false, mcpEndpoint=null), every operation here is byte-identical
+// (perRunClaimEnforcement=false, mcpEndpoint=null), every operation here is byte-identical
 // at the runtime boundary to calling the underlying WorkerPool directly:
 //   - acquireRunSlot calls pool.acquire and, on `leased`, mints a RunSlot whose
 //     release/fail/heartbeat delegate straight to the wrapped WorkerLease (so the
@@ -185,7 +185,7 @@ export interface DispatchCoordinator extends CapacityProbe {
    * capacity-skipped issue re-dispatches without waiting out the poll interval.
    */
   onCapacityAvailable(cb: () => void): void;
-  readonly capabilities: { readonly perRunEndpoint: boolean };
+  readonly capabilities: { readonly perRunClaimEnforcement: boolean };
   /**
    * Read-only per-run liveness oracle the gateway re-checks on EVERY MCP request
    * (injected into `@lorenz/mcp` from the composition root, the same seam as the
@@ -334,7 +334,7 @@ function createRunSlot(args: {
  * past construction (the pool owns the live settings). The injected
  * `mcpEndpointManager` is the null passthrough in STEP 1, so every minted slot
  * carries `mcpEndpoint = null` and the coordinator advertises
- * `perRunEndpoint = false`.
+ * `perRunClaimEnforcement = false`.
  */
 export function createDispatchCoordinator(
   deps: CreateDispatchCoordinatorDeps,
@@ -429,7 +429,9 @@ export function createDispatchCoordinator(
     });
   }
 
-  const capabilities = { perRunEndpoint: mcpEndpointManager.perRunEndpoint } as const;
+  const capabilities = {
+    perRunClaimEnforcement: mcpEndpointManager.perRunClaimEnforcement,
+  } as const;
 
   return {
     capabilities,
@@ -511,7 +513,7 @@ export function createDispatchCoordinator(
       const needsMcpEndpoint = req.needsMcpEndpoint ?? true;
       const wouldOpenTunnel =
         needsMcpEndpoint &&
-        mcpEndpointManager.perRunEndpoint &&
+        mcpEndpointManager.perRunClaimEnforcement &&
         !isLocalWorkerHost(acquired.lease.workerHost);
       let tunnelReserved = false;
       if (wouldOpenTunnel && tunnelCeiling !== undefined) {

@@ -1,7 +1,7 @@
 // STEP 1 (T1c): DispatchCoordinator 1:1 passthrough over WorkerPool.
 //
 // These tests pin the byte-identical-at-the-runtime-boundary contract: with the
-// default null McpEndpointManager (perRunEndpoint=false, mcpEndpoint=null), the
+// default null McpEndpointManager (perRunClaimEnforcement=false, mcpEndpoint=null), the
 // coordinator delegates every operation to the underlying WorkerPool with NO change
 // in observable behaviour. Concretely:
 //   - acquireRunSlot delegates to pool.acquire; a `leased` result mints a RunSlot
@@ -649,18 +649,18 @@ test("snapshot() returns the pool snapshot extended with an empty slots array (S
 });
 
 // ---------------------------------------------------------------------------
-// capabilities: perRunEndpoint mirrors the injected manager
+// capabilities: perRunClaimEnforcement mirrors the injected manager
 // ---------------------------------------------------------------------------
 
-test("capabilities.perRunEndpoint mirrors the injected manager (false for the null passthrough)", () => {
+test("capabilities.perRunClaimEnforcement mirrors the injected manager (false for the null passthrough)", () => {
   const pool = makeFakeWorkerPool();
   const coordinator = makeCoordinator(pool, nullEndpointManager);
-  assert.equal(coordinator.capabilities.perRunEndpoint, false);
+  assert.equal(coordinator.capabilities.perRunClaimEnforcement, false);
 });
 
-test("capabilities.perRunEndpoint reflects a manager advertising perRunEndpoint=true", () => {
+test("capabilities.perRunClaimEnforcement reflects a manager advertising perRunClaimEnforcement=true", () => {
   const perRunManager: McpEndpointManager = {
-    perRunEndpoint: true,
+    perRunClaimEnforcement: true,
     async open(): Promise<null> {
       return null;
     },
@@ -668,7 +668,7 @@ test("capabilities.perRunEndpoint reflects a manager advertising perRunEndpoint=
   };
   const pool = makeFakeWorkerPool();
   const coordinator = makeCoordinator(pool, perRunManager);
-  assert.equal(coordinator.capabilities.perRunEndpoint, true);
+  assert.equal(coordinator.capabilities.perRunClaimEnforcement, true);
 });
 
 // ---------------------------------------------------------------------------
@@ -711,7 +711,7 @@ function makeRecordingManager(
   return {
     openCalls,
     opened,
-    perRunEndpoint: true,
+    perRunClaimEnforcement: true,
     async open(req): Promise<AgentMcpEndpointLease | null> {
       openCalls.push({ workerHost: req.workerHost, runKey: req.runKey });
       if (options.openThrows) {
@@ -976,7 +976,7 @@ test("drain awaits recycle-triggered per-run cleanup (endpoint release) before r
   // fails to AWAIT the recycle-triggered fail would return with the endpoint still
   // open (released.count === 0).
   const manager: McpEndpointManager = {
-    perRunEndpoint: true,
+    perRunClaimEnforcement: true,
     async open(): Promise<AgentMcpEndpointLease | null> {
       return endpoint;
     },
@@ -1204,14 +1204,14 @@ test("collision rejection does NOT open an endpoint (the colliding endpoint is n
 });
 
 // ---------------------------------------------------------------------------
-// createPerRunEndpointManager: local-vs-remote routing + perRunEndpoint=true
+// createPerRunEndpointManager: local-vs-remote routing + perRunClaimEnforcement=true
 // ---------------------------------------------------------------------------
 
-test("createPerRunEndpointManager advertises perRunEndpoint=true", () => {
+test("createPerRunEndpointManager advertises perRunClaimEnforcement=true", () => {
   const manager = createPerRunEndpointManager({
     acquireForRun: async () => makeFakeEndpoint("x"),
   });
-  assert.equal(manager.perRunEndpoint, true);
+  assert.equal(manager.perRunClaimEnforcement, true);
 });
 
 test("createPerRunEndpointManager opens a per-run endpoint for an ssh-addressable host", async () => {
@@ -1442,7 +1442,7 @@ test("tunnel ceiling: absent maxConcurrentTunnels never gates (no ceiling config
 });
 
 test("tunnel ceiling: the NULL passthrough never trips the ceiling (no per-run endpoint is minted)", async () => {
-  // perRunEndpoint=false mints no tunnels, so even an absurdly low ceiling never
+  // perRunClaimEnforcement=false mints no tunnels, so even an absurdly low ceiling never
   // gates - the default single-tenant path stays byte-identical.
   const pool = makeMultiWorkerPool(3);
   const coordinator = makeCoordinatorWithSettings(pool, nullEndpointManager, {
@@ -1469,7 +1469,7 @@ test("tunnel ceiling: a local-host slot (null endpoint) does NOT consume tunnel 
   // Wrap the recording manager so a local host mints no endpoint (mirrors the
   // concrete per-run manager's host routing).
   const routingManager: McpEndpointManager = {
-    perRunEndpoint: true,
+    perRunClaimEnforcement: true,
     async open(req): Promise<AgentMcpEndpointLease | null> {
       if (req.workerHost.length === 0) return null;
       return manager.open(req);
@@ -1603,7 +1603,7 @@ test("settle: endpoint-release REJECTION still settles the WorkerLease, deregist
   // A per-run manager whose endpoint open succeeds but whose release REJECTS.
   const endpoint = makeFakeEndpoint("x");
   const manager: McpEndpointManager = {
-    perRunEndpoint: true,
+    perRunClaimEnforcement: true,
     async open(): Promise<AgentMcpEndpointLease | null> {
       order.push("open");
       return endpoint;
@@ -1644,7 +1644,7 @@ test("settle: endpoint-release REJECTION still settles the WorkerLease, deregist
 test("settle: endpoint-release REJECTION on a poison fail still fails the WorkerLease and deregisters (HIGH #1)", async () => {
   const order: string[] = [];
   const manager: McpEndpointManager = {
-    perRunEndpoint: true,
+    perRunClaimEnforcement: true,
     async open(): Promise<AgentMcpEndpointLease | null> {
       order.push("open");
       return makeFakeEndpoint("y");
@@ -1695,7 +1695,7 @@ function makeGatedManager(): McpEndpointManager & {
     releaseGate(): void {
       resolveGate();
     },
-    perRunEndpoint: true,
+    perRunClaimEnforcement: true,
     async open(): Promise<AgentMcpEndpointLease | null> {
       openCalls.count += 1;
       await gate;
@@ -1751,7 +1751,7 @@ function makeThrowingOpenManager(order: string[]): McpEndpointManager & {
   const openCalls = { count: 0 };
   return {
     openCalls,
-    perRunEndpoint: true,
+    perRunClaimEnforcement: true,
     async open(): Promise<AgentMcpEndpointLease | null> {
       openCalls.count += 1;
       order.push("open:throw");

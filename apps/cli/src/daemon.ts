@@ -147,7 +147,7 @@ export async function buildWorkerPool(
  * `undefined` when the pool is disabled so the disabled path stays byte-identical
  * to the pre-pool daemon.
  *
- * The CONCRETE per-run {@link McpEndpointManager} (`perRunEndpoint=true`) is wired
+ * The CONCRETE per-run {@link McpEndpointManager} (`perRunClaimEnforcement=true`) is wired
  * here: it OWNS the whole per-run MCP endpoint lease (auth token + refcounted local
  * mcp server + reverse tunnel) via the injected `acquireAgentMcpEndpointForRun`. The
  * daemon is the right ownership boundary because it already depends on

@@ -49,8 +49,10 @@ function isLocalWorkerHost(workerHost: string): boolean {
 }
 
 /**
- * Constructs the CONCRETE per-run {@link McpEndpointManager} (`perRunEndpoint =
- * true`, the capability the STEP 3 startup gate consumes). For an ssh-addressable
+ * Constructs the CONCRETE per-run {@link McpEndpointManager}
+ * (`perRunClaimEnforcement = true`, the capability the startup gate consumes:
+ * each run gets a scoped Token B claim the shared gateway re-checks server-side).
+ * For an ssh-addressable
  * `workerHost` it opens the WHOLE per-run endpoint lease via the injected
  * `acquireForRun`; for a local (empty) host it returns `null` (acp keeps its
  * own endpoint, the byte-identical local path). `release(lease)` closes the lease
@@ -62,7 +64,7 @@ export function createPerRunEndpointManager(
 ): McpEndpointManager {
   const { acquireForRun } = deps;
   return {
-    perRunEndpoint: true,
+    perRunClaimEnforcement: true,
     async open(req: {
       settings: Settings;
       workerHost: string;

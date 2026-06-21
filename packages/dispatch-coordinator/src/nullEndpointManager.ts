@@ -2,7 +2,7 @@
 //
 // STEP 1 wiring: when no concrete per-run endpoint manager is injected, the
 // coordinator uses this null manager so it stays a 1:1 passthrough over the
-// existing WorkerPool. `perRunEndpoint` is `false`, so acp keeps acquiring AND
+// existing WorkerPool. `perRunClaimEnforcement` is `false`, so acp keeps acquiring AND
 // releasing its OWN endpoint exactly as today (byte-identical runtime
 // behaviour); `open` mints nothing (returns null) and `release` is a no-op. It
 // holds no state, so a single frozen singleton is safe to share.
@@ -11,13 +11,13 @@ import type { McpEndpointManager } from "./types.js";
 
 /**
  * The no-op {@link McpEndpointManager} used by the STEP 1 passthrough
- * coordinator. `perRunEndpoint` is `false` (the capability the STEP 3 gate
- * reads), `open()` resolves to `null` (no per-run endpoint is minted, so acp
+ * coordinator. `perRunClaimEnforcement` is `false` (the capability the startup
+ * gate reads), `open()` resolves to `null` (no per-run endpoint is minted, so acp
  * owns its own endpoint as today), and `release(null)` is a no-op. Stateless and
  * therefore safe to share as a singleton.
  */
 export const nullEndpointManager: McpEndpointManager = Object.freeze({
-  perRunEndpoint: false,
+  perRunClaimEnforcement: false,
   async open(): Promise<null> {
     // Mints nothing: acp keeps owning its own endpoint (the STEP 1 byte-identical
     // path). The trivial await keeps the method genuinely async (the port's
