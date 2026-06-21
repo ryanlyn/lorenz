@@ -14,7 +14,7 @@ Packages stack in dependency order. Each layer depends only on the ones above it
 | Extension SDKs | `tracker-sdk`, `tool-sdk`, `agent-sdk`, `worker-sdk` | The four builder-facing contracts plus registries |
 | Engine | `config`, `workflow`, `prompt`, `dispatch`, `policies`, `retry-scheduler`, `orchestrator`, `runtime`, `runtime-events`, `projections`, `dispatch-coordinator`, `worker-pool`, `worker-host-pool`, `ssh`, `static-worker`, `agent-runner`, `acp`, `mcp`, `server`, `presenter`, `humanize`, `traceviz-emitter`, `traceviz-server`, `tui`, `cli-kit`, `workspace`, `test-utils` | The poll/dispatch loop, agent execution, MCP, observability |
 | Extensions | `extensions/linear-tracker`, `extensions/jira-tracker`, `extensions/local-tracker`, `extensions/memory-tracker`, `extensions/slack-tracker`, `extensions/docker-worker` | Concrete trackers and one worker driver |
-| Apps | `apps/cli`, `apps/lorenz-dashboard`, `apps/traceviz` | The `lorenz` binary, the React SPA, the standalone trace viewer |
+| Apps | `apps/cli`, `apps/web`, `apps/traceviz` | The `lorenz` binary, the React SPA, the standalone trace viewer |
 | Vendored | `vendor/codex-acp`, `vendor/claude-agent-acp` | Patched ACP bridge subprocesses |
 
 The composition root in `apps/cli/src/daemon.ts` (`registerBuiltinBackends`) is the one place backend identity is hardcoded. It registers every built-in tracker, the tracker tool pack, the ACP executor, and the worker drivers into the four default registries before any config is parsed. See [architecture](architecture.md) for how the layers run as one process and [extensions/index.md](extensions/index.md) for the build recipes.
@@ -151,7 +151,7 @@ See [trackers/index.md](trackers/index.md), [trackers/memory.md](trackers/memory
 | App | What it owns |
 | --- | --- |
 | `apps/cli` | The shipped `lorenz` binary and the composition root. Defines three commands (the daemon, `lorenz runs`, `lorenz doctor`), wires every adapter into `LorenzRuntime`, and loads out-of-tree worker drivers. First files: `src/main.ts`, `src/daemon.ts`, `src/workerDriverLoader.ts`. |
-| `apps/lorenz-dashboard` | The React/Vite SPA (package `@lorenz/dashboard`): the ops Overview and the trace viewer, behind a `#/` and `#/trace/:id` hash router. First files: `src/App.tsx`, `src/features/ops/`. |
+| `apps/web` | The React/Vite SPA (package `@lorenz/dashboard`): the ops Overview and the trace viewer, behind a `#/` and `#/trace/:id` hash router. First files: `src/App.tsx`, `src/features/ops/`. |
 | `apps/traceviz` | A standalone read-only viewer that serves one `trace.jsonl` file (`pnpm traceviz <file>`). First files: `app.ts`, `serve.ts`. |
 
 The CLI `bin` shim is `apps/cli/bin/lorenz.js`, which imports the built `dist/bin/cli.js`. See [cli.md](cli.md) and [getting-started.md](getting-started.md).

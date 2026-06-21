@@ -39,7 +39,7 @@ Returns `200` with `{"status": "ok"}`. No snapshot read; always available while 
 
 ### GET /
 
-Serves `<staticDir>/index.html`. When the file is missing (the dashboard was not built), returns `503` with code `dashboard_not_built` and message `Dashboard assets not found. Run: pnpm build`. `staticDir` defaults to the `apps/lorenz-dashboard/dist` directory bundled with the server build; override it with the `staticDir` option. Hashed assets are served from `/assets/*`.
+Serves `<staticDir>/index.html`. When the file is missing (the dashboard was not built), returns `503` with code `dashboard_not_built` and message `Dashboard assets not found. Run: pnpm build`. `staticDir` defaults to the `apps/web/dist` directory bundled with the server build; override it with the `staticDir` option. Hashed assets are served from `/assets/*`.
 
 ### GET /api/v1/state
 

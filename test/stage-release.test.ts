@@ -182,7 +182,7 @@ test("stages a source-free CLI release tree with rewritten package manifests", a
 test("reports missing build outputs before writing a release tree", async () => {
   const workspaceRoot = path.join(tempRoot, "workspace");
   await seedWorkspace(workspaceRoot);
-  await fs.rm(path.join(workspaceRoot, "apps/lorenz-dashboard/dist"), {
+  await fs.rm(path.join(workspaceRoot, "apps/web/dist"), {
     recursive: true,
     force: true,
   });
@@ -193,7 +193,7 @@ test("reports missing build outputs before writing a release tree", async () => 
       outputRoot: path.join(tempRoot, "out"),
       releaseName: "lorenz-test",
     }),
-    /apps\/lorenz-dashboard\/dist/,
+    /apps\/web\/dist/,
   );
   assert.equal(await exists(path.join(tempRoot, "out", "lorenz-test")), false);
 });
@@ -323,13 +323,13 @@ catalog:
     "#!/usr/bin/env node\n",
   );
 
-  await seedPackage(workspaceRoot, "apps/lorenz-dashboard", {
+  await seedPackage(workspaceRoot, "apps/web", {
     name: "@lorenz/dashboard",
     version: "2.2.2",
     private: true,
     type: "module",
   });
-  await writeFile(workspaceRoot, "apps/lorenz-dashboard/dist/index.html", "<div></div>\n");
+  await writeFile(workspaceRoot, "apps/web/dist/index.html", "<div></div>\n");
   await writeFile(workspaceRoot, "README.md", "# Test\n");
 }
 

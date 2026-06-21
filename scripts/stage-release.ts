@@ -62,7 +62,7 @@ const defaultWorkspaceRoot = path.resolve(path.dirname(scriptPath), "..");
 const packageSearchRoots = ["apps", "packages", "extensions", "vendor"];
 const releaseEntrypoint = "bin/lorenz";
 // Where the built dashboard assets live in the workspace.
-const dashboardSourceDist = "apps/lorenz-dashboard/dist";
+const dashboardSourceDist = "apps/web/dist";
 // The dashboard ships as a bundled package so the server and doctor can locate it through Node
 // module resolution (`@lorenz/dashboard/dist`) regardless of the consumer's install layout, rather
 // than via a relative path that only holds when packages are symlinked next to it.
@@ -411,7 +411,7 @@ async function stageDashboardPackage(
   fallbackVersion: string,
 ): Promise<string> {
   const dashboardPackage = await readJson<PackageJson>(
-    path.join(workspaceRoot, "apps/lorenz-dashboard/package.json"),
+    path.join(workspaceRoot, "apps/web/package.json"),
   ).catch((error) => {
     if (isNodeError(error) && error.code === "ENOENT") return null;
     throw error;

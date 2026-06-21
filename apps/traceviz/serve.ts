@@ -36,7 +36,7 @@ const stats = computeStats(events);
 const issueId = metadata?.issueId ?? path.basename(resolved, ".jsonl");
 const identifier = metadata?.issueIdentifier ?? path.basename(resolved, ".jsonl");
 
-const dashboardDist = path.resolve(import.meta.dirname, "../lorenz-dashboard/dist");
+const dashboardDist = path.resolve(import.meta.dirname, "../web/dist");
 if (!fs.existsSync(dashboardDist)) {
   console.error(`Dashboard not built. Run: pnpm --filter @lorenz/dashboard build`);
   process.exit(1);
