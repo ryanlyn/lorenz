@@ -1,6 +1,6 @@
 {
   "name": "lorenz",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "private": true,
   "type": "module",
   "description": "Lorenz is a control plane for dispatching and structuring order across dynamic agent systems.",
