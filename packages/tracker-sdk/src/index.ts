@@ -15,3 +15,9 @@ export {
   stringOption,
 } from "./options.js";
 export { createTrackerToolProvider } from "./toolPack.js";
+export {
+  TRACKER_SDK_VERSION,
+  assertTrackerProviderModule,
+  defineTrackerProvider,
+  type TrackerProviderModule,
+} from "./module.js";
