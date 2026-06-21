@@ -140,6 +140,37 @@ export class RunSlotCollisionError extends Error {
 }
 
 /**
+ * Thrown by {@link DispatchCoordinator.acquireRunSlot} when a co-residence run
+ * (`slotsPerMachine > 1`, per-run-claim enforcement on) binds to a LOCAL (empty)
+ * worker host. The per-run claim model only covers REAL remote hosts: an empty host
+ * routes through the manager's null/local path, which mints NO Token B claim and
+ * keeps acp's settings-wide endpoint - so a co-resident local run would share an
+ * unscoped endpoint with its neighbours, exactly the cross-run authority leak the
+ * startup gate exists to prevent. The startup/reload gate already refuses
+ * co-residence without claim enforcement or with an external server; this is the
+ * runtime backstop for the remaining bypass (a slot that lands on an empty host at
+ * acquire time). The just-bound lease is settled HEALTHY (the worker itself is fine)
+ * and NO slot is registered; the runtime maps the throw to worker_pool_acquire_error.
+ */
+export class LocalCoResidenceError extends Error {
+  readonly issueId: string;
+  readonly slotIndex: number;
+  readonly machineLeaseId: string;
+
+  constructor(args: { issueId: string; slotIndex: number; machineLeaseId: string }) {
+    super(
+      `local_co_residence_unscoped: (issueId=${args.issueId}, slotIndex=${args.slotIndex}) bound to ` +
+        `an empty worker host under slotsPerMachine>1; a local run cannot mint a per-run scoped ` +
+        `Token B claim, so co-residence on a local host is refused`,
+    );
+    this.name = "LocalCoResidenceError";
+    this.issueId = args.issueId;
+    this.slotIndex = args.slotIndex;
+    this.machineLeaseId = args.machineLeaseId;
+  }
+}
+
+/**
  * One entry in the coordinator snapshot's `slots` view. STEP 1 always reports an
  * empty list (no live per-run accounting yet); the shape is fixed now so the
  * runtime/observability surface is stable across the later steps that populate it.
@@ -480,6 +511,39 @@ export function createDispatchCoordinator(
         }
       }
 
+      // C6 bypass closure: a CO-RESIDENCE run (`slotsPerMachine > 1`, per-run-claim
+      // enforcement on) that needs an MCP endpoint must NEVER land on a LOCAL (empty)
+      // worker host. The per-run manager routes an empty host through its null/local
+      // path, which mints NO Token B claim and keeps acp's settings-wide endpoint, so
+      // a co-resident local run would share one unscoped endpoint with its neighbours -
+      // the cross-run authority leak the startup gate prevents. The gate refuses
+      // co-residence without claim enforcement or with an external server, but a slot
+      // can still land on an empty host at acquire time; this is the runtime backstop.
+      // Checked AFTER lease-bind + collision but BEFORE the endpoint open / tunnel
+      // reservation so no unscoped endpoint is ever minted. The just-bound lease is
+      // settled HEALTHY (the worker is fine) and NO slot is registered; the runtime
+      // maps the throw to worker_pool_acquire_error. Single-tenant (slotsPerMachine<=1)
+      // and runs that consume no endpoint are unaffected - the local path stays
+      // byte-identical there.
+      const needsMcpEndpoint = req.needsMcpEndpoint ?? true;
+      if (
+        needsMcpEndpoint &&
+        mcpEndpointManager.perRunClaimEnforcement &&
+        currentSettings.slotsPerMachine > 1 &&
+        isLocalWorkerHost(acquired.lease.workerHost)
+      ) {
+        try {
+          await acquired.lease.release("healthy");
+        } catch {
+          // Swallow: the bypass refusal is the surfaced fault; the worker is healthy.
+        }
+        throw new LocalCoResidenceError({
+          issueId: req.issueId,
+          slotIndex: req.slotIndex,
+          machineLeaseId,
+        });
+      }
+
       // STEP 3 (T3c #1): tunnel-exhaustion ceiling. When `maxConcurrentTunnels` is
       // set, opening another per-run endpoint that would exceed it surfaces as a
       // TYPED `no_capacity` ('tunnel_exhausted'), NEVER an unhandled throw inside
@@ -503,14 +567,13 @@ export function createDispatchCoordinator(
       // finishes). Mirrors the worker pool's reservedProvisions single-flight.
       const runKey = runKeyFor(req.issueId, req.slotIndex);
       const tunnelCeiling = currentSettings.maxConcurrentTunnels;
-      // Whether THIS run actually consumes a per-run MCP endpoint. The Codex/appserver
+      // `needsMcpEndpoint` (resolved above the local-co-residence guard) is whether
+      // THIS run actually consumes a per-run MCP endpoint. The Codex/appserver
       // executor runs its dynamic tools IN-PROCESS and ignores the endpoint, so a
-      // run that needs none must SKIP the open AND the tunnel reservation/ceiling
-      // entirely (it would otherwise be SKIPPED by an open failure / port-forward
-      // restriction / maxConcurrentTunnels for an endpoint it never uses). Only
-      // ACP/Claude reads `/mcp` over the reverse tunnel. Defaults to `true`
-      // (the existing ACP behaviour) when a legacy caller omits the field.
-      const needsMcpEndpoint = req.needsMcpEndpoint ?? true;
+      // run that needs none SKIPS the open AND the tunnel reservation/ceiling entirely
+      // (it would otherwise be SKIPPED by an open failure / port-forward restriction /
+      // maxConcurrentTunnels for an endpoint it never uses). Only ACP/Claude reads
+      // `/mcp` over the reverse tunnel.
       const wouldOpenTunnel =
         needsMcpEndpoint &&
         mcpEndpointManager.perRunClaimEnforcement &&

@@ -1,5 +1,6 @@
 import EventEmitter from "node:events";
 import { createServer } from "node:net";
+import { createServer as createHttpServer } from "node:http";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 
 import { afterEach, beforeEach, test, vi } from "vitest";
@@ -284,4 +285,69 @@ test("recycling a host:port slot bumps the generation so a fresh claim outranks 
   assert.ok((secondGen as number) > (firstGen as number));
 
   await second.release();
+});
+
+// ---------------------------------------------------------------------------
+// C6 bypass closure: the per-run claim path can NEVER mint an unenforceable token.
+// ---------------------------------------------------------------------------
+
+test("acquireAgentMcpEndpointForRun REFUSES an empty (local) worker host (no Token B minted for a local run)", async () => {
+  const port = await freeLocalPort();
+  const settings = settingsWithPort(port);
+
+  // An empty workerHost denotes a LOCAL/acp run, which the per-run manager routes
+  // through its own null/local path - it must never reach this minting path. If it
+  // does (a wiring bug), minting a Token B claim stamped `workerHost: ""` would let
+  // isRunLive match it against any other local slot, so the path fails loud instead.
+  await assert.rejects(
+    () => acquireAgentMcpEndpointForRun(settings, "", "run-local", workerHostPool),
+    /per_run_mcp_endpoint_requires_remote_worker_host/,
+  );
+
+  // No server, tunnel, or token was minted for the refused run: the local server
+  // never came up (an empty host short-circuits before ensureLocalMcpServer).
+  assert.equal(await mcpServerReachable("127.0.0.1", port), false);
+  assert.equal(mockStartReverseTunnel.mock.calls.length, 0);
+});
+
+// The reachability probe echoes the request's jsonrpc `id` back; a foreign server
+// must mirror it so `configuredMcpServerReachable` accepts the response as a real
+// MCP server (it checks `body.id === <probeId>`).
+function parseJsonRpcId(body: string): unknown {
+  try {
+    return (JSON.parse(body) as { id?: unknown }).id ?? null;
+  } catch {
+    return null;
+  }
+}
+
+test("acquireAgentMcpEndpointForRun REFUSES to attach to an externally-configured MCP server (lorenz does not own the auth surface)", async () => {
+  // Stand up a FOREIGN server on the configured port that answers `tools/list`
+  // exactly like a real MCP server, so `configuredMcpServerReachable` treats it as
+  // reachable. The ACP/local path would ATTACH to it (return null); the per-run
+  // claim path must REFUSE, because lorenz cannot enforce its Token B owner re-check
+  // / generation fence against a server it did not start.
+  const port = await freeLocalPort();
+  const foreign = createHttpServer((req, res) => {
+    let body = "";
+    req.on("data", (chunk: Buffer) => (body += chunk.toString()));
+    req.on("end", () => {
+      const id = parseJsonRpcId(body);
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ jsonrpc: "2.0", id, result: { tools: [] } }));
+    });
+  });
+  await new Promise<void>((resolve) => foreign.listen(port, "127.0.0.1", resolve));
+  try {
+    const settings = settingsWithPort(port);
+    await assert.rejects(
+      () => acquireAgentMcpEndpointForRun(settings, "worker-1", "run-external", workerHostPool),
+      /per_run_mcp_endpoint_requires_lorenz_owned_server/,
+    );
+    // The refusal happened BEFORE any reverse tunnel was opened (no half-open child
+    // pointed at a server lorenz does not own).
+    assert.equal(mockStartReverseTunnel.mock.calls.length, 0);
+  } finally {
+    await new Promise<void>((resolve) => foreign.close(() => resolve()));
+  }
 });

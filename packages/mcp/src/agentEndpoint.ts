@@ -184,6 +184,17 @@ export async function acquireAgentMcpEndpointForRun(
   tunnels: RemoteMcpTunnelTransport,
   isRunLive?: IsRunLive,
 ): Promise<AgentMcpEndpointLease> {
+  // Token B is bound to a per-run claim whose `workerHost` is the run's REAL ssh
+  // host (the gateway re-checks `isRunLive(runKey, workerHost, generation)` against
+  // it). An empty `workerHost` denotes a LOCAL/acp run, which the per-run manager
+  // routes through its own null/local path (acp keeps its settings-wide endpoint) -
+  // it must NEVER reach this minting path. Asserting here CLOSES the bypass where a
+  // local run would otherwise mint a Token B claim stamped `workerHost: ""` that
+  // `isRunLive` could match against any other local slot: the per-run claim model
+  // only applies to real remote hosts, so a local run here is a wiring bug, fail loud.
+  if (workerHost.length === 0) {
+    throw new Error("per_run_mcp_endpoint_requires_remote_worker_host");
+  }
   let endpoint: McpEndpoint | null = null;
   let token: string | null = null;
   let released = false;
@@ -322,7 +333,16 @@ async function acquirePerRunMcpEndpoint(
   // local MCP servers / their listeners. The per-run server is mounted with the
   // injected `isRunLive` oracle so its Token B middleware enforces the owner
   // re-check + generation fence on every request.
-  const localServer = await ensureLocalMcpServer(settings, configuredToken, isRunLive);
+  //
+  // `requireOwnedServer: true` CLOSES the configured-external-server bypass for the
+  // per-run claim path: when a foreign MCP server is already reachable on the
+  // configured port, `ensureLocalMcpServer` would normally return null to ATTACH to
+  // it - but lorenz does not own that server's auth surface, so it cannot enforce
+  // the per-request owner re-check / generation fence / fail-closed revocation a
+  // Token B claim depends on. Co-residence over a server lorenz is merely a client
+  // of is a claim bypass, so the per-run path REFUSES to attach and fails loud
+  // instead of minting an unenforceable Token B.
+  const localServer = await ensureLocalMcpServer(settings, configuredToken, isRunLive, true);
   // Capture the shared local server's generation BEFORE the `openForRun` await.
   // The single event loop is single-writer only BETWEEN awaits: stamping the
   // claim with the generation that was live at this point (rather than re-reading
@@ -356,6 +376,7 @@ async function ensureLocalMcpServer(
   settings: Settings,
   configuredToken: IssuedMcpToken | null,
   isRunLive?: IsRunLive,
+  requireOwnedServer = false,
 ): Promise<LocalMcpServerLease | null> {
   const configuredPort = settings.server.port;
   const serverHost = normalizeHttpBindHost(settings.server.host);
@@ -374,7 +395,17 @@ async function ensureLocalMcpServer(
         existing.refCount += 1;
         return { key, handle: existing.handle, generation: existing.generation };
       }
-      if (await configuredMcpServerReachable(settings, configuredToken.token)) return null;
+      if (await configuredMcpServerReachable(settings, configuredToken.token)) {
+        // A foreign MCP server is already reachable on the configured port. The
+        // ACP/local path ATTACHES to it (returns null); but the per-run claim path
+        // sets `requireOwnedServer` because lorenz cannot enforce its Token B owner
+        // re-check / generation fence against a server it does not own - attaching
+        // would silently bypass the per-run claim model. Refuse loudly instead.
+        if (requireOwnedServer) {
+          throw new Error("per_run_mcp_endpoint_requires_lorenz_owned_server");
+        }
+        return null;
+      }
       const handle = await startMcpServer(settings, {
         host: serverHost,
         port: configuredPort,

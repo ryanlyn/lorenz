@@ -13,6 +13,7 @@
 export {
   createDispatchCoordinator,
   EndpointOpenError,
+  LocalCoResidenceError,
   RunSlotCollisionError,
   type DispatchCoordinator,
   type CreateDispatchCoordinatorDeps,

@@ -35,6 +35,7 @@ import { assert, settle } from "@lorenz/test-utils";
 import {
   createDispatchCoordinator,
   EndpointOpenError,
+  LocalCoResidenceError,
   RunSlotCollisionError,
 } from "../src/index.js";
 import { nullEndpointManager } from "../src/nullEndpointManager.js";
@@ -1201,6 +1202,71 @@ test("collision rejection does NOT open an endpoint (the colliding endpoint is n
   // Exactly one endpoint opened (the first slot); the collision minted none.
   assert.equal(manager.openCalls.length, 1);
   assert.equal(manager.opened.length, 1);
+});
+
+// ---------------------------------------------------------------------------
+// C6 bypass closure: a co-residence run cannot land on a LOCAL (empty) host.
+// ---------------------------------------------------------------------------
+
+// A coordinator whose live settings declare co-residence (slotsPerMachine>1). The
+// empty-host guard only fires under co-residence + per-run-claim enforcement.
+function makeCoResidenceCoordinator(
+  pool: FakeWorkerPool,
+  manager: McpEndpointManager,
+): ReturnType<typeof createDispatchCoordinator> {
+  return createDispatchCoordinator({
+    pool,
+    mcpEndpointManager: manager,
+    settings: { slotsPerMachine: 2 } as unknown as WorkerPoolSettings,
+  });
+}
+
+test("acquireRunSlot REFUSES a co-residence run that binds to a LOCAL (empty) worker host", async () => {
+  // Under co-residence (slotsPerMachine>1) + per-run-claim enforcement, an empty
+  // worker host routes through the manager's null/local path, which mints NO Token B
+  // claim - so a co-resident local run would share an unscoped endpoint with its
+  // neighbours (the cross-run authority leak the startup gate prevents). The
+  // coordinator is the runtime backstop: it asserts-and-rejects before opening any
+  // endpoint, settling the just-bound lease HEALTHY and registering NO slot.
+  const order: string[] = [];
+  const manager = makeRecordingManager(order);
+  const lease = makeFakeLease({ workerId: "worker-1", workerHost: "" });
+  const pool = makeFakeWorkerPool({ lease });
+  const coordinator = makeCoResidenceCoordinator(pool, manager);
+
+  let thrown: unknown;
+  try {
+    await coordinator.acquireRunSlot(acquireReq);
+  } catch (error) {
+    thrown = error;
+  }
+  assert.ok(thrown instanceof LocalCoResidenceError);
+
+  // No endpoint was opened (the refusal precedes the open) and the just-bound lease
+  // was settled HEALTHY (the worker itself is fine) - no slot is registered.
+  assert.equal(manager.openCalls.length, 0);
+  assert.equal(coordinator.snapshot().slots.length, 0);
+  assert.deepEqual(lease.settles, [{ kind: "release", arg: "healthy" }]);
+});
+
+test("acquireRunSlot ALLOWS a local-host run at slotsPerMachine=1 (the empty-host guard is co-residence-only)", async () => {
+  // The guard is gated on currentSettings.slotsPerMachine>1, NOT merely on the
+  // per-run-claim capability. With the SAME capable manager but the default
+  // slotsPerMachine=1 settings stub, a local (empty) host binds normally - the
+  // single-tenant local path is unaffected by the co-residence backstop.
+  const order: string[] = [];
+  const manager = makeRecordingManager(order);
+  const lease = makeFakeLease({ workerId: "worker-1", workerHost: "" });
+  const pool = makeFakeWorkerPool({ lease });
+  const coordinator = makeCoordinator(pool, manager);
+
+  const result = await coordinator.acquireRunSlot(acquireReq);
+  assert.equal(result.status, "bound");
+  if (result.status !== "bound") return;
+  assert.equal(result.slot.workerHost, "");
+  // No refusal: the slot is registered (the guard did not fire at slotsPerMachine=1).
+  assert.equal(coordinator.snapshot().slots.length, 1);
+  await result.slot.release("healthy");
 });
 
 // ---------------------------------------------------------------------------
