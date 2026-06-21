@@ -1581,16 +1581,22 @@ test("ssh_hosts folds into an enabled static-ssh pool (no throw)", () => {
   // RE-ANCHOR (feature E): the old enabled&&ssh_hosts mutual-exclusivity throw is GONE - the pool
   // now REPRESENTS the static-host case. A bare ssh_hosts (no named driver) yields an enabled
   // `static-ssh` pool with the hosts threaded through driverOptions.ssh_hosts and max bounded by
-  // the host count. The legacy static-host behavior is preserved (per-host single tenancy); the
-  // provision policy is round-robin first-free (static-ssh driver), documented vs the old
-  // least-loaded selection.
+  // the host count. The legacy per-host CAPACITY is preserved: slotsPerMachine is the old per-host
+  // cap (max_concurrent_agents_per_host ?? agent.max_concurrent_agents, default 10), and
+  // co_residence is auto-enabled because each co-resident run owns its own per-run Token B claim +
+  // the shared per-host tunnel. The provision policy is round-robin first-free (static-ssh driver),
+  // documented vs the old least-loaded selection.
   const folded = parseConfig({
     worker: { ssh_hosts: ["user@host-a:22", "user@host-b:22"] },
   });
   assert.deepEqual(folded.worker.sshHosts, ["user@host-a:22", "user@host-b:22"]);
   assert.equal(folded.worker.workerPool?.enabled, true);
   assert.equal(folded.worker.workerPool?.driver, "static-ssh");
-  assert.equal(folded.worker.workerPool?.slotsPerMachine, 1);
+  // RE-ANCHOR (ssh_hosts capacity preservation): previously the fold-in pinned slotsPerMachine=1,
+  // which silently cut existing ssh_hosts fleets from ~10 runs/host to 1. The fold-in now preserves
+  // the legacy per-host cap (default agent.max_concurrent_agents=10) and auto-enables co_residence.
+  assert.equal(folded.worker.workerPool?.slotsPerMachine, 10);
+  assert.equal(folded.worker.workerPool?.coResidence, true);
   assert.equal(folded.worker.workerPool?.max, 2);
   assert.deepEqual(folded.worker.workerPool?.driverOptions, {
     ssh_hosts: ["user@host-a:22", "user@host-b:22"],
@@ -1608,6 +1614,40 @@ test("ssh_hosts folds into an enabled static-ssh pool (no throw)", () => {
       }),
     /worker\.worker_pool\.driver cannot be combined with worker\.ssh_hosts/,
   );
+});
+
+test("ssh_hosts fold-in maps the legacy per-host cap onto slotsPerMachine + co_residence", () => {
+  // Explicit per-host knob wins and maps onto slotsPerMachine; co_residence auto-enabled because
+  // slotsPerMachine>1 co-resides runs (each with its own per-run Token B claim + shared tunnel).
+  const perHost = parseConfig({
+    worker: { ssh_hosts: ["user@a:22", "user@b:22"], max_concurrent_agents_per_host: 3 },
+  }).worker.workerPool;
+  assert.equal(perHost?.slotsPerMachine, 3);
+  assert.equal(perHost?.coResidence, true);
+  assert.equal(perHost?.max, 2);
+
+  // With no per-host knob, the global agent cap supplies the per-host capacity.
+  const agentCap = parseConfig({
+    agent: { max_concurrent_agents: 5 },
+    worker: { ssh_hosts: ["user@a:22"] },
+  }).worker.workerPool;
+  assert.equal(agentCap?.slotsPerMachine, 5);
+  assert.equal(agentCap?.coResidence, true);
+
+  // The per-host knob takes precedence over the global agent cap.
+  const precedence = parseConfig({
+    agent: { max_concurrent_agents: 5 },
+    worker: { ssh_hosts: ["user@a:22"], max_concurrent_agents_per_host: 2 },
+  }).worker.workerPool;
+  assert.equal(precedence?.slotsPerMachine, 2);
+
+  // A per-host cap of 1 stays single-tenant: slotsPerMachine=1 and co_residence is NOT set, so the
+  // slots-per-machine gate never trips for a single-tenant static fleet.
+  const single = parseConfig({
+    worker: { ssh_hosts: ["user@a:22"], max_concurrent_agents_per_host: 1 },
+  }).worker.workerPool;
+  assert.equal(single?.slotsPerMachine, 1);
+  assert.equal(single?.coResidence, undefined);
 });
 
 test("worker.kind cannot be combined with non-empty ssh_hosts", () => {

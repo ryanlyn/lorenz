@@ -99,3 +99,18 @@ test("gate predicate: default slotsPerMachine=1 always returns null regardless o
   assert.equal(checkSlotsPerMachineGate(defaultPool, undefined), null);
   assert.equal(checkSlotsPerMachineGate(defaultPool, capable), null);
 });
+
+test("ssh_hosts fold-in passes the gate: auto co_residence + perRunClaimEnforcement keeps the >1 fleet safe", () => {
+  // Feature E folds ssh_hosts into a static-ssh pool at slotsPerMachine = the per-host cap (default
+  // 10) and auto-enables co_residence. The startup gate must therefore PASS for a claim-enforcing
+  // coordinator (the daemon wires the concrete per-run manager) and FAIL loud for an incapable one.
+  const folded = parseConfig({
+    worker: { ssh_hosts: ["user@a:22", "user@b:22"] },
+  }).worker.workerPool;
+  assert.equal(folded?.slotsPerMachine, 10);
+  assert.equal(folded?.coResidence, true);
+  assert.equal(checkSlotsPerMachineGate(folded, capable), null);
+  const message = checkSlotsPerMachineGate(folded, incapable);
+  assert.ok(message);
+  assert.match(message!, /per-run scoped claims|perRunClaimEnforcement/i);
+});
