@@ -1214,6 +1214,51 @@ test("createPerRunEndpointManager.release closes the lease; release(null) is a n
   await manager.release(null);
 });
 
+// --- STAGE 2: an empty-host (local-driver) lease through the CONCRETE per-run
+// manager binds with a NULL endpoint and NEVER mints a tunnel ----------------
+// The `local` worker driver yields an EMPTY workerHost. Routed end-to-end through
+// the coordinator wired with the REAL createPerRunEndpointManager (perRunEndpoint=true),
+// the empty host must short-circuit open() to null so acp keeps its OWN endpoint:
+// acquireForRun (which would mint the per-run token + reverse tunnel) is NEVER called.
+// This is the coordinator-level twin of the apps/cli wiring proof: the byte-identical
+// local behaviour comes from the empty host, not from a degraded capability.
+
+test("local driver (empty host) through the concrete per-run manager binds a null endpoint and mints no tunnel", async () => {
+  let acquireForRunCalls = 0;
+  // The CONCRETE per-run manager the daemon wires: acquireForRun is what opens the
+  // token + reverse tunnel. For an empty host it must NEVER be reached.
+  const manager = createPerRunEndpointManager({
+    acquireForRun: async () => {
+      acquireForRunCalls += 1;
+      return makeFakeEndpoint("should-never-open");
+    },
+  });
+  // A lease whose workerHost is empty - exactly what the `local` driver produces.
+  const lease = makeFakeLease({ workerId: "local-1", workerHost: "" });
+  const pool = makeFakeWorkerPool({ lease });
+  const coordinator = makeCoordinator(pool, manager);
+
+  // The coordinator advertises the per-run capability (identical to a remote pool);
+  // the local behaviour is purely the empty-host short-circuit, not a degraded cap.
+  assert.equal(coordinator.capabilities.perRunEndpoint, true);
+
+  const result = await coordinator.acquireRunSlot({ ...acquireReq, issueId: "issue-local", slotIndex: 0 });
+  assert.equal(result.status, "bound");
+  if (result.status !== "bound") return;
+
+  // Empty host => acp keeps its own in-process endpoint: the slot carries a null
+  // endpoint and acquireForRun (token + ssh -N tunnel) was never invoked.
+  assert.equal(result.slot.workerHost, "");
+  assert.equal(result.slot.mcpEndpoint, null);
+  assert.equal(acquireForRunCalls, 0);
+
+  // Settling the empty-host slot needs no endpoint close (release(null) is a no-op)
+  // and settles the worker exactly as the byte-identical local path.
+  await result.slot.release("healthy");
+  assert.deepEqual(lease.settles, [{ kind: "release", arg: "healthy" }]);
+  assert.equal(coordinator.snapshot().slots.length, 0);
+});
+
 // ---------------------------------------------------------------------------
 // STEP 3 (T3c #1): tunnel-exhaustion ceiling -> typed no_capacity 'tunnel_exhausted'
 // ---------------------------------------------------------------------------

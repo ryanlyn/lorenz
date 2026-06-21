@@ -152,3 +152,94 @@ test("gate: default slotsPerMachine=1 always passes regardless of capability/opt
   assert.equal(noPool.worker.workerPool, undefined);
   assertSlotsPerMachineGate(noPool, undefined);
 });
+
+// --- STAGE 2: an EXPLICIT enabled local pool is byte-identical at slotsPerMachine=1 ---
+// Before any default is changed (stage 3), prove that wiring an explicit
+// `worker_pool: { enabled:true, driver:"local" }` at the default slotsPerMachine=1
+// routes through buildDispatchCoordinator / the REAL per-run McpEndpointManager and
+// reproduces today's local single-tenant execution EXACTLY:
+//   - the leased slot's workerHost is the EMPTY string (the local driver yields it),
+//   - the slot's mcpEndpoint is null (the per-run manager mints NO tunnel for an
+//     empty host, so acp keeps its own in-process endpoint - no token, no ssh -N),
+//   - the co-residence gate is inert at slotsPerMachine=1 for BOTH a capable and an
+//     incapable coordinator capability.
+// This isolates "does the local driver behave locally end-to-end" from "is it the
+// default", so a stage-3 default regression is unambiguous. These are NEW positive
+// assertions; they do not touch the disabled-path tests above (re-anchored in stage 4).
+
+function localPoolSettings(extra: Record<string, unknown> = {}) {
+  // warm:0 / min:0 keeps the pool lazy so nothing provisions eagerly; the single
+  // local worker is minted on-demand by acquire. max:1 + slotsPerMachine=1 is the
+  // single-tenant shape a default-on local pool will use.
+  return parseConfig({
+    worker: { worker_pool: { enabled: true, driver: "local", warm: 0, min: 0, max: 1, ...extra } },
+  });
+}
+
+test("wiring: an explicit enabled local pool leases an EMPTY-host slot with a null MCP endpoint (no tunnel)", async () => {
+  const settings = localPoolSettings();
+  assert.equal(settings.worker.workerPool?.enabled, true);
+  assert.equal(settings.worker.workerPool?.driver, "local");
+  assert.equal(settings.worker.workerPool?.slotsPerMachine, 1);
+
+  const coordinator = await buildDispatchCoordinator(settings, {});
+  assert.ok(coordinator);
+
+  try {
+    const result = await coordinator!.acquireRunSlot({
+      issueId: "issue-local-1",
+      slotIndex: 0,
+      labels: [],
+      timeoutMs: 5_000,
+      // The FULL parsed Settings, exactly as the runtime threads it. The empty host
+      // short-circuits the manager to null BEFORE acquireAgentMcpEndpointForRun reads
+      // settings.server.port, so no @lorenz/mcp / tunnel machinery is ever touched.
+      settings,
+    });
+    assert.equal(result.status, "bound");
+    if (result.status !== "bound") return;
+
+    // The local driver's empty workerHost is the load-bearing contract: it routes the
+    // run through acp's own in-process MCP endpoint - byte-identical to the pre-pool
+    // local dispatch path.
+    assert.equal(result.slot.workerHost, "");
+    // The per-run manager minted NO endpoint for the empty host: acp keeps its own
+    // endpoint, no per-run token, no reverse tunnel (`ssh -N`) child.
+    assert.equal(result.slot.mcpEndpoint, null);
+    // runKey is still the issue-scoped key; the slot is registered exactly once.
+    assert.equal(result.slot.runKey, "issue-local-1#0");
+    assert.equal(coordinator!.snapshot().slots.length, 1);
+
+    // Settling the slot releases the worker HEALTHY with no endpoint to close.
+    await result.slot.release("healthy");
+    assert.equal(coordinator!.snapshot().slots.length, 0);
+  } finally {
+    // Stop the reaper timer so the test leaves no background interval running.
+    await coordinator!.drain({ deadlineMs: 1_000 });
+  }
+});
+
+test("wiring: the local pool coordinator advertises perRunEndpoint=true yet the empty host opens no tunnel", async () => {
+  // The coordinator is wired with the CONCRETE per-run manager (perRunEndpoint=true),
+  // so the capability surface is identical to a remote pool; the byte-identical local
+  // behaviour comes purely from the empty host short-circuiting open() to null, NOT
+  // from a degraded capability.
+  const settings = localPoolSettings();
+  const coordinator = await buildDispatchCoordinator(settings, {});
+  assert.ok(coordinator);
+  try {
+    assert.equal(coordinator!.capabilities.perRunEndpoint, true);
+  } finally {
+    await coordinator!.drain({ deadlineMs: 1_000 });
+  }
+});
+
+test("gate: an explicit local pool at slotsPerMachine=1 is inert for both capable and incapable capabilities", () => {
+  // The local pool defaults to slotsPerMachine=1, so the co-residence gate never
+  // fires regardless of the coordinator capability - the single-tenant local path
+  // is never gated.
+  const settings = localPoolSettings();
+  assert.equal(settings.worker.workerPool?.slotsPerMachine, 1);
+  assertSlotsPerMachineGate(settings, incapable);
+  assertSlotsPerMachineGate(settings, capable);
+});
