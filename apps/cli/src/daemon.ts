@@ -14,7 +14,7 @@ import {
   registerFakeWorkerDriver,
   type WorkerDriverRegistry,
 } from "@lorenz/worker-sdk";
-import type { DefaultSettingsOptions } from "@lorenz/config";
+import { trackerSpecifierFromConfig, type DefaultSettingsOptions } from "@lorenz/config";
 import { registerDockerWorkerDriver } from "@lorenz/docker-worker";
 import { systemClock, type RuntimeTrackerClient, type Settings } from "@lorenz/domain";
 import { registerJiraTrackers } from "@lorenz/jira-tracker";
@@ -48,6 +48,7 @@ import {
 } from "@lorenz/tracker-sdk";
 
 import { ensureWorkerDriverLoaded } from "./workerDriverLoader.js";
+import { ensureTrackerProviderLoaded } from "./trackerLoader.js";
 
 export interface BackendRegistries {
   trackers?: TrackerRegistry | undefined;
@@ -88,6 +89,39 @@ export function registerBuiltinBackends(registries: BackendRegistries = {}): voi
 
 export function runtimeDefaultSettingsOptions(): DefaultSettingsOptions {
   return { tmpdir: os.tmpdir() };
+}
+
+/**
+ * `loadWorkflow` pre-parse hook: dynamic-import any out-of-tree tracker named by
+ * `tracker.kind` (a module specifier rather than a registered kind) and register
+ * it into `trackers` under that exact string, BEFORE the config parser resolves
+ * the tracker provider. Mirrors {@link buildWorkerPool}'s driver-loading step:
+ * the loader is a no-op for a built-in kind, dynamic-imports on a miss, and
+ * fail-loud on an unresolvable specifier / SDK mismatch at the same startup point
+ * as an unregistered kind. Re-running it on a reload re-encounters an
+ * already-loaded specifier and emits `tracker_provider_module_pinned`; a config
+ * that switches `tracker.kind` to a NEW specifier hot-loads it.
+ *
+ * `baseDir` anchors `./relative` specifiers to the workflow file's directory (the
+ * most predictable anchor for operators), and `logEvent` routes the
+ * `tracker_provider_loaded`/`_module_pinned` audit events to the configured log
+ * file when one is known.
+ */
+export async function prepareTrackerExtensions(
+  rawConfig: Record<string, unknown>,
+  context: { baseDir: string; logFile?: string | undefined; trackers?: TrackerRegistry },
+): Promise<void> {
+  const specifier = trackerSpecifierFromConfig(rawConfig);
+  if (specifier === undefined) return;
+  const trackers = context.trackers ?? defaultTrackerRegistry;
+  const logEvent =
+    context.logFile === undefined
+      ? undefined
+      : (event: Record<string, unknown>): void => void appendLogEvent(context.logFile!, event);
+  await ensureTrackerProviderLoaded(specifier, trackers, {
+    baseDir: context.baseDir,
+    logEvent,
+  });
 }
 
 export function createTrackerClient(

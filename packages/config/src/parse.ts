@@ -220,6 +220,36 @@ export function validateDispatchConfig(
   }
 }
 
+/**
+ * The effective tracker selector a raw workflow config resolves to - the value
+ * that becomes `settings.tracker.kind` - WITHOUT running the rest of config
+ * parsing. The out-of-tree extension loader needs this BEFORE {@link parseConfig}
+ * so it can dynamic-import a tracker module named by `tracker.kind` and register
+ * it (under that exact string) into the registry the parser then resolves
+ * `parseOptions`/`validateDispatch` against. Returns undefined when no tracker is
+ * configured (the default tracker applies) or when a `trackers.<name>` bundle is
+ * selected (a bundle is an in-repo composition, never a module specifier).
+ *
+ * Mirrors {@link parseTracker}'s selection: `tracker.kind` is the selector; an
+ * empty/blank value yields undefined. This reads only the selector, so a tracker
+ * module specifier in `tracker.kind` (e.g. `./acme-tracker.mjs`) surfaces here
+ * verbatim for the loader, while a bundle selection is left to the registry's
+ * built-ins.
+ */
+export function trackerSpecifierFromConfig(
+  raw: Record<string, unknown> = {},
+): string | undefined {
+  const parsed = parseWorkflowConfig(raw);
+  const trackersRaw = parsed.trackers ?? {};
+  const selectorRecord = parseTrackerRecord(parsed.tracker ?? {}, "tracker");
+  const selected = trackerKindValue(selectorRecord.kind);
+  if (selected === undefined) return undefined;
+  // A `trackers.<name>` bundle selection composes an in-repo provider via the
+  // bundle's `provider:` key; it is never an out-of-tree module specifier.
+  if (trackersRaw[selected] !== undefined) return undefined;
+  return selected;
+}
+
 export function normalizeStateName(value: string): string {
   return value.trim().toLowerCase();
 }

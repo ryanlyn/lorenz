@@ -43,6 +43,7 @@ import {
 import {
   buildDispatchCoordinator,
   createTrackerClient,
+  prepareTrackerExtensions,
   runAgentAttempt,
   registerBuiltinBackends,
   runtimeAdapters,
@@ -129,11 +130,24 @@ export async function runDaemon(options: CliOptions): Promise<number> {
     // Surface deprecated config keys once, on the first (startup) load. Reloads run the same
     // validation every poll, so re-warning there would spam an unchanged config.
     let deprecationsReported = false;
+    // Known after the first load; reused so the tracker loader's audit events
+    // reach the configured log file on every reload after startup.
+    let trackerLogFile: string | undefined;
     const loadRuntimeWorkflow = async () => {
       const workflow = await loadWorkflow(options.workflowPath ?? undefined, process.env, {
         ...runtimeDefaultSettingsOptions(),
         trackers: defaultTrackerRegistry,
+        // Pre-parse hook: dynamic-import any out-of-tree tracker named by
+        // `tracker.kind` BEFORE config parsing resolves the provider, so an
+        // out-of-tree tracker is option-parsed and validated exactly like a built-in.
+        prepareRegistries: async (rawConfig, ctx) =>
+          prepareTrackerExtensions(rawConfig, {
+            baseDir: ctx.baseDir,
+            logFile: trackerLogFile,
+            trackers: defaultTrackerRegistry,
+          }),
       });
+      trackerLogFile = workflow.settings.logging.logFile;
       applyCliOverrides(workflow, options);
       if (boundServerPort !== null) workflow.settings.server.port = boundServerPort;
       validateDispatchConfig(

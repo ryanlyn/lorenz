@@ -31,6 +31,17 @@ type WorkflowLoadOptions = DefaultSettingsOptions & {
    * registry is used.
    */
   executors?: AgentExecutorRegistry | undefined;
+  /**
+   * Async hook run AFTER the front matter is parsed but BEFORE {@link parseConfig}, so the
+   * composition root can dynamic-import any out-of-tree extension named by config (a
+   * `tracker.kind` module specifier) and register it into the registries the parser then
+   * resolves against. `baseDir` is the workflow file's directory, anchoring `./relative`
+   * specifiers. Loading here (not inside the sync parser) keeps the extension trust boundary
+   * and the audit events in the composition root.
+   */
+  prepareRegistries?:
+    | ((rawConfig: Record<string, unknown>, context: { baseDir: string }) => Promise<void>)
+    | undefined;
 };
 
 const promptTemplateEngine = new Liquid({
@@ -75,6 +86,9 @@ export async function loadWorkflow(
   }
   const { config, body } = parseWorkflowContent(content);
   const configDefaults = { ...defaults, configDir: path.dirname(absolute) };
+  // Load out-of-tree extensions named by config into the registries BEFORE parsing, so the
+  // parser's provider option parsing resolves an out-of-tree tracker exactly like a built-in.
+  await defaults.prepareRegistries?.(config, { baseDir: path.dirname(absolute) });
   const settings = parseConfig(config, env, configDefaults, defaults.trackers, defaults.executors);
   return {
     path: absolute,

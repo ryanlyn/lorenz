@@ -13,6 +13,7 @@ export {
   parseConfig,
   settingsForIssueState,
   validateDispatchConfig,
+  trackerSpecifierFromConfig,
   normalizeStateName,
   normalizeRouteName,
 } from "./parse.js";
