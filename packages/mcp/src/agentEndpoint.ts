@@ -48,8 +48,10 @@ interface RemoteMcpTunnel {
  * composition side passes its pool (e.g. the SSH worker-host pool); this package never
  * reaches into transport infrastructure itself. The whole-endpoint path uses the
  * stateless {@link acquireRemoteMcpTunnel}/{@link releaseRemoteMcpTunnel} pair; the
- * per-run path keys a tunnel by `(workerHost, runKey)` via {@link openForRun}/{@link
- * closeForRun} so co-resident runs on one machine each get an isolated tunnel.
+ * per-run path takes a per-run HOLD on the SHARED per-host tunnel via {@link
+ * openForRun}/{@link closeForRun} (one `ssh -R` per worker host, refcounted across
+ * co-resident runs). Co-resident runs are kept apart by their per-run Token B claim,
+ * NOT by a distinct tunnel/remote port.
  */
 export interface RemoteMcpTunnelTransport {
   acquireRemoteMcpTunnel(

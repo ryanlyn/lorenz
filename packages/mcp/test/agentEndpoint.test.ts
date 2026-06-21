@@ -204,16 +204,21 @@ test("acquireAgentMcpEndpointForRun releases the local-server ref AND revokes th
   assert.deepEqual(closeForRun.mock.calls[0], ["worker-1", "run-fail"]);
 });
 
-test("two per-run endpoints on one host get DISTINCT tunnel ports", async () => {
+test("two per-run endpoints on one host SHARE one reverse tunnel / URL (per-host collapse), kept apart by distinct Token B claims", async () => {
   const port = await freeLocalPort();
   const settings = settingsWithPort(port);
 
   const a = await acquireAgentMcpEndpointForRun(settings, "worker-1", "run-A", workerHostPool);
   const b = await acquireAgentMcpEndpointForRun(settings, "worker-1", "run-B", workerHostPool);
 
-  // Two distinct per-run tunnels — no host coalescing.
-  assert.equal(mockStartReverseTunnel.mock.calls.length, 2);
-  assert.notEqual(a.url, b.url);
+  // ONE shared per-host reverse tunnel: a single ssh child and the SAME tunnel URL
+  // (remote port) for both co-resident runs (host coalescing).
+  assert.equal(mockStartReverseTunnel.mock.calls.length, 1);
+  assert.equal(a.url, b.url);
+  // Runs are distinguished by their distinct per-run Token B claims, NOT the port.
+  assert.notEqual(a.token, b.token);
+  assert.ok(resolveRunClaim(a.token));
+  assert.ok(resolveRunClaim(b.token));
 
   await a.release();
   await b.release();

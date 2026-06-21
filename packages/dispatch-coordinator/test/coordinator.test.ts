@@ -1088,8 +1088,10 @@ test("acquireRunSlot REJECTS a second (issueId, slotIndex) on the SAME machine (
 
 test("(issueId, slotIndex) uniqueness: runKey AND workspace-suffix uniqueness hold SIMULTANEOUSLY across co-resident slots", async () => {
   // Two DISTINCT slots of one issue co-residing on ONE worker (slotsPerMachine>1):
-  // distinct slotIndex => distinct runKey (per-run endpoint/tunnel key) AND distinct
-  // workspace slot suffix, so neither the tunnel nor the workspace is shared.
+  // distinct slotIndex => distinct runKey (the per-run CLAIM key - Token B is bound
+  // to it) AND distinct workspace slot suffix. The per-HOST reverse tunnel is now
+  // SHARED across the two co-resident slots (they are kept apart by their claim, not
+  // by a per-run port); the workspace dir stays distinct.
   const s0 = makeFakeLease({ leaseId: "g0", workerId: "worker-1", workerHost: "ssh://host-1" });
   const s1 = makeFakeLease({ leaseId: "g1", workerId: "worker-1", workerHost: "ssh://host-1" });
   const pool = makeScriptedWorkerPool([s0, s1]);
@@ -1100,9 +1102,9 @@ test("(issueId, slotIndex) uniqueness: runKey AND workspace-suffix uniqueness ho
   if (r0.status !== "bound" || r1.status !== "bound") throw new Error("expected bound");
 
   // runKey is the issue-scoped `${issueId}#${slotIndex}`: distinct per slot (the
-  // slotIndex differs), so the two co-resident slots get distinct per-run
-  // endpoint/tunnel keys; the workspace dir stays distinct via its own slotIndex
-  // suffix simultaneously.
+  // slotIndex differs), so the two co-resident slots get distinct per-run CLAIM
+  // keys (each binds its own Token B) while SHARING the one per-host tunnel; the
+  // workspace dir stays distinct via its own slotIndex suffix simultaneously.
   assert.equal(r0.slot.runKey, "issue-1#0");
   assert.equal(r1.slot.runKey, "issue-1#1");
   assert.ok(r0.slot.runKey !== r1.slot.runKey);
@@ -1116,10 +1118,11 @@ test("(issueId, slotIndex) uniqueness: runKey AND workspace-suffix uniqueness ho
 test("runKey is ISSUE-SCOPED: two DIFFERENT issues at slotIndex 0 co-resident on ONE machine get DISTINCT runKeys", async () => {
   // Codex HIGH #2: with slotsPerMachine>1, DIFFERENT issues can co-reside on ONE
   // workerHost. A bare `${slotIndex}` runKey would make both non-ensemble issues
-  // (slotIndex 0) key to "0", so `${workerHost}#${runKey}` collides ACROSS issues ->
-  // shared tunnel/port, broken per-run isolation. The runKey must be ISSUE-SCOPED
-  // (`${issueId}#${slotIndex}`) so co-resident runs of different issues get DISTINCT
-  // per-run endpoint/tunnel keys.
+  // (slotIndex 0) key to "0", so two co-resident runs would collide on ONE per-run
+  // CLAIM (`${issueId}#${slotIndex}`) -> Token B for one would authorize the other,
+  // broken per-run isolation. The runKey must be ISSUE-SCOPED so co-resident runs of
+  // different issues get DISTINCT per-run claim keys (the per-HOST tunnel is shared
+  // by design; the claim, not the port, is what isolates the runs).
   const order: string[] = [];
   const manager = makeRecordingManager(order);
   const a = makeFakeLease({ leaseId: "a", workerId: "worker-1", workerHost: "ssh://host-1" });
@@ -1137,8 +1140,8 @@ test("runKey is ISSUE-SCOPED: two DIFFERENT issues at slotIndex 0 co-resident on
   assert.ok(ra.slot.runKey !== rb.slot.runKey);
 
   // The per-run manager opened each endpoint with the DISTINCT issue-scoped runKey
-  // (the key that feeds `${workerHost}#${runKey}` in the tunnel pool), so the two
-  // co-resident runs never share a tunnel/port.
+  // (the key each run's Token B CLAIM is bound to), so the two co-resident runs hold
+  // DISTINCT claims even though they share the one per-host tunnel.
   assert.equal(manager.openCalls[0]?.runKey, "issue-a#0");
   assert.equal(manager.openCalls[1]?.runKey, "issue-b#0");
 });

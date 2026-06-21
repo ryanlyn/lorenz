@@ -47,7 +47,7 @@ import { afterEach, beforeEach, test, vi } from "vitest";
 import { startReverseTunnel } from "@lorenz/ssh";
 import { parseConfig } from "@lorenz/config";
 import type { WorkerPoolSettings } from "@lorenz/domain";
-import { acquireAgentMcpEndpointForRun, mcpAuthScopeForSettings, validMcpToken } from "@lorenz/mcp";
+import { acquireAgentMcpEndpointForRun, resolveRunClaim } from "@lorenz/mcp";
 import type { AgentMcpEndpointLease } from "@lorenz/mcp";
 import { WorkerHostPool, workerHostPool } from "@lorenz/worker-host-pool";
 import { createDispatchCoordinator } from "@lorenz/cli";
@@ -135,7 +135,7 @@ function isLocalWorkerHost(workerHost: string): boolean {
 
 function perRunManager(acquireForRun: AcquireForRun): McpEndpointManager {
   return {
-    perRunEndpoint: true,
+    perRunClaimEnforcement: true,
     async open(req): Promise<AgentMcpEndpointLease | null> {
       if (isLocalWorkerHost(req.workerHost)) return null;
       return acquireForRun(req.settings, req.workerHost, req.runKey);
@@ -259,13 +259,13 @@ function endpointSettings(): WorkerPoolSettings {
   return full as unknown as WorkerPoolSettings;
 }
 
-// Tokens issued for the configured server port are scoped to the settings
-// identity; validity checks must use the same scope.
-const endpointTokenScope = mcpAuthScopeForSettings(
-  endpointSettings() as unknown as Settings,
-  "127.0.0.1",
-  mcpServerPort,
-);
+// The per-run path mints Token B (an opaque per-run token bound to a server-side
+// claim), NOT a settings-wide token. A live token RESOLVES to its claim; a revoked
+// one resolves to undefined (the claim Map is the sole authority - there is no
+// settings-scope to validate against).
+function tokenIsLive(token: string): boolean {
+  return resolveRunClaim(token) !== undefined;
+}
 
 function makeCoordinator(
   pool: FakeMachinePool,
@@ -335,8 +335,8 @@ test("recycle/poison of run A fails A CLEANLY (token revoked, ssh child killed, 
   // Both endpoints opened real per-run tunnels: two distinct ssh children, both
   // tokens valid.
   assert.equal(processes.length, 2);
-  assert.ok(validMcpToken(tokenA, endpointTokenScope));
-  assert.ok(validMcpToken(tokenB, endpointTokenScope));
+  assert.ok(tokenIsLive(tokenA));
+  assert.ok(tokenIsLive(tokenB));
   assert.equal(coordinator.snapshot().slots.length, 2);
 
   // The pool recycles run A's worker (poison/reaper). The coordinator's registered
@@ -346,7 +346,7 @@ test("recycle/poison of run A fails A CLEANLY (token revoked, ssh child killed, 
   await flushMicrotasks();
 
   // Run A is torn down cleanly end-to-end:
-  assert.equal(validMcpToken(tokenA, endpointTokenScope), false); // token revoked
+  assert.equal(tokenIsLive(tokenA), false); // token revoked
   assert.equal(processes[0]!.kill.mock.calls.length, 1); // A's ssh child killed
   assert.deepEqual(pool.leases.get(a.slot.machineLeaseId)!.settles, [
     { kind: "fail", arg: "machine_recycled" },
@@ -354,7 +354,7 @@ test("recycle/poison of run A fails A CLEANLY (token revoked, ssh child killed, 
 
   // Run B is completely untouched: token still valid, child still alive, slot
   // still registered.
-  assert.ok(validMcpToken(tokenB, endpointTokenScope));
+  assert.ok(tokenIsLive(tokenB));
   assert.equal(processes[1]!.kill.mock.calls.length, 0);
   const slots = coordinator.snapshot().slots;
   assert.equal(slots.length, 1);
@@ -366,11 +366,12 @@ test("recycle/poison of run A fails A CLEANLY (token revoked, ssh child killed, 
   assert.equal(pool.leases.get(a.slot.machineLeaseId)!.settles.length, 1);
 });
 
-test("two co-resident runs on ONE machine get DISTINCT per-run tunnels; closing A leaves B's endpoint live", async () => {
+test("two co-resident runs on ONE machine SHARE one reverse tunnel (refcounted); closing A keeps B's endpoint + the shared tunnel live", async () => {
   const processes: FakeProcess[] = [];
   mockStartReverseTunnel.mockImplementation(() => makeFakeProcess(processes));
-  // Both slots resolve to the SAME host (co-residence): the per-run tunnel keying
-  // (`${workerHost}#${runKey}`) must still hand out DISTINCT remote ports.
+  // Both slots resolve to the SAME host (co-residence). Per-HOST collapse (C7): the
+  // two runs share ONE `ssh -R` reverse tunnel / remote port; they are kept apart by
+  // their distinct per-run Token B claim, NOT by a distinct remote port.
   const pool = makeFakeMachinePool({ hostFor: () => "ssh://shared-host" });
   const coordinator = makeCoordinator(pool);
 
@@ -379,18 +380,29 @@ test("two co-resident runs on ONE machine get DISTINCT per-run tunnels; closing 
   if (a.status !== "bound" || b.status !== "bound") return;
   liveEndpoints.push(b.slot.mcpEndpoint!);
 
-  // Distinct remote ports despite the shared host (no host-coalescing kill).
+  // SHARED tunnel: one ssh child, the SAME remote port for both co-resident runs.
   const portA = Number(new URL(a.slot.mcpEndpoint!.url).port);
   const portB = Number(new URL(b.slot.mcpEndpoint!.url).port);
-  assert.ok(portA !== portB);
-  assert.equal(processes.length, 2);
+  assert.equal(portA, portB);
+  assert.equal(processes.length, 1);
+  // DISTINCT per-run Token B claims (the run isolation that replaced per-run ports).
+  assert.notEqual(a.slot.mcpEndpoint!.token, b.slot.mcpEndpoint!.token);
+  assert.ok(tokenIsLive(a.slot.mcpEndpoint!.token));
+  assert.ok(tokenIsLive(b.slot.mcpEndpoint!.token));
 
-  // Close A's run: only A's ssh child dies; B's tunnel stays alive.
+  // Close A's run: its Token B claim is revoked, but the SHARED tunnel stays alive
+  // (refcount drops to B only) so the ssh child is NOT killed and B's claim is live.
   await a.slot.release("healthy");
-  assert.equal(processes[0]!.kill.mock.calls.length, 1);
-  assert.equal(processes[1]!.kill.mock.calls.length, 0);
-  assert.ok(validMcpToken(b.slot.mcpEndpoint!.token, endpointTokenScope));
+  assert.equal(processes[0]!.kill.mock.calls.length, 0);
+  assert.equal(tokenIsLive(a.slot.mcpEndpoint!.token), false); // A's claim revoked
+  assert.ok(tokenIsLive(b.slot.mcpEndpoint!.token)); // B's claim still live
   assert.equal(coordinator.snapshot().slots.length, 1);
+
+  // Closing the LAST co-resident run (B) finally tears the shared tunnel down.
+  liveEndpoints = [];
+  await b.slot.release("healthy");
+  assert.equal(processes[0]!.kill.mock.calls.length, 1);
+  assert.equal(tokenIsLive(b.slot.mcpEndpoint!.token), false);
 });
 
 // ---------------------------------------------------------------------------
@@ -509,7 +521,7 @@ test("force-drain closes EVERY surviving registry endpoint (no leaked ssh -N chi
   assert.equal(processes.length, 3);
   assert.equal(coordinator.snapshot().slots.length, 3);
   const tokens = slots.map((s) => s.mcpEndpoint!.token);
-  for (const token of tokens) assert.ok(validMcpToken(token, endpointTokenScope));
+  for (const token of tokens) assert.ok(tokenIsLive(token));
 
   // Force-drain: the real pool recycles every worker on drain (firing the recycle
   // callback per worker), so every surviving registry endpoint is closed - no ssh -N
@@ -519,7 +531,7 @@ test("force-drain closes EVERY surviving registry endpoint (no leaked ssh -N chi
 
   for (let i = 0; i < 3; i += 1) {
     assert.equal(processes[i]!.kill.mock.calls.length, 1); // every ssh child killed
-    assert.equal(validMcpToken(tokens[i]!, endpointTokenScope), false); // every token revoked
+    assert.equal(tokenIsLive(tokens[i]!), false); // every token revoked
   }
   // Every slot deregistered: the registry is empty after a force-drain.
   assert.equal(coordinator.snapshot().slots.length, 0);
@@ -575,7 +587,7 @@ test("single-slot path opens EXACTLY ONE endpoint per machine (one ssh child, on
   // heartbeat / resume within the run never re-opens.
   r.slot.heartbeat();
   assert.ok(r.slot.mcpEndpoint);
-  assert.ok(validMcpToken(r.slot.mcpEndpoint!.token, endpointTokenScope));
+  assert.ok(tokenIsLive(r.slot.mcpEndpoint!.token));
   assert.equal(processes.length, 1);
   assert.equal(coordinator.snapshot().slots.length, 1);
 
@@ -584,7 +596,7 @@ test("single-slot path opens EXACTLY ONE endpoint per machine (one ssh child, on
   const token = r.slot.mcpEndpoint!.token;
   liveEndpoints = [];
   await r.slot.release("healthy");
-  assert.equal(validMcpToken(token, endpointTokenScope), false);
+  assert.equal(tokenIsLive(token), false);
   assert.equal(processes[0]!.kill.mock.calls.length, 1);
 });
 
