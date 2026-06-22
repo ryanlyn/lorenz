@@ -53,7 +53,10 @@ const config: KnipConfig = {
   },
   ignoreDependencies: ["tsx"],
   ignoreBinaries: ["op", "tar"],
-  ignore: ["sandbox/**"],
+  // The extension-import-boundary fixtures are loaded by file path (cruised
+  // through dependency-cruiser), never statically imported, so knip's static
+  // graph cannot see them used.
+  ignore: ["sandbox/**", "test/fixtures/extension-import-boundaries/**"],
 };
 
 export default config;

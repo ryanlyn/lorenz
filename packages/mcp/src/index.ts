@@ -9,7 +9,7 @@ export {
   revokeRunClaim,
   validMcpToken,
 } from "./auth.js";
-export type { RunClaim, RunClaimDecision, RunClaimRequest } from "./auth.js";
+export type { RunClaim } from "./auth.js";
 export { executeTool, mountedSkillSources, toolSpecs } from "./tools.js";
 export {
   acquireAgentMcpEndpoint,
