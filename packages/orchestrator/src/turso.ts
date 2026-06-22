@@ -7,6 +7,7 @@ import type { AsyncClaimStoreBackend, ClaimStoreCheckpoint } from "./claimStore.
 
 export interface TursoClaimStoreBackendOptions {
   busyTimeoutMs?: number | undefined;
+  maxEventRows?: number | undefined;
   multiprocessWal?: boolean | undefined;
 }
 
@@ -20,7 +21,10 @@ export class TursoClaimStoreBackend implements AsyncClaimStoreBackend {
 
   private transactionDepth = 0;
 
-  private constructor(private readonly db: Database) {}
+  private constructor(
+    private readonly db: Database,
+    private readonly maxEventRows: number,
+  ) {}
 
   static async open(
     dbPath: string,
@@ -32,7 +36,10 @@ export class TursoClaimStoreBackend implements AsyncClaimStoreBackend {
     };
     if (options.multiprocessWal) dbOptions.experimental = ["multiprocess_wal"];
     const db = await connect(dbPath, dbOptions);
-    const backend = new TursoClaimStoreBackend(db);
+    const backend = new TursoClaimStoreBackend(
+      db,
+      Math.max(1, Math.floor(options.maxEventRows ?? 1000)),
+    );
     await backend.initialize();
     return backend;
   }
@@ -143,6 +150,17 @@ export class TursoClaimStoreBackend implements AsyncClaimStoreBackend {
       checkpoint.ownerId,
       checkpoint.writtenAt,
       checkpoint.operation,
+    );
+    await this.db.run(
+      `
+        DELETE FROM claim_store_events
+        WHERE id NOT IN (
+          SELECT id FROM claim_store_events
+          ORDER BY id DESC
+          LIMIT ?
+        )
+      `,
+      this.maxEventRows,
     );
   }
 }

@@ -1430,10 +1430,8 @@ test("runtime stalled reconciliation does not record a stalled run when durable 
   );
 });
 
-// NOTE: This test modifies process.env.PATH to inject a fake ssh binary.
-// It restores PATH in the finally block but is NOT safe for parallel execution
-// with other tests that depend on PATH or invoke ssh. The test suite runs
-// sequentially so this is acceptable.
+// This test modifies process.env.PATH to inject a fake ssh binary. It restores PATH in
+// the finally block and must run serially because process.env is process-wide.
 test("runtime does not stall a stale ensemble slot snapshot after its runner completes", async () => {
   const issue = issueFixture("issue-ensemble-stall-race", "MT-ENSEMBLE-RACE");
   const root = await tempDir("lorenz-runtime-ensemble-stall-race");
@@ -2918,8 +2916,7 @@ test("worker pool: a null-manager slot threads a null mcpEndpoint into the runne
   await runtime.start({ once: true, dryRun: false });
 
   // The bare-workerPool path wraps the pool in the null-endpoint passthrough
-  // coordinator, so the slot carries mcpEndpoint=null and the runner is threaded
-  // null (acp then acquires/releases its own endpoint - byte-identical).
+  // coordinator, so the slot carries mcpEndpoint=null and the runner receives null.
   assert.equal(runnerEndpoint, null);
 });
 
@@ -4612,8 +4609,7 @@ test("worker pool: a reload to max_in_flight>1 WITH co_residence + per-run-endpo
 });
 
 test("worker pool: a default (slotsPerMachine=1) reload applies unchanged through the gate", async () => {
-  // The byte-identical default path: slotsPerMachine stays 1, the gate never
-  // triggers, the reload applies and reconciles exactly as before.
+  // With the default single-slot shape, the gate does not trigger and the reload applies.
   const issue = issueFixture("issue-bp-reload-default", "MT-BP-RELOAD-DEFAULT");
   const firstWorkflow = workerPoolWorkflowFixture();
   const secondWorkflow = workerPoolWorkflowFixture(
@@ -4747,7 +4743,7 @@ test("worker pool: drainWorkerPool resolves as a no-op when no pool is configure
   await runtime.drainWorkerPool();
 });
 
-test("worker pool undefined: byte-identical regression (acquire and classifier never invoked)", async () => {
+test("worker pool undefined: static path does not acquire or classify worker leases", async () => {
   const issue = issueFixture("issue-no-bp", "MT-NO-BP");
   const doneIssue: Issue = { ...issue, state: "Done", stateType: "completed" };
   let runnerWorkerHost: string | null | undefined = "unset";

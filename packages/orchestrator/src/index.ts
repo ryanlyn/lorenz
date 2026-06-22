@@ -201,6 +201,42 @@ export class Orchestrator {
     return this.claimStore.transaction(operation, run);
   }
 
+  private noopAsNull<T>(run: () => T): T | null {
+    try {
+      return run();
+    } catch (error) {
+      if (error instanceof NoopClaimStoreMutation) return null;
+      throw error;
+    }
+  }
+
+  private async noopAsNullAsync<T>(run: () => Promise<T>): Promise<T | null> {
+    try {
+      return await run();
+    } catch (error) {
+      if (error instanceof NoopClaimStoreMutation) return null;
+      throw error;
+    }
+  }
+
+  private ignoreNoop(run: () => void): void {
+    try {
+      run();
+    } catch (error) {
+      if (error instanceof NoopClaimStoreMutation) return;
+      throw error;
+    }
+  }
+
+  private async ignoreNoopAsync(run: () => Promise<void>): Promise<void> {
+    try {
+      await run();
+    } catch (error) {
+      if (error instanceof NoopClaimStoreMutation) return;
+      throw error;
+    }
+  }
+
   private syncClaimStore(): ClaimStore {
     if (isAsyncClaimStore(this.claimStore)) throw new Error("async_claim_store_requires_async_api");
     return this.claimStore;
@@ -292,17 +328,23 @@ export class Orchestrator {
   }
 
   claim(issue: Issue): ClaimResult | null {
-    return this.withClaimStore("claim", () => this.claimInTransaction(issue));
+    return this.noopAsNull(() =>
+      this.withClaimStore("claim", () => this.claimInTransaction(issue)),
+    );
   }
 
   async claimAsync(issue: Issue): Promise<ClaimResult | null> {
-    return this.withClaimStoreAsync("claim", () => this.claimInTransaction(issue));
+    return this.noopAsNullAsync(async () =>
+      this.withClaimStoreAsync("claim", () => this.claimInTransaction(issue)),
+    );
   }
 
   private claimInTransaction(issue: Issue): ClaimResult | null {
     const retries = this.retryEntriesForIssue(issue.id);
     const retryEntry = retries.find(([, retry]) => this.retryIsDue(retry)) ?? retries[0];
-    if (retryEntry && this.retryIsDue(retryEntry[1])) this.releaseStaleClaimsForRetry(issue.id);
+    let stateChanged = false;
+    if (retryEntry && this.retryIsDue(retryEntry[1]))
+      stateChanged = this.releaseStaleClaimsForRetry(issue.id) || stateChanged;
     const retryEntryKey = retryEntry?.[0];
     const retry = retryEntry?.[1];
     if (
@@ -313,7 +355,8 @@ export class Orchestrator {
         workerCapacityAvailable: this.workerCapacityAvailable(),
       })
     ) {
-      return null;
+      if (stateChanged) return null;
+      throw new NoopClaimStoreMutation();
     }
     const slotIndex = firstUnclaimedSlot(
       issue,
@@ -321,7 +364,10 @@ export class Orchestrator {
       this.state.claimed,
       retry?.slotIndex,
     );
-    if (slotIndex === null) return null;
+    if (slotIndex === null) {
+      if (stateChanged) return null;
+      throw new NoopClaimStoreMutation();
+    }
     if (this.capacityProbe?.governs()) {
       // The pool governs capacity: hold the slot host-less while the coordinator
       // negotiates a concrete worker asynchronously (bindReservation mints the
@@ -331,7 +377,10 @@ export class Orchestrator {
     // No pool (or a disabled pool whose probe no longer governs): take the normal
     // static/local selection, which yields null/local when ssh_hosts is empty.
     const selected = this.selectWorkerHost(retry?.workerHost);
-    if (selected === undefined) return null;
+    if (selected === undefined) {
+      if (stateChanged) return null;
+      throw new NoopClaimStoreMutation();
+    }
     const workerHost = selected;
     const effective = settingsForIssueState(this.settings, issue.state);
     const size = ensembleSize(issue) ?? this.settings.agent.ensembleSize;
@@ -423,8 +472,10 @@ export class Orchestrator {
    * the provision wait.
    */
   bindReservation(reservation: SlotReservation, workerHost: string): RunningEntry | null {
-    return this.withClaimStore("bind_reservation", () =>
-      this.bindReservationInTransaction(reservation, workerHost),
+    return this.noopAsNull(() =>
+      this.withClaimStore("bind_reservation", () =>
+        this.bindReservationInTransaction(reservation, workerHost),
+      ),
     );
   }
 
@@ -432,8 +483,10 @@ export class Orchestrator {
     reservation: SlotReservation,
     workerHost: string,
   ): Promise<RunningEntry | null> {
-    return this.withClaimStoreAsync("bind_reservation", () =>
-      this.bindReservationInTransaction(reservation, workerHost),
+    return this.noopAsNullAsync(async () =>
+      this.withClaimStoreAsync("bind_reservation", () =>
+        this.bindReservationInTransaction(reservation, workerHost),
+      ),
     );
   }
 
@@ -444,7 +497,7 @@ export class Orchestrator {
     const key = slotKey(reservation.issueId, reservation.slotIndex);
     const record = this.state.reserved.get(key);
     if (!record || record.token !== reservation.token || !this.claimIsOwnedByThisStore(key))
-      return null;
+      throw new NoopClaimStoreMutation();
     this.state.reserved.delete(key);
     const entry: RunningEntry = {
       issue: record.issue,
@@ -479,37 +532,48 @@ export class Orchestrator {
    * (cancelled, expired, or superseded by a re-reserve) is a no-op.
    */
   cancelReservation(reservation: SlotReservation): void {
-    this.withClaimStore("cancel_reservation", () =>
-      this.cancelReservationInTransaction(reservation),
+    this.ignoreNoop(() =>
+      this.withClaimStore("cancel_reservation", () =>
+        this.cancelReservationInTransaction(reservation),
+      ),
     );
   }
 
   async cancelReservationAsync(reservation: SlotReservation): Promise<void> {
-    await this.withClaimStoreAsync("cancel_reservation", () =>
-      this.cancelReservationInTransaction(reservation),
+    await this.ignoreNoopAsync(async () =>
+      this.withClaimStoreAsync("cancel_reservation", () =>
+        this.cancelReservationInTransaction(reservation),
+      ),
     );
   }
 
   private cancelReservationInTransaction(reservation: SlotReservation): void {
     const key = slotKey(reservation.issueId, reservation.slotIndex);
     const record = this.state.reserved.get(key);
-    if (!record || record.token !== reservation.token || !this.claimIsOwnedByThisStore(key)) return;
+    if (!record || record.token !== reservation.token || !this.claimIsOwnedByThisStore(key))
+      throw new NoopClaimStoreMutation();
     this.cancelReservationRecord(key, record);
   }
 
   abandonClaim(issueId: string, slotIndex: number): void {
-    this.withClaimStore("abandon_claim", () => this.abandonClaimInTransaction(issueId, slotIndex));
+    this.ignoreNoop(() =>
+      this.withClaimStore("abandon_claim", () =>
+        this.abandonClaimInTransaction(issueId, slotIndex),
+      ),
+    );
   }
 
   async abandonClaimAsync(issueId: string, slotIndex: number): Promise<void> {
-    await this.withClaimStoreAsync("abandon_claim", () =>
-      this.abandonClaimInTransaction(issueId, slotIndex),
+    await this.ignoreNoopAsync(async () =>
+      this.withClaimStoreAsync("abandon_claim", () =>
+        this.abandonClaimInTransaction(issueId, slotIndex),
+      ),
     );
   }
 
   private abandonClaimInTransaction(issueId: string, slotIndex: number): void {
     const key = slotKey(issueId, slotIndex);
-    if (!this.claimIsOwnedByThisStore(key)) return;
+    if (!this.claimIsOwnedByThisStore(key)) throw new NoopClaimStoreMutation();
     const reservation = this.state.reserved.get(key);
     if (reservation) {
       this.cancelReservationRecord(key, reservation);
@@ -586,26 +650,38 @@ export class Orchestrator {
   }
 
   refreshRunningIssue(issue: Issue): void {
-    this.withClaimStore("refresh_running_issue", () =>
-      this.refreshRunningIssueInTransaction(issue),
+    this.ignoreNoop(() =>
+      this.withClaimStore("refresh_running_issue", () =>
+        this.refreshRunningIssueInTransaction(issue),
+      ),
     );
   }
 
   async refreshRunningIssueAsync(issue: Issue): Promise<void> {
-    await this.withClaimStoreAsync("refresh_running_issue", () =>
-      this.refreshRunningIssueInTransaction(issue),
+    await this.ignoreNoopAsync(async () =>
+      this.withClaimStoreAsync("refresh_running_issue", () =>
+        this.refreshRunningIssueInTransaction(issue),
+      ),
     );
   }
 
   private refreshRunningIssueInTransaction(issue: Issue): void {
+    let stateChanged = false;
     for (const entry of this.state.running.values()) {
-      if (entry.issue.id === issue.id) entry.issue = issue;
+      if (entry.issue.id === issue.id && entry.issue !== issue) {
+        entry.issue = issue;
+        stateChanged = true;
+      }
     }
     // Reserved records feed per-state cap accounting, so a long acquire must not
     // hold a stale issue state either.
     for (const record of this.state.reserved.values()) {
-      if (record.issue.id === issue.id) record.issue = issue;
+      if (record.issue.id === issue.id && record.issue !== issue) {
+        record.issue = issue;
+        stateChanged = true;
+      }
     }
+    if (!stateChanged) throw new NoopClaimStoreMutation();
   }
 
   applyUpdate(issueId: string, slotIndex: number, update: AgentUpdate): void {
@@ -654,8 +730,10 @@ export class Orchestrator {
     error?: string,
     retryKind: "failure" | "continuation" = "failure",
   ): RunningEntry | null {
-    return this.withClaimStore("finish", () =>
-      this.finishInTransaction(issueId, slotIndex, normal, error, retryKind),
+    return this.noopAsNull(() =>
+      this.withClaimStore("finish", () =>
+        this.finishInTransaction(issueId, slotIndex, normal, error, retryKind),
+      ),
     );
   }
 
@@ -666,8 +744,10 @@ export class Orchestrator {
     error?: string,
     retryKind: "failure" | "continuation" = "failure",
   ): Promise<RunningEntry | null> {
-    return this.withClaimStoreAsync("finish", () =>
-      this.finishInTransaction(issueId, slotIndex, normal, error, retryKind),
+    return this.noopAsNullAsync(async () =>
+      this.withClaimStoreAsync("finish", () =>
+        this.finishInTransaction(issueId, slotIndex, normal, error, retryKind),
+      ),
     );
   }
 
@@ -680,8 +760,8 @@ export class Orchestrator {
   ): RunningEntry | null {
     const key = slotKey(issueId, slotIndex);
     const entry = this.state.running.get(key);
-    if (!entry) return null;
-    if (!this.claimIsOwnedByThisStore(key)) return null;
+    if (!entry) throw new NoopClaimStoreMutation();
+    if (!this.claimIsOwnedByThisStore(key)) throw new NoopClaimStoreMutation();
     this.state.running.delete(key);
     this.state.claimed.delete(key);
     this.releaseClaimOwner(key);
@@ -714,31 +794,43 @@ export class Orchestrator {
   }
 
   cleanupIssue(issueId: string): void {
-    this.withClaimStore("cleanup_issue", () => this.cleanupIssueInTransaction(issueId));
+    this.ignoreNoop(() =>
+      this.withClaimStore("cleanup_issue", () => this.cleanupIssueInTransaction(issueId)),
+    );
   }
 
   async cleanupIssueAsync(issueId: string): Promise<void> {
-    await this.withClaimStoreAsync("cleanup_issue", () => this.cleanupIssueInTransaction(issueId));
+    await this.ignoreNoopAsync(async () =>
+      this.withClaimStoreAsync("cleanup_issue", () => this.cleanupIssueInTransaction(issueId)),
+    );
   }
 
   private cleanupIssueInTransaction(issueId: string): void {
+    let stateChanged = false;
     for (const [key, entry] of this.state.running.entries()) {
       if (entry.issue.id === issueId && this.claimIsOwnedByThisStore(key)) {
         this.state.running.delete(key);
         this.state.claimed.delete(key);
         this.releaseClaimOwner(key);
         this.state.usageDeltaBases.delete(key);
+        stateChanged = true;
       }
     }
     // Cancel any in-acquire reservation (token retired -> a late bind returns null).
     // The restore-then-delete composition is safe: the subsequent
     // deleteRetryAttemptsForIssue removes any restored retry entry.
     for (const [key, record] of [...this.state.reserved.entries()]) {
-      if (record.issue.id === issueId && this.claimIsOwnedByThisStore(key))
+      if (record.issue.id === issueId && this.claimIsOwnedByThisStore(key)) {
         this.cancelReservationRecord(key, record);
+        stateChanged = true;
+      }
     }
-    this.deleteRetryAttemptsForIssue(issueId);
-    this.state.completed.add(issueId);
+    stateChanged = this.deleteRetryAttemptsForIssue(issueId) || stateChanged;
+    if (!this.state.completed.has(issueId)) {
+      this.state.completed.add(issueId);
+      stateChanged = true;
+    }
+    if (!stateChanged) throw new NoopClaimStoreMutation();
   }
 
   snapshot(): OrchestratorSnapshot {
@@ -892,7 +984,8 @@ export class Orchestrator {
     });
   }
 
-  private releaseStaleClaimsForRetry(issueId: string): void {
+  private releaseStaleClaimsForRetry(issueId: string): boolean {
+    let stateChanged = false;
     for (const key of [...this.state.claimed]) {
       if (!key.startsWith(`${issueId}:`)) continue;
       // Claimed-without-running is a legitimate state while a reservation holds the
@@ -902,8 +995,10 @@ export class Orchestrator {
       if (!this.state.running.has(key)) {
         this.state.claimed.delete(key);
         this.releaseClaimOwner(key);
+        stateChanged = true;
       }
     }
+    return stateChanged;
   }
 
   private retryEntriesForIssue(issueId: string): Array<[string, RetryEntry]> {
@@ -916,10 +1011,15 @@ export class Orchestrator {
     return this.clock.monotonicMs() >= retry.monotonicDeadlineMs;
   }
 
-  private deleteRetryAttemptsForIssue(issueId: string): void {
+  private deleteRetryAttemptsForIssue(issueId: string): boolean {
+    let stateChanged = false;
     for (const [key, retry] of this.state.retryAttempts.entries()) {
-      if (retry.issueId === issueId) this.state.retryAttempts.delete(key);
+      if (retry.issueId === issueId) {
+        this.state.retryAttempts.delete(key);
+        stateChanged = true;
+      }
     }
+    return stateChanged;
   }
 }
 

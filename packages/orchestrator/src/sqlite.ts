@@ -7,6 +7,7 @@ import type { ClaimStoreBackend, ClaimStoreCheckpoint } from "./claimStore.js";
 
 export interface SqliteClaimStoreBackendOptions {
   busyTimeoutMs?: number | undefined;
+  maxEventRows?: number | undefined;
 }
 
 export class SqliteClaimStoreBackend implements ClaimStoreBackend {
@@ -21,14 +22,17 @@ export class SqliteClaimStoreBackend implements ClaimStoreBackend {
   private readonly loadStmt: Database.Statement;
   private readonly upsertSnapshotStmt: Database.Statement;
   private readonly insertEventStmt: Database.Statement;
+  private readonly pruneEventsStmt: Database.Statement;
   private readonly upsertOwnerStmt: Database.Statement;
   private readonly ownerHeartbeatStmt: Database.Statement;
   private readonly beginImmediateStmt: Database.Statement;
   private readonly commitStmt: Database.Statement;
   private readonly rollbackStmt: Database.Statement;
+  private readonly maxEventRows: number;
   private transactionDepth = 0;
 
   constructor(dbPath: string, options: SqliteClaimStoreBackendOptions = {}) {
+    this.maxEventRows = Math.max(1, Math.floor(options.maxEventRows ?? 1000));
     mkdirSync(path.dirname(dbPath), { recursive: true });
     this.db = new Database(dbPath);
     this.db.pragma("journal_mode = WAL");
@@ -69,6 +73,14 @@ export class SqliteClaimStoreBackend implements ClaimStoreBackend {
     this.insertEventStmt = this.db.prepare(`
       INSERT INTO claim_store_events (ownerId, writtenAt, operation)
       VALUES (@ownerId, @writtenAt, @operation)
+    `);
+    this.pruneEventsStmt = this.db.prepare(`
+      DELETE FROM claim_store_events
+      WHERE id NOT IN (
+        SELECT id FROM claim_store_events
+        ORDER BY id DESC
+        LIMIT @maxEventRows
+      )
     `);
     this.upsertOwnerStmt = this.db.prepare(`
       INSERT INTO claim_store_owners (ownerId, heartbeatAt)
@@ -139,5 +151,6 @@ export class SqliteClaimStoreBackend implements ClaimStoreBackend {
       writtenAt: checkpoint.writtenAt,
       operation: checkpoint.operation,
     });
+    this.pruneEventsStmt.run({ maxEventRows: this.maxEventRows });
   }
 }

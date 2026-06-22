@@ -1,7 +1,7 @@
 import { performance } from "node:perf_hooks";
 import { randomUUID } from "node:crypto";
 
-import type { RetryEntry, RunningEntry } from "@lorenz/domain";
+import { isRecord, type RetryEntry, type RunningEntry } from "@lorenz/domain";
 
 import {
   hydrateState,
@@ -201,7 +201,8 @@ export class AsyncPersistentClaimStore implements AsyncClaimStore {
 
   async read<T>(run: (state: OrchestratorState) => T): Promise<T> {
     const apply = async (): Promise<T> => {
-      if (this.capabilities.sharedAcrossProcesses) await this.reload();
+      if (this.capabilities.sharedAcrossProcesses)
+        await this.reload({ heartbeatOwner: false, recoverInactiveOwners: false });
       return run(this.state);
     };
     return this.backend.withExclusiveTransaction
@@ -219,7 +220,8 @@ export class AsyncPersistentClaimStore implements AsyncClaimStore {
       rollback = null;
     };
     const apply = async (): Promise<T> => {
-      if (this.capabilities.sharedAcrossProcesses) await this.reload();
+      if (this.capabilities.sharedAcrossProcesses)
+        await this.reload({ heartbeatOwner: true, recoverInactiveOwners: true });
       const rollbackState = cloneStateContents(this.state);
       const rollbackTransactionsApplied = this.transactionsApplied;
       const rollbackLastOperation = this.lastOperation;
@@ -260,7 +262,8 @@ export class AsyncPersistentClaimStore implements AsyncClaimStore {
 
   async flush(): Promise<void> {
     const apply = async (): Promise<void> => {
-      if (this.capabilities.sharedAcrossProcesses) await this.reload();
+      if (this.capabilities.sharedAcrossProcesses)
+        await this.reload({ heartbeatOwner: true, recoverInactiveOwners: true });
       await this.save("flush");
     };
     if (this.backend.withExclusiveTransaction) await this.backend.withExclusiveTransaction(apply);
@@ -317,8 +320,11 @@ export class AsyncPersistentClaimStore implements AsyncClaimStore {
     this.lastCheckpointAt = writtenAt;
   }
 
-  private async reload(): Promise<void> {
-    await this.writeOwnerHeartbeat();
+  private async reload(options: {
+    heartbeatOwner: boolean;
+    recoverInactiveOwners: boolean;
+  }): Promise<void> {
+    if (options.heartbeatOwner) await this.writeOwnerHeartbeat();
     const ownedEphemeralFields = captureOwnedRunningEphemeralFields(this.state, this.ownerId);
     const checkpoint = await this.backend.load();
     replaceStateContents(
@@ -329,7 +335,8 @@ export class AsyncPersistentClaimStore implements AsyncClaimStore {
     );
     restoreOwnedRunningEphemeralFields(this.state, this.ownerId, ownedEphemeralFields);
     this.lastCheckpointAt = checkpoint?.writtenAt ?? null;
-    if (await this.recoverInactiveOwners()) await this.save("recover_stale_owners");
+    if (options.recoverInactiveOwners && (await this.recoverInactiveOwners()))
+      await this.save("recover_stale_owners");
   }
 
   private async writeOwnerHeartbeat(): Promise<void> {
@@ -340,9 +347,15 @@ export class AsyncPersistentClaimStore implements AsyncClaimStore {
     if (!this.capabilities.sharedAcrossProcesses || !this.backend.ownerIsActive) return false;
     const now = this.now();
     let recovered = false;
+    const activeOwners = new Map<string, boolean>();
     for (const [key, ownerId] of [...this.state.claimOwners.entries()]) {
       if (ownerId === this.ownerId) continue;
-      if (await this.backend.ownerIsActive(ownerId, now, this.ownerLeaseStaleMs)) continue;
+      let ownerActive = activeOwners.get(ownerId);
+      if (ownerActive === undefined) {
+        ownerActive = await this.backend.ownerIsActive(ownerId, now, this.ownerLeaseStaleMs);
+        activeOwners.set(ownerId, ownerActive);
+      }
+      if (ownerActive) continue;
       const reservation = this.state.reserved.get(key);
       if (
         reservation?.consumedRetry &&
@@ -467,7 +480,8 @@ export class PersistentClaimStore implements ClaimStore {
 
   read<T>(run: (state: OrchestratorState) => T): T {
     const apply = (): T => {
-      if (this.capabilities.sharedAcrossProcesses) this.reload();
+      if (this.capabilities.sharedAcrossProcesses)
+        this.reload({ heartbeatOwner: false, recoverInactiveOwners: false });
       return run(this.state);
     };
     return this.backend.withExclusiveTransaction
@@ -482,7 +496,8 @@ export class PersistentClaimStore implements ClaimStore {
       rollback = null;
     };
     const apply = (): T => {
-      if (this.capabilities.sharedAcrossProcesses) this.reload();
+      if (this.capabilities.sharedAcrossProcesses)
+        this.reload({ heartbeatOwner: true, recoverInactiveOwners: true });
       const rollbackState = cloneStateContents(this.state);
       const rollbackTransactionsApplied = this.transactionsApplied;
       const rollbackLastOperation = this.lastOperation;
@@ -523,7 +538,8 @@ export class PersistentClaimStore implements ClaimStore {
 
   flush(): void {
     const apply = (): void => {
-      if (this.capabilities.sharedAcrossProcesses) this.reload();
+      if (this.capabilities.sharedAcrossProcesses)
+        this.reload({ heartbeatOwner: true, recoverInactiveOwners: true });
       this.save("flush");
     };
     if (this.backend.withExclusiveTransaction) this.backend.withExclusiveTransaction(apply);
@@ -564,8 +580,8 @@ export class PersistentClaimStore implements ClaimStore {
     this.lastCheckpointAt = writtenAt;
   }
 
-  private reload(): void {
-    this.writeOwnerHeartbeat();
+  private reload(options: { heartbeatOwner: boolean; recoverInactiveOwners: boolean }): void {
+    if (options.heartbeatOwner) this.writeOwnerHeartbeat();
     const ownedEphemeralFields = captureOwnedRunningEphemeralFields(this.state, this.ownerId);
     const checkpoint = this.backend.load();
     replaceStateContents(
@@ -576,7 +592,8 @@ export class PersistentClaimStore implements ClaimStore {
     );
     restoreOwnedRunningEphemeralFields(this.state, this.ownerId, ownedEphemeralFields);
     this.lastCheckpointAt = checkpoint?.writtenAt ?? null;
-    if (this.recoverInactiveOwners()) this.save("recover_stale_owners");
+    if (options.recoverInactiveOwners && this.recoverInactiveOwners())
+      this.save("recover_stale_owners");
   }
 
   private writeOwnerHeartbeat(): void {
@@ -587,9 +604,15 @@ export class PersistentClaimStore implements ClaimStore {
     if (!this.capabilities.sharedAcrossProcesses || !this.backend.ownerIsActive) return false;
     const now = this.now();
     let recovered = false;
+    const activeOwners = new Map<string, boolean>();
     for (const [key, ownerId] of [...this.state.claimOwners.entries()]) {
       if (ownerId === this.ownerId) continue;
-      if (this.backend.ownerIsActive(ownerId, now, this.ownerLeaseStaleMs)) continue;
+      let ownerActive = activeOwners.get(ownerId);
+      if (ownerActive === undefined) {
+        ownerActive = this.backend.ownerIsActive(ownerId, now, this.ownerLeaseStaleMs);
+        activeOwners.set(ownerId, ownerActive);
+      }
+      if (ownerActive) continue;
       const reservation = this.state.reserved.get(key);
       if (
         reservation?.consumedRetry &&
@@ -648,7 +671,7 @@ export class PersistentClaimStore implements ClaimStore {
 }
 
 export function isClaimStore(value: unknown): value is ClaimStore {
-  if (typeof value !== "object" || value === null) return false;
+  if (!isRecord(value)) return false;
   const candidate = value as Partial<ClaimStore> & { async?: unknown };
   if (candidate.async === true) return false;
   return (
@@ -664,7 +687,7 @@ export function isClaimStore(value: unknown): value is ClaimStore {
 }
 
 export function isAsyncClaimStore(value: unknown): value is AsyncClaimStore {
-  if (typeof value !== "object" || value === null) return false;
+  if (!isRecord(value)) return false;
   const candidate = value as Partial<AsyncClaimStore>;
   return (
     candidate.async === true &&

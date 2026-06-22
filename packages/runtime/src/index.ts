@@ -105,12 +105,12 @@ export interface LorenzRuntimeOptions {
    * Optional embedded worker pool. When present, the orchestrator is constructed with a capacity
    * probe backed by the pool's `canAcquire` (bypassing the static `sshHosts` selection), and
    * each run acquires a {@link RunSlot} before the runner and releases/fails it in the run's
-   * `finally`. Absent (default) preserves the existing local / `sshHosts` behavior byte-for-byte.
+   * `finally`. Absent (default) preserves the local and `sshHosts` behavior.
    *
    * A bare `workerPool` is wrapped internally in a null-endpoint passthrough
    * {@link DispatchCoordinator} (see {@link LorenzRuntimeOptions.coordinator}), so every run
-   * drives the coordinator uniformly while a bare pool injection stays byte-identical at the
-   * runtime boundary (default `slotsPerMachine=1` + `mcpEndpoint=null`). Prefer threading a
+   * drives the coordinator uniformly while a bare pool injection keeps the default runtime
+   * boundary unchanged (`slotsPerMachine=1` + `mcpEndpoint=null`). Prefer threading a
    * pre-built `coordinator`; `workerPool` is the low-churn path that keeps existing injection
    * sites unchanged. When BOTH are supplied, `coordinator` wins.
    */
@@ -296,11 +296,10 @@ export class LorenzRuntime {
   private changeStream: TrackerChangeStream | undefined;
   private changeStreamOpening = false;
   /**
-   * The reload-surviving coordinator singleton. Built ONCE here: either the
+   * The reload-surviving coordinator singleton. Built here from either the
    * pre-built `input.coordinator` (preferred), or a null-endpoint passthrough
-   * wrapping a bare `input.workerPool` (the low-churn path that keeps every existing
-   * workerPool-injecting site byte-identical at the runtime boundary). `undefined`
-   * when neither is supplied (the static/local path, byte-identical to today).
+   * wrapping a bare `input.workerPool`, which keeps the default runtime boundary unchanged.
+   * `undefined` when neither is supplied, which uses the static/local path.
    */
   private readonly coordinator: DispatchCoordinator | undefined;
 
@@ -1029,7 +1028,6 @@ export class LorenzRuntime {
       // rejects with agent_run_aborted; recording it as a failure would emit a
       // run_failed event the TUI renders as a red error banner on Ctrl+C.
       if (!handle.isActive) return;
-      if (!handle.isActive) return;
       let finished: RunningEntry | null;
       try {
         finished = await this.orchestrator.finishAsync(
@@ -1712,13 +1710,13 @@ function disabledWorkerPoolSettings(
 /**
  * Wraps a bare {@link WorkerPool} in a null-endpoint passthrough {@link DispatchCoordinator} so the
  * runtime drives every run through the uniform coordinator surface while a bare-pool injection
- * stays byte-identical at the runtime boundary. STEP 1's null manager mints nothing
+ * keeps the default runtime boundary unchanged. The null manager mints nothing
  * (`perRunEndpoint=false`, every `RunSlot.mcpEndpoint=null`), so this is a 1:1 passthrough over
  * the pool: `acquireRunSlot` delegates to `pool.acquire`, settle delegates straight to the
  * `WorkerLease`, and `reconcile`/`drain`/`governs`/`canAcquire` forward verbatim. Returns
  * `undefined` when no pool is supplied (the static/local path).
  *
- * `settings` only needs to satisfy the coordinator's constructor; in STEP 1 the coordinator does
+ * `settings` only needs to satisfy the coordinator's constructor; this wrapper does
  * not read it past construction (the pool owns live settings), so the live `worker.workerPool`
  * settings are passed when present and a disabled placeholder otherwise.
  */

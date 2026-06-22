@@ -683,64 +683,58 @@ describe("Runtime Integration (sandbox scenarios)", () => {
   });
 
   // ---------------------------------------------------------------------------
-  // Known bugs (test.fails)
+  // Expected failures
   // ---------------------------------------------------------------------------
-  describe("Known bugs", () => {
-    // Aborting runs for issue "a" affects issue "a:0" (prefix collision)
-    // Bug: abortIssueRuns uses key.startsWith(`${issueId}:`) which means
-    // aborting issue "a" also matches "a:0:0" (the slotKey for issue "a:0", slot 0).
-    test.fails(
-      "BUG: abort for issue X does not affect issue Y with prefix-colliding ID",
-      async () => {
-        const result = await runScenario({
-          issues: [
-            makeIssue("a:0", "COLON-1", {
-              state: "In Progress",
-              stateType: "started",
-              priority: 2,
-            }),
-            makeIssue("a", "PREFIX-1", {
-              state: "In Progress",
-              stateType: "started",
-              priority: 1,
-            }),
-          ],
-          settingsOverrides: { agent: { maxConcurrentAgents: 5 } },
-          runnerConfig: {
-            byId: {
-              a: { shouldSucceed: true, turnCount: 3, latencyPerTurnMs: 200 },
-              "a:0": { shouldSucceed: true, turnCount: 5, latencyPerTurnMs: 200 },
+  describe("Expected failures", () => {
+    // Aborting one issue must not affect another issue with a prefix-colliding id.
+    test.fails("abort for issue X does not affect issue Y with prefix-colliding ID", async () => {
+      const result = await runScenario({
+        issues: [
+          makeIssue("a:0", "COLON-1", {
+            state: "In Progress",
+            stateType: "started",
+            priority: 2,
+          }),
+          makeIssue("a", "PREFIX-1", {
+            state: "In Progress",
+            stateType: "started",
+            priority: 1,
+          }),
+        ],
+        settingsOverrides: { agent: { maxConcurrentAgents: 5 } },
+        runnerConfig: {
+          byId: {
+            a: { shouldSucceed: true, turnCount: 3, latencyPerTurnMs: 200 },
+            "a:0": { shouldSucceed: true, turnCount: 5, latencyPerTurnMs: 200 },
+          },
+        },
+        pollTicks: 5,
+        tickDelayMs: 300,
+        waitForRuns: false,
+        timedMutations: [
+          // Fire after first tick dispatches both, but before either run completes
+          {
+            afterMs: 250,
+            mutate: {
+              type: "change_state",
+              issueId: "a",
+              state: "Done",
+              stateType: "completed",
             },
           },
-          pollTicks: 5,
-          tickDelayMs: 300,
-          waitForRuns: false,
-          timedMutations: [
-            // Fire after first tick dispatches both, but before either run completes
-            {
-              afterMs: 250,
-              mutate: {
-                type: "change_state",
-                issueId: "a",
-                state: "Done",
-                stateType: "completed",
-              },
-            },
-          ],
-        });
+        ],
+      });
 
-        // When issue "a" goes terminal and its runs are aborted, issue "a:0" should
-        // NOT be affected. The bug causes "a:0" to never complete because its abort
-        // controller is triggered by the prefix match.
-        const completedMessages = result.events
-          .filter((e) => e.type === "run_completed")
-          .map((e) => e.message);
-        expect(completedMessages.some((m) => m.includes("COLON-1"))).toBe(true);
-      },
-    );
+      // When issue "a" goes terminal and its runs are aborted, issue "a:0" must
+      // keep running because slot ownership is exact, not prefix-based.
+      const completedMessages = result.events
+        .filter((e) => e.type === "run_completed")
+        .map((e) => e.message);
+      expect(completedMessages.some((m) => m.includes("COLON-1"))).toBe(true);
+    });
 
-    // Regression: fast-completing runs used to bypass the global concurrency cap
-    // by freeing their slot via microtask before the next claim().
+    // A poll tick reserves capacity for every dispatch decision it makes, including
+    // work that settles before the tick finishes.
     test("global concurrency cap is not bypassable by fast-completing runs", async () => {
       const result = await runScenario({
         issues: [
@@ -755,8 +749,8 @@ describe("Runtime Integration (sandbox scenarios)", () => {
         pollTicks: 1,
       });
 
-      // With maxConcurrentAgents=1 and instant completion (0ms), only A-1 should
-      // be dispatched in a single tick.
+      // With maxConcurrentAgents=1 and instant completion, only one issue can be
+      // dispatched in a single tick.
       const startedMessages = result.events
         .filter((e) => e.type === "run_started")
         .map((e) => e.message);
@@ -764,8 +758,8 @@ describe("Runtime Integration (sandbox scenarios)", () => {
       expect(startedMessages.some((m) => m.includes("C-1"))).toBe(false);
     });
 
-    // Regression: fast-completing runs used to reset host counts mid-dispatch loop,
-    // allowing more dispatches to a single host than maxConcurrentAgentsPerHost permits.
+    // Host capacity is reserved for the whole poll tick, including work that settles
+    // before the tick finishes.
     test("per-host SSH cap is not bypassable by fast-completing runs", async () => {
       const result = await runScenario({
         issues: [
