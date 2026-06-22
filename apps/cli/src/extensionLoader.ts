@@ -1,24 +1,19 @@
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
+import { errorMessage, isRecord } from "@lorenz/domain";
+
 /**
- * Axis-generic out-of-tree extension loading. lorenz has four extension axes -
- * trackers, tools, agent-executors, worker-drivers - each registered into the
- * daemon through a static `registerBuiltinBackends()` trust boundary for
- * BUILT-INS. This module is the OTHER half: an operator names a MODULE SPECIFIER
- * (an npm package name, `@scope/name`, `./relative` or `/absolute` path, with an
- * optional `#exportName` suffix) in config, and the daemon dynamic-imports that
- * module at startup (and on a reload that changes the specifier) and registers
- * it into the axis registry under the EXACT configured string, so the existing
- * registry resolution needs no changes and third parties ship extensions without
- * forking the repo.
- *
- * The worker-driver loader was the first instance of this shape; this core lifts
- * its every literal behind {@link ExtensionAxis} so the same audited mechanics -
- * exact-kind-wins resolution, native `import()` + `pathToFileURL`, the
- * sdkVersion handshake, the loaded/pinned audit events, the per-registry pin
- * WeakMap, the cache-busting-query rejection - serve all four axes from one
- * place. It is purely additive: built-ins never flow through here.
+ * Axis-generic out-of-tree extension loading. Each of lorenz's extension axes -
+ * trackers, tools, agent-executors, worker-drivers - registers its BUILT-INS
+ * through a static `registerBuiltinBackends()` trust boundary. This is the other
+ * half: an operator names a MODULE SPECIFIER (an npm package name, `@scope/name`,
+ * `./relative` or `/absolute` path, with an optional `#exportName` suffix) in
+ * config, and the daemon dynamic-imports that module at startup (and on a reload
+ * that changes the specifier) and registers it into the axis registry under the
+ * EXACT configured string, so the existing registry resolution needs no changes
+ * and third parties ship extensions without forking the repo. Built-ins never
+ * flow through here.
  *
  * Trust: a dynamic import runs arbitrary code in the daemon process - the same
  * trust boundary as workspace hooks. Loads happen ONLY at startup/reload, never
@@ -43,32 +38,26 @@ export interface ExtensionRegistry<TFactory> {
   kinds(): string[];
 }
 
-/**
- * The per-axis configuration that turns the generic core into a concrete loader.
- * Every literal that was worker-driver-specific in the original loader lives
- * here so the mechanics stay byte-identical across instances.
- */
+/** The per-axis configuration that turns the generic core into a concrete loader. */
 export interface ExtensionAxis<TFactory, TModule> {
   /**
-   * Error-code prefix for this axis (the worker-driver instance passes
-   * `"worker_pool_driver"`). All thrown errors and the resolution diagnostics
-   * are namespaced under it.
+   * Error-code prefix for this axis (e.g. `"worker_pool_driver"`). All thrown
+   * errors and the resolution diagnostics are namespaced under it.
    */
   readonly errorPrefix: string;
   /** Audit event names emitted on a fresh load vs a re-encountered pin. */
   readonly eventNames: { loaded: string; pinned: string };
   /**
-   * The authoring-sugar helper name an out-of-tree module exports through (the
-   * worker-driver instance passes `"defineWorkerDriver"`), named in the
-   * no-default-export error so the author knows the expected shape.
+   * The authoring-sugar helper name an out-of-tree module exports through (e.g.
+   * `"defineWorkerDriver"`), named in the no-default-export error so the author
+   * knows the expected shape.
    */
   readonly defineHelperName: string;
   /**
-   * The noun for "this axis's units" used in the empty-registry resolution hint
-   * (`no <noun> registered`) and the cache-busting-query advice (`restart the
-   * daemon to pick up <noun> code changes`). The worker-driver instance passes
-   * `"worker drivers"` to keep its diagnostics byte-identical to the original
-   * single-axis loader.
+   * The noun for this axis's units (e.g. `"worker drivers"`), used in the
+   * empty-registry resolution hint (`no <noun> registered`) and the
+   * cache-busting-query advice (`restart the daemon to pick up <noun> code
+   * changes`).
    */
   readonly unitNoun: string;
   /**
@@ -80,8 +69,8 @@ export interface ExtensionAxis<TFactory, TModule> {
   /**
    * Whether the unwrapped value structurally looks like a module of this axis,
    * used by {@link selectExport} to disambiguate the transpiled-CJS double-default
-   * shape and the CJS-hoisted-exports shape. The worker-driver instance tests
-   * for a `create` function.
+   * shape and the CJS-hoisted-exports shape (e.g. by testing for a `create`
+   * function).
    */
   looksLikeModule(value: unknown): boolean;
   /**
@@ -205,8 +194,8 @@ export function createExtensionLoader<TFactory, TModule>(
       const named = namespace[exportName];
       if (named !== undefined) return named;
       const viaDefault = namespace["default"];
-      if (typeof viaDefault === "object" && viaDefault !== null) {
-        return (viaDefault as Record<string, unknown>)[exportName];
+      if (isRecord(viaDefault)) {
+        return viaDefault[exportName];
       }
       return undefined;
     }
@@ -220,13 +209,8 @@ export function createExtensionLoader<TFactory, TModule>(
     // Transpiled-CJS double default: `module.exports = { default: <module> }`
     // imported as `{ default: { default: <module> } }`. A real module looks
     // like a module, so only unwrap when the outer layer does not.
-    if (
-      typeof candidate === "object" &&
-      candidate !== null &&
-      "default" in candidate &&
-      !axis.looksLikeModule(candidate)
-    ) {
-      candidate = (candidate as Record<string, unknown>)["default"];
+    if (isRecord(candidate) && "default" in candidate && !axis.looksLikeModule(candidate)) {
+      candidate = candidate["default"];
     }
     return candidate;
   }
@@ -238,7 +222,7 @@ export function createExtensionLoader<TFactory, TModule>(
     cause: unknown,
     knownKinds: ReadonlyArray<string>,
   ): Error {
-    const message = cause instanceof Error ? cause.message : String(cause);
+    const message = errorMessage(cause);
     if (isPathSpecifier(specifier)) {
       return new Error(
         `${axis.errorPrefix}_unavailable: ${specifier} (failed to import ${resolvedFrom}: ${message})`,

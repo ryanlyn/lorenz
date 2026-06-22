@@ -977,3 +977,115 @@ export interface AgentExecutor {
   /** Sends one prompt to the session and resolves with the updates produced during that turn. */
   runTurn(session: AgentSession, prompt: string, issue?: Issue): Promise<AgentUpdate[]>;
 }
+
+// --- SDK module contracts ---
+
+/** A required function hook an out-of-tree module must expose. */
+export interface SdkRequiredFn {
+  /** Property name to test for `typeof === "function"`. */
+  readonly field: string;
+  /** Signature shown in the error, e.g. `createClient(settings, context)`. */
+  readonly signature: string;
+  /** Article preceding the signature in the error: `"a"` or `"an"`. */
+  readonly article: "a" | "an";
+}
+
+/** The per-axis text and shape an {@link makeSdkModuleContract} call varies on. */
+export interface SdkModuleContractSpec {
+  /** Error-code prefix; errors are `<prefix>_module_invalid`/`<prefix>_sdk_mismatch`. */
+  readonly errorPrefix: string;
+  /**
+   * Module noun phrase in the non-object error, e.g. `a tracker provider module`;
+   * the error appends ` object` to it.
+   */
+  readonly moduleNoun: string;
+  /** Identity-field name the module must carry as a non-empty string. */
+  readonly identityField: string;
+  /** The `define...({ ... })` snippet shown in the non-object error's authoring hint. */
+  readonly defineCall: string;
+  /** Required function hooks, asserted in order after the identity check. */
+  readonly requiredFns: readonly SdkRequiredFn[];
+  /** SDK version this build speaks; a module declaring another version is rejected. */
+  readonly sdkVersion: number;
+}
+
+/** A module carrying the `sdkVersion` an out-of-tree author declares. */
+export interface SdkModule {
+  readonly sdkVersion: number;
+}
+
+/** The assert + define pair {@link makeSdkModuleContract} returns for one axis. */
+export interface SdkModuleContract<TModule extends SdkModule> {
+  /**
+   * Structural check + version handshake for a dynamically loaded module. `source`
+   * names where the value came from (a module specifier, or the `define...` helper
+   * at authoring time) so every error is actionable. Standalone (`this: void`), so
+   * an SDK can re-export it directly under its public name.
+   */
+  readonly assertModule: (
+    this: void,
+    value: unknown,
+    source: string,
+  ) => asserts value is TModule;
+  /**
+   * Authoring sugar: shape-asserts at definition time (so a typo fails in the
+   * author's tests, not the operator's daemon) and returns the module unchanged.
+   * `helperName` names the wrapper for the assertion's `source`.
+   */
+  readonly defineModule: (this: void, module: TModule, helperName: string) => TModule;
+}
+
+/**
+ * Builds the assert/define pair an SDK exposes for OUT-OF-TREE modules of one
+ * extension axis. In-repo extensions register with the composition root (which
+ * vouches for them); a dynamically imported module crosses a version boundary the
+ * daemon cannot type-check, so the explicit `sdkVersion` handshake stands in for
+ * the compiler. Every axis runs the identical 5-check sequence (object, identity,
+ * required hooks, numeric version, version match) and differs only in {@link spec}.
+ */
+export function makeSdkModuleContract<TModule extends SdkModule>(
+  spec: SdkModuleContractSpec,
+): SdkModuleContract<TModule> {
+  function assertModule(value: unknown, source: string): asserts value is TModule {
+    if (!isRecord(value)) {
+      throw new Error(
+        `${spec.errorPrefix}_module_invalid: ${source} did not yield ${spec.moduleNoun} object ` +
+          `(got ${value === null ? "null" : typeof value}); export ${spec.defineCall} ` +
+          `as the default export or a named export`,
+      );
+    }
+    const identity = value[spec.identityField];
+    if (typeof identity !== "string" || identity.trim() === "") {
+      throw new Error(
+        `${spec.errorPrefix}_module_invalid: ${source} is missing a non-empty string \`${spec.identityField}\``,
+      );
+    }
+    for (const fn of spec.requiredFns) {
+      if (typeof value[fn.field] !== "function") {
+        throw new Error(
+          `${spec.errorPrefix}_module_invalid: ${source} (${spec.identityField}: ${identity}) ` +
+            `is missing ${fn.article} \`${fn.signature}\` function`,
+        );
+      }
+    }
+    if (typeof value["sdkVersion"] !== "number") {
+      throw new Error(
+        `${spec.errorPrefix}_module_invalid: ${source} (${spec.identityField}: ${identity}) is missing a numeric \`sdkVersion\` ` +
+          `(declare sdkVersion: ${spec.sdkVersion})`,
+      );
+    }
+    if (value["sdkVersion"] !== spec.sdkVersion) {
+      throw new Error(
+        `${spec.errorPrefix}_sdk_mismatch: ${source} targets SDK v${value["sdkVersion"]}, ` +
+          `this build supports v${spec.sdkVersion}`,
+      );
+    }
+  }
+
+  function defineModule(module: TModule, helperName: string): TModule {
+    assertModule(module, helperName);
+    return module;
+  }
+
+  return { assertModule, defineModule };
+}

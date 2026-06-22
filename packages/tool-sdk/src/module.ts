@@ -1,3 +1,5 @@
+import { makeSdkModuleContract } from "@lorenz/domain";
+
 import type { ToolProvider } from "./provider.js";
 
 /**
@@ -10,14 +12,34 @@ export const TOOL_SDK_VERSION = 1;
 
 /**
  * The unit an OUT-OF-TREE tool module exports: a {@link ToolProvider} carrying
- * the SDK version it targets. In-repo extensions register packs directly (the
- * composition root vouches for them); a dynamically imported module instead
- * crosses a version boundary the daemon cannot type-check, so the explicit
- * `sdkVersion` handshake stands in for the compiler.
+ * the SDK version it targets. A dynamically imported module crosses a version
+ * boundary the daemon cannot type-check, so the explicit `sdkVersion` handshake
+ * stands in for the compiler.
  */
 export interface ToolProviderModule extends ToolProvider {
   readonly sdkVersion: number;
 }
+
+const contract = makeSdkModuleContract<ToolProviderModule>({
+  errorPrefix: "tool_provider",
+  moduleNoun: "a tool provider module",
+  identityField: "name",
+  defineCall: "defineToolProvider({ name, sdkVersion, toolSpecs, executeTool })",
+  requiredFns: [
+    { field: "toolSpecs", signature: "toolSpecs(settings)", article: "a" },
+    { field: "executeTool", signature: "executeTool(name, input, context)", article: "an" },
+  ],
+  sdkVersion: TOOL_SDK_VERSION,
+});
+
+/**
+ * Structural check + version handshake for a dynamically loaded tool module.
+ * `source` names where the value came from so every error is actionable.
+ */
+export const assertToolProviderModule: (
+  value: unknown,
+  source: string,
+) => asserts value is ToolProviderModule = contract.assertModule;
 
 /**
  * Authoring sugar for out-of-tree tool modules: shape-asserts the module at
@@ -34,58 +56,5 @@ export interface ToolProviderModule extends ToolProvider {
  * ```
  */
 export function defineToolProvider(module: ToolProviderModule): ToolProviderModule {
-  assertToolProviderModule(module, "defineToolProvider");
-  return module;
-}
-
-/**
- * Structural check + version handshake for a dynamically loaded tool module.
- * `source` names where the value came from (a module specifier, or
- * `defineToolProvider` at authoring time) so every error is actionable. Throws:
- *
- * - `tool_provider_module_invalid: <source> ...` when the value is not an
- *   object, `name` is not a non-empty string, `toolSpecs`/`executeTool` are not
- *   functions, or `sdkVersion` is not a number;
- * - `tool_provider_sdk_mismatch: <source> targets SDK v<n>, this build supports
- *   v<TOOL_SDK_VERSION>` when the declared version differs.
- */
-export function assertToolProviderModule(
-  value: unknown,
-  source: string,
-): asserts value is ToolProviderModule {
-  if (typeof value !== "object" || value === null) {
-    throw new Error(
-      `tool_provider_module_invalid: ${source} did not yield a tool provider module object ` +
-        `(got ${value === null ? "null" : typeof value}); export defineToolProvider({ name, sdkVersion, toolSpecs, executeTool }) ` +
-        `as the default export or a named export`,
-    );
-  }
-  const candidate = value as Partial<ToolProviderModule>;
-  if (typeof candidate.name !== "string" || candidate.name.trim() === "") {
-    throw new Error(
-      `tool_provider_module_invalid: ${source} is missing a non-empty string \`name\``,
-    );
-  }
-  if (typeof candidate.toolSpecs !== "function") {
-    throw new Error(
-      `tool_provider_module_invalid: ${source} (name: ${candidate.name}) is missing a \`toolSpecs(settings)\` function`,
-    );
-  }
-  if (typeof candidate.executeTool !== "function") {
-    throw new Error(
-      `tool_provider_module_invalid: ${source} (name: ${candidate.name}) is missing an \`executeTool(name, input, context)\` function`,
-    );
-  }
-  if (typeof candidate.sdkVersion !== "number") {
-    throw new Error(
-      `tool_provider_module_invalid: ${source} (name: ${candidate.name}) is missing a numeric \`sdkVersion\` ` +
-        `(declare sdkVersion: ${TOOL_SDK_VERSION})`,
-    );
-  }
-  if (candidate.sdkVersion !== TOOL_SDK_VERSION) {
-    throw new Error(
-      `tool_provider_sdk_mismatch: ${source} targets SDK v${candidate.sdkVersion}, ` +
-        `this build supports v${TOOL_SDK_VERSION}`,
-    );
-  }
+  return contract.defineModule(module, "defineToolProvider");
 }

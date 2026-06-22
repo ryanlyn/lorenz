@@ -26,6 +26,8 @@ A `TrackerProvider` (`packages/tracker-sdk/src/provider.ts`) connects Lorenz to 
 
 The tracker tools your provider can back are normalized through `TrackerToolOps`, an all-optional interface: `readIssue`, `queryIssues`, `queryRows`, `updateStatus`, `listComments`, `addComment`, `updateComment`, `createIssue`. A missing member makes the corresponding tracker tool report itself unavailable rather than fail mid-call. See [tracker-provider.md](tracker-provider.md).
 
+A tracker can ship inside the repo or load from an out-of-tree module: `tracker.kind` accepts a module specifier as well as a registered kind, loaded at startup through the same `sdkVersion` handshake (`TRACKER_SDK_VERSION`, checked by `assertTrackerProviderModule`) the worker driver uses. See [out-of-tree.md](out-of-tree.md).
+
 ### ToolProvider
 
 A `ToolProvider` (`packages/tool-sdk/src/provider.ts`) adds a named pack of MCP tools an agent can call. The required members are `name` (a string), `toolSpecs(settings)` returning the advertised `ToolSpec[]`, and `executeTool(name, input, context)` returning a `ToolResult`. Optional members are `skills` (absolute skill directories overlaid into the workspace when the pack is mounted) and `validateOptions(options)`. The `ToolContext` passed to `executeTool` is exactly `{ settings, fetchImpl }`.
@@ -42,7 +44,7 @@ The runtime contract the executor satisfies, `AgentExecutor` with `startSession`
 
 A `WorkerDriverFactory` (`packages/worker-sdk/src/types.ts`) produces a `WorkerDriver` that the warm worker pool uses to place agents on remote machines. The factory has `kind` and `create(options, deps)`. The driver it returns implements four operations the pool calls and nothing else: `provision(req)`, `probe(worker, opts)`, `destroy(worker, opts)`, and `list()`, plus a `capabilities` record `{ sshAddressable, ephemeral, usesLedger }`.
 
-Worker drivers can ship inside the repo or load from an out-of-tree module. The out-of-tree path uses a version handshake (`WORKER_DRIVER_SDK_VERSION`, currently `1`) checked by `assertWorkerDriverModule` before the module reaches the registry. See [worker-driver.md](worker-driver.md) and [out-of-tree.md](out-of-tree.md).
+Worker drivers can ship inside the repo or load from an out-of-tree module. The out-of-tree path uses a version handshake (`WORKER_DRIVER_SDK_VERSION`, currently `1`) checked by `assertWorkerDriverModule` before the module reaches the registry. The loading mechanism is axis-generic: each SDK exposes the same `define*` / `assert*Module` / `*_SDK_VERSION` handshake, and a config selector (`worker.worker_pool.driver`, `tracker.kind`) accepts a module specifier the daemon resolves under the exact configured string. See [worker-driver.md](worker-driver.md) and [out-of-tree.md](out-of-tree.md).
 
 ## The registry pattern
 
@@ -114,7 +116,7 @@ Each page is the complete recipe for one extension point: the interface members,
 - [tool-pack.md](tool-pack.md) - add a named pack of MCP tools.
 - [agent-executor.md](agent-executor.md) - add a new way to run agents.
 - [worker-driver.md](worker-driver.md) - place agents on a new kind of machine.
-- [out-of-tree.md](out-of-tree.md) - ship a worker driver as a standalone module with the version handshake.
+- [out-of-tree.md](out-of-tree.md) - ship an extension as a standalone module loaded by config specifier with the version handshake (worked through the worker driver; the same mechanism loads a tracker named by `tracker.kind`).
 
 ## See also
 - [../architecture.md](../architecture.md) - how the SDK, engine, and extension layers fit together.
