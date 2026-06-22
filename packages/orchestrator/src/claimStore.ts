@@ -49,6 +49,20 @@ export interface ClaimStore {
   status(): ClaimStoreStatus;
 }
 
+export interface AsyncClaimStore {
+  readonly async: true;
+  readonly kind: string;
+  readonly ownerId: string;
+  readonly capabilities: ClaimStoreCapabilities;
+  readonly state: OrchestratorState;
+  read<T>(run: (state: OrchestratorState) => T): Promise<T>;
+  transaction<T>(operation: ClaimStoreOperation, run: (state: OrchestratorState) => T): Promise<T>;
+  heartbeatOwner(): Promise<void>;
+  status(): ClaimStoreStatus;
+}
+
+export type ClaimStoreLike = ClaimStore | AsyncClaimStore;
+
 export interface ClaimStoreCheckpoint {
   version: 1;
   ownerId: string;
@@ -66,6 +80,17 @@ export interface ClaimStoreBackend {
   heartbeatOwner?(ownerId: string, at: Date): void;
   ownerIsActive?(ownerId: string, now: Date, staleMs: number): boolean;
   close?(): void;
+}
+
+export interface AsyncClaimStoreBackend {
+  readonly kind: string;
+  readonly capabilities: ClaimStoreCapabilities;
+  load(): Promise<ClaimStoreCheckpoint | null>;
+  save(checkpoint: ClaimStoreCheckpoint): Promise<void>;
+  withExclusiveTransaction?<T>(run: () => Promise<T>): Promise<T>;
+  heartbeatOwner?(ownerId: string, at: Date): Promise<void>;
+  ownerIsActive?(ownerId: string, now: Date, staleMs: number): Promise<boolean>;
+  close?(): Promise<void>;
 }
 
 export interface InMemoryClaimStoreOptions {
@@ -119,6 +144,258 @@ export class InMemoryClaimStore implements ClaimStore {
       transactionsApplied: this.transactionsApplied,
       lastOperation: this.lastOperation,
       lastCheckpointAt: null,
+    };
+  }
+}
+
+export class AsyncPersistentClaimStore implements AsyncClaimStore {
+  readonly async = true as const;
+  readonly ownerId: string;
+  readonly kind: string;
+  readonly capabilities: ClaimStoreCapabilities;
+  readonly state: OrchestratorState;
+  private readonly hydratedAt: Date;
+  private readonly now: () => Date;
+  private readonly monotonicNow: () => number;
+  private readonly ownerLeaseStaleMs: number;
+  private readonly hydrateOptions: HydrateStateOptions | (() => HydrateStateOptions) | undefined;
+  private transactionsApplied = 0;
+  private lastOperation: ClaimStoreOperation | null = null;
+  private lastCheckpointAt: string | null = null;
+
+  private constructor(
+    private readonly backend: AsyncClaimStoreBackend,
+    options: PersistentClaimStoreOptions = {},
+  ) {
+    this.kind = backend.kind;
+    this.capabilities = backend.capabilities;
+    if (this.capabilities.sharedAcrossProcesses && !backend.withExclusiveTransaction) {
+      throw new Error("shared_claim_store_backend_requires_exclusive_transaction");
+    }
+    if (
+      this.capabilities.sharedAcrossProcesses &&
+      this.capabilities.crashRecovery &&
+      (!backend.heartbeatOwner || !backend.ownerIsActive)
+    ) {
+      throw new Error("shared_crash_recovery_claim_store_requires_owner_leases");
+    }
+    this.ownerId =
+      options.ownerId ??
+      `${backend.kind}:${process.pid}:${nextPersistentOwnerId++}:${randomUUID()}`;
+    this.hydratedAt = options.hydratedAt ?? new Date();
+    this.now = options.now ?? (() => new Date());
+    this.monotonicNow = options.monotonicNow ?? (() => performance.now());
+    this.ownerLeaseStaleMs = options.ownerLeaseStaleMs ?? 300_000;
+    this.hydrateOptions = options.hydrate;
+    this.state = createState();
+  }
+
+  static async create(
+    backend: AsyncClaimStoreBackend,
+    options: PersistentClaimStoreOptions = {},
+  ): Promise<AsyncPersistentClaimStore> {
+    const store = new AsyncPersistentClaimStore(backend, options);
+    await store.loadInitial();
+    return store;
+  }
+
+  async read<T>(run: (state: OrchestratorState) => T): Promise<T> {
+    const apply = async (): Promise<T> => {
+      if (this.capabilities.sharedAcrossProcesses) await this.reload();
+      return run(this.state);
+    };
+    return this.backend.withExclusiveTransaction
+      ? this.backend.withExclusiveTransaction(apply)
+      : apply();
+  }
+
+  async transaction<T>(
+    operation: ClaimStoreOperation,
+    run: (state: OrchestratorState) => T,
+  ): Promise<T> {
+    let rollback: (() => void) | null = null;
+    const rollbackLocalState = (): void => {
+      rollback?.();
+      rollback = null;
+    };
+    const apply = async (): Promise<T> => {
+      if (this.capabilities.sharedAcrossProcesses) await this.reload();
+      const rollbackState = cloneStateContents(this.state);
+      const rollbackTransactionsApplied = this.transactionsApplied;
+      const rollbackLastOperation = this.lastOperation;
+      const rollbackLastCheckpointAt = this.lastCheckpointAt;
+      rollback = () => {
+        replaceStateContents(this.state, rollbackState);
+        this.transactionsApplied = rollbackTransactionsApplied;
+        this.lastOperation = rollbackLastOperation;
+        this.lastCheckpointAt = rollbackLastCheckpointAt;
+      };
+      try {
+        const result = run(this.state);
+        this.transactionsApplied += 1;
+        this.lastOperation = operation;
+        await this.save(operation);
+        return result;
+      } catch (error) {
+        rollbackLocalState();
+        throw error;
+      }
+    };
+    if (!this.backend.withExclusiveTransaction) {
+      try {
+        return await apply();
+      } finally {
+        rollback = null;
+      }
+    }
+    try {
+      const result = await this.backend.withExclusiveTransaction(apply);
+      rollback = null;
+      return result;
+    } catch (error) {
+      rollbackLocalState();
+      throw error;
+    }
+  }
+
+  async flush(): Promise<void> {
+    const apply = async (): Promise<void> => {
+      if (this.capabilities.sharedAcrossProcesses) await this.reload();
+      await this.save("flush");
+    };
+    if (this.backend.withExclusiveTransaction) await this.backend.withExclusiveTransaction(apply);
+    else await apply();
+  }
+
+  async heartbeatOwner(): Promise<void> {
+    const apply = async (): Promise<void> => this.writeOwnerHeartbeat();
+    if (this.backend.withExclusiveTransaction) await this.backend.withExclusiveTransaction(apply);
+    else await apply();
+  }
+
+  async close(): Promise<void> {
+    await this.backend.close?.();
+  }
+
+  status(): ClaimStoreStatus {
+    return {
+      kind: this.kind,
+      ownerId: this.ownerId,
+      capabilities: { ...this.capabilities },
+      hydratedAt: this.hydratedAt.toISOString(),
+      transactionsApplied: this.transactionsApplied,
+      lastOperation: this.lastOperation,
+      lastCheckpointAt: this.lastCheckpointAt,
+    };
+  }
+
+  private async loadInitial(): Promise<void> {
+    const apply = async (): Promise<void> => {
+      await this.writeOwnerHeartbeat();
+      const checkpoint = await this.backend.load();
+      if (checkpoint)
+        replaceStateContents(
+          this.state,
+          hydrateState(checkpoint.state, this.hydrate(this.recovery(), checkpoint.ownerId)),
+        );
+      this.lastCheckpointAt = checkpoint?.writtenAt ?? null;
+      if (await this.recoverInactiveOwners()) await this.save("recover_stale_owners");
+    };
+    if (this.backend.withExclusiveTransaction) await this.backend.withExclusiveTransaction(apply);
+    else await apply();
+  }
+
+  private async save(operation: ClaimStoreCheckpoint["operation"]): Promise<void> {
+    const writtenAt = this.now().toISOString();
+    await this.backend.save({
+      version: 1,
+      ownerId: this.ownerId,
+      writtenAt,
+      operation,
+      state: serializeState(this.state),
+    });
+    this.lastCheckpointAt = writtenAt;
+  }
+
+  private async reload(): Promise<void> {
+    await this.writeOwnerHeartbeat();
+    const ownedEphemeralFields = captureOwnedRunningEphemeralFields(this.state, this.ownerId);
+    const checkpoint = await this.backend.load();
+    replaceStateContents(
+      this.state,
+      checkpoint
+        ? hydrateState(checkpoint.state, this.hydrate("preserve", checkpoint.ownerId))
+        : createState(),
+    );
+    restoreOwnedRunningEphemeralFields(this.state, this.ownerId, ownedEphemeralFields);
+    this.lastCheckpointAt = checkpoint?.writtenAt ?? null;
+    if (await this.recoverInactiveOwners()) await this.save("recover_stale_owners");
+  }
+
+  private async writeOwnerHeartbeat(): Promise<void> {
+    await this.backend.heartbeatOwner?.(this.ownerId, this.now());
+  }
+
+  private async recoverInactiveOwners(): Promise<boolean> {
+    if (!this.capabilities.sharedAcrossProcesses || !this.backend.ownerIsActive) return false;
+    const now = this.now();
+    let recovered = false;
+    for (const [key, ownerId] of [...this.state.claimOwners.entries()]) {
+      if (ownerId === this.ownerId) continue;
+      if (await this.backend.ownerIsActive(ownerId, now, this.ownerLeaseStaleMs)) continue;
+      const reservation = this.state.reserved.get(key);
+      if (
+        reservation?.consumedRetry &&
+        !this.state.retryAttempts.has(reservation.consumedRetry.key)
+      ) {
+        this.state.retryAttempts.set(
+          reservation.consumedRetry.key,
+          reservation.consumedRetry.entry,
+        );
+      }
+      const running = this.state.running.get(key);
+      if (running && running.retryAttempt !== null && !this.state.retryAttempts.has(key))
+        this.state.retryAttempts.set(key, this.retryEntryFromRunningClaim(running, now));
+      this.state.running.delete(key);
+      this.state.reserved.delete(key);
+      this.state.claimed.delete(key);
+      this.state.claimOwners.delete(key);
+      recovered = true;
+    }
+    return recovered;
+  }
+
+  private hydrate(
+    recovery: HydrateStateOptions["reservationRecovery"],
+    fallbackClaimOwnerId: string,
+  ): HydrateStateOptions {
+    const base =
+      typeof this.hydrateOptions === "function"
+        ? this.hydrateOptions()
+        : (this.hydrateOptions ?? { now: this.now(), monotonicNowMs: this.monotonicNow() });
+    return {
+      ...base,
+      fallbackClaimOwnerId,
+      reservationRecovery: recovery,
+      runningRecovery: recovery,
+    };
+  }
+
+  private recovery(): HydrateStateOptions["reservationRecovery"] {
+    return this.capabilities.sharedAcrossProcesses ? "preserve" : "abandon";
+  }
+
+  private retryEntryFromRunningClaim(entry: RunningEntry, now: Date): RetryEntry {
+    return {
+      issueId: entry.issue.id,
+      identifier: entry.identifier,
+      issueUrl: entry.issue.url ?? null,
+      attempt: entry.retryAttempt ?? 1,
+      monotonicDeadlineMs: this.monotonicNow(),
+      dueAtIso: now.toISOString(),
+      slotIndex: entry.slotIndex,
+      workerHost: entry.workerHost,
+      workspacePath: entry.workspacePath,
     };
   }
 }
@@ -372,7 +649,8 @@ export class PersistentClaimStore implements ClaimStore {
 
 export function isClaimStore(value: unknown): value is ClaimStore {
   if (typeof value !== "object" || value === null) return false;
-  const candidate = value as Partial<ClaimStore>;
+  const candidate = value as Partial<ClaimStore> & { async?: unknown };
+  if (candidate.async === true) return false;
   return (
     typeof candidate.kind === "string" &&
     typeof candidate.ownerId === "string" &&
@@ -383,6 +661,26 @@ export function isClaimStore(value: unknown): value is ClaimStore {
     typeof candidate.status === "function" &&
     candidate.state !== undefined
   );
+}
+
+export function isAsyncClaimStore(value: unknown): value is AsyncClaimStore {
+  if (typeof value !== "object" || value === null) return false;
+  const candidate = value as Partial<AsyncClaimStore>;
+  return (
+    candidate.async === true &&
+    typeof candidate.kind === "string" &&
+    typeof candidate.ownerId === "string" &&
+    typeof candidate.capabilities === "object" &&
+    typeof candidate.read === "function" &&
+    typeof candidate.transaction === "function" &&
+    typeof candidate.heartbeatOwner === "function" &&
+    typeof candidate.status === "function" &&
+    candidate.state !== undefined
+  );
+}
+
+export function isClaimStoreLike(value: unknown): value is ClaimStoreLike {
+  return isAsyncClaimStore(value) || isClaimStore(value);
 }
 
 function replaceStateContents(target: OrchestratorState, source: OrchestratorState): void {

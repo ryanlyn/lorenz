@@ -739,10 +739,9 @@ describe("Runtime Integration (sandbox scenarios)", () => {
       },
     );
 
-    // Fast-completing runs bypass global concurrency cap via microtask race
-    // Bug: the dispatch loop has await points where fast-completing runs (0ms latency)
-    // free their slot via microtask before the next claim(), bypassing the cap.
-    test.fails("BUG: global concurrency cap not bypassable by fast-completing runs", async () => {
+    // Regression: fast-completing runs used to bypass the global concurrency cap
+    // by freeing their slot via microtask before the next claim().
+    test("global concurrency cap is not bypassable by fast-completing runs", async () => {
       const result = await runScenario({
         issues: [
           makeIssue("a", "A-1", { state: "In Progress", stateType: "started", priority: 1 }),
@@ -757,7 +756,7 @@ describe("Runtime Integration (sandbox scenarios)", () => {
       });
 
       // With maxConcurrentAgents=1 and instant completion (0ms), only A-1 should
-      // be dispatched in a single tick. The bug allows all 3 to dispatch.
+      // be dispatched in a single tick.
       const startedMessages = result.events
         .filter((e) => e.type === "run_started")
         .map((e) => e.message);
@@ -765,11 +764,9 @@ describe("Runtime Integration (sandbox scenarios)", () => {
       expect(startedMessages.some((m) => m.includes("C-1"))).toBe(false);
     });
 
-    // Per-host SSH capacity cap bypassed by fast-completing runs
-    // Bug: same microtask-ordering issue but targeting per-host capacity.
-    // Fast-completing runs reset host counts mid-dispatch loop, allowing more dispatches
-    // to a single host than maxConcurrentAgentsPerHost permits.
-    test.fails("BUG: per-host SSH cap not bypassable by fast-completing runs", async () => {
+    // Regression: fast-completing runs used to reset host counts mid-dispatch loop,
+    // allowing more dispatches to a single host than maxConcurrentAgentsPerHost permits.
+    test("per-host SSH cap is not bypassable by fast-completing runs", async () => {
       const result = await runScenario({
         issues: [
           makeIssue("a", "A-1", { state: "In Progress", stateType: "started", priority: 1 }),
@@ -790,8 +787,6 @@ describe("Runtime Integration (sandbox scenarios)", () => {
       });
 
       // With per-host cap of 1, only one issue should be dispatched to host-a per tick.
-      // The bug allows multiple dispatches because fast-completing runs (0ms) free
-      // host capacity mid-loop.
       const startedMessages = result.events
         .filter((e) => e.type === "run_started")
         .map((e) => e.message);

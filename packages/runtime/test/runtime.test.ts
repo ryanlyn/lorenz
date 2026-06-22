@@ -2127,6 +2127,7 @@ test("runtime aborts active claims when periodic owner heartbeat fails", async (
 
     clock.advance(10_000);
     clock.fireTimer();
+    await settle(0);
     assert.equal(store.heartbeats, 2);
     assert.equal(aborted, true);
     assert.equal(orchestrator.snapshot().running.length, 1);
@@ -2187,6 +2188,7 @@ test("runtime heartbeat failure aborts active claims when failure-event snapshot
 
     clock.advance(10_000);
     clock.fireTimer();
+    await settle(0);
 
     assert.equal(aborted, true);
     assert.equal(runtime.snapshot().appStatus, "error");

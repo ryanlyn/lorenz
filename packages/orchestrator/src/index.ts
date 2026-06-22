@@ -31,8 +31,10 @@ import {
 import { createState, type OrchestratorState, type ReservationRecord } from "./state.js";
 import {
   InMemoryClaimStore,
-  isClaimStore,
+  isAsyncClaimStore,
+  isClaimStoreLike,
   type ClaimStore,
+  type ClaimStoreLike,
   type ClaimStoreOperation,
   type ClaimStoreStatus,
 } from "./claimStore.js";
@@ -50,11 +52,17 @@ export { createState, type OrchestratorState, type ReservationRecord } from "./s
 export {
   InMemoryClaimStore,
   PersistentClaimStore,
+  AsyncPersistentClaimStore,
+  isAsyncClaimStore,
   isClaimStore,
+  isClaimStoreLike,
+  type AsyncClaimStore,
+  type AsyncClaimStoreBackend,
   type ClaimStore,
   type ClaimStoreBackend,
   type ClaimStoreCapabilities,
   type ClaimStoreCheckpoint,
+  type ClaimStoreLike,
   type ClaimStoreOperation,
   type ClaimStoreStatus,
 } from "./claimStore.js";
@@ -125,6 +133,12 @@ function retrySlotIndex(retry: RetryEntry): number {
   return retry.slotIndex ?? 0;
 }
 
+class NoopClaimStoreMutation extends Error {
+  constructor() {
+    super("noop_claim_store_mutation");
+  }
+}
+
 /**
  * Optional capacity gate supplied by a configured worker pool. The probe is installed for the
  * orchestrator's LIFETIME whenever a pool object exists, but a config reload can DISABLE or REMOVE
@@ -143,15 +157,15 @@ export interface CapacityProbe {
 
 export class Orchestrator {
   readonly state: OrchestratorState;
-  private readonly claimStore: ClaimStore;
+  private readonly claimStore: ClaimStoreLike;
 
   constructor(
     public settings: Settings,
     private readonly clock: ClockPort = systemClock,
-    stateOrClaimStore: OrchestratorState | ClaimStore = createState(),
+    stateOrClaimStore: OrchestratorState | ClaimStoreLike = createState(),
     private readonly capacityProbe?: CapacityProbe,
   ) {
-    this.claimStore = isClaimStore(stateOrClaimStore)
+    this.claimStore = isClaimStoreLike(stateOrClaimStore)
       ? stateOrClaimStore
       : new InMemoryClaimStore(stateOrClaimStore);
     this.state = this.claimStore.state;
@@ -163,15 +177,33 @@ export class Orchestrator {
 
   ownsClaim(issueId: string, slotIndex: number): boolean {
     const key = slotKey(issueId, slotIndex);
+    return this.syncClaimStore().read(() => this.claimIsOwnedByThisStore(key));
+  }
+
+  async ownsClaimAsync(issueId: string, slotIndex: number): Promise<boolean> {
+    const key = slotKey(issueId, slotIndex);
     return this.claimStore.read(() => this.claimIsOwnedByThisStore(key));
   }
 
   heartbeatClaimOwner(): void {
-    this.claimStore.heartbeatOwner();
+    this.syncClaimStore().heartbeatOwner();
+  }
+
+  async heartbeatClaimOwnerAsync(): Promise<void> {
+    await this.claimStore.heartbeatOwner();
   }
 
   private withClaimStore<T>(operation: ClaimStoreOperation, run: () => T): T {
+    return this.syncClaimStore().transaction(operation, run);
+  }
+
+  private async withClaimStoreAsync<T>(operation: ClaimStoreOperation, run: () => T): Promise<T> {
     return this.claimStore.transaction(operation, run);
+  }
+
+  private syncClaimStore(): ClaimStore {
+    if (isAsyncClaimStore(this.claimStore)) throw new Error("async_claim_store_requires_async_api");
+    return this.claimStore;
   }
 
   private claimIsOwnedByThisStore(key: string): boolean {
@@ -214,109 +246,123 @@ export class Orchestrator {
   }
 
   eligibleIssues(issues: Issue[]): Issue[] {
-    return this.withClaimStore("eligible_issues", () => {
-      this.sweepExpiredReservations();
-      this.cleanupRetryAttempts(issues);
-      this.state.blockedDispatches = [];
-      const runningByState = this.runningByStateCounts();
+    return this.withClaimStore("eligible_issues", () => this.eligibleIssuesInTransaction(issues));
+  }
 
-      return sortForDispatch(issues).filter((issue) => {
-        const retries = this.retryEntriesForIssue(issue.id);
-        const dueRetries = retries.filter(([, retry]) => this.retryIsDue(retry));
-        if (retries.length > 0 && dueRetries.length === 0) return false;
-        if (dueRetries.length > 0) this.releaseStaleClaimsForRetry(issue.id);
-        const blockedRetry = dueRetries[0]?.[1] ?? retries[0]?.[1];
-        const dispatchState = {
-          runningCount: this.occupiedSlotCount(),
-          runningByState,
-          claimedSlots: this.state.claimed,
-          workerCapacityAvailable: this.workerCapacityAvailable(),
-        };
-        const reason = dispatchBlockReason(issue, this.settings, dispatchState);
-        if (reason) {
-          this.state.blockedDispatches.push({
-            issueId: issue.id,
-            identifier: issue.identifier,
-            state: issue.state,
-            reason,
-            workerHost: blockedRetry?.workerHost ?? null,
-            issueUrl: issue.url ?? null,
-          });
-          for (const [key, retry] of dueRetries)
-            this.rescheduleRetryAfterDispatchBlock(key, issue, retry, reason);
-          return false;
-        }
-        return shouldDispatchIssue(issue, this.settings, dispatchState);
-      });
+  async eligibleIssuesAsync(issues: Issue[]): Promise<Issue[]> {
+    return this.withClaimStoreAsync("eligible_issues", () =>
+      this.eligibleIssuesInTransaction(issues),
+    );
+  }
+
+  private eligibleIssuesInTransaction(issues: Issue[]): Issue[] {
+    this.sweepExpiredReservations();
+    this.cleanupRetryAttempts(issues);
+    this.state.blockedDispatches = [];
+    const runningByState = this.runningByStateCounts();
+
+    return sortForDispatch(issues).filter((issue) => {
+      const retries = this.retryEntriesForIssue(issue.id);
+      const dueRetries = retries.filter(([, retry]) => this.retryIsDue(retry));
+      if (retries.length > 0 && dueRetries.length === 0) return false;
+      if (dueRetries.length > 0) this.releaseStaleClaimsForRetry(issue.id);
+      const blockedRetry = dueRetries[0]?.[1] ?? retries[0]?.[1];
+      const dispatchState = {
+        runningCount: this.occupiedSlotCount(),
+        runningByState,
+        claimedSlots: this.state.claimed,
+        workerCapacityAvailable: this.workerCapacityAvailable(),
+      };
+      const reason = dispatchBlockReason(issue, this.settings, dispatchState);
+      if (reason) {
+        this.state.blockedDispatches.push({
+          issueId: issue.id,
+          identifier: issue.identifier,
+          state: issue.state,
+          reason,
+          workerHost: blockedRetry?.workerHost ?? null,
+          issueUrl: issue.url ?? null,
+        });
+        for (const [key, retry] of dueRetries)
+          this.rescheduleRetryAfterDispatchBlock(key, issue, retry, reason);
+        return false;
+      }
+      return shouldDispatchIssue(issue, this.settings, dispatchState);
     });
   }
 
   claim(issue: Issue): ClaimResult | null {
-    return this.withClaimStore("claim", () => {
-      const retries = this.retryEntriesForIssue(issue.id);
-      const retryEntry = retries.find(([, retry]) => this.retryIsDue(retry)) ?? retries[0];
-      if (retryEntry && this.retryIsDue(retryEntry[1])) this.releaseStaleClaimsForRetry(issue.id);
-      const retryEntryKey = retryEntry?.[0];
-      const retry = retryEntry?.[1];
-      if (
-        !shouldDispatchIssue(issue, this.settings, {
-          runningCount: this.occupiedSlotCount(),
-          runningByState: this.runningByStateCounts(),
-          claimedSlots: this.state.claimed,
-          workerCapacityAvailable: this.workerCapacityAvailable(),
-        })
-      ) {
-        return null;
-      }
-      const slotIndex = firstUnclaimedSlot(
-        issue,
-        this.settings,
-        this.state.claimed,
-        retry?.slotIndex,
-      );
-      if (slotIndex === null) return null;
-      if (this.capacityProbe?.governs()) {
-        // The pool governs capacity: hold the slot host-less while the coordinator
-        // negotiates a concrete worker asynchronously (bindReservation mints the
-        // RunningEntry only once a real host is bound).
-        return { kind: "reserved", reservation: this.reserveSlot(issue, slotIndex, retryEntry) };
-      }
-      // No pool (or a disabled pool whose probe no longer governs): take the normal
-      // static/local selection, which yields null/local when ssh_hosts is empty.
-      const selected = this.selectWorkerHost(retry?.workerHost);
-      if (selected === undefined) return null;
-      const workerHost = selected;
-      const effective = settingsForIssueState(this.settings, issue.state);
-      const size = ensembleSize(issue) ?? this.settings.agent.ensembleSize;
-      const key = slotKey(issue.id, slotIndex);
-      const entry: RunningEntry = {
-        issue,
-        identifier: issue.identifier,
-        slotIndex,
-        ensembleSize: size,
-        agentKind: effective.agent.kind,
-        workerHost,
-        workspacePath: null,
-        sessionId: null,
-        executorPid: null,
-        turnCount: 0,
-        startedAt: this.clock.now(),
-        lastAgentEvent: null,
-        lastAgentTimestamp: null,
-        usageTotals: { inputTokens: 0, outputTokens: 0, totalTokens: 0, secondsRunning: 0 },
-        lastReportedInputTokens: 0,
-        lastReportedOutputTokens: 0,
-        lastReportedTotalTokens: 0,
-        retryAttempt: retry?.attempt ?? null,
-      };
+    return this.withClaimStore("claim", () => this.claimInTransaction(issue));
+  }
 
-      this.state.claimed.add(key);
-      this.recordClaimOwner(key);
-      this.state.running.set(key, entry);
-      this.state.usageDeltaBases.set(key, zeroUsageTotals());
-      if (retryEntryKey) this.state.retryAttempts.delete(retryEntryKey);
-      return { kind: "running", entry };
-    });
+  async claimAsync(issue: Issue): Promise<ClaimResult | null> {
+    return this.withClaimStoreAsync("claim", () => this.claimInTransaction(issue));
+  }
+
+  private claimInTransaction(issue: Issue): ClaimResult | null {
+    const retries = this.retryEntriesForIssue(issue.id);
+    const retryEntry = retries.find(([, retry]) => this.retryIsDue(retry)) ?? retries[0];
+    if (retryEntry && this.retryIsDue(retryEntry[1])) this.releaseStaleClaimsForRetry(issue.id);
+    const retryEntryKey = retryEntry?.[0];
+    const retry = retryEntry?.[1];
+    if (
+      !shouldDispatchIssue(issue, this.settings, {
+        runningCount: this.occupiedSlotCount(),
+        runningByState: this.runningByStateCounts(),
+        claimedSlots: this.state.claimed,
+        workerCapacityAvailable: this.workerCapacityAvailable(),
+      })
+    ) {
+      return null;
+    }
+    const slotIndex = firstUnclaimedSlot(
+      issue,
+      this.settings,
+      this.state.claimed,
+      retry?.slotIndex,
+    );
+    if (slotIndex === null) return null;
+    if (this.capacityProbe?.governs()) {
+      // The pool governs capacity: hold the slot host-less while the coordinator
+      // negotiates a concrete worker asynchronously (bindReservation mints the
+      // RunningEntry only once a real host is bound).
+      return { kind: "reserved", reservation: this.reserveSlot(issue, slotIndex, retryEntry) };
+    }
+    // No pool (or a disabled pool whose probe no longer governs): take the normal
+    // static/local selection, which yields null/local when ssh_hosts is empty.
+    const selected = this.selectWorkerHost(retry?.workerHost);
+    if (selected === undefined) return null;
+    const workerHost = selected;
+    const effective = settingsForIssueState(this.settings, issue.state);
+    const size = ensembleSize(issue) ?? this.settings.agent.ensembleSize;
+    const key = slotKey(issue.id, slotIndex);
+    const entry: RunningEntry = {
+      issue,
+      identifier: issue.identifier,
+      slotIndex,
+      ensembleSize: size,
+      agentKind: effective.agent.kind,
+      workerHost,
+      workspacePath: null,
+      sessionId: null,
+      executorPid: null,
+      turnCount: 0,
+      startedAt: this.clock.now(),
+      lastAgentEvent: null,
+      lastAgentTimestamp: null,
+      usageTotals: { inputTokens: 0, outputTokens: 0, totalTokens: 0, secondsRunning: 0 },
+      lastReportedInputTokens: 0,
+      lastReportedOutputTokens: 0,
+      lastReportedTotalTokens: 0,
+      retryAttempt: retry?.attempt ?? null,
+    };
+
+    this.state.claimed.add(key);
+    this.recordClaimOwner(key);
+    this.state.running.set(key, entry);
+    this.state.usageDeltaBases.set(key, zeroUsageTotals());
+    if (retryEntryKey) this.state.retryAttempts.delete(retryEntryKey);
+    return { kind: "running", entry };
   }
 
   /**
@@ -377,38 +423,54 @@ export class Orchestrator {
    * the provision wait.
    */
   bindReservation(reservation: SlotReservation, workerHost: string): RunningEntry | null {
-    return this.withClaimStore("bind_reservation", () => {
-      const key = slotKey(reservation.issueId, reservation.slotIndex);
-      const record = this.state.reserved.get(key);
-      if (!record || record.token !== reservation.token || !this.claimIsOwnedByThisStore(key))
-        return null;
-      this.state.reserved.delete(key);
-      const entry: RunningEntry = {
-        issue: record.issue,
-        identifier: record.issue.identifier,
-        slotIndex: record.slotIndex,
-        ensembleSize: record.ensembleSize,
-        agentKind: record.agentKind,
-        workerHost,
-        workspacePath: null,
-        sessionId: null,
-        executorPid: null,
-        turnCount: 0,
-        startedAt: this.clock.now(),
-        lastAgentEvent: null,
-        lastAgentTimestamp: null,
-        usageTotals: { inputTokens: 0, outputTokens: 0, totalTokens: 0, secondsRunning: 0 },
-        lastReportedInputTokens: 0,
-        lastReportedOutputTokens: 0,
-        lastReportedTotalTokens: 0,
-        retryAttempt: record.retryAttempt,
-      };
-      this.state.claimed.add(key);
-      this.recordClaimOwner(key);
-      this.state.running.set(key, entry);
-      this.state.usageDeltaBases.set(key, zeroUsageTotals());
-      return entry;
-    });
+    return this.withClaimStore("bind_reservation", () =>
+      this.bindReservationInTransaction(reservation, workerHost),
+    );
+  }
+
+  async bindReservationAsync(
+    reservation: SlotReservation,
+    workerHost: string,
+  ): Promise<RunningEntry | null> {
+    return this.withClaimStoreAsync("bind_reservation", () =>
+      this.bindReservationInTransaction(reservation, workerHost),
+    );
+  }
+
+  private bindReservationInTransaction(
+    reservation: SlotReservation,
+    workerHost: string,
+  ): RunningEntry | null {
+    const key = slotKey(reservation.issueId, reservation.slotIndex);
+    const record = this.state.reserved.get(key);
+    if (!record || record.token !== reservation.token || !this.claimIsOwnedByThisStore(key))
+      return null;
+    this.state.reserved.delete(key);
+    const entry: RunningEntry = {
+      issue: record.issue,
+      identifier: record.issue.identifier,
+      slotIndex: record.slotIndex,
+      ensembleSize: record.ensembleSize,
+      agentKind: record.agentKind,
+      workerHost,
+      workspacePath: null,
+      sessionId: null,
+      executorPid: null,
+      turnCount: 0,
+      startedAt: this.clock.now(),
+      lastAgentEvent: null,
+      lastAgentTimestamp: null,
+      usageTotals: { inputTokens: 0, outputTokens: 0, totalTokens: 0, secondsRunning: 0 },
+      lastReportedInputTokens: 0,
+      lastReportedOutputTokens: 0,
+      lastReportedTotalTokens: 0,
+      retryAttempt: record.retryAttempt,
+    };
+    this.state.claimed.add(key);
+    this.recordClaimOwner(key);
+    this.state.running.set(key, entry);
+    this.state.usageDeltaBases.set(key, zeroUsageTotals());
+    return entry;
   }
 
   /**
@@ -417,31 +479,48 @@ export class Orchestrator {
    * (cancelled, expired, or superseded by a re-reserve) is a no-op.
    */
   cancelReservation(reservation: SlotReservation): void {
-    this.withClaimStore("cancel_reservation", () => {
-      const key = slotKey(reservation.issueId, reservation.slotIndex);
-      const record = this.state.reserved.get(key);
-      if (!record || record.token !== reservation.token || !this.claimIsOwnedByThisStore(key))
-        return;
-      this.cancelReservationRecord(key, record);
-    });
+    this.withClaimStore("cancel_reservation", () =>
+      this.cancelReservationInTransaction(reservation),
+    );
+  }
+
+  async cancelReservationAsync(reservation: SlotReservation): Promise<void> {
+    await this.withClaimStoreAsync("cancel_reservation", () =>
+      this.cancelReservationInTransaction(reservation),
+    );
+  }
+
+  private cancelReservationInTransaction(reservation: SlotReservation): void {
+    const key = slotKey(reservation.issueId, reservation.slotIndex);
+    const record = this.state.reserved.get(key);
+    if (!record || record.token !== reservation.token || !this.claimIsOwnedByThisStore(key)) return;
+    this.cancelReservationRecord(key, record);
   }
 
   abandonClaim(issueId: string, slotIndex: number): void {
-    this.withClaimStore("abandon_claim", () => {
-      const key = slotKey(issueId, slotIndex);
-      if (!this.claimIsOwnedByThisStore(key)) return;
-      const reservation = this.state.reserved.get(key);
-      if (reservation) {
-        this.cancelReservationRecord(key, reservation);
-        return;
-      }
-      const running = this.state.running.get(key);
-      if (running) this.restoreRunningRetry(key, running);
-      this.state.running.delete(key);
-      this.state.claimed.delete(key);
-      this.releaseClaimOwner(key);
-      this.state.usageDeltaBases.delete(key);
-    });
+    this.withClaimStore("abandon_claim", () => this.abandonClaimInTransaction(issueId, slotIndex));
+  }
+
+  async abandonClaimAsync(issueId: string, slotIndex: number): Promise<void> {
+    await this.withClaimStoreAsync("abandon_claim", () =>
+      this.abandonClaimInTransaction(issueId, slotIndex),
+    );
+  }
+
+  private abandonClaimInTransaction(issueId: string, slotIndex: number): void {
+    const key = slotKey(issueId, slotIndex);
+    if (!this.claimIsOwnedByThisStore(key)) return;
+    const reservation = this.state.reserved.get(key);
+    if (reservation) {
+      this.cancelReservationRecord(key, reservation);
+      return;
+    }
+    const running = this.state.running.get(key);
+    if (running) this.restoreRunningRetry(key, running);
+    this.state.running.delete(key);
+    this.state.claimed.delete(key);
+    this.releaseClaimOwner(key);
+    this.state.usageDeltaBases.delete(key);
   }
 
   /** Shared cancel path for token-checked cancels, the expiry sweep, and cleanupIssue. */
@@ -507,36 +586,65 @@ export class Orchestrator {
   }
 
   refreshRunningIssue(issue: Issue): void {
-    this.withClaimStore("refresh_running_issue", () => {
-      for (const entry of this.state.running.values()) {
-        if (entry.issue.id === issue.id) entry.issue = issue;
-      }
-      // Reserved records feed per-state cap accounting, so a long acquire must not
-      // hold a stale issue state either.
-      for (const record of this.state.reserved.values()) {
-        if (record.issue.id === issue.id) record.issue = issue;
-      }
-    });
+    this.withClaimStore("refresh_running_issue", () =>
+      this.refreshRunningIssueInTransaction(issue),
+    );
+  }
+
+  async refreshRunningIssueAsync(issue: Issue): Promise<void> {
+    await this.withClaimStoreAsync("refresh_running_issue", () =>
+      this.refreshRunningIssueInTransaction(issue),
+    );
+  }
+
+  private refreshRunningIssueInTransaction(issue: Issue): void {
+    for (const entry of this.state.running.values()) {
+      if (entry.issue.id === issue.id) entry.issue = issue;
+    }
+    // Reserved records feed per-state cap accounting, so a long acquire must not
+    // hold a stale issue state either.
+    for (const record of this.state.reserved.values()) {
+      if (record.issue.id === issue.id) record.issue = issue;
+    }
   }
 
   applyUpdate(issueId: string, slotIndex: number, update: AgentUpdate): void {
-    const key = slotKey(issueId, slotIndex);
-    if (!this.state.running.has(key)) return;
-    this.withClaimStore("apply_update", () => {
-      const entry = this.state.running.get(key);
-      if (!entry) return;
-      if (!this.claimIsOwnedByThisStore(key)) return;
+    try {
+      this.withClaimStore("apply_update", () =>
+        this.applyUpdateInTransaction(issueId, slotIndex, update),
+      );
+    } catch (error) {
+      if (error instanceof NoopClaimStoreMutation) return;
+      throw error;
+    }
+  }
 
-      entry.lastAgentEvent = update.type;
-      entry.lastAgentMessage = update.message;
-      entry.lastAgentTimestamp = update.timestamp ?? this.clock.now();
-      if (update.sessionId !== undefined) entry.sessionId = update.sessionId;
-      if (update.executorPid !== undefined) entry.executorPid = update.executorPid;
-      if (update.workspacePath !== undefined) entry.workspacePath = update.workspacePath;
-      if (update.type === "turn_completed") entry.turnCount += 1;
-      if (update.rateLimits !== undefined) this.state.rateLimits = update.rateLimits;
-      if (update.usage) this.applyUsageUpdate(key, entry, update);
-    });
+  async applyUpdateAsync(issueId: string, slotIndex: number, update: AgentUpdate): Promise<void> {
+    try {
+      await this.withClaimStoreAsync("apply_update", () =>
+        this.applyUpdateInTransaction(issueId, slotIndex, update),
+      );
+    } catch (error) {
+      if (error instanceof NoopClaimStoreMutation) return;
+      throw error;
+    }
+  }
+
+  private applyUpdateInTransaction(issueId: string, slotIndex: number, update: AgentUpdate): void {
+    const key = slotKey(issueId, slotIndex);
+    const entry = this.state.running.get(key);
+    if (!entry) throw new NoopClaimStoreMutation();
+    if (!this.claimIsOwnedByThisStore(key)) throw new NoopClaimStoreMutation();
+
+    entry.lastAgentEvent = update.type;
+    entry.lastAgentMessage = update.message;
+    entry.lastAgentTimestamp = update.timestamp ?? this.clock.now();
+    if (update.sessionId !== undefined) entry.sessionId = update.sessionId;
+    if (update.executorPid !== undefined) entry.executorPid = update.executorPid;
+    if (update.workspacePath !== undefined) entry.workspacePath = update.workspacePath;
+    if (update.type === "turn_completed") entry.turnCount += 1;
+    if (update.rateLimits !== undefined) this.state.rateLimits = update.rateLimits;
+    if (update.usage) this.applyUsageUpdate(key, entry, update);
   }
 
   finish(
@@ -546,75 +654,104 @@ export class Orchestrator {
     error?: string,
     retryKind: "failure" | "continuation" = "failure",
   ): RunningEntry | null {
-    return this.withClaimStore("finish", () => {
-      const key = slotKey(issueId, slotIndex);
-      const entry = this.state.running.get(key);
-      if (!entry) return null;
-      if (!this.claimIsOwnedByThisStore(key)) return null;
-      this.state.running.delete(key);
-      this.state.claimed.delete(key);
-      this.releaseClaimOwner(key);
-      this.state.usageDeltaBases.delete(key);
-      this.state.usageTotals.secondsRunning += Math.max(
-        0,
-        (this.clock.now().getTime() - entry.startedAt.getTime()) / 1000,
-      );
+    return this.withClaimStore("finish", () =>
+      this.finishInTransaction(issueId, slotIndex, normal, error, retryKind),
+    );
+  }
 
-      if (normal) {
-        const attempt = retryKind === "continuation" ? 1 : (entry.retryAttempt ?? 0) + 1;
-        this.state.completed.add(issueId);
-        const deadline = this.retryDeadline(
-          retryBackoffMs(attempt, this.settings.agent.maxRetryBackoffMs, retryKind),
-        );
-        this.state.retryAttempts.set(slotKey(issueId, slotIndex), {
-          issueId,
-          identifier: entry.identifier,
-          issueUrl: entry.issue.url ?? null,
-          attempt,
-          monotonicDeadlineMs: deadline.monotonicDeadlineMs,
-          dueAtIso: deadline.dueAtIso,
-          slotIndex,
-          workerHost: entry.workerHost,
-          workspacePath: entry.workspacePath,
-          error,
-        });
-      }
-      return entry;
-    });
+  async finishAsync(
+    issueId: string,
+    slotIndex: number,
+    normal: boolean,
+    error?: string,
+    retryKind: "failure" | "continuation" = "failure",
+  ): Promise<RunningEntry | null> {
+    return this.withClaimStoreAsync("finish", () =>
+      this.finishInTransaction(issueId, slotIndex, normal, error, retryKind),
+    );
+  }
+
+  private finishInTransaction(
+    issueId: string,
+    slotIndex: number,
+    normal: boolean,
+    error: string | undefined,
+    retryKind: "failure" | "continuation",
+  ): RunningEntry | null {
+    const key = slotKey(issueId, slotIndex);
+    const entry = this.state.running.get(key);
+    if (!entry) return null;
+    if (!this.claimIsOwnedByThisStore(key)) return null;
+    this.state.running.delete(key);
+    this.state.claimed.delete(key);
+    this.releaseClaimOwner(key);
+    this.state.usageDeltaBases.delete(key);
+    this.state.usageTotals.secondsRunning += Math.max(
+      0,
+      (this.clock.now().getTime() - entry.startedAt.getTime()) / 1000,
+    );
+
+    if (normal) {
+      const attempt = retryKind === "continuation" ? 1 : (entry.retryAttempt ?? 0) + 1;
+      this.state.completed.add(issueId);
+      const deadline = this.retryDeadline(
+        retryBackoffMs(attempt, this.settings.agent.maxRetryBackoffMs, retryKind),
+      );
+      this.state.retryAttempts.set(slotKey(issueId, slotIndex), {
+        issueId,
+        identifier: entry.identifier,
+        issueUrl: entry.issue.url ?? null,
+        attempt,
+        monotonicDeadlineMs: deadline.monotonicDeadlineMs,
+        dueAtIso: deadline.dueAtIso,
+        slotIndex,
+        workerHost: entry.workerHost,
+        workspacePath: entry.workspacePath,
+        error,
+      });
+    }
+    return entry;
   }
 
   cleanupIssue(issueId: string): void {
-    this.withClaimStore("cleanup_issue", () => {
-      for (const [key, entry] of this.state.running.entries()) {
-        if (entry.issue.id === issueId && this.claimIsOwnedByThisStore(key)) {
-          this.state.running.delete(key);
-          this.state.claimed.delete(key);
-          this.releaseClaimOwner(key);
-          this.state.usageDeltaBases.delete(key);
-        }
-      }
-      // Cancel any in-acquire reservation (token retired -> a late bind returns null).
-      // The restore-then-delete composition is safe: the subsequent
-      // deleteRetryAttemptsForIssue removes any restored retry entry.
-      for (const [key, record] of [...this.state.reserved.entries()]) {
-        if (record.issue.id === issueId && this.claimIsOwnedByThisStore(key))
-          this.cancelReservationRecord(key, record);
-      }
-      this.deleteRetryAttemptsForIssue(issueId);
-      this.state.completed.add(issueId);
-    });
+    this.withClaimStore("cleanup_issue", () => this.cleanupIssueInTransaction(issueId));
   }
 
-  snapshot(): {
-    running: RunningEntry[];
-    reserving: ReservationSnapshotEntry[];
-    retrying: RetryEntry[];
-    blocked: DispatchBlockEntry[];
-    usageTotals: UsageTotals;
-    rateLimits: unknown;
-    claimStore: ClaimStoreStatus;
-  } {
-    return this.claimStore.read(() => ({
+  async cleanupIssueAsync(issueId: string): Promise<void> {
+    await this.withClaimStoreAsync("cleanup_issue", () => this.cleanupIssueInTransaction(issueId));
+  }
+
+  private cleanupIssueInTransaction(issueId: string): void {
+    for (const [key, entry] of this.state.running.entries()) {
+      if (entry.issue.id === issueId && this.claimIsOwnedByThisStore(key)) {
+        this.state.running.delete(key);
+        this.state.claimed.delete(key);
+        this.releaseClaimOwner(key);
+        this.state.usageDeltaBases.delete(key);
+      }
+    }
+    // Cancel any in-acquire reservation (token retired -> a late bind returns null).
+    // The restore-then-delete composition is safe: the subsequent
+    // deleteRetryAttemptsForIssue removes any restored retry entry.
+    for (const [key, record] of [...this.state.reserved.entries()]) {
+      if (record.issue.id === issueId && this.claimIsOwnedByThisStore(key))
+        this.cancelReservationRecord(key, record);
+    }
+    this.deleteRetryAttemptsForIssue(issueId);
+    this.state.completed.add(issueId);
+  }
+
+  snapshot(): OrchestratorSnapshot {
+    if (isAsyncClaimStore(this.claimStore)) return this.snapshotInTransaction();
+    return this.syncClaimStore().read(() => this.snapshotInTransaction());
+  }
+
+  async snapshotAsync(): Promise<OrchestratorSnapshot> {
+    return this.claimStore.read(() => this.snapshotInTransaction());
+  }
+
+  private snapshotInTransaction(): OrchestratorSnapshot {
+    return {
       running: [...this.state.running.values()],
       reserving: [...this.state.reserved.values()].map((record) => ({
         issueId: record.issue.id,
@@ -629,7 +766,7 @@ export class Orchestrator {
       usageTotals: { ...this.state.usageTotals },
       rateLimits: this.state.rateLimits,
       claimStore: this.claimStore.status(),
-    }));
+    };
   }
 
   private applyUsageUpdate(key: string, entry: RunningEntry, update: AgentUpdate): void {
@@ -784,6 +921,16 @@ export class Orchestrator {
       if (retry.issueId === issueId) this.state.retryAttempts.delete(key);
     }
   }
+}
+
+export interface OrchestratorSnapshot {
+  running: RunningEntry[];
+  reserving: ReservationSnapshotEntry[];
+  retrying: RetryEntry[];
+  blocked: DispatchBlockEntry[];
+  usageTotals: UsageTotals;
+  rateLimits: unknown;
+  claimStore: ClaimStoreStatus;
 }
 
 function dispatchBlockError(reason: DispatchBlockReason): string {
