@@ -1,3 +1,5 @@
+import { makeSdkModuleContract } from "@lorenz/domain";
+
 import type { WorkerDriverFactory } from "./types.js";
 
 /**
@@ -11,14 +13,31 @@ export const WORKER_DRIVER_SDK_VERSION = 1;
 
 /**
  * The unit an OUT-OF-TREE worker-driver module exports: a {@link WorkerDriverFactory}
- * carrying the SDK version it targets. In-repo extensions register factories
- * directly (the composition root vouches for them); a dynamically imported
- * module instead crosses a version boundary the daemon cannot type-check, so
- * the explicit `sdkVersion` handshake stands in for the compiler.
+ * carrying the SDK version it targets. A dynamically imported module crosses a
+ * version boundary the daemon cannot type-check, so the explicit `sdkVersion`
+ * handshake stands in for the compiler.
  */
 export interface WorkerDriverModule extends WorkerDriverFactory {
   readonly sdkVersion: number;
 }
+
+const contract = makeSdkModuleContract<WorkerDriverModule>({
+  errorPrefix: "worker_pool_driver",
+  moduleNoun: "a worker driver module",
+  identityField: "kind",
+  defineCall: "defineWorkerDriver({ kind, sdkVersion, create })",
+  requiredFns: [{ field: "create", signature: "create(options, deps)", article: "a" }],
+  sdkVersion: WORKER_DRIVER_SDK_VERSION,
+});
+
+/**
+ * Structural check + version handshake for a dynamically loaded worker-driver
+ * module. `source` names where the value came from so every error is actionable.
+ */
+export const assertWorkerDriverModule: (
+  value: unknown,
+  source: string,
+) => asserts value is WorkerDriverModule = contract.assertModule;
 
 /**
  * Authoring sugar for out-of-tree driver modules: shape-asserts the module at
@@ -34,53 +53,5 @@ export interface WorkerDriverModule extends WorkerDriverFactory {
  * ```
  */
 export function defineWorkerDriver(module: WorkerDriverModule): WorkerDriverModule {
-  assertWorkerDriverModule(module, "defineWorkerDriver");
-  return module;
-}
-
-/**
- * Structural check + version handshake for a dynamically loaded worker-driver
- * module. `source` names where the value came from (a module specifier, or
- * `defineWorkerDriver` at authoring time) so every error is actionable. Throws:
- *
- * - `worker_pool_driver_module_invalid: <source> ...` when the value is not an
- *   object, `kind` is not a non-empty string, `create` is not a function, or
- *   `sdkVersion` is not a number;
- * - `worker_pool_driver_sdk_mismatch: <source> targets SDK v<n>, this build
- *   supports v<WORKER_DRIVER_SDK_VERSION>` when the declared version differs.
- */
-export function assertWorkerDriverModule(
-  value: unknown,
-  source: string,
-): asserts value is WorkerDriverModule {
-  if (typeof value !== "object" || value === null) {
-    throw new Error(
-      `worker_pool_driver_module_invalid: ${source} did not yield a worker driver module object ` +
-        `(got ${value === null ? "null" : typeof value}); export defineWorkerDriver({ kind, sdkVersion, create }) ` +
-        `as the default export or a named export`,
-    );
-  }
-  const candidate = value as Partial<WorkerDriverModule>;
-  if (typeof candidate.kind !== "string" || candidate.kind.trim() === "") {
-    throw new Error(
-      `worker_pool_driver_module_invalid: ${source} is missing a non-empty string \`kind\``,
-    );
-  }
-  if (typeof candidate.create !== "function") {
-    throw new Error(
-      `worker_pool_driver_module_invalid: ${source} (kind: ${candidate.kind}) is missing a \`create(options, deps)\` function`,
-    );
-  }
-  if (typeof candidate.sdkVersion !== "number") {
-    throw new Error(
-      `worker_pool_driver_module_invalid: ${source} (kind: ${candidate.kind}) is missing a numeric \`sdkVersion\` ` +
-        `(declare sdkVersion: ${WORKER_DRIVER_SDK_VERSION})`,
-    );
-  }
-  if (candidate.sdkVersion !== WORKER_DRIVER_SDK_VERSION) {
-    throw new Error(
-      `worker_pool_driver_sdk_mismatch: ${source} targets SDK v${candidate.sdkVersion}, ` +
-        `this build supports v${WORKER_DRIVER_SDK_VERSION}`,
-    );
-  }
+  return contract.defineModule(module, "defineWorkerDriver");
 }

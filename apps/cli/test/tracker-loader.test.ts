@@ -1,14 +1,8 @@
-// Out-of-tree tracker loading: `tracker.kind` accepts a module specifier (npm
-// name, `./relative` or `/absolute` path, optional `#exportName` suffix) that the
-// daemon dynamic-imports at startup and registers into the tracker registry under
-// the EXACT configured string. These tests drive the generic loader through
-// temp-dir fixture modules - the SECOND instantiation of the axis-generic
-// extension loader, proving it carries the same audited mechanics as the
-// worker-driver loader: startup load + dispatch through the loaded provider, the
-// named-export form, the SDK version handshake, malformed-module rejection, the
-// known-kinds/did-you-mean resolution error, the cache-busting-query rejection,
-// the module-pinned re-encounter event, and the end-to-end loadWorkflow wiring
-// (parse + dispatch validation) via the prepareRegistries hook.
+// Out-of-tree tracker loading driven through temp-dir fixture modules: startup
+// load + dispatch, the named-export form, the SDK version handshake,
+// malformed-module rejection, the did-you-mean resolution error, cache-busting
+// rejection, the module-pinned re-encounter event, and the end-to-end
+// loadWorkflow wiring via the prepareRegistries hook.
 
 import fs from "node:fs/promises";
 import { createRequire } from "node:module";
@@ -119,9 +113,7 @@ function recordingLog(): {
   return { events, logEvent: (event) => void events.push(event) };
 }
 
-// ---------------------------------------------------------------------------
 // startup load + dispatch through the loaded provider
-// ---------------------------------------------------------------------------
 
 test("startup: ensureTrackerProviderLoaded registers a default-export module under the specifier", async () => {
   const dir = await tempDir("tracker-loader");
@@ -170,9 +162,7 @@ test("startup: a relative specifier resolves against baseDir and dispatches a sy
   assert.equal(issues[0]!.identifier, "REL-1");
 });
 
-// ---------------------------------------------------------------------------
 // end-to-end wiring: loadWorkflow -> prepareRegistries -> validateDispatchConfig
-// ---------------------------------------------------------------------------
 
 test("loadWorkflow: prepareTrackerExtensions loads the tracker before parse, and dispatch validates", async () => {
   const dir = await tempDir("tracker-loader");
@@ -198,9 +188,7 @@ test("loadWorkflow: prepareTrackerExtensions loads the tracker before parse, and
   validateDispatchConfig(workflow.settings, registry, defaultAgentExecutorRegistry);
 });
 
-// ---------------------------------------------------------------------------
 // named-export form (#name)
-// ---------------------------------------------------------------------------
 
 test("a #exportName suffix selects a named export", async () => {
   const dir = await tempDir("tracker-loader");
@@ -228,9 +216,7 @@ test("a #exportName miss fails loud listing the available exports", async () => 
   );
 });
 
-// ---------------------------------------------------------------------------
 // version handshake + malformed modules (fail-loud)
-// ---------------------------------------------------------------------------
 
 test("an sdkVersion mismatch fails loud with tracker_provider_sdk_mismatch", async () => {
   const dir = await tempDir("tracker-loader");
@@ -272,9 +258,7 @@ test("a module without a default export fails loud and points at #name", async (
   );
 });
 
-// ---------------------------------------------------------------------------
 // bare-specifier resolution failures + cache-busting rejection
-// ---------------------------------------------------------------------------
 
 test("an unknown bare specifier fails loud listing the known kinds", async () => {
   const registry = privateRegistry();
@@ -316,9 +300,7 @@ test("parseTrackerRef splits the #exportName suffix and keeps plain specifiers w
   assert.throws(() => parseTrackerRef("./tracker.mjs#"), /empty #exportName/);
 });
 
-// ---------------------------------------------------------------------------
 // exact-kind-wins + reload semantics (pinning on a re-encounter)
-// ---------------------------------------------------------------------------
 
 test("an EXACT registered kind wins before parsing as a module", async () => {
   // A registered kind that also looks like a bare package name must resolve from

@@ -349,7 +349,7 @@ test("trackers: a pathToFileURL specifier resolves under the release layout", as
 });
 
 // ===========================================================================
-// worker-drivers: the byte-identical first instance also survives bundling
+// worker-drivers: a bundled extension survives the release layout
 // ===========================================================================
 
 test("worker-drivers: a bundled bare-specifier extension resolves under the release layout", async () => {
