@@ -54,13 +54,24 @@ export {
   createDaemonIdentity,
   daemonLockIsStale,
   daemonLockPath,
+  LocalFileLeadershipStore,
   readDaemonLock,
   type AcquireDaemonLockOptions,
   type AcquireDaemonLockResult,
+  type AcquireLocalFileLeadershipResult,
   type DaemonEndpoint,
   type DaemonIdentity,
   type DaemonLockRecord,
 } from "./daemonLock.js";
+/** @beta */
+export type {
+  LeadershipAcquireResult,
+  LeadershipEndpoint,
+  LeadershipIdentity,
+  LeadershipLease,
+  LeadershipLeaseRecord,
+  LeadershipStore,
+} from "./leadershipStore.js";
 /** @beta */
 export { daemonStatusPayload, type DaemonStatusPayload } from "./daemonStatus.js";
 export { Orchestrator } from "@lorenz/orchestrator";

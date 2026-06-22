@@ -89,6 +89,9 @@ Benefits:
 - Gives `lorenz runs`, refresh, status, shutdown, and reload commands one stable owner.
 - Can reuse the existing HTTP server or add a Unix domain socket for local-only control.
 - Establishes daemon identity and heartbeat before durable persistence lands.
+- Establishes a `LeadershipStore` boundary so the initial local-file implementation can
+  later be replaced by a Turso/SQLite row, Postgres advisory lock, Kubernetes Lease, or
+  another deployment-native provider.
 
 Tradeoffs:
 
@@ -97,6 +100,8 @@ Tradeoffs:
 - Local API authentication and file permissions become part of the product surface.
 - The TUI must become a client view instead of the scheduler owner when attached to an
   existing daemon.
+- File-based leadership is same-host only. It prevents duplicate local schedulers, but it
+  is not a distributed election primitive for multiple pods.
 
 Best use: first real daemon milestone.
 
@@ -173,19 +178,23 @@ Build Option B first, with boundaries that do not block Option C.
 1. Add a daemon identity and singleton lock keyed by workflow path and workspace root.
    Store the lock under the workspace's `.lorenz/` tree with owner id, pid, start time,
    workflow path, control endpoint, and heartbeat timestamp.
-2. Add a local control endpoint. Prefer a Unix domain socket when available; keep HTTP
+2. Put that singleton behavior behind a small leadership-store port:
+   acquire, read, heartbeat, release, and stale detection. The default store is local
+   file-backed; distributed deployments can provide SQL or orchestrator-native stores
+   without changing daemon status, attach, or shutdown semantics.
+3. Add a local control endpoint. Prefer a Unix domain socket when available; keep HTTP
    bind behavior for dashboard and MCP. If HTTP is reused for control actions, require a
    local token and make privileged routes opt-in.
-3. Teach CLI commands to attach to the running owner. `runs`, `status`, `refresh`, and
+4. Teach CLI commands to attach to the running owner. `runs`, `status`, `refresh`, and
    `stop` should talk to the daemon when its lock and endpoint are healthy. Starting a
    second scheduler should fail loudly unless the user explicitly asks for an isolated
    foreground run.
-4. Expose daemon status in `/api/v1/state` or a dedicated `/api/v1/daemon` route:
+5. Expose daemon status in `/api/v1/state` or a dedicated `/api/v1/daemon` route:
    daemon id, pid, started_at, heartbeat_at, workflow path, lock path, control endpoint,
    claim-store status, last reload result, and worker-pool drain status.
-5. Keep the in-memory claim store as the default. When the durable claim store lands, the
+6. Keep the in-memory claim store as the default. When the durable claim store lands, the
    daemon should own store construction and pass the store into `Orchestrator`.
-6. Split into a daemon package only after the control and singleton behavior are stable.
+7. Split into a daemon package only after the control and singleton behavior are stable.
    The package split should be mechanical: move lifecycle ownership out of `main.ts`,
    not redesign dispatch.
 
@@ -221,7 +230,10 @@ retry durability; a SQLite store can report exactly the guarantees it implements
 
 ### Singleton Leadership
 
-- Use an atomic lock file or SQLite leadership row keyed by normalized workflow identity.
+- Use the `LeadershipStore` port. The first implementation can use an atomic local lock
+  file keyed by normalized workflow identity; multi-pod deployments need a distributed
+  store such as Turso/SQLite with a shared durable file, Postgres, etcd, Consul, or a
+  Kubernetes Lease.
 - Write owner id, pid, process start time if available, hostname, control endpoint, and
   heartbeat.
 - Treat stale locks conservatively. Prefer "owner unavailable" over stealing a lock while
@@ -281,12 +293,36 @@ retry durability; a SQLite store can report exactly the guarantees it implements
 - Keep `@lorenz/orchestrator` synchronous. It should accept a claim store, but not open
   files, sockets, or databases.
 - Keep backend registration in `apps/cli/src/daemon.ts` until the daemon package exists.
-- Add lifecycle helpers in a small daemon module first: lock acquisition, status model,
-  control endpoint address, attach-client resolution.
+- Add lifecycle helpers in small daemon modules first: leadership-store acquisition,
+  status model, control endpoint address, attach-client resolution.
+- Keep leadership and claim persistence as separate store interfaces. Leadership chooses
+  the one active control-plane owner for a scope; claim persistence serializes dispatch
+  state, retry state, and owner leases. They can share a provider, such as Turso, while
+  preserving separate responsibilities and schemas.
 - Reuse `@lorenz/server` for read-only observability. Add privileged control routes only
   behind local auth or in a separate local socket server.
 - Keep `LorenzRuntime` as the event-loop owner. Avoid teaching it about process locks or
   service managers.
+
+## Scale-Out Direction
+
+Nothing in the daemon direction should require all scheduling forever to live in one
+process. The narrow singleton is the poller/decision owner for a workflow scope. The rest
+of the system should become event-driven from durable state:
+
+- A leadership store elects exactly one poller that reads tracker state and writes
+  eligible work decisions.
+- A claim store serializes claim, reservation, retry, and heartbeat mutations.
+- Workers or runtime executors consume claimed work and publish updates through durable
+  state or explicit event channels.
+- Observers attach to the daemon or read projection state; they do not become schedulers.
+
+That gives two scale paths. First, keep one leader per workflow but scale execution
+horizontally through worker pools and durable claims. Second, shard leadership by workflow,
+route, tenant, or tracker project so multiple leaders own disjoint scopes. A fully
+leaderless scheduler would need compare-and-swap claim transactions on every poll result
+and careful tracker-rate coordination; it is possible, but it is a larger architecture than
+the same-host daemon milestone.
 
 ## Testing Plan
 

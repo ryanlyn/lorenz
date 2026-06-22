@@ -10,6 +10,7 @@ import {
   createDaemonIdentity,
   daemonLockIsStale,
   daemonLockPath,
+  LocalFileLeadershipStore,
   readDaemonLock,
 } from "../src/daemonLock.js";
 import { daemonStatusPayload } from "../src/daemonStatus.js";
@@ -85,6 +86,44 @@ test("daemon heartbeat updates only the owning lock", async () => {
     const heartbeat = await acquired.lock.heartbeat(new Date("2026-01-01T00:00:30.000Z"));
     assert.equal(heartbeat.heartbeatAt, "2026-01-01T00:00:30.000Z");
     assert.equal((await readDaemonLock(lockPath))?.heartbeatAt, "2026-01-01T00:00:30.000Z");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("local file leadership store exposes generic lease operations", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "lorenz-leadership-store-"));
+  try {
+    const workflowPath = path.join(root, "WORKFLOW.md");
+    const lockPath = daemonLockPath(root, workflowPath);
+    const store = new LocalFileLeadershipStore();
+    const acquired = await store.acquire({
+      lockPath,
+      identity: createDaemonIdentity({
+        workflowPath,
+        workspaceRoot: root,
+        ownerId: "owner-a",
+        pid: 101,
+        hostname: "host-a",
+        now: new Date("2026-01-01T00:00:00.000Z"),
+      }),
+      endpoint: { kind: "socket", address: "/tmp/lorenz.sock" },
+      now: new Date("2026-01-01T00:00:00.000Z"),
+    });
+    assert.equal(acquired.status, "acquired");
+    if (acquired.status !== "acquired") throw new Error("leadership should be acquired");
+
+    const heartbeat = await acquired.lease.heartbeat(new Date("2026-01-01T00:00:30.000Z"));
+    assert.equal(heartbeat.heartbeatAt, "2026-01-01T00:00:30.000Z");
+
+    const record = await store.read(lockPath);
+    assert.equal(record?.ownerId, "owner-a");
+    assert.equal(
+      record ? store.isStale(record, new Date("2026-01-01T00:00:31.000Z"), 60_000) : null,
+      false,
+    );
+    assert.equal(await acquired.lease.release(), true);
+    assert.equal(await store.read(lockPath), null);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

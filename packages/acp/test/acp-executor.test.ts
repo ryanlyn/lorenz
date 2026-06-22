@@ -16,6 +16,7 @@ import { AgentExecutorRegistry } from "@lorenz/agent-sdk";
 import type { AgentMcpEndpointLease } from "@lorenz/mcp";
 import { workerHostPool } from "@lorenz/worker-host-pool";
 import { assert, sampleIssue, tempDir, writeExecutable } from "@lorenz/test-utils";
+
 import { acpExecutorProvider } from "@lorenz/acp";
 
 // Private executor registry so agent records parse through the ACP provider's option

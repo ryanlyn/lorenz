@@ -5,27 +5,26 @@ import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 
+import type {
+  LeadershipAcquireResult,
+  LeadershipEndpoint,
+  LeadershipIdentity,
+  LeadershipLease,
+  LeadershipLeaseRecord,
+  LeadershipStore,
+} from "./leadershipStore.js";
+
 /** @beta */
 export const DAEMON_LOCK_VERSION = 1;
 const MUTATION_LOCK_RETRY_MS = 10;
 const MUTATION_LOCK_STALE_MS = 30_000;
 
 /** @beta */
-export interface DaemonEndpoint {
-  kind: "http" | "socket";
-  address: string;
-}
+export type DaemonEndpoint = LeadershipEndpoint;
 
-export interface DaemonIdentity {
-  ownerId: string;
-  pid: number;
-  hostname: string;
-  startedAt: string;
-  workflowPath: string;
-  workspaceRoot: string;
-}
+export type DaemonIdentity = LeadershipIdentity;
 
-export interface DaemonLockRecord extends DaemonIdentity {
+export interface DaemonLockRecord extends DaemonIdentity, LeadershipLeaseRecord {
   version: typeof DAEMON_LOCK_VERSION;
   lockPath: string;
   endpoint: DaemonEndpoint;
@@ -53,6 +52,11 @@ export type AcquireDaemonLockResult =
   | { status: "acquired"; lock: DaemonLock }
   | { status: "conflict"; record: DaemonLockRecord | null; stale: boolean };
 
+export type AcquireLocalFileLeadershipResult = LeadershipAcquireResult<
+  DaemonLock,
+  DaemonLockRecord
+>;
+
 export function createDaemonIdentity(options: CreateDaemonIdentityOptions): DaemonIdentity {
   const now = options.now ?? new Date();
   return {
@@ -74,21 +78,8 @@ export function daemonLockPath(workspaceRoot: string, workflowPath: string): str
 export async function acquireDaemonLock(
   options: AcquireDaemonLockOptions,
 ): Promise<AcquireDaemonLockResult> {
-  const now = options.now ?? new Date();
-  const record = daemonLockRecord(options.lockPath, options.identity, options.endpoint, now);
-  await fs.mkdir(path.dirname(options.lockPath), { recursive: true, mode: 0o700 });
-  return withDaemonLockMutation(options.lockPath, async () => {
-    const created = await writeExclusiveJsonFile(options.lockPath, record);
-    if (created) {
-      return { status: "acquired", lock: new DaemonLock(options.lockPath, record) };
-    }
-    const existing = await readDaemonLock(options.lockPath);
-    return {
-      status: "conflict",
-      record: existing,
-      stale: existing ? daemonLockIsStale(existing, now, options.staleAfterMs ?? 60_000) : true,
-    };
-  });
+  const result = await new LocalFileLeadershipStore().acquire(options);
+  return result.status === "acquired" ? { status: "acquired", lock: result.lease } : result;
 }
 
 export async function readDaemonLock(lockPath: string): Promise<DaemonLockRecord | null> {
@@ -112,7 +103,7 @@ export function daemonLockIsStale(
 }
 
 /** @beta */
-export class DaemonLock {
+export class DaemonLock implements LeadershipLease<DaemonLockRecord> {
   private operationQueue: Promise<void> = Promise.resolve();
 
   constructor(
@@ -156,6 +147,42 @@ export class DaemonLock {
       () => undefined,
     );
     return run;
+  }
+}
+
+/** @beta */
+export class LocalFileLeadershipStore implements LeadershipStore<
+  AcquireDaemonLockOptions,
+  string,
+  DaemonLockRecord,
+  DaemonLock
+> {
+  readonly kind = "local-file";
+
+  async acquire(options: AcquireDaemonLockOptions): Promise<AcquireLocalFileLeadershipResult> {
+    const now = options.now ?? new Date();
+    const record = daemonLockRecord(options.lockPath, options.identity, options.endpoint, now);
+    await fs.mkdir(path.dirname(options.lockPath), { recursive: true, mode: 0o700 });
+    return withDaemonLockMutation(options.lockPath, async () => {
+      const created = await writeExclusiveJsonFile(options.lockPath, record);
+      if (created) {
+        return { status: "acquired", lease: new DaemonLock(options.lockPath, record) };
+      }
+      const existing = await readDaemonLock(options.lockPath);
+      return {
+        status: "conflict",
+        record: existing,
+        stale: existing ? this.isStale(existing, now, options.staleAfterMs ?? 60_000) : true,
+      };
+    });
+  }
+
+  async read(lockPath: string): Promise<DaemonLockRecord | null> {
+    return readDaemonLock(lockPath);
+  }
+
+  isStale(record: DaemonLockRecord, now = new Date(), staleAfterMs = 60_000): boolean {
+    return daemonLockIsStale(record, now, staleAfterMs);
   }
 }
 
