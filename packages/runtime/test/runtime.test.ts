@@ -38,7 +38,7 @@ import type {
 import type { ClockPort, WorkerPoolSettings } from "@lorenz/domain";
 import type { AgentMcpEndpointLease } from "@lorenz/mcp";
 import type { AcquireResult, WorkerLease, WorkerOutcome, WorkerPool } from "@lorenz/worker-pool";
-import { assert, tempDir, writeExecutable } from "@lorenz/test-utils";
+import { assert, settle, tempDir, writeExecutable } from "@lorenz/test-utils";
 
 import {
   RUNTIME_EVENT_TYPES as RUNTIME_EVENT_TYPES_FROM_RUNTIME,
@@ -1771,6 +1771,110 @@ test("runtime keeps polling after a candidate fetch throws in the recurring loop
         (event) => event.type === "poll_error" && event.message.includes("tracker fetch failed"),
       ),
     );
+  } finally {
+    runtime.stop();
+  }
+});
+
+function pushWorkflowFixture(): WorkflowDefinition {
+  // A long poll interval isolates the push path: the recurring loop polls once then sleeps, so a
+  // second fetch within the test window can only come from a watch() nudge.
+  const settings = parseConfig({
+    tracker: {
+      kind: "linear",
+      api_key: "linear-token",
+      project_slug: "mono",
+      active_states: ["Todo", "In Progress"],
+      terminal_states: ["Done"],
+    },
+    polling: { interval_ms: 600_000 },
+    workspace: { root: "/tmp/lorenz-runtime-test" },
+  });
+  return { path: "/tmp/WORKFLOW.md", config: {}, promptTemplate: "x", settings };
+}
+
+test("a tracker push nudges an immediate poll between intervals", async () => {
+  let fetches = 0;
+  let captured: (() => void) | null = null;
+  const runtime = new LorenzRuntime(
+    runtimeOptions({
+      workflow: pushWorkflowFixture(),
+      client: {
+        fetchCandidateIssues: async () => {
+          fetches += 1;
+          return [];
+        },
+        fetchIssuesByIds: async () => [],
+        watch: (onChange) => {
+          captured = onChange;
+          return { close: () => {} };
+        },
+      },
+    }),
+  );
+
+  void runtime.start({ once: false });
+  try {
+    await waitFor(() => captured !== null && fetches >= 1, 1_000);
+    const before = fetches;
+    // Simulate a Slack Socket Mode event: the runtime must re-poll without waiting out the
+    // (10-minute) interval.
+    captured!();
+    await waitFor(() => fetches > before, 1_000);
+    const snapshot = runtime.snapshot();
+    assert.ok(snapshot.recentEvents.some((event) => event.type === "tracker_watch_started"));
+    assert.ok(snapshot.recentEvents.some((event) => event.type === "tracker_push"));
+  } finally {
+    runtime.stop();
+  }
+});
+
+test("the runtime closes the tracker change stream on stop", async () => {
+  let closed = false;
+  const runtime = new LorenzRuntime(
+    runtimeOptions({
+      workflow: pushWorkflowFixture(),
+      client: {
+        fetchCandidateIssues: async () => [],
+        fetchIssuesByIds: async () => [],
+        watch: () => ({
+          close: () => {
+            closed = true;
+          },
+        }),
+      },
+    }),
+  );
+
+  void runtime.start({ once: false });
+  try {
+    await waitFor(
+      () => runtime.snapshot().recentEvents.some((event) => event.type === "tracker_watch_started"),
+      1_000,
+    );
+  } finally {
+    runtime.stop();
+  }
+  await waitFor(() => closed, 1_000);
+});
+
+test("a tracker without watch() polls on the interval alone (no push events)", async () => {
+  const runtime = new LorenzRuntime(
+    runtimeOptions({
+      workflow: workflowFixture(),
+      client: {
+        fetchCandidateIssues: async () => [],
+        fetchIssuesByIds: async () => [],
+      },
+    }),
+  );
+
+  void runtime.start({ once: false });
+  try {
+    await waitFor(() => runtime.snapshot().poll.lastPollAt !== null, 1_000);
+    const snapshot = runtime.snapshot();
+    assert.ok(!snapshot.recentEvents.some((event) => event.type === "tracker_watch_started"));
+    assert.ok(!snapshot.recentEvents.some((event) => event.type === "tracker_push"));
   } finally {
     runtime.stop();
   }
@@ -3904,7 +4008,9 @@ test("worker pool: a reserving (in-acquire) slot is never stall-finished and rec
     await waitFor(() => orchestrator.snapshot().reserving.length === 1, 1_000);
 
     // Let the acquire window outlast the stall timeout, then run the reconciler.
-    await new Promise<void>((resolve) => setTimeout(resolve, 80));
+    // This asserts an absence (the reserving slot is NOT stall-finished), which
+    // cannot be polled for, so settle past the stall window before reconciling.
+    await settle(80);
     await runtime.pollOnce({ dryRun: true });
 
     // The reserving slot was NOT stall-finished: no run_stalled, no retry entry
@@ -4840,7 +4946,9 @@ test("runtime replays retry timer due while a poll is active", async () => {
 
     const dryPoll = runtime.pollOnce({ dryRun: true });
     await waitFor(() => candidateFetches === 2, 1_000);
-    await new Promise<void>((resolve) => setTimeout(resolve, 50));
+    // The second fetch is confirmed entered; settle briefly to be sure the poll
+    // has parked on the blocked fetch before we release it.
+    await settle(50);
 
     const unblockFetch = fetchControl.release;
     assert.ok(unblockFetch);

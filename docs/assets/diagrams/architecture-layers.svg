@@ -1,0 +1,107 @@
+<svg role="img" aria-labelledby="t-arch-layers d-arch-layers" viewBox="0 0 820 560" width="100%" style="max-width:820px;height:auto" xmlns="http://www.w3.org/2000/svg">
+  <title id="t-arch-layers">Lorenz layered architecture</title>
+  <desc id="d-arch-layers">Five horizontal layers stacked top to bottom: apps (composition roots and UIs), extensions, the backend-agnostic engine, the extension SDKs, and pure types with leaf logic. Dependencies point downward and are enforced by dependency-cruiser, so an engine package importing an extension fails CI.</desc>
+  <defs>
+    <marker id="arrow-arch-layers" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#475569"/>
+    </marker>
+    <style>
+      .ttl { font-family: ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; }
+      .mono { font-family: ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace; }
+    </style>
+  </defs>
+  <!-- framed panel -->
+  <rect x="1" y="1" width="818" height="558" rx="14" fill="#FBFCFE" stroke="#E2E8F0" stroke-width="1.5"/>
+  <!-- diagram title -->
+  <text x="24" y="34" class="ttl" font-size="15" font-weight="600" fill="#0F172A">Lorenz layered architecture</text>
+  <!-- ===================== Layer 1: apps ===================== -->
+  <rect x="24" y="52" width="700" height="86" rx="10" fill="#FEF3C7" stroke="#F59E0B" stroke-width="1.5"/>
+  <text x="40" y="76" class="ttl" font-size="13" font-weight="600" fill="#78350F">apps</text>
+  <text x="40" y="93" class="ttl" font-size="11" fill="#475569">Composition roots &amp; UIs</text>
+  <g class="mono" font-size="12" fill="#78350F" text-anchor="middle">
+    <rect x="320" y="62" width="118" height="28" rx="7" fill="#FFFFFF" stroke="#F59E0B" stroke-width="1"/>
+    <text x="379" y="76" dominant-baseline="middle">apps/cli</text>
+    <rect x="448" y="62" width="178" height="28" rx="7" fill="#FFFFFF" stroke="#F59E0B" stroke-width="1"/>
+    <text x="537" y="76" dominant-baseline="middle">apps/web</text>
+    <rect x="320" y="98" width="306" height="28" rx="7" fill="#FFFFFF" stroke="#F59E0B" stroke-width="1"/>
+    <text x="473" y="112" dominant-baseline="middle">apps/traceviz</text>
+  </g>
+  <!-- ===================== Layer 2: ext ===================== -->
+  <rect x="24" y="156" width="700" height="86" rx="10" fill="#DCFCE7" stroke="#22C55E" stroke-width="1.5"/>
+  <text x="40" y="180" class="ttl" font-size="13" font-weight="600" fill="#14532D">Extensions</text>
+  <text x="40" y="197" class="ttl" font-size="11" fill="#475569">trackers + worker drivers</text>
+  <g class="mono" font-size="12" fill="#14532D" text-anchor="middle">
+    <rect x="246" y="164" width="68" height="28" rx="7" fill="#FFFFFF" stroke="#22C55E" stroke-width="1"/>
+    <text x="280" y="178" dominant-baseline="middle">linear</text>
+    <rect x="322" y="164" width="56" height="28" rx="7" fill="#FFFFFF" stroke="#22C55E" stroke-width="1"/>
+    <text x="350" y="178" dominant-baseline="middle">jira</text>
+    <rect x="386" y="164" width="62" height="28" rx="7" fill="#FFFFFF" stroke="#22C55E" stroke-width="1"/>
+    <text x="417" y="178" dominant-baseline="middle">local</text>
+    <rect x="456" y="164" width="64" height="28" rx="7" fill="#FFFFFF" stroke="#22C55E" stroke-width="1"/>
+    <text x="488" y="178" dominant-baseline="middle">slack</text>
+    <rect x="528" y="164" width="98" height="28" rx="7" fill="#FFFFFF" stroke="#22C55E" stroke-width="1"/>
+    <text x="577" y="178" dominant-baseline="middle">memory</text>
+    <rect x="322" y="200" width="142" height="28" rx="7" fill="#FFFFFF" stroke="#22C55E" stroke-width="1"/>
+    <text x="393" y="214" dominant-baseline="middle">docker-worker</text>
+    <rect x="472" y="200" width="154" height="28" rx="7" fill="#FFFFFF" stroke="#22C55E" stroke-width="1"/>
+    <text x="549" y="214" dominant-baseline="middle">static-worker</text>
+  </g>
+  <!-- ===================== Layer 3: engine ===================== -->
+  <rect x="24" y="260" width="700" height="92" rx="10" fill="#E0E7FF" stroke="#6366F1" stroke-width="1.5"/>
+  <text x="40" y="284" class="ttl" font-size="13" font-weight="600" fill="#312E81">Engine</text>
+  <text x="40" y="301" class="ttl" font-size="11" fill="#475569">backend-agnostic</text>
+  <g class="mono" font-size="12" fill="#312E81" text-anchor="middle">
+    <rect x="240" y="268" width="62" height="26" rx="7" fill="#FFFFFF" stroke="#6366F1" stroke-width="1"/>
+    <text x="271" y="281" dominant-baseline="middle">config</text>
+    <rect x="310" y="268" width="78" height="26" rx="7" fill="#FFFFFF" stroke="#6366F1" stroke-width="1"/>
+    <text x="349" y="281" dominant-baseline="middle">workflow</text>
+    <rect x="396" y="268" width="72" height="26" rx="7" fill="#FFFFFF" stroke="#6366F1" stroke-width="1"/>
+    <text x="432" y="281" dominant-baseline="middle">runtime</text>
+    <rect x="476" y="268" width="98" height="26" rx="7" fill="#FFFFFF" stroke="#6366F1" stroke-width="1"/>
+    <text x="525" y="281" dominant-baseline="middle">orchestrator</text>
+    <rect x="582" y="268" width="74" height="26" rx="7" fill="#FFFFFF" stroke="#6366F1" stroke-width="1"/>
+    <text x="619" y="281" dominant-baseline="middle">dispatch</text>
+    <rect x="240" y="300" width="106" height="26" rx="7" fill="#FFFFFF" stroke="#6366F1" stroke-width="1"/>
+    <text x="293" y="313" dominant-baseline="middle">agent-runner</text>
+    <rect x="354" y="300" width="52" height="26" rx="7" fill="#FFFFFF" stroke="#6366F1" stroke-width="1"/>
+    <text x="380" y="313" dominant-baseline="middle">acp</text>
+    <rect x="414" y="300" width="50" height="26" rx="7" fill="#FFFFFF" stroke="#6366F1" stroke-width="1"/>
+    <text x="439" y="313" dominant-baseline="middle">mcp</text>
+    <rect x="472" y="300" width="98" height="26" rx="7" fill="#FFFFFF" stroke="#6366F1" stroke-width="1"/>
+    <text x="521" y="313" dominant-baseline="middle">worker-pool</text>
+    <rect x="578" y="300" width="58" height="26" rx="7" fill="#FFFFFF" stroke="#6366F1" stroke-width="1"/>
+    <text x="607" y="313" dominant-baseline="middle">server</text>
+    <rect x="644" y="300" width="48" height="26" rx="7" fill="#FFFFFF" stroke="#6366F1" stroke-width="1"/>
+    <text x="668" y="313" dominant-baseline="middle">tui</text>
+  </g>
+  <!-- ===================== Layer 4: sdk ===================== -->
+  <rect x="24" y="370" width="700" height="86" rx="10" fill="#EDE9FE" stroke="#8B5CF6" stroke-width="1.5"/>
+  <text x="40" y="394" class="ttl" font-size="13" font-weight="600" fill="#4C1D95">Extension SDKs</text>
+  <text x="40" y="411" class="ttl" font-size="11" fill="#475569">contracts + registries</text>
+  <g class="mono" font-size="12" fill="#4C1D95" text-anchor="middle">
+    <rect x="290" y="404" width="100" height="28" rx="7" fill="#FFFFFF" stroke="#8B5CF6" stroke-width="1"/>
+    <text x="340" y="418" dominant-baseline="middle">tracker-sdk</text>
+    <rect x="400" y="404" width="84" height="28" rx="7" fill="#FFFFFF" stroke="#8B5CF6" stroke-width="1"/>
+    <text x="442" y="418" dominant-baseline="middle">tool-sdk</text>
+    <rect x="494" y="404" width="90" height="28" rx="7" fill="#FFFFFF" stroke="#8B5CF6" stroke-width="1"/>
+    <text x="539" y="418" dominant-baseline="middle">agent-sdk</text>
+    <rect x="594" y="404" width="96" height="28" rx="7" fill="#FFFFFF" stroke="#8B5CF6" stroke-width="1"/>
+    <text x="642" y="418" dominant-baseline="middle">worker-sdk</text>
+  </g>
+  <!-- ===================== Layer 5: leaf ===================== -->
+  <rect x="24" y="474" width="700" height="62" rx="10" fill="#F1F5F9" stroke="#94A3B8" stroke-width="1.5"/>
+  <text x="40" y="498" class="ttl" font-size="13" font-weight="600" fill="#334155">Pure types &amp; leaf logic</text>
+  <g class="mono" font-size="12" fill="#334155" text-anchor="middle">
+    <rect x="396" y="491" width="74" height="28" rx="7" fill="#FFFFFF" stroke="#94A3B8" stroke-width="1"/>
+    <text x="433" y="505" dominant-baseline="middle">domain</text>
+    <rect x="480" y="491" width="60" height="28" rx="7" fill="#FFFFFF" stroke="#94A3B8" stroke-width="1"/>
+    <text x="510" y="505" dominant-baseline="middle">issue</text>
+    <rect x="550" y="491" width="76" height="28" rx="7" fill="#FFFFFF" stroke="#94A3B8" stroke-width="1"/>
+    <text x="588" y="505" dominant-baseline="middle">policies</text>
+  </g>
+  <!-- ===================== dependency direction arrow (right edge) ===================== -->
+  <line x1="760" y1="64" x2="760" y2="524" stroke="#475569" stroke-width="1.5" marker-end="url(#arrow-arch-layers)"/>
+  <text x="769" y="300" class="ttl" font-size="11" font-weight="500" fill="#475569" transform="rotate(90 769 300)" text-anchor="middle">dependencies point down (enforced by dependency-cruiser)</text>
+  <!-- ===================== CI note (bottom-left of leaf band) ===================== -->
+  <text x="40" y="517" class="ttl" font-size="10.5" font-weight="500" fill="#7F1D1D">an engine package importing an extension fails CI</text>
+</svg>

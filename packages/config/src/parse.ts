@@ -29,6 +29,7 @@ import type { ToolRegistry } from "@lorenz/tool-sdk";
 import { defaultTrackerRegistry, type TrackerRegistry } from "@lorenz/tracker-sdk";
 
 import { hooksAliases, normalizeAliases } from "./aliases.js";
+import { warnConfigDeprecations } from "./deprecations.js";
 import { defaultAgentRecords, defaultSettings, type DefaultSettingsOptions } from "./defaults.js";
 import { configErrorMessage } from "./errors.js";
 import { joinPath, nonEmptyString } from "./leaf-utils.js";
@@ -164,12 +165,28 @@ export function settingsForIssueState(settings: Settings, state: string): Settin
   return merged;
 }
 
+/**
+ * Opt-in deprecation-warning surface for {@link validateDispatchConfig}. Callers that hold the
+ * raw front matter (the daemon's first load, an embedder validating a config) pass it to have
+ * deprecated keys reported at validation time; the per-poll runtime path omits it so a reload
+ * loop never re-warns.
+ */
+export interface ConfigDeprecationContext {
+  rawConfig: Record<string, unknown>;
+  warn: (message: string) => void;
+}
+
 export function validateDispatchConfig(
   settings: Settings,
   trackers: TrackerRegistry = defaultTrackerRegistry,
   executors: AgentExecutorRegistry = defaultAgentExecutorRegistry,
   tools?: ToolRegistry,
+  deprecations?: ConfigDeprecationContext,
 ): void {
+  // Report deprecations before the throwing validation below so operators still see the
+  // recommendation when a config both uses a deprecated key and fails to validate.
+  if (deprecations) warnConfigDeprecations(deprecations.rawConfig, deprecations.warn);
+
   const provider = trackers.require(settings.tracker.kind);
   provider.validateDispatch?.(settings);
 

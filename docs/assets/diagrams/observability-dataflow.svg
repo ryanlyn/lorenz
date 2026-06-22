@@ -1,0 +1,103 @@
+<svg role="img" aria-labelledby="t-observability-dataflow d-observability-dataflow" viewBox="0 0 920 470" width="100%" style="max-width:920px;height:auto" xmlns="http://www.w3.org/2000/svg" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif">
+  <title id="t-observability-dataflow">Observability data flow</title>
+  <desc id="d-observability-dataflow">The LorenzRuntime exposes an immutable RuntimeSnapshot (running agents, retry/backoff, dispatch blocks, run history, usage, rate limits, recent events). The ProjectionActor keeps bounded recentEvents (last 20) and runHistory (last 50) slices, which the presenter maps to snake_case payloads. Three consumers read it: the @lorenz/server Hono app serves the SPA plus /api/v1 REST JSON and the /ws ops_state WebSocket push (both rendered in apps/web), while @lorenz/tui formatDashboard renders the same snapshot as an Ink terminal dashboard.</desc><rect x="0.75" y="0.75" width="918.50" height="468.50" rx="14" fill="#FFFFFF" stroke="#E2E8F0" stroke-width="1.5"/>
+  <defs>
+    <marker id="arrow-observability-dataflow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#475569"/>
+    </marker>
+    <marker id="arrow-accent-observability-dataflow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#14B8A6"/>
+    </marker>
+  </defs>
+  <!-- title -->
+  <text x="20" y="30" font-size="15" font-weight="600" fill="#0F172A">Observability data flow</text>
+  <!-- ===================== Source: LorenzRuntime -> RuntimeSnapshot ===================== -->
+  <g>
+    <rect x="20" y="120" width="196" height="172" rx="10" fill="#E0E7FF" stroke="#6366F1" stroke-width="1.5"/>
+    <text x="118" y="146" text-anchor="middle" font-size="13" font-weight="600" fill="#312E81">LorenzRuntime</text>
+    <text x="118" y="166" text-anchor="middle" font-size="12" font-weight="600" fill="#4C1D95" font-family="ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace">RuntimeSnapshot</text>
+    <text x="118" y="190" text-anchor="middle" font-size="11" fill="#475569">running, retry/backoff</text>
+    <text x="118" y="206" text-anchor="middle" font-size="11" fill="#475569">dispatch blocks</text>
+    <text x="118" y="222" text-anchor="middle" font-size="11" fill="#475569">run history, usage</text>
+    <text x="118" y="238" text-anchor="middle" font-size="11" fill="#475569">rate limits</text>
+    <text x="118" y="254" text-anchor="middle" font-size="11" fill="#475569">recent events</text>
+    <text x="118" y="276" text-anchor="middle" font-size="11" fill="#475569" font-style="italic">immutable snapshot</text>
+  </g>
+  <!-- ===================== ProjectionActor ===================== -->
+  <g>
+    <rect x="262" y="138" width="174" height="136" rx="10" fill="#E0E7FF" stroke="#6366F1" stroke-width="1.5"/>
+    <text x="349" y="166" text-anchor="middle" font-size="13" font-weight="600" fill="#312E81">ProjectionActor</text>
+    <text x="349" y="183" text-anchor="middle" font-size="11" fill="#475569">bounded slices</text>
+    <text x="349" y="210" text-anchor="middle" font-size="12" font-weight="600" fill="#4C1D95" font-family="ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace">recentEvents</text>
+    <text x="349" y="226" text-anchor="middle" font-size="11" fill="#475569">last 20</text>
+    <text x="349" y="248" text-anchor="middle" font-size="12" font-weight="600" fill="#4C1D95" font-family="ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace">runHistory</text>
+    <text x="349" y="264" text-anchor="middle" font-size="11" fill="#475569">last 50</text>
+  </g>
+  <!-- ===================== @lorenz/server (Hono) panel ===================== -->
+  <g>
+    <rect x="482" y="64" width="208" height="296" rx="12" fill="#FBFCFE" stroke="#E2E8F0" stroke-width="1.5"/>
+    <text x="586" y="86" text-anchor="middle" font-size="13" font-weight="600" fill="#0F172A">@lorenz/server (Hono)</text>
+    <text x="586" y="102" text-anchor="middle" font-size="11" fill="#475569">startObservabilityServer</text>
+    <!-- presenter inside server -->
+    <g>
+      <rect x="502" y="118" width="168" height="50" rx="10" fill="#E0E7FF" stroke="#6366F1" stroke-width="1.5"/>
+      <text x="586" y="138" text-anchor="middle" font-size="12" font-weight="600" fill="#4C1D95" font-family="ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace">presenter</text>
+      <text x="586" y="156" text-anchor="middle" font-size="11" fill="#475569">snapshot -&gt; snake_case</text>
+    </g>
+    <!-- route list -->
+    <g>
+      <rect x="502" y="184" width="168" height="156" rx="10" fill="#FEF3C7" stroke="#F59E0B" stroke-width="1.5"/>
+      <text x="586" y="204" text-anchor="middle" font-size="11" font-weight="600" fill="#78350F">route groups</text>
+      <text x="586" y="227" text-anchor="middle" font-size="12" fill="#78350F" font-family="ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace">/ (SPA)</text>
+      <text x="586" y="250" text-anchor="middle" font-size="12" fill="#78350F" font-family="ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace">/api/v1/*</text>
+      <text x="586" y="273" text-anchor="middle" font-size="12" fill="#78350F" font-family="ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace">/ws</text>
+      <text x="586" y="296" text-anchor="middle" font-size="12" fill="#78350F" font-family="ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace">/mcp</text>
+      <text x="586" y="324" text-anchor="middle" font-size="11" fill="#475569">serves @lorenz/dashboard</text>
+    </g>
+  </g>
+  <!-- ===================== Consumers (right column) ===================== -->
+  <!-- REST -->
+  <g>
+    <rect x="724" y="78" width="176" height="62" rx="10" fill="#FEF3C7" stroke="#F59E0B" stroke-width="1.5"/>
+    <text x="812" y="102" text-anchor="middle" font-size="12" font-weight="600" fill="#78350F" font-family="ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace">/api/v1/* JSON</text>
+    <text x="812" y="122" text-anchor="middle" font-size="11" fill="#78350F">REST (web)</text>
+  </g>
+  <!-- WS -->
+  <g>
+    <rect x="724" y="160" width="176" height="62" rx="10" fill="#CCFBF1" stroke="#14B8A6" stroke-width="2"/>
+    <text x="812" y="184" text-anchor="middle" font-size="12" font-weight="600" fill="#134E4A" font-family="ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace">/ws ops_state</text>
+    <text x="812" y="204" text-anchor="middle" font-size="11" fill="#134E4A">WebSocket push (web)</text>
+  </g>
+  <!-- TUI -->
+  <g>
+    <rect x="724" y="278" width="176" height="68" rx="10" fill="#DCFCE7" stroke="#22C55E" stroke-width="1.5"/>
+    <text x="812" y="302" text-anchor="middle" font-size="12" font-weight="600" fill="#14532D" font-family="ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace">@lorenz/tui</text>
+    <text x="812" y="320" text-anchor="middle" font-size="11" fill="#14532D" font-family="ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace">formatDashboard</text>
+    <text x="812" y="338" text-anchor="middle" font-size="11" fill="#475569">Ink TUI (terminal)</text>
+  </g>
+  <!-- ===================== Edges ===================== -->
+  <!-- Runtime -> ProjectionActor -->
+  <path d="M216,206 L256,206" stroke="#475569" stroke-width="1.5" fill="none" marker-end="url(#arrow-observability-dataflow)"/>
+  <!-- ProjectionActor -> presenter (into server) -->
+  <path d="M436,168 C458,158 462,150 476,144" stroke="#475569" stroke-width="1.5" fill="none" marker-end="url(#arrow-observability-dataflow)"/>
+  <!-- ProjectionActor -> TUI (snapshot direct to terminal) -->
+  <path d="M349,274 L349,392 L718,392 L718,330" stroke="#475569" stroke-width="1.5" fill="none" marker-end="url(#arrow-observability-dataflow)"/>
+  <rect x="470" y="384" width="100" height="18" rx="4" fill="#FFFFFF" stroke="#E2E8F0"/>
+  <text x="520" y="397" text-anchor="middle" font-size="11" font-weight="500" fill="#475569">snapshot()</text>
+  <!-- presenter -> REST -->
+  <path d="M670,134 C700,124 700,114 718,109" stroke="#475569" stroke-width="1.5" fill="none" marker-end="url(#arrow-observability-dataflow)"/>
+  <!-- presenter -> WS (accent / live push) -->
+  <path d="M670,150 C700,166 700,180 718,189" stroke="#14B8A6" stroke-width="2" fill="none" marker-end="url(#arrow-accent-observability-dataflow)"/>
+  <!-- ===================== Legend ===================== -->
+  <g>
+    <rect x="20" y="412" width="416" height="42" rx="8" fill="#FBFCFE" stroke="#E2E8F0" stroke-width="1"/>
+    <rect x="34" y="425" width="16" height="14" rx="3" fill="#E0E7FF" stroke="#6366F1" stroke-width="1.5"/>
+    <text x="58" y="436" font-size="11" fill="#334155">engine</text>
+    <rect x="108" y="425" width="16" height="14" rx="3" fill="#FEF3C7" stroke="#F59E0B" stroke-width="1.5"/>
+    <text x="132" y="436" font-size="11" fill="#334155">web / SPA</text>
+    <rect x="200" y="425" width="16" height="14" rx="3" fill="#DCFCE7" stroke="#22C55E" stroke-width="1.5"/>
+    <text x="224" y="436" font-size="11" fill="#334155">terminal</text>
+    <line x1="296" y1="432" x2="324" y2="432" stroke="#14B8A6" stroke-width="2"/>
+    <text x="332" y="436" font-size="11" fill="#334155">live push</text>
+  </g>
+</svg>

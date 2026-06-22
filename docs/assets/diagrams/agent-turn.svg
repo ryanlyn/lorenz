@@ -1,0 +1,171 @@
+<svg role="img" aria-labelledby="t-agent-turn d-agent-turn" viewBox="0 0 920 560" width="100%" style="max-width:920px;height:auto" xmlns="http://www.w3.org/2000/svg" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif">
+  <title id="t-agent-turn">One ACP agent turn</title>
+  <desc id="d-agent-turn">Sequence of a single ACP turn: AgentRunner.runTurn calls the AcpExecutor, which sends connection.prompt to the bridge subprocess. The bridge streams session_notification events (each resetting the stall timer) and may call tracker MCP tools, then returns PromptResponse.stopReason mapped to turn_completed, turn_cancelled, or turn_failed. Two timers on the Executor lifeline, turnTimeoutMs (hard) and stallTimeoutMs (inactivity), both fire cancelTurn which calls connection.cancel.</desc><rect x="0.75" y="0.75" width="918.50" height="558.50" rx="14" fill="#FFFFFF" stroke="#E2E8F0" stroke-width="1.5"/>
+  <defs>
+    <marker id="arrow-agent-turn" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#475569"/>
+    </marker>
+    <marker id="arrow-accent-agent-turn" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#14B8A6"/>
+    </marker>
+    <marker id="arrow-danger-agent-turn" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#EF4444"/>
+    </marker>
+  </defs>
+  <!-- title -->
+  <text x="24" y="30" font-size="15" font-weight="600" fill="#0F172A">One ACP agent turn</text>
+  <!-- ===== Actor headers ===== -->
+  <!-- AgentRunner: engine -->
+  <g>
+    <rect x="24" y="48" width="158" height="40" rx="10" fill="#E0E7FF" stroke="#6366F1" stroke-width="1.5"/>
+    <text x="103" y="68" text-anchor="middle" font-size="13" font-weight="600" fill="#312E81">AgentRunner</text>
+    <text x="103" y="81" text-anchor="middle" font-size="11" fill="#475569">run loop</text>
+  </g>
+  <!-- AcpExecutor: engine -->
+  <g>
+    <rect x="254" y="48" width="158" height="40" rx="10" fill="#E0E7FF" stroke="#6366F1" stroke-width="1.5"/>
+    <text x="333" y="68" text-anchor="middle" font-size="13" font-weight="600" fill="#312E81">AcpExecutor</text>
+    <text x="333" y="81" text-anchor="middle" font-size="11" fill="#475569">executor: "acp"</text>
+  </g>
+  <!-- Bridge subprocess: external -->
+  <g>
+    <rect x="500" y="48" width="190" height="40" rx="10" fill="#FFFFFF" stroke="#94A3B8" stroke-width="1.5" stroke-dasharray="4 3"/>
+    <text x="595" y="66" text-anchor="middle" font-size="13" font-weight="600" fill="#334155">Bridge subprocess</text>
+    <text x="595" y="80" text-anchor="middle" font-size="10.5" fill="#475569" font-family="ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace">codex-acp / claude-agent-acp</text>
+  </g>
+  <!-- Tracker / MCP: ext -->
+  <g>
+    <rect x="754" y="48" width="142" height="40" rx="10" fill="#DCFCE7" stroke="#22C55E" stroke-width="1.5"/>
+    <text x="825" y="68" text-anchor="middle" font-size="13" font-weight="600" fill="#14532D">Tracker / MCP</text>
+    <text x="825" y="81" text-anchor="middle" font-size="11" fill="#475569" font-family="ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace">tracker_*</text>
+  </g>
+  <!-- ===== Lifelines ===== -->
+  <line x1="103" y1="88" x2="103" y2="498" stroke="#CBD5E1" stroke-width="1.25" stroke-dasharray="3 4"/>
+  <line x1="333" y1="88" x2="333" y2="498" stroke="#CBD5E1" stroke-width="1.25" stroke-dasharray="3 4"/>
+  <line x1="595" y1="88" x2="595" y2="498" stroke="#CBD5E1" stroke-width="1.25" stroke-dasharray="3 4"/>
+  <line x1="825" y1="88" x2="825" y2="498" stroke="#CBD5E1" stroke-width="1.25" stroke-dasharray="3 4"/>
+  <!-- ===== Timer overlay band on Executor lifeline ===== -->
+  <rect x="319" y="146" width="28" height="296" rx="6" fill="#EDE9FE" stroke="#8B5CF6" stroke-width="1.25"/>
+  <!-- hard turn timer label -->
+  <g>
+    <rect x="194" y="150" width="120" height="34" rx="6" fill="#FEF3C7" stroke="#F59E0B" stroke-width="1.25"/>
+    <text x="254" y="164" text-anchor="middle" font-size="11" font-weight="600" fill="#78350F" font-family="ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace">turnTimeoutMs</text>
+    <text x="254" y="177" text-anchor="middle" font-size="10" fill="#78350F">hard timer (3.6e6ms)</text>
+  </g>
+  <!-- stall timer label -->
+  <g>
+    <rect x="194" y="190" width="120" height="34" rx="6" fill="#FEF3C7" stroke="#F59E0B" stroke-width="1.25"/>
+    <text x="254" y="204" text-anchor="middle" font-size="11" font-weight="600" fill="#78350F" font-family="ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace">stallTimeoutMs</text>
+    <text x="254" y="217" text-anchor="middle" font-size="10" fill="#78350F">inactivity (3e5ms)</text>
+  </g>
+  <!-- ===== Step 1: AgentRunner.runTurn -> Executor.runTurn ===== -->
+  <line x1="103" y1="118" x2="329" y2="118" stroke="#14B8A6" stroke-width="2" fill="none" marker-end="url(#arrow-accent-agent-turn)"/>
+  <g>
+    <rect x="142" y="106" width="148" height="17" rx="4" fill="#FFFFFF" stroke="#E2E8F0"/>
+    <text x="216" y="115" text-anchor="middle" font-size="11" font-weight="500" fill="#134E4A" font-family="ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace">runTurn(session, prompt)</text>
+  </g>
+  <!-- ===== Step 2: Executor -> Bridge connection.prompt ===== -->
+  <line x1="347" y1="148" x2="591" y2="148" stroke="#14B8A6" stroke-width="2" fill="none" marker-end="url(#arrow-accent-agent-turn)"/>
+  <g>
+    <rect x="388" y="136" width="162" height="17" rx="4" fill="#FFFFFF" stroke="#E2E8F0"/>
+    <text x="469" y="145" text-anchor="middle" font-size="11" font-weight="500" fill="#134E4A" font-family="ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace">connection.prompt({...})</text>
+  </g>
+  <!-- ===== Loop band: streamed notifications ===== -->
+  <rect x="356" y="206" width="500" height="148" rx="8" fill="none" stroke="#94A3B8" stroke-width="1" stroke-dasharray="5 3"/>
+  <g>
+    <rect x="362" y="200" width="218" height="17" rx="4" fill="#F1F5F9" stroke="#94A3B8"/>
+    <text x="372" y="209" font-size="10.5" font-weight="600" fill="#334155">loop  while turn in progress</text>
+  </g>
+  <!-- Step 3: Bridge -> Executor session_notification (resets stall) -->
+  <line x1="591" y1="232" x2="349" y2="232" stroke="#475569" stroke-width="1.5" fill="none" marker-end="url(#arrow-agent-turn)"/>
+  <g>
+    <rect x="372" y="220" width="200" height="17" rx="4" fill="#FFFFFF" stroke="#E2E8F0"/>
+    <text x="472" y="229" text-anchor="middle" font-size="11" font-weight="500" fill="#0F172A" font-family="ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace">session_notification</text>
+  </g>
+  <!-- reset annotation pointing at timer band -->
+  <line x1="362" y1="246" x2="349" y2="246" stroke="#8B5CF6" stroke-width="1.25" fill="none" marker-end="url(#arrow-agent-turn)"/>
+  <text x="368" y="250" font-size="10" font-style="italic" fill="#6D28D9">resets stallTimer</text>
+  <!-- Step 4: Bridge -> Tracker MCP tracker_* tool call -->
+  <line x1="599" y1="282" x2="821" y2="282" stroke="#475569" stroke-width="1.5" fill="none" marker-end="url(#arrow-agent-turn)"/>
+  <g>
+    <rect x="624" y="270" width="172" height="17" rx="4" fill="#FFFFFF" stroke="#E2E8F0"/>
+    <text x="710" y="279" text-anchor="middle" font-size="11" font-weight="500" fill="#0F172A" font-family="ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace">tracker_* tool call</text>
+  </g>
+  <!-- Tracker -> Bridge result -->
+  <line x1="821" y1="312" x2="599" y2="312" stroke="#475569" stroke-width="1.5" fill="none" stroke-dasharray="5 3" marker-end="url(#arrow-agent-turn)"/>
+  <g>
+    <rect x="688" y="300" width="76" height="17" rx="4" fill="#FFFFFF" stroke="#E2E8F0"/>
+    <text x="726" y="309" text-anchor="middle" font-size="11" font-weight="500" fill="#475569">result</text>
+  </g>
+  <text x="372" y="340" font-size="10.5" font-style="italic" fill="#475569">sessionUpdate: "tool_call" | "usage_update" stream until done</text>
+  <!-- ===== Step 5: Bridge -> Executor PromptResponse.stopReason ===== -->
+  <line x1="591" y1="378" x2="349" y2="378" stroke="#475569" stroke-width="1.5" fill="none" marker-end="url(#arrow-agent-turn)"/>
+  <g>
+    <rect x="368" y="366" width="208" height="17" rx="4" fill="#FFFFFF" stroke="#E2E8F0"/>
+    <text x="472" y="375" text-anchor="middle" font-size="11" font-weight="500" fill="#0F172A" font-family="ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace">PromptResponse.stopReason</text>
+  </g>
+  <!-- ===== Outcome boxes (actionForStopReason) ===== -->
+  <text x="24" y="416" font-size="11" font-weight="600" fill="#475569">actionForStopReason →</text>
+  <g>
+    <rect x="172" y="404" width="148" height="34" rx="8" fill="#CCFBF1" stroke="#14B8A6" stroke-width="1.5"/>
+    <text x="246" y="418" text-anchor="middle" font-size="11.5" font-weight="600" fill="#134E4A" font-family="ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace">turn_completed</text>
+    <text x="246" y="431" text-anchor="middle" font-size="9.5" fill="#134E4A">continue → resolve</text>
+  </g>
+  <g>
+    <rect x="328" y="404" width="146" height="34" rx="8" fill="#FEE2E2" stroke="#EF4444" stroke-width="1.5"/>
+    <text x="401" y="418" text-anchor="middle" font-size="11.5" font-weight="600" fill="#7F1D1D" font-family="ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace">turn_cancelled</text>
+    <text x="401" y="431" text-anchor="middle" font-size="9.5" fill="#7F1D1D">cancel → reject</text>
+  </g>
+  <g>
+    <rect x="482" y="404" width="138" height="34" rx="8" fill="#FEE2E2" stroke="#EF4444" stroke-width="1.5"/>
+    <text x="551" y="418" text-anchor="middle" font-size="11.5" font-weight="600" fill="#7F1D1D" font-family="ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace">turn_failed</text>
+    <text x="551" y="431" text-anchor="middle" font-size="9.5" fill="#7F1D1D">else → reject</text>
+  </g>
+  <!-- ===== Timeout path: timers -> cancelTurn -> connection.cancel ===== -->
+  <!-- timers fire into a cancelTurn node -->
+  <g>
+    <rect x="640" y="404" width="118" height="34" rx="8" fill="#FEE2E2" stroke="#EF4444" stroke-width="1.5"/>
+    <text x="699" y="418" text-anchor="middle" font-size="11.5" font-weight="600" fill="#7F1D1D" font-family="ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace">cancelTurn()</text>
+    <text x="699" y="431" text-anchor="middle" font-size="9.5" fill="#7F1D1D">on timer fire</text>
+  </g>
+  <g>
+    <rect x="766" y="404" width="130" height="34" rx="8" fill="#FFFFFF" stroke="#94A3B8" stroke-width="1.5" stroke-dasharray="4 3"/>
+    <text x="831" y="418" text-anchor="middle" font-size="11" font-weight="600" fill="#334155" font-family="ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace">connection.cancel</text>
+    <text x="831" y="431" text-anchor="middle" font-size="9.5" fill="#334155">{ sessionId }</text>
+  </g>
+  <!-- timer band -> cancelTurn -->
+  <path d="M333 442 L333 458 L699 458 L699 440" stroke="#EF4444" stroke-width="1.5" fill="none" marker-end="url(#arrow-danger-agent-turn)"/>
+  <g>
+    <rect x="430" y="450" width="186" height="16" rx="4" fill="#FFFFFF" stroke="#E2E8F0"/>
+    <text x="523" y="459" text-anchor="middle" font-size="10" font-weight="500" fill="#7F1D1D">either timer fires → cancelTurn</text>
+  </g>
+  <!-- cancelTurn -> connection.cancel -->
+  <line x1="758" y1="421" x2="762" y2="421" stroke="#EF4444" stroke-width="1.5" fill="none" marker-end="url(#arrow-danger-agent-turn)"/>
+  <!-- ===== Legend ===== -->
+  <g>
+    <rect x="24" y="500" width="872" height="44" rx="8" fill="#FBFCFE" stroke="#E2E8F0" stroke-width="1"/>
+    <!-- engine -->
+    <rect x="38" y="512" width="20" height="13" rx="3" fill="#E0E7FF" stroke="#6366F1"/>
+    <text x="64" y="522" font-size="10.5" fill="#334155">engine (runner / executor)</text>
+    <!-- ext -->
+    <rect x="222" y="512" width="20" height="13" rx="3" fill="#DCFCE7" stroke="#22C55E"/>
+    <text x="248" y="522" font-size="10.5" fill="#334155">extension (tracker MCP)</text>
+    <!-- external -->
+    <rect x="402" y="512" width="20" height="13" rx="3" fill="#FFFFFF" stroke="#94A3B8" stroke-dasharray="4 3"/>
+    <text x="428" y="522" font-size="10.5" fill="#334155">external (bridge subprocess)</text>
+    <!-- timer -->
+    <rect x="598" y="512" width="20" height="13" rx="3" fill="#EDE9FE" stroke="#8B5CF6"/>
+    <text x="624" y="522" font-size="10.5" fill="#334155">timer overlay</text>
+    <!-- happy edge -->
+    <line x1="712" y1="519" x2="736" y2="519" stroke="#14B8A6" stroke-width="2"/>
+    <text x="742" y="522" font-size="10.5" fill="#334155">happy path</text>
+    <!-- danger edge -->
+    <line x1="822" y1="519" x2="846" y2="519" stroke="#EF4444" stroke-width="1.5"/>
+    <text x="852" y="522" font-size="10.5" fill="#334155">cancel</text>
+    <!-- second row -->
+    <line x1="38" y1="535" x2="62" y2="535" stroke="#475569" stroke-width="1.5"/>
+    <text x="68" y="538" font-size="10.5" fill="#334155">call / notification</text>
+    <line x1="196" y1="535" x2="220" y2="535" stroke="#475569" stroke-width="1.5" stroke-dasharray="5 3"/>
+    <text x="226" y="538" font-size="10.5" fill="#334155">return / result</text>
+  </g>
+</svg>

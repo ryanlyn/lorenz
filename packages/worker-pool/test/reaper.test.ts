@@ -1,8 +1,8 @@
-import { beforeEach, test } from "vitest";
+import { beforeEach, test, vi } from "vitest";
 import type { WorkerPoolSettings } from "@lorenz/domain";
 import { withDerivedMaxInFlight } from "@lorenz/domain";
 import type { ClockPort, TimerHandle } from "@lorenz/domain";
-import { assert } from "@lorenz/test-utils";
+import { assert, settle } from "@lorenz/test-utils";
 import { WorkerDriverRegistry, FakeWorkerDriver } from "@lorenz/worker-sdk";
 import type { WorkerDriver } from "@lorenz/worker-sdk";
 
@@ -244,7 +244,11 @@ test("LEASED past ttl is flagged markedForDestroy, NOT yanked, recycled when inF
   // Advance past ttl and let a reaper tick fire. The worker is LEASED so it is only
   // flagged, never destroyed mid-run.
   advance(2_000);
-  await new Promise<void>((resolve) => setTimeout(resolve, 40));
+  // Poll for the reaper tick to flag the LEASED worker for destroy.
+  await vi.waitFor(() => {
+    const row = pool.snapshot().workers.find((b) => b.workerId === leased.lease.workerId);
+    assert.equal(row?.markedForDestroy, true);
+  });
 
   let snap = pool.snapshot();
   assert.equal(snap.total, 1);
@@ -362,7 +366,9 @@ test("LIVE POOL: a long-stale LEASED worker is never force-returned by the orpha
   // Advance far past staleHeartbeatMs WITHOUT a heartbeat, then let several reaper
   // ticks fire. The held lease never settles, so the worker must stay LEASED.
   advance(60_000);
-  await new Promise<void>((resolve) => setTimeout(resolve, 60));
+  // Asserting an absence (the held lease is never force-returned). This cannot be
+  // polled for, so settle across several reaper intervals then confirm it held.
+  await settle(60);
 
   const snap = pool.snapshot();
   assert.equal(snap.total, 1);
@@ -563,9 +569,7 @@ test("reaper serial: a second tick while one is in progress is skipped", async (
   const first = runReaperTick(internals);
   // Wait until the first tick has entered provisionWarm and parked (the body runs
   // after the reconcile/probe awaits, so poll rather than guess a microtask count).
-  while (gate.release === null) {
-    await new Promise<void>((resolve) => setTimeout(resolve, 1));
-  }
+  await vi.waitFor(() => assert.ok(gate.release !== null));
   // A second tick must be a no-op while the first is in progress (it must NOT
   // start a second provision body).
   const second = runReaperTick(internals);
@@ -624,7 +628,8 @@ test("pool reaper tick fires on the clock timer and reaps an idle worker (end-to
   // Advance the logical clock past the idle window and let the real reaper timer
   // fire; the idle worker should be reaped.
   advance(5_000);
-  await new Promise<void>((resolve) => setTimeout(resolve, 40));
+  // Poll for the real reaper timer to fire and reap the now-idle worker.
+  await vi.waitFor(() => assert.equal(pool.snapshot().total, 0));
 
   assert.equal(pool.snapshot().total, 0);
   await pool.drain({ deadlineMs: 100 });

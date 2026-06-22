@@ -126,6 +126,9 @@ export async function runDaemon(options: CliOptions): Promise<number> {
   registerBuiltinBackends();
   try {
     let boundServerPort: number | null = null;
+    // Surface deprecated config keys once, on the first (startup) load. Reloads run the same
+    // validation every poll, so re-warning there would spam an unchanged config.
+    let deprecationsReported = false;
     const loadRuntimeWorkflow = async () => {
       const workflow = await loadWorkflow(options.workflowPath ?? undefined, process.env, {
         ...runtimeDefaultSettingsOptions(),
@@ -138,7 +141,14 @@ export async function runDaemon(options: CliOptions): Promise<number> {
         defaultTrackerRegistry,
         defaultAgentExecutorRegistry,
         defaultToolRegistry,
+        deprecationsReported
+          ? undefined
+          : {
+              rawConfig: workflow.config,
+              warn: (message) => process.stderr.write(`Lorenz config deprecation: ${message}\n`),
+            },
       );
+      deprecationsReported = true;
       return workflow;
     };
     const workflow = await loadRuntimeWorkflow();

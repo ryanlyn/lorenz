@@ -1,5 +1,6 @@
 import { constants } from "node:fs";
 import fs from "node:fs/promises";
+import { createRequire } from "node:module";
 import path from "node:path";
 
 import { Command } from "commander";
@@ -10,7 +11,12 @@ import {
   parseRequiredValue,
   type ParseResult,
 } from "@lorenz/cli-kit";
-import { settingsForIssueState, validateDispatchConfig } from "@lorenz/config";
+import {
+  collectConfigDeprecations,
+  formatConfigDeprecation,
+  settingsForIssueState,
+  validateDispatchConfig,
+} from "@lorenz/config";
 import { errorMessage, type Settings } from "@lorenz/domain";
 import { loadWorkflow, workflowFilePath } from "@lorenz/workflow";
 import { defaultAgentExecutorRegistry } from "@lorenz/agent-sdk";
@@ -166,6 +172,7 @@ export async function runDoctorCommand(
   }
 
   applyDoctorOverrides(workflow.settings, options);
+  checks.push(...checkConfigDeprecations(workflow.config));
   checks.push(checkDispatchConfig(workflow.settings));
   checks.push(await checkDashboardAssets(workflow.settings, options.dashboard));
   checks.push(await checkLogPath(workflow.settings.logging.logFile));
@@ -218,6 +225,25 @@ async function checkWorkflowFile(workflowPath: string): Promise<DoctorCheck> {
       details: { path: workflowPath },
     };
   }
+}
+
+function checkConfigDeprecations(rawConfig: Record<string, unknown>): DoctorCheck[] {
+  const deprecations = collectConfigDeprecations(rawConfig);
+  if (deprecations.length === 0) {
+    return [
+      {
+        id: "config_deprecations",
+        status: "ok",
+        message: "No deprecated configuration keys are in use.",
+      },
+    ];
+  }
+  return deprecations.map((dep) => ({
+    id: `config_deprecation_${safeCheckId(dep.configPath)}`,
+    status: "warning",
+    message: formatConfigDeprecation(dep),
+    details: { key: dep.configPath, replacement: dep.replacement },
+  }));
 }
 
 function checkDispatchConfig(settings: Settings): DoctorCheck {
@@ -698,7 +724,15 @@ async function statOrNull(filePath: string) {
 }
 
 function defaultDashboardStaticDir(): string {
-  return path.resolve(import.meta.dirname, "../../lorenz-dashboard/dist");
+  // Packaged releases ship the dashboard as a bundled `@lorenz/dashboard` package; resolve it via
+  // Node module resolution so doctor checks the same assets the server serves in any layout. The
+  // dev monorepo falls back to the dashboard app's built output.
+  try {
+    const require = createRequire(import.meta.url);
+    return path.dirname(require.resolve("@lorenz/dashboard/dist/index.html"));
+  } catch {
+    return path.resolve(import.meta.dirname, "../../web/dist");
+  }
 }
 
 function applyDoctorOverrides(settings: Settings, options: DoctorCommandOptions): void {

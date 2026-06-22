@@ -2,6 +2,7 @@ import { serve, type ServerType } from "@hono/node-server";
 import { Hono } from "hono";
 import { describe, expect, test, vi } from "vitest";
 import type { DisplayEvent, TicketInfo, TraceWatcher } from "@lorenz/traceviz-server";
+import { settle } from "@lorenz/test-utils";
 
 import type { RuntimeServerSource } from "../src/index.js";
 import { createWsHandler } from "../src/ws.js";
@@ -307,6 +308,6 @@ async function waitFor(predicate: () => boolean, timeoutMs = 5_000): Promise<voi
   const deadline = Date.now() + timeoutMs;
   while (!predicate()) {
     if (Date.now() > deadline) throw new Error("Timed out waiting for condition");
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await settle(10);
   }
 }

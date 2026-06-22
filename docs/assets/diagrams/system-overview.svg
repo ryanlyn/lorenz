@@ -1,0 +1,101 @@
+<svg role="img" aria-labelledby="t-system-overview d-system-overview" viewBox="0 0 960 340" width="100%" style="max-width:960px;height:auto" xmlns="http://www.w3.org/2000/svg" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif">
+  <title id="t-system-overview">Lorenz end-to-end loop</title>
+  <desc id="d-system-overview">The happy path of the Lorenz control loop, left to right: a tracker issue is polled, checked for eligibility, prepared into a per-issue workspace, run as an agent turn over the ACP bridge, the agent updates the tracker, and the run is reconciled and either re-run up to max_turns or stopped and cleaned up before the next poll.</desc><rect x="0.75" y="0.75" width="958.50" height="338.50" rx="14" fill="#FFFFFF" stroke="#E2E8F0" stroke-width="1.5"/>
+  <defs>
+    <marker id="arrow-system-overview" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#475569"/>
+    </marker>
+    <marker id="arrow-accent-system-overview" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#14B8A6"/>
+    </marker>
+    <marker id="arrow-danger-system-overview" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#EF4444"/>
+    </marker>
+  </defs>
+  <!-- Title -->
+  <text x="20" y="30" font-size="15" font-weight="600" fill="#0F172A">Lorenz end-to-end loop</text>
+  <!-- ============ Happy-path edges (drawn first, behind nodes) ============ -->
+  <!-- Tracker -> Poll -->
+  <path d="M178,96 L192,96" stroke="#14B8A6" stroke-width="2" fill="none" marker-end="url(#arrow-accent-system-overview)"/>
+  <!-- Poll -> Eligible? -->
+  <path d="M384,96 L400,96" stroke="#14B8A6" stroke-width="2" fill="none" marker-end="url(#arrow-accent-system-overview)"/>
+  <!-- Eligible? -> Prepare workspace -->
+  <path d="M578,96 L594,96" stroke="#14B8A6" stroke-width="2" fill="none" marker-end="url(#arrow-accent-system-overview)"/>
+  <!-- Prepare workspace -> Run agent turn -->
+  <path d="M744,96 L760,96" stroke="#14B8A6" stroke-width="2" fill="none" marker-end="url(#arrow-accent-system-overview)"/>
+  <!-- Run agent turn (down) -> Agent updates tracker -->
+  <path d="M850,130 L850,222" stroke="#14B8A6" stroke-width="2" fill="none" marker-end="url(#arrow-accent-system-overview)"/>
+  <!-- Agent updates tracker -> Reconcile -->
+  <path d="M760,260 L555,260" stroke="#14B8A6" stroke-width="2" fill="none" marker-end="url(#arrow-accent-system-overview)"/>
+  <!-- Reconcile -> Poll (next poll loop, dashed teal) -->
+  <path d="M388,228 L388,168 Q388,158 378,158 L298,158 Q288,158 288,148 L288,126"
+        stroke="#14B8A6" stroke-width="2" fill="none" stroke-dasharray="6 4" marker-end="url(#arrow-accent-system-overview)"/>
+  <rect x="300" y="148" width="74" height="20" rx="4" fill="#FFFFFF" stroke="#E2E8F0"/>
+  <text x="337" y="158" text-anchor="middle" dominant-baseline="middle" font-size="11" font-weight="500" fill="#134E4A">next poll</text>
+  <!-- Eligible? ineligible off-ramp (danger): from Eligible? bottom down and right to a danger box -->
+  <path d="M548,130 L548,168 Q548,178 558,178 L656,178"
+        stroke="#EF4444" stroke-width="1.5" fill="none" marker-end="url(#arrow-danger-system-overview)"/>
+  <rect x="660" y="158" width="184" height="40" rx="10" fill="#FEE2E2" stroke="#EF4444" stroke-width="1.5"/>
+  <text x="752" y="174" text-anchor="middle" dominant-baseline="middle" font-size="13" font-weight="600" fill="#7F1D1D">ineligible</text>
+  <text x="752" y="188" text-anchor="middle" dominant-baseline="middle" font-size="11" fill="#7F1D1D">skip / block dispatch</text>
+  <!-- ============ Nodes ============ -->
+  <!-- Tracker (external) -->
+  <g>
+    <rect x="20" y="68" width="158" height="56" rx="10" fill="#FFFFFF" stroke="#94A3B8" stroke-width="1.5" stroke-dasharray="4 3"/>
+    <text x="99" y="89" text-anchor="middle" font-size="13" font-weight="600" fill="#334155">Tracker</text>
+    <text x="99" y="106" text-anchor="middle" font-size="11" fill="#475569">Linear / Jira / Local / Slack</text>
+  </g>
+  <!-- Poll (engine) -->
+  <g>
+    <rect x="192" y="68" width="192" height="56" rx="10" fill="#E0E7FF" stroke="#6366F1" stroke-width="1.5"/>
+    <text x="288" y="89" text-anchor="middle" font-size="13" font-weight="600" fill="#312E81">Poll</text>
+    <text x="288" y="107" text-anchor="middle" font-size="11" fill="#475569">every <tspan font-family="ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace" font-size="11">polling.interval_ms</tspan></text>
+  </g>
+  <!-- Eligible? (engine decision) -->
+  <g>
+    <rect x="400" y="62" width="178" height="68" rx="10" fill="#E0E7FF" stroke="#6366F1" stroke-width="1.5"/>
+    <text x="489" y="84" text-anchor="middle" font-size="13" font-weight="600" fill="#312E81">Eligible?</text>
+    <text x="489" y="101" text-anchor="middle" font-size="11" fill="#475569">active state, routed,</text>
+    <text x="489" y="115" text-anchor="middle" font-size="11" fill="#475569">unblocked, capacity</text>
+  </g>
+  <!-- Prepare workspace (engine) -->
+  <g>
+    <rect x="594" y="62" width="150" height="68" rx="10" fill="#E0E7FF" stroke="#6366F1" stroke-width="1.5"/>
+    <text x="669" y="84" text-anchor="middle" font-size="13" font-weight="600" fill="#312E81">Prepare workspace</text>
+    <text x="669" y="101" text-anchor="middle" font-size="11" fill="#475569">per-issue dir,</text>
+    <text x="669" y="115" text-anchor="middle" font-size="11" fill="#475569">hooks, skills</text>
+  </g>
+  <!-- Run agent turn (accent highlight) -->
+  <g>
+    <rect x="760" y="62" width="180" height="68" rx="10" fill="#CCFBF1" stroke="#14B8A6" stroke-width="2"/>
+    <text x="850" y="84" text-anchor="middle" font-size="13" font-weight="600" fill="#134E4A">Run agent turn</text>
+    <text x="850" y="101" text-anchor="middle" font-size="11" fill="#134E4A">Codex or Claude</text>
+    <text x="850" y="115" text-anchor="middle" font-size="11" fill="#134E4A">via ACP bridge</text>
+  </g>
+  <!-- Agent updates tracker (external) -->
+  <g>
+    <rect x="760" y="232" width="180" height="56" rx="10" fill="#FFFFFF" stroke="#94A3B8" stroke-width="1.5" stroke-dasharray="4 3"/>
+    <text x="850" y="253" text-anchor="middle" font-size="13" font-weight="600" fill="#334155">Agent updates tracker</text>
+    <text x="850" y="270" text-anchor="middle" font-size="11" fill="#475569">status, comments, PR</text>
+  </g>
+  <!-- Reconcile (engine decision) -->
+  <g>
+    <rect x="355" y="228" width="200" height="68" rx="10" fill="#E0E7FF" stroke="#6366F1" stroke-width="1.5"/>
+    <text x="455" y="247" text-anchor="middle" font-size="13" font-weight="600" fill="#312E81">Reconcile</text>
+    <text x="455" y="264" text-anchor="middle" font-size="11" fill="#475569">still active? re-run up to <tspan font-family="ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace" font-size="11">max_turns</tspan></text>
+    <text x="455" y="279" text-anchor="middle" font-size="11" fill="#475569">terminal? stop + cleanup</text>
+  </g>
+  <!-- ============ Legend ============ -->
+  <g>
+    <rect x="20" y="306" width="14" height="14" rx="3" fill="#FFFFFF" stroke="#94A3B8" stroke-width="1.5" stroke-dasharray="4 3"/>
+    <text x="40" y="313" dominant-baseline="middle" font-size="11" fill="#475569">external</text>
+    <rect x="108" y="306" width="14" height="14" rx="3" fill="#E0E7FF" stroke="#6366F1" stroke-width="1.5"/>
+    <text x="128" y="313" dominant-baseline="middle" font-size="11" fill="#475569">engine</text>
+    <rect x="188" y="306" width="14" height="14" rx="3" fill="#CCFBF1" stroke="#14B8A6" stroke-width="2"/>
+    <text x="208" y="313" dominant-baseline="middle" font-size="11" fill="#475569">agent run</text>
+    <line x1="288" y1="313" x2="316" y2="313" stroke="#14B8A6" stroke-width="2"/>
+    <text x="322" y="313" dominant-baseline="middle" font-size="11" fill="#475569">happy path</text>
+    <line x1="406" y1="313" x2="434" y2="313" stroke="#EF4444" stroke-width="1.5"/>
+    <text x="440" y="313" dominant-baseline="middle" font-size="11" fill="#475569">off-ramp</text>
+  </g>
+</svg>

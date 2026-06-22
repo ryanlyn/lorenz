@@ -1,0 +1,133 @@
+<svg role="img" aria-labelledby="t-extension-points d-extension-points" viewBox="0 0 920 560" width="100%" style="max-width:920px;height:auto" xmlns="http://www.w3.org/2000/svg" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif">
+  <title id="t-extension-points">Lorenz extension points</title>
+  <desc id="d-extension-points">A four-layer dependency map. The dependency-free @lorenz/domain vocabulary sits at the bottom. Above it, four SDK packages each define one extension contract plus a process-wide registry: tracker-sdk's TrackerProvider, tool-sdk's ToolProvider, agent-sdk's AgentExecutorProvider, and worker-sdk's WorkerDriverFactory. Above each SDK, the in-tree extensions that implement it. At the top, apps/cli registerBuiltinBackends() is the single wiring point that registers every builtin into the default registries. The backend-agnostic engine reads from those registries via a dashed edge.</desc><rect x="0.75" y="0.75" width="918.50" height="558.50" rx="14" fill="#FFFFFF" stroke="#E2E8F0" stroke-width="1.5"/>
+  <defs>
+    <marker id="arrow-extension-points" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#475569"/>
+    </marker>
+    <style>
+      .ttl { font-size:15px; font-weight:600; fill:#0F172A; }
+      .mono { font-family:ui-monospace,'SF Mono','JetBrains Mono',Menlo,Consolas,monospace; }
+      .ntitle { font-size:13px; font-weight:600; }
+      .nsub { font-size:11px; fill:#475569; }
+      .ext { font-size:11px; font-weight:600; }
+      .lg { font-size:11px; fill:#334155; }
+    </style>
+  </defs>
+  <text x="20" y="30" class="ttl">Extension points: one package + one registration line</text>
+  <!-- ===================== APPS (top, single wiring point) ===================== -->
+  <g>
+    <rect x="250" y="50" width="420" height="50" rx="10" fill="#FEF3C7" stroke="#F59E0B" stroke-width="1.5"/>
+    <text x="460" y="71" text-anchor="middle" class="ntitle mono" fill="#78350F">apps/cli &#183; registerBuiltinBackends()</text>
+    <text x="460" y="88" text-anchor="middle" class="nsub">the single wiring point &#8212; registers builtins into the default registries</text>
+  </g>
+  <!-- ===================== EXT ROW (impls, above their SDKs) ===================== -->
+  <!-- tracker-sdk impls -->
+  <g>
+    <rect x="20" y="150" width="200" height="62" rx="10" fill="#DCFCE7" stroke="#22C55E" stroke-width="1.5"/>
+    <text x="120" y="167" text-anchor="middle" class="ext" fill="#14532D">tracker extensions</text>
+    <text x="120" y="185" text-anchor="middle" class="nsub mono" fill="#14532D">linear &#183; jira &#183; local</text>
+    <text x="120" y="201" text-anchor="middle" class="nsub mono" fill="#14532D">slack &#183; memory</text>
+  </g>
+  <!-- tool-sdk impls -->
+  <g>
+    <rect x="250" y="150" width="200" height="62" rx="10" fill="#DCFCE7" stroke="#22C55E" stroke-width="1.5"/>
+    <text x="350" y="167" text-anchor="middle" class="ext" fill="#14532D">tool packs</text>
+    <text x="350" y="185" text-anchor="middle" class="nsub mono" fill="#14532D">linear &#183; local &#183; slack</text>
+    <text x="350" y="201" text-anchor="middle" class="nsub" fill="#14532D">(+ neutral "tracker" pack)</text>
+  </g>
+  <!-- agent-sdk impls -->
+  <g>
+    <rect x="480" y="150" width="200" height="62" rx="10" fill="#DCFCE7" stroke="#22C55E" stroke-width="1.5"/>
+    <text x="580" y="167" text-anchor="middle" class="ext" fill="#14532D">agent executor</text>
+    <text x="580" y="185" text-anchor="middle" class="nsub mono" fill="#14532D">acp</text>
+    <text x="580" y="201" text-anchor="middle" class="nsub" fill="#14532D">(acpExecutorProvider)</text>
+  </g>
+  <!-- worker-sdk impls -->
+  <g>
+    <rect x="710" y="150" width="190" height="62" rx="10" fill="#DCFCE7" stroke="#22C55E" stroke-width="1.5"/>
+    <text x="805" y="167" text-anchor="middle" class="ext" fill="#14532D">worker drivers</text>
+    <text x="805" y="185" text-anchor="middle" class="nsub mono" fill="#14532D">static-ssh &#183; docker</text>
+    <text x="805" y="201" text-anchor="middle" class="nsub mono" fill="#14532D">fake</text>
+  </g>
+  <!-- ===================== SDK ROW (contract + registry) ===================== -->
+  <g>
+    <rect x="20" y="280" width="200" height="62" rx="10" fill="#EDE9FE" stroke="#8B5CF6" stroke-width="1.5"/>
+    <text x="120" y="299" text-anchor="middle" class="ntitle mono" fill="#4C1D95">tracker-sdk</text>
+    <text x="120" y="317" text-anchor="middle" class="nsub mono" fill="#4C1D95">TrackerProvider</text>
+    <text x="120" y="333" text-anchor="middle" class="nsub" fill="#4C1D95">+ TrackerRegistry</text>
+  </g>
+  <g>
+    <rect x="250" y="280" width="200" height="62" rx="10" fill="#EDE9FE" stroke="#8B5CF6" stroke-width="1.5"/>
+    <text x="350" y="299" text-anchor="middle" class="ntitle mono" fill="#4C1D95">tool-sdk</text>
+    <text x="350" y="317" text-anchor="middle" class="nsub mono" fill="#4C1D95">ToolProvider</text>
+    <text x="350" y="333" text-anchor="middle" class="nsub" fill="#4C1D95">+ ToolRegistry</text>
+  </g>
+  <g>
+    <rect x="480" y="280" width="200" height="62" rx="10" fill="#EDE9FE" stroke="#8B5CF6" stroke-width="1.5"/>
+    <text x="580" y="299" text-anchor="middle" class="ntitle mono" fill="#4C1D95">agent-sdk</text>
+    <text x="580" y="317" text-anchor="middle" class="nsub mono" fill="#4C1D95">AgentExecutorProvider</text>
+    <text x="580" y="333" text-anchor="middle" class="nsub" fill="#4C1D95">+ AgentExecutorRegistry</text>
+  </g>
+  <g>
+    <rect x="710" y="280" width="190" height="62" rx="10" fill="#EDE9FE" stroke="#8B5CF6" stroke-width="1.5"/>
+    <text x="805" y="299" text-anchor="middle" class="ntitle mono" fill="#4C1D95">worker-sdk</text>
+    <text x="805" y="317" text-anchor="middle" class="nsub mono" fill="#4C1D95">WorkerDriverFactory</text>
+    <text x="805" y="333" text-anchor="middle" class="nsub" fill="#4C1D95">+ WorkerDriverRegistry</text>
+  </g>
+  <!-- ===================== LEAF (bottom, domain vocabulary) ===================== -->
+  <g>
+    <rect x="20" y="410" width="880" height="58" rx="10" fill="#F1F5F9" stroke="#94A3B8" stroke-width="1.5"/>
+    <text x="460" y="431" text-anchor="middle" class="ntitle mono" fill="#334155">@lorenz/domain</text>
+    <text x="460" y="450" text-anchor="middle" class="nsub mono" fill="#334155">vocabulary: Issue, Settings &#183; open string aliases TrackerKind / AgentKind / WorkerDriverKind</text>
+  </g>
+  <!-- ===================== ENGINE chip (reads via registry, dashed) ===================== -->
+  <g>
+    <rect x="20" y="50" width="180" height="50" rx="10" fill="#E0E7FF" stroke="#6366F1" stroke-width="1.5"/>
+    <text x="110" y="71" text-anchor="middle" class="ntitle" fill="#312E81">engine</text>
+    <text x="110" y="88" text-anchor="middle" class="nsub" fill="#312E81">backend-agnostic packages</text>
+  </g>
+  <!-- ===================== EDGES ===================== -->
+  <!-- ext -> sdk (implements, solid up) -->
+  <line x1="120" y1="280" x2="120" y2="214" stroke="#475569" stroke-width="1.5" marker-end="url(#arrow-extension-points)"/>
+  <line x1="350" y1="280" x2="350" y2="214" stroke="#475569" stroke-width="1.5" marker-end="url(#arrow-extension-points)"/>
+  <line x1="580" y1="280" x2="580" y2="214" stroke="#475569" stroke-width="1.5" marker-end="url(#arrow-extension-points)"/>
+  <line x1="805" y1="280" x2="805" y2="214" stroke="#475569" stroke-width="1.5" marker-end="url(#arrow-extension-points)"/>
+  <!-- sdk -> domain (depends on, solid down) -->
+  <line x1="120" y1="342" x2="120" y2="408" stroke="#475569" stroke-width="1.5" marker-end="url(#arrow-extension-points)"/>
+  <line x1="350" y1="342" x2="350" y2="408" stroke="#475569" stroke-width="1.5" marker-end="url(#arrow-extension-points)"/>
+  <line x1="580" y1="342" x2="580" y2="408" stroke="#475569" stroke-width="1.5" marker-end="url(#arrow-extension-points)"/>
+  <line x1="805" y1="342" x2="805" y2="408" stroke="#475569" stroke-width="1.5" marker-end="url(#arrow-extension-points)"/>
+  <!-- apps -> ext (registers, solid down) -->
+  <line x1="305" y1="100" x2="170" y2="148" stroke="#475569" stroke-width="1.5" marker-end="url(#arrow-extension-points)"/>
+  <line x1="400" y1="100" x2="380" y2="148" stroke="#475569" stroke-width="1.5" marker-end="url(#arrow-extension-points)"/>
+  <line x1="520" y1="100" x2="565" y2="148" stroke="#475569" stroke-width="1.5" marker-end="url(#arrow-extension-points)"/>
+  <line x1="615" y1="100" x2="775" y2="148" stroke="#475569" stroke-width="1.5" marker-end="url(#arrow-extension-points)"/>
+  <!-- engine ..reads via registry.. sdk row (dashed) -->
+  <path d="M110,100 L110,128 L460,128 L460,278" stroke="#94A3B8" stroke-width="1.25" stroke-dasharray="5 3" fill="none" marker-end="url(#arrow-extension-points)"/>
+  <g>
+    <rect x="332" y="118" width="256" height="20" rx="4" fill="#FFFFFF" stroke="#E2E8F0"/>
+    <text x="460" y="128" text-anchor="middle" dominant-baseline="middle" class="lg">engine resolves via process-wide registries</text>
+  </g>
+  <!-- ===================== LEGEND ===================== -->
+  <g>
+    <rect x="20" y="490" width="430" height="56" rx="8" fill="#FBFCFE" stroke="#E2E8F0" stroke-width="1"/>
+    <!-- solid -->
+    <line x1="34" y1="508" x2="64" y2="508" stroke="#475569" stroke-width="1.5" marker-end="url(#arrow-extension-points)"/>
+    <text x="72" y="508" dominant-baseline="middle" class="lg">implements / registers</text>
+    <!-- dashed -->
+    <line x1="34" y1="530" x2="64" y2="530" stroke="#94A3B8" stroke-width="1.25" stroke-dasharray="5 3" marker-end="url(#arrow-extension-points)"/>
+    <text x="72" y="530" dominant-baseline="middle" class="lg">reads via registry</text>
+    <!-- swatches -->
+    <rect x="232" y="500" width="14" height="14" rx="3" fill="#FEF3C7" stroke="#F59E0B"/>
+    <text x="252" y="508" dominant-baseline="middle" class="lg">apps</text>
+    <rect x="232" y="522" width="14" height="14" rx="3" fill="#DCFCE7" stroke="#22C55E"/>
+    <text x="252" y="530" dominant-baseline="middle" class="lg">extension</text>
+    <rect x="330" y="500" width="14" height="14" rx="3" fill="#EDE9FE" stroke="#8B5CF6"/>
+    <text x="350" y="508" dominant-baseline="middle" class="lg">sdk</text>
+    <rect x="330" y="522" width="14" height="14" rx="3" fill="#E0E7FF" stroke="#6366F1"/>
+    <text x="350" y="530" dominant-baseline="middle" class="lg">engine</text>
+    <rect x="408" y="500" width="14" height="14" rx="3" fill="#F1F5F9" stroke="#94A3B8"/>
+    <text x="428" y="508" dominant-baseline="middle" class="lg">leaf</text>
+  </g>
+</svg>

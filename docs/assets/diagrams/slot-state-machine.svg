@@ -1,0 +1,123 @@
+<svg role="img" aria-labelledby="t-slot-state-machine d-slot-state-machine" viewBox="0 0 720 612" width="100%" style="max-width:720px;height:auto" xmlns="http://www.w3.org/2000/svg" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif">
+  <title id="t-slot-state-machine">Dispatch slot state machine</title>
+  <desc id="d-slot-state-machine">A dispatch slot moves from Unclaimed to Claimed/Reserved to Running, then finishes and schedules either a continuation retry (fixed 1s) or a failure retry (exponential backoff); when the retry is due the slot becomes eligible again. A reserved slot can be cancelled or expire back to Unclaimed.</desc><rect x="0.75" y="0.75" width="718.50" height="610.50" rx="14" fill="#FFFFFF" stroke="#E2E8F0" stroke-width="1.5"/>
+  <defs>
+    <marker id="arrow-slot-state-machine" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#475569"/>
+    </marker>
+    <marker id="arrow-accent-slot-state-machine" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#14B8A6"/>
+    </marker>
+    <marker id="arrow-danger-slot-state-machine" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#EF4444"/>
+    </marker>
+  </defs>
+  <!-- Title -->
+  <text x="20" y="30" font-size="15" font-weight="600" fill="#0F172A">Dispatch slot state machine</text>
+  <text x="20" y="48" font-size="11" fill="#475569">Orchestrator.claim / bindReservation / finish over one ensemble slot</text>
+  <!-- ===== Nodes ===== -->
+  <!-- Unclaimed / Eligible (accent start) -->
+  <g>
+    <rect x="270" y="70" width="180" height="52" rx="10" fill="#CCFBF1" stroke="#14B8A6" stroke-width="1.5"/>
+    <text x="360" y="91" text-anchor="middle" font-size="13" font-weight="600" fill="#134E4A">Unclaimed / Eligible</text>
+    <text x="360" y="108" text-anchor="middle" font-size="11" fill="#475569">candidate issue, slot free</text>
+  </g>
+  <!-- Claimed / Reserved -->
+  <g>
+    <rect x="270" y="172" width="180" height="58" rx="10" fill="#E0E7FF" stroke="#6366F1" stroke-width="1.5"/>
+    <text x="360" y="191" text-anchor="middle" font-size="13" font-weight="600" fill="#312E81">Claimed / Reserved</text>
+    <text x="360" y="207" text-anchor="middle" font-size="11" fill="#475569">host-less, counts toward caps</text>
+    <text x="360" y="221" text-anchor="middle" font-size="11" fill="#475569">snapshot lane: reserving</text>
+  </g>
+  <!-- Running -->
+  <g>
+    <rect x="270" y="280" width="180" height="52" rx="10" fill="#CCFBF1" stroke="#14B8A6" stroke-width="1.5"/>
+    <text x="360" y="301" text-anchor="middle" font-size="13" font-weight="600" fill="#134E4A">Running</text>
+    <text x="360" y="318" text-anchor="middle" font-size="11" fill="#475569">bound host, lane: running</text>
+  </g>
+  <!-- Finished -->
+  <g>
+    <rect x="270" y="382" width="180" height="52" rx="10" fill="#E0E7FF" stroke="#6366F1" stroke-width="1.5"/>
+    <text x="360" y="403" text-anchor="middle" font-size="13" font-weight="600" fill="#312E81">Finished</text>
+    <text x="360" y="420" text-anchor="middle" font-size="11" fill="#475569">completed, schedules retry</text>
+  </g>
+  <!-- Continuation retry (engine/leaf) -->
+  <g>
+    <rect x="60" y="478" width="230" height="62" rx="10" fill="#F1F5F9" stroke="#94A3B8" stroke-width="1.5"/>
+    <text x="175" y="500" text-anchor="middle" font-size="13" font-weight="600" fill="#334155">Continuation retry</text>
+    <text x="175" y="516" text-anchor="middle" font-size="11" fill="#475569">clean exit, attempt = 1</text>
+    <text x="175" y="530" text-anchor="middle" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" font-size="11" fill="#475569">fixed 1000ms</text>
+  </g>
+  <!-- Failure retry (danger) -->
+  <g>
+    <rect x="430" y="478" width="230" height="62" rx="10" fill="#FEE2E2" stroke="#EF4444" stroke-width="1.5"/>
+    <text x="545" y="500" text-anchor="middle" font-size="13" font-weight="600" fill="#7F1D1D">Failure retry</text>
+    <text x="545" y="516" text-anchor="middle" font-size="11" fill="#475569">fault, attempt = prev + 1</text>
+    <text x="545" y="530" text-anchor="middle" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" font-size="11" fill="#475569">10s * 2^(n-1), capped</text>
+  </g>
+  <!-- ===== Happy spine edges (accent) ===== -->
+  <!-- Unclaimed -> Claimed -->
+  <line x1="360" y1="122" x2="360" y2="170" stroke="#14B8A6" stroke-width="2" fill="none" marker-end="url(#arrow-accent-slot-state-machine)"/>
+  <g>
+    <rect x="368" y="137" width="44" height="18" rx="4" fill="#FFFFFF" stroke="#E2E8F0"/>
+    <text x="390" y="146" text-anchor="middle" dominant-baseline="middle" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" font-size="11" fill="#134E4A">claim</text>
+  </g>
+  <!-- Claimed -> Running -->
+  <line x1="360" y1="230" x2="360" y2="278" stroke="#14B8A6" stroke-width="2" fill="none" marker-end="url(#arrow-accent-slot-state-machine)"/>
+  <g>
+    <rect x="368" y="245" width="116" height="18" rx="4" fill="#FFFFFF" stroke="#E2E8F0"/>
+    <text x="426" y="254" text-anchor="middle" dominant-baseline="middle" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" font-size="11" fill="#134E4A">bindReservation</text>
+  </g>
+  <!-- Running -> Finished -->
+  <line x1="360" y1="332" x2="360" y2="380" stroke="#14B8A6" stroke-width="2" fill="none" marker-end="url(#arrow-accent-slot-state-machine)"/>
+  <g>
+    <rect x="368" y="347" width="50" height="18" rx="4" fill="#FFFFFF" stroke="#E2E8F0"/>
+    <text x="393" y="356" text-anchor="middle" dominant-baseline="middle" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" font-size="11" fill="#134E4A">finish</text>
+  </g>
+  <!-- ===== Finished -> retries (solid control) ===== -->
+  <!-- Finished -> Continuation retry -->
+  <path d="M320,434 L175,448 L175,476" stroke="#475569" stroke-width="1.5" fill="none" marker-end="url(#arrow-slot-state-machine)"/>
+  <g>
+    <rect x="142" y="450" width="106" height="18" rx="4" fill="#FFFFFF" stroke="#E2E8F0"/>
+    <text x="195" y="459" text-anchor="middle" dominant-baseline="middle" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" font-size="11" fill="#475569">continuation</text>
+  </g>
+  <!-- Finished -> Failure retry -->
+  <path d="M400,434 L545,448 L545,476" stroke="#EF4444" stroke-width="1.5" fill="none" marker-end="url(#arrow-danger-slot-state-machine)"/>
+  <g>
+    <rect x="510" y="444" width="62" height="18" rx="4" fill="#FFFFFF" stroke="#E2E8F0"/>
+    <text x="541" y="453" text-anchor="middle" dominant-baseline="middle" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" font-size="11" fill="#7F1D1D">failure</text>
+  </g>
+  <!-- ===== retries -> Unclaimed (due) ===== -->
+  <!-- Continuation retry -> Unclaimed (left loop up) -->
+  <path d="M60,509 L30,509 L30,96 L268,96" stroke="#475569" stroke-width="1.5" fill="none" marker-end="url(#arrow-slot-state-machine)"/>
+  <g>
+    <rect x="36" y="290" width="44" height="18" rx="4" fill="#FFFFFF" stroke="#E2E8F0"/>
+    <text x="58" y="299" text-anchor="middle" dominant-baseline="middle" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" font-size="11" fill="#475569">due</text>
+  </g>
+  <!-- Failure retry -> Unclaimed (right loop up) -->
+  <path d="M660,509 L690,509 L690,96 L452,96" stroke="#475569" stroke-width="1.5" fill="none" marker-end="url(#arrow-slot-state-machine)"/>
+  <g>
+    <rect x="668" y="290" width="44" height="18" rx="4" fill="#FFFFFF" stroke="#E2E8F0"/>
+    <text x="690" y="299" text-anchor="middle" dominant-baseline="middle" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" font-size="11" fill="#475569">due</text>
+  </g>
+  <!-- ===== Reserved -> Unclaimed (cancel / expiry) ===== -->
+  <path d="M270,201 L150,201 L150,108 L268,108" stroke="#475569" stroke-width="1.5" fill="none" stroke-dasharray="5 3" marker-end="url(#arrow-slot-state-machine)"/>
+  <g>
+    <rect x="92" y="145" width="156" height="18" rx="4" fill="#FFFFFF" stroke="#E2E8F0"/>
+    <text x="170" y="154" text-anchor="middle" dominant-baseline="middle" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" font-size="11" fill="#475569">cancelReservation / expiry</text>
+  </g>
+  <!-- ===== Legend (bottom strip, clear of all nodes and edges) ===== -->
+  <g>
+    <rect x="60" y="556" width="600" height="40" rx="8" fill="#FBFCFE" stroke="#E2E8F0" stroke-width="1"/>
+    <line x1="74" y1="576" x2="102" y2="576" stroke="#14B8A6" stroke-width="2"/>
+    <text x="108" y="576" dominant-baseline="middle" font-size="11" fill="#475569">happy spine</text>
+    <line x1="200" y1="576" x2="228" y2="576" stroke="#475569" stroke-width="1.5"/>
+    <text x="234" y="576" dominant-baseline="middle" font-size="11" fill="#475569">retry / due</text>
+    <line x1="316" y1="576" x2="344" y2="576" stroke="#EF4444" stroke-width="1.5"/>
+    <text x="350" y="576" dominant-baseline="middle" font-size="11" fill="#475569">failure path</text>
+    <line x1="446" y1="576" x2="474" y2="576" stroke="#475569" stroke-width="1.5" stroke-dasharray="5 3"/>
+    <text x="480" y="576" dominant-baseline="middle" font-size="11" fill="#475569">cancel / expiry</text>
+    <rect x="600" y="570" width="14" height="11" rx="3" fill="#E0E7FF" stroke="#6366F1"/>
+    <text x="620" y="576" dominant-baseline="middle" font-size="11" fill="#475569">state</text>
+  </g>
+</svg>

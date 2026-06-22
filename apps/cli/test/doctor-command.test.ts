@@ -69,6 +69,52 @@ test("doctor uses default workflow resolution and reports healthy local checks",
   assert.equal(statusFor(report, "dashboard_assets"), "ok");
   assert.equal(statusFor(report, "log_path"), "ok");
   assert.equal(statusFor(report, "agent_bridge_codex"), "ok");
+  assert.equal(statusFor(report, "config_deprecations"), "ok");
+});
+
+test("doctor warns on deprecated legacy config sections", async () => {
+  const root = await tempDir("lorenz-doctor-deprecated");
+  const workflowPath = path.join(root, "WORKFLOW.md");
+  const boardDir = path.join(root, "board");
+  const logFile = path.join(root, "log", "lorenz.log");
+  const bridgeCommand = path.join(root, "bin", "codex-acp");
+  await writeExecutable(bridgeCommand, "#!/usr/bin/env bash\nexit 0\n");
+  await fs.writeFile(
+    workflowPath,
+    [
+      "---",
+      "tracker:",
+      "  kind: local",
+      `  path: ${JSON.stringify(boardDir)}`,
+      "codex:",
+      `  command: ${JSON.stringify(bridgeCommand)}`,
+      "  turn_timeout_ms: 1200000",
+      "logging:",
+      `  log_file: ${JSON.stringify(logFile)}`,
+      "---",
+      "Handle {{ issue.identifier }}",
+      "",
+    ].join("\n"),
+  );
+
+  const report = await runDoctorCommand({
+    workflowPath,
+    dashboard: false,
+    logsRoot: null,
+  });
+
+  assert.equal(report.status, "warning");
+  assert.equal(statusFor(report, "config_deprecation_codex_command"), "warning");
+  assert.match(
+    messageFor(report, "config_deprecation_codex_command"),
+    /`codex\.command` is deprecated; use `agents\.codex\.bridge_command` instead/,
+  );
+  assert.equal(statusFor(report, "config_deprecation_codex_turn_timeout_ms"), "warning");
+  assert.equal(statusFor(report, "config_deprecation_tracker_path"), "warning");
+  assert.match(
+    messageFor(report, "config_deprecation_tracker_path"),
+    /`tracker\.path` is deprecated; use `trackers\.local\.path` instead/,
+  );
 });
 
 test("doctor renders a text report via runDoctorMain", async () => {
@@ -321,17 +367,36 @@ async function doctorFixture(options: {
     await fs.mkdir(path.join(dashboardDir, "assets"), { recursive: true });
     await fs.writeFile(path.join(dashboardDir, "index.html"), "<div>dashboard</div>");
   }
+  // Default fixture uses the recommended nested bundle shape so the healthy baseline is free of
+  // config deprecations; the unknown-kind error path stays flat to exercise dispatch validation.
+  const trackerLines =
+    options.trackerKind === undefined
+      ? [
+          "tracker:",
+          "  kind: local",
+          "  active_states:",
+          "    - Todo",
+          "  terminal_states:",
+          "    - Done",
+          "trackers:",
+          "  local:",
+          "    provider: local",
+          `    path: ${JSON.stringify(boardDir)}`,
+        ]
+      : [
+          "tracker:",
+          `  kind: ${JSON.stringify(options.trackerKind)}`,
+          `  path: ${JSON.stringify(boardDir)}`,
+          "  active_states:",
+          "    - Todo",
+          "  terminal_states:",
+          "    - Done",
+        ];
   await fs.writeFile(
     workflowPath,
     [
       "---",
-      "tracker:",
-      `  kind: ${JSON.stringify(options.trackerKind ?? "local")}`,
-      `  path: ${JSON.stringify(boardDir)}`,
-      "  active_states:",
-      "    - Todo",
-      "  terminal_states:",
-      "    - Done",
+      ...trackerLines,
       "agents:",
       "  codex:",
       `    bridge_command: ${JSON.stringify(bridgeCommand)}`,

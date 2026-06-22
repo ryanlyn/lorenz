@@ -1,4 +1,5 @@
 import { afterEach, expect, test, vi } from "vitest";
+import { settle } from "@lorenz/test-utils";
 
 import type { OpsState } from "../src/features/ops/api/types";
 import type { WsMessage } from "../src/shared/hooks/useWebSocket";
@@ -80,7 +81,9 @@ test("useOpsState ignores trace messages and reports a disconnected stream", asy
   });
 
   try {
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    // Asserting an absence (a trace message must not seed ops state) after the
+    // rejected fetch settles — flush one macrotask, then confirm nothing changed.
+    await settle(0);
     expect(hook.connected).toBe(false);
     expect(stateUpdates).toEqual([]);
   } finally {
@@ -98,8 +101,7 @@ test("useOpsState seeds state from the initial REST fetch", async () => {
   });
 
   try {
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(stateUpdates).toEqual([payload]);
+    await vi.waitFor(() => expect(stateUpdates).toEqual([payload]));
   } finally {
     cleanup();
   }
@@ -119,7 +121,9 @@ test("useOpsState initial fetch failure does not emit an unhandled rejection", a
   });
 
   try {
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    // Asserting an absence (no unhandled rejection, no state seeded) after the
+    // rejected fetch settles — flush one macrotask, then confirm nothing changed.
+    await settle(0);
     expect(unhandledReasons).toEqual([]);
     expect(stateUpdates).toEqual([]);
   } finally {

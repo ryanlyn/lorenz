@@ -6,6 +6,11 @@ tracker:
     # Direct-message channels (D...) are watched the same way - list the DM's channel id here.
     # - D0123456789
   bot_user_id: $SLACK_BOT_USER_ID
+  # Optional: an app-level token (xapp-..., scope connections:write) turns on Slack Socket Mode,
+  # so a new @-mention or thread reply dispatches an agent within ~a second instead of waiting out
+  # the poll interval below. Leave it unset to stay pull-only (interval polling). The bot token
+  # above still does all reads/writes; this token is used ONLY to open the events socket.
+  app_token: $SLACK_APP_TOKEN
   # Optional author allowlist: when set, only these users' bot-mentions create issues. Leave it
   # out for no author constraint. Recommended when watching a DM channel, since anyone can DM the
   # bot - constraining to known requesters keeps dispatch scoped.
@@ -31,6 +36,11 @@ polling:
   # conservative (60s) so a busy channel does not trigger sustained 429s; watched channels should
   # be dedicated and low-traffic. The 429/Retry-After backoff and per-channel poll_error handling
   # cover transient limits on top of this.
+  #
+  # With `tracker.app_token` set (Socket Mode), this interval is a SAFETY NET rather than the
+  # dispatch latency: a real mention pushes an event over the socket and the runtime re-polls
+  # immediately, so dispatch is ~instant while the interval stays conservative to bound API load
+  # and recover anything a dropped event missed.
   interval_ms: 60000
 workspace:
   root: ~/dev/lorenz-workspaces

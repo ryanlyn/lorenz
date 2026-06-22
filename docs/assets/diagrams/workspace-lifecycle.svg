@@ -1,0 +1,96 @@
+<svg role="img" aria-labelledby="t-workspace-lifecycle d-workspace-lifecycle" viewBox="0 0 720 766" width="100%" style="max-width:720px;height:auto" xmlns="http://www.w3.org/2000/svg" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif">
+  <title id="t-workspace-lifecycle">Per-issue workspace lifecycle</title>
+  <desc id="d-workspace-lifecycle">Top-to-bottom sequence: create the per-issue workspace directory (local or over SSH), run the after_create fail-fast hook, overlay skills into .lorenz/skills, then per attempt up to max_turns run the before_run fail-fast hook, startSession, the turn loop, and the after_run best-effort hook; after the loop run the before_remove best-effort hook and remove the workspace.</desc><rect x="0.75" y="0.75" width="718.50" height="764.50" rx="14" fill="#FFFFFF" stroke="#E2E8F0" stroke-width="1.5"/>
+  <defs>
+    <marker id="arrow-workspace-lifecycle" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#475569"/>
+    </marker>
+    <marker id="arrow-accent-workspace-lifecycle" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#14B8A6"/>
+    </marker>
+  </defs>
+  <!-- Title -->
+  <text x="20" y="30" font-size="15" font-weight="600" fill="#0F172A">Per-issue workspace lifecycle</text>
+  <text x="20" y="48" font-size="11" fill="#475569">create &#8594; hooks &#8594; skills overlay &#8594; run loop &#8594; remove</text>
+  <!-- Step 1: Create -->
+  <g>
+    <rect x="180" y="62" width="360" height="50" rx="10" fill="#CCFBF1" stroke="#14B8A6" stroke-width="1.5"/>
+    <text x="360" y="82" text-anchor="middle" font-size="13" font-weight="600" fill="#134E4A">Create workspace directory</text>
+    <text x="360" y="99" text-anchor="middle" font-family="ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace" font-size="11" fill="#134E4A">&lt;root&gt;/&lt;safe-id&gt;[/&lt;slot&gt;]  (local or over SSH)</text>
+  </g>
+  <!-- Note chip -->
+  <g>
+    <rect x="556" y="62" width="148" height="50" rx="8" fill="#FFFFFF" stroke="#94A3B8" stroke-width="1" stroke-dasharray="4 3"/>
+    <text x="630" y="81" text-anchor="middle" font-size="10" fill="#334155">cwd validated inside root;</text>
+    <text x="630" y="96" text-anchor="middle" font-size="10" fill="#334155">symlink escapes rejected</text>
+  </g>
+  <path d="M556,87 L540,87" stroke="#94A3B8" stroke-width="1.25" stroke-dasharray="4 3" fill="none"/>
+  <path d="M360,112 L360,134" stroke="#475569" stroke-width="1.5" fill="none" marker-end="url(#arrow-workspace-lifecycle)"/>
+  <!-- Step 2: after_create hook (fail-fast) -->
+  <g>
+    <rect x="180" y="136" width="360" height="50" rx="10" fill="#FEE2E2" stroke="#EF4444" stroke-width="1.5"/>
+    <text x="360" y="156" text-anchor="middle" font-size="13" font-weight="600" fill="#7F1D1D">hook</text>
+    <text x="360" y="173" text-anchor="middle" font-family="ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace" font-size="12" fill="#7F1D1D">after_create  (fail-fast)</text>
+  </g>
+  <path d="M360,186 L360,208" stroke="#475569" stroke-width="1.5" fill="none" marker-end="url(#arrow-workspace-lifecycle)"/>
+  <!-- Step 3: skill overlay -->
+  <g>
+    <rect x="180" y="210" width="360" height="50" rx="10" fill="#EDE9FE" stroke="#8B5CF6" stroke-width="1.5"/>
+    <text x="360" y="230" text-anchor="middle" font-size="13" font-weight="600" fill="#4C1D95">Overlay skills</text>
+    <text x="360" y="247" text-anchor="middle" font-family="ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace" font-size="11" fill="#4C1D95">&#8594; .lorenz/skills/  (+ .gitignore '*')</text>
+  </g>
+  <path d="M360,260 L360,300" stroke="#475569" stroke-width="1.5" fill="none" marker-end="url(#arrow-workspace-lifecycle)"/>
+  <!-- Loop frame -->
+  <g>
+    <rect x="120" y="296" width="480" height="300" rx="10" fill="none" stroke="#6366F1" stroke-width="1.5" stroke-dasharray="6 4"/>
+    <rect x="120" y="296" width="244" height="24" rx="0" fill="#E0E7FF" stroke="#6366F1" stroke-width="1.5"/>
+    <text x="132" y="313" font-size="11" font-weight="600" fill="#312E81">loop &#160;&#160;per attempt, up to max_turns</text>
+  </g>
+  <!-- before_run hook (fail-fast) -->
+  <g>
+    <rect x="200" y="338" width="320" height="46" rx="10" fill="#FEE2E2" stroke="#EF4444" stroke-width="1.5"/>
+    <text x="360" y="356" text-anchor="middle" font-size="13" font-weight="600" fill="#7F1D1D">hook</text>
+    <text x="360" y="372" text-anchor="middle" font-family="ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace" font-size="12" fill="#7F1D1D">before_run  (fail-fast)</text>
+  </g>
+  <path d="M360,384 L360,404" stroke="#475569" stroke-width="1.5" fill="none" marker-end="url(#arrow-workspace-lifecycle)"/>
+  <!-- startSession -->
+  <g>
+    <rect x="200" y="406" width="320" height="44" rx="10" fill="#E0E7FF" stroke="#6366F1" stroke-width="1.5"/>
+    <text x="360" y="428" text-anchor="middle" dominant-baseline="middle" font-family="ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace" font-size="13" font-weight="600" fill="#312E81">startSession</text>
+  </g>
+  <path d="M360,450 L360,470" stroke="#475569" stroke-width="1.5" fill="none" marker-end="url(#arrow-workspace-lifecycle)"/>
+  <!-- turn loop -->
+  <g>
+    <rect x="200" y="472" width="320" height="44" rx="10" fill="#F1F5F9" stroke="#94A3B8" stroke-width="1.5"/>
+    <text x="360" y="494" text-anchor="middle" dominant-baseline="middle" font-size="13" font-weight="600" fill="#334155">turn loop</text>
+  </g>
+  <path d="M360,516 L360,536" stroke="#475569" stroke-width="1.5" fill="none" marker-end="url(#arrow-workspace-lifecycle)"/>
+  <!-- after_run hook (best-effort) -->
+  <g>
+    <rect x="200" y="538" width="320" height="46" rx="10" fill="#F1F5F9" stroke="#94A3B8" stroke-width="1.5"/>
+    <text x="360" y="556" text-anchor="middle" font-size="13" font-weight="600" fill="#334155">hook</text>
+    <text x="360" y="572" text-anchor="middle" font-family="ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace" font-size="12" fill="#475569">after_run  (best-effort)</text>
+  </g>
+  <!-- exit loop -->
+  <path d="M360,596 L360,624" stroke="#475569" stroke-width="1.5" fill="none" marker-end="url(#arrow-workspace-lifecycle)"/>
+  <!-- before_remove hook (best-effort) -->
+  <g>
+    <rect x="180" y="626" width="360" height="50" rx="10" fill="#F1F5F9" stroke="#94A3B8" stroke-width="1.5"/>
+    <text x="360" y="646" text-anchor="middle" font-size="13" font-weight="600" fill="#334155">hook</text>
+    <text x="360" y="663" text-anchor="middle" font-family="ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace" font-size="12" fill="#475569">before_remove  (best-effort)</text>
+  </g>
+  <path d="M360,676 L360,698" stroke="#475569" stroke-width="1.5" fill="none" marker-end="url(#arrow-workspace-lifecycle)"/>
+  <!-- remove workspace -->
+  <g>
+    <rect x="200" y="700" width="320" height="44" rx="10" fill="#FFFFFF" stroke="#94A3B8" stroke-width="1.5" stroke-dasharray="4 3"/>
+    <text x="360" y="722" text-anchor="middle" dominant-baseline="middle" font-size="13" font-weight="600" fill="#334155">remove workspace</text>
+  </g>
+  <!-- Legend -->
+  <g>
+    <rect x="20" y="690" width="150" height="58" rx="8" fill="#FBFCFE" stroke="#E2E8F0" stroke-width="1"/>
+    <rect x="32" y="704" width="14" height="14" rx="3" fill="#FEE2E2" stroke="#EF4444" stroke-width="1.5"/>
+    <text x="54" y="715" font-size="11" fill="#0F172A">fail-fast hook</text>
+    <rect x="32" y="726" width="14" height="14" rx="3" fill="#F1F5F9" stroke="#94A3B8" stroke-width="1.5"/>
+    <text x="54" y="737" font-size="11" fill="#0F172A">best-effort hook</text>
+  </g>
+</svg>

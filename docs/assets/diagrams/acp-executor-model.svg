@@ -1,0 +1,93 @@
+<svg role="img" aria-labelledby="t-acp-executor-model d-acp-executor-model" viewBox="0 0 720 432" width="100%" style="max-width:720px;height:auto" xmlns="http://www.w3.org/2000/svg" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif">
+  <title id="t-acp-executor-model">Agent executor extension model</title>
+  <desc id="d-acp-executor-model">The agent-sdk defines the AgentExecutorProvider and AgentExecutorRegistry contract. The agents.kind.executor selector (today "acp") resolves a provider whose createExecutor builds the built-in @lorenz/acp AcpExecutor, which drives a vendored ACP bridge (codex-acp or claude-agent-acp) over the Agent Client Protocol.</desc><rect x="0.75" y="0.75" width="718.50" height="430.50" rx="14" fill="#FFFFFF" stroke="#E2E8F0" stroke-width="1.5"/>
+  <defs>
+    <marker id="arrow-acp-executor-model" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#475569"/>
+    </marker>
+    <marker id="arrow-accent-acp-executor-model" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#14B8A6"/>
+    </marker>
+  </defs>
+  <!-- title -->
+  <text x="16" y="28" font-size="15" font-weight="600" fill="#0F172A">Agent executor extension model</text>
+  <!-- ===================== SDK box (left) ===================== -->
+  <g>
+    <rect x="16" y="116" width="180" height="96" rx="10" fill="#EDE9FE" stroke="#8B5CF6" stroke-width="1.5"/>
+    <text x="106" y="140" text-anchor="middle" font-size="11" fill="#7C3AED" font-weight="600">@lorenz/agent-sdk</text>
+    <text x="106" y="168" text-anchor="middle" font-size="12" font-weight="600" fill="#4C1D95" font-family="ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace">AgentExecutorProvider</text>
+    <text x="106" y="190" text-anchor="middle" font-size="12" font-weight="600" fill="#4C1D95" font-family="ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace">AgentExecutorRegistry</text>
+  </g>
+  <!-- ===================== Center column (engine) ===================== -->
+  <!-- selector -->
+  <g>
+    <rect x="270" y="60" width="200" height="60" rx="10" fill="#E0E7FF" stroke="#6366F1" stroke-width="1.5"/>
+    <text x="370" y="86" text-anchor="middle" font-size="12" font-weight="600" fill="#312E81" font-family="ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace">agents.&lt;kind&gt;.executor</text>
+    <text x="370" y="105" text-anchor="middle" font-size="11" fill="#475569">today: "acp"</text>
+  </g>
+  <!-- createExecutor pill -->
+  <g>
+    <rect x="296" y="158" width="148" height="40" rx="10" fill="#E0E7FF" stroke="#6366F1" stroke-width="1.5"/>
+    <text x="370" y="178" text-anchor="middle" dominant-baseline="middle" font-size="12" font-weight="600" fill="#312E81" font-family="ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace">createExecutor</text>
+  </g>
+  <!-- AcpExecutor -->
+  <g>
+    <rect x="270" y="236" width="200" height="64" rx="10" fill="#CCFBF1" stroke="#14B8A6" stroke-width="1.5"/>
+    <text x="370" y="262" text-anchor="middle" font-size="11" fill="#0F766E" font-weight="600">@lorenz/acp</text>
+    <text x="370" y="284" text-anchor="middle" font-size="13" font-weight="600" fill="#134E4A" font-family="ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace">AcpExecutor</text>
+  </g>
+  <!-- ===================== Right column (ext bridges) ===================== -->
+  <g>
+    <rect x="520" y="200" width="184" height="76" rx="10" fill="#DCFCE7" stroke="#22C55E" stroke-width="1.5"/>
+    <text x="612" y="222" text-anchor="middle" font-size="12" font-weight="600" fill="#14532D" font-family="ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace">codex-acp</text>
+    <text x="612" y="240" text-anchor="middle" font-size="11" fill="#15803D">Codex · config.toml overlay</text>
+    <text x="612" y="256" text-anchor="middle" font-size="11" fill="#15803D">JSONL usage</text>
+  </g>
+  <g>
+    <rect x="520" y="296" width="184" height="76" rx="10" fill="#DCFCE7" stroke="#22C55E" stroke-width="1.5"/>
+    <text x="612" y="318" text-anchor="middle" font-size="12" font-weight="600" fill="#14532D" font-family="ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace">claude-agent-acp</text>
+    <text x="612" y="336" text-anchor="middle" font-size="11" fill="#15803D">Claude · settings.json overlay</text>
+    <text x="612" y="352" text-anchor="middle" font-size="11" fill="#15803D">/mcp rewrite</text>
+  </g>
+  <!-- ===================== Edges ===================== -->
+  <!-- sdk registry resolves selector (dashed dependency) -->
+  <path d="M196,150 C232,140 240,108 268,98" stroke="#94A3B8" stroke-width="1.25" stroke-dasharray="5 3" fill="none" marker-end="url(#arrow-acp-executor-model)"/>
+  <g>
+    <rect x="200" y="112" width="68" height="18" rx="4" fill="#FFFFFF" stroke="#E2E8F0"/>
+    <text x="234" y="121" text-anchor="middle" dominant-baseline="middle" font-size="11" font-weight="500" fill="#475569">resolves</text>
+  </g>
+  <!-- selector -> createExecutor -->
+  <path d="M370,120 L370,156" stroke="#475569" stroke-width="1.5" fill="none" marker-end="url(#arrow-acp-executor-model)"/>
+  <!-- createExecutor -> AcpExecutor -->
+  <path d="M370,198 L370,234" stroke="#475569" stroke-width="1.5" fill="none" marker-end="url(#arrow-acp-executor-model)"/>
+  <!-- AcpExecutor -> codex bridge (accent, ACP) -->
+  <path d="M470,260 C496,250 500,242 518,238" stroke="#14B8A6" stroke-width="2" fill="none" marker-end="url(#arrow-accent-acp-executor-model)"/>
+  <!-- AcpExecutor -> claude bridge (accent, ACP) -->
+  <path d="M470,278 C496,300 500,318 518,328" stroke="#14B8A6" stroke-width="2" fill="none" marker-end="url(#arrow-accent-acp-executor-model)"/>
+  <!-- ACP edge chip -->
+  <g>
+    <rect x="466" y="266" width="92" height="32" rx="4" fill="#FFFFFF" stroke="#E2E8F0"/>
+    <text x="512" y="278" text-anchor="middle" dominant-baseline="middle" font-size="11" font-weight="600" fill="#0F766E">ACP</text>
+    <text x="512" y="291" text-anchor="middle" dominant-baseline="middle" font-size="10" fill="#475569" font-family="ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace">@agentclientprotocol/sdk</text>
+  </g>
+  <!-- ===================== Note ===================== -->
+  <g>
+    <rect x="16" y="248" width="234" height="64" rx="10" fill="#F1F5F9" stroke="#94A3B8" stroke-width="1.25"/>
+    <text x="32" y="270" font-size="11" font-weight="600" fill="#334155">Per-call extensions</text>
+    <text x="32" y="288" font-size="11" fill="#475569" font-family="ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace">_meta symphony/* </text>
+    <text x="32" y="304" font-size="11" fill="#475569">carry usage + provider config</text>
+  </g>
+  <!-- ===================== Legend ===================== -->
+  <g>
+    <rect x="280" y="392" width="14" height="14" rx="3" fill="#EDE9FE" stroke="#8B5CF6" stroke-width="1.5"/>
+    <text x="300" y="399" dominant-baseline="middle" font-size="11" fill="#475569">sdk</text>
+    <rect x="338" y="392" width="14" height="14" rx="3" fill="#E0E7FF" stroke="#6366F1" stroke-width="1.5"/>
+    <text x="358" y="399" dominant-baseline="middle" font-size="11" fill="#475569">engine</text>
+    <rect x="406" y="392" width="14" height="14" rx="3" fill="#CCFBF1" stroke="#14B8A6" stroke-width="1.5"/>
+    <text x="426" y="399" dominant-baseline="middle" font-size="11" fill="#475569">built-in</text>
+    <rect x="476" y="392" width="14" height="14" rx="3" fill="#DCFCE7" stroke="#22C55E" stroke-width="1.5"/>
+    <text x="496" y="399" dominant-baseline="middle" font-size="11" fill="#475569">bridge</text>
+    <line x1="548" y1="399" x2="572" y2="399" stroke="#94A3B8" stroke-width="1.25" stroke-dasharray="5 3"/>
+    <text x="578" y="399" dominant-baseline="middle" font-size="11" fill="#475569">resolves</text>
+  </g>
+</svg>

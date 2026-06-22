@@ -3,6 +3,7 @@ import path from "node:path";
 import { tmpdir } from "node:os";
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { settle } from "@lorenz/test-utils";
 
 import { TraceWatcher } from "../src/watcher.js";
 import type { TicketInfo } from "../src/models/api.js";
@@ -71,7 +72,7 @@ describe("TraceWatcher", () => {
       callbacks.push({ issueId, ticket });
     });
 
-    await new Promise((r) => setTimeout(r, 150));
+    await vi.waitFor(() => expect(callbacks.length).toBeGreaterThan(0));
     watcher.stop();
 
     expect(callbacks.length).toBeGreaterThan(0);
@@ -122,7 +123,10 @@ describe("TraceWatcher", () => {
         callbacks.push({ issueId, ticket });
       });
 
-      await new Promise((r) => setTimeout(r, 150));
+      // Asserting an absence (the symlinked dir is ignored), which cannot be
+      // polled for — settle across several scan intervals then confirm nothing
+      // was picked up.
+      await settle(150);
       watcher.stop();
 
       expect(watcher.getTickets()).toEqual([]);
@@ -146,11 +150,13 @@ describe("TraceWatcher", () => {
       callbacks.push({ issueId, ticket });
     });
 
-    await new Promise((r) => setTimeout(r, 150));
+    await vi.waitFor(() => expect(callbacks.length).toBeGreaterThan(0));
     const countAfterFirst = callbacks.length;
     expect(countAfterFirst).toBeGreaterThan(0);
 
-    await new Promise((r) => setTimeout(r, 150));
+    // Asserting no further callbacks fire while the file is untouched — settle
+    // across several scan intervals then confirm the count held steady.
+    await settle(150);
     expect(callbacks.length).toBe(countAfterFirst);
 
     writeTraceLine(traceDir, "TEST-2", {
@@ -164,7 +170,7 @@ describe("TraceWatcher", () => {
       },
     });
 
-    await new Promise((r) => setTimeout(r, 150));
+    await vi.waitFor(() => expect(callbacks.length).toBeGreaterThan(countAfterFirst));
     watcher.stop();
 
     expect(callbacks.length).toBeGreaterThan(countAfterFirst);
@@ -225,7 +231,7 @@ describe("TraceWatcher", () => {
       callbacks.push({ issueId, ticket });
     });
 
-    await new Promise((r) => setTimeout(r, 150));
+    await vi.waitFor(() => expect(callbacks.length).toBeGreaterThan(0));
 
     writeTraceLine(traceDir, "TEST-3", {
       type: "session_notification",
@@ -238,7 +244,9 @@ describe("TraceWatcher", () => {
       },
     });
 
-    await new Promise((r) => setTimeout(r, 150));
+    await vi.waitFor(() =>
+      expect(watcher.getEventsForTicket("id-3").some((e) => e.kind === "message")).toBe(true),
+    );
     watcher.stop();
 
     const latest = callbacks[callbacks.length - 1]!;
@@ -276,7 +284,7 @@ describe("TraceWatcher", () => {
     });
 
     watcher.start(() => {});
-    await new Promise((r) => setTimeout(r, 150));
+    await vi.waitFor(() => expect(watcher.getEventsForTicket("id-4").length).toBeGreaterThan(0));
 
     const events = watcher.getEventsForTicket("id-4");
     expect(events.length).toBeGreaterThan(0);

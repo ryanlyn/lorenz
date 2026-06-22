@@ -47,7 +47,7 @@ import type { WorkerPoolSettings } from "@lorenz/domain";
 import { withDerivedMaxInFlight } from "@lorenz/domain";
 import type { AgentMcpEndpointLease } from "@lorenz/mcp";
 import type { ClockPort, TimerHandle } from "@lorenz/domain";
-import { assert } from "@lorenz/test-utils";
+import { assert, settle } from "@lorenz/test-utils";
 
 // ---------------------------------------------------------------------------
 // A controllable clock: `now`/`advance` drive the pool's spend/ttl/idle logical
@@ -400,7 +400,7 @@ test("per-issue RunSlot accounting is an exact live-slot refcount; maxWorkersPer
 // Drains the pending microtask/macrotask queue so the recycle-driven fire-and-
 // forget slot.fail chain (close endpoint -> settle lease -> deregister) completes.
 async function flush(): Promise<void> {
-  await new Promise((resolve) => setTimeout(resolve, 0));
+  await settle(0);
 }
 
 test("one co-resident slot poisoning does NOT tear out its still-running sibling (poison is isolated while a sibling holds the worker)", async () => {

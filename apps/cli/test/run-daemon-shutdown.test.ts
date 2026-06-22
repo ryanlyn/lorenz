@@ -229,6 +229,42 @@ test("runDaemon stops gracefully on the first SIGINT and returns success", async
   assertNoAddedProcessListeners("SIGTERM", sigtermBaseline);
 });
 
+test("runDaemon warns about deprecated config keys once at startup", async () => {
+  const fixture = await workflowFixture();
+  mocks.loadWorkflow.mockResolvedValue({
+    ...fixture,
+    config: { codex: { command: "codex-acp" } },
+  });
+
+  const sigintBaseline = process.listeners("SIGINT");
+
+  const daemonPromise = runDaemon({
+    workflowPath: "WORKFLOW.md",
+    once: false,
+    dryRun: false,
+    tui: true,
+    dashboard: false,
+    port: null,
+    logsRoot: null,
+  });
+
+  const runtime = await waitForRuntimeInstance();
+  await runtime.startEntered;
+
+  const deprecationWrites = stderrWriteSpy.mock.calls.filter((call) =>
+    String(call[0]).includes("Lorenz config deprecation:"),
+  );
+  assert.equal(deprecationWrites.length, 1);
+  assert.match(
+    String(deprecationWrites[0]![0]),
+    /`codex\.command` is deprecated; use `agents\.codex\.bridge_command` instead/,
+  );
+
+  const [sigintHandler] = addedProcessListeners("SIGINT", sigintBaseline);
+  sigintHandler!();
+  assert.equal(await daemonPromise, 0);
+});
+
 test("runDaemon still reports real startup failures", async () => {
   mocks.loadWorkflow.mockResolvedValue(await workflowFixture());
   mocks.startObservabilityServer.mockRejectedValue(new Error("listen failed"));

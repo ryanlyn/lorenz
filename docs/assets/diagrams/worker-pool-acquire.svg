@@ -1,0 +1,120 @@
+<svg role="img" aria-labelledby="t-worker-pool-acquire d-worker-pool-acquire" viewBox="0 0 920 600" width="100%" style="max-width:920px;height:auto" xmlns="http://www.w3.org/2000/svg">
+  <title id="t-worker-pool-acquire">Worker pool acquire() sequence</title>
+  <desc id="d-worker-pool-acquire">acquire(runId) selects a warm idle worker and stamps a lease, or grows the pool under capacity and spend caps by writing a provisional ledger row before driver.provision and probing until ready, otherwise parks on a FIFO waiter queue or returns no_capacity.</desc><rect x="0.75" y="0.75" width="918.50" height="598.50" rx="14" fill="#FFFFFF" stroke="#E2E8F0" stroke-width="1.5"/>
+  <defs>
+    <marker id="arrow-worker-pool-acquire" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#475569"/>
+    </marker>
+    <marker id="arrow-accent-worker-pool-acquire" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#14B8A6"/>
+    </marker>
+    <marker id="arrow-danger-worker-pool-acquire" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#EF4444"/>
+    </marker>
+  </defs>
+  <text x="20" y="30" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="15" font-weight="600" fill="#0F172A">Worker pool: acquire() sequence</text>
+  <!-- Entry -->
+  <g>
+    <rect x="20" y="52" width="180" height="46" rx="10" fill="#E0E7FF" stroke="#6366F1" stroke-width="1.5"/>
+    <text x="110" y="75" text-anchor="middle" dominant-baseline="middle" font-family="ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace" font-size="12" fill="#312E81">acquire(runId)</text>
+  </g>
+  <!-- Decision 1: warm idle worker? -->
+  <g>
+    <polygon points="370,45 470,75 370,105 270,75" fill="#E0E7FF" stroke="#6366F1" stroke-width="1.5"/>
+    <text x="370" y="69" text-anchor="middle" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="12" font-weight="600" fill="#312E81">warm idle</text>
+    <text x="370" y="85" text-anchor="middle" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="12" font-weight="600" fill="#312E81">worker?</text>
+  </g>
+  <line x1="200" y1="75" x2="266" y2="75" stroke="#475569" stroke-width="1.5" fill="none" marker-end="url(#arrow-worker-pool-acquire)"/>
+  <text x="233" y="64" text-anchor="middle" font-family="ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace" font-size="11" fill="#475569">selectAndStamp</text>
+  <!-- YES path: stamp lease -> return workerHost (accent) -->
+  <g>
+    <rect x="560" y="48" width="280" height="54" rx="10" fill="#CCFBF1" stroke="#14B8A6" stroke-width="1.5"/>
+    <text x="700" y="69" text-anchor="middle" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="13" font-weight="600" fill="#134E4A">stamp lease &#8594; return WorkerLease</text>
+    <text x="700" y="87" text-anchor="middle" font-family="ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace" font-size="11" fill="#134E4A">status: 'leased' &#183; lease.workerHost</text>
+  </g>
+  <line x1="470" y1="75" x2="556" y2="75" stroke="#14B8A6" stroke-width="2" fill="none" marker-end="url(#arrow-accent-worker-pool-acquire)"/>
+  <g>
+    <rect x="491" y="64" width="34" height="18" rx="4" fill="#FFFFFF" stroke="#E2E8F0"/>
+    <text x="508" y="73" text-anchor="middle" dominant-baseline="middle" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11" font-weight="500" fill="#134E4A">yes</text>
+  </g>
+  <!-- Decision 2: under max & spend caps? -->
+  <g>
+    <polygon points="370,150 480,184 370,218 260,184" fill="#E0E7FF" stroke="#6366F1" stroke-width="1.5"/>
+    <text x="370" y="178" text-anchor="middle" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="12" font-weight="600" fill="#312E81">under max &amp;</text>
+    <text x="370" y="194" text-anchor="middle" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="12" font-weight="600" fill="#312E81">spend caps?</text>
+  </g>
+  <line x1="370" y1="105" x2="370" y2="146" stroke="#475569" stroke-width="1.5" fill="none" marker-end="url(#arrow-worker-pool-acquire)"/>
+  <g>
+    <rect x="378" y="116" width="26" height="18" rx="4" fill="#FFFFFF" stroke="#E2E8F0"/>
+    <text x="391" y="125" text-anchor="middle" dominant-baseline="middle" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11" font-weight="500" fill="#7F1D1D">no</text>
+  </g>
+  <!-- YES path 2: grow steps -->
+  <g>
+    <rect x="540" y="138" width="360" height="116" rx="10" fill="#DCFCE7" stroke="#22C55E" stroke-width="1.5"/>
+    <text x="556" y="158" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="13" font-weight="600" fill="#14532D">grow (reservation &#183; single-flight)</text>
+    <text x="556" y="178" font-family="ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace" font-size="11" fill="#14532D">1. reserve slot (reservedProvisions++)</text>
+    <text x="556" y="195" font-family="ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace" font-size="11" fill="#14532D">2. write provisional ledger row</text>
+    <text x="556" y="212" font-family="ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace" font-size="11" fill="#14532D">3. driver.provision &#8594; correlate workerId</text>
+    <text x="556" y="229" font-family="ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace" font-size="11" fill="#14532D">4. probeUntilReady (PROBE_READY_ATTEMPTS)</text>
+    <text x="556" y="246" font-family="ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace" font-size="11" fill="#14532D">5. stamp lease &#8594; return WorkerLease</text>
+  </g>
+  <line x1="480" y1="184" x2="536" y2="184" stroke="#22C55E" stroke-width="1.5" fill="none" marker-end="url(#arrow-worker-pool-acquire)"/>
+  <g>
+    <rect x="491" y="173" width="34" height="18" rx="4" fill="#FFFFFF" stroke="#E2E8F0"/>
+    <text x="508" y="182" text-anchor="middle" dominant-baseline="middle" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11" font-weight="500" fill="#14532D">yes</text>
+  </g>
+  <!-- grow loops back to accent return -->
+  <path d="M720,138 L720,118 L700,118 L700,102" stroke="#14B8A6" stroke-width="2" fill="none" marker-end="url(#arrow-accent-worker-pool-acquire)"/>
+  <!-- NO path 2: enqueue FIFO waiter -->
+  <g>
+    <rect x="150" y="258" width="440" height="58" rx="10" fill="#E0E7FF" stroke="#6366F1" stroke-width="1.5"/>
+    <text x="370" y="280" text-anchor="middle" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="13" font-weight="600" fill="#312E81">enqueue FIFO waiter &#8594; waitForCapacity</text>
+    <text x="370" y="299" text-anchor="middle" font-family="ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace" font-size="11" fill="#475569">parks until acquire_timeout_ms (default 30000)</text>
+  </g>
+  <line x1="370" y1="218" x2="370" y2="254" stroke="#475569" stroke-width="1.5" fill="none" marker-end="url(#arrow-worker-pool-acquire)"/>
+  <g>
+    <rect x="378" y="227" width="120" height="18" rx="4" fill="#FFFFFF" stroke="#E2E8F0"/>
+    <text x="438" y="236" text-anchor="middle" dominant-baseline="middle" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11" font-weight="500" fill="#7F1D1D">no (not canGrow)</text>
+  </g>
+  <!-- no_capacity result block -->
+  <g>
+    <rect x="150" y="354" width="440" height="58" rx="10" fill="#FEE2E2" stroke="#EF4444" stroke-width="1.5"/>
+    <text x="370" y="376" text-anchor="middle" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="13" font-weight="600" fill="#7F1D1D">status: 'no_capacity'</text>
+    <text x="370" y="395" text-anchor="middle" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11" fill="#7F1D1D">timeout / blocked &#8594; closed reason set</text>
+  </g>
+  <line x1="370" y1="316" x2="370" y2="350" stroke="#EF4444" stroke-width="1.5" fill="none" marker-end="url(#arrow-danger-worker-pool-acquire)"/>
+  <!-- four no_capacity reason chips -->
+  <text x="630" y="372" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11" font-weight="600" fill="#475569">no_capacity reasons</text>
+  <g font-family="ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace" font-size="11" fill="#7F1D1D">
+    <rect x="630" y="382" width="130" height="22" rx="6" fill="#FEE2E2" stroke="#EF4444" stroke-width="1.25"/>
+    <text x="695" y="393" text-anchor="middle" dominant-baseline="middle">acquire_timeout</text>
+    <rect x="768" y="382" width="100" height="22" rx="6" fill="#FEE2E2" stroke="#EF4444" stroke-width="1.25"/>
+    <text x="818" y="393" text-anchor="middle" dominant-baseline="middle">spend_cap</text>
+    <rect x="630" y="410" width="130" height="22" rx="6" fill="#FEE2E2" stroke="#EF4444" stroke-width="1.25"/>
+    <text x="695" y="421" text-anchor="middle" dominant-baseline="middle">pool_disabled</text>
+    <rect x="768" y="410" width="100" height="22" rx="6" fill="#FEE2E2" stroke="#EF4444" stroke-width="1.25"/>
+    <text x="818" y="421" text-anchor="middle" dominant-baseline="middle">driver_error</text>
+  </g>
+  <text x="630" y="450" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11" fill="#475569">triggers: pool max &#183; spend cap &#183;</text>
+  <text x="630" y="465" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11" fill="#475569">acquire timeout &#183; all-leased</text>
+  <!-- Side note: write-ahead ledger -->
+  <g>
+    <rect x="20" y="476" width="570" height="100" rx="10" fill="#FBFCFE" stroke="#E2E8F0" stroke-width="1.5"/>
+    <text x="36" y="498" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="12" font-weight="600" fill="#0F172A">Write-ahead ledger &amp; crash recovery</text>
+    <text x="36" y="519" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11" fill="#475569">The provisional ledger row precedes driver.provision so a paid machine is</text>
+    <text x="36" y="535" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11" fill="#475569">never orphaned by a crash mid-grow (ledger drivers only, capabilities.usesLedger).</text>
+    <text x="36" y="556" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11" fill="#475569">On restart, hydrate() re-adopts POOL_OWNED_LABEL survivors via driver.list()</text>
+    <text x="36" y="568" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11" fill="#475569">as authoritative truth, dropping orphan rows.</text>
+  </g>
+  <!-- Legend -->
+  <g font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11" fill="#475569">
+    <rect x="620" y="492" width="14" height="14" rx="3" fill="#CCFBF1" stroke="#14B8A6" stroke-width="1.5"/>
+    <text x="640" y="500" dominant-baseline="middle">accent: leased / happy path</text>
+    <rect x="620" y="514" width="14" height="14" rx="3" fill="#DCFCE7" stroke="#22C55E" stroke-width="1.5"/>
+    <text x="640" y="522" dominant-baseline="middle">ext: grow via WorkerDriver</text>
+    <rect x="620" y="536" width="14" height="14" rx="3" fill="#E0E7FF" stroke="#6366F1" stroke-width="1.5"/>
+    <text x="640" y="544" dominant-baseline="middle">engine: pool decision / queue</text>
+    <rect x="620" y="558" width="14" height="14" rx="3" fill="#FEE2E2" stroke="#EF4444" stroke-width="1.5"/>
+    <text x="640" y="566" dominant-baseline="middle">danger: no_capacity</text>
+  </g>
+</svg>

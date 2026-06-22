@@ -6,6 +6,7 @@ import {
   ONE_WEEK_MS,
   PORT_MAX,
   RENDER_INTERVAL_MAX_MS,
+  isRecord,
   isValidConcurrency,
   isValidEnsembleSize,
   isValidIntervalMs,
@@ -17,6 +18,45 @@ import {
 } from "@lorenz/domain";
 
 import { normalizeWorkflowConfig } from "./aliases.js";
+
+// Deprecations are declared as Zod `.meta()` annotations on the schema fields and sections they
+// belong to, so the fact that a key is deprecated lives next to where that key is defined. The
+// scanner in `deprecations.ts` reads these annotations back; it owns no key lists of its own.
+
+/** Field-level annotation: this key is deprecated in favor of {@link replacement}. */
+interface DeprecatedFieldMeta {
+  /** snake_case replacement path, e.g. `agents.codex.bridge_command`. */
+  replacement: string;
+  /** Optional per-field guidance; falls back to the section note when omitted. */
+  detail?: string;
+}
+
+/** Object-level annotation: every catchall (undeclared) key in this section is deprecated. */
+interface FlatShapeDeprecationMeta {
+  /** Bundle namespace that replaces the flat shape, e.g. `trackers`. */
+  replacementBundle: string;
+  /** Section key whose value names the suggested bundle (e.g. `kind`). */
+  bundleNameKey: string;
+  /** Guidance appended to each flagged key's warning. */
+  note: string;
+}
+
+/** Tag a schema field as deprecated with the canonical key that replaces it. */
+function deprecatedField<T extends z.ZodType>(schema: T, meta: DeprecatedFieldMeta): T {
+  return schema.meta({ deprecation: meta });
+}
+
+function fieldDeprecation(schema: z.ZodType): DeprecatedFieldMeta | undefined {
+  return (schema.meta() as { deprecation?: DeprecatedFieldMeta } | undefined)?.deprecation;
+}
+
+function sectionDeprecationNote(schema: z.ZodType): string | undefined {
+  return (schema.meta() as { deprecatedSection?: string } | undefined)?.deprecatedSection;
+}
+
+function flatShapeDeprecation(schema: z.ZodType): FlatShapeDeprecationMeta | undefined {
+  return (schema.meta() as { flatShape?: FlatShapeDeprecationMeta } | undefined)?.flatShape;
+}
 
 const numericInput = z.union([
   z.number().refine((n) => !Number.isNaN(n), { message: "must not be NaN" }),
@@ -114,7 +154,10 @@ export const agentRecordOverrideSchema = z
   .catchall(z.unknown());
 
 // Common keys are validated after the tracker provider has been selected. This schema is
-// used for the legacy `tracker.kind` form and canonical `trackers.<name>` records.
+// used for the legacy `tracker.kind` form and canonical `trackers.<name>` records. The declared
+// keys are the core selector; the catchall carries provider passthrough options, which under
+// `tracker` (the flat shape) are deprecated in favor of a `trackers.<name>` bundle - see the
+// `flatShape` annotation, which the deprecation scanner reads to flag those undeclared keys.
 export const trackerRecordSchema = z
   .object({
     kind: z.string().optional(),
@@ -133,7 +176,14 @@ export const trackerRecordSchema = z
       .strict()
       .optional(),
   })
-  .catchall(z.unknown());
+  .catchall(z.unknown())
+  .meta({
+    flatShape: {
+      replacementBundle: "trackers",
+      bundleNameKey: "kind",
+      note: "Provider options under `tracker` (flat shape) are deprecated; move them into a `trackers.<name>` bundle with `provider:` selected by `tracker.kind`.",
+    } satisfies FlatShapeDeprecationMeta,
+  });
 const trackerRawSchema = z.record(z.string(), z.unknown());
 const trackersRawSchema = z.record(z.string(), z.record(z.string(), z.unknown()));
 
@@ -209,23 +259,51 @@ const agentRawSchema = z
     skills: skillSourceListSchema.optional(),
   })
   .strict();
+// The top-level `codex:`/`claude:` sections are legacy sugar folded into `agents.<kind>` at
+// parse time, so every field carries the canonical `agents.<kind>` key that replaces it.
 const codexRawSchema = z
   .object({
-    command: z.string().optional(),
-    turnTimeoutMs: coercedTimeoutMs.optional(),
-    stallTimeoutMs: coercedNonNegativeTimeoutMs.optional(),
+    command: deprecatedField(z.string().optional(), {
+      replacement: "agents.codex.bridge_command",
+    }),
+    turnTimeoutMs: deprecatedField(coercedTimeoutMs.optional(), {
+      replacement: "agents.codex.turn_timeout_ms",
+    }),
+    stallTimeoutMs: deprecatedField(coercedNonNegativeTimeoutMs.optional(), {
+      replacement: "agents.codex.stall_timeout_ms",
+    }),
   })
-  .strict();
+  .strict()
+  .meta({
+    deprecatedSection:
+      "The top-level `codex` section is legacy sugar; configure agent records under `agents.codex` instead.",
+  });
 const claudeRawSchema = z
   .object({
-    command: z.string().optional(),
-    model: z.string().optional(),
-    turnTimeoutMs: coercedTimeoutMs.optional(),
-    stallTimeoutMs: coercedNonNegativeTimeoutMs.optional(),
-    strictMcpConfig: coercedBoolean.optional(),
-    providerConfig: z.record(z.string(), z.unknown()).optional(),
+    command: deprecatedField(z.string().optional(), {
+      replacement: "agents.claude.bridge_command",
+    }),
+    model: deprecatedField(z.string().optional(), {
+      replacement: "agents.claude.provider_config.model",
+    }),
+    turnTimeoutMs: deprecatedField(coercedTimeoutMs.optional(), {
+      replacement: "agents.claude.turn_timeout_ms",
+    }),
+    stallTimeoutMs: deprecatedField(coercedNonNegativeTimeoutMs.optional(), {
+      replacement: "agents.claude.stall_timeout_ms",
+    }),
+    strictMcpConfig: deprecatedField(coercedBoolean.optional(), {
+      replacement: "agents.claude.strict_mcp_config",
+    }),
+    providerConfig: deprecatedField(z.record(z.string(), z.unknown()).optional(), {
+      replacement: "agents.claude.provider_config",
+    }),
   })
-  .strict();
+  .strict()
+  .meta({
+    deprecatedSection:
+      "The top-level `claude` section is legacy sugar; configure agent records under `agents.claude` instead.",
+  });
 const observabilityRawSchema = z
   .object({
     dashboardEnabled: coercedBoolean.optional(),
@@ -282,6 +360,90 @@ export const workflowConfigSchema = z.preprocess(
     })
     .passthrough(),
 );
+
+/** A deprecated config key discovered by reading the schema annotations, with its replacement. */
+export interface ConfigDeprecation {
+  /** snake_case config path as written in front matter, e.g. `codex.command`. */
+  configPath: string;
+  /** Recommended replacement key or shape, e.g. `agents.codex.bridge_command`. */
+  replacement: string;
+  /** Extra guidance appended to the formatted warning. */
+  detail?: string | undefined;
+}
+
+// Sections whose deprecated keys are declared field-by-field via `deprecatedField`/`.meta`.
+const ANNOTATED_DEPRECATION_SECTIONS: ReadonlyArray<{ section: string; schema: z.ZodObject }> = [
+  { section: "codex", schema: codexRawSchema },
+  { section: "claude", schema: claudeRawSchema },
+];
+
+/**
+ * Read the deprecation annotations off the schemas for a normalized (alias-resolved) config and
+ * return one entry per deprecated key in use. The facts all live on the schemas; this walker
+ * only reports what they declare.
+ */
+export function schemaConfigDeprecations(normalized: Record<string, unknown>): ConfigDeprecation[] {
+  const out: ConfigDeprecation[] = [];
+  for (const { section, schema } of ANNOTATED_DEPRECATION_SECTIONS) {
+    collectAnnotatedFields(normalized[section], section, schema, out);
+  }
+  collectFlatShape(normalized.tracker, "tracker", trackerRecordSchema, out);
+  return out;
+}
+
+function collectAnnotatedFields(
+  rawSection: unknown,
+  section: string,
+  schema: z.ZodObject,
+  out: ConfigDeprecation[],
+): void {
+  if (!isRecord(rawSection)) return;
+  const shape: Record<string, z.ZodType> = schema.def.shape;
+  const note = sectionDeprecationNote(schema);
+  for (const key of Object.keys(rawSection)) {
+    const field = shape[key];
+    if (!field) continue;
+    const dep = fieldDeprecation(field);
+    if (!dep) continue;
+    out.push({
+      configPath: `${section}.${toSnakeKey(key)}`,
+      replacement: dep.replacement,
+      detail: dep.detail ?? note,
+    });
+  }
+}
+
+function collectFlatShape(
+  rawSection: unknown,
+  section: string,
+  schema: z.ZodObject,
+  out: ConfigDeprecation[],
+): void {
+  if (!isRecord(rawSection)) return;
+  const flat = flatShapeDeprecation(schema);
+  if (!flat) return;
+  const coreKeys = new Set(Object.keys(schema.def.shape));
+  const bundle = suggestedBundleName(rawSection[flat.bundleNameKey]);
+  for (const key of Object.keys(rawSection)) {
+    if (coreKeys.has(key)) continue;
+    out.push({
+      configPath: `${section}.${toSnakeKey(key)}`,
+      replacement: `${flat.replacementBundle}.${bundle}.${toSnakeKey(key)}`,
+      detail: flat.note,
+    });
+  }
+}
+
+function suggestedBundleName(kind: unknown): string {
+  return typeof kind === "string" && kind.trim() !== "" ? kind.trim() : "<name>";
+}
+
+function toSnakeKey(key: string): string {
+  return key
+    .replace(/([A-Z]+)([A-Z][a-z])/g, "$1_$2")
+    .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
+    .toLowerCase();
+}
 
 export type WorkflowConfigRaw = z.infer<typeof workflowConfigSchema>;
 export type WorkersRaw = z.infer<typeof workersRawSchema>;

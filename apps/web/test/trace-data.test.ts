@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, test, vi, type Mock } from "vitest";
+import { settle } from "@lorenz/test-utils";
 
 import type { DisplayEvent } from "../src/features/traceviz/api/types";
 import type { WsMessage } from "../src/shared/hooks/useWebSocket";
@@ -609,5 +610,5 @@ function deferred<T>(): {
 }
 
 async function flushAsync(): Promise<void> {
-  await new Promise((resolve) => setTimeout(resolve, 0));
+  await settle(0);
 }

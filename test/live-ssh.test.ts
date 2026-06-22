@@ -10,7 +10,7 @@ import { parseConfig, runAgentAttempt, runSsh, shellEscape } from "@lorenz/cli";
 import type { Issue, WorkflowDefinition } from "@lorenz/cli";
 import { acpExecutorProvider } from "@lorenz/acp";
 import { defaultAgentExecutorRegistry } from "@lorenz/agent-sdk";
-import { assert, sampleIssue, tempDir } from "@lorenz/test-utils";
+import { assert, sampleIssue, settle, tempDir } from "@lorenz/test-utils";
 
 // Attempts run through the CLI's default adapters, which resolve executors (and agent
 // option vocabularies at parse time) via the process-default registry.
@@ -509,7 +509,7 @@ async function reserveTcpPort(retries = 3): Promise<number> {
     if (available) return port;
     if (attempt < retries - 1) {
       // Small delay before retrying to let ephemeral port churn settle
-      await new Promise((r) => setTimeout(r, 50));
+      await settle(50);
     }
   }
   throw new Error("failed to reserve an available tcp port after retries");

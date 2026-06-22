@@ -1,0 +1,120 @@
+<svg role="img" aria-labelledby="t-traceviz-flow d-traceviz-flow" viewBox="0 0 920 520" width="100%" style="max-width:920px;height:auto" xmlns="http://www.w3.org/2000/svg">
+  <title id="t-traceviz-flow">Trace capture and view flow</title>
+  <desc id="d-traceviz-flow">Each runtime AgentUpdate flows through the onAgentUpdate callback into TraceEmitter.emit, which appends one JSON line to a per-issue trace.jsonl. TraceWatcher polls those files and parseTraceLines turns raw lines into DisplayEvents, consumed by the live dashboard over the websocket and by the standalone traceviz viewer.</desc><rect x="0.75" y="0.75" width="918.50" height="518.50" rx="14" fill="#FFFFFF" stroke="#E2E8F0" stroke-width="1.5"/>
+  <defs>
+    <marker id="arrow-traceviz-flow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#475569"/>
+    </marker>
+    <marker id="arrow-accent-traceviz-flow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#14B8A6"/>
+    </marker>
+  </defs>
+  <text x="16" y="30" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="15" font-weight="600" fill="#0F172A">Trace capture and view flow</text>
+  <!-- Row 1: capture pipeline -->
+  <!-- runtime AgentUpdate (external) -->
+  <g>
+    <rect x="16" y="64" width="150" height="56" rx="10" fill="#FFFFFF" stroke="#94A3B8" stroke-width="1.5" stroke-dasharray="4 3"/>
+    <text x="91" y="86" text-anchor="middle" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="13" font-weight="600" fill="#334155">runtime</text>
+    <text x="91" y="104" text-anchor="middle" font-family="ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace" font-size="12" fill="#475569">AgentUpdate</text>
+  </g>
+  <!-- onAgentUpdate callback (apps/cli) -->
+  <g>
+    <rect x="216" y="64" width="160" height="56" rx="10" fill="#FEF3C7" stroke="#F59E0B" stroke-width="1.5"/>
+    <text x="296" y="86" text-anchor="middle" font-family="ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace" font-size="12" fill="#78350F">onAgentUpdate</text>
+    <text x="296" y="104" text-anchor="middle" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11" fill="#78350F">apps/cli callback</text>
+  </g>
+  <!-- TraceEmitter.emit (engine) -->
+  <g>
+    <rect x="426" y="64" width="170" height="56" rx="10" fill="#E0E7FF" stroke="#6366F1" stroke-width="1.5"/>
+    <text x="511" y="86" text-anchor="middle" font-family="ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace" font-size="12" fill="#312E81">TraceEmitter.emit</text>
+    <text x="511" y="104" text-anchor="middle" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11" fill="#475569">traceviz-emitter</text>
+  </g>
+  <!-- trace.jsonl (leaf/storage) -->
+  <g>
+    <rect x="646" y="56" width="258" height="72" rx="10" fill="#F1F5F9" stroke="#94A3B8" stroke-width="1.5"/>
+    <text x="775" y="80" text-anchor="middle" font-family="ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace" font-size="12" fill="#334155">trace.jsonl</text>
+    <text x="775" y="98" text-anchor="middle" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11" fill="#475569">&lt;traceDir&gt;/&lt;urlencoded issueId&gt;/</text>
+    <text x="775" y="114" text-anchor="middle" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11" fill="#475569">one JSON line per update</text>
+  </g>
+  <!-- Row 1 edges -->
+  <line x1="166" y1="92" x2="216" y2="92" stroke="#475569" stroke-width="1.5" marker-end="url(#arrow-traceviz-flow)"/>
+  <line x1="376" y1="92" x2="426" y2="92" stroke="#475569" stroke-width="1.5" marker-end="url(#arrow-traceviz-flow)"/>
+  <line x1="596" y1="92" x2="646" y2="92" stroke="#475569" stroke-width="1.5" marker-end="url(#arrow-traceviz-flow)"/>
+  <!-- note chip: 1 AgentUpdate = 1 trace line, sits over emitter->jsonl -->
+  <g>
+    <rect x="572" y="158" width="200" height="26" rx="6" fill="#CCFBF1" stroke="#14B8A6" stroke-width="1.25"/>
+    <text x="672" y="171" text-anchor="middle" dominant-baseline="middle" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11" font-weight="600" fill="#134E4A">1 AgentUpdate = 1 trace line</text>
+  </g>
+  <!-- Row 2: watcher + parser -->
+  <!-- TraceWatcher (engine) -->
+  <g>
+    <rect x="646" y="216" width="258" height="60" rx="10" fill="#E0E7FF" stroke="#6366F1" stroke-width="1.5"/>
+    <text x="775" y="240" text-anchor="middle" font-family="ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace" font-size="12" fill="#312E81">TraceWatcher</text>
+    <text x="775" y="258" text-anchor="middle" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11" fill="#475569">polls files every 500ms</text>
+  </g>
+  <!-- parseTraceLines -> DisplayEvent (engine) -->
+  <g>
+    <rect x="356" y="216" width="240" height="60" rx="10" fill="#E0E7FF" stroke="#6366F1" stroke-width="1.5"/>
+    <text x="476" y="240" text-anchor="middle" font-family="ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace" font-size="12" fill="#312E81">parseTraceLines</text>
+    <text x="476" y="258" text-anchor="middle" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11" fill="#475569">→ DisplayEvent[]</text>
+  </g>
+  <!-- edges trace.jsonl -> watcher (down), watcher -> parser (left) -->
+  <path d="M775,128 L775,216" fill="none" stroke="#475569" stroke-width="1.5" marker-end="url(#arrow-traceviz-flow)"/>
+  <g>
+    <rect x="800" y="160" width="84" height="22" rx="4" fill="#FFFFFF" stroke="#E2E8F0"/>
+    <text x="842" y="171" text-anchor="middle" dominant-baseline="middle" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11" font-weight="500" fill="#475569">poll / read</text>
+  </g>
+  <line x1="646" y1="246" x2="596" y2="246" stroke="#475569" stroke-width="1.5" marker-end="url(#arrow-traceviz-flow)"/>
+  <!-- Fork label -->
+  <text x="356" y="312" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11" font-weight="600" fill="#475569">DisplayEvent[] feeds two consumers</text>
+  <!-- Consumer (a) live -->
+  <!-- @lorenz/server /ws (engine) -->
+  <g>
+    <rect x="16" y="332" width="250" height="60" rx="10" fill="#E0E7FF" stroke="#6366F1" stroke-width="1.5"/>
+    <text x="141" y="356" text-anchor="middle" font-family="ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace" font-size="12" fill="#312E81">@lorenz/server  /ws</text>
+    <text x="141" y="374" text-anchor="middle" font-family="ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace" font-size="11" fill="#475569">events / events_append</text>
+  </g>
+  <!-- dashboard (apps) -->
+  <g>
+    <rect x="16" y="424" width="250" height="60" rx="10" fill="#FEF3C7" stroke="#F59E0B" stroke-width="1.5"/>
+    <text x="141" y="448" text-anchor="middle" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="13" font-weight="600" fill="#78350F">dashboard</text>
+    <text x="141" y="466" text-anchor="middle" font-family="ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace" font-size="11" fill="#78350F">#/trace/&lt;issueId&gt;</text>
+  </g>
+  <!-- Consumer (b) standalone -->
+  <g>
+    <rect x="356" y="378" width="280" height="72" rx="10" fill="#FEF3C7" stroke="#F59E0B" stroke-width="1.5"/>
+    <text x="496" y="402" text-anchor="middle" font-family="ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace" font-size="12" fill="#78350F">apps/traceviz</text>
+    <text x="496" y="420" text-anchor="middle" font-family="ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace" font-size="11" fill="#78350F">pnpm traceviz file.jsonl</text>
+    <text x="496" y="436" text-anchor="middle" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11" fill="#78350F">standalone, read-once</text>
+  </g>
+  <!-- fork edges from parseTraceLines (bottom at 476,276) -->
+  <!-- to live /ws -->
+  <path d="M476,276 L476,300 L141,300 L141,332" fill="none" stroke="#14B8A6" stroke-width="2" marker-end="url(#arrow-accent-traceviz-flow)"/>
+  <g>
+    <rect x="246" y="289" width="52" height="22" rx="4" fill="#FFFFFF" stroke="#E2E8F0"/>
+    <text x="272" y="300" text-anchor="middle" dominant-baseline="middle" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11" font-weight="500" fill="#134E4A">live</text>
+  </g>
+  <!-- to standalone -->
+  <path d="M496,276 L496,378" fill="none" stroke="#475569" stroke-width="1.5" marker-end="url(#arrow-traceviz-flow)"/>
+  <g>
+    <rect x="506" y="316" width="92" height="22" rx="4" fill="#FFFFFF" stroke="#E2E8F0"/>
+    <text x="552" y="327" text-anchor="middle" dominant-baseline="middle" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11" font-weight="500" fill="#475569">standalone</text>
+  </g>
+  <!-- /ws -> dashboard -->
+  <path d="M141,392 L141,424" fill="none" stroke="#14B8A6" stroke-width="2" marker-end="url(#arrow-accent-traceviz-flow)"/>
+  <!-- Legend -->
+  <g>
+    <rect x="656" y="332" width="248" height="152" rx="10" fill="#FBFCFE" stroke="#E2E8F0" stroke-width="1"/>
+    <text x="672" y="354" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11" font-weight="600" fill="#475569">Legend</text>
+    <rect x="672" y="366" width="22" height="14" rx="3" fill="#E0E7FF" stroke="#6366F1" stroke-width="1.5"/>
+    <text x="702" y="373" dominant-baseline="middle" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11" fill="#475569">engine (traceviz, server)</text>
+    <rect x="672" y="388" width="22" height="14" rx="3" fill="#FEF3C7" stroke="#F59E0B" stroke-width="1.5"/>
+    <text x="702" y="395" dominant-baseline="middle" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11" fill="#475569">app / UI (cli, dashboard)</text>
+    <rect x="672" y="410" width="22" height="14" rx="3" fill="#F1F5F9" stroke="#94A3B8" stroke-width="1.5"/>
+    <text x="702" y="417" dominant-baseline="middle" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11" fill="#475569">on-disk trace file</text>
+    <rect x="672" y="432" width="22" height="14" rx="3" fill="#FFFFFF" stroke="#94A3B8" stroke-width="1.5" stroke-dasharray="4 3"/>
+    <text x="702" y="439" dominant-baseline="middle" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11" fill="#475569">external (runtime)</text>
+    <line x1="672" y1="461" x2="694" y2="461" stroke="#14B8A6" stroke-width="2" marker-end="url(#arrow-accent-traceviz-flow)"/>
+    <text x="702" y="461" dominant-baseline="middle" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11" fill="#475569">live push path</text>
+  </g>
+</svg>

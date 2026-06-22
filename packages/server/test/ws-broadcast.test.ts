@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import { TraceWatcher } from "@lorenz/traceviz-server";
+import { settle } from "@lorenz/test-utils";
 
 describe("TraceWatcher broadcast callback", () => {
   it("invokes callback with issueId and compact ticket info when lines change", async () => {
@@ -35,7 +36,7 @@ describe("TraceWatcher broadcast callback", () => {
     const callback = vi.fn();
 
     watcher.start(callback);
-    await new Promise((r) => setTimeout(r, 150));
+    await vi.waitFor(() => expect(callback).toHaveBeenCalledTimes(1));
     watcher.stop();
 
     expect(callback).toHaveBeenCalledTimes(1);
@@ -73,11 +74,13 @@ describe("TraceWatcher broadcast callback", () => {
     const callback = vi.fn();
 
     watcher.start(callback);
-    await new Promise((r) => setTimeout(r, 150));
+    await vi.waitFor(() => expect(callback).toHaveBeenCalled());
     const initialCount = callback.mock.calls.length;
 
-    // Wait without modifying
-    await new Promise((r) => setTimeout(r, 150));
+    // Wait without modifying the file. This asserts an absence (no further
+    // callbacks), which cannot be polled for, so settle briefly across several
+    // scan intervals and confirm the count held steady.
+    await settle(150);
     watcher.stop();
 
     expect(callback.mock.calls.length).toBe(initialCount);

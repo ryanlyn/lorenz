@@ -42,7 +42,7 @@ import EventEmitter from "node:events";
 import { createServer } from "node:net";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 
-import { assert } from "@lorenz/test-utils";
+import { assert, settle } from "@lorenz/test-utils";
 import { afterEach, beforeEach, test, vi } from "vitest";
 import { startReverseTunnel } from "@lorenz/ssh";
 import { parseConfig } from "@lorenz/config";
@@ -287,7 +287,7 @@ const baseReq: Pick<AcquireRunSlotRequest, "labels" | "timeoutMs"> = {
 // Flush the fire-and-forget recycle-driven settle chain (a macrotask turn runs
 // after every currently-queued microtask).
 async function flushMicrotasks(): Promise<void> {
-  await new Promise((resolve) => setTimeout(resolve, 0));
+  await settle(0);
 }
 
 // Asserts the structured acquire error the coordinator rethrows when the per-run

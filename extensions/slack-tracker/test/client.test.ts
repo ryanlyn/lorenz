@@ -3,7 +3,12 @@ import { assert } from "@lorenz/test-utils";
 
 import { parseSlackConfig } from "./helpers.js";
 
-import { InMemorySlackTransport, SlackTrackerClient } from "@lorenz/slack-tracker";
+import {
+  InMemorySlackTransport,
+  SlackTrackerClient,
+  type SlackSocketMode,
+  type SlackSocketModeOptions,
+} from "@lorenz/slack-tracker";
 
 function settings() {
   return parseSlackConfig(
@@ -487,4 +492,58 @@ test("the bot's reaction mirror self-heals after a human command", async () => {
   const afterHeal = reactionCalls;
   await client.fetchCandidateIssues();
   assert.equal(reactionCalls, afterHeal);
+});
+
+test("watch is null (pull-only) when no app token is configured", () => {
+  const transport = new InMemorySlackTransport({ C1: [] });
+  const client = new SlackTrackerClient(settings(), transport);
+  // No SLACK_APP_TOKEN -> no Socket Mode push; the runtime stays on interval polling.
+  assert.equal(
+    client.watch(() => {}),
+    null,
+  );
+});
+
+test("watch opens Socket Mode with the resolved app token and watched channels", () => {
+  const transport = new InMemorySlackTransport({ C1: [] });
+  const withApp = parseSlackConfig(
+    {
+      tracker: {
+        kind: "slack",
+        channels: ["C1", "C2"],
+        bot_user_id: "U_BOT",
+        active_states: ["Todo"],
+      },
+    },
+    { SLACK_BOT_TOKEN: "xoxb-test", SLACK_APP_TOKEN: "xapp-123" },
+  );
+
+  let opened: SlackSocketModeOptions | null = null;
+  let started = false;
+  let closed = false;
+  const client = new SlackTrackerClient(withApp, transport, (options) => {
+    opened = options;
+    return {
+      start: () => {
+        started = true;
+      },
+      close: () => {
+        closed = true;
+      },
+    } as unknown as SlackSocketMode;
+  });
+
+  const onChange = () => {};
+  const stream = client.watch(onChange);
+  assert.ok(stream !== null);
+  assert.equal(started, true);
+  assert.ok(opened !== null);
+  const opts = opened as unknown as SlackSocketModeOptions;
+  assert.equal(opts.appToken, "xapp-123");
+  assert.equal(opts.endpoint, "https://slack.com/api");
+  assert.deepEqual(opts.channels, ["C1", "C2"]);
+  assert.equal(opts.onChange, onChange);
+
+  stream!.close();
+  assert.equal(closed, true);
 });

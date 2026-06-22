@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-import { assert } from "@lorenz/test-utils";
+import { assert, settle } from "@lorenz/test-utils";
 import { afterEach, beforeEach, test } from "vitest";
 import type { WorkerPoolSettings } from "@lorenz/domain";
 import { withDerivedMaxInFlight } from "@lorenz/domain";
@@ -429,7 +429,7 @@ afterEach(async () => {
         await fs.rm(dir, { recursive: true, force: true });
         break;
       } catch {
-        await new Promise((resolve) => setTimeout(resolve, 5));
+        await settle(5);
       }
     }
   }
@@ -1193,7 +1193,7 @@ test("a late settle during a deadline-exceeded drain cannot flip a destroyed wor
       resurrectedToWarmIdle = true;
       break;
     }
-    await new Promise((resolve) => setTimeout(resolve, 2));
+    await settle(2);
   }
   assert.equal(resurrectedToWarmIdle, false);
 
@@ -1245,7 +1245,7 @@ async function waitUntil(
   const start = Date.now();
   while (!(await predicate())) {
     if (Date.now() - start > timeoutMs) throw new Error("waitUntil timed out");
-    await new Promise((resolve) => setTimeout(resolve, 2));
+    await settle(2);
   }
 }
 
@@ -1670,7 +1670,7 @@ test("an orphaned drain whose deadline fires after a re-enable does NOT destroy 
   // force-destroys the now-LIVE pool's workers (total -> 0). Under the fix the
   // stale-epoch / cleared-draining guard makes the loop bail, leaving the live
   // workers intact.
-  await new Promise((resolve) => setTimeout(resolve, 80));
+  await settle(80);
 
   const snap = pool.snapshot();
   // The leased worker AND the freshly grown warm worker both survive the stale drain.
@@ -1879,7 +1879,7 @@ test("reaper firing before hydrate does NOT destroy a labeled survivor; hydrate 
   );
 
   // Let the reaper tick fire at least once BEFORE hydrate runs.
-  await new Promise((resolve) => setTimeout(resolve, 30));
+  await settle(30);
 
   // The survivor was never destroyed by the pre-hydrate reaper tick.
   assert.deepEqual(driver.destroyed, []);
@@ -1893,7 +1893,7 @@ test("reaper firing before hydrate does NOT destroy a labeled survivor; hydrate 
 
   // And it is still present (not reaped) after a few more post-hydrate ticks,
   // because it is now in inventory (known), so the reconcile leaves it alone.
-  await new Promise((resolve) => setTimeout(resolve, 30));
+  await settle(30);
   assert.deepEqual(driver.destroyed, []);
   assert.equal(pool.snapshot().total, 1);
 
@@ -1931,7 +1931,7 @@ test("hydrate on a usesLedger driver whose list() always fails REJECTS (startup 
   // pool never proved it had re-adopted its inventory. (list() still fails for the
   // reaper too, so the reconcile cannot run, but the gate being closed is the
   // belt-and-braces guarantee.)
-  await new Promise((resolve) => setTimeout(resolve, 30));
+  await settle(30);
   assert.deepEqual(driver.destroyed, []);
 
   // The pool was never marked drained-safe; tear it down so the recurring reaper
@@ -1989,7 +1989,7 @@ test("hydrate retries list() and, once it succeeds, adopts the survivors and ope
   // The gate opened (hydrated=true): the re-adopted survivor stays known across a
   // few reaper ticks (a known worker is left alone; an UNKNOWN labeled worker would now
   // be reaped, proving the gate is open).
-  await new Promise((resolve) => setTimeout(resolve, 30));
+  await settle(30);
   assert.equal(pool.snapshot().total, 1);
 
   await pool.drain({ deadlineMs: 1_000 });

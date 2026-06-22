@@ -90,7 +90,7 @@ Run \`pnpm build\` first; staging fails if build outputs are missing. Authentica
 with \`npm login\` (or an .npmrc authToken in CI) before publishing for real.
 
 Options:
-  --version <value>  Override the published version (defaults to @lorenz/cli's)
+  --version <value>  Override the published version (defaults to root package.json)
   --tag <name>       npm dist-tag to publish under (e.g. next)
   --dry-run          Run \`npm publish --dry-run\` without uploading
   --help             Show this help

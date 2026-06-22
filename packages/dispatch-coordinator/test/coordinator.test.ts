@@ -30,7 +30,7 @@ import type {
   WorkerPoolSnapshot,
 } from "@lorenz/worker-pool";
 import type { AgentMcpEndpointLease } from "@lorenz/mcp";
-import { assert } from "@lorenz/test-utils";
+import { assert, settle } from "@lorenz/test-utils";
 
 import {
   createDispatchCoordinator,
@@ -761,7 +761,7 @@ function makeOrderedLease(
 // turn (setTimeout 0) runs after every currently-queued microtask, which is
 // enough for the close-endpoint -> settle-lease -> deregister chain.
 async function flushMicrotasks(): Promise<void> {
-  await new Promise((resolve) => setTimeout(resolve, 0));
+  await settle(0);
 }
 
 test("open-after-bind: a per-run manager mints the endpoint and the slot carries it", async () => {
@@ -936,7 +936,9 @@ test("drain awaits recycle-triggered per-run cleanup (endpoint release) before r
     },
     async release(lease): Promise<void> {
       if (lease === null) return;
-      await new Promise((resolve) => setTimeout(resolve, 15));
+      // Defer the close onto a macrotask so a drain that fails to await the
+      // recycle-triggered cleanup would observably return with it still open.
+      await settle(15);
       await lease.release();
     },
   };

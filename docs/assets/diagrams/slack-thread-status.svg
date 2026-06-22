@@ -1,0 +1,78 @@
+<svg role="img" aria-labelledby="t-slack-thread-status d-slack-thread-status" viewBox="0 0 920 420" width="100%" style="max-width:920px;height:auto" xmlns="http://www.w3.org/2000/svg" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif">
+  <title id="t-slack-thread-status">Slack thread status fold</title>
+  <desc id="d-slack-thread-status">Thread status is the latest ts-ordered event that wins among bot status replies, human bang-commands, and bare re-mentions. With no status event ever, status is derived from the bot-owned reaction mirror.</desc><rect x="0.75" y="0.75" width="918.50" height="418.50" rx="14" fill="#FFFFFF" stroke="#E2E8F0" stroke-width="1.5"/>
+  <defs>
+    <marker id="arrow-slack-thread-status" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#475569"/>
+    </marker>
+    <marker id="arrow-accent-slack-thread-status" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#14B8A6"/>
+    </marker>
+  </defs>
+  <text x="20" y="30" font-size="15" font-weight="600" fill="#0F172A">Slack thread status &#8212; fold by ts, latest event wins</text>
+  <!-- Section caption: events column -->
+  <text x="20" y="62" font-size="11" font-weight="600" fill="#475569">ts-ordered events in the thread</text>
+  <!-- Event 1: bot status reply -->
+  <g>
+    <rect x="20" y="74" width="300" height="56" rx="10" fill="#DCFCE7" stroke="#22C55E" stroke-width="1.5"/>
+    <text x="36" y="98" font-size="13" font-weight="600" fill="#14532D">bot &#8220;status: &lt;Name&gt;&#8221; reply</text>
+    <text x="36" y="116" font-family="ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace" font-size="12" fill="#475569">from slack_update_status</text>
+  </g>
+  <!-- Event 2: human bang command -->
+  <g>
+    <rect x="20" y="146" width="300" height="56" rx="10" fill="#FEF3C7" stroke="#F59E0B" stroke-width="1.5"/>
+    <text x="36" y="170" font-size="13" font-weight="600" fill="#78350F">human bang-command</text>
+    <text x="36" y="188" font-family="ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace" font-size="12" fill="#78350F">@bot !done | !cancel | !status X | !reopen</text>
+  </g>
+  <!-- Event 3: bare re-mention reopen -->
+  <g>
+    <rect x="20" y="218" width="300" height="56" rx="10" fill="#FEF3C7" stroke="#F59E0B" stroke-width="1.5"/>
+    <text x="36" y="242" font-size="13" font-weight="600" fill="#78350F">bare @bot re-mention</text>
+    <text x="36" y="260" font-size="11" fill="#78350F">on terminal issue &#8594; reopen (first active)</text>
+  </g>
+  <!-- Fold node (center) -->
+  <g>
+    <rect x="400" y="120" width="200" height="84" rx="10" fill="#CCFBF1" stroke="#14B8A6" stroke-width="2"/>
+    <text x="500" y="150" text-anchor="middle" font-size="13" font-weight="600" fill="#134E4A">fold by ts</text>
+    <text x="500" y="170" text-anchor="middle" font-size="11" fill="#134E4A">stateFromThread</text>
+    <text x="500" y="188" text-anchor="middle" font-size="11" fill="#134E4A">latest event wins</text>
+  </g>
+  <!-- Current status output -->
+  <g>
+    <rect x="700" y="120" width="200" height="84" rx="10" fill="#E0E7FF" stroke="#6366F1" stroke-width="1.5"/>
+    <text x="800" y="156" text-anchor="middle" font-size="13" font-weight="600" fill="#312E81">current status</text>
+    <text x="800" y="176" text-anchor="middle" font-size="11" fill="#475569">ThreadState.state</text>
+  </g>
+  <!-- Edges from events into fold -->
+  <path d="M320,102 C360,102 364,150 398,150" fill="none" stroke="#475569" stroke-width="1.5" marker-end="url(#arrow-slack-thread-status)"/>
+  <path d="M320,174 L398,166" fill="none" stroke="#475569" stroke-width="1.5" marker-end="url(#arrow-slack-thread-status)"/>
+  <path d="M320,246 C360,246 364,182 398,182" fill="none" stroke="#475569" stroke-width="1.5" marker-end="url(#arrow-slack-thread-status)"/>
+  <!-- fold -> current status (happy path) -->
+  <path d="M600,162 L698,162" fill="none" stroke="#14B8A6" stroke-width="2" marker-end="url(#arrow-accent-slack-thread-status)"/>
+  <!-- Fallback branch -->
+  <text x="400" y="300" font-size="11" font-weight="600" fill="#475569">fallback: no status event ever</text>
+  <g>
+    <rect x="400" y="312" width="200" height="84" rx="10" fill="#FFFFFF" stroke="#94A3B8" stroke-width="1.5" stroke-dasharray="4 3"/>
+    <text x="500" y="340" text-anchor="middle" font-size="13" font-weight="600" fill="#334155">derive from reaction</text>
+    <text x="500" y="358" text-anchor="middle" font-family="ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace" font-size="12" fill="#334155">emoji_states</text>
+    <text x="500" y="376" text-anchor="middle" font-size="11" fill="#475569">visibility mirror only (bot-owned)</text>
+  </g>
+  <!-- fold -> fallback (no events) -->
+  <path d="M500,204 L500,310" fill="none" stroke="#475569" stroke-width="1.5" stroke-dasharray="5 3" marker-end="url(#arrow-slack-thread-status)"/>
+  <g>
+    <rect x="458" y="246" width="120" height="20" rx="4" fill="#FFFFFF" stroke="#E2E8F0"/>
+    <text x="518" y="256" text-anchor="middle" font-size="11" font-weight="500" fill="#475569" dominant-baseline="middle">no events &#8594; reactions</text>
+  </g>
+  <!-- fallback -> current status -->
+  <path d="M600,354 C660,354 700,220 698,196" fill="none" stroke="#475569" stroke-width="1.5" stroke-dasharray="5 3" marker-end="url(#arrow-slack-thread-status)"/>
+  <!-- Legend -->
+  <g>
+    <text x="20" y="332" font-size="11" font-weight="600" fill="#475569">Legend</text>
+    <rect x="20" y="344" width="14" height="14" rx="3" fill="#DCFCE7" stroke="#22C55E" stroke-width="1.5"/>
+    <text x="40" y="351" font-size="11" fill="#334155" dominant-baseline="middle">bot event</text>
+    <rect x="20" y="366" width="14" height="14" rx="3" fill="#FEF3C7" stroke="#F59E0B" stroke-width="1.5"/>
+    <text x="40" y="373" font-size="11" fill="#334155" dominant-baseline="middle">human event</text>
+    <rect x="20" y="388" width="14" height="14" rx="3" fill="#FFFFFF" stroke="#94A3B8" stroke-width="1.5" stroke-dasharray="4 3"/>
+    <text x="40" y="395" font-size="11" fill="#334155" dominant-baseline="middle">fallback / mirror (dashed)</text>
+  </g>
+</svg>

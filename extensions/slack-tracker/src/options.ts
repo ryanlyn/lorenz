@@ -19,6 +19,14 @@ export interface SlackTrackerOptions {
    */
   botUserId?: string | undefined;
   /**
+   * Slack app-level token (`xapp-...`) with the `connections:write` scope, enabling Socket Mode
+   * push: the client opens a WebSocket to Slack and re-polls the instant a watched mention or
+   * thread reply arrives, instead of waiting out `polling.intervalMs`. Optional; when unset the
+   * tracker is pull-only (interval polling), exactly as before. Bot-token reads/writes are
+   * unaffected either way - this token is used ONLY to open the events socket.
+   */
+  appToken?: string | undefined;
+  /**
    * Optional allowlist of Slack user ids (e.g. `"U0123ABCD"`) whose messages may create issues.
    * Empty means no author constraint (any author, as long as the bot is mentioned). When
    * non-empty, only these users' bot-mentions become issues - the way to constrain dispatch to a
@@ -41,6 +49,7 @@ export interface SlackTrackerOptions {
 export function slackTrackerOptions(settings: Settings): SlackTrackerOptions {
   const options = settings.tracker.options;
   const botUserId = stringOption(options, "botUserId");
+  const appToken = stringOption(options, "appToken");
   const emojiStates = emojiStatesValue(options.emojiStates);
   const markerEmoji = stringOption(options, "markerEmoji");
   const replyLookbackDays = numberOption(options, "replyLookbackDays");
@@ -48,6 +57,7 @@ export function slackTrackerOptions(settings: Settings): SlackTrackerOptions {
     channels: stringListOption(options, "channels") ?? [],
     users: stringListOption(options, "users") ?? [],
     ...(botUserId !== undefined ? { botUserId } : {}),
+    ...(appToken !== undefined ? { appToken } : {}),
     ...(emojiStates !== undefined ? { emojiStates } : {}),
     ...(markerEmoji !== undefined ? { markerEmoji } : {}),
     ...(replyLookbackDays !== undefined ? { replyLookbackDays } : {}),

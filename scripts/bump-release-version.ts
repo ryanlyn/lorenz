@@ -9,12 +9,6 @@ type PackageJson = JsonObject & {
   version?: string;
 };
 
-type PackageFile = {
-  relativePath: string;
-  absolutePath: string;
-  packageJson: PackageJson;
-};
-
 export type BumpReleaseVersionOptions = {
   workspaceRoot?: string;
   baseVersion?: string;
@@ -30,8 +24,7 @@ export type BumpReleaseVersionResult = {
 
 const scriptPath = fileURLToPath(import.meta.url);
 const defaultWorkspaceRoot = path.resolve(path.dirname(scriptPath), "..");
-const firstPartyPackageRoots = ["apps", "packages", "extensions"];
-const cliPackagePath = "apps/cli/package.json";
+const rootPackagePath = "package.json";
 
 export async function bumpReleaseVersion(
   options: BumpReleaseVersionOptions = {},
@@ -41,32 +34,13 @@ export async function bumpReleaseVersion(
   }
 
   const workspaceRoot = path.resolve(options.workspaceRoot ?? defaultWorkspaceRoot);
-  const packageFiles = await readFirstPartyPackageFiles(workspaceRoot);
-  const cliPackage = packageFiles.find(
-    (packageFile) => packageFile.relativePath === cliPackagePath,
-  );
-  if (!cliPackage?.packageJson.version) {
-    throw new Error(`Cannot bump release version: ${cliPackagePath} has no version.`);
+  const rootPackagePathAbsolute = path.join(workspaceRoot, rootPackagePath);
+  const rootPackage = await readJson<PackageJson>(rootPackagePathAbsolute);
+  if (!rootPackage.version) {
+    throw new Error(`Cannot bump release version: ${rootPackagePath} has no version.`);
   }
 
-  const currentVersions = new Set<string>();
-  for (const packageFile of packageFiles) {
-    const version = packageFile.packageJson.version;
-    if (!version) {
-      throw new Error(`Cannot bump release version: ${packageFile.relativePath} has no version.`);
-    }
-    currentVersions.add(version);
-  }
-
-  if (currentVersions.size !== 1) {
-    throw new Error(
-      `Cannot bump release version: first-party package versions must match (${[
-        ...currentVersions,
-      ].join(", ")}).`,
-    );
-  }
-
-  const previousVersion = cliPackage.packageJson.version;
+  const previousVersion = rootPackage.version;
   const baseVersion = options.baseVersion
     ? maxStableVersion(previousVersion, options.baseVersion)
     : previousVersion;
@@ -74,50 +48,15 @@ export async function bumpReleaseVersion(
   assertStableVersion(nextVersion);
 
   if (!options.dryRun) {
-    await Promise.all(
-      packageFiles.map(async (packageFile) => {
-        packageFile.packageJson.version = nextVersion;
-        await writeJson(packageFile.absolutePath, packageFile.packageJson);
-      }),
-    );
+    rootPackage.version = nextVersion;
+    await writeJson(rootPackagePathAbsolute, rootPackage);
   }
 
   return {
     previousVersion,
     nextVersion,
-    packageFiles: packageFiles.map((packageFile) => packageFile.relativePath),
+    packageFiles: [rootPackagePath],
   };
-}
-
-async function readFirstPartyPackageFiles(workspaceRoot: string): Promise<PackageFile[]> {
-  const relativePaths = ["package.json"];
-
-  for (const root of firstPartyPackageRoots) {
-    const rootPath = path.join(workspaceRoot, root);
-    const entries = await fs.readdir(rootPath, { withFileTypes: true }).catch((error) => {
-      if (isNodeError(error) && error.code === "ENOENT") return [];
-      throw error;
-    });
-
-    for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
-      if (!entry.isDirectory()) continue;
-      const relativePath = path.posix.join(root, entry.name, "package.json");
-      if (await pathExists(path.join(workspaceRoot, relativePath))) {
-        relativePaths.push(relativePath);
-      }
-    }
-  }
-
-  return Promise.all(
-    relativePaths.map(async (relativePath) => {
-      const absolutePath = path.join(workspaceRoot, relativePath);
-      return {
-        relativePath,
-        absolutePath,
-        packageJson: await readJson<PackageJson>(absolutePath),
-      };
-    }),
-  );
 }
 
 function incrementPatchVersion(version: string): string {
@@ -170,25 +109,10 @@ async function writeJson(filePath: string, value: unknown): Promise<void> {
   await fs.writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`);
 }
 
-async function pathExists(filePath: string): Promise<boolean> {
-  try {
-    await fs.access(filePath);
-    return true;
-  } catch (error) {
-    if (isNodeError(error) && error.code === "ENOENT") return false;
-    throw error;
-  }
-}
-
-function isNodeError(error: unknown): error is NodeJS.ErrnoException {
-  return error instanceof Error && "code" in error;
-}
-
 function printHelp(): void {
   console.log(`Usage: tsx scripts/bump-release-version.ts [options]
 
-Bumps every first-party package.json version used by the Lorenz release train.
-By default this increments the current @lorenz/cli patch version.
+Bumps the root package.json version used to release Lorenz.
 
 Options:
   --base-version <value>  Increment patch from this stable semver version

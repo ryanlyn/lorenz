@@ -16,3 +16,10 @@ export {
   normalizeStateName,
   normalizeRouteName,
 } from "./parse.js";
+export type { ConfigDeprecationContext } from "./parse.js";
+export {
+  collectConfigDeprecations,
+  formatConfigDeprecation,
+  warnConfigDeprecations,
+} from "./deprecations.js";
+export type { ConfigDeprecation } from "./deprecations.js";

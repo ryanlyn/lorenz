@@ -632,6 +632,29 @@ export interface RuntimeTrackerClient {
    * cannot answer state queries cheaply may omit it and the caller will skip those flows.
    */
   fetchIssuesByStates?(states: string[]): Promise<Issue[]>;
+  /**
+   * Optional push capability: open a live change stream that invokes `onChange` whenever the
+   * backend signals new or updated work, so the runtime can re-poll IMMEDIATELY instead of
+   * waiting out `polling.intervalMs`. Backends that can only be pulled omit this and the runtime
+   * relies on interval polling alone.
+   *
+   * The interval poll always stays active as a safety net, so `onChange` need not be exhaustive
+   * or reliable: a missed signal is at worst recovered on the next interval, and the runtime
+   * coalesces a burst of signals into a single poll. The returned {@link TrackerChangeStream} is
+   * closed by the runtime on shutdown. Returning `null` means "no push available for this config"
+   * (e.g. the credential that enables it is unset) - the runtime stays on interval polling without
+   * treating it as an error.
+   */
+  watch?(onChange: () => void): TrackerChangeStream | null | Promise<TrackerChangeStream | null>;
+}
+
+/**
+ * A live subscription opened by {@link RuntimeTrackerClient.watch}. The runtime owns its
+ * lifecycle and calls {@link close} exactly once on shutdown; implementations must make close
+ * idempotent and release any sockets/timers it holds.
+ */
+export interface TrackerChangeStream {
+  close(): void | Promise<void>;
 }
 
 /**

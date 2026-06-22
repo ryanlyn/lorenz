@@ -2,7 +2,7 @@ import path from "node:path";
 import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 
 import { IssueStore } from "../src/issue-store.js";
 
@@ -101,10 +101,17 @@ describe("IssueStore", () => {
     store2.close();
   });
 
-  it("getRecent returns records ordered by most recent first", async () => {
-    store.upsert({ issueId: "id-1", issueIdentifier: "ENG-1", title: "First", url: null });
-    await new Promise((r) => setTimeout(r, 10));
-    store.upsert({ issueId: "id-2", issueIdentifier: "ENG-2", title: "Second", url: null });
+  it("getRecent returns records ordered by most recent first", () => {
+    // Fake timers give the two upserts distinct, deterministic `updatedAt`
+    // stamps (IssueStore.upsert reads Date.now()) so recency ordering is stable.
+    vi.useFakeTimers();
+    try {
+      store.upsert({ issueId: "id-1", issueIdentifier: "ENG-1", title: "First", url: null });
+      vi.advanceTimersByTime(10);
+      store.upsert({ issueId: "id-2", issueIdentifier: "ENG-2", title: "Second", url: null });
+    } finally {
+      vi.useRealTimers();
+    }
 
     const recent = store.getRecent(10);
     expect(recent).toHaveLength(2);

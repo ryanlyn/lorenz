@@ -1,0 +1,121 @@
+<svg role="img" aria-labelledby="t-worker-pool-state d-worker-pool-state" viewBox="0 0 720 560" width="100%" style="max-width:720px;height:auto" xmlns="http://www.w3.org/2000/svg">
+  <title id="t-worker-pool-state">Warm worker-pool WorkerState lifecycle</title>
+  <desc id="d-worker-pool-state">State machine for a worker in the warm pool: PROVISIONING becomes WARM_IDLE after a healthy probe; WARM_IDLE is leased to LEASED and released back; a failing probe demotes WARM_IDLE or LEASED to DEGRADED; the reaper drives DEGRADED, TTL/idle, and drained workers through DESTROYING to DESTROYED. WARMING and DRAINING are reserved and unused.</desc><rect x="0.75" y="0.75" width="718.50" height="558.50" rx="14" fill="#FFFFFF" stroke="#E2E8F0" stroke-width="1.5"/>
+  <defs>
+    <marker id="arrow-worker-pool-state" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#475569"/>
+    </marker>
+    <marker id="arrow-accent-worker-pool-state" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#14B8A6"/>
+    </marker>
+    <marker id="arrow-danger-worker-pool-state" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#EF4444"/>
+    </marker>
+    <style>
+      .lbl { font-family: ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; }
+      .mono { font-family: ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace; }
+    </style>
+  </defs>
+  <!-- title -->
+  <text x="20" y="30" class="lbl" font-size="15" font-weight="600" fill="#0F172A">Warm worker-pool: WorkerState lifecycle</text>
+  <!-- ============ NODES ============ -->
+  <!-- PROVISIONING -->
+  <g>
+    <rect x="280" y="56" width="160" height="48" rx="10" fill="#E0E7FF" stroke="#6366F1" stroke-width="1.5"/>
+    <text x="360" y="80" text-anchor="middle" dominant-baseline="middle" class="mono" font-size="13" font-weight="600" fill="#312E81">PROVISIONING</text>
+  </g>
+  <!-- WARM_IDLE -->
+  <g>
+    <rect x="280" y="176" width="160" height="48" rx="10" fill="#E0E7FF" stroke="#6366F1" stroke-width="1.5"/>
+    <text x="360" y="200" text-anchor="middle" dominant-baseline="middle" class="mono" font-size="13" font-weight="600" fill="#312E81">WARM_IDLE</text>
+  </g>
+  <!-- LEASED (accent) -->
+  <g>
+    <rect x="528" y="176" width="160" height="48" rx="10" fill="#CCFBF1" stroke="#14B8A6" stroke-width="1.5"/>
+    <text x="608" y="200" text-anchor="middle" dominant-baseline="middle" class="mono" font-size="13" font-weight="600" fill="#134E4A">LEASED</text>
+  </g>
+  <!-- DEGRADED (danger) -->
+  <g>
+    <rect x="280" y="312" width="160" height="48" rx="10" fill="#FEE2E2" stroke="#EF4444" stroke-width="1.5"/>
+    <text x="360" y="336" text-anchor="middle" dominant-baseline="middle" class="mono" font-size="13" font-weight="600" fill="#7F1D1D">DEGRADED</text>
+  </g>
+  <!-- DESTROYING -->
+  <g>
+    <rect x="280" y="432" width="160" height="48" rx="10" fill="#F1F5F9" stroke="#94A3B8" stroke-width="1.5"/>
+    <text x="360" y="456" text-anchor="middle" dominant-baseline="middle" class="mono" font-size="13" font-weight="600" fill="#334155">DESTROYING</text>
+  </g>
+  <!-- DESTROYED -->
+  <g>
+    <rect x="528" y="432" width="160" height="48" rx="10" fill="#F1F5F9" stroke="#94A3B8" stroke-width="1.5"/>
+    <text x="608" y="456" text-anchor="middle" dominant-baseline="middle" class="mono" font-size="13" font-weight="600" fill="#334155">DESTROYED</text>
+  </g>
+  <!-- ============ EDGES ============ -->
+  <!-- PROVISIONING -> WARM_IDLE (happy path) -->
+  <path d="M360,104 L360,176" stroke="#14B8A6" stroke-width="2" fill="none" marker-end="url(#arrow-accent-worker-pool-state)"/>
+  <g>
+    <rect x="368" y="129" width="104" height="20" rx="4" fill="#FFFFFF" stroke="#E2E8F0"/>
+    <text x="376" y="139" dominant-baseline="middle" class="lbl" font-size="11" font-weight="500" fill="#134E4A">probe healthy</text>
+  </g>
+  <!-- WARM_IDLE -> LEASED (acquire) -->
+  <path d="M440,192 L528,192" stroke="#14B8A6" stroke-width="2" fill="none" marker-end="url(#arrow-accent-worker-pool-state)"/>
+  <g>
+    <rect x="448" y="166" width="92" height="20" rx="4" fill="#FFFFFF" stroke="#E2E8F0"/>
+    <text x="456" y="176" dominant-baseline="middle" class="lbl" font-size="11" font-weight="500" fill="#134E4A">acquire / lease</text>
+  </g>
+  <!-- LEASED -> WARM_IDLE (release) -->
+  <path d="M528,208 L440,208" stroke="#475569" stroke-width="1.5" fill="none" marker-end="url(#arrow-worker-pool-state)"/>
+  <g>
+    <rect x="458" y="212" width="72" height="20" rx="4" fill="#FFFFFF" stroke="#E2E8F0"/>
+    <text x="466" y="222" dominant-baseline="middle" class="lbl" font-size="11" font-weight="500" fill="#475569">release</text>
+  </g>
+  <!-- WARM_IDLE -> DEGRADED (probe fails, reaper) -->
+  <path d="M340,224 L340,312" stroke="#EF4444" stroke-width="1.5" fill="none" marker-end="url(#arrow-danger-worker-pool-state)"/>
+  <g>
+    <rect x="160" y="258" width="170" height="20" rx="4" fill="#FFFFFF" stroke="#E2E8F0"/>
+    <text x="168" y="268" dominant-baseline="middle" class="lbl" font-size="11" font-weight="500" fill="#7F1D1D">reaper: probe fails (demote)</text>
+  </g>
+  <!-- LEASED -> DEGRADED (probe fails on a leased worker) -->
+  <path d="M580,224 L580,290 L400,290 L388,312" stroke="#EF4444" stroke-width="1.5" fill="none" stroke-dasharray="5 3" marker-end="url(#arrow-danger-worker-pool-state)"/>
+  <g>
+    <rect x="446" y="280" width="124" height="20" rx="4" fill="#FFFFFF" stroke="#E2E8F0"/>
+    <text x="454" y="290" dominant-baseline="middle" class="lbl" font-size="11" font-weight="500" fill="#7F1D1D">probe fails (leased)</text>
+  </g>
+  <!-- DEGRADED -> DESTROYING (reaper recycle) -->
+  <path d="M360,360 L360,432" stroke="#475569" stroke-width="1.5" fill="none" marker-end="url(#arrow-worker-pool-state)"/>
+  <g>
+    <rect x="368" y="385" width="116" height="20" rx="4" fill="#FFFFFF" stroke="#E2E8F0"/>
+    <text x="376" y="395" dominant-baseline="middle" class="lbl" font-size="11" font-weight="500" fill="#475569">reaper: recycle</text>
+  </g>
+  <!-- WARM_IDLE -> DESTROYING (ttl / idle reap) - left arc -->
+  <path d="M280,200 L150,200 L150,456 L280,456" stroke="#475569" stroke-width="1.5" fill="none" marker-end="url(#arrow-worker-pool-state)"/>
+  <g>
+    <rect x="40" y="306" width="220" height="36" rx="4" fill="#FFFFFF" stroke="#E2E8F0"/>
+    <text x="50" y="319" dominant-baseline="middle" class="lbl" font-size="11" font-weight="500" fill="#475569">reaper: ttl_ms or idle_reap_ms</text>
+    <text x="50" y="332" dominant-baseline="middle" class="lbl" font-size="11" font-weight="400" fill="#475569">(idle above min, oldest-first)</text>
+  </g>
+  <!-- DESTROYING -> DESTROYED -->
+  <path d="M440,456 L528,456" stroke="#475569" stroke-width="1.5" fill="none" marker-end="url(#arrow-worker-pool-state)"/>
+  <g>
+    <rect x="452" y="430" width="64" height="20" rx="4" fill="#FFFFFF" stroke="#E2E8F0"/>
+    <text x="460" y="440" dominant-baseline="middle" class="lbl" font-size="11" font-weight="500" fill="#475569">destroy</text>
+  </g>
+  <!-- entry marker into PROVISIONING -->
+  <circle cx="360" cy="44" r="4" fill="#475569"/>
+  <path d="M360,48 L360,56" stroke="#475569" stroke-width="1.5" fill="none" marker-end="url(#arrow-worker-pool-state)"/>
+  <!-- reserved note -->
+  <text x="528" y="78" class="lbl" font-size="11" font-weight="400" fill="#475569">WARMING and</text>
+  <text x="528" y="92" class="lbl" font-size="11" font-weight="400" fill="#475569">DRAINING are</text>
+  <text x="528" y="106" class="lbl" font-size="11" font-weight="400" fill="#475569">reserved, unused</text>
+  <!-- ============ LEGEND ============ -->
+  <g>
+    <rect x="20" y="500" width="490" height="44" rx="8" fill="#FBFCFE" stroke="#E2E8F0"/>
+    <rect x="34" y="514" width="16" height="16" rx="4" fill="#CCFBF1" stroke="#14B8A6" stroke-width="1.5"/>
+    <text x="56" y="522" dominant-baseline="middle" class="lbl" font-size="11" fill="#475569">leased (in use)</text>
+    <rect x="166" y="514" width="16" height="16" rx="4" fill="#FEE2E2" stroke="#EF4444" stroke-width="1.5"/>
+    <text x="188" y="522" dominant-baseline="middle" class="lbl" font-size="11" fill="#475569">unhealthy</text>
+    <line x1="280" y1="522" x2="312" y2="522" stroke="#14B8A6" stroke-width="2"/>
+    <text x="318" y="522" dominant-baseline="middle" class="lbl" font-size="11" fill="#475569">happy path</text>
+    <line x1="404" y1="522" x2="436" y2="522" stroke="#EF4444" stroke-width="1.5" stroke-dasharray="5 3"/>
+    <text x="442" y="522" dominant-baseline="middle" class="lbl" font-size="11" fill="#475569">probe demote</text>
+  </g>
+</svg>

@@ -1,7 +1,7 @@
 import { test } from "vitest";
 import { statePayload } from "@lorenz/presenter";
 import type { RuntimeSnapshot } from "@lorenz/runtime-events";
-import { assert } from "@lorenz/test-utils";
+import { assert, settle } from "@lorenz/test-utils";
 
 import { startObservabilityServer, type RuntimeServerSource } from "@lorenz/server";
 
@@ -78,7 +78,9 @@ test("observability /ws still serves trace init when the runtime snapshot is una
 
     // Without a trace watcher, subscribe messages are ignored rather than answered
     ws.send(JSON.stringify({ type: "subscribe", issueId: "MT-WS" }));
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    // Asserting an absence (the subscribe is ignored), which cannot be polled
+    // for — settle briefly and confirm no extra message arrived.
+    await settle(100);
     assert.equal(messages.length, 1);
   } finally {
     ws.close();
@@ -127,6 +129,6 @@ async function waitFor(predicate: () => boolean, timeoutMs = 5_000): Promise<voi
   const deadline = Date.now() + timeoutMs;
   while (!predicate()) {
     if (Date.now() > deadline) throw new Error("Timed out waiting for condition");
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await settle(10);
   }
 }

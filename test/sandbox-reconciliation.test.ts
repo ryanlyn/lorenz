@@ -5,18 +5,14 @@ import type { ChaosLinearClient } from "../sandbox/sandbox.js";
 
 describe("Sandbox: Reconciliation", () => {
   test("stalled fake runner with default waitForRuns returns a stall error", async () => {
-    const result = await Promise.race([
-      runScenario({
-        issues: [makeIssue("stall", "STALL-1", { state: "Todo", stateType: "unstarted" })],
-        settingsOverrides: { codex: { stallTimeoutMs: 25 } },
-        runnerConfig: { defaultBehavior: { stall: true } },
-        pollTicks: 1,
-      }),
-      new Promise<"timed-out">((resolve) => setTimeout(() => resolve("timed-out"), 500)),
-    ]);
-
-    expect(result).not.toBe("timed-out");
-    if (result === "timed-out") return;
+    // No manual watchdog race here: a fixed deadline spuriously fails under load
+    // and duplicates vitest's testTimeout, which fails loudly if the scenario hangs.
+    const result = await runScenario({
+      issues: [makeIssue("stall", "STALL-1", { state: "Todo", stateType: "unstarted" })],
+      settingsOverrides: { codex: { stallTimeoutMs: 25 } },
+      runnerConfig: { defaultBehavior: { stall: true } },
+      pollTicks: 1,
+    });
 
     expect(result.ticksExecuted).toBe(1);
     expect(result.errors.map((error) => error.message).join("\n")).toContain("stall timeout");

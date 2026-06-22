@@ -7,7 +7,7 @@ import fc from "fast-check";
 import type { WorkerPoolSettings } from "@lorenz/domain";
 import { withDerivedMaxInFlight } from "@lorenz/domain";
 import type { ClockPort, TimerHandle } from "@lorenz/domain";
-import { assert } from "@lorenz/test-utils";
+import { assert, settle } from "@lorenz/test-utils";
 import { WorkerDriverRegistry, FakeWorkerDriver, POOL_OWNED_LABEL } from "@lorenz/worker-sdk";
 import type { WorkerDriver } from "@lorenz/worker-sdk";
 
@@ -97,18 +97,18 @@ class DeferredDriver implements WorkerDriver {
     metadata: Record<string, unknown>;
   }> {
     const workerHost = `fake://worker-${req.workerId}`;
-    return new Promise((resolve) => {
-      setTimeout(() => {
-        this.workers.add(req.workerId);
-        resolve({
-          workerId: req.workerId,
-          workerHost,
-          driverRef: workerHost,
-          createdAtMs: 0,
-          labels: [...req.labels],
-          metadata: {},
-        });
-      }, 0);
+    // Resolve on a microtask so provisioning is asynchronous (as a real driver
+    // would be) without a wall-clock timer.
+    return Promise.resolve().then(() => {
+      this.workers.add(req.workerId);
+      return {
+        workerId: req.workerId,
+        workerHost,
+        driverRef: workerHost,
+        createdAtMs: 0,
+        labels: [...req.labels],
+        metadata: {},
+      };
     });
   }
 
@@ -142,7 +142,7 @@ afterEach(async () => {
         await fs.rm(dir, { recursive: true, force: true });
         break;
       } catch {
-        await new Promise((resolve) => setTimeout(resolve, 5));
+        await settle(5);
       }
     }
   }
@@ -596,6 +596,6 @@ test("pool — N concurrent growth ops never exceed max (synchronous reservation
 // setTimeout) the pool arms (reaper top-up, deferred provisions) settle before
 // the property asserts. Two macrotask hops cover a provision-then-grow chain.
 async function flushAsync(): Promise<void> {
-  await new Promise((resolve) => setTimeout(resolve, 0));
-  await new Promise((resolve) => setTimeout(resolve, 0));
+  await settle(0);
+  await settle(0);
 }

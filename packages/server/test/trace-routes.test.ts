@@ -2,7 +2,7 @@ import path from "node:path";
 import { mkdirSync, appendFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 
 import { IssueStore } from "../src/issue-store.js";
 import { createTraceRoutes } from "../src/trace-routes.js";
@@ -79,7 +79,7 @@ describe("trace routes with IssueStore enrichment", () => {
 
     // Let watcher pick up the trace files
     watcher.start(() => {});
-    await new Promise((r) => setTimeout(r, 150));
+    await vi.waitFor(() => expect(watcher.getTickets()).toHaveLength(2));
 
     const data = (await getJson("/api/v1/tickets")) as { tickets: Array<Record<string, unknown>> };
     expect(data.tickets).toHaveLength(2);
@@ -95,7 +95,7 @@ describe("trace routes with IssueStore enrichment", () => {
 
   it("GET /api/v1/tickets returns tickets without store data gracefully", async () => {
     watcher.start(() => {});
-    await new Promise((r) => setTimeout(r, 150));
+    await vi.waitFor(() => expect(watcher.getTickets()).toHaveLength(2));
 
     const data = (await getJson("/api/v1/tickets")) as { tickets: Array<Record<string, unknown>> };
     expect(data.tickets).toHaveLength(2);
@@ -109,7 +109,7 @@ describe("trace routes with IssueStore enrichment", () => {
     issueStore.upsert({ issueId: "id-1", issueIdentifier: "RENAMED-1", title: "Title", url: null });
 
     watcher.start(() => {});
-    await new Promise((r) => setTimeout(r, 150));
+    await vi.waitFor(() => expect(watcher.getTickets()).toHaveLength(2));
 
     const data = (await getJson("/api/v1/tickets/id-1/events")) as Record<string, unknown>;
     expect(data.identifier).toBe("RENAMED-1");
@@ -119,7 +119,7 @@ describe("trace routes with IssueStore enrichment", () => {
     issueStore.upsert({ issueId: "id-1", issueIdentifier: "RENAMED-1", title: "Title", url: null });
 
     watcher.start(() => {});
-    await new Promise((r) => setTimeout(r, 150));
+    await vi.waitFor(() => expect(watcher.getTickets()).toHaveLength(2));
 
     const data = (await getJson("/api/v1/tickets/id%2D1/events")) as Record<string, unknown>;
     expect(data.issueId).toBe("id-1");
@@ -128,7 +128,7 @@ describe("trace routes with IssueStore enrichment", () => {
 
   it("GET /api/v1/tickets/:id/events falls back to watcher identifier", async () => {
     watcher.start(() => {});
-    await new Promise((r) => setTimeout(r, 150));
+    await vi.waitFor(() => expect(watcher.getTickets()).toHaveLength(2));
 
     const data = (await getJson("/api/v1/tickets/id-1/events")) as Record<string, unknown>;
     expect(data.identifier).toBe("TEST-1");
@@ -153,7 +153,7 @@ describe("trace routes with IssueStore enrichment", () => {
 
   it("GET /api/v1/tickets/:id/exists returns true for known ticket", async () => {
     watcher.start(() => {});
-    await new Promise((r) => setTimeout(r, 150));
+    await vi.waitFor(() => expect(watcher.getTickets()).toHaveLength(2));
 
     const data = (await getJson("/api/v1/tickets/id-1/exists")) as { exists: boolean };
     expect(data.exists).toBe(true);
@@ -161,26 +161,33 @@ describe("trace routes with IssueStore enrichment", () => {
 
   it("GET /api/v1/tickets/:id/exists returns false for unknown ticket", async () => {
     watcher.start(() => {});
-    await new Promise((r) => setTimeout(r, 150));
+    await vi.waitFor(() => expect(watcher.getTickets()).toHaveLength(2));
 
     const data = (await getJson("/api/v1/tickets/no-such-id/exists")) as { exists: boolean };
     expect(data.exists).toBe(false);
   });
 
   it("GET /api/v1/issues/recent returns records from issue store", async () => {
-    issueStore.upsert({
-      issueId: "id-1",
-      issueIdentifier: "TEST-1",
-      title: "First issue",
-      url: null,
-    });
-    await new Promise((r) => setTimeout(r, 10));
-    issueStore.upsert({
-      issueId: "id-2",
-      issueIdentifier: "TEST-2",
-      title: "Second issue",
-      url: "https://linear.app/2",
-    });
+    // Fake timers give the two upserts distinct, deterministic `updatedAt`
+    // stamps (IssueStore.upsert reads Date.now()) so recency ordering is stable.
+    vi.useFakeTimers();
+    try {
+      issueStore.upsert({
+        issueId: "id-1",
+        issueIdentifier: "TEST-1",
+        title: "First issue",
+        url: null,
+      });
+      vi.advanceTimersByTime(10);
+      issueStore.upsert({
+        issueId: "id-2",
+        issueIdentifier: "TEST-2",
+        title: "Second issue",
+        url: "https://linear.app/2",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
 
     const data = (await getJson("/api/v1/issues/recent?limit=5")) as {
       issues: Array<Record<string, unknown>>;

@@ -1,0 +1,67 @@
+<svg role="img" aria-labelledby="t-local-board-anatomy d-local-board-anatomy" viewBox="0 0 720 540" width="100%" style="max-width:720px;height:auto" xmlns="http://www.w3.org/2000/svg" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif">
+  <title id="t-local-board-anatomy">Local board file anatomy</title>
+  <desc id="d-local-board-anatomy">A BOARD-7.md markdown file split into three labeled regions - YAML front matter (status, labels), a human-authored title and description, and a hidden lorenz:comments marker before the Comments list - each with a callout to the writer that owns it: local_update_status owns status, the body is human-authored, and local_comment appends comments.</desc><rect x="0.75" y="0.75" width="718.50" height="538.50" rx="14" fill="#FFFFFF" stroke="#E2E8F0" stroke-width="1.5"/>
+  <defs>
+    <marker id="arrow-local-board-anatomy" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#475569"/>
+    </marker>
+  </defs>
+  <!-- Title -->
+  <text x="24" y="30" font-size="15" font-weight="600" fill="#0F172A">Local board file anatomy</text>
+  <text x="24" y="48" font-size="11" fill="#475569" font-family="ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace">.lorenz/local/BOARD-7.md</text>
+  <!-- ============ The file card (leaf role) ============ -->
+  <rect x="24" y="66" width="352" height="392" rx="10" fill="#F1F5F9" stroke="#94A3B8" stroke-width="1.5"/>
+  <!-- file tab / header -->
+  <rect x="24" y="66" width="352" height="30" rx="10" fill="#E2E8F0" stroke="#94A3B8" stroke-width="1.5"/>
+  <rect x="24" y="82" width="352" height="14" fill="#E2E8F0"/>
+  <line x1="24" y1="96" x2="376" y2="96" stroke="#94A3B8" stroke-width="1.5"/>
+  <text x="40" y="86" font-size="12" font-weight="600" fill="#334155" font-family="ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace">BOARD-7.md</text>
+  <!-- Region 1: YAML front matter (engine role tint to read as machine-owned) -->
+  <rect x="40" y="110" width="320" height="78" rx="8" fill="#E0E7FF" stroke="#6366F1" stroke-width="1.5"/>
+  <text x="52" y="128" font-size="12" fill="#312E81" font-family="ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace">---</text>
+  <text x="52" y="146" font-size="12" fill="#312E81" font-family="ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace">status: In Progress</text>
+  <text x="52" y="164" font-size="12" fill="#312E81" font-family="ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace">labels: [backend, urgent]</text>
+  <text x="52" y="182" font-size="12" fill="#312E81" font-family="ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace">---</text>
+  <text x="348" y="124" text-anchor="end" font-size="10" font-weight="600" fill="#6366F1">YAML front matter</text>
+  <!-- Region 2: Title + description (human body, leaf/neutral) -->
+  <rect x="40" y="200" width="320" height="110" rx="8" fill="#FFFFFF" stroke="#94A3B8" stroke-width="1.5"/>
+  <text x="52" y="226" font-size="14" font-weight="600" fill="#0F172A" font-family="ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace"># Fix retry backoff</text>
+  <text x="52" y="252" font-size="12" fill="#475569">Backoff resets on every poll, so</text>
+  <text x="52" y="270" font-size="12" fill="#475569">failed dispatches never cool down.</text>
+  <text x="52" y="288" font-size="12" fill="#475569">Repro and a fix are needed.</text>
+  <text x="348" y="218" text-anchor="end" font-size="10" font-weight="600" fill="#94A3B8">body</text>
+  <!-- Region 3: hidden marker + Comments -->
+  <rect x="40" y="322" width="320" height="120" rx="8" fill="#DCFCE7" stroke="#22C55E" stroke-width="1.5"/>
+  <text x="52" y="344" font-size="11.5" fill="#16A34A" font-style="italic" font-family="ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace">&lt;!-- lorenz:comments --&gt;</text>
+  <text x="52" y="366" font-size="13" font-weight="600" fill="#14532D" font-family="ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace">## Comments</text>
+  <text x="52" y="390" font-size="11" fill="#14532D" font-family="ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace">- 2026-05-29T10:00:00Z agent:</text>
+  <text x="64" y="406" font-size="11" fill="#14532D" font-family="ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace">opened PR</text>
+  <text x="52" y="426" font-size="11" fill="#14532D" font-family="ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace">- 2026-05-29T11:02:00Z agent:</text>
+  <text x="348" y="340" text-anchor="end" font-size="10" font-weight="600" fill="#22C55E">hidden marker + list</text>
+  <!-- ============ Callouts (right column) ============ -->
+  <!-- Callout 1: local_update_status owns status -->
+  <g>
+    <rect x="440" y="118" width="256" height="56" rx="10" fill="#E0E7FF" stroke="#6366F1" stroke-width="1.5"/>
+    <text x="456" y="142" font-size="12.5" font-weight="600" fill="#312E81" font-family="ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace">local_update_status</text>
+    <text x="456" y="160" font-size="11" fill="#475569">owns the status field</text>
+  </g>
+  <path d="M360 149 H440" fill="none" stroke="#475569" stroke-width="1.5" marker-end="url(#arrow-local-board-anatomy)"/>
+  <!-- Callout 2: human-authored body -->
+  <g>
+    <rect x="440" y="227" width="256" height="56" rx="10" fill="#FFFFFF" stroke="#94A3B8" stroke-width="1.5"/>
+    <text x="456" y="251" font-size="12.5" font-weight="600" fill="#334155">Human-authored issue body</text>
+    <text x="456" y="269" font-size="11" fill="#475569"># Title falls back to id if absent</text>
+  </g>
+  <path d="M360 255 H440" fill="none" stroke="#475569" stroke-width="1.5" marker-end="url(#arrow-local-board-anatomy)"/>
+  <!-- Callout 3: local_comment appends here -->
+  <g>
+    <rect x="440" y="354" width="256" height="56" rx="10" fill="#DCFCE7" stroke="#22C55E" stroke-width="1.5"/>
+    <text x="456" y="378" font-size="12.5" font-weight="600" fill="#14532D" font-family="ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace">local_comment</text>
+    <text x="456" y="396" font-size="11" fill="#475569">appends one line here</text>
+  </g>
+  <path d="M360 382 H440" fill="none" stroke="#475569" stroke-width="1.5" marker-end="url(#arrow-local-board-anatomy)"/>
+  <!-- ============ Side note ============ -->
+  <rect x="24" y="474" width="672" height="48" rx="10" fill="#FBFCFE" stroke="#E2E8F0" stroke-width="1.5"/>
+  <text x="40" y="494" font-size="11" fill="#475569">id = file stem &#183; only <tspan font-family="ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace" fill="#334155">^&lt;prefix&gt;\d+$</tspan> files are issues (default prefix <tspan font-family="ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace" fill="#334155">BOARD-</tspan>)</text>
+  <text x="40" y="512" font-size="11" fill="#475569">writes are crash-atomic (temp + fsync + rename/link) &#183; per-file serialized via a module-level lock</text>
+</svg>

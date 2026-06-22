@@ -1,0 +1,184 @@
+<svg role="img" aria-labelledby="t-dispatch-eligibility d-dispatch-eligibility" viewBox="0 0 720 1180" width="100%" style="max-width:720px;height:auto" xmlns="http://www.w3.org/2000/svg">
+  <title id="t-dispatch-eligibility">Dispatch eligibility decision tree</title>
+  <desc id="d-dispatch-eligibility">A candidate issue passes a top-down chain of eligibility and capacity checks. Each check branches "no" to the right to an ineligible or capacity-block outcome with its reason; "yes" continues down the vertical spine to claiming an ensemble slot. Order: identity fields present, active non-terminal state, routed to this worker, no open blockers (unstarted only), under global concurrency cap, under per-state cap, worker-host capacity available, free ensemble slot, then ELIGIBLE and claim slot.</desc><rect x="0.75" y="0.75" width="718.50" height="1178.50" rx="14" fill="#FFFFFF" stroke="#E2E8F0" stroke-width="1.5"/>
+  <defs>
+    <marker id="arrow-dispatch-eligibility" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#475569"/>
+    </marker>
+    <marker id="arrow-accent-dispatch-eligibility" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#14B8A6"/>
+    </marker>
+    <marker id="arrow-danger-dispatch-eligibility" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#EF4444"/>
+    </marker>
+    <style>
+      .sans { font-family: ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; }
+      .mono { font-family: ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace; }
+    </style>
+  </defs>
+  <!-- title -->
+  <text x="16" y="28" class="sans" font-size="15" font-weight="600" fill="#0F172A">Dispatch eligibility decision tree</text>
+  <text x="16" y="46" class="sans" font-size="11" fill="#475569">shouldDispatchIssue / dispatchBlockReason - packages/dispatch/src/index.ts</text>
+  <!-- candidate entry -->
+  <g>
+    <rect x="180" y="62" width="180" height="40" rx="10" fill="#F1F5F9" stroke="#94A3B8" stroke-width="1.5"/>
+    <text x="270" y="82" text-anchor="middle" class="sans" font-size="13" font-weight="600" fill="#334155">Candidate issue</text>
+    <text x="270" y="96" text-anchor="middle" class="sans" font-size="11" fill="#475569">from sortForDispatch order</text>
+  </g>
+  <!-- spine geometry: diamonds centered at x=270; danger chips on the right at x=500..700 -->
+  <!-- ===================== D1: identity ===================== -->
+  <!-- entry -> D1 -->
+  <path d="M270,102 L270,124" stroke="#475569" stroke-width="1.5" fill="none" marker-end="url(#arrow-dispatch-eligibility)"/>
+  <g>
+    <polygon points="270,124 360,164 270,204 180,164" fill="#E0E7FF" stroke="#6366F1" stroke-width="1.5"/>
+    <text x="270" y="160" text-anchor="middle" class="sans" font-size="12" font-weight="600" fill="#312E81">Has id / identifier</text>
+    <text x="270" y="174" text-anchor="middle" class="sans" font-size="12" font-weight="600" fill="#312E81">/ title / state?</text>
+  </g>
+  <!-- no -> chip -->
+  <path d="M360,164 L500,164" stroke="#EF4444" stroke-width="1.5" fill="none" marker-end="url(#arrow-danger-dispatch-eligibility)"/>
+  <rect x="424" y="153" width="22" height="16" rx="4" fill="#FFFFFF" stroke="#E2E8F0"/>
+  <text x="435" y="161" text-anchor="middle" class="sans" font-size="11" font-weight="500" fill="#7F1D1D" dominant-baseline="middle">no</text>
+  <g>
+    <rect x="500" y="142" width="204" height="44" rx="10" fill="#FEE2E2" stroke="#EF4444" stroke-width="1.5"/>
+    <text x="602" y="160" text-anchor="middle" class="sans" font-size="12" font-weight="600" fill="#7F1D1D">Ineligible</text>
+    <text x="602" y="176" text-anchor="middle" class="sans" font-size="11" fill="#7F1D1D">missing identity field</text>
+  </g>
+  <!-- ===================== D2: active state ===================== -->
+  <path d="M270,204 L270,234" stroke="#475569" stroke-width="1.5" fill="none" marker-end="url(#arrow-dispatch-eligibility)"/>
+  <rect x="278" y="208" width="26" height="16" rx="4" fill="#FFFFFF" stroke="#E2E8F0"/>
+  <text x="291" y="216" text-anchor="middle" class="sans" font-size="11" font-weight="500" fill="#14532D" dominant-baseline="middle">yes</text>
+  <g>
+    <polygon points="270,234 360,274 270,314 180,274" fill="#E0E7FF" stroke="#6366F1" stroke-width="1.5"/>
+    <text x="270" y="270" text-anchor="middle" class="sans" font-size="12" font-weight="600" fill="#312E81">Active</text>
+    <text x="270" y="284" text-anchor="middle" class="sans" font-size="12" font-weight="600" fill="#312E81">(non-terminal) state?</text>
+  </g>
+  <path d="M360,274 L500,274" stroke="#EF4444" stroke-width="1.5" fill="none" marker-end="url(#arrow-danger-dispatch-eligibility)"/>
+  <rect x="424" y="263" width="22" height="16" rx="4" fill="#FFFFFF" stroke="#E2E8F0"/>
+  <text x="435" y="271" text-anchor="middle" class="sans" font-size="11" font-weight="500" fill="#7F1D1D" dominant-baseline="middle">no</text>
+  <g>
+    <rect x="500" y="252" width="204" height="44" rx="10" fill="#FEE2E2" stroke="#EF4444" stroke-width="1.5"/>
+    <text x="602" y="270" text-anchor="middle" class="sans" font-size="12" font-weight="600" fill="#7F1D1D">Ineligible</text>
+    <text x="602" y="286" text-anchor="middle" class="sans" font-size="11" fill="#7F1D1D">inactive / terminal</text>
+  </g>
+  <!-- ===================== D3: routed ===================== -->
+  <path d="M270,314 L270,344" stroke="#475569" stroke-width="1.5" fill="none" marker-end="url(#arrow-dispatch-eligibility)"/>
+  <rect x="278" y="318" width="26" height="16" rx="4" fill="#FFFFFF" stroke="#E2E8F0"/>
+  <text x="291" y="326" text-anchor="middle" class="sans" font-size="11" font-weight="500" fill="#14532D" dominant-baseline="middle">yes</text>
+  <g>
+    <polygon points="270,344 360,384 270,424 180,384" fill="#E0E7FF" stroke="#6366F1" stroke-width="1.5"/>
+    <text x="270" y="388" text-anchor="middle" class="sans" font-size="12" font-weight="600" fill="#312E81">Routed to this worker?</text>
+  </g>
+  <path d="M360,384 L500,384" stroke="#EF4444" stroke-width="1.5" fill="none" marker-end="url(#arrow-danger-dispatch-eligibility)"/>
+  <rect x="424" y="373" width="22" height="16" rx="4" fill="#FFFFFF" stroke="#E2E8F0"/>
+  <text x="435" y="381" text-anchor="middle" class="sans" font-size="11" font-weight="500" fill="#7F1D1D" dominant-baseline="middle">no</text>
+  <g>
+    <rect x="500" y="362" width="204" height="44" rx="10" fill="#FEE2E2" stroke="#EF4444" stroke-width="1.5"/>
+    <text x="602" y="380" text-anchor="middle" class="sans" font-size="12" font-weight="600" fill="#7F1D1D">Ineligible</text>
+    <text x="602" y="396" text-anchor="middle" class="sans" font-size="11" fill="#7F1D1D">unrouted / wrong worker</text>
+  </g>
+  <!-- ===================== D4: blockers ===================== -->
+  <path d="M270,424 L270,454" stroke="#475569" stroke-width="1.5" fill="none" marker-end="url(#arrow-dispatch-eligibility)"/>
+  <rect x="278" y="428" width="26" height="16" rx="4" fill="#FFFFFF" stroke="#E2E8F0"/>
+  <text x="291" y="436" text-anchor="middle" class="sans" font-size="11" font-weight="500" fill="#14532D" dominant-baseline="middle">yes</text>
+  <g>
+    <polygon points="270,454 360,494 270,534 180,494" fill="#E0E7FF" stroke="#6366F1" stroke-width="1.5"/>
+    <text x="270" y="490" text-anchor="middle" class="sans" font-size="12" font-weight="600" fill="#312E81">No open blockers?</text>
+    <text x="270" y="504" text-anchor="middle" class="sans" font-size="11" fill="#475569">(unstarted only)</text>
+  </g>
+  <path d="M360,494 L500,494" stroke="#EF4444" stroke-width="1.5" fill="none" marker-end="url(#arrow-danger-dispatch-eligibility)"/>
+  <rect x="424" y="483" width="22" height="16" rx="4" fill="#FFFFFF" stroke="#E2E8F0"/>
+  <text x="435" y="491" text-anchor="middle" class="sans" font-size="11" font-weight="500" fill="#7F1D1D" dominant-baseline="middle">no</text>
+  <g>
+    <rect x="500" y="472" width="204" height="44" rx="10" fill="#FEE2E2" stroke="#EF4444" stroke-width="1.5"/>
+    <text x="602" y="490" text-anchor="middle" class="sans" font-size="12" font-weight="600" fill="#7F1D1D">Ineligible</text>
+    <text x="602" y="506" text-anchor="middle" class="sans" font-size="11" fill="#7F1D1D">open blockers</text>
+  </g>
+  <!-- ===================== D5: global cap ===================== -->
+  <path d="M270,534 L270,564" stroke="#475569" stroke-width="1.5" fill="none" marker-end="url(#arrow-dispatch-eligibility)"/>
+  <rect x="278" y="538" width="26" height="16" rx="4" fill="#FFFFFF" stroke="#E2E8F0"/>
+  <text x="291" y="546" text-anchor="middle" class="sans" font-size="11" font-weight="500" fill="#14532D" dominant-baseline="middle">yes</text>
+  <g>
+    <polygon points="270,564 360,604 270,644 180,604" fill="#E0E7FF" stroke="#6366F1" stroke-width="1.5"/>
+    <text x="270" y="600" text-anchor="middle" class="sans" font-size="12" font-weight="600" fill="#312E81">Under global</text>
+    <text x="270" y="614" text-anchor="middle" class="sans" font-size="12" font-weight="600" fill="#312E81">concurrency cap?</text>
+  </g>
+  <path d="M360,604 L500,604" stroke="#EF4444" stroke-width="1.5" fill="none" marker-end="url(#arrow-danger-dispatch-eligibility)"/>
+  <rect x="424" y="593" width="22" height="16" rx="4" fill="#FFFFFF" stroke="#E2E8F0"/>
+  <text x="435" y="601" text-anchor="middle" class="sans" font-size="11" font-weight="500" fill="#7F1D1D" dominant-baseline="middle">no</text>
+  <g>
+    <rect x="500" y="582" width="204" height="44" rx="10" fill="#FEE2E2" stroke="#EF4444" stroke-width="1.5"/>
+    <text x="602" y="600" text-anchor="middle" class="sans" font-size="11" font-weight="600" fill="#7F1D1D">Capacity-blocked</text>
+    <text x="602" y="616" text-anchor="middle" class="mono" font-size="12" fill="#7F1D1D">global_concurrency_cap</text>
+  </g>
+  <!-- ===================== D6: per-state cap ===================== -->
+  <path d="M270,644 L270,674" stroke="#475569" stroke-width="1.5" fill="none" marker-end="url(#arrow-dispatch-eligibility)"/>
+  <rect x="278" y="648" width="26" height="16" rx="4" fill="#FFFFFF" stroke="#E2E8F0"/>
+  <text x="291" y="656" text-anchor="middle" class="sans" font-size="11" font-weight="500" fill="#14532D" dominant-baseline="middle">yes</text>
+  <g>
+    <polygon points="270,674 360,714 270,754 180,714" fill="#E0E7FF" stroke="#6366F1" stroke-width="1.5"/>
+    <text x="270" y="710" text-anchor="middle" class="sans" font-size="12" font-weight="600" fill="#312E81">Under per-state cap?</text>
+    <text x="270" y="724" text-anchor="middle" class="mono" font-size="11" fill="#475569">status_overrides</text>
+  </g>
+  <path d="M360,714 L500,714" stroke="#EF4444" stroke-width="1.5" fill="none" marker-end="url(#arrow-danger-dispatch-eligibility)"/>
+  <rect x="424" y="703" width="22" height="16" rx="4" fill="#FFFFFF" stroke="#E2E8F0"/>
+  <text x="435" y="711" text-anchor="middle" class="sans" font-size="11" font-weight="500" fill="#7F1D1D" dominant-baseline="middle">no</text>
+  <g>
+    <rect x="500" y="692" width="204" height="44" rx="10" fill="#FEE2E2" stroke="#EF4444" stroke-width="1.5"/>
+    <text x="602" y="710" text-anchor="middle" class="sans" font-size="11" font-weight="600" fill="#7F1D1D">Capacity-blocked</text>
+    <text x="602" y="726" text-anchor="middle" class="mono" font-size="12" fill="#7F1D1D">local_concurrency_cap</text>
+  </g>
+  <!-- ===================== D7: worker-host capacity ===================== -->
+  <path d="M270,754 L270,784" stroke="#475569" stroke-width="1.5" fill="none" marker-end="url(#arrow-dispatch-eligibility)"/>
+  <rect x="278" y="758" width="26" height="16" rx="4" fill="#FFFFFF" stroke="#E2E8F0"/>
+  <text x="291" y="766" text-anchor="middle" class="sans" font-size="11" font-weight="500" fill="#14532D" dominant-baseline="middle">yes</text>
+  <g>
+    <polygon points="270,784 360,824 270,864 180,824" fill="#E0E7FF" stroke="#6366F1" stroke-width="1.5"/>
+    <text x="270" y="820" text-anchor="middle" class="sans" font-size="12" font-weight="600" fill="#312E81">Worker-host</text>
+    <text x="270" y="834" text-anchor="middle" class="sans" font-size="12" font-weight="600" fill="#312E81">capacity available?</text>
+  </g>
+  <path d="M360,824 L500,824" stroke="#EF4444" stroke-width="1.5" fill="none" marker-end="url(#arrow-danger-dispatch-eligibility)"/>
+  <rect x="424" y="813" width="22" height="16" rx="4" fill="#FFFFFF" stroke="#E2E8F0"/>
+  <text x="435" y="821" text-anchor="middle" class="sans" font-size="11" font-weight="500" fill="#7F1D1D" dominant-baseline="middle">no</text>
+  <g>
+    <rect x="500" y="802" width="204" height="44" rx="10" fill="#FEE2E2" stroke="#EF4444" stroke-width="1.5"/>
+    <text x="602" y="820" text-anchor="middle" class="sans" font-size="11" font-weight="600" fill="#7F1D1D">Capacity-blocked</text>
+    <text x="602" y="836" text-anchor="middle" class="mono" font-size="12" fill="#7F1D1D">worker_host_capacity</text>
+  </g>
+  <!-- ===================== D8: free slot ===================== -->
+  <path d="M270,864 L270,894" stroke="#475569" stroke-width="1.5" fill="none" marker-end="url(#arrow-dispatch-eligibility)"/>
+  <rect x="278" y="868" width="26" height="16" rx="4" fill="#FFFFFF" stroke="#E2E8F0"/>
+  <text x="291" y="876" text-anchor="middle" class="sans" font-size="11" font-weight="500" fill="#14532D" dominant-baseline="middle">yes</text>
+  <g>
+    <polygon points="270,894 360,934 270,974 180,934" fill="#E0E7FF" stroke="#6366F1" stroke-width="1.5"/>
+    <text x="270" y="930" text-anchor="middle" class="sans" font-size="12" font-weight="600" fill="#312E81">Free ensemble slot?</text>
+    <text x="270" y="944" text-anchor="middle" class="mono" font-size="11" fill="#475569">firstUnclaimedSlot</text>
+  </g>
+  <path d="M360,934 L500,934" stroke="#EF4444" stroke-width="1.5" fill="none" marker-end="url(#arrow-danger-dispatch-eligibility)"/>
+  <rect x="424" y="923" width="22" height="16" rx="4" fill="#FFFFFF" stroke="#E2E8F0"/>
+  <text x="435" y="931" text-anchor="middle" class="sans" font-size="11" font-weight="500" fill="#7F1D1D" dominant-baseline="middle">no</text>
+  <g>
+    <rect x="500" y="912" width="204" height="44" rx="10" fill="#FEE2E2" stroke="#EF4444" stroke-width="1.5"/>
+    <text x="602" y="930" text-anchor="middle" class="sans" font-size="12" font-weight="600" fill="#7F1D1D">Skip</text>
+    <text x="602" y="946" text-anchor="middle" class="sans" font-size="11" fill="#7F1D1D">all slots claimed</text>
+  </g>
+  <!-- ===================== ELIGIBLE ===================== -->
+  <path d="M270,974 L270,1004" stroke="#14B8A6" stroke-width="2" fill="none" marker-end="url(#arrow-accent-dispatch-eligibility)"/>
+  <rect x="278" y="978" width="26" height="16" rx="4" fill="#FFFFFF" stroke="#E2E8F0"/>
+  <text x="291" y="986" text-anchor="middle" class="sans" font-size="11" font-weight="500" fill="#14532D" dominant-baseline="middle">yes</text>
+  <g>
+    <rect x="160" y="1004" width="220" height="48" rx="10" fill="#CCFBF1" stroke="#14B8A6" stroke-width="2"/>
+    <text x="270" y="1023" text-anchor="middle" class="sans" font-size="13" font-weight="600" fill="#134E4A">ELIGIBLE</text>
+    <text x="270" y="1040" text-anchor="middle" class="sans" font-size="11" fill="#134E4A">claim slot (slotKey)</text>
+  </g>
+  <!-- legend -->
+  <g>
+    <rect x="500" y="1000" width="204" height="92" rx="10" fill="#FBFCFE" stroke="#E2E8F0" stroke-width="1"/>
+    <text x="514" y="1020" class="sans" font-size="11" font-weight="600" fill="#0F172A">Legend</text>
+    <polygon points="524,1034 534,1039 524,1044 514,1039" fill="#E0E7FF" stroke="#6366F1" stroke-width="1.5"/>
+    <text x="542" y="1039" class="sans" font-size="11" fill="#475569" dominant-baseline="middle">decision check</text>
+    <rect x="514" y="1052" width="20" height="12" rx="3" fill="#FEE2E2" stroke="#EF4444" stroke-width="1.5"/>
+    <text x="542" y="1058" class="sans" font-size="11" fill="#475569" dominant-baseline="middle">ineligible / blocked</text>
+    <rect x="514" y="1070" width="20" height="12" rx="3" fill="#CCFBF1" stroke="#14B8A6" stroke-width="1.5"/>
+    <text x="542" y="1076" class="sans" font-size="11" fill="#475569" dominant-baseline="middle">eligible (happy path)</text>
+  </g>
+</svg>

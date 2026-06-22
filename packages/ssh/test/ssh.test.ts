@@ -1,14 +1,13 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
-import { setTimeout as delay } from "node:timers/promises";
 
 // Tests mutate process.env.PATH and process.env.LORENZ_SSH_CONFIG to inject fake
 // ssh binaries and config. This requires sequential execution (enforced by the root
 // vitest.config.ts `sequence: { concurrent: false }`). The afterEach hook guarantees
 // env restoration even when assertions fail mid-test.
 import { afterEach, beforeEach, test } from "vitest";
-import { assert, tempDir, writeExecutable } from "@lorenz/test-utils";
+import { assert, settle, tempDir, writeExecutable } from "@lorenz/test-utils";
 
 import {
   parseSshTarget,
@@ -157,7 +156,11 @@ wait "$child"
   const traceText = await fs.readFile(trace, "utf8");
   const childMatch = /^CHILD:(\d+)$/m.exec(traceText);
   if (!childMatch) throw new Error(`fake ssh child pid missing in trace: ${traceText}`);
-  await waitForProcessExit(Number(childMatch[1]), 7_000);
+  // runSsh sends SIGTERM at the 1s timeout and only escalates to SIGKILL after a
+  // 5s grace, so the TERM-ignoring child cannot exit before ~6s by design. Allow a
+  // generous horizon (well under the 30s testTimeout) so SIGKILL delivery and
+  // process reaping under full-suite load do not flake this.
+  await waitForProcessExit(Number(childMatch[1]), 20_000);
 });
 
 test("SSH run reports signaled subprocesses as failures", async () => {
@@ -332,7 +335,7 @@ async function waitForProcessExit(pid: number, timeoutMs: number): Promise<void>
     } catch {
       return;
     }
-    await delay(50);
+    await settle(50);
   }
   throw new Error(`process ${pid} still running after ${timeoutMs}ms`);
 }

@@ -1,0 +1,111 @@
+<svg role="img" aria-labelledby="t-routing-decision d-routing-decision" viewBox="0 0 720 620" width="100%" style="max-width:720px;height:auto" xmlns="http://www.w3.org/2000/svg" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif">
+  <title id="t-routing-decision">routedToThisWorker decision</title>
+  <desc id="d-routing-decision">Decision tree for whether an issue routes to this worker: assignedToWorker gate, then route-label presence, acceptUnrouted, and the onlyRoutes allowlist, ending in Accepted or Rejected sinks.</desc><rect x="0.75" y="0.75" width="718.50" height="618.50" rx="14" fill="#FFFFFF" stroke="#E2E8F0" stroke-width="1.5"/>
+  <defs>
+    <marker id="arrow-routing-decision" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#475569"/>
+    </marker>
+    <marker id="arrow-accent-routing-decision" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#14B8A6"/>
+    </marker>
+  </defs>
+  <!-- title -->
+  <text x="16" y="26" font-size="15" font-weight="600" fill="#0F172A">routedToThisWorker</text>
+  <text x="16" y="44" font-size="11" fill="#475569">routes an issue's labels + assignedToWorker to Accepted / Rejected</text>
+  <!-- ===== edges (drawn first, under nodes) ===== -->
+  <!-- input -> D1 -->
+  <path d="M360,86 L360,116" stroke="#475569" stroke-width="1.5" fill="none" marker-end="url(#arrow-routing-decision)"/>
+  <!-- D1 yes -> reject (left) -->
+  <path d="M280,150 L120,150 L120,532" stroke="#EF4444" stroke-width="1.5" fill="none" marker-end="url(#arrow-routing-decision)"/>
+  <!-- D1 no -> D2 -->
+  <path d="M360,184 L360,216" stroke="#475569" stroke-width="1.5" fill="none" marker-end="url(#arrow-routing-decision)"/>
+  <!-- D2 no -> D3 (acceptUnrouted) -->
+  <path d="M280,250 L200,250 L200,296" stroke="#475569" stroke-width="1.5" fill="none" marker-end="url(#arrow-routing-decision)"/>
+  <!-- D2 yes -> D4 -->
+  <path d="M440,250 L520,250 L520,296" stroke="#475569" stroke-width="1.5" fill="none" marker-end="url(#arrow-routing-decision)"/>
+  <!-- D3 yes -> accept -->
+  <path d="M200,344 L200,400 L320,400 L320,452" stroke="#14B8A6" stroke-width="2" fill="none" marker-end="url(#arrow-accent-routing-decision)"/>
+  <!-- D3 no -> reject trunk (merges into x=120 vertical, no arrowhead) -->
+  <path d="M160,320 L120,320" stroke="#EF4444" stroke-width="1.5" fill="none"/>
+  <!-- D4 null=any -> accept -->
+  <path d="M520,344 L520,400 L400,400 L400,452" stroke="#14B8A6" stroke-width="2" fill="none" marker-end="url(#arrow-accent-routing-decision)"/>
+  <!-- D4 []=none / not in list -> reject (around the right, above the note chip, into Rejected top-right) -->
+  <path d="M560,320 L640,320 L640,512 L150,512 L150,532" stroke="#EF4444" stroke-width="1.5" fill="none" marker-end="url(#arrow-routing-decision)"/>
+  <!-- ===== edge labels (white chips) ===== -->
+  <g font-size="11" font-weight="500" font-family="ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace">
+    <rect x="178" y="140" width="86" height="18" rx="4" fill="#FFFFFF" stroke="#E2E8F0"/>
+    <text x="221" y="150" text-anchor="middle" dominant-baseline="middle" fill="#7F1D1D">set &amp; != this</text>
+    <rect x="372" y="194" width="34" height="18" rx="4" fill="#FFFFFF" stroke="#E2E8F0"/>
+    <text x="389" y="204" text-anchor="middle" dominant-baseline="middle" fill="#334155">else</text>
+    <rect x="216" y="241" width="34" height="18" rx="4" fill="#FFFFFF" stroke="#E2E8F0"/>
+    <text x="233" y="251" text-anchor="middle" dominant-baseline="middle" fill="#334155">no</text>
+    <rect x="468" y="241" width="34" height="18" rx="4" fill="#FFFFFF" stroke="#E2E8F0"/>
+    <text x="485" y="251" text-anchor="middle" dominant-baseline="middle" fill="#334155">yes</text>
+    <rect x="120" y="362" width="74" height="18" rx="4" fill="#FFFFFF" stroke="#E2E8F0"/>
+    <text x="157" y="372" text-anchor="middle" dominant-baseline="middle" fill="#134E4A">yes=accept</text>
+    <rect x="118" y="311" width="30" height="18" rx="4" fill="#FFFFFF" stroke="#E2E8F0"/>
+    <text x="133" y="321" text-anchor="middle" dominant-baseline="middle" fill="#7F1D1D">no</text>
+    <rect x="430" y="362" width="58" height="18" rx="4" fill="#FFFFFF" stroke="#E2E8F0"/>
+    <text x="459" y="372" text-anchor="middle" dominant-baseline="middle" fill="#134E4A">null=any</text>
+    <rect x="510" y="311" width="84" height="18" rx="4" fill="#FFFFFF" stroke="#E2E8F0"/>
+    <text x="552" y="321" text-anchor="middle" dominant-baseline="middle" fill="#7F1D1D">[]=none / miss</text>
+  </g>
+  <!-- ===== nodes ===== -->
+  <!-- input -->
+  <g>
+    <rect x="240" y="56" width="240" height="30" rx="10" fill="#F1F5F9" stroke="#94A3B8" stroke-width="1.5"/>
+    <text x="360" y="71" text-anchor="middle" dominant-baseline="middle" font-size="12" fill="#334155" font-family="ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace">issue.labels + assignedToWorker</text>
+  </g>
+  <!-- D1 -->
+  <g>
+    <rect x="280" y="116" width="160" height="68" rx="10" fill="#E0E7FF" stroke="#6366F1" stroke-width="1.5"/>
+    <text x="360" y="138" text-anchor="middle" dominant-baseline="middle" font-size="13" font-weight="600" fill="#312E81" font-family="ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace">assignedToWorker</text>
+    <text x="360" y="155" text-anchor="middle" dominant-baseline="middle" font-size="11" fill="#475569">set and pinned to</text>
+    <text x="360" y="170" text-anchor="middle" dominant-baseline="middle" font-size="11" fill="#475569">another worker?</text>
+  </g>
+  <!-- D2 -->
+  <g>
+    <rect x="280" y="216" width="160" height="68" rx="10" fill="#E0E7FF" stroke="#6366F1" stroke-width="1.5"/>
+    <text x="360" y="238" text-anchor="middle" dominant-baseline="middle" font-size="13" font-weight="600" fill="#312E81">any route label?</text>
+    <text x="360" y="255" text-anchor="middle" dominant-baseline="middle" font-size="11" fill="#475569">label starts with</text>
+    <text x="360" y="270" text-anchor="middle" dominant-baseline="middle" font-size="11" fill="#475569" font-family="ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace">route_label_prefix</text>
+  </g>
+  <!-- D3 acceptUnrouted -->
+  <g>
+    <rect x="120" y="296" width="160" height="48" rx="10" fill="#E0E7FF" stroke="#6366F1" stroke-width="1.5"/>
+    <text x="200" y="314" text-anchor="middle" dominant-baseline="middle" font-size="13" font-weight="600" fill="#312E81" font-family="ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace">acceptUnrouted?</text>
+    <text x="200" y="330" text-anchor="middle" dominant-baseline="middle" font-size="11" fill="#475569">no route label present</text>
+  </g>
+  <!-- D4 onlyRoutes -->
+  <g>
+    <rect x="440" y="296" width="160" height="48" rx="10" fill="#E0E7FF" stroke="#6366F1" stroke-width="1.5"/>
+    <text x="520" y="314" text-anchor="middle" dominant-baseline="middle" font-size="13" font-weight="600" fill="#312E81">route in</text>
+    <text x="520" y="330" text-anchor="middle" dominant-baseline="middle" font-size="12" fill="#475569" font-family="ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace">onlyRoutes allowlist?</text>
+  </g>
+  <!-- Accepted sink -->
+  <g>
+    <rect x="300" y="452" width="120" height="44" rx="10" fill="#CCFBF1" stroke="#14B8A6" stroke-width="1.5"/>
+    <text x="360" y="474" text-anchor="middle" dominant-baseline="middle" font-size="13" font-weight="600" fill="#134E4A">Accepted</text>
+  </g>
+  <!-- Rejected sink -->
+  <g>
+    <rect x="60" y="532" width="120" height="44" rx="10" fill="#FEE2E2" stroke="#EF4444" stroke-width="1.5"/>
+    <text x="120" y="554" text-anchor="middle" dominant-baseline="middle" font-size="13" font-weight="600" fill="#7F1D1D">Rejected</text>
+  </g>
+  <!-- note chip -->
+  <g>
+    <rect x="438" y="528" width="266" height="52" rx="8" fill="#FBFCFE" stroke="#E2E8F0" stroke-width="1"/>
+    <text x="450" y="548" font-size="11" font-weight="600" fill="#475569">note</text>
+    <text x="450" y="564" font-size="11" fill="#475569">route names normalized case-insensitively,</text>
+    <text x="450" y="577" font-size="11" fill="#475569">prefix stripped (default Lorenz:)</text>
+  </g>
+  <!-- legend -->
+  <g font-size="11" fill="#334155">
+    <rect x="60" y="592" width="16" height="12" rx="3" fill="#CCFBF1" stroke="#14B8A6" stroke-width="1.5"/>
+    <text x="82" y="599" dominant-baseline="middle">accept path</text>
+    <rect x="176" y="592" width="16" height="12" rx="3" fill="#FEE2E2" stroke="#EF4444" stroke-width="1.5"/>
+    <text x="198" y="599" dominant-baseline="middle">reject path</text>
+    <rect x="290" y="592" width="16" height="12" rx="3" fill="#E0E7FF" stroke="#6366F1" stroke-width="1.5"/>
+    <text x="312" y="599" dominant-baseline="middle">decision</text>
+  </g>
+</svg>

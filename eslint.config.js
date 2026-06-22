@@ -51,4 +51,25 @@ export default tseslint.config(
       "@typescript-eslint/no-explicit-any": "off",
     },
   },
+  {
+    // Flake guard: ban fixed-delay sleeps in tests. `disableTypeChecked` strips
+    // the type-aware rules above, so this lives in its own block to survive that
+    // reset and to also cover `.tsx` test files.
+    files: [
+      "packages/*/test/**/*.{ts,tsx}",
+      "extensions/*/test/**/*.{ts,tsx}",
+      "apps/*/test/**/*.{ts,tsx}",
+      "test/**/*.{ts,tsx}",
+    ],
+    rules: {
+      "no-restricted-syntax": [
+        "error",
+        {
+          selector: "NewExpression[callee.name='Promise'] CallExpression[callee.name='setTimeout']",
+          message:
+            "Fixed-delay sleep in a test (`new Promise(r => setTimeout(r, ms))`) is a flake source. Poll the condition with `vi.waitFor`/`vi.waitUntil`, drive timer code with `vi.useFakeTimers()` + `vi.advanceTimersByTimeAsync()`, or—only when asserting something does NOT happen—use `settle()` from @lorenz/test-utils.",
+        },
+      ],
+    },
+  },
 );

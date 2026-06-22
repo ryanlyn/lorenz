@@ -1,0 +1,114 @@
+<svg role="img" aria-labelledby="t-mcp-tool-mounting d-mcp-tool-mounting" viewBox="0 0 880 660" width="100%" style="max-width:880px;height:auto" xmlns="http://www.w3.org/2000/svg" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif">
+  <title id="t-mcp-tool-mounting">MCP tool mounting and call flow</title>
+  <desc id="d-mcp-tool-mounting">Three tool-pack sources are de-duplicated and flattened into one namespace, then served over the POST /mcp JSON-RPC endpoint via executeMountedTool to a tracker pack handler, whose ToolResult maps to JSON-RPC isError so failure is data, never thrown.</desc><rect x="0.75" y="0.75" width="878.50" height="658.50" rx="14" fill="#FFFFFF" stroke="#E2E8F0" stroke-width="1.5"/>
+  <defs>
+    <marker id="arrow-mcp-tool-mounting" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#475569"/>
+    </marker>
+    <marker id="arrow-accent-mcp-tool-mounting" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#14B8A6"/>
+    </marker>
+    <marker id="arrow-danger-mcp-tool-mounting" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#EF4444"/>
+    </marker>
+  </defs>
+  <text x="24" y="34" font-size="15" font-weight="600" fill="#0F172A">MCP tool mounting + call flow</text>
+  <!-- Pack selection row label -->
+  <text x="24" y="62" font-size="11" font-weight="600" fill="#475569">PACK SELECTION (first-seen order, de-duplicated)</text>
+  <!-- Source box 1: neutral tracker pack -->
+  <g>
+    <rect x="24" y="76" width="262" height="68" rx="10" fill="#EDE9FE" stroke="#8B5CF6" stroke-width="1.5"/>
+    <text x="155" y="100" text-anchor="middle" font-size="13" font-weight="600" fill="#4C1D95">neutral pack</text>
+    <text x="155" y="118" text-anchor="middle" font-size="12" fill="#4C1D95" font-family="ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace">"tracker"</text>
+    <text x="155" y="134" text-anchor="middle" font-size="11" fill="#475569" font-family="ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace">tracker_* tools</text>
+  </g>
+  <!-- Source box 2: dispatch defaultToolPacks -->
+  <g>
+    <rect x="309" y="76" width="262" height="68" rx="10" fill="#DCFCE7" stroke="#22C55E" stroke-width="1.5"/>
+    <text x="440" y="100" text-anchor="middle" font-size="13" font-weight="600" fill="#14532D">dispatch tracker</text>
+    <text x="440" y="118" text-anchor="middle" font-size="12" fill="#14532D" font-family="ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace">defaultToolPacks(settings)</text>
+    <text x="440" y="134" text-anchor="middle" font-size="11" fill="#475569">e.g. linear / local / slack</text>
+  </g>
+  <!-- Source box 3: workflow tools map -->
+  <g>
+    <rect x="594" y="76" width="262" height="68" rx="10" fill="#FEF3C7" stroke="#F59E0B" stroke-width="1.5"/>
+    <text x="725" y="100" text-anchor="middle" font-size="13" font-weight="600" fill="#78350F">workflow tools</text>
+    <text x="725" y="118" text-anchor="middle" font-size="12" fill="#78350F" font-family="ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace">keys of settings.toolOptions</text>
+    <text x="725" y="134" text-anchor="middle" font-size="11" fill="#475569">explicit packs (tools: map)</text>
+  </g>
+  <!-- arrows from 3 sources to merge -->
+  <path d="M155,144 L155,168 L440,168 L440,182" stroke="#475569" stroke-width="1.5" fill="none" marker-end="url(#arrow-mcp-tool-mounting)"/>
+  <path d="M440,144 L440,182" stroke="#475569" stroke-width="1.5" fill="none" marker-end="url(#arrow-mcp-tool-mounting)"/>
+  <path d="M725,144 L725,168 L440,168 L440,182" stroke="#475569" stroke-width="1.5" fill="none"/>
+  <!-- Merge node: de-dup + flatten -->
+  <g>
+    <rect x="246" y="184" width="388" height="62" rx="10" fill="#E0E7FF" stroke="#6366F1" stroke-width="1.5"/>
+    <text x="440" y="208" text-anchor="middle" font-size="13" font-weight="600" fill="#312E81">de-dup (Set) + flatten into one namespace</text>
+    <text x="440" y="228" text-anchor="middle" font-size="11" fill="#475569" font-family="ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace">mountedToolSpecs - collision = fail loud</text>
+  </g>
+  <!-- collision callout -->
+  <g>
+    <rect x="654" y="186" width="202" height="58" rx="8" fill="#FEE2E2" stroke="#EF4444" stroke-width="1.5"/>
+    <text x="755" y="208" text-anchor="middle" font-size="11" font-weight="600" fill="#7F1D1D">tool name collision</text>
+    <text x="755" y="225" text-anchor="middle" font-size="10.5" fill="#7F1D1D">across two packs</text>
+    <text x="755" y="239" text-anchor="middle" font-size="10.5" fill="#7F1D1D">throws at mount time</text>
+  </g>
+  <path d="M634,215 L654,215" stroke="#EF4444" stroke-width="1.5" fill="none" marker-end="url(#arrow-danger-mcp-tool-mounting)"/>
+  <!-- arrow merge -> POST /mcp -->
+  <path d="M440,246 L440,278" stroke="#14B8A6" stroke-width="2" fill="none" marker-end="url(#arrow-accent-mcp-tool-mounting)"/>
+  <!-- POST /mcp auth -->
+  <g>
+    <rect x="296" y="280" width="288" height="58" rx="10" fill="#CCFBF1" stroke="#14B8A6" stroke-width="1.5"/>
+    <text x="440" y="303" text-anchor="middle" font-size="13" font-weight="600" fill="#134E4A" font-family="ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace">POST /mcp</text>
+    <text x="440" y="322" text-anchor="middle" font-size="11" fill="#134E4A">auth check - Bearer token / scope</text>
+  </g>
+  <path d="M440,338 L440,370" stroke="#14B8A6" stroke-width="2" fill="none" marker-end="url(#arrow-accent-mcp-tool-mounting)"/>
+  <!-- tools/list & tools/call -->
+  <g>
+    <rect x="296" y="372" width="288" height="58" rx="10" fill="#E0E7FF" stroke="#6366F1" stroke-width="1.5"/>
+    <text x="440" y="395" text-anchor="middle" font-size="12" font-weight="600" fill="#312E81" font-family="ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace">tools/list &amp; tools/call</text>
+    <text x="440" y="414" text-anchor="middle" font-size="11" fill="#475569">JSON-RPC dispatch (mcpResponse)</text>
+  </g>
+  <path d="M440,430 L440,462" stroke="#14B8A6" stroke-width="2" fill="none" marker-end="url(#arrow-accent-mcp-tool-mounting)"/>
+  <!-- executeMountedTool -->
+  <g>
+    <rect x="296" y="464" width="288" height="58" rx="10" fill="#EDE9FE" stroke="#8B5CF6" stroke-width="1.5"/>
+    <text x="440" y="487" text-anchor="middle" font-size="12" font-weight="600" fill="#4C1D95" font-family="ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace">executeMountedTool</text>
+    <text x="440" y="506" text-anchor="middle" font-size="11" fill="#475569">routes name to declaring pack</text>
+  </g>
+  <path d="M440,522 L440,554" stroke="#14B8A6" stroke-width="2" fill="none" marker-end="url(#arrow-accent-mcp-tool-mounting)"/>
+  <!-- TrackerToolOps / pack handler -->
+  <g>
+    <rect x="296" y="556" width="288" height="58" rx="10" fill="#DCFCE7" stroke="#22C55E" stroke-width="1.5"/>
+    <text x="440" y="579" text-anchor="middle" font-size="12" font-weight="600" fill="#14532D" font-family="ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace">TrackerToolOps / pack handler</text>
+    <text x="440" y="598" text-anchor="middle" font-size="11" fill="#475569">runs the tool, returns a ToolResult</text>
+  </g>
+  <!-- result box on right, connected from pack handler -->
+  <path d="M584,585 L612,585 L612,470 L640,470" stroke="#475569" stroke-width="1.5" fill="none" marker-end="url(#arrow-mcp-tool-mounting)"/>
+  <g>
+    <rect x="640" y="408" width="216" height="124" rx="10" fill="#FEE2E2" stroke="#EF4444" stroke-width="1.5"/>
+    <text x="748" y="432" text-anchor="middle" font-size="13" font-weight="600" fill="#7F1D1D" font-family="ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace">ToolResult</text>
+    <text x="748" y="450" text-anchor="middle" font-size="11" fill="#7F1D1D" font-family="ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace">{ success | error }</text>
+    <line x1="660" y1="462" x2="836" y2="462" stroke="#EF4444" stroke-width="1" stroke-dasharray="3 3"/>
+    <text x="748" y="481" text-anchor="middle" font-size="11" fill="#7F1D1D" font-family="ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace">isError: !success</text>
+    <text x="748" y="503" text-anchor="middle" font-size="11" font-weight="600" fill="#7F1D1D">failure is data,</text>
+    <text x="748" y="519" text-anchor="middle" font-size="11" font-weight="600" fill="#7F1D1D">never thrown (HTTP 200)</text>
+  </g>
+  <!-- Legend -->
+  <g>
+    <rect x="24" y="556" width="246" height="86" rx="8" fill="#FBFCFE" stroke="#E2E8F0" stroke-width="1"/>
+    <text x="36" y="574" font-size="11" font-weight="600" fill="#475569">Legend</text>
+    <rect x="36" y="582" width="14" height="11" rx="3" fill="#EDE9FE" stroke="#8B5CF6" stroke-width="1.25"/>
+    <text x="56" y="591" font-size="10.5" fill="#334155">SDK / registry</text>
+    <rect x="148" y="582" width="14" height="11" rx="3" fill="#DCFCE7" stroke="#22C55E" stroke-width="1.25"/>
+    <text x="168" y="591" font-size="10.5" fill="#334155">tracker / pack</text>
+    <rect x="36" y="600" width="14" height="11" rx="3" fill="#E0E7FF" stroke="#6366F1" stroke-width="1.25"/>
+    <text x="56" y="609" font-size="10.5" fill="#334155">engine</text>
+    <rect x="148" y="600" width="14" height="11" rx="3" fill="#FEE2E2" stroke="#EF4444" stroke-width="1.25"/>
+    <text x="168" y="609" font-size="10.5" fill="#334155">failure path</text>
+    <line x1="40" y1="624" x2="62" y2="624" stroke="#14B8A6" stroke-width="2"/>
+    <text x="68" y="628" font-size="10.5" fill="#334155">happy path</text>
+    <rect x="148" y="619" width="14" height="11" rx="3" fill="#CCFBF1" stroke="#14B8A6" stroke-width="1.25"/>
+    <text x="168" y="628" font-size="10.5" fill="#334155">MCP endpoint</text>
+  </g>
+</svg>

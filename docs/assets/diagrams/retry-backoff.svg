@@ -1,0 +1,75 @@
+<svg role="img" aria-labelledby="t-retry-backoff d-retry-backoff" viewBox="0 0 720 392" width="100%" style="max-width:720px;height:auto" xmlns="http://www.w3.org/2000/svg" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif">
+  <title id="t-retry-backoff">Retry backoff: continuation vs failure</title>
+  <desc id="d-retry-backoff">Two timelines of retry attempts. The continuation track (issue still active) waits a fixed 1000ms between every attempt, so its bars are equal and flat. The failure track grows exponentially as 10000 times 2 to the power of attempt minus 1, producing 10s, 20s, 40s, 80s, 160s, then capping at max_retry_backoff_ms (default 300000ms).</desc><rect x="0.75" y="0.75" width="718.50" height="390.50" rx="14" fill="#FFFFFF" stroke="#E2E8F0" stroke-width="1.5"/>
+  <defs>
+    <marker id="arrow-retry-backoff" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#475569"/>
+    </marker>
+  </defs>
+  <!-- Diagram title -->
+  <text x="20" y="28" font-size="15" font-weight="600" fill="#0F172A">Retry backoff: continuation vs failure</text>
+  <!-- ================= CONTINUATION TRACK ================= -->
+  <text x="20" y="64" font-size="13" font-weight="600" fill="#134E4A">Continuation retry (issue still active)</text>
+  <text x="20" y="80" font-size="11" fill="#475569">fixed 1000ms between attempts &#8226; retryBackoffMs returns MIN_RETRY_DELAY_MS</text>
+  <!-- baseline -->
+  <line x1="40" y1="128" x2="700" y2="128" stroke="#475569" stroke-width="1.5" marker-end="url(#arrow-retry-backoff)"/>
+  <text x="700" y="118" text-anchor="end" font-size="11" fill="#475569">time &#8594;</text>
+  <!-- equal flat bars: width 36, gap that mirrors the wait, all identical height -->
+  <g>
+    <rect x="40"  y="98"  width="36" height="30" rx="4" fill="#CCFBF1" stroke="#14B8A6" stroke-width="1.5"/>
+    <rect x="156" y="98"  width="36" height="30" rx="4" fill="#CCFBF1" stroke="#14B8A6" stroke-width="1.5"/>
+    <rect x="272" y="98"  width="36" height="30" rx="4" fill="#CCFBF1" stroke="#14B8A6" stroke-width="1.5"/>
+    <rect x="388" y="98"  width="36" height="30" rx="4" fill="#CCFBF1" stroke="#14B8A6" stroke-width="1.5"/>
+    <rect x="504" y="98"  width="36" height="30" rx="4" fill="#CCFBF1" stroke="#14B8A6" stroke-width="1.5"/>
+    <rect x="620" y="98"  width="36" height="30" rx="4" fill="#CCFBF1" stroke="#14B8A6" stroke-width="1.5"/>
+  </g>
+  <!-- one representative wait label (mono), repeated bars stay clean -->
+  <text x="116" y="92" text-anchor="middle" font-family="ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace" font-size="12" fill="#134E4A">1000ms (fixed)</text>
+  <text x="232" y="92" text-anchor="middle" font-family="ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace" font-size="12" fill="#134E4A">1000ms</text>
+  <text x="348" y="92" text-anchor="middle" font-family="ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace" font-size="12" fill="#134E4A">1000ms</text>
+  <text x="464" y="92" text-anchor="middle" font-family="ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace" font-size="12" fill="#134E4A">1000ms</text>
+  <text x="580" y="92" text-anchor="middle" font-family="ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace" font-size="12" fill="#134E4A">1000ms</text>
+  <!-- ================= FAILURE TRACK ================= -->
+  <text x="20" y="186" font-size="13" font-weight="600" fill="#7F1D1D">Failure retry (exponential)</text>
+  <text x="20" y="202" font-size="11" fill="#475569">10000 &#215; 2^(attempt&#8722;1) &#8226; 10s, 20s, 40s, 80s, 160s &#8230;</text>
+  <!-- baseline at y=358 (bars grow upward from it) -->
+  <line x1="40" y1="358" x2="700" y2="358" stroke="#475569" stroke-width="1.5" marker-end="url(#arrow-retry-backoff)"/>
+  <text x="700" y="372" text-anchor="end" font-size="11" fill="#475569">time &#8594;</text>
+  <!-- dashed cap line across the failure track at the 300s ceiling -->
+  <line x1="40" y1="232" x2="700" y2="232" stroke="#EF4444" stroke-width="1.5" stroke-dasharray="6 4"/>
+  <rect x="48" y="210" width="268" height="18" rx="4" fill="#FFFFFF" stroke="#E2E8F0"/>
+  <text x="56" y="223" font-size="11" font-weight="500" fill="#7F1D1D">cap: max_retry_backoff_ms (default 300000ms)</text>
+  <!-- growing bars. Heights encode 10/20/40/80/160s on a log-ish visual ramp; last two clamp at cap (top y=232, height=126). baseline y=358. -->
+  <g font-family="ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace" font-size="12" fill="#7F1D1D">
+    <!-- 10s -->
+    <rect x="46"  y="334" width="56" height="24"  rx="4" fill="#FEE2E2" stroke="#EF4444" stroke-width="1.5"/>
+    <text x="74"  y="326" text-anchor="middle">10s</text>
+    <!-- 20s -->
+    <rect x="138" y="314" width="56" height="44"  rx="4" fill="#FEE2E2" stroke="#EF4444" stroke-width="1.5"/>
+    <text x="166" y="306" text-anchor="middle">20s</text>
+    <!-- 40s -->
+    <rect x="230" y="286" width="56" height="72"  rx="4" fill="#FEE2E2" stroke="#EF4444" stroke-width="1.5"/>
+    <text x="258" y="278" text-anchor="middle">40s</text>
+    <!-- 80s -->
+    <rect x="322" y="252" width="56" height="106" rx="4" fill="#FEE2E2" stroke="#EF4444" stroke-width="1.5"/>
+    <text x="350" y="246" text-anchor="middle">80s</text>
+    <!-- 160s -->
+    <rect x="414" y="232" width="56" height="126" rx="4" fill="#FEE2E2" stroke="#EF4444" stroke-width="1.5"/>
+    <text x="442" y="226" text-anchor="middle">160s</text>
+    <!-- 300s capped -->
+    <rect x="506" y="232" width="56" height="126" rx="4" fill="#FCA5A5" stroke="#EF4444" stroke-width="1.5"/>
+    <text x="534" y="226" text-anchor="middle">300s</text>
+    <!-- capped (stays at ceiling) -->
+    <rect x="598" y="232" width="56" height="126" rx="4" fill="#FCA5A5" stroke="#EF4444" stroke-width="1.5"/>
+    <text x="626" y="226" text-anchor="middle">300s</text>
+  </g>
+  <!-- legend (bottom-left, inside viewBox) -->
+  <g>
+    <rect x="20" y="370" width="13" height="13" rx="3" fill="#CCFBF1" stroke="#14B8A6" stroke-width="1.5"/>
+    <text x="39" y="380" font-size="11" fill="#334155">continuation (flat)</text>
+    <rect x="178" y="370" width="13" height="13" rx="3" fill="#FEE2E2" stroke="#EF4444" stroke-width="1.5"/>
+    <text x="197" y="380" font-size="11" fill="#334155">failure (exponential)</text>
+    <rect x="338" y="370" width="13" height="13" rx="3" fill="#FCA5A5" stroke="#EF4444" stroke-width="1.5"/>
+    <text x="357" y="380" font-size="11" fill="#334155">capped at ceiling</text>
+  </g>
+</svg>

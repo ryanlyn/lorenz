@@ -1,4 +1,5 @@
 import { readFile as fsReadFile } from "node:fs/promises";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -233,8 +234,16 @@ function runtimeSettings(runtime: RuntimeServerSource): Settings | null {
 }
 
 function resolveStaticDir(): string {
-  const thisFile = fileURLToPath(import.meta.url);
-  return path.resolve(path.dirname(thisFile), "../../../apps/lorenz-dashboard/dist");
+  // Packaged releases ship the dashboard as a bundled `@lorenz/dashboard` package, so resolve it
+  // through Node module resolution to stay correct regardless of install layout. In the dev
+  // monorepo the package is not a dependency of the server, so fall back to the built assets.
+  try {
+    const require = createRequire(import.meta.url);
+    return path.dirname(require.resolve("@lorenz/dashboard/dist/index.html"));
+  } catch {
+    const thisFile = fileURLToPath(import.meta.url);
+    return path.resolve(path.dirname(thisFile), "../../../apps/web/dist");
+  }
 }
 
 function jsonResponse(body: unknown, status = 200): Response {

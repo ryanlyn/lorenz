@@ -17,7 +17,7 @@ afterEach(async () => {
   await fs.rm(tempRoot, { recursive: true, force: true });
 });
 
-test("bumps first-party package versions and leaves vendored packages unchanged", async () => {
+test("bumps the root package version and leaves workspace packages unchanged", async () => {
   await seedPackage("package.json", "lorenz", "0.1.0");
   await seedPackage("apps/cli/package.json", "@lorenz/cli", "0.1.0");
   await seedPackage("apps/traceviz/package.json", "@lorenz/traceviz", "0.1.0");
@@ -29,18 +29,12 @@ test("bumps first-party package versions and leaves vendored packages unchanged"
 
   assert.equal(result.previousVersion, "0.1.0");
   assert.equal(result.nextVersion, "0.1.1");
-  assert.deepEqual(result.packageFiles, [
-    "package.json",
-    "apps/cli/package.json",
-    "apps/traceviz/package.json",
-    "packages/acp/package.json",
-    "extensions/slack-tracker/package.json",
-  ]);
+  assert.deepEqual(result.packageFiles, ["package.json"]);
   assert.equal((await readPackage("package.json")).version, "0.1.1");
-  assert.equal((await readPackage("apps/cli/package.json")).version, "0.1.1");
-  assert.equal((await readPackage("apps/traceviz/package.json")).version, "0.1.1");
-  assert.equal((await readPackage("packages/acp/package.json")).version, "0.1.1");
-  assert.equal((await readPackage("extensions/slack-tracker/package.json")).version, "0.1.1");
+  assert.equal((await readPackage("apps/cli/package.json")).version, "0.1.0");
+  assert.equal((await readPackage("apps/traceviz/package.json")).version, "0.1.0");
+  assert.equal((await readPackage("packages/acp/package.json")).version, "0.1.0");
+  assert.equal((await readPackage("extensions/slack-tracker/package.json")).version, "0.1.0");
   assert.equal((await readPackage("vendor/codex-acp/package.json")).version, "0.0.45");
 });
 
@@ -53,29 +47,42 @@ test("can bump from a supplied release-tag base version", async () => {
   assert.equal(result.previousVersion, "0.1.0");
   assert.equal(result.nextVersion, "1.2.4");
   assert.equal((await readPackage("package.json")).version, "1.2.4");
-  assert.equal((await readPackage("apps/cli/package.json")).version, "1.2.4");
+  assert.equal((await readPackage("apps/cli/package.json")).version, "0.1.0");
 });
 
-test("does not choose a base version below the current first-party version", async () => {
+test("does not choose a base version below the current root version", async () => {
   await seedPackage("package.json", "lorenz", "1.3.0");
-  await seedPackage("apps/cli/package.json", "@lorenz/cli", "1.3.0");
+  await seedPackage("apps/cli/package.json", "@lorenz/cli", "9.9.9");
 
   const result = await bumpReleaseVersion({ workspaceRoot: tempRoot, baseVersion: "1.2.3" });
 
   assert.equal(result.previousVersion, "1.3.0");
   assert.equal(result.nextVersion, "1.3.1");
   assert.equal((await readPackage("package.json")).version, "1.3.1");
-  assert.equal((await readPackage("apps/cli/package.json")).version, "1.3.1");
+  assert.equal((await readPackage("apps/cli/package.json")).version, "9.9.9");
 });
 
-test("rejects mismatched first-party versions", async () => {
+test("ignores workspace package versions when bumping from a release-tag base", async () => {
   await seedPackage("package.json", "lorenz", "0.1.0");
+  await seedPackage("apps/cli/package.json", "@lorenz/cli", "0.1.1");
+  await seedPackage("packages/acp/package.json", "@lorenz/acp", "0.1.0");
+
+  const result = await bumpReleaseVersion({ workspaceRoot: tempRoot, baseVersion: "0.1.1" });
+
+  assert.equal(result.previousVersion, "0.1.0");
+  assert.equal(result.nextVersion, "0.1.2");
+  assert.equal((await readPackage("package.json")).version, "0.1.2");
+  assert.equal((await readPackage("apps/cli/package.json")).version, "0.1.1");
+  assert.equal((await readPackage("packages/acp/package.json")).version, "0.1.0");
+});
+
+test("rejects unstable root package versions", async () => {
+  await seedPackage("package.json", "lorenz", "0.2.0-beta.1");
   await seedPackage("apps/cli/package.json", "@lorenz/cli", "0.1.0");
-  await seedPackage("packages/acp/package.json", "@lorenz/acp", "0.2.0");
 
   await assert.rejects(
     bumpReleaseVersion({ workspaceRoot: tempRoot }),
-    /first-party package versions must match/,
+    /Release versions must be stable semver versions: 0\.2\.0-beta\.1/,
   );
 });
 

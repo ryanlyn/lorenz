@@ -42,6 +42,47 @@ test("config parses slack bot_user_id and resolves SLACK_BOT_USER_ID fallback", 
   assert.equal(slackTrackerOptions(unset).botUserId, undefined);
 });
 
+test("config parses slack app_token and resolves the SLACK_APP_TOKEN fallback", () => {
+  const explicit = parseSlackConfig(
+    { tracker: { kind: "slack", channels: ["C1"], bot_user_id: "U1", app_token: "xapp-explicit" } },
+    { SLACK_BOT_TOKEN: "xoxb-test" },
+  );
+  assert.equal(slackTrackerOptions(explicit).appToken, "xapp-explicit");
+
+  const fromEnv = parseSlackConfig(
+    { tracker: { kind: "slack", channels: ["C1"], bot_user_id: "U1" } },
+    { SLACK_BOT_TOKEN: "xoxb-test", SLACK_APP_TOKEN: "xapp-env" },
+  );
+  assert.equal(slackTrackerOptions(fromEnv).appToken, "xapp-env");
+
+  const fromRef = parseSlackConfig(
+    {
+      tracker: {
+        kind: "slack",
+        channels: ["C1"],
+        bot_user_id: "U1",
+        app_token: "$SLACK_APP_TOKEN",
+      },
+    },
+    { SLACK_BOT_TOKEN: "xoxb-test", SLACK_APP_TOKEN: "xapp-ref" },
+  );
+  assert.equal(slackTrackerOptions(fromRef).appToken, "xapp-ref");
+
+  // Unset stays pull-only: no app token surfaces in options, and an empty env value is dropped
+  // rather than stored as "".
+  const unset = parseSlackConfig(
+    { tracker: { kind: "slack", channels: ["C1"], bot_user_id: "U1" } },
+    { SLACK_BOT_TOKEN: "xoxb-test" },
+  );
+  assert.equal(slackTrackerOptions(unset).appToken, undefined);
+
+  const empty = parseSlackConfig(
+    { tracker: { kind: "slack", channels: ["C1"], bot_user_id: "U1" } },
+    { SLACK_BOT_TOKEN: "xoxb-test", SLACK_APP_TOKEN: "" },
+  );
+  assert.equal(slackTrackerOptions(empty).appToken, undefined);
+});
+
 test("parses slack tracker config with channels, emoji overrides, and token env", () => {
   const settings = parseSlackConfig(
     { tracker: { kind: "slack", channels: ["C1", "C2"], emoji_states: { rocket: "Shipped" } } },

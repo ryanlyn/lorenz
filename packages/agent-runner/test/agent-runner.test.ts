@@ -262,6 +262,7 @@ test("runAgentAttempt cancels workspace creation when setup timeout fires", asyn
         const signal = (options as typeof options & { abortSignal?: AbortSignal }).abortSignal;
         signalSeen = signal instanceof AbortSignal;
         return new Promise<string>((resolve, reject) => {
+          // eslint-disable-next-line no-restricted-syntax -- cancellable timer under fake-timer control (vi.advanceTimersByTimeAsync below); the test asserts abort clears it, so this is not a wall-clock sleep.
           const markerTimer = setTimeout(() => {
             markerWritten = true;
             resolve("/tmp/workspace/TEST-1");
@@ -364,6 +365,7 @@ test("runAgentAttempt cancels beforeRun hook when setup timeout fires", async ()
         const signal = options?.abortSignal;
         signalSeen = signal instanceof AbortSignal;
         return new Promise<void>((resolve, reject) => {
+          // eslint-disable-next-line no-restricted-syntax -- cancellable timer under fake-timer control (vi.advanceTimersByTimeAsync below); the test asserts abort clears it, so this is not a wall-clock sleep.
           const markerTimer = setTimeout(() => {
             markerWritten = true;
             resolve();
