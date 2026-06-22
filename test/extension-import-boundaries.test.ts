@@ -8,9 +8,8 @@
 // out-of-tree extension through a native `import(specifier)` whose argument is an
 // opaque runtime string. depcruise cannot see that string, so a loaded extension
 // that imports an ENGINE package - the very core it is meant to extend - sails past
-// architecture:check (and architecture:check does not even scan test/). This is the
-// blind spot openclaw's extension-import-boundaries test covers; this is lorenz's
-// analog.
+// architecture:check (and architecture:check does not even scan test/). This guard
+// exists to cover exactly that blind spot.
 //
 // The guard cruises two in-repo fixtures (test/fixtures/extension-import-boundaries)
 // through dependency-cruiser PROGRAMMATICALLY - reusing the REAL `.dependency-cruiser.cjs`
