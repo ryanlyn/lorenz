@@ -25,6 +25,8 @@ test("CLI accepts workflow path and TS runtime flags", () => {
         dashboard: true,
         port: 4100,
         logsRoot: null,
+        flagTokens: [],
+        featureTokens: [],
       },
     },
   );
@@ -41,6 +43,8 @@ test("CLI defaults to a TUI daemon when only workflow path is supplied", () => {
       dashboard: true,
       port: null,
       logsRoot: null,
+      flagTokens: [],
+      featureTokens: [],
     },
   });
   assert.deepEqual(parseCliArgs(["--logs-root", "tmp/custom-logs", "--port", "0", "WORKFLOW.md"]), {
@@ -53,6 +57,8 @@ test("CLI defaults to a TUI daemon when only workflow path is supplied", () => {
       dashboard: true,
       port: 0,
       logsRoot: "tmp/custom-logs",
+      flagTokens: [],
+      featureTokens: [],
     },
   });
   assert.deepEqual(parseCliArgs(["--logs-root=tmp/custom-logs", "--port=0", "WORKFLOW.md"]), {
@@ -65,6 +71,8 @@ test("CLI defaults to a TUI daemon when only workflow path is supplied", () => {
       dashboard: true,
       port: 0,
       logsRoot: "tmp/custom-logs",
+      flagTokens: [],
+      featureTokens: [],
     },
   });
 });

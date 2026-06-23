@@ -26,6 +26,9 @@
       "path": "./packages/domain"
     },
     {
+      "path": "./packages/flags"
+    },
+    {
       "path": "./packages/humanize"
     },
     {

@@ -26,6 +26,7 @@ import { defaultTrackerRegistry } from "@lorenz/tracker-sdk";
 import { TraceEmitter } from "@lorenz/traceviz-emitter";
 import { defaultIssueStorePath, IssueStore } from "@lorenz/server";
 import { errorMessage, type Settings, type WorkflowDefinition } from "@lorenz/domain";
+import { setDefaultFlags } from "@lorenz/flags";
 
 import {
   createRunsCommand,
@@ -49,6 +50,12 @@ import {
   runtimeAdapters,
   runtimeDefaultSettingsOptions,
 } from "./daemon.js";
+import {
+  accumulateOption,
+  getFlags,
+  renderFlagDiagnostics,
+  resolveAppFlags,
+} from "./flags-manifest.js";
 
 export interface CliOptions {
   workflowPath: string | null;
@@ -58,6 +65,10 @@ export interface CliOptions {
   dashboard: boolean;
   port: number | null;
   logsRoot: string | null;
+  // Optional so existing/programmatic callers of the exported runDaemon stay source-compatible;
+  // the resolver treats absent arrays as "no CLI overrides".
+  flagTokens?: string[];
+  featureTokens?: string[];
 }
 
 interface CliCommanderOptions {
@@ -67,6 +78,8 @@ interface CliCommanderOptions {
   dashboard?: boolean;
   port?: number;
   logsRoot?: string;
+  flag?: string[];
+  feature?: string[];
 }
 
 export type CliParseResult = ParseResult<CliOptions>;
@@ -130,6 +143,11 @@ export async function runDaemon(options: CliOptions): Promise<number> {
     // Surface deprecated config keys once, on the first (startup) load. Reloads run the same
     // validation every poll, so re-warning there would spam an unchanged config.
     let deprecationsReported = false;
+    // Flags resolve once at startup and are reload-invariant; if a later reload changes the
+    // `flags:`/`features:` front matter, warn once that the edit was ignored rather than honoring
+    // or silently dropping it.
+    let flagFrontMatter: string | null = null;
+    let flagChangeWarned = false;
     // Known after the first load; reused so the tracker loader's audit events
     // reach the configured log file on every reload after startup.
     let trackerLogFile: string | undefined;
@@ -163,9 +181,39 @@ export async function runDaemon(options: CliOptions): Promise<number> {
             },
       );
       deprecationsReported = true;
+      // Detect a post-startup edit to the reload-invariant flag front matter. Skip the work once the
+      // warning has fired, so the steady-state per-poll cost is zero.
+      if (!flagChangeWarned) {
+        const flagFingerprint = JSON.stringify({
+          flags: workflow.config.flags ?? null,
+          features: workflow.config.features ?? null,
+        });
+        if (flagFrontMatter === null) {
+          flagFrontMatter = flagFingerprint;
+        } else if (flagFingerprint !== flagFrontMatter) {
+          flagChangeWarned = true;
+          process.stderr.write(
+            "warning: WORKFLOW.md flags/features changed after startup and were ignored; " +
+              "restart Lorenz to apply.\n",
+          );
+        }
+      }
       return workflow;
     };
     const workflow = await loadRuntimeWorkflow();
+    // Resolve flags once, from CLI > file (front matter) > env > defaults, and install the frozen
+    // snapshot before anything that might read it. Invalid flags throw and surface via the catch.
+    const flags = resolveAppFlags(
+      { flagTokens: options.flagTokens, featureTokens: options.featureTokens },
+      workflow.config,
+      process.env,
+      { warn: (message) => process.stderr.write(`warning: ${message}\n`) },
+    );
+    setDefaultFlags(flags);
+    // Read back through the installed typed accessor, the same path engine code uses.
+    if (getFlags().get("diagnostics.log_flag_resolution")) {
+      process.stderr.write(renderFlagDiagnostics(getFlags()));
+    }
     await configureLogFile(workflow.settings.logging.logFile);
 
     // baseDir anchors `./relative` driver module specifiers to the workflow
@@ -304,7 +352,18 @@ function createDaemonCommand(name = "lorenz"): Command {
       "Root directory for Lorenz logs.",
       parseRequiredValue("--logs-root", "path"),
     )
-    .option("--port <port>", "Observability API port.", parseNonNegativeInteger("--port"));
+    .option("--port <port>", "Observability API port.", parseNonNegativeInteger("--port"))
+    .option(
+      "--flag <key=value>",
+      "Override an internal feature flag (repeatable).",
+      accumulateOption,
+    )
+    .option(
+      "--feature <name|name=bool>",
+      "Enable or disable an internal feature preset, e.g. --feature verbose_diagnostics or " +
+        "--feature verbose_diagnostics=false (repeatable).",
+      accumulateOption,
+    );
 }
 
 function createRootCommand(): Command {
@@ -320,6 +379,8 @@ function cliOptionsFromCommander(parsed: CliCommanderOptions, workflowPath?: str
     dashboard: parsed.dashboard ?? true,
     port: parsed.port ?? null,
     logsRoot: parsed.logsRoot ?? null,
+    flagTokens: parsed.flag ?? [],
+    featureTokens: parsed.feature ?? [],
   };
 }
 
