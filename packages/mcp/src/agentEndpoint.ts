@@ -188,12 +188,11 @@ export async function acquireAgentMcpEndpointForRun(
 ): Promise<AgentMcpEndpointLease> {
   // Token B is bound to a per-run claim whose `workerHost` is the run's REAL ssh
   // host (the gateway re-checks `isRunLive(runKey, workerHost, generation)` against
-  // it). An empty `workerHost` denotes a LOCAL/acp run, which the per-run manager
-  // routes through its own null/local path (acp keeps its settings-wide endpoint) -
-  // it must NEVER reach this minting path. Asserting here CLOSES the bypass where a
-  // local run would otherwise mint a Token B claim stamped `workerHost: ""` that
-  // `isRunLive` could match against any other local slot: the per-run claim model
-  // only applies to real remote hosts, so a local run here is a wiring bug, fail loud.
+  // it). An empty `workerHost` denotes a LOCAL/acp run, routed through the per-run
+  // manager's null/local path - it must NEVER reach this minting path. Fail loud:
+  // a local run here would otherwise mint a claim stamped `workerHost: ""` that
+  // `isRunLive` could match against any other local slot, and the per-run claim
+  // model only applies to real remote hosts.
   if (workerHost.length === 0) {
     throw new Error("per_run_mcp_endpoint_requires_remote_worker_host");
   }
@@ -210,9 +209,8 @@ export async function acquireAgentMcpEndpointForRun(
       tunnels,
       isRunLive,
     );
-    // The configured external-server bypass (Token A) is closed in C6; for now a
-    // configured token is revoked immediately because the per-run lease is scoped
-    // by Token B below, never by the settings-wide token.
+    // The per-run lease is scoped solely by Token B (minted below), never by the
+    // settings-wide token, so revoke any configured token immediately.
     revokeMcpToken(configuredToken?.token);
     // Mint Token B: an opaque per-run token bound to a server-side claim. The
     // claim's generation was captured BEFORE the `openForRun` await (see
@@ -334,23 +332,15 @@ async function acquirePerRunMcpEndpoint(
   // Drop the ref here so repeated tunnel-spawn failures don't leak refcounted
   // local MCP servers / their listeners. The per-run server is mounted with the
   // injected `isRunLive` oracle so its Token B middleware enforces the owner
-  // re-check + generation fence on every request.
-  //
-  // `requireOwnedServer: true` CLOSES the configured-external-server bypass for the
-  // per-run claim path: when a foreign MCP server is already reachable on the
-  // configured port, `ensureLocalMcpServer` would normally return null to ATTACH to
-  // it - but lorenz does not own that server's auth surface, so it cannot enforce
-  // the per-request owner re-check / generation fence / fail-closed revocation a
-  // Token B claim depends on. Co-residence over a server lorenz is merely a client
-  // of is a claim bypass, so the per-run path REFUSES to attach and fails loud
-  // instead of minting an unenforceable Token B.
+  // re-check + generation fence on every request. `requireOwnedServer: true`
+  // refuses to attach to a foreign server lorenz cannot enforce that fence over
+  // (see `ensureLocalMcpServer`).
   const localServer = await ensureLocalMcpServer(settings, configuredToken, isRunLive, true);
   // Capture the shared local server's generation BEFORE the `openForRun` await.
-  // The single event loop is single-writer only BETWEEN awaits: stamping the
-  // claim with the generation that was live at this point (rather than re-reading
-  // it after the await, when a recycle may have bumped it) makes a stale token
-  // fail the per-request liveness fence instead of silently inheriting a newer
-  // generation it was never minted against.
+  // The event loop is single-writer only BETWEEN awaits, so stamping the claim
+  // with the generation live at this point (not re-read after the await, when a
+  // recycle may have bumped it) makes a stale token fail the per-request liveness
+  // fence instead of silently inheriting a generation it was never minted against.
   const generation = localServer?.generation ?? 1;
   try {
     const localHost = "127.0.0.1";

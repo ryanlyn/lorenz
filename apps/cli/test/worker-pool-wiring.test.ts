@@ -72,7 +72,7 @@ test("CLI re-exports the worker-pool driver public API for live/e2e tests", () =
   assert.ok(defaultWorkerDriverRegistry.kinds().includes("fake"));
 });
 
-// --- STEP 3 post-construction gate ---------------------------------------
+// --- post-construction gate ----------------------------------------------
 // `assertSlotsPerMachineGate` is the single mechanical safety that lives where
 // the coordinator capability is actually known (after buildDispatchCoordinator).
 // It enforces TWO conditions for slotsPerMachine>1: the runtime
