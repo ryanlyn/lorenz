@@ -30,6 +30,9 @@ catalogs:
     "@testing-library/react":
       specifier: ^16.3.0
       version: 16.3.2
+    "@tursodatabase/database":
+      specifier: ^0.6.1
+      version: 0.6.1
     "@types/better-sqlite3":
       specifier: ^7.6.13
       version: 7.6.13
@@ -804,6 +807,16 @@ importers:
       "@lorenz/policies":
         specifier: workspace:*
         version: link:../policies
+      "@tursodatabase/database":
+        specifier: "catalog:"
+        version: 0.6.1
+      better-sqlite3:
+        specifier: "catalog:"
+        version: 12.10.0
+    devDependencies:
+      "@types/better-sqlite3":
+        specifier: "catalog:"
+        version: 7.6.13
 
   packages/policies:
     dependencies:
@@ -3044,6 +3057,52 @@ packages:
         optional: true
       "@types/react-dom":
         optional: true
+
+  "@tursodatabase/database-common@0.6.1":
+    resolution:
+      {
+        integrity: sha512-fkmkhgSUDg3MXkcziTG9Ime3AY5+YvvDN7VvUDEMNV7MP+XgwE/i5tU6eQP1EKa/zDkdSYPq8gPcmROmKmKL8Q==,
+      }
+
+  "@tursodatabase/database-darwin-arm64@0.6.1":
+    resolution:
+      {
+        integrity: sha512-2/nlqulI/kWlrh7vHMwF5fkuavGRWB83SIhzHZmoHSQovq0a28Z4+WAHerjh9yNs7DTj70U9PIsvAtRdh77l7g==,
+      }
+    cpu: [arm64]
+    os: [darwin]
+
+  "@tursodatabase/database-linux-arm64-gnu@0.6.1":
+    resolution:
+      {
+        integrity: sha512-ixooF2xyxV84GYIYPLI5D9VEp+cX3WPBmXRyoCGw7+l9G66eOp8QppGF0dKFYhtp/AJ8YmOp+lemqBoCue9N8Q==,
+      }
+    cpu: [arm64]
+    os: [linux]
+    libc: [glibc]
+
+  "@tursodatabase/database-linux-x64-gnu@0.6.1":
+    resolution:
+      {
+        integrity: sha512-cNZ3FS8XBn4X8zHSzd31nvEeBbR4hCDBGs2P3ViND1Egu5oDZ822a+hWxNxMgMPgUJf/aGBEAk5p+j11fAC/QQ==,
+      }
+    cpu: [x64]
+    os: [linux]
+    libc: [glibc]
+
+  "@tursodatabase/database-win32-x64-msvc@0.6.1":
+    resolution:
+      {
+        integrity: sha512-3CASiW3BbeNT4qryxPKKZECGxaAtfUeM/Bjx1NWIxShCLLtRpnaEUt7WLOT2hz+sqU322H6fmMuaN9sYrcwBxw==,
+      }
+    cpu: [x64]
+    os: [win32]
+
+  "@tursodatabase/database@0.6.1":
+    resolution:
+      {
+        integrity: sha512-qg6LO1XHA9kc2s97crg0/nHiKFk3xTzylRuZPYggO0vA4hx2rp8fk0Je2vFGOkfVv+ZmzsXOIb+DBHmdrG+72A==,
+      }
 
   "@tybys/wasm-util@0.10.2":
     resolution:
@@ -8148,6 +8207,29 @@ snapshots:
     optionalDependencies:
       "@types/react": 19.2.15
       "@types/react-dom": 19.2.3(@types/react@19.2.15)
+
+  "@tursodatabase/database-common@0.6.1": {}
+
+  "@tursodatabase/database-darwin-arm64@0.6.1":
+    optional: true
+
+  "@tursodatabase/database-linux-arm64-gnu@0.6.1":
+    optional: true
+
+  "@tursodatabase/database-linux-x64-gnu@0.6.1":
+    optional: true
+
+  "@tursodatabase/database-win32-x64-msvc@0.6.1":
+    optional: true
+
+  "@tursodatabase/database@0.6.1":
+    dependencies:
+      "@tursodatabase/database-common": 0.6.1
+    optionalDependencies:
+      "@tursodatabase/database-darwin-arm64": 0.6.1
+      "@tursodatabase/database-linux-arm64-gnu": 0.6.1
+      "@tursodatabase/database-linux-x64-gnu": 0.6.1
+      "@tursodatabase/database-win32-x64-msvc": 0.6.1
 
   "@tybys/wasm-util@0.10.2":
     dependencies:

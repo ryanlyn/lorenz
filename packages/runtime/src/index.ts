@@ -1,7 +1,7 @@
 import { issueHasOpenBlockers, issueIsActive, routedToThisWorker, slotKey } from "@lorenz/dispatch";
 import { reconciliationStopReason } from "@lorenz/policies/reconciliation";
 import { isTerminalState } from "@lorenz/issue";
-import { Orchestrator, type SlotReservation } from "@lorenz/orchestrator";
+import { Orchestrator, type ClaimStoreLike, type SlotReservation } from "@lorenz/orchestrator";
 import { settingsForIssueState, validateDispatchConfig } from "@lorenz/config";
 import { runAgentAttempt, type RunResult } from "@lorenz/agent-runner";
 import { ProjectionActor } from "@lorenz/projections";
@@ -13,6 +13,7 @@ import {
   systemClock,
   withDerivedMaxInFlight,
   type ClockPort,
+  type TimerHandle,
 } from "@lorenz/domain";
 import type {
   RuntimeAppStatus,
@@ -73,6 +74,11 @@ export interface LorenzRuntimeOptions {
   clientFactory?: ((settings: WorkflowDefinition["settings"]) => RuntimeTrackerClient) | undefined;
   reloadWorkflow?: (() => Promise<WorkflowDefinition>) | undefined;
   orchestrator?: Orchestrator | undefined;
+  /**
+   * Optional claim store for the runtime-owned orchestrator. Defaults to an in-memory
+   * store; ignored when a pre-built `orchestrator` is supplied.
+   */
+  claimStore?: ClaimStoreLike | undefined;
   runner?: RuntimeRunner | undefined;
   removeIssueWorkspaces?:
     | ((
@@ -99,12 +105,12 @@ export interface LorenzRuntimeOptions {
    * Optional embedded worker pool. When present, the orchestrator is constructed with a capacity
    * probe backed by the pool's `canAcquire` (bypassing the static `sshHosts` selection), and
    * each run acquires a {@link RunSlot} before the runner and releases/fails it in the run's
-   * `finally`. Absent (default) preserves the existing local / `sshHosts` behavior byte-for-byte.
+   * `finally`. Absent (default) preserves the local and `sshHosts` behavior.
    *
    * A bare `workerPool` is wrapped internally in a null-endpoint passthrough
    * {@link DispatchCoordinator} (see {@link LorenzRuntimeOptions.coordinator}), so every run
-   * drives the coordinator uniformly while a bare pool injection stays byte-identical at the
-   * runtime boundary (default `slotsPerMachine=1` + `mcpEndpoint=null`). Prefer threading a
+   * drives the coordinator uniformly while a bare pool injection keeps the default runtime
+   * boundary unchanged (`slotsPerMachine=1` + `mcpEndpoint=null`). Prefer threading a
    * pre-built `coordinator`; `workerPool` is the low-churn path that keeps existing injection
    * sites unchanged. When BOTH are supplied, `coordinator` wins.
    */
@@ -136,6 +142,8 @@ const POISON_WORKER_ERROR_PREFIXES = [
   // `hook failed with status N` (no `workspace ` prefix) and stays healthy.
   "workspace hook failed with status ",
 ] as const;
+
+const CLAIM_OWNER_HEARTBEAT_INTERVAL_MS = 10_000;
 
 export function classifyWorkerOutcome(error: unknown): WorkerOutcome {
   const message = error instanceof Error ? error.message : String(error);
@@ -194,6 +202,19 @@ function mergePollOptions(existing: PollOptions | null, requested: PollOptions):
   });
 }
 
+class ClaimStoreRuntimeError extends Error {
+  constructor(
+    readonly reason: string,
+    readonly original: unknown,
+  ) {
+    super(errorMessage(original));
+  }
+}
+
+function throwRuntimeError(error: Error): never {
+  throw error;
+}
+
 class ActiveRunHandle {
   readonly controller = new AbortController();
   /**
@@ -202,8 +223,11 @@ class ActiveRunHandle {
    * generic `agent_run_aborted` (which would otherwise classify as healthy).
    */
   reason: "stalled" | null = null;
+  abandonClaimOnSettlement = false;
 
   constructor(
+    readonly issueId: string,
+    readonly slotIndex: number,
     readonly key: string,
     readonly runId: string,
     private readonly activeRuns: Map<string, ActiveRunHandle>,
@@ -221,8 +245,12 @@ class ActiveRunHandle {
     this.controller.abort();
   }
 
-  finishExternally(reason: "stalled" | null = null): void {
+  finishExternally(
+    reason: "stalled" | null = null,
+    options: { abandonClaimOnSettlement?: boolean | undefined } = {},
+  ): void {
     if (reason) this.reason = reason;
+    if (options.abandonClaimOnSettlement) this.abandonClaimOnSettlement = true;
     this.abort();
     this.release();
   }
@@ -257,6 +285,8 @@ export class LorenzRuntime {
   private activePollOptions: PollOptions | null = null;
   private pendingPollOptions: PollOptions | null = null;
   private workerPoolDrained = false;
+  private claimOwnerHeartbeatTimer: TimerHandle | null = null;
+  private pendingStoppedClaimSettlements = 0;
   /**
    * Live tracker push subscription (see {@link RuntimeTrackerClient.watch}), opened once in the
    * recurring `start()` loop and closed on `stop()`. `undefined` for pull-only trackers and the
@@ -266,11 +296,10 @@ export class LorenzRuntime {
   private changeStream: TrackerChangeStream | undefined;
   private changeStreamOpening = false;
   /**
-   * The reload-surviving coordinator singleton. Built ONCE here: either the
+   * The reload-surviving coordinator singleton. Built here from either the
    * pre-built `input.coordinator` (preferred), or a null-endpoint passthrough
-   * wrapping a bare `input.workerPool` (the low-churn path that keeps every existing
-   * workerPool-injecting site byte-identical at the runtime boundary). `undefined`
-   * when neither is supplied (the static/local path, byte-identical to today).
+   * wrapping a bare `input.workerPool`, which keeps the default runtime boundary unchanged.
+   * `undefined` when neither is supplied, which uses the static/local path.
    */
   private readonly coordinator: DispatchCoordinator | undefined;
 
@@ -291,7 +320,7 @@ export class LorenzRuntime {
       new Orchestrator(
         input.workflow.settings,
         this.clock,
-        undefined,
+        input.claimStore,
         // The coordinator IS the orchestrator's capacity authority (it satisfies
         // the CapacityProbe shape directly). It is installed for the orchestrator's
         // lifetime whenever it exists, but a reload can disable the underlying pool
@@ -351,6 +380,7 @@ export class LorenzRuntime {
       blocked: orchestration.blocked.map((entry) => ({ ...entry })),
       usageTotals: orchestration.usageTotals,
       rateLimits: orchestration.rateLimits,
+      claimStore: orchestration.claimStore,
       logFile: this.workflow.settings.logging.logFile,
     });
   }
@@ -389,8 +419,14 @@ export class LorenzRuntime {
     void this.closeChangeStream();
     // finishExternally (abort + release) mirrors the other abort sites and clears
     // isActive, so the resulting agent_run_aborted rejection is treated as a clean
-    // shutdown in runClaim rather than recorded as a failed run.
-    for (const handle of [...this.activeRuns.values()]) handle.finishExternally();
+    // shutdown in runClaim rather than recorded as a failed run. Durable claims are
+    // abandoned only after the runner settles; until then a shared store must still
+    // show the slot as owned.
+    for (const handle of [...this.activeRuns.values()]) {
+      this.markStoppedClaimSettlementPending(handle);
+      handle.finishExternally(null, { abandonClaimOnSettlement: true });
+    }
+    this.stopClaimOwnerHeartbeatIfIdle();
     this.retryScheduler.stop();
     this.emit();
   }
@@ -532,17 +568,17 @@ export class LorenzRuntime {
     this.appStatus = this.inFlight.size > 0 ? "running" : "polling";
     this.lastPollAt = this.clock.now().toISOString();
     this.lastError = null;
-    this.emit();
 
     const dispatched: Array<Promise<void>> = [];
     try {
+      this.emit();
       await this.reloadWorkflowIfConfigured();
       this.validateDispatch(this.workflow.settings);
       await this.cleanupTerminalWorkspacesOnce();
-      this.reconcileStalledRuns();
+      await this.reconcileStalledRuns();
       await this.reconcileTrackedIssues();
       const issues = await this.client.fetchCandidateIssues();
-      const eligibleIssues = this.orchestrator.eligibleIssues(issues);
+      const eligibleIssues = await this.orchestrator.eligibleIssuesAsync(issues);
       if (!options.dryRun) this.syncRetryTimersForIssues(issues);
       this.candidates = issues.length;
       this.eligible = eligibleIssues.length;
@@ -560,7 +596,7 @@ export class LorenzRuntime {
       }
 
       this.pollStatus = "idle";
-      this.appStatus = this.inFlight.size > 0 ? "running" : "idle";
+      this.updateAppStatusFromInFlight();
       this.nextPollAt = new Date(
         this.clock.now().getTime() + this.workflow.settings.polling.intervalMs,
       ).toISOString();
@@ -582,12 +618,11 @@ export class LorenzRuntime {
       return [];
     }
 
-    const claim = this.orchestrator.claim(refreshed);
+    const claim = await this.orchestrator.claimAsync(refreshed);
     if (!claim) {
       this.addEvent("dispatch_skipped", `${refreshed.identifier} stale_before_dispatch`);
       return [];
     }
-    this.syncRetryTimer(refreshed.id);
     const slotIndex =
       claim.kind === "running" ? claim.entry.slotIndex : claim.reservation.slotIndex;
     const key = slotKey(refreshed.id, slotIndex);
@@ -596,18 +631,32 @@ export class LorenzRuntime {
     // The handle is registered for the WHOLE run lifecycle - including the reserved
     // path's acquire window - so stop()/reconcile abort an in-acquire run (the
     // signal reaches the pool's FIFO waiter) exactly as they abort a running one.
-    const handle = new ActiveRunHandle(key, runId, this.activeRuns);
+    const handle = new ActiveRunHandle(refreshed.id, slotIndex, key, runId, this.activeRuns);
     this.activeRuns.set(key, handle);
-    // On the static/local path the run starts immediately. On the pool-governed
-    // path run_reserving marks dispatch intent and run_started moves AFTER
-    // bindReservation (inside runReservedClaim): a capacity-refused dispatch
-    // never emits a phantom run_started.
-    if (claim.kind === "running") {
-      this.addEvent("run_started", `${refreshed.identifier} slot=${slotIndex}`);
-    } else {
-      this.addEvent("run_reserving", `${refreshed.identifier} slot=${slotIndex}`);
+    try {
+      this.syncRetryTimer(refreshed.id);
+      await this.startClaimOwnerHeartbeat();
+      // On the static/local path the run starts immediately. On the pool-governed
+      // path run_reserving marks dispatch intent and run_started moves AFTER
+      // bindReservation (inside runReservedClaim): a capacity-refused dispatch
+      // never emits a phantom run_started.
+      if (claim.kind === "running") {
+        this.addEvent("run_started", `${refreshed.identifier} slot=${slotIndex}`);
+      } else {
+        this.addEvent("run_reserving", `${refreshed.identifier} slot=${slotIndex}`);
+      }
+      this.input.onIssueDispatched?.(refreshed);
+    } catch (error) {
+      try {
+        await this.orchestrator.abandonClaimAsync(refreshed.id, slotIndex);
+      } catch {
+        // Preserve the heartbeat failure; if the backend is unavailable, abandon may fail too.
+      } finally {
+        handle.release();
+        this.stopClaimOwnerHeartbeatIfIdle();
+      }
+      throw error;
     }
-    this.input.onIssueDispatched?.(refreshed);
 
     const run =
       claim.kind === "running"
@@ -623,7 +672,8 @@ export class LorenzRuntime {
     this.inFlight.add(run);
     void run.finally(() => {
       this.inFlight.delete(run);
-      this.appStatus = this.inFlight.size > 0 ? "running" : "idle";
+      this.stopClaimOwnerHeartbeatIfIdle();
+      this.updateAppStatusFromInFlight();
       this.emit();
     });
     this.emit();
@@ -638,6 +688,60 @@ export class LorenzRuntime {
       this.addEvent("dispatch_refresh_failed", `${issue.identifier} ${errorMessage(error)}`);
       return null;
     }
+  }
+
+  private async startClaimOwnerHeartbeat(): Promise<void> {
+    await this.orchestrator.heartbeatClaimOwnerAsync();
+    if (this.claimOwnerHeartbeatTimer) return;
+    this.claimOwnerHeartbeatTimer = this.clock.setTimeout(() => {
+      void this.heartbeatClaimOwnerWhileActive();
+    }, CLAIM_OWNER_HEARTBEAT_INTERVAL_MS);
+    this.claimOwnerHeartbeatTimer.unref?.();
+  }
+
+  private async heartbeatClaimOwnerWhileActive(): Promise<void> {
+    this.claimOwnerHeartbeatTimer = null;
+    if (this.activeRuns.size === 0 && this.pendingStoppedClaimSettlements === 0) return;
+    try {
+      await this.orchestrator.heartbeatClaimOwnerAsync();
+    } catch (error) {
+      this.handleClaimOwnerHeartbeatFailure(error);
+    }
+    if (this.activeRuns.size === 0 && this.pendingStoppedClaimSettlements === 0) return;
+    this.claimOwnerHeartbeatTimer = this.clock.setTimeout(() => {
+      void this.heartbeatClaimOwnerWhileActive();
+    }, CLAIM_OWNER_HEARTBEAT_INTERVAL_MS);
+    this.claimOwnerHeartbeatTimer.unref?.();
+  }
+
+  private handleClaimOwnerHeartbeatFailure(error: unknown): void {
+    const message = `claim_owner_heartbeat_failed ${errorMessage(error)}`;
+    this.stopped = true;
+    this.appStatus = "error";
+    this.lastError = message;
+    for (const handle of [...this.activeRuns.values()]) {
+      this.markStoppedClaimSettlementPending(handle);
+      handle.finishExternally(null, { abandonClaimOnSettlement: true });
+    }
+    this.retryScheduler.stop();
+    this.addEvent("poll_error", message);
+  }
+
+  private stopClaimOwnerHeartbeatIfIdle(): void {
+    if (this.activeRuns.size > 0) return;
+    if (this.pendingStoppedClaimSettlements > 0) return;
+    this.stopClaimOwnerHeartbeat();
+  }
+
+  private stopClaimOwnerHeartbeat(): void {
+    if (!this.claimOwnerHeartbeatTimer) return;
+    this.clock.clearTimeout(this.claimOwnerHeartbeatTimer);
+    this.claimOwnerHeartbeatTimer = null;
+  }
+
+  private updateAppStatusFromInFlight(): void {
+    if (this.appStatus === "error") return;
+    this.appStatus = this.inFlight.size > 0 ? "running" : "idle";
   }
 
   /**
@@ -662,8 +766,9 @@ export class LorenzRuntime {
         "dispatch_skipped",
         `${issue.identifier} worker_pool_acquire_error coordinator_missing`,
       );
-      this.orchestrator.cancelReservation(reservation);
-      handle.release();
+      await this.cancelReservationAfterSkippedAcquire(issue, reservation, handle, {
+        syncRetryTimer: true,
+      });
       return;
     }
     let acquired: AcquireRunSlotResult;
@@ -701,9 +806,9 @@ export class LorenzRuntime {
         "dispatch_skipped",
         `${issue.identifier} worker_pool_acquire_error ${errorMessage(error)}`,
       );
-      this.orchestrator.cancelReservation(reservation);
-      this.syncRetryTimer(issue.id);
-      handle.release();
+      await this.cancelReservationAfterSkippedAcquire(issue, reservation, handle, {
+        syncRetryTimer: true,
+      });
       return;
     }
     if (acquired.status !== "bound") {
@@ -714,13 +819,49 @@ export class LorenzRuntime {
       // affinity and attempt counter intact; never record history for a run that
       // did not start.
       this.addEvent("dispatch_skipped", `${issue.identifier} worker_host_capacity`);
-      this.orchestrator.cancelReservation(reservation);
-      this.syncRetryTimer(issue.id);
-      handle.release();
+      await this.cancelReservationAfterSkippedAcquire(issue, reservation, handle, {
+        syncRetryTimer: true,
+      });
       return;
     }
     const slot = acquired.slot;
-    const entry = this.orchestrator.bindReservation(reservation, slot.workerHost);
+    let entry: Awaited<ReturnType<Orchestrator["bindReservationAsync"]>>;
+    try {
+      entry = await this.orchestrator.bindReservationAsync(reservation, slot.workerHost);
+    } catch (error) {
+      const bindError = errorMessage(error);
+      let releaseErrorMessage: string | null = null;
+      try {
+        await slot.release("healthy");
+      } catch (releaseError) {
+        releaseErrorMessage = errorMessage(releaseError);
+      }
+      handle.release();
+      const bindFailureMessage = `claim_bind_failed ${bindError}`;
+      this.markRuntimeError(bindFailureMessage);
+      let retrySyncError: string | null = null;
+      if (handle.abandonClaimOnSettlement) {
+        await this.settleStoppedClaim(handle, issue.id, reservation.slotIndex);
+      } else {
+        try {
+          await this.orchestrator.abandonClaimAsync(issue.id, reservation.slotIndex);
+          retrySyncError = this.syncRetryTimerSafely(issue.id);
+        } catch {
+          // Preserve the bind failure event; if the backend is unavailable, abandon may fail too.
+        }
+      }
+      this.stopClaimOwnerHeartbeatIfIdle();
+      this.addEvent("dispatch_skipped", `${issue.identifier} bind_reservation_error ${bindError}`);
+      if (releaseErrorMessage) {
+        this.addEvent(
+          "dispatch_skipped",
+          `${issue.identifier} bind_reservation_release_error ${releaseErrorMessage}`,
+        );
+      }
+      this.addEvent("poll_error", bindFailureMessage);
+      if (retrySyncError) this.addEvent("poll_error", retrySyncError);
+      return;
+    }
     if (!entry) {
       // The reservation was cancelled/expired during the acquire (cleanup, stop,
       // or the expiry sweep): release the bound worker back to warm inventory (the
@@ -728,6 +869,7 @@ export class LorenzRuntime {
       await slot.release("healthy");
       this.addEvent("dispatch_skipped", `${issue.identifier} reservation_lapsed`);
       handle.release();
+      await this.settleStoppedClaim(handle, issue.id, reservation.slotIndex);
       return;
     }
     this.addEvent("run_started", `${issue.identifier} slot=${reservation.slotIndex}`);
@@ -740,6 +882,37 @@ export class LorenzRuntime {
       handle,
       slot,
     );
+  }
+
+  private async cancelReservationAfterSkippedAcquire(
+    issue: Issue,
+    reservation: SlotReservation,
+    handle: ActiveRunHandle,
+    options: { syncRetryTimer?: boolean | undefined } = {},
+  ): Promise<void> {
+    let cancelled = false;
+    let cancelError: unknown;
+    try {
+      await this.orchestrator.cancelReservationAsync(reservation);
+      cancelled = true;
+    } catch (error) {
+      cancelError = error;
+    } finally {
+      handle.release();
+      await this.settleStoppedClaim(handle, issue.id, reservation.slotIndex);
+      this.stopClaimOwnerHeartbeatIfIdle();
+    }
+    if (cancelled && options.syncRetryTimer) {
+      const retrySyncError = this.syncRetryTimerSafely(issue.id);
+      if (retrySyncError) this.addEvent("poll_error", retrySyncError);
+    }
+    if (!cancelError) return;
+    const message = `claim_cancel_failed ${errorMessage(cancelError)}`;
+    if (this.appStatus !== "error") {
+      this.appStatus = "error";
+      this.lastError = message;
+    }
+    this.addEvent("poll_error", message);
   }
 
   private async runClaim(
@@ -755,6 +928,20 @@ export class LorenzRuntime {
     const effectiveWorkerHost = workerHost;
     let workerOutcome: WorkerOutcome = "healthy";
     const heartbeatSlot = slot;
+    let claimStoreRuntimeError: ClaimStoreRuntimeError | null = null;
+    let updateQueue: Promise<void> = Promise.resolve();
+    const enqueueUpdate = (update: AgentUpdate): void => {
+      const next = updateQueue.then(async () => {
+        heartbeatSlot?.heartbeat();
+        await this.orchestrator.applyUpdateAsync(issue.id, slotIndex, update);
+        this.addEvent(update.type, agentUpdateRuntimeMessage(issue.identifier, update));
+        this.input.onAgentUpdate?.(issue, update);
+      });
+      updateQueue = next.catch((error) => {
+        claimStoreRuntimeError ??= new ClaimStoreRuntimeError("claim_update_failed", error);
+        handle.abort();
+      });
+    };
     try {
       const result = await this.runner({
         issue,
@@ -771,24 +958,35 @@ export class LorenzRuntime {
         // path; force the per-slot suffix whenever co-residence is possible.
         // Single-tenant (default) keeps the bare path.
         forceSlotSuffix: (this.workflow.settings.worker.workerPool?.slotsPerMachine ?? 1) > 1,
-        onUpdate: (update) => {
-          heartbeatSlot?.heartbeat();
-          this.orchestrator.applyUpdate(issue.id, slotIndex, update);
-          this.addEvent(update.type, agentUpdateRuntimeMessage(issue.identifier, update));
-          this.input.onAgentUpdate?.(issue, update);
-        },
+        onUpdate: enqueueUpdate,
         fetchIssue: async (current) => {
           const refreshed = await this.client.fetchIssuesByIds([current.id]);
           return refreshed[0] ?? current;
         },
         abortSignal: handle.signal,
       });
+      await updateQueue;
+      if (claimStoreRuntimeError) throwRuntimeError(claimStoreRuntimeError);
       if (!handle.isActive) return;
       const finalIssue = result.finalIssue ?? (await this.fetchIssueOrSelf(issue));
       if (!handle.isActive) return;
-      const entry = this.runningEntry(issue.id, slotIndex);
-      this.orchestrator.finish(issue.id, slotIndex, true, undefined, "continuation");
-      this.syncRetryTimer(issue.id);
+      let finished: RunningEntry | null;
+      try {
+        finished = await this.orchestrator.finishAsync(
+          issue.id,
+          slotIndex,
+          true,
+          undefined,
+          "continuation",
+        );
+      } catch (error) {
+        this.recordClaimStoreFailure("claim_finish_failed", error);
+        return;
+      }
+      if (!finished) {
+        this.addEvent("dispatch_skipped", `${issue.identifier} claim_lost_before_finish`);
+        return;
+      }
       this.recordHistory(
         buildRunHistoryEntry({
           id: runId,
@@ -798,15 +996,28 @@ export class LorenzRuntime {
           agentKind,
           outcome: "success",
           turnCount: result.turnCount,
-          runningEntry: entry,
+          runningEntry: finished,
           workspacePath: result.workspace,
           startedAt,
           endedAt: this.clock.now().toISOString(),
           durationMs: durationMs(startedAt, this.clock.now().toISOString()),
         }),
       );
+      const retrySyncError = this.syncRetryTimerSafely(issue.id);
       this.addEvent("run_completed", `${issue.identifier} turns=${result.turnCount}`);
+      if (retrySyncError) this.addEvent("poll_error", retrySyncError);
     } catch (error) {
+      await updateQueue;
+      const runtimeError = error instanceof ClaimStoreRuntimeError ? error : claimStoreRuntimeError;
+      if (runtimeError) {
+        this.recordClaimStoreFailure(runtimeError.reason, runtimeError.original);
+        try {
+          await this.orchestrator.abandonClaimAsync(issue.id, slotIndex);
+        } catch (abandonError) {
+          this.recordClaimStoreFailure("claim_abandon_failed", abandonError);
+        }
+        return;
+      }
       // Classify the worker outcome BEFORE any early return so a run finished
       // externally (e.g. a stall reconciliation aborted it -> the runner throws
       // `agent_run_aborted`) still poisons the worker: a stall-finished run is
@@ -817,10 +1028,23 @@ export class LorenzRuntime {
       // rejects with agent_run_aborted; recording it as a failure would emit a
       // run_failed event the TUI renders as a red error banner on Ctrl+C.
       if (!handle.isActive) return;
-      const entry = this.runningEntry(issue.id, slotIndex);
-      if (!handle.isActive) return;
-      this.orchestrator.finish(issue.id, slotIndex, true, errorMessage(error), "failure");
-      this.syncRetryTimer(issue.id);
+      let finished: RunningEntry | null;
+      try {
+        finished = await this.orchestrator.finishAsync(
+          issue.id,
+          slotIndex,
+          true,
+          errorMessage(error),
+          "failure",
+        );
+      } catch (finishError) {
+        this.recordClaimStoreFailure("claim_finish_failed", finishError);
+        return;
+      }
+      if (!finished) {
+        this.addEvent("dispatch_skipped", `${issue.identifier} claim_lost_before_finish`);
+        return;
+      }
       this.recordHistory(
         buildRunHistoryEntry({
           id: runId,
@@ -828,8 +1052,8 @@ export class LorenzRuntime {
           slotIndex,
           agentKind,
           outcome: "failed",
-          turnCount: entry?.turnCount ?? 0,
-          runningEntry: entry,
+          turnCount: finished.turnCount,
+          runningEntry: finished,
           startedAt,
           endedAt: this.clock.now().toISOString(),
           durationMs: durationMs(startedAt, this.clock.now().toISOString()),
@@ -837,7 +1061,9 @@ export class LorenzRuntime {
           fallbackLastEvent: "turn_failed",
         }),
       );
+      const retrySyncError = this.syncRetryTimerSafely(issue.id);
       this.addEvent("run_failed", `${issue.identifier} ${errorMessage(error)}`);
+      if (retrySyncError) this.addEvent("poll_error", retrySyncError);
     } finally {
       handle.release();
       if (slot) {
@@ -859,6 +1085,34 @@ export class LorenzRuntime {
           await slot.release("healthy");
         }
       }
+      await this.settleStoppedClaim(handle, issue.id, slotIndex);
+    }
+  }
+
+  private markStoppedClaimSettlementPending(handle: ActiveRunHandle): void {
+    if (handle.abandonClaimOnSettlement) return;
+    this.pendingStoppedClaimSettlements += 1;
+  }
+
+  private async settleStoppedClaim(
+    handle: ActiveRunHandle,
+    issueId: string,
+    slotIndex: number,
+  ): Promise<void> {
+    if (!handle.abandonClaimOnSettlement) return;
+    handle.abandonClaimOnSettlement = false;
+    try {
+      await this.orchestrator.abandonClaimAsync(issueId, slotIndex);
+    } catch (error) {
+      const message = `claim_abandon_failed ${errorMessage(error)}`;
+      if (this.appStatus !== "error") {
+        this.appStatus = "error";
+        this.lastError = message;
+      }
+      this.addEvent("poll_error", message);
+    } finally {
+      this.pendingStoppedClaimSettlements = Math.max(0, this.pendingStoppedClaimSettlements - 1);
+      this.stopClaimOwnerHeartbeatIfIdle();
     }
   }
 
@@ -927,10 +1181,11 @@ export class LorenzRuntime {
   }
 
   private async reconcileTrackedIssues(): Promise<void> {
-    const snapshot = this.orchestrator.snapshot();
+    const snapshot = await this.orchestrator.snapshotAsync();
     const tracked = new Map<
       string,
       {
+        kind: "claim" | "retry";
         identifier: string;
         workerHost?: string | null | undefined;
         workspacePath?: string | null | undefined;
@@ -939,24 +1194,33 @@ export class LorenzRuntime {
     // Reserving (in-acquire) slots are tracked host-less so an issue that goes
     // terminal mid-acquire is still aborted and cleaned up; running/retrying
     // entries below override with their richer metadata when present.
-    for (const entry of snapshot.reserving)
+    for (const entry of snapshot.reserving) {
+      if (!(await this.orchestrator.ownsClaimAsync(entry.issueId, entry.slotIndex))) continue;
       tracked.set(entry.issueId, {
+        kind: "claim",
         identifier: entry.identifier,
         workerHost: null,
         workspacePath: null,
       });
-    for (const entry of snapshot.running)
+    }
+    for (const entry of snapshot.running) {
+      if (!(await this.orchestrator.ownsClaimAsync(entry.issue.id, entry.slotIndex))) continue;
       tracked.set(entry.issue.id, {
+        kind: "claim",
         identifier: entry.issue.identifier,
         workerHost: entry.workerHost,
         workspacePath: entry.workspacePath,
       });
-    for (const entry of snapshot.retrying)
+    }
+    for (const entry of snapshot.retrying) {
+      if (tracked.has(entry.issueId)) continue;
       tracked.set(entry.issueId, {
+        kind: "retry",
         identifier: entry.identifier,
         workerHost: entry.workerHost,
         workspacePath: entry.workspacePath,
       });
+    }
     if (tracked.size === 0) return;
 
     let refreshed: Issue[];
@@ -968,23 +1232,27 @@ export class LorenzRuntime {
     }
     const refreshedIds = new Set(refreshed.map((issue) => issue.id));
     for (const issue of refreshed) {
-      if (
-        issueIsActive(issue, this.workflow.settings) &&
-        routedToThisWorker(issue, this.workflow.settings) &&
-        !issueHasOpenBlockers(issue, this.workflow.settings)
-      ) {
-        this.orchestrator.refreshRunningIssue(issue);
+      const meta = tracked.get(issue.id);
+      const active = issueIsActive(issue, this.workflow.settings);
+      const routed = routedToThisWorker(issue, this.workflow.settings);
+      if (active && routed && !issueHasOpenBlockers(issue, this.workflow.settings)) {
+        await this.orchestrator.refreshRunningIssueAsync(issue);
+        continue;
+      }
+      try {
+        await this.orchestrator.cleanupIssueAsync(issue.id);
+      } catch (error) {
+        this.recordClaimStoreFailure("claim_cleanup_failed", error);
         continue;
       }
       this.abortIssueRuns(issue.id);
-      this.orchestrator.cleanupIssue(issue.id);
       this.clearRetryTimer(issue.id);
       const reason = reconciliationStopReason(issue, this.workflow.settings);
       if (isTerminalState(issue.state, this.workflow.settings.tracker.terminalStates)) {
         await this.removeIssueWorkspaces(
           this.workflow.settings,
-          issue.identifier || tracked.get(issue.id)?.identifier,
-          tracked.get(issue.id)?.workerHost,
+          issue.identifier || meta?.identifier,
+          meta?.workerHost,
           issue,
         );
         this.addEvent("workspace_cleanup", `${issue.identifier} ${reason}`);
@@ -994,16 +1262,28 @@ export class LorenzRuntime {
     }
     for (const [issueId, meta] of tracked.entries()) {
       if (refreshedIds.has(issueId)) continue;
+      try {
+        await this.orchestrator.cleanupIssueAsync(issueId);
+      } catch (error) {
+        this.recordClaimStoreFailure("claim_cleanup_failed", error);
+        continue;
+      }
       this.abortIssueRuns(issueId);
-      this.orchestrator.cleanupIssue(issueId);
       this.clearRetryTimer(issueId);
       this.addEvent("run_reconciled", `${meta.identifier} missing`);
     }
   }
 
-  private reconcileStalledRuns(): void {
-    for (const snapshotEntry of this.orchestrator.snapshot().running) {
-      const currentEntry = this.runningEntry(snapshotEntry.issue.id, snapshotEntry.slotIndex);
+  private async reconcileStalledRuns(): Promise<void> {
+    // Let already-settled runner and run-claim continuations finish before acting on a stale snapshot.
+    await Promise.resolve();
+    await Promise.resolve();
+    for (const snapshotEntry of (await this.orchestrator.snapshotAsync()).running) {
+      if (
+        !(await this.orchestrator.ownsClaimAsync(snapshotEntry.issue.id, snapshotEntry.slotIndex))
+      )
+        continue;
+      const currentEntry = await this.runningEntry(snapshotEntry.issue.id, snapshotEntry.slotIndex);
       if (!currentEntry) continue;
       const effective = settingsForIssueState(this.workflow.settings, currentEntry.issue.state);
       const agent = effective.agents[currentEntry.agentKind];
@@ -1019,10 +1299,26 @@ export class LorenzRuntime {
       const runId =
         activeHandle?.runId ?? `stalled-${currentEntry.issue.id}-${currentEntry.slotIndex}`;
       const error = `agent_stalled after ${timeoutMs}ms`;
-      const entry = this.runningEntry(snapshotEntry.issue.id, snapshotEntry.slotIndex);
+      const entry = await this.runningEntry(snapshotEntry.issue.id, snapshotEntry.slotIndex);
       if (!entry) continue;
-      this.orchestrator.finish(entry.issue.id, entry.slotIndex, true, error, "failure");
-      this.syncRetryTimer(entry.issue.id);
+      let finished: RunningEntry | null;
+      try {
+        finished = await this.orchestrator.finishAsync(
+          entry.issue.id,
+          entry.slotIndex,
+          true,
+          error,
+          "failure",
+        );
+      } catch (finishError) {
+        this.recordClaimStoreFailure("claim_finish_failed", finishError);
+        continue;
+      }
+      if (!finished) {
+        activeHandle?.finishExternally();
+        this.addEvent("dispatch_skipped", `${entry.identifier} claim_lost_before_finish`);
+        continue;
+      }
       activeHandle?.finishExternally("stalled");
       const endedAt = this.clock.now().toISOString();
       this.recordHistory(
@@ -1042,14 +1338,19 @@ export class LorenzRuntime {
           fallbackLastEvent: "agent_stalled",
         }),
       );
+      const retrySyncError = this.syncRetryTimerSafely(entry.issue.id);
       this.addEvent("run_stalled", `${entry.identifier} ${error}`);
+      if (retrySyncError) this.addEvent("poll_error", retrySyncError);
     }
   }
 
-  private runningEntry(issueId: string, slotIndex: number): RunningEntry | undefined {
-    return this.orchestrator
-      .snapshot()
-      .running.find((entry) => entry.issue.id === issueId && entry.slotIndex === slotIndex);
+  private async runningEntry(
+    issueId: string,
+    slotIndex: number,
+  ): Promise<RunningEntry | undefined> {
+    return (await this.orchestrator.snapshotAsync()).running.find(
+      (entry) => entry.issue.id === issueId && entry.slotIndex === slotIndex,
+    );
   }
 
   // Cleanup is driven by what is actually on disk: list existing per-issue workspace
@@ -1099,25 +1400,31 @@ export class LorenzRuntime {
       return;
     }
     this.retryScheduler.sync(runtimeRetryEntry(retry), (scheduled) => {
-      const current = this.orchestrator
-        .snapshot()
-        .retrying.find((entry) => entry.issueId === scheduled.issueId);
-      if (
-        !current ||
-        current.attempt !== scheduled.attempt ||
-        current.dueAtIso !== scheduled.dueAtIso
-      ) {
-        return;
+      try {
+        const current = this.orchestrator
+          .snapshot()
+          .retrying.find((entry) => entry.issueId === scheduled.issueId);
+        if (
+          !current ||
+          current.attempt !== scheduled.attempt ||
+          current.dueAtIso !== scheduled.dueAtIso
+        ) {
+          return;
+        }
+        this.addEvent(
+          "retry_timer_due",
+          `${scheduled.issueIdentifier} attempt=${scheduled.attempt}`,
+        );
+        if (this.pollInProgress) {
+          this.queuePendingPoll({}, true);
+          return;
+        }
+        this.pollOnce().catch((error) => {
+          this.recordRetryTimerError(error);
+        });
+      } catch (error) {
+        this.recordRetryTimerError(error);
       }
-      this.addEvent("retry_timer_due", `${scheduled.issueIdentifier} attempt=${scheduled.attempt}`);
-      if (this.pollInProgress) {
-        this.queuePendingPoll({}, true);
-        return;
-      }
-      this.pollOnce().catch((error) => {
-        this.lastError = errorMessage(error);
-        this.addEvent("retry_timer_error", this.lastError);
-      });
     });
   }
 
@@ -1135,6 +1442,36 @@ export class LorenzRuntime {
 
   private recordHistory(entry: RuntimeRunHistoryEntry): void {
     this.projection.recordRunHistory(entry);
+  }
+
+  private recordRetryTimerError(error: unknown): void {
+    const message = errorMessage(error);
+    this.markRuntimeError(message);
+    this.addEvent("retry_timer_error", message);
+  }
+
+  private recordClaimStoreFailure(reason: string, error: unknown): void {
+    const message = `${reason} ${errorMessage(error)}`;
+    this.markRuntimeError(message);
+    this.addEvent("poll_error", message);
+  }
+
+  private syncRetryTimerSafely(issueId: string): string | null {
+    try {
+      this.syncRetryTimer(issueId);
+      return null;
+    } catch (error) {
+      const message = `retry_timer_sync_failed ${errorMessage(error)}`;
+      this.markRuntimeError(message);
+      return message;
+    }
+  }
+
+  private markRuntimeError(message: string): void {
+    if (this.appStatus !== "error") {
+      this.appStatus = "error";
+      this.lastError = message;
+    }
   }
 
   private addEvent(type: RuntimeEventType, message: string): void {
@@ -1177,7 +1514,13 @@ export class LorenzRuntime {
   }
 
   private emit(): void {
-    const snapshot = this.snapshot();
+    let snapshot: RuntimeSnapshot;
+    try {
+      snapshot = this.snapshot();
+    } catch (error) {
+      if (this.appStatus === "error") return;
+      throw error;
+    }
     for (const listener of this.listeners) listener(snapshot);
   }
 
@@ -1367,13 +1710,13 @@ function disabledWorkerPoolSettings(
 /**
  * Wraps a bare {@link WorkerPool} in a null-endpoint passthrough {@link DispatchCoordinator} so the
  * runtime drives every run through the uniform coordinator surface while a bare-pool injection
- * stays byte-identical at the runtime boundary. STEP 1's null manager mints nothing
+ * keeps the default runtime boundary unchanged. The null manager mints nothing
  * (`perRunEndpoint=false`, every `RunSlot.mcpEndpoint=null`), so this is a 1:1 passthrough over
  * the pool: `acquireRunSlot` delegates to `pool.acquire`, settle delegates straight to the
  * `WorkerLease`, and `reconcile`/`drain`/`governs`/`canAcquire` forward verbatim. Returns
  * `undefined` when no pool is supplied (the static/local path).
  *
- * `settings` only needs to satisfy the coordinator's constructor; in STEP 1 the coordinator does
+ * `settings` only needs to satisfy the coordinator's constructor; this wrapper does
  * not read it past construction (the pool owns live settings), so the live `worker.workerPool`
  * settings are passed when present and a disabled placeholder otherwise.
  */

@@ -81,7 +81,7 @@ test("SSH run honors LORENZ_SSH_CONFIG, stderr folding, missing ssh, and timeout
   const root = await tempDir("lorenz-ssh");
   const trace = path.join(root, "ssh.trace");
 
-  await installFakeSsh(
+  let sshExecutablePath = await installFakeSsh(
     root,
     trace,
     `#!/bin/sh
@@ -93,7 +93,10 @@ exit 7
   );
   process.env.LORENZ_SSH_CONFIG = "/tmp/lorenz-test-ssh-config";
 
-  const result = await runSsh("localhost:2222", "echo ready", { stderrToStdout: true });
+  const result = await runSsh("localhost:2222", "echo ready", {
+    sshExecutablePath,
+    stderrToStdout: true,
+  });
   assert.equal(result.status, 7);
   assert.equal(result.stdout, "out\nerr\n");
   assert.equal(result.stderr, "");
@@ -106,7 +109,7 @@ exit 7
   await assert.rejects(() => runSsh("localhost", "printf ok"), /ssh_not_found/);
 
   process.env.PATH = savedEnv.PATH!;
-  await installFakeSsh(
+  sshExecutablePath = await installFakeSsh(
     root,
     trace,
     `#!/bin/sh
@@ -116,7 +119,7 @@ exit 0
 `,
   );
   await assert.rejects(
-    () => runSsh("localhost", "printf ok", { timeoutMs: 20 }),
+    () => runSsh("localhost", "printf ok", { sshExecutablePath, timeoutMs: 20 }),
     /ssh_timeout: localhost 20/,
   );
 });
@@ -125,7 +128,7 @@ test("SSH timeout rejects near the caller deadline when a child keeps pipes open
   const root = await tempDir("lorenz-ssh-timeout");
   const trace = path.join(root, "ssh.trace");
 
-  await installFakeSsh(
+  const sshExecutablePath = await installFakeSsh(
     root,
     trace,
     `#!/bin/sh
@@ -142,7 +145,7 @@ wait "$child"
 
   const started = performance.now();
   await assert.rejects(
-    () => runSsh("localhost", "printf ok", { timeoutMs: 1000 }),
+    () => runSsh("localhost", "printf ok", { sshExecutablePath, timeoutMs: 1000 }),
     /ssh_timeout: localhost 1000/,
   );
   const elapsedMs = performance.now() - started;
@@ -167,7 +170,7 @@ test("SSH run reports signaled subprocesses as failures", async () => {
   const root = await tempDir("lorenz-ssh-signaled");
   const trace = path.join(root, "ssh.trace");
 
-  await installFakeSsh(
+  const sshExecutablePath = await installFakeSsh(
     root,
     trace,
     `#!/bin/sh
@@ -176,7 +179,10 @@ kill -TERM $$
 `,
   );
 
-  const outcome = await runSsh("localhost", "printf ok", { stderrToStdout: true }).then(
+  const outcome = await runSsh("localhost", "printf ok", {
+    sshExecutablePath,
+    stderrToStdout: true,
+  }).then(
     (result) => ({ status: result.status }),
     (error: unknown) => ({ error }),
   );
@@ -194,7 +200,7 @@ test("SSH writeRemoteFile rejects signaled subprocesses", async () => {
   const root = await tempDir("lorenz-ssh-write-signaled");
   const trace = path.join(root, "ssh.trace");
 
-  await installFakeSsh(
+  const sshExecutablePath = await installFakeSsh(
     root,
     trace,
     `#!/bin/sh
@@ -204,7 +210,10 @@ kill -TERM $$
   );
 
   await assert.rejects(
-    () => writeRemoteFile("localhost", path.join(root, "remote.txt"), "payload"),
+    () =>
+      writeRemoteFile("localhost", path.join(root, "remote.txt"), "payload", {
+        sshExecutablePath,
+      }),
     /ssh.*SIGTERM|remote_write_failed/,
   );
 });
@@ -214,7 +223,7 @@ test("SSH writeRemoteFile preserves payload bytes and applies mode", async () =>
   const trace = path.join(root, "ssh.trace");
   const remotePath = path.join(root, "nested", "script.sh");
 
-  await installFakeSsh(
+  const sshExecutablePath = await installFakeSsh(
     root,
     trace,
     `#!/bin/sh
@@ -224,7 +233,7 @@ eval "$last_arg"
 `,
   );
   const payload = "#!/bin/bash\necho ready\n__LORENZ_SSH_WRITE_PAYLOAD__\n";
-  await writeRemoteFile("localhost", remotePath, payload, { mode: 0o755 });
+  await writeRemoteFile("localhost", remotePath, payload, { mode: 0o755, sshExecutablePath });
   assert.equal(await fs.readFile(remotePath, "utf8"), payload);
   const stat = await fs.stat(remotePath);
   assert.equal(stat.mode & 0o777, 0o755);
@@ -237,7 +246,7 @@ test("SSH waitForRemoteTcpPort probes the remote loopback port", async () => {
   const root = await tempDir("lorenz-ssh-port-probe");
   const trace = path.join(root, "ssh.trace");
 
-  await installFakeSsh(
+  const sshExecutablePath = await installFakeSsh(
     root,
     trace,
     `#!/bin/sh
@@ -251,6 +260,7 @@ esac
   );
 
   await waitForRemoteTcpPort("localhost:2222", 46_000, {
+    sshExecutablePath,
     timeoutMs: 2_000,
     intervalMs: 100,
     attemptTimeoutMs: 1_000,
@@ -267,7 +277,7 @@ test("SSH writeRemoteFile rejects unsafe string modes without executing them", a
   const marker = path.join(root, "marker");
   const remotePath = path.join(root, "script.sh");
 
-  await installFakeSsh(
+  const sshExecutablePath = await installFakeSsh(
     root,
     trace,
     `#!/bin/sh
@@ -281,6 +291,7 @@ eval "$last_arg"
   try {
     await writeRemoteFile("localhost", remotePath, "echo ready\n", {
       mode: `u+x; printf pwned > ${shellEscape(marker)}`,
+      sshExecutablePath,
     });
   } catch (error) {
     writeError = error;
@@ -295,7 +306,7 @@ test("SSH writeRemoteFile shell-quotes string modes and protects dash-leading pa
   const trace = path.join(root, "ssh.trace");
   const remotePath = "-script.sh";
 
-  await installFakeSsh(
+  const sshExecutablePath = await installFakeSsh(
     root,
     trace,
     `#!/bin/sh
@@ -306,7 +317,10 @@ eval "$last_arg"
 `,
   );
 
-  await writeRemoteFile("localhost", remotePath, "echo ready\n", { mode: "u+x" });
+  await writeRemoteFile("localhost", remotePath, "echo ready\n", {
+    mode: "u+x",
+    sshExecutablePath,
+  });
 
   const stat = await fs.stat(path.join(root, remotePath));
   assert.equal(stat.mode & 0o777, 0o744);
@@ -314,12 +328,14 @@ eval "$last_arg"
   assert.match(traceText, /chmod '"'"'u\+x'"'"' '"'"'\.\/-script\.sh'"'"'/);
 });
 
-async function installFakeSsh(root: string, trace: string, source: string): Promise<void> {
+async function installFakeSsh(root: string, trace: string, source: string): Promise<string> {
   const bin = path.join(root, "bin");
+  const sshExecutablePath = path.join(bin, "ssh");
   await fs.mkdir(bin, { recursive: true });
-  await writeExecutable(path.join(bin, "ssh"), source);
+  await writeExecutable(sshExecutablePath, source);
   process.env.PATH = `${bin}:${process.env.PATH ?? ""}`;
   await fs.writeFile(trace, "");
+  return sshExecutablePath;
 }
 
 function restoreEnv(key: string, value: string | undefined): void {

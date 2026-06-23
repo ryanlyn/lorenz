@@ -62,6 +62,20 @@ export interface BlockedEntryPayload {
   worker_host: string | null;
 }
 
+export interface ClaimStorePayload {
+  kind: string;
+  owner_id: string;
+  capabilities: {
+    crash_recovery: boolean;
+    shared_across_processes: boolean;
+    retry_durability: boolean;
+  };
+  hydrated_at: string;
+  transactions_applied: number;
+  last_operation: string | null;
+  last_checkpoint_at: string | null;
+}
+
 export interface OpsStatePayload {
   generated_at: string;
   counts: { running: number; retrying: number; blocked: number };
@@ -71,6 +85,7 @@ export interface OpsStatePayload {
   blocked: BlockedEntryPayload[];
   usage_totals: UsageTotalsPayload;
   rate_limits: unknown;
+  claim_store: ClaimStorePayload | null;
 }
 
 type RunsPayloadResult =
@@ -100,6 +115,24 @@ export function statePayload(snapshot: RuntimeSnapshot, generatedAt = nowIso()):
     blocked: snapshot.blocked.map(blockedEntryPayload),
     usage_totals: usagePayload(snapshot.usageTotals),
     rate_limits: snapshot.rateLimits,
+    claim_store: claimStorePayload(snapshot.claimStore),
+  };
+}
+
+function claimStorePayload(snapshot: RuntimeSnapshot["claimStore"]): ClaimStorePayload | null {
+  if (!snapshot) return null;
+  return {
+    kind: snapshot.kind,
+    owner_id: snapshot.ownerId,
+    capabilities: {
+      crash_recovery: snapshot.capabilities.crashRecovery,
+      shared_across_processes: snapshot.capabilities.sharedAcrossProcesses,
+      retry_durability: snapshot.capabilities.retryDurability,
+    },
+    hydrated_at: snapshot.hydratedAt,
+    transactions_applied: snapshot.transactionsApplied,
+    last_operation: snapshot.lastOperation,
+    last_checkpoint_at: snapshot.lastCheckpointAt,
   };
 }
 

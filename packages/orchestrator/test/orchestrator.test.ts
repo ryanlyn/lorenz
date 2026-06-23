@@ -1,10 +1,23 @@
+import path from "node:path";
+
 import { test } from "vitest";
 import fc from "fast-check";
 import { Orchestrator, normalizeIssue, parseConfig, slotKey } from "@lorenz/cli";
 import { systemClock, type ClockPort, type Issue, type RunningEntry } from "@lorenz/domain";
-import { assert } from "@lorenz/test-utils";
+import { assert, tempDir } from "@lorenz/test-utils";
 
-import { createState, type SlotReservation } from "@lorenz/orchestrator";
+import {
+  AsyncPersistentClaimStore,
+  createState,
+  InMemoryClaimStore,
+  PersistentClaimStore,
+  type AsyncClaimStoreBackend,
+  type ClaimStoreBackend,
+  type ClaimStoreCapabilities,
+  type ClaimStoreCheckpoint,
+  type SlotReservation,
+} from "@lorenz/orchestrator";
+import { TursoClaimStoreBackend } from "@lorenz/orchestrator/turso";
 
 function fakeClock(initial = new Date()) {
   let tick = initial.getTime();
@@ -35,6 +48,1120 @@ function claimReservation(orchestrator: Orchestrator, issue: Issue): SlotReserva
   assert.equal(result.kind, "reserved");
   return result.kind === "reserved" ? result.reservation : null;
 }
+
+async function claimEntryAsync(
+  orchestrator: Orchestrator,
+  issue: Issue,
+): Promise<RunningEntry | null> {
+  const result = await orchestrator.claimAsync(issue);
+  if (result === null) return null;
+  assert.equal(result.kind, "running");
+  return result.kind === "running" ? result.entry : null;
+}
+
+class MemoryCheckpointBackend implements ClaimStoreBackend {
+  readonly kind = "memory-checkpoint";
+  readonly capabilities: ClaimStoreCapabilities;
+  saved: ClaimStoreCheckpoint[] = [];
+  ownerHeartbeats = new Map<string, string>();
+  exclusiveTransactions = 0;
+
+  constructor(capabilities: Partial<ClaimStoreCapabilities> = {}) {
+    this.capabilities = {
+      crashRecovery: true,
+      sharedAcrossProcesses: false,
+      retryDurability: true,
+      ...capabilities,
+    };
+  }
+
+  load(): ClaimStoreCheckpoint | null {
+    return this.saved.at(-1) ?? null;
+  }
+
+  save(checkpoint: ClaimStoreCheckpoint): void {
+    this.saved.push(checkpoint);
+  }
+
+  heartbeatOwner(ownerId: string, at: Date): void {
+    this.ownerHeartbeats.set(ownerId, at.toISOString());
+  }
+
+  ownerIsActive(ownerId: string, now: Date, staleMs: number): boolean {
+    const heartbeatAt = this.ownerHeartbeats.get(ownerId);
+    if (!heartbeatAt) return false;
+    const heartbeatMs = Date.parse(heartbeatAt);
+    return Number.isFinite(heartbeatMs) && now.getTime() - heartbeatMs <= staleMs;
+  }
+
+  withExclusiveTransaction<T>(run: () => T): T {
+    this.exclusiveTransactions += 1;
+    return run();
+  }
+}
+
+class FailingSaveBackend extends MemoryCheckpointBackend {
+  save(): void {
+    throw new Error("checkpoint failed");
+  }
+}
+
+class FailingCommitBackend extends MemoryCheckpointBackend {
+  failCommit = false;
+
+  override withExclusiveTransaction<T>(run: () => T): T {
+    this.exclusiveTransactions += 1;
+    const savedBefore = [...this.saved];
+    const heartbeatsBefore = new Map(this.ownerHeartbeats);
+    const result = run();
+    if (this.failCommit) {
+      this.saved = savedBefore;
+      this.ownerHeartbeats = heartbeatsBefore;
+      throw new Error("commit failed");
+    }
+    return result;
+  }
+}
+
+class AsyncMemoryCheckpointBackend implements AsyncClaimStoreBackend {
+  readonly kind = "async-memory-checkpoint";
+  readonly capabilities: ClaimStoreCapabilities;
+  saved: ClaimStoreCheckpoint[] = [];
+  ownerHeartbeats = new Map<string, string>();
+  exclusiveTransactions = 0;
+
+  constructor(capabilities: Partial<ClaimStoreCapabilities> = {}) {
+    this.capabilities = {
+      crashRecovery: true,
+      sharedAcrossProcesses: false,
+      retryDurability: true,
+      ...capabilities,
+    };
+  }
+
+  async load(): Promise<ClaimStoreCheckpoint | null> {
+    return this.saved.at(-1) ?? null;
+  }
+
+  async save(checkpoint: ClaimStoreCheckpoint): Promise<void> {
+    this.saved.push(checkpoint);
+  }
+
+  async heartbeatOwner(ownerId: string, at: Date): Promise<void> {
+    this.ownerHeartbeats.set(ownerId, at.toISOString());
+  }
+
+  async ownerIsActive(ownerId: string, now: Date, staleMs: number): Promise<boolean> {
+    const heartbeatAt = this.ownerHeartbeats.get(ownerId);
+    if (!heartbeatAt) return false;
+    const heartbeatMs = Date.parse(heartbeatAt);
+    return Number.isFinite(heartbeatMs) && now.getTime() - heartbeatMs <= staleMs;
+  }
+
+  async withExclusiveTransaction<T>(run: () => Promise<T>): Promise<T> {
+    this.exclusiveTransactions += 1;
+    return run();
+  }
+}
+
+test("orchestrator wraps legacy injected state in an in-memory claim store", () => {
+  const state = createState();
+  const orchestrator = new Orchestrator(parseConfig(), systemClock, state);
+
+  assert.equal(orchestrator.state, state);
+  const status = orchestrator.claimStoreStatus();
+  assert.equal(status.kind, "memory");
+  assert.deepEqual(status.capabilities, {
+    crashRecovery: false,
+    sharedAcrossProcesses: false,
+    retryDurability: false,
+  });
+  assert.equal(status.transactionsApplied, 0);
+  assert.equal(status.lastOperation, null);
+  assert.equal(status.lastCheckpointAt, null);
+  assert.match(status.ownerId, /^memory:/);
+});
+
+test("orchestrator accepts an injected claim store and reports hydrated retry claims", () => {
+  const clock = fakeClock(new Date("2026-01-01T00:00:00.000Z"));
+  const settings = parseConfig({
+    worker: { ssh_hosts: ["worker-a"], max_concurrent_agents_per_host: 1 },
+  });
+  const issue = normalizeIssue({
+    id: "durable-retry",
+    identifier: "MT-DURABLE-RETRY",
+    title: "Durable retry",
+    state: { name: "Todo", type: "unstarted" },
+  });
+  const state = createState();
+  state.retryAttempts.set(slotKey(issue.id, 0), {
+    issueId: issue.id,
+    identifier: issue.identifier,
+    issueUrl: null,
+    attempt: 3,
+    monotonicDeadlineMs: clock.monotonicMs() - 1,
+    dueAtIso: "2025-12-31T23:59:59.999Z",
+    slotIndex: 0,
+    workerHost: "worker-a",
+    workspacePath: "/tmp/lorenz/MT-DURABLE-RETRY",
+    error: "previous run failed",
+  });
+  const store = new InMemoryClaimStore(state, {
+    ownerId: "orchestrator-test",
+    hydratedAt: new Date("2026-01-01T00:00:00.000Z"),
+  });
+  const orchestrator = new Orchestrator(settings, clock, store);
+
+  assert.equal(orchestrator.state, state);
+  assert.equal(orchestrator.eligibleIssues([issue])[0]?.identifier, issue.identifier);
+
+  const retry = claimEntry(orchestrator, issue);
+  assert.equal(retry?.retryAttempt, 3);
+  assert.equal(retry?.workerHost, "worker-a");
+  assert.equal(orchestrator.snapshot().retrying.length, 0);
+
+  assert.deepEqual(orchestrator.snapshot().claimStore, {
+    kind: "memory",
+    ownerId: "orchestrator-test",
+    capabilities: {
+      crashRecovery: false,
+      sharedAcrossProcesses: false,
+      retryDurability: false,
+    },
+    hydratedAt: "2026-01-01T00:00:00.000Z",
+    transactionsApplied: 2,
+    lastOperation: "claim",
+    lastCheckpointAt: null,
+  });
+});
+
+test("orchestrator does not report ownership for absent claim slots", () => {
+  const orchestrator = new Orchestrator(parseConfig());
+
+  assert.equal(orchestrator.ownsClaim("missing-issue", 0), false);
+});
+
+test("persistent claim store default owner id includes restart-unique entropy", () => {
+  const store = new PersistentClaimStore(new MemoryCheckpointBackend());
+
+  assert.match(store.ownerId, /^memory-checkpoint:\d+:\d+:[0-9a-f-]{36}$/);
+});
+
+test("persistent claim store checkpoints and hydrates retry state across owners", () => {
+  const clock = fakeClock(new Date("2026-01-01T00:00:00.000Z"));
+  const backend = new MemoryCheckpointBackend();
+  const settings = parseConfig({ agent: { max_retry_backoff_ms: 60_000 } });
+  const issue = normalizeIssue({
+    id: "persistent-retry",
+    identifier: "MT-PERSIST-RETRY",
+    title: "Persistent retry",
+    state: { name: "Todo", type: "unstarted" },
+  });
+
+  const firstStore = new PersistentClaimStore(backend, {
+    ownerId: "owner-a",
+    hydratedAt: new Date("2026-01-01T00:00:00.000Z"),
+    now: () => clock.now(),
+  });
+  const first = new Orchestrator(settings, clock, firstStore);
+  assert.ok(claimEntry(first, issue));
+  first.finish(issue.id, 0, true, "failed once");
+
+  assert.equal(backend.saved.length, 2);
+  assert.equal(first.snapshot().claimStore.lastCheckpointAt, "2026-01-01T00:00:00.000Z");
+
+  const restartClock = fakeClock(new Date("2026-01-01T00:00:05.000Z"));
+  const restartedStore = new PersistentClaimStore(backend, {
+    ownerId: "owner-b",
+    hydratedAt: new Date("2026-01-01T00:00:05.000Z"),
+    now: () => restartClock.now(),
+    hydrate: {
+      now: restartClock.now(),
+      monotonicNowMs: restartClock.monotonicMs(),
+    },
+  });
+  const restarted = new Orchestrator(settings, restartClock, restartedStore);
+  const retry = restarted.snapshot().retrying[0];
+
+  assert.equal(retry?.attempt, 1);
+  assert.equal(retry?.error, "failed once");
+  assert.equal(retry?.monotonicDeadlineMs, restartClock.monotonicMs() + 5_000);
+  assert.deepEqual(restarted.snapshot().claimStore, {
+    kind: "memory-checkpoint",
+    ownerId: "owner-b",
+    capabilities: {
+      crashRecovery: true,
+      sharedAcrossProcesses: false,
+      retryDurability: true,
+    },
+    hydratedAt: "2026-01-01T00:00:05.000Z",
+    transactionsApplied: 0,
+    lastOperation: null,
+    lastCheckpointAt: "2026-01-01T00:00:00.000Z",
+  });
+});
+
+test("persistent claim store checkpoints normalized issues without opaque raw payloads", () => {
+  const backend = new MemoryCheckpointBackend();
+  const settings = parseConfig();
+  const issue = normalizeIssue({
+    id: "persistent-sanitized-issue",
+    identifier: "MT-PERSIST-SANITIZED",
+    title: "Persistent sanitized issue",
+    state: { name: "Todo", type: "unstarted" },
+    opaquePayload: { token: "tracker-secret", revision: 1n },
+  });
+  const store = new PersistentClaimStore(backend, { ownerId: "owner-a" });
+  const orchestrator = new Orchestrator(settings, systemClock, store);
+
+  assert.ok(claimEntry(orchestrator, issue));
+  orchestrator.applyUpdate(issue.id, 0, {
+    type: "stderr",
+    message: "agent-secret",
+    sessionId: "session-secret",
+    executorPid: "pid-secret",
+  });
+  const persistedIssue = backend.saved.at(-1)?.state.running[0]?.[1].issue;
+  const serializedCheckpoint = JSON.stringify(backend.saved.at(-1));
+
+  assert.equal(persistedIssue?.raw, undefined);
+  assert.equal(serializedCheckpoint.includes("tracker-secret"), false);
+  assert.equal(serializedCheckpoint.includes("agent-secret"), false);
+  assert.equal(serializedCheckpoint.includes("session-secret"), false);
+  assert.equal(serializedCheckpoint.includes("pid-secret"), false);
+});
+
+test("shared persistent claim store preserves owned live metadata across reload", () => {
+  const backend = new MemoryCheckpointBackend({ sharedAcrossProcesses: true });
+  const settings = parseConfig();
+  const issue = normalizeIssue({
+    id: "shared-ephemeral-metadata",
+    identifier: "MT-SHARED-EPHEMERAL",
+    title: "Shared ephemeral metadata",
+    state: { name: "Todo", type: "unstarted" },
+  });
+  const store = new PersistentClaimStore(backend, { ownerId: "owner-a" });
+  const orchestrator = new Orchestrator(settings, systemClock, store);
+
+  assert.ok(claimEntry(orchestrator, issue));
+  orchestrator.applyUpdate(issue.id, 0, {
+    type: "stderr",
+    message: "agent-live-message",
+    sessionId: "session-live",
+    executorPid: "pid-live",
+  });
+
+  const checkpoint = JSON.stringify(backend.saved.at(-1));
+  const running = orchestrator.snapshot().running[0];
+
+  assert.equal(checkpoint.includes("agent-live-message"), false);
+  assert.equal(checkpoint.includes("session-live"), false);
+  assert.equal(checkpoint.includes("pid-live"), false);
+  assert.equal(running?.lastAgentMessage, "agent-live-message");
+  assert.equal(running?.sessionId, "session-live");
+  assert.equal(running?.executorPid, "pid-live");
+});
+
+test("persistent claim store rolls back in-memory state when checkpoint save fails", () => {
+  const backend = new FailingSaveBackend();
+  const settings = parseConfig();
+  const issue = normalizeIssue({
+    id: "persistent-save-failure",
+    identifier: "MT-PERSIST-SAVE-FAILURE",
+    title: "Persistent save failure",
+    state: { name: "Todo", type: "unstarted" },
+  });
+  const store = new PersistentClaimStore(backend, { ownerId: "owner-a" });
+  const orchestrator = new Orchestrator(settings, systemClock, store);
+  let error: unknown;
+
+  try {
+    orchestrator.claim(issue);
+  } catch (caught) {
+    error = caught;
+  }
+
+  assert.match(error instanceof Error ? error.message : String(error), /checkpoint failed/);
+  assert.equal(orchestrator.snapshot().running.length, 0);
+  assert.equal(orchestrator.snapshot().claimStore.transactionsApplied, 0);
+  assert.equal(orchestrator.snapshot().claimStore.lastOperation, null);
+});
+
+test("persistent claim store rolls back in-memory state when backend commit fails", () => {
+  const backend = new FailingCommitBackend();
+  const settings = parseConfig();
+  const issue = normalizeIssue({
+    id: "persistent-commit-failure",
+    identifier: "MT-PERSIST-COMMIT-FAILURE",
+    title: "Persistent commit failure",
+    state: { name: "Todo", type: "unstarted" },
+  });
+  const store = new PersistentClaimStore(backend, { ownerId: "owner-a" });
+  const orchestrator = new Orchestrator(settings, systemClock, store);
+  backend.failCommit = true;
+  let error: unknown;
+
+  try {
+    orchestrator.claim(issue);
+  } catch (caught) {
+    error = caught;
+  }
+
+  backend.failCommit = false;
+  assert.match(error instanceof Error ? error.message : String(error), /commit failed/);
+  assert.equal(backend.saved.length, 0);
+  assert.equal(orchestrator.snapshot().running.length, 0);
+  assert.equal(orchestrator.snapshot().claimStore.transactionsApplied, 0);
+  assert.equal(orchestrator.snapshot().claimStore.lastOperation, null);
+  assert.equal(orchestrator.snapshot().claimStore.lastCheckpointAt, null);
+});
+
+test("persistent claim store rolls back usage delta bookkeeping when backend commit fails", () => {
+  const backend = new FailingCommitBackend();
+  const settings = parseConfig();
+  const issue = normalizeIssue({
+    id: "persistent-usage-commit-failure",
+    identifier: "MT-PERSIST-USAGE-COMMIT-FAILURE",
+    title: "Persistent usage commit failure",
+    state: { name: "Todo", type: "unstarted" },
+  });
+  const store = new PersistentClaimStore(backend, { ownerId: "owner-a" });
+  const orchestrator = new Orchestrator(settings, systemClock, store);
+  assert.ok(claimEntry(orchestrator, issue));
+  backend.failCommit = true;
+  let error: unknown;
+
+  try {
+    orchestrator.applyUpdate(issue.id, 0, {
+      type: "turn_completed",
+      usageKind: "delta",
+      usage: { inputTokens: 5, outputTokens: 7, totalTokens: 12 },
+    });
+  } catch (caught) {
+    error = caught;
+  }
+
+  backend.failCommit = false;
+  assert.match(error instanceof Error ? error.message : String(error), /commit failed/);
+  let snapshot = orchestrator.snapshot();
+  assert.deepEqual(snapshot.running[0]?.usageTotals, {
+    inputTokens: 0,
+    outputTokens: 0,
+    totalTokens: 0,
+    secondsRunning: 0,
+  });
+  assert.deepEqual(snapshot.usageTotals, {
+    inputTokens: 0,
+    outputTokens: 0,
+    totalTokens: 0,
+    secondsRunning: 0,
+  });
+
+  orchestrator.applyUpdate(issue.id, 0, {
+    type: "turn_completed",
+    usageKind: "delta",
+    usage: { inputTokens: 5, outputTokens: 7, totalTokens: 12 },
+  });
+
+  snapshot = orchestrator.snapshot();
+  assert.deepEqual(snapshot.running[0]?.usageTotals, {
+    inputTokens: 5,
+    outputTokens: 7,
+    totalTokens: 12,
+    secondsRunning: 0,
+  });
+  assert.deepEqual(snapshot.usageTotals, {
+    inputTokens: 5,
+    outputTokens: 7,
+    totalTokens: 12,
+    secondsRunning: 0,
+  });
+});
+
+test("persistent claim store abandons reserved slots on hydrate and restores consumed retries", () => {
+  const clock = fakeClock(new Date("2026-01-01T00:00:00.000Z"));
+  const backend = new MemoryCheckpointBackend();
+  const settings = parseConfig();
+  const probe = { governs: () => true, canAcquire: () => true };
+  const issue = normalizeIssue({
+    id: "persistent-reservation",
+    identifier: "MT-PERSIST-RESERVATION",
+    title: "Persistent reservation",
+    state: { name: "Todo", type: "unstarted" },
+  });
+  const key = slotKey(issue.id, 0);
+  const consumed = {
+    issueId: issue.id,
+    identifier: issue.identifier,
+    issueUrl: null,
+    attempt: 2,
+    monotonicDeadlineMs: clock.monotonicMs() - 1,
+    dueAtIso: new Date(clock.now().getTime() - 1).toISOString(),
+    slotIndex: 0,
+    workerHost: "worker-a",
+    workspacePath: "/tmp/lorenz/MT-PERSIST-RESERVATION",
+    error: "previous run failed",
+  };
+
+  const firstStore = new PersistentClaimStore(backend, {
+    ownerId: "owner-a",
+    now: () => clock.now(),
+    hydrate: {
+      now: clock.now(),
+      monotonicNowMs: clock.monotonicMs(),
+    },
+  });
+  const first = new Orchestrator(settings, clock, firstStore, probe);
+  first.state.retryAttempts.set(key, consumed);
+
+  const reservation = claimReservation(first, issue);
+  assert.ok(reservation);
+  assert.equal(first.snapshot().reserving.length, 1);
+  assert.equal(first.snapshot().retrying.length, 0);
+
+  const restartClock = fakeClock(new Date("2026-01-01T00:00:05.000Z"));
+  const restartedStore = new PersistentClaimStore(backend, {
+    ownerId: "owner-b",
+    now: () => restartClock.now(),
+    hydrate: {
+      now: restartClock.now(),
+      monotonicNowMs: restartClock.monotonicMs(),
+    },
+  });
+  const restarted = new Orchestrator(settings, restartClock, restartedStore, probe);
+  const retry = restarted.snapshot().retrying[0];
+
+  assert.equal(restarted.state.reserved.size, 0);
+  assert.equal(restarted.state.claimed.has(key), false);
+  assert.equal(retry?.attempt, 2);
+  assert.equal(retry?.workerHost, "worker-a");
+  assert.equal(retry?.monotonicDeadlineMs, restartClock.monotonicMs());
+  assert.equal(restarted.bindReservation(reservation!, "late-worker"), null);
+});
+
+test("persistent claim store abandons running claims on non-shared hydrate", () => {
+  const clock = fakeClock(new Date("2026-01-01T00:00:00.000Z"));
+  const backend = new MemoryCheckpointBackend();
+  const settings = parseConfig();
+  const issue = normalizeIssue({
+    id: "persistent-running",
+    identifier: "MT-PERSIST-RUNNING",
+    title: "Persistent running",
+    state: { name: "Todo", type: "unstarted" },
+  });
+
+  const firstStore = new PersistentClaimStore(backend, {
+    ownerId: "owner-a",
+    now: () => clock.now(),
+  });
+  const first = new Orchestrator(settings, clock, firstStore);
+  assert.ok(claimEntry(first, issue));
+  assert.equal(first.snapshot().running.length, 1);
+
+  const restartClock = fakeClock(new Date("2026-01-01T00:00:05.000Z"));
+  const restartedStore = new PersistentClaimStore(backend, {
+    ownerId: "owner-b",
+    now: () => restartClock.now(),
+    hydrate: {
+      now: restartClock.now(),
+      monotonicNowMs: restartClock.monotonicMs(),
+    },
+  });
+  const restarted = new Orchestrator(settings, restartClock, restartedStore);
+
+  assert.equal(restarted.snapshot().running.length, 0);
+  assert.equal(restarted.state.claimed.has(slotKey(issue.id, 0)), false);
+  assert.ok(claimEntry(restarted, issue));
+});
+
+test("persistent claim store restores retry metadata from abandoned running claims", () => {
+  const clock = fakeClock(new Date("2026-01-01T00:00:00.000Z"));
+  const backend = new MemoryCheckpointBackend();
+  const settings = parseConfig({
+    worker: { ssh_hosts: ["worker-a"], max_concurrent_agents_per_host: 1 },
+  });
+  const issue = normalizeIssue({
+    id: "persistent-running-retry",
+    identifier: "MT-PERSIST-RUNNING-RETRY",
+    title: "Persistent running retry",
+    state: { name: "Todo", type: "unstarted" },
+    url: "https://tracker.example/MT-PERSIST-RUNNING-RETRY",
+  });
+  const key = slotKey(issue.id, 0);
+  const firstStore = new PersistentClaimStore(backend, {
+    ownerId: "owner-a",
+    now: () => clock.now(),
+    monotonicNow: () => clock.monotonicMs(),
+    hydrate: {
+      now: clock.now(),
+      monotonicNowMs: clock.monotonicMs(),
+    },
+  });
+  const first = new Orchestrator(settings, clock, firstStore);
+  first.state.retryAttempts.set(key, {
+    issueId: issue.id,
+    identifier: issue.identifier,
+    issueUrl: issue.url ?? null,
+    attempt: 2,
+    monotonicDeadlineMs: clock.monotonicMs() - 1,
+    dueAtIso: new Date(clock.now().getTime() - 1).toISOString(),
+    slotIndex: 0,
+    workerHost: "worker-a",
+    workspacePath: "/tmp/lorenz/MT-PERSIST-RUNNING-RETRY",
+    error: "previous run failed",
+  });
+  firstStore.flush();
+  assert.equal(claimEntry(first, issue)?.retryAttempt, 2);
+  first.applyUpdate(issue.id, 0, {
+    type: "turn_completed",
+    workspacePath: "/tmp/lorenz/MT-PERSIST-RUNNING-RETRY",
+  });
+
+  const restartClock = fakeClock(new Date("2026-01-01T00:00:05.000Z"));
+  const restartedStore = new PersistentClaimStore(backend, {
+    ownerId: "owner-b",
+    now: () => restartClock.now(),
+    monotonicNow: () => restartClock.monotonicMs(),
+    hydrate: {
+      now: restartClock.now(),
+      monotonicNowMs: restartClock.monotonicMs(),
+    },
+  });
+  const restarted = new Orchestrator(settings, restartClock, restartedStore);
+  const retry = restarted.snapshot().retrying[0];
+
+  assert.equal(restarted.snapshot().running.length, 0);
+  assert.equal(restarted.state.claimed.has(key), false);
+  assert.equal(retry?.attempt, 2);
+  assert.equal(retry?.workerHost, "worker-a");
+  assert.equal(retry?.workspacePath, "/tmp/lorenz/MT-PERSIST-RUNNING-RETRY");
+  assert.equal(retry?.issueUrl, issue.url);
+  assert.equal(retry?.monotonicDeadlineMs, restartClock.monotonicMs());
+});
+
+test("shared persistent claim store reloads under an exclusive backend transaction", () => {
+  const clock = fakeClock(new Date("2026-01-01T00:00:00.000Z"));
+  const backend = new MemoryCheckpointBackend({ sharedAcrossProcesses: true });
+  const settings = parseConfig({ agent: { max_concurrent_agents: 1 } });
+  const issue = normalizeIssue({
+    id: "shared-persistent-claim",
+    identifier: "MT-SHARED-PERSISTENT",
+    title: "Shared persistent claim",
+    state: { name: "Todo", type: "unstarted" },
+  });
+  const hydrate = () => ({
+    now: clock.now(),
+    monotonicNowMs: clock.monotonicMs(),
+  });
+  const firstStore = new PersistentClaimStore(backend, {
+    ownerId: "owner-a",
+    now: () => clock.now(),
+    hydrate,
+  });
+  const secondStore = new PersistentClaimStore(backend, {
+    ownerId: "owner-b",
+    now: () => clock.now(),
+    hydrate,
+  });
+  const first = new Orchestrator(settings, clock, firstStore);
+  const second = new Orchestrator(settings, clock, secondStore);
+
+  assert.ok(claimEntry(first, issue));
+  assert.equal(second.snapshot().running.length, 1);
+  assert.equal(claimEntry(second, issue), null);
+  assert.equal(second.state.running.size, 1);
+  assert.equal(second.state.claimed.has(slotKey(issue.id, 0)), true);
+  assert.ok(backend.exclusiveTransactions >= 3);
+});
+
+test("async persistent claim store reloads under an exclusive backend transaction", async () => {
+  const clock = fakeClock(new Date("2026-01-01T00:00:00.000Z"));
+  const backend = new AsyncMemoryCheckpointBackend({ sharedAcrossProcesses: true });
+  const settings = parseConfig({ agent: { max_concurrent_agents: 1 } });
+  const issue = normalizeIssue({
+    id: "async-shared-persistent-claim",
+    identifier: "MT-ASYNC-SHARED",
+    title: "Async shared persistent claim",
+    state: { name: "Todo", type: "unstarted" },
+  });
+  const hydrate = () => ({
+    now: clock.now(),
+    monotonicNowMs: clock.monotonicMs(),
+  });
+  const firstStore = await AsyncPersistentClaimStore.create(backend, {
+    ownerId: "owner-a",
+    now: () => clock.now(),
+    hydrate,
+  });
+  const secondStore = await AsyncPersistentClaimStore.create(backend, {
+    ownerId: "owner-b",
+    now: () => clock.now(),
+    hydrate,
+  });
+  const first = new Orchestrator(settings, clock, firstStore);
+  const second = new Orchestrator(settings, clock, secondStore);
+
+  assert.ok(await claimEntryAsync(first, issue));
+  assert.equal((await second.snapshotAsync()).running.length, 1);
+  assert.equal(await claimEntryAsync(second, issue), null);
+  assert.equal(second.state.running.size, 1);
+  assert.equal(second.state.claimed.has(slotKey(issue.id, 0)), true);
+  assert.ok(backend.exclusiveTransactions >= 3);
+});
+
+test("turso claim store hydrates retry state across restart", async () => {
+  const clock = fakeClock(new Date("2026-01-01T00:00:00.000Z"));
+  const settings = parseConfig({ agent: { max_retry_backoff_ms: 60_000 } });
+  const issue = normalizeIssue({
+    id: "turso-persistent-retry",
+    identifier: "MT-TURSO-RETRY",
+    title: "Turso persistent retry",
+    state: { name: "Todo", type: "unstarted" },
+  });
+  const root = await tempDir("lorenz-turso-claim-store");
+  const dbPath = path.join(root, "claims.db");
+  const backend = await TursoClaimStoreBackend.open(dbPath);
+  const firstStore = await AsyncPersistentClaimStore.create(backend, {
+    ownerId: "owner-a",
+    hydratedAt: new Date("2026-01-01T00:00:00.000Z"),
+    now: () => clock.now(),
+  });
+
+  try {
+    const first = new Orchestrator(settings, clock, firstStore);
+    assert.ok(await claimEntryAsync(first, issue));
+    await first.finishAsync(issue.id, 0, true, "failed once");
+    assert.equal((await first.snapshotAsync()).claimStore.kind, "turso");
+  } finally {
+    await firstStore.close();
+  }
+
+  const restartClock = fakeClock(new Date("2026-01-01T00:00:05.000Z"));
+  const restartedBackend = await TursoClaimStoreBackend.open(dbPath);
+  const restartedStore = await AsyncPersistentClaimStore.create(restartedBackend, {
+    ownerId: "owner-b",
+    hydratedAt: new Date("2026-01-01T00:00:05.000Z"),
+    now: () => restartClock.now(),
+    hydrate: {
+      now: restartClock.now(),
+      monotonicNowMs: restartClock.monotonicMs(),
+    },
+  });
+
+  try {
+    const restarted = new Orchestrator(settings, restartClock, restartedStore);
+    const snapshot = await restarted.snapshotAsync();
+    const retry = snapshot.retrying[0];
+
+    assert.equal(retry?.attempt, 1);
+    assert.equal(retry?.error, "failed once");
+    assert.equal(retry?.monotonicDeadlineMs, restartClock.monotonicMs() + 5_000);
+    assert.deepEqual(snapshot.claimStore, {
+      kind: "turso",
+      ownerId: "owner-b",
+      capabilities: {
+        crashRecovery: true,
+        sharedAcrossProcesses: true,
+        retryDurability: true,
+      },
+      hydratedAt: "2026-01-01T00:00:05.000Z",
+      transactionsApplied: 0,
+      lastOperation: null,
+      lastCheckpointAt: "2026-01-01T00:00:00.000Z",
+    });
+  } finally {
+    await restartedStore.close();
+  }
+});
+
+test("shared persistent claim store flush preserves newer backend state", () => {
+  const clock = fakeClock(new Date("2026-01-01T00:00:00.000Z"));
+  const backend = new MemoryCheckpointBackend({ sharedAcrossProcesses: true });
+  const settings = parseConfig({ agent: { max_concurrent_agents: 2 } });
+  const firstIssue = normalizeIssue({
+    id: "shared-flush-first",
+    identifier: "MT-SHARED-FLUSH-1",
+    title: "Shared flush first",
+    state: { name: "Todo", type: "unstarted" },
+  });
+  const secondIssue = normalizeIssue({
+    id: "shared-flush-second",
+    identifier: "MT-SHARED-FLUSH-2",
+    title: "Shared flush second",
+    state: { name: "Todo", type: "unstarted" },
+  });
+  const hydrate = () => ({
+    now: clock.now(),
+    monotonicNowMs: clock.monotonicMs(),
+  });
+  const firstStore = new PersistentClaimStore(backend, {
+    ownerId: "owner-a",
+    now: () => clock.now(),
+    hydrate,
+  });
+  const secondStore = new PersistentClaimStore(backend, {
+    ownerId: "owner-b",
+    now: () => clock.now(),
+    hydrate,
+  });
+  const first = new Orchestrator(settings, clock, firstStore);
+  const second = new Orchestrator(settings, clock, secondStore);
+
+  assert.ok(claimEntry(first, firstIssue));
+  assert.ok(claimEntry(second, secondIssue));
+  assert.equal(first.state.running.size, 1);
+
+  firstStore.flush();
+  const restartedStore = new PersistentClaimStore(backend, {
+    ownerId: "owner-c",
+    now: () => clock.now(),
+    hydrate,
+  });
+  const restarted = new Orchestrator(settings, clock, restartedStore);
+
+  assert.deepEqual(
+    restarted
+      .snapshot()
+      .running.map((entry) => entry.issue.id)
+      .sort(),
+    [firstIssue.id, secondIssue.id],
+  );
+});
+
+test("shared persistent claim store prevents non-owner finish", () => {
+  const clock = fakeClock(new Date("2026-01-01T00:00:00.000Z"));
+  const backend = new MemoryCheckpointBackend({ sharedAcrossProcesses: true });
+  const settings = parseConfig();
+  const issue = normalizeIssue({
+    id: "shared-owner-finish",
+    identifier: "MT-SHARED-OWNER-FINISH",
+    title: "Shared owner finish",
+    state: { name: "Todo", type: "unstarted" },
+  });
+  const hydrate = () => ({
+    now: clock.now(),
+    monotonicNowMs: clock.monotonicMs(),
+  });
+  const firstStore = new PersistentClaimStore(backend, {
+    ownerId: "owner-a",
+    now: () => clock.now(),
+    hydrate,
+  });
+  const secondStore = new PersistentClaimStore(backend, {
+    ownerId: "owner-b",
+    now: () => clock.now(),
+    hydrate,
+  });
+  const first = new Orchestrator(settings, clock, firstStore);
+  const second = new Orchestrator(settings, clock, secondStore);
+
+  assert.ok(claimEntry(first, issue));
+  assert.equal(second.snapshot().running.length, 1);
+  assert.equal(second.ownsClaim(issue.id, 0), false);
+
+  second.finish(issue.id, 0, true, "non-owner attempted finish");
+
+  assert.equal(second.snapshot().running.length, 1);
+  assert.equal(second.snapshot().retrying.length, 0);
+  assert.equal(first.snapshot().running.length, 1);
+  first.finish(issue.id, 0, true, "owner finished");
+  assert.equal(first.snapshot().running.length, 0);
+  assert.equal(first.snapshot().retrying.length, 1);
+});
+
+test("shared persistent claim store recovers stale owner running claims", () => {
+  const clock = fakeClock(new Date("2026-01-01T00:00:00.000Z"));
+  const backend = new MemoryCheckpointBackend({ sharedAcrossProcesses: true });
+  const settings = parseConfig();
+  const issue = normalizeIssue({
+    id: "shared-stale-owner",
+    identifier: "MT-SHARED-STALE-OWNER",
+    title: "Shared stale owner",
+    state: { name: "Todo", type: "unstarted" },
+  });
+  const hydrate = () => ({
+    now: clock.now(),
+    monotonicNowMs: clock.monotonicMs(),
+  });
+  const firstStore = new PersistentClaimStore(backend, {
+    ownerId: "owner-a",
+    now: () => clock.now(),
+    hydrate,
+    ownerLeaseStaleMs: 60_000,
+  });
+  const first = new Orchestrator(settings, clock, firstStore);
+  assert.ok(claimEntry(first, issue));
+  assert.equal(first.snapshot().running.length, 1);
+
+  clock.advance(60_001);
+  const restartedStore = new PersistentClaimStore(backend, {
+    ownerId: "owner-b",
+    now: () => clock.now(),
+    hydrate,
+    ownerLeaseStaleMs: 60_000,
+  });
+  const restarted = new Orchestrator(settings, clock, restartedStore);
+
+  assert.equal(backend.saved.at(-1)?.operation, "recover_stale_owners");
+  assert.equal(restarted.snapshot().running.length, 0);
+  assert.equal(restarted.state.claimed.has(slotKey(issue.id, 0)), false);
+  assert.ok(claimEntry(restarted, issue));
+});
+
+test("shared persistent claim store recovers retry metadata from stale running claims", () => {
+  const clock = fakeClock(new Date("2026-01-01T00:00:00.000Z"));
+  const backend = new MemoryCheckpointBackend({ sharedAcrossProcesses: true });
+  const settings = parseConfig({
+    worker: { ssh_hosts: ["worker-a"], max_concurrent_agents_per_host: 1 },
+  });
+  const issue = normalizeIssue({
+    id: "shared-stale-retry-owner",
+    identifier: "MT-SHARED-STALE-RETRY",
+    title: "Shared stale retry owner",
+    state: { name: "Todo", type: "unstarted" },
+    url: "https://tracker.example/MT-SHARED-STALE-RETRY",
+  });
+  const key = slotKey(issue.id, 0);
+  const hydrate = () => ({
+    now: clock.now(),
+    monotonicNowMs: clock.monotonicMs(),
+  });
+  const firstStore = new PersistentClaimStore(backend, {
+    ownerId: "owner-a",
+    now: () => clock.now(),
+    monotonicNow: () => clock.monotonicMs(),
+    hydrate,
+    ownerLeaseStaleMs: 60_000,
+  });
+  const first = new Orchestrator(settings, clock, firstStore);
+  firstStore.transaction("apply_update", (state) => {
+    state.retryAttempts.set(key, {
+      issueId: issue.id,
+      identifier: issue.identifier,
+      issueUrl: issue.url ?? null,
+      attempt: 2,
+      monotonicDeadlineMs: clock.monotonicMs() - 1,
+      dueAtIso: new Date(clock.now().getTime() - 1).toISOString(),
+      slotIndex: 0,
+      workerHost: "worker-a",
+      workspacePath: "/tmp/lorenz/MT-SHARED-STALE-RETRY",
+      error: "previous run failed",
+    });
+  });
+  const running = claimEntry(first, issue);
+  assert.equal(running?.retryAttempt, 2);
+  assert.equal(first.state.retryAttempts.has(key), false);
+  first.applyUpdate(issue.id, 0, {
+    type: "turn_completed",
+    workspacePath: "/tmp/lorenz/MT-SHARED-STALE-RETRY",
+  });
+
+  clock.advance(60_001);
+  const restartedStore = new PersistentClaimStore(backend, {
+    ownerId: "owner-b",
+    now: () => clock.now(),
+    monotonicNow: () => clock.monotonicMs(),
+    hydrate,
+    ownerLeaseStaleMs: 60_000,
+  });
+  const restarted = new Orchestrator(settings, clock, restartedStore);
+  const retry = restarted.snapshot().retrying[0];
+
+  assert.equal(backend.saved.at(-1)?.operation, "recover_stale_owners");
+  assert.equal(restarted.snapshot().running.length, 0);
+  assert.equal(restarted.state.claimed.has(key), false);
+  assert.equal(retry?.attempt, 2);
+  assert.equal(retry?.workerHost, "worker-a");
+  assert.equal(retry?.workspacePath, "/tmp/lorenz/MT-SHARED-STALE-RETRY");
+  assert.equal(retry?.issueUrl, issue.url);
+  assert.equal(retry?.monotonicDeadlineMs, clock.monotonicMs());
+});
+
+test("shared persistent claim store keeps live owner claims after lease heartbeat", () => {
+  const clock = fakeClock(new Date("2026-01-01T00:00:00.000Z"));
+  const backend = new MemoryCheckpointBackend({ sharedAcrossProcesses: true });
+  const settings = parseConfig();
+  const issue = normalizeIssue({
+    id: "shared-live-owner",
+    identifier: "MT-SHARED-LIVE-OWNER",
+    title: "Shared live owner",
+    state: { name: "Todo", type: "unstarted" },
+  });
+  const hydrate = () => ({
+    now: clock.now(),
+    monotonicNowMs: clock.monotonicMs(),
+  });
+  const firstStore = new PersistentClaimStore(backend, {
+    ownerId: "owner-a",
+    now: () => clock.now(),
+    hydrate,
+    ownerLeaseStaleMs: 60_000,
+  });
+  const first = new Orchestrator(settings, clock, firstStore);
+  assert.ok(claimEntry(first, issue));
+  assert.equal(first.snapshot().running.length, 1);
+
+  clock.advance(60_001);
+  first.heartbeatClaimOwner();
+  const secondStore = new PersistentClaimStore(backend, {
+    ownerId: "owner-b",
+    now: () => clock.now(),
+    hydrate,
+    ownerLeaseStaleMs: 60_000,
+  });
+  const second = new Orchestrator(settings, clock, secondStore);
+
+  assert.notEqual(backend.saved.at(-1)?.operation, "recover_stale_owners");
+  assert.equal(second.snapshot().running.length, 1);
+  assert.equal(second.state.claimed.has(slotKey(issue.id, 0)), true);
+  assert.equal(claimEntry(second, issue), null);
+});
+
+test("shared persistent claim store checkpoints abandoned running claims", () => {
+  const clock = fakeClock(new Date("2026-01-01T00:00:00.000Z"));
+  const backend = new MemoryCheckpointBackend({ sharedAcrossProcesses: true });
+  const settings = parseConfig();
+  const issue = normalizeIssue({
+    id: "shared-abandon-owner",
+    identifier: "MT-SHARED-ABANDON",
+    title: "Shared abandon owner",
+    state: { name: "Todo", type: "unstarted" },
+  });
+  const hydrate = () => ({
+    now: clock.now(),
+    monotonicNowMs: clock.monotonicMs(),
+  });
+  const firstStore = new PersistentClaimStore(backend, {
+    ownerId: "owner-a",
+    now: () => clock.now(),
+    hydrate,
+  });
+  const secondStore = new PersistentClaimStore(backend, {
+    ownerId: "owner-b",
+    now: () => clock.now(),
+    hydrate,
+  });
+  const first = new Orchestrator(settings, clock, firstStore);
+  const second = new Orchestrator(settings, clock, secondStore);
+
+  assert.ok(claimEntry(first, issue));
+  first.abandonClaim(issue.id, 0);
+
+  assert.equal(backend.saved.at(-1)?.operation, "abandon_claim");
+  assert.equal(second.snapshot().running.length, 0);
+  assert.equal(second.state.claimed.has(slotKey(issue.id, 0)), false);
+  assert.ok(claimEntry(second, issue));
+});
+
+test("shared persistent claim store restores retry metadata from abandoned running retries", () => {
+  const clock = fakeClock(new Date("2026-01-01T00:00:00.000Z"));
+  const backend = new MemoryCheckpointBackend({ sharedAcrossProcesses: true });
+  const settings = parseConfig({
+    worker: { ssh_hosts: ["worker-a"], max_concurrent_agents_per_host: 1 },
+  });
+  const issue = normalizeIssue({
+    id: "shared-abandon-retry",
+    identifier: "MT-SHARED-ABANDON-RETRY",
+    title: "Shared abandon retry",
+    state: { name: "Todo", type: "unstarted" },
+    url: "https://tracker.example/MT-SHARED-ABANDON-RETRY",
+  });
+  const key = slotKey(issue.id, 0);
+  const workspacePath = "/tmp/lorenz/MT-SHARED-ABANDON-RETRY";
+  const hydrate = () => ({
+    now: clock.now(),
+    monotonicNowMs: clock.monotonicMs(),
+  });
+  const firstStore = new PersistentClaimStore(backend, {
+    ownerId: "owner-a",
+    now: () => clock.now(),
+    monotonicNow: () => clock.monotonicMs(),
+    hydrate,
+  });
+  const secondStore = new PersistentClaimStore(backend, {
+    ownerId: "owner-b",
+    now: () => clock.now(),
+    monotonicNow: () => clock.monotonicMs(),
+    hydrate,
+  });
+  const first = new Orchestrator(settings, clock, firstStore);
+  firstStore.transaction("apply_update", (state) => {
+    state.retryAttempts.set(key, {
+      issueId: issue.id,
+      identifier: issue.identifier,
+      issueUrl: issue.url ?? null,
+      attempt: 2,
+      monotonicDeadlineMs: clock.monotonicMs() - 1,
+      dueAtIso: new Date(clock.now().getTime() - 1).toISOString(),
+      slotIndex: 0,
+      workerHost: "worker-a",
+      workspacePath,
+      error: "previous run failed",
+    });
+  });
+  const running = claimEntry(first, issue);
+  assert.equal(running?.retryAttempt, 2);
+  assert.equal(first.state.retryAttempts.has(key), false);
+  first.applyUpdate(issue.id, 0, {
+    type: "turn_completed",
+    workspacePath,
+  });
+
+  first.abandonClaim(issue.id, 0);
+
+  const second = new Orchestrator(settings, clock, secondStore);
+  const retry = second.snapshot().retrying[0];
+  assert.equal(backend.saved.at(-1)?.operation, "abandon_claim");
+  assert.equal(retry?.attempt, 2);
+  assert.equal(retry?.workerHost, "worker-a");
+  assert.equal(retry?.workspacePath, workspacePath);
+  assert.equal(retry?.issueUrl, issue.url);
+  assert.equal(retry?.monotonicDeadlineMs, clock.monotonicMs());
+  assert.equal(claimEntry(second, issue)?.retryAttempt, 2);
+});
+
+test("shared persistent reservations reject late binds from another owner", () => {
+  const clock = fakeClock(new Date("2026-01-01T00:00:00.000Z"));
+  const backend = new MemoryCheckpointBackend({ sharedAcrossProcesses: true });
+  const settings = parseConfig();
+  const probe = { governs: () => true, canAcquire: () => true };
+  const issue = normalizeIssue({
+    id: "shared-reservation-token",
+    identifier: "MT-SHARED-RESERVATION",
+    title: "Shared reservation token",
+    state: { name: "Todo", type: "unstarted" },
+  });
+  const hydrate = () => ({
+    now: clock.now(),
+    monotonicNowMs: clock.monotonicMs(),
+  });
+  const firstStore = new PersistentClaimStore(backend, {
+    ownerId: "owner-a",
+    now: () => clock.now(),
+    hydrate,
+  });
+  const secondStore = new PersistentClaimStore(backend, {
+    ownerId: "owner-b",
+    now: () => clock.now(),
+    hydrate,
+  });
+  const first = new Orchestrator(settings, clock, firstStore, probe);
+  const second = new Orchestrator(settings, clock, secondStore, probe);
+
+  const firstReservation = claimReservation(first, issue);
+  assert.ok(firstReservation);
+  first.cancelReservation(firstReservation!);
+  const secondReservation = claimReservation(second, issue);
+  assert.ok(secondReservation);
+  assert.notEqual(firstReservation?.token, secondReservation?.token);
+
+  assert.equal(first.bindReservation(firstReservation!, "late-worker"), null);
+  assert.equal(second.snapshot().reserving.length, 1);
+  assert.equal(
+    second.bindReservation(secondReservation!, "fresh-worker")?.workerHost,
+    "fresh-worker",
+  );
+});
 
 test("orchestrator claims ensemble slots independently and snapshots backend-neutral fields", () => {
   const settings = parseConfig({

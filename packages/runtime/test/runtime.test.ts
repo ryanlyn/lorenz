@@ -18,6 +18,12 @@ import {
 } from "@lorenz/cli";
 import { registerLinearTracker } from "@lorenz/linear-tracker";
 import {
+  createState,
+  InMemoryClaimStore,
+  type ClaimStoreOperation,
+  type OrchestratorState,
+} from "@lorenz/orchestrator";
+import {
   RUNTIME_EVENT_TYPES as RUNTIME_EVENT_TYPES_FROM_RUNTIME_EVENTS,
   RUNTIME_RUN_OUTCOMES as RUNTIME_RUN_OUTCOMES_FROM_RUNTIME_EVENTS,
 } from "@lorenz/runtime-events";
@@ -29,10 +35,10 @@ import type {
   LorenzRuntimeOptions,
   WorkflowDefinition,
 } from "@lorenz/cli";
-import type { WorkerPoolSettings } from "@lorenz/domain";
+import type { ClockPort, WorkerPoolSettings } from "@lorenz/domain";
 import type { AgentMcpEndpointLease } from "@lorenz/mcp";
 import type { AcquireResult, WorkerLease, WorkerOutcome, WorkerPool } from "@lorenz/worker-pool";
-import { assert, settle, tempDir } from "@lorenz/test-utils";
+import { assert, settle, tempDir, writeExecutable } from "@lorenz/test-utils";
 
 import {
   RUNTIME_EVENT_TYPES as RUNTIME_EVENT_TYPES_FROM_RUNTIME,
@@ -60,9 +66,429 @@ function runtimeOptions(options: LorenzRuntimeOptions): LorenzRuntimeOptions {
   return { ...runtimeAdapters, listIssueWorkspaces: async () => [], ...options };
 }
 
+class CountingClaimStore extends InMemoryClaimStore {
+  heartbeats = 0;
+
+  heartbeatOwner(): void {
+    this.heartbeats += 1;
+  }
+}
+
+class FailingHeartbeatClaimStore extends InMemoryClaimStore {
+  heartbeatOwner(): void {
+    throw new Error("heartbeat failed");
+  }
+}
+
+class FailingPeriodicHeartbeatClaimStore extends InMemoryClaimStore {
+  heartbeats = 0;
+
+  heartbeatOwner(): void {
+    this.heartbeats += 1;
+    if (this.heartbeats > 1) throw new Error("periodic heartbeat failed");
+  }
+}
+
+class SnapshotFailingPeriodicHeartbeatClaimStore extends InMemoryClaimStore {
+  heartbeats = 0;
+  readFailures = 0;
+
+  heartbeatOwner(): void {
+    this.heartbeats += 1;
+    if (this.heartbeats <= 1) return;
+    this.readFailures = 1;
+    throw new Error("periodic heartbeat failed");
+  }
+
+  override read<T>(run: (state: OrchestratorState) => T): T {
+    if (this.readFailures > 0) {
+      this.readFailures -= 1;
+      throw new Error("snapshot failed");
+    }
+    return super.read(run);
+  }
+}
+
+class FailingBindClaimStore extends InMemoryClaimStore {
+  readFailures = 0;
+
+  override transaction<T>(operation: ClaimStoreOperation, run: (state: OrchestratorState) => T): T {
+    if (operation === "bind_reservation") {
+      this.readFailures = 1;
+      throw new Error("bind failed");
+    }
+    return super.transaction(operation, run);
+  }
+
+  override read<T>(run: (state: OrchestratorState) => T): T {
+    if (this.readFailures > 0) {
+      this.readFailures -= 1;
+      throw new Error("snapshot failed after bind");
+    }
+    return super.read(run);
+  }
+}
+
+class FailingCancelClaimStore extends CountingClaimStore {
+  override transaction<T>(operation: ClaimStoreOperation, run: (state: OrchestratorState) => T): T {
+    if (operation === "cancel_reservation") throw new Error("cancel failed");
+    return super.transaction(operation, run);
+  }
+}
+
+class RetrySyncFailingCancelClaimStore extends InMemoryClaimStore {
+  readFailures = 0;
+
+  override transaction<T>(operation: ClaimStoreOperation, run: (state: OrchestratorState) => T): T {
+    const result = super.transaction(operation, run);
+    if (operation === "cancel_reservation") this.readFailures = 1;
+    return result;
+  }
+
+  override read<T>(run: (state: OrchestratorState) => T): T {
+    if (this.readFailures > 0) {
+      this.readFailures -= 1;
+      throw new Error("manual snapshot failure");
+    }
+    return super.read(run);
+  }
+}
+
+class LosingFinishClaimStore extends InMemoryClaimStore {
+  override transaction<T>(operation: ClaimStoreOperation, run: (state: OrchestratorState) => T): T {
+    if (operation === "finish") {
+      this.state.running.clear();
+      this.state.claimed.clear();
+    }
+    return super.transaction(operation, run);
+  }
+}
+
+class FailingFinishClaimStore extends InMemoryClaimStore {
+  override transaction<T>(operation: ClaimStoreOperation, run: (state: OrchestratorState) => T): T {
+    if (operation === "finish") throw new Error("finish failed");
+    return super.transaction(operation, run);
+  }
+}
+
+class FailingApplyUpdateClaimStore extends InMemoryClaimStore {
+  override transaction<T>(operation: ClaimStoreOperation, run: (state: OrchestratorState) => T): T {
+    if (operation === "apply_update") throw new Error("apply update failed");
+    return super.transaction(operation, run);
+  }
+}
+
+class FailingCleanupClaimStore extends InMemoryClaimStore {
+  override transaction<T>(operation: ClaimStoreOperation, run: (state: OrchestratorState) => T): T {
+    if (operation === "cleanup_issue") throw new Error("cleanup failed");
+    return super.transaction(operation, run);
+  }
+}
+
+class SnapshotFailingAfterFinishClaimStore extends InMemoryClaimStore {
+  readFailures = 0;
+
+  override transaction<T>(operation: ClaimStoreOperation, run: (state: OrchestratorState) => T): T {
+    const result = super.transaction(operation, run);
+    if (operation === "finish") this.readFailures = 1;
+    return result;
+  }
+
+  override read<T>(run: (state: OrchestratorState) => T): T {
+    if (this.readFailures > 0) {
+      this.readFailures -= 1;
+      throw new Error("snapshot failed after finish");
+    }
+    return super.read(run);
+  }
+}
+
+class SnapshotFailingAfterClaimStore extends InMemoryClaimStore {
+  readFailures = 0;
+
+  override transaction<T>(operation: ClaimStoreOperation, run: (state: OrchestratorState) => T): T {
+    const result = super.transaction(operation, run);
+    if (operation === "claim") this.readFailures = 1;
+    return result;
+  }
+
+  override read<T>(run: (state: OrchestratorState) => T): T {
+    if (this.readFailures > 0) {
+      this.readFailures -= 1;
+      throw new Error("snapshot failed after claim");
+    }
+    return super.read(run);
+  }
+}
+
+class ManuallyFailingReadClaimStore extends InMemoryClaimStore {
+  readFailures = 0;
+
+  override read<T>(run: (state: OrchestratorState) => T): T {
+    if (this.readFailures > 0) {
+      this.readFailures -= 1;
+      throw new Error("manual snapshot failure");
+    }
+    return super.read(run);
+  }
+}
+
+class FailingAbandonClaimStore extends CountingClaimStore {
+  override transaction<T>(operation: ClaimStoreOperation, run: (state: OrchestratorState) => T): T {
+    if (operation === "abandon_claim") throw new Error("abandon failed");
+    return super.transaction(operation, run);
+  }
+}
+
+function manualClock(initial = new Date("2026-01-01T00:00:00.000Z")) {
+  let nowMs = initial.getTime();
+  let scheduled: (() => void) | null = null;
+  const clock: ClockPort & { advance(ms: number): void; fireTimer(): void } = {
+    now: () => new Date(nowMs),
+    monotonicMs: () => nowMs,
+    setTimeout(callback) {
+      scheduled = callback;
+      return { unref: () => {} };
+    },
+    clearTimeout() {
+      scheduled = null;
+    },
+    advance(ms: number) {
+      nowMs += ms;
+    },
+    fireTimer() {
+      const callback = scheduled;
+      scheduled = null;
+      callback?.();
+    },
+  };
+  return clock;
+}
+
 test("runtime exports canonical runtime-events vocabulary values", () => {
   assert.equal(RUNTIME_EVENT_TYPES_FROM_RUNTIME, RUNTIME_EVENT_TYPES_FROM_RUNTIME_EVENTS);
   assert.equal(RUNTIME_RUN_OUTCOMES_FROM_RUNTIME, RUNTIME_RUN_OUTCOMES_FROM_RUNTIME_EVENTS);
+});
+
+test("runtime accepts an injected claim store for the default orchestrator", () => {
+  const store = new InMemoryClaimStore(createState(), {
+    ownerId: "runtime-claim-store",
+    hydratedAt: new Date("2026-01-01T00:00:00.000Z"),
+  });
+  const runtime = new LorenzRuntime(
+    runtimeOptions({
+      workflow: workflowFixture(),
+      claimStore: store,
+      client: {
+        fetchCandidateIssues: async () => [],
+        fetchIssuesByIds: async () => [],
+      },
+    }),
+  );
+
+  assert.deepEqual(runtime.snapshot().claimStore, {
+    kind: "memory",
+    ownerId: "runtime-claim-store",
+    capabilities: {
+      crashRecovery: false,
+      sharedAcrossProcesses: false,
+      retryDurability: false,
+    },
+    hydratedAt: "2026-01-01T00:00:00.000Z",
+    transactionsApplied: 0,
+    lastOperation: null,
+    lastCheckpointAt: null,
+  });
+});
+
+test("runtime abandons a claim when owner heartbeat startup fails before runner starts", async () => {
+  const issue = issueFixture("issue-heartbeat-start-failure", "MT-HEARTBEAT-START-FAILURE");
+  const store = new FailingHeartbeatClaimStore(createState(), {
+    ownerId: "runtime-claim-store",
+  });
+  const workflow = workflowFixture();
+  const clock = manualClock();
+  const orchestrator = new Orchestrator(workflow.settings, clock, store);
+  let runnerCalls = 0;
+  const runtime = new LorenzRuntime(
+    runtimeOptions({
+      workflow,
+      clock,
+      orchestrator,
+      client: {
+        fetchCandidateIssues: async () => [issue],
+        fetchIssuesByIds: async () => [issue],
+      },
+      runner: async () => {
+        runnerCalls += 1;
+        return { workspace: "/tmp/lorenz/MT-HEARTBEAT-START-FAILURE", finalIssue: issue };
+      },
+    }),
+  );
+
+  await assert.rejects(() => runtime.pollOnce({ waitForRuns: true }), "heartbeat failed");
+
+  assert.equal(runnerCalls, 0);
+  assert.equal(orchestrator.snapshot().running.length, 0);
+  assert.equal(orchestrator.snapshot().claimStore.lastOperation, "abandon_claim");
+  assert.equal(runtime.snapshot().running.length, 0);
+});
+
+test("runtime abandons a claim when post-claim retry timer sync fails before runner starts", async () => {
+  const issue = issueFixture("issue-post-claim-sync-failure", "MT-POST-CLAIM-SYNC-FAILURE");
+  const store = new SnapshotFailingAfterClaimStore(createState(), {
+    ownerId: "runtime-post-claim-sync-failure",
+  });
+  const workflow = workflowFixture();
+  const orchestrator = new Orchestrator(workflow.settings, undefined, store);
+  let runnerCalls = 0;
+  const runtime = new LorenzRuntime(
+    runtimeOptions({
+      workflow,
+      orchestrator,
+      client: {
+        fetchCandidateIssues: async () => [issue],
+        fetchIssuesByIds: async () => [issue],
+      },
+      runner: async () => {
+        runnerCalls += 1;
+        return { workspace: "/tmp/lorenz/MT-POST-CLAIM-SYNC-FAILURE", finalIssue: issue };
+      },
+    }),
+  );
+
+  await assert.rejects(
+    () => runtime.pollOnce({ waitForRuns: true }),
+    /snapshot failed after claim/,
+  );
+
+  assert.equal(runnerCalls, 0);
+  assert.equal(orchestrator.snapshot().running.length, 0);
+  assert.equal(orchestrator.snapshot().claimStore.lastOperation, "abandon_claim");
+  assert.equal(runtime.snapshot().running.length, 0);
+});
+
+test("runtime abandons a claim when pre-run dispatch notification fails", async () => {
+  const issue = issueFixture("issue-dispatch-notification-failure", "MT-DISPATCH-NOTIFY-FAIL");
+  const workflow = workflowFixture();
+  const orchestrator = new Orchestrator(workflow.settings);
+  let runnerCalls = 0;
+  const runtime = new LorenzRuntime(
+    runtimeOptions({
+      workflow,
+      orchestrator,
+      client: {
+        fetchCandidateIssues: async () => [issue],
+        fetchIssuesByIds: async () => [issue],
+      },
+      onIssueDispatched: () => {
+        throw new Error("dispatch notification failed");
+      },
+      runner: async () => {
+        runnerCalls += 1;
+        return { workspace: "/tmp/lorenz/MT-DISPATCH-NOTIFY-FAIL", finalIssue: issue };
+      },
+    }),
+  );
+
+  await assert.rejects(
+    () => runtime.pollOnce({ waitForRuns: true }),
+    /dispatch notification failed/,
+  );
+
+  assert.equal(runnerCalls, 0);
+  assert.equal(orchestrator.snapshot().running.length, 0);
+  assert.equal(orchestrator.snapshot().claimStore.lastOperation, "abandon_claim");
+  assert.equal(runtime.snapshot().running.length, 0);
+});
+
+test("runtime records retry timer errors when the timer callback snapshot fails", async () => {
+  const issue = issueFixture("issue-retry-timer-snapshot-failure", "MT-RETRY-TIMER-SNAPSHOT");
+  const workflow = workflowFixture();
+  workflow.settings.polling.intervalMs = 60_000;
+  const clock = manualClock();
+  const store = new ManuallyFailingReadClaimStore(createState(), {
+    ownerId: "retry-timer-snapshot-failure",
+  });
+  const orchestrator = new Orchestrator(workflow.settings, clock, store);
+  const dueAt = new Date(clock.now().getTime() + 10_000);
+  orchestrator.state.retryAttempts.set(slotKey(issue.id, 0), {
+    issueId: issue.id,
+    identifier: issue.identifier,
+    issueUrl: issue.url ?? null,
+    attempt: 1,
+    monotonicDeadlineMs: clock.monotonicMs() + 10_000,
+    dueAtIso: dueAt.toISOString(),
+    slotIndex: 0,
+    workerHost: null,
+    workspacePath: null,
+    error: "previous failure",
+  });
+  let runnerCalls = 0;
+  const runtime = new LorenzRuntime(
+    runtimeOptions({
+      workflow,
+      clock,
+      orchestrator,
+      client: {
+        fetchCandidateIssues: async () => [issue],
+        fetchIssuesByIds: async () => [issue],
+      },
+      runner: async () => {
+        runnerCalls += 1;
+        throw new Error("runner should not run before retry due");
+      },
+    }),
+  );
+
+  await runtime.pollOnce();
+  store.readFailures = 1;
+  clock.advance(10_000);
+  clock.fireTimer();
+
+  const snapshot = runtime.snapshot();
+  assert.equal(runnerCalls, 0);
+  assert.equal(snapshot.appStatus, "error");
+  assert.equal(
+    snapshot.recentEvents.some((event) => event.type === "retry_timer_error"),
+    true,
+  );
+  assert.match(snapshot.poll.lastError ?? "", /manual snapshot failure/);
+});
+
+test("runtime records poll errors when poll-start snapshot emission fails", async () => {
+  const workflow = workflowFixture();
+  const store = new ManuallyFailingReadClaimStore(createState(), {
+    ownerId: "poll-start-snapshot-failure",
+  });
+  const orchestrator = new Orchestrator(workflow.settings, undefined, store);
+  let candidateFetches = 0;
+  const runtime = new LorenzRuntime(
+    runtimeOptions({
+      workflow,
+      orchestrator,
+      client: {
+        fetchCandidateIssues: async () => {
+          candidateFetches += 1;
+          return [];
+        },
+        fetchIssuesByIds: async () => [],
+      },
+    }),
+  );
+
+  store.readFailures = 1;
+  await assert.rejects(() => runtime.pollOnce({ dryRun: true }), /manual snapshot failure/);
+
+  const snapshot = runtime.snapshot();
+  assert.equal(candidateFetches, 0);
+  assert.equal(snapshot.appStatus, "error");
+  assert.equal(snapshot.poll.status, "error");
+  assert.match(snapshot.poll.lastError ?? "", /manual snapshot failure/);
+  assert.equal(
+    snapshot.recentEvents.some((event) => event.type === "poll_error"),
+    true,
+  );
 });
 
 test("runtime dry-run polls, computes eligibility, and does not start agents", async () => {
@@ -130,6 +556,263 @@ test("runtime once claims an eligible issue, applies updates, and records comple
   assert.equal(snapshot.runHistory[0]?.issueIdentifier, "MT-1");
   assert.equal(snapshot.runHistory[0]?.outcome, "success");
   assert.equal(snapshot.usageTotals.totalTokens, 10);
+});
+
+test("runtime does not record completion when claim ownership is lost before finish", async () => {
+  const issue = issueFixture("issue-lost-before-finish", "MT-LOST-BEFORE-FINISH");
+  const doneIssue: Issue = { ...issue, state: "Done", stateType: "completed" };
+  const workflow = workflowFixture();
+  const store = new LosingFinishClaimStore(createState(), { ownerId: "lost-before-finish" });
+  const orchestrator = new Orchestrator(workflow.settings, undefined, store);
+  const runtime = new LorenzRuntime(
+    runtimeOptions({
+      workflow,
+      orchestrator,
+      client: {
+        fetchCandidateIssues: async () => [issue],
+        fetchIssuesByIds: async () => [issue],
+      },
+      runner: async () => ({
+        workspace: "/tmp/lorenz/MT-LOST-BEFORE-FINISH",
+        turnCount: 1,
+        updates: [],
+        agentKind: "codex",
+        finalIssue: doneIssue,
+      }),
+    }),
+  );
+
+  await runtime.pollOnce({ waitForRuns: true });
+
+  const snapshot = runtime.snapshot();
+  assert.equal(snapshot.running.length, 0);
+  assert.equal(snapshot.runHistory.length, 0);
+  assert.equal(
+    snapshot.recentEvents.some((event) => event.type === "run_completed"),
+    false,
+  );
+  assert.equal(
+    snapshot.recentEvents.some((event) => event.message.includes("claim_lost_before_finish")),
+    true,
+  );
+});
+
+test("runtime does not record runner failure when durable finish fails after runner success", async () => {
+  const issue = issueFixture("issue-finish-failure", "MT-FINISH-FAILURE");
+  const doneIssue: Issue = { ...issue, state: "Done", stateType: "completed" };
+  const workflow = workflowFixture();
+  const store = new FailingFinishClaimStore(createState(), { ownerId: "finish-failure" });
+  const orchestrator = new Orchestrator(workflow.settings, undefined, store);
+  const runtime = new LorenzRuntime(
+    runtimeOptions({
+      workflow,
+      orchestrator,
+      client: {
+        fetchCandidateIssues: async () => [issue],
+        fetchIssuesByIds: async () => [issue],
+      },
+      runner: async () => ({
+        workspace: "/tmp/lorenz/MT-FINISH-FAILURE",
+        turnCount: 1,
+        updates: [],
+        agentKind: "codex",
+        finalIssue: doneIssue,
+      }),
+    }),
+  );
+
+  await runtime.pollOnce({ waitForRuns: true });
+
+  const snapshot = runtime.snapshot();
+  assert.equal(snapshot.appStatus, "error");
+  assert.match(snapshot.poll.lastError ?? "", /claim_finish_failed/);
+  assert.equal(snapshot.runHistory.length, 0);
+  assert.equal(snapshot.retrying.length, 0);
+  assert.equal(
+    snapshot.recentEvents.some((event) => event.type === "run_failed"),
+    false,
+  );
+  assert.equal(
+    snapshot.recentEvents.some((event) => event.message.includes("finish failed")),
+    true,
+  );
+});
+
+test("runtime records update persistence failures without treating them as agent failures", async () => {
+  const root = await tempDir("lorenz-runtime-update-failure");
+  const issue = issueFixture("issue-update-failure", "MT-UPDATE-FAILURE");
+  const workflow = workflowFixture(root);
+  const workspace = await createWorkspaceForIssue(workflow.settings, issue);
+  const store = new FailingApplyUpdateClaimStore(createState(), {
+    ownerId: "apply-update-failure",
+  });
+  const orchestrator = new Orchestrator(workflow.settings, undefined, store);
+  const runtime = new LorenzRuntime(
+    runtimeOptions({
+      workflow,
+      orchestrator,
+      client: {
+        fetchCandidateIssues: async () => [issue],
+        fetchIssuesByIds: async () => [issue],
+      },
+      runner: async ({ onUpdate }) => {
+        onUpdate?.({
+          type: "workspace_prepared",
+          message: `workspace prepared at ${workspace}`,
+          workspacePath: workspace,
+        });
+        return { workspace, finalIssue: issue };
+      },
+    }),
+  );
+
+  await runtime.pollOnce({ waitForRuns: true });
+
+  const snapshot = runtime.snapshot();
+  assert.equal(snapshot.appStatus, "error");
+  assert.match(snapshot.poll.lastError ?? "", /claim_update_failed/);
+  assert.equal(snapshot.runHistory.length, 0);
+  assert.equal(snapshot.retrying.length, 0);
+  assert.equal(snapshot.running.length, 0);
+  assert.equal(orchestrator.snapshot().claimStore.lastOperation, "abandon_claim");
+  assert.equal(
+    snapshot.recentEvents.some((event) => event.type === "run_failed"),
+    false,
+  );
+  assert.equal(
+    snapshot.recentEvents.some(
+      (event) => event.type === "poll_error" && event.message.includes("apply update failed"),
+    ),
+    true,
+  );
+});
+
+test("runtime keeps completed run history when retry timer sync fails after finish", async () => {
+  const issue = issueFixture("issue-post-finish-snapshot-failure", "MT-POST-FINISH-SNAPSHOT");
+  const doneIssue: Issue = { ...issue, state: "Done", stateType: "completed" };
+  const workflow = workflowFixture();
+  const store = new SnapshotFailingAfterFinishClaimStore(createState(), {
+    ownerId: "post-finish-snapshot-failure",
+  });
+  const orchestrator = new Orchestrator(workflow.settings, undefined, store);
+  const runtime = new LorenzRuntime(
+    runtimeOptions({
+      workflow,
+      orchestrator,
+      client: {
+        fetchCandidateIssues: async () => [issue],
+        fetchIssuesByIds: async () => [issue],
+      },
+      runner: async () => ({
+        workspace: "/tmp/lorenz/MT-POST-FINISH-SNAPSHOT",
+        turnCount: 1,
+        updates: [],
+        agentKind: "codex",
+        finalIssue: doneIssue,
+      }),
+    }),
+  );
+
+  await runtime.pollOnce({ waitForRuns: true });
+
+  const snapshot = runtime.snapshot();
+  assert.equal(snapshot.appStatus, "error");
+  assert.match(snapshot.poll.lastError ?? "", /retry_timer_sync_failed/);
+  assert.equal(snapshot.runHistory[0]?.outcome, "success");
+  assert.equal(
+    snapshot.recentEvents.some((event) => event.type === "run_completed"),
+    true,
+  );
+  assert.equal(
+    snapshot.recentEvents.some((event) => event.message.includes("snapshot failed after finish")),
+    true,
+  );
+  assert.equal(
+    snapshot.recentEvents.some((event) => event.type === "run_failed"),
+    false,
+  );
+});
+
+test("runtime does not record runner failure when a post-run pre-finish snapshot would fail", async () => {
+  const issue = issueFixture("issue-post-run-snapshot-failure", "MT-POST-RUN-SNAPSHOT");
+  const doneIssue: Issue = { ...issue, state: "Done", stateType: "completed" };
+  const workflow = workflowFixture();
+  const store = new ManuallyFailingReadClaimStore(createState(), {
+    ownerId: "post-run-snapshot-failure",
+  });
+  const orchestrator = new Orchestrator(workflow.settings, undefined, store);
+  const runtime = new LorenzRuntime(
+    runtimeOptions({
+      workflow,
+      orchestrator,
+      client: {
+        fetchCandidateIssues: async () => [issue],
+        fetchIssuesByIds: async () => [issue],
+      },
+      runner: async () => {
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        store.readFailures = 1;
+        return {
+          workspace: "/tmp/lorenz/MT-POST-RUN-SNAPSHOT",
+          turnCount: 1,
+          updates: [],
+          agentKind: "codex",
+          finalIssue: doneIssue,
+        };
+      },
+    }),
+  );
+
+  await runtime.pollOnce({ waitForRuns: true });
+
+  const snapshot = runtime.snapshot();
+  assert.equal(snapshot.appStatus, "error");
+  assert.match(snapshot.poll.lastError ?? "", /retry_timer_sync_failed/);
+  assert.equal(snapshot.runHistory[0]?.outcome, "success");
+  assert.equal(
+    snapshot.recentEvents.some((event) => event.type === "run_completed"),
+    true,
+  );
+  assert.equal(
+    snapshot.recentEvents.some((event) => event.type === "run_failed"),
+    false,
+  );
+});
+
+test("runtime finishes a failed run when a failure-path pre-finish snapshot would fail", async () => {
+  const issue = issueFixture("issue-failure-path-snapshot-failure", "MT-FAILURE-SNAPSHOT");
+  const workflow = workflowFixture();
+  const store = new ManuallyFailingReadClaimStore(createState(), {
+    ownerId: "failure-path-snapshot-failure",
+  });
+  const orchestrator = new Orchestrator(workflow.settings, undefined, store);
+  const runtime = new LorenzRuntime(
+    runtimeOptions({
+      workflow,
+      orchestrator,
+      client: {
+        fetchCandidateIssues: async () => [issue],
+        fetchIssuesByIds: async () => [issue],
+      },
+      runner: async () => {
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        store.readFailures = 1;
+        throw new Error("agent exited: boom");
+      },
+    }),
+  );
+
+  await runtime.pollOnce({ waitForRuns: true });
+
+  const snapshot = runtime.snapshot();
+  assert.equal(snapshot.appStatus, "error");
+  assert.match(snapshot.poll.lastError ?? "", /retry_timer_sync_failed/);
+  assert.equal(snapshot.runHistory[0]?.outcome, "failed");
+  assert.equal(snapshot.retrying[0]?.attempt, 1);
+  assert.equal(
+    snapshot.recentEvents.some((event) => event.type === "run_failed"),
+    true,
+  );
 });
 
 test("runtime schedules continuation retry after normal worker exit even when issue is inactive", async () => {
@@ -412,6 +1095,64 @@ test("runtime aborts in-flight runs when reconciliation sees a terminal issue", 
   );
 });
 
+test("runtime keeps active runs when reconciliation cleanup persistence fails", async () => {
+  const issue = issueFixture("issue-cleanup-failure", "MT-CLEANUP-FAILURE");
+  const doneIssue: Issue = { ...issue, state: "Done", stateType: "completed" };
+  const workflow = workflowFixture();
+  const store = new FailingCleanupClaimStore(createState(), {
+    ownerId: "cleanup-failure",
+  });
+  const orchestrator = new Orchestrator(workflow.settings, undefined, store);
+  let fetches = 0;
+  let aborted = false;
+  const runtime = new LorenzRuntime(
+    runtimeOptions({
+      workflow,
+      orchestrator,
+      client: {
+        fetchCandidateIssues: async () => [issue],
+        fetchIssuesByIds: async () => {
+          fetches += 1;
+          return fetches === 1 ? [issue] : [doneIssue];
+        },
+      },
+      runner: async ({ abortSignal }) => {
+        await new Promise<void>((_resolve, reject) => {
+          abortSignal?.addEventListener(
+            "abort",
+            () => {
+              aborted = true;
+              reject(new Error("aborted"));
+            },
+            { once: true },
+          );
+        });
+        throw new Error("unreachable");
+      },
+    }),
+  );
+
+  try {
+    await runtime.pollOnce();
+    await runtime.pollOnce({ dryRun: true });
+
+    const snapshot = runtime.snapshot();
+    assert.equal(aborted, false);
+    assert.equal(snapshot.appStatus, "error");
+    assert.match(snapshot.poll.lastError ?? "", /claim_cleanup_failed/);
+    assert.equal(snapshot.running.length, 1);
+    assert.equal(orchestrator.snapshot().running.length, 1);
+    assert.equal(
+      snapshot.recentEvents.some(
+        (event) => event.type === "poll_error" && event.message.includes("cleanup failed"),
+      ),
+      true,
+    );
+  } finally {
+    runtime.stop();
+  }
+});
+
 test("runtime aborts in-flight runs when reconciliation sees missing or unrouted issues", async () => {
   for (const mode of ["missing", "unrouted"] as const) {
     const root = await tempDir(`lorenz-runtime-${mode}-inert`);
@@ -655,6 +1396,144 @@ test("runtime stall reconciliation uses agents-level stall timeout defaults", as
   }
 });
 
+test("runtime stalled reconciliation does not record a stalled run when durable finish fails", async () => {
+  const issue = issueFixture("issue-stall-finish-failure", "MT-STALL-FINISH-FAILURE");
+  const workflow = workflowFixture();
+  workflow.settings.agents.codex.stallTimeoutMs = 50;
+  const store = new FailingFinishClaimStore(createState(), { ownerId: "stall-finish-failure" });
+  const orchestrator = new Orchestrator(workflow.settings, undefined, store);
+  assert.ok(orchestrator.claim(issue));
+  const running = orchestrator.snapshot().running[0];
+  assert.ok(running);
+  running.lastAgentTimestamp = new Date(Date.now() - 1_000);
+  const runtime = new LorenzRuntime(
+    runtimeOptions({
+      workflow,
+      orchestrator,
+      client: {
+        fetchCandidateIssues: async () => [],
+        fetchIssuesByIds: async () => [issue],
+      },
+    }),
+  );
+
+  await runtime.pollOnce({ dryRun: true });
+
+  const snapshot = runtime.snapshot();
+  assert.equal(snapshot.appStatus, "error");
+  assert.match(snapshot.poll.lastError ?? "", /claim_finish_failed/);
+  assert.equal(snapshot.runHistory.length, 0);
+  assert.equal(snapshot.running.length, 1);
+  assert.equal(
+    snapshot.recentEvents.some((event) => event.type === "run_stalled"),
+    false,
+  );
+});
+
+// This test modifies process.env.PATH to inject a fake ssh binary. It restores PATH in
+// the finally block and must run serially because process.env is process-wide.
+test("runtime does not stall a stale ensemble slot snapshot after its runner completes", async () => {
+  const issue = issueFixture("issue-ensemble-stall-race", "MT-ENSEMBLE-RACE");
+  const root = await tempDir("lorenz-runtime-ensemble-stall-race");
+  const workflow = workflowFixture(root);
+  workflow.settings.agent.ensembleSize = 2;
+  workflow.settings.agents.codex.stallTimeoutMs = 50;
+  workflow.settings.worker.sshTimeoutMs = 2_000;
+  const orchestrator = new Orchestrator(workflow.settings);
+  const controls = new Map<
+    number,
+    {
+      resolve: (value: RunResult) => void;
+      reject: (error: Error) => void;
+    }
+  >();
+  const runtime = new LorenzRuntime(
+    runtimeOptions({
+      workflow,
+      orchestrator,
+      client: {
+        fetchCandidateIssues: async () => [issue],
+        fetchIssuesByIds: async () => [issue],
+      },
+      runner: async ({ abortSignal, onUpdate, slotIndex }) => {
+        const slot = slotIndex ?? 0;
+        const workspace = path.join(root, `workspace-${slot}`);
+        onUpdate?.({
+          type: "workspace_prepared",
+          message: `workspace prepared at ${workspace}`,
+          workspacePath: workspace,
+        });
+        return await new Promise<RunResult>((resolve, reject) => {
+          controls.set(slot, { resolve, reject });
+          abortSignal?.addEventListener("abort", () => reject(new Error(`aborted slot ${slot}`)), {
+            once: true,
+          });
+        });
+      },
+    }),
+  );
+  const fakeBin = path.join(root, "bin");
+  const originalPath = process.env.PATH;
+  await writeExecutable(
+    path.join(fakeBin, "ssh"),
+    [
+      "#!/bin/sh",
+      'args="$*"',
+      'case "$args" in',
+      "*rev-parse*) sleep 0.15; printf '.git\\n'; exit 0 ;;",
+      "*rm\\ -f*) sleep 0.05; exit 0 ;;",
+      "*) exit 0 ;;",
+      "esac",
+      "",
+    ].join("\n"),
+  );
+
+  try {
+    await runtime.pollOnce();
+    await runtime.pollOnce();
+    await waitFor(() => controls.size === 2, 2_000);
+
+    const entries = orchestrator.snapshot().running;
+    assert.equal(entries.length, 2);
+    for (const entry of entries) {
+      entry.lastAgentTimestamp = new Date(Date.now() - 1_000);
+    }
+    const firstSlot = entries.find((entry) => entry.slotIndex === 0);
+    assert.ok(firstSlot);
+    firstSlot.workerHost = "worker-01";
+    firstSlot.workspacePath = "/remote/workspace-0";
+
+    process.env.PATH = `${fakeBin}:${originalPath ?? ""}`;
+    const stallPoll = runtime.pollOnce({ dryRun: true });
+    controls.get(1)?.resolve({
+      workspace: path.join(root, "workspace-1"),
+      turnCount: 1,
+      updates: [],
+      agentKind: "codex",
+      finalIssue: { ...issue, state: { name: "Todo", type: "unstarted" } },
+    });
+    await stallPoll;
+    await waitFor(
+      () => runtime.snapshot().runHistory.some((entry) => entry.slotIndex === 1),
+      2_000,
+    );
+
+    const snapshot = runtime.snapshot();
+    assert.deepEqual(
+      snapshot.runHistory.filter((entry) => entry.slotIndex === 1).map((entry) => entry.outcome),
+      ["success"],
+    );
+    assert.deepEqual(
+      snapshot.runHistory
+        .filter((entry) => entry.outcome === "stalled")
+        .map((entry) => entry.slotIndex),
+      [0],
+    );
+  } finally {
+    process.env.PATH = originalPath;
+    runtime.stop();
+  }
+});
 test("runtime does not record late success after stall reconciliation wins", async () => {
   const issue = issueFixture("issue-late-success", "MT-LATE-SUCCESS");
   const workflow = workflowFixture();
@@ -1029,13 +1908,15 @@ test("runtime stop does not record an in-flight run as a failure", async () => {
   await runtime.pollOnce();
   await waitFor(() => orchestrator.snapshot().running.length === 1, 1_000);
 
-  // Ctrl+C path: stop() aborts the in-flight run without releasing its slot.
+  // Ctrl+C path: stop() aborts the in-flight run, then settlement abandons the
+  // local claim without recording a run failure.
   runtime.stop();
   await waitFor(() => aborted, 1_000);
   // Let the runner's rejection propagate through runClaim's catch.
   await new Promise<void>((resolve) => setImmediate(resolve));
 
   const snapshot = runtime.snapshot();
+  assert.equal(snapshot.running.length, 0);
   assert.equal(
     snapshot.runHistory.some((entry) => entry.outcome === "failed"),
     false,
@@ -1044,6 +1925,281 @@ test("runtime stop does not record an in-flight run as a failure", async () => {
     snapshot.recentEvents.some((event) => event.type === "run_failed"),
     false,
   );
+});
+
+test("runtime stop keeps a claim owned until the runner settles", async () => {
+  const issue = issueFixture("issue-stop-settlement", "MT-STOP-SETTLEMENT");
+  const orchestrator = new Orchestrator(workflowFixture().settings);
+  let aborted = false;
+  let settleRunner: ((result: RunResult) => void) | undefined;
+  const runtime = new LorenzRuntime(
+    runtimeOptions({
+      workflow: workflowFixture(),
+      orchestrator,
+      client: {
+        fetchCandidateIssues: async () => [issue],
+        fetchIssuesByIds: async () => [issue],
+      },
+      runner: async ({ abortSignal }) =>
+        await new Promise<RunResult>((resolve) => {
+          settleRunner = resolve;
+          abortSignal?.addEventListener(
+            "abort",
+            () => {
+              aborted = true;
+            },
+            { once: true },
+          );
+        }),
+    }),
+  );
+
+  await runtime.pollOnce();
+  await waitFor(() => orchestrator.snapshot().running.length === 1, 1_000);
+
+  runtime.stop();
+  await waitFor(() => aborted, 1_000);
+  assert.equal(orchestrator.snapshot().running.length, 1);
+
+  settleRunner?.({
+    workspace: "/tmp/lorenz/MT-STOP-SETTLEMENT",
+    turnCount: 1,
+    updates: [],
+    agentKind: "codex",
+  });
+  await waitFor(() => orchestrator.snapshot().running.length === 0, 1_000);
+});
+
+test("runtime stop keeps claim owner heartbeat alive until stopped claim settles", async () => {
+  const issue = issueFixture("issue-stop-heartbeat", "MT-STOP-HEARTBEAT");
+  const workflow = workflowFixture();
+  const clock = manualClock();
+  const store = new CountingClaimStore(createState(), { ownerId: "runtime-stop-heartbeat" });
+  const orchestrator = new Orchestrator(workflow.settings, clock, store);
+  let aborted = false;
+  let settleRunner: ((result: RunResult) => void) | undefined;
+  const runtime = new LorenzRuntime(
+    runtimeOptions({
+      workflow,
+      clock,
+      orchestrator,
+      client: {
+        fetchCandidateIssues: async () => [issue],
+        fetchIssuesByIds: async () => [issue],
+      },
+      runner: async ({ abortSignal }) =>
+        await new Promise<RunResult>((resolve) => {
+          settleRunner = resolve;
+          abortSignal?.addEventListener(
+            "abort",
+            () => {
+              aborted = true;
+            },
+            { once: true },
+          );
+        }),
+    }),
+  );
+
+  await runtime.pollOnce();
+  await waitFor(() => orchestrator.snapshot().running.length === 1, 1_000);
+  assert.equal(store.heartbeats, 1);
+
+  runtime.stop();
+  await waitFor(() => aborted, 1_000);
+  assert.equal(orchestrator.snapshot().running.length, 1);
+
+  clock.advance(10_000);
+  clock.fireTimer();
+  assert.equal(store.heartbeats, 2);
+
+  settleRunner?.({
+    workspace: "/tmp/lorenz/MT-STOP-HEARTBEAT",
+    turnCount: 1,
+    updates: [],
+    agentKind: "codex",
+  });
+  await waitFor(() => orchestrator.snapshot().running.length === 0, 1_000);
+
+  clock.advance(10_000);
+  clock.fireTimer();
+  assert.equal(store.heartbeats, 2);
+});
+
+test("runtime stop settlement records abandon failures without stranding heartbeat cleanup", async () => {
+  const issue = issueFixture("issue-stop-abandon-failure", "MT-STOP-ABANDON-FAILURE");
+  const workflow = workflowFixture();
+  const clock = manualClock();
+  const store = new FailingAbandonClaimStore(createState(), {
+    ownerId: "runtime-stop-abandon-failure",
+  });
+  const orchestrator = new Orchestrator(workflow.settings, clock, store);
+  let aborted = false;
+  let settleRunner: ((result: RunResult) => void) | undefined;
+  const runtime = new LorenzRuntime(
+    runtimeOptions({
+      workflow,
+      clock,
+      orchestrator,
+      client: {
+        fetchCandidateIssues: async () => [issue],
+        fetchIssuesByIds: async () => [issue],
+      },
+      runner: async ({ abortSignal }) =>
+        await new Promise<RunResult>((resolve) => {
+          settleRunner = resolve;
+          abortSignal?.addEventListener(
+            "abort",
+            () => {
+              aborted = true;
+            },
+            { once: true },
+          );
+        }),
+    }),
+  );
+
+  await runtime.pollOnce();
+  await waitFor(() => orchestrator.snapshot().running.length === 1, 1_000);
+  assert.equal(store.heartbeats, 1);
+
+  runtime.stop();
+  await waitFor(() => aborted, 1_000);
+
+  settleRunner?.({
+    workspace: "/tmp/lorenz/MT-STOP-ABANDON-FAILURE",
+    turnCount: 1,
+    updates: [],
+    agentKind: "codex",
+  });
+  await waitFor(() => runtime.snapshot().appStatus === "error", 1_000);
+
+  assert.match(runtime.snapshot().poll.lastError ?? "", /claim_abandon_failed/);
+  assert.equal(
+    runtime.snapshot().recentEvents.some((event) => event.message.includes("abandon failed")),
+    true,
+  );
+
+  clock.advance(10_000);
+  clock.fireTimer();
+  assert.equal(store.heartbeats, 1);
+});
+
+test("runtime aborts active claims when periodic owner heartbeat fails", async () => {
+  const issue = issueFixture("issue-periodic-heartbeat-failure", "MT-PERIODIC-HEARTBEAT-FAILURE");
+  const workflow = workflowFixture();
+  const clock = manualClock();
+  const store = new FailingPeriodicHeartbeatClaimStore(createState(), {
+    ownerId: "runtime-periodic-heartbeat",
+  });
+  const orchestrator = new Orchestrator(workflow.settings, clock, store);
+  let aborted = false;
+  let settleRunner: ((result: RunResult) => void) | undefined;
+  const runtime = new LorenzRuntime(
+    runtimeOptions({
+      workflow,
+      clock,
+      orchestrator,
+      client: {
+        fetchCandidateIssues: async () => [issue],
+        fetchIssuesByIds: async () => [issue],
+      },
+      runner: async ({ abortSignal }) =>
+        await new Promise<RunResult>((resolve) => {
+          settleRunner = resolve;
+          abortSignal?.addEventListener(
+            "abort",
+            () => {
+              aborted = true;
+            },
+            { once: true },
+          );
+        }),
+    }),
+  );
+
+  try {
+    await runtime.pollOnce();
+    await waitFor(() => orchestrator.snapshot().running.length === 1, 1_000);
+    assert.equal(store.heartbeats, 1);
+
+    clock.advance(10_000);
+    clock.fireTimer();
+    await settle(0);
+    assert.equal(store.heartbeats, 2);
+    assert.equal(aborted, true);
+    assert.equal(orchestrator.snapshot().running.length, 1);
+    assert.equal(runtime.snapshot().appStatus, "error");
+    assert.match(runtime.snapshot().poll.lastError ?? "", /claim_owner_heartbeat_failed/);
+  } finally {
+    settleRunner?.({
+      workspace: "/tmp/lorenz/MT-PERIODIC-HEARTBEAT-FAILURE",
+      turnCount: 1,
+      updates: [],
+      agentKind: "codex",
+    });
+    await waitFor(() => orchestrator.snapshot().running.length === 0, 1_000);
+    assert.equal(runtime.snapshot().appStatus, "error");
+    assert.match(runtime.snapshot().poll.lastError ?? "", /claim_owner_heartbeat_failed/);
+    clock.advance(10_000);
+    clock.fireTimer();
+    assert.equal(store.heartbeats, 2);
+  }
+});
+
+test("runtime heartbeat failure aborts active claims when failure-event snapshotting fails", async () => {
+  const issue = issueFixture("issue-heartbeat-snapshot-failure", "MT-HEARTBEAT-SNAPSHOT-FAILURE");
+  const workflow = workflowFixture();
+  const clock = manualClock();
+  const store = new SnapshotFailingPeriodicHeartbeatClaimStore(createState(), {
+    ownerId: "runtime-heartbeat-snapshot-failure",
+  });
+  const orchestrator = new Orchestrator(workflow.settings, clock, store);
+  let aborted = false;
+  let settleRunner: ((result: RunResult) => void) | undefined;
+  const runtime = new LorenzRuntime(
+    runtimeOptions({
+      workflow,
+      clock,
+      orchestrator,
+      client: {
+        fetchCandidateIssues: async () => [issue],
+        fetchIssuesByIds: async () => [issue],
+      },
+      runner: async ({ abortSignal }) =>
+        await new Promise<RunResult>((resolve) => {
+          settleRunner = resolve;
+          abortSignal?.addEventListener(
+            "abort",
+            () => {
+              aborted = true;
+            },
+            { once: true },
+          );
+        }),
+    }),
+  );
+
+  try {
+    await runtime.pollOnce();
+    await waitFor(() => orchestrator.snapshot().running.length === 1, 1_000);
+
+    clock.advance(10_000);
+    clock.fireTimer();
+    await settle(0);
+
+    assert.equal(aborted, true);
+    assert.equal(runtime.snapshot().appStatus, "error");
+    assert.match(runtime.snapshot().poll.lastError ?? "", /claim_owner_heartbeat_failed/);
+  } finally {
+    settleRunner?.({
+      workspace: "/tmp/lorenz/MT-HEARTBEAT-SNAPSHOT-FAILURE",
+      turnCount: 1,
+      updates: [],
+      agentKind: "codex",
+    });
+    await waitFor(() => orchestrator.snapshot().running.length === 0, 1_000);
+  }
 });
 
 test("runtime appends operational events to the configured log file", async () => {
@@ -1104,6 +2260,67 @@ test("runtime reconciliation removes terminal retry workspaces before polling", 
   assert.equal(cleanupIssues[0]?.id, doneIssue.id);
   assert.equal(runtime.snapshot().recentEvents[0]?.type, "dry_run");
   assert.ok(runtime.snapshot().recentEvents.some((event) => event.type === "workspace_cleanup"));
+});
+
+test("runtime reconciliation preserves retry metadata for active issues routed to another worker", async () => {
+  const root = await tempDir("lorenz-runtime-routed-retry");
+  const settings = parseConfig({
+    tracker: {
+      kind: "linear",
+      api_key: "linear-token",
+      project_slug: "mono",
+      dispatch: { only_routes: ["backend"] },
+      active_states: ["Todo"],
+      terminal_states: ["Done"],
+    },
+    polling: { interval_ms: 5 },
+    workspace: { root },
+  });
+  const workflow: WorkflowDefinition = {
+    path: "/tmp/WORKFLOW.md",
+    config: {},
+    promptTemplate: "Issue {{ issue.identifier }}",
+    settings,
+  };
+  const retryIssue = {
+    ...issueFixture("issue-routed-retry", "MT-ROUTED-RETRY"),
+    labels: ["symphony:frontend"],
+  };
+  const now = Date.now();
+  const orchestrator = new Orchestrator(settings);
+  orchestrator.state.retryAttempts.set(slotKey(retryIssue.id, 0), {
+    issueId: retryIssue.id,
+    identifier: retryIssue.identifier,
+    issueUrl: retryIssue.url ?? null,
+    attempt: 2,
+    monotonicDeadlineMs: now - 1,
+    dueAtIso: new Date(now - 1).toISOString(),
+    slotIndex: 0,
+    workerHost: "worker-a",
+    workspacePath: "/tmp/lorenz/MT-ROUTED-RETRY",
+    error: "previous run failed",
+  });
+
+  const runtime = new LorenzRuntime(
+    runtimeOptions({
+      workflow,
+      orchestrator,
+      client: {
+        fetchCandidateIssues: async () => [],
+        fetchIssuesByIds: async (ids) => (ids.includes(retryIssue.id) ? [retryIssue] : []),
+      },
+    }),
+  );
+
+  await runtime.pollOnce({ dryRun: true });
+
+  const retry = orchestrator.snapshot().retrying[0];
+  assert.equal(retry?.issueId, retryIssue.id);
+  assert.equal(retry?.attempt, 2);
+  assert.equal(
+    runtime.snapshot().recentEvents.some((event) => event.type === "run_reconciled"),
+    false,
+  );
 });
 
 test("runtime reconcile refreshes the running stage when the tracker state changes", async () => {
@@ -1513,7 +2730,6 @@ test("worker pool: leased workerHost is written back and passed to the runner; h
           workspace: "/tmp/lorenz/MT-BP-LEASE",
           turnCount: 1,
           updates: [],
-          resumeId: "resume-bp",
           agentKind: "codex",
           finalIssue: doneIssue,
         };
@@ -1582,7 +2798,6 @@ test("worker pool: the bound slot's mcpEndpoint is threaded into the runner", as
           workspace: "/tmp/lorenz/MT-BP-ENDPOINT",
           turnCount: 1,
           updates: [],
-          resumeId: "resume-bp-endpoint",
           agentKind: "claude",
           finalIssue: doneIssue,
         };
@@ -1654,7 +2869,6 @@ test("worker pool: the FULL workflow Settings (with server.port) is threaded to 
         workspace: "/tmp/lorenz/MT-BP-FULL-SETTINGS",
         turnCount: 1,
         updates: [],
-        resumeId: "resume-bp-full-settings",
         agentKind: "claude",
         finalIssue: doneIssue,
       }),
@@ -1692,7 +2906,6 @@ test("worker pool: a null-manager slot threads a null mcpEndpoint into the runne
           workspace: "/tmp/lorenz/MT-BP-NULL",
           turnCount: 1,
           updates: [],
-          resumeId: "resume-bp-null",
           agentKind: "codex",
           finalIssue: doneIssue,
         };
@@ -1703,8 +2916,7 @@ test("worker pool: a null-manager slot threads a null mcpEndpoint into the runne
   await runtime.start({ once: true, dryRun: false });
 
   // The bare-workerPool path wraps the pool in the null-endpoint passthrough
-  // coordinator, so the slot carries mcpEndpoint=null and the runner is threaded
-  // null (acp then acquires/releases its own endpoint - byte-identical).
+  // coordinator, so the slot carries mcpEndpoint=null and the runner receives null.
   assert.equal(runnerEndpoint, null);
 });
 
@@ -1839,7 +3051,6 @@ test("worker pool: an ACP/claude run STILL opens its per-run endpoint (the per-r
           workspace: "/tmp/lorenz/MT-BP-CLAUDE-EP",
           turnCount: 1,
           updates: [],
-          resumeId: "resume-claude-ep",
           agentKind: "claude",
           finalIssue: doneIssue,
         };
@@ -1899,7 +3110,6 @@ test("worker pool: a claim is a host-less reservation between claim and acquire,
         workspace: "/tmp/lorenz/MT-BP-RESERVED",
         turnCount: 1,
         updates: [],
-        resumeId: "resume",
         agentKind: "codex",
         finalIssue: doneIssue,
       }),
@@ -1963,7 +3173,6 @@ test("worker pool: acquire uses the prior real workerHost as affinityKey on retr
         workspace: "/tmp/lorenz/MT-BP-AFFINITY",
         turnCount: 1,
         updates: [],
-        resumeId: "resume",
         agentKind: "codex",
         finalIssue: doneIssue,
       }),
@@ -2025,6 +3234,110 @@ test("worker pool: no_capacity cancels the reservation, skips the runner, record
   );
 });
 
+test("worker pool: no_capacity reports retry timer sync failures after reservation cleanup", async () => {
+  const issue = issueFixture("issue-bp-nocap-retry-sync-failure", "MT-BP-NOCAP-SYNC");
+  const workflow = workerPoolWorkflowFixture();
+  const store = new RetrySyncFailingCancelClaimStore(createState(), {
+    ownerId: "runtime-cancel-retry-sync-failure",
+  });
+  const orchestrator = new Orchestrator(workflow.settings, undefined, store, {
+    governs: () => true,
+    canAcquire: () => true,
+  });
+  let runnerCalls = 0;
+  const workerPool = makeFakeWorkerPool({
+    result: { status: "no_capacity", reason: "acquire_timeout" },
+  });
+  const runtime = new LorenzRuntime(
+    runtimeOptions({
+      workflow,
+      orchestrator,
+      workerPool,
+      client: {
+        fetchCandidateIssues: async () => [issue],
+        fetchIssuesByIds: async () => [issue],
+      },
+      runner: async () => {
+        runnerCalls += 1;
+        throw new Error("runner should not run on no_capacity");
+      },
+    }),
+  );
+
+  await runtime.start({ once: true, dryRun: false });
+
+  const snapshot = runtime.snapshot();
+  assert.equal(runnerCalls, 0);
+  assert.equal(snapshot.appStatus, "error");
+  assert.match(snapshot.poll.lastError ?? "", /retry_timer_sync_failed/);
+  assert.equal(snapshot.runHistory.length, 0);
+  assert.equal(snapshot.running.length, 0);
+  assert.equal(snapshot.reserving.length, 0);
+  assert.equal(orchestrator.state.claimed.size, 0);
+  assert.equal(orchestrator.state.running.size, 0);
+  assert.equal(orchestrator.state.reserved.size, 0);
+  assert.equal(
+    snapshot.recentEvents.some((event) => event.message.includes("manual snapshot failure")),
+    true,
+  );
+  assert.equal(
+    snapshot.recentEvents.some((event) => event.message.includes("worker_host_capacity")),
+    true,
+  );
+});
+
+test("worker pool: no_capacity releases active handle when durable reservation cancel fails", async () => {
+  const issue = issueFixture("issue-bp-cancel-failure", "MT-BP-CANCEL-FAILURE");
+  const workflow = workerPoolWorkflowFixture();
+  const clock = manualClock();
+  const store = new FailingCancelClaimStore(createState(), {
+    ownerId: "runtime-cancel-failure",
+  });
+  const orchestrator = new Orchestrator(workflow.settings, clock, store, {
+    governs: () => true,
+    canAcquire: () => true,
+  });
+  let runnerCalls = 0;
+  const workerPool = makeFakeWorkerPool({
+    result: { status: "no_capacity", reason: "acquire_timeout" },
+  });
+  const runtime = new LorenzRuntime(
+    runtimeOptions({
+      workflow,
+      clock,
+      orchestrator,
+      workerPool,
+      client: {
+        fetchCandidateIssues: async () => [issue],
+        fetchIssuesByIds: async () => [issue],
+      },
+      runner: async () => {
+        runnerCalls += 1;
+        throw new Error("runner should not run on no_capacity");
+      },
+    }),
+  );
+
+  await runtime.start({ once: true, dryRun: false });
+
+  const snapshot = runtime.snapshot();
+  assert.equal(runnerCalls, 0);
+  assert.equal(store.heartbeats, 1);
+  assert.equal(snapshot.appStatus, "error");
+  assert.match(snapshot.poll.lastError ?? "", /claim_cancel_failed/);
+  assert.equal(snapshot.runHistory.length, 0);
+  assert.equal(snapshot.running.length, 0);
+  assert.equal(snapshot.reserving.length, 1);
+  assert.equal(
+    snapshot.recentEvents.some((event) => event.message.includes("cancel failed")),
+    true,
+  );
+
+  clock.advance(10_000);
+  clock.fireTimer();
+  assert.equal(store.heartbeats, 1);
+});
+
 test("worker pool: no_capacity restores the consumed retry entry so affinity and attempt survive", async () => {
   const issue = issueFixture("issue-bp-nocap-retry", "MT-BP-NOCAP-RETRY");
   const doneIssue: Issue = { ...issue, state: "Done", stateType: "completed" };
@@ -2068,7 +3381,6 @@ test("worker pool: no_capacity restores the consumed retry entry so affinity and
         workspace: "/tmp/lorenz/MT-BP-NOCAP-RETRY",
         turnCount: 1,
         updates: [],
-        resumeId: "resume",
         agentKind: "codex",
         finalIssue: doneIssue,
       }),
@@ -2141,7 +3453,6 @@ test("worker pool: acquire errors rearm a restored due retry timer", async () =>
         workspace: "/tmp/lorenz/MT-BP-ACQ-ERR-RETRY",
         turnCount: 1,
         updates: [],
-        resumeId: "resume",
         agentKind: "codex",
         finalIssue: doneIssue,
       }),
@@ -2199,7 +3510,6 @@ test("worker pool: freed capacity nudges the poll so a capacity-blocked issue re
         workspace: "/tmp/lorenz/MT-BP-NUDGE",
         turnCount: 1,
         updates: [],
-        resumeId: "resume",
         agentKind: "codex",
         finalIssue: doneIssue,
       }),
@@ -2267,7 +3577,6 @@ test("worker pool: a thrown acquire rejection cancels the reservation, skips the
           workspace: "/tmp/lorenz/MT-BP-ACQ-THROW",
           turnCount: 1,
           updates: [],
-          resumeId: "resume-acq",
           agentKind: "codex",
           finalIssue: doneIssue,
         };
@@ -2327,7 +3636,6 @@ test("worker pool: success path releases the lease as healthy", async () => {
         workspace: "/tmp/lorenz/MT-BP-SUCCESS",
         turnCount: 1,
         updates: [],
-        resumeId: "resume",
         agentKind: "codex",
         finalIssue: doneIssue,
       }),
@@ -2539,7 +3847,6 @@ test("worker pool: a stall-aborted run that RESOLVES SUCCESSFULLY still poisons 
       workspace: path.join(root, "workspace"),
       turnCount: 1,
       updates: [],
-      resumeId: "stall-then-success",
       agentKind: "codex",
       finalIssue: doneIssue,
     });
@@ -2639,7 +3946,6 @@ test("worker pool: a stale-generation late resolve is a lease no-op (leaseId gua
       workspace: path.join(root, "workspace-1"),
       turnCount: 1,
       updates: [],
-      resumeId: "stale-late",
       agentKind: "codex",
       finalIssue: issue,
     });
@@ -2690,7 +3996,6 @@ test("worker pool: a reserving (in-acquire) slot is never stall-finished and rec
         workspace: "/tmp/lorenz/MT-BP-RESERVING-STALL",
         turnCount: 1,
         updates: [],
-        resumeId: "resume",
         agentKind: "codex",
         finalIssue: doneIssue,
       }),
@@ -2806,6 +4111,61 @@ test("worker pool: a bind after cleanup releases the worker healthy and skips as
   }
 });
 
+test("worker pool: bind checkpoint failure releases the acquired worker and clears the reservation", async () => {
+  const issue = issueFixture("issue-bp-bind-failure", "MT-BP-BIND-FAILURE");
+  const workflow = workerPoolWorkflowFixture();
+  const store = new FailingBindClaimStore(createState(), { ownerId: "bind-failure-store" });
+  const orchestrator = new Orchestrator(workflow.settings, undefined, store, {
+    governs: () => true,
+    canAcquire: () => true,
+  });
+  const lease = makeFakeLease({ workerHost: "fake://worker-bind-failure" });
+  const workerPool = makeFakeWorkerPool({ lease });
+  let runnerCalls = 0;
+  const runtime = new LorenzRuntime(
+    runtimeOptions({
+      workflow,
+      orchestrator,
+      workerPool,
+      client: {
+        fetchCandidateIssues: async () => [issue],
+        fetchIssuesByIds: async () => [issue],
+      },
+      runner: async () => {
+        runnerCalls += 1;
+        throw new Error("runner should not start after bind failure");
+      },
+    }),
+  );
+
+  await runtime.pollOnce({ waitForRuns: true });
+
+  assert.deepEqual(lease.settles, [{ kind: "release", arg: "healthy" }]);
+  assert.equal(runnerCalls, 0);
+  assert.equal(orchestrator.snapshot().reserving.length, 0);
+  assert.equal(orchestrator.snapshot().running.length, 0);
+  const snapshot = runtime.snapshot();
+  assert.equal(snapshot.appStatus, "error");
+  assert.match(snapshot.poll.lastError ?? "", /claim_bind_failed/);
+  assert.equal(
+    snapshot.recentEvents.some(
+      (event) =>
+        event.type === "dispatch_skipped" && event.message.includes("bind_reservation_error"),
+    ),
+    true,
+  );
+  assert.equal(
+    snapshot.recentEvents.some(
+      (event) => event.type === "poll_error" && event.message.includes("bind failed"),
+    ),
+    true,
+  );
+  assert.equal(
+    snapshot.recentEvents.some((event) => event.type === "run_started"),
+    false,
+  );
+});
+
 test("worker pool: onUpdate triggers a lease heartbeat", async () => {
   const issue = issueFixture("issue-bp-heartbeat", "MT-BP-HEARTBEAT");
   const doneIssue: Issue = { ...issue, state: "Done", stateType: "completed" };
@@ -2820,13 +4180,12 @@ test("worker pool: onUpdate triggers a lease heartbeat", async () => {
         fetchIssuesByIds: async () => [issue],
       },
       runner: async ({ onUpdate }) => {
-        onUpdate?.({ type: "turn_completed", sessionId: "s", resumeId: "r" });
-        onUpdate?.({ type: "turn_completed", sessionId: "s", resumeId: "r" });
+        onUpdate?.({ type: "turn_completed", sessionId: "s" });
+        onUpdate?.({ type: "turn_completed", sessionId: "s" });
         return {
           workspace: "/tmp/lorenz/MT-BP-HEARTBEAT",
           turnCount: 2,
           updates: [],
-          resumeId: "r",
           agentKind: "codex",
           finalIssue: doneIssue,
         };
@@ -2975,7 +4334,6 @@ test("worker pool: a reload that disables the pool resumes dispatch via the loca
           workspace: "/tmp/lorenz/MT-BP-DISABLED-RESUME",
           turnCount: 1,
           updates: [],
-          resumeId: "resume",
           agentKind: "codex",
           finalIssue: doneIssue,
         };
@@ -3041,7 +4399,6 @@ test("worker pool: a reload that re-enables the pool governs again and acquires 
           workspace: "/tmp/lorenz/MT-BP-REENABLE",
           turnCount: 1,
           updates: [],
-          resumeId: "resume",
           agentKind: "codex",
           finalIssue: doneIssue,
         };
@@ -3252,8 +4609,7 @@ test("worker pool: a reload to max_in_flight>1 WITH co_residence + per-run-endpo
 });
 
 test("worker pool: a default (slotsPerMachine=1) reload applies unchanged through the gate", async () => {
-  // The byte-identical default path: slotsPerMachine stays 1, the gate never
-  // triggers, the reload applies and reconciles exactly as before.
+  // With the default single-slot shape, the gate does not trigger and the reload applies.
   const issue = issueFixture("issue-bp-reload-default", "MT-BP-RELOAD-DEFAULT");
   const firstWorkflow = workerPoolWorkflowFixture();
   const secondWorkflow = workerPoolWorkflowFixture(
@@ -3387,7 +4743,7 @@ test("worker pool: drainWorkerPool resolves as a no-op when no pool is configure
   await runtime.drainWorkerPool();
 });
 
-test("worker pool undefined: byte-identical regression (acquire and classifier never invoked)", async () => {
+test("worker pool undefined: static path does not acquire or classify worker leases", async () => {
   const issue = issueFixture("issue-no-bp", "MT-NO-BP");
   const doneIssue: Issue = { ...issue, state: "Done", stateType: "completed" };
   let runnerWorkerHost: string | null | undefined = "unset";
@@ -3404,7 +4760,6 @@ test("worker pool undefined: byte-identical regression (acquire and classifier n
           workspace: "/tmp/lorenz/MT-NO-BP",
           turnCount: 1,
           updates: [],
-          resumeId: "resume",
           agentKind: "codex",
           finalIssue: doneIssue,
         };
@@ -3504,7 +4859,7 @@ test("runtime reconcile still passes a real workerHost to remote workspace clean
   assert.equal(observedWorkerHost, "ssh://worker-real");
 });
 
-test("runtime reconcile of a reserved issue cancels the reservation without a remote resume-state delete", async () => {
+test("runtime reconcile of a reserved issue cancels the reservation without remote cleanup", async () => {
   const workflow = workflowFixture();
   const orchestrator = new Orchestrator(workflow.settings, undefined, undefined, {
     governs: () => true,
@@ -3515,10 +4870,8 @@ test("runtime reconcile of a reserved issue cancels the reservation without a re
   assert.equal(claimed?.kind, "reserved");
 
   // Non-terminal but inactive (state not in active_states, not terminal) -> the
-  // reconciler cleans up the issue. A reservation has no workspace (no agent ever
-  // started), so there is no resume state to invalidate and no host to SSH to.
+  // reconciler cleans up the issue. A reservation has no workspace and no host to SSH to.
   const canceledIssue: Issue = { ...issue, state: "Canceled", stateType: "canceled" };
-  let deleteCalls = 0;
   const runtime = new LorenzRuntime(
     runtimeOptions({
       workflow,
@@ -3527,15 +4880,11 @@ test("runtime reconcile of a reserved issue cancels the reservation without a re
         fetchCandidateIssues: async () => [],
         fetchIssuesByIds: async () => [canceledIssue],
       },
-      deleteResumeState: async () => {
-        deleteCalls += 1;
-      },
     }),
   );
 
   await runtime.pollOnce({ dryRun: true });
 
-  assert.equal(deleteCalls, 0);
   assert.equal(orchestrator.state.reserved.size, 0);
   assert.equal(orchestrator.state.claimed.size, 0);
   assert.equal(

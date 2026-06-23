@@ -250,21 +250,31 @@ async function pollOnceWithFakeClock(
   // Consecutive full microtask drains with no progress and no pending timer:
   // the run is stalled. A small bound keeps stall detection near-instant while
   // tolerating multi-stage immediately-resolving promise chains.
+  const stallDeadlineMs = stall.timeoutMs > 0 ? clock.monotonicMs() + stall.timeoutMs : null;
+  const throwStallError = (): never => {
+    runtime.stop();
+    void poll.catch(() => {});
+    throw new Error(
+      stall.timeoutMs > 0
+        ? `sandbox poll tick ${stall.tick} exceeded stall timeout of ${stall.timeoutMs}ms while waiting for runs`
+        : `sandbox poll tick ${stall.tick} stalled with no pending timers`,
+    );
+  };
   let idleFlushes = 0;
   for (let guard = 0; guard < 1_000_000 && !settled; guard++) {
     await new Promise((resolve) => setTimeout(resolve, 0));
     if (settled) break;
+    if (stallDeadlineMs !== null && clock.monotonicMs() >= stallDeadlineMs) {
+      throwStallError();
+    }
     if (clock.hasPending()) {
       idleFlushes = 0;
       await clock.fireNext();
+      if (stallDeadlineMs !== null && clock.monotonicMs() >= stallDeadlineMs && !settled) {
+        throwStallError();
+      }
     } else if (++idleFlushes > 3) {
-      runtime.stop();
-      void poll.catch(() => {});
-      throw new Error(
-        stall.timeoutMs > 0
-          ? `sandbox poll tick ${stall.tick} exceeded stall timeout of ${stall.timeoutMs}ms while waiting for runs`
-          : `sandbox poll tick ${stall.tick} stalled with no pending timers`,
-      );
+      throwStallError();
     }
   }
 

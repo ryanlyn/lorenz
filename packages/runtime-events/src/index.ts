@@ -118,6 +118,20 @@ export interface RuntimeReservingEntry {
   reservedAtIso: string;
 }
 
+export interface RuntimeClaimStoreStatus {
+  kind: string;
+  ownerId: string;
+  capabilities: {
+    crashRecovery: boolean;
+    sharedAcrossProcesses: boolean;
+    retryDurability: boolean;
+  };
+  hydratedAt: string;
+  transactionsApplied: number;
+  lastOperation: string | null;
+  lastCheckpointAt: string | null;
+}
+
 export interface RuntimeSnapshot {
   appStatus: RuntimeAppStatus;
   workflowPath: string;
@@ -137,6 +151,7 @@ export interface RuntimeSnapshot {
   runHistory: RuntimeRunHistoryEntry[];
   usageTotals: UsageTotals;
   rateLimits: unknown;
+  claimStore?: RuntimeClaimStoreStatus | undefined;
   logFile: string | null;
   recentEvents: RuntimeEvent[];
 }

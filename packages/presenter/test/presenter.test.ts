@@ -12,6 +12,19 @@ test("presenter preserves blocked dispatches, retry errors, run costs, retries, 
   const state = statePayload(snapshot);
   const counts = state.counts as Record<string, unknown>;
   assert.equal(counts.blocked, 1);
+  assert.deepEqual(state.claim_store, {
+    kind: "memory",
+    owner_id: "presenter-test",
+    capabilities: {
+      crash_recovery: false,
+      shared_across_processes: false,
+      retry_durability: false,
+    },
+    hydrated_at: "2026-05-06T00:00:00.000Z",
+    transactions_applied: 4,
+    last_operation: "finish",
+    last_checkpoint_at: "2026-05-06T00:00:05.000Z",
+  });
   assert.deepEqual((state.running as any[])[0] as Record<string, unknown>, {
     issue_id: "running-1",
     issue_identifier: "MT-RUNNING",
@@ -298,6 +311,19 @@ function snapshotFixture(): RuntimeSnapshot {
     ],
     usageTotals: { inputTokens: 8, outputTokens: 7, totalTokens: 15, secondsRunning: 12 },
     rateLimits: null,
+    claimStore: {
+      kind: "memory",
+      ownerId: "presenter-test",
+      capabilities: {
+        crashRecovery: false,
+        sharedAcrossProcesses: false,
+        retryDurability: false,
+      },
+      hydratedAt: "2026-05-06T00:00:00.000Z",
+      transactionsApplied: 4,
+      lastOperation: "finish",
+      lastCheckpointAt: "2026-05-06T00:00:05.000Z",
+    },
     logFile: "/tmp/lorenz.log",
     recentEvents: [],
   };

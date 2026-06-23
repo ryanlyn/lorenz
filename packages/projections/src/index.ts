@@ -29,6 +29,7 @@ export class ProjectionActor {
       })),
       usageTotals: { ...input.usageTotals },
       rateLimits: input.rateLimits,
+      ...(input.claimStore ? { claimStore: { ...input.claimStore } } : {}),
       logFile: input.logFile,
       recentEvents: this.recentEvents.map((event) => ({ ...event })),
     };

@@ -6,13 +6,20 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
-    ".": "./dist/index.js"
+    ".": "./dist/index.js",
+    "./sqlite": "./dist/sqlite.js",
+    "./turso": "./dist/turso.js"
   },
   "dependencies": {
     "@lorenz/config": "workspace:*",
     "@lorenz/dispatch": "workspace:*",
     "@lorenz/domain": "workspace:*",
     "@lorenz/issue": "workspace:*",
-    "@lorenz/policies": "workspace:*"
+    "@lorenz/policies": "workspace:*",
+    "@tursodatabase/database": "catalog:",
+    "better-sqlite3": "catalog:"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "catalog:"
   }
 }

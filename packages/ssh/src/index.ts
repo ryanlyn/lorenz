@@ -35,6 +35,7 @@ export interface SshRunOptions {
   timeoutMs?: number | undefined;
   stderrToStdout?: boolean | undefined;
   abortSignal?: AbortSignal | undefined;
+  sshExecutablePath?: string | undefined;
 }
 
 export interface SshRunResult {
@@ -64,6 +65,7 @@ export interface RemoteTcpPortWaitOptions {
   timeoutMs?: number | undefined;
   intervalMs?: number | undefined;
   attemptTimeoutMs?: number | undefined;
+  sshExecutablePath?: string | undefined;
 }
 
 export async function runSsh(
@@ -82,7 +84,7 @@ export async function runSsh(
     // with open pipes that block resolution until they exit naturally.
     // SIGTERM first to allow trap handlers / graceful shutdown; SIGKILL after 5s as fallback.
     // TODO - this may not be enough to ensure the remote ssh process cleans up its children
-    const subprocess = execa("ssh", sshArgs(host, command), {
+    const subprocess = execa(options.sshExecutablePath ?? "ssh", sshArgs(host, command), {
       reject: false,
       ...(options.stderrToStdout ? { all: true } : {}),
       stdin: "ignore",
@@ -206,6 +208,7 @@ export async function waitForRemoteTcpPort(
     try {
       const result = await runSsh(host, `: < /dev/tcp/127.0.0.1/${remotePort}`, {
         stderrToStdout: true,
+        sshExecutablePath: options.sshExecutablePath,
         timeoutMs: Math.min(attemptTimeoutMs, remainingMs),
       });
       if (result.status === 0) return;
