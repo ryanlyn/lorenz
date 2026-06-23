@@ -528,6 +528,7 @@ test("runAgentAttempt forwards a threaded mcpEndpoint into executor.startSession
   const lease = {
     url: "http://127.0.0.1:46999/claude-mcp",
     token: "threaded",
+    generation: 1,
     acpServer: () => ({ type: "http" as const, name: "threaded_endpoint", url: "", headers: [] }),
     release: async () => {},
   };

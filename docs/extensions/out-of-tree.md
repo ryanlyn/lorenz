@@ -4,6 +4,8 @@ This page is for an extension author who has a worker backend - a cloud API, a V
 
 The whole feature is one idea: `worker.worker_pool.driver` accepts a module specifier as well as a registered kind. A built-in kind (`fake`, `static-ssh`, `docker`) resolves through the registry. Anything else is dynamic-imported, shape-checked, and registered under the exact string you wrote.
 
+This page works the mechanism through the worker driver, but it is axis-generic. A tracker loads the same way from `tracker.kind` (with `defineTrackerProvider` / `assertTrackerProviderModule` and `TRACKER_SDK_VERSION`); the tool and agent-executor SDKs expose the same handshake. Read `worker_pool_driver` as the per-axis error prefix and `worker drivers` as the per-axis noun, and everything below holds for any axis whose config selector accepts a specifier.
+
 ## The module specifier
 
 `worker.worker_pool.driver` takes one of two grammars in a single field:

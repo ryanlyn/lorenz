@@ -1,4 +1,4 @@
-// STEP 3 (T3c): REAL N-per-machine multi-tenant co-residence.
+// REAL N-per-machine multi-tenant co-residence.
 //
 // This is the cross-cutting proof that `slotsPerMachine > 1` actually works
 // end-to-end through the REAL `DispatchCoordinator` over the REAL
@@ -107,14 +107,15 @@ function fakeDriverRegistry(): WorkerDriverRegistry {
 }
 
 // ---------------------------------------------------------------------------
-// The fake per-run McpEndpointManager. perRunEndpoint=true (so the coordinator
-// opens one endpoint per remote run and the tunnel-exhaustion ceiling is in
-// force). It mirrors the REAL `WorkerHostPool.openForRun` keying contract: the
-// remote port is allocated per `${workerHost}#${runKey}` key, so two runs with the
-// SAME key on one host would share a port (the production behaviour) while two runs
-// with DISTINCT keys get DISTINCT ports. `release()` is observable so a test can
-// prove the lease was closed exactly once (no orphaned token/server/tunnel) and a
-// distinct port per concurrent run proves per-run isolation.
+// The fake per-run McpEndpointManager. perRunClaimEnforcement=true (so the
+// coordinator opens one endpoint per remote run and the per-HOST tunnel-exhaustion
+// ceiling is in force). It models the REAL post-collapse contract: each run gets a
+// DISTINCT per-run lease (distinct claim KEY + distinct Token B), but co-resident
+// runs on ONE host SHARE a single reverse tunnel / remote PORT (one `ssh -R` per
+// host, runs distinguished by their claim, not by the port). `release()` is
+// observable so a test can prove each per-run lease is closed exactly once and a
+// SHARED port per host proves the tunnel collapse while DISTINCT keys/tokens prove
+// per-run claim isolation.
 // ---------------------------------------------------------------------------
 interface FakeEndpoint extends AgentMcpEndpointLease {
   readonly remotePort: number;
@@ -128,6 +129,8 @@ interface RecordingEndpointManager extends McpEndpointManager {
   readonly opened: FakeEndpoint[];
   /** Live endpoints (opened minus released). */
   liveCount(): number;
+  /** Distinct LIVE per-host tunnels (shared remote ports still open). */
+  liveTunnelCount(): number;
 }
 
 function makeDistinctPortManager(
@@ -135,26 +138,42 @@ function makeDistinctPortManager(
 ): RecordingEndpointManager {
   const opened: FakeEndpoint[] = [];
   let nextPort = 46_000;
+  // One shared reverse tunnel (remote port) per worker host: the per-HOST collapse.
+  const portByHost = new Map<string, number>();
   const isLocal = options.isLocal ?? ((workerHost: string) => workerHost.length === 0);
   return {
     opened,
-    perRunEndpoint: true,
+    perRunClaimEnforcement: true,
     liveCount(): number {
       return opened.filter((endpoint) => endpoint.released.count === 0).length;
+    },
+    liveTunnelCount(): number {
+      const hosts = new Set<string>();
+      for (const endpoint of opened) {
+        if (endpoint.released.count === 0) hosts.add(endpoint.workerHost);
+      }
+      return hosts.size;
     },
     async open(req): Promise<AgentMcpEndpointLease | null> {
       // Local host mints nothing (acp keeps its own endpoint), exactly like the
       // concrete per-run manager's host routing.
       if (isLocal(req.workerHost)) return null;
-      // Key exactly as WorkerHostPool.openForRun does (`${workerHost}#${runKey}`):
-      // the port is the run's tunnel identity, distinct per distinct key.
+      // Each run gets a DISTINCT claim key (`${workerHost}#${runKey}`) and token,
+      // but co-resident runs on one host SHARE the single per-host reverse tunnel /
+      // remote port - the port is the HOST's tunnel identity, the key/token is the
+      // RUN's claim identity.
       const key = `${req.workerHost}#${req.runKey}`;
-      const remotePort = nextPort;
-      nextPort += 1;
+      let remotePort = portByHost.get(req.workerHost);
+      if (remotePort === undefined) {
+        remotePort = nextPort;
+        nextPort += 1;
+        portByHost.set(req.workerHost, remotePort);
+      }
       const released = { count: 0 };
       const endpoint: FakeEndpoint = {
         url: `http://127.0.0.1:${remotePort}/mcp`,
         token: `tok-${key}`,
+        generation: 1,
         acpServer: () => ({ type: "http", name: "lorenz_linear", url: "", headers: [] }),
         remotePort,
         workerHost: req.workerHost,
@@ -232,15 +251,17 @@ test("two SAME-issue runs co-reside on ONE fake worker, each with a distinct per
   assert.equal(pool.snapshot().inFlight, 2);
   assert.equal(pool.snapshot().total, 1);
 
-  // Distinct per-run endpoints (distinct tunnel keys + distinct remote ports) and
-  // distinct issue-scoped runKeys (`${issueId}#${slotIndex}`): neither the tunnel
-  // nor the workspace is shared across the two co-resident same-issue slots.
+  // Per-HOST tunnel collapse: the two co-resident slots SHARE one reverse tunnel /
+  // remote port, but each holds a DISTINCT per-run claim (distinct key + token) and a
+  // distinct issue-scoped runKey (`${issueId}#${slotIndex}`). Runs are kept apart by
+  // their Token B claim, not by a per-run port; the workspace slot stays distinct.
   const epA = a.slot.mcpEndpoint as FakeEndpoint | null;
   const epB = b.slot.mcpEndpoint as FakeEndpoint | null;
   assert.ok(epA);
   assert.ok(epB);
   assert.notEqual(epA?.key, epB?.key);
-  assert.notEqual(epA?.remotePort, epB?.remotePort);
+  assert.notEqual(epA?.token, epB?.token);
+  assert.equal(epA?.remotePort, epB?.remotePort);
   assert.notEqual(a.slot.runKey, b.slot.runKey);
   assert.equal(a.slot.runKey, "issue-a#0");
   assert.equal(b.slot.runKey, "issue-a#1");
@@ -275,11 +296,11 @@ test("two CROSS-issue runs co-reside on ONE fake worker (multi-tenant), each wit
   const { pool, coordinator } = makeStack(poolSettings({ max: 1, slotsPerMachine: 2 }), manager);
 
   // Two DIFFERENT issues co-reside on one worker, each with an ISSUE-SCOPED runKey
-  // (`${issueId}#${slotIndex}`), so their per-run tunnel keys
-  // (`${workerHost}#${runKey}`) are distinct - the isolation guarantee the real
-  // WorkerHostPool.openForRun keying provides. Because the runKey is issue-scoped,
-  // even two cross-issue runs that BOTH chose slotIndex 0 get DISTINCT tunnel keys;
-  // here distinct slot indices also exercise distinct workspace slot suffixes.
+  // (`${issueId}#${slotIndex}`), so their per-run claim KEYS (`${workerHost}#${runKey}`)
+  // are distinct - the per-run Token B isolation the real per-run claim model provides.
+  // Because the runKey is issue-scoped, even two cross-issue runs that BOTH chose
+  // slotIndex 0 get DISTINCT claim keys; here distinct slot indices also exercise
+  // distinct workspace slot suffixes.
   const a = await coordinator.acquireRunSlot({ ...baseReq, issueId: "issue-a", slotIndex: 0 });
   const b = await coordinator.acquireRunSlot({ ...baseReq, issueId: "issue-b", slotIndex: 1 });
   assert.equal(a.status, "bound");
@@ -291,14 +312,16 @@ test("two CROSS-issue runs co-reside on ONE fake worker (multi-tenant), each wit
   assert.notEqual(a.slot.issueId, b.slot.issueId);
   assert.equal(pool.snapshot().inFlight, 2);
 
-  // Distinct per-run endpoints: distinct tunnel KEYS (`${workerHost}#${runKey}`)
-  // AND distinct remote ports, so neither tunnel is shared across the two tenants.
+  // Per-HOST tunnel collapse: distinct per-run claim KEYS + tokens
+  // (`${workerHost}#${runKey}`) but a SHARED reverse tunnel / remote port across the
+  // two co-resident tenants. The claim, not the port, isolates the runs.
   const epA = a.slot.mcpEndpoint as FakeEndpoint | null;
   const epB = b.slot.mcpEndpoint as FakeEndpoint | null;
   assert.ok(epA);
   assert.ok(epB);
   assert.notEqual(epA?.key, epB?.key);
-  assert.notEqual(epA?.remotePort, epB?.remotePort);
+  assert.notEqual(epA?.token, epB?.token);
+  assert.equal(epA?.remotePort, epB?.remotePort);
 
   // Per-issue accounting: each issue holds exactly one live slot.
   assert.equal(liveSlotsForIssue(coordinator, "issue-a"), 1);
@@ -492,14 +515,53 @@ test("a teardown recycle of a co-resident worker fails ALL its live slots CLEANL
 });
 
 // ---------------------------------------------------------------------------
-// The tunnel-exhaustion ceiling surfaces as a TYPED no_capacity (never a throw).
+// The per-HOST tunnel-exhaustion ceiling surfaces as a TYPED no_capacity (never a
+// throw). After the per-HOST collapse the ceiling counts DISTINCT HOSTS that hold a
+// reverse tunnel, NOT per-run endpoints - so a NEW host trips it while a co-resident
+// run on an already-tunneled host is exempt.
 // ---------------------------------------------------------------------------
 
-test("tunnel-exhaustion ceiling surfaces as a TYPED no_capacity ('tunnel_exhausted'), never an unhandled throw", async () => {
+test("per-host tunnel ceiling: opening a tunnel on a NEW host past maxConcurrentTunnels returns TYPED no_capacity ('tunnel_exhausted'), never a throw", async () => {
   const manager = makeDistinctPortManager();
-  // max=2 workers, slotsPerMachine=2, but a tunnel ceiling of 2 caps concurrent
-  // per-run tunnels - the 3rd remote run is over the ceiling.
-  const settings = poolSettings({ max: 2, slotsPerMachine: 2, maxConcurrentTunnels: 2 });
+  // slotsPerMachine=1 so each run lands on its OWN host (one tunnel per run here);
+  // a host ceiling of 2 caps concurrent per-host tunnels - the 3rd HOST is over it.
+  const settings = poolSettings({ max: 3, slotsPerMachine: 1, maxConcurrentTunnels: 2 });
+  const { pool, coordinator } = makeStack(settings, manager);
+
+  const a = await coordinator.acquireRunSlot({ ...baseReq, issueId: "issue-a", slotIndex: 0 });
+  const b = await coordinator.acquireRunSlot({ ...baseReq, issueId: "issue-b", slotIndex: 0 });
+  assert.equal(a.status, "bound");
+  assert.equal(b.status, "bound");
+  if (a.status !== "bound" || b.status !== "bound") return;
+  // Two distinct hosts hold two distinct reverse tunnels (the ceiling).
+  assert.notEqual(a.slot.workerHost, b.slot.workerHost);
+  assert.equal(manager.liveTunnelCount(), 2);
+
+  // A 3rd run on a 3rd host would open a 3rd tunnel, exceeding the host ceiling. It
+  // must surface as a TYPED no_capacity reason - NOT a throw out of acquireRunSlot.
+  const c = await coordinator.acquireRunSlot({ ...baseReq, issueId: "issue-c", slotIndex: 0 });
+  assert.equal(c.status, "no_capacity");
+  if (c.status !== "no_capacity") return;
+  assert.equal(c.reason, "tunnel_exhausted");
+  // No 3rd endpoint was opened (the ceiling short-circuits BEFORE the open).
+  assert.equal(manager.opened.length, 2);
+
+  // Freeing one host's tunnel drops the live host count below the ceiling so a new
+  // remote run on a fresh host binds again.
+  await a.slot.release("healthy");
+  assert.equal(manager.liveTunnelCount(), 1);
+  const d = await coordinator.acquireRunSlot({ ...baseReq, issueId: "issue-d", slotIndex: 0 });
+  assert.equal(d.status, "bound");
+
+  await teardown(pool);
+});
+
+test("per-host tunnel ceiling: a CO-RESIDENT run on an already-tunneled host is EXEMPT (the shared host tunnel is one budget unit)", async () => {
+  const manager = makeDistinctPortManager();
+  // slotsPerMachine=2 so two runs co-reside on one host SHARING its single tunnel.
+  // A host ceiling of 1 still admits BOTH co-resident runs (they consume ONE host
+  // tunnel) - the per-HOST collapse means the budget is one unit per host, not per run.
+  const settings = poolSettings({ max: 2, slotsPerMachine: 2, maxConcurrentTunnels: 1 });
   const { pool, coordinator } = makeStack(settings, manager);
 
   const a = await coordinator.acquireRunSlot({ ...baseReq, issueId: "issue-a", slotIndex: 0 });
@@ -507,23 +569,17 @@ test("tunnel-exhaustion ceiling surfaces as a TYPED no_capacity ('tunnel_exhaust
   assert.equal(a.status, "bound");
   assert.equal(b.status, "bound");
   if (a.status !== "bound" || b.status !== "bound") return;
-  // Two live tunnels (the ceiling).
+  // Both co-resided on ONE host sharing its single reverse tunnel: TWO per-run
+  // endpoints (claims) but ONE host tunnel - so the ceiling of 1 is NOT tripped.
+  assert.equal(a.slot.workerHost, b.slot.workerHost);
   assert.equal(manager.liveCount(), 2);
+  assert.equal(manager.liveTunnelCount(), 1);
 
-  // The 3rd remote run would open a 3rd tunnel, exceeding the ceiling. It must
-  // surface as a TYPED no_capacity reason - NOT a throw out of acquireRunSlot.
+  // A run that needs a tunnel on a SECOND host is over the host ceiling of 1.
   const c = await coordinator.acquireRunSlot({ ...baseReq, issueId: "issue-b", slotIndex: 0 });
   assert.equal(c.status, "no_capacity");
   if (c.status !== "no_capacity") return;
   assert.equal(c.reason, "tunnel_exhausted");
-  // No 3rd endpoint was opened (the ceiling short-circuits BEFORE the open).
-  assert.equal(manager.opened.length, 2);
-
-  // Freeing a tunnel drops the live count below the ceiling so a new remote run binds.
-  await a.slot.release("healthy");
-  assert.equal(manager.liveCount(), 1);
-  const d = await coordinator.acquireRunSlot({ ...baseReq, issueId: "issue-b", slotIndex: 0 });
-  assert.equal(d.status, "bound");
 
   await teardown(pool);
 });

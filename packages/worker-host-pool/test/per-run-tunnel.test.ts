@@ -38,7 +38,16 @@ beforeEach(() => {
   mockStartReverseTunnel.mockReset();
 });
 
-test("openForRun gives two runs on one host DISTINCT remote ports", async () => {
+// ---------------------------------------------------------------------------
+// Per-HOST tunnel collapse: one `ssh -R` reverse tunnel per worker host,
+// SHARED by every co-resident run on that host. Runs are kept apart by their
+// per-run Token B claim - NOT by the tunnel or its remote port - so two runs on
+// one host coalesce onto ONE tunnel (refcounted), rather than each owning a
+// distinct remote port. The host tunnel opens on the first run and closes only
+// at the last `closeForRun`.
+// ---------------------------------------------------------------------------
+
+test("openForRun coalesces two runs on ONE host onto a SINGLE shared tunnel/port", async () => {
   const processes: FakeProcess[] = [];
   mockStartReverseTunnel.mockImplementation(() => makeFakeProcess(processes));
   const pool = new WorkerHostPool();
@@ -48,14 +57,17 @@ test("openForRun gives two runs on one host DISTINCT remote ports", async () => 
 
   assert.equal(a.workerHost, "worker-1");
   assert.equal(b.workerHost, "worker-1");
-  assert.ok(a.remotePort !== b.remotePort);
+  // Both runs share the SAME per-host tunnel and remote port (no distinct port
+  // per run anymore - the per-run claim distinguishes them).
+  assert.equal(a.remotePort, b.remotePort);
   assert.equal(a.remotePort, 46_000);
-  assert.equal(b.remotePort, 46_001);
-  // Two distinct tunnel processes — NOT host-coalesced.
-  assert.equal(mockStartReverseTunnel.mock.calls.length, 2);
+  // ONE ssh -R child for the host, NOT one per run.
+  assert.equal(mockStartReverseTunnel.mock.calls.length, 1);
+  // Distinct refcount leases on the one shared entry.
+  assert.ok(a.leaseId !== b.leaseId);
 });
 
-test("openForRun is per-run keyed: re-opening the SAME run reuses its entry", async () => {
+test("openForRun is per-run hold keyed: re-opening the SAME run reuses its hold (no extra refcount)", async () => {
   const processes: FakeProcess[] = [];
   mockStartReverseTunnel.mockImplementation(() => makeFakeProcess(processes));
   const pool = new WorkerHostPool();
@@ -63,12 +75,18 @@ test("openForRun is per-run keyed: re-opening the SAME run reuses its entry", as
   const a1 = await pool.openForRun("worker-1", "0", "127.0.0.1", 3000);
   const a2 = await pool.openForRun("worker-1", "0", "127.0.0.1", 3000);
 
+  // Same run + same local endpoint reuses its existing hold (same lease, same
+  // shared tunnel) - a single co-resident run never takes two refcounts.
   assert.equal(a1.remotePort, a2.remotePort);
-  // Same run + same local endpoint reuses the single tunnel.
+  assert.equal(a1.leaseId, a2.leaseId);
   assert.equal(mockStartReverseTunnel.mock.calls.length, 1);
+
+  // One closeForRun drops the run's single hold and tears the (only) tunnel down.
+  pool.closeForRun("worker-1", "0");
+  assert.equal(processes[0]!.kill.mock.calls.length, 1);
 });
 
-test("closeForRun(A) leaves run B alive on the same host", async () => {
+test("closeForRun(A) keeps the SHARED host tunnel alive while run B still holds it", async () => {
   const processes: FakeProcess[] = [];
   mockStartReverseTunnel.mockImplementation(() => makeFakeProcess(processes));
   const pool = new WorkerHostPool();
@@ -76,69 +94,74 @@ test("closeForRun(A) leaves run B alive on the same host", async () => {
   await pool.openForRun("worker-1", "A", "127.0.0.1", 3000);
   const b = await pool.openForRun("worker-1", "B", "127.0.0.1", 3000);
 
+  // Closing A drops one ref but B still holds the shared tunnel: the ssh child
+  // is NOT killed (refcount stays > 0).
   pool.closeForRun("worker-1", "A");
+  assert.equal(processes[0]!.kill.mock.calls.length, 0);
 
-  // Run A's process was killed; run B's process untouched.
-  assert.equal(processes[0]!.kill.mock.calls.length, 1);
-  assert.equal(processes[1]!.kill.mock.calls.length, 0);
-
-  // Re-opening run B reuses its still-alive entry (no new process).
+  // Re-opening run B reuses the still-live shared entry (no new process).
   const b2 = await pool.openForRun("worker-1", "B", "127.0.0.1", 3000);
   assert.equal(b2.remotePort, b.remotePort);
+  assert.equal(mockStartReverseTunnel.mock.calls.length, 1);
+
+  // Closing the LAST holder (B) finally tears the shared tunnel down.
+  pool.closeForRun("worker-1", "B");
+  assert.equal(processes[0]!.kill.mock.calls.length, 1);
+});
+
+test("two DIFFERENT hosts get DISTINCT tunnels and remote ports", async () => {
+  const processes: FakeProcess[] = [];
+  mockStartReverseTunnel.mockImplementation(() => makeFakeProcess(processes));
+  const pool = new WorkerHostPool();
+
+  const a = await pool.openForRun("worker-1", "R", "127.0.0.1", 3000);
+  const b = await pool.openForRun("worker-2", "R", "127.0.0.1", 3000);
+
+  // Per-HOST keying: distinct hosts never share a tunnel/port.
+  assert.ok(a.remotePort !== b.remotePort);
+  assert.equal(a.remotePort, 46_000);
+  assert.equal(b.remotePort, 46_001);
   assert.equal(mockStartReverseTunnel.mock.calls.length, 2);
 });
 
-test("a localPort change for run A never replaces run B's per-run entry", async () => {
+test("two DIFFERENT issues at slotIndex 0 on the SAME host SHARE one host tunnel (claim-distinguished, not port-distinguished)", async () => {
+  // The coordinator runKey is ISSUE-SCOPED (`${issueId}#${slotIndex}`). Under the
+  // per-HOST collapse both co-resident issues route onto ONE shared `ssh -R`
+  // tunnel; they are kept apart by their per-run Token B claim at the gateway,
+  // not by a distinct remote port. Each takes its own refcount lease.
   const processes: FakeProcess[] = [];
   mockStartReverseTunnel.mockImplementation(() => makeFakeProcess(processes));
   const pool = new WorkerHostPool();
 
-  const a = await pool.openForRun("worker-1", "A", "127.0.0.1", 3000);
-  const b = await pool.openForRun("worker-1", "B", "127.0.0.1", 3000);
+  const a = await pool.openForRun("worker-1", "issue-a#0", "127.0.0.1", 3000);
+  const b = await pool.openForRun("worker-1", "issue-b#0", "127.0.0.1", 3000);
 
-  // Run A's local endpoint changes (e.g. on reload) — replaces ONLY A's entry.
-  const a2 = await pool.openForRun("worker-1", "A", "127.0.0.1", 4000);
+  // ONE shared tunnel: same remote port, ONE ssh child, distinct refcount leases.
+  assert.equal(a.remotePort, b.remotePort);
+  assert.equal(a.remotePort, 46_000);
+  assert.ok(a.leaseId !== b.leaseId);
+  assert.equal(mockStartReverseTunnel.mock.calls.length, 1);
 
-  // A's old process killed; B's process untouched by A's change.
+  // Closing issue-a leaves issue-b's hold (and the shared tunnel) untouched.
+  pool.closeForRun("worker-1", "issue-a#0");
+  assert.equal(processes[0]!.kill.mock.calls.length, 0);
+  pool.closeForRun("worker-1", "issue-b#0");
   assert.equal(processes[0]!.kill.mock.calls.length, 1);
-  assert.equal(processes[1]!.kill.mock.calls.length, 0);
-
-  // Run B still holds its OWN distinct port and entry.
-  const bStill = await pool.openForRun("worker-1", "B", "127.0.0.1", 3000);
-  assert.equal(bStill.remotePort, b.remotePort);
-  assert.ok(a2.remotePort !== b.remotePort);
-  // A's recycled port (46000) was reused for A's replacement, NOT B's.
-  assert.equal(a2.remotePort, a.remotePort);
-  // No new process for B's re-open.
-  assert.equal(mockStartReverseTunnel.mock.calls.length, 3);
 });
 
-test("recycled port is not reused while a live entry holds it (N concurrent ports)", async () => {
+test("openForRun and acquireRemoteMcpTunnel SHARE one host:port tunnel (single ssh child)", async () => {
   const processes: FakeProcess[] = [];
   mockStartReverseTunnel.mockImplementation(() => makeFakeProcess(processes));
   const pool = new WorkerHostPool();
 
-  const a = await pool.openForRun("worker-1", "A", "127.0.0.1", 3000); // 46000
-  const b = await pool.openForRun("worker-1", "B", "127.0.0.1", 3000); // 46001
-  const c = await pool.openForRun("worker-1", "C", "127.0.0.1", 3000); // 46002
-  assert.equal(a.remotePort, 46_000);
-  assert.equal(b.remotePort, 46_001);
-  assert.equal(c.remotePort, 46_002);
+  // Both the whole-endpoint host path and the per-run path target the same
+  // host:port, so they coalesce onto ONE shared reverse tunnel.
+  const host = await pool.acquireRemoteMcpTunnel("worker-1", "127.0.0.1", 3000);
+  const run = await pool.openForRun("worker-1", "R", "127.0.0.1", 3000);
 
-  // Free the middle port; A and C remain live holding 46000 and 46002.
-  pool.closeForRun("worker-1", "B");
-
-  // A new run reuses the recycled middle port — and crucially never collides
-  // with the still-live A/C ports.
-  const d = await pool.openForRun("worker-1", "D", "127.0.0.1", 3000);
-  assert.equal(d.remotePort, 46_001);
-  assert.ok(d.remotePort !== a.remotePort);
-  assert.ok(d.remotePort !== c.remotePort);
-
-  // The next fresh run advances past the high-water mark, never re-using a
-  // live port while its entry is held.
-  const e = await pool.openForRun("worker-1", "E", "127.0.0.1", 3000);
-  assert.equal(e.remotePort, 46_003);
+  assert.equal(host.remotePort, run.remotePort);
+  assert.equal(host.remotePort, 46_000);
+  assert.equal(mockStartReverseTunnel.mock.calls.length, 1);
 });
 
 test("closeForRun is a no-op for an unknown run key", () => {
@@ -147,48 +170,34 @@ test("closeForRun is a no-op for an unknown run key", () => {
   pool.closeForRun("", "");
 });
 
-test("two DIFFERENT issues at slotIndex 0 on the SAME host get DISTINCT per-run tunnels (issue-scoped runKey)", async () => {
-  // Codex HIGH #2: the coordinator runKey is ISSUE-SCOPED (`${issueId}#${slotIndex}`)
-  // so two DIFFERENT issues co-residing at slotIndex 0 on ONE host never collide on
-  // the `${workerHost}#${runKey}` tunnel key. With a bare `${slotIndex}` runKey both
-  // would key to "worker-1#0" and SHARE one tunnel/remote port (broken isolation);
-  // with the issue-scoped key they get distinct entries and distinct remote ports.
+test("generation fence: a stale closeForRun after a host:port recycle never tears down the FRESH tunnel (CAS late-close reject)", async () => {
   const processes: FakeProcess[] = [];
   mockStartReverseTunnel.mockImplementation(() => makeFakeProcess(processes));
   const pool = new WorkerHostPool();
 
-  const a = await pool.openForRun("worker-1", "issue-a#0", "127.0.0.1", 3000);
-  const b = await pool.openForRun("worker-1", "issue-b#0", "127.0.0.1", 3000);
-
-  // Distinct per-run tunnels: two ssh children, two distinct remote ports.
-  assert.ok(a.remotePort !== b.remotePort);
+  // Run A opens the host:port tunnel (generation 1) and holds it.
+  const a = await pool.openForRun("worker-1", "A", "127.0.0.1", 3000);
   assert.equal(a.remotePort, 46_000);
-  assert.equal(b.remotePort, 46_001);
-  assert.equal(mockStartReverseTunnel.mock.calls.length, 2);
 
-  // A same-key reopen / localPort change for issue-a NEVER affects issue-b's entry:
-  // only issue-a's process is replaced; issue-b keeps its own port and process.
-  const a2 = await pool.openForRun("worker-1", "issue-a#0", "127.0.0.1", 4000);
-  assert.equal(processes[0]!.kill.mock.calls.length, 1); // issue-a's old child killed
-  assert.equal(processes[1]!.kill.mock.calls.length, 0); // issue-b untouched
+  // The ssh child dies unexpectedly: the process-end handler tears the
+  // generation-1 entry down (clearing A's lease bookkeeping) WITHOUT removing
+  // A's per-run hold record. A's hold is now stale (recorded against generation 1).
+  processes[0]!.emit("close", null, "SIGKILL");
 
-  const bStill = await pool.openForRun("worker-1", "issue-b#0", "127.0.0.1", 3000);
-  assert.equal(bStill.remotePort, b.remotePort); // issue-b still holds its own port
-  assert.equal(a2.remotePort, a.remotePort); // issue-a reused its OWN recycled port
-  assert.ok(a2.remotePort !== b.remotePort);
-  assert.equal(mockStartReverseTunnel.mock.calls.length, 3); // no new child for b's re-open
-});
+  // A DIFFERENT run B opens the SAME host:port: a brand-new entry replaces the
+  // torn-down one under a STRICTLY higher generation (2).
+  await pool.openForRun("worker-1", "B", "127.0.0.1", 3000);
+  assert.equal(mockStartReverseTunnel.mock.calls.length, 2); // a brand-new ssh child
+  assert.equal(processes.length, 2);
 
-test("per-run and host-keyed tunnels coexist without colliding ports", async () => {
-  const processes: FakeProcess[] = [];
-  mockStartReverseTunnel.mockImplementation(() => makeFakeProcess(processes));
-  const pool = new WorkerHostPool();
+  // Run A's now-stale closeForRun fires. Its hold was recorded at generation 1,
+  // but the live entry is generation 2: the CAS late-close reject must drop A's
+  // stale bookkeeping WITHOUT decrementing B's fresh generation-2 refcount. B's
+  // tunnel must stay alive.
+  pool.closeForRun("worker-1", "A");
+  assert.equal(processes[1]!.kill.mock.calls.length, 0); // fresh tunnel untouched
 
-  const host = await pool.acquireRemoteMcpTunnel("worker-1", "127.0.0.1", 3000);
-  const run = await pool.openForRun("worker-1", "R", "127.0.0.1", 3000);
-
-  assert.ok(host.remotePort !== run.remotePort);
-  assert.equal(host.remotePort, 46_000);
-  assert.equal(run.remotePort, 46_001);
-  assert.equal(mockStartReverseTunnel.mock.calls.length, 2);
+  // Only B (the real, current holder) closing tears the fresh tunnel down.
+  pool.closeForRun("worker-1", "B");
+  assert.equal(processes[1]!.kill.mock.calls.length, 1);
 });

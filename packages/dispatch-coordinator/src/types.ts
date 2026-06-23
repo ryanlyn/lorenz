@@ -6,13 +6,12 @@
 //
 // `AgentMcpEndpointLease` (from `@lorenz/mcp`) is the WHOLE per-run endpoint
 // lease (auth token + refcounted local mcp server + reverse tunnel) the
-// coordinator owns end-to-end in later steps. It is pulled in with a TYPE-ONLY
-// import so it is fully erased by tsc and forms NO runtime edge to
-// `@lorenz/mcp` (which pulls in the observability server, the tunnel pool,
-// hono, etc.) - keeping this package (and `worker-pool`) free of any
-// mcp/tunnel RUNTIME dependency (invariant #8 in the dispatch-coordinator plan).
-// In STEP 1 every RunSlot carries `mcpEndpoint = null`, so nothing here reads the
-// lease at runtime yet; the type lives here only to nail the contract shape.
+// coordinator owns end-to-end. It is pulled in with a TYPE-ONLY import so it is
+// fully erased by tsc and forms NO runtime edge to `@lorenz/mcp` (which pulls in
+// the observability server, the tunnel pool, hono, etc.) - keeping this package
+// (and `worker-pool`) free of any mcp/tunnel RUNTIME dependency. With the null
+// manager every RunSlot carries `mcpEndpoint = null`, so the type lives here only
+// to nail the contract shape.
 
 import type { Settings } from "@lorenz/domain";
 import type { AgentMcpEndpointLease } from "@lorenz/mcp";
@@ -26,12 +25,10 @@ import type { WorkerOutcome } from "@lorenz/worker-pool";
  *
  * `release(outcome)` / `fail(reason)` are idempotent and exactly-once across
  * BOTH the normal settle path and a machine-recycle-initiated fail: they close
- * THIS slot's endpoint (a no-op when `mcpEndpoint` is null, as in STEP 1) THEN
- * delegate to the wrapped `WorkerLease` (itself leaseId+settled+DESTROYED guarded)
- * THEN deregister from the coordinator's registry.
- *
- * In STEP 1 the coordinator is a 1:1 passthrough: `mcpEndpoint` is always null,
- * so `release`/`fail` are byte-identical to the underlying `WorkerLease` settle.
+ * THIS slot's endpoint (a no-op when `mcpEndpoint` is null) THEN delegate to the
+ * wrapped `WorkerLease` (itself leaseId+settled+DESTROYED guarded) THEN deregister
+ * from the coordinator's registry. With a null endpoint `release`/`fail` are
+ * byte-identical to the underlying `WorkerLease` settle.
  */
 export interface RunSlot {
   /** Stable per-slot identity used as the registry key (issueId/slotIndex/leaseId derived). */
@@ -48,7 +45,7 @@ export interface RunSlot {
   readonly workerHost: string;
   /** Issue-scoped per-run key (`${issueId}#${slotIndex}`) feeding the per-run endpoint/tunnel. */
   readonly runKey: string;
-  /** The WHOLE per-run endpoint lease, or null in STEP 1 / on the local path. */
+  /** The WHOLE per-run endpoint lease, or null on the null-manager / local path. */
   readonly mcpEndpoint: AgentMcpEndpointLease | null;
   /** Mirrors `WorkerLease.acquiredAtMs` (the lease-bind timestamp). */
   readonly acquiredAtMs: number;
@@ -69,9 +66,9 @@ export interface RunSlot {
 
 /**
  * Request to acquire a {@link RunSlot}. Mirrors the worker-pool `AcquireRequest`
- * shape so the STEP 1 coordinator can pass it straight through to `pool.acquire`
- * (1:1 passthrough). `affinityKey` is the prior `workerHost` for sticky retry,
- * NOT the pending sentinel.
+ * shape so the coordinator can pass it straight through to `pool.acquire`.
+ * `affinityKey` is the prior `workerHost` for sticky retry, NOT the pending
+ * sentinel.
  */
 export interface AcquireRunSlotRequest {
   issueId: string;
@@ -116,10 +113,13 @@ export interface AcquireRunSlotRequest {
 
 /**
  * The injected port the coordinator uses to own each run's WHOLE MCP endpoint
- * (token + refcounted local server + reverse tunnel) behind ONE lease object.
- * `perRunEndpoint` is the capability the STEP 3 startup gate consumes: the NULL
- * passthrough reports `false` (acp keeps acquiring/releasing its own endpoint,
- * the STEP 1 byte-identical behaviour); a concrete remote manager reports `true`.
+ * (per-run scoped Token B claim + refcounted local server + reverse tunnel) behind
+ * ONE lease object. `perRunClaimEnforcement` is the capability the startup gate
+ * consumes: a concrete remote manager mints per-run scoped Token B claims the shared
+ * gateway re-checks server-side every request (resolve claim -> expiry -> allowlist
+ * -> liveness + generation fence, else fail closed), so it reports `true`; the NULL
+ * passthrough enforces nothing (acp keeps acquiring/releasing its own settings-wide
+ * endpoint) and reports `false`.
  *
  * `open` returns null when this manager does not mint a per-run endpoint (the
  * NULL passthrough always, or the concrete manager on a local/non-ssh host).
@@ -127,7 +127,7 @@ export interface AcquireRunSlotRequest {
  * is uniform whether or not an endpoint was minted.
  */
 export interface McpEndpointManager {
-  readonly perRunEndpoint: boolean;
+  readonly perRunClaimEnforcement: boolean;
   open(req: {
     settings: Settings;
     workerHost: string;

@@ -2761,14 +2761,14 @@ test("worker pool: the bound slot's mcpEndpoint is threaded into the runner", as
   const workflow = workerPoolWorkflowFixture();
   workflow.settings.agent.kind = "claude";
 
-  // A concrete-style manager (perRunEndpoint=true) that opens a recognizable
+  // A concrete-style manager (perRunClaimEnforcement=true) that opens a recognizable
   // per-run lease and records its open/release calls so we can assert the
   // coordinator owns the endpoint lifecycle and the runner consumes it.
   const endpointLease = makeFakeEndpointLease();
   const opens: Array<{ workerHost: string; runKey: string }> = [];
   let releaseCalls = 0;
   const manager: McpEndpointManager = {
-    perRunEndpoint: true,
+    perRunClaimEnforcement: true,
     async open(req) {
       opens.push({ workerHost: req.workerHost, runKey: req.runKey });
       return endpointLease;
@@ -2844,7 +2844,7 @@ test("worker pool: the FULL workflow Settings (with server.port) is threaded to 
   let openSettings: unknown;
   const endpointLease = makeFakeEndpointLease();
   const manager: McpEndpointManager = {
-    perRunEndpoint: true,
+    perRunClaimEnforcement: true,
     async open(req) {
       openSettings = req.settings;
       return endpointLease;
@@ -2924,6 +2924,7 @@ function makeFakeEndpointLease(): AgentMcpEndpointLease {
   return {
     url: "http://127.0.0.1:46999/claude-mcp",
     token: "run-token",
+    generation: 1,
     acpServer: () => ({ type: "http", name: "threaded_endpoint", url: "", headers: [] }),
     async release() {},
   };
@@ -2953,7 +2954,7 @@ test("worker pool: a codex run is skipped when the per-run endpoint open THROWS 
   // worker_pool_acquire_error and the run never dispatches.
   let openCalls = 0;
   const manager: McpEndpointManager = {
-    perRunEndpoint: true,
+    perRunClaimEnforcement: true,
     async open() {
       openCalls += 1;
       throw new Error("mcp_endpoint_open_failed: remote port-forward restricted");
@@ -3024,7 +3025,7 @@ test("worker pool: an ACP/claude run STILL opens its per-run endpoint (the per-r
   const endpointLease = makeFakeEndpointLease();
   let openCalls = 0;
   const manager: McpEndpointManager = {
-    perRunEndpoint: true,
+    perRunClaimEnforcement: true,
     async open() {
       openCalls += 1;
       return endpointLease;
@@ -4453,11 +4454,11 @@ test("worker pool: a reload that throws the anti-double-capacity guard keeps las
 });
 
 function perRunEndpointManager(): McpEndpointManager {
-  // A concrete-style manager (perRunEndpoint=true) so the coordinator advertises
+  // A concrete-style manager (perRunClaimEnforcement=true) so the coordinator advertises
   // the per-run-endpoint capability; open() returns null (no real endpoint needed
   // for the reload-gate tests, which never run an agent).
   return {
-    perRunEndpoint: true,
+    perRunClaimEnforcement: true,
     async open() {
       return null;
     },
@@ -4523,7 +4524,7 @@ test("worker pool: a reload to max_in_flight>1 without co_residence is rejected 
 });
 
 test("worker pool: a reload to max_in_flight>1 without the per-run-endpoint capability is rejected (gate)", async () => {
-  // A bare workerPool wraps in a null-endpoint coordinator (perRunEndpoint=false), so
+  // A bare workerPool wraps in a null-endpoint coordinator (perRunClaimEnforcement=false), so
   // even WITH the co_residence opt-in the gate must reject slotsPerMachine>1 for
   // lack of the per-run-endpoint capability - mirroring the startup gate.
   const issue = issueFixture("issue-bp-reload-endpoint", "MT-BP-RELOAD-ENDPOINT");
@@ -4537,7 +4538,7 @@ test("worker pool: a reload to max_in_flight>1 without the per-run-endpoint capa
   const runtime = new LorenzRuntime(
     runtimeOptions({
       workflow: firstWorkflow,
-      // Bare workerPool -> null-endpoint passthrough coordinator (perRunEndpoint=false).
+      // Bare workerPool -> null-endpoint passthrough coordinator (perRunClaimEnforcement=false).
       workerPool,
       reloadWorkflow: async () => {
         reloads += 1;
@@ -4559,7 +4560,7 @@ test("worker pool: a reload to max_in_flight>1 without the per-run-endpoint capa
     .snapshot()
     .recentEvents.find((event) => event.type === "workflow_reload_failed");
   assert.ok(reloadFailed);
-  assert.match(reloadFailed!.message, /per-run.*endpoint|perRunEndpoint/i);
+  assert.match(reloadFailed!.message, /per-run scoped claims|perRunClaimEnforcement/i);
 });
 
 test("worker pool: a reload to max_in_flight>1 WITH co_residence + per-run-endpoint applies and reconciles", async () => {

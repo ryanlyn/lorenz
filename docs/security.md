@@ -59,12 +59,12 @@ Two unrelated config surfaces share the "static SSH" name: the legacy `worker.ss
 
 ## MCP endpoint authentication
 
-Agents reach tracker tools over an HTTP MCP endpoint at `POST /mcp`. Every request is authenticated.
+Agents reach tracker tools over an HTTP MCP endpoint at `POST /mcp`. Every request carries a random base64url token in an `Authorization: Bearer <token>` header; a request without a valid token gets `401 {error:{code:'unauthorized'}}`. There are two token kinds, both held in a process-local map (in-memory only, never persisted or shared across processes):
 
-- **Per-agent leased bearer tokens.** Each agent run leases an endpoint that carries a random base64url token in an `Authorization: Bearer <token>` header. A request without a valid token gets `401 {error:{code:'unauthorized'}}`.
-- **Scoped tokens.** A token is valid only for the scope `mcp:<sha256(identity)>`, derived from the server host, port, full tracker config, and canonicalized tool options. Any settings change rotates the scope and invalidates tokens minted for the old one.
-- **In-memory only.** Tokens live in a process-local map. They do not persist across restarts and are not shared across processes.
-- **Remote tunnels.** For workers, the endpoint is reached through an SSH reverse tunnel (`ssh -R`) managed per run by `@lorenz/worker-host-pool`, so the token never traverses an open network port.
+- **Settings-scoped bearer (Token A).** Valid only for the scope `mcp:<sha256(identity)>`, derived from the server host, port, full tracker config, and canonicalized tool options. Any settings change rotates the scope and invalidates tokens minted for the old one. This is the token the single-tenant ACP/local endpoint and the observability server accept.
+- **Per-run scoped claim (Token B).** An opaque token whose bytes carry no scope: it resolves server-side to a daemon-minted claim that pins the run (`runKey`, worker host, generation) and a coarse lifetime cap. The claim-enforcing MCP server re-checks the claim on **every** request - expiry, then the per-operation tool allowlist, then a liveness-and-generation re-check that returns false once the run has settled, its host was recycled, or a higher-generation re-acquire superseded it. Any miss denies; it never falls back to Token A. The `runKey` is resolved from the token, never from a self-reported header.
+
+Per-run isolation comes from the Token B claim, not from a distinct network path. Co-resident runs packed onto one worker host (`worker.worker_pool.slots_per_machine > 1`) **share one** SSH reverse tunnel (`ssh -R`, one per host, refcounted by `@lorenz/worker-host-pool`); they are kept apart by their distinct claims rather than by separate ports. A run whose claim cannot be enforced server-side - a local run that owns no remote claim, or a foreign MCP server Lorenz does not own - is refused rather than authorized against the settings-wide token. The token never traverses an open network port.
 
 The endpoint binds to `server.host` (default `127.0.0.1`). A failed tool call is returned as data (`isError: true` inside an HTTP 200 JSON-RPC result), not as a transport error, so a misbehaving tool cannot crash the seam. See the [HTTP API reference](reference/http-api.md) and [tracker tools](reference/tracker-tools.md).
 
@@ -109,6 +109,7 @@ For an operator standing up a deployment, in rough priority order:
 - **Run `lorenz doctor`.** Validate the workflow and prerequisites before going live.
 
 ## See also
+
 - [Workspaces](workspace.md) - containment rules, hook execution, and the skill overlay in full
 - [Workflows](workflows.md) - the `WORKFLOW.md` contract that hooks and config live in
 - [Secret resolution](features/secret-resolution.md) - `$VAR` / `op://` / env-fallback order

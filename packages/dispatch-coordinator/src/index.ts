@@ -4,15 +4,15 @@
 // machine pool and an injected McpEndpointManager to mint per-run RunSlots.
 // Distinct from the pure-policy @lorenz/dispatch package.
 //
-// STEP 1 surface: the DispatchCoordinator is a 1:1 passthrough over WorkerPool
-// (default slotsPerMachine=1 + the null McpEndpointManager make every RunSlot
-// carry mcpEndpoint=null), so the runtime boundary is byte-identical to calling
-// the WorkerPool directly. Later steps add per-run MCP endpoints, co-residence, and
-// a provider hot-swap behind this same surface.
+// With default slotsPerMachine=1 and the null McpEndpointManager every RunSlot
+// carries mcpEndpoint=null, so the runtime boundary is byte-identical to calling
+// the WorkerPool directly. A concrete McpEndpointManager adds per-run MCP
+// endpoints and co-residence behind this same surface.
 
 export {
   createDispatchCoordinator,
   EndpointOpenError,
+  LocalCoResidenceError,
   RunSlotCollisionError,
   type DispatchCoordinator,
   type CreateDispatchCoordinatorDeps,

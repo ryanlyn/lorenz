@@ -1,31 +1,59 @@
-# Lorenz
+<div align="center">
 
-[![Documentation](https://img.shields.io/badge/docs-ryanlyn.github.io%2Florenz-14b8a6)](https://ryanlyn.github.io/lorenz/)
+<a href="https://ryanlyn.github.io/lorenz/"><img src="docs/images/lorenz-banner.png" alt="Lorenz - agent orchestration engine" width="100%"></a>
 
-Originated from [OpenAI Symphony](https://openai.com/index/open-source-codex-orchestration-symphony/), Lorenz lets you declare work on trackers (in-memory, Obsidian markdown files, Linear, Jira, Slack etc.) and manage the dispatch, execution, and convergence of concurrent agent sessions until they reach a specified terminal state. It is harness-agnostic through the [Agent-Client Protocol](https://agentclientprotocol.com/get-started/introduction) with support for local, static SSH boxes, or (experimental) cloud-brokered VMs.
+[![docs](https://img.shields.io/badge/docs-ryanlyn.github.io%2Florenz-78DCE8?style=flat-square&labelColor=2D2A2E)](https://ryanlyn.github.io/lorenz/) [![npm](https://img.shields.io/npm/v/lorenz?style=flat-square&label=npm&color=A9DC76&labelColor=2D2A2E)](https://www.npmjs.com/package/lorenz) [![license](https://img.shields.io/badge/license-Apache--2.0-AB9DF2?style=flat-square&labelColor=2D2A2E)](LICENSE) [![protocol](https://img.shields.io/badge/protocol-ACP-FC9867?style=flat-square&labelColor=2D2A2E)](https://agentclientprotocol.com/get-started/introduction) [![node](https://img.shields.io/badge/node-24%2B-FFD866?style=flat-square&labelColor=2D2A2E)](mise.toml)
 
-## Screenshots
+</div>
 
-Lorenz ships two operator views over the same runtime snapshot: an Ink terminal dashboard (TUI)
-and a web dashboard served by the observability API.
+Originated from [OpenAI Symphony](https://openai.com/index/open-source-codex-orchestration-symphony/), **Lorenz** lets you declare work on a tracker (in-memory, Obsidian markdown files, Linear, Jira, Slack) and manages the dispatch, execution, and convergence of concurrent agent sessions until they reach a specified terminal state. It is harness-agnostic through the [Agent-Client Protocol](https://agentclientprotocol.com/get-started/introduction), running agents on local machines, static SSH boxes, or (experimental) cloud-brokered VMs.
 
-### Terminal dashboard (TUI)
+## Features
 
-![Lorenz terminal dashboard](docs/images/lorenz-tui.png)
+<table>
+<tr>
+<td width="50%" valign="top">
 
-### Web dashboard
+**Any tracker**<br>
+Linear, Jira, Slack, Obsidian, local files, or in-memory.
 
-![Lorenz web dashboard](docs/images/lorenz-dashboard.png)
+</td>
+<td width="50%" valign="top">
 
-## Documentation
+**Harness-agnostic**<br>
+Codex, Claude, or anything that speaks the Agent-Client Protocol.
 
-The published documentation site is at **[ryanlyn.github.io/lorenz](https://ryanlyn.github.io/lorenz/)**, built from [`docs/`](./docs). Start here:
+</td>
+</tr>
+<tr>
+<td width="50%" valign="top">
 
-- [Getting started](./docs/getting-started.md) - install, write a `WORKFLOW.md`, run your first issue.
-- [How it works](./docs/how-it-works.md) - the polling, dispatch, and run lifecycle.
-- [Configuration reference](./docs/reference/configuration.md) - every front-matter key, default, and meaning.
-- [Trackers](./docs/trackers/index.md) - Linear, Jira, Slack, local, and memory sources of issues.
-- [CLI](./docs/cli.md) - commands, flags, and run history.
+**Concurrency control**<br>
+Global and per-host caps, with routing labels to share one project across instances.
+
+</td>
+<td width="50%" valign="top">
+
+**Retry and backoff**<br>
+Rate-limit aware, with stall detection and automatic requeue.
+
+</td>
+</tr>
+<tr>
+<td width="50%" valign="top">
+
+**Two operator views**<br>
+An Ink terminal dashboard and a web dashboard over one runtime snapshot.
+
+</td>
+<td width="50%" valign="top">
+
+**Local, SSH, or cloud workers**<br>
+Disposable local boxes, static SSH hosts, or brokered VMs on demand.
+
+</td>
+</tr>
+</table>
 
 ## Quickstart
 
@@ -35,7 +63,7 @@ Running Lorenz is as easy as:
 npx lorenz WORKFLOW.md
 ```
 
-with full CLI options:
+The full CLI surface:
 
 ```sh
 lorenz [--once] [--dry-run] [--no-tui] [--port <port>] [--logs-root <path>] [path-to-WORKFLOW.md]
@@ -49,6 +77,36 @@ Runtime needs depend on the workflow: `LINEAR_API_KEY` for Linear, `codex` on `P
 runs, a Claude ACP bridge for Claude runs, and SSH access for remote workers. See
 [Getting started](./docs/getting-started.md) for the full list. Run commands from the repository
 root unless a command says otherwise.
+
+## How It Works
+
+Lorenz polls a tracker for eligible issues, dispatches each one to a worker as a concurrent agent
+session, and drives it through its run lifecycle until it reaches a terminal state, honoring
+concurrency caps, retries, and rate limits along the way. The polling, dispatch, and run lifecycle
+are covered in [How it works](./docs/how-it-works.md).
+
+## Dashboards
+
+Lorenz ships two operator views over the same runtime snapshot: an Ink terminal dashboard (TUI) and
+a web dashboard served by the observability API.
+
+**Terminal dashboard (TUI)**
+
+![Lorenz terminal dashboard](docs/images/lorenz-tui.png)
+
+**Web dashboard**
+
+![Lorenz web dashboard](docs/images/lorenz-dashboard.png)
+
+## Documentation
+
+The published documentation site is at **[ryanlyn.github.io/lorenz](https://ryanlyn.github.io/lorenz/)**, built from [`docs/`](./docs). Start here:
+
+- [Getting started](./docs/getting-started.md) - install, write a `WORKFLOW.md`, run your first issue.
+- [How it works](./docs/how-it-works.md) - the polling, dispatch, and run lifecycle.
+- [Configuration reference](./docs/reference/configuration.md) - every front-matter key, default, and meaning.
+- [Trackers](./docs/trackers/index.md) - Linear, Jira, Slack, local, and memory sources of issues.
+- [CLI](./docs/cli.md) - commands, flags, and run history.
 
 ## Configuration
 
@@ -79,7 +137,7 @@ complete variable list is in the [Workflow prompt reference](./docs/reference/wo
 ## Skills
 
 The `skills/` directory holds orchestration skills (`lorenz-commit`, `lorenz-push`, `lorenz-pull`,
-`lorenz-land`, `lorenz-debug`) referenced by the example workflows. Lorenz copies skills into
+`lorenz-land`, `lorenz-debug`) referenced by the example workflows. Lorenz installs skills into
 `.lorenz/skills/` in each prepared workspace before the agent starts. See
 [Skills](./docs/agents/skills.md) for how `agent.skills` and tool-pack skills are resolved.
 
@@ -90,7 +148,10 @@ retry queue, and dispatch blocks. The web dashboard exposes the same runtime sna
 HTTP server, started with `--port` or `server.port`. Routes, the WebSocket stream, and `/mcp` tool
 serving are documented in [Observability](./docs/observability.md).
 
-## Contributing
+<details>
+<summary><b>Contributing &amp; development</b></summary>
+
+<br>
 
 ### Requirements
 
@@ -160,6 +221,8 @@ evidence stay at the workspace root.
 The checked-in workflow files (`WORKFLOW.md`, `WORKFLOW_FULL_ACCESS.md`) are executable fixtures.
 `pnpm test` guards workflow docs, prompt rendering, dashboard snapshots, runtime behavior, and CLI
 documentation. Update the fixture and the matching test together when the public contract changes.
+
+</details>
 
 ## License
 

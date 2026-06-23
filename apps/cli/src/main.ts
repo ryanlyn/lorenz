@@ -72,6 +72,7 @@ import {
 import {
   buildDispatchCoordinator,
   createTrackerClient,
+  prepareTrackerExtensions,
   runAgentAttempt,
   registerBuiltinBackends,
   runtimeAdapters,
@@ -198,11 +199,24 @@ export async function runDaemon(options: CliOptions): Promise<number> {
     // Surface deprecated config keys once, on the first (startup) load. Reloads run the same
     // validation every poll, so re-warning there would spam an unchanged config.
     let deprecationsReported = false;
+    // Known after the first load; reused so the tracker loader's audit events
+    // reach the configured log file on every reload after startup.
+    let trackerLogFile: string | undefined;
     const loadRuntimeWorkflow = async () => {
       const workflow = await loadWorkflow(options.workflowPath ?? undefined, process.env, {
         ...runtimeDefaultSettingsOptions(),
         trackers: defaultTrackerRegistry,
+        // Pre-parse hook: dynamic-import any out-of-tree tracker named by
+        // `tracker.kind` BEFORE config parsing resolves the provider, so an
+        // out-of-tree tracker is option-parsed and validated exactly like a built-in.
+        prepareRegistries: async (rawConfig, ctx) =>
+          prepareTrackerExtensions(rawConfig, {
+            baseDir: ctx.baseDir,
+            logFile: trackerLogFile,
+            trackers: defaultTrackerRegistry,
+          }),
       });
+      trackerLogFile = workflow.settings.logging.logFile;
       applyCliOverrides(workflow, options);
       if (boundServerPort !== null) workflow.settings.server.port = boundServerPort;
       validateDispatchConfig(
@@ -501,22 +515,24 @@ function daemonServerSource(runtime: LorenzRuntime, lock: DaemonLock | null): Ru
  * (the canonical field behind the legacy `max_in_flight` key). Co-residence packs
  * multiple run slots onto one machine, so it requires BOTH:
  *
- *  1. a coordinator that advertises `capabilities.perRunEndpoint === true` (each
- *     RunSlot owns its own MCP endpoint - token + local-server + tunnel - so two
- *     co-resident runs never share or tear out each other's endpoint), and
+ *  1. a coordinator whose gateway advertises `capabilities.perRunClaimEnforcement
+ *     === true`: the shared MCP gateway resolves each request's per-run scoped Token
+ *     B claim server-side, re-checks the owning run is still live, fences it by
+ *     generation, and fails closed otherwise - so two co-resident runs sharing one
+ *     host + reverse tunnel can never authorize against each other's claim, and
  *  2. an explicit `worker.worker_pool.co_residence` operator opt-in, because a single
  *     poisoned worker fails every co-resident run on recycle: widening that blast
  *     radius is a deliberate tradeoff, not just a capability.
  *
  * `slotsPerMachine === 1` (the default) always passes - the gate never triggers, so
  * the single-tenant startup path stays byte-identical. This lives in the daemon
- * rather than {@link validateDispatchConfig} because the per-run-endpoint capability
- * only exists once the coordinator has been constructed; the per-poll config
- * validation must stay capability-free.
+ * rather than {@link validateDispatchConfig} because the per-run-claim-enforcement
+ * capability only exists once the coordinator has been constructed; the per-poll
+ * config validation must stay capability-free.
  */
 export function assertSlotsPerMachineGate(
   settings: Settings,
-  coordinator: { readonly capabilities: { readonly perRunEndpoint: boolean } } | undefined,
+  coordinator: { readonly capabilities: { readonly perRunClaimEnforcement: boolean } } | undefined,
 ): void {
   // Delegate to the shared PURE predicate so this STARTUP gate and the runtime
   // RELOAD guard enforce byte-identical rules (no drift). `null` means safe; a

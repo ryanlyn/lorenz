@@ -17,7 +17,7 @@ import type { WorkerPoolSettings } from "@lorenz/domain";
 
 /** The subset of a coordinator's capabilities the gate consumes. */
 export interface SlotsPerMachineGateCapabilities {
-  readonly perRunEndpoint: boolean;
+  readonly perRunClaimEnforcement: boolean;
 }
 
 /**
@@ -25,9 +25,11 @@ export interface SlotsPerMachineGateCapabilities {
  * or `null` when it passes. Co-residence packs multiple run slots onto one machine,
  * so `slotsPerMachine > 1` requires BOTH:
  *
- *  1. a coordinator that advertises `capabilities.perRunEndpoint === true` (each
- *     RunSlot owns its own MCP endpoint - token + local-server + tunnel - so two
- *     co-resident runs never share or tear out each other's endpoint), and
+ *  1. a coordinator whose gateway advertises `capabilities.perRunClaimEnforcement
+ *     === true`: the shared MCP gateway resolves each request's per-run scoped Token
+ *     B claim server-side, re-checks the owning run is still live, fences it by
+ *     generation, and fails closed otherwise - so two co-resident runs sharing one
+ *     host + one reverse tunnel can never authorize against each other's claim, and
  *  2. an explicit `worker.worker_pool.co_residence` operator opt-in, because a single
  *     poisoned worker fails every co-resident run on recycle: widening that blast
  *     radius is a deliberate tradeoff, not just a capability.
@@ -43,10 +45,11 @@ export function checkSlotsPerMachineGate(
 ): string | null {
   if (!workerPool || workerPool.enabled === false || workerPool.slotsPerMachine <= 1) return null;
 
-  if (capabilities?.perRunEndpoint !== true) {
+  if (capabilities?.perRunClaimEnforcement !== true) {
     return (
-      "worker.worker_pool.max_in_flight > 1 requires a dispatch coordinator with per-run MCP " +
-      "endpoints (capabilities.perRunEndpoint), which the current build does not provide"
+      "worker.worker_pool.max_in_flight > 1 requires a dispatch coordinator whose MCP gateway " +
+      "enforces per-run scoped claims (capabilities.perRunClaimEnforcement): server-side Token B " +
+      "resolution, owner re-check, and a generation fence, which the current build does not provide"
     );
   }
   if (workerPool.coResidence !== true) {

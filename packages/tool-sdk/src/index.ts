@@ -15,3 +15,9 @@ export {
   pickFields,
 } from "./filter.js";
 export type { Filter, QuerySpec } from "./filter.js";
+export {
+  TOOL_SDK_VERSION,
+  assertToolProviderModule,
+  defineToolProvider,
+  type ToolProviderModule,
+} from "./module.js";

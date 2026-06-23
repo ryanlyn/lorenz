@@ -72,21 +72,22 @@ test("CLI re-exports the worker-pool driver public API for live/e2e tests", () =
   assert.ok(defaultWorkerDriverRegistry.kinds().includes("fake"));
 });
 
-// --- STEP 3 post-construction gate ---------------------------------------
+// --- post-construction gate ----------------------------------------------
 // `assertSlotsPerMachineGate` is the single mechanical safety that lives where
 // the coordinator capability is actually known (after buildDispatchCoordinator).
-// It enforces TWO conditions for slotsPerMachine>1: the runtime perRunEndpoint
-// capability AND the explicit operator co-residence opt-in. slotsPerMachine===1
-// always passes (the gate never triggers) so the default path is byte-identical.
+// It enforces TWO conditions for slotsPerMachine>1: the runtime
+// perRunClaimEnforcement capability AND the explicit operator co-residence opt-in.
+// slotsPerMachine===1 always passes (the gate never triggers) so the default path
+// is byte-identical.
 
-const capable = { capabilities: { perRunEndpoint: true } } as const;
-const incapable = { capabilities: { perRunEndpoint: false } } as const;
+const capable = { capabilities: { perRunClaimEnforcement: true } } as const;
+const incapable = { capabilities: { perRunClaimEnforcement: false } } as const;
 
 function gateSettings(workerPool: Record<string, unknown> | undefined) {
   return parseConfig(workerPool ? { worker: { worker_pool: workerPool } } : {});
 }
 
-test("gate: slotsPerMachine>1 with perRunEndpoint=false throws", () => {
+test("gate: slotsPerMachine>1 with perRunClaimEnforcement=false throws", () => {
   const settings = gateSettings({
     enabled: true,
     driver: "fake",
@@ -95,17 +96,17 @@ test("gate: slotsPerMachine>1 with perRunEndpoint=false throws", () => {
   });
   assert.throws(
     () => assertSlotsPerMachineGate(settings, incapable),
-    /per-run.*endpoint|perRunEndpoint/i,
+    /per-run scoped claims|perRunClaimEnforcement/i,
   );
 });
 
-test("gate: slotsPerMachine>1 with perRunEndpoint=true but coResidence absent throws", () => {
+test("gate: slotsPerMachine>1 with perRunClaimEnforcement=true but coResidence absent throws", () => {
   const settings = gateSettings({ enabled: true, driver: "fake", max_in_flight: 2 });
   assert.equal(settings.worker.workerPool?.coResidence, undefined);
   assert.throws(() => assertSlotsPerMachineGate(settings, capable), /co.?residence/i);
 });
 
-test("gate: slotsPerMachine>1 with perRunEndpoint=true but coResidence=false throws", () => {
+test("gate: slotsPerMachine>1 with perRunClaimEnforcement=true but coResidence=false throws", () => {
   const settings = gateSettings({
     enabled: true,
     driver: "fake",
@@ -115,7 +116,7 @@ test("gate: slotsPerMachine>1 with perRunEndpoint=true but coResidence=false thr
   assert.throws(() => assertSlotsPerMachineGate(settings, capable), /co.?residence/i);
 });
 
-test("gate: slotsPerMachine>1 with perRunEndpoint AND coResidence passes", () => {
+test("gate: slotsPerMachine>1 with perRunClaimEnforcement AND coResidence passes", () => {
   const settings = gateSettings({
     enabled: true,
     driver: "fake",

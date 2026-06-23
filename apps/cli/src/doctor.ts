@@ -149,6 +149,11 @@ export async function runDoctorCommand(
 
   let workflow;
   try {
+    // Doctor is a STATIC validator: it does not dynamic-import out-of-tree
+    // extensions (the daemon does that at startup). An out-of-tree `tracker.kind`
+    // module specifier surfaces through `dispatch_config` as an unsupported kind,
+    // listing the registered kinds - the same fail-loud surface as any unknown
+    // kind - without running arbitrary extension code in the doctor process.
     workflow = await loadWorkflow(resolvedWorkflowPath, env, {
       ...runtimeDefaultSettingsOptions(),
       cwd,

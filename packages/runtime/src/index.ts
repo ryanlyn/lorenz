@@ -1710,8 +1710,8 @@ function disabledWorkerPoolSettings(
 /**
  * Wraps a bare {@link WorkerPool} in a null-endpoint passthrough {@link DispatchCoordinator} so the
  * runtime drives every run through the uniform coordinator surface while a bare-pool injection
- * keeps the default runtime boundary unchanged. The null manager mints nothing
- * (`perRunEndpoint=false`, every `RunSlot.mcpEndpoint=null`), so this is a 1:1 passthrough over
+ * stays byte-identical at the runtime boundary. The null manager mints nothing
+ * (`perRunClaimEnforcement=false`, every `RunSlot.mcpEndpoint=null`), so this is a passthrough over
  * the pool: `acquireRunSlot` delegates to `pool.acquire`, settle delegates straight to the
  * `WorkerLease`, and `reconcile`/`drain`/`governs`/`canAcquire` forward verbatim. Returns
  * `undefined` when no pool is supplied (the static/local path).

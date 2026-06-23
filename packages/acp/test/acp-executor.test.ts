@@ -609,6 +609,7 @@ function makeFakeEndpointLease(): FakeEndpointLease {
   const lease: FakeEndpointLease = {
     url: "http://127.0.0.1:46999/claude-mcp",
     token: "threaded-token",
+    generation: 1,
     acpServerCalls: 0,
     releaseCalls: 0,
     acpServer() {

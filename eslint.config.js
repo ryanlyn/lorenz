@@ -4,7 +4,18 @@ import importX from "eslint-plugin-import-x";
 
 export default tseslint.config(
   {
-    ignores: ["**/dist/**", "log/**", "node_modules/**", "apps/traceviz/dist/**"],
+    ignores: [
+      "**/dist/**",
+      "log/**",
+      "node_modules/**",
+      "apps/traceviz/dist/**",
+      // Architecture-guard fixtures are cruised by dependency-cruiser
+      // (test/extension-import-boundaries.test.ts), not compiled by any tsconfig
+      // project; the type-aware parser would reject them as out-of-project. One of
+      // them deliberately imports an engine package, which is the violation the
+      // guard asserts - linting it as real source would be a category error.
+      "test/fixtures/**",
+    ],
   },
   js.configs.recommended,
   ...tseslint.configs.recommendedTypeChecked,

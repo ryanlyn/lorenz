@@ -14,7 +14,7 @@ import {
   registerFakeWorkerDriver,
   type WorkerDriverRegistry,
 } from "@lorenz/worker-sdk";
-import type { DefaultSettingsOptions } from "@lorenz/config";
+import { trackerSpecifierFromConfig, type DefaultSettingsOptions } from "@lorenz/config";
 import { registerDockerWorkerDriver } from "@lorenz/docker-worker";
 import { systemClock, type RuntimeTrackerClient, type Settings } from "@lorenz/domain";
 import { registerJiraTrackers } from "@lorenz/jira-tracker";
@@ -23,7 +23,7 @@ import { registerLocalTracker } from "@lorenz/local-tracker";
 import { registerMemoryTracker } from "@lorenz/memory-tracker";
 import { registerSlackTracker } from "@lorenz/slack-tracker";
 import { registerStaticSshWorkerDriver } from "@lorenz/static-worker";
-import { acquireAgentMcpEndpointForRun } from "@lorenz/mcp";
+import { acquireAgentMcpEndpointForRun, type IsRunLive } from "@lorenz/mcp";
 import { createWorkerPool, type WorkerPool } from "@lorenz/worker-pool";
 import { workerHostPool } from "@lorenz/worker-host-pool";
 import {
@@ -48,6 +48,7 @@ import {
 } from "@lorenz/tracker-sdk";
 
 import { ensureWorkerDriverLoaded } from "./workerDriverLoader.js";
+import { ensureTrackerProviderLoaded } from "./trackerLoader.js";
 
 export interface BackendRegistries {
   trackers?: TrackerRegistry | undefined;
@@ -88,6 +89,39 @@ export function registerBuiltinBackends(registries: BackendRegistries = {}): voi
 
 export function runtimeDefaultSettingsOptions(): DefaultSettingsOptions {
   return { tmpdir: os.tmpdir() };
+}
+
+/**
+ * `loadWorkflow` pre-parse hook: dynamic-import any out-of-tree tracker named by
+ * `tracker.kind` (a module specifier rather than a registered kind) and register
+ * it into `trackers` under that exact string, BEFORE the config parser resolves
+ * the tracker provider. Mirrors {@link buildWorkerPool}'s driver-loading step:
+ * the loader is a no-op for a built-in kind, dynamic-imports on a miss, and
+ * fail-loud on an unresolvable specifier / SDK mismatch at the same startup point
+ * as an unregistered kind. Re-running it on a reload re-encounters an
+ * already-loaded specifier and emits `tracker_provider_module_pinned`; a config
+ * that switches `tracker.kind` to a NEW specifier hot-loads it.
+ *
+ * `baseDir` anchors `./relative` specifiers to the workflow file's directory (the
+ * most predictable anchor for operators), and `logEvent` routes the
+ * `tracker_provider_loaded`/`_module_pinned` audit events to the configured log
+ * file when one is known.
+ */
+export async function prepareTrackerExtensions(
+  rawConfig: Record<string, unknown>,
+  context: { baseDir: string; logFile?: string | undefined; trackers?: TrackerRegistry },
+): Promise<void> {
+  const specifier = trackerSpecifierFromConfig(rawConfig);
+  if (specifier === undefined) return;
+  const trackers = context.trackers ?? defaultTrackerRegistry;
+  const logEvent =
+    context.logFile === undefined
+      ? undefined
+      : (event: Record<string, unknown>): void => void appendLogEvent(context.logFile!, event);
+  await ensureTrackerProviderLoaded(specifier, trackers, {
+    baseDir: context.baseDir,
+    logEvent,
+  });
 }
 
 export function createTrackerClient(
@@ -147,13 +181,13 @@ export async function buildWorkerPool(
  * `undefined` when the pool is disabled so the disabled path stays byte-identical
  * to the pre-pool daemon.
  *
- * The CONCRETE per-run {@link McpEndpointManager} (`perRunEndpoint=true`) is wired
+ * The CONCRETE per-run {@link McpEndpointManager} (`perRunClaimEnforcement=true`) is wired
  * here: it OWNS the whole per-run MCP endpoint lease (auth token + refcounted local
  * mcp server + reverse tunnel) via the injected `acquireAgentMcpEndpointForRun`. The
  * daemon is the right ownership boundary because it already depends on
  * `@lorenz/mcp`, keeping `@lorenz/worker-pool` and
- * `@lorenz/dispatch-coordinator` free of any mcp/tunnel runtime dependency
- * (invariant #8). At the default `slotsPerMachine=1` this opens exactly ONE endpoint
+ * `@lorenz/dispatch-coordinator` free of any mcp/tunnel runtime dependency.
+ * At the default `slotsPerMachine=1` this opens exactly ONE endpoint
  * per run (just coordinator-owned), and the manager returns `null` for an empty
  * (local) worker host so the local path keeps using acp's own endpoint -
  * byte-identical to the single-tenant path. `buildWorkerPool` stays for the worker-pool
@@ -171,7 +205,17 @@ export async function buildDispatchCoordinator(
   const baseDir = options.baseDir ?? process.cwd();
   const logEvent = (event: Record<string, unknown>): void =>
     void appendLogEvent(settings.logging.logFile, event);
-  return createDispatchCoordinator({
+  // Forward reference so the per-run endpoint manager's `acquireForRun` can inject
+  // the coordinator's own `isRunLive` oracle into `@lorenz/mcp`. The coordinator
+  // is the live-slot authority the gateway owner re-check reads; the daemon is the
+  // only place that holds both `@lorenz/mcp` and the coordinator, so it closes the
+  // loop here WITHOUT either package importing the other. `acquireForRun` is only
+  // ever called AFTER `createDispatchCoordinator` returns (during an
+  // `acquireRunSlot`), so `ref.coordinator` is always bound by then.
+  const ref: { coordinator: DispatchCoordinator | undefined } = { coordinator: undefined };
+  const isRunLive: IsRunLive = (runKey, workerHost, generation) =>
+    ref.coordinator?.isRunLive(runKey, workerHost, generation) ?? false;
+  const coordinator = createDispatchCoordinator({
     pool,
     // The concrete manager OWNS each run's whole endpoint lease; it calls the
     // injected `acquireAgentMcpEndpointForRun` (signature-compatible) for an
@@ -179,10 +223,14 @@ export async function buildDispatchCoordinator(
     // local path keeps using acp's own endpoint.
     mcpEndpointManager: createPerRunEndpointManager({
       // The composition root binds the concrete tunnel transport (the shared
-      // worker-host pool), keeping `@lorenz/mcp` free of any worker-host-pool
-      // import (invariant #8) while the coordinator stays on the 3-arg acquirer.
+      // worker-host pool) AND the coordinator-backed `isRunLive` oracle, keeping
+      // `@lorenz/mcp` free of any worker-host-pool / coordinator import while the
+      // coordinator stays on the manager seam. The per-run MCP server mounts
+      // `isRunLive` so its Token B middleware enforces the per-request owner
+      // re-check + generation fence over live coordinator slots; the
+      // capture-before-await fence is what makes that window safe.
       acquireForRun: async (runSettings, workerHost, runKey) =>
-        acquireAgentMcpEndpointForRun(runSettings, workerHost, runKey, workerHostPool),
+        acquireAgentMcpEndpointForRun(runSettings, workerHost, runKey, workerHostPool, isRunLive),
     }),
     // Same structured-event sink as the pool so coordinator faults (e.g.
     // worker_pool_endpoint_release_failed) reach the log file instead of being
@@ -196,6 +244,8 @@ export async function buildDispatchCoordinator(
     driverLoader: async (driver: string) =>
       ensureWorkerDriverLoaded(driver, defaultWorkerDriverRegistry, { baseDir, logEvent }),
   });
+  ref.coordinator = coordinator;
+  return coordinator;
 }
 
 /**
