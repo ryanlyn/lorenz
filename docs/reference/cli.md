@@ -18,7 +18,7 @@ The `bin` shim at `apps/cli/bin/lorenz.js` imports the built `dist/bin/cli.js`. 
 lorenz [--once] [--dry-run] [--no-tui] [--no-dashboard] [--port <port>] [--logs-root <path>] [workflowPath]
 ```
 
-The default command. It loads the workflow, validates dispatch config, builds the dispatch coordinator and warm worker pool when enabled, constructs the runtime, starts the observability server and TUI, then polls until interrupted.
+The default command. It loads the workflow, validates dispatch config, builds the dispatch coordinator and warm worker pool, constructs the runtime, starts the observability server and TUI, then polls until interrupted.
 
 ### Argument
 

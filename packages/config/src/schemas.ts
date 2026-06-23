@@ -203,12 +203,10 @@ const workerPoolSpendRawSchema = z
   .strict();
 const workerPoolRawSchema = z
   .object({
-    // Feature E removed the operator-facing `enabled` flag: the pool is the single dispatch
-    // path now. An absent `worker_pool` defaults to an enabled `local` pool (byte-identical to
-    // the old local single-tenant path), and `ssh_hosts` folds into an enabled static-ssh pool,
-    // so there is no longer an operator scenario that wants the pool "off". The `.strict()` schema
-    // therefore REJECTS `enabled`. The internal `WorkerPoolSettings.enabled` field survives because
-    // the reload-drain still toggles it to drain a removed/disabled pool to zero.
+    // There is no operator-facing `enabled` flag: the pool is the single dispatch path, so a
+    // present `worker_pool` block is always enabled. The `.strict()` schema therefore rejects an
+    // `enabled` key. (The internal `WorkerPoolSettings.enabled` field is set by the reload-drain
+    // to drain a removed pool to zero, not by config.)
     //
     // The driver selector is open-ended; whether the kind is supported is decided by the
     // worker-driver registry at pool construction, not by the schema.

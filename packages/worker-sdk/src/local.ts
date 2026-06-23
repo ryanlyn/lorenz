@@ -22,26 +22,23 @@ const CAPABILITIES: DriverCapabilities = {
 /**
  * The single-machine, in-process {@link WorkerDriver}. It provisions workers
  * whose `workerHost` is the EMPTY string, the canonical "no remote worker"
- * signal the orchestrator/endpoint-manager already understands: an empty host
- * mints NO tunnel and NO MCP lease, so acp keeps its own in-process MCP
- * endpoint and the run executes locally - byte-identical to the pre-pool local
- * dispatch path. A warm pool at `slotsPerMachine=1` over this driver therefore
- * reproduces today's local single-tenant execution exactly, which is what makes
- * a default-on pool safe.
+ * signal the orchestrator/endpoint-manager understands: an empty host mints NO
+ * tunnel and NO MCP lease, so acp keeps its own in-process MCP endpoint and the
+ * run executes locally. A warm pool at `slotsPerMachine=1` over this driver
+ * runs one local worker, single-tenant.
  *
- * Mechanically it mirrors {@link FakeWorkerDriver}: a purely in-memory
- * `Map<workerId, WorkerDescriptor>`, deterministic `createdAtMs` from the
- * injected clock, idempotent provision/destroy, and a probe that returns
- * `{ ok: true }` WITHOUT touching SSH (there is no remote machine to reach).
- * The two differences from the fake driver are deliberate: the yielded
- * `workerHost` is empty (so downstream wiring takes the local-execution arm),
- * and the `driverRef` stays distinct per worker (`local://<workerId>`) so
- * destroy/list/reconcile key per-worker even though every worker shares the
- * empty host.
+ * Mechanically it is a purely in-memory `Map<workerId, WorkerDescriptor>` with
+ * deterministic `createdAtMs` from the injected clock, idempotent
+ * provision/destroy, and a probe that returns `{ ok: true }` WITHOUT touching
+ * SSH (there is no remote machine to reach). The yielded `workerHost` is empty
+ * (so downstream wiring takes the local-execution arm), and the `driverRef`
+ * stays distinct per worker (`local://<workerId>`) so destroy/list/reconcile
+ * key per-worker even though every worker shares the empty host. There is no
+ * failure injection: a local in-process worker has no remote faults to model.
  *
  * This driver is single-machine by design: the pool affinity-keys on
  * `workerHost`, so an empty host collapses every local worker into ONE affinity
- * bucket. That is inert at the only configuration this driver is meant for
+ * bucket. That is inert at the configuration this driver is meant for
  * (`slotsPerMachine=1`, `max=1`): there is at most one local worker, so the
  * bucket never matters.
  */
@@ -71,8 +68,8 @@ export class LocalWorkerDriver implements WorkerDriver {
 
     const descriptor: WorkerDescriptor = {
       workerId: req.workerId,
-      // The empty host is the load-bearing difference: it routes the run
-      // through acp's own in-process MCP endpoint (no tunnel, no MCP lease).
+      // The empty host is load-bearing: it routes the run through acp's own
+      // in-process MCP endpoint (no tunnel, no MCP lease).
       workerHost: "",
       // A distinct, non-empty ref per worker so destroy/list/reconcile key
       // per-worker even though every local worker shares the empty host.

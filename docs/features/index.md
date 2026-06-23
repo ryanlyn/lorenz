@@ -104,7 +104,7 @@ See [workflows.md](../workflows.md) for authoring the file and [reference/config
 
 ## Remote workers
 
-Run agents on machines other than the one hosting the daemon. Two mutually exclusive paths exist. The legacy static path shards runs across a fixed list of pre-existing SSH destinations with no provisioning. The warm worker pool leases, grows, and reaps machines through a swappable driver, with spend caps and crash recovery.
+Run agents on machines other than the one hosting the daemon. The warm worker pool is the single dispatch path: it leases, grows, and reaps machines through a swappable driver, with spend caps and crash recovery. The legacy `worker.ssh_hosts` list is a shorthand that folds into a `static-ssh` pool over a fixed set of pre-existing SSH destinations with no provisioning.
 
 Static SSH hosts:
 
@@ -129,7 +129,7 @@ workers:
     image: lorenz/worker:latest
 ```
 
-You cannot combine `worker.ssh_hosts` with `worker.worker_pool` or `worker.kind`; the parser rejects it. The pool driver defaults to `fake` when a pool is present but no driver is named. `fake` is the in-memory default; the production built-ins are `static-ssh` and `docker`. Out-of-tree drivers load by module specifier.
+You cannot name a driver twice for the same hosts: the parser rejects `worker.ssh_hosts` alongside `worker.worker_pool.driver` or `worker.kind`. The pool driver defaults to `local` when no `worker.worker_pool` block is present, and to `fake` when a block is present but no driver is named. `fake` is the in-memory default; the production built-ins are `static-ssh` and `docker`. Out-of-tree drivers load by module specifier.
 
 This capability has no dedicated page of its own; [workers/index.md](../workers/index.md) is its home, covering the two paths, alongside [workers/static-ssh.md](../workers/static-ssh.md), [workers/worker-pool.md](../workers/worker-pool.md), and [workers/docker.md](../workers/docker.md).
 

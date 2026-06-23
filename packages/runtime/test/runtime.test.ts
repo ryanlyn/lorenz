@@ -1459,10 +1459,10 @@ function workerPoolWorkflowFixture(
   root = "/tmp/lorenz-runtime-workerpool",
   overrides: Record<string, unknown> = {},
 ): WorkflowDefinition {
-  // Feature E removed the operator-facing `enabled` flag, so config can no longer carry it. A
-  // disabled pool is the INTERNAL drained shape the reload-drain produces; tests that drive the
-  // reload-disable path pass `{ enabled: false }` here, which is applied to the parsed settings
-  // object AFTER parse (config rejects the key). All other overrides still flow through config.
+  // Config has no `enabled` key; a disabled pool is the INTERNAL drained shape the reload-drain
+  // produces. Tests that drive the reload-disable path pass `{ enabled: false }` here, which is
+  // applied to the parsed settings object AFTER parse (config rejects the key). All other overrides
+  // flow through config.
   const { enabled, ...configOverrides } = overrides as { enabled?: boolean } & Record<
     string,
     unknown
@@ -2881,14 +2881,13 @@ test("worker pool: reconcile is called on workflow reload with the next worker-p
 });
 
 test("worker pool: a reload that removes the worker_pool block reconciles to the default local pool", async () => {
-  // RE-ANCHOR (feature E): the pool is now the single dispatch path, so REMOVING the worker_pool
-  // block no longer disables the pool - it reconciles to the DEFAULT enabled `local` pool
-  // (min=0/warm=0/max=1), which provisions nothing eagerly. The "drain to zero on disable"
-  // coverage is preserved by the sibling test below that sets an EXPLICIT `enabled:false`; an
-  // operator must now disable explicitly rather than by deleting the block.
+  // The pool is the single dispatch path, so REMOVING the worker_pool block reconciles to the
+  // DEFAULT enabled `local` pool (min=0/warm=0/max=1), which provisions nothing eagerly. The
+  // "drain to zero on disable" coverage lives in the sibling test that sets an EXPLICIT
+  // `enabled:false`; disabling requires that explicit shape, not deleting the block.
   const issue = issueFixture("issue-bp-remove", "MT-BP-REMOVE");
   const firstWorkflow = workerPoolWorkflowFixture();
-  // The reloaded workflow has NO worker.worker_pool block: it now carries the default local pool.
+  // The reloaded workflow has NO worker.worker_pool block: it carries the default local pool.
   const secondWorkflow = workflowFixture("/tmp/lorenz-runtime-workerpool-removed");
   assert.equal(secondWorkflow.settings.worker.workerPool?.enabled, true);
   assert.equal(secondWorkflow.settings.worker.workerPool?.driver, "local");
@@ -2913,8 +2912,8 @@ test("worker pool: a reload that removes the worker_pool block reconciles to the
   await runtime.pollOnce({ dryRun: true });
 
   assert.equal(reloads, 1);
-  // The reload reconciles the live pool to the new default local pool: still enabled, but
-  // warm=0/min=0 so it holds no idle (paid) workers and the fake pool reconciles exactly once.
+  // The reload reconciles the live pool to the default local pool: enabled, with warm=0/min=0 so
+  // it holds no idle (paid) workers and the fake pool reconciles exactly once.
   assert.equal(workerPool.reconcileCalls.length, 1);
   assert.equal(workerPool.reconcileCalls[0]?.enabled, true);
   assert.equal(workerPool.reconcileCalls[0]?.driver, "local");
@@ -3094,10 +3093,9 @@ test("worker pool: a reload that throws the anti-double-capacity guard keeps las
       workflow: firstWorkflow,
       workerPool,
       reloadWorkflow: async () => {
-        // RE-ANCHOR (feature E): the old `worker.worker_pool.enabled cannot be combined with
-        // worker.ssh_hosts` throw is gone; a real ambiguous reload now throws on the driver +
-        // ssh_hosts combination. The test injects the current message to drive the throwing-reload
-        // path (keep last-good, surface the message) - the throw source is irrelevant here.
+        // An ambiguous reload (worker_pool.driver + ssh_hosts) throws this message. The test
+        // injects it to drive the throwing-reload path (keep last-good, surface the message); the
+        // throw source is irrelevant to what is asserted here.
         throw new Error("worker.worker_pool.driver cannot be combined with worker.ssh_hosts");
       },
       client: {

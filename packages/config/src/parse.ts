@@ -102,15 +102,10 @@ export function parseConfig(
   if (workerRaw.kind !== undefined && settings.worker.sshHosts.length > 0) {
     throw new Error("worker.kind cannot be combined with worker.ssh_hosts");
   }
-  // The pool is now the single dispatch path: an absent worker_pool defaults to an enabled
-  // local pool (the byte-identical successor to the old local single-tenant path), and a
-  // non-empty `ssh_hosts` is REPRESENTED by an enabled static-ssh pool rather than an
-  // exclusive legacy branch. Both are produced inside parseWorkerPool from `settings.worker.sshHosts`.
-  //
-  // The static-ssh fold-in preserves the legacy per-host concurrency: the old static path ran up to
-  // `worker.max_concurrent_agents_per_host ?? agent.max_concurrent_agents` runs per host. The agent
-  // override is not applied until parseAgentSettings below, so read it from the raw config and fall
-  // back to the default already on settings.agent; pass it as the pool's slotsPerMachine.
+  // The pool is the single dispatch path; parseWorkerPool always returns one. The static-ssh
+  // fold-in caps per-host concurrency at `max_concurrent_agents_per_host ?? agent.max_concurrent_agents`.
+  // The agent override is applied later (parseAgentSettings), so resolve it here from the raw config,
+  // falling back to the value already on settings.agent.
   const perHostConcurrency =
     settings.worker.maxConcurrentAgentsPerHost ??
     parsed.agent?.maxConcurrentAgents ??
@@ -477,31 +472,21 @@ function parseWorkerPool(
 ): WorkerPoolSettings {
   const selectedWorker = selectedWorkerProfile(workerRaw.kind, workersRaw);
 
-  // No explicit worker_pool and no named worker profile: the pool defaults the dispatch path.
-  // - Non-empty ssh_hosts -> an enabled `static-ssh` pool that REPRESENTS the legacy static-host
-  //   model (one slot per machine, max bounded by the host count, hosts threaded through
-  //   driverOptions exactly as the static-ssh driver's readSshHosts expects).
-  // - Empty ssh_hosts -> an enabled `local` pool at min=0/warm=0/max=1 so NOTHING provisions
-  //   eagerly: byte-identical to the old local single-tenant path (empty workerHost -> no tunnel,
-  //   acp keeps its own in-process MCP endpoint).
+  // No explicit worker_pool and no named worker profile: defaultDispatchWorkerPool supplies the
+  // implicit pool (a `local` pool, or a `static-ssh` pool when `ssh_hosts` is set).
   if ((raw === undefined || raw === null) && selectedWorker === undefined) {
     return defaultDispatchWorkerPool(sshHosts, perHostConcurrency);
   }
   if (selectedWorker !== undefined && raw?.driver !== undefined) {
     throw new Error("worker.kind cannot be combined with worker.worker_pool.driver");
   }
-  // An explicit `worker_pool.driver` alongside non-empty ssh_hosts is ambiguous: the fold-in only
-  // auto-selects static-ssh when the operator named NO driver. A named driver wins, so reject the
-  // combination rather than silently dropping the hosts.
+  // The `ssh_hosts` fold-in only auto-selects static-ssh when no driver is named; a named driver
+  // wins, so an explicit `worker_pool.driver` alongside `ssh_hosts` is ambiguous and rejected
+  // rather than dropping the hosts.
   if (raw?.driver !== undefined && sshHosts.length > 0) {
     throw new Error("worker.worker_pool.driver cannot be combined with worker.ssh_hosts");
   }
 
-  // The operator-facing `enabled` flag is gone (feature E): the pool is the single dispatch path,
-  // so any present `worker_pool` block or named `worker.kind` profile yields an ENABLED pool. The
-  // absent-config defaults are produced by `defaultDispatchWorkerPool` above; this branch only runs
-  // when the operator explicitly configured a pool, which is always enabled.
-  const enabled = true;
   const driver = selectedWorker?.driver ?? raw?.driver ?? "fake";
   const min = raw?.min ?? 0;
   const max = raw?.max ?? 1;
@@ -518,7 +503,9 @@ function parseWorkerPool(
   // so the constructed object carries exactly ONE own field (`slotsPerMachine`). The config key
   // `worker.worker_pool.max_in_flight` is unchanged; it parses into `slotsPerMachine`.
   const input: WorkerPoolSettingsInput = {
-    enabled,
+    // A configured pool (an explicit worker_pool block or a named worker.kind) is always enabled;
+    // `enabled` is an internal liveness flag the reload-drain flips, not an operator config key.
+    enabled: true,
     driver,
     min,
     max,
@@ -555,30 +542,24 @@ function parseWorkerPool(
 }
 
 /**
- * The implicit, default dispatch pool produced when no `worker_pool` and no `worker.kind` are
- * configured. It is the byte-identical successor to the pre-pool local/static-host dispatch:
- * - empty `sshHosts`  -> an enabled `local` pool, slotsPerMachine=1, min=0/warm=0/max=1 so the
- *   reaper warms toward nothing and the single local worker is minted on first acquire. The local
- *   driver yields an EMPTY workerHost, so the per-run endpoint manager mints no tunnel and acp
- *   keeps its own in-process MCP endpoint - exactly the old no-hosts local path.
+ * The implicit dispatch pool produced when no `worker_pool` and no `worker.kind` are configured:
+ * - empty `sshHosts`  -> an enabled `local` pool, slotsPerMachine=1, min=0/warm=0/max=1 so nothing
+ *   provisions eagerly and the single local worker is minted on first acquire. The local driver
+ *   yields an empty `workerHost`, so the per-run endpoint manager mints no tunnel and acp keeps its
+ *   own in-process MCP endpoint.
  * - non-empty `sshHosts` -> an enabled `static-ssh` pool whose driverOptions carry the configured
  *   hosts (the `ssh_hosts` spelling the driver's `readSshHosts` expects). `max` is the host count
- *   and slotsPerMachine is the legacy per-host cap (`max_concurrent_agents_per_host ??
- *   agent.max_concurrent_agents`), so total capacity (hosts * perHostConcurrency) matches the
- *   pre-pool fleet. `co_residence` is auto-enabled when that cap is >1: each co-resident run owns
- *   its own per-run Token B claim + the shared per-host reverse tunnel, so co-residence is safe and
- *   these hosts already ran multiple agents pre-pool. The provision policy is round-robin first-free
- *   (static-ssh `provision`), NOT the legacy least-loaded selection.
+ *   and slotsPerMachine is the per-host cap (`max_concurrent_agents_per_host ??
+ *   agent.max_concurrent_agents`), so total capacity is hosts * perHostConcurrency. `co_residence`
+ *   is auto-enabled when that cap is >1, since each co-resident run owns its own per-run Token B
+ *   claim plus the shared per-host reverse tunnel. The provision policy is round-robin first-free
+ *   (static-ssh `provision`).
  */
 function defaultDispatchWorkerPool(
   sshHosts: readonly string[],
   perHostConcurrency: number,
 ): WorkerPoolSettings {
   if (sshHosts.length > 0) {
-    // Preserve the legacy per-host concurrency: the old static path allowed up to
-    // `perHostConcurrency` runs per host (least-loaded selection capped at
-    // max_concurrent_agents_per_host ?? agent.max_concurrent_agents). Map it onto slotsPerMachine
-    // so total capacity (max * slotsPerMachine = hosts * perHostConcurrency) is unchanged.
     const slotsPerMachine = Math.max(1, perHostConcurrency);
     const input: WorkerPoolSettingsInput = {
       enabled: true,
@@ -596,11 +577,8 @@ function defaultDispatchWorkerPool(
       driverOptions: { ssh_hosts: [...sshHosts] },
     };
     const settings = withDerivedMaxInFlight(input);
-    // slotsPerMachine>1 co-resides runs on one host, which the slots-per-machine gate guards. Each
-    // co-resident run now owns its own per-run Token B claim + the shared per-host tunnel (feature
-    // C), so auto-enable the co_residence opt-in for the fold-in: these hosts already ran multiple
-    // agents pre-pool, so this preserves behaviour rather than widening the blast radius. A per-host
-    // cap of 1 stays single-tenant and never trips the gate.
+    // A per-host cap >1 co-resides runs on one host (guarded by the slots-per-machine gate), so
+    // auto-enable the co_residence opt-in. A cap of 1 stays single-tenant and never trips the gate.
     if (slotsPerMachine > 1) settings.coResidence = true;
     return settings;
   }

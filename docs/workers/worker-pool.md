@@ -2,7 +2,7 @@
 
 The warm worker pool provisions, leases, and reaps the SSH-addressable machines your agent runs execute on. It is a long-lived singleton in `@lorenz/worker-pool` that survives workflow hot-reload, calls a swappable `WorkerDriver` for provision/probe/destroy/list, and owns every lifecycle decision itself: leasing, warm top-up, a reaper, spend caps, a write-ahead ledger, and crash recovery. This page is for operators tuning the pool under `worker.worker_pool`.
 
-The pool is one of two mutually exclusive ways to get a `workerHost`. The other is the legacy static path `worker.ssh_hosts`, a flat list of pre-existing SSH destinations the runtime shards runs across with no provisioning or lifecycle. You cannot combine `worker.ssh_hosts` with `worker.worker_pool` or `worker.kind`; the config parser rejects it. See [static SSH workers](./static-ssh.md) for that path.
+The pool is the single dispatch path for every `workerHost`. The legacy static list `worker.ssh_hosts` folds into a `static-ssh` pool (one machine per host), so it is not a separate model; you cannot name a driver twice for the same hosts, so the parser rejects `worker.ssh_hosts` alongside `worker.worker_pool.driver` or `worker.kind`. See [static SSH workers](./static-ssh.md) for that path.
 
 ## Turning it on
 
@@ -70,8 +70,7 @@ All keys live under `worker.worker_pool`. Write them in snake_case.
 
 | Key                      | Default                                                                           | Meaning                                                                                            |
 | ------------------------ | --------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
-| `enabled`                | `true` when a `worker.kind` profile is selected; otherwise must be set explicitly | Master switch. Disabling it drains the pool.                                                       |
-| `driver`                 | `fake`                                                                            | Registered driver kind, or an out-of-tree module specifier.                                        |
+| `driver`                 | `fake` when a block is present, `local` when absent                                | Registered driver kind, or an out-of-tree module specifier. There is no `enabled` key; the pool is always live. |
 | `min`                    | `0`                                                                               | Floor the reaper keeps warm. Never reaped below this.                                              |
 | `max`                    | `1`                                                                               | Ceiling on total workers. Must be `>= min`.                                                        |
 | `warm`                   | `1`                                                                               | Target idle workers the top-up maintains. Must be `<= max`.                                        |

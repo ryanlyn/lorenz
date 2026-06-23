@@ -21,9 +21,9 @@ function workerPoolSettings(
   return parseConfig(workerPool ? { worker: { worker_pool: workerPool } } : {}).worker.workerPool;
 }
 
-// The operator-facing `enabled` flag was removed in feature E, so config can no longer express a
-// disabled pool. The reload-drain still produces the INTERNAL disabled shape; build it directly
-// from a parsed enabled pool to preserve the disabled-pool gate coverage.
+// Config cannot express a disabled pool (there is no `enabled` config key), but the reload-drain
+// produces the INTERNAL disabled shape. Build it directly from a parsed enabled pool to cover the
+// disabled-pool gate behavior.
 function internallyDisabledPoolSettings(
   workerPool: Record<string, unknown>,
 ): WorkerPoolSettings {
@@ -71,10 +71,9 @@ test("gate predicate: slotsPerMachine>1 with perRunClaimEnforcement AND coReside
 });
 
 test("gate predicate: an internally DISABLED pool with slotsPerMachine>1 returns null (dormant value, gate no-ops like an absent pool)", () => {
-  // RE-ANCHOR (feature E): config can no longer disable the pool, but the reload-drain still
-  // produces an internally disabled pool. A disabled pool cannot co-reside anything: runs go
-  // static/local, so a dormant max_in_flight>1 must be ignored exactly like an absent pool.
-  // Otherwise the startup gate hard-aborts the daemon over a value the disabled pool never uses.
+  // The reload-drain produces an internally disabled pool. A disabled pool cannot co-reside
+  // anything: runs go static/local, so a dormant max_in_flight>1 must be ignored exactly like an
+  // absent pool. Otherwise the startup gate hard-aborts the daemon over a value it never uses.
   const settings = internallyDisabledPoolSettings({ driver: "fake", max_in_flight: 2 });
   assert.equal(settings.enabled, false);
   assert.equal(settings.slotsPerMachine, 2);
@@ -90,9 +89,8 @@ test("gate predicate: default slotsPerMachine=1 always returns null regardless o
   assert.equal(checkSlotsPerMachineGate(enabledDefault, incapable), null);
   assert.equal(checkSlotsPerMachineGate(enabledDefault, capable), null);
 
-  // RE-ANCHOR (feature E): an absent worker_pool now defaults to the enabled `local` pool at
-  // slotsPerMachine=1, so the gate predicate still returns null (the gate only fires for
-  // slotsPerMachine>1). The default path stays a byte-identical no-op for any capability.
+  // An absent worker_pool defaults to the enabled `local` pool at slotsPerMachine=1, so the gate
+  // predicate returns null (it only fires for slotsPerMachine>1) for any capability.
   const defaultPool = workerPoolSettings(undefined);
   assert.equal(defaultPool?.driver, "local");
   assert.equal(defaultPool?.slotsPerMachine, 1);
@@ -101,9 +99,9 @@ test("gate predicate: default slotsPerMachine=1 always returns null regardless o
 });
 
 test("ssh_hosts fold-in passes the gate: auto co_residence + perRunClaimEnforcement keeps the >1 fleet safe", () => {
-  // Feature E folds ssh_hosts into a static-ssh pool at slotsPerMachine = the per-host cap (default
-  // 10) and auto-enables co_residence. The startup gate must therefore PASS for a claim-enforcing
-  // coordinator (the daemon wires the concrete per-run manager) and FAIL loud for an incapable one.
+  // ssh_hosts folds into a static-ssh pool at slotsPerMachine = the per-host cap (default 10) and
+  // auto-enables co_residence. The startup gate therefore PASSES for a claim-enforcing coordinator
+  // (the daemon wires the concrete per-run manager) and FAILS loud for an incapable one.
   const folded = parseConfig({
     worker: { ssh_hosts: ["user@a:22", "user@b:22"] },
   }).worker.workerPool;

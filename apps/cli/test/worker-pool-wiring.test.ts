@@ -23,11 +23,8 @@ beforeAll(() => {
 });
 
 test("buildWorkerPool builds the DEFAULT enabled local pool for an absent worker_pool", async () => {
-  // RE-ANCHOR (feature E): parseConfig({}) no longer yields an undefined pool - the pool is the
-  // single dispatch path, defaulting to an enabled `local` pool at slotsPerMachine=1 with
-  // min=0/warm=0/max=1. buildWorkerPool now constructs it (nothing provisions eagerly because
-  // warm=0/min=0). The byte-identical disabled-path coverage moves to the explicit enabled:false
-  // test below.
+  // parseConfig({}) defaults to an enabled `local` pool at slotsPerMachine=1 with
+  // min=0/warm=0/max=1. buildWorkerPool constructs it; nothing provisions eagerly (warm=0/min=0).
   const settings = parseConfig({}, {});
   assert.equal(settings.worker.workerPool?.enabled, true);
   assert.equal(settings.worker.workerPool?.driver, "local");
@@ -43,13 +40,10 @@ test("buildWorkerPool builds the DEFAULT enabled local pool for an absent worker
   await workerPool!.drain({ deadlineMs: 1_000 });
 });
 
-test("the operator-facing worker_pool.enabled opt-out is removed (feature E)", () => {
-  // RE-ANCHOR (feature E): the old `enabled:false` operator opt-out (buildWorkerPool -> undefined)
-  // is gone - the pool is the single dispatch path, and an operator who wants "no pool" already
-  // gets the inert default local pool. The `.strict()` config schema now rejects `enabled`. The
-  // INTERNAL disabled-pool -> undefined contract still holds for hand-built settings (covered by
-  // the "buildWorkerPool returns undefined for an internally disabled pool" test below), which is
-  // the shape the reload-drain produces; it is no longer reachable from operator config.
+test("there is no operator-facing worker_pool.enabled opt-out", () => {
+  // The pool is the single dispatch path; an operator who wants "no pool" gets the inert default
+  // local pool. The `.strict()` config schema rejects `enabled`. The internal disabled-pool ->
+  // undefined contract (the shape the reload-drain produces) is covered by the test below.
   assert.throws(
     () => parseConfig({ worker: { worker_pool: { enabled: false, driver: "fake" } } }, {}),
     /unsupported keys: enabled/,
@@ -57,10 +51,9 @@ test("the operator-facing worker_pool.enabled opt-out is removed (feature E)", (
 });
 
 test("buildWorkerPool returns undefined for an internally disabled pool", async () => {
-  // The reload-drain reconciles a removed pool to an internally disabled settings object; nothing
-  // operator-facing produces this shape anymore, but buildWorkerPool must still short-circuit it so
-  // a drained pool is never rebuilt. Construct the disabled shape directly (parseConfig can no
-  // longer express it) to pin the internal `enabled:false` -> undefined contract.
+  // The reload-drain reconciles a removed pool to an internally disabled settings object, and
+  // buildWorkerPool must short-circuit it so a drained pool is never rebuilt. Construct the disabled
+  // shape directly (config cannot express it) to pin the internal `enabled:false` -> undefined contract.
   const settings = parseConfig({ worker: { worker_pool: { driver: "fake" } } }, {});
   const disabled = {
     ...settings,
@@ -164,12 +157,10 @@ test("gate: slotsPerMachine>1 with perRunClaimEnforcement AND coResidence passes
 });
 
 test("gate: an internally DISABLED pool with max_in_flight>1 does not abort daemon startup", async () => {
-  // RE-ANCHOR (feature E): the operator `enabled:false` opt-out is gone, so this is no longer
-  // reachable from config; the INTERNAL disabled shape (produced by the reload-drain) still must
-  // not gate startup. A dormant max_in_flight>1 on a disabled pool must not gate: the pool is off
-  // (runs go static/local), so buildDispatchCoordinator returns undefined and
-  // assertSlotsPerMachineGate(settings, undefined) must NOT throw. Construct the disabled shape
-  // directly (config can no longer express it) to preserve the original coverage intent.
+  // The INTERNAL disabled shape (produced by the reload-drain) must not gate startup. A dormant
+  // max_in_flight>1 on a disabled pool does not gate: the pool is off (runs go static/local), so
+  // buildDispatchCoordinator returns undefined and assertSlotsPerMachineGate(settings, undefined)
+  // does NOT throw. Construct the disabled shape directly (config cannot express it).
   const parsed = gateSettings({ driver: "fake", max_in_flight: 2 });
   const settings = {
     ...parsed,
@@ -193,9 +184,8 @@ test("gate: default slotsPerMachine=1 always passes regardless of capability/opt
   assertSlotsPerMachineGate(enabledDefault, incapable);
   assertSlotsPerMachineGate(enabledDefault, capable);
 
-  // RE-ANCHOR (feature E): an absent worker_pool now defaults to the enabled `local` pool at
-  // slotsPerMachine=1, so the gate is still inert (slotsPerMachine===1 never triggers). The
-  // default-path gate is byte-identical: it passes for both a present and an absent coordinator.
+  // An absent worker_pool defaults to the enabled `local` pool at slotsPerMachine=1, so the gate is
+  // inert (slotsPerMachine===1 never triggers): it passes for both a present and an absent coordinator.
   const defaultPool = gateSettings(undefined);
   assert.equal(defaultPool.worker.workerPool?.driver, "local");
   assert.equal(defaultPool.worker.workerPool?.slotsPerMachine, 1);
@@ -203,24 +193,18 @@ test("gate: default slotsPerMachine=1 always passes regardless of capability/opt
   assertSlotsPerMachineGate(defaultPool, capable);
 });
 
-// --- STAGE 2: an EXPLICIT enabled local pool is byte-identical at slotsPerMachine=1 ---
-// Before any default is changed (stage 3), prove that wiring an explicit
-// `worker_pool: { enabled:true, driver:"local" }` at the default slotsPerMachine=1
-// routes through buildDispatchCoordinator / the REAL per-run McpEndpointManager and
-// reproduces today's local single-tenant execution EXACTLY:
+// An EXPLICIT enabled local pool at slotsPerMachine=1 routes through buildDispatchCoordinator /
+// the REAL per-run McpEndpointManager and runs local single-tenant execution:
 //   - the leased slot's workerHost is the EMPTY string (the local driver yields it),
 //   - the slot's mcpEndpoint is null (the per-run manager mints NO tunnel for an
 //     empty host, so acp keeps its own in-process endpoint - no token, no ssh -N),
 //   - the co-residence gate is inert at slotsPerMachine=1 for BOTH a capable and an
 //     incapable coordinator capability.
-// This isolates "does the local driver behave locally end-to-end" from "is it the
-// default", so a stage-3 default regression is unambiguous. These are NEW positive
-// assertions; they do not touch the disabled-path tests above (re-anchored in stage 4).
 
 function localPoolSettings(extra: Record<string, unknown> = {}) {
   // warm:0 / min:0 keeps the pool lazy so nothing provisions eagerly; the single
   // local worker is minted on-demand by acquire. max:1 + slotsPerMachine=1 is the
-  // single-tenant shape a default-on local pool will use.
+  // single-tenant shape the default-on local pool uses.
   return parseConfig({
     worker: { worker_pool: { driver: "local", warm: 0, min: 0, max: 1, ...extra } },
   });
@@ -250,8 +234,7 @@ test("wiring: an explicit enabled local pool leases an EMPTY-host slot with a nu
     if (result.status !== "bound") return;
 
     // The local driver's empty workerHost is the load-bearing contract: it routes the
-    // run through acp's own in-process MCP endpoint - byte-identical to the pre-pool
-    // local dispatch path.
+    // run through acp's own in-process MCP endpoint (the local dispatch path).
     assert.equal(result.slot.workerHost, "");
     // The per-run manager minted NO endpoint for the empty host: acp keeps its own
     // endpoint, no per-run token, no reverse tunnel (`ssh -N`) child.
@@ -270,10 +253,9 @@ test("wiring: an explicit enabled local pool leases an EMPTY-host slot with a nu
 });
 
 test("wiring: the local pool coordinator advertises perRunClaimEnforcement=true yet the empty host opens no tunnel", async () => {
-  // The coordinator is wired with the CONCRETE per-run manager (perRunClaimEnforcement=true),
-  // so the capability surface is identical to a remote pool; the byte-identical local
-  // behaviour comes purely from the empty host short-circuiting open() to null, NOT
-  // from a degraded capability.
+  // The coordinator is wired with the CONCRETE per-run manager (perRunClaimEnforcement=true), so
+  // the capability surface is identical to a remote pool; the local behaviour comes purely from the
+  // empty host short-circuiting open() to null, NOT from a degraded capability.
   const settings = localPoolSettings();
   const coordinator = await buildDispatchCoordinator(settings, {});
   assert.ok(coordinator);
@@ -294,10 +276,10 @@ test("gate: an explicit local pool at slotsPerMachine=1 is inert for both capabl
   assertSlotsPerMachineGate(settings, capable);
 });
 
-// --- STAGE 3: the IMPLICIT-DEFAULT local pool (absent worker_pool) is byte-identical ---
-// parseConfig({}) now defaults to the enabled local pool. Prove the DEFAULT (not just the
-// explicit) pool, built via buildDispatchCoordinator, reproduces local single-tenant dispatch:
-// an empty-host slot with a null MCP lease, and NO worker provisioned until first acquire.
+// The IMPLICIT-DEFAULT local pool (absent worker_pool) runs local single-tenant dispatch.
+// parseConfig({}) defaults to the enabled local pool. Built via buildDispatchCoordinator, the
+// default pool leases an empty-host slot with a null MCP lease, and provisions NO worker until the
+// first acquire.
 
 test("wiring: the IMPLICIT default local pool leases an empty-host slot and provisions nothing eagerly", async () => {
   const settings = parseConfig({});

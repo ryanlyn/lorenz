@@ -1,6 +1,6 @@
 # Workers
 
-Workers are where agent runs execute. This page is for operators choosing between running agents on the Lorenz host, sharding them across a fixed set of SSH machines, or leasing machines from a warm pool. It covers the config that selects each mode, how they are mutually exclusive, and how Lorenz spreads runs across hosts.
+Workers are where agent runs execute. This page is for operators choosing between running agents on the Lorenz host, sharding them across a fixed set of SSH machines, or leasing machines from a warm pool. It covers the config that selects each mode and how Lorenz spreads runs across hosts.
 
 By default there is no worker config and every agent run executes locally on the machine running the `lorenz` daemon. You opt into remote execution by adding one of two blocks to your `WORKFLOW.md` front matter.
 
@@ -17,7 +17,7 @@ Lorenz resolves an SSH-addressable target for each run. Where that target comes 
 | Drivers      | n/a                                      | n/a                                                        | `fake`, `static-ssh`, `docker`, or an out-of-tree module               |
 | When to use  | single-host development, small workloads | you already run a stable fleet of build boxes              | you want elastic, billed capacity that grows and shrinks with demand   |
 
-The pool is the single dispatch path, so `worker.ssh_hosts` is not a separate model anymore - it folds into a `static-ssh` pool with one slot per host. You still cannot name a driver twice for the same hosts: the parser rejects `worker.kind` alongside `worker.ssh_hosts`, `worker.worker_pool.driver` alongside `worker.ssh_hosts`, and `worker.kind` alongside `worker.worker_pool.driver`.
+The pool is the single dispatch path, so `worker.ssh_hosts` is not a separate model: it folds into a `static-ssh` pool with one machine per host. You cannot name a driver twice for the same hosts, so the parser rejects `worker.kind` alongside `worker.ssh_hosts`, `worker.worker_pool.driver` alongside `worker.ssh_hosts`, and `worker.kind` alongside `worker.worker_pool.driver`.
 
 ```sh
 worker.kind cannot be combined with worker.ssh_hosts

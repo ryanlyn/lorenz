@@ -1329,14 +1329,13 @@ test("createPerRunEndpointManager.release closes the lease; release(null) is a n
   await manager.release(null);
 });
 
-// --- STAGE 2: an empty-host (local-driver) lease through the CONCRETE per-run
-// manager binds with a NULL endpoint and NEVER mints a tunnel ----------------
-// The `local` worker driver yields an EMPTY workerHost. Routed end-to-end through
-// the coordinator wired with the REAL createPerRunEndpointManager (perRunClaimEnforcement=true),
-// the empty host must short-circuit open() to null so acp keeps its OWN endpoint:
-// acquireForRun (which would mint the per-run token + reverse tunnel) is NEVER called.
-// This is the coordinator-level twin of the apps/cli wiring proof: the byte-identical
-// local behaviour comes from the empty host, not from a degraded capability.
+// An empty-host (local-driver) lease through the CONCRETE per-run manager binds with a NULL
+// endpoint and never mints a tunnel. The `local` worker driver yields an EMPTY workerHost. Routed
+// end-to-end through the coordinator wired with the REAL createPerRunEndpointManager
+// (perRunClaimEnforcement=true), the empty host short-circuits open() to null so acp keeps its OWN
+// endpoint: acquireForRun (which would mint the per-run token + reverse tunnel) is NEVER called.
+// The coordinator still advertises the per-run capability; the local behaviour is the empty-host
+// short-circuit, not a degraded capability.
 
 test("local driver (empty host) through the concrete per-run manager binds a null endpoint and mints no tunnel", async () => {
   let acquireForRunCalls = 0;
@@ -1368,7 +1367,7 @@ test("local driver (empty host) through the concrete per-run manager binds a nul
   assert.equal(acquireForRunCalls, 0);
 
   // Settling the empty-host slot needs no endpoint close (release(null) is a no-op)
-  // and settles the worker exactly as the byte-identical local path.
+  // and settles the worker through the local path.
   await result.slot.release("healthy");
   assert.deepEqual(lease.settles, [{ kind: "release", arg: "healthy" }]);
   assert.equal(coordinator.snapshot().slots.length, 0);

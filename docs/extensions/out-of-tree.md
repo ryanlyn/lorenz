@@ -95,7 +95,6 @@ Loading never happens on the acquire path. A run never triggers a dynamic import
 ```yaml
 worker:
   worker_pool:
-    enabled: true
     driver: "@acme/lorenz-drivers#acmeWorkerDriver"
 workers:
   acme:

@@ -243,18 +243,18 @@ export interface TrackerSettings {
 /**
  * Configuration for the embedded warm worker/executor worker pool, the single dispatch path. When
  * `enabled`, the runtime leases a worker per run (producing the run's `workerHost`) through the
- * configured driver. The default `local` driver yields an empty `workerHost` so dispatch executes
- * on acp's own in-process MCP endpoint (byte-identical to the pre-pool local path); the
- * `static-ssh` driver represents the legacy {@link WorkerSettings.sshHosts} static-host model.
- * Durations are milliseconds; spend caps are seconds (matching {@link UsageTotals.secondsRunning}).
+ * configured driver. The `local` driver yields an empty `workerHost` so dispatch executes on acp's
+ * own in-process MCP endpoint; the `static-ssh` driver leases from the
+ * {@link WorkerSettings.sshHosts} static-host model. Durations are milliseconds; spend caps are
+ * seconds (matching {@link UsageTotals.secondsRunning}).
  */
 export interface WorkerPoolSettings {
   /**
-   * Internal liveness switch, NOT an operator-facing config key (feature E removed the
-   * `worker.worker_pool.enabled` config field). A parsed config always produces `enabled: true`;
-   * the reload-drain is the only writer that flips it to `false`, to drain a removed pool to zero
-   * (`reconcile` then skips the driver swap and tears the workers down). When `false` the pool is
-   * constructed-but-inert (or not constructed at all) and `governs()` falls through to local/static.
+   * Internal liveness switch, not an operator-facing config key. A parsed config always produces
+   * `enabled: true`; the reload-drain is the only writer that flips it to `false`, to drain a
+   * removed pool to zero (`reconcile` then skips the driver swap and tears the workers down). When
+   * `false` the pool is constructed-but-inert (or not constructed at all) and `governs()` falls
+   * through to local/static.
    */
   enabled: boolean;
   /** Worker driver backend that provisions, probes, and destroys workers. */
@@ -388,10 +388,10 @@ export interface WorkerSettings {
   /**
    * Embedded worker-pool configuration; the single dispatch path. {@link parseConfig} always
    * populates it: an absent `worker_pool` with no hosts defaults to an enabled `local` pool
-   * (slotsPerMachine=1, min=0/warm=0/max=1) that is byte-identical to the old local single-tenant
-   * dispatch, and a non-empty {@link WorkerSettings.sshHosts} is represented by an enabled
-   * `static-ssh` pool carrying the hosts in {@link WorkerPoolSettings.driverOptions}. The field
-   * stays optional in the type so non-parse constructors (tests, fixtures) may omit it.
+   * (slotsPerMachine=1, min=0/warm=0/max=1), and a non-empty {@link WorkerSettings.sshHosts} is
+   * represented by an enabled `static-ssh` pool carrying the hosts in
+   * {@link WorkerPoolSettings.driverOptions}. The field stays optional in the type so non-parse
+   * constructors (tests, fixtures) may omit it.
    */
   workerPool?: WorkerPoolSettings | undefined;
 }

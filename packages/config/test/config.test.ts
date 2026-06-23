@@ -1324,8 +1324,7 @@ test("worker.worker_pool parses all keys with snake_case aliasing", () => {
     worker: {
       kind: "static-prod",
       worker_pool: {
-        // RE-ANCHOR (feature E): the operator-facing `enabled` key was removed; the parsed pool is
-        // always enabled, asserted on the output below. Config no longer accepts `enabled`.
+        // There is no `enabled` config key; the parsed pool is always enabled (asserted below).
         min: 1,
         max: 4,
         warm: 2,
@@ -1471,10 +1470,9 @@ test("worker.worker_pool max_in_flight parses into slotsPerMachine with maxInFli
 });
 
 test("absent worker_pool defaults to an enabled local pool (byte-identical local dispatch)", () => {
-  // RE-ANCHOR (feature E): the pool is now the single dispatch path. An absent worker_pool with no
-  // hosts no longer leaves workerPool undefined; it defaults to an enabled `local` pool at
-  // slotsPerMachine=1 with min=0/warm=0/max=1, which provisions nothing eagerly and routes runs
-  // through acp's own endpoint (empty workerHost) - byte-identical to the old local single-tenant path.
+  // An absent worker_pool with no hosts defaults to an enabled `local` pool at slotsPerMachine=1
+  // with min=0/warm=0/max=1, which provisions nothing eagerly and routes runs through acp's own
+  // endpoint (empty workerHost): the byte-identical local single-tenant dispatch path.
   const settings = parseConfig({ worker: { ssh_timeout_ms: 1_000 } });
   assert.ok(settings.worker.workerPool);
   assert.equal(settings.worker.workerPool?.enabled, true);
@@ -1486,9 +1484,8 @@ test("absent worker_pool defaults to an enabled local pool (byte-identical local
 });
 
 test("REGRESSION: default local-pool Settings clone deep-equals the issue-state clone", () => {
-  // RE-ANCHOR (feature E): the byte-identity clone property is preserved over the NEW default pool.
-  // The deep-equal-clone shape still holds; the only change is workerPool is now present (the
-  // default local pool) rather than absent, so assert it is present-and-equal in the clone.
+  // The byte-identity deep-equal-clone property holds over the default local pool: workerPool is
+  // present (the default local pool) and is present-and-equal in the clone.
   const settings = parseConfig({});
   const clone = settingsForIssueState(settings, "Todo");
   assert.deepEqual(clone, settings);
@@ -1515,8 +1512,7 @@ test("worker.worker_pool driver is an open string resolved by the registry", () 
 test("workers.<name> options are accepted for open driver names", () => {
   const settings = parseConfig({
     worker: {
-      // RE-ANCHOR (feature E): a named `worker.kind` alone yields an enabled pool now; the old
-      // `worker_pool: { enabled: true }` opt-in is gone (the `enabled` key is rejected).
+      // A named `worker.kind` alone yields an enabled pool; there is no `enabled` opt-in key.
       kind: "antarctica",
     },
     workers: {
@@ -1578,23 +1574,20 @@ test("worker.worker_pool rejects non-positive integers where positive is require
 });
 
 test("ssh_hosts folds into an enabled static-ssh pool (no throw)", () => {
-  // RE-ANCHOR (feature E): the old enabled&&ssh_hosts mutual-exclusivity throw is GONE - the pool
-  // now REPRESENTS the static-host case. A bare ssh_hosts (no named driver) yields an enabled
-  // `static-ssh` pool with the hosts threaded through driverOptions.ssh_hosts and max bounded by
-  // the host count. The legacy per-host CAPACITY is preserved: slotsPerMachine is the old per-host
-  // cap (max_concurrent_agents_per_host ?? agent.max_concurrent_agents, default 10), and
-  // co_residence is auto-enabled because each co-resident run owns its own per-run Token B claim +
-  // the shared per-host tunnel. The provision policy is round-robin first-free (static-ssh driver),
-  // documented vs the old least-loaded selection.
+  // A bare ssh_hosts (no named driver) represents the static-host case as an enabled `static-ssh`
+  // pool: the hosts are threaded through driverOptions.ssh_hosts and max is bounded by the host
+  // count. Per-host capacity is the per-host cap (max_concurrent_agents_per_host ??
+  // agent.max_concurrent_agents, default 10) mapped onto slotsPerMachine, and co_residence is
+  // auto-enabled because each co-resident run owns its own per-run Token B claim plus the shared
+  // per-host tunnel. The provision policy is round-robin first-free (static-ssh driver).
   const folded = parseConfig({
     worker: { ssh_hosts: ["user@host-a:22", "user@host-b:22"] },
   });
   assert.deepEqual(folded.worker.sshHosts, ["user@host-a:22", "user@host-b:22"]);
   assert.equal(folded.worker.workerPool?.enabled, true);
   assert.equal(folded.worker.workerPool?.driver, "static-ssh");
-  // RE-ANCHOR (ssh_hosts capacity preservation): previously the fold-in pinned slotsPerMachine=1,
-  // which silently cut existing ssh_hosts fleets from ~10 runs/host to 1. The fold-in now preserves
-  // the legacy per-host cap (default agent.max_concurrent_agents=10) and auto-enables co_residence.
+  // slotsPerMachine is the per-host cap (default agent.max_concurrent_agents=10); a per-host
+  // capacity >1 auto-enables co_residence.
   assert.equal(folded.worker.workerPool?.slotsPerMachine, 10);
   assert.equal(folded.worker.workerPool?.coResidence, true);
   assert.equal(folded.worker.workerPool?.max, 2);
@@ -1692,12 +1685,10 @@ test("unknown key under worker_pool throws (strict schema)", () => {
   );
 });
 
-test("worker.worker_pool.enabled is no longer an operator-facing key (feature E)", () => {
-  // RE-ANCHOR (feature E): the operator-facing `enabled` flag was removed because the pool is now
-  // the single dispatch path (an absent pool defaults to an enabled local pool; ssh_hosts folds
-  // into static-ssh), so there is no operator scenario that turns the pool "off". The `.strict()`
-  // schema rejects `enabled` like any other unknown key - the disabled-path coverage that used to
-  // pass `enabled: false` is re-anchored to this rejection plus the default-on behavior above.
+test("worker.worker_pool.enabled is not an operator-facing key", () => {
+  // The pool is the single dispatch path (an absent pool defaults to an enabled local pool;
+  // ssh_hosts folds into static-ssh), so there is no operator scenario that turns the pool "off".
+  // The `.strict()` schema rejects `enabled` like any other unknown key, whether true or false.
   assert.throws(
     () => parseConfig({ worker: { worker_pool: { driver: "fake", enabled: false } } }),
     /unsupported keys: enabled/,

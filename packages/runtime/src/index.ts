@@ -898,8 +898,8 @@ export class LorenzRuntime {
       //
       // The coordinator (and its pool) is a reload-surviving singleton: diff
       // prev-vs-next worker-pool settings instead of being reconstructed. The pool is
-      // now the single dispatch path, so a parsed config ALWAYS carries a worker_pool
-      // (an absent block defaults to the enabled `local` pool). The
+      // the single dispatch path, so a parsed config always carries a worker_pool (an
+      // absent block defaults to the enabled `local` pool). The
       // `disabledWorkerPoolSettings(prevWorkerPool)` fallback only fires for a settings
       // object built outside parseConfig that genuinely omits the block; reconcile then
       // drains the live pool to zero instead of leaking its (paid) workers. A present

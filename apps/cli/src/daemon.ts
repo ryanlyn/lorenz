@@ -144,20 +144,18 @@ export interface BuildWorkerPoolOptions {
 }
 
 /**
- * Constructs the warm worker pool for the parsed worker-pool settings. The pool is
- * the single dispatch path now (feature E removed the operator-facing `enabled`
- * flag), so a parsed config ALWAYS carries an enabled pool - an absent `worker_pool`
- * defaults to an enabled `local` pool that provisions nothing eagerly. The internal
- * `enabled` field survives only for the reload-drain (a removed pool is reconciled to
- * disabled so it drains to zero); this guard returns `undefined` for such an internally
- * disabled / absent settings object so nothing is rebuilt. The pool resolves the configured `driver` against the
- * worker-driver registry populated by {@link registerBuiltinBackends}; a driver
- * string that is NOT a registered kind is treated as a module specifier and
- * dynamic-imported into the registry first (see {@link ensureWorkerDriverLoaded}),
- * so third-party drivers load at the same fail-loud startup point - an
- * unresolvable driver throws `worker_pool_driver_unavailable` before the pool, the
- * runtime, or any provision exists. The write-ahead ledger (only consulted by
- * cloud drivers) lives under `<workspace.root>/.lorenz/worker-pool/`.
+ * Constructs the warm worker pool for the parsed worker-pool settings. The pool is the single
+ * dispatch path, so a parsed config always carries an enabled pool (an absent `worker_pool`
+ * defaults to an enabled `local` pool that provisions nothing eagerly). The internal `enabled`
+ * field is only flipped off by the reload-drain (a removed pool reconciled to drain to zero); this
+ * guard returns `undefined` for such an internally disabled / absent settings object so nothing is
+ * rebuilt. The pool resolves the configured `driver` against the worker-driver registry populated
+ * by {@link registerBuiltinBackends}; a driver string that is NOT a registered kind is treated as a
+ * module specifier and dynamic-imported into the registry first (see
+ * {@link ensureWorkerDriverLoaded}), so third-party drivers load at the same fail-loud startup
+ * point - an unresolvable driver throws `worker_pool_driver_unavailable` before the pool, the
+ * runtime, or any provision exists. The write-ahead ledger (only consulted by cloud drivers) lives
+ * under `<workspace.root>/.lorenz/worker-pool/`.
  */
 export async function buildWorkerPool(
   settings: Settings,
@@ -183,9 +181,8 @@ export async function buildWorkerPool(
 /**
  * Constructs the runtime-facing {@link DispatchCoordinator}, wrapping the same
  * {@link WorkerPool} that {@link buildWorkerPool} builds and the injected
- * {@link McpEndpointManager}. The pool is the single dispatch path now (feature E
- * removed the operator-facing `enabled` flag), so a parsed config always yields a
- * coordinator. Returns `undefined` only for an internally disabled / absent settings
+ * {@link McpEndpointManager}. The pool is the single dispatch path, so a parsed config always
+ * yields a coordinator. Returns `undefined` only for an internally disabled / absent settings
  * object (the reload-drain's drained-to-zero shape), mirroring {@link buildWorkerPool}.
  *
  * The CONCRETE per-run {@link McpEndpointManager} (`perRunClaimEnforcement=true`) is wired
