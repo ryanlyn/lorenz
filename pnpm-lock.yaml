@@ -349,6 +349,9 @@ importers:
       "@lorenz/domain":
         specifier: workspace:*
         version: link:../../packages/domain
+      "@lorenz/flags":
+        specifier: workspace:*
+        version: link:../../packages/flags
       "@lorenz/humanize":
         specifier: workspace:*
         version: link:../../packages/humanize
@@ -726,6 +729,15 @@ importers:
       "@agentclientprotocol/sdk":
         specifier: "catalog:"
         version: 0.21.1(zod@4.4.3)
+
+  packages/flags:
+    dependencies:
+      "@lorenz/domain":
+        specifier: workspace:*
+        version: link:../domain
+      zod:
+        specifier: "catalog:"
+        version: 4.4.3
 
   packages/humanize: {}
 

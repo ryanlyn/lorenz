@@ -4,6 +4,8 @@ import path from "node:path";
 import { afterEach, test, vi } from "vitest";
 import { assert, tempDir, writeExecutable } from "@lorenz/test-utils";
 
+import { doctorOptionsFromCommanderOptions } from "../src/doctor.js";
+
 import {
   main,
   parseDoctorArgs,
@@ -24,6 +26,8 @@ test("doctor command parses workflow path and local options", () => {
       workflowPath: "WORKFLOW.md",
       dashboard: false,
       logsRoot: null,
+      flagTokens: [],
+      featureTokens: [],
     },
   });
   assert.deepEqual(parseDoctorArgs(["--logs-root", "tmp/custom-logs"]), {
@@ -32,8 +36,21 @@ test("doctor command parses workflow path and local options", () => {
       workflowPath: null,
       dashboard: true,
       logsRoot: "tmp/custom-logs",
+      flagTokens: [],
+      featureTokens: [],
     },
   });
+});
+
+test("doctor composes inherited root and local flag/feature tokens", () => {
+  const options = doctorOptionsFromCommanderOptions(
+    { flag: ["scheduler=1"], feature: ["local"] },
+    "WORKFLOW.md",
+    { flag: ["root=2"], feature: ["root_feature"] },
+  );
+  // Inherited root tokens come first, local tokens last (local wins per key at resolve time).
+  assert.deepEqual(options.flagTokens, ["root=2", "scheduler=1"]);
+  assert.deepEqual(options.featureTokens, ["root_feature", "local"]);
 });
 
 test("doctor command reports help and invalid arguments", () => {

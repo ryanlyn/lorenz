@@ -100,6 +100,17 @@ module.exports = {
       from: { path: "^packages/" },
       to: { path: "^extensions/" },
     },
+    {
+      name: "flags-stays-engine-internal",
+      comment:
+        "@lorenz/flags is engine-layer feature gating. The SDK and extension layers already " +
+        "cannot import engine packages; this names the boundary explicitly so a future allow-list " +
+        "widening cannot silently leak the flags registry into an SDK or extension, which must " +
+        "resolve gating through the engine (injected deps), never the flags package directly.",
+      severity: "error",
+      from: { path: "^(?:packages/(?:tracker-sdk|tool-sdk|agent-sdk|worker-sdk)|extensions/[^/]+)/" },
+      to: { path: "^packages/flags/" },
+    },
   ],
   options: {
     doNotFollow: {

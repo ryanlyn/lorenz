@@ -29,6 +29,7 @@ import { defaultToolRegistry } from "@lorenz/tool-sdk";
 import { defaultTrackerRegistry } from "@lorenz/tracker-sdk";
 
 import { registerBuiltinBackends, runtimeDefaultSettingsOptions } from "./daemon.js";
+import { accumulateOption, resolveAppFlags } from "./flags-manifest.js";
 
 type DoctorCheckStatus = "ok" | "warning" | "error";
 
@@ -49,16 +50,24 @@ export interface DoctorCommandOptions {
   workflowPath: string | null;
   dashboard: boolean;
   logsRoot: string | null;
+  // Optional so existing/programmatic callers of the exported runDoctorCommand stay
+  // source-compatible; the resolver treats absent arrays as "no CLI overrides".
+  flagTokens?: string[];
+  featureTokens?: string[];
 }
 
 export interface DoctorCommanderOptions {
   dashboard?: boolean;
   logsRoot?: string;
+  flag?: string[];
+  feature?: string[];
 }
 
 export interface DoctorInheritedOptions {
   dashboard?: boolean | undefined;
   logsRoot?: string | undefined;
+  flag?: string[] | undefined;
+  feature?: string[] | undefined;
 }
 
 interface DoctorRunContext {
@@ -91,6 +100,16 @@ export function createDoctorCommand(name = "lorenz doctor"): Command {
       "--logs-root <path>",
       "Root directory for Lorenz logs.",
       parseRequiredValue("--logs-root", "path"),
+    )
+    .option(
+      "--flag <key=value>",
+      "Override an internal feature flag (repeatable).",
+      accumulateOption,
+    )
+    .option(
+      "--feature <name|name=bool>",
+      "Enable or disable an internal feature preset (repeatable).",
+      accumulateOption,
     );
 }
 
@@ -122,6 +141,11 @@ export function doctorOptionsFromCommanderOptions(
     workflowPath: workflowPath ?? null,
     dashboard: parsed.dashboard === false || inherited.dashboard === false ? false : true,
     logsRoot: parsed.logsRoot ?? inherited.logsRoot ?? null,
+    // Flag/feature tokens compose across the root and subcommand (unlike the scalar options above):
+    // inherited root tokens come first, then local ones, so both apply and a local token wins per
+    // key via the resolver's last-wins-within-a-layer rule.
+    flagTokens: [...(inherited.flag ?? []), ...(parsed.flag ?? [])],
+    featureTokens: [...(inherited.feature ?? []), ...(parsed.feature ?? [])],
   };
 }
 
@@ -173,6 +197,7 @@ export async function runDoctorCommand(
 
   applyDoctorOverrides(workflow.settings, options);
   checks.push(...checkConfigDeprecations(workflow.config));
+  checks.push(checkFlags(workflow.config, options, env));
   checks.push(checkDispatchConfig(workflow.settings));
   checks.push(await checkDashboardAssets(workflow.settings, options.dashboard));
   checks.push(await checkLogPath(workflow.settings.logging.logFile));
@@ -244,6 +269,38 @@ function checkConfigDeprecations(rawConfig: Record<string, unknown>): DoctorChec
     message: formatConfigDeprecation(dep),
     details: { key: dep.configPath, replacement: dep.replacement },
   }));
+}
+
+function checkFlags(
+  config: Record<string, unknown>,
+  options: DoctorCommandOptions,
+  env: NodeJS.ProcessEnv,
+): DoctorCheck {
+  try {
+    const flags = resolveAppFlags(
+      { flagTokens: options.flagTokens, featureTokens: options.featureTokens },
+      config,
+      env,
+      { warn: () => {} },
+    );
+    const details: Record<string, string | number | boolean | null> = {};
+    for (const [key, value] of Object.entries(flags.values)) {
+      details[key] =
+        `${JSON.stringify(value)} (${flags.source(key as Parameters<typeof flags.source>[0])})`;
+    }
+    return {
+      id: "flags",
+      status: "ok",
+      message: "Internal feature flags resolve with the active layers.",
+      details,
+    };
+  } catch (error) {
+    return {
+      id: "flags",
+      status: "error",
+      message: `Internal feature flags failed to resolve: ${errorMessage(error)}`,
+    };
+  }
 }
 
 function checkDispatchConfig(settings: Settings): DoctorCheck {
