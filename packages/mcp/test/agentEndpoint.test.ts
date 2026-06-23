@@ -293,7 +293,7 @@ test("recycling a host:port slot bumps the generation so a fresh claim outranks 
 });
 
 // ---------------------------------------------------------------------------
-// C6 bypass closure: the per-run claim path can NEVER mint an unenforceable token.
+// Bypass closure: the per-run claim path can NEVER mint an unenforceable token.
 // ---------------------------------------------------------------------------
 
 test("acquireAgentMcpEndpointForRun REFUSES an empty (local) worker host (no Token B minted for a local run)", async () => {

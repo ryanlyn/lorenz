@@ -70,7 +70,7 @@ The core tracker bundle. `tracker.kind` selects the provider. There is no defaul
 
 | Key | Type | Default | Meaning |
 | --- | --- | --- | --- |
-| `tracker.kind` | string | (none) | Selects the provider: `linear`, `jira`, `jira-mcp`, `local`, `slack`, `memory`, or `dispatch`. Required. |
+| `tracker.kind` | string | (none) | Selects the provider: `linear`, `jira`, `jira-mcp`, `local`, `slack`, `memory`, or `dispatch`, or an out-of-tree module specifier. Required. |
 | `tracker.provider` | string | (none) | Provider name when `kind` names a bundle rather than a provider directly. |
 | `tracker.endpoint` | string | provider default | API base URL. Falls back to the provider's `defaultEndpoint`. |
 | `tracker.api_key` | string (secret) | (none) | API credential. Resolves `$VAR` / `op://` / provider env fallback. |

@@ -1,5 +1,5 @@
-// STEP 2 (T2e) cross-cutting endpoint-isolation: the WHOLE per-run stack wired
-// together as production wires it - the REAL `WorkerHostPool` (per-run tunnels),
+// Cross-cutting endpoint-isolation: the WHOLE per-run stack wired together as
+// production wires it - the REAL `WorkerHostPool` (per-run tunnels),
 // the REAL `acquireAgentMcpEndpointForRun` (token + refcounted local mcp server +
 // reverse tunnel behind ONE lease), the concrete per-run `McpEndpointManager`,
 // and the REAL `DispatchCoordinator` over a fake machine `WorkerPool`. The ONLY seam
@@ -369,8 +369,8 @@ test("recycle/poison of run A fails A CLEANLY (token revoked, ssh child killed, 
 test("two co-resident runs on ONE machine SHARE one reverse tunnel (refcounted); closing A keeps B's endpoint + the shared tunnel live", async () => {
   const processes: FakeProcess[] = [];
   mockStartReverseTunnel.mockImplementation(() => makeFakeProcess(processes));
-  // Both slots resolve to the SAME host (co-residence). Per-HOST collapse (C7): the
-  // two runs share ONE `ssh -R` reverse tunnel / remote port; they are kept apart by
+  // Both slots resolve to the SAME host (co-residence). Per-HOST collapse: the two
+  // runs share ONE `ssh -R` reverse tunnel / remote port; they are kept apart by
   // their distinct per-run Token B claim, NOT by a distinct remote port.
   const pool = makeFakeMachinePool({ hostFor: () => "ssh://shared-host" });
   const coordinator = makeCoordinator(pool);

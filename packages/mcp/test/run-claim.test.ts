@@ -21,7 +21,7 @@ const baseClaim = (overrides: Partial<RunClaim> = {}): RunClaim => ({
 
 const live = () => true;
 
-test("issueRunMcpToken — mints a unique opaque base64url token with no scope in the bytes", () => {
+test("issueRunMcpToken - mints a unique opaque base64url token with no scope in the bytes", () => {
   const tokens: string[] = [];
   try {
     const first = issueRunMcpToken(baseClaim());
@@ -31,14 +31,14 @@ test("issueRunMcpToken — mints a unique opaque base64url token with no scope i
 
     assert.ok(first.length > 0);
     assert.notEqual(first, second);
-    // base64url: no +, /, or = characters — the token carries no claim payload.
+    // base64url: no +, /, or = characters - the token carries no claim payload.
     assert.notMatch(first, /[+/=]/);
   } finally {
     for (const t of tokens) revokeRunClaim(t);
   }
 });
 
-test("resolveRunClaim — is the only source of runKey; resolves server-side from the opaque token", () => {
+test("resolveRunClaim - is the only source of runKey; resolves server-side from the opaque token", () => {
   const claim = baseClaim({ runKey: "run-server-side" });
   const token = issueRunMcpToken(claim);
   try {
@@ -51,14 +51,14 @@ test("resolveRunClaim — is the only source of runKey; resolves server-side fro
   }
 });
 
-test("resolveRunClaim — returns undefined for unknown, empty, null, and undefined tokens", () => {
+test("resolveRunClaim - returns undefined for unknown, empty, null, and undefined tokens", () => {
   assert.equal(resolveRunClaim("not-a-real-token"), undefined);
   assert.equal(resolveRunClaim(""), undefined);
   assert.equal(resolveRunClaim(null), undefined);
   assert.equal(resolveRunClaim(undefined), undefined);
 });
 
-test("revokeRunClaim — drops the claim so resolveRunClaim fails closed; double/invalid revoke is safe", () => {
+test("revokeRunClaim - drops the claim so resolveRunClaim fails closed; double/invalid revoke is safe", () => {
   const token = issueRunMcpToken(baseClaim());
   try {
     assert.ok(resolveRunClaim(token));
@@ -74,14 +74,14 @@ test("revokeRunClaim — drops the claim so resolveRunClaim fails closed; double
   }
 });
 
-test("checkRunClaim — passes when not expired, tool allowed, and the run is live", () => {
+test("checkRunClaim - passes when not expired, tool allowed, and the run is live", () => {
   const claim = baseClaim({ allowedTools: ["search", "comment"] });
   const decision = checkRunClaim(claim, { toolName: "search", isRunLive: live });
   assert.equal(decision.ok, true);
   if (decision.ok) assert.equal(decision.claim.runKey, "run-1");
 });
 
-test("checkRunClaim — expiry is checked first and denies even a live, allowed tool", () => {
+test("checkRunClaim - expiry is checked first and denies even a live, allowed tool", () => {
   const claim = baseClaim({ expiresAt: 1_000, allowedTools: ["search"] });
   const decision = checkRunClaim(claim, {
     toolName: "search",
@@ -92,7 +92,7 @@ test("checkRunClaim — expiry is checked first and denies even a live, allowed 
   if (!decision.ok) assert.equal(decision.reason, "expired");
 });
 
-test("checkRunClaim — allowlist is checked before liveness; a disallowed tool denies", () => {
+test("checkRunClaim - allowlist is checked before liveness; a disallowed tool denies", () => {
   const claim = baseClaim({ allowedTools: ["search"] });
   // Liveness would pass, but the tool is not allowed and that is checked first.
   const decision = checkRunClaim(claim, { toolName: "delete", isRunLive: live });
@@ -100,26 +100,26 @@ test("checkRunClaim — allowlist is checked before liveness; a disallowed tool 
   if (!decision.ok) assert.equal(decision.reason, "tool-not-allowed");
 });
 
-test("checkRunClaim — undefined allowedTools permits any tool name", () => {
+test("checkRunClaim - undefined allowedTools permits any tool name", () => {
   const claim = baseClaim({ allowedTools: undefined });
   const decision = checkRunClaim(claim, { toolName: "anything", isRunLive: live });
   assert.equal(decision.ok, true);
 });
 
-test("checkRunClaim — a non-tool request (no toolName) skips the allowlist", () => {
+test("checkRunClaim - a non-tool request (no toolName) skips the allowlist", () => {
   const claim = baseClaim({ allowedTools: ["search"] });
   const decision = checkRunClaim(claim, { isRunLive: live });
   assert.equal(decision.ok, true);
 });
 
-test("checkRunClaim — fails closed when the run is not live", () => {
+test("checkRunClaim - fails closed when the run is not live", () => {
   const claim = baseClaim();
   const decision = checkRunClaim(claim, { isRunLive: () => false });
   assert.equal(decision.ok, false);
   if (!decision.ok) assert.equal(decision.reason, "not-live");
 });
 
-test("checkRunClaim — liveness oracle receives runKey, workerHost, and generation from the claim", () => {
+test("checkRunClaim - liveness oracle receives runKey, workerHost, and generation from the claim", () => {
   const claim = baseClaim({ runKey: "run-9", workerHost: "host-z", generation: 7 });
   let seen: [string, string, number] | null = null;
   checkRunClaim(claim, {
@@ -131,7 +131,7 @@ test("checkRunClaim — liveness oracle receives runKey, workerHost, and generat
   assert.deepEqual(seen, ["run-9", "host-z", 7]);
 });
 
-test("checkRunClaim — a stale generation denies via the liveness fence", () => {
+test("checkRunClaim - a stale generation denies via the liveness fence", () => {
   const claim = baseClaim({ generation: 1 });
   // Oracle accepts only the current generation (2); the claim's generation is stale.
   const decision = checkRunClaim(claim, {

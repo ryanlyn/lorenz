@@ -162,9 +162,9 @@ export type RunClaimDecision =
  * Authoritative per-request owner re-check for a resolved {@link RunClaim},
  * ordered expiry-first, allowlist-before-secret, fail-closed:
  *
- *   1. `expiresAt > now`            — coarse lifetime cap.
- *   2. tool ∈ `allowedTools`        — per-operation allowlist (before liveness).
- *   3. `isRunLive(runKey, host, generation)` — the run is still live AND the
+ *   1. `expiresAt > now`            - coarse lifetime cap.
+ *   2. tool in `allowedTools`       - per-operation allowlist (before liveness).
+ *   3. `isRunLive(runKey, host, generation)` - the run is still live AND the
  *      generation matches the live endpoint.
  *
  * Never falls back to the settings-wide scope; any miss denies.

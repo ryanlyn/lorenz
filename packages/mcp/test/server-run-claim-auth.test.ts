@@ -42,9 +42,7 @@ const baseClaim = (overrides: Partial<RunClaim> = {}): RunClaim => ({
   ...overrides,
 });
 
-function mountWith(
-  options: Parameters<typeof mountMcp>[2],
-): { app: Hono; authScope: string } {
+function mountWith(options: Parameters<typeof mountMcp>[2]): { app: Hono; authScope: string } {
   const app = new Hono();
   const authScope = createMcpAuthScope();
   mountMcp(app, linearSettings(), { authScope, tools, ...options });
@@ -143,7 +141,9 @@ test("Token B: the injected oracle receives runKey, workerHost, and generation f
       return true;
     },
   });
-  const token = issueRunMcpToken(baseClaim({ runKey: "run-9", workerHost: "host-z", generation: 7 }));
+  const token = issueRunMcpToken(
+    baseClaim({ runKey: "run-9", workerHost: "host-z", generation: 7 }),
+  );
   try {
     await toolsListStatus(app, token);
     assert.deepEqual(seen, ["run-9", "host-z", 7]);
@@ -166,12 +166,10 @@ test("Token A authorizes on a NON-claim mount (observability / legacy acp endpoi
 });
 
 test("A claim-enforcing mount REJECTS a valid Token A (no settings-wide bypass)", async () => {
-  // RE-ANCHOR (Token A hardening): previously a claim-enforcing mount also
-  // accepted a settings-wide Token A. That was the latent fail-open the review
-  // flagged. A mount handed a real isRunLive oracle is the per-run
-  // claim-enforcing (co-residence) server: it accepts ONLY Token B and refuses
-  // the Token A path outright, so a settings-wide token can never authorize a
-  // co-resident run's MCP calls.
+  // A mount handed a real isRunLive oracle is the per-run claim-enforcing
+  // (co-residence) server: it accepts ONLY Token B and refuses the Token A path
+  // outright, so a settings-wide token can never authorize a co-resident run's
+  // MCP calls.
   const { app, authScope } = mountWith({ isRunLive: () => true });
   const token = issueMcpToken(authScope);
   try {

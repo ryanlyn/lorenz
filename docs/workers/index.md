@@ -8,14 +8,14 @@ By default there is no worker config and every agent run executes locally on the
 
 Lorenz resolves an SSH-addressable target for each run. Where that target comes from depends on which of three modes you configure.
 
-| | Local | Static SSH hosts | Warm worker pool |
-| --- | --- | --- | --- |
-| Config | none (default) | `worker.ssh_hosts` | `worker.worker_pool` or `worker.kind` |
-| Provisioning | none, runs on the daemon host | none, you pre-create and maintain the hosts | the pool leases, grows, and reaps machines through a driver |
-| Lifecycle | n/a | hosts are permanent; Lorenz never creates or destroys them | machines are warmed, leased, recycled, and torn down on TTL or idle |
-| Spend caps | n/a | none | `max_concurrent_workers`, `max_worker_seconds`, `daily_worker_seconds` |
-| Drivers | n/a | n/a | `fake`, `static-ssh`, `docker`, or an out-of-tree module |
-| When to use | single-host development, small workloads | you already run a stable fleet of build boxes | you want elastic, billed capacity that grows and shrinks with demand |
+|              | Local                                    | Static SSH hosts                                           | Warm worker pool                                                       |
+| ------------ | ---------------------------------------- | ---------------------------------------------------------- | ---------------------------------------------------------------------- |
+| Config       | none (default)                           | `worker.ssh_hosts`                                         | `worker.worker_pool` or `worker.kind`                                  |
+| Provisioning | none, runs on the daemon host            | none, you pre-create and maintain the hosts                | the pool leases, grows, and reaps machines through a driver            |
+| Lifecycle    | n/a                                      | hosts are permanent; Lorenz never creates or destroys them | machines are warmed, leased, recycled, and torn down on TTL or idle    |
+| Spend caps   | n/a                                      | none                                                       | `max_concurrent_workers`, `max_worker_seconds`, `daily_worker_seconds` |
+| Drivers      | n/a                                      | n/a                                                        | `fake`, `static-ssh`, `docker`, or an out-of-tree module               |
+| When to use  | single-host development, small workloads | you already run a stable fleet of build boxes              | you want elastic, billed capacity that grows and shrinks with demand   |
 
 The pool is the single dispatch path, so `worker.ssh_hosts` is not a separate model anymore - it folds into a `static-ssh` pool with one slot per host. You still cannot name a driver twice for the same hosts: the parser rejects `worker.kind` alongside `worker.ssh_hosts`, `worker.worker_pool.driver` alongside `worker.ssh_hosts`, and `worker.kind` alongside `worker.worker_pool.driver`.
 
@@ -93,11 +93,11 @@ Pool defaults, when the block is present:
 
 Spend caps live under `worker.worker_pool.spend`:
 
-| Key | Meaning |
-| --- | --- |
-| `max_concurrent_workers` | blocks growth past this many live machines |
-| `max_worker_seconds` | lifetime ceiling on total worker-seconds |
-| `daily_worker_seconds` | per-UTC-day ceiling, persisted to a `spend.json` sidecar |
+| Key                      | Meaning                                                  |
+| ------------------------ | -------------------------------------------------------- |
+| `max_concurrent_workers` | blocks growth past this many live machines               |
+| `max_worker_seconds`     | lifetime ceiling on total worker-seconds                 |
+| `daily_worker_seconds`   | per-UTC-day ceiling, persisted to a `spend.json` sidecar |
 
 A run that cannot get a lease is reported with one of a closed set of `no_capacity` reasons. See [worker-pool.md](worker-pool.md) for those reasons, the acquire path, and the full lifecycle, ledger, crash recovery, and spend model.
 
@@ -107,13 +107,14 @@ For static SSH hosts, Lorenz tracks how many runs occupy each host and assigns t
 
 The warm pool governs its own capacity. Its `acquire_timeout`, mapped onto the same `worker_host_capacity` dispatch signal, is what a waiting run sees when no machine is free within the wait window.
 
-For co-residence (more than one run per machine), the parser writes an internal `slots_per_machine` field. The only config key that sets it is `worker.worker_pool.max_in_flight`, a deprecated alias; the schema is strict and rejects any other key. Running more than one run per machine requires both a runtime per-run endpoint capability and an explicit `worker.worker_pool.co_residence: true` opt-in; the daemon enforces this gate after construction.
+For co-residence (more than one run per machine), the parser writes an internal `slots_per_machine` field. The only config key that sets it is `worker.worker_pool.max_in_flight`, a deprecated alias; the schema is strict and rejects any other key. Running more than one run per machine requires both a runtime per-run-claim-enforcement capability (the MCP gateway re-checks each request's per-run scoped claim server-side) and an explicit `worker.worker_pool.co_residence: true` opt-in; the daemon enforces this gate after construction.
 
 ## Not the worker pool: reverse SSH tunnels
 
-`@lorenz/worker-host-pool` is separate plumbing. It manages per-run reverse SSH (MCP) tunnels so a remote worker can reach back to the daemon, not the workers themselves. It is not a source of execution capacity. Do not confuse it with the warm worker pool in `@lorenz/worker-pool`.
+`@lorenz/worker-host-pool` is separate plumbing. It manages reverse SSH (MCP) tunnels - one `ssh -R` per worker host, shared by every co-resident run on that host - so a remote worker can reach back to the daemon, not the workers themselves. It is not a source of execution capacity. Do not confuse it with the warm worker pool in `@lorenz/worker-pool`.
 
 ## See also
+
 - [static-ssh.md](static-ssh.md) - shard runs across a fixed SSH fleet with `worker.ssh_hosts`
 - [worker-pool.md](worker-pool.md) - the warm pool lifecycle, spend caps, and crash recovery
 - [docker.md](docker.md) - the `docker` driver for disposable container workers

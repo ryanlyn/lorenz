@@ -1,16 +1,10 @@
-// Out-of-tree agent-executor loading: a configured `agents.<kind>.executor`
-// accepts a module specifier (npm name, `./relative` or `/absolute` path,
-// optional `#exportName` suffix) that the daemon dynamic-imports at startup and
-// registers into the executor registry under the EXACT configured string. These
-// tests drive the generic loader through temp-dir fixture modules - the FOURTH
-// instantiation of the axis-generic extension loader, proving it carries the same
-// audited mechanics as the worker-driver, tracker, and tool loaders: startup load
-// + createExecutor through the loaded provider, the named-export form, the SDK
-// version handshake, malformed-module rejection, the known-executors/did-you-mean
-// resolution error, the cache-busting rejection, the module-pinned re-encounter
-// event, and exact-selector-wins. The `executor`-as-identity field (vs the
-// tracker's `kind`) and the `executors()`->`kinds()` registry adapter are the two
-// agent-axis specifics this suite locks down.
+// Out-of-tree agent-executor loading driven through temp-dir fixture modules:
+// startup load + createExecutor, the named-export form, the SDK version
+// handshake, malformed-module rejection, the did-you-mean resolution error,
+// cache-busting rejection, the module-pinned re-encounter event, and
+// exact-selector-wins. The `executor`-as-identity field and the
+// `executors()`->`kinds()` registry adapter are the agent-axis specifics this
+// suite locks down.
 
 import fs from "node:fs/promises";
 import { createRequire } from "node:module";
@@ -93,9 +87,7 @@ function recordingLog(): {
   return { events, logEvent: (event) => void events.push(event) };
 }
 
-// ---------------------------------------------------------------------------
 // startup load + construct through the loaded provider
-// ---------------------------------------------------------------------------
 
 test("startup: ensureAgentExecutorLoaded registers a default-export module under the specifier", async () => {
   const dir = await tempDir("agent-executor-loader");
@@ -139,9 +131,7 @@ test("startup: a relative specifier resolves against baseDir and constructs an e
   assert.equal(executor.kind, "worker");
 });
 
-// ---------------------------------------------------------------------------
 // named-export form (#name)
-// ---------------------------------------------------------------------------
 
 test("a #exportName suffix selects a named export", async () => {
   const dir = await tempDir("agent-executor-loader");
@@ -169,9 +159,7 @@ test("a #exportName miss fails loud listing the available exports", async () => 
   );
 });
 
-// ---------------------------------------------------------------------------
 // version handshake + malformed modules (fail-loud)
-// ---------------------------------------------------------------------------
 
 test("an sdkVersion mismatch fails loud with agent_executor_sdk_mismatch", async () => {
   const dir = await tempDir("agent-executor-loader");
@@ -217,9 +205,7 @@ test("a module without a default export fails loud and points at #name", async (
   );
 });
 
-// ---------------------------------------------------------------------------
 // bare-specifier resolution failures + cache-busting rejection
-// ---------------------------------------------------------------------------
 
 test("an unknown bare specifier fails loud listing the known executors", async () => {
   const registry = privateRegistry();
@@ -261,9 +247,7 @@ test("parseAgentExecutorRef splits the #exportName suffix and keeps plain specif
   assert.throws(() => parseAgentExecutorRef("./executor.mjs#"), /empty #exportName/);
 });
 
-// ---------------------------------------------------------------------------
 // exact-selector-wins + reload semantics (pinning on a re-encounter)
-// ---------------------------------------------------------------------------
 
 test("an EXACT registered selector wins before parsing as a module", async () => {
   // A registered selector that also looks like a bare package name must resolve

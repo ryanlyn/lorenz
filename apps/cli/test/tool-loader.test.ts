@@ -1,15 +1,9 @@
-// Out-of-tree tool-pack loading: a configured pack name accepts a module
-// specifier (npm name, `./relative` or `/absolute` path, optional `#exportName`
-// suffix) that the daemon dynamic-imports at startup and registers into the tool
-// registry under the EXACT configured string. These tests drive the generic
-// loader through temp-dir fixture modules - the THIRD instantiation of the
-// axis-generic extension loader, proving it carries the same audited mechanics as
-// the worker-driver and tracker loaders: startup load + execute through the
-// loaded pack, the named-export form, the SDK version handshake, malformed-module
-// rejection, the known-names/did-you-mean resolution error, the cache-busting
+// Out-of-tree tool-pack loading driven through temp-dir fixture modules: startup
+// load + execute, the named-export form, the SDK version handshake,
+// malformed-module rejection, the did-you-mean resolution error, cache-busting
 // rejection, the module-pinned re-encounter event, and exact-name-wins. The
-// `name`-as-identity field (vs the tracker's `kind`) and the `names()`->`kinds()`
-// registry adapter are the two tool-axis specifics this suite locks down.
+// `name`-as-identity field and the `names()`->`kinds()` registry adapter are the
+// tool-axis specifics this suite locks down.
 
 import fs from "node:fs/promises";
 import { createRequire } from "node:module";
@@ -94,9 +88,7 @@ function recordingLog(): {
   return { events, logEvent: (event) => void events.push(event) };
 }
 
-// ---------------------------------------------------------------------------
 // startup load + execute through the loaded pack
-// ---------------------------------------------------------------------------
 
 test("startup: ensureToolProviderLoaded registers a default-export module under the specifier", async () => {
   const dir = await tempDir("tool-loader");
@@ -140,9 +132,7 @@ test("startup: a relative specifier resolves against baseDir and executes a tool
   assert.deepEqual(result.result, { tool: "rel_echo", echoed: { value: "hi" } });
 });
 
-// ---------------------------------------------------------------------------
 // named-export form (#name)
-// ---------------------------------------------------------------------------
 
 test("a #exportName suffix selects a named export", async () => {
   const dir = await tempDir("tool-loader");
@@ -170,9 +160,7 @@ test("a #exportName miss fails loud listing the available exports", async () => 
   );
 });
 
-// ---------------------------------------------------------------------------
 // version handshake + malformed modules (fail-loud)
-// ---------------------------------------------------------------------------
 
 test("an sdkVersion mismatch fails loud with tool_provider_sdk_mismatch", async () => {
   const dir = await tempDir("tool-loader");
@@ -218,9 +206,7 @@ test("a module without a default export fails loud and points at #name", async (
   );
 });
 
-// ---------------------------------------------------------------------------
 // bare-specifier resolution failures + cache-busting rejection
-// ---------------------------------------------------------------------------
 
 test("an unknown bare specifier fails loud listing the known names", async () => {
   const registry = privateRegistry();
@@ -259,9 +245,7 @@ test("parseToolRef splits the #exportName suffix and keeps plain specifiers whol
   assert.throws(() => parseToolRef("./tools.mjs#"), /empty #exportName/);
 });
 
-// ---------------------------------------------------------------------------
 // exact-name-wins + reload semantics (pinning on a re-encounter)
-// ---------------------------------------------------------------------------
 
 test("an EXACT registered name wins before parsing as a module", async () => {
   // A registered pack name that also looks like a bare package name must resolve

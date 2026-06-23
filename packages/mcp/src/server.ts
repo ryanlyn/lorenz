@@ -36,7 +36,8 @@ export interface ObservabilityServerOptions {
   tools?: ToolRegistry | undefined;
   /**
    * Read-only liveness oracle for per-run (Token B) claims. Injected at the
-   * composition root; defaults to a permissive placeholder until C4.
+   * composition root; absent on non-claim mounts, where the FAIL-CLOSED default
+   * denies any Token B presented to them.
    */
   isRunLive?: IsRunLive | undefined;
 }
@@ -55,12 +56,19 @@ export interface McpMountOptions {
   tools?: ToolRegistry | undefined;
   /**
    * Read-only liveness oracle for per-run (Token B) claims. Injected at the
-   * composition root; defaults to a permissive placeholder until C4.
+   * composition root; absent on non-claim mounts, where the FAIL-CLOSED default
+   * denies any Token B presented to them.
    */
   isRunLive?: IsRunLive | undefined;
 }
 
 const mcpPath = "/mcp";
+
+// The claim middleware stashes the request body it already parsed here, keyed by
+// the underlying `Request`, so `handleMcp` reads it back instead of re-parsing -
+// the JSON is parsed once per request. A WeakMap avoids typing the untyped Hono
+// app's context store and lets the entry be collected with the request.
+const parsedRequestBodies = new WeakMap<Request, Record<string, unknown>>();
 
 export async function startMcpServer(
   settings: Settings,
@@ -112,10 +120,12 @@ export function mountMcp(
     // EVERY request. A self-reported runKey header is never trusted.
     const claim = resolveRunClaim(bearer);
     if (claim) {
-      // Hono caches the parsed body, so reading the text here does not consume
-      // it for the downstream `handleMcp` request handler.
-      const toolName = requestToolName(await c.req.text());
-      const decision = checkRunClaim(claim, { toolName, isRunLive });
+      // Parse the body ONCE here for the allowlist re-check and stash a record
+      // body for `handleMcp` to reuse (a malformed/non-record body is left
+      // unstashed so `handleMcp` re-parses and reports the JSON-RPC parse error).
+      const parsedBody = parseRequestBody(await c.req.text());
+      if (isRecord(parsedBody)) parsedRequestBodies.set(c.req.raw, parsedBody);
+      const decision = checkRunClaim(claim, { toolName: requestToolName(parsedBody), isRunLive });
       if (!decision.ok) return unauthorizedMcpResponse();
       await next();
       return;
@@ -186,9 +196,26 @@ async function handleMcp(settings: Settings, c: Context, tools?: ToolRegistry): 
 }
 
 async function requestJson(c: Context): Promise<Record<string, unknown>> {
+  // Reuse the record body the claim middleware already parsed, if present, so the
+  // per-request MCP path parses the JSON exactly once.
+  const cached = getRequestBody(c);
+  if (cached) return cached;
   const parsed = JSON.parse(await c.req.text()) as unknown;
   if (!isRecord(parsed)) throw new Error("request body must be an object");
   return parsed;
+}
+
+function getRequestBody(c: Context): Record<string, unknown> | undefined {
+  return parsedRequestBodies.get(c.req.raw);
+}
+
+/** Parse a raw JSON body, returning `undefined` for unparseable input. */
+function parseRequestBody(rawBody: string): unknown {
+  try {
+    return JSON.parse(rawBody);
+  } catch {
+    return undefined;
+  }
 }
 
 function bearerToken(authorization: string | undefined): string | undefined {
@@ -208,18 +235,12 @@ function unauthorizedMcpResponse(): Response {
 }
 
 /**
- * Best-effort `tools/call` name for the per-run allowlist re-check, parsed from
- * the raw request body. Returns null for non-tool requests or unparseable
- * bodies; the allowlist only narrows tool calls, so a null name simply skips the
- * allowlist (the rest of the claim still gates the request).
+ * Best-effort `tools/call` name for the per-run allowlist re-check, read from the
+ * already-parsed request body. Returns null for non-tool requests or
+ * unparseable/non-record bodies; the allowlist only narrows tool calls, so a null
+ * name simply skips the allowlist (the rest of the claim still gates the request).
  */
-function requestToolName(rawBody: string): string | null {
-  let body: unknown;
-  try {
-    body = JSON.parse(rawBody);
-  } catch {
-    return null;
-  }
+function requestToolName(body: unknown): string | null {
   if (!isRecord(body) || body.method !== "tools/call") return null;
   const params = body.params;
   if (!isRecord(params)) return null;

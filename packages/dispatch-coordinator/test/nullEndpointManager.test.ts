@@ -10,10 +10,10 @@ import type { McpEndpointManager } from "../src/types.js";
 // without dragging in a full config fixture.
 const settingsStub = {} as Settings;
 
-test("null manager advertises perRunClaimEnforcement=false (the STEP-1 passthrough capability)", () => {
-  // perRunClaimEnforcement is the capability the STEP 3 startup gate consumes; the null
-  // manager must report `false` so acp keeps owning its own endpoint (the
-  // byte-identical STEP 1 behaviour) and slotsPerMachine>1 stays gated off.
+test("null manager advertises perRunClaimEnforcement=false (the passthrough capability)", () => {
+  // perRunClaimEnforcement is the capability the startup gate consumes; the null
+  // manager reports `false` so acp keeps owning its own endpoint (byte-identical)
+  // and slotsPerMachine>1 stays gated off.
   assert.equal(nullEndpointManager.perRunClaimEnforcement, false);
 });
 

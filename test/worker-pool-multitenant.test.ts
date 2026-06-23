@@ -1,4 +1,4 @@
-// STEP 3 (T3c): REAL N-per-machine multi-tenant co-residence.
+// REAL N-per-machine multi-tenant co-residence.
 //
 // This is the cross-cutting proof that `slotsPerMachine > 1` actually works
 // end-to-end through the REAL `DispatchCoordinator` over the REAL
@@ -160,8 +160,8 @@ function makeDistinctPortManager(
       if (isLocal(req.workerHost)) return null;
       // Each run gets a DISTINCT claim key (`${workerHost}#${runKey}`) and token,
       // but co-resident runs on one host SHARE the single per-host reverse tunnel /
-      // remote port (the C7 collapse) - the port is the HOST's tunnel identity, the
-      // key/token is the RUN's claim identity.
+      // remote port - the port is the HOST's tunnel identity, the key/token is the
+      // RUN's claim identity.
       const key = `${req.workerHost}#${req.runKey}`;
       let remotePort = portByHost.get(req.workerHost);
       if (remotePort === undefined) {

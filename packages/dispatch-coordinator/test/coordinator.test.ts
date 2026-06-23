@@ -1,4 +1,4 @@
-// STEP 1 (T1c): DispatchCoordinator 1:1 passthrough over WorkerPool.
+// DispatchCoordinator passthrough over WorkerPool.
 //
 // These tests pin the byte-identical-at-the-runtime-boundary contract: with the
 // default null McpEndpointManager (perRunClaimEnforcement=false, mcpEndpoint=null), the
@@ -189,8 +189,8 @@ function baseSnapshot(overrides: Partial<WorkerPoolSnapshot> = {}): WorkerPoolSn
 }
 
 // A `WorkerPoolSettings`-typed stub for reconcile/drain delegation assertions: the
-// coordinator never reads its fields in STEP 1 (it forwards the reference), so a
-// tagged cast is enough to prove the SAME object reference is passed through.
+// coordinator forwards the reference without reading its fields, so a tagged cast
+// is enough to prove the SAME object reference is passed through.
 function settingsStub(tag: string): WorkerPoolSettings {
   return { __tag: tag } as unknown as WorkerPoolSettings;
 }
@@ -264,7 +264,7 @@ test("acquireRunSlot on leased mints a RunSlot mirroring the WorkerLease identit
   if (result.status !== "bound") return;
   const slot = result.slot;
 
-  // The minted RunSlot mirrors the lease + request identity; STEP 1 endpoint is null.
+  // The minted RunSlot mirrors the lease + request identity; the endpoint is null.
   assert.equal(slot.leaseId, "lease-xyz");
   assert.equal(slot.machineLeaseId, "worker-9");
   assert.equal(slot.workerHost, "fake://worker-9");
@@ -621,7 +621,7 @@ test("hydrate() delegates to pool.hydrate()", async () => {
 // snapshot: pool snapshot extended with an empty slots array
 // ---------------------------------------------------------------------------
 
-test("snapshot() returns the pool snapshot extended with an empty slots array (STEP 1 stub)", () => {
+test("snapshot() returns the pool snapshot extended with an empty slots array when no slots are live", () => {
   const poolSnapshot = baseSnapshot({
     total: 3,
     leased: 1,
@@ -645,7 +645,7 @@ test("snapshot() returns the pool snapshot extended with an empty slots array (S
   assert.equal(snap.leased, 1);
   assert.equal(snap.inFlight, 1);
   assert.deepEqual(snap.workers, poolSnapshot.workers);
-  // The coordinator appends an empty slots array (the STEP 1 stub; no live slot accounting yet).
+  // The coordinator appends a slots array, empty when no run slots are live.
   assert.deepEqual(snap.slots, []);
 });
 
@@ -673,7 +673,7 @@ test("capabilities.perRunClaimEnforcement reflects a manager advertising perRunC
 });
 
 // ---------------------------------------------------------------------------
-// STEP 2 (T2c): open-after-bind / close-before-settle / recycle ordering
+// open-after-bind / close-before-settle / recycle ordering
 // ---------------------------------------------------------------------------
 
 // A fake AgentMcpEndpointLease whose release() is observable. The coordinator
@@ -1031,7 +1031,7 @@ test("single-slot (default slotsPerMachine=1) opens EXACTLY ONE endpoint per run
 });
 
 // ---------------------------------------------------------------------------
-// STEP 3 (T3b): (issueId, slotIndex) uniqueness invariant feeding runKey
+// (issueId, slotIndex) uniqueness invariant feeding runKey
 // ---------------------------------------------------------------------------
 
 // A pool that hands out a SCRIPTED sequence of leased results, one per acquire
@@ -1055,7 +1055,7 @@ test("acquireRunSlot REJECTS a second (issueId, slotIndex) on the SAME machine (
   // Two distinct lease generations (leaseId a/b) both land on worker-1 for the SAME
   // (issueId='issue-1', slotIndex=0). The first binds a RunSlot; the second is a
   // (issueId, slotIndex)-on-one-machine collision and MUST be rejected, never
-  // silently disambiguated (openQuestion #1: assert-and-reject preferred).
+  // silently disambiguated.
   const a = makeFakeLease({ leaseId: "a", workerId: "worker-1", workerHost: "ssh://host-1" });
   const b = makeFakeLease({ leaseId: "b", workerId: "worker-1", workerHost: "ssh://host-1" });
   const pool = makeScriptedWorkerPool([a, b]);
@@ -1116,8 +1116,8 @@ test("(issueId, slotIndex) uniqueness: runKey AND workspace-suffix uniqueness ho
 });
 
 test("runKey is ISSUE-SCOPED: two DIFFERENT issues at slotIndex 0 co-resident on ONE machine get DISTINCT runKeys", async () => {
-  // Codex HIGH #2: with slotsPerMachine>1, DIFFERENT issues can co-reside on ONE
-  // workerHost. A bare `${slotIndex}` runKey would make both non-ensemble issues
+  // With slotsPerMachine>1, DIFFERENT issues can co-reside on ONE workerHost.
+  // A bare `${slotIndex}` runKey would make both non-ensemble issues
   // (slotIndex 0) key to "0", so two co-resident runs would collide on ONE per-run
   // CLAIM (`${issueId}#${slotIndex}`) -> Token B for one would authorize the other,
   // broken per-run isolation. The runKey must be ISSUE-SCOPED so co-resident runs of
@@ -1208,7 +1208,7 @@ test("collision rejection does NOT open an endpoint (the colliding endpoint is n
 });
 
 // ---------------------------------------------------------------------------
-// C6 bypass closure: a co-residence run cannot land on a LOCAL (empty) host.
+// Empty-host bypass closure: a co-residence run cannot land on a LOCAL (empty) host.
 // ---------------------------------------------------------------------------
 
 // A coordinator whose live settings declare co-residence (slotsPerMachine>1). The
@@ -1375,7 +1375,7 @@ test("local driver (empty host) through the concrete per-run manager binds a nul
 });
 
 // ---------------------------------------------------------------------------
-// STEP 3 (T3c #1): tunnel-exhaustion ceiling -> typed no_capacity 'tunnel_exhausted'
+// tunnel-exhaustion ceiling -> typed no_capacity 'tunnel_exhausted'
 // ---------------------------------------------------------------------------
 //
 // When settings.maxConcurrentTunnels is set, opening another per-run endpoint
@@ -1606,7 +1606,7 @@ test("tunnel ceiling: a local-host slot (null endpoint) does NOT consume tunnel 
 });
 
 // ---------------------------------------------------------------------------
-// STEP 3 (T3c #2): per-issue RunSlot accounting (precise live-slot refcount)
+// per-issue RunSlot accounting (precise live-slot refcount)
 // ---------------------------------------------------------------------------
 //
 // The coordinator holds the authoritative per-(issueId, slotIndex, leaseId)
@@ -1701,7 +1701,7 @@ test("per-issue accounting: co-resident slots of one issue on ONE machine are co
 });
 
 // ---------------------------------------------------------------------------
-// Codex iter-4 HIGH #1: endpoint-release failure must NOT strand a leased worker
+// endpoint-release failure must NOT strand a leased worker
 // ---------------------------------------------------------------------------
 //
 // In the RunSlot settle path the endpoint cleanup must be BEST-EFFORT: if
@@ -1711,7 +1711,7 @@ test("per-issue accounting: co-resident slots of one issue on ONE machine are co
 // released regardless. The endpoint error is surfaced/logged, NEVER thrown to the
 // caller as an unsettled lease.
 
-test("settle: endpoint-release REJECTION still settles the WorkerLease, deregisters the slot, and surfaces the error (HIGH #1)", async () => {
+test("settle: endpoint-release REJECTION still settles the WorkerLease, deregisters the slot, and surfaces the error", async () => {
   const order: string[] = [];
   const releaseError = new Error("tunnel_close_failed: local mcp server stop threw");
   // A per-run manager whose endpoint open succeeds but whose release REJECTS.
@@ -1755,7 +1755,7 @@ test("settle: endpoint-release REJECTION still settles the WorkerLease, deregist
   assert.ok(logged);
 });
 
-test("settle: endpoint-release REJECTION on a poison fail still fails the WorkerLease and deregisters (HIGH #1)", async () => {
+test("settle: endpoint-release REJECTION on a poison fail still fails the WorkerLease and deregisters", async () => {
   const order: string[] = [];
   const manager: McpEndpointManager = {
     perRunClaimEnforcement: true,
@@ -1782,7 +1782,7 @@ test("settle: endpoint-release REJECTION on a poison fail still fails the Worker
 });
 
 // ---------------------------------------------------------------------------
-// Codex iter-4 HIGH #2: tunnel ceiling must not be raceable under concurrent acquires
+// tunnel ceiling must not be raceable under concurrent acquires
 // ---------------------------------------------------------------------------
 //
 // The maxConcurrentTunnels check counted only slots ALREADY registered, but
@@ -1819,7 +1819,7 @@ function makeGatedManager(): McpEndpointManager & {
   };
 }
 
-test("tunnel ceiling: two CONCURRENT acquires with DELAYED opens never exceed maxConcurrentTunnels:1 (HIGH #2)", async () => {
+test("tunnel ceiling: two CONCURRENT acquires with DELAYED opens never exceed maxConcurrentTunnels:1", async () => {
   const manager = makeGatedManager();
   const pool = makeMultiWorkerPool(2);
   const coordinator = makeCoordinatorWithSettings(pool, manager, { maxConcurrentTunnels: 1 });
@@ -1846,7 +1846,7 @@ test("tunnel ceiling: two CONCURRENT acquires with DELAYED opens never exceed ma
 });
 
 // ---------------------------------------------------------------------------
-// Codex iter-6 HIGH: needsMcpEndpoint gates the per-run endpoint + tunnel ceiling
+// needsMcpEndpoint gates the per-run endpoint + tunnel ceiling
 // ---------------------------------------------------------------------------
 //
 // A Codex/appserver run runs its dynamic tools in-process and IGNORES the per-run
@@ -1877,7 +1877,7 @@ function makeThrowingOpenManager(order: string[]): McpEndpointManager & {
   };
 }
 
-test("needsMcpEndpoint=false: a remote leased slot dispatches WITHOUT opening an endpoint even when open() throws (HIGH)", async () => {
+test("needsMcpEndpoint=false: a remote leased slot dispatches WITHOUT opening an endpoint even when open() throws", async () => {
   const order: string[] = [];
   const manager = makeThrowingOpenManager(order);
   const lease = makeFakeLease({ workerHost: "ssh://host-codex" });
@@ -1897,7 +1897,7 @@ test("needsMcpEndpoint=false: a remote leased slot dispatches WITHOUT opening an
   assert.equal(coordinator.snapshot().slots.length, 1);
 });
 
-test("needsMcpEndpoint=false: a remote slot does NOT consume tunnel budget / trip maxConcurrentTunnels (HIGH)", async () => {
+test("needsMcpEndpoint=false: a remote slot does NOT consume tunnel budget / trip maxConcurrentTunnels", async () => {
   // With maxConcurrentTunnels:0 ANY tunnel reservation would exhaust immediately.
   // A needs-no-endpoint run must neither reserve nor be gated: it binds normally.
   const order: string[] = [];

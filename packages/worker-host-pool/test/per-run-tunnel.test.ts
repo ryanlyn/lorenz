@@ -39,10 +39,10 @@ beforeEach(() => {
 });
 
 // ---------------------------------------------------------------------------
-// Per-HOST tunnel collapse (C7): one `ssh -R` reverse tunnel per worker host,
+// Per-HOST tunnel collapse: one `ssh -R` reverse tunnel per worker host,
 // SHARED by every co-resident run on that host. Runs are kept apart by their
 // per-run Token B claim - NOT by the tunnel or its remote port - so two runs on
-// one host now coalesce onto ONE tunnel (refcounted), instead of each owning a
+// one host coalesce onto ONE tunnel (refcounted), rather than each owning a
 // distinct remote port. The host tunnel opens on the first run and closes only
 // at the last `closeForRun`.
 // ---------------------------------------------------------------------------
