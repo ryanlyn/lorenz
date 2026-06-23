@@ -1,135 +1,120 @@
-# Ship a worker driver out of tree
+# Write your own extension out of tree
 
-This page is for an extension author who has a worker backend - a cloud API, a VM fleet, a container host - and wants Lorenz to provision against it without forking the repo. You write a small module, publish or vendor it, point one config key at it, and the daemon loads it at startup. The driver contract itself is covered in [worker-driver.md](worker-driver.md); this page covers the loading mechanism, the SDK handshake, and the trust boundary you accept by using it.
+Lorenz has four extension surfaces - trackers, tool packs, agent executors, and worker drivers (see [extensions/index.md](index.md)). A surface is normally a package wired in at the composition root. But any surface whose config selector accepts a module specifier can also be loaded from a module you point config at, with no fork and no composition-root edit: you write a small module, reference it by path or package name, and the daemon loads it at startup.
 
-The whole feature is one idea: `worker.worker_pool.driver` accepts a module specifier as well as a registered kind. A built-in kind (`fake`, `static-ssh`, `docker`) resolves through the registry. Anything else is dynamic-imported, shape-checked, and registered under the exact string you wrote.
+The runtime contract is structural, so the smallest extension is a plain object with no build dependency on Lorenz at all. The typed SDKs exist only to give you the contract types and an optional `define*` helper while you author; they are erased from a normally-built extension.
 
-This page works the mechanism through the worker driver, but it is axis-generic. A tracker loads the same way from `tracker.kind` (with `defineTrackerProvider` / `assertTrackerProviderModule` and `TRACKER_SDK_VERSION`); the tool and agent-executor SDKs expose the same handshake. Read `worker_pool_driver` as the per-axis error prefix and `worker drivers` as the per-axis noun, and everything below holds for any axis whose config selector accepts a specifier.
+## What is loadable today
+
+| Surface | Config selector | Types package | Status |
+| --- | --- | --- | --- |
+| Tracker provider | `tracker.kind` | `@lorenz/tracker-sdk` | loadable by specifier |
+| Worker driver | `worker.worker_pool.driver` | `@lorenz/worker-sdk` | loadable by specifier |
+| Tool pack | (none yet) | `@lorenz/tool-sdk` | the SDK and loader exist; no config selector reads a specifier yet |
+| Agent executor | (none yet) | `@lorenz/agent-sdk` | the SDK and loader exist; no config selector reads a specifier yet |
+
+The mechanism is identical across surfaces. This page uses a tracker for the worked example and a worker driver for some config samples; where a name reads `tracker_provider`, substitute the per-surface error prefix (`worker_pool_driver`, and so on).
 
 ## The module specifier
 
-`worker.worker_pool.driver` takes one of two grammars in a single field:
+A config selector takes one of two grammars in a single field:
 
-- A registered kind. An exact match in the worker-driver registry always wins, checked before anything is parsed as a module. A published npm package named `docker` can never shadow the built-in `docker` driver.
+- A registered kind. An exact match in the registry always wins, checked before anything is parsed as a module, so a published package named `docker` can never shadow the built-in `docker` driver.
 - A module specifier. Everything that is not an exact registered kind is treated as a reference to a module.
-
-A specifier is one of:
 
 | Form | Example | Resolves through |
 | --- | --- | --- |
-| npm package name | `acme-worker` | the daemon's module graph |
-| scoped package | `@acme/worker` | the daemon's module graph |
-| relative path | `./drivers/acme.js` | `dirname(workflow.path)` |
-| relative path | `../shared/acme.js` | `dirname(workflow.path)` |
+| relative path | `./trackers/acme.js` | the `WORKFLOW.md` directory |
+| relative path | `../shared/acme.js` | the `WORKFLOW.md` directory |
 | absolute path | `/opt/lorenz/acme.js` | the filesystem |
 | `file:` URL | `file:///opt/lorenz/acme.js` | the filesystem |
+| npm package name | `acme-tracker` | the daemon's module graph |
+| scoped package | `@acme/tracker` | the daemon's module graph |
 
-Any specifier may carry a `#exportName` suffix to select a named export instead of the default:
+Path specifiers (`./`, `../`, absolute, `file:`) resolve against the directory containing your `WORKFLOW.md` and need nothing installed: this is the local-authoring path - build your extension to a `.js` file next to your workflow and point at it. Bare package names resolve through the daemon's own module graph, so they require the package to be installed where the daemon can resolve it; reach for a bare name when you publish your extension. Any specifier may carry a `#exportName` suffix to select a named export.
 
 ```yaml
-worker:
-  worker_pool:
-    driver: "@acme/lorenz-drivers#acmeWorkerDriver"
+tracker:
+  kind: ./trackers/acme.js            # a local file, nothing installed
+# or
+  kind: "@acme/lorenz-trackers#acme"  # an installed package, named export
 ```
 
-Relative and absolute paths resolve against `baseDir`, which the daemon sets to the directory containing your `WORKFLOW.md` (`dirname(workflow.path)`). Bare package names resolve through the daemon's module graph, so the operator installs your driver package next to Lorenz; `./path` is the escape hatch when installation is not an option.
+An empty specifier, an empty `#` suffix, or a `?` query string is rejected at parse time. Cache-busting query strings are unsupported because module code is pinned for the daemon's lifetime (see [When loading happens](#when-loading-happens)).
 
-Two specifier shapes are rejected at parse time:
+## Authoring the module
 
-- An empty specifier or an empty `#` suffix throws `worker_pool_driver_invalid_specifier`.
-- A query string (`?`) throws `worker_pool_driver_invalid_specifier`. Cache-busting query strings are not supported, because module code is pinned for the daemon's lifetime (see below).
+The runtime checks the loaded module STRUCTURALLY: it must be an object carrying the surface's identity field (`kind` for trackers and drivers, `name` for tool packs, `executor` for executors), the surface's required hook functions, and a numeric `sdkVersion`. Nothing in that contract requires importing Lorenz at runtime.
 
-## Authoring the module with `defineWorkerDriver`
+### Zero-dependency: a typed plain object
 
-An out-of-tree module exports a `WorkerDriverModule`: a `WorkerDriverFactory` plus the SDK version it targets. Use `defineWorkerDriver` from `@lorenz/worker-sdk`, which shape-asserts the module at definition time and returns it unchanged, so a typo fails in your tests rather than the operator's daemon.
+Install the surface's SDK as a dev dependency for the TYPES only, write the module with `satisfies`, and stamp a literal `sdkVersion`. The types are erased at build, so the emitted JavaScript imports nothing from Lorenz:
 
 ```ts
-import { defineWorkerDriver } from "@lorenz/worker-sdk";
-import { AcmeWorkerDriver } from "./acme-driver.js";
+import type { TrackerProviderModule } from "@lorenz/tracker-sdk";
+
+export default {
+  kind: "acme",
+  sdkVersion: 1,
+  createClient: (settings) => new AcmeClient(settings),
+} satisfies TrackerProviderModule;
+```
+
+This is the recommended shape for a local extension: it builds to a self-contained `.js` file you point `tracker.kind` at, with no install on the operator side. A runnable example and a test that proves the built output carries no `@lorenz` import live in `test/fixtures/out-of-tree-extension/`.
+
+### With the `define*` helper
+
+If you would rather have the SDK shape-assert your module at definition time, so a typo fails in your tests instead of the operator's daemon, use the axis `define*` helper. It is a runtime function, so it adds a runtime dependency on the SDK (install it as a regular dependency, or bundle it into your build):
+
+```ts
+import { defineWorkerDriver, WORKER_DRIVER_SDK_VERSION } from "@lorenz/worker-sdk";
 
 export default defineWorkerDriver({
   kind: "acme",
-  sdkVersion: 1,
+  sdkVersion: WORKER_DRIVER_SDK_VERSION,
   create: (options, deps) => new AcmeWorkerDriver(options, deps),
 });
 ```
 
-The three fields:
-
-| Field | Type | Meaning |
-| --- | --- | --- |
-| `kind` | non-empty string | the driver's self-declared kind, recorded in the audit trail (not the registry key) |
-| `sdkVersion` | number | the SDK major version the module targets; must equal `WORKER_DRIVER_SDK_VERSION` |
-| `create` | `(options, deps) => WorkerDriver` | factory the pool calls once to construct the driver |
-
-`create` receives the `workers.<name>` options verbatim (minus `driver`) and a `DriverDeps` bundle (`clock`, `logEvent`, `runSsh`). Validate the options fail-loud inside `create`. The `WorkerDriver` you return implements `provision`, `probe`, `destroy`, `list`, and a `capabilities` object; that contract lives in [worker-driver.md](worker-driver.md).
-
-Export the module as the default export, or as a named export selected by a `#name` suffix on the specifier.
+Export the module as the default export, or as a named export selected by a `#name` suffix on the specifier. The per-surface contracts - which hooks a module must implement - live with each surface: [worker-driver.md](worker-driver.md) for drivers, and the `TrackerProvider`, `ToolProvider`, and `AgentExecutorProvider` types in their SDKs for the rest.
 
 ## The SDK version handshake
 
-`WORKER_DRIVER_SDK_VERSION` is `1`. The version is major-only: additive, backwards-compatible SDK changes never bump it.
+Each SDK exports a major-only version constant (`TRACKER_SDK_VERSION`, `WORKER_DRIVER_SDK_VERSION`, and so on), currently `1`. Additive, backwards-compatible SDK changes never bump it.
 
-In-repo extensions register their factories directly through the composition root, which vouches for them at build time. A dynamically imported module crosses a version boundary the daemon cannot type-check, so the explicit `sdkVersion` handshake stands in for the compiler. The loader runs `assertWorkerDriverModule` on the imported value before it ever reaches the registry, and rejects:
+In-repo extensions register through the composition root, which vouches for them at build time. A dynamically imported module crosses a version boundary the daemon cannot type-check, so the `sdkVersion` handshake stands in for the compiler. The loader runs `assert<Surface>Module` on the imported value before it reaches the registry, and rejects, loudly and at load time:
 
 | Throw | Cause |
 | --- | --- |
-| `worker_pool_driver_module_invalid` | the value is not an object, `kind` is not a non-empty string, `create` is not a function, or `sdkVersion` is not a number |
-| `worker_pool_driver_sdk_mismatch` | `sdkVersion` is a number other than `1` |
-| `worker_pool_driver_module_invalid` | the specifier resolved but has no default export and no matching named export |
-| `worker_pool_driver_unavailable` | the specifier could not be imported at all (with a did-you-mean hint toward a close registered kind for a bare name) |
+| `<prefix>_module_invalid` | the value is not an object, the identity field is not a non-empty string, a required hook is not a function, or `sdkVersion` is not a number |
+| `<prefix>_sdk_mismatch` | `sdkVersion` is a number other than the one this build supports |
+| `<prefix>_module_invalid` | the specifier resolved but has no default export and no matching named export |
+| `<prefix>_unavailable` | the specifier could not be imported at all (with a did-you-mean hint toward a close registered kind for a bare name) |
 
-Every failure is loud and happens at load time, before the pool, the runtime, or any provision exists. A `sdkVersion` of `2` against a `v1` build does not load a half-working driver; it stops the daemon.
+A `sdkVersion` of `2` against a `v1` build does not load a half-working extension; it stops the daemon before the runtime exists.
 
 ## When loading happens
 
-The daemon calls `ensureWorkerDriverLoaded` in exactly two places:
+The daemon loads a specifier in exactly two places: at startup, before the runtime is built, and on a workflow reload that CHANGES the specifier. Loading never happens on a hot path; a run never triggers a dynamic import.
 
-- At startup, before the worker pool is created.
-- On a workflow reload that changes the driver specifier, before `pool.reconcile`, via the coordinator's injected driver loader.
-
-Loading never happens on the acquire path. A run never triggers a dynamic import; by the time the pool leases a worker, the driver is already resolved and constructed.
-
-`ensureWorkerDriverLoaded` is idempotent. A registry hit is a no-op: a built-in kind, an in-repo extension, or a specifier a previous call already loaded. The one observable effect on a repeat is the audit event below.
-
-```yaml
-worker:
-  worker_pool:
-    driver: "@acme/lorenz-drivers#acmeWorkerDriver"
-workers:
-  acme:
-    driver: "@acme/lorenz-drivers#acmeWorkerDriver"
-    region: "us-east-1"
-```
-
-Changing the driver CONFIG to a new specifier hot-loads the new module on the next reload. Changing the driver CODE behind an already-loaded specifier does not take effect on reload: Node's ESM cache loads a given specifier's code once per daemon lifetime. To pick up code changes, restart the daemon.
+Resolution is idempotent. A registry hit - a built-in kind, an in-repo extension, or a specifier a previous call already loaded - is a no-op. Changing the config to a new specifier hot-loads the new module on the next reload. Changing the CODE behind an already-loaded specifier does not take effect, because Node's ESM cache loads a specifier's code once per daemon lifetime; restart the daemon to pick up code changes.
 
 ## Audit events
 
-Two events make the loader's decisions observable. Both flow through the standard event log; see [observability.md](../observability.md).
+Two events make the loader's decisions observable (see [observability.md](../observability.md)):
 
 | Event | Fired when | Fields |
 | --- | --- | --- |
-| `worker_pool_driver_loaded` | a specifier is dynamic-imported and registered for the first time | `specifier`, `kind` (the module's self-declared kind), `sdkVersion`, `resolvedFrom` |
-| `worker_pool_driver_module_pinned` | a reload re-encounters a specifier this loader already loaded | `specifier` |
-
-`worker_pool_driver_loaded` records exactly which code went live and where it was imported from. `worker_pool_driver_module_pinned` makes the code-is-pinned semantic observable: it tells you the reload saw your config but reused the cached module rather than re-importing it.
+| `<prefix>_loaded` | a specifier is dynamic-imported and registered for the first time | `specifier`, `kind`, `sdkVersion`, `resolvedFrom` |
+| `<prefix>_module_pinned` | a reload re-encounters a specifier already loaded | `specifier` |
 
 ## The trust boundary
 
-A dynamic import runs arbitrary code in the daemon process. This is the same trust boundary as workspace hooks: the module you point at executes with the daemon's full privileges. Treat a third-party driver package the way you treat a hook script.
-
-The boundary is narrowed in three ways:
-
-- Code loads only at startup or on a specifier-changing reload, never on the acquire path. A run cannot cause new code to load.
-- The factory is registered under the exact configured specifier string, not the module's self-declared `kind`. The pool resolves `settings.driver` verbatim, so what runs is what you wrote in config.
-- The module is pinned for the daemon's lifetime. Once loaded, the code cannot silently change underneath a running daemon; a restart is required to load different code.
-
-For the broader picture of what runs with daemon privileges and how to contain it, see [security.md](../security.md).
+A dynamic import runs arbitrary code in the daemon process, with the daemon's full privileges - the same trust boundary as workspace hooks. Treat a third-party extension package the way you treat a hook script. The boundary is narrowed three ways: code loads only at startup or on a specifier-changing reload, never on a hot path; the module is registered under the exact configured specifier string, not its self-declared identity, so what runs is what you wrote in config; and the module is pinned for the daemon's lifetime, so its code cannot change under a running daemon. See [security.md](../security.md) for the broader daemon trust model.
 
 ## See also
 
-- [worker-driver.md](worker-driver.md) - the `WorkerDriver` contract your module implements
+- [extensions/index.md](index.md) - the four extension surfaces and how the built-in set registers
+- [worker-driver.md](worker-driver.md) - the `WorkerDriver` contract a driver module implements
 - [security.md](../security.md) - the daemon trust model and what runs with its privileges
-- [worker-pool.md](../workers/worker-pool.md) - the warm pool that leases, reaps, and bills the workers your driver provisions
-- [extensions/index.md](index.md) - the four extension surfaces and how they register
+- [worker-pool.md](../workers/worker-pool.md) - the warm pool that leases the workers a driver provisions

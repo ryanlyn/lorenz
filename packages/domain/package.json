@@ -1,10 +1,17 @@
 {
   "name": "@lorenz/domain",
   "version": "0.1.1",
-  "private": true,
+  "description": "Core domain types and contracts for Lorenz, including the out-of-tree extension provider/driver contracts.",
+  "license": "Apache-2.0",
+  "publishConfig": {
+    "access": "public"
+  },
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
   "exports": {
     ".": "./dist/index.js"
   },

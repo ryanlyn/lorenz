@@ -116,7 +116,7 @@ Each page is the complete recipe for one extension point: the interface members,
 - [tool-pack.md](tool-pack.md) - add a named pack of MCP tools.
 - [agent-executor.md](agent-executor.md) - add a new way to run agents.
 - [worker-driver.md](worker-driver.md) - place agents on a new kind of machine.
-- [out-of-tree.md](out-of-tree.md) - ship an extension as a standalone module loaded by config specifier with the version handshake (worked through the worker driver; the same mechanism loads a tracker named by `tracker.kind`).
+- [out-of-tree.md](out-of-tree.md) - ship an extension as a standalone module loaded by a config specifier, with the SDK version handshake. Covers any axis whose config selector accepts a specifier (`tracker.kind`, `worker.worker_pool.driver`), including the zero-runtime-dependency authoring recipe.
 
 ## See also
 - [../architecture.md](../architecture.md) - how the SDK, engine, and extension layers fit together.
