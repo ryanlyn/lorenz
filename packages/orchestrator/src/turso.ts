@@ -4,8 +4,16 @@ import path from "node:path";
 import { connect, type Database } from "@tursodatabase/database";
 
 import type { AsyncClaimStoreBackend, ClaimStoreCheckpoint } from "./claimStore.js";
+import {
+  CLAIM_STORE_SCHEMA_VERSION,
+  CLAIM_STORE_SCHEMA_VERSION_INSERT_SQL,
+  CLAIM_STORE_SCHEMA_VERSION_KEY,
+  CLAIM_STORE_SCHEMA_VERSION_SELECT_SQL,
+  CLAIM_STORE_TABLES_SQL,
+  unsupportedClaimStoreSchemaVersionError,
+} from "./claimStoreSchema.js";
 
-export const CLAIM_STORE_SCHEMA_VERSION = 1;
+export { CLAIM_STORE_SCHEMA_VERSION } from "./claimStoreSchema.js";
 
 export interface TursoClaimStoreBackendOptions {
   busyTimeoutMs?: number | undefined;
@@ -42,8 +50,17 @@ export class TursoClaimStoreBackend implements AsyncClaimStoreBackend {
       db,
       Math.max(1, Math.floor(options.maxEventRows ?? 1000)),
     );
-    await backend.initialize();
-    return backend;
+    try {
+      await backend.initialize();
+      return backend;
+    } catch (error) {
+      try {
+        await db.close();
+      } catch {
+        // Preserve the initialization error.
+      }
+      throw error;
+    }
   }
 
   async load(): Promise<ClaimStoreCheckpoint | null> {
@@ -104,31 +121,7 @@ export class TursoClaimStoreBackend implements AsyncClaimStoreBackend {
   }
 
   private async initialize(): Promise<void> {
-    await this.db.exec(`
-      CREATE TABLE IF NOT EXISTS claim_store_meta (
-        key TEXT PRIMARY KEY,
-        value TEXT NOT NULL
-      );
-      CREATE TABLE IF NOT EXISTS claim_store_snapshot (
-        id INTEGER PRIMARY KEY CHECK (id = 1),
-        ownerId TEXT NOT NULL,
-        writtenAt TEXT NOT NULL,
-        operation TEXT NOT NULL,
-        checkpointJson TEXT NOT NULL
-      );
-      CREATE TABLE IF NOT EXISTS claim_store_events (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        ownerId TEXT NOT NULL,
-        writtenAt TEXT NOT NULL,
-        operation TEXT NOT NULL
-      );
-      CREATE INDEX IF NOT EXISTS idx_claim_store_events_written_at
-        ON claim_store_events (writtenAt);
-      CREATE TABLE IF NOT EXISTS claim_store_owners (
-        ownerId TEXT PRIMARY KEY,
-        heartbeatAt TEXT NOT NULL
-      );
-    `);
+    await this.db.exec(CLAIM_STORE_TABLES_SQL);
     await this.verifySchemaVersion();
   }
 
@@ -172,21 +165,18 @@ export class TursoClaimStoreBackend implements AsyncClaimStoreBackend {
   }
 
   private async verifySchemaVersion(): Promise<void> {
-    const row = (await this.db.get(
-      "SELECT value FROM claim_store_meta WHERE key = 'schema_version'",
-    )) as { value: string } | undefined;
-    if (row) {
-      const version = Number(row.value);
-      if (version !== CLAIM_STORE_SCHEMA_VERSION) {
-        throw new Error(
-          `unsupported_claim_store_schema_version: expected=${CLAIM_STORE_SCHEMA_VERSION} actual=${row.value}`,
-        );
-      }
-      return;
-    }
     await this.db.run(
-      "INSERT INTO claim_store_meta (key, value) VALUES ('schema_version', ?)",
+      CLAIM_STORE_SCHEMA_VERSION_INSERT_SQL,
+      CLAIM_STORE_SCHEMA_VERSION_KEY,
       String(CLAIM_STORE_SCHEMA_VERSION),
     );
+    const row = (await this.db.get(
+      CLAIM_STORE_SCHEMA_VERSION_SELECT_SQL,
+      CLAIM_STORE_SCHEMA_VERSION_KEY,
+    )) as { value: string } | undefined;
+    if (!row) throw new Error("claim_store_schema_version_missing");
+    const version = Number(row.value);
+    if (version !== CLAIM_STORE_SCHEMA_VERSION)
+      throw unsupportedClaimStoreSchemaVersionError(row.value);
   }
 }

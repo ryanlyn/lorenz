@@ -135,7 +135,7 @@ On a snapshot error this route returns `503` with code `snapshot_timeout` or `sn
 
 ### POST /api/v1/refresh
 
-Queues an immediate poll and reconcile pass rather than waiting for the next scheduled poll. On success returns `202`:
+Queues an immediate poll and reconcile pass rather than waiting for the next scheduled poll. Requires `Authorization: Bearer <control-token>`. On success returns `202`:
 
 ```json
 {
@@ -146,7 +146,7 @@ Queues an immediate poll and reconcile pass rather than waiting for the next sch
 }
 ```
 
-`coalesced` is `true` when a poll is already in flight; no new poll starts. If the runtime cannot accept the request, returns `503 orchestrator_unavailable` ("Orchestrator is unavailable").
+`coalesced` is `true` when a poll is already in flight; no new poll starts. If the runtime cannot accept the request, returns `503 orchestrator_unavailable` ("Orchestrator is unavailable"). If the bearer token is missing or invalid, returns `401 unauthorized`.
 
 ### GET /api/v1/daemon
 
@@ -175,7 +175,7 @@ server.
 
 ### POST /api/v1/stop
 
-Requests a graceful daemon shutdown. On success returns `202`:
+Requests a graceful daemon shutdown. Requires `Authorization: Bearer <control-token>`. On success returns `202`:
 
 ```json
 {
@@ -185,7 +185,7 @@ Requests a graceful daemon shutdown. On success returns `202`:
 ```
 
 If the mounted runtime source does not expose stop control, returns
-`503 daemon_control_unavailable` ("Daemon control unavailable").
+`503 daemon_control_unavailable` ("Daemon control unavailable"). If the bearer token is missing or invalid, returns `401 unauthorized`.
 
 ### GET /api/v1/:issue_identifier
 
@@ -273,6 +273,7 @@ The `OpsStatePayload`, `RunningEntryPayload`, `RetryEntryPayload`, and `BlockedE
 | `not_found` | 404 | any unknown path | No matching route |
 | `snapshot_timeout` | 200 / 503 | `state`, `runs` | Snapshot read timed out |
 | `snapshot_unavailable` | 200 / 503 | `state`, `runs` | Snapshot read failed |
+| `unauthorized` | 401 | `refresh`, `stop` | Missing or invalid daemon control token |
 | `orchestrator_unavailable` | 503 | `refresh` | Runtime could not queue the refresh |
 | `daemon_status_unavailable` | 503 | `daemon` | No daemon status hook or snapshot status was available |
 | `daemon_control_unavailable` | 503 | `stop` | The mounted runtime source cannot accept stop requests |

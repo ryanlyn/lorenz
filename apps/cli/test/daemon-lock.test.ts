@@ -1,6 +1,6 @@
 import path from "node:path";
 import fs, { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { hostname, tmpdir } from "node:os";
 
 import { test, vi } from "vitest";
 import { assert } from "@lorenz/test-utils";
@@ -56,6 +56,7 @@ test("daemon lock records owner identity and rejects a second live owner", async
     assert.equal(second.stale, false);
     assert.equal(second.record?.ownerId, "owner-a");
     assert.equal(second.record?.endpoint.address, "/tmp/lorenz.sock");
+    assert.ok(first.lock.snapshot().controlToken);
 
     assert.equal(await first.lock.release(), true);
     assert.equal(await readDaemonLock(lockPath), null);
@@ -221,6 +222,113 @@ test("daemon lock reports stale owners without stealing by default", async () =>
   }
 });
 
+test("daemon lock can replace a stale owner when takeover is requested", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "lorenz-daemon-stale-replace-"));
+  try {
+    const workflowPath = path.join(root, "WORKFLOW.md");
+    const lockPath = daemonLockPath(root, workflowPath);
+    const deadPid = 101;
+    const killSpy = vi.spyOn(process, "kill").mockImplementation(((pid: number | string) => {
+      if (pid === deadPid) {
+        const error = new Error("No such process") as NodeJS.ErrnoException;
+        error.code = "ESRCH";
+        throw error;
+      }
+      return true;
+    }) as typeof process.kill);
+    await mkdir(path.dirname(lockPath), { recursive: true });
+    await writeFile(
+      lockPath,
+      JSON.stringify({
+        version: 1,
+        ownerId: "owner-a",
+        pid: deadPid,
+        hostname: hostname(),
+        startedAt: "2026-01-01T00:00:00.000Z",
+        workflowPath,
+        workspaceRoot: root,
+        endpoint: { kind: "socket", address: "/tmp/lorenz.sock" },
+        heartbeatAt: "2026-01-01T00:00:00.000Z",
+      }),
+      "utf8",
+    );
+
+    try {
+      const result = await acquireDaemonLock({
+        lockPath,
+        identity: createDaemonIdentity({
+          workflowPath,
+          workspaceRoot: root,
+          ownerId: "owner-b",
+          now: new Date("2026-01-01T00:02:00.000Z"),
+        }),
+        endpoint: { kind: "http", address: "http://127.0.0.1:5050" },
+        now: new Date("2026-01-01T00:02:00.000Z"),
+        replaceStale: true,
+        staleAfterMs: 60_000,
+      });
+
+      assert.equal(result.status, "acquired");
+      if (result.status !== "acquired") throw new Error("stale owner should be replaced");
+      const record = await readDaemonLock(lockPath);
+      assert.equal(record?.ownerId, "owner-b");
+      assert.equal(record?.endpoint.address, "http://127.0.0.1:5050");
+      assert.ok(record?.controlToken);
+      assert.equal(killSpy.mock.calls[0]?.[0], deadPid);
+      assert.equal(killSpy.mock.calls[0]?.[1], 0);
+    } finally {
+      killSpy.mockRestore();
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("daemon lock does not replace a stale same-host owner that is still alive", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "lorenz-daemon-stale-live-"));
+  try {
+    const workflowPath = path.join(root, "WORKFLOW.md");
+    const lockPath = daemonLockPath(root, workflowPath);
+    await mkdir(path.dirname(lockPath), { recursive: true });
+    await writeFile(
+      lockPath,
+      JSON.stringify({
+        version: 1,
+        ownerId: "owner-a",
+        pid: process.pid,
+        hostname: hostname(),
+        startedAt: "2026-01-01T00:00:00.000Z",
+        workflowPath,
+        workspaceRoot: root,
+        endpoint: { kind: "socket", address: "/tmp/lorenz.sock" },
+        heartbeatAt: "2026-01-01T00:00:00.000Z",
+      }),
+      "utf8",
+    );
+
+    const result = await acquireDaemonLock({
+      lockPath,
+      identity: createDaemonIdentity({
+        workflowPath,
+        workspaceRoot: root,
+        ownerId: "owner-b",
+        now: new Date("2026-01-01T00:02:00.000Z"),
+      }),
+      endpoint: { kind: "http", address: "http://127.0.0.1:5050" },
+      now: new Date("2026-01-01T00:02:00.000Z"),
+      replaceStale: true,
+      staleAfterMs: 60_000,
+    });
+
+    assert.equal(result.status, "conflict");
+    if (result.status !== "conflict") throw new Error("live owner should still conflict");
+    assert.equal(result.stale, true);
+    assert.equal((await readDaemonLock(lockPath))?.ownerId, "owner-a");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("daemon lock treats unreadable contents as a stale conflict", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "lorenz-daemon-malformed-"));
   try {
@@ -250,6 +358,25 @@ test("daemon lock treats unreadable contents as a stale conflict", async () => {
     if (result.status !== "conflict") throw new Error("malformed owner should still conflict");
     assert.equal(result.record, null);
     assert.equal(result.stale, true);
+
+    const replacement = await acquireDaemonLock({
+      lockPath,
+      identity: createDaemonIdentity({
+        workflowPath,
+        workspaceRoot: root,
+        ownerId: "owner-c",
+        now: new Date("2026-01-01T00:03:00.000Z"),
+      }),
+      endpoint: { kind: "socket", address: "/tmp/replacement.sock" },
+      now: new Date("2026-01-01T00:03:00.000Z"),
+      replaceStale: true,
+      staleAfterMs: 60_000,
+    });
+
+    assert.equal(replacement.status, "conflict");
+    if (replacement.status !== "conflict") throw new Error("malformed owner should not be stolen");
+    assert.equal(replacement.record, null);
+    assert.equal(await readFile(lockPath, "utf8"), "null");
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -342,6 +469,36 @@ test("daemon lock recovers a stale mutation guard", async () => {
     assert.equal(result.status, "acquired");
     const record = await readDaemonLock(lockPath);
     assert.equal(record?.ownerId, "owner-a");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("daemon lock recovers a stale malformed mutation guard", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "lorenz-daemon-malformed-mutation-"));
+  try {
+    const workflowPath = path.join(root, "WORKFLOW.md");
+    const lockPath = daemonLockPath(root, workflowPath);
+    const mutationPath = `${lockPath}.mutation`;
+    await mkdir(path.dirname(lockPath), { recursive: true });
+    await writeFile(mutationPath, "{", "utf8");
+    const staleTime = new Date(Date.now() - 60_000);
+    await fs.utimes(mutationPath, staleTime, staleTime);
+
+    const result = await acquireDaemonLock({
+      lockPath,
+      identity: createDaemonIdentity({
+        workflowPath,
+        workspaceRoot: root,
+        ownerId: "owner-a",
+      }),
+      endpoint: { kind: "socket", address: "/tmp/lorenz.sock" },
+    });
+
+    assert.equal(result.status, "acquired");
+    const record = await readDaemonLock(lockPath);
+    assert.equal(record?.ownerId, "owner-a");
+    await assert.rejects(() => readFile(mutationPath, "utf8"), "ENOENT");
   } finally {
     await rm(root, { recursive: true, force: true });
   }

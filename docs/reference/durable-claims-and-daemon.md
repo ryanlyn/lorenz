@@ -26,8 +26,12 @@ When a durable backend is selected without `--claim-store-path` or
 `LORENZ_CLAIM_STORE_PATH`, the daemon stores claims at:
 
 ```text
-<workspace.root>/.lorenz/claim-store/claims.db
+<workspace.root>/.lorenz/claim-store/<workflow-sha256>/claims.db
 ```
+
+The workflow hash is derived from the absolute workflow file path. This keeps the default
+durable store isolated when multiple workflow files share one workspace root. Operators who
+want a shared store can still provide an explicit path.
 
 The claim owner stale threshold defaults inside the orchestrator store. Override it with
 `--claim-store-owner-stale-ms <ms>` or `LORENZ_CLAIM_STORE_OWNER_STALE_MS`.

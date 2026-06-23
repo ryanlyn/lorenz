@@ -14,7 +14,13 @@ import {
   normalizeHttpBindHost,
   type Settings,
 } from "@lorenz/domain";
-import { createMcpAuthScope, mcpAuthScopeForSettings, mountMcp } from "@lorenz/mcp";
+import {
+  bearerToken,
+  createMcpAuthScope,
+  createOpaqueBearerToken,
+  mcpAuthScopeForSettings,
+  mountMcp,
+} from "@lorenz/mcp";
 import type { ToolRegistry } from "@lorenz/tool-sdk";
 import {
   daemonPayload,
@@ -45,12 +51,14 @@ export interface ObservabilityServerOptions {
   issueStore?: IssueStore;
   /** Tool packs served on the MCP mount; defaults to the process-wide registry. */
   tools?: ToolRegistry;
+  controlToken?: string | undefined;
 }
 
 export interface ObservabilityServerHandle {
   host: string;
   port: number;
   authScope: string;
+  controlToken: string | null;
   url(path?: string): string;
   stop(): Promise<void>;
 }
@@ -65,11 +73,18 @@ export async function startObservabilityServer(
     settings && options.port > 0
       ? mcpAuthScopeForSettings(settings, bindHost, options.port)
       : createMcpAuthScope();
-  const { app, watcher } = buildObservabilityApp(runtime, options, authScope, settings);
+  const controlToken = options.controlToken ?? createControlToken();
+  const { app, watcher } = buildObservabilityApp(
+    runtime,
+    options,
+    authScope,
+    settings,
+    controlToken,
+  );
   const wsSetup = createWsHandler(app, runtime, watcher);
 
   try {
-    return await startHonoServer(app, options, authScope, {
+    return await startHonoServer(app, options, authScope, controlToken, {
       injectWebSocket: wsSetup.injectWebSocket,
       stop: wsSetup.stop,
     });
@@ -88,6 +103,7 @@ async function startHonoServer(
   app: Hono,
   options: ObservabilityServerOptions,
   authScope: string,
+  controlToken: string | null,
   internals: HonoServerInternals,
 ): Promise<ObservabilityServerHandle> {
   let server!: ServerType;
@@ -110,6 +126,7 @@ async function startHonoServer(
     host: bindHost,
     port,
     authScope,
+    controlToken,
     url(urlPath = "/"): string {
       return `http://${httpUrlHost(bindHost)}:${port}${urlPath}`;
     },
@@ -130,6 +147,7 @@ function buildObservabilityApp(
   options: ObservabilityServerOptions,
   authScope: string,
   settings = runtimeSettings(runtime),
+  controlToken: string | null = null,
 ): BuildResult {
   const app = new Hono();
   // Resolve settings per request so the MCP endpoint reflects workflow settings the runtime
@@ -195,7 +213,9 @@ function buildObservabilityApp(
   });
   app.all("/api/v1/runs", () => errorResponse(405, "method_not_allowed", "Method not allowed"));
 
-  app.post("/api/v1/refresh", () => {
+  app.post("/api/v1/refresh", (c) => {
+    const unauthorized = unauthorizedControlResponse(c.req.header("authorization"), controlToken);
+    if (unauthorized) return unauthorized;
     try {
       return jsonResponse(runtime.requestRefresh(), 202);
     } catch {
@@ -212,7 +232,9 @@ function buildObservabilityApp(
   });
   app.all("/api/v1/daemon", () => errorResponse(405, "method_not_allowed", "Method not allowed"));
 
-  app.post("/api/v1/stop", () => {
+  app.post("/api/v1/stop", (c) => {
+    const unauthorized = unauthorizedControlResponse(c.req.header("authorization"), controlToken);
+    if (unauthorized) return unauthorized;
     if (!runtime.requestStop)
       return errorResponse(503, "daemon_control_unavailable", "Daemon control unavailable");
     return jsonResponse(runtime.requestStop(), 202);
@@ -252,6 +274,19 @@ function buildObservabilityApp(
 
 function runtimeSettings(runtime: RuntimeServerSource): Settings | null {
   return runtime.workflow?.settings ?? null;
+}
+
+function createControlToken(): string {
+  return createOpaqueBearerToken();
+}
+
+function unauthorizedControlResponse(
+  authorization: string | undefined,
+  controlToken: string | null,
+): Response | null {
+  if (controlToken === null) return null;
+  if (bearerToken(authorization) === controlToken) return null;
+  return errorResponse(401, "unauthorized", "Missing or invalid daemon control token");
 }
 
 function resolveStaticDir(): string {

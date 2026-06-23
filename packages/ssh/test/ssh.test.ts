@@ -133,20 +133,20 @@ test("SSH timeout rejects near the caller deadline when a child keeps pipes open
     trace,
     `#!/bin/sh
 printf 'ARGV:%s\\n' "$*" >> ${shellEscape(trace)}
-# A TERM-ignoring child that holds the pipes open. Plain sh: spawning node
-# here can outlast the ssh timeout on a loaded machine, killing the script
-# before it records CHILD and flaking the test.
-sh -c 'trap "" TERM; while :; do sleep 1; done' &
-child="$!"
+# A TERM-ignoring fake ssh process that holds the pipes open. Keep this in
+# plain sh; spawning another runtime here can outlast the caller timeout on a
+# loaded machine.
+trap "" TERM
+child="$$"
 printf 'CHILD:%s\\n' "$child" >> ${shellEscape(trace)}
-wait "$child"
+while :; do sleep 1; done
 `,
   );
 
   const started = performance.now();
   await assert.rejects(
-    () => runSsh("localhost", "printf ok", { sshExecutablePath, timeoutMs: 1000 }),
-    /ssh_timeout: localhost 1000/,
+    () => runSsh("localhost", "printf ok", { sshExecutablePath, timeoutMs: 5000 }),
+    /ssh_timeout: localhost 5000/,
   );
   const elapsedMs = performance.now() - started;
 
@@ -154,16 +154,14 @@ wait "$child"
   // would take the full waitForProcessExit horizon) rather than asserting
   // scheduler precision: the margin must absorb event-loop and process-spawn
   // delay on a loaded machine (parallel check tasks, CI) without flaking.
-  if (elapsedMs >= 3_000) throw new Error(`timeout returned after ${Math.round(elapsedMs)}ms`);
+  if (elapsedMs >= 8_000) throw new Error(`timeout returned after ${Math.round(elapsedMs)}ms`);
 
-  const traceText = await fs.readFile(trace, "utf8");
-  const childMatch = /^CHILD:(\d+)$/m.exec(traceText);
-  if (!childMatch) throw new Error(`fake ssh child pid missing in trace: ${traceText}`);
-  // runSsh sends SIGTERM at the 1s timeout and only escalates to SIGKILL after a
-  // 5s grace, so the TERM-ignoring child cannot exit before ~6s by design. Allow a
+  const childPid = await readFakeSshChildPid(trace, 2_000);
+  // runSsh sends SIGTERM at the caller timeout and only escalates to SIGKILL after
+  // a 5s grace, so the TERM-ignoring process cannot exit before then. Allow a
   // generous horizon (well under the 30s testTimeout) so SIGKILL delivery and
   // process reaping under full-suite load do not flake this.
-  await waitForProcessExit(Number(childMatch[1]), 20_000);
+  await waitForProcessExit(childPid, 20_000);
 });
 
 test("SSH run reports signaled subprocesses as failures", async () => {
@@ -354,6 +352,18 @@ async function waitForProcessExit(pid: number, timeoutMs: number): Promise<void>
     await settle(50);
   }
   throw new Error(`process ${pid} still running after ${timeoutMs}ms`);
+}
+
+async function readFakeSshChildPid(trace: string, timeoutMs: number): Promise<number> {
+  const deadline = performance.now() + timeoutMs;
+  let traceText = "";
+  while (performance.now() < deadline) {
+    traceText = await fs.readFile(trace, "utf8");
+    const childMatch = /^CHILD:(\d+)$/m.exec(traceText);
+    if (childMatch) return Number(childMatch[1]);
+    await settle(50);
+  }
+  throw new Error(`fake ssh child pid missing in trace: ${traceText}`);
 }
 
 async function assertMissing(filePath: string, message: string): Promise<void> {

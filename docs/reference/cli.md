@@ -42,7 +42,7 @@ When `workflowPath` is omitted, resolution falls to `LORENZ_WORKFLOW` (an absolu
 | `--port <port>` | non-negative integer | unset | Override `server.port`. Parsed by `parseNonNegativeInteger`. |
 | `--logs-root <path>` | path | unset | Write logs to `<path>/log/lorenz.log` (overrides `logging.log_file`). |
 | `--claim-store <backend>` | `memory`, `sqlite`, or `turso` | `memory` | Select the claim-store backend for this daemon process. |
-| `--claim-store-path <path>` | path | `<workspace.root>/.lorenz/claim-store/claims.db` for durable backends | Database path for `sqlite` and `turso` claim stores. Ignored by `memory`. |
+| `--claim-store-path <path>` | path | `<workspace.root>/.lorenz/claim-store/<workflow-sha256>/claims.db` for durable backends | Database path for `sqlite` and `turso` claim stores. Ignored by `memory`. |
 | `--claim-store-owner-stale-ms <ms>` | positive integer | orchestrator default | Override the owner-heartbeat stale threshold used by durable claim stores. |
 
 Both the web dashboard and the TUI are on by default. The TUI only renders when `process.stdout.isTTY` is true; without a TTY the runtime subscribes and writes pretty-printed JSON snapshots to stdout. Pass `--no-tui` to force the JSON-snapshot path even on a TTY.
@@ -175,23 +175,26 @@ the endpoint.
 ## `lorenz refresh`
 
 ```sh
-lorenz refresh [--url <url>] [--port <port>] [--json] [workflowPath]
+lorenz refresh [--url <url>] [--port <port>] [--control-token <token>] [--json] [workflowPath]
 ```
 
 Resolves the daemon endpoint the same way as `lorenz status`, then posts to
 `/api/v1/refresh`. On success the daemon queues an out-of-band poll and reconcile pass. A running
-poll is coalesced rather than duplicated. Non-2xx responses exit `1`.
+poll is coalesced rather than duplicated. The command uses the daemon lock token when the target
+matches the lock endpoint; pass `--control-token` when targeting a protected endpoint directly.
+Non-2xx responses exit `1`.
 
 ## `lorenz stop`
 
 ```sh
-lorenz stop [--url <url>] [--port <port>] [--json] [workflowPath]
+lorenz stop [--url <url>] [--port <port>] [--control-token <token>] [--json] [workflowPath]
 ```
 
 Resolves the daemon endpoint the same way as `lorenz status`, then posts to `/api/v1/stop`. The
 daemon calls `runtime.stop()` and returns once the stop request has been accepted; normal shutdown
-then drains workers, stops the server, closes stores, and releases the daemon lease. Non-2xx
-responses exit `1`.
+then drains workers, stops the server, closes stores, and releases the daemon lease. The command
+uses the daemon lock token when the target matches the lock endpoint; pass `--control-token` when
+targeting a protected endpoint directly. Non-2xx responses exit `1`.
 
 ## `lorenz doctor`
 

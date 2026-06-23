@@ -1356,7 +1356,11 @@ test("local driver (empty host) through the concrete per-run manager binds a nul
   // the local behaviour is purely the empty-host short-circuit, not a degraded cap.
   assert.equal(coordinator.capabilities.perRunClaimEnforcement, true);
 
-  const result = await coordinator.acquireRunSlot({ ...acquireReq, issueId: "issue-local", slotIndex: 0 });
+  const result = await coordinator.acquireRunSlot({
+    ...acquireReq,
+    issueId: "issue-local",
+    slotIndex: 0,
+  });
   assert.equal(result.status, "bound");
   if (result.status !== "bound") return;
 

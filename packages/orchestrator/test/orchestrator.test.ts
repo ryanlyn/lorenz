@@ -131,6 +131,21 @@ class FailingCommitBackend extends MemoryCheckpointBackend {
   }
 }
 
+class TransactionalMemoryCheckpointBackend extends MemoryCheckpointBackend {
+  override withExclusiveTransaction<T>(run: () => T): T {
+    this.exclusiveTransactions += 1;
+    const savedBefore = [...this.saved];
+    const heartbeatsBefore = new Map(this.ownerHeartbeats);
+    try {
+      return run();
+    } catch (error) {
+      this.saved = savedBefore;
+      this.ownerHeartbeats = heartbeatsBefore;
+      throw error;
+    }
+  }
+}
+
 class AsyncMemoryCheckpointBackend implements AsyncClaimStoreBackend {
   readonly kind = "async-memory-checkpoint";
   readonly capabilities: ClaimStoreCapabilities;
@@ -169,6 +184,21 @@ class AsyncMemoryCheckpointBackend implements AsyncClaimStoreBackend {
   async withExclusiveTransaction<T>(run: () => Promise<T>): Promise<T> {
     this.exclusiveTransactions += 1;
     return run();
+  }
+}
+
+class AsyncTransactionalMemoryCheckpointBackend extends AsyncMemoryCheckpointBackend {
+  override async withExclusiveTransaction<T>(run: () => Promise<T>): Promise<T> {
+    this.exclusiveTransactions += 1;
+    const savedBefore = [...this.saved];
+    const heartbeatsBefore = new Map(this.ownerHeartbeats);
+    try {
+      return await run();
+    } catch (error) {
+      this.saved = savedBefore;
+      this.ownerHeartbeats = heartbeatsBefore;
+      throw error;
+    }
   }
 }
 
@@ -253,6 +283,164 @@ test("persistent claim store default owner id includes restart-unique entropy", 
   const store = new PersistentClaimStore(new MemoryCheckpointBackend());
 
   assert.match(store.ownerId, /^memory-checkpoint:\d+:\d+:[0-9a-f-]{36}$/);
+});
+
+test("persistent claim store skips checkpoints for unchanged eligible issue polls", () => {
+  const backend = new MemoryCheckpointBackend();
+  const store = new PersistentClaimStore(backend, { ownerId: "owner-a" });
+  const orchestrator = new Orchestrator(parseConfig(), systemClock, store);
+  const issue = normalizeIssue({
+    id: "persistent-eligible-noop",
+    identifier: "MT-PERSIST-ELIGIBLE-NOOP",
+    title: "Persistent eligible noop",
+    state: { name: "Todo", type: "unstarted" },
+  });
+
+  assert.equal(orchestrator.eligibleIssues([issue])[0]?.identifier, issue.identifier);
+  assert.equal(backend.saved.length, 0);
+  assert.equal(orchestrator.snapshot().claimStore.transactionsApplied, 0);
+});
+
+test("persistent claim store checkpoints eligible issue polls when block state changes", () => {
+  const backend = new MemoryCheckpointBackend();
+  const store = new PersistentClaimStore(backend, { ownerId: "owner-a" });
+  const orchestrator = new Orchestrator(
+    parseConfig({ agent: { max_concurrent_agents: 1 } }),
+    systemClock,
+    store,
+  );
+  const running = normalizeIssue({
+    id: "persistent-eligible-running",
+    identifier: "MT-PERSIST-ELIGIBLE-RUNNING",
+    title: "Persistent eligible running",
+    state: { name: "Todo", type: "unstarted" },
+  });
+  const blocked = normalizeIssue({
+    id: "persistent-eligible-blocked",
+    identifier: "MT-PERSIST-ELIGIBLE-BLOCKED",
+    title: "Persistent eligible blocked",
+    state: { name: "Todo", type: "unstarted" },
+  });
+
+  assert.ok(claimEntry(orchestrator, running));
+  assert.equal(backend.saved.length, 1);
+
+  assert.deepEqual(orchestrator.eligibleIssues([blocked]), []);
+  assert.equal(backend.saved.length, 2);
+  assert.equal(backend.saved.at(-1)?.operation, "eligible_issues");
+  assert.equal(orchestrator.snapshot().blocked[0]?.reason, "global_concurrency_cap");
+
+  assert.deepEqual(orchestrator.eligibleIssues([blocked]), []);
+  assert.equal(backend.saved.length, 2);
+});
+
+test("async persistent claim store skips checkpoints for unchanged eligible issue polls", async () => {
+  const backend = new AsyncMemoryCheckpointBackend();
+  const store = await AsyncPersistentClaimStore.create(backend, { ownerId: "owner-a" });
+  const orchestrator = new Orchestrator(parseConfig(), systemClock, store);
+  const issue = normalizeIssue({
+    id: "async-persistent-eligible-noop",
+    identifier: "MT-ASYNC-PERSIST-ELIGIBLE-NOOP",
+    title: "Async persistent eligible noop",
+    state: { name: "Todo", type: "unstarted" },
+  });
+
+  assert.equal((await orchestrator.eligibleIssuesAsync([issue]))[0]?.identifier, issue.identifier);
+  assert.equal(backend.saved.length, 0);
+  assert.equal((await orchestrator.snapshotAsync()).claimStore.transactionsApplied, 0);
+});
+
+test("persistent claim store skips checkpoints for live-only session notifications", () => {
+  const backend = new MemoryCheckpointBackend();
+  const store = new PersistentClaimStore(backend, { ownerId: "owner-a" });
+  const orchestrator = new Orchestrator(parseConfig(), systemClock, store);
+  const issue = normalizeIssue({
+    id: "persistent-streaming-update",
+    identifier: "MT-PERSIST-STREAM",
+    title: "Persistent streaming update",
+    state: { name: "Todo", type: "unstarted" },
+  });
+
+  assert.ok(claimEntry(orchestrator, issue));
+  assert.equal(backend.saved.length, 1);
+
+  orchestrator.applyUpdate(issue.id, 0, {
+    type: "session_notification",
+    message: { sessionUpdate: "thinking" } as never,
+    sessionId: "session-live",
+    executorPid: "pid-live",
+    timestamp: new Date("2026-01-01T00:00:05.000Z"),
+  });
+  assert.equal(backend.saved.length, 1);
+  assert.equal(orchestrator.snapshot().running[0]?.lastAgentEvent, "session_notification");
+  assert.equal(orchestrator.snapshot().running[0]?.sessionId, "session-live");
+
+  orchestrator.applyUpdate(issue.id, 0, {
+    type: "session_notification",
+    message: { sessionUpdate: "usage" } as never,
+    usageKind: "cumulative",
+    usage: { totalTokens: 7 },
+  });
+  assert.equal(backend.saved.length, 2);
+  assert.equal(backend.saved.at(-1)?.operation, "apply_update");
+});
+
+test("shared persistent claim store applies live-only session notifications without reload", () => {
+  const backend = new MemoryCheckpointBackend({ sharedAcrossProcesses: true });
+  const store = new PersistentClaimStore(backend, { ownerId: "owner-a" });
+  const orchestrator = new Orchestrator(parseConfig(), systemClock, store);
+  const issue = normalizeIssue({
+    id: "shared-live-streaming-update",
+    identifier: "MT-SHARED-LIVE-STREAM",
+    title: "Shared live streaming update",
+    state: { name: "Todo", type: "unstarted" },
+  });
+
+  assert.ok(claimEntry(orchestrator, issue));
+  const transactionsBefore = backend.exclusiveTransactions;
+
+  orchestrator.applyUpdate(issue.id, 0, {
+    type: "session_notification",
+    message: { sessionUpdate: "thinking" } as never,
+    sessionId: "session-live",
+    executorPid: "pid-live",
+  });
+
+  const running = orchestrator.state.running.get(slotKey(issue.id, 0));
+  assert.equal(backend.exclusiveTransactions, transactionsBefore);
+  assert.equal(backend.saved.length, 1);
+  assert.equal(running?.lastAgentEvent, "session_notification");
+  assert.equal(running?.sessionId, "session-live");
+  assert.equal(running?.executorPid, "pid-live");
+});
+
+test("async shared persistent claim store applies live-only session notifications without reload", async () => {
+  const backend = new AsyncMemoryCheckpointBackend({ sharedAcrossProcesses: true });
+  const store = await AsyncPersistentClaimStore.create(backend, { ownerId: "owner-a" });
+  const orchestrator = new Orchestrator(parseConfig(), systemClock, store);
+  const issue = normalizeIssue({
+    id: "async-shared-live-streaming-update",
+    identifier: "MT-ASYNC-SHARED-LIVE-STREAM",
+    title: "Async shared live streaming update",
+    state: { name: "Todo", type: "unstarted" },
+  });
+
+  assert.ok(await claimEntryAsync(orchestrator, issue));
+  const transactionsBefore = backend.exclusiveTransactions;
+
+  await orchestrator.applyUpdateAsync(issue.id, 0, {
+    type: "session_notification",
+    message: { sessionUpdate: "thinking" } as never,
+    sessionId: "session-live",
+    executorPid: "pid-live",
+  });
+
+  const running = orchestrator.state.running.get(slotKey(issue.id, 0));
+  assert.equal(backend.exclusiveTransactions, transactionsBefore);
+  assert.equal(backend.saved.length, 1);
+  assert.equal(running?.lastAgentEvent, "session_notification");
+  assert.equal(running?.sessionId, "session-live");
+  assert.equal(running?.executorPid, "pid-live");
 });
 
 test("persistent claim store checkpoints and hydrates retry state across owners", () => {
@@ -989,6 +1177,86 @@ test("shared persistent claim store recovers stale owner running claims", () => 
   assert.equal(restarted.snapshot().running.length, 0);
   assert.equal(restarted.state.claimed.has(slotKey(issue.id, 0)), false);
   assert.ok(claimEntry(restarted, issue));
+});
+
+test("shared persistent eligible no-op preserves stale-owner recovery", () => {
+  const clock = fakeClock(new Date("2026-01-01T00:00:00.000Z"));
+  const backend = new TransactionalMemoryCheckpointBackend({ sharedAcrossProcesses: true });
+  const settings = parseConfig();
+  const issue = normalizeIssue({
+    id: "shared-noop-recovery",
+    identifier: "MT-SHARED-NOOP-RECOVERY",
+    title: "Shared noop recovery",
+    state: { name: "Todo", type: "unstarted" },
+  });
+  const hydrate = () => ({
+    now: clock.now(),
+    monotonicNowMs: clock.monotonicMs(),
+  });
+  const firstStore = new PersistentClaimStore(backend, {
+    ownerId: "owner-a",
+    now: () => clock.now(),
+    hydrate,
+    ownerLeaseStaleMs: 60_000,
+  });
+  const first = new Orchestrator(settings, clock, firstStore);
+  assert.ok(claimEntry(first, issue));
+
+  const secondStore = new PersistentClaimStore(backend, {
+    ownerId: "owner-b",
+    now: () => clock.now(),
+    hydrate,
+    ownerLeaseStaleMs: 60_000,
+  });
+  const second = new Orchestrator(settings, clock, secondStore);
+  assert.equal(second.snapshot().running.length, 1);
+
+  clock.advance(60_001);
+  assert.equal(second.eligibleIssues([issue])[0]?.identifier, issue.identifier);
+
+  assert.equal(backend.saved.at(-1)?.operation, "recover_stale_owners");
+  assert.equal(second.snapshot().running.length, 0);
+  assert.equal(second.state.claimed.has(slotKey(issue.id, 0)), false);
+});
+
+test("async shared persistent eligible no-op preserves stale-owner recovery", async () => {
+  const clock = fakeClock(new Date("2026-01-01T00:00:00.000Z"));
+  const backend = new AsyncTransactionalMemoryCheckpointBackend({ sharedAcrossProcesses: true });
+  const settings = parseConfig();
+  const issue = normalizeIssue({
+    id: "async-shared-noop-recovery",
+    identifier: "MT-ASYNC-SHARED-NOOP-RECOVERY",
+    title: "Async shared noop recovery",
+    state: { name: "Todo", type: "unstarted" },
+  });
+  const hydrate = () => ({
+    now: clock.now(),
+    monotonicNowMs: clock.monotonicMs(),
+  });
+  const firstStore = await AsyncPersistentClaimStore.create(backend, {
+    ownerId: "owner-a",
+    now: () => clock.now(),
+    hydrate,
+    ownerLeaseStaleMs: 60_000,
+  });
+  const first = new Orchestrator(settings, clock, firstStore);
+  assert.ok(await claimEntryAsync(first, issue));
+
+  const secondStore = await AsyncPersistentClaimStore.create(backend, {
+    ownerId: "owner-b",
+    now: () => clock.now(),
+    hydrate,
+    ownerLeaseStaleMs: 60_000,
+  });
+  const second = new Orchestrator(settings, clock, secondStore);
+  assert.equal((await second.snapshotAsync()).running.length, 1);
+
+  clock.advance(60_001);
+  assert.equal((await second.eligibleIssuesAsync([issue]))[0]?.identifier, issue.identifier);
+
+  assert.equal(backend.saved.at(-1)?.operation, "recover_stale_owners");
+  assert.equal((await second.snapshotAsync()).running.length, 0);
+  assert.equal(second.state.claimed.has(slotKey(issue.id, 0)), false);
 });
 
 test("shared persistent claim store recovers retry metadata from stale running claims", () => {

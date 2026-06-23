@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import path from "node:path";
 
 import {
@@ -7,7 +8,7 @@ import {
 } from "@lorenz/orchestrator";
 import { SqliteClaimStoreBackend } from "@lorenz/orchestrator/sqlite";
 import { TursoClaimStoreBackend } from "@lorenz/orchestrator/turso";
-import type { WorkflowDefinition } from "@lorenz/domain";
+import { isOneOf, type WorkflowDefinition } from "@lorenz/domain";
 
 const CLAIM_STORE_BACKENDS = ["memory", "sqlite", "turso"] as const;
 export type ClaimStoreBackendName = (typeof CLAIM_STORE_BACKENDS)[number];
@@ -77,7 +78,14 @@ export async function buildClaimStoreHandle(
 }
 
 export function defaultClaimStorePath(workflow: WorkflowDefinition): string {
-  return path.join(workflow.settings.workspace.root, ".lorenz", "claim-store", "claims.db");
+  const workflowKey = createHash("sha256").update(path.resolve(workflow.path)).digest("hex");
+  return path.join(
+    workflow.settings.workspace.root,
+    ".lorenz",
+    "claim-store",
+    workflowKey,
+    "claims.db",
+  );
 }
 
 function selectedBackend(
@@ -114,5 +122,5 @@ function selectedOwnerStaleMs(
 }
 
 function isClaimStoreBackend(value: string): value is ClaimStoreBackendName {
-  return CLAIM_STORE_BACKENDS.includes(value as ClaimStoreBackendName);
+  return isOneOf(value, CLAIM_STORE_BACKENDS);
 }

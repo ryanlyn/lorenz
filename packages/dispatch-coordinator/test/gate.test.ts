@@ -24,9 +24,7 @@ function workerPoolSettings(
 // Config cannot express a disabled pool (there is no `enabled` config key), but the reload-drain
 // produces the INTERNAL disabled shape. Build it directly from a parsed enabled pool to cover the
 // disabled-pool gate behavior.
-function internallyDisabledPoolSettings(
-  workerPool: Record<string, unknown>,
-): WorkerPoolSettings {
+function internallyDisabledPoolSettings(workerPool: Record<string, unknown>): WorkerPoolSettings {
   const parsed = workerPoolSettings(workerPool)!;
   return { ...parsed, enabled: false };
 }

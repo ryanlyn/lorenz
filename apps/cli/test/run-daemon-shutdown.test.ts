@@ -6,6 +6,7 @@ import { afterEach, beforeEach, test, vi } from "vitest";
 import { assert, tempDir } from "@lorenz/test-utils";
 
 import type * as daemonModule from "../src/daemon.js";
+import type * as daemonLockModule from "../src/daemonLock.js";
 
 const mocks = vi.hoisted(() => ({
   loadWorkflow: vi.fn(),
@@ -17,6 +18,11 @@ const mocks = vi.hoisted(() => ({
   runtimeDefaultSettingsOptions: vi.fn(() => ({})),
   // No worker.worker_pool in the fixture, so the real builder returns undefined.
   buildDispatchCoordinator: vi.fn(() => undefined),
+  acquireDaemonLock: null as
+    | ((
+        ...args: Parameters<typeof daemonLockModule.acquireDaemonLock>
+      ) => ReturnType<typeof daemonLockModule.acquireDaemonLock>)
+    | null,
   runtimeInstances: [] as Array<FakeRuntime>,
 }));
 
@@ -83,6 +89,17 @@ vi.mock("ink", () => ({
 vi.mock("@lorenz/runtime", () => ({
   LorenzRuntime: FakeRuntime,
 }));
+
+vi.mock("../src/daemonLock.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof daemonLockModule>();
+  return {
+    ...actual,
+    acquireDaemonLock: (...args: Parameters<typeof actual.acquireDaemonLock>) =>
+      mocks.acquireDaemonLock
+        ? mocks.acquireDaemonLock(...args)
+        : actual.acquireDaemonLock(...args),
+  };
+});
 
 vi.mock("@lorenz/traceviz-emitter", () => ({
   TraceEmitter: class {
@@ -166,6 +183,7 @@ beforeEach(() => {
   mocks.runAgentAttempt.mockReset();
   mocks.runtimeDefaultSettingsOptions.mockClear();
   mocks.buildDispatchCoordinator.mockClear();
+  mocks.acquireDaemonLock = null;
   mocks.runtimeInstances.length = 0;
   stderrWriteSpy = vi.spyOn(process.stderr, "write").mockReturnValue(true);
   originalIsTTY = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
@@ -280,6 +298,63 @@ test("runDaemon rejects a second live daemon for the same workflow", async () =>
   const [sigintHandler] = addedProcessListeners("SIGINT", sigintBaseline);
   sigintHandler!();
   assert.equal(await daemonPromise, 0);
+});
+
+test("runDaemon reports failure when the daemon lock is lost during runtime start", async () => {
+  mocks.loadWorkflow.mockResolvedValue(await workflowFixture());
+  let rejectHeartbeat!: (error: Error) => void;
+  const pendingHeartbeat = new Promise<never>((_resolve, reject) => {
+    rejectHeartbeat = reject;
+  });
+  const startedAt = "2026-01-01T00:00:00.000Z";
+  const heartbeatAt = "2026-01-01T00:00:00.000Z";
+  const fakeRecord = {
+    version: 1 as const,
+    ownerId: "owner-a",
+    pid: process.pid,
+    hostname: "host-a",
+    startedAt,
+    workflowPath: "/tmp/WORKFLOW.md",
+    workspaceRoot: "/tmp",
+    lockPath: "/tmp/.lorenz/daemon/test.lock.json",
+    endpoint: { kind: "http" as const, address: "http://127.0.0.1:4040" },
+    controlToken: "control-token",
+    heartbeatAt,
+  };
+  const release = vi.fn(async () => true);
+  const heartbeat = vi.fn(() => pendingHeartbeat);
+  mocks.acquireDaemonLock = async () => ({
+    status: "acquired",
+    lock: {
+      heartbeat,
+      release,
+      snapshot: () => fakeRecord,
+      updateEndpoint: vi.fn(async () => fakeRecord),
+    } as unknown as daemonLockModule.DaemonLock,
+  });
+
+  const daemonPromise = runDaemon({
+    workflowPath: "WORKFLOW.md",
+    once: false,
+    dryRun: false,
+    tui: false,
+    dashboard: false,
+    port: null,
+    logsRoot: null,
+    claimStore: { backend: null, path: null, ownerStaleMs: null },
+  });
+
+  const runtime = await waitForRuntimeInstance();
+  await runtime.startEntered;
+  rejectHeartbeat(new Error("daemon_lock_lost"));
+
+  assert.equal(await daemonPromise, 1);
+  assert.equal(runtime.stop.mock.calls.length, 1);
+  assert.equal(release.mock.calls.length, 1);
+  assert.equal(
+    stderrWriteSpy.mock.calls.some((call) => String(call[0]).includes("daemon_lock_lost")),
+    true,
+  );
 });
 
 test("runDaemon warns about deprecated config keys once at startup", async () => {

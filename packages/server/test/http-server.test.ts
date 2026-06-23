@@ -107,7 +107,12 @@ test("observability HTTP API exposes state, issue, runs, refresh, and errors", a
       },
     });
 
-    const refresh = await postJson(server.url("/api/v1/refresh"));
+    const unauthorizedRefresh = await postJson(server.url("/api/v1/refresh"), 401);
+    assert.deepEqual(unauthorizedRefresh, {
+      error: { code: "unauthorized", message: "Missing or invalid daemon control token" },
+    });
+
+    const refresh = await postJson(server.url("/api/v1/refresh"), 202, server.controlToken);
     assert.equal(refresh.queued, true);
     assert.deepEqual(refresh.operations, ["poll", "reconcile"]);
 
@@ -164,7 +169,13 @@ test("observability HTTP API exposes daemon status and stop control", async () =
     assert.equal(daemon.owner_id, "owner-daemon");
     assert.equal(daemon.endpoint.address, "http://127.0.0.1:4040/");
 
-    const stop = await postJson(server.url("/api/v1/stop"));
+    const unauthorized = await postJson(server.url("/api/v1/stop"), 401);
+    assert.deepEqual(unauthorized, {
+      error: { code: "unauthorized", message: "Missing or invalid daemon control token" },
+    });
+    assert.equal(requestStop.mock.calls.length, 0);
+
+    const stop = await postJson(server.url("/api/v1/stop"), 202, server.controlToken);
     assert.equal(stop.stopping, true);
     assert.equal(requestStop.mock.calls.length, 1);
   } finally {
@@ -322,7 +333,16 @@ test("observability HTTP API matches snapshot timeout and unavailable branches",
     const issue = await getJson(unavailable.url("/api/v1/MT-HTTP"), 404);
     assert.deepEqual(issue, { error: { code: "issue_not_found", message: "Issue not found" } });
 
-    const refresh = await postJson(unavailable.url("/api/v1/refresh"), 503);
+    const unauthorizedRefresh = await postJson(unavailable.url("/api/v1/refresh"), 401);
+    assert.deepEqual(unauthorizedRefresh, {
+      error: { code: "unauthorized", message: "Missing or invalid daemon control token" },
+    });
+
+    const refresh = await postJson(
+      unavailable.url("/api/v1/refresh"),
+      503,
+      unavailable.controlToken,
+    );
     assert.deepEqual(refresh, {
       error: { code: "orchestrator_unavailable", message: "Orchestrator is unavailable" },
     });
@@ -588,8 +608,14 @@ async function getJson(url: string, expectedStatus = 200): Promise<any> {
   return response.json();
 }
 
-async function postJson(url: string, expectedStatus = 202): Promise<any> {
-  const response = await fetch(url, { method: "POST" });
+async function postJson(
+  url: string,
+  expectedStatus = 202,
+  token: string | null = null,
+): Promise<any> {
+  const headers: Record<string, string> = {};
+  if (token) headers.authorization = `Bearer ${token}`;
+  const response = await fetch(url, { method: "POST", headers });
   assert.equal(response.status, expectedStatus);
   assert.equal(response.headers.get("content-type"), "application/json; charset=utf-8");
   return response.json();

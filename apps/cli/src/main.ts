@@ -30,7 +30,7 @@ import {
   startObservabilityServer,
   type RuntimeServerSource,
 } from "@lorenz/server";
-import { errorMessage, type Settings, type WorkflowDefinition } from "@lorenz/domain";
+import { errorMessage, httpUrlHost, type Settings, type WorkflowDefinition } from "@lorenz/domain";
 import type { RuntimeSnapshot } from "@lorenz/runtime-events";
 
 import {
@@ -241,17 +241,29 @@ export async function runDaemon(options: CliOptions): Promise<number> {
     let runtime: LorenzRuntime | null = null;
     let server: Awaited<ReturnType<typeof startObservabilityServer>> | null = null;
     let daemonHeartbeat: NodeJS.Timeout | null = null;
+    let daemonLockLost = false;
     let detachSignalHandlers: (() => void) | null = null;
     let instance: ReturnType<typeof render> | null = null;
+    const onDaemonLockLost = () => {
+      daemonLockLost = true;
+      runtime?.stop();
+    };
+    const assertDaemonLockHeld = () => {
+      if (daemonLockLost) throw new Error("daemon_lock_lost");
+    };
     try {
+      if (daemonLock) daemonHeartbeat = startDaemonHeartbeat(daemonLock, onDaemonLockLost);
       claimStoreHandle = await buildClaimStoreHandle(workflow, options.claimStore, process.env);
+      assertDaemonLockHeld();
       await configureLogFile(workflow.settings.logging.logFile);
+      assertDaemonLockHeld();
 
       // baseDir anchors `./relative` driver module specifiers to the workflow
       // file's directory - the most predictable anchor for operators.
       const coordinator = await buildDispatchCoordinator(workflow.settings, process.env, {
         baseDir: path.dirname(workflow.path),
       });
+      assertDaemonLockHeld();
       // Post-construction gate: slotsPerMachine>1 is only safe once the coordinator
       // advertises per-run claim enforcement AND the operator has explicitly opted
       // into co-residence. The capability is known only here, after the coordinator
@@ -288,6 +300,7 @@ export async function runDaemon(options: CliOptions): Promise<number> {
         ...runtimeAdapters,
       });
       await coordinator?.hydrate();
+      assertDaemonLockHeld();
       // Persistent (not once) handlers so the graceful teardown below actually
       // runs to completion. With process.once, the listener is removed after the
       // first SIGINT; a second SIGINT — which Node + Ink can surface while the
@@ -312,7 +325,6 @@ export async function runDaemon(options: CliOptions): Promise<number> {
         process.off("SIGTERM", requestStop);
       };
 
-      if (daemonLock) daemonHeartbeat = startDaemonHeartbeat(daemonLock, () => runtime?.stop());
       if (options.dashboard) {
         server = await startObservabilityServer(daemonServerSource(runtime, daemonLock), {
           host: workflow.settings.server.host,
@@ -325,12 +337,15 @@ export async function runDaemon(options: CliOptions): Promise<number> {
           }),
           issueStore,
           tools: defaultToolRegistry,
+          controlToken: daemonLock?.snapshot().controlToken ?? undefined,
         });
+        assertDaemonLockHeld();
         workflow.settings.server.port = server.port;
         boundServerPort = server.port;
         if (daemonLock) {
           await daemonLock.updateEndpoint({ kind: "http", address: server.url("/") });
         }
+        assertDaemonLockHeld();
         process.stderr.write(`Observability API listening on ${server.url("/")}\n`);
       }
 
@@ -351,23 +366,31 @@ export async function runDaemon(options: CliOptions): Promise<number> {
         });
       }
 
+      assertDaemonLockHeld();
       await runtime.start({ once: options.once, dryRun: options.dryRun });
+      assertDaemonLockHeld();
       return 0;
     } finally {
       // Leave the signal handlers attached through teardown so a second Ctrl+C
       // can't slip past them and kill the process mid-shutdown.
       try {
-        instance?.unmount();
-        // start() returns once stop() flips the runtime to stopped; drain paid
-        // cloud workers before tearing down the server so they are destroyed on exit.
-        await runtime?.drainWorkerPool();
-        await server?.stop();
-        issueStore?.close();
-        await claimStoreHandle?.close();
-        claimStoreHandle = null;
-        if (daemonHeartbeat) clearInterval(daemonHeartbeat);
-        await daemonLock?.release();
-        daemonLock = null;
+        try {
+          instance?.unmount();
+          // start() returns once stop() flips the runtime to stopped; drain paid
+          // cloud workers before tearing down the server so they are destroyed on exit.
+          await runtime?.drainWorkerPool();
+          await server?.stop();
+          issueStore?.close();
+          await claimStoreHandle?.close();
+          claimStoreHandle = null;
+        } finally {
+          if (daemonHeartbeat) {
+            clearInterval(daemonHeartbeat);
+            daemonHeartbeat = null;
+          }
+          await daemonLock?.release();
+          daemonLock = null;
+        }
       } finally {
         detachSignalHandlers?.();
       }
@@ -456,6 +479,7 @@ async function acquireDaemonLeadership(workflow: WorkflowDefinition): Promise<Da
       workspaceRoot: workflow.settings.workspace.root,
     }),
     endpoint,
+    replaceStale: true,
   });
   if (result.status === "acquired") return result.lock;
   const owner = result.record
@@ -467,16 +491,26 @@ async function acquireDaemonLeadership(workflow: WorkflowDefinition): Promise<Da
 
 function daemonEndpointForSettings(settings: Settings): DaemonEndpoint {
   const port = settings.server.port ?? 0;
-  return { kind: "http", address: `http://${settings.server.host}:${port}` };
+  return { kind: "http", address: `http://${httpUrlHost(settings.server.host)}:${port}` };
 }
 
 function startDaemonHeartbeat(lock: DaemonLock, onLost: () => void): NodeJS.Timeout {
-  const timer = setInterval(() => {
-    lock.heartbeat().catch((error) => {
-      process.stderr.write(`daemon heartbeat failed: ${errorMessage(error)}\n`);
-      onLost();
-    });
-  }, 10_000);
+  let heartbeatInFlight = false;
+  const heartbeat = () => {
+    if (heartbeatInFlight) return;
+    heartbeatInFlight = true;
+    lock
+      .heartbeat()
+      .catch((error) => {
+        process.stderr.write(`daemon heartbeat failed: ${errorMessage(error)}\n`);
+        onLost();
+      })
+      .finally(() => {
+        heartbeatInFlight = false;
+      });
+  };
+  heartbeat();
+  const timer = setInterval(heartbeat, 10_000);
   timer.unref();
   return timer;
 }

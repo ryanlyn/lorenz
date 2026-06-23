@@ -71,6 +71,31 @@ export interface ClaimStoreCheckpoint {
   state: SerializedOrchestratorState;
 }
 
+export class NoopClaimStoreMutation extends Error {
+  constructor(readonly result?: unknown) {
+    super("noop_claim_store_mutation");
+  }
+}
+
+const noopAfterRecoverySymbol = Symbol("noop_after_recovery");
+
+interface NoopAfterRecovery {
+  readonly [noopAfterRecoverySymbol]: true;
+  readonly error: NoopClaimStoreMutation;
+}
+
+function noopAfterRecovery(error: NoopClaimStoreMutation): NoopAfterRecovery {
+  return { [noopAfterRecoverySymbol]: true, error };
+}
+
+function isNoopAfterRecovery(value: unknown): value is NoopAfterRecovery {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    (value as Partial<NoopAfterRecovery>)[noopAfterRecoverySymbol] === true
+  );
+}
+
 export interface ClaimStoreBackend {
   readonly kind: string;
   readonly capabilities: ClaimStoreCapabilities;
@@ -215,13 +240,18 @@ export class AsyncPersistentClaimStore implements AsyncClaimStore {
     run: (state: OrchestratorState) => T,
   ): Promise<T> {
     let rollback: (() => void) | null = null;
+    const preserveRecoveredNoop = this.backend.withExclusiveTransaction !== undefined;
     const rollbackLocalState = (): void => {
       rollback?.();
       rollback = null;
     };
-    const apply = async (): Promise<T> => {
+    const apply = async (): Promise<T | NoopAfterRecovery> => {
+      let recoveredInactiveOwners = false;
       if (this.capabilities.sharedAcrossProcesses)
-        await this.reload({ heartbeatOwner: true, recoverInactiveOwners: true });
+        recoveredInactiveOwners = await this.reload({
+          heartbeatOwner: true,
+          recoverInactiveOwners: true,
+        });
       const rollbackState = cloneStateContents(this.state);
       const rollbackTransactionsApplied = this.transactionsApplied;
       const rollbackLastOperation = this.lastOperation;
@@ -240,12 +270,18 @@ export class AsyncPersistentClaimStore implements AsyncClaimStore {
         return result;
       } catch (error) {
         rollbackLocalState();
+        if (
+          recoveredInactiveOwners &&
+          preserveRecoveredNoop &&
+          error instanceof NoopClaimStoreMutation
+        )
+          return noopAfterRecovery(error);
         throw error;
       }
     };
     if (!this.backend.withExclusiveTransaction) {
       try {
-        return await apply();
+        return (await apply()) as T;
       } finally {
         rollback = null;
       }
@@ -253,6 +289,7 @@ export class AsyncPersistentClaimStore implements AsyncClaimStore {
     try {
       const result = await this.backend.withExclusiveTransaction(apply);
       rollback = null;
+      if (isNoopAfterRecovery(result)) throw result.error;
       return result;
     } catch (error) {
       rollbackLocalState();
@@ -323,7 +360,7 @@ export class AsyncPersistentClaimStore implements AsyncClaimStore {
   private async reload(options: {
     heartbeatOwner: boolean;
     recoverInactiveOwners: boolean;
-  }): Promise<void> {
+  }): Promise<boolean> {
     if (options.heartbeatOwner) await this.writeOwnerHeartbeat();
     const ownedEphemeralFields = captureOwnedRunningEphemeralFields(this.state, this.ownerId);
     const checkpoint = await this.backend.load();
@@ -335,8 +372,11 @@ export class AsyncPersistentClaimStore implements AsyncClaimStore {
     );
     restoreOwnedRunningEphemeralFields(this.state, this.ownerId, ownedEphemeralFields);
     this.lastCheckpointAt = checkpoint?.writtenAt ?? null;
-    if (options.recoverInactiveOwners && (await this.recoverInactiveOwners()))
+    if (options.recoverInactiveOwners && (await this.recoverInactiveOwners())) {
       await this.save("recover_stale_owners");
+      return true;
+    }
+    return false;
   }
 
   private async writeOwnerHeartbeat(): Promise<void> {
@@ -491,13 +531,18 @@ export class PersistentClaimStore implements ClaimStore {
 
   transaction<T>(operation: ClaimStoreOperation, run: (state: OrchestratorState) => T): T {
     let rollback: (() => void) | null = null;
+    const preserveRecoveredNoop = this.backend.withExclusiveTransaction !== undefined;
     const rollbackLocalState = (): void => {
       rollback?.();
       rollback = null;
     };
-    const apply = (): T => {
+    const apply = (): T | NoopAfterRecovery => {
+      let recoveredInactiveOwners = false;
       if (this.capabilities.sharedAcrossProcesses)
-        this.reload({ heartbeatOwner: true, recoverInactiveOwners: true });
+        recoveredInactiveOwners = this.reload({
+          heartbeatOwner: true,
+          recoverInactiveOwners: true,
+        });
       const rollbackState = cloneStateContents(this.state);
       const rollbackTransactionsApplied = this.transactionsApplied;
       const rollbackLastOperation = this.lastOperation;
@@ -516,12 +561,18 @@ export class PersistentClaimStore implements ClaimStore {
         return result;
       } catch (error) {
         rollbackLocalState();
+        if (
+          recoveredInactiveOwners &&
+          preserveRecoveredNoop &&
+          error instanceof NoopClaimStoreMutation
+        )
+          return noopAfterRecovery(error);
         throw error;
       }
     };
     if (!this.backend.withExclusiveTransaction) {
       try {
-        return apply();
+        return apply() as T;
       } finally {
         rollback = null;
       }
@@ -529,6 +580,7 @@ export class PersistentClaimStore implements ClaimStore {
     try {
       const result = this.backend.withExclusiveTransaction(apply);
       rollback = null;
+      if (isNoopAfterRecovery(result)) throw result.error;
       return result;
     } catch (error) {
       rollbackLocalState();
@@ -580,7 +632,7 @@ export class PersistentClaimStore implements ClaimStore {
     this.lastCheckpointAt = writtenAt;
   }
 
-  private reload(options: { heartbeatOwner: boolean; recoverInactiveOwners: boolean }): void {
+  private reload(options: { heartbeatOwner: boolean; recoverInactiveOwners: boolean }): boolean {
     if (options.heartbeatOwner) this.writeOwnerHeartbeat();
     const ownedEphemeralFields = captureOwnedRunningEphemeralFields(this.state, this.ownerId);
     const checkpoint = this.backend.load();
@@ -592,8 +644,11 @@ export class PersistentClaimStore implements ClaimStore {
     );
     restoreOwnedRunningEphemeralFields(this.state, this.ownerId, ownedEphemeralFields);
     this.lastCheckpointAt = checkpoint?.writtenAt ?? null;
-    if (options.recoverInactiveOwners && this.recoverInactiveOwners())
+    if (options.recoverInactiveOwners && this.recoverInactiveOwners()) {
       this.save("recover_stale_owners");
+      return true;
+    }
+    return false;
   }
 
   private writeOwnerHeartbeat(): void {
@@ -772,7 +827,10 @@ function cloneIssueForMemory(issue: RunningEntry["issue"]): RunningEntry["issue"
   };
 }
 
-type EphemeralRunningFields = Pick<RunningEntry, "executorPid" | "lastAgentMessage" | "sessionId">;
+type EphemeralRunningFields = Pick<
+  RunningEntry,
+  "executorPid" | "lastAgentEvent" | "lastAgentMessage" | "lastAgentTimestamp" | "sessionId"
+>;
 
 function captureOwnedRunningEphemeralFields(
   state: OrchestratorState,
@@ -783,7 +841,9 @@ function captureOwnedRunningEphemeralFields(
     if (state.claimOwners.get(key) !== ownerId) continue;
     fields.set(key, {
       executorPid: entry.executorPid,
+      lastAgentEvent: entry.lastAgentEvent,
       lastAgentMessage: entry.lastAgentMessage,
+      lastAgentTimestamp: entry.lastAgentTimestamp,
       sessionId: entry.sessionId,
     });
   }
@@ -800,7 +860,9 @@ function restoreOwnedRunningEphemeralFields(
     const entry = state.running.get(key);
     if (!entry) continue;
     entry.executorPid = field.executorPid;
+    entry.lastAgentEvent = field.lastAgentEvent;
     entry.lastAgentMessage = field.lastAgentMessage;
+    entry.lastAgentTimestamp = field.lastAgentTimestamp;
     entry.sessionId = field.sessionId;
   }
 }
