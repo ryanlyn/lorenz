@@ -1,9 +1,9 @@
-import { mkdirSync } from "node:fs";
-import path from "node:path";
+import { AsyncLocalStorage } from "node:async_hooks";
 
 import { connect, type Database } from "@tursodatabase/database";
 
 import type { AsyncClaimStoreBackend, ClaimStoreCheckpoint } from "./claimStore.js";
+import { prepareClaimStoreFile, restrictClaimStoreFiles } from "./filePermissions.js";
 import {
   CLAIM_STORE_SCHEMA_VERSION,
   CLAIM_STORE_SCHEMA_VERSION_INSERT_SQL,
@@ -29,10 +29,12 @@ export class TursoClaimStoreBackend implements AsyncClaimStoreBackend {
     retryDurability: true,
   };
 
-  private transactionDepth = 0;
+  private readonly transactionScope = new AsyncLocalStorage<boolean>();
+  private transactionTail: Promise<void> = Promise.resolve();
 
   private constructor(
     private readonly db: Database,
+    private readonly dbPath: string,
     private readonly maxEventRows: number,
   ) {}
 
@@ -40,7 +42,7 @@ export class TursoClaimStoreBackend implements AsyncClaimStoreBackend {
     dbPath: string,
     options: TursoClaimStoreBackendOptions = {},
   ): Promise<TursoClaimStoreBackend> {
-    mkdirSync(path.dirname(dbPath), { recursive: true });
+    prepareClaimStoreFile(dbPath);
     const dbOptions: { timeout: number; experimental?: ["multiprocess_wal"] } = {
       timeout: options.busyTimeoutMs ?? 5000,
     };
@@ -48,6 +50,7 @@ export class TursoClaimStoreBackend implements AsyncClaimStoreBackend {
     const db = await connect(dbPath, dbOptions);
     const backend = new TursoClaimStoreBackend(
       db,
+      dbPath,
       Math.max(1, Math.floor(options.maxEventRows ?? 1000)),
     );
     try {
@@ -101,18 +104,20 @@ export class TursoClaimStoreBackend implements AsyncClaimStoreBackend {
   }
 
   async withExclusiveTransaction<T>(run: () => Promise<T>): Promise<T> {
-    if (this.transactionDepth > 0) return run();
-    await this.db.exec("BEGIN IMMEDIATE");
-    this.transactionDepth += 1;
+    if (this.transactionScope.getStore()) return run();
+    const releaseTransactionTurn = await this.waitForTransactionTurn();
     try {
-      const result = await run();
-      await this.db.exec("COMMIT");
-      return result;
-    } catch (error) {
-      await this.db.exec("ROLLBACK");
-      throw error;
+      await this.db.exec("BEGIN IMMEDIATE");
+      try {
+        const result = await this.transactionScope.run(true, run);
+        await this.db.exec("COMMIT");
+        return result;
+      } catch (error) {
+        await this.db.exec("ROLLBACK");
+        throw error;
+      }
     } finally {
-      this.transactionDepth -= 1;
+      releaseTransactionTurn();
     }
   }
 
@@ -123,6 +128,7 @@ export class TursoClaimStoreBackend implements AsyncClaimStoreBackend {
   private async initialize(): Promise<void> {
     await this.db.exec(CLAIM_STORE_TABLES_SQL);
     await this.verifySchemaVersion();
+    restrictClaimStoreFiles(this.dbPath);
   }
 
   private async writeCheckpoint(checkpoint: ClaimStoreCheckpoint): Promise<void> {
@@ -178,5 +184,15 @@ export class TursoClaimStoreBackend implements AsyncClaimStoreBackend {
     const version = Number(row.value);
     if (version !== CLAIM_STORE_SCHEMA_VERSION)
       throw unsupportedClaimStoreSchemaVersionError(row.value);
+  }
+
+  private async waitForTransactionTurn(): Promise<() => void> {
+    const previous = this.transactionTail;
+    let release!: () => void;
+    this.transactionTail = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await previous;
+    return release;
   }
 }

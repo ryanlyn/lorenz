@@ -17,7 +17,7 @@ import type {
 } from "@lorenz/traceviz-server";
 import type { WSContext } from "hono/ws";
 
-import type { RuntimeServerSource } from "./source.js";
+import { snapshotWithDaemonStatus, type RuntimeServerSource } from "./source.js";
 
 type WsServerMessage =
   | { type: "init"; tickets: TicketInfo[] }
@@ -194,7 +194,10 @@ export function createWsHandler(
   // Wire up the runtime to broadcast ops-state updates
   const unsubscribe = subscribeToRuntime(runtime, (snapshot) => {
     if (connections.size === 0) return;
-    broadcast({ type: "ops_state", state: statePayload(snapshot) });
+    broadcast({
+      type: "ops_state",
+      state: statePayload(snapshotWithDaemonStatus(runtime, snapshot)),
+    });
   });
 
   return {
@@ -208,7 +211,7 @@ export function createWsHandler(
 
 function currentOpsState(runtime: RuntimeServerSource): OpsStatePayload | null {
   try {
-    return statePayload(runtime.snapshot());
+    return statePayload(snapshotWithDaemonStatus(runtime, runtime.snapshot()));
   } catch {
     return null;
   }

@@ -19,7 +19,7 @@ test("daemon lock records owner identity and rejects a second live owner", async
   const root = await mkdtemp(path.join(tmpdir(), "lorenz-daemon-lock-"));
   try {
     const workflowPath = path.join(root, "WORKFLOW.md");
-    const lockPath = daemonLockPath(root, workflowPath);
+    const lockPath = daemonLockPath(workflowPath);
     const firstIdentity = createDaemonIdentity({
       workflowPath,
       workspaceRoot: root,
@@ -69,7 +69,7 @@ test("daemon heartbeat updates only the owning lock", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "lorenz-daemon-heartbeat-"));
   try {
     const workflowPath = path.join(root, "WORKFLOW.md");
-    const lockPath = daemonLockPath(root, workflowPath);
+    const lockPath = daemonLockPath(workflowPath);
     const acquired = await acquireDaemonLock({
       lockPath,
       identity: createDaemonIdentity({
@@ -96,7 +96,7 @@ test("local file daemon leadership store exposes lease operations", async () => 
   const root = await mkdtemp(path.join(tmpdir(), "lorenz-leadership-store-"));
   try {
     const workflowPath = path.join(root, "WORKFLOW.md");
-    const lockPath = daemonLockPath(root, workflowPath);
+    const lockPath = daemonLockPath(workflowPath);
     const store = new LocalFileDaemonLeadershipStore();
     const acquired = await store.acquire({
       lockPath,
@@ -134,7 +134,7 @@ test("daemon heartbeat does not replace a successor lock", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "lorenz-daemon-successor-"));
   try {
     const workflowPath = path.join(root, "WORKFLOW.md");
-    const lockPath = daemonLockPath(root, workflowPath);
+    const lockPath = daemonLockPath(workflowPath);
     const first = await acquireDaemonLock({
       lockPath,
       identity: createDaemonIdentity({
@@ -178,7 +178,7 @@ test("daemon lock reports stale owners without stealing by default", async () =>
   const root = await mkdtemp(path.join(tmpdir(), "lorenz-daemon-stale-"));
   try {
     const workflowPath = path.join(root, "WORKFLOW.md");
-    const lockPath = daemonLockPath(root, workflowPath);
+    const lockPath = daemonLockPath(workflowPath);
     await mkdir(path.dirname(lockPath), { recursive: true });
     await writeFile(
       lockPath,
@@ -226,7 +226,7 @@ test("daemon lock can replace a stale owner when takeover is requested", async (
   const root = await mkdtemp(path.join(tmpdir(), "lorenz-daemon-stale-replace-"));
   try {
     const workflowPath = path.join(root, "WORKFLOW.md");
-    const lockPath = daemonLockPath(root, workflowPath);
+    const lockPath = daemonLockPath(workflowPath);
     const deadPid = 101;
     const killSpy = vi.spyOn(process, "kill").mockImplementation(((pid: number | string) => {
       if (pid === deadPid) {
@@ -288,7 +288,7 @@ test("daemon lock does not replace a stale same-host owner that is still alive",
   const root = await mkdtemp(path.join(tmpdir(), "lorenz-daemon-stale-live-"));
   try {
     const workflowPath = path.join(root, "WORKFLOW.md");
-    const lockPath = daemonLockPath(root, workflowPath);
+    const lockPath = daemonLockPath(workflowPath);
     await mkdir(path.dirname(lockPath), { recursive: true });
     await writeFile(
       lockPath,
@@ -333,7 +333,7 @@ test("daemon lock treats unreadable contents as a stale conflict", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "lorenz-daemon-malformed-"));
   try {
     const workflowPath = path.join(root, "WORKFLOW.md");
-    const lockPath = daemonLockPath(root, workflowPath);
+    const lockPath = daemonLockPath(workflowPath);
     await mkdir(path.dirname(lockPath), { recursive: true });
     await writeFile(lockPath, "", "utf8");
     assert.equal(await readDaemonLock(lockPath), null);
@@ -386,7 +386,7 @@ test("daemon lock removes a just-created file when initial write fails", async (
   const root = await mkdtemp(path.join(tmpdir(), "lorenz-daemon-write-failure-"));
   try {
     const workflowPath = path.join(root, "WORKFLOW.md");
-    const lockPath = daemonLockPath(root, workflowPath);
+    const lockPath = daemonLockPath(workflowPath);
     const originalOpen = fs.open.bind(fs);
     const openSpy = vi.spyOn(fs, "open").mockImplementation(async (file, flags, mode) => {
       const handle = await originalOpen(file, flags, mode);
@@ -442,7 +442,7 @@ test("daemon lock recovers a stale mutation guard", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "lorenz-daemon-stale-mutation-"));
   try {
     const workflowPath = path.join(root, "WORKFLOW.md");
-    const lockPath = daemonLockPath(root, workflowPath);
+    const lockPath = daemonLockPath(workflowPath);
     await mkdir(path.dirname(lockPath), { recursive: true });
     await writeFile(
       `${lockPath}.mutation`,
@@ -478,7 +478,7 @@ test("daemon lock recovers a stale malformed mutation guard", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "lorenz-daemon-malformed-mutation-"));
   try {
     const workflowPath = path.join(root, "WORKFLOW.md");
-    const lockPath = daemonLockPath(root, workflowPath);
+    const lockPath = daemonLockPath(workflowPath);
     const mutationPath = `${lockPath}.mutation`;
     await mkdir(path.dirname(lockPath), { recursive: true });
     await writeFile(mutationPath, "{", "utf8");
@@ -515,12 +515,33 @@ test("daemon lock path uses a fixed-size workflow key", async () => {
       "segments".repeat(40),
       "WORKFLOW.md",
     );
-    const lockPath = daemonLockPath(root, workflowPath);
+    const lockPath = daemonLockPath(workflowPath);
 
     assert.equal(path.basename(path.dirname(lockPath)), "daemon");
     assert.equal(path.basename(path.dirname(path.dirname(lockPath))), ".lorenz");
     assert.match(path.basename(lockPath), /^[a-f0-9]{64}\.lock\.json$/);
     assert.ok(path.basename(lockPath).length < 255);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("daemon lock path lives beside the workflow instead of workspace root", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "lorenz-daemon-lock-scope-"));
+  try {
+    const workflowDir = path.join(root, "repo");
+    const workspaceRoot = path.join(root, "mutable-workspaces");
+    await mkdir(workflowDir, { recursive: true });
+    await mkdir(workspaceRoot);
+    const workflowPath = path.join(workflowDir, "WORKFLOW.md");
+    await writeFile(workflowPath, "workflow", "utf8");
+
+    const lockPath = daemonLockPath(workflowPath);
+    const canonicalWorkflowDir = await fs.realpath(workflowDir);
+    const canonicalWorkspaceRoot = await fs.realpath(workspaceRoot);
+
+    assert.equal(path.dirname(path.dirname(lockPath)), path.join(canonicalWorkflowDir, ".lorenz"));
+    assert.ok(!lockPath.startsWith(path.join(canonicalWorkspaceRoot, ".lorenz")));
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -537,10 +558,7 @@ test("daemon lock path canonicalizes symlinked workflow aliases", async () => {
     const workflowAlias = path.join(workspaceAlias, "WORKFLOW.md");
     await writeFile(workflowPath, "workflow", "utf8");
 
-    assert.equal(
-      daemonLockPath(workspaceRoot, workflowPath),
-      daemonLockPath(workspaceAlias, workflowAlias),
-    );
+    assert.equal(daemonLockPath(workflowPath), daemonLockPath(workflowAlias));
 
     const canonicalIdentity = createDaemonIdentity({ workspaceRoot, workflowPath });
     const aliasIdentity = createDaemonIdentity({
@@ -558,7 +576,7 @@ test("daemon status payload exposes endpoint and heartbeat age", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "lorenz-daemon-status-"));
   try {
     const workflowPath = path.join(root, "WORKFLOW.md");
-    const lockPath = daemonLockPath(root, workflowPath);
+    const lockPath = daemonLockPath(workflowPath);
     const acquired = await acquireDaemonLock({
       lockPath,
       identity: createDaemonIdentity({
@@ -599,7 +617,7 @@ test("daemon status payload encodes malformed heartbeat age as null", async () =
   const root = await mkdtemp(path.join(tmpdir(), "lorenz-daemon-status-malformed-"));
   try {
     const workflowPath = path.join(root, "WORKFLOW.md");
-    const lockPath = daemonLockPath(root, workflowPath);
+    const lockPath = daemonLockPath(workflowPath);
     const acquired = await acquireDaemonLock({
       lockPath,
       identity: createDaemonIdentity({

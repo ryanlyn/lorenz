@@ -29,6 +29,7 @@
     "@lorenz/dispatch-coordinator": "workspace:*",
     "@lorenz/docker-worker": "workspace:*",
     "@lorenz/domain": "workspace:*",
+    "@lorenz/flags": "workspace:*",
     "@lorenz/humanize": "workspace:*",
     "@lorenz/issue": "workspace:*",
     "@lorenz/jira-tracker": "workspace:*",

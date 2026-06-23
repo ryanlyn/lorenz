@@ -1,6 +1,6 @@
 /** @beta */
 export interface LeadershipEndpoint {
-  kind: "http" | "socket";
+  kind: "http" | "socket" | "none";
   address: string;
 }
 

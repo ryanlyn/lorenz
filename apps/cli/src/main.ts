@@ -30,8 +30,9 @@ import {
   startObservabilityServer,
   type RuntimeServerSource,
 } from "@lorenz/server";
-import { errorMessage, httpUrlHost, type Settings, type WorkflowDefinition } from "@lorenz/domain";
+import { errorMessage, type Settings, type WorkflowDefinition } from "@lorenz/domain";
 import type { RuntimeSnapshot } from "@lorenz/runtime-events";
+import { setDefaultFlags } from "@lorenz/flags";
 
 import {
   buildClaimStoreHandle,
@@ -78,6 +79,12 @@ import {
   runtimeAdapters,
   runtimeDefaultSettingsOptions,
 } from "./daemon.js";
+import {
+  accumulateOption,
+  getFlags,
+  renderFlagDiagnostics,
+  resolveAppFlags,
+} from "./flags-manifest.js";
 
 export interface CliOptions {
   workflowPath: string | null;
@@ -88,6 +95,10 @@ export interface CliOptions {
   port: number | null;
   logsRoot: string | null;
   claimStore: ClaimStoreCliOptions;
+  // Optional so existing/programmatic callers of the exported runDaemon stay source-compatible;
+  // the resolver treats absent arrays as "no CLI overrides".
+  flagTokens?: string[];
+  featureTokens?: string[];
 }
 
 interface CliCommanderOptions {
@@ -100,6 +111,8 @@ interface CliCommanderOptions {
   claimStore?: ClaimStoreCliOptions["backend"];
   claimStorePath?: string;
   claimStoreOwnerStaleMs?: number;
+  flag?: string[];
+  feature?: string[];
 }
 
 export type CliParseResult = ParseResult<CliOptions>;
@@ -199,6 +212,11 @@ export async function runDaemon(options: CliOptions): Promise<number> {
     // Surface deprecated config keys once, on the first (startup) load. Reloads run the same
     // validation every poll, so re-warning there would spam an unchanged config.
     let deprecationsReported = false;
+    // Flags resolve once at startup and are reload-invariant; if a later reload changes the
+    // `flags:`/`features:` front matter, warn once that the edit was ignored rather than honoring
+    // or silently dropping it.
+    let flagFrontMatter: string | null = null;
+    let flagChangeWarned = false;
     // Known after the first load; reused so the tracker loader's audit events
     // reach the configured log file on every reload after startup.
     let trackerLogFile: string | undefined;
@@ -232,9 +250,39 @@ export async function runDaemon(options: CliOptions): Promise<number> {
             },
       );
       deprecationsReported = true;
+      // Detect a post-startup edit to the reload-invariant flag front matter. Skip the work once the
+      // warning has fired, so the steady-state per-poll cost is zero.
+      if (!flagChangeWarned) {
+        const flagFingerprint = JSON.stringify({
+          flags: workflow.config.flags ?? null,
+          features: workflow.config.features ?? null,
+        });
+        if (flagFrontMatter === null) {
+          flagFrontMatter = flagFingerprint;
+        } else if (flagFingerprint !== flagFrontMatter) {
+          flagChangeWarned = true;
+          process.stderr.write(
+            "warning: WORKFLOW.md flags/features changed after startup and were ignored; " +
+              "restart Lorenz to apply.\n",
+          );
+        }
+      }
       return workflow;
     };
     const workflow = await loadRuntimeWorkflow();
+    // Resolve flags once, from CLI > file (front matter) > env > defaults, and install the frozen
+    // snapshot before anything that might read it. Invalid flags throw and surface via the catch.
+    const flags = resolveAppFlags(
+      { flagTokens: options.flagTokens, featureTokens: options.featureTokens },
+      workflow.config,
+      process.env,
+      { warn: (message) => process.stderr.write(`warning: ${message}\n`) },
+    );
+    setDefaultFlags(flags);
+    // Read back through the installed typed accessor, the same path engine code uses.
+    if (getFlags().get("diagnostics.log_flag_resolution")) {
+      process.stderr.write(renderFlagDiagnostics(getFlags()));
+    }
     let daemonLock = options.once ? null : await acquireDaemonLeadership(workflow);
     let claimStoreHandle: ClaimStoreHandle | null = null;
     let issueStore: IssueStore | null = null;
@@ -303,8 +351,8 @@ export async function runDaemon(options: CliOptions): Promise<number> {
       assertDaemonLockHeld();
       // Persistent (not once) handlers so the graceful teardown below actually
       // runs to completion. With process.once, the listener is removed after the
-      // first SIGINT; a second SIGINT — which Node + Ink can surface while the
-      // daemon is still winding down — then hits the default disposition and kills
+      // first SIGINT; a second SIGINT - which Node + Ink can surface while the
+      // daemon is still winding down - then hits the default disposition and kills
       // the process with code 130 mid-shutdown, before Ink restores the terminal.
       // That abrupt kill is what leaves a garbled/red error state on Ctrl+C.
       let shuttingDown = false;
@@ -430,7 +478,18 @@ function createDaemonCommand(name = "lorenz"): Command {
       "Claim owner lease stale threshold.",
       parsePositiveInteger("--claim-store-owner-stale-ms"),
     )
-    .option("--port <port>", "Observability API port.", parseNonNegativeInteger("--port"));
+    .option("--port <port>", "Observability API port.", parseNonNegativeInteger("--port"))
+    .option(
+      "--flag <key=value>",
+      "Override an internal feature flag (repeatable).",
+      accumulateOption,
+    )
+    .option(
+      "--feature <name|name=bool>",
+      "Enable or disable an internal feature preset, e.g. --feature verbose_diagnostics or " +
+        "--feature verbose_diagnostics=false (repeatable).",
+      accumulateOption,
+    );
 }
 
 function createRootCommand(): Command {
@@ -451,6 +510,8 @@ function cliOptionsFromCommander(parsed: CliCommanderOptions, workflowPath?: str
       path: parsed.claimStorePath ?? null,
       ownerStaleMs: parsed.claimStoreOwnerStaleMs ?? null,
     },
+    flagTokens: parsed.flag ?? [],
+    featureTokens: parsed.feature ?? [],
   };
 }
 
@@ -470,8 +531,8 @@ export function projectUrlForSettings(settings: Settings): string | undefined {
 }
 
 async function acquireDaemonLeadership(workflow: WorkflowDefinition): Promise<DaemonLock> {
-  const lockPath = daemonLockPath(workflow.settings.workspace.root, workflow.path);
-  const endpoint = daemonEndpointForSettings(workflow.settings);
+  const lockPath = daemonLockPath(workflow.path);
+  const endpoint = initialDaemonEndpoint();
   const result = await acquireDaemonLock({
     lockPath,
     identity: createDaemonIdentity({
@@ -489,9 +550,8 @@ async function acquireDaemonLeadership(workflow: WorkflowDefinition): Promise<Da
   throw new Error(`daemon_already_running ${owner}${stale}`);
 }
 
-function daemonEndpointForSettings(settings: Settings): DaemonEndpoint {
-  const port = settings.server.port ?? 0;
-  return { kind: "http", address: `http://${httpUrlHost(settings.server.host)}:${port}` };
+function initialDaemonEndpoint(): DaemonEndpoint {
+  return { kind: "none", address: "" };
 }
 
 function startDaemonHeartbeat(lock: DaemonLock, onLost: () => void): NodeJS.Timeout {

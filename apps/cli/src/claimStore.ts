@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import path from "node:path";
 
 import {
@@ -9,6 +8,8 @@ import {
 import { SqliteClaimStoreBackend } from "@lorenz/orchestrator/sqlite";
 import { TursoClaimStoreBackend } from "@lorenz/orchestrator/turso";
 import { isOneOf, type WorkflowDefinition } from "@lorenz/domain";
+
+import { daemonWorkflowKey, daemonWorkspacePath } from "./daemonLock.js";
 
 const CLAIM_STORE_BACKENDS = ["memory", "sqlite", "turso"] as const;
 export type ClaimStoreBackendName = (typeof CLAIM_STORE_BACKENDS)[number];
@@ -78,12 +79,10 @@ export async function buildClaimStoreHandle(
 }
 
 export function defaultClaimStorePath(workflow: WorkflowDefinition): string {
-  const workflowKey = createHash("sha256").update(path.resolve(workflow.path)).digest("hex");
-  return path.join(
+  return daemonWorkspacePath(
     workflow.settings.workspace.root,
-    ".lorenz",
     "claim-store",
-    workflowKey,
+    daemonWorkflowKey(workflow.path),
     "claims.db",
   );
 }

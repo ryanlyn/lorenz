@@ -127,6 +127,9 @@ async function resolveDaemonControl(options: DaemonControlCommandOptions): Promi
   if (record?.endpoint.kind === "http" && usableHttpEndpoint(record.endpoint.address)) {
     return controlTarget(trimTrailingSlash(record.endpoint.address), record, options.controlToken);
   }
+  if (record) {
+    throw new Error("Daemon is running without an HTTP control endpoint. Pass --url or --port.");
+  }
   const port = workflow.settings.server.port;
   if (typeof port === "number" && port > 0) {
     return controlTarget(workflowHttpBaseUrl(workflow, port), record, options.controlToken);
@@ -193,7 +196,7 @@ async function resolveDaemonRecordForWorkflow(
   workflow: Awaited<ReturnType<typeof loadWorkflow>>;
   record: DaemonLockRecord | null;
 }> {
-  const lockPath = daemonLockPath(workflow.settings.workspace.root, workflow.path);
+  const lockPath = daemonLockPath(workflow.path);
   return { workflow, record: await readDaemonLock(lockPath) };
 }
 

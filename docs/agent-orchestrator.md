@@ -1,6 +1,6 @@
 # Agent orchestrator and runtime
 
-Contributor reference for the control-plane core: how Lorenz schedules work. It covers the single authoritative in-memory state, the poll loop that drives it, the slot lifecycle, two-phase pool-governed dispatch, the reconciliation passes, and how the live `RuntimeSnapshot` is assembled. There is no database, so it also covers how a restart recovers from the tracker and the filesystem alone. For the eligibility, sort, and backoff math, see [dispatch.md](dispatch.md); for what an agent run does once dispatched, see [agents/acp-bridges.md](agents/acp-bridges.md).
+Contributor reference for the control-plane core: how Lorenz schedules work. It covers the single authoritative scheduling state, the poll loop that drives it, the slot lifecycle, two-phase pool-governed dispatch, the reconciliation passes, and how the live `RuntimeSnapshot` is assembled. The default claim store is in-memory; explicit durable stores add restart recovery for retry state and claim ownership. For the eligibility, sort, and backoff math, see [dispatch.md](dispatch.md); for what an agent run does once dispatched, see [agents/acp-bridges.md](agents/acp-bridges.md).
 
 ## The two halves and one source of truth
 
@@ -156,14 +156,17 @@ The `reserving` lane is host-less by design and surfaced separately, not folded 
 
 `RUNTIME_RUN_OUTCOMES` is `['success', 'failed', 'stalled', 'canceled']`, but the runtime never records a `canceled` run-history outcome today: reconciliation calls `cleanupIssue` without writing history. Only `success`, `failed`, and `stalled` reach run history; `canceled` is defined but unused.
 
-## No-database restart recovery
+## Restart Recovery
 
-There is no database. On boot, `createState()` rebuilds `OrchestratorState` empty. Recovery is entirely tracker-driven and filesystem-driven.
+With the default in-memory claim store, `createState()` rebuilds `OrchestratorState` empty on boot.
+Recovery is tracker-driven and filesystem-driven.
 
 - **Tracker re-fetch.** `fetchCandidateIssues` repopulates the candidate set, and the tracked-issue reconciliation refetches issue ids by id. Any issue that is still eligible re-dispatches on the next tick. An interrupted run simply runs again.
 - **Filesystem cleanup.** `cleanupTerminalWorkspacesOnce` reads the workspaces left on disk and removes the ones whose issues are now terminal.
 
-Nothing about scheduling state is persisted, and nothing needs to be. The tracker is the durable record of what to work on, and the filesystem is the durable record of what was left behind. An orchestrator restart converges to the same in-flight set the tracker implies, with no replay log and no checkpoint to corrupt.
+With an explicit durable claim store, retry state and claim ownership hydrate from the store so crash
+recovery and retry durability survive process restart. The tracker remains the durable record of what
+to work on, and the filesystem remains the durable record of what was left behind.
 
 ## Transactional workflow reload
 

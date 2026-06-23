@@ -1,3 +1,4 @@
+import { chmod, stat } from "node:fs/promises";
 import path from "node:path";
 
 import { test } from "vitest";
@@ -991,6 +992,37 @@ test("SQLite claim store records and validates its schema version", async () => 
   assert.equal(TURSO_CLAIM_STORE_SCHEMA_VERSION, SQLITE_CLAIM_STORE_SCHEMA_VERSION);
 });
 
+test("SQLite claim store creates private database files", async () => {
+  if (process.platform === "win32") return;
+  const root = await tempDir("lorenz-sqlite-private");
+  const dbPath = path.join(root, "claim-store", "claims.db");
+  const backend = new SqliteClaimStoreBackend(dbPath);
+  try {
+    assert.deepEqual(await claimStoreFileModes(dbPath, ["-wal", "-shm"]), {
+      [path.dirname(dbPath)]: 0o700,
+      [dbPath]: 0o600,
+      [`${dbPath}-wal`]: 0o600,
+      [`${dbPath}-shm`]: 0o600,
+    });
+  } finally {
+    backend.close();
+  }
+});
+
+test("SQLite claim store preserves existing parent directory mode", async () => {
+  if (process.platform === "win32") return;
+  const root = await tempDir("lorenz-sqlite-existing-parent");
+  await chmod(root, 0o755);
+  const dbPath = path.join(root, "claims.db");
+  const backend = new SqliteClaimStoreBackend(dbPath);
+  try {
+    assert.equal(await fileMode(root), 0o755);
+    assert.equal(await fileMode(dbPath), 0o600);
+  } finally {
+    backend.close();
+  }
+});
+
 test("Turso claim store rejects unsupported schema versions", async () => {
   const root = await tempDir("lorenz-turso-schema-version");
   const dbPath = path.join(root, "claims.db");
@@ -1013,6 +1045,80 @@ test("Turso claim store rejects unsupported schema versions", async () => {
     /unsupported_claim_store_schema_version/,
   );
 });
+
+test("Turso claim store creates private database files", async () => {
+  if (process.platform === "win32") return;
+  const root = await tempDir("lorenz-turso-private");
+  const dbPath = path.join(root, "claim-store", "claims.db");
+  const backend = await TursoClaimStoreBackend.open(dbPath);
+  try {
+    assert.deepEqual(await claimStoreFileModes(dbPath, ["-wal"]), {
+      [path.dirname(dbPath)]: 0o700,
+      [dbPath]: 0o600,
+      [`${dbPath}-wal`]: 0o600,
+    });
+  } finally {
+    await backend.close();
+  }
+});
+
+test("Turso claim store serializes concurrent transactions on one backend", async () => {
+  const root = await tempDir("lorenz-turso-transaction-queue");
+  const dbPath = path.join(root, "claims.db");
+  const backend = await TursoClaimStoreBackend.open(dbPath);
+  const order: string[] = [];
+  let releaseFirst!: () => void;
+  let markFirstStarted!: () => void;
+  const firstStarted = new Promise<void>((resolve) => {
+    markFirstStarted = resolve;
+  });
+  const firstCanFinish = new Promise<void>((resolve) => {
+    releaseFirst = resolve;
+  });
+
+  try {
+    const first = backend.withExclusiveTransaction(async () => {
+      order.push("first-start");
+      markFirstStarted();
+      await firstCanFinish;
+      await backend.withExclusiveTransaction(async () => {
+        order.push("first-nested");
+      });
+      order.push("first-end");
+    });
+    await firstStarted;
+
+    const second = backend.withExclusiveTransaction(async () => {
+      order.push("second-start");
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+
+    assert.deepEqual(order, ["first-start"]);
+    releaseFirst();
+    await Promise.all([first, second]);
+    assert.deepEqual(order, ["first-start", "first-nested", "first-end", "second-start"]);
+  } finally {
+    await backend.close();
+  }
+});
+
+async function fileMode(filePath: string): Promise<number> {
+  return (await stat(filePath)).mode & 0o777;
+}
+
+async function claimStoreFileModes(
+  dbPath: string,
+  sidecars: string[],
+): Promise<Record<string, number>> {
+  const modes: Record<string, number> = {
+    [path.dirname(dbPath)]: await fileMode(path.dirname(dbPath)),
+    [dbPath]: await fileMode(dbPath),
+  };
+  for (const suffix of sidecars) {
+    modes[`${dbPath}${suffix}`] = await fileMode(`${dbPath}${suffix}`);
+  }
+  return modes;
+}
 
 test("Turso claim store serializes concurrent claims for the same slot", async () => {
   const root = await tempDir("lorenz-turso-concurrent-claim");

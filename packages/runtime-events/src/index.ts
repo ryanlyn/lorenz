@@ -140,7 +140,7 @@ export interface RuntimeDaemonStatus {
   workflowPath: string;
   workspaceRoot: string;
   lockPath: string;
-  endpoint: { kind: "http" | "socket"; address: string };
+  endpoint: { kind: "http" | "socket" | "none"; address: string };
   heartbeatAt: string;
   heartbeatAgeMs: number | null;
   stale: boolean;

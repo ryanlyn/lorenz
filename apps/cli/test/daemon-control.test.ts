@@ -57,7 +57,7 @@ test("daemon stop --url uses the lock token only for the matching endpoint", asy
       ].join("\n"),
       "utf8",
     );
-    const lockPath = daemonLockPath(root, workflowPath);
+    const lockPath = daemonLockPath(workflowPath);
     await mkdir(path.dirname(lockPath), { recursive: true });
     await writeFile(
       lockPath,
@@ -168,6 +168,66 @@ test("daemon control --url works without a workflow lock", async () => {
   assert.equal(fetchSpy.mock.calls.length, 2);
 });
 
+test("daemon control does not fall back to workflow port when the lock has no HTTP endpoint", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "lorenz-daemon-control-none-"));
+  try {
+    const workflowPath = path.join(root, "WORKFLOW.md");
+    await writeFile(
+      workflowPath,
+      [
+        "---",
+        "name: daemon-control-none",
+        "tracker:",
+        "  kind: memory",
+        "workspace:",
+        `  root: ${JSON.stringify(root)}`,
+        "server:",
+        "  port: 48080",
+        "---",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    const lockPath = daemonLockPath(workflowPath);
+    await mkdir(path.dirname(lockPath), { recursive: true });
+    await writeFile(
+      lockPath,
+      JSON.stringify({
+        version: 1,
+        ownerId: "owner-a",
+        pid: 101,
+        hostname: "host-a",
+        startedAt: "2026-01-01T00:00:00.000Z",
+        workflowPath,
+        workspaceRoot: root,
+        endpoint: { kind: "none", address: "" },
+        controlToken: "control-token",
+        heartbeatAt: "2026-01-01T00:00:00.000Z",
+      }),
+      "utf8",
+    );
+    const fetchSpy = vi.fn(async () => {
+      throw new Error("unexpected fetch");
+    });
+    vi.stubGlobal("fetch", fetchSpy);
+
+    await assert.rejects(
+      () =>
+        runDaemonStopCommand({
+          workflowPath,
+          url: null,
+          port: null,
+          controlToken: null,
+          json: true,
+        }),
+      /Daemon is running without an HTTP control endpoint/,
+    );
+    assert.equal(fetchSpy.mock.calls.length, 0);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("daemon control --url can use an explicit control token", async () => {
   const fetchSpy = vi.fn(async (_url: string, init?: RequestInit) => {
     const headers = init?.headers as Record<string, string> | undefined;
@@ -234,7 +294,7 @@ test("daemon status lock fallback keeps text-mode status successful on request f
       ].join("\n"),
       "utf8",
     );
-    const lockPath = daemonLockPath(root, workflowPath);
+    const lockPath = daemonLockPath(workflowPath);
     await mkdir(path.dirname(lockPath), { recursive: true });
     await writeFile(
       lockPath,
@@ -310,7 +370,7 @@ test("daemon status lock fallback preserves non-json HTTP error status", async (
       ].join("\n"),
       "utf8",
     );
-    const lockPath = daemonLockPath(root, workflowPath);
+    const lockPath = daemonLockPath(workflowPath);
     await mkdir(path.dirname(lockPath), { recursive: true });
     await writeFile(
       lockPath,

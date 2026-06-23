@@ -19,7 +19,7 @@ import { registerLocalTracker } from "@lorenz/local-tracker";
 import { defaultToolRegistry } from "@lorenz/tool-sdk";
 import { createTrackerToolProvider, defaultTrackerRegistry } from "@lorenz/tracker-sdk";
 import { assert } from "@lorenz/test-utils";
-import type { RuntimeSnapshot } from "@lorenz/runtime-events";
+import type { RuntimeDaemonStatus, RuntimeSnapshot } from "@lorenz/runtime-events";
 
 import {
   IssueStore,
@@ -130,29 +130,15 @@ test("observability HTTP API exposes state, issue, runs, refresh, and errors", a
 
 test("observability HTTP API exposes daemon status and stop control", async () => {
   const workflow = workflowFixture();
+  const daemonStatus = daemonStatusFixture(workflow);
   const requestStop = vi.fn(() => ({ requested_at: "2026-01-01T00:00:00.000Z", stopping: true }));
   const runtime: RuntimeServerSource = {
     workflow,
-    snapshot: () => ({
-      ...emptySnapshot(workflow),
-      daemon: {
-        ownerId: "owner-daemon",
-        pid: 123,
-        hostname: "host-a",
-        startedAt: "2026-01-01T00:00:00.000Z",
-        workflowPath: workflow.path,
-        workspaceRoot: workflow.settings.workspace.root,
-        lockPath: "/tmp/lorenz.lock",
-        endpoint: { kind: "http", address: "http://127.0.0.1:4040/" },
-        heartbeatAt: "2026-01-01T00:00:05.000Z",
-        heartbeatAgeMs: 1000,
-        stale: false,
-        leadershipStoreKind: "local-file",
-      },
-    }),
+    snapshot: () => emptySnapshot(workflow),
     subscribe: () => () => {},
     requestRefresh: () => ({ queued: true }),
     requestStop,
+    daemonStatus: () => daemonStatus,
   };
   const server = await startObservabilityServer(runtime, {
     host: "127.0.0.1",
@@ -182,6 +168,23 @@ test("observability HTTP API exposes daemon status and stop control", async () =
     await server.stop();
   }
 });
+
+function daemonStatusFixture(workflow: WorkflowDefinition): RuntimeDaemonStatus {
+  return {
+    ownerId: "owner-daemon",
+    pid: 123,
+    hostname: "host-a",
+    startedAt: "2026-01-01T00:00:00.000Z",
+    workflowPath: workflow.path,
+    workspaceRoot: workflow.settings.workspace.root,
+    lockPath: "/tmp/lorenz.lock",
+    endpoint: { kind: "http", address: "http://127.0.0.1:4040/" },
+    heartbeatAt: "2026-01-01T00:00:05.000Z",
+    heartbeatAgeMs: 1000,
+    stale: false,
+    leadershipStoreKind: "local-file",
+  };
+}
 
 test("standalone MCP server preserves route and JSON-RPC error contracts", async () => {
   const workflow = workflowFixture();

@@ -29,7 +29,7 @@ When a durable backend is selected without `--claim-store-path` or
 <workspace.root>/.lorenz/claim-store/<workflow-sha256>/claims.db
 ```
 
-The workflow hash is derived from the absolute workflow file path. This keeps the default
+The workflow hash is derived from the canonical workflow file path. This keeps the default
 durable store isolated when multiple workflow files share one workspace root. Operators who
 want a shared store can still provide an explicit path.
 
@@ -60,16 +60,20 @@ selection out of the pure dispatch state machine.
 ## Daemon Leadership
 
 Long-running daemon startup acquires a local leadership lease before tracker polling,
-worker-pool hydration, server startup, or runtime start. The lease is keyed by workflow
-path under:
+worker-pool hydration, server startup, or runtime start. The lease is keyed by canonical
+workflow path under:
 
 ```text
-<workspace.root>/.lorenz/daemon/<workflow-sha256>.lock.json
+<workflow-directory>/.lorenz/daemon/<workflow-sha256>.lock.json
 ```
 
 A second long-running daemon for the same workflow exits with `daemon_already_running`
 and reports the owner pid and endpoint when available. `--once` remains an isolated
 single-poll mode and does not acquire the long-lived daemon lease.
+
+When the dashboard server is disabled, the lease records that no HTTP control endpoint is
+published. `lorenz status` can still report the lease owner, while `lorenz refresh` and
+`lorenz stop` need `--url` or `--port` for an external control endpoint.
 
 The initial leadership store is local-file backed and same-host only. The interface is
 generic so another provider can later supply the same acquire, read, heartbeat, stale,

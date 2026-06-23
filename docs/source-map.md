@@ -68,7 +68,8 @@ Pure, side-effect-free policy split across small packages. The orchestrator and 
 
 ## Orchestrator and runtime
 
-The control-plane core. There is no database: restart recovery is tracker-driven and filesystem-driven.
+The control-plane core. The default claim store is in-memory; explicit durable stores add crash
+recovery and retry durability for operators that select them.
 
 | Package | What it owns | First files to open |
 | --- | --- | --- |
@@ -150,7 +151,7 @@ See [trackers/index.md](trackers/index.md), [trackers/memory.md](trackers/memory
 
 | App | What it owns |
 | --- | --- |
-| `apps/cli` | The shipped `lorenz` binary and the composition root. Defines three commands (the daemon, `lorenz runs`, `lorenz doctor`), wires every adapter into `LorenzRuntime`, and loads out-of-tree worker drivers. First files: `src/main.ts`, `src/daemon.ts`, `src/workerDriverLoader.ts`. |
+| `apps/cli` | The shipped `lorenz` binary and the composition root. Defines the daemon, run-history, daemon-control, and doctor commands; wires every adapter into `LorenzRuntime`; and loads out-of-tree worker drivers. First files: `src/main.ts`, `src/daemon.ts`, `src/workerDriverLoader.ts`. |
 | `apps/web` | The React/Vite SPA (package `@lorenz/dashboard`): the ops Overview and the trace viewer, behind a `#/` and `#/trace/:id` hash router. First files: `src/App.tsx`, `src/features/ops/`. |
 | `apps/traceviz` | A standalone read-only viewer that serves one `trace.jsonl` file (`pnpm traceviz <file>`). First files: `app.ts`, `serve.ts`. |
 

@@ -2,7 +2,7 @@
 
 This page is a concept-first walkthrough for anyone deciding whether to run or evaluate Lorenz. It
 covers the end-to-end loop, what a `WORKFLOW.md` is, how agents run inside per-issue workspaces, and
-why there is no database. For the mechanics behind each step, follow the links to
+how restart recovery works. For the mechanics behind each step, follow the links to
 [agent-orchestrator.md](agent-orchestrator.md) and [dispatch.md](dispatch.md).
 
 ## The core loop
@@ -94,16 +94,16 @@ cleaned up. A failed re-fetch keeps everything running so a transient tracker ou
 live runs, and a separate stall pass finishes runs that have gone quiet. The per-outcome
 classifications and the stall machinery live in [agent-orchestrator.md](agent-orchestrator.md).
 
-## No database
+## Restart Recovery
 
-Lorenz has no database. The in-memory `OrchestratorState` (running, reserved, claimed, retrying,
-completed, usage totals, rate limits, blocked dispatches) is the only scheduling state, and it is
-rebuilt from scratch on every boot. Recovery after a restart is two-sided: the tracker says what
-still needs doing, so eligible issues re-dispatch, and the filesystem is reconciled against the
-tracker so terminal workspaces are swept. The exact restart-recovery passes are in
-[agent-orchestrator.md](agent-orchestrator.md).
+With the default in-memory claim store, `OrchestratorState` (running, reserved, claimed, retrying,
+completed, usage totals, rate limits, blocked dispatches) is rebuilt from scratch on every boot.
+Recovery after a restart is two-sided: the tracker says what still needs doing, so eligible issues
+re-dispatch, and the filesystem is reconciled against the tracker so terminal workspaces are swept.
+With an explicit durable claim store, retry state and claim ownership hydrate from the store before
+the next poll. The exact restart-recovery passes are in [agent-orchestrator.md](agent-orchestrator.md).
 
-There is no persisted scheduling state beyond the JSON event log, which is on by default at
+The default in-memory mode persists no scheduling state beyond the JSON event log, which is on by default at
 `logging.log_file` and writes only when that key is set. This is by design; the tracker plus the
 filesystem are enough to recover a clean view of the world.
 

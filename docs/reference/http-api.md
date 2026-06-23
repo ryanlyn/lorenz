@@ -62,7 +62,19 @@ The live ops snapshot used by the dashboard Overview. On success returns `200` w
     "seconds_running": 0
   },
   "rate_limits": null,
-  "claim_store": null,
+  "claim_store": {
+    "kind": "memory",
+    "owner_id": "memory:12345:1",
+    "capabilities": {
+      "crash_recovery": false,
+      "shared_across_processes": false,
+      "retry_durability": false
+    },
+    "hydrated_at": "2026-06-17T12:00:00.000Z",
+    "transactions_applied": 0,
+    "last_operation": null,
+    "last_checkpoint_at": null
+  },
   "daemon": null
 }
 ```
@@ -86,9 +98,11 @@ Each `BlockedEntryPayload` has: `issue_id`, `issue_identifier`, `issue_url`, `st
 
 `tokens` is `{input_tokens, output_tokens, total_tokens}`. `usage_totals` adds `seconds_running`.
 
-`claim_store` is `null` for the default in-memory runtime when no claim-store status is attached.
-Durable stores report `kind`, `owner_id`, `capabilities`, `hydrated_at`,
-`transactions_applied`, `last_operation`, and `last_checkpoint_at`.
+`claim_store` reports the runtime-owned orchestrator's claim-store status. The default in-memory
+store reports `kind: "memory"` with all durability capabilities set to `false`. Durable stores use
+the same shape with their own `kind`, `owner_id`, `capabilities`, `hydrated_at`,
+`transactions_applied`, `last_operation`, and `last_checkpoint_at`. The field is `null` only when
+the mounted runtime source has no claim-store status.
 
 `daemon` is `null` when the runtime source has no daemon status. Long-running CLI daemons report
 `owner_id`, `pid`, `hostname`, `started_at`, `workflow_path`, `workspace_root`, `lock_path`,

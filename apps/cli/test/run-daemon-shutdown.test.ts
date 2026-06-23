@@ -300,6 +300,62 @@ test("runDaemon rejects a second live daemon for the same workflow", async () =>
   assert.equal(await daemonPromise, 0);
 });
 
+test("runDaemon publishes no HTTP control endpoint when dashboard is disabled", async () => {
+  mocks.loadWorkflow.mockResolvedValue(await workflowFixture());
+  const sigintBaseline = process.listeners("SIGINT");
+  const startedAt = "2026-01-01T00:00:00.000Z";
+  const heartbeatAt = "2026-01-01T00:00:00.000Z";
+  const fakeRecord = {
+    version: 1 as const,
+    ownerId: "owner-a",
+    pid: process.pid,
+    hostname: "host-a",
+    startedAt,
+    workflowPath: "/tmp/WORKFLOW.md",
+    workspaceRoot: "/tmp",
+    lockPath: "/tmp/.lorenz/daemon/test.lock.json",
+    endpoint: { kind: "none" as const, address: "" },
+    controlToken: "control-token",
+    heartbeatAt,
+  };
+  const updateEndpoint = vi.fn(async () => fakeRecord);
+  const release = vi.fn(async () => true);
+  const heartbeat = vi.fn(async () => fakeRecord);
+  mocks.acquireDaemonLock = async (...args) => {
+    assert.equal(args[0].endpoint.kind, "none");
+    assert.equal(args[0].endpoint.address, "");
+    return {
+      status: "acquired",
+      lock: {
+        heartbeat,
+        release,
+        snapshot: () => fakeRecord,
+        updateEndpoint,
+      } as unknown as daemonLockModule.DaemonLock,
+    };
+  };
+
+  const daemonPromise = runDaemon({
+    workflowPath: "WORKFLOW.md",
+    once: false,
+    dryRun: false,
+    tui: false,
+    dashboard: false,
+    port: null,
+    logsRoot: null,
+    claimStore: { backend: null, path: null, ownerStaleMs: null },
+  });
+
+  const runtime = await waitForRuntimeInstance();
+  await runtime.startEntered;
+  const [sigintHandler] = addedProcessListeners("SIGINT", sigintBaseline);
+  sigintHandler!();
+
+  assert.equal(await daemonPromise, 0);
+  assert.equal(mocks.startObservabilityServer.mock.calls.length, 0);
+  assert.equal(updateEndpoint.mock.calls.length, 0);
+});
+
 test("runDaemon reports failure when the daemon lock is lost during runtime start", async () => {
   mocks.loadWorkflow.mockResolvedValue(await workflowFixture());
   let rejectHeartbeat!: (error: Error) => void;

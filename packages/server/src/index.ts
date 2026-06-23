@@ -36,7 +36,7 @@ import { createTraceRoutes } from "./trace-routes.js";
 import { createWsHandler } from "./ws.js";
 import { defaultIssueStorePath, IssueStore } from "./issue-store.js";
 import { decodePathParam, invalidPathParameterError } from "./path-params.js";
-import type { RuntimeServerSource } from "./source.js";
+import { snapshotWithDaemonStatus, type RuntimeServerSource } from "./source.js";
 
 export { defaultIssueStorePath, IssueStore };
 export { startMcpServer } from "@lorenz/mcp";
@@ -193,7 +193,7 @@ function buildObservabilityApp(
         error: observabilityErrorBody(snapshot.status),
       });
     }
-    return jsonResponse(statePayload(snapshot.snapshot));
+    return jsonResponse(statePayload(snapshotWithDaemonStatus(runtime, snapshot.snapshot)));
   });
   app.all("/api/v1/state", () => errorResponse(405, "method_not_allowed", "Method not allowed"));
 

@@ -1,9 +1,7 @@
-import { mkdirSync } from "node:fs";
-import path from "node:path";
-
 import Database from "better-sqlite3";
 
 import type { ClaimStoreBackend, ClaimStoreCheckpoint } from "./claimStore.js";
+import { prepareClaimStoreFile, restrictClaimStoreFiles } from "./filePermissions.js";
 import {
   CLAIM_STORE_SCHEMA_VERSION,
   CLAIM_STORE_SCHEMA_VERSION_INSERT_SQL,
@@ -43,7 +41,7 @@ export class SqliteClaimStoreBackend implements ClaimStoreBackend {
 
   constructor(dbPath: string, options: SqliteClaimStoreBackendOptions = {}) {
     this.maxEventRows = Math.max(1, Math.floor(options.maxEventRows ?? 1000));
-    mkdirSync(path.dirname(dbPath), { recursive: true });
+    prepareClaimStoreFile(dbPath);
     this.db = new Database(dbPath);
     this.db.pragma("journal_mode = WAL");
     this.db.pragma("synchronous = NORMAL");
@@ -52,6 +50,7 @@ export class SqliteClaimStoreBackend implements ClaimStoreBackend {
     try {
       this.db.exec(CLAIM_STORE_TABLES_SQL);
       this.verifySchemaVersion();
+      restrictClaimStoreFiles(dbPath);
     } catch (error) {
       try {
         this.db.close();

@@ -10,3 +10,12 @@ export interface RuntimeServerSource {
   requestStop?(): Record<string, unknown>;
   daemonStatus?(): RuntimeDaemonStatus | null;
 }
+
+export function snapshotWithDaemonStatus(
+  runtime: RuntimeServerSource,
+  snapshot: RuntimeSnapshot,
+): RuntimeSnapshot {
+  const daemon = runtime.daemonStatus?.() ?? snapshot.daemon;
+  if (daemon === snapshot.daemon) return snapshot;
+  return { ...snapshot, daemon: daemon ?? undefined };
+}

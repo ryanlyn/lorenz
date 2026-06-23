@@ -1,16 +1,19 @@
 # CLI
 
-The `lorenz` binary is the only process you run. This page is the operator's task guide to its three commands: the default daemon that polls a tracker and dispatches agents, `lorenz runs` to inspect run history, and `lorenz doctor` to validate a setup before you start it. For the flag-by-flag table, see [reference/cli.md](reference/cli.md).
+The `lorenz` binary is the only process you run. This page is the operator's task guide to the default daemon that polls a tracker and dispatches agents, `lorenz runs` to inspect run history, `lorenz status`/`refresh`/`stop` to control a running daemon, and `lorenz doctor` to validate a setup before you start it. For the flag-by-flag table, see [reference/cli.md](reference/cli.md).
 
-## The three commands
+## Commands
 
 ```sh
 lorenz [flags] [WORKFLOW.md]   # default: the daemon
 lorenz runs [filters]          # query run history from the observability API
+lorenz status [WORKFLOW.md]    # show the active daemon lease and endpoint
+lorenz refresh [WORKFLOW.md]   # ask the daemon to poll now
+lorenz stop [WORKFLOW.md]      # ask the daemon to stop gracefully
 lorenz doctor [WORKFLOW.md]    # validate a workflow and local prerequisites
 ```
 
-`runs` and `doctor` are subcommands. Anything that is not `runs` or `doctor` runs the daemon. If the binary prints `lorenz has not been built yet`, run `pnpm build` first; the npm shim imports the built `dist` output.
+`runs`, `status`, `refresh`, `stop`, and `doctor` are subcommands. Anything else runs the daemon. If the binary prints `lorenz has not been built yet`, run `pnpm build` first; the npm shim imports the built `dist` output.
 
 ## Run the daemon
 
@@ -41,6 +44,9 @@ A missing file fails fast with `missing_workflow_file`. The directory holding th
 | `--no-dashboard` | Disable the web dashboard and its HTTP API server. | You want no listening port at all. |
 | `--port <port>` | Set the observability API port. Overrides `server.port` from the workflow. | Pinning a known port, or avoiding a clash. `0` binds an ephemeral port. |
 | `--logs-root <path>` | Write logs to `<path>/log/lorenz.log` instead of the configured `logging.log_file`. | Redirecting logs to a writable scratch directory. |
+| `--claim-store <backend>` | Select `memory`, `sqlite`, or `turso` claim storage. | Enabling same-host durable claim recovery with an explicit durable backend. |
+| `--claim-store-path <path>` | Set the durable claim-store database path. | Sharing or relocating a durable store intentionally. |
+| `--claim-store-owner-stale-ms <ms>` | Override durable owner-heartbeat staleness. | Tuning crash-recovery handoff for a specific host. |
 
 `--no-tui` and `--no-dashboard` are the only forms; there is no positive `--tui` or `--dashboard` flag. Both surfaces are on by default. The TUI renders only when stdout is a TTY; without a TTY the runtime writes JSON snapshots to stdout on each update instead.
 
@@ -50,17 +56,23 @@ A missing file fails fast with `missing_workflow_file`. The directory holding th
 
 1. Register the built-in trackers, tool pack, agent executor, and worker drivers (idempotent).
 2. Load and parse the workflow, apply `--port` and `--logs-root` overrides, and run [`validateDispatchConfig`](reference/configuration.md).
-3. Build the [dispatch coordinator](dispatch.md) and [warm worker pool](workers/worker-pool.md). The pool is the single dispatch path, so it is always built; with no `worker.worker_pool` block it defaults to the `local` driver (runs execute on the daemon host).
-4. Run the `slots_per_machine` blast-radius gate (see below).
-5. Construct the runtime, start the observability server, then render the TUI or subscribe for JSON snapshots.
+3. Acquire the same-host daemon lease for long-running mode. `--once` skips the lease.
+4. Open the selected claim store. The default is in-memory; durable backends are explicit.
+5. Build the [dispatch coordinator](dispatch.md) and [warm worker pool](workers/worker-pool.md). The pool is the single dispatch path, so it is always built; with no `worker.worker_pool` block it defaults to the `local` driver (runs execute on the daemon host).
+6. Run the `slots_per_machine` blast-radius gate (see below).
+7. Construct the runtime, start the observability server if enabled, then render the TUI or subscribe for JSON snapshots.
 
 The runtime re-reads the workflow before every poll, so editing `WORKFLOW.md` while the daemon runs reloads it without a restart. A reload that fails to parse keeps the last good settings and records `workflow_reload_failed`. See [workflow hot-reload](features/workflow-hot-reload.md).
 
-When the server binds, the bound port is written back into `server.port` so reloads keep the same port, and stderr prints `Observability API listening on <url>`.
+When the server binds, the bound port is written back into `server.port` so reloads keep the same port, the daemon lease is updated with the HTTP control endpoint, and stderr prints `Observability API listening on <url>`. With `--no-dashboard`, no HTTP control endpoint is published.
 
 ### Stopping it
 
-A first `Ctrl+C` (`SIGINT`) or `SIGTERM` starts a graceful stop: the runtime finishes draining, the worker pool drains, the server stops, and the issue store closes. A second `Ctrl+C` while shutting down forces an exit with code `130`.
+A first `Ctrl+C` (`SIGINT`) or `SIGTERM` starts a graceful stop: the runtime finishes draining, the worker pool drains, the server stops, the issue store closes, the claim store closes, and the daemon lease is released. A second `Ctrl+C` while shutting down forces an exit with code `130`.
+
+### Control commands
+
+`lorenz status`, `lorenz refresh`, and `lorenz stop` discover the running daemon through the workflow's same-host lease. `status` reports the owner and endpoint. `refresh` and `stop` require the daemon's HTTP control endpoint, so they work when the dashboard server is enabled or when you pass `--url`/`--port` for a known endpoint.
 
 ### The slots-per-machine gate
 

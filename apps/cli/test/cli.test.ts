@@ -26,6 +26,8 @@ test("CLI accepts workflow path and TS runtime flags", () => {
         port: 4100,
         logsRoot: null,
         claimStore: { backend: null, path: null, ownerStaleMs: null },
+        flagTokens: [],
+        featureTokens: [],
       },
     },
   );
@@ -43,6 +45,8 @@ test("CLI defaults to a TUI daemon when only workflow path is supplied", () => {
       port: null,
       logsRoot: null,
       claimStore: { backend: null, path: null, ownerStaleMs: null },
+      flagTokens: [],
+      featureTokens: [],
     },
   });
   assert.deepEqual(parseCliArgs(["--logs-root", "tmp/custom-logs", "--port", "0", "WORKFLOW.md"]), {
@@ -56,6 +60,8 @@ test("CLI defaults to a TUI daemon when only workflow path is supplied", () => {
       port: 0,
       logsRoot: "tmp/custom-logs",
       claimStore: { backend: null, path: null, ownerStaleMs: null },
+      flagTokens: [],
+      featureTokens: [],
     },
   });
   assert.deepEqual(parseCliArgs(["--logs-root=tmp/custom-logs", "--port=0", "WORKFLOW.md"]), {
@@ -69,6 +75,8 @@ test("CLI defaults to a TUI daemon when only workflow path is supplied", () => {
       port: 0,
       logsRoot: "tmp/custom-logs",
       claimStore: { backend: null, path: null, ownerStaleMs: null },
+      flagTokens: [],
+      featureTokens: [],
     },
   });
 });
@@ -95,6 +103,8 @@ test("CLI accepts explicit durable claim store options", () => {
         port: null,
         logsRoot: null,
         claimStore: { backend: "turso", path: "tmp/claims.db", ownerStaleMs: 90000 },
+        flagTokens: [],
+        featureTokens: [],
       },
     },
   );

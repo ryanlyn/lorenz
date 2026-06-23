@@ -24,7 +24,7 @@ const MUTATION_LOCK_RETRY_MS = 10;
 const MUTATION_LOCK_MAX_RETRY_MS = 250;
 const MUTATION_LOCK_STALE_MS = 30_000;
 const MUTATION_LOCK_TIMEOUT_MS = 120_000;
-const DAEMON_ENDPOINT_KINDS = ["http", "socket"] as const;
+const DAEMON_ENDPOINT_KINDS = ["http", "socket", "none"] as const;
 
 /** @beta */
 export type DaemonEndpoint = LeadershipEndpoint;
@@ -79,10 +79,22 @@ export function createDaemonIdentity(options: CreateDaemonIdentityOptions): Daem
   };
 }
 
-export function daemonLockPath(workspaceRoot: string, workflowPath: string): string {
-  const normalizedWorkflow = canonicalPath(workflowPath);
-  const suffix = createHash("sha256").update(normalizedWorkflow).digest("hex");
-  return path.join(canonicalPath(workspaceRoot), ".lorenz", "daemon", `${suffix}.lock.json`);
+export function daemonLockPath(workflowPath: string): string {
+  const suffix = daemonWorkflowKey(workflowPath);
+  return path.join(
+    path.dirname(canonicalPath(workflowPath)),
+    ".lorenz",
+    "daemon",
+    `${suffix}.lock.json`,
+  );
+}
+
+export function daemonWorkflowKey(workflowPath: string): string {
+  return createHash("sha256").update(canonicalPath(workflowPath)).digest("hex");
+}
+
+export function daemonWorkspacePath(workspaceRoot: string, ...segments: string[]): string {
+  return path.join(canonicalPath(workspaceRoot), ".lorenz", ...segments);
 }
 
 function createDaemonControlToken(): string {

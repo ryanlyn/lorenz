@@ -2,7 +2,7 @@
 
 The exact contract for the `lorenz` binary: every command, flag, argument, exit code, and environment variable it reads. This is the man-page for integrators and operators who need precise behavior. For a guided walkthrough, start at [cli.md](../cli.md).
 
-The binary ships six commands:
+The binary ships these commands:
 
 | Command | Purpose |
 | --- | --- |
@@ -42,7 +42,7 @@ When `workflowPath` is omitted, resolution falls to `LORENZ_WORKFLOW` (an absolu
 | `--port <port>` | non-negative integer | unset | Override `server.port`. Parsed by `parseNonNegativeInteger`. |
 | `--logs-root <path>` | path | unset | Write logs to `<path>/log/lorenz.log` (overrides `logging.log_file`). |
 | `--claim-store <backend>` | `memory`, `sqlite`, or `turso` | `memory` | Select the claim-store backend for this daemon process. |
-| `--claim-store-path <path>` | path | `<workspace.root>/.lorenz/claim-store/<workflow-sha256>/claims.db` for durable backends | Database path for `sqlite` and `turso` claim stores. Ignored by `memory`. |
+| `--claim-store-path <path>` | path | `<workspace.root>/.lorenz/claim-store/<workflow-sha256>/claims.db` for durable backends | Database path for `sqlite` and `turso` claim stores. Ignored by `memory`. The workflow hash uses the canonical workflow path. |
 | `--claim-store-owner-stale-ms <ms>` | positive integer | orchestrator default | Override the owner-heartbeat stale threshold used by durable claim stores. |
 
 Both the web dashboard and the TUI are on by default. The TUI only renders when `process.stdout.isTTY` is true; without a TTY the runtime subscribes and writes pretty-printed JSON snapshots to stdout. Pass `--no-tui` to force the JSON-snapshot path even on a TTY.
@@ -54,7 +54,7 @@ CLI overrides are applied to the loaded workflow on every load and reload:
 - `--port` sets `workflow.settings.server.port`.
 - `--logs-root` sets `logging.log_file` to `<resolve(logsRoot)>/log/lorenz.log`.
 
-When the observability server binds, its actual port is written back into `server.port` and pinned, so subsequent workflow reloads keep the same port. The server prints `Observability API listening on <url>` to stderr.
+When the observability server binds, its actual port is written back into `server.port` and pinned, so subsequent workflow reloads keep the same port. The daemon lease is then updated with the bound HTTP control endpoint, and the server prints `Observability API listening on <url>` to stderr. With `--no-dashboard`, no HTTP control endpoint is published.
 
 Claim-store options are daemon composition choices rather than workflow settings. The default
 backend is `memory`; selecting `sqlite` or `turso` opens a durable store and passes it into the
@@ -76,7 +76,7 @@ and endpoint when available. `--once` skips the lease and remains a one-shot pol
 
 ### Shutdown and exit codes
 
-`SIGINT` and `SIGTERM` are handled by persistent (`process.on`, not `process.once`) listeners. The first signal sets a `shuttingDown` flag and calls `runtime.stop()`. A second `Ctrl+C` while shutting down unmounts Ink and calls `process.exit(130)`. The `finally` block unmounts the TUI, drains the worker pool (`drainWorkerPool`), stops the server, closes the `IssueStore`, then detaches the handlers.
+`SIGINT` and `SIGTERM` are handled by persistent (`process.on`, not `process.once`) listeners. The first signal sets a `shuttingDown` flag and calls `runtime.stop()`. A second `Ctrl+C` while shutting down unmounts Ink and calls `process.exit(130)`. The `finally` block unmounts the TUI, drains the worker pool (`drainWorkerPool`), stops the server, closes the issue store, closes the claim store, releases the daemon lease, then detaches the handlers.
 
 | Exit code | When |
 | --- | --- |
@@ -178,11 +178,12 @@ the endpoint.
 lorenz refresh [--url <url>] [--port <port>] [--control-token <token>] [--json] [workflowPath]
 ```
 
-Resolves the daemon endpoint the same way as `lorenz status`, then posts to
-`/api/v1/refresh`. On success the daemon queues an out-of-band poll and reconcile pass. A running
-poll is coalesced rather than duplicated. The command uses the daemon lock token when the target
-matches the lock endpoint; pass `--control-token` when targeting a protected endpoint directly.
-Non-2xx responses exit `1`.
+Resolves the daemon endpoint from `--url`, `--port`, or the workflow lock's HTTP endpoint, then
+posts to `/api/v1/refresh`. On success the daemon queues an out-of-band poll and reconcile pass.
+A running poll is coalesced rather than duplicated. The command uses the daemon lock token when
+the target matches the lock endpoint; pass `--control-token` when targeting a protected endpoint
+directly. A lock without an HTTP endpoint is not enough for this command unless `--url` or
+`--port` supplies one. Non-2xx responses exit `1`.
 
 ## `lorenz stop`
 
@@ -190,11 +191,13 @@ Non-2xx responses exit `1`.
 lorenz stop [--url <url>] [--port <port>] [--control-token <token>] [--json] [workflowPath]
 ```
 
-Resolves the daemon endpoint the same way as `lorenz status`, then posts to `/api/v1/stop`. The
-daemon calls `runtime.stop()` and returns once the stop request has been accepted; normal shutdown
-then drains workers, stops the server, closes stores, and releases the daemon lease. The command
-uses the daemon lock token when the target matches the lock endpoint; pass `--control-token` when
-targeting a protected endpoint directly. Non-2xx responses exit `1`.
+Resolves the daemon endpoint from `--url`, `--port`, or the workflow lock's HTTP endpoint, then
+posts to `/api/v1/stop`. The daemon calls `runtime.stop()` and returns once the stop request has
+been accepted; normal shutdown then drains workers, stops the server, closes stores, and releases
+the daemon lease. The command uses the daemon lock token when the target matches the lock endpoint;
+pass `--control-token` when targeting a protected endpoint directly. A lock without an HTTP
+endpoint is not enough for this command unless `--url` or `--port` supplies one. Non-2xx responses
+exit `1`.
 
 ## `lorenz doctor`
 

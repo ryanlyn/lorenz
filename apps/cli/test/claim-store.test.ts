@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { mkdir, realpath, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import { test } from "vitest";
@@ -71,27 +71,47 @@ test("claim store builder reads explicit backend settings from env", async () =>
 test("claim store default path is anchored under the workflow workspace", async () => {
   const root = await tempDir("lorenz-claim-store-default-path");
   const workflow = workflowFixture(root);
+  const defaultPath = defaultClaimStorePath(workflow);
+  const canonicalRoot = await realpath(root);
 
   assert.equal(
-    defaultClaimStorePath(workflow),
-    path.join(root, ".lorenz", "claim-store", workflowKey(workflow), "claims.db"),
+    path.dirname(path.dirname(defaultPath)),
+    path.join(canonicalRoot, ".lorenz", "claim-store"),
   );
+  assert.match(path.basename(path.dirname(defaultPath)), /^[a-f0-9]{64}$/);
+  assert.equal(path.basename(defaultPath), "claims.db");
 });
 
 test("claim store default path is scoped by workflow path", async () => {
   const root = await tempDir("lorenz-claim-store-workflow-scope");
   const first = workflowFixture(root, "WORKFLOW.md");
   const second = workflowFixture(root, "WORKFLOW.alt.md");
+  const canonicalRoot = await realpath(root);
 
   assert.notEqual(defaultClaimStorePath(first), defaultClaimStorePath(second));
   assert.equal(
     path.dirname(path.dirname(defaultClaimStorePath(first))),
-    path.join(root, ".lorenz", "claim-store"),
+    path.join(canonicalRoot, ".lorenz", "claim-store"),
   );
   assert.equal(
     path.dirname(path.dirname(defaultClaimStorePath(second))),
-    path.join(root, ".lorenz", "claim-store"),
+    path.join(canonicalRoot, ".lorenz", "claim-store"),
   );
+});
+
+test("claim store default path canonicalizes symlinked workflow aliases", async () => {
+  const root = await tempDir("lorenz-claim-store-symlink");
+  const workspaceRoot = path.join(root, "workspace");
+  const workspaceAlias = path.join(root, "workspace-link");
+  await mkdir(workspaceRoot);
+  await symlink(workspaceRoot, workspaceAlias, "dir");
+  const workflowPath = path.join(workspaceRoot, "WORKFLOW.md");
+  await writeFile(workflowPath, "workflow", "utf8");
+
+  const canonical = workflowFixture(workspaceRoot);
+  const alias = workflowFixture(workspaceAlias);
+
+  assert.equal(defaultClaimStorePath(canonical), defaultClaimStorePath(alias));
 });
 
 function workflowFixture(root: string, fileName = "WORKFLOW.md"): WorkflowDefinition {
@@ -105,8 +125,4 @@ function workflowFixture(root: string, fileName = "WORKFLOW.md"): WorkflowDefini
       logging: { log_file: path.join(root, "lorenz.log") },
     }),
   };
-}
-
-function workflowKey(workflow: WorkflowDefinition): string {
-  return createHash("sha256").update(path.resolve(workflow.path)).digest("hex");
 }

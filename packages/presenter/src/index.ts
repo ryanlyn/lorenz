@@ -85,7 +85,7 @@ export interface DaemonPayload {
   workflow_path: string;
   workspace_root: string;
   lock_path: string;
-  endpoint: { kind: "http" | "socket"; address: string };
+  endpoint: { kind: "http" | "socket" | "none"; address: string };
   heartbeat_at: string;
   heartbeat_age_ms: number | null;
   stale: boolean;

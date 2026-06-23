@@ -55,7 +55,7 @@ This capability has no dedicated page of its own; [dispatch.md](../dispatch.md) 
 
 ## Run history
 
-Watch what each agent is doing and what it did, with no database to run. The runtime keeps the last 20 events and the last 50 run-history entries in memory and merges them into one `RuntimeSnapshot` that feeds the TUI, the web dashboard, and the HTTP API. Run-history outcomes are `success`, `failed`, and `stalled`.
+Watch what each agent is doing and what it did, without requiring a database. The runtime keeps the last 20 events and the last 50 run-history entries in memory and merges them into one `RuntimeSnapshot` that feeds the TUI, the web dashboard, and the HTTP API. Run-history outcomes are `success`, `failed`, and `stalled`.
 
 The dashboard and snapshot surface are on by default:
 
