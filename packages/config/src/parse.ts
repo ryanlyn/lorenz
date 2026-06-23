@@ -102,11 +102,21 @@ export function parseConfig(
   if (workerRaw.kind !== undefined && settings.worker.sshHosts.length > 0) {
     throw new Error("worker.kind cannot be combined with worker.ssh_hosts");
   }
-  const workerPool = parseWorkerPool(workerRaw.workerPool, workerRaw, parsed.workers ?? {});
-  if (workerPool) settings.worker.workerPool = workerPool;
-  if (workerPool?.enabled && settings.worker.sshHosts.length > 0) {
-    throw new Error("worker.worker_pool.enabled cannot be combined with worker.ssh_hosts");
-  }
+  // The pool is the single dispatch path; parseWorkerPool always returns one. The static-ssh
+  // fold-in caps per-host concurrency at `max_concurrent_agents_per_host ?? agent.max_concurrent_agents`.
+  // The agent override is applied later (parseAgentSettings), so resolve it here from the raw config,
+  // falling back to the value already on settings.agent.
+  const perHostConcurrency =
+    settings.worker.maxConcurrentAgentsPerHost ??
+    parsed.agent?.maxConcurrentAgents ??
+    settings.agent.maxConcurrentAgents;
+  settings.worker.workerPool = parseWorkerPool(
+    workerRaw.workerPool,
+    workerRaw,
+    parsed.workers ?? {},
+    settings.worker.sshHosts,
+    perHostConcurrency,
+  );
 
   settings.hooks = parseHooks(settings.hooks, parsed.hooks ?? {});
   if (settings.workspace.isolation === "none") assertNoWorkspaceHooks(settings.hooks);
@@ -455,14 +465,26 @@ function parseWorkerPool(
   raw: WorkerPoolRaw | null | undefined,
   workerRaw: NonNullable<WorkflowConfigRaw["worker"]>,
   workersRaw: WorkersRaw,
-): WorkerPoolSettings | undefined {
+  sshHosts: readonly string[],
+  perHostConcurrency: number,
+): WorkerPoolSettings {
   const selectedWorker = selectedWorkerProfile(workerRaw.kind, workersRaw);
-  if ((raw === undefined || raw === null) && selectedWorker === undefined) return undefined;
+
+  // No explicit worker_pool and no named worker profile: defaultDispatchWorkerPool supplies the
+  // implicit pool (a `local` pool, or a `static-ssh` pool when `ssh_hosts` is set).
+  if ((raw === undefined || raw === null) && selectedWorker === undefined) {
+    return defaultDispatchWorkerPool(sshHosts, perHostConcurrency);
+  }
   if (selectedWorker !== undefined && raw?.driver !== undefined) {
     throw new Error("worker.kind cannot be combined with worker.worker_pool.driver");
   }
+  // The `ssh_hosts` fold-in only auto-selects static-ssh when no driver is named; a named driver
+  // wins, so an explicit `worker_pool.driver` alongside `ssh_hosts` is ambiguous and rejected
+  // rather than dropping the hosts.
+  if (raw?.driver !== undefined && sshHosts.length > 0) {
+    throw new Error("worker.worker_pool.driver cannot be combined with worker.ssh_hosts");
+  }
 
-  const enabled = raw?.enabled ?? selectedWorker !== undefined;
   const driver = selectedWorker?.driver ?? raw?.driver ?? "fake";
   const min = raw?.min ?? 0;
   const max = raw?.max ?? 1;
@@ -479,7 +501,9 @@ function parseWorkerPool(
   // so the constructed object carries exactly ONE own field (`slotsPerMachine`). The config key
   // `worker.worker_pool.max_in_flight` is unchanged; it parses into `slotsPerMachine`.
   const input: WorkerPoolSettingsInput = {
-    enabled,
+    // A configured pool (an explicit worker_pool block or a named worker.kind) is always enabled;
+    // `enabled` is an internal liveness flag the reload-drain flips, not an operator config key.
+    enabled: true,
     driver,
     min,
     max,
@@ -513,6 +537,65 @@ function parseWorkerPool(
   // lives with the registered driver and runs at pool construction - the same
   // fail-loud startup point as an unregistered kind.
   return settings;
+}
+
+/**
+ * The implicit dispatch pool produced when no `worker_pool` and no `worker.kind` are configured:
+ * - empty `sshHosts`  -> an enabled `local` pool, slotsPerMachine=1, min=0/warm=0/max=1 so nothing
+ *   provisions eagerly and the single local worker is minted on first acquire. The local driver
+ *   yields an empty `workerHost`, so the per-run endpoint manager mints no tunnel and acp keeps its
+ *   own in-process MCP endpoint.
+ * - non-empty `sshHosts` -> an enabled `static-ssh` pool whose driverOptions carry the configured
+ *   hosts (the `ssh_hosts` spelling the driver's `readSshHosts` expects). `max` is the host count
+ *   and slotsPerMachine is the per-host cap (`max_concurrent_agents_per_host ??
+ *   agent.max_concurrent_agents`), so total capacity is hosts * perHostConcurrency. `co_residence`
+ *   is auto-enabled when that cap is >1, since each co-resident run owns its own per-run Token B
+ *   claim plus the shared per-host reverse tunnel. The provision policy is round-robin first-free
+ *   (static-ssh `provision`).
+ */
+function defaultDispatchWorkerPool(
+  sshHosts: readonly string[],
+  perHostConcurrency: number,
+): WorkerPoolSettings {
+  if (sshHosts.length > 0) {
+    const slotsPerMachine = Math.max(1, perHostConcurrency);
+    const input: WorkerPoolSettingsInput = {
+      enabled: true,
+      driver: "static-ssh",
+      min: 0,
+      max: sshHosts.length,
+      warm: 0,
+      slotsPerMachine,
+      ttlMs: 3_600_000,
+      idleReapMs: 300_000,
+      acquireTimeoutMs: 30_000,
+      reapIntervalMs: 15_000,
+      staleHeartbeatMs: 600_000,
+      drainDeadlineMs: 30_000,
+      driverOptions: { ssh_hosts: [...sshHosts] },
+    };
+    const settings = withDerivedMaxInFlight(input);
+    // A per-host cap >1 co-resides runs on one host (guarded by the slots-per-machine gate), so
+    // auto-enable the co_residence opt-in. A cap of 1 stays single-tenant and never trips the gate.
+    if (slotsPerMachine > 1) settings.coResidence = true;
+    return settings;
+  }
+
+  const input: WorkerPoolSettingsInput = {
+    enabled: true,
+    driver: "local",
+    min: 0,
+    max: 1,
+    warm: 0,
+    slotsPerMachine: 1,
+    ttlMs: 3_600_000,
+    idleReapMs: 300_000,
+    acquireTimeoutMs: 30_000,
+    reapIntervalMs: 15_000,
+    staleHeartbeatMs: 600_000,
+    drainDeadlineMs: 30_000,
+  };
+  return withDerivedMaxInFlight(input);
 }
 
 function selectedWorkerProfile(

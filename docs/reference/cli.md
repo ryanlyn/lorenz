@@ -21,7 +21,7 @@ The `bin` shim at `apps/cli/bin/lorenz.js` imports the built `dist/bin/cli.js`. 
 lorenz [--once] [--dry-run] [--no-tui] [--no-dashboard] [--port <port>] [--logs-root <path>] [--claim-store <backend>] [--claim-store-path <path>] [--claim-store-owner-stale-ms <ms>] [workflowPath]
 ```
 
-The default command. It loads the workflow, validates dispatch config, builds the dispatch coordinator and warm worker pool when enabled, constructs the runtime, starts the observability server and TUI, then polls until interrupted.
+The default command. It loads the workflow, validates dispatch config, builds the dispatch coordinator and warm worker pool, constructs the runtime, starts the observability server and TUI, then polls until interrupted.
 
 ### Argument
 
@@ -68,7 +68,7 @@ Startup runs in order: register backends, load and validate the workflow, acquir
 
 The coordinator anchors at `baseDir = dirname(workflow.path)`, the directory of the workflow file. `assertSlotsPerMachineGate` then runs as a post-construction check (see [Co-residence gate](#co-residence-gate)). `validateDispatchConfig` runs at startup and again as the runtime's per-reload `validateDispatch` hook, so a bad edit to `WORKFLOW.md` is caught on the next poll rather than at dispatch time.
 
-The worker pool and dispatch coordinator are constructed only when `worker.worker_pool.enabled` is set. With the pool disabled both return `undefined` and the daemon takes the byte-identical pre-pool path.
+The worker pool and dispatch coordinator are always constructed - the pool is the single dispatch path. With no `worker.worker_pool` block the pool defaults to the `local` driver at `max: 1`, whose empty worker host keeps runs on the daemon's own in-process endpoint (byte-identical to the pre-pool local path). An internally disabled pool (the drained shape a reload produces) still resolves both to `undefined`.
 
 Long-running daemon mode acquires a local leadership lease keyed by workflow path. If another live
 daemon already owns the lease, startup exits with `daemon_already_running` and reports the owner pid
@@ -262,7 +262,7 @@ See [worker-driver.md](../extensions/worker-driver.md) and [out-of-tree.md](../e
 1. The coordinator advertises `capabilities.perRunClaimEnforcement === true` so the shared MCP gateway resolves each request's per-run scoped claim, re-checks owner liveness, and fences by generation.
 2. `worker.worker_pool.co_residence` is explicitly opted in.
 
-The gate is a post-construction check, separate from `worker.worker_pool.enabled`, because the per-run-claim enforcement capability exists only once the coordinator is built. The same rule is enforced on reload via the shared `checkSlotsPerMachineGate` predicate. See [security.md](../security.md) for the blast-radius rationale.
+The gate is a post-construction check, because the per-run-claim enforcement capability exists only once the coordinator is built. The same rule is enforced on reload via the shared `checkSlotsPerMachineGate` predicate. See [security.md](../security.md) for the blast-radius rationale.
 
 ## See also
 - [cli.md](../cli.md) - the tutorial these commands back

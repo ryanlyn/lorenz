@@ -241,14 +241,21 @@ export interface TrackerSettings {
 }
 
 /**
- * Configuration for the embedded warm worker/executor worker pool. When present and `enabled`,
- * the runtime leases an SSH-addressable worker per run (producing the run's `workerHost`) instead
- * of selecting from a static {@link WorkerSettings.sshHosts} list. Absent or disabled means the
- * pool is off and behavior is identical to the static-host path. Durations are milliseconds;
- * spend caps are seconds (matching {@link UsageTotals.secondsRunning}).
+ * Configuration for the embedded warm worker/executor worker pool, the single dispatch path. When
+ * `enabled`, the runtime leases a worker per run (producing the run's `workerHost`) through the
+ * configured driver. The `local` driver yields an empty `workerHost` so dispatch executes on acp's
+ * own in-process MCP endpoint; the `static-ssh` driver leases from the
+ * {@link WorkerSettings.sshHosts} static-host model. Durations are milliseconds; spend caps are
+ * seconds (matching {@link UsageTotals.secondsRunning}).
  */
 export interface WorkerPoolSettings {
-  /** Master switch. When false the pool is constructed-but-inert (or not constructed at all). */
+  /**
+   * Internal liveness switch, not an operator-facing config key. A parsed config always produces
+   * `enabled: true`; the reload-drain is the only writer that flips it to `false`, to drain a
+   * removed pool to zero (`reconcile` then skips the driver swap and tears the workers down). When
+   * `false` the pool is constructed-but-inert (or not constructed at all) and `governs()` falls
+   * through to local/static.
+   */
   enabled: boolean;
   /** Worker driver backend that provisions, probes, and destroys workers. */
   driver: WorkerDriverKind;
@@ -379,9 +386,12 @@ export interface WorkerSettings {
    */
   maxConcurrentAgentsPerHost?: number | undefined;
   /**
-   * Optional embedded worker-pool configuration. Absent (the default) leaves the static-host path
-   * unchanged. When `enabled`, the pool leases SSH-addressable workers to produce each run's
-   * `workerHost`; it cannot be combined with a non-empty {@link WorkerSettings.sshHosts}.
+   * Embedded worker-pool configuration; the single dispatch path. {@link parseConfig} always
+   * populates it: an absent `worker_pool` with no hosts defaults to an enabled `local` pool
+   * (slotsPerMachine=1, min=0/warm=0/max=1), and a non-empty {@link WorkerSettings.sshHosts} is
+   * represented by an enabled `static-ssh` pool carrying the hosts in
+   * {@link WorkerPoolSettings.driverOptions}. The field stays optional in the type so non-parse
+   * constructors (tests, fixtures) may omit it.
    */
   workerPool?: WorkerPoolSettings | undefined;
 }

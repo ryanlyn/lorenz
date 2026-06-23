@@ -50,7 +50,7 @@ A missing file fails fast with `missing_workflow_file`. The directory holding th
 
 1. Register the built-in trackers, tool pack, agent executor, and worker drivers (idempotent).
 2. Load and parse the workflow, apply `--port` and `--logs-root` overrides, and run [`validateDispatchConfig`](reference/configuration.md).
-3. Build the [dispatch coordinator](dispatch.md) and [warm worker pool](workers/worker-pool.md), but only when `worker.worker_pool.enabled` is set. Otherwise both are skipped.
+3. Build the [dispatch coordinator](dispatch.md) and [warm worker pool](workers/worker-pool.md). The pool is the single dispatch path, so it is always built; with no `worker.worker_pool` block it defaults to the `local` driver (runs execute on the daemon host).
 4. Run the `slots_per_machine` blast-radius gate (see below).
 5. Construct the runtime, start the observability server, then render the TUI or subscribe for JSON snapshots.
 

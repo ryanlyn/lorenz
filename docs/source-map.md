@@ -81,7 +81,7 @@ The control-plane core. There is no database: restart recovery is tracker-driven
 
 ## Dispatch coordinator and worker pool
 
-These produce the SSH-addressable host each run executes on. Two host mechanisms exist and are mutually exclusive in config: the legacy static path (`worker.ssh_hosts`, no provisioning) and the warm pool (`worker.worker_pool`).
+These produce the SSH-addressable host each run executes on. The warm pool (`worker.worker_pool`) is the single dispatch path; the legacy `worker.ssh_hosts` list folds into a `static-ssh` pool over a fixed set of hosts with no provisioning.
 
 | Package | What it owns | First files to open |
 | --- | --- | --- |

@@ -203,7 +203,11 @@ const workerPoolSpendRawSchema = z
   .strict();
 const workerPoolRawSchema = z
   .object({
-    enabled: coercedBoolean.optional(),
+    // There is no operator-facing `enabled` flag: the pool is the single dispatch path, so a
+    // present `worker_pool` block is always enabled. The `.strict()` schema therefore rejects an
+    // `enabled` key. (The internal `WorkerPoolSettings.enabled` field is set by the reload-drain
+    // to drain a removed pool to zero, not by config.)
+    //
     // The driver selector is open-ended; whether the kind is supported is decided by the
     // worker-driver registry at pool construction, not by the schema.
     driver: z.string().min(1).optional(),

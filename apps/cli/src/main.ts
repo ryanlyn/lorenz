@@ -253,10 +253,9 @@ export async function runDaemon(options: CliOptions): Promise<number> {
         baseDir: path.dirname(workflow.path),
       });
       // Post-construction gate: slotsPerMachine>1 is only safe once the coordinator
-      // advertises per-run MCP endpoints AND the operator has explicitly opted into
-      // co-residence (a poisoned worker fails every co-resident run on recycle). The
-      // capability is known only here, after the coordinator exists, so this is the
-      // right home for the check (validateDispatchConfig stays capability-free).
+      // advertises per-run claim enforcement AND the operator has explicitly opted
+      // into co-residence. The capability is known only here, after the coordinator
+      // exists, so this is the right home for the check.
       assertSlotsPerMachineGate(workflow.settings, coordinator);
       const traceDir = workflow.settings.server.traceDir!;
       const traceEmitter = new TraceEmitter(traceDir);

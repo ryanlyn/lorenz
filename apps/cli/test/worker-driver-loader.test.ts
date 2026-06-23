@@ -138,7 +138,6 @@ function poolSettings(dir: string, driver: string): Settings {
       logging: { log_file: path.join(dir, "lorenz.log") },
       worker: {
         worker_pool: {
-          enabled: true,
           driver,
           max: 1,
           warm: 0,

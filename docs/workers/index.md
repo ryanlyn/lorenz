@@ -1,6 +1,6 @@
 # Workers
 
-Workers are where agent runs execute. This page is for operators choosing between running agents on the Lorenz host, sharding them across a fixed set of SSH machines, or leasing machines from a warm pool. It covers the config that selects each mode, how they are mutually exclusive, and how Lorenz spreads runs across hosts.
+Workers are where agent runs execute. This page is for operators choosing between running agents on the Lorenz host, sharding them across a fixed set of SSH machines, or leasing machines from a warm pool. It covers the config that selects each mode and how Lorenz spreads runs across hosts.
 
 By default there is no worker config and every agent run executes locally on the machine running the `lorenz` daemon. You opt into remote execution by adding one of two blocks to your `WORKFLOW.md` front matter.
 
@@ -17,11 +17,11 @@ Lorenz resolves an SSH-addressable target for each run. Where that target comes 
 | Drivers      | n/a                                      | n/a                                                        | `fake`, `static-ssh`, `docker`, or an out-of-tree module               |
 | When to use  | single-host development, small workloads | you already run a stable fleet of build boxes              | you want elastic, billed capacity that grows and shrinks with demand   |
 
-`worker.ssh_hosts` and `worker.worker_pool` are mutually exclusive. The config parser throws at startup if you combine them. It also rejects `worker.kind` set alongside `worker.ssh_hosts`, and `worker.kind` set alongside `worker.worker_pool.driver`.
+The pool is the single dispatch path, so `worker.ssh_hosts` is not a separate model: it folds into a `static-ssh` pool with one machine per host. You cannot name a driver twice for the same hosts, so the parser rejects `worker.kind` alongside `worker.ssh_hosts`, `worker.worker_pool.driver` alongside `worker.ssh_hosts`, and `worker.kind` alongside `worker.worker_pool.driver`.
 
 ```sh
-worker.worker_pool.enabled cannot be combined with worker.ssh_hosts
 worker.kind cannot be combined with worker.ssh_hosts
+worker.worker_pool.driver cannot be combined with worker.ssh_hosts
 worker.kind cannot be combined with worker.worker_pool.driver
 ```
 
@@ -53,14 +53,13 @@ You configure the pool one of two ways. Set `worker.worker_pool.driver` directly
 ```yaml
 worker:
   worker_pool:
-    enabled: true
     driver: docker
     min: 1
     max: 4
     warm: 2
 ```
 
-A directly-configured `worker.worker_pool` block defaults `enabled` to `false`, so it must set `enabled: true` to build a live pool. Without it the pool resolves to disabled and no machines are leased.
+A `worker.worker_pool` block needs no `enabled` flag - the pool is always live. With no block at all it defaults to the `local` driver at `max: 1` (runs execute on the daemon host).
 
 Or select a named profile with `worker.kind`, which points at a top-level `workers.<name>` block:
 
@@ -74,24 +73,23 @@ workers:
     image: lorenz-worker:latest
 ```
 
-When `worker.kind` is set, the matching `workers.<name>` entry supplies the driver and its options. Every key under that profile except `driver` is passed to the driver verbatim. A `worker.kind` that matches no `workers` entry throws `worker.kind "<name>" does not match any workers entry` at startup. Selecting a profile this way defaults `enabled` to `true`, so the pool runs without an explicit `enabled` key.
+When `worker.kind` is set, the matching `workers.<name>` entry supplies the driver and its options. Every key under that profile except `driver` is passed to the driver verbatim. A `worker.kind` that matches no `workers` entry throws `worker.kind "<name>" does not match any workers entry` at startup.
 
 When `worker.worker_pool` is present but no driver is specified, the driver defaults to `fake` (an in-memory driver for tests, not a real backend). The built-in real drivers are `static-ssh` (a fixed host list fed into the pool lifecycle) and `docker` (disposable containers). Drivers can also load out-of-tree by module specifier.
 
 Pool defaults, when the block is present:
 
-| Key                                     | Default                                                        | Meaning                                                                                      |
-| --------------------------------------- | -------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
-| `worker.worker_pool.enabled`            | `true` only when selected via `worker.kind`; otherwise `false` | turns the pool on; a directly-configured `worker.worker_pool` block must set `enabled: true` |
-| `worker.worker_pool.driver`             | `fake`                                                         | which backend provisions machines                                                            |
-| `worker.worker_pool.min`                | `0`                                                            | floor on live machines                                                                       |
-| `worker.worker_pool.max`                | `1`                                                            | ceiling on live machines (must be `>= min`)                                                  |
-| `worker.worker_pool.warm`               | `1`                                                            | machines kept ready ahead of demand (must be `<= max`)                                       |
-| `worker.worker_pool.ttl_ms`             | `3600000`                                                      | max machine lifetime before reap                                                             |
-| `worker.worker_pool.idle_reap_ms`       | `300000`                                                       | idle time before a machine above `min` is reaped                                             |
-| `worker.worker_pool.acquire_timeout_ms` | `30000`                                                        | how long a run waits for a lease before giving up                                            |
-| `worker.worker_pool.reap_interval_ms`   | `15000`                                                        | reaper tick cadence                                                                          |
-| `worker.worker_pool.drain_deadline_ms`  | `30000`                                                        | grace window for in-flight leases during drain                                               |
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `worker.worker_pool.driver` | `fake` when a block is present, `local` when absent | which backend provisions machines |
+| `worker.worker_pool.min` | `0` | floor on live machines |
+| `worker.worker_pool.max` | `1` | ceiling on live machines (must be `>= min`) |
+| `worker.worker_pool.warm` | `1` | machines kept ready ahead of demand (must be `<= max`) |
+| `worker.worker_pool.ttl_ms` | `3600000` | max machine lifetime before reap |
+| `worker.worker_pool.idle_reap_ms` | `300000` | idle time before a machine above `min` is reaped |
+| `worker.worker_pool.acquire_timeout_ms` | `30000` | how long a run waits for a lease before giving up |
+| `worker.worker_pool.reap_interval_ms` | `15000` | reaper tick cadence |
+| `worker.worker_pool.drain_deadline_ms` | `30000` | grace window for in-flight leases during drain |
 
 Spend caps live under `worker.worker_pool.spend`:
 

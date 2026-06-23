@@ -2,7 +2,7 @@
 
 This page is for operators who already run a fixed set of machines and want Lorenz to dispatch agent runs onto them over SSH. It covers the `worker.ssh_hosts` path: a flat list of pre-existing SSH destinations that the runtime shards runs across, with no provisioning, no lifecycle, and no spend tracking.
 
-Static SSH is the simplest way to run agents off the daemon host. You list the machines, Lorenz picks the least-loaded one for each run, and you keep owning the machines. If you instead want Lorenz to create and destroy ephemeral machines on demand, see the [worker pool](worker-pool.md) and the [Docker driver](docker.md).
+Static SSH is the simplest way to run agents off the daemon host. You list the machines, Lorenz spreads runs across them (round-robin onto the first host with a free slot), and you keep owning the machines. If you instead want Lorenz to create and destroy ephemeral machines on demand, see the [worker pool](worker-pool.md) and the [Docker driver](docker.md).
 
 ## Two surfaces named "static SSH"
 
@@ -10,12 +10,12 @@ There are two distinct config shapes that both involve a fixed SSH host list. Pi
 
 | Surface | Config | Who selects the host | Lifecycle |
 | --- | --- | --- | --- |
-| Legacy static path | `worker.ssh_hosts` | The runtime, least-loaded across the list | None. You own the machines. |
+| Legacy static path | `worker.ssh_hosts` | The static-ssh pool, round-robin across the list | None. You own the machines. |
 | `static-ssh` driver | `workers.<name>` with `driver: static-ssh`, option `ssh_hosts` | The [worker pool](worker-pool.md) engine | Pool leasing only. The driver never deletes a machine. |
 
 This page documents the first surface: `worker.ssh_hosts`. The `static-ssh` driver is the same fixed-host idea wired into the pool's lease/reap machinery instead of the runtime's own host selection. Reach for it only when you want the pool's accounting around a fixed fleet; for plain "run on these N boxes" the legacy path is enough.
 
-The config parser refuses to combine them. Setting `worker.ssh_hosts` alongside `worker.worker_pool.enabled` throws `worker.worker_pool.enabled cannot be combined with worker.ssh_hosts`, and combining it with `worker.kind` throws `worker.kind cannot be combined with worker.ssh_hosts`.
+Under the hood, `worker.ssh_hosts` folds into a `static-ssh` pool (one machine per host; up to `max_concurrent_agents_per_host ?? agent.max_concurrent_agents` runs co-reside per host, with `co_residence` auto-enabled above one) - it is the pool's single dispatch path, not a separate model. You cannot name a driver twice for the same hosts: setting `worker.ssh_hosts` alongside `worker.worker_pool.driver` throws `worker.worker_pool.driver cannot be combined with worker.ssh_hosts`, and combining it with `worker.kind` throws `worker.kind cannot be combined with worker.ssh_hosts`.
 
 ## When to use it
 
@@ -128,7 +128,7 @@ export LORENZ_SSH_CONFIG=/etc/lorenz/ssh_config
 lorenz WORKFLOW.md
 ```
 
-With this config Lorenz can run up to six agents at once (three per host across two hosts). Each run is sharded onto whichever of `build-a` or `build-b` has the fewest in-flight runs. A retried run prefers the host it last ran on. When both hosts hold three runs, new dispatches wait and the dashboard shows `worker_host_capacity`.
+With this config Lorenz can run up to six agents at once (three per host across two hosts): `slots_per_machine` is set to `max_concurrent_agents_per_host` and `co_residence` is auto-enabled so the three co-resident runs each hold their own per-run claim. Each run is placed round-robin onto the first host with a free slot. When both hosts hold three runs, new dispatches wait and the dashboard shows `worker_host_capacity`.
 
 ## Failure modes
 

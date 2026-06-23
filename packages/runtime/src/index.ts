@@ -1151,12 +1151,14 @@ export class LorenzRuntime {
       // applied, so dispatch can never use settings that do not match the live pool.
       //
       // The coordinator (and its pool) is a reload-surviving singleton: diff
-      // prev-vs-next worker-pool settings instead of being reconstructed. When the
-      // reload REMOVES the worker_pool block entirely (next === undefined), reconcile
-      // to a disabled-equivalent of the prior settings so the live pool drains to
-      // zero instead of leaking its (paid) workers unmanaged. A present block (even
-      // one with `enabled: false`) keeps the existing path: reconcile handles the
-      // disable-and-drain itself.
+      // prev-vs-next worker-pool settings instead of being reconstructed. The pool is
+      // the single dispatch path, so a parsed config always carries a worker_pool (an
+      // absent block defaults to the enabled `local` pool). The
+      // `disabledWorkerPoolSettings(prevWorkerPool)` fallback only fires for a settings
+      // object built outside parseConfig that genuinely omits the block; reconcile then
+      // drains the live pool to zero instead of leaking its (paid) workers. A present
+      // block (including an explicit `enabled: false`) reconciles directly: reconcile
+      // handles the disable-and-drain itself.
       if (this.coordinator) {
         const next =
           workflow.settings.worker.workerPool ?? disabledWorkerPoolSettings(prevWorkerPool);

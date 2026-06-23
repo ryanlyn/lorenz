@@ -1324,7 +1324,7 @@ test("worker.worker_pool parses all keys with snake_case aliasing", () => {
     worker: {
       kind: "static-prod",
       worker_pool: {
-        enabled: true,
+        // There is no `enabled` config key; the parsed pool is always enabled (asserted below).
         min: 1,
         max: 4,
         warm: 2,
@@ -1382,7 +1382,6 @@ test("worker.worker_pool parses co_residence and max_concurrent_tunnels (snake->
   const settings = parseConfig({
     worker: {
       worker_pool: {
-        enabled: true,
         driver: "fake",
         max_in_flight: 2,
         co_residence: true,
@@ -1405,7 +1404,7 @@ test("worker.worker_pool parses co_residence and max_concurrent_tunnels (snake->
 
 test("worker.worker_pool co_residence and max_concurrent_tunnels default absent", () => {
   const settings = parseConfig({
-    worker: { worker_pool: { enabled: true, driver: "fake" } },
+    worker: { worker_pool: { driver: "fake" } },
   });
 
   const workerPool = settings.worker.workerPool;
@@ -1426,7 +1425,7 @@ test("worker.worker_pool rejects non-positive max_concurrent_tunnels", () => {
 test("worker.worker_pool applies defaults when keys omitted", () => {
   const settings = parseConfig({
     worker: {
-      worker_pool: { enabled: true, driver: "fake" },
+      worker_pool: { driver: "fake" },
     },
   });
 
@@ -1453,7 +1452,7 @@ test("worker.worker_pool applies defaults when keys omitted", () => {
 test("worker.worker_pool max_in_flight parses into slotsPerMachine with maxInFlight mirroring it", () => {
   const settings = parseConfig({
     worker: {
-      worker_pool: { enabled: true, driver: "fake", max_in_flight: 3 },
+      worker_pool: { driver: "fake", max_in_flight: 3 },
     },
   });
 
@@ -1470,17 +1469,28 @@ test("worker.worker_pool max_in_flight parses into slotsPerMachine with maxInFli
   assert.equal(clone?.maxInFlight, clone?.slotsPerMachine);
 });
 
-test("absent worker_pool leaves settings.worker.workerPool undefined", () => {
+test("absent worker_pool defaults to an enabled local pool (byte-identical local dispatch)", () => {
+  // An absent worker_pool with no hosts defaults to an enabled `local` pool at slotsPerMachine=1
+  // with min=0/warm=0/max=1, which provisions nothing eagerly and routes runs through acp's own
+  // endpoint (empty workerHost): the byte-identical local single-tenant dispatch path.
   const settings = parseConfig({ worker: { ssh_timeout_ms: 1_000 } });
-  assert.equal(settings.worker.workerPool, undefined);
-  assert.equal("workerPool" in settings.worker, false);
+  assert.ok(settings.worker.workerPool);
+  assert.equal(settings.worker.workerPool?.enabled, true);
+  assert.equal(settings.worker.workerPool?.driver, "local");
+  assert.equal(settings.worker.workerPool?.slotsPerMachine, 1);
+  assert.equal(settings.worker.workerPool?.min, 0);
+  assert.equal(settings.worker.workerPool?.warm, 0);
+  assert.equal(settings.worker.workerPool?.max, 1);
 });
 
-test("REGRESSION: absent worker_pool Settings clone deep-equals the issue-state clone", () => {
+test("REGRESSION: default local-pool Settings clone deep-equals the issue-state clone", () => {
+  // The byte-identity deep-equal-clone property holds over the default local pool: workerPool is
+  // present (the default local pool) and is present-and-equal in the clone.
   const settings = parseConfig({});
   const clone = settingsForIssueState(settings, "Todo");
   assert.deepEqual(clone, settings);
-  assert.equal("workerPool" in clone.worker, false);
+  assert.ok("workerPool" in clone.worker);
+  assert.deepEqual(clone.worker.workerPool, settings.worker.workerPool);
 });
 
 test("worker.worker_pool driver is an open string resolved by the registry", () => {
@@ -1502,8 +1512,8 @@ test("worker.worker_pool driver is an open string resolved by the registry", () 
 test("workers.<name> options are accepted for open driver names", () => {
   const settings = parseConfig({
     worker: {
+      // A named `worker.kind` alone yields an enabled pool; there is no `enabled` opt-in key.
       kind: "antarctica",
-      worker_pool: { enabled: true },
     },
     workers: {
       antarctica: {
@@ -1563,26 +1573,74 @@ test("worker.worker_pool rejects non-positive integers where positive is require
   );
 });
 
-test("worker.worker_pool enabled cannot be combined with non-empty ssh_hosts", () => {
+test("ssh_hosts folds into an enabled static-ssh pool (no throw)", () => {
+  // A bare ssh_hosts (no named driver) represents the static-host case as an enabled `static-ssh`
+  // pool: the hosts are threaded through driverOptions.ssh_hosts and max is bounded by the host
+  // count. Per-host capacity is the per-host cap (max_concurrent_agents_per_host ??
+  // agent.max_concurrent_agents, default 10) mapped onto slotsPerMachine, and co_residence is
+  // auto-enabled because each co-resident run owns its own per-run Token B claim plus the shared
+  // per-host tunnel. The provision policy is round-robin first-free (static-ssh driver).
+  const folded = parseConfig({
+    worker: { ssh_hosts: ["user@host-a:22", "user@host-b:22"] },
+  });
+  assert.deepEqual(folded.worker.sshHosts, ["user@host-a:22", "user@host-b:22"]);
+  assert.equal(folded.worker.workerPool?.enabled, true);
+  assert.equal(folded.worker.workerPool?.driver, "static-ssh");
+  // slotsPerMachine is the per-host cap (default agent.max_concurrent_agents=10); a per-host
+  // capacity >1 auto-enables co_residence.
+  assert.equal(folded.worker.workerPool?.slotsPerMachine, 10);
+  assert.equal(folded.worker.workerPool?.coResidence, true);
+  assert.equal(folded.worker.workerPool?.max, 2);
+  assert.deepEqual(folded.worker.workerPool?.driverOptions, {
+    ssh_hosts: ["user@host-a:22", "user@host-b:22"],
+  });
+
+  // An EXPLICIT worker_pool.driver alongside ssh_hosts is still rejected: the fold-in only
+  // auto-selects static-ssh when no driver was named, so a named driver + hosts is ambiguous.
   assert.throws(
     () =>
       parseConfig({
         worker: {
           ssh_hosts: ["user@host:22"],
-          worker_pool: { enabled: true, driver: "fake" },
+          worker_pool: { driver: "fake" },
         },
       }),
-    /worker\.worker_pool\.enabled cannot be combined with worker\.ssh_hosts/,
+    /worker\.worker_pool\.driver cannot be combined with worker\.ssh_hosts/,
   );
+});
 
-  const ok = parseConfig({
-    worker: {
-      ssh_hosts: ["user@host:22"],
-      worker_pool: { enabled: false, driver: "fake" },
-    },
-  });
-  assert.deepEqual(ok.worker.sshHosts, ["user@host:22"]);
-  assert.equal(ok.worker.workerPool?.enabled, false);
+test("ssh_hosts fold-in maps the legacy per-host cap onto slotsPerMachine + co_residence", () => {
+  // Explicit per-host knob wins and maps onto slotsPerMachine; co_residence auto-enabled because
+  // slotsPerMachine>1 co-resides runs (each with its own per-run Token B claim + shared tunnel).
+  const perHost = parseConfig({
+    worker: { ssh_hosts: ["user@a:22", "user@b:22"], max_concurrent_agents_per_host: 3 },
+  }).worker.workerPool;
+  assert.equal(perHost?.slotsPerMachine, 3);
+  assert.equal(perHost?.coResidence, true);
+  assert.equal(perHost?.max, 2);
+
+  // With no per-host knob, the global agent cap supplies the per-host capacity.
+  const agentCap = parseConfig({
+    agent: { max_concurrent_agents: 5 },
+    worker: { ssh_hosts: ["user@a:22"] },
+  }).worker.workerPool;
+  assert.equal(agentCap?.slotsPerMachine, 5);
+  assert.equal(agentCap?.coResidence, true);
+
+  // The per-host knob takes precedence over the global agent cap.
+  const precedence = parseConfig({
+    agent: { max_concurrent_agents: 5 },
+    worker: { ssh_hosts: ["user@a:22"], max_concurrent_agents_per_host: 2 },
+  }).worker.workerPool;
+  assert.equal(precedence?.slotsPerMachine, 2);
+
+  // A per-host cap of 1 stays single-tenant: slotsPerMachine=1 and co_residence is NOT set, so the
+  // slots-per-machine gate never trips for a single-tenant static fleet.
+  const single = parseConfig({
+    worker: { ssh_hosts: ["user@a:22"], max_concurrent_agents_per_host: 1 },
+  }).worker.workerPool;
+  assert.equal(single?.slotsPerMachine, 1);
+  assert.equal(single?.coResidence, undefined);
 });
 
 test("worker.kind cannot be combined with non-empty ssh_hosts", () => {
@@ -1604,13 +1662,13 @@ test("static-ssh ssh_hosts validation belongs to the driver, not the parser", ()
   // (the same fail-loud startup point as an unregistered kind); config parsing
   // passes the options through untouched, including camelCase spellings.
   const parsed = parseConfig({
-    worker: { kind: "static-prod", worker_pool: { enabled: true } },
+    worker: { kind: "static-prod" },
     workers: { "static-prod": { driver: "static-ssh" } },
   });
   assert.equal(parsed.worker.workerPool?.driverOptions, undefined);
 
   const camel = parseConfig({
-    worker: { kind: "static-prod", worker_pool: { enabled: true } },
+    worker: { kind: "static-prod" },
     workers: {
       "static-prod": { driver: "static-ssh", sshHosts: ["user@host:22"] },
     },
@@ -1624,6 +1682,20 @@ test("unknown key under worker_pool throws (strict schema)", () => {
   assert.throws(
     () => parseConfig({ worker: { worker_pool: { driver: "fake", bogus: 1 } } }),
     /unsupported keys: bogus/,
+  );
+});
+
+test("worker.worker_pool.enabled is not an operator-facing key", () => {
+  // The pool is the single dispatch path (an absent pool defaults to an enabled local pool;
+  // ssh_hosts folds into static-ssh), so there is no operator scenario that turns the pool "off".
+  // The `.strict()` schema rejects `enabled` like any other unknown key, whether true or false.
+  assert.throws(
+    () => parseConfig({ worker: { worker_pool: { driver: "fake", enabled: false } } }),
+    /unsupported keys: enabled/,
+  );
+  assert.throws(
+    () => parseConfig({ worker: { worker_pool: { enabled: true } } }),
+    /unsupported keys: enabled/,
   );
 });
 
@@ -1680,9 +1752,6 @@ test("cloneSettings deep-copies driverOptions nested ssh_hosts array", () => {
   const settings = parseConfig({
     worker: {
       kind: "static-prod",
-      worker_pool: {
-        enabled: true,
-      },
     },
     workers: {
       "static-prod": {
@@ -1709,7 +1778,6 @@ test("cloneSettings deep-copies spend so mutating the clone leaves the original 
   const settings = parseConfig({
     worker: {
       worker_pool: {
-        enabled: true,
         driver: "fake",
         spend: { max_worker_seconds: 7_200 },
       },
@@ -1726,7 +1794,6 @@ test("worker.worker_pool spend.* parse in seconds while ttl/idle/drain stay in m
   const settings = parseConfig({
     worker: {
       worker_pool: {
-        enabled: true,
         driver: "fake",
         ttl_ms: 1_800_000,
         idle_reap_ms: 60_000,
@@ -1748,7 +1815,6 @@ test("workers.<name> option keys pass through un-normalized", () => {
   const settings = parseConfig({
     worker: {
       kind: "static-prod",
-      worker_pool: { enabled: true },
     },
     workers: {
       "static-prod": {

@@ -195,7 +195,6 @@ async function setupHarness(
     worker: {
       ssh_timeout_ms: 5_000,
       worker_pool: {
-        enabled: true,
         driver: "fake",
         min: 0,
         max: 1,
