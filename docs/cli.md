@@ -64,7 +64,7 @@ A first `Ctrl+C` (`SIGINT`) or `SIGTERM` starts a graceful stop: the runtime fin
 
 ### The slots-per-machine gate
 
-`worker.worker_pool.slots_per_machine > 1` packs more than one run onto a single worker machine. The default `1` always passes. Above `1`, the daemon refuses to start unless the coordinator advertises per-run MCP endpoints and you have set `worker.worker_pool.co_residence`. The opt-in is required because one poisoned worker fails every co-resident run when it recycles. `max_in_flight` is the legacy alias for `slots_per_machine`.
+`worker.worker_pool.slots_per_machine > 1` packs more than one run onto a single worker machine. The default `1` always passes. Above `1`, the daemon refuses to start unless the coordinator advertises per-run claim enforcement and you have set `worker.worker_pool.co_residence`. The opt-in is required because one poisoned worker fails every co-resident run when it recycles. `max_in_flight` is the legacy alias for `slots_per_machine`.
 
 ## Inspect runs
 

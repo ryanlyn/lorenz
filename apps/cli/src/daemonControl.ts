@@ -1,5 +1,5 @@
 import { Command } from "commander";
-import { parseNonNegativeInteger, parseRequiredValue, type ParseResult } from "@lorenz/cli-kit";
+import { parseNonNegativeInteger, parseRequiredValue } from "@lorenz/cli-kit";
 import { loadWorkflow } from "@lorenz/workflow";
 import { errorMessage } from "@lorenz/domain";
 
@@ -23,8 +23,6 @@ interface DaemonControlResult {
   statusCode: number;
   output: string;
 }
-
-export type DaemonControlParseResult = ParseResult<DaemonControlCommandOptions>;
 
 export function createDaemonStatusCommand(name = "status"): Command {
   return createDaemonControlCommand(name, "Show the active daemon owner and endpoint.");

@@ -236,9 +236,7 @@ export function validateDispatchConfig(
  * verbatim for the loader, while a bundle selection is left to the registry's
  * built-ins.
  */
-export function trackerSpecifierFromConfig(
-  raw: Record<string, unknown> = {},
-): string | undefined {
+export function trackerSpecifierFromConfig(raw: Record<string, unknown> = {}): string | undefined {
   const parsed = parseWorkflowConfig(raw);
   const trackersRaw = parsed.trackers ?? {};
   const selectorRecord = parseTrackerRecord(parsed.tracker ?? {}, "tracker");

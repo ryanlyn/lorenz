@@ -9,7 +9,7 @@ import { SqliteClaimStoreBackend } from "@lorenz/orchestrator/sqlite";
 import { TursoClaimStoreBackend } from "@lorenz/orchestrator/turso";
 import type { WorkflowDefinition } from "@lorenz/domain";
 
-export const CLAIM_STORE_BACKENDS = ["memory", "sqlite", "turso"] as const;
+const CLAIM_STORE_BACKENDS = ["memory", "sqlite", "turso"] as const;
 export type ClaimStoreBackendName = (typeof CLAIM_STORE_BACKENDS)[number];
 
 export interface ClaimStoreCliOptions {

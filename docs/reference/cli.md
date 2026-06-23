@@ -259,10 +259,10 @@ See [worker-driver.md](../extensions/worker-driver.md) and [out-of-tree.md](../e
 
 `worker.worker_pool.slots_per_machine` (legacy key `max_in_flight`) defaults to `1`. The default always passes the gate, keeping the single-tenant path byte-identical. Setting it above `1` triggers `assertSlotsPerMachineGate`, which throws unless both conditions hold:
 
-1. The coordinator advertises `capabilities.perRunEndpoint === true` (each run slot owns its own MCP endpoint).
+1. The coordinator advertises `capabilities.perRunClaimEnforcement === true` so the shared MCP gateway resolves each request's per-run scoped claim, re-checks owner liveness, and fences by generation.
 2. `worker.worker_pool.co_residence` is explicitly opted in.
 
-The gate is a post-construction check, separate from `worker.worker_pool.enabled`, because the per-run-endpoint capability exists only once the coordinator is built. The same rule is enforced on reload via the shared `checkSlotsPerMachineGate` predicate. See [security.md](../security.md) for the blast-radius rationale.
+The gate is a post-construction check, separate from `worker.worker_pool.enabled`, because the per-run-claim enforcement capability exists only once the coordinator is built. The same rule is enforced on reload via the shared `checkSlotsPerMachineGate` predicate. See [security.md](../security.md) for the blast-radius rationale.
 
 ## See also
 - [cli.md](../cli.md) - the tutorial these commands back

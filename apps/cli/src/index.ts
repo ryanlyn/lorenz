@@ -74,24 +74,6 @@ export type {
 } from "./leadershipStore.js";
 /** @beta */
 export { daemonStatusPayload, type DaemonStatusPayload } from "./daemonStatus.js";
-export {
-  buildClaimStoreHandle,
-  defaultClaimStorePath,
-  parseClaimStoreBackend,
-  type ClaimStoreBackendName,
-  type ClaimStoreCliOptions,
-  type ClaimStoreHandle,
-} from "./claimStore.js";
-export {
-  createDaemonRefreshCommand,
-  createDaemonStatusCommand,
-  createDaemonStopCommand,
-  daemonControlOptionsFromCommanderOptions,
-  runDaemonRefreshCommand,
-  runDaemonStatusCommand,
-  runDaemonStopCommand,
-  type DaemonControlCommandOptions,
-} from "./daemonControl.js";
 export { Orchestrator } from "@lorenz/orchestrator";
 export type { RunResult } from "@lorenz/agent-runner";
 export { LorenzRuntime, RUNTIME_EVENT_TYPES } from "@lorenz/runtime";
