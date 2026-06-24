@@ -161,6 +161,14 @@ test("observability HTTP API exposes daemon status and stop control", async () =
     });
     assert.equal(requestStop.mock.calls.length, 0);
 
+    const wrongToken = await postJson(
+      server.url("/api/v1/stop"),
+      401,
+      `${server.controlToken}-nope`,
+    );
+    assert.equal(wrongToken.error.code, "unauthorized");
+    assert.equal(requestStop.mock.calls.length, 0);
+
     const stop = await postJson(server.url("/api/v1/stop"), 202, server.controlToken);
     assert.equal(stop.stopping, true);
     assert.equal(requestStop.mock.calls.length, 1);

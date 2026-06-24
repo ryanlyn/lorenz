@@ -384,6 +384,24 @@ test("persistent claim store skips checkpoints for live-only session notificatio
   });
   assert.equal(backend.saved.length, 2);
   assert.equal(backend.saved.at(-1)?.operation, "apply_update");
+
+  // A workspacePath carries durable state, so it must NOT take the skip-checkpoint fast path.
+  orchestrator.applyUpdate(issue.id, 0, {
+    type: "session_notification",
+    message: { sessionUpdate: "thinking" } as never,
+    workspacePath: "/tmp/lorenz/MT-PERSIST-STREAM",
+  });
+  assert.equal(backend.saved.length, 3);
+  assert.equal(backend.saved.at(-1)?.operation, "apply_update");
+
+  // rateLimits likewise must be persisted rather than skipped.
+  orchestrator.applyUpdate(issue.id, 0, {
+    type: "session_notification",
+    message: { sessionUpdate: "thinking" } as never,
+    rateLimits: { remaining: 3 },
+  });
+  assert.equal(backend.saved.length, 4);
+  assert.equal(backend.saved.at(-1)?.operation, "apply_update");
 });
 
 test("shared persistent claim store applies live-only session notifications without reload", () => {

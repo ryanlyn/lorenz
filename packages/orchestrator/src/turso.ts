@@ -113,7 +113,11 @@ export class TursoClaimStoreBackend implements AsyncClaimStoreBackend {
         await this.db.exec("COMMIT");
         return result;
       } catch (error) {
-        await this.db.exec("ROLLBACK");
+        try {
+          await this.db.exec("ROLLBACK");
+        } catch {
+          // Keep the original failure visible; a rollback error must not mask it.
+        }
         throw error;
       }
     } finally {

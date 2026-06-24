@@ -390,6 +390,9 @@ async function tryAcquireMutationLock(mutationPath: string, token: string): Prom
 }
 
 async function releaseMutationLock(mutationPath: string, token: string): Promise<boolean> {
+  // Only ever remove an entry that still carries our token: check first, then unlink. Stale
+  // takeover (a foreign token) is serialized by the recovery lock in removeStaleMutationLock so
+  // two contenders cannot both reach this unlink for the same stale entry.
   const record = await readMutationLock(mutationPath);
   if (record?.token !== token) return false;
   await fs.rm(mutationPath, { force: true });
@@ -400,7 +403,23 @@ async function removeStaleMutationLock(mutationPath: string, now = new Date()): 
   const record = await readMutationLock(mutationPath);
   if (!record) return removeMalformedMutationLockIfStale(mutationPath, now);
   if (!mutationLockRecordIsStale(record, now)) return false;
-  return releaseMutationLock(mutationPath, record.token);
+  // Serialize stale takeover through the recovery lock - the same guard the malformed path
+  // uses - so two contenders cannot both observe one stale entry and race their unlink against
+  // a fresh acquirer's O_EXCL create (which would let two processes hold the mutation lock and
+  // split-brain daemon leadership). Re-read under the lock before removing: the entry may have
+  // been cleared (ENOENT) or legitimately reacquired (no longer stale) while we waited.
+  //
+  // Residual: a holder that keeps the mutation lock past MUTATION_LOCK_STALE_MS (a hung or
+  // suspended process) can still race its own unlink against this recovery. That window is
+  // irreducible for an O_EXCL lockfile and would need an OS advisory lock (flock/fcntl) to
+  // close; mutation operations are short file writes, so exceeding the stale window is itself
+  // the crash/hang signal this recovery exists to handle.
+  return withMutationRecoveryLock(mutationPath, async () => {
+    const current = await readMutationLock(mutationPath);
+    if (!current) return true;
+    if (!mutationLockRecordIsStale(current, now)) return false;
+    return releaseMutationLock(mutationPath, current.token);
+  });
 }
 
 async function removeMalformedMutationLockIfStale(

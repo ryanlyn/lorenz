@@ -469,6 +469,13 @@ test("daemon lock recovers a stale mutation guard", async () => {
     assert.equal(result.status, "acquired");
     const record = await readDaemonLock(lockPath);
     assert.equal(record?.ownerId, "owner-a");
+    // Stale takeover runs under the recovery lock; once recovery completes, neither the stale
+    // mutation guard nor the recovery guard may linger.
+    const leftover = await fs.readdir(path.dirname(lockPath));
+    assert.equal(
+      leftover.some((name) => name.endsWith(".mutation") || name.endsWith(".recovery")),
+      false,
+    );
   } finally {
     await rm(root, { recursive: true, force: true });
   }

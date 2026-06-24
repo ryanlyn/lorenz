@@ -127,7 +127,11 @@ export class SqliteClaimStoreBackend implements ClaimStoreBackend {
       this.commitStmt.run();
       return result;
     } catch (error) {
-      this.rollbackStmt.run();
+      try {
+        this.rollbackStmt.run();
+      } catch {
+        // Keep the original failure visible; a rollback error must not mask it.
+      }
       throw error;
     } finally {
       this.transactionDepth -= 1;

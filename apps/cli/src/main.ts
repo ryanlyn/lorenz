@@ -423,14 +423,19 @@ export async function runDaemon(options: CliOptions): Promise<number> {
       // can't slip past them and kill the process mid-shutdown.
       try {
         try {
-          instance?.unmount();
-          // start() returns once stop() flips the runtime to stopped; drain paid
-          // cloud workers before tearing down the server so they are destroyed on exit.
-          await runtime?.drainWorkerPool();
-          await server?.stop();
-          issueStore?.close();
-          await claimStoreHandle?.close();
-          claimStoreHandle = null;
+          try {
+            instance?.unmount();
+            // start() returns once stop() flips the runtime to stopped; drain paid
+            // cloud workers before tearing down the server so they are destroyed on exit.
+            await runtime?.drainWorkerPool();
+            await server?.stop();
+          } finally {
+            // Always release local resources even if worker/server teardown threw, so the
+            // claim-store db handle and issue store are never leaked on a failed shutdown.
+            issueStore?.close();
+            await claimStoreHandle?.close();
+            claimStoreHandle = null;
+          }
         } finally {
           if (daemonHeartbeat) {
             clearInterval(daemonHeartbeat);
