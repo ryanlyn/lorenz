@@ -1,6 +1,6 @@
 import { Command } from "commander";
 import { parseNonNegativeInteger, parseRequiredValue } from "@lorenz/cli-kit";
-import { loadWorkflow } from "@lorenz/workflow";
+import { loadWorkflow, workflowFilePath } from "@lorenz/workflow";
 
 import { daemonLockPath, readDaemonLock, type DaemonLockRecord } from "./daemonLock.js";
 import { daemonStatusPayload } from "./daemonStatus.js";
@@ -31,6 +31,8 @@ interface DaemonControlResult {
   statusCode: number;
   output: string;
 }
+
+type LoadedWorkflow = Awaited<ReturnType<typeof loadWorkflow>>;
 
 export function createDaemonStatusCommand(name = "status"): Command {
   return createDaemonControlCommand(name, "Show the active daemon owner and endpoint.");
@@ -98,12 +100,14 @@ export async function runDaemonStopCommand(
 
 async function resolveDaemonBaseUrl(options: DaemonControlCommandOptions): Promise<string> {
   if (options.url) return normalizeHttpBaseUrl(options.url);
-  const workflow = await loadWorkflow(options.workflowPath ?? undefined);
-  if (options.port !== null && options.port > 0) return workflowHttpBaseUrl(workflow, options.port);
-  const { record } = await resolveDaemonRecordForWorkflow(workflow);
+  const record = await readDaemonRecordForOptions(options);
+  if (options.port !== null && options.port > 0) {
+    return workflowHttpBaseUrl(await loadDaemonWorkflow(options), options.port);
+  }
   if (record?.endpoint.kind === "http" && usableHttpEndpoint(record.endpoint.address)) {
     return trimTrailingSlash(record.endpoint.address);
   }
+  const workflow = await loadDaemonWorkflow(options);
   const port = workflow.settings.server.port;
   if (typeof port === "number" && port > 0) return workflowHttpBaseUrl(workflow, port);
   throw new Error("No daemon control endpoint found. Pass --url or --port.");
@@ -120,8 +124,9 @@ async function resolveDaemonControl(options: DaemonControlCommandOptions): Promi
       options.controlToken,
     );
   }
-  const { workflow, record } = await resolveDaemonRecord(options);
+  const record = await readDaemonRecordForOptions(options);
   if (options.port !== null && options.port > 0) {
+    const workflow = await loadDaemonWorkflow(options);
     return controlTarget(workflowHttpBaseUrl(workflow, options.port), record, options.controlToken);
   }
   if (record?.endpoint.kind === "http" && usableHttpEndpoint(record.endpoint.address)) {
@@ -130,6 +135,7 @@ async function resolveDaemonControl(options: DaemonControlCommandOptions): Promi
   if (record) {
     throw new Error("Daemon is running without an HTTP control endpoint. Pass --url or --port.");
   }
+  const workflow = await loadDaemonWorkflow(options);
   const port = workflow.settings.server.port;
   if (typeof port === "number" && port > 0) {
     return controlTarget(workflowHttpBaseUrl(workflow, port), record, options.controlToken);
@@ -157,7 +163,7 @@ async function readOptionalDaemonControlRecord(
   options: DaemonControlCommandOptions,
 ): Promise<DaemonLockRecord | null> {
   try {
-    return (await resolveDaemonRecord(options)).record;
+    return await readDaemonRecordForOptions(options);
   } catch {
     return null;
   }
@@ -183,21 +189,34 @@ function sameDaemonBaseUrl(left: string, right: string): boolean {
 }
 
 async function resolveDaemonRecord(options: DaemonControlCommandOptions): Promise<{
-  workflow: Awaited<ReturnType<typeof loadWorkflow>>;
+  workflow: LoadedWorkflow | null;
   record: DaemonLockRecord | null;
 }> {
-  const workflow = await loadWorkflow(options.workflowPath ?? undefined);
-  return resolveDaemonRecordForWorkflow(workflow);
+  const record = await readDaemonRecordForOptions(options);
+  if (record) return { workflow: null, record };
+  const workflow = await loadDaemonWorkflow(options);
+  return { workflow, record: await readDaemonRecordForWorkflow(workflow) };
 }
 
-async function resolveDaemonRecordForWorkflow(
-  workflow: Awaited<ReturnType<typeof loadWorkflow>>,
-): Promise<{
-  workflow: Awaited<ReturnType<typeof loadWorkflow>>;
-  record: DaemonLockRecord | null;
-}> {
+async function readDaemonRecordForWorkflow(
+  workflow: LoadedWorkflow,
+): Promise<DaemonLockRecord | null> {
   const lockPath = daemonLockPath(workflow.path);
-  return { workflow, record: await readDaemonLock(lockPath) };
+  return readDaemonLock(lockPath);
+}
+
+async function readDaemonRecordForOptions(
+  options: DaemonControlCommandOptions,
+): Promise<DaemonLockRecord | null> {
+  return readDaemonLock(daemonLockPath(daemonControlWorkflowPath(options)));
+}
+
+function daemonControlWorkflowPath(options: DaemonControlCommandOptions): string {
+  return options.workflowPath ?? workflowFilePath();
+}
+
+async function loadDaemonWorkflow(options: DaemonControlCommandOptions): Promise<LoadedWorkflow> {
+  return loadWorkflow(options.workflowPath ?? undefined);
 }
 
 async function fetchDaemonPayload(

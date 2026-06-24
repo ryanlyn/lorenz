@@ -168,6 +168,94 @@ test("daemon control --url works without a workflow lock", async () => {
   assert.equal(fetchSpy.mock.calls.length, 2);
 });
 
+test("daemon control reads the lock before parsing a broken workflow", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "lorenz-daemon-control-broken-workflow-"));
+  try {
+    const workflowPath = path.join(root, "WORKFLOW.md");
+    await writeFile(
+      workflowPath,
+      [
+        "---",
+        "name: daemon-control-broken-workflow",
+        "tracker:",
+        "  kind: memory",
+        "workspace:",
+        `  root: ${JSON.stringify(root)}`,
+        "---",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    const lockPath = daemonLockPath(workflowPath);
+    await mkdir(path.dirname(lockPath), { recursive: true });
+    await writeFile(
+      lockPath,
+      JSON.stringify({
+        version: 1,
+        ownerId: "owner-a",
+        pid: 101,
+        hostname: "host-a",
+        startedAt: "2026-01-01T00:00:00.000Z",
+        workflowPath,
+        workspaceRoot: root,
+        endpoint: { kind: "http", address: "http://127.0.0.1:48080/" },
+        controlToken: "control-token",
+        heartbeatAt: "2026-01-01T00:00:00.000Z",
+      }),
+      "utf8",
+    );
+    await writeFile(workflowPath, "---\nname: [\n---\n", "utf8");
+
+    const fetchSpy = vi.fn(async (url: string, init?: RequestInit) => {
+      const headers = init?.headers as Record<string, string> | undefined;
+      if (url === "http://127.0.0.1:48080/api/v1/daemon") {
+        assert.equal(headers?.authorization, undefined);
+        return new Response(JSON.stringify({ owner_id: "owner-live" }), {
+          status: 200,
+          headers: { "content-type": "application/json; charset=utf-8" },
+        });
+      }
+      assert.match(url, /^http:\/\/127\.0\.0\.1:48080\/api\/v1\/(?:refresh|stop)$/);
+      assert.equal(headers?.authorization, "Bearer control-token");
+      return new Response(JSON.stringify({ ok: true }), {
+        status: 202,
+        headers: { "content-type": "application/json; charset=utf-8" },
+      });
+    });
+    vi.stubGlobal("fetch", fetchSpy);
+
+    const status = await runDaemonStatusCommand({
+      workflowPath,
+      url: null,
+      port: null,
+      controlToken: null,
+      json: true,
+    });
+    const refresh = await runDaemonRefreshCommand({
+      workflowPath,
+      url: null,
+      port: null,
+      controlToken: null,
+      json: true,
+    });
+    const stop = await runDaemonStopCommand({
+      workflowPath,
+      url: null,
+      port: null,
+      controlToken: null,
+      json: true,
+    });
+
+    assert.equal(status.statusCode, 0);
+    assert.match(status.output, /owner-live/);
+    assert.equal(refresh.statusCode, 0);
+    assert.equal(stop.statusCode, 0);
+    assert.equal(fetchSpy.mock.calls.length, 3);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("daemon control does not fall back to workflow port when the lock has no HTTP endpoint", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "lorenz-daemon-control-none-"));
   try {
