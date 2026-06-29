@@ -24,18 +24,21 @@ const flags = defineFlags({
   "diagnostics.log_flag_resolution": flag.bool({
     default: false,
     description: "Write the resolved flag set to stderr at startup.",
+    envName: "LORENZ_FLAG_DIAGNOSTICS__LOG_FLAG_RESOLUTION",
   }),
   "diagnostics.detail": flag.enum({
     values: ["summary", "full"],
     default: "summary",
     description:
       "Startup flag-dump detail: summary lists non-default flags, full lists every flag and feature.",
+    envName: "LORENZ_FLAG_DIAGNOSTICS__DETAIL",
   }),
   "diagnostics.sample_limit": flag.int({
     default: 20,
     refine: (n) => n >= 0,
     refineMessage: "must be a non-negative integer",
     description: "Maximum flags to print in the startup dump (0 = no limit).",
+    envName: "LORENZ_FLAG_DIAGNOSTICS__SAMPLE_LIMIT",
   }),
 });
 
@@ -44,6 +47,7 @@ const features = defineFeatures(flags, {
     default: false,
     description: "Dump the full resolved flag set to stderr at startup.",
     preset: { "diagnostics.log_flag_resolution": true, "diagnostics.detail": "full" },
+    envName: "LORENZ_FEATURE_VERBOSE_DIAGNOSTICS",
   }),
 });
 

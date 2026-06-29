@@ -20,7 +20,11 @@ export interface FlagDef<Schema extends z.ZodType = z.ZodType> {
   readonly deprecation?: FlagDeprecation | undefined;
   /** enum only: the allowed values, surfaced in error/help text. */
   readonly values?: readonly string[] | undefined;
-  /** Optional explicit env var name (including the `LORENZ_FLAG_`/`LORENZ_FEATURE_` prefix). */
+  /**
+   * Explicit, arbitrary env var name this flag reads from. Optional: a flag with no `envName` is
+   * config/CLI-only and is never read from the environment. There is no key-derived default and no
+   * reserved prefix - the name is whatever the author writes.
+   */
   readonly envName?: string | undefined;
 }
 
@@ -30,6 +34,11 @@ export interface FeatureDef<Preset extends Record<string, unknown> = Record<stri
   readonly description: string;
   readonly preset: Preset;
   readonly deprecation?: FlagDeprecation | undefined;
+  /**
+   * Explicit, arbitrary env var name this feature reads from. Optional: a feature with no `envName`
+   * is config/CLI-only and is never read from the environment. There is no name-derived default and
+   * no reserved prefix.
+   */
   readonly envName?: string | undefined;
 }
 

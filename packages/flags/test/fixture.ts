@@ -1,10 +1,16 @@
 import { defineFeatures, defineFlags, feature, flag, type FlagManifest } from "@lorenz/flags";
 
 // Shared manifest exercising every flag kind, a dotted key, presets, a preset conflict pair, and
-// flag/feature deprecations. Used across the package's resolve/parsing/seam tests.
+// flag/feature deprecations. Used across the package's resolve/parsing/seam tests. The entries the
+// env tests drive declare an explicit `envName`; the rest are config/CLI-only (no env binding),
+// which exercises the "envName is optional" path.
 
 export const flags = defineFlags({
-  timeout_ms: flag.int({ default: 30000, description: "Request timeout in milliseconds." }),
+  timeout_ms: flag.int({
+    default: 30000,
+    description: "Request timeout in milliseconds.",
+    envName: "LORENZ_FLAG_TIMEOUT_MS",
+  }),
   retries: flag.int({
     default: 3,
     refine: (n) => n >= 0,
@@ -14,8 +20,16 @@ export const flags = defineFlags({
   ratio: flag.float({ default: 1.5, description: "A scaling ratio." }),
   log_level: flag.enum({ values: ["info", "debug"], default: "info", description: "Log level." }),
   label: flag.string({ default: "default", description: "An arbitrary label." }),
-  verbose: flag.bool({ default: false, description: "Verbose output." }),
-  "pool.size": flag.int({ default: 4, description: "Worker pool size." }),
+  verbose: flag.bool({
+    default: false,
+    description: "Verbose output.",
+    envName: "LORENZ_FLAG_VERBOSE",
+  }),
+  "pool.size": flag.int({
+    default: 4,
+    description: "Worker pool size.",
+    envName: "LORENZ_FLAG_POOL__SIZE",
+  }),
   legacy_timeout: flag.int({
     default: 30000,
     description: "Deprecated request timeout.",
@@ -38,6 +52,7 @@ export const features = defineFeatures(flags, {
     default: false,
     description: "Verbose debug logging.",
     preset: { log_level: "debug", verbose: true },
+    envName: "LORENZ_FEATURE_CHATTY",
   }),
   legacy: feature({
     default: false,

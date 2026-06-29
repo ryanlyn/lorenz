@@ -2,7 +2,7 @@ import { test } from "vitest";
 import { assert } from "@lorenz/test-utils";
 
 import { resetFlagDeprecationWarnings } from "../src/deprecations.js";
-import { buildEnvLookup } from "../src/env.js";
+import { buildEnvLookup, flagInputsFromEnv } from "../src/env.js";
 import { flagInputsFromCli, flagInputsFromFile } from "../src/layers.js";
 import { defineFlags, flag } from "../src/manifest.js";
 import { resolveFlags } from "../src/resolve.js";
@@ -72,12 +72,37 @@ test("a non-map flags section is a structural issue", () => {
   assert.match(layer.issues?.[0]?.message ?? "", /must be a map/);
 });
 
-test("buildEnvLookup throws on a manifest-level env-name collision", () => {
+test("buildEnvLookup throws when two entries declare the same envName", () => {
   const flags = defineFlags({
-    x: flag.bool({ default: false, description: "x." }),
-    y: flag.bool({ default: false, description: "y.", envName: "LORENZ_FLAG_X" }),
+    x: flag.bool({ default: false, description: "x.", envName: "LORENZ_FLAG_SHARED" }),
+    y: flag.bool({ default: false, description: "y.", envName: "LORENZ_FLAG_SHARED" }),
   });
   assert.throws(() => buildEnvLookup({ flags, features: {} }), /maps to both/);
+});
+
+test("buildEnvLookup omits entries without an explicit envName", () => {
+  const flags = defineFlags({
+    bound: flag.bool({ default: false, description: "bound.", envName: "ARBITRARY_NAME" }),
+    unbound: flag.bool({ default: false, description: "config/CLI only." }),
+  });
+  const lookup = buildEnvLookup({ flags, features: {} });
+  assert.deepEqual([...lookup.keys()], ["ARBITRARY_NAME"]);
+});
+
+test("flagInputsFromEnv reads only declared names and ignores everything else", () => {
+  const flags = defineFlags({
+    bound: flag.int({ default: 1, description: "bound.", envName: "ARBITRARY_NAME" }),
+    unbound: flag.int({ default: 1, description: "config/CLI only." }),
+  });
+  const layer = flagInputsFromEnv(
+    { flags, features: {} },
+    // The declared name is read; an undeclared/prefix-shaped var is silently ignored (no issue).
+    { ARBITRARY_NAME: "7", LORENZ_FLAG_UNBOUND: "9", LORENZ_FLAG_NOPE: "1" },
+  );
+  assert.equal(layer.flags.length, 1);
+  assert.equal(layer.flags[0]?.key, "bound");
+  assert.equal(layer.flags[0]?.rawValue, "7");
+  assert.equal(layer.issues?.length ?? 0, 0);
 });
 
 test("an explicitly-set deprecated flag warns once per process", () => {
