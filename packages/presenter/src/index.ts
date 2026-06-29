@@ -7,110 +7,33 @@ import type {
 import { humanizeAgentMessage } from "@lorenz/humanize";
 import { durationMs, type UsageTotals } from "@lorenz/domain";
 
+import {
+  daemonPayloadSchema,
+  issuePayloadSchema,
+  opsStatePayloadSchema,
+  runsResultPayloadSchema,
+  type ClaimStorePayload,
+  type DaemonPayload,
+  type IssuePayload,
+  type OpsStatePayload,
+  type RunPayload,
+  type RunsResultPayload,
+  type UsageTotalsPayload,
+  type TokensPayload,
+} from "./schemas.js";
+
+// Re-export every payload schema and its derived type so consumers (the dashboard, the CLI client)
+// import the same names from `@lorenz/presenter`.
+export * from "./schemas.js";
+
 export interface PresenterParams {
   [key: string]: string | boolean | number | undefined;
 }
 
-export interface TokensPayload {
-  input_tokens: number;
-  output_tokens: number;
-  total_tokens: number;
-}
-
-export interface UsageTotalsPayload extends TokensPayload {
-  seconds_running: number;
-}
-
-export interface RunningEntryPayload {
-  issue_id: string;
-  issue_identifier: string;
-  issue_url: string | null;
-  state: string;
-  slot_index: number;
-  ensemble_size: number;
-  worker_host: string | null;
-  workspace_path: string | null;
-  session_id: string | null;
-  turn_count: number;
-  agent_kind: string;
-  executor_pid: string | null;
-  usage_totals: UsageTotalsPayload;
-  last_event: string | null;
-  last_message: string | null;
-  started_at: string;
-  last_event_at: string | null;
-  tokens: TokensPayload;
-}
-
-export interface RetryEntryPayload {
-  issue_id: string;
-  issue_identifier: string;
-  issue_url: string | null;
-  attempt: number;
-  due_at: string;
-  error: string | null;
-  worker_host: string | null;
-  workspace_path: string | null;
-}
-
-export interface BlockedEntryPayload {
-  issue_id: string;
-  issue_identifier: string;
-  issue_url: string | null;
-  state: string;
-  reason: string;
-  label: string;
-  worker_host: string | null;
-}
-
-export interface ClaimStorePayload {
-  kind: string;
-  owner_id: string;
-  capabilities: {
-    crash_recovery: boolean;
-    shared_across_processes: boolean;
-    retry_durability: boolean;
-  };
-  hydrated_at: string;
-  transactions_applied: number;
-  last_operation: string | null;
-  last_checkpoint_at: string | null;
-}
-
-export interface DaemonPayload {
-  owner_id: string;
-  pid: number;
-  hostname: string;
-  started_at: string;
-  workflow_path: string;
-  workspace_root: string;
-  lock_path: string;
-  endpoint: { kind: "http" | "socket" | "none"; address: string };
-  heartbeat_at: string;
-  heartbeat_age_ms: number | null;
-  stale: boolean;
-  leadership_store_kind: string;
-}
-
-export interface OpsStatePayload {
-  generated_at: string;
-  counts: { running: number; retrying: number; blocked: number };
-  blocked_by_reason: Record<string, number>;
-  running: RunningEntryPayload[];
-  retrying: RetryEntryPayload[];
-  blocked: BlockedEntryPayload[];
-  usage_totals: UsageTotalsPayload;
-  rate_limits: unknown;
-  claim_store: ClaimStorePayload | null;
-  daemon: DaemonPayload | null;
-}
-
-type RunsPayloadResult =
-  | { status: "ok"; payload: Record<string, unknown> }
-  | { status: "run_not_found" };
+type RunsPayloadResult = { status: "ok"; payload: RunsResultPayload } | { status: "run_not_found" };
 
 export function statePayload(snapshot: RuntimeSnapshot, generatedAt = nowIso()): OpsStatePayload {
-  return {
+  return opsStatePayloadSchema.parse({
     generated_at: generatedAt,
     counts: {
       running: snapshot.running.length,
@@ -134,12 +57,12 @@ export function statePayload(snapshot: RuntimeSnapshot, generatedAt = nowIso()):
     rate_limits: snapshot.rateLimits,
     claim_store: claimStorePayload(snapshot.claimStore),
     daemon: daemonPayload(snapshot.daemon),
-  };
+  });
 }
 
 export function daemonPayload(snapshot: RuntimeDaemonStatus | undefined): DaemonPayload | null {
   if (!snapshot) return null;
-  return {
+  return daemonPayloadSchema.parse({
     owner_id: snapshot.ownerId,
     pid: snapshot.pid,
     hostname: snapshot.hostname,
@@ -152,7 +75,7 @@ export function daemonPayload(snapshot: RuntimeDaemonStatus | undefined): Daemon
     heartbeat_age_ms: snapshot.heartbeatAgeMs,
     stale: snapshot.stale,
     leadership_store_kind: snapshot.leadershipStoreKind,
-  };
+  });
 }
 
 function claimStorePayload(snapshot: RuntimeSnapshot["claimStore"]): ClaimStorePayload | null {
@@ -175,7 +98,7 @@ function claimStorePayload(snapshot: RuntimeSnapshot["claimStore"]): ClaimStoreP
 export function issuePayload(
   snapshot: RuntimeSnapshot,
   issueIdentifier: string,
-): { status: "ok"; payload: Record<string, unknown> } | { status: "issue_not_found" } {
+): { status: "ok"; payload: IssuePayload } | { status: "issue_not_found" } {
   const running = snapshot.running.find((entry) => entry.issueIdentifier === issueIdentifier);
   const retry = snapshot.retrying.find((entry) => entry.issueIdentifier === issueIdentifier);
   if (!running && !retry) return { status: "issue_not_found" };
@@ -183,7 +106,7 @@ export function issuePayload(
 
   return {
     status: "ok",
-    payload: {
+    payload: issuePayloadSchema.parse({
       issue_identifier: issueIdentifier,
       issue_id: running?.issueId ?? retry?.issueId ?? null,
       status: running ? "running" : "retrying",
@@ -217,7 +140,7 @@ export function issuePayload(
         : [],
       last_error: retry?.error ?? null,
       tracked: {},
-    },
+    }),
   };
 }
 
@@ -243,17 +166,15 @@ export function runsPayload(
   );
 
   if (truthyParam(params.cost)) {
-    return {
-      status: "ok",
-      payload: { generated_at: generatedAt, view: "cost", summary: costSummaryPayload(runs) },
-    };
+    return runsResult({
+      generated_at: generatedAt,
+      view: "cost",
+      summary: costSummaryPayload(runs),
+    });
   }
 
   if (truthyParam(params.retries)) {
-    return {
-      status: "ok",
-      payload: { generated_at: generatedAt, view: "retries", issues: retriesPayload(runs) },
-    };
+    return runsResult({ generated_at: generatedAt, view: "retries", issues: retriesPayload(runs) });
   }
 
   const requestedId = stringParam(params.id);
@@ -261,20 +182,21 @@ export function runsPayload(
     if (requestedId === "") return runsListPayload(generatedAt, runs, params);
     const run = runs.find((entry) => entry.id === requestedId);
     if (!run) return { status: "run_not_found" };
-    return {
-      status: "ok",
-      payload: {
-        generated_at: generatedAt,
-        view: "run",
-        run,
-        related_runs: runs
-          .filter((entry) => entry.id !== run.id && entry.issue_id === run.issue_id)
-          .slice(0, 10),
-      },
-    };
+    return runsResult({
+      generated_at: generatedAt,
+      view: "run",
+      run,
+      related_runs: runs
+        .filter((entry) => entry.id !== run.id && entry.issue_id === run.issue_id)
+        .slice(0, 10),
+    });
   }
 
   return runsListPayload(generatedAt, runs, params);
+}
+
+function runsResult(payload: unknown): RunsPayloadResult {
+  return { status: "ok", payload: runsResultPayloadSchema.parse(payload) };
 }
 
 function runsListPayload(
@@ -282,49 +204,12 @@ function runsListPayload(
   runs: RunPayload[],
   params: PresenterParams,
 ): RunsPayloadResult {
-  return {
-    status: "ok",
-    payload: {
-      generated_at: generatedAt,
-      view: "runs",
-      summary: runsSummaryPayload(runs),
-      runs: runs.slice(0, limitParam(params.limit)),
-    },
-  };
-}
-
-interface RunPayload {
-  id: string;
-  issue_id: string;
-  issue_identifier: string;
-  issue_title: string | null;
-  state: string | null;
-  slot_index: number;
-  ensemble_size: number;
-  agent_kind: string;
-  outcome: string;
-  retry_attempt: number;
-  worker_host: string | null;
-  workspace_path: string | null;
-  session_id: string | null;
-  executor_pid: string | null;
-  usage_totals: ReturnType<typeof usagePayload>;
-  turn_count: number;
-  failure_reason: string | null;
-  last_event: string | null;
-  last_message: string | null;
-  last_event_at: string | null;
-  started_at: string | null;
-  ended_at: string | null;
-  duration_ms: number | null;
-  cost: { estimated_cost_usd: number | null };
-  tokens: ReturnType<typeof tokenPayload>;
-  log_hints: {
-    lorenz_log_file: string | null;
-    workspace_path: string | null;
-    session_id: string | null;
-    issue_identifier: string;
-  };
+  return runsResult({
+    generated_at: generatedAt,
+    view: "runs",
+    summary: runsSummaryPayload(runs),
+    runs: runs.slice(0, limitParam(params.limit)),
+  });
 }
 
 function runningRunPayload(entry: RuntimeRunningEntry, logFile: string | null): RunPayload {
@@ -406,7 +291,7 @@ function historyRunPayload(entry: RuntimeRunHistoryEntry, logFile: string | null
   };
 }
 
-function blockedEntryPayload(entry: RuntimeSnapshot["blocked"][number]): BlockedEntryPayload {
+function blockedEntryPayload(entry: RuntimeSnapshot["blocked"][number]) {
   return {
     issue_id: entry.issueId,
     issue_identifier: entry.identifier,
@@ -418,7 +303,7 @@ function blockedEntryPayload(entry: RuntimeSnapshot["blocked"][number]): Blocked
   };
 }
 
-function runningEntryPayload(entry: RuntimeRunningEntry): RunningEntryPayload {
+function runningEntryPayload(entry: RuntimeRunningEntry) {
   return {
     issue_id: entry.issueId,
     issue_identifier: entry.issueIdentifier,
@@ -441,7 +326,7 @@ function runningEntryPayload(entry: RuntimeRunningEntry): RunningEntryPayload {
   };
 }
 
-function runningIssuePayload(entry: RuntimeRunningEntry): Record<string, unknown> {
+function runningIssuePayload(entry: RuntimeRunningEntry) {
   return {
     slot_index: entry.slotIndex,
     ensemble_size: entry.ensembleSize,
@@ -474,7 +359,7 @@ function filterRuns(runs: RunPayload[], params: PresenterParams): RunPayload[] {
   return filtered;
 }
 
-function runsSummaryPayload(runs: RunPayload[]): Record<string, number> {
+function runsSummaryPayload(runs: RunPayload[]) {
   return {
     total: runs.length,
     running: runs.filter((run) => run.outcome === "running").length,
@@ -485,7 +370,7 @@ function runsSummaryPayload(runs: RunPayload[]): Record<string, number> {
   };
 }
 
-function costSummaryPayload(runs: RunPayload[]): Record<string, unknown> {
+function costSummaryPayload(runs: RunPayload[]) {
   const byAgent = new Map<string, RunPayload[]>();
   for (const run of runs)
     byAgent.set(run.agent_kind, [...(byAgent.get(run.agent_kind) ?? []), run]);
@@ -522,7 +407,7 @@ function costSummaryPayload(runs: RunPayload[]): Record<string, unknown> {
   };
 }
 
-function retriesPayload(runs: RunPayload[]): Array<Record<string, unknown>> {
+function retriesPayload(runs: RunPayload[]) {
   const grouped = new Map<string, RunPayload[]>();
   for (const run of runs)
     grouped.set(run.issue_identifier, [...(grouped.get(run.issue_identifier) ?? []), run]);
@@ -548,11 +433,11 @@ function retriesPayload(runs: RunPayload[]): Array<Record<string, unknown>> {
       };
     })
     .sort((left, right) => {
-      const attemptDelta = Number(right.attempts) - Number(left.attempts);
+      const attemptDelta = right.attempts - left.attempts;
       if (attemptDelta !== 0) return attemptDelta;
-      const tokenDelta = Number(right.total_tokens) - Number(left.total_tokens);
+      const tokenDelta = right.total_tokens - left.total_tokens;
       if (tokenDelta !== 0) return tokenDelta;
-      return String(left.issue_identifier).localeCompare(String(right.issue_identifier));
+      return left.issue_identifier.localeCompare(right.issue_identifier);
     });
 }
 
