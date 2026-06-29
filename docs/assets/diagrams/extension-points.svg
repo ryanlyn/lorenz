@@ -34,7 +34,7 @@
     <rect x="250" y="150" width="200" height="62" rx="10" fill="#DCFCE7" stroke="#22C55E" stroke-width="1.5"/>
     <text x="350" y="167" text-anchor="middle" class="ext" fill="#14532D">tool packs</text>
     <text x="350" y="185" text-anchor="middle" class="nsub mono" fill="#14532D">linear &#183; local &#183; slack &#183; jira</text>
-    <text x="350" y="201" text-anchor="middle" class="nsub" fill="#14532D">(jira's pack is "tracker")</text>
+    <text x="350" y="201" text-anchor="middle" class="nsub" fill="#14532D">(jira's pack is "jira")</text>
   </g>
   <!-- agent-sdk impls -->
   <g>

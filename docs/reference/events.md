@@ -124,7 +124,7 @@ The agent-facing tool surface is an HTTP MCP endpoint at `POST /mcp`, not an eve
 | `unauthorized` | 401 error code | Missing or wrong bearer token for the endpoint's auth scope. |
 | `-32700` / `-32601` / `-32602` | JSON-RPC error codes | Parse error / method not found / invalid params. |
 
-Tool failures cross the MCP seam as data, never as thrown errors. The seven `tracker_*` tools the Jira extension's pack mounts are `tracker_read_issue`, `tracker_query`, `tracker_update_status`, `tracker_list_comments`, `tracker_comment`, `tracker_update_comment`, and `tracker_create_issue`.
+Tool failures cross the MCP seam as data, never as thrown errors. The seven `jira_*` tools the Jira extension's pack mounts are `jira_read_issue`, `jira_query`, `jira_update_status`, `jira_list_comments`, `jira_comment`, `jira_update_comment`, and `jira_create_issue`.
 
 ## Worker-pool and driver events
 

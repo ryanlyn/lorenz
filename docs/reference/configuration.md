@@ -128,7 +128,7 @@ Direct Jira Cloud REST v3. See [trackers/jira.md](../trackers/jira.md). Requires
 | `api_key` | string (secret) | env `JIRA_API_KEY` | API token. Required. |
 | `project_keys` | string[] | (none) | Project keys for the candidate scope. |
 | `jql` | string | (none) | Provider-native scope, wrapped and AND-ed with the active-states and agent gating. |
-| `issue_type` | string | `Task` | Issue type used by `tracker_create_issue`. |
+| `issue_type` | string | `Task` | Issue type used by `jira_create_issue`. |
 | `assignee` | string | (none) | Unset or `me` resolves to `currentUser()`; otherwise verbatim. |
 
 ### `jira-mcp`

@@ -112,7 +112,7 @@ packs mount, in this order, de-duplicated by a `Set` (first-seen wins):
 *Pack selection: the dispatch tracker's default packs and the workflow `tools:` keys are unioned, then flattened into one tool namespace with a collision check.*
 
 The shipping trackers all declare `defaultToolPacks`, so the kind-name fallback rarely fires:
-`jira` and `jira-mcp` mount `['tracker']`, `linear` mounts `['linear']`, `local` mounts `['local']`,
+`jira` and `jira-mcp` mount `['jira']`, `linear` mounts `['linear']`, `local` mounts `['local']`,
 `slack` mounts `['slack']`.
 
 ### Flat namespace, collisions fail loud
@@ -126,7 +126,7 @@ tool name collision: <name> is declared by both the "<a>" and "<b>" packs
 
 A pack re-declaring its own tool name is allowed; the owner check is by `pack.name`. Name your
 tools with a pack-specific prefix (the shipped packs use `local_*`, `linear_*`, `slack_*`,
-`tracker_*`) so two enabled packs never clash.
+`jira_*`) so two enabled packs never clash.
 
 At call time, `executeMountedTool` routes a `tools/call` to the first pack whose `toolSpecs`
 contains the name. An unknown name returns `unsupportedToolFailure(name, ...)` listing every
@@ -189,8 +189,8 @@ The DSL is bounded so a hostile or runaway filter cannot exhaust the process:
 
 `parseSelect` only chooses fields; the calling tool decides the default projection when `select` is
 omitted. The `local` pack uses `["id", "title", "state", "stateType", "labels"]`. The jira
-extension's `tracker` pack defines `DEFAULT_SELECT` in `extensions/jira-tracker/src/tools.ts`, and
-its `tracker_query` uses `["id", "identifier", "title", "state", "stateType", "labels", "url"]`.
+extension's `jira` pack defines `DEFAULT_SELECT` in `extensions/jira-tracker/src/tools.ts`, and
+its `jira_query` uses `["id", "identifier", "title", "state", "stateType", "labels", "url"]`.
 
 ## A minimal pack
 
@@ -250,14 +250,14 @@ tools:
 `tools.echo is not supported by the "echo" pack` at startup. Add `validateOptions` once the pack
 takes configuration.
 
-For the seven `tracker_*` tools the jira extension's `tracker` pack ships
+For the seven `jira_*` tools the jira extension's `jira` pack ships
 (`extensions/jira-tracker/src/tools.ts`) and their argument shapes, see
 [reference/tracker-tools.md](../reference/tracker-tools.md).
 
 ## See also
 
 - [tracker-provider.md](tracker-provider.md) - the dispatch-backend contract a tool pack usually ships alongside
-- [reference/tracker-tools.md](../reference/tracker-tools.md) - the seven `tracker_*` tools the jira `tracker` pack ships and their inputs
+- [reference/tracker-tools.md](../reference/tracker-tools.md) - the seven `jira_*` tools the jira `jira` pack ships and their inputs
 - [extensions/index.md](index.md) - the four extension contracts and where they register
 - [reference/http-api.md](../reference/http-api.md) - the `POST /mcp` JSON-RPC endpoint that serves mounted tools
 - [agents/claude.md](../agents/claude.md) - how Claude sessions consume the mounted tool surface

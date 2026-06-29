@@ -28,8 +28,8 @@ test("register/get/names round-trip; duplicate names rejected; blank rejected", 
   const linear = pack("linear", ["linear_graphql"]);
   registry.register(linear);
   registry.register(linear);
-  registry.register(pack("tracker", ["tracker_query"]));
-  assert.deepEqual(registry.names(), ["linear", "tracker"]);
+  registry.register(pack("jira", ["jira_query"]));
+  assert.deepEqual(registry.names(), ["jira", "linear"]);
   assert.throws(
     () => registry.register(pack("linear", [])),
     /tool provider already registered for name: linear/,
@@ -43,34 +43,34 @@ test("require lists known packs, and explains registration when empty", () => {
     () => registry.require("linear"),
     /no tool packs registered - register tool packs at the composition root/,
   );
-  registry.register(pack("tracker", []));
+  registry.register(pack("jira", []));
   assert.throws(
     () => registry.require("linear"),
-    /unsupported tool pack: linear \(known tool packs: tracker\)/,
+    /unsupported tool pack: linear \(known tool packs: jira\)/,
   );
 });
 
 test("mountedToolSpecs flattens packs and fails loudly on tool-name collisions", () => {
   const specs = mountedToolSpecs(
-    [pack("tracker", ["tracker_query"]), pack("linear", ["linear_graphql"])],
+    [pack("jira", ["jira_query"]), pack("linear", ["linear_graphql"])],
     settings,
   );
   assert.deepEqual(
     specs.map((spec) => spec.name),
-    ["tracker_query", "linear_graphql"],
+    ["jira_query", "linear_graphql"],
   );
   assert.throws(
     () =>
       mountedToolSpecs(
-        [pack("tracker", ["tracker_query"]), pack("other", ["tracker_query"])],
+        [pack("jira", ["jira_query"]), pack("other", ["jira_query"])],
         settings,
       ),
-    /tool name collision: tracker_query is declared by both the "tracker" and "other" packs/,
+    /tool name collision: jira_query is declared by both the "jira" and "other" packs/,
   );
 });
 
 test("executeMountedTool routes to the declaring pack and reports unknown tools", async () => {
-  const packs = [pack("tracker", ["tracker_query"]), pack("linear", ["linear_graphql"])];
+  const packs = [pack("jira", ["jira_query"]), pack("linear", ["linear_graphql"])];
   const routed = await executeMountedTool(
     packs,
     "linear_graphql",

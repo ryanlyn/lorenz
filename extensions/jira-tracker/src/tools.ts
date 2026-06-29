@@ -15,41 +15,41 @@ import {
 import { JiraClient, JiraMcpClient } from "./client.js";
 
 /**
- * Pack name kept as `tracker` so the tool names (`tracker_*`) and the pack name stay coherent
- * and the config "tracker pack" vocabulary is preserved. Jira is the only tracker that owns
- * this pack; it is mounted exclusively for the `jira` / `jira-mcp` backends via
+ * Pack named `jira` so the pack name and its tool names (`jira_*`) stay coherent with the other
+ * trackers (pack `linear` owns `linear_*`, `local` owns `local_*`). Jira is the only tracker that
+ * owns this pack; it is mounted exclusively for the `jira` / `jira-mcp` backends via
  * {@link jiraTrackerProvider}'s `defaultToolPacks`.
  */
-export const JIRA_TOOL_PACK_NAME = "tracker";
+export const JIRA_TOOL_PACK_NAME = "jira";
 
-const TRACKER_TOOL_NAMES = [
-  "tracker_read_issue",
-  "tracker_query",
-  "tracker_update_status",
-  "tracker_list_comments",
-  "tracker_comment",
-  "tracker_update_comment",
-  "tracker_create_issue",
+const JIRA_TOOL_NAMES = [
+  "jira_read_issue",
+  "jira_query",
+  "jira_update_status",
+  "jira_list_comments",
+  "jira_comment",
+  "jira_update_comment",
+  "jira_create_issue",
 ] as const;
 
 const DEFAULT_SELECT = ["id", "identifier", "title", "state", "stateType", "labels", "url"];
 
 /**
- * The `tracker_*` tool pack owned by the Jira extension. The tools operate over the same Jira
+ * The `jira_*` tool pack owned by the Jira extension. The tools operate over the same Jira
  * REST / MCP transport that feeds dispatch, picking the client that matches the configured
  * tracker kind. Mounted only when a `jira` / `jira-mcp` tracker drives dispatch.
  */
 export const jiraToolProvider: ToolProvider = {
   name: JIRA_TOOL_PACK_NAME,
-  toolSpecs: () => trackerToolSpecs(),
+  toolSpecs: () => jiraToolSpecs(),
   executeTool: async (name, input, context) =>
     executeJiraTool(name, input, context.settings, context.fetchImpl),
 };
 
-export function trackerToolSpecs(): ToolSpec[] {
+export function jiraToolSpecs(): ToolSpec[] {
   return [
     {
-      name: "tracker_read_issue",
+      name: "jira_read_issue",
       description:
         "Read one issue from the configured tracker. Args: issueId (tracker id or key when supported).",
       inputSchema: {
@@ -60,7 +60,7 @@ export function trackerToolSpecs(): ToolSpec[] {
       },
     },
     {
-      name: "tracker_query",
+      name: "jira_query",
       description:
         "Query issues from the configured tracker. Args: states?, issueIds?, query? (native query string, for trackers with a query language), where?, select?, order_by?, limit?, offset?.",
       inputSchema: {
@@ -79,7 +79,7 @@ export function trackerToolSpecs(): ToolSpec[] {
       },
     },
     {
-      name: "tracker_update_status",
+      name: "jira_update_status",
       description:
         "Move an issue in the configured tracker to a new status. Args: issueId, status.",
       inputSchema: {
@@ -90,7 +90,7 @@ export function trackerToolSpecs(): ToolSpec[] {
       },
     },
     {
-      name: "tracker_list_comments",
+      name: "jira_list_comments",
       description: "List comments on an issue in the configured tracker. Args: issueId.",
       inputSchema: {
         type: "object",
@@ -100,7 +100,7 @@ export function trackerToolSpecs(): ToolSpec[] {
       },
     },
     {
-      name: "tracker_comment",
+      name: "jira_comment",
       description:
         "Add a comment to an issue in the configured tracker. Args: issueId, body. Returns the created comment when the provider exposes it.",
       inputSchema: {
@@ -111,7 +111,7 @@ export function trackerToolSpecs(): ToolSpec[] {
       },
     },
     {
-      name: "tracker_update_comment",
+      name: "jira_update_comment",
       description:
         "Update a comment on an issue in the configured tracker. Args: issueId, commentId, body.",
       inputSchema: {
@@ -126,7 +126,7 @@ export function trackerToolSpecs(): ToolSpec[] {
       },
     },
     {
-      name: "tracker_create_issue",
+      name: "jira_create_issue",
       description:
         "Create an issue in the configured tracker. Args: title, body?, status?, assignee?.",
       inputSchema: {
@@ -157,35 +157,35 @@ export async function executeJiraTool(
   settings: Settings,
   fetchImpl: typeof fetch,
 ): Promise<ToolResult> {
-  if (!isOneOf(name, TRACKER_TOOL_NAMES)) return unsupportedToolFailure(name, TRACKER_TOOL_NAMES);
+  if (!isOneOf(name, JIRA_TOOL_NAMES)) return unsupportedToolFailure(name, JIRA_TOOL_NAMES);
   const args = isRecord(input) ? input : {};
   const client = clientFor(settings, fetchImpl);
   try {
     switch (name) {
-      case "tracker_read_issue":
+      case "jira_read_issue":
         return toolSuccess({ issue: await client.readIssue(requireStr(args, "issueId")) });
-      case "tracker_query": {
+      case "jira_query": {
         const select = parseSelect(args.select) ?? DEFAULT_SELECT;
         const issues = await queryJiraIssues(client, settings, args);
         return toolSuccess(projectIssues(issues, select, args));
       }
-      case "tracker_update_status":
+      case "jira_update_status":
         return toolSuccess({
           issue: await client.updateIssueStatus(
             requireStr(args, "issueId"),
             requireStr(args, "status"),
           ),
         });
-      case "tracker_list_comments":
+      case "jira_list_comments":
         return toolSuccess({ comments: await client.listComments(requireStr(args, "issueId")) });
-      case "tracker_comment": {
+      case "jira_comment": {
         const comment = await client.addComment(
           requireStr(args, "issueId"),
           requireStr(args, "body"),
         );
         return toolSuccess(comment ? { ok: true, comment } : { ok: true });
       }
-      case "tracker_update_comment":
+      case "jira_update_comment":
         return toolSuccess({
           comment: await client.updateComment(
             requireStr(args, "issueId"),
@@ -193,7 +193,7 @@ export async function executeJiraTool(
             requireStr(args, "body"),
           ),
         });
-      case "tracker_create_issue":
+      case "jira_create_issue":
         return toolSuccess({
           issue: await client.createIssue({
             title: requireStr(args, "title"),

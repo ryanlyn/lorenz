@@ -11,5 +11,5 @@ export {
   JIRA_TOOL_PACK_NAME,
   executeJiraTool,
   jiraToolProvider,
-  trackerToolSpecs,
+  jiraToolSpecs,
 } from "./tools.js";

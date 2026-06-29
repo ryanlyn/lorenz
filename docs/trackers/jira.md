@@ -3,12 +3,12 @@
 Drive Lorenz dispatch from Jira Cloud issues, either by calling the Jira REST API directly or by
 proxying through an external MCP server. This page is for operators wiring Jira into a
 `WORKFLOW.md` and a tracker config. It covers both tracker kinds (`jira` and `jira-mcp`), every
-config key, the gating rule that decides which issues run, and the agent-facing `tracker_*` tools.
+config key, the gating rule that decides which issues run, and the agent-facing `jira_*` tools.
 
 ## Two kinds, one behavior
 
 The Jira extension registers two tracker kinds. They share option parsing, the candidate-issue
-query, normalization, and the `tracker_*` tool surface. They differ only in transport.
+query, normalization, and the `jira_*` tool surface. They differ only in transport.
 
 | Kind | Transport | Auth | Required config |
 | --- | --- | --- | --- |
@@ -149,23 +149,23 @@ in the `jira-mcp` example are an override you supply to match a specific server.
 a JSON-RPC 2.0 `tools/call` request, unwraps `result.content[].text`, and parses it as JSON when
 possible.
 
-## The `tracker_*` tools
+## The `jira_*` tools
 
-Both kinds expose the same `tracker_*` tool pack, owned by the Jira extension and defined in
-`extensions/jira-tracker/src/tools.ts`. The pack registers under the name `"tracker"` and the
-`jira` and `jira-mcp` providers mount it via `defaultToolPacks(): ["tracker"]`. The seven tools
+Both kinds expose the same `jira_*` tool pack, owned by the Jira extension and defined in
+`extensions/jira-tracker/src/tools.ts`. The pack registers under the name `"jira"` and the
+`jira` and `jira-mcp` providers mount it via `defaultToolPacks(): ["jira"]`. The seven tools
 implement directly over `JiraClient` or `JiraMcpClient`, selected by `settings.tracker.kind`. See
 the [trackers overview](index.md) for the read surface and
 [reference/tracker-tools](../reference/tracker-tools.md) for the seven tools and their contract.
 
-`tracker_query` routes by its arguments: `issueIds` fetches by id, a `query` or `jql` string runs a
+`jira_query` routes by its arguments: `issueIds` fetches by id, a `query` or `jql` string runs a
 native search, `states` fetches by status, and otherwise it returns the candidate set scoped by
 `active_states`.
 
 ### Workpad comments
 
 Agents read and write a workpad as a tracker comment, the same flow on both kinds.
-`tracker_list_comments`, `tracker_comment`, and `tracker_update_comment` map to
+`jira_list_comments`, `jira_comment`, and `jira_update_comment` map to
 `listComments` / `addComment` / `updateComment`. On `jira` these are REST comment calls with bodies
 encoded as Atlassian Document Format (one paragraph per line); on `jira-mcp` they are the configured
 comment tools. Comments normalize to `{id, body, author, createdAt, updatedAt, url}`, with `author`
@@ -186,7 +186,7 @@ If no transition matches the target status, the call throws
 
 ## Creating issues
 
-`tracker_create_issue` uses `project_keys[0]` as the target project and `issue_type` (default
+`jira_create_issue` uses `project_keys[0]` as the target project and `issue_type` (default
 `Task`) as the type. On `jira`, a created issue defaults to the current user as assignee unless an
 explicit or configured non-`me` assignee is set; status is applied via a transition after creation.
 On `jira-mcp`, assignee arguments are forwarded only when a concrete non-`me` assignee resolves, and
@@ -205,6 +205,6 @@ surface to the agent as tool data, never thrown - see
 
 - [Trackers overview](index.md) - the tracker contract and the other backends.
 - [Dispatch](../dispatch.md) - how candidate issues become runs.
-- [tracker_* tools reference](../reference/tracker-tools.md) - the exact tool input and output shapes.
+- [jira_* tools reference](../reference/tracker-tools.md) - the exact tool input and output shapes.
 - [Configuration reference](../reference/configuration.md) - every config key in one table.
 - [Agent skills](../agents/skills.md) - how Lorenz overlays reusable agent playbooks into a workspace.

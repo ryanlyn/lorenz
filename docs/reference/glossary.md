@@ -139,8 +139,8 @@ for issues in a given tracker state, for example a per-state `agent.max_concurre
 ## T
 
 **Tool pack** - a named bundle of agent-callable tools (a `ToolProvider`) registered under a `name`,
-mounted into the flat MCP namespace, and optionally shipping skills. The Jira extension's `tracker`
-pack serves the seven `tracker_*` tools; provider-specific packs (`linear`, `local`, `slack`) ship in
+mounted into the flat MCP namespace, and optionally shipping skills. The Jira extension's `jira`
+pack serves the seven `jira_*` tools; provider-specific packs (`linear`, `local`, `slack`) ship in
 the tracker extensions. See [../extensions/tool-pack.md](../extensions/tool-pack.md) and
 [tracker-tools.md](tracker-tools.md).
 

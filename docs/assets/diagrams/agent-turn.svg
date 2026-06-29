@@ -37,7 +37,7 @@
   <g>
     <rect x="754" y="48" width="142" height="40" rx="10" fill="#DCFCE7" stroke="#22C55E" stroke-width="1.5"/>
     <text x="825" y="68" text-anchor="middle" font-size="13" font-weight="600" fill="#14532D">Tracker / MCP</text>
-    <text x="825" y="81" text-anchor="middle" font-size="11" fill="#475569" font-family="ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace">tracker_*</text>
+    <text x="825" y="81" text-anchor="middle" font-size="11" fill="#475569" font-family="ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace">jira_*</text>
   </g>
   <!-- ===== Lifelines ===== -->
   <line x1="103" y1="88" x2="103" y2="498" stroke="#CBD5E1" stroke-width="1.25" stroke-dasharray="3 4"/>
@@ -85,11 +85,11 @@
   <!-- reset annotation pointing at timer band -->
   <line x1="362" y1="246" x2="349" y2="246" stroke="#8B5CF6" stroke-width="1.25" fill="none" marker-end="url(#arrow-agent-turn)"/>
   <text x="368" y="250" font-size="10" font-style="italic" fill="#6D28D9">resets stallTimer</text>
-  <!-- Step 4: Bridge -> Tracker MCP tracker_* tool call -->
+  <!-- Step 4: Bridge -> Tracker MCP jira_* tool call -->
   <line x1="599" y1="282" x2="821" y2="282" stroke="#475569" stroke-width="1.5" fill="none" marker-end="url(#arrow-agent-turn)"/>
   <g>
     <rect x="624" y="270" width="172" height="17" rx="4" fill="#FFFFFF" stroke="#E2E8F0"/>
-    <text x="710" y="279" text-anchor="middle" font-size="11" font-weight="500" fill="#0F172A" font-family="ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace">tracker_* tool call</text>
+    <text x="710" y="279" text-anchor="middle" font-size="11" font-weight="500" fill="#0F172A" font-family="ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace">jira_* tool call</text>
   </g>
   <!-- Tracker -> Bridge result -->
   <line x1="821" y1="312" x2="599" y2="312" stroke="#475569" stroke-width="1.5" fill="none" stroke-dasharray="5 3" marker-end="url(#arrow-agent-turn)"/>

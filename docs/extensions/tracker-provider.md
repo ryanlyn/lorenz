@@ -120,11 +120,11 @@ share its `tracker.kind`, which the MCP mount falls back to.
 
 Each built-in tracker owns its own pack:
 
-- Jira owns the pack named the literal string `"tracker"`, defined in
-  `extensions/jira-tracker/src/tools.ts`. It serves `tracker_read_issue`, `tracker_query`,
-  `tracker_update_status`, `tracker_list_comments`, `tracker_comment`, `tracker_update_comment`, and
-  `tracker_create_issue` over `JiraClient` or `JiraMcpClient`, selected by `settings.tracker.kind`. The
-  `jira` and `jira-mcp` providers both declare `defaultToolPacks() => ["tracker"]`.
+- Jira owns the pack named the literal string `"jira"`, defined in
+  `extensions/jira-tracker/src/tools.ts`. It serves `jira_read_issue`, `jira_query`,
+  `jira_update_status`, `jira_list_comments`, `jira_comment`, `jira_update_comment`, and
+  `jira_create_issue` over `JiraClient` or `JiraMcpClient`, selected by `settings.tracker.kind`. The
+  `jira` and `jira-mcp` providers both declare `defaultToolPacks() => ["jira"]`.
 - Linear declares `defaultToolPacks() => ["linear"]`, mounting the `linear` pack that exposes the
   single `linear_graphql` tool and bundles the `lorenz-linear` skill.
 - The `local` tracker mounts its `local` pack: `local_update_status`, `local_comment`,
@@ -133,10 +133,10 @@ Each built-in tracker owns its own pack:
   `slack_read_thread`, `slack_query`, `slack_user_info`, and `slack_channel_context`.
 - The `memory` tracker declares no `defaultToolPacks`, so it advertises no tools.
 
-The select/filter projection for `tracker_query` lives alongside the pack in
+The select/filter projection for `jira_query` lives alongside the pack in
 `extensions/jira-tracker/src/tools.ts`, where the seven tool-name definitions and
 `DEFAULT_SELECT = [id, identifier, title, state, stateType, labels, url]` are declared. Tool packs are
-their own recipe; see [tool-pack.md](tool-pack.md). The `tracker_*` surface is detailed in
+their own recipe; see [tool-pack.md](tool-pack.md). The `jira_*` surface is detailed in
 [reference/tracker-tools.md](../reference/tracker-tools.md).
 
 ## The recipe
@@ -184,6 +184,6 @@ After this, `tracker.kind: <name>` in a workflow selects your backend. No core p
 - [trackers/linear.md](../trackers/linear.md) - the most complete worked example of this contract.
 - [trackers/jira.md](../trackers/jira.md) - a second backend with REST and MCP-proxied variants.
 - [extensions/tool-pack.md](tool-pack.md) - the separate axis for agent-facing tools your tracker can ship.
-- [reference/tracker-tools.md](../reference/tracker-tools.md) - the seven `tracker_*` tools the Jira `tracker` pack serves.
+- [reference/tracker-tools.md](../reference/tracker-tools.md) - the seven `jira_*` tools the Jira `jira` pack serves.
 - [architecture.md](../architecture.md) - how the four extension points and the composition root fit together.
 - [reference/configuration.md](../reference/configuration.md) - every `tracker.*` config key the registry selects on.

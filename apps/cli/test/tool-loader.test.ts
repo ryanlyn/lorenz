@@ -75,7 +75,7 @@ function privateRegistry(extraNames: string[] = []): ToolRegistry {
       throw new Error(`stub pack ${name} must not execute a tool`);
     },
   });
-  registry.register(stub("tracker"));
+  registry.register(stub("jira"));
   for (const name of extraNames) registry.register(stub(name));
   return registry;
 }
@@ -213,7 +213,7 @@ test("an unknown bare specifier fails loud listing the known names", async () =>
 
   await assert.rejects(
     () => ensureToolProviderLoaded("definitely-not-a-real-tool-pkg", registry, {}),
-    /tool_provider_unavailable: definitely-not-a-real-tool-pkg.*known kinds: .*tracker/,
+    /tool_provider_unavailable: definitely-not-a-real-tool-pkg.*known kinds: .*jira/,
   );
 });
 
@@ -285,7 +285,7 @@ test("reload: re-encountering an already-loaded specifier emits tool_provider_mo
 
   // A registered NAME hit (the built-in path) stays silent: no pinned event for a
   // pack this loader never imported.
-  await ensureToolProviderLoaded("tracker", registry, { baseDir: dir, logEvent });
+  await ensureToolProviderLoaded("jira", registry, { baseDir: dir, logEvent });
   assert.equal(
     events.filter((event) => event.event === "tool_provider_module_pinned").length,
     1,

@@ -18,7 +18,7 @@ import {
 } from "@lorenz/mcp";
 
 // Private registries so the mount is exercised without mutating process defaults. These tests
-// drive `tracker_*` tool NAMES through the per-run claim/allowlist middleware, which authorizes
+// drive `jira_*` tool NAMES through the per-run claim/allowlist middleware, which authorizes
 // by name before the tool is resolved, so the outcome is independent of which pack is mounted.
 const trackers = new TrackerRegistry();
 const tools = new ToolRegistry();
@@ -83,9 +83,9 @@ async function toolsCall(app: Hono, token: string, name: string): Promise<number
 
 test("Token B: a resolved, live, allowed claim authorizes the request", async () => {
   const { app } = mountWith({ isRunLive: () => true });
-  const token = issueRunMcpToken(baseClaim({ allowedTools: ["tracker_query"] }));
+  const token = issueRunMcpToken(baseClaim({ allowedTools: ["jira_query"] }));
   try {
-    assert.equal(await toolsCall(app, token, "tracker_query"), 200);
+    assert.equal(await toolsCall(app, token, "jira_query"), 200);
   } finally {
     revokeRunClaim(token);
   }
@@ -93,7 +93,7 @@ test("Token B: a resolved, live, allowed claim authorizes the request", async ()
 
 test("Token B: a non-tool request (tools/list) is gated by the claim, not the allowlist", async () => {
   const { app } = mountWith({ isRunLive: () => true });
-  const token = issueRunMcpToken(baseClaim({ allowedTools: ["tracker_query"] }));
+  const token = issueRunMcpToken(baseClaim({ allowedTools: ["jira_query"] }));
   try {
     assert.equal(await toolsListStatus(app, token), 200);
   } finally {
@@ -103,9 +103,9 @@ test("Token B: a non-tool request (tools/list) is gated by the claim, not the al
 
 test("Token B: a disallowed tool/call is denied 401", async () => {
   const { app } = mountWith({ isRunLive: () => true });
-  const token = issueRunMcpToken(baseClaim({ allowedTools: ["tracker_query"] }));
+  const token = issueRunMcpToken(baseClaim({ allowedTools: ["jira_query"] }));
   try {
-    assert.equal(await toolsCall(app, token, "tracker_update_status"), 401);
+    assert.equal(await toolsCall(app, token, "jira_update_status"), 401);
   } finally {
     revokeRunClaim(token);
   }
@@ -113,9 +113,9 @@ test("Token B: a disallowed tool/call is denied 401", async () => {
 
 test("Token B: an expired claim is denied 401 even for a live, allowed tool", async () => {
   const { app } = mountWith({ isRunLive: () => true });
-  const token = issueRunMcpToken(baseClaim({ expiresAt: 1_000, allowedTools: ["tracker_query"] }));
+  const token = issueRunMcpToken(baseClaim({ expiresAt: 1_000, allowedTools: ["jira_query"] }));
   try {
-    assert.equal(await toolsCall(app, token, "tracker_query"), 401);
+    assert.equal(await toolsCall(app, token, "jira_query"), 401);
   } finally {
     revokeRunClaim(token);
   }

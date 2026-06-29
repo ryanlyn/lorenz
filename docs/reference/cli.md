@@ -54,7 +54,7 @@ When the observability server binds, its actual port is written back into `serve
 
 Startup runs in order: register backends, load and validate the workflow, build the coordinator, gate co-residence, construct the runtime, start the server and TUI, then poll.
 
-`registerBuiltinBackends()` runs first and wires every built-in tracker (`linear`, `local`, `memory`, `jira`, `slack`), the tracker tool pack (tool kind `tracker`), the ACP agent executor, and the built-in worker drivers (`fake`, `static-ssh`, `docker`) into the process-wide registries. It is idempotent.
+`registerBuiltinBackends()` runs first and wires every built-in tracker (`linear`, `local`, `memory`, `jira`, `slack`), the jira tool pack (tool kind `jira`), the ACP agent executor, and the built-in worker drivers (`fake`, `static-ssh`, `docker`) into the process-wide registries. It is idempotent.
 
 The coordinator anchors at `baseDir = dirname(workflow.path)`, the directory of the workflow file. `assertSlotsPerMachineGate` then runs as a post-construction check (see [Co-residence gate](#co-residence-gate)). `validateDispatchConfig` runs at startup and again as the runtime's per-reload `validateDispatch` hook, so a bad edit to `WORKFLOW.md` is caught on the next poll rather than at dispatch time.
 

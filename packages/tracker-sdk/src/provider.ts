@@ -63,7 +63,7 @@ export interface TrackerProvider {
   createClient(settings: Settings, context: TrackerContext): RuntimeTrackerClient;
   /**
    * Tool packs mounted by default when this tracker drives dispatch. This is how a tracker
-   * extension exposes its agent-facing tools (e.g. Jira's `tracker_*` pack, Linear's
+   * extension exposes its agent-facing tools (e.g. Jira's `jira_*` pack, Linear's
    * `linear_graphql` pack); return the names of the registered {@link ToolProvider} packs the
    * backend owns. Omit when the backend ships no agent tools.
    */

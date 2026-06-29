@@ -5,7 +5,7 @@ import { jiraMcpTrackerProvider, jiraTrackerProvider } from "./provider.js";
 import { jiraToolProvider } from "./tools.js";
 
 /**
- * Register this extension's tracker providers (`jira` and `jira-mcp`) and the `tracker_*`
+ * Register this extension's tracker providers (`jira` and `jira-mcp`) and the `jira_*`
  * tool pack they mount by default. Idempotent; called by the composition root (or a test),
  * defaulting to the process-wide registries.
  */

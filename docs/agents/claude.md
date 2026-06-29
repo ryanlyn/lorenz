@@ -128,8 +128,8 @@ A Claude session reaches Lorenz tracker tools through the built-in `/mcp` tool e
 separate sidecar. The Codex bridge receives the same tools as an ACP `McpServer` config; Claude
 calls the HTTP `POST /mcp` JSON-RPC endpoint directly. Either way the tool surface is identical: the
 dispatch tracker's own packs plus any pack named in the workflow `tools:` map. For a Jira dispatch
-that means the `tracker` pack (`tracker_read_issue`, `tracker_query`, `tracker_update_status`,
-`tracker_list_comments`, `tracker_comment`, `tracker_update_comment`, `tracker_create_issue`); other
+that means the `jira` pack (`jira_read_issue`, `jira_query`, `jira_update_status`,
+`jira_list_comments`, `jira_comment`, `jira_update_comment`, `jira_create_issue`); other
 trackers mount their own bespoke packs instead.
 
 The observability server hosts that `/mcp` endpoint, so it starts automatically for Claude workflows
@@ -172,5 +172,5 @@ This section is `.strict()`: it accepts only those keys. Prefer writing `agents.
 - [index.md](index.md) - the kind/executor model and shared agent record.
 - [acp-bridges.md](acp-bridges.md) - the `acp` executor, vendored bridges, and usage accounting.
 - [../observability.md](../observability.md) - the server that hosts the `/mcp` tool endpoint.
-- [../reference/tracker-tools.md](../reference/tracker-tools.md) - the `tracker_*` tools a Claude session can call.
+- [../reference/tracker-tools.md](../reference/tracker-tools.md) - the `jira_*` tools a Claude session can call.
 - [../reference/configuration.md](../reference/configuration.md) - every config key, default, and alias.

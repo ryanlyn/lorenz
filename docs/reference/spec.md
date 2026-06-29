@@ -73,7 +73,7 @@ and one Codex backend.
   [extensions/agent-executor](../extensions/agent-executor.md).
 - **`ToolProvider`** mounts a tool pack into agent sessions. A tracker exposes agent tools by
   implementing `defaultToolPacks(settings)`, which names the registered packs it owns. The Jira
-  extension owns the `tracker` pack of seven `tracker_*` tools. See
+  extension owns the `jira` pack of seven `jira_*` tools. See
   [extensions/tool-pack](../extensions/tool-pack.md) and
   [reference/tracker-tools](tracker-tools.md).
 - **`WorkerDriver`** / `WorkerDriverFactory` (from `@lorenz/worker-sdk`) back the worker pool,
@@ -437,9 +437,9 @@ worker's turns, and forwards normalized agent updates to the orchestrator. The s
 
 Tooling reaches the agent through MCP, not a Codex client-tool channel. The mounted set is driven by
 the dispatch tracker's `defaultToolPacks()` plus the workflow `tools:` map keys, de-duplicated and
-collision-checked. The Jira extension's `tracker` pack mounts seven tools: `tracker_read_issue`,
-`tracker_query`, `tracker_update_status`, `tracker_list_comments`, `tracker_comment`,
-`tracker_update_comment`, `tracker_create_issue`. This replaces the draft's single `linear_graphql`
+collision-checked. The Jira extension's `jira` pack mounts seven tools: `jira_read_issue`,
+`jira_query`, `jira_update_status`, `jira_list_comments`, `jira_comment`,
+`jira_update_comment`, `jira_create_issue`. This replaces the draft's single `linear_graphql`
 tool. Generated MCP config is workspace-local and
 carries only the Lorenz-issued bearer token for the local endpoint; raw tracker secrets are never
 written to disk. Remote workers reach the local MCP endpoint through an SSH tunnel or equivalent
@@ -470,7 +470,7 @@ and skips dispatch; on a refresh failure it keeps workers running; on a startup-
 logs and continues startup.
 
 Tracker writes are out of scope for the orchestrator: ticket mutations run through the agent's
-`tracker_*` tools. Built-in providers ship as `extensions/{linear,jira,local,slack,memory}-tracker`.
+`jira_*` tools. Built-in providers ship as `extensions/{linear,jira,local,slack,memory}-tracker`.
 See [trackers/index](../trackers/index.md), [trackers/linear](../trackers/linear.md),
 [trackers/jira](../trackers/jira.md), [trackers/local](../trackers/local.md), and
 [trackers/slack](../trackers/slack.md).
@@ -563,7 +563,7 @@ A conforming implementation ships tests across three profiles.
   the executor client, observability, and CLI lifecycle.
 - **Extension conformance** - required only for optional features an implementation ships: context
   ensembles, per-state `status_overrides`, the worker pool and SSH workers, the HTTP server, and the
-  `tracker_*` tool pack.
+  `jira_*` tool pack.
 - **Real integration profile** - environment-dependent smoke checks recommended before production,
   skippable when credentials or network are unavailable; a skipped check is reported skipped, not
   silently passed.

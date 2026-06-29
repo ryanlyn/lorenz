@@ -30,7 +30,7 @@ was verified against the parser or schema that applies it.
 - [events.md](events.md) - the named events the runtime records to a run's trace, including
   `workflow_reloaded`, `workflow_reload_failed`, `workflow_parse_error`, and
   `missing_workflow_file`. Each entry lists when it fires and what payload it carries.
-- [tracker-tools.md](tracker-tools.md) - the agent-facing tool catalog (for example `tracker_query`
+- [tracker-tools.md](tracker-tools.md) - the agent-facing tool catalog (for example `jira_query`
   and the tracker write tools), their input schemas, and which tracker capabilities each one
   requires.
 - [spec.md](spec.md) - the formal data shapes: the parsed `Settings` object, the `WorkflowDefinition`

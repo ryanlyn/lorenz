@@ -1,6 +1,6 @@
 # Agent tool catalog
 
-This page is the exhaustive reference for the tools an agent can call while working an issue: the Jira extension's `tracker_*` family, the read-only query DSL it shares, and the other provider-specific tool packs (`linear`, `local`, `slack`). It is written for integrators who need exact tool names, argument shapes, and the rules for which tracker supports which tool. Operators who want the conceptual picture should start with [how it works](../how-it-works.md); extension authors building a new pack should read [tool-pack extensions](../extensions/tool-pack.md).
+This page is the exhaustive reference for the tools an agent can call while working an issue: the Jira extension's `jira_*` family, the read-only query DSL it shares, and the other provider-specific tool packs (`linear`, `local`, `slack`). It is written for integrators who need exact tool names, argument shapes, and the rules for which tracker supports which tool. Operators who want the conceptual picture should start with [how it works](../how-it-works.md); extension authors building a new pack should read [tool-pack extensions](../extensions/tool-pack.md).
 
 Lorenz serves these tools over an HTTP MCP (Model Context Protocol) endpoint at `POST /mcp`. Every tool is self-documenting: a `tools/list` JSON-RPC call returns the live specs (name, description, JSON-Schema `inputSchema`) for exactly the tools mounted under the current workflow settings. The tables below mirror those specs, but the endpoint is the source of truth at runtime.
 
@@ -13,7 +13,7 @@ The set of tools an agent sees is computed from the workflow settings, not fixed
 
 Pack selection order (first-seen wins, de-duplicated through a Set):
 
-1. The dispatch tracker's `defaultToolPacks(settings)`. Linear returns `["linear"]`, local returns `["local"]`, slack returns `["slack"]`, and `jira` / `jira-mcp` return `["tracker"]`. When a tracker omits `defaultToolPacks`, the fallback mounts a pack whose name equals `tracker.kind` if one is registered. The `memory` tracker declares no `defaultToolPacks` and registers no pack of its own, so it ships no tools.
+1. The dispatch tracker's `defaultToolPacks(settings)`. Linear returns `["linear"]`, local returns `["local"]`, slack returns `["slack"]`, and `jira` / `jira-mcp` return `["jira"]`. When a tracker omits `defaultToolPacks`, the fallback mounts a pack whose name equals `tracker.kind` if one is registered. The `memory` tracker declares no `defaultToolPacks` and registers no pack of its own, so it ships no tools.
 2. Every key of the workflow `tools:` map (parsed into `settings.toolOptions`). Writing `tools: { linear: { api_key: "$LINEAR_API_KEY" } }` mounts the `linear` pack over any dispatch tracker.
 
 The namespace is flat. If two mounted packs declare the same tool name, the server throws `tool name collision: <name> is declared by both the "<a>" and "<b>" packs` at mount time. A pack re-declaring its own tool name is fine (ownership is by pack name).
@@ -33,33 +33,33 @@ Tool failures are returned as data, never thrown across the MCP seam. A tool ret
 
 A failed tool is still an HTTP 200 JSON-RPC result with `isError: true`, not a transport error. On success the payload is `result.result ?? {}`; on failure it is `result.result ?? { "error": { "message": <error string> } }`. A pack that throws is caught and returned as a failure. Calling a name no pack declares returns `Unsupported tool: "<name>".` with a `supportedTools` list.
 
-A tool can also report a failure as data. A `tracker_*` tool that calls the Jira backend and hits a transport or API error returns `success: false` with the error string. Missing required string arguments fail the same way, with `'<key>' is required`.
+A tool can also report a failure as data. A `jira_*` tool that calls the Jira backend and hits a transport or API error returns `success: false` with the error string. Missing required string arguments fail the same way, with `'<key>' is required`.
 
-## The `tracker_*` tools
+## The `jira_*` tools
 
-The Jira extension owns the `tracker` pack, which serves seven tools and is mounted for the `jira` and `jira-mcp` backends. The pack implements the tools directly over the Jira REST or MCP transport that also feeds dispatch, selecting the client that matches `settings.tracker.kind`. The pack and its tools live in `extensions/jira-tracker/src/tools.ts`.
+The Jira extension owns the `jira` pack, which serves seven tools and is mounted for the `jira` and `jira-mcp` backends. The pack implements the tools directly over the Jira REST or MCP transport that also feeds dispatch, selecting the client that matches `settings.tracker.kind`. The pack and its tools live in `extensions/jira-tracker/src/tools.ts`.
 
 | Tool | Required args | Optional args | Returns |
 | --- | --- | --- | --- |
-| `tracker_read_issue` | `issueId` | | `{ issue }` |
-| `tracker_query` | | `states`, `issueIds`, `query`, `where`, `select`, `order_by`, `limit`, `offset` | `{ rows, total, skipped? }` |
-| `tracker_update_status` | `issueId`, `status` | | `{ issue }` |
-| `tracker_list_comments` | `issueId` | | `{ comments }` |
-| `tracker_comment` | `issueId`, `body` | | `{ ok: true }` or `{ ok: true, comment }` |
-| `tracker_update_comment` | `issueId`, `commentId`, `body` | | `{ comment }` |
-| `tracker_create_issue` | `title` | `body`, `status`, `assignee` | `{ issue }` |
+| `jira_read_issue` | `issueId` | | `{ issue }` |
+| `jira_query` | | `states`, `issueIds`, `query`, `where`, `select`, `order_by`, `limit`, `offset` | `{ rows, total, skipped? }` |
+| `jira_update_status` | `issueId`, `status` | | `{ issue }` |
+| `jira_list_comments` | `issueId` | | `{ comments }` |
+| `jira_comment` | `issueId`, `body` | | `{ ok: true }` or `{ ok: true, comment }` |
+| `jira_update_comment` | `issueId`, `commentId`, `body` | | `{ comment }` |
+| `jira_create_issue` | `title` | `body`, `status`, `assignee` | `{ issue }` |
 
-`tracker_comment` returns `{ ok: true }` when the backend reports no comment body and `{ ok: true, comment }` when it returns the created comment.
+`jira_comment` returns `{ ok: true }` when the backend reports no comment body and `{ ok: true, comment }` when it returns the created comment.
 
 ### Tracker availability
 
-All seven `tracker_*` tools are available on the `jira` and `jira-mcp` backends, the only trackers that mount the `tracker` pack. The other trackers (`linear`, `local`, `slack`, `memory`) do not serve the `tracker_*` tools; Linear, local boards, and Slack each expose their own pack documented below, and `memory` ships no tools.
+All seven `jira_*` tools are available on the `jira` and `jira-mcp` backends, the only trackers that mount the `jira` pack. The other trackers (`linear`, `local`, `slack`, `memory`) do not serve the `jira_*` tools; Linear, local boards, and Slack each expose their own pack documented below, and `memory` ships no tools.
 
-`tracker_create_issue` assignee handling differs by Jira transport. Jira REST assigns to the configured owner; `jira-mcp` forwards a concrete assignee. The pack passes `assignee` straight through to the selected client.
+`jira_create_issue` assignee handling differs by Jira transport. Jira REST assigns to the configured owner; `jira-mcp` forwards a concrete assignee. The pack passes `assignee` straight through to the selected client.
 
 ## The read-only query DSL
 
-`tracker_query` (and the structured pack tools `local_query` and `slack_query`) accept a side-effect-free query envelope: a filter predicate tree, a field projection, an ordering, and paging. The DSL is total. It has no regex, no `eval`, and no JSONPath, and it runs in memory over already-parsed records, so a query can never mutate the backend.
+`jira_query` (and the structured pack tools `local_query` and `slack_query`) accept a side-effect-free query envelope: a filter predicate tree, a field projection, an ordering, and paging. The DSL is total. It has no regex, no `eval`, and no JSONPath, and it runs in memory over already-parsed records, so a query can never mutate the backend.
 
 ### Filter predicates
 
@@ -94,7 +94,7 @@ Evaluation rules:
 
 A query returns the page plus `total`, the pre-page count after filtering. `select` is honored only on the whole-issue projection path. When a tool implements native row projection (for example `local_query` and `slack_query`), it does its own projection and the envelope's `select` is applied by that tool's own default.
 
-DSL bounds: filter nesting is capped at depth `12`, a filter tree at `200` nodes, `limit` default `100` and maximum `1000`. For `tracker_query`, the default projection (`DEFAULT_SELECT`) when `select` is omitted is `id`, `identifier`, `title`, `state`, `stateType`, `labels`, `url`.
+DSL bounds: filter nesting is capped at depth `12`, a filter tree at `200` nodes, `limit` default `100` and maximum `1000`. For `jira_query`, the default projection (`DEFAULT_SELECT`) when `select` is omitted is `id`, `identifier`, `title`, `state`, `stateType`, `labels`, `url`.
 
 ## Provider packs
 
@@ -143,7 +143,7 @@ There is no `slack_create_issue`: only a human creating an @-mention starts a Sl
 
 ## Jira and the `jira-mcp` external tool map
 
-The Jira extension owns the `tracker` pack, so agents working a Jira issue use the `tracker_*` tools, and the extension also ships a `lorenz-jira` skill documenting raw Jira REST v3 patterns. The `jira-mcp` variant backs the same `tracker_*` tools against an external MCP server. Its outbound tool names default to the `jira_*` family and are overridable per operation under `trackers.jira-mcp.mcp.tools`:
+The Jira extension owns the `jira` pack, so agents working a Jira issue use the `jira_*` tools, and the extension also ships a `lorenz-jira` skill documenting raw Jira REST v3 patterns. The `jira-mcp` variant backs the same `jira_*` tools against an external MCP server. Its outbound tool names default to the `jira_*` family and are overridable per operation under `trackers.jira-mcp.mcp.tools`:
 
 | Operation | Default external tool |
 | --- | --- |

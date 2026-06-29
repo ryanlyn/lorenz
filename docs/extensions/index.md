@@ -88,7 +88,7 @@ export function registerBuiltinBackends(registries: BackendRegistries = {}): voi
 
 Your new backend follows the same pattern: one `register*` call here. That is the "one registration line" half of the thesis. The function is idempotent, so calling it more than once is safe.
 
-The Jira extension owns the `tracker` tool pack, registered here through `registerJiraTrackers({ trackers, tools })`. The pack (`extensions/jira-tracker/src/tools.ts`) advertises the seven tools `tracker_read_issue`, `tracker_query`, `tracker_update_status`, `tracker_list_comments`, `tracker_comment`, `tracker_update_comment`, and `tracker_create_issue`, implemented directly over `JiraClient` or `JiraMcpClient` selected by `settings.tracker.kind`. The `jira` and `jira-mcp` trackers mount it by returning `["tracker"]` from `defaultToolPacks()`.
+The Jira extension owns the `jira` tool pack, registered here through `registerJiraTrackers({ trackers, tools })`. The pack (`extensions/jira-tracker/src/tools.ts`) advertises the seven tools `jira_read_issue`, `jira_query`, `jira_update_status`, `jira_list_comments`, `jira_comment`, `jira_update_comment`, and `jira_create_issue`, implemented directly over `JiraClient` or `JiraMcpClient` selected by `settings.tracker.kind`. The `jira` and `jira-mcp` trackers mount it by returning `["jira"]` from `defaultToolPacks()`.
 
 ## The directory rule
 

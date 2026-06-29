@@ -130,9 +130,9 @@ advertises tools and runs them. The mounting endpoint unions the dispatch tracke
 `defaultToolPacks` and the workflow `tools:` keys into one flat namespace that fails loud on a name
 collision. If a tracker declares no `defaultToolPacks`, a registered pack whose name equals
 `tracker.kind` is mounted as a fallback. A tracker owns the tools it exposes: the Jira tracker ships
-the `tracker` pack with the seven `tracker_*` tools, while `linear`, `local`, and `slack` each ship
+the `jira` pack with the seven `jira_*` tools, while `linear`, `local`, and `slack` each ship
 their own bespoke pack. Contract: [extensions/tool-pack.md](extensions/tool-pack.md); the Jira
-`tracker_*` tools themselves: [reference/tracker-tools.md](reference/tracker-tools.md).
+`jira_*` tools themselves: [reference/tracker-tools.md](reference/tracker-tools.md).
 
 ### Agent executor
 
@@ -186,7 +186,7 @@ collapses to `undefined`), and `resolveEnvReference("$VAR", env)`. Their errors 
 
 `registerBuiltinBackends()` in `apps/cli/src/daemon.ts` is the single place backend identity is
 hardcoded. It registers the `linear`, `local`, `memory`, `jira`, and `slack` trackers and their tool
-packs (the `jira` pack owns the `tracker_*` tools, `linear` owns `linear_graphql`, `local` owns the
+packs (the `jira` pack owns the `jira_*` tools, `linear` owns `linear_graphql`, `local` owns the
 `local_*` tools, and `slack` owns the `slack_*` tools), the `acp` executor provider, and the `fake`,
 `static-ssh`, and `docker` worker drivers into the four default registries. It is idempotent, so
 calling it more than once is safe.

@@ -1,6 +1,6 @@
 <svg role="img" aria-labelledby="t-mcp-tool-mounting d-mcp-tool-mounting" viewBox="0 0 880 660" width="100%" style="max-width:880px;height:auto" xmlns="http://www.w3.org/2000/svg" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif">
   <title id="t-mcp-tool-mounting">MCP tool mounting and call flow</title>
-  <desc id="d-mcp-tool-mounting">The dispatch tracker's default tool packs (the jira tracker_* pack, or a linear / local / slack pack) and the workflow tools: map are de-duplicated and flattened into one namespace, then served over the POST /mcp JSON-RPC endpoint via executeMountedTool to the declaring pack's handler, whose ToolResult maps to JSON-RPC isError so failure is data, never thrown.</desc><rect x="0.75" y="0.75" width="878.50" height="658.50" rx="14" fill="#FFFFFF" stroke="#E2E8F0" stroke-width="1.5"/>
+  <desc id="d-mcp-tool-mounting">The dispatch tracker's default tool packs (the jira pack, or a linear / local / slack pack) and the workflow tools: map are de-duplicated and flattened into one namespace, then served over the POST /mcp JSON-RPC endpoint via executeMountedTool to the declaring pack's handler, whose ToolResult maps to JSON-RPC isError so failure is data, never thrown.</desc><rect x="0.75" y="0.75" width="878.50" height="658.50" rx="14" fill="#FFFFFF" stroke="#E2E8F0" stroke-width="1.5"/>
   <defs>
     <marker id="arrow-mcp-tool-mounting" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
       <path d="M0,0 L10,5 L0,10 z" fill="#475569"/>
@@ -15,12 +15,12 @@
   <text x="24" y="34" font-size="15" font-weight="600" fill="#0F172A">MCP tool mounting + call flow</text>
   <!-- Pack selection row label -->
   <text x="24" y="62" font-size="11" font-weight="600" fill="#475569">PACK SELECTION (first-seen order, de-duplicated)</text>
-  <!-- Source box 1: jira's tracker_* pack -->
+  <!-- Source box 1: jira's jira_* pack -->
   <g>
     <rect x="24" y="76" width="262" height="68" rx="10" fill="#EDE9FE" stroke="#8B5CF6" stroke-width="1.5"/>
-    <text x="155" y="100" text-anchor="middle" font-size="13" font-weight="600" fill="#4C1D95">jira tracker pack</text>
-    <text x="155" y="118" text-anchor="middle" font-size="12" fill="#4C1D95" font-family="ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace">"tracker"</text>
-    <text x="155" y="134" text-anchor="middle" font-size="11" fill="#475569" font-family="ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace">tracker_* tools</text>
+    <text x="155" y="100" text-anchor="middle" font-size="13" font-weight="600" fill="#4C1D95">jira pack</text>
+    <text x="155" y="118" text-anchor="middle" font-size="12" fill="#4C1D95" font-family="ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace">"jira"</text>
+    <text x="155" y="134" text-anchor="middle" font-size="11" fill="#475569" font-family="ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace">jira_* tools</text>
   </g>
   <!-- Source box 2: dispatch defaultToolPacks -->
   <g>

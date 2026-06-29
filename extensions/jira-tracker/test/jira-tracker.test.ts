@@ -621,10 +621,10 @@ test("Jira MCP client sends the configured assignee when creating issues", async
   });
 });
 
-test("tracker_read_issue routes a jira tracker to the REST client", async () => {
+test("jira_read_issue routes a jira tracker to the REST client", async () => {
   const calls: FetchCall[] = [];
   const result = await executeJiraTool(
-    "tracker_read_issue",
+    "jira_read_issue",
     { issueId: "ENG-1" },
     jiraSettings(),
     fetchSequence(calls, jsonResponse(jiraIssue())),
@@ -639,10 +639,10 @@ test("tracker_read_issue routes a jira tracker to the REST client", async () => 
   );
 });
 
-test("tracker_read_issue routes a jira-mcp tracker to the MCP client", async () => {
+test("jira_read_issue routes a jira-mcp tracker to the MCP client", async () => {
   const calls: FetchCall[] = [];
   const result = await executeJiraTool(
-    "tracker_read_issue",
+    "jira_read_issue",
     { issueId: "ENG-1" },
     jiraMcpSettings(),
     fetchSequence(
@@ -663,10 +663,10 @@ test("tracker_read_issue routes a jira-mcp tracker to the MCP client", async () 
   assert.equal((calls[0]?.body.params as { name: string }).name, "jira_get_issue");
 });
 
-test("tracker_query projects rows through select against the jira client", async () => {
+test("jira_query projects rows through select against the jira client", async () => {
   const calls: FetchCall[] = [];
   const result = await executeJiraTool(
-    "tracker_query",
+    "jira_query",
     { issueIds: ["ENG-1"], select: ["id", "identifier", "state"] },
     jiraSettings(),
     fetchSequence(calls, jsonResponse({ total: 1, issues: [jiraIssue()] })),
@@ -682,10 +682,10 @@ test("tracker_query projects rows through select against the jira client", async
   assert.equal(calls[0]?.url, "https://example.atlassian.net/rest/api/3/search/jql");
 });
 
-test("tracker_comment returns the created comment when the backend exposes it", async () => {
+test("jira_comment returns the created comment when the backend exposes it", async () => {
   const calls: FetchCall[] = [];
   const result = await executeJiraTool(
-    "tracker_comment",
+    "jira_comment",
     { issueId: "ENG-1", body: "progress note" },
     jiraSettings(),
     fetchSequence(calls, jsonResponse(jiraComment({ id: "c-1", body: "progress note" }))),
@@ -706,7 +706,7 @@ test("tracker_comment returns the created comment when the backend exposes it", 
 });
 
 test("tracker tools validate required args before touching the network", async () => {
-  const result = await executeJiraTool("tracker_read_issue", {}, jiraSettings(), () => {
+  const result = await executeJiraTool("jira_read_issue", {}, jiraSettings(), () => {
     throw new Error("should not fetch when args are invalid");
   });
 
@@ -715,16 +715,16 @@ test("tracker tools validate required args before touching the network", async (
 });
 
 test("an unknown tracker tool name fails listing the supported tools", async () => {
-  const result = await executeJiraTool("tracker_bogus", {}, jiraSettings(), fetch);
+  const result = await executeJiraTool("jira_bogus", {}, jiraSettings(), fetch);
 
   assert.equal(result.success, false);
-  assert.match(result.error ?? "", /Unsupported tool: "tracker_bogus"/);
+  assert.match(result.error ?? "", /Unsupported tool: "jira_bogus"/);
 });
 
 test("a failing jira request surfaces as a failed tool result, not a thrown error", async () => {
   const calls: FetchCall[] = [];
   const result = await executeJiraTool(
-    "tracker_read_issue",
+    "jira_read_issue",
     { issueId: "ENG-1" },
     jiraSettings(),
     fetchSequence(calls, jsonResponse({ errorMessages: ["boom"] }, 500)),

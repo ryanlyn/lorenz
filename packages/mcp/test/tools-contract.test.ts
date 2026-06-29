@@ -25,14 +25,14 @@ registerLocalTracker({ trackers, tools });
 registerMemoryTracker({ trackers });
 registerJiraTrackers({ trackers, tools });
 
-const TRACKER_TOOL_NAMES = [
-  "tracker_read_issue",
-  "tracker_query",
-  "tracker_update_status",
-  "tracker_list_comments",
-  "tracker_comment",
-  "tracker_update_comment",
-  "tracker_create_issue",
+const JIRA_TOOL_NAMES = [
+  "jira_read_issue",
+  "jira_query",
+  "jira_update_status",
+  "jira_list_comments",
+  "jira_comment",
+  "jira_update_comment",
+  "jira_create_issue",
 ];
 
 const LOCAL_TOOL_NAMES = [
@@ -71,18 +71,18 @@ function specNames(settings: Settings): string[] {
 }
 
 test("default mount advertises only the dispatch tracker's own pack", async () => {
-  // Linear and local own bespoke packs; only those mount (no provider-neutral tracker_* pack).
+  // Linear and local own bespoke packs; only those mount (no provider-neutral pack).
   assert.deepEqual(specNames(linearSettings()), ["linear_graphql"]);
   assert.deepEqual(specNames(await localSettings()), [...LOCAL_TOOL_NAMES]);
 
-  // Jira backends own the `tracker_*` pack and mount it via defaultToolPacks.
+  // Jira backends own the `jira_*` pack and mount it via defaultToolPacks.
   assert.deepEqual(
     specNames(settingsFor("jira", { base_url: "https://jira.example.com" })),
-    TRACKER_TOOL_NAMES,
+    JIRA_TOOL_NAMES,
   );
   assert.deepEqual(
     specNames(settingsFor("jira-mcp", { base_url: "https://jira.example.com" })),
-    TRACKER_TOOL_NAMES,
+    JIRA_TOOL_NAMES,
   );
 
   // Memory ships no pack, so nothing mounts.
@@ -123,10 +123,10 @@ test("unknown tool names fail listing every mounted tool", async () => {
   });
 });
 
-test("the jira pack advertises the tracker_* tools", () => {
+test("the jira pack advertises the jira_* tools", () => {
   assert.deepEqual(
     specNames(settingsFor("jira", { base_url: "https://jira.example.com" })),
-    TRACKER_TOOL_NAMES,
+    JIRA_TOOL_NAMES,
   );
 });
 

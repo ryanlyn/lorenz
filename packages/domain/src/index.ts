@@ -556,10 +556,9 @@ export interface Settings {
    */
   agents: Record<string, AgentConfig>;
   /**
-   * Per-pack options from the workflow's `tools:` map, keyed by pack name. Runtime always
-   * mounts the provider-neutral `tracker` pack, mounts the dispatch tracker's declared
-   * default packs, and mounts any additional packs named here. Each configured pack validates
-   * its own option bag.
+   * Per-pack options from the workflow's `tools:` map, keyed by pack name. Runtime mounts the
+   * dispatch tracker's declared default packs (for example Jira's `jira` pack) and any
+   * additional packs named here. Each configured pack validates its own option bag.
    */
   toolOptions?: Record<string, Record<string, unknown>> | undefined;
   observability: ObservabilitySettings;

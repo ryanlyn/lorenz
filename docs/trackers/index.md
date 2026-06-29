@@ -90,28 +90,28 @@ payload. A provider that cannot produce a well-formed issue drops it rather than
 Agents change issues through MCP tools, not through provider SDKs directly. Each tracker owns the
 tool packs it exposes and mounts them through `defaultToolPacks`.
 
-### The Jira `tracker_*` pack
+### The Jira `jira_*` pack
 
-The Jira extension owns the pack named exactly `tracker`, defined in
+The Jira extension owns the pack named exactly `jira`, defined in
 `extensions/jira-tracker/src/tools.ts` as a `ToolProvider`. The `jira` and `jira-mcp` providers
-mount it through their `defaultToolPacks(): ["tracker"]`, so it rides on top of Jira-driven dispatch.
+mount it through their `defaultToolPacks(): ["jira"]`, so it rides on top of Jira-driven dispatch.
 It serves seven tools:
 
 | Tool | What it does |
 | --- | --- |
-| `tracker_read_issue` | Read one issue by id. |
-| `tracker_query` | Filter, project, sort, and page issues with the read-only query DSL. |
-| `tracker_update_status` | Move an issue to a new status. |
-| `tracker_list_comments` | List an issue's comments. |
-| `tracker_comment` | Add a comment. |
-| `tracker_update_comment` | Edit an existing comment. |
-| `tracker_create_issue` | Create a new issue. |
+| `jira_read_issue` | Read one issue by id. |
+| `jira_query` | Filter, project, sort, and page issues with the read-only query DSL. |
+| `jira_update_status` | Move an issue to a new status. |
+| `jira_list_comments` | List an issue's comments. |
+| `jira_comment` | Add a comment. |
+| `jira_update_comment` | Edit an existing comment. |
+| `jira_create_issue` | Create a new issue. |
 
 Each tool maps to a method on the Jira client. The pack selects `JiraClient` for the `jira` kind and
 `JiraMcpClient` for `jira-mcp`, keyed off `settings.tracker.kind`, then calls the client method that
 backs the invoked tool.
 
-`tracker_query` maps issues to records and applies the query DSL with `DEFAULT_SELECT = ['id',
+`jira_query` maps issues to records and applies the query DSL with `DEFAULT_SELECT = ['id',
 'identifier', 'title', 'state', 'stateType', 'labels', 'url']`. The DSL is total and
 side-effect-free, capped by `MAX_FILTER_DEPTH = 12`, `MAX_FILTER_NODES = 200`,
 `DEFAULT_LIMIT = 100`, and `MAX_LIMIT = 1000`. Full tool schemas and the DSL grammar live in
@@ -124,7 +124,7 @@ Every tracker that exposes agent tools owns a pack and mounts it through the pro
 
 | Provider | Pack | Tools |
 | --- | --- | --- |
-| `jira`, `jira-mcp` | `tracker` | `tracker_read_issue`, `tracker_query`, `tracker_update_status`, `tracker_list_comments`, `tracker_comment`, `tracker_update_comment`, `tracker_create_issue` |
+| `jira`, `jira-mcp` | `jira` | `jira_read_issue`, `jira_query`, `jira_update_status`, `jira_list_comments`, `jira_comment`, `jira_update_comment`, `jira_create_issue` |
 | `linear` | `linear` | `linear_graphql` |
 | `local` | `local` | `local_query`, `local_read_issue`, `local_update_status`, `local_comment`, `local_create_issue` |
 | `slack` | `slack` | `slack_update_status`, `slack_comment`, `slack_read_thread`, `slack_query`, `slack_user_info`, `slack_channel_context` |
@@ -157,7 +157,7 @@ see [reference/http-api.md](../reference/http-api.md).
 ## See also
 
 - [reference/tracker-tools.md](../reference/tracker-tools.md) - exact schemas for all seven
-  `tracker_*` tools and the query DSL grammar.
+  `jira_*` tools and the query DSL grammar.
 - [dispatch.md](../dispatch.md) - the eligibility chain that consumes poll candidates.
 - [reference/configuration.md](../reference/configuration.md) - the full `tracker.*` and `trackers.*`
   key reference.

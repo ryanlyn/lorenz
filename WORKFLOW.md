@@ -90,7 +90,7 @@ Work only in the provided repository copy. Do not touch any other path.
 
 ## Prerequisite: tracker tools are available
 
-The agent should be able to talk to the configured tracker. Linear-backed runs use the `linear_graphql` tool (see the `lorenz-linear` skill); Jira and Jira MCP runs use the `tracker_*` MCP tools. If no tracker tool is present, stop and ask the user to configure the tracker MCP endpoint.
+The agent should be able to talk to the configured tracker. Linear-backed runs use the `linear_graphql` tool (see the `lorenz-linear` skill); Jira and Jira MCP runs use the `jira_*` MCP tools. If no tracker tool is present, stop and ask the user to configure the tracker MCP endpoint.
 
 ## Default posture
 
@@ -101,7 +101,7 @@ The agent should be able to talk to the configured tracker. Linear-backed runs u
 - Keep issue metadata current (state, checklist, acceptance criteria, links).
 - Treat a single persistent tracker comment as the source of truth for progress across Linear, Jira, and Jira MCP.
 - Use that single workpad comment for all progress and handoff notes; do not post separate "done"/summary comments.
-- Manage the workpad by finding the existing comment by marker, creating it only if missing, then updating that same comment in place. On Linear, use `linear_graphql` (`commentCreate` / `commentUpdate` plus an `issue(id) { comments }` read; see the `lorenz-linear` skill); on Jira and Jira MCP, use `tracker_list_comments`, `tracker_comment`, and `tracker_update_comment`.
+- Manage the workpad by finding the existing comment by marker, creating it only if missing, then updating that same comment in place. On Linear, use `linear_graphql` (`commentCreate` / `commentUpdate` plus an `issue(id) { comments }` read; see the `lorenz-linear` skill); on Jira and Jira MCP, use `jira_list_comments`, `jira_comment`, and `jira_update_comment`.
 - Treat any ticket-authored `Validation`, `Test Plan`, or `Testing` section as non-negotiable acceptance input: mirror it in the workpad and execute it before considering the work complete.
 - When meaningful out-of-scope improvements are discovered during execution,
   file a separate tracker issue instead of expanding scope. The follow-up issue
@@ -111,7 +111,7 @@ The agent should be able to talk to the configured tracker. Linear-backed runs u
   the current issue.
   When creating the follow-up issue, pass `assignee: {{ issue.assignee_id }}` when
   `Current owner` is not null. On Linear, create it with `linear_graphql` (`issueCreate`,
-  see the `lorenz-linear` skill); on Jira and Jira MCP, use `tracker_create_issue`.
+  see the `lorenz-linear` skill); on Jira and Jira MCP, use `jira_create_issue`.
 - Move status only when the matching quality bar is met.
 - Operate autonomously end-to-end unless blocked by missing requirements, secrets, or permissions.
 - Use the blocked-access escape hatch only for true external blockers (missing required tools/auth) after exhausting documented fallbacks.
@@ -119,7 +119,7 @@ The agent should be able to talk to the configured tracker. Linear-backed runs u
 ## Related skills
 
 - `lorenz-linear`: on Linear, use the `linear_graphql` tool for issue reads, comments, comment updates, status changes, and PR attachments.
-- Tracker MCP tools: on Jira and Jira MCP, use the `tracker_*` tools for issue reads, comments, comment updates, and status changes.
+- Tracker MCP tools: on Jira and Jira MCP, use the `jira_*` tools for issue reads, comments, comment updates, and status changes.
 - `lorenz-commit`: produce clean, logical commits during implementation.
 - `simplify`: review changed code for reuse, quality, and efficiency before committing.
 - `lorenz-push`: keep remote branch current and publish updates.
@@ -161,11 +161,11 @@ The agent should be able to talk to the configured tracker. Linear-backed runs u
 
 ## Step 1: Start/continue execution (Todo or In Progress)
 
-1.  Find or create a single persistent scratchpad comment for the issue (on Linear use `linear_graphql` per the `lorenz-linear` skill; on Jira and Jira MCP use the `tracker_*` comment tools):
-    - List the issue's comments and search them for marker header `## Codex Workpad` (Linear: `issue(id) { comments { nodes { id body } } }`; Jira: `tracker_list_comments(issueId)`).
+1.  Find or create a single persistent scratchpad comment for the issue (on Linear use `linear_graphql` per the `lorenz-linear` skill; on Jira and Jira MCP use the `jira_*` comment tools):
+    - List the issue's comments and search them for marker header `## Codex Workpad` (Linear: `issue(id) { comments { nodes { id body } } }`; Jira: `jira_list_comments(issueId)`).
     - If found, reuse that comment; do not create a new workpad comment.
-    - If not found, create one comment using the workpad template (Linear: `commentCreate`; Jira: `tracker_comment(issueId, body)`). Use the returned comment ID when present; otherwise list comments again and record the new comment ID.
-    - Persist the workpad comment ID and only write progress updates to that ID (Linear: `commentUpdate`; Jira: `tracker_update_comment(issueId, commentId, body)`).
+    - If not found, create one comment using the workpad template (Linear: `commentCreate`; Jira: `jira_comment(issueId, body)`). Use the returned comment ID when present; otherwise list comments again and record the new comment ID.
+    - Persist the workpad comment ID and only write progress updates to that ID (Linear: `commentUpdate`; Jira: `jira_update_comment(issueId, commentId, body)`).
     - If comment listing or updating is unavailable, treat that as a tracker capability blocker rather than posting repeated detailed comments.
 2.  If arriving from `Todo`, do not delay on additional status transitions: the issue should already be `In Progress` before this step begins.
 3.  Immediately reconcile the workpad before new edits:
@@ -229,7 +229,7 @@ Use this only when completion is blocked by missing required tools or missing au
     - Add newly discovered items in the appropriate section.
     - Keep parent/child structure intact as scope evolves.
     - Update the workpad immediately after each meaningful milestone (for example: reproduction complete, code change landed, validation run, review feedback addressed).
-    - Update the persistent workpad comment in place (Linear: `linear_graphql` `commentUpdate`; Jira: `tracker_update_comment`); do not post separate progress comments.
+    - Update the persistent workpad comment in place (Linear: `linear_graphql` `commentUpdate`; Jira: `jira_update_comment`); do not post separate progress comments.
     - Never leave completed work unchecked in the plan.
     - For tickets that started as `Todo` with an attached PR, run the full PR feedback sweep protocol immediately after kickoff and before new feature work.
 5.  Run validation/tests/proof-of-work required for the scope.

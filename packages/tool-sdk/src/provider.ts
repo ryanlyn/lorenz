@@ -28,9 +28,8 @@ export interface ToolContext {
 
 /**
  * One named pack of agent-facing tools. Packs are registered in a {@link ToolRegistry}. The
- * MCP endpoint always mounts the provider-neutral tracker pack, mounts the active tracker
- * provider's declared default packs, and mounts any additional packs explicitly configured
- * by the workflow's `tools:` map.
+ * MCP endpoint mounts the active tracker provider's declared default packs and any additional
+ * packs explicitly configured by the workflow's `tools:` map.
  */
 export interface ToolProvider {
   /** Pack name used by tracker providers' default mounts or by the workflow `tools:` map. */
