@@ -543,10 +543,11 @@ function parseWorkerPool(
 
 /**
  * The implicit dispatch pool produced when no `worker_pool` and no `worker.kind` are configured:
- * - empty `sshHosts`  -> an enabled `local` pool, slotsPerMachine=1, min=0/warm=0/max=1 so nothing
- *   provisions eagerly and the single local worker is minted on first acquire. The local driver
- *   yields an empty `workerHost`, so the per-run endpoint manager mints no tunnel and acp keeps its
- *   own in-process MCP endpoint.
+ * - empty `sshHosts`  -> an enabled `local` pool, slotsPerMachine=1, min=0/warm=0 and
+ *   max=`max_concurrent_agents_per_host ?? agent.max_concurrent_agents` so local concurrency tracks
+ *   the agent concurrency knob. Nothing provisions eagerly; each single-tenant local worker is minted
+ *   on first acquire, up to `max`. The local driver yields an empty `workerHost`, so the per-run
+ *   endpoint manager mints no tunnel and acp keeps its own in-process MCP endpoint.
  * - non-empty `sshHosts` -> an enabled `static-ssh` pool whose driverOptions carry the configured
  *   hosts (the `ssh_hosts` spelling the driver's `readSshHosts` expects). `max` is the host count
  *   and slotsPerMachine is the per-host cap (`max_concurrent_agents_per_host ??
@@ -587,7 +588,11 @@ function defaultDispatchWorkerPool(
     enabled: true,
     driver: "local",
     min: 0,
-    max: 1,
+    // Local concurrency tracks the agent concurrency knob: up to `perHostConcurrency`
+    // (`max_concurrent_agents_per_host ?? agent.max_concurrent_agents`) single-tenant local workers
+    // run in parallel. slotsPerMachine stays 1, so each run is its own isolation unit (no
+    // co-residence, no per-run claim gateway) rather than packing N runs onto one worker.
+    max: Math.max(1, perHostConcurrency),
     warm: 0,
     slotsPerMachine: 1,
     ttlMs: 3_600_000,
