@@ -224,12 +224,11 @@ The `after_create` hook runs once when the per-issue workspace is created; `git 
 
 ## The checked-in examples
 
-The repository root ships four example workflows. Each is a complete, runnable file you can copy and adapt.
+The repository root ships three example workflows. Each is a complete, runnable file you can copy and adapt.
 
 | File | Tracker | Demonstrates |
 | --- | --- | --- |
-| `WORKFLOW.md` | Linear | The reference Linear flow: `project_slugs`, a `Merging`/`Rework` state map, a full multi-step prompt with a `## Codex Workpad` comment protocol and a `lorenz-land` handoff |
-| `WORKFLOW_FULL_ACCESS.md` | Linear | An `Agent Review` state and an autonomous review protocol; `claude` configured with `bypassPermissions` alongside `codex` |
+| `WORKFLOW.md` | Linear | The reference Linear flow: `project_slug`, an `Agent Review` state with an autonomous review protocol, both `codex` and `claude` configured (`claude` with `bypassPermissions`), and a full multi-step prompt with a `## Codex Workpad` comment protocol and a `lorenz-land` handoff |
 | `WORKFLOW.local.md` | Local board | No credentials and no Linear: `tracker.kind: local` with `id_prefix`, the `local_*` tools, and a prompt that reads state through `local_read_issue` |
 | `WORKFLOW.slack.md` | Slack | Issues from bot @-mentions: `channels`, `bot_user_id`, `emoji_states`, hashtag routing with `route_label_prefix: "route-"`, and the `slack_*` tools |
 

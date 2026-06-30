@@ -47,8 +47,6 @@ polling:
   interval_ms: 60000
 workspace:
   root: ~/dev/lorenz-workspaces
-worker:
-  ssh_timeout_ms: 60000
 hooks:
   after_create: |
     set -euo pipefail

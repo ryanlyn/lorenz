@@ -1142,18 +1142,16 @@ test("status overrides reject legacy per-state map and unknown sections", () => 
   );
 });
 
-test("copied workflow examples load independently in the TypeScript port", async () => {
+test("the shipped WORKFLOW.md loads independently in the TypeScript port", async () => {
   const root = path.resolve(".");
-  for (const name of ["WORKFLOW.md", "WORKFLOW_FULL_ACCESS.md"]) {
-    const workflow = await loadWorkflow(
-      path.join(root, name),
-      { LINEAR_API_KEY: "test-token", LINEAR_ASSIGNEE: "worker@example.com" },
-      { trackers, executors },
-    );
-    assert.equal(workflow.settings.tracker.dispatch.acceptUnrouted, true);
-    assert.equal(workflow.settings.tracker.dispatch.routeLabelPrefix, "Lorenz:");
-    assert.ok(workflow.promptTemplate.length > 100);
-  }
+  const workflow = await loadWorkflow(
+    path.join(root, "WORKFLOW.md"),
+    { LINEAR_API_KEY: "test-token", LINEAR_ASSIGNEE: "worker@example.com" },
+    { trackers, executors },
+  );
+  assert.equal(workflow.settings.tracker.dispatch.acceptUnrouted, true);
+  assert.equal(workflow.settings.tracker.dispatch.routeLabelPrefix, "Lorenz:");
+  assert.ok(workflow.promptTemplate.length > 100);
 });
 
 test("workflow path defaults match LORENZ_WORKFLOW then cwd WORKFLOW.md", async () => {
