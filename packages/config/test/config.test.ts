@@ -1468,10 +1468,12 @@ test("worker.worker_pool max_in_flight parses into slotsPerMachine with maxInFli
   assert.equal(clone?.maxInFlight, clone?.slotsPerMachine);
 });
 
-test("absent worker_pool defaults to an enabled local pool (byte-identical local dispatch)", () => {
+test("absent worker_pool defaults to an enabled local pool whose max tracks max_concurrent_agents", () => {
   // An absent worker_pool with no hosts defaults to an enabled `local` pool at slotsPerMachine=1
-  // with min=0/warm=0/max=1, which provisions nothing eagerly and routes runs through acp's own
-  // endpoint (empty workerHost): the byte-identical local single-tenant dispatch path.
+  // (single-tenant: each run is its own isolation unit through acp's own endpoint, no co-residence),
+  // min=0/warm=0 so nothing provisions eagerly. `max` tracks the agent concurrency knob
+  // (`max_concurrent_agents_per_host ?? agent.max_concurrent_agents`), so local dispatch runs up to
+  // that many single-tenant workers in parallel instead of one at a time.
   const settings = parseConfig({ worker: { ssh_timeout_ms: 1_000 } });
   assert.ok(settings.worker.workerPool);
   assert.equal(settings.worker.workerPool?.enabled, true);
@@ -1479,7 +1481,15 @@ test("absent worker_pool defaults to an enabled local pool (byte-identical local
   assert.equal(settings.worker.workerPool?.slotsPerMachine, 1);
   assert.equal(settings.worker.workerPool?.min, 0);
   assert.equal(settings.worker.workerPool?.warm, 0);
-  assert.equal(settings.worker.workerPool?.max, 1);
+  // Default agent.max_concurrent_agents is 10, so the implicit local pool grows to 10 workers.
+  assert.equal(settings.worker.workerPool?.max, 10);
+
+  // The implicit local pool max follows a custom agent concurrency knob.
+  const custom = parseConfig({
+    agent: { max_concurrent_agents: 4 },
+    worker: { ssh_timeout_ms: 1_000 },
+  });
+  assert.equal(custom.worker.workerPool?.max, 4);
 });
 
 test("REGRESSION: default local-pool Settings clone deep-equals the issue-state clone", () => {

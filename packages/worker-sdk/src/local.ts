@@ -24,8 +24,8 @@ const CAPABILITIES: DriverCapabilities = {
  * whose `workerHost` is the EMPTY string, the canonical "no remote worker"
  * signal the orchestrator/endpoint-manager understands: an empty host mints NO
  * tunnel and NO MCP lease, so acp keeps its own in-process MCP endpoint and the
- * run executes locally. A warm pool at `slotsPerMachine=1` over this driver
- * runs one local worker, single-tenant.
+ * run executes locally. A pool at `slotsPerMachine=1` over this driver runs up
+ * to `max` single-tenant local workers, one run each.
  *
  * Mechanically it is a purely in-memory `Map<workerId, WorkerDescriptor>` with
  * deterministic `createdAtMs` from the injected clock, idempotent
@@ -36,11 +36,14 @@ const CAPABILITIES: DriverCapabilities = {
  * key per-worker even though every worker shares the empty host. There is no
  * failure injection: a local in-process worker has no remote faults to model.
  *
- * This driver is single-machine by design: the pool affinity-keys on
- * `workerHost`, so an empty host collapses every local worker into ONE affinity
- * bucket. That is inert at the configuration this driver is meant for
- * (`slotsPerMachine=1`, `max=1`): there is at most one local worker, so the
- * bucket never matters.
+ * Every worker runs on the one local host: the pool affinity-keys on `workerHost`,
+ * so the empty host collapses all local workers into ONE host-affinity bucket. That
+ * bucket only governs host-level stickiness (routing a resumed issue back to a prior
+ * host), which is moot here - each worker is a distinct `workerId` with its own
+ * in-process endpoint and per-issue workspace, so the pool still leases up to `max`
+ * of them concurrently. The default dispatch pool sizes `max` to the agent concurrency
+ * knob (`max_concurrent_agents`), so this driver routinely runs several single-tenant
+ * local workers at once.
  */
 export class LocalWorkerDriver implements WorkerDriver {
   readonly kind = KIND;
