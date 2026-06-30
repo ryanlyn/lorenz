@@ -32,6 +32,12 @@ agent:
   kind: codex
   max_concurrent_agents: 10
   max_turns: 20
+  skills:
+    - ./skills/lorenz-commit
+    - ./skills/lorenz-push
+    - ./skills/lorenz-pull
+    - ./skills/lorenz-land
+    - ./skills/lorenz-debug
 agents:
   turn_timeout_ms: 3600000
   stall_timeout_ms: 300000
