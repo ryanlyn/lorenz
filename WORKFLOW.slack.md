@@ -1,35 +1,38 @@
 ---
 tracker:
   kind: slack
-  channels:
-    - C0123456789
-    # Direct-message channels (D...) are watched the same way - list the DM's channel id here.
-    # - D0123456789
-  bot_user_id: $SLACK_BOT_USER_ID
-  # Optional: an app-level token (xapp-..., scope connections:write) turns on Slack Socket Mode,
-  # so a new @-mention or thread reply dispatches an agent within ~a second instead of waiting out
-  # the poll interval below. Leave it unset to stay pull-only (interval polling). The bot token
-  # above still does all reads/writes; this token is used ONLY to open the events socket.
-  app_token: $SLACK_APP_TOKEN
-  # Optional author allowlist: when set, only these users' bot-mentions create issues. Leave it
-  # out for no author constraint. Recommended when watching a DM channel, since anyone can DM the
-  # bot - constraining to known requesters keeps dispatch scoped.
-  # users:
-  #   - U0123ABCD
-  emoji_states:
-    eyes: In Progress
-    white_check_mark: Done
-    x: Cancelled
-  active_states:
-    - Todo
-    - In Progress
-  terminal_states:
-    - Done
-    - Cancelled
-  dispatch:
-    accept_unrouted: true
-    only_routes: null
-    route_label_prefix: "route-"
+trackers:
+  slack:
+    provider: slack
+    channels:
+      - C0123456789
+      # Direct-message channels (D...) are watched the same way - list the DM's channel id here.
+      # - D0123456789
+    bot_user_id: $SLACK_BOT_USER_ID
+    # Optional: an app-level token (xapp-..., scope connections:write) turns on Slack Socket Mode,
+    # so a new @-mention or thread reply dispatches an agent within ~a second instead of waiting out
+    # the poll interval below. Leave it unset to stay pull-only (interval polling). The bot token
+    # above still does all reads/writes; this token is used ONLY to open the events socket.
+    app_token: $SLACK_APP_TOKEN
+    # Optional author allowlist: when set, only these users' bot-mentions create issues. Leave it
+    # out for no author constraint. Recommended when watching a DM channel, since anyone can DM the
+    # bot - constraining to known requesters keeps dispatch scoped.
+    # users:
+    #   - U0123ABCD
+    emoji_states:
+      eyes: In Progress
+      white_check_mark: Done
+      x: Cancelled
+    active_states:
+      - Todo
+      - In Progress
+    terminal_states:
+      - Done
+      - Cancelled
+    dispatch:
+      accept_unrouted: true
+      only_routes: null
+      route_label_prefix: "route-"
 polling:
   # Slack conversations.history is rate-limited (newer non-Marketplace apps can be throttled to
   # ~1 request/minute), and each poll re-scans recent channel history. Keep this interval
@@ -67,14 +70,14 @@ agents:
       shell_environment_policy:
         inherit: all
       model_reasoning_effort: high
-      model: gpt-5.4
-claude:
-  command: claude
-  strict_mcp_config: true
-  provider_config:
-    model: claude-opus-4-6
-    permissions:
-      defaultMode: dontAsk
+      model: gpt-5.5
+  claude:
+    bridge_command: claude
+    strict_mcp_config: true
+    provider_config:
+      model: claude-opus-4-8
+      permissions:
+        defaultMode: dontAsk
 ---
 
 You are working on a Slack issue `{{ issue.id }}`

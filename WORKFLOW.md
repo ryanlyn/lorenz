@@ -1,22 +1,25 @@
 ---
 tracker:
   kind: linear
-  project_slug: "lorenz-414bf2e49ff2"
-  active_states:
-    - Todo
-    - In Progress
-    - Merging
-    - Rework
-  terminal_states:
-    - Closed
-    - Cancelled
-    - Canceled
-    - Duplicate
-    - Done
-  dispatch:
-    accept_unrouted: true
-    only_routes: null
-    route_label_prefix: "Lorenz:"
+trackers:
+  linear:
+    provider: linear
+    project_slug: "lorenz-414bf2e49ff2"
+    active_states:
+      - Todo
+      - In Progress
+      - Merging
+      - Rework
+    terminal_states:
+      - Closed
+      - Cancelled
+      - Canceled
+      - Duplicate
+      - Done
+    dispatch:
+      accept_unrouted: true
+      only_routes: null
+      route_label_prefix: "Lorenz:"
 polling:
   interval_ms: 5000
 workspace:
@@ -44,14 +47,14 @@ agents:
       shell_environment_policy:
         inherit: all
       model_reasoning_effort: high
-      model: gpt-5.4
-claude:
-  command: claude
-  strict_mcp_config: true
-  provider_config:
-    model: claude-opus-4-6
-    permissions:
-      defaultMode: dontAsk
+      model: gpt-5.5
+  claude:
+    bridge_command: claude
+    strict_mcp_config: true
+    provider_config:
+      model: claude-opus-4-8
+      permissions:
+        defaultMode: dontAsk
 ---
 
 You are working on a tracker issue `{{ issue.identifier }}`

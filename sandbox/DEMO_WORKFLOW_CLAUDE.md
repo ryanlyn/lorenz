@@ -1,17 +1,20 @@
 ---
 tracker:
   kind: linear
-  project_slug: $LINEAR_PROJECT_SLUG
-  active_states:
-    - Todo
-    - In Progress
-  terminal_states:
-    - Done
-    - Closed
-    - Cancelled
-    - Canceled
-  dispatch:
-    accept_unrouted: true
+trackers:
+  linear:
+    provider: linear
+    project_slug: $LINEAR_PROJECT_SLUG
+    active_states:
+      - Todo
+      - In Progress
+    terminal_states:
+      - Done
+      - Closed
+      - Cancelled
+      - Canceled
+    dispatch:
+      accept_unrouted: true
 
 polling:
   interval_ms: 5000
@@ -30,11 +33,12 @@ agent:
 agents:
   turn_timeout_ms: 3600000
   stall_timeout_ms: 300000
-
-claude:
-  command: claude-agent-acp
-  model: claude-sonnet-4-6
-  permission_mode: dontAsk
+  claude:
+    bridge_command: claude-agent-acp
+    provider_config:
+      model: claude-opus-4-8
+      permissions:
+        defaultMode: dontAsk
 
 server:
   port: 4040

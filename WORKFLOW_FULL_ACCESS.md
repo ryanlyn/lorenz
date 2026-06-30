@@ -1,23 +1,26 @@
 ---
 tracker:
   kind: linear
-  project_slug: "lorenz-414bf2e49ff2"
-  active_states:
-    - Todo
-    - In Progress
-    - Agent Review
-    - Merging
-    - Rework
-  terminal_states:
-    - Closed
-    - Cancelled
-    - Canceled
-    - Duplicate
-    - Done
-  dispatch:
-    accept_unrouted: true
-    only_routes: null
-    route_label_prefix: "Lorenz:"
+trackers:
+  linear:
+    provider: linear
+    project_slug: "lorenz-414bf2e49ff2"
+    active_states:
+      - Todo
+      - In Progress
+      - Agent Review
+      - Merging
+      - Rework
+    terminal_states:
+      - Closed
+      - Cancelled
+      - Canceled
+      - Duplicate
+      - Done
+    dispatch:
+      accept_unrouted: true
+      only_routes: null
+      route_label_prefix: "Lorenz:"
 polling:
   interval_ms: 5000
 workspace:
