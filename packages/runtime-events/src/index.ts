@@ -135,6 +135,8 @@ export interface RuntimeClaimStoreStatus {
 
 export interface RuntimeSnapshot {
   appStatus: RuntimeAppStatus;
+  /** Wall-clock time when the runtime instance was created. */
+  appStartedAt?: string | undefined;
   workflowPath: string;
   poll: {
     status: RuntimePollStatus;

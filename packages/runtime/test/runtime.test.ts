@@ -606,6 +606,7 @@ test("runtime snapshot adds active elapsed seconds without mutating completion t
     clock.advance(30_000);
     const firstActiveSnapshot = runtime.snapshot();
     const repeatedActiveSnapshot = runtime.snapshot();
+    assert.equal(firstActiveSnapshot.appStartedAt, "2026-01-01T00:00:00.000Z");
     assert.equal(firstActiveSnapshot.usageTotals.secondsRunning, 30);
     assert.equal(repeatedActiveSnapshot.usageTotals.secondsRunning, 30);
     assert.equal(orchestrator.snapshot().usageTotals.secondsRunning, 0);
