@@ -226,4 +226,4 @@ documentation. Update the fixture and the matching test together when the public
 
 ## License
 
-See [CHANGELOG.md](CHANGELOG.md) for notable changes. This project is licensed under the [Apache License 2.0](LICENSE).
+This project is licensed under the [Apache License 2.0](LICENSE).
