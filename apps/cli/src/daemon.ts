@@ -261,6 +261,14 @@ function resolveSkillOverlay(settings: Settings): WorkspaceSkillOverlay | undefi
   if (sources.length === 0) return undefined;
   return { sources, destDir: ".lorenz/skills" };
 }
+/**
+ * Production defaults for the agent-runner adapter seam.
+ *
+ * `@lorenz/agent-runner` accepts a partial adapter bag so tests can isolate one
+ * dependency at a time. The CLI path starts from this complete default set and
+ * only then overlays caller overrides, which keeps production wiring explicit
+ * without removing the narrower test seam.
+ */
 function createRunAgentAttemptAdapters(): RunAgentAttemptAdapters {
   return {
     createWorkspaceForIssue: async (settings, issue, options) =>
