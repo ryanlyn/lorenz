@@ -1,6 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
 import { Box, Text } from "ink";
-import { humanizeAgentMessage } from "@lorenz/humanize";
 import type { AgentUpdateType } from "@lorenz/domain";
 import type { RuntimeSnapshot } from "@lorenz/runtime-events";
 
@@ -181,7 +180,7 @@ export function formatDashboard(
 
 function runningHeader(ansi: boolean): string {
   const header =
-    "ID       SLOT  AGENT    STAGE          PID      AGE / TURN   TOKENS     SESSION        EVENT";
+    "ID       SLOT  AGENT    STAGE          PID      AGE / TURN   TOKENS     TOOLS    SESSION";
   return `│   ${s("90", ansi ? header.padEnd(111) : header, ansi)}`;
 }
 
@@ -196,11 +195,11 @@ function formatRunningRow(
 ): string {
   const stage = runningStage(run);
   const ageTurn = `${formatMinutesSeconds(secondsBetween(now, run.startedAt))} / ${run.turnCount}`;
-  const event = terminalEvent(run);
   const session = shortSession(terminalCell(run.sessionId ?? "n/a"));
   const color = rowColor(run.lastEvent);
   const ageWidth = ansi ? 12 : 13;
   const tokenWidth = ansi ? 10 : 9;
+  const toolWidth = ansi ? 7 : 6;
   return [
     "│",
     s(color, "●", ansi),
@@ -211,8 +210,8 @@ function formatRunningRow(
     styledCell("33", String(run.executorPid ?? "n/a"), ansi, { padEnd: 8 }),
     s("35", ageTurn.padEnd(ageWidth), ansi),
     s("33", formatInteger(run.usageTotals.totalTokens).padStart(tokenWidth), ansi),
-    s("36", session.padEnd(14), ansi),
-    s(color, ansi ? event.padEnd(24) : event, ansi),
+    s("32", formatInteger(run.toolCallCount ?? 0).padStart(toolWidth), ansi),
+    s("36", session, ansi),
   ].join(" ");
 }
 
@@ -262,22 +261,6 @@ function rowColor(lastEvent: AgentUpdateType | null | undefined): string {
     default:
       return "34";
   }
-}
-
-function terminalEvent(run: RuntimeSnapshot["running"][number]): string {
-  if (
-    (run.lastEvent === null || run.lastEvent === undefined) &&
-    (run.lastMessage === null || run.lastMessage === undefined)
-  )
-    return "pending";
-  return terminalCell(
-    humanizeAgentMessage({
-      agent_kind: run.agentKind,
-      event: run.lastEvent,
-      message: run.lastMessage,
-    }),
-    { max: 24 },
-  );
 }
 
 function formatTerminalRateLimits(value: unknown, ansi: boolean): string {

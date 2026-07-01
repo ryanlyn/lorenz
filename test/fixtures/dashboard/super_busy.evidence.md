@@ -8,10 +8,10 @@
 │ Next refresh: n/a
 ├─ Running
 │
-│   ID       SLOT  AGENT    STAGE          PID      AGE / TURN   TOKENS     SESSION        EVENT
+│   ID       SLOT  AGENT    STAGE          PID      AGE / TURN   TOKENS     TOOLS    SESSION
 │   ───────────────────────────────────────────────────────────────────────────────────────────────────────────────
-│ ● MT-101   0     codex    running        4242     13m 5s / 11     120,450 thre...567890  turn completed
-│ ● MT-102   0     claude   running        5252     6m 52s / 4       89,200 thre...567890  claude turn started
+│ ● MT-101   0     codex    running        4242     13m 5s / 11     120,450      0 thre...567890
+│ ● MT-102   0     claude   running        5252     6m 52s / 4       89,200      0 thre...567890
 │
 ├─ Backoff queue
 │

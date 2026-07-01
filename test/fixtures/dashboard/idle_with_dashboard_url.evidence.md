@@ -10,7 +10,7 @@
 │ Next refresh: n/a
 ├─ Running
 │
-│   ID       SLOT  AGENT    STAGE          PID      AGE / TURN   TOKENS     SESSION        EVENT
+│   ID       SLOT  AGENT    STAGE          PID      AGE / TURN   TOKENS     TOOLS    SESSION
 │   ───────────────────────────────────────────────────────────────────────────────────────────────────────────────
 │  No active agents
 │

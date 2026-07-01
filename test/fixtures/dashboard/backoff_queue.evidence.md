@@ -8,9 +8,9 @@
 │ Next refresh: n/a
 ├─ Running
 │
-│   ID       SLOT  AGENT    STAGE          PID      AGE / TURN   TOKENS     SESSION        EVENT
+│   ID       SLOT  AGENT    STAGE          PID      AGE / TURN   TOKENS     TOOLS    SESSION
 │   ───────────────────────────────────────────────────────────────────────────────────────────────────────────────
-│ ● MT-638   0     codex    retrying       4242     20m 25s / 7      14,200 thre...567890  agent message streami...
+│ ● MT-638   0     codex    retrying       4242     20m 25s / 7      14,200      0 thre...567890
 │
 ├─ Backoff queue
 │
