@@ -97,6 +97,16 @@ export interface RunAgentAttemptInput {
   onUpdate?: (update: AgentUpdate) => void;
   fetchIssue?: (issue: Issue) => Promise<Issue>;
   abortSignal?: AbortSignal | undefined;
+  /**
+   * Intentional composition seam for runner isolation.
+   *
+   * The core accepts a `Partial` adapter bag so tests can override only the
+   * adapter under examination. Production entrypoints compose the full defaults
+   * first, then layer any overrides on top. Keep the field optional so a missing
+   * required adapter fails at the use site with the specific
+   * `agent_runner_adapter_missing: <adapter>` error instead of a broad
+   * construction-time assertion.
+   */
   adapters?: Partial<RunAgentAttemptAdapters> | undefined;
 }
 
