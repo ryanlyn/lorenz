@@ -78,30 +78,66 @@ test("terminal dashboard preserves tracker states in the running stage column", 
   assert.notMatch(rendered, /codex\s+running\s+4242/);
 });
 
-test("terminal dashboard renders pending for claimed runs before agent events arrive", () => {
+test("terminal dashboard renders zero tool calls for claimed runs before agent events arrive", () => {
   const rendered = formatDashboard(
     dashboardSnapshot({
       now: "2026-05-05T02:00:00.000Z",
       running: [
-        runningFixture(
-          "MT-PEND",
-          "codex",
-          "running",
-          null,
-          0,
-          0,
-          0,
-          null,
-          "2026-05-05T02:00:00.000Z",
-          null,
-        ),
+        {
+          ...runningFixture(
+            "MT-PEND",
+            "codex",
+            "running",
+            null,
+            0,
+            0,
+            0,
+            null,
+            "2026-05-05T02:00:00.000Z",
+            null,
+          ),
+          sessionId: null,
+        },
       ],
     }),
     { now: "2026-05-05T02:00:00.000Z", runtimeSeconds: 0, throughputTps: 0 },
   );
 
-  assert.match(rendered, /MT-PEND[\s\S]*pending/);
+  assert.match(rendered, /TOKENS\s+TOOLS\s+SESSION/);
+  assert.match(rendered, /MT-PEND[\s\S]*\b0\s+n\/a/);
+  assert.notMatch(rendered, /\bEVENT\b/);
   assert.notMatch(rendered, /\bundefined\b/);
+});
+
+test("terminal dashboard renders running tool-call totals between tokens and session", () => {
+  const rendered = formatDashboard(
+    dashboardSnapshot({
+      now: "2026-05-05T02:00:00.000Z",
+      running: [
+        {
+          ...runningFixture(
+            "MT-TOOLS",
+            "codex",
+            "In Progress",
+            "4242",
+            30,
+            2,
+            1_234,
+            "turn completed should not render",
+            "2026-05-05T02:00:00.000Z",
+            "turn_completed",
+          ),
+          toolCallCount: 12,
+        },
+      ],
+    }),
+    { now: "2026-05-05T02:00:00.000Z", runtimeSeconds: 30, throughputTps: 41 },
+  );
+
+  assert.match(rendered, /TOKENS\s+TOOLS\s+SESSION/);
+  assert.match(rendered, /1,234\s+12\s+thre\.\.\.567890/);
+  assert.notMatch(rendered, /\bEVENT\b/);
+  assert.notMatch(rendered, /turn completed should not render/);
 });
 
 test("terminal dashboard sanitizes snapshot-derived strings before rendering", () => {

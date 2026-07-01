@@ -771,6 +771,8 @@ export interface RunningEntry {
   lastAgentEvent?: AgentUpdateType | null | undefined;
   lastAgentMessage?: unknown;
   lastAgentTimestamp?: Date | null | undefined;
+  /** Monotonic count of tool-call start notifications seen during this run. */
+  toolCallCount?: number | undefined;
   /** Monotonic per-run totals, kept in sync as usage updates arrive. */
   usageTotals: UsageTotals;
   /** Highwater mark of input tokens already folded into the orchestrator-wide totals; used to compute deltas. */

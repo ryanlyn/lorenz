@@ -121,6 +121,17 @@ function reportedUsageTotals(entry: RunningEntry): UsageTotals {
   };
 }
 
+function isToolCallNotification(update: AgentUpdate): boolean {
+  if (update.type !== "session_notification") return false;
+  if (!isRecord(update.message)) return false;
+  const payload = update.message.update;
+  return isRecord(payload) && payload.sessionUpdate === "tool_call";
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 function usageDelta(value: number | undefined): number {
   return Number.isFinite(value) ? Math.max(0, value!) : 0;
 }
@@ -399,6 +410,7 @@ export class Orchestrator {
       startedAt: this.clock.now(),
       lastAgentEvent: null,
       lastAgentTimestamp: null,
+      toolCallCount: 0,
       usageTotals: { inputTokens: 0, outputTokens: 0, totalTokens: 0, secondsRunning: 0 },
       lastReportedInputTokens: 0,
       lastReportedOutputTokens: 0,
@@ -513,6 +525,7 @@ export class Orchestrator {
       startedAt: this.clock.now(),
       lastAgentEvent: null,
       lastAgentTimestamp: null,
+      toolCallCount: 0,
       usageTotals: { inputTokens: 0, outputTokens: 0, totalTokens: 0, secondsRunning: 0 },
       lastReportedInputTokens: 0,
       lastReportedOutputTokens: 0,
@@ -719,6 +732,7 @@ export class Orchestrator {
     if (update.executorPid !== undefined) entry.executorPid = update.executorPid;
     if (update.workspacePath !== undefined) entry.workspacePath = update.workspacePath;
     if (update.type === "turn_completed") entry.turnCount += 1;
+    if (isToolCallNotification(update)) entry.toolCallCount = (entry.toolCallCount ?? 0) + 1;
     if (update.rateLimits !== undefined) this.state.rateLimits = update.rateLimits;
     if (update.usage) this.applyUsageUpdate(key, entry, update);
   }

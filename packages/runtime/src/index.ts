@@ -1618,6 +1618,7 @@ function runtimeRunningEntry(entry: RunningEntry, runId: string | undefined): Ru
     lastEvent: entry.lastAgentEvent,
     lastMessage: entry.lastAgentMessage,
     lastEventAt: entry.lastAgentTimestamp?.toISOString() ?? null,
+    toolCallCount: entry.toolCallCount ?? 0,
     workspacePath: entry.workspacePath,
     usageTotals: { ...entry.usageTotals },
     retryAttempt: entry.retryAttempt,

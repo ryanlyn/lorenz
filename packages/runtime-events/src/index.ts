@@ -83,6 +83,7 @@ export interface RuntimeRunningEntry {
   lastEvent?: AgentUpdateType | null | undefined;
   lastMessage?: unknown;
   lastEventAt?: string | null | undefined;
+  toolCallCount?: number | undefined;
   workspacePath?: string | null | undefined;
   usageTotals: UsageTotals;
   retryAttempt?: number | null | undefined;
