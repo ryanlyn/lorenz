@@ -1,6 +1,7 @@
 import { LinearGraphQLClient } from "@linear/sdk";
 export { LinearGraphQLClient } from "@linear/sdk";
 import { normalizeIssue } from "@lorenz/issue";
+import { createTrackerPaginationGuard, type TrackerPaginationLimits } from "@lorenz/tracker-sdk";
 import {
   errorMessage,
   isRecord,
@@ -119,6 +120,7 @@ export interface LinearClientDeps {
   fetchImpl?: typeof fetch | undefined;
   graphqlClient?: LinearGraphQLClient | undefined;
   logger?: LinearClientLogger | undefined;
+  paginationLimits?: TrackerPaginationLimits | undefined;
 }
 
 export class LinearClient {
@@ -129,6 +131,7 @@ export class LinearClient {
   private readonly settings: Settings;
   private readonly fetchImpl: typeof fetch | undefined;
   private readonly logger: LinearClientLogger;
+  private readonly paginationLimits: TrackerPaginationLimits | undefined;
 
   constructor(
     settings: Settings,
@@ -151,6 +154,7 @@ export class LinearClient {
       warn: (message) => console.warn(message),
       error: (message) => console.error(message),
     };
+    this.paginationLimits = deps.paginationLimits;
 
     if (deps.graphqlClient) {
       this.gqlClient = deps.graphqlClient;
@@ -306,8 +310,14 @@ export class LinearClient {
     const issues: Issue[] = [];
     const assignee = await this.assigneeFilterValue();
     const projectSlugs = await this.resolveProjectSlugs();
+    const pagination = createTrackerPaginationGuard({
+      tracker: "linear",
+      resource: "issues",
+      limits: this.paginationLimits,
+    });
 
     for (;;) {
+      pagination.recordPage();
       const data: {
         issues: {
           nodes: Array<Record<string, unknown>>;
@@ -328,16 +338,21 @@ export class LinearClient {
         },
       );
 
+      pagination.recordItems(data.issues.nodes.length);
       await this.appendNormalizedIssues(issues, data.issues.nodes, assignee);
       if (!data.issues.pageInfo.hasNextPage) return issues;
-      if (!data.issues.pageInfo.endCursor) throw new Error("linear_missing_end_cursor");
-      after = data.issues.pageInfo.endCursor;
+      after = pagination.nextCursor(data.issues.pageInfo.endCursor, "endCursor");
     }
   }
 
   async fetchIssuesByIds(ids: string[]): Promise<Issue[]> {
     const uniqueIds = [...new Set(ids)];
     if (uniqueIds.length === 0) return [];
+    createTrackerPaginationGuard({
+      tracker: "linear",
+      resource: "issuesByIds",
+      limits: this.paginationLimits,
+    }).recordItems(uniqueIds.length);
     const assignee = await this.assigneeFilterValue();
 
     const issueOrder = new Map(uniqueIds.map((id, index) => [id, index]));
@@ -498,7 +513,13 @@ export class LinearClient {
   private async resolveProjectSlugsByLabels(labels: string[]): Promise<string[]> {
     let after: string | null = null;
     const slugs: string[] = [];
+    const pagination = createTrackerPaginationGuard({
+      tracker: "linear",
+      resource: "projectsByLabels",
+      limits: this.paginationLimits,
+    });
     for (;;) {
+      pagination.recordPage();
       const data: {
         projects: {
           nodes: Array<{ slugId: string }>;
@@ -513,11 +534,10 @@ export class LinearClient {
         }`,
         { labels, first: 100, after },
       );
+      pagination.recordItems(data.projects.nodes.length);
       slugs.push(...data.projects.nodes.map((p) => p.slugId));
       if (!data.projects.pageInfo?.hasNextPage) break;
-      if (!data.projects.pageInfo.endCursor)
-        throw new Error("linear_missing_end_cursor: projectsByLabels");
-      after = data.projects.pageInfo.endCursor;
+      after = pagination.nextCursor(data.projects.pageInfo.endCursor, "endCursor");
     }
     if (slugs.length === 0)
       throw new Error(`no linear projects found for labels: ${labels.join(", ")}`);
@@ -721,16 +741,32 @@ export class LinearClient {
     initial: unknown;
     fetchPage: (after: string) => Promise<unknown>;
   }): Promise<CompleteConnectionResult> {
+    const pagination = createTrackerPaginationGuard({
+      tracker: "linear",
+      resource: input.connection,
+      limits: this.paginationLimits,
+    });
     const initial = connectionSnapshot(input.initial);
     const nodes = [...initial.nodes];
+    try {
+      pagination.recordPage();
+      pagination.recordItems(initial.nodes.length);
+    } catch (error) {
+      return {
+        nodes: [],
+        degradedConnections: [degradedConnection(input, errorMessage(error))],
+      };
+    }
     if (!initial.pageInfo?.hasNextPage) return { nodes, degradedConnections: [] };
 
-    let after = initial.pageInfo.endCursor ?? null;
-    if (!after) {
+    let after: string;
+    try {
+      after = pagination.nextCursor(initial.pageInfo.endCursor, "endCursor");
+    } catch (error) {
       return {
         nodes,
         degradedConnections: [
-          degradedConnection(input, "linear_missing_end_cursor", initial.pageInfo.endCursor),
+          degradedConnection(input, errorMessage(error), initial.pageInfo.endCursor),
         ],
       };
     }
@@ -738,6 +774,7 @@ export class LinearClient {
     for (;;) {
       let page: unknown;
       try {
+        pagination.recordPage();
         page = await input.fetchPage(after);
       } catch (error) {
         return {
@@ -755,26 +792,26 @@ export class LinearClient {
           ],
         };
       }
+      try {
+        pagination.recordItems(next.nodes.length);
+      } catch (error) {
+        return {
+          nodes,
+          degradedConnections: [degradedConnection(input, errorMessage(error), after)],
+        };
+      }
       nodes.push(...next.nodes);
       if (!next.pageInfo?.hasNextPage) return { nodes, degradedConnections: [] };
-      const nextCursor = next.pageInfo.endCursor ?? null;
-      if (!nextCursor) {
+      try {
+        after = pagination.nextCursor(next.pageInfo.endCursor, "endCursor");
+      } catch (error) {
         return {
           nodes,
           degradedConnections: [
-            degradedConnection(input, "linear_missing_end_cursor", next.pageInfo.endCursor),
+            degradedConnection(input, errorMessage(error), next.pageInfo.endCursor),
           ],
         };
       }
-      if (nextCursor === after) {
-        return {
-          nodes,
-          degradedConnections: [
-            degradedConnection(input, "linear_repeated_end_cursor", nextCursor),
-          ],
-        };
-      }
-      after = nextCursor;
     }
   }
 
@@ -840,15 +877,27 @@ function resolveDeps(fetchImplOrDeps?: typeof fetch | LinearClientDeps): {
   fetchImpl: typeof fetch | undefined;
   graphqlClient: LinearGraphQLClient | undefined;
   logger: LinearClientLogger | undefined;
+  paginationLimits: TrackerPaginationLimits | undefined;
 } {
   if (!fetchImplOrDeps)
-    return { fetchImpl: undefined, graphqlClient: undefined, logger: undefined };
+    return {
+      fetchImpl: undefined,
+      graphqlClient: undefined,
+      logger: undefined,
+      paginationLimits: undefined,
+    };
   if (typeof fetchImplOrDeps === "function")
-    return { fetchImpl: fetchImplOrDeps, graphqlClient: undefined, logger: undefined };
+    return {
+      fetchImpl: fetchImplOrDeps,
+      graphqlClient: undefined,
+      logger: undefined,
+      paginationLimits: undefined,
+    };
   return {
     fetchImpl: fetchImplOrDeps.fetchImpl ?? undefined,
     graphqlClient: fetchImplOrDeps.graphqlClient ?? undefined,
     logger: fetchImplOrDeps.logger ?? undefined,
+    paginationLimits: fetchImplOrDeps.paginationLimits ?? undefined,
   };
 }
 

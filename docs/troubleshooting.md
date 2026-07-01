@@ -93,8 +93,18 @@ The Linear client and the `linear_graphql` tool both retry HTTP 429 honoring `Re
 | `linear api status 429` in events | Sustained rate limiting beyond the 4 retries. | Reduce poll frequency (`polling.interval_ms`, default 30000), narrow `project_slugs`, or lower concurrency so fewer agents call Linear at once. |
 | `linear api timeout after 30000ms` | A single request exceeded the 30000ms per-request timeout. | Check network reachability to `https://api.linear.app/graphql`; a slow connection or an oversized query is the usual cause. |
 | `linear api status <N>` (other than 429) | A non-retryable HTTP error. | Inspect `<N>`. A 401/403 means a bad or revoked `tracker.api_key`. |
-| `linear_truncated_connection: <name>` | A healthy issue had a truncated `labels`/`relations`/`teams`/`states` page; Lorenz hard-fails rather than silently drop data. | An integrity guard: the issue has more related records than one page holds. This is a real data shape, not a transient fault. |
-| `linear_missing_end_cursor` | Pagination claimed more pages but returned no cursor. | A Linear API anomaly; retry the poll. Persistent failures warrant checking the Linear status page. |
+| `linear_truncated_connection: <name>` | Linear project metadata such as teams or states was truncated. Issue-level labels and relations degrade with a warning instead of aborting the poll. | Narrow project metadata scope when project lookups are oversized. For issue-level warnings, inspect whether labels or blockers are too large to fit in one nested page. |
+
+## Tracker pagination guards
+
+Linear and Jira REST polling use bounded cursor pagination. A normal multi-page poll follows every page until the backend says it is complete. Malformed cursors, repeated cursors, page-count overflows, and item-count overflows fail loudly because continuing would risk an infinite loop or a silent under-read.
+
+| Symptom | Cause | Fix |
+| --- | --- | --- |
+| `linear_pagination_malformed_cursor` / `jira_pagination_malformed_cursor` | The backend claimed there was another page but returned a missing, blank, or non-string cursor. | Retry the poll. Persistent failures point to a tracker API or proxy bug. |
+| `linear_pagination_repeated_cursor` / `jira_pagination_repeated_cursor` | The backend returned the same cursor twice for one paginated read. | Treat this as a tracker pagination fault. Narrow the query only if the backend is known to loop on oversized result sets. |
+| `linear_pagination_page_limit_exceeded` / `jira_pagination_page_limit_exceeded` | A poll exceeded the maximum page budget. | Narrow `active_states`, `project_slugs`, project labels, or Jira JQL so one poll has a bounded candidate set. |
+| `linear_pagination_item_limit_exceeded` / `jira_pagination_item_limit_exceeded` | A poll exceeded the maximum item budget. | Split large tracker scopes across workflows or narrow the tracker query. |
 
 ## SSH worker unreachable
 
