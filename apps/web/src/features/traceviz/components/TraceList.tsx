@@ -2,6 +2,7 @@ import { Search, ExternalLink, Loader2 } from "lucide-react";
 
 import { useIssueSearch } from "../hooks/useIssueSearch";
 import { cn } from "../../../lib/utils";
+import { safeExternalHref } from "../../../shared/components/SafeExternalLink";
 
 interface TraceListProps {
   onSelect: (issueId: string) => void;
@@ -78,7 +79,7 @@ export function TraceList({ onSelect }: TraceListProps) {
               <span className="shrink-0 text-xs text-muted">
                 {formatRelativeTime(issue.updatedAt)}
               </span>
-              {issue.url && (
+              {safeExternalHref(issue.url) && (
                 <ExternalLink aria-hidden="true" className="h-3.5 w-3.5 shrink-0 text-muted" />
               )}
             </button>

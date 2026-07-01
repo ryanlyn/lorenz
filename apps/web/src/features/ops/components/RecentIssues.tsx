@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { ExternalLink, FileText } from "lucide-react";
 
 import { cn } from "../../../lib/utils";
+import { SafeExternalLink } from "../../../shared/components/SafeExternalLink";
 import type { IssueRecord } from "../../traceviz/api/types";
 import { fetchRecentIssues } from "../../traceviz/api/client";
 
@@ -52,15 +53,14 @@ export function RecentIssues() {
                     {issue.issueIdentifier}
                   </a>
                   {issue.url && (
-                    <a
+                    <SafeExternalLink
                       href={issue.url}
-                      target="_blank"
-                      rel="noopener noreferrer"
+                      omitUnsafe
                       className="inline-flex items-center text-muted hover:text-foreground"
                       title="Open in tracker"
                     >
                       <ExternalLink className="h-3.5 w-3.5" />
-                    </a>
+                    </SafeExternalLink>
                   )}
                 </div>
                 {issue.title && <p className="truncate text-xs text-muted">{issue.title}</p>}
