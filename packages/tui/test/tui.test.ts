@@ -203,6 +203,46 @@ test("Runtime field advances active aggregate from snapshot receipt time", () =>
   assert.match(frame, /Runtime: 1m 30s/);
 });
 
+test("Runtime field uses wall-clock app runtime when the snapshot supplies it", () => {
+  const snapshot = dashboardSnapshot({
+    now: "2026-05-05T00:01:00.000Z",
+    appStartedAt: "2026-05-05T00:00:00.000Z",
+    usageTotals: { inputTokens: 0, outputTokens: 0, totalTokens: 0, secondsRunning: 120 },
+    running: [
+      runningFixture(
+        "MT-1",
+        "codex",
+        "running",
+        "4242",
+        60,
+        1,
+        0,
+        "working",
+        "2026-05-05T00:01:00.000Z",
+      ),
+      runningFixture(
+        "MT-2",
+        "codex",
+        "running",
+        "5252",
+        60,
+        1,
+        0,
+        "working",
+        "2026-05-05T00:01:00.000Z",
+      ),
+    ],
+  });
+
+  const frame = formatDashboard(snapshot, {
+    now: "2026-05-05T00:01:10.000Z",
+    snapshotReceivedAt: "2026-05-05T00:01:00.000Z",
+  });
+
+  assert.match(frame, /Runtime: 1m 10s/);
+  assert.notMatch(frame, /Runtime: 2m 20s/);
+});
+
 test("Runtime field includes completed and active seconds supplied by the snapshot", () => {
   const snapshot = dashboardSnapshot({
     now: "2026-05-05T00:00:30.000Z",
@@ -481,6 +521,7 @@ function dashboardScenarios(): Array<{
 function dashboardSnapshot(input: Partial<RuntimeSnapshot> & { now: string }): RuntimeSnapshot {
   return {
     appStatus: "running",
+    ...(input.appStartedAt ? { appStartedAt: input.appStartedAt } : {}),
     workflowPath: "/tmp/WORKFLOW.md",
     poll: {
       status: "idle",

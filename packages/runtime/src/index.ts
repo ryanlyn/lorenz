@@ -266,6 +266,7 @@ export class LorenzRuntime {
   private readonly orchestrator: Orchestrator;
   private readonly runner: RuntimeRunner;
   private readonly clock: ClockPort;
+  private readonly appStartedAt: string;
   private readonly validateDispatch: (settings: WorkflowDefinition["settings"]) => void;
   private readonly listeners = new Set<(snapshot: RuntimeSnapshot) => void>();
   private readonly retryScheduler: RetryScheduler;
@@ -308,6 +309,7 @@ export class LorenzRuntime {
     this.client =
       input.client ?? input.clientFactory?.(input.workflow.settings) ?? missingRuntimeClient();
     this.clock = input.clock ?? systemClock;
+    this.appStartedAt = this.clock.now().toISOString();
     // Prefer the pre-built coordinator; otherwise wrap a bare workerPool in a
     // null-endpoint passthrough so `acquireRunSlot`/`governs`/`canAcquire`/
     // `reconcile`/`drain` drive a uniform surface (default slotsPerMachine=1 +
@@ -360,6 +362,7 @@ export class LorenzRuntime {
     const now = this.clock.now();
     return this.projection.snapshot({
       appStatus: this.appStatus,
+      appStartedAt: this.appStartedAt,
       workflowPath: this.workflow.path,
       poll: {
         status: this.pollStatus,

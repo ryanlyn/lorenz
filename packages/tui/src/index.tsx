@@ -341,11 +341,13 @@ function liveRuntimeSeconds(
   now: Date,
   snapshotReceivedAt: Date | undefined,
 ): number {
+  const appStartedAt = coerceDate(snapshot.appStartedAt);
+  if (appStartedAt) return Math.max(0, secondsBetween(now, appStartedAt));
   if (!snapshotReceivedAt || snapshot.running.length === 0) {
     return snapshot.usageTotals.secondsRunning;
   }
   const elapsedSinceSnapshot = Math.max(0, secondsBetween(now, snapshotReceivedAt));
-  return snapshot.usageTotals.secondsRunning + snapshot.running.length * elapsedSinceSnapshot;
+  return snapshot.usageTotals.secondsRunning + elapsedSinceSnapshot;
 }
 
 function throughput(totalTokens: number, runtimeSeconds: number): number {
