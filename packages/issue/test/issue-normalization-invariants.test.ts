@@ -53,6 +53,14 @@ function validIssueInput(overrides: Record<string, unknown> = {}): Record<string
   };
 }
 
+describe("INVARIANT: Source URLs SHALL be preserved by issue normalization.", () => {
+  test("unsafe source URL schemes remain data, not rendering policy", () => {
+    const issue = normalizeIssue(validIssueInput({ url: "javascript:alert(1)" }));
+
+    assert.equal(issue.url, "javascript:alert(1)");
+  });
+});
+
 describe("INVARIANT: When a state value is resolved, the system SHALL accept nested object form, snake_case, camelCase, and direct string form (in that priority order).", () => {
   test("state resolution accepts nested object form { state: { name, type } }", () => {
     fc.assert(

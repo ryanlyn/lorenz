@@ -2,6 +2,7 @@ import { ChevronDown, ExternalLink } from "lucide-react";
 
 import type { TicketInfo } from "../api/types";
 import { cn } from "../../../lib/utils";
+import { SafeExternalLink } from "../../../shared/components/SafeExternalLink";
 
 interface TicketSelectorProps {
   tickets: TicketInfo[];
@@ -69,16 +70,15 @@ export function TicketSelector({ tickets, selectedId, onSelect }: TicketSelector
         )}
       </div>
       {selectedTicket?.url && (
-        <a
+        <SafeExternalLink
           href={selectedTicket.url}
-          target="_blank"
-          rel="noopener noreferrer"
+          omitUnsafe
           className="flex items-center gap-1 rounded-lg border border-border bg-card px-2.5 py-1.5 text-xs text-muted transition-colors hover:border-muted hover:text-foreground"
           title="Open in Linear"
         >
           <ExternalLink className="h-3.5 w-3.5" />
           Linear
-        </a>
+        </SafeExternalLink>
       )}
     </div>
   );

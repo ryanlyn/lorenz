@@ -80,6 +80,17 @@ describe("IssueStore", () => {
     expect(record?.url).toBeNull();
   });
 
+  it("preserves unsafe source urls without scheme filtering", () => {
+    store.upsert({
+      issueId: "id-1",
+      issueIdentifier: "ENG-1",
+      title: "Unsafe URL",
+      url: "data:text/html,hi",
+    });
+
+    expect(store.get("id-1")?.url).toBe("data:text/html,hi");
+  });
+
   it("creates missing database parent directories", () => {
     const nestedPath = path.join(dir, "nested", "issues.db");
     const nestedStore = new IssueStore(nestedPath);

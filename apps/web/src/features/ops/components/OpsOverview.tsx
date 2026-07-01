@@ -1,6 +1,7 @@
 import { Activity, RefreshCw, AlertOctagon, Coins, ExternalLink, FileText } from "lucide-react";
 
 import { cn, formatNumber, formatTimestamp } from "../../../lib/utils";
+import { SafeExternalLink } from "../../../shared/components/SafeExternalLink";
 import type { OpsState, OpsRunningEntry, OpsRetryEntry, OpsBlockedEntry } from "../api/types";
 
 import { RecentIssues } from "./RecentIssues";
@@ -65,15 +66,14 @@ function RunningTable({ sessions }: { sessions: OpsRunningEntry[] }) {
                         {s.issue_identifier}
                       </a>
                       {s.issue_url && (
-                        <a
+                        <SafeExternalLink
                           href={s.issue_url}
-                          target="_blank"
-                          rel="noopener noreferrer"
+                          omitUnsafe
                           className="inline-flex items-center text-muted hover:text-foreground"
                           title="Open in tracker"
                         >
                           <ExternalLink className="h-3.5 w-3.5" />
-                        </a>
+                        </SafeExternalLink>
                       )}
                     </div>
                   </td>
@@ -132,15 +132,14 @@ function RetryTable({ entries }: { entries: OpsRetryEntry[] }) {
                         {e.issue_identifier}
                       </a>
                       {e.issue_url && (
-                        <a
+                        <SafeExternalLink
                           href={e.issue_url}
-                          target="_blank"
-                          rel="noopener noreferrer"
+                          omitUnsafe
                           className="inline-flex items-center text-muted hover:text-foreground"
                           title="Open in tracker"
                         >
                           <ExternalLink className="h-3.5 w-3.5" />
-                        </a>
+                        </SafeExternalLink>
                       )}
                     </div>
                   </td>
@@ -191,15 +190,14 @@ function BlockedTable({ entries }: { entries: OpsBlockedEntry[] }) {
                         {e.issue_identifier}
                       </a>
                       {e.issue_url && (
-                        <a
+                        <SafeExternalLink
                           href={e.issue_url}
-                          target="_blank"
-                          rel="noopener noreferrer"
+                          omitUnsafe
                           className="inline-flex items-center text-muted hover:text-foreground"
                           title="Open in tracker"
                         >
                           <ExternalLink className="h-3.5 w-3.5" />
-                        </a>
+                        </SafeExternalLink>
                       )}
                     </div>
                   </td>

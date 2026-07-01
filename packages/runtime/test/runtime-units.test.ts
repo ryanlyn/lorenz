@@ -491,6 +491,7 @@ test("runtime snapshot projector preserves facade snapshot shape", () => {
   const snapshot = projector.snapshot({
     appStatus: "running",
     workflow,
+    now: new Date("2026-01-01T00:00:05.000Z"),
     poll: {
       status: "idle",
       candidates: 1,
@@ -508,6 +509,7 @@ test("runtime snapshot projector preserves facade snapshot shape", () => {
   assert.equal(snapshot.running[0]?.issueIdentifier, "MONO-1");
   assert.equal(snapshot.reserving?.[0]?.slotIndex, 1);
   assert.equal(snapshot.retrying[0]?.issueIdentifier, "MONO-1");
+  assert.equal(snapshot.usageTotals.secondsRunning, 6);
   assert.equal(snapshot.recentEvents[0]?.type, "run_started");
   assert.equal(snapshot.runHistory[0]?.id, "history-1");
 });

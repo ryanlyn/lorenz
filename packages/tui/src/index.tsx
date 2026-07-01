@@ -31,14 +31,17 @@ export function RuntimeApp({
     initialThroughputState(),
   );
   const [now, setNow] = useState<number>(() => Date.now());
+  const [snapshotReceivedAt, setSnapshotReceivedAt] = useState<number>(() => Date.now());
   const snapshotRef = useRef(snapshot);
   snapshotRef.current = snapshot;
 
   useEffect(
     () =>
       runtime.subscribe((nextSnapshot) => {
+        const receivedAt = Date.now();
         setSnapshot(nextSnapshot);
-        setThroughputState((state) => updateThroughputState(state, nextSnapshot, Date.now()));
+        setSnapshotReceivedAt(receivedAt);
+        setThroughputState((state) => updateThroughputState(state, nextSnapshot, receivedAt));
       }),
     [runtime],
   );
@@ -59,6 +62,7 @@ export function RuntimeApp({
       dashboardUrl={dashboardUrl}
       projectUrl={projectUrl}
       now={now}
+      snapshotReceivedAt={snapshotReceivedAt}
     />
   );
 }
@@ -69,12 +73,14 @@ export function RuntimeDashboard({
   dashboardUrl,
   projectUrl,
   now,
+  snapshotReceivedAt,
 }: {
   snapshot: RuntimeSnapshot;
   throughputTps?: number | undefined;
   dashboardUrl?: string | null | undefined;
   projectUrl?: string | undefined;
   now?: Date | string | number | undefined;
+  snapshotReceivedAt?: Date | string | number | undefined;
 }) {
   return (
     <Box flexDirection="column" marginTop={1}>
@@ -84,6 +90,7 @@ export function RuntimeDashboard({
           projectUrl,
           throughputTps,
           now,
+          snapshotReceivedAt,
           ansi: true,
         })}
       </Text>
@@ -112,6 +119,7 @@ export interface DashboardFormatOptions {
   now?: Date | string | number | undefined;
   projectUrl?: string | undefined;
   runtimeSeconds?: number | undefined;
+  snapshotReceivedAt?: Date | string | number | undefined;
   throughputTps?: number | undefined;
 }
 
@@ -122,7 +130,9 @@ export function formatDashboard(
   const ansi = options.ansi === true;
   const now = coerceDate(options.now) ?? new Date();
   const maxAgents = options.maxAgents ?? 10;
-  const runtimeSeconds = options.runtimeSeconds ?? liveRuntimeSeconds(snapshot, now);
+  const snapshotReceivedAt = coerceDate(options.snapshotReceivedAt) ?? undefined;
+  const runtimeSeconds =
+    options.runtimeSeconds ?? liveRuntimeSeconds(snapshot, now, snapshotReceivedAt);
   const throughputTps =
     options.throughputTps ?? throughput(snapshot.usageTotals.totalTokens, runtimeSeconds);
   const lines = [
@@ -326,12 +336,16 @@ function formatMinutesSeconds(seconds: number): string {
   return `${Math.floor(whole / 60)}m ${whole % 60}s`;
 }
 
-function liveRuntimeSeconds(snapshot: RuntimeSnapshot, now: Date): number {
-  let seconds = snapshot.usageTotals.secondsRunning;
-  for (const run of snapshot.running) {
-    seconds += Math.max(0, secondsBetween(now, run.startedAt));
+function liveRuntimeSeconds(
+  snapshot: RuntimeSnapshot,
+  now: Date,
+  snapshotReceivedAt: Date | undefined,
+): number {
+  if (!snapshotReceivedAt || snapshot.running.length === 0) {
+    return snapshot.usageTotals.secondsRunning;
   }
-  return seconds;
+  const elapsedSinceSnapshot = Math.max(0, secondsBetween(now, snapshotReceivedAt));
+  return snapshot.usageTotals.secondsRunning + snapshot.running.length * elapsedSinceSnapshot;
 }
 
 function throughput(totalTokens: number, runtimeSeconds: number): number {

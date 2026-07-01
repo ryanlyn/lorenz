@@ -450,9 +450,11 @@ export class LorenzRuntime {
 
   snapshot(): RuntimeSnapshot {
     const orchestration = this.orchestrator.snapshot();
+    const now = this.clock.now();
     return this.snapshotProjector.snapshot({
       appStatus: this.appStatus,
       workflow: this.workflow,
+      now,
       poll: {
         status: this.pollStatus,
         candidates: this.candidates,
