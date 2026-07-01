@@ -20,8 +20,10 @@ import {
   type ClockPort,
   type DispatchBlockReason,
   type DispatchBlockEntry,
+  type ExhaustedEntry,
   type Issue,
   type RetryEntry,
+  type RetryExhaustionKind,
   type RunningEntry,
   type Settings,
   type UsageTokenUpdate,
@@ -298,6 +300,7 @@ export class Orchestrator {
     const runningByState = this.runningByStateCounts();
 
     return sortForDispatch(issues).filter((issue) => {
+      if (this.issueHasExhaustedEntry(issue.id)) return false;
       const retries = this.retryEntriesForIssue(issue.id);
       const dueRetries = retries.filter(([, retry]) => this.retryIsDue(retry));
       if (retries.length > 0 && dueRetries.length === 0) return false;
@@ -347,6 +350,10 @@ export class Orchestrator {
       stateChanged = this.releaseStaleClaimsForRetry(issue.id) || stateChanged;
     const retryEntryKey = retryEntry?.[0];
     const retry = retryEntry?.[1];
+    if (this.issueHasExhaustedEntry(issue.id)) {
+      if (stateChanged) return null;
+      throw new NoopClaimStoreMutation();
+    }
     if (
       !shouldDispatchIssue(issue, this.settings, {
         runningCount: this.occupiedSlotCount(),
@@ -772,10 +779,29 @@ export class Orchestrator {
     );
 
     if (normal) {
-      const attempt = retryKind === "continuation" ? 1 : (entry.retryAttempt ?? 0) + 1;
+      const effectiveAgent = settingsForIssueState(this.settings, entry.issue.state).agent;
+      const maxAttempts = effectiveAgent.maxRetryAttempts;
+      const attempts = entry.retryAttempt ?? 0;
+      const attempt = attempts + 1;
       this.state.completed.add(issueId);
+      if (attempt > maxAttempts) {
+        this.recordExhaustedEntry(key, {
+          issueId: entry.issue.id,
+          identifier: entry.identifier,
+          issueUrl: entry.issue.url ?? null,
+          slotIndex: entry.slotIndex,
+          workerHost: entry.workerHost,
+          workspacePath: entry.workspacePath,
+          attempts,
+          maxAttempts,
+          nextAttempt: attempt,
+          retryKind,
+          error,
+        });
+        return entry;
+      }
       const deadline = this.retryDeadline(
-        retryBackoffMs(attempt, this.settings.agent.maxRetryBackoffMs, retryKind),
+        retryBackoffMs(attempt, effectiveAgent.maxRetryBackoffMs, retryKind),
       );
       this.state.retryAttempts.set(slotKey(issueId, slotIndex), {
         issueId,
@@ -826,6 +852,7 @@ export class Orchestrator {
       }
     }
     stateChanged = this.deleteRetryAttemptsForIssue(issueId) || stateChanged;
+    stateChanged = this.deleteExhaustedEntriesForIssue(issueId) || stateChanged;
     if (!this.state.completed.has(issueId)) {
       this.state.completed.add(issueId);
       stateChanged = true;
@@ -854,6 +881,7 @@ export class Orchestrator {
         reservedAtIso: record.reservedAt.toISOString(),
       })),
       retrying: [...this.state.retryAttempts.values()].map((entry) => ({ ...entry })),
+      exhausted: [...this.state.exhausted.values()].map(cloneExhaustedEntry),
       blocked: this.state.blockedDispatches.map((entry) => ({ ...entry })),
       usageTotals: { ...this.state.usageTotals },
       rateLimits: this.state.rateLimits,
@@ -949,7 +977,9 @@ export class Orchestrator {
 
   private cleanupRetryAttempts(issues: Issue[]): void {
     for (const issue of issues) {
-      if (!issueIsActive(issue, this.settings)) this.deleteRetryAttemptsForIssue(issue.id);
+      if (issueIsActive(issue, this.settings)) continue;
+      this.deleteRetryAttemptsForIssue(issue.id);
+      this.deleteExhaustedEntriesForIssue(issue.id);
     }
   }
 
@@ -969,8 +999,26 @@ export class Orchestrator {
     reason: DispatchBlockReason,
   ): void {
     const attempt = retry.attempt + 1;
+    const effectiveAgent = settingsForIssueState(this.settings, issue.state).agent;
+    const maxAttempts = effectiveAgent.maxRetryAttempts;
+    if (attempt > maxAttempts) {
+      this.recordExhaustedEntry(key, {
+        issueId: issue.id,
+        identifier: issue.identifier,
+        issueUrl: issue.url ?? retry.issueUrl ?? null,
+        slotIndex: retry.slotIndex,
+        workerHost: retry.workerHost,
+        workspacePath: retry.workspacePath,
+        attempts: retry.attempt,
+        maxAttempts,
+        nextAttempt: attempt,
+        retryKind: "failure",
+        error: dispatchBlockError(reason),
+      });
+      return;
+    }
     const deadline = this.retryDeadline(
-      retryBackoffMs(attempt, this.settings.agent.maxRetryBackoffMs, "failure"),
+      retryBackoffMs(attempt, effectiveAgent.maxRetryBackoffMs, "failure"),
     );
     this.state.retryAttempts.set(key, {
       ...retry,
@@ -1007,6 +1055,13 @@ export class Orchestrator {
       .sort((left, right) => retrySlotIndex(left[1]) - retrySlotIndex(right[1]));
   }
 
+  private issueHasExhaustedEntry(issueId: string): boolean {
+    for (const exhausted of this.state.exhausted.values()) {
+      if (exhausted.issueId === issueId) return true;
+    }
+    return false;
+  }
+
   private retryIsDue(retry: RetryEntry): boolean {
     return this.clock.monotonicMs() >= retry.monotonicDeadlineMs;
   }
@@ -1021,16 +1076,65 @@ export class Orchestrator {
     }
     return stateChanged;
   }
+
+  private deleteExhaustedEntriesForIssue(issueId: string): boolean {
+    let stateChanged = false;
+    for (const [key, exhausted] of this.state.exhausted.entries()) {
+      if (exhausted.issueId === issueId) {
+        this.state.exhausted.delete(key);
+        stateChanged = true;
+      }
+    }
+    return stateChanged;
+  }
+
+  private recordExhaustedEntry(
+    key: string,
+    entry: {
+      issueId: string;
+      identifier: string;
+      issueUrl?: string | null | undefined;
+      slotIndex?: number | undefined;
+      workerHost?: string | null | undefined;
+      workspacePath?: string | null | undefined;
+      attempts: number;
+      maxAttempts: number;
+      nextAttempt: number;
+      retryKind: RetryExhaustionKind;
+      error?: string | undefined;
+    },
+  ): void {
+    this.state.retryAttempts.delete(key);
+    this.state.exhausted.set(key, {
+      issueId: entry.issueId,
+      identifier: entry.identifier,
+      issueUrl: entry.issueUrl ?? null,
+      attempts: entry.attempts,
+      maxAttempts: entry.maxAttempts,
+      nextAttempt: entry.nextAttempt,
+      retryKind: entry.retryKind,
+      exhaustedAt: this.clock.now(),
+      slotIndex: entry.slotIndex,
+      workerHost: entry.workerHost,
+      workspacePath: entry.workspacePath,
+      ...(entry.error !== undefined ? { error: entry.error } : {}),
+    });
+  }
 }
 
 export interface OrchestratorSnapshot {
   running: RunningEntry[];
   reserving: ReservationSnapshotEntry[];
   retrying: RetryEntry[];
+  exhausted: ExhaustedEntry[];
   blocked: DispatchBlockEntry[];
   usageTotals: UsageTotals;
   rateLimits: unknown;
   claimStore: ClaimStoreStatus;
+}
+
+function cloneExhaustedEntry(entry: ExhaustedEntry): ExhaustedEntry {
+  return { ...entry, exhaustedAt: new Date(entry.exhaustedAt) };
 }
 
 function dispatchBlockError(reason: DispatchBlockReason): string {

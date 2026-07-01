@@ -39,6 +39,7 @@ export const defaultSettings = (options: DefaultSettingsOptions = {}): Settings 
       kind: "codex",
       maxConcurrentAgents: 10,
       maxTurns: 20,
+      maxRetryAttempts: 3,
       maxRetryBackoffMs: 300_000,
       ensembleSize: 1,
       skills: [],

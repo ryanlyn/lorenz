@@ -1782,11 +1782,11 @@ test("orchestrator uses configured retry delays for failures and active continua
   continuationOrchestrator.finish(issue.id, 0, true, undefined, "continuation");
   retry = continuationOrchestrator.snapshot().retrying[0];
   assert.ok(retry);
-  assert.equal(retry.attempt, 1);
+  assert.equal(retry.attempt, 2);
   const secondContinuationDelay = Date.parse(retry.dueAtIso) - beforeSecondContinuation;
   assert.ok(secondContinuationDelay >= 900 && secondContinuationDelay <= 1_500);
 
-  assert.equal(claimEntry(continuationOrchestrator, issue)?.retryAttempt, 1);
+  assert.equal(claimEntry(continuationOrchestrator, issue)?.retryAttempt, 2);
   const beforeFailureAfterContinuations = Date.now();
   continuationOrchestrator.finish(
     issue.id,
@@ -1797,9 +1797,9 @@ test("orchestrator uses configured retry delays for failures and active continua
   );
   retry = continuationOrchestrator.snapshot().retrying[0];
   assert.ok(retry);
-  assert.equal(retry.attempt, 2);
+  assert.equal(retry.attempt, 3);
   const failureDelay = Date.parse(retry.dueAtIso) - beforeFailureAfterContinuations;
-  assert.ok(failureDelay >= 19_900 && failureDelay <= 20_500);
+  assert.ok(failureDelay >= 39_900 && failureDelay <= 40_500);
 });
 
 test("orchestrator retry dispatch reopens slots blocked only by stale claims", () => {

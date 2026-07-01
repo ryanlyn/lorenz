@@ -1,4 +1,10 @@
-import type { DispatchBlockEntry, Issue, RetryEntry, RunningEntry } from "@lorenz/domain";
+import type {
+  DispatchBlockEntry,
+  ExhaustedEntry,
+  Issue,
+  RetryEntry,
+  RunningEntry,
+} from "@lorenz/domain";
 
 import { createState, type OrchestratorState, type ReservationRecord } from "./state.js";
 
@@ -21,6 +27,10 @@ export interface SerializedReservationRecord extends Omit<
   consumedRetry: { key: string; entry: RetryEntry } | null;
 }
 
+interface SerializedExhaustedEntry extends Omit<ExhaustedEntry, "exhaustedAt"> {
+  exhaustedAt: string;
+}
+
 export interface SerializedOrchestratorState {
   version: typeof CLAIM_STORE_SNAPSHOT_VERSION;
   running: Array<[string, SerializedRunningEntry]>;
@@ -28,6 +38,7 @@ export interface SerializedOrchestratorState {
   claimed: string[];
   claimOwners?: Array<[string, string]> | undefined;
   retryAttempts: Array<[string, RetryEntry]>;
+  exhausted?: Array<[string, SerializedExhaustedEntry]> | undefined;
   completed: string[];
   usageTotals: OrchestratorState["usageTotals"];
   usageDeltaBases?: Array<[string, OrchestratorState["usageTotals"]]> | undefined;
@@ -57,6 +68,10 @@ export function serializeState(state: OrchestratorState): SerializedOrchestrator
     claimed: [...state.claimed],
     claimOwners: [...state.claimOwners.entries()],
     retryAttempts: [...state.retryAttempts.entries()].map(([key, retry]) => [key, { ...retry }]),
+    exhausted: [...state.exhausted.entries()].map(([key, entry]) => [
+      key,
+      serializeExhaustedEntry(entry),
+    ]),
     completed: [...state.completed],
     usageTotals: { ...state.usageTotals },
     usageDeltaBases: [...state.usageDeltaBases.entries()].map(([key, value]) => [
@@ -92,6 +107,9 @@ export function hydrateState(
   }
   state.retryAttempts = new Map(
     snapshot.retryAttempts.map(([key, retry]) => [key, hydrateRetryEntry(retry, options)]),
+  );
+  state.exhausted = new Map(
+    (snapshot.exhausted ?? []).map(([key, entry]) => [key, hydrateExhaustedEntry(entry)]),
   );
   for (const [key, entry] of abandonedRunningEntries) {
     if (entry.retryAttempt === null || state.retryAttempts.has(key)) continue;
@@ -206,6 +224,20 @@ function hydrateRetryEntry(retry: RetryEntry, options: HydrateStateOptions): Ret
       retry.monotonicDeadlineMs,
       options,
     ),
+  };
+}
+
+function serializeExhaustedEntry(entry: ExhaustedEntry): SerializedExhaustedEntry {
+  return {
+    ...entry,
+    exhaustedAt: entry.exhaustedAt.toISOString(),
+  };
+}
+
+function hydrateExhaustedEntry(entry: SerializedExhaustedEntry): ExhaustedEntry {
+  return {
+    ...entry,
+    exhaustedAt: new Date(entry.exhaustedAt),
   };
 }
 

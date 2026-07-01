@@ -47,6 +47,7 @@ export const hooksAliases = {
 const agentAliases = {
   max_concurrent_agents: "maxConcurrentAgents",
   max_turns: "maxTurns",
+  max_retry_attempts: "maxRetryAttempts",
   max_retry_backoff_ms: "maxRetryBackoffMs",
   ensemble_size: "ensembleSize",
 };

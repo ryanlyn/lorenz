@@ -246,9 +246,7 @@ export function validateDispatchConfig(
  * verbatim for the loader, while a bundle selection is left to the registry's
  * built-ins.
  */
-export function trackerSpecifierFromConfig(
-  raw: Record<string, unknown> = {},
-): string | undefined {
+export function trackerSpecifierFromConfig(raw: Record<string, unknown> = {}): string | undefined {
   const parsed = parseWorkflowConfig(raw);
   const trackersRaw = parsed.trackers ?? {};
   const selectorRecord = parseTrackerRecord(parsed.tracker ?? {}, "tracker");
@@ -654,6 +652,7 @@ function parseAgentSettings(
     kind,
     maxConcurrentAgents: agentRaw.maxConcurrentAgents ?? defaults.maxConcurrentAgents,
     maxTurns: agentRaw.maxTurns ?? defaults.maxTurns,
+    maxRetryAttempts: agentRaw.maxRetryAttempts ?? defaults.maxRetryAttempts,
     maxRetryBackoffMs: agentRaw.maxRetryBackoffMs ?? defaults.maxRetryBackoffMs,
     ensembleSize: agentRaw.ensembleSize ?? defaults.ensembleSize,
     skills: agentRaw.skills ? skills : defaults.skills,
@@ -906,6 +905,7 @@ function parsePartialAgent(raw: Partial<AgentRaw>): Partial<AgentSettings> {
   if (raw.kind !== undefined) next.kind = raw.kind;
   if (raw.maxConcurrentAgents !== undefined) next.maxConcurrentAgents = raw.maxConcurrentAgents;
   if (raw.maxTurns !== undefined) next.maxTurns = raw.maxTurns;
+  if (raw.maxRetryAttempts !== undefined) next.maxRetryAttempts = raw.maxRetryAttempts;
   if (raw.maxRetryBackoffMs !== undefined) next.maxRetryBackoffMs = raw.maxRetryBackoffMs;
   if (raw.ensembleSize !== undefined) next.ensembleSize = raw.ensembleSize;
   return next;

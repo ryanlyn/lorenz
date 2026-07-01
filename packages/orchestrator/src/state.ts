@@ -1,6 +1,7 @@
 import type {
   AgentKind,
   DispatchBlockEntry,
+  ExhaustedEntry,
   Issue,
   RetryEntry,
   RunningEntry,
@@ -42,6 +43,8 @@ export interface OrchestratorState {
   claimOwners: Map<string, string>;
   /** Retry entries keyed by slotKey(issueId, slotIndex). */
   retryAttempts: Map<string, RetryEntry>;
+  /** Terminal retry exhaustion entries keyed by slotKey(issueId, slotIndex). */
+  exhausted: Map<string, ExhaustedEntry>;
   completed: Set<string>;
   usageTotals: UsageTotals;
   /** Incremental usage report baseline keyed by slotKey(issueId, slotIndex). */
@@ -57,6 +60,7 @@ export function createState(): OrchestratorState {
     claimed: new Set(),
     claimOwners: new Map(),
     retryAttempts: new Map(),
+    exhausted: new Map(),
     completed: new Set(),
     usageTotals: { inputTokens: 0, outputTokens: 0, totalTokens: 0, secondsRunning: 0 },
     usageDeltaBases: new Map(),

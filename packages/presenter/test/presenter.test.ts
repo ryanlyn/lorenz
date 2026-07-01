@@ -12,6 +12,7 @@ test("presenter preserves blocked dispatches, retry errors, run costs, retries, 
   const state = statePayload(snapshot);
   const counts = state.counts as Record<string, unknown>;
   assert.equal(counts.blocked, 1);
+  assert.equal(counts.exhausted, 1);
   assert.deepEqual(state.claim_store, {
     kind: "memory",
     owner_id: "presenter-test",
@@ -56,6 +57,19 @@ test("presenter preserves blocked dispatches, retry errors, run costs, retries, 
     worker_host: null,
   });
   assert.equal((state.retrying as any[])[0].error, "agent exited: boom");
+  assert.deepEqual((state.exhausted as any[])[0], {
+    issue_id: "exhausted-1",
+    issue_identifier: "MT-EXHAUSTED",
+    issue_url: null,
+    attempts: 3,
+    max_attempts: 3,
+    next_attempt: 4,
+    retry_kind: "failure",
+    exhausted_at: "2026-05-06T00:02:00.000Z",
+    error: "agent exited: too many failures",
+    worker_host: null,
+    workspace_path: "/tmp/lorenz/MT-EXHAUSTED",
+  });
 
   const issue = issuePayload(snapshot, "MT-RETRY");
   assert.equal(issue.status, "ok");
@@ -67,6 +81,22 @@ test("presenter preserves blocked dispatches, retry errors, run costs, retries, 
     error: "agent exited: boom",
     worker_host: null,
     workspace_path: "/tmp/lorenz/MT-RETRY",
+  });
+
+  const exhaustedIssue = issuePayload(snapshot, "MT-EXHAUSTED");
+  assert.equal(exhaustedIssue.status, "ok");
+  if (exhaustedIssue.status !== "ok") throw new Error("exhausted issue payload should exist");
+  assert.equal(exhaustedIssue.payload.status, "exhausted");
+  assert.equal(exhaustedIssue.payload.last_error, "agent exited: too many failures");
+  assert.deepEqual(exhaustedIssue.payload.exhausted, {
+    attempts: 3,
+    max_attempts: 3,
+    next_attempt: 4,
+    retry_kind: "failure",
+    exhausted_at: "2026-05-06T00:02:00.000Z",
+    error: "agent exited: too many failures",
+    worker_host: null,
+    workspace_path: "/tmp/lorenz/MT-EXHAUSTED",
   });
 
   const runningIssue = issuePayload(snapshot, "MT-RUNNING");
@@ -263,6 +293,19 @@ function snapshotFixture(): RuntimeSnapshot {
         monotonicDeadlineMs: 60000,
         error: "agent exited: boom",
         workspacePath: "/tmp/lorenz/MT-RETRY",
+      },
+    ],
+    exhausted: [
+      {
+        issueId: "exhausted-1",
+        issueIdentifier: "MT-EXHAUSTED",
+        attempts: 3,
+        maxAttempts: 3,
+        nextAttempt: 4,
+        retryKind: "failure",
+        exhaustedAtIso: "2026-05-06T00:02:00.000Z",
+        error: "agent exited: too many failures",
+        workspacePath: "/tmp/lorenz/MT-EXHAUSTED",
       },
     ],
     blocked: [

@@ -182,6 +182,32 @@ test("finish — finishing same slot twice is idempotent (second is no-op)", () 
   assert.equal(orchestrator.snapshot().usageTotals.secondsRunning, afterFirst);
 });
 
+test("finish — exhausted retry budget records terminal work and blocks redispatch", () => {
+  const settings = parseConfig({ agent: { max_retry_attempts: 1, max_retry_backoff_ms: 1 } });
+  const orchestrator = new Orchestrator(settings);
+  const issue = makeIssue();
+  claimEntry(orchestrator, issue);
+
+  orchestrator.finish(issue.id, 0, true, "first failure", "failure");
+  const retry = orchestrator.state.retryAttempts.get(slotKey(issue.id, 0));
+  assert.ok(retry);
+  retry.monotonicDeadlineMs = 0;
+
+  claimEntry(orchestrator, issue);
+  orchestrator.finish(issue.id, 0, true, "second failure", "failure");
+
+  const snapshot = orchestrator.snapshot();
+  assert.equal(snapshot.retrying.length, 0);
+  assert.equal(snapshot.exhausted.length, 1);
+  assert.equal(snapshot.exhausted[0]?.issueId, issue.id);
+  assert.equal(snapshot.exhausted[0]?.attempts, 1);
+  assert.equal(snapshot.exhausted[0]?.maxAttempts, 1);
+  assert.equal(snapshot.exhausted[0]?.nextAttempt, 2);
+  assert.equal(snapshot.exhausted[0]?.error, "second failure");
+  assert.equal(orchestrator.eligibleIssues([issue]).length, 0);
+  assert.equal(claimEntry(orchestrator, issue), null);
+});
+
 // --- cleanupIssue ---
 
 test("cleanupIssue — removes running entry and claimed slot", () => {

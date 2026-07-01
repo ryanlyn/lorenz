@@ -1,7 +1,21 @@
-import { Activity, RefreshCw, AlertOctagon, Coins, ExternalLink, FileText } from "lucide-react";
+import {
+  Activity,
+  RefreshCw,
+  AlertOctagon,
+  Ban,
+  Coins,
+  ExternalLink,
+  FileText,
+} from "lucide-react";
 
 import { cn, formatNumber, formatTimestamp } from "../../../lib/utils";
-import type { OpsState, OpsRunningEntry, OpsRetryEntry, OpsBlockedEntry } from "../api/types";
+import type {
+  OpsState,
+  OpsRunningEntry,
+  OpsRetryEntry,
+  OpsExhaustedEntry,
+  OpsBlockedEntry,
+} from "../api/types";
 
 import { RecentIssues } from "./RecentIssues";
 
@@ -25,6 +39,40 @@ function MetricCard({ label, value, icon, color }: MetricCardProps) {
         <span className="text-xs text-muted">{label}</span>
       </div>
       <div className="mt-2 text-2xl font-semibold tracking-tight">{value}</div>
+    </div>
+  );
+}
+
+function IssueLinks({
+  issue_id,
+  issue_identifier,
+  issue_url,
+}: {
+  issue_id: string;
+  issue_identifier: string;
+  issue_url: string | null;
+}) {
+  return (
+    <div className="flex items-center gap-2">
+      <a
+        href={`#/trace/${encodeURIComponent(issue_id)}`}
+        className="inline-flex items-center gap-1 font-mono text-accent-blue hover:underline"
+        title="View trace"
+      >
+        <FileText className="h-3 w-3" />
+        {issue_identifier}
+      </a>
+      {issue_url && (
+        <a
+          href={issue_url}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="inline-flex items-center text-muted hover:text-foreground"
+          title="Open in tracker"
+        >
+          <ExternalLink className="h-3.5 w-3.5" />
+        </a>
+      )}
     </div>
   );
 }
@@ -55,27 +103,7 @@ function RunningTable({ sessions }: { sessions: OpsRunningEntry[] }) {
               {sessions.map((s) => (
                 <tr key={s.issue_id} className="hover:bg-surface">
                   <td className="px-4 py-2">
-                    <div className="flex items-center gap-2">
-                      <a
-                        href={`#/trace/${encodeURIComponent(s.issue_id)}`}
-                        className="inline-flex items-center gap-1 font-mono text-accent-blue hover:underline"
-                        title="View trace"
-                      >
-                        <FileText className="h-3 w-3" />
-                        {s.issue_identifier}
-                      </a>
-                      {s.issue_url && (
-                        <a
-                          href={s.issue_url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="inline-flex items-center text-muted hover:text-foreground"
-                          title="Open in tracker"
-                        >
-                          <ExternalLink className="h-3.5 w-3.5" />
-                        </a>
-                      )}
-                    </div>
+                    <IssueLinks {...s} />
                   </td>
                   <td className="px-4 py-2">
                     <span className="rounded bg-surface px-2 py-0.5 text-xs text-muted">
@@ -122,32 +150,56 @@ function RetryTable({ entries }: { entries: OpsRetryEntry[] }) {
               {entries.map((e) => (
                 <tr key={e.issue_id} className="hover:bg-surface">
                   <td className="px-4 py-2">
-                    <div className="flex items-center gap-2">
-                      <a
-                        href={`#/trace/${encodeURIComponent(e.issue_id)}`}
-                        className="inline-flex items-center gap-1 font-mono text-accent-blue hover:underline"
-                        title="View trace"
-                      >
-                        <FileText className="h-3 w-3" />
-                        {e.issue_identifier}
-                      </a>
-                      {e.issue_url && (
-                        <a
-                          href={e.issue_url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="inline-flex items-center text-muted hover:text-foreground"
-                          title="Open in tracker"
-                        >
-                          <ExternalLink className="h-3.5 w-3.5" />
-                        </a>
-                      )}
-                    </div>
+                    <IssueLinks {...e} />
                   </td>
                   <td className="px-4 py-2 font-mono">{e.attempt}</td>
                   <td className="px-4 py-2 font-mono">{formatTimestamp(e.due_at)}</td>
                   <td className="px-4 py-2 text-muted">{e.worker_host ?? "local"}</td>
                   <td className="px-4 py-2 font-mono text-muted">{e.workspace_path ?? "n/a"}</td>
+                  <td className="px-4 py-2 text-muted">{e.error ?? "n/a"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ExhaustedTable({ entries }: { entries: OpsExhaustedEntry[] }) {
+  return (
+    <div className="rounded-lg border border-border bg-card">
+      <div className="border-b border-border px-4 py-3">
+        <h3 className="text-sm font-medium text-foreground">Exhausted Work</h3>
+      </div>
+      {entries.length === 0 ? (
+        <div className="px-4 py-6 text-center text-sm text-muted">No exhausted work</div>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-border text-left text-xs text-muted">
+                <th className="px-4 py-2 font-medium">Issue</th>
+                <th className="px-4 py-2 font-medium">Budget</th>
+                <th className="px-4 py-2 font-medium">Kind</th>
+                <th className="px-4 py-2 font-medium">Exhausted</th>
+                <th className="px-4 py-2 font-medium">Worker</th>
+                <th className="px-4 py-2 font-medium">Error</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-border">
+              {entries.map((e) => (
+                <tr key={e.issue_id} className="hover:bg-surface">
+                  <td className="px-4 py-2">
+                    <IssueLinks {...e} />
+                  </td>
+                  <td className="px-4 py-2 font-mono">
+                    {e.attempts}/{e.max_attempts}
+                  </td>
+                  <td className="px-4 py-2 text-muted">{e.retry_kind}</td>
+                  <td className="px-4 py-2 font-mono">{formatTimestamp(e.exhausted_at)}</td>
+                  <td className="px-4 py-2 text-muted">{e.worker_host ?? "local"}</td>
                   <td className="px-4 py-2 text-muted">{e.error ?? "n/a"}</td>
                 </tr>
               ))}
@@ -223,8 +275,9 @@ interface OpsOverviewProps {
 export function OpsOverview({ state, connected }: OpsOverviewProps) {
   const running = state?.running ?? [];
   const retrying = state?.retrying ?? [];
+  const exhausted = state?.exhausted ?? [];
   const blocked = state?.blocked ?? [];
-  const counts = state?.counts ?? { running: 0, retrying: 0, blocked: 0 };
+  const counts = state?.counts ?? { running: 0, retrying: 0, exhausted: 0, blocked: 0 };
   const usageTotals = state?.usage_totals ?? { input_tokens: 0, output_tokens: 0, total_tokens: 0 };
 
   const metrics: MetricCardProps[] = [
@@ -239,6 +292,12 @@ export function OpsOverview({ state, connected }: OpsOverviewProps) {
       value: counts.retrying.toString(),
       icon: <RefreshCw className="h-4 w-4" />,
       color: "text-accent-orange",
+    },
+    {
+      label: "Exhausted",
+      value: counts.exhausted.toString(),
+      icon: <Ban className="h-4 w-4" />,
+      color: "text-accent-red",
     },
     {
       label: "Blocked",
@@ -280,6 +339,7 @@ export function OpsOverview({ state, connected }: OpsOverviewProps) {
       <div className="space-y-6">
         <RunningTable sessions={running} />
         <RetryTable entries={retrying} />
+        <ExhaustedTable entries={exhausted} />
         <BlockedTable entries={blocked} />
       </div>
 

@@ -35,7 +35,7 @@ import type {
   LorenzRuntimeOptions,
   WorkflowDefinition,
 } from "@lorenz/cli";
-import type { ClockPort, WorkerPoolSettings } from "@lorenz/domain";
+import type { AgentUpdate, ClockPort, WorkerPoolSettings } from "@lorenz/domain";
 import type { AgentMcpEndpointLease } from "@lorenz/mcp";
 import type { AcquireResult, WorkerLease, WorkerOutcome, WorkerPool } from "@lorenz/worker-pool";
 import { assert, settle, tempDir, writeExecutable } from "@lorenz/test-utils";
@@ -1325,6 +1325,67 @@ test("runtime reconciles stalled runs from the orchestrator poll loop", async ()
   }
 });
 
+test("runtime exhausts stalled runs when the retry budget is spent", async () => {
+  const issue = issueFixture("issue-stall-exhausted", "MT-STALL-EXHAUSTED");
+  const root = await tempDir("lorenz-runtime-stall-exhausted");
+  const workflow = workflowFixture(root);
+  workflow.settings.agent.maxRetryAttempts = 0;
+  workflow.settings.agents.codex.stallTimeoutMs = 50;
+  const workspace = await createWorkspaceForIssue(workflow.settings, issue);
+  const orchestrator = new Orchestrator(workflow.settings);
+  let aborted = false;
+  const runtime = new LorenzRuntime(
+    runtimeOptions({
+      workflow,
+      orchestrator,
+      client: {
+        fetchCandidateIssues: async () => [issue],
+        fetchIssuesByIds: async () => [issue],
+      },
+      runner: async ({ abortSignal, onUpdate }) => {
+        onUpdate?.({
+          type: "workspace_prepared",
+          message: `workspace prepared at ${workspace}`,
+          workspacePath: workspace,
+        });
+        await new Promise<void>((_resolve, reject) => {
+          abortSignal?.addEventListener(
+            "abort",
+            () => {
+              aborted = true;
+              reject(new Error("aborted by stall reconciliation"));
+            },
+            { once: true },
+          );
+        });
+        throw new Error("unreachable");
+      },
+    }),
+  );
+
+  try {
+    await runtime.pollOnce();
+    const running = orchestrator.snapshot().running[0];
+    assert.ok(running);
+    running.lastAgentTimestamp = new Date(Date.now() - 1_000);
+
+    await runtime.pollOnce({ dryRun: true });
+    await waitFor(() => aborted, 1_000);
+
+    const snapshot = runtime.snapshot();
+    assert.equal(snapshot.running.length, 0);
+    assert.equal(snapshot.retrying.length, 0);
+    assert.equal(snapshot.exhausted?.[0]?.retryKind, "failure");
+    assert.equal(snapshot.runHistory[0]?.outcome, "exhausted");
+    assert.equal(
+      snapshot.recentEvents.some((event) => event.type === "run_exhausted"),
+      true,
+    );
+  } finally {
+    runtime.stop();
+  }
+});
+
 test("runtime stall reconciliation uses agents-level stall timeout defaults", async () => {
   const issue = issueFixture("issue-agents-stall", "MT-AGENTS-STALL");
   const root = await tempDir("lorenz-runtime-agents-stall");
@@ -2475,11 +2536,156 @@ test("runtime records failed attempts as retryable work and keeps polling", asyn
   snapshot = runtime.snapshot();
   assert.equal(attempts, 2);
   assert.equal(snapshot.runHistory[0]?.outcome, "success");
-  assert.equal(snapshot.retrying[0]?.attempt, 1);
+  assert.equal(snapshot.retrying[0]?.attempt, 2);
 
   await runtime.pollOnce({ waitForRuns: true });
   snapshot = runtime.snapshot();
   assert.equal(snapshot.retrying.length, 0);
+});
+
+test("runtime exhausts failed retries when the retry budget is spent", async () => {
+  const issue = issueFixture("issue-retry-exhausted", "MT-RETRY-EXHAUSTED");
+  const workflow = workflowFixture();
+  workflow.settings.agent.maxRetryAttempts = 0;
+  const orchestrator = new Orchestrator(workflow.settings);
+  let attempts = 0;
+  const runtime = new LorenzRuntime(
+    runtimeOptions({
+      workflow,
+      orchestrator,
+      client: {
+        fetchCandidateIssues: async () => [issue],
+        fetchIssuesByIds: async () => [issue],
+      },
+      runner: async () => {
+        attempts += 1;
+        throw new Error("agent exited: boom");
+      },
+    }),
+  );
+
+  await runtime.pollOnce({ waitForRuns: true });
+  let snapshot = runtime.snapshot();
+  assert.equal(attempts, 1);
+  assert.equal(snapshot.retrying.length, 0);
+  assert.equal(snapshot.exhausted?.[0]?.issueIdentifier, "MT-RETRY-EXHAUSTED");
+  assert.equal(snapshot.exhausted?.[0]?.retryKind, "failure");
+  assert.equal(snapshot.exhausted?.[0]?.attempts, 0);
+  assert.equal(snapshot.exhausted?.[0]?.maxAttempts, 0);
+  assert.equal(snapshot.runHistory[0]?.outcome, "exhausted");
+  assert.equal(
+    snapshot.recentEvents.some((event) => event.type === "run_exhausted"),
+    true,
+  );
+
+  await runtime.pollOnce({ waitForRuns: true });
+  snapshot = runtime.snapshot();
+  assert.equal(attempts, 1);
+  assert.equal(snapshot.exhausted?.length, 1);
+});
+
+test("runtime treats quiet session notifications as liveness", async () => {
+  const issue = issueFixture("issue-quiet-live", "MT-QUIET-LIVE");
+  const workflow = workflowFixture();
+  workflow.settings.agents.codex.stallTimeoutMs = 50;
+  const clock = manualClock(new Date("2026-01-01T00:00:00.000Z"));
+  const orchestrator = new Orchestrator(workflow.settings, clock);
+  let emitUpdate: ((update: AgentUpdate) => void) | undefined;
+  let aborted = false;
+  const runtime = new LorenzRuntime(
+    runtimeOptions({
+      workflow,
+      orchestrator,
+      clock,
+      client: {
+        fetchCandidateIssues: async () => [issue],
+        fetchIssuesByIds: async () => [issue],
+      },
+      runner: async ({ abortSignal, onUpdate }) => {
+        emitUpdate = onUpdate;
+        abortSignal?.addEventListener("abort", () => {
+          aborted = true;
+        });
+        return await new Promise<RunResult>(() => {});
+      },
+    }),
+  );
+
+  try {
+    await runtime.pollOnce();
+    clock.advance(1_000);
+    assert.ok(emitUpdate);
+    emitUpdate({
+      type: "session_notification",
+      message: { sessionUpdate: "tool_call" },
+    });
+    await vi.waitFor(() => {
+      assert.equal(orchestrator.snapshot().running[0]?.lastAgentEvent, "session_notification");
+    });
+
+    clock.advance(40);
+    await runtime.pollOnce({ dryRun: true });
+    const snapshot = runtime.snapshot();
+    assert.equal(aborted, false);
+    assert.equal(snapshot.running.length, 1);
+    assert.equal(snapshot.runHistory.length, 0);
+    assert.equal(
+      snapshot.recentEvents.some((event) => event.type === "run_stalled"),
+      false,
+    );
+  } finally {
+    runtime.stop();
+  }
+});
+
+test("runtime exhausts continuation loops when the retry budget is spent", async () => {
+  const issue = issueFixture("issue-continuation-exhausted", "MT-CONT-EXHAUSTED");
+  const workflow = workflowFixture();
+  workflow.settings.agent.maxRetryAttempts = 1;
+  workflow.settings.agent.maxRetryBackoffMs = 0;
+  const orchestrator = new Orchestrator(workflow.settings);
+  let attempts = 0;
+  const runtime = new LorenzRuntime(
+    runtimeOptions({
+      workflow,
+      orchestrator,
+      client: {
+        fetchCandidateIssues: async () => [issue],
+        fetchIssuesByIds: async () => [issue],
+      },
+      runner: async () => {
+        attempts += 1;
+        return {
+          workspace: "/tmp/lorenz/MT-CONT-EXHAUSTED",
+          turnCount: 1,
+          updates: [],
+          agentKind: "codex",
+          finalIssue: issue,
+        };
+      },
+    }),
+  );
+
+  await runtime.pollOnce({ waitForRuns: true });
+  let snapshot = runtime.snapshot();
+  assert.equal(snapshot.retrying[0]?.attempt, 1);
+  const retry = orchestrator.state.retryAttempts.get(slotKey(issue.id, 0));
+  assert.ok(retry);
+  retry.dueAtIso = new Date(Date.now() - 1).toISOString();
+  retry.monotonicDeadlineMs = 0;
+
+  await runtime.pollOnce({ waitForRuns: true });
+  snapshot = runtime.snapshot();
+  assert.equal(attempts, 2);
+  assert.equal(snapshot.retrying.length, 0);
+  assert.equal(snapshot.exhausted?.[0]?.retryKind, "continuation");
+  assert.equal(snapshot.exhausted?.[0]?.attempts, 1);
+  assert.equal(snapshot.exhausted?.[0]?.nextAttempt, 2);
+  assert.equal(snapshot.runHistory[0]?.outcome, "exhausted");
+  assert.equal(
+    snapshot.recentEvents.some((event) => event.type === "run_exhausted"),
+    true,
+  );
 });
 
 test("runtime schedules retry refresh timers independently of the poll cadence", async () => {
@@ -2516,7 +2722,7 @@ test("runtime schedules retry refresh timers independently of the poll cadence",
 
   await waitFor(() => attempts === 2, 3_000);
   let snapshot = runtime.snapshot();
-  assert.equal(snapshot.retrying[0]?.attempt, 1);
+  assert.equal(snapshot.retrying[0]?.attempt, 2);
 
   await waitFor(() => runtime.snapshot().retrying.length === 0, 3_000);
   snapshot = runtime.snapshot();

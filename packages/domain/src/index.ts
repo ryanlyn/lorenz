@@ -13,6 +13,7 @@ export const RENDER_INTERVAL_MAX_MS = 60_000;
 export const CONCURRENCY_MAX = 1000;
 export const MAX_TURNS_MAX = 10_000;
 export const ENSEMBLE_SIZE_MAX = 100;
+export const RETRY_ATTEMPTS_MAX = 1000;
 
 // --- Bounds validators ---
 
@@ -42,6 +43,10 @@ export function isValidConcurrency(n: number): boolean {
 
 export function isValidMaxTurns(n: number): boolean {
   return Number.isInteger(n) && n >= 1 && n <= MAX_TURNS_MAX;
+}
+
+export function isValidRetryAttempts(n: number): boolean {
+  return Number.isInteger(n) && n >= 0 && n <= RETRY_ATTEMPTS_MAX;
 }
 
 export function isValidEnsembleSize(n: number): boolean {
@@ -406,6 +411,8 @@ export interface AgentSettings {
   maxConcurrentAgents: number;
   /** Maximum back-to-back turns a single worker session may run before exiting and yielding. */
   maxTurns: number;
+  /** Maximum retries or continuations allowed after the initial attempt. `0` disables retries. */
+  maxRetryAttempts: number;
   /** Cap (ms) on exponential retry backoff between attempts on the same issue. */
   maxRetryBackoffMs: number;
   /**
@@ -686,7 +693,7 @@ export interface EnsembleContext {
 export interface RetryEntry {
   issueId: string;
   identifier: string;
-  /** 1-based attempt counter; bumped each time a failure retry is recorded, reset to 1 for continuation retries. */
+  /** 1-based retry or continuation counter after the initial attempt. */
   attempt: number;
   /** Monotonic clock deadline (ms) — drives timer scheduling; immune to wall-clock adjustments. */
   monotonicDeadlineMs: number;
@@ -699,6 +706,25 @@ export interface RetryEntry {
   workerHost?: string | null | undefined;
   workspacePath?: string | null | undefined;
   issueUrl?: string | null | undefined;
+}
+
+export type RetryExhaustionKind = "failure" | "continuation";
+
+export interface ExhaustedEntry {
+  issueId: string;
+  identifier: string;
+  issueUrl?: string | null | undefined;
+  /** Retry or continuation attempts already consumed after the initial attempt. */
+  attempts: number;
+  maxAttempts: number;
+  /** The next retry or continuation attempt that was not scheduled because the budget was spent. */
+  nextAttempt: number;
+  retryKind: RetryExhaustionKind;
+  exhaustedAt: Date;
+  error?: string | undefined;
+  slotIndex?: number | undefined;
+  workerHost?: string | null | undefined;
+  workspacePath?: string | null | undefined;
 }
 
 /**
@@ -1031,11 +1057,7 @@ export interface SdkModuleContract<TModule extends SdkModule> {
    * at authoring time) so every error is actionable. Standalone (`this: void`), so
    * an SDK can re-export it directly under its public name.
    */
-  readonly assertModule: (
-    this: void,
-    value: unknown,
-    source: string,
-  ) => asserts value is TModule;
+  readonly assertModule: (this: void, value: unknown, source: string) => asserts value is TModule;
   /**
    * Authoring sugar: shape-asserts at definition time (so a typo fails in the
    * author's tests, not the operator's daemon) and returns the module unchanged.

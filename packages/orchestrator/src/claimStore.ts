@@ -712,6 +712,7 @@ function replaceStateContents(target: OrchestratorState, source: OrchestratorSta
   target.claimed = source.claimed;
   target.claimOwners = source.claimOwners;
   target.retryAttempts = source.retryAttempts;
+  target.exhausted = source.exhausted;
   target.completed = source.completed;
   target.usageTotals = source.usageTotals;
   target.usageDeltaBases = source.usageDeltaBases;
@@ -731,6 +732,12 @@ function cloneStateContents(source: OrchestratorState): OrchestratorState {
   state.claimOwners = new Map(source.claimOwners);
   state.retryAttempts = new Map(
     [...source.retryAttempts.entries()].map(([key, entry]) => [key, { ...entry }]),
+  );
+  state.exhausted = new Map(
+    [...source.exhausted.entries()].map(([key, entry]) => [
+      key,
+      { ...entry, exhaustedAt: new Date(entry.exhaustedAt) },
+    ]),
   );
   state.completed = new Set(source.completed);
   state.usageTotals = { ...source.usageTotals };

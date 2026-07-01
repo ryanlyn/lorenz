@@ -17,6 +17,10 @@
 │
 │  No queued retries
 │
+├─ Exhausted work
+│
+│  No exhausted work
+│
 ├─ Dispatch blocks
 │
 │  No capacity-blocked issues

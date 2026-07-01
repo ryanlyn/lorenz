@@ -155,6 +155,13 @@ export function formatDashboard(
   } else {
     for (const retry of snapshot.retrying) lines.push(formatRetryRow(retry, now, ansi));
   }
+  const exhausted = snapshot.exhausted ?? [];
+  lines.push("│", b("├─ Exhausted work", ansi), "│");
+  if (exhausted.length === 0) {
+    lines.push(`│  ${s("90", "No exhausted work", ansi)}`);
+  } else {
+    for (const entry of exhausted) lines.push(formatExhaustedRow(entry, ansi));
+  }
   lines.push("│", b("├─ Dispatch blocks", ansi), "│");
   const dispatchBlocks =
     snapshot.blocked.length > 0
@@ -215,6 +222,15 @@ function formatRetryRow(
   const error = stringAt(retry, ["error"]);
   const suffix = error ? `error=${terminalCell(error)}` : "error=n/a";
   return `│  ${s("38;5;208", "↻", ansi)} ${styledCell("31", retry.issueIdentifier, ansi)} ${s("33", `attempt=${retry.attempt}`, ansi)}${s("2", " in ", ansi)}${s("36", dueIn, ansi)} ${s("2", suffix, ansi)}`;
+}
+
+function formatExhaustedRow(
+  entry: NonNullable<RuntimeSnapshot["exhausted"]>[number],
+  ansi: boolean,
+): string {
+  const error = stringAt(entry, ["error"]);
+  const suffix = error ? `error=${terminalCell(error)}` : "error=n/a";
+  return `│  ${s("31", "×", ansi)} ${styledCell("31", entry.issueIdentifier, ansi)} ${s("33", `${entry.retryKind}=${entry.attempts}/${entry.maxAttempts}`, ansi)} ${s("2", suffix, ansi)}`;
 }
 
 function formatDispatchBlockRow(block: unknown, ansi: boolean): string {

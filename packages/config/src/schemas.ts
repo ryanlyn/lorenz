@@ -6,6 +6,7 @@ import {
   ONE_WEEK_MS,
   PORT_MAX,
   RENDER_INTERVAL_MAX_MS,
+  RETRY_ATTEMPTS_MAX,
   isRecord,
   isValidConcurrency,
   isValidEnsembleSize,
@@ -14,6 +15,7 @@ import {
   isValidNonNegativeTimeoutMs,
   isValidPort,
   isValidRenderIntervalMs,
+  isValidRetryAttempts,
   isValidTimeoutMs,
 } from "@lorenz/domain";
 
@@ -108,6 +110,12 @@ const coercedMaxTurns = numericInput
     message: `must be an integer between 1 and ${MAX_TURNS_MAX}`,
   })
   .describe("positive");
+
+const coercedRetryAttempts = numericInput
+  .refine((n) => isValidRetryAttempts(n), {
+    message: `must be an integer between 0 and ${RETRY_ATTEMPTS_MAX}`,
+  })
+  .describe("non-negative");
 
 const coercedEnsembleSize = numericInput
   .refine((n) => isValidEnsembleSize(n), {
@@ -258,6 +266,7 @@ const agentRawSchema = z
     kind: z.string().optional(),
     maxConcurrentAgents: coercedConcurrency.optional(),
     maxTurns: coercedMaxTurns.optional(),
+    maxRetryAttempts: coercedRetryAttempts.optional(),
     maxRetryBackoffMs: coercedTimeoutMs.optional(),
     ensembleSize: coercedEnsembleSize.optional(),
     skills: skillSourceListSchema.optional(),

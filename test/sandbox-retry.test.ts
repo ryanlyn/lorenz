@@ -189,7 +189,7 @@ describe("Sandbox: Retry and Backoff", () => {
       ],
       settingsOverrides: {
         polling: { intervalMs: 60_000 },
-        agent: { maxConcurrentAgents: 1, maxRetryBackoffMs: 80 },
+        agent: { maxConcurrentAgents: 1, maxRetryAttempts: 8, maxRetryBackoffMs: 80 },
       },
       runnerConfig: {
         defaultBehavior: { shouldSucceed: true, turnCount: 1, latencyPerTurnMs: 0 },

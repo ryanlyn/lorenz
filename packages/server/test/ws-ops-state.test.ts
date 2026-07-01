@@ -41,7 +41,12 @@ test("observability /ws pushes ops state on connect and broadcasts runtime updat
     await waitFor(() => messages.length >= 3);
     assert.equal(messages[2]!.type, "ops_state");
     assert.equal(messages[2]!.state.running[0].turn_count, 2);
-    assert.deepEqual(messages[2]!.state.counts, { running: 1, retrying: 0, blocked: 0 });
+    assert.deepEqual(messages[2]!.state.counts, {
+      running: 1,
+      retrying: 0,
+      exhausted: 0,
+      blocked: 0,
+    });
   } finally {
     ws.close();
     await closed;
@@ -116,6 +121,7 @@ function snapshotFixture(turnCount: number): RuntimeSnapshot {
       },
     ],
     retrying: [],
+    exhausted: [],
     blocked: [],
     runHistory: [],
     usageTotals: { inputTokens: 4, outputTokens: 8, totalTokens: 12, secondsRunning: 1 },

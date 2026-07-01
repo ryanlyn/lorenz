@@ -15,6 +15,10 @@
 │
 │  \e[90mNo queued retries\e[0m
 │
+\e[1m├─ Exhausted work\e[0m
+│
+│  \e[90mNo exhausted work\e[0m
+│
 \e[1m├─ Dispatch blocks\e[0m
 │
 │  \e[90mNo capacity-blocked issues\e[0m

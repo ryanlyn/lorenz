@@ -18,9 +18,11 @@ import {
 import type {
   RuntimeAppStatus,
   RuntimeEventType,
+  RuntimeExhaustedEntry,
   RuntimePollStatus,
   RuntimeRetryEntry,
   RuntimeRunHistoryEntry,
+  RuntimeRunLastEvent,
   RuntimeRunOutcome,
   RuntimeRunningEntry,
   RuntimeSnapshot,
@@ -54,6 +56,7 @@ export type {
   RuntimeBlockedEntry,
   RuntimeEvent,
   RuntimeEventType,
+  RuntimeExhaustedEntry,
   RuntimePollStatus,
   RuntimeReservingEntry,
   RuntimeRetryEntry,
@@ -377,6 +380,7 @@ export class LorenzRuntime {
       // `running` with a placeholder host.
       reserving: orchestration.reserving.map((entry) => ({ ...entry })),
       retrying: orchestration.retrying.map(runtimeRetryEntry),
+      exhausted: orchestration.exhausted.map(runtimeExhaustedEntry),
       blocked: orchestration.blocked.map((entry) => ({ ...entry })),
       usageTotals: orchestration.usageTotals,
       rateLimits: orchestration.rateLimits,
@@ -987,6 +991,13 @@ export class LorenzRuntime {
         this.addEvent("dispatch_skipped", `${issue.identifier} claim_lost_before_finish`);
         return;
       }
+      const retrySyncError = this.syncRetryTimerSafely(issue.id);
+      const exhausted = this.exhaustedForSlot(issue.id, slotIndex);
+      const terminal = terminalRunDetails(issue.identifier, exhausted, {
+        outcome: "success",
+        eventType: "run_completed",
+        eventMessage: `${issue.identifier} turns=${result.turnCount}`,
+      });
       this.recordHistory(
         buildRunHistoryEntry({
           id: runId,
@@ -994,17 +1005,18 @@ export class LorenzRuntime {
           state: finalIssue.state,
           slotIndex,
           agentKind,
-          outcome: "success",
+          outcome: terminal.outcome,
           turnCount: result.turnCount,
           runningEntry: finished,
           workspacePath: result.workspace,
           startedAt,
           endedAt: this.clock.now().toISOString(),
           durationMs: durationMs(startedAt, this.clock.now().toISOString()),
+          error: terminal.error,
+          fallbackLastEvent: terminal.fallbackLastEvent,
         }),
       );
-      const retrySyncError = this.syncRetryTimerSafely(issue.id);
-      this.addEvent("run_completed", `${issue.identifier} turns=${result.turnCount}`);
+      this.addEvent(terminal.eventType, terminal.eventMessage);
       if (retrySyncError) this.addEvent("poll_error", retrySyncError);
     } catch (error) {
       await updateQueue;
@@ -1045,24 +1057,33 @@ export class LorenzRuntime {
         this.addEvent("dispatch_skipped", `${issue.identifier} claim_lost_before_finish`);
         return;
       }
+      const retrySyncError = this.syncRetryTimerSafely(issue.id);
+      const exhausted = this.exhaustedForSlot(issue.id, slotIndex);
+      const runError = errorMessage(error);
+      const terminal = terminalRunDetails(issue.identifier, exhausted, {
+        outcome: "failed",
+        error: runError,
+        fallbackLastEvent: "turn_failed",
+        eventType: "run_failed",
+        eventMessage: `${issue.identifier} ${runError}`,
+      });
       this.recordHistory(
         buildRunHistoryEntry({
           id: runId,
           issue,
           slotIndex,
           agentKind,
-          outcome: "failed",
+          outcome: terminal.outcome,
           turnCount: finished.turnCount,
           runningEntry: finished,
           startedAt,
           endedAt: this.clock.now().toISOString(),
           durationMs: durationMs(startedAt, this.clock.now().toISOString()),
-          error: errorMessage(error),
-          fallbackLastEvent: "turn_failed",
+          error: terminal.error,
+          fallbackLastEvent: terminal.fallbackLastEvent,
         }),
       );
-      const retrySyncError = this.syncRetryTimerSafely(issue.id);
-      this.addEvent("run_failed", `${issue.identifier} ${errorMessage(error)}`);
+      this.addEvent(terminal.eventType, terminal.eventMessage);
       if (retrySyncError) this.addEvent("poll_error", retrySyncError);
     } finally {
       handle.release();
@@ -1187,7 +1208,7 @@ export class LorenzRuntime {
     const tracked = new Map<
       string,
       {
-        kind: "claim" | "retry";
+        kind: "claim" | "retry" | "exhausted";
         identifier: string;
         workerHost?: string | null | undefined;
         workspacePath?: string | null | undefined;
@@ -1223,6 +1244,15 @@ export class LorenzRuntime {
         workspacePath: entry.workspacePath,
       });
     }
+    for (const entry of snapshot.exhausted) {
+      if (tracked.has(entry.issueId)) continue;
+      tracked.set(entry.issueId, {
+        kind: "exhausted",
+        identifier: entry.identifier,
+        workerHost: entry.workerHost,
+        workspacePath: entry.workspacePath,
+      });
+    }
     if (tracked.size === 0) return;
 
     let refreshed: Issue[];
@@ -1238,7 +1268,7 @@ export class LorenzRuntime {
       const active = issueIsActive(issue, this.workflow.settings);
       const routed = routedToThisWorker(issue, this.workflow.settings);
       if (active && routed && !issueHasOpenBlockers(issue, this.workflow.settings)) {
-        await this.orchestrator.refreshRunningIssueAsync(issue);
+        if (meta?.kind === "claim") await this.orchestrator.refreshRunningIssueAsync(issue);
         continue;
       }
       try {
@@ -1322,6 +1352,15 @@ export class LorenzRuntime {
         continue;
       }
       activeHandle?.finishExternally("stalled");
+      const retrySyncError = this.syncRetryTimerSafely(entry.issue.id);
+      const exhausted = this.exhaustedForSlot(entry.issue.id, entry.slotIndex);
+      const terminal = terminalRunDetails(entry.identifier, exhausted, {
+        outcome: "stalled",
+        error,
+        fallbackLastEvent: "agent_stalled",
+        eventType: "run_stalled",
+        eventMessage: `${entry.identifier} ${error}`,
+      });
       const endedAt = this.clock.now().toISOString();
       this.recordHistory(
         buildRunHistoryEntry({
@@ -1330,18 +1369,17 @@ export class LorenzRuntime {
           issueIdentifier: entry.identifier,
           slotIndex: entry.slotIndex,
           agentKind: entry.agentKind,
-          outcome: "stalled",
+          outcome: terminal.outcome,
           turnCount: entry.turnCount,
           runningEntry: entry,
           startedAt: entry.startedAt.toISOString(),
           endedAt,
           durationMs: durationMs(entry.startedAt.toISOString(), endedAt),
-          error,
-          fallbackLastEvent: "agent_stalled",
+          error: terminal.error,
+          fallbackLastEvent: terminal.fallbackLastEvent,
         }),
       );
-      const retrySyncError = this.syncRetryTimerSafely(entry.issue.id);
-      this.addEvent("run_stalled", `${entry.identifier} ${error}`);
+      this.addEvent(terminal.eventType, terminal.eventMessage);
       if (retrySyncError) this.addEvent("poll_error", retrySyncError);
     }
   }
@@ -1444,6 +1482,13 @@ export class LorenzRuntime {
 
   private recordHistory(entry: RuntimeRunHistoryEntry): void {
     this.projection.recordRunHistory(entry);
+  }
+
+  private exhaustedForSlot(issueId: string, slotIndex: number): RuntimeExhaustedEntry | undefined {
+    const entry = this.orchestrator
+      .snapshot()
+      .exhausted.find((entry) => entry.issueId === issueId && (entry.slotIndex ?? 0) === slotIndex);
+    return entry ? runtimeExhaustedEntry(entry) : undefined;
   }
 
   private recordRetryTimerError(error: unknown): void {
@@ -1646,6 +1691,72 @@ function runtimeRetryEntry(entry: {
     ...(entry.workerHost !== undefined ? { workerHost: entry.workerHost } : {}),
     ...(entry.workspacePath !== undefined ? { workspacePath: entry.workspacePath } : {}),
   };
+}
+
+interface TerminalRunFallback {
+  outcome: RuntimeRunOutcome;
+  error?: string | undefined;
+  fallbackLastEvent?: RuntimeRunLastEvent | undefined;
+  eventType: RuntimeEventType;
+  eventMessage: string;
+}
+
+interface TerminalRunDetails extends TerminalRunFallback {
+  outcome: RuntimeRunOutcome;
+}
+
+function terminalRunDetails(
+  issueIdentifier: string,
+  exhausted: RuntimeExhaustedEntry | undefined,
+  fallback: TerminalRunFallback,
+): TerminalRunDetails {
+  if (!exhausted) return fallback;
+  return {
+    outcome: "exhausted",
+    error: exhaustedMessage(exhausted),
+    fallbackLastEvent: "agent_exhausted",
+    eventType: "run_exhausted",
+    eventMessage: exhaustedRuntimeMessage(issueIdentifier, exhausted),
+  };
+}
+
+function runtimeExhaustedEntry(entry: {
+  issueId: string;
+  identifier: string;
+  issueUrl?: string | null | undefined;
+  attempts: number;
+  maxAttempts: number;
+  nextAttempt: number;
+  retryKind: RuntimeExhaustedEntry["retryKind"];
+  exhaustedAt: Date;
+  error?: string | undefined;
+  slotIndex?: number | undefined;
+  workerHost?: string | null | undefined;
+  workspacePath?: string | null | undefined;
+}): RuntimeExhaustedEntry {
+  return {
+    issueId: entry.issueId,
+    issueIdentifier: entry.identifier,
+    issueUrl: entry.issueUrl ?? null,
+    attempts: entry.attempts,
+    maxAttempts: entry.maxAttempts,
+    nextAttempt: entry.nextAttempt,
+    retryKind: entry.retryKind,
+    exhaustedAtIso: entry.exhaustedAt.toISOString(),
+    ...(entry.error !== undefined ? { error: entry.error } : {}),
+    ...(entry.slotIndex !== undefined ? { slotIndex: entry.slotIndex } : {}),
+    ...(entry.workerHost !== undefined ? { workerHost: entry.workerHost } : {}),
+    ...(entry.workspacePath !== undefined ? { workspacePath: entry.workspacePath } : {}),
+  };
+}
+
+function exhaustedMessage(entry: RuntimeExhaustedEntry): string {
+  const reason = entry.error ?? `${entry.retryKind} retry budget exhausted`;
+  return `retry budget exhausted (${entry.retryKind} attempts=${entry.attempts}/${entry.maxAttempts} next=${entry.nextAttempt}): ${reason}`;
+}
+
+function exhaustedRuntimeMessage(issueIdentifier: string, entry: RuntimeExhaustedEntry): string {
+  return `${issueIdentifier} ${entry.retryKind} attempts=${entry.attempts}/${entry.maxAttempts} next=${entry.nextAttempt}`;
 }
 
 function agentUpdateRuntimeMessage(issueIdentifier: string, update: AgentUpdate): string {

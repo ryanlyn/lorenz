@@ -237,7 +237,7 @@ function renderRuns(body: Record<string, unknown>): string {
   return `${[
     "Run History",
     "",
-    `total=${numberField(summary, "total")} running=${numberField(summary, "running")} success=${numberField(summary, "success")} failed=${numberField(summary, "failed")} stalled=${numberField(summary, "stalled")} canceled=${numberField(summary, "canceled")}`,
+    `total=${numberField(summary, "total")} running=${numberField(summary, "running")} success=${numberField(summary, "success")} failed=${numberField(summary, "failed")} stalled=${numberField(summary, "stalled")} exhausted=${numberField(summary, "exhausted")} canceled=${numberField(summary, "canceled")}`,
     "",
     renderTable(
       ["ID", "ISSUE", "AGENT", "OUTCOME", "ATTEMPT", "TURNS", "TOKENS", "DURATION", "SESSION"],

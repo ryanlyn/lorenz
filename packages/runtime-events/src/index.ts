@@ -1,11 +1,23 @@
 import { AGENT_UPDATE_TYPES } from "@lorenz/domain";
-import type { AgentKind, AgentUpdateType, DispatchBlockEntry, UsageTotals } from "@lorenz/domain";
+import type {
+  AgentKind,
+  AgentUpdateType,
+  DispatchBlockEntry,
+  RetryExhaustionKind,
+  UsageTotals,
+} from "@lorenz/domain";
 
 export type RuntimeAppStatus = "starting" | "idle" | "polling" | "running" | "stopping" | "error";
 export type RuntimePollStatus = "idle" | "checking" | "error";
-export const RUNTIME_RUN_OUTCOMES = ["success", "failed", "stalled", "canceled"] as const;
+export const RUNTIME_RUN_OUTCOMES = [
+  "success",
+  "failed",
+  "stalled",
+  "exhausted",
+  "canceled",
+] as const;
 export type RuntimeRunOutcome = (typeof RUNTIME_RUN_OUTCOMES)[number];
-export type RuntimeRunLastEvent = AgentUpdateType | "agent_stalled";
+export type RuntimeRunLastEvent = AgentUpdateType | "agent_stalled" | "agent_exhausted";
 export const RUNTIME_EVENT_TYPES = [
   ...AGENT_UPDATE_TYPES,
   "dry_run",
@@ -16,6 +28,7 @@ export const RUNTIME_EVENT_TYPES = [
   "dispatch_refresh_failed",
   "run_completed",
   "run_failed",
+  "run_exhausted",
   "workflow_reloaded",
   "workflow_reload_failed",
   "reconcile_refresh_failed",
@@ -101,6 +114,21 @@ export interface RuntimeRetryEntry {
   workspacePath?: string | null | undefined;
 }
 
+export interface RuntimeExhaustedEntry {
+  issueId: string;
+  issueIdentifier: string;
+  issueUrl?: string | null | undefined;
+  attempts: number;
+  maxAttempts: number;
+  nextAttempt: number;
+  retryKind: RetryExhaustionKind;
+  exhaustedAtIso: string;
+  error?: string | undefined;
+  slotIndex?: number | undefined;
+  workerHost?: string | null | undefined;
+  workspacePath?: string | null | undefined;
+}
+
 export type RuntimeBlockedEntry = DispatchBlockEntry;
 
 /**
@@ -147,6 +175,7 @@ export interface RuntimeSnapshot {
   /** In-acquire (reserved) slots; additive, absent from snapshots predating the lane. */
   reserving?: RuntimeReservingEntry[];
   retrying: RuntimeRetryEntry[];
+  exhausted?: RuntimeExhaustedEntry[];
   blocked: RuntimeBlockedEntry[];
   runHistory: RuntimeRunHistoryEntry[];
   usageTotals: UsageTotals;

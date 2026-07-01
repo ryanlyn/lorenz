@@ -1,5 +1,7 @@
 import type { z } from "zod";
 
+const NON_NEGATIVE_INTEGER_FIELDS = new Set(["stall_timeout_ms", "max_retry_attempts"]);
+
 export function configErrorMessage(error: z.ZodError, baseLabel?: string): string {
   const issue = error.issues[0];
   if (!issue) return `${baseLabel ?? "workflow"} is invalid`;
@@ -35,7 +37,9 @@ export function configErrorMessage(error: z.ZodError, baseLabel?: string): strin
 function integerMessageForLabel(label: string): string {
   const field = label.split(".").pop() ?? "";
   if (field === "port") return `${label} must be a valid port number (0-65535)`;
-  const kind = field === "stall_timeout_ms" ? "a non-negative integer" : "a positive integer";
+  const kind = NON_NEGATIVE_INTEGER_FIELDS.has(field)
+    ? "a non-negative integer"
+    : "a positive integer";
   return `${label} must be ${kind}`;
 }
 
