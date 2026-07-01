@@ -361,10 +361,94 @@ test("Linear candidate polling rejects a continued page without a cursor", async
     ),
   );
 
-  await assert.rejects(() => client.fetchCandidateIssues(), /linear_missing_end_cursor/);
+  await assert.rejects(
+    () => client.fetchCandidateIssues(),
+    /linear_pagination_malformed_cursor: issues endCursor must be a non-empty string/,
+  );
 });
 
-test("Linear candidate polling rejects truncated inverse relation pages", async () => {
+test("Linear candidate polling rejects repeated cursors", async () => {
+  const client = new LinearClient(
+    settings(),
+    fetchSequence(
+      jsonResponse({
+        data: {
+          issues: {
+            nodes: [linearIssue("id-1", "MT-1")],
+            pageInfo: { hasNextPage: true, endCursor: "cursor-1" },
+          },
+        },
+      }),
+      jsonResponse({
+        data: {
+          issues: {
+            nodes: [linearIssue("id-2", "MT-2")],
+            pageInfo: { hasNextPage: true, endCursor: "cursor-1" },
+          },
+        },
+      }),
+    ),
+  );
+
+  await assert.rejects(
+    () => client.fetchCandidateIssues(),
+    /linear_pagination_repeated_cursor: issues endCursor="cursor-1" was returned more than once/,
+  );
+});
+
+test("Linear candidate polling rejects page limit overflows", async () => {
+  const client = new LinearClient(settings(), {
+    fetchImpl: fetchSequence(
+      jsonResponse({
+        data: {
+          issues: {
+            nodes: [linearIssue("id-1", "MT-1")],
+            pageInfo: { hasNextPage: true, endCursor: "cursor-1" },
+          },
+        },
+      }),
+      jsonResponse({
+        data: {
+          issues: {
+            nodes: [linearIssue("id-2", "MT-2")],
+            pageInfo: { hasNextPage: true, endCursor: "cursor-2" },
+          },
+        },
+      }),
+    ),
+    paginationLimits: { maxPages: 2 },
+  });
+
+  await assert.rejects(
+    () => client.fetchCandidateIssues(),
+    /linear_pagination_page_limit_exceeded: issues pages=3 max_pages=2/,
+  );
+});
+
+test("Linear candidate polling rejects item limit overflows", async () => {
+  const client = new LinearClient(settings(), {
+    fetchImpl: fetchSequence(
+      jsonResponse({
+        data: {
+          issues: {
+            nodes: [linearIssue("id-1", "MT-1"), linearIssue("id-2", "MT-2")],
+            pageInfo: { hasNextPage: false, endCursor: null },
+          },
+        },
+      }),
+    ),
+    paginationLimits: { maxItems: 1 },
+  });
+
+  await assert.rejects(
+    () => client.fetchCandidateIssues(),
+    /linear_pagination_item_limit_exceeded: issues items=2 max_items=1/,
+  );
+});
+
+test("Linear candidate polling degrades truncated issue metadata", async () => {
+  const warnings: string[] = [];
+  const warnSpy = viSpyOnConsoleWarn(warnings);
   const client = new LinearClient(
     settings(),
     fetchSequence(
@@ -374,6 +458,10 @@ test("Linear candidate polling rejects truncated inverse relation pages", async 
             nodes: [
               {
                 ...linearIssue("id-1", "MT-1"),
+                labels: {
+                  nodes: [{ name: "Lorenz:Backend" }],
+                  pageInfo: { hasNextPage: true, endCursor: "label-cursor-1" },
+                },
                 inverseRelations: {
                   nodes: [],
                   pageInfo: { hasNextPage: true, endCursor: "relation-cursor-1" },
@@ -387,10 +475,18 @@ test("Linear candidate polling rejects truncated inverse relation pages", async 
     ),
   );
 
-  await assert.rejects(
-    () => client.fetchCandidateIssues(),
-    /linear_truncated_connection: issue.inverseRelations/,
-  );
+  try {
+    const issues = await client.fetchCandidateIssues();
+
+    assert.equal(issues.length, 1);
+    assert.deepEqual(issues[0]?.labels, []);
+    assert.deepEqual(issues[0]?.blockers, []);
+    assert.equal(warnings.length, 2);
+    assert.match(warnings[0] ?? "", /connection=issue.labels issue=MT-1/);
+    assert.match(warnings[1] ?? "", /connection=issue.inverseRelations issue=MT-1/);
+  } finally {
+    warnSpy.mockRestore();
+  }
 });
 
 test("Linear project lookup rejects truncated teams and states", async () => {
@@ -525,6 +621,23 @@ test("Linear fetchIssuesByIds returns empty without touching the network", async
   }) as typeof fetch);
 
   assert.deepEqual(await client.fetchIssuesByIds([]), []);
+  assert.equal(calls.length, 0);
+});
+
+test("Linear fetchIssuesByIds rejects item limit overflows before touching the network", async () => {
+  const calls: FetchCall[] = [];
+  const client = new LinearClient(settings(), {
+    fetchImpl: (async (input, init) => {
+      calls.push(fetchCall(input, init));
+      return jsonResponse({ data: { issues: { nodes: [] } } });
+    }) as typeof fetch,
+    paginationLimits: { maxItems: 1 },
+  });
+
+  await assert.rejects(
+    () => client.fetchIssuesByIds(["id-1", "id-2"]),
+    /linear_pagination_item_limit_exceeded: issuesByIds items=2 max_items=1/,
+  );
   assert.equal(calls.length, 0);
 });
 

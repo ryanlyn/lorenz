@@ -1,6 +1,7 @@
 import { LinearGraphQLClient } from "@linear/sdk";
 export { LinearGraphQLClient } from "@linear/sdk";
 import { normalizeIssue } from "@lorenz/issue";
+import { createTrackerPaginationGuard, type TrackerPaginationLimits } from "@lorenz/tracker-sdk";
 import {
   errorMessage,
   isRecord,
@@ -104,6 +105,7 @@ export interface LinearClientDeps {
   fetchImpl?: typeof fetch | undefined;
   graphqlClient?: LinearGraphQLClient | undefined;
   logger?: LinearClientLogger | undefined;
+  paginationLimits?: TrackerPaginationLimits | undefined;
 }
 
 export class LinearClient {
@@ -114,6 +116,7 @@ export class LinearClient {
   private readonly settings: Settings;
   private readonly fetchImpl: typeof fetch | undefined;
   private readonly logger: LinearClientLogger;
+  private readonly paginationLimits: TrackerPaginationLimits | undefined;
 
   constructor(
     settings: Settings,
@@ -136,6 +139,7 @@ export class LinearClient {
       warn: (message) => console.warn(message),
       error: (message) => console.error(message),
     };
+    this.paginationLimits = deps.paginationLimits;
 
     if (deps.graphqlClient) {
       this.gqlClient = deps.graphqlClient;
@@ -291,8 +295,14 @@ export class LinearClient {
     const issues: Issue[] = [];
     const assignee = await this.assigneeFilterValue();
     const projectSlugs = await this.resolveProjectSlugs();
+    const pagination = createTrackerPaginationGuard({
+      tracker: "linear",
+      resource: "issues",
+      limits: this.paginationLimits,
+    });
 
     for (;;) {
+      pagination.recordPage();
       const data: {
         issues: {
           nodes: Array<Record<string, unknown>>;
@@ -313,16 +323,21 @@ export class LinearClient {
         },
       );
 
-      appendNormalizedIssues(issues, data.issues.nodes, assignee);
+      pagination.recordItems(data.issues.nodes.length);
+      appendNormalizedIssues(issues, data.issues.nodes, assignee, this.logger);
       if (!data.issues.pageInfo.hasNextPage) return issues;
-      if (!data.issues.pageInfo.endCursor) throw new Error("linear_missing_end_cursor");
-      after = data.issues.pageInfo.endCursor;
+      after = pagination.nextCursor(data.issues.pageInfo.endCursor, "endCursor");
     }
   }
 
   async fetchIssuesByIds(ids: string[]): Promise<Issue[]> {
     const uniqueIds = [...new Set(ids)];
     if (uniqueIds.length === 0) return [];
+    createTrackerPaginationGuard({
+      tracker: "linear",
+      resource: "issuesByIds",
+      limits: this.paginationLimits,
+    }).recordItems(uniqueIds.length);
     const assignee = await this.assigneeFilterValue();
 
     const issueOrder = new Map(uniqueIds.map((id, index) => [id, index]));
@@ -340,7 +355,7 @@ export class LinearClient {
           }`,
           { ids: batchIds, first: batchIds.length },
         );
-        appendNormalizedIssues(issues, data.issues.nodes, assignee);
+        appendNormalizedIssues(issues, data.issues.nodes, assignee, this.logger);
       } catch (error) {
         // Identifier-shaped inputs ("MT-32" from workspace directory names) can make
         // the id filter reject the whole batch; those resolve via the fallback below.
@@ -365,7 +380,7 @@ export class LinearClient {
           }`,
           { id },
         );
-        if (data.issue) appendNormalizedIssues(issues, [data.issue], assignee);
+        if (data.issue) appendNormalizedIssues(issues, [data.issue], assignee, this.logger);
       } catch {
         // Best-effort identifier resolution.
       }
@@ -413,7 +428,7 @@ export class LinearClient {
     if (!data.issueCreate.success || !data.issueCreate.issue)
       throw new Error("linear issueCreate failed");
     return normalizeIssue(
-      linearIssuePayload(data.issueCreate.issue),
+      linearIssuePayload(data.issueCreate.issue, this.logger),
       await this.assigneeFilterValue(),
     );
   }
@@ -433,7 +448,7 @@ export class LinearClient {
     if (!data.issueUpdate.success || !data.issueUpdate.issue)
       throw new Error("linear issueUpdate failed");
     return normalizeIssue(
-      linearIssuePayload(data.issueUpdate.issue),
+      linearIssuePayload(data.issueUpdate.issue, this.logger),
       await this.assigneeFilterValue(),
     );
   }
@@ -479,7 +494,13 @@ export class LinearClient {
   private async resolveProjectSlugsByLabels(labels: string[]): Promise<string[]> {
     let after: string | null = null;
     const slugs: string[] = [];
+    const pagination = createTrackerPaginationGuard({
+      tracker: "linear",
+      resource: "projectsByLabels",
+      limits: this.paginationLimits,
+    });
     for (;;) {
+      pagination.recordPage();
       const data: {
         projects: {
           nodes: Array<{ slugId: string }>;
@@ -494,11 +515,10 @@ export class LinearClient {
         }`,
         { labels, first: 100, after },
       );
+      pagination.recordItems(data.projects.nodes.length);
       slugs.push(...data.projects.nodes.map((p) => p.slugId));
       if (!data.projects.pageInfo?.hasNextPage) break;
-      if (!data.projects.pageInfo.endCursor)
-        throw new Error("linear_missing_end_cursor: projectsByLabels");
-      after = data.projects.pageInfo.endCursor;
+      after = pagination.nextCursor(data.projects.pageInfo.endCursor, "endCursor");
     }
     if (slugs.length === 0)
       throw new Error(`no linear projects found for labels: ${labels.join(", ")}`);
@@ -559,27 +579,45 @@ function resolveDeps(fetchImplOrDeps?: typeof fetch | LinearClientDeps): {
   fetchImpl: typeof fetch | undefined;
   graphqlClient: LinearGraphQLClient | undefined;
   logger: LinearClientLogger | undefined;
+  paginationLimits: TrackerPaginationLimits | undefined;
 } {
   if (!fetchImplOrDeps)
-    return { fetchImpl: undefined, graphqlClient: undefined, logger: undefined };
+    return {
+      fetchImpl: undefined,
+      graphqlClient: undefined,
+      logger: undefined,
+      paginationLimits: undefined,
+    };
   if (typeof fetchImplOrDeps === "function")
-    return { fetchImpl: fetchImplOrDeps, graphqlClient: undefined, logger: undefined };
+    return {
+      fetchImpl: fetchImplOrDeps,
+      graphqlClient: undefined,
+      logger: undefined,
+      paginationLimits: undefined,
+    };
   return {
     fetchImpl: fetchImplOrDeps.fetchImpl ?? undefined,
     graphqlClient: fetchImplOrDeps.graphqlClient ?? undefined,
     logger: fetchImplOrDeps.logger ?? undefined,
+    paginationLimits: fetchImplOrDeps.paginationLimits ?? undefined,
   };
 }
 
-function linearIssuePayload(issue: Record<string, unknown>): Record<string, unknown> {
+function linearIssuePayload(
+  issue: Record<string, unknown>,
+  logger?: LinearClientLogger,
+): Record<string, unknown> {
   return {
     ...issue,
     state: issue.state,
     state_type: isRecord(issue.state) ? issue.state.type : null,
     branch_name: issue.branchName,
     assignee_id: isRecord(issue.assignee) ? issue.assignee.id : null,
-    labels: nodesFromConnection(issue.labels, "issue.labels"),
-    relations: nodesFromConnection(issue.inverseRelations, "issue.inverseRelations"),
+    labels: nodesFromConnection(issue.labels, "issue.labels", { issue, logger }),
+    relations: nodesFromConnection(issue.inverseRelations, "issue.inverseRelations", {
+      issue,
+      logger,
+    }),
     created_at: issue.createdAt,
     updated_at: issue.updatedAt,
   };
@@ -589,17 +627,22 @@ function appendNormalizedIssues(
   target: Issue[],
   nodes: unknown[],
   assignee: string | undefined,
+  logger?: LinearClientLogger,
 ): void {
   for (const issue of nodes) {
-    const normalized = normalizeLinearIssue(issue, assignee);
+    const normalized = normalizeLinearIssue(issue, assignee, logger);
     if (normalized) target.push(normalized);
   }
 }
 
-function normalizeLinearIssue(issue: unknown, assignee: string | undefined): Issue | null {
+function normalizeLinearIssue(
+  issue: unknown,
+  assignee: string | undefined,
+  logger?: LinearClientLogger,
+): Issue | null {
   if (!isRecord(issue)) return null;
   try {
-    return normalizeIssue(linearIssuePayload(issue), assignee);
+    return normalizeIssue(linearIssuePayload(issue, logger), assignee);
   } catch (error) {
     if (isLinearConnectionTruncatedError(error)) throw error;
     return null;
@@ -683,9 +726,19 @@ function isLinearConnectionTruncatedError(error: unknown): error is LinearConnec
   return error instanceof LinearConnectionTruncatedError;
 }
 
-function nodesFromConnection(value: unknown, connectionName: string): unknown[] {
+function nodesFromConnection(
+  value: unknown,
+  connectionName: string,
+  options: { issue?: Record<string, unknown>; logger?: LinearClientLogger | undefined } = {},
+): unknown[] {
   if (!isConnection(value)) return [];
   if (isRecord(value.pageInfo) && value.pageInfo.hasNextPage === true) {
+    if (connectionName.startsWith("issue.")) {
+      options.logger?.warn(
+        `Linear issue metadata truncated connection=${connectionName}${linearIssueContext(options.issue)}; dropping nested metadata`,
+      );
+      return [];
+    }
     throw new LinearConnectionTruncatedError(connectionName);
   }
   return value.nodes;
@@ -704,6 +757,14 @@ function stringField(record: Record<string, unknown>, key: string): string {
 function asRecord(value: unknown): Record<string, unknown> {
   if (!isRecord(value)) throw new Error("expected Linear object");
   return value;
+}
+
+function linearIssueContext(issue: Record<string, unknown> | undefined): string {
+  if (!issue) return "";
+  const identifier = typeof issue.identifier === "string" ? issue.identifier : null;
+  const id = typeof issue.id === "string" ? issue.id : null;
+  const value = identifier ?? id;
+  return value ? ` issue=${value}` : "";
 }
 
 function linearErrorContext(query: string, body?: unknown): string {
