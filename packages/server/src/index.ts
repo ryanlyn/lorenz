@@ -39,6 +39,8 @@ export interface ObservabilityServerOptions {
   issueStore?: IssueStore;
   /** Tool packs served on the MCP mount; defaults to the process-wide registry. */
   tools?: ToolRegistry;
+  /** Environment threaded into MCP tool execution so tools never read `process.env` directly. */
+  env: NodeJS.ProcessEnv;
 }
 
 export interface ObservabilityServerHandle {
@@ -133,6 +135,7 @@ function buildObservabilityApp(
     mountMcp(app, () => runtimeSettings(runtime) ?? initialSettings, {
       authScope,
       tools: options.tools,
+      env: options.env,
     });
   }
 

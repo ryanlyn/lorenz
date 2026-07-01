@@ -113,6 +113,7 @@ test("the per-run server enforces the INJECTED isRunLive on every Token B reques
 
   const lease = await acquireAgentMcpEndpointForRun(
     settings,
+    process.env,
     "worker-1",
     "run-live",
     workerHostPool,
@@ -141,7 +142,13 @@ test("acquireAgentMcpEndpointForRun.release() revokes the token, drops the local
   const settings = settingsWithPort(port);
   const closeForRun = vi.spyOn(workerHostPool, "closeForRun");
 
-  const lease = await acquireAgentMcpEndpointForRun(settings, "worker-1", "run-A", workerHostPool);
+  const lease = await acquireAgentMcpEndpointForRun(
+    settings,
+    process.env,
+    "worker-1",
+    "run-A",
+    workerHostPool,
+  );
 
   // Sub-resource (1): a per-run Token B was minted and resolves to a claim bound
   // to THIS run server-side (runKey is resolved from the token, never reported).
@@ -181,7 +188,8 @@ test("acquireAgentMcpEndpointForRun releases the local-server ref AND revokes th
 
   // The thrown error propagates to the caller.
   await assert.rejects(
-    () => acquireAgentMcpEndpointForRun(settings, "worker-1", "run-fail", workerHostPool),
+    () =>
+      acquireAgentMcpEndpointForRun(settings, process.env, "worker-1", "run-fail", workerHostPool),
     /tunnel_spawn_failed/,
   );
 
@@ -193,7 +201,13 @@ test("acquireAgentMcpEndpointForRun releases the local-server ref AND revokes th
   // and brings the local server back up, then releases cleanly — proving the
   // failed attempt left no lingering refcount that would keep the server alive.
   mockStartReverseTunnel.mockImplementation(() => makeFakeProcess());
-  const lease = await acquireAgentMcpEndpointForRun(settings, "worker-1", "run-ok", workerHostPool);
+  const lease = await acquireAgentMcpEndpointForRun(
+    settings,
+    process.env,
+    "worker-1",
+    "run-ok",
+    workerHostPool,
+  );
   assert.ok(resolveRunClaim(lease.token));
   assert.equal(await mcpServerReachable("127.0.0.1", port), true);
   await lease.release();
@@ -208,8 +222,20 @@ test("two per-run endpoints on one host SHARE one reverse tunnel / URL (per-host
   const port = await freeLocalPort();
   const settings = settingsWithPort(port);
 
-  const a = await acquireAgentMcpEndpointForRun(settings, "worker-1", "run-A", workerHostPool);
-  const b = await acquireAgentMcpEndpointForRun(settings, "worker-1", "run-B", workerHostPool);
+  const a = await acquireAgentMcpEndpointForRun(
+    settings,
+    process.env,
+    "worker-1",
+    "run-A",
+    workerHostPool,
+  );
+  const b = await acquireAgentMcpEndpointForRun(
+    settings,
+    process.env,
+    "worker-1",
+    "run-B",
+    workerHostPool,
+  );
 
   // ONE shared per-host reverse tunnel: a single ssh child and the SAME tunnel URL
   // (remote port) for both co-resident runs (host coalescing).
@@ -229,8 +255,20 @@ test("the local MCP server refcount is shared across two per-run endpoints on th
   const settings = settingsWithPort(port);
   const stopForRun = vi.spyOn(workerHostPool, "closeForRun");
 
-  const a = await acquireAgentMcpEndpointForRun(settings, "worker-1", "run-A", workerHostPool);
-  const b = await acquireAgentMcpEndpointForRun(settings, "worker-1", "run-B", workerHostPool);
+  const a = await acquireAgentMcpEndpointForRun(
+    settings,
+    process.env,
+    "worker-1",
+    "run-A",
+    workerHostPool,
+  );
+  const b = await acquireAgentMcpEndpointForRun(
+    settings,
+    process.env,
+    "worker-1",
+    "run-B",
+    workerHostPool,
+  );
 
   // ONE shared local server backs BOTH per-run endpoints (refCount == 2):
   // the second acquire reuses the existing instance, so no second server was
@@ -255,8 +293,20 @@ test("co-resident per-run claims share the live local-server generation", async 
   // Two runs co-resident on ONE shared local MCP server (the second acquire
   // reuses the refcounted instance) carry the SAME slot generation in their
   // claims: the generation tracks the shared endpoint, not the individual run.
-  const a = await acquireAgentMcpEndpointForRun(settings, "worker-1", "run-A", workerHostPool);
-  const b = await acquireAgentMcpEndpointForRun(settings, "worker-1", "run-B", workerHostPool);
+  const a = await acquireAgentMcpEndpointForRun(
+    settings,
+    process.env,
+    "worker-1",
+    "run-A",
+    workerHostPool,
+  );
+  const b = await acquireAgentMcpEndpointForRun(
+    settings,
+    process.env,
+    "worker-1",
+    "run-B",
+    workerHostPool,
+  );
 
   const claimA = resolveRunClaim(a.token);
   const claimB = resolveRunClaim(b.token);
@@ -273,7 +323,13 @@ test("recycling a host:port slot bumps the generation so a fresh claim outranks 
   const settings = settingsWithPort(port);
 
   // First run brings the shared local server up; capture its generation.
-  const first = await acquireAgentMcpEndpointForRun(settings, "worker-1", "run-A", workerHostPool);
+  const first = await acquireAgentMcpEndpointForRun(
+    settings,
+    process.env,
+    "worker-1",
+    "run-A",
+    workerHostPool,
+  );
   const firstGen = resolveRunClaim(first.token)?.generation;
   assert.ok(typeof firstGen === "number");
 
@@ -284,7 +340,13 @@ test("recycling a host:port slot bumps the generation so a fresh claim outranks 
   // Re-acquiring the SAME host:port starts a brand-new entry, so its generation
   // is STRICTLY higher. This is the exact input the per-request liveness fence
   // uses to reject a Token B minted against the prior, now-recycled generation.
-  const second = await acquireAgentMcpEndpointForRun(settings, "worker-1", "run-B", workerHostPool);
+  const second = await acquireAgentMcpEndpointForRun(
+    settings,
+    process.env,
+    "worker-1",
+    "run-B",
+    workerHostPool,
+  );
   const secondGen = resolveRunClaim(second.token)?.generation;
   assert.ok(typeof secondGen === "number");
   assert.ok((secondGen as number) > (firstGen as number));
@@ -305,7 +367,7 @@ test("acquireAgentMcpEndpointForRun REFUSES an empty (local) worker host (no Tok
   // does (a wiring bug), minting a Token B claim stamped `workerHost: ""` would let
   // isRunLive match it against any other local slot, so the path fails loud instead.
   await assert.rejects(
-    () => acquireAgentMcpEndpointForRun(settings, "", "run-local", workerHostPool),
+    () => acquireAgentMcpEndpointForRun(settings, process.env, "", "run-local", workerHostPool),
     /per_run_mcp_endpoint_requires_remote_worker_host/,
   );
 
@@ -346,7 +408,14 @@ test("acquireAgentMcpEndpointForRun REFUSES to attach to an externally-configure
   try {
     const settings = settingsWithPort(port);
     await assert.rejects(
-      () => acquireAgentMcpEndpointForRun(settings, "worker-1", "run-external", workerHostPool),
+      () =>
+        acquireAgentMcpEndpointForRun(
+          settings,
+          process.env,
+          "worker-1",
+          "run-external",
+          workerHostPool,
+        ),
       /per_run_mcp_endpoint_requires_lorenz_owned_server/,
     );
     // The refusal happened BEFORE any reverse tunnel was opened (no half-open child

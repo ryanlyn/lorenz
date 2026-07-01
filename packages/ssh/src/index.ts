@@ -16,8 +16,8 @@ const NUMERIC_CHMOD_MODE = /^[0-7]{3,4}$/;
 const SYMBOLIC_CHMOD_MODE =
   /^(?:[ugoa]*(?:(?:[+-][rwxXstugo]+)|(?:=[rwxXstugo]*)))(?:,(?:[ugoa]*(?:(?:[+-][rwxXstugo]+)|(?:=[rwxXstugo]*))))*$/;
 
-function requireSshExecutable(): string {
-  const pathValue = process.env.PATH ?? "";
+function requireSshExecutable(env: NodeJS.ProcessEnv): string {
+  const pathValue = env.PATH ?? "";
   for (const directory of pathValue.split(path.delimiter)) {
     if (!directory) continue;
     const executable = path.join(directory, "ssh");
@@ -32,6 +32,8 @@ function requireSshExecutable(): string {
 }
 
 export interface SshRunOptions {
+  /** Environment the ssh invocation reads PATH (binary discovery) and LORENZ_SSH_CONFIG from. */
+  env: NodeJS.ProcessEnv;
   timeoutMs?: number | undefined;
   stderrToStdout?: boolean | undefined;
   abortSignal?: AbortSignal | undefined;
@@ -62,6 +64,8 @@ interface SshExitMetadata {
 }
 
 export interface RemoteTcpPortWaitOptions {
+  /** Environment the underlying ssh probe reads PATH and LORENZ_SSH_CONFIG from. */
+  env: NodeJS.ProcessEnv;
   timeoutMs?: number | undefined;
   intervalMs?: number | undefined;
   attemptTimeoutMs?: number | undefined;
@@ -71,7 +75,7 @@ export interface RemoteTcpPortWaitOptions {
 export async function runSsh(
   host: string,
   command: string,
-  options: SshRunOptions = {},
+  options: SshRunOptions,
 ): Promise<SshRunResult> {
   const timeoutMs = options.timeoutMs ?? DEFAULT_SSH_TIMEOUT_MS;
   if (!Number.isInteger(timeoutMs) || timeoutMs <= 0)
@@ -84,13 +88,17 @@ export async function runSsh(
     // with open pipes that block resolution until they exit naturally.
     // SIGTERM first to allow trap handlers / graceful shutdown; SIGKILL after 5s as fallback.
     // TODO - this may not be enough to ensure the remote ssh process cleans up its children
-    const subprocess = execa(options.sshExecutablePath ?? "ssh", sshArgs(host, command), {
-      reject: false,
-      ...(options.stderrToStdout ? { all: true } : {}),
-      stdin: "ignore",
-      stripFinalNewline: false,
-      detached: true,
-    });
+    const subprocess = execa(
+      options.sshExecutablePath ?? "ssh",
+      sshArgs(host, command, options.env),
+      {
+        reject: false,
+        ...(options.stderrToStdout ? { all: true } : {}),
+        stdin: "ignore",
+        stripFinalNewline: false,
+        detached: true,
+      },
+    );
     let timeoutTimer: ReturnType<typeof setTimeout> | undefined;
     let forceKillTimer: ReturnType<typeof setTimeout> | undefined;
     let terminationRequested = false;
@@ -156,8 +164,12 @@ export async function runSsh(
   }
 }
 
-export function startSshProcess(host: string, command: string): ChildProcessWithoutNullStreams {
-  return execa("ssh", sshArgs(host, command), {
+export function startSshProcess(
+  host: string,
+  command: string,
+  env: NodeJS.ProcessEnv,
+): ChildProcessWithoutNullStreams {
+  return execa("ssh", sshArgs(host, command, env), {
     stdin: "pipe",
     stdout: "pipe",
     stderr: "pipe",
@@ -170,19 +182,24 @@ export function startReverseTunnel(
   remotePort: number,
   localHost: string,
   localPort: number,
+  env: NodeJS.ProcessEnv,
 ): ChildProcessWithoutNullStreams {
-  return execa(requireSshExecutable(), reverseTunnelArgs(host, remotePort, localHost, localPort), {
-    stdin: "pipe",
-    stdout: "pipe",
-    stderr: "pipe",
-    reject: false,
-  }) as unknown as ChildProcessWithoutNullStreams;
+  return execa(
+    requireSshExecutable(env),
+    reverseTunnelArgs(host, remotePort, localHost, localPort, env),
+    {
+      stdin: "pipe",
+      stdout: "pipe",
+      stderr: "pipe",
+      reject: false,
+    },
+  ) as unknown as ChildProcessWithoutNullStreams;
 }
 
 export async function waitForRemoteTcpPort(
   host: string,
   remotePort: number,
-  options: RemoteTcpPortWaitOptions = {},
+  options: RemoteTcpPortWaitOptions,
 ): Promise<void> {
   const timeoutMs = options.timeoutMs ?? DEFAULT_REMOTE_TCP_PORT_READY_TIMEOUT_MS;
   const intervalMs = options.intervalMs ?? DEFAULT_REMOTE_TCP_PORT_READY_INTERVAL_MS;
@@ -207,6 +224,7 @@ export async function waitForRemoteTcpPort(
     const remainingMs = Math.max(1, deadline - Date.now());
     try {
       const result = await runSsh(host, `: < /dev/tcp/127.0.0.1/${remotePort}`, {
+        env: options.env,
         stderrToStdout: true,
         sshExecutablePath: options.sshExecutablePath,
         timeoutMs: Math.min(attemptTimeoutMs, remainingMs),
@@ -229,7 +247,7 @@ export async function writeRemoteFile(
   host: string,
   remotePath: string,
   contents: string,
-  options: SshRunOptions & { mode?: number | string | undefined } = {},
+  options: SshRunOptions & { mode?: number | string | undefined },
 ): Promise<void> {
   const command = [
     `mkdir -p ${shellEscape(path.posix.dirname(remotePath))}`,
@@ -241,10 +259,10 @@ export async function writeRemoteFile(
     throw new Error(`remote_write_failed: ${result.status} ${result.stdout}`);
 }
 
-export function sshArgs(host: string, command: string): string[] {
+export function sshArgs(host: string, command: string, env: NodeJS.ProcessEnv): string[] {
   const target = parseSshTarget(host);
   return [
-    ...sshConfigArgs(),
+    ...sshConfigArgs(env),
     "-T",
     ...(target.port ? ["-p", target.port] : []),
     "--",
@@ -258,10 +276,11 @@ export function reverseTunnelArgs(
   remotePort: number,
   localHost: string,
   localPort: number,
+  env: NodeJS.ProcessEnv,
 ): string[] {
   const target = parseSshTarget(host);
   return [
-    ...sshConfigArgs(),
+    ...sshConfigArgs(env),
     "-T",
     "-N",
     "-o",
@@ -313,8 +332,8 @@ function sshMissingExitCodeError(host: string, result: SshExitMetadata): Error {
   });
 }
 
-function sshConfigArgs(): string[] {
-  const configPath = process.env.LORENZ_SSH_CONFIG;
+function sshConfigArgs(env: NodeJS.ProcessEnv): string[] {
+  const configPath = env.LORENZ_SSH_CONFIG;
   return configPath ? ["-F", configPath] : [];
 }
 

@@ -270,7 +270,7 @@ function tokenIsLive(token: string): boolean {
 function makeCoordinator(
   pool: FakeMachinePool,
   acquireForRun: AcquireForRun = (settings, workerHost, runKey) =>
-    acquireAgentMcpEndpointForRun(settings, workerHost, runKey, workerHostPool),
+    acquireAgentMcpEndpointForRun(settings, process.env, workerHost, runKey, workerHostPool),
 ): ReturnType<typeof createDispatchCoordinator> {
   return createDispatchCoordinator({
     pool,
@@ -465,7 +465,13 @@ test("a stall during the open-endpoint window aborts open, settles the lease HEA
   // must (no orphaned token/server/tunnel).
   const controller = new AbortController();
   const acquireForRun: AcquireForRun = async (settings, workerHost, runKey) => {
-    const lease = await acquireAgentMcpEndpointForRun(settings, workerHost, runKey, workerHostPool);
+    const lease = await acquireAgentMcpEndpointForRun(
+      settings,
+      process.env,
+      workerHost,
+      runKey,
+      workerHostPool,
+    );
     if (controller.signal.aborted) {
       await lease.release();
       throw new Error("open_aborted: stall in open window");
@@ -548,9 +554,9 @@ test("local-host path: the coordinator mints NO endpoint (acp keeps acquiring AN
   // null for it (acp owns its own endpoint exactly as in the single-tenant path).
   const pool = makeFakeMachinePool({ hostFor: () => "" });
   let acquireCalled = 0;
-  const coordinator = makeCoordinator(pool, async (...args) => {
+  const coordinator = makeCoordinator(pool, async (settings, workerHost, runKey) => {
     acquireCalled += 1;
-    return acquireAgentMcpEndpointForRun(...args, workerHostPool);
+    return acquireAgentMcpEndpointForRun(settings, process.env, workerHost, runKey, workerHostPool);
   });
 
   const r = await coordinator.acquireRunSlot({ ...baseReq, issueId: "issue-a", slotIndex: 0 });

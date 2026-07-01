@@ -408,9 +408,19 @@ test("ACP MCP endpoint leases reuse one reverse tunnel per worker host with per-
       server: { host: "127.0.0.1", port: await reserveTcpPort() },
       worker: { ssh_timeout_ms: 5_000 },
     });
-    const first = await acquireAgentMcpEndpoint(settings, "worker-acp", workerHostPool);
+    const first = await acquireAgentMcpEndpoint(
+      settings,
+      process.env,
+      "worker-acp",
+      workerHostPool,
+    );
     leases.push(first);
-    const second = await acquireAgentMcpEndpoint(settings, "worker-acp", workerHostPool);
+    const second = await acquireAgentMcpEndpoint(
+      settings,
+      process.env,
+      "worker-acp",
+      workerHostPool,
+    );
     leases.push(second);
 
     assert.equal(first.url, "http://127.0.0.1:46000/mcp");
@@ -421,7 +431,12 @@ test("ACP MCP endpoint leases reuse one reverse tunnel per worker host with per-
 
     await first.release();
     leases.splice(leases.indexOf(first), 1);
-    const third = await acquireAgentMcpEndpoint(settings, "worker-acp", workerHostPool);
+    const third = await acquireAgentMcpEndpoint(
+      settings,
+      process.env,
+      "worker-acp",
+      workerHostPool,
+    );
     leases.push(third);
     assert.equal(tunnelTraceCount(await fs.readFile(trace, "utf8")), 1);
 
@@ -429,7 +444,12 @@ test("ACP MCP endpoint leases reuse one reverse tunnel per worker host with per-
     leases.splice(leases.indexOf(second), 1);
     await third.release();
     leases.splice(leases.indexOf(third), 1);
-    const fourth = await acquireAgentMcpEndpoint(settings, "worker-acp", workerHostPool);
+    const fourth = await acquireAgentMcpEndpoint(
+      settings,
+      process.env,
+      "worker-acp",
+      workerHostPool,
+    );
     leases.push(fourth);
     await waitForTunnelTrace(trace, 2);
   } finally {

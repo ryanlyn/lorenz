@@ -63,7 +63,12 @@ function runtimeOptions(options: LorenzRuntimeOptions): LorenzRuntimeOptions {
   // Startup cleanup scans the workspace root and consumes a fetchIssuesByIds call;
   // default it off so call-counting tests stay deterministic. Cleanup tests pass the
   // real lister explicitly.
-  return { ...runtimeAdapters, listIssueWorkspaces: async () => [], ...options };
+  return {
+    ...runtimeAdapters(),
+    env: process.env,
+    listIssueWorkspaces: async () => [],
+    ...options,
+  };
 }
 
 class CountingClaimStore extends InMemoryClaimStore {
@@ -2248,7 +2253,7 @@ test("runtime reconciliation removes terminal retry workspaces before polling", 
       },
       removeIssueWorkspaces: async (settings, identifier, workerHost, issue) => {
         cleanupIssues.push(issue);
-        await removeIssueWorkspaces(settings, identifier, workerHost, issue);
+        await removeIssueWorkspaces(settings, identifier, process.env, workerHost, issue);
       },
     }),
   );

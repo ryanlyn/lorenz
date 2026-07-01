@@ -67,6 +67,7 @@ test("observability HTTP API exposes state, issue, runs, refresh, and errors", a
     host: "127.0.0.1",
     port: 0,
     staticDir: "/tmp/nonexistent-dashboard-dist",
+    env: process.env,
   });
 
   try {
@@ -212,6 +213,7 @@ test("observability HTTP API serves trace routes when issueStore is provided", a
       traceDir,
       issueStore,
       staticDir: "/tmp/nonexistent-dashboard-dist",
+      env: process.env,
     });
 
     const response = await fetch(server.url("/api/v1/tickets"));
@@ -230,6 +232,7 @@ test("observability HTTP API returns structured 400 for malformed issue identifi
     host: "127.0.0.1",
     port: 0,
     staticDir: "/tmp/nonexistent-dashboard-dist",
+    env: process.env,
   });
   try {
     const malformed = await getJson(server.url("/api/v1/%E0%A4%A"), 400);
@@ -249,6 +252,7 @@ test("observability HTTP API matches snapshot timeout and unavailable branches",
     host: "127.0.0.1",
     port: 0,
     staticDir: "/tmp/nonexistent-dashboard-dist",
+    env: process.env,
   });
   try {
     const state = await getJson(unavailable.url("/api/v1/state"));
@@ -282,6 +286,7 @@ test("observability HTTP API matches snapshot timeout and unavailable branches",
   const timeout = await startObservabilityServer(fakeRuntime("snapshot_timeout"), {
     host: "127.0.0.1",
     port: 0,
+    env: process.env,
   });
   try {
     const state = await getJson(timeout.url("/api/v1/state"));
@@ -304,7 +309,11 @@ test("MCP endpoint authorizes bearer tokens and executes Linear tools", async ()
       fetchIssuesByIds: async () => [],
     },
   });
-  const server = await startObservabilityServer(runtime, { host: "127.0.0.1", port: 0 });
+  const server = await startObservabilityServer(runtime, {
+    host: "127.0.0.1",
+    port: 0,
+    env: process.env,
+  });
   const token = issueMcpToken(server.authScope);
   const originalFetch = globalThis.fetch;
   const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation((async (
@@ -411,7 +420,11 @@ test("observability MCP endpoint uses workflow settings reloaded by the runtime"
       fetchIssuesByIds: async () => [],
     },
   });
-  const server = await startObservabilityServer(runtime, { host: "127.0.0.1", port: 0 });
+  const server = await startObservabilityServer(runtime, {
+    host: "127.0.0.1",
+    port: 0,
+    env: process.env,
+  });
   const token = issueMcpToken(server.authScope);
 
   try {

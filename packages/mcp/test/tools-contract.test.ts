@@ -99,7 +99,7 @@ test("explicit tools map adds extra mounted packs", async () => {
 });
 
 test("unknown tool names fail listing every mounted tool", async () => {
-  assert.deepEqual(await executeTool("unknown", {}, linearSettings(), fetch, tools), {
+  assert.deepEqual(await executeTool("unknown", {}, linearSettings(), process.env, fetch, tools), {
     success: false,
     error: 'Unsupported tool: "unknown".',
     result: {
@@ -111,16 +111,19 @@ test("unknown tool names fail listing every mounted tool", async () => {
   });
 
   // Memory mounts no pack, so it advertises nothing.
-  assert.deepEqual(await executeTool("memory_bogus", {}, settingsFor("memory"), fetch, tools), {
-    success: false,
-    error: 'Unsupported tool: "memory_bogus".',
-    result: {
-      error: {
-        message: 'Unsupported tool: "memory_bogus".',
-        supportedTools: [],
+  assert.deepEqual(
+    await executeTool("memory_bogus", {}, settingsFor("memory"), process.env, fetch, tools),
+    {
+      success: false,
+      error: 'Unsupported tool: "memory_bogus".',
+      result: {
+        error: {
+          message: 'Unsupported tool: "memory_bogus".',
+          supportedTools: [],
+        },
       },
     },
-  });
+  );
 });
 
 test("the jira pack advertises the jira_* tools", () => {
@@ -143,7 +146,7 @@ test("a throwing pack surfaces as a failed tool result, not a thrown error", asy
   });
 
   const settings = settingsFor("boom");
-  const result = await executeTool("boom_tool", {}, settings, fetch, boomTools);
+  const result = await executeTool("boom_tool", {}, settings, process.env, fetch, boomTools);
   assert.equal(result.success, false);
   assert.match(result.error ?? "", /pack exploded/);
 });

@@ -65,9 +65,16 @@ export class WorkerHostPool {
     workerHost: string,
     localHost: string,
     localPort: number,
+    env: NodeJS.ProcessEnv,
   ): Promise<RemoteMcpTunnelLease> {
     const endpointKey = this.remoteMcpTunnelEndpointKey(workerHost, localHost, localPort);
-    const entry = await this.ensureRemoteMcpTunnelEntry(workerHost, localHost, localPort, endpointKey);
+    const entry = await this.ensureRemoteMcpTunnelEntry(
+      workerHost,
+      localHost,
+      localPort,
+      endpointKey,
+      env,
+    );
     return this.createRemoteMcpTunnelLease(entry);
   }
 
@@ -94,6 +101,7 @@ export class WorkerHostPool {
     runKey: string,
     localHost: string,
     localPort: number,
+    env: NodeJS.ProcessEnv,
   ): Promise<RemoteMcpTunnelLease> {
     const holdKey = perRunKey(workerHost, runKey);
     const endpointKey = this.remoteMcpTunnelEndpointKey(workerHost, localHost, localPort);
@@ -121,7 +129,13 @@ export class WorkerHostPool {
       this.releasePerRunHold(holdKey);
     }
 
-    const entry = await this.ensureRemoteMcpTunnelEntry(workerHost, localHost, localPort, endpointKey);
+    const entry = await this.ensureRemoteMcpTunnelEntry(
+      workerHost,
+      localHost,
+      localPort,
+      endpointKey,
+      env,
+    );
     const lease = this.createRemoteMcpTunnelLease(entry);
     this.perRunTunnelHolds.set(holdKey, {
       leaseId: lease.leaseId,
@@ -166,6 +180,7 @@ export class WorkerHostPool {
     localHost: string,
     localPort: number,
     endpointKey: string,
+    env: NodeJS.ProcessEnv,
   ): Promise<RemoteMcpTunnelEntry> {
     const current = this.remoteMcpTunnelsByEndpoint.get(endpointKey);
     if (current && !current.processEnded) {
@@ -178,7 +193,7 @@ export class WorkerHostPool {
     const remotePort = recycledPort ?? this.nextRemoteMcpPort;
     let process: ReturnType<typeof startReverseTunnel>;
     try {
-      process = startReverseTunnel(workerHost, remotePort, localHost, localPort);
+      process = startReverseTunnel(workerHost, remotePort, localHost, localPort, env);
     } catch (error) {
       if (recycledPort !== undefined) this.recycleRemoteMcpPort(recycledPort);
       throw error;
@@ -206,7 +221,7 @@ export class WorkerHostPool {
     process.on("close", () => this.handleRemoteMcpTunnelProcessEnd(entry, endpointKey));
     process.on("exit", () => this.handleRemoteMcpTunnelProcessEnd(entry, endpointKey));
     process.on("error", () => this.handleRemoteMcpTunnelProcessEnd(entry, endpointKey));
-    entry.readyPromise = this.confirmRemoteMcpTunnelReady(entry);
+    entry.readyPromise = this.confirmRemoteMcpTunnelReady(entry, env);
     await this.waitForRemoteMcpTunnelReady(entry);
     return entry;
   }
@@ -265,11 +280,14 @@ export class WorkerHostPool {
     }
   }
 
-  private async confirmRemoteMcpTunnelReady(entry: RemoteMcpTunnelEntry): Promise<void> {
+  private async confirmRemoteMcpTunnelReady(
+    entry: RemoteMcpTunnelEntry,
+    env: NodeJS.ProcessEnv,
+  ): Promise<void> {
     const processEndWatcher = this.watchRemoteMcpTunnelSetupProcessEnd(entry);
     try {
       await Promise.race([
-        waitForRemoteTcpPort(entry.workerHost, entry.remotePort),
+        waitForRemoteTcpPort(entry.workerHost, entry.remotePort, { env }),
         processEndWatcher.promise,
       ]);
     } catch (error) {

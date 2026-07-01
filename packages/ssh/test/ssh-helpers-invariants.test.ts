@@ -185,7 +185,7 @@ describe("INVARIANT: When shellEscape is applied, the output SHALL be reversible
   test("sshArgs includes the shell-escaped command as the final argument", () => {
     fc.assert(
       fc.property(sshTargetAny, shellDangerousString, (host, command) => {
-        const args = sshArgs(host, command);
+        const args = sshArgs(host, command, process.env);
         // The last argument should be the remoteShellCommand result
         const lastArg = args[args.length - 1];
         assert.equal(lastArg, remoteShellCommand(command));
@@ -199,7 +199,7 @@ describe("INVARIANT: When shellEscape is applied, the output SHALL be reversible
   test("sshArgs always contains -T flag for non-interactive mode", () => {
     fc.assert(
       fc.property(sshTargetAny, shellDangerousString, (host, command) => {
-        const args = sshArgs(host, command);
+        const args = sshArgs(host, command, process.env);
         assert.equal(args.includes("-T"), true);
       }),
       { numRuns: 500 },
@@ -315,7 +315,7 @@ describe("INVARIANT: When sshArgs constructs arguments, they SHALL be consistent
   test("sshArgs uses parseSshTarget destination as the host argument", () => {
     fc.assert(
       fc.property(sshTargetAny, shellDangerousString, (host, command) => {
-        const args = sshArgs(host, command);
+        const args = sshArgs(host, command, process.env);
         const target = parseSshTarget(host);
         // The destination must appear in the args (as the ssh target)
         assert.equal(args.includes(target.destination), true);
@@ -327,7 +327,7 @@ describe("INVARIANT: When sshArgs constructs arguments, they SHALL be consistent
   test("sshArgs port argument matches parseSshTarget port when present", () => {
     fc.assert(
       fc.property(sshTargetAny, shellDangerousString, (host, command) => {
-        const args = sshArgs(host, command);
+        const args = sshArgs(host, command, process.env);
         const target = parseSshTarget(host);
         const portFlagIndex = args.indexOf("-p");
         if (target.port !== null) {

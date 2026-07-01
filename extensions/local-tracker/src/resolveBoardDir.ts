@@ -22,11 +22,10 @@ export const DEFAULT_BOARD_DIR = ".lorenz/local";
  */
 export function resolveBoardDir(
   configuredPath: string | undefined,
-  opts: { cwd?: string; env?: NodeJS.ProcessEnv } = {},
+  opts: { cwd?: string; env: NodeJS.ProcessEnv },
 ): string {
   const cwd = opts.cwd ?? process.cwd();
-  const env = opts.env ?? process.env;
-  const expanded = expandPath(configuredPath ?? DEFAULT_BOARD_DIR, env);
+  const expanded = expandPath(configuredPath ?? DEFAULT_BOARD_DIR, opts.env);
   return path.isAbsolute(expanded) ? expanded : path.join(cwd, expanded);
 }
 

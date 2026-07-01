@@ -34,6 +34,8 @@ export interface ObservabilityServerOptions {
   authScope?: string | undefined;
   /** Tool packs available to this endpoint; defaults to the process-wide registry. */
   tools?: ToolRegistry | undefined;
+  /** Environment threaded into tool execution so tools never read `process.env` directly. */
+  env: NodeJS.ProcessEnv;
   /**
    * Read-only liveness oracle for per-run (Token B) claims. Injected at the
    * composition root; absent on non-claim mounts, where the FAIL-CLOSED default
@@ -54,6 +56,8 @@ export interface McpMountOptions {
   authScope?: string | undefined;
   /** Tool packs available to this endpoint; defaults to the process-wide registry. */
   tools?: ToolRegistry | undefined;
+  /** Environment threaded into tool execution so tools never read `process.env` directly. */
+  env: NodeJS.ProcessEnv;
   /**
    * Read-only liveness oracle for per-run (Token B) claims. Injected at the
    * composition root; absent on non-claim mounts, where the FAIL-CLOSED default
@@ -81,7 +85,12 @@ export async function startMcpServer(
     (options.port > 0
       ? mcpAuthScopeForSettings(settings, bindHost, options.port)
       : createMcpAuthScope());
-  mountMcp(app, settings, { authScope, tools: options.tools, isRunLive: options.isRunLive });
+  mountMcp(app, settings, {
+    authScope,
+    tools: options.tools,
+    isRunLive: options.isRunLive,
+    env: options.env,
+  });
   app.notFound((c) =>
     c.req.method === "GET"
       ? errorResponse(404, "not_found", "Route not found")
@@ -98,7 +107,7 @@ export async function startMcpServer(
 export function mountMcp(
   app: Hono,
   settings: Settings | (() => Settings),
-  options: McpMountOptions = {},
+  options: McpMountOptions,
 ): void {
   const currentSettings = typeof settings === "function" ? settings : () => settings;
   const authScope = options.authScope ?? createMcpAuthScope();
@@ -143,7 +152,7 @@ export function mountMcp(
     }
     await next();
   });
-  app.post(mcpPath, async (c) => handleMcp(currentSettings(), c, options.tools));
+  app.post(mcpPath, async (c) => handleMcp(currentSettings(), c, options.env, options.tools));
   app.all(mcpPath, () => errorResponse(405, "method_not_allowed", "Method not allowed"));
 }
 
@@ -175,7 +184,12 @@ async function startHonoServer(
   };
 }
 
-async function handleMcp(settings: Settings, c: Context, tools?: ToolRegistry): Promise<Response> {
+async function handleMcp(
+  settings: Settings,
+  c: Context,
+  env: NodeJS.ProcessEnv,
+  tools?: ToolRegistry,
+): Promise<Response> {
   let body: Record<string, unknown>;
   try {
     body = await requestJson(c);
@@ -190,7 +204,7 @@ async function handleMcp(settings: Settings, c: Context, tools?: ToolRegistry): 
     );
   }
 
-  const response = await mcpResponse(settings, body, tools);
+  const response = await mcpResponse(settings, body, env, tools);
   if (response === null) return new Response("", { status: 204 });
   return jsonResponse(response);
 }
@@ -251,6 +265,7 @@ function requestToolName(body: unknown): string | null {
 export async function mcpResponse(
   settings: Settings,
   body: Record<string, unknown>,
+  env: NodeJS.ProcessEnv,
   tools: ToolRegistry = defaultToolRegistry,
 ): Promise<Record<string, unknown> | null> {
   const method = typeof body.method === "string" ? body.method : "";
@@ -282,6 +297,7 @@ export async function mcpResponse(
         parsed.data.name,
         parsed.data.arguments,
         settings,
+        env,
         fetch,
         tools,
       );

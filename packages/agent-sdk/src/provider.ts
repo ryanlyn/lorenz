@@ -41,8 +41,16 @@ export interface AgentExecutorProvider {
    * invalid combination, ...). Called once at startup by `validateDispatchConfig`.
    */
   validateAgent?(kind: AgentKind, config: AgentConfig, settings: Settings): void;
-  /** Build the executor that drives sessions for the given agent kind. */
-  createExecutor(kind: AgentKind, settings: Settings): AgentExecutor | Promise<AgentExecutor>;
+  /**
+   * Build the executor that drives sessions for the given agent kind. `env` is the
+   * process environment threaded from the composition root, so the executor can spawn
+   * SSH bridges and acquire MCP endpoints without reading `process.env` itself.
+   */
+  createExecutor(
+    kind: AgentKind,
+    settings: Settings,
+    env: NodeJS.ProcessEnv,
+  ): AgentExecutor | Promise<AgentExecutor>;
 }
 
 /** Lookup table of {@link AgentExecutorProvider}s keyed by their `executor` selector. */

@@ -81,6 +81,7 @@ export async function executeTool(
   name: string,
   input: unknown,
   settings: Settings,
+  env: NodeJS.ProcessEnv,
   fetchImpl: typeof fetch = fetch,
   registry: ToolRegistry = defaultToolRegistry,
   trackers: TrackerRegistry = defaultTrackerRegistry,
@@ -88,5 +89,6 @@ export async function executeTool(
   return executeMountedTool(mountedPacks(settings, registry, trackers), name, input, {
     settings,
     fetchImpl,
+    env,
   });
 }

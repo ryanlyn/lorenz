@@ -246,9 +246,7 @@ export function validateDispatchConfig(
  * verbatim for the loader, while a bundle selection is left to the registry's
  * built-ins.
  */
-export function trackerSpecifierFromConfig(
-  raw: Record<string, unknown> = {},
-): string | undefined {
+export function trackerSpecifierFromConfig(raw: Record<string, unknown> = {}): string | undefined {
   const parsed = parseWorkflowConfig(raw);
   const trackersRaw = parsed.trackers ?? {};
   const selectorRecord = parseTrackerRecord(parsed.tracker ?? {}, "tracker");
@@ -1177,9 +1175,10 @@ function resolveOnePasswordRef(
   env: NodeJS.ProcessEnv,
 ): string | undefined {
   if (value === undefined || !value.startsWith("op://")) return value;
-  const mergedEnv = { ...process.env, ...env };
+  // The `op` subprocess inherits the caller-provided env, so secrets resolve against the same
+  // environment the rest of config resolution uses.
   try {
-    execaSync("op", ["--version"], { env: mergedEnv });
+    execaSync("op", ["--version"], { env });
   } catch {
     throw new Error(
       "1Password CLI (op) is required to resolve op:// references but was not found. " +
@@ -1187,7 +1186,7 @@ function resolveOnePasswordRef(
     );
   }
   try {
-    const result = execaSync("op", ["read", value], { env: mergedEnv });
+    const result = execaSync("op", ["read", value], { env });
     return result.stdout.trim();
   } catch {
     throw new Error(`Failed to resolve 1Password reference: ${value}`);

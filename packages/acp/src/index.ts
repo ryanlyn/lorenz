@@ -122,14 +122,16 @@ export const acpExecutorProvider: AgentExecutorProvider = {
       );
     }
   },
-  createExecutor: (kind) => new Executor(kind),
+  createExecutor: (kind, _settings, env) => new Executor(kind, env),
 };
 
 export class Executor implements AgentExecutor {
   readonly kind: AgentKind;
+  private readonly env: NodeJS.ProcessEnv;
 
-  constructor(kind = "acp") {
+  constructor(kind: AgentKind, env: NodeJS.ProcessEnv = process.env) {
     this.kind = kind;
+    this.env = env;
   }
 
   async startSession(input: {
@@ -151,6 +153,7 @@ export class Executor implements AgentExecutor {
     const workspace = await validateWorkspaceCwd(
       input.settings,
       input.workspace,
+      this.env,
       input.workerHost ?? null,
     );
     const agentKind = input.settings.agent.kind;
@@ -168,10 +171,16 @@ export class Executor implements AgentExecutor {
         threadedEndpoint ??
         (await acquireAgentMcpEndpoint(
           input.settings,
+          this.env,
           input.workerHost ?? null,
           mcpTunnelTransport,
         ));
-      child = startBridgeProcess(acpOptions.bridgeCommand, workspace, input.workerHost ?? null);
+      child = startBridgeProcess(
+        acpOptions.bridgeCommand,
+        workspace,
+        input.workerHost ?? null,
+        this.env,
+      );
       const client = acpClient({
         workspace,
         workerHost: input.workerHost ?? null,
@@ -740,19 +749,23 @@ function startBridgeProcess(
   bridgeCommand: string,
   workspace: string,
   workerHost: string | null,
+  env: NodeJS.ProcessEnv,
 ): ChildProcessWithoutNullStreams {
   const command = `exec ${resolveBridgeCommand(bridgeCommand, workerHost)}`;
   if (workerHost) {
     // Remote bridges resolve their own binaries on the worker host.
-    return startSshProcess(workerHost, `cd ${shellEscape(workspace)} && ${command}`);
+    return startSshProcess(workerHost, `cd ${shellEscape(workspace)} && ${command}`, env);
   }
+  // Derive the child environment from the resolved env plus any agent-binary paths it lacks, rather
+  // than execa's default of layering overrides onto the ambient process environment.
   return execa("bash", ["-lc", command], {
     cwd: workspace,
     stdin: "pipe",
     stdout: "pipe",
     stderr: "pipe",
     reject: false,
-    env: hostAgentBinaryEnv(),
+    extendEnv: false,
+    env: { ...env, ...hostAgentBinaryEnv(env) },
   }) as unknown as ChildProcessWithoutNullStreams;
 }
 

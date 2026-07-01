@@ -258,7 +258,7 @@ test("runAgentAttempt cancels workspace creation when setup timeout fires", asyn
     workflow: { path: "/workflow.md", config: {}, promptTemplate: "Fix it", settings },
     settings,
     adapters: fakeAdapters({
-      createWorkspaceForIssue: async (_settings, _issue, options) => {
+      createWorkspaceForIssue: async (_settings, _issue, _env, options) => {
         const signal = (options as typeof options & { abortSignal?: AbortSignal }).abortSignal;
         signalSeen = signal instanceof AbortSignal;
         return new Promise<string>((resolve, reject) => {
@@ -359,6 +359,7 @@ test("runAgentAttempt cancels beforeRun hook when setup timeout fires", async ()
         _command,
         _workspace,
         _hooks,
+        _env,
         _workerHost,
         options?: { abortSignal?: AbortSignal },
       ) => {
@@ -674,7 +675,7 @@ test("createWorkspaceForIssue calls workspace adapter with correct issue/ensembl
     settings,
     slotIndex: 2,
     adapters: fakeAdapters({
-      createWorkspaceForIssue: async (_settings, iss, opts) => {
+      createWorkspaceForIssue: async (_settings, iss, _env, opts) => {
         capturedIssue = iss;
         capturedOptions = opts;
         return "/tmp/workspace/WS-1";
@@ -729,7 +730,7 @@ test("runAgentAttempt emits hook execution updates from beforeRun hooks", async 
     settings,
     onUpdate: (update) => received.push(update),
     adapters: fakeAdapters({
-      runHook: async (command, workspace, _hooks, _workerHost, options) => {
+      runHook: async (command, workspace, _hooks, _env, _workerHost, options) => {
         options?.onHookEvent?.({
           status: "started",
           command,

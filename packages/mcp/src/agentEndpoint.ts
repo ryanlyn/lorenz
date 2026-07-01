@@ -58,6 +58,7 @@ export interface RemoteMcpTunnelTransport {
     workerHost: string,
     localHost: string,
     localPort: number,
+    env: NodeJS.ProcessEnv,
   ): Promise<RemoteMcpTunnel>;
   releaseRemoteMcpTunnel(tunnel: RemoteMcpTunnel): void;
   openForRun(
@@ -65,6 +66,7 @@ export interface RemoteMcpTunnelTransport {
     runKey: string,
     localHost: string,
     localPort: number,
+    env: NodeJS.ProcessEnv,
   ): Promise<RemoteMcpTunnel>;
   closeForRun(workerHost: string, runKey: string): void;
 }
@@ -133,6 +135,7 @@ const runClaimMaxLifetimeMs = 24 * 60 * 60 * 1000;
 
 export async function acquireAgentMcpEndpoint(
   settings: Settings,
+  env: NodeJS.ProcessEnv,
   workerHost?: string | null,
   tunnels?: RemoteMcpTunnelTransport,
 ): Promise<AgentMcpEndpointLease> {
@@ -143,8 +146,8 @@ export async function acquireAgentMcpEndpoint(
     const configuredToken = issueConfiguredMcpToken(settings);
     token = configuredToken?.token ?? null;
     endpoint = workerHost
-      ? await acquireRemoteMcpEndpoint(workerHost, settings, configuredToken, tunnels)
-      : await localMcpEndpoint(settings, configuredToken);
+      ? await acquireRemoteMcpEndpoint(workerHost, settings, env, configuredToken, tunnels)
+      : await localMcpEndpoint(settings, env, configuredToken);
     token ??= issueMcpToken(endpoint.authScope);
     return {
       url: endpoint.url,
@@ -181,6 +184,7 @@ export async function acquireAgentMcpEndpoint(
 
 export async function acquireAgentMcpEndpointForRun(
   settings: Settings,
+  env: NodeJS.ProcessEnv,
   workerHost: string,
   runKey: string,
   tunnels: RemoteMcpTunnelTransport,
@@ -205,6 +209,7 @@ export async function acquireAgentMcpEndpointForRun(
       workerHost,
       runKey,
       settings,
+      env,
       configuredToken,
       tunnels,
       isRunLive,
@@ -270,9 +275,10 @@ function runClaimForLease(
 
 async function localMcpEndpoint(
   settings: Settings,
+  env: NodeJS.ProcessEnv,
   configuredToken: IssuedMcpToken | null,
 ): Promise<McpEndpoint> {
-  const localServer = await ensureLocalMcpServer(settings, configuredToken);
+  const localServer = await ensureLocalMcpServer(settings, env, configuredToken);
   const serverHost = normalizeHttpBindHost(settings.server.host);
   const configuredPort = settings.server.port;
   return {
@@ -289,18 +295,19 @@ async function localMcpEndpoint(
 async function acquireRemoteMcpEndpoint(
   workerHost: string,
   settings: Settings,
+  env: NodeJS.ProcessEnv,
   configuredToken: IssuedMcpToken | null,
   tunnels: RemoteMcpTunnelTransport | undefined,
 ): Promise<McpEndpoint> {
   if (!tunnels) throw new Error("remote_acp_mcp_requires_tunnel_transport");
-  const localServer = await ensureLocalMcpServer(settings, configuredToken);
+  const localServer = await ensureLocalMcpServer(settings, env, configuredToken);
   try {
     const localHost = "127.0.0.1";
     const localPort = localServer?.handle.port ?? settings.server.port;
     if (typeof localPort !== "number" || localPort <= 0) {
       throw new Error("remote_acp_mcp_requires_server_port");
     }
-    const tunnel = await tunnels.acquireRemoteMcpTunnel(workerHost, localHost, localPort);
+    const tunnel = await tunnels.acquireRemoteMcpTunnel(workerHost, localHost, localPort, env);
     return {
       url: `http://127.0.0.1:${tunnel.remotePort}${mcpPath}`,
       authScope:
@@ -321,6 +328,7 @@ async function acquirePerRunMcpEndpoint(
   workerHost: string,
   runKey: string,
   settings: Settings,
+  env: NodeJS.ProcessEnv,
   configuredToken: IssuedMcpToken | null,
   tunnels: RemoteMcpTunnelTransport,
   isRunLive?: IsRunLive,
@@ -335,7 +343,7 @@ async function acquirePerRunMcpEndpoint(
   // re-check + generation fence on every request. `requireOwnedServer: true`
   // refuses to attach to a foreign server lorenz cannot enforce that fence over
   // (see `ensureLocalMcpServer`).
-  const localServer = await ensureLocalMcpServer(settings, configuredToken, isRunLive, true);
+  const localServer = await ensureLocalMcpServer(settings, env, configuredToken, isRunLive, true);
   // Capture the shared local server's generation BEFORE the `openForRun` await.
   // The event loop is single-writer only BETWEEN awaits, so stamping the claim
   // with the generation live at this point (not re-read after the await, when a
@@ -348,7 +356,7 @@ async function acquirePerRunMcpEndpoint(
     if (typeof localPort !== "number" || localPort <= 0) {
       throw new Error("remote_acp_mcp_requires_server_port");
     }
-    const tunnel = await tunnels.openForRun(workerHost, runKey, localHost, localPort);
+    const tunnel = await tunnels.openForRun(workerHost, runKey, localHost, localPort, env);
     return {
       url: `http://127.0.0.1:${tunnel.remotePort}${mcpPath}`,
       authScope:
@@ -366,6 +374,7 @@ async function acquirePerRunMcpEndpoint(
 
 async function ensureLocalMcpServer(
   settings: Settings,
+  env: NodeJS.ProcessEnv,
   configuredToken: IssuedMcpToken | null,
   isRunLive?: IsRunLive,
   requireOwnedServer = false,
@@ -403,6 +412,7 @@ async function ensureLocalMcpServer(
         port: configuredPort,
         authScope: identity,
         isRunLive,
+        env,
       });
       // Bump the slot's generation when a brand-new entry replaces a torn-down
       // one. The first entry for a key gets generation 1; each recycle is
@@ -415,7 +425,7 @@ async function ensureLocalMcpServer(
     });
   }
 
-  const handle = await startMcpServer(settings, { host: serverHost, port: 0, isRunLive });
+  const handle = await startMcpServer(settings, { host: serverHost, port: 0, isRunLive, env });
   // Ephemeral (port 0) servers are not shared/refcounted, so each lease is its
   // own generation-1 slot stopped on release; nothing recycles it in place.
   return { key: null, handle, generation: 1 };

@@ -67,6 +67,7 @@ test("local tools create, update status, and comment on the board", async () => 
     "local_create_issue",
     { title: "Fix it", status: "Todo" },
     settings,
+    process.env,
   );
   assert.equal(created.success, true);
 
@@ -74,6 +75,7 @@ test("local tools create, update status, and comment on the board", async () => 
     "local_update_status",
     { issueId: "BOARD-1", status: "In Progress" },
     settings,
+    process.env,
   );
   assert.equal(moved.success, true);
 
@@ -81,6 +83,7 @@ test("local tools create, update status, and comment on the board", async () => 
     "local_comment",
     { issueId: "BOARD-1", body: "opened PR" },
     settings,
+    process.env,
   );
   assert.equal(commented.success, true);
 
@@ -93,7 +96,12 @@ test("local_create_issue persists the body so it round-trips as the issue descri
   const { dir, settings } = await localSettings();
   const body = "Steps to reproduce:\n1. open the app\n2. it crashes";
 
-  const created = await executeLocalTool("local_create_issue", { title: "Crash", body }, settings);
+  const created = await executeLocalTool(
+    "local_create_issue",
+    { title: "Crash", body },
+    settings,
+    process.env,
+  );
   assert.equal(created.success, true);
   // The tool's own returned issue carries the body through as the description.
   assert.equal((created.result as { issue: { description: string } }).issue.description, body);
@@ -112,6 +120,7 @@ test("local_read_issue reads back the status, title, description, and both comme
     "local_create_issue",
     { title: "Read it", body: "the details", status: "Todo" },
     settings,
+    process.env,
   );
   assert.equal(created.success, true);
 
@@ -119,11 +128,27 @@ test("local_read_issue reads back the status, title, description, and both comme
     "local_update_status",
     { issueId: "BOARD-1", status: "In Progress" },
     settings,
+    process.env,
   );
-  await executeLocalTool("local_comment", { issueId: "BOARD-1", body: "opened PR" }, settings);
-  await executeLocalTool("local_comment", { issueId: "BOARD-1", body: "checks green" }, settings);
+  await executeLocalTool(
+    "local_comment",
+    { issueId: "BOARD-1", body: "opened PR" },
+    settings,
+    process.env,
+  );
+  await executeLocalTool(
+    "local_comment",
+    { issueId: "BOARD-1", body: "checks green" },
+    settings,
+    process.env,
+  );
 
-  const read = await executeLocalTool("local_read_issue", { issueId: "BOARD-1" }, settings);
+  const read = await executeLocalTool(
+    "local_read_issue",
+    { issueId: "BOARD-1" },
+    settings,
+    process.env,
+  );
   assert.equal(read.success, true);
   const result = read.result as {
     issue: { id: string; status: string; title: string; description: string };
@@ -140,17 +165,42 @@ test("local_read_issue reads back the status, title, description, and both comme
 
 test("local_read_issue fails for a missing or invalid id", async () => {
   const { settings } = await localSettings();
-  const missing = await executeLocalTool("local_read_issue", { issueId: "BOARD-404" }, settings);
+  const missing = await executeLocalTool(
+    "local_read_issue",
+    { issueId: "BOARD-404" },
+    settings,
+    process.env,
+  );
   assert.equal(missing.success, false);
-  const invalid = await executeLocalTool("local_read_issue", { issueId: "nope" }, settings);
+  const invalid = await executeLocalTool(
+    "local_read_issue",
+    { issueId: "nope" },
+    settings,
+    process.env,
+  );
   assert.equal(invalid.success, false);
 });
 
 test("local_query filters, projects, and orders board issues", async () => {
   const { settings } = await localSettings();
-  await executeLocalTool("local_create_issue", { title: "Alpha", status: "Todo" }, settings);
-  await executeLocalTool("local_create_issue", { title: "Beta", status: "In Progress" }, settings);
-  await executeLocalTool("local_create_issue", { title: "Gamma", status: "Todo" }, settings);
+  await executeLocalTool(
+    "local_create_issue",
+    { title: "Alpha", status: "Todo" },
+    settings,
+    process.env,
+  );
+  await executeLocalTool(
+    "local_create_issue",
+    { title: "Beta", status: "In Progress" },
+    settings,
+    process.env,
+  );
+  await executeLocalTool(
+    "local_create_issue",
+    { title: "Gamma", status: "Todo" },
+    settings,
+    process.env,
+  );
 
   const res = await executeLocalTool(
     "local_query",
@@ -160,6 +210,7 @@ test("local_query filters, projects, and orders board issues", async () => {
       order_by: [{ field: "title", dir: "desc" }],
     },
     settings,
+    process.env,
   );
   assert.equal(res.success, true);
   const result = res.result as {
@@ -180,13 +231,14 @@ test("local_query filters, projects, and orders board issues", async () => {
 test("local_query pages with the requested window and the pre-page total", async () => {
   const { settings } = await localSettings();
   for (const title of ["one", "two", "three"]) {
-    await executeLocalTool("local_create_issue", { title, status: "Todo" }, settings);
+    await executeLocalTool("local_create_issue", { title, status: "Todo" }, settings, process.env);
   }
 
   const res = await executeLocalTool(
     "local_query",
     { select: ["id"], order_by: [{ field: "id", dir: "asc" }], limit: 1, offset: 1 },
     settings,
+    process.env,
   );
   const result = res.result as { rows: Array<{ id: string }>; total: number };
   assert.equal(result.total, 3);
@@ -196,10 +248,25 @@ test("local_query pages with the requested window and the pre-page total", async
 
 test("local_query includes comments only when selected", async () => {
   const { settings } = await localSettings();
-  await executeLocalTool("local_create_issue", { title: "withcomments", status: "Todo" }, settings);
-  await executeLocalTool("local_comment", { issueId: "BOARD-1", body: "first note" }, settings);
+  await executeLocalTool(
+    "local_create_issue",
+    { title: "withcomments", status: "Todo" },
+    settings,
+    process.env,
+  );
+  await executeLocalTool(
+    "local_comment",
+    { issueId: "BOARD-1", body: "first note" },
+    settings,
+    process.env,
+  );
 
-  const without = await executeLocalTool("local_query", { select: ["id", "title"] }, settings);
+  const without = await executeLocalTool(
+    "local_query",
+    { select: ["id", "title"] },
+    settings,
+    process.env,
+  );
   const w0 = (without.result as { rows: Array<Record<string, unknown>> }).rows[0]!;
   assert.equal("comments" in w0, false);
 
@@ -207,6 +274,7 @@ test("local_query includes comments only when selected", async () => {
     "local_query",
     { select: ["id", "comments"] },
     settings,
+    process.env,
   );
   const c0 = (withComments.result as { rows: Array<{ comments: string[] }> }).rows[0]!;
   assert.equal(c0.comments.length, 1);
@@ -215,11 +283,16 @@ test("local_query includes comments only when selected", async () => {
 
 test("local_query surfaces malformed board files via skipped instead of failing", async () => {
   const { dir, settings } = await localSettings();
-  await executeLocalTool("local_create_issue", { title: "ok", status: "Todo" }, settings);
+  await executeLocalTool(
+    "local_create_issue",
+    { title: "ok", status: "Todo" },
+    settings,
+    process.env,
+  );
   // A board-id file with no status frontmatter is malformed; list() skips it via onSkip.
   await writeFile(path.join(dir, "BOARD-9.md"), "---\nlabels: []\n---\n# broken\n", "utf8");
 
-  const res = await executeLocalTool("local_query", { select: ["id"] }, settings);
+  const res = await executeLocalTool("local_query", { select: ["id"] }, settings, process.env);
   assert.equal(res.success, true);
   const result = res.result as {
     rows: Array<{ id: string }>;
@@ -241,6 +314,7 @@ test("local_query rejects a malformed filter", async () => {
     "local_query",
     { where: { field: "state", op: "bogus", value: "x" } },
     settings,
+    process.env,
   );
   assert.equal(res.success, false);
   assert.match(res.error ?? "", /unknown op/);
@@ -248,7 +322,7 @@ test("local_query rejects a malformed filter", async () => {
 
 test("local tools reject unknown names", async () => {
   const { settings } = await localSettings();
-  const result = await executeLocalTool("local_bogus", {}, settings);
+  const result = await executeLocalTool("local_bogus", {}, settings, process.env);
   assert.deepEqual(result, {
     success: false,
     error: 'Unsupported tool: "local_bogus".',
@@ -278,7 +352,12 @@ test("local_create_issue writes under HOME for a ~ path, not a literal ~ under c
   const previousHome = process.env.HOME;
   process.env.HOME = home;
   try {
-    const created = await executeLocalTool("local_create_issue", { title: "FromTilde" }, settings);
+    const created = await executeLocalTool(
+      "local_create_issue",
+      { title: "FromTilde" },
+      settings,
+      process.env,
+    );
     assert.equal(created.success, true);
 
     // The issue file lands under the expanded HOME/board directory.

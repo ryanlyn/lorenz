@@ -70,6 +70,11 @@ export {
 
 export interface LorenzRuntimeOptions {
   workflow: WorkflowDefinition;
+  /**
+   * Process environment threaded from the composition root into each agent run, so the
+   * runner (and the workspace/hook/executor adapters it drives) never reads `process.env`.
+   */
+  env: NodeJS.ProcessEnv;
   client?: RuntimeTrackerClient | undefined;
   clientFactory?: ((settings: WorkflowDefinition["settings"]) => RuntimeTrackerClient) | undefined;
   reloadWorkflow?: (() => Promise<WorkflowDefinition>) | undefined;
@@ -946,6 +951,7 @@ export class LorenzRuntime {
       const result = await this.runner({
         issue,
         workflow: this.workflow,
+        env: this.input.env,
         workerHost: effectiveWorkerHost,
         slotIndex,
         // Thread the bound slot's per-run MCP endpoint (or null on the local /

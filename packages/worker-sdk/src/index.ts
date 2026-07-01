@@ -30,8 +30,4 @@ export {
 
 export { FakeWorkerDriver, fakeWorkerDriverFactory, registerFakeWorkerDriver } from "./fake.js";
 
-export {
-  LocalWorkerDriver,
-  localWorkerDriverFactory,
-  registerLocalWorkerDriver,
-} from "./local.js";
+export { LocalWorkerDriver, localWorkerDriverFactory, registerLocalWorkerDriver } from "./local.js";

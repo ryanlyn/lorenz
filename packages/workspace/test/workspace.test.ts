@@ -138,14 +138,17 @@ test("ensureInsideRoot — root itself does not throw", () => {
 test('validateWorkspaceCwd — blank input throws "invalid_workspace_cwd"', async () => {
   const root = await tempDir("ws-validate");
   const settings = makeSettings(root);
-  await assert.rejects(() => validateWorkspaceCwd(settings, "   "), /invalid_workspace_cwd/);
+  await assert.rejects(
+    () => validateWorkspaceCwd(settings, "   ", process.env),
+    /invalid_workspace_cwd/,
+  );
 });
 
 test('validateWorkspaceCwd — newline in path throws "invalid_workspace_cwd"', async () => {
   const root = await tempDir("ws-validate");
   const settings = makeSettings(root);
   await assert.rejects(
-    () => validateWorkspaceCwd(settings, "/some/path\n/injected"),
+    () => validateWorkspaceCwd(settings, "/some/path\n/injected", process.env),
     /invalid_workspace_cwd/,
   );
 });
@@ -157,7 +160,7 @@ test("validateWorkspaceCwd — accepts final symlinks that resolve inside the ro
   await fs.mkdir(real);
   await fs.symlink(real, link);
   const settings = makeSettings(root);
-  const result = await validateWorkspaceCwd(settings, link);
+  const result = await validateWorkspaceCwd(settings, link, process.env);
   assert.equal(result, await fs.realpath(real));
 });
 
@@ -171,7 +174,7 @@ test("validateWorkspaceCwd — accepts symlinked components that resolve inside 
   await fs.symlink(realParent, linkParent);
 
   const settings = makeSettings(root);
-  const result = await validateWorkspaceCwd(settings, path.join(linkParent, "MT-1"));
+  const result = await validateWorkspaceCwd(settings, path.join(linkParent, "MT-1"), process.env);
 
   assert.equal(result, await fs.realpath(workspace));
 });
@@ -180,7 +183,7 @@ test("validateWorkspaceCwd — rejects workspace equal to workspace root", async
   const root = await tempDir("ws-validate");
   const settings = makeSettings(root);
   await assert.rejects(
-    () => validateWorkspaceCwd(settings, root),
+    () => validateWorkspaceCwd(settings, root, process.env),
     /refusing to use workspace root as cwd/,
   );
 });
@@ -190,7 +193,7 @@ test("validateWorkspaceCwd — rejects workspace equal to workspace root", async
 test("createWorkspaceForIssue — creates directory and returns canonical path", async () => {
   const root = await tempDir("ws-create");
   const settings = makeSettings(root);
-  const result = await createWorkspaceForIssue(settings, sampleIssue);
+  const result = await createWorkspaceForIssue(settings, sampleIssue, process.env);
   const expected = path.join(await fs.realpath(root), safeIdentifier(sampleIssue.identifier));
   assert.equal(result, expected);
   const stat = await fs.stat(result);
@@ -200,15 +203,15 @@ test("createWorkspaceForIssue — creates directory and returns canonical path",
 test("createWorkspaceForIssue — reuses existing workspace directory", async () => {
   const root = await tempDir("ws-create");
   const settings = makeSettings(root);
-  const first = await createWorkspaceForIssue(settings, sampleIssue);
-  const second = await createWorkspaceForIssue(settings, sampleIssue);
+  const first = await createWorkspaceForIssue(settings, sampleIssue, process.env);
+  const second = await createWorkspaceForIssue(settings, sampleIssue, process.env);
   assert.equal(first, second);
 });
 
 test("createWorkspaceForIssue — runs afterCreate hook on new workspace", async () => {
   const root = await tempDir("ws-create");
   const settings = makeSettings(root, { afterCreate: "touch .hook-ran" });
-  const ws = await createWorkspaceForIssue(settings, sampleIssue);
+  const ws = await createWorkspaceForIssue(settings, sampleIssue, process.env);
   const hookFile = path.join(ws, ".hook-ran");
   const stat = await fs.stat(hookFile);
   assert.ok(stat.isFile());
@@ -217,7 +220,7 @@ test("createWorkspaceForIssue — runs afterCreate hook on new workspace", async
 test("createWorkspaceForIssue — default (no forceSlotSuffix) returns the bare issue dir", async () => {
   const root = await tempDir("ws-create-bare");
   const settings = makeSettings(root);
-  const ws = await createWorkspaceForIssue(settings, sampleIssue, {
+  const ws = await createWorkspaceForIssue(settings, sampleIssue, process.env, {
     slotIndex: 0,
     ensembleSize: 1,
   });
@@ -233,12 +236,12 @@ test("createWorkspaceForIssue — forceSlotSuffix shards two co-resident same-is
 
   // Both runs are solo (ensembleSize=1) yet co-reside on one machine: forceSlotSuffix
   // must give them distinct `<issue>/<slotIndex>` dirs, never the shared bare path.
-  const slot0 = await createWorkspaceForIssue(settings, sampleIssue, {
+  const slot0 = await createWorkspaceForIssue(settings, sampleIssue, process.env, {
     slotIndex: 0,
     ensembleSize: 1,
     forceSlotSuffix: true,
   });
-  const slot1 = await createWorkspaceForIssue(settings, sampleIssue, {
+  const slot1 = await createWorkspaceForIssue(settings, sampleIssue, process.env, {
     slotIndex: 1,
     ensembleSize: 1,
     forceSlotSuffix: true,
@@ -263,7 +266,7 @@ test("createWorkspaceForIssue — overlays configured skill directories after af
       "mkdir -p .lorenz/skills/lorenz-land && printf hook > .lorenz/skills/lorenz-land/SKILL.md",
   });
 
-  const ws = await createWorkspaceForIssue(settings, sampleIssue, {
+  const ws = await createWorkspaceForIssue(settings, sampleIssue, process.env, {
     skillOverlay: skillOverlay([skill]),
   });
 
@@ -288,7 +291,7 @@ test("createWorkspaceForIssue — writes .gitignore in skills destination", asyn
   await fs.writeFile(path.join(skill, "SKILL.md"), "linear\n");
   const settings = makeSettings(root);
 
-  const ws = await createWorkspaceForIssue(settings, sampleIssue, {
+  const ws = await createWorkspaceForIssue(settings, sampleIssue, process.env, {
     skillOverlay: skillOverlay([skill]),
   });
 
@@ -308,9 +311,13 @@ test("createWorkspaceForIssue — refreshes skills when reusing an existing work
   const settings = makeSettings(root);
   const overlay = skillOverlay([skill]);
 
-  const first = await createWorkspaceForIssue(settings, sampleIssue, { skillOverlay: overlay });
+  const first = await createWorkspaceForIssue(settings, sampleIssue, process.env, {
+    skillOverlay: overlay,
+  });
   await fs.writeFile(path.join(skill, "SKILL.md"), "second\n");
-  const second = await createWorkspaceForIssue(settings, sampleIssue, { skillOverlay: overlay });
+  const second = await createWorkspaceForIssue(settings, sampleIssue, process.env, {
+    skillOverlay: overlay,
+  });
 
   assert.equal(second, first);
   assert.equal(
@@ -328,7 +335,7 @@ test("createWorkspaceForIssue — copies the whole skill directory under its bas
   await fs.writeFile(path.join(skill, "scripts", "run.sh"), "echo run\n");
   const settings = makeSettings(root);
 
-  const ws = await createWorkspaceForIssue(settings, sampleIssue, {
+  const ws = await createWorkspaceForIssue(settings, sampleIssue, process.env, {
     skillOverlay: skillOverlay([skill]),
   });
 
@@ -354,7 +361,9 @@ test("createWorkspaceForIssue — rejects skill source files (skills must be dir
 
   await assert.rejects(
     () =>
-      createWorkspaceForIssue(settings, sampleIssue, { skillOverlay: skillOverlay([sourceFile]) }),
+      createWorkspaceForIssue(settings, sampleIssue, process.env, {
+        skillOverlay: skillOverlay([sourceFile]),
+      }),
     /workspace_skill_source_unsupported/,
   );
 });
@@ -372,7 +381,10 @@ test("createWorkspaceForIssue - rejects symlinked skill overlay directories", as
   const settings = makeSettings(root);
 
   await assert.rejects(
-    () => createWorkspaceForIssue(settings, sampleIssue, { skillOverlay: skillOverlay([skill]) }),
+    () =>
+      createWorkspaceForIssue(settings, sampleIssue, process.env, {
+        skillOverlay: skillOverlay([skill]),
+      }),
     /unsafe symlink/,
   );
   assert.equal(await fileExists(path.join(outside, "skills", "lorenz-land", "SKILL.md")), false);
@@ -391,7 +403,10 @@ test("createWorkspaceForIssue - rejects symlinked skill overlay targets", async 
   const settings = makeSettings(root);
 
   await assert.rejects(
-    () => createWorkspaceForIssue(settings, sampleIssue, { skillOverlay: skillOverlay([skill]) }),
+    () =>
+      createWorkspaceForIssue(settings, sampleIssue, process.env, {
+        skillOverlay: skillOverlay([skill]),
+      }),
     /unsafe symlink/,
   );
   assert.equal(await fileExists(path.join(outside, "SKILL.md")), false);
@@ -409,7 +424,10 @@ test("createWorkspaceForIssue - rejects skill target symlinks that point to the 
   const settings = makeSettings(root);
 
   await assert.rejects(
-    () => createWorkspaceForIssue(settings, sampleIssue, { skillOverlay: skillOverlay([skill]) }),
+    () =>
+      createWorkspaceForIssue(settings, sampleIssue, process.env, {
+        skillOverlay: skillOverlay([skill]),
+      }),
     /unsafe symlink/,
   );
 });
@@ -426,7 +444,10 @@ test("createWorkspaceForIssue - rejects symlinked skill source entries", async (
   const settings = makeSettings(root);
 
   await assert.rejects(
-    () => createWorkspaceForIssue(settings, sampleIssue, { skillOverlay: skillOverlay([skill]) }),
+    () =>
+      createWorkspaceForIssue(settings, sampleIssue, process.env, {
+        skillOverlay: skillOverlay([skill]),
+      }),
     /workspace_skill_source_symlink/,
   );
 });
@@ -443,7 +464,7 @@ test("createWorkspaceForIssue - replaces skill targets before refreshing", async
   await fs.symlink(outside, path.join(workspace, ".lorenz", "skills", "lorenz-land", "scripts"));
   const settings = makeSettings(root);
 
-  const ws = await createWorkspaceForIssue(settings, sampleIssue, {
+  const ws = await createWorkspaceForIssue(settings, sampleIssue, process.env, {
     skillOverlay: skillOverlay([skill]),
   });
 
@@ -473,7 +494,9 @@ eval "$last_arg"
 `,
   );
 
-  await syncWorkspaceSkills(workspace, skillOverlay([skill]), "localhost", { timeoutMs: 5_000 });
+  await syncWorkspaceSkills(workspace, skillOverlay([skill]), process.env, "localhost", {
+    timeoutMs: 5_000,
+  });
 
   const scriptsPath = path.join(workspace, ".lorenz", "skills", "lorenz-land", "scripts");
   assert.equal((await fs.lstat(scriptsPath)).isSymbolicLink(), false);
@@ -498,7 +521,9 @@ eval "$last_arg"
 `,
   );
 
-  await syncWorkspaceSkills(workspace, skillOverlay([skill]), "localhost", { timeoutMs: 5_000 });
+  await syncWorkspaceSkills(workspace, skillOverlay([skill]), process.env, "localhost", {
+    timeoutMs: 5_000,
+  });
 
   assert.equal(
     await fs.readFile(path.join(workspace, ".lorenz", "skills", "-team-skill", "SKILL.md"), "utf8"),
@@ -525,6 +550,7 @@ eval "$last_arg"
   await syncWorkspaceSkills(
     workspace,
     skillOverlay([path.join(skillsRoot, "lorenz-land")]),
+    process.env,
     "localhost",
     { timeoutMs: 5_000 },
   );
@@ -553,9 +579,15 @@ while :; do sleep 1; done
 
   await assert.rejects(
     () =>
-      syncWorkspaceSkills("/remote/workspaces/MT-1", skillOverlay([skill]), "localhost", {
-        timeoutMs: 50,
-      }),
+      syncWorkspaceSkills(
+        "/remote/workspaces/MT-1",
+        skillOverlay([skill]),
+        process.env,
+        "localhost",
+        {
+          timeoutMs: 50,
+        },
+      ),
     /workspace_skill_remote_sync_timeout: localhost 50/,
   );
 });
@@ -568,7 +600,7 @@ test("createWorkspaceForIssue — installs skills into shared workspaces", async
   await fs.writeFile(path.join(skill, "SKILL.md"), "debug\n");
   const settings = makeSettings(root, {}, { isolation: "none" });
 
-  const ws = await createWorkspaceForIssue(settings, sampleIssue, {
+  const ws = await createWorkspaceForIssue(settings, sampleIssue, process.env, {
     skillOverlay: skillOverlay([skill]),
   });
 
@@ -585,7 +617,10 @@ test("createWorkspaceForIssue — rejects missing configured skill sources", asy
   const settings = makeSettings(root);
 
   await assert.rejects(
-    () => createWorkspaceForIssue(settings, sampleIssue, { skillOverlay: skillOverlay([missing]) }),
+    () =>
+      createWorkspaceForIssue(settings, sampleIssue, process.env, {
+        skillOverlay: skillOverlay([missing]),
+      }),
     /workspace_skill_source_missing/,
   );
 });
@@ -594,7 +629,7 @@ test("createWorkspaceForIssue — renders Liquid template variables in afterCrea
   const settings = makeSettings(root, {
     afterCreate: "printf '%s' {{ issue.identifier }} > .issue-id",
   });
-  const ws = await createWorkspaceForIssue(settings, sampleIssue);
+  const ws = await createWorkspaceForIssue(settings, sampleIssue, process.env);
   const content = await fs.readFile(path.join(ws, ".issue-id"), "utf8");
   assert.equal(content, sampleIssue.identifier);
 });
@@ -607,6 +642,7 @@ test("runHook — renders Liquid template variables when issue is provided", asy
     `printf '%s' {{ issue.title }} > ${JSON.stringify(outFile)}`,
     root,
     settings.hooks,
+    process.env,
     null,
     {},
     sampleIssue,
@@ -627,6 +663,7 @@ test("runHook — shell-escapes issue fields to prevent injection", async () => 
     `printf '%s' {{ issue.title }} > ${JSON.stringify(outFile)}`,
     root,
     settings.hooks,
+    process.env,
     null,
     {},
     maliciousIssue,
@@ -644,7 +681,15 @@ test("runHook — keeps raw issue values for Liquid conditionals and comparisons
     `{% if issue.state == "Todo" %}printf ":todo"{% endif %} >> ${JSON.stringify(outFile)}`,
   ].join("\n");
 
-  await runHook(command, root, settings.hooks, null, {}, { ...sampleIssue, branchName: null });
+  await runHook(
+    command,
+    root,
+    settings.hooks,
+    process.env,
+    null,
+    {},
+    { ...sampleIssue, branchName: null },
+  );
 
   const content = await fs.readFile(outFile, "utf8");
   assert.equal(content, "no-branch:todo");
@@ -661,7 +706,7 @@ test("runHook — renders loops over issue arrays as shell-safe words", async ()
     `done > ${JSON.stringify(outFile)}`,
   ].join("\n");
 
-  await runHook(command, root, settings.hooks, null, {}, issue);
+  await runHook(command, root, settings.hooks, process.env, null, {}, issue);
 
   const content = await fs.readFile(outFile, "utf8");
   assert.equal(content, "<backend><needs review>");
@@ -681,7 +726,7 @@ test("runHook — exposes blocked_by issue refs in hook templates", async () => 
     `done > ${JSON.stringify(outFile)}`,
   ].join("\n");
 
-  await runHook(command, root, settings.hooks, null, {}, issue);
+  await runHook(command, root, settings.hooks, process.env, null, {}, issue);
 
   const content = await fs.readFile(outFile, "utf8");
   assert.equal(content, "MT-0");
@@ -695,6 +740,7 @@ test("runHook — supports raw filter for deliberate unescaped output", async ()
     `printf '%s' "{{ issue.identifier | raw }}" > ${JSON.stringify(outFile)}`,
     root,
     settings.hooks,
+    process.env,
     null,
     {},
     sampleIssue,
@@ -713,6 +759,7 @@ test("runHook — supports explicit shell_escape filter without double escaping"
     `printf '%s' {{ issue.title | shell_escape }} > ${JSON.stringify(outFile)}`,
     root,
     settings.hooks,
+    process.env,
     null,
     {},
     issue,
@@ -733,6 +780,7 @@ test("runHook — fails loudly for unknown issue template variables", async () =
         `printf '%s' {{ issue.not_a_field }} > ${JSON.stringify(outFile)}`,
         root,
         settings.hooks,
+        process.env,
         null,
         {},
         sampleIssue,
@@ -749,6 +797,7 @@ test("runHook — leaves non-issue double-brace syntax untouched", async () => {
     `printf '%s' '{{.State.Running}}' > ${JSON.stringify(outFile)}`,
     root,
     settings.hooks,
+    process.env,
     null,
     {},
     sampleIssue,
@@ -766,6 +815,7 @@ test("runHook — passes command through unmodified when no issue context", asyn
     `printf "%s" "{{ issue.identifier }}" > ${JSON.stringify(outFile)}`,
     root,
     settings.hooks,
+    process.env,
   );
   const content = await fs.readFile(outFile, "utf8");
   assert.equal(content, "{{ issue.identifier }}");
@@ -777,7 +827,7 @@ test("runHook — emits start and completion hook execution events", async () =>
   const events: HookExecutionMessage[] = [];
   const command = `printf "%s" "ok"`;
 
-  await runHook(command, root, settings.hooks, null, {
+  await runHook(command, root, settings.hooks, process.env, null, {
     hookName: "before_run",
     onHookEvent: (event) => events.push(event),
   });
@@ -802,7 +852,7 @@ test("runHook — emits exit code and error details on hook failure", async () =
 
   await assert.rejects(
     () =>
-      runHook(command, root, settings.hooks, null, {
+      runHook(command, root, settings.hooks, process.env, null, {
         hookName: "after_run",
         onHookEvent: (event) => events.push(event),
       }),
@@ -843,7 +893,7 @@ test("createWorkspaceForIssue — refuses afterCreate when cwd is swapped to an 
     });
 
     await assert.rejects(
-      () => createWorkspaceForIssue(settings, sampleIssue),
+      () => createWorkspaceForIssue(settings, sampleIssue, process.env),
       /unsafe symlink in workspace path|workspace outside root/,
     );
     assert.equal(swapped, true);
@@ -865,7 +915,7 @@ test("runHook — abort terminates subprocesses before they write later markers"
     `printf late > ${shellEscape(marker)}`,
   ].join("\n");
 
-  const promise = runHook(command, root, settings.hooks, null, {
+  const promise = runHook(command, root, settings.hooks, process.env, null, {
     abortSignal: controller.signal,
   });
 
@@ -889,7 +939,7 @@ test("createWorkspaceForIssue — replaces a stale final file and runs afterCrea
   await fs.writeFile(stalePath, "stale");
   const settings = makeSettings(root, { afterCreate: "touch .hook-ran" });
 
-  const ws = await createWorkspaceForIssue(settings, sampleIssue);
+  const ws = await createWorkspaceForIssue(settings, sampleIssue, process.env);
 
   assert.equal(ws, await fs.realpath(stalePath));
   assert.ok((await fs.stat(ws)).isDirectory());
@@ -913,7 +963,7 @@ test("createWorkspaceForIssue — retries when an existing segment disappears be
 
   try {
     const settings = makeSettings(root);
-    const ws = await createWorkspaceForIssue(settings, sampleIssue, {
+    const ws = await createWorkspaceForIssue(settings, sampleIssue, process.env, {
       slotIndex: 0,
       ensembleSize: 2,
     });
@@ -932,8 +982,12 @@ test("createWorkspaceForIssue — shared mode returns the root for every issue",
   const root = await tempDir("ws-shared");
   const settings = makeSettings(root, {}, { isolation: "none" });
   const canonicalRoot = await fs.realpath(root);
-  const first = await createWorkspaceForIssue(settings, sampleIssue);
-  const second = await createWorkspaceForIssue(settings, { ...sampleIssue, identifier: "MT-2" });
+  const first = await createWorkspaceForIssue(settings, sampleIssue, process.env);
+  const second = await createWorkspaceForIssue(
+    settings,
+    { ...sampleIssue, identifier: "MT-2" },
+    process.env,
+  );
   assert.equal(first, canonicalRoot);
   assert.equal(second, canonicalRoot);
 });
@@ -941,15 +995,15 @@ test("createWorkspaceForIssue — shared mode returns the root for every issue",
 test("validateWorkspaceCwd — shared mode allows the root as cwd", async () => {
   const root = await tempDir("ws-shared");
   const settings = makeSettings(root, {}, { isolation: "none" });
-  const result = await validateWorkspaceCwd(settings, root);
+  const result = await validateWorkspaceCwd(settings, root, process.env);
   assert.equal(result, await fs.realpath(root));
 });
 
 test("removeIssueWorkspaces — shared mode never deletes the root", async () => {
   const root = await tempDir("ws-shared");
   const settings = makeSettings(root, {}, { isolation: "none" });
-  await createWorkspaceForIssue(settings, sampleIssue);
-  await removeIssueWorkspaces(settings, sampleIssue.identifier);
+  await createWorkspaceForIssue(settings, sampleIssue, process.env);
+  await removeIssueWorkspaces(settings, sampleIssue.identifier, process.env);
   const stat = await fs.stat(root);
   assert.ok(stat.isDirectory());
 });
@@ -959,7 +1013,7 @@ test("createWorkspaceForIssue — shared mode never runs the afterCreate hook", 
   // Hooks can never reach this path through parseConfig (it rejects them); construct directly to
   // prove the shared code path itself runs no hooks, independent of config validation.
   const settings = makeSettings(root, { afterCreate: "touch .hook-ran" }, { isolation: "none" });
-  const ws = await createWorkspaceForIssue(settings, sampleIssue);
+  const ws = await createWorkspaceForIssue(settings, sampleIssue, process.env);
   await assert.rejects(
     () => fs.stat(path.join(ws, ".hook-ran")),
     (e: unknown) => (e as NodeJS.ErrnoException).code === "ENOENT",
@@ -974,8 +1028,8 @@ test("removeIssueWorkspaces — shared mode never runs the beforeRemove hook", a
     { beforeRemove: `touch ${JSON.stringify(marker)}` },
     { isolation: "none" },
   );
-  await createWorkspaceForIssue(settings, sampleIssue);
-  await removeIssueWorkspaces(settings, sampleIssue.identifier);
+  await createWorkspaceForIssue(settings, sampleIssue, process.env);
+  await removeIssueWorkspaces(settings, sampleIssue.identifier, process.env);
   await assert.rejects(
     () => fs.stat(marker),
     (e: unknown) => (e as NodeJS.ErrnoException).code === "ENOENT",
@@ -987,8 +1041,8 @@ test("removeIssueWorkspaces — shared mode never runs the beforeRemove hook", a
 test("removeWorkspace — removes existing workspace directory", async () => {
   const root = await tempDir("ws-remove");
   const settings = makeSettings(root);
-  const ws = await createWorkspaceForIssue(settings, sampleIssue);
-  const removed = await removeWorkspace(settings, ws);
+  const ws = await createWorkspaceForIssue(settings, sampleIssue, process.env);
+  const removed = await removeWorkspace(settings, ws, process.env);
   assert.deepEqual(removed, [ws]);
   await assert.rejects(
     () => fs.stat(ws),
@@ -999,7 +1053,10 @@ test("removeWorkspace — removes existing workspace directory", async () => {
 test("removeWorkspace — refuses to remove workspace root", async () => {
   const root = await tempDir("ws-remove");
   const settings = makeSettings(root);
-  await assert.rejects(() => removeWorkspace(settings, root), /refusing to remove workspace root/);
+  await assert.rejects(
+    () => removeWorkspace(settings, root, process.env),
+    /refusing to remove workspace root/,
+  );
 });
 
 test("removeWorkspace — runs beforeRemove hook before deletion", async () => {
@@ -1009,8 +1066,8 @@ test("removeWorkspace — runs beforeRemove hook before deletion", async () => {
   const settings = makeSettings(root, {
     beforeRemove: `touch ${JSON.stringify(markerFile)}`,
   });
-  const ws = await createWorkspaceForIssue(settings, sampleIssue);
-  await removeWorkspace(settings, ws, undefined, {
+  const ws = await createWorkspaceForIssue(settings, sampleIssue, process.env);
+  await removeWorkspace(settings, ws, process.env, undefined, {
     onHookEvent: (event) => events.push(event),
   });
   const stat = await fs.stat(markerFile);
@@ -1029,9 +1086,9 @@ test("removeIssueWorkspaces — passes issue context to beforeRemove hook", asyn
   const settings = makeSettings(root, {
     beforeRemove: `printf '%s' {{ issue.identifier }} > ${JSON.stringify(markerFile)}`,
   });
-  await createWorkspaceForIssue(settings, sampleIssue);
+  await createWorkspaceForIssue(settings, sampleIssue, process.env);
 
-  await removeIssueWorkspaces(settings, sampleIssue.identifier, null, sampleIssue);
+  await removeIssueWorkspaces(settings, sampleIssue.identifier, process.env, null, sampleIssue);
 
   const content = await fs.readFile(markerFile, "utf8");
   assert.equal(content, sampleIssue.identifier);
@@ -1040,29 +1097,29 @@ test("removeIssueWorkspaces — passes issue context to beforeRemove hook", asyn
 test("removeWorkspace — nonexistent workspace returns empty array", async () => {
   const root = await tempDir("ws-remove");
   const settings = makeSettings(root);
-  const result = await removeWorkspace(settings, path.join(root, "does-not-exist"));
+  const result = await removeWorkspace(settings, path.join(root, "does-not-exist"), process.env);
   assert.deepEqual(result, []);
 });
 
 test("listIssueWorkspaceIdentifiers returns existing workspace directory names", async () => {
   const root = await tempDir("ws-list");
   const settings = makeSettings(root);
-  await createWorkspaceForIssue(settings, "MT-7");
-  await createWorkspaceForIssue(settings, "MT-9");
+  await createWorkspaceForIssue(settings, "MT-7", process.env);
+  await createWorkspaceForIssue(settings, "MT-9", process.env);
   await fs.writeFile(path.join(root, "not-a-workspace.txt"), "ignore me\n");
 
-  const names = await listIssueWorkspaceIdentifiers(settings);
+  const names = await listIssueWorkspaceIdentifiers(settings, process.env);
   assert.deepEqual(names.sort(), ["MT-7", "MT-9"]);
 });
 
 test("listIssueWorkspaceIdentifiers is empty for missing roots and shared workspaces", async () => {
   const missing = makeSettings(path.join(await tempDir("ws-list-missing"), "nope"));
-  assert.deepEqual(await listIssueWorkspaceIdentifiers(missing), []);
+  assert.deepEqual(await listIssueWorkspaceIdentifiers(missing, process.env), []);
 
   const sharedRoot = await tempDir("ws-list-shared");
   const shared = makeSettings(sharedRoot, {}, { isolation: "none" });
   await fs.mkdir(path.join(sharedRoot, "MT-1"), { recursive: true });
-  assert.deepEqual(await listIssueWorkspaceIdentifiers(shared), []);
+  assert.deepEqual(await listIssueWorkspaceIdentifiers(shared, process.env), []);
 });
 
 async function installFakeSsh(root: string, trace: string, source: string): Promise<void> {

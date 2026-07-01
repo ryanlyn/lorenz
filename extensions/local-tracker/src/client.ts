@@ -13,8 +13,8 @@ export class LocalTrackerClient implements RuntimeTrackerClient {
 
   constructor(
     private readonly settings: Settings,
-    cwd: string = process.cwd(),
-    env: NodeJS.ProcessEnv = process.env,
+    cwd: string,
+    env: NodeJS.ProcessEnv,
     logger: LocalTrackerLogger = { warn: (message) => console.warn(message) },
   ) {
     const dir = localBoardDir(settings, { cwd, env });

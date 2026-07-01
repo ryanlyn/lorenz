@@ -29,7 +29,7 @@ test("LocalTrackerClient reads candidates by active states from the board dir", 
     { tracker: { kind: "local", path: dir, active_states: ["Todo"], terminal_states: ["Done"] } },
     {},
   );
-  const client = new LocalTrackerClient(settings);
+  const client = new LocalTrackerClient(settings, process.cwd(), process.env);
 
   const candidates = await client.fetchCandidateIssues();
   assert.deepEqual(

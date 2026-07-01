@@ -29,6 +29,7 @@ export interface RunAgentAttemptAdapters {
   createWorkspaceForIssue(
     settings: Settings,
     issue: Issue,
+    env: NodeJS.ProcessEnv,
     options: {
       slotIndex: number;
       ensembleSize: number;
@@ -42,11 +43,15 @@ export interface RunAgentAttemptAdapters {
     command: string,
     workspace: string,
     hooks: Settings["hooks"],
+    env: NodeJS.ProcessEnv,
     workerHost: string | null,
     options?: SetupStageSignalOptions,
     issue?: Issue,
   ): Promise<void>;
-  executorFactory(settings: Settings): Promise<AgentExecutor> | AgentExecutor;
+  executorFactory(
+    settings: Settings,
+    env: NodeJS.ProcessEnv,
+  ): Promise<AgentExecutor> | AgentExecutor;
 }
 
 /**
@@ -73,6 +78,11 @@ export interface RunResult {
 export interface RunAgentAttemptInput {
   issue: Issue;
   workflow: WorkflowDefinition;
+  /**
+   * Process environment threaded from the composition root. Passed to the workspace,
+   * hook, and executor adapters so none of them read `process.env` directly.
+   */
+  env: NodeJS.ProcessEnv;
   settings?: Settings;
   workerHost?: string | null;
   slotIndex?: number;
@@ -119,7 +129,7 @@ class RunController {
       workspaceCreateStage,
       workspaceCreateTimeoutMs(runtime),
       async ({ abortSignal }) =>
-        createWorkspaceForIssue(input.adapters, runtime, issue, {
+        createWorkspaceForIssue(input.adapters, runtime, issue, input.env, {
           slotIndex,
           ensembleSize: size,
           workerHost,
@@ -155,6 +165,7 @@ class RunController {
               beforeRun,
               workspace,
               runtime.hooks,
+              input.env,
               workerHost,
               {
                 abortSignal,
@@ -167,7 +178,7 @@ class RunController {
         );
       }
 
-      const executor = await executorFor(input.adapters, runtime);
+      const executor = await executorFor(input.adapters, runtime, input.env);
       // Thread the coordinator's per-run endpoint (or null on the local/non-pool
       // path) into the executor: the acp executor consumes a non-null lease and
       // skips its own acquire+release. Built as a typed value so the optional
@@ -282,6 +293,7 @@ class RunController {
           afterRun,
           workspace,
           runtime.hooks,
+          input.env,
           workerHost,
           {
             abortSignal,
@@ -344,8 +356,9 @@ function throwIfAborted(abortSignal: AbortSignal | undefined): void {
 async function executorFor(
   adapters: Partial<RunAgentAttemptAdapters> | undefined,
   settings: Settings,
+  env: NodeJS.ProcessEnv,
 ): Promise<AgentExecutor> {
-  if (adapters?.executorFactory) return adapters.executorFactory(settings);
+  if (adapters?.executorFactory) return adapters.executorFactory(settings, env);
   throw new Error("agent_runner_adapter_missing: executorFactory");
 }
 
@@ -438,6 +451,7 @@ async function createWorkspaceForIssue(
   adapters: Partial<RunAgentAttemptAdapters> | undefined,
   settings: Settings,
   issue: Issue,
+  env: NodeJS.ProcessEnv,
   options: {
     slotIndex: number;
     ensembleSize: number;
@@ -448,7 +462,7 @@ async function createWorkspaceForIssue(
   },
 ): Promise<string> {
   if (adapters?.createWorkspaceForIssue)
-    return adapters.createWorkspaceForIssue(settings, issue, options);
+    return adapters.createWorkspaceForIssue(settings, issue, env, options);
   throw new Error("agent_runner_adapter_missing: createWorkspaceForIssue");
 }
 
@@ -457,11 +471,12 @@ async function runHook(
   command: string,
   workspacePath: string,
   hooks: Settings["hooks"],
+  env: NodeJS.ProcessEnv,
   workerHost: string | null,
   options?: SetupStageSignalOptions,
   issue?: Issue,
 ): Promise<void> {
   if (adapters?.runHook)
-    return adapters.runHook(command, workspacePath, hooks, workerHost, options, issue);
+    return adapters.runHook(command, workspacePath, hooks, env, workerHost, options, issue);
   throw new Error("agent_runner_adapter_missing: runHook");
 }

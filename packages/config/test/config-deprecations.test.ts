@@ -82,9 +82,8 @@ test("formats a deprecation with its recommendation and detail", () => {
 
 test("warnConfigDeprecations emits each formatted message and returns the list", () => {
   const messages: string[] = [];
-  const deprecations = warnConfigDeprecations(
-    { codex: { command: "codex-acp" } },
-    (message) => messages.push(message),
+  const deprecations = warnConfigDeprecations({ codex: { command: "codex-acp" } }, (message) =>
+    messages.push(message),
   );
   assert.equal(deprecations.length, 1);
   assert.equal(messages.length, 1);

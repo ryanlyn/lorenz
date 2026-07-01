@@ -163,6 +163,7 @@ test("a linear-dispatch workflow mounts only linear_graphql", async () => {
     "linear_graphql",
     { query: "query Me { viewer { id } }" },
     settings,
+    process.env,
     fakeFetch,
     tools,
   );
@@ -191,6 +192,7 @@ test("linear_graphql falls back to tracker auth only when Linear drives dispatch
     "linear_graphql",
     { query: "query Me { viewer { id } }" },
     settings,
+    process.env,
     fakeFetch,
     tools,
   );
@@ -213,6 +215,7 @@ test("a linear tool call on a foreign dispatch tracker is unsupported, not borro
     "linear_graphql",
     { query: "query Me { viewer { id } }" },
     settings,
+    process.env,
     fakeFetch,
     tools,
   );
@@ -232,6 +235,7 @@ test("an explicitly mounted linear pack on a foreign tracker uses only pack auth
     "linear_graphql",
     { query: "query Me { viewer { id } }" },
     missingAuth,
+    process.env,
     async () => {
       callsWithoutAuth.push("called");
       return new Response("{}", { status: 200 });
@@ -250,6 +254,7 @@ test("an explicitly mounted linear pack on a foreign tracker uses only pack auth
     "linear_graphql",
     { query: "query Me { viewer { id } }" },
     withAuth,
+    process.env,
     async (_input, init) => {
       authorizations.push(new Headers(init?.headers).get("authorization"));
       return new Response(JSON.stringify({ data: { viewer: { id: "user-1" } } }), {
@@ -300,6 +305,7 @@ test("local dispatch mounts only local board tools", async () => {
     "local_create_issue",
     { title: "Sweep the board", body: "Tracker-aligned round trip." },
     settings,
+    process.env,
     fetch,
     tools,
   );
@@ -310,12 +316,20 @@ test("local dispatch mounts only local board tools", async () => {
     "local_update_status",
     { issueId: issue.id, status: "In Progress" },
     settings,
+    process.env,
     fetch,
     tools,
   );
   assert.equal(moved.success, true);
 
-  const read = await executeTool("local_read_issue", { issueId: issue.id }, settings, fetch, tools);
+  const read = await executeTool(
+    "local_read_issue",
+    { issueId: issue.id },
+    settings,
+    process.env,
+    fetch,
+    tools,
+  );
   assert.equal(read.success, true);
   const readIssue = (read.result as { issue: { id: string; status: string; title: string } }).issue;
   assert.equal(readIssue.id, issue.id);

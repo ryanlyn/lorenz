@@ -232,6 +232,7 @@ export async function runDaemon(options: CliOptions): Promise<number> {
     const issueStore = new IssueStore(defaultIssueStorePath());
     const runtime = new LorenzRuntime({
       workflow,
+      env: process.env,
       clientFactory: createTrackerClient,
       reloadWorkflow: loadRuntimeWorkflow,
       runner: runAgentAttempt,
@@ -254,7 +255,7 @@ export async function runDaemon(options: CliOptions): Promise<number> {
           url: issue.url ?? null,
         });
       },
-      ...runtimeAdapters,
+      ...runtimeAdapters(process.env),
     });
     await coordinator?.hydrate();
     let instance: ReturnType<typeof render> | null = null;
@@ -292,6 +293,7 @@ export async function runDaemon(options: CliOptions): Promise<number> {
           }),
           issueStore,
           tools: defaultToolRegistry,
+          env: process.env,
         });
         workflow.settings.server.port = server.port;
         boundServerPort = server.port;

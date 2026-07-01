@@ -17,7 +17,13 @@ import {
 } from "@lorenz/worker-sdk";
 import { trackerSpecifierFromConfig, type DefaultSettingsOptions } from "@lorenz/config";
 import { registerDockerWorkerDriver } from "@lorenz/docker-worker";
-import { systemClock, type RuntimeTrackerClient, type Settings } from "@lorenz/domain";
+import {
+  systemClock,
+  type HookExecutionMessage,
+  type Issue,
+  type RuntimeTrackerClient,
+  type Settings,
+} from "@lorenz/domain";
 import { registerJiraTrackers } from "@lorenz/jira-tracker";
 import { registerLinearTracker } from "@lorenz/linear-tracker";
 import { registerLocalTracker } from "@lorenz/local-tracker";
@@ -152,7 +158,7 @@ export interface BuildWorkerPoolOptions {
  */
 export async function buildWorkerPool(
   settings: Settings,
-  _env: NodeJS.ProcessEnv = process.env,
+  env: NodeJS.ProcessEnv = process.env,
   options: BuildWorkerPoolOptions = {},
 ): Promise<WorkerPool | undefined> {
   const workerPoolSettings = settings.worker.workerPool;
@@ -168,6 +174,7 @@ export async function buildWorkerPool(
     logEvent,
     ledgerPath: path.join(settings.workspace.root, ".lorenz", "worker-pool", "ledger.json"),
     drivers: defaultWorkerDriverRegistry,
+    env,
   });
 }
 
@@ -227,7 +234,14 @@ export async function buildDispatchCoordinator(
       // re-check + generation fence over live coordinator slots; the
       // capture-before-await fence is what makes that window safe.
       acquireForRun: async (runSettings, workerHost, runKey) =>
-        acquireAgentMcpEndpointForRun(runSettings, workerHost, runKey, workerHostPool, isRunLive),
+        acquireAgentMcpEndpointForRun(
+          runSettings,
+          env,
+          workerHost,
+          runKey,
+          workerHostPool,
+          isRunLive,
+        ),
     }),
     // Same structured-event sink as the pool so coordinator faults (e.g.
     // worker_pool_endpoint_release_failed) reach the log file instead of being
@@ -263,17 +277,19 @@ function resolveSkillOverlay(settings: Settings): WorkspaceSkillOverlay | undefi
 }
 function createRunAgentAttemptAdapters(): RunAgentAttemptAdapters {
   return {
-    createWorkspaceForIssue: async (settings, issue, options) =>
-      createWorkspaceForIssue(settings, issue, {
+    createWorkspaceForIssue: async (settings, issue, env, options) =>
+      createWorkspaceForIssue(settings, issue, env, {
         ...options,
         skillOverlay: resolveSkillOverlay(settings),
       }),
     runHook,
-    executorFactory: async (settings) => {
+    executorFactory: async (settings, env) => {
       const kind = settings.agent.kind;
       const agent = settings.agents[kind];
       if (!agent) throw new Error(`agents.${kind} is required`);
-      return defaultAgentExecutorRegistry.require(agent.executor).createExecutor(kind, settings);
+      return defaultAgentExecutorRegistry
+        .require(agent.executor)
+        .createExecutor(kind, settings, env);
     },
   };
 }
@@ -285,8 +301,22 @@ export async function runAgentAttempt(input: RunAgentAttemptInput): Promise<RunR
   });
 }
 
-export const runtimeAdapters = {
-  removeIssueWorkspaces,
-  listIssueWorkspaces: listIssueWorkspaceIdentifiers,
-  appendLogEvent,
-};
+/**
+ * Runtime-facing workspace/log adapters with `env` bound from the composition root, so the
+ * runtime drives workspace cleanup without reading `process.env`.
+ */
+export function runtimeAdapters(env: NodeJS.ProcessEnv = process.env) {
+  return {
+    removeIssueWorkspaces: async (
+      settings: Settings,
+      issueIdentifier?: string | null,
+      workerHost?: string | null,
+      issue?: Issue,
+      options?: { onHookEvent?: ((event: HookExecutionMessage) => void) | undefined },
+    ): Promise<void> =>
+      removeIssueWorkspaces(settings, issueIdentifier, env, workerHost, issue, options),
+    listIssueWorkspaces: async (settings: Settings): Promise<string[]> =>
+      listIssueWorkspaceIdentifiers(settings, env),
+    appendLogEvent,
+  };
+}

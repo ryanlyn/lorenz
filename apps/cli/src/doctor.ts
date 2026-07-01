@@ -734,7 +734,7 @@ async function findExecutable(executable: string, env: NodeJS.ProcessEnv): Promi
   if (executable.includes("/") || path.isAbsolute(executable)) {
     return (await canExecute(executable)) ? executable : null;
   }
-  const pathValue = env.PATH ?? process.env.PATH ?? "";
+  const pathValue = env.PATH ?? "";
   for (const directory of pathValue.split(path.delimiter)) {
     if (!directory) continue;
     const candidate = path.join(directory, executable);

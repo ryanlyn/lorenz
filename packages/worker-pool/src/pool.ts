@@ -40,6 +40,12 @@ import type {
 export interface CreateWorkerPoolDeps {
   clock: ClockPort;
   logEvent: (event: Record<string, unknown>) => void;
+  /**
+   * Environment the pool binds into the `runSsh` it injects into drivers, so the ssh transport
+   * reads PATH/LORENZ_SSH_CONFIG from the threaded env rather than `process.env`. Drivers never
+   * see or set it - the pool is the engine boundary that owns the real ssh dependency.
+   */
+  env: NodeJS.ProcessEnv;
   ledgerPath?: string;
   /**
    * Worker-driver registry the pool resolves `settings.driver` against. The
@@ -64,7 +70,9 @@ function resolveDriver(settings: WorkerPoolSettings, deps: CreateWorkerPoolDeps)
   const driverDeps: DriverDeps = {
     clock: deps.clock,
     logEvent: deps.logEvent,
-    runSsh,
+    // Bind the threaded env into the injected ssh runner: drivers call this with transport options
+    // only (timeout/abort), and the pool supplies the env the ssh layer reads PATH/config from.
+    runSsh: async (host, command, options) => runSsh(host, command, { ...options, env: deps.env }),
   };
   return factory.create(settings.driverOptions ?? {}, driverDeps);
 }

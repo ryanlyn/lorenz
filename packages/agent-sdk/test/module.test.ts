@@ -51,7 +51,7 @@ test("assert rejects a missing or blank executor", () => {
 test("assert rejects a missing createExecutor function", () => {
   assert.throws(
     () => assertAgentExecutorModule({ executor: "acme", sdkVersion: 1 }, "src"),
-    /agent_executor_module_invalid: src \(executor: acme\) is missing a `createExecutor\(kind, settings\)` function/,
+    /agent_executor_module_invalid: src \(executor: acme\) is missing a `createExecutor\(kind, settings, env\)` function/,
   );
 });
 

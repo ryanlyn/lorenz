@@ -95,7 +95,7 @@ vi.mock("../src/daemon.js", async (importOriginal) => ({
   ...(await importOriginal<typeof daemonModule>()),
   createTrackerClient: mocks.createTrackerClient,
   runAgentAttempt: mocks.runAgentAttempt,
-  runtimeAdapters: {},
+  runtimeAdapters: () => ({}),
   runtimeDefaultSettingsOptions: mocks.runtimeDefaultSettingsOptions,
   buildDispatchCoordinator: mocks.buildDispatchCoordinator,
 }));

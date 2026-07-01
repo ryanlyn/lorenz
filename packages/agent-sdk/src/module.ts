@@ -27,7 +27,7 @@ const contract = makeSdkModuleContract<AgentExecutorModule>({
   identityField: "executor",
   defineCall: "defineAgentExecutor({ executor, sdkVersion, createExecutor })",
   requiredFns: [
-    { field: "createExecutor", signature: "createExecutor(kind, settings)", article: "a" },
+    { field: "createExecutor", signature: "createExecutor(kind, settings, env)", article: "a" },
   ],
   sdkVersion: AGENT_EXECUTOR_SDK_VERSION,
 });
@@ -50,7 +50,7 @@ export const assertAgentExecutorModule: (
  * export default defineAgentExecutor({
  *   executor: "acme",
  *   sdkVersion: 1,
- *   createExecutor: (kind, settings) => new AcmeExecutor(kind, settings),
+ *   createExecutor: (kind, settings, env) => new AcmeExecutor(kind, settings, env),
  * });
  * ```
  */

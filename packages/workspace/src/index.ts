@@ -160,10 +160,11 @@ export function workspacePath(
 export async function createWorkspaceForIssue(
   settings: Settings,
   issue: Issue | string,
+  env: NodeJS.ProcessEnv,
   options: WorkspaceCreateOptions = {},
 ): Promise<string> {
   if (options.workerHost)
-    return createRemoteWorkspaceForIssue(settings, issue, options.workerHost, options);
+    return createRemoteWorkspaceForIssue(settings, issue, options.workerHost, env, options);
 
   const identifier = typeof issue === "string" ? issue : issue.identifier;
   const slotIndex = options.slotIndex ?? 0;
@@ -178,31 +179,32 @@ export async function createWorkspaceForIssue(
   // Shared workspaces run no lifecycle hooks (config rejects them); canonicalRoot is already
   // realpath'd and symlink-checked above, so creation is done.
   if (sharedWorkspaceRoot(settings)) {
-    await applyWorkspaceSkillOverlay(settings, canonicalRoot, null, options);
+    await applyWorkspaceSkillOverlay(settings, canonicalRoot, null, env, options);
     return canonicalRoot;
   }
 
   const target = workspacePath(canonicalRoot, identifier, slotIndex, ensembleSize, forceSlotSuffix);
   const created = await ensureDirectoryWithinRoot(canonicalRoot, target);
-  const canonicalTarget = await validateWorkspaceCwd(settings, target);
+  const canonicalTarget = await validateWorkspaceCwd(settings, target, env);
 
   if (created && settings.hooks.afterCreate) {
     await runHook(
       settings.hooks.afterCreate,
       canonicalTarget,
       settings.hooks,
+      env,
       null,
       {
         abortSignal: options.abortSignal,
         hookName: "after_create",
         onHookEvent: options.onHookEvent,
-        validateCwd: async () => validateWorkspaceCwd(settings, canonicalTarget),
+        validateCwd: async () => validateWorkspaceCwd(settings, canonicalTarget, env),
       },
       typeof issue === "string" ? undefined : issue,
     );
   }
 
-  await applyWorkspaceSkillOverlay(settings, canonicalTarget, null, options);
+  await applyWorkspaceSkillOverlay(settings, canonicalTarget, null, env, options);
 
   return canonicalTarget;
 }
@@ -212,10 +214,11 @@ async function applyWorkspaceSkillOverlay(
   settings: Settings,
   workspace: string,
   workerHost: string | null,
+  env: NodeJS.ProcessEnv,
   options: WorkspaceCreateOptions,
 ): Promise<void> {
   if (!options.skillOverlay) return;
-  await syncWorkspaceSkills(workspace, options.skillOverlay, workerHost, {
+  await syncWorkspaceSkills(workspace, options.skillOverlay, env, workerHost, {
     abortSignal: options.abortSignal,
     timeoutMs: settings.worker.sshTimeoutMs,
   });
@@ -224,6 +227,7 @@ async function applyWorkspaceSkillOverlay(
 export async function syncWorkspaceSkills(
   workspace: string,
   overlay: WorkspaceSkillOverlay,
+  env: NodeJS.ProcessEnv,
   workerHost?: string | null,
   options: { abortSignal?: AbortSignal | undefined; timeoutMs?: number | undefined } = {},
 ): Promise<void> {
@@ -232,7 +236,7 @@ export async function syncWorkspaceSkills(
   const plans = await workspaceSkillSourcePlans(overlay.sources);
   const destSegments = skillDestinationSegments(overlay.destDir);
   if (workerHost) {
-    await syncRemoteWorkspaceSkills(workerHost, workspace, plans, destSegments, {
+    await syncRemoteWorkspaceSkills(workerHost, workspace, plans, destSegments, env, {
       abortSignal: options.abortSignal,
       timeoutMs: options.timeoutMs,
     });
@@ -252,6 +256,7 @@ function skillDestinationSegments(destDir: string): string[] {
 export async function removeWorkspace(
   settings: Settings,
   workspace: string,
+  env: NodeJS.ProcessEnv,
   issue?: Issue,
   options: WorkspaceHookEventOptions = {},
 ): Promise<string[]> {
@@ -267,7 +272,7 @@ export async function removeWorkspace(
   if ((await fs.realpath(candidate)) === canonicalRoot) {
     throw new Error(`refusing to remove workspace root: ${canonicalRoot}`);
   }
-  const canonicalTarget = await validateWorkspaceCwd(settings, candidate);
+  const canonicalTarget = await validateWorkspaceCwd(settings, candidate, env);
 
   if (settings.hooks.beforeRemove) {
     try {
@@ -275,11 +280,12 @@ export async function removeWorkspace(
         settings.hooks.beforeRemove,
         canonicalTarget,
         settings.hooks,
+        env,
         null,
         {
           hookName: "before_remove",
           onHookEvent: options.onHookEvent,
-          validateCwd: async () => validateWorkspaceCwd(settings, canonicalTarget),
+          validateCwd: async () => validateWorkspaceCwd(settings, canonicalTarget, env),
         },
         issue,
       );
@@ -296,10 +302,11 @@ export async function removeRemoteWorkspace(
   settings: Settings,
   workspace: string,
   workerHost: string,
+  env: NodeJS.ProcessEnv,
   issue?: Issue,
   options: WorkspaceHookEventOptions = {},
 ): Promise<string[]> {
-  const canonicalWorkspace = await validateWorkspaceCwd(settings, workspace, workerHost);
+  const canonicalWorkspace = await validateWorkspaceCwd(settings, workspace, env, workerHost);
 
   if (settings.hooks.beforeRemove) {
     try {
@@ -308,6 +315,7 @@ export async function removeRemoteWorkspace(
         canonicalWorkspace,
         settings.hooks.beforeRemove,
         settings.hooks,
+        env,
         { hookName: "before_remove", onHookEvent: options.onHookEvent },
         { issue },
       );
@@ -317,6 +325,7 @@ export async function removeRemoteWorkspace(
   }
 
   const result = await runSsh(workerHost, `rm -rf ${shellEscape(canonicalWorkspace)}`, {
+    env,
     timeoutMs: settings.hooks.timeoutMs,
     stderrToStdout: true,
   });
@@ -328,6 +337,7 @@ export async function removeRemoteWorkspace(
 export async function removeIssueWorkspaces(
   settings: Settings,
   identifier: unknown,
+  env: NodeJS.ProcessEnv,
   workerHost?: string | null,
   issue?: Issue,
   options: WorkspaceHookEventOptions = {},
@@ -339,7 +349,14 @@ export async function removeIssueWorkspaces(
   if (sharedWorkspaceRoot(settings)) return;
   if (workerHost) {
     try {
-      await removeRemoteIssueWorkspaces(settings, resolvedIdentifier, workerHost, issue, options);
+      await removeRemoteIssueWorkspaces(
+        settings,
+        resolvedIdentifier,
+        workerHost,
+        env,
+        issue,
+        options,
+      );
     } catch {
       // Issue-level cleanup is best effort.
     }
@@ -351,6 +368,7 @@ export async function removeIssueWorkspaces(
       await removeWorkspace(
         settings,
         path.join(canonicalRoot, safeIdentifier(resolvedIdentifier)),
+        env,
         issue,
         options,
       );
@@ -360,7 +378,7 @@ export async function removeIssueWorkspaces(
   }
   for (const host of settings.worker.sshHosts) {
     try {
-      await removeRemoteIssueWorkspaces(settings, resolvedIdentifier, host, issue, options);
+      await removeRemoteIssueWorkspaces(settings, resolvedIdentifier, host, env, issue, options);
     } catch {
       // Continue cleaning other worker hosts.
     }
@@ -371,15 +389,17 @@ export async function removeRemoteIssueWorkspaces(
   settings: Settings,
   identifier: unknown,
   workerHost: string,
+  env: NodeJS.ProcessEnv,
   issue?: Issue,
   options: WorkspaceHookEventOptions = {},
 ): Promise<void> {
   if (typeof identifier !== "string") return;
-  const root = await remoteWorkspaceRoot(settings, workerHost);
+  const root = await remoteWorkspaceRoot(settings, workerHost, env);
   await removeRemoteWorkspace(
     settings,
     path.posix.join(root, safeIdentifier(identifier)),
     workerHost,
+    env,
     issue,
     options,
   );
@@ -392,7 +412,10 @@ export async function removeRemoteIssueWorkspaces(
  * identifiers that may still own a workspace. Hosts that cannot be listed are skipped:
  * the result feeds best-effort cleanup, never correctness.
  */
-export async function listIssueWorkspaceIdentifiers(settings: Settings): Promise<string[]> {
+export async function listIssueWorkspaceIdentifiers(
+  settings: Settings,
+  env: NodeJS.ProcessEnv,
+): Promise<string[]> {
   if (sharedWorkspaceRoot(settings)) return [];
   const names = new Set<string>();
 
@@ -409,11 +432,11 @@ export async function listIssueWorkspaceIdentifiers(settings: Settings): Promise
 
   for (const host of settings.worker.sshHosts) {
     try {
-      const root = await remoteWorkspaceRoot(settings, host);
+      const root = await remoteWorkspaceRoot(settings, host, env);
       const result = await runSsh(
         host,
         `[ -d ${shellEscape(root)} ] && find ${shellEscape(root)} -mindepth 1 -maxdepth 1 -type d -exec basename {} \\; || true`,
-        { timeoutMs: settings.worker.sshTimeoutMs, stderrToStdout: false },
+        { env, timeoutMs: settings.worker.sshTimeoutMs, stderrToStdout: false },
       );
       if (result.status !== 0) continue;
       for (const line of result.stdout.split("\n")) {
@@ -432,12 +455,14 @@ export async function runHook(
   command: string,
   cwd: string,
   hooks: HooksSettings,
+  env: NodeJS.ProcessEnv,
   workerHost?: string | null,
   options: WorkspaceRunHookOptions = {},
   issue?: Issue,
 ): Promise<void> {
   const templateContext: HookTemplateContext = { issue };
-  if (workerHost) return runRemoteHook(workerHost, cwd, command, hooks, options, templateContext);
+  if (workerHost)
+    return runRemoteHook(workerHost, cwd, command, hooks, env, options, templateContext);
   if (options.abortSignal?.aborted) throw new Error("hook canceled");
   const hookCwd = options.validateCwd ? await options.validateCwd() : cwd;
   if (options.abortSignal?.aborted) throw new Error("hook canceled");
@@ -584,9 +609,10 @@ export function ensureInsideRoot(target: string, root: string): void {
 export async function validateWorkspaceCwd(
   settings: Settings,
   workspace: string,
+  env: NodeJS.ProcessEnv,
   workerHost?: string | null,
 ): Promise<string> {
-  if (workerHost) return validateRemoteWorkspaceCwd(settings, workspace, workerHost);
+  if (workerHost) return validateRemoteWorkspaceCwd(settings, workspace, workerHost, env);
   if (invalidWorkspaceInput(workspace)) throw new Error("invalid_workspace_cwd: blank");
   const rootPath = path.resolve(settings.workspace.root);
   await rejectFinalSymlink(rootPath);
@@ -732,11 +758,12 @@ async function syncRemoteWorkspaceSkills(
   workspace: string,
   plans: WorkspaceSkillSourcePlan[],
   destSegments: string[],
+  env: NodeJS.ProcessEnv,
   options: { abortSignal?: AbortSignal | undefined; timeoutMs?: number | undefined },
 ): Promise<void> {
   const skillsRoot = path.posix.join(workspace, ...destSegments);
   for (const plan of plans) {
-    await syncRemoteWorkspaceSkill(workerHost, skillsRoot, plan, options);
+    await syncRemoteWorkspaceSkill(workerHost, skillsRoot, plan, env, options);
   }
 }
 
@@ -744,6 +771,7 @@ async function syncRemoteWorkspaceSkill(
   workerHost: string,
   skillsRoot: string,
   plan: WorkspaceSkillSourcePlan,
+  env: NodeJS.ProcessEnv,
   options: { abortSignal?: AbortSignal | undefined; timeoutMs?: number | undefined },
 ): Promise<void> {
   if (options.abortSignal?.aborted) throw new Error("workspace_skill_sync_canceled");
@@ -816,7 +844,7 @@ rm -rf "$target"`;
       );
     }
 
-    const remote = startSshProcess(workerHost, command);
+    const remote = startSshProcess(workerHost, command, env);
     const remoteStdout = collectStreamText(remote.stdout);
     const remoteStderr = collectStreamText(remote.stderr);
     const remoteExit = waitForProcessExit(remote);
@@ -963,10 +991,11 @@ async function createRemoteWorkspaceForIssue(
   settings: Settings,
   issue: Issue | string,
   workerHost: string,
+  env: NodeJS.ProcessEnv,
   options: WorkspaceCreateOptions,
 ): Promise<string> {
   const identifier = typeof issue === "string" ? issue : issue.identifier;
-  const root = await remoteWorkspaceRoot(settings, workerHost, options);
+  const root = await remoteWorkspaceRoot(settings, workerHost, env, options);
   const workspace = sharedWorkspaceRoot(settings)
     ? root
     : remoteWorkspacePath(
@@ -994,6 +1023,7 @@ async function createRemoteWorkspaceForIssue(
     `printf '%s\\t%s\\t%s\\n' ${shellEscape(remoteWorkspaceMarker)} "$created" "$(pwd -P)"`,
   ].join("\n");
   const result = await runSsh(workerHost, script, {
+    env,
     timeoutMs: settings.hooks.timeoutMs,
     stderrToStdout: true,
     abortSignal: options.abortSignal,
@@ -1005,6 +1035,7 @@ async function createRemoteWorkspaceForIssue(
     settings,
     parsed.workspace,
     workerHost,
+    env,
     options,
   );
 
@@ -1014,12 +1045,13 @@ async function createRemoteWorkspaceForIssue(
       canonicalWorkspace,
       settings.hooks.afterCreate,
       settings.hooks,
+      env,
       { ...options, hookName: "after_create" },
       { issue: typeof issue === "string" ? undefined : issue },
     );
   }
 
-  await applyWorkspaceSkillOverlay(settings, canonicalWorkspace, workerHost, options);
+  await applyWorkspaceSkillOverlay(settings, canonicalWorkspace, workerHost, env, options);
 
   return canonicalWorkspace;
 }
@@ -1028,11 +1060,12 @@ async function validateRemoteWorkspaceCwd(
   settings: Settings,
   workspace: string,
   workerHost: string,
+  env: NodeJS.ProcessEnv,
   options: WorkspaceRunHookOptions = {},
 ): Promise<string> {
   if (invalidWorkspaceInput(workspace)) throw new Error("invalid_workspace_cwd: blank");
   const shared = sharedWorkspaceRoot(settings);
-  const root = await remoteWorkspaceRoot(settings, workerHost, options);
+  const root = await remoteWorkspaceRoot(settings, workerHost, env, options);
   ensureRemoteInsideRoot(workspace, root);
   if (!shared && normalizeRemotePath(workspace) === normalizeRemotePath(root)) {
     throw new Error(`refusing to use workspace root as cwd: ${root}`);
@@ -1074,6 +1107,7 @@ async function validateRemoteWorkspaceCwd(
     `printf '%s\\t%s\\t%s\\n' ${shellEscape(remoteWorkspaceMarker)} "$root_real" "$workspace_real"`,
   ].join("\n");
   const result = await runSsh(workerHost, script, {
+    env,
     timeoutMs: settings.worker.sshTimeoutMs,
     stderrToStdout: true,
     abortSignal: options.abortSignal,
@@ -1097,6 +1131,7 @@ async function runRemoteHook(
   workspace: string,
   command: string,
   hooks: HooksSettings,
+  env: NodeJS.ProcessEnv,
   options: WorkspaceRunHookOptions = {},
   templateContext: HookTemplateContext = {},
 ): Promise<void> {
@@ -1127,6 +1162,7 @@ async function runRemoteHook(
   let result: Awaited<ReturnType<typeof runSsh>>;
   try {
     result = await runSsh(workerHost, `cd ${shellEscape(workspace)} && ${rendered}`, {
+      env,
       timeoutMs: hooks.timeoutMs,
       stderrToStdout: true,
       abortSignal: options.abortSignal,
@@ -1192,11 +1228,13 @@ function truncateHookLogText(text: string): { text: string; truncated: boolean }
 async function remoteWorkspaceRoot(
   settings: Settings,
   workerHost: string,
+  env: NodeJS.ProcessEnv,
   options: WorkspaceRunHookOptions = {},
 ): Promise<string> {
   const root = settings.workspace.rootExpression ?? settings.workspace.root;
   if (root === "~" || root.startsWith("~/")) {
     const result = await runSsh(workerHost, 'printf "%s\\n" "$HOME"', {
+      env,
       timeoutMs: settings.worker.sshTimeoutMs,
       stderrToStdout: true,
       abortSignal: options.abortSignal,

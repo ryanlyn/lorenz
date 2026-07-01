@@ -95,8 +95,9 @@ export async function executeLocalTool(
   name: string,
   input: unknown,
   settings: Settings,
+  env: NodeJS.ProcessEnv,
 ): Promise<ToolResult> {
-  const store = storeFor(settings);
+  const store = storeFor(settings, env);
   const args = isRecord(input) ? input : {};
   try {
     switch (name) {
@@ -132,7 +133,7 @@ export async function executeLocalTool(
         const select = parseSelect(args.select) ?? DEFAULT_LOCAL_SELECT;
         // Surface malformed board files instead of hiding them; a query never throws on a bad file.
         const skipped: Array<{ id: string; error: string }> = [];
-        const queryStore = storeFor(settings, {
+        const queryStore = storeFor(settings, env, {
           onSkip: ({ id, error }) => skipped.push({ id, error }),
         });
         const records = (await queryStore.list()).map(toLocalRecord);
@@ -162,12 +163,17 @@ export const localToolProvider: ToolProvider = {
   name: "local",
   validateOptions: (options) => validateLocalToolOptions(options),
   toolSpecs: () => localToolSpecs(),
-  executeTool: async (name, input, context) => executeLocalTool(name, input, context.settings),
+  executeTool: async (name, input, context) =>
+    executeLocalTool(name, input, context.settings, context.env),
 };
 
-function storeFor(settings: Settings, options: BoardStoreOptions = {}): BoardStore {
+function storeFor(
+  settings: Settings,
+  env: NodeJS.ProcessEnv,
+  options: BoardStoreOptions = {},
+): BoardStore {
   const { path: boardPath, idPrefix } = localToolPackOptions(settings);
-  return new BoardStore(resolveBoardDir(boardPath), {
+  return new BoardStore(resolveBoardDir(boardPath, { env }), {
     ...(idPrefix !== undefined ? { idPrefix } : {}),
     ...options,
   });

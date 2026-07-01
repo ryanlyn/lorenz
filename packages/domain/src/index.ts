@@ -1031,11 +1031,7 @@ export interface SdkModuleContract<TModule extends SdkModule> {
    * at authoring time) so every error is actionable. Standalone (`this: void`), so
    * an SDK can re-export it directly under its public name.
    */
-  readonly assertModule: (
-    this: void,
-    value: unknown,
-    source: string,
-  ) => asserts value is TModule;
+  readonly assertModule: (this: void, value: unknown, source: string) => asserts value is TModule;
   /**
    * Authoring sugar: shape-asserts at definition time (so a typo fails in the
    * author's tests, not the operator's daemon) and returns the module unchanged.

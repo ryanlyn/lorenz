@@ -89,7 +89,7 @@ function normalizeLocalPackOptions(options: Record<string, unknown>): LocalTrack
 /** Absolute on-disk board directory for the configured settings. */
 export function localBoardDir(
   settings: Settings,
-  opts: { cwd?: string; env?: NodeJS.ProcessEnv } = {},
+  opts: { cwd?: string; env: NodeJS.ProcessEnv },
 ): string {
   return resolveBoardDir(localTrackerOptions(settings).path, opts);
 }

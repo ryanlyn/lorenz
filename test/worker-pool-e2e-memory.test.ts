@@ -244,7 +244,8 @@ async function setupHarness(
     clientFactory: (s) => createTrackerClient(s, process.env),
     runner: runAgentAttempt,
     workerPool: pool,
-    ...runtimeAdapters,
+    env: process.env,
+    ...runtimeAdapters(process.env),
   });
   await pool.hydrate();
 

@@ -32,7 +32,8 @@ test("remote endpoint acquisition releases a newly-started local MCP server when
   });
 
   await assert.rejects(
-    () => acquireAgentMcpEndpoint(settingsWithServerPort(39_001), "worker-1", fakeTunnels),
+    () =>
+      acquireAgentMcpEndpoint(settingsWithServerPort(39_001), process.env, "worker-1", fakeTunnels),
     /tunnel failed/,
   );
 
@@ -47,6 +48,7 @@ test("remote endpoint release returns the acquired tunnel lease", async () => {
 
   const lease = await acquireAgentMcpEndpoint(
     settingsWithServerPort(39_004),
+    process.env,
     "worker-1",
     fakeTunnels,
   );
@@ -62,8 +64,8 @@ test("concurrent local MCP endpoint acquisition starts one configured-port serve
   mockStartMcpServer.mockResolvedValue(handle);
 
   const settings = settingsWithServerPort(39_002);
-  const first = acquireAgentMcpEndpoint(settings);
-  const second = acquireAgentMcpEndpoint(settings);
+  const first = acquireAgentMcpEndpoint(settings, process.env);
+  const second = acquireAgentMcpEndpoint(settings, process.env);
   const leases = await Promise.all([first, second]);
 
   try {
@@ -81,11 +83,17 @@ test("configured-port local MCP endpoint rejects different tracker settings", as
   const handle = fakeServerHandle(39_003);
   mockStartMcpServer.mockResolvedValue(handle);
 
-  const firstLease = await acquireAgentMcpEndpoint(localSettingsWithServerPort(39_003, "board-a"));
+  const firstLease = await acquireAgentMcpEndpoint(
+    localSettingsWithServerPort(39_003, "board-a"),
+    process.env,
+  );
   let secondLease: Awaited<ReturnType<typeof acquireAgentMcpEndpoint>> | undefined;
   try {
     try {
-      secondLease = await acquireAgentMcpEndpoint(localSettingsWithServerPort(39_003, "board-b"));
+      secondLease = await acquireAgentMcpEndpoint(
+        localSettingsWithServerPort(39_003, "board-b"),
+        process.env,
+      );
     } catch (error) {
       assert.match(String(error), /configured_mcp_server_conflict/);
       return;
@@ -111,11 +119,11 @@ test("configured-port acquisition waits for final release stop before replacing 
     .mockResolvedValue(new Response("", { status: 404 }));
 
   const settings = settingsWithServerPort(39_004);
-  const firstLease = await acquireAgentMcpEndpoint(settings);
+  const firstLease = await acquireAgentMcpEndpoint(settings, process.env);
   const releasePromise = firstLease.release();
   let acquiredBeforeStop = false;
   let secondLease: { release(): Promise<void> } | undefined;
-  const secondAcquire = acquireAgentMcpEndpoint(settings).then((lease) => {
+  const secondAcquire = acquireAgentMcpEndpoint(settings, process.env).then((lease) => {
     acquiredBeforeStop = true;
     secondLease = lease;
     return lease;
@@ -162,7 +170,7 @@ test("configured-port local MCP endpoint does not reuse an unauthenticated 405 s
 
   let lease: Awaited<ReturnType<typeof acquireAgentMcpEndpoint>> | undefined;
   try {
-    lease = await acquireAgentMcpEndpoint(settingsWithServerPort(39_005));
+    lease = await acquireAgentMcpEndpoint(settingsWithServerPort(39_005), process.env);
 
     assert.equal(mockStartMcpServer.mock.calls.length, 1);
     const postCall = fetchSpy.mock.calls.find(([, init]) => init?.method === "POST");
@@ -208,7 +216,7 @@ test("local MCP endpoint reports a connectable URL when configured server binds 
   });
 
   try {
-    const lease = await acquireAgentMcpEndpoint(settings);
+    const lease = await acquireAgentMcpEndpoint(settings, process.env);
     try {
       assert.equal(lease.url, "http://127.0.0.1:43210/mcp");
       assert.equal(mockStartMcpServer.mock.calls.length, 0);

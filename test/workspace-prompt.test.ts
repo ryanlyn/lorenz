@@ -31,11 +31,11 @@ function parseConfig(raw: Record<string, unknown>): Settings {
 }
 
 const executorAdapters = {
-  executorFactory: async (settings: Settings) => {
+  executorFactory: async (settings: Settings, env: NodeJS.ProcessEnv) => {
     const kind = settings.agent.kind;
     const agent = settings.agents[kind];
     if (!agent) throw new Error(`agents.${kind} is required`);
-    return executors.require(agent.executor).createExecutor(kind, settings);
+    return executors.require(agent.executor).createExecutor(kind, settings, env);
   },
 };
 
@@ -83,7 +83,7 @@ test("workspace path is safe, per-slot, and runs after_create in the slot direct
     hooks: { after_create: "pwd > created.cwd && echo created > marker.txt" },
   });
 
-  const workspace = await createWorkspaceForIssue(settings, sampleIssue, {
+  const workspace = await createWorkspaceForIssue(settings, sampleIssue, process.env, {
     slotIndex: 1,
     ensembleSize: 3,
   });
@@ -100,7 +100,10 @@ test("workspace identifiers preserve safe identifier semantics", async () => {
 
   const root = await tempDir("lorenz-workspace-empty-identifier");
   const settings = parseConfig({ workspace: { root } });
-  await assert.rejects(() => createWorkspaceForIssue(settings, ""), /empty identifier/);
+  await assert.rejects(
+    () => createWorkspaceForIssue(settings, "", process.env),
+    /empty identifier/,
+  );
 });
 
 test("workspace cwd validation rejects control characters", async () => {
@@ -110,11 +113,11 @@ test("workspace cwd validation rejects control characters", async () => {
   const settings = parseConfig({ workspace: { root } });
 
   await assert.rejects(
-    () => validateWorkspaceCwd(settings, `${workspace}\r`),
+    () => validateWorkspaceCwd(settings, `${workspace}\r`, process.env),
     /invalid_workspace_cwd/,
   );
   await assert.rejects(
-    () => validateWorkspaceCwd(settings, `${workspace}\0`),
+    () => validateWorkspaceCwd(settings, `${workspace}\0`, process.env),
     /invalid_workspace_cwd/,
   );
 });
@@ -125,7 +128,12 @@ test("workspace creation rejects symlink roots and final symlink directories", a
   const symlinkRoot = path.join(root, "workspace-link");
   await fs.symlink(outside, symlinkRoot);
   await assert.rejects(
-    () => createWorkspaceForIssue(parseConfig({ workspace: { root: symlinkRoot } }), "MT-SYMROOT"),
+    () =>
+      createWorkspaceForIssue(
+        parseConfig({ workspace: { root: symlinkRoot } }),
+        "MT-SYMROOT",
+        process.env,
+      ),
     /unsafe symlink/,
   );
 
@@ -133,7 +141,12 @@ test("workspace creation rejects symlink roots and final symlink directories", a
   const finalOutside = await tempDir("lorenz-workspace-final-outside");
   await fs.symlink(finalOutside, path.join(finalRoot, "MT-SYMFINAL"));
   await assert.rejects(
-    () => createWorkspaceForIssue(parseConfig({ workspace: { root: finalRoot } }), "MT-SYMFINAL"),
+    () =>
+      createWorkspaceForIssue(
+        parseConfig({ workspace: { root: finalRoot } }),
+        "MT-SYMFINAL",
+        process.env,
+      ),
     /unsafe symlink/,
   );
 });
@@ -149,56 +162,67 @@ test("workspace removal runs before_remove best-effort hooks and refuses unsafe 
     },
   });
 
-  const workspace = await createWorkspaceForIssue(settings, "MT-HOOKS");
+  const workspace = await createWorkspaceForIssue(settings, "MT-HOOKS", process.env);
   assert.equal(await fileExists(path.join(workspace, "after_create.log")), true);
-  assert.deepEqual(await removeWorkspace(settings, workspace), [workspace]);
+  assert.deepEqual(await removeWorkspace(settings, workspace, process.env), [workspace]);
   assert.equal(await fileExists(workspace), false);
   assert.equal((await fs.readFile(beforeRemoveMarker, "utf8")).trim(), "before_remove");
 
-  const recreated = await createWorkspaceForIssue(settings, "MT-HOOKS-FAIL");
+  const recreated = await createWorkspaceForIssue(settings, "MT-HOOKS-FAIL", process.env);
   const failingSettings = parseConfig({
     workspace: { root },
     hooks: { before_remove: "echo failure && exit 17" },
   });
-  assert.deepEqual(await removeWorkspace(failingSettings, recreated), [recreated]);
+  assert.deepEqual(await removeWorkspace(failingSettings, recreated, process.env), [recreated]);
   assert.equal(await fileExists(recreated), false);
 
-  const timeoutWorkspace = await createWorkspaceForIssue(settings, "MT-HOOKS-TIMEOUT");
+  const timeoutWorkspace = await createWorkspaceForIssue(settings, "MT-HOOKS-TIMEOUT", process.env);
   const timeoutSettings = parseConfig({
     workspace: { root },
     hooks: { timeout_ms: 10, before_remove: "sleep 1" },
   });
-  assert.deepEqual(await removeWorkspace(timeoutSettings, timeoutWorkspace), [timeoutWorkspace]);
+  assert.deepEqual(await removeWorkspace(timeoutSettings, timeoutWorkspace, process.env), [
+    timeoutWorkspace,
+  ]);
   assert.equal(await fileExists(timeoutWorkspace), false);
 
-  await assert.rejects(() => removeWorkspace(settings, root), /refusing to remove workspace root/);
-  assert.deepEqual(await removeWorkspace(settings, path.join(root, "missing")), []);
+  await assert.rejects(
+    () => removeWorkspace(settings, root, process.env),
+    /refusing to remove workspace root/,
+  );
+  assert.deepEqual(await removeWorkspace(settings, path.join(root, "missing"), process.env), []);
 
   const symlinkPath = path.join(root, "MT-SYM");
   const symlinkTarget = await tempDir("lorenz-symlink");
   await fs.symlink(symlinkTarget, symlinkPath);
   await assert.rejects(
-    () => removeWorkspace(settings, symlinkPath),
+    () => removeWorkspace(settings, symlinkPath, process.env),
     /unsafe symlink in workspace path/,
   );
   assert.equal(await fileExists(symlinkPath), true);
 
   const outsideRoot = await tempDir("lorenz-workspace-outside");
-  await assert.rejects(() => removeWorkspace(settings, outsideRoot), /workspace outside root/);
+  await assert.rejects(
+    () => removeWorkspace(settings, outsideRoot, process.env),
+    /workspace outside root/,
+  );
   assert.equal(await fileExists(outsideRoot), true);
 });
 
 test("workspace issue cleanup removes issue directory and ignores missing or non-string identifiers", async () => {
   const root = await tempDir("lorenz-workspace-cleanup");
   const settings = parseConfig({ workspace: { root } });
-  const slot = await createWorkspaceForIssue(settings, "S 1", { slotIndex: 1, ensembleSize: 2 });
+  const slot = await createWorkspaceForIssue(settings, "S 1", process.env, {
+    slotIndex: 1,
+    ensembleSize: 2,
+  });
   const issueRoot = path.dirname(slot);
   await fs.writeFile(path.join(slot, "scratch.txt"), "remove me\n");
 
-  await removeIssueWorkspaces(settings, "S 1");
+  await removeIssueWorkspaces(settings, "S 1", process.env);
   assert.equal(await fileExists(issueRoot), false);
-  await removeIssueWorkspaces(settings, "missing");
-  await removeIssueWorkspaces(settings, null);
+  await removeIssueWorkspaces(settings, "missing", process.env);
+  await removeIssueWorkspaces(settings, null, process.env);
 });
 
 test("remote workspace creation and removal use SSH hooks and validate remote paths", async () => {
@@ -219,7 +243,7 @@ test("remote workspace creation and removal use SSH hooks and validate remote pa
     },
   });
 
-  const workspace = await createWorkspaceForIssue(settings, "MT-REMOTE", {
+  const workspace = await createWorkspaceForIssue(settings, "MT-REMOTE", process.env, {
     workerHost: "worker-01:2200",
   });
   assert.equal(workspace, path.join(canonicalRemoteHome, "workspaces", "MT-REMOTE"));
@@ -228,12 +252,12 @@ test("remote workspace creation and removal use SSH hooks and validate remote pa
     "remote-after",
   );
 
-  await removeRemoteWorkspace(settings, workspace, "worker-01:2200");
+  await removeRemoteWorkspace(settings, workspace, "worker-01:2200", process.env);
   assert.equal(await fileExists(workspace), false);
   assert.equal((await fs.readFile(marker, "utf8")).trim(), "remote-before");
 
   await assert.rejects(
-    () => removeRemoteWorkspace(settings, "/tmp/outside-root", "worker-01:2200"),
+    () => removeRemoteWorkspace(settings, "/tmp/outside-root", "worker-01:2200", process.env),
     /workspace outside root/,
   );
   const traceText = await fs.readFile(trace, "utf8");
@@ -261,7 +285,7 @@ test("remote workspace cwd validation accepts a missing path inside the workspac
       worker: { ssh_hosts: ["worker-01:2200"], ssh_timeout_ms: 5_000 },
     });
 
-    const result = await validateWorkspaceCwd(settings, workspace, "worker-01:2200");
+    const result = await validateWorkspaceCwd(settings, workspace, process.env, "worker-01:2200");
 
     assert.equal(result, workspace);
   } finally {
@@ -289,7 +313,8 @@ test("remote workspace cwd validation reports symlink escapes through missing ta
     });
 
     await assert.rejects(
-      () => validateWorkspaceCwd(settings, path.join(link, "missing"), "worker-01:2200"),
+      () =>
+        validateWorkspaceCwd(settings, path.join(link, "missing"), process.env, "worker-01:2200"),
       /symlink_escape/,
     );
   } finally {
@@ -313,12 +338,12 @@ test("remote workspace creation forces the slot suffix for co-resident same-issu
 
     // Both solo (ensembleSize default 1) but co-resident on one host: forceSlotSuffix
     // must give distinct `<issue>/<slotIndex>` remote dirs, not the shared bare path.
-    const slot0 = await createWorkspaceForIssue(settings, "MT-REMOTE-CO", {
+    const slot0 = await createWorkspaceForIssue(settings, "MT-REMOTE-CO", process.env, {
       workerHost: "worker-01:2200",
       slotIndex: 0,
       forceSlotSuffix: true,
     });
-    const slot1 = await createWorkspaceForIssue(settings, "MT-REMOTE-CO", {
+    const slot1 = await createWorkspaceForIssue(settings, "MT-REMOTE-CO", process.env, {
       workerHost: "worker-01:2200",
       slotIndex: 1,
       forceSlotSuffix: true,
@@ -330,7 +355,7 @@ test("remote workspace creation forces the slot suffix for co-resident same-issu
     assert.ok(slot0 !== slot1);
 
     // The default (no forceSlotSuffix) still returns the bare remote issue dir.
-    const bare = await createWorkspaceForIssue(settings, "MT-REMOTE-BARE", {
+    const bare = await createWorkspaceForIssue(settings, "MT-REMOTE-BARE", process.env, {
       workerHost: "worker-01:2200",
     });
     assert.equal(bare, path.join(canonicalRemoteHome, "workspaces", "MT-REMOTE-BARE"));
@@ -394,6 +419,7 @@ new acp.AgentSideConnection((connection) => new FakeAgent(connection), stream);
   const result = await runAgentAttempt({
     issue: sampleIssue,
     workflow,
+    env: process.env,
     adapters: executorAdapters,
   });
 
@@ -464,10 +490,16 @@ new acp.AgentSideConnection((connection) => new FakeAgent(connection), stream);
     settings,
   };
 
-  const first = await runAgentAttempt({ issue: sampleIssue, workflow, adapters: executorAdapters });
+  const first = await runAgentAttempt({
+    issue: sampleIssue,
+    workflow,
+    env: process.env,
+    adapters: executorAdapters,
+  });
   const second = await runAgentAttempt({
     issue: { ...sampleIssue, identifier: "MT-77" },
     workflow,
+    env: process.env,
     adapters: executorAdapters,
   });
 
@@ -540,6 +572,7 @@ new acp.AgentSideConnection((connection) => new FakeAgent(connection), stream);
   const result = await runAgentAttempt({
     issue: sampleIssue,
     workflow,
+    env: process.env,
     workerHost: "worker-01:2200",
     adapters: executorAdapters,
   });
@@ -611,6 +644,7 @@ new acp.AgentSideConnection((connection) => new FakeAgent(connection), stream);
       runAgentAttempt({
         issue: sampleIssue,
         workflow,
+        env: process.env,
         adapters: executorAdapters,
       }),
     /timed out/,

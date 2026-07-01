@@ -61,8 +61,7 @@ test("assert rejects a missing toolSpecs or executeTool function", () => {
     /tool_provider_module_invalid: src \(name: acme\) is missing a `toolSpecs\(settings\)` function/,
   );
   assert.throws(
-    () =>
-      assertToolProviderModule({ name: "acme", sdkVersion: 1, toolSpecs: () => [] }, "src"),
+    () => assertToolProviderModule({ name: "acme", sdkVersion: 1, toolSpecs: () => [] }, "src"),
     /tool_provider_module_invalid: src \(name: acme\) is missing an `executeTool\(name, input, context\)` function/,
   );
 });

@@ -24,6 +24,13 @@ export interface ToolResult {
 export interface ToolContext {
   settings: Settings;
   fetchImpl: typeof fetch;
+  /**
+   * The environment a tool resolves env-dependent config against (e.g. a board path containing
+   * `$VAR`/`~`). Threaded from the composition root so a tool never reads `process.env` directly;
+   * this keeps the agent-facing write path resolving against the SAME environment the daemon's
+   * read path uses.
+   */
+  env: NodeJS.ProcessEnv;
 }
 
 /**

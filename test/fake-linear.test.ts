@@ -130,6 +130,7 @@ describe("fake Linear MSW tests", () => {
         variables: { ids: [created.id], first: 1 },
       },
       settings,
+      process.env,
       fetch,
       tools,
     );
@@ -139,7 +140,14 @@ describe("fake Linear MSW tests", () => {
     );
     assert.match(JSON.stringify(dynamicToolResult.result), new RegExp(created.identifier));
 
-    const unsupportedTool = await executeTool("not_a_real_tool", {}, settings, fetch, tools);
+    const unsupportedTool = await executeTool(
+      "not_a_real_tool",
+      {},
+      settings,
+      process.env,
+      fetch,
+      tools,
+    );
     assert.equal(unsupportedTool.success, false);
     assert.match(unsupportedTool.error ?? "", /Unsupported tool/);
 
