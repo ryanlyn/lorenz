@@ -9,6 +9,7 @@ export type RuntimeRunLastEvent = AgentUpdateType | "agent_stalled";
 export const RUNTIME_EVENT_TYPES = [
   ...AGENT_UPDATE_TYPES,
   "dry_run",
+  "poll_progress",
   "poll_error",
   "dispatch_skipped",
   "run_reserving",

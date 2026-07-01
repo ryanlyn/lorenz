@@ -32,6 +32,7 @@ import type {
   HookExecutionMessage,
   Issue,
   RunningEntry,
+  RuntimeTrackerReconcileResult,
   RuntimeTrackerClient,
   TrackerChangeStream,
   WorkflowDefinition,
@@ -145,6 +146,15 @@ const POISON_WORKER_ERROR_PREFIXES = [
 
 const CLAIM_OWNER_HEARTBEAT_INTERVAL_MS = 10_000;
 
+/**
+ * How often a long-running poll emits a `poll_progress` heartbeat. A poll is normally
+ * sub-second, but a tracker scanning a rate-limited backend or a large channel history can block
+ * for minutes inside a single fetchCandidateIssues() call while emitting nothing. The heartbeat
+ * turns that silent window into periodic log/snapshot updates so the daemon does not look hung.
+ * Chosen well above a healthy poll's duration so normal fast polls never emit it.
+ */
+const POLL_PROGRESS_INTERVAL_MS = 20_000;
+
 export function classifyWorkerOutcome(error: unknown): WorkerOutcome {
   const message = error instanceof Error ? error.message : String(error);
   return POISON_WORKER_ERROR_PREFIXES.some((prefix) => message.startsWith(prefix))
@@ -200,6 +210,18 @@ function mergePollOptions(existing: PollOptions | null, requested: PollOptions):
     dryRun: existingIntent.dryRun && requestedIntent.dryRun,
     waitForRuns: existingIntent.waitForRuns || requestedIntent.waitForRuns,
   });
+}
+
+function mergeIssuesById(primary: Issue[], additions: Issue[]): Issue[] {
+  if (additions.length === 0) return primary;
+  const seen = new Set(primary.map((issue) => issue.id));
+  const merged = [...primary];
+  for (const issue of additions) {
+    if (seen.has(issue.id)) continue;
+    seen.add(issue.id);
+    merged.push(issue);
+  }
+  return merged;
 }
 
 class ClaimStoreRuntimeError extends Error {
@@ -570,16 +592,36 @@ export class LorenzRuntime {
     this.lastError = null;
 
     const dispatched: Array<Promise<void>> = [];
+    // A poll that blocks for minutes inside a rate-limited tracker scan would otherwise emit
+    // nothing between the start and end emit() below. Heartbeat a `poll_progress` event on a
+    // coarse interval so the log file and snapshot show the daemon is still working, not hung.
+    // This uses a REAL timer (not the injected clock) on purpose: routing it through the
+    // deterministic ClockPort would couple it to scheduling timers such as claim-owner heartbeat
+    // and retry scheduling. unref() so it never keeps the process alive.
+    const pollStartedMs = Date.now();
+    const heartbeat = setInterval(() => {
+      const elapsedS = Math.round((Date.now() - pollStartedMs) / 1000);
+      try {
+        this.addEvent("poll_progress", `still polling (${elapsedS}s elapsed)`);
+      } catch {
+        // Best-effort observability: a progress heartbeat must never crash a healthy poll.
+      }
+    }, POLL_PROGRESS_INTERVAL_MS);
+    heartbeat.unref?.();
     try {
       this.emit();
       await this.reloadWorkflowIfConfigured();
       this.validateDispatch(this.workflow.settings);
       await this.cleanupTerminalWorkspacesOnce();
       await this.reconcileStalledRuns();
-      await this.reconcileTrackedIssues();
-      const issues = await this.client.fetchCandidateIssues();
+      const reconciled = await this.reconcileTrackedIssues();
+      const issues = mergeIssuesById(
+        await this.client.fetchCandidateIssues(),
+        reconciled.candidateIssues ?? [],
+      );
       const eligibleIssues = await this.orchestrator.eligibleIssuesAsync(issues);
-      if (!options.dryRun) this.syncRetryTimersForIssues(issues);
+      if (!options.dryRun)
+        this.syncRetryTimersForIssues(mergeIssuesById(issues, reconciled.issues));
       this.candidates = issues.length;
       this.eligible = eligibleIssues.length;
 
@@ -607,6 +649,7 @@ export class LorenzRuntime {
       this.addEvent("poll_error", this.lastError);
       throw error;
     } finally {
+      clearInterval(heartbeat);
       this.emit();
     }
   }
@@ -1182,8 +1225,10 @@ export class LorenzRuntime {
     }
   }
 
-  private async reconcileTrackedIssues(): Promise<void> {
+  private async reconcileTrackedIssues(): Promise<RuntimeTrackerReconcileResult> {
     const snapshot = await this.orchestrator.snapshotAsync();
+    const empty: RuntimeTrackerReconcileResult = { issues: [] };
+    const candidateIds = new Set<string>();
     const tracked = new Map<
       string,
       {
@@ -1215,6 +1260,7 @@ export class LorenzRuntime {
       });
     }
     for (const entry of snapshot.retrying) {
+      if (this.retrySnapshotIsDue(entry)) candidateIds.add(entry.issueId);
       if (tracked.has(entry.issueId)) continue;
       tracked.set(entry.issueId, {
         kind: "retry",
@@ -1223,22 +1269,28 @@ export class LorenzRuntime {
         workspacePath: entry.workspacePath,
       });
     }
-    if (tracked.size === 0) return;
+    if (tracked.size === 0) return empty;
 
-    let refreshed: Issue[];
+    let reconciled: RuntimeTrackerReconcileResult;
     try {
-      refreshed = await this.client.fetchIssuesByIds([...tracked.keys()]);
+      const ids = [...tracked.keys()];
+      reconciled = this.client.reconcileIssuesByIds
+        ? await this.client.reconcileIssuesByIds(ids, { candidateIds: [...candidateIds] })
+        : { issues: await this.client.fetchIssuesByIds(ids) };
     } catch (error) {
       this.addEvent("reconcile_refresh_failed", errorMessage(error));
-      return;
+      return empty;
     }
+    const refreshed = reconciled.issues;
     const refreshedIds = new Set(refreshed.map((issue) => issue.id));
+    const activeCandidateIds = new Set<string>();
     for (const issue of refreshed) {
       const meta = tracked.get(issue.id);
       const active = issueIsActive(issue, this.workflow.settings);
       const routed = routedToThisWorker(issue, this.workflow.settings);
       if (active && routed && !issueHasOpenBlockers(issue, this.workflow.settings)) {
         await this.orchestrator.refreshRunningIssueAsync(issue);
+        activeCandidateIds.add(issue.id);
         continue;
       }
       try {
@@ -1274,6 +1326,12 @@ export class LorenzRuntime {
       this.clearRetryTimer(issueId);
       this.addEvent("run_reconciled", `${meta.identifier} missing`);
     }
+    return {
+      issues: refreshed,
+      candidateIssues: (reconciled.candidateIssues ?? []).filter((issue) =>
+        activeCandidateIds.has(issue.id),
+      ),
+    };
   }
 
   private async reconcileStalledRuns(): Promise<void> {
@@ -1394,6 +1452,10 @@ export class LorenzRuntime {
   private syncRetryTimer(issueId: string): void {
     const retry = this.orchestrator.snapshot().retrying.find((entry) => entry.issueId === issueId);
     this.syncRetryTimerEntry(issueId, retry);
+  }
+
+  private retrySnapshotIsDue(retry: RetrySnapshotEntry): boolean {
+    return this.clock.monotonicMs() >= retry.monotonicDeadlineMs;
   }
 
   private syncRetryTimerEntry(issueId: string, retry: RetrySnapshotEntry | undefined): void {

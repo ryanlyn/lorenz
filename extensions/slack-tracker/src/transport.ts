@@ -38,8 +38,9 @@ export interface SlackChannelScan {
 }
 
 export interface SlackTransport {
-  // Note: there is no incremental `sinceTs` watermark. Polling re-derives the scan from the
-  // active window each loop; pagination is bounded by MAX_HISTORY_PAGES, not a time cursor.
+  // Note: there is no incremental, advancing `sinceTs` cursor. Each poll re-derives the scan from
+  // either full history or a configured FIXED trailing window, bounded by MAX_HISTORY_PAGES, so
+  // every issue inside the scanned range keeps re-surfacing rather than being skipped past.
   /** One paged pass over each channel's root messages, split into mentions and threaded roots. */
   scanChannels(channels: string[]): Promise<SlackChannelScan>;
   /** The mention half of {@link scanChannels}; kept for callers that need nothing else. */

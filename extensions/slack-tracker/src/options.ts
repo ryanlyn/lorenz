@@ -43,6 +43,18 @@ export interface SlackTrackerOptions {
    * (default 2). Already-tracked threads are recognized by the marker regardless of age.
    */
   replyLookbackDays?: number | undefined;
+  /**
+   * How far back (days) `conversations.history` is paged when scanning a channel for candidate
+   * issues. When omitted (or set to 0), the scan stays unbounded for backwards compatibility. A
+   * positive value bounds the request with a trailing `oldest` watermark, so a channel's ancient
+   * backlog is not re-paged every poll - useful both for large channels and for Slack apps on
+   * restricted history-read limits. This is a FIXED trailing window recomputed every poll (not an
+   * advancing persisted cursor), so every active issue inside the window keeps re-surfacing; only a
+   * bot-mention whose ROOT message is older than the window stops being newly discovered. Once an
+   * issue is claimed it is refreshed by id (unbounded), so in-flight work is unaffected. Set it
+   * generously on channels with long-lived issues.
+   */
+  scanLookbackDays?: number | undefined;
 }
 
 /** Typed view over `settings.tracker.options` for the Slack provider. */
@@ -53,6 +65,7 @@ export function slackTrackerOptions(settings: Settings): SlackTrackerOptions {
   const emojiStates = emojiStatesValue(options.emojiStates);
   const markerEmoji = stringOption(options, "markerEmoji");
   const replyLookbackDays = numberOption(options, "replyLookbackDays");
+  const scanLookbackDays = numberOption(options, "scanLookbackDays");
   return {
     channels: stringListOption(options, "channels") ?? [],
     users: stringListOption(options, "users") ?? [],
@@ -61,6 +74,7 @@ export function slackTrackerOptions(settings: Settings): SlackTrackerOptions {
     ...(emojiStates !== undefined ? { emojiStates } : {}),
     ...(markerEmoji !== undefined ? { markerEmoji } : {}),
     ...(replyLookbackDays !== undefined ? { replyLookbackDays } : {}),
+    ...(scanLookbackDays !== undefined ? { scanLookbackDays } : {}),
   };
 }
 

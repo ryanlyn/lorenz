@@ -636,6 +636,19 @@ export interface RuntimeTrackerClient {
   /** Re-fetches specific issues by tracker id, preserving the requested order. */
   fetchIssuesByIds(ids: string[]): Promise<Issue[]>;
   /**
+   * Optional poll-reconciliation refresh for already-tracked claims/retries. `issues` must match
+   * {@link fetchIssuesByIds} semantics: preserve requested order, omit genuinely missing ids, and
+   * never report a still-valid id as missing just because it is outside a scan window.
+   *
+   * `candidateIds` names reconciled ids the runtime may need to reconsider for dispatch. Return
+   * only candidate-scoped issues in `candidateIssues`; omit it to keep {@link fetchCandidateIssues}
+   * the sole dispatch source.
+   */
+  reconcileIssuesByIds?(
+    ids: string[],
+    options?: RuntimeTrackerReconcileOptions,
+  ): Promise<RuntimeTrackerReconcileResult>;
+  /**
    * Lists issues currently in any of the given states. Optional because it is only exercised
    * by best-effort flows (notably terminal-state workspace cleanup at startup); backends that
    * cannot answer state queries cheaply may omit it and the caller will skip those flows.
@@ -655,6 +668,18 @@ export interface RuntimeTrackerClient {
    * treating it as an error.
    */
   watch?(onChange: () => void): TrackerChangeStream | null | Promise<TrackerChangeStream | null>;
+}
+
+export interface RuntimeTrackerReconcileOptions {
+  /** Reconciled ids that may be promoted into this poll's dispatch candidate set. */
+  candidateIds?: string[] | undefined;
+}
+
+export interface RuntimeTrackerReconcileResult {
+  /** Refreshed tracked issues, preserving the requested id order and omitting genuinely missing ids. */
+  issues: Issue[];
+  /** Subset safe to merge into dispatch candidates, preserving the requested candidate id order. */
+  candidateIssues?: Issue[] | undefined;
 }
 
 /**
@@ -1031,11 +1056,7 @@ export interface SdkModuleContract<TModule extends SdkModule> {
    * at authoring time) so every error is actionable. Standalone (`this: void`), so
    * an SDK can re-export it directly under its public name.
    */
-  readonly assertModule: (
-    this: void,
-    value: unknown,
-    source: string,
-  ) => asserts value is TModule;
+  readonly assertModule: (this: void, value: unknown, source: string) => asserts value is TModule;
   /**
    * Authoring sugar: shape-asserts at definition time (so a typo fails in the
    * author's tests, not the operator's daemon) and returns the module unchanged.

@@ -2,6 +2,8 @@ import { defaultStateType, normalizeIssue } from "@lorenz/issue";
 import type {
   Issue,
   IssueStateType,
+  RuntimeTrackerReconcileOptions,
+  RuntimeTrackerReconcileResult,
   RuntimeTrackerClient,
   Settings,
   TrackerChangeStream,
@@ -224,6 +226,16 @@ export class SlackTrackerClient implements RuntimeTrackerClient {
     return socket;
   }
 
+  /** Resolve a tracked root's thread state and map it to a normalized issue. */
+  private async issueFromRoot(root: SlackMessage, base: string | null): Promise<Issue> {
+    const thread = await resolveThreadState(this.settings, this.transport, root);
+    return slackMessageToIssue(root, this.settings, {
+      permalinkBase: base,
+      state: thread.state,
+      request: thread.request,
+    });
+  }
+
   async fetchIssuesByIds(ids: string[]): Promise<Issue[]> {
     const base = await this.transport.teamUrl();
     const out: Issue[] = [];
@@ -239,16 +251,55 @@ export class SlackTrackerClient implements RuntimeTrackerClient {
       } catch {
         continue;
       }
-      const thread = await resolveThreadState(this.settings, this.transport, root);
-      out.push(
-        slackMessageToIssue(root, this.settings, {
-          permalinkBase: base,
-          state: thread.state,
-          request: thread.request,
-        }),
-      );
+      out.push(await this.issueFromRoot(root, base));
     }
     return out;
+  }
+
+  /**
+   * Reconciliation-path refresh (see {@link RuntimeTrackerClient.reconcileIssuesByIds}). This takes
+   * a fresh scan so running/retrying issue state is current, warms the scan cache for the following
+   * candidate fetch, and falls back to by-id reads for roots outside the scan window.
+   */
+  async reconcileIssuesByIds(
+    ids: string[],
+    options: RuntimeTrackerReconcileOptions = {},
+  ): Promise<RuntimeTrackerReconcileResult> {
+    if (ids.length === 0) return { issues: [] };
+    const [scan, base] = await Promise.all([
+      this.scanCached({ forceRefresh: true }),
+      this.transport.teamUrl(),
+    ]);
+    const trackedById = new Map<string, SlackMessage>(
+      trackedRootsOf(scan).map((root) => [`${root.channel}:${root.ts}`, root]),
+    );
+    const resolved = new Map<string, Issue>();
+    const missingFromScan: string[] = [];
+    for (const id of ids) {
+      const root = trackedById.get(id);
+      if (!root) {
+        missingFromScan.push(id);
+        continue;
+      }
+      resolved.set(id, await this.issueFromRoot(root, base));
+    }
+    if (missingFromScan.length > 0) {
+      for (const issue of await this.fetchIssuesByIds(missingFromScan)) {
+        resolved.set(issue.id, issue);
+      }
+    }
+    // Preserve the requested order (matching fetchIssuesByIds); ids that resolved to nothing
+    // (genuinely gone) are omitted.
+    const issues = ids
+      .map((id) => resolved.get(id))
+      .filter((issue): issue is Issue => issue !== undefined);
+    const candidateIssues = (options.candidateIds ?? [])
+      .map((id) => resolved.get(id))
+      .filter((issue): issue is Issue => issue !== undefined);
+    return {
+      issues,
+      ...(candidateIssues.length > 0 ? { candidateIssues } : {}),
+    };
   }
 
   async fetchIssuesByStates(states: string[]): Promise<Issue[]> {
@@ -312,10 +363,11 @@ export class SlackTrackerClient implements RuntimeTrackerClient {
     this.mirroredStates.set(key, state);
   }
 
-  private async scanCached(): Promise<SlackChannelScan> {
+  private async scanCached(options: { forceRefresh?: boolean } = {}): Promise<SlackChannelScan> {
     const key = this.channels().join(",");
     const now = Date.now();
     if (
+      options.forceRefresh !== true &&
       this.scanCache &&
       this.scanCache.key === key &&
       now - this.scanCache.at < SCAN_CACHE_TTL_MS

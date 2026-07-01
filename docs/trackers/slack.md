@@ -1,9 +1,11 @@
 # Slack tracker
 
 Use Slack channels as the source of work. An `@`-mention of your bot becomes an issue, the
-mention's thread carries the status, and Lorenz polls the watched channels over the Slack Web API.
-This page is for operators: it covers the Slack app setup, the required config, the status model,
-and the `slack_*` agent tools. The provider lives in `extensions/slack-tracker`.
+mention's thread carries the status, and Lorenz reads the watched channels over the Slack Web API.
+Optional Socket Mode push can wake the poll loop immediately after relevant Slack events; the Web
+API poll remains the source of truth. This page is for operators: it covers the Slack app setup, the
+required config, the status model, and the `slack_*` agent tools. The provider lives in
+`extensions/slack-tracker`.
 
 ## The model in one screen
 
@@ -26,25 +28,37 @@ Create a Slack app for your workspace, install it to the channels Lorenz watches
 OAuth bot scopes below. These are the OAuth bot scopes Lorenz needs, implied by the Web API methods
 the transport calls; they are not declared in the extension source.
 
-| Scope | Why Lorenz needs it |
-| --- | --- |
-| `channels:history` | Read message history in public channels (`conversations.history`, `conversations.replies`). |
-| `groups:history` | Read history in private channels. |
-| `reactions:read` | Read reactions to derive fallback status and detect the bot's marker. |
-| `reactions:write` | Add and remove the bot's own marker and status reactions (`reactions.add`, `reactions.remove`). |
-| `chat:write` | Post the bot's `status:` and comment replies (`chat.postMessage`). |
-| `users:read` | Resolve a `U...` id to a profile for `slack_user_info` (`users.info`). |
+| Scope               | Why Lorenz needs it                                                                             |
+| ------------------- | ----------------------------------------------------------------------------------------------- |
+| `channels:history`  | Read message history in public channels (`conversations.history`, `conversations.replies`).     |
+| `groups:history`    | Read history in private channels.                                                               |
+| `app_mentions:read` | Receive `app_mention` events when Socket Mode push wakeups are enabled.                         |
+| `reactions:read`    | Read reactions to derive fallback status and detect the bot's marker.                           |
+| `reactions:write`   | Add and remove the bot's own marker and status reactions (`reactions.add`, `reactions.remove`). |
+| `chat:write`        | Post the bot's `status:` and comment replies (`chat.postMessage`).                              |
+| `users:read`        | Resolve a `U...` id to a profile for `slack_user_info` (`users.info`).                          |
 
-There is no `app_mentions:read` scope and no Events API subscription. Discovery is pure polling of
-`conversations.history`, so Lorenz never receives mention events and does not need that scope. A
-per-channel incremental watermark is a deferred enhancement; each poll re-scans recent history from
-the newest message.
+Socket Mode is optional. Without an app token, discovery is pure polling of
+`conversations.history`. With an app-level token, Lorenz opens a Socket Mode connection and treats
+watched `app_mention`, `message`, and reaction events as a prompt to re-poll immediately. Event
+handling is deliberately only a wakeup: the subsequent poll re-derives candidates, status, routing,
+and reconciliation from the Web API, and the interval poll remains the safety net for missed events.
+A per-channel incremental watermark is a deferred enhancement; each poll re-scans recent history
+from the newest message.
 
-The bot needs two distinct identifiers from the app:
+To receive Socket Mode wakeups, enable Event Subscriptions in the Slack app and subscribe to the bot
+events Lorenz watches: `app_mention`, `message.channels` for public channels, `message.groups` for
+private channels, plus `reaction_added` and `reaction_removed`. Socket Mode delivers those events
+over the WebSocket; the bot token still performs every read and write.
+
+The bot needs two distinct identifiers from the app, plus an optional Socket Mode token:
 
 - The bot token, an `xoxb-` value, supplied as `SLACK_BOT_TOKEN`.
 - The bot user id, a `U...` value, supplied as `SLACK_BOT_USER_ID`. This is the user the bot posts
   as, not the app id.
+- Optional: an app-level token, an `xapp-` value with `connections:write`, supplied as
+  `SLACK_APP_TOKEN`, enables Socket Mode push wakeups. The bot token still does all reads and
+  writes.
 
 ## Required config
 
@@ -64,16 +78,18 @@ trackers:
     bot_user_id: $SLACK_BOT_USER_ID
 ```
 
-| Key | Env fallback | Default | Meaning |
-| --- | --- | --- | --- |
-| `kind` / `provider` | | | `tracker.kind: slack` selects the bundle; `trackers.slack.provider: slack` names the implementation. |
-| `channels` | | | Required. List of `C...` channel ids. Entries resolve `$VAR` references; an unresolved ref collapses to empty and is dropped. |
-| `bot_user_id` | `SLACK_BOT_USER_ID` | | Required. The bot's `U...` id. An empty string does not satisfy it. |
-| `api_key` | `SLACK_BOT_TOKEN` | | The `xoxb-` bot token. |
-| `endpoint` | | `https://slack.com/api` | Slack Web API base. |
-| `emoji_states` | | `eyes: In Progress`, `white_check_mark: Done`, `x: Cancelled` | Emoji name to state name, merged over the built-in `DEFAULT_EMOJI_STATES`. |
-| `marker_emoji` | | `robot_face` | The reaction the bot adds to mark a tracked thread root. |
-| `reply_lookback_days` | | `2` | How far back to discover new reply-mention threads. |
+| Key                   | Env fallback        | Default                                                       | Meaning                                                                                                                               |
+| --------------------- | ------------------- | ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `kind` / `provider`   |                     |                                                               | `tracker.kind: slack` selects the bundle; `trackers.slack.provider: slack` names the implementation.                                  |
+| `channels`            |                     |                                                               | Required. List of `C...` channel ids. Entries resolve `$VAR` references; an unresolved ref collapses to empty and is dropped.         |
+| `bot_user_id`         | `SLACK_BOT_USER_ID` |                                                               | Required. The bot's `U...` id. An empty string does not satisfy it.                                                                   |
+| `api_key`             | `SLACK_BOT_TOKEN`   |                                                               | The `xoxb-` bot token.                                                                                                                |
+| `app_token`           | `SLACK_APP_TOKEN`   |                                                               | Optional `xapp-` app-level token for Socket Mode push wakeups.                                                                        |
+| `endpoint`            |                     | `https://slack.com/api`                                       | Slack Web API base.                                                                                                                   |
+| `emoji_states`        |                     | `eyes: In Progress`, `white_check_mark: Done`, `x: Cancelled` | Emoji name to state name, merged over the built-in `DEFAULT_EMOJI_STATES`.                                                            |
+| `marker_emoji`        |                     | `robot_face`                                                  | The reaction the bot adds to mark a tracked thread root.                                                                              |
+| `reply_lookback_days` |                     | `2`                                                           | How far back to discover new reply-mention threads.                                                                                   |
+| `scan_lookback_days`  |                     | Unbounded                                                     | How far back the candidate `conversations.history` scan pages. The shipped sample sets `30`; set `0` or omit for a full-history scan. |
 
 See [reference/configuration.md](../reference/configuration.md) for the full `tracker.*` key reference and the active/terminal state defaults.
 
@@ -140,14 +156,14 @@ otherwise `Todo`.
 A command reply must lead with the bot mention, then a `!` body. `@bot done` without the bang is a
 bare mention, not a command. The keyword map:
 
-| Command | Result |
-| --- | --- |
-| `!done`, `!complete`, `!completed`, `!finished` | `Done` |
-| `!cancel`, `!cancelled`, `!canceled`, `!stop` | `Cancelled` |
-| `!reopen`, `!rework`, `!retry` | First active state |
-| `!in progress`, `!start`, `!started`, `!wip` | `In Progress` |
-| `!todo`, `!backlog` | `Todo` |
-| `!status <Name>` | The explicit state `<Name>` |
+| Command                                         | Result                      |
+| ----------------------------------------------- | --------------------------- |
+| `!done`, `!complete`, `!completed`, `!finished` | `Done`                      |
+| `!cancel`, `!cancelled`, `!canceled`, `!stop`   | `Cancelled`                 |
+| `!reopen`, `!rework`, `!retry`                  | First active state          |
+| `!in progress`, `!start`, `!started`, `!wip`    | `In Progress`               |
+| `!todo`, `!backlog`                             | `Todo`                      |
+| `!status <Name>`                                | The explicit state `<Name>` |
 
 A bare bot-mention reply with no recognized command reopens a terminal issue to the first configured
 active state. Reaction-only state is treated as having ts of negative infinity, so any later bare
@@ -182,27 +198,37 @@ it starts with `tracker.dispatch.route_label_prefix`, which the shipped workflow
 
 See [dispatch.md](../dispatch.md) for the full route resolution chain.
 
-## Polling and rate limits
+## Polling, push, and rate limits
 
 The shipped `WORKFLOW.slack.md` sets `polling.interval_ms` to `60000`, a 60-second cadence. The
 interval is deliberately conservative: `conversations.history` can be throttled to roughly one
-request per minute for newer non-Marketplace apps, and each poll re-scans recent channel history.
+request per minute for newer non-Marketplace apps, while Marketplace-approved apps and internal
+customer-built apps keep the higher tier. Each full poll re-scans recent channel history.
 
 ```yaml
 polling:
   interval_ms: 60000
 ```
 
-Each poll re-scans recent `conversations.history` newest-first with no `sinceTs` watermark, paging
-at `limit=200` until there is no `next_cursor` or `MAX_HISTORY_PAGES` (500) is reached. Hitting the
-cap with a cursor remaining logs a loud truncation warning. Channels are scanned concurrently; one
-failed channel is skipped and logged, and only an all-channels failure rejects the poll with
-`poll_error`.
+Each poll re-scans `conversations.history` newest-first, paging at `limit=200` until there is no
+`next_cursor` or `MAX_HISTORY_PAGES` (500) is reached. When `scan_lookback_days` is set to a
+positive value, the scan sends a fixed trailing `oldest` watermark. The watermark is not an
+advancing cursor: active issues inside the window keep re-surfacing, while new discovery of roots
+older than the window is intentionally bounded. Claimed issues are still refreshed by id, unbounded,
+during reconciliation. Hitting the page cap with a cursor remaining logs a loud truncation warning.
+Channels are scanned concurrently; one failed channel is skipped and logged, and only an
+all-channels failure rejects the poll with `poll_error`.
 
-Reads retry on 429 and 5xx. `chat.postMessage` retries only on 429, never on an ambiguous 5xx, since
-it is non-idempotent. Reaction writes are idempotent: Slack's `already_reacted` and `no_reaction`
-errors are treated as success. Backoff is exponential, honors `Retry-After`, and is capped, with a
-30-second request timeout.
+With Socket Mode enabled, push is a latency trigger rather than a separate candidate source. A
+watched Slack event queues the same full poll path the interval uses, so reconciliation, retry
+timers, terminal cleanup, blocked-dispatch snapshots, and candidate counts stay consistent. The
+interval still runs to recover any dropped event or reconnect gap.
+
+Reads retry on 429 and 5xx. Each retry wait is logged so a rate-limited scan is visible in daemon
+logs instead of looking hung. `chat.postMessage` retries only on 429, never on an ambiguous 5xx,
+since it is non-idempotent. Reaction writes are idempotent: Slack's `already_reacted` and
+`no_reaction` errors are treated as success. Backoff is exponential, honors `Retry-After`, and is
+capped, with a 30-second request timeout.
 
 ## The `slack_*` tools
 

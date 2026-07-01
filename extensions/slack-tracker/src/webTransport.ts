@@ -26,6 +26,7 @@ interface RawSlackMessage {
 // ~100k messages per channel per poll.
 const MAX_HISTORY_PAGES = 500;
 const MAX_RETRIES = 4;
+const SECONDS_PER_DAY = 86_400;
 /**
  * Upper bound on a single retry sleep, including Retry-After-driven ones. Slack's real
  * Retry-After values are short; an unbounded header (or a far-future HTTP-date injected by an
@@ -54,6 +55,14 @@ export interface SlackTrackerLogger {
 export interface SlackWebTransportOptions {
   /** Safety cap on conversations.history pages per channel per poll (default: MAX_HISTORY_PAGES). */
   maxHistoryPages?: number;
+  /**
+   * Trailing history window (days) for the candidate scan; overrides the configured
+   * `scanLookbackDays`. Omitted, `0`, or negative disables the `oldest` bound entirely
+   * (full history).
+   */
+  scanLookbackDays?: number;
+  /** Wall-clock source for the trailing `oldest` watermark (default `Date.now`); injectable for tests. */
+  now?: () => number;
 }
 
 export class SlackWebTransport implements SlackTransport {
@@ -62,6 +71,8 @@ export class SlackWebTransport implements SlackTransport {
   private readonly botUserId: string | undefined;
   private readonly allowedUsers: string[];
   private readonly maxHistoryPages: number;
+  private readonly scanLookbackDays: number;
+  private readonly now: () => number;
   private warnedNoBotUserId = false;
 
   constructor(
@@ -77,6 +88,19 @@ export class SlackWebTransport implements SlackTransport {
     this.botUserId = slackOptions.botUserId;
     this.allowedUsers = slackOptions.users;
     this.maxHistoryPages = options.maxHistoryPages ?? MAX_HISTORY_PAGES;
+    this.scanLookbackDays = options.scanLookbackDays ?? slackOptions.scanLookbackDays ?? 0;
+    this.now = options.now ?? Date.now;
+  }
+
+  /**
+   * The `oldest` epoch-seconds watermark for this poll's candidate scan, or `undefined` to leave
+   * the scan unbounded. Recomputed per call: a FIXED trailing window (now - scanLookbackDays), not
+   * an advancing persisted cursor, so every issue with activity inside the window keeps
+   * re-surfacing each poll.
+   */
+  private historyOldest(): string | undefined {
+    if (!(this.scanLookbackDays > 0)) return undefined;
+    return String(Math.floor(this.now() / 1000 - this.scanLookbackDays * SECONDS_PER_DAY));
   }
 
   async listMentions(channels: string[]): Promise<SlackMessage[]> {
@@ -84,14 +108,9 @@ export class SlackWebTransport implements SlackTransport {
   }
 
   async scanChannels(channels: string[]): Promise<SlackChannelScan> {
-    // Each poll scans recent conversations.history from newest backward (no oldest/latest
-    // watermark). A per-channel incremental watermark is a DEFERRED enhancement: a naive
-    // time-watermark would regress re-discovery of undispatched active issues, because the runtime
-    // re-surfaces an active-but-undispatched Todo/In Progress issue via the candidate poll, and a
-    // watermark that advanced past it would stop re-surfacing it so it would never be picked up.
-    // Doing this safely needs a stateful open-issue registry, tracked separately. The conservative
-    // poll interval (WORKFLOW.slack.md polling.interval_ms) plus the 429/Retry-After backoff bound
-    // the rate-limit pressure in the meantime.
+    // A positive scanLookbackDays is a fixed trailing window, not an advancing cursor; each poll
+    // still re-scans the window so undispatched active issues inside it keep re-surfacing.
+    const oldest = this.historyOldest();
     //
     // Fail closed: with no bot user id configured, the any-mention fallback would treat every
     // human-to-human <@U...> mention in a watched channel as an issue and expose that text to
@@ -122,7 +141,7 @@ export class SlackWebTransport implements SlackTransport {
         // mention beyond the failed page would otherwise vanish silently from candidate discovery
         // and terminal cleanup.
         try {
-          return { channel, scan: await this.scanChannel(channel) };
+          return { channel, scan: await this.scanChannel(channel, oldest) };
         } catch (error) {
           // A page failed after the transport's own retries: treat the whole channel as failed
           // and discard its partial buffer. One bad channel must not abort the others.
@@ -156,14 +175,20 @@ export class SlackWebTransport implements SlackTransport {
     return out;
   }
 
-  /** Scan one channel's full root-message history; throws when pagination fails partway. */
-  private async scanChannel(channel: string): Promise<SlackChannelScan> {
+  /**
+   * Scan one channel's recent root-message history (bounded by the trailing `oldest` watermark
+   * when set); throws when pagination fails partway.
+   */
+  private async scanChannel(channel: string, oldest?: string): Promise<SlackChannelScan> {
     const buffer: SlackChannelScan = { mentions: [], threadedRoots: [] };
     let cursor: string | undefined;
-    // Page until Slack stops returning a next_cursor: full exhaustion is the normal terminal
-    // condition. The page count only guards against a pathological non-terminating cursor.
+    // Page until Slack stops returning a next_cursor (full exhaustion of the window) - the normal
+    // terminal condition. The page count only guards against a pathological non-terminating cursor.
     for (let page = 0; page < this.maxHistoryPages; page += 1) {
       const params: Record<string, string> = { channel, limit: "200" };
+      // Bound the scan to the trailing window: Slack only returns messages at or after `oldest`,
+      // so a channel's ancient backlog is not re-paged every poll.
+      if (oldest !== undefined) params.oldest = oldest;
       if (cursor) params.cursor = cursor;
       const body = await this.get("conversations.history", params);
       const messages = Array.isArray(body.messages) ? (body.messages as RawSlackMessage[]) : [];
@@ -200,7 +225,7 @@ export class SlackWebTransport implements SlackTransport {
   }
 
   async teamUrl(): Promise<string | null> {
-    const cacheKey = `${this.endpoint} ${this.token}`;
+    const cacheKey = `${this.endpoint} ${this.token}`;
     const cached = teamUrlByAuth.get(cacheKey);
     if (cached !== undefined) return cached;
     try {
@@ -406,7 +431,16 @@ export class SlackWebTransport implements SlackTransport {
         }
         return response;
       }
-      await this.sleep(retryDelayMs(response.headers, retryCount));
+      // Surface the backoff: when Slack rate-limits a history or reply read, a cold scan can spend
+      // long stretches asleep here, one Retry-After at a time. Without this line that window is
+      // silent and the daemon looks hung. One warn per wait makes the rate-limit crawl visible to
+      // anyone tailing the process.
+      const delayMs = retryDelayMs(response.headers, retryCount);
+      this.logger.warn(
+        `slack ${method}: HTTP ${response.status}; backing off ${Math.round(delayMs / 1000)}s ` +
+          `before retry ${retryCount + 1}/${MAX_RETRIES}`,
+      );
+      await this.sleep(delayMs);
     }
   }
 

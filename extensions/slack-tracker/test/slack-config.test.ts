@@ -95,6 +95,21 @@ test("parses slack tracker config with channels, emoji overrides, and token env"
   assert.deepEqual(slackTrackerOptions(settings).emojiStates, { rocket: "Shipped" });
 });
 
+test("parses the scan_lookback_days scan-bounding option", () => {
+  const settings = parseSlackConfig(
+    {
+      tracker: {
+        kind: "slack",
+        channels: ["C1"],
+        bot_user_id: "U1",
+        scan_lookback_days: 14,
+      },
+    },
+    { SLACK_BOT_TOKEN: "xoxb-test" },
+  );
+  assert.equal(slackTrackerOptions(settings).scanLookbackDays, 14);
+});
+
 test("rejects unknown slack tracker options and malformed emoji_states", () => {
   assert.throws(
     () =>

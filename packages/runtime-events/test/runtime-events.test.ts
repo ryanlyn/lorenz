@@ -32,6 +32,7 @@ test("RUNTIME_EVENT_TYPES is a strict superset of AGENT_UPDATE_TYPES with no dup
   // These are the known runtime-specific event types that must exist
   const expectedRuntimeSpecific = [
     "dry_run",
+    "poll_progress",
     "poll_error",
     "dispatch_skipped",
     "run_reserving",
