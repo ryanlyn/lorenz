@@ -313,6 +313,51 @@ test("linear_graphql tool logs non-200 and transport failures with context", asy
   }
 });
 
+test("linear_graphql tool redacts secrets in diagnostic logs", async () => {
+  const secret = "resolved-env-secret-linear-tool-sentinel";
+  const ref = "op://vault/item/linear-tool";
+  const errors: string[] = [];
+  const errorSpy = viSpyOnConsoleError(errors);
+  const settings = parseConfig(
+    {
+      tracker: {
+        kind: "linear",
+        api_key: "$LINEAR_API_KEY",
+        project_slug: "mono",
+      },
+    },
+    { LINEAR_API_KEY: secret },
+  );
+
+  try {
+    await executeLinearTool(
+      "linear_graphql",
+      { query: "query LorenzTsViewer { viewer { id } }" },
+      settings,
+      fetchSequence(
+        jsonResponse(
+          {
+            errors: [
+              {
+                message: `bad request api_key=${secret} Bearer ${secret} ${ref}`,
+              },
+            ],
+          },
+          500,
+        ),
+      ),
+    );
+
+    assert.equal(errors.length, 1);
+    assert.notMatch(errors[0] ?? "", new RegExp(secret));
+    assert.notMatch(errors[0] ?? "", /op:\/\/vault\/item\/linear-tool/);
+    assert.notMatch(errors[0] ?? "", /Bearer resolved-env-secret-linear-tool-sentinel/);
+    assert.match(errors[0] ?? "", /\[REDACTED\]/);
+  } finally {
+    errorSpy.mockRestore();
+  }
+});
+
 test("linear_graphql tool retries 429 responses like the Linear client", async () => {
   const calls: number[] = [];
   const result = await executeLinearTool(

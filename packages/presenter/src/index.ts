@@ -4,7 +4,12 @@ import type {
   RuntimeSnapshot,
 } from "@lorenz/runtime-events";
 import { humanizeAgentMessage } from "@lorenz/humanize";
-import { durationMs, type UsageTotals } from "@lorenz/domain";
+import {
+  durationMs,
+  redactDiagnosticText,
+  redactDiagnosticValue,
+  type UsageTotals,
+} from "@lorenz/domain";
 
 export interface PresenterParams {
   [key: string]: string | boolean | number | undefined;
@@ -108,13 +113,13 @@ export function statePayload(snapshot: RuntimeSnapshot, generatedAt = nowIso()):
       issue_url: entry.issueUrl ?? null,
       attempt: entry.attempt,
       due_at: entry.dueAtIso,
-      error: entry.error ?? null,
+      error: entry.error === undefined ? null : redactDiagnosticText(entry.error),
       worker_host: entry.workerHost ?? null,
       workspace_path: entry.workspacePath ?? null,
     })),
     blocked: snapshot.blocked.map(blockedEntryPayload),
     usage_totals: usagePayload(snapshot.usageTotals),
-    rate_limits: snapshot.rateLimits,
+    rate_limits: redactDiagnosticValue(snapshot.rateLimits),
     claim_store: claimStorePayload(snapshot.claimStore),
   };
 }
@@ -164,7 +169,7 @@ export function issuePayload(
         ? {
             attempt: retry.attempt,
             due_at: retry.dueAtIso,
-            error: retry.error ?? null,
+            error: retry.error === undefined ? null : redactDiagnosticText(retry.error),
             worker_host: retry.workerHost ?? null,
             workspace_path: retry.workspacePath ?? null,
           }
@@ -179,7 +184,7 @@ export function issuePayload(
             },
           ]
         : [],
-      last_error: retry?.error ?? null,
+      last_error: retry?.error === undefined ? null : redactDiagnosticText(retry.error),
       tracked: {},
     },
   };
@@ -352,7 +357,7 @@ function historyRunPayload(entry: RuntimeRunHistoryEntry, logFile: string | null
     executor_pid: entry.executorPid ?? null,
     usage_totals: usagePayload(usage),
     turn_count: entry.turnCount,
-    failure_reason: entry.error ?? null,
+    failure_reason: entry.error === undefined ? null : redactDiagnosticText(entry.error),
     last_event: entry.lastEvent ?? null,
     last_message: summarizeMessage(entry.lastMessage),
     last_event_at: entry.lastEventAt ?? null,
@@ -582,7 +587,7 @@ function runSortTime(run: RunPayload): number {
 
 function summarizeMessage(message: unknown): string | null {
   if (message === null || message === undefined) return null;
-  return humanizeAgentMessage(message);
+  return redactDiagnosticText(humanizeAgentMessage(message));
 }
 
 function truthyParam(value: string | boolean | number | undefined): boolean {

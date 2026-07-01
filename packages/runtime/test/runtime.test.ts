@@ -1062,6 +1062,70 @@ test("runtime reloads workflow settings on each poll with last-known-good fallba
   );
 });
 
+test("runtime redacts reload failures in recent events and logs while polling last-good config", async () => {
+  const secret = "resolved-env-secret-runtime-sentinel";
+  const ref = "op://vault/item/runtime-field";
+  const issue = issueFixture("issue-secret-reload-failure", "MT-SECRET-RELOAD");
+  const dir = await tempDir("lorenz-runtime-secret-reload");
+  const workflowFile = path.join(dir, "WORKFLOW.md");
+  const workflowText = [
+    "---",
+    "tracker:",
+    "  kind: linear",
+    "  api_key: $LINEAR_API_KEY",
+    "  project_slug: mono",
+    "  active_states:",
+    "    - Todo",
+    "    - In Progress",
+    "  terminal_states:",
+    "    - Done",
+    "polling:",
+    "  interval_ms: 5",
+    "---",
+    "Issue {{ issue.identifier }}",
+    "",
+  ].join("\n");
+  await fs.writeFile(workflowFile, workflowText);
+  const workflow = await loadWorkflow(workflowFile, { LINEAR_API_KEY: secret }, { cwd: dir });
+  await fs.writeFile(workflowFile, `${workflowText}\nchanged\n`);
+
+  const logEvents: Record<string, unknown>[] = [];
+  const runtime = new LorenzRuntime(
+    runtimeOptions({
+      workflow,
+      reloadWorkflow: async () => {
+        throw new Error(`reload failed ${secret} ${ref} Bearer ${secret}`);
+      },
+      appendLogEvent: async (_logFile, event) => {
+        logEvents.push(event);
+      },
+      client: {
+        fetchCandidateIssues: async () => [issue],
+        fetchIssuesByIds: async () => [issue],
+      },
+      runner: async () => {
+        throw new Error("dry-run should not call runner");
+      },
+    }),
+  );
+
+  try {
+    await runtime.pollOnce({ dryRun: true });
+
+    const snapshot = runtime.snapshot();
+    assert.equal(snapshot.poll.candidates, 1);
+    assert.equal(snapshot.poll.eligible, 1);
+    assert.ok(snapshot.recentEvents.some((event) => event.type === "workflow_reload_failed"));
+    assert.ok(snapshot.recentEvents.some((event) => event.type === "dry_run"));
+    const diagnostics = JSON.stringify({ recentEvents: snapshot.recentEvents, logEvents });
+    assert.notMatch(diagnostics, new RegExp(secret));
+    assert.notMatch(diagnostics, /op:\/\/vault\/item\/runtime-field/);
+    assert.notMatch(diagnostics, /Bearer resolved-env-secret-runtime-sentinel/);
+  } finally {
+    runtime.stop();
+  }
+});
+
 test("runtime skips reload side effects when workflow content is unchanged", async () => {
   const issue = issueFixture("issue-unchanged-reload", "MT-UNCHANGED-RELOAD");
   const dir = await tempDir("lorenz-runtime-unchanged-workflow");

@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import type { AgentUpdate } from "@lorenz/domain";
+import { parseConfig } from "@lorenz/cli";
 
 import { TraceEmitter } from "../src/index.js";
 
@@ -73,6 +74,36 @@ describe("TraceEmitter", () => {
     expect(lines).toHaveLength(2);
     expect(JSON.parse(lines[0]!).type).toBe("turn_started");
     expect(JSON.parse(lines[1]!).type).toBe("turn_completed");
+  });
+
+  it("redacts secret values and secret references before writing trace lines", async () => {
+    const secret = "resolved-env-secret-trace-sentinel";
+    const ref = "op://vault/item/trace-field";
+    parseConfig({ tracker: { api_key: "$LINEAR_API_KEY" } }, { LINEAR_API_KEY: secret });
+
+    emitter.emit(
+      "id-1",
+      "ENG-1",
+      makeUpdate({
+        type: "session_notification",
+        message: {
+          update: {
+            sessionUpdate: "tool_call_update",
+            toolCallId: "tool-1",
+            status: "failed",
+            rawOutput: `failed with ${secret} ${ref} Bearer ${secret}`,
+          },
+        },
+      }),
+    );
+    await emitter.drain();
+
+    const filePath = TraceEmitter.tracePathForIssue(traceDir, "id-1");
+    const content = readFileSync(filePath, "utf-8");
+    expect(content).not.toContain(secret);
+    expect(content).not.toContain(ref);
+    expect(content).not.toContain(`Bearer ${secret}`);
+    expect(content).toContain("[REDACTED]");
   });
 
   it("encodes issue ids for directory names", async () => {

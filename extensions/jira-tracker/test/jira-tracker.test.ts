@@ -836,6 +836,60 @@ test("a failing jira request surfaces as a failed tool result, not a thrown erro
   assert.match(result.error ?? "", /jira api status 500/);
 });
 
+test("jira tool failures redact tracker secrets and secret references", async () => {
+  const calls: FetchCall[] = [];
+  const basic = Buffer.from("bot@example.com:jira-token").toString("base64");
+  const result = await executeJiraTool(
+    "jira_read_issue",
+    { issueId: "ENG-1" },
+    jiraSettings(),
+    fetchSequence(
+      calls,
+      jsonResponse(
+        {
+          errorMessages: [`bad auth api_key=jira-token Basic ${basic} op://vault/item/jira-token`],
+        },
+        500,
+      ),
+    ),
+  );
+
+  assert.equal(result.success, false);
+  assert.match(result.error ?? "", /jira api status 500/);
+  assert.notMatch(result.error ?? "", /jira-token/);
+  assert.notMatch(result.error ?? "", new RegExp(basic));
+  assert.notMatch(result.error ?? "", /op:\/\/vault\/item\/jira-token/);
+  assert.match(result.error ?? "", /\[REDACTED\]/);
+});
+
+test("jira-mcp JSON-RPC errors redact tracker secrets and secret references", async () => {
+  const calls: FetchCall[] = [];
+  const basic = Buffer.from("bot@example.com:jira-token").toString("base64");
+  const result = await executeJiraTool(
+    "jira_read_issue",
+    { issueId: "ENG-1" },
+    jiraMcpSettings(),
+    fetchSequence(
+      calls,
+      jsonResponse({
+        jsonrpc: "2.0",
+        id: "1",
+        error: {
+          code: -32000,
+          message: `bad auth api_key=jira-token Basic ${basic} op://vault/item/jira-token`,
+        },
+      }),
+    ),
+  );
+
+  assert.equal(result.success, false);
+  assert.match(result.error ?? "", /jira-mcp error/);
+  assert.notMatch(result.error ?? "", /jira-token/);
+  assert.notMatch(result.error ?? "", new RegExp(basic));
+  assert.notMatch(result.error ?? "", /op:\/\/vault\/item\/jira-token/);
+  assert.match(result.error ?? "", /\[REDACTED\]/);
+});
+
 function jiraMcpSettings() {
   return parseConfig(
     {

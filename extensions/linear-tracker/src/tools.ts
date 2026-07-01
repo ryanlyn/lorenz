@@ -1,7 +1,13 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { errorMessage, isRecord, type Settings } from "@lorenz/domain";
+import {
+  errorMessage,
+  isRecord,
+  redactDiagnosticText,
+  redactDiagnosticValue,
+  type Settings,
+} from "@lorenz/domain";
 import {
   toolFailure,
   toolSuccess,
@@ -11,6 +17,7 @@ import {
   type ToolSpec,
 } from "@lorenz/tool-sdk";
 
+import { linearErrorContext } from "./diagnostics.js";
 import { linearToolPackOptions, validateLinearToolOptions } from "./options.js";
 
 /**
@@ -26,7 +33,6 @@ const lorenzLinearSkillDir = path.resolve(
 );
 
 const LINEAR_MAX_RETRIES = 4;
-const MAX_ERROR_BODY_LOG_BYTES = 1000;
 
 interface LinearToolLogger {
   warn(message: string): void;
@@ -116,15 +122,15 @@ export async function executeLinearTool(
       });
     }
     if (isRecord(body) && Array.isArray(body.errors) && body.errors.length > 0) {
-      return { success: false, result: body };
+      return { success: false, result: redactDiagnosticValue(body) };
     }
-    return toolSuccess(body);
+    return toolSuccess(redactDiagnosticValue(body));
   } catch (error) {
     defaultLinearToolLogger.error(
-      `Linear GraphQL request failed: ${errorMessage(error)}${linearErrorContext(normalizedInput.query)}`,
+      `Linear GraphQL request failed: ${redactDiagnosticText(errorMessage(error))}${linearErrorContext(normalizedInput.query)}`,
     );
     return toolFailure("Linear GraphQL request failed before receiving a successful response.", {
-      reason: errorMessage(error),
+      reason: redactDiagnosticText(errorMessage(error)),
     });
   }
 }
@@ -241,31 +247,4 @@ function logStatusError(
   body: unknown,
 ): void {
   logger.error(`Linear GraphQL request failed status=${status}${linearErrorContext(query, body)}`);
-}
-
-function linearErrorContext(query: string, body?: unknown): string {
-  const parts: string[] = [];
-  const operation = operationName(query);
-  if (operation) parts.push(`operation=${operation}`);
-  if (body !== undefined) parts.push(`body=${summarizeErrorBody(body)}`);
-  return parts.length === 0 ? "" : ` ${parts.join(" ")}`;
-}
-
-function operationName(query: string): string | null {
-  return /\b(?:query|mutation)\s+([A-Za-z_][A-Za-z0-9_]*)/.exec(query)?.[1] ?? null;
-}
-
-function summarizeErrorBody(body: unknown): string {
-  const text = typeof body === "string" ? body : stringifyErrorBody(body);
-  const compact = text.replace(/\s+/g, " ").trim();
-  if (compact.length <= MAX_ERROR_BODY_LOG_BYTES) return compact;
-  return `${compact.slice(0, MAX_ERROR_BODY_LOG_BYTES)}...<truncated>`;
-}
-
-function stringifyErrorBody(body: unknown): string {
-  try {
-    return JSON.stringify(body) ?? String(body);
-  } catch {
-    return String(body);
-  }
 }

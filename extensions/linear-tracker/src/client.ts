@@ -6,16 +6,17 @@ import {
   errorMessage,
   isRecord,
   normalizeStateType,
+  redactDiagnosticText,
   type Issue,
   type IssueStateType,
   type Settings,
 } from "@lorenz/domain";
 
+import { linearErrorContext } from "./diagnostics.js";
 import { linearEndpoint, linearTrackerOptions } from "./options.js";
 
 const LINEAR_REQUEST_TIMEOUT_MS = 30_000;
 const LINEAR_CONNECTION_PAGE_SIZE = 50;
-const MAX_ERROR_BODY_LOG_BYTES = 1000;
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -209,9 +210,11 @@ export class LinearClient {
     } catch (error) {
       if (!response.ok) {
         this.logStatusError(query, response.status, errorBodyText ?? errorMessage(error));
-        throw new Error(`linear api status ${response.status}`, { cause: error });
+        // eslint-disable-next-line preserve-caught-error -- Secret-boundary rethrows must not retain provider error objects.
+        throw new Error(`linear api status ${response.status}`);
       }
-      throw new Error(`linear_invalid_json: ${errorMessage(error)}`, { cause: error });
+      // eslint-disable-next-line preserve-caught-error -- Secret-boundary rethrows must not retain provider error objects.
+      throw new Error(`linear_invalid_json: ${redactDiagnosticText(errorMessage(error))}`);
     }
     if (response.status === 429) {
       this.logStatusError(query, response.status, body);
@@ -219,7 +222,9 @@ export class LinearClient {
     }
     if (isRecord(body) && Array.isArray(body.errors) && body.errors.length > 0) {
       this.logStatusError(query, response.status, body);
-      throw new Error(`linear_graphql_errors: ${JSON.stringify(body.errors)}`);
+      throw new Error(
+        `linear_graphql_errors: ${redactDiagnosticText(JSON.stringify(body.errors))}`,
+      );
     }
     if (!response.ok) {
       this.logStatusError(query, response.status, body);
@@ -250,7 +255,8 @@ export class LinearClient {
         });
       } catch (error: unknown) {
         this.logRequestError(query, error);
-        throw error;
+        // eslint-disable-next-line preserve-caught-error -- Secret-boundary rethrows must not retain provider error objects.
+        throw new Error(redactDiagnosticText(errorMessage(error)));
       }
       if (response.status !== 429 || retryCount >= this.retryOptions.maxRetries) return response;
       const delayMs = retryDelayMs(response.headers, this.retryOptions, retryCount);
@@ -868,7 +874,7 @@ export class LinearClient {
 
   private logRequestError(query: string, error: unknown): void {
     this.logger.error(
-      `Linear GraphQL request failed: ${errorMessage(error)}${linearErrorContext(query)}`,
+      `Linear GraphQL request failed: ${redactDiagnosticText(errorMessage(error))}${linearErrorContext(query)}`,
     );
   }
 }
@@ -949,14 +955,19 @@ function retryDelayFromError(
 
 function reclassifyError(error: unknown): Error {
   if (error instanceof Error) {
-    const msg = error.message;
-    if (msg.includes("429")) return new Error("linear api status 429", { cause: error });
+    const msg = redactDiagnosticText(error.message);
+    const cause = redactedLinearCause(error);
+    if (msg.includes("429")) return new Error("linear api status 429", { cause });
     if (msg.toLowerCase().includes("graphql")) {
-      return new Error(`linear_graphql_errors: ${msg}`, { cause: error });
+      return new Error(`linear_graphql_errors: ${msg}`, { cause });
     }
-    return error;
+    return new Error(msg, { cause });
   }
-  return new Error(String(error));
+  return new Error(redactDiagnosticText(String(error)));
+}
+
+function redactedLinearCause(error: unknown): Error {
+  return new Error(redactDiagnosticText(errorMessage(error)));
 }
 
 function isConnection(value: unknown): value is { nodes: unknown[]; pageInfo?: unknown } {
@@ -1025,25 +1036,6 @@ function stringField(record: Record<string, unknown>, key: string): string {
 function asRecord(value: unknown): Record<string, unknown> {
   if (!isRecord(value)) throw new Error("expected Linear object");
   return value;
-}
-
-function linearErrorContext(query: string, body?: unknown): string {
-  const parts: string[] = [];
-  const operation = operationName(query);
-  if (operation) parts.push(`operation=${operation}`);
-  if (body !== undefined) parts.push(`body=${summarizeErrorBody(body)}`);
-  return parts.length === 0 ? "" : ` ${parts.join(" ")}`;
-}
-
-function operationName(query: string): string | null {
-  return /\b(?:query|mutation)\s+([A-Za-z_][A-Za-z0-9_]*)/.exec(query)?.[1] ?? null;
-}
-
-function summarizeErrorBody(body: unknown): string {
-  const text = typeof body === "string" ? body : (JSON.stringify(body) ?? String(body));
-  const compact = text.replace(/\s+/g, " ").trim();
-  if (compact.length <= MAX_ERROR_BODY_LOG_BYTES) return compact;
-  return `${compact.slice(0, MAX_ERROR_BODY_LOG_BYTES)}...<truncated>`;
 }
 
 function retryAfterHeaderValueFromError(error: unknown): string | null {

@@ -217,6 +217,68 @@ test("Linear client logs non-200 failures with operation and bounded body", asyn
   }
 });
 
+test("Linear client redacts secrets in diagnostic logs", async () => {
+  const secret = "resolved-env-secret-linear-client-sentinel";
+  const ref = "op://vault/item/linear-client";
+  const errors: string[] = [];
+  const errorSpy = viSpyOnConsoleError(errors);
+  const client = new LinearClient(
+    settings({ apiKey: "$LINEAR_API_KEY" }, { LINEAR_API_KEY: secret }),
+    fetchSequence(
+      jsonResponse(
+        {
+          errors: [{ message: `bad request api_key=${secret} Bearer ${secret} ${ref}` }],
+        },
+        500,
+      ),
+    ),
+  );
+
+  try {
+    await assert.rejects(() => client.viewer(), /linear_graphql_errors|linear api status 500/);
+    assert.equal(errors.length, 1);
+    assert.notMatch(errors[0] ?? "", new RegExp(secret));
+    assert.notMatch(errors[0] ?? "", /op:\/\/vault\/item\/linear-client/);
+    assert.notMatch(errors[0] ?? "", /Bearer resolved-env-secret-linear-client-sentinel/);
+    assert.match(errors[0] ?? "", /\[REDACTED\]/);
+  } finally {
+    errorSpy.mockRestore();
+  }
+});
+
+test("Linear client redacts secrets in thrown errors and causes", async () => {
+  const secret = "resolved-env-secret-linear-cause-sentinel";
+  const ref = "op://vault/item/linear-cause";
+  const errors: string[] = [];
+  const errorSpy = viSpyOnConsoleError(errors);
+  const client = new LinearClient(
+    settings({ apiKey: "$LINEAR_API_KEY" }, { LINEAR_API_KEY: secret }),
+    (async () => {
+      throw new Error(`network down api_key=${secret} Bearer ${secret} ${ref}`);
+    }) as typeof fetch,
+  );
+
+  try {
+    await assert.rejects(
+      () => client.viewer(),
+      (error) => {
+        const message = error instanceof Error ? error.message : String(error);
+        const cause = error instanceof Error ? error.cause : undefined;
+        const causeText = cause instanceof Error ? cause.message : String(cause);
+        for (const text of [message, causeText]) {
+          assert.notMatch(text, new RegExp(secret));
+          assert.notMatch(text, /op:\/\/vault\/item\/linear-cause/);
+          assert.notMatch(text, /Bearer resolved-env-secret-linear-cause-sentinel/);
+        }
+        assert.match(message, /\[REDACTED\]/);
+        return true;
+      },
+    );
+  } finally {
+    errorSpy.mockRestore();
+  }
+});
+
 test("Linear candidate polling follows every page in order", async () => {
   const calls: FetchCall[] = [];
   const client = new LinearClient(
@@ -869,7 +931,7 @@ test("Linear archiveIssue archives by id and reports failed payloads", async () 
   );
 });
 
-function settings() {
+function settings(trackerOverrides: Record<string, unknown> = {}, env: NodeJS.ProcessEnv = {}) {
   return parseConfig(
     {
       tracker: {
@@ -877,9 +939,10 @@ function settings() {
         api_key: "linear-token",
         project_slug: "mono",
         active_states: ["Todo"],
+        ...trackerOverrides,
       },
     },
-    {},
+    env,
   );
 }
 

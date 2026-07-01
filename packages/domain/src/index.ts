@@ -105,6 +105,80 @@ export function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+const DIAGNOSTIC_REDACTION = "[REDACTED]";
+const MIN_REGISTERED_SECRET_LENGTH = 3;
+const OP_REFERENCE_PATTERN = /op:\/\/[^\s"'`),\]}]+/g;
+const BEARER_AUTH_PATTERN = /\bBearer\s+[A-Za-z0-9._~+/=%-]+/gi;
+const BASIC_AUTH_PATTERN = /\bBasic\s+[A-Za-z0-9._~+/=%-]+/gi;
+const URL_AUTH_PATTERN = /([A-Za-z][A-Za-z0-9+.-]*:\/\/)([^@\s/?#]+)@/g;
+const SECRET_ASSIGNMENT_PATTERN =
+  /((?:["']?\b(?:api[_-]?key|apiKey|authorization|auth[_-]?token|access[_-]?token|refresh[_-]?token|password|secret|token)\b["']?)\s*[:=]\s*)(["']?)([^"'\s,}\]]+)/gi;
+const DIAGNOSTIC_SECRET_KEY_PATTERN =
+  /(?:api[_-]?key|apiKey|authorization|auth[_-]?token|access[_-]?token|refresh[_-]?token|password|secret|token)/i;
+
+const registeredDiagnosticSecrets = new Set<string>();
+let sortedDiagnosticSecrets: string[] | null = null;
+
+export function isDiagnosticSecretKey(key: string): boolean {
+  return DIAGNOSTIC_SECRET_KEY_PATTERN.test(key);
+}
+
+export function registerDiagnosticSecret(value: string | null | undefined): void {
+  const secret = value?.trim();
+  if (!secret || secret.length < MIN_REGISTERED_SECRET_LENGTH) return;
+  if (secret === DIAGNOSTIC_REDACTION || secret.startsWith("op://")) return;
+  if (registeredDiagnosticSecrets.has(secret)) return;
+  registeredDiagnosticSecrets.add(secret);
+  sortedDiagnosticSecrets = null;
+}
+
+export function redactDiagnosticText(value: string): string {
+  let redacted = value;
+  for (const secret of registeredSecretsByLength()) {
+    redacted = redacted.split(secret).join(DIAGNOSTIC_REDACTION);
+  }
+  return redacted
+    .replace(BEARER_AUTH_PATTERN, `Bearer ${DIAGNOSTIC_REDACTION}`)
+    .replace(BASIC_AUTH_PATTERN, `Basic ${DIAGNOSTIC_REDACTION}`)
+    .replace(URL_AUTH_PATTERN, `$1${DIAGNOSTIC_REDACTION}@`)
+    .replace(SECRET_ASSIGNMENT_PATTERN, (_match, prefix: string, quote: string) => {
+      const suffix = quote === "" ? "" : quote;
+      return `${prefix}${quote}${DIAGNOSTIC_REDACTION}${suffix}`;
+    })
+    .replace(OP_REFERENCE_PATTERN, DIAGNOSTIC_REDACTION);
+}
+
+export function redactDiagnosticValue<T>(value: T): T {
+  return redactDiagnosticUnknown(value, new WeakSet()) as T;
+}
+
+function registeredSecretsByLength(): string[] {
+  sortedDiagnosticSecrets ??= [...registeredDiagnosticSecrets].sort(
+    (left, right) => right.length - left.length,
+  );
+  return sortedDiagnosticSecrets;
+}
+
+function redactDiagnosticUnknown(value: unknown, seen: WeakSet<object>): unknown {
+  if (typeof value === "string") return redactDiagnosticText(value);
+  if (typeof value !== "object" || value === null) return value;
+  if (seen.has(value)) return value;
+  seen.add(value);
+  if (Array.isArray(value)) return value.map((item) => redactDiagnosticUnknown(item, seen));
+  if (!isPlainDiagnosticRecord(value)) return value;
+  return Object.fromEntries(
+    Object.entries(value).map(([key, item]): [string, unknown] => [
+      key,
+      redactDiagnosticUnknown(item, seen),
+    ]),
+  );
+}
+
+function isPlainDiagnosticRecord(value: object): value is Record<string, unknown> {
+  const proto: unknown = Object.getPrototypeOf(value);
+  return proto === Object.prototype || proto === null;
+}
+
 export function isOneOf<const Values extends readonly string[]>(
   value: string,
   values: Values,
@@ -1033,11 +1107,7 @@ export interface SdkModuleContract<TModule extends SdkModule> {
    * at authoring time) so every error is actionable. Standalone (`this: void`), so
    * an SDK can re-export it directly under its public name.
    */
-  readonly assertModule: (
-    this: void,
-    value: unknown,
-    source: string,
-  ) => asserts value is TModule;
+  readonly assertModule: (this: void, value: unknown, source: string) => asserts value is TModule;
   /**
    * Authoring sugar: shape-asserts at definition time (so a typo fails in the
    * author's tests, not the operator's daemon) and returns the module unchanged.

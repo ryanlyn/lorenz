@@ -20,7 +20,7 @@ import { registerLocalTracker } from "@lorenz/local-tracker";
 import { registerMemoryTracker } from "@lorenz/memory-tracker";
 import { ToolRegistry } from "@lorenz/tool-sdk";
 import { TrackerRegistry } from "@lorenz/tracker-sdk";
-import { assert, tempDir } from "@lorenz/test-utils";
+import { assert, tempDir, writeExecutable } from "@lorenz/test-utils";
 
 import type { DefaultSettingsOptions } from "@lorenz/config";
 
@@ -109,11 +109,10 @@ test("config honors logging.log_file with alias and home expansion", () => {
 test("config resolves op:// references via 1Password CLI", async () => {
   const root = await tempDir("lorenz-op-mock");
   const opScript = path.join(root, "op");
-  await fs.writeFile(
+  await writeExecutable(
     opScript,
     '#!/bin/sh\nif [ "$1" = "--version" ]; then echo "2.0.0"; else echo "resolved-secret"; fi\n',
   );
-  await fs.chmod(opScript, 0o755);
 
   const settings = parseConfig(
     { tracker: { api_key: "op://vault/item/field" } },
@@ -125,17 +124,126 @@ test("config resolves op:// references via 1Password CLI", async () => {
 test("config resolves op:// references from env var fallback", async () => {
   const root = await tempDir("lorenz-op-mock");
   const opScript = path.join(root, "op");
-  await fs.writeFile(
+  await writeExecutable(
     opScript,
     '#!/bin/sh\nif [ "$1" = "--version" ]; then echo "2.0.0"; else echo "env-secret"; fi\n',
   );
-  await fs.chmod(opScript, 0o755);
 
   const settings = parseConfig(
     { tracker: { kind: "linear" } },
     { LINEAR_API_KEY: "op://vault/item/key", PATH: `${root}:${process.env.PATH}` },
   );
   assert.equal(settings.tracker.apiKey, "env-secret");
+});
+
+test("config limits the 1Password child process environment to resolution inputs", async () => {
+  const root = await tempDir("lorenz-op-env");
+  const opScript = path.join(root, "op");
+  const envCapture = path.join(root, "op.env");
+  const oldParentSecret = process.env.LORENZ_PARENT_SECRET_SENTINEL;
+  process.env.LORENZ_PARENT_SECRET_SENTINEL = "parent-secret-should-not-reach-op";
+  await writeExecutable(
+    opScript,
+    [
+      "#!/bin/sh",
+      'if [ "$1" = "read" ]; then env > "$OP_ENV_CAPTURE"; echo "resolved-secret"; exit 0; fi',
+      'echo "resolved-secret"',
+      "",
+    ].join("\n"),
+  );
+
+  try {
+    const settings = parseConfig(
+      { tracker: { api_key: "op://vault/item/field" } },
+      {
+        PATH: `${root}:${process.env.PATH}`,
+        OP_ENV_CAPTURE: envCapture,
+        LINEAR_API_KEY: "linear-secret-should-not-reach-op",
+      },
+    );
+
+    assert.equal(settings.tracker.apiKey, "resolved-secret");
+    const childEnv = await fs.readFile(envCapture, "utf8");
+    assert.equal(childEnv.includes("OP_ENV_CAPTURE="), true);
+    assert.equal(childEnv.includes("LORENZ_PARENT_SECRET_SENTINEL="), false);
+    assert.equal(childEnv.includes("parent-secret-should-not-reach-op"), false);
+    assert.equal(childEnv.includes("LINEAR_API_KEY="), false);
+    assert.equal(childEnv.includes("linear-secret-should-not-reach-op"), false);
+  } finally {
+    if (oldParentSecret === undefined) delete process.env.LORENZ_PARENT_SECRET_SENTINEL;
+    else process.env.LORENZ_PARENT_SECRET_SENTINEL = oldParentSecret;
+  }
+});
+
+test("config redacts op references and provider output from 1Password failures", async () => {
+  const root = await tempDir("lorenz-op-failure");
+  const opScript = path.join(root, "op");
+  await writeExecutable(
+    opScript,
+    [
+      "#!/bin/sh",
+      'if [ "$1" = "--version" ]; then echo "2.0.0"; exit 0; fi',
+      'echo "failed op://vault/item/field with resolved-secret-sentinel" >&2',
+      "exit 1",
+      "",
+    ].join("\n"),
+  );
+
+  assert.throws(
+    () =>
+      parseConfig(
+        { tracker: { api_key: "op://vault/item/field" } },
+        { PATH: `${root}:${process.env.PATH}` },
+      ),
+    (error) => {
+      const message = error instanceof Error ? error.message : String(error);
+      const cause = error instanceof Error ? error.cause : undefined;
+      const causeText = cause instanceof Error ? cause.message : String(cause);
+      assert.notMatch(message, /op:\/\/vault\/item\/field/);
+      assert.notMatch(message, /resolved-secret-sentinel/);
+      assert.notMatch(causeText, /op:\/\/vault\/item\/field/);
+      assert.notMatch(causeText, /resolved-secret-sentinel/);
+      assert.match(message, /Failed to resolve 1Password reference/);
+      return true;
+    },
+  );
+});
+
+test("config bounds 1Password resolution and reports timeout without leaking the reference", async () => {
+  const root = await tempDir("lorenz-op-timeout");
+  const opScript = path.join(root, "op");
+  await writeExecutable(
+    opScript,
+    [
+      "#!/bin/sh",
+      'if [ "$1" = "--version" ]; then echo "2.0.0"; exit 0; fi',
+      "sleep 2",
+      'echo "resolved-secret-sentinel"',
+      "",
+    ].join("\n"),
+  );
+
+  assert.throws(
+    () =>
+      parseConfig(
+        { tracker: { api_key: "op://vault/item/field" } },
+        {
+          PATH: `${root}:${process.env.PATH}`,
+          LORENZ_SECRET_RESOLUTION_TIMEOUT_MS: "500",
+        },
+      ),
+    (error) => {
+      const message = error instanceof Error ? error.message : String(error);
+      const cause = error instanceof Error ? error.cause : undefined;
+      const causeText = cause instanceof Error ? cause.message : String(cause);
+      assert.match(message, /Timed out resolving 1Password reference/);
+      assert.notMatch(message, /op:\/\/vault\/item\/field/);
+      assert.notMatch(message, /resolved-secret-sentinel/);
+      assert.notMatch(causeText, /op:\/\/vault\/item\/field/);
+      assert.notMatch(causeText, /resolved-secret-sentinel/);
+      return true;
+    },
+  );
 });
 
 test("non-Linear tracker configs ignore Linear secret env fallbacks", () => {
@@ -157,11 +265,10 @@ test("non-Linear tracker configs ignore Linear secret env fallbacks", () => {
 test("non-Linear tracker configs still resolve explicitly configured secrets", async () => {
   const root = await tempDir("lorenz-op-mock");
   const opScript = path.join(root, "op");
-  await fs.writeFile(
+  await writeExecutable(
     opScript,
     '#!/bin/sh\nif [ "$1" = "--version" ]; then echo "2.0.0"; else echo "resolved-secret"; fi\n',
   );
-  await fs.chmod(opScript, 0o755);
 
   const settings = parseConfig(
     {

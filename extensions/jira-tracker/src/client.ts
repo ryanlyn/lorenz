@@ -1,6 +1,7 @@
 import {
   errorMessage,
   isRecord,
+  redactDiagnosticText,
   type Issue,
   type IssueRef,
   type IssueStateType,
@@ -371,9 +372,9 @@ export class JiraMcpClient implements RuntimeTrackerClient {
         const payload = await this.callTool(tool, args);
         const payloadError = mcpToolPayloadError(payload);
         if (!payloadError) return commentsFromPayload(payload);
-        failures.push(payloadError);
+        failures.push(redactDiagnosticText(payloadError));
       } catch (error) {
-        failures.push(errorMessage(error));
+        failures.push(redactDiagnosticText(errorMessage(error)));
       }
     }
     throw new Error(`jira-mcp list comments failed: ${failures.join("; ")}`);
@@ -391,9 +392,9 @@ export class JiraMcpClient implements RuntimeTrackerClient {
         const payload = await this.callTool(tool, args);
         const payloadError = mcpToolPayloadError(payload);
         if (!payloadError) return firstCommentFromPayload(payload) ?? { id: commentId, body };
-        failures.push(payloadError);
+        failures.push(redactDiagnosticText(payloadError));
       } catch (error) {
-        failures.push(errorMessage(error));
+        failures.push(redactDiagnosticText(errorMessage(error)));
       }
     }
     throw new Error(`jira-mcp update comment failed: ${failures.join("; ")}`);
@@ -407,9 +408,9 @@ export class JiraMcpClient implements RuntimeTrackerClient {
         const payload = await this.callTool(tool, args);
         const payloadError = mcpToolPayloadError(payload);
         if (!payloadError) return createdCommentFromPayload(payload, body);
-        failures.push(payloadError);
+        failures.push(redactDiagnosticText(payloadError));
       } catch (error) {
-        failures.push(errorMessage(error));
+        failures.push(redactDiagnosticText(errorMessage(error)));
       }
     }
     throw new Error(`jira-mcp add comment failed: ${failures.join("; ")}`);
@@ -489,7 +490,7 @@ export class JiraMcpClient implements RuntimeTrackerClient {
       throw new Error(`jira-mcp status ${response.status}: ${summarizeBody(body ?? text)}`);
     if (isRecord(body) && isRecord(body.error)) {
       throw new Error(
-        `jira-mcp error: ${stringField(body.error, "message") ?? summarizeBody(body.error)}`,
+        `jira-mcp error: ${redactDiagnosticText(stringField(body.error, "message") ?? summarizeBody(body.error))}`,
       );
     }
     return mcpResultPayload(body);
@@ -819,13 +820,15 @@ function mcpToolPayloadError(payload: unknown): string | null {
   if (!isRecord(payload)) return null;
   const success = payload.success;
   if (success === false) {
-    return (
-      stringField(payload, "error") ?? stringField(payload, "message") ?? summarizeBody(payload)
+    return redactDiagnosticText(
+      stringField(payload, "error") ?? stringField(payload, "message") ?? summarizeBody(payload),
     );
   }
-  if (typeof payload.error === "string") return payload.error;
+  if (typeof payload.error === "string") return redactDiagnosticText(payload.error);
   if (isRecord(payload.error))
-    return stringField(payload.error, "message") ?? summarizeBody(payload.error);
+    return redactDiagnosticText(
+      stringField(payload.error, "message") ?? summarizeBody(payload.error),
+    );
   return null;
 }
 
@@ -944,6 +947,15 @@ function parseJson(text: string): unknown {
 }
 
 function summarizeBody(body: unknown): string {
-  const text = typeof body === "string" ? body : JSON.stringify(body);
+  const text = redactDiagnosticText(stringifyBody(body));
   return text.length > 500 ? `${text.slice(0, 500)}...<truncated>` : text;
+}
+
+function stringifyBody(body: unknown): string {
+  if (typeof body === "string") return body;
+  try {
+    return JSON.stringify(body) ?? String(body);
+  } catch {
+    return String(body);
+  }
 }

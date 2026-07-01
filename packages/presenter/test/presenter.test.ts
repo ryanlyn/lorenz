@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { test } from "vitest";
-import { issuePayload, runsPayload, statePayload } from "@lorenz/cli";
+import { issuePayload, parseConfig, runsPayload, statePayload } from "@lorenz/cli";
 import type { RuntimeSnapshot } from "@lorenz/runtime";
 import { assert } from "@lorenz/test-utils";
 
@@ -155,6 +155,41 @@ test("presenter humanizes structured agent messages at the JSON API boundary", (
     (detail.payload.run as any).last_message,
     "agent message content streaming: streaming update",
   );
+});
+
+test("presenter redacts resolved secrets and secret references at the JSON API boundary", () => {
+  const secret = "resolved-env-secret-presenter-sentinel";
+  const ref = "op://vault/item/presenter-field";
+  parseConfig(
+    {
+      tracker: {
+        kind: "linear",
+        api_key: "$LINEAR_API_KEY",
+        project_slug: "mono",
+      },
+    },
+    { LINEAR_API_KEY: secret },
+  );
+  const snapshot = snapshotFixture();
+  snapshot.running[0]!.lastEvent = "session_notification";
+  snapshot.running[0]!.lastEventAt = "2026-05-06T00:00:02.000Z";
+  snapshot.running[0]!.lastMessage = `tool output Bearer ${secret} ${ref}`;
+  snapshot.retrying[0]!.error = `retry failed api_key=${secret} ${ref}`;
+  snapshot.runHistory[0]!.error = `history failed Basic ${Buffer.from(`bot:${secret}`).toString("base64")}`;
+  snapshot.runHistory[0]!.lastMessage = {
+    event: "turn_failed",
+    message: { error: `failure included ${secret} and ${ref}` },
+  };
+
+  const state = statePayload(snapshot);
+  const issue = issuePayload(snapshot, "MT-RUNNING");
+  const detail = runsPayload(snapshot, { id: "run-2" });
+  const diagnostics = JSON.stringify({ state, issue, detail });
+
+  assert.notMatch(diagnostics, new RegExp(secret));
+  assert.notMatch(diagnostics, /op:\/\/vault\/item\/presenter-field/);
+  assert.notMatch(diagnostics, /Bearer resolved-env-secret-presenter-sentinel/);
+  assert.notMatch(diagnostics, /Basic Ym90OnJlc29sdmVkLWVudi1zZWNyZXQtcHJlc2VudGVyLXNlbnRpbmVs/);
 });
 
 test("presenter shows retry attempts for active running retries", () => {
