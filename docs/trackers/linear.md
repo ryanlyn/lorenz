@@ -159,9 +159,10 @@ same resilience behavior:
 - **429 backoff.** On a `429`, the client honors `Retry-After` when present (integer seconds or an
   HTTP-date), falling back to exponential backoff (1 second base, doubling, capped at 30 seconds). It
   retries up to 4 times, then raises a `429` error.
-- **Pagination integrity.** A page that reports more results but omits its cursor fails the poll
-  loudly rather than truncating silently. A truncated page of issue labels or relations hard-fails
-  the poll too, an intentional guard against silent data loss.
+- **Pagination integrity.** A page that reports more issues but omits its cursor fails the poll
+  loudly rather than truncating silently. Oversized nested issue and project metadata is read across
+  follow-up pages when possible; if Linear cannot provide the continuation page, the poll keeps
+  usable issues and logs the degraded issue, project, team, and connection.
 
 A missing `api_key` fails before any network call with a `missing Linear API key` error.
 
