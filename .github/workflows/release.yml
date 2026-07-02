@@ -9,7 +9,8 @@ on:
     tags:
       - "v*"
   schedule:
-    - cron: "17 9 * * *"
+    # GitHub schedules use UTC; 20:00 UTC is 06:00 AEST.
+    - cron: "0 20 * * *"
   workflow_dispatch:
 
 permissions:

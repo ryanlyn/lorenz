@@ -1,6 +1,7 @@
 import {
   errorMessage,
   isRecord,
+  redactDiagnosticText,
   type Issue,
   type IssueRef,
   type IssueStateType,
@@ -8,8 +9,13 @@ import {
   type Settings,
 } from "@lorenz/domain";
 import { defaultStateType, normalizeIssue } from "@lorenz/issue";
-import type { TrackerComment } from "@lorenz/tracker-sdk";
+import {
+  createTrackerPaginationGuard,
+  type TrackerComment,
+  type TrackerPaginationLimits,
+} from "@lorenz/tracker-sdk";
 
+import { markdownToAdf } from "./adf.js";
 import { jiraTrackerOptions, type JiraMcpToolMap } from "./options.js";
 
 const JIRA_REQUEST_TIMEOUT_MS = 30_000;
@@ -27,6 +33,7 @@ const JIRA_FIELDS = [
   "updated",
 ];
 const DEFAULT_JIRA_ISSUE_TYPE = "Task";
+const JIRA_NESTED_METADATA_MAX_ITEMS = 500;
 const DEFAULT_MCP_TOOLS: Required<JiraMcpToolMap> = {
   search: "jira_search",
   readIssue: "jira_get_issue",
@@ -39,16 +46,26 @@ const DEFAULT_MCP_TOOLS: Required<JiraMcpToolMap> = {
 
 export interface JiraClientDeps {
   fetchImpl?: typeof fetch | undefined;
+  logger?: JiraClientLogger | undefined;
+  paginationLimits?: TrackerPaginationLimits | undefined;
+}
+
+export interface JiraClientLogger {
+  warn(message: string): void;
 }
 
 export class JiraClient implements RuntimeTrackerClient {
   private readonly fetchImpl: typeof fetch;
+  private readonly logger: JiraClientLogger;
+  private readonly paginationLimits: TrackerPaginationLimits | undefined;
 
   constructor(
     private readonly settings: Settings,
     deps: JiraClientDeps = {},
   ) {
     this.fetchImpl = deps.fetchImpl ?? fetch;
+    this.logger = deps.logger ?? { warn: (message) => console.warn(message) };
+    this.paginationLimits = deps.paginationLimits;
   }
 
   async fetchCandidateIssues(): Promise<Issue[]> {
@@ -78,7 +95,9 @@ export class JiraClient implements RuntimeTrackerClient {
       `/rest/api/3/issue/${encodeURIComponent(issueIdOrKey)}?fields=${encodeURIComponent(JIRA_FIELDS.join(","))}`,
       { method: "GET" },
     );
-    return normalizeJiraIssue(raw, assigneeFilterValue(this.settings), this.baseUrl());
+    return normalizeJiraIssue(raw, assigneeFilterValue(this.settings), this.baseUrl(), {
+      logger: this.logger,
+    });
   }
 
   async updateIssueStatus(issueIdOrKey: string, status: string): Promise<Issue> {
@@ -106,7 +125,7 @@ export class JiraClient implements RuntimeTrackerClient {
       `/rest/api/3/issue/${encodeURIComponent(issueIdOrKey)}/comment`,
       {
         method: "POST",
-        body: JSON.stringify({ body: adfDocument(body) }),
+        body: JSON.stringify({ body: markdownToAdf(body) }),
       },
     );
     return normalizeJiraComment(raw);
@@ -116,12 +135,19 @@ export class JiraClient implements RuntimeTrackerClient {
     const out: TrackerComment[] = [];
     let startAt = 0;
     const maxResults = 100;
+    const pagination = createTrackerPaginationGuard({
+      tracker: "jira",
+      resource: "comments",
+      limits: this.paginationLimits,
+    });
     for (;;) {
+      pagination.recordPage();
       const page = await this.request<Record<string, unknown>>(
         `/rest/api/3/issue/${encodeURIComponent(issueIdOrKey)}/comment?startAt=${startAt}&maxResults=${maxResults}`,
         { method: "GET" },
       );
       const comments = Array.isArray(page.comments) ? page.comments : [];
+      pagination.recordItems(comments.length);
       for (const comment of comments) {
         if (isRecord(comment)) out.push(normalizeJiraComment(comment));
       }
@@ -140,7 +166,7 @@ export class JiraClient implements RuntimeTrackerClient {
       `/rest/api/3/issue/${encodeURIComponent(issueIdOrKey)}/comment/${encodeURIComponent(commentId)}`,
       {
         method: "PUT",
-        body: JSON.stringify({ body: adfDocument(body) }),
+        body: JSON.stringify({ body: markdownToAdf(body) }),
       },
     );
     return normalizeJiraComment(raw);
@@ -163,7 +189,7 @@ export class JiraClient implements RuntimeTrackerClient {
             name: jiraTrackerOptions(this.settings).issueType ?? DEFAULT_JIRA_ISSUE_TYPE,
           },
           summary: input.title,
-          ...(input.body !== undefined ? { description: adfDocument(input.body) } : {}),
+          ...(input.body !== undefined ? { description: markdownToAdf(input.body) } : {}),
           assignee,
         },
       }),
@@ -182,7 +208,13 @@ export class JiraClient implements RuntimeTrackerClient {
     // `/search/jql` endpoint replaces `startAt`/`total` offset paging with an
     // opaque `nextPageToken` and omits a total count (pages run until no token).
     let nextPageToken: string | undefined;
+    const pagination = createTrackerPaginationGuard({
+      tracker: "jira",
+      resource: "searchIssues",
+      limits: this.paginationLimits,
+    });
     for (;;) {
+      pagination.recordPage();
       const page = await this.request<Record<string, unknown>>("/rest/api/3/search/jql", {
         method: "POST",
         body: JSON.stringify({
@@ -193,13 +225,17 @@ export class JiraClient implements RuntimeTrackerClient {
         }),
       });
       const nodes = Array.isArray(page.issues) ? page.issues : [];
+      pagination.recordItems(nodes.length);
       for (const node of nodes) {
         if (isRecord(node))
-          out.push(normalizeJiraIssue(node, assigneeFilterValue(this.settings), this.baseUrl()));
+          out.push(
+            normalizeJiraIssue(node, assigneeFilterValue(this.settings), this.baseUrl(), {
+              logger: this.logger,
+            }),
+          );
       }
-      const token = typeof page.nextPageToken === "string" ? page.nextPageToken : undefined;
-      if (nodes.length === 0 || token === undefined) return out;
-      nextPageToken = token;
+      if (page.nextPageToken === undefined || page.nextPageToken === null) return out;
+      nextPageToken = pagination.nextCursor(page.nextPageToken, "nextPageToken");
     }
   }
 
@@ -260,12 +296,16 @@ export class JiraClient implements RuntimeTrackerClient {
 
 export class JiraMcpClient implements RuntimeTrackerClient {
   private readonly fetchImpl: typeof fetch;
+  private readonly logger: JiraClientLogger;
+  private readonly paginationLimits: TrackerPaginationLimits | undefined;
 
   constructor(
     private readonly settings: Settings,
     deps: JiraClientDeps = {},
   ) {
     this.fetchImpl = deps.fetchImpl ?? fetch;
+    this.logger = deps.logger ?? { warn: (message) => console.warn(message) };
+    this.paginationLimits = deps.paginationLimits;
   }
 
   async fetchCandidateIssues(): Promise<Issue[]> {
@@ -284,6 +324,7 @@ export class JiraMcpClient implements RuntimeTrackerClient {
           payload,
           assigneeFilterValue(this.settings),
           this.baseUrlOrNull(),
+          { logger: this.logger },
         );
         if (issue) issues.push(issue);
       }
@@ -303,6 +344,7 @@ export class JiraMcpClient implements RuntimeTrackerClient {
       payload,
       assigneeFilterValue(this.settings),
       this.baseUrlOrNull(),
+      { logger: this.logger },
     );
     if (!issue) throw new Error("jira-mcp read issue returned no issue");
     return issue;
@@ -317,6 +359,7 @@ export class JiraMcpClient implements RuntimeTrackerClient {
       payload,
       assigneeFilterValue(this.settings),
       this.baseUrlOrNull(),
+      { logger: this.logger },
     );
     return issue ?? (await this.readIssue(issueIdOrKey));
   }
@@ -329,9 +372,9 @@ export class JiraMcpClient implements RuntimeTrackerClient {
         const payload = await this.callTool(tool, args);
         const payloadError = mcpToolPayloadError(payload);
         if (!payloadError) return commentsFromPayload(payload);
-        failures.push(payloadError);
+        failures.push(redactDiagnosticText(payloadError));
       } catch (error) {
-        failures.push(errorMessage(error));
+        failures.push(redactDiagnosticText(errorMessage(error)));
       }
     }
     throw new Error(`jira-mcp list comments failed: ${failures.join("; ")}`);
@@ -349,9 +392,9 @@ export class JiraMcpClient implements RuntimeTrackerClient {
         const payload = await this.callTool(tool, args);
         const payloadError = mcpToolPayloadError(payload);
         if (!payloadError) return firstCommentFromPayload(payload) ?? { id: commentId, body };
-        failures.push(payloadError);
+        failures.push(redactDiagnosticText(payloadError));
       } catch (error) {
-        failures.push(errorMessage(error));
+        failures.push(redactDiagnosticText(errorMessage(error)));
       }
     }
     throw new Error(`jira-mcp update comment failed: ${failures.join("; ")}`);
@@ -365,9 +408,9 @@ export class JiraMcpClient implements RuntimeTrackerClient {
         const payload = await this.callTool(tool, args);
         const payloadError = mcpToolPayloadError(payload);
         if (!payloadError) return createdCommentFromPayload(payload, body);
-        failures.push(payloadError);
+        failures.push(redactDiagnosticText(payloadError));
       } catch (error) {
-        failures.push(errorMessage(error));
+        failures.push(redactDiagnosticText(errorMessage(error)));
       }
     }
     throw new Error(`jira-mcp add comment failed: ${failures.join("; ")}`);
@@ -394,6 +437,7 @@ export class JiraMcpClient implements RuntimeTrackerClient {
       payload,
       assigneeFilterValue(this.settings),
       this.baseUrlOrNull(),
+      { logger: this.logger },
     );
     if (!issue) throw new Error("jira-mcp create issue returned no issue");
     return issue;
@@ -401,7 +445,11 @@ export class JiraMcpClient implements RuntimeTrackerClient {
 
   async searchIssues(jql: string): Promise<Issue[]> {
     const payload = await this.callTool(this.toolName("search"), { jql, fields: JIRA_FIELDS });
-    return issuesFromPayload(payload, assigneeFilterValue(this.settings), this.baseUrlOrNull());
+    return issuesFromPayload(payload, assigneeFilterValue(this.settings), this.baseUrlOrNull(), {
+      logger: this.logger,
+      paginationLimits: this.paginationLimits,
+      resource: "mcpSearchIssues",
+    });
   }
 
   private baseUrlOrNull(): string | null {
@@ -442,7 +490,7 @@ export class JiraMcpClient implements RuntimeTrackerClient {
       throw new Error(`jira-mcp status ${response.status}: ${summarizeBody(body ?? text)}`);
     if (isRecord(body) && isRecord(body.error)) {
       throw new Error(
-        `jira-mcp error: ${stringField(body.error, "message") ?? summarizeBody(body.error)}`,
+        `jira-mcp error: ${redactDiagnosticText(stringField(body.error, "message") ?? summarizeBody(body.error))}`,
       );
     }
     return mcpResultPayload(body);
@@ -646,6 +694,7 @@ export function normalizeJiraIssue(
   issue: Record<string, unknown>,
   assignee?: string,
   baseUrl?: string | null,
+  options: { logger?: JiraClientLogger | undefined } = {},
 ): Issue {
   const fields = isRecord(issue.fields) ? issue.fields : {};
   const status = isRecord(fields.status) ? fields.status : {};
@@ -666,8 +715,8 @@ export function normalizeJiraIssue(
       description: jiraDescriptionToText(fields.description),
       state,
       state_type: rawStateType,
-      labels: Array.isArray(fields.labels) ? fields.labels : [],
-      blockers: jiraBlockers(fields.issuelinks),
+      labels: jiraNestedArray(fields.labels, "labels", key, options.logger),
+      blockers: jiraBlockers(fields.issuelinks, key, options.logger),
       assignee_id: stringField(assigneeRecord, "accountId") ?? stringField(assigneeRecord, "name"),
       priority: jiraPriority(fields.priority),
       created_at: stringField(fields, "created") ?? stringField(issue, "createdAt"),
@@ -684,6 +733,11 @@ function issuesFromPayload(
   payload: unknown,
   assignee: string | undefined,
   baseUrl: string | null,
+  options: {
+    logger?: JiraClientLogger | undefined;
+    paginationLimits?: TrackerPaginationLimits | undefined;
+    resource?: string | undefined;
+  } = {},
 ): Issue[] {
   const rawIssues = Array.isArray(payload)
     ? payload
@@ -694,12 +748,18 @@ function issuesFromPayload(
         : isRecord(payload) && isRecord(payload.data) && Array.isArray(payload.data.issues)
           ? payload.data.issues
           : [];
+  const pagination = createTrackerPaginationGuard({
+    tracker: "jira",
+    resource: options.resource ?? "payloadIssues",
+    limits: options.paginationLimits,
+  });
+  pagination.recordItems(rawIssues.length);
   return rawIssues.flatMap((raw) => {
     if (!isRecord(raw)) return [];
     try {
       return [
         isRecord(raw.fields) || raw.key
-          ? normalizeJiraIssue(raw, assignee, baseUrl)
+          ? normalizeJiraIssue(raw, assignee, baseUrl, { logger: options.logger })
           : normalizeIssue(raw, assignee),
       ];
     } catch {
@@ -712,14 +772,15 @@ function firstIssueFromPayload(
   payload: unknown,
   assignee: string | undefined,
   baseUrl: string | null,
+  options: { logger?: JiraClientLogger | undefined } = {},
 ): Issue | null {
   if (isRecord(payload) && isRecord(payload.issue)) {
     return isRecord(payload.issue.fields) || payload.issue.key
-      ? normalizeJiraIssue(payload.issue, assignee, baseUrl)
+      ? normalizeJiraIssue(payload.issue, assignee, baseUrl, { logger: options.logger })
       : normalizeIssue(payload.issue, assignee);
   }
   if (isRecord(payload) && (isRecord(payload.fields) || payload.key)) {
-    return normalizeJiraIssue(payload, assignee, baseUrl);
+    return normalizeJiraIssue(payload, assignee, baseUrl, { logger: options.logger });
   }
   if (isRecord(payload)) {
     try {
@@ -728,7 +789,7 @@ function firstIssueFromPayload(
       // Fall through to list-shaped payloads.
     }
   }
-  return issuesFromPayload(payload, assignee, baseUrl)[0] ?? null;
+  return issuesFromPayload(payload, assignee, baseUrl, { logger: options.logger })[0] ?? null;
 }
 
 function mcpResultPayload(body: unknown): unknown {
@@ -759,13 +820,15 @@ function mcpToolPayloadError(payload: unknown): string | null {
   if (!isRecord(payload)) return null;
   const success = payload.success;
   if (success === false) {
-    return (
-      stringField(payload, "error") ?? stringField(payload, "message") ?? summarizeBody(payload)
+    return redactDiagnosticText(
+      stringField(payload, "error") ?? stringField(payload, "message") ?? summarizeBody(payload),
     );
   }
-  if (typeof payload.error === "string") return payload.error;
+  if (typeof payload.error === "string") return redactDiagnosticText(payload.error);
   if (isRecord(payload.error))
-    return stringField(payload.error, "message") ?? summarizeBody(payload.error);
+    return redactDiagnosticText(
+      stringField(payload.error, "message") ?? summarizeBody(payload.error),
+    );
   return null;
 }
 
@@ -794,9 +857,14 @@ function normalizeFallbackStateType(state: string): IssueStateType {
   return "started";
 }
 
-function jiraBlockers(value: unknown): IssueRef[] {
-  if (!Array.isArray(value)) return [];
-  return value.flatMap((link) => {
+function jiraBlockers(
+  value: unknown,
+  issueKey: string,
+  logger: JiraClientLogger | undefined,
+): IssueRef[] {
+  const links = jiraNestedArray(value, "issuelinks", issueKey, logger);
+  if (links.length === 0) return [];
+  return links.flatMap((link) => {
     if (!isRecord(link) || !isRecord(link.type)) return [];
     const name = stringField(link.type, "name")?.toLowerCase() ?? "";
     const inward = stringField(link.type, "inward")?.toLowerCase() ?? "";
@@ -814,6 +882,20 @@ function jiraBlockers(value: unknown): IssueRef[] {
       },
     ];
   });
+}
+
+function jiraNestedArray(
+  value: unknown,
+  field: string,
+  issueKey: string,
+  logger: JiraClientLogger | undefined,
+): unknown[] {
+  if (!Array.isArray(value)) return [];
+  if (value.length <= JIRA_NESTED_METADATA_MAX_ITEMS) return value;
+  logger?.warn(
+    `Jira issue metadata oversized field=${field} issue=${issueKey} items=${value.length} max_items=${JIRA_NESTED_METADATA_MAX_ITEMS}; dropping nested metadata`,
+  );
+  return [];
 }
 
 function jiraPriority(value: unknown): number | null {
@@ -842,17 +924,6 @@ function adfToText(value: unknown): string {
   return children.join(separator);
 }
 
-function adfDocument(text: string): Record<string, unknown> {
-  return {
-    type: "doc",
-    version: 1,
-    content: text.split(/\r?\n/).map((line) => ({
-      type: "paragraph",
-      content: line === "" ? [] : [{ type: "text", text: line }],
-    })),
-  };
-}
-
 function normalizeStateNames(stateNames: unknown[]): string[] {
   return [...new Set(stateNames.map((stateName) => String(stateName)))];
 }
@@ -876,6 +947,15 @@ function parseJson(text: string): unknown {
 }
 
 function summarizeBody(body: unknown): string {
-  const text = typeof body === "string" ? body : JSON.stringify(body);
+  const text = redactDiagnosticText(stringifyBody(body));
   return text.length > 500 ? `${text.slice(0, 500)}...<truncated>` : text;
+}
+
+function stringifyBody(body: unknown): string {
+  if (typeof body === "string") return body;
+  try {
+    return JSON.stringify(body) ?? String(body);
+  } catch {
+    return String(body);
+  }
 }

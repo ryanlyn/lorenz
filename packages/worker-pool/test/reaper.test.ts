@@ -3,7 +3,7 @@ import type { WorkerPoolSettings } from "@lorenz/domain";
 import { withDerivedMaxInFlight } from "@lorenz/domain";
 import type { ClockPort, TimerHandle } from "@lorenz/domain";
 import { assert, settle } from "@lorenz/test-utils";
-import { WorkerDriverRegistry, FakeWorkerDriver } from "@lorenz/worker-sdk";
+import { WorkerDriverRegistry, FakeWorkerDriver, POOL_OWNED_LABEL } from "@lorenz/worker-sdk";
 import type { WorkerDriver } from "@lorenz/worker-sdk";
 
 import { createWorkerPool } from "../src/pool.js";
@@ -82,7 +82,7 @@ function makeRecord(overrides: Partial<WorkerRecord> = {}): WorkerRecord {
     workerHost,
     driverRef: workerHost,
     state: "WARM_IDLE",
-    labels: ["lorenz.pool=worker-pool"],
+    labels: [POOL_OWNED_LABEL],
     createdAtMs: 0,
     leaseId: null,
     inFlight: 0,
@@ -154,7 +154,7 @@ function makeInternals(
   const internals: ReaperInternals = {
     settings,
     driver,
-    poolOwnedLabel: options.poolOwnedLabel ?? "lorenz.pool=worker-pool",
+    poolOwnedLabel: options.poolOwnedLabel ?? POOL_OWNED_LABEL,
     now: () => 0,
     inventory,
     mutexFor: (workerId: string): Mutex => {
@@ -168,6 +168,7 @@ function makeInternals(
     liveWorkerCount: options.liveWorkerCount ?? (() => inventory.size),
     isRunActive: options.isRunActive ?? (() => true),
     hydrated: () => true,
+    pendingProvisionIds: () => new Set<string>(),
     hasGrowthBudget: () => true,
     destroyWorker: async (record: WorkerRecord) => {
       destroyed.push(record.workerId);
@@ -392,7 +393,7 @@ test("list() authoritative: labeled pool-owned unknown is destroyed", async () =
   // of it (e.g. a crashed-before-ledger orphan). It must be destroyed.
   await driver.provision({
     workerId: "ghost-0",
-    labels: ["lorenz.pool=worker-pool"],
+    labels: [POOL_OWNED_LABEL],
     timeoutMs: 1_000,
   });
 
@@ -415,7 +416,7 @@ test("list() pre-hydrate: a labeled survivor is NOT destroyed before hydrate has
   // the reaper but hydrate runs later); otherwise a restart reaps its own survivor.
   await driver.provision({
     workerId: "survivor-0",
-    labels: ["lorenz.pool=worker-pool"],
+    labels: [POOL_OWNED_LABEL],
     timeoutMs: 1_000,
   });
 
@@ -430,6 +431,89 @@ test("list() pre-hydrate: a labeled survivor is NOT destroyed before hydrate has
   const remaining = await driver.list();
   assert.equal(remaining.length, 1);
   assert.equal(remaining[0]?.workerId, "survivor-0");
+});
+
+test("list() reconcile skips a labeled unknown whose provision is still in flight", async () => {
+  const { clock } = controllableClock(0);
+  const driver = new FakeWorkerDriver({ clock });
+  // The worker already exists at the driver (its provision started) but has not
+  // landed in inventory yet - the mid-provision window. The pending-provision
+  // shield must keep the destroy-unknown branch away from it; once the shield
+  // drops without the worker landing in inventory, it is a genuine leaked orphan.
+  await driver.provision({
+    workerId: "worker-0",
+    labels: [POOL_OWNED_LABEL],
+    timeoutMs: 1_000,
+  });
+
+  const settings = poolSettings({ min: 0 });
+  const { internals } = makeInternals(settings, [], { driver });
+  internals.pendingProvisionIds = () => new Set(["worker-0"]);
+
+  await runReaperTick(internals);
+  // Shielded: the mid-provision worker survives the reconcile.
+  assert.equal((await driver.list()).length, 1);
+
+  internals.pendingProvisionIds = () => new Set();
+  await runReaperTick(internals);
+  // Shield dropped and still unknown: now a genuine leaked orphan, reaped.
+  assert.equal((await driver.list()).length, 0);
+});
+
+test("grow survives reaper ticks that fire during a slow provision (real pool)", async () => {
+  const { clock } = controllableClock(0);
+  // A driver modeling a slow cold boot: the fake registers the labeled worker
+  // (visible to list()) and THEN the wrapper parks until the gate releases -
+  // exactly the window in which the destroy-unknown reconcile used to reap the
+  // pool's own in-flight worker and fail the acquire.
+  const fake = new FakeWorkerDriver({ clock });
+  const destroyedAtDriver: string[] = [];
+  const gate: { release: (() => void) | null } = { release: null };
+  const slowDriver: WorkerDriver = {
+    kind: fake.kind,
+    capabilities: fake.capabilities,
+    provision: async (req) => {
+      const descriptor = await fake.provision(req);
+      await new Promise<void>((resolve) => {
+        gate.release = resolve;
+      });
+      return descriptor;
+    },
+    probe: (worker, opts) => fake.probe(worker, opts),
+    destroy: async (worker, opts) => {
+      destroyedAtDriver.push(worker.workerId);
+      await fake.destroy(worker, opts);
+    },
+    list: () => fake.list(),
+  };
+  drivers = new WorkerDriverRegistry();
+  drivers.register({ kind: "fake", create: () => slowDriver });
+
+  const pool = createWorkerPool(
+    poolSettings({ min: 0, warm: 0, max: 1, reapIntervalMs: 10 }),
+    { clock, drivers, logEvent: () => undefined },
+  );
+  // Complete hydrate so the destroy-unknown branch is live (post-restart steady state).
+  await pool.hydrate();
+
+  const acquirePromise = pool.acquire({
+    issueId: "issue-1",
+    slotIndex: 0,
+    labels: [],
+    timeoutMs: 5_000,
+  });
+  // Wait until the provision is in flight (worker visible at the backend)...
+  await vi.waitFor(() => assert.ok(gate.release !== null));
+  // ...then let several real reaper ticks run against the mid-provision worker.
+  // Asserting an absence (no destroy), so settle across ticks rather than poll.
+  await settle(60);
+  assert.deepEqual(destroyedAtDriver, []);
+
+  gate.release?.();
+  const leased = await acquirePromise;
+  assert.equal(leased.status, "leased");
+  if (leased.status === "leased") await leased.lease.release("healthy");
+  await pool.drain({ deadlineMs: 100 });
 });
 
 test("list() authoritative: unlabeled instance is NEVER destroyed", async () => {

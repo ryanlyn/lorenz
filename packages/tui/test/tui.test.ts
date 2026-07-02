@@ -78,30 +78,66 @@ test("terminal dashboard preserves tracker states in the running stage column", 
   assert.notMatch(rendered, /codex\s+running\s+4242/);
 });
 
-test("terminal dashboard renders pending for claimed runs before agent events arrive", () => {
+test("terminal dashboard renders zero tool calls for claimed runs before agent events arrive", () => {
   const rendered = formatDashboard(
     dashboardSnapshot({
       now: "2026-05-05T02:00:00.000Z",
       running: [
-        runningFixture(
-          "MT-PEND",
-          "codex",
-          "running",
-          null,
-          0,
-          0,
-          0,
-          null,
-          "2026-05-05T02:00:00.000Z",
-          null,
-        ),
+        {
+          ...runningFixture(
+            "MT-PEND",
+            "codex",
+            "running",
+            null,
+            0,
+            0,
+            0,
+            null,
+            "2026-05-05T02:00:00.000Z",
+            null,
+          ),
+          sessionId: null,
+        },
       ],
     }),
     { now: "2026-05-05T02:00:00.000Z", runtimeSeconds: 0, throughputTps: 0 },
   );
 
-  assert.match(rendered, /MT-PEND[\s\S]*pending/);
+  assert.match(rendered, /TOKENS\s+TOOLS\s+SESSION/);
+  assert.match(rendered, /MT-PEND[\s\S]*\b0\s+n\/a/);
+  assert.notMatch(rendered, /\bEVENT\b/);
   assert.notMatch(rendered, /\bundefined\b/);
+});
+
+test("terminal dashboard renders running tool-call totals between tokens and session", () => {
+  const rendered = formatDashboard(
+    dashboardSnapshot({
+      now: "2026-05-05T02:00:00.000Z",
+      running: [
+        {
+          ...runningFixture(
+            "MT-TOOLS",
+            "codex",
+            "In Progress",
+            "4242",
+            30,
+            2,
+            1_234,
+            "turn completed should not render",
+            "2026-05-05T02:00:00.000Z",
+            "turn_completed",
+          ),
+          toolCallCount: 12,
+        },
+      ],
+    }),
+    { now: "2026-05-05T02:00:00.000Z", runtimeSeconds: 30, throughputTps: 41 },
+  );
+
+  assert.match(rendered, /TOKENS\s+TOOLS\s+SESSION/);
+  assert.match(rendered, /1,234\s+12\s+thre\.\.\.567890/);
+  assert.notMatch(rendered, /\bEVENT\b/);
+  assert.notMatch(rendered, /turn completed should not render/);
 });
 
 test("terminal dashboard sanitizes snapshot-derived strings before rendering", () => {
@@ -148,11 +184,10 @@ test("terminal dashboard sanitizes snapshot-derived strings before rendering", (
   assert.notMatch(rendered, /\n│ (agent-kind|fake-\w+|spoofed)/);
 });
 
-test("Runtime field tracks live elapsed time of active runs as the clock advances", () => {
-  // A single run started at 00:00:00 with no completion-accumulated seconds.
+test("Runtime field uses the live snapshot aggregate without adding active run age again", () => {
   const snapshot = dashboardSnapshot({
     now: "2026-05-05T00:00:30.000Z",
-    usageTotals: { inputTokens: 0, outputTokens: 0, totalTokens: 0, secondsRunning: 0 },
+    usageTotals: { inputTokens: 0, outputTokens: 0, totalTokens: 0, secondsRunning: 30 },
     running: [
       runningFixture(
         "MT-1",
@@ -168,21 +203,86 @@ test("Runtime field tracks live elapsed time of active runs as the clock advance
     ],
   });
 
-  // No new snapshot is emitted between frames; only the wall clock advances.
   const runtimeLine = (now: string): string => {
     const frame = formatDashboard(snapshot, { now });
     return (frame.split("\n").find((line) => line.includes("Runtime:")) ?? "").trim();
   };
 
   assert.equal(runtimeLine("2026-05-05T00:00:30.000Z"), "│ Runtime: 0m 30s");
-  assert.equal(runtimeLine("2026-05-05T00:01:30.000Z"), "│ Runtime: 1m 30s");
+  assert.equal(runtimeLine("2026-05-05T00:01:30.000Z"), "│ Runtime: 0m 30s");
 });
 
-test("Runtime field adds active-run elapsed on top of completion-accumulated seconds", () => {
+test("Runtime field advances active aggregate from snapshot receipt time", () => {
   const snapshot = dashboardSnapshot({
     now: "2026-05-05T00:00:30.000Z",
-    // 120s already banked from completed runs.
+    usageTotals: { inputTokens: 0, outputTokens: 0, totalTokens: 0, secondsRunning: 30 },
+    running: [
+      runningFixture(
+        "MT-1",
+        "codex",
+        "running",
+        "4242",
+        30,
+        1,
+        0,
+        "working",
+        "2026-05-05T00:00:30.000Z",
+      ),
+    ],
+  });
+
+  const frame = formatDashboard(snapshot, {
+    now: "2026-05-05T00:01:30.000Z",
+    snapshotReceivedAt: "2026-05-05T00:00:30.000Z",
+  });
+
+  assert.match(frame, /Runtime: 1m 30s/);
+});
+
+test("Runtime field uses wall-clock app runtime when the snapshot supplies it", () => {
+  const snapshot = dashboardSnapshot({
+    now: "2026-05-05T00:01:00.000Z",
+    appStartedAt: "2026-05-05T00:00:00.000Z",
     usageTotals: { inputTokens: 0, outputTokens: 0, totalTokens: 0, secondsRunning: 120 },
+    running: [
+      runningFixture(
+        "MT-1",
+        "codex",
+        "running",
+        "4242",
+        60,
+        1,
+        0,
+        "working",
+        "2026-05-05T00:01:00.000Z",
+      ),
+      runningFixture(
+        "MT-2",
+        "codex",
+        "running",
+        "5252",
+        60,
+        1,
+        0,
+        "working",
+        "2026-05-05T00:01:00.000Z",
+      ),
+    ],
+  });
+
+  const frame = formatDashboard(snapshot, {
+    now: "2026-05-05T00:01:10.000Z",
+    snapshotReceivedAt: "2026-05-05T00:01:00.000Z",
+  });
+
+  assert.match(frame, /Runtime: 1m 10s/);
+  assert.notMatch(frame, /Runtime: 2m 20s/);
+});
+
+test("Runtime field includes completed and active seconds supplied by the snapshot", () => {
+  const snapshot = dashboardSnapshot({
+    now: "2026-05-05T00:00:30.000Z",
+    usageTotals: { inputTokens: 0, outputTokens: 0, totalTokens: 0, secondsRunning: 150 },
     running: [
       runningFixture(
         "MT-1",
@@ -198,7 +298,6 @@ test("Runtime field adds active-run elapsed on top of completion-accumulated sec
     ],
   });
   const frame = formatDashboard(snapshot, { now: "2026-05-05T00:00:30.000Z" });
-  // 120 banked + 30 live = 150s = 2m 30s.
   assert.match(frame, /Runtime: 2m 30s/);
 });
 
@@ -458,6 +557,7 @@ function dashboardScenarios(): Array<{
 function dashboardSnapshot(input: Partial<RuntimeSnapshot> & { now: string }): RuntimeSnapshot {
   return {
     appStatus: "running",
+    ...(input.appStartedAt ? { appStartedAt: input.appStartedAt } : {}),
     workflowPath: "/tmp/WORKFLOW.md",
     poll: {
       status: "idle",

@@ -2,7 +2,7 @@ import { mkdirSync, rmSync } from "node:fs";
 import { appendFile } from "node:fs/promises";
 import path from "node:path";
 
-import type { AgentUpdate, TraceEvent } from "@lorenz/domain";
+import { redactDiagnosticValue, type AgentUpdate, type TraceEvent } from "@lorenz/domain";
 
 export class TraceEmitter {
   private readonly traceDir: string;
@@ -17,7 +17,7 @@ export class TraceEmitter {
 
   emit(issueId: string, issueIdentifier: string, update: AgentUpdate): void {
     const { dirPath, filePath } = this.issueTracePaths(issueId);
-    const payload: TraceEvent = {
+    const payload: TraceEvent = redactDiagnosticValue({
       type: update.type,
       issueId,
       issueIdentifier,
@@ -27,7 +27,7 @@ export class TraceEmitter {
       workspacePath: update.workspacePath ?? null,
       sessionId: update.sessionId ?? null,
       executorPid: update.executorPid ?? null,
-    } as TraceEvent;
+    } as TraceEvent);
     const line = JSON.stringify(payload);
 
     this.enqueue(

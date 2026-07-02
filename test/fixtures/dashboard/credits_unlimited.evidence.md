@@ -8,9 +8,9 @@
 │ Next refresh: n/a
 ├─ Running
 │
-│   ID       SLOT  AGENT    STAGE          PID      AGE / TURN   TOKENS     SESSION        EVENT
+│   ID       SLOT  AGENT    STAGE          PID      AGE / TURN   TOKENS     TOOLS    SESSION
 │   ───────────────────────────────────────────────────────────────────────────────────────────────────────────────
-│ ● MT-777   0     codex    running        4242     1m 15s / 7        3,200 thre...567890  thread token usage up...
+│ ● MT-777   0     codex    running        4242     1m 15s / 7        3,200      0 thre...567890
 │
 ├─ Backoff queue
 │

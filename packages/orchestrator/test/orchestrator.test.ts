@@ -1925,6 +1925,36 @@ test("orchestrator does not double-count ACP usage updates when turn completion 
   });
 });
 
+test("orchestrator counts ACP tool-call starts without counting tool updates", () => {
+  const orchestrator = new Orchestrator(parseConfig());
+  const issue = normalizeIssue({
+    id: "tool-count",
+    identifier: "MT-TOOLS",
+    title: "Tool count",
+    state: { name: "Todo", type: "unstarted" },
+  });
+
+  assert.ok(claimEntry(orchestrator, issue));
+  orchestrator.applyUpdate(issue.id, 0, {
+    type: "session_notification",
+    message: { sessionId: "session-tools", update: { sessionUpdate: "tool_call" } },
+  });
+  orchestrator.applyUpdate(issue.id, 0, {
+    type: "session_notification",
+    message: { sessionId: "session-tools", update: { sessionUpdate: "tool_call_update" } },
+  });
+  orchestrator.applyUpdate(issue.id, 0, {
+    type: "session_notification",
+    message: { sessionId: "session-tools", update: { sessionUpdate: "agent_message_chunk" } },
+  });
+  orchestrator.applyUpdate(issue.id, 0, {
+    type: "session_notification",
+    message: { sessionId: "session-tools", update: { sessionUpdate: "tool_call" } },
+  });
+
+  assert.equal(orchestrator.snapshot().running[0]?.toolCallCount, 2);
+});
+
 test("orchestrator assigns SSH worker hosts by least loaded capacity", () => {
   const settings = parseConfig({
     worker: { ssh_hosts: ["worker-a:2200", "worker-b:2200"], max_concurrent_agents_per_host: 1 },

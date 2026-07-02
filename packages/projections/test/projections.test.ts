@@ -86,6 +86,7 @@ test("ProjectionActor processes runtime snapshot into projection", () => {
   const actor = new ProjectionActor();
   const input = makeInput({
     appStatus: "running",
+    appStartedAt: "2026-01-01T00:00:00.000Z",
     workflowPath: "/home/user/workflow.md",
     poll: {
       status: "checking",
@@ -154,6 +155,7 @@ test("ProjectionActor processes runtime snapshot into projection", () => {
   const snap = actor.snapshot(input);
 
   assert.equal(snap.appStatus, "running");
+  assert.equal(snap.appStartedAt, "2026-01-01T00:00:00.000Z");
   assert.equal(snap.workflowPath, "/home/user/workflow.md");
   assert.equal(snap.poll.status, "checking");
   assert.equal(snap.poll.candidates, 5);

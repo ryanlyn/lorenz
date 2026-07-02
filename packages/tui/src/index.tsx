@@ -1,6 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
 import { Box, Text } from "ink";
-import { humanizeAgentMessage } from "@lorenz/humanize";
 import type { AgentUpdateType } from "@lorenz/domain";
 import type { RuntimeSnapshot } from "@lorenz/runtime-events";
 
@@ -31,14 +30,17 @@ export function RuntimeApp({
     initialThroughputState(),
   );
   const [now, setNow] = useState<number>(() => Date.now());
+  const [snapshotReceivedAt, setSnapshotReceivedAt] = useState<number>(() => Date.now());
   const snapshotRef = useRef(snapshot);
   snapshotRef.current = snapshot;
 
   useEffect(
     () =>
       runtime.subscribe((nextSnapshot) => {
+        const receivedAt = Date.now();
         setSnapshot(nextSnapshot);
-        setThroughputState((state) => updateThroughputState(state, nextSnapshot, Date.now()));
+        setSnapshotReceivedAt(receivedAt);
+        setThroughputState((state) => updateThroughputState(state, nextSnapshot, receivedAt));
       }),
     [runtime],
   );
@@ -59,6 +61,7 @@ export function RuntimeApp({
       dashboardUrl={dashboardUrl}
       projectUrl={projectUrl}
       now={now}
+      snapshotReceivedAt={snapshotReceivedAt}
     />
   );
 }
@@ -69,12 +72,14 @@ export function RuntimeDashboard({
   dashboardUrl,
   projectUrl,
   now,
+  snapshotReceivedAt,
 }: {
   snapshot: RuntimeSnapshot;
   throughputTps?: number | undefined;
   dashboardUrl?: string | null | undefined;
   projectUrl?: string | undefined;
   now?: Date | string | number | undefined;
+  snapshotReceivedAt?: Date | string | number | undefined;
 }) {
   return (
     <Box flexDirection="column" marginTop={1}>
@@ -84,6 +89,7 @@ export function RuntimeDashboard({
           projectUrl,
           throughputTps,
           now,
+          snapshotReceivedAt,
           ansi: true,
         })}
       </Text>
@@ -112,6 +118,7 @@ export interface DashboardFormatOptions {
   now?: Date | string | number | undefined;
   projectUrl?: string | undefined;
   runtimeSeconds?: number | undefined;
+  snapshotReceivedAt?: Date | string | number | undefined;
   throughputTps?: number | undefined;
 }
 
@@ -122,7 +129,9 @@ export function formatDashboard(
   const ansi = options.ansi === true;
   const now = coerceDate(options.now) ?? new Date();
   const maxAgents = options.maxAgents ?? 10;
-  const runtimeSeconds = options.runtimeSeconds ?? liveRuntimeSeconds(snapshot, now);
+  const snapshotReceivedAt = coerceDate(options.snapshotReceivedAt) ?? undefined;
+  const runtimeSeconds =
+    options.runtimeSeconds ?? liveRuntimeSeconds(snapshot, now, snapshotReceivedAt);
   const throughputTps =
     options.throughputTps ?? throughput(snapshot.usageTotals.totalTokens, runtimeSeconds);
   const lines = [
@@ -171,7 +180,7 @@ export function formatDashboard(
 
 function runningHeader(ansi: boolean): string {
   const header =
-    "ID       SLOT  AGENT    STAGE          PID      AGE / TURN   TOKENS     SESSION        EVENT";
+    "ID       SLOT  AGENT    STAGE          PID      AGE / TURN   TOKENS     TOOLS    SESSION";
   return `│   ${s("90", ansi ? header.padEnd(111) : header, ansi)}`;
 }
 
@@ -186,11 +195,11 @@ function formatRunningRow(
 ): string {
   const stage = runningStage(run);
   const ageTurn = `${formatMinutesSeconds(secondsBetween(now, run.startedAt))} / ${run.turnCount}`;
-  const event = terminalEvent(run);
   const session = shortSession(terminalCell(run.sessionId ?? "n/a"));
   const color = rowColor(run.lastEvent);
   const ageWidth = ansi ? 12 : 13;
   const tokenWidth = ansi ? 10 : 9;
+  const toolWidth = ansi ? 7 : 6;
   return [
     "│",
     s(color, "●", ansi),
@@ -201,8 +210,8 @@ function formatRunningRow(
     styledCell("33", String(run.executorPid ?? "n/a"), ansi, { padEnd: 8 }),
     s("35", ageTurn.padEnd(ageWidth), ansi),
     s("33", formatInteger(run.usageTotals.totalTokens).padStart(tokenWidth), ansi),
-    s("36", session.padEnd(14), ansi),
-    s(color, ansi ? event.padEnd(24) : event, ansi),
+    s("32", formatInteger(run.toolCallCount ?? 0).padStart(toolWidth), ansi),
+    s("36", session, ansi),
   ].join(" ");
 }
 
@@ -252,22 +261,6 @@ function rowColor(lastEvent: AgentUpdateType | null | undefined): string {
     default:
       return "34";
   }
-}
-
-function terminalEvent(run: RuntimeSnapshot["running"][number]): string {
-  if (
-    (run.lastEvent === null || run.lastEvent === undefined) &&
-    (run.lastMessage === null || run.lastMessage === undefined)
-  )
-    return "pending";
-  return terminalCell(
-    humanizeAgentMessage({
-      agent_kind: run.agentKind,
-      event: run.lastEvent,
-      message: run.lastMessage,
-    }),
-    { max: 24 },
-  );
 }
 
 function formatTerminalRateLimits(value: unknown, ansi: boolean): string {
@@ -326,12 +319,18 @@ function formatMinutesSeconds(seconds: number): string {
   return `${Math.floor(whole / 60)}m ${whole % 60}s`;
 }
 
-function liveRuntimeSeconds(snapshot: RuntimeSnapshot, now: Date): number {
-  let seconds = snapshot.usageTotals.secondsRunning;
-  for (const run of snapshot.running) {
-    seconds += Math.max(0, secondsBetween(now, run.startedAt));
+function liveRuntimeSeconds(
+  snapshot: RuntimeSnapshot,
+  now: Date,
+  snapshotReceivedAt: Date | undefined,
+): number {
+  const appStartedAt = coerceDate(snapshot.appStartedAt);
+  if (appStartedAt) return Math.max(0, secondsBetween(now, appStartedAt));
+  if (!snapshotReceivedAt || snapshot.running.length === 0) {
+    return snapshot.usageTotals.secondsRunning;
   }
-  return seconds;
+  const elapsedSinceSnapshot = Math.max(0, secondsBetween(now, snapshotReceivedAt));
+  return snapshot.usageTotals.secondsRunning + elapsedSinceSnapshot;
 }
 
 function throughput(totalTokens: number, runtimeSeconds: number): number {

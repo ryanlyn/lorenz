@@ -1,14 +1,22 @@
-import ReactMarkdown from "react-markdown";
+import ReactMarkdown, { type UrlTransform } from "react-markdown";
+
+import { SafeExternalLink, safeExternalHref } from "../../../shared/components/SafeExternalLink";
 
 interface MarkdownProps {
   children: string;
   className?: string;
 }
 
+const markdownUrlTransform: UrlTransform = (url, key, node) => {
+  if (key === "href" && node.tagName === "a") return url;
+  return safeExternalHref(url) ?? undefined;
+};
+
 export function Markdown({ children, className }: MarkdownProps) {
   return (
     <div className={className}>
       <ReactMarkdown
+        urlTransform={markdownUrlTransform}
         components={{
           p: ({ children }) => <p className="mb-2 last:mb-0">{children}</p>,
           h1: ({ children }) => <h1 className="mb-2 text-lg font-bold">{children}</h1>,
@@ -36,9 +44,9 @@ export function Markdown({ children, className }: MarkdownProps) {
           ),
           strong: ({ children }) => <strong className="font-semibold">{children}</strong>,
           a: ({ children, href }) => (
-            <a href={href} className="text-accent-blue underline" target="_blank" rel="noreferrer">
+            <SafeExternalLink href={href} className="text-accent-blue underline">
               {children}
-            </a>
+            </SafeExternalLink>
           ),
         }}
       >

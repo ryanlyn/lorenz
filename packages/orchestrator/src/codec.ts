@@ -141,6 +141,7 @@ function serializeRunningEntry(entry: RunningEntry): SerializedRunningEntry {
     workerHost: entry.workerHost,
     workspacePath: entry.workspacePath,
     turnCount: entry.turnCount,
+    toolCallCount: entry.toolCallCount ?? 0,
     usageTotals: { ...entry.usageTotals },
     lastReportedInputTokens: entry.lastReportedInputTokens,
     lastReportedOutputTokens: entry.lastReportedOutputTokens,
@@ -156,6 +157,7 @@ function hydrateRunningEntry(entry: SerializedRunningEntry): RunningEntry {
   return {
     ...entry,
     issue: cloneIssue(entry.issue),
+    toolCallCount: entry.toolCallCount ?? 0,
     usageTotals: { ...entry.usageTotals },
     startedAt: new Date(entry.startedAt),
     lastAgentTimestamp: entry.lastAgentTimestamp ? new Date(entry.lastAgentTimestamp) : null,

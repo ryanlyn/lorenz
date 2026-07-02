@@ -1,7 +1,6 @@
 import { test } from "vitest";
 import { assert } from "@lorenz/test-utils";
 
-import { flagEnvName } from "../src/env.js";
 import {
   defineFeatures,
   defineFlags,
@@ -72,11 +71,6 @@ test("flag.enum carries its allowed values for help and error text", () => {
   const def = flag.enum({ values: ["a", "b", "c"], default: "a", description: "Pick." });
   assert.deepEqual(def.values, ["a", "b", "c"]);
   assert.equal(def.kind, "enum");
-});
-
-test("env names encode dotted snake keys losslessly", () => {
-  assert.equal(flagEnvName("timeout_ms"), "LORENZ_FLAG_TIMEOUT_MS");
-  assert.equal(flagEnvName("pool.size"), "LORENZ_FLAG_POOL__SIZE");
 });
 
 test("presetValueEqual compares scalars by identity", () => {

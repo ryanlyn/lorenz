@@ -6,7 +6,7 @@ import { test } from "vitest";
 import { assert, tempDir, writeExecutable } from "@lorenz/test-utils";
 
 const repoRoot = path.resolve(import.meta.dirname, "..");
-const linearWorkflowFiles = ["WORKFLOW.md", "WORKFLOW_FULL_ACCESS.md"];
+const linearWorkflowFiles = ["WORKFLOW.md"];
 const workflowFiles = [...linearWorkflowFiles, "WORKFLOW.local.md"];
 
 test("packaged workflow files use TypeScript workspace bootstrap hooks", async () => {

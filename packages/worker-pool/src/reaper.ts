@@ -53,6 +53,16 @@ export interface ReaperInternals {
    * hydrate completes, after which normal reconcile behavior resumes.
    */
   hydrated: () => boolean;
+  /**
+   * Worker ids whose provision is currently in flight: the driver has been (or is
+   * being) asked to create them, but they have not yet landed in `inventory`
+   * (grow/provisionWarm insert only after provision + correlate + readiness probe
+   * all succeed - a multi-second window for a cold boot). During that window the
+   * worker already exists at the backend carrying the pool-owned label, so the
+   * destroy-unknown reconcile would otherwise reap it as a leaked orphan and the
+   * in-flight grow would then fail against the destroyed machine.
+   */
+  pendingProvisionIds: () => ReadonlySet<string>;
   /** Whether the spend budget allows provisioning one more worker right now. */
   hasGrowthBudget: () => boolean;
   /** Destroys a worker (driver.destroy + inventory/mutex removal). Idempotent. */
@@ -144,9 +154,15 @@ async function reconcileWithDriverList(internals: ReaperInternals): Promise<void
   // would destroy the pool's own survivors on restart. After hydrate the branch
   // resumes normal behavior (a labeled-unknown is then a genuine leaked orphan).
   const reapUnknowns = internals.hydrated();
+  const pendingProvisions = internals.pendingProvisionIds();
   for (const descriptor of listed) {
     if (internals.inventory.has(descriptor.workerId)) continue;
     if (!reapUnknowns) continue;
+    // A worker whose provision is still in flight legitimately exists at the
+    // driver before it lands in inventory; destroying it here would fail the
+    // in-flight grow. Only a labeled unknown with NO pending provision is a
+    // genuine leaked orphan.
+    if (pendingProvisions.has(descriptor.workerId)) continue;
     const owned = descriptor.labels.includes(internals.poolOwnedLabel);
     if (!owned) {
       // Not ours: NEVER destroy.
@@ -175,7 +191,10 @@ async function reconcileWithDriverList(internals: ReaperInternals): Promise<void
     if (listedById.has(record.workerId)) continue;
     if (record.state === "DESTROYED" || record.state === "DESTROYING") continue;
     // A worker still mid-provision may legitimately not appear in list() yet; only
-    // reconcile away records the pool already considers live/idle.
+    // reconcile away records the pool already considers live/idle. (The pool never
+    // actually inserts PROVISIONING/WARMING placeholder records today - mid-provision
+    // workers are tracked in `pendingProvisionIds` instead - but the guard keeps this
+    // branch correct if a placeholder strategy is ever adopted.)
     if (record.state === "PROVISIONING" || record.state === "WARMING") continue;
     // A worker created on a now-detached driver (it carries the `originDriver` a
     // swapDriver stamped) is NOT expected in the LIVE driver's list() - it lives

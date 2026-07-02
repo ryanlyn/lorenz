@@ -113,8 +113,10 @@ export function feature<const Preset extends Record<string, unknown>>(config: {
   return config;
 }
 
-// Keys are lower_snake_case dotted segments only, which keeps the env-var transform lossless. The
-// rule is enforced at module load so a stray camelCase key fails fast in CI, not at daemon start.
+// Keys are lower_snake_case dotted segments only, for a single consistent key vocabulary across the
+// manifest, config file, and CLI tokens. The rule is enforced at module load so a stray camelCase
+// key fails fast in CI, not at daemon start. (Env var names are declared separately and explicitly
+// via each entry's `envName`; they are not derived from the key.)
 const SNAKE_KEY = /^[a-z0-9]+(?:_[a-z0-9]+)*(?:\.[a-z0-9]+(?:_[a-z0-9]+)*)*$/;
 
 function assertSnakeKeys(keys: readonly string[], what: string): void {

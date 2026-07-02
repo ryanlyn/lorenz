@@ -16,8 +16,10 @@ import type {
 } from "@lorenz/domain";
 import {
   errorMessage,
+  isDiagnosticSecretKey,
   isRecord as isPlainRecord,
   normalizeHttpBindHost,
+  registerDiagnosticSecret,
   withDerivedMaxInFlight,
 } from "@lorenz/domain";
 import {
@@ -312,7 +314,14 @@ function parseTracker(
   // rejected with the full list of known kinds by validateDispatchConfig.
   const provider = registry.get(kind);
 
-  const apiKey = resolveConfiguredSecret(trackerRecord.apiKey, env, provider?.envFallbacks?.apiKey);
+  const apiKey = resolveConfiguredSecret(
+    trackerRecord.apiKey,
+    env,
+    provider?.envFallbacks?.apiKey,
+    {
+      register: true,
+    },
+  );
   const assignee = resolveConfiguredSecret(
     trackerRecord.assignee,
     env,
@@ -329,7 +338,7 @@ function parseTracker(
     ? provider.parseOptions(aliased, {
         env,
         resolveSecret: (value, fallbackEnvVar) =>
-          resolveConfiguredSecret(value, env, fallbackEnvVar),
+          resolveConfiguredSecret(value, env, fallbackEnvVar, { register: true }),
       })
     : aliased;
 
@@ -541,10 +550,11 @@ function parseWorkerPool(
 
 /**
  * The implicit dispatch pool produced when no `worker_pool` and no `worker.kind` are configured:
- * - empty `sshHosts`  -> an enabled `local` pool, slotsPerMachine=1, min=0/warm=0/max=1 so nothing
- *   provisions eagerly and the single local worker is minted on first acquire. The local driver
- *   yields an empty `workerHost`, so the per-run endpoint manager mints no tunnel and acp keeps its
- *   own in-process MCP endpoint.
+ * - empty `sshHosts`  -> an enabled `local` pool, slotsPerMachine=1, min=0/warm=0 and
+ *   max=`max_concurrent_agents_per_host ?? agent.max_concurrent_agents` so local concurrency tracks
+ *   the agent concurrency knob. Nothing provisions eagerly; each single-tenant local worker is minted
+ *   on first acquire, up to `max`. The local driver yields an empty `workerHost`, so the per-run
+ *   endpoint manager mints no tunnel and acp keeps its own in-process MCP endpoint.
  * - non-empty `sshHosts` -> an enabled `static-ssh` pool whose driverOptions carry the configured
  *   hosts (the `ssh_hosts` spelling the driver's `readSshHosts` expects). `max` is the host count
  *   and slotsPerMachine is the per-host cap (`max_concurrent_agents_per_host ??
@@ -585,7 +595,11 @@ function defaultDispatchWorkerPool(
     enabled: true,
     driver: "local",
     min: 0,
-    max: 1,
+    // Local concurrency tracks the agent concurrency knob: up to `perHostConcurrency`
+    // (`max_concurrent_agents_per_host ?? agent.max_concurrent_agents`) single-tenant local workers
+    // run in parallel. slotsPerMachine stays 1, so each run is its own isolation unit (no
+    // co-residence, no per-run claim gateway) rather than packing N runs onto one worker.
+    max: Math.max(1, perHostConcurrency),
     warm: 0,
     slotsPerMachine: 1,
     ttlMs: 3_600_000,
@@ -1045,12 +1059,18 @@ function resolveToolOptionReferences(
     resolved[pack] = Object.fromEntries(
       Object.entries(structuredClone(options)).flatMap(([key, value]) => {
         if (typeof value !== "string") return [[key, value]];
-        const secret = resolveConfiguredSecret(value, env);
+        const secret = resolveConfiguredSecret(value, env, undefined, {
+          register: isSecretOptionKey(key),
+        });
         return secret === undefined ? [] : [[key, secret]];
       }),
     );
   }
   return resolved;
+}
+
+function isSecretOptionKey(key: string): boolean {
+  return isDiagnosticSecretKey(key);
 }
 
 function cloneSettings(settings: Settings): Settings {
@@ -1155,36 +1175,104 @@ function resolveConfiguredSecret(
   value: string | undefined,
   env: NodeJS.ProcessEnv,
   fallbackEnvName?: string,
+  options: { register?: boolean | undefined } = {},
 ): string | undefined {
   const fallback = fallbackEnvName === undefined ? undefined : nonEmptyString(env[fallbackEnvName]);
+  const shouldRegister =
+    options.register === true ||
+    (value !== undefined && value.startsWith("op://")) ||
+    (fallback !== undefined && fallback.startsWith("op://"));
+  let secret: string | undefined;
   if (value === undefined) {
-    return resolveOnePasswordRef(fallback, env);
+    secret = resolveOnePasswordRef(fallback, env);
+  } else {
+    const resolved = resolveEnv(value, env);
+    const candidate = nonEmptyString(resolved) ?? fallback;
+    secret = resolveOnePasswordRef(candidate, env);
   }
-  const resolved = resolveEnv(value, env);
-  const secret = nonEmptyString(resolved) ?? fallback;
-  return resolveOnePasswordRef(secret, env);
+  if (shouldRegister) registerDiagnosticSecret(secret);
+  return secret;
 }
+
+const DEFAULT_SECRET_RESOLUTION_TIMEOUT_MS = 30_000;
+const SECRET_RESOLUTION_TIMEOUT_ENV = "LORENZ_SECRET_RESOLUTION_TIMEOUT_MS";
+const SECRET_PROVIDER_ENV_KEYS = new Set([
+  "HOME",
+  "LOGNAME",
+  "PATH",
+  "SHELL",
+  "TMPDIR",
+  "USER",
+  "XDG_CACHE_HOME",
+  "XDG_CONFIG_HOME",
+  "XDG_DATA_HOME",
+  "XDG_STATE_HOME",
+]);
 
 function resolveOnePasswordRef(
   value: string | undefined,
   env: NodeJS.ProcessEnv,
 ): string | undefined {
   if (value === undefined || !value.startsWith("op://")) return value;
-  const mergedEnv = { ...process.env, ...env };
+  const providerEnv = secretProviderEnv(env);
+  const timeout = secretResolutionTimeoutMs(env);
   try {
-    execaSync("op", ["--version"], { env: mergedEnv });
-  } catch {
+    const result = execaSync("op", ["read", value], {
+      env: providerEnv,
+      extendEnv: false,
+      timeout,
+    });
+    return result.stdout.trim();
+  } catch (error) {
+    if (isTimeoutError(error)) {
+      // eslint-disable-next-line preserve-caught-error -- Secret-boundary rethrows must not retain provider error objects.
+      throw new Error(
+        `Timed out resolving 1Password reference after ${timeout}ms; check 1Password CLI sign-in, network access, and vault permissions.`,
+      );
+    }
+    if (isMissingExecutableError(error)) {
+      // eslint-disable-next-line preserve-caught-error -- Secret-boundary rethrows must not retain provider error objects.
+      throw new Error(
+        "1Password CLI (op) is required to resolve op:// references but was not found. " +
+          "Install it from https://developer.1password.com/docs/cli/get-started - it cannot be managed by mise.",
+      );
+    }
+    // eslint-disable-next-line preserve-caught-error -- Secret-boundary rethrows must not retain provider error objects.
     throw new Error(
-      "1Password CLI (op) is required to resolve op:// references but was not found. " +
-        "Install it from https://developer.1password.com/docs/cli/get-started - it cannot be managed by mise.",
+      "Failed to resolve 1Password reference; check the redacted op:// reference, vault access, and 1Password sign-in.",
     );
   }
-  try {
-    const result = execaSync("op", ["read", value], { env: mergedEnv });
-    return result.stdout.trim();
-  } catch {
-    throw new Error(`Failed to resolve 1Password reference: ${value}`);
+}
+
+function secretProviderEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const out: NodeJS.ProcessEnv = {};
+  for (const source of [process.env, env]) {
+    for (const [key, value] of Object.entries(source)) {
+      if (value === undefined || !isSecretProviderEnvKey(key)) continue;
+      out[key] = value;
+    }
   }
+  return out;
+}
+
+function isSecretProviderEnvKey(key: string): boolean {
+  return SECRET_PROVIDER_ENV_KEYS.has(key) || key.startsWith("OP_");
+}
+
+function secretResolutionTimeoutMs(env: NodeJS.ProcessEnv): number {
+  const raw = env[SECRET_RESOLUTION_TIMEOUT_ENV] ?? process.env[SECRET_RESOLUTION_TIMEOUT_ENV];
+  const parsed = raw === undefined ? NaN : Number(raw);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : DEFAULT_SECRET_RESOLUTION_TIMEOUT_MS;
+}
+
+function isTimeoutError(error: unknown): boolean {
+  if (!isPlainRecord(error)) return false;
+  return error.timedOut === true || error.code === "ETIMEDOUT";
+}
+
+function isMissingExecutableError(error: unknown): boolean {
+  if (!isPlainRecord(error)) return false;
+  return error.code === "ENOENT";
 }
 
 function expandPathVariables(value: string, env: NodeJS.ProcessEnv): string {

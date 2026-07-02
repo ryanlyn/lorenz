@@ -14,11 +14,11 @@ beforeAll(() => {
 
 test("CLI accepts workflow path and TS runtime flags", () => {
   assert.deepEqual(
-    parseCliArgs(["--once", "--dry-run", "--no-tui", "--port", "4100", "WORKFLOW_FULL_ACCESS.md"]),
+    parseCliArgs(["--once", "--dry-run", "--no-tui", "--port", "4100", "WORKFLOW.md"]),
     {
       status: "ok",
       options: {
-        workflowPath: "WORKFLOW_FULL_ACCESS.md",
+        workflowPath: "WORKFLOW.md",
         once: true,
         dryRun: true,
         tui: false,

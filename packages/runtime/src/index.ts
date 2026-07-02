@@ -10,10 +10,13 @@ import { workflowFileChanged, workflowStampsEqual } from "@lorenz/workflow";
 import {
   durationMs,
   errorMessage,
+  redactDiagnosticText,
+  redactDiagnosticValue,
   systemClock,
   withDerivedMaxInFlight,
   type ClockPort,
   type TimerHandle,
+  type UsageTotals,
 } from "@lorenz/domain";
 import type {
   RuntimeAppStatus,
@@ -265,6 +268,7 @@ export class LorenzRuntime {
   private readonly orchestrator: Orchestrator;
   private readonly runner: RuntimeRunner;
   private readonly clock: ClockPort;
+  private readonly appStartedAt: string;
   private readonly validateDispatch: (settings: WorkflowDefinition["settings"]) => void;
   private readonly listeners = new Set<(snapshot: RuntimeSnapshot) => void>();
   private readonly retryScheduler: RetryScheduler;
@@ -307,6 +311,7 @@ export class LorenzRuntime {
     this.client =
       input.client ?? input.clientFactory?.(input.workflow.settings) ?? missingRuntimeClient();
     this.clock = input.clock ?? systemClock;
+    this.appStartedAt = this.clock.now().toISOString();
     // Prefer the pre-built coordinator; otherwise wrap a bare workerPool in a
     // null-endpoint passthrough so `acquireRunSlot`/`governs`/`canAcquire`/
     // `reconcile`/`drain` drive a uniform surface (default slotsPerMachine=1 +
@@ -356,8 +361,10 @@ export class LorenzRuntime {
 
   snapshot(): RuntimeSnapshot {
     const orchestration = this.orchestrator.snapshot();
+    const now = this.clock.now();
     return this.projection.snapshot({
       appStatus: this.appStatus,
+      appStartedAt: this.appStartedAt,
       workflowPath: this.workflow.path,
       poll: {
         status: this.pollStatus,
@@ -378,7 +385,7 @@ export class LorenzRuntime {
       reserving: orchestration.reserving.map((entry) => ({ ...entry })),
       retrying: orchestration.retrying.map(runtimeRetryEntry),
       blocked: orchestration.blocked.map((entry) => ({ ...entry })),
-      usageTotals: orchestration.usageTotals,
+      usageTotals: liveSnapshotUsageTotals(orchestration.usageTotals, orchestration.running, now),
       rateLimits: orchestration.rateLimits,
       claimStore: orchestration.claimStore,
       logFile: this.workflow.settings.logging.logFile,
@@ -605,7 +612,7 @@ export class LorenzRuntime {
     } catch (error) {
       this.pollStatus = "error";
       this.appStatus = "error";
-      this.lastError = errorMessage(error);
+      this.lastError = redactDiagnosticText(errorMessage(error));
       this.addEvent("poll_error", this.lastError);
       throw error;
     } finally {
@@ -720,7 +727,7 @@ export class LorenzRuntime {
     const message = `claim_owner_heartbeat_failed ${errorMessage(error)}`;
     this.stopped = true;
     this.appStatus = "error";
-    this.lastError = message;
+    this.lastError = redactDiagnosticText(message);
     for (const handle of [...this.activeRuns.values()]) {
       this.markStoppedClaimSettlementPending(handle);
       handle.finishExternally(null, { abandonClaimOnSettlement: true });
@@ -912,7 +919,7 @@ export class LorenzRuntime {
     const message = `claim_cancel_failed ${errorMessage(cancelError)}`;
     if (this.appStatus !== "error") {
       this.appStatus = "error";
-      this.lastError = message;
+      this.lastError = redactDiagnosticText(message);
     }
     this.addEvent("poll_error", message);
   }
@@ -1109,7 +1116,7 @@ export class LorenzRuntime {
       const message = `claim_abandon_failed ${errorMessage(error)}`;
       if (this.appStatus !== "error") {
         this.appStatus = "error";
-        this.lastError = message;
+        this.lastError = redactDiagnosticText(message);
       }
       this.addEvent("poll_error", message);
     } finally {
@@ -1445,7 +1452,7 @@ export class LorenzRuntime {
   }
 
   private recordHistory(entry: RuntimeRunHistoryEntry): void {
-    this.projection.recordRunHistory(entry);
+    this.projection.recordRunHistory(redactDiagnosticValue(entry));
   }
 
   private recordRetryTimerError(error: unknown): void {
@@ -1474,17 +1481,18 @@ export class LorenzRuntime {
   private markRuntimeError(message: string): void {
     if (this.appStatus !== "error") {
       this.appStatus = "error";
-      this.lastError = message;
+      this.lastError = redactDiagnosticText(message);
     }
   }
 
   private addEvent(type: RuntimeEventType, message: string): void {
-    const event = { type, message, at: this.clock.now().toISOString() };
+    const safeMessage = redactDiagnosticText(message);
+    const event = { type, message: safeMessage, at: this.clock.now().toISOString() };
     this.projection.recordEvent(event);
     void this.appendLogEvent(this.workflow.settings.logging.logFile, {
       at: event.at,
       event: type,
-      message,
+      message: safeMessage,
     }).catch((err) => {
       process.stderr.write(`appendLogEvent failed: ${err}\n`);
     });
@@ -1538,7 +1546,7 @@ export class LorenzRuntime {
     const coalesced = this.pollStatus === "checking";
     if (!coalesced) {
       this.pollOnce().catch((error) => {
-        this.lastError = errorMessage(error);
+        this.lastError = redactDiagnosticText(errorMessage(error));
         this.addEvent("refresh_error", this.lastError);
       });
     }
@@ -1592,9 +1600,9 @@ function buildRunHistoryEntry(input: BuildRunHistoryEntryInput): RuntimeRunHisto
     startedAt: input.startedAt,
     endedAt: input.endedAt,
     durationMs: input.durationMs,
-    ...(input.error !== undefined ? { error: input.error } : {}),
+    ...(input.error !== undefined ? { error: redactDiagnosticText(input.error) } : {}),
     lastEvent: entry?.lastAgentEvent ?? input.fallbackLastEvent,
-    lastMessage: entry?.lastAgentMessage,
+    lastMessage: redactDiagnosticValue(entry?.lastAgentMessage),
     lastEventAt: entry?.lastAgentTimestamp?.toISOString() ?? null,
     retryAttempt: entry?.retryAttempt,
   };
@@ -1617,11 +1625,27 @@ function runtimeRunningEntry(entry: RunningEntry, runId: string | undefined): Ru
     turnCount: entry.turnCount,
     startedAt: entry.startedAt.toISOString(),
     lastEvent: entry.lastAgentEvent,
-    lastMessage: entry.lastAgentMessage,
+    lastMessage: redactDiagnosticValue(entry.lastAgentMessage),
     lastEventAt: entry.lastAgentTimestamp?.toISOString() ?? null,
+    toolCallCount: entry.toolCallCount ?? 0,
     workspacePath: entry.workspacePath,
     usageTotals: { ...entry.usageTotals },
     retryAttempt: entry.retryAttempt,
+  };
+}
+
+function liveSnapshotUsageTotals(
+  usageTotals: UsageTotals,
+  running: RunningEntry[],
+  now: Date,
+): UsageTotals {
+  const activeSeconds = running.reduce(
+    (total, entry) => total + Math.max(0, (now.getTime() - entry.startedAt.getTime()) / 1000),
+    0,
+  );
+  return {
+    ...usageTotals,
+    secondsRunning: usageTotals.secondsRunning + activeSeconds,
   };
 }
 
@@ -1644,7 +1668,7 @@ function runtimeRetryEntry(entry: {
     attempt: entry.attempt,
     dueAtIso: entry.dueAtIso,
     monotonicDeadlineMs: entry.monotonicDeadlineMs,
-    ...(entry.error !== undefined ? { error: entry.error } : {}),
+    ...(entry.error !== undefined ? { error: redactDiagnosticText(entry.error) } : {}),
     ...(entry.slotIndex !== undefined ? { slotIndex: entry.slotIndex } : {}),
     ...(entry.workerHost !== undefined ? { workerHost: entry.workerHost } : {}),
     ...(entry.workspacePath !== undefined ? { workspacePath: entry.workspacePath } : {}),

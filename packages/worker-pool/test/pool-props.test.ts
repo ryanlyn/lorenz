@@ -514,6 +514,7 @@ test("pool — reaper never destroys a LEASED worker (only flags it markedForDes
           // yanks it (the only path that could destroy a LEASED worker).
           isRunActive: () => true,
           hydrated: () => true,
+          pendingProvisionIds: () => new Set<string>(),
           hasGrowthBudget: () => true,
           destroyWorker: async (record: WorkerRecord) => {
             destroyed.push(record.workerId);

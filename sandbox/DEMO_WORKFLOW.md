@@ -1,17 +1,20 @@
 ---
 tracker:
   kind: linear
-  project_slug: $LINEAR_PROJECT_SLUG
-  active_states:
-    - Todo
-    - In Progress
-  terminal_states:
-    - Done
-    - Closed
-    - Cancelled
-    - Canceled
-  dispatch:
-    accept_unrouted: true
+trackers:
+  linear:
+    provider: linear
+    project_slug: $LINEAR_PROJECT_SLUG
+    active_states:
+      - Todo
+      - In Progress
+    terminal_states:
+      - Done
+      - Closed
+      - Cancelled
+      - Canceled
+    dispatch:
+      accept_unrouted: true
 
 polling:
   interval_ms: 5000

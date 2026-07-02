@@ -596,6 +596,136 @@ test("runtime once claims an eligible issue, applies updates, and records comple
   assert.equal(snapshot.usageTotals.totalTokens, 10);
 });
 
+test("runtime snapshot adds active elapsed seconds without mutating completion totals", async () => {
+  const root = await tempDir("lorenz-runtime-active-runtime");
+  const issue = issueFixture("issue-active-runtime", "MT-ACTIVE-RUNTIME");
+  const doneIssue: Issue = { ...issue, state: "Done", stateType: "completed" };
+  const workflow = workflowFixture(root);
+  workflow.settings.logging.logFile = path.join(root, "lorenz.log");
+  const clock = manualClock();
+  const orchestrator = new Orchestrator(workflow.settings, clock);
+  const limits = { model: "codex", primary: { used: 1, limit: 10, resetSeconds: 20 } };
+  let finishRun!: () => void;
+  const runCanFinish = new Promise<void>((resolve) => {
+    finishRun = resolve;
+  });
+  const runtime = new LorenzRuntime(
+    runtimeOptions({
+      workflow,
+      clock,
+      orchestrator,
+      client: {
+        fetchCandidateIssues: async () => [issue],
+        fetchIssuesByIds: async () => [issue],
+      },
+      runner: async ({ onUpdate }) => {
+        onUpdate?.({
+          type: "rate_limit",
+          message: "rate limited by codex",
+          rateLimits: limits,
+        });
+        await runCanFinish;
+        return {
+          workspace: "/tmp/lorenz/MT-ACTIVE-RUNTIME",
+          turnCount: 1,
+          updates: [],
+          agentKind: "codex",
+          finalIssue: doneIssue,
+        };
+      },
+    }),
+  );
+
+  try {
+    await runtime.pollOnce();
+    await waitFor(() => runtime.snapshot().running.length === 1, 1_000);
+    await waitFor(() => runtime.snapshot().rateLimits === limits, 1_000);
+
+    clock.advance(30_000);
+    const firstActiveSnapshot = runtime.snapshot();
+    const repeatedActiveSnapshot = runtime.snapshot();
+    assert.equal(firstActiveSnapshot.appStartedAt, "2026-01-01T00:00:00.000Z");
+    assert.equal(firstActiveSnapshot.usageTotals.secondsRunning, 30);
+    assert.equal(repeatedActiveSnapshot.usageTotals.secondsRunning, 30);
+    assert.equal(orchestrator.snapshot().usageTotals.secondsRunning, 0);
+    assert.deepEqual(repeatedActiveSnapshot.rateLimits, limits);
+
+    finishRun();
+    await waitFor(() => runtime.snapshot().running.length === 0, 1_000);
+
+    const finishedSnapshot = runtime.snapshot();
+    assert.equal(finishedSnapshot.usageTotals.secondsRunning, 30);
+    assert.equal(finishedSnapshot.runHistory[0]?.durationMs, 30_000);
+
+    clock.advance(30_000);
+    const laterSnapshot = runtime.snapshot();
+    assert.equal(laterSnapshot.usageTotals.secondsRunning, 30);
+    assert.equal(laterSnapshot.runHistory[0]?.durationMs, 30_000);
+  } finally {
+    runtime.stop();
+  }
+});
+
+test("runtime snapshot keeps active elapsed seconds across workflow reloads", async () => {
+  const root = await tempDir("lorenz-runtime-active-runtime-reload");
+  const issue = issueFixture("issue-active-runtime-reload", "MT-ACTIVE-RUNTIME-RELOAD");
+  const doneIssue: Issue = { ...issue, state: "Done", stateType: "completed" };
+  const reloadedPath = path.join(root, "WORKFLOW-after.md");
+  const firstWorkflow = { ...workflowFixture(root), path: path.join(root, "WORKFLOW-before.md") };
+  const secondWorkflow = { ...workflowFixture(root), path: reloadedPath };
+  firstWorkflow.settings.logging.logFile = path.join(root, "lorenz.log");
+  secondWorkflow.settings.logging.logFile = path.join(root, "lorenz.log");
+  const clock = manualClock();
+  const orchestrator = new Orchestrator(firstWorkflow.settings, clock);
+  let reloads = 0;
+  let finishRun!: () => void;
+  const runCanFinish = new Promise<void>((resolve) => {
+    finishRun = resolve;
+  });
+  const runtime = new LorenzRuntime(
+    runtimeOptions({
+      workflow: firstWorkflow,
+      clock,
+      orchestrator,
+      reloadWorkflow: async () => {
+        reloads += 1;
+        return reloads === 1 ? firstWorkflow : secondWorkflow;
+      },
+      client: {
+        fetchCandidateIssues: async () => [issue],
+        fetchIssuesByIds: async () => [issue],
+      },
+      runner: async () => {
+        await runCanFinish;
+        return {
+          workspace: "/tmp/lorenz/MT-ACTIVE-RUNTIME-RELOAD",
+          turnCount: 1,
+          updates: [],
+          agentKind: "codex",
+          finalIssue: doneIssue,
+        };
+      },
+    }),
+  );
+
+  try {
+    await runtime.pollOnce();
+    await waitFor(() => runtime.snapshot().running.length === 1, 1_000);
+
+    clock.advance(12_000);
+    await runtime.pollOnce({ dryRun: true });
+
+    const reloadedSnapshot = runtime.snapshot();
+    assert.equal(reloadedSnapshot.workflowPath, reloadedPath);
+    assert.equal(reloadedSnapshot.usageTotals.secondsRunning, 12);
+
+    finishRun();
+    await waitFor(() => runtime.snapshot().running.length === 0, 1_000);
+  } finally {
+    runtime.stop();
+  }
+});
+
 test("runtime does not record completion when claim ownership is lost before finish", async () => {
   const issue = issueFixture("issue-lost-before-finish", "MT-LOST-BEFORE-FINISH");
   const doneIssue: Issue = { ...issue, state: "Done", stateType: "completed" };
@@ -969,6 +1099,70 @@ test("runtime reloads workflow settings on each poll with last-known-good fallba
   assert.ok(
     runtime.snapshot().recentEvents.some((event) => event.type === "workflow_reload_failed"),
   );
+});
+
+test("runtime redacts reload failures in recent events and logs while polling last-good config", async () => {
+  const secret = "resolved-env-secret-runtime-sentinel";
+  const ref = "op://vault/item/runtime-field";
+  const issue = issueFixture("issue-secret-reload-failure", "MT-SECRET-RELOAD");
+  const dir = await tempDir("lorenz-runtime-secret-reload");
+  const workflowFile = path.join(dir, "WORKFLOW.md");
+  const workflowText = [
+    "---",
+    "tracker:",
+    "  kind: linear",
+    "  api_key: $LINEAR_API_KEY",
+    "  project_slug: mono",
+    "  active_states:",
+    "    - Todo",
+    "    - In Progress",
+    "  terminal_states:",
+    "    - Done",
+    "polling:",
+    "  interval_ms: 5",
+    "---",
+    "Issue {{ issue.identifier }}",
+    "",
+  ].join("\n");
+  await fs.writeFile(workflowFile, workflowText);
+  const workflow = await loadWorkflow(workflowFile, { LINEAR_API_KEY: secret }, { cwd: dir });
+  await fs.writeFile(workflowFile, `${workflowText}\nchanged\n`);
+
+  const logEvents: Record<string, unknown>[] = [];
+  const runtime = new LorenzRuntime(
+    runtimeOptions({
+      workflow,
+      reloadWorkflow: async () => {
+        throw new Error(`reload failed ${secret} ${ref} Bearer ${secret}`);
+      },
+      appendLogEvent: async (_logFile, event) => {
+        logEvents.push(event);
+      },
+      client: {
+        fetchCandidateIssues: async () => [issue],
+        fetchIssuesByIds: async () => [issue],
+      },
+      runner: async () => {
+        throw new Error("dry-run should not call runner");
+      },
+    }),
+  );
+
+  try {
+    await runtime.pollOnce({ dryRun: true });
+
+    const snapshot = runtime.snapshot();
+    assert.equal(snapshot.poll.candidates, 1);
+    assert.equal(snapshot.poll.eligible, 1);
+    assert.ok(snapshot.recentEvents.some((event) => event.type === "workflow_reload_failed"));
+    assert.ok(snapshot.recentEvents.some((event) => event.type === "dry_run"));
+    const diagnostics = JSON.stringify({ recentEvents: snapshot.recentEvents, logEvents });
+    assert.notMatch(diagnostics, new RegExp(secret));
+    assert.notMatch(diagnostics, /op:\/\/vault\/item\/runtime-field/);
+    assert.notMatch(diagnostics, /Bearer resolved-env-secret-runtime-sentinel/);
+  } finally {
+    runtime.stop();
+  }
 });
 
 test("runtime skips reload side effects when workflow content is unchanged", async () => {

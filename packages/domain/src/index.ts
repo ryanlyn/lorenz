@@ -105,6 +105,94 @@ export function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+const DIAGNOSTIC_REDACTION = "[REDACTED]";
+const MIN_REGISTERED_SECRET_LENGTH = 3;
+const OP_REFERENCE_PATTERN = /op:\/\/[^\s"'`),\]}]+/g;
+const BEARER_AUTH_PATTERN = /\bBearer\s+[A-Za-z0-9._~+/=%-]+/gi;
+const BASIC_AUTH_PATTERN = /\bBasic\s+[A-Za-z0-9._~+/=%-]+/gi;
+const URL_AUTH_PATTERN = /([A-Za-z][A-Za-z0-9+.-]*:\/\/)([^@\s/?#]+)@/g;
+const SECRET_ASSIGNMENT_PATTERN =
+  /((?:["']?\b(?:api[_-]?key|apiKey|authorization|auth[_-]?token|access[_-]?token|refresh[_-]?token|password|secret|token)\b["']?)\s*[:=]\s*)(["']?)([^"'\s,}\]]+)/gi;
+const DIAGNOSTIC_SECRET_KEY_PATTERN =
+  /(?:api[_-]?key|apiKey|authorization|auth[_-]?token|access[_-]?token|refresh[_-]?token|password|secret|token)/i;
+
+const registeredDiagnosticSecrets = new Set<string>();
+let sortedDiagnosticSecrets: string[] | null = null;
+
+export function isDiagnosticSecretKey(key: string): boolean {
+  return DIAGNOSTIC_SECRET_KEY_PATTERN.test(key);
+}
+
+export function registerDiagnosticSecret(value: string | null | undefined): void {
+  const secret = value?.trim();
+  if (!secret || secret.length < MIN_REGISTERED_SECRET_LENGTH) return;
+  if (secret === DIAGNOSTIC_REDACTION || secret.startsWith("op://")) return;
+  if (registeredDiagnosticSecrets.has(secret)) return;
+  registeredDiagnosticSecrets.add(secret);
+  sortedDiagnosticSecrets = null;
+}
+
+export function redactDiagnosticText(value: string): string {
+  let redacted = value;
+  for (const secret of registeredSecretsByLength()) {
+    redacted = redacted.split(secret).join(DIAGNOSTIC_REDACTION);
+  }
+  return redacted
+    .replace(BEARER_AUTH_PATTERN, `Bearer ${DIAGNOSTIC_REDACTION}`)
+    .replace(BASIC_AUTH_PATTERN, `Basic ${DIAGNOSTIC_REDACTION}`)
+    .replace(URL_AUTH_PATTERN, `$1${DIAGNOSTIC_REDACTION}@`)
+    // The value group stops before the closing quote, so that quote survives in
+    // the output and must not be re-emitted here.
+    .replace(SECRET_ASSIGNMENT_PATTERN, `$1$2${DIAGNOSTIC_REDACTION}`)
+    .replace(OP_REFERENCE_PATTERN, DIAGNOSTIC_REDACTION);
+}
+
+export function redactDiagnosticValue<T>(value: T): T {
+  return redactDiagnosticUnknown(value, new WeakMap()) as T;
+}
+
+function registeredSecretsByLength(): string[] {
+  sortedDiagnosticSecrets ??= [...registeredDiagnosticSecrets].sort(
+    (left, right) => right.length - left.length,
+  );
+  return sortedDiagnosticSecrets;
+}
+
+// Maps each visited original to its redacted clone so repeated references (and
+// cycles) resolve to the clone; returning the original here would leak it unredacted.
+function redactDiagnosticUnknown(value: unknown, seen: WeakMap<object, unknown>): unknown {
+  if (typeof value === "string") return redactDiagnosticText(value);
+  if (typeof value !== "object" || value === null) return value;
+  if (seen.has(value)) return seen.get(value);
+  if (Array.isArray(value)) {
+    const clone: unknown[] = [];
+    seen.set(value, clone);
+    for (const item of value) clone.push(redactDiagnosticUnknown(item, seen));
+    return clone;
+  }
+  if (!isPlainDiagnosticRecord(value)) return value;
+  const clone: Record<string, unknown> = {};
+  seen.set(value, clone);
+  for (const [key, item] of Object.entries(value)) {
+    // Define an own data property rather than assigning: JSON-parsed payloads can
+    // carry an own "__proto__" key, and plain assignment would hit the
+    // Object.prototype.__proto__ setter (dropping the key and mutating the
+    // clone's prototype) instead of copying it.
+    Object.defineProperty(clone, key, {
+      value: redactDiagnosticUnknown(item, seen),
+      writable: true,
+      enumerable: true,
+      configurable: true,
+    });
+  }
+  return clone;
+}
+
+function isPlainDiagnosticRecord(value: object): value is Record<string, unknown> {
+  const proto: unknown = Object.getPrototypeOf(value);
+  return proto === Object.prototype || proto === null;
+}
+
 export function isOneOf<const Values extends readonly string[]>(
   value: string,
   values: Values,
@@ -771,6 +859,8 @@ export interface RunningEntry {
   lastAgentEvent?: AgentUpdateType | null | undefined;
   lastAgentMessage?: unknown;
   lastAgentTimestamp?: Date | null | undefined;
+  /** Monotonic count of tool-call start notifications seen during this run. */
+  toolCallCount?: number | undefined;
   /** Monotonic per-run totals, kept in sync as usage updates arrive. */
   usageTotals: UsageTotals;
   /** Highwater mark of input tokens already folded into the orchestrator-wide totals; used to compute deltas. */
