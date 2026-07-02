@@ -1,7 +1,6 @@
 ```text
- LORENZ  ▶ 1 running  ↻ 4 retrying · 15 tps · tok 20,200 · up 45m 0s
- gpt-5 · primary ░░░░░░░░░░ 0% resets 1m 35s · secondary 0/60 resets 45s · credits none · in 18,000 / out 2,200
- poll n/a
+ LORENZ  ▶ 1 running  ↻ 4 retrying                                                                                15 tps · up 45m 0s
+ issues ██████████████████████ · 1 active · 4 waiting                                       tok 20,200 · gpt-5 0% ↺1m 35s · poll n/a
 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
  #   LANE  ID        TITLE                      STAGE         AGENT  HOST          AGE/TURN  TOKENS LAST ACTIVITY                   
 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────

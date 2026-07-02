@@ -36,9 +36,12 @@ export function RuntimeApp({
   maxAgents?: number | undefined;
 }) {
   const runSamplesRef = useRef<Map<string, TokenSample[]>>(new Map());
+  const globalSamplesRef = useRef<TokenSample[]>([]);
   const [snapshot, setSnapshot] = useState<RuntimeSnapshot>(() => {
     const initial = runtime.snapshot();
-    recordRunSamples(runSamplesRef.current, initial, Date.now());
+    const startedAt = Date.now();
+    recordRunSamples(runSamplesRef.current, initial, startedAt);
+    globalSamplesRef.current = recordGlobalSample(globalSamplesRef.current, initial, startedAt);
     return initial;
   });
   const [throughputState, setThroughputState] = useState<ThroughputState>(() =>
@@ -63,6 +66,11 @@ export function RuntimeApp({
         setSnapshotReceivedAt(receivedAt);
         setThroughputState((state) => updateThroughputState(state, nextSnapshot, receivedAt));
         recordRunSamples(runSamplesRef.current, nextSnapshot, receivedAt);
+        globalSamplesRef.current = recordGlobalSample(
+          globalSamplesRef.current,
+          nextSnapshot,
+          receivedAt,
+        );
       }),
     [runtime],
   );
@@ -136,6 +144,7 @@ export function RuntimeApp({
     projectUrl,
     maxAgents,
     throughputTps: throughputState.currentTps,
+    throughputSparkline: tokenRateSparkline(globalSamplesRef.current, now),
     now,
     snapshotReceivedAt,
     columns: stdout?.columns,
@@ -156,7 +165,12 @@ export function RuntimeApp({
               ),
               runTps: runTokensPerSecond(runSamplesRef.current.get(runKey(selectedRun)) ?? [], now),
             })
-          : formatDashboard(snapshot, { ...shared, cursor: interactive ? cursor : undefined })}
+          : formatDashboard(snapshot, {
+              ...shared,
+              cursor: interactive ? cursor : undefined,
+              runSparkline: (run) =>
+                tokenRateSparkline(runSamplesRef.current.get(runKey(run)) ?? [], now),
+            })}
       </Text>
     </Box>
   );
@@ -221,6 +235,18 @@ const SPARKLINE_BUCKETS = 10;
 const SPARKLINE_BUCKET_MS = 6_000;
 const RUN_SAMPLE_WINDOW_MS = SPARKLINE_BUCKETS * SPARKLINE_BUCKET_MS + 30_000;
 const SPARKLINE_LEVELS = "▁▂▃▄▅▆▇█";
+
+/** Rolling fleet-wide token samples backing the header throughput sparkline. */
+function recordGlobalSample(
+  samples: TokenSample[],
+  snapshot: RuntimeSnapshot,
+  nowMs: number,
+): TokenSample[] {
+  return [
+    { timestampMs: nowMs, totalTokens: snapshot.usageTotals.totalTokens },
+    ...samples.filter((sample) => sample.timestampMs >= nowMs - RUN_SAMPLE_WINDOW_MS),
+  ];
+}
 
 /** Track per-run cumulative token samples so detail views can plot a rate histogram. */
 function recordRunSamples(
@@ -318,8 +344,12 @@ export interface DashboardFormatOptions {
   maxAgents?: number | undefined;
   now?: Date | string | number | undefined;
   projectUrl?: string | undefined;
+  /** Per-running-row token-rate histogram; the RATE column renders only when given. */
+  runSparkline?: ((run: RuntimeSnapshot["running"][number]) => string) | undefined;
   runtimeSeconds?: number | undefined;
   snapshotReceivedAt?: Date | string | number | undefined;
+  /** Rolling global token-rate histogram shown beside the tps figure. */
+  throughputSparkline?: string | undefined;
   throughputTps?: number | undefined;
 }
 
@@ -347,6 +377,7 @@ type ColumnKey =
   | "host"
   | "ageTurn"
   | "tokens"
+  | "spark"
   | "activity";
 
 interface ColumnSpec {
@@ -373,6 +404,7 @@ const COLUMN_SPECS: ColumnSpec[] = [
   { key: "host", label: "HOST", min: 8, max: 14, align: "left", priority: 50, flex: 1 },
   { key: "ageTurn", label: "AGE/TURN", min: 9, max: 11, align: "right", priority: 70, flex: 0 },
   { key: "tokens", label: "TOKENS", min: 7, max: 9, align: "right", priority: 65, flex: 0 },
+  { key: "spark", label: "RATE", min: 10, max: 10, align: "left", priority: 45, flex: 0 },
   {
     key: "activity",
     label: "LAST ACTIVITY",
@@ -397,13 +429,15 @@ interface TableLayout {
  * first). Whatever remains after every column hits its cap stays as negative
  * space instead of being crammed with more data.
  */
-function computeLayout(columns: number, runningCount: number): TableLayout {
+function computeLayout(columns: number, runningCount: number, includeSpark: boolean): TableLayout {
   const gap = columns >= WIDE_GAP_COLUMNS ? 2 : 1;
   const indexWidth = Math.max(1, String(Math.max(1, runningCount)).length);
   const prefixWidth = indexWidth + 4; // "▸ 12 ▶ " = cursor + index + marker cells
   const available = columns - prefixWidth;
 
-  const active = COLUMN_SPECS.map((spec) => ({ spec, width: spec.min }));
+  const active = COLUMN_SPECS.filter((spec) => includeSpark || spec.key !== "spark").map(
+    (spec) => ({ spec, width: spec.min }),
+  );
   const needed = () => active.reduce((sum, col) => sum + col.width, 0) + gap * (active.length - 1);
   while (needed() > available && active.some((col) => col.spec.priority !== Infinity)) {
     let lowest = 0;
@@ -493,8 +527,13 @@ export function formatDashboard(
 ): string {
   const context = boardContext(options);
   const { ansi, columns, now } = context;
-  const layout = computeLayout(columns, snapshot.running.length);
-  const lines: string[] = [...headerLines(snapshot, options, context)];
+  const layout = computeLayout(
+    columns,
+    snapshot.running.length,
+    options.runSparkline !== undefined,
+  );
+  const header = headerLines(snapshot, options, context);
+  const lines: string[] = [...header];
 
   const reserving = snapshot.reserving ?? [];
   const blockedList: unknown[] =
@@ -504,7 +543,15 @@ export function formatDashboard(
 
   const tableRows: BoardRow[] = [
     ...snapshot.running.map((run, index) => ({
-      line: formatRunningRow(run, index + 1, options.cursor === index, now, ansi, layout),
+      line: formatRunningRow(
+        run,
+        index + 1,
+        options.cursor === index,
+        now,
+        ansi,
+        layout,
+        options.runSparkline,
+      ),
       lane: "run" as const,
     })),
     ...reserving.map((entry) => ({
@@ -530,7 +577,7 @@ export function formatDashboard(
   let belowLine: string | null = null;
   if (options.rows !== undefined && tableRows.length > 0) {
     const usable = Math.max(MIN_ROWS, options.rows) - 2;
-    const chrome = 3 + 3 + 1 + 1 + (options.interactive === true ? 1 : 0);
+    const chrome = header.length + 3 + 1 + 1 + (options.interactive === true ? 1 : 0);
     const remaining = Math.max(MIN_EVENTS + 1, usable - chrome);
     tapeLimit = Math.min(eventsLimit, Math.max(MIN_EVENTS, remaining - tableRows.length));
     let budget = remaining - tapeLimit;
@@ -750,34 +797,170 @@ function headerLines(
       : null,
   ].filter((part): part is string => part !== null);
 
-  const limits = formatLimitsParts(snapshot.rateLimits, ansi);
-  return [
-    fitLine(
-      ` ${b("LORENZ", ansi)}  ${lanes.join("  ")}`,
-      [
-        s("36", `${formatInteger(throughputTps)} tps`, ansi),
-        `${s("90", "tok ", ansi)}${s("33", formatInteger(snapshot.usageTotals.totalTokens), ansi)}`,
-        `${s("90", "up ", ansi)}${s("35", formatMinutesSeconds(runtimeSeconds), ansi)}`,
-      ],
-      sep,
-      columns,
-    ),
-    fitLine(
-      ` ${limits.mandatory}`,
-      [
-        ...limits.optional,
-        `${s("90", "in ", ansi)}${s("33", formatInteger(snapshot.usageTotals.inputTokens), ansi)}${s("90", " / out ", ansi)}${s("33", formatInteger(snapshot.usageTotals.outputTokens), ansi)}`,
-      ],
-      sep,
-      columns,
-    ),
-    fitLine(
-      ` ${formatPollPart(snapshot, now, ansi)}`,
-      pollOptionalParts(snapshot, options, ansi),
-      sep,
-      columns,
-    ),
+  // Line 1: lanes on the left, live throughput on the right, negative space between.
+  const tpsFigure = s("36", `${formatInteger(throughputTps)} tps`, ansi);
+  const line1 = joinRight(
+    ` ${b("LORENZ", ansi)}  ${lanes.join("  ")}`,
+    [
+      options.throughputSparkline
+        ? `${s("32", options.throughputSparkline, ansi)} ${tpsFigure}`
+        : tpsFigure,
+      `${s("90", "up ", ansi)}${s("35", formatMinutesSeconds(runtimeSeconds), ansi)}`,
+    ],
+    sep,
+    columns,
+  );
+
+  // Line 2: the fleet-wide issue bar on the left, compact vitals on the right.
+  const status = issueStatusBar(snapshot, blocked, ansi, columns);
+  const rightParts = [
+    `${s("90", "tok ", ansi)}${s("33", formatInteger(snapshot.usageTotals.totalTokens), ansi)}`,
+    ...(compactLimits(snapshot.rateLimits, ansi) ?? []),
+    formatPollPart(snapshot, now, ansi),
   ];
+  const right2Budget = columns - visibleLength(status.mandatory) - 2;
+  const right2 = fitParts(rightParts, sep, right2Budget);
+  const line2 = joinRight(
+    fitLine(status.mandatory, status.legend, sep, columns - visibleLength(right2) - 2),
+    right2 === "" ? [] : [right2],
+    sep,
+    columns,
+  );
+
+  const lines = [line1, line2];
+  const urlParts: string[] = [];
+  if (options.projectUrl) {
+    urlParts.push(`${s("90", "project ", ansi)}${styledCell("36", options.projectUrl, ansi)}`);
+  }
+  if (options.dashboardUrl) {
+    urlParts.push(
+      `${s("90", "dash ", ansi)}${s("36", normalizeDashboardUrl(terminalCell(options.dashboardUrl)), ansi)}`,
+    );
+  }
+  const [firstUrl, ...restUrls] = urlParts;
+  if (firstUrl !== undefined) lines.push(fitLine(` ${firstUrl}`, restUrls, sep, columns));
+  return lines;
+}
+
+/** Greedily join parts with a separator while the budget allows. */
+function fitParts(parts: string[], sep: string, budget: number): string {
+  let joined = "";
+  for (const part of parts) {
+    const candidate = joined === "" ? part : `${joined}${sep}${part}`;
+    if (visibleLength(candidate) > budget) break;
+    joined = candidate;
+  }
+  return joined;
+}
+
+/** Left content, right content, and whatever viewport is left as negative space. */
+function joinRight(left: string, rightParts: string[], sep: string, columns: number): string {
+  const right = fitParts(rightParts, sep, columns - visibleLength(left) - 2);
+  if (right === "") return left;
+  const padding = columns - visibleLength(left) - visibleLength(right);
+  return `${left}${" ".repeat(Math.max(2, padding))}${right}`;
+}
+
+const STATUS_BAR_ACTIVE = { color: "1;92", char: "█" };
+
+/**
+ * One stacked bar over every issue the runtime can see: finished history
+ * (dimmed), live lanes (active runs bright, waiting orange), and the
+ * still-dispatchable backlog (hollow). Widths are proportional but every
+ * non-zero status keeps at least one cell.
+ */
+function issueStatusBar(
+  snapshot: RuntimeSnapshot,
+  blockedCount: number,
+  ansi: boolean,
+  columns: number,
+): { mandatory: string; legend: string[] } {
+  const history = snapshot.runHistory ?? [];
+  const done = history.filter((entry) => entry.outcome === "success").length;
+  const failed = history.length - done;
+  const active = snapshot.running.length;
+  const waiting = (snapshot.reserving?.length ?? 0) + snapshot.retrying.length + blockedCount;
+  // Eligible issues not yet claimed by a live lane are the dispatchable backlog.
+  const backlog = Math.max(0, snapshot.poll.eligible - blockedCount);
+  const segments = [
+    { count: done, color: "2;32", char: "█", label: `${done}✓`, labelColor: "32" },
+    { count: failed, color: "2;31", char: "█", label: `${failed}✗`, labelColor: "31" },
+    {
+      count: active,
+      ...STATUS_BAR_ACTIVE,
+      label: `${active} active`,
+      labelColor: "1;92",
+    },
+    {
+      count: waiting,
+      color: "38;5;208",
+      char: "█",
+      label: `${waiting} waiting`,
+      labelColor: "38;5;208",
+    },
+    { count: backlog, color: "90", char: "░", label: `${backlog} backlog`, labelColor: "90" },
+  ];
+  const total = segments.reduce((sum, segment) => sum + segment.count, 0);
+  if (total === 0) {
+    return {
+      mandatory: ` ${s("90", "issues", ansi)} ${s("90", "none tracked yet", ansi)}`,
+      legend: [],
+    };
+  }
+  const width = Math.max(10, Math.min(28, Math.floor(columns / 6)));
+  const widths = segments.map((segment) =>
+    segment.count === 0 ? 0 : Math.max(1, Math.round((segment.count / total) * width)),
+  );
+  // Nudge the largest segment until the bar is exactly `width` cells.
+  let drift = widths.reduce((sum, value) => sum + value, 0) - width;
+  while (drift !== 0) {
+    const index = widths.indexOf(Math.max(...widths));
+    const cell = widths[index] ?? 0;
+    if (drift > 0 && cell > 1) {
+      widths[index] = cell - 1;
+      drift -= 1;
+    } else if (drift < 0) {
+      widths[index] = cell + 1;
+      drift += 1;
+    } else {
+      break;
+    }
+  }
+  const bar = segments
+    .map((segment, index) => s(segment.color, segment.char.repeat(widths[index] ?? 0), ansi))
+    .join("");
+  const legend = segments
+    .filter((segment) => segment.count > 0)
+    .map((segment) => s(segment.labelColor, segment.label, ansi));
+  return { mandatory: ` ${s("90", "issues", ansi)} ${bar}`, legend };
+}
+
+/** Rate limits shrunk to "model NN% ↺reset": enough to see pressure, no gauge. */
+function compactLimits(value: unknown, ansi: boolean): string[] | null {
+  if (value === null || value === undefined) return null;
+  const model =
+    stringAt(value, ["model"]) ?? stringAt(value, ["model_slug"]) ?? stringAt(value, ["modelSlug"]);
+  const bucket = recordAt(value, ["primary"]);
+  const used = numberAt(bucket, ["used"]) ?? numberAt(bucket, ["remaining"]) ?? 0;
+  const limit = numberAt(bucket, ["limit"]) ?? numberAt(bucket, ["total"]) ?? 0;
+  const resetSeconds =
+    numberAt(bucket, ["resetSeconds"]) ??
+    numberAt(bucket, ["reset_seconds"]) ??
+    numberAt(bucket, ["resetsInSeconds"]) ??
+    0;
+  if (!model && limit <= 0) return null;
+  const modelCell = model ? terminalCell(model) : null;
+  const parts: string[] = [];
+  if (limit > 0) {
+    const percent = Math.min(100, Math.max(0, Math.round((used / limit) * 100)));
+    const color = percent >= 90 ? "31" : percent >= 75 ? "33" : "90";
+    parts.push(
+      `${s("90", modelCell ? `${modelCell} ` : "limits ", ansi)}${s(color, `${percent}%`, ansi)}${s("90", ` ↺${formatDuration(resetSeconds)}`, ansi)}`,
+    );
+  } else if (modelCell) {
+    parts.push(s("90", modelCell, ansi));
+  }
+  return parts.length === 0 ? null : parts;
 }
 
 function rule(columns: number, ansi: boolean): string {
@@ -791,6 +974,7 @@ function formatRunningRow(
   now: Date,
   ansi: boolean,
   layout: TableLayout,
+  runSparkline: DashboardFormatOptions["runSparkline"],
 ): string {
   const color = rowColor(run.lastEvent);
   const ageTurn = `${formatMinutesSeconds(secondsBetween(now, run.startedAt))}/${run.turnCount}`;
@@ -803,6 +987,7 @@ function formatRunningRow(
     host: { text: run.workerHost ?? "local", color: "90" },
     ageTurn: { text: ageTurn, color: "35" },
     tokens: { text: formatInteger(run.usageTotals.totalTokens), color: "33" },
+    ...(runSparkline ? { spark: { text: runSparkline(run), color: "32" } } : {}),
     activity: { text: humanizeAgentMessage(run.lastMessage ?? null), color: "36" },
   });
 }
@@ -924,92 +1109,12 @@ function rowColor(lastEvent: AgentUpdateType | null | undefined): string {
   }
 }
 
-function formatLimitsParts(
-  value: unknown,
-  ansi: boolean,
-): { mandatory: string; optional: string[] } {
-  if (value === null || value === undefined) {
-    return { mandatory: s("90", "rate limits unavailable", ansi), optional: [] };
-  }
-  const model =
-    stringAt(value, ["model"]) ?? stringAt(value, ["model_slug"]) ?? stringAt(value, ["modelSlug"]);
-  const primary = formatRateBucket(value, "primary", ansi, true);
-  const secondary = formatRateBucket(value, "secondary", ansi, false);
-  const credits = formatCredits(valueAt(value, ["credits"]));
-  if (!model && !primary && !secondary && !credits) {
-    return { mandatory: terminalCell(JSON.stringify(value), { max: 60 }), optional: [] };
-  }
-  return {
-    mandatory: styledCell("33", model ?? "unknown", ansi),
-    optional: [
-      primary,
-      secondary,
-      credits ? styledCell("32", `credits ${credits}`, ansi) : null,
-    ].filter((part): part is string => part !== null),
-  };
-}
-
-function formatRateBucket(
-  value: unknown,
-  key: string,
-  ansi: boolean,
-  gauge: boolean,
-): string | null {
-  const bucket = recordAt(value, [key]);
-  if (!bucket) return null;
-  const used = numberAt(bucket, ["used"]) ?? numberAt(bucket, ["remaining"]) ?? 0;
-  const limit = numberAt(bucket, ["limit"]) ?? numberAt(bucket, ["total"]) ?? 0;
-  const resetSeconds =
-    numberAt(bucket, ["resetSeconds"]) ??
-    numberAt(bucket, ["reset_seconds"]) ??
-    numberAt(bucket, ["resetsInSeconds"]) ??
-    0;
-  const resets = `resets ${formatDuration(resetSeconds)}`;
-  if (gauge && limit > 0) {
-    const percent = Math.min(100, Math.max(0, Math.round((used / limit) * 100)));
-    const filled = Math.round(percent / 10);
-    const color = percent >= 90 ? "31" : percent >= 75 ? "33" : "32";
-    const bar = `${s(color, "█".repeat(filled), ansi)}${s("90", "░".repeat(10 - filled), ansi)}`;
-    return `${s("90", `${key} `, ansi)}${bar} ${s(color, `${percent}%`, ansi)} ${s("90", resets, ansi)}`;
-  }
-  return s("36", `${key} ${formatInteger(used)}/${formatInteger(limit)} ${resets}`, ansi);
-}
-
 function formatPollPart(snapshot: RuntimeSnapshot, now: Date, ansi: boolean): string {
   if (snapshot.poll.nextPollAt) {
     const dueIn = formatDuration(secondsBetween(new Date(snapshot.poll.nextPollAt), now));
     return `${s("90", "poll in ", ansi)}${s("36", dueIn, ansi)}`;
   }
   return s("90", "poll n/a", ansi);
-}
-
-function pollOptionalParts(
-  snapshot: RuntimeSnapshot,
-  options: DashboardFormatOptions,
-  ansi: boolean,
-): string[] {
-  const parts: string[] = [];
-  if (snapshot.poll.candidates > 0) {
-    parts.push(
-      `${s("90", "eligible ", ansi)}${s("36", `${snapshot.poll.eligible}/${snapshot.poll.candidates}`, ansi)}`,
-    );
-  }
-  if (options.projectUrl) {
-    parts.push(`${s("90", "project ", ansi)}${styledCell("36", options.projectUrl, ansi)}`);
-  }
-  if (options.dashboardUrl) {
-    parts.push(
-      `${s("90", "dash ", ansi)}${s("36", normalizeDashboardUrl(terminalCell(options.dashboardUrl)), ansi)}`,
-    );
-  }
-  return parts;
-}
-
-function formatCredits(value: unknown): string | null {
-  if (value === null) return "none";
-  if (typeof value === "string" && value.trim() !== "") return value.trim();
-  if (typeof value === "number" && Number.isFinite(value)) return value.toFixed(2);
-  return null;
 }
 
 function normalizeDashboardUrl(url: string): string {

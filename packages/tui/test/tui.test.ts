@@ -195,6 +195,81 @@ test("running cap renders when provided and lane labels compress when narrow", (
   assert.match(narrow, /1 run\b/);
 });
 
+test("header shows a moving throughput sparkline and a fleet status bar", () => {
+  const now = "2026-05-05T02:00:00.000Z";
+  const snapshot = {
+    ...dashboardSnapshot({
+      now,
+      running: [runningFixture("MT-1", "codex", "running", "1", 10, 1, 5, "working", now)],
+      retrying: [retryFixture("MT-2", 1, 30, "boom", now)],
+    }),
+    poll: {
+      status: "idle" as const,
+      candidates: 9,
+      eligible: 6,
+      lastPollAt: now,
+      nextPollAt: null,
+      lastError: null,
+    },
+    runHistory: [
+      {
+        id: "r1",
+        issueId: "h1",
+        issueIdentifier: "MT-OLD",
+        slotIndex: 0,
+        agentKind: "codex",
+        outcome: "success" as const,
+        turnCount: 2,
+        startedAt: "2026-05-05T01:00:00.000Z",
+        endedAt: "2026-05-05T01:10:00.000Z",
+      },
+      {
+        id: "r2",
+        issueId: "h2",
+        issueIdentifier: "MT-BAD",
+        slotIndex: 0,
+        agentKind: "codex",
+        outcome: "failed" as const,
+        turnCount: 2,
+        startedAt: "2026-05-05T01:00:00.000Z",
+        endedAt: "2026-05-05T01:20:00.000Z",
+      },
+    ],
+  };
+  const rendered = formatDashboard(snapshot, {
+    now,
+    runtimeSeconds: 10,
+    throughputTps: 1_234,
+    throughputSparkline: "▁▂▃▅▇█▆▄▂▁",
+    runSparkline: () => "▂▃▅▇▆▅▃▂▁▁",
+    columns: 132,
+  });
+
+  // Line 1: the rolling throughput histogram sits beside the tps figure.
+  assert.match(rendered, /▁▂▃▅▇█▆▄▂▁ 1,234 tps/);
+  // Line 2: one stacked bar over history + live lanes + dispatchable backlog.
+  assert.match(rendered, /issues [█░]+/);
+  assert.match(rendered, /1✓/);
+  assert.match(rendered, /1✗/);
+  assert.match(rendered, /1 active/);
+  assert.match(rendered, /1 waiting/);
+  assert.match(rendered, /6 backlog/);
+  // No model-specific gauge; rate limits are absent in this snapshot.
+  assert.notMatch(rendered, /primary/);
+  // The RATE column renders the per-run histogram.
+  assert.match(rendered, /RATE/);
+  assert.match(rendered, /▂▃▅▇▆▅▃▂▁▁/);
+
+  // Without the sparkline callbacks the header and table stay chart-free.
+  const plain = formatDashboard(snapshot, {
+    now,
+    runtimeSeconds: 10,
+    throughputTps: 1,
+    columns: 132,
+  });
+  assert.notMatch(plain, /RATE/);
+});
+
 test("board event tape reads oldest to newest, newest at the bottom", () => {
   const rendered = formatDashboard(
     dashboardSnapshot({
@@ -218,7 +293,7 @@ test("RuntimeApp narrows into an agent card on digit keys and returns on escape"
   const { frames, stdin, unmount } = render(React.createElement(RuntimeApp, { runtime }));
   const lastFrame = () => stripAnsi(frames.findLast((candidate) => candidate.trim() !== "") ?? "");
   try {
-    await vi.waitFor(() => assert.match(lastFrame(), /LANE/));
+    await vi.waitFor(() => assert.match(lastFrame(), /LAST ACTIVITY/));
 
     stdin.write("1");
     await vi.waitFor(() => assert.match(lastFrame(), /session session-1/));
@@ -227,10 +302,10 @@ test("RuntimeApp narrows into an agent card on digit keys and returns on escape"
     assert.match(detail, /workspace \/tmp\/lorenz\/MT-1/);
     assert.match(detail, /rate [▁▂▃▄▅▆▇█]{10}/u);
     assert.match(detail, /events · MT-1/);
-    assert.notMatch(detail, /LANE/);
+    assert.notMatch(detail, /LAST ACTIVITY/);
 
     stdin.write("\u001B"); // escape key
-    await vi.waitFor(() => assert.match(lastFrame(), /LANE/));
+    await vi.waitFor(() => assert.match(lastFrame(), /LAST ACTIVITY/));
   } finally {
     unmount();
   }

@@ -13,6 +13,13 @@
 >   deltas, not the cumulative ramp), and the event tape filtered to that agent.
 >   `←/→` cycles agents, `esc` returns to the board, `q` quits.
 >
+> The header is two light lines: lanes on the left with a **moving 60s throughput
+> sparkline** + uptime right-aligned, then a **fleet status bar** — one stacked bar
+> over finished history (dimmed ✓/✗), active runs (bright), waiting lanes (orange),
+> and the dispatchable backlog (hollow) — with compact `model NN% ↺reset` limits
+> instead of a per-model gauge. Running rows carry a live per-run **RATE** histogram
+> column when width allows.
+>
 > The board is **responsive**: a priority-ordered column layout drops LANE, HOST,
 > AGENT, and STAGE as the viewport narrows (the row marker + color keep encoding
 > the lane) and grows TITLE/ACTIVITY plus the column gap when wide, leaving the

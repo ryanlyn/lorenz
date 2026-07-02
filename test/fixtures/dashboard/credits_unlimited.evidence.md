@@ -1,7 +1,6 @@
 ```text
- LORENZ  ▶ 1 running · 42 tps · tok 102 · up 1m 15s
- priority-tier · primary ██████████ 100% resets 1s · secondary 500/500 resets 1s · credits unlimited · in 90 / out 12
- poll n/a
+ LORENZ  ▶ 1 running                                                                                              42 tps · up 1m 15s
+ issues ██████████████████████ · 1 active                                                tok 102 · priority-tier 100% ↺1s · poll n/a
 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
  #   LANE  ID        TITLE                      STAGE         AGENT  HOST          AGE/TURN  TOKENS LAST ACTIVITY                   
 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────

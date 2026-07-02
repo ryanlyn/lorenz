@@ -75,13 +75,6 @@ const snapshot = {
   ],
 };
 
-const shared = {
-  ansi: true,
-  interactive: true,
-  maxAgents: 10,
-  dashboardUrl: "http://127.0.0.1:8771",
-  projectUrl: "https://linear.app/northwind/team/ENG",
-};
 
 // Fake a bursty token history for the inspected run so the histogram has shape.
 const detailRun = snapshot.running[1];
@@ -92,7 +85,35 @@ for (let i = 0; i <= 20; i++) {
   samples.push({ timestampMs: t, totalTokens: 120_000 + i * 800 + burst });
 }
 
+// Fleet-wide throughput history for the header sparkline, and per-run shapes
+// for the RATE column.
+const globalSamples = [];
+for (let i = 0; i <= 20; i++) {
+  const t = now - (20 - i) * 3_000;
+  const wave = Math.round(20_000 * (1 + Math.sin(i / 2.4)));
+  globalSamples.push({ timestampMs: t, totalTokens: 200_000 + i * 4_000 + wave });
+}
+const rowShapes = {
+  "ENG-2014": "▂▃▅▆█▆▅▃▂▂",
+  "ENG-2027": "▅▆██▆▅▃▂▁▁",
+  "ENG-2031": "▁▁▂▂▃▅▆▇█▇",
+};
+const runSparkline = (run) =>
+  rowShapes[run.issueIdentifier] ?? ["▂▃▂▄▃▅▄▆▅▇", "▄▂▅▃▆▄▇▅█▆", "▁▂▁▃▂▄▃▅▄▆"][run.slotIndex % 3];
+
 // A crowded fleet: dozens of running agents plus queues, on a bounded viewport.
+const shared = {
+  ansi: true,
+  interactive: true,
+  maxAgents: 10,
+  dashboardUrl: "http://127.0.0.1:8771",
+  projectUrl: "https://linear.app/northwind/team/ENG",
+  get throughputSparkline() {
+    return tokenRateSparkline(globalSamples, now);
+  },
+  runSparkline,
+};
+
 const crowd = {
   ...snapshot,
   running: Array.from({ length: 64 }, (_, i) => ({
