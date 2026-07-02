@@ -94,8 +94,8 @@ no lease is acquired.
 | ------------------------ | --------------------- | ------------------------------------------------------------------------------------------------------ |
 | `LORENZ_WORKFLOW`        | `packages/workflow`   | Default workflow path when `workflowPath` is omitted. Absolute used as-is, relative joined to cwd.     |
 | `LORENZ_WORKSPACE_ROOT`  | `packages/config`     | Overrides `workspace.root`.                                                                            |
-| `LORENZ_FLAG_<KEY>`      | `@lorenz/flags`       | Set a flag from the env, e.g. `LORENZ_FLAG_CLAIM_STORE__BACKEND=turso` (`.` becomes `__`, uppercased). |
-| `LORENZ_FEATURE_<NAME>`  | `@lorenz/flags`       | Enable a feature from the env, e.g. `LORENZ_FEATURE_DURABLE_CLAIMS=1`.                                 |
+| `LORENZ_FLAG_*`          | `@lorenz/flags`       | Set a flag whose manifest entry declares that env name, e.g. `LORENZ_FLAG_CLAIM_STORE__BACKEND=turso`. |
+| `LORENZ_FEATURE_*`       | `@lorenz/flags`       | Enable a feature whose manifest entry declares that env name, e.g. `LORENZ_FEATURE_DURABLE_CLAIMS=1`.  |
 | `LORENZ_SSH_CONFIG`      | `packages/ssh`        | Path passed to `ssh -F` for remote workers.                                                            |
 | `CLAUDE_CODE_EXECUTABLE` | ACP bridges, `doctor` | Override path to the `claude` CLI.                                                                     |
 | `CODEX_PATH`             | ACP bridges, `doctor` | Override path to the `codex` CLI.                                                                      |
