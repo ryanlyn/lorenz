@@ -174,7 +174,16 @@ function redactDiagnosticUnknown(value: unknown, seen: WeakMap<object, unknown>)
   const clone: Record<string, unknown> = {};
   seen.set(value, clone);
   for (const [key, item] of Object.entries(value)) {
-    clone[key] = redactDiagnosticUnknown(item, seen);
+    // Define an own data property rather than assigning: JSON-parsed payloads can
+    // carry an own "__proto__" key, and plain assignment would hit the
+    // Object.prototype.__proto__ setter (dropping the key and mutating the
+    // clone's prototype) instead of copying it.
+    Object.defineProperty(clone, key, {
+      value: redactDiagnosticUnknown(item, seen),
+      writable: true,
+      enumerable: true,
+      configurable: true,
+    });
   }
   return clone;
 }

@@ -38,3 +38,21 @@ test("redacted quoted JSON assignments still parse as JSON", () => {
   const redacted = redactDiagnosticText('{"api_key": "sk-live-json-roundtrip", "keep": "x"}');
   assert.deepEqual(JSON.parse(redacted), { api_key: "[REDACTED]", keep: "x" });
 });
+
+test("redactDiagnosticValue copies an own __proto__ key instead of mutating the clone's prototype", () => {
+  // JSON.parse produces "__proto__" as an ordinary own key; the clone must keep
+  // it as an own property, not route it through the Object.prototype setter.
+  const parsed = JSON.parse('{"__proto__": {"auth": "Bearer sk-live-proto-key"}, "keep": "x"}') as {
+    keep: string;
+  };
+
+  const redacted = redactDiagnosticValue(parsed);
+
+  assert.equal(Object.getPrototypeOf(redacted), Object.prototype);
+  assert.equal(redacted.keep, "x");
+  const proto = Object.getOwnPropertyDescriptor(redacted, "__proto__")?.value as
+    | { auth: string }
+    | undefined;
+  assert.equal(proto?.auth, "Bearer [REDACTED]");
+  assert.notMatch(JSON.stringify(redacted), /sk-live-proto-key/);
+});
