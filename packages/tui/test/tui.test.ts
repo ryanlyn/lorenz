@@ -27,7 +27,9 @@ test("Ink dashboard renders the flight board with an event tape at the bottom", 
   const frame = stripAnsi(lastFrame() ?? "");
 
   assert.match(frame, /LORENZ/);
-  assert.match(frame, /1\/10 running/);
+  assert.match(frame, /1 running/);
+  // The configured cap renders only when the caller provides it.
+  assert.notMatch(frame, /1\/10/);
   assert.match(frame, /tps/);
   assert.match(frame, /LANE/);
   assert.match(frame, /run\s+MT-1/);
@@ -36,6 +38,161 @@ test("Ink dashboard renders the flight board with an event tape at the bottom", 
   assert.match(frame, /turn_completed\s+MT-1 turn_completed/);
   // The tape sits below the table.
   assert.ok(frame.indexOf("LANE") < frame.indexOf("events"));
+});
+
+test("board adapts its columns to the viewport width", () => {
+  const snapshot = dashboardSnapshot({
+    now: "2026-05-05T02:00:00.000Z",
+    running: [
+      runningFixture(
+        "MT-WIDE",
+        "codex",
+        "In Progress",
+        "4242",
+        90,
+        3,
+        12_345,
+        "a fairly long humanized activity message that should truncate",
+        "2026-05-05T02:00:00.000Z",
+      ),
+    ],
+    retrying: [
+      retryFixture(
+        "MT-RTY",
+        2,
+        30,
+        "a long error string that also needs truncation to fit narrow viewports",
+        "2026-05-05T02:00:00.000Z",
+      ),
+    ],
+    recentEvents: [
+      {
+        type: "run_started",
+        message: "MT-WIDE started with a fairly verbose event message attached to it",
+        at: "2026-05-05T01:59:00.000Z",
+      },
+    ],
+  });
+  const opts = {
+    now: "2026-05-05T02:00:00.000Z",
+    runtimeSeconds: 90,
+    throughputTps: 100,
+    interactive: true,
+    projectUrl: "https://linear.app/northwind/team/ENG",
+    dashboardUrl: "http://127.0.0.1:8771",
+  };
+
+  // Invariant: no rendered line ever exceeds the viewport width.
+  for (const columns of [60, 72, 84, 100, 132, 180, 220]) {
+    const rendered = formatDashboard(snapshot, { ...opts, columns });
+    for (const line of rendered.split("\n")) {
+      assert.ok(line.length <= columns, `width ${columns} overflowed: "${line}" (${line.length})`);
+    }
+    const detail = formatAgentDetail(snapshot.running[0]!, snapshot, {
+      ...opts,
+      columns,
+      sparkline: "▁▁▂▃▅▇█▅▃▂",
+      runTps: 42,
+    });
+    for (const line of detail.split("\n")) {
+      assert.ok(
+        line.length <= columns,
+        `detail width ${columns} overflowed: "${line}" (${line.length})`,
+      );
+    }
+  }
+
+  // Narrow boards drop low-priority columns but keep the essentials.
+  const narrow = formatDashboard(snapshot, { ...opts, columns: 72 });
+  assert.notMatch(narrow, /LANE/);
+  assert.notMatch(narrow, /HOST/);
+  assert.match(narrow, /ID\s+TITLE/);
+  assert.match(narrow, /LAST ACTIVITY/);
+  assert.match(narrow, /MT-WIDE/);
+
+  // Wide boards keep every column and let flexible ones breathe.
+  const wide = formatDashboard(snapshot, { ...opts, columns: 180 });
+  assert.match(wide, /LANE\s+ID\s+TITLE\s+STAGE\s+AGENT\s+HOST/);
+  const extraWide = formatDashboard(snapshot, { ...opts, columns: 220 });
+  assert.match(extraWide, /a fairly long humanized activity message that should truncate/);
+});
+
+test("board windows the table to the viewport height with a cursor-following view", () => {
+  const now = "2026-05-05T02:00:00.000Z";
+  const running = Array.from({ length: 100 }, (_, i) =>
+    runningFixture(
+      `MT-${String(i + 1).padStart(3, "0")}`,
+      "codex",
+      "running",
+      "4242",
+      60,
+      1,
+      10,
+      "working",
+      now,
+    ),
+  );
+  const snapshot = dashboardSnapshot({
+    now,
+    running,
+    blocked: [
+      { issueId: "b1", identifier: "MT-BLK", state: "Todo", reason: "global_concurrency_cap" },
+    ],
+    recentEvents: [
+      { type: "run_started", message: "MT-001 started", at: "2026-05-05T01:59:00.000Z" },
+    ],
+  });
+  const opts = { now, runtimeSeconds: 60, throughputTps: 10, interactive: true, columns: 120 };
+
+  const top = formatDashboard(snapshot, { ...opts, rows: 30, cursor: 0 });
+  assert.ok(top.split("\n").length <= 30, `expected <=30 lines, got ${top.split("\n").length}`);
+  assert.match(top, /\b1 ▶/);
+  assert.match(top, /↓ \d+ more \(\d+ run · 1 block\)/);
+  assert.notMatch(top, /↑ \d+ more/);
+
+  // The window follows the cursor deep into the list; both indicators show.
+  const mid = formatDashboard(snapshot, { ...opts, rows: 30, cursor: 60 });
+  assert.match(mid, /↑ \d+ more/);
+  assert.match(mid, /↓ \d+ more/);
+  assert.match(mid, /▸\s*61 ▶/);
+
+  // Three-digit indexes align without assuming single-digit agent counts.
+  assert.match(mid, /\b61 ▶ .*MT-061/);
+});
+
+test("running cap renders when provided and lane labels compress when narrow", () => {
+  const snapshot = dashboardSnapshot({
+    now: "2026-05-05T02:00:00.000Z",
+    running: [
+      runningFixture(
+        "MT-1",
+        "codex",
+        "running",
+        "1",
+        10,
+        1,
+        5,
+        "working",
+        "2026-05-05T02:00:00.000Z",
+      ),
+    ],
+  });
+  const capped = formatDashboard(snapshot, {
+    now: "2026-05-05T02:00:00.000Z",
+    runtimeSeconds: 10,
+    throughputTps: 1,
+    maxAgents: 100,
+    columns: 132,
+  });
+  assert.match(capped, /1\/100 running/);
+
+  const narrow = formatDashboard(snapshot, {
+    now: "2026-05-05T02:00:00.000Z",
+    runtimeSeconds: 10,
+    throughputTps: 1,
+    columns: 72,
+  });
+  assert.match(narrow, /1 run\b/);
 });
 
 test("board event tape reads oldest to newest, newest at the bottom", () => {
@@ -315,9 +472,10 @@ test("terminal dashboard sanitizes snapshot-derived strings before rendering", (
   );
 
   assert.match(rendered, /MT-1/);
-  assert.match(rendered, /codex/);
+  // The injected agent kind is sanitized, then truncated to the agent column.
+  assert.match(rendered, /cod\.\.\./);
   assert.match(rendered, /In Progress/);
-  assert.match(rendered, /MT-RETRY/);
+  assert.match(rendered, /MT-RET/);
   assert.match(rendered, /gpt-5/);
   assert.equal(rendered.includes("\x1b[2J"), false);
   assert.notMatch(rendered, /\n│ (agent-kind|fake-\w+|spoofed)/);
@@ -716,7 +874,7 @@ function dashboardScenarios(): Array<{
           },
         ],
       },
-      options: { now: backoffNow, runtimeSeconds: 2_700, throughputTps: 48 },
+      options: { now: backoffNow, runtimeSeconds: 2_700, throughputTps: 48, maxAgents: 10 },
     },
     {
       name: "credits_unlimited",

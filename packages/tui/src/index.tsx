@@ -28,10 +28,12 @@ export function RuntimeApp({
   runtime,
   dashboardUrl,
   projectUrl,
+  maxAgents,
 }: {
   runtime: RuntimeViewSource;
   dashboardUrl?: string | null | undefined;
   projectUrl?: string | undefined;
+  maxAgents?: number | undefined;
 }) {
   const runSamplesRef = useRef<Map<string, TokenSample[]>>(new Map());
   const [snapshot, setSnapshot] = useState<RuntimeSnapshot>(() => {
@@ -45,6 +47,7 @@ export function RuntimeApp({
   const [now, setNow] = useState<number>(() => Date.now());
   const [snapshotReceivedAt, setSnapshotReceivedAt] = useState<number>(() => Date.now());
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
+  const [cursorState, setCursorState] = useState(0);
   const snapshotRef = useRef(snapshot);
   snapshotRef.current = snapshot;
   const { stdout } = useStdout();
@@ -73,6 +76,11 @@ export function RuntimeApp({
     return () => clearInterval(id);
   }, []);
 
+  const running = snapshot.running;
+  const cursor = running.length === 0 ? 0 : Math.min(cursorState, running.length - 1);
+  const selectedRun =
+    selectedKey === null ? null : (running.find((run) => runKey(run) === selectedKey) ?? null);
+
   useInput(
     (input, key) => {
       if (input === "q") {
@@ -83,37 +91,55 @@ export function RuntimeApp({
         setSelectedKey(null);
         return;
       }
-      const running = snapshotRef.current.running;
-      const digit = Number.parseInt(input, 10);
-      if (!Number.isNaN(digit) && digit >= 1 && digit <= running.length) {
-        const run = running[digit - 1];
-        if (run) setSelectedKey(runKey(run));
-        return;
+      const liveRunning = snapshotRef.current.running;
+      const inspecting = selectedKey !== null;
+      if (inspecting) {
+        if (key.leftArrow || key.rightArrow || key.upArrow || key.downArrow) {
+          setSelectedKey((current) => {
+            if (current === null || liveRunning.length === 0) return current;
+            const index = liveRunning.findIndex((run) => runKey(run) === current);
+            const step = key.leftArrow || key.upArrow ? -1 : 1;
+            const next = liveRunning[(index + step + liveRunning.length) % liveRunning.length];
+            return next ? runKey(next) : null;
+          });
+          return;
+        }
+      } else {
+        if (key.upArrow) {
+          setCursorState((current) => Math.max(0, Math.min(current, liveRunning.length - 1) - 1));
+          return;
+        }
+        if (key.downArrow) {
+          setCursorState((current) => Math.min(Math.max(0, liveRunning.length - 1), current + 1));
+          return;
+        }
+        if (key.return) {
+          const run = liveRunning[Math.min(cursor, liveRunning.length - 1)];
+          if (run) setSelectedKey(runKey(run));
+          return;
+        }
       }
-      if (key.leftArrow || key.rightArrow) {
-        setSelectedKey((current) => {
-          if (current === null || running.length === 0) return current;
-          const index = running.findIndex((run) => runKey(run) === current);
-          const step = key.leftArrow ? -1 : 1;
-          const next = running[(index + step + running.length) % running.length];
-          return next ? runKey(next) : null;
-        });
+      const digit = Number.parseInt(input, 10);
+      if (!Number.isNaN(digit) && digit >= 1 && digit <= liveRunning.length) {
+        const run = liveRunning[digit - 1];
+        if (run) {
+          setSelectedKey(runKey(run));
+          setCursorState(digit - 1);
+        }
       }
     },
     { isActive: interactive },
   );
 
-  const selectedRun =
-    selectedKey === null
-      ? null
-      : (snapshot.running.find((run) => runKey(run) === selectedKey) ?? null);
   const shared = {
     dashboardUrl,
     projectUrl,
+    maxAgents,
     throughputTps: throughputState.currentTps,
     now,
     snapshotReceivedAt,
     columns: stdout?.columns,
+    rows: stdout?.rows,
     interactive,
     ansi: true,
   };
@@ -130,7 +156,7 @@ export function RuntimeApp({
               ),
               runTps: runTokensPerSecond(runSamplesRef.current.get(runKey(selectedRun)) ?? [], now),
             })
-          : formatDashboard(snapshot, shared)}
+          : formatDashboard(snapshot, { ...shared, cursor: interactive ? cursor : undefined })}
       </Text>
     </Box>
   );
@@ -144,6 +170,8 @@ export function RuntimeDashboard({
   now,
   snapshotReceivedAt,
   columns,
+  rows,
+  maxAgents,
 }: {
   snapshot: RuntimeSnapshot;
   throughputTps?: number | undefined;
@@ -152,6 +180,8 @@ export function RuntimeDashboard({
   now?: Date | string | number | undefined;
   snapshotReceivedAt?: Date | string | number | undefined;
   columns?: number | undefined;
+  rows?: number | undefined;
+  maxAgents?: number | undefined;
 }) {
   return (
     <Box flexDirection="column" marginTop={1}>
@@ -163,6 +193,8 @@ export function RuntimeDashboard({
           now,
           snapshotReceivedAt,
           columns,
+          rows,
+          maxAgents,
           ansi: true,
         })}
       </Text>
@@ -267,17 +299,22 @@ export function runTokensPerSecond(samples: TokenSample[], nowMs: number): numbe
   return Math.max(0, latest.totalTokens - base.totalTokens) / elapsed;
 }
 
-// --- Flight-board formatter ----------------------------------------------------
+// --- Responsive column layout ---------------------------------------------------
 
 export interface DashboardFormatOptions {
   ansi?: boolean | undefined;
-  /** Terminal width the board may use; defaults to 132 and clamps at 96. */
+  /** Terminal width the board fills; defaults to 132, floors at 60. */
   columns?: number | undefined;
+  /** Terminal height; when set, the table windows itself and the tape shrinks to fit. */
+  rows?: number | undefined;
+  /** Highlighted running-row index (interactive cursor). */
+  cursor?: number | undefined;
   dashboardUrl?: string | null | undefined;
-  /** How many events the bottom tape shows; defaults to 6. */
+  /** How many events the bottom tape shows; defaults to 6, shrinks under height pressure. */
   eventsLimit?: number | undefined;
   /** Render the key-binding hint line (interactive TTY sessions only). */
   interactive?: boolean | undefined;
+  /** Configured concurrency cap; rendered next to the running count only when known. */
   maxAgents?: number | undefined;
   now?: Date | string | number | undefined;
   projectUrl?: string | undefined;
@@ -294,29 +331,160 @@ export interface AgentDetailOptions extends DashboardFormatOptions {
 }
 
 const DEFAULT_COLUMNS = 132;
-const MIN_COLUMNS = 96;
+const MIN_COLUMNS = 60;
+const MIN_ROWS = 16;
 const DEFAULT_EVENTS_LIMIT = 6;
+const MIN_EVENTS = 2;
 const EVENT_TYPE_WIDTH = 18;
+const WIDE_GAP_COLUMNS = 150;
 
-// Unified-table cell widths; LAST ACTIVITY absorbs whatever width remains.
-const COLS = { lane: 5, id: 9, title: 26, stage: 12, agent: 6, host: 12, ageTurn: 11, tokens: 9 };
-const ROW_FIXED_WIDTH =
-  6 + // " NN ▶ " index + marker prefix
-  (COLS.lane + 1) +
-  (COLS.id + 1) +
-  (COLS.title + 1) +
-  (COLS.stage + 1) +
-  (COLS.agent + 1) +
-  (COLS.host + 1) +
-  (COLS.ageTurn + 1) +
-  COLS.tokens +
-  2;
+type ColumnKey =
+  | "lane"
+  | "id"
+  | "title"
+  | "stage"
+  | "agent"
+  | "host"
+  | "ageTurn"
+  | "tokens"
+  | "activity";
+
+interface ColumnSpec {
+  key: ColumnKey;
+  label: string;
+  min: number;
+  max: number;
+  align: "left" | "right";
+  /** Higher survives longer as the viewport narrows; Infinity is never dropped. */
+  priority: number;
+  /** Share of surplus width when the viewport is wide; 0 is fixed-width. */
+  flex: number;
+}
+
+// Display order. Under width pressure the lowest-priority columns disappear
+// first (lane word, then host, agent, stage, tokens): the row marker + color
+// keep encoding the lane, so narrow boards lose detail, not meaning.
+const COLUMN_SPECS: ColumnSpec[] = [
+  { key: "lane", label: "LANE", min: 5, max: 5, align: "left", priority: 40, flex: 0 },
+  { key: "id", label: "ID", min: 9, max: 12, align: "left", priority: Infinity, flex: 0 },
+  { key: "title", label: "TITLE", min: 14, max: 44, align: "left", priority: Infinity, flex: 3 },
+  { key: "stage", label: "STAGE", min: 9, max: 13, align: "left", priority: 60, flex: 1 },
+  { key: "agent", label: "AGENT", min: 6, max: 6, align: "left", priority: 55, flex: 0 },
+  { key: "host", label: "HOST", min: 8, max: 14, align: "left", priority: 50, flex: 1 },
+  { key: "ageTurn", label: "AGE/TURN", min: 9, max: 11, align: "right", priority: 70, flex: 0 },
+  { key: "tokens", label: "TOKENS", min: 7, max: 9, align: "right", priority: 65, flex: 0 },
+  {
+    key: "activity",
+    label: "LAST ACTIVITY",
+    min: 14,
+    max: 64,
+    align: "left",
+    priority: Infinity,
+    flex: 4,
+  },
+];
+
+interface TableLayout {
+  columns: Array<{ spec: ColumnSpec; width: number }>;
+  gap: number;
+  indexWidth: number;
+  prefixWidth: number;
+}
+
+/**
+ * Fit the table to the viewport: drop low-priority columns until the minimum
+ * widths fit, then hand surplus width to flexible columns (activity and title
+ * first). Whatever remains after every column hits its cap stays as negative
+ * space instead of being crammed with more data.
+ */
+function computeLayout(columns: number, runningCount: number): TableLayout {
+  const gap = columns >= WIDE_GAP_COLUMNS ? 2 : 1;
+  const indexWidth = Math.max(1, String(Math.max(1, runningCount)).length);
+  const prefixWidth = indexWidth + 4; // "▸ 12 ▶ " = cursor + index + marker cells
+  const available = columns - prefixWidth;
+
+  const active = COLUMN_SPECS.map((spec) => ({ spec, width: spec.min }));
+  const needed = () => active.reduce((sum, col) => sum + col.width, 0) + gap * (active.length - 1);
+  while (needed() > available && active.some((col) => col.spec.priority !== Infinity)) {
+    let lowest = 0;
+    for (let index = 1; index < active.length; index++) {
+      const candidate = active[index];
+      const current = active[lowest];
+      if (candidate && current && candidate.spec.priority < current.spec.priority) lowest = index;
+    }
+    active.splice(lowest, 1);
+  }
+
+  let surplus = available - needed();
+  const flexOrder = [...active]
+    .filter((col) => col.spec.flex > 0)
+    .sort((a, b) => b.spec.flex - a.spec.flex);
+  while (surplus > 0) {
+    let grew = false;
+    for (const col of flexOrder) {
+      for (let unit = 0; unit < col.spec.flex && surplus > 0; unit++) {
+        if (col.width < col.spec.max) {
+          col.width += 1;
+          surplus -= 1;
+          grew = true;
+        }
+      }
+    }
+    if (!grew) break;
+  }
+  return { columns: active, gap, indexWidth, prefixWidth };
+}
+
+interface Cell {
+  text: string;
+  color: string;
+  truncate?: boolean;
+}
+
+function tableRow(
+  layout: TableLayout,
+  ansi: boolean,
+  index: string | null,
+  marker: string,
+  markerColor: string,
+  cursor: boolean,
+  cells: Partial<Record<ColumnKey, Cell>>,
+): string {
+  const prefix = `${s("36;1", cursor ? "▸" : " ", ansi)}${s(cursor ? "36;1" : "90", (index ?? "").padStart(layout.indexWidth), ansi)} ${s(markerColor, marker, ansi)} `;
+  const rendered = layout.columns.map(({ spec, width }) => {
+    const cell = cells[spec.key] ?? { text: "—", color: "90" };
+    const options: TerminalCellOptions =
+      spec.align === "right"
+        ? { padStart: width, max: width }
+        : { padEnd: width, max: cell.truncate === false ? undefined : width };
+    return styledCell(cell.color, cell.text, ansi, options);
+  });
+  return prefix + rendered.join(" ".repeat(layout.gap));
+}
+
+function tableHeader(layout: TableLayout, ansi: boolean): string {
+  const prefix = ` ${"#".padStart(layout.indexWidth)}   `;
+  const header = layout.columns
+    .map(({ spec, width }) =>
+      spec.align === "right"
+        ? spec.label.padStart(width)
+        : truncate(spec.label, width).padEnd(width),
+    )
+    .join(" ".repeat(layout.gap));
+  return s("90", prefix + header, ansi);
+}
+
+// --- Flight-board formatter ----------------------------------------------------
 
 interface BoardContext {
   ansi: boolean;
   columns: number;
   now: Date;
-  activityWidth: number;
+}
+
+interface BoardRow {
+  line: string;
+  lane: "run" | "rsv" | "retry" | "block";
 }
 
 export function formatDashboard(
@@ -324,41 +492,103 @@ export function formatDashboard(
   options: DashboardFormatOptions = {},
 ): string {
   const context = boardContext(options);
-  const { ansi, columns, now, activityWidth } = context;
+  const { ansi, columns, now } = context;
+  const layout = computeLayout(columns, snapshot.running.length);
   const lines: string[] = [...headerLines(snapshot, options, context)];
-
-  lines.push(rule(columns, ansi));
-  lines.push(tableHeader(ansi));
-  lines.push(rule(columns, ansi));
 
   const reserving = snapshot.reserving ?? [];
   const blockedList: unknown[] =
     snapshot.blocked.length > 0
       ? snapshot.blocked
       : (arrayAt(snapshot, ["dispatchBlocks"]) ?? arrayAt(snapshot, ["dispatch_blocks"]) ?? []);
-  const total =
-    snapshot.running.length + reserving.length + snapshot.retrying.length + blockedList.length;
-  if (total === 0) {
-    lines.push(`      ${s("90", "no work in flight", ansi)}`);
-  } else {
-    snapshot.running.forEach((run, index) => {
-      lines.push(formatRunningRow(run, index + 1, now, ansi, activityWidth));
-    });
-    for (const entry of reserving) lines.push(formatReservingRow(entry, now, ansi, activityWidth));
-    for (const entry of snapshot.retrying) {
-      lines.push(formatRetryRow(entry, now, ansi, activityWidth));
+
+  const tableRows: BoardRow[] = [
+    ...snapshot.running.map((run, index) => ({
+      line: formatRunningRow(run, index + 1, options.cursor === index, now, ansi, layout),
+      lane: "run" as const,
+    })),
+    ...reserving.map((entry) => ({
+      line: formatReservingRow(entry, now, ansi, layout),
+      lane: "rsv" as const,
+    })),
+    ...snapshot.retrying.map((entry) => ({
+      line: formatRetryRow(entry, now, ansi, layout),
+      lane: "retry" as const,
+    })),
+    ...blockedList.map((entry) => ({
+      line: formatBlockedRow(entry, ansi, layout),
+      lane: "block" as const,
+    })),
+  ];
+
+  // Vertical budget: the table gets the viewport minus chrome; the tape keeps
+  // at least MIN_EVENTS lines and gives the rest back to the table.
+  const eventsLimit = options.eventsLimit ?? DEFAULT_EVENTS_LIMIT;
+  let tapeLimit = eventsLimit;
+  let visible = tableRows;
+  let aboveLine: string | null = null;
+  let belowLine: string | null = null;
+  if (options.rows !== undefined && tableRows.length > 0) {
+    const usable = Math.max(MIN_ROWS, options.rows) - 2;
+    const chrome = 3 + 3 + 1 + 1 + (options.interactive === true ? 1 : 0);
+    const remaining = Math.max(MIN_EVENTS + 1, usable - chrome);
+    tapeLimit = Math.min(eventsLimit, Math.max(MIN_EVENTS, remaining - tableRows.length));
+    let budget = remaining - tapeLimit;
+    if (tableRows.length > budget) {
+      budget = Math.max(1, budget - 2);
+      const cursor = Math.min(options.cursor ?? 0, tableRows.length - 1);
+      const start = Math.max(
+        0,
+        Math.min(cursor - Math.floor(budget / 2), tableRows.length - budget),
+      );
+      const end = start + budget;
+      visible = tableRows.slice(start, end);
+      if (start > 0) {
+        aboveLine = s("90", `${" ".repeat(layout.prefixWidth)}↑ ${start} more`, ansi);
+      }
+      if (end < tableRows.length) {
+        belowLine = s(
+          "90",
+          `${" ".repeat(layout.prefixWidth)}↓ ${tableRows.length - end} more ${laneSummary(tableRows.slice(end))}`,
+          ansi,
+        );
+      }
     }
-    for (const entry of blockedList) lines.push(formatBlockedRow(entry, ansi, activityWidth));
   }
 
   lines.push(rule(columns, ansi));
-  lines.push(...eventTapeLines(snapshot.recentEvents, options, context, null));
+  lines.push(tableHeader(layout, ansi));
+  lines.push(rule(columns, ansi));
+  if (tableRows.length === 0) {
+    lines.push(`${" ".repeat(layout.prefixWidth)}${s("90", "no work in flight", ansi)}`);
+  } else {
+    if (aboveLine) lines.push(aboveLine);
+    for (const row of visible) lines.push(row.line);
+    if (belowLine) lines.push(belowLine);
+  }
+
+  lines.push(rule(columns, ansi));
+  lines.push(...eventTapeLines(snapshot.recentEvents, tapeLimit, context, null));
   if (options.interactive === true) {
-    lines.push(
-      `${s("36", " 1-9", ansi)}${s("90", " inspect agent", ansi)}${s("90", " · ", ansi)}${s("36", "q", ansi)}${s("90", " quit", ansi)}`,
-    );
+    lines.push(hintLine(["↑/↓ select", "⏎ inspect", "1-9 jump", "q quit"], ansi));
   }
   return `${lines.join("\n")}\n`;
+}
+
+function laneSummary(rows: BoardRow[]): string {
+  const counts = new Map<string, number>();
+  for (const row of rows) counts.set(row.lane, (counts.get(row.lane) ?? 0) + 1);
+  const parts = [...counts.entries()].map(([lane, count]) => `${count} ${lane}`);
+  return `(${parts.join(" · ")})`;
+}
+
+function hintLine(hints: string[], ansi: boolean): string {
+  return ` ${hints
+    .map((hint) => {
+      const [keys, ...rest] = hint.split(" ");
+      return `${s("36", keys ?? "", ansi)}${s("90", ` ${rest.join(" ")}`, ansi)}`;
+    })
+    .join(s("90", " · ", ansi))}`;
 }
 
 /** The narrowed, card-style view of one running agent (V4 "cards" density). */
@@ -372,71 +602,118 @@ export function formatAgentDetail(
   const sep = s("90", " · ", ansi);
   const color = rowColor(run.lastEvent);
   const lines: string[] = [...headerLines(snapshot, options, context)];
-  const wide = Math.max(24, columns - 4);
 
   lines.push(rule(columns, ansi));
+  const id = terminalCell(run.issueIdentifier);
   lines.push(
-    ` ${s(color, "▶", ansi)} ${styledCell("36;1", run.issueIdentifier, ansi)}${sep}${styledCell("1", run.issueTitle || "untitled", ansi, { max: wide })}`,
+    ` ${s(color, "▶", ansi)} ${s("36;1", id, ansi)}${sep}${styledCell("1", run.issueTitle || "untitled", ansi, { max: Math.max(16, columns - id.length - 6) })}`,
   );
   lines.push(
-    `   ${s("90", "stage ", ansi)}${styledCell(color, runningStage(run), ansi)}${sep}` +
-      `${s("90", "agent ", ansi)}${styledCell("35", run.agentKind, ansi)}${sep}` +
-      `${s("90", "host ", ansi)}${styledCell("39", run.workerHost ?? "local", ansi)}${sep}` +
-      `${s("90", "slot ", ansi)}${s("39", String(run.slotIndex), ansi)}` +
-      (run.retryAttempt ? `${sep}${s("38;5;208", `retry attempt ${run.retryAttempt}`, ansi)}` : ""),
+    fitLine(
+      `   ${s("90", "stage ", ansi)}${styledCell(color, runningStage(run), ansi)}`,
+      [
+        `${s("90", "agent ", ansi)}${styledCell("35", run.agentKind, ansi)}`,
+        `${s("90", "host ", ansi)}${styledCell("39", run.workerHost ?? "local", ansi)}`,
+        `${s("90", "slot ", ansi)}${s("39", String(run.slotIndex), ansi)}`,
+        ...(run.retryAttempt ? [s("38;5;208", `retry attempt ${run.retryAttempt}`, ansi)] : []),
+      ],
+      sep,
+      columns,
+    ),
   );
   const lastEventAgo = run.lastEventAt
     ? `${formatDuration(secondsBetween(now, run.lastEventAt))} ago`
     : "n/a";
   lines.push(
-    `   ${s("90", "turn ", ansi)}${s("35", String(run.turnCount), ansi)}${sep}` +
-      `${s("90", "age ", ansi)}${s("35", formatMinutesSeconds(secondsBetween(now, run.startedAt)), ansi)}${sep}` +
-      `${s("90", "tools ", ansi)}${s("32", formatInteger(run.toolCallCount ?? 0), ansi)}${sep}` +
-      `${s("90", "last event ", ansi)}${styledCell("39", String(run.lastEvent ?? "none"), ansi)} ${s("90", lastEventAgo, ansi)}`,
+    fitLine(
+      `   ${s("90", "turn ", ansi)}${s("35", String(run.turnCount), ansi)}`,
+      [
+        `${s("90", "age ", ansi)}${s("35", formatMinutesSeconds(secondsBetween(now, run.startedAt)), ansi)}`,
+        `${s("90", "tools ", ansi)}${s("32", formatInteger(run.toolCallCount ?? 0), ansi)}`,
+        `${s("90", "last event ", ansi)}${styledCell("39", String(run.lastEvent ?? "none"), ansi)} ${s("90", lastEventAgo, ansi)}`,
+      ],
+      sep,
+      columns,
+    ),
   );
   const rate = options.runTps !== undefined ? `${formatInteger(options.runTps)} tps` : null;
   lines.push(
-    `   ${s("90", "tokens ", ansi)}${s("33", formatInteger(run.usageTotals.totalTokens), ansi)}` +
-      `${s("90", ` (in ${formatInteger(run.usageTotals.inputTokens)} / out ${formatInteger(run.usageTotals.outputTokens)})`, ansi)}` +
-      (options.sparkline
-        ? `${sep}${s("90", "rate ", ansi)}${s("32", options.sparkline, ansi)}${rate ? ` ${s("36", rate, ansi)}` : ""} ${s("90", "(last 60s)", ansi)}`
-        : ""),
+    fitLine(
+      `   ${s("90", "tokens ", ansi)}${s("33", formatInteger(run.usageTotals.totalTokens), ansi)}`,
+      [
+        s(
+          "90",
+          `in ${formatInteger(run.usageTotals.inputTokens)} / out ${formatInteger(run.usageTotals.outputTokens)}`,
+          ansi,
+        ),
+        ...(options.sparkline
+          ? [
+              `${s("90", "rate ", ansi)}${s("32", options.sparkline, ansi)}${rate ? ` ${s("36", rate, ansi)}` : ""} ${s("90", "(last 60s)", ansi)}`,
+            ]
+          : []),
+      ],
+      sep,
+      columns,
+    ),
   );
   lines.push(
-    `   ${s("90", "session ", ansi)}${styledCell("36", run.sessionId ?? "n/a", ansi)}${sep}${s("90", "pid ", ansi)}${styledCell("39", run.executorPid ?? "n/a", ansi)}`,
+    fitLine(
+      `   ${s("90", "session ", ansi)}${styledCell("36", run.sessionId ?? "n/a", ansi, { max: Math.max(12, columns - 14) })}`,
+      [`${s("90", "pid ", ansi)}${styledCell("39", run.executorPid ?? "n/a", ansi)}`],
+      sep,
+      columns,
+    ),
   );
   if (run.workspacePath) {
     lines.push(
-      `   ${s("90", "workspace ", ansi)}${styledCell("39", run.workspacePath, ansi, { max: wide })}`,
+      `   ${s("90", "workspace ", ansi)}${styledCell("39", run.workspacePath, ansi, { max: Math.max(16, columns - 14) })}`,
     );
   }
   if (run.issueUrl) {
     lines.push(
-      `   ${s("90", "issue ", ansi)}${styledCell("36", run.issueUrl, ansi, { max: wide })}`,
+      `   ${s("90", "issue ", ansi)}${styledCell("36", run.issueUrl, ansi, { max: Math.max(16, columns - 10) })}`,
     );
   }
   lines.push(
-    `   ${s(color, "▸ ", ansi)}${styledCell(color, humanizeAgentMessage(run.lastMessage ?? null), ansi, { max: wide })}`,
+    `   ${s(color, "▸ ", ansi)}${styledCell(color, humanizeAgentMessage(run.lastMessage ?? null), ansi, { max: Math.max(16, columns - 6) })}`,
   );
 
+  let tapeLimit = options.eventsLimit ?? DEFAULT_EVENTS_LIMIT;
+  if (options.rows !== undefined) {
+    const usable = Math.max(MIN_ROWS, options.rows) - 2;
+    const chrome = lines.length + 2 + (options.interactive === true ? 1 : 0);
+    tapeLimit = Math.min(tapeLimit, Math.max(MIN_EVENTS, usable - chrome));
+  }
   lines.push(rule(columns, ansi));
-  lines.push(...eventTapeLines(snapshot.recentEvents, options, context, run.issueIdentifier));
+  lines.push(...eventTapeLines(snapshot.recentEvents, tapeLimit, context, run.issueIdentifier));
   if (options.interactive === true) {
-    lines.push(
-      `${s("36", " ←/→", ansi)}${s("90", " switch agent", ansi)}${s("90", " · ", ansi)}${s("36", "esc", ansi)}${s("90", " board", ansi)}${s("90", " · ", ansi)}${s("36", "q", ansi)}${s("90", " quit", ansi)}`,
-    );
+    lines.push(hintLine(["←/→ switch agent", "esc board", "q quit"], ansi));
   }
   return `${lines.join("\n")}\n`;
 }
 
 function boardContext(options: DashboardFormatOptions): BoardContext {
-  const columns = Math.max(MIN_COLUMNS, options.columns ?? DEFAULT_COLUMNS);
   return {
     ansi: options.ansi === true,
-    columns,
+    columns: Math.max(MIN_COLUMNS, options.columns ?? DEFAULT_COLUMNS),
     now: coerceDate(options.now) ?? new Date(),
-    activityWidth: Math.max(16, columns - ROW_FIXED_WIDTH),
   };
+}
+
+/** Append optional segments while the line still fits the viewport. */
+function fitLine(mandatory: string, optional: string[], sep: string, columns: number): string {
+  let line = mandatory;
+  for (const part of optional) {
+    const candidate = `${line}${sep}${part}`;
+    if (visibleLength(candidate) > columns) break;
+    line = candidate;
+  }
+  return line;
+}
+
+function visibleLength(value: string): number {
+  // eslint-disable-next-line no-control-regex
+  return value.replace(/\x1b\[[0-9;]*m/g, "").length;
 }
 
 function headerLines(
@@ -444,14 +721,14 @@ function headerLines(
   options: DashboardFormatOptions,
   context: BoardContext,
 ): string[] {
-  const { ansi, now } = context;
-  const maxAgents = options.maxAgents ?? 10;
+  const { ansi, columns, now } = context;
   const snapshotReceivedAt = coerceDate(options.snapshotReceivedAt) ?? undefined;
   const runtimeSeconds =
     options.runtimeSeconds ?? liveRuntimeSeconds(snapshot, now, snapshotReceivedAt);
   const throughputTps =
     options.throughputTps ?? throughput(snapshot.usageTotals.totalTokens, runtimeSeconds);
   const sep = s("90", " · ", ansi);
+  const short = columns < 110;
   const reserving = snapshot.reserving?.length ?? 0;
   const blocked = Math.max(
     snapshot.blocked.length,
@@ -459,132 +736,114 @@ function headerLines(
       arrayAt(snapshot, ["dispatch_blocks"])?.length ??
       0,
   );
+  const cap = options.maxAgents !== undefined ? `/${options.maxAgents}` : "";
   const lanes = [
-    `${s("32", "▶", ansi)} ${s("32", String(snapshot.running.length), ansi)}${s("90", `/${maxAgents} running`, ansi)}`,
-    reserving > 0 ? `${s("90", "◌", ansi)} ${s("90", `${reserving} reserving`, ansi)}` : null,
+    `${s("32", "▶", ansi)} ${s("32", String(snapshot.running.length), ansi)}${s("90", `${cap} ${short ? "run" : "running"}`, ansi)}`,
+    reserving > 0
+      ? `${s("90", "◌", ansi)} ${s("90", `${reserving} ${short ? "rsv" : "reserving"}`, ansi)}`
+      : null,
     snapshot.retrying.length > 0
-      ? `${s("38;5;208", "↻", ansi)} ${s("38;5;208", String(snapshot.retrying.length), ansi)}${s("90", " retrying", ansi)}`
+      ? `${s("38;5;208", "↻", ansi)} ${s("38;5;208", String(snapshot.retrying.length), ansi)}${s("90", ` ${short ? "retry" : "retrying"}`, ansi)}`
       : null,
     blocked > 0
-      ? `${s("33", "■", ansi)} ${s("33", String(blocked), ansi)}${s("90", " blocked", ansi)}`
+      ? `${s("33", "■", ansi)} ${s("33", String(blocked), ansi)}${s("90", ` ${short ? "blk" : "blocked"}`, ansi)}`
       : null,
   ].filter((part): part is string => part !== null);
-  const lines: string[] = [];
-  lines.push(
-    ` ${b("LORENZ", ansi)}  ${lanes.join("  ")}${sep}` +
-      `${s("36", `${formatInteger(throughputTps)} tps`, ansi)}${sep}` +
-      `${s("90", "tok ", ansi)}${s("33", formatInteger(snapshot.usageTotals.totalTokens), ansi)}${sep}` +
-      `${s("90", "up ", ansi)}${s("35", formatMinutesSeconds(runtimeSeconds), ansi)}`,
-  );
-  lines.push(
-    ` ${formatLimitsLine(snapshot.rateLimits, ansi, sep)}${sep}` +
-      `${s("90", "in ", ansi)}${s("33", formatInteger(snapshot.usageTotals.inputTokens), ansi)}` +
-      `${s("90", " / out ", ansi)}${s("33", formatInteger(snapshot.usageTotals.outputTokens), ansi)}`,
-  );
-  lines.push(` ${formatPollLine(snapshot, options, now, ansi, sep)}`);
-  return lines;
+
+  const limits = formatLimitsParts(snapshot.rateLimits, ansi);
+  return [
+    fitLine(
+      ` ${b("LORENZ", ansi)}  ${lanes.join("  ")}`,
+      [
+        s("36", `${formatInteger(throughputTps)} tps`, ansi),
+        `${s("90", "tok ", ansi)}${s("33", formatInteger(snapshot.usageTotals.totalTokens), ansi)}`,
+        `${s("90", "up ", ansi)}${s("35", formatMinutesSeconds(runtimeSeconds), ansi)}`,
+      ],
+      sep,
+      columns,
+    ),
+    fitLine(
+      ` ${limits.mandatory}`,
+      [
+        ...limits.optional,
+        `${s("90", "in ", ansi)}${s("33", formatInteger(snapshot.usageTotals.inputTokens), ansi)}${s("90", " / out ", ansi)}${s("33", formatInteger(snapshot.usageTotals.outputTokens), ansi)}`,
+      ],
+      sep,
+      columns,
+    ),
+    fitLine(
+      ` ${formatPollPart(snapshot, now, ansi)}`,
+      pollOptionalParts(snapshot, options, ansi),
+      sep,
+      columns,
+    ),
+  ];
 }
 
 function rule(columns: number, ansi: boolean): string {
   return s("90", "─".repeat(columns), ansi);
 }
 
-function tableHeader(ansi: boolean): string {
-  const header = [
-    padEnd("LANE", COLS.lane),
-    padEnd("ID", COLS.id),
-    padEnd("TITLE", COLS.title),
-    padEnd("STAGE", COLS.stage),
-    padEnd("AGENT", COLS.agent),
-    padEnd("HOST", COLS.host),
-    padStart("AGE/TURN", COLS.ageTurn),
-    padStart("TOKENS", COLS.tokens),
-  ].join(" ");
-  return `  ${s("90", "#", ansi)}   ${s("90", `${header}  LAST ACTIVITY`, ansi)}`;
-}
-
-function rowPrefix(
-  index: number | null,
-  marker: string,
-  markerColor: string,
-  ansi: boolean,
-): string {
-  const indexCell = index === null ? "  " : String(index).padStart(2);
-  return ` ${s("90", indexCell, ansi)} ${s(markerColor, marker, ansi)} `;
-}
-
 function formatRunningRow(
   run: RunningEntry,
   index: number,
+  cursor: boolean,
   now: Date,
   ansi: boolean,
-  activityWidth: number,
+  layout: TableLayout,
 ): string {
   const color = rowColor(run.lastEvent);
   const ageTurn = `${formatMinutesSeconds(secondsBetween(now, run.startedAt))}/${run.turnCount}`;
-  const activity = humanizeAgentMessage(run.lastMessage ?? null);
-  return [
-    `${rowPrefix(index <= 9 ? index : null, "▶", color, ansi)}${s("32", padEnd("run", COLS.lane), ansi)}`,
-    styledCell("36", run.issueIdentifier, ansi, { padEnd: COLS.id }),
-    styledCell("39", run.issueTitle || "untitled", ansi, { padEnd: COLS.title, max: COLS.title }),
-    styledCell(color, runningStage(run), ansi, { padEnd: COLS.stage, max: COLS.stage }),
-    styledCell("35", run.agentKind, ansi, { padEnd: COLS.agent }),
-    styledCell("90", run.workerHost ?? "local", ansi, { padEnd: COLS.host, max: COLS.host }),
-    s("35", padStart(ageTurn, COLS.ageTurn), ansi),
-    s("33", padStart(formatInteger(run.usageTotals.totalTokens), COLS.tokens), ansi),
-    ` ${styledCell("36", activity, ansi, { max: activityWidth })}`,
-  ].join(" ");
+  return tableRow(layout, ansi, String(index), "▶", color, cursor, {
+    lane: { text: "run", color: "32" },
+    id: { text: run.issueIdentifier, color: cursor ? "36;1" : "36" },
+    title: { text: run.issueTitle || "untitled", color: "39" },
+    stage: { text: runningStage(run), color },
+    agent: { text: run.agentKind, color: "35" },
+    host: { text: run.workerHost ?? "local", color: "90" },
+    ageTurn: { text: ageTurn, color: "35" },
+    tokens: { text: formatInteger(run.usageTotals.totalTokens), color: "33" },
+    activity: { text: humanizeAgentMessage(run.lastMessage ?? null), color: "36" },
+  });
 }
 
 function formatReservingRow(
   entry: NonNullable<RuntimeSnapshot["reserving"]>[number],
   now: Date,
   ansi: boolean,
-  activityWidth: number,
+  layout: TableLayout,
 ): string {
   const age = formatDuration(secondsBetween(now, entry.reservedAtIso));
   const affinity = entry.affinityHost ? ` (prefers ${entry.affinityHost})` : "";
-  return [
-    `${rowPrefix(null, "◌", "90", ansi)}${s("90", padEnd("rsv", COLS.lane), ansi)}`,
-    styledCell("36", entry.identifier, ansi, { padEnd: COLS.id }),
-    styledCell("90", `reserving slot ${entry.slotIndex}`, ansi, {
-      padEnd: COLS.title,
-      max: COLS.title,
-    }),
-    s("90", padEnd("—", COLS.stage), ansi),
-    s("90", padEnd("—", COLS.agent), ansi),
-    styledCell("90", "(acquiring)", ansi, { padEnd: COLS.host }),
-    s("90", padStart(age, COLS.ageTurn), ansi),
-    s("90", padStart("—", COLS.tokens), ansi),
-    ` ${styledCell("2", `acquiring worker${affinity}`, ansi, { max: activityWidth })}`,
-  ].join(" ");
+  return tableRow(layout, ansi, null, "◌", "90", false, {
+    lane: { text: "rsv", color: "90" },
+    id: { text: entry.identifier, color: "36" },
+    title: { text: `reserving slot ${entry.slotIndex}`, color: "90" },
+    host: { text: "(acquiring)", color: "90" },
+    ageTurn: { text: age, color: "90" },
+    activity: { text: `acquiring worker${affinity}`, color: "2" },
+  });
 }
 
 function formatRetryRow(
   retry: RuntimeSnapshot["retrying"][number],
   now: Date,
   ansi: boolean,
-  activityWidth: number,
+  layout: TableLayout,
 ): string {
   const dueIn = `in ${formatDuration(secondsBetween(new Date(retry.dueAtIso), now))}`;
-  return [
-    `${rowPrefix(null, "↻", "38;5;208", ansi)}${s("38;5;208", padEnd("retry", COLS.lane), ansi)}`,
-    styledCell("36", retry.issueIdentifier, ansi, { padEnd: COLS.id }),
-    styledCell("33", `retry attempt ${retry.attempt}`, ansi, {
-      padEnd: COLS.title,
-      max: COLS.title,
-    }),
-    s("90", padEnd("—", COLS.stage), ansi),
-    s("90", padEnd("—", COLS.agent), ansi),
-    styledCell("90", retry.workerHost ?? "—", ansi, { padEnd: COLS.host, max: COLS.host }),
-    s("38;5;208", padStart(dueIn, COLS.ageTurn), ansi),
-    s("90", padStart("—", COLS.tokens), ansi),
-    ` ${styledCell("2", retry.error ?? "cause unknown", ansi, { max: activityWidth })}`,
-  ].join(" ");
+  return tableRow(layout, ansi, null, "↻", "38;5;208", false, {
+    lane: { text: "retry", color: "38;5;208" },
+    id: { text: retry.issueIdentifier, color: "36" },
+    title: { text: `retry attempt ${retry.attempt}`, color: "33" },
+    ...(retry.workerHost ? { host: { text: retry.workerHost, color: "90" } } : {}),
+    ageTurn: { text: dueIn, color: "38;5;208" },
+    activity: { text: retry.error ?? "cause unknown", color: "2" },
+  });
 }
 
-function formatBlockedRow(block: unknown, ansi: boolean, activityWidth: number): string {
-  if (!isRecord(block)) return `      ${terminalCell(String(block))}`;
+function formatBlockedRow(block: unknown, ansi: boolean, layout: TableLayout): string {
+  if (!isRecord(block)) return `${" ".repeat(layout.prefixWidth)}${terminalCell(String(block))}`;
   const identifier =
     stringAt(block, ["identifier"]) ??
     stringAt(block, ["issueIdentifier"]) ??
@@ -592,28 +851,22 @@ function formatBlockedRow(block: unknown, ansi: boolean, activityWidth: number):
     "unknown";
   const state = stringAt(block, ["state"]) ?? "unknown";
   const reason = stringAt(block, ["reason"]) ?? "unknown";
-  return [
-    `${rowPrefix(null, "■", "33", ansi)}${s("33", padEnd("block", COLS.lane), ansi)}`,
-    styledCell("36", identifier, ansi, { padEnd: COLS.id }),
-    s("90", padEnd("—", COLS.title), ansi),
-    styledCell("90", state, ansi, { padEnd: COLS.stage, max: COLS.stage }),
-    s("90", padEnd("—", COLS.agent), ansi),
-    s("90", padEnd("—", COLS.host), ansi),
-    s("90", padStart("—", COLS.ageTurn), ansi),
-    s("90", padStart("—", COLS.tokens), ansi),
-    ` ${styledCell("33", reason.replaceAll("_", " "), ansi, { max: activityWidth })}`,
-  ].join(" ");
+  return tableRow(layout, ansi, null, "■", "33", false, {
+    lane: { text: "block", color: "33" },
+    id: { text: identifier, color: "36" },
+    stage: { text: state, color: "90" },
+    activity: { text: reason.replaceAll("_", " "), color: "33" },
+  });
 }
 
 /** The bottom log tape: recent runtime events, oldest first, newest at the bottom. */
 function eventTapeLines(
   recentEvents: RuntimeSnapshot["recentEvents"] | undefined,
-  options: DashboardFormatOptions,
+  limit: number,
   context: BoardContext,
   filterIdentifier: string | null,
 ): string[] {
   const { ansi, columns } = context;
-  const limit = options.eventsLimit ?? DEFAULT_EVENTS_LIMIT;
   const label = filterIdentifier === null ? "events" : `events · ${filterIdentifier}`;
   const lines = [` ${b(label, ansi)}`];
   const filtered = (recentEvents ?? []).filter(
@@ -623,11 +876,16 @@ function eventTapeLines(
     lines.push(`   ${s("90", "no recent events", ansi)}`);
     return lines;
   }
-  const messageWidth = Math.max(24, columns - (3 + 9 + EVENT_TYPE_WIDTH + 2));
+  const typeWidth = columns < 90 ? 0 : EVENT_TYPE_WIDTH;
+  const messageWidth = Math.max(24, columns - (3 + 9 + typeWidth + 2));
   // recentEvents is newest-first; the tape reads downward toward "now".
   for (const event of filtered.slice(0, limit).reverse()) {
+    const type =
+      typeWidth === 0
+        ? ""
+        : `${styledCell(eventColor(event.type), event.type, ansi, { padEnd: typeWidth, max: typeWidth })} `;
     lines.push(
-      `   ${s("90", formatClockTime(event.at), ansi)} ${styledCell(eventColor(event.type), event.type, ansi, { padEnd: EVENT_TYPE_WIDTH, max: EVENT_TYPE_WIDTH })} ${styledCell("39", event.message, ansi, { max: messageWidth })}`,
+      `   ${s("90", formatClockTime(event.at), ansi)} ${type}${styledCell("39", event.message, ansi, { max: messageWidth })}`,
     );
   }
   return lines;
@@ -666,22 +924,29 @@ function rowColor(lastEvent: AgentUpdateType | null | undefined): string {
   }
 }
 
-function formatLimitsLine(value: unknown, ansi: boolean, sep: string): string {
-  if (value === null || value === undefined) return s("90", "rate limits unavailable", ansi);
+function formatLimitsParts(
+  value: unknown,
+  ansi: boolean,
+): { mandatory: string; optional: string[] } {
+  if (value === null || value === undefined) {
+    return { mandatory: s("90", "rate limits unavailable", ansi), optional: [] };
+  }
   const model =
     stringAt(value, ["model"]) ?? stringAt(value, ["model_slug"]) ?? stringAt(value, ["modelSlug"]);
   const primary = formatRateBucket(value, "primary", ansi, true);
   const secondary = formatRateBucket(value, "secondary", ansi, false);
   const credits = formatCredits(valueAt(value, ["credits"]));
-  if (!model && !primary && !secondary && !credits) return terminalCell(JSON.stringify(value));
-  return [
-    styledCell("33", model ?? "unknown", ansi),
-    primary,
-    secondary,
-    credits ? styledCell("32", `credits ${credits}`, ansi) : null,
-  ]
-    .filter((part): part is string => part !== null)
-    .join(sep);
+  if (!model && !primary && !secondary && !credits) {
+    return { mandatory: terminalCell(JSON.stringify(value), { max: 60 }), optional: [] };
+  }
+  return {
+    mandatory: styledCell("33", model ?? "unknown", ansi),
+    optional: [
+      primary,
+      secondary,
+      credits ? styledCell("32", `credits ${credits}`, ansi) : null,
+    ].filter((part): part is string => part !== null),
+  };
 }
 
 function formatRateBucket(
@@ -710,20 +975,20 @@ function formatRateBucket(
   return s("36", `${key} ${formatInteger(used)}/${formatInteger(limit)} ${resets}`, ansi);
 }
 
-function formatPollLine(
-  snapshot: RuntimeSnapshot,
-  options: DashboardFormatOptions,
-  now: Date,
-  ansi: boolean,
-  sep: string,
-): string {
-  const parts: string[] = [];
+function formatPollPart(snapshot: RuntimeSnapshot, now: Date, ansi: boolean): string {
   if (snapshot.poll.nextPollAt) {
     const dueIn = formatDuration(secondsBetween(new Date(snapshot.poll.nextPollAt), now));
-    parts.push(`${s("90", "poll in ", ansi)}${s("36", dueIn, ansi)}`);
-  } else {
-    parts.push(s("90", "poll n/a", ansi));
+    return `${s("90", "poll in ", ansi)}${s("36", dueIn, ansi)}`;
   }
+  return s("90", "poll n/a", ansi);
+}
+
+function pollOptionalParts(
+  snapshot: RuntimeSnapshot,
+  options: DashboardFormatOptions,
+  ansi: boolean,
+): string[] {
+  const parts: string[] = [];
   if (snapshot.poll.candidates > 0) {
     parts.push(
       `${s("90", "eligible ", ansi)}${s("36", `${snapshot.poll.eligible}/${snapshot.poll.candidates}`, ansi)}`,
@@ -737,7 +1002,7 @@ function formatPollLine(
       `${s("90", "dash ", ansi)}${s("36", normalizeDashboardUrl(terminalCell(options.dashboardUrl)), ansi)}`,
     );
   }
-  return parts.join(sep);
+  return parts;
 }
 
 function formatCredits(value: unknown): string | null {
@@ -859,14 +1124,6 @@ function b(value: string, ansi: boolean): string {
 
 function s(code: string, value: string, ansi: boolean): string {
   return ansi ? `\x1b[${code}m${value}\x1b[0m` : value;
-}
-
-function padEnd(value: string, width: number): string {
-  return value.padEnd(width);
-}
-
-function padStart(value: string, width: number): string {
-  return value.padStart(width);
 }
 
 interface TerminalCellOptions {

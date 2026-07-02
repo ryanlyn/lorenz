@@ -77,8 +77,8 @@ const snapshot = {
 
 const shared = {
   ansi: true,
-  columns: 132,
   interactive: true,
+  maxAgents: 10,
   dashboardUrl: "http://127.0.0.1:8771",
   projectUrl: "https://linear.app/northwind/team/ENG",
 };
@@ -92,13 +92,39 @@ for (let i = 0; i <= 20; i++) {
   samples.push({ timestampMs: t, totalTokens: 120_000 + i * 800 + burst });
 }
 
+// A crowded fleet: dozens of running agents plus queues, on a bounded viewport.
+const crowd = {
+  ...snapshot,
+  running: Array.from({ length: 64 }, (_, i) => ({
+    ...snapshot.running[i % 3],
+    issueId: `c${i}`,
+    issueIdentifier: `ENG-${2100 + i}`,
+    slotIndex: i,
+    startedAt: iso(-((i * 47) % 3200) - 60),
+    usageTotals: {
+      inputTokens: 1000 * i,
+      outputTokens: 400 * i,
+      totalTokens: 1400 * i + 900,
+      secondsRunning: 0,
+    },
+  })),
+};
+
 const views = {
-  board: formatDashboard(snapshot, shared),
-  detail: formatAgentDetail(detailRun, snapshot, {
-    ...shared,
-    sparkline: tokenRateSparkline(samples, now),
-    runTps: 2_057,
-  }),
+  board: { cols: 132, text: formatDashboard(snapshot, { ...shared, columns: 132, cursor: 1, rows: 44 }), title: "flight board · 132 cols" },
+  board_wide: { cols: 172, text: formatDashboard(snapshot, { ...shared, columns: 172, cursor: 1, rows: 44 }), title: "flight board · 172 cols (flex columns + negative space)" },
+  board_narrow: { cols: 78, text: formatDashboard(snapshot, { ...shared, columns: 78, cursor: 1, rows: 44 }), title: "flight board · 78 cols (tmux split)" },
+  board_crowd: { cols: 132, text: formatDashboard(crowd, { ...shared, maxAgents: 100, columns: 132, cursor: 33, rows: 32 }), title: "flight board · 64 running agents in a 32-row viewport" },
+  detail: {
+    cols: 132,
+    title: "agent detail (⏎ on ENG-2027)",
+    text: formatAgentDetail(detailRun, snapshot, {
+      ...shared,
+      columns: 132,
+      sparkline: tokenRateSparkline(samples, now),
+      runTps: 2_057,
+    }),
+  },
 };
 
 // --- ANSI -> HTML ------------------------------------------------------------
@@ -143,20 +169,21 @@ function ansiToHtml(text) {
 
 const outDir = process.argv[2] ?? "/tmp/tui-capture";
 mkdirSync(outDir, { recursive: true });
-for (const [name, ansiText] of Object.entries(views)) {
+for (const [name, view] of Object.entries(views)) {
+  const width = Math.ceil(view.cols * 7.85 + 48);
   const html = `<!doctype html><html><head><meta charset="utf-8"><style>
 * { margin:0; padding:0; box-sizing:border-box; }
 html,body { background:#0b0a0c; }
-.win { width:1180px; margin:18px; border-radius:12px; overflow:hidden; background:#19181a;
+.win { width:${width}px; margin:18px; border-radius:12px; overflow:hidden; background:#19181a;
        box-shadow:0 12px 48px rgba(0,0,0,.6); border:1px solid #2e2b30; }
 .bar { display:flex; align-items:center; gap:8px; padding:12px 16px; background:#221f22; border-bottom:1px solid #2e2b30; }
 .dot { width:12px; height:12px; border-radius:50%; }
 .title { color:#a6a2aa; font:600 13px ui-monospace,SFMono-Regular,Menlo,monospace; margin-left:8px; }
 pre { padding:16px 22px 20px; font:13px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; color:#FCFCFA; white-space:pre; }
 </style></head><body><div class="win">
-<div class="bar"><div class="dot" style="background:#ff5f57"></div><div class="dot" style="background:#febc2e"></div><div class="dot" style="background:#28c840"></div><div class="title">lorenz — ${name === "board" ? "flight board" : "agent detail (pressed 2)"}</div></div>
-<pre>${ansiToHtml(ansiText)}</pre></div></body></html>`;
+<div class="bar"><div class="dot" style="background:#ff5f57"></div><div class="dot" style="background:#febc2e"></div><div class="dot" style="background:#28c840"></div><div class="title">lorenz — ${view.title}</div></div>
+<pre>${ansiToHtml(view.text)}</pre></div></body></html>`;
   writeFileSync(join(outDir, `${name}.html`), html);
-  writeFileSync(join(outDir, `${name}.txt`), ansiText.replaceAll(/\x1b\[[0-9;]*m/g, ""));
+  writeFileSync(join(outDir, `${name}.txt`), view.text.replaceAll(/\x1b\[[0-9;]*m/g, ""));
 }
-console.log("wrote board.html + detail.html to", outDir);
+console.log("wrote", Object.keys(views).join(", "), "to", outDir);

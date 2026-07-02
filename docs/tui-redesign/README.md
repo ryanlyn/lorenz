@@ -13,7 +13,17 @@
 >   deltas, not the cumulative ramp), and the event tape filtered to that agent.
 >   `←/→` cycles agents, `esc` returns to the board, `q` quits.
 >
-> `board.png` / `detail.png` capture the real formatters (regenerate with
+> The board is **responsive**: a priority-ordered column layout drops LANE, HOST,
+> AGENT, and STAGE as the viewport narrows (the row marker + color keep encoding
+> the lane) and grows TITLE/ACTIVITY plus the column gap when wide, leaving the
+> remainder as negative space. With `rows` known, the table windows itself around
+> the selection cursor (`↑ N more` / `↓ N more (lane counts)`) and the tape gives
+> lines back to the table, so fleets of 100 agents fit any terminal. Selection is
+> cursor-based (`↑/↓` + `⏎`) with digits as 1-9 shortcuts, and the running cap
+> renders only when the CLI passes the configured `maxConcurrentAgents`.
+>
+> `board.png` / `board_wide.png` / `board_narrow.png` / `board_crowd.png` /
+> `detail.png` capture the real formatters (regenerate with
 > `node packages/tui/scripts/capture-live.mjs <out-dir>` and screenshot the HTML).
 > Golden fixtures live in `test/fixtures/dashboard/` and regenerate with
 > `UPDATE_DASHBOARD_FIXTURES=1 vitest run packages/tui/test/tui.test.ts`.

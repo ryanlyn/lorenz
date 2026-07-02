@@ -305,6 +305,7 @@ export async function runDaemon(options: CliOptions): Promise<number> {
                 runtime,
                 dashboardUrl: server?.url("/") ?? null,
                 projectUrl: projectUrlForSettings(workflow.settings),
+                maxAgents: workflow.settings.agent.maxConcurrentAgents,
               }),
             )
           : null;

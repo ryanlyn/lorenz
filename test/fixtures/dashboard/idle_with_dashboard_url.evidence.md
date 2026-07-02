@@ -1,11 +1,11 @@
 ```text
- LORENZ  ▶ 0/10 running · 0 tps · tok 0 · up 0m 0s
+ LORENZ  ▶ 0 running · 0 tps · tok 0 · up 0m 0s
  rate limits unavailable · in 0 / out 0
  poll n/a · project https://linear.app/project/mono/issues · dash http://127.0.0.1:4000/
 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-  #   LANE  ID        TITLE                      STAGE        AGENT  HOST            AGE/TURN    TOKENS  LAST ACTIVITY
+ #   LANE  ID        TITLE                      STAGE         AGENT  HOST          AGE/TURN  TOKENS LAST ACTIVITY                   
 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-      no work in flight
+     no work in flight
 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
  events
    no recent events
