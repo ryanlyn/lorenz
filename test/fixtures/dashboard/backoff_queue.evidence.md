@@ -1,26 +1,16 @@
 ```text
-╭─ LORENZ STATUS
-│ Agents: 1/10
-│ Throughput: 15 tps
-│ Runtime: 45m 0s
-│ Tokens: in 18,000 | out 2,200 | total 20,200
-│ Rate Limits: gpt-5 | primary 0/20,000 reset 95s | secondary 0/60 reset 45s | credits none
-│ Next refresh: n/a
-├─ Running
-│
-│   ID       SLOT  AGENT    STAGE          PID      AGE / TURN   TOKENS     TOOLS    SESSION
-│   ───────────────────────────────────────────────────────────────────────────────────────────────────────────────
-│ ● MT-638   0     codex    retrying       4242     20m 25s / 7      14,200      0 thre...567890
-│
-├─ Backoff queue
-│
-│  ↻ MT-450 attempt=4 in 1.250s error=rate limit exhausted
-│  ↻ MT-451 attempt=2 in 3.900s error=retrying after API timeout with jitter
-│  ↻ MT-452 attempt=6 in 8.100s error=worker crashed restarting cleanly
-│  ↻ MT-453 attempt=1 in 11.000s error=fourth queued retry should also render after removing the top-three limit
-│
-├─ Dispatch blocks
-│
-│  No capacity-blocked issues
-╰─
+ LORENZ  ▶ 1/10 running  ↻ 4 retrying · 15 tps · tok 20,200 · up 45m 0s
+ gpt-5 · primary ░░░░░░░░░░ 0% resets 1m 35s · secondary 0/60 resets 45s · credits none · in 18,000 / out 2,200
+ poll n/a
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  #   LANE  ID        TITLE                      STAGE        AGENT  HOST            AGE/TURN    TOKENS  LAST ACTIVITY
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  1 ▶ run   MT-638    Fixture issue              retrying     codex  local          20m 25s/7    14,200  agent message streami...
+    ↻ retry MT-450    retry attempt 4            —            —      —                  in 2s         —  rate limit exhausted
+    ↻ retry MT-451    retry attempt 2            —            —      —                  in 4s         —  retrying after API timeo...
+    ↻ retry MT-452    retry attempt 6            —            —      —                  in 9s         —  worker crashed restartin...
+    ↻ retry MT-453    retry attempt 1            —            —      —                 in 11s         —  fourth queued retry shou...
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ events
+   no recent events
 ```
