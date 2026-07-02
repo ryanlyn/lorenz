@@ -146,6 +146,7 @@ export function parseConfig(
   if (serverRaw.port !== undefined) settings.server.port = serverRaw.port;
   if (serverRaw.traceDir !== undefined) settings.server.traceDir = serverRaw.traceDir;
   if (serverRaw.staticDir !== undefined) settings.server.staticDir = serverRaw.staticDir;
+  if (serverRaw.publicUrl !== undefined) settings.server.publicUrl = serverRaw.publicUrl;
 
   const loggingRaw = parsed.logging ?? {};
   if (loggingRaw.logFile !== undefined) {

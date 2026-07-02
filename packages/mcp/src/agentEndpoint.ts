@@ -276,7 +276,11 @@ async function localMcpEndpoint(
   const serverHost = normalizeHttpBindHost(settings.server.host);
   const configuredPort = settings.server.port;
   return {
-    url: localServer ? localServer.handle.url(mcpPath) : configuredLocalMcpUrl(settings),
+    url: settings.server.publicUrl
+      ? `${settings.server.publicUrl.replace(/\/$/, "")}${mcpPath}`
+      : localServer
+        ? localServer.handle.url(mcpPath)
+        : configuredLocalMcpUrl(settings),
     authScope:
       configuredToken?.authScope ??
       localServer?.handle.authScope ??
