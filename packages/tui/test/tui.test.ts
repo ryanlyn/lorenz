@@ -27,9 +27,10 @@ test("Ink dashboard renders the flight board with an event tape at the bottom", 
   const frame = stripAnsi(lastFrame() ?? "");
 
   assert.match(frame, /LORENZ/);
-  assert.match(frame, /1 running/);
+  // Running count lives in the status-bar "active" legend, not a separate stat.
+  assert.match(frame, /1 active/);
   // The configured cap renders only when the caller provides it.
-  assert.notMatch(frame, /1\/10/);
+  assert.notMatch(frame, /\/10 active/);
   assert.match(frame, /tps/);
   assert.match(frame, /LANE/);
   assert.match(frame, /run\s+MT-1/);
@@ -77,21 +78,30 @@ test("board adapts its columns to the viewport width", () => {
     now: "2026-05-05T02:00:00.000Z",
     runtimeSeconds: 90,
     throughputTps: 100,
+    throughputSparkline: "▁▁▂▃▅▇█▅▃▂",
+    throughputCumulative: "▁▂▃▄▅▆▇███",
+    maxAgents: 10,
     interactive: true,
-    projectUrl: "https://linear.app/northwind/team/ENG",
+    trackerKind: "linear",
+    agentKind: "codex",
     dashboardUrl: "http://127.0.0.1:8771",
   };
 
-  // Invariant: no rendered line ever exceeds the viewport width.
+  // Invariant: no rendered line ever exceeds the viewport width (incl. the
+  // full-width status bar and the fit-dropped header).
   for (const columns of [60, 72, 84, 100, 132, 180, 220]) {
     const rendered = formatDashboard(snapshot, { ...opts, columns });
     for (const line of rendered.split("\n")) {
       assert.ok(line.length <= columns, `width ${columns} overflowed: "${line}" (${line.length})`);
     }
+    // The status bar fills the width exactly (accounting for the 1-col margins).
+    const barWidth = (rendered.split("\n")[0] ?? "").length;
+    assert.equal(barWidth, columns, `status bar not full width at ${columns}: got ${barWidth}`);
     const detail = formatAgentDetail(snapshot.running[0]!, snapshot, {
       ...opts,
       columns,
       sparkline: "▁▁▂▃▅▇█▅▃▂",
+      cumulative: "▁▂▃▄▅▆▇███",
       runTps: 42,
     });
     for (const line of detail.split("\n")) {
@@ -160,7 +170,7 @@ test("board windows the table to the viewport height with a cursor-following vie
   assert.match(mid, /\b61 ▶ .*MT-061/);
 });
 
-test("running cap renders when provided and lane labels compress when narrow", () => {
+test("running cap rides the active legend only when provided, and identity shows tracker/agent kind", () => {
   const snapshot = dashboardSnapshot({
     now: "2026-05-05T02:00:00.000Z",
     running: [
@@ -182,17 +192,23 @@ test("running cap renders when provided and lane labels compress when narrow", (
     runtimeSeconds: 10,
     throughputTps: 1,
     maxAgents: 100,
+    trackerKind: "linear",
+    agentKind: "codex",
     columns: 132,
   });
-  assert.match(capped, /1\/100 running/);
+  // Cap folded into the active legend; configured kinds replace the old project URL.
+  assert.match(capped, /1\/100 active/);
+  assert.match(capped, /LORENZ · linear\/codex/);
+  assert.notMatch(capped, /project /);
 
-  const narrow = formatDashboard(snapshot, {
+  const uncapped = formatDashboard(snapshot, {
     now: "2026-05-05T02:00:00.000Z",
     runtimeSeconds: 10,
     throughputTps: 1,
-    columns: 72,
+    columns: 132,
   });
-  assert.match(narrow, /1 run\b/);
+  assert.match(uncapped, /1 active/);
+  assert.notMatch(uncapped, /\/\d+ active/);
 });
 
 test("header shows a moving throughput sparkline and a fleet status bar", () => {
@@ -200,6 +216,12 @@ test("header shows a moving throughput sparkline and a fleet status bar", () => 
   const snapshot = {
     ...dashboardSnapshot({
       now,
+      usageTotals: {
+        inputTokens: 249_000,
+        outputTokens: 63_000,
+        totalTokens: 312_000,
+        secondsRunning: 10,
+      },
       running: [runningFixture("MT-1", "codex", "running", "1", 10, 1, 5, "working", now)],
       retrying: [retryFixture("MT-2", 1, 30, "boom", now)],
     }),
@@ -241,21 +263,28 @@ test("header shows a moving throughput sparkline and a fleet status bar", () => 
     runtimeSeconds: 10,
     throughputTps: 1_234,
     throughputSparkline: "▁▂▃▅▇█▆▄▂▁",
+    throughputCumulative: "▁▁▂▃▄▅▆▇██",
     runSparkline: () => "▂▃▅▇▆▅▃▂▁▁",
     columns: 132,
   });
+  const lines = rendered.split("\n");
 
-  // Line 1: the rolling throughput histogram sits beside the tps figure.
-  assert.match(rendered, /▁▂▃▅▇█▆▄▂▁ 1,234 tps/);
-  // Line 2: one stacked bar over history + live lanes + dispatchable backlog.
-  assert.match(rendered, /issues [█░]+/);
+  // Line 1: a full-width stacked bar over history + live lanes + backlog (no label).
+  const bar = lines[0] ?? "";
+  assert.match(bar, /^ [█░]+ $/);
+  assert.equal(bar.length, 132);
+  // Rate histogram beside the tps figure; cumulative histogram beside the total.
+  assert.match(rendered, /rate ▁▂▃▅▇█▆▄▂▁ 1,234 tps/);
+  assert.match(rendered, /total ▁▁▂▃▄▅▆▇██ 312,000 tok/);
+  // Status legend distinguishes finished history, active, waiting, and backlog.
   assert.match(rendered, /1✓/);
   assert.match(rendered, /1✗/);
   assert.match(rendered, /1 active/);
   assert.match(rendered, /1 waiting/);
   assert.match(rendered, /6 backlog/);
-  // No model-specific gauge; rate limits are absent in this snapshot.
+  // No model-specific rate-limit field anymore.
   assert.notMatch(rendered, /primary/);
+  assert.notMatch(rendered, /↺/);
   // The RATE column renders the per-run histogram.
   assert.match(rendered, /RATE/);
   assert.match(rendered, /▂▃▅▇▆▅▃▂▁▁/);
@@ -531,16 +560,12 @@ test("terminal dashboard sanitizes snapshot-derived strings before rendering", (
         ),
       ],
       retrying: [retryFixture("MT-RETRY\n│ fake-retry\x1b[2J", 1, 1, "retry\n│ fake-error", now)],
-      rateLimits: {
-        model: "gpt-5\n│ fake-rate\x1b[2J",
-        primary: { used: 1, limit: 2, resetSeconds: 3 },
-        credits: "none\n│ fake-credit\x1b[2J",
-      },
     }),
     {
       now,
       dashboardUrl: "http://127.0.0.1:4000\n│ fake-dashboard\x1b[2J",
-      projectUrl: "https://linear.app/project\n│ fake-project\x1b[2J",
+      trackerKind: "linear\n│ fake-tracker\x1b[2J",
+      agentKind: "codex\n│ fake-agent\x1b[2J",
       runtimeSeconds: 0,
       throughputTps: 0,
     },
@@ -551,7 +576,10 @@ test("terminal dashboard sanitizes snapshot-derived strings before rendering", (
   assert.match(rendered, /cod\.\.\./);
   assert.match(rendered, /In Progress/);
   assert.match(rendered, /MT-RET/);
-  assert.match(rendered, /gpt-5/);
+  // The configured tracker/agent identity renders (sanitized) in the header.
+  assert.match(rendered, /LORENZ/);
+  assert.match(rendered, /linear/);
+  // No control sequence survives, and nothing injected breaks onto a new line.
   assert.equal(rendered.includes("\x1b[2J"), false);
   assert.notMatch(rendered, /\n│ (agent-kind|fake-\w+|spoofed)/);
 });
@@ -949,7 +977,16 @@ function dashboardScenarios(): Array<{
           },
         ],
       },
-      options: { now: backoffNow, runtimeSeconds: 2_700, throughputTps: 48, maxAgents: 10 },
+      options: {
+        now: backoffNow,
+        runtimeSeconds: 2_700,
+        throughputTps: 48,
+        maxAgents: 10,
+        trackerKind: "linear",
+        agentKind: "codex",
+        throughputSparkline: "▁▂▃▅▇█▆▄▂▁",
+        throughputCumulative: "▁▁▂▃▄▅▆▇██",
+      },
     },
     {
       name: "credits_unlimited",
@@ -987,7 +1024,8 @@ function dashboardScenarios(): Array<{
         runtimeSeconds: 0,
         throughputTps: 0,
         dashboardUrl: "http://127.0.0.1:4000",
-        projectUrl: "https://linear.app/project/mono/issues",
+        trackerKind: "linear",
+        agentKind: "codex",
       },
     },
     {

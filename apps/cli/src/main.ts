@@ -304,7 +304,8 @@ export async function runDaemon(options: CliOptions): Promise<number> {
               React.createElement(RuntimeApp, {
                 runtime,
                 dashboardUrl: server?.url("/") ?? null,
-                projectUrl: projectUrlForSettings(workflow.settings),
+                trackerKind: workflow.settings.tracker.kind,
+                agentKind: workflow.settings.agent.kind,
                 maxAgents: workflow.settings.agent.maxConcurrentAgents,
               }),
             )

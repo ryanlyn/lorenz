@@ -13,12 +13,18 @@
 >   deltas, not the cumulative ramp), and the event tape filtered to that agent.
 >   `←/→` cycles agents, `esc` returns to the board, `q` quits.
 >
-> The header is two light lines: lanes on the left with a **moving 60s throughput
-> sparkline** + uptime right-aligned, then a **fleet status bar** — one stacked bar
-> over finished history (dimmed ✓/✗), active runs (bright), waiting lanes (orange),
-> and the dispatchable backlog (hollow) — with compact `model NN% ↺reset` limits
-> instead of a per-model gauge. Running rows carry a live per-run **RATE** histogram
-> column when width allows.
+> The header is three balanced lines. **Line 1** is the **fleet status bar spanning the
+> full width** — one stacked bar over finished history (dimmed ✓/✗), active runs
+> (bright green), waiting lanes (orange), and the dispatchable backlog (hollow).
+> **Line 2** is identity (`LORENZ` + configured `tracker.kind`/`agent.kind`) on the
+> left with ops vitals (uptime, poll countdown, dashboard address) right-aligned.
+> **Line 3** is the status-bar legend on the left (the concurrency cap rides the
+> `N/max active` label) and the paired throughput charts on the right: a **moving 60s
+> token-rate histogram** next to the tps figure and a **cumulative-total histogram**
+> next to the running token total. No datum is shown twice; the model rate-limit field
+> and the single-tracker project URL are gone. Running rows carry a live per-run
+> **RATE** histogram column when width allows; the detail card shows both the rate and
+> cumulative histograms for the inspected run.
 >
 > The board is **responsive**: a priority-ordered column layout drops LANE, HOST,
 > AGENT, and STAGE as the viewport narrows (the row marker + color keep encoding

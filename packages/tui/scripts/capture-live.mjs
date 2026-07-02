@@ -6,7 +6,12 @@
 // Usage: node packages/tui/scripts/capture-live.mjs <output-dir>
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { formatAgentDetail, formatDashboard, tokenRateSparkline } from "@lorenz/tui";
+import {
+  cumulativeTokenSparkline,
+  formatAgentDetail,
+  formatDashboard,
+  tokenRateSparkline,
+} from "@lorenz/tui";
 
 const now = Date.now();
 const iso = (offsetSeconds) => new Date(now + offsetSeconds * 1000).toISOString();
@@ -107,9 +112,13 @@ const shared = {
   interactive: true,
   maxAgents: 10,
   dashboardUrl: "http://127.0.0.1:8771",
-  projectUrl: "https://linear.app/northwind/team/ENG",
+  trackerKind: "linear",
+  agentKind: "codex",
   get throughputSparkline() {
     return tokenRateSparkline(globalSamples, now);
+  },
+  get throughputCumulative() {
+    return cumulativeTokenSparkline(globalSamples, now);
   },
   runSparkline,
 };
@@ -143,6 +152,7 @@ const views = {
       ...shared,
       columns: 132,
       sparkline: tokenRateSparkline(samples, now),
+      cumulative: cumulativeTokenSparkline(samples, now),
       runTps: 2_057,
     }),
   },

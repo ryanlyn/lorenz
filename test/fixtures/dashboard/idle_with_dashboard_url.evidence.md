@@ -1,7 +1,7 @@
 ```text
- LORENZ  ▶ 0 running                                                                                                0 tps · up 0m 0s
- issues none tracked yet                                                                                            tok 0 · poll n/a
- project https://linear.app/project/mono/issues · dash http://127.0.0.1:4000/
+ ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ 
+ LORENZ · linear/codex                                                             up 0m 0s · poll n/a · dash http://127.0.0.1:4000/
+ no issues tracked                                                                           rate 0 tps · total 0 tok · in 0 / out 0
 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
  #   LANE  ID        TITLE                      STAGE         AGENT  HOST          AGE/TURN  TOKENS LAST ACTIVITY                   
 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────

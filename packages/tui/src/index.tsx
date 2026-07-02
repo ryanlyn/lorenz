@@ -27,12 +27,14 @@ function runKey(run: RunningEntry): string {
 export function RuntimeApp({
   runtime,
   dashboardUrl,
-  projectUrl,
+  trackerKind,
+  agentKind,
   maxAgents,
 }: {
   runtime: RuntimeViewSource;
   dashboardUrl?: string | null | undefined;
-  projectUrl?: string | undefined;
+  trackerKind?: string | undefined;
+  agentKind?: string | undefined;
   maxAgents?: number | undefined;
 }) {
   const runSamplesRef = useRef<Map<string, TokenSample[]>>(new Map());
@@ -141,10 +143,12 @@ export function RuntimeApp({
 
   const shared = {
     dashboardUrl,
-    projectUrl,
+    trackerKind,
+    agentKind,
     maxAgents,
     throughputTps: throughputState.currentTps,
     throughputSparkline: tokenRateSparkline(globalSamplesRef.current, now),
+    throughputCumulative: cumulativeTokenSparkline(globalSamplesRef.current, now),
     now,
     snapshotReceivedAt,
     columns: stdout?.columns,
@@ -160,6 +164,10 @@ export function RuntimeApp({
           ? formatAgentDetail(selectedRun, snapshot, {
               ...shared,
               sparkline: tokenRateSparkline(
+                runSamplesRef.current.get(runKey(selectedRun)) ?? [],
+                now,
+              ),
+              cumulative: cumulativeTokenSparkline(
                 runSamplesRef.current.get(runKey(selectedRun)) ?? [],
                 now,
               ),
@@ -180,7 +188,8 @@ export function RuntimeDashboard({
   snapshot,
   throughputTps,
   dashboardUrl,
-  projectUrl,
+  trackerKind,
+  agentKind,
   now,
   snapshotReceivedAt,
   columns,
@@ -190,7 +199,8 @@ export function RuntimeDashboard({
   snapshot: RuntimeSnapshot;
   throughputTps?: number | undefined;
   dashboardUrl?: string | null | undefined;
-  projectUrl?: string | undefined;
+  trackerKind?: string | undefined;
+  agentKind?: string | undefined;
   now?: Date | string | number | undefined;
   snapshotReceivedAt?: Date | string | number | undefined;
   columns?: number | undefined;
@@ -202,7 +212,8 @@ export function RuntimeDashboard({
       <Text>
         {formatDashboard(snapshot, {
           dashboardUrl,
-          projectUrl,
+          trackerKind,
+          agentKind,
           throughputTps,
           now,
           snapshotReceivedAt,
@@ -311,6 +322,48 @@ export function tokenRateSparkline(
     .join("");
 }
 
+/**
+ * Cumulative *total* histogram over the trailing minute: each glyph is the
+ * running token total at that bucket, scaled across the window's min..max. It
+ * reads as a rising staircase — the growth curve — pairing with the rate
+ * histogram (how fast) to show how much has accumulated (how much).
+ */
+export function cumulativeTokenSparkline(
+  samples: TokenSample[],
+  nowMs: number,
+  buckets = SPARKLINE_BUCKETS,
+  bucketMs = SPARKLINE_BUCKET_MS,
+): string {
+  const flat = (SPARKLINE_LEVELS[0] ?? "▁").repeat(buckets);
+  if (samples.length === 0) return flat;
+  const sorted = [...samples].sort((a, b) => a.timestampMs - b.timestampMs);
+  const tokensAt = (timestampMs: number): number => {
+    let value = sorted[0]?.totalTokens ?? 0;
+    for (const sample of sorted) {
+      if (sample.timestampMs > timestampMs) break;
+      value = sample.totalTokens;
+    }
+    return value;
+  };
+  const start = nowMs - buckets * bucketMs;
+  const totals: number[] = [];
+  for (let index = 0; index < buckets; index++) {
+    totals.push(tokensAt(start + (index + 1) * bucketMs));
+  }
+  const min = Math.min(...totals);
+  const max = Math.max(...totals);
+  if (max <= min) return flat;
+  return totals
+    .map((total) => {
+      const level = Math.min(
+        SPARKLINE_LEVELS.length - 1,
+        Math.round(((total - min) / (max - min)) * (SPARKLINE_LEVELS.length - 1)),
+      );
+      return SPARKLINE_LEVELS[level];
+    })
+    .join("");
+}
+
 /** Current tokens/second for one run, from its trailing samples. */
 export function runTokensPerSecond(samples: TokenSample[], nowMs: number): number {
   if (samples.length < 2) return 0;
@@ -343,19 +396,26 @@ export interface DashboardFormatOptions {
   /** Configured concurrency cap; rendered next to the running count only when known. */
   maxAgents?: number | undefined;
   now?: Date | string | number | undefined;
-  projectUrl?: string | undefined;
+  /** Configured tracker kind (e.g. "linear"); shown in the header identity. */
+  trackerKind?: string | undefined;
+  /** Configured default agent kind (e.g. "codex"); shown in the header identity. */
+  agentKind?: string | undefined;
   /** Per-running-row token-rate histogram; the RATE column renders only when given. */
   runSparkline?: ((run: RuntimeSnapshot["running"][number]) => string) | undefined;
   runtimeSeconds?: number | undefined;
   snapshotReceivedAt?: Date | string | number | undefined;
   /** Rolling global token-rate histogram shown beside the tps figure. */
   throughputSparkline?: string | undefined;
+  /** Rolling cumulative-total token histogram shown beside the total-tokens figure. */
+  throughputCumulative?: string | undefined;
   throughputTps?: number | undefined;
 }
 
 export interface AgentDetailOptions extends DashboardFormatOptions {
   /** Token-rate histogram for the inspected run (see {@link tokenRateSparkline}). */
   sparkline?: string | undefined;
+  /** Cumulative-total token histogram for the inspected run. */
+  cumulative?: string | undefined;
   /** Current tokens/second for the inspected run. */
   runTps?: number | undefined;
 }
@@ -695,7 +755,12 @@ export function formatAgentDetail(
         ),
         ...(options.sparkline
           ? [
-              `${s("90", "rate ", ansi)}${s("32", options.sparkline, ansi)}${rate ? ` ${s("36", rate, ansi)}` : ""} ${s("90", "(last 60s)", ansi)}`,
+              `${s("90", "rate ", ansi)}${s("32", options.sparkline, ansi)}${rate ? ` ${s("36", rate, ansi)}` : ""}`,
+            ]
+          : []),
+        ...(options.cumulative
+          ? [
+              `${s("90", "total ", ansi)}${s("32", options.cumulative, ansi)} ${s("90", "(last 60s)", ansi)}`,
             ]
           : []),
       ],
@@ -775,71 +840,59 @@ function headerLines(
   const throughputTps =
     options.throughputTps ?? throughput(snapshot.usageTotals.totalTokens, runtimeSeconds);
   const sep = s("90", " · ", ansi);
-  const short = columns < 110;
-  const reserving = snapshot.reserving?.length ?? 0;
   const blocked = Math.max(
     snapshot.blocked.length,
     arrayAt(snapshot, ["dispatchBlocks"])?.length ??
       arrayAt(snapshot, ["dispatch_blocks"])?.length ??
       0,
   );
-  const cap = options.maxAgents !== undefined ? `/${options.maxAgents}` : "";
-  const lanes = [
-    `${s("32", "▶", ansi)} ${s("32", String(snapshot.running.length), ansi)}${s("90", `${cap} ${short ? "run" : "running"}`, ansi)}`,
-    reserving > 0
-      ? `${s("90", "◌", ansi)} ${s("90", `${reserving} ${short ? "rsv" : "reserving"}`, ansi)}`
-      : null,
-    snapshot.retrying.length > 0
-      ? `${s("38;5;208", "↻", ansi)} ${s("38;5;208", String(snapshot.retrying.length), ansi)}${s("90", ` ${short ? "retry" : "retrying"}`, ansi)}`
-      : null,
-    blocked > 0
-      ? `${s("33", "■", ansi)} ${s("33", String(blocked), ansi)}${s("90", ` ${short ? "blk" : "blocked"}`, ansi)}`
-      : null,
-  ].filter((part): part is string => part !== null);
 
-  // Line 1: lanes on the left, live throughput on the right, negative space between.
-  const tpsFigure = s("36", `${formatInteger(throughputTps)} tps`, ansi);
-  const line1 = joinRight(
-    ` ${b("LORENZ", ansi)}  ${lanes.join("  ")}`,
-    [
-      options.throughputSparkline
-        ? `${s("32", options.throughputSparkline, ansi)} ${tpsFigure}`
-        : tpsFigure,
-      `${s("90", "up ", ansi)}${s("35", formatMinutesSeconds(runtimeSeconds), ansi)}`,
-    ],
-    sep,
-    columns,
-  );
+  // Line 1: the fleet issue bar spans the full width of the header. The
+  // configured concurrency cap rides the "active" legend, so the running count
+  // is not repeated as a separate stat.
+  const status = renderStatusBar(snapshot, blocked, options.maxAgents, ansi, columns - 2);
+  const barLine = ` ${status.bar} `;
 
-  // Line 2: the fleet-wide issue bar on the left, compact vitals on the right.
-  const status = issueStatusBar(snapshot, blocked, ansi, columns);
-  const rightParts = [
-    `${s("90", "tok ", ansi)}${s("33", formatInteger(snapshot.usageTotals.totalTokens), ansi)}`,
-    ...(compactLimits(snapshot.rateLimits, ansi) ?? []),
+  // Line 2: identity on the left (LORENZ + configured tracker/agent kind),
+  // operational vitals right-aligned.
+  const kinds = [options.trackerKind, options.agentKind]
+    .filter((kind): kind is string => typeof kind === "string" && kind.trim() !== "")
+    .map((kind) => terminalCell(kind));
+  const identity =
+    kinds.length > 0
+      ? ` ${b("LORENZ", ansi)}${sep}${s("36", kinds.join("/"), ansi)}`
+      : ` ${b("LORENZ", ansi)}`;
+  const opsParts = [
+    `${s("90", "up ", ansi)}${s("35", formatMinutesSeconds(runtimeSeconds), ansi)}`,
     formatPollPart(snapshot, now, ansi),
+    ...(options.dashboardUrl
+      ? [
+          `${s("90", "dash ", ansi)}${s("36", normalizeDashboardUrl(terminalCell(options.dashboardUrl)), ansi)}`,
+        ]
+      : []),
   ];
-  const right2Budget = columns - visibleLength(status.mandatory) - 2;
-  const right2 = fitParts(rightParts, sep, right2Budget);
-  const line2 = joinRight(
-    fitLine(status.mandatory, status.legend, sep, columns - visibleLength(right2) - 2),
-    right2 === "" ? [] : [right2],
-    sep,
-    columns,
-  );
+  const identityLine = joinRight(identity, opsParts, sep, columns);
 
-  const lines = [line1, line2];
-  const urlParts: string[] = [];
-  if (options.projectUrl) {
-    urlParts.push(`${s("90", "project ", ansi)}${styledCell("36", options.projectUrl, ansi)}`);
-  }
-  if (options.dashboardUrl) {
-    urlParts.push(
-      `${s("90", "dash ", ansi)}${s("36", normalizeDashboardUrl(terminalCell(options.dashboardUrl)), ansi)}`,
-    );
-  }
-  const [firstUrl, ...restUrls] = urlParts;
-  if (firstUrl !== undefined) lines.push(fitLine(` ${firstUrl}`, restUrls, sep, columns));
-  return lines;
+  // Line 3: the status-bar legend on the left; the paired throughput charts
+  // (moving rate + cumulative total) with their numerics on the right.
+  const legendLine =
+    status.legend.length > 0
+      ? fitLine(` ${status.legend[0]}`, status.legend.slice(1), sep, columns)
+      : ` ${s("90", "no issues tracked", ansi)}`;
+  const rateChart = options.throughputSparkline
+    ? `${s("90", "rate ", ansi)}${s("32", options.throughputSparkline, ansi)} ${s("36", `${formatInteger(throughputTps)} tps`, ansi)}`
+    : `${s("90", "rate ", ansi)}${s("36", `${formatInteger(throughputTps)} tps`, ansi)}`;
+  const totalChart = `${s("90", "total ", ansi)}${
+    options.throughputCumulative ? `${s("32", options.throughputCumulative, ansi)} ` : ""
+  }${s("33", formatInteger(snapshot.usageTotals.totalTokens), ansi)}${s("90", " tok", ansi)}`;
+  const inOut = s(
+    "90",
+    `in ${formatInteger(snapshot.usageTotals.inputTokens)} / out ${formatInteger(snapshot.usageTotals.outputTokens)}`,
+    ansi,
+  );
+  const chartsLine = joinRight(legendLine, [rateChart, totalChart, inOut], sep, columns);
+
+  return [barLine, identityLine, chartsLine];
 }
 
 /** Greedily join parts with a separator while the budget allows. */
@@ -861,36 +914,41 @@ function joinRight(left: string, rightParts: string[], sep: string, columns: num
   return `${left}${" ".repeat(Math.max(2, padding))}${right}`;
 }
 
-const STATUS_BAR_ACTIVE = { color: "1;92", char: "█" };
+interface StatusSegment {
+  count: number;
+  color: string;
+  char: string;
+  label: string;
+  labelColor: string;
+}
 
 /**
- * One stacked bar over every issue the runtime can see: finished history
- * (dimmed), live lanes (active runs bright, waiting orange), and the
- * still-dispatchable backlog (hollow). Widths are proportional but every
- * non-zero status keeps at least one cell.
+ * The full-width stacked bar over every issue the runtime can see: finished
+ * history (dimmed ✓/✗), live lanes (active runs bright, waiting orange), and
+ * the still-dispatchable backlog (hollow). Fills exactly `barWidth` cells;
+ * every non-zero status keeps at least one cell, and the rest is proportional.
  */
-function issueStatusBar(
+function renderStatusBar(
   snapshot: RuntimeSnapshot,
   blockedCount: number,
+  maxAgents: number | undefined,
   ansi: boolean,
-  columns: number,
-): { mandatory: string; legend: string[] } {
+  barWidth: number,
+): { bar: string; legend: string[] } {
+  const width = Math.max(1, barWidth);
   const history = snapshot.runHistory ?? [];
   const done = history.filter((entry) => entry.outcome === "success").length;
   const failed = history.length - done;
   const active = snapshot.running.length;
+  const activeLabel =
+    maxAgents !== undefined ? `${active}/${maxAgents} active` : `${active} active`;
   const waiting = (snapshot.reserving?.length ?? 0) + snapshot.retrying.length + blockedCount;
   // Eligible issues not yet claimed by a live lane are the dispatchable backlog.
   const backlog = Math.max(0, snapshot.poll.eligible - blockedCount);
-  const segments = [
+  const segments: StatusSegment[] = [
     { count: done, color: "2;32", char: "█", label: `${done}✓`, labelColor: "32" },
     { count: failed, color: "2;31", char: "█", label: `${failed}✗`, labelColor: "31" },
-    {
-      count: active,
-      ...STATUS_BAR_ACTIVE,
-      label: `${active} active`,
-      labelColor: "1;92",
-    },
+    { count: active, color: "1;92", char: "█", label: activeLabel, labelColor: "1;92" },
     {
       count: waiting,
       color: "38;5;208",
@@ -902,12 +960,8 @@ function issueStatusBar(
   ];
   const total = segments.reduce((sum, segment) => sum + segment.count, 0);
   if (total === 0) {
-    return {
-      mandatory: ` ${s("90", "issues", ansi)} ${s("90", "none tracked yet", ansi)}`,
-      legend: [],
-    };
+    return { bar: s("90", "░".repeat(width), ansi), legend: [] };
   }
-  const width = Math.max(10, Math.min(28, Math.floor(columns / 6)));
   const widths = segments.map((segment) =>
     segment.count === 0 ? 0 : Math.max(1, Math.round((segment.count / total) * width)),
   );
@@ -932,35 +986,7 @@ function issueStatusBar(
   const legend = segments
     .filter((segment) => segment.count > 0)
     .map((segment) => s(segment.labelColor, segment.label, ansi));
-  return { mandatory: ` ${s("90", "issues", ansi)} ${bar}`, legend };
-}
-
-/** Rate limits shrunk to "model NN% ↺reset": enough to see pressure, no gauge. */
-function compactLimits(value: unknown, ansi: boolean): string[] | null {
-  if (value === null || value === undefined) return null;
-  const model =
-    stringAt(value, ["model"]) ?? stringAt(value, ["model_slug"]) ?? stringAt(value, ["modelSlug"]);
-  const bucket = recordAt(value, ["primary"]);
-  const used = numberAt(bucket, ["used"]) ?? numberAt(bucket, ["remaining"]) ?? 0;
-  const limit = numberAt(bucket, ["limit"]) ?? numberAt(bucket, ["total"]) ?? 0;
-  const resetSeconds =
-    numberAt(bucket, ["resetSeconds"]) ??
-    numberAt(bucket, ["reset_seconds"]) ??
-    numberAt(bucket, ["resetsInSeconds"]) ??
-    0;
-  if (!model && limit <= 0) return null;
-  const modelCell = model ? terminalCell(model) : null;
-  const parts: string[] = [];
-  if (limit > 0) {
-    const percent = Math.min(100, Math.max(0, Math.round((used / limit) * 100)));
-    const color = percent >= 90 ? "31" : percent >= 75 ? "33" : "90";
-    parts.push(
-      `${s("90", modelCell ? `${modelCell} ` : "limits ", ansi)}${s(color, `${percent}%`, ansi)}${s("90", ` ↺${formatDuration(resetSeconds)}`, ansi)}`,
-    );
-  } else if (modelCell) {
-    parts.push(s("90", modelCell, ansi));
-  }
-  return parts.length === 0 ? null : parts;
+  return { bar, legend };
 }
 
 function rule(columns: number, ansi: boolean): string {
@@ -1276,11 +1302,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function recordAt(value: unknown, path: string[]): Record<string, unknown> | null {
-  const found = valueAt(value, path);
-  return isRecord(found) ? found : null;
-}
-
 function arrayAt(value: unknown, path: string[]): unknown[] | null {
   const found = valueAt(value, path);
   return Array.isArray(found) ? found : null;
@@ -1289,11 +1310,6 @@ function arrayAt(value: unknown, path: string[]): unknown[] | null {
 function stringAt(value: unknown, path: string[]): string | null {
   const found = valueAt(value, path);
   return typeof found === "string" && found.trim() !== "" ? found : null;
-}
-
-function numberAt(value: unknown, path: string[]): number | null {
-  const found = valueAt(value, path);
-  return typeof found === "number" && Number.isFinite(found) ? found : null;
 }
 
 function valueAt(value: unknown, path: string[]): unknown {
