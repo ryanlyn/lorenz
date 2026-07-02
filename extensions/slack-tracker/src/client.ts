@@ -2,8 +2,6 @@ import { defaultStateType, normalizeIssue } from "@lorenz/issue";
 import type {
   Issue,
   IssueStateType,
-  RuntimeTrackerReconcileOptions,
-  RuntimeTrackerReconcileResult,
   RuntimeTrackerClient,
   Settings,
   TrackerChangeStream,
@@ -167,10 +165,10 @@ export function trackedRootsOf(scan: SlackChannelScan): SlackMessage[] {
 }
 
 /**
- * One scan serves every read within a poll cycle: the runtime triggers two back-to-back full
- * scans per cycle (terminal-state reconciliation, then candidates), and each scan pages the
- * full channel history against a tightly rate-limited API. Comfortably shorter than any real
- * poll interval, so cross-poll staleness stays bounded.
+ * One scan serves every read within a poll cycle: the runtime's by-id reconciliation forces a
+ * fresh scan, and the candidate fetch that follows moments later reuses it instead of re-paging
+ * channel history against a tightly rate-limited API. Comfortably shorter than any real poll
+ * interval, so cross-poll staleness stays bounded.
  */
 const SCAN_CACHE_TTL_MS = 10_000;
 
@@ -236,70 +234,43 @@ export class SlackTrackerClient implements RuntimeTrackerClient {
     });
   }
 
-  async fetchIssuesByIds(ids: string[]): Promise<Issue[]> {
-    const base = await this.transport.teamUrl();
-    const out: Issue[] = [];
-    for (const id of ids) {
-      const parts = splitIssueId(id);
-      if (!parts) continue;
-      const [channel, ts] = parts;
-      // Apply the same tracked-message predicate as candidate discovery and the Slack write
-      // tools. If a human edits the request away, the issue reconciles as gone, not live.
-      let root: SlackMessage;
-      try {
-        root = await requireTrackedMessage(this.settings, this.transport, channel, ts);
-      } catch {
-        continue;
-      }
-      out.push(await this.issueFromRoot(root, base));
-    }
-    return out;
-  }
-
   /**
-   * Reconciliation-path refresh (see {@link RuntimeTrackerClient.reconcileIssuesByIds}). This takes
-   * a fresh scan so running/retrying issue state is current, warms the scan cache for the following
-   * candidate fetch, and falls back to by-id reads for roots outside the scan window.
+   * The by-id refresh is driven by one fresh channel scan: every id whose root is in the scan is
+   * resolved from it with no per-id read, and the scan warms the cache for the candidate fetch
+   * that follows in the same poll cycle - so a poll costs one scan, not a scan plus a read per
+   * tracked issue. Ids outside the scan (roots older than any configured scan window) fall back
+   * to authoritative per-id reads, so a still-valid root is never reported gone (the runtime
+   * would release its claim). The fresh scan (not the cached one) keeps this path as current as
+   * the per-id reads it replaces: the runtime aborts and releases runs based on these states.
    */
-  async reconcileIssuesByIds(
-    ids: string[],
-    options: RuntimeTrackerReconcileOptions = {},
-  ): Promise<RuntimeTrackerReconcileResult> {
-    if (ids.length === 0) return { issues: [] };
+  async fetchIssuesByIds(ids: string[]): Promise<Issue[]> {
+    const parsed = ids.flatMap((id) => {
+      const parts = splitIssueId(id);
+      return parts ? [[id, parts] as const] : [];
+    });
+    if (parsed.length === 0) return [];
     const [scan, base] = await Promise.all([
       this.scanCached({ forceRefresh: true }),
       this.transport.teamUrl(),
     ]);
-    const trackedById = new Map<string, SlackMessage>(
+    const scannedById = new Map<string, SlackMessage>(
       trackedRootsOf(scan).map((root) => [`${root.channel}:${root.ts}`, root]),
     );
-    const resolved = new Map<string, Issue>();
-    const missingFromScan: string[] = [];
-    for (const id of ids) {
-      const root = trackedById.get(id);
+    const out: Issue[] = [];
+    for (const [id, parts] of parsed) {
+      let root = scannedById.get(id);
       if (!root) {
-        missingFromScan.push(id);
-        continue;
+        // Apply the same tracked-message predicate as candidate discovery and the Slack write
+        // tools. If a human edits the request away, the issue reconciles as gone, not live.
+        try {
+          root = await requireTrackedMessage(this.settings, this.transport, parts[0], parts[1]);
+        } catch {
+          continue;
+        }
       }
-      resolved.set(id, await this.issueFromRoot(root, base));
+      out.push(await this.issueFromRoot(root, base));
     }
-    if (missingFromScan.length > 0) {
-      for (const issue of await this.fetchIssuesByIds(missingFromScan)) {
-        resolved.set(issue.id, issue);
-      }
-    }
-    // Preserve the requested order (matching fetchIssuesByIds); ids that resolved to nothing
-    // (genuinely gone) are omitted.
-    const issues = ids
-      .map((id) => resolved.get(id))
-      .filter((issue): issue is Issue => issue !== undefined);
-    const candidateIssues = (options.candidateIds ?? [])
-      .map((id) => resolved.get(id))
-      .filter((issue): issue is Issue => issue !== undefined);
-    return {
-      issues,
-      ...(candidateIssues.length > 0 ? { candidateIssues } : {}),
-    };
+    return out;
   }
 
   async fetchIssuesByStates(states: string[]): Promise<Issue[]> {

@@ -214,8 +214,11 @@ Each poll re-scans `conversations.history` newest-first, paging at `limit=200` u
 `next_cursor` or `MAX_HISTORY_PAGES` (500) is reached. When `scan_lookback_days` is set to a
 positive value, the scan sends a fixed trailing `oldest` watermark. The watermark is not an
 advancing cursor: active issues inside the window keep re-surfacing, while new discovery of roots
-older than the window is intentionally bounded. Claimed issues are still refreshed by id, unbounded,
-during reconciliation. Hitting the page cap with a cursor remaining logs a loud truncation warning.
+older than the window is intentionally bounded. Because `conversations.history` filters on the
+thread root's ts, that bound also applies to reply mentions: a fresh reply-mention in a thread whose
+root predates the window is not discovered, regardless of `reply_lookback_days`. Claimed issues are
+still refreshed by id, unbounded, during reconciliation. Hitting the page cap with a cursor
+remaining logs a loud truncation warning.
 Channels are scanned concurrently; one failed channel is skipped and logged, and only an
 all-channels failure rejects the poll with `poll_error`.
 

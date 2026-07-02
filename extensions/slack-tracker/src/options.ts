@@ -50,9 +50,11 @@ export interface SlackTrackerOptions {
    * backlog is not re-paged every poll - useful both for large channels and for Slack apps on
    * restricted history-read limits. This is a FIXED trailing window recomputed every poll (not an
    * advancing persisted cursor), so every active issue inside the window keeps re-surfacing; only a
-   * bot-mention whose ROOT message is older than the window stops being newly discovered. Once an
-   * issue is claimed it is refreshed by id (unbounded), so in-flight work is unaffected. Set it
-   * generously on channels with long-lived issues.
+   * mention whose thread ROOT is older than the window stops being newly discovered. That includes
+   * reply mentions: `conversations.history` filters on the root's ts, so a fresh reply mention in
+   * a thread whose root predates the window is never discovered, regardless of `replyLookbackDays`.
+   * Once an issue is claimed it is refreshed by id (unbounded), so in-flight work is unaffected.
+   * Set it generously on channels with long-lived issues or revived old threads.
    */
   scanLookbackDays?: number | undefined;
 }

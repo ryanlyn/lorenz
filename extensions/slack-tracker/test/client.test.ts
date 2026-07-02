@@ -494,7 +494,7 @@ test("the bot's reaction mirror self-heals after a human command", async () => {
   assert.equal(reactionCalls, afterHeal);
 });
 
-test("reconcileIssuesByIds derives in-window issues from the scan and warms the candidate cache", async () => {
+test("fetchIssuesByIds derives in-window issues from the scan and warms the candidate cache", async () => {
   const transport = new InMemorySlackTransport(
     { C1: [{ ts: "1700000000.000100", text: "<@U_BOT> tracked work", reactions: ["eyes"] }] },
     { botUserId: "U_BOT" },
@@ -513,37 +513,37 @@ test("reconcileIssuesByIds derives in-window issues from the scan and warms the 
   };
   const client = new SlackTrackerClient(settings(), transport);
 
-  // Reconcile a tracked id, then fetch candidates in the same cycle: ONE scan total, and the
+  // Refresh a tracked id, then fetch candidates in the same cycle: ONE scan total, and the
   // in-window id is derived from the scan with NO per-id getMessage round-trip.
-  const reconciled = await client.reconcileIssuesByIds(["C1:1700000000.000100"]);
+  const refreshed = await client.fetchIssuesByIds(["C1:1700000000.000100"]);
   assert.deepEqual(
-    reconciled.issues.map((i) => i.id),
+    refreshed.map((i) => i.id),
     ["C1:1700000000.000100"],
   );
-  assert.equal(reconciled.candidateIssues, undefined);
   await client.fetchCandidateIssues();
   assert.equal(scans, 1);
   assert.equal(getMessages, 0);
 });
 
-test("reconcileIssuesByIds returns candidate-scoped issues for requested candidate ids", async () => {
+test("fetchIssuesByIds skips the scan entirely when no id is parseable", async () => {
   const transport = new InMemorySlackTransport(
-    { C1: [{ ts: "1700000000.000100", text: "<@U_BOT> retry work", reactions: ["eyes"] }] },
+    { C1: [{ ts: "1700000000.000100", text: "<@U_BOT> tracked work", reactions: ["eyes"] }] },
     { botUserId: "U_BOT" },
   );
+  let scans = 0;
+  transport.scanChannels = async () => {
+    scans += 1;
+    return { mentions: [], threadedRoots: [] };
+  };
   const client = new SlackTrackerClient(settings(), transport);
 
-  const reconciled = await client.reconcileIssuesByIds(["C1:1700000000.000100"], {
-    candidateIds: ["C1:1700000000.000100"],
-  });
-
-  assert.deepEqual(
-    reconciled.candidateIssues?.map((i) => i.id),
-    ["C1:1700000000.000100"],
-  );
+  // Startup workspace cleanup passes identifiers (no `channel:ts` colon); those must not cost
+  // a channel-history scan.
+  assert.deepEqual(await client.fetchIssuesByIds(["SLK-C1-1700000000-000100"]), []);
+  assert.equal(scans, 0);
 });
 
-test("reconcileIssuesByIds forces a fresh scan before deciding tracked issue state", async () => {
+test("fetchIssuesByIds takes a fresh scan before deciding tracked issue state", async () => {
   const transport = new InMemorySlackTransport(
     { C1: [{ ts: "1700000000.000100", text: "<@U_BOT> tracked work", reactions: ["eyes"] }] },
     { botUserId: "U_BOT" },
@@ -570,16 +570,16 @@ test("reconcileIssuesByIds forces a fresh scan before deciding tracked issue sta
   );
   terminalOnNextScan = true;
 
-  const reconciled = await client.reconcileIssuesByIds(["C1:1700000000.000100"]);
+  const refreshed = await client.fetchIssuesByIds(["C1:1700000000.000100"]);
 
   assert.equal(scans, 2);
   assert.deepEqual(
-    reconciled.issues.map((i) => i.state),
+    refreshed.map((i) => i.state),
     ["Done"],
   );
 });
 
-test("reconcileIssuesByIds falls back to getMessage for ids outside the scan window (never drops a live root)", async () => {
+test("fetchIssuesByIds falls back to getMessage for ids outside the scan window (never drops a live root)", async () => {
   const transport = new InMemorySlackTransport(
     {
       C1: [
@@ -589,7 +589,7 @@ test("reconcileIssuesByIds falls back to getMessage for ids outside the scan win
     { botUserId: "U_BOT" },
   );
   // Simulate a root older than the candidate scan window: the scan omits it, but the authoritative
-  // by-id read still returns it. Reconcile must NOT report it gone (which would abort its live run).
+  // by-id read still returns it. The refresh must NOT report it gone (which would abort its live run).
   transport.scanChannels = async () => ({ mentions: [], threadedRoots: [] });
   let getMessages = 0;
   const getMessage = transport.getMessage.bind(transport);
@@ -599,15 +599,15 @@ test("reconcileIssuesByIds falls back to getMessage for ids outside the scan win
   };
   const client = new SlackTrackerClient(settings(), transport);
 
-  const reconciled = await client.reconcileIssuesByIds(["C1:1700000000.000100"]);
+  const refreshed = await client.fetchIssuesByIds(["C1:1700000000.000100"]);
   assert.deepEqual(
-    reconciled.issues.map((i) => i.id),
+    refreshed.map((i) => i.id),
     ["C1:1700000000.000100"],
   );
   assert.ok(getMessages > 0);
 });
 
-test("reconcileIssuesByIds preserves the requested id order across scan hits and fallbacks", async () => {
+test("fetchIssuesByIds preserves the requested id order across scan hits and fallbacks", async () => {
   const transport = new InMemorySlackTransport(
     {
       C1: [
@@ -628,12 +628,9 @@ test("reconcileIssuesByIds preserves the requested id order across scan hits and
   });
   const client = new SlackTrackerClient(settings(), transport);
 
-  const result = await client.reconcileIssuesByIds([
-    "C1:1700000000.000100",
-    "C1:1700000000.000200",
-  ]);
+  const result = await client.fetchIssuesByIds(["C1:1700000000.000100", "C1:1700000000.000200"]);
   assert.deepEqual(
-    result.issues.map((i) => i.id),
+    result.map((i) => i.id),
     ["C1:1700000000.000100", "C1:1700000000.000200"],
   );
 });

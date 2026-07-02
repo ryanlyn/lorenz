@@ -37,10 +37,11 @@ tracker:
   #
   # scan_lookback_days: how far back (days) the candidate scan pages conversations.history. The
   # scan sends a trailing `oldest` watermark so a channel's ancient backlog is not re-paged every
-  # poll. A bot-mention whose ROOT message is older than this window stops being newly discovered
-  # (claimed issues are still refreshed by id, unbounded). The default is unbounded for backwards
-  # compatibility; this sample opts into 30 days. Raise it on channels with long-lived
-  # undispatched issues, or set 0 to scan full history.
+  # poll. A mention whose thread ROOT is older than this window stops being newly discovered -
+  # including a fresh reply-mention in an old thread, since history filters on the root's ts -
+  # while claimed issues are still refreshed by id, unbounded. The default is unbounded for
+  # backwards compatibility; this sample opts into 30 days. Raise it on channels with long-lived
+  # undispatched issues or revived old threads, or set 0 to scan full history.
   scan_lookback_days: 30
 polling:
   # Slack conversations.history is rate-limited (with higher limits for Marketplace-approved and

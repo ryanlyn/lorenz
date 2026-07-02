@@ -633,21 +633,13 @@ export interface RuntimeTrackerClient {
    * applied by the runtime, not here.
    */
   fetchCandidateIssues(): Promise<Issue[]>;
-  /** Re-fetches specific issues by tracker id, preserving the requested order. */
-  fetchIssuesByIds(ids: string[]): Promise<Issue[]>;
   /**
-   * Optional poll-reconciliation refresh for already-tracked claims/retries. `issues` must match
-   * {@link fetchIssuesByIds} semantics: preserve requested order, omit genuinely missing ids, and
-   * never report a still-valid id as missing just because it is outside a scan window.
-   *
-   * `candidateIds` names reconciled ids the runtime may need to reconsider for dispatch. Return
-   * only candidate-scoped issues in `candidateIssues`; omit it to keep {@link fetchCandidateIssues}
-   * the sole dispatch source.
+   * Re-fetches specific issues by tracker id, preserving the requested order and omitting ids
+   * that are genuinely gone. The runtime treats omission as issue-deleted and releases the
+   * issue's claims, so a backend whose candidate scan is bounded (for example by a time window)
+   * must never omit a still-valid id merely because it falls outside that window.
    */
-  reconcileIssuesByIds?(
-    ids: string[],
-    options?: RuntimeTrackerReconcileOptions,
-  ): Promise<RuntimeTrackerReconcileResult>;
+  fetchIssuesByIds(ids: string[]): Promise<Issue[]>;
   /**
    * Lists issues currently in any of the given states. Optional because it is only exercised
    * by best-effort flows (notably terminal-state workspace cleanup at startup); backends that
@@ -668,18 +660,6 @@ export interface RuntimeTrackerClient {
    * treating it as an error.
    */
   watch?(onChange: () => void): TrackerChangeStream | null | Promise<TrackerChangeStream | null>;
-}
-
-export interface RuntimeTrackerReconcileOptions {
-  /** Reconciled ids that may be promoted into this poll's dispatch candidate set. */
-  candidateIds?: string[] | undefined;
-}
-
-export interface RuntimeTrackerReconcileResult {
-  /** Refreshed tracked issues, preserving the requested id order and omitting genuinely missing ids. */
-  issues: Issue[];
-  /** Subset safe to merge into dispatch candidates, preserving the requested candidate id order. */
-  candidateIssues?: Issue[] | undefined;
 }
 
 /**
