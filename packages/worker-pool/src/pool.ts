@@ -169,6 +169,13 @@ class WorkerPoolImpl implements WorkerPool {
   // decremented in `grow`'s finally.
   private readonly reservedProvisionsByIssue = new Map<string, number>();
 
+  // Worker ids whose provision is in flight (added before the provision await,
+  // removed in grow/provisionWarm's finally). The worker exists at the backend -
+  // labeled pool-owned and visible to `driver.list()` - before it lands in
+  // inventory, so the reaper's destroy-unknown reconcile consults this set to
+  // avoid reaping a mid-provision worker as a leaked orphan.
+  private readonly pendingProvisionIds = new Set<string>();
+
   // Process-lifetime + daily worker-second accumulators. `dayKey` rolls on UTC day
   // change. The daily total is seeded from the ledger sidecar on hydrate (T10).
   private workerSecondsUsed = 0;
@@ -265,6 +272,7 @@ class WorkerPoolImpl implements WorkerPool {
       // only the survivors `driver.list()` still shows and drops orphan rows.
       isRunActive: () => true,
       hydrated: () => this.hydrated,
+      pendingProvisionIds: () => this.pendingProvisionIds,
       hasGrowthBudget: () => this.hasGrowthHeadroom(),
       destroyWorker: async (record: WorkerRecord, reason: TeardownReason) =>
         this.recycle(record, reason),
@@ -1076,6 +1084,9 @@ class WorkerPoolImpl implements WorkerPool {
 
     const workerId = `worker-${this.workerSeq++}`;
     const labels = [POOL_OWNED_LABEL, ...req.labels];
+    // Shield the not-yet-inventoried worker from the reaper's destroy-unknown
+    // reconcile for the whole provision->probe window; released in the finally.
+    this.pendingProvisionIds.add(workerId);
     // Capture the driver that will actually run this provision (and its
     // generation) BEFORE the await, so a swapDriver racing the provision cannot
     // misattribute the resulting worker: the record's origin is stamped to THIS
@@ -1172,6 +1183,7 @@ class WorkerPoolImpl implements WorkerPool {
       // permanently blocks future growth.
       this.reservedProvisions -= 1;
       this.releaseIssueProvision(req.issueId);
+      this.pendingProvisionIds.delete(workerId);
     }
   }
 
@@ -1489,6 +1501,9 @@ class WorkerPoolImpl implements WorkerPool {
     }
     const workerId = `worker-${this.workerSeq++}`;
     const labels = [POOL_OWNED_LABEL];
+    // Shield the not-yet-inventoried worker from the reaper's destroy-unknown
+    // reconcile for the whole provision->probe window; released in the finally.
+    this.pendingProvisionIds.add(workerId);
     // Capture the driver that will run this warm provision (and its generation)
     // BEFORE the await so a swapDriver racing the provision cannot misattribute the
     // worker (same no-orphan invariant as `grow`).
@@ -1580,6 +1595,7 @@ class WorkerPoolImpl implements WorkerPool {
       await this.ledger.delete(workerId);
     } finally {
       this.reservedProvisions -= 1;
+      this.pendingProvisionIds.delete(workerId);
     }
   }
 
