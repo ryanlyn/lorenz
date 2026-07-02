@@ -141,15 +141,14 @@ export function redactDiagnosticText(value: string): string {
     .replace(BEARER_AUTH_PATTERN, `Bearer ${DIAGNOSTIC_REDACTION}`)
     .replace(BASIC_AUTH_PATTERN, `Basic ${DIAGNOSTIC_REDACTION}`)
     .replace(URL_AUTH_PATTERN, `$1${DIAGNOSTIC_REDACTION}@`)
-    .replace(SECRET_ASSIGNMENT_PATTERN, (_match, prefix: string, quote: string) => {
-      const suffix = quote === "" ? "" : quote;
-      return `${prefix}${quote}${DIAGNOSTIC_REDACTION}${suffix}`;
-    })
+    // The value group stops before the closing quote, so that quote survives in
+    // the output and must not be re-emitted here.
+    .replace(SECRET_ASSIGNMENT_PATTERN, `$1$2${DIAGNOSTIC_REDACTION}`)
     .replace(OP_REFERENCE_PATTERN, DIAGNOSTIC_REDACTION);
 }
 
 export function redactDiagnosticValue<T>(value: T): T {
-  return redactDiagnosticUnknown(value, new WeakSet()) as T;
+  return redactDiagnosticUnknown(value, new WeakMap()) as T;
 }
 
 function registeredSecretsByLength(): string[] {
@@ -159,19 +158,25 @@ function registeredSecretsByLength(): string[] {
   return sortedDiagnosticSecrets;
 }
 
-function redactDiagnosticUnknown(value: unknown, seen: WeakSet<object>): unknown {
+// Maps each visited original to its redacted clone so repeated references (and
+// cycles) resolve to the clone; returning the original here would leak it unredacted.
+function redactDiagnosticUnknown(value: unknown, seen: WeakMap<object, unknown>): unknown {
   if (typeof value === "string") return redactDiagnosticText(value);
   if (typeof value !== "object" || value === null) return value;
-  if (seen.has(value)) return value;
-  seen.add(value);
-  if (Array.isArray(value)) return value.map((item) => redactDiagnosticUnknown(item, seen));
+  if (seen.has(value)) return seen.get(value);
+  if (Array.isArray(value)) {
+    const clone: unknown[] = [];
+    seen.set(value, clone);
+    for (const item of value) clone.push(redactDiagnosticUnknown(item, seen));
+    return clone;
+  }
   if (!isPlainDiagnosticRecord(value)) return value;
-  return Object.fromEntries(
-    Object.entries(value).map(([key, item]): [string, unknown] => [
-      key,
-      redactDiagnosticUnknown(item, seen),
-    ]),
-  );
+  const clone: Record<string, unknown> = {};
+  seen.set(value, clone);
+  for (const [key, item] of Object.entries(value)) {
+    clone[key] = redactDiagnosticUnknown(item, seen);
+  }
+  return clone;
 }
 
 function isPlainDiagnosticRecord(value: object): value is Record<string, unknown> {
