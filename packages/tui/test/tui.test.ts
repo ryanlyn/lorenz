@@ -276,11 +276,10 @@ test("header shows a moving throughput sparkline and a fleet status bar", () => 
   // Rate histogram beside the tps figure; cumulative histogram beside the total.
   assert.match(rendered, /rate ▁▂▃▅▇█▆▄▂▁ 1,234 tps/);
   assert.match(rendered, /total ▁▁▂▃▄▅▆▇██ 312,000 tok/);
-  // Status legend distinguishes finished history, active, waiting, and backlog.
-  assert.match(rendered, /1✓/);
-  assert.match(rendered, /1✗/);
+  // Status legend distinguishes terminal history, active, pending, and backlog.
+  assert.match(rendered, /1✓ 1✗/);
   assert.match(rendered, /1 active/);
-  assert.match(rendered, /1 waiting/);
+  assert.match(rendered, /1 pending/);
   assert.match(rendered, /6 backlog/);
   // No model-specific rate-limit field anymore.
   assert.notMatch(rendered, /primary/);

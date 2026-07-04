@@ -14,8 +14,10 @@
 >   `←/→` cycles agents, `esc` returns to the board, `q` quits.
 >
 > The header is three balanced lines. **Line 1** is the **fleet status bar spanning the
-> full width** — one stacked bar over finished history (dimmed ✓/✗), active runs
-> (bright green), waiting lanes (orange), and the dispatchable backlog (hollow).
+> full width** — one stacked pipeline bar: terminal states reached in this orchestrator
+> instantiation (muted green; the legend keeps the ✓/✗ split), active runs (green),
+> pending lanes that are retrying/backing off (orange), and the remaining dispatchable
+> backlog (muted grey, hollow).
 > **Line 2** is identity (`LORENZ` + configured `tracker.kind`/`agent.kind`) on the
 > left with ops vitals (uptime, poll countdown, dashboard address) right-aligned.
 > **Line 3** is the status-bar legend on the left (the concurrency cap rides the

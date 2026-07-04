@@ -923,10 +923,13 @@ interface StatusSegment {
 }
 
 /**
- * The full-width stacked bar over every issue the runtime can see: finished
- * history (dimmed ✓/✗), live lanes (active runs bright, waiting orange), and
- * the still-dispatchable backlog (hollow). Fills exactly `barWidth` cells;
- * every non-zero status keeps at least one cell, and the rest is proportional.
+ * The full-width stacked bar over every issue the runtime can see, ordered as
+ * a pipeline: terminal states reached in this orchestrator instantiation
+ * (muted green, ✓ and ✗ alike — the legend keeps the split), active runs
+ * (green), pending lanes that are retrying/backing off (orange), and the
+ * remaining dispatchable backlog (muted grey, hollow). Fills exactly
+ * `barWidth` cells; every non-zero status keeps at least one cell, and the
+ * rest is proportional.
  */
 function renderStatusBar(
   snapshot: RuntimeSnapshot,
@@ -942,18 +945,23 @@ function renderStatusBar(
   const active = snapshot.running.length;
   const activeLabel =
     maxAgents !== undefined ? `${active}/${maxAgents} active` : `${active} active`;
-  const waiting = (snapshot.reserving?.length ?? 0) + snapshot.retrying.length + blockedCount;
+  const pending = (snapshot.reserving?.length ?? 0) + snapshot.retrying.length + blockedCount;
   // Eligible issues not yet claimed by a live lane are the dispatchable backlog.
   const backlog = Math.max(0, snapshot.poll.eligible - blockedCount);
   const segments: StatusSegment[] = [
-    { count: done, color: "2;32", char: "█", label: `${done}✓`, labelColor: "32" },
-    { count: failed, color: "2;31", char: "█", label: `${failed}✗`, labelColor: "31" },
-    { count: active, color: "1;92", char: "█", label: activeLabel, labelColor: "1;92" },
     {
-      count: waiting,
+      count: history.length,
+      color: "2;32",
+      char: "█",
+      label: failed > 0 ? `${done}✓ ${failed}✗` : `${done}✓`,
+      labelColor: "2;32",
+    },
+    { count: active, color: "92", char: "█", label: activeLabel, labelColor: "92" },
+    {
+      count: pending,
       color: "38;5;208",
       char: "█",
-      label: `${waiting} waiting`,
+      label: `${pending} pending`,
       labelColor: "38;5;208",
     },
     { count: backlog, color: "90", char: "░", label: `${backlog} backlog`, labelColor: "90" },
