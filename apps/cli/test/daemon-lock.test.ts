@@ -223,20 +223,24 @@ test("daemon lock reports stale owners without stealing by default", async () =>
   }
 });
 
+function mockDeadPid(deadPid: number) {
+  return vi.spyOn(process, "kill").mockImplementation(((pid: number | string) => {
+    if (pid === deadPid) {
+      const error = new Error("No such process") as NodeJS.ErrnoException;
+      error.code = "ESRCH";
+      throw error;
+    }
+    return true;
+  }) as typeof process.kill);
+}
+
 test("daemon lock can replace a stale owner when takeover is requested", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "lorenz-daemon-stale-replace-"));
   try {
     const workflowPath = path.join(root, "WORKFLOW.md");
     const lockPath = daemonLockPath(workflowPath);
     const deadPid = 101;
-    const killSpy = vi.spyOn(process, "kill").mockImplementation(((pid: number | string) => {
-      if (pid === deadPid) {
-        const error = new Error("No such process") as NodeJS.ErrnoException;
-        error.code = "ESRCH";
-        throw error;
-      }
-      return true;
-    }) as typeof process.kill);
+    const killSpy = mockDeadPid(deadPid);
     await mkdir(path.dirname(lockPath), { recursive: true });
     await writeFile(
       lockPath,
@@ -265,7 +269,7 @@ test("daemon lock can replace a stale owner when takeover is requested", async (
         }),
         endpoint: { kind: "http", address: "http://127.0.0.1:5050" },
         now: new Date("2026-01-01T00:02:00.000Z"),
-        replaceStale: true,
+        replaceDeadOwner: true,
         staleAfterMs: 60_000,
       });
 
@@ -277,6 +281,57 @@ test("daemon lock can replace a stale owner when takeover is requested", async (
       assert.ok(record?.controlToken);
       assert.equal(killSpy.mock.calls[0]?.[0], deadPid);
       assert.equal(killSpy.mock.calls[0]?.[1], 0);
+    } finally {
+      killSpy.mockRestore();
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("daemon lock replaces a dead same-host owner without waiting for heartbeat staleness", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "lorenz-daemon-dead-fresh-"));
+  try {
+    const workflowPath = path.join(root, "WORKFLOW.md");
+    const lockPath = daemonLockPath(workflowPath);
+    const deadPid = 101;
+    const killSpy = mockDeadPid(deadPid);
+    await mkdir(path.dirname(lockPath), { recursive: true });
+    // Heartbeat is current: the owner crashed moments ago, well inside the staleness window.
+    await writeFile(
+      lockPath,
+      JSON.stringify({
+        version: 1,
+        ownerId: "owner-a",
+        pid: deadPid,
+        hostname: hostname(),
+        startedAt: "2026-01-01T00:00:00.000Z",
+        workflowPath,
+        workspaceRoot: root,
+        endpoint: { kind: "socket", address: "/tmp/lorenz.sock" },
+        heartbeatAt: "2026-01-01T00:00:59.000Z",
+      }),
+      "utf8",
+    );
+
+    try {
+      const result = await acquireDaemonLock({
+        lockPath,
+        identity: createDaemonIdentity({
+          workflowPath,
+          workspaceRoot: root,
+          ownerId: "owner-b",
+          now: new Date("2026-01-01T00:01:00.000Z"),
+        }),
+        endpoint: { kind: "http", address: "http://127.0.0.1:5050" },
+        now: new Date("2026-01-01T00:01:00.000Z"),
+        replaceDeadOwner: true,
+        staleAfterMs: 60_000,
+      });
+
+      assert.equal(result.status, "acquired");
+      if (result.status !== "acquired") throw new Error("dead owner should be replaced");
+      assert.equal((await readDaemonLock(lockPath))?.ownerId, "owner-b");
     } finally {
       killSpy.mockRestore();
     }
@@ -317,7 +372,7 @@ test("daemon lock does not replace a stale same-host owner that is still alive",
       }),
       endpoint: { kind: "http", address: "http://127.0.0.1:5050" },
       now: new Date("2026-01-01T00:02:00.000Z"),
-      replaceStale: true,
+      replaceDeadOwner: true,
       staleAfterMs: 60_000,
     });
 
@@ -370,7 +425,7 @@ test("daemon lock treats unreadable contents as a stale conflict", async () => {
       }),
       endpoint: { kind: "socket", address: "/tmp/replacement.sock" },
       now: new Date("2026-01-01T00:03:00.000Z"),
-      replaceStale: true,
+      replaceDeadOwner: true,
       staleAfterMs: 60_000,
     });
 

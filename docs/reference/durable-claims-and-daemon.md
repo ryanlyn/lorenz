@@ -76,8 +76,11 @@ under:
 ```
 
 A second long-running daemon for the same workflow exits with `daemon_already_running`
-and reports the owner pid and endpoint when available. `--once` remains an isolated
-single-poll mode and does not acquire the long-lived daemon lease.
+and reports the owner pid and endpoint when available. A lease whose same-host owner pid
+is verifiably dead is replaced immediately; if the owner cannot be verified dead (another
+host, or the pid is live or reused) and its heartbeat is stale, startup exits with
+`daemon_lock_stale` and names the lock file to remove to force takeover. `--once` remains
+an isolated single-poll mode and does not acquire the long-lived daemon lease.
 
 When the dashboard server is disabled, the daemon still serves its control endpoints over a unix
 domain socket in a per-user runtime directory, and the lease records that `socket` endpoint. So
@@ -118,6 +121,9 @@ On graceful shutdown the daemon stops the runtime, unmounts the TUI, drains the 
 pool, stops the server, closes the issue store, closes the claim store, and then releases
 the leadership lease.
 
-Forced process exit may leave a lock or claim owner heartbeat behind. Recovery treats
-those records as live until their heartbeat is stale rather than assuming a missing local
-process proves distributed ownership is gone.
+Forced process exit may leave a lock or claim owner heartbeat behind. The daemon lease is
+same-host by design, so a restart reclaims it as soon as the recorded owner pid is
+verifiably dead (`ESRCH`), without waiting for the heartbeat to go stale. Claim owner
+records make no such local-process assumption: recovery treats them as live until their
+heartbeat is stale, because a shared claim store may outlive any one process's view of
+ownership.

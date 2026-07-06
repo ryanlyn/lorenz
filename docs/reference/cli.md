@@ -75,8 +75,10 @@ The worker pool and dispatch coordinator are always constructed - the pool is th
 
 Long-running daemon mode (the `daemon` feature) acquires a local leadership lease keyed by workflow
 path. If another live daemon already owns the lease, startup exits with `daemon_already_running` and
-reports the owner pid and endpoint when available. With the feature off (the default) or `--once`,
-no lease is acquired.
+reports the owner pid and endpoint when available. A crashed owner (same host, pid verifiably dead)
+is replaced immediately; a stale lease whose owner cannot be verified dead exits with
+`daemon_lock_stale` and names the lock file to remove to force takeover. With the feature off (the
+default) or `--once`, no lease is acquired.
 
 ### Shutdown and exit codes
 

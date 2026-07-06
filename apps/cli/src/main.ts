@@ -261,6 +261,12 @@ export async function runDaemon(options: CliOptions): Promise<number> {
       return workflow;
     };
     const workflow = await loadRuntimeWorkflow();
+    // Name the resolved workflow up front: the daemon lease, claim store, and control socket are
+    // all keyed off this absolute path, so a cwd surprise with a relative argument must be
+    // visible before anything starts acting on the wrong tracker.
+    process.stderr.write(
+      `Workflow: ${workflow.path} (tracker: ${workflow.settings.tracker.kind})\n`,
+    );
     // Resolve flags once, from CLI > file (front matter) > env > defaults, and install the frozen
     // snapshot before anything that might read it. Invalid flags throw and surface via the catch.
     const flags = resolveAppFlags(
@@ -542,14 +548,17 @@ async function acquireDaemonLeadership(workflow: WorkflowDefinition): Promise<Da
       workspaceRoot: workflow.settings.workspace.root,
     }),
     endpoint,
-    replaceStale: true,
+    replaceDeadOwner: true,
   });
   if (result.status === "acquired") return result.lock;
   const owner = result.record
     ? `pid=${result.record.pid} endpoint=${result.record.endpoint.address}`
     : "owner=unknown";
-  const stale = result.stale ? " stale=true" : "";
-  throw new Error(`daemon_already_running ${owner}${stale}`);
+  throw new Error(
+    result.stale
+      ? `daemon_lock_stale ${owner} lock=${lockPath} (owner not verifiably dead; remove the lock file to force takeover)`
+      : `daemon_already_running ${owner}`,
+  );
 }
 
 function initialDaemonEndpoint(): DaemonEndpoint {

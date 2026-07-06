@@ -54,7 +54,12 @@ export interface AcquireDaemonLockOptions {
   endpoint: DaemonEndpoint;
   controlToken?: string | undefined;
   now?: Date | undefined;
-  replaceStale?: boolean | undefined;
+  /**
+   * Take over the lease when the recorded owner is a same-host process whose pid is verifiably
+   * dead (ESRCH). Heartbeat staleness alone never authorizes takeover; a stale-but-unverifiable
+   * owner still yields a conflict with `stale: true`.
+   */
+  replaceDeadOwner?: boolean | undefined;
   staleAfterMs?: number | undefined;
 }
 
@@ -223,19 +228,30 @@ export class LocalFileDaemonLeadershipStore implements LeadershipStore<
         return { status: "acquired", lease: new DaemonLock(options.lockPath, record) };
       }
       const existing = await readDaemonLock(options.lockPath);
-      const stale = existing ? this.isStale(existing, now, options.staleAfterMs ?? 60_000) : true;
-      if (stale && options.replaceStale && existing && staleOwnerCanBeReplaced(existing)) {
+      const staleAfterMs = options.staleAfterMs ?? 60_000;
+      const conflict = (record: DaemonLockRecord | null) => ({
+        status: "conflict" as const,
+        record,
+        stale: record ? this.isStale(record, now, staleAfterMs) : true,
+      });
+      // A same-host owner whose pid is gone is dead no matter how fresh its heartbeat is, so
+      // takeover does not wait out the staleness window (a crashed daemon can restart
+      // immediately). Heartbeat staleness still drives the `stale` hint on conflicts where the
+      // pid cannot be verified dead (other host, pid alive or reused, EPERM).
+      if (options.replaceDeadOwner && existing && ownerIsVerifiablyDead(existing)) {
+        // rm-then-create (not an atomic rename) is deliberate: the owner is provably dead, so a
+        // failed create leaves no lock at all (an availability blip the next acquire repairs),
+        // whereas a rename-based swap would reintroduce the by-path TOCTOU this mutation lock
+        // exists to prevent.
         await fs.rm(options.lockPath, { force: true });
         const replaced = await writeExclusiveJsonFile(options.lockPath, record);
         if (replaced) {
           return { status: "acquired", lease: new DaemonLock(options.lockPath, record) };
         }
+        // Report the record that won the recreate race, not the dead owner just removed.
+        return conflict(await readDaemonLock(options.lockPath));
       }
-      return {
-        status: "conflict",
-        record: existing,
-        stale,
-      };
+      return conflict(existing);
     });
   }
 
@@ -248,7 +264,10 @@ export class LocalFileDaemonLeadershipStore implements LeadershipStore<
   }
 }
 
-function staleOwnerCanBeReplaced(record: DaemonLockRecord): boolean {
+// kill(pid, 0) is authoritative only within one pid namespace: sharing the lock directory across
+// pid namespaces with identical hostnames (an unsupported deployment; the lease is same-host by
+// design) could report a live foreign owner as dead and steal its lock.
+function ownerIsVerifiablyDead(record: DaemonLockRecord): boolean {
   if (record.hostname !== os.hostname()) return false;
   if (!Number.isInteger(record.pid) || record.pid <= 0) return false;
   try {

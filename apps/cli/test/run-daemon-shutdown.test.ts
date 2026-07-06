@@ -300,6 +300,44 @@ test("runDaemon rejects a second live daemon for the same workflow", async () =>
   assert.equal(await daemonPromise, 0);
 });
 
+test("runDaemon reports daemon_lock_stale when the owner cannot be verified dead", async () => {
+  mocks.loadWorkflow.mockResolvedValue(await workflowFixture());
+  mocks.acquireDaemonLock = async () => ({
+    status: "conflict",
+    record: {
+      version: 1 as const,
+      ownerId: "owner-a",
+      pid: 4242,
+      hostname: "host-a",
+      startedAt: "2026-01-01T00:00:00.000Z",
+      workflowPath: "/tmp/WORKFLOW.md",
+      workspaceRoot: "/tmp",
+      lockPath: "/tmp/.lorenz/daemon/test.lock.json",
+      endpoint: { kind: "socket" as const, address: "/tmp/lorenz.sock" },
+      controlToken: "control-token",
+      heartbeatAt: "2026-01-01T00:00:00.000Z",
+    },
+    stale: true,
+  });
+
+  const result = await runDaemon({
+    workflowPath: "WORKFLOW.md",
+    once: false,
+    dryRun: false,
+    tui: false,
+    dashboard: false,
+    port: null,
+    logsRoot: null,
+    featureTokens: ["daemon"],
+  });
+
+  assert.equal(result, 1);
+  assert.equal(
+    stderrWriteSpy.mock.calls.some((call) => String(call[0]).includes("daemon_lock_stale")),
+    true,
+  );
+});
+
 test("runDaemon publishes a unix control socket (no TCP) when the dashboard is disabled", async () => {
   mocks.loadWorkflow.mockResolvedValue(await workflowFixture());
   const sigintBaseline = process.listeners("SIGINT");
