@@ -44,7 +44,7 @@ export function Markdown({ children, className }: MarkdownProps) {
           ),
           strong: ({ children }) => <strong className="font-semibold">{children}</strong>,
           a: ({ children, href }) => (
-            <SafeExternalLink href={href} className="text-accent-blue underline">
+            <SafeExternalLink href={href} className="text-accent-cyan underline">
               {children}
             </SafeExternalLink>
           ),

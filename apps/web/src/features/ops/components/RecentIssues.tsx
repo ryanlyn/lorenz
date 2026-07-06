@@ -1,8 +1,6 @@
 import { useEffect, useState } from "react";
-import { ExternalLink, FileText } from "lucide-react";
 
-import { cn } from "../../../lib/utils";
-import { SafeExternalLink } from "../../../shared/components/SafeExternalLink";
+import { SectionCard, EmptyRow, IssueLink } from "../../../shared/components/ui";
 import type { IssueRecord } from "../../traceviz/api/types";
 import { fetchRecentIssues } from "../../traceviz/api/client";
 
@@ -26,52 +24,31 @@ export function RecentIssues() {
   }, []);
 
   return (
-    <div className="rounded-lg border border-border bg-card">
-      <div className="border-b border-border px-4 py-3">
-        <h3 className="text-sm font-medium text-foreground">Recent Issues</h3>
-      </div>
+    <SectionCard title="Recent issues" count={issues.length} dotClass="bg-accent-cyan">
       {issues.length === 0 ? (
-        <div className="px-4 py-6 text-center text-sm text-muted">No recent issues</div>
+        <EmptyRow label="No recent issues" />
       ) : (
-        <div className="divide-y divide-border">
+        <div>
           {issues.map((issue) => (
             <div
               key={issue.issueId}
-              className={cn(
-                "flex items-center gap-3 px-4 py-3",
-                "transition-colors hover:bg-surface",
-              )}
+              className="flex items-center gap-3 border-b border-border/60 px-4 py-2.5 transition-colors last:border-b-0 hover:bg-accent/[0.03]"
             >
               <div className="min-w-0 flex-1">
-                <div className="flex items-center gap-2">
-                  <a
-                    href={`#/trace/${encodeURIComponent(issue.issueId)}`}
-                    className="inline-flex items-center gap-1 truncate font-mono text-sm text-accent-blue hover:underline"
-                    title="View trace"
-                  >
-                    <FileText className="h-3 w-3 shrink-0" />
-                    {issue.issueIdentifier}
-                  </a>
-                  {issue.url && (
-                    <SafeExternalLink
-                      href={issue.url}
-                      omitUnsafe
-                      className="inline-flex items-center text-muted hover:text-foreground"
-                      title="Open in tracker"
-                    >
-                      <ExternalLink className="h-3.5 w-3.5" />
-                    </SafeExternalLink>
-                  )}
-                </div>
-                {issue.title && <p className="truncate text-xs text-muted">{issue.title}</p>}
+                <IssueLink
+                  issueId={issue.issueId}
+                  identifier={issue.issueIdentifier}
+                  url={issue.url}
+                />
+                {issue.title && <p className="mt-0.5 truncate text-xs text-muted">{issue.title}</p>}
               </div>
-              <span className="shrink-0 text-xs text-muted">
+              <span className="shrink-0 text-xs text-faint">
                 {formatRelativeTime(issue.updatedAt)}
               </span>
             </div>
           ))}
         </div>
       )}
-    </div>
+    </SectionCard>
   );
 }

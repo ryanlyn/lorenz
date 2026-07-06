@@ -44,7 +44,7 @@ export function TraceView({ issueId, onBack }: TraceViewProps) {
         <button
           onClick={onBack}
           aria-label="Go back to overview"
-          className="flex items-center gap-1.5 rounded-lg border border-border bg-card px-3 py-1.5 text-sm text-muted transition-colors hover:border-muted hover:text-foreground"
+          className="flex items-center gap-1.5 rounded-lg border border-border bg-card px-3 py-1.5 text-sm text-muted transition-colors hover:border-border-strong hover:text-foreground"
         >
           <ArrowLeft className="h-3.5 w-3.5" />
           Overview
@@ -70,7 +70,7 @@ export function TraceView({ issueId, onBack }: TraceViewProps) {
       {hasNewUpdates && (
         <button
           onClick={scrollToTop}
-          className="fixed left-1/2 top-16 z-40 flex -translate-x-1/2 items-center gap-1.5 rounded-full border border-accent-purple/30 bg-background/95 px-3 py-1.5 text-xs font-medium text-accent-purple shadow-lg shadow-black/20 backdrop-blur-sm transition-colors hover:border-accent-purple/50 hover:bg-accent-purple/10"
+          className="fixed left-1/2 top-16 z-40 flex -translate-x-1/2 items-center gap-1.5 rounded-full border border-accent/30 bg-background/95 px-3 py-1.5 text-xs font-medium text-accent shadow-lg shadow-black/20 backdrop-blur-sm transition-colors hover:border-accent/50 hover:bg-accent/10"
         >
           <ArrowUp className="h-3 w-3" />
           New updates available

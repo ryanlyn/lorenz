@@ -36,8 +36,8 @@ export function TraceList({ onSelect }: TraceListProps) {
           onChange={(e) => setQuery(e.target.value)}
           placeholder="Search by ID or title…"
           className={cn(
-            "w-full rounded-lg border border-border bg-card py-2 pl-9 pr-3 text-sm text-foreground",
-            "placeholder:text-muted focus:border-accent-purple/50 focus:outline-none focus:ring-2 focus:ring-accent-purple/50",
+            "w-full rounded-xl border border-border bg-card py-2 pl-9 pr-3 text-sm text-foreground",
+            "placeholder:text-muted focus:border-accent/50 focus:outline-none focus:ring-2 focus:ring-accent/50",
           )}
         />
         {searching && (
@@ -59,15 +59,15 @@ export function TraceList({ onSelect }: TraceListProps) {
       {noResults && <p className="py-8 text-center text-sm text-muted">No results</p>}
 
       {issues.length > 0 && (
-        <div className="divide-y divide-border rounded-lg border border-border bg-card">
+        <div className="divide-y divide-border/60 rounded-2xl border border-border bg-card">
           {issues.map((issue) => (
             <button
               key={issue.issueId}
               onClick={() => onSelect(issue.issueId)}
               className={cn(
                 "flex w-full items-center gap-3 px-4 py-3 text-left",
-                "transition-colors hover:bg-muted/10",
-                "focus:outline-none focus:bg-muted/10",
+                "transition-colors hover:bg-accent/[0.04]",
+                "focus:outline-none focus:bg-accent/[0.04]",
               )}
             >
               <div className="min-w-0 flex-1">
