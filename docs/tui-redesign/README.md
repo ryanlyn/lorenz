@@ -40,6 +40,9 @@
 > `board.png` / `board_wide.png` / `board_narrow.png` / `board_crowd.png` /
 > `detail.png` capture the real formatters (regenerate with
 > `node packages/tui/scripts/capture-live.mjs <out-dir>` and screenshot the HTML).
+> The same harness renders a `readme` view — a 96-agent fleet saturating a
+> 100-slot cap — which is the source of `docs/images/lorenz-tui.png` (screenshot
+> `readme.html` at 2× device scale, clipped to the window).
 > Golden fixtures live in `test/fixtures/dashboard/` and regenerate with
 > `UPDATE_DASHBOARD_FIXTURES=1 vitest run packages/tui/test/tui.test.ts`.
 

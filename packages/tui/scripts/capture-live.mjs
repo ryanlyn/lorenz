@@ -146,11 +146,207 @@ const crowd = {
   })),
 };
 
+// The README hero: a massively-concurrent fleet — 96 diverse agents saturating
+// a 100-slot cap, windowed around the cursor. Everything is deterministic (a
+// seeded LCG shuffles identifiers) so reruns produce comparable screenshots.
+const FLEET_TITLES = [
+  "Dedupe webhook retries on 5xx",
+  "Fix pagination cursor drift in Linear sync",
+  "Quieten flaky worker-recycle test",
+  "Backfill run history for aborted sessions",
+  "Cap retry backoff at poll interval",
+  "Surface worker host in run trace metadata",
+  "Migrate tracker cache to SQLite WAL mode",
+  "Handle Jira 410 on deleted issues",
+  "Stream agent diffs over the observability socket",
+  "Rotate session logs past 50MB",
+  "Fix TOCTOU race in workspace provisioning",
+  "Add exponential jitter to Linear polling",
+  "Prune orphaned worktrees on reaper pass",
+  "Batch token-usage samples before persisting",
+  "Fix double-dispatch on tracker state flap",
+  "Redact bearer tokens from executor stderr",
+  "Retry SSH handshake on transient ECONNRESET",
+  "Fold ensemble votes into a single PR review",
+  "Fix off-by-one in sparkline bucket edges",
+  "Honor Retry-After on Linear 429s",
+  "Recycle workers past memory watermark",
+  "Escape tmux control chars in issue titles",
+  "Pin agent CLI version per workspace",
+  "Fix zombie PID reap on macOS workers",
+  "Add heartbeat timeout to ACP transport",
+  "Coalesce duplicate turn_completed events",
+  "Fix cursor reset when fleet shrinks",
+  "Persist rate-limit windows across restarts",
+  "Skip dispatch when workspace disk is full",
+  "Normalize CRLF in workflow front-matter",
+  "Fix stall detector false-positive on long tools",
+  "Shard run archive by ISO week",
+  "Add per-host concurrency override",
+  "Fix TraceViz gap on out-of-order events",
+  "Debounce dashboard websocket reconnects",
+  "Guard against empty diff in review gate",
+  "Fix timezone drift in retry due labels",
+  "Compress snapshots before WS broadcast",
+  "Add circuit breaker to tracker mutations",
+  "Fix leaked AbortController in poll loop",
+  "Dedupe identical events in the tape",
+  "Clamp title width on narrow viewports",
+  "Fix ensemble slot leak on agent crash",
+  "Cache Linear team lookup per poll tick",
+  "Add turn-count budget to run lifecycle",
+  "Fix workspace symlink escape in provisioner",
+  "Batch GraphQL comment mutations",
+  "Fix histogram smear on suspended laptops",
+];
+const FLEET_HOSTS = [
+  null,
+  "mac-mini-01",
+  "mac-mini-02",
+  "worker-01",
+  "worker-02",
+  "worker-03",
+  "worker-04",
+  "worker-05",
+  "worker-06",
+  "hetzner-01",
+];
+const FLEET_SHAPES = [
+  "▂▃▅▆█▆▅▃▂▂", "▅▆██▆▅▃▂▁▁", "▁▁▂▂▃▅▆▇█▇", "▄▂▅▃▆▄▇▅█▆",
+  "▁▂▁▃▂▄▃▅▄▆", "▆▅▄▃▂▂▁▁▁▁", "▂▂▃▃▄▄▅▅▆▆", "█▆▄▂▁▁▂▄▆█",
+  "▃▅▂▆▁▇▂▅▃▄", "▁▃▅▇█▇▅▃▁▂",
+];
+// Knuth multiplicative hash — decorrelates per-row variety from the row
+// index (linear strides collapse once the variant choice fixes i mod 4).
+// (shift before the mod so low bits of n don't survive into small moduli)
+const mix = (n) => (Math.imul(n + 1, 2654435761) >>> 13) % 100_000;
+const fleetActivity = (i, agentKind, tokens) => {
+  if (agentKind === "claude") {
+    const variants = [
+      { agent_kind: "claude", event: "turn_completed", message: {} },
+      { agent_kind: "claude", event: "turn_started", message: {} },
+      {
+        agent_kind: "claude",
+        message: {
+          type: "assistant",
+          message: { content: [{ type: "tool_use", name: ["Bash", "Edit", "Grep", "Read"][mix(i) % 4] }] },
+        },
+      },
+      { agent_kind: "claude", message: { type: "assistant", message: { content: [{ type: "thinking" }] } } },
+    ];
+    return variants[i % variants.length];
+  }
+  const variants = [
+    { method: "turn/diff/updated", params: { diff: "x\n".repeat(2 + (mix(i) % 140)) } },
+    { method: "item/completed", params: { item: { type: "fileChange" } } },
+    {
+      method: "item/agentMessage/delta",
+      params: { delta: ["Reproducing the failure with a focused test first", "Root cause: the cursor resets when the page is empty", "Wiring the new backoff policy through the scheduler", "All 214 tracker tests pass; tightening the types now"][mix(i) % 4] },
+    },
+    { method: "turn/plan/updated", params: { plan: Array.from({ length: 3 + (mix(i) % 6) }, () => ({})) } },
+  ];
+  return variants[i % variants.length];
+};
+const fleetIds = (() => {
+  const ids = Array.from({ length: 96 }, (_, k) => 2010 + 3 * k);
+  let seed = 0x5eed;
+  const rand = () => ((seed = (seed * 48271) % 0x7fffffff) / 0x7fffffff);
+  for (let k = ids.length - 1; k > 0; k--) {
+    const j = Math.floor(rand() * (k + 1));
+    [ids[k], ids[j]] = [ids[j], ids[k]];
+  }
+  return ids;
+})();
+const fleetRunning = Array.from({ length: 96 }, (_, i) => {
+  const agentKind = (i * 3) % 5 < 3 ? "codex" : "claude";
+  const ageSeconds = 40 + (mix(i * 7) % 5860);
+  const totalTokens = 700 + Math.round((ageSeconds * (26 + (mix(i * 3) % 40))) / 100) * 100;
+  const turnCount = 1 + Math.floor(ageSeconds / 900) + (i % 3);
+  const identifier = `ENG-${fleetIds[i]}`;
+  const session = `thread-${((i + 1) * 2654435761 % 0xffffff).toString(16).padStart(6, "0")}`;
+  return {
+    issueId: `f${i}`,
+    issueIdentifier: identifier,
+    issueTitle: FLEET_TITLES[i % FLEET_TITLES.length],
+    state: (i * 3) % 10 < 7 ? "In Progress" : "Agent Review",
+    slotIndex: i,
+    ensembleSize: 1,
+    agentKind,
+    sessionId: session,
+    executorPid: String(41000 + i * 7),
+    workerHost: FLEET_HOSTS[(i * 7) % FLEET_HOSTS.length],
+    turnCount,
+    startedAt: iso(-ageSeconds),
+    lastEvent: "session_notification",
+    lastEventAt: iso(-(3 + ((i * 13) % 170))),
+    lastMessage: fleetActivity(i, agentKind, totalTokens),
+    workspacePath: `/Users/ryan/lorenz-ws/${identifier.toLowerCase()}`,
+    toolCallCount: turnCount * (4 + (i % 7)),
+    issueUrl: `https://linear.app/northwind/issue/${identifier}`,
+    usageTotals: {
+      inputTokens: Math.round(totalTokens * 0.86),
+      outputTokens: totalTokens - Math.round(totalTokens * 0.86),
+      totalTokens,
+      secondsRunning: 0,
+    },
+  };
+});
+const fleet = {
+  ...snapshot,
+  appStartedAt: iso(-(118 * 60 + 41)),
+  poll: { status: "idle", candidates: 141, eligible: 33, lastPollAt: iso(-11), nextPollAt: iso(19), lastError: null },
+  running: fleetRunning,
+  reserving: [
+    { issueId: "fr1", identifier: "ENG-2301", slotIndex: 96, affinityHost: "ssh-worker-3", retryAttempt: null, reservedAtIso: iso(-3) },
+    { issueId: "fr2", identifier: "ENG-2304", slotIndex: 97, affinityHost: null, retryAttempt: null, reservedAtIso: iso(-8) },
+  ],
+  retrying: [
+    { issueId: "fy1", issueIdentifier: "ENG-2143", attempt: 3, dueAtIso: iso(58), monotonicDeadlineMs: 0, error: "Linear 429: rate limited, honoring Retry-After", slotIndex: 12 },
+    { issueId: "fy2", issueIdentifier: "ENG-2188", attempt: 1, dueAtIso: iso(147), monotonicDeadlineMs: 0, error: "agent stalled past stall_timeout_ms", slotIndex: 41 },
+    { issueId: "fy3", issueIdentifier: "ENG-2077", attempt: 2, dueAtIso: iso(311), monotonicDeadlineMs: 0, error: "worker recycled mid-run (machine_recycled)", slotIndex: 63 },
+  ],
+  blocked: [
+    { issueId: "fb1", identifier: "ENG-2310", state: "Todo", reason: "global_concurrency_cap" },
+    { issueId: "fb2", identifier: "ENG-2312", state: "Todo", reason: "global_concurrency_cap" },
+    { issueId: "fb3", identifier: "ENG-2315", state: "Todo", reason: "worker_host_capacity" },
+    { issueId: "fb4", identifier: "ENG-2317", state: "In Progress", reason: "local_state_concurrency_cap" },
+  ],
+  runHistory: Array.from({ length: 41 }, (_, k) => ({
+    issueIdentifier: `ENG-${1860 + k * 3}`,
+    outcome: k === 7 || k === 19 || k === 33 ? "failure" : "success",
+  })),
+  usageTotals: { inputTokens: 20_941_000, outputTokens: 3_628_000, totalTokens: 24_569_000, secondsRunning: 7_121 },
+  rateLimits: { model: "claude-opus-4-6", primary: { used: 8_410, limit: 10_000, resetSeconds: 1_240 }, credits: null },
+  // Runtime order: newest first (the formatter re-reverses so newest lands at
+  // the bottom of the tape).
+  recentEvents: [
+    { type: "run_started", message: "ENG-2231 session thread-4f21c7 spawned on worker-04 (slot 88)", at: iso(-6) },
+    { type: "session_notification", message: "ENG-2201 ran `pnpm vitest tracker` — all 214 passed", at: iso(-23) },
+    { type: "dispatch_skipped", message: "ENG-2310 dispatch skipped: global_concurrency_cap (96/100 slots)", at: iso(-44) },
+    { type: "turn_completed", message: "ENG-2117 claude turn 14 completed (612,400 tok)", at: iso(-71) },
+    { type: "retry_timer_due", message: "ENG-2143 backoff armed: attempt 3 in 58s (Linear 429)", at: iso(-96) },
+    { type: "session_notification", message: "ENG-2079 wrote packages/worker/src/pool.ts (+118 −42)", at: iso(-121) },
+  ],
+};
+
 const views = {
   board: { cols: 132, text: formatDashboard(snapshot, { ...shared, columns: 132, cursor: 1, rows: 44 }), title: "flight board · 132 cols" },
   board_wide: { cols: 172, text: formatDashboard(snapshot, { ...shared, columns: 172, cursor: 1, rows: 44 }), title: "flight board · 172 cols (flex columns + negative space)" },
   board_narrow: { cols: 78, text: formatDashboard(snapshot, { ...shared, columns: 78, cursor: 1, rows: 44 }), title: "flight board · 78 cols (tmux split)" },
   board_crowd: { cols: 132, text: formatDashboard(crowd, { ...shared, maxAgents: 100, columns: 132, cursor: 33, rows: 32 }), title: "flight board · 64 running agents in a 32-row viewport" },
+  readme: {
+    cols: 150,
+    chrome: "WORKFLOW.md",
+    text: formatDashboard(fleet, {
+      ...shared,
+      maxAgents: 100,
+      columns: 150,
+      cursor: 46,
+      rows: 44,
+      runSparkline: (run) => FLEET_SHAPES[run.slotIndex % FLEET_SHAPES.length],
+    }),
+    title: "readme hero · 96 running agents saturating a 100-slot cap",
+  },
   detail: {
     cols: 132,
     title: "agent detail (⏎ on ENG-2027)",
@@ -218,7 +414,7 @@ html,body { background:#0b0a0c; }
 .title { color:#a6a2aa; font:600 13px ui-monospace,SFMono-Regular,Menlo,monospace; margin-left:8px; }
 pre { padding:16px 22px 20px; font:13px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; color:#FCFCFA; white-space:pre; }
 </style></head><body><div class="win">
-<div class="bar"><div class="dot" style="background:#ff5f57"></div><div class="dot" style="background:#febc2e"></div><div class="dot" style="background:#28c840"></div><div class="title">lorenz — ${view.title}</div></div>
+<div class="bar"><div class="dot" style="background:#ff5f57"></div><div class="dot" style="background:#febc2e"></div><div class="dot" style="background:#28c840"></div><div class="title">lorenz — ${view.chrome ?? view.title}</div></div>
 <pre>${ansiToHtml(view.text)}</pre></div></body></html>`;
   writeFileSync(join(outDir, `${name}.html`), html);
   writeFileSync(join(outDir, `${name}.txt`), view.text.replaceAll(/\x1b\[[0-9;]*m/g, ""));
