@@ -1,17 +1,24 @@
 @import "tailwindcss";
 
 @theme {
-  --color-background: #09090b;
-  --color-foreground: #fafafa;
-  --color-card: #18181b;
-  --color-surface: #232329;
-  --color-border: #3f3f46;
-  --color-muted: #a1a1aa;
-  --color-accent-purple: #a855f7;
-  --color-accent-blue: #3b82f6;
-  --color-accent-orange: #f97316;
-  --color-accent-green: #22c55e;
-  --color-accent-red: #ef4444;
+  /* Deep blue-green blacks pulled from the Lorenz attractor artwork. */
+  --color-background: #0b1114;
+  --color-card: #10171b;
+  --color-card-2: #131c21;
+  --color-surface: #182228;
+  --color-border: #1e2b31;
+  --color-border-strong: #2a3b42;
+  --color-foreground: #e9f2ef;
+  --color-muted: #9cb3ae;
+  --color-faint: #69837e;
+  /* Brand accents: teal primary, petrol cyan, amber, coral; lime is decorative. */
+  --color-accent: #2dd4a8;
+  --color-accent-cyan: #4cc0e0;
+  --color-accent-amber: #f2a33c;
+  --color-accent-coral: #ef6351;
+  --color-accent-lime: #a3e635;
+  --font-mono:
+    ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace;
 }
 
 body {
@@ -24,4 +31,9 @@ body {
     sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  /* Faint smooth glow beneath the ASCII aurora character field. */
+  background-image:
+    radial-gradient(900px 420px at 12% -8%, rgba(45, 212, 168, 0.06), transparent 60%),
+    radial-gradient(1100px 480px at 88% -12%, rgba(46, 134, 171, 0.07), transparent 60%);
+  background-repeat: no-repeat;
 }

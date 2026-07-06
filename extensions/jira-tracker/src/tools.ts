@@ -1,4 +1,11 @@
-import { errorMessage, isOneOf, isRecord, type Issue, type Settings } from "@lorenz/domain";
+import {
+  errorMessage,
+  isOneOf,
+  isRecord,
+  redactDiagnosticText,
+  type Issue,
+  type Settings,
+} from "@lorenz/domain";
 import {
   applyQuery,
   parseQuerySpec,
@@ -204,7 +211,7 @@ export async function executeJiraTool(
         });
     }
   } catch (error) {
-    return toolFailure(errorMessage(error));
+    return toolFailure(redactDiagnosticText(errorMessage(error)));
   }
 }
 

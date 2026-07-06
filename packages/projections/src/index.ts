@@ -17,6 +17,7 @@ export class ProjectionActor {
   snapshot(input: RuntimeProjectionInput): RuntimeSnapshot {
     return {
       appStatus: input.appStatus,
+      ...(input.appStartedAt ? { appStartedAt: input.appStartedAt } : {}),
       workflowPath: input.workflowPath,
       poll: { ...input.poll },
       running: input.running.map((entry) => ({ ...entry, usageTotals: { ...entry.usageTotals } })),

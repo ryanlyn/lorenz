@@ -1,7 +1,10 @@
+import { useState } from "react";
 import { CircleHelp } from "lucide-react";
 
 import type { UnknownEvent as UnknownEventType } from "../../api/types";
 import { formatTimestamp } from "../../../../lib/utils";
+
+import { EventRow } from "./EventRow";
 
 interface UnknownEventProps {
   event: UnknownEventType;
@@ -23,20 +26,23 @@ function formatRawPayload(raw: Record<string, unknown>): string {
 }
 
 export function UnknownEvent({ event }: UnknownEventProps) {
+  const [expanded, setExpanded] = useState(false);
+
   return (
-    <div className="border-l-4 border-muted rounded-r-md bg-background/50 p-3">
-      <div className="flex items-start gap-2">
-        <CircleHelp aria-hidden="true" className="mt-0.5 h-4 w-4 shrink-0 text-muted" />
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2">
-            <span className="text-xs text-muted">{formatTimestamp(event.timestamp)}</span>
-            <span className="text-xs font-medium text-muted">Unknown event</span>
-          </div>
-          <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-md bg-background p-2 text-xs font-mono text-foreground/80">
-            {formatRawPayload(event.raw)}
-          </pre>
-        </div>
-      </div>
-    </div>
+    <EventRow
+      dotClass="bg-faint"
+      time={formatTimestamp(event.timestamp)}
+      icon={<CircleHelp className="h-3.5 w-3.5 text-faint" />}
+      title={<span className="text-xs font-medium text-muted">Unknown event</span>}
+      expandable
+      expanded={expanded}
+      onToggle={() => setExpanded((value) => !value)}
+      ariaLabel="Toggle unknown event details"
+      detail={
+        <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-lg bg-background/70 p-2.5 font-mono text-xs text-foreground/80">
+          {formatRawPayload(event.raw)}
+        </pre>
+      }
+    />
   );
 }

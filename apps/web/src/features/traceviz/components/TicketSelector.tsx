@@ -2,6 +2,7 @@ import { ChevronDown, ExternalLink } from "lucide-react";
 
 import type { TicketInfo } from "../api/types";
 import { cn } from "../../../lib/utils";
+import { SafeExternalLink } from "../../../shared/components/SafeExternalLink";
 
 interface TicketSelectorProps {
   tickets: TicketInfo[];
@@ -12,11 +13,11 @@ interface TicketSelectorProps {
 function statusColor(status: TicketInfo["status"]): string {
   switch (status) {
     case "completed":
-      return "bg-accent-green";
+      return "bg-accent";
     case "running":
-      return "bg-accent-blue animate-pulse";
+      return "bg-accent-cyan animate-pulse";
     case "failed":
-      return "bg-accent-red";
+      return "bg-accent-coral";
     default:
       return "bg-muted";
   }
@@ -39,8 +40,8 @@ export function TicketSelector({ tickets, selectedId, onSelect }: TicketSelector
           value={selectedId ?? ""}
           onChange={(e) => onSelect(e.target.value || null)}
           className={cn(
-            "appearance-none rounded-lg border border-border bg-card px-3 py-1.5 pr-8 text-sm",
-            "focus:outline-none focus:ring-2 focus:ring-accent-purple/50",
+            "appearance-none rounded-lg border border-border bg-card px-3 py-1.5 pr-16 text-sm",
+            "focus:outline-none focus:ring-2 focus:ring-accent/50",
             "cursor-pointer min-w-[240px]",
           )}
         >
@@ -69,16 +70,15 @@ export function TicketSelector({ tickets, selectedId, onSelect }: TicketSelector
         )}
       </div>
       {selectedTicket?.url && (
-        <a
+        <SafeExternalLink
           href={selectedTicket.url}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="flex items-center gap-1 rounded-lg border border-border bg-card px-2.5 py-1.5 text-xs text-muted transition-colors hover:border-muted hover:text-foreground"
+          omitUnsafe
+          className="flex items-center gap-1 rounded-lg border border-border bg-card px-2.5 py-1.5 text-xs text-muted transition-colors hover:border-border-strong hover:text-foreground"
           title="Open in Linear"
         >
           <ExternalLink className="h-3.5 w-3.5" />
           Linear
-        </a>
+        </SafeExternalLink>
       )}
     </div>
   );

@@ -218,7 +218,7 @@ evidence stay at the workspace root.
 
 ### Compatibility Contracts
 
-The checked-in workflow files (`WORKFLOW.md`, `WORKFLOW_FULL_ACCESS.md`) are executable fixtures.
+The checked-in workflow files (`WORKFLOW.md`, `WORKFLOW.local.md`, `WORKFLOW.slack.md`) are executable fixtures.
 `pnpm test` guards workflow docs, prompt rendering, dashboard snapshots, runtime behavior, and CLI
 documentation. Update the fixture and the matching test together when the public contract changes.
 
@@ -226,4 +226,4 @@ documentation. Update the fixture and the matching test together when the public
 
 ## License
 
-See [CHANGELOG.md](CHANGELOG.md) for notable changes. This project is licensed under the [Apache License 2.0](LICENSE).
+This project is licensed under the [Apache License 2.0](LICENSE).

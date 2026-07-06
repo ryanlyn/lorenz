@@ -421,6 +421,7 @@ test("RuntimeRunningEntry usageTotals fields survive snapshot serialization with
         agentKind: "claude",
         turnCount: 3,
         startedAt: "2026-05-26T00:00:00.000Z",
+        toolCallCount: 7,
         usageTotals: { inputTokens: 150, outputTokens: 250, totalTokens: 400, secondsRunning: 30 },
       },
       {
@@ -458,6 +459,7 @@ test("RuntimeRunningEntry usageTotals fields survive snapshot serialization with
   assert.equal(parsed.running[0].usageTotals.outputTokens, 250);
   assert.equal(parsed.running[0].usageTotals.totalTokens, 400);
   assert.equal(parsed.running[0].usageTotals.secondsRunning, 30);
+  assert.equal(parsed.running[0].toolCallCount, 7);
 
   // Zero-value usageTotals must not be dropped or coerced
   assert.equal(parsed.running[1].usageTotals.inputTokens, 0);

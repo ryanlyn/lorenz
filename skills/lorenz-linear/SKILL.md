@@ -76,8 +76,12 @@ query CommentCreateInputShape {
 Use these progressively:
 
 - Start with `issue(id: $key)` when you have a ticket key such as `MT-686`.
-- Fall back to `issues(filter: ...)` when you need identifier search semantics.
+- Fall back to `searchIssues(term: ...)` when you need search semantics.
 - Once you have the internal issue id, prefer `issue(id: $id)` for narrower reads.
+- Do not query `Issue.links`; Linear exposes URL and PR links through
+  `attachments`.
+- Do not use `issues(filter: { identifier: ... })`; `IssueFilter` does not
+  support an `identifier` field.
 
 Lookup by issue key:
 
@@ -100,22 +104,23 @@ query IssueByKey($key: String!) {
     url
     description
     updatedAt
-    links {
+    attachments {
       nodes {
         id
-        url
         title
+        url
+        sourceType
       }
     }
   }
 }
 ```
 
-Lookup by identifier filter:
+Search fallback:
 
 ```graphql
-query IssueByIdentifier($identifier: String!) {
-  issues(filter: { identifier: { eq: $identifier } }, first: 1) {
+query SearchIssue($term: String!) {
+  searchIssues(term: $term, first: 1) {
     nodes {
       id
       identifier
@@ -206,6 +211,9 @@ query IssueTeamStates($id: String!) {
 ```
 
 ### Edit an existing comment
+
+Comment records expose `resolvedAt` and `archivedAt`. Do not query
+`resolved` or `archived`.
 
 Use `commentUpdate` through `linear_graphql`:
 
@@ -309,12 +317,7 @@ Use the GitHub-specific attachment mutation when linking a PR:
 
 ```graphql
 mutation AttachGitHubPR($issueId: String!, $url: String!, $title: String) {
-  attachmentLinkGitHubPR(
-    issueId: $issueId
-    url: $url
-    title: $title
-    linkKind: links
-  ) {
+  attachmentLinkGitHubPR(issueId: $issueId, url: $url, title: $title, linkKind: links) {
     success
     attachment {
       id
@@ -324,6 +327,10 @@ mutation AttachGitHubPR($issueId: String!, $url: String!, $title: String) {
   }
 }
 ```
+
+If Linear returns `Duplicate attachment for duplicate url`, treat the PR as
+already linked and continue. Do not retry with a different attachment mutation
+for the same URL.
 
 If you only need a plain URL attachment and do not care about GitHub-specific
 link metadata, use:
@@ -344,6 +351,9 @@ mutation AttachURL($issueId: String!, $url: String!, $title: String) {
 ### Introspection patterns used during schema discovery
 
 Use these when the exact field or mutation shape is unclear:
+
+Do not run full `__schema` introspection. Linear rejects overly broad schema
+queries as too complex. Use targeted `__type(name: "...")` queries instead.
 
 ```graphql
 query QueryFields {
@@ -394,18 +404,8 @@ Do this in three steps:
 Useful mutations:
 
 ```graphql
-mutation FileUpload(
-  $filename: String!
-  $contentType: String!
-  $size: Int!
-  $makePublic: Boolean
-) {
-  fileUpload(
-    filename: $filename
-    contentType: $contentType
-    size: $size
-    makePublic: $makePublic
-  ) {
+mutation FileUpload($filename: String!, $contentType: String!, $size: Int!, $makePublic: Boolean) {
+  fileUpload(filename: $filename, contentType: $contentType, size: $size, makePublic: $makePublic) {
     success
     uploadFile {
       uploadUrl
@@ -427,11 +427,13 @@ mutation FileUpload(
   the user explicitly asks or the content is too large to reasonably inline;
   prefer fenced code blocks in comments instead.
 - Prefer the narrowest issue lookup that matches what you already know:
-  key -> identifier search -> internal id.
+  key -> search fallback -> internal id.
 - For state transitions, fetch team states first and use the exact `stateId`
   instead of hardcoding names inside mutations.
 - Prefer `attachmentLinkGitHubPR` over a generic URL attachment when linking a
   GitHub PR to a Linear issue.
+- Treat duplicate attachment URL errors as success when the URL is already the
+  PR you intended to attach.
 - Do not introduce new raw-token shell helpers for GraphQL access.
 - If you need shell work for uploads, only use it for signed upload URLs
   returned by `fileUpload`; those URLs already carry the needed authorization.

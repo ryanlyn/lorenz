@@ -92,6 +92,88 @@ test("Jira REST client pages /search/jql via nextPageToken until exhausted", asy
   assert.equal(calls[1]?.body.nextPageToken, "page-2");
 });
 
+test("Jira REST client rejects repeated search cursors", async () => {
+  const client = new JiraClient(jiraSettings(), {
+    fetchImpl: fetchSequence(
+      [],
+      jsonResponse({ issues: [jiraIssue()], nextPageToken: "page-2" }),
+      jsonResponse({ issues: [jiraIssue()], nextPageToken: "page-2" }),
+    ),
+  });
+
+  await assert.rejects(
+    () => client.searchIssues('project in ("ENG")'),
+    /jira_pagination_repeated_cursor: searchIssues nextPageToken="page-2" was returned more than once/,
+  );
+});
+
+test("Jira REST client rejects malformed search cursors", async () => {
+  const client = new JiraClient(jiraSettings(), {
+    fetchImpl: fetchSequence([], jsonResponse({ issues: [jiraIssue()], nextPageToken: 42 })),
+  });
+
+  await assert.rejects(
+    () => client.searchIssues('project in ("ENG")'),
+    /jira_pagination_malformed_cursor: searchIssues nextPageToken must be a non-empty string/,
+  );
+});
+
+test("Jira REST client rejects page limit overflows", async () => {
+  const client = new JiraClient(jiraSettings(), {
+    fetchImpl: fetchSequence(
+      [],
+      jsonResponse({ issues: [jiraIssue()], nextPageToken: "page-2" }),
+      jsonResponse({ issues: [jiraIssue()], nextPageToken: "page-3" }),
+    ),
+    paginationLimits: { maxPages: 2 },
+  });
+
+  await assert.rejects(
+    () => client.searchIssues('project in ("ENG")'),
+    /jira_pagination_page_limit_exceeded: searchIssues pages=3 max_pages=2/,
+  );
+});
+
+test("Jira REST client rejects item limit overflows", async () => {
+  const client = new JiraClient(jiraSettings(), {
+    fetchImpl: fetchSequence([], jsonResponse({ issues: [jiraIssue(), jiraIssue()] })),
+    paginationLimits: { maxItems: 1 },
+  });
+
+  await assert.rejects(
+    () => client.searchIssues('project in ("ENG")'),
+    /jira_pagination_item_limit_exceeded: searchIssues items=2 max_items=1/,
+  );
+});
+
+test("Jira REST client degrades oversized nested issue metadata", async () => {
+  const warnings: string[] = [];
+  const issue = jiraIssue();
+  const fields = issue.fields as Record<string, unknown>;
+  fields.labels = Array.from({ length: 501 }, (_, index) => `label-${index}`);
+  fields.issuelinks = Array.from({ length: 501 }, (_, index) => ({
+    type: { name: "Blocks", inward: "is blocked by" },
+    inwardIssue: {
+      id: `blocker-${index}`,
+      key: `ENG-B-${index}`,
+      fields: { status: { name: "To Do", statusCategory: { key: "new" } } },
+    },
+  }));
+  const client = new JiraClient(jiraSettings(), {
+    fetchImpl: fetchSequence([], jsonResponse({ issues: [issue] })),
+    logger: { warn: (message) => warnings.push(message) },
+  });
+
+  const issues = await client.searchIssues('project in ("ENG")');
+
+  assert.equal(issues.length, 1);
+  assert.deepEqual(issues[0]?.labels, []);
+  assert.deepEqual(issues[0]?.blockers, []);
+  assert.equal(warnings.length, 2);
+  assert.match(warnings[0] ?? "", /field=labels issue=ENG-1 items=501 max_items=500/);
+  assert.match(warnings[1] ?? "", /field=issuelinks issue=ENG-1 items=501 max_items=500/);
+});
+
 test("Jira REST client updates status via the matching transition", async () => {
   const calls: FetchCall[] = [];
   const client = new JiraClient(jiraSettings(), {
@@ -289,6 +371,28 @@ test("Jira MCP client calls configured external tools and normalizes returned is
       ],
     },
   });
+});
+
+test("Jira MCP client rejects oversized search payloads", async () => {
+  const settings = jiraMcpSettings();
+  const client = new JiraMcpClient(settings, {
+    fetchImpl: fetchSequence(
+      [],
+      jsonResponse({
+        jsonrpc: "2.0",
+        id: "1",
+        result: {
+          content: [{ type: "text", text: JSON.stringify({ issues: [jiraIssue(), jiraIssue()] }) }],
+        },
+      }),
+    ),
+    paginationLimits: { maxItems: 1 },
+  });
+
+  await assert.rejects(
+    () => client.searchIssues('project in ("ENG")'),
+    /jira_pagination_item_limit_exceeded: mcpSearchIssues items=2 max_items=1/,
+  );
 });
 
 test("Jira MCP client adds comments with issue_key and comment args", async () => {
@@ -730,6 +834,60 @@ test("a failing jira request surfaces as a failed tool result, not a thrown erro
 
   assert.equal(result.success, false);
   assert.match(result.error ?? "", /jira api status 500/);
+});
+
+test("jira tool failures redact tracker secrets and secret references", async () => {
+  const calls: FetchCall[] = [];
+  const basic = Buffer.from("bot@example.com:jira-token").toString("base64");
+  const result = await executeJiraTool(
+    "jira_read_issue",
+    { issueId: "ENG-1" },
+    jiraSettings(),
+    fetchSequence(
+      calls,
+      jsonResponse(
+        {
+          errorMessages: [`bad auth api_key=jira-token Basic ${basic} op://vault/item/jira-token`],
+        },
+        500,
+      ),
+    ),
+  );
+
+  assert.equal(result.success, false);
+  assert.match(result.error ?? "", /jira api status 500/);
+  assert.notMatch(result.error ?? "", /jira-token/);
+  assert.notMatch(result.error ?? "", new RegExp(basic));
+  assert.notMatch(result.error ?? "", /op:\/\/vault\/item\/jira-token/);
+  assert.match(result.error ?? "", /\[REDACTED\]/);
+});
+
+test("jira-mcp JSON-RPC errors redact tracker secrets and secret references", async () => {
+  const calls: FetchCall[] = [];
+  const basic = Buffer.from("bot@example.com:jira-token").toString("base64");
+  const result = await executeJiraTool(
+    "jira_read_issue",
+    { issueId: "ENG-1" },
+    jiraMcpSettings(),
+    fetchSequence(
+      calls,
+      jsonResponse({
+        jsonrpc: "2.0",
+        id: "1",
+        error: {
+          code: -32000,
+          message: `bad auth api_key=jira-token Basic ${basic} op://vault/item/jira-token`,
+        },
+      }),
+    ),
+  );
+
+  assert.equal(result.success, false);
+  assert.match(result.error ?? "", /jira-mcp error/);
+  assert.notMatch(result.error ?? "", /jira-token/);
+  assert.notMatch(result.error ?? "", new RegExp(basic));
+  assert.notMatch(result.error ?? "", /op:\/\/vault\/item\/jira-token/);
+  assert.match(result.error ?? "", /\[REDACTED\]/);
 });
 
 function jiraMcpSettings() {

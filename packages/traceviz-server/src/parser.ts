@@ -1,5 +1,5 @@
 import type { ToolCallContent } from "@agentclientprotocol/sdk";
-import { isRecord, type TraceEvent } from "@lorenz/domain";
+import { isRecord, redactDiagnosticValue, type TraceEvent } from "@lorenz/domain";
 
 import type { DisplayEvent, ToolCallDisplayEvent, TokenUsage } from "./models/display-events.js";
 
@@ -369,7 +369,7 @@ export function parseTraceLines(lines: string[]): DisplayEvent[] {
 
   flushPendingText();
 
-  return sortDisplayEventsChronologically(events);
+  return sortDisplayEventsChronologically(events.map((event) => redactDiagnosticValue(event)));
 }
 
 export interface TicketMetadata {

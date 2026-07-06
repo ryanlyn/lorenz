@@ -29,11 +29,7 @@ const sdkHref = pathToFileURL(createRequire(import.meta.url).resolve("@lorenz/to
  * executes it in-memory so a load + execute round-trip can run without any
  * network or settings dependency.
  */
-function toolModuleSource(options: {
-  name: string;
-  sdkVersion?: number;
-  named?: boolean;
-}): string {
+function toolModuleSource(options: { name: string; sdkVersion?: number; named?: boolean }): string {
   const { name, sdkVersion = 1, named = false } = options;
   return `
 import { defineToolProvider } from ${JSON.stringify(sdkHref)};
@@ -236,7 +232,10 @@ test("cache-busting query strings are rejected", async () => {
 });
 
 test("parseToolRef splits the #exportName suffix and keeps plain specifiers whole", () => {
-  assert.deepEqual(parseToolRef("@acme/tools"), { specifier: "@acme/tools", exportName: undefined });
+  assert.deepEqual(parseToolRef("@acme/tools"), {
+    specifier: "@acme/tools",
+    exportName: undefined,
+  });
   assert.deepEqual(parseToolRef("./tools/acme.mjs#acmeTools"), {
     specifier: "./tools/acme.mjs",
     exportName: "acmeTools",
@@ -286,8 +285,5 @@ test("reload: re-encountering an already-loaded specifier emits tool_provider_mo
   // A registered NAME hit (the built-in path) stays silent: no pinned event for a
   // pack this loader never imported.
   await ensureToolProviderLoaded("jira", registry, { baseDir: dir, logEvent });
-  assert.equal(
-    events.filter((event) => event.event === "tool_provider_module_pinned").length,
-    1,
-  );
+  assert.equal(events.filter((event) => event.event === "tool_provider_module_pinned").length, 1);
 });

@@ -23,10 +23,12 @@ export type WorkerOutcome = "healthy" | "poison";
  * Lifecycle state of a worker inside the pool inventory. Internal to the pool;
  * surfaced (read-only) via `WorkerPoolSnapshot` for tests/observability.
  *
- * `WARMING` and `DRAINING` are never assigned by the current pool (provisioning
- * probes inline and drain is a pool-level flag); they stay in the vocabulary for
- * a future async warmup strategy / per-worker drain marker, and the leasable/reap
- * guards already treat them correctly.
+ * `PROVISIONING`, `WARMING`, and `DRAINING` are never assigned by the current
+ * pool (a mid-provision worker is tracked in the pool's `pendingProvisionIds`
+ * set rather than as an inventory placeholder, provisioning probes inline, and
+ * drain is a pool-level flag); they stay in the vocabulary for a future async
+ * warmup strategy / per-worker drain marker, and the leasable/reap guards
+ * already treat them correctly.
  */
 export type WorkerState =
   | "PROVISIONING"

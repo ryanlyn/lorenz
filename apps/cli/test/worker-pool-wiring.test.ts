@@ -24,7 +24,8 @@ beforeAll(() => {
 
 test("buildWorkerPool builds the DEFAULT enabled local pool for an absent worker_pool", async () => {
   // parseConfig({}) defaults to an enabled `local` pool at slotsPerMachine=1 with
-  // min=0/warm=0/max=1. buildWorkerPool constructs it; nothing provisions eagerly (warm=0/min=0).
+  // min=0/warm=0 and max tracking max_concurrent_agents. buildWorkerPool constructs it; nothing
+  // provisions eagerly (warm=0/min=0), so the local workers are minted on first acquire.
   const settings = parseConfig({}, {});
   assert.equal(settings.worker.workerPool?.enabled, true);
   assert.equal(settings.worker.workerPool?.driver, "local");

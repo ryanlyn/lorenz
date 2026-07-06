@@ -104,10 +104,7 @@ async function cruiseFixtures(config: DepcruiserConfig): Promise<CruiseResult> {
   );
 
   const { cruise } = (await import("dependency-cruiser")) as {
-    cruise: (
-      roots: string[],
-      options: Record<string, unknown>,
-    ) => Promise<CruiseResult>;
+    cruise: (roots: string[], options: Record<string, unknown>) => Promise<CruiseResult>;
   };
 
   return cruise([fixturesDir], {

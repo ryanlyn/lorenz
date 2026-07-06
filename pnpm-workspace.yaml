@@ -3,12 +3,12 @@ packages:
   - "extensions/*"
   - "apps/*"
   - "vendor/*"
-allowBuilds:
-  better-sqlite3: true
-  esbuild: true
-  msw: true
+onlyBuiltDependencies:
+  - better-sqlite3
+  - esbuild
+  - msw
   # Required by eslint's import resolver; without this pnpm prompts interactively during install.
-  unrs-resolver: true
+  - unrs-resolver
 
 catalog:
   "@eslint/js": "^10.0.1"

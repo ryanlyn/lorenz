@@ -1,52 +1,55 @@
 ---
 tracker:
   kind: slack
-  channels:
-    - C0123456789
-    # Direct-message channels (D...) are watched the same way - list the DM's channel id here.
-    # - D0123456789
-  bot_user_id: $SLACK_BOT_USER_ID
-  # Optional: an app-level token (xapp-..., scope connections:write) turns on Slack Socket Mode,
-  # so a new @-mention or thread reply dispatches an agent within ~a second instead of waiting out
-  # the poll interval below. Leave it unset to stay pull-only (interval polling). The bot token
-  # above still does all reads/writes; this token is used ONLY to open the events socket.
-  app_token: $SLACK_APP_TOKEN
-  # Optional author allowlist: when set, only these users' bot-mentions create issues. Leave it
-  # out for no author constraint. Recommended when watching a DM channel, since anyone can DM the
-  # bot - constraining to known requesters keeps dispatch scoped.
-  # users:
-  #   - U0123ABCD
-  emoji_states:
-    eyes: In Progress
-    white_check_mark: Done
-    x: Cancelled
-  active_states:
-    - Todo
-    - In Progress
-  terminal_states:
-    - Done
-    - Cancelled
-  dispatch:
-    accept_unrouted: true
-    only_routes: null
-    route_label_prefix: "route-"
-  # Scan-cost controls (optional). Slack's restricted tier can make history scans very slow, while
-  # Marketplace-approved apps and internal customer-built apps keep higher limits; either way a
-  # large channel backlog can make an unbounded first poll expensive. These controls bound the
-  # history read without introducing an advancing cursor.
-  #
-  # scan_lookback_days: how far back (days) the candidate scan pages conversations.history. The
-  # scan sends a trailing `oldest` watermark so a channel's ancient backlog is not re-paged every
-  # poll. A mention whose thread ROOT is older than this window stops being newly discovered -
-  # including a fresh reply-mention in an old thread, since history filters on the root's ts -
-  # while claimed issues are still refreshed by id, unbounded. The default is unbounded for
-  # backwards compatibility; this sample opts into 30 days. Raise it on channels with long-lived
-  # undispatched issues or revived old threads, or set 0 to scan full history.
-  scan_lookback_days: 30
+trackers:
+  slack:
+    provider: slack
+    channels:
+      - C0123456789
+      # Direct-message channels (D...) are watched the same way - list the DM's channel id here.
+      # - D0123456789
+    bot_user_id: $SLACK_BOT_USER_ID
+    # Optional: an app-level token (xapp-..., scope connections:write) turns on Slack Socket Mode,
+    # so a new @-mention or thread reply dispatches an agent within ~a second instead of waiting out
+    # the poll interval below. Leave it unset to stay pull-only (interval polling). The bot token
+    # above still does all reads/writes; this token is used ONLY to open the events socket.
+    app_token: $SLACK_APP_TOKEN
+    # Optional author allowlist: when set, only these users' bot-mentions create issues. Leave it
+    # out for no author constraint. Recommended when watching a DM channel, since anyone can DM the
+    # bot - constraining to known requesters keeps dispatch scoped.
+    # users:
+    #   - U0123ABCD
+    emoji_states:
+      eyes: In Progress
+      white_check_mark: Done
+      x: Cancelled
+    active_states:
+      - Todo
+      - In Progress
+    terminal_states:
+      - Done
+      - Cancelled
+    dispatch:
+      accept_unrouted: true
+      only_routes: null
+      route_label_prefix: "route-"
+    # Scan-cost controls (optional). Slack's restricted tier can make history scans very slow,
+    # while Marketplace-approved apps and internal customer-built apps keep higher limits; either
+    # way a large channel backlog can make an unbounded first poll expensive. These controls bound
+    # the history read without introducing an advancing cursor.
+    #
+    # scan_lookback_days: how far back (days) the candidate scan pages conversations.history. The
+    # scan sends a trailing `oldest` watermark so a channel's ancient backlog is not re-paged every
+    # poll. A mention whose thread ROOT is older than this window stops being newly discovered -
+    # including a fresh reply-mention in an old thread, since history filters on the root's ts -
+    # while claimed issues are still refreshed by id, unbounded. The default is unbounded for
+    # backwards compatibility; this sample opts into 30 days. Raise it on channels with long-lived
+    # undispatched issues or revived old threads, or set 0 to scan full history.
+    scan_lookback_days: 30
 polling:
   # Slack conversations.history is rate-limited (with higher limits for Marketplace-approved and
   # internal customer-built apps than for restricted-tier apps), and each poll re-scans recent
-  # channel history (bounded by tracker.scan_lookback_days above). Keep this interval conservative
+  # channel history (bounded by scan_lookback_days above). Keep this interval conservative
   # (60s) so a busy channel does not trigger sustained 429s; watched channels should be dedicated
   # and low-traffic. The 429/Retry-After backoff (each wait is now logged) and per-channel
   # poll_error handling cover transient limits on top of this; the runtime also emits a
@@ -59,8 +62,6 @@ polling:
   interval_ms: 60000
 workspace:
   root: ~/dev/lorenz-workspaces
-worker:
-  ssh_timeout_ms: 60000
 hooks:
   after_create: |
     set -euo pipefail
@@ -73,6 +74,12 @@ agent:
   kind: codex
   max_concurrent_agents: 10
   max_turns: 20
+  skills:
+    - ./skills/lorenz-commit
+    - ./skills/lorenz-push
+    - ./skills/lorenz-pull
+    - ./skills/lorenz-land
+    - ./skills/lorenz-debug
 agents:
   turn_timeout_ms: 3600000
   stall_timeout_ms: 300000
@@ -82,14 +89,14 @@ agents:
       shell_environment_policy:
         inherit: all
       model_reasoning_effort: high
-      model: gpt-5.4
-claude:
-  command: claude
-  strict_mcp_config: true
-  provider_config:
-    model: claude-opus-4-6
-    permissions:
-      defaultMode: dontAsk
+      model: gpt-5.5
+  claude:
+    bridge_command: claude
+    strict_mcp_config: true
+    provider_config:
+      model: claude-opus-4-8
+      permissions:
+        defaultMode: dontAsk
 ---
 
 You are working on a Slack issue `{{ issue.id }}`

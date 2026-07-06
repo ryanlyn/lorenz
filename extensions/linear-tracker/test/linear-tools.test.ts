@@ -178,6 +178,7 @@ test("linear_graphql tool treats GraphQL errors as failed operations on 200 and 
         error: {
           message: "Linear GraphQL request failed with HTTP 400.",
           status: 400,
+          body: '{"errors":[{"message":"bad query"}]}',
         },
       },
     },
@@ -207,6 +208,7 @@ test("linear_graphql tool reports HTTP, invalid JSON, and network failures", asy
         error: {
           message: "Linear GraphQL request failed with HTTP 429.",
           status: 429,
+          body: '{"message":"rate limited"}',
         },
       },
     },
@@ -266,6 +268,7 @@ test("linear_graphql tool logs non-200 and transport failures with context", asy
   const errors: string[] = [];
   const errorSpy = viSpyOnConsoleError(errors);
   const body = { message: `BAD_USER_INPUT ${"x".repeat(1200)}` };
+  const bodySummary = `${JSON.stringify(body).slice(0, 1000)}...<truncated>`;
 
   try {
     assert.deepEqual(
@@ -282,6 +285,7 @@ test("linear_graphql tool logs non-200 and transport failures with context", asy
           error: {
             message: "Linear GraphQL request failed with HTTP 500.",
             status: 500,
+            body: bodySummary,
           },
         },
       },
@@ -308,6 +312,56 @@ test("linear_graphql tool logs non-200 and transport failures with context", asy
     assert.equal(errors.length, 2);
     assert.match(errors[1] ?? "", /Linear GraphQL request failed: socket closed/);
     assert.match(errors[1] ?? "", /operation=LorenzTsViewer/);
+  } finally {
+    errorSpy.mockRestore();
+  }
+});
+
+test("linear_graphql tool redacts secrets in diagnostic logs", async () => {
+  const secret = "resolved-env-secret-linear-tool-sentinel";
+  const ref = "op://vault/item/linear-tool";
+  const errors: string[] = [];
+  const errorSpy = viSpyOnConsoleError(errors);
+  const settings = parseConfig(
+    {
+      tracker: {
+        kind: "linear",
+        api_key: "$LINEAR_API_KEY",
+        project_slug: "mono",
+      },
+    },
+    { LINEAR_API_KEY: secret },
+  );
+
+  try {
+    const result = await executeLinearTool(
+      "linear_graphql",
+      { query: "query LorenzTsViewer { viewer { id } }" },
+      settings,
+      fetchSequence(
+        jsonResponse(
+          {
+            errors: [
+              {
+                message: `bad request api_key=${secret} Bearer ${secret} ${ref}`,
+              },
+            ],
+          },
+          500,
+        ),
+      ),
+    );
+    const serializedResult = JSON.stringify(result);
+
+    assert.equal(errors.length, 1);
+    assert.notMatch(errors[0] ?? "", new RegExp(secret));
+    assert.notMatch(errors[0] ?? "", /op:\/\/vault\/item\/linear-tool/);
+    assert.notMatch(errors[0] ?? "", /Bearer resolved-env-secret-linear-tool-sentinel/);
+    assert.match(errors[0] ?? "", /\[REDACTED\]/);
+    assert.notMatch(serializedResult, new RegExp(secret));
+    assert.notMatch(serializedResult, /op:\/\/vault\/item\/linear-tool/);
+    assert.notMatch(serializedResult, /Bearer resolved-env-secret-linear-tool-sentinel/);
+    assert.match(serializedResult, /\[REDACTED\]/);
   } finally {
     errorSpy.mockRestore();
   }

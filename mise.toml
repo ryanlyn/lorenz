@@ -2,14 +2,14 @@
 _.file = ".env"
 
 [hooks]
-enter = "mise run check-env && pnpm install --frozen-lockfile && prek install --hook-type pre-push -v"
+enter = "mise run check-env && pnpm --config.ignore-scripts=false install --frozen-lockfile && prek install --hook-type pre-push -v"
 
 [settings]
 experimental = true
 
 [tools]
 node = "24"
-pnpm = "9"
+pnpm = "10.19.0"
 prek = "0.4.3"
 claude-code = "latest"
 "npm:@openai/codex" = "latest"
