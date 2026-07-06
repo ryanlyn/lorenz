@@ -1,25 +1,12 @@
 ```text
-╭─ LORENZ STATUS
-│ Agents: 0/10
-│ Throughput: 0 tps
-│ Runtime: 0m 0s
-│ Tokens: in 0 | out 0 | total 0
-│ Rate Limits: unavailable
-│ Project: https://linear.app/project/mono/issues
-│ Dashboard: http://127.0.0.1:4000/
-│ Next refresh: n/a
-├─ Running
-│
-│   ID       SLOT  AGENT    STAGE          PID      AGE / TURN   TOKENS     TOOLS    SESSION
-│   ───────────────────────────────────────────────────────────────────────────────────────────────────────────────
-│  No active agents
-│
-├─ Backoff queue
-│
-│  No queued retries
-│
-├─ Dispatch blocks
-│
-│  No capacity-blocked issues
-╰─
+ ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ 
+ LORENZ · linear/codex                                                             up 0m 0s · poll n/a · dash http://127.0.0.1:4000/
+ no issues tracked                                                                           rate 0 tps · total 0 tok · in 0 / out 0
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ #   LANE  ID        TITLE                      STAGE         AGENT  HOST          AGE/TURN  TOKENS LAST ACTIVITY                   
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+     no work in flight
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ events
+   no recent events
 ```

@@ -199,7 +199,9 @@ interface MiniFactory {
 }
 
 /** The minimal `ExtensionRegistry<TFactory>` shape the loader closes over. */
-function miniRegistry<TFactory extends MiniFactory>(builtins: TFactory[] = []): {
+function miniRegistry<TFactory extends MiniFactory>(
+  builtins: TFactory[] = [],
+): {
   get(kind: string | undefined): TFactory | undefined;
   register(factory: TFactory): void;
   kinds(): string[];
@@ -403,9 +405,5 @@ test("a broken release layout (SDK not bundled) fails bare-specifier resolution"
     // underlying cause is the SDK module being unresolvable in the broken layout.
     /tracker_provider_unavailable: @acme\/lorenz-tracker/,
   );
-  assert.equal(
-    registry.get(specifier),
-    undefined,
-    "a broken layout must register nothing",
-  );
+  assert.equal(registry.get(specifier), undefined, "a broken layout must register nothing");
 });

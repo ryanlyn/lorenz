@@ -50,11 +50,7 @@ test("assert rejects a missing or blank kind", () => {
 
 test("assert rejects a missing createClient function", () => {
   assert.throws(
-    () =>
-      assertTrackerProviderModule(
-        { kind: "acme", sdkVersion: 1, createClient: "nope" },
-        "src",
-      ),
+    () => assertTrackerProviderModule({ kind: "acme", sdkVersion: 1, createClient: "nope" }, "src"),
     /tracker_provider_module_invalid: src \(kind: acme\) is missing a `createClient\(settings, context\)` function/,
   );
 });
@@ -79,7 +75,8 @@ test("define round-trips a valid module and asserts at authoring time", () => {
   const module = validModule();
   assert.equal(defineTrackerProvider(module), module);
   assert.throws(
-    () => defineTrackerProvider({ kind: "acme", sdkVersion: 99 } as unknown as TrackerProviderModule),
+    () =>
+      defineTrackerProvider({ kind: "acme", sdkVersion: 99 } as unknown as TrackerProviderModule),
     /tracker_provider_module_invalid: defineTrackerProvider \(kind: acme\) is missing a `createClient/,
   );
 });

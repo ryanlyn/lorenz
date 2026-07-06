@@ -135,7 +135,11 @@ test("startup: a relative specifier resolves against baseDir and constructs an e
 
 test("a #exportName suffix selects a named export", async () => {
   const dir = await tempDir("agent-executor-loader");
-  await writeFixture(dir, "named-executor.mjs", executorModuleSource({ executor: "acme", named: true }));
+  await writeFixture(
+    dir,
+    "named-executor.mjs",
+    executorModuleSource({ executor: "acme", named: true }),
+  );
   const registry = privateRegistry();
   const { events, logEvent } = recordingLog();
 
@@ -150,7 +154,11 @@ test("a #exportName suffix selects a named export", async () => {
 
 test("a #exportName miss fails loud listing the available exports", async () => {
   const dir = await tempDir("agent-executor-loader");
-  await writeFixture(dir, "named-executor.mjs", executorModuleSource({ executor: "acme", named: true }));
+  await writeFixture(
+    dir,
+    "named-executor.mjs",
+    executorModuleSource({ executor: "acme", named: true }),
+  );
   const registry = privateRegistry();
 
   await assert.rejects(
@@ -288,8 +296,5 @@ test("reload: re-encountering an already-loaded specifier emits agent_executor_m
   // A registered SELECTOR hit (the built-in path) stays silent: no pinned event
   // for an executor this loader never imported.
   await ensureAgentExecutorLoaded("acp", registry, { baseDir: dir, logEvent });
-  assert.equal(
-    events.filter((event) => event.event === "agent_executor_module_pinned").length,
-    1,
-  );
+  assert.equal(events.filter((event) => event.event === "agent_executor_module_pinned").length, 1);
 });

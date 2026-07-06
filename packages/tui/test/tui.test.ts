@@ -2,33 +2,419 @@ import fs from "node:fs";
 import path from "node:path";
 
 import React from "react";
-import { test } from "vitest";
+import { test, vi } from "vitest";
 import { render } from "ink-testing-library";
 import type { RuntimeSnapshot } from "@lorenz/runtime";
 import { assert } from "@lorenz/test-utils";
 
 import {
+  formatAgentDetail,
   formatDashboard,
   humanizeAgentMessage,
   humanizeCodexMessage,
   rollingThroughput,
+  RuntimeApp,
   RuntimeDashboard,
+  tokenRateSparkline,
   updateTokenSamples,
 } from "@lorenz/tui";
+import type { RuntimeViewSource } from "@lorenz/tui";
 
-test("Ink dashboard renders operational sections", () => {
+test("Ink dashboard renders the flight board with an event tape at the bottom", () => {
   const { lastFrame } = render(
     React.createElement(RuntimeDashboard, { snapshot: snapshotFixture() }),
   );
   const frame = stripAnsi(lastFrame() ?? "");
 
-  assert.match(frame, /LORENZ STATUS/);
-  assert.match(frame, /Agents: 1\/10/);
-  assert.match(frame, /Throughput:/);
-  assert.match(frame, /Running/);
-  assert.match(frame, /MT-1/);
-  assert.match(frame, /Backoff queue/);
-  assert.match(frame, /Dispatch blocks/);
+  assert.match(frame, /LORENZ/);
+  // Running count lives in the status-bar "active" legend, not a separate stat.
+  assert.match(frame, /1 active/);
+  // The configured cap renders only when the caller provides it.
+  assert.notMatch(frame, /\/10 active/);
+  assert.match(frame, /tps/);
+  assert.match(frame, /LANE/);
+  assert.match(frame, /run\s+MT-1/);
+  assert.match(frame, /Build the thing/);
+  assert.match(frame, /events/);
+  assert.match(frame, /turn_completed\s+MT-1 turn_completed/);
+  // The tape sits below the table.
+  assert.ok(frame.indexOf("LANE") < frame.indexOf("events"));
+});
+
+test("board adapts its columns to the viewport width", () => {
+  const snapshot = dashboardSnapshot({
+    now: "2026-05-05T02:00:00.000Z",
+    running: [
+      runningFixture(
+        "MT-WIDE",
+        "codex",
+        "In Progress",
+        "4242",
+        90,
+        3,
+        12_345,
+        "a fairly long humanized activity message that should truncate",
+        "2026-05-05T02:00:00.000Z",
+      ),
+    ],
+    retrying: [
+      retryFixture(
+        "MT-RTY",
+        2,
+        30,
+        "a long error string that also needs truncation to fit narrow viewports",
+        "2026-05-05T02:00:00.000Z",
+      ),
+    ],
+    recentEvents: [
+      {
+        type: "run_started",
+        message: "MT-WIDE started with a fairly verbose event message attached to it",
+        at: "2026-05-05T01:59:00.000Z",
+      },
+    ],
+  });
+  const opts = {
+    now: "2026-05-05T02:00:00.000Z",
+    runtimeSeconds: 90,
+    throughputTps: 100,
+    throughputSparkline: "▁▁▂▃▅▇█▅▃▂",
+    throughputCumulative: "▁▂▃▄▅▆▇███",
+    maxAgents: 10,
+    interactive: true,
+    trackerKind: "linear",
+    agentKind: "codex",
+    dashboardUrl: "http://127.0.0.1:8771",
+  };
+
+  // Invariant: no rendered line ever exceeds the viewport width (incl. the
+  // full-width status bar and the fit-dropped header).
+  for (const columns of [60, 72, 84, 100, 132, 180, 220]) {
+    const rendered = formatDashboard(snapshot, { ...opts, columns });
+    for (const line of rendered.split("\n")) {
+      assert.ok(line.length <= columns, `width ${columns} overflowed: "${line}" (${line.length})`);
+    }
+    // The status bar fills the width exactly (accounting for the 1-col margins).
+    const barWidth = (rendered.split("\n")[0] ?? "").length;
+    assert.equal(barWidth, columns, `status bar not full width at ${columns}: got ${barWidth}`);
+    const detail = formatAgentDetail(snapshot.running[0]!, snapshot, {
+      ...opts,
+      columns,
+      sparkline: "▁▁▂▃▅▇█▅▃▂",
+      cumulative: "▁▂▃▄▅▆▇███",
+      runTps: 42,
+    });
+    for (const line of detail.split("\n")) {
+      assert.ok(
+        line.length <= columns,
+        `detail width ${columns} overflowed: "${line}" (${line.length})`,
+      );
+    }
+  }
+
+  // Narrow boards drop low-priority columns but keep the essentials.
+  const narrow = formatDashboard(snapshot, { ...opts, columns: 72 });
+  assert.notMatch(narrow, /LANE/);
+  assert.notMatch(narrow, /HOST/);
+  assert.match(narrow, /ID\s+TITLE/);
+  assert.match(narrow, /LAST ACTIVITY/);
+  assert.match(narrow, /MT-WIDE/);
+
+  // Wide boards keep every column and let flexible ones breathe.
+  const wide = formatDashboard(snapshot, { ...opts, columns: 180 });
+  assert.match(wide, /LANE\s+ID\s+TITLE\s+STAGE\s+AGENT\s+HOST/);
+  const extraWide = formatDashboard(snapshot, { ...opts, columns: 220 });
+  assert.match(extraWide, /a fairly long humanized activity message that should truncate/);
+});
+
+test("board windows the table to the viewport height with a cursor-following view", () => {
+  const now = "2026-05-05T02:00:00.000Z";
+  const running = Array.from({ length: 100 }, (_, i) =>
+    runningFixture(
+      `MT-${String(i + 1).padStart(3, "0")}`,
+      "codex",
+      "running",
+      "4242",
+      60,
+      1,
+      10,
+      "working",
+      now,
+    ),
+  );
+  const snapshot = dashboardSnapshot({
+    now,
+    running,
+    blocked: [
+      { issueId: "b1", identifier: "MT-BLK", state: "Todo", reason: "global_concurrency_cap" },
+    ],
+    recentEvents: [
+      { type: "run_started", message: "MT-001 started", at: "2026-05-05T01:59:00.000Z" },
+    ],
+  });
+  const opts = { now, runtimeSeconds: 60, throughputTps: 10, interactive: true, columns: 120 };
+
+  const top = formatDashboard(snapshot, { ...opts, rows: 30, cursor: 0 });
+  assert.ok(top.split("\n").length <= 30, `expected <=30 lines, got ${top.split("\n").length}`);
+  assert.match(top, /\b1 ▶/);
+  assert.match(top, /↓ \d+ more \(\d+ run · 1 block\)/);
+  assert.notMatch(top, /↑ \d+ more/);
+
+  // The window follows the cursor deep into the list; both indicators show.
+  const mid = formatDashboard(snapshot, { ...opts, rows: 30, cursor: 60 });
+  assert.match(mid, /↑ \d+ more/);
+  assert.match(mid, /↓ \d+ more/);
+  assert.match(mid, /▸\s*61 ▶/);
+
+  // Three-digit indexes align without assuming single-digit agent counts.
+  assert.match(mid, /\b61 ▶ .*MT-061/);
+});
+
+test("running cap rides the active legend only when provided, and identity shows tracker/agent kind", () => {
+  const snapshot = dashboardSnapshot({
+    now: "2026-05-05T02:00:00.000Z",
+    running: [
+      runningFixture(
+        "MT-1",
+        "codex",
+        "running",
+        "1",
+        10,
+        1,
+        5,
+        "working",
+        "2026-05-05T02:00:00.000Z",
+      ),
+    ],
+  });
+  const capped = formatDashboard(snapshot, {
+    now: "2026-05-05T02:00:00.000Z",
+    runtimeSeconds: 10,
+    throughputTps: 1,
+    maxAgents: 100,
+    trackerKind: "linear",
+    agentKind: "codex",
+    columns: 132,
+  });
+  // Cap folded into the active legend; configured kinds replace the old project URL.
+  assert.match(capped, /1\/100 active/);
+  assert.match(capped, /LORENZ · linear\/codex/);
+  assert.notMatch(capped, /project /);
+
+  const uncapped = formatDashboard(snapshot, {
+    now: "2026-05-05T02:00:00.000Z",
+    runtimeSeconds: 10,
+    throughputTps: 1,
+    columns: 132,
+  });
+  assert.match(uncapped, /1 active/);
+  assert.notMatch(uncapped, /\/\d+ active/);
+});
+
+test("header shows a moving throughput sparkline and a fleet status bar", () => {
+  const now = "2026-05-05T02:00:00.000Z";
+  const snapshot = {
+    ...dashboardSnapshot({
+      now,
+      usageTotals: {
+        inputTokens: 249_000,
+        outputTokens: 63_000,
+        totalTokens: 312_000,
+        secondsRunning: 10,
+      },
+      running: [runningFixture("MT-1", "codex", "running", "1", 10, 1, 5, "working", now)],
+      retrying: [retryFixture("MT-2", 1, 30, "boom", now)],
+    }),
+    poll: {
+      status: "idle" as const,
+      candidates: 9,
+      eligible: 6,
+      lastPollAt: now,
+      nextPollAt: null,
+      lastError: null,
+    },
+    runHistory: [
+      {
+        id: "r1",
+        issueId: "h1",
+        issueIdentifier: "MT-OLD",
+        slotIndex: 0,
+        agentKind: "codex",
+        outcome: "success" as const,
+        turnCount: 2,
+        startedAt: "2026-05-05T01:00:00.000Z",
+        endedAt: "2026-05-05T01:10:00.000Z",
+      },
+      {
+        id: "r2",
+        issueId: "h2",
+        issueIdentifier: "MT-BAD",
+        slotIndex: 0,
+        agentKind: "codex",
+        outcome: "failed" as const,
+        turnCount: 2,
+        startedAt: "2026-05-05T01:00:00.000Z",
+        endedAt: "2026-05-05T01:20:00.000Z",
+      },
+    ],
+  };
+  const rendered = formatDashboard(snapshot, {
+    now,
+    runtimeSeconds: 10,
+    throughputTps: 1_234,
+    throughputSparkline: "▁▂▃▅▇█▆▄▂▁",
+    throughputCumulative: "▁▁▂▃▄▅▆▇██",
+    runSparkline: () => "▂▃▅▇▆▅▃▂▁▁",
+    columns: 132,
+  });
+  const lines = rendered.split("\n");
+
+  // Line 1: a full-width stacked bar over history + live lanes + backlog (no label).
+  const bar = lines[0] ?? "";
+  assert.match(bar, /^ [█░]+ $/);
+  assert.equal(bar.length, 132);
+  // Rate histogram beside the tps figure; cumulative histogram beside the total.
+  assert.match(rendered, /rate ▁▂▃▅▇█▆▄▂▁ 1,234 tps/);
+  assert.match(rendered, /total ▁▁▂▃▄▅▆▇██ 312,000 tok/);
+  // Status legend distinguishes terminal history, active, pending, and backlog.
+  assert.match(rendered, /1✓ 1✗/);
+  assert.match(rendered, /1 active/);
+  assert.match(rendered, /1 pending/);
+  assert.match(rendered, /6 backlog/);
+  // No model-specific rate-limit field anymore.
+  assert.notMatch(rendered, /primary/);
+  assert.notMatch(rendered, /↺/);
+  // The RATE column renders the per-run histogram.
+  assert.match(rendered, /RATE/);
+  assert.match(rendered, /▂▃▅▇▆▅▃▂▁▁/);
+
+  // Without the sparkline callbacks the header and table stay chart-free.
+  const plain = formatDashboard(snapshot, {
+    now,
+    runtimeSeconds: 10,
+    throughputTps: 1,
+    columns: 132,
+  });
+  assert.notMatch(plain, /RATE/);
+});
+
+test("board event tape reads oldest to newest, newest at the bottom", () => {
+  const rendered = formatDashboard(
+    dashboardSnapshot({
+      now: "2026-05-05T02:00:00.000Z",
+      recentEvents: [
+        { type: "run_started", message: "MT-2 run started", at: "2026-05-05T00:00:02.000Z" },
+        { type: "turn_completed", message: "MT-1 turn done", at: "2026-05-05T00:00:01.000Z" },
+      ],
+    }),
+    { now: "2026-05-05T02:00:00.000Z", runtimeSeconds: 0, throughputTps: 0 },
+  );
+  assert.match(rendered, /MT-1 turn done[\s\S]*MT-2 run started/);
+});
+
+test("RuntimeApp narrows into an agent card on digit keys and returns on escape", async () => {
+  const snapshot = snapshotFixture();
+  const runtime: RuntimeViewSource = {
+    snapshot: () => snapshot,
+    subscribe: () => () => {},
+  };
+  const { frames, stdin, unmount } = render(React.createElement(RuntimeApp, { runtime }));
+  const lastFrame = () => stripAnsi(frames.findLast((candidate) => candidate.trim() !== "") ?? "");
+  try {
+    await vi.waitFor(() => assert.match(lastFrame(), /LAST ACTIVITY/));
+
+    stdin.write("1");
+    await vi.waitFor(() => assert.match(lastFrame(), /session session-1/));
+    const detail = lastFrame();
+    assert.match(detail, /MT-1 · Build the thing/);
+    assert.match(detail, /workspace \/tmp\/lorenz\/MT-1/);
+    assert.match(detail, /rate [▁▂▃▄▅▆▇█]{10}/u);
+    assert.match(detail, /events · MT-1/);
+    assert.notMatch(detail, /LAST ACTIVITY/);
+
+    stdin.write("\u001B"); // escape key
+    await vi.waitFor(() => assert.match(lastFrame(), /LAST ACTIVITY/));
+  } finally {
+    unmount();
+  }
+});
+
+test("agent detail formatter shows run vitals and agent-filtered events", () => {
+  const snapshot = dashboardSnapshot({
+    now: "2026-05-05T02:00:00.000Z",
+    running: [
+      {
+        ...runningFixture(
+          "MT-CARD",
+          "claude",
+          "Agent Review",
+          "4242",
+          30,
+          7,
+          1_500,
+          { method: "turn/diff/updated", params: { diff: "a\nb\n" } },
+          "2026-05-05T02:00:00.000Z",
+          "turn_completed",
+        ),
+        workerHost: "ssh-worker-2",
+        toolCallCount: 12,
+        retryAttempt: 2,
+      },
+    ],
+    recentEvents: [
+      { type: "run_started", message: "MT-CARD run started", at: "2026-05-05T01:59:40.000Z" },
+      { type: "poll_error", message: "unrelated tracker noise", at: "2026-05-05T01:59:50.000Z" },
+    ],
+  });
+  const run = snapshot.running[0];
+  assert.ok(run);
+  const rendered = formatAgentDetail(run, snapshot, {
+    now: "2026-05-05T02:00:00.000Z",
+    runtimeSeconds: 30,
+    throughputTps: 5,
+    sparkline: "▁▁▂▃▅▇█▅▃▂",
+    runTps: 42,
+  });
+
+  assert.match(rendered, /MT-CARD · Fixture issue/);
+  assert.match(rendered, /stage Agent Review/);
+  assert.match(rendered, /host ssh-worker-2/);
+  assert.match(rendered, /retry attempt 2/);
+  assert.match(rendered, /turn 7/);
+  assert.match(rendered, /tools 12/);
+  assert.match(rendered, /rate ▁▁▂▃▅▇█▅▃▂ 42 tps/);
+  assert.match(rendered, /session thre\.\.\.567890|session thread-1234567890/);
+  assert.match(rendered, /pid 4242/);
+  assert.match(rendered, /turn diff updated \(2 lines\)/);
+  assert.match(rendered, /events · MT-CARD/);
+  assert.match(rendered, /MT-CARD run started/);
+  assert.notMatch(rendered, /unrelated tracker noise/);
+});
+
+test("token rate sparkline plots per-bucket deltas, not the cumulative ramp", () => {
+  const nowMs = 60_000;
+  // Steady climb: equal deltas per bucket -> a flat-topped histogram, not a ramp.
+  const steady = Array.from({ length: 11 }, (_, i) => ({
+    timestampMs: i * 6_000,
+    totalTokens: i * 100,
+  }));
+  assert.equal(tokenRateSparkline(steady, nowMs), "██████████");
+
+  // A single burst in the middle dominates; quiet buckets floor out.
+  const burst = [
+    { timestampMs: 0, totalTokens: 0 },
+    { timestampMs: 30_000, totalTokens: 0 },
+    { timestampMs: 36_000, totalTokens: 700 },
+    { timestampMs: 60_000, totalTokens: 700 },
+  ];
+  const rendered = tokenRateSparkline(burst, nowMs);
+  assert.equal(rendered.length, 10);
+  assert.equal(rendered[5], "█");
+  assert.equal(rendered[0], "▁");
+  assert.equal(rendered[9], "▁");
+
+  // No samples or no movement -> a flat floor.
+  assert.equal(tokenRateSparkline([], nowMs), "▁▁▁▁▁▁▁▁▁▁");
 });
 
 function stripAnsi(value: string): string {
@@ -38,15 +424,23 @@ function stripAnsi(value: string): string {
 
 test("terminal dashboard formatter matches exported golden fixtures", () => {
   for (const scenario of dashboardScenarios()) {
-    assert.equal(
-      formatDashboard(scenario.snapshot, scenario.options),
-      readEvidence(scenario.name),
-      `${scenario.name} plain fixture`,
-    );
+    const plainOutput = formatDashboard(scenario.snapshot, scenario.options);
     const ansiOutput = formatDashboard(scenario.snapshot, {
       ...scenario.options,
       ansi: true,
     });
+    if (process.env.UPDATE_DASHBOARD_FIXTURES) {
+      fs.writeFileSync(
+        fixturePath(`${scenario.name}.evidence.md`),
+        "```text\n" + plainOutput + "```\n",
+      );
+      fs.writeFileSync(
+        fixturePath(`${scenario.name}.snapshot.txt`),
+        ansiOutput.replaceAll("\x1b", "\\e"),
+      );
+      continue;
+    }
+    assert.equal(plainOutput, readEvidence(scenario.name), `${scenario.name} plain fixture`);
     assert.equal(ansiOutput.includes("\x1b[1m"), true);
     assert.equal(ansiOutput.includes("\\e["), false);
     assert.equal(ansiOutput, readAnsiSnapshot(scenario.name), `${scenario.name} ansi fixture`);
@@ -74,11 +468,11 @@ test("terminal dashboard preserves tracker states in the running stage column", 
     { now: "2026-05-05T02:00:00.000Z", runtimeSeconds: 30, throughputTps: 2 },
   );
 
-  assert.match(rendered, /codex\s+Agent Review\s+4242/);
-  assert.notMatch(rendered, /codex\s+running\s+4242/);
+  assert.match(rendered, /MT-STATE\s+Fixture issue\s+Agent Review/);
+  assert.notMatch(rendered, /MT-STATE\s+Fixture issue\s+running/);
 });
 
-test("terminal dashboard renders zero tool calls for claimed runs before agent events arrive", () => {
+test("terminal dashboard renders placeholder activity for claimed runs before agent events arrive", () => {
   const rendered = formatDashboard(
     dashboardSnapshot({
       now: "2026-05-05T02:00:00.000Z",
@@ -103,41 +497,46 @@ test("terminal dashboard renders zero tool calls for claimed runs before agent e
     { now: "2026-05-05T02:00:00.000Z", runtimeSeconds: 0, throughputTps: 0 },
   );
 
-  assert.match(rendered, /TOKENS\s+TOOLS\s+SESSION/);
-  assert.match(rendered, /MT-PEND[\s\S]*\b0\s+n\/a/);
-  assert.notMatch(rendered, /\bEVENT\b/);
+  assert.match(
+    rendered,
+    /LANE\s+ID\s+TITLE\s+STAGE\s+AGENT\s+HOST\s+AGE\/TURN\s+TOKENS\s+LAST ACTIVITY/,
+  );
+  assert.match(rendered, /MT-PEND/);
+  assert.match(rendered, /no agent message yet/);
   assert.notMatch(rendered, /\bundefined\b/);
 });
 
-test("terminal dashboard renders running tool-call totals between tokens and session", () => {
+test("terminal dashboard renders humanized last activity and worker host per run", () => {
   const rendered = formatDashboard(
     dashboardSnapshot({
       now: "2026-05-05T02:00:00.000Z",
       running: [
         {
           ...runningFixture(
-            "MT-TOOLS",
+            "MT-ACT",
             "codex",
             "In Progress",
             "4242",
             30,
             2,
             1_234,
-            "turn completed should not render",
+            { method: "turn/diff/updated", params: { diff: "a\nb\n" } },
             "2026-05-05T02:00:00.000Z",
             "turn_completed",
           ),
-          toolCallCount: 12,
+          workerHost: "ssh-worker-2",
         },
       ],
     }),
     { now: "2026-05-05T02:00:00.000Z", runtimeSeconds: 30, throughputTps: 41 },
   );
 
-  assert.match(rendered, /TOKENS\s+TOOLS\s+SESSION/);
-  assert.match(rendered, /1,234\s+12\s+thre\.\.\.567890/);
-  assert.notMatch(rendered, /\bEVENT\b/);
-  assert.notMatch(rendered, /turn completed should not render/);
+  assert.match(rendered, /MT-ACT/);
+  assert.match(rendered, /ssh-worker-2/);
+  assert.match(rendered, /turn diff updated \(2 lines\)/);
+  // Session ids and executor pids no longer spend board columns.
+  assert.notMatch(rendered, /thre\.\.\.567890/);
+  assert.notMatch(rendered, /4242/);
 });
 
 test("terminal dashboard sanitizes snapshot-derived strings before rendering", () => {
@@ -160,26 +559,26 @@ test("terminal dashboard sanitizes snapshot-derived strings before rendering", (
         ),
       ],
       retrying: [retryFixture("MT-RETRY\n│ fake-retry\x1b[2J", 1, 1, "retry\n│ fake-error", now)],
-      rateLimits: {
-        model: "gpt-5\n│ fake-rate\x1b[2J",
-        primary: { used: 1, limit: 2, resetSeconds: 3 },
-        credits: "none\n│ fake-credit\x1b[2J",
-      },
     }),
     {
       now,
       dashboardUrl: "http://127.0.0.1:4000\n│ fake-dashboard\x1b[2J",
-      projectUrl: "https://linear.app/project\n│ fake-project\x1b[2J",
+      trackerKind: "linear\n│ fake-tracker\x1b[2J",
+      agentKind: "codex\n│ fake-agent\x1b[2J",
       runtimeSeconds: 0,
       throughputTps: 0,
     },
   );
 
   assert.match(rendered, /MT-1/);
-  assert.match(rendered, /codex/);
+  // The injected agent kind is sanitized, then truncated to the agent column.
+  assert.match(rendered, /cod\.\.\./);
   assert.match(rendered, /In Progress/);
-  assert.match(rendered, /MT-RETRY/);
-  assert.match(rendered, /gpt-5/);
+  assert.match(rendered, /MT-RET/);
+  // The configured tracker/agent identity renders (sanitized) in the header.
+  assert.match(rendered, /LORENZ/);
+  assert.match(rendered, /linear/);
+  // No control sequence survives, and nothing injected breaks onto a new line.
   assert.equal(rendered.includes("\x1b[2J"), false);
   assert.notMatch(rendered, /\n│ (agent-kind|fake-\w+|spoofed)/);
 });
@@ -203,13 +602,13 @@ test("Runtime field uses the live snapshot aggregate without adding active run a
     ],
   });
 
-  const runtimeLine = (now: string): string => {
+  const runtimeToken = (now: string): string => {
     const frame = formatDashboard(snapshot, { now });
-    return (frame.split("\n").find((line) => line.includes("Runtime:")) ?? "").trim();
+    return /\bup (\d+m \d+s)/.exec(frame)?.[1] ?? "";
   };
 
-  assert.equal(runtimeLine("2026-05-05T00:00:30.000Z"), "│ Runtime: 0m 30s");
-  assert.equal(runtimeLine("2026-05-05T00:01:30.000Z"), "│ Runtime: 0m 30s");
+  assert.equal(runtimeToken("2026-05-05T00:00:30.000Z"), "0m 30s");
+  assert.equal(runtimeToken("2026-05-05T00:01:30.000Z"), "0m 30s");
 });
 
 test("Runtime field advances active aggregate from snapshot receipt time", () => {
@@ -236,7 +635,7 @@ test("Runtime field advances active aggregate from snapshot receipt time", () =>
     snapshotReceivedAt: "2026-05-05T00:00:30.000Z",
   });
 
-  assert.match(frame, /Runtime: 1m 30s/);
+  assert.match(frame, /\bup 1m 30s/);
 });
 
 test("Runtime field uses wall-clock app runtime when the snapshot supplies it", () => {
@@ -275,8 +674,8 @@ test("Runtime field uses wall-clock app runtime when the snapshot supplies it", 
     snapshotReceivedAt: "2026-05-05T00:01:00.000Z",
   });
 
-  assert.match(frame, /Runtime: 1m 10s/);
-  assert.notMatch(frame, /Runtime: 2m 20s/);
+  assert.match(frame, /\bup 1m 10s/);
+  assert.notMatch(frame, /\bup 2m 20s/);
 });
 
 test("Runtime field includes completed and active seconds supplied by the snapshot", () => {
@@ -298,7 +697,7 @@ test("Runtime field includes completed and active seconds supplied by the snapsh
     ],
   });
   const frame = formatDashboard(snapshot, { now: "2026-05-05T00:00:30.000Z" });
-  assert.match(frame, /Runtime: 2m 30s/);
+  assert.match(frame, /\bup 2m 30s/);
 });
 
 test("TUI humanizes Codex and Claude event variants", () => {
@@ -473,6 +872,122 @@ function dashboardScenarios(): Array<{
       options: { now: backoffNow, runtimeSeconds: 2_700, throughputTps: 15 },
     },
     {
+      name: "full_pipeline",
+      snapshot: {
+        ...dashboardSnapshot({
+          now: backoffNow,
+          usageTotals: {
+            inputTokens: 120_000,
+            outputTokens: 9_400,
+            totalTokens: 129_400,
+            secondsRunning: 2_700,
+          },
+          rateLimits: rateLimits("gpt-5", 12_200, 20_000, 95, 10, 60, 45, null),
+          running: [
+            {
+              ...runningFixture(
+                "MT-700",
+                "codex",
+                "In Progress",
+                "4242",
+                14 * 60 + 2,
+                6,
+                89_350,
+                "editing src/webhooks/retry.ts",
+                backoffNow,
+                "turn_started",
+              ),
+              issueTitle: "Dedupe webhook retries on 5xx with a title long enough to truncate",
+              workerHost: "mac-mini-01",
+            },
+          ],
+          retrying: [retryFixture("MT-450", 2, 34, "Linear 429: rate limited", backoffNow)],
+          blocked: [
+            {
+              issueId: "MT-461",
+              identifier: "MT-461",
+              state: "Todo",
+              reason: "global_concurrency_cap",
+            },
+          ],
+        }),
+        poll: {
+          status: "idle",
+          candidates: 14,
+          eligible: 6,
+          lastPollAt: backoffNow,
+          nextPollAt: new Date(new Date(backoffNow).getTime() + 23_000).toISOString(),
+          lastError: null,
+        },
+        reserving: [
+          {
+            issueId: "MT-458",
+            identifier: "MT-458",
+            slotIndex: 1,
+            affinityHost: "ssh-worker-2",
+            retryAttempt: null,
+            reservedAtIso: new Date(new Date(backoffNow).getTime() - 4_000).toISOString(),
+          },
+        ],
+        runHistory: [
+          {
+            id: "run-2",
+            issueId: "MT-441",
+            issueIdentifier: "MT-441",
+            slotIndex: 0,
+            agentKind: "codex",
+            outcome: "failed",
+            turnCount: 9,
+            startedAt: "2026-05-05T00:00:00.000Z",
+            endedAt: "2026-05-05T00:41:02.000Z",
+            durationMs: 2_462_000,
+            usageTotals: {
+              inputTokens: 190_000,
+              outputTokens: 13_000,
+              totalTokens: 203_000,
+              secondsRunning: 2_462,
+            },
+            error: "tests failed twice",
+          },
+          {
+            id: "run-1",
+            issueId: "MT-433",
+            issueIdentifier: "MT-433",
+            slotIndex: 1,
+            agentKind: "claude",
+            outcome: "success",
+            turnCount: 4,
+            startedAt: "2026-05-05T00:00:00.000Z",
+            endedAt: "2026-05-05T00:22:00.000Z",
+            durationMs: 1_320_000,
+            usageTotals: {
+              inputTokens: 131_000,
+              outputTokens: 10_000,
+              totalTokens: 141_000,
+              secondsRunning: 1_320,
+            },
+          },
+        ],
+        recentEvents: [
+          {
+            type: "run_started",
+            message: "MT-700 session e71a23 spawned on mac-mini-01 (slot 0)",
+            at: "2026-05-05T00:44:41.000Z",
+          },
+        ],
+      },
+      options: {
+        now: backoffNow,
+        runtimeSeconds: 2_700,
+        throughputTps: 48,
+        maxAgents: 10,
+        trackerKind: "linear",
+        agentKind: "codex",
+        throughputSparkline: "▁▂▃▅▇█▆▄▂▁",
+        throughputCumulative: "▁▁▂▃▄▅▆▇██",
+      },
+    },
+    {
       name: "credits_unlimited",
       snapshot: dashboardSnapshot({
         now: "2026-05-05T00:01:15.000Z",
@@ -508,7 +1023,8 @@ function dashboardScenarios(): Array<{
         runtimeSeconds: 0,
         throughputTps: 0,
         dashboardUrl: "http://127.0.0.1:4000",
-        projectUrl: "https://linear.app/project/mono/issues",
+        trackerKind: "linear",
+        agentKind: "codex",
       },
     },
     {
@@ -579,7 +1095,7 @@ function dashboardSnapshot(input: Partial<RuntimeSnapshot> & { now: string }): R
     },
     rateLimits: input.rateLimits ?? null,
     logFile: null,
-    recentEvents: [],
+    recentEvents: input.recentEvents ?? [],
   };
 }
 

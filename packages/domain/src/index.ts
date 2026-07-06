@@ -137,14 +137,16 @@ export function redactDiagnosticText(value: string): string {
   for (const secret of registeredSecretsByLength()) {
     redacted = redacted.split(secret).join(DIAGNOSTIC_REDACTION);
   }
-  return redacted
-    .replace(BEARER_AUTH_PATTERN, `Bearer ${DIAGNOSTIC_REDACTION}`)
-    .replace(BASIC_AUTH_PATTERN, `Basic ${DIAGNOSTIC_REDACTION}`)
-    .replace(URL_AUTH_PATTERN, `$1${DIAGNOSTIC_REDACTION}@`)
-    // The value group stops before the closing quote, so that quote survives in
-    // the output and must not be re-emitted here.
-    .replace(SECRET_ASSIGNMENT_PATTERN, `$1$2${DIAGNOSTIC_REDACTION}`)
-    .replace(OP_REFERENCE_PATTERN, DIAGNOSTIC_REDACTION);
+  return (
+    redacted
+      .replace(BEARER_AUTH_PATTERN, `Bearer ${DIAGNOSTIC_REDACTION}`)
+      .replace(BASIC_AUTH_PATTERN, `Basic ${DIAGNOSTIC_REDACTION}`)
+      .replace(URL_AUTH_PATTERN, `$1${DIAGNOSTIC_REDACTION}@`)
+      // The value group stops before the closing quote, so that quote survives in
+      // the output and must not be re-emitted here.
+      .replace(SECRET_ASSIGNMENT_PATTERN, `$1$2${DIAGNOSTIC_REDACTION}`)
+      .replace(OP_REFERENCE_PATTERN, DIAGNOSTIC_REDACTION)
+  );
 }
 
 export function redactDiagnosticValue<T>(value: T): T {

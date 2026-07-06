@@ -174,11 +174,15 @@ test("loadWorkflow: prepareTrackerExtensions loads the tracker before parse, and
     ["---", "tracker:", "  kind: ./wf-tracker.mjs", "---", "Body."].join("\n"),
   );
 
-  const workflow = await loadWorkflow(workflowPath, {}, {
-    trackers: registry,
-    prepareRegistries: (rawConfig, ctx) =>
-      prepareTrackerExtensions(rawConfig, { baseDir: ctx.baseDir, trackers: registry }),
-  });
+  const workflow = await loadWorkflow(
+    workflowPath,
+    {},
+    {
+      trackers: registry,
+      prepareRegistries: (rawConfig, ctx) =>
+        prepareTrackerExtensions(rawConfig, { baseDir: ctx.baseDir, trackers: registry }),
+    },
+  );
 
   // The configured kind is the specifier verbatim, registered before parse.
   assert.equal(workflow.settings.tracker.kind, "./wf-tracker.mjs");
@@ -238,7 +242,11 @@ test("an sdkVersion mismatch fails loud with tracker_provider_sdk_mismatch", asy
 
 test("a malformed module (no createClient) fails loud with tracker_provider_module_invalid", async () => {
   const dir = await tempDir("tracker-loader");
-  await writeFixture(dir, "broken-tracker.mjs", `export default { kind: "broken", sdkVersion: 1 };`);
+  await writeFixture(
+    dir,
+    "broken-tracker.mjs",
+    `export default { kind: "broken", sdkVersion: 1 };`,
+  );
   const registry = privateRegistry();
 
   await assert.rejects(

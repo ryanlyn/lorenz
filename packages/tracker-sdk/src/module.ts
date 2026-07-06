@@ -25,7 +25,9 @@ const contract = makeSdkModuleContract<TrackerProviderModule>({
   moduleNoun: "a tracker provider module",
   identityField: "kind",
   defineCall: "defineTrackerProvider({ kind, sdkVersion, createClient })",
-  requiredFns: [{ field: "createClient", signature: "createClient(settings, context)", article: "a" }],
+  requiredFns: [
+    { field: "createClient", signature: "createClient(settings, context)", article: "a" },
+  ],
   sdkVersion: TRACKER_SDK_VERSION,
 });
 

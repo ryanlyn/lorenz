@@ -60,11 +60,7 @@ test("mountedToolSpecs flattens packs and fails loudly on tool-name collisions",
     ["jira_query", "linear_graphql"],
   );
   assert.throws(
-    () =>
-      mountedToolSpecs(
-        [pack("jira", ["jira_query"]), pack("other", ["jira_query"])],
-        settings,
-      ),
+    () => mountedToolSpecs([pack("jira", ["jira_query"]), pack("other", ["jira_query"])], settings),
     /tool name collision: jira_query is declared by both the "jira" and "other" packs/,
   );
 });

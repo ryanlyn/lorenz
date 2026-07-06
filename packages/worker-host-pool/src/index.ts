@@ -67,7 +67,12 @@ export class WorkerHostPool {
     localPort: number,
   ): Promise<RemoteMcpTunnelLease> {
     const endpointKey = this.remoteMcpTunnelEndpointKey(workerHost, localHost, localPort);
-    const entry = await this.ensureRemoteMcpTunnelEntry(workerHost, localHost, localPort, endpointKey);
+    const entry = await this.ensureRemoteMcpTunnelEntry(
+      workerHost,
+      localHost,
+      localPort,
+      endpointKey,
+    );
     return this.createRemoteMcpTunnelLease(entry);
   }
 
@@ -121,7 +126,12 @@ export class WorkerHostPool {
       this.releasePerRunHold(holdKey);
     }
 
-    const entry = await this.ensureRemoteMcpTunnelEntry(workerHost, localHost, localPort, endpointKey);
+    const entry = await this.ensureRemoteMcpTunnelEntry(
+      workerHost,
+      localHost,
+      localPort,
+      endpointKey,
+    );
     const lease = this.createRemoteMcpTunnelLease(entry);
     this.perRunTunnelHolds.set(holdKey, {
       leaseId: lease.leaseId,
