@@ -1020,7 +1020,10 @@ function formatRunningRow(
     agent: { text: run.agentKind, color: "35" },
     host: { text: run.workerHost ?? "local", color: "90" },
     ageTurn: { text: ageTurn, color: "35" },
-    tokens: { text: formatInteger(run.usageTotals.totalTokens), color: "33" },
+    tokens: {
+      text: formatTokensForWidth(run.usageTotals.totalTokens, tokensWidth(layout)),
+      color: "33",
+    },
     ...(runSparkline ? { spark: { text: runSparkline(run), color: "32" } } : {}),
     activity: { text: humanizeAgentMessage(run.lastMessage ?? null), color: "36" },
   });
@@ -1250,6 +1253,30 @@ function secondsBetween(left: Date, right: Date | string): number {
 
 function formatInteger(value: number): string {
   return Math.round(value).toLocaleString("en-US");
+}
+
+function tokensWidth(layout: TableLayout): number {
+  return layout.columns.find((col) => col.spec.key === "tokens")?.width ?? 7;
+}
+
+/**
+ * Token counts past ~1M outgrow the fixed board column (a run at a few
+ * thousand tok/s crosses it in minutes), so fall back to a compact unit form
+ * instead of letting the cell truncate to "12,4...".
+ */
+function formatTokensForWidth(value: number, width: number): string {
+  const exact = formatInteger(value);
+  if (exact.length <= width) return exact;
+  for (const [divisor, suffix] of [
+    [1e9, "B"],
+    [1e6, "M"],
+    [1e3, "k"],
+  ] as const) {
+    if (value < divisor) continue;
+    const oneDecimal = `${(value / divisor).toFixed(1)}${suffix}`;
+    return oneDecimal.length <= width ? oneDecimal : `${Math.round(value / divisor)}${suffix}`;
+  }
+  return exact;
 }
 
 function coerceDate(value: Date | string | number | undefined): Date | null {

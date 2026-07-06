@@ -539,6 +539,27 @@ test("terminal dashboard renders humanized last activity and worker host per run
   assert.notMatch(rendered, /4242/);
 });
 
+test("board token cells compact past the column width instead of truncating", () => {
+  const now = "2026-05-05T02:00:00.000Z";
+  const rendered = formatDashboard(
+    dashboardSnapshot({
+      now,
+      running: [
+        runningFixture("MT-BIG", "codex", "In Progress", "1", 3_600, 4, 12_456_700, null, now),
+        runningFixture("MT-HUGE", "claude", "In Progress", "2", 7_200, 9, 1_234_000_000, null, now),
+        runningFixture("MT-SMALL", "codex", "In Progress", "3", 60, 1, 461_000, null, now),
+      ],
+    }),
+    { now, runtimeSeconds: 3_600, throughputTps: 41, columns: 150 },
+  );
+
+  // Values that fit the column stay exact; larger ones compact to a unit form.
+  assert.match(rendered, /MT-BIG.*12\.5M/);
+  assert.match(rendered, /MT-HUGE.*1\.2B/);
+  assert.match(rendered, /MT-SMALL.*461,000/);
+  assert.notMatch(rendered, /12,4\.\.\./);
+});
+
 test("terminal dashboard sanitizes snapshot-derived strings before rendering", () => {
   const now = "2026-05-05T02:00:00.000Z";
   const rendered = formatDashboard(

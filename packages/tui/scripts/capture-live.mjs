@@ -247,8 +247,9 @@ const fleetActivity = (i, agentKind, tokens) => {
   ];
   return variants[i % variants.length];
 };
+const FLEET_SIZE = 32;
 const fleetIds = (() => {
-  const ids = Array.from({ length: 96 }, (_, k) => 2010 + 3 * k);
+  const ids = Array.from({ length: FLEET_SIZE }, (_, k) => 2010 + 3 * k);
   let seed = 0x5eed;
   const rand = () => ((seed = (seed * 48271) % 0x7fffffff) / 0x7fffffff);
   for (let k = ids.length - 1; k > 0; k--) {
@@ -257,10 +258,11 @@ const fleetIds = (() => {
   }
   return ids;
 })();
-const fleetRunning = Array.from({ length: 96 }, (_, i) => {
+const fleetRunning = Array.from({ length: FLEET_SIZE }, (_, i) => {
   const agentKind = (i * 3) % 5 < 3 ? "codex" : "claude";
   const ageSeconds = 40 + (mix(i * 7) % 5860);
-  const totalTokens = 700 + Math.round((ageSeconds * (26 + (mix(i * 3) % 40))) / 100) * 100;
+  // ~2.4-4.2k tok/s per agent — matches observed fleets (~20k tps from 6 agents).
+  const totalTokens = Math.round((ageSeconds * (2_400 + (mix(i * 3) % 1_800))) / 1000) * 1000;
   const turnCount = 1 + Math.floor(ageSeconds / 900) + (i % 3);
   const identifier = `ENG-${fleetIds[i]}`;
   const session = `thread-${((i + 1) * 2654435761 % 0xffffff).toString(16).padStart(6, "0")}`;
@@ -294,7 +296,7 @@ const fleetRunning = Array.from({ length: 96 }, (_, i) => {
 const fleet = {
   ...snapshot,
   appStartedAt: iso(-(118 * 60 + 41)),
-  poll: { status: "idle", candidates: 141, eligible: 33, lastPollAt: iso(-11), nextPollAt: iso(19), lastError: null },
+  poll: { status: "idle", candidates: 87, eligible: 12, lastPollAt: iso(-11), nextPollAt: iso(19), lastError: null },
   running: fleetRunning,
   reserving: [
     { issueId: "fr1", identifier: "ENG-2301", slotIndex: 96, affinityHost: "ssh-worker-3", retryAttempt: null, reservedAtIso: iso(-3) },
@@ -306,24 +308,24 @@ const fleet = {
     { issueId: "fy3", issueIdentifier: "ENG-2077", attempt: 2, dueAtIso: iso(311), monotonicDeadlineMs: 0, error: "worker recycled mid-run (machine_recycled)", slotIndex: 63 },
   ],
   blocked: [
-    { issueId: "fb1", identifier: "ENG-2310", state: "Todo", reason: "global_concurrency_cap" },
-    { issueId: "fb2", identifier: "ENG-2312", state: "Todo", reason: "global_concurrency_cap" },
-    { issueId: "fb3", identifier: "ENG-2315", state: "Todo", reason: "worker_host_capacity" },
+    { issueId: "fb1", identifier: "ENG-2310", state: "Todo", reason: "worker_host_capacity" },
+    { issueId: "fb2", identifier: "ENG-2312", state: "Todo", reason: "worker_host_capacity" },
+    { issueId: "fb3", identifier: "ENG-2315", state: "Todo", reason: "local_state_concurrency_cap" },
     { issueId: "fb4", identifier: "ENG-2317", state: "In Progress", reason: "local_state_concurrency_cap" },
   ],
   runHistory: Array.from({ length: 41 }, (_, k) => ({
     issueIdentifier: `ENG-${1860 + k * 3}`,
     outcome: k === 7 || k === 19 || k === 33 ? "failure" : "success",
   })),
-  usageTotals: { inputTokens: 20_941_000, outputTokens: 3_628_000, totalTokens: 24_569_000, secondsRunning: 7_121 },
+  usageTotals: { inputTokens: 583_460_000, outputTokens: 57_780_000, totalTokens: 641_240_000, secondsRunning: 7_121 },
   rateLimits: { model: "claude-opus-4-6", primary: { used: 8_410, limit: 10_000, resetSeconds: 1_240 }, credits: null },
   // Runtime order: newest first (the formatter re-reverses so newest lands at
   // the bottom of the tape).
   recentEvents: [
     { type: "run_started", message: "ENG-2231 session thread-4f21c7 spawned on worker-04 (slot 88)", at: iso(-6) },
     { type: "session_notification", message: "ENG-2201 ran `pnpm vitest tracker` — all 214 passed", at: iso(-23) },
-    { type: "dispatch_skipped", message: "ENG-2310 dispatch skipped: global_concurrency_cap (96/100 slots)", at: iso(-44) },
-    { type: "turn_completed", message: "ENG-2117 claude turn 14 completed (612,400 tok)", at: iso(-71) },
+    { type: "dispatch_skipped", message: "ENG-2310 dispatch skipped: worker_host_capacity (mac-mini-01 4/4)", at: iso(-44) },
+    { type: "turn_completed", message: "ENG-2117 claude turn 14 completed (8,412,600 tok)", at: iso(-71) },
     { type: "retry_timer_due", message: "ENG-2143 backoff armed: attempt 3 in 58s (Linear 429)", at: iso(-96) },
     { type: "session_notification", message: "ENG-2079 wrote packages/worker/src/pool.ts (+118 −42)", at: iso(-121) },
   ],
@@ -341,11 +343,11 @@ const views = {
       ...shared,
       maxAgents: 100,
       columns: 150,
-      cursor: 46,
+      cursor: 16,
       rows: 44,
       runSparkline: (run) => FLEET_SHAPES[run.slotIndex % FLEET_SHAPES.length],
     }),
-    title: "readme hero · 96 running agents saturating a 100-slot cap",
+    title: "readme hero · 32-agent fleet at ~90k tps",
   },
   detail: {
     cols: 132,
