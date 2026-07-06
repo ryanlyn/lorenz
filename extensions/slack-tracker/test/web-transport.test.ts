@@ -12,6 +12,27 @@ function settings() {
   );
 }
 
+function recordingScanTransport(options: { scanLookbackDays?: number; now?: () => number } = {}) {
+  const calls: string[] = [];
+  const fetchImpl = (async (url: string | URL) => {
+    calls.push(String(url));
+    return new Response(JSON.stringify({ ok: true, messages: [] }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  }) as typeof fetch;
+  return {
+    calls,
+    transport: new SlackWebTransport(
+      settings(),
+      fetchImpl,
+      () => Promise.resolve(),
+      undefined,
+      options,
+    ),
+  };
+}
+
 test("listMentions calls conversations.history with auth and parses messages", async () => {
   const calls: Array<{ url: string; auth: string | null }> = [];
   const fetchImpl = (async (url: string | URL, init?: RequestInit) => {
@@ -394,6 +415,62 @@ test("listMentions returns ONLY a fully-scanned channel's mentions when a siblin
   // Exactly one warning, naming the failed channel A.
   assert.equal(warnings.length, 1);
   assert.match(warnings[0]!, /C_A/);
+});
+
+test("scanChannels bounds conversations.history with a trailing oldest watermark", async () => {
+  // The candidate scan must not re-page a channel's full backlog every poll: it sends an `oldest`
+  // epoch-seconds bound = now - scanLookbackDays so Slack only returns recent history. A fixed
+  // `now` and lookback make the expected watermark deterministic.
+  const nowMs = 1_700_000_000_000;
+  const { calls, transport } = recordingScanTransport({
+    scanLookbackDays: 30,
+    now: () => nowMs,
+  });
+  await transport.scanChannels(["C1"]);
+
+  const expectedOldest = String(Math.floor(nowMs / 1000 - 30 * 86_400));
+  assert.equal(new URL(calls[0]!).searchParams.get("oldest"), expectedOldest);
+});
+
+test("scanChannels defaults to an unbounded history scan for existing configs", async () => {
+  const { calls, transport } = recordingScanTransport();
+  await transport.scanChannels(["C1"]);
+
+  assert.equal(new URL(calls[0]!).searchParams.get("oldest"), null);
+});
+
+test("scanChannels omits the oldest bound when scanLookbackDays is 0 (full history)", async () => {
+  const { calls, transport } = recordingScanTransport({ scanLookbackDays: 0 });
+  await transport.scanChannels(["C1"]);
+
+  assert.equal(new URL(calls[0]!).searchParams.get("oldest"), null);
+});
+
+test("a rate-limit backoff is logged so the wait is not silent", async () => {
+  // A cold scan can spend minutes asleep on 429/Retry-After. Each wait must emit a warn naming the
+  // method and the backoff seconds, so the daemon does not look hung.
+  let attempts = 0;
+  const fetchImpl = (async () => {
+    attempts += 1;
+    if (attempts === 1) {
+      return new Response("rate limited", { status: 429, headers: { "retry-after": "1" } });
+    }
+    return new Response(JSON.stringify({ ok: true, messages: [] }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  }) as typeof fetch;
+
+  const warnings: string[] = [];
+  const transport = new SlackWebTransport(settings(), fetchImpl, () => Promise.resolve(), {
+    warn: (m) => warnings.push(m),
+  });
+  await transport.listMentions(["C1"]);
+
+  const backoff = warnings.find((w) => /backing off/i.test(w));
+  assert.ok(backoff, "expected a backoff warning");
+  assert.match(backoff!, /conversations\.history/);
+  assert.match(backoff!, /retry 1\/4/);
 });
 
 test("addReaction posts to reactions.add", async () => {

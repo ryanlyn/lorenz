@@ -491,6 +491,51 @@ test("runtime records poll errors when poll-start snapshot emission fails", asyn
   );
 });
 
+test("poll_progress heartbeat ignores observer failures during a long poll", async () => {
+  vi.useFakeTimers();
+  let runtime: LorenzRuntime | null = null;
+  try {
+    let releaseFetch!: () => void;
+    let resolveFetchStarted!: () => void;
+    const fetchStarted = new Promise<void>((resolve) => {
+      resolveFetchStarted = resolve;
+    });
+    runtime = new LorenzRuntime(
+      runtimeOptions({
+        workflow: workflowFixture(),
+        client: {
+          fetchCandidateIssues: async () => {
+            resolveFetchStarted();
+            await new Promise<void>((resolve) => {
+              releaseFetch = resolve;
+            });
+            return [];
+          },
+          fetchIssuesByIds: async () => [],
+        },
+      }),
+    );
+    let threwOnProgress = false;
+    runtime.subscribe((snapshot) => {
+      if (!threwOnProgress && snapshot.recentEvents.at(-1)?.type === "poll_progress") {
+        threwOnProgress = true;
+        throw new Error("observer failed on progress");
+      }
+    });
+
+    const poll = runtime.pollOnce();
+    await fetchStarted;
+    await vi.advanceTimersByTimeAsync(20_000);
+    releaseFetch();
+    await poll;
+
+    assert.equal(runtime.snapshot().poll.status, "idle");
+  } finally {
+    runtime?.stop();
+    vi.useRealTimers();
+  }
+});
+
 test("runtime dry-run polls, computes eligibility, and does not start agents", async () => {
   const issue = issueFixture("issue-1", "MT-1");
   let runnerCalls = 0;
@@ -2676,6 +2721,138 @@ test("runtime records failed attempts as retryable work and keeps polling", asyn
   assert.equal(snapshot.retrying.length, 0);
 });
 
+test("runtime retries aged-out tracked issues refreshed by reconciliation", async () => {
+  const issue = issueFixture("issue-aged-out-retry", "MT-AGED-RETRY");
+  const doneIssue: Issue = { ...issue, state: "Done", stateType: "completed" };
+  const workflow = workflowFixture();
+  const orchestrator = new Orchestrator(workflow.settings);
+  let attempts = 0;
+  let candidateFetches = 0;
+  const runtime = new LorenzRuntime(
+    runtimeOptions({
+      workflow,
+      orchestrator,
+      client: {
+        fetchCandidateIssues: async () => {
+          candidateFetches += 1;
+          return candidateFetches === 1 ? [issue] : [];
+        },
+        fetchIssuesByIds: async () => (attempts >= 2 ? [doneIssue] : [issue]),
+      },
+      runner: async () => {
+        attempts += 1;
+        if (attempts === 1) throw new Error("agent exited: retry me");
+        return {
+          workspace: "/tmp/lorenz/MT-AGED-RETRY",
+          turnCount: 1,
+          updates: [],
+          agentKind: "codex",
+          finalIssue: doneIssue,
+        };
+      },
+    }),
+  );
+
+  await runtime.pollOnce({ waitForRuns: true });
+  assert.equal(attempts, 1);
+  assert.equal(runtime.snapshot().retrying[0]?.attempt, 1);
+
+  const retry = orchestrator.state.retryAttempts.get(slotKey(issue.id, 0));
+  assert.ok(retry);
+  retry.dueAtIso = new Date(Date.now() - 1).toISOString();
+  retry.monotonicDeadlineMs = 0;
+
+  await runtime.pollOnce({ waitForRuns: true });
+
+  assert.equal(candidateFetches, 2);
+  assert.equal(attempts, 2);
+  assert.equal(runtime.snapshot().runHistory[0]?.outcome, "success");
+});
+
+test("a due retry that fails the promotion gate is released, never spun on (no poll loop)", async () => {
+  const issue = issueFixture("issue-due-retry-loop-guard", "MT-LOOP-GUARD");
+  // Reconciles as live and active but fails the dispatch gate: unstarted with an open blocker.
+  const blockedIssue: Issue = {
+    ...issue,
+    blockers: [{ id: "blocker-1", identifier: "MT-BLOCKER", state: "Todo" }],
+  };
+  const workflow = workflowFixture();
+  const orchestrator = new Orchestrator(workflow.settings);
+  orchestrator.state.retryAttempts.set(slotKey(issue.id, 0), {
+    issueId: issue.id,
+    identifier: issue.identifier,
+    issueUrl: issue.url ?? null,
+    attempt: 1,
+    monotonicDeadlineMs: 0,
+    dueAtIso: new Date(Date.now() - 1).toISOString(),
+    slotIndex: 0,
+    workerHost: null,
+    workspacePath: null,
+    error: "previous failure",
+  });
+  let candidateFetches = 0;
+  const runtime = new LorenzRuntime(
+    runtimeOptions({
+      workflow,
+      orchestrator,
+      client: {
+        fetchCandidateIssues: async () => {
+          candidateFetches += 1;
+          return [];
+        },
+        fetchIssuesByIds: async () => [blockedIssue],
+      },
+    }),
+  );
+
+  await runtime.pollOnce({ waitForRuns: true });
+  // Every due retry either joins this poll's candidates (dispatchable) or is released here;
+  // reconciliation must never leave one parked with its timer re-armed at ~0ms, because that
+  // timer's callback polls again - continuous polling against the tracker API.
+  assert.equal(runtime.snapshot().retrying.length, 0);
+  const afterPoll = candidateFetches;
+  await settle(300);
+  assert.equal(
+    candidateFetches,
+    afterPoll,
+    `poll loop: ${candidateFetches - afterPoll} extra polls in 300ms`,
+  );
+  runtime.stop();
+});
+
+test("runtime promotes a due retry even when another slot for the same issue is tracked", async () => {
+  const issue = issueFixture("issue-aged-out-multislot-retry", "MT-AGED-MULTISLOT");
+  const workflow = workflowFixture();
+  const orchestrator = new Orchestrator(workflow.settings);
+  assert.ok(orchestrator.claim(issue));
+  orchestrator.state.retryAttempts.set(slotKey(issue.id, 1), {
+    issueId: issue.id,
+    identifier: issue.identifier,
+    issueUrl: issue.url ?? null,
+    attempt: 1,
+    monotonicDeadlineMs: 0,
+    dueAtIso: new Date(Date.now() - 1).toISOString(),
+    slotIndex: 1,
+    workerHost: null,
+    workspacePath: null,
+    error: "previous failure",
+  });
+  const runtime = new LorenzRuntime(
+    runtimeOptions({
+      workflow,
+      orchestrator,
+      client: {
+        fetchCandidateIssues: async () => [],
+        fetchIssuesByIds: async () => [issue],
+      },
+    }),
+  );
+
+  await runtime.pollOnce({ dryRun: true });
+
+  assert.equal(runtime.snapshot().poll.candidates, 1);
+});
+
 test("runtime schedules retry refresh timers independently of the poll cadence", async () => {
   const issue = issueFixture("issue-timer-retry", "MT-TIMER");
   const doneIssue: Issue = { ...issue, state: "Done", stateType: "completed" };
@@ -2720,6 +2897,62 @@ test("runtime schedules retry refresh timers independently of the poll cadence",
     snapshot.recentEvents.some((event) => event.type === "retry_timer_due"),
     true,
   );
+  runtime.stop();
+});
+
+test("runtime restores retry timers for reconciled issues outside the candidate scan", async () => {
+  const issue = issueFixture("issue-aged-out-timer", "MT-AGED-TIMER");
+  const doneIssue: Issue = { ...issue, state: "Done", stateType: "completed" };
+  const workflow = workflowFixture();
+  workflow.settings.polling.intervalMs = 60_000;
+  const clock = manualClock();
+  const orchestrator = new Orchestrator(workflow.settings, clock);
+  const dueAt = new Date(clock.now().getTime() + 500);
+  orchestrator.state.retryAttempts.set(slotKey(issue.id, 0), {
+    issueId: issue.id,
+    identifier: issue.identifier,
+    issueUrl: issue.url ?? null,
+    attempt: 1,
+    monotonicDeadlineMs: clock.monotonicMs() + 500,
+    dueAtIso: dueAt.toISOString(),
+    slotIndex: 0,
+    workerHost: null,
+    workspacePath: null,
+    error: "previous failure",
+  });
+  let attempts = 0;
+  const runtime = new LorenzRuntime(
+    runtimeOptions({
+      workflow,
+      clock,
+      orchestrator,
+      client: {
+        fetchCandidateIssues: async () => [],
+        fetchIssuesByIds: async () => [issue],
+      },
+      runner: async () => {
+        attempts += 1;
+        return {
+          workspace: "/tmp/lorenz/MT-AGED-TIMER",
+          turnCount: 1,
+          updates: [],
+          agentKind: "codex",
+          finalIssue: doneIssue,
+        };
+      },
+    }),
+  );
+
+  // Not due yet: the poll restores the wakeup timer from the by-id refresh (the issue is
+  // outside the candidate scan) without dispatching anything.
+  await runtime.pollOnce();
+  assert.equal(attempts, 0);
+
+  clock.advance(500);
+  clock.fireTimer();
+
+  await waitFor(() => attempts === 1, 1_000);
+  await waitFor(() => runtime.snapshot().runHistory[0]?.outcome === "success", 1_000);
   runtime.stop();
 });
 

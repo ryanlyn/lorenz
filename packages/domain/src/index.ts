@@ -723,7 +723,12 @@ export interface RuntimeTrackerClient {
    * applied by the runtime, not here.
    */
   fetchCandidateIssues(): Promise<Issue[]>;
-  /** Re-fetches specific issues by tracker id, preserving the requested order. */
+  /**
+   * Re-fetches specific issues by tracker id, preserving the requested order and omitting ids
+   * that are genuinely gone. The runtime treats omission as issue-deleted and releases the
+   * issue's claims, so a backend whose candidate scan is bounded (for example by a time window)
+   * must never omit a still-valid id merely because it falls outside that window.
+   */
   fetchIssuesByIds(ids: string[]): Promise<Issue[]>;
   /**
    * Lists issues currently in any of the given states. Optional because it is only exercised

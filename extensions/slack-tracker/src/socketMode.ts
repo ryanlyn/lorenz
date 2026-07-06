@@ -43,7 +43,7 @@ export interface SlackSocketModeOptions {
   appToken: string;
   /** Watched channel ids; events outside these are ignored so we never poll on unrelated traffic. */
   channels: string[];
-  /** Invoked when a watched channel sees a mention/reply/reaction - the runtime re-polls promptly. */
+  /** Invoked when a watched channel sees a mention/reply/reaction so the runtime re-polls promptly. */
   onChange: () => void;
   fetchImpl?: typeof fetch;
   webSocketFactory?: SlackWebSocketFactory;

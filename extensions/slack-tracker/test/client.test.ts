@@ -494,6 +494,147 @@ test("the bot's reaction mirror self-heals after a human command", async () => {
   assert.equal(reactionCalls, afterHeal);
 });
 
+test("fetchIssuesByIds derives in-window issues from the scan and warms the candidate cache", async () => {
+  const transport = new InMemorySlackTransport(
+    { C1: [{ ts: "1700000000.000100", text: "<@U_BOT> tracked work", reactions: ["eyes"] }] },
+    { botUserId: "U_BOT" },
+  );
+  let scans = 0;
+  const scanChannels = transport.scanChannels.bind(transport);
+  transport.scanChannels = async (channels) => {
+    scans += 1;
+    return scanChannels(channels);
+  };
+  let getMessages = 0;
+  const getMessage = transport.getMessage.bind(transport);
+  transport.getMessage = async (channel, ts) => {
+    getMessages += 1;
+    return getMessage(channel, ts);
+  };
+  const client = new SlackTrackerClient(settings(), transport);
+
+  // Refresh a tracked id, then fetch candidates in the same cycle: ONE scan total, and the
+  // in-window id is derived from the scan with NO per-id getMessage round-trip.
+  const refreshed = await client.fetchIssuesByIds(["C1:1700000000.000100"]);
+  assert.deepEqual(
+    refreshed.map((i) => i.id),
+    ["C1:1700000000.000100"],
+  );
+  await client.fetchCandidateIssues();
+  assert.equal(scans, 1);
+  assert.equal(getMessages, 0);
+});
+
+test("fetchIssuesByIds skips the scan entirely when no id is parseable", async () => {
+  const transport = new InMemorySlackTransport(
+    { C1: [{ ts: "1700000000.000100", text: "<@U_BOT> tracked work", reactions: ["eyes"] }] },
+    { botUserId: "U_BOT" },
+  );
+  let scans = 0;
+  transport.scanChannels = async () => {
+    scans += 1;
+    return { mentions: [], threadedRoots: [] };
+  };
+  const client = new SlackTrackerClient(settings(), transport);
+
+  // Startup workspace cleanup passes identifiers (no `channel:ts` colon); those must not cost
+  // a channel-history scan.
+  assert.deepEqual(await client.fetchIssuesByIds(["SLK-C1-1700000000-000100"]), []);
+  assert.equal(scans, 0);
+});
+
+test("fetchIssuesByIds takes a fresh scan before deciding tracked issue state", async () => {
+  const transport = new InMemorySlackTransport(
+    { C1: [{ ts: "1700000000.000100", text: "<@U_BOT> tracked work", reactions: ["eyes"] }] },
+    { botUserId: "U_BOT" },
+  );
+  let scans = 0;
+  let terminalOnNextScan = false;
+  const scanChannels = transport.scanChannels.bind(transport);
+  transport.scanChannels = async (channels) => {
+    scans += 1;
+    const scan = await scanChannels(channels);
+    if (!terminalOnNextScan) return scan;
+    return {
+      mentions: scan.mentions.map((root) =>
+        root.ts === "1700000000.000100" ? { ...root, reactions: ["white_check_mark"] } : root,
+      ),
+      threadedRoots: scan.threadedRoots,
+    };
+  };
+  const client = new SlackTrackerClient(settings(), transport);
+
+  assert.deepEqual(
+    (await client.fetchCandidateIssues()).map((i) => i.state),
+    ["In Progress"],
+  );
+  terminalOnNextScan = true;
+
+  const refreshed = await client.fetchIssuesByIds(["C1:1700000000.000100"]);
+
+  assert.equal(scans, 2);
+  assert.deepEqual(
+    refreshed.map((i) => i.state),
+    ["Done"],
+  );
+});
+
+test("fetchIssuesByIds falls back to getMessage for ids outside the scan window (never drops a live root)", async () => {
+  const transport = new InMemorySlackTransport(
+    {
+      C1: [
+        { ts: "1700000000.000100", text: "<@U_BOT> aged out of the window", reactions: ["eyes"] },
+      ],
+    },
+    { botUserId: "U_BOT" },
+  );
+  // Simulate a root older than the candidate scan window: the scan omits it, but the authoritative
+  // by-id read still returns it. The refresh must NOT report it gone (which would abort its live run).
+  transport.scanChannels = async () => ({ mentions: [], threadedRoots: [] });
+  let getMessages = 0;
+  const getMessage = transport.getMessage.bind(transport);
+  transport.getMessage = async (channel, ts) => {
+    getMessages += 1;
+    return getMessage(channel, ts);
+  };
+  const client = new SlackTrackerClient(settings(), transport);
+
+  const refreshed = await client.fetchIssuesByIds(["C1:1700000000.000100"]);
+  assert.deepEqual(
+    refreshed.map((i) => i.id),
+    ["C1:1700000000.000100"],
+  );
+  assert.ok(getMessages > 0);
+});
+
+test("fetchIssuesByIds preserves the requested id order across scan hits and fallbacks", async () => {
+  const transport = new InMemorySlackTransport(
+    {
+      C1: [
+        { ts: "1700000000.000100", text: "<@U_BOT> out of scan", reactions: ["eyes"] },
+        { ts: "1700000000.000200", text: "<@U_BOT> in scan", reactions: ["eyes"] },
+      ],
+    },
+    { botUserId: "U_BOT" },
+  );
+  // The first id falls OUTSIDE the candidate scan (aged out of the window) so it takes the
+  // getMessage fallback; the second is a scan hit. The result must keep the REQUESTED order, not
+  // emit scan hits first and append fallbacks.
+  transport.scanChannels = async () => ({
+    mentions: [
+      { channel: "C1", ts: "1700000000.000200", text: "<@U_BOT> in scan", reactions: ["eyes"] },
+    ],
+    threadedRoots: [],
+  });
+  const client = new SlackTrackerClient(settings(), transport);
+
+  const result = await client.fetchIssuesByIds(["C1:1700000000.000100", "C1:1700000000.000200"]);
+  assert.deepEqual(
+    result.map((i) => i.id),
+    ["C1:1700000000.000100", "C1:1700000000.000200"],
+  );
+});
+
 test("watch is null (pull-only) when no app token is configured", () => {
   const transport = new InMemorySlackTransport({ C1: [] });
   const client = new SlackTrackerClient(settings(), transport);

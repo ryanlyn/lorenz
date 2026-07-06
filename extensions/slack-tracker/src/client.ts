@@ -165,10 +165,10 @@ export function trackedRootsOf(scan: SlackChannelScan): SlackMessage[] {
 }
 
 /**
- * One scan serves every read within a poll cycle: the runtime triggers two back-to-back full
- * scans per cycle (terminal-state reconciliation, then candidates), and each scan pages the
- * full channel history against a tightly rate-limited API. Comfortably shorter than any real
- * poll interval, so cross-poll staleness stays bounded.
+ * One scan serves every read within a poll cycle: the runtime's by-id reconciliation forces a
+ * fresh scan, and the candidate fetch that follows moments later reuses it instead of re-paging
+ * channel history against a tightly rate-limited API. Comfortably shorter than any real poll
+ * interval, so cross-poll staleness stays bounded.
  */
 const SCAN_CACHE_TTL_MS = 10_000;
 
@@ -224,29 +224,51 @@ export class SlackTrackerClient implements RuntimeTrackerClient {
     return socket;
   }
 
+  /** Resolve a tracked root's thread state and map it to a normalized issue. */
+  private async issueFromRoot(root: SlackMessage, base: string | null): Promise<Issue> {
+    const thread = await resolveThreadState(this.settings, this.transport, root);
+    return slackMessageToIssue(root, this.settings, {
+      permalinkBase: base,
+      state: thread.state,
+      request: thread.request,
+    });
+  }
+
+  /**
+   * The by-id refresh is driven by one fresh channel scan: every id whose root is in the scan is
+   * resolved from it with no per-id read, and the scan warms the cache for the candidate fetch
+   * that follows in the same poll cycle - so a poll costs one scan, not a scan plus a read per
+   * tracked issue. Ids outside the scan (roots older than any configured scan window) fall back
+   * to authoritative per-id reads, so a still-valid root is never reported gone (the runtime
+   * would release its claim). The fresh scan (not the cached one) keeps this path as current as
+   * the per-id reads it replaces: the runtime aborts and releases runs based on these states.
+   */
   async fetchIssuesByIds(ids: string[]): Promise<Issue[]> {
-    const base = await this.transport.teamUrl();
-    const out: Issue[] = [];
-    for (const id of ids) {
+    const parsed = ids.flatMap((id) => {
       const parts = splitIssueId(id);
-      if (!parts) continue;
-      const [channel, ts] = parts;
-      // Apply the same tracked-message predicate as candidate discovery and the Slack write
-      // tools. If a human edits the request away, the issue reconciles as gone, not live.
-      let root: SlackMessage;
-      try {
-        root = await requireTrackedMessage(this.settings, this.transport, channel, ts);
-      } catch {
-        continue;
+      return parts ? [[id, parts] as const] : [];
+    });
+    if (parsed.length === 0) return [];
+    const [scan, base] = await Promise.all([
+      this.scanCached({ forceRefresh: true }),
+      this.transport.teamUrl(),
+    ]);
+    const scannedById = new Map<string, SlackMessage>(
+      trackedRootsOf(scan).map((root) => [`${root.channel}:${root.ts}`, root]),
+    );
+    const out: Issue[] = [];
+    for (const [id, parts] of parsed) {
+      let root = scannedById.get(id);
+      if (!root) {
+        // Apply the same tracked-message predicate as candidate discovery and the Slack write
+        // tools. If a human edits the request away, the issue reconciles as gone, not live.
+        try {
+          root = await requireTrackedMessage(this.settings, this.transport, parts[0], parts[1]);
+        } catch {
+          continue;
+        }
       }
-      const thread = await resolveThreadState(this.settings, this.transport, root);
-      out.push(
-        slackMessageToIssue(root, this.settings, {
-          permalinkBase: base,
-          state: thread.state,
-          request: thread.request,
-        }),
-      );
+      out.push(await this.issueFromRoot(root, base));
     }
     return out;
   }
@@ -312,10 +334,11 @@ export class SlackTrackerClient implements RuntimeTrackerClient {
     this.mirroredStates.set(key, state);
   }
 
-  private async scanCached(): Promise<SlackChannelScan> {
+  private async scanCached(options: { forceRefresh?: boolean } = {}): Promise<SlackChannelScan> {
     const key = this.channels().join(",");
     const now = Date.now();
     if (
+      options.forceRefresh !== true &&
       this.scanCache &&
       this.scanCache.key === key &&
       now - this.scanCache.at < SCAN_CACHE_TTL_MS
