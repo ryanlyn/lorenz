@@ -489,10 +489,11 @@ test("grow survives reaper ticks that fire during a slow provision (real pool)",
   drivers = new WorkerDriverRegistry();
   drivers.register({ kind: "fake", create: () => slowDriver });
 
-  const pool = createWorkerPool(
-    poolSettings({ min: 0, warm: 0, max: 1, reapIntervalMs: 10 }),
-    { clock, drivers, logEvent: () => undefined },
-  );
+  const pool = createWorkerPool(poolSettings({ min: 0, warm: 0, max: 1, reapIntervalMs: 10 }), {
+    clock,
+    drivers,
+    logEvent: () => undefined,
+  });
   // Complete hydrate so the destroy-unknown branch is live (post-restart steady state).
   await pool.hydrate();
 

@@ -1,0 +1,18 @@
+╭─ LORENZ  agents 3/10  ·  up 85m23s  ·  2.1k tps  ·  tok 312,320 (in 249k / out 63k)
+│  opus-4-6 primary ▮▮▮▮▮▮▮▯▯▯▯ 61% resets 31m  ·  poll in 23s  ·  linear.app/northwind/ENG  ·  dash :8771
+├─ running 3
+│     ID       TITLE                               AGENT  HOST             AGE TURN   TOKENS  ACTIVITY
+│  ● ENG-2014 Dedupe webhook retries on 5xx       codex  mac-mini-01   14m02s    6   89,350  editing src/webhooks/retry.ts
+│  ● ENG-2027 Fix pagination cursor drift in Lin… claude ssh-worker-2  27m03s   11  182,500  turn completed · awaiting review
+│  ● ENG-2031 Quieten flaky worker-recycle test   codex  local          3m28s    2   24,700  reproducing the failure
+├─ waiting 6
+│  ◌ ENG-2058 reserving slot 1                    acquiring worker lease (4s)
+│  ↻ ENG-2009 retry 2 in 34s                      Linear 429: rate limited, honoring Retry-After
+│  ↻ ENG-2044 retry 1 in 1m52s                    agent stalled past stall_timeout_ms
+│  ↻ ENG-2051 retry 4 in 8m06s                    worker recycled mid-run (machine_recycled)
+│  ■ ENG-2061 todo                                global concurrency cap
+│  ■ ENG-2062 todo                                worker host capacity
+├─ recent  2✓ 1✗
+│  ✓ ENG-2003 merged after 22m · 141k tok         ✓ ENG-1998 9m · 36k tok
+│  ✗ ENG-2007 failed after 41m — tests failed twice 
+╰─ 09:41:22 ENG-2031 run started on local · session thre…e71a23

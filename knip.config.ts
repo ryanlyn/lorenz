@@ -59,6 +59,10 @@ const config: KnipConfig = {
     "sandbox/**",
     "test/fixtures/extension-import-boundaries/**",
     "test/fixtures/out-of-tree-extension/**",
+    // Documentation artifacts (e.g. TUI mockup generators) are run manually.
+    "docs/**",
+    // Manual visual-capture harness for the TUI (see docs/tui-redesign).
+    "packages/tui/scripts/**",
   ],
 };
 

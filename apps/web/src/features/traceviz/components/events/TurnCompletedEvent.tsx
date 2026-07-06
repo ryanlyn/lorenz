@@ -3,44 +3,42 @@ import { CheckCircle } from "lucide-react";
 import type { TurnCompletedEvent as TurnCompletedEventType } from "../../api/types";
 import { formatTimestamp, formatNumber, formatDuration } from "../../../../lib/utils";
 
+import { EventRow } from "./EventRow";
+
 interface TurnCompletedEventProps {
   event: TurnCompletedEventType;
 }
 
 export function TurnCompletedEvent({ event }: TurnCompletedEventProps) {
   return (
-    <div className="border-l-4 border-accent-green rounded-r-md bg-background/50 p-3">
-      <div className="flex items-start gap-2">
-        <CheckCircle aria-hidden="true" className="mt-0.5 h-4 w-4 shrink-0 text-accent-green" />
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2">
-            <span className="text-xs text-muted">{formatTimestamp(event.timestamp)}</span>
-            <span className="text-xs font-medium text-accent-green">Turn completed</span>
-          </div>
-          <div className="mt-1 flex items-center gap-3 text-xs text-muted">
-            {event.usage && (
-              <>
-                <span>
-                  In:{" "}
-                  <span className="text-foreground">{formatNumber(event.usage.inputTokens)}</span>{" "}
-                  tokens
-                </span>
-                <span>
-                  Out:{" "}
-                  <span className="text-foreground">{formatNumber(event.usage.outputTokens)}</span>{" "}
-                  tokens
-                </span>
-              </>
-            )}
-            {event.durationMs != null && (
+    <EventRow
+      dotClass="bg-accent"
+      time={formatTimestamp(event.timestamp)}
+      icon={<CheckCircle className="h-3.5 w-3.5 text-accent" />}
+      title={<span className="text-xs font-medium text-accent">Turn completed</span>}
+      meta={
+        <span className="flex items-center gap-3 text-[11px] text-faint">
+          {event.usage && (
+            <>
               <span>
-                Duration:{" "}
-                <span className="text-foreground">{formatDuration(event.durationMs)}</span>
+                In{" "}
+                <span className="tabular-nums text-muted">
+                  {formatNumber(event.usage.inputTokens)}
+                </span>
               </span>
-            )}
-          </div>
-        </div>
-      </div>
-    </div>
+              <span>
+                Out{" "}
+                <span className="tabular-nums text-muted">
+                  {formatNumber(event.usage.outputTokens)}
+                </span>
+              </span>
+            </>
+          )}
+          {event.durationMs != null && (
+            <span className="tabular-nums text-muted">{formatDuration(event.durationMs)}</span>
+          )}
+        </span>
+      }
+    />
   );
 }

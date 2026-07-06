@@ -418,7 +418,9 @@ export async function runDaemon(options: CliOptions): Promise<number> {
                 // url() throws without a TCP listener (socket-only daemon), so only read it when the
                 // dashboard is enabled.
                 dashboardUrl: options.dashboard && server ? server.url("/") : null,
-                projectUrl: projectUrlForSettings(workflow.settings),
+                trackerKind: workflow.settings.tracker.kind,
+                agentKind: workflow.settings.agent.kind,
+                maxAgents: workflow.settings.agent.maxConcurrentAgents,
               }),
             )
           : null;

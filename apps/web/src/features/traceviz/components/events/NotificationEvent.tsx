@@ -1,32 +1,49 @@
+import { useState } from "react";
 import { Info, AlertTriangle } from "lucide-react";
 
 import type { NotificationEvent as NotificationEventType, TurnFailedEvent } from "../../api/types";
 import { cn, formatTimestamp } from "../../../../lib/utils";
+
+import { EventRow } from "./EventRow";
+
+const LONG_NOTIFICATION_CHARS = 160;
 
 interface NotificationEventProps {
   event: NotificationEventType | TurnFailedEvent;
 }
 
 export function NotificationEvent({ event }: NotificationEventProps) {
+  const [expanded, setExpanded] = useState(false);
   const isFailed = event.kind === "turn_failed";
+  const isLong = event.text.length > LONG_NOTIFICATION_CHARS;
+
   return (
-    <div
-      className={cn(
-        "border-l-4 rounded-r-md bg-background/50 p-3",
-        isFailed ? "border-accent-red" : "border-muted",
-      )}
-    >
-      <div className="flex items-start gap-2">
-        {isFailed ? (
-          <AlertTriangle aria-hidden="true" className="mt-0.5 h-4 w-4 shrink-0 text-accent-red" />
+    <EventRow
+      dotClass={isFailed ? "bg-accent-coral" : "bg-faint"}
+      time={formatTimestamp(event.timestamp)}
+      icon={
+        isFailed ? (
+          <AlertTriangle className="h-3.5 w-3.5 text-accent-coral" />
         ) : (
-          <Info aria-hidden="true" className="mt-0.5 h-4 w-4 shrink-0 text-muted" />
-        )}
-        <div className="min-w-0 flex-1">
-          <span className="text-xs text-muted">{formatTimestamp(event.timestamp)}</span>
-          <p className="mt-1 text-sm">{event.text}</p>
-        </div>
-      </div>
-    </div>
+          <Info className="h-3.5 w-3.5 text-faint" />
+        )
+      }
+      title={
+        <span className={cn("text-[13px]", isFailed ? "text-accent-coral" : "text-muted")}>
+          {event.text}
+        </span>
+      }
+      expandable={isLong}
+      expanded={expanded}
+      onToggle={() => setExpanded((value) => !value)}
+      ariaLabel="Toggle notification details"
+      detail={
+        isLong ? (
+          <p className={cn("text-[13px]", isFailed ? "text-accent-coral" : "text-muted")}>
+            {event.text}
+          </p>
+        ) : undefined
+      }
+    />
   );
 }
