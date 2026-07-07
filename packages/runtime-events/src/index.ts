@@ -134,6 +134,21 @@ export interface RuntimeClaimStoreStatus {
   lastCheckpointAt: string | null;
 }
 
+export interface RuntimeDaemonStatus {
+  ownerId: string;
+  pid: number;
+  hostname: string;
+  startedAt: string;
+  workflowPath: string;
+  workspaceRoot: string;
+  lockPath: string;
+  endpoint: { kind: "http" | "socket" | "none"; address: string };
+  heartbeatAt: string;
+  heartbeatAgeMs: number | null;
+  stale: boolean;
+  leadershipStoreKind: string;
+}
+
 export interface RuntimeSnapshot {
   appStatus: RuntimeAppStatus;
   /** Wall-clock time when the runtime instance was created. */
@@ -156,6 +171,7 @@ export interface RuntimeSnapshot {
   usageTotals: UsageTotals;
   rateLimits: unknown;
   claimStore?: RuntimeClaimStoreStatus | undefined;
+  daemon?: RuntimeDaemonStatus | undefined;
   logFile: string | null;
   recentEvents: RuntimeEvent[];
 }

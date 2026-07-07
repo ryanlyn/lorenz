@@ -15,7 +15,6 @@ import {
 } from "@lorenz/cli-kit";
 import { validateDispatchConfig } from "@lorenz/config";
 import { checkSlotsPerMachineGate } from "@lorenz/dispatch-coordinator";
-import { startObservabilityServer } from "@lorenz/server";
 import { configureLogFile } from "@lorenz/log-file";
 import { LorenzRuntime } from "@lorenz/runtime";
 import { RuntimeApp } from "@lorenz/tui";
@@ -24,10 +23,35 @@ import { defaultAgentExecutorRegistry } from "@lorenz/agent-sdk";
 import { defaultToolRegistry } from "@lorenz/tool-sdk";
 import { defaultTrackerRegistry } from "@lorenz/tracker-sdk";
 import { TraceEmitter } from "@lorenz/traceviz-emitter";
-import { defaultIssueStorePath, IssueStore } from "@lorenz/server";
+import {
+  defaultIssueStorePath,
+  IssueStore,
+  startObservabilityServer,
+  type RuntimeServerSource,
+} from "@lorenz/server";
 import { errorMessage, type Settings, type WorkflowDefinition } from "@lorenz/domain";
+import type { RuntimeSnapshot } from "@lorenz/runtime-events";
 import { setDefaultFlags } from "@lorenz/flags";
 
+import { buildClaimStoreHandle, type ClaimStoreHandle } from "./claimStore.js";
+import {
+  acquireDaemonLock,
+  createDaemonIdentity,
+  daemonControlSocketPath,
+  daemonLockPath,
+  type DaemonEndpoint,
+  type DaemonLock,
+} from "./daemonLock.js";
+import { runtimeDaemonStatus } from "./daemonStatus.js";
+import {
+  createDaemonRefreshCommand,
+  createDaemonStatusCommand,
+  createDaemonStopCommand,
+  daemonControlOptionsFromCommanderOptions,
+  runDaemonRefreshCommand,
+  runDaemonStatusCommand,
+  runDaemonStopCommand,
+} from "./daemonControl.js";
 import {
   createRunsCommand,
   runRunsCommand,
@@ -116,6 +140,42 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
   });
   command.addCommand(runsCommand);
 
+  const statusCommand = createDaemonStatusCommand("status");
+  statusCommand.action(async (workflowPath: string | undefined) => {
+    const rootOptions = command.opts<CliCommanderOptions>();
+    const statusOptions = statusCommand.opts();
+    const result = await runDaemonStatusCommand(
+      daemonControlOptionsFromCommanderOptions({ ...rootOptions, ...statusOptions }, workflowPath),
+    );
+    process.stdout.write(result.output);
+    status = result.statusCode;
+  });
+  command.addCommand(statusCommand);
+
+  const refreshCommand = createDaemonRefreshCommand("refresh");
+  refreshCommand.action(async (workflowPath: string | undefined) => {
+    const rootOptions = command.opts<CliCommanderOptions>();
+    const refreshOptions = refreshCommand.opts();
+    const result = await runDaemonRefreshCommand(
+      daemonControlOptionsFromCommanderOptions({ ...rootOptions, ...refreshOptions }, workflowPath),
+    );
+    process.stdout.write(result.output);
+    status = result.statusCode;
+  });
+  command.addCommand(refreshCommand);
+
+  const stopCommand = createDaemonStopCommand("stop");
+  stopCommand.action(async (workflowPath: string | undefined) => {
+    const rootOptions = command.opts<CliCommanderOptions>();
+    const stopOptions = stopCommand.opts();
+    const result = await runDaemonStopCommand(
+      daemonControlOptionsFromCommanderOptions({ ...rootOptions, ...stopOptions }, workflowPath),
+    );
+    process.stdout.write(result.output);
+    status = result.statusCode;
+  });
+  command.addCommand(stopCommand);
+
   const doctorCommand = createDoctorCommand("doctor");
   doctorCommand.action(async (workflowPath: string | undefined, parsed: DoctorCommanderOptions) => {
     const rootOptions = command.opts<CliCommanderOptions>();
@@ -201,6 +261,12 @@ export async function runDaemon(options: CliOptions): Promise<number> {
       return workflow;
     };
     const workflow = await loadRuntimeWorkflow();
+    // Name the resolved workflow up front: the daemon lease, claim store, and control socket are
+    // all keyed off this absolute path, so a cwd surprise with a relative argument must be
+    // visible before anything starts acting on the wrong tracker.
+    process.stderr.write(
+      `Workflow: ${workflow.path} (tracker: ${workflow.settings.tracker.kind})\n`,
+    );
     // Resolve flags once, from CLI > file (front matter) > env > defaults, and install the frozen
     // snapshot before anything that might read it. Invalid flags throw and surface via the catch.
     const flags = resolveAppFlags(
@@ -214,74 +280,113 @@ export async function runDaemon(options: CliOptions): Promise<number> {
     if (getFlags().get("diagnostics.log_flag_resolution")) {
       process.stderr.write(renderFlagDiagnostics(getFlags()));
     }
-    await configureLogFile(workflow.settings.logging.logFile);
-
-    // baseDir anchors `./relative` driver module specifiers to the workflow
-    // file's directory - the most predictable anchor for operators.
-    const coordinator = await buildDispatchCoordinator(workflow.settings, process.env, {
-      baseDir: path.dirname(workflow.path),
-    });
-    // Post-construction gate: slotsPerMachine>1 is only safe once the coordinator
-    // advertises per-run MCP endpoints AND the operator has explicitly opted into
-    // co-residence (a poisoned worker fails every co-resident run on recycle). The
-    // capability is known only here, after the coordinator exists, so this is the
-    // right home for the check (validateDispatchConfig stays capability-free).
-    assertSlotsPerMachineGate(workflow.settings, coordinator);
-    const traceDir = workflow.settings.server.traceDir!;
-    const traceEmitter = new TraceEmitter(traceDir);
-    const issueStore = new IssueStore(defaultIssueStorePath());
-    const runtime = new LorenzRuntime({
-      workflow,
-      clientFactory: createTrackerClient,
-      reloadWorkflow: loadRuntimeWorkflow,
-      runner: runAgentAttempt,
-      coordinator,
-      validateDispatch: (settings) =>
-        validateDispatchConfig(
-          settings,
-          defaultTrackerRegistry,
-          defaultAgentExecutorRegistry,
-          defaultToolRegistry,
-        ),
-      onAgentUpdate: (issue, update) => {
-        traceEmitter.emit(issue.id, issue.identifier, update);
-      },
-      onIssueDispatched: (issue) => {
-        issueStore.upsert({
-          issueId: issue.id,
-          issueIdentifier: issue.identifier,
-          title: issue.title,
-          url: issue.url ?? null,
-        });
-      },
-      ...runtimeAdapters,
-    });
-    await coordinator?.hydrate();
-    let instance: ReturnType<typeof render> | null = null;
-    // Persistent (not once) handlers so the graceful teardown below actually
-    // runs to completion. With process.once, the listener is removed after the
-    // first SIGINT; a second SIGINT — which Node + Ink can surface while the
-    // daemon is still winding down — then hits the default disposition and kills
-    // the process with code 130 mid-shutdown, before Ink restores the terminal.
-    // That abrupt kill is what leaves a garbled/red error state on Ctrl+C.
-    let shuttingDown = false;
-    const requestStop = () => {
-      if (shuttingDown) {
-        // Repeated Ctrl+C: force-quit, but unmount Ink first so the terminal is
-        // left clean rather than mid-render.
-        instance?.unmount();
-        process.exit(130);
-      }
-      shuttingDown = true;
-      runtime.stop();
-    };
-    process.on("SIGINT", requestStop);
-    process.on("SIGTERM", requestStop);
-
+    // The long-lived daemon (single-instance leadership lock, heartbeat, and HTTP control
+    // endpoints) is gated behind the `daemon` feature; without it the orchestrator runs
+    // unmanaged exactly as it did before the daemon work, just like `--once`.
+    const daemonEnabled = getFlags().get("daemon.enabled");
+    let daemonLock =
+      options.once || !daemonEnabled ? null : await acquireDaemonLeadership(workflow);
+    let claimStoreHandle: ClaimStoreHandle | null = null;
+    let issueStore: IssueStore | null = null;
+    let runtime: LorenzRuntime | null = null;
     let server: Awaited<ReturnType<typeof startObservabilityServer>> | null = null;
+    let daemonHeartbeat: NodeJS.Timeout | null = null;
+    let daemonLockLost = false;
+    let detachSignalHandlers: (() => void) | null = null;
+    let instance: ReturnType<typeof render> | null = null;
+    const onDaemonLockLost = () => {
+      daemonLockLost = true;
+      runtime?.stop();
+    };
+    const assertDaemonLockHeld = () => {
+      if (daemonLockLost) throw new Error("daemon_lock_lost");
+    };
     try {
-      if (options.dashboard) {
-        server = await startObservabilityServer(runtime, {
+      if (daemonLock) daemonHeartbeat = startDaemonHeartbeat(daemonLock, onDaemonLockLost);
+      const flags = getFlags();
+      claimStoreHandle = await buildClaimStoreHandle(workflow, {
+        backend: flags.get("claim_store.backend"),
+        path: flags.get("claim_store.path"),
+        ownerStaleMs: flags.get("claim_store.owner_stale_ms"),
+      });
+      assertDaemonLockHeld();
+      await configureLogFile(workflow.settings.logging.logFile);
+      assertDaemonLockHeld();
+
+      // baseDir anchors `./relative` driver module specifiers to the workflow
+      // file's directory - the most predictable anchor for operators.
+      const coordinator = await buildDispatchCoordinator(workflow.settings, process.env, {
+        baseDir: path.dirname(workflow.path),
+      });
+      assertDaemonLockHeld();
+      // Post-construction gate: slotsPerMachine>1 is only safe once the coordinator
+      // advertises per-run claim enforcement AND the operator has explicitly opted
+      // into co-residence. The capability is known only here, after the coordinator
+      // exists, so this is the right home for the check.
+      assertSlotsPerMachineGate(workflow.settings, coordinator);
+      const traceDir = workflow.settings.server.traceDir!;
+      const traceEmitter = new TraceEmitter(traceDir);
+      issueStore = new IssueStore(defaultIssueStorePath());
+      runtime = new LorenzRuntime({
+        workflow,
+        clientFactory: createTrackerClient,
+        reloadWorkflow: loadRuntimeWorkflow,
+        runner: runAgentAttempt,
+        coordinator,
+        validateDispatch: (settings) =>
+          validateDispatchConfig(
+            settings,
+            defaultTrackerRegistry,
+            defaultAgentExecutorRegistry,
+            defaultToolRegistry,
+          ),
+        onAgentUpdate: (issue, update) => {
+          traceEmitter.emit(issue.id, issue.identifier, update);
+        },
+        onIssueDispatched: (issue) => {
+          issueStore?.upsert({
+            issueId: issue.id,
+            issueIdentifier: issue.identifier,
+            title: issue.title,
+            url: issue.url ?? null,
+          });
+        },
+        ...(claimStoreHandle.claimStore ? { claimStore: claimStoreHandle.claimStore } : {}),
+        ...runtimeAdapters,
+      });
+      await coordinator?.hydrate();
+      assertDaemonLockHeld();
+      // Persistent (not once) handlers so the graceful teardown below actually
+      // runs to completion. With process.once, the listener is removed after the
+      // first SIGINT; a second SIGINT - which Node + Ink can surface while the
+      // daemon is still winding down - then hits the default disposition and kills
+      // the process with code 130 mid-shutdown, before Ink restores the terminal.
+      // That abrupt kill is what leaves a garbled/red error state on Ctrl+C.
+      let shuttingDown = false;
+      const requestStop = () => {
+        if (shuttingDown) {
+          // Repeated Ctrl+C: force-quit, but unmount Ink first so the terminal is
+          // left clean rather than mid-render.
+          instance?.unmount();
+          process.exit(130);
+        }
+        shuttingDown = true;
+        runtime?.stop();
+      };
+      process.on("SIGINT", requestStop);
+      process.on("SIGTERM", requestStop);
+      detachSignalHandlers = () => {
+        process.off("SIGINT", requestStop);
+        process.off("SIGTERM", requestStop);
+      };
+
+      // Daemon control is published over HTTP when the dashboard (TCP) is enabled - the lock records
+      // the dashboard URL, which is discoverable and matches --url/--port. With --no-dashboard the
+      // daemon instead serves control over a unix socket so status/refresh/stop still self-discover.
+      const controlSocketPath =
+        daemonLock && !options.dashboard ? daemonControlSocketPath(workflow.path) : undefined;
+      if (options.dashboard || daemonLock) {
+        server = await startObservabilityServer(daemonServerSource(runtime, daemonLock), {
           host: workflow.settings.server.host,
           port: workflow.settings.server.port ?? 0,
           ...(workflow.settings.server.traceDir !== undefined && {
@@ -292,10 +397,23 @@ export async function runDaemon(options: CliOptions): Promise<number> {
           }),
           issueStore,
           tools: defaultToolRegistry,
+          controlToken: daemonLock?.snapshot().controlToken ?? undefined,
+          ...(controlSocketPath ? { socketPath: controlSocketPath } : {}),
+          httpDisabled: !options.dashboard,
         });
-        workflow.settings.server.port = server.port;
-        boundServerPort = server.port;
-        process.stderr.write(`Observability API listening on ${server.url("/")}\n`);
+        assertDaemonLockHeld();
+        if (options.dashboard) {
+          workflow.settings.server.port = server.port;
+          boundServerPort = server.port;
+          process.stderr.write(`Observability API listening on ${server.url("/")}\n`);
+        }
+        if (daemonLock) {
+          const endpoint: DaemonEndpoint = controlSocketPath
+            ? { kind: "socket", address: controlSocketPath }
+            : { kind: "http", address: server.url("/") };
+          await daemonLock.updateEndpoint(endpoint);
+        }
+        assertDaemonLockHeld();
       }
 
       instance =
@@ -303,7 +421,9 @@ export async function runDaemon(options: CliOptions): Promise<number> {
           ? render(
               React.createElement(RuntimeApp, {
                 runtime,
-                dashboardUrl: server?.url("/") ?? null,
+                // url() throws without a TCP listener (socket-only daemon), so only read it when the
+                // dashboard is enabled.
+                dashboardUrl: options.dashboard && server ? server.url("/") : null,
                 trackerKind: workflow.settings.tracker.kind,
                 agentKind: workflow.settings.agent.kind,
                 maxAgents: workflow.settings.agent.maxConcurrentAgents,
@@ -317,21 +437,38 @@ export async function runDaemon(options: CliOptions): Promise<number> {
         });
       }
 
+      assertDaemonLockHeld();
       await runtime.start({ once: options.once, dryRun: options.dryRun });
+      assertDaemonLockHeld();
       return 0;
     } finally {
       // Leave the signal handlers attached through teardown so a second Ctrl+C
       // can't slip past them and kill the process mid-shutdown.
       try {
-        instance?.unmount();
-        // start() returns once stop() flips the runtime to stopped; drain paid
-        // cloud workers before tearing down the server so they are destroyed on exit.
-        await runtime.drainWorkerPool();
-        await server?.stop();
-        issueStore.close();
+        try {
+          try {
+            instance?.unmount();
+            // start() returns once stop() flips the runtime to stopped; drain paid
+            // cloud workers before tearing down the server so they are destroyed on exit.
+            await runtime?.drainWorkerPool();
+            await server?.stop();
+          } finally {
+            // Always release local resources even if worker/server teardown threw, so the
+            // claim-store db handle and issue store are never leaked on a failed shutdown.
+            issueStore?.close();
+            await claimStoreHandle?.close();
+            claimStoreHandle = null;
+          }
+        } finally {
+          if (daemonHeartbeat) {
+            clearInterval(daemonHeartbeat);
+            daemonHeartbeat = null;
+          }
+          await daemonLock?.release();
+          daemonLock = null;
+        }
       } finally {
-        process.off("SIGINT", requestStop);
-        process.off("SIGTERM", requestStop);
+        detachSignalHandlers?.();
       }
     }
   } catch (error) {
@@ -399,6 +536,82 @@ function applyCliOverrides(workflow: WorkflowDefinition, options: CliOptions): v
 
 export function projectUrlForSettings(settings: Settings): string | undefined {
   return defaultTrackerRegistry.providerFor(settings)?.projectUrl?.(settings);
+}
+
+async function acquireDaemonLeadership(workflow: WorkflowDefinition): Promise<DaemonLock> {
+  const lockPath = daemonLockPath(workflow.path);
+  const endpoint = initialDaemonEndpoint();
+  const result = await acquireDaemonLock({
+    lockPath,
+    identity: createDaemonIdentity({
+      workflowPath: workflow.path,
+      workspaceRoot: workflow.settings.workspace.root,
+    }),
+    endpoint,
+    replaceDeadOwner: true,
+  });
+  if (result.status === "acquired") return result.lock;
+  const owner = result.record
+    ? `pid=${result.record.pid} endpoint=${result.record.endpoint.address}`
+    : "owner=unknown";
+  throw new Error(
+    result.stale
+      ? `daemon_lock_stale ${owner} lock=${lockPath} (owner not verifiably dead; remove the lock file to force takeover)`
+      : `daemon_already_running ${owner}`,
+  );
+}
+
+function initialDaemonEndpoint(): DaemonEndpoint {
+  return { kind: "none", address: "" };
+}
+
+function startDaemonHeartbeat(lock: DaemonLock, onLost: () => void): NodeJS.Timeout {
+  let heartbeatInFlight = false;
+  const heartbeat = () => {
+    if (heartbeatInFlight) return;
+    heartbeatInFlight = true;
+    lock
+      .heartbeat()
+      .catch((error) => {
+        process.stderr.write(`daemon heartbeat failed: ${errorMessage(error)}\n`);
+        onLost();
+      })
+      .finally(() => {
+        heartbeatInFlight = false;
+      });
+  };
+  heartbeat();
+  const timer = setInterval(heartbeat, 10_000);
+  timer.unref();
+  return timer;
+}
+
+function daemonServerSource(runtime: LorenzRuntime, lock: DaemonLock | null): RuntimeServerSource {
+  const daemonStatus = () =>
+    lock ? runtimeDaemonStatus(lock.snapshot(), new Date(), 60_000, "local-file") : null;
+  const withDaemon = (snapshot: RuntimeSnapshot): RuntimeSnapshot => {
+    const status = daemonStatus();
+    return status ? { ...snapshot, daemon: status } : snapshot;
+  };
+  return {
+    get workflow() {
+      return runtime.workflow;
+    },
+    snapshot() {
+      return withDaemon(runtime.snapshot());
+    },
+    subscribe(listener) {
+      return runtime.subscribe((snapshot) => listener(withDaemon(snapshot)));
+    },
+    requestRefresh() {
+      return runtime.requestRefresh();
+    },
+    requestStop() {
+      runtime.stop();
+      return { requested_at: new Date().toISOString(), stopping: true };
+    },
+    daemonStatus,
+  };
 }
 
 /**

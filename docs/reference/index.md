@@ -27,6 +27,8 @@ was verified against the parser or schema that applies it.
 - [http-api.md](http-api.md) - the dashboard and trace server: every REST route, its method and
   shape, the WebSocket `events` and `events_append` messages, and the `server.host` / `server.port`
   binding.
+- [durable-claims-and-daemon.md](durable-claims-and-daemon.md) - the explicit claim-store backend
+  switch, schema-version guard, daemon leadership lease, and local daemon control commands.
 - [events.md](events.md) - the named events the runtime records to a run's trace, including
   `workflow_reloaded`, `workflow_reload_failed`, `workflow_parse_error`, and
   `missing_workflow_file`. Each entry lists when it fires and what payload it carries.

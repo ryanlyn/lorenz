@@ -140,7 +140,7 @@ So only `after_create` and `before_run` fail-fast. If a teardown hook is broken,
 
 ## Finding logs and traces
 
-Lorenz keeps no database. The live error surface is the in-memory snapshot: `poll.lastError` plus the last 20 `recentEvents`. Beyond that there are two on-disk sources.
+The live error surface is the in-memory snapshot: `poll.lastError` plus the last 20 `recentEvents`. Beyond that there are two on-disk sources.
 
 - **Event log file.** When `logging.log_file` is set (default `~/.lorenz/log/lorenz.log`), runtime events are appended as JSON. The daemon flag `--logs-root <path>` redirects this to `<path>/log/lorenz.log`.
 - **Per-issue trace.** Every `AgentUpdate` is written as one JSON line to `<server.trace_dir>/<urlencoded issueId>/trace.jsonl`. The default `trace_dir` is `~/.lorenz/issues` (note: `issues`, not `traces`). View a single trace file standalone with `pnpm traceviz <file.jsonl>`, which serves the dashboard SPA at `http://localhost:4040/#/trace/<issueId>`.

@@ -1,6 +1,6 @@
 /** @beta */
 export interface LeadershipEndpoint {
-  kind: "http" | "socket";
+  kind: "http" | "socket" | "none";
   address: string;
 }
 
@@ -33,6 +33,9 @@ export type LeadershipAcquireResult<
   TRecord extends LeadershipLeaseRecord,
 > =
   | { status: "acquired"; lease: TLease }
+  // `stale` on a conflict means the owner's heartbeat is past the staleness window but the owner
+  // could not be verified dead (other host, live or reused pid, or an unreadable record); a
+  // verifiably dead owner is replaced during acquire instead of surfacing as a conflict.
   | { status: "conflict"; record: TRecord | null; stale: boolean };
 
 /** @beta */

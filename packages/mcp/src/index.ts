@@ -1,6 +1,8 @@
 export {
   checkRunClaim,
+  bearerToken,
   createMcpAuthScope,
+  createOpaqueBearerToken,
   issueMcpToken,
   issueRunMcpToken,
   mcpAuthScopeForSettings,

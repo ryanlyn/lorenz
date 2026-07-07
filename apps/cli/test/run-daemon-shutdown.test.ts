@@ -1,10 +1,12 @@
 import path from "node:path";
+import { writeFile } from "node:fs/promises";
 
 import { parseConfig } from "@lorenz/config";
 import { afterEach, beforeEach, test, vi } from "vitest";
 import { assert, tempDir } from "@lorenz/test-utils";
 
 import type * as daemonModule from "../src/daemon.js";
+import type * as daemonLockModule from "../src/daemonLock.js";
 
 const mocks = vi.hoisted(() => ({
   loadWorkflow: vi.fn(),
@@ -16,6 +18,11 @@ const mocks = vi.hoisted(() => ({
   runtimeDefaultSettingsOptions: vi.fn(() => ({})),
   // No worker.worker_pool in the fixture, so the real builder returns undefined.
   buildDispatchCoordinator: vi.fn(() => undefined),
+  acquireDaemonLock: null as
+    | ((
+        ...args: Parameters<typeof daemonLockModule.acquireDaemonLock>
+      ) => ReturnType<typeof daemonLockModule.acquireDaemonLock>)
+    | null,
   runtimeInstances: [] as Array<FakeRuntime>,
 }));
 
@@ -83,6 +90,17 @@ vi.mock("@lorenz/runtime", () => ({
   LorenzRuntime: FakeRuntime,
 }));
 
+vi.mock("../src/daemonLock.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof daemonLockModule>();
+  return {
+    ...actual,
+    acquireDaemonLock: (...args: Parameters<typeof actual.acquireDaemonLock>) =>
+      mocks.acquireDaemonLock
+        ? mocks.acquireDaemonLock(...args)
+        : actual.acquireDaemonLock(...args),
+  };
+});
+
 vi.mock("@lorenz/traceviz-emitter", () => ({
   TraceEmitter: class {
     public readonly emit = vi.fn();
@@ -141,8 +159,11 @@ async function workflowFixture() {
     {},
   );
 
+  const workflowPath = path.join(root, "WORKFLOW.md");
+  await writeFile(workflowPath, "# Test workflow\n", "utf8");
+
   return {
-    path: path.join(root, "WORKFLOW.md"),
+    path: workflowPath,
     config: {},
     promptTemplate: "Issue {{ issue.identifier }}",
     settings,
@@ -162,6 +183,7 @@ beforeEach(() => {
   mocks.runAgentAttempt.mockReset();
   mocks.runtimeDefaultSettingsOptions.mockClear();
   mocks.buildDispatchCoordinator.mockClear();
+  mocks.acquireDaemonLock = null;
   mocks.runtimeInstances.length = 0;
   stderrWriteSpy = vi.spyOn(process.stderr, "write").mockReturnValue(true);
   originalIsTTY = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
@@ -182,12 +204,20 @@ afterEach(() => {
 });
 
 async function waitForRuntimeInstance(): Promise<FakeRuntime> {
-  for (let attempt = 0; attempt < 10; attempt += 1) {
-    const runtime = mocks.runtimeInstances[0];
-    if (runtime) return runtime;
-    await new Promise<void>((resolve) => setImmediate(resolve));
-  }
-  throw new Error("runtime instance was not created");
+  await vi.waitFor(
+    () => {
+      assert.ok(mocks.runtimeInstances[0]);
+    },
+    {
+      timeout: 500,
+      interval: 5,
+      onTimeout(error) {
+        const stderr = stderrWriteSpy.mock.calls.map((call) => String(call[0])).join("");
+        return new Error(`${error.message}: ${stderr}`);
+      },
+    },
+  );
+  return mocks.runtimeInstances[0]!;
 }
 
 test("runDaemon stops gracefully on the first SIGINT and returns success", async () => {
@@ -204,6 +234,7 @@ test("runDaemon stops gracefully on the first SIGINT and returns success", async
     dashboard: false,
     port: null,
     logsRoot: null,
+    featureTokens: ["daemon"],
   });
 
   const runtime = await waitForRuntimeInstance();
@@ -229,6 +260,241 @@ test("runDaemon stops gracefully on the first SIGINT and returns success", async
   assertNoAddedProcessListeners("SIGTERM", sigtermBaseline);
 });
 
+test("runDaemon rejects a second live daemon for the same workflow", async () => {
+  mocks.loadWorkflow.mockResolvedValue(await workflowFixture());
+
+  const sigintBaseline = process.listeners("SIGINT");
+  const daemonPromise = runDaemon({
+    workflowPath: "WORKFLOW.md",
+    once: false,
+    dryRun: false,
+    tui: true,
+    dashboard: false,
+    port: null,
+    logsRoot: null,
+    featureTokens: ["daemon"],
+  });
+
+  const runtime = await waitForRuntimeInstance();
+  await runtime.startEntered;
+
+  const secondResult = await runDaemon({
+    workflowPath: "WORKFLOW.md",
+    once: false,
+    dryRun: false,
+    tui: false,
+    dashboard: false,
+    port: null,
+    logsRoot: null,
+    featureTokens: ["daemon"],
+  });
+
+  assert.equal(secondResult, 1);
+  assert.equal(
+    stderrWriteSpy.mock.calls.some((call) => String(call[0]).includes("daemon_already_running")),
+    true,
+  );
+
+  const [sigintHandler] = addedProcessListeners("SIGINT", sigintBaseline);
+  sigintHandler!();
+  assert.equal(await daemonPromise, 0);
+});
+
+test("runDaemon reports daemon_lock_stale when the owner cannot be verified dead", async () => {
+  mocks.loadWorkflow.mockResolvedValue(await workflowFixture());
+  mocks.acquireDaemonLock = async () => ({
+    status: "conflict",
+    record: {
+      version: 1 as const,
+      ownerId: "owner-a",
+      pid: 4242,
+      hostname: "host-a",
+      startedAt: "2026-01-01T00:00:00.000Z",
+      workflowPath: "/tmp/WORKFLOW.md",
+      workspaceRoot: "/tmp",
+      lockPath: "/tmp/.lorenz/daemon/test.lock.json",
+      endpoint: { kind: "socket" as const, address: "/tmp/lorenz.sock" },
+      controlToken: "control-token",
+      heartbeatAt: "2026-01-01T00:00:00.000Z",
+    },
+    stale: true,
+  });
+
+  const result = await runDaemon({
+    workflowPath: "WORKFLOW.md",
+    once: false,
+    dryRun: false,
+    tui: false,
+    dashboard: false,
+    port: null,
+    logsRoot: null,
+    featureTokens: ["daemon"],
+  });
+
+  assert.equal(result, 1);
+  assert.equal(
+    stderrWriteSpy.mock.calls.some((call) => String(call[0]).includes("daemon_lock_stale")),
+    true,
+  );
+});
+
+test("runDaemon publishes a unix control socket (no TCP) when the dashboard is disabled", async () => {
+  mocks.loadWorkflow.mockResolvedValue(await workflowFixture());
+  const sigintBaseline = process.listeners("SIGINT");
+  const startedAt = "2026-01-01T00:00:00.000Z";
+  const heartbeatAt = "2026-01-01T00:00:00.000Z";
+  const fakeRecord = {
+    version: 1 as const,
+    ownerId: "owner-a",
+    pid: process.pid,
+    hostname: "host-a",
+    startedAt,
+    workflowPath: "/tmp/WORKFLOW.md",
+    workspaceRoot: "/tmp",
+    lockPath: "/tmp/.lorenz/daemon/test.lock.json",
+    endpoint: { kind: "none" as const, address: "" },
+    controlToken: "control-token",
+    heartbeatAt,
+  };
+  const updateEndpoint = vi.fn(async () => fakeRecord);
+  const release = vi.fn(async () => true);
+  const heartbeat = vi.fn(async () => fakeRecord);
+  mocks.acquireDaemonLock = async (...args) => {
+    assert.equal(args[0].endpoint.kind, "none");
+    assert.equal(args[0].endpoint.address, "");
+    return {
+      status: "acquired",
+      lock: {
+        heartbeat,
+        release,
+        snapshot: () => fakeRecord,
+        updateEndpoint,
+      } as unknown as daemonLockModule.DaemonLock,
+    };
+  };
+
+  const daemonPromise = runDaemon({
+    workflowPath: "WORKFLOW.md",
+    once: false,
+    dryRun: false,
+    tui: false,
+    dashboard: false,
+    port: null,
+    logsRoot: null,
+    featureTokens: ["daemon"],
+  });
+
+  const runtime = await waitForRuntimeInstance();
+  await runtime.startEntered;
+  const [sigintHandler] = addedProcessListeners("SIGINT", sigintBaseline);
+  sigintHandler!();
+
+  assert.equal(await daemonPromise, 0);
+  // The control socket is always-on: the server starts socket-only (httpDisabled) and the lease
+  // records a `socket` control endpoint, even though the TCP dashboard is off.
+  const serverCalls = mocks.startObservabilityServer.mock.calls;
+  assert.equal(serverCalls.length, 1);
+  const serverOptions = serverCalls[0]![1] as { httpDisabled?: boolean; socketPath?: string };
+  assert.equal(serverOptions.httpDisabled, true);
+  assert.match(serverOptions.socketPath ?? "", /\.sock$/);
+  assert.equal(updateEndpoint.mock.calls.length, 1);
+  assert.equal((updateEndpoint.mock.calls[0]![0] as { kind: string }).kind, "socket");
+});
+
+test("runDaemon renders without crashing for a socket-only daemon (url() has no TCP endpoint)", async () => {
+  mocks.loadWorkflow.mockResolvedValue(await workflowFixture());
+  // A socket-only handle: url() throws because there is no TCP listener. The TUI render must not
+  // call url() when the dashboard is disabled, or startup would crash.
+  mocks.startObservabilityServer.mockResolvedValue({
+    host: "127.0.0.1",
+    port: 0,
+    authScope: "scope",
+    controlToken: "token",
+    socketPath: "/tmp/lorenz-test.sock",
+    url: () => {
+      throw new Error("observability server has no HTTP endpoint");
+    },
+    stop: async () => {},
+  });
+
+  const sigintBaseline = process.listeners("SIGINT");
+  const daemonPromise = runDaemon({
+    workflowPath: "WORKFLOW.md",
+    once: false,
+    dryRun: false,
+    tui: true,
+    dashboard: false,
+    port: null,
+    logsRoot: null,
+    featureTokens: ["daemon"],
+  });
+
+  const runtime = await waitForRuntimeInstance();
+  await runtime.startEntered;
+  const [sigintHandler] = addedProcessListeners("SIGINT", sigintBaseline);
+  sigintHandler!();
+
+  assert.equal(await daemonPromise, 0);
+  assert.equal(mocks.render.mock.calls.length, 1);
+});
+
+test("runDaemon reports failure when the daemon lock is lost during runtime start", async () => {
+  mocks.loadWorkflow.mockResolvedValue(await workflowFixture());
+  let rejectHeartbeat!: (error: Error) => void;
+  const pendingHeartbeat = new Promise<never>((_resolve, reject) => {
+    rejectHeartbeat = reject;
+  });
+  const startedAt = "2026-01-01T00:00:00.000Z";
+  const heartbeatAt = "2026-01-01T00:00:00.000Z";
+  const fakeRecord = {
+    version: 1 as const,
+    ownerId: "owner-a",
+    pid: process.pid,
+    hostname: "host-a",
+    startedAt,
+    workflowPath: "/tmp/WORKFLOW.md",
+    workspaceRoot: "/tmp",
+    lockPath: "/tmp/.lorenz/daemon/test.lock.json",
+    endpoint: { kind: "http" as const, address: "http://127.0.0.1:4040" },
+    controlToken: "control-token",
+    heartbeatAt,
+  };
+  const release = vi.fn(async () => true);
+  const heartbeat = vi.fn(() => pendingHeartbeat);
+  mocks.acquireDaemonLock = async () => ({
+    status: "acquired",
+    lock: {
+      heartbeat,
+      release,
+      snapshot: () => fakeRecord,
+      updateEndpoint: vi.fn(async () => fakeRecord),
+    } as unknown as daemonLockModule.DaemonLock,
+  });
+
+  const daemonPromise = runDaemon({
+    workflowPath: "WORKFLOW.md",
+    once: false,
+    dryRun: false,
+    tui: false,
+    dashboard: false,
+    port: null,
+    logsRoot: null,
+    featureTokens: ["daemon"],
+  });
+
+  const runtime = await waitForRuntimeInstance();
+  await runtime.startEntered;
+  rejectHeartbeat(new Error("daemon_lock_lost"));
+
+  assert.equal(await daemonPromise, 1);
+  assert.equal(runtime.stop.mock.calls.length, 1);
+  assert.equal(release.mock.calls.length, 1);
+  assert.equal(
+    stderrWriteSpy.mock.calls.some((call) => String(call[0]).includes("daemon_lock_lost")),
+    true,
+  );
+});
+
 test("runDaemon warns about deprecated config keys once at startup", async () => {
   const fixture = await workflowFixture();
   mocks.loadWorkflow.mockResolvedValue({
@@ -246,6 +512,7 @@ test("runDaemon warns about deprecated config keys once at startup", async () =>
     dashboard: false,
     port: null,
     logsRoot: null,
+    featureTokens: ["daemon"],
   });
 
   const runtime = await waitForRuntimeInstance();
@@ -280,6 +547,7 @@ test("runDaemon still reports real startup failures", async () => {
     dashboard: true,
     port: 4040,
     logsRoot: null,
+    featureTokens: ["daemon"],
   });
 
   assert.equal(result, 1);
@@ -289,4 +557,32 @@ test("runDaemon still reports real startup failures", async () => {
   );
   assertNoAddedProcessListeners("SIGINT", sigintBaseline);
   assertNoAddedProcessListeners("SIGTERM", sigtermBaseline);
+});
+
+test("runDaemon skips daemon leadership when the daemon feature is disabled", async () => {
+  mocks.loadWorkflow.mockResolvedValue(await workflowFixture());
+  // Fail loudly if leadership is ever acquired while the feature is off.
+  mocks.acquireDaemonLock = vi.fn(async () => {
+    throw new Error("daemon leadership acquired while gated off");
+  });
+
+  const sigintBaseline = process.listeners("SIGINT");
+  const daemonPromise = runDaemon({
+    workflowPath: "WORKFLOW.md",
+    once: false,
+    dryRun: false,
+    tui: true,
+    dashboard: false,
+    port: null,
+    logsRoot: null,
+    // No daemon feature: the orchestrator runs unmanaged and acquires no lock.
+  });
+
+  const runtime = await waitForRuntimeInstance();
+  await runtime.startEntered;
+  assert.equal(mocks.acquireDaemonLock.mock.calls.length, 0);
+
+  const [sigintHandler] = addedProcessListeners("SIGINT", sigintBaseline);
+  sigintHandler!();
+  assert.equal(await daemonPromise, 0);
 });

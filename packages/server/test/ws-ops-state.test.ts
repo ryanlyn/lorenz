@@ -1,12 +1,13 @@
 import { test } from "vitest";
 import { statePayload } from "@lorenz/presenter";
-import type { RuntimeSnapshot } from "@lorenz/runtime-events";
+import type { RuntimeDaemonStatus, RuntimeSnapshot } from "@lorenz/runtime-events";
 import { assert, settle } from "@lorenz/test-utils";
 
 import { startObservabilityServer, type RuntimeServerSource } from "@lorenz/server";
 
 test("observability /ws pushes ops state on connect and broadcasts runtime updates", async () => {
   const listeners = new Set<(snapshot: RuntimeSnapshot) => void>();
+  const daemon = daemonStatusFixture();
   const runtime: RuntimeServerSource = {
     snapshot: () => snapshotFixture(1),
     subscribe(listener) {
@@ -14,6 +15,7 @@ test("observability /ws pushes ops state on connect and broadcasts runtime updat
       return () => listeners.delete(listener);
     },
     requestRefresh: () => ({ queued: true }),
+    daemonStatus: () => daemon,
   };
   const server = await startObservabilityServer(runtime, {
     host: "127.0.0.1",
@@ -33,7 +35,7 @@ test("observability /ws pushes ops state on connect and broadcasts runtime updat
     assert.equal(messages[1]!.type, "ops_state");
     assert.deepEqual(
       messages[1]!.state,
-      statePayload(snapshotFixture(1), messages[1]!.state.generated_at as string),
+      statePayload({ ...snapshotFixture(1), daemon }, messages[1]!.state.generated_at as string),
     );
 
     assert.equal(listeners.size, 1);
@@ -41,6 +43,7 @@ test("observability /ws pushes ops state on connect and broadcasts runtime updat
     await waitFor(() => messages.length >= 3);
     assert.equal(messages[2]!.type, "ops_state");
     assert.equal(messages[2]!.state.running[0].turn_count, 2);
+    assert.equal(messages[2]!.state.daemon.owner_id, "owner-daemon");
     assert.deepEqual(messages[2]!.state.counts, { running: 1, retrying: 0, blocked: 0 });
   } finally {
     ws.close();
@@ -122,6 +125,23 @@ function snapshotFixture(turnCount: number): RuntimeSnapshot {
     rateLimits: null,
     logFile: null,
     recentEvents: [],
+  };
+}
+
+function daemonStatusFixture(): RuntimeDaemonStatus {
+  return {
+    ownerId: "owner-daemon",
+    pid: 123,
+    hostname: "host-a",
+    startedAt: "2026-01-01T00:00:00.000Z",
+    workflowPath: "/tmp/WORKFLOW.md",
+    workspaceRoot: "/tmp",
+    lockPath: "/tmp/.lorenz/daemon/test.lock.json",
+    endpoint: { kind: "http", address: "http://127.0.0.1:4040/" },
+    heartbeatAt: "2026-01-01T00:00:05.000Z",
+    heartbeatAgeMs: 1000,
+    stale: false,
+    leadershipStoreKind: "local-file",
   };
 }
 

@@ -7,6 +7,7 @@ import { httpUrlHost, isRecord, normalizeHttpBindHost, type Settings } from "@lo
 import { defaultToolRegistry, type ToolRegistry } from "@lorenz/tool-sdk";
 
 import {
+  bearerToken,
   checkRunClaim,
   createMcpAuthScope,
   mcpAuthScopeForSettings,
@@ -216,10 +217,6 @@ function parseRequestBody(rawBody: string): unknown {
   } catch {
     return undefined;
   }
-}
-
-function bearerToken(authorization: string | undefined): string | undefined {
-  return /^Bearer\s+(.+)$/.exec(authorization ?? "")?.[1];
 }
 
 function unauthorizedMcpResponse(): Response {

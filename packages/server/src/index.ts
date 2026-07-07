@@ -1,9 +1,10 @@
-import { readFile as fsReadFile } from "node:fs/promises";
+import { chmod, readFile as fsReadFile, lstat, mkdir, rm as fsRm } from "node:fs/promises";
+import { createServer, type Server as HttpServer } from "node:http";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { serve } from "@hono/node-server";
+import { getRequestListener, serve } from "@hono/node-server";
 import type { ServerType } from "@hono/node-server";
 import { serveStatic } from "@hono/node-server/serve-static";
 import { Hono } from "hono";
@@ -14,9 +15,21 @@ import {
   normalizeHttpBindHost,
   type Settings,
 } from "@lorenz/domain";
-import { createMcpAuthScope, mcpAuthScopeForSettings, mountMcp } from "@lorenz/mcp";
+import {
+  bearerToken,
+  createMcpAuthScope,
+  createOpaqueBearerToken,
+  mcpAuthScopeForSettings,
+  mountMcp,
+} from "@lorenz/mcp";
 import type { ToolRegistry } from "@lorenz/tool-sdk";
-import { issuePayload, runsPayload, statePayload, type PresenterParams } from "@lorenz/presenter";
+import {
+  daemonPayload,
+  issuePayload,
+  runsPayload,
+  statePayload,
+  type PresenterParams,
+} from "@lorenz/presenter";
 import type { RuntimeSnapshot } from "@lorenz/runtime-events";
 import type { TraceWatcher } from "@lorenz/traceviz-server";
 
@@ -24,7 +37,7 @@ import { createTraceRoutes } from "./trace-routes.js";
 import { createWsHandler } from "./ws.js";
 import { defaultIssueStorePath, IssueStore } from "./issue-store.js";
 import { decodePathParam, invalidPathParameterError } from "./path-params.js";
-import type { RuntimeServerSource } from "./source.js";
+import { snapshotWithDaemonStatus, type RuntimeServerSource } from "./source.js";
 
 export { defaultIssueStorePath, IssueStore };
 export { startMcpServer } from "@lorenz/mcp";
@@ -39,12 +52,22 @@ export interface ObservabilityServerOptions {
   issueStore?: IssueStore;
   /** Tool packs served on the MCP mount; defaults to the process-wide registry. */
   tools?: ToolRegistry;
+  controlToken?: string | undefined;
+  /**
+   * Serve the app on a unix domain socket in addition to (or instead of) TCP. The daemon uses this
+   * as an always-on control endpoint so `status/refresh/stop` self-discover even with no dashboard.
+   */
+  socketPath?: string | undefined;
+  /** Skip the TCP listener entirely (socket-only control, e.g. `--no-dashboard`). */
+  httpDisabled?: boolean | undefined;
 }
 
 export interface ObservabilityServerHandle {
   host: string;
   port: number;
   authScope: string;
+  controlToken: string | null;
+  socketPath: string | null;
   url(path?: string): string;
   stop(): Promise<void>;
 }
@@ -59,11 +82,18 @@ export async function startObservabilityServer(
     settings && options.port > 0
       ? mcpAuthScopeForSettings(settings, bindHost, options.port)
       : createMcpAuthScope();
-  const { app, watcher } = buildObservabilityApp(runtime, options, authScope, settings);
+  const controlToken = options.controlToken ?? createControlToken();
+  const { app, watcher } = buildObservabilityApp(
+    runtime,
+    options,
+    authScope,
+    settings,
+    controlToken,
+  );
   const wsSetup = createWsHandler(app, runtime, watcher);
 
   try {
-    return await startHonoServer(app, options, authScope, {
+    return await startHonoServer(app, options, authScope, controlToken, {
       injectWebSocket: wsSetup.injectWebSocket,
       stop: wsSetup.stop,
     });
@@ -82,36 +112,107 @@ async function startHonoServer(
   app: Hono,
   options: ObservabilityServerOptions,
   authScope: string,
+  controlToken: string | null,
   internals: HonoServerInternals,
 ): Promise<ObservabilityServerHandle> {
-  let server!: ServerType;
   const bindHost = normalizeHttpBindHost(options.host);
-  await new Promise<void>((resolve, reject) => {
-    server = serve({ fetch: app.fetch, hostname: bindHost, port: options.port }, () => {
-      server.off("error", reject);
-      resolve();
-    });
-    server.once("error", reject);
-  });
-  const activeServer = server;
+  let tcpServer: ServerType | null = null;
+  let port = 0;
+  if (!options.httpDisabled) {
+    tcpServer = await listenTcp(app, bindHost, options.port);
+    // Inject WebSocket support after the TCP server starts listening (browsers connect over TCP).
+    internals.injectWebSocket(tcpServer);
+    const address = tcpServer.address();
+    port = typeof address === "object" && address !== null ? address.port : options.port;
+  }
 
-  // Inject WebSocket support after server starts listening
-  internals.injectWebSocket(activeServer);
+  let socketServer: HttpServer | null = null;
+  const socketPath = options.socketPath ?? null;
+  if (socketPath) socketServer = await listenSocket(app, socketPath);
 
-  const address = activeServer.address();
-  const port = typeof address === "object" && address !== null ? address.port : options.port;
+  if (!tcpServer && !socketServer) {
+    internals.stop();
+    throw new Error("observability server requires an HTTP port or a socket path");
+  }
+
+  const tcp = tcpServer;
   return {
     host: bindHost,
     port,
     authScope,
+    controlToken,
+    socketPath,
     url(urlPath = "/"): string {
+      if (!tcp) throw new Error("observability server has no HTTP endpoint");
       return `http://${httpUrlHost(bindHost)}:${port}${urlPath}`;
     },
     stop: async () => {
       internals.stop();
-      await stopServer(activeServer);
+      if (tcp) await stopServer(tcp);
+      if (socketServer) await stopSocketServer(socketServer, socketPath);
     },
   };
+}
+
+async function listenTcp(app: Hono, bindHost: string, port: number): Promise<ServerType> {
+  const server = await new Promise<ServerType>((resolve, reject) => {
+    const started = serve({ fetch: app.fetch, hostname: bindHost, port }, () => {
+      started.off("error", reject);
+      resolve(started);
+    });
+    started.once("error", reject);
+  });
+  return server;
+}
+
+async function listenSocket(app: Hono, socketPath: string): Promise<HttpServer> {
+  // Bind paths over the OS sun_path limit (~104 bytes) are silently truncated by libuv: listen()
+  // "succeeds" at a different path while the requested inode is never created. Fail loudly instead.
+  if (Buffer.byteLength(socketPath) > 103) {
+    throw new Error(`daemon control socket path too long (${Buffer.byteLength(socketPath)} bytes)`);
+  }
+  // Ensure the per-user runtime dir exists and is private to this user before binding inside it.
+  await ensurePrivateDir(path.dirname(socketPath));
+  // The daemon lease guarantees single-instance, so any socket file at this path is a leftover from
+  // a crashed predecessor; remove it before listen() to avoid EADDRINUSE.
+  await fsRm(socketPath, { force: true });
+  // app.fetch is the async Hono FetchCallback that getRequestListener is designed to drive; the
+  // adapter awaits it internally. This is the same handler `serve()` uses for the TCP listener.
+  // eslint-disable-next-line @typescript-eslint/no-misused-promises
+  const server = createServer(getRequestListener(app.fetch));
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen({ path: socketPath }, () => {
+      server.off("error", reject);
+      resolve();
+    });
+  });
+  // Best-effort owner-only perms; the 0700 parent dir is the primary boundary, so a chmod failure
+  // must not crash the daemon.
+  try {
+    await chmod(socketPath, 0o600);
+  } catch {
+    // Parent dir perms still protect the socket.
+  }
+  return server;
+}
+
+async function stopSocketServer(server: HttpServer, socketPath: string | null): Promise<void> {
+  await new Promise<void>((resolve) => server.close(() => resolve()));
+  if (socketPath) await fsRm(socketPath, { force: true });
+}
+
+// Create the socket's runtime dir and verify it is genuinely private to this user before binding.
+// On Linux the tmpdir fallback (/tmp) is world-writable, so a co-tenant could pre-create the
+// deterministic path as a symlink or a dir they own and MITM the control socket; reject that and
+// refuse to bind rather than leak the bearer control token a client sends.
+async function ensurePrivateDir(dir: string): Promise<void> {
+  await mkdir(dir, { recursive: true, mode: 0o700 });
+  const stat = await lstat(dir);
+  const uid = typeof process.getuid === "function" ? process.getuid() : undefined;
+  if (!stat.isDirectory() || (stat.mode & 0o077) !== 0 || (uid !== undefined && stat.uid !== uid)) {
+    throw new Error(`refusing to use a non-private daemon runtime directory: ${dir}`);
+  }
 }
 
 interface BuildResult {
@@ -124,6 +225,7 @@ function buildObservabilityApp(
   options: ObservabilityServerOptions,
   authScope: string,
   settings = runtimeSettings(runtime),
+  controlToken: string | null = null,
 ): BuildResult {
   const app = new Hono();
   // Resolve settings per request so the MCP endpoint reflects workflow settings the runtime
@@ -169,7 +271,7 @@ function buildObservabilityApp(
         error: observabilityErrorBody(snapshot.status),
       });
     }
-    return jsonResponse(statePayload(snapshot.snapshot));
+    return jsonResponse(statePayload(snapshotWithDaemonStatus(runtime, snapshot.snapshot)));
   });
   app.all("/api/v1/state", () => errorResponse(405, "method_not_allowed", "Method not allowed"));
 
@@ -189,7 +291,9 @@ function buildObservabilityApp(
   });
   app.all("/api/v1/runs", () => errorResponse(405, "method_not_allowed", "Method not allowed"));
 
-  app.post("/api/v1/refresh", () => {
+  app.post("/api/v1/refresh", (c) => {
+    const unauthorized = unauthorizedControlResponse(c.req.header("authorization"), controlToken);
+    if (unauthorized) return unauthorized;
     try {
       return jsonResponse(runtime.requestRefresh(), 202);
     } catch {
@@ -197,6 +301,23 @@ function buildObservabilityApp(
     }
   });
   app.all("/api/v1/refresh", () => errorResponse(405, "method_not_allowed", "Method not allowed"));
+
+  app.get("/api/v1/daemon", () => {
+    const daemon = runtime.daemonStatus?.() ?? daemonStatusFromSnapshot(runtime);
+    if (!daemon)
+      return errorResponse(503, "daemon_status_unavailable", "Daemon status unavailable");
+    return jsonResponse(daemonPayload(daemon));
+  });
+  app.all("/api/v1/daemon", () => errorResponse(405, "method_not_allowed", "Method not allowed"));
+
+  app.post("/api/v1/stop", (c) => {
+    const unauthorized = unauthorizedControlResponse(c.req.header("authorization"), controlToken);
+    if (unauthorized) return unauthorized;
+    if (!runtime.requestStop)
+      return errorResponse(503, "daemon_control_unavailable", "Daemon control unavailable");
+    return jsonResponse(runtime.requestStop(), 202);
+  });
+  app.all("/api/v1/stop", () => errorResponse(405, "method_not_allowed", "Method not allowed"));
 
   // Mount trace routes BEFORE the :identifier catch-all
   let watcher: TraceWatcher | null = null;
@@ -231,6 +352,19 @@ function buildObservabilityApp(
 
 function runtimeSettings(runtime: RuntimeServerSource): Settings | null {
   return runtime.workflow?.settings ?? null;
+}
+
+function createControlToken(): string {
+  return createOpaqueBearerToken();
+}
+
+function unauthorizedControlResponse(
+  authorization: string | undefined,
+  controlToken: string | null,
+): Response | null {
+  if (controlToken === null) return null;
+  if (bearerToken(authorization) === controlToken) return null;
+  return errorResponse(401, "unauthorized", "Missing or invalid daemon control token");
 }
 
 function resolveStaticDir(): string {
@@ -285,6 +419,11 @@ function observabilityErrorCode(error: unknown): "snapshot_timeout" | "snapshot_
   const message = errorMessage(error);
   if (message === "snapshot_timeout" || message === "timeout") return "snapshot_timeout";
   return "snapshot_unavailable";
+}
+
+function daemonStatusFromSnapshot(runtime: RuntimeServerSource): RuntimeSnapshot["daemon"] | null {
+  const snapshot = snapshotResult(runtime);
+  return snapshot.status === "ok" ? (snapshot.snapshot.daemon ?? null) : null;
 }
 
 function observabilityErrorBody(code: "snapshot_timeout" | "snapshot_unavailable"): {

@@ -10,6 +10,13 @@ import {
 } from "@lorenz/cli-kit";
 import { loadWorkflow } from "@lorenz/workflow";
 
+import {
+  apiErrorMessage,
+  normalizeHttpBaseUrl,
+  parseHttpUrlOption,
+  workflowHttpBaseUrl,
+} from "./httpApi.js";
+
 export interface RunsCommandOptions {
   issue: string | null;
   failed: boolean;
@@ -45,7 +52,7 @@ export function createRunsCommand(name = "lorenz runs"): Command {
     .option("--retries", "Show retry summary by issue.")
     .option("--id <runId>", "Show one run and related attempts.", parseRequiredValue("--id"))
     .option("--limit <limit>", "Limit returned runs.", parsePositiveInteger("--limit"))
-    .option("--url <url>", "Observability API base URL.", parseUrl)
+    .option("--url <url>", "Observability API base URL.", parseHttpUrlOption)
     .option("--port <port>", "Observability API localhost port.", parseNonNegativeInteger("--port"))
     .option("--json", "Print raw JSON response.");
 }
@@ -93,8 +100,9 @@ export async function runRunsCommand(options: RunsCommandOptions): Promise<strin
   const body = (await response.json()) as Record<string, unknown>;
 
   if (response.status === 200) return renderOutput(body, options.json);
-  if (response.status === 404) throw new Error(errorMessage(body, "Run not found"));
-  if (response.status === 503) throw new Error(errorMessage(body, "Observability API unavailable"));
+  if (response.status === 404) throw new Error(apiErrorMessage(body, "Run not found"));
+  if (response.status === 503)
+    throw new Error(apiErrorMessage(body, "Observability API unavailable"));
   throw new Error(`Unexpected response status ${response.status}`);
 }
 
@@ -112,13 +120,11 @@ async function runsUrl(options: RunsCommandOptions): Promise<string> {
 }
 
 async function resolveBaseUrl(options: RunsCommandOptions): Promise<string> {
-  if (options.url) return trimTrailingSlash(options.url);
+  if (options.url) return normalizeHttpBaseUrl(options.url);
   const workflow = await loadWorkflow();
-  if (options.port !== null && options.port > 0)
-    return `http://${workflow.settings.server.host}:${options.port}`;
+  if (options.port !== null && options.port > 0) return workflowHttpBaseUrl(workflow, options.port);
   const port = workflow.settings.server.port;
-  if (typeof port === "number" && port > 0)
-    return `http://${workflow.settings.server.host}:${port}`;
+  if (typeof port === "number" && port > 0) return workflowHttpBaseUrl(workflow, port);
   throw new Error(
     "No observability server port configured. Pass --port/--url or set server.port in WORKFLOW.md.",
   );
@@ -277,10 +283,6 @@ function formatRow(columns: string[], widths: number[]): string {
   return columns.map((column, index) => column.padEnd(widths[index] ?? 0)).join("  ");
 }
 
-function errorMessage(body: Record<string, unknown>, fallback: string): string {
-  return stringField(recordField(body, "error"), "message") || fallback;
-}
-
 function asRecord(value: unknown): Record<string, unknown> {
   return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
 }
@@ -333,12 +335,4 @@ function formatDuration(durationMs: number | null): string {
 function compact(value: string): string {
   if (!value) return "n/a";
   return value.length > 14 ? `${value.slice(0, 6)}...${value.slice(-5)}` : value;
-}
-
-function trimTrailingSlash(value: string): string {
-  return value.trim().replace(/\/+$/, "");
-}
-
-function parseUrl(value: string): string {
-  return trimTrailingSlash(parseRequiredValue("--url")(value));
 }

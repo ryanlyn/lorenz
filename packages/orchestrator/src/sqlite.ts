@@ -1,9 +1,17 @@
-import { mkdirSync } from "node:fs";
-import path from "node:path";
-
 import Database from "better-sqlite3";
 
 import type { ClaimStoreBackend, ClaimStoreCheckpoint } from "./claimStore.js";
+import { prepareClaimStoreFile, restrictClaimStoreFiles } from "./filePermissions.js";
+import {
+  CLAIM_STORE_SCHEMA_VERSION,
+  CLAIM_STORE_SCHEMA_VERSION_INSERT_SQL,
+  CLAIM_STORE_SCHEMA_VERSION_KEY,
+  CLAIM_STORE_SCHEMA_VERSION_SELECT_SQL,
+  CLAIM_STORE_TABLES_SQL,
+  unsupportedClaimStoreSchemaVersionError,
+} from "./claimStoreSchema.js";
+
+export { CLAIM_STORE_SCHEMA_VERSION } from "./claimStoreSchema.js";
 
 export interface SqliteClaimStoreBackendOptions {
   busyTimeoutMs?: number | undefined;
@@ -33,33 +41,24 @@ export class SqliteClaimStoreBackend implements ClaimStoreBackend {
 
   constructor(dbPath: string, options: SqliteClaimStoreBackendOptions = {}) {
     this.maxEventRows = Math.max(1, Math.floor(options.maxEventRows ?? 1000));
-    mkdirSync(path.dirname(dbPath), { recursive: true });
+    prepareClaimStoreFile(dbPath);
     this.db = new Database(dbPath);
     this.db.pragma("journal_mode = WAL");
     this.db.pragma("synchronous = NORMAL");
     this.db.pragma(`busy_timeout = ${options.busyTimeoutMs ?? 5000}`);
     this.db.pragma("foreign_keys = ON");
-    this.db.exec(`
-      CREATE TABLE IF NOT EXISTS claim_store_snapshot (
-        id INTEGER PRIMARY KEY CHECK (id = 1),
-        ownerId TEXT NOT NULL,
-        writtenAt TEXT NOT NULL,
-        operation TEXT NOT NULL,
-        checkpointJson TEXT NOT NULL
-      );
-      CREATE TABLE IF NOT EXISTS claim_store_events (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        ownerId TEXT NOT NULL,
-        writtenAt TEXT NOT NULL,
-        operation TEXT NOT NULL
-      );
-      CREATE INDEX IF NOT EXISTS idx_claim_store_events_written_at
-        ON claim_store_events (writtenAt);
-      CREATE TABLE IF NOT EXISTS claim_store_owners (
-        ownerId TEXT PRIMARY KEY,
-        heartbeatAt TEXT NOT NULL
-      );
-    `);
+    try {
+      this.db.exec(CLAIM_STORE_TABLES_SQL);
+      this.verifySchemaVersion();
+      restrictClaimStoreFiles(dbPath);
+    } catch (error) {
+      try {
+        this.db.close();
+      } catch {
+        // Preserve the initialization error.
+      }
+      throw error;
+    }
     this.loadStmt = this.db.prepare("SELECT checkpointJson FROM claim_store_snapshot WHERE id = 1");
     this.upsertSnapshotStmt = this.db.prepare(`
       INSERT INTO claim_store_snapshot (id, ownerId, writtenAt, operation, checkpointJson)
@@ -128,7 +127,11 @@ export class SqliteClaimStoreBackend implements ClaimStoreBackend {
       this.commitStmt.run();
       return result;
     } catch (error) {
-      this.rollbackStmt.run();
+      try {
+        this.rollbackStmt.run();
+      } catch {
+        // Keep the original failure visible; a rollback error must not mask it.
+      }
       throw error;
     } finally {
       this.transactionDepth -= 1;
@@ -152,5 +155,18 @@ export class SqliteClaimStoreBackend implements ClaimStoreBackend {
       operation: checkpoint.operation,
     });
     this.pruneEventsStmt.run({ maxEventRows: this.maxEventRows });
+  }
+
+  private verifySchemaVersion(): void {
+    this.db
+      .prepare(CLAIM_STORE_SCHEMA_VERSION_INSERT_SQL)
+      .run(CLAIM_STORE_SCHEMA_VERSION_KEY, String(CLAIM_STORE_SCHEMA_VERSION));
+    const row = this.db
+      .prepare(CLAIM_STORE_SCHEMA_VERSION_SELECT_SQL)
+      .get(CLAIM_STORE_SCHEMA_VERSION_KEY) as { value: string } | undefined;
+    if (!row) throw new Error("claim_store_schema_version_missing");
+    const version = Number(row.value);
+    if (version !== CLAIM_STORE_SCHEMA_VERSION)
+      throw unsupportedClaimStoreSchemaVersionError(row.value);
   }
 }

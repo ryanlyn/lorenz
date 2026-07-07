@@ -31,6 +31,9 @@ export class ProjectionActor {
       usageTotals: { ...input.usageTotals },
       rateLimits: input.rateLimits,
       ...(input.claimStore ? { claimStore: { ...input.claimStore } } : {}),
+      ...(input.daemon
+        ? { daemon: { ...input.daemon, endpoint: { ...input.daemon.endpoint } } }
+        : {}),
       logFile: input.logFile,
       recentEvents: this.recentEvents.map((event) => ({ ...event })),
     };

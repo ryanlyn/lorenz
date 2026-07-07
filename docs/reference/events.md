@@ -11,7 +11,7 @@ Trace lines are a third surface, derived 1:1 from agent updates. Each `AgentUpda
 
 ## The canonical runtime vocabulary
 
-`RUNTIME_EVENT_TYPES` (in `packages/runtime-events/src/index.ts`) is the spread of `AGENT_UPDATE_TYPES` followed by 19 runtime-specific strings. Every entry of `recentEvents[]` carries a `type` from this set, a `message`, and an ISO `at` timestamp. The agent-turn half (`AGENT_UPDATE_TYPES`, from `packages/domain`) is reused verbatim, so a `turn_completed` in the snapshot and a `turn_completed` line in a trace file are the same string.
+`RUNTIME_EVENT_TYPES` (in `packages/runtime-events/src/index.ts`) is the spread of `AGENT_UPDATE_TYPES` followed by 22 runtime-specific strings. Every entry of `recentEvents[]` carries a `type` from this set, a `message`, and an ISO `at` timestamp. The agent-turn half (`AGENT_UPDATE_TYPES`, from `packages/domain`) is reused verbatim, so a `turn_completed` in the snapshot and a `turn_completed` line in a trace file are the same string.
 
 The sections below group every name by category. Names are verbatim. None are invented.
 
@@ -69,6 +69,17 @@ Hot-reload runs before each poll and keeps last-known-good settings on any failu
 | `workflow_reload_failed` | Re-reading, re-parsing, the slots-per-machine gate, or the coordinator reconcile threw during a reload. | The reload was rejected; the daemon kept last-known-good settings. No partial apply. |
 
 Parse-time failures surfaced while loading the file carry their own stable error strings (`workflow_parse_error`, `workflow_front_matter_not_a_map`, `missing_workflow_file`, `template_parse_error`). These are thrown messages, not members of `RUNTIME_EVENT_TYPES`; a reload that hits one is reported as `workflow_reload_failed`.
+
+### Tracker push
+
+Trackers may expose a push subscription alongside interval polling. Push signals never replace the
+poll cadence; they only nudge an immediate poll when available.
+
+| Event | When it fires | Signals |
+| --- | --- | --- |
+| `tracker_watch_started` | A tracker push subscription opened successfully during recurring runtime startup. | Push notifications can trigger immediate polls for this runtime. |
+| `tracker_watch_error` | Opening or closing a tracker push subscription threw. | The runtime stays on interval polling; the failure is diagnostic. |
+| `tracker_push` | The tracker push subscription delivered a change notification. | The runtime queued or started an immediate poll outside the interval cadence. |
 
 ### Agent turn
 
@@ -181,7 +192,7 @@ The same name can reach different consumers, and many runtime events never reach
 - **Trace files** receive one line per `AgentUpdate`, written to `<server.trace_dir>/<issueId>/trace.jsonl`. The trace parser drops eight raw types entirely (`rate_limit`, `workspace_prepared`, `session_started`, `process_exit`, `stderr`, `fs_write`, `approval_auto_approved`, `approval_required`); they still count toward the watcher's line summary. The dashboard's trace timeline maps lines to its own `DisplayEvent` kinds (`thought`, `message`, `tool_call`, `turn_started`, `turn_completed`, `turn_failed`, `notification`, `unknown`).
 - **Daemon log** (`logging.log_file`) receives the worker-pool/driver log events. These never enter `recentEvents`.
 
-There is no database. The 20-event and 50-history ring buffers, plus the optional log file, are the only event surfaces; nothing is persisted beyond them.
+Runtime event history is not database-backed. The 20-event and 50-history ring buffers, plus the optional log file, are the event surfaces; durable claim stores persist scheduling claims and retry state, not this bounded event history.
 
 ## See also
 - [Configuration reference](configuration.md) - the keys (`agent.max_retry_backoff_ms`, `agents.<kind>.stall_timeout_ms`, `server.trace_dir`) that govern these events.

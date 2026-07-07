@@ -1,4 +1,5 @@
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, rm } from "node:fs/promises";
+import { request as httpRequest } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -17,9 +18,14 @@ import type { WorkflowDefinition } from "@lorenz/domain";
 import { registerLinearTracker } from "@lorenz/linear-tracker";
 import { registerLocalTracker } from "@lorenz/local-tracker";
 import { assert } from "@lorenz/test-utils";
+import type { RuntimeDaemonStatus, RuntimeSnapshot } from "@lorenz/runtime-events";
 
-import { IssueStore, startObservabilityServer } from "@lorenz/server";
-import { startMcpServer } from "@lorenz/server";
+import {
+  IssueStore,
+  startMcpServer,
+  startObservabilityServer,
+  type RuntimeServerSource,
+} from "@lorenz/server";
 
 // The observability server resolves tool packs and tracker ops through the process-default
 // registries (it offers no injection point), so populate them the same way the CLI
@@ -97,7 +103,12 @@ test("observability HTTP API exposes state, issue, runs, refresh, and errors", a
       },
     });
 
-    const refresh = await postJson(server.url("/api/v1/refresh"));
+    const unauthorizedRefresh = await postJson(server.url("/api/v1/refresh"), 401);
+    assert.deepEqual(unauthorizedRefresh, {
+      error: { code: "unauthorized", message: "Missing or invalid daemon control token" },
+    });
+
+    const refresh = await postJson(server.url("/api/v1/refresh"), 202, server.controlToken);
     assert.equal(refresh.queued, true);
     assert.deepEqual(refresh.operations, ["poll", "reconcile"]);
 
@@ -112,6 +123,179 @@ test("observability HTTP API exposes state, issue, runs, refresh, and errors", a
     await server.stop();
   }
 });
+
+test("observability HTTP API exposes daemon status and stop control", async () => {
+  const workflow = workflowFixture();
+  const daemonStatus = daemonStatusFixture(workflow);
+  const requestStop = vi.fn(() => ({ requested_at: "2026-01-01T00:00:00.000Z", stopping: true }));
+  const runtime: RuntimeServerSource = {
+    workflow,
+    snapshot: () => emptySnapshot(workflow),
+    subscribe: () => () => {},
+    requestRefresh: () => ({ queued: true }),
+    requestStop,
+    daemonStatus: () => daemonStatus,
+  };
+  const server = await startObservabilityServer(runtime, {
+    host: "127.0.0.1",
+    port: 0,
+    staticDir: "/tmp/nonexistent-dashboard-dist",
+  });
+
+  try {
+    const state = await getJson(server.url("/api/v1/state"));
+    assert.equal(state.daemon.owner_id, "owner-daemon");
+    assert.equal(state.daemon.leadership_store_kind, "local-file");
+
+    const daemon = await getJson(server.url("/api/v1/daemon"));
+    assert.equal(daemon.owner_id, "owner-daemon");
+    assert.equal(daemon.endpoint.address, "http://127.0.0.1:4040/");
+
+    const unauthorized = await postJson(server.url("/api/v1/stop"), 401);
+    assert.deepEqual(unauthorized, {
+      error: { code: "unauthorized", message: "Missing or invalid daemon control token" },
+    });
+    assert.equal(requestStop.mock.calls.length, 0);
+
+    const wrongToken = await postJson(
+      server.url("/api/v1/stop"),
+      401,
+      `${server.controlToken}-nope`,
+    );
+    assert.equal(wrongToken.error.code, "unauthorized");
+    assert.equal(requestStop.mock.calls.length, 0);
+
+    const stop = await postJson(server.url("/api/v1/stop"), 202, server.controlToken);
+    assert.equal(stop.stopping, true);
+    assert.equal(requestStop.mock.calls.length, 1);
+  } finally {
+    await server.stop();
+  }
+});
+
+test("observability server serves daemon control over a unix socket", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "lz-ctl-"));
+  const socketPath = path.join(dir, "c.sock");
+  const workflow = workflowFixture();
+  const daemonStatus = daemonStatusFixture(workflow);
+  const requestStop = vi.fn(() => ({ requested_at: "2026-01-01T00:00:00.000Z", stopping: true }));
+  const runtime: RuntimeServerSource = {
+    workflow,
+    snapshot: () => emptySnapshot(workflow),
+    subscribe: () => () => {},
+    requestRefresh: () => ({ queued: true }),
+    requestStop,
+    daemonStatus: () => daemonStatus,
+  };
+  const server = await startObservabilityServer(runtime, {
+    host: "127.0.0.1",
+    port: 0,
+    socketPath,
+    httpDisabled: true,
+    staticDir: "/tmp/nonexistent-dashboard-dist",
+  });
+
+  try {
+    assert.equal(server.socketPath, socketPath);
+
+    const daemon = await socketJson(socketPath, "/api/v1/daemon", "GET");
+    assert.equal(daemon.status, 200);
+    assert.equal(daemon.body.owner_id, "owner-daemon");
+
+    const unauthorized = await socketJson(socketPath, "/api/v1/stop", "POST");
+    assert.equal(unauthorized.status, 401);
+    assert.equal(requestStop.mock.calls.length, 0);
+
+    const wrongToken = await socketJson(
+      socketPath,
+      "/api/v1/stop",
+      "POST",
+      `${server.controlToken}-x`,
+    );
+    assert.equal(wrongToken.status, 401);
+    assert.equal(requestStop.mock.calls.length, 0);
+
+    const stop = await socketJson(socketPath, "/api/v1/stop", "POST", server.controlToken);
+    assert.equal(stop.status, 202);
+    assert.equal(requestStop.mock.calls.length, 1);
+  } finally {
+    await server.stop();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("observability server refuses a world-accessible control socket directory", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "lz-bad-"));
+  const runtimeDir = path.join(dir, "rt");
+  await mkdir(runtimeDir, { recursive: true });
+  await chmod(runtimeDir, 0o777); // a co-tenant could write here -> must be refused
+  const socketPath = path.join(runtimeDir, "c.sock");
+  const workflow = workflowFixture();
+  const runtime: RuntimeServerSource = {
+    workflow,
+    snapshot: () => emptySnapshot(workflow),
+    subscribe: () => () => {},
+    requestRefresh: () => ({ queued: true }),
+  };
+
+  try {
+    await assert.rejects(
+      () =>
+        startObservabilityServer(runtime, {
+          host: "127.0.0.1",
+          port: 0,
+          socketPath,
+          httpDisabled: true,
+          staticDir: "/tmp/nonexistent-dashboard-dist",
+        }),
+      /non-private daemon runtime directory/,
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+async function socketJson(
+  socketPath: string,
+  requestPath: string,
+  method: "GET" | "POST",
+  token: string | null = null,
+): Promise<{ status: number; body: any }> {
+  const result = await new Promise<{ status: number; body: any }>((resolve, reject) => {
+    const headers: Record<string, string> = { host: "lorenz.local" };
+    if (token) headers.authorization = `Bearer ${token}`;
+    const req = httpRequest({ socketPath, path: requestPath, method, headers }, (res) => {
+      let raw = "";
+      res.setEncoding("utf8");
+      res.on("data", (chunk) => {
+        raw += chunk;
+      });
+      res.on("end", () => {
+        resolve({ status: res.statusCode ?? 0, body: raw ? JSON.parse(raw) : {} });
+      });
+    });
+    req.on("error", reject);
+    req.end();
+  });
+  return result;
+}
+
+function daemonStatusFixture(workflow: WorkflowDefinition): RuntimeDaemonStatus {
+  return {
+    ownerId: "owner-daemon",
+    pid: 123,
+    hostname: "host-a",
+    startedAt: "2026-01-01T00:00:00.000Z",
+    workflowPath: workflow.path,
+    workspaceRoot: workflow.settings.workspace.root,
+    lockPath: "/tmp/lorenz.lock",
+    endpoint: { kind: "http", address: "http://127.0.0.1:4040/" },
+    heartbeatAt: "2026-01-01T00:00:05.000Z",
+    heartbeatAgeMs: 1000,
+    stale: false,
+    leadershipStoreKind: "local-file",
+  };
+}
 
 test("standalone MCP server preserves route and JSON-RPC error contracts", async () => {
   const workflow = workflowFixture();
@@ -263,7 +447,16 @@ test("observability HTTP API matches snapshot timeout and unavailable branches",
     const issue = await getJson(unavailable.url("/api/v1/MT-HTTP"), 404);
     assert.deepEqual(issue, { error: { code: "issue_not_found", message: "Issue not found" } });
 
-    const refresh = await postJson(unavailable.url("/api/v1/refresh"), 503);
+    const unauthorizedRefresh = await postJson(unavailable.url("/api/v1/refresh"), 401);
+    assert.deepEqual(unauthorizedRefresh, {
+      error: { code: "unauthorized", message: "Missing or invalid daemon control token" },
+    });
+
+    const refresh = await postJson(
+      unavailable.url("/api/v1/refresh"),
+      503,
+      unavailable.controlToken,
+    );
     assert.deepEqual(refresh, {
       error: { code: "orchestrator_unavailable", message: "Orchestrator is unavailable" },
     });
@@ -479,6 +672,30 @@ function workflowFixture(): WorkflowDefinition {
   };
 }
 
+function emptySnapshot(workflow: WorkflowDefinition): RuntimeSnapshot {
+  return {
+    appStatus: "idle",
+    workflowPath: workflow.path,
+    poll: {
+      status: "idle",
+      candidates: 0,
+      eligible: 0,
+      lastPollAt: null,
+      nextPollAt: null,
+      lastError: null,
+    },
+    running: [],
+    reserving: [],
+    retrying: [],
+    blocked: [],
+    runHistory: [],
+    usageTotals: { inputTokens: 0, outputTokens: 0, totalTokens: 0, secondsRunning: 0 },
+    rateLimits: null,
+    logFile: null,
+    recentEvents: [],
+  };
+}
+
 async function getJson(url: string, expectedStatus = 200): Promise<any> {
   const response = await fetch(url);
   assert.equal(response.status, expectedStatus);
@@ -486,8 +703,14 @@ async function getJson(url: string, expectedStatus = 200): Promise<any> {
   return response.json();
 }
 
-async function postJson(url: string, expectedStatus = 202): Promise<any> {
-  const response = await fetch(url, { method: "POST" });
+async function postJson(
+  url: string,
+  expectedStatus = 202,
+  token: string | null = null,
+): Promise<any> {
+  const headers: Record<string, string> = {};
+  if (token) headers.authorization = `Bearer ${token}`;
+  const response = await fetch(url, { method: "POST", headers });
   assert.equal(response.status, expectedStatus);
   assert.equal(response.headers.get("content-type"), "application/json; charset=utf-8");
   return response.json();

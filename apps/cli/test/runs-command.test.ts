@@ -55,6 +55,18 @@ test("runs command parses run-history filters", () => {
   });
 });
 
+test("runs command rejects non-HTTP API base URLs", () => {
+  const query = parseRunsArgs(["--url", "http://127.0.0.1:43210/?x=1"]);
+  assert.equal(query.status, "error");
+  if (query.status !== "error") throw new Error("expected query-string URL to fail");
+  assert.match(query.message, /--url must not include a query string or fragment/);
+
+  const scheme = parseRunsArgs(["--url", "ftp://127.0.0.1:43210"]);
+  assert.equal(scheme.status, "error");
+  if (scheme.status !== "error") throw new Error("expected non-HTTP URL to fail");
+  assert.match(scheme.message, /--url must use http or https/);
+});
+
 test("runs command queries the observability API and renders a run table", async () => {
   const server = http.createServer((request, response) => {
     assert.equal(request.url, "/api/v1/runs?failed=true&limit=5");

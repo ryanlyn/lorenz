@@ -1,7 +1,9 @@
+import { chmod, stat } from "node:fs/promises";
 import path from "node:path";
 
 import { test } from "vitest";
 import fc from "fast-check";
+import Database from "better-sqlite3";
 import { Orchestrator, normalizeIssue, parseConfig, slotKey } from "@lorenz/cli";
 import { systemClock, type ClockPort, type Issue, type RunningEntry } from "@lorenz/domain";
 import { assert, tempDir } from "@lorenz/test-utils";
@@ -17,7 +19,14 @@ import {
   type ClaimStoreCheckpoint,
   type SlotReservation,
 } from "@lorenz/orchestrator";
-import { TursoClaimStoreBackend } from "@lorenz/orchestrator/turso";
+import {
+  CLAIM_STORE_SCHEMA_VERSION as TURSO_CLAIM_STORE_SCHEMA_VERSION,
+  TursoClaimStoreBackend,
+} from "@lorenz/orchestrator/turso";
+import {
+  CLAIM_STORE_SCHEMA_VERSION as SQLITE_CLAIM_STORE_SCHEMA_VERSION,
+  SqliteClaimStoreBackend,
+} from "@lorenz/orchestrator/sqlite";
 
 function fakeClock(initial = new Date()) {
   let tick = initial.getTime();
@@ -123,6 +132,21 @@ class FailingCommitBackend extends MemoryCheckpointBackend {
   }
 }
 
+class TransactionalMemoryCheckpointBackend extends MemoryCheckpointBackend {
+  override withExclusiveTransaction<T>(run: () => T): T {
+    this.exclusiveTransactions += 1;
+    const savedBefore = [...this.saved];
+    const heartbeatsBefore = new Map(this.ownerHeartbeats);
+    try {
+      return run();
+    } catch (error) {
+      this.saved = savedBefore;
+      this.ownerHeartbeats = heartbeatsBefore;
+      throw error;
+    }
+  }
+}
+
 class AsyncMemoryCheckpointBackend implements AsyncClaimStoreBackend {
   readonly kind = "async-memory-checkpoint";
   readonly capabilities: ClaimStoreCapabilities;
@@ -161,6 +185,21 @@ class AsyncMemoryCheckpointBackend implements AsyncClaimStoreBackend {
   async withExclusiveTransaction<T>(run: () => Promise<T>): Promise<T> {
     this.exclusiveTransactions += 1;
     return run();
+  }
+}
+
+class AsyncTransactionalMemoryCheckpointBackend extends AsyncMemoryCheckpointBackend {
+  override async withExclusiveTransaction<T>(run: () => Promise<T>): Promise<T> {
+    this.exclusiveTransactions += 1;
+    const savedBefore = [...this.saved];
+    const heartbeatsBefore = new Map(this.ownerHeartbeats);
+    try {
+      return await run();
+    } catch (error) {
+      this.saved = savedBefore;
+      this.ownerHeartbeats = heartbeatsBefore;
+      throw error;
+    }
   }
 }
 
@@ -245,6 +284,182 @@ test("persistent claim store default owner id includes restart-unique entropy", 
   const store = new PersistentClaimStore(new MemoryCheckpointBackend());
 
   assert.match(store.ownerId, /^memory-checkpoint:\d+:\d+:[0-9a-f-]{36}$/);
+});
+
+test("persistent claim store skips checkpoints for unchanged eligible issue polls", () => {
+  const backend = new MemoryCheckpointBackend();
+  const store = new PersistentClaimStore(backend, { ownerId: "owner-a" });
+  const orchestrator = new Orchestrator(parseConfig(), systemClock, store);
+  const issue = normalizeIssue({
+    id: "persistent-eligible-noop",
+    identifier: "MT-PERSIST-ELIGIBLE-NOOP",
+    title: "Persistent eligible noop",
+    state: { name: "Todo", type: "unstarted" },
+  });
+
+  assert.equal(orchestrator.eligibleIssues([issue])[0]?.identifier, issue.identifier);
+  assert.equal(backend.saved.length, 0);
+  assert.equal(orchestrator.snapshot().claimStore.transactionsApplied, 0);
+});
+
+test("persistent claim store checkpoints eligible issue polls when block state changes", () => {
+  const backend = new MemoryCheckpointBackend();
+  const store = new PersistentClaimStore(backend, { ownerId: "owner-a" });
+  const orchestrator = new Orchestrator(
+    parseConfig({ agent: { max_concurrent_agents: 1 } }),
+    systemClock,
+    store,
+  );
+  const running = normalizeIssue({
+    id: "persistent-eligible-running",
+    identifier: "MT-PERSIST-ELIGIBLE-RUNNING",
+    title: "Persistent eligible running",
+    state: { name: "Todo", type: "unstarted" },
+  });
+  const blocked = normalizeIssue({
+    id: "persistent-eligible-blocked",
+    identifier: "MT-PERSIST-ELIGIBLE-BLOCKED",
+    title: "Persistent eligible blocked",
+    state: { name: "Todo", type: "unstarted" },
+  });
+
+  assert.ok(claimEntry(orchestrator, running));
+  assert.equal(backend.saved.length, 1);
+
+  assert.deepEqual(orchestrator.eligibleIssues([blocked]), []);
+  assert.equal(backend.saved.length, 2);
+  assert.equal(backend.saved.at(-1)?.operation, "eligible_issues");
+  assert.equal(orchestrator.snapshot().blocked[0]?.reason, "global_concurrency_cap");
+
+  assert.deepEqual(orchestrator.eligibleIssues([blocked]), []);
+  assert.equal(backend.saved.length, 2);
+});
+
+test("async persistent claim store skips checkpoints for unchanged eligible issue polls", async () => {
+  const backend = new AsyncMemoryCheckpointBackend();
+  const store = await AsyncPersistentClaimStore.create(backend, { ownerId: "owner-a" });
+  const orchestrator = new Orchestrator(parseConfig(), systemClock, store);
+  const issue = normalizeIssue({
+    id: "async-persistent-eligible-noop",
+    identifier: "MT-ASYNC-PERSIST-ELIGIBLE-NOOP",
+    title: "Async persistent eligible noop",
+    state: { name: "Todo", type: "unstarted" },
+  });
+
+  assert.equal((await orchestrator.eligibleIssuesAsync([issue]))[0]?.identifier, issue.identifier);
+  assert.equal(backend.saved.length, 0);
+  assert.equal((await orchestrator.snapshotAsync()).claimStore.transactionsApplied, 0);
+});
+
+test("persistent claim store skips checkpoints for live-only session notifications", () => {
+  const backend = new MemoryCheckpointBackend();
+  const store = new PersistentClaimStore(backend, { ownerId: "owner-a" });
+  const orchestrator = new Orchestrator(parseConfig(), systemClock, store);
+  const issue = normalizeIssue({
+    id: "persistent-streaming-update",
+    identifier: "MT-PERSIST-STREAM",
+    title: "Persistent streaming update",
+    state: { name: "Todo", type: "unstarted" },
+  });
+
+  assert.ok(claimEntry(orchestrator, issue));
+  assert.equal(backend.saved.length, 1);
+
+  orchestrator.applyUpdate(issue.id, 0, {
+    type: "session_notification",
+    message: { sessionUpdate: "thinking" } as never,
+    sessionId: "session-live",
+    executorPid: "pid-live",
+    timestamp: new Date("2026-01-01T00:00:05.000Z"),
+  });
+  assert.equal(backend.saved.length, 1);
+  assert.equal(orchestrator.snapshot().running[0]?.lastAgentEvent, "session_notification");
+  assert.equal(orchestrator.snapshot().running[0]?.sessionId, "session-live");
+
+  orchestrator.applyUpdate(issue.id, 0, {
+    type: "session_notification",
+    message: { sessionUpdate: "usage" } as never,
+    usageKind: "cumulative",
+    usage: { totalTokens: 7 },
+  });
+  assert.equal(backend.saved.length, 2);
+  assert.equal(backend.saved.at(-1)?.operation, "apply_update");
+
+  // A workspacePath carries durable state, so it must NOT take the skip-checkpoint fast path.
+  orchestrator.applyUpdate(issue.id, 0, {
+    type: "session_notification",
+    message: { sessionUpdate: "thinking" } as never,
+    workspacePath: "/tmp/lorenz/MT-PERSIST-STREAM",
+  });
+  assert.equal(backend.saved.length, 3);
+  assert.equal(backend.saved.at(-1)?.operation, "apply_update");
+
+  // rateLimits likewise must be persisted rather than skipped.
+  orchestrator.applyUpdate(issue.id, 0, {
+    type: "session_notification",
+    message: { sessionUpdate: "thinking" } as never,
+    rateLimits: { remaining: 3 },
+  });
+  assert.equal(backend.saved.length, 4);
+  assert.equal(backend.saved.at(-1)?.operation, "apply_update");
+});
+
+test("shared persistent claim store applies live-only session notifications without reload", () => {
+  const backend = new MemoryCheckpointBackend({ sharedAcrossProcesses: true });
+  const store = new PersistentClaimStore(backend, { ownerId: "owner-a" });
+  const orchestrator = new Orchestrator(parseConfig(), systemClock, store);
+  const issue = normalizeIssue({
+    id: "shared-live-streaming-update",
+    identifier: "MT-SHARED-LIVE-STREAM",
+    title: "Shared live streaming update",
+    state: { name: "Todo", type: "unstarted" },
+  });
+
+  assert.ok(claimEntry(orchestrator, issue));
+  const transactionsBefore = backend.exclusiveTransactions;
+
+  orchestrator.applyUpdate(issue.id, 0, {
+    type: "session_notification",
+    message: { sessionUpdate: "thinking" } as never,
+    sessionId: "session-live",
+    executorPid: "pid-live",
+  });
+
+  const running = orchestrator.state.running.get(slotKey(issue.id, 0));
+  assert.equal(backend.exclusiveTransactions, transactionsBefore);
+  assert.equal(backend.saved.length, 1);
+  assert.equal(running?.lastAgentEvent, "session_notification");
+  assert.equal(running?.sessionId, "session-live");
+  assert.equal(running?.executorPid, "pid-live");
+});
+
+test("async shared persistent claim store applies live-only session notifications without reload", async () => {
+  const backend = new AsyncMemoryCheckpointBackend({ sharedAcrossProcesses: true });
+  const store = await AsyncPersistentClaimStore.create(backend, { ownerId: "owner-a" });
+  const orchestrator = new Orchestrator(parseConfig(), systemClock, store);
+  const issue = normalizeIssue({
+    id: "async-shared-live-streaming-update",
+    identifier: "MT-ASYNC-SHARED-LIVE-STREAM",
+    title: "Async shared live streaming update",
+    state: { name: "Todo", type: "unstarted" },
+  });
+
+  assert.ok(await claimEntryAsync(orchestrator, issue));
+  const transactionsBefore = backend.exclusiveTransactions;
+
+  await orchestrator.applyUpdateAsync(issue.id, 0, {
+    type: "session_notification",
+    message: { sessionUpdate: "thinking" } as never,
+    sessionId: "session-live",
+    executorPid: "pid-live",
+  });
+
+  const running = orchestrator.state.running.get(slotKey(issue.id, 0));
+  assert.equal(backend.exclusiveTransactions, transactionsBefore);
+  assert.equal(backend.saved.length, 1);
+  assert.equal(running?.lastAgentEvent, "session_notification");
+  assert.equal(running?.sessionId, "session-live");
+  assert.equal(running?.executorPid, "pid-live");
 });
 
 test("persistent claim store checkpoints and hydrates retry state across owners", () => {
@@ -774,6 +989,186 @@ test("turso claim store hydrates retry state across restart", async () => {
   }
 });
 
+test("SQLite claim store records and validates its schema version", async () => {
+  const root = await tempDir("lorenz-sqlite-schema");
+  const dbPath = path.join(root, "claims.db");
+  const backend = new SqliteClaimStoreBackend(dbPath);
+  backend.close();
+
+  const db = new Database(dbPath);
+  try {
+    const row = db
+      .prepare("SELECT value FROM claim_store_meta WHERE key = 'schema_version'")
+      .get() as { value: string } | undefined;
+    assert.equal(row?.value, String(SQLITE_CLAIM_STORE_SCHEMA_VERSION));
+  } finally {
+    db.close();
+  }
+
+  const reopened = new SqliteClaimStoreBackend(dbPath);
+  reopened.close();
+  assert.equal(TURSO_CLAIM_STORE_SCHEMA_VERSION, SQLITE_CLAIM_STORE_SCHEMA_VERSION);
+});
+
+test("SQLite claim store creates private database files", async () => {
+  if (process.platform === "win32") return;
+  const root = await tempDir("lorenz-sqlite-private");
+  const dbPath = path.join(root, "claim-store", "claims.db");
+  const backend = new SqliteClaimStoreBackend(dbPath);
+  try {
+    assert.deepEqual(await claimStoreFileModes(dbPath, ["-wal", "-shm"]), {
+      [path.dirname(dbPath)]: 0o700,
+      [dbPath]: 0o600,
+      [`${dbPath}-wal`]: 0o600,
+      [`${dbPath}-shm`]: 0o600,
+    });
+  } finally {
+    backend.close();
+  }
+});
+
+test("SQLite claim store preserves existing parent directory mode", async () => {
+  if (process.platform === "win32") return;
+  const root = await tempDir("lorenz-sqlite-existing-parent");
+  await chmod(root, 0o755);
+  const dbPath = path.join(root, "claims.db");
+  const backend = new SqliteClaimStoreBackend(dbPath);
+  try {
+    assert.equal(await fileMode(root), 0o755);
+    assert.equal(await fileMode(dbPath), 0o600);
+  } finally {
+    backend.close();
+  }
+});
+
+test("Turso claim store rejects unsupported schema versions", async () => {
+  const root = await tempDir("lorenz-turso-schema-version");
+  const dbPath = path.join(root, "claims.db");
+  const backend = await TursoClaimStoreBackend.open(dbPath);
+  await backend.close();
+
+  const db = await import("@tursodatabase/database");
+  const connection = await db.connect(dbPath, { timeout: 5000 });
+  try {
+    await connection.run(
+      "UPDATE claim_store_meta SET value = ? WHERE key = 'schema_version'",
+      "999",
+    );
+  } finally {
+    await connection.close();
+  }
+
+  await assert.rejects(
+    () => TursoClaimStoreBackend.open(dbPath),
+    /unsupported_claim_store_schema_version/,
+  );
+});
+
+test("Turso claim store creates private database files", async () => {
+  if (process.platform === "win32") return;
+  const root = await tempDir("lorenz-turso-private");
+  const dbPath = path.join(root, "claim-store", "claims.db");
+  const backend = await TursoClaimStoreBackend.open(dbPath);
+  try {
+    assert.deepEqual(await claimStoreFileModes(dbPath, ["-wal"]), {
+      [path.dirname(dbPath)]: 0o700,
+      [dbPath]: 0o600,
+      [`${dbPath}-wal`]: 0o600,
+    });
+  } finally {
+    await backend.close();
+  }
+});
+
+test("Turso claim store serializes concurrent transactions on one backend", async () => {
+  const root = await tempDir("lorenz-turso-transaction-queue");
+  const dbPath = path.join(root, "claims.db");
+  const backend = await TursoClaimStoreBackend.open(dbPath);
+  const order: string[] = [];
+  let releaseFirst!: () => void;
+  let markFirstStarted!: () => void;
+  const firstStarted = new Promise<void>((resolve) => {
+    markFirstStarted = resolve;
+  });
+  const firstCanFinish = new Promise<void>((resolve) => {
+    releaseFirst = resolve;
+  });
+
+  try {
+    const first = backend.withExclusiveTransaction(async () => {
+      order.push("first-start");
+      markFirstStarted();
+      await firstCanFinish;
+      await backend.withExclusiveTransaction(async () => {
+        order.push("first-nested");
+      });
+      order.push("first-end");
+    });
+    await firstStarted;
+
+    const second = backend.withExclusiveTransaction(async () => {
+      order.push("second-start");
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+
+    assert.deepEqual(order, ["first-start"]);
+    releaseFirst();
+    await Promise.all([first, second]);
+    assert.deepEqual(order, ["first-start", "first-nested", "first-end", "second-start"]);
+  } finally {
+    await backend.close();
+  }
+});
+
+async function fileMode(filePath: string): Promise<number> {
+  return (await stat(filePath)).mode & 0o777;
+}
+
+async function claimStoreFileModes(
+  dbPath: string,
+  sidecars: string[],
+): Promise<Record<string, number>> {
+  const modes: Record<string, number> = {
+    [path.dirname(dbPath)]: await fileMode(path.dirname(dbPath)),
+    [dbPath]: await fileMode(dbPath),
+  };
+  for (const suffix of sidecars) {
+    modes[`${dbPath}${suffix}`] = await fileMode(`${dbPath}${suffix}`);
+  }
+  return modes;
+}
+
+test("Turso claim store serializes concurrent claims for the same slot", async () => {
+  const root = await tempDir("lorenz-turso-concurrent-claim");
+  const dbPath = path.join(root, "claims.db");
+  const firstBackend = await TursoClaimStoreBackend.open(dbPath);
+  const secondBackend = await TursoClaimStoreBackend.open(dbPath);
+  const firstStore = await AsyncPersistentClaimStore.create(firstBackend, { ownerId: "owner-a" });
+  const secondStore = await AsyncPersistentClaimStore.create(secondBackend, { ownerId: "owner-b" });
+  const settings = parseConfig();
+  const issue = normalizeIssue({
+    id: "turso-concurrent-claim",
+    identifier: "MT-TURSO-CONCURRENT",
+    title: "Concurrent claim",
+    state: { name: "Todo", type: "unstarted" },
+  });
+  const first = new Orchestrator(settings, systemClock, firstStore);
+  const second = new Orchestrator(settings, systemClock, secondStore);
+
+  try {
+    const [firstClaim, secondClaim] = await Promise.all([
+      claimEntryAsync(first, issue),
+      claimEntryAsync(second, issue),
+    ]);
+    assert.equal([firstClaim, secondClaim].filter(Boolean).length, 1);
+    assert.equal((await first.snapshotAsync()).running.length, 1);
+    assert.equal((await second.snapshotAsync()).running.length, 1);
+  } finally {
+    await firstStore.close();
+    await secondStore.close();
+  }
+});
+
 test("shared persistent claim store flush preserves newer backend state", () => {
   const clock = fakeClock(new Date("2026-01-01T00:00:00.000Z"));
   const backend = new MemoryCheckpointBackend({ sharedAcrossProcesses: true });
@@ -906,6 +1301,86 @@ test("shared persistent claim store recovers stale owner running claims", () => 
   assert.equal(restarted.snapshot().running.length, 0);
   assert.equal(restarted.state.claimed.has(slotKey(issue.id, 0)), false);
   assert.ok(claimEntry(restarted, issue));
+});
+
+test("shared persistent eligible no-op preserves stale-owner recovery", () => {
+  const clock = fakeClock(new Date("2026-01-01T00:00:00.000Z"));
+  const backend = new TransactionalMemoryCheckpointBackend({ sharedAcrossProcesses: true });
+  const settings = parseConfig();
+  const issue = normalizeIssue({
+    id: "shared-noop-recovery",
+    identifier: "MT-SHARED-NOOP-RECOVERY",
+    title: "Shared noop recovery",
+    state: { name: "Todo", type: "unstarted" },
+  });
+  const hydrate = () => ({
+    now: clock.now(),
+    monotonicNowMs: clock.monotonicMs(),
+  });
+  const firstStore = new PersistentClaimStore(backend, {
+    ownerId: "owner-a",
+    now: () => clock.now(),
+    hydrate,
+    ownerLeaseStaleMs: 60_000,
+  });
+  const first = new Orchestrator(settings, clock, firstStore);
+  assert.ok(claimEntry(first, issue));
+
+  const secondStore = new PersistentClaimStore(backend, {
+    ownerId: "owner-b",
+    now: () => clock.now(),
+    hydrate,
+    ownerLeaseStaleMs: 60_000,
+  });
+  const second = new Orchestrator(settings, clock, secondStore);
+  assert.equal(second.snapshot().running.length, 1);
+
+  clock.advance(60_001);
+  assert.equal(second.eligibleIssues([issue])[0]?.identifier, issue.identifier);
+
+  assert.equal(backend.saved.at(-1)?.operation, "recover_stale_owners");
+  assert.equal(second.snapshot().running.length, 0);
+  assert.equal(second.state.claimed.has(slotKey(issue.id, 0)), false);
+});
+
+test("async shared persistent eligible no-op preserves stale-owner recovery", async () => {
+  const clock = fakeClock(new Date("2026-01-01T00:00:00.000Z"));
+  const backend = new AsyncTransactionalMemoryCheckpointBackend({ sharedAcrossProcesses: true });
+  const settings = parseConfig();
+  const issue = normalizeIssue({
+    id: "async-shared-noop-recovery",
+    identifier: "MT-ASYNC-SHARED-NOOP-RECOVERY",
+    title: "Async shared noop recovery",
+    state: { name: "Todo", type: "unstarted" },
+  });
+  const hydrate = () => ({
+    now: clock.now(),
+    monotonicNowMs: clock.monotonicMs(),
+  });
+  const firstStore = await AsyncPersistentClaimStore.create(backend, {
+    ownerId: "owner-a",
+    now: () => clock.now(),
+    hydrate,
+    ownerLeaseStaleMs: 60_000,
+  });
+  const first = new Orchestrator(settings, clock, firstStore);
+  assert.ok(await claimEntryAsync(first, issue));
+
+  const secondStore = await AsyncPersistentClaimStore.create(backend, {
+    ownerId: "owner-b",
+    now: () => clock.now(),
+    hydrate,
+    ownerLeaseStaleMs: 60_000,
+  });
+  const second = new Orchestrator(settings, clock, secondStore);
+  assert.equal((await second.snapshotAsync()).running.length, 1);
+
+  clock.advance(60_001);
+  assert.equal((await second.eligibleIssuesAsync([issue]))[0]?.identifier, issue.identifier);
+
+  assert.equal(backend.saved.at(-1)?.operation, "recover_stale_owners");
+  assert.equal((await second.snapshotAsync()).running.length, 0);
+  assert.equal(second.state.claimed.has(slotKey(issue.id, 0)), false);
 });
 
 test("shared persistent claim store recovers retry metadata from stale running claims", () => {

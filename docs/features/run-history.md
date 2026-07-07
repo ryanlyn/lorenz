@@ -6,7 +6,7 @@
 
 `lorenz runs` is a thin HTTP client. It builds a base URL, fetches `GET /api/v1/runs` from the running daemon's observability API, and renders the JSON as text tables (or raw JSON with `--json`). It holds no state and starts no server. The daemon must be running for the command to return anything.
 
-It reads the runtime's in-memory run history, a bounded ring buffer of the most recent completed runs (the cap is the same `runHistory(50)` view from the [RuntimeSnapshot](../observability.md)). There is no database, so on restart the buffer starts empty and refills as new runs finish, and history past the cap is gone. Capture the output you need before it ages out.
+It reads the runtime's in-memory run history, a bounded ring buffer of the most recent completed runs (the cap is the same `runHistory(50)` view from the [RuntimeSnapshot](../observability.md)). Run history is not database-backed, so on restart the buffer starts empty and refills as new runs finish, and history past the cap is gone. Capture the output you need before it ages out.
 
 Live `running` entries are merged on top of history, so an in-flight run shows up with `outcome=running` alongside the completed ones.
 

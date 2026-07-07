@@ -1,9 +1,19 @@
-import { mkdirSync } from "node:fs";
-import path from "node:path";
+import { AsyncLocalStorage } from "node:async_hooks";
 
 import { connect, type Database } from "@tursodatabase/database";
 
 import type { AsyncClaimStoreBackend, ClaimStoreCheckpoint } from "./claimStore.js";
+import { prepareClaimStoreFile, restrictClaimStoreFiles } from "./filePermissions.js";
+import {
+  CLAIM_STORE_SCHEMA_VERSION,
+  CLAIM_STORE_SCHEMA_VERSION_INSERT_SQL,
+  CLAIM_STORE_SCHEMA_VERSION_KEY,
+  CLAIM_STORE_SCHEMA_VERSION_SELECT_SQL,
+  CLAIM_STORE_TABLES_SQL,
+  unsupportedClaimStoreSchemaVersionError,
+} from "./claimStoreSchema.js";
+
+export { CLAIM_STORE_SCHEMA_VERSION } from "./claimStoreSchema.js";
 
 export interface TursoClaimStoreBackendOptions {
   busyTimeoutMs?: number | undefined;
@@ -19,10 +29,12 @@ export class TursoClaimStoreBackend implements AsyncClaimStoreBackend {
     retryDurability: true,
   };
 
-  private transactionDepth = 0;
+  private readonly transactionScope = new AsyncLocalStorage<boolean>();
+  private transactionTail: Promise<void> = Promise.resolve();
 
   private constructor(
     private readonly db: Database,
+    private readonly dbPath: string,
     private readonly maxEventRows: number,
   ) {}
 
@@ -30,7 +42,7 @@ export class TursoClaimStoreBackend implements AsyncClaimStoreBackend {
     dbPath: string,
     options: TursoClaimStoreBackendOptions = {},
   ): Promise<TursoClaimStoreBackend> {
-    mkdirSync(path.dirname(dbPath), { recursive: true });
+    prepareClaimStoreFile(dbPath);
     const dbOptions: { timeout: number; experimental?: ["multiprocess_wal"] } = {
       timeout: options.busyTimeoutMs ?? 5000,
     };
@@ -38,10 +50,20 @@ export class TursoClaimStoreBackend implements AsyncClaimStoreBackend {
     const db = await connect(dbPath, dbOptions);
     const backend = new TursoClaimStoreBackend(
       db,
+      dbPath,
       Math.max(1, Math.floor(options.maxEventRows ?? 1000)),
     );
-    await backend.initialize();
-    return backend;
+    try {
+      await backend.initialize();
+      return backend;
+    } catch (error) {
+      try {
+        await db.close();
+      } catch {
+        // Preserve the initialization error.
+      }
+      throw error;
+    }
   }
 
   async load(): Promise<ClaimStoreCheckpoint | null> {
@@ -82,18 +104,24 @@ export class TursoClaimStoreBackend implements AsyncClaimStoreBackend {
   }
 
   async withExclusiveTransaction<T>(run: () => Promise<T>): Promise<T> {
-    if (this.transactionDepth > 0) return run();
-    await this.db.exec("BEGIN IMMEDIATE");
-    this.transactionDepth += 1;
+    if (this.transactionScope.getStore()) return run();
+    const releaseTransactionTurn = await this.waitForTransactionTurn();
     try {
-      const result = await run();
-      await this.db.exec("COMMIT");
-      return result;
-    } catch (error) {
-      await this.db.exec("ROLLBACK");
-      throw error;
+      await this.db.exec("BEGIN IMMEDIATE");
+      try {
+        const result = await this.transactionScope.run(true, run);
+        await this.db.exec("COMMIT");
+        return result;
+      } catch (error) {
+        try {
+          await this.db.exec("ROLLBACK");
+        } catch {
+          // Keep the original failure visible; a rollback error must not mask it.
+        }
+        throw error;
+      }
     } finally {
-      this.transactionDepth -= 1;
+      releaseTransactionTurn();
     }
   }
 
@@ -102,27 +130,9 @@ export class TursoClaimStoreBackend implements AsyncClaimStoreBackend {
   }
 
   private async initialize(): Promise<void> {
-    await this.db.exec(`
-      CREATE TABLE IF NOT EXISTS claim_store_snapshot (
-        id INTEGER PRIMARY KEY CHECK (id = 1),
-        ownerId TEXT NOT NULL,
-        writtenAt TEXT NOT NULL,
-        operation TEXT NOT NULL,
-        checkpointJson TEXT NOT NULL
-      );
-      CREATE TABLE IF NOT EXISTS claim_store_events (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        ownerId TEXT NOT NULL,
-        writtenAt TEXT NOT NULL,
-        operation TEXT NOT NULL
-      );
-      CREATE INDEX IF NOT EXISTS idx_claim_store_events_written_at
-        ON claim_store_events (writtenAt);
-      CREATE TABLE IF NOT EXISTS claim_store_owners (
-        ownerId TEXT PRIMARY KEY,
-        heartbeatAt TEXT NOT NULL
-      );
-    `);
+    await this.db.exec(CLAIM_STORE_TABLES_SQL);
+    await this.verifySchemaVersion();
+    restrictClaimStoreFiles(this.dbPath);
   }
 
   private async writeCheckpoint(checkpoint: ClaimStoreCheckpoint): Promise<void> {
@@ -162,5 +172,31 @@ export class TursoClaimStoreBackend implements AsyncClaimStoreBackend {
       `,
       this.maxEventRows,
     );
+  }
+
+  private async verifySchemaVersion(): Promise<void> {
+    await this.db.run(
+      CLAIM_STORE_SCHEMA_VERSION_INSERT_SQL,
+      CLAIM_STORE_SCHEMA_VERSION_KEY,
+      String(CLAIM_STORE_SCHEMA_VERSION),
+    );
+    const row = (await this.db.get(
+      CLAIM_STORE_SCHEMA_VERSION_SELECT_SQL,
+      CLAIM_STORE_SCHEMA_VERSION_KEY,
+    )) as { value: string } | undefined;
+    if (!row) throw new Error("claim_store_schema_version_missing");
+    const version = Number(row.value);
+    if (version !== CLAIM_STORE_SCHEMA_VERSION)
+      throw unsupportedClaimStoreSchemaVersionError(row.value);
+  }
+
+  private async waitForTransactionTurn(): Promise<() => void> {
+    const previous = this.transactionTail;
+    let release!: () => void;
+    this.transactionTail = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await previous;
+    return release;
   }
 }

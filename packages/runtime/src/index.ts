@@ -436,6 +436,7 @@ export class LorenzRuntime {
   }
 
   async start(options: RuntimeStartOptions = {}): Promise<void> {
+    if (this.stopped) return;
     this.stopped = false;
     // Open the tracker's push subscription (if any) so a real backend event re-polls
     // immediately instead of waiting out polling.intervalMs. Skipped for --once (which polls
@@ -494,6 +495,7 @@ export class LorenzRuntime {
   }
 
   async pollOnce(options: PollOptions = {}): Promise<void> {
+    if (this.stopped) throw new Error("runtime_stopped");
     if (this.pollInProgress) {
       this.queuePendingPoll(options);
       return this.pollInProgress;
@@ -1617,6 +1619,7 @@ export class LorenzRuntime {
     coalesced: boolean;
     operations: string[];
   } {
+    if (this.stopped) throw new Error("runtime_stopped");
     const coalesced = this.pollStatus === "checking";
     if (!coalesced) {
       this.pollOnce().catch((error) => {

@@ -31,6 +31,7 @@ import {
 import { createState, type OrchestratorState, type ReservationRecord } from "./state.js";
 import {
   InMemoryClaimStore,
+  NoopClaimStoreMutation,
   isAsyncClaimStore,
   isClaimStoreLike,
   type ClaimStore,
@@ -56,6 +57,7 @@ export {
   isAsyncClaimStore,
   isClaimStore,
   isClaimStoreLike,
+  NoopClaimStoreMutation,
   type AsyncClaimStore,
   type AsyncClaimStoreBackend,
   type ClaimStore,
@@ -142,12 +144,6 @@ function deltaNotAlreadyReported(delta: number, reported: number, base: number):
 
 function retrySlotIndex(retry: RetryEntry): number {
   return retry.slotIndex ?? 0;
-}
-
-class NoopClaimStoreMutation extends Error {
-  constructor() {
-    super("noop_claim_store_mutation");
-  }
 }
 
 /**
@@ -292,27 +288,47 @@ export class Orchestrator {
     return this.state.running.size + this.state.reserved.size;
   }
 
-  eligibleIssues(issues: Issue[]): Issue[] {
-    return this.withClaimStore("eligible_issues", () => this.eligibleIssuesInTransaction(issues));
-  }
-
-  async eligibleIssuesAsync(issues: Issue[]): Promise<Issue[]> {
-    return this.withClaimStoreAsync("eligible_issues", () =>
-      this.eligibleIssuesInTransaction(issues),
+  private canSkipUnchangedEligibleIssues(): boolean {
+    const capabilities = this.claimStore.capabilities;
+    return (
+      capabilities.crashRecovery ||
+      capabilities.sharedAcrossProcesses ||
+      capabilities.retryDurability
     );
   }
 
+  eligibleIssues(issues: Issue[]): Issue[] {
+    try {
+      return this.withClaimStore("eligible_issues", () => this.eligibleIssuesInTransaction(issues));
+    } catch (error) {
+      if (error instanceof NoopClaimStoreMutation) return error.result as Issue[];
+      throw error;
+    }
+  }
+
+  async eligibleIssuesAsync(issues: Issue[]): Promise<Issue[]> {
+    try {
+      return await this.withClaimStoreAsync("eligible_issues", () =>
+        this.eligibleIssuesInTransaction(issues),
+      );
+    } catch (error) {
+      if (error instanceof NoopClaimStoreMutation) return error.result as Issue[];
+      throw error;
+    }
+  }
+
   private eligibleIssuesInTransaction(issues: Issue[]): Issue[] {
-    this.sweepExpiredReservations();
-    this.cleanupRetryAttempts(issues);
-    this.state.blockedDispatches = [];
+    let stateChanged = this.sweepExpiredReservations();
+    stateChanged = this.cleanupRetryAttempts(issues) || stateChanged;
+    const blockedDispatches: DispatchBlockEntry[] = [];
     const runningByState = this.runningByStateCounts();
 
-    return sortForDispatch(issues).filter((issue) => {
+    const result = sortForDispatch(issues).filter((issue) => {
       const retries = this.retryEntriesForIssue(issue.id);
       const dueRetries = retries.filter(([, retry]) => this.retryIsDue(retry));
       if (retries.length > 0 && dueRetries.length === 0) return false;
-      if (dueRetries.length > 0) this.releaseStaleClaimsForRetry(issue.id);
+      if (dueRetries.length > 0)
+        stateChanged = this.releaseStaleClaimsForRetry(issue.id) || stateChanged;
       const blockedRetry = dueRetries[0]?.[1] ?? retries[0]?.[1];
       const dispatchState = {
         runningCount: this.occupiedSlotCount(),
@@ -322,7 +338,7 @@ export class Orchestrator {
       };
       const reason = dispatchBlockReason(issue, this.settings, dispatchState);
       if (reason) {
-        this.state.blockedDispatches.push({
+        blockedDispatches.push({
           issueId: issue.id,
           identifier: issue.identifier,
           state: issue.state,
@@ -331,11 +347,20 @@ export class Orchestrator {
           issueUrl: issue.url ?? null,
         });
         for (const [key, retry] of dueRetries)
-          this.rescheduleRetryAfterDispatchBlock(key, issue, retry, reason);
+          stateChanged =
+            this.rescheduleRetryAfterDispatchBlock(key, issue, retry, reason) || stateChanged;
         return false;
       }
       return shouldDispatchIssue(issue, this.settings, dispatchState);
     });
+    if (!dispatchBlockEntriesEqual(this.state.blockedDispatches, blockedDispatches)) {
+      this.state.blockedDispatches = blockedDispatches;
+      stateChanged = true;
+    }
+    if (!stateChanged && this.canSkipUnchangedEligibleIssues()) {
+      throw new NoopClaimStoreMutation(result);
+    }
+    return result;
   }
 
   claim(issue: Issue): ClaimResult | null {
@@ -631,11 +656,16 @@ export class Orchestrator {
    * (e.g. a wedged endpoint open) cannot strand a concurrency slot until shutdown. A late
    * successful acquire after the sweep is token-guarded to a null bind.
    */
-  private sweepExpiredReservations(): void {
+  private sweepExpiredReservations(): boolean {
     const nowMs = this.clock.monotonicMs();
+    let stateChanged = false;
     for (const [key, record] of [...this.state.reserved.entries()]) {
-      if (nowMs >= record.expiresAtMonotonicMs) this.cancelReservationRecord(key, record);
+      if (nowMs >= record.expiresAtMonotonicMs) {
+        this.cancelReservationRecord(key, record);
+        stateChanged = true;
+      }
     }
+    return stateChanged;
   }
 
   private selectWorkerHost(preferredHost?: string | null): string | null | undefined {
@@ -699,6 +729,10 @@ export class Orchestrator {
 
   applyUpdate(issueId: string, slotIndex: number, update: AgentUpdate): void {
     try {
+      if (agentUpdateCanSkipCheckpoint(update)) {
+        this.applyUpdateInTransaction(issueId, slotIndex, update);
+        return;
+      }
       this.withClaimStore("apply_update", () =>
         this.applyUpdateInTransaction(issueId, slotIndex, update),
       );
@@ -710,6 +744,10 @@ export class Orchestrator {
 
   async applyUpdateAsync(issueId: string, slotIndex: number, update: AgentUpdate): Promise<void> {
     try {
+      if (agentUpdateCanSkipCheckpoint(update)) {
+        this.applyUpdateInTransaction(issueId, slotIndex, update);
+        return;
+      }
       await this.withClaimStoreAsync("apply_update", () =>
         this.applyUpdateInTransaction(issueId, slotIndex, update),
       );
@@ -961,10 +999,13 @@ export class Orchestrator {
     entry.lastReportedTotalTokens = Math.max(entry.lastReportedTotalTokens, nextBase.totalTokens);
   }
 
-  private cleanupRetryAttempts(issues: Issue[]): void {
+  private cleanupRetryAttempts(issues: Issue[]): boolean {
+    let stateChanged = false;
     for (const issue of issues) {
-      if (!issueIsActive(issue, this.settings)) this.deleteRetryAttemptsForIssue(issue.id);
+      if (!issueIsActive(issue, this.settings))
+        stateChanged = this.deleteRetryAttemptsForIssue(issue.id) || stateChanged;
     }
+    return stateChanged;
   }
 
   private retryDeadline(delayMs: number): { dueAtIso: string; monotonicDeadlineMs: number } {
@@ -981,7 +1022,7 @@ export class Orchestrator {
     issue: Issue,
     retry: RetryEntry,
     reason: DispatchBlockReason,
-  ): void {
+  ): boolean {
     const attempt = retry.attempt + 1;
     const deadline = this.retryDeadline(
       retryBackoffMs(attempt, this.settings.agent.maxRetryBackoffMs, "failure"),
@@ -996,6 +1037,7 @@ export class Orchestrator {
       dueAtIso: deadline.dueAtIso,
       error: dispatchBlockError(reason),
     });
+    return true;
   }
 
   private releaseStaleClaimsForRetry(issueId: string): boolean {
@@ -1035,6 +1077,34 @@ export class Orchestrator {
     }
     return stateChanged;
   }
+}
+
+function dispatchBlockEntriesEqual(
+  left: DispatchBlockEntry[],
+  right: DispatchBlockEntry[],
+): boolean {
+  if (left.length !== right.length) return false;
+  return left.every((entry, index) => {
+    const other = right[index];
+    return (
+      other !== undefined &&
+      entry.issueId === other.issueId &&
+      entry.identifier === other.identifier &&
+      entry.state === other.state &&
+      entry.reason === other.reason &&
+      (entry.workerHost ?? null) === (other.workerHost ?? null) &&
+      (entry.issueUrl ?? null) === (other.issueUrl ?? null)
+    );
+  });
+}
+
+function agentUpdateCanSkipCheckpoint(update: AgentUpdate): boolean {
+  return (
+    update.type === "session_notification" &&
+    update.usage === undefined &&
+    update.rateLimits === undefined &&
+    update.workspacePath === undefined
+  );
 }
 
 export interface OrchestratorSnapshot {

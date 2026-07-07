@@ -853,6 +853,9 @@ importers:
       "@lorenz/runtime-events":
         specifier: workspace:*
         version: link:../runtime-events
+      zod:
+        specifier: "catalog:"
+        version: 4.4.3
 
   packages/projections:
     dependencies:

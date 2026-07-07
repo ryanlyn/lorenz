@@ -33,6 +33,14 @@ export function mcpAuthScopeForSettings(
   return `mcp:${createHash("sha256").update(identity).digest("base64url")}`;
 }
 
+export function createOpaqueBearerToken(): string {
+  return randomBytes(32).toString("base64url");
+}
+
+export function bearerToken(authorization: string | undefined): string | undefined {
+  return /^Bearer\s+(.+)$/.exec(authorization ?? "")?.[1];
+}
+
 /** Key-sorted copy of a provider options record so equivalent configs hash identically. */
 function canonicalRecord(record: Record<string, unknown>): Record<string, unknown> {
   return Object.fromEntries(
@@ -52,7 +60,7 @@ function canonicalToolOptions(
 }
 
 export function issueMcpToken(scope = defaultMcpAuthScope): string {
-  const token = randomBytes(32).toString("base64url");
+  const token = createOpaqueBearerToken();
   activeTokens.set(token, scope);
   return token;
 }
@@ -118,7 +126,7 @@ const runClaims = new Map<string, RunClaim>();
  * request via {@link resolveRunClaim}.
  */
 export function issueRunMcpToken(claim: RunClaim): string {
-  const token = randomBytes(32).toString("base64url");
+  const token = createOpaqueBearerToken();
   runClaims.set(token, claim);
   return token;
 }

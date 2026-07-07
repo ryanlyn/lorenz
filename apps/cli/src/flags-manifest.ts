@@ -40,6 +40,31 @@ const flags = defineFlags({
     description: "Maximum flags to print in the startup dump (0 = no limit).",
     envName: "LORENZ_FLAG_DIAGNOSTICS__SAMPLE_LIMIT",
   }),
+  "daemon.enabled": flag.bool({
+    default: false,
+    description:
+      "Run the orchestrator as a long-lived single-instance daemon (leadership lock, heartbeat, and HTTP control endpoints).",
+    envName: "LORENZ_FLAG_DAEMON__ENABLED",
+  }),
+  "claim_store.backend": flag.enum({
+    values: ["memory", "sqlite", "turso"],
+    default: "memory",
+    description: "Orchestrator claim store implementation.",
+    envName: "LORENZ_FLAG_CLAIM_STORE__BACKEND",
+  }),
+  "claim_store.path": flag.string({
+    default: "",
+    description:
+      "Durable claim store database path (empty derives a path under the workflow workspace).",
+    envName: "LORENZ_FLAG_CLAIM_STORE__PATH",
+  }),
+  "claim_store.owner_stale_ms": flag.int({
+    default: 0,
+    refine: (n) => n >= 0,
+    refineMessage: "must be a non-negative integer",
+    description: "Claim owner lease stale threshold in ms (0 uses the store default).",
+    envName: "LORENZ_FLAG_CLAIM_STORE__OWNER_STALE_MS",
+  }),
 });
 
 const features = defineFeatures(flags, {
@@ -48,6 +73,18 @@ const features = defineFeatures(flags, {
     description: "Dump the full resolved flag set to stderr at startup.",
     preset: { "diagnostics.log_flag_resolution": true, "diagnostics.detail": "full" },
     envName: "LORENZ_FEATURE_VERBOSE_DIAGNOSTICS",
+  }),
+  daemon: feature({
+    default: false,
+    description: "Run the orchestrator as a long-lived single-instance daemon.",
+    preset: { "daemon.enabled": true },
+    envName: "LORENZ_FEATURE_DAEMON",
+  }),
+  durable_claims: feature({
+    default: false,
+    description: "Persist orchestrator claims durably with the SQLite backend.",
+    preset: { "claim_store.backend": "sqlite" },
+    envName: "LORENZ_FEATURE_DURABLE_CLAIMS",
   }),
 });
 

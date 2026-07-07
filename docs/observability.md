@@ -57,7 +57,9 @@ The server mounts REST routes under `/api/v1`, a `/ws` WebSocket for live push, 
 | --- | --- | --- |
 | `/api/v1/state` | GET | Current ops state payload |
 | `/api/v1/runs` | GET | Run history; filters `issue`, `failed`, `cost`, `retries`, `id`, `limit` |
-| `/api/v1/refresh` | POST | Queue a poll + reconcile (`202`, `operations: ['poll','reconcile']`) |
+| `/api/v1/refresh` | POST | Queue a poll + reconcile with a control bearer token (`202`, `operations: ['poll','reconcile']`) |
+| `/api/v1/daemon` | GET | Daemon owner, endpoint, heartbeat, and leadership status |
+| `/api/v1/stop` | POST | Request daemon shutdown with a control bearer token |
 | `/api/v1/:identifier` | GET | One issue's detail |
 | `/api/v1/issues/recent` | GET | Recent issues (trace) |
 | `/api/v1/issues/search` | GET | Issue search (trace) |
@@ -68,7 +70,11 @@ The server mounts REST routes under `/api/v1`, a `/ws` WebSocket for live push, 
 | `/health` | GET | Health check |
 | `/mcp` | POST | MCP endpoint |
 
-The `runs` limit defaults to 20 and is clamped to a max of 200. On `/ws` connect the server sends `init` (tickets), then `ops_state` if a snapshot is available; the runtime broadcasts `ops_state` to connected clients on each update. The exact payload shapes, query params, and error codes are in [reference/http-api.md](reference/http-api.md).
+The `runs` limit defaults to 20 and is clamped to a max of 200. `/api/v1/refresh` and
+`/api/v1/stop` require `Authorization: Bearer <control-token>`. On `/ws` connect the server sends
+`init` (tickets), then `ops_state` if a snapshot is available; the runtime broadcasts `ops_state` to
+connected clients on each update. The exact payload shapes, query params, auth requirements, and
+error codes are in [reference/http-api.md](reference/http-api.md).
 
 The trace REST routes (`/api/v1/issues/*`, `/api/v1/tickets/*`) mount only when both `server.traceDir` and an `IssueStore` are present. The CLI supplies both, so they are live under the daemon.
 

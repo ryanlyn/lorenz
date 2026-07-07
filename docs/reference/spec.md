@@ -131,10 +131,11 @@ The single authoritative in-memory `OrchestratorState`, owned and mutated only b
 The draft `SPEC.md` omits `reserved` and `blockedDispatches` and keys retries by bare issue ID. Code
 includes both maps and keys retries by slot key.
 
-There is no database. Restart recovery is tracker-driven and filesystem-driven: the orchestrator
-rebuilds `OrchestratorState` from scratch on boot, re-fetches candidate and tracked issues, cleans
-terminal workspaces from disk, and re-dispatches whatever is still eligible. No retry timers or live
-sessions survive a restart.
+The default claim store is in-memory: restart recovery is tracker-driven and filesystem-driven. The
+orchestrator rebuilds `OrchestratorState` from scratch on boot, re-fetches candidate and tracked
+issues, cleans terminal workspaces from disk, and re-dispatches whatever is still eligible. When an
+operator selects a durable claim store, retry state and claim ownership are hydrated from that store
+instead. Live agent sessions are still not restored.
 
 ## 4. Workflow contract
 
@@ -482,10 +483,10 @@ See [trackers/index](../trackers/index.md), [trackers/linear](../trackers/linear
 One `RuntimeSnapshot` feeds every consumer: the TUI, the web dashboard, and the HTTP API. It
 carries `appStatus`, `workflowPath`, a `poll` block (status, candidates, eligible, last and next poll
 times, last error), the `running`, `reserving`, `retrying`, and `blocked` lanes, `runHistory`,
-`usageTotals`, `rateLimits`, `logFile`, and `recentEvents`. The `reserving` lane is the host-less
-two-phase reservations, kept separate from `running`. A `ProjectionActor` bounds the ring buffers to
-the last `20` events and last `50` run-history entries. There is no persisted log beyond the optional
-`logging.log_file` sink. See [observability](../observability.md).
+`usageTotals`, `rateLimits`, `logFile`, `claimStore`, `daemon`, and `recentEvents`. The `reserving`
+lane is the host-less two-phase reservations, kept separate from `running`. A `ProjectionActor`
+bounds the ring buffers to the last `20` events and last `50` run-history entries. There is no
+persisted log beyond the optional `logging.log_file` sink. See [observability](../observability.md).
 
 ### 9.2 Events
 
@@ -498,6 +499,7 @@ run_started        dispatch_refresh_failed  run_completed       run_failed
 workflow_reloaded  workflow_reload_failed   reconcile_refresh_failed  workspace_cleanup
 run_reconciled     run_stalled              startup_workspace_cleanup
 startup_workspace_cleanup_failed  retry_timer_due  retry_timer_error  refresh_error
+tracker_watch_started  tracker_watch_error  tracker_push
 ```
 
 Run-history outcomes are `success`, `failed`, `stalled`, `canceled`. The runtime records only
@@ -518,9 +520,10 @@ is captured for display and never drives logic.
 
 The HTTP server runs by default and is disabled with `--no-dashboard`. `server.port` in front matter
 and the CLI `--port` set the bind port (`--port` wins). It binds loopback by default. It serves a dashboard at `/` and a read-only JSON API
-under `/api/v1/*` with a `/api/v1/state` summary, a `/api/v1/<issue_identifier>` detail (404 when the
-issue is unknown), and a `POST /api/v1/refresh` trigger that queues a poll and reconcile. Errors use
-a `{"error":{"code","message"}}` envelope; an unsupported method on a defined route returns `405`.
+under `/api/v1/*` with a `/api/v1/state` summary, `/api/v1/runs`, `/api/v1/daemon`, a
+`/api/v1/<issue_identifier>` detail (404 when the issue is unknown), `POST /api/v1/refresh`, and
+`POST /api/v1/stop`. Refresh and stop require the daemon control bearer token. Errors use a
+`{"error":{"code","message"}}` envelope; an unsupported method on a defined route returns `405`.
 The server is observability and control only and is never required for orchestrator correctness. See
 [reference/http-api](http-api.md).
 
@@ -547,12 +550,15 @@ reducing exposed tools and credentials) is part of the safety model, not an afte
 | Reconciliation refresh failure | Keep current workers, retry next tick. |
 | Observability failure | Never crash the orchestrator or affect dispatch. |
 
-Restart recovery is in-memory by design: no retry timers and no running sessions are restored. The
-service recovers through startup terminal-workspace cleanup, a fresh poll of active issues, and
-re-dispatch of eligible work. Operators steer behavior by editing `WORKFLOW.md` (re-applied live) or
-by changing tracker states: moving an issue to a terminal state stops its run and cleans the
-workspace at reconcile; moving it to a non-active state stops the run without cleanup. See
-[troubleshooting](../troubleshooting.md).
+Restart recovery depends on the selected claim store. In-memory mode starts with an empty retry
+schedule and no live agent sessions; it recovers through startup terminal-workspace cleanup, a fresh
+poll of active issues, and re-dispatch of eligible work. Durable claim stores hydrate retry state and claim
+ownership from the store so crash recovery and retry durability survive process restart. Live agent
+sessions are not restored. Operators steer behavior by editing `WORKFLOW.md` (re-applied live) or by
+changing tracker states: moving an issue to a terminal state stops its run and cleans the workspace
+at reconcile; moving it to a non-active state stops the run without cleanup. See
+[troubleshooting](../troubleshooting.md) and
+[durable-claims-and-daemon](durable-claims-and-daemon.md).
 
 ## 12. Conformance and tests
 
@@ -591,8 +597,9 @@ guards.
 
 These are specified but not shipped. They live in [roadmap/index](../roadmap/index.md).
 
-- **Durable scheduler state.** Persisting the retry queue and session metadata across restarts.
-  Today the orchestrator state is in-memory only and recovery is tracker-driven.
+- **Live session replay.** Durable claim stores persist retry state and claim ownership when
+  explicitly selected. Reattaching to an interrupted live agent session after a process restart is
+  still future work.
 - **First-class tracker writes in the orchestrator.** State transitions and comments from the
   orchestrator rather than only through agent tools.
 - **Additional out-of-tree worker drivers.** The worker driver interface and the worker pool are

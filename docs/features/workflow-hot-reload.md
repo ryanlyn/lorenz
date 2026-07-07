@@ -115,7 +115,7 @@ The distinction that matters:
 
 The hard guard is `worker.worker_pool.max_in_flight` (the slots-per-machine
 count). A live daemon cannot raise it past the startup gate. If a reload sets
-`max_in_flight` above 1 without the per-run-endpoint capability or the
+`max_in_flight` above 1 without per-run claim enforcement or the
 `co_residence` opt-in, the gate rejects the candidate settings, the reload fails,
 and `workflow_reload_failed` carries the gate's message. This stops a live edit
 from widening the shared-machine blast radius that the startup gate already

@@ -11,6 +11,7 @@
   "dependencies": {
     "@lorenz/domain": "workspace:*",
     "@lorenz/humanize": "workspace:*",
-    "@lorenz/runtime-events": "workspace:*"
+    "@lorenz/runtime-events": "workspace:*",
+    "zod": "catalog:"
   }
 }

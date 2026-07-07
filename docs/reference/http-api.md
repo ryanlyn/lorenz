@@ -10,7 +10,7 @@ The server is a Hono app started by `startObservabilityServer(runtime, options)`
 - **Method fallback.** Each concrete route registers an `app.all(...)` fallback that returns `405 method_not_allowed` for the wrong verb. An unknown path returns `404 not_found` ("Route not found").
 - **Snapshot reads.** State-bearing routes call `runtime.snapshot()`. If that throws, the error code maps to `snapshot_timeout` (when the underlying code or message is `snapshot_timeout` / `timeout`) or `snapshot_unavailable` (everything else). Each route handles that failure its own way, documented per route.
 - **Path parameters** are percent-decoded with `decodeURIComponent`. Malformed encoding returns `400 invalid_path_parameter` ("Malformed percent encoding in path parameter").
-- **Route order.** Trace routes and `/api/v1/state|runs|refresh` register before the catch-all `GET /api/v1/:identifier`, so a literal path like `/api/v1/tickets` never falls into the identifier route.
+- **Route order.** Trace routes and `/api/v1/state|runs|refresh|daemon|stop` register before the catch-all `GET /api/v1/:identifier`, so a literal path like `/api/v1/tickets` never falls into the identifier route.
 
 ## REST routes
 
@@ -22,6 +22,8 @@ The server is a Hono app started by `startObservabilityServer(runtime, options)`
 | `GET` | `/api/v1/state` | Live ops state (running / retrying / blocked) |
 | `GET` | `/api/v1/runs` | Run list and run views |
 | `POST` | `/api/v1/refresh` | Queue an out-of-band poll + reconcile |
+| `GET` | `/api/v1/daemon` | Daemon owner, endpoint, heartbeat, and leadership status |
+| `POST` | `/api/v1/stop` | Request graceful daemon shutdown |
 | `GET` | `/api/v1/:issue_identifier` | Detail for one in-flight issue |
 | `GET` | `/api/v1/issues/recent` | Recent issues from the issue store |
 | `GET` | `/api/v1/issues/search` | Search issues by query |
@@ -59,7 +61,21 @@ The live ops snapshot used by the dashboard Overview. On success returns `200` w
     "total_tokens": 0,
     "seconds_running": 0
   },
-  "rate_limits": null
+  "rate_limits": null,
+  "claim_store": {
+    "kind": "memory",
+    "owner_id": "memory:12345:1",
+    "capabilities": {
+      "crash_recovery": false,
+      "shared_across_processes": false,
+      "retry_durability": false
+    },
+    "hydrated_at": "2026-06-17T12:00:00.000Z",
+    "transactions_applied": 0,
+    "last_operation": null,
+    "last_checkpoint_at": null
+  },
+  "daemon": null
 }
 ```
 
@@ -81,6 +97,16 @@ Each `RetryEntryPayload` has: `issue_id`, `issue_identifier`, `issue_url`, `atte
 Each `BlockedEntryPayload` has: `issue_id`, `issue_identifier`, `issue_url`, `state`, `reason`, `label`, `worker_host`. The `reason` is the raw enum (`global_concurrency_cap`, `local_concurrency_cap`, `worker_host_capacity`); `label` is the human form (`global concurrency cap`, `local state concurrency cap`, `worker host capacity`).
 
 `tokens` is `{input_tokens, output_tokens, total_tokens}`. `usage_totals` adds `seconds_running`.
+
+`claim_store` reports the runtime-owned orchestrator's claim-store status. The default in-memory
+store reports `kind: "memory"` with all durability capabilities set to `false`. Durable stores use
+the same shape with their own `kind`, `owner_id`, `capabilities`, `hydrated_at`,
+`transactions_applied`, `last_operation`, and `last_checkpoint_at`. The field is `null` only when
+the mounted runtime source has no claim-store status.
+
+`daemon` is `null` when the runtime source has no daemon status. Long-running CLI daemons report
+`owner_id`, `pid`, `hostname`, `started_at`, `workflow_path`, `workspace_root`, `lock_path`,
+`endpoint`, `heartbeat_at`, `heartbeat_age_ms`, `stale`, and `leadership_store_kind`.
 
 ### GET /api/v1/runs
 
@@ -123,7 +149,7 @@ On a snapshot error this route returns `503` with code `snapshot_timeout` or `sn
 
 ### POST /api/v1/refresh
 
-Queues an immediate poll and reconcile pass rather than waiting for the next scheduled poll. On success returns `202`:
+Queues an immediate poll and reconcile pass rather than waiting for the next scheduled poll. Requires `Authorization: Bearer <control-token>`. On success returns `202`:
 
 ```json
 {
@@ -134,7 +160,46 @@ Queues an immediate poll and reconcile pass rather than waiting for the next sch
 }
 ```
 
-`coalesced` is `true` when a poll is already in flight; no new poll starts. If the runtime cannot accept the request, returns `503 orchestrator_unavailable` ("Orchestrator is unavailable").
+`coalesced` is `true` when a poll is already in flight; no new poll starts. If the runtime cannot accept the request, returns `503 orchestrator_unavailable` ("Orchestrator is unavailable"). If the bearer token is missing or invalid, returns `401 unauthorized`.
+
+### GET /api/v1/daemon
+
+Returns daemon leadership status for a long-running CLI daemon:
+
+```json
+{
+  "owner_id": "hostname:12345:abcdef",
+  "pid": 12345,
+  "hostname": "hostname",
+  "started_at": "2026-06-17T12:00:00.000Z",
+  "workflow_path": "/repo/WORKFLOW.md",
+  "workspace_root": "/repo",
+  "lock_path": "/repo/.lorenz/daemon/<workflow-sha256>.lock.json",
+  "endpoint": { "kind": "http", "address": "http://127.0.0.1:4040/" },
+  "heartbeat_at": "2026-06-17T12:00:10.000Z",
+  "heartbeat_age_ms": 25,
+  "stale": false,
+  "leadership_store_kind": "local-file"
+}
+```
+
+If daemon status is unavailable, returns `503 daemon_status_unavailable` ("Daemon status
+unavailable"). This can happen when a non-daemon runtime source is mounted into the observability
+server.
+
+### POST /api/v1/stop
+
+Requests a graceful daemon shutdown. Requires `Authorization: Bearer <control-token>`. On success returns `202`:
+
+```json
+{
+  "requested_at": "2026-06-17T12:00:00.000Z",
+  "stopping": true
+}
+```
+
+If the mounted runtime source does not expose stop control, returns
+`503 daemon_control_unavailable` ("Daemon control unavailable"). If the bearer token is missing or invalid, returns `401 unauthorized`.
 
 ### GET /api/v1/:issue_identifier
 
@@ -222,7 +287,10 @@ The `OpsStatePayload`, `RunningEntryPayload`, `RetryEntryPayload`, and `BlockedE
 | `not_found` | 404 | any unknown path | No matching route |
 | `snapshot_timeout` | 200 / 503 | `state`, `runs` | Snapshot read timed out |
 | `snapshot_unavailable` | 200 / 503 | `state`, `runs` | Snapshot read failed |
+| `unauthorized` | 401 | `refresh`, `stop` | Missing or invalid daemon control token |
 | `orchestrator_unavailable` | 503 | `refresh` | Runtime could not queue the refresh |
+| `daemon_status_unavailable` | 503 | `daemon` | No daemon status hook or snapshot status was available |
+| `daemon_control_unavailable` | 503 | `stop` | The mounted runtime source cannot accept stop requests |
 | `issue_not_found` | 404 | `:issue_identifier` | No running or retrying entry matches |
 | `run_not_found` | 404 | `runs?id=` | No run matches the id |
 | `invalid_path_parameter` | 400 | path-param routes | Malformed percent encoding in the path |

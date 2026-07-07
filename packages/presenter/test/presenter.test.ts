@@ -25,6 +25,7 @@ test("presenter preserves blocked dispatches, retry errors, run costs, retries, 
     last_operation: "finish",
     last_checkpoint_at: "2026-05-06T00:00:05.000Z",
   });
+  assert.equal(state.daemon, null);
   assert.deepEqual((state.running as any[])[0] as Record<string, unknown>, {
     issue_id: "running-1",
     issue_identifier: "MT-RUNNING",

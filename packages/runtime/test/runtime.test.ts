@@ -301,6 +301,44 @@ test("runtime accepts an injected claim store for the default orchestrator", () 
   });
 });
 
+test("runtime rejects refresh requests after stop", () => {
+  const runtime = new LorenzRuntime(
+    runtimeOptions({
+      workflow: workflowFixture(),
+      client: {
+        fetchCandidateIssues: async () => [],
+        fetchIssuesByIds: async () => [],
+      },
+    }),
+  );
+
+  runtime.stop();
+
+  assert.throws(() => runtime.requestRefresh(), /runtime_stopped/);
+});
+
+test("runtime start honors a stop requested before startup", async () => {
+  let fetches = 0;
+  const runtime = new LorenzRuntime(
+    runtimeOptions({
+      workflow: workflowFixture(),
+      client: {
+        fetchCandidateIssues: async () => {
+          fetches += 1;
+          return [];
+        },
+        fetchIssuesByIds: async () => [],
+      },
+    }),
+  );
+
+  runtime.stop();
+  await runtime.start({ once: true });
+
+  assert.equal(fetches, 0);
+  assert.equal(runtime.snapshot().appStatus, "stopping");
+});
+
 test("runtime abandons a claim when owner heartbeat startup fails before runner starts", async () => {
   const issue = issueFixture("issue-heartbeat-start-failure", "MT-HEARTBEAT-START-FAILURE");
   const store = new FailingHeartbeatClaimStore(createState(), {

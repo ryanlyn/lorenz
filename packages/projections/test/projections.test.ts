@@ -135,6 +135,20 @@ test("ProjectionActor processes runtime snapshot into projection", () => {
       secondsRunning: 120,
     }),
     rateLimits: { remaining: 10 },
+    daemon: {
+      ownerId: "owner-daemon",
+      pid: 123,
+      hostname: "host-a",
+      startedAt: "2026-01-01T00:00:00.000Z",
+      workflowPath: "/home/user/workflow.md",
+      workspaceRoot: "/home/user",
+      lockPath: "/home/user/.lorenz/daemon/test.lock.json",
+      endpoint: { kind: "http", address: "http://127.0.0.1:4040/" },
+      heartbeatAt: "2026-01-01T00:00:05.000Z",
+      heartbeatAgeMs: 1000,
+      stale: false,
+      leadershipStoreKind: "local-file",
+    },
     logFile: "/tmp/lorenz.log",
   });
 
@@ -155,6 +169,8 @@ test("ProjectionActor processes runtime snapshot into projection", () => {
   assert.equal(snap.blocked[0]!.reason, "global_concurrency_cap");
   assert.equal(snap.usageTotals.totalTokens, 700);
   assert.deepEqual(snap.rateLimits, { remaining: 10 });
+  assert.equal(snap.daemon?.ownerId, "owner-daemon");
+  assert.equal(snap.daemon?.endpoint.address, "http://127.0.0.1:4040/");
   assert.equal(snap.logFile, "/tmp/lorenz.log");
 });
 
