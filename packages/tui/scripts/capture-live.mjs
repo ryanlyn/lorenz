@@ -4,6 +4,13 @@
 // (e.g. `chromium --headless --screenshot=board.png board.html`).
 //
 // Usage: node packages/tui/scripts/capture-live.mjs <output-dir>
+//
+// The `readme` view — a 32-agent fleet at ~90k tps with cumulative usage in
+// the hundreds of millions of tokens — is the source of
+// docs/images/lorenz-tui.png: screenshot readme.html at 2x device scale,
+// clipped to the .win element, and quantize to a 256-color palette.
+// Golden fixtures live in test/fixtures/dashboard/ and regenerate with
+// `UPDATE_DASHBOARD_FIXTURES=1 vitest run packages/tui/test/tui.test.ts`.
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
