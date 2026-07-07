@@ -18,22 +18,24 @@ A few facts hold across all three views:
 - `recentEvents` is capped at the last 20 entries, newest first.
 - `runHistory` is capped at the last 50 entries, newest first.
 - The presenter sets `cost.estimated_cost_usd` to `null` everywhere. Cost is reported from token totals, not dollars.
-- The snapshot's `reserving` field (slots mid-acquire) is carried by projections but not surfaced in any operator view.
+- The snapshot's `reserving` field (slots mid-acquire) is carried by projections and surfaced only in the TUI (as the `rsv` lane); the web dashboard and `lorenz runs` do not show it.
 
 ## The terminal dashboard (TUI)
 
 The TUI is on by default. It renders only when `process.stdout.isTTY` is true. Pass `--no-tui` to disable it; without a TTY the runtime writes a JSON snapshot to stdout on every update instead.
 
-It refreshes every 250ms. Throughput is a 5-second rolling window, recomputed at most once per wall-clock second. The header shows up to 10 agents.
+It refreshes every 250ms. Throughput is a 5-second rolling window, recomputed at most once per wall-clock second.
 
 ![Lorenz terminal dashboard](images/lorenz-tui.png)
 
 From top to bottom:
 
-- **Header.** Five metric panels: Agents (running count against the cap), Throughput (rolling tokens per second), Runtime, Tokens, and Rate Limits.
-- **Running.** One row per active session. Each row is colored by its last event: `turn_started` is green, `turn_completed` is magenta, any other event is blue, and a row with no event yet is red.
-- **Backoff queue.** The retry/backoff entries waiting to be redispatched.
-- **Dispatch blocks.** Candidates the coordinator declined to start, labeled by reason: `global concurrency cap`, `local state concurrency cap`, or `worker host capacity`.
+- **Fleet status bar.** One stacked pipeline bar spanning the full width: terminal states reached in this orchestrator instantiation (muted, with the ✓/✗ split in the legend), active runs, pending lanes (reserving, retrying, blocked), and the remaining dispatchable backlog (hollow).
+- **Identity and vitals.** `LORENZ` plus the configured tracker and agent kinds on the left; uptime, poll countdown, and the dashboard address on the right. The legend line below carries the concurrency cap (`N/max active`) and the paired throughput charts: a moving 60-second token-rate histogram beside the tokens-per-second figure, and a cumulative-total histogram beside the running token total.
+- **Flight board.** One row per issue in the pipeline. Running, reserving, retrying, and blocked are lanes (`run` / `rsv` / `retry` / `block`) in a single table with issue title, tracker stage, agent kind, worker host, age and turn count, token total, a live per-run rate histogram when width allows, and the humanized last activity. The layout is responsive: lower-priority columns drop as the terminal narrows (the lane marker and row color keep encoding the lane), and when the terminal height is known the table windows itself around the selection cursor (`↑ N more` / `↓ N more` with lane counts), so a fleet of 100 agents fits any viewport.
+- **Event tape.** The most recent humanized runtime events, newest at the bottom.
+
+In a TTY the board is interactive: `↑/↓` move the cursor and `⏎` (or digits `1-9`) narrows into a detail card for one running agent — session, pid, workspace, issue URL, retry attempt, the run's token-rate and cumulative histograms, and the event tape filtered to that agent. `←/→` cycle between agents, `esc` returns to the board, and `q` quits.
 
 The `observability.*` config keys (`dashboard_enabled`, `refresh_ms`, `render_interval_ms`) are parsed and defaulted (`true`, `1000`, `16`), but the TUI uses the hardcoded 250ms refresh and 5-second throughput window. `refresh_ms` and `render_interval_ms` are not consumed by the TUI.
 

@@ -94,6 +94,8 @@ a web dashboard served by the observability API.
 
 ![Lorenz terminal dashboard](docs/images/lorenz-tui.png)
 
+_The flight board: every issue in the pipeline is one row in a single lane table, windowed around the cursor — a fleet of 100 concurrent agents fits any terminal._
+
 **Web dashboard**
 
 ![Lorenz web dashboard](docs/images/lorenz-dashboard.png)
@@ -143,8 +145,10 @@ The `skills/` directory holds orchestration skills (`lorenz-commit`, `lorenz-pus
 
 ## Observability
 
-The terminal dashboard shows agents, throughput, runtime, token usage, rate limits, sessions, the
-retry queue, and dispatch blocks. The web dashboard exposes the same runtime snapshot over a local
+The terminal dashboard is a flight board: every issue in the pipeline (running, reserving,
+retrying, blocked) is one row in a single lane table under a fleet status bar with throughput,
+token, and rate-limit vitals, and any running agent can be narrowed into an interactive detail
+card. The web dashboard exposes the same runtime snapshot over a local
 HTTP server, started with `--port` or `server.port`. Routes, the WebSocket stream, and `/mcp` tool
 serving are documented in [Observability](./docs/observability.md).
 
