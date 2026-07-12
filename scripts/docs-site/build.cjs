@@ -61,6 +61,9 @@ for (const p of pages) {
   let body = renderMarkdown(p.abs)
   body = body.replace(/href="([^"]+?)\.md(#[^"]*)?"/g, (m, t, a) => t.startsWith('http') ? m : `href="${t}.html${a || ''}"`)
   body = body.replace(/href="\.\.\/README\.html"/g, 'href="https://github.com/ryanlyn/lorenz"')
+  // The home page renders its own hero with the same title and lede, so drop
+  // the leading <h1> and intro paragraph from the README body.
+  if (p.rel === 'README.md') body = body.replace(/^\s*<h1[^>]*>[\s\S]*?<\/h1>\s*<p>[\s\S]*?<\/p>/, '')
   p.body = body
 }
 

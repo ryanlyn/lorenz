@@ -539,6 +539,126 @@ html[data-theme="dark"] .theme-toggle .moon{display:inline}
 .btn--ghost{background:var(--panel);color:var(--text);border:1px solid var(--border-strong)}
 .btn--ghost:hover{text-decoration:none;border-color:var(--accent);color:var(--accent)}
 
+/* terminal mock */
+.term{
+  margin-top:30px;border-radius:var(--radius);overflow:hidden;
+  border:1px solid var(--code-border);background:var(--code-bg);
+  box-shadow:var(--shadow);
+}
+.term__bar{
+  display:flex;align-items:center;gap:12px;
+  padding:10px 16px;border-bottom:1px solid rgba(252,252,250,.07);
+}
+.term__dots{
+  width:11px;height:11px;border-radius:50%;background:#FF6188;flex:0 0 auto;
+  box-shadow:18px 0 0 #FFD866,36px 0 0 #A9DC76;margin-right:36px;opacity:.9;
+}
+.term__title{
+  font-family:var(--font-mono);font-size:.72rem;color:rgba(252,252,250,.45);
+  letter-spacing:.04em;
+}
+.term__body{
+  margin:0;padding:16px 18px 18px;overflow-x:auto;
+  font-family:var(--font-mono);font-size:.82rem;line-height:1.75;color:var(--code-text);
+  scrollbar-width:thin;scrollbar-color:rgba(252,252,250,.2) transparent;
+}
+.t-green{color:#A9DC76}.t-cyan{color:#78DCE8}.t-yellow{color:#FFD866}
+.t-purple{color:#AB9DF2}.t-pink{color:#FF6188}.t-dim{color:#727072}
+
+/* ---------- landing page (home) ---------- */
+.topbar-link{
+  font-family:var(--font-mono);font-size:.8rem;color:var(--text-soft);
+  padding:6px 10px;border-radius:8px;
+}
+.topbar-link:hover{color:var(--accent);text-decoration:none}
+
+body.is-home{position:relative}
+body.is-home::before{
+  content:"";position:absolute;top:0;left:0;right:0;height:660px;pointer-events:none;
+  background:
+    radial-gradient(560px 380px at 78% -60px,var(--accent-soft),transparent 70%),
+    radial-gradient(520px 360px at 4% 40px,var(--accent-2-soft),transparent 72%);
+}
+.landing{position:relative;max-width:1160px;margin:0 auto;padding:0 28px 72px}
+
+.hero--landing{
+  display:grid;grid-template-columns:minmax(0,1.05fr) minmax(0,.95fr);
+  gap:48px;align-items:center;
+  margin:0;padding:76px 0 68px;border-bottom:1px solid var(--border);
+}
+.hero--landing h1{font-size:clamp(2.6rem,5.2vw,3.85rem)}
+.hero--landing .hero__lede{font-size:1.13rem}
+.hero__demo .term{margin-top:0}
+
+.landing-section{padding:58px 0 6px}
+.landing-section__eyebrow{
+  font-family:var(--font-mono);font-size:.7rem;font-weight:600;
+  letter-spacing:.1em;text-transform:uppercase;color:var(--accent);margin:0 0 10px;
+}
+.landing-section__title{
+  font-family:var(--font-display);font-size:clamp(1.5rem,2.6vw,2rem);
+  letter-spacing:-.025em;font-weight:600;margin:0;color:var(--text);
+}
+.landing-section__lede{color:var(--text-soft);max-width:64ch;margin:12px 0 0;line-height:1.6}
+
+.steps{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:16px;margin-top:30px}
+.step{
+  padding:18px 18px 20px;border:1px solid var(--border);border-radius:var(--radius);
+  background:var(--panel);transition:border-color .15s,transform .12s;
+}
+.step:hover{border-color:var(--border-strong);transform:translateY(-2px)}
+.step__n{font-family:var(--font-mono);font-size:.72rem;font-weight:600;color:var(--accent-2);letter-spacing:.08em}
+.step__title{font-family:var(--font-display);font-size:1.06rem;font-weight:600;letter-spacing:-.01em;margin:.5em 0 .35em;color:var(--text)}
+.step__body{margin:0;font-size:.875rem;color:var(--text-soft);line-height:1.55}
+
+.paths{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;margin-top:30px}
+.path-card{
+  padding:22px 22px 20px;border:1px solid var(--border);border-radius:var(--radius);
+  background:var(--panel);transition:border-color .15s;
+}
+.path-card:hover{border-color:var(--border-strong)}
+.path-card__title{font-family:var(--font-display);font-size:1.14rem;font-weight:600;letter-spacing:-.015em;margin:0 0 4px;color:var(--text)}
+.path-card__desc{margin:0 0 14px;font-size:.9rem;color:var(--text-mute)}
+.path-card__links{list-style:none;margin:0;padding:0;display:flex;flex-wrap:wrap;gap:8px}
+.path-card__links a{
+  display:inline-block;font-family:var(--font-mono);font-size:.78rem;
+  padding:4px 11px;border:1px solid var(--border);border-radius:999px;
+  color:var(--text-soft);background:var(--bg-soft);
+  transition:color .12s,border-color .12s;
+}
+.path-card__links a:hover{color:var(--accent);border-color:var(--accent);text-decoration:none}
+
+.peek{
+  display:block;margin-top:26px;border:1px solid var(--border);border-radius:var(--radius);
+  overflow:hidden;box-shadow:var(--shadow);
+  transition:border-color .15s,transform .15s;
+}
+.peek:hover{border-color:var(--accent);transform:translateY(-2px)}
+.peek img{display:block;width:100%;height:auto}
+
+.explore{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:16px;margin-top:30px}
+.explore-card{padding:18px 20px;border:1px solid var(--border);border-radius:var(--radius);background:var(--panel)}
+.explore-card__title{
+  font-family:var(--font-mono);font-size:.68rem;font-weight:600;
+  letter-spacing:.1em;text-transform:uppercase;color:var(--text-faint);margin:0 0 10px;
+}
+.explore-card__links{list-style:none;margin:0;padding:0}
+.explore-card__links a{display:block;padding:3.5px 0;font-size:.86rem;color:var(--text-soft)}
+.explore-card__links a:hover{color:var(--accent);text-decoration:none}
+
+.doc-footer--landing{margin-top:64px}
+
+@media (max-width:980px){
+  .hero--landing{grid-template-columns:minmax(0,1fr);gap:34px;padding:52px 0 52px}
+  .steps{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .paths{grid-template-columns:minmax(0,1fr)}
+}
+@media (max-width:560px){
+  .steps{grid-template-columns:minmax(0,1fr)}
+  .landing{padding:0 18px 56px}
+  .topbar-link{display:none}
+}
+
 /* ---------- mobile scrim ---------- */
 .scrim{
   display:none;position:fixed;inset:var(--topbar-h) 0 0;z-index:55;
@@ -658,6 +778,176 @@ const SCRIPT = `
 })();
 `
 
+/* ---------- home landing page data ---------- */
+
+const STEPS = [
+  {
+    n: '01',
+    title: 'Watch',
+    body: 'A tracker provider polls Linear, Jira, Slack, or a local board for issues in active states.',
+  },
+  {
+    n: '02',
+    title: 'Prepare',
+    body: 'Each claimed issue gets an isolated workspace on a host, SSH fleet, warm pool, or Docker worker.',
+  },
+  {
+    n: '03',
+    title: 'Run',
+    body: 'Codex or Claude works the issue over the Agent Client Protocol, turn by turn, with tracker tools.',
+  },
+  {
+    n: '04',
+    title: 'Report',
+    body: 'Progress, PRs, and state changes flow back to the tracker, the dashboard, and run history.',
+  },
+]
+
+const PATHS = [
+  {
+    title: 'Operators & users',
+    desc: 'Run Lorenz against a tracker and keep the fleet healthy.',
+    links: [
+      ['Getting started', 'getting-started.html'],
+      ['How it works', 'how-it-works.html'],
+      ['Workflows', 'workflows.html'],
+      ['CLI', 'cli.html'],
+      ['Troubleshooting', 'troubleshooting.html'],
+    ],
+  },
+  {
+    title: 'Extension authors',
+    desc: 'Add a tracker, tool pack, agent executor, or worker driver.',
+    links: [
+      ['Architecture', 'architecture.html'],
+      ['Extensions overview', 'extensions/index.html'],
+      ['Tracker provider', 'extensions/tracker-provider.html'],
+      ['Tool pack', 'extensions/tool-pack.html'],
+      ['Worker driver', 'extensions/worker-driver.html'],
+    ],
+  },
+  {
+    title: 'Integrators & spec readers',
+    desc: 'The exact contracts: configuration, APIs, events, and the spec.',
+    links: [
+      ['Configuration', 'reference/configuration.html'],
+      ['CLI reference', 'reference/cli.html'],
+      ['HTTP API', 'reference/http-api.html'],
+      ['Events', 'reference/events.html'],
+      ['Spec', 'reference/spec.html'],
+    ],
+  },
+  {
+    title: 'Evaluators',
+    desc: 'Decide whether Lorenz fits your team and your trust boundary.',
+    links: [
+      ['How it works', 'how-it-works.html'],
+      ['Architecture', 'architecture.html'],
+      ['Security', 'security.html'],
+      ['Roadmap', 'roadmap/index.html'],
+    ],
+  },
+]
+
+const TERMINAL = `<div class="term" role="img" aria-label="Terminal showing a Lorenz daemon dispatching issues to agents">
+  <div class="term__bar">
+    <span class="term__dots" aria-hidden="true"></span>
+    <span class="term__title">lorenz &mdash; daemon</span>
+  </div>
+  <pre class="term__body"><span class="t-dim">$</span> lorenz up
+<span class="t-green">✓</span> workflow <span class="t-cyan">WORKFLOW.md</span> loaded    <span class="t-dim">linear · claude · pool:4</span>
+<span class="t-green">✓</span> tracker connected             <span class="t-dim">3 issues in Todo</span>
+<span class="t-cyan">→</span> <span class="t-purple">LOR-142</span> workspace prepared    <span class="t-dim">worker-2</span>
+<span class="t-yellow">●</span> <span class="t-purple">LOR-143</span> claude · turn 4       <span class="t-dim">worker-1</span>
+<span class="t-green">✓</span> <span class="t-purple">LOR-141</span> PR #87 opened         <span class="t-dim">→ In Review</span></pre>
+</div>`
+
+function renderLanding({ siteTitle, nav, relRoot }) {
+  const steps = STEPS.map(
+    (s) => `<div class="step">
+  <span class="step__n">${s.n}</span>
+  <h3 class="step__title">${escapeHtml(s.title)}</h3>
+  <p class="step__body">${escapeHtml(s.body)}</p>
+</div>`
+  ).join('\n')
+
+  const paths = PATHS.map(
+    (p) => `<div class="path-card">
+  <h3 class="path-card__title">${escapeHtml(p.title)}</h3>
+  <p class="path-card__desc">${escapeHtml(p.desc)}</p>
+  <ul class="path-card__links">${p.links
+    .map(
+      ([t, href]) =>
+        `<li><a href="${relRoot}${escapeAttr(href)}">${escapeHtml(t)}</a></li>`
+    )
+    .join('')}</ul>
+</div>`
+  ).join('\n')
+
+  const explore = nav
+    .map(
+      (grp) => `<div class="explore-card">
+  <h3 class="explore-card__title">${escapeHtml(grp.group)}</h3>
+  <ul class="explore-card__links">${(grp.items || [])
+    .filter((it) => it.path !== 'README.html')
+    .map(
+      (it) =>
+        `<li><a href="${relRoot}${escapeAttr(it.path)}">${escapeHtml(
+          it.title
+        )}</a></li>`
+    )
+    .join('')}</ul>
+</div>`
+    )
+    .join('\n')
+
+  return `<section class="hero hero--landing">
+  <div class="hero__copy">
+    <span class="hero__eyebrow"><span class="dot"></span>Control plane for coding agents</span>
+    <h1>Tracker issues in. <span class="accent">Agent runs out.</span></h1>
+    <p class="hero__lede">Lorenz watches your tracker for ready issues, prepares an isolated workspace for each one, runs Codex or Claude over the Agent Client Protocol, and reports back where your team already lives.</p>
+    <div class="hero__cta">
+      <a class="btn btn--primary" href="${relRoot}getting-started.html">Get started ${ARROW_SVG}</a>
+      <a class="btn btn--ghost" href="${relRoot}how-it-works.html">How it works</a>
+      <a class="btn btn--ghost" href="https://github.com/ryanlyn/lorenz">GitHub</a>
+    </div>
+  </div>
+  <div class="hero__demo">${TERMINAL}</div>
+</section>
+
+<section class="landing-section">
+  <p class="landing-section__eyebrow">The loop</p>
+  <h2 class="landing-section__title">From issue to pull request</h2>
+  <div class="steps">${steps}</div>
+</section>
+
+<section class="landing-section">
+  <p class="landing-section__eyebrow">Start here</p>
+  <h2 class="landing-section__title">Pick the path that matches what you came to do</h2>
+  <div class="paths">${paths}</div>
+</section>
+
+<section class="landing-section">
+  <p class="landing-section__eyebrow">Observability</p>
+  <h2 class="landing-section__title">Watch every run as it happens</h2>
+  <p class="landing-section__lede">The dashboard tracks issues, runs, and workers live; <a href="${relRoot}observability.html">run history and TraceViz</a> keep the post-mortem record.</p>
+  <a class="peek" href="${relRoot}observability.html">
+    <img src="${relRoot}images/lorenz-dashboard.png" alt="The Lorenz dashboard showing live issues, runs, and workers" loading="lazy">
+  </a>
+</section>
+
+<section class="landing-section">
+  <p class="landing-section__eyebrow">The docs tree</p>
+  <h2 class="landing-section__title">Explore the documentation</h2>
+  <div class="explore">${explore}</div>
+</section>
+
+<footer class="doc-footer doc-footer--landing">
+  <span>&copy; ${new Date().getFullYear()} ${escapeHtml(siteTitle)} · derives from <a href="https://github.com/openai/symphony">OpenAI's Symphony</a></span>
+  <span>Issues in, agent runs out.</span>
+</footer>`
+}
+
 const SUN_SVG =
   '<svg class="sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4.2"/><path d="M12 2v2.4M12 19.6V22M4.2 4.2l1.7 1.7M18.1 18.1l1.7 1.7M2 12h2.4M19.6 12H22M4.2 19.8l1.7-1.7M18.1 5.9l1.7-1.7"/></svg>'
 const MOON_SVG =
@@ -691,23 +981,7 @@ function render({
     ? `${escapeHtml(siteTitle)} Docs`
     : `${escapeHtml(pageTitle)} - ${escapeHtml(siteTitle)} Docs`
 
-  let hero = ''
-  if (isHome) {
-    hero = `<div class="hero">
-  <span class="hero__eyebrow"><span class="dot"></span>Control plane for coding agents</span>
-  <h1>Tracker issues in. <span class="accent">Agent runs out.</span></h1>
-  <p class="hero__lede">Lorenz is a control plane that turns tracker issues into coding-agent runs. It dispatches the work to a fleet of agents and isolated workers, then reports back where your team already lives.</p>
-  <div class="hero__cta">
-    <a class="btn btn--primary" href="${relRoot}getting-started.html">Get started ${ARROW_SVG}</a>
-    <a class="btn btn--ghost" href="${relRoot}architecture.html">How it works</a>
-  </div>
-</div>`
-  }
-
-  return `<!doctype html>
-<html lang="en" data-theme="dark">
-<head>
-<meta charset="utf-8">
+  const head = `<meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>${title}</title>
 <meta name="color-scheme" content="dark light">
@@ -718,19 +992,44 @@ function render({
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;450;500;600;650;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
-<style>${STYLE}</style>
-</head>
-<body>
-<a class="skip-link" href="#content-main">Skip to content</a>
-<header class="topbar">
-  <button id="menu-btn" class="icon-btn menu-btn" aria-label="Toggle navigation" aria-controls="sidebar">${MENU_SVG}</button>
+<style>${STYLE}</style>`
+
+  const topbar = (withMenu) => `<header class="topbar">
+  ${withMenu ? `<button id="menu-btn" class="icon-btn menu-btn" aria-label="Toggle navigation" aria-controls="sidebar">${MENU_SVG}</button>` : ''}
   <a class="brand" href="${relRoot}README.html" aria-label="${escapeAttr(siteTitle)} docs home">
     <span class="brand__mark" aria-hidden="true"></span>
     <span class="brand__name">${escapeHtml(siteTitle)}</span>
     <span class="brand__tag">Docs</span>
   </a>
+  <a class="topbar-link" href="https://github.com/ryanlyn/lorenz">GitHub</a>
   <button id="theme-toggle" class="icon-btn theme-toggle" aria-label="Toggle dark mode" title="Toggle theme">${SUN_SVG}${MOON_SVG}</button>
-</header>
+</header>`
+
+  if (isHome) {
+    return `<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+${head}
+</head>
+<body class="is-home">
+<a class="skip-link" href="#content-main">Skip to content</a>
+${topbar(false)}
+<main class="landing" id="content-main">
+${renderLanding({ siteTitle, nav: navArr, relRoot })}
+</main>
+<script>${SCRIPT}</script>
+</body>
+</html>`
+  }
+
+  return `<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+${head}
+</head>
+<body>
+<a class="skip-link" href="#content-main">Skip to content</a>
+${topbar(true)}
 
 <div class="scrim" id="scrim" aria-hidden="true"></div>
 
@@ -742,7 +1041,6 @@ function render({
   <main class="content" id="content-main">
     <div class="content-inner">
       ${breadcrumbs}
-      ${hero}
       <article class="prose">
 ${bodyHtml}
       </article>
