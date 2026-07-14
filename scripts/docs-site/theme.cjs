@@ -509,7 +509,7 @@ html[data-theme="dark"] .theme-toggle .moon{display:inline}
 .hero__eyebrow{
   display:inline-flex;align-items:center;gap:8px;
   font-family:var(--font-mono);
-  font-size:.7rem;font-weight:600;letter-spacing:.06em;text-transform:uppercase;
+  font-size:.78rem;font-weight:600;letter-spacing:.03em;
   color:var(--accent);background:var(--accent-soft);
   padding:5px 12px;border-radius:7px;margin-bottom:20px;
 }
@@ -517,6 +517,7 @@ html[data-theme="dark"] .theme-toggle .moon{display:inline}
   width:7px;height:7px;border-radius:50%;background:var(--accent-2);
   box-shadow:0 0 0 3px var(--accent-2-soft);
 }
+.hero__eyebrow em{font-style:italic;color:var(--accent-2)}
 .hero h1{
   font-family:var(--font-display);
   font-size:clamp(2.4rem,6vw,3.4rem);line-height:1.04;letter-spacing:-.04em;font-weight:600;
@@ -903,7 +904,7 @@ function renderLanding({ siteTitle, nav, relRoot }) {
 
   return `<section class="hero hero--landing">
   <div class="hero__copy">
-    <span class="hero__eyebrow"><span class="dot"></span>Control plane for coding agents</span>
+    <span class="hero__eyebrow"><span class="dot"></span><span>Human-<em>on</em>-the-loop agents</span></span>
     <h1>Tracker issues in. <span class="accent">Agent runs out.</span></h1>
     <p class="hero__lede">Lorenz watches your tracker for ready issues, prepares an isolated workspace for each one, runs Codex or Claude over the Agent Client Protocol, and reports back where your team already lives.</p>
     <div class="hero__cta">

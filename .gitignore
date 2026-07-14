@@ -28,3 +28,6 @@ log/
 
 # Built documentation site (scripts/docs-site/build.cjs)
 _site/
+
+# fonts fetched by scripts/docs-site/banner.py
+scripts/docs-site/*.ttf
