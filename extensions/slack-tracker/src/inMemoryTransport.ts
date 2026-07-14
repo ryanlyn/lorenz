@@ -11,13 +11,15 @@ interface SeedMessage {
   ts: string;
   text: string;
   user?: string;
+  /** Reactions authored by the BOT (the mirror/marker), as if written in an earlier session. */
   reactions?: string[];
+  /** Reactions authored by humans: visible on the message but never state-bearing. */
+  humanReactions?: string[];
   replies?: SlackThreadReply[];
-  /** Seed the bot's tracking marker, as if the bot had reacted in an earlier session. */
-  botReacted?: boolean;
 }
 
-interface StoredMessage extends SlackMessage {
+interface StoredMessage extends Omit<SlackMessage, "reactions"> {
+  humanReactions: string[];
   thread: SlackThreadReply[];
 }
 
@@ -48,8 +50,8 @@ export class InMemorySlackTransport implements SlackTransport {
           ts: m.ts,
           text: m.text,
           ...(m.user !== undefined ? { user: m.user } : {}),
-          reactions: [...(m.reactions ?? [])],
-          botReacted: m.botReacted ?? false,
+          botReactions: [...(m.reactions ?? [])],
+          humanReactions: [...(m.humanReactions ?? [])],
           thread: (m.replies ?? []).map((r) => ({ ...r })),
         })),
       );
@@ -108,17 +110,16 @@ export class InMemorySlackTransport implements SlackTransport {
 
   async addReaction(channel: string, ts: string, name: string): Promise<void> {
     const msg = (this.messages.get(channel) ?? []).find((m) => m.ts === ts);
-    if (msg) {
-      if (!msg.reactions.includes(name)) msg.reactions.push(name);
-      // This transport acts as the bot, so a reaction it adds is the bot's marker.
-      msg.botReacted = true;
-    }
+    // This transport acts as the bot, so a reaction it adds is bot-authored.
+    if (msg && !msg.botReactions.includes(name)) msg.botReactions.push(name);
     return Promise.resolve();
   }
 
   async removeReaction(channel: string, ts: string, name: string): Promise<void> {
+    // Slack's reactions.remove is self-scoped: it only removes the CALLER's reaction, so a
+    // human-authored one survives (removing an absent one is the benign no_reaction success).
     const msg = (this.messages.get(channel) ?? []).find((m) => m.ts === ts);
-    if (msg) msg.reactions = msg.reactions.filter((r) => r !== name);
+    if (msg) msg.botReactions = msg.botReactions.filter((r) => r !== name);
     return Promise.resolve();
   }
 
@@ -139,10 +140,11 @@ export class InMemorySlackTransport implements SlackTransport {
   }
 
   private snapshot(message: StoredMessage): SlackMessage {
-    const { thread, ...rest } = message;
+    const { thread, humanReactions, ...rest } = message;
     return {
       ...rest,
-      reactions: [...message.reactions],
+      reactions: [...new Set([...message.botReactions, ...humanReactions])],
+      botReactions: [...message.botReactions],
       ...(thread.length > 0
         ? { replyCount: thread.length, latestReply: thread[thread.length - 1]!.ts }
         : {}),

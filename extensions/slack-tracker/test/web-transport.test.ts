@@ -60,6 +60,40 @@ test("listMentions calls conversations.history with auth and parses messages", a
   assert.equal(calls[0]!.auth, "Bearer xoxb-abc");
 });
 
+test("botReactions carries only reactions whose users list includes the bot", async () => {
+  // State derivation reads botReactions exclusively: a human's :white_check_mark: (or a
+  // reaction with no users list at all) must be visible in `reactions` but never state-bearing.
+  const fetchImpl = (async () => {
+    return new Response(
+      JSON.stringify({
+        ok: true,
+        messages: [
+          {
+            ts: "1.1",
+            text: "<@U_BOT> do it",
+            reactions: [
+              { name: "eyes", users: ["U_BOT", "U_HUMAN"], count: 2 },
+              { name: "white_check_mark", users: ["U_HUMAN"], count: 1 },
+              { name: "tada", count: 3 },
+            ],
+          },
+        ],
+      }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+  }) as typeof fetch;
+
+  const settingsWithBot = parseSlackConfig(
+    { tracker: { kind: "slack", channels: ["C1"], bot_user_id: "U_BOT" } },
+    { SLACK_BOT_TOKEN: "xoxb-abc" },
+  );
+  const transport = new SlackWebTransport(settingsWithBot, fetchImpl);
+  const [message] = await transport.listMentions(["C1"]);
+
+  assert.deepEqual(message!.reactions, ["eyes", "white_check_mark", "tada"]);
+  assert.deepEqual(message!.botReactions, ["eyes"]);
+});
+
 test("listMentions filters to the configured bot user when botUserId is set", async () => {
   const fetchImpl = (async () => {
     return new Response(

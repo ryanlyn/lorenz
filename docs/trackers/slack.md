@@ -19,7 +19,8 @@ required config, the status model, and the `slack_*` agent tools. The provider l
   `SLK-C0123456789-1717000000-000100`. It is for reference only and is not a valid `issueId`.
 - Status lives in the thread. The latest ts-ordered status event wins: the bot's own
   `status: <Name>` replies and human `@bot !<command>` mentions are events. Reactions are a
-  bot-owned visibility mirror, not the source of truth.
+  bot-owned visibility mirror, not the source of truth. Only the BOT's own reactions ever read
+  as state; a human's reaction never moves an issue - humans transition with `!` commands.
 - Humans create issues by mentioning the bot. Agents do not. There is no `slack_create_issue`.
 
 ## Setting up the Slack app
@@ -148,8 +149,8 @@ Two event kinds count:
 - **Human `!`-command mentions.** A reply that starts with the bot mention followed by a
   `!`-prefixed body.
 
-If the thread has no status event, state falls back to the reactions when the root is a mention,
-otherwise `Todo`.
+If the thread has no status event, state falls back to the BOT's own reactions when the root is a
+mention, otherwise `Todo`. Human reactions never count toward state.
 
 ### Human commands
 
@@ -179,18 +180,22 @@ During a poll, if a human transition left the bot's managed reaction stale or mi
 mirror reconciles the bot's own reaction once per state change per issue. `reactions.remove` only
 removes the caller's own reaction, so human reactions are never touched.
 
-Mirror updates are frugal and off the dispatch path. Only managed emoji actually observed on the
-message are removed (reaction names are complete in Slack reads, so an unobserved emoji is a
-guaranteed no-op remove), which means a mirror that is merely missing its target costs a single
+Mirror updates are frugal and off the dispatch path. Only the bot's own managed emoji observed on
+the message are removed, so a mirror that is merely missing its target costs a single
 `reactions.add`. Poll-time heals run in a serialized background queue: reaction methods are Slack
 Tier-3 rate-limited, and a cold heal pass over a large backlog (restart, newly watched channel)
 must not stall candidate discovery and dispatch behind 429 backoffs.
 
-Reactions are per-author: the bot cannot add or remove a human's reaction. They cannot carry a
-jointly-edited status, so once any status event exists, reactions stop being the source of truth.
-They are a visibility mirror plus a back-compat fallback for threads with no event. When several
-mapped reactions are present, the most-advanced wins: cancelled outranks done, which outranks in
-progress, which outranks backlog.
+Reactions are per-author: the bot cannot add or remove a human's reaction, so reactions cannot
+carry a jointly-edited status. Consequently only BOT-AUTHORED reactions are ever read as state -
+the fallback for threads with no status event reads the bot's own reactions (the mirror it wrote
+in an earlier session), and a human's reaction is display-only. This keeps state changes auditable
+(a `!` command is a ts-ordered thread event; an emoji is not) and means a random channel member
+cannot silently complete or cancel an issue, bypassing the `users` author allowlist. When several
+of the bot's mapped reactions are present, the most-advanced wins: cancelled outranks done, which
+outranks in progress, which outranks backlog. Bot authorship is derived from each reaction's
+`users` list, which Slack can truncate on heavily-reacted messages; the thread reply always wins
+when one exists.
 
 ## Routing with hashtags
 

@@ -229,8 +229,9 @@ test("slack_read_thread fails when no message exists at the issueId", async () =
 });
 
 test("slack_read_thread fails when the message is not a bot mention", async () => {
+  // A HUMAN's reaction on random chatter is not the bot's tracking marker.
   const transport = new InMemorySlackTransport({
-    C1: [{ ts: "1.1", text: "just chatting, no mention here", reactions: ["eyes"] }],
+    C1: [{ ts: "1.1", text: "just chatting, no mention here", humanReactions: ["eyes"] }],
   });
 
   const result = await executeSlackTool(
@@ -523,8 +524,9 @@ test("slack_comment fails when no message exists at the issueId", async () => {
 });
 
 test("slack_update_status fails when the message is not a bot mention", async () => {
+  // A HUMAN's reaction on random chatter is not the bot's tracking marker.
   const transport = new InMemorySlackTransport({
-    C1: [{ ts: "1.1", text: "just chatting, no mention here", reactions: ["eyes"] }],
+    C1: [{ ts: "1.1", text: "just chatting, no mention here", humanReactions: ["eyes"] }],
   });
 
   const result = await executeSlackTool(
@@ -656,8 +658,7 @@ test("slack_query includes bot-marked reply-tracked threads with thread state", 
         {
           ts: "2.1",
           text: "background discussion",
-          reactions: [],
-          botReacted: true,
+          reactions: ["robot_face"],
           replies: [
             { ts: "2.2", text: "<@U1> please handle #infra", user: "U_HUMAN" },
             { ts: "2.3", text: "status: In Progress", user: "U1" },

@@ -17,6 +17,7 @@ import { mirrorStatusReaction, requireTrackedMessage } from "./operations.js";
 import { slackEndpoint, slackTrackerOptions } from "./options.js";
 import { SlackSocketMode, type SlackSocketModeOptions } from "./socketMode.js";
 import { resolveThreadState, type ThreadState } from "./threadState.js";
+import { isBotMarked } from "./transport.js";
 import type { SlackChannelScan, SlackMessage, SlackTransport } from "./transport.js";
 
 export function splitIssueId(id: string): [string, string] | null {
@@ -100,7 +101,7 @@ export function slackMessageToRow(
   context: SlackIssueContext = {},
 ): SlackIssueRow {
   const state =
-    context.state ?? stateFromReactions(message.reactions, statusEmojiMap(settings), settings);
+    context.state ?? stateFromReactions(message.botReactions, statusEmojiMap(settings), settings);
   // For reply-tracked threads the request reply carries the ask; the root is surrounding
   // conversation. Title (and routing hashtags) come from the request, labels from both.
   const requestText = context.request?.text;
@@ -161,7 +162,7 @@ function slackMessageToIssue(
  * re-reading their threads).
  */
 export function trackedRootsOf(scan: SlackChannelScan): SlackMessage[] {
-  return [...scan.mentions, ...scan.threadedRoots.filter((root) => root.botReacted === true)];
+  return [...scan.mentions, ...scan.threadedRoots.filter(isBotMarked)];
 }
 
 /**
@@ -173,6 +174,9 @@ export function trackedRootsOf(scan: SlackChannelScan): SlackMessage[] {
 const SCAN_CACHE_TTL_MS = 10_000;
 
 const DEFAULT_REPLY_LOOKBACK_DAYS = 2;
+
+/** Entry cap for the per-issue mirror reconciliation cache (matches THREAD_STATE_CACHE_MAX). */
+const MIRRORED_STATES_MAX = 5_000;
 
 export class SlackTrackerClient implements RuntimeTrackerClient {
   private scanCache: { at: number; key: string; scan: SlackChannelScan } | null = null;
@@ -288,7 +292,7 @@ export class SlackTrackerClient implements RuntimeTrackerClient {
     // window. A thread is tracked once a reply mentions the bot; the bot then marks the root
     // with its own reaction so later polls (and restarts) recognize it from the scan alone.
     for (const root of scan.threadedRoots) {
-      if (root.botReacted === true) continue;
+      if (isBotMarked(root)) continue;
       if (tsValue(root.latestReply) <= this.replyFloor) continue;
       const thread = await resolveThreadState(this.settings, this.transport, root);
       if (!thread.request) continue;
@@ -318,8 +322,8 @@ export class SlackTrackerClient implements RuntimeTrackerClient {
    * Self-healing reaction mirror: when a HUMAN transitions status (`@bot !done`, a bare
    * re-mention re-open), the bot's reaction still shows the previous state until the bot acts
    * again. Reconcile the mirror to the thread-derived state during the poll, attempted once
-   * per state change per issue - a stale HUMAN-authored reaction is not removable by the bot
-   * (reactions are per-author), so retrying every poll would only churn the API.
+   * per state change per issue - the guard keeps a heal that cannot fully converge (e.g. a
+   * mapped emoji missing from the workspace) from churning the API every poll.
    *
    * Scheduling is synchronous but the reaction writes run in a BACKGROUND queue: reactions are
    * Slack Tier-3 methods, so a heal pass over a cold backlog (restart, newly watched channel)
@@ -332,27 +336,29 @@ export class SlackTrackerClient implements RuntimeTrackerClient {
   private healStatusMirror(root: SlackMessage, state: string): void {
     const key = `${root.channel}:${root.ts}`;
     if (this.mirroredStates.get(key) === state) return;
+    // Bounded like threadStateCache: a clear only lets already-converged mirrors re-check (the
+    // stale/missing gate blocks them) and non-convergent ones retry once more.
+    if (this.mirroredStates.size >= MIRRORED_STATES_MAX) this.mirroredStates.clear();
     this.mirroredStates.set(key, state);
     const map = statusEmojiMap(this.settings);
     const target = emojiForState(state, map);
-    const staleManaged = root.reactions.some(
+    // Only the bot's own reactions constitute the mirror: a human's managed emoji is neither
+    // state-bearing nor removable by the bot, so it never triggers (or blocks) a heal.
+    const staleManaged = root.botReactions.some(
       (reaction) => typeof map[reaction] === "string" && reaction !== target,
     );
-    const missingTarget = target !== null && !root.reactions.includes(target);
+    const missingTarget = target !== null && !root.botReactions.includes(target);
     if (!staleManaged && !missingTarget) return;
-    const observed = [...root.reactions];
+    // Capture only what the heal needs: the queued closure can outlive minutes of 429 backoff,
+    // and holding `root` would pin every backlogged message body in memory until the queue drains.
+    const { channel, ts } = root;
+    const observed = [...root.botReactions];
     this.mirrorHealQueue = this.mirrorHealQueue.then(async () => {
       try {
-        await mirrorStatusReaction(
-          this.settings,
-          this.transport,
-          root.channel,
-          root.ts,
-          state,
-          observed,
-        );
+        await mirrorStatusReaction(this.settings, this.transport, channel, ts, state, observed);
       } catch {
-        // Best-effort mirror; the thread reply already carries the authoritative state.
+        // Defensive only (mirror writes already swallow their own failures): a rejection here
+        // would poison the serialized queue and silently skip every later heal.
       }
     });
   }
