@@ -1080,7 +1080,11 @@ export interface AgentExecutor {
     settings: Settings;
     onUpdate?: (update: AgentUpdate) => void;
   }): Promise<AgentSession>;
-  /** Sends one prompt to the session and resolves with the updates produced during that turn. */
+  /**
+   * Sends one prompt to the session and resolves with the updates produced during that turn.
+   * Executors may bound the resolved batch for very long turns; a consumer that needs the
+   * complete stream must observe `onUpdate` instead of this return value.
+   */
   runTurn(session: AgentSession, prompt: string, issue?: Issue): Promise<AgentUpdate[]>;
 }
 

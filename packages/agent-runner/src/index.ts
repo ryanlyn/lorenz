@@ -65,7 +65,6 @@ type StartSessionInput = Parameters<AgentExecutor["startSession"]>[0] & {
 export interface RunResult {
   workspace: string;
   turnCount: number;
-  updates: AgentUpdate[];
   agentKind: string;
   finalIssue?: Issue | undefined;
 }
@@ -137,8 +136,9 @@ class RunController {
       workspacePath: workspace,
       message: `workspace prepared at ${workspace}`,
     });
-    const updates: AgentUpdate[] = [];
     let session: AgentSession | null = null;
+    // Reset at the start of every turn; set by the streamed updates below.
+    let sawToolCallThisTurn: boolean;
 
     let turnCount = 0;
     let runError: unknown;
@@ -184,8 +184,15 @@ class RunController {
         issue,
         settings: runtime,
         mcpEndpoint: input.mcpEndpoint ?? null,
+        // Stream updates through WITHOUT retaining them: a long-lived agent
+        // session emits an unbounded stream of (potentially large) updates, and
+        // accumulating them for the run's lifetime leaks memory in a daemon
+        // whose runs can live for hours (the full history already goes to the
+        // log file / trace emitter via onUpdate). Turn continuation only needs
+        // to know whether the turn issued a tool call, so that single bit is
+        // folded out of the stream here.
         onUpdate: (update) => {
-          updates.push(update);
+          if (isToolCallNotification(update)) sawToolCallThisTurn = true;
           input.onUpdate?.(update);
         },
       };
@@ -205,6 +212,7 @@ class RunController {
                 },
               )
             : continuationPrompt(turnCount + 1, runtime.agent.maxTurns);
+        sawToolCallThisTurn = false;
         const turnUpdates = await runTurnWithAbort(
           executor,
           session,
@@ -217,13 +225,14 @@ class RunController {
         // Known seam leak: turn-continuation is decided from ACP event vocabulary here
         // instead of an executor-owned hook. Generalize onto the session contract (a
         // provider-supplied "has more work" classifier) when a second executor lands.
+        // The signal is primarily derived from the STREAMED updates (see onUpdate
+        // above): the returned batch may be bounded for very long turns (see
+        // AgentExecutor.runTurn), so an early tool call could be missing from it.
         if (
           turnCount > 1 &&
           runtime.agents[runtime.agent.kind]?.executor === "acp" &&
-          !turnUpdates.some(
-            (u) =>
-              u.type === "session_notification" && u.message.update?.sessionUpdate === "tool_call",
-          )
+          !sawToolCallThisTurn &&
+          !turnUpdates.some(isToolCallNotification)
         ) {
           break;
         }
@@ -260,7 +269,6 @@ class RunController {
     return {
       workspace,
       turnCount,
-      updates,
       agentKind: runtime.agent.kind,
       finalIssue: issue,
     };
@@ -334,6 +342,13 @@ async function runTurnWithAbort(
   } finally {
     if (onAbort) abortSignal?.removeEventListener("abort", onAbort);
   }
+}
+
+/** True for a streamed ACP session notification describing a tool call. */
+function isToolCallNotification(update: AgentUpdate): boolean {
+  return (
+    update.type === "session_notification" && update.message.update?.sessionUpdate === "tool_call"
+  );
 }
 
 function throwIfAborted(abortSignal: AbortSignal | undefined): void {

@@ -622,7 +622,6 @@ test("runtime once claims an eligible issue, applies updates, and records comple
         return {
           workspace: "/tmp/lorenz/MT-1",
           turnCount: 1,
-          updates: [],
           agentKind: "codex",
           finalIssue: doneIssue,
         };
@@ -673,7 +672,6 @@ test("runtime snapshot adds active elapsed seconds without mutating completion t
         return {
           workspace: "/tmp/lorenz/MT-ACTIVE-RUNTIME",
           turnCount: 1,
-          updates: [],
           agentKind: "codex",
           finalIssue: doneIssue,
         };
@@ -745,7 +743,6 @@ test("runtime snapshot keeps active elapsed seconds across workflow reloads", as
         return {
           workspace: "/tmp/lorenz/MT-ACTIVE-RUNTIME-RELOAD",
           turnCount: 1,
-          updates: [],
           agentKind: "codex",
           finalIssue: doneIssue,
         };
@@ -788,7 +785,6 @@ test("runtime does not record completion when claim ownership is lost before fin
       runner: async () => ({
         workspace: "/tmp/lorenz/MT-LOST-BEFORE-FINISH",
         turnCount: 1,
-        updates: [],
         agentKind: "codex",
         finalIssue: doneIssue,
       }),
@@ -827,7 +823,6 @@ test("runtime does not record runner failure when durable finish fails after run
       runner: async () => ({
         workspace: "/tmp/lorenz/MT-FINISH-FAILURE",
         turnCount: 1,
-        updates: [],
         agentKind: "codex",
         finalIssue: doneIssue,
       }),
@@ -919,7 +914,6 @@ test("runtime keeps completed run history when retry timer sync fails after fini
       runner: async () => ({
         workspace: "/tmp/lorenz/MT-POST-FINISH-SNAPSHOT",
         turnCount: 1,
-        updates: [],
         agentKind: "codex",
         finalIssue: doneIssue,
       }),
@@ -968,7 +962,6 @@ test("runtime does not record runner failure when a post-run pre-finish snapshot
         return {
           workspace: "/tmp/lorenz/MT-POST-RUN-SNAPSHOT",
           turnCount: 1,
-          updates: [],
           agentKind: "codex",
           finalIssue: doneIssue,
         };
@@ -1041,7 +1034,6 @@ test("runtime schedules continuation retry after normal worker exit even when is
       runner: async () => ({
         workspace: "/tmp/lorenz/MT-INACTIVE-CONTINUATION",
         turnCount: 1,
-        updates: [],
         agentKind: "codex",
         finalIssue: doneIssue,
       }),
@@ -1785,7 +1777,6 @@ test("runtime does not stall a stale ensemble slot snapshot after its runner com
     controls.get(1)?.resolve({
       workspace: path.join(root, "workspace-1"),
       turnCount: 1,
-      updates: [],
       agentKind: "codex",
       finalIssue: { ...issue, state: { name: "Todo", type: "unstarted" } },
     });
@@ -1853,7 +1844,6 @@ test("runtime does not record late success after stall reconciliation wins", asy
     completeRun({
       workspace: "/tmp/lorenz/MT-LATE-SUCCESS",
       turnCount: 1,
-      updates: [],
       agentKind: "codex",
       finalIssue: completeIssue,
     });
@@ -1921,7 +1911,6 @@ test("runtime keeps a retry handle active when a stalled generation finishes lat
     controls.get(1)?.resolve({
       workspace: path.join(root, "workspace-1"),
       turnCount: 1,
-      updates: [],
       agentKind: "codex",
       finalIssue: issue,
     });
@@ -1994,7 +1983,6 @@ test("runtime preserves stronger overlapping pollOnce dispatch intent", async ()
         return {
           workspace: "/tmp/lorenz/MT-OVERLAP-DISPATCH",
           turnCount: 1,
-          updates: [],
           agentKind: "codex",
           finalIssue: doneIssue,
         };
@@ -2241,7 +2229,6 @@ test("runtime stop keeps a claim owned until the runner settles", async () => {
   settleRunner?.({
     workspace: "/tmp/lorenz/MT-STOP-SETTLEMENT",
     turnCount: 1,
-    updates: [],
     agentKind: "codex",
   });
   await waitFor(() => orchestrator.snapshot().running.length === 0, 1_000);
@@ -2293,7 +2280,6 @@ test("runtime stop keeps claim owner heartbeat alive until stopped claim settles
   settleRunner?.({
     workspace: "/tmp/lorenz/MT-STOP-HEARTBEAT",
     turnCount: 1,
-    updates: [],
     agentKind: "codex",
   });
   await waitFor(() => orchestrator.snapshot().running.length === 0, 1_000);
@@ -2346,7 +2332,6 @@ test("runtime stop settlement records abandon failures without stranding heartbe
   settleRunner?.({
     workspace: "/tmp/lorenz/MT-STOP-ABANDON-FAILURE",
     turnCount: 1,
-    updates: [],
     agentKind: "codex",
   });
   await waitFor(() => runtime.snapshot().appStatus === "error", 1_000);
@@ -2412,7 +2397,6 @@ test("runtime aborts active claims when periodic owner heartbeat fails", async (
     settleRunner?.({
       workspace: "/tmp/lorenz/MT-PERIODIC-HEARTBEAT-FAILURE",
       turnCount: 1,
-      updates: [],
       agentKind: "codex",
     });
     await waitFor(() => orchestrator.snapshot().running.length === 0, 1_000);
@@ -2472,7 +2456,6 @@ test("runtime heartbeat failure aborts active claims when failure-event snapshot
     settleRunner?.({
       workspace: "/tmp/lorenz/MT-HEARTBEAT-SNAPSHOT-FAILURE",
       turnCount: 1,
-      updates: [],
       agentKind: "codex",
     });
     await waitFor(() => orchestrator.snapshot().running.length === 0, 1_000);
@@ -2729,7 +2712,6 @@ test("runtime records failed attempts as retryable work and keeps polling", asyn
         return {
           workspace: "/tmp/lorenz/MT-RETRYABLE",
           turnCount: 1,
-          updates: [],
           agentKind: "codex",
           finalIssue: doneIssue,
         };
@@ -2783,7 +2765,6 @@ test("runtime retries aged-out tracked issues refreshed by reconciliation", asyn
         return {
           workspace: "/tmp/lorenz/MT-AGED-RETRY",
           turnCount: 1,
-          updates: [],
           agentKind: "codex",
           finalIssue: doneIssue,
         };
@@ -2911,7 +2892,6 @@ test("runtime schedules retry refresh timers independently of the poll cadence",
         return {
           workspace: "/tmp/lorenz/MT-TIMER",
           turnCount: 1,
-          updates: [],
           agentKind: "codex",
           finalIssue: doneIssue,
         };
@@ -2973,7 +2953,6 @@ test("runtime restores retry timers for reconciled issues outside the candidate 
         return {
           workspace: "/tmp/lorenz/MT-AGED-TIMER",
           turnCount: 1,
-          updates: [],
           agentKind: "codex",
           finalIssue: doneIssue,
         };
@@ -3204,7 +3183,6 @@ test("worker pool: leased workerHost is written back and passed to the runner; h
         return {
           workspace: "/tmp/lorenz/MT-BP-LEASE",
           turnCount: 1,
-          updates: [],
           agentKind: "codex",
           finalIssue: doneIssue,
         };
@@ -3272,7 +3250,6 @@ test("worker pool: the bound slot's mcpEndpoint is threaded into the runner", as
         return {
           workspace: "/tmp/lorenz/MT-BP-ENDPOINT",
           turnCount: 1,
-          updates: [],
           agentKind: "claude",
           finalIssue: doneIssue,
         };
@@ -3343,7 +3320,6 @@ test("worker pool: the FULL workflow Settings (with server.port) is threaded to 
       runner: async () => ({
         workspace: "/tmp/lorenz/MT-BP-FULL-SETTINGS",
         turnCount: 1,
-        updates: [],
         agentKind: "claude",
         finalIssue: doneIssue,
       }),
@@ -3380,7 +3356,6 @@ test("worker pool: a null-manager slot threads a null mcpEndpoint into the runne
         return {
           workspace: "/tmp/lorenz/MT-BP-NULL",
           turnCount: 1,
-          updates: [],
           agentKind: "codex",
           finalIssue: doneIssue,
         };
@@ -3526,7 +3501,6 @@ test("worker pool: an ACP/claude run STILL opens its per-run endpoint (the per-r
         return {
           workspace: "/tmp/lorenz/MT-BP-CLAUDE-EP",
           turnCount: 1,
-          updates: [],
           agentKind: "claude",
           finalIssue: doneIssue,
         };
@@ -3585,7 +3559,6 @@ test("worker pool: a claim is a host-less reservation between claim and acquire,
       runner: async () => ({
         workspace: "/tmp/lorenz/MT-BP-RESERVED",
         turnCount: 1,
-        updates: [],
         agentKind: "codex",
         finalIssue: doneIssue,
       }),
@@ -3648,7 +3621,6 @@ test("worker pool: acquire uses the prior real workerHost as affinityKey on retr
       runner: async () => ({
         workspace: "/tmp/lorenz/MT-BP-AFFINITY",
         turnCount: 1,
-        updates: [],
         agentKind: "codex",
         finalIssue: doneIssue,
       }),
@@ -3856,7 +3828,6 @@ test("worker pool: no_capacity restores the consumed retry entry so affinity and
       runner: async () => ({
         workspace: "/tmp/lorenz/MT-BP-NOCAP-RETRY",
         turnCount: 1,
-        updates: [],
         agentKind: "codex",
         finalIssue: doneIssue,
       }),
@@ -3928,7 +3899,6 @@ test("worker pool: acquire errors rearm a restored due retry timer", async () =>
       runner: async () => ({
         workspace: "/tmp/lorenz/MT-BP-ACQ-ERR-RETRY",
         turnCount: 1,
-        updates: [],
         agentKind: "codex",
         finalIssue: doneIssue,
       }),
@@ -3985,7 +3955,6 @@ test("worker pool: freed capacity nudges the poll so a capacity-blocked issue re
       runner: async () => ({
         workspace: "/tmp/lorenz/MT-BP-NUDGE",
         turnCount: 1,
-        updates: [],
         agentKind: "codex",
         finalIssue: doneIssue,
       }),
@@ -4052,7 +4021,6 @@ test("worker pool: a thrown acquire rejection cancels the reservation, skips the
         return {
           workspace: "/tmp/lorenz/MT-BP-ACQ-THROW",
           turnCount: 1,
-          updates: [],
           agentKind: "codex",
           finalIssue: doneIssue,
         };
@@ -4111,7 +4079,6 @@ test("worker pool: success path releases the lease as healthy", async () => {
       runner: async () => ({
         workspace: "/tmp/lorenz/MT-BP-SUCCESS",
         turnCount: 1,
-        updates: [],
         agentKind: "codex",
         finalIssue: doneIssue,
       }),
@@ -4322,7 +4289,6 @@ test("worker pool: a stall-aborted run that RESOLVES SUCCESSFULLY still poisons 
     runControl.resolve?.({
       workspace: path.join(root, "workspace"),
       turnCount: 1,
-      updates: [],
       agentKind: "codex",
       finalIssue: doneIssue,
     });
@@ -4421,7 +4387,6 @@ test("worker pool: a stale-generation late resolve is a lease no-op (leaseId gua
     controls.get(1)?.resolve({
       workspace: path.join(root, "workspace-1"),
       turnCount: 1,
-      updates: [],
       agentKind: "codex",
       finalIssue: issue,
     });
@@ -4471,7 +4436,6 @@ test("worker pool: a reserving (in-acquire) slot is never stall-finished and rec
       runner: async () => ({
         workspace: "/tmp/lorenz/MT-BP-RESERVING-STALL",
         turnCount: 1,
-        updates: [],
         agentKind: "codex",
         finalIssue: doneIssue,
       }),
@@ -4661,7 +4625,6 @@ test("worker pool: onUpdate triggers a lease heartbeat", async () => {
         return {
           workspace: "/tmp/lorenz/MT-BP-HEARTBEAT",
           turnCount: 2,
-          updates: [],
           agentKind: "codex",
           finalIssue: doneIssue,
         };
@@ -4817,7 +4780,6 @@ test("worker pool: a reload that disables the pool resumes dispatch via the loca
         return {
           workspace: "/tmp/lorenz/MT-BP-DISABLED-RESUME",
           turnCount: 1,
-          updates: [],
           agentKind: "codex",
           finalIssue: doneIssue,
         };
@@ -4882,7 +4844,6 @@ test("worker pool: a reload that re-enables the pool governs again and acquires 
         return {
           workspace: "/tmp/lorenz/MT-BP-REENABLE",
           turnCount: 1,
-          updates: [],
           agentKind: "codex",
           finalIssue: doneIssue,
         };
@@ -5247,7 +5208,6 @@ test("worker pool undefined: static path does not acquire or classify worker lea
         return {
           workspace: "/tmp/lorenz/MT-NO-BP",
           turnCount: 1,
-          updates: [],
           agentKind: "codex",
           finalIssue: doneIssue,
         };
@@ -5417,7 +5377,6 @@ test("runtime replays retry timer due while a poll is active", async () => {
         return {
           workspace: "/tmp/lorenz/MT-TIMER-OVERLAP",
           turnCount: 1,
-          updates: [],
           agentKind: "codex",
           finalIssue: doneIssue,
         };

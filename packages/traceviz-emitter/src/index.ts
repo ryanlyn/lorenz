@@ -9,6 +9,16 @@ export class TraceEmitter {
   private initialized = new Set<string>();
   /** Per-file write queues to avoid unbounded concurrent writes. */
   private writeQueues = new Map<string, Promise<void>>();
+  /**
+   * Lines waiting for the queued flush of their file. Appends are BATCHED: one
+   * queued flush drains everything buffered for its file in as few appendFile
+   * calls as possible. Without batching, a busy agent session (many updates per
+   * second across concurrent runs) enqueues one appendFile per update, the
+   * per-file promise chain falls behind the producer, and every pending closure
+   * retains its serialized line - unbounded memory growth in a long-running
+   * daemon.
+   */
+  private pendingBatches = new Map<string, { lines: string[] }>();
   private writeFailures: Error[] = [];
 
   constructor(traceDir: string) {
@@ -30,14 +40,40 @@ export class TraceEmitter {
     } as TraceEvent);
     const line = JSON.stringify(payload);
 
+    const pending = this.pendingBatches.get(filePath);
+    if (pending) {
+      // A flush for this file is already queued; it drains everything buffered.
+      pending.lines.push(line);
+      return;
+    }
+    const batch = { lines: [line] };
+    this.pendingBatches.set(filePath, batch);
     this.enqueue(
       filePath,
       async () => {
-        if (!this.initialized.has(dirPath)) {
-          mkdirSync(dirPath, { recursive: true });
-          this.initialized.add(dirPath);
+        // Drain until quiescent: lines buffered while an append is in flight
+        // are picked up by the next loop iteration, preserving order. The
+        // batch is identity-checked so a clear() (which detaches it) discards
+        // everything buffered before it, and the finally covers the failure
+        // path - a failed append drops the batch (bounded loss, as before)
+        // instead of stranding lines no queued flush would ever pick up.
+        try {
+          for (;;) {
+            if (this.pendingBatches.get(filePath) !== batch) return;
+            const lines = batch.lines;
+            if (lines.length === 0) return;
+            batch.lines = [];
+            if (!this.initialized.has(dirPath)) {
+              mkdirSync(dirPath, { recursive: true });
+              this.initialized.add(dirPath);
+            }
+            await appendFile(filePath, lines.join("\n") + "\n");
+          }
+        } finally {
+          if (this.pendingBatches.get(filePath) === batch) {
+            this.pendingBatches.delete(filePath);
+          }
         }
-        await appendFile(filePath, line + "\n");
       },
       `[TraceEmitter] Failed to write trace for issue ${issueIdentifier}:`,
     );
@@ -56,6 +92,10 @@ export class TraceEmitter {
 
   clear(issueId: string): void {
     const { dirPath, filePath } = this.issueTracePaths(issueId);
+    // Detach the pending batch: everything buffered before the clear is
+    // discarded (the queued flush identity-checks its batch), and an emit
+    // arriving after the clear starts a fresh batch ordered behind it.
+    this.pendingBatches.delete(filePath);
     const clearIssueDir = (): void => {
       rmSync(dirPath, { recursive: true, force: true });
       this.initialized.delete(dirPath);

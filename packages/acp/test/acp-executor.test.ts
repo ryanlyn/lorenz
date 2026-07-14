@@ -152,12 +152,15 @@ test("ACP executor accumulates per-call usage buckets incrementally", async () =
     onUpdate: (update) => updates.push(update),
   });
   const firstTurn = await executor.runTurn(session, "hello", sampleIssue);
+  // The full stream arrives via onUpdate (runTurn resolves only the terminal
+  // update): slice this turn's notifications off the stream before turn two.
+  const firstTurnStream = updates.splice(0);
   const secondTurn = await executor.runTurn(session, "hello again", sampleIssue);
   await session.stop();
 
   // Three unique buckets stream during the first turn (the duplicate seq and
   // the plain usage_update carry no usage), each carrying running totals.
-  const firstTurnUsage = firstTurn
+  const firstTurnUsage = firstTurnStream
     .filter((update) => update.type === "session_notification" && update.usage)
     .map((update) => update.usage);
   assert.deepEqual(firstTurnUsage, [
@@ -166,7 +169,7 @@ test("ACP executor accumulates per-call usage buckets incrementally", async () =
     { inputTokens: 21, outputTokens: 9, totalTokens: 30 },
   ]);
   assert.ok(
-    firstTurn
+    firstTurnStream
       .filter((update) => update.type === "session_notification" && update.usage)
       .every((update) => update.usageKind === "cumulative"),
   );

@@ -1,4 +1,11 @@
-export { main, parseCliArgs, projectUrlForSettings } from "./main.js";
+export {
+  HEADLESS_SNAPSHOT_INTERVAL_MS,
+  main,
+  parseCliArgs,
+  projectUrlForSettings,
+  subscribeHeadlessSnapshotWriter,
+  type HeadlessSnapshotSink,
+} from "./main.js";
 export {
   buildWorkerPool,
   buildDispatchCoordinator,

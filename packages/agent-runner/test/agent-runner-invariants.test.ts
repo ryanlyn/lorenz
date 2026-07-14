@@ -542,6 +542,48 @@ describe("INVARIANT (ACP): After turn 2+, the loop continues when tool_use_reque
     assert.equal(prompts.length, 4);
   });
 
+  test("ACP executor continues when tool_call arrives only via the streamed onUpdate", async () => {
+    // The batch runTurn resolves with may be BOUNDED for very long turns (the
+    // executor caps retention), so continuation must also be derivable from the
+    // streamed updates: a tool_call streamed through the session's onUpdate but
+    // absent from the returned batch still keeps the loop going.
+    const settings = fakeSettings({ agent: { ...defaultSettings().agent, maxTurns: 3 } });
+    const prompts: string[] = [];
+
+    const result = await runAgentAttempt({
+      issue: fakeIssue(),
+      workflow: { path: "/workflow.md", config: {}, promptTemplate: "Fix it", settings },
+      settings,
+      fetchIssue: async (iss) => iss,
+      adapters: fakeAdapters({
+        executorFactory: () => {
+          let emit: ((update: AgentUpdate) => void) | undefined;
+          return {
+            kind: "codex",
+            async startSession(input) {
+              emit = input.onUpdate;
+              input.onUpdate?.({
+                type: "session_started",
+                message: "session started (s1)",
+                sessionId: "s1",
+              });
+              return fakeSession();
+            },
+            async runTurn(_session, prompt) {
+              prompts.push(prompt);
+              emit?.(fakeToolCallNotification());
+              // The returned batch omits the tool call (as a capped batch would).
+              return [{ type: "turn_completed" }];
+            },
+          };
+        },
+      }),
+    });
+
+    assert.equal(result.turnCount, 3);
+    assert.equal(prompts.length, 3);
+  });
+
   test("ACP executor breaks at the turn where tool_use_requested stops appearing", async () => {
     const settings = fakeSettings({ agent: { ...defaultSettings().agent, maxTurns: 5 } });
     let turnCount = 0;

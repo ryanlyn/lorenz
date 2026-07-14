@@ -432,9 +432,7 @@ export async function runDaemon(options: CliOptions): Promise<number> {
           : null;
 
       if (!instance) {
-        runtime.subscribe((snapshot) => {
-          process.stdout.write(`${JSON.stringify(snapshot, null, 2)}\n`);
-        });
+        subscribeHeadlessSnapshotWriter(runtime);
       }
 
       assertDaemonLockHeld();
@@ -475,6 +473,64 @@ export async function runDaemon(options: CliOptions): Promise<number> {
     process.stderr.write(`${errorMessage(error)}\n`);
     return 1;
   }
+}
+
+/**
+ * Headless (non-TTY) status output: stream the runtime snapshot as JSON.
+ *
+ * The runtime emits a snapshot on EVERY event - during a busy agent run that is
+ * many times per second, and each pretty-printed snapshot can run to tens of
+ * kilobytes. Writing every emission floods whatever consumes stdout (this can
+ * reach gigabytes per hour), and when stdout is a pipe whose consumer is slower
+ * than the producer, Node buffers the backlog in the JS heap - unbounded growth
+ * that ends in "JavaScript heap out of memory" after enough hours. Snapshots
+ * are cumulative state (not an event log), so intermediate ones are superseded
+ * by the latest: coalesce to at most one write per interval and never queue a
+ * write while the previous one has not flushed.
+ */
+export const HEADLESS_SNAPSHOT_INTERVAL_MS = 1_000;
+
+/** The slice of a writable stream the headless writer needs; injectable for tests. */
+export interface HeadlessSnapshotSink {
+  write(chunk: string): boolean;
+  once(event: "drain", listener: () => void): unknown;
+}
+
+export function subscribeHeadlessSnapshotWriter(
+  runtime: Pick<LorenzRuntime, "subscribe">,
+  sink: HeadlessSnapshotSink = process.stdout,
+  intervalMs: number = HEADLESS_SNAPSHOT_INTERVAL_MS,
+): void {
+  let pending: RuntimeSnapshot | null = null;
+  let awaitingDrain = false;
+  let cooldown: NodeJS.Timeout | null = null;
+
+  const flush = (): void => {
+    if (awaitingDrain || cooldown !== null || pending === null) return;
+    const snapshot = pending;
+    pending = null;
+    const flushed = sink.write(`${JSON.stringify(snapshot, null, 2)}\n`);
+    if (!flushed) {
+      // Backpressure: hold the (single, latest) pending snapshot until the
+      // kernel buffer drains instead of queueing writes in the heap.
+      awaitingDrain = true;
+      sink.once("drain", () => {
+        awaitingDrain = false;
+        flush();
+      });
+      return;
+    }
+    cooldown = setTimeout(() => {
+      cooldown = null;
+      flush();
+    }, intervalMs);
+    cooldown.unref?.();
+  };
+
+  runtime.subscribe((snapshot) => {
+    pending = snapshot;
+    flush();
+  });
 }
 
 function createDaemonCommand(name = "lorenz"): Command {

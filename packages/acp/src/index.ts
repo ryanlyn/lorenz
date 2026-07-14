@@ -239,10 +239,18 @@ export class Executor implements AgentExecutor {
     }
   }
 
+  /**
+   * Send one prompt and resolve with the turn's TERMINAL update only (the
+   * `turn_completed` that ended it). Everything the turn streams goes through
+   * the session's `onUpdate`; retaining the full batch here would hold every
+   * (potentially large) update - and, via V8 sliced strings, the raw receive
+   * buffers behind them - for the whole lifetime of a turn that can run for
+   * an hour, across every concurrent run. That is a real memory leak in a
+   * long-running daemon, so the batch is not kept.
+   */
   async runTurn(session: Session, prompt: string, _issue?: Issue): Promise<AgentUpdate[]> {
     if (session.pendingTurn) throw new Error("ACP turn already running");
     const previous = session.onUpdate;
-    const updates: AgentUpdate[] = [];
     let settled = false;
 
     return new Promise<AgentUpdate[]>((resolve, reject) => {
@@ -287,7 +295,6 @@ export class Executor implements AgentExecutor {
       session.pendingTurn = { reject: finishReject, allowSessionIdRotation: true };
       session.onUpdate = (update) => {
         resetStallTimer();
-        updates.push(update);
         previous?.(update);
       };
 
@@ -323,8 +330,9 @@ export class Executor implements AgentExecutor {
             ...(usage && { usage, usageKind: "cumulative" as const }),
           };
           if (action === "continue") {
-            this.emit(session, { ...base, type: "turn_completed" });
-            finishResolve([...updates]);
+            const terminal: AgentUpdate = { ...base, type: "turn_completed" };
+            this.emit(session, terminal);
+            finishResolve([terminal]);
           } else if (action === "cancel") {
             this.emit(session, { ...base, type: "turn_cancelled" });
             finishReject(new Error("acp_turn_cancelled"));
@@ -752,6 +760,12 @@ function startBridgeProcess(
     stdout: "pipe",
     stderr: "pipe",
     reject: false,
+    // Never accumulate the child's output for `result.stdout`: the bridge
+    // streams the WHOLE agent session over stdout (potentially gigabytes over
+    // an hours-long run), the session consumes it incrementally, and nothing
+    // reads the buffered result - with buffering on, execa retains every byte
+    // until the process exits, a leading memory leak in a long-running daemon.
+    buffer: false,
     env: hostAgentBinaryEnv(),
   }) as unknown as ChildProcessWithoutNullStreams;
 }
