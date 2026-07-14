@@ -179,6 +179,13 @@ During a poll, if a human transition left the bot's managed reaction stale or mi
 mirror reconciles the bot's own reaction once per state change per issue. `reactions.remove` only
 removes the caller's own reaction, so human reactions are never touched.
 
+Mirror updates are frugal and off the dispatch path. Only managed emoji actually observed on the
+message are removed (reaction names are complete in Slack reads, so an unobserved emoji is a
+guaranteed no-op remove), which means a mirror that is merely missing its target costs a single
+`reactions.add`. Poll-time heals run in a serialized background queue: reaction methods are Slack
+Tier-3 rate-limited, and a cold heal pass over a large backlog (restart, newly watched channel)
+must not stall candidate discovery and dispatch behind 429 backoffs.
+
 Reactions are per-author: the bot cannot add or remove a human's reaction. They cannot carry a
 jointly-edited status, so once any status event exists, reactions stop being the source of truth.
 They are a visibility mirror plus a back-compat fallback for threads with no event. When several

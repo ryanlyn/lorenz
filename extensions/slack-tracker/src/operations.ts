@@ -98,7 +98,7 @@ export async function updateSlackStatus(
   // tracked message before we write into its thread.
   const root = await requireTrackedMessage(settings, transport, channel, ts);
   await transport.postReply(channel, ts, `${BOT_STATUS_PREFIX} ${canonical}`);
-  await mirrorStatusReaction(settings, transport, channel, ts, canonical);
+  await mirrorStatusReaction(settings, transport, channel, ts, canonical, root.reactions);
   return { ok: true, status: canonical, root };
 }
 
@@ -106,6 +106,15 @@ export async function updateSlackStatus(
  * Best-effort visibility mirror: add the bot's reaction for the new state (when one is mapped)
  * and drop the bot's own other managed reactions. `reactions.remove` only removes the caller's
  * own reaction, so human-authored reactions are untouched by construction.
+ *
+ * `observed` is the reaction-name snapshot of the message (from the trust-check fetch or the
+ * poll scan). Slack reads report every reaction NAME on a message (only the per-reaction user
+ * lists are truncated), so an emoji absent from the snapshot is absent for every author,
+ * including the bot - removing it is a guaranteed no-op. Intersecting the managed set with the
+ * snapshot cuts a mirror update from one Tier-3 `reactions.remove` per managed emoji (a dozen
+ * rate-limited calls each, multiplied across a cold startup heal pass) down to one per emoji
+ * actually present; a mirror that is merely missing its target costs a single `reactions.add`.
+ * When no snapshot is available, fall back to sweeping the full managed set.
  */
 export async function mirrorStatusReaction(
   settings: Settings,
@@ -113,12 +122,14 @@ export async function mirrorStatusReaction(
   channel: string,
   ts: string,
   state: string,
+  observed?: readonly string[],
 ): Promise<void> {
   const map = statusEmojiMap(settings);
   const target = emojiForState(state, map);
   const managed = Object.keys(map);
   for (const emoji of managed) {
     if (emoji === target) continue;
+    if (observed !== undefined && !observed.includes(emoji)) continue;
     try {
       await transport.removeReaction(channel, ts, emoji);
     } catch {

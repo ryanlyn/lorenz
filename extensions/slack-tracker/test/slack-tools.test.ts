@@ -351,6 +351,32 @@ test("slack_update_status works for custom states with no mapped emoji", async (
   assert.equal((read.result as { status: string }).status, "Shipped");
 });
 
+test("slack_update_status only removes managed reactions present on the root", async () => {
+  // The root carries only :eyes:; transitioning to Done must remove exactly that and add
+  // :white_check_mark:, not sweep a reactions.remove for every managed emoji (Tier-3 calls).
+  const transport = new InMemorySlackTransport(
+    { C1: [{ ts: "1.1", text: "<@U1> do the thing", reactions: ["eyes"] }] },
+    { botUserId: "U1" },
+  );
+  const removed: string[] = [];
+  const remove = transport.removeReaction.bind(transport);
+  transport.removeReaction = async (channel, ts, name) => {
+    removed.push(name);
+    return remove(channel, ts, name);
+  };
+
+  const result = await executeSlackTool(
+    "slack_update_status",
+    { issueId: "C1:1.1", status: "Done" },
+    settings(),
+    transport,
+  );
+
+  assert.equal(result.success, true);
+  assert.deepEqual(removed, ["eyes"]);
+  assert.deepEqual((await transport.getMessage("C1", "1.1"))!.reactions, ["white_check_mark"]);
+});
+
 test("a failing reaction mirror never fails the status transition", async () => {
   const transport = new InMemorySlackTransport(
     { C1: [{ ts: "1.1", text: "<@U1> do the thing", reactions: ["eyes"] }] },

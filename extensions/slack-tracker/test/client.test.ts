@@ -481,8 +481,10 @@ test("the bot's reaction mirror self-heals after a human command", async () => {
   };
   const client = new SlackTrackerClient(settings(), transport);
 
-  // Done is terminal, so the issue is not a candidate - but the poll still heals the mirror.
+  // Done is terminal, so the issue is not a candidate - but the poll still heals the mirror
+  // (in the background queue; flush to observe the settled result).
   assert.deepEqual(await client.fetchCandidateIssues(), []);
+  await client.flushStatusMirrorHeals();
   assert.deepEqual((await transport.getMessage("C1", "1700000000.000100"))!.reactions, [
     "white_check_mark",
   ]);
@@ -491,7 +493,121 @@ test("the bot's reaction mirror self-heals after a human command", async () => {
   // A second poll with an unchanged state attempts no further reaction writes.
   const afterHeal = reactionCalls;
   await client.fetchCandidateIssues();
+  await client.flushStatusMirrorHeals();
   assert.equal(reactionCalls, afterHeal);
+});
+
+test("a mirror heal only removes managed reactions actually present on the message", async () => {
+  // Default managed set is {eyes, white_check_mark, x}. The root carries only :eyes:, so the
+  // heal to Done must remove exactly :eyes: and add :white_check_mark: - never fire a remove
+  // for :x: (or any other managed emoji) that is not on the message. Reaction methods are
+  // Slack Tier-3; the blanket sweep was ~one remove per managed emoji per healed root.
+  const transport = new InMemorySlackTransport(
+    {
+      C1: [
+        {
+          ts: "1700000000.000100",
+          text: "<@U_BOT> fix the thing",
+          reactions: ["eyes"],
+          replies: [{ ts: "1700000000.000200", text: "<@U_BOT> !done", user: "U_HUMAN" }],
+        },
+      ],
+    },
+    { botUserId: "U_BOT" },
+  );
+  const removed: string[] = [];
+  const added: string[] = [];
+  const add = transport.addReaction.bind(transport);
+  const remove = transport.removeReaction.bind(transport);
+  transport.addReaction = async (channel, ts, name) => {
+    added.push(name);
+    return add(channel, ts, name);
+  };
+  transport.removeReaction = async (channel, ts, name) => {
+    removed.push(name);
+    return remove(channel, ts, name);
+  };
+  const client = new SlackTrackerClient(settings(), transport);
+
+  await client.fetchCandidateIssues();
+  await client.flushStatusMirrorHeals();
+  assert.deepEqual(removed, ["eyes"]);
+  assert.deepEqual(added, ["white_check_mark"]);
+});
+
+test("a heal that is only missing its target emoji costs one add and zero removes", async () => {
+  // A human `!wip` on a root with no reactions at all: the mirror is merely missing :eyes:.
+  // Nothing managed is present, so the heal must be a single reactions.add.
+  const transport = new InMemorySlackTransport(
+    {
+      C1: [
+        {
+          ts: "1700000000.000100",
+          text: "<@U_BOT> fix the thing",
+          reactions: [],
+          replies: [{ ts: "1700000000.000200", text: "<@U_BOT> !wip", user: "U_HUMAN" }],
+        },
+      ],
+    },
+    { botUserId: "U_BOT" },
+  );
+  let removes = 0;
+  let adds = 0;
+  const add = transport.addReaction.bind(transport);
+  transport.addReaction = async (channel, ts, name) => {
+    adds += 1;
+    return add(channel, ts, name);
+  };
+  transport.removeReaction = async () => {
+    removes += 1;
+  };
+  const client = new SlackTrackerClient(settings(), transport);
+
+  await client.fetchCandidateIssues();
+  await client.flushStatusMirrorHeals();
+  assert.equal(removes, 0);
+  assert.equal(adds, 1);
+});
+
+test("a rate-limited mirror heal does not block candidate discovery", async () => {
+  // Two issues: one needs a mirror heal whose reactions.remove is stuck (a 429 backoff in the
+  // real transport), the other is a plain new mention. The poll must still return promptly with
+  // both issues - the heal runs in the background queue, not on the dispatch path.
+  const transport = new InMemorySlackTransport(
+    {
+      C1: [
+        {
+          ts: "1700000000.000100",
+          text: "<@U_BOT> healed later",
+          reactions: ["eyes"],
+          replies: [{ ts: "1700000000.000150", text: "<@U_BOT> !todo", user: "U_HUMAN" }],
+        },
+        { ts: "1700000000.000200", text: "<@U_BOT> fresh request", reactions: [] },
+      ],
+    },
+    { botUserId: "U_BOT" },
+  );
+  let releaseRemove!: () => void;
+  const blocked = new Promise<void>((resolve) => {
+    releaseRemove = resolve;
+  });
+  const remove = transport.removeReaction.bind(transport);
+  transport.removeReaction = async (channel, ts, name) => {
+    await blocked;
+    return remove(channel, ts, name);
+  };
+  const client = new SlackTrackerClient(settings(), transport);
+
+  const candidates = await client.fetchCandidateIssues();
+  assert.deepEqual(
+    candidates.map((i) => i.id),
+    ["C1:1700000000.000100", "C1:1700000000.000200"],
+  );
+
+  // Unblock the stuck remove and let the heal settle; the mirror still converges.
+  releaseRemove();
+  await client.flushStatusMirrorHeals();
+  assert.deepEqual((await transport.getMessage("C1", "1700000000.000100"))!.reactions, []);
 });
 
 test("fetchIssuesByIds derives in-window issues from the scan and warms the candidate cache", async () => {

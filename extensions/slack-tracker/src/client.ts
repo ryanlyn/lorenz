@@ -178,6 +178,8 @@ export class SlackTrackerClient implements RuntimeTrackerClient {
   private scanCache: { at: number; key: string; scan: SlackChannelScan } | null = null;
   /** Last state the reaction mirror was reconciled to, per issue (see healStatusMirror). */
   private readonly mirroredStates = new Map<string, string>();
+  /** Serialized background queue of pending reaction-mirror heals (see healStatusMirror). */
+  private mirrorHealQueue: Promise<void> = Promise.resolve();
   /**
    * Oldest thread activity (epoch seconds) considered when hunting for NEW reply-mention
    * requests in untracked threads. Once tracked, a thread is marked with the bot's reaction
@@ -300,7 +302,7 @@ export class SlackTrackerClient implements RuntimeTrackerClient {
     const issues: Issue[] = [];
     for (const root of roots) {
       const thread = await resolveThreadState(this.settings, this.transport, root);
-      await this.healStatusMirror(root, thread.state);
+      this.healStatusMirror(root, thread.state);
       issues.push(
         slackMessageToIssue(root, this.settings, {
           permalinkBase: base,
@@ -318,20 +320,49 @@ export class SlackTrackerClient implements RuntimeTrackerClient {
    * again. Reconcile the mirror to the thread-derived state during the poll, attempted once
    * per state change per issue - a stale HUMAN-authored reaction is not removable by the bot
    * (reactions are per-author), so retrying every poll would only churn the API.
+   *
+   * Scheduling is synchronous but the reaction writes run in a BACKGROUND queue: reactions are
+   * Slack Tier-3 methods, so a heal pass over a cold backlog (restart, newly watched channel)
+   * can spend minutes in 429 backoff. That wait must not sit inside trackedIssues() - it would
+   * starve candidate discovery and dispatch of issues that are already fully resolved. The queue
+   * is serialized so heals never compete with each other for the rate limit, and it is bounded:
+   * `mirroredStates` marks the issue at schedule time, so one heal is queued per state change
+   * per issue no matter how many polls elapse while the queue drains.
    */
-  private async healStatusMirror(root: SlackMessage, state: string): Promise<void> {
+  private healStatusMirror(root: SlackMessage, state: string): void {
     const key = `${root.channel}:${root.ts}`;
     if (this.mirroredStates.get(key) === state) return;
+    this.mirroredStates.set(key, state);
     const map = statusEmojiMap(this.settings);
     const target = emojiForState(state, map);
     const staleManaged = root.reactions.some(
       (reaction) => typeof map[reaction] === "string" && reaction !== target,
     );
     const missingTarget = target !== null && !root.reactions.includes(target);
-    if (staleManaged || missingTarget) {
-      await mirrorStatusReaction(this.settings, this.transport, root.channel, root.ts, state);
-    }
-    this.mirroredStates.set(key, state);
+    if (!staleManaged && !missingTarget) return;
+    const observed = [...root.reactions];
+    this.mirrorHealQueue = this.mirrorHealQueue.then(async () => {
+      try {
+        await mirrorStatusReaction(
+          this.settings,
+          this.transport,
+          root.channel,
+          root.ts,
+          state,
+          observed,
+        );
+      } catch {
+        // Best-effort mirror; the thread reply already carries the authoritative state.
+      }
+    });
+  }
+
+  /**
+   * Resolves once every mirror heal scheduled SO FAR has finished. Deterministic settling point
+   * for tests and for callers that want the mirror visibly converged (e.g. before shutdown).
+   */
+  async flushStatusMirrorHeals(): Promise<void> {
+    await this.mirrorHealQueue;
   }
 
   private async scanCached(options: { forceRefresh?: boolean } = {}): Promise<SlackChannelScan> {
