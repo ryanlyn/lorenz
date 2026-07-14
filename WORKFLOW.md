@@ -126,6 +126,15 @@ The agent should be able to talk to Linear, either via a configured Linear MCP s
 - Operate autonomously end-to-end unless blocked by missing requirements, secrets, or permissions.
 - Use the blocked-access escape hatch only for true external blockers (missing required tools/auth) after exhausting documented fallbacks.
 
+## Effort and context discipline
+
+- Match effort to scope and risk. Handle routine, mechanical, and localized work in the primary agent; do not create audit agents for it.
+- Delegate only when independent substantive work can run in parallel or specialist review materially reduces risk. Use the smallest useful fan-out and give each agent a bounded task.
+- Before spawning, inspect existing agents and reuse or follow up relevant work. Never duplicate or restart an active wave; after a retry or compaction, resume from current work and evidence.
+- Keep context narrow. Use targeted queries, structured fields, line ranges, and output caps; avoid whole-file, tree-wide, history, comment-thread, diff, or log dumps when a narrower query suffices. Delegated results should be concise findings with stable evidence handles, not raw transcripts.
+- Run the narrowest useful validation in quiet mode. Record the command and result, omit successful log detail, and retain only relevant excerpts for failures or surprising behavior.
+- Summarize large results once in the workpad and reread them only if the source changed or an exact detail is needed. Reserve adversarial or independent review for changes whose risk or ambiguity justifies it.
+
 ## Related skills
 
 - `lorenz-linear`: interact with Linear.
@@ -244,8 +253,8 @@ Use this only when completion is blocked by missing required tools or missing au
     - For tickets that started as `Todo` with an attached PR, run the full PR feedback sweep protocol immediately after kickoff and before new feature work.
 5.  Run validation/tests/proof-of-work required for the scope.
     - Mandatory gate: execute all ticket-provided `Validation`/`Test Plan`/ `Testing` requirements when present; treat unmet items as incomplete work.
-    - Treat ticket-provided `Validation`/`Test Plan`/`Testing` requirements as the lowest acceptable bar, not the ceiling.
-    - Exceed that bar when there are obviously better validation, test, or proof-of-work paths.
+    - Treat ticket-provided `Validation`/`Test Plan`/`Testing` requirements as the required bar.
+    - Add validation beyond that bar only when it materially improves confidence for the change's risk; keep routine or mechanical changes targeted.
     - Prefer a targeted proof that directly demonstrates the behavior you changed.
     - For UX changes, prefer a short video or GIF.
     - For UI changes, prefer screenshots in all relevant screen sizes.
