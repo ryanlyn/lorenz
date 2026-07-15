@@ -2,15 +2,34 @@ export interface SlackMessage {
   channel: string;
   ts: string;
   text: string;
+  /** Every reaction name on the message, any author. Display only - never drives state. */
   reactions: string[];
+  /**
+   * Reaction names authored by the BOT itself (a subset of `reactions`). These are the only
+   * reactions that carry meaning: the status mirror and the reaction-derived state fallback
+   * read them, and a non-empty list is the bot's tracking marker. Human reactions are
+   * deliberately excluded - humans transition status through `!`-command thread replies, and
+   * a reaction from a random channel member must not silently move an issue. Derived from each
+   * reaction's `users` list, which Slack may truncate on heavily-reacted messages; the thread
+   * reply remains the authoritative state either way.
+   */
+  botReactions: string[];
   /** Author user id, when the API provided one. */
   user?: string | undefined;
   /** Number of thread replies under this message (root messages only). */
   replyCount?: number | undefined;
   /** ts of the newest thread reply (root messages only). */
   latestReply?: string | undefined;
-  /** True when the bot itself has reacted to this message (its tracking marker). */
-  botReacted?: boolean | undefined;
+}
+
+/**
+ * True when the bot itself has reacted to the message - its tracking marker. A bot-marked root
+ * is (and stays) a tracked issue: reply-tracked threads are recognized across restarts by the
+ * marker alone, and the tool trust boundary accepts a marked root even if the author allowlist
+ * has since been tightened.
+ */
+export function isBotMarked(message: SlackMessage): boolean {
+  return message.botReactions.length > 0;
 }
 
 /** A single reply in a Slack thread, excluding the parent (root) message. */

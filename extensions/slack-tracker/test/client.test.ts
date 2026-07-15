@@ -38,7 +38,7 @@ function botSettings() {
   );
 }
 
-test("mentions become issues; reactions drive state", async () => {
+test("mentions become issues; the bot's reactions drive state", async () => {
   const transport = new InMemorySlackTransport({
     C1: [
       { ts: "1700000000.000100", text: "<@U_BOT> fix the flaky test\nmore detail", reactions: [] },
@@ -129,7 +129,8 @@ test("fetchIssuesByIds re-validates channel and bot mention (refresh-path trust 
     {
       C1: [
         { ts: "1700000000.000600", text: "<@U_BOT> still tracked", reactions: ["eyes"] },
-        { ts: "1700000000.000700", text: "<@U_OTHER> mention removed", reactions: ["eyes"] },
+        // A HUMAN's reaction: with the mention edited away and no bot marker, the issue is gone.
+        { ts: "1700000000.000700", text: "<@U_OTHER> mention removed", humanReactions: ["eyes"] },
       ],
       C9: [{ ts: "1700000000.000800", text: "<@U_BOT> wrong channel", reactions: ["eyes"] }],
     },
@@ -284,7 +285,13 @@ test("tracker.users gates the tool trust boundary, but a bot-marked root stays t
           user: "U_ALICE",
           reactions: ["eyes"],
         },
-        { ts: "1700000000.000200", text: "<@U_BOT> from bob", user: "U_BOB", reactions: ["eyes"] },
+        // A HUMAN's :eyes:, not a bot marker: does not keep a non-allowed author tracked.
+        {
+          ts: "1700000000.000200",
+          text: "<@U_BOT> from bob",
+          user: "U_BOB",
+          humanReactions: ["eyes"],
+        },
         // Author not allowed, but the bot already marked it on an earlier poll: stays tracked so a
         // later tightening of `users` does not orphan an in-flight issue.
         {
@@ -292,7 +299,6 @@ test("tracker.users gates the tool trust boundary, but a bot-marked root stays t
           text: "<@U_BOT> from carol",
           user: "U_CAROL",
           reactions: ["eyes"],
-          botReacted: true,
         },
       ],
     },
@@ -407,7 +413,7 @@ test("a bot mention in a reply tracks the thread: request title, marker, restart
   assert.deepEqual(candidates[0]!.labels, ["backend"]);
   assert.match(candidates[0]!.description ?? "", /flaky deploys in prod/);
   // The bot marked the root so the thread stays tracked without re-reading replies.
-  assert.equal((await transport.getMessage("C1", rootTs))!.botReacted, true);
+  assert.ok((await transport.getMessage("C1", rootTs))!.botReactions.includes("robot_face"));
 
   // A fresh client (daemon restart) recognizes the marker even with an expired lookback.
   const restarted = new SlackTrackerClient(
@@ -454,7 +460,8 @@ test("untracked threads older than the reply lookback are not inspected", async 
 test("the bot's reaction mirror self-heals after a human command", async () => {
   // A human `!done` changes the derived state, but the bot's stale :eyes: mirror lingers
   // until the bot acts. The poll reconciles the mirror to the thread-derived state - once
-  // per state change, not on every poll (a stale HUMAN reaction is not removable anyway).
+  // per state change, not on every poll (re-attempting would churn the API while the
+  // background queue drains, or forever when a mapped emoji cannot be added).
   const transport = new InMemorySlackTransport(
     {
       C1: [
@@ -481,8 +488,10 @@ test("the bot's reaction mirror self-heals after a human command", async () => {
   };
   const client = new SlackTrackerClient(settings(), transport);
 
-  // Done is terminal, so the issue is not a candidate - but the poll still heals the mirror.
+  // Done is terminal, so the issue is not a candidate - but the poll still heals the mirror
+  // (in the background queue; flush to observe the settled result).
   assert.deepEqual(await client.fetchCandidateIssues(), []);
+  await client.flushStatusMirrorHeals();
   assert.deepEqual((await transport.getMessage("C1", "1700000000.000100"))!.reactions, [
     "white_check_mark",
   ]);
@@ -491,7 +500,173 @@ test("the bot's reaction mirror self-heals after a human command", async () => {
   // A second poll with an unchanged state attempts no further reaction writes.
   const afterHeal = reactionCalls;
   await client.fetchCandidateIssues();
+  await client.flushStatusMirrorHeals();
   assert.equal(reactionCalls, afterHeal);
+});
+
+test("human reactions never drive state and never trigger mirror writes", async () => {
+  // A human's :white_check_mark: on an eventless mention thread must NOT read as Done (that
+  // would let any channel member close an issue silently, bypassing the author allowlist) and
+  // must not be "ratified" by a heal. Humans transition via !commands; the issue stays Todo.
+  const transport = new InMemorySlackTransport(
+    {
+      C1: [
+        {
+          ts: "1700000000.000100",
+          text: "<@U_BOT> fix the thing",
+          humanReactions: ["white_check_mark", "eyes"],
+        },
+      ],
+    },
+    { botUserId: "U_BOT" },
+  );
+  let reactionCalls = 0;
+  transport.addReaction = async () => {
+    reactionCalls += 1;
+  };
+  transport.removeReaction = async () => {
+    reactionCalls += 1;
+  };
+  const client = new SlackTrackerClient(settings(), transport);
+
+  const candidates = await client.fetchCandidateIssues();
+  await client.flushStatusMirrorHeals();
+  assert.deepEqual(
+    candidates.map((i) => [i.id, i.state]),
+    [["C1:1700000000.000100", "Todo"]],
+  );
+  assert.equal(reactionCalls, 0);
+});
+
+test("the bot's own reactions still drive the eventless-state fallback", async () => {
+  const transport = new InMemorySlackTransport(
+    {
+      C1: [
+        // Seeded `reactions` are bot-authored: the mirror written in an earlier session.
+        { ts: "1700000000.000100", text: "<@U_BOT> shipped earlier", reactions: ["eyes"] },
+      ],
+    },
+    { botUserId: "U_BOT" },
+  );
+  const client = new SlackTrackerClient(settings(), transport);
+
+  assert.deepEqual(
+    (await client.fetchCandidateIssues()).map((i) => i.state),
+    ["In Progress"],
+  );
+});
+
+test("a mirror heal only removes managed reactions actually present on the message", async () => {
+  // Default managed set is {eyes, white_check_mark, x}. The root carries only :eyes:, so the
+  // heal to Done must remove exactly :eyes: and add :white_check_mark: - never fire a remove
+  // for :x: (or any other managed emoji) that is not on the message. Reaction methods are
+  // Slack Tier-3; the blanket sweep was ~one remove per managed emoji per healed root.
+  const transport = new InMemorySlackTransport(
+    {
+      C1: [
+        {
+          ts: "1700000000.000100",
+          text: "<@U_BOT> fix the thing",
+          reactions: ["eyes"],
+          replies: [{ ts: "1700000000.000200", text: "<@U_BOT> !done", user: "U_HUMAN" }],
+        },
+      ],
+    },
+    { botUserId: "U_BOT" },
+  );
+  const removed: string[] = [];
+  const added: string[] = [];
+  const add = transport.addReaction.bind(transport);
+  const remove = transport.removeReaction.bind(transport);
+  transport.addReaction = async (channel, ts, name) => {
+    added.push(name);
+    return add(channel, ts, name);
+  };
+  transport.removeReaction = async (channel, ts, name) => {
+    removed.push(name);
+    return remove(channel, ts, name);
+  };
+  const client = new SlackTrackerClient(settings(), transport);
+
+  await client.fetchCandidateIssues();
+  await client.flushStatusMirrorHeals();
+  assert.deepEqual(removed, ["eyes"]);
+  assert.deepEqual(added, ["white_check_mark"]);
+});
+
+test("a heal that is only missing its target emoji costs one add and zero removes", async () => {
+  // A human `!wip` on a root with no reactions at all: the mirror is merely missing :eyes:.
+  // Nothing managed is present, so the heal must be a single reactions.add.
+  const transport = new InMemorySlackTransport(
+    {
+      C1: [
+        {
+          ts: "1700000000.000100",
+          text: "<@U_BOT> fix the thing",
+          reactions: [],
+          replies: [{ ts: "1700000000.000200", text: "<@U_BOT> !wip", user: "U_HUMAN" }],
+        },
+      ],
+    },
+    { botUserId: "U_BOT" },
+  );
+  let removes = 0;
+  let adds = 0;
+  const add = transport.addReaction.bind(transport);
+  transport.addReaction = async (channel, ts, name) => {
+    adds += 1;
+    return add(channel, ts, name);
+  };
+  transport.removeReaction = async () => {
+    removes += 1;
+  };
+  const client = new SlackTrackerClient(settings(), transport);
+
+  await client.fetchCandidateIssues();
+  await client.flushStatusMirrorHeals();
+  assert.equal(removes, 0);
+  assert.equal(adds, 1);
+});
+
+test("a rate-limited mirror heal does not block candidate discovery", async () => {
+  // Two issues: one needs a mirror heal whose reactions.remove is stuck (a 429 backoff in the
+  // real transport), the other is a plain new mention. The poll must still return promptly with
+  // both issues - the heal runs in the background queue, not on the dispatch path.
+  const transport = new InMemorySlackTransport(
+    {
+      C1: [
+        {
+          ts: "1700000000.000100",
+          text: "<@U_BOT> healed later",
+          reactions: ["eyes"],
+          replies: [{ ts: "1700000000.000150", text: "<@U_BOT> !todo", user: "U_HUMAN" }],
+        },
+        { ts: "1700000000.000200", text: "<@U_BOT> fresh request", reactions: [] },
+      ],
+    },
+    { botUserId: "U_BOT" },
+  );
+  let releaseRemove!: () => void;
+  const blocked = new Promise<void>((resolve) => {
+    releaseRemove = resolve;
+  });
+  const remove = transport.removeReaction.bind(transport);
+  transport.removeReaction = async (channel, ts, name) => {
+    await blocked;
+    return remove(channel, ts, name);
+  };
+  const client = new SlackTrackerClient(settings(), transport);
+
+  const candidates = await client.fetchCandidateIssues();
+  assert.deepEqual(
+    candidates.map((i) => i.id),
+    ["C1:1700000000.000100", "C1:1700000000.000200"],
+  );
+
+  // Unblock the stuck remove and let the heal settle; the mirror still converges.
+  releaseRemove();
+  await client.flushStatusMirrorHeals();
+  assert.deepEqual((await transport.getMessage("C1", "1700000000.000100"))!.reactions, []);
 });
 
 test("fetchIssuesByIds derives in-window issues from the scan and warms the candidate cache", async () => {
@@ -557,7 +732,9 @@ test("fetchIssuesByIds takes a fresh scan before deciding tracked issue state", 
     if (!terminalOnNextScan) return scan;
     return {
       mentions: scan.mentions.map((root) =>
-        root.ts === "1700000000.000100" ? { ...root, reactions: ["white_check_mark"] } : root,
+        root.ts === "1700000000.000100"
+          ? { ...root, reactions: ["white_check_mark"], botReactions: ["white_check_mark"] }
+          : root,
       ),
       threadedRoots: scan.threadedRoots,
     };
@@ -622,7 +799,13 @@ test("fetchIssuesByIds preserves the requested id order across scan hits and fal
   // emit scan hits first and append fallbacks.
   transport.scanChannels = async () => ({
     mentions: [
-      { channel: "C1", ts: "1700000000.000200", text: "<@U_BOT> in scan", reactions: ["eyes"] },
+      {
+        channel: "C1",
+        ts: "1700000000.000200",
+        text: "<@U_BOT> in scan",
+        reactions: ["eyes"],
+        botReactions: ["eyes"],
+      },
     ],
     threadedRoots: [],
   });

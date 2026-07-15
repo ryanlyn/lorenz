@@ -26,8 +26,8 @@ function settings(overrides: Record<string, unknown> = {}) {
   );
 }
 
-function root(text: string, reactions: string[] = []): SlackMessage {
-  return { channel: "C1", ts: "100.000100", text, reactions };
+function root(text: string, botReactions: string[] = []): SlackMessage {
+  return { channel: "C1", ts: "100.000100", text, reactions: botReactions, botReactions };
 }
 
 function reply(ts: string, text: string, user?: string): SlackThreadReply {

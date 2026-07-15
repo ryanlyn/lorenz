@@ -229,8 +229,9 @@ test("slack_read_thread fails when no message exists at the issueId", async () =
 });
 
 test("slack_read_thread fails when the message is not a bot mention", async () => {
+  // A HUMAN's reaction on random chatter is not the bot's tracking marker.
   const transport = new InMemorySlackTransport({
-    C1: [{ ts: "1.1", text: "just chatting, no mention here", reactions: ["eyes"] }],
+    C1: [{ ts: "1.1", text: "just chatting, no mention here", humanReactions: ["eyes"] }],
   });
 
   const result = await executeSlackTool(
@@ -349,6 +350,32 @@ test("slack_update_status works for custom states with no mapped emoji", async (
     transport,
   );
   assert.equal((read.result as { status: string }).status, "Shipped");
+});
+
+test("slack_update_status only removes managed reactions present on the root", async () => {
+  // The root carries only :eyes:; transitioning to Done must remove exactly that and add
+  // :white_check_mark:, not sweep a reactions.remove for every managed emoji (Tier-3 calls).
+  const transport = new InMemorySlackTransport(
+    { C1: [{ ts: "1.1", text: "<@U1> do the thing", reactions: ["eyes"] }] },
+    { botUserId: "U1" },
+  );
+  const removed: string[] = [];
+  const remove = transport.removeReaction.bind(transport);
+  transport.removeReaction = async (channel, ts, name) => {
+    removed.push(name);
+    return remove(channel, ts, name);
+  };
+
+  const result = await executeSlackTool(
+    "slack_update_status",
+    { issueId: "C1:1.1", status: "Done" },
+    settings(),
+    transport,
+  );
+
+  assert.equal(result.success, true);
+  assert.deepEqual(removed, ["eyes"]);
+  assert.deepEqual((await transport.getMessage("C1", "1.1"))!.reactions, ["white_check_mark"]);
 });
 
 test("a failing reaction mirror never fails the status transition", async () => {
@@ -497,8 +524,9 @@ test("slack_comment fails when no message exists at the issueId", async () => {
 });
 
 test("slack_update_status fails when the message is not a bot mention", async () => {
+  // A HUMAN's reaction on random chatter is not the bot's tracking marker.
   const transport = new InMemorySlackTransport({
-    C1: [{ ts: "1.1", text: "just chatting, no mention here", reactions: ["eyes"] }],
+    C1: [{ ts: "1.1", text: "just chatting, no mention here", humanReactions: ["eyes"] }],
   });
 
   const result = await executeSlackTool(
@@ -630,8 +658,7 @@ test("slack_query includes bot-marked reply-tracked threads with thread state", 
         {
           ts: "2.1",
           text: "background discussion",
-          reactions: [],
-          botReacted: true,
+          reactions: ["robot_face"],
           replies: [
             { ts: "2.2", text: "<@U1> please handle #infra", user: "U_HUMAN" },
             { ts: "2.3", text: "status: In Progress", user: "U1" },

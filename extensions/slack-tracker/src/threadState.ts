@@ -172,7 +172,10 @@ export function stateFromThread(
     state = lastEvent.state;
     lastEventTs = tsValue(lastEvent.ts);
   } else if (rootIsMention) {
-    state = stateFromReactions(root.reactions, statusEmojiMap(settings), settings);
+    // Only the BOT's own reactions read as state: the mirror it wrote in an earlier session, or
+    // legacy reaction-managed threads. A human's reaction never moves an issue - humans
+    // transition through `!`-command replies, which are ts-ordered and auditable.
+    state = stateFromReactions(root.botReactions, statusEmojiMap(settings), settings);
     // Reactions carry no ordering, so any later bare mention may re-open a terminal reading.
     lastEventTs = Number.NEGATIVE_INFINITY;
   } else {
@@ -220,7 +223,8 @@ export async function resolveThreadState(
   }
   const key = `${root.channel}:${root.ts}`;
   const latestReply = root.latestReply ?? "";
-  const reactionsKey = [...root.reactions].sort().join(",");
+  // Only bot-authored reactions can change the derived state, so only they invalidate.
+  const reactionsKey = [...root.botReactions].sort().join(",");
   const cached = threadStateCache.get(key);
   if (
     cached &&

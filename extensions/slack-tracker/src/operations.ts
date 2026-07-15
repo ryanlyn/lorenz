@@ -3,6 +3,7 @@ import type { Settings } from "@lorenz/domain";
 import { emojiForState, isAllowedAuthor, isBotMention, statusEmojiMap } from "./mapping.js";
 import { slackTrackerOptions } from "./options.js";
 import { BOT_STATUS_PREFIX, resolveStateName } from "./threadState.js";
+import { isBotMarked } from "./transport.js";
 import type { SlackMessage, SlackTransport } from "./transport.js";
 
 /**
@@ -46,7 +47,7 @@ export async function requireTrackedMessage(
   // an issue the agent is mid-flight on. New tracking honors the allowlist on the author.
   if (
     (isBotMention(message.text, botUserId) && isAllowedAuthor(message.user, users)) ||
-    message.botReacted === true
+    isBotMarked(message)
   ) {
     return message;
   }
@@ -98,14 +99,20 @@ export async function updateSlackStatus(
   // tracked message before we write into its thread.
   const root = await requireTrackedMessage(settings, transport, channel, ts);
   await transport.postReply(channel, ts, `${BOT_STATUS_PREFIX} ${canonical}`);
-  await mirrorStatusReaction(settings, transport, channel, ts, canonical);
+  await mirrorStatusReaction(settings, transport, channel, ts, canonical, root.botReactions);
   return { ok: true, status: canonical, root };
 }
 
 /**
  * Best-effort visibility mirror: add the bot's reaction for the new state (when one is mapped)
- * and drop the bot's own other managed reactions. `reactions.remove` only removes the caller's
- * own reaction, so human-authored reactions are untouched by construction.
+ * and drop the bot's other managed reactions. `reactions.remove` only removes the caller's own
+ * reaction, so human-authored reactions are untouched by construction.
+ *
+ * `observed` is the snapshot of the BOT's own reactions on the message (from the trust-check
+ * fetch or the poll scan). Only those can need removing, and reaction methods are Tier-3
+ * rate-limited, so removals are the intersection of the managed set with the snapshot: a mirror
+ * that is merely missing its target costs a single `reactions.add`, and a stale one costs one
+ * remove per stale emoji rather than one per managed emoji.
  */
 export async function mirrorStatusReaction(
   settings: Settings,
@@ -113,12 +120,12 @@ export async function mirrorStatusReaction(
   channel: string,
   ts: string,
   state: string,
+  observed: readonly string[],
 ): Promise<void> {
   const map = statusEmojiMap(settings);
   const target = emojiForState(state, map);
-  const managed = Object.keys(map);
-  for (const emoji of managed) {
-    if (emoji === target) continue;
+  for (const emoji of observed) {
+    if (emoji === target || typeof map[emoji] !== "string") continue;
     try {
       await transport.removeReaction(channel, ts, emoji);
     } catch {

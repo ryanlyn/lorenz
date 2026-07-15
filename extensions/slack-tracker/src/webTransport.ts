@@ -495,22 +495,27 @@ function nextCursor(body: Record<string, unknown>): string | undefined {
 }
 
 function toMessage(channel: string, m: RawSlackMessage, botUserId?: string): SlackMessage {
-  const botReacted =
-    botUserId !== undefined &&
-    (m.reactions ?? []).some((r) => Array.isArray(r.users) && r.users.includes(botUserId));
+  const raw = m.reactions ?? [];
   return {
     channel,
     ts: m.ts ?? "",
     text: m.text ?? "",
     ...(typeof m.user === "string" ? { user: m.user } : {}),
-    reactions: (m.reactions ?? [])
-      .map((r) => r.name)
-      .filter((n): n is string => typeof n === "string"),
+    reactions: raw.map((r) => r.name).filter((n): n is string => typeof n === "string"),
+    // Bot authorship comes from each reaction's `users` list. Slack may truncate that list on
+    // heavily-reacted messages, so a bot reaction can occasionally be invisible here; state then
+    // falls back conservatively (the thread reply, when one exists, always wins regardless).
+    botReactions:
+      botUserId === undefined
+        ? []
+        : raw
+            .filter((r) => Array.isArray(r.users) && r.users.includes(botUserId))
+            .map((r) => r.name)
+            .filter((n): n is string => typeof n === "string"),
     ...(typeof m.reply_count === "number" && m.reply_count > 0
       ? { replyCount: m.reply_count }
       : {}),
     ...(typeof m.latest_reply === "string" ? { latestReply: m.latest_reply } : {}),
-    ...(botReacted ? { botReacted: true } : {}),
   };
 }
 
