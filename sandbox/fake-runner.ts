@@ -82,23 +82,18 @@ export function createFakeAgentRunner(
     const { issue, onUpdate, abortSignal } = input;
     const behavior = resolveBehavior(issue);
     const workspace = `/tmp/sandbox_workspaces/${issue.identifier}`;
-    const allUpdates: AgentUpdate[] = [];
 
-    const workspaceUpdate: AgentUpdate = {
+    onUpdate?.({
       type: "workspace_prepared",
       message: `workspace prepared at ${workspace}`,
       workspacePath: workspace,
-    };
-    onUpdate?.(workspaceUpdate);
-    allUpdates.push(workspaceUpdate);
+    });
 
-    const sessionUpdate: AgentUpdate = {
+    onUpdate?.({
       type: "session_started",
       message: `session started (fake-session-${issue.id})`,
       sessionId: `fake-session-${issue.id}`,
-    };
-    onUpdate?.(sessionUpdate);
-    allUpdates.push(sessionUpdate);
+    });
 
     if (behavior.stall) {
       return new Promise<RunResult>((_resolve, reject) => {
@@ -114,7 +109,6 @@ export function createFakeAgentRunner(
 
     for (const update of behavior.customUpdates) {
       onUpdate?.(update);
-      allUpdates.push(update);
     }
 
     let completedTurns = 0;
@@ -128,38 +122,30 @@ export function createFakeAgentRunner(
       }
 
       if (behavior.crashMidTurn && turn === behavior.crashAtTurn) {
-        const crashUpdate: AgentUpdate = {
+        onUpdate?.({
           type: "turn_failed",
           message: "session crash",
-        };
-        onUpdate?.(crashUpdate);
-        allUpdates.push(crashUpdate);
+        });
         throw new Error("FakeAgentRunner: session crashed mid-turn");
       }
 
-      const turnStarted: AgentUpdate = {
+      onUpdate?.({
         type: "turn_started",
         message: `turn ${turn}`,
-      };
-      onUpdate?.(turnStarted);
-      allUpdates.push(turnStarted);
+      });
 
       if (behavior.usagePerTurn) {
-        const usageUpdate: AgentUpdate = {
+        onUpdate?.({
           type: "usage",
           usage: { ...behavior.usagePerTurn },
-        };
-        onUpdate?.(usageUpdate);
-        allUpdates.push(usageUpdate);
+        });
       }
 
-      const turnCompleted: AgentUpdate = {
+      onUpdate?.({
         type: "turn_completed",
         sessionId: `fake-session-${issue.id}`,
         usage: { ...behavior.usagePerTurn },
-      };
-      onUpdate?.(turnCompleted);
-      allUpdates.push(turnCompleted);
+      });
 
       completedTurns += 1;
     }
@@ -171,7 +157,6 @@ export function createFakeAgentRunner(
     return {
       workspace,
       turnCount: completedTurns,
-      updates: allUpdates,
       agentKind: "codex",
     };
   };

@@ -162,6 +162,11 @@ export function startSshProcess(host: string, command: string): ChildProcessWith
     stdout: "pipe",
     stderr: "pipe",
     reject: false,
+    // Callers stream stdout/stderr themselves; buffering would ALSO retain the
+    // process's entire lifetime output for a `result` nobody reads - for a
+    // remote agent bridge that is the whole session's traffic, an unbounded
+    // memory leak in a long-running daemon.
+    buffer: false,
   }) as unknown as ChildProcessWithoutNullStreams;
 }
 
@@ -171,12 +176,25 @@ export function startReverseTunnel(
   localHost: string,
   localPort: number,
 ): ChildProcessWithoutNullStreams {
-  return execa(requireSshExecutable(), reverseTunnelArgs(host, remotePort, localHost, localPort), {
-    stdin: "pipe",
-    stdout: "pipe",
-    stderr: "pipe",
-    reject: false,
-  }) as unknown as ChildProcessWithoutNullStreams;
+  const subprocess = execa(
+    requireSshExecutable(),
+    reverseTunnelArgs(host, remotePort, localHost, localPort),
+    {
+      stdin: "pipe",
+      stdout: "pipe",
+      stderr: "pipe",
+      reject: false,
+      // A tunnel lives for hours; buffering would retain its whole lifetime
+      // output for a `result` nobody reads.
+      buffer: false,
+    },
+  ) as unknown as ChildProcessWithoutNullStreams;
+  // No caller consumes tunnel output. With buffering off, someone must drain
+  // the pipes or a chatty ssh (warnings, debug output) eventually fills them
+  // and blocks the tunnel; discard the data instead of retaining it.
+  subprocess.stdout.resume();
+  subprocess.stderr.resume();
+  return subprocess;
 }
 
 export async function waitForRemoteTcpPort(

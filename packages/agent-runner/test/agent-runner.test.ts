@@ -148,17 +148,19 @@ afterEach(() => {
 test("runAgentAttempt returns success result on normal completion", async () => {
   const issue = fakeIssue();
   const settings = fakeSettings();
+  const streamed: AgentUpdate[] = [];
   const result = await runAgentAttempt({
     issue,
     workflow: { path: "/workflow.md", config: {}, promptTemplate: "Fix {{issue.title}}", settings },
     settings,
+    onUpdate: (update) => streamed.push(update),
     adapters: fakeAdapters(),
   });
 
   assert.equal(result.workspace, "/tmp/workspace/TEST-1");
   assert.equal(result.turnCount, 1);
   assert.equal(result.agentKind, "codex");
-  assert.ok(result.updates.length > 0);
+  assert.ok(streamed.length > 0);
 });
 
 test("runAgentAttempt returns failure result when executor throws", async () => {
@@ -831,12 +833,14 @@ test("RunController accumulates usage totals across turns", async () => {
   const settings = fakeSettings({ agent: { ...defaultSettings().agent, maxTurns: 3 } });
   let turnNumber = 0;
   let sessionOnUpdate: ((update: AgentUpdate) => void) | undefined;
+  const streamed: AgentUpdate[] = [];
 
   const result = await runAgentAttempt({
     issue,
     workflow: { path: "/workflow.md", config: {}, promptTemplate: "Fix it", settings },
     settings,
     fetchIssue: async (iss) => iss,
+    onUpdate: (update) => streamed.push(update),
     adapters: fakeAdapters({
       executorFactory: () => ({
         kind: "codex",
@@ -868,9 +872,9 @@ test("RunController accumulates usage totals across turns", async () => {
     }),
   });
 
-  // The controller runs at least one turn and accumulates updates from onUpdate callback
+  // The controller runs at least one turn and streams updates through onUpdate
   assert.ok(result.turnCount >= 1);
-  const usageUpdates = result.updates.filter((u) => u.type === "session_notification" && u.usage);
+  const usageUpdates = streamed.filter((u) => u.type === "session_notification" && u.usage);
   assert.ok(usageUpdates.length >= 1);
   // Verify usage fields are passed through
   assert.ok(usageUpdates[0]!.usage);

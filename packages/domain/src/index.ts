@@ -110,7 +110,12 @@ const MIN_REGISTERED_SECRET_LENGTH = 3;
 const OP_REFERENCE_PATTERN = /op:\/\/[^\s"'`),\]}]+/g;
 const BEARER_AUTH_PATTERN = /\bBearer\s+[A-Za-z0-9._~+/=%-]+/gi;
 const BASIC_AUTH_PATTERN = /\bBasic\s+[A-Za-z0-9._~+/=%-]+/gi;
-const URL_AUTH_PATTERN = /([A-Za-z][A-Za-z0-9+.-]*:\/\/)([^@\s/?#]+)@/g;
+// The scheme length is BOUNDED: with an unbounded `[A-Za-z0-9+.-]*` the scan is
+// quadratic on long unbroken tokens (hex dumps, ids) - the greedy run consumes
+// the whole token at every start position before failing to find `://` - and
+// this pattern runs over every diagnostic string, including streamed agent
+// output. Real URI schemes are far shorter than 64 characters.
+const URL_AUTH_PATTERN = /([A-Za-z][A-Za-z0-9+.-]{0,63}:\/\/)([^@\s/?#]+)@/g;
 const SECRET_ASSIGNMENT_PATTERN =
   /((?:["']?\b(?:api[_-]?key|apiKey|authorization|auth[_-]?token|access[_-]?token|refresh[_-]?token|password|secret|token)\b["']?)\s*[:=]\s*)(["']?)([^"'\s,}\]]+)/gi;
 const DIAGNOSTIC_SECRET_KEY_PATTERN =
@@ -1080,7 +1085,11 @@ export interface AgentExecutor {
     settings: Settings;
     onUpdate?: (update: AgentUpdate) => void;
   }): Promise<AgentSession>;
-  /** Sends one prompt to the session and resolves with the updates produced during that turn. */
+  /**
+   * Sends one prompt to the session and resolves with the updates produced during that turn.
+   * Executors may bound the resolved batch for very long turns; a consumer that needs the
+   * complete stream must observe `onUpdate` instead of this return value.
+   */
   runTurn(session: AgentSession, prompt: string, issue?: Issue): Promise<AgentUpdate[]>;
 }
 

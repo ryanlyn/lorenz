@@ -1,6 +1,8 @@
 import fs from "node:fs/promises";
 import net from "node:net";
 import path from "node:path";
+import v8 from "node:v8";
+import vm from "node:vm";
 
 import { test, vi } from "vitest";
 import {
@@ -152,12 +154,15 @@ test("ACP executor accumulates per-call usage buckets incrementally", async () =
     onUpdate: (update) => updates.push(update),
   });
   const firstTurn = await executor.runTurn(session, "hello", sampleIssue);
+  // The full stream arrives via onUpdate (runTurn resolves only the terminal
+  // update): slice this turn's notifications off the stream before turn two.
+  const firstTurnStream = updates.splice(0);
   const secondTurn = await executor.runTurn(session, "hello again", sampleIssue);
   await session.stop();
 
   // Three unique buckets stream during the first turn (the duplicate seq and
   // the plain usage_update carry no usage), each carrying running totals.
-  const firstTurnUsage = firstTurn
+  const firstTurnUsage = firstTurnStream
     .filter((update) => update.type === "session_notification" && update.usage)
     .map((update) => update.usage);
   assert.deepEqual(firstTurnUsage, [
@@ -166,7 +171,7 @@ test("ACP executor accumulates per-call usage buckets incrementally", async () =
     { inputTokens: 21, outputTokens: 9, totalTokens: 30 },
   ]);
   assert.ok(
-    firstTurn
+    firstTurnStream
       .filter((update) => update.type === "session_notification" && update.usage)
       .every((update) => update.usageKind === "cumulative"),
   );
@@ -179,6 +184,59 @@ test("ACP executor accumulates per-call usage buckets incrementally", async () =
   // The second turn's bucket accumulates on top of the first turn.
   const secondCompleted = secondTurn.find((update) => update.type === "turn_completed");
   assert.deepEqual(secondCompleted?.usage, { inputTokens: 28, outputTokens: 12, totalTokens: 40 });
+});
+
+test("ACP executor does not retain a flood turn's stream (bridge stdout, per-turn batch)", async () => {
+  // Regression guard for the daemon OOM: the bridge streams ~49MB of unique
+  // chunks in one turn. Neither execa (result buffering of the child's stdout)
+  // nor runTurn (per-turn update batch) may retain that stream - post-GC heap
+  // growth must stay a small fraction of the streamed volume while the session
+  // (and so the bridge process) is still alive.
+  const forceGc = (() => {
+    if (typeof globalThis.gc === "function") return globalThis.gc.bind(globalThis);
+    v8.setFlagsFromString("--expose-gc");
+    const gc = vm.runInNewContext("gc") as () => void;
+    v8.setFlagsFromString("--no-expose-gc");
+    return gc;
+  })();
+  const heapUsedAfterGc = (): number => {
+    forceGc();
+    forceGc();
+    return process.memoryUsage().heapUsed;
+  };
+
+  const root = await tempDir("lorenz-acp-flood");
+  const fake = await writeFakeBridge(root);
+  const trace = path.join(root, "trace.jsonl");
+  const settings = acpSettings(root, fake, trace, "flood", 60_000);
+  const executor = new Executor("claude");
+  let streamedChunks = 0;
+  const session = await executor.startSession({
+    workspace: root,
+    settings,
+    issue: sampleIssue,
+    onUpdate: (update) => {
+      if (update.type === "session_notification") streamedChunks += 1;
+    },
+  });
+  try {
+    const baseline = heapUsedAfterGc();
+    const turnUpdates = await executor.runTurn(session, "hello", sampleIssue);
+    const growth = heapUsedAfterGc() - baseline;
+
+    // The stream really flowed (3000 chunks x ~16KB) and the resolved batch is
+    // just the terminal update, not the turn's history.
+    assert.ok(streamedChunks >= 3000, `expected the flood to stream, got ${streamedChunks}`);
+    assert.ok(turnUpdates.length <= 1, `expected only the terminal update, got ${turnUpdates.length}`);
+    const maxGrowth = 20 * 1024 * 1024;
+    assert.ok(
+      growth < maxGrowth,
+      `post-GC heap grew ${(growth / 1048576).toFixed(1)}MB after a ~49MB flood turn - ` +
+        "the bridge stream is being retained again",
+    );
+  } finally {
+    await session.stop();
+  }
 });
 
 test("ACP executor reconciles bucket undercount against the turn aggregate", async () => {
@@ -824,6 +882,20 @@ class FakeAgent {
           totalTokens: 10
         }
       };
+    }
+    if (mode === "flood") {
+      // Stream a large volume of unique chunks: the daemon must not retain the
+      // bridge's stdout (execa result buffering) or the streamed updates.
+      for (let i = 0; i < 3000; i++) {
+        await this.connection.sessionUpdate({
+          sessionId: params.sessionId,
+          update: {
+            sessionUpdate: "agent_message_chunk",
+            content: { type: "text", text: ("flood-" + i + "-").padEnd(64, "y").repeat(256) }
+          }
+        });
+      }
+      return { stopReason: "end_turn" };
     }
     if (mode === "wrong-session-update") {
       await this.connection.sessionUpdate({
