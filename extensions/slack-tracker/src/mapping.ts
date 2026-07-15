@@ -76,8 +76,8 @@ export function statusEmojiMap(settings: Settings): Record<string, string> {
  * outranks completed so that a cancellation deterministically overrides a completion when both
  * reactions are present, regardless of reaction order. Custom state names (no known category)
  * rank by their configured role: terminal states rank with completed and active states with
- * started, so a human-applied custom terminal reaction still closes an issue the agent marked
- * in-progress.
+ * started, so when the bot's mirror carries both a custom terminal emoji and an in-progress one
+ * (mid-swap, or a legacy thread), the terminal reading wins.
  */
 function stateRank(state: string, settings?: Settings): number {
   switch (defaultStateType(state)) {

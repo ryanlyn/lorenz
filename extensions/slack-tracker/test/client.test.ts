@@ -38,7 +38,7 @@ function botSettings() {
   );
 }
 
-test("mentions become issues; reactions drive state", async () => {
+test("mentions become issues; the bot's reactions drive state", async () => {
   const transport = new InMemorySlackTransport({
     C1: [
       { ts: "1700000000.000100", text: "<@U_BOT> fix the flaky test\nmore detail", reactions: [] },
@@ -460,7 +460,8 @@ test("untracked threads older than the reply lookback are not inspected", async 
 test("the bot's reaction mirror self-heals after a human command", async () => {
   // A human `!done` changes the derived state, but the bot's stale :eyes: mirror lingers
   // until the bot acts. The poll reconciles the mirror to the thread-derived state - once
-  // per state change, not on every poll (a stale HUMAN reaction is not removable anyway).
+  // per state change, not on every poll (re-attempting would churn the API while the
+  // background queue drains, or forever when a mapped emoji cannot be added).
   const transport = new InMemorySlackTransport(
     {
       C1: [
