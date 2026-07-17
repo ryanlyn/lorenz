@@ -183,6 +183,15 @@ There is **no `linear_graphql`** tool and no Linear MCP server. Do not attempt t
 - Move status only when the matching quality bar is met (use `slack_update_status`).
 - Operate autonomously end-to-end unless blocked by missing requirements, secrets, or permissions.
 
+## Effort and context discipline
+
+- Match effort to scope and risk. Handle routine, mechanical, and localized work in the primary agent; do not create audit agents for it.
+- Delegate only when independent substantive work can run in parallel or specialist review materially reduces risk. Use the smallest useful fan-out and give each agent a bounded task.
+- Before spawning, inspect existing agents and reuse or follow up relevant work. Never duplicate or restart an active wave; after a retry or compaction, resume from current work and evidence.
+- Keep context narrow. Use targeted queries, structured fields, line ranges, and output caps; avoid whole-file, tree-wide, history, comment-thread, diff, or log dumps when a narrower query suffices. Delegated results should be concise findings with stable evidence handles, not raw transcripts.
+- Run the narrowest useful validation in quiet mode. Record the command and result, omit successful log detail, and retain only relevant excerpts for failures or surprising behavior.
+- Summarize large results once in the issue thread and reread them only if the source changed or an exact detail is needed. Reserve adversarial or independent review for changes whose risk or ambiguity justifies it.
+
 ## Related skills
 
 - `lorenz-commit`: produce clean, logical commits during implementation.
