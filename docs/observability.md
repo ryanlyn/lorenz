@@ -8,17 +8,17 @@ Lorenz exposes one source of truth and three views over it. The source is the ru
 
 The runtime holds a single immutable `RuntimeSnapshot`: running agents, the retry/backoff queue, dispatch blocks, run history, token usage totals, rate limits, and recent events. Every operator view reads from this one structure, so they never disagree about live state.
 
-The path from runtime to screen is the same whichever view you open. `@lorenz/projections` keeps the bounded `recentEvents` and `runHistory` slices and deep-clones snapshot fields so a consumer can never mutate runtime state. `@lorenz/presenter` converts the camelCase snapshot into the snake_case JSON the HTTP API and WebSocket serve. `@lorenz/tui` formats the same snapshot into the terminal dashboard.
+The path from runtime to screen is the same whichever view you open. The runtime projection module keeps the bounded `recentEvents` and `runHistory` slices and deep-clones snapshot fields so a consumer can never mutate runtime state. `@lorenz/presenter` converts the camelCase snapshot into the snake_case JSON the HTTP API and WebSocket serve. `@lorenz/tui` formats the same snapshot into the terminal dashboard.
 
 <p align="center"><img src="assets/diagrams/observability-dataflow.svg" alt="observability dataflow diagram" width="920" style="width:100%;max-width:920px;height:auto" /></p>
-*One `RuntimeSnapshot` fans out through projections and the presenter into the HTTP JSON, the WebSocket `ops_state` push, and the TUI dashboard string.*
+*One `RuntimeSnapshot` fans out through runtime projection and the presenter into the HTTP JSON, the WebSocket `ops_state` push, and the TUI dashboard string.*
 
 A few facts hold across all three views:
 
 - `recentEvents` is capped at the last 20 entries, newest first.
 - `runHistory` is capped at the last 50 entries, newest first.
 - The presenter sets `cost.estimated_cost_usd` to `null` everywhere. Cost is reported from token totals, not dollars.
-- The snapshot's `reserving` field (slots mid-acquire) is carried by projections and surfaced only in the TUI (as the `rsv` lane); the web dashboard and `lorenz runs` do not show it.
+- The snapshot's `reserving` field (slots mid-acquire) is carried by runtime projection and surfaced only in the TUI (as the `rsv` lane); the web dashboard and `lorenz runs` do not show it.
 
 ## The terminal dashboard (TUI)
 

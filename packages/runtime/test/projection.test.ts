@@ -3,8 +3,8 @@ import type { RuntimeEvent, RuntimeRunHistoryEntry } from "@lorenz/runtime-event
 import type { UsageTotals } from "@lorenz/domain";
 import { assert } from "@lorenz/test-utils";
 
-import type { RuntimeProjectionInput } from "@lorenz/projections";
-import { ProjectionActor } from "@lorenz/projections";
+import type { RuntimeProjectionInput } from "@lorenz/runtime";
+import { ProjectionActor } from "@lorenz/runtime";
 
 function makeUsageTotals(overrides: Partial<UsageTotals> = {}): UsageTotals {
   return {
