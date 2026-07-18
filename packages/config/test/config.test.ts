@@ -703,6 +703,70 @@ test("dispatch config rejects blank routes and normalizes unique route names", (
   );
 });
 
+test("dispatch route_agents parses via snake_case and normalizes route keys", () => {
+  assert.deepEqual(parseConfig().tracker.dispatch.routeAgents, {});
+
+  const settings = parseConfig({
+    tracker: {
+      dispatch: {
+        route_agents: { " Claude ": " claude ", CODEX: "codex" },
+      },
+    },
+  });
+  assert.deepEqual(settings.tracker.dispatch.routeAgents, {
+    claude: "claude",
+    codex: "codex",
+  });
+});
+
+test("dispatch route_agents rejects invalid and conflicting entries", () => {
+  assert.throws(
+    () => parseConfig({ tracker: { dispatch: { route_agents: { " ": "claude" } } } }),
+    /tracker.dispatch.route_agents must not contain blank routes/,
+  );
+  assert.throws(
+    () => parseConfig({ tracker: { dispatch: { route_agents: { backend: " " } } } }),
+    /tracker.dispatch.route_agents.backend must not be blank/,
+  );
+  assert.throws(
+    () =>
+      parseConfig({
+        tracker: { dispatch: { route_agents: { Backend: "claude", " backend ": "codex" } } },
+      }),
+    /route_agents maps route "backend" to conflicting agent kinds/,
+  );
+  assert.deepEqual(
+    parseConfig({
+      tracker: { dispatch: { route_agents: { Backend: "claude", " backend ": "claude" } } },
+    }).tracker.dispatch.routeAgents,
+    { backend: "claude" },
+  );
+});
+
+test("dispatch validation requires configured route_agents targets", () => {
+  assert.throws(
+    () =>
+      validateDispatchConfig(
+        parseConfig({
+          tracker: { kind: "memory", dispatch: { route_agents: { backend: "ghost" } } },
+        }),
+      ),
+    /tracker\.dispatch\.route_agents\.backend: agents\.ghost is required/,
+  );
+
+  validateDispatchConfig(
+    parseConfig({
+      tracker: { kind: "memory", dispatch: { route_agents: { backend: "claude" } } },
+    }),
+  );
+  validateDispatchConfig(
+    parseConfig({
+      tracker: { kind: "memory", dispatch: { route_agents: { backend: "pi" } } },
+      agents: { pi: { bridge_command: "pi-acp" } },
+    }),
+  );
+});
+
 test("config validates literal-only backend names and rejects removed Codex keys", () => {
   const settings = parseConfig({
     tracker: { kind: "memory" },

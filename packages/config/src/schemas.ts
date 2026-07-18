@@ -172,6 +172,7 @@ export const trackerRecordSchema = z
         acceptUnrouted: coercedBoolean.optional(),
         onlyRoutes: z.array(z.string()).nullable().optional(),
         routeLabelPrefix: z.string().optional(),
+        routeAgents: z.record(z.string(), z.string()).optional(),
       })
       .strict()
       .optional(),

@@ -219,6 +219,12 @@ export function validateDispatchConfig(
   for (const override of settings.statusOverrides.values()) {
     if (override.agent?.kind) requiredBackends.add(override.agent.kind);
   }
+  for (const [route, kind] of Object.entries(settings.tracker.dispatch.routeAgents ?? {})) {
+    if (!settings.agents[kind] && kind !== settings.agent.kind) {
+      throw new Error(`tracker.dispatch.route_agents.${route}: agents.${kind} is required`);
+    }
+    requiredBackends.add(kind);
+  }
   for (const kind of requiredBackends) {
     const agent = settings.agents[kind];
     if (!agent) throw new Error(`agents.${kind} is required`);
@@ -280,6 +286,7 @@ const TRACKER_DISPATCH_ALIASES = {
   accept_unrouted: "acceptUnrouted",
   only_routes: "onlyRoutes",
   route_label_prefix: "routeLabelPrefix",
+  route_agents: "routeAgents",
 };
 
 /** Keys of a selected tracker config record owned by the core; everything else belongs to the provider. */
@@ -457,6 +464,8 @@ function parseDispatch(defaults: TrackerSettings["dispatch"], raw: DispatchRaw) 
     acceptUnrouted: raw.acceptUnrouted ?? defaults.acceptUnrouted,
     onlyRoutes,
     routeLabelPrefix: (raw.routeLabelPrefix ?? defaults.routeLabelPrefix).trim(),
+    routeAgents:
+      raw.routeAgents === undefined ? defaults.routeAgents : normalizeRouteAgents(raw.routeAgents),
   };
 }
 
@@ -1125,7 +1134,12 @@ function cloneWorkerPool(workerPool: WorkerPoolSettings): WorkerPoolSettings {
 function cloneTracker(tracker: TrackerSettings): TrackerSettings {
   return {
     ...tracker,
-    dispatch: { ...tracker.dispatch },
+    dispatch: {
+      ...tracker.dispatch,
+      ...(tracker.dispatch.routeAgents !== undefined && {
+        routeAgents: { ...tracker.dispatch.routeAgents },
+      }),
+    },
     activeStates: [...tracker.activeStates],
     terminalStates: [...tracker.terminalStates],
     options: structuredClone(tracker.options),
@@ -1163,6 +1177,28 @@ function normalizeOnlyRoutes(routes: string[]): string[] {
     throw new Error("tracker.dispatch.only_routes must not contain blank routes");
   }
   return [...new Set(normalized)];
+}
+
+function normalizeRouteAgents(routeAgents: Record<string, string>): Record<string, string> {
+  const normalized: Record<string, string> = {};
+  for (const [routeRaw, kindRaw] of Object.entries(routeAgents)) {
+    const route = normalizeRouteName(routeRaw);
+    if (route === "") {
+      throw new Error("tracker.dispatch.route_agents must not contain blank routes");
+    }
+    const kind = kindRaw.trim();
+    if (kind === "") {
+      throw new Error(`tracker.dispatch.route_agents.${route} must not be blank`);
+    }
+    const existing = normalized[route];
+    if (existing !== undefined && existing !== kind) {
+      throw new Error(
+        `tracker.dispatch.route_agents maps route "${route}" to conflicting agent kinds ("${existing}", "${kind}")`,
+      );
+    }
+    normalized[route] = kind;
+  }
+  return normalized;
 }
 
 function resolveEnv(value: string, env: NodeJS.ProcessEnv): string {

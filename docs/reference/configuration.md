@@ -80,6 +80,7 @@ The core tracker bundle. `tracker.kind` selects the provider. There is no defaul
 | `tracker.dispatch.accept_unrouted` | boolean | `true` | Dispatch issues that carry no route label. |
 | `tracker.dispatch.only_routes` | string[] \| null | `null` | Restrict dispatch to these routes; `null` means no restriction. |
 | `tracker.dispatch.route_label_prefix` | string | `Lorenz:` | Label prefix that marks a route (for example `Lorenz:Backend` to route `backend`). |
+| `tracker.dispatch.route_agents` | map<string, string> | `{}` | Map normalized route names to configured agent kinds. An unambiguous route overrides the per-state and default kind without changing eligibility. |
 
 `active_states`, `terminal_states`, and the `dispatch.*` keys are core fields shared by every provider, not provider-specific. See [dispatch](../dispatch.md) and [dispatch-routing](../features/dispatch-routing.md).
 

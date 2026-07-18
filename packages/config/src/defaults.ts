@@ -24,6 +24,7 @@ export const defaultSettings = (options: DefaultSettingsOptions = {}): Settings 
         acceptUnrouted: true,
         onlyRoutes: null,
         routeLabelPrefix: "Lorenz:",
+        routeAgents: {},
       },
       options: {},
     },

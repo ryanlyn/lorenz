@@ -116,7 +116,34 @@ Two rows are worth a second look:
 
 Each instance enforces its own concurrency caps independently. `agent.max_concurrent_agents` (default `10`) is per process, so three instances can run up to thirty agents in total. Plan host capacity for the sum.
 
+## Routes can select the agent
+
+`tracker.dispatch.route_agents` maps route names to agent kinds, so one Lorenz instance can run a
+different configured agent bundle for each route. With the Slack `route-` prefix,
+`#route-claude` selects the `claude` bundle:
+
+```yaml
+tracker:
+  dispatch:
+    route_label_prefix: "route-"
+    route_agents:
+      claude: claude
+      codex: codex
+```
+
+Route selection is independent of routing eligibility. `accept_unrouted` and `only_routes` still
+decide whether this instance accepts the issue. For an accepted issue, precedence is route mapping,
+then the per-state `status_overrides` kind, then the default `agent.kind`.
+
+Each value must name a configured `agents.<kind>` entry. Route keys are trimmed and lowercased like
+`only_routes`; agent kind values are trimmed and remain case-sensitive. If several issue routes map
+to the same kind, that kind is selected. If they map to different kinds, Lorenz does not guess: the
+per-state or default kind runs and a `route_agents_conflict` event names the conflicting mappings.
+The selected kind is pinned when the issue is claimed, so relabeling does not retarget an active
+run.
+
 ## See also
+
 - [../dispatch.md](../dispatch.md) - the full eligibility chain, the routing predicate line by line, and concurrency caps
 - [../trackers/linear.md](../trackers/linear.md) - Linear labels, project selection, and the `Lorenz:` prefix
 - [../trackers/slack.md](../trackers/slack.md) - Slack hashtag routes and why `tracker.assignee` is rejected

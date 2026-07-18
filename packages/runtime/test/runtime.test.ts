@@ -806,6 +806,85 @@ test("runtime does not record completion when claim ownership is lost before fin
   );
 });
 
+test("runtime pins the route-selected agent kind into runner settings", async () => {
+  const routed = normalizeIssue({
+    id: "issue-route-agent",
+    identifier: "MT-ROUTE-AGENT",
+    title: "Runtime fixture",
+    state: { name: "Todo", type: "unstarted" },
+    labels: [{ name: "Lorenz:Claude" }],
+    blockers: [],
+  });
+  const workflow = workflowFixture();
+  workflow.settings.tracker.dispatch.routeAgents = { claude: "claude" };
+  const runnerSettings: Settings[] = [];
+  const runtime = new LorenzRuntime(
+    runtimeOptions({
+      workflow,
+      client: {
+        fetchCandidateIssues: async () => [routed],
+        fetchIssuesByIds: async () => [routed],
+      },
+      runner: async (input) => {
+        runnerSettings.push(input.settings ?? input.workflow.settings);
+        return {
+          workspace: "/tmp/lorenz/MT-ROUTE-AGENT",
+          turnCount: 1,
+          agentKind: "claude",
+          finalIssue: { ...routed, state: "Done", stateType: "completed" },
+        };
+      },
+    }),
+  );
+
+  await runtime.pollOnce({ waitForRuns: true });
+
+  assert.equal(runnerSettings[0]?.agent.kind, "claude");
+  assert.equal(runtime.snapshot().runHistory[0]?.agentKind, "claude");
+});
+
+test("runtime warns and applies no override when route_agents conflict", async () => {
+  const conflicted = normalizeIssue({
+    id: "issue-route-agent-conflict",
+    identifier: "MT-ROUTE-AGENT-CONFLICT",
+    title: "Runtime fixture",
+    state: { name: "Todo", type: "unstarted" },
+    labels: [{ name: "Lorenz:Claude" }, { name: "Lorenz:Codex" }],
+    blockers: [],
+  });
+  const workflow = workflowFixture();
+  workflow.settings.tracker.dispatch.routeAgents = { claude: "claude", codex: "codex" };
+  const runnerSettings: Settings[] = [];
+  const runtime = new LorenzRuntime(
+    runtimeOptions({
+      workflow,
+      client: {
+        fetchCandidateIssues: async () => [conflicted],
+        fetchIssuesByIds: async () => [conflicted],
+      },
+      runner: async (input) => {
+        runnerSettings.push(input.settings ?? input.workflow.settings);
+        return {
+          workspace: "/tmp/lorenz/MT-ROUTE-AGENT-CONFLICT",
+          turnCount: 1,
+          agentKind: "codex",
+          finalIssue: { ...conflicted, state: "Done", stateType: "completed" },
+        };
+      },
+    }),
+  );
+
+  await runtime.pollOnce({ waitForRuns: true });
+
+  assert.equal(runnerSettings[0], workflow.settings);
+  assert.equal(runnerSettings[0]?.agent.kind, "codex");
+  const conflict = runtime
+    .snapshot()
+    .recentEvents.find((event) => event.message.includes("route_agents_conflict"));
+  assert.equal(conflict?.type, "poll_error");
+  assert.match(conflict?.message ?? "", /claude=claude, codex=codex/);
+});
+
 test("runtime does not record runner failure when durable finish fails after runner success", async () => {
   const issue = issueFixture("issue-finish-failure", "MT-FINISH-FAILURE");
   const doneIssue: Issue = { ...issue, state: "Done", stateType: "completed" };

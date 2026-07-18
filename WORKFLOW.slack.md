@@ -33,6 +33,11 @@ trackers:
       accept_unrouted: true
       only_routes: null
       route_label_prefix: "route-"
+      # Optional route -> agent-kind selection. Route-based agent selection does not change which
+      # issues this instance accepts. Values must name configured agents.* entries.
+      route_agents:
+        claude: claude
+        codex: codex
     # Scan-cost controls (optional). Slack's restricted tier can make history scans very slow,
     # while Marketplace-approved apps and internal customer-built apps keep higher limits; either
     # way a large channel backlog can make an unbounded first poll expensive. These controls bound

@@ -1676,6 +1676,47 @@ test("orchestrator claims ensemble slots independently and snapshots backend-neu
   assert.equal(orchestrator.snapshot().retrying[0]?.attempt, 1);
 });
 
+test("orchestrator claim resolves route_agents over the per-state override", () => {
+  const settings = parseConfig({
+    tracker: { dispatch: { route_agents: { claude: "claude" } } },
+    status_overrides: { Todo: { agent: { kind: "pi" } } },
+    agents: { pi: { bridge_command: "pi-acp" } },
+  });
+  const orchestrator = new Orchestrator(settings);
+  const routed = normalizeIssue({
+    id: "route-agent-issue",
+    identifier: "MT-ROUTE-AGENT",
+    title: "Route selects the agent",
+    state: { name: "Todo", type: "unstarted" },
+    labels: [{ name: "Lorenz:Claude" }],
+  });
+  const unrouted = normalizeIssue({
+    id: "route-agent-default",
+    identifier: "MT-ROUTE-AGENT-DEFAULT",
+    title: "State override applies without a mapped route",
+    state: { name: "Todo", type: "unstarted" },
+  });
+
+  assert.equal(claimEntry(orchestrator, routed)?.agentKind, "claude");
+  assert.equal(claimEntry(orchestrator, unrouted)?.agentKind, "pi");
+});
+
+test("orchestrator claim applies no route override when mapped routes conflict", () => {
+  const settings = parseConfig({
+    tracker: { dispatch: { route_agents: { claude: "claude", codex: "codex" } } },
+  });
+  const orchestrator = new Orchestrator(settings);
+  const conflicted = normalizeIssue({
+    id: "route-agent-conflict",
+    identifier: "MT-ROUTE-AGENT-CONFLICT",
+    title: "Ambiguity never guesses",
+    state: { name: "Todo", type: "unstarted" },
+    labels: [{ name: "Lorenz:Claude" }, { name: "Lorenz:Codex" }],
+  });
+
+  assert.equal(claimEntry(orchestrator, conflicted)?.agentKind, "codex");
+});
+
 test("orchestrator preserves pending ensemble retries per slot", () => {
   const clock = fakeClock(new Date("2026-01-01T00:00:00.000Z"));
   const settings = parseConfig({
