@@ -81,6 +81,8 @@ interface TurnActivity {
 interface QueuedTurn {
   outcome: Promise<TurnOutcome>;
   activity: TurnActivity;
+  activated: boolean;
+  activate(): void;
 }
 
 export interface RunAgentAttemptInput {
@@ -348,10 +350,14 @@ class RunController {
           const prompt = issueEventsPrompt(chunk.promptEvents);
           const activity = { sawToolCall: false };
           pendingStreamActivities.push(activity);
+          let releaseActivation: (() => void) | undefined;
+          const startWhen = new Promise<void>((resolve) => {
+            releaseActivation = resolve;
+          });
           let outcome: Promise<TurnOutcome>;
           try {
             outcome = session
-              .queueTurn(prompt)
+              .queueTurn(prompt, { startWhen })
               .then<TurnOutcome, TurnOutcome>(
                 (updates) => ({ updates }),
                 (error: unknown) => ({ error }),
@@ -366,7 +372,16 @@ class RunController {
             reportSteeringFailure("queue", error);
             return { acceptedThrough, failed: true };
           }
-          const queuedTurn = { outcome, activity };
+          const queuedTurn: QueuedTurn = {
+            outcome,
+            activity,
+            activated: false,
+            activate() {
+              if (queuedTurn.activated) return;
+              queuedTurn.activated = true;
+              releaseActivation?.();
+            },
+          };
           queuedTurns.push(queuedTurn);
           steeringTurnCount += 1;
           for (const event of chunk.sourceEvents) seenSteeringEventTs.add(event.ts);
@@ -433,7 +448,33 @@ class RunController {
       while (autonomousTurnCount < runtime.agent.maxTurns || queuedTurns.length > 0) {
         throwIfAborted(input.abortSignal);
         await steeringFlushTail;
-        const queuedTurn = queuedTurns.shift();
+        let queuedTurn = queuedTurns[0];
+        if (queuedTurn && !queuedTurn.activated) {
+          if (!input.fetchIssue) {
+            queuedTurn.activate();
+          } else {
+            try {
+              issue = await input.fetchIssue(issue);
+            } catch (error) {
+              throwIfAborted(input.abortSignal);
+              await steeringFlushTail;
+              if (queuedTurns.length === 0) throw error;
+              reportSteeringFailure("issue refresh", error);
+              queuedTurns[0]?.activate();
+            }
+            await steeringFlushTail;
+            const activeIssue = issueIsActive(issue, settings);
+            if (!activeIssue) break;
+            const refreshed = settingsForIssueState(settings, issue.state);
+            const backendChanged =
+              refreshed.agent.kind !== runtime.agent.kind ||
+              backendProfile(refreshed) !== backendProfile(runtime);
+            if (backendChanged) break;
+            runtime = refreshed;
+            queuedTurns[0]?.activate();
+          }
+        }
+        queuedTurn = queuedTurns.shift();
         if (!queuedTurn && autonomousTurnCount >= runtime.agent.maxTurns) break;
         let turnUpdates: AgentUpdate[];
         let turnActivity: TurnActivity;
@@ -514,6 +555,7 @@ class RunController {
         // primarily comes from streamed updates because the returned batch may be
         // bounded for very long turns, which can omit an early tool call.
         const completedWithoutTools =
+          !queuedTurn &&
           turnCount > 1 &&
           runtime.agents[runtime.agent.kind]?.executor === "acp" &&
           !turnActivity.sawToolCall &&
@@ -521,7 +563,10 @@ class RunController {
 
         if (completedWithoutTools && !steeringRecoveryAvailable) break;
         if (!input.fetchIssue) {
-          if (queuedTurns.length > 0) continue;
+          if (queuedTurns.length > 0) {
+            queuedTurns[0]?.activate();
+            continue;
+          }
           break;
         }
         try {
@@ -529,8 +574,12 @@ class RunController {
         } catch (error) {
           throwIfAborted(input.abortSignal);
           await steeringFlushTail;
-          if (queuedTurns.length === 0) throw error;
+          if (queuedTurns.length === 0) {
+            if (queuedTurn) break;
+            throw error;
+          }
           reportSteeringFailure("issue refresh", error);
+          queuedTurns[0]?.activate();
           continue;
         }
         await steeringFlushTail;
@@ -542,11 +591,17 @@ class RunController {
           backendProfile(refreshed) !== backendProfile(runtime);
         if (backendChanged) break;
         runtime = refreshed;
-        if (queuedTurns.length > 0) continue;
+        if (queuedTurns.length > 0) {
+          queuedTurns[0]?.activate();
+          continue;
+        }
         await enqueueSteeringFlush(
           completedWithoutTools || autonomousTurnCount >= runtime.agent.maxTurns,
         );
-        if (queuedTurns.length > 0) continue;
+        if (queuedTurns.length > 0) {
+          queuedTurns[0]?.activate();
+          continue;
+        }
         if (completedWithoutTools && queuedTurns.length === 0) break;
       }
     } catch (error) {

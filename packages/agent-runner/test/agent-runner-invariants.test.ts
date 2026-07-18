@@ -322,6 +322,7 @@ describe("INVARIANT: When the backend profile changes between turns, the system 
       markQueuedTurnSubmitted = resolve;
     });
     let stopCalls = 0;
+    let backendActivations = 0;
 
     const attempt = runAgentAttempt({
       issue: fakeIssue({ state: "Todo" }),
@@ -337,9 +338,11 @@ describe("INVARIANT: When the backend profile changes between turns, the system 
           kind: "codex",
           async startSession() {
             return fakeSession({
-              queueTurn: async (prompt) => {
+              queueTurn: async (prompt, options) => {
                 queuedPrompts.push(prompt);
                 markQueuedTurnSubmitted?.();
+                await options?.startWhen;
+                backendActivations += 1;
                 return [{ type: "turn_completed" }];
               },
               stop: async () => {
@@ -365,6 +368,7 @@ describe("INVARIANT: When the backend profile changes between turns, the system 
     assert.equal(result.turnCount, 1);
     assert.equal(stopCalls, 1);
     assert.equal(queuedPrompts.length, 1);
+    assert.equal(backendActivations, 0);
   });
 
   test("session continues when profile stays the same across turns (ACP)", async () => {

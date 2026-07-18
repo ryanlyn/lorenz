@@ -254,12 +254,14 @@ A normal worker exit does not mean the issue is finished. One worker may run mul
 autonomous turns on the same live agent thread in the same workspace, up to `agent.max_turns`,
 re-checking the tracker state after each turn. Human steering accepted by the active session is
 drained even when that autonomous budget is exhausted, with a separate `agent.max_turns` limit on
-steering turns per run. Additional prompt-visible issue messages remain eligible for the next
-attempt. The first autonomous turn sends the full rendered prompt; later autonomous turns send only
-continuation guidance to the existing thread. If a state refresh changes the effective backend
-profile (the `agents.<kind>.executor` or its options), the worker ends the session and yields so a
-future attempt starts with the new profile. After a normal exit the orchestrator always schedules a
-short continuation retry to re-check whether the issue still needs another session.
+steering turns per run. Accepted steering enters the session queue immediately but remains inactive
+until the tracker refresh confirms that the issue is active and its effective backend profile is
+unchanged. Additional prompt-visible issue messages remain eligible for the next attempt. The first
+autonomous turn sends the full rendered prompt; later autonomous turns send only continuation
+guidance to the existing thread. If a state refresh changes the effective backend profile (the
+`agents.<kind>.executor` or its options), the worker ends the session and yields so a future attempt
+starts with the new profile. After a normal exit the orchestrator always schedules a short
+continuation retry to re-check whether the issue still needs another session.
 
 ### 5.2 Poll tick
 

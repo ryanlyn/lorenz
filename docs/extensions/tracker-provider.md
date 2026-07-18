@@ -79,10 +79,12 @@ interface RuntimeTrackerClient {
   each issue snapshot. The runner ignores live replays at or before that immutable boundary,
   reconciles recovery results before newer live events, and advances its recovery cursor only
   through events accepted into bounded queued turns. Exceptionally long messages are shortened for
-  live delivery and remain complete in the next issue snapshot. A run submits later human events
-  even when the autonomous turn budget is exhausted and accepts at most `agent.max_turns` steering
-  turns; additional prompt-visible events remain eligible for the next attempt. Stop the request
-  when `abortSignal` aborts.
+  live delivery and remain complete in the next issue snapshot. The runner submits each accepted
+  prompt to the session queue immediately, then activates it after an issue refresh confirms that
+  the issue is active and the effective backend profile is unchanged. A run submits later human
+  events even when the autonomous turn budget is exhausted and accepts at most `agent.max_turns`
+  steering turns; additional prompt-visible events remain eligible for the next attempt. Stop the
+  request when `abortSignal` aborts.
 
 Each client returns the domain `Issue` shape, not the backend's raw payload. `Issue` requires
 `stateType: IssueStateType` (one of `backlog`, `unstarted`, `started`, `completed`, `canceled`,
