@@ -25,7 +25,7 @@ a closed set. See [../agents/index.md](../agents/index.md) and
 ## C
 
 **Continuation turn** - the retry Lorenz schedules after a clean agent exit, distinct from a failure
-retry. `finish(normal)` always writes a continuation retry (attempt 1, fixed backoff near 1000ms);
+retry. `finishAsync(normal)` always writes a continuation retry (attempt 1, fixed backoff near 1000ms);
 reconciliation later prunes it if the issue is no longer active. See
 [../agent-orchestrator.md](../agent-orchestrator.md) and
 [workflow-prompt.md](workflow-prompt.md) for the continuation prompt.
@@ -45,7 +45,7 @@ immediately, the pool path reserves a slot, acquires a worker, then binds. See
 ## E
 
 **Eligibility** - the orchestrator's decision about which fetched issues may be dispatched now.
-`eligibleIssues` sweeps expired reservations, prunes retry attempts for inactive issues, resets the
+`eligibleIssuesAsync` sweeps expired reservations, prunes retry attempts for inactive issues, resets the
 blocked list, then sorts and filters: issues with retries not yet due are dropped. See
 [../dispatch.md](../dispatch.md).
 

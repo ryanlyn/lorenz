@@ -44,7 +44,7 @@ Each tick runs `pollOnceUnlocked` in a fixed order:
 4. `reconcileStalledRuns` - stall detection (Part A).
 5. `reconcileTrackedIssues` - tracker state refresh (Part B).
 6. `client.fetchCandidateIssues` - pull the candidate set from the tracker.
-7. `orchestrator.eligibleIssues(issues)` - sort and filter.
+7. `orchestrator.eligibleIssuesAsync(issues)` - sort and filter.
 8. `syncRetryTimersForIssues` - arm retry timers (skipped on dry-run).
 9. dispatch each eligible issue, or emit `dry_run` for it.
 10. if `waitForRuns`, await every dispatched run.
@@ -67,12 +67,12 @@ A dispatch slot moves through a small state machine. The orchestrator owns every
 *A slot's lifecycle: unclaimed to claimed/reserved to running to finished, then a continuation or failure retry that makes the issue eligible again. Reservation expiry and the ABA token guard branch off the reserved state.*
 
 - **Unclaimed.** No entry in `claimed` for this `slotKey`. `firstUnclaimedSlot` will select it, honoring `preferredSlotIndex` so a retry reuses its original slot.
-- **Claimed / reserved.** On the pool-governed path, `claim()` returns `{ kind: 'reserved', reservation }`. The slot is in `claimed` and `reserved` but has no host yet. On the static/local path, `claim()` mints a `RunningEntry` immediately and the slot goes straight to running.
-- **Running.** A bound `RunningEntry` in `running`. Agent updates flow through `applyUpdate(issueId, slotIndex, update)`, refreshing `lastAgentTimestamp` and usage.
-- **Finished.** `finish(issueId, slotIndex, normal, error?, retryKind)` removes the running and claimed entries, adds `secondsRunning`, marks the issue `completed`, and **always** schedules a retry.
+- **Claimed / reserved.** On the pool-governed path, `claimAsync()` returns `{ kind: 'reserved', reservation }`. The slot is in `claimed` and `reserved` but has no host yet. On the static/local path, `claimAsync()` mints a `RunningEntry` immediately and the slot goes straight to running.
+- **Running.** A bound `RunningEntry` in `running`. Agent updates flow through `applyUpdateAsync(issueId, slotIndex, update)`, refreshing `lastAgentTimestamp` and usage.
+- **Finished.** `finishAsync(issueId, slotIndex, normal, error?, retryKind)` removes the running and claimed entries, adds `secondsRunning`, marks the issue `completed`, and **always** schedules a retry.
 - **Retry pending.** A `RetryEntry` in `retryAttempts`. The slot is eligible again only once its monotonic deadline passes.
 
-`finish` always writes a retry. A clean exit writes a `continuation` retry (attempt fixed to `1`); a fault writes a `failure` retry (attempt = previous + 1). The continuation retry is written even if the issue is now inactive; `eligibleIssues` prunes it later via `cleanupRetryAttempts` if the issue is no longer active. Continuation backoff is a fixed `1000` ms; failure backoff is `10000 * 2^(attempt - 1)` capped at `agent.max_retry_backoff_ms` (default `300000`). The backoff math lives in `@lorenz/policies` and is detailed in [dispatch.md](dispatch.md).
+`finishAsync` always writes a retry. A clean exit writes a `continuation` retry (attempt fixed to `1`); a fault writes a `failure` retry (attempt = previous + 1). The continuation retry is written even if the issue is now inactive; `eligibleIssuesAsync` prunes it later via `cleanupRetryAttempts` if the issue is no longer active. Continuation backoff is a fixed `1000` ms; failure backoff is `10000 * 2^(attempt - 1)` capped at `agent.max_retry_backoff_ms` (default `300000`). The backoff math lives in `@lorenz/policies` and is detailed in [dispatch.md](dispatch.md).
 
 ## Two-phase pool-governed dispatch
 
@@ -83,22 +83,22 @@ When a live worker pool governs capacity, dispatch is two-phase so a reservation
 
 The phases:
 
-1. **Claim (reserved).** `claim()` sees `capacityProbe.governs()` is true and returns `{ kind: 'reserved', reservation }`. The slot is claimed and reserved, host-less. The runtime emits `run_reserving`.
+1. **Claim (reserved).** `claimAsync()` sees `capacityProbe.governs()` is true and returns `{ kind: 'reserved', reservation }`. The slot is claimed and reserved, host-less. The runtime emits `run_reserving`.
 2. **Acquire.** `runReservedClaim()` awaits `coordinator.acquireRunSlot`. The result is `{ status: 'bound', slot }` or `{ status: 'no_capacity', reason }`.
 3. **Bind or cancel.**
-   - On `bound`: `bindReservation(reservation, host)` upgrades the `ReservationRecord` to a `RunningEntry` and the runtime emits `run_started`.
-   - On `no_capacity`: `cancelReservation(reservation)` releases the slot with **no backoff** and restores the consumed `RetryEntry`, so the issue's slot affinity and attempt counter survive a capacity miss. The runtime emits `dispatch_skipped` with reason `worker_host_capacity`.
+   - On `bound`: `bindReservationAsync(reservation, host)` upgrades the `ReservationRecord` to a `RunningEntry` and the runtime emits `run_started`.
+   - On `no_capacity`: `cancelReservationAsync(reservation)` releases the slot with **no backoff** and restores the consumed `RetryEntry`, so the issue's slot affinity and attempt counter survive a capacity miss. The runtime emits `dispatch_skipped` with reason `worker_host_capacity`.
    - On an acquire throw: the runtime emits `dispatch_skipped` with reason `worker_pool_acquire_error <message>`.
 
-The static/local path skips all of this. With no governing pool, `claim()` mints the `RunningEntry` synchronously, picks the least-loaded host with `selectWorkerHost` over `worker.ssh_hosts` (honoring `worker.max_concurrent_agents_per_host`), and emits `run_started` at once. Empty `ssh_hosts` means a local run.
+The static/local path skips all of this. With no governing pool, `claimAsync()` mints the `RunningEntry` immediately, picks the least-loaded host with `selectWorkerHost` over `worker.ssh_hosts` (honoring `worker.max_concurrent_agents_per_host`), and emits `run_started` at once. Empty `ssh_hosts` means a local run.
 
 Reserved slots count toward capacity. `occupiedSlotCount = running.size + reserved.size`, and that count feeds both the global cap and every per-state cap, so dispatch cannot exceed `agent.max_concurrent_agents` during acquire windows.
 
-A disabled-but-present pool keeps its `CapacityProbe` installed, but `governs()` returns `false`, so `claim()` and `workerCapacityAvailable()` fall through to the static/local path. A disabled pool never permanently blocks dispatch as `worker_host_capacity`.
+A disabled-but-present pool keeps its `CapacityProbe` installed, but `governs()` returns `false`, so `claimAsync()` and `workerCapacityAvailable()` fall through to the static/local path. A disabled pool never permanently blocks dispatch as `worker_host_capacity`.
 
 ### ABA and expiry guards
 
-A reservation carries a token, and that token is an ABA guard. `bindReservation` and `cancelReservation` are no-ops on a token mismatch, so a stale acquire that resolves after its reservation was already swept cannot resurrect or corrupt a newer slot. Every reservation also has a defensive expiry of `acquire_timeout_ms * 2 + 60000` ms (`acquire_timeout_ms` default `30000`). `eligibleIssues` sweeps expired reservations at the top of each eligibility pass through `sweepExpiredReservations`, and the sweep cancels them with the same retry-restore as a `no_capacity` cancel, so a hung acquire does not hold a concurrency slot forever.
+A reservation carries a token, and that token is an ABA guard. `bindReservationAsync` and `cancelReservationAsync` are no-ops on a token mismatch, so a stale acquire that resolves after its reservation was already swept cannot resurrect or corrupt a newer slot. Every reservation also has a defensive expiry of `acquire_timeout_ms * 2 + 60000` ms (`acquire_timeout_ms` default `30000`). `eligibleIssuesAsync` sweeps expired reservations at the top of each eligibility pass through `sweepExpiredReservations`, and the sweep cancels them with the same retry-restore as a `no_capacity` cancel, so a hung acquire does not hold a concurrency slot forever.
 
 ## Reconciliation
 
@@ -106,7 +106,7 @@ Two passes run every tick before the candidate fetch, plus a one-time startup pa
 
 ### Stall detection (Part A)
 
-`reconcileStalledRuns` walks each `RunningEntry`. Elapsed time is measured from `lastAgentTimestamp ?? startedAt`. If elapsed exceeds the effective `agents.<kind>.stall_timeout_ms` (default `300000`, and stall detection is disabled when the value is `<= 0`), the run is treated as stalled: `finish()` records it as a failure, run history records the `stalled` outcome, and `handle.finishExternally('stalled')` aborts the run and forces the worker into poison. The runtime emits `run_stalled`.
+`reconcileStalledRuns` walks each `RunningEntry`. Elapsed time is measured from `lastAgentTimestamp ?? startedAt`. If elapsed exceeds the effective `agents.<kind>.stall_timeout_ms` (default `300000`, and stall detection is disabled when the value is `<= 0`), the run is treated as stalled: `finishAsync()` records it as a failure, run history records the `stalled` outcome, and `handle.finishExternally('stalled')` aborts the run and forces the worker into poison. The runtime emits `run_stalled`.
 
 A stall-finished run poisons its worker even if the underlying runner resolves successfully, because `handle.reason === 'stalled'` forces poison before the slot settles. `classifyWorkerOutcome` alone would otherwise mis-read an `agent_run_aborted` as healthy.
 
@@ -114,8 +114,8 @@ A stall-finished run poisons its worker even if the underlying runner resolves s
 
 `reconcileTrackedIssues` collects the issue ids that are reserving, running, or retrying and refetches just those from the tracker. Per issue it decides:
 
-- **Active, routed to this worker, no open blockers.** `refreshRunningIssue(issue)` updates the in-memory state and emits `run_reconciled`. The run continues.
-- **Otherwise.** `abortIssueRuns` + `cleanupIssue(issueId)` + clear the retry timer. The run stops.
+- **Active, routed to this worker, no open blockers.** `refreshRunningIssueAsync(issue)` updates the in-memory state and emits `run_reconciled`. The run continues.
+- **Otherwise.** `abortIssueRuns` + `cleanupIssueAsync(issueId)` + clear the retry timer. The run stops.
   - If the issue is in a terminal state, `removeIssueWorkspaces` runs and the runtime emits `workspace_cleanup`.
   - Otherwise it emits `run_reconciled`.
 - **Missing from the refetch.** Reconciled as `missing`, treated the same as ineligible.
@@ -127,7 +127,7 @@ The per-issue decision tree:
 ```text
 refetch tracked issue
 ├─ missing from result        -> abort + cleanup ('missing')
-├─ active + routed + unblocked -> refreshRunningIssue (run continues)
+├─ active + routed + unblocked -> refreshRunningIssueAsync (run continues)
 └─ else                        -> abort + cleanup
                                    ├─ terminal state -> removeIssueWorkspaces + workspace_cleanup
                                    └─ else           -> run_reconciled
@@ -153,7 +153,7 @@ Retries do not wait for the next poll. `RetryScheduler` (`packages/retry-schedul
 
 The `reserving` lane is host-less by design and surfaced separately, not folded into `running` with a placeholder host. It is an optional, additive field. The `poll.lastError` and `recentEvents` are the only error surface; there is no persisted error log beyond the optional `appendLogEvent` write to `logging.log_file`.
 
-`RUNTIME_RUN_OUTCOMES` is `['success', 'failed', 'stalled', 'canceled']`, but the runtime never records a `canceled` run-history outcome today: reconciliation calls `cleanupIssue` without writing history. Only `success`, `failed`, and `stalled` reach run history; `canceled` is defined but unused.
+`RUNTIME_RUN_OUTCOMES` is `['success', 'failed', 'stalled', 'canceled']`, but the runtime never records a `canceled` run-history outcome today: reconciliation calls `cleanupIssueAsync` without writing history. Only `success`, `failed`, and `stalled` reach run history; `canceled` is defined but unused.
 
 ## Restart Recovery
 

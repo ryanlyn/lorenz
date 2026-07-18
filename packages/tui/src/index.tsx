@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { Box, Text, useApp, useInput, useStdin, useStdout } from "ink";
-import { isRecord, type AgentUpdateType } from "@lorenz/domain";
+import { dispatchBlockReasonLabel, isRecord, type AgentUpdateType } from "@lorenz/domain";
 import type { RuntimeSnapshot } from "@lorenz/runtime-events";
 import {
   arrayAt,
@@ -1083,7 +1083,7 @@ function formatBlockedRow(block: unknown, ansi: boolean, layout: TableLayout): s
     lane: { text: "block", color: "33" },
     id: { text: identifier, color: "36" },
     stage: { text: state, color: "90" },
-    activity: { text: reason.replaceAll("_", " "), color: "33" },
+    activity: { text: dispatchBlockReasonLabel(reason), color: "33" },
   });
 }
 

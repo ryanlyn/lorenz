@@ -42,11 +42,11 @@
   <line x1="785" y1="88" x2="785" y2="500" stroke="#CBD5E1" stroke-width="1.25" stroke-dasharray="3 4"/>
   <!-- Phase 1 band label -->
   <text x="40" y="112" font-size="11" font-weight="600" fill="#475569">Phase 1 - reserve (host-less)</text>
-  <!-- 1. claim -> reserved (self at orchestrator) -->
+  <!-- 1. claimAsync -> reserved (self at orchestrator) -->
   <path d="M115,130 L195,130 L195,150 L121,150" fill="none" stroke="#475569" stroke-width="1.5" marker-end="url(#arrow-two-phase-dispatch)"/>
   <g>
     <rect x="198" y="120" width="200" height="20" rx="4" fill="#FFFFFF" stroke="#E2E8F0"/>
-    <text x="204" y="130" dominant-baseline="middle" font-size="11" font-weight="500" fill="#0F172A"><tspan font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" font-size="12">claim()</tspan> &#8594; {kind:'reserved'}</text>
+    <text x="204" y="130" dominant-baseline="middle" font-size="11" font-weight="500" fill="#0F172A"><tspan font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" font-size="12">claimAsync()</tspan> &#8594; {kind:'reserved'}</text>
   </g>
   <!-- 2. emit run_reserving (accent, off the orchestrator) -->
   <line x1="115" y1="168" x2="115" y2="168" stroke="none"/>
@@ -86,11 +86,11 @@
     <rect x="150" y="332" width="180" height="20" rx="4" fill="#FFFFFF" stroke="#E2E8F0"/>
     <text x="240" y="342" text-anchor="middle" dominant-baseline="middle" font-size="11" font-weight="500" fill="#0F172A">bound &#8594; <tspan font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" font-size="12">slot.workerHost</tspan></text>
   </g>
-  <!-- 8. bindReservation (self at orchestrator) + emit run_started -->
+  <!-- 8. bindReservationAsync (self at orchestrator) + emit run_started -->
   <path d="M115,370 L195,370 L195,390 L121,390" fill="none" stroke="#14B8A6" stroke-width="2" marker-end="url(#arrow-accent-two-phase-dispatch)"/>
   <g>
     <rect x="198" y="360" width="218" height="20" rx="4" fill="#FFFFFF" stroke="#E2E8F0"/>
-    <text x="204" y="370" dominant-baseline="middle" font-size="11" font-weight="500" fill="#0F172A"><tspan font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" font-size="12">bindReservation(host)</tspan> &#8594; RunningEntry</text>
+    <text x="204" y="370" dominant-baseline="middle" font-size="11" font-weight="500" fill="#0F172A"><tspan font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" font-size="12">bindReservationAsync(host)</tspan> &#8594; RunningEntry</text>
   </g>
   <g>
     <rect x="198" y="384" width="150" height="20" rx="4" fill="#CCFBF1" stroke="#14B8A6"/>
@@ -112,7 +112,7 @@
   <g>
     <rect x="280" y="478" width="412" height="44" rx="10" fill="#FEE2E2" stroke="#EF4444" stroke-width="1.5"/>
     <text x="294" y="495" dominant-baseline="middle" font-size="11" font-weight="600" fill="#7F1D1D">no_capacity branch</text>
-    <text x="294" y="511" dominant-baseline="middle" font-size="11" font-weight="500" fill="#7F1D1D"><tspan font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" font-size="12">cancelReservation</tspan> (no backoff) &#8594; <tspan font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" font-size="12">dispatch_skipped</tspan> &#8594; stays eligible</text>
+    <text x="294" y="511" dominant-baseline="middle" font-size="11" font-weight="500" fill="#7F1D1D"><tspan font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" font-size="12">cancelReservationAsync</tspan> (no backoff) &#8594; <tspan font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" font-size="12">dispatch_skipped</tspan> &#8594; stays eligible</text>
   </g>
   <!-- danger arrow from coordinator phase-1 down into branch -->
   <path d="M365,300 L365,470 L365,472" fill="none" stroke="#EF4444" stroke-width="1.5" stroke-dasharray="5 3" marker-end="url(#arrow-danger-two-phase-dispatch)"/>

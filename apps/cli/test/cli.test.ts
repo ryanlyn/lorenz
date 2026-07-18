@@ -4,12 +4,23 @@ import { assert } from "@lorenz/test-utils";
 
 import { registerBuiltinBackends } from "../src/daemon.js";
 
-import { main, parseCliArgs, projectUrlForSettings } from "@lorenz/cli";
+import {
+  defaultPromptTemplate,
+  effectivePromptTemplate,
+  main,
+  parseCliArgs,
+  projectUrlForSettings,
+} from "@lorenz/cli";
 
 // projectUrlForSettings and parseConfig resolve providers through the process-default
 // registries, so populate them the same way the CLI entrypoints do.
 beforeAll(() => {
   registerBuiltinBackends();
+});
+
+test("CLI exposes workflow prompt defaults", () => {
+  assert.equal(effectivePromptTemplate(" \n"), defaultPromptTemplate);
+  assert.equal(effectivePromptTemplate("Custom prompt"), "Custom prompt");
 });
 
 test("CLI accepts workflow path and TS runtime flags", () => {
