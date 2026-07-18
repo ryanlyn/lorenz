@@ -408,6 +408,14 @@ test("vendored prompt queues advertise capability and isolate Claude usage at ha
   const promptErrorBody = claudeSource.slice(promptErrorStart, promptFinallyStart);
   assert.match(promptErrorBody, /some\(\(pending\) => pending\.inputSubmitted\)/);
   assert.match(promptErrorBody, /this\.discardSession\(params\.sessionId, session\)/);
+  const replayCheck = claudeSource.indexOf("// Check for prompt replay", queuedHandoff);
+  const cancelledMessageCheck = claudeSource.indexOf("if (session.cancelled)", replayCheck);
+  assert.ok(replayCheck > queuedHandoff);
+  assert.ok(cancelledMessageCheck > replayCheck);
+  assert.match(
+    claudeSource.slice(replayCheck, cancelledMessageCheck),
+    /stopReason: session\.cancelled \? "cancelled" : "end_turn"/,
+  );
 
   const cancelStart = claudeSource.indexOf("async cancel(params)");
   const teardownStart = claudeSource.indexOf("async teardownSession", cancelStart);

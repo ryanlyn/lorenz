@@ -834,9 +834,6 @@ export class ClaudeAcpAgent {
                     }
                     case "user":
                     case "assistant": {
-                        if (session.cancelled) {
-                            break;
-                        }
                         // Check for prompt replay
                         if (message.type === "user" && "uuid" in message && message.uuid) {
                             if (message.uuid === promptUuid) {
@@ -846,15 +843,21 @@ export class ClaudeAcpAgent {
                             if (pending) {
                                 session.pendingMessages.delete(message.uuid);
                                 handedOff = true;
-                                // the current loop stops with end_turn,
-                                // the loop of the next prompt continues running
+                                // The current owner stops and the next prompt
+                                // continues with the same query loop.
                                 settlePendingPrompt(pending, false);
-                                return { stopReason: "end_turn", usage: sessionUsage(session) };
+                                return {
+                                    stopReason: session.cancelled ? "cancelled" : "end_turn",
+                                    usage: sessionUsage(session),
+                                };
                             }
                             if ("isReplay" in message && message.isReplay) {
                                 // not pending or unrelated replay message
                                 break;
                             }
+                        }
+                        if (session.cancelled) {
+                            break;
                         }
                         // Snapshot the latest top-level assistant usage and model so the
                         // next `result` can emit a usage_update tied to the right context
