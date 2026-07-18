@@ -185,6 +185,7 @@ class RunController {
     let runError: unknown;
     let stopError: unknown;
     let stopSession: (() => Promise<void>) | undefined;
+    let stopSteeringRecovery: (() => void) | undefined;
     let removeSessionAbortListener: (() => void) | undefined;
     try {
       const beforeRun = runtime.hooks.beforeRun;
@@ -275,13 +276,22 @@ class RunController {
         typeof session.queueTurn === "function" &&
         Boolean(input.fetchIssueEvents) &&
         typeof issue.issueEventCursor === "string";
+      let steeringDeliveryClosed = false;
+      const steeringRecoveryController = new AbortController();
+      const steeringRecoverySignal = input.abortSignal
+        ? AbortSignal.any([input.abortSignal, steeringRecoveryController.signal])
+        : steeringRecoveryController.signal;
+      stopSteeringRecovery = () => {
+        steeringDeliveryClosed = true;
+        steeringRecoveryController.abort();
+      };
       const fetchSteeringIssueEvents = async (sinceTs: string): Promise<TrackerIssueEvent[]> => {
         if (!input.fetchIssueEvents || !steeringRecoveryAvailable) return [];
         return runSetupStage(
           issueEventsFeedStage,
           steeringFeedTimeoutMs(runtime),
           async ({ abortSignal }) => input.fetchIssueEvents?.(sinceTs, abortSignal) ?? [],
-          input.abortSignal,
+          steeringRecoverySignal,
         );
       };
       const steeringSnapshotCursorTs = issue.issueEventCursor;
@@ -309,6 +319,7 @@ class RunController {
         acceptedThrough: string | null;
         failed: boolean;
       } => {
+        if (steeringDeliveryClosed) return { acceptedThrough: null, failed: false };
         if (!steeringReady) {
           bufferIssueEvents(events);
           return { acceptedThrough: null, failed: false };
@@ -339,10 +350,16 @@ class RunController {
           pendingStreamActivities.push(activity);
           let outcome: Promise<TurnOutcome>;
           try {
-            outcome = session.queueTurn(prompt).then<TurnOutcome, TurnOutcome>(
-              (updates) => ({ updates }),
-              (error: unknown) => ({ error }),
-            );
+            outcome = session
+              .queueTurn(prompt)
+              .then<TurnOutcome, TurnOutcome>(
+                (updates) => ({ updates }),
+                (error: unknown) => ({ error }),
+              )
+              .then((turnOutcome) => {
+                if ("error" in turnOutcome) stopSteeringRecovery?.();
+                return turnOutcome;
+              });
           } catch (error) {
             removePendingActivity(pendingStreamActivities, activity);
             bufferIssueEvents(fresh.slice(offset));
@@ -375,6 +392,7 @@ class RunController {
           }
           if (queued.failed) throw new Error("steering_event_queue_failed");
         } catch (error) {
+          if (steeringRecoveryController.signal.aborted && !input.abortSignal?.aborted) return;
           throwIfAborted(input.abortSignal);
           if (required) throw error;
           reportSteeringFailure("recovery", error);
@@ -454,17 +472,36 @@ class RunController {
               issue,
               stopSession,
               input.abortSignal,
-            ).then<TurnOutcome, TurnOutcome>(
-              (updates) => ({ updates }),
-              (error: unknown) => ({ error }),
-            );
+            )
+              .then<TurnOutcome, TurnOutcome>(
+                (updates) => ({ updates }),
+                (error: unknown) => ({ error }),
+              )
+              .then((outcome) => {
+                if ("error" in outcome) stopSteeringRecovery?.();
+                return outcome;
+              });
             autonomousTurnCount += 1;
             if (autonomousTurnCount === 1) {
-              await initializeSteering();
+              const initialization = initializeSteering();
+              const first = await Promise.race([
+                turnOutcome.then((outcome) => ({ kind: "turn", outcome }) as const),
+                initialization.then(() => ({ kind: "steering" }) as const),
+              ]);
+              if (first.kind === "turn" && "error" in first.outcome) {
+                stopSteeringRecovery();
+                await initialization;
+                throw first.outcome.error;
+              }
+              await initialization;
+              const outcome = first.kind === "turn" ? first.outcome : await turnOutcome;
+              if ("error" in outcome) throw outcome.error;
+              turnUpdates = outcome.updates;
+            } else {
+              const outcome = await turnOutcome;
+              if ("error" in outcome) throw outcome.error;
+              turnUpdates = outcome.updates;
             }
-            const outcome = await turnOutcome;
-            if ("error" in outcome) throw outcome.error;
-            turnUpdates = outcome.updates;
           } finally {
             currentNormalActivity = undefined;
             removePendingActivity(pendingStreamActivities, turnActivity);
@@ -505,20 +542,19 @@ class RunController {
         const backendChanged =
           refreshed.agent.kind !== runtime.agent.kind ||
           backendProfile(refreshed) !== backendProfile(runtime);
-        if (!backendChanged) runtime = refreshed;
+        if (backendChanged) break;
+        runtime = refreshed;
         await enqueueSteeringFlush(
-          completedWithoutTools ||
-            autonomousTurnCount >= runtime.agent.maxTurns ||
-            !activeIssue ||
-            backendChanged,
+          completedWithoutTools || autonomousTurnCount >= runtime.agent.maxTurns || !activeIssue,
         );
         if (queuedTurns.length > 0) continue;
-        if (!activeIssue || backendChanged) break;
+        if (!activeIssue) break;
         if (completedWithoutTools && queuedTurns.length === 0) break;
       }
     } catch (error) {
       runError = error;
     } finally {
+      stopSteeringRecovery?.();
       removeSessionAbortListener?.();
       unsubscribeIssueEvents?.();
       if (stopSession) {

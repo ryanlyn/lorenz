@@ -609,21 +609,23 @@ test("initial recovery queues events missed after the issue snapshot", async () 
   assert.deepEqual(recoveryCursors, ["10.0", "11.0"]);
 });
 
-test("a failed initial turn stays observed while recovery is pending", async () => {
+test("a failed initial turn cancels pending recovery", async () => {
   const settings = fakeSettings({ agent: { ...defaultSettings().agent, maxTurns: 1 } });
-  let releaseRecovery: (() => void) | undefined;
-  const recoveryGate = new Promise<void>((resolve) => {
-    releaseRecovery = resolve;
-  });
+  let recoverySignal: AbortSignal | undefined;
 
   const attempt = runAgentAttempt({
     issue: fakeIssue({ issueEventCursor: "10.0" }),
     workflow: { path: "/workflow.md", config: {}, promptTemplate: "Fix it", settings },
     settings,
-    fetchIssueEvents: async () => {
-      await recoveryGate;
-      return [];
-    },
+    fetchIssueEvents: async (_sinceTs, abortSignal) =>
+      new Promise<TrackerIssueEvent[]>((_resolve, reject) => {
+        recoverySignal = abortSignal;
+        abortSignal?.addEventListener(
+          "abort",
+          () => reject(abortSignal.reason ?? new Error("aborted")),
+          { once: true },
+        );
+      }),
     adapters: fakeAdapters({
       executorFactory: () =>
         fakeExecutor({
@@ -634,14 +636,9 @@ test("a failed initial turn stays observed while recovery is pending", async () 
         }),
     }),
   });
-  const observed = observePromise(attempt);
-
-  await Promise.resolve();
-  await Promise.resolve();
-  assert.deepEqual(await observedPromiseState(observed), { status: "pending" });
-  releaseRecovery?.();
 
   await assert.rejects(() => attempt, /initial turn failed/);
+  assert.equal(recoverySignal?.aborted, true);
 });
 
 test("final recovery drains a missed event after the issue becomes inactive", async () => {

@@ -504,7 +504,7 @@ export interface AgentSettings {
   kind: AgentKind;
   /** Upper bound on concurrent agent runs across the whole instance. */
   maxConcurrentAgents: number;
-  /** Maximum back-to-back turns a single worker session may run before exiting and yielding. */
+  /** Per-run limit applied separately to autonomous turns and human steering turns. */
   maxTurns: number;
   /** Cap (ms) on exponential retry backoff between attempts on the same issue. */
   maxRetryBackoffMs: number;

@@ -246,7 +246,9 @@ describe("INVARIANT: When a continuation turn begins, the system SHALL send only
 
 describe("INVARIANT: When the backend profile changes between turns, the system SHALL end the session and yield to the orchestrator.", () => {
   test("session ends when backend profile changes between turns via agent kind override (ACP)", async () => {
-    const issue = fakeIssue({ state: "Todo" });
+    const issue = fakeIssue({ state: "Todo", issueEventCursor: "10.0" });
+    const queuedPrompts: string[] = [];
+    let recoveryCalls = 0;
     const overrides = new Map<string, { agent?: Partial<Settings["agent"]> }>();
     overrides.set("in progress", {
       agent: { kind: "claude" },
@@ -260,6 +262,12 @@ describe("INVARIANT: When the backend profile changes between turns, the system 
       workflow: { path: "/workflow.md", config: {}, promptTemplate: "Fix it", settings },
       settings,
       fetchIssue: async (iss) => ({ ...iss, state: "In Progress" }),
+      fetchIssueEvents: async () => {
+        recoveryCalls += 1;
+        return recoveryCalls === 1
+          ? []
+          : [{ ts: "11.0", author: "ryan", text: "use the new backend" }];
+      },
       adapters: fakeAdapters({
         executorFactory: () => ({
           kind: "codex",
@@ -269,7 +277,12 @@ describe("INVARIANT: When the backend profile changes between turns, the system 
               message: "session started (s1)",
               sessionId: "s1",
             });
-            return fakeSession();
+            return fakeSession({
+              queueTurn: async (prompt) => {
+                queuedPrompts.push(prompt);
+                return [{ type: "turn_completed" }];
+              },
+            });
           },
           async runTurn() {
             // Emit tool_use_requested so ACP check does not interfere
@@ -281,6 +294,8 @@ describe("INVARIANT: When the backend profile changes between turns, the system 
 
     // Session ends after 1 turn because agent kind changed from "codex" to "claude"
     assert.equal(result.turnCount, 1);
+    assert.equal(recoveryCalls, 1);
+    assert.deepEqual(queuedPrompts, []);
   });
 
   test("session continues when profile stays the same across turns (ACP)", async () => {

@@ -435,8 +435,9 @@ front matter, listed with their canonical aliases):
 
 The executor launches the bridge subprocess in the workspace, drives one ACP session across the
 worker's turns, and forwards normalized agent updates to the orchestrator. The session lifecycle
-(first turn sends the full prompt, continuation turns send only guidance, turn count bounded by
-`agent.max_turns`, profile change ends the session) matches Section 5.1. See
+(first turn sends the full prompt, continuation turns send only guidance, autonomous and steering
+turn counts are each bounded by `agent.max_turns`, profile change ends the session) matches Section
+5.1. See
 [agents/acp-bridges](../agents/acp-bridges.md) and [agents/index](../agents/index.md).
 
 Tooling reaches the agent through MCP, not a Codex client-tool channel. The mounted set is driven by
