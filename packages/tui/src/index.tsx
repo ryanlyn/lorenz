@@ -184,49 +184,6 @@ export function RuntimeApp({
   );
 }
 
-export function RuntimeDashboard({
-  snapshot,
-  throughputTps,
-  dashboardUrl,
-  trackerKind,
-  agentKind,
-  now,
-  snapshotReceivedAt,
-  columns,
-  rows,
-  maxAgents,
-}: {
-  snapshot: RuntimeSnapshot;
-  throughputTps?: number | undefined;
-  dashboardUrl?: string | null | undefined;
-  trackerKind?: string | undefined;
-  agentKind?: string | undefined;
-  now?: Date | string | number | undefined;
-  snapshotReceivedAt?: Date | string | number | undefined;
-  columns?: number | undefined;
-  rows?: number | undefined;
-  maxAgents?: number | undefined;
-}) {
-  return (
-    <Box flexDirection="column" marginTop={1}>
-      <Text>
-        {formatDashboard(snapshot, {
-          dashboardUrl,
-          trackerKind,
-          agentKind,
-          throughputTps,
-          now,
-          snapshotReceivedAt,
-          columns,
-          rows,
-          maxAgents,
-          ansi: true,
-        })}
-      </Text>
-    </Box>
-  );
-}
-
 // --- Throughput and per-run token-rate sampling -------------------------------
 
 export interface TokenSample {
