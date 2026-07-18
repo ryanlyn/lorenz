@@ -221,9 +221,6 @@ importers:
       '@lorenz/projections':
         specifier: workspace:*
         version: link:packages/projections
-      '@lorenz/retry-scheduler':
-        specifier: workspace:*
-        version: link:packages/retry-scheduler
       '@lorenz/runtime':
         specifier: workspace:*
         version: link:packages/runtime
@@ -392,9 +389,6 @@ importers:
       '@lorenz/prompt':
         specifier: workspace:*
         version: link:../../packages/prompt
-      '@lorenz/retry-scheduler':
-        specifier: workspace:*
-        version: link:../../packages/retry-scheduler
       '@lorenz/runtime':
         specifier: workspace:*
         version: link:../../packages/runtime
@@ -879,15 +873,6 @@ importers:
         specifier: 'catalog:'
         version: 10.27.0
 
-  packages/retry-scheduler:
-    dependencies:
-      '@lorenz/domain':
-        specifier: workspace:*
-        version: link:../domain
-      '@lorenz/runtime-events':
-        specifier: workspace:*
-        version: link:../runtime-events
-
   packages/runtime:
     dependencies:
       '@lorenz/agent-runner':
@@ -917,9 +902,6 @@ importers:
       '@lorenz/projections':
         specifier: workspace:*
         version: link:../projections
-      '@lorenz/retry-scheduler':
-        specifier: workspace:*
-        version: link:../retry-scheduler
       '@lorenz/runtime-events':
         specifier: workspace:*
         version: link:../runtime-events

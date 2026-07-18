@@ -43,7 +43,6 @@
     "@lorenz/presenter": "workspace:*",
     "@lorenz/projections": "workspace:*",
     "@lorenz/prompt": "workspace:*",
-    "@lorenz/retry-scheduler": "workspace:*",
     "@lorenz/runtime": "workspace:*",
     "@lorenz/server": "workspace:*",
     "@lorenz/slack-tracker": "workspace:*",

@@ -83,9 +83,6 @@
       "path": "../../packages/prompt"
     },
     {
-      "path": "../../packages/retry-scheduler"
-    },
-    {
       "path": "../../packages/runtime"
     },
     {

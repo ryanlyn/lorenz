@@ -2,8 +2,7 @@ import { beforeEach, test } from "vitest";
 import type { ClockPort, TimerHandle } from "@lorenz/domain";
 import { assert } from "@lorenz/test-utils";
 
-import { RetryScheduler } from "@lorenz/retry-scheduler";
-import { RETRY_SCHEDULER_SYNC_DELAY_MS } from "@lorenz/retry-scheduler";
+import { RETRY_SCHEDULER_SYNC_DELAY_MS, RetryScheduler } from "../src/retry-scheduler.js";
 
 function fakeClock(): ClockPort & {
   tick: number;

@@ -19,7 +19,6 @@ const config: KnipConfig = {
         "@lorenz/orchestrator",
         "@lorenz/policies",
         "@lorenz/projections",
-        "@lorenz/retry-scheduler",
         "@lorenz/server",
         "@lorenz/traceviz-emitter",
         "@lorenz/tui",

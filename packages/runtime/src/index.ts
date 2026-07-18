@@ -5,7 +5,6 @@ import { Orchestrator, type ClaimStoreLike, type SlotReservation } from "@lorenz
 import { settingsForIssueState, validateDispatchConfig } from "@lorenz/config";
 import { runAgentAttempt, type RunResult } from "@lorenz/agent-runner";
 import { ProjectionActor } from "@lorenz/projections";
-import { RetryScheduler } from "@lorenz/retry-scheduler";
 import { workflowFileChanged, workflowStampsEqual } from "@lorenz/workflow";
 import {
   durationMs,
@@ -48,6 +47,8 @@ import {
   type DispatchCoordinator,
   type RunSlot,
 } from "@lorenz/dispatch-coordinator";
+
+import { RetryScheduler } from "./retry-scheduler.js";
 
 export type RuntimeRunner = (input: Parameters<typeof runAgentAttempt>[0]) => Promise<RunResult>;
 

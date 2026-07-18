@@ -38,9 +38,6 @@
       "path": "../projections"
     },
     {
-      "path": "../retry-scheduler"
-    },
-    {
       "path": "../runtime-events"
     },
     {
