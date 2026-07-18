@@ -146,6 +146,114 @@ test("ACP session submits a queued turn before the active turn finishes", async 
   assert.equal(prompts[1]?.params?.prompt?.[0]?.text, "new direction");
 });
 
+test("ACP session exposes queueTurn only when the bridge advertises prompt queuing", async () => {
+  const root = await tempDir("lorenz-acp-no-prompt-queue");
+  const fake = await writeFakeBridge(root);
+  const trace = path.join(root, "trace.jsonl");
+  const settings = acpSettings(root, fake, trace, "new");
+  const session = await new Executor("claude").startSession({
+    workspace: root,
+    settings,
+    issue: sampleIssue,
+  });
+
+  try {
+    assert.equal(session.queueTurn, undefined);
+  } finally {
+    await session.stop();
+  }
+});
+
+test("ACP queued turn starts its lifecycle after a timed-out predecessor releases the bridge", async () => {
+  const root = await tempDir("lorenz-acp-queued-timeout");
+  const fake = await writeFakeBridge(root);
+  const trace = path.join(root, "trace.jsonl");
+  const settings = acpSettings(root, fake, trace, "queued-timeout", 50);
+  const updates: AgentUpdate[] = [];
+  const executor = new Executor("claude");
+  const session = await executor.startSession({
+    workspace: root,
+    settings,
+    issue: sampleIssue,
+    onUpdate: (update) => updates.push(update),
+  });
+
+  try {
+    const active = executor
+      .runTurn(session, "initial work", sampleIssue)
+      .then(() => null)
+      .catch((error: unknown) => error);
+    await waitForTraceEvent(trace, "firstPromptWaiting");
+    assert.ok(session.queueTurn);
+    const queued = session.queueTurn("new direction");
+    await waitForTraceEvent(trace, "queuedPromptWaiting");
+
+    assert.match(String(await active), /acp turn timed out/);
+    const queuedUpdates = await queued;
+    assert.ok(queuedUpdates.some((update) => update.type === "turn_completed"));
+  } finally {
+    await session.stop();
+  }
+
+  assert.equal(updates.filter((update) => update.type === "turn_started").length, 2);
+  const events = await readTrace(trace);
+  const releasedIndex = events.findIndex((event) => event.method === "firstPromptReleased");
+  const runningIndex = events.findIndex((event) => event.method === "queuedPromptRunning");
+  assert.ok(releasedIndex >= 0);
+  assert.ok(runningIndex > releasedIndex);
+});
+
+test("ACP session stop rejects queued turns without activating them", async () => {
+  const root = await tempDir("lorenz-acp-queued-stop");
+  const fake = await writeFakeBridge(root);
+  const trace = path.join(root, "trace.jsonl");
+  const settings = acpSettings(root, fake, trace, "queued-stop");
+  const updates: AgentUpdate[] = [];
+  const executor = new Executor("claude");
+  const session = await executor.startSession({
+    workspace: root,
+    settings,
+    issue: sampleIssue,
+    onUpdate: (update) => updates.push(update),
+  });
+  const active = executor.runTurn(session, "initial work", sampleIssue).catch((error) => error);
+  await waitForTraceEvent(trace, "queuedStopPromptWaiting");
+  assert.ok(session.queueTurn);
+  const queued = session.queueTurn("new direction").catch((error) => error);
+  await vi.waitFor(
+    async () => {
+      const prompts = (await readTrace(trace)).filter(
+        (event) => event.method === "queuedStopPromptWaiting",
+      );
+      assert.equal(prompts.length, 2);
+    },
+    { timeout: 10_000, interval: 20 },
+  );
+
+  await session.stop();
+
+  assert.match(String(await active), /acp session stopped/);
+  assert.match(String(await queued), /acp session stopped/);
+  assert.equal(updates.filter((update) => update.type === "turn_started").length, 1);
+});
+
+test("vendored prompt queues advertise capability and isolate Claude usage at handoff", async () => {
+  const claudeSource = await fs.readFile(
+    path.resolve("vendor/claude-agent-acp/dist/acp-agent.js"),
+    "utf8",
+  );
+  const codexSource = await fs.readFile(path.resolve("vendor/codex-acp/dist/index.js"), "utf8");
+  assert.match(claudeSource, /"symphony\/promptQueueing": true/);
+  assert.match(codexSource, /"symphony\/promptQueueing": true/);
+
+  const promptStart = claudeSource.indexOf("async prompt(params)");
+  const queuedHandoff = claudeSource.indexOf("const cancelled = await", promptStart);
+  const usageReset = claudeSource.indexOf("session.accumulatedUsage = {", promptStart);
+  assert.ok(promptStart >= 0);
+  assert.ok(queuedHandoff > promptStart);
+  assert.ok(usageReset > queuedHandoff);
+});
+
 test("ACP executor can pass through cumulative bridge usage without double counting", async () => {
   const root = await tempDir("lorenz-acp-cumulative-usage");
   const fake = await writeFakeBridge(root);
@@ -782,11 +890,15 @@ class FakeAgent {
     this.promptCount = 0;
     this.cancelled = false;
     this.cancelWaiters = [];
+    this.firstPromptReleased = false;
   }
 
   async initialize(params) {
     record({ method: "initialize", params });
     const agentCapabilities = { sessionCapabilities: { close: {} } };
+    if (mode.startsWith("queued")) {
+      agentCapabilities._meta = { "symphony/promptQueueing": true };
+    }
     return { protocolVersion: acp.PROTOCOL_VERSION, agentCapabilities };
   }
 
@@ -868,6 +980,26 @@ class FakeAgent {
         await sleep(30);
       }
       return { stopReason: "end_turn" };
+    }
+    if (mode === "queued-timeout") {
+      const promptNumber = this.promptCount;
+      if (promptNumber === 1) {
+        record({ method: "firstPromptWaiting" });
+        await this.waitForCancel();
+        await sleep(100);
+        this.firstPromptReleased = true;
+        record({ method: "firstPromptReleased" });
+        return { stopReason: "end_turn" };
+      }
+      record({ method: "queuedPromptWaiting" });
+      while (!this.firstPromptReleased) await sleep(5);
+      await sleep(30);
+      record({ method: "queuedPromptRunning" });
+      return { stopReason: "end_turn" };
+    }
+    if (mode === "queued-stop") {
+      record({ method: "queuedStopPromptWaiting" });
+      await new Promise(() => {});
     }
     if (mode === "stall") {
       await new Promise(() => {});

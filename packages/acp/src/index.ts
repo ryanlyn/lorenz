@@ -219,7 +219,9 @@ export class Executor implements AgentExecutor {
         turnStartTotals: emptyUsageTotals(),
         lastCallUsageSeq: 0,
         pendingTurns: [],
-        queueTurn: async (prompt) => this.queueTurn(nextSession, prompt),
+        ...(supportsPromptQueue(init) && {
+          queueTurn: async (prompt: string) => this.queueTurn(nextSession, prompt),
+        }),
         stop: async () => {
           await this.stopSession(nextSession);
         },
@@ -286,9 +288,13 @@ export class Executor implements AgentExecutor {
         stallTimer = setTimeout(cancelTurn, session.agentConfig.stallTimeoutMs);
       };
 
-      const cleanup = () => {
+      const clearTimers = () => {
         if (hardTimer) clearTimeout(hardTimer);
         if (stallTimer) clearTimeout(stallTimer);
+      };
+
+      const releaseBackendSlot = () => {
+        clearTimers();
         const index = session.pendingTurns.indexOf(turn);
         if (index === -1) return;
         const wasActive = index === 0;
@@ -300,7 +306,7 @@ export class Executor implements AgentExecutor {
         if (settled) return;
         settled = true;
         turn.settled = true;
-        cleanup();
+        clearTimers();
         resolve(value);
       };
 
@@ -308,7 +314,7 @@ export class Executor implements AgentExecutor {
         if (settled) return;
         settled = true;
         turn.settled = true;
-        cleanup();
+        clearTimers();
         reject(error);
       };
 
@@ -382,7 +388,8 @@ export class Executor implements AgentExecutor {
             timestamp: new Date(),
           });
           finishReject(error instanceof Error ? error : new Error(message));
-        });
+        })
+        .finally(releaseBackendSlot);
     });
   }
 
@@ -826,7 +833,19 @@ function wireProcessEvents(session: Session): void {
 }
 
 function rejectPendingTurns(session: Session, error: Error): void {
-  for (const turn of [...session.pendingTurns]) turn.reject(error);
+  const pending = session.pendingTurns.splice(0);
+  for (const turn of pending) turn.reject(error);
+}
+
+function supportsPromptQueue(init: InitializeResponse): boolean {
+  const meta = init.agentCapabilities?._meta;
+  if (meta?.["symphony/promptQueueing"] === true) return true;
+  const claudeCode = meta?.["claudeCode"];
+  return (
+    typeof claudeCode === "object" &&
+    claudeCode !== null &&
+    (claudeCode as Record<string, unknown>)["promptQueueing"] === true
+  );
 }
 
 function clientCapabilities(workerHost: string | null): ClientCapabilities {

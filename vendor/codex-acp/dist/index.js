@@ -20077,6 +20077,9 @@ var CodexAcpServer = class _CodexAcpServer {
         version: package_default.version
       },
       agentCapabilities: {
+        _meta: {
+          "symphony/promptQueueing": true
+        },
         auth: {
           logout: {}
         },

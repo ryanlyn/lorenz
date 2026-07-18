@@ -340,6 +340,7 @@ export class ClaudeAcpAgent {
             protocolVersion: 1,
             agentCapabilities: {
                 _meta: {
+                    "symphony/promptQueueing": true,
                     claudeCode: {
                         promptQueueing: true,
                     },
@@ -447,12 +448,6 @@ export class ClaudeAcpAgent {
             throw new Error("Session not found");
         }
         session.cancelled = false;
-        session.accumulatedUsage = {
-            inputTokens: 0,
-            outputTokens: 0,
-            cachedReadTokens: 0,
-            cachedWriteTokens: 0,
-        };
         let lastAssistantTotalUsage = null;
         let lastAssistantUsage = null;
         let lastAssistantModel = null;
@@ -491,6 +486,14 @@ export class ClaudeAcpAgent {
         else {
             session.input.push(userMessage);
         }
+        // Usage belongs to the prompt that owns the query loop. A queued prompt
+        // reaches this point only after the preceding prompt hands off.
+        session.accumulatedUsage = {
+            inputTokens: 0,
+            outputTokens: 0,
+            cachedReadTokens: 0,
+            cachedWriteTokens: 0,
+        };
         session.promptRunning = true;
         let handedOff = false;
         let errored = false;
