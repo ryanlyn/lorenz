@@ -388,13 +388,14 @@ test("sessions without queued turns do not start issue event recovery", async ()
 });
 
 test("run cancellation aborts an active steering recovery request", async () => {
-  const settings = fakeSettings({ agent: { ...defaultSettings().agent, maxTurns: 2 } });
+  const settings = fakeSettings({ agent: { ...defaultSettings().agent, maxTurns: 3 } });
   const controller = new AbortController();
   let markFeedStarted: (() => void) | undefined;
   const feedStarted = new Promise<void>((resolve) => {
     markFeedStarted = resolve;
   });
   let feedSignal: AbortSignal | undefined;
+  let feedCalls = 0;
   const session = fakeSession({
     queueTurn: async () => [{ type: "turn_completed" }],
   });
@@ -405,6 +406,8 @@ test("run cancellation aborts an active steering recovery request", async () => 
     settings,
     fetchIssue: async (issue) => issue,
     fetchIssueEvents: async (_sinceTs, abortSignal) => {
+      feedCalls += 1;
+      if (feedCalls === 1) return [];
       feedSignal = abortSignal;
       markFeedStarted?.();
       return new Promise<TrackerIssueEvent[]>((_resolve, reject) => {
@@ -430,6 +433,7 @@ test("run cancellation aborts an active steering recovery request", async () => 
   controller.abort();
 
   await assert.rejects(() => attempt, /agent_run_aborted/);
+  assert.equal(feedCalls, 2);
   assert.equal(feedSignal?.aborted, true);
 });
 

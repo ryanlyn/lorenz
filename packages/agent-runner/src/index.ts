@@ -313,6 +313,7 @@ class RunController {
           queueIssueEvents(recovered);
           steeringRecoveryCursorTs = maxSteeringTs(recovered, steeringRecoveryCursorTs);
         } catch (error) {
+          throwIfAborted(input.abortSignal);
           reportSteeringFailure("recovery", error);
         }
       };
