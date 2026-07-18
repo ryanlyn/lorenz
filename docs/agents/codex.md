@@ -46,13 +46,13 @@ executor owns. The built-in defaults:
 
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `agents.codex.executor` | `acp` | Executor selector. Only `acp` ships today. |
+| `agents.codex.executor` | `acp` | Executor selector. `acp` is the built-in executor. |
 | `agents.codex.bridge_command` | `codex-acp` | Shell command launched per session. Bare names resolve to the vendored bridge locally. |
 | `agents.codex.usage_accounting` | `per-turn` | Shape of the usage numbers the bridge reports. See [Usage accounting](#usage-accounting). |
 | `agents.codex.provider_config` | unset | `config.toml`-shaped overlay merged into the Codex session. See [Provider config](#provider-config). |
-| `agents.codex.turn_timeout_ms` | `3600000` | Hard cap on one turn. The executor cancels the ACP turn when it fires. |
-| `agents.codex.stall_timeout_ms` | `300000` | Inactivity cap, reset on every update from the bridge. `0` or below disables stall detection. |
-| `agents.codex.strict_mcp_config` | `true` | Parsed and validated, but not read at runtime today. Treat it as a no-op for now. |
+| `agents.codex.turn_timeout_ms` | `3600000` | Hard cap on one turn. A timeout rejects queued turns and terminates the ACP session. |
+| `agents.codex.stall_timeout_ms` | `300000` | Inactivity cap, reset on every update from the bridge. A timeout rejects queued turns and terminates the ACP session. `0` or below disables stall detection. |
+| `agents.codex.strict_mcp_config` | `true` | Parsed and validated, but not read by the executor. |
 
 `bridge_command` must be non-blank; a blank value is rejected at config-parse time. The `acp`
 executor rejects unknown option keys (see [index.md](./index.md)), so a misspelled option fails fast

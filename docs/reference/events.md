@@ -92,7 +92,7 @@ These 17 names are `AGENT_UPDATE_TYPES`, reused verbatim inside `RUNTIME_EVENT_T
 | `turn_started` | A prompt was sent for a new turn. | One turn is in flight. Only one concurrent turn per session is allowed. |
 | `turn_completed` | The turn's stop reason mapped to `continue` (`end_turn`, `max_tokens`, `max_turn_requests`). | The turn resolved normally; the run loop may continue. |
 | `turn_failed` | The stop reason mapped to retry (anything outside continue/cancel, e.g. `refusal`). | The turn rejected with `acp_turn_failed: <stopReason>`. |
-| `turn_cancelled` | The stop reason was `cancelled`, or a turn/stall timeout cancelled the turn. | The turn was cancelled (`acp_turn_cancelled`). |
+| `turn_cancelled` | The stop reason was `cancelled`, or a turn/stall timeout stopped the ACP session. | The turn was cancelled (`acp_turn_cancelled`). A timeout also rejects queued turns and terminates the session. |
 | `turn_input_required` | The bridge requested input mid-turn. | The agent is waiting for input. |
 | `approval_required` | A permission request had no auto-approvable option. | A permission could not be auto-approved; the outcome is `cancelled`. |
 | `approval_auto_approved` | A permission request matched an `allow`-prefixed option. | Lorenz auto-approved the request (the default for ACP permissions). |

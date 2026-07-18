@@ -521,10 +521,17 @@ test("Windows bridge guardian owns descendants through a Job Object", async () =
   assert.match(guardian, /Buffer\.from\(bridge, "utf8"\)\.toString\("base64"\)/);
   assert.equal(guardian.includes("$args["), false);
   assert.match(source, /"-Command", windowsBridgeGuardianScript\(workspace, bridge\)\]/);
-  const guardianAssignment = guardian.indexOf("[LorenzProcessJob]::Assign($job, $guardian.Handle)");
+  assert.match(guardian, /\[char\]10 \+ "exec "/);
   const bridgeStart = guardian.indexOf("$process.Start()");
-  assert.ok(guardianAssignment >= 0);
-  assert.ok(bridgeStart > guardianAssignment);
+  const bridgeAssignment = guardian.indexOf("[LorenzProcessJob]::Assign($job, $process.Handle)");
+  const bridgeRelease = guardian.indexOf('$process.StandardInput.WriteLine("ready")');
+  const jobClose = guardian.indexOf("[LorenzProcessJob]::Close($job)", bridgeRelease);
+  const outputDrain = guardian.indexOf("[Threading.Tasks.Task]::WaitAll(", jobClose);
+  assert.ok(bridgeStart >= 0);
+  assert.ok(bridgeAssignment > bridgeStart);
+  assert.ok(bridgeRelease > bridgeAssignment);
+  assert.ok(jobClose > bridgeRelease);
+  assert.ok(outputDrain > jobClose);
   assert.match(
     source,
     /if \(child\) await stopChild\(child, \{ processGroup: !input\.workerHost \}\)/,

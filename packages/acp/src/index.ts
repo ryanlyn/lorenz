@@ -966,6 +966,9 @@ public static class LorenzProcessJob
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern bool AssignProcessToJobObject(IntPtr job, IntPtr process);
 
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool CloseHandle(IntPtr handle);
+
     public static IntPtr Create()
     {
         IntPtr job = CreateJobObject(IntPtr.Zero, null);
@@ -980,6 +983,7 @@ public static class LorenzProcessJob
         if (!SetInformationJobObject(job, JobObjectExtendedLimitInformation, ref information, length))
         {
             int error = Marshal.GetLastWin32Error();
+            CloseHandle(job);
             throw new Win32Exception(error);
         }
         return job;
@@ -988,6 +992,14 @@ public static class LorenzProcessJob
     public static void Assign(IntPtr job, IntPtr process)
     {
         if (!AssignProcessToJobObject(job, process))
+        {
+            throw new Win32Exception(Marshal.GetLastWin32Error());
+        }
+    }
+
+    public static void Close(IntPtr job)
+    {
+        if (job != IntPtr.Zero && !CloseHandle(job))
         {
             throw new Win32Exception(Marshal.GetLastWin32Error());
         }
@@ -1016,11 +1028,10 @@ $workspace = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String("${enco
 $bridge = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String("${encodedBridge}"))
 $scriptPath = [IO.Path]::GetTempFileName()
 $utf8 = [Text.UTF8Encoding]::new($false)
-[IO.File]::WriteAllText($scriptPath, "exec " + $bridge + [Environment]::NewLine, $utf8)
+$script = "IFS= read -r _lorenz_ready || exit 1" + [char]10 + "exec " + $bridge + [char]10
+[IO.File]::WriteAllText($scriptPath, $script, $utf8)
 
 $job = [LorenzProcessJob]::Create()
-$guardian = [Diagnostics.Process]::GetCurrentProcess()
-[LorenzProcessJob]::Assign($job, $guardian.Handle)
 $process = $null
 $exitCode = 1
 try {
@@ -1039,6 +1050,9 @@ try {
   if (-not $process.Start()) {
     throw "bridge process did not start"
   }
+  [LorenzProcessJob]::Assign($job, $process.Handle)
+  $process.StandardInput.WriteLine("ready")
+  $process.StandardInput.Flush()
 
   $stdinTask = [LorenzProcessJob]::CopyInput(
     [Console]::OpenStandardInput(),
@@ -1054,15 +1068,26 @@ try {
   )
   $process.WaitForExit()
   $exitCode = $process.ExitCode
-  try {
-    [void][Threading.Tasks.Task]::WaitAll(
-      [Threading.Tasks.Task[]]@($stdoutTask, $stderrTask),
-      1000
-    )
-  } catch {
-  }
+  [LorenzProcessJob]::Close($job)
+  $job = [IntPtr]::Zero
+  [Threading.Tasks.Task]::WaitAll(
+    [Threading.Tasks.Task[]]@($stdoutTask, $stderrTask)
+  )
 } finally {
+  if ($job -ne [IntPtr]::Zero) {
+    try {
+      [LorenzProcessJob]::Close($job)
+    } catch {
+    }
+  }
   if ($null -ne $process) {
+    try {
+      if (-not $process.HasExited) {
+        $process.Kill()
+        $process.WaitForExit()
+      }
+    } catch {
+    }
     $process.Dispose()
   }
   Remove-Item -LiteralPath $scriptPath -Force -ErrorAction SilentlyContinue
