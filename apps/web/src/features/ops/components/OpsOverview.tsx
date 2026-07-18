@@ -1,4 +1,5 @@
 import { useMemo, useRef } from "react";
+import { dispatchBlockReasonLabel } from "@lorenz/domain";
 
 import { cn, formatNumber, formatTimestamp } from "../../../lib/utils";
 import {
@@ -242,11 +243,11 @@ function nextDue(entries: OpsRetryEntry[]): string | null {
   return formatTimestamp(soonest.due_at);
 }
 
-function topBlockedReason(state: OpsState | null): string | null {
+export function topBlockedReasonLabel(state: OpsState | null): string | null {
   const byReason = Object.entries(state?.blocked_by_reason ?? {});
   if (byReason.length === 0) return null;
   byReason.sort((a, b) => b[1] - a[1]);
-  return byReason[0][0].replaceAll("_", " ");
+  return dispatchBlockReasonLabel(byReason[0][0]);
 }
 
 interface OpsOverviewProps {
@@ -280,7 +281,7 @@ export function OpsOverview({ state }: OpsOverviewProps) {
 
   const workers = workerCount(running);
   const due = nextDue(retrying);
-  const blockedReason = topBlockedReason(state);
+  const blockedReason = topBlockedReasonLabel(state);
 
   return (
     <div className="space-y-4">
