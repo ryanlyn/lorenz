@@ -786,7 +786,11 @@ export interface RuntimeTrackerClient {
    * boundary through {@link Issue.issueEventCursor}; live push is the primary delivery path and
    * this pull hook recovers events missed across connection gaps.
    */
-  fetchIssueEvents?(issueId: string, sinceTs: string): Promise<TrackerIssueEvent[]>;
+  fetchIssueEvents?(
+    issueId: string,
+    sinceTs: string,
+    abortSignal?: AbortSignal,
+  ): Promise<TrackerIssueEvent[]>;
 }
 
 /**

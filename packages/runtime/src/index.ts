@@ -267,6 +267,7 @@ class ActiveRunHandle {
   readonly controller = new AbortController();
   private readonly issueEventListeners = new Set<(events: TrackerIssueEvent[]) => void>();
   private pendingIssueEvents: TrackerIssueEvent[] = [];
+  private issueEventDeliveryClosed = false;
   /**
    * Set when the run is force-finished externally (e.g. a stall reconciliation aborts it). The
    * worker pool reads this so a stall-finished run poisons its worker even though the runner surfaces a
@@ -296,17 +297,27 @@ class ActiveRunHandle {
   }
 
   subscribeIssueEvents(listener: (events: TrackerIssueEvent[]) => void): () => void {
+    if (this.issueEventDeliveryClosed) return () => {};
     this.issueEventListeners.add(listener);
     if (this.pendingIssueEvents.length > 0) {
       const pending = this.pendingIssueEvents;
       this.pendingIssueEvents = [];
       listener(pending);
     }
-    return () => this.issueEventListeners.delete(listener);
+    let subscribed = true;
+    return () => {
+      if (!subscribed) return;
+      subscribed = false;
+      this.issueEventListeners.delete(listener);
+      if (this.issueEventListeners.size === 0) {
+        this.issueEventDeliveryClosed = true;
+        this.pendingIssueEvents = [];
+      }
+    };
   }
 
   publishIssueEvents(events: TrackerIssueEvent[]): void {
-    if (!this.isActive || events.length === 0) return;
+    if (!this.isActive || this.issueEventDeliveryClosed || events.length === 0) return;
     if (this.issueEventListeners.size === 0) {
       this.pendingIssueEvents.push(...events);
       return;
@@ -1072,8 +1083,8 @@ export class LorenzRuntime {
         subscribeIssueEvents: (listener) => handle.subscribeIssueEvents(listener),
         ...(this.client.fetchIssueEvents
           ? {
-              fetchIssueEvents: async (sinceTs: string) =>
-                (await this.client.fetchIssueEvents?.(issue.id, sinceTs)) ?? [],
+              fetchIssueEvents: async (sinceTs: string, abortSignal?: AbortSignal) =>
+                (await this.client.fetchIssueEvents?.(issue.id, sinceTs, abortSignal)) ?? [],
             }
           : {}),
         abortSignal: handle.signal,

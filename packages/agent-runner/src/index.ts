@@ -111,7 +111,7 @@ export interface RunAgentAttemptInput {
   /** Subscribe to live human-authored events for this run's issue. */
   subscribeIssueEvents?: (listener: (events: TrackerIssueEvent[]) => void) => () => void;
   /** Recover issue events missed by the live subscription. */
-  fetchIssueEvents?: (sinceTs: string) => Promise<TrackerIssueEvent[]>;
+  fetchIssueEvents?: (sinceTs: string, abortSignal?: AbortSignal) => Promise<TrackerIssueEvent[]>;
   abortSignal?: AbortSignal | undefined;
   adapters?: Partial<RunAgentAttemptAdapters> | undefined;
 }
@@ -167,7 +167,6 @@ class RunController {
       message: `workspace prepared at ${workspace}`,
     });
     let session: AgentSession | null = null;
-    let steeringFeedAbortController: AbortController | undefined;
 
     let turnCount = 0;
     let submittedTurnCount = 0;
@@ -250,14 +249,13 @@ class RunController {
         Boolean(input.fetchIssueEvents) &&
         typeof issue.issueEventCursor === "string" &&
         runtime.agent.maxTurns > 1;
-      steeringFeedAbortController = canRecoverSteering ? new AbortController() : undefined;
       const fetchSteeringIssueEvents = async (sinceTs: string): Promise<TrackerIssueEvent[]> => {
-        if (!input.fetchIssueEvents || !steeringFeedAbortController) return [];
+        if (!input.fetchIssueEvents || !canRecoverSteering) return [];
         return runSetupStage(
           issueEventsFeedStage,
           steeringFeedTimeoutMs(runtime),
-          async () => input.fetchIssueEvents?.(sinceTs) ?? [],
-          steeringFeedAbortController.signal,
+          async ({ abortSignal }) => input.fetchIssueEvents?.(sinceTs, abortSignal) ?? [],
+          input.abortSignal,
         );
       };
       let steeringRecoveryCursorTs = issue.issueEventCursor ?? "0";
@@ -375,15 +373,12 @@ class RunController {
         // The signal is primarily derived from the STREAMED updates (see onUpdate
         // above): the returned batch may be bounded for very long turns (see
         // AgentExecutor.runTurn), so an early tool call could be missing from it.
-        if (
+        const completedWithoutTools =
           turnCount > 1 &&
           queuedTurns.length === 0 &&
           runtime.agents[runtime.agent.kind]?.executor === "acp" &&
           !turnActivity.sawToolCall &&
-          !turnUpdates.some(isToolCallNotification)
-        ) {
-          break;
-        }
+          !turnUpdates.some(isToolCallNotification);
 
         if (!input.fetchIssue) {
           if (queuedTurns.length > 0) continue;
@@ -400,11 +395,11 @@ class RunController {
         }
         runtime = refreshed;
         await recoverSteering();
+        if (completedWithoutTools && queuedTurns.length === 0) break;
       }
     } catch (error) {
       runError = error;
     } finally {
-      steeringFeedAbortController?.abort(new Error("agent_run_finished"));
       unsubscribeIssueEvents?.();
       if (session) {
         try {

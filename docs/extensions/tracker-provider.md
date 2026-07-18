@@ -50,7 +50,11 @@ interface RuntimeTrackerClient {
   fetchIssuesByIds(ids: string[]): Promise<Issue[]>;
   fetchIssuesByStates?(states: string[]): Promise<Issue[]>;
   watch?(onChange: (change?: TrackerChange) => void): TrackerChangeStream | null;
-  fetchIssueEvents?(issueId: string, sinceTs: string): Promise<TrackerIssueEvent[]>;
+  fetchIssueEvents?(
+    issueId: string,
+    sinceTs: string,
+    abortSignal?: AbortSignal,
+  ): Promise<TrackerIssueEvent[]>;
 }
 ```
 
@@ -69,7 +73,8 @@ interface RuntimeTrackerClient {
   change-stream gap. Each event uses a unique, canonical non-negative decimal `ts` key. The feed
   returns events newer than `sinceTs`. Set `Issue.issueEventCursor` to the latest event key included
   in each issue snapshot; the runner starts recovery there, advances the cursor only from feed
-  results, and deduplicates live delivery independently.
+  results, and deduplicates live delivery independently. Stop the request when `abortSignal`
+  aborts.
 
 Each client returns the domain `Issue` shape, not the backend's raw payload. `Issue` requires
 `stateType: IssueStateType` (one of `backlog`, `unstarted`, `started`, `completed`, `canceled`,

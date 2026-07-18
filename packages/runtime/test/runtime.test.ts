@@ -2139,6 +2139,59 @@ test("a tracker push delivers issue events to every active run for that issue", 
   }
 });
 
+test("issue event delivery remains closed after the runner unsubscribes", async () => {
+  const issue = issueFixture("issue-closed-steering", "MT-CLOSED-STEERING");
+  let captured: ((change?: TrackerChange) => void) | null = null;
+  let subscribeAgain: ((listener: (events: TrackerIssueEvent[]) => void) => () => void) | undefined;
+  let markUnsubscribed: (() => void) | undefined;
+  const unsubscribed = new Promise<void>((resolve) => {
+    markUnsubscribed = resolve;
+  });
+  let finishRun: (() => void) | undefined;
+  const runFinished = new Promise<void>((resolve) => {
+    finishRun = resolve;
+  });
+  const replayed: TrackerIssueEvent[] = [];
+  const runtime = new LorenzRuntime(
+    runtimeOptions({
+      workflow: pushWorkflowFixture(),
+      client: {
+        fetchCandidateIssues: async () => [issue],
+        fetchIssuesByIds: async () => [issue],
+        watch: (onChange) => {
+          captured = onChange;
+          return { close: () => {} };
+        },
+      },
+      runner: async (input) => {
+        subscribeAgain = input.subscribeIssueEvents;
+        const unsubscribe = input.subscribeIssueEvents?.(() => {});
+        unsubscribe?.();
+        markUnsubscribed?.();
+        await runFinished;
+        return { workspace: "/tmp/lorenz/MT-CLOSED-STEERING", finalIssue: issue };
+      },
+    }),
+  );
+
+  void runtime.start({ once: false });
+  try {
+    await waitFor(() => captured !== null && runtime.snapshot().running.length === 1, 1_000);
+    await unsubscribed;
+    captured!({
+      issueEvents: {
+        issueId: issue.id,
+        events: [{ ts: "11.0", author: "ryan", text: "do not retain" }],
+      },
+    });
+    subscribeAgain?.((events) => replayed.push(...events));
+    assert.deepEqual(replayed, []);
+  } finally {
+    finishRun?.();
+    runtime.stop();
+  }
+});
+
 test("the runtime closes the tracker change stream on stop", async () => {
   let closed = false;
   const runtime = new LorenzRuntime(

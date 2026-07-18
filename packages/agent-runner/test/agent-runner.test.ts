@@ -324,6 +324,44 @@ test("live delivery does not advance the recovery cursor past missed events", as
   assert.notMatch(queuedPrompts[1]!, /live event/);
 });
 
+test("recovery can queue a missed event before the no-tool completion exit", async () => {
+  const settings = fakeSettings({ agent: { ...defaultSettings().agent, maxTurns: 3 } });
+  const feedCursors: string[] = [];
+  const queuedPrompts: string[] = [];
+  const session = fakeSession({
+    queueTurn: async (prompt) => {
+      queuedPrompts.push(prompt);
+      return [{ type: "turn_completed" }];
+    },
+  });
+
+  const result = await runAgentAttempt({
+    issue: fakeIssue({ issueEventCursor: "10.0" }),
+    workflow: { path: "/workflow.md", config: {}, promptTemplate: "Fix it", settings },
+    settings,
+    fetchIssue: async (issue) => issue,
+    fetchIssueEvents: async (sinceTs) => {
+      feedCursors.push(sinceTs);
+      return feedCursors.length === 2
+        ? [{ ts: "11.0", author: "ryan", text: "missed during turn" }]
+        : [];
+    },
+    adapters: fakeAdapters({
+      executorFactory: () =>
+        fakeExecutor({
+          session: {
+            queueTurn: session.queueTurn,
+          },
+        }),
+    }),
+  });
+
+  assert.equal(result.turnCount, 3);
+  assert.deepEqual(feedCursors, ["10.0", "10.0"]);
+  assert.equal(queuedPrompts.length, 1);
+  assert.match(queuedPrompts[0]!, /missed during turn/);
+});
+
 test("sessions without queued turns do not start issue event recovery", async () => {
   const settings = fakeSettings({ agent: { ...defaultSettings().agent, maxTurns: 1 } });
   let feedCalls = 0;
@@ -347,6 +385,52 @@ test("sessions without queued turns do not start issue event recovery", async ()
   assert.equal(result.turnCount, 1);
   assert.equal(feedCalls, 0);
   assert.equal(subscriptionClosed, true);
+});
+
+test("run cancellation aborts an active steering recovery request", async () => {
+  const settings = fakeSettings({ agent: { ...defaultSettings().agent, maxTurns: 2 } });
+  const controller = new AbortController();
+  let markFeedStarted: (() => void) | undefined;
+  const feedStarted = new Promise<void>((resolve) => {
+    markFeedStarted = resolve;
+  });
+  let feedSignal: AbortSignal | undefined;
+  const session = fakeSession({
+    queueTurn: async () => [{ type: "turn_completed" }],
+  });
+
+  const attempt = runAgentAttempt({
+    issue: fakeIssue({ issueEventCursor: "10.0" }),
+    workflow: { path: "/workflow.md", config: {}, promptTemplate: "Fix it", settings },
+    settings,
+    fetchIssue: async (issue) => issue,
+    fetchIssueEvents: async (_sinceTs, abortSignal) => {
+      feedSignal = abortSignal;
+      markFeedStarted?.();
+      return new Promise<TrackerIssueEvent[]>((_resolve, reject) => {
+        abortSignal?.addEventListener(
+          "abort",
+          () => reject(abortSignal.reason ?? new Error("aborted")),
+          { once: true },
+        );
+      });
+    },
+    abortSignal: controller.signal,
+    adapters: fakeAdapters({
+      executorFactory: () =>
+        fakeExecutor({
+          session: {
+            queueTurn: session.queueTurn,
+          },
+        }),
+    }),
+  });
+
+  await feedStarted;
+  controller.abort();
+
+  await assert.rejects(() => attempt, /agent_run_aborted/);
+  assert.equal(feedSignal?.aborted, true);
 });
 
 test("a non-settling steering recovery feed is bounded by the agent timeout", async () => {
