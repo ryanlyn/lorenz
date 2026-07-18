@@ -489,7 +489,7 @@ export class LorenzRuntime {
     // Open the tracker's push subscription (if any) so a real backend event re-polls
     // immediately instead of waiting out polling.intervalMs. Skipped for --once (which polls
     // exactly once and exits) and for pull-only trackers that do not implement watch().
-    if (!options.once) await this.openChangeStream();
+    if (!options.once) void this.openChangeStream();
     do {
       if (options.once) {
         await this.pollOnce({ dryRun: options.dryRun, waitForRuns: true });
@@ -601,7 +601,8 @@ export class LorenzRuntime {
    * implemented) so a real backend event triggers an immediate poll. Idempotent and
    * fail-soft: a watch() that rejects (or is absent) leaves the runtime on interval polling
    * alone, surfaced as a `tracker_watch_error` event rather than aborting startup. A stop()
-   * that races an in-flight open is honored by closing the freshly-opened stream.
+   * that races an in-flight open is honored by closing the freshly-opened stream. Callers do not
+   * await this method, so a provider that never settles cannot block polling or workflow reload.
    */
   private async openChangeStream(): Promise<void> {
     const client = this.client;
@@ -1383,7 +1384,7 @@ export class LorenzRuntime {
       this.orchestrator.settings = workflow.settings;
       this.client = nextClient;
       if (clientChanged) this.issueEventRecoveryWarningIssued = false;
-      if (clientChanged && this.changeStreamEnabled) await this.openChangeStream();
+      if (clientChanged && this.changeStreamEnabled) void this.openChangeStream();
       this.addEvent("workflow_reloaded", workflow.path);
     } catch (error) {
       // Keeps last-good settings. errorMessage(error) already surfaces the

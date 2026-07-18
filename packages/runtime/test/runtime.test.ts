@@ -1438,7 +1438,7 @@ test("runtime bounds tracker stream shutdown during reload", async () => {
   }
 });
 
-test("runtime opens a replacement stream while the superseded stream is still opening", async () => {
+test("runtime polling does not wait for replacement stream startup", async () => {
   const dir = await tempDir("lorenz-runtime-reload-opening-watch");
   const workflowFile = path.join(dir, "WORKFLOW.md");
   await fs.writeFile(workflowFile, workflowMarkdown({ intervalMs: 600_000 }));
@@ -1449,6 +1449,8 @@ test("runtime opens a replacement stream while the superseded stream is still op
     resolveFirstStream = resolve;
   });
   let firstStreamCloses = 0;
+  let replacementWatchCalls = 0;
+  const fetches = [0, 0];
   let clientBuilds = 0;
   const runtime = new LorenzRuntime(
     runtimeOptions({
@@ -1458,12 +1460,16 @@ test("runtime opens a replacement stream while the superseded stream is still op
         const index = clientBuilds;
         clientBuilds += 1;
         return {
-          fetchCandidateIssues: async () => [],
+          fetchCandidateIssues: async () => {
+            fetches[index] = (fetches[index] ?? 0) + 1;
+            return [];
+          },
           fetchIssuesByIds: async () => [],
           watch: (onChange) => {
             callbacks[index] = onChange;
             if (index === 0) return firstStream;
-            return { close: () => {} };
+            replacementWatchCalls += 1;
+            return new Promise<never>(() => {});
           },
         };
       },
@@ -1481,6 +1487,8 @@ test("runtime opens a replacement stream while the superseded stream is still op
     await runtime.pollOnce({ dryRun: true });
     assert.equal(clientBuilds, 2);
     assert.ok(callbacks[1]);
+    assert.equal(replacementWatchCalls, 1);
+    assert.equal(fetches[1], 1);
     assert.equal(firstStreamCloses, 0);
 
     resolveFirstStream?.({
