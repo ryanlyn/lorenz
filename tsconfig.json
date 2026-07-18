@@ -107,6 +107,9 @@
       "path": "./packages/workspace"
     },
     {
+      "path": "./extensions/discord-tracker"
+    },
+    {
       "path": "./extensions/docker-worker"
     },
     {

@@ -6,8 +6,8 @@ surface every tracker shares, the agent tools that ride on top, and where each b
 exact keys.
 
 Lorenz polls one tracker, turns matching issues into agent runs, and writes results back to that
-same tracker. The tracker is an extension point, so Linear, Jira, a local Markdown board, Slack, and an in-process
-fixture all plug into the same contract.
+same tracker. The tracker is an extension point, so Linear, Jira, a local Markdown board, Slack,
+Discord, and an in-process fixture all plug into the same contract.
 
 ## Picking a tracker
 
@@ -50,6 +50,7 @@ An unknown provider fails fast at startup. `TrackerRegistry.require` throws
 | `jira-mcp` | Jira via an external MCP server | A separate MCP server already fronts your Jira; Lorenz proxies through it. |
 | `local` | Filesystem Markdown board | You want to try Lorenz with no external tracker, or drive it from files in the repo. |
 | `slack` | Slack channels and threads | Work arrives as `@bot` mentions in Slack rather than as tracker issues. |
+| `discord` | Discord guild channels and native threads | Work arrives as bot or managed-role mentions. |
 | `memory` | In-process fixture | Tests and dry runs; issues come from an env var, no network, no agent tools. |
 
 Each provider owns its own config slice and its own page:
@@ -58,6 +59,7 @@ Each provider owns its own config slice and its own page:
 - [jira.md](jira.md) - REST and MCP variants, JQL scope, the hard `agent`-label gate.
 - [local.md](local.md) - the Markdown board file format, board directory, id prefix.
 - [slack.md](slack.md) - bot-mention issues, thread-derived status, channel allow-list.
+- [discord.md](discord.md) - bot and managed-role mentions, native threads, REST, and Gateway.
 - [memory.md](memory.md) - the in-process fixture and its seed env var.
 
 ## The shared read surface
@@ -69,11 +71,15 @@ into the backend directly.
 - `fetchCandidateIssues()` returns the issues eligible for dispatch this tick. Each provider scopes
   this to its own notion of "active": Linear polls `tracker.active_states`, the local board calls
   `byStatus(activeStates)`, Jira intersects its JQL with the active-states clause, Slack returns
-  mention-tracked roots.
+  mention-tracked roots, and Discord returns mentions from configured guild channels.
 - `fetchIssuesByIds(ids)` refreshes specific issues by id, used to re-read an issue Lorenz is
   already working.
 - `fetchIssuesByStates(states)` lists issues in given states, used for workspace cleanup against
   `tracker.terminal_states`.
+- `acknowledgeIssue(issue)` is an optional best-effort write started after a successful claim and
+  alongside agent setup. Discord uses it to expose `In Progress` immediately.
+- `watch(onChange)` is an optional push wake-up. Discord Gateway and Slack Socket Mode use it to
+  collapse discovery latency without replacing authoritative polling.
 
 Two config keys are core, not provider-specific: `tracker.active_states` (default
 `['Todo', 'In Progress']`) gates which states poll as candidates, and `tracker.terminal_states`

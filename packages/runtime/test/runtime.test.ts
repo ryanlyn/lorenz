@@ -339,6 +339,79 @@ test("runtime start honors a stop requested before startup", async () => {
   assert.equal(runtime.snapshot().appStatus, "stopping");
 });
 
+test("runtime starts tracker acknowledgement alongside the claimed run", async () => {
+  const issue = issueFixture("issue-acknowledgement", "MT-ACKNOWLEDGEMENT");
+  let acknowledgementStarted = false;
+  let runnerStarted = false;
+  let releaseAcknowledgement!: () => void;
+  const acknowledgementBlocked = new Promise<void>((resolve) => {
+    releaseAcknowledgement = resolve;
+  });
+  const runtime = new LorenzRuntime(
+    runtimeOptions({
+      workflow: workflowFixture(),
+      client: {
+        fetchCandidateIssues: async () => [issue],
+        fetchIssuesByIds: async () => [issue],
+        acknowledgeIssue: async () => {
+          acknowledgementStarted = true;
+          await acknowledgementBlocked;
+          return true;
+        },
+      },
+      runner: async () => {
+        runnerStarted = true;
+        return { workspace: "/tmp/lorenz/MT-ACKNOWLEDGEMENT", finalIssue: issue };
+      },
+    }),
+  );
+
+  const poll = runtime.pollOnce({ waitForRuns: true });
+  await vi.waitFor(() => {
+    assert.equal(acknowledgementStarted, true);
+    assert.equal(runnerStarted, true);
+  });
+  releaseAcknowledgement();
+  await poll;
+
+  assert.ok(runtime.snapshot().recentEvents.some((event) => event.type === "tracker_acknowledged"));
+});
+
+test("tracker acknowledgement failures do not fail the claimed run", async () => {
+  const issue = issueFixture("issue-acknowledgement-failure", "MT-ACKNOWLEDGEMENT-FAILURE");
+  let runnerCalls = 0;
+  const runtime = new LorenzRuntime(
+    runtimeOptions({
+      workflow: workflowFixture(),
+      client: {
+        fetchCandidateIssues: async () => [issue],
+        fetchIssuesByIds: async () => [issue],
+        acknowledgeIssue: async () => {
+          throw new Error("acknowledgement unavailable");
+        },
+      },
+      runner: async () => {
+        runnerCalls += 1;
+        return { workspace: "/tmp/lorenz/MT-ACKNOWLEDGEMENT-FAILURE", finalIssue: issue };
+      },
+    }),
+  );
+
+  await runtime.pollOnce({ waitForRuns: true });
+
+  assert.equal(runnerCalls, 1);
+  assert.ok(
+    runtime
+      .snapshot()
+      .recentEvents.some(
+        (event) =>
+          event.type === "tracker_acknowledge_failed" &&
+          event.message.includes("acknowledgement unavailable"),
+      ),
+  );
+  assert.ok(runtime.snapshot().recentEvents.some((event) => event.type === "run_completed"));
+});
+
 test("runtime abandons a claim when owner heartbeat startup fails before runner starts", async () => {
   const issue = issueFixture("issue-heartbeat-start-failure", "MT-HEARTBEAT-START-FAILURE");
   const store = new FailingHeartbeatClaimStore(createState(), {
@@ -3421,6 +3494,7 @@ test("worker pool: a codex run is skipped when the per-run endpoint open THROWS 
     canAcquire: () => true,
   });
   let runnerCalls = 0;
+  let acknowledgements = 0;
   const runtime = new LorenzRuntime(
     runtimeOptions({
       workflow,
@@ -3429,6 +3503,10 @@ test("worker pool: a codex run is skipped when the per-run endpoint open THROWS 
       client: {
         fetchCandidateIssues: async () => [issue],
         fetchIssuesByIds: async () => [issue],
+        acknowledgeIssue: async () => {
+          acknowledgements += 1;
+          return true;
+        },
       },
       runner: async () => {
         runnerCalls += 1;
@@ -3443,6 +3521,7 @@ test("worker pool: a codex run is skipped when the per-run endpoint open THROWS 
   // ran, and the dispatch was skipped with a clear acquire error.
   assert.equal(openCalls, 1);
   assert.equal(runnerCalls, 0);
+  assert.equal(acknowledgements, 0);
   const snapshot = runtime.snapshot();
   assert.equal(snapshot.runHistory.length, 0);
   assert.equal(snapshot.retrying.length, 0);
@@ -3488,6 +3567,7 @@ test("worker pool: an ACP/claude run STILL opens its per-run endpoint (the per-r
     settings: workflow.settings.worker.workerPool!,
   });
   let runnerEndpoint: AgentMcpEndpointLease | null | undefined = "unset" as never;
+  let acknowledgements = 0;
   const runtime = new LorenzRuntime(
     runtimeOptions({
       workflow,
@@ -3495,6 +3575,10 @@ test("worker pool: an ACP/claude run STILL opens its per-run endpoint (the per-r
       client: {
         fetchCandidateIssues: async () => [issue],
         fetchIssuesByIds: async () => [issue],
+        acknowledgeIssue: async () => {
+          acknowledgements += 1;
+          return true;
+        },
       },
       runner: async ({ mcpEndpoint }) => {
         runnerEndpoint = mcpEndpoint;
@@ -3512,6 +3596,7 @@ test("worker pool: an ACP/claude run STILL opens its per-run endpoint (the per-r
 
   // The ACP run opened its per-run endpoint exactly once and the runner consumed it.
   assert.equal(openCalls, 1);
+  assert.equal(acknowledgements, 1);
   assert.equal(runnerEndpoint, endpointLease);
   assert.equal(runtime.snapshot().runHistory[0]?.outcome, "success");
 });

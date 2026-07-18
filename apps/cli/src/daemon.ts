@@ -17,6 +17,7 @@ import {
 } from "@lorenz/worker-sdk";
 import { trackerSpecifierFromConfig, type DefaultSettingsOptions } from "@lorenz/config";
 import { registerDockerWorkerDriver } from "@lorenz/docker-worker";
+import { registerDiscordTracker } from "@lorenz/discord-tracker";
 import { systemClock, type RuntimeTrackerClient, type Settings } from "@lorenz/domain";
 import { registerJiraTrackers } from "@lorenz/jira-tracker";
 import { registerLinearTracker } from "@lorenz/linear-tracker";
@@ -71,6 +72,7 @@ export function registerBuiltinBackends(registries: BackendRegistries = {}): voi
   registerMemoryTracker({ trackers });
   registerJiraTrackers({ trackers, tools });
   registerSlackTracker({ trackers, tools });
+  registerDiscordTracker({ trackers, tools });
   if (executors.get(acpExecutorProvider.executor) === undefined) {
     executors.register(acpExecutorProvider);
   }

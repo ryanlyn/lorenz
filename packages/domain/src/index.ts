@@ -742,6 +742,13 @@ export interface RuntimeTrackerClient {
    */
   fetchIssuesByStates?(states: string[]): Promise<Issue[]>;
   /**
+   * Optional best-effort dispatch acknowledgement. The runtime starts this after it owns the
+   * issue claim and lets it run alongside agent setup, so a tracker can provide immediate
+   * human-visible feedback without delaying execution. Rejections are reported as runtime events
+   * and never fail the claimed run.
+   */
+  acknowledgeIssue?(issue: Issue): Promise<boolean>;
+  /**
    * Optional push capability: open a live change stream that invokes `onChange` whenever the
    * backend signals new or updated work, so the runtime can re-poll IMMEDIATELY instead of
    * waiting out `polling.intervalMs`. Backends that can only be pulled omit this and the runtime

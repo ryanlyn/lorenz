@@ -66,7 +66,7 @@ hard-coded. This is the central correction to the original draft, which assumed 
 and one Codex backend.
 
 - **`TrackerProvider`** registered in a `TrackerRegistry`. Adding a tracker is one provider plus one
-  registration. Built-in providers ship as `extensions/{linear,jira,local,slack,memory}-tracker`.
+  registration. Built-in providers ship as `extensions/{linear,jira,local,slack,discord,memory}-tracker`.
   See [extensions/tracker-provider](../extensions/tracker-provider.md).
 - **`AgentExecutorProvider`** registered in an `AgentExecutorRegistry`, matched against
   `agents.<kind>.executor`. The shipped provider is `acpExecutorProvider` with selector `acp`. See
@@ -161,7 +161,7 @@ meaning.
 
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `tracker.kind` | required | Provider selector (`linear`, `jira`, `local`, `slack`, `memory`). |
+| `tracker.kind` | required | Provider selector (`linear`, `jira`, `local`, `slack`, `discord`, `memory`). |
 | `tracker.active_states` | `[Todo, In Progress]` | States eligible for dispatch. |
 | `tracker.terminal_states` | `[Closed, Cancelled, Canceled, Duplicate, Done]` | Terminal states; trigger workspace cleanup. |
 | `tracker.dispatch.route_label_prefix` | `Lorenz:` | Prefix that turns a label into a route. |
@@ -470,8 +470,10 @@ coerced to integer or null; timestamps parsed as ISO-8601. On a candidate-fetch 
 and skips dispatch; on a refresh failure it keeps workers running; on a startup-cleanup failure it
 logs and continues startup.
 
-Tracker writes are out of scope for the orchestrator: ticket mutations run through the agent's
-`jira_*` tools. Built-in providers ship as `extensions/{linear,jira,local,slack,memory}-tracker`.
+Tracker writes normally run through agent tools. A provider may additionally implement the
+best-effort dispatch acknowledgement hook, which the runtime starts after a successful claim and
+alongside agent setup. Built-in providers ship as
+`extensions/{linear,jira,local,slack,discord,memory}-tracker`.
 See [trackers/index](../trackers/index.md), [trackers/linear](../trackers/linear.md),
 [trackers/jira](../trackers/jira.md), [trackers/local](../trackers/local.md), and
 [trackers/slack](../trackers/slack.md).

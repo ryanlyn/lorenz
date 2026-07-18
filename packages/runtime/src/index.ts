@@ -708,6 +708,7 @@ export class LorenzRuntime {
     // signal reaches the pool's FIFO waiter) exactly as they abort a running one.
     const handle = new ActiveRunHandle(refreshed.id, slotIndex, key, runId, this.activeRuns);
     this.activeRuns.set(key, handle);
+    let acknowledgement: Promise<void> | null = null;
     try {
       this.syncRetryTimer(refreshed.id);
       await this.startClaimOwnerHeartbeat();
@@ -721,6 +722,7 @@ export class LorenzRuntime {
         this.addEvent("run_reserving", `${refreshed.identifier} slot=${slotIndex}`);
       }
       this.input.onIssueDispatched?.(refreshed);
+      if (claim.kind === "running") acknowledgement = this.acknowledgeIssue(refreshed);
     } catch (error) {
       try {
         await this.orchestrator.abandonClaimAsync(refreshed.id, slotIndex);
@@ -733,7 +735,7 @@ export class LorenzRuntime {
       throw error;
     }
 
-    const run =
+    const execution =
       claim.kind === "running"
         ? this.runClaim(
             refreshed,
@@ -744,6 +746,9 @@ export class LorenzRuntime {
             handle,
           )
         : this.runReservedClaim(refreshed, claim.reservation, runId, handle);
+    const run = acknowledgement
+      ? Promise.all([execution, acknowledgement]).then(() => undefined)
+      : execution;
     this.inFlight.add(run);
     void run.finally(() => {
       this.inFlight.delete(run);
@@ -753,6 +758,23 @@ export class LorenzRuntime {
     });
     this.emit();
     return [run];
+  }
+
+  private acknowledgeIssue(issue: Issue): Promise<void> | null {
+    if (!this.client.acknowledgeIssue) return null;
+    try {
+      return this.client.acknowledgeIssue(issue).then(
+        (acknowledged) => {
+          if (acknowledged) this.addEvent("tracker_acknowledged", issue.identifier);
+        },
+        (error) => {
+          this.addEvent("tracker_acknowledge_failed", `${issue.identifier} ${errorMessage(error)}`);
+        },
+      );
+    } catch (error) {
+      this.addEvent("tracker_acknowledge_failed", `${issue.identifier} ${errorMessage(error)}`);
+      return null;
+    }
   }
 
   private async fetchIssueForDispatch(issue: Issue): Promise<Issue | null> {
@@ -948,7 +970,8 @@ export class LorenzRuntime {
       return;
     }
     this.addEvent("run_started", `${issue.identifier} slot=${reservation.slotIndex}`);
-    await this.runClaim(
+    const acknowledgement = this.acknowledgeIssue(issue);
+    const execution = this.runClaim(
       issue,
       reservation.slotIndex,
       reservation.agentKind,
@@ -957,6 +980,11 @@ export class LorenzRuntime {
       handle,
       slot,
     );
+    if (acknowledgement) {
+      await Promise.all([execution, acknowledgement]);
+    } else {
+      await execution;
+    }
   }
 
   private async cancelReservationAfterSkippedAcquire(

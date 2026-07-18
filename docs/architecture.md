@@ -185,7 +185,7 @@ collapses to `undefined`), and `resolveEnvReference("$VAR", env)`. Their errors 
 ## The composition root
 
 `registerBuiltinBackends()` in `apps/cli/src/daemon.ts` is the single place backend identity is
-hardcoded. It registers the `linear`, `local`, `memory`, `jira`, and `slack` trackers and their tool
+hardcoded. It registers the `linear`, `local`, `memory`, `jira`, `slack`, and `discord` trackers and their tool
 packs (the `jira` pack owns the `jira_*` tools, `linear` owns `linear_graphql`, `local` owns the
 `local_*` tools, and `slack` owns the `slack_*` tools), the `acp` executor provider, and the `fake`,
 `static-ssh`, and `docker` worker drivers into the four default registries. It is idempotent, so

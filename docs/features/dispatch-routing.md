@@ -50,7 +50,12 @@ Linear issues carry labels directly. With the default `route_label_prefix` of `L
 
 ### Slack
 
-A Slack issue is a thread that @-mentions the bot. There are no issue labels, so routes come from hashtags in the message text. The shipped `WORKFLOW.slack.md` sets `route_label_prefix` to `route-`, so a hashtag `#route-backend` becomes the label `route-backend`, which resolves to the route `backend`. A plain `#backend` is an ordinary label, not a route. With `accept_unrouted: true` (the Slack default), every bot-mention is still picked up whether or not it carries a route hashtag. See [../trackers/slack.md](../trackers/slack.md).
+A Slack issue is a thread that @-mentions the bot. There are no issue labels, so routes come from hashtags in the message text. The Slack bundle in `WORKFLOW.chat.md` sets `route_label_prefix` to `route-`, so a hashtag `#route-backend` becomes the label `route-backend`, which resolves to the route `backend`. A plain `#backend` is an ordinary label, not a route. With `accept_unrouted: true` (the Slack default), every bot-mention is still picked up whether or not it carries a route hashtag. See [../trackers/slack.md](../trackers/slack.md).
+
+Discord uses the same hashtag routing model. A source-channel message that mentions the bot becomes
+an issue, and hashtags in that source message become labels. The Discord bundle in
+`WORKFLOW.chat.md` uses the `route-` prefix so `#route-backend` selects the `backend` route. See
+[../trackers/discord.md](../trackers/discord.md).
 
 | Tracker | `route_label_prefix` | Route source | Example for route `backend` |
 |---|---|---|---|

@@ -45,6 +45,9 @@ catalogs:
     "@types/react-dom":
       specifier: ^19
       version: 19.2.3
+    "@types/ws":
+      specifier: ^8.18.1
+      version: 8.18.1
     "@vitejs/plugin-react":
       specifier: ^4.5
       version: 4.7.0
@@ -60,6 +63,9 @@ catalogs:
     dependency-cruiser:
       specifier: ^17.4.3
       version: 17.4.3
+    discord-api-types:
+      specifier: 0.38.49
+      version: 0.38.49
     eslint:
       specifier: ^10.3.0
       version: 10.4.1
@@ -144,6 +150,9 @@ catalogs:
     vitest:
       specifier: ^4.0.14
       version: 4.1.7
+    ws:
+      specifier: 8.21.0
+      version: 8.21.0
     yaml:
       specifier: ^2.8.0
       version: 2.9.0
@@ -337,6 +346,9 @@ importers:
       "@lorenz/config":
         specifier: workspace:*
         version: link:../../packages/config
+      "@lorenz/discord-tracker":
+        specifier: workspace:*
+        version: link:../../extensions/discord-tracker
       "@lorenz/dispatch":
         specifier: workspace:*
         version: link:../../packages/dispatch
@@ -516,6 +528,31 @@ importers:
       vite:
         specifier: "catalog:"
         version: 6.4.2(@types/node@22.19.19)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.22.3)(yaml@2.9.0)
+
+  extensions/discord-tracker:
+    dependencies:
+      "@lorenz/domain":
+        specifier: workspace:*
+        version: link:../../packages/domain
+      "@lorenz/issue":
+        specifier: workspace:*
+        version: link:../../packages/issue
+      "@lorenz/tool-sdk":
+        specifier: workspace:*
+        version: link:../../packages/tool-sdk
+      "@lorenz/tracker-sdk":
+        specifier: workspace:*
+        version: link:../../packages/tracker-sdk
+      discord-api-types:
+        specifier: "catalog:"
+        version: 0.38.49
+      ws:
+        specifier: "catalog:"
+        version: 8.21.0
+    devDependencies:
+      "@types/ws":
+        specifier: "catalog:"
+        version: 8.18.1
 
   extensions/docker-worker:
     dependencies:
@@ -3271,6 +3308,12 @@ packages:
         integrity: sha512-ko/gIFJRv177XgZsZcBwnqJN5x/Gien8qNOn0D5bQU/zAzVf9Zt3BlcUiLqhV9y4ARk0GbT3tnUiPNgnTXzc/Q==,
       }
 
+  "@types/ws@8.18.1":
+    resolution:
+      {
+        integrity: sha512-ThVF6DCVhA8kUGy+aazFQ4kXQ7E1Ty7A3ypFOe0IcJV8O/M511G99AW24irKrW56Wt44yG9+ij8FaqoBGkuBXg==,
+      }
+
   "@typescript-eslint/eslint-plugin@8.60.0":
     resolution:
       {
@@ -4208,6 +4251,12 @@ packages:
         integrity: sha512-DPi0FmjiSU5EvQV0++GFDOJ9ASQUVFh5kD+OzOnYdi7n3Wpm9hWWGfB/O2blfHcMVTL5WkQXSnRiK9makhrcnw==,
       }
     engines: { node: ">=0.3.1" }
+
+  discord-api-types@0.38.49:
+    resolution:
+      {
+        integrity: sha512-XnqcWmnFZFAE8ZM8SHAw9DIV8D3Or00rMQ8iQLotrEA2PmXhl+ykaf6L6q4l474hrSUH1JaYcv+iOMRWp2p6Tg==,
+      }
 
   dom-accessibility-api@0.5.16:
     resolution:
@@ -8333,6 +8382,10 @@ snapshots:
 
   "@types/unist@3.0.3": {}
 
+  "@types/ws@8.18.1":
+    dependencies:
+      "@types/node": 22.19.19
+
   "@typescript-eslint/eslint-plugin@8.60.0(@typescript-eslint/parser@8.60.0(eslint@10.4.1(jiti@2.7.0))(typescript@5.9.3))(eslint@10.4.1(jiti@2.7.0))(typescript@5.9.3)":
     dependencies:
       "@eslint-community/regexpp": 4.12.2
@@ -8849,6 +8902,8 @@ snapshots:
       dequal: 2.0.3
 
   diff@8.0.4: {}
+
+  discord-api-types@0.38.49: {}
 
   dom-accessibility-api@0.5.16: {}
 

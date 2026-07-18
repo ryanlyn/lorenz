@@ -28,6 +28,7 @@
     "@lorenz/dispatch": "workspace:*",
     "@lorenz/dispatch-coordinator": "workspace:*",
     "@lorenz/docker-worker": "workspace:*",
+    "@lorenz/discord-tracker": "workspace:*",
     "@lorenz/domain": "workspace:*",
     "@lorenz/flags": "workspace:*",
     "@lorenz/humanize": "workspace:*",

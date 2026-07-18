@@ -38,6 +38,9 @@
       "path": "../../extensions/docker-worker"
     },
     {
+      "path": "../../extensions/discord-tracker"
+    },
+    {
       "path": "../../packages/domain"
     },
     {
