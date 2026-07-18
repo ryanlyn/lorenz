@@ -21941,6 +21941,26 @@ function toTokenCount(usage) {
     reasoningOutputTokens: usage.reasoningOutputTokens
   };
 }
+// symphony-patch: per-session codex config overrides (config.toml shape as
+// JSON) supplied by the client on session/new, session/resume and
+// session/load via _meta["symphony/config"].
+function symphonySessionConfig(request) {
+  const config = request._meta?.["symphony/config"];
+  return typeof config === "object" && config !== null && !Array.isArray(config) ? config : void 0;
+}
+// symphony-patch: map a TokenCount to the symphony/_meta usage bucket shape.
+// inputTokens is already cache-subtracted and outputTokens already includes
+// reasoning tokens, so totalTokens = input + cachedRead + output holds.
+function toSymphonyUsageBucket(tokenCount) {
+  return {
+    inputTokens: tokenCount.inputTokens,
+    outputTokens: tokenCount.outputTokens,
+    cachedReadTokens: tokenCount.cachedInputTokens,
+    cachedWriteTokens: 0,
+    thoughtTokens: tokenCount.reasoningOutputTokens,
+    totalTokens: tokenCount.totalTokens
+  };
+}
 function toPromptUsage(tokenCount) {
   return {
     totalTokens: tokenCount.totalTokens,
@@ -23775,13 +23795,38 @@ ${event.stdin}
     this.handleTokenUsageUpdated(params);
     const used = this.sessionState.lastTokenUsage?.totalTokens;
     const size = this.sessionState.modelContextWindow;
-    if (used == null || size == null || size <= 0) {
+    // symphony-patch: codex reports the per-call bucket (tokenUsage.last) and
+    // the thread-cumulative total on every token update; surface both via
+    // _meta and emit even when the context window is unknown (size 0) so
+    // call-by-call accounting never stalls on a missing window size.
+    const meta = this.createSymphonyUsageMeta();
+    if (used == null) {
       return null;
+    }
+    if (size == null || size <= 0) {
+      return meta ? { sessionUpdate: "usage_update", used, size: 0, _meta: meta } : null;
     }
     return {
       sessionUpdate: "usage_update",
       used,
-      size
+      size,
+      ...meta ? { _meta: meta } : {}
+    };
+  }
+  // symphony-patch: per-call and thread-total token buckets for _meta.
+  createSymphonyUsageMeta() {
+    const last = this.sessionState.lastTokenUsage;
+    if (last == null) {
+      return null;
+    }
+    this.sessionState.symphonyCallSeq = (this.sessionState.symphonyCallSeq ?? 0) + 1;
+    const total = this.sessionState.totalTokenUsage;
+    return {
+      "symphony/callUsage": {
+        seq: this.sessionState.symphonyCallSeq,
+        ...toSymphonyUsageBucket(last)
+      },
+      ...total ? { "symphony/totalUsage": toSymphonyUsageBucket(total) } : {}
     };
   }
   handleRateLimitsUpdated(params) {
@@ -25628,7 +25673,7 @@ var CodexAcpClient = class {
     const additionalDirectories = readAdditionalDirectories(request.cwd, request.additionalDirectories, request._meta);
     await this.refreshSkills(request.cwd, additionalDirectories);
     const response = await this.codexClient.threadResume({
-      config: await this.createSessionConfig(request.cwd, additionalDirectories, request.mcpServers ?? []),
+      config: await this.createSessionConfig(request.cwd, additionalDirectories, request.mcpServers ?? [], symphonySessionConfig(request)),
       cwd: request.cwd,
       modelProvider: await this.getResumeModelProvider(),
       threadId: request.sessionId
@@ -25649,7 +25694,7 @@ var CodexAcpClient = class {
     const additionalDirectories = readAdditionalDirectories(request.cwd, request.additionalDirectories, request._meta);
     await this.refreshSkills(request.cwd, additionalDirectories);
     const response = await this.codexClient.threadResume({
-      config: await this.createSessionConfig(request.cwd, additionalDirectories, request.mcpServers ?? []),
+      config: await this.createSessionConfig(request.cwd, additionalDirectories, request.mcpServers ?? [], symphonySessionConfig(request)),
       cwd: request.cwd,
       modelProvider: await this.getResumeModelProvider(),
       threadId: request.sessionId
@@ -25675,7 +25720,7 @@ var CodexAcpClient = class {
     const additionalDirectories = readAdditionalDirectories(request.cwd, request.additionalDirectories, request._meta);
     await this.refreshSkills(request.cwd, additionalDirectories);
     const response = await this.codexClient.threadStart({
-      config: await this.createSessionConfig(request.cwd, additionalDirectories, request.mcpServers),
+      config: await this.createSessionConfig(request.cwd, additionalDirectories, request.mcpServers, symphonySessionConfig(request)),
       modelProvider: this.getModelProvider(),
       cwd: request.cwd
     });
@@ -25741,10 +25786,13 @@ var CodexAcpClient = class {
   getMcpServerStartupVersion() {
     return this.codexClient.getMcpServerStartupVersion();
   }
-  async createSessionConfig(projectPath, additionalDirectories, mcpServers) {
+  async createSessionConfig(projectPath, additionalDirectories, mcpServers, sessionConfig) {
     const sessionRoots = [projectPath, ...additionalDirectories];
     const mergedConfig = {
       ...mergeGatewayConfig(this.config, this.gatewayConfig),
+      // symphony-patch: per-session config overrides (config.toml shape)
+      // supplied via session _meta["symphony/config"].
+      ...sessionConfig ?? {},
       projects: Object.fromEntries(sessionRoots.map((root) => [root, {
         trust_level: "trusted"
       }]))
@@ -25765,9 +25813,15 @@ var CodexAcpClient = class {
     if (serversToConfigure.length === 0) {
       return configWithWorkspaceRoots;
     }
+    const configMcpServers = configWithWorkspaceRoots["mcp_servers"];
     return {
       ...configWithWorkspaceRoots,
-      "mcp_servers": Object.fromEntries(serversToConfigure.map((mcp) => [mcp.name, this.createMcpSeverConfig(mcp.server)]))
+      // symphony-patch: keep session-config mcp servers alongside the
+      // client-injected ones instead of clobbering them.
+      "mcp_servers": {
+        ...typeof configMcpServers === "object" && configMcpServers !== null ? configMcpServers : {},
+        ...Object.fromEntries(serversToConfigure.map((mcp) => [mcp.name, this.createMcpSeverConfig(mcp.server)]))
+      }
     };
   }
   async getConfigMcpServerNames(projectPath) {
