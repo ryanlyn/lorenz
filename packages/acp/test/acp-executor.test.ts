@@ -227,7 +227,10 @@ test("ACP executor does not retain a flood turn's stream (bridge stdout, per-tur
     // The stream really flowed (3000 chunks x ~16KB) and the resolved batch is
     // just the terminal update, not the turn's history.
     assert.ok(streamedChunks >= 3000, `expected the flood to stream, got ${streamedChunks}`);
-    assert.ok(turnUpdates.length <= 1, `expected only the terminal update, got ${turnUpdates.length}`);
+    assert.ok(
+      turnUpdates.length <= 1,
+      `expected only the terminal update, got ${turnUpdates.length}`,
+    );
     const maxGrowth = 20 * 1024 * 1024;
     assert.ok(
       growth < maxGrowth,
