@@ -243,14 +243,13 @@ class RunController {
         bufferedIssueEvents = [];
         receiveIssueEvents = () => {};
       }
-      const canRecoverSteering =
+      const steeringRecoveryAvailable =
         typeof session.queueTurn === "function" &&
         Boolean(input.fetchIssue) &&
         Boolean(input.fetchIssueEvents) &&
-        typeof issue.issueEventCursor === "string" &&
-        runtime.agent.maxTurns > 1;
+        typeof issue.issueEventCursor === "string";
       const fetchSteeringIssueEvents = async (sinceTs: string): Promise<TrackerIssueEvent[]> => {
-        if (!input.fetchIssueEvents || !canRecoverSteering) return [];
+        if (!input.fetchIssueEvents || !steeringRecoveryAvailable) return [];
         return runSetupStage(
           issueEventsFeedStage,
           steeringFeedTimeoutMs(runtime),
@@ -305,7 +304,7 @@ class RunController {
         queueIssueEvents(buffered);
       };
       const recoverSteering = async (): Promise<void> => {
-        if (!canRecoverSteering || submittedTurnCount >= runtime.agent.maxTurns) {
+        if (!steeringRecoveryAvailable || submittedTurnCount >= runtime.agent.maxTurns) {
           return;
         }
         try {
@@ -381,6 +380,7 @@ class RunController {
           !turnActivity.sawToolCall &&
           !turnUpdates.some(isToolCallNotification);
 
+        if (completedWithoutTools && !steeringRecoveryAvailable) break;
         if (!input.fetchIssue) {
           if (queuedTurns.length > 0) continue;
           break;

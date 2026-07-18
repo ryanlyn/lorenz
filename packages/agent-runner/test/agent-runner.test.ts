@@ -362,6 +362,68 @@ test("recovery can queue a missed event before the no-tool completion exit", asy
   assert.match(queuedPrompts[0]!, /missed during turn/);
 });
 
+test("no-tool completion does not refresh the issue when recovery is unavailable", async () => {
+  const settings = fakeSettings({ agent: { ...defaultSettings().agent, maxTurns: 3 } });
+  let issueRefreshes = 0;
+
+  const result = await runAgentAttempt({
+    issue: fakeIssue(),
+    workflow: { path: "/workflow.md", config: {}, promptTemplate: "Fix it", settings },
+    settings,
+    fetchIssue: async (issue) => {
+      issueRefreshes += 1;
+      return issue;
+    },
+    adapters: fakeAdapters(),
+  });
+
+  assert.equal(result.turnCount, 2);
+  assert.equal(issueRefreshes, 1);
+});
+
+test("a state override can add turn capacity for steering recovery", async () => {
+  const overrides = new Map<string, { agent?: Partial<Settings["agent"]> }>();
+  overrides.set("in progress", { agent: { maxTurns: 3 } });
+  const settings = fakeSettings({
+    agent: { ...defaultSettings().agent, maxTurns: 1 },
+    statusOverrides: overrides as Settings["statusOverrides"],
+  });
+  const feedCursors: string[] = [];
+  const queuedPrompts: string[] = [];
+  const session = fakeSession({
+    queueTurn: async (prompt) => {
+      queuedPrompts.push(prompt);
+      return [{ type: "turn_completed" }];
+    },
+  });
+
+  const result = await runAgentAttempt({
+    issue: fakeIssue({ issueEventCursor: "10.0" }),
+    workflow: { path: "/workflow.md", config: {}, promptTemplate: "Fix it", settings },
+    settings,
+    fetchIssue: async (issue) => ({ ...issue, state: "In Progress" }),
+    fetchIssueEvents: async (sinceTs) => {
+      feedCursors.push(sinceTs);
+      return sinceTs === "10.0"
+        ? [{ ts: "11.0", author: "ryan", text: "recovered after transition" }]
+        : [];
+    },
+    adapters: fakeAdapters({
+      executorFactory: () =>
+        fakeExecutor({
+          session: {
+            queueTurn: session.queueTurn,
+          },
+        }),
+    }),
+  });
+
+  assert.equal(result.turnCount, 2);
+  assert.deepEqual(feedCursors, ["10.0", "11.0"]);
+  assert.equal(queuedPrompts.length, 1);
+  assert.match(queuedPrompts[0]!, /recovered after transition/);
+});
+
 test("sessions without queued turns do not start issue event recovery", async () => {
   const settings = fakeSettings({ agent: { ...defaultSettings().agent, maxTurns: 1 } });
   let feedCalls = 0;
