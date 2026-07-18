@@ -271,6 +271,34 @@ test("ACP queued turn starts its lifecycle after a timed-out predecessor release
   assert.ok(runningIndex > releasedIndex);
 });
 
+test("ACP queued turns reject when a timed-out backend does not release its slot", async () => {
+  const root = await tempDir("lorenz-acp-queued-wedged-timeout");
+  const fake = await writeFakeBridge(root);
+  const trace = path.join(root, "trace.jsonl");
+  const settings = acpSettings(root, fake, trace, "queued-wedged-timeout", 50);
+  const executor = new Executor("claude");
+  const session = await executor.startSession({
+    workspace: root,
+    settings,
+    issue: sampleIssue,
+  });
+
+  try {
+    const active = executor
+      .runTurn(session, "initial work", sampleIssue)
+      .then(() => null)
+      .catch((error: unknown) => error);
+    await waitForTraceEvent(trace, "wedgedPromptWaiting");
+    assert.ok(session.queueTurn);
+    const queued = session.queueTurn("new direction");
+
+    assert.match(String(await active), /acp turn timed out/);
+    await expectRejectsWithin(() => queued, 7_000, /acp backend cancellation timed out/);
+  } finally {
+    await session.stop();
+  }
+});
+
 test("ACP session stop rejects queued turns without activating them", async () => {
   const root = await tempDir("lorenz-acp-queued-stop");
   const fake = await writeFakeBridge(root);
@@ -316,10 +344,12 @@ test("vendored prompt queues advertise capability and isolate Claude usage at ha
 
   const promptStart = claudeSource.indexOf("async prompt(params)");
   const queuedHandoff = claudeSource.indexOf("const cancelled = await", promptStart);
+  const queuedInputPush = claudeSource.indexOf("session.input.push(userMessage)", queuedHandoff);
   const cancellationReset = claudeSource.indexOf("session.cancelled = false", promptStart);
   const usageReset = claudeSource.indexOf("session.accumulatedUsage = {", promptStart);
   assert.ok(promptStart >= 0);
   assert.ok(queuedHandoff > promptStart);
+  assert.ok(queuedInputPush > queuedHandoff);
   assert.ok(cancellationReset > queuedHandoff);
   assert.ok(usageReset > queuedHandoff);
 
@@ -1143,6 +1173,10 @@ class FakeAgent {
       await sleep(30);
       record({ method: "queuedPromptRunning" });
       return { stopReason: "end_turn" };
+    }
+    if (mode === "queued-wedged-timeout") {
+      record({ method: "wedgedPromptWaiting" });
+      await new Promise(() => {});
     }
     if (mode === "queued-stop") {
       record({ method: "queuedStopPromptWaiting" });

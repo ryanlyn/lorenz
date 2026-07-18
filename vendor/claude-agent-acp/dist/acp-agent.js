@@ -467,13 +467,11 @@ export class ClaudeAcpAgent {
         const userMessage = promptToClaude(params);
         const promptUuid = randomUUID();
         userMessage.uuid = promptUuid;
-        // These local-only commands return a result without replaying the user
-        // message. Mark promptReplayed=true so their result isn't consumed as a
-        // background task result.
         const firstText = params.prompt[0]?.type === "text" ? params.prompt[0].text : "";
         const isLocalOnlyCommand = firstText.startsWith("/") && LOCAL_ONLY_COMMANDS.has(firstText.split(" ", 1)[0]);
         if (session.promptRunning) {
-            session.input.push(userMessage);
+            // Register the ACP request immediately, then submit its SDK input
+            // only when this request owns the session's FIFO prompt slot.
             const order = session.nextPendingOrder++;
             const cancelled = await new Promise((resolve) => {
                 session.pendingMessages.set(promptUuid, { resolve, order });
@@ -481,6 +479,7 @@ export class ClaudeAcpAgent {
             if (cancelled) {
                 return { stopReason: "cancelled" };
             }
+            session.input.push(userMessage);
         }
         else {
             session.input.push(userMessage);
