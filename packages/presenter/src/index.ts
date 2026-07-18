@@ -6,6 +6,7 @@ import type {
 } from "@lorenz/runtime-events";
 import { humanizeAgentMessage } from "@lorenz/humanize";
 import {
+  dispatchBlockReasonLabel,
   durationMs,
   redactDiagnosticText,
   redactDiagnosticValue,
@@ -303,7 +304,7 @@ function blockedEntryPayload(entry: RuntimeSnapshot["blocked"][number]) {
     issue_url: entry.issueUrl ?? null,
     state: entry.state,
     reason: entry.reason,
-    label: blockReasonLabel(entry.reason),
+    label: dispatchBlockReasonLabel(entry.reason),
     worker_host: entry.workerHost ?? null,
   };
 }
@@ -482,16 +483,9 @@ function logHints(
 }
 
 function blockedByReasonPayload(blocked: RuntimeSnapshot["blocked"]): Record<string, number> {
-  const counts: Record<string, number> = {};
-  for (const entry of blocked) counts[entry.reason] = (counts[entry.reason] ?? 0) + 1;
-  return counts;
-}
-
-function blockReasonLabel(reason: string): string {
-  if (reason === "global_concurrency_cap") return "global concurrency cap";
-  if (reason === "local_concurrency_cap") return "local state concurrency cap";
-  if (reason === "worker_host_capacity") return "worker host capacity";
-  return reason;
+  const counts = new Map<string, number>();
+  for (const entry of blocked) counts.set(entry.reason, (counts.get(entry.reason) ?? 0) + 1);
+  return Object.fromEntries(counts);
 }
 
 function compareLatestRun(left: RunPayload, right: RunPayload): number {

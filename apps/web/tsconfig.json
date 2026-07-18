@@ -22,6 +22,9 @@
   ],
   "references": [
     {
+      "path": "../../packages/domain"
+    },
+    {
       "path": "../../packages/presenter"
     },
     {
