@@ -146,6 +146,50 @@ test("ACP session submits a queued turn before the active turn finishes", async 
   assert.equal(prompts[1]?.params?.prompt?.[0]?.text, "new direction");
 });
 
+test("ACP session retains a gated turn until activation is allowed", async () => {
+  const root = await tempDir("lorenz-acp-gated-queued-turn");
+  const fake = await writeFakeBridge(root);
+  const trace = path.join(root, "trace.jsonl");
+  const settings = acpSettings(root, fake, trace, "queued-activation-gate");
+  const executor = new Executor("claude");
+  const session = await executor.startSession({
+    workspace: root,
+    settings,
+    issue: sampleIssue,
+  });
+  let allowActivation: (() => void) | undefined;
+  const startWhen = new Promise<void>((resolve) => {
+    allowActivation = resolve;
+  });
+
+  try {
+    const active = executor.runTurn(session, "initial work", sampleIssue);
+    await waitForTraceEvent(trace, "gatedFirstPromptWaiting");
+    assert.ok(session.queueTurn);
+    const queued = session.queueTurn("validated direction", { startWhen });
+
+    await settle(20);
+    let prompts = (await readTrace(trace)).filter((event) => event.method === "prompt");
+    assert.equal(prompts.length, 1);
+
+    await fs.writeFile(`${trace}.release`, "");
+    await active;
+    await settle(20);
+    prompts = (await readTrace(trace)).filter((event) => event.method === "prompt");
+    assert.equal(prompts.length, 1);
+
+    allowActivation?.();
+    await queued;
+  } finally {
+    allowActivation?.();
+    await session.stop();
+  }
+
+  const prompts = (await readTrace(trace)).filter((event) => event.method === "prompt");
+  assert.equal(prompts.length, 2);
+  assert.equal(prompts[1]?.params?.prompt?.[0]?.text, "validated direction");
+});
+
 test("ACP session publishes queued responses in turn lifecycle order", async () => {
   const root = await tempDir("lorenz-acp-queued-response-order");
   const fake = await writeFakeBridge(root);
@@ -1149,6 +1193,17 @@ class FakeAgent {
       } else {
         record({ method: "queuedPromptAccepted" });
         await sleep(30);
+      }
+      return { stopReason: "end_turn" };
+    }
+    if (mode === "queued-activation-gate") {
+      const promptNumber = this.promptCount;
+      if (promptNumber === 1) {
+        record({ method: "gatedFirstPromptWaiting" });
+        while (!fs.existsSync(trace + ".release")) await sleep(5);
+        record({ method: "gatedFirstPromptReleased" });
+      } else {
+        record({ method: "gatedQueuedPromptRunning" });
       }
       return { stopReason: "end_turn" };
     }

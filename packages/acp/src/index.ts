@@ -38,6 +38,7 @@ import {
   type AgentUpdate,
   type AgentUpdateType,
   type Issue,
+  type QueuedTurnOptions,
   type Settings,
   type UsageTokenUpdate,
   type UsageTotals,
@@ -221,7 +222,8 @@ export class Executor implements AgentExecutor {
         lastCallUsageSeq: 0,
         pendingTurns: [],
         ...(supportsPromptQueue(init) && {
-          queueTurn: async (prompt: string) => this.queueTurn(nextSession, prompt),
+          queueTurn: async (prompt: string, options?: QueuedTurnOptions) =>
+            this.queueTurn(nextSession, prompt, options),
         }),
         stop: async () => {
           await this.stopSession(nextSession);
@@ -267,11 +269,19 @@ export class Executor implements AgentExecutor {
     return this.startTurn(session, prompt);
   }
 
-  private async queueTurn(session: Session, prompt: string): Promise<AgentUpdate[]> {
-    return this.startTurn(session, prompt);
+  private async queueTurn(
+    session: Session,
+    prompt: string,
+    options?: QueuedTurnOptions,
+  ): Promise<AgentUpdate[]> {
+    return this.startTurn(session, prompt, options);
   }
 
-  private async startTurn(session: Session, prompt: string): Promise<AgentUpdate[]> {
+  private async startTurn(
+    session: Session,
+    prompt: string,
+    options?: QueuedTurnOptions,
+  ): Promise<AgentUpdate[]> {
     let settled = false;
     let backendCompletion: (() => void) | undefined;
 
@@ -346,85 +356,109 @@ export class Executor implements AgentExecutor {
       };
 
       const sessionId = requireSessionId(session);
+      let backendSlotAvailable = false;
+      let activationReady = options?.startWhen === undefined;
+      let promptSubmitted = false;
+      const emitUpdate = (update: AgentUpdate): void => this.emit(session, update);
+      const submitPrompt = (): void => {
+        if (promptSubmitted || turn.settled) return;
+        promptSubmitted = true;
+        session.connection
+          .prompt({
+            sessionId,
+            prompt: [{ type: "text", text: prompt }],
+          })
+          .then(
+            (response) => {
+              backendCompletion = () => {
+                if (settled) return;
+                const usage = finalizeTurnUsage(session, extractUsage(response.usage ?? undefined));
+                const action = actionForStopReason(response.stopReason);
+                const terminalType =
+                  action === "continue"
+                    ? "turn_completed"
+                    : action === "cancel"
+                      ? "turn_cancelled"
+                      : "turn_failed";
+                const base = {
+                  sessionUpdate: acpProtocolUpdate(session, terminalType, { response }),
+                  sessionId: session.sessionId,
+                  executorPid: session.executorPid,
+                  message: { response },
+                  timestamp: new Date(),
+                  ...(usage && { usage, usageKind: "cumulative" as const }),
+                };
+                if (action === "continue") {
+                  const terminal: AgentUpdate = { ...base, type: "turn_completed" };
+                  this.emit(session, terminal);
+                  finishResolve([terminal]);
+                } else if (action === "cancel") {
+                  this.emit(session, { ...base, type: "turn_cancelled" });
+                  finishReject(new Error("acp_turn_cancelled"));
+                } else {
+                  this.emit(session, { ...base, type: "turn_failed" });
+                  finishReject(new Error(`acp_turn_failed: ${response.stopReason}`));
+                }
+              };
+              flushBackendCompletion();
+            },
+            (error: unknown) => {
+              backendCompletion = () => {
+                if (settled) return;
+                const message = errorMessage(error);
+                this.emit(session, {
+                  type: "turn_failed",
+                  sessionId,
+                  message,
+                  timestamp: new Date(),
+                });
+                finishReject(error instanceof Error ? error : new Error(message));
+              };
+              flushBackendCompletion();
+            },
+          );
+      };
+      function beginTurn(): void {
+        if (!backendSlotAvailable || !activationReady || turn.active || turn.settled) return;
+        turn.active = true;
+        submitPrompt();
+        session.sawCallUsageThisTurn = false;
+        session.turnStartTotals = { ...session.usageTotals };
+        hardTimer = setTimeout(cancelTurn, session.agentConfig.turnTimeoutMs);
+        resetStallTimer();
+        emitUpdate({
+          type: "turn_started",
+          sessionId,
+          message: { prompt: [{ type: "text", text: prompt }] },
+          timestamp: new Date(),
+        });
+        flushBackendCompletion();
+      }
       const turn: PendingTurn = {
         active: false,
         settled: false,
         allowSessionIdRotation: true,
         activate: () => {
-          if (turn.active || turn.settled) return;
-          turn.active = true;
-          session.sawCallUsageThisTurn = false;
-          session.turnStartTotals = { ...session.usageTotals };
-          hardTimer = setTimeout(cancelTurn, session.agentConfig.turnTimeoutMs);
-          resetStallTimer();
-          this.emit(session, {
-            type: "turn_started",
-            sessionId,
-            message: { prompt: [{ type: "text", text: prompt }] },
-            timestamp: new Date(),
-          });
-          flushBackendCompletion();
+          backendSlotAvailable = true;
+          beginTurn();
         },
         touch: resetStallTimer,
         reject: finishReject,
       };
       session.pendingTurns.push(turn);
+      if (options?.startWhen === undefined) submitPrompt();
       if (session.pendingTurns[0] === turn) turn.activate();
-
-      session.connection
-        .prompt({
-          sessionId,
-          prompt: [{ type: "text", text: prompt }],
-        })
-        .then(
-          (response) => {
-            backendCompletion = () => {
-              if (settled) return;
-              const usage = finalizeTurnUsage(session, extractUsage(response.usage ?? undefined));
-              const action = actionForStopReason(response.stopReason);
-              const terminalType =
-                action === "continue"
-                  ? "turn_completed"
-                  : action === "cancel"
-                    ? "turn_cancelled"
-                    : "turn_failed";
-              const base = {
-                sessionUpdate: acpProtocolUpdate(session, terminalType, { response }),
-                sessionId: session.sessionId,
-                executorPid: session.executorPid,
-                message: { response },
-                timestamp: new Date(),
-                ...(usage && { usage, usageKind: "cumulative" as const }),
-              };
-              if (action === "continue") {
-                const terminal: AgentUpdate = { ...base, type: "turn_completed" };
-                this.emit(session, terminal);
-                finishResolve([terminal]);
-              } else if (action === "cancel") {
-                this.emit(session, { ...base, type: "turn_cancelled" });
-                finishReject(new Error("acp_turn_cancelled"));
-              } else {
-                this.emit(session, { ...base, type: "turn_failed" });
-                finishReject(new Error(`acp_turn_failed: ${response.stopReason}`));
-              }
-            };
-            flushBackendCompletion();
-          },
-          (error: unknown) => {
-            backendCompletion = () => {
-              if (settled) return;
-              const message = errorMessage(error);
-              this.emit(session, {
-                type: "turn_failed",
-                sessionId,
-                message,
-                timestamp: new Date(),
-              });
-              finishReject(error instanceof Error ? error : new Error(message));
-            };
-            flushBackendCompletion();
-          },
-        );
+      void options?.startWhen?.then(
+        () => {
+          activationReady = true;
+          beginTurn();
+        },
+        (error: unknown) => {
+          if (turn.settled) return;
+          finishReject(error instanceof Error ? error : new Error(errorMessage(error)));
+          releaseBackendSlot();
+        },
+      );
     });
   }
 
