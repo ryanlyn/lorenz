@@ -21,6 +21,7 @@ export type {
   TraceStats,
   HealthResponse,
   WsClientMessage,
+  WsServerMessage,
 } from "./models/api.js";
 
 export type {

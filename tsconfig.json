@@ -11,9 +11,6 @@
       "path": "./packages/agent-sdk"
     },
     {
-      "path": "./packages/cli-kit"
-    },
-    {
       "path": "./packages/config"
     },
     {
