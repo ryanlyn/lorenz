@@ -4,7 +4,6 @@ import { isTerminalState } from "@lorenz/issue";
 import { Orchestrator, type ClaimStoreLike, type SlotReservation } from "@lorenz/orchestrator";
 import { settingsForIssueState, validateDispatchConfig } from "@lorenz/config";
 import { runAgentAttempt, type RunResult } from "@lorenz/agent-runner";
-import { ProjectionActor } from "@lorenz/projections";
 import { RetryScheduler } from "@lorenz/retry-scheduler";
 import { workflowFileChanged, workflowStampsEqual } from "@lorenz/workflow";
 import {
@@ -49,8 +48,12 @@ import {
   type RunSlot,
 } from "@lorenz/dispatch-coordinator";
 
+import { ProjectionActor } from "./projection.js";
+
 export type RuntimeRunner = (input: Parameters<typeof runAgentAttempt>[0]) => Promise<RunResult>;
 
+export { ProjectionActor } from "./projection.js";
+export type { RuntimeProjectionInput } from "./projection.js";
 export { RUNTIME_EVENT_TYPES, RUNTIME_RUN_OUTCOMES } from "@lorenz/runtime-events";
 export type {
   RuntimeAppStatus,

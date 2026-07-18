@@ -218,9 +218,6 @@ importers:
       '@lorenz/policies':
         specifier: workspace:*
         version: link:packages/policies
-      '@lorenz/projections':
-        specifier: workspace:*
-        version: link:packages/projections
       '@lorenz/retry-scheduler':
         specifier: workspace:*
         version: link:packages/retry-scheduler
@@ -386,9 +383,6 @@ importers:
       '@lorenz/presenter':
         specifier: workspace:*
         version: link:../../packages/presenter
-      '@lorenz/projections':
-        specifier: workspace:*
-        version: link:../../packages/projections
       '@lorenz/retry-scheduler':
         specifier: workspace:*
         version: link:../../packages/retry-scheduler
@@ -858,15 +852,6 @@ importers:
         specifier: 'catalog:'
         version: 4.4.3
 
-  packages/projections:
-    dependencies:
-      '@lorenz/domain':
-        specifier: workspace:*
-        version: link:../domain
-      '@lorenz/runtime-events':
-        specifier: workspace:*
-        version: link:../runtime-events
-
   packages/retry-scheduler:
     dependencies:
       '@lorenz/domain':
@@ -902,9 +887,6 @@ importers:
       '@lorenz/policies':
         specifier: workspace:*
         version: link:../policies
-      '@lorenz/projections':
-        specifier: workspace:*
-        version: link:../projections
       '@lorenz/retry-scheduler':
         specifier: workspace:*
         version: link:../retry-scheduler
@@ -1019,6 +1001,9 @@ importers:
       '@lorenz/domain':
         specifier: workspace:*
         version: link:../domain
+      '@lorenz/presenter':
+        specifier: workspace:*
+        version: link:../presenter
     devDependencies:
       '@types/node':
         specifier: 'catalog:'

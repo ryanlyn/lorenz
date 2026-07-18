@@ -77,9 +77,6 @@
       "path": "../../packages/presenter"
     },
     {
-      "path": "../../packages/projections"
-    },
-    {
       "path": "../../packages/retry-scheduler"
     },
     {

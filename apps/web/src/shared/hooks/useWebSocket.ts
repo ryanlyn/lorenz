@@ -1,21 +1,13 @@
 import { useEffect, useRef, useState, useCallback } from "react";
-import type { OpsStatePayload } from "@lorenz/presenter";
-import type { TicketInfo, DisplayEvent, WsClientMessage } from "@lorenz/traceviz-server";
+import type { WsClientMessage, WsServerMessage } from "@lorenz/traceviz-server";
 
-/** Messages pushed by the server over the `/ws` connection. */
-export type WsMessage =
-  | { type: "init"; tickets: TicketInfo[] }
-  | { type: "update"; issueId: string; tickets: TicketInfo[] }
-  | { type: "events"; issueId: string; events: DisplayEvent[] }
-  | { type: "events_append"; issueId: string; events: DisplayEvent[]; fromIndex: number }
-  | { type: "ops_state"; state: OpsStatePayload }
-  | { type: "ping" };
+export type { WsServerMessage as WsMessage } from "@lorenz/traceviz-server";
 
 type WsStatus = "connecting" | "connected" | "disconnected";
 
 export function useWebSocket() {
   const [status, setStatus] = useState<WsStatus>("disconnected");
-  const [lastMessage, setLastMessage] = useState<WsMessage | null>(null);
+  const [lastMessage, setLastMessage] = useState<WsServerMessage | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const disposedRef = useRef(false);
@@ -39,7 +31,7 @@ export function useWebSocket() {
 
     ws.onmessage = (event) => {
       try {
-        const message = JSON.parse(event.data as string) as WsMessage;
+        const message = JSON.parse(event.data as string) as WsServerMessage;
         if (message.type !== "ping") {
           setLastMessage(message);
         }
