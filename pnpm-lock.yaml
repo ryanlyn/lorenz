@@ -389,9 +389,6 @@ importers:
       '@lorenz/projections':
         specifier: workspace:*
         version: link:../../packages/projections
-      '@lorenz/prompt':
-        specifier: workspace:*
-        version: link:../../packages/prompt
       '@lorenz/retry-scheduler':
         specifier: workspace:*
         version: link:../../packages/retry-scheduler
@@ -659,9 +656,12 @@ importers:
       '@lorenz/mcp':
         specifier: workspace:*
         version: link:../mcp
-      '@lorenz/prompt':
+      '@lorenz/workflow':
         specifier: workspace:*
-        version: link:../prompt
+        version: link:../workflow
+      liquidjs:
+        specifier: 'catalog:'
+        version: 10.27.0
     devDependencies:
       '@agentclientprotocol/sdk':
         specifier: 'catalog:'
@@ -866,18 +866,6 @@ importers:
       '@lorenz/runtime-events':
         specifier: workspace:*
         version: link:../runtime-events
-
-  packages/prompt:
-    dependencies:
-      '@lorenz/domain':
-        specifier: workspace:*
-        version: link:../domain
-      '@lorenz/workflow':
-        specifier: workspace:*
-        version: link:../workflow
-      liquidjs:
-        specifier: 'catalog:'
-        version: 10.27.0
 
   packages/retry-scheduler:
     dependencies:

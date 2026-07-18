@@ -1,9 +1,10 @@
 import { test, describe } from "vitest";
 import fc from "fast-check";
-import { buildPrompt } from "@lorenz/cli";
-import { effectivePromptTemplate, defaultPromptTemplate } from "@lorenz/cli";
 import type { Issue } from "@lorenz/domain";
 import { assert, issueWith } from "@lorenz/test-utils";
+import { effectivePromptTemplate, defaultPromptTemplate } from "@lorenz/workflow";
+
+import { buildPrompt } from "../src/index.js";
 
 // --- Helper arbitraries ---
 
