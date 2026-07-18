@@ -62,6 +62,7 @@ export {
 
 /** The SSH worker-host pool provisions the reverse tunnels behind remote MCP endpoints. */
 const mcpTunnelTransport: RemoteMcpTunnelTransport = workerHostPool;
+const ACP_CANCEL_GRACE_MS = 5_000;
 
 interface Session extends AgentSession {
   connection: ClientSideConnection;
@@ -219,7 +220,9 @@ export class Executor implements AgentExecutor {
         turnStartTotals: emptyUsageTotals(),
         lastCallUsageSeq: 0,
         pendingTurns: [],
-        queueTurn: async (prompt) => this.queueTurn(nextSession, prompt),
+        ...(supportsPromptQueue(init) && {
+          queueTurn: async (prompt: string) => this.queueTurn(nextSession, prompt),
+        }),
         stop: async () => {
           await this.stopSession(nextSession);
         },
@@ -270,25 +273,40 @@ export class Executor implements AgentExecutor {
 
   private async startTurn(session: Session, prompt: string): Promise<AgentUpdate[]> {
     let settled = false;
+    let backendCompletion: (() => void) | undefined;
 
     return new Promise<AgentUpdate[]>((resolve, reject) => {
       const cancelTurn = () => {
+        if (turn.settled) return;
         void session.connection.cancel({ sessionId: requireSessionId(session) }).catch((err) => {
           process.stderr.write(`session cancel failed: ${err}\n`);
         });
         finishReject(new Error("acp turn timed out"));
+        cancelGraceTimer = setTimeout(() => {
+          if (!session.pendingTurns.includes(turn)) return;
+          rejectPendingTurns(session, new Error("acp backend cancellation timed out"));
+          void stopChild(session.process).catch((err) => {
+            process.stderr.write(`acp bridge stop failed: ${err}\n`);
+          });
+        }, ACP_CANCEL_GRACE_MS);
       };
       let stallTimer: ReturnType<typeof setTimeout> | undefined;
       let hardTimer: ReturnType<typeof setTimeout> | undefined;
+      let cancelGraceTimer: ReturnType<typeof setTimeout> | undefined;
       const resetStallTimer = () => {
-        if (!turn.active || session.agentConfig.stallTimeoutMs <= 0) return;
+        if (!turn.active || turn.settled || session.agentConfig.stallTimeoutMs <= 0) return;
         if (stallTimer) clearTimeout(stallTimer);
         stallTimer = setTimeout(cancelTurn, session.agentConfig.stallTimeoutMs);
       };
 
-      const cleanup = () => {
+      const clearTimers = () => {
         if (hardTimer) clearTimeout(hardTimer);
         if (stallTimer) clearTimeout(stallTimer);
+        if (cancelGraceTimer) clearTimeout(cancelGraceTimer);
+      };
+
+      const releaseBackendSlot = () => {
+        clearTimers();
         const index = session.pendingTurns.indexOf(turn);
         if (index === -1) return;
         const wasActive = index === 0;
@@ -296,19 +314,34 @@ export class Executor implements AgentExecutor {
         if (wasActive) session.pendingTurns[0]?.activate();
       };
 
+      const flushBackendCompletion = () => {
+        if (!turn.active || !backendCompletion) return;
+        const complete = backendCompletion;
+        backendCompletion = undefined;
+        try {
+          complete();
+        } catch (error) {
+          if (!settled) {
+            finishReject(error instanceof Error ? error : new Error(errorMessage(error)));
+          }
+        } finally {
+          releaseBackendSlot();
+        }
+      };
+
       const finishResolve = (value: AgentUpdate[]) => {
         if (settled) return;
         settled = true;
         turn.settled = true;
-        cleanup();
+        clearTimers();
         resolve(value);
       };
 
       const finishReject = (error: Error) => {
+        clearTimers();
         if (settled) return;
         settled = true;
         turn.settled = true;
-        cleanup();
         reject(error);
       };
 
@@ -330,6 +363,7 @@ export class Executor implements AgentExecutor {
             message: { prompt: [{ type: "text", text: prompt }] },
             timestamp: new Date(),
           });
+          flushBackendCompletion();
         },
         touch: resetStallTimer,
         reject: finishReject,
@@ -342,51 +376,60 @@ export class Executor implements AgentExecutor {
           sessionId,
           prompt: [{ type: "text", text: prompt }],
         })
-        .then((response) => {
-          if (settled) return;
-          const usage = finalizeTurnUsage(session, extractUsage(response.usage ?? undefined));
-          const action = actionForStopReason(response.stopReason);
-          const terminalType =
-            action === "continue"
-              ? "turn_completed"
-              : action === "cancel"
-                ? "turn_cancelled"
-                : "turn_failed";
-          const base = {
-            sessionUpdate: acpProtocolUpdate(session, terminalType, { response }),
-            sessionId: session.sessionId,
-            executorPid: session.executorPid,
-            message: { response },
-            timestamp: new Date(),
-            ...(usage && { usage, usageKind: "cumulative" as const }),
-          };
-          if (action === "continue") {
-            const terminal: AgentUpdate = { ...base, type: "turn_completed" };
-            this.emit(session, terminal);
-            finishResolve([terminal]);
-          } else if (action === "cancel") {
-            this.emit(session, { ...base, type: "turn_cancelled" });
-            finishReject(new Error("acp_turn_cancelled"));
-          } else {
-            this.emit(session, { ...base, type: "turn_failed" });
-            finishReject(new Error(`acp_turn_failed: ${response.stopReason}`));
-          }
-        })
-        .catch((error: unknown) => {
-          if (settled) return;
-          const message = errorMessage(error);
-          this.emit(session, {
-            type: "turn_failed",
-            sessionId,
-            message,
-            timestamp: new Date(),
-          });
-          finishReject(error instanceof Error ? error : new Error(message));
-        });
+        .then(
+          (response) => {
+            backendCompletion = () => {
+              if (settled) return;
+              const usage = finalizeTurnUsage(session, extractUsage(response.usage ?? undefined));
+              const action = actionForStopReason(response.stopReason);
+              const terminalType =
+                action === "continue"
+                  ? "turn_completed"
+                  : action === "cancel"
+                    ? "turn_cancelled"
+                    : "turn_failed";
+              const base = {
+                sessionUpdate: acpProtocolUpdate(session, terminalType, { response }),
+                sessionId: session.sessionId,
+                executorPid: session.executorPid,
+                message: { response },
+                timestamp: new Date(),
+                ...(usage && { usage, usageKind: "cumulative" as const }),
+              };
+              if (action === "continue") {
+                const terminal: AgentUpdate = { ...base, type: "turn_completed" };
+                this.emit(session, terminal);
+                finishResolve([terminal]);
+              } else if (action === "cancel") {
+                this.emit(session, { ...base, type: "turn_cancelled" });
+                finishReject(new Error("acp_turn_cancelled"));
+              } else {
+                this.emit(session, { ...base, type: "turn_failed" });
+                finishReject(new Error(`acp_turn_failed: ${response.stopReason}`));
+              }
+            };
+            flushBackendCompletion();
+          },
+          (error: unknown) => {
+            backendCompletion = () => {
+              if (settled) return;
+              const message = errorMessage(error);
+              this.emit(session, {
+                type: "turn_failed",
+                sessionId,
+                message,
+                timestamp: new Date(),
+              });
+              finishReject(error instanceof Error ? error : new Error(message));
+            };
+            flushBackendCompletion();
+          },
+        );
     });
   }
 
   private emit(session: Session | null, update: AgentUpdate): void {
+    session?.pendingTurns[0]?.touch();
     session?.onUpdate?.(update);
   }
 
@@ -826,7 +869,12 @@ function wireProcessEvents(session: Session): void {
 }
 
 function rejectPendingTurns(session: Session, error: Error): void {
-  for (const turn of [...session.pendingTurns]) turn.reject(error);
+  const pending = session.pendingTurns.splice(0);
+  for (const turn of pending) turn.reject(error);
+}
+
+function supportsPromptQueue(init: InitializeResponse): boolean {
+  return init.agentCapabilities?._meta?.["symphony/promptQueueing"] === true;
 }
 
 function clientCapabilities(workerHost: string | null): ClientCapabilities {

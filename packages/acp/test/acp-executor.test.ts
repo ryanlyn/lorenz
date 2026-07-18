@@ -17,7 +17,7 @@ import type { AgentUpdate } from "@lorenz/cli";
 import { AgentExecutorRegistry } from "@lorenz/agent-sdk";
 import type { AgentMcpEndpointLease } from "@lorenz/mcp";
 import { workerHostPool } from "@lorenz/worker-host-pool";
-import { assert, sampleIssue, tempDir, writeExecutable } from "@lorenz/test-utils";
+import { assert, sampleIssue, settle, tempDir, writeExecutable } from "@lorenz/test-utils";
 
 import { acpExecutorProvider } from "@lorenz/acp";
 
@@ -144,6 +144,230 @@ test("ACP session submits a queued turn before the active turn finishes", async 
   const prompts = (await readTrace(trace)).filter((event) => event.method === "prompt");
   assert.equal(prompts[0]?.params?.prompt?.[0]?.text, "initial work");
   assert.equal(prompts[1]?.params?.prompt?.[0]?.text, "new direction");
+});
+
+test("ACP session publishes queued responses in turn lifecycle order", async () => {
+  const root = await tempDir("lorenz-acp-queued-response-order");
+  const fake = await writeFakeBridge(root);
+  const trace = path.join(root, "trace.jsonl");
+  const settings = acpSettings(root, fake, trace, "queued-response-order");
+  const updates: AgentUpdate[] = [];
+  const executor = new Executor("claude");
+  const session = await executor.startSession({
+    workspace: root,
+    settings,
+    issue: sampleIssue,
+    onUpdate: (update) => updates.push(update),
+  });
+
+  try {
+    const active = executor.runTurn(session, "initial work", sampleIssue);
+    await waitForTraceEvent(trace, "firstPromptWaiting");
+    assert.ok(session.queueTurn);
+    let queuedSettled = false;
+    const queued = session.queueTurn("new direction").then((result) => {
+      queuedSettled = true;
+      return result;
+    });
+
+    await waitForTraceEvent(trace, "queuedPromptResolved");
+    await settle(20);
+    try {
+      assert.equal(queuedSettled, false);
+      assert.deepEqual(
+        updates.map((update) => update.type),
+        ["session_started", "turn_started"],
+      );
+    } finally {
+      await fs.writeFile(`${trace}.release`, "");
+    }
+
+    await active;
+    await queued;
+  } finally {
+    await session.stop();
+  }
+
+  assert.deepEqual(
+    updates
+      .filter((update) => update.type === "turn_started" || update.type === "turn_completed")
+      .map((update) => update.type),
+    ["turn_started", "turn_completed", "turn_started", "turn_completed"],
+  );
+});
+
+test("ACP session exposes queueTurn only when the bridge advertises prompt queuing", async () => {
+  const root = await tempDir("lorenz-acp-no-prompt-queue");
+  const fake = await writeFakeBridge(root);
+  const trace = path.join(root, "trace.jsonl");
+  const settings = acpSettings(root, fake, trace, "new");
+  const session = await new Executor("claude").startSession({
+    workspace: root,
+    settings,
+    issue: sampleIssue,
+  });
+
+  try {
+    assert.equal(session.queueTurn, undefined);
+  } finally {
+    await session.stop();
+  }
+});
+
+test("ACP session ignores prompt queue capabilities without the Lorenz contract", async () => {
+  const root = await tempDir("lorenz-acp-external-prompt-queue");
+  const fake = await writeFakeBridge(root);
+  const trace = path.join(root, "trace.jsonl");
+  const settings = acpSettings(root, fake, trace, "queued-external-capability");
+  const session = await new Executor("claude").startSession({
+    workspace: root,
+    settings,
+    issue: sampleIssue,
+  });
+
+  try {
+    assert.equal(session.queueTurn, undefined);
+  } finally {
+    await session.stop();
+  }
+});
+
+test("ACP queued turn starts its lifecycle after a timed-out predecessor releases the bridge", async () => {
+  const root = await tempDir("lorenz-acp-queued-timeout");
+  const fake = await writeFakeBridge(root);
+  const trace = path.join(root, "trace.jsonl");
+  const settings = acpSettings(root, fake, trace, "queued-timeout", 50);
+  const updates: AgentUpdate[] = [];
+  const executor = new Executor("claude");
+  const session = await executor.startSession({
+    workspace: root,
+    settings,
+    issue: sampleIssue,
+    onUpdate: (update) => updates.push(update),
+  });
+
+  try {
+    const active = executor
+      .runTurn(session, "initial work", sampleIssue)
+      .then(() => null)
+      .catch((error: unknown) => error);
+    await waitForTraceEvent(trace, "firstPromptWaiting");
+    assert.ok(session.queueTurn);
+    const queued = session.queueTurn("new direction");
+    await waitForTraceEvent(trace, "queuedPromptWaiting");
+
+    assert.match(String(await active), /acp turn timed out/);
+    const queuedUpdates = await queued;
+    assert.ok(queuedUpdates.some((update) => update.type === "turn_completed"));
+  } finally {
+    await session.stop();
+  }
+
+  assert.equal(updates.filter((update) => update.type === "turn_started").length, 2);
+  const events = await readTrace(trace);
+  const releasedIndex = events.findIndex((event) => event.method === "firstPromptReleased");
+  const runningIndex = events.findIndex((event) => event.method === "queuedPromptRunning");
+  assert.ok(releasedIndex >= 0);
+  assert.ok(runningIndex > releasedIndex);
+});
+
+test("ACP queued turns reject when a timed-out backend does not release its slot", async () => {
+  const root = await tempDir("lorenz-acp-queued-wedged-timeout");
+  const fake = await writeFakeBridge(root);
+  const trace = path.join(root, "trace.jsonl");
+  const settings = acpSettings(root, fake, trace, "queued-wedged-timeout", 50);
+  const executor = new Executor("claude");
+  const session = await executor.startSession({
+    workspace: root,
+    settings,
+    issue: sampleIssue,
+  });
+
+  try {
+    const active = executor
+      .runTurn(session, "initial work", sampleIssue)
+      .then(() => null)
+      .catch((error: unknown) => error);
+    await waitForTraceEvent(trace, "wedgedPromptWaiting");
+    assert.ok(session.queueTurn);
+    const queued = session.queueTurn("new direction");
+
+    assert.match(String(await active), /acp turn timed out/);
+    await expectRejectsWithin(() => queued, 7_000, /acp backend cancellation timed out/);
+  } finally {
+    await session.stop();
+  }
+});
+
+test("ACP session stop rejects queued turns without activating them", async () => {
+  const root = await tempDir("lorenz-acp-queued-stop");
+  const fake = await writeFakeBridge(root);
+  const trace = path.join(root, "trace.jsonl");
+  const settings = acpSettings(root, fake, trace, "queued-stop");
+  const updates: AgentUpdate[] = [];
+  const executor = new Executor("claude");
+  const session = await executor.startSession({
+    workspace: root,
+    settings,
+    issue: sampleIssue,
+    onUpdate: (update) => updates.push(update),
+  });
+  const active = executor.runTurn(session, "initial work", sampleIssue).catch((error) => error);
+  await waitForTraceEvent(trace, "queuedStopPromptWaiting");
+  assert.ok(session.queueTurn);
+  const queued = session.queueTurn("new direction").catch((error) => error);
+  await vi.waitFor(
+    async () => {
+      const prompts = (await readTrace(trace)).filter(
+        (event) => event.method === "queuedStopPromptWaiting",
+      );
+      assert.equal(prompts.length, 2);
+    },
+    { timeout: 10_000, interval: 20 },
+  );
+
+  await session.stop();
+
+  assert.match(String(await active), /acp session stopped/);
+  assert.match(String(await queued), /acp session stopped/);
+  assert.equal(updates.filter((update) => update.type === "turn_started").length, 1);
+});
+
+test("vendored prompt queues advertise capability and isolate Claude usage at handoff", async () => {
+  const claudeSource = await fs.readFile(
+    path.resolve("vendor/claude-agent-acp/dist/acp-agent.js"),
+    "utf8",
+  );
+  const codexSource = await fs.readFile(path.resolve("vendor/codex-acp/dist/index.js"), "utf8");
+  assert.match(claudeSource, /"symphony\/promptQueueing": true/);
+  assert.match(codexSource, /"symphony\/promptQueueing": true/);
+
+  const promptStart = claudeSource.indexOf("async prompt(params)");
+  const queuedHandoff = claudeSource.indexOf("const cancelled = await", promptStart);
+  const cancellationReset = claudeSource.indexOf("session.cancelled = false", promptStart);
+  const usageReset = claudeSource.indexOf("session.accumulatedUsage = {", promptStart);
+  assert.ok(promptStart >= 0);
+  assert.ok(queuedHandoff > promptStart);
+  assert.ok(cancellationReset > queuedHandoff);
+  assert.ok(usageReset > queuedHandoff);
+  const queueSubmission = claudeSource.slice(promptStart, cancellationReset);
+  assert.match(queueSubmission, /const deferInput = isLocalOnlyCommand \|\|/);
+  assert.match(queueSubmission, /if \(!deferInput\) \{\s*session\.input\.push\(userMessage\)/);
+  assert.match(
+    queueSubmission,
+    /if \(!pendingPrompt\.inputSubmitted\) \{\s*session\.input\.push\(userMessage\)/,
+  );
+
+  const cancelStart = claudeSource.indexOf("async cancel(params)");
+  const teardownStart = claudeSource.indexOf("async teardownSession", cancelStart);
+  const cancelBody = claudeSource.slice(cancelStart, teardownStart);
+  assert.equal(/pendingMessages/.test(cancelBody), false);
+  assert.match(claudeSource.slice(teardownStart), /cancelPendingPrompts\(session\)/);
+  assert.match(claudeSource, /settleNextPendingPrompt\(session\)/);
+
+  const codexPromptStart = codexSource.indexOf("async prompt(params)");
+  const codexRunPromptStart = codexSource.indexOf("async runPrompt(params)", codexPromptStart);
+  assert.match(codexSource.slice(codexPromptStart, codexRunPromptStart), /setImmediate\(resolve\)/);
 });
 
 test("ACP executor can pass through cumulative bridge usage without double counting", async () => {
@@ -419,6 +643,36 @@ test("ACP executor resets the stall timeout on session notifications", async () 
   );
 });
 
+test("ACP executor resets the stall timeout on client activity", async () => {
+  const root = await tempDir("lorenz-acp-client-activity-stall-reset");
+  const fake = await writeFakeBridge(root);
+  const trace = path.join(root, "trace.jsonl");
+  const settings = acpSettings(root, fake, trace, "active-client-events", 5_000, {
+    stallTimeoutMs: 350,
+  });
+  const updates: AgentUpdate[] = [];
+  const executor = new Executor("claude");
+  const session = await executor.startSession({
+    workspace: root,
+    settings,
+    issue: sampleIssue,
+    onUpdate: (update) => updates.push(update),
+  });
+  try {
+    const turnUpdates = await executor.runTurn(session, "hello", sampleIssue);
+    assert.ok(turnUpdates.some((update) => update.type === "turn_completed"));
+  } finally {
+    await session.stop();
+  }
+
+  assert.equal(updates.filter((update) => update.type === "fs_write").length, 3);
+  const traceEvents = await readTrace(trace);
+  assert.equal(
+    traceEvents.some((event) => event.method === "cancel"),
+    false,
+  );
+});
+
 test("ACP executor emits matching terminal sessionUpdate kinds for cancelled and failed turns", async () => {
   const cases = [
     {
@@ -494,6 +748,29 @@ test("ACP executor suppresses late terminal updates after turn timeout", async (
     updates.some((update) => update.type === "turn_completed" || update.type === "turn_cancelled"),
     false,
   );
+});
+
+test("ACP executor does not rearm stall cancellation after turn timeout", async () => {
+  const root = await tempDir("lorenz-acp-late-activity-timeout");
+  const fake = await writeFakeBridge(root);
+  const trace = path.join(root, "trace.jsonl");
+  const settings = acpSettings(root, fake, trace, "late-activity-after-timeout", 50, {
+    stallTimeoutMs: 100,
+  });
+  const executor = new Executor("claude");
+  const session = await executor.startSession({ workspace: root, settings, issue: sampleIssue });
+  try {
+    await assert.rejects(
+      () => executor.runTurn(session, "hello", sampleIssue),
+      /acp turn timed out/,
+    );
+    await waitForTraceEvent(trace, "lateActivityAfterTimeout");
+    await settle(150);
+    const traceEvents = await readTrace(trace);
+    assert.equal(traceEvents.filter((event) => event.method === "cancel").length, 1);
+  } finally {
+    await session.stop();
+  }
 });
 
 test("ACP MCP endpoint leases reuse one reverse tunnel per worker host with per-session tokens", async () => {
@@ -782,11 +1059,17 @@ class FakeAgent {
     this.promptCount = 0;
     this.cancelled = false;
     this.cancelWaiters = [];
+    this.firstPromptReleased = false;
   }
 
   async initialize(params) {
     record({ method: "initialize", params });
     const agentCapabilities = { sessionCapabilities: { close: {} } };
+    if (mode === "queued-external-capability") {
+      agentCapabilities._meta = { claudeCode: { promptQueueing: true } };
+    } else if (mode.startsWith("queued")) {
+      agentCapabilities._meta = { "symphony/promptQueueing": true };
+    }
     return { protocolVersion: acp.PROTOCOL_VERSION, agentCapabilities };
   }
 
@@ -869,6 +1152,41 @@ class FakeAgent {
       }
       return { stopReason: "end_turn" };
     }
+    if (mode === "queued-response-order") {
+      const promptNumber = this.promptCount;
+      if (promptNumber === 1) {
+        record({ method: "firstPromptWaiting" });
+        while (!fs.existsSync(trace + ".release")) await sleep(5);
+        record({ method: "firstPromptResolved" });
+        return { stopReason: "end_turn" };
+      }
+      record({ method: "queuedPromptResolved" });
+      return { stopReason: "end_turn" };
+    }
+    if (mode === "queued-timeout") {
+      const promptNumber = this.promptCount;
+      if (promptNumber === 1) {
+        record({ method: "firstPromptWaiting" });
+        await this.waitForCancel();
+        await sleep(100);
+        this.firstPromptReleased = true;
+        record({ method: "firstPromptReleased" });
+        return { stopReason: "end_turn" };
+      }
+      record({ method: "queuedPromptWaiting" });
+      while (!this.firstPromptReleased) await sleep(5);
+      await sleep(30);
+      record({ method: "queuedPromptRunning" });
+      return { stopReason: "end_turn" };
+    }
+    if (mode === "queued-wedged-timeout") {
+      record({ method: "wedgedPromptWaiting" });
+      await new Promise(() => {});
+    }
+    if (mode === "queued-stop") {
+      record({ method: "queuedStopPromptWaiting" });
+      await new Promise(() => {});
+    }
     if (mode === "stall") {
       await new Promise(() => {});
     }
@@ -886,6 +1204,18 @@ class FakeAgent {
           totalTokens: 10
         }
       };
+    }
+    if (mode === "late-activity-after-timeout") {
+      await this.waitForCancel();
+      await this.connection.sessionUpdate({
+        sessionId: params.sessionId,
+        update: {
+          sessionUpdate: "agent_message_chunk",
+          content: { type: "text", text: "late activity" }
+        }
+      });
+      record({ method: "lateActivityAfterTimeout" });
+      await new Promise(() => {});
     }
     if (mode === "active-long-turn") {
       for (let i = 0; i < 3; i += 1) {
@@ -909,6 +1239,17 @@ class FakeAgent {
           totalTokens: 10
         }
       };
+    }
+    if (mode === "active-client-events") {
+      for (let i = 0; i < 3; i += 1) {
+        await sleep(200);
+        await this.connection.writeTextFile({
+          sessionId: params.sessionId,
+          path: path.join(process.cwd(), "active-" + i + ".txt"),
+          content: "still working"
+        });
+      }
+      return { stopReason: "end_turn" };
     }
     if (mode === "cancelled-turn") {
       return {

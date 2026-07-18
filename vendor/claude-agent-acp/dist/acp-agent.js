@@ -340,6 +340,7 @@ export class ClaudeAcpAgent {
             protocolVersion: 1,
             agentCapabilities: {
                 _meta: {
+                    "symphony/promptQueueing": true,
                     claudeCode: {
                         promptQueueing: true,
                     },
@@ -446,13 +447,6 @@ export class ClaudeAcpAgent {
         if (!session) {
             throw new Error("Session not found");
         }
-        session.cancelled = false;
-        session.accumulatedUsage = {
-            inputTokens: 0,
-            outputTokens: 0,
-            cachedReadTokens: 0,
-            cachedWriteTokens: 0,
-        };
         let lastAssistantTotalUsage = null;
         let lastAssistantUsage = null;
         let lastAssistantModel = null;
@@ -473,24 +467,45 @@ export class ClaudeAcpAgent {
         const userMessage = promptToClaude(params);
         const promptUuid = randomUUID();
         userMessage.uuid = promptUuid;
-        // These local-only commands return a result without replaying the user
-        // message. Mark promptReplayed=true so their result isn't consumed as a
-        // background task result.
         const firstText = params.prompt[0]?.type === "text" ? params.prompt[0].text : "";
         const isLocalOnlyCommand = firstText.startsWith("/") && LOCAL_ONLY_COMMANDS.has(firstText.split(" ", 1)[0]);
         if (session.promptRunning) {
-            session.input.push(userMessage);
             const order = session.nextPendingOrder++;
+            // Regular input enters the live SDK queue immediately. Commands
+            // without an input replay, and requests behind them, wait for
+            // ownership so every ACP prompt keeps FIFO response attribution.
+            const deferInput = isLocalOnlyCommand ||
+                [...session.pendingMessages.values()].some((pending) => !pending.inputSubmitted);
+            let pendingPrompt;
             const cancelled = await new Promise((resolve) => {
-                session.pendingMessages.set(promptUuid, { resolve, order });
+                pendingPrompt = { resolve, order, inputSubmitted: !deferInput };
+                session.pendingMessages.set(promptUuid, pendingPrompt);
+                if (!deferInput) {
+                    session.input.push(userMessage);
+                }
             });
             if (cancelled) {
                 return { stopReason: "cancelled" };
+            }
+            if (!pendingPrompt.inputSubmitted) {
+                session.input.push(userMessage);
+                pendingPrompt.inputSubmitted = true;
             }
         }
         else {
             session.input.push(userMessage);
         }
+        // Cancellation belongs to the prompt that owns the query loop. A
+        // queued prompt clears the predecessor's state only when it takes over.
+        session.cancelled = false;
+        // Usage belongs to the prompt that owns the query loop. A queued prompt
+        // reaches this point only after the preceding prompt hands off.
+        session.accumulatedUsage = {
+            inputTokens: 0,
+            outputTokens: 0,
+            cachedReadTokens: 0,
+            cachedWriteTokens: 0,
+        };
         session.promptRunning = true;
         let handedOff = false;
         let errored = false;
@@ -829,11 +844,11 @@ export class ClaudeAcpAgent {
                             }
                             const pending = session.pendingMessages.get(message.uuid);
                             if (pending) {
-                                pending.resolve(false);
                                 session.pendingMessages.delete(message.uuid);
                                 handedOff = true;
                                 // the current loop stops with end_turn,
                                 // the loop of the next prompt continues running
+                                settlePendingPrompt(pending, false);
                                 return { stopReason: "end_turn", usage: sessionUsage(session) };
                             }
                             if ("isReplay" in message && message.isReplay) {
@@ -1005,26 +1020,15 @@ export class ClaudeAcpAgent {
         }
         finally {
             if (!handedOff) {
-                session.promptRunning = false;
                 if (errored) {
                     // The query stream was just drained — handing pending prompts off
                     // onto it would let them race with the recovery. Cancel them so
                     // each waiting prompt() returns stopReason: "cancelled" and the
                     // client can decide whether to retry.
-                    for (const pending of session.pendingMessages.values()) {
-                        pending.resolve(true);
-                    }
-                    session.pendingMessages.clear();
+                    cancelPendingPrompts(session);
                 }
-                else if (session.pendingMessages.size > 0) {
-                    // This usually should not happen, but in case the loop finishes
-                    // without claude sending all message replays, we resolve the
-                    // next pending prompt call to ensure no prompts get stuck.
-                    const next = [...session.pendingMessages.entries()].sort((a, b) => a[1].order - b[1].order)[0];
-                    if (next) {
-                        next[1].resolve(false);
-                        session.pendingMessages.delete(next[0]);
-                    }
+                else {
+                    settleNextPendingPrompt(session);
                 }
             }
         }
@@ -1035,10 +1039,6 @@ export class ClaudeAcpAgent {
             return;
         }
         session.cancelled = true;
-        for (const [, pending] of session.pendingMessages) {
-            pending.resolve(true);
-        }
-        session.pendingMessages.clear();
         await session.query.interrupt();
     }
     /** Cleanly tear down a session: cancel in-flight work, dispose resources,
@@ -1048,6 +1048,7 @@ export class ClaudeAcpAgent {
         if (!session) {
             return;
         }
+        cancelPendingPrompts(session);
         await this.cancel({ sessionId });
         session.settingsManager.dispose();
         session.abortController.abort();
@@ -1823,6 +1824,35 @@ function sessionUsage(session) {
             session.accumulatedUsage.cachedReadTokens +
             session.accumulatedUsage.cachedWriteTokens,
     };
+}
+
+function cancelPendingPrompts(session) {
+    setImmediate(() => {
+        const pendingPrompts = [...session.pendingMessages.values()];
+        session.pendingMessages.clear();
+        session.promptRunning = false;
+        for (const pending of pendingPrompts) {
+            pending.resolve(true);
+        }
+    });
+}
+function settlePendingPrompt(pending, cancelled) {
+    // Let the current prompt response reach the transport before the next
+    // prompt can emit notifications or a response under the same session.
+    setImmediate(() => pending.resolve(cancelled));
+}
+function settleNextPendingPrompt(session) {
+    // Keep ownership reserved until the current prompt response reaches the
+    // transport, then hand the query loop to the oldest waiting prompt.
+    setImmediate(() => {
+        const next = [...session.pendingMessages.entries()].sort((a, b) => a[1].order - b[1].order)[0];
+        if (!next) {
+            session.promptRunning = false;
+            return;
+        }
+        session.pendingMessages.delete(next[0]);
+        next[1].resolve(false);
+    });
 }
 /** Sum all four fields as a proxy for post-turn context occupancy: the current
  *  turn's output becomes next turn's input. Per the Anthropic API, input_tokens
