@@ -146,6 +146,123 @@ test("live issue events are submitted immediately and consumed as the next queue
   assert.equal(subscriptionClosed, true);
 });
 
+test("accepted steering runs before a fallible issue refresh", async () => {
+  const settings = fakeSettings({ agent: { ...defaultSettings().agent, maxTurns: 2 } });
+  const queuedPrompts: string[] = [];
+  let issueEventListener: ((events: TrackerIssueEvent[]) => void) | undefined;
+  let releaseFirstTurn: (() => void) | undefined;
+  let markFirstTurnStarted: (() => void) | undefined;
+  const firstTurnStarted = new Promise<void>((resolve) => {
+    markFirstTurnStarted = resolve;
+  });
+  const firstTurnRelease = new Promise<void>((resolve) => {
+    releaseFirstTurn = resolve;
+  });
+  let issueRefreshes = 0;
+  const session = fakeSession({
+    queueTurn: async (prompt) => {
+      queuedPrompts.push(prompt);
+      return [{ type: "turn_completed" }];
+    },
+  });
+  const executor: AgentExecutor = {
+    kind: "codex",
+    async startSession() {
+      return session;
+    },
+    async runTurn() {
+      markFirstTurnStarted?.();
+      await firstTurnRelease;
+      return [{ type: "turn_completed" }];
+    },
+  };
+
+  const attempt = runAgentAttempt({
+    issue: fakeIssue(),
+    workflow: { path: "/workflow.md", config: {}, promptTemplate: "Fix it", settings },
+    settings,
+    fetchIssue: async () => {
+      issueRefreshes += 1;
+      throw new Error("tracker unavailable");
+    },
+    subscribeIssueEvents: (listener) => {
+      issueEventListener = listener;
+      return () => {};
+    },
+    adapters: fakeAdapters({ executorFactory: () => executor }),
+  });
+
+  await firstTurnStarted;
+  issueEventListener?.([{ ts: "11.0", author: "ryan", text: "finish this first" }]);
+  await vi.waitFor(() => assert.equal(queuedPrompts.length, 1));
+  releaseFirstTurn?.();
+
+  const result = await attempt;
+  assert.equal(result.turnCount, 2);
+  assert.equal(issueRefreshes, 0);
+  assert.match(queuedPrompts[0]!, /finish this first/);
+});
+
+test("steering accepted during a failed issue refresh still completes", async () => {
+  const settings = fakeSettings({ agent: { ...defaultSettings().agent, maxTurns: 2 } });
+  const queuedPrompts: string[] = [];
+  const updates: AgentUpdate[] = [];
+  let issueEventListener: ((events: TrackerIssueEvent[]) => void) | undefined;
+  let markIssueRefreshStarted: (() => void) | undefined;
+  let rejectIssueRefresh: ((error: Error) => void) | undefined;
+  const issueRefreshStarted = new Promise<void>((resolve) => {
+    markIssueRefreshStarted = resolve;
+  });
+  const issueRefresh = new Promise<Issue>((_resolve, reject) => {
+    rejectIssueRefresh = reject;
+  });
+  const session = fakeSession({
+    queueTurn: async (prompt) => {
+      queuedPrompts.push(prompt);
+      return [{ type: "turn_completed" }];
+    },
+  });
+
+  const attempt = runAgentAttempt({
+    issue: fakeIssue(),
+    workflow: { path: "/workflow.md", config: {}, promptTemplate: "Fix it", settings },
+    settings,
+    fetchIssue: async () => {
+      markIssueRefreshStarted?.();
+      return issueRefresh;
+    },
+    subscribeIssueEvents: (listener) => {
+      issueEventListener = listener;
+      return () => {};
+    },
+    onUpdate: (update) => updates.push(update),
+    adapters: fakeAdapters({
+      executorFactory: () =>
+        fakeExecutor({
+          session: {
+            queueTurn: session.queueTurn,
+          },
+        }),
+    }),
+  });
+
+  await issueRefreshStarted;
+  issueEventListener?.([{ ts: "11.0", author: "ryan", text: "accepted during refresh" }]);
+  await vi.waitFor(() => assert.equal(queuedPrompts.length, 1));
+  rejectIssueRefresh?.(new Error("tracker unavailable"));
+
+  const result = await attempt;
+  assert.equal(result.turnCount, 2);
+  assert.ok(
+    updates.some(
+      (update) =>
+        update.type === "stderr" &&
+        update.message.includes("Ignoring steering issue refresh failure: tracker unavailable"),
+    ),
+  );
+  assert.match(queuedPrompts[0]!, /accepted during refresh/);
+});
+
 test("a queued turn with streamed tool activity permits a continuation turn", async () => {
   const settings = fakeSettings({ agent: { ...defaultSettings().agent, maxTurns: 3 } });
   const normalPrompts: string[] = [];
@@ -566,6 +683,7 @@ test("run cancellation stops queued ACP work during an issue refresh", async () 
   let releaseIssueRefresh: (() => void) | undefined;
   let markIssueRefreshStarted: (() => void) | undefined;
   let markSessionStopped: (() => void) | undefined;
+  let markQueuedTurnSubmitted: (() => void) | undefined;
   const firstTurnStarted = new Promise<void>((resolve) => {
     markFirstTurnStarted = resolve;
   });
@@ -581,9 +699,15 @@ test("run cancellation stops queued ACP work during an issue refresh", async () 
   const sessionStopped = new Promise<void>((resolve) => {
     markSessionStopped = resolve;
   });
+  const queuedTurnSubmitted = new Promise<void>((resolve) => {
+    markQueuedTurnSubmitted = resolve;
+  });
   let stopCalls = 0;
   const session = fakeSession({
-    queueTurn: async () => never<AgentUpdate[]>(),
+    queueTurn: async () => {
+      markQueuedTurnSubmitted?.();
+      return never<AgentUpdate[]>();
+    },
     stop: async () => {
       stopCalls += 1;
       markSessionStopped?.();
@@ -619,9 +743,10 @@ test("run cancellation stops queued ACP work during an issue refresh", async () 
   });
 
   await firstTurnStarted;
-  issueEventListener?.([{ ts: "11.0", author: "ryan", text: "queued work" }]);
   releaseFirstTurn?.();
   await issueRefreshStarted;
+  issueEventListener?.([{ ts: "11.0", author: "ryan", text: "queued work" }]);
+  await queuedTurnSubmitted;
   controller.abort();
   await sessionStopped;
 

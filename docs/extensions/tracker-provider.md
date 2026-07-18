@@ -49,7 +49,9 @@ interface RuntimeTrackerClient {
   fetchCandidateIssues(): Promise<Issue[]>;
   fetchIssuesByIds(ids: string[]): Promise<Issue[]>;
   fetchIssuesByStates?(states: string[]): Promise<Issue[]>;
-  watch?(onChange: (change?: TrackerChange) => void): TrackerChangeStream | null;
+  watch?(
+    onChange: (change?: TrackerChange) => void,
+  ): TrackerChangeStream | null | Promise<TrackerChangeStream | null>;
   fetchIssueEvents?(
     issueId: string,
     sinceTs: string,

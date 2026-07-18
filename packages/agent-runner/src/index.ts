@@ -401,15 +401,13 @@ class RunController {
         }
         turnCount += 1;
 
-        // Known seam leak: turn-continuation is decided from ACP event vocabulary here
-        // instead of an executor-owned hook. Generalize onto the session contract (a
-        // provider-supplied "has more work" classifier) when a second executor lands.
-        // The signal is primarily derived from the STREAMED updates (see onUpdate
-        // above): the returned batch may be bounded for very long turns (see
-        // AgentExecutor.runTurn), so an early tool call could be missing from it.
+        if (queuedTurns.length > 0) continue;
+
+        // ACP turn continuation is derived from its event vocabulary. The signal
+        // primarily comes from streamed updates because the returned batch may be
+        // bounded for very long turns, which can omit an early tool call.
         const completedWithoutTools =
           turnCount > 1 &&
-          queuedTurns.length === 0 &&
           runtime.agents[runtime.agent.kind]?.executor === "acp" &&
           !turnActivity.sawToolCall &&
           !turnUpdates.some(isToolCallNotification);
@@ -419,7 +417,15 @@ class RunController {
           if (queuedTurns.length > 0) continue;
           break;
         }
-        issue = await input.fetchIssue(issue);
+        try {
+          issue = await input.fetchIssue(issue);
+        } catch (error) {
+          throwIfAborted(input.abortSignal);
+          if (queuedTurns.length === 0) throw error;
+          reportSteeringFailure("issue refresh", error);
+          continue;
+        }
+        if (queuedTurns.length > 0) continue;
         if (!issueIsActive(issue, settings)) break;
         const refreshed = settingsForIssueState(settings, issue.state);
         if (
