@@ -503,6 +503,8 @@ export interface AgentSettings {
   maxTurns: number;
   /** Cap (ms) on exponential retry backoff between attempts on the same issue. */
   maxRetryBackoffMs: number;
+  /** Number of retries allowed after the initial run. Zero disables retries. */
+  maxRetryAttempts: number;
   /**
    * Default number of independent parallel slots dispatched per issue.
    * Overridden per-issue by an `ensemble:<n>` label.
@@ -786,7 +788,7 @@ export interface EnsembleContext {
 export interface RetryEntry {
   issueId: string;
   identifier: string;
-  /** 1-based attempt counter; bumped each time a failure retry is recorded, reset to 1 for continuation retries. */
+  /** 1-based retry counter shared by continuation and failure paths. */
   attempt: number;
   /** Monotonic clock deadline (ms) — drives timer scheduling; immune to wall-clock adjustments. */
   monotonicDeadlineMs: number;
@@ -799,6 +801,21 @@ export interface RetryEntry {
   workerHost?: string | null | undefined;
   workspacePath?: string | null | undefined;
   issueUrl?: string | null | undefined;
+}
+
+/** Durable terminal state for one issue slot whose retry budget is exhausted. */
+export interface ExhaustedEntry {
+  issueId: string;
+  identifier: string;
+  issueUrl?: string | null | undefined;
+  slotIndex: number;
+  /** Total settled runs, including the initial run. */
+  attempts: number;
+  maxRetryAttempts: number;
+  exhaustedAtIso: string;
+  error?: string | undefined;
+  workerHost?: string | null | undefined;
+  workspacePath?: string | null | undefined;
 }
 
 /**
@@ -930,6 +947,7 @@ export type StringMessageUpdateType =
   | "rate_limit"
   | "turn_input_required"
   | "tool_input_auto_answered"
+  | "session_liveness"
   | "malformed";
 
 export interface StringMessageUpdate extends AgentUpdateBase {
@@ -1032,6 +1050,7 @@ export const AGENT_UPDATE_TYPES = [
   "fs_write",
   "hook_execution",
   "session_notification",
+  "session_liveness",
 ] as const satisfies readonly AgentUpdateType[];
 
 // Fails to compile if a union member is missing from the array (catches forgotten entries).

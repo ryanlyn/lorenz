@@ -70,10 +70,22 @@ test("config resolves env-backed Linear token and assignee", () => {
   assert.equal(settings.tracker.assignee, "worker@example.com");
   assert.equal(settings.agent.kind, "codex");
   assert.equal(settings.agent.maxTurns, 20);
+  assert.equal(settings.agent.maxRetryAttempts, 3);
   assert.equal(settings.agent.ensembleSize, 1);
   assert.equal(settings.agents.codex?.executor, "acp");
   assert.equal(settings.agents.codex?.options.bridgeCommand, "codex-acp");
   assert.equal(settings.agents.claude?.executor, "acp");
+});
+
+test("config parses retry budgets and state overrides", () => {
+  const settings = parseConfig({
+    agent: { max_retry_attempts: 0 },
+    status_overrides: { "In Progress": { agent: { max_retry_attempts: 7 } } },
+  });
+
+  assert.equal(settings.agent.maxRetryAttempts, 0);
+  assert.equal(settingsForIssueState(settings, "in progress").agent.maxRetryAttempts, 7);
+  assert.throws(() => parseConfig({ agent: { max_retry_attempts: -1 } }), /max_retry_attempts/);
 });
 
 test("partial codex agent override preserves bridgeCommand codex-acp", () => {

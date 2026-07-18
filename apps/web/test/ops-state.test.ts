@@ -135,7 +135,7 @@ test("useOpsState initial fetch failure does not emit an unhandled rejection", a
 function opsStateFixture(): OpsState {
   return {
     generated_at: "2026-05-05T00:00:00.000Z",
-    counts: { running: 1, retrying: 0, blocked: 0 },
+    counts: { running: 1, retrying: 0, exhausted: 0, blocked: 0 },
     blocked_by_reason: {},
     running: [
       {
@@ -160,6 +160,7 @@ function opsStateFixture(): OpsState {
       },
     ],
     retrying: [],
+    exhausted: [],
     blocked: [],
     usage_totals: { input_tokens: 10, output_tokens: 5, total_tokens: 15, seconds_running: 2 },
     rate_limits: null,

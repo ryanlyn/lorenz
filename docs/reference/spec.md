@@ -177,6 +177,7 @@ meaning.
 | `agent.max_concurrent_agents` | `10` | Global concurrency cap. |
 | `agent.max_turns` | `20` | Back-to-back turns per worker lifetime. |
 | `agent.max_retry_backoff_ms` | `300000` | Failure backoff cap (5 minutes). |
+| `agent.max_retry_attempts` | `3` | Retries after the initial run; `0` disables retries. |
 | `agent.ensemble_size` | `1` | Default slots per issue. |
 | `agents.<kind>.executor` | `acp` | Executor selector for an agent kind. |
 | `agents.<kind>.bridge_command` | required for `acp` | The ACP bridge subprocess command. |
@@ -318,12 +319,12 @@ preserves the triggering slot index. See [features/context-ensembles](../feature
 
 ### 5.6 Retry and backoff
 
-After a clean worker exit the orchestrator always schedules a **continuation** retry: a fixed
-`1000` ms delay, attempt fixed to `1`, scheduled even when the issue is now inactive (reconciliation
-prunes it later). After a fault it schedules a **failure** retry: attempt is the prior attempt plus
-one, delay is `min(10000 * 2^(attempt - 1), agent.max_retry_backoff_ms)`. So failure attempt 1 is
-10s, 2 is 20s, 3 is 40s, capped at the configured maximum (default `300000` ms). Backoff is pure
-exponential on attempt count.
+Each settled active run advances one counter. Clean exits schedule a **continuation** retry with a
+fixed `1000` ms delay. Faults, dead sessions, and stalls schedule a **failure** retry with delay
+`min(10000 * 2^(attempt - 1), agent.max_retry_backoff_ms)`. Failure attempt 1 is 10s, 2 is 20s,
+and 3 is 40s, capped at the configured maximum (default `300000` ms). The counter is bounded by
+`agent.max_retry_attempts`, which defaults to three retries after the initial run. Exceeding the
+budget writes durable exhaustion instead of another retry. Capacity deferrals do not consume it.
 
 There is no Retry-After or 429-driven backoff. `rate_limit` is a display-only agent-update field
 captured in `rateLimits`; it does not influence retry timing. A claim of HTTP-429 honoring would be

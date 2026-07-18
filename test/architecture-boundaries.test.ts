@@ -122,10 +122,10 @@ test("ugly retry flow keeps capacity authority in the orchestrator", async () =>
   assert.deepEqual(await orchestrator.eligibleIssuesAsync([issue]), []);
   assert.equal(orchestrator.snapshot().running.length, 2);
   assert.equal(orchestrator.snapshot().retrying.length, 1);
-  assert.equal(orchestrator.snapshot().retrying[0]?.attempt, 2);
+  assert.equal(orchestrator.snapshot().retrying[0]?.attempt, 1);
   assert.equal(orchestrator.snapshot().retrying[0]?.monotonicDeadlineMs, 20_000);
 
-  await orchestrator.finishAsync(issue.id, 1, false);
+  await orchestrator.finishAsync(issue.id, 1, { remainsActive: false });
   assert.deepEqual(await orchestrator.eligibleIssuesAsync([issue]), []);
 
   clock.advance(10_000);

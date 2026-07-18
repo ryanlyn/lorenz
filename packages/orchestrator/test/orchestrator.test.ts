@@ -11,8 +11,10 @@ import { assert, tempDir } from "@lorenz/test-utils";
 import {
   AsyncPersistentClaimStore,
   createState,
+  hydrateState,
   InMemoryClaimStore,
   PersistentClaimStore,
+  serializeState,
   type AsyncClaimStoreBackend,
   type ClaimStoreBackend,
   type ClaimStoreCapabilities,
@@ -475,7 +477,7 @@ test("persistent claim store checkpoints and hydrates retry state across owners"
   });
   const first = new Orchestrator(settings, clock, firstStore);
   assert.ok(await claimEntryAsync(first, issue));
-  await first.finishAsync(issue.id, 0, true, "failed once");
+  await first.finishAsync(issue.id, 0, { remainsActive: true, error: "failed once" });
 
   assert.equal(backend.saved.length, 2);
   assert.equal(first.snapshot().claimStore.lastCheckpointAt, "2026-01-01T00:00:00.000Z");
@@ -940,7 +942,7 @@ test("turso claim store hydrates retry state across restart", async () => {
   try {
     const first = new Orchestrator(settings, clock, firstStore);
     assert.ok(await claimEntryAsync(first, issue));
-    await first.finishAsync(issue.id, 0, true, "failed once");
+    await first.finishAsync(issue.id, 0, { remainsActive: true, error: "failed once" });
     assert.equal((await first.snapshotAsync()).claimStore.kind, "turso");
   } finally {
     await firstStore.close();
@@ -1249,12 +1251,15 @@ test("shared persistent claim store prevents non-owner finish", async () => {
   assert.equal(second.snapshot().running.length, 1);
   assert.equal(await second.ownsClaimAsync(issue.id, 0), false);
 
-  await second.finishAsync(issue.id, 0, true, "non-owner attempted finish");
+  await second.finishAsync(issue.id, 0, {
+    remainsActive: true,
+    error: "non-owner attempted finish",
+  });
 
   assert.equal(second.snapshot().running.length, 1);
   assert.equal(second.snapshot().retrying.length, 0);
   assert.equal(first.snapshot().running.length, 1);
-  await first.finishAsync(issue.id, 0, true, "owner finished");
+  await first.finishAsync(issue.id, 0, { remainsActive: true, error: "owner finished" });
   assert.equal(first.snapshot().running.length, 0);
   assert.equal(first.snapshot().retrying.length, 1);
 });
@@ -1667,7 +1672,7 @@ test("orchestrator claims ensemble slots independently and snapshots backend-neu
   assert.equal(snapshot.running[0]?.executorPid, "123");
   assert.equal(snapshot.usageTotals.totalTokens, 15);
 
-  await orchestrator.finishAsync(issue.id, 0, true);
+  await orchestrator.finishAsync(issue.id, 0, { remainsActive: true });
   assert.equal(orchestrator.snapshot().retrying[0]?.attempt, 1);
 });
 
@@ -1699,8 +1704,8 @@ test("orchestrator preserves pending ensemble retries per slot", async () => {
     workspacePath: "/work/slot-1",
   });
 
-  await orchestrator.finishAsync(issue.id, 0, true, "slot 0 failed");
-  await orchestrator.finishAsync(issue.id, 1, true, "slot 1 failed");
+  await orchestrator.finishAsync(issue.id, 0, { remainsActive: true, error: "slot 0 failed" });
+  await orchestrator.finishAsync(issue.id, 1, { remainsActive: true, error: "slot 1 failed" });
 
   const pending = orchestrator
     .snapshot()
@@ -1983,7 +1988,7 @@ test("orchestrator assigns SSH worker hosts by least loaded capacity", async () 
   assert.equal((await claimEntryAsync(orchestrator, secondIssue))?.workerHost, "worker-b:2200");
   assert.equal(await claimEntryAsync(orchestrator, thirdIssue), null);
 
-  await orchestrator.finishAsync(firstIssue.id, 0, false);
+  await orchestrator.finishAsync(firstIssue.id, 0, { remainsActive: false });
   assert.equal((await claimEntryAsync(orchestrator, thirdIssue))?.workerHost, "worker-a:2200");
 });
 
@@ -2203,7 +2208,7 @@ test("orchestrator reschedules due retries that are still capacity-blocked", asy
   assert.deepEqual(await orchestrator.eligibleIssuesAsync([retryIssue]), []);
   let retry = orchestrator.snapshot().retrying[0];
   assert.equal(orchestrator.snapshot().blocked[0]?.reason, "global_concurrency_cap");
-  assert.equal(retry?.attempt, 2);
+  assert.equal(retry?.attempt, 1);
   assert.equal(retry?.monotonicDeadlineMs, clock.monotonicMs() + 20_000);
   assert.equal(retry?.dueAtIso, "2026-01-01T00:00:20.000Z");
   assert.equal(retry?.error, "dispatch blocked by global concurrency cap");
@@ -2211,16 +2216,16 @@ test("orchestrator reschedules due retries that are still capacity-blocked", asy
   assert.deepEqual(await orchestrator.eligibleIssuesAsync([retryIssue]), []);
   retry = orchestrator.snapshot().retrying[0];
   assert.equal(orchestrator.snapshot().blocked.length, 0);
-  assert.equal(retry?.attempt, 2);
+  assert.equal(retry?.attempt, 1);
   assert.equal(retry?.monotonicDeadlineMs, clock.monotonicMs() + 20_000);
 
   clock.advance(20_000);
   assert.deepEqual(await orchestrator.eligibleIssuesAsync([retryIssue]), []);
   retry = orchestrator.snapshot().retrying[0];
   assert.equal(orchestrator.snapshot().blocked[0]?.reason, "global_concurrency_cap");
-  assert.equal(retry?.attempt, 3);
-  assert.equal(retry?.monotonicDeadlineMs, clock.monotonicMs() + 40_000);
-  assert.equal(retry?.dueAtIso, "2026-01-01T00:01:00.000Z");
+  assert.equal(retry?.attempt, 1);
+  assert.equal(retry?.monotonicDeadlineMs, clock.monotonicMs() + 20_000);
+  assert.equal(retry?.dueAtIso, "2026-01-01T00:00:40.000Z");
 });
 
 test("orchestrator gates retry attempts until backoff is due and clears terminal retries", async () => {
@@ -2236,7 +2241,7 @@ test("orchestrator gates retry attempts until backoff is due and clears terminal
   const doneIssue = normalizeIssue({ ...issue, state: "Done", stateType: "completed" });
 
   assert.ok(await claimEntryAsync(orchestrator, issue));
-  await orchestrator.finishAsync(issue.id, 0, true);
+  await orchestrator.finishAsync(issue.id, 0, { remainsActive: true });
   const retry = orchestrator.snapshot().retrying[0];
   assert.equal(retry?.attempt, 1);
   // Issue will only be available for a retry after the retry backoff is due
@@ -2246,7 +2251,7 @@ test("orchestrator gates retry attempts until backoff is due and clears terminal
 
   assert.equal((await orchestrator.eligibleIssuesAsync([issue]))[0]?.identifier, "MT-RETRY");
   assert.equal((await claimEntryAsync(orchestrator, issue))?.retryAttempt, 1);
-  await orchestrator.finishAsync(issue.id, 0, true);
+  await orchestrator.finishAsync(issue.id, 0, { remainsActive: true });
   assert.equal(orchestrator.snapshot().retrying[0]?.attempt, 2);
 
   assert.deepEqual(await orchestrator.eligibleIssuesAsync([doneIssue]), []);
@@ -2265,7 +2270,11 @@ test("orchestrator uses configured retry delays for failures and active continua
 
   assert.ok(await claimEntryAsync(orchestrator, issue));
   const beforeFailure = Date.now();
-  await orchestrator.finishAsync(issue.id, 0, true, "agent exited", "failure");
+  await orchestrator.finishAsync(issue.id, 0, {
+    remainsActive: true,
+    error: "agent exited",
+    retryKind: "failure",
+  });
   let retry = orchestrator.snapshot().retrying[0];
   assert.ok(retry);
   assert.equal(retry.attempt, 1);
@@ -2274,7 +2283,10 @@ test("orchestrator uses configured retry delays for failures and active continua
   const continuationOrchestrator = new Orchestrator(settings);
   assert.ok(await claimEntryAsync(continuationOrchestrator, issue));
   const beforeContinuation = Date.now();
-  await continuationOrchestrator.finishAsync(issue.id, 0, true, undefined, "continuation");
+  await continuationOrchestrator.finishAsync(issue.id, 0, {
+    remainsActive: true,
+    retryKind: "continuation",
+  });
   retry = continuationOrchestrator.snapshot().retrying[0];
   assert.ok(retry);
   assert.equal(retry.attempt, 1);
@@ -2283,27 +2295,83 @@ test("orchestrator uses configured retry delays for failures and active continua
 
   assert.equal((await claimEntryAsync(continuationOrchestrator, issue))?.retryAttempt, 1);
   const beforeSecondContinuation = Date.now();
-  await continuationOrchestrator.finishAsync(issue.id, 0, true, undefined, "continuation");
-  retry = continuationOrchestrator.snapshot().retrying[0];
-  assert.ok(retry);
-  assert.equal(retry.attempt, 1);
-  const secondContinuationDelay = Date.parse(retry.dueAtIso) - beforeSecondContinuation;
-  assert.ok(secondContinuationDelay >= 900 && secondContinuationDelay <= 1_500);
-
-  assert.equal((await claimEntryAsync(continuationOrchestrator, issue))?.retryAttempt, 1);
-  const beforeFailureAfterContinuations = Date.now();
-  await continuationOrchestrator.finishAsync(
-    issue.id,
-    0,
-    true,
-    "transient failure after healthy continuations",
-    "failure",
-  );
+  await continuationOrchestrator.finishAsync(issue.id, 0, {
+    remainsActive: true,
+    retryKind: "continuation",
+  });
   retry = continuationOrchestrator.snapshot().retrying[0];
   assert.ok(retry);
   assert.equal(retry.attempt, 2);
+  const secondContinuationDelay = Date.parse(retry.dueAtIso) - beforeSecondContinuation;
+  assert.ok(secondContinuationDelay >= 900 && secondContinuationDelay <= 1_500);
+
+  assert.equal((await claimEntryAsync(continuationOrchestrator, issue))?.retryAttempt, 2);
+  const beforeFailureAfterContinuations = Date.now();
+  await continuationOrchestrator.finishAsync(issue.id, 0, {
+    remainsActive: true,
+    error: "transient failure after healthy continuations",
+    retryKind: "failure",
+  });
+  retry = continuationOrchestrator.snapshot().retrying[0];
+  assert.ok(retry);
+  assert.equal(retry.attempt, 3);
   const failureDelay = Date.parse(retry.dueAtIso) - beforeFailureAfterContinuations;
-  assert.ok(failureDelay >= 19_900 && failureDelay <= 20_500);
+  assert.ok(failureDelay >= 39_900 && failureDelay <= 40_500);
+});
+
+test("orchestrator exhausts one durable budget across failures and continuations", async () => {
+  const clock = fakeClock(new Date("2026-01-01T00:00:00.000Z"));
+  const settings = parseConfig({
+    agent: { max_retry_attempts: 1, max_retry_backoff_ms: 1 },
+  });
+  const issue = normalizeIssue({
+    id: "retry-exhausted",
+    identifier: "MT-EXHAUSTED",
+    title: "Retry exhausted",
+    state: { name: "Todo", type: "unstarted" },
+  });
+  const orchestrator = new Orchestrator(settings, clock);
+
+  assert.ok(await claimEntryAsync(orchestrator, issue));
+  const first = await orchestrator.finishAsync(issue.id, 0, {
+    remainsActive: true,
+    error: "first failure",
+    retryKind: "failure",
+  });
+  assert.equal(first?.exhausted, null);
+  assert.equal(orchestrator.snapshot().retrying[0]?.attempt, 1);
+
+  clock.advance(1);
+  assert.equal((await claimEntryAsync(orchestrator, issue))?.retryAttempt, 1);
+  const terminal = await orchestrator.finishAsync(issue.id, 0, {
+    remainsActive: true,
+    error: "second failure",
+    retryKind: "failure",
+  });
+  assert.equal(terminal?.exhausted?.attempts, 2);
+  assert.equal(terminal?.exhausted?.maxRetryAttempts, 1);
+  assert.equal(orchestrator.snapshot().retrying.length, 0);
+  assert.equal((await orchestrator.eligibleIssuesAsync([issue])).length, 0);
+  assert.equal(await orchestrator.claimAsync(issue), null);
+
+  const hydrated = hydrateState(serializeState(orchestrator.state), {
+    now: clock.now(),
+    monotonicNowMs: clock.monotonicMs(),
+  });
+  assert.equal(hydrated.exhausted.get(slotKey(issue.id, 0))?.error, "second failure");
+
+  const continuationSettings = parseConfig({ agent: { max_retry_attempts: 0 } });
+  const continuation = new Orchestrator(continuationSettings, clock);
+  assert.ok(await claimEntryAsync(continuation, issue));
+  const noRetry = await continuation.finishAsync(issue.id, 0, {
+    remainsActive: true,
+    retryKind: "continuation",
+  });
+  assert.equal(noRetry?.exhausted?.attempts, 1);
+
+  const done = normalizeIssue({ ...issue, state: "Done", stateType: "completed" });
+  assert.deepEqual(await orchestrator.eligibleIssuesAsync([done]), []);
+  assert.equal(orchestrator.snapshot().exhausted.length, 0);
 });
 
 test("orchestrator retry dispatch reopens slots blocked only by stale claims", async () => {
@@ -2897,7 +2965,9 @@ test("cap parity property: running + reserved never exceeds the cap and claimed 
           } else if (op === "finish" && runningSlots.length > 0) {
             const [slot] = runningSlots.splice(pick % runningSlots.length, 1);
             clock.advance(1_000);
-            await orchestrator.finishAsync(slot!.issueId, slot!.slotIndex, true);
+            await orchestrator.finishAsync(slot!.issueId, slot!.slotIndex, {
+              remainsActive: true,
+            });
           }
           assertInvariants();
         }

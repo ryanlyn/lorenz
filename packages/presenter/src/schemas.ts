@@ -54,6 +54,26 @@ export const retryEntryPayloadSchema = z.object({
 });
 export type RetryEntryPayload = z.infer<typeof retryEntryPayloadSchema>;
 
+export const exhaustionDetailsPayloadSchema = z.object({
+  attempts: z.number(),
+  max_retry_attempts: z.number(),
+  exhausted_at: z.string(),
+  error: z.string().nullable(),
+  worker_host: z.string().nullable(),
+  workspace_path: z.string().nullable(),
+});
+export type ExhaustionDetailsPayload = z.infer<typeof exhaustionDetailsPayloadSchema>;
+
+export const exhaustedEntryPayloadSchema = z
+  .object({
+    issue_id: z.string(),
+    issue_identifier: z.string(),
+    issue_url: z.string().nullable(),
+    slot_index: z.number(),
+  })
+  .extend(exhaustionDetailsPayloadSchema.shape);
+export type ExhaustedEntryPayload = z.infer<typeof exhaustedEntryPayloadSchema>;
+
 export const blockedEntryPayloadSchema = z.object({
   issue_id: z.string(),
   issue_identifier: z.string(),
@@ -106,11 +126,13 @@ export const opsStatePayloadSchema = z.object({
   counts: z.object({
     running: z.number(),
     retrying: z.number(),
+    exhausted: z.number(),
     blocked: z.number(),
   }),
   blocked_by_reason: z.record(z.string(), z.number()),
   running: z.array(runningEntryPayloadSchema),
   retrying: z.array(retryEntryPayloadSchema),
+  exhausted: z.array(exhaustedEntryPayloadSchema),
   blocked: z.array(blockedEntryPayloadSchema),
   usage_totals: usageTotalsPayloadSchema,
   rate_limits: z.unknown(),
@@ -163,6 +185,7 @@ export const runsSummaryPayloadSchema = z.object({
   failed: z.number(),
   stalled: z.number(),
   canceled: z.number(),
+  exhausted: z.number(),
 });
 
 export const runsListPayloadSchema = z.object({
@@ -234,7 +257,7 @@ export type RunsResultPayload = z.infer<typeof runsResultPayloadSchema>;
 export const issuePayloadSchema = z.object({
   issue_identifier: z.string(),
   issue_id: z.string().nullable(),
-  status: z.enum(["running", "retrying"]),
+  status: z.enum(["running", "retrying", "exhausted"]),
   workspace: z.object({
     path: z.string().nullable(),
     host: z.string().nullable(),
@@ -272,6 +295,7 @@ export const issuePayloadSchema = z.object({
       workspace_path: z.string().nullable(),
     })
     .nullable(),
+  exhausted: exhaustionDetailsPayloadSchema.nullable(),
   logs: z.object({ codex_session_logs: z.array(z.unknown()) }),
   recent_events: z.array(
     z.object({

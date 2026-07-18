@@ -24,9 +24,9 @@ a closed set. See [../agents/index.md](../agents/index.md) and
 
 ## C
 
-**Continuation turn** - the retry Lorenz schedules after a clean agent exit, distinct from a failure
-retry. `finishAsync(normal)` always writes a continuation retry (attempt 1, fixed backoff near 1000ms);
-reconciliation later prunes it if the issue is no longer active. See
+**Continuation turn** - the retry Lorenz schedules after a clean agent exit while work remains
+active, distinct from a failure retry. It uses a fixed backoff near 1000ms and consumes the same
+bounded retry budget as failures, dead sessions, and stalls. See
 [../agent-orchestrator.md](../agent-orchestrator.md) and
 [workflow-prompt.md](workflow-prompt.md) for the continuation prompt.
 

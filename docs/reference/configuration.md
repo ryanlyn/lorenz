@@ -278,6 +278,7 @@ Run-loop and concurrency settings, independent of which executor runs. See [agen
 | `agent.max_concurrent_agents` | integer | `10` | Global cap on concurrent agent runs. |
 | `agent.max_turns` | integer | `20` | Maximum turns per run. |
 | `agent.max_retry_backoff_ms` | integer | `300000` | Ceiling on retry backoff. |
+| `agent.max_retry_attempts` | integer (non-negative) | `3` | Retries after the initial run; `0` disables retries. |
 | `agent.ensemble_size` | integer | `1` | Parallel attempts per issue. Above 1 enables ensemble mode. See [context-ensembles](../features/context-ensembles.md). |
 | `agent.skills` | string[] | `[]` | Agent skills mounted for every run. See [skills](../agents/skills.md). |
 

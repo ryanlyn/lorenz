@@ -40,6 +40,7 @@ test("RUNTIME_EVENT_TYPES is a strict superset of AGENT_UPDATE_TYPES with no dup
     "dispatch_refresh_failed",
     "run_completed",
     "run_failed",
+    "run_exhausted",
     "workflow_reloaded",
     "workflow_reload_failed",
     "reconcile_refresh_failed",
@@ -85,13 +86,14 @@ test("RUNTIME_EVENT_TYPES starts with AGENT_UPDATE_TYPES in order then appends r
   }
 });
 
-test("RUNTIME_RUN_OUTCOMES contains exactly the four expected outcomes with no duplicates", () => {
+test("RUNTIME_RUN_OUTCOMES contains exactly the expected outcomes with no duplicates", () => {
   // Verify exact contents
-  assert.equal(RUNTIME_RUN_OUTCOMES.length, 4);
+  assert.equal(RUNTIME_RUN_OUTCOMES.length, 5);
   assert.ok(RUNTIME_RUN_OUTCOMES.includes("success"));
   assert.ok(RUNTIME_RUN_OUTCOMES.includes("failed"));
   assert.ok(RUNTIME_RUN_OUTCOMES.includes("stalled"));
   assert.ok(RUNTIME_RUN_OUTCOMES.includes("canceled"));
+  assert.ok(RUNTIME_RUN_OUTCOMES.includes("exhausted"));
 
   // No duplicates
   const unique = new Set(RUNTIME_RUN_OUTCOMES);

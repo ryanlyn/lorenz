@@ -40,6 +40,7 @@ export const defaultSettings = (options: DefaultSettingsOptions = {}): Settings 
       maxConcurrentAgents: 10,
       maxTurns: 20,
       maxRetryBackoffMs: 300_000,
+      maxRetryAttempts: 3,
       ensembleSize: 1,
       skills: [],
     },

@@ -48,6 +48,7 @@ const agentAliases = {
   max_concurrent_agents: "maxConcurrentAgents",
   max_turns: "maxTurns",
   max_retry_backoff_ms: "maxRetryBackoffMs",
+  max_retry_attempts: "maxRetryAttempts",
   ensemble_size: "ensembleSize",
 };
 const agentsAliases = {

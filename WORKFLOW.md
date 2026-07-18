@@ -37,6 +37,7 @@ agent:
   kind: codex
   max_concurrent_agents: 10
   max_turns: 20
+  max_retry_attempts: 3
   skills:
     - ./skills/lorenz-commit
     - ./skills/lorenz-push

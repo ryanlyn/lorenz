@@ -44,6 +44,7 @@ export function makeSettings(overrides: Record<string, unknown> = {}): Settings 
         maxConcurrentAgents: 5,
         maxTurns: 10,
         maxRetryBackoffMs: 1000,
+        maxRetryAttempts: 3,
         ensembleSize: 1,
       },
       codex: {

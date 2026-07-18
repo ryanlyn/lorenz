@@ -542,7 +542,7 @@ interface BoardContext {
 
 interface BoardRow {
   line: string;
-  lane: "run" | "rsv" | "retry" | "block";
+  lane: "run" | "rsv" | "retry" | "exhaust" | "block";
 }
 
 export function formatDashboard(
@@ -585,6 +585,10 @@ export function formatDashboard(
     ...snapshot.retrying.map((entry) => ({
       line: formatRetryRow(entry, now, ansi, layout),
       lane: "retry" as const,
+    })),
+    ...(snapshot.exhausted ?? []).map((entry) => ({
+      line: formatExhaustedRow(entry, now, ansi, layout),
+      lane: "exhaust" as const,
     })),
     ...blockedList.map((entry) => ({
       line: formatBlockedRow(entry, ansi, layout),
@@ -1024,6 +1028,23 @@ function formatRetryRow(
     ...(retry.workerHost ? { host: { text: retry.workerHost, color: "90" } } : {}),
     ageTurn: { text: dueIn, color: "38;5;208" },
     activity: { text: retry.error ?? "cause unknown", color: "2" },
+  });
+}
+
+function formatExhaustedRow(
+  entry: NonNullable<RuntimeSnapshot["exhausted"]>[number],
+  now: Date,
+  ansi: boolean,
+  layout: TableLayout,
+): string {
+  const age = `${formatDuration(secondsBetween(now, entry.exhaustedAtIso))} ago`;
+  return tableRow(layout, ansi, null, "✖", "31;1", false, {
+    lane: { text: "exhaust", color: "31;1" },
+    id: { text: entry.issueIdentifier, color: "36" },
+    title: { text: `exhausted after ${entry.attempts} attempts`, color: "31;1" },
+    ...(entry.workerHost ? { host: { text: entry.workerHost, color: "90" } } : {}),
+    ageTurn: { text: age, color: "31" },
+    activity: { text: entry.error ?? "retry budget exhausted", color: "31" },
   });
 }
 

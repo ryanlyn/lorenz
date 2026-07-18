@@ -20,6 +20,7 @@ import {
   type ClockPort,
   type DispatchBlockReason,
   type DispatchBlockEntry,
+  type ExhaustedEntry,
   type Issue,
   type RetryEntry,
   type RunningEntry,
@@ -108,6 +109,17 @@ export interface ReservationSnapshotEntry {
   affinityHost: string | null;
   retryAttempt: number | null;
   reservedAtIso: string;
+}
+
+export interface FinishResult {
+  entry: RunningEntry;
+  exhausted: ExhaustedEntry | null;
+}
+
+export interface FinishOptions {
+  remainsActive: boolean;
+  error?: string | undefined;
+  retryKind?: "failure" | "continuation" | undefined;
 }
 
 function zeroUsageTotals(): UsageTotals {
@@ -279,22 +291,28 @@ export class Orchestrator {
 
   private eligibleIssuesInTransaction(issues: Issue[]): Issue[] {
     let stateChanged = this.sweepExpiredReservations();
-    stateChanged = this.cleanupRetryAttempts(issues) || stateChanged;
+    stateChanged = this.cleanupInactiveLifecycleState(issues) || stateChanged;
     const blockedDispatches: DispatchBlockEntry[] = [];
     const runningByState = this.runningByStateCounts();
+    const runningCount = this.occupiedSlotCount();
+    const workerCapacityAvailable = this.workerCapacityAvailable();
+    let unavailableSlots = this.unavailableSlots();
 
     const result = sortForDispatch(issues).filter((issue) => {
       const retries = this.retryEntriesForIssue(issue.id);
       const dueRetries = retries.filter(([, retry]) => this.retryIsDue(retry));
       if (retries.length > 0 && dueRetries.length === 0) return false;
-      if (dueRetries.length > 0)
-        stateChanged = this.releaseStaleClaimsForRetry(issue.id) || stateChanged;
+      if (dueRetries.length > 0) {
+        const releasedClaims = this.releaseStaleClaimsForRetry(issue.id);
+        stateChanged = releasedClaims || stateChanged;
+        if (releasedClaims) unavailableSlots = this.unavailableSlots();
+      }
       const blockedRetry = dueRetries[0]?.[1] ?? retries[0]?.[1];
       const dispatchState = {
-        runningCount: this.occupiedSlotCount(),
+        runningCount,
         runningByState,
-        claimedSlots: this.state.claimed,
-        workerCapacityAvailable: this.workerCapacityAvailable(),
+        claimedSlots: unavailableSlots,
+        workerCapacityAvailable,
       };
       const reason = dispatchBlockReason(issue, this.settings, dispatchState);
       if (reason) {
@@ -337,23 +355,19 @@ export class Orchestrator {
       stateChanged = this.releaseStaleClaimsForRetry(issue.id) || stateChanged;
     const retryEntryKey = retryEntry?.[0];
     const retry = retryEntry?.[1];
+    const unavailableSlots = this.unavailableSlots();
     if (
       !shouldDispatchIssue(issue, this.settings, {
         runningCount: this.occupiedSlotCount(),
         runningByState: this.runningByStateCounts(),
-        claimedSlots: this.state.claimed,
+        claimedSlots: unavailableSlots,
         workerCapacityAvailable: this.workerCapacityAvailable(),
       })
     ) {
       if (stateChanged) return null;
       throw new NoopClaimStoreMutation();
     }
-    const slotIndex = firstUnclaimedSlot(
-      issue,
-      this.settings,
-      this.state.claimed,
-      retry?.slotIndex,
-    );
+    const slotIndex = firstUnclaimedSlot(issue, this.settings, unavailableSlots, retry?.slotIndex);
     if (slotIndex === null) {
       if (stateChanged) return null;
       throw new NoopClaimStoreMutation();
@@ -685,13 +699,11 @@ export class Orchestrator {
   async finishAsync(
     issueId: string,
     slotIndex: number,
-    normal: boolean,
-    error?: string,
-    retryKind: "failure" | "continuation" = "failure",
-  ): Promise<RunningEntry | null> {
+    options: FinishOptions,
+  ): Promise<FinishResult | null> {
     return this.noopAsNullAsync(async () =>
       this.withClaimStoreAsync("finish", () =>
-        this.finishInTransaction(issueId, slotIndex, normal, error, retryKind),
+        this.finishInTransaction(issueId, slotIndex, options),
       ),
     );
   }
@@ -699,10 +711,9 @@ export class Orchestrator {
   private finishInTransaction(
     issueId: string,
     slotIndex: number,
-    normal: boolean,
-    error: string | undefined,
-    retryKind: "failure" | "continuation",
-  ): RunningEntry | null {
+    options: FinishOptions,
+  ): FinishResult | null {
+    const { remainsActive, error, retryKind = "failure" } = options;
     const key = slotKey(issueId, slotIndex);
     const entry = this.state.running.get(key);
     if (!entry) throw new NoopClaimStoreMutation();
@@ -711,31 +722,50 @@ export class Orchestrator {
     this.state.claimed.delete(key);
     this.releaseClaimOwner(key);
     this.state.usageDeltaBases.delete(key);
+    const finishedAt = this.clock.now();
     this.state.usageTotals.secondsRunning += Math.max(
       0,
-      (this.clock.now().getTime() - entry.startedAt.getTime()) / 1000,
+      (finishedAt.getTime() - entry.startedAt.getTime()) / 1000,
     );
 
-    if (normal) {
-      const attempt = retryKind === "continuation" ? 1 : (entry.retryAttempt ?? 0) + 1;
+    let exhausted: ExhaustedEntry | null = null;
+    if (remainsActive) {
+      const attempt = (entry.retryAttempt ?? 0) + 1;
+      const effective = settingsForIssueState(this.settings, entry.issue.state);
       this.state.completed.add(issueId);
-      const deadline = this.retryDeadline(
-        retryBackoffMs(attempt, this.settings.agent.maxRetryBackoffMs, retryKind),
-      );
-      this.state.retryAttempts.set(slotKey(issueId, slotIndex), {
-        issueId,
-        identifier: entry.identifier,
-        issueUrl: entry.issue.url ?? null,
-        attempt,
-        monotonicDeadlineMs: deadline.monotonicDeadlineMs,
-        dueAtIso: deadline.dueAtIso,
-        slotIndex,
-        workerHost: entry.workerHost,
-        workspacePath: entry.workspacePath,
-        error,
-      });
+      if (attempt > effective.agent.maxRetryAttempts) {
+        exhausted = {
+          issueId,
+          identifier: entry.identifier,
+          issueUrl: entry.issue.url ?? null,
+          slotIndex,
+          attempts: attempt,
+          maxRetryAttempts: effective.agent.maxRetryAttempts,
+          exhaustedAtIso: finishedAt.toISOString(),
+          workerHost: entry.workerHost,
+          workspacePath: entry.workspacePath,
+          ...(error !== undefined ? { error } : {}),
+        };
+        this.state.exhausted.set(key, exhausted);
+      } else {
+        const deadline = this.retryDeadline(
+          retryBackoffMs(attempt, effective.agent.maxRetryBackoffMs, retryKind),
+        );
+        this.state.retryAttempts.set(key, {
+          issueId,
+          identifier: entry.identifier,
+          issueUrl: entry.issue.url ?? null,
+          attempt,
+          monotonicDeadlineMs: deadline.monotonicDeadlineMs,
+          dueAtIso: deadline.dueAtIso,
+          slotIndex,
+          workerHost: entry.workerHost,
+          workspacePath: entry.workspacePath,
+          error,
+        });
+      }
     }
-    return entry;
+    return { entry, exhausted };
   }
 
   async cleanupIssueAsync(issueId: string): Promise<void> {
@@ -765,6 +795,7 @@ export class Orchestrator {
       }
     }
     stateChanged = this.deleteRetryAttemptsForIssue(issueId) || stateChanged;
+    stateChanged = this.deleteExhaustedForIssue(issueId) || stateChanged;
     if (!this.state.completed.has(issueId)) {
       this.state.completed.add(issueId);
       stateChanged = true;
@@ -793,6 +824,7 @@ export class Orchestrator {
         reservedAtIso: record.reservedAt.toISOString(),
       })),
       retrying: [...this.state.retryAttempts.values()].map((entry) => ({ ...entry })),
+      exhausted: [...this.state.exhausted.values()].map((entry) => ({ ...entry })),
       blocked: this.state.blockedDispatches.map((entry) => ({ ...entry })),
       usageTotals: { ...this.state.usageTotals },
       rateLimits: this.state.rateLimits,
@@ -886,11 +918,13 @@ export class Orchestrator {
     entry.lastReportedTotalTokens = Math.max(entry.lastReportedTotalTokens, nextBase.totalTokens);
   }
 
-  private cleanupRetryAttempts(issues: Issue[]): boolean {
+  private cleanupInactiveLifecycleState(issues: Issue[]): boolean {
     let stateChanged = false;
     for (const issue of issues) {
-      if (!issueIsActive(issue, this.settings))
+      if (!issueIsActive(issue, this.settings)) {
         stateChanged = this.deleteRetryAttemptsForIssue(issue.id) || stateChanged;
+        stateChanged = this.deleteExhaustedForIssue(issue.id) || stateChanged;
+      }
     }
     return stateChanged;
   }
@@ -910,16 +944,16 @@ export class Orchestrator {
     retry: RetryEntry,
     reason: DispatchBlockReason,
   ): boolean {
-    const attempt = retry.attempt + 1;
+    const backoffAttempt = retry.attempt + 1;
+    const effective = settingsForIssueState(this.settings, issue.state);
     const deadline = this.retryDeadline(
-      retryBackoffMs(attempt, this.settings.agent.maxRetryBackoffMs, "failure"),
+      retryBackoffMs(backoffAttempt, effective.agent.maxRetryBackoffMs, "failure"),
     );
     this.state.retryAttempts.set(key, {
       ...retry,
       issueId: issue.id,
       identifier: issue.identifier,
       issueUrl: issue.url ?? retry.issueUrl ?? null,
-      attempt,
       monotonicDeadlineMs: deadline.monotonicDeadlineMs,
       dueAtIso: deadline.dueAtIso,
       error: dispatchBlockError(reason),
@@ -955,15 +989,29 @@ export class Orchestrator {
   }
 
   private deleteRetryAttemptsForIssue(issueId: string): boolean {
-    let stateChanged = false;
-    for (const [key, retry] of this.state.retryAttempts.entries()) {
-      if (retry.issueId === issueId) {
-        this.state.retryAttempts.delete(key);
-        stateChanged = true;
-      }
-    }
-    return stateChanged;
+    return deleteLifecycleEntriesForIssue(this.state.retryAttempts, issueId);
   }
+
+  private deleteExhaustedForIssue(issueId: string): boolean {
+    return deleteLifecycleEntriesForIssue(this.state.exhausted, issueId);
+  }
+
+  private unavailableSlots(): Set<string> {
+    return new Set([...this.state.claimed, ...this.state.exhausted.keys()]);
+  }
+}
+
+function deleteLifecycleEntriesForIssue<T extends { issueId: string }>(
+  entries: Map<string, T>,
+  issueId: string,
+): boolean {
+  let stateChanged = false;
+  for (const [key, entry] of entries) {
+    if (entry.issueId !== issueId) continue;
+    entries.delete(key);
+    stateChanged = true;
+  }
+  return stateChanged;
 }
 
 function dispatchBlockEntriesEqual(
@@ -987,7 +1035,7 @@ function dispatchBlockEntriesEqual(
 
 function agentUpdateCanSkipCheckpoint(update: AgentUpdate): boolean {
   return (
-    update.type === "session_notification" &&
+    (update.type === "session_notification" || update.type === "session_liveness") &&
     update.usage === undefined &&
     update.rateLimits === undefined &&
     update.workspacePath === undefined
@@ -998,6 +1046,7 @@ export interface OrchestratorSnapshot {
   running: RunningEntry[];
   reserving: ReservationSnapshotEntry[];
   retrying: RetryEntry[];
+  exhausted: ExhaustedEntry[];
   blocked: DispatchBlockEntry[];
   usageTotals: UsageTotals;
   rateLimits: unknown;

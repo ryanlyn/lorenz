@@ -146,7 +146,7 @@ test("finishAsync - non-normal finish does not create retry entry", async () => 
   const issue = makeIssue();
   await claimEntry(orchestrator, issue);
 
-  await orchestrator.finishAsync(issue.id, 0, false, "crashed");
+  await orchestrator.finishAsync(issue.id, 0, { remainsActive: false, error: "crashed" });
 
   assert.equal(orchestrator.snapshot().retrying.length, 0);
   assert.equal(orchestrator.snapshot().running.length, 0);
@@ -161,11 +161,11 @@ test("finishAsync - secondsRunning accumulates across multiple finishes", async 
 
   await claimEntry(orchestrator, issueA);
   clock.advance(10_000);
-  await orchestrator.finishAsync(issueA.id, 0, false);
+  await orchestrator.finishAsync(issueA.id, 0, { remainsActive: false });
 
   await claimEntry(orchestrator, issueB);
   clock.advance(15_000);
-  await orchestrator.finishAsync(issueB.id, 0, false);
+  await orchestrator.finishAsync(issueB.id, 0, { remainsActive: false });
 
   assert.equal(orchestrator.snapshot().usageTotals.secondsRunning, 25);
 });
@@ -175,10 +175,10 @@ test("finishAsync - finishing same slot twice is idempotent (second is no-op)", 
   const issue = makeIssue();
   await claimEntry(orchestrator, issue);
 
-  await orchestrator.finishAsync(issue.id, 0, true);
+  await orchestrator.finishAsync(issue.id, 0, { remainsActive: true });
   const afterFirst = orchestrator.snapshot().usageTotals.secondsRunning;
 
-  await orchestrator.finishAsync(issue.id, 0, true);
+  await orchestrator.finishAsync(issue.id, 0, { remainsActive: true });
   assert.equal(orchestrator.snapshot().usageTotals.secondsRunning, afterFirst);
 });
 
@@ -199,7 +199,7 @@ test("cleanupIssueAsync - removes retry attempts for issue", async () => {
   const orchestrator = new Orchestrator(parseConfig());
   const issue = makeIssue();
   await claimEntry(orchestrator, issue);
-  await orchestrator.finishAsync(issue.id, 0, true);
+  await orchestrator.finishAsync(issue.id, 0, { remainsActive: true });
   assert.equal(orchestrator.snapshot().retrying.length, 1);
 
   await orchestrator.cleanupIssueAsync(issue.id);
@@ -238,7 +238,7 @@ test("eligibleIssuesAsync - inactive issue cleared from retryAttempts", async ()
   const issue = makeIssue();
 
   await claimEntry(orchestrator, issue);
-  await orchestrator.finishAsync(issue.id, 0, true);
+  await orchestrator.finishAsync(issue.id, 0, { remainsActive: true });
   assert.equal(orchestrator.snapshot().retrying.length, 1);
 
   const doneIssue = normalizeIssue({

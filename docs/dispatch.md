@@ -90,12 +90,12 @@ The sort is a pure permutation: no issue is added or dropped. The same candidate
 
 ## Retries and backoff
 
-Every run schedules a retry when it finishes. Two kinds exist, with different delays. The math is `retryBackoffMs` in `packages/policies/src/retry.ts`.
+Every settled active run advances one counter shared by continuation, failure, dead-session, and stall paths. `agent.max_retry_attempts` defaults to `3` retries after the initial run; `0` disables retries. When the next retry exceeds that budget, the orchestrator records durable exhaustion instead of another deadline. Two retry kinds exist, with different delays. The math is `retryBackoffMs` in `packages/policies/src/retry.ts`.
 
 <p align="center"><img src="assets/diagrams/retry-backoff.svg" alt="retry backoff diagram" width="720" style="width:100%;max-width:720px;height:auto" /></p>
 *Continuation retries use a fixed short delay; failure retries grow exponentially until they hit `max_retry_backoff_ms`.*
 
-- **Continuation** (a clean worker exit, ready to continue the issue): fixed `1000ms` (`MIN_RETRY_DELAY_MS`), regardless of attempt number. Attempt is pinned to 1.
+- **Continuation** (a clean worker exit, ready to continue the issue): fixed `1000ms` (`MIN_RETRY_DELAY_MS`), regardless of attempt number. It advances the shared attempt counter.
 - **Failure** (an abnormal exit): `min(maxRetryBackoffMs, 10000 * 2 ** (attempt - 1))`. Attempt 1 is `10s`, attempt 2 is `20s`, attempt 3 is `40s`, doubling until it caps at `agent.max_retry_backoff_ms` (default `300000`, five minutes). The failure attempt counter is `previous + 1`.
 
 The delay is monotonically non-decreasing with attempt number, never negative, and never above the cap.
@@ -108,7 +108,7 @@ A retry's deadline carries a monotonic `monotonicDeadlineMs` (the authoritative 
 
 A single slot (one `${issueId}:${slotIndex}` pair) moves through a small state machine - unclaimed to claimed/reserved to running to finished, then a continuation or failure retry back to eligible. The dispatch package answers only whether a transition is allowed; the orchestrator owns the transitions, the ABA-token reservation guard, the two-phase reserve/bind pool path, and `preferredSlotIndex` slot affinity across retries. See the slot-lifecycle state machine in [agent-orchestrator.md](agent-orchestrator.md).
 
-One detail that stays here because it is dispatch math: a capacity miss during the reserve window cancels the reservation without applying backoff and restores the consumed retry entry, so the attempt counter and slot affinity survive a transient capacity shortfall.
+One detail that stays here because it is dispatch math: a capacity miss during the reserve window cancels the reservation without consuming a retry and restores the retry entry, so its attempt counter and slot affinity survive a transient capacity shortfall.
 
 ## Reconciliation
 

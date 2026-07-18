@@ -11,7 +11,7 @@ Trace lines are a third surface, derived 1:1 from agent updates. Each `AgentUpda
 
 ## The canonical runtime vocabulary
 
-`RUNTIME_EVENT_TYPES` (in `packages/runtime-events/src/index.ts`) is the spread of `AGENT_UPDATE_TYPES` followed by 22 runtime-specific strings. Every entry of `recentEvents[]` carries a `type` from this set, a `message`, and an ISO `at` timestamp. The agent-turn half (`AGENT_UPDATE_TYPES`, from `packages/domain`) is reused verbatim, so a `turn_completed` in the snapshot and a `turn_completed` line in a trace file are the same string.
+`RUNTIME_EVENT_TYPES` (in `packages/runtime-events/src/index.ts`) is the spread of `AGENT_UPDATE_TYPES` followed by 24 runtime-specific strings. Every entry of `recentEvents[]` carries a `type` from this set, a `message`, and an ISO `at` timestamp. The agent-turn half (`AGENT_UPDATE_TYPES`, from `packages/domain`) is reused verbatim, so a `turn_completed` in the snapshot and a `turn_completed` line in a trace file are the same string.
 
 The sections below group every name by category. Names are verbatim. None are invented.
 
@@ -27,8 +27,9 @@ These fire as the runtime moves an issue from eligible candidate to a live run.
 | `run_reserving` | The pool path claims a host-less reservation before acquiring a worker. | A two-phase pool dispatch entered its acquire window. The slot occupies concurrency but has no host yet. |
 | `run_started` | A run binds to a concrete host: immediately on the static/local path, or after `bindReservationAsync` on the pool path. | The agent run is live. |
 | `dispatch_refresh_failed` | Re-fetching an issue immediately before dispatch failed. | The pre-dispatch state refresh errored; the issue is not dispatched this tick. |
-| `run_completed` | A run finished cleanly (clean worker exit). | The run ended; a `continuation` retry is scheduled. |
-| `run_failed` | A run finished with a fault. | The run ended in error; a `failure` retry is scheduled with exponential backoff. |
+| `run_completed` | A run finished cleanly (clean worker exit). | Active work schedules a `continuation` retry while budget remains, or enters exhaustion. |
+| `run_failed` | A run finished with a fault. | Active work schedules a `failure` retry with exponential backoff while budget remains, or enters exhaustion. |
+| `run_exhausted` | A settled run consumed the final retry opportunity. | The slot entered durable terminal exhaustion; the message includes total attempts and configured retry budget. |
 
 The three concurrency-cap strings (`global_concurrency_cap`, `local_concurrency_cap`, `worker_host_capacity`) are the closed set of `DispatchBlockReason` values. They also populate `blocked[]` in the snapshot, not only the `dispatch_skipped` message. An ineligible issue (inactive, unrouted, or blocked) is never reported as capacity-blocked; it is silently filtered.
 
@@ -41,7 +42,7 @@ The retry scheduler fires off the poll cadence to wake an issue when its backoff
 | `retry_timer_due` | A per-issue retry timer's monotonic deadline elapsed. | The issue is due; the scheduler nudges a poll so eligibility re-checks it. |
 | `retry_timer_error` | The poll triggered by a due timer threw. | The retry-driven poll failed; the timer's work did not complete. |
 
-Backoff is purely exponential on attempt count: a `continuation` retry is a fixed `1000ms`; a `failure` retry is `10000 * 2^(attempt-1)`, capped at `agent.max_retry_backoff_ms` (default `300000`). Timers fire 5ms after the computed deadline (`RETRY_SCHEDULER_SYNC_DELAY_MS`) so the issue is reliably due when the poll re-evaluates it. There is no Retry-After or 429-driven backoff anywhere in this path.
+Backoff is purely exponential on attempt count: a `continuation` retry is a fixed `1000ms`; a `failure` retry is `10000 * 2^(attempt-1)`, capped at `agent.max_retry_backoff_ms` (default `300000`). Both consume the shared `agent.max_retry_attempts` budget, as do stalls and dead sessions. Capacity deferrals do not consume it. Timers fire 5ms after the computed deadline (`RETRY_SCHEDULER_SYNC_DELAY_MS`) so the issue is reliably due when the poll re-evaluates it. There is no Retry-After or 429-driven backoff anywhere in this path.
 
 ### Reconcile and workspace
 
@@ -50,7 +51,7 @@ Reconciliation refreshes in-flight issues against the tracker, stops runs that b
 | Event | When it fires | Signals |
 | --- | --- | --- |
 | `run_reconciled` | A tracked run was stopped during reconciliation for a non-terminal reason. | The run stopped because the issue went `unrouted`, `blocked`, or `inactive` (or is `missing` from the refetch). |
-| `run_stalled` | A running entry exceeded its effective `agents.<kind>.stall_timeout_ms`. | The run was force-finished as a failure, its worker forced to poison, and a `stalled` run-history entry recorded. |
+| `run_stalled` | A running entry exceeded its effective `agents.<kind>.stall_timeout_ms`. | The run was force-finished as a failure and its worker forced to poison; history records `stalled` or terminal `exhausted`. |
 | `reconcile_refresh_failed` | Re-fetching tracked issues during reconciliation failed. | The refetch errored; all in-flight runs are kept running for that tick. |
 | `workspace_cleanup` | A reconciled issue reached a terminal state and its workspace was removed. | Per-issue workspace dirs were deleted (locally and on every configured SSH host). |
 | `startup_workspace_cleanup` | The one-time, disk-driven startup sweep removed workspaces for terminal issues. | On-disk workspaces were enumerated, their issues fetched, and terminal ones cleaned. Runs once per daemon. |
@@ -83,7 +84,7 @@ poll cadence; they only nudge an immediate poll when available.
 
 ### Agent turn
 
-These 17 names are `AGENT_UPDATE_TYPES`, reused verbatim inside `RUNTIME_EVENT_TYPES`. The ACP executor produces them as it drives one bridge subprocess (Codex or Claude) through a turn. They are the trace stream.
+These 18 names are `AGENT_UPDATE_TYPES`, reused verbatim inside `RUNTIME_EVENT_TYPES`. The ACP executor produces them as it drives one bridge subprocess (Codex or Claude) through a turn. They are the trace stream.
 
 | Event | When it fires | Signals |
 | --- | --- | --- |
@@ -104,6 +105,7 @@ These 17 names are `AGENT_UPDATE_TYPES`, reused verbatim inside `RUNTIME_EVENT_T
 | `fs_write` | The agent wrote a file through the sandboxed client fs (local runs only). | A workspace-scoped file write occurred. |
 | `hook_execution` | A workspace lifecycle hook ran. | Carries a `HookExecutionMessage` (`started`/`completed`/`failed`). |
 | `session_notification` | The bridge streamed an ACP session update. | Wraps the ACP `sessionUpdate` kinds below. Resets the stall timer. |
+| `session_liveness` | A quiet prompt's ACP `session/list` response contains the active session. | Proves session liveness without assistant output and resets the stall timer. |
 
 `session_notification` carries the streaming sub-kinds the trace parser reads: `agent_message_chunk`, `user_message_chunk`, `agent_thought_chunk`, `tool_call`, and `tool_call_update`. `usage_update` also rides this channel. The parser coalesces message/thought chunks and pairs `tool_call` with `tool_call_update` by `toolCallId`.
 

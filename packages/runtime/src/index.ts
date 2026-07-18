@@ -1,6 +1,11 @@
 import { issueHasOpenBlockers, issueIsActive, routedToThisWorker, slotKey } from "@lorenz/dispatch";
 import { isTerminalState } from "@lorenz/issue";
-import { Orchestrator, type ClaimStoreLike, type SlotReservation } from "@lorenz/orchestrator";
+import {
+  Orchestrator,
+  type ClaimStoreLike,
+  type FinishResult,
+  type SlotReservation,
+} from "@lorenz/orchestrator";
 import { settingsForIssueState, validateDispatchConfig } from "@lorenz/config";
 import { runAgentAttempt, type RunResult } from "@lorenz/agent-runner";
 import { workflowFileChanged, workflowStampsEqual } from "@lorenz/workflow";
@@ -18,6 +23,7 @@ import {
 import type {
   RuntimeAppStatus,
   RuntimeEventType,
+  RuntimeExhaustedEntry,
   RuntimePollStatus,
   RuntimeRetryEntry,
   RuntimeRunHistoryEntry,
@@ -60,6 +66,7 @@ export type {
   RuntimeBlockedEntry,
   RuntimeEvent,
   RuntimeEventType,
+  RuntimeExhaustedEntry,
   RuntimePollStatus,
   RuntimeReservingEntry,
   RuntimeRetryEntry,
@@ -431,6 +438,7 @@ export class LorenzRuntime {
       // `running` with a placeholder host.
       reserving: orchestration.reserving.map((entry) => ({ ...entry })),
       retrying: orchestration.retrying.map(runtimeRetryEntry),
+      exhausted: orchestration.exhausted.map(runtimeExhaustedEntry),
       blocked: orchestration.blocked.map((entry) => ({ ...entry })),
       usageTotals: liveSnapshotUsageTotals(orchestration.usageTotals, orchestration.running, now),
       rateLimits: orchestration.rateLimits,
@@ -1049,23 +1057,22 @@ export class LorenzRuntime {
       if (!handle.isActive) return;
       const finalIssue = result.finalIssue ?? (await this.fetchIssueOrSelf(issue));
       if (!handle.isActive) return;
-      let finished: RunningEntry | null;
+      const remainsActive = issueIsActive(finalIssue, this.workflow.settings);
+      let finishResult: FinishResult | null;
       try {
-        finished = await this.orchestrator.finishAsync(
-          issue.id,
-          slotIndex,
-          true,
-          undefined,
-          "continuation",
-        );
+        finishResult = await this.orchestrator.finishAsync(issue.id, slotIndex, {
+          remainsActive,
+          retryKind: "continuation",
+        });
       } catch (error) {
         this.recordClaimStoreFailure("claim_finish_failed", error);
         return;
       }
-      if (!finished) {
+      if (!finishResult) {
         this.addEvent("dispatch_skipped", `${issue.identifier} claim_lost_before_finish`);
         return;
       }
+      const { entry: finished, exhausted } = finishResult;
       this.recordHistory(
         buildRunHistoryEntry({
           id: runId,
@@ -1073,17 +1080,20 @@ export class LorenzRuntime {
           state: finalIssue.state,
           slotIndex,
           agentKind,
-          outcome: "success",
+          outcome: exhausted ? "exhausted" : "success",
           turnCount: result.turnCount,
           runningEntry: finished,
           workspacePath: result.workspace,
           startedAt,
           endedAt: this.clock.now().toISOString(),
           durationMs: durationMs(startedAt, this.clock.now().toISOString()),
+          ...(exhausted ? { error: exhaustionMessage(exhausted) } : {}),
         }),
       );
       const retrySyncError = this.syncRetryTimerSafely(issue.id);
       this.addEvent("run_completed", `${issue.identifier} turns=${result.turnCount}`);
+      if (exhausted) this.addEvent("run_exhausted", exhaustionMessage(exhausted));
+      if (!remainsActive) await this.reconcileFinishedIssue(finalIssue, finished);
       if (retrySyncError) this.addEvent("poll_error", retrySyncError);
     } catch (error) {
       await updateQueue;
@@ -1107,30 +1117,29 @@ export class LorenzRuntime {
       // rejects with agent_run_aborted; recording it as a failure would emit a
       // run_failed event the TUI renders as a red error banner on Ctrl+C.
       if (!handle.isActive) return;
-      let finished: RunningEntry | null;
+      let finishResult: FinishResult | null;
       try {
-        finished = await this.orchestrator.finishAsync(
-          issue.id,
-          slotIndex,
-          true,
-          errorMessage(error),
-          "failure",
-        );
+        finishResult = await this.orchestrator.finishAsync(issue.id, slotIndex, {
+          remainsActive: true,
+          error: errorMessage(error),
+          retryKind: "failure",
+        });
       } catch (finishError) {
         this.recordClaimStoreFailure("claim_finish_failed", finishError);
         return;
       }
-      if (!finished) {
+      if (!finishResult) {
         this.addEvent("dispatch_skipped", `${issue.identifier} claim_lost_before_finish`);
         return;
       }
+      const { entry: finished, exhausted } = finishResult;
       this.recordHistory(
         buildRunHistoryEntry({
           id: runId,
           issue,
           slotIndex,
           agentKind,
-          outcome: "failed",
+          outcome: exhausted ? "exhausted" : "failed",
           turnCount: finished.turnCount,
           runningEntry: finished,
           startedAt,
@@ -1142,6 +1151,7 @@ export class LorenzRuntime {
       );
       const retrySyncError = this.syncRetryTimerSafely(issue.id);
       this.addEvent("run_failed", `${issue.identifier} ${errorMessage(error)}`);
+      if (exhausted) this.addEvent("run_exhausted", exhaustionMessage(exhausted));
       if (retrySyncError) this.addEvent("poll_error", retrySyncError);
     } finally {
       handle.release();
@@ -1268,7 +1278,7 @@ export class LorenzRuntime {
     const tracked = new Map<
       string,
       {
-        kind: "claim" | "retry";
+        kind: "claim" | "retry" | "exhausted";
         identifier: string;
         workerHost?: string | null | undefined;
         workspacePath?: string | null | undefined;
@@ -1305,6 +1315,15 @@ export class LorenzRuntime {
         workspacePath: entry.workspacePath,
       });
     }
+    for (const entry of snapshot.exhausted ?? []) {
+      if (tracked.has(entry.issueId)) continue;
+      tracked.set(entry.issueId, {
+        kind: "exhausted",
+        identifier: entry.identifier,
+        workerHost: entry.workerHost,
+        workspacePath: entry.workspacePath,
+      });
+    }
     if (tracked.size === 0) return empty;
 
     let refreshed: Issue[];
@@ -1321,42 +1340,17 @@ export class LorenzRuntime {
       const active = issueIsActive(issue, this.workflow.settings);
       const routed = routedToThisWorker(issue, this.workflow.settings);
       if (active && routed && !issueHasOpenBlockers(issue, this.workflow.settings)) {
+        if (meta?.kind === "exhausted") continue;
         await this.orchestrator.refreshRunningIssueAsync(issue);
         if (dueRetryIds.has(issue.id)) outcome.dueRetryCandidates.push(issue);
         else outcome.retryTimerIssues.push(issue);
         continue;
       }
-      try {
-        await this.orchestrator.cleanupIssueAsync(issue.id);
-      } catch (error) {
-        this.recordClaimStoreFailure("claim_cleanup_failed", error);
-        continue;
-      }
-      this.abortIssueRuns(issue.id);
-      this.clearRetryTimer(issue.id);
-      const reason = reconciliationStopReason(issue, this.workflow.settings);
-      if (isTerminalState(issue.state, this.workflow.settings.tracker.terminalStates)) {
-        await this.removeIssueWorkspaces(
-          this.workflow.settings,
-          issue.identifier || meta?.identifier,
-          meta?.workerHost,
-          issue,
-        );
-        this.addEvent("workspace_cleanup", `${issue.identifier} ${reason}`);
-      } else {
-        this.addEvent("run_reconciled", `${issue.identifier} ${reason}`);
-      }
+      await this.reconcileStoppedIssue(issue, meta?.identifier, meta?.workerHost);
     }
     for (const [issueId, meta] of tracked.entries()) {
       if (refreshedIds.has(issueId)) continue;
-      try {
-        await this.orchestrator.cleanupIssueAsync(issueId);
-      } catch (error) {
-        this.recordClaimStoreFailure("claim_cleanup_failed", error);
-        continue;
-      }
-      this.abortIssueRuns(issueId);
-      this.clearRetryTimer(issueId);
+      if (!(await this.releaseTrackedIssue(issueId))) continue;
       this.addEvent("run_reconciled", `${meta.identifier} missing`);
     }
     return outcome;
@@ -1389,24 +1383,23 @@ export class LorenzRuntime {
       const error = `agent_stalled after ${timeoutMs}ms`;
       const entry = await this.runningEntry(snapshotEntry.issue.id, snapshotEntry.slotIndex);
       if (!entry) continue;
-      let finished: RunningEntry | null;
+      let finishResult: FinishResult | null;
       try {
-        finished = await this.orchestrator.finishAsync(
-          entry.issue.id,
-          entry.slotIndex,
-          true,
+        finishResult = await this.orchestrator.finishAsync(entry.issue.id, entry.slotIndex, {
+          remainsActive: true,
           error,
-          "failure",
-        );
+          retryKind: "failure",
+        });
       } catch (finishError) {
         this.recordClaimStoreFailure("claim_finish_failed", finishError);
         continue;
       }
-      if (!finished) {
+      if (!finishResult) {
         activeHandle?.finishExternally();
         this.addEvent("dispatch_skipped", `${entry.identifier} claim_lost_before_finish`);
         continue;
       }
+      const { exhausted } = finishResult;
       activeHandle?.finishExternally("stalled");
       const endedAt = this.clock.now().toISOString();
       this.recordHistory(
@@ -1416,7 +1409,7 @@ export class LorenzRuntime {
           issueIdentifier: entry.identifier,
           slotIndex: entry.slotIndex,
           agentKind: entry.agentKind,
-          outcome: "stalled",
+          outcome: exhausted ? "exhausted" : "stalled",
           turnCount: entry.turnCount,
           runningEntry: entry,
           startedAt: entry.startedAt.toISOString(),
@@ -1428,8 +1421,47 @@ export class LorenzRuntime {
       );
       const retrySyncError = this.syncRetryTimerSafely(entry.issue.id);
       this.addEvent("run_stalled", `${entry.identifier} ${error}`);
+      if (exhausted) this.addEvent("run_exhausted", exhaustionMessage(exhausted));
       if (retrySyncError) this.addEvent("poll_error", retrySyncError);
     }
+  }
+
+  private async reconcileFinishedIssue(issue: Issue, finished: RunningEntry): Promise<void> {
+    await this.reconcileStoppedIssue(issue, finished.identifier, finished.workerHost);
+  }
+
+  private async reconcileStoppedIssue(
+    issue: Issue,
+    fallbackIdentifier?: string | null,
+    workerHost?: string | null,
+  ): Promise<void> {
+    if (!(await this.releaseTrackedIssue(issue.id))) return;
+    const identifier = issue.identifier || fallbackIdentifier || issue.id;
+    const reason = reconciliationStopReason(issue, this.workflow.settings);
+    if (!isTerminalState(issue.state, this.workflow.settings.tracker.terminalStates)) {
+      this.addEvent("run_reconciled", `${identifier} ${reason}`);
+      return;
+    }
+    try {
+      await this.removeIssueWorkspaces(this.workflow.settings, identifier, workerHost, issue);
+      this.addEvent("workspace_cleanup", `${identifier} ${reason}`);
+    } catch (error) {
+      const message = `workspace_cleanup_failed ${errorMessage(error)}`;
+      this.markRuntimeError(message);
+      this.addEvent("poll_error", message);
+    }
+  }
+
+  private async releaseTrackedIssue(issueId: string): Promise<boolean> {
+    try {
+      await this.orchestrator.cleanupIssueAsync(issueId);
+    } catch (error) {
+      this.recordClaimStoreFailure("claim_cleanup_failed", error);
+      return false;
+    }
+    this.abortIssueRuns(issueId);
+    this.clearRetryTimer(issueId);
+    return true;
   }
 
   private async runningEntry(
@@ -1754,6 +1786,42 @@ function runtimeRetryEntry(entry: {
     ...(entry.workerHost !== undefined ? { workerHost: entry.workerHost } : {}),
     ...(entry.workspacePath !== undefined ? { workspacePath: entry.workspacePath } : {}),
   };
+}
+
+function runtimeExhaustedEntry(entry: {
+  issueId: string;
+  identifier: string;
+  issueUrl?: string | null | undefined;
+  slotIndex: number;
+  attempts: number;
+  maxRetryAttempts: number;
+  exhaustedAtIso: string;
+  error?: string | undefined;
+  workerHost?: string | null | undefined;
+  workspacePath?: string | null | undefined;
+}): RuntimeExhaustedEntry {
+  return {
+    issueId: entry.issueId,
+    issueIdentifier: entry.identifier,
+    issueUrl: entry.issueUrl ?? null,
+    slotIndex: entry.slotIndex,
+    attempts: entry.attempts,
+    maxRetryAttempts: entry.maxRetryAttempts,
+    exhaustedAtIso: entry.exhaustedAtIso,
+    ...(entry.error !== undefined ? { error: redactDiagnosticText(entry.error) } : {}),
+    ...(entry.workerHost !== undefined ? { workerHost: entry.workerHost } : {}),
+    ...(entry.workspacePath !== undefined ? { workspacePath: entry.workspacePath } : {}),
+  };
+}
+
+function exhaustionMessage(entry: {
+  identifier: string;
+  attempts: number;
+  maxRetryAttempts: number;
+  error?: string | undefined;
+}): string {
+  const base = `${entry.identifier} attempts=${entry.attempts} max_retries=${entry.maxRetryAttempts}`;
+  return entry.error ? `${base} ${entry.error}` : base;
 }
 
 function agentUpdateRuntimeMessage(issueIdentifier: string, update: AgentUpdate): string {

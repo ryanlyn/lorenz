@@ -74,13 +74,21 @@ test("runs command queries the observability API and renders a run table", async
     response.end(
       JSON.stringify({
         view: "runs",
-        summary: { total: 1, running: 0, success: 0, failed: 1, stalled: 0, canceled: 0 },
+        summary: {
+          total: 1,
+          running: 0,
+          success: 0,
+          failed: 0,
+          stalled: 0,
+          canceled: 0,
+          exhausted: 1,
+        },
         runs: [
           {
             id: "run-2",
             issue_identifier: "MT-RETRY",
             agent_kind: "codex",
-            outcome: "failed",
+            outcome: "exhausted",
             retry_attempt: 2,
             turn_count: 3,
             tokens: { total_tokens: 15 },
@@ -108,7 +116,7 @@ test("runs command queries the observability API and renders a run table", async
     assert.match(output, /Run History/);
     assert.match(output, /run-2/);
     assert.match(output, /MT-RETRY/);
-    assert.match(output, /failed/);
+    assert.match(output, /exhausted/);
   } finally {
     await new Promise<void>((resolve, reject) =>
       server.close((error) => (error ? reject(error) : resolve())),

@@ -13,7 +13,13 @@ import {
   HeroDivider,
   Sparkline,
 } from "../../../shared/components/ui";
-import type { OpsState, OpsRunningEntry, OpsRetryEntry, OpsBlockedEntry } from "../api/types";
+import type {
+  OpsState,
+  OpsRunningEntry,
+  OpsRetryEntry,
+  OpsExhaustedEntry,
+  OpsBlockedEntry,
+} from "../api/types";
 
 import { RecentIssues } from "./RecentIssues";
 
@@ -24,6 +30,7 @@ interface SparkSample {
   generatedAt: string;
   running: number;
   retrying: number;
+  exhausted: number;
   blocked: number;
   tokens: number;
 }
@@ -233,6 +240,53 @@ function BlockedTable({ entries }: { entries: OpsBlockedEntry[] }) {
   );
 }
 
+function ExhaustedTable({ entries }: { entries: OpsExhaustedEntry[] }) {
+  return (
+    <SectionCard title="Exhausted issues" count={entries.length} dotClass="bg-accent-coral">
+      {entries.length === 0 ? (
+        <EmptyRow label="No exhausted issues" />
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr>
+                <Th>Issue</Th>
+                <Th>Attempts</Th>
+                <Th>Exhausted</Th>
+                <Th>Worker</Th>
+                <Th>Error</Th>
+              </tr>
+            </thead>
+            <tbody>
+              {entries.map((entry) => (
+                <tr key={`${entry.issue_id}:${entry.slot_index}`} className={rowClass}>
+                  <td className={cellClass}>
+                    <IssueLink
+                      issueId={entry.issue_id}
+                      identifier={entry.issue_identifier}
+                      url={entry.issue_url}
+                    />
+                  </td>
+                  <td className={cn(cellClass, "font-mono text-[12.5px] tabular-nums")}>
+                    {entry.attempts} total / {entry.max_retry_attempts} retries
+                  </td>
+                  <td className={cellClass}>
+                    <Pill color="coral">{formatTimestamp(entry.exhausted_at)}</Pill>
+                  </td>
+                  <td className={cn(cellClass, "text-muted")}>{entry.worker_host ?? "local"}</td>
+                  <td className={cn(cellClass, "text-[12.5px] text-muted")}>
+                    {entry.error ?? "retry budget exhausted"}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </SectionCard>
+  );
+}
+
 function workerCount(sessions: OpsRunningEntry[]): number {
   return new Set(sessions.map((s) => s.worker_host ?? "local")).size;
 }
@@ -258,8 +312,9 @@ interface OpsOverviewProps {
 export function OpsOverview({ state }: OpsOverviewProps) {
   const running = state?.running ?? [];
   const retrying = state?.retrying ?? [];
+  const exhausted = state?.exhausted ?? [];
   const blocked = state?.blocked ?? [];
-  const counts = state?.counts ?? { running: 0, retrying: 0, blocked: 0 };
+  const counts = state?.counts ?? { running: 0, retrying: 0, exhausted: 0, blocked: 0 };
   const usageTotals = state?.usage_totals ?? { input_tokens: 0, output_tokens: 0, total_tokens: 0 };
 
   // Rolling client-side history of stream samples backing the hero sparklines.
@@ -271,6 +326,7 @@ export function OpsOverview({ state }: OpsOverviewProps) {
         generatedAt: state.generated_at,
         running: state.counts.running,
         retrying: state.counts.retrying,
+        exhausted: state.counts.exhausted,
         blocked: state.counts.blocked,
         tokens: state.usage_totals.total_tokens,
       });
@@ -294,6 +350,19 @@ export function OpsOverview({ state }: OpsOverviewProps) {
           }
           dotClass="bg-accent"
           chart={<Sparkline values={history.map((s) => s.running)} className="text-accent" />}
+        />
+        <HeroDivider />
+        <HeroStat
+          label="Exhausted"
+          value={counts.exhausted.toString()}
+          sub={counts.exhausted > 0 ? "operator attention" : "none terminal"}
+          dotClass="bg-accent-coral"
+          chart={
+            <Sparkline
+              values={history.map((sample) => sample.exhausted)}
+              className="text-accent-coral"
+            />
+          }
         />
         <HeroDivider />
         <HeroStat
@@ -330,6 +399,7 @@ export function OpsOverview({ state }: OpsOverviewProps) {
 
       <RunningTable sessions={running} />
       <RetryTable entries={retrying} />
+      <ExhaustedTable entries={exhausted} />
 
       <div className="grid items-start gap-4 lg:grid-cols-2">
         <BlockedTable entries={blocked} />

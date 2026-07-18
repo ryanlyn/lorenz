@@ -377,9 +377,111 @@ test("ACP executor resets the stall timeout on session notifications", async () 
   assert.ok(updates.some((update) => update.type === "session_notification"));
   const traceEvents = await readTrace(trace);
   assert.equal(
+    traceEvents.some((event) => event.method === "listSessions"),
+    false,
+  );
+  assert.equal(
     traceEvents.some((event) => event.method === "cancel"),
     false,
   );
+});
+
+test("ACP executor proves quiet turn liveness without agent output", async () => {
+  const root = await tempDir("lorenz-acp-quiet-live");
+  const fake = await writeFakeBridge(root);
+  const trace = path.join(root, "trace.jsonl");
+  const settings = acpSettings(root, fake, trace, "quiet-live", 5_000, { stallTimeoutMs: 50 });
+  const updates: AgentUpdate[] = [];
+  const executor = new Executor("claude");
+  const session = await executor.startSession({
+    workspace: root,
+    settings,
+    issue: sampleIssue,
+    onUpdate: (update) => updates.push(update),
+  });
+  try {
+    const turnUpdates = await executor.runTurn(session, "hello", sampleIssue);
+    assert.ok(turnUpdates.some((update) => update.type === "turn_completed"));
+  } finally {
+    await session.stop();
+  }
+
+  assert.ok(updates.some((update) => update.type === "session_liveness"));
+  assert.equal(
+    updates.some((update) => update.type === "session_notification"),
+    false,
+  );
+  const traceEvents = await readTrace(trace);
+  assert.ok(traceEvents.some((event) => event.method === "listSessions"));
+  assert.equal(
+    traceEvents.some((event) => event.method === "cancel"),
+    false,
+  );
+});
+
+test("ACP executor rejects a dead session instead of treating silence as liveness", async () => {
+  const root = await tempDir("lorenz-acp-dead-session");
+  const fake = await writeFakeBridge(root);
+  const trace = path.join(root, "trace.jsonl");
+  const settings = acpSettings(root, fake, trace, "dead-session", 5_000, {
+    stallTimeoutMs: 500,
+  });
+  const updates: AgentUpdate[] = [];
+  const executor = new Executor("claude");
+  const session = await executor.startSession({
+    workspace: root,
+    settings,
+    issue: sampleIssue,
+    onUpdate: (update) => updates.push(update),
+  });
+  try {
+    await expectRejectsWithin(
+      () => executor.runTurn(session, "hello", sampleIssue),
+      500,
+      /ACP connection closed|acp bridge exited with status 17/,
+    );
+  } finally {
+    await session.stop();
+  }
+
+  assert.equal(
+    updates.some((update) => update.type === "session_liveness"),
+    false,
+  );
+});
+
+test("ACP executor rejects a missing session even while its bridge stays live", async () => {
+  const root = await tempDir("lorenz-acp-missing-session");
+  const fake = await writeFakeBridge(root);
+  const trace = path.join(root, "trace.jsonl");
+  const settings = acpSettings(root, fake, trace, "quiet-missing-session", 5_000, {
+    stallTimeoutMs: 50,
+  });
+  const updates: AgentUpdate[] = [];
+  const executor = new Executor("claude");
+  const session = await executor.startSession({
+    workspace: root,
+    settings,
+    issue: sampleIssue,
+    onUpdate: (update) => updates.push(update),
+  });
+  try {
+    await expectRejectsWithin(
+      () => executor.runTurn(session, "hello", sampleIssue),
+      500,
+      /acp turn timed out/,
+    );
+  } finally {
+    await session.stop();
+  }
+
+  assert.equal(
+    updates.some((update) => update.type === "session_liveness"),
+    false,
+  );
+  const traceEvents = await readTrace(trace);
+  assert.ok(traceEvents.some((event) => event.method === "listSessions"));
+  assert.ok(traceEvents.some((event) => event.method === "cancel"));
 });
 
 test("ACP executor emits matching terminal sessionUpdate kinds for cancelled and failed turns", async () => {
@@ -749,7 +851,14 @@ class FakeAgent {
 
   async initialize(params) {
     record({ method: "initialize", params });
-    const agentCapabilities = { sessionCapabilities: { close: {} } };
+    const agentCapabilities = {
+      sessionCapabilities: {
+        close: {},
+        ...(["quiet-live", "quiet-missing-session", "active-long-turn"].includes(mode)
+          ? { list: {} }
+          : {})
+      }
+    };
     return { protocolVersion: acp.PROTOCOL_VERSION, agentCapabilities };
   }
 
@@ -820,6 +929,18 @@ class FakeAgent {
       return { stopReason: "end_turn" };
     }
     if (mode === "stall") {
+      await new Promise(() => {});
+    }
+    if (mode === "quiet-live") {
+      await sleep(160);
+      return { stopReason: "end_turn" };
+    }
+    if (mode === "quiet-missing-session") {
+      await this.waitForCancel();
+      return { stopReason: "end_turn" };
+    }
+    if (mode === "dead-session") {
+      setTimeout(() => process.exit(17), 20);
       await new Promise(() => {});
     }
     if (mode === "late-complete-after-timeout") {
@@ -1004,6 +1125,15 @@ class FakeAgent {
     const waiters = this.cancelWaiters;
     this.cancelWaiters = [];
     for (const resolve of waiters) resolve();
+  }
+
+  async listSessions(params) {
+    record({ method: "listSessions", params });
+    return {
+      sessions: mode === "quiet-missing-session"
+        ? []
+        : [{ sessionId: "acp-new", cwd: process.cwd() }]
+    };
   }
 
   async closeSession(params) {
