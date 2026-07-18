@@ -10,6 +10,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { serve } from "@hono/node-server";
+import { createFixedTraceDataSource } from "@lorenz/server/trace-routes";
 import { parseTraceLines, extractTicketMetadata, computeStats } from "@lorenz/traceviz-core";
 
 import { createTracevizApp } from "./app.js";
@@ -44,9 +45,7 @@ if (!fs.existsSync(dashboardDist)) {
 
 const app = createTracevizApp({
   dashboardDist,
-  events,
-  identifier,
-  issueId,
+  source: createFixedTraceDataSource({ events, identifier, issueId }, stats.totalTurns),
   stats,
 });
 
