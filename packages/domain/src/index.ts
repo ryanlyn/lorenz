@@ -812,6 +812,20 @@ export type DispatchBlockReason =
   | "local_concurrency_cap"
   | "worker_host_capacity";
 
+const DISPATCH_BLOCK_REASON_LABELS = {
+  global_concurrency_cap: "global concurrency cap",
+  local_concurrency_cap: "local state concurrency cap",
+  worker_host_capacity: "worker host capacity",
+} satisfies Record<DispatchBlockReason, string>;
+
+/** Human-readable operator label for a dispatch block reason. */
+export function dispatchBlockReasonLabel(reason: string): string {
+  if (Object.hasOwn(DISPATCH_BLOCK_REASON_LABELS, reason)) {
+    return DISPATCH_BLOCK_REASON_LABELS[reason as DispatchBlockReason];
+  }
+  return reason.replaceAll("_", " ").trim() || "unknown";
+}
+
 /**
  * Record of an issue that was skipped during a dispatch tick along with why.
  * Surfaced to operators (TUI, HTTP snapshot) so capacity pressure is visible; rebuilt each tick.
