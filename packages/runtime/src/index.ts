@@ -713,7 +713,7 @@ export class LorenzRuntime {
       await this.startClaimOwnerHeartbeat();
       // On the static/local path the run starts immediately. On the pool-governed
       // path run_reserving marks dispatch intent and run_started moves AFTER
-      // bindReservation (inside runReservedClaim): a capacity-refused dispatch
+      // bindReservationAsync (inside runReservedClaim): a capacity-refused dispatch
       // never emits a phantom run_started.
       if (claim.kind === "running") {
         this.addEvent("run_started", `${refreshed.identifier} slot=${slotIndex}`);

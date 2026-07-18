@@ -26,7 +26,7 @@ export interface ReservationRecord {
   reservedAt: Date;
   /** Wall-clock expiry used to rebase the defensive sweep across process boundaries. */
   expiresAt: Date;
-  /** Defensive expiry, swept by Orchestrator.eligibleIssues. */
+  /** Defensive expiry, swept by Orchestrator.eligibleIssuesAsync. */
   expiresAtMonotonicMs: number;
   /** The due RetryEntry consumed at reserve time, kept so cancel can restore it. */
   consumedRetry: { key: string; entry: RetryEntry } | null;
