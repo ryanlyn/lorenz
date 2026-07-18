@@ -37,6 +37,32 @@ test("dashboard formatter renders the flight board with an event tape at the bot
   assert.ok(frame.indexOf("LANE") < frame.indexOf("events"));
 });
 
+test("dashboard renders terminal exhaustion separately from retrying work", () => {
+  const now = "2026-05-05T02:00:00.000Z";
+  const snapshot = dashboardSnapshot({
+    now,
+    exhausted: [
+      {
+        issueId: "issue-exhausted",
+        issueIdentifier: "MT-EXHAUSTED",
+        slotIndex: 0,
+        attempts: 4,
+        maxRetryAttempts: 3,
+        exhaustedAtIso: "2026-05-05T01:59:00.000Z",
+        error: "agent exited: final failure",
+      },
+    ],
+  });
+
+  const rendered = formatDashboard(snapshot, { now, columns: 132, ansi: false });
+
+  assert.match(rendered, /ex\.\.\./);
+  assert.match(rendered, /MT-EXH/);
+  assert.match(rendered, /exhausted after 4 attempts/);
+  assert.match(rendered, /agent exited: final failure/);
+  assert.notMatch(rendered, /retry attempt 4/);
+});
+
 test("board adapts its columns to the viewport width", () => {
   const snapshot = dashboardSnapshot({
     now: "2026-05-05T02:00:00.000Z",
@@ -1102,6 +1128,7 @@ function dashboardSnapshot(input: Partial<RuntimeSnapshot> & { now: string }): R
     },
     running: input.running ?? [],
     retrying: input.retrying ?? [],
+    ...(input.exhausted ? { exhausted: input.exhausted } : {}),
     blocked: input.blocked ?? [],
     runHistory: [],
     usageTotals: input.usageTotals ?? {

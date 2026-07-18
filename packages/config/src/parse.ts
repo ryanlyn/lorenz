@@ -662,6 +662,7 @@ function parseAgentSettings(
     maxConcurrentAgents: agentRaw.maxConcurrentAgents ?? defaults.maxConcurrentAgents,
     maxTurns: agentRaw.maxTurns ?? defaults.maxTurns,
     maxRetryBackoffMs: agentRaw.maxRetryBackoffMs ?? defaults.maxRetryBackoffMs,
+    maxRetryAttempts: agentRaw.maxRetryAttempts ?? defaults.maxRetryAttempts,
     ensembleSize: agentRaw.ensembleSize ?? defaults.ensembleSize,
     skills: agentRaw.skills ? skills : defaults.skills,
   };
@@ -915,6 +916,7 @@ function parsePartialAgent(raw: Partial<AgentRaw>): Partial<AgentSettings> {
   if (raw.maxConcurrentAgents !== undefined) next.maxConcurrentAgents = raw.maxConcurrentAgents;
   if (raw.maxTurns !== undefined) next.maxTurns = raw.maxTurns;
   if (raw.maxRetryBackoffMs !== undefined) next.maxRetryBackoffMs = raw.maxRetryBackoffMs;
+  if (raw.maxRetryAttempts !== undefined) next.maxRetryAttempts = raw.maxRetryAttempts;
   if (raw.ensembleSize !== undefined) next.ensembleSize = raw.ensembleSize;
   return next;
 }

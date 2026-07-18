@@ -261,16 +261,55 @@ export class Executor implements AgentExecutor {
         finishReject(new Error("acp turn timed out"));
       };
       let stallTimer: ReturnType<typeof setTimeout> | undefined;
+      let livenessTimer: ReturnType<typeof setTimeout> | undefined;
+      let livenessProbeInFlight = false;
       const resetStallTimer = () => {
         if (session.agentConfig.stallTimeoutMs <= 0) return;
         if (stallTimer) clearTimeout(stallTimer);
         stallTimer = setTimeout(cancelTurn, session.agentConfig.stallTimeoutMs);
+      };
+      const scheduleLivenessProbe = () => {
+        if (
+          settled ||
+          livenessProbeInFlight ||
+          session.agentConfig.stallTimeoutMs <= 0 ||
+          !supportsList(session.init)
+        )
+          return;
+        if (livenessTimer) clearTimeout(livenessTimer);
+        const delayMs = Math.max(1, Math.floor(session.agentConfig.stallTimeoutMs / 2));
+        livenessTimer = setTimeout(() => {
+          livenessTimer = undefined;
+          livenessProbeInFlight = true;
+          void session.connection
+            .listSessions({ cwd: session.workspace })
+            .then((response) => {
+              if (
+                settled ||
+                !response.sessions.some((listed) => listed.sessionId === session.sessionId)
+              )
+                return;
+              this.emit(session, {
+                type: "session_liveness",
+                sessionId: session.sessionId,
+                executorPid: session.executorPid,
+                message: "session/list ok",
+                timestamp: new Date(),
+              });
+            })
+            .catch(() => {})
+            .finally(() => {
+              livenessProbeInFlight = false;
+              if (!settled) scheduleLivenessProbe();
+            });
+        }, delayMs);
       };
       const hardTimer = setTimeout(cancelTurn, session.agentConfig.turnTimeoutMs);
 
       const cleanup = () => {
         clearTimeout(hardTimer);
         if (stallTimer) clearTimeout(stallTimer);
+        if (livenessTimer) clearTimeout(livenessTimer);
         session.onUpdate = previous;
         session.pendingTurn = undefined;
       };
@@ -290,11 +329,13 @@ export class Executor implements AgentExecutor {
       };
 
       resetStallTimer();
+      scheduleLivenessProbe();
       session.sawCallUsageThisTurn = false;
       session.turnStartTotals = { ...session.usageTotals };
       session.pendingTurn = { reject: finishReject, allowSessionIdRotation: true };
       session.onUpdate = (update) => {
         resetStallTimer();
+        scheduleLivenessProbe();
         previous?.(update);
       };
 
@@ -861,6 +902,10 @@ function resolveAgentConfig(settings: Settings, kind: AgentKind): AgentConfig {
 
 function supportsClose(init: InitializeResponse): boolean {
   return Boolean(init.agentCapabilities?.sessionCapabilities?.close);
+}
+
+function supportsList(init: InitializeResponse): boolean {
+  return Boolean(init.agentCapabilities?.sessionCapabilities?.list);
 }
 
 function requireSessionId(session: Session): string {

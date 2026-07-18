@@ -44,6 +44,7 @@ export function statePayload(snapshot: RuntimeSnapshot, generatedAt = nowIso()):
     counts: {
       running: snapshot.running.length,
       retrying: snapshot.retrying.length,
+      exhausted: snapshot.exhausted?.length ?? 0,
       blocked: snapshot.blocked.length,
     },
     blocked_by_reason: blockedByReasonPayload(snapshot.blocked),
@@ -57,6 +58,13 @@ export function statePayload(snapshot: RuntimeSnapshot, generatedAt = nowIso()):
       error: entry.error === undefined ? null : redactDiagnosticText(entry.error),
       worker_host: entry.workerHost ?? null,
       workspace_path: entry.workspacePath ?? null,
+    })),
+    exhausted: (snapshot.exhausted ?? []).map((entry) => ({
+      issue_id: entry.issueId,
+      issue_identifier: entry.issueIdentifier,
+      issue_url: entry.issueUrl ?? null,
+      slot_index: entry.slotIndex,
+      ...exhaustionDetailsPayload(entry),
     })),
     blocked: snapshot.blocked.map(blockedEntryPayload),
     usage_totals: usagePayload(snapshot.usageTotals),
@@ -107,18 +115,20 @@ export function issuePayload(
 ): { status: "ok"; payload: IssuePayload } | { status: "issue_not_found" } {
   const running = snapshot.running.find((entry) => entry.issueIdentifier === issueIdentifier);
   const retry = snapshot.retrying.find((entry) => entry.issueIdentifier === issueIdentifier);
-  if (!running && !retry) return { status: "issue_not_found" };
-  const currentRetryAttempt = issueCurrentRetryAttempt(running, retry);
+  const exhausted = snapshot.exhausted?.find((entry) => entry.issueIdentifier === issueIdentifier);
+  if (!running && !retry && !exhausted) return { status: "issue_not_found" };
+  const currentRetryAttempt = issueCurrentRetryAttempt(running, retry, exhausted);
+  const lastError = retry?.error ?? exhausted?.error;
 
   return {
     status: "ok",
     payload: issuePayloadSchema.parse({
       issue_identifier: issueIdentifier,
-      issue_id: running?.issueId ?? retry?.issueId ?? null,
-      status: running ? "running" : "retrying",
+      issue_id: running?.issueId ?? retry?.issueId ?? exhausted?.issueId ?? null,
+      status: running ? "running" : retry ? "retrying" : "exhausted",
       workspace: {
-        path: running?.workspacePath ?? retry?.workspacePath ?? null,
-        host: running?.workerHost ?? retry?.workerHost ?? null,
+        path: running?.workspacePath ?? retry?.workspacePath ?? exhausted?.workspacePath ?? null,
+        host: running?.workerHost ?? retry?.workerHost ?? exhausted?.workerHost ?? null,
       },
       attempts: {
         restart_count: Math.max(currentRetryAttempt - 1, 0),
@@ -134,6 +144,7 @@ export function issuePayload(
             workspace_path: retry.workspacePath ?? null,
           }
         : null,
+      exhausted: exhausted ? exhaustionDetailsPayload(exhausted) : null,
       logs: { codex_session_logs: [] },
       recent_events: running?.lastEventAt
         ? [
@@ -144,7 +155,7 @@ export function issuePayload(
             },
           ]
         : [],
-      last_error: retry?.error === undefined ? null : redactDiagnosticText(retry.error),
+      last_error: lastError === undefined ? null : redactDiagnosticText(lastError),
       tracked: {},
     }),
   };
@@ -153,8 +164,20 @@ export function issuePayload(
 function issueCurrentRetryAttempt(
   running: RuntimeRunningEntry | undefined,
   retry: RuntimeSnapshot["retrying"][number] | undefined,
+  exhausted: NonNullable<RuntimeSnapshot["exhausted"]>[number] | undefined,
 ): number {
-  return running?.retryAttempt ?? retry?.attempt ?? 0;
+  return running?.retryAttempt ?? retry?.attempt ?? Math.max((exhausted?.attempts ?? 1) - 1, 0);
+}
+
+function exhaustionDetailsPayload(entry: NonNullable<RuntimeSnapshot["exhausted"]>[number]) {
+  return {
+    attempts: entry.attempts,
+    max_retry_attempts: entry.maxRetryAttempts,
+    exhausted_at: entry.exhaustedAtIso,
+    error: entry.error === undefined ? null : redactDiagnosticText(entry.error),
+    worker_host: entry.workerHost ?? null,
+    workspace_path: entry.workspacePath ?? null,
+  };
 }
 
 export function runsPayload(
@@ -360,7 +383,9 @@ function filterRuns(runs: RunPayload[], params: PresenterParams): RunPayload[] {
     filtered = filtered.filter((run) => run.issue_identifier === issue || run.issue_id === issue);
   }
   if (truthyParam(params.failed)) {
-    filtered = filtered.filter((run) => run.outcome === "failed" || run.outcome === "stalled");
+    filtered = filtered.filter(
+      (run) => run.outcome === "failed" || run.outcome === "stalled" || run.outcome === "exhausted",
+    );
   }
   return filtered;
 }
@@ -373,6 +398,7 @@ function runsSummaryPayload(runs: RunPayload[]) {
     failed: runs.filter((run) => run.outcome === "failed").length,
     stalled: runs.filter((run) => run.outcome === "stalled").length,
     canceled: runs.filter((run) => run.outcome === "canceled").length,
+    exhausted: runs.filter((run) => run.outcome === "exhausted").length,
   };
 }
 

@@ -3,7 +3,13 @@ import type { AgentKind, AgentUpdateType, DispatchBlockEntry, UsageTotals } from
 
 export type RuntimeAppStatus = "starting" | "idle" | "polling" | "running" | "stopping" | "error";
 export type RuntimePollStatus = "idle" | "checking" | "error";
-export const RUNTIME_RUN_OUTCOMES = ["success", "failed", "stalled", "canceled"] as const;
+export const RUNTIME_RUN_OUTCOMES = [
+  "success",
+  "failed",
+  "stalled",
+  "canceled",
+  "exhausted",
+] as const;
 export type RuntimeRunOutcome = (typeof RUNTIME_RUN_OUTCOMES)[number];
 export type RuntimeRunLastEvent = AgentUpdateType | "agent_stalled";
 export const RUNTIME_EVENT_TYPES = [
@@ -17,6 +23,7 @@ export const RUNTIME_EVENT_TYPES = [
   "dispatch_refresh_failed",
   "run_completed",
   "run_failed",
+  "run_exhausted",
   "workflow_reloaded",
   "workflow_reload_failed",
   "reconcile_refresh_failed",
@@ -103,6 +110,19 @@ export interface RuntimeRetryEntry {
   workspacePath?: string | null | undefined;
 }
 
+export interface RuntimeExhaustedEntry {
+  issueId: string;
+  issueIdentifier: string;
+  issueUrl?: string | null | undefined;
+  slotIndex: number;
+  attempts: number;
+  maxRetryAttempts: number;
+  exhaustedAtIso: string;
+  error?: string | undefined;
+  workerHost?: string | null | undefined;
+  workspacePath?: string | null | undefined;
+}
+
 export type RuntimeBlockedEntry = DispatchBlockEntry;
 
 /**
@@ -166,6 +186,8 @@ export interface RuntimeSnapshot {
   /** In-acquire (reserved) slots; additive, absent from snapshots predating the lane. */
   reserving?: RuntimeReservingEntry[];
   retrying: RuntimeRetryEntry[];
+  /** Terminal retry-budget exhaustion; absent from snapshots predating this lane. */
+  exhausted?: RuntimeExhaustedEntry[] | undefined;
   blocked: RuntimeBlockedEntry[];
   runHistory: RuntimeRunHistoryEntry[];
   usageTotals: UsageTotals;

@@ -259,6 +259,7 @@ const agentRawSchema = z
     maxConcurrentAgents: coercedConcurrency.optional(),
     maxTurns: coercedMaxTurns.optional(),
     maxRetryBackoffMs: coercedTimeoutMs.optional(),
+    maxRetryAttempts: coercedNonNegativeCount.optional(),
     ensembleSize: coercedEnsembleSize.optional(),
     skills: skillSourceListSchema.optional(),
   })

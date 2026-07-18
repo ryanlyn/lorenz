@@ -3,5 +3,6 @@ export type {
   OpsStatePayload as OpsState,
   RunningEntryPayload as OpsRunningEntry,
   RetryEntryPayload as OpsRetryEntry,
+  ExhaustedEntryPayload as OpsExhaustedEntry,
   BlockedEntryPayload as OpsBlockedEntry,
 } from "@lorenz/presenter";

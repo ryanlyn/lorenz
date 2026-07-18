@@ -44,7 +44,12 @@ test("observability /ws pushes ops state on connect and broadcasts runtime updat
     assert.equal(messages[2]!.type, "ops_state");
     assert.equal(messages[2]!.state.running[0].turn_count, 2);
     assert.equal(messages[2]!.state.daemon.owner_id, "owner-daemon");
-    assert.deepEqual(messages[2]!.state.counts, { running: 1, retrying: 0, blocked: 0 });
+    assert.deepEqual(messages[2]!.state.counts, {
+      running: 1,
+      retrying: 0,
+      exhausted: 1,
+      blocked: 0,
+    });
   } finally {
     ws.close();
     await closed;
@@ -119,6 +124,17 @@ function snapshotFixture(turnCount: number): RuntimeSnapshot {
       },
     ],
     retrying: [],
+    exhausted: [
+      {
+        issueId: "issue-exhausted",
+        issueIdentifier: "MT-EXHAUSTED",
+        slotIndex: 0,
+        attempts: 4,
+        maxRetryAttempts: 3,
+        exhaustedAtIso: "2026-05-05T00:00:00.000Z",
+        error: "agent exited: final failure",
+      },
+    ],
     blocked: [],
     runHistory: [],
     usageTotals: { inputTokens: 4, outputTokens: 8, totalTokens: 12, secondsRunning: 1 },

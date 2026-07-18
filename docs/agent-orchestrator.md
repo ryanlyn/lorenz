@@ -22,6 +22,7 @@ The orchestrator is a state machine with no I/O; the runtime is the I/O shell th
 | `reserved` | `Map<string, ReservationRecord>` | Pool-governed slots mid-acquire, host-less, keyed by `slotKey`. |
 | `claimed` | `Set<string>` | Every `slotKey` that is running or reserved. The claim guard for slot selection. |
 | `retryAttempts` | `Map<string, RetryEntry>` | Pending retries keyed by `slotKey`, carrying attempt count, kind, and the monotonic deadline. |
+| `exhausted` | `Map<string, ExhaustedEntry>` | Durable terminal retry-budget exhaustion keyed by `slotKey`. Exhausted slots cannot dispatch while their issue remains active. |
 | `completed` | `Set<string>` | Issue ids that have finished at least one run cleanly this process. |
 | `usageTotals` | usage record | Session-cumulative token and cost accounting. |
 | `rateLimits` | `unknown` | Last-seen rate-limit payload, surfaced for display only. It does not influence retry timing. |
@@ -69,10 +70,13 @@ A dispatch slot moves through a small state machine. The orchestrator owns every
 - **Unclaimed.** No entry in `claimed` for this `slotKey`. `firstUnclaimedSlot` will select it, honoring `preferredSlotIndex` so a retry reuses its original slot.
 - **Claimed / reserved.** On the pool-governed path, `claimAsync()` returns `{ kind: 'reserved', reservation }`. The slot is in `claimed` and `reserved` but has no host yet. On the static/local path, `claimAsync()` mints a `RunningEntry` immediately and the slot goes straight to running.
 - **Running.** A bound `RunningEntry` in `running`. Agent updates flow through `applyUpdateAsync(issueId, slotIndex, update)`, refreshing `lastAgentTimestamp` and usage.
-- **Finished.** `finishAsync(issueId, slotIndex, normal, error?, retryKind)` removes the running and claimed entries, adds `secondsRunning`, marks the issue `completed`, and **always** schedules a retry.
+- **Finished.** `finishAsync(issueId, slotIndex, { remainsActive, error?, retryKind? })` removes the running and claimed entries, adds `secondsRunning`, and advances one shared retry counter when the issue remains active.
 - **Retry pending.** A `RetryEntry` in `retryAttempts`. The slot is eligible again only once its monotonic deadline passes.
+- **Exhausted.** An `ExhaustedEntry` records the terminal attempt count and reason. The slot stays undispatchable until the issue leaves active scope.
 
-`finishAsync` always writes a retry. A clean exit writes a `continuation` retry (attempt fixed to `1`); a fault writes a `failure` retry (attempt = previous + 1). The continuation retry is written even if the issue is now inactive; `eligibleIssuesAsync` prunes it later via `cleanupRetryAttempts` if the issue is no longer active. Continuation backoff is a fixed `1000` ms; failure backoff is `10000 * 2^(attempt - 1)` capped at `agent.max_retry_backoff_ms` (default `300000`). The backoff math lives in `@lorenz/policies` and is detailed in [dispatch.md](dispatch.md).
+`agent.max_retry_attempts` is the number of retries allowed after the initial run. It defaults to `3`; `0` disables retries. Clean continuations, runner failures, dead ACP sessions, and stalls all advance the same counter. When the next retry would exceed the budget, `finishAsync` writes `exhausted` instead of `retryAttempts`. Capacity-only dispatch deferrals do not consume the budget because no agent run settled. Continuation backoff remains a fixed `1000` ms; failure backoff is `10000 * 2^(attempt - 1)` capped at `agent.max_retry_backoff_ms` (default `300000`).
+
+The runtime projects exhaustion consistently: `RuntimeSnapshot.exhausted`, a final run-history outcome of `exhausted`, and a `run_exhausted` event alongside the path event (`run_completed`, `run_failed`, or `run_stalled`). The presenter, dashboard, CLI, and TUI read that same snapshot lane. Reconciliation keeps active exhausted work visible and clears it only after the tracker issue becomes inactive, terminal, unrouted, blocked, or missing.
 
 ## Two-phase pool-governed dispatch
 
@@ -106,13 +110,15 @@ Two passes run every tick before the candidate fetch, plus a one-time startup pa
 
 ### Stall detection (Part A)
 
-`reconcileStalledRuns` walks each `RunningEntry`. Elapsed time is measured from `lastAgentTimestamp ?? startedAt`. If elapsed exceeds the effective `agents.<kind>.stall_timeout_ms` (default `300000`, and stall detection is disabled when the value is `<= 0`), the run is treated as stalled: `finishAsync()` records it as a failure, run history records the `stalled` outcome, and `handle.finishExternally('stalled')` aborts the run and forces the worker into poison. The runtime emits `run_stalled`.
+`reconcileStalledRuns` walks each `RunningEntry`. Elapsed time is measured from `lastAgentTimestamp ?? startedAt`. If elapsed exceeds the effective `agents.<kind>.stall_timeout_ms` (default `300000`, and stall detection is disabled when the value is `<= 0`), the run is treated as stalled: `finishAsync()` consumes the same retry budget as any other settled run, and `handle.finishExternally('stalled')` aborts the run and forces the worker into poison. The runtime emits `run_stalled`, plus `run_exhausted` when the budget ends.
+
+ACP bridges that advertise `session/list` can prove liveness during a quiet prompt without streaming assistant text or tool output. The executor issues one non-overlapping probe halfway to the stall deadline. A response that lists the active session emits `session_liveness`, refreshing `lastAgentTimestamp`; an absent session or an unresponsive bridge produces no heartbeat and still reaches the stall or hard turn bound.
 
 A stall-finished run poisons its worker even if the underlying runner resolves successfully, because `handle.reason === 'stalled'` forces poison before the slot settles. `classifyWorkerOutcome` alone would otherwise mis-read an `agent_run_aborted` as healthy.
 
 ### Tracker state refresh (Part B)
 
-`reconcileTrackedIssues` collects the issue ids that are reserving, running, or retrying and refetches just those from the tracker. Per issue it decides:
+`reconcileTrackedIssues` collects the issue ids that are reserving, running, retrying, or exhausted and refetches just those from the tracker. Per issue it decides:
 
 - **Active, routed to this worker, no open blockers.** `refreshRunningIssueAsync(issue)` updates the in-memory state and emits `run_reconciled`. The run continues.
 - **Otherwise.** `abortIssueRuns` + `cleanupIssueAsync(issueId)` + clear the retry timer. The run stops.

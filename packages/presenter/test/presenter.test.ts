@@ -208,6 +208,70 @@ test("presenter shows retry attempts for active running retries", () => {
   assert.equal((issue.payload.running as any).retry_attempt, 2);
 });
 
+test("presenter exposes terminal exhaustion in ops, issue, and run-history views", () => {
+  const snapshot = snapshotFixture();
+  snapshot.exhausted = [
+    {
+      issueId: "exhausted-1",
+      issueIdentifier: "MT-EXHAUSTED",
+      issueUrl: "https://example.com/MT-EXHAUSTED",
+      slotIndex: 0,
+      attempts: 4,
+      maxRetryAttempts: 3,
+      exhaustedAtIso: "2026-05-06T00:02:00.000Z",
+      error: "agent exited: final failure",
+      workerHost: "worker-1",
+      workspacePath: "/tmp/lorenz/MT-EXHAUSTED",
+    },
+  ];
+  snapshot.runHistory.unshift({
+    id: "run-exhausted",
+    issueId: "exhausted-1",
+    issueIdentifier: "MT-EXHAUSTED",
+    issueTitle: "Exhausted",
+    state: "Todo",
+    slotIndex: 0,
+    ensembleSize: 1,
+    agentKind: "codex",
+    outcome: "exhausted",
+    turnCount: 0,
+    startedAt: "2026-05-06T00:01:00.000Z",
+    endedAt: "2026-05-06T00:02:00.000Z",
+    error: "agent exited: final failure",
+    retryAttempt: 3,
+  });
+
+  const state = statePayload(snapshot);
+  assert.equal(state.counts.exhausted, 1);
+  assert.deepEqual(state.exhausted[0], {
+    issue_id: "exhausted-1",
+    issue_identifier: "MT-EXHAUSTED",
+    issue_url: "https://example.com/MT-EXHAUSTED",
+    slot_index: 0,
+    attempts: 4,
+    max_retry_attempts: 3,
+    exhausted_at: "2026-05-06T00:02:00.000Z",
+    error: "agent exited: final failure",
+    worker_host: "worker-1",
+    workspace_path: "/tmp/lorenz/MT-EXHAUSTED",
+  });
+
+  const issue = issuePayload(snapshot, "MT-EXHAUSTED");
+  assert.equal(issue.status, "ok");
+  if (issue.status !== "ok") throw new Error("exhausted issue payload should exist");
+  assert.equal(issue.payload.status, "exhausted");
+  assert.equal(issue.payload.exhausted?.attempts, 4);
+  assert.equal(issue.payload.last_error, "agent exited: final failure");
+
+  const runs = runsPayload(snapshot, { failed: true });
+  assert.equal(runs.status, "ok");
+  if (runs.status !== "ok") throw new Error("runs payload should exist");
+  assert.equal(runs.payload.view, "runs");
+  if (runs.payload.view !== "runs") throw new Error("runs list should be selected");
+  assert.equal(runs.payload.summary.exhausted, 1);
+  assert.ok(runs.payload.runs.some((run) => run.outcome === "exhausted"));
+});
+
 test("presenter does not treat ensemble slots as retry attempts", () => {
   const snapshot = snapshotFixture();
   snapshot.runHistory.push(

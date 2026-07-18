@@ -148,7 +148,7 @@ describe("INVARIANT: When all worker hosts are at capacity, the system SHALL NOT
     // Finish one entry on host-a
     const hostAEntry = claimed.find((e) => e.workerHost === "host-a")!;
     clock.advance(1000);
-    await orch.finishAsync(hostAEntry.issue.id, hostAEntry.slotIndex, false);
+    await orch.finishAsync(hostAEntry.issue.id, hostAEntry.slotIndex, { remainsActive: false });
 
     // Now a new claim should succeed and go to host-a (freed host)
     const reclaimed = await claimEntry(orch, makeIssue({ id: "i5", identifier: "T-5" }));
@@ -216,7 +216,10 @@ describe("INVARIANT: When claimAsync succeeds, the retryAttempts entry for that 
     const entry = await claimEntry(orch, issue);
     assert.ok(entry !== null);
     clock.advance(1000);
-    await orch.finishAsync(issue.id, 0, true, undefined, "continuation");
+    await orch.finishAsync(issue.id, 0, {
+      remainsActive: true,
+      retryKind: "continuation",
+    });
 
     const snap1 = orch.snapshot();
     assert.equal(snap1.retrying.length, 1);
@@ -243,7 +246,7 @@ describe("INVARIANT: When an entry is finished, its slot key SHALL be removed fr
     assert.equal(orch.state.claimed.has(slotKey(issue.id, 0)), true);
 
     clock.advance(5000);
-    await orch.finishAsync(issue.id, 0, false);
+    await orch.finishAsync(issue.id, 0, { remainsActive: false });
 
     assert.equal(orch.state.running.has(slotKey(issue.id, 0)), false);
     assert.equal(orch.state.claimed.has(slotKey(issue.id, 0)), false);
@@ -475,7 +478,10 @@ describe("INVARIANT: When an issue is cleaned up, all running entries, claimed s
 
     // Finish slot 0 to create retry entry
     clock.advance(1000);
-    await orch.finishAsync(issue.id, 0, true, undefined, "continuation");
+    await orch.finishAsync(issue.id, 0, {
+      remainsActive: true,
+      retryKind: "continuation",
+    });
 
     // Confirm state before cleanup
     assert.equal(orch.state.running.has(slotKey(issue.id, 1)), true);
@@ -501,14 +507,14 @@ describe("INVARIANT: When an entry is finished, elapsed seconds SHALL be compute
     await claimEntry(orch, issue1);
 
     clock.advance(30_000);
-    await orch.finishAsync(issue1.id, 0, false);
+    await orch.finishAsync(issue1.id, 0, { remainsActive: false });
     assert.equal(orch.snapshot().usageTotals.secondsRunning, 30);
 
     const issue2 = makeIssue({ id: "i2", identifier: "T-2" });
     await claimEntry(orch, issue2);
 
     clock.advance(15_000);
-    await orch.finishAsync(issue2.id, 0, false);
+    await orch.finishAsync(issue2.id, 0, { remainsActive: false });
     assert.equal(orch.snapshot().usageTotals.secondsRunning, 45);
   });
 });
@@ -522,7 +528,10 @@ describe("INVARIANT: When a continuation finishAsync occurs, the issue SHALL be 
 
     await claimEntry(orch, issue);
     clock.advance(5000);
-    await orch.finishAsync(issue.id, 0, true, undefined, "continuation");
+    await orch.finishAsync(issue.id, 0, {
+      remainsActive: true,
+      retryKind: "continuation",
+    });
 
     const snap = orch.snapshot();
     assert.equal(snap.retrying.length, 1);
@@ -545,7 +554,10 @@ describe("INVARIANT: When a snapshot is taken, its arrays and objects SHALL be i
 
     await claimEntry(orch, issue);
     clock.advance(5000);
-    await orch.finishAsync(issue.id, 0, true, undefined, "continuation");
+    await orch.finishAsync(issue.id, 0, {
+      remainsActive: true,
+      retryKind: "continuation",
+    });
 
     // Take first snapshot and mutate it
     const snap1 = orch.snapshot();

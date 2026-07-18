@@ -334,7 +334,7 @@ function scenarioSettings(root: string, options: ScenarioOptions): Settings {
       polling: { interval_ms: 1000 },
       logging: { log_file: path.join(root, "lorenz.log") },
       workspace: { root },
-      agent: { max_concurrent_agents: 2 },
+      agent: { max_concurrent_agents: 2, max_retry_attempts: 1000 },
       ...(options.sshHosts ? { worker: { ssh_hosts: options.sshHosts } } : {}),
     },
     { SLACK_BOT_TOKEN: "xoxb-test" },
