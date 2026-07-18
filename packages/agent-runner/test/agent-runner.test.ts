@@ -424,6 +424,64 @@ test("a state override can add turn capacity for steering recovery", async () =>
   assert.match(queuedPrompts[0]!, /recovered after transition/);
 });
 
+test("a state override can add turn capacity for a buffered live event", async () => {
+  const overrides = new Map<string, { agent?: Partial<Settings["agent"]> }>();
+  overrides.set("in progress", { agent: { maxTurns: 2 } });
+  const settings = fakeSettings({
+    agent: { ...defaultSettings().agent, maxTurns: 1 },
+    statusOverrides: overrides as Settings["statusOverrides"],
+  });
+  const queuedPrompts: string[] = [];
+  let issueEventListener: ((events: TrackerIssueEvent[]) => void) | undefined;
+  let releaseFirstTurn: (() => void) | undefined;
+  let markFirstTurnStarted: (() => void) | undefined;
+  const firstTurnStarted = new Promise<void>((resolve) => {
+    markFirstTurnStarted = resolve;
+  });
+  const firstTurnRelease = new Promise<void>((resolve) => {
+    releaseFirstTurn = resolve;
+  });
+  const session = fakeSession({
+    queueTurn: async (prompt) => {
+      queuedPrompts.push(prompt);
+      return [{ type: "turn_completed" }];
+    },
+  });
+  const executor: AgentExecutor = {
+    kind: "codex",
+    async startSession() {
+      return session;
+    },
+    async runTurn() {
+      markFirstTurnStarted?.();
+      await firstTurnRelease;
+      return [{ type: "turn_completed" }];
+    },
+  };
+
+  const attempt = runAgentAttempt({
+    issue: fakeIssue(),
+    workflow: { path: "/workflow.md", config: {}, promptTemplate: "Fix it", settings },
+    settings,
+    fetchIssue: async (issue) => ({ ...issue, state: "In Progress" }),
+    subscribeIssueEvents: (listener) => {
+      issueEventListener = listener;
+      return () => {};
+    },
+    adapters: fakeAdapters({ executorFactory: () => executor }),
+  });
+
+  await firstTurnStarted;
+  issueEventListener?.([{ ts: "11.0", author: "ryan", text: "use the new capacity" }]);
+  assert.equal(queuedPrompts.length, 0);
+  releaseFirstTurn?.();
+
+  const result = await attempt;
+  assert.equal(result.turnCount, 2);
+  assert.equal(queuedPrompts.length, 1);
+  assert.match(queuedPrompts[0]!, /use the new capacity/);
+});
+
 test("sessions without queued turns do not start issue event recovery", async () => {
   const settings = fakeSettings({ agent: { ...defaultSettings().agent, maxTurns: 1 } });
   let feedCalls = 0;
@@ -497,6 +555,80 @@ test("run cancellation aborts an active steering recovery request", async () => 
   await assert.rejects(() => attempt, /agent_run_aborted/);
   assert.equal(feedCalls, 2);
   assert.equal(feedSignal?.aborted, true);
+});
+
+test("run cancellation stops queued ACP work during an issue refresh", async () => {
+  const settings = fakeSettings({ agent: { ...defaultSettings().agent, maxTurns: 2 } });
+  const controller = new AbortController();
+  let issueEventListener: ((events: TrackerIssueEvent[]) => void) | undefined;
+  let releaseFirstTurn: (() => void) | undefined;
+  let markFirstTurnStarted: (() => void) | undefined;
+  let releaseIssueRefresh: (() => void) | undefined;
+  let markIssueRefreshStarted: (() => void) | undefined;
+  let markSessionStopped: (() => void) | undefined;
+  const firstTurnStarted = new Promise<void>((resolve) => {
+    markFirstTurnStarted = resolve;
+  });
+  const firstTurnRelease = new Promise<void>((resolve) => {
+    releaseFirstTurn = resolve;
+  });
+  const issueRefreshStarted = new Promise<void>((resolve) => {
+    markIssueRefreshStarted = resolve;
+  });
+  const issueRefreshRelease = new Promise<void>((resolve) => {
+    releaseIssueRefresh = resolve;
+  });
+  const sessionStopped = new Promise<void>((resolve) => {
+    markSessionStopped = resolve;
+  });
+  let stopCalls = 0;
+  const session = fakeSession({
+    queueTurn: async () => never<AgentUpdate[]>(),
+    stop: async () => {
+      stopCalls += 1;
+      markSessionStopped?.();
+    },
+  });
+  const executor: AgentExecutor = {
+    kind: "codex",
+    async startSession() {
+      return session;
+    },
+    async runTurn() {
+      markFirstTurnStarted?.();
+      await firstTurnRelease;
+      return [{ type: "turn_completed" }];
+    },
+  };
+
+  const attempt = runAgentAttempt({
+    issue: fakeIssue(),
+    workflow: { path: "/workflow.md", config: {}, promptTemplate: "Fix it", settings },
+    settings,
+    fetchIssue: async (issue) => {
+      markIssueRefreshStarted?.();
+      await issueRefreshRelease;
+      return issue;
+    },
+    subscribeIssueEvents: (listener) => {
+      issueEventListener = listener;
+      return () => {};
+    },
+    abortSignal: controller.signal,
+    adapters: fakeAdapters({ executorFactory: () => executor }),
+  });
+
+  await firstTurnStarted;
+  issueEventListener?.([{ ts: "11.0", author: "ryan", text: "queued work" }]);
+  releaseFirstTurn?.();
+  await issueRefreshStarted;
+  controller.abort();
+  await sessionStopped;
+
+  assert.equal(stopCalls, 1);
+  releaseIssueRefresh?.();
+  await assert.rejects(() => attempt, /agent_run_aborted/);
+  assert.equal(stopCalls, 1);
 });
 
 test("a non-settling steering recovery feed is bounded by the agent timeout", async () => {

@@ -172,6 +172,8 @@ class RunController {
     let submittedTurnCount = 0;
     let runError: unknown;
     let stopError: unknown;
+    let stopSession: (() => Promise<void>) | undefined;
+    let removeSessionAbortListener: (() => void) | undefined;
     try {
       const beforeRun = runtime.hooks.beforeRun;
       if (beforeRun) {
@@ -236,6 +238,20 @@ class RunController {
         },
       };
       session = await executor.startSession(startSessionInput);
+      const startedSession = session;
+      let stopPromise: Promise<void> | undefined;
+      stopSession = async () => (stopPromise ??= startedSession.stop());
+      if (input.abortSignal) {
+        const stopOnAbort = (): void => {
+          void stopSession?.().catch((error) => {
+            process.stderr.write(`session.stop failed: ${error}\n`);
+          });
+        };
+        input.abortSignal.addEventListener("abort", stopOnAbort, { once: true });
+        removeSessionAbortListener = () =>
+          input.abortSignal?.removeEventListener("abort", stopOnAbort);
+        throwIfAborted(input.abortSignal);
+      }
 
       if (!session.queueTurn) {
         unsubscribeIssueEvents?.();
@@ -272,10 +288,22 @@ class RunController {
           bufferedIssueEvents.push(...events);
           return;
         }
-        if (!session?.queueTurn || submittedTurnCount >= runtime.agent.maxTurns) return;
+        if (!session?.queueTurn) return;
+        const candidates = [...bufferedIssueEvents, ...events];
+        bufferedIssueEvents = [];
+        let fresh: TrackerIssueEvent[];
         try {
-          const fresh = freshSteeringEvents(events, seenSteeringEventTs);
-          if (fresh.length === 0) return;
+          fresh = freshSteeringEvents(candidates, seenSteeringEventTs);
+        } catch (error) {
+          reportSteeringFailure("queue", error);
+          return;
+        }
+        if (fresh.length === 0) return;
+        if (submittedTurnCount >= runtime.agent.maxTurns) {
+          bufferedIssueEvents = fresh;
+          return;
+        }
+        try {
           const prompt = issueEventsPrompt(fresh);
           const activity = { sawToolCall: false };
           pendingStreamActivities.push(activity);
@@ -294,6 +322,7 @@ class RunController {
           submittedTurnCount += 1;
           for (const event of fresh) seenSteeringEventTs.add(event.ts);
         } catch (error) {
+          bufferedIssueEvents = fresh;
           reportSteeringFailure("queue", error);
         }
       };
@@ -327,7 +356,11 @@ class RunController {
         let turnActivity: TurnActivity;
         if (queuedTurn) {
           turnActivity = queuedTurn.activity;
-          const outcome = await queuedTurnWithAbort(queuedTurn.outcome, session, input.abortSignal);
+          const outcome = await queuedTurnWithAbort(
+            queuedTurn.outcome,
+            stopSession,
+            input.abortSignal,
+          );
           if ("error" in outcome) throw outcome.error;
           turnUpdates = outcome.updates;
           removePendingActivity(pendingStreamActivities, turnActivity);
@@ -354,6 +387,7 @@ class RunController {
               session,
               prompt,
               issue,
+              stopSession,
               input.abortSignal,
             );
             submittedTurnCount += 1;
@@ -395,16 +429,18 @@ class RunController {
           break;
         }
         runtime = refreshed;
+        queueIssueEvents([]);
         await recoverSteering();
         if (completedWithoutTools && queuedTurns.length === 0) break;
       }
     } catch (error) {
       runError = error;
     } finally {
+      removeSessionAbortListener?.();
       unsubscribeIssueEvents?.();
-      if (session) {
+      if (stopSession) {
         try {
-          await session.stop();
+          await stopSession();
         } catch (error) {
           stopError = error;
         }
@@ -473,6 +509,7 @@ async function runTurnWithAbort(
   session: AgentSession,
   prompt: string,
   issue: Issue,
+  stopSession: () => Promise<void>,
   abortSignal: AbortSignal | undefined,
 ): Promise<AgentUpdate[]> {
   if (!abortSignal) return executor.runTurn(session, prompt, issue);
@@ -481,7 +518,7 @@ async function runTurnWithAbort(
   const abortPromise = new Promise<AgentUpdate[]>((_resolve, reject) => {
     onAbort = () => {
       reject(new Error("agent_run_aborted"));
-      void session.stop().catch((err) => {
+      void stopSession().catch((err) => {
         process.stderr.write(`session.stop failed: ${err}\n`);
       });
     };
@@ -496,7 +533,7 @@ async function runTurnWithAbort(
 
 async function queuedTurnWithAbort(
   outcome: Promise<TurnOutcome>,
-  session: AgentSession,
+  stopSession: () => Promise<void>,
   abortSignal: AbortSignal | undefined,
 ): Promise<TurnOutcome> {
   if (!abortSignal) return outcome;
@@ -505,7 +542,7 @@ async function queuedTurnWithAbort(
   const abortPromise = new Promise<TurnOutcome>((_resolve, reject) => {
     onAbort = () => {
       reject(new Error("agent_run_aborted"));
-      void session.stop().catch((err) => {
+      void stopSession().catch((err) => {
         process.stderr.write(`session.stop failed: ${err}\n`);
       });
     };
