@@ -19480,11 +19480,21 @@ var CodexAcpClient = class {
    * Falls back to model defaults if parameters are missing or unsupported.
    */
   createModelId(availableModels, modelId, reasoningEffort) {
-    const selectedModel = availableModels.find((m) => m.id === modelId) ?? availableModels.find((m) => m.isDefault);
-    if (!selectedModel) {
+    const selectedModel = availableModels.find((m) => m.id === modelId);
+    // symphony-patch: model/list only advertises the curated picker catalog. A
+    // thread configured with a model outside it (e.g. via
+    // _meta["symphony/config"]) must keep that model: turn/start echoes this id
+    // back as the turn model, so falling back to the catalog default would
+    // silently override the thread's configured model on every turn.
+    if (!selectedModel && modelId) {
+      const fallbackEffort = reasoningEffort ?? availableModels.find((m) => m.isDefault)?.defaultReasoningEffort ?? "medium";
+      return ModelId.create(modelId, fallbackEffort);
+    }
+    const resolvedModel = selectedModel ?? availableModels.find((m) => m.isDefault);
+    if (!resolvedModel) {
       throw new Error(`Model selection failed: No model found for ID "${modelId}" and no default model is defined.`);
     }
-    return ModelId.create(selectedModel.id, reasoningEffort ?? selectedModel.defaultReasoningEffort);
+    return ModelId.create(resolvedModel.id, reasoningEffort ?? resolvedModel.defaultReasoningEffort);
   }
   async subscribeToSessionEvents(sessionId, eventHandler, approvalHandler, elicitationHandler) {
     this.codexClient.onServerNotification(sessionId, eventHandler);
