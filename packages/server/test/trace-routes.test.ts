@@ -134,6 +134,13 @@ describe("trace routes with IssueStore enrichment", () => {
     expect(data.identifier).toBe("TEST-1");
   });
 
+  it("GET /api/v1/tickets/:id/events returns 404 for an unknown ticket", async () => {
+    const data = (await getJson("/api/v1/tickets/no-such-id/events", 404)) as {
+      error: string;
+    };
+    expect(data).toEqual({ error: "Ticket not found" });
+  });
+
   it.each(["/api/v1/tickets/%E0%A4%A/exists", "/api/v1/tickets/%E0%A4%A/events"])(
     "GET %s returns structured 400 for malformed ticket ids",
     async (path) => {
