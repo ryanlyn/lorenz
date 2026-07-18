@@ -9,6 +9,7 @@ import {
   stripLeadingMention,
 } from "./mapping.js";
 import { slackTrackerOptions } from "./options.js";
+import { STATUS_METADATA_EVENT, WORKPAD_METADATA_EVENT } from "./transport.js";
 import type { SlackMessage, SlackThreadReply, SlackTransport } from "./transport.js";
 
 /**
@@ -116,8 +117,11 @@ export function parseStatusCommand(
 }
 
 /**
- * True when the first line begins with `!aside` after an optional leading bot mention.
- * Asides remain visible in Slack but do not steer the agent or change issue state.
+ * True when the reply is an ASIDE: a first line starting with `!aside` (after an optional
+ * leading bot mention). Asides are for humans talking near the issue without addressing it -
+ * they are never a command, never a bare re-mention (so they cannot re-open a terminal issue),
+ * and never delivered as steering context. They stay visible in the thread and in
+ * `slack_read_thread`'s raw replies; the marker only opts them out of being PUSHED at the agent.
  */
 export function isAsideText(text: string, botUserId: string | undefined): boolean {
   const stripped = stripLeadingMention(text.trim(), botUserId);
@@ -125,11 +129,30 @@ export function isAsideText(text: string, botUserId: string | undefined): boolea
   return /^!aside(?:\s|$)/i.test(firstLine);
 }
 
+/** One folded status transition: who moved the issue where, and when. */
+export interface ThreadStatusEvent {
+  ts: string;
+  state: string;
+  /** The transitioning author's user id (the bot's own id for `status:` replies). */
+  actor?: string | undefined;
+}
+
 /** Derived status of one tracked thread plus, for reply-tracked threads, the request reply. */
 export interface ThreadState {
   state: string;
   /** First bot-mention reply when the ROOT does not mention the bot (the actual request). */
   request?: { ts: string; text: string; user?: string | undefined } | undefined;
+  /** The folded status transitions in ts order (the audit trail the session modal renders). */
+  events: ThreadStatusEvent[];
+  /** The bot's workpad message in this thread, when one exists (see workpad.ts). */
+  workpad?: ThreadWorkpad | undefined;
+}
+
+/** The workpad reply's identity and its metadata-carried sections (the plan/note round-trip). */
+export interface ThreadWorkpad {
+  ts: string;
+  plan?: string | undefined;
+  note?: string | undefined;
 }
 
 /**
@@ -147,21 +170,55 @@ export function stateFromThread(
   const ordered = [...replies].sort((a, b) => tsValue(a.ts) - tsValue(b.ts));
   const rootIsMention = isBotMention(root.text, botUserId);
 
-  const events: Array<{ ts: string; state: string }> = [];
+  const events: ThreadStatusEvent[] = [];
   const bareMentionTs: string[] = [];
   let request: ThreadState["request"];
+  let workpad: ThreadWorkpad | undefined;
 
   for (const reply of ordered) {
+    // FIRST-SEEN text classifies a reply when the mirror recorded one: an edit must not
+    // retroactively rewrite a folded transition (post a new command instead). Tombstoned
+    // (deleted) replies keep their folded role for the same reason - both are the mirror's
+    // in-session guarantee; API-served replies can only ever carry the current text.
+    const classificationText = reply.firstSeenText ?? reply.text;
     if (botUserId !== undefined && reply.user === botUserId) {
+      // Metadata is the machine-readable form of the bot's own writes: only the posting app can
+      // attach it, so a metadata-bearing status reply needs no text parsing (and its text is
+      // free to carry extra lines, e.g. a button-click attribution).
+      const metadata = reply.metadata;
+      if (metadata?.eventType === WORKPAD_METADATA_EVENT) {
+        // The metadata payload round-trips the workpad's editable sections, so a header heal or
+        // a partial tool update can rewrite the message without re-deriving them from blocks.
+        const plan = metadata.payload.plan;
+        const note = metadata.payload.note;
+        workpad = {
+          ts: reply.ts,
+          ...(typeof plan === "string" ? { plan } : {}),
+          ...(typeof note === "string" ? { note } : {}),
+        };
+        continue;
+      }
+      if (metadata?.eventType === STATUS_METADATA_EVENT) {
+        const raw = metadata.payload.state;
+        const state = typeof raw === "string" ? resolveStateName(raw, settings) : null;
+        if (state) {
+          events.push({ ts: reply.ts, state, actor: botUserId });
+          continue;
+        }
+        // An unresolvable metadata state falls through to the text parse rather than being
+        // silently dropped: the reply may still carry a valid `status:` line.
+      }
       const status = BOT_STATUS_RE.exec(reply.text.trim());
       if (status) {
         const state = resolveStateName(status[1]!, settings);
-        if (state) events.push({ ts: reply.ts, state });
+        if (state) events.push({ ts: reply.ts, state, actor: botUserId });
       }
       continue;
     }
-    if (isAsideText(reply.text, botUserId)) continue;
-    if (!isBotMention(reply.text, botUserId)) continue;
+    // Asides opt out of the fold entirely: not a command, and - crucially - not a bare mention,
+    // so `@bot !aside fyi...` on a Done issue does not re-open it.
+    if (isAsideText(classificationText, botUserId)) continue;
+    if (!isBotMention(classificationText, botUserId)) continue;
     if (!rootIsMention && request === undefined) {
       // The first bot-mention reply from an allowed author in a non-mention thread is the request
       // itself, not a transition. A reply from a non-allowed author is skipped so a later allowed
@@ -171,8 +228,8 @@ export function stateFromThread(
       }
       continue;
     }
-    const command = parseStatusCommand(reply.text, botUserId, settings);
-    if (command) events.push({ ts: reply.ts, state: command.state });
+    const command = parseStatusCommand(classificationText, botUserId, settings);
+    if (command) events.push({ ts: reply.ts, state: command.state, actor: reply.user });
     else bareMentionTs.push(reply.ts);
   }
 
@@ -198,7 +255,12 @@ export function stateFromThread(
     state = reopenState(settings);
   }
 
-  return { state, ...(request !== undefined ? { request } : {}) };
+  return {
+    state,
+    events,
+    ...(request !== undefined ? { request } : {}),
+    ...(workpad !== undefined ? { workpad } : {}),
+  };
 }
 
 function tsValue(ts: string): number {

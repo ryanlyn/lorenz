@@ -59,6 +59,10 @@ async function flush(): Promise<void> {
 function makeSocketMode(overrides: {
   channels?: string[];
   onChange: (payload?: Record<string, unknown>) => void;
+  onEvent?: (payload: Record<string, unknown>) => void;
+  onInteractive?: (payload: Record<string, unknown>) => void;
+  onReconnect?: () => void;
+  onConnectionState?: (connected: boolean) => void;
   fetchImpl?: typeof fetch;
   socketQueue: FakeSocket[];
   reconnectDelayMs?: (attempt: number) => number;
@@ -69,6 +73,10 @@ function makeSocketMode(overrides: {
     appToken: "xapp-test",
     channels: overrides.channels ?? ["C1"],
     onChange: overrides.onChange,
+    ...(overrides.onEvent ? { onEvent: overrides.onEvent } : {}),
+    ...(overrides.onInteractive ? { onInteractive: overrides.onInteractive } : {}),
+    ...(overrides.onReconnect ? { onReconnect: overrides.onReconnect } : {}),
+    ...(overrides.onConnectionState ? { onConnectionState: overrides.onConnectionState } : {}),
     fetchImpl: overrides.fetchImpl ?? okOpen(),
     logger: silentLogger,
     ...(overrides.reconnectDelayMs ? { reconnectDelayMs: overrides.reconnectDelayMs } : {}),
@@ -250,5 +258,111 @@ test("a failed apps.connections.open schedules a reconnect rather than throwing"
   });
   assert.ok(attempts >= 2);
   assert.equal(nudges, 1);
+  sm.close();
+});
+
+test("onEvent receives the watched payload before onChange nudges", async () => {
+  const order: string[] = [];
+  const socket = new FakeSocket();
+  const sm = makeSocketMode({
+    onChange: () => order.push("change"),
+    onEvent: (payload) => {
+      const event = payload.event as { ts?: string };
+      order.push(`event:${event.ts ?? "?"}`);
+    },
+    socketQueue: [socket],
+  });
+  sm.start();
+  await flush();
+
+  socket.receive({ type: "hello" });
+  socket.receive({
+    type: "events_api",
+    envelope_id: "env-1",
+    payload: { event: { type: "message", channel: "C1", ts: "9.9" } },
+  });
+
+  // The mirror must apply the payload before the nudged poll reads it.
+  assert.deepEqual(order, ["event:9.9", "change"]);
+  sm.close();
+});
+
+test("interactive envelopes are acked and routed to onInteractive, never onChange", async () => {
+  let nudges = 0;
+  const interactions: Array<Record<string, unknown>> = [];
+  const socket = new FakeSocket();
+  const sm = makeSocketMode({
+    onChange: () => (nudges += 1),
+    onInteractive: (payload) => interactions.push(payload),
+    socketQueue: [socket],
+  });
+  sm.start();
+  await flush();
+
+  socket.receive({ type: "hello" });
+  socket.receive({
+    type: "interactive",
+    envelope_id: "env-i",
+    payload: { type: "block_actions", actions: [{ action_id: "lorenz_cancel", value: "C1:1.1" }] },
+  });
+
+  assert.equal(nudges, 0);
+  assert.equal(interactions.length, 1);
+  assert.equal(interactions[0]!.type, "block_actions");
+  assert.deepEqual(socket.sent, [JSON.stringify({ envelope_id: "env-i" })]);
+  sm.close();
+});
+
+test("a throwing onEvent handler still acks and still nudges", async () => {
+  let nudges = 0;
+  const socket = new FakeSocket();
+  const sm = makeSocketMode({
+    onChange: () => (nudges += 1),
+    onEvent: () => {
+      throw new Error("handler bug");
+    },
+    socketQueue: [socket],
+  });
+  sm.start();
+  await flush();
+
+  socket.receive({ type: "hello" });
+  socket.receive({
+    type: "events_api",
+    envelope_id: "env-2",
+    payload: { event: { type: "message", channel: "C1", ts: "1.2" } },
+  });
+
+  assert.equal(nudges, 1);
+  assert.deepEqual(socket.sent, [JSON.stringify({ envelope_id: "env-2" })]);
+  sm.close();
+});
+
+test("reconnect fires onReconnect (a gap) and onConnectionState tracks both edges", async () => {
+  const first = new FakeSocket();
+  const second = new FakeSocket();
+  let reconnects = 0;
+  const states: boolean[] = [];
+  const sm = makeSocketMode({
+    onChange: () => {},
+    onReconnect: () => (reconnects += 1),
+    onConnectionState: (connected) => states.push(connected),
+    socketQueue: [first, second],
+    reconnectDelayMs: () => 0,
+  });
+  sm.start();
+  await flush();
+
+  first.receive({ type: "hello" });
+  // The FIRST hello is a connect, not a reconnect: there was no gap to repair.
+  assert.equal(reconnects, 0);
+  assert.deepEqual(states, [true]);
+
+  first.close();
+  await vi.waitFor(() => assert.ok(second.hasListener("message")));
+  second.receive({ type: "hello" });
+
+  assert.equal(reconnects, 1);
+  assert.deepEqual(states, [true, false, true]);
   sm.close();
 });

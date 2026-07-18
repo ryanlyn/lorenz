@@ -32,8 +32,15 @@ const defaultWebSocketFactory: SlackWebSocketFactory = (url) => {
 const MAX_RECONNECT_DELAY_MS = 30_000;
 const BASE_RECONNECT_DELAY_MS = 1_000;
 
-const defaultReconnectDelayMs = (attempt: number): number =>
-  Math.min(BASE_RECONNECT_DELAY_MS * 2 ** attempt, MAX_RECONNECT_DELAY_MS);
+/**
+ * Capped exponential backoff with ±15% jitter. The jitter matters when several daemons watch
+ * one workspace (or one daemon watches several accounts): a Slack-side blip disconnects them
+ * all at once, and synchronized retries would then hammer `apps.connections.open` in lockstep.
+ */
+const defaultReconnectDelayMs = (attempt: number): number => {
+  const base = Math.min(BASE_RECONNECT_DELAY_MS * 2 ** attempt, MAX_RECONNECT_DELAY_MS);
+  return Math.round(base * (0.85 + Math.random() * 0.3));
+};
 
 /** Dependencies and knobs for {@link SlackSocketMode}; production callers rely on the defaults. */
 export interface SlackSocketModeOptions {
@@ -43,8 +50,29 @@ export interface SlackSocketModeOptions {
   appToken: string;
   /** Watched channel ids; events outside these are ignored so we never poll on unrelated traffic. */
   channels: string[];
-  /** Invoked with the watched event payload so the tracker can attach structured change data. */
+  /** Invoked with the watched event payload after `onEvent` updates the local mirror. */
   onChange: (payload?: Record<string, unknown>) => void;
+  /**
+   * Invoked with the full Events API payload of every watched-channel event, BEFORE `onChange`.
+   * This is what makes the socket a data feed rather than a doorbell: the channel mirror applies
+   * the payload so the nudged poll that follows reads local state instead of re-scanning Slack.
+   * Must not throw (a throw here must never cost the ack or the nudge).
+   */
+  onEvent?: (payload: Record<string, unknown>) => void;
+  /**
+   * Invoked with every `interactive` envelope payload (block actions, view submissions) - the
+   * workpad's Cancel/Details buttons arrive here, over the same socket, so interactivity needs
+   * no public HTTP endpoint.
+   */
+  onInteractive?: (payload: Record<string, unknown>) => void;
+  /**
+   * Invoked when a connection is (re-)established after a previous one existed. Slack replays
+   * nothing that was missed while disconnected, so the mirror treats every reconnect as a gap
+   * and re-syncs from a real scan.
+   */
+  onReconnect?: () => void;
+  /** Invoked on connect (`true`, on hello) and disconnect (`false`); drives mirror freshness. */
+  onConnectionState?: (connected: boolean) => void;
   fetchImpl?: typeof fetch;
   webSocketFactory?: SlackWebSocketFactory;
   logger?: SlackTrackerLogger;
@@ -71,6 +99,10 @@ export class SlackSocketMode implements TrackerChangeStream {
   private readonly appToken: string;
   private readonly channels: Set<string>;
   private readonly onChange: (payload?: Record<string, unknown>) => void;
+  private readonly onEvent: ((payload: Record<string, unknown>) => void) | undefined;
+  private readonly onInteractive: ((payload: Record<string, unknown>) => void) | undefined;
+  private readonly onReconnect: (() => void) | undefined;
+  private readonly onConnectionState: ((connected: boolean) => void) | undefined;
   private readonly fetchImpl: typeof fetch;
   private readonly webSocketFactory: SlackWebSocketFactory;
   private readonly logger: SlackTrackerLogger;
@@ -80,12 +112,20 @@ export class SlackSocketMode implements TrackerChangeStream {
   private closed = false;
   private reconnectAttempts = 0;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  /** True once any connection has said hello; a later hello is then a RE-connect (a gap). */
+  private hadConnection = false;
+  /** Tracks the live-connection state so close/error only reports a transition once. */
+  private connected = false;
 
   constructor(options: SlackSocketModeOptions) {
     this.endpoint = options.endpoint.replace(/\/+$/, "");
     this.appToken = options.appToken;
     this.channels = new Set(options.channels);
     this.onChange = options.onChange;
+    this.onEvent = options.onEvent;
+    this.onInteractive = options.onInteractive;
+    this.onReconnect = options.onReconnect;
+    this.onConnectionState = options.onConnectionState;
     this.fetchImpl = options.fetchImpl ?? fetch;
     this.webSocketFactory = options.webSocketFactory ?? defaultWebSocketFactory;
     this.logger = options.logger ?? { warn: (message) => console.warn(message) };
@@ -195,6 +235,24 @@ export class SlackSocketMode implements TrackerChangeStream {
     if (frame.type === "hello") {
       // A live connection resets the backoff so the NEXT drop retries promptly.
       this.reconnectAttempts = 0;
+      this.connected = true;
+      // Slack routes each event to exactly ONE of an app's open Socket Mode connections. More
+      // than one connection on this app token means another process is silently consuming a
+      // share of our events - nearly undebuggable without this warning.
+      const connections = numConnectionsOf(frame);
+      if (connections !== null && connections > 1) {
+        this.logger.warn(
+          `slack socket mode: this app has ${connections} open socket connections; events are ` +
+            "split across them, so another process may be consuming this tracker's events",
+        );
+      }
+      if (this.hadConnection) {
+        // Anything delivered while we were between connections is gone (Slack replays nothing),
+        // so a reconnect is a gap by definition - the mirror re-syncs from a real scan.
+        this.safeNotify(this.onReconnect, "onReconnect");
+      }
+      this.hadConnection = true;
+      this.safeNotify(() => this.onConnectionState?.(true), "onConnectionState");
       return;
     }
     if (frame.type === "disconnect") {
@@ -207,8 +265,27 @@ export class SlackSocketMode implements TrackerChangeStream {
       }
       return;
     }
+    if (frame.type === "interactive" && isRecord(frame.payload)) {
+      const payload = frame.payload;
+      this.safeNotify(() => this.onInteractive?.(payload), "onInteractive");
+      return;
+    }
     if (frame.type === "events_api" && this.eventTouchesWatchedChannel(frame.payload)) {
-      this.onChange(frame.payload as Record<string, unknown>);
+      // Deliver the payload BEFORE the nudge so the poll the nudge triggers reads a mirror that
+      // already reflects this event.
+      const payload = frame.payload as Record<string, unknown>;
+      this.safeNotify(() => this.onEvent?.(payload), "onEvent");
+      this.onChange(payload);
+    }
+  }
+
+  /** A consumer callback must never break the socket loop (the ack already went out). */
+  private safeNotify(callback: (() => void) | undefined, label: string): void {
+    if (!callback) return;
+    try {
+      callback();
+    } catch (error) {
+      this.logger.warn(`slack socket mode: ${label} handler failed: ${errorMessage(error)}`);
     }
   }
 
@@ -239,6 +316,10 @@ export class SlackSocketMode implements TrackerChangeStream {
   private onSocketClosed(socket: SlackWebSocketLike): void {
     if (this.socket !== socket) return; // a stale socket (already replaced); ignore.
     this.socket = null;
+    if (this.connected) {
+      this.connected = false;
+      this.safeNotify(() => this.onConnectionState?.(false), "onConnectionState");
+    }
     this.scheduleReconnect("socket closed");
   }
 
@@ -262,4 +343,10 @@ function channelOfEvent(event: Record<string, unknown>): string | null {
   const item = event.item;
   if (isRecord(item) && typeof item.channel === "string") return item.channel;
   return null;
+}
+
+/** `num_connections` reported by the `hello` frame, or null when absent/malformed. */
+function numConnectionsOf(frame: Record<string, unknown>): number | null {
+  const value = frame.num_connections;
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
 }

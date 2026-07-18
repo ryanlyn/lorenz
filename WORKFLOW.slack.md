@@ -9,11 +9,14 @@ trackers:
       # Direct-message channels (D...) are watched the same way - list the DM's channel id here.
       # - D0123456789
     bot_user_id: $SLACK_BOT_USER_ID
-    # Optional: an app-level token (xapp-..., scope connections:write) turns on Slack Socket Mode,
-    # so a new @-mention or thread reply dispatches an agent within ~a second instead of waiting out
-    # the poll interval below. Leave it unset to stay pull-only (interval polling). The bot token
-    # above still does all reads/writes; this token is used ONLY to open the events socket.
+    # Optional: an app-level token (xapp-..., scope connections:write) turns on Slack Socket Mode.
+    # Events feed the in-memory channel mirror, eligible human replies queue immediately into active
+    # agents, and workpad buttons become available. Leave it unset to stay pull-only. The bot token
+    # still performs every read and write; this token is used only to open the events socket.
     app_token: $SLACK_APP_TOKEN
+    # With Socket Mode, how often the event-fed mirror re-syncs from a real history scan.
+    # Bootstrap, reconnects, and events that cannot be applied also force a real scan.
+    # reconcile_interval_ms: 900000
     # Optional author allowlist: when set, only these users' bot-mentions create issues. Leave it
     # out for no author constraint. Recommended when watching a DM channel, since anyone can DM the
     # bot - constraining to known requesters keeps dispatch scoped.
@@ -56,9 +59,8 @@ polling:
   # poll_progress heartbeat so a long first scan is visible rather than silent.
   #
   # With `tracker.app_token` set (Socket Mode), this interval is a SAFETY NET rather than the
-  # dispatch latency: a real mention pushes an event over the socket and the runtime re-polls
-  # immediately, so dispatch is ~instant while the interval stays conservative to bound API load
-  # and recover anything a dropped event missed.
+  # dispatch latency: events update the in-memory mirror and nudge the runtime immediately. Real
+  # history scans become reconciliation rather than the hot poll path.
   interval_ms: 60000
 workspace:
   root: ~/dev/lorenz-workspaces
@@ -155,19 +157,21 @@ Slack issues carry only labels derived from hashtags in the message text: a `#ta
 
 Status transitions are ts-ordered events in the issue's thread; the latest wins:
 
-- You (the agent) set status with `slack_update_status`, which posts the bot's authoritative `status: <Name>` thread reply and then mirrors the state onto the bot's own reaction (`emoji_states`: `:eyes:` -> `In Progress`, `:white_check_mark:` -> `Done`, `:x:` -> `Cancelled`) for glanceability.
-- Humans transition status by mentioning the bot with a `!`-prefixed command reply: `@bot !done`, `@bot !cancel`, `@bot !reopen`, `@bot !in progress`, `@bot !status <Name>`. The bang keeps transitions unmistakable next to ordinary prompts addressed to the bot.
+- You (the agent) set status with `slack_update_status`, which posts the bot's authoritative `status: <Name>` thread reply with machine-readable metadata and then mirrors the state onto the bot's own reaction for glanceability.
+- Humans transition status by mentioning the bot with a `!`-prefixed command reply: `@bot !done`, `@bot !cancel`, `@bot !reopen`, `@bot !in progress`, `@bot !status <Name>`. The workpad Cancel button is the one-click form of `@bot !cancel`.
 - Ordinary human thread replies steer an active agent. With Socket Mode they are submitted immediately as the next queued ACP turn; without Socket Mode they are recovered between turns. Prefix a reply with `!aside`, optionally after the bot mention, to keep it as thread context without steering the agent or changing status.
 - A human mention with **no** recognized command re-opens a terminal issue to the first active state: re-mentioning the bot always means "this needs attention again".
+- Status commands are first-seen within a daemon session. Editing an old command does not rewrite status; post a new command instead.
 - Reactions are per-author in Slack (the bot cannot remove a human's reaction and vice versa), so reactions are never the source of truth once a status event exists; do not reason about status from reactions.
 
 ## Available tools
 
-You have six Slack tools:
+You have seven Slack tools:
 
 - `slack_update_status` - set the issue's status by posting the bot's `status:` thread reply (and mirroring the bot's reaction). Args: `issueId` (`<channel>:<ts>`), `status` (a configured active/terminal state name, e.g. `In Progress`, `Done`, `Cancelled`). Example: set `In Progress` when you pick it up, `Done` when complete.
-- `slack_comment` - post a threaded reply on the source message. Args: `issueId` (`<channel>:<ts>`), `body`. Use it to post human-visible progress notes. These replies stay human-visible in the thread and are readable later: `slack_read_thread` returns them, so you can recover plan/validation state across turns.
-- `slack_read_thread` - read the issue's authoritative state. Args: `issueId` (`<channel>:<ts>`). Returns the thread-derived status, the source message, the request reply (for thread-tracked issues), reactions, the message permalink, and all thread replies. Use it to recover your prior progress notes, catch new human replies and commands, and confirm the latest status.
+- `slack_comment` - post a threaded reply on the source message. Args: `issueId` (`<channel>:<ts>`), `body`. Use it for milestones that should notify the thread.
+- `slack_workpad` - create or update one bot message carrying the live plan checklist, latest note, and Cancel/Details buttons. Args: `issueId`, `plan?`, `note?`. Omitted sections keep their current value.
+- `slack_read_thread` - read the issue's authoritative state. Args: `issueId` (`<channel>:<ts>`). Returns the folded status and audit trail, source message, request, workpad, reactions, permalink, and replies.
 - `slack_query` - read-only query over the tracked issues in the watched channels (bot-mention roots and bot-marked threads), with thread-derived state. Args: `channels?`, `where?`, `select?`, `expand?` (`thread`, `reactions`), `order_by?`, `limit?`, `offset?`. Use it to survey related issues; it never mutates anything.
 - `slack_user_info` - resolve a `U...` user id (from a `<@U...>` mention or a reply's `user` field) to its profile (name, real name, display name, bot flag). Args: `userId`.
 - `slack_channel_context` - read the channel conversation around the issue's source message (read-only, ascending). Args: `issueId`, `before?` (default 10, max 50), `after?` (default 10, max 50). Use it when the request references surrounding discussion ("see the message above").
@@ -178,7 +182,7 @@ There is **no `linear_graphql`** tool and no Linear MCP server. Do not attempt t
 
 - Start with `slack_read_thread(issueId)`: it returns the authoritative thread-derived status, the request, and every reply, including human commands posted since dispatch.
 - Re-check the thread at milestones and ALWAYS before finishing a turn: humans reply mid-run ("stop", "wrong repo", scope changes, `@bot !cancel`), and the thread is the only channel they have to reach you. Honor a `Cancelled`/`Done` transition immediately.
-- Post human-visible progress as threaded replies with `slack_comment`. They stay human-visible in the thread and are also readable via `slack_read_thread`, so they double as your continuation notes alongside the restored workspace and the issue's current status.
+- Keep the living checklist in `slack_workpad`, edited in place. Use `slack_comment` for milestones worth notifying to the thread.
 - Spend extra effort up front on planning and verification design before implementation.
 - Reproduce first: confirm the current behavior/issue signal before changing code.
 - Move status only when the matching quality bar is met (use `slack_update_status`).
@@ -219,19 +223,19 @@ There is **no `linear_graphql`** tool and no Linear MCP server. Do not attempt t
 
 ## Step 1: Start / continue execution
 
-1. Post a `slack_comment` threaded reply with a hierarchical plan and acceptance criteria in checklist form, plus follow-up replies on each milestone, as a human-visible progress log. This thread is readable via `slack_read_thread`, so it serves as continuation notes; still keep your durable state reflected in the git workspace (commits/PR) and the issue status.
+1. Create or update the workpad with `slack_workpad`: keep the hierarchical plan, acceptance criteria, and validation checklist in one message edited in place. Post genuinely notifying milestones with `slack_comment`.
 2. If arriving from `Todo`, ensure the `:eyes:` (`In Progress`) reaction is set (you set it in Step 0).
-3. Include a compact environment stamp in the first workpad reply: `<host>:<abs-workdir>@<short-sha>`.
+3. Include a compact environment stamp in the workpad note: `<host>:<abs-workdir>@<short-sha>`.
 4. Capture a concrete reproduction signal and record it in a threaded reply before implementing.
 5. Run the `lorenz-pull` skill to sync with latest `origin/main` before code edits, and record the result via `slack_comment`.
 
 ## Step 2: Implement and validate
 
-1. Implement against the plan, posting milestone updates as threaded replies via `slack_comment`.
+1. Implement against the plan, updating `slack_workpad` as items complete and posting milestone updates via `slack_comment`.
 2. Run validation/tests/proof-of-work for the scope. Prefer a targeted proof that demonstrates the behavior you changed.
 3. Re-check all acceptance criteria and close any gaps.
 4. Before every `git commit`, run the `simplify` skill, then the `lorenz-commit` skill to commit and `lorenz-push` to push and open/update the PR.
-5. Post the final checklist status and validation notes as a threaded reply.
+5. Update the workpad with the final checklist status and validation note.
 
 ## Step 3: Complete
 
@@ -241,7 +245,7 @@ There is **no `linear_graphql`** tool and no Linear MCP server. Do not attempt t
 
 ## Completion bar before Done
 
-- Plan/acceptance/validation checklist is complete and reflected in the thread.
+- Plan/acceptance/validation checklist is complete in the workpad.
 - Validation/tests are green for the latest commit.
 - PR is pushed, linked in a threaded reply, and checks are green.
 
@@ -252,36 +256,25 @@ There is **no `linear_graphql`** tool and no Linear MCP server. Do not attempt t
 - Status changes happen exclusively through `slack_update_status` (it posts the bot's `status:` thread reply); never post `status:`-prefixed comments by hand and never reason about status from reactions.
 - If the branch PR is already closed/merged, create a new branch from `origin/main` and restart from reproduction/planning.
 - Do not reopen terminal (`Done`/`Cancelled`) issues on your own initiative; humans reopen by re-mentioning the bot or with `@bot !reopen`.
-- Use threaded replies (`slack_comment`) as a human-visible progress log; they stay visible in the thread and are readable via `slack_read_thread`, so they can back your continuation state alongside the git workspace and issue status.
+- Keep checklist churn in `slack_workpad`; reserve `slack_comment` for milestones worth a notification.
+- Never write `<!channel>`, `<!here>`, or user-group broadcast tokens. The tracker strips them from outbound messages regardless.
 - If blocked by missing required tools/auth, post one threaded reply via `slack_comment` describing the blocker, its impact, and the next unblock action.
 
-## Progress-note template
+## Workpad template
 
-Use this structure for the first `slack_comment` progress reply and keep follow-ups consistent. These replies are human-visible notes and are readable back via `slack_read_thread`:
+Use this structure for the `slack_workpad` `plan` argument. Put the environment stamp and latest
+one-line update in `note`.
 
 ````md
-## Lorenz Workpad
-
-```text
-<hostname>:<abs-path>@<short-sha>
-```
-
-### Plan
-
-- [ ] 1\. Parent task
+*Plan*
+- [ ] 1. Parent task
   - [ ] 1.1 Child task
-- [ ] 2\. Parent task
-
-### Acceptance Criteria
-
+- [ ] 2. Parent task
+*Acceptance criteria*
 - [ ] Criterion 1
 - [ ] Criterion 2
-
-### Validation
-
+*Validation*
 - [ ] targeted tests: `<command>`
-
-### Notes
-
-- <short progress note with timestamp>
 ````
+
+`note` example: `<hostname>:<abs-path>@<short-sha> - running targeted tests`

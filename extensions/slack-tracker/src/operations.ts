@@ -3,8 +3,9 @@ import type { Settings } from "@lorenz/domain";
 import { emojiForState, isAllowedAuthor, isBotMention, statusEmojiMap } from "./mapping.js";
 import { slackTrackerOptions } from "./options.js";
 import { BOT_STATUS_PREFIX, resolveStateName } from "./threadState.js";
-import { isBotMarked } from "./transport.js";
+import { isBotMarked, STATUS_METADATA_EVENT } from "./transport.js";
 import type { SlackMessage, SlackTransport } from "./transport.js";
+import { makeMetadataSeq } from "./webTransport.js";
 
 /**
  * The configured bot user id, or a clear configuration error. Every agent-facing read and
@@ -85,6 +86,7 @@ export async function updateSlackStatus(
   channel: string,
   ts: string,
   status: string,
+  options: { attribution?: string } = {},
 ): Promise<SlackStatusUpdateOutcome> {
   const canonical = resolveStateName(status, settings);
   if (canonical === null) {
@@ -98,7 +100,21 @@ export async function updateSlackStatus(
   // Trust-boundary check: the agent-supplied issueId must point at a watched channel and a
   // tracked message before we write into its thread.
   const root = await requireTrackedMessage(settings, transport, channel, ts);
-  await transport.postReply(channel, ts, `${BOT_STATUS_PREFIX} ${canonical}`);
+  // The reply text stays human-readable (`status: <Name>`, plus an optional attribution line for
+  // e.g. button-initiated transitions), while the metadata is the machine-readable event the
+  // fold prefers: only the posting app can attach metadata, so it cannot be forged, and the
+  // unique `seq` upgrades delivery to exactly-once (an ambiguous outcome reconciles against the
+  // thread instead of silently losing - or duplicating - a transition).
+  const body =
+    options.attribution === undefined
+      ? `${BOT_STATUS_PREFIX} ${canonical}`
+      : `${BOT_STATUS_PREFIX} ${canonical}\n${options.attribution}`;
+  await transport.postReply(channel, ts, body, {
+    metadata: {
+      eventType: STATUS_METADATA_EVENT,
+      payload: { issue: `${channel}:${ts}`, state: canonical, seq: makeMetadataSeq() },
+    },
+  });
   await mirrorStatusReaction(settings, transport, channel, ts, canonical, root.botReactions);
   return { ok: true, status: canonical, root };
 }

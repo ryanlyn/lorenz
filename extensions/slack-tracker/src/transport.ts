@@ -32,11 +32,42 @@ export function isBotMarked(message: SlackMessage): boolean {
   return message.botReactions.length > 0;
 }
 
+/**
+ * Slack message metadata (`metadata.event_type` / `metadata.event_payload`) on a bot post.
+ * Metadata can only be attached by the app that posted the message, so a metadata-bearing reply
+ * whose author is the bot is machine-readable state that neither a human nor another app can
+ * forge - the fold prefers it over parsing the reply text.
+ */
+export interface SlackMessageMetadata {
+  eventType: string;
+  payload: Record<string, unknown>;
+}
+
+/** `event_type` of the bot's authoritative status replies (see operations.ts). */
+export const STATUS_METADATA_EVENT = "lorenz_status";
+/** `event_type` of the bot's per-issue workpad message (see workpad.ts). */
+export const WORKPAD_METADATA_EVENT = "lorenz_workpad";
+
 /** A single reply in a Slack thread, excluding the parent (root) message. */
 export interface SlackThreadReply {
   ts: string;
   text: string;
   user?: string;
+  /** Message metadata when present (bot posts carry machine-readable state here). */
+  metadata?: SlackMessageMetadata | undefined;
+  /**
+   * Set by the channel mirror: the text this reply had when FIRST observed. Human `!` command
+   * classification uses this (first-seen wins), so a later edit cannot retroactively rewrite a
+   * folded transition. Absent on API-served replies (Slack cannot return pre-edit text).
+   */
+  firstSeenText?: string | undefined;
+  /**
+   * Set by the channel mirror: the reply was deleted after being observed. Tombstoned replies
+   * keep their folded role for the daemon session (a deleted `!done` does not silently re-open
+   * the issue) and are dropped at the next reconciliation, where the substrate has forgotten
+   * them. Also excluded from steering context.
+   */
+  deleted?: boolean | undefined;
 }
 
 /** A workspace member, as resolved via `users.info`. */
@@ -85,5 +116,43 @@ export interface SlackTransport {
   ): Promise<SlackMessage[]>;
   addReaction(channel: string, ts: string, name: string): Promise<void>;
   removeReaction(channel: string, ts: string, name: string): Promise<void>;
-  postReply(channel: string, threadTs: string, body: string): Promise<void>;
+  /**
+   * Post a thread reply and return its ts. `options.metadata` attaches machine-readable message
+   * metadata AND upgrades the delivery contract: a metadata-bearing post that fails ambiguously
+   * (5xx/network after the request was sent) is reconciled against the thread by its unique
+   * metadata marker instead of being reported failed - exactly-once, where a bare post can only
+   * promise at-most-once. `options.blocks` attaches Block Kit blocks with `body` as fallback.
+   * Every body is broadcast-sanitized (see sanitize.ts).
+   */
+  postReply(
+    channel: string,
+    threadTs: string,
+    body: string,
+    options?: SlackPostOptions,
+  ): Promise<string>;
+  /**
+   * Edit a previously posted bot message in place (`chat.update`). Used only for display
+   * mirrors (the workpad); never for fold events, which are append-only.
+   */
+  updateMessage(
+    channel: string,
+    ts: string,
+    body: string,
+    options?: SlackPostOptions,
+  ): Promise<void>;
+  /** Post an ephemeral message visible only to `user`, threaded under `threadTs`. */
+  postEphemeral(channel: string, user: string, threadTs: string, body: string): Promise<void>;
+  /**
+   * Open a modal for the interaction identified by `triggerId` and return its view id when Slack
+   * supplies one. Trigger ids are valid for only a few seconds.
+   */
+  openView(triggerId: string, view: Record<string, unknown>): Promise<string | null>;
+  /** Replace the contents of an already-open modal. */
+  updateView(viewId: string, view: Record<string, unknown>): Promise<void>;
+}
+
+/** Optional attachments for a bot write (see {@link SlackTransport.postReply}). */
+export interface SlackPostOptions {
+  metadata?: SlackMessageMetadata | undefined;
+  blocks?: unknown[] | undefined;
 }

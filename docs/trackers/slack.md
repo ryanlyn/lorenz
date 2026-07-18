@@ -2,10 +2,11 @@
 
 Use Slack channels as the source of work. An `@`-mention of your bot becomes an issue, the
 mention's thread carries the status, and Lorenz reads the watched channels over the Slack Web API.
-Optional Socket Mode push can wake the poll loop immediately after relevant Slack events and send a
-human thread reply directly to the active agent as its next queued turn. The Web API poll remains
-the source of truth for discovery and status. This page is for operators: it covers the Slack app
-setup, the required config, the status model, and the `slack_*` agent tools. The provider lives in
+With Socket Mode enabled, event payloads feed a local channel mirror so most polls read memory, and
+eligible human thread replies are submitted immediately as the active agent's next queued turn.
+Without Socket Mode the tracker is pull-only and every poll is a real scan. This page is for
+operators: it covers the Slack app setup, the required config, the status model, the
+workpad/session-modal surfaces, and the `slack_*` agent tools. The provider lives in
 `extensions/slack-tracker`.
 
 ## The model in one screen
@@ -41,12 +42,20 @@ the transport calls; they are not declared in the extension source.
 | `users:read`        | Resolve a `U...` id to a profile for `slack_user_info` (`users.info`).                          |
 
 Socket Mode is optional. Without an app token, discovery is pure polling of
-`conversations.history`. With an app-level token, Lorenz opens a Socket Mode connection and treats
-watched `app_mention`, `message`, and reaction events as a prompt to re-poll immediately. Candidate
-discovery, status, routing, and reconciliation are still re-derived from the Web API. A new human
-thread reply is also attached to that push as a structured issue event and submitted immediately to
-the active ACP session as its next queued user turn. `conversations.replies` recovers missed replies
-after a reconnect or turn boundary, and the interval poll remains the safety net for missed events.
+`conversations.history`. With an app-level token, Lorenz opens a Socket Mode connection and the
+socket becomes a data feed, not just a doorbell: every watched `app_mention`, `message`, and
+reaction event payload is applied to an in-memory **channel mirror**, the poll the event nudges
+reads that mirror instead of re-scanning Slack, and the real history scan runs only as
+reconciliation - at startup, after every reconnect (Slack replays nothing missed while
+disconnected), whenever an event cannot be applied cleanly, and on the `reconcile_interval_ms`
+cadence as a standing repair pass. The fold over thread events is idempotent, so a duplicated or
+re-scanned input re-derives the same state; while the socket is unhealthy the mirror never serves
+and every poll is a real scan, exactly the pull-only behavior. `interactive` envelopes (the
+workpad's Cancel/Details buttons) arrive over the same connection, so interactivity needs no
+public HTTP endpoint - enable **Interactivity** in the Slack app config to use the buttons.
+Eligible human thread replies also travel with the event as structured issue data and are
+submitted immediately to the active ACP session. Thread reads recover any reply missed during a
+reconnect.
 
 To receive Socket Mode wakeups, enable Event Subscriptions in the Slack app and subscribe to the bot
 events Lorenz watches: `app_mention`, `message.channels` for public channels, `message.groups` for
@@ -92,6 +101,7 @@ trackers:
 | `marker_emoji`        |                     | `robot_face`                                                  | The reaction the bot adds to mark a tracked thread root.                                                                              |
 | `reply_lookback_days` |                     | `2`                                                           | How far back to discover new reply-mention threads.                                                                                   |
 | `scan_lookback_days`  |                     | Unbounded                                                     | How far back the candidate `conversations.history` scan pages. The shipped sample sets `30`; set `0` or omit for a full-history scan. |
+| `reconcile_interval_ms` |                   | `900000` (15 min)                                             | With Socket Mode: how often the event-fed channel mirror re-syncs from a real scan. Ignored without `app_token` (pull-only scans every poll). |
 
 See [reference/configuration.md](../reference/configuration.md) for the full `tracker.*` key reference and the active/terminal state defaults.
 
@@ -145,10 +155,30 @@ Status is a fold over ts-ordered events in the issue's thread. The latest event 
 
 Two event kinds count:
 
-- **Bot `status:` replies.** A reply matching `^status:\s*(.+)$` (case-insensitive), posted by the
-  bot. `slack_update_status` writes these, with the `status:` prefix from `BOT_STATUS_PREFIX`.
+- **Bot `status:` replies.** `slack_update_status` writes these. Each carries Slack **message
+  metadata** (`lorenz_status` with the canonical state and a unique `seq`), which the fold
+  prefers over text parsing: only the posting app can attach metadata, so it cannot be forged,
+  and the text is free to carry extra lines (for example a Cancel-button attribution). Replies
+  that predate metadata still fold through the `^status:\s*(.+)$` regex (case-insensitive).
+  The `seq` also upgrades delivery to exactly-once: an ambiguous outcome (5xx/timeout after the
+  request was sent) is reconciled against the thread by its marker instead of silently losing -
+  or duplicating - a transition.
 - **Human `!`-command mentions.** A reply that starts with the bot mention followed by a
   `!`-prefixed body.
+
+Two escape hatches around the events:
+
+- **Asides.** A reply whose first line starts with `!aside` (after an optional leading bot
+  mention) opts out of the fold entirely: it is never a command, never a bare re-mention (so it
+  cannot re-open a terminal issue), and is never delivered to the agent as steering context. Use
+  it to talk near the issue without addressing it.
+- **Edits and deletions.** Command classification is **first-seen** for the daemon session: an
+  edit to an already-folded `!` command is ignored (a one-time thread notice says so) - post a
+  new command instead. A deleted command keeps its folded role until the next reconciliation
+  scan, where the substrate has forgotten it and the fold re-derives. Across a restart the
+  rebuild scan can only fold current text (Slack's API cannot return pre-edit text) - the
+  first-seen guarantee is in-session, stated plainly rather than pretended durable. Root edits
+  track current text: editing the mention away untracks the issue, as before.
 
 If the thread has no status event, state falls back to the BOT's own reactions when the root is a
 mention, otherwise `Todo`. Human reactions never count toward state.
@@ -170,11 +200,6 @@ bare mention, not a command. The keyword map:
 A bare bot-mention reply with no recognized command reopens a terminal issue to the first configured
 active state. Reaction-only state is treated as having ts of negative infinity, so any later bare
 mention reopens it. Re-mentioning the bot always means "this needs attention again".
-
-Prefix a reply with `!aside`, optionally after the bot mention, to keep it visible in the Slack
-thread without steering the active agent or changing issue state. For example,
-`@bot !aside deployment logs are archived elsewhere` is context for humans and future thread reads,
-not a queued agent turn.
 
 ### Reactions as a mirror
 
@@ -240,37 +265,78 @@ remaining logs a loud truncation warning.
 Channels are scanned concurrently; one failed channel is skipped and logged, and only an
 all-channels failure rejects the poll with `poll_error`.
 
-With Socket Mode enabled, push is a latency trigger rather than a separate candidate source. A
-watched Slack event queues the same full poll path the interval uses, so reconciliation, retry
-timers, terminal cleanup, blocked-dispatch snapshots, and candidate counts stay consistent. The
-interval still runs to recover any dropped event or reconnect gap.
-
-### Steering a running agent
-
-A new human thread reply is submitted to the active ACP session immediately when Socket Mode
-delivers it. ACP queues the prompt behind any turn already executing, so that reply itself is the
-next turn. The runner consumes the queued result as the next turn slot and does not append the reply
-to a separate continuation prompt.
-
-Bot-authored replies, status commands, `!aside` replies, message edits, system messages, and channel
-roots do not steer the agent. A thread read recovers eligible human replies after a reconnect or
-turn boundary using the latest submitted Slack timestamp as a watermark. Without Socket Mode,
-eligible replies are recovered between turns rather than pushed during an executing turn.
+With Socket Mode enabled, push feeds the channel mirror and the poll path stays identical - it
+just reads memory. A watched Slack event is applied to the mirror and then queues the same full
+poll path the interval uses, so reconciliation, retry timers, terminal cleanup, blocked-dispatch
+snapshots, and candidate counts stay consistent. Real scans then happen only at bootstrap, after
+reconnects, on dirty channels, and on the `reconcile_interval_ms` cadence - the interval poll
+keeps running as the safety net, it is just cheap. This is also what keeps the tracker viable
+under Slack's restricted non-Marketplace rate tier (~1 `conversations.history` request/minute):
+the hot path stops depending on history reads entirely.
 
 Reads retry on 429 and 5xx. Each retry wait is logged so a rate-limited scan is visible in daemon
-logs instead of looking hung. `chat.postMessage` retries only on 429, never on an ambiguous 5xx,
-since it is non-idempotent. Reaction writes are idempotent: Slack's `already_reacted` and
-`no_reaction` errors are treated as success. Backoff is exponential, honors `Retry-After`, and is
-capped, with a 30-second request timeout.
+logs instead of looking hung. `chat.postMessage` retries only on 429, never blindly on an
+ambiguous 5xx, since it is non-idempotent - but metadata-marked posts (`status:` replies, the
+workpad) resolve ambiguity by scanning the thread for their unique marker: found means the send
+landed (no duplicate), and a successful read with no marker proves a retry is safe. A failed
+reconciliation read fails loudly without retrying the post. Reaction writes are idempotent:
+Slack's `already_reacted` and `no_reaction` errors are treated as success. Backoff is
+exponential with jitter, honors `Retry-After`, and is capped, with a 30-second request timeout.
+
+## The workpad and the session modal
+
+At the first `slack_workpad` call, the bot posts ONE Block Kit message in the issue thread and
+edits it in place from then on - the live plan checklist and latest note, without the notification
+spam of posting each revision as a new reply (edits do not notify; genuinely notifying milestones
+still belong in `slack_comment` replies). The workpad is recognized by its `lorenz_workpad`
+message metadata, which also round-trips the plan/note so partial updates and restarts never lose
+a section. Like the reactions, it is a display mirror, never state: the daemon heals its status
+header on the same per-state-change cadence as the reaction mirror, and a workpad that cannot be
+edited (deleted, edit window closed) is simply reposted.
+
+The workpad carries two buttons, delivered as `interactive` Socket Mode envelopes:
+
+- **Cancel** posts the authoritative `status: Cancelled` reply with an attribution line naming
+  the clicker, then nudges a poll so the runtime's reconciliation aborts the running agent within
+  seconds. It is a shortcut for typing `@bot !cancel`, not a new privilege: any human can use it,
+  matching the `!`-command model (the author allowlist gates issue creation, not transitions).
+- **Details** opens a per-user modal - the in-Slack session view: current status, the folded
+  status history (who moved the issue where, when), the request, the live plan/note, and artifact
+  links harvested from the bot's replies, with a Refresh button. It consumes Slack's short-lived
+  trigger immediately with a loading modal, then updates that view after authoritative reads.
+  Nothing is posted to the thread and no external link is involved.
+
+When a human posts a bare (command-less) bot-mention reply on an issue that is already past its
+initial active state, the bot answers with an **ephemeral** notice - visible only to that author -
+saying the agent is already working, that replies become its next queued turn, and how to stop it.
+Rate-limited per issue+author; a politeness surface, never a lock.
+
+## Steering a running agent
+
+With Socket Mode, an eligible human thread reply is submitted to the active ACP session
+immediately. ACP queues it behind a turn already executing, so the reply itself becomes the next
+turn; the runner consumes that queued result instead of sending a separate continuation prompt.
+Thread reads recover replies newer than the latest submitted watermark after a reconnect or turn
+boundary. Without Socket Mode, eligible replies are recovered between turns rather than pushed
+during an executing turn.
+
+Excluded: the bot's own replies, `!` commands (they act through the status fold), asides, message
+edits, system/root messages, and deleted replies. The shipped workflow still mandates re-reading
+the thread at milestones and before finishing so status and visible context are verified together.
+
+Every outbound bot message is broadcast-sanitized: `<!channel>`, `<!here>`, `<!everyone>`, and
+`<!subteam^...>` tokens are rewritten to inert plain text (`@channel`, ...) unconditionally. An
+agent cannot page a channel; there is no knob to get wrong.
 
 ## The `slack_*` tools
 
 The `slack` tool pack mounts automatically for the Slack tracker (its `defaultToolPacks` returns
 `["slack"]`), and it is the only pack the Slack tracker mounts. Its Slack-native tools expose the
 thread model directly: `slack_update_status` and `slack_comment` write the bot's reply,
-`slack_read_thread` returns the authoritative thread-derived state, `slack_query` runs the read-only
-`where` DSL, and `slack_user_info` / `slack_channel_context` resolve people and surrounding
-conversation.
+`slack_workpad` creates/edits the single in-place plan message, `slack_read_thread` returns the
+authoritative thread-derived state plus the folded `statusEvents` audit trail, `slack_query` runs
+the read-only `where` DSL, and `slack_user_info` / `slack_channel_context` resolve people and
+surrounding conversation.
 
 Every tool enforces the same trust boundary: a configured `bot_user_id`, a watched channel, and a
 tracked message. `slack_query` rejects `jql` (use the `where` DSL) and always intersects requested

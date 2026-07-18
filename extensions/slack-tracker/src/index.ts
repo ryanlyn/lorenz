@@ -1,13 +1,20 @@
 export type {
   SlackChannelScan,
   SlackMessage,
+  SlackMessageMetadata,
+  SlackPostOptions,
   SlackThreadReply,
   SlackTransport,
   SlackUser,
 } from "./transport.js";
+export { STATUS_METADATA_EVENT, WORKPAD_METADATA_EVENT } from "./transport.js";
 export { InMemorySlackTransport } from "./inMemoryTransport.js";
-export { SlackWebTransport } from "./webTransport.js";
+export { makeMetadataSeq, SlackWebTransport } from "./webTransport.js";
 export type { SlackTrackerLogger } from "./webTransport.js";
+export { stripBroadcastMentions } from "./sanitize.js";
+export { MirrorBackedSlackTransport } from "./mirror.js";
+export { handleSlackInteraction } from "./interactions.js";
+export { renderWorkpadBlocks, upsertWorkpad } from "./workpad.js";
 export { SlackTrackerClient } from "./client.js";
 export { SlackSocketMode } from "./socketMode.js";
 export type {
@@ -33,7 +40,7 @@ export {
   resolveStateName,
   stateFromThread,
 } from "./threadState.js";
-export type { ThreadState } from "./threadState.js";
+export type { ThreadState, ThreadStatusEvent, ThreadWorkpad } from "./threadState.js";
 export { slackTrackerProvider } from "./provider.js";
 export { registerSlackTracker } from "./register.js";
 export { executeSlackTool, slackToolSpecs } from "./tools.js";

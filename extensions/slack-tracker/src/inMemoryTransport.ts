@@ -1,7 +1,9 @@
 import { isAllowedAuthor, isBotMention } from "./mapping.js";
+import { stripBroadcastMentions } from "./sanitize.js";
 import type {
   SlackChannelScan,
   SlackMessage,
+  SlackPostOptions,
   SlackThreadReply,
   SlackTransport,
   SlackUser,
@@ -33,6 +35,10 @@ interface InMemoryOptions {
 
 export class InMemorySlackTransport implements SlackTransport {
   readonly replies: Array<{ channel: string; threadTs: string; body: string }> = [];
+  readonly ephemerals: Array<{ channel: string; user: string; threadTs: string; body: string }> =
+    [];
+  readonly openedViews: Array<{ triggerId: string; view: Record<string, unknown> }> = [];
+  readonly updatedViews: Array<{ viewId: string; view: Record<string, unknown> }> = [];
   private readonly messages: Map<string, StoredMessage[]> = new Map();
   private readonly botUserId: string | undefined;
   private readonly allowedUsers: string[];
@@ -123,19 +129,69 @@ export class InMemorySlackTransport implements SlackTransport {
     return Promise.resolve();
   }
 
-  async postReply(channel: string, threadTs: string, body: string): Promise<void> {
-    this.replies.push({ channel, threadTs, body });
+  async postReply(
+    channel: string,
+    threadTs: string,
+    body: string,
+    options: SlackPostOptions = {},
+  ): Promise<string> {
+    const text = stripBroadcastMentions(body);
+    this.replies.push({ channel, threadTs, body: text });
     // Append the reply to the parent message's thread so a posted reply can be read back via
     // getThread in tests. The reply is authored by the bot, with a ts after the parent's.
     const parent = (this.messages.get(channel) ?? []).find((m) => m.ts === threadTs);
+    const ts = parent
+      ? `${Number.parseFloat(threadTs) + parent.thread.length + 1}.000000`
+      : `${Number.parseFloat(threadTs) + 1}.000000`;
     if (parent) {
-      const reply: SlackThreadReply = {
-        ts: `${Number.parseFloat(threadTs) + parent.thread.length + 1}.000000`,
-        text: body,
-      };
+      const reply: SlackThreadReply = { ts, text };
       if (this.botUserId !== undefined) reply.user = this.botUserId;
+      if (options.metadata !== undefined) reply.metadata = options.metadata;
       parent.thread.push(reply);
     }
+    return Promise.resolve(ts);
+  }
+
+  async updateMessage(
+    channel: string,
+    ts: string,
+    body: string,
+    options: SlackPostOptions = {},
+  ): Promise<void> {
+    // Edits apply wherever the message lives: a root, or a reply in any thread.
+    const text = stripBroadcastMentions(body);
+    for (const m of this.messages.get(channel) ?? []) {
+      if (m.ts === ts) {
+        m.text = text;
+        return Promise.resolve();
+      }
+      const reply = m.thread.find((r) => r.ts === ts);
+      if (reply) {
+        reply.text = text;
+        if (options.metadata !== undefined) reply.metadata = options.metadata;
+        return Promise.resolve();
+      }
+    }
+    return Promise.reject(new Error("slack chat.update failed: message_not_found"));
+  }
+
+  async postEphemeral(
+    channel: string,
+    user: string,
+    threadTs: string,
+    body: string,
+  ): Promise<void> {
+    this.ephemerals.push({ channel, user, threadTs, body: stripBroadcastMentions(body) });
+    return Promise.resolve();
+  }
+
+  async openView(triggerId: string, view: Record<string, unknown>): Promise<string> {
+    this.openedViews.push({ triggerId, view });
+    return Promise.resolve(`V_OPEN_${this.openedViews.length}`);
+  }
+
+  async updateView(viewId: string, view: Record<string, unknown>): Promise<void> {
+    this.updatedViews.push({ viewId, view });
     return Promise.resolve();
   }
 

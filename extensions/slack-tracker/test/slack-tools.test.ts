@@ -18,6 +18,7 @@ test("slack toolSpecs lists the status, comment, read, query, and context tools"
     [
       "slack_update_status",
       "slack_comment",
+      "slack_workpad",
       "slack_read_thread",
       "slack_query",
       "slack_user_info",
@@ -156,6 +157,9 @@ test("slack_read_thread returns text, derived status, reactions, and the thread 
   assert.deepEqual(result.result, {
     issueId: "C1:1.1",
     status: "In Progress",
+    // Reaction-derived state: no `status:`/command events in the thread, so the audit trail is
+    // empty and the state falls back to the bot's own reaction reading.
+    statusEvents: [],
     text: "<@U1> do the thing",
     reactions: ["eyes"],
     permalink: "https://example.slack.com/archives/C1/p11",

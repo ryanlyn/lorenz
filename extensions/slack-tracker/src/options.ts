@@ -57,6 +57,14 @@ export interface SlackTrackerOptions {
    * Set it generously on channels with long-lived issues or revived old threads.
    */
   scanLookbackDays?: number | undefined;
+  /**
+   * How often (ms) the event-fed channel mirror re-syncs from a REAL `conversations.history`
+   * scan while the Socket Mode feed is healthy (default 15 minutes). The mirror serves polls
+   * from memory between re-syncs; this is the standing repair pass that catches anything the
+   * event feed missed. Only meaningful with `app_token` set - without a socket the tracker is
+   * pull-only and every poll is a real scan, exactly as before the mirror existed.
+   */
+  reconcileIntervalMs?: number | undefined;
 }
 
 /** Typed view over `settings.tracker.options` for the Slack provider. */
@@ -68,6 +76,7 @@ export function slackTrackerOptions(settings: Settings): SlackTrackerOptions {
   const markerEmoji = stringOption(options, "markerEmoji");
   const replyLookbackDays = numberOption(options, "replyLookbackDays");
   const scanLookbackDays = numberOption(options, "scanLookbackDays");
+  const reconcileIntervalMs = numberOption(options, "reconcileIntervalMs");
   return {
     channels: stringListOption(options, "channels") ?? [],
     users: stringListOption(options, "users") ?? [],
@@ -77,6 +86,7 @@ export function slackTrackerOptions(settings: Settings): SlackTrackerOptions {
     ...(markerEmoji !== undefined ? { markerEmoji } : {}),
     ...(replyLookbackDays !== undefined ? { replyLookbackDays } : {}),
     ...(scanLookbackDays !== undefined ? { scanLookbackDays } : {}),
+    ...(reconcileIntervalMs !== undefined ? { reconcileIntervalMs } : {}),
   };
 }
 

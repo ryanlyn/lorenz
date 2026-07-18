@@ -1,4 +1,5 @@
 import { defaultStateType, normalizeIssue } from "@lorenz/issue";
+import { isRecord } from "@lorenz/domain";
 import type {
   Issue,
   IssueStateType,
@@ -9,12 +10,16 @@ import type {
   TrackerIssueEvent,
 } from "@lorenz/domain";
 
+import { splitIssueId } from "./ids.js";
+import { handleSlackInteraction } from "./interactions.js";
 import {
   emojiForState,
+  isBotMention,
   stateFromReactions,
   statusEmojiMap,
   stripLeadingMention,
 } from "./mapping.js";
+import { MirrorBackedSlackTransport } from "./mirror.js";
 import { mirrorStatusReaction, requireTrackedMessage } from "./operations.js";
 import { slackEndpoint, slackTrackerOptions } from "./options.js";
 import { SlackSocketMode, type SlackSocketModeOptions } from "./socketMode.js";
@@ -26,12 +31,11 @@ import {
 } from "./threadState.js";
 import { isBotMarked } from "./transport.js";
 import type { SlackChannelScan, SlackMessage, SlackTransport } from "./transport.js";
+import { upsertWorkpad } from "./workpad.js";
 
-export function splitIssueId(id: string): [string, string] | null {
-  const idx = id.indexOf(":");
-  if (idx === -1) return null;
-  return [id.slice(0, idx), id.slice(idx + 1)];
-}
+// Re-exported here for API stability: the id helper predates ids.ts and package consumers (and
+// the tool pack) import it from the client module.
+export { splitIssueId };
 
 /**
  * Derive labels from hashtag tokens in `text`: match `#tag`, strip the leading `#`, lowercase,
@@ -185,12 +189,17 @@ const DEFAULT_REPLY_LOOKBACK_DAYS = 2;
 /** Entry cap for the per-issue mirror reconciliation cache (matches THREAD_STATE_CACHE_MAX). */
 const MIRRORED_STATES_MAX = 5_000;
 
+/** Minimum gap between "already running" ephemerals for one issue+author pair. */
+const BUSY_NOTICE_WINDOW_MS = 10 * 60_000;
+
 export class SlackTrackerClient implements RuntimeTrackerClient {
   private scanCache: { at: number; key: string; scan: SlackChannelScan } | null = null;
   /** Last state the reaction mirror was reconciled to, per issue (see healStatusMirror). */
   private readonly mirroredStates = new Map<string, string>();
   /** Serialized background queue of pending reaction-mirror heals (see healStatusMirror). */
   private mirrorHealQueue: Promise<void> = Promise.resolve();
+  /** Last "already running" ephemeral per issue+author, so a chatty thread is nudged once. */
+  private readonly busyNoticeAt = new Map<string, number>();
   /**
    * Oldest thread activity (epoch seconds) considered when hunting for NEW reply-mention
    * requests in untracked threads. Once tracked, a thread is marked with the bot's reaction
@@ -198,18 +207,36 @@ export class SlackTrackerClient implements RuntimeTrackerClient {
    * mention posted while the daemon was down longer than the lookback is not picked up.
    */
   private readonly replyFloor: number;
+  /**
+   * The effective transport. With an app token this is the event-fed channel mirror wrapping
+   * the real transport (polls read memory; the scan becomes reconciliation); without one it is
+   * the raw transport and every poll is a real scan, exactly the pre-mirror behavior.
+   */
+  private readonly transport: SlackTransport;
+  private readonly channelMirror: MirrorBackedSlackTransport | null;
 
   constructor(
     private readonly settings: Settings,
-    private readonly transport: SlackTransport,
+    transport: SlackTransport,
     // Seam for tests: lets a fake Socket Mode (or one with an injected WebSocket) stand in.
     private readonly createSocketMode: (options: SlackSocketModeOptions) => SlackSocketMode = (
       options,
     ) => new SlackSocketMode(options),
   ) {
-    const lookbackDays =
-      slackTrackerOptions(settings).replyLookbackDays ?? DEFAULT_REPLY_LOOKBACK_DAYS;
+    const options = slackTrackerOptions(settings);
+    const lookbackDays = options.replyLookbackDays ?? DEFAULT_REPLY_LOOKBACK_DAYS;
     this.replyFloor = Date.now() / 1000 - lookbackDays * 86_400;
+    // The mirror is only worth constructing when a socket can feed it; it refuses to serve
+    // until the socket reports healthy anyway (isFresh), so this is belt and braces.
+    this.channelMirror =
+      options.appToken !== undefined &&
+      options.appToken.trim() !== "" &&
+      options.channels.length > 0
+        ? new MirrorBackedSlackTransport(transport, settings, {
+            reconcileIntervalMs: options.reconcileIntervalMs,
+          })
+        : null;
+    this.transport = this.channelMirror ?? transport;
   }
 
   async fetchCandidateIssues(): Promise<Issue[]> {
@@ -218,11 +245,13 @@ export class SlackTrackerClient implements RuntimeTrackerClient {
 
   /**
    * Push capability (see {@link RuntimeTrackerClient.watch}). When an app-level token is
-   * configured, open a Slack Socket Mode connection so a watched mention/reply/reaction nudges the
-   * runtime to re-poll immediately - the dispatch path stays the pull-based scan, this only
-   * collapses the up-to-`polling.intervalMs` wait to ~instant. Returns `null` (pull-only, as
-   * before) when no app token is set or no channels are watched, so push is strictly opt-in and
-   * never changes behavior for existing single-token deployments.
+   * configured, open a Slack Socket Mode connection. The socket is a DATA FEED, not just a
+   * doorbell: every watched event payload is applied to the channel mirror first, so the poll
+   * the nudge triggers reads local state instead of re-scanning Slack; `interactive` envelopes
+   * (the workpad's Cancel/Details buttons) route to the interaction handler over the same
+   * connection. Returns `null` (pull-only, as before) when no app token is set or no channels
+   * are watched, so push is strictly opt-in and never changes behavior for existing
+   * single-token deployments.
    */
   watch(onChange: (change?: TrackerChange) => void): TrackerChangeStream | null {
     const { channels, appToken } = slackTrackerOptions(this.settings);
@@ -232,25 +261,53 @@ export class SlackTrackerClient implements RuntimeTrackerClient {
       appToken,
       channels,
       onChange: (payload) => onChange(this.changeForSocketPayload(payload)),
+      onEvent: (payload) => {
+        this.channelMirror?.applyEvent(payload);
+        this.scanCache = null;
+        this.noticeIfBusyReply(payload);
+      },
+      onInteractive: (payload) => {
+        void handleSlackInteraction(payload, {
+          settings: this.settings,
+          transport: this.transport,
+          logger: { warn: (message) => console.warn(message) },
+          nudge: () => onChange(),
+        });
+      },
+      // Slack replays nothing across a connection gap, so a reconnect re-syncs from real scans;
+      // while disconnected the mirror refuses to serve at all (connection-state gate).
+      onReconnect: () => this.channelMirror?.markAllDirty("socket reconnected"),
+      onConnectionState: (connected) => this.channelMirror?.setSocketHealthy(connected),
     });
     socket.start();
     return socket;
   }
 
+  /**
+   * Steering feed (see {@link RuntimeTrackerClient.fetchIssueEvents}): human thread replies
+   * newer than `sinceTs`, ascending, for recovery into the active ACP queue. Excluded on
+   * purpose: the bot's own replies (the agent wrote them), `!` command replies (they act
+   * through the status fold, not the prompt), asides (`!aside` opts a reply out of delivery),
+   * and tombstoned deletions. With the mirror active this is a memory read.
+   */
   async fetchIssueEvents(issueId: string, sinceTs: string): Promise<TrackerIssueEvent[]> {
     const parts = splitIssueId(issueId);
     if (!parts) return [];
-    const [channel, threadTs] = parts;
+    const [channel, ts] = parts;
     const { botUserId } = slackTrackerOptions(this.settings);
-    const floor = tsValue(sinceTs);
-    return (await this.transport.getThread(channel, threadTs))
+    const parsedSince = Number.parseFloat(sinceTs);
+    const floor = Number.isFinite(parsedSince) ? parsedSince : 0;
+    const replies = await this.transport.getThread(channel, ts);
+    return replies
       .filter((reply) => {
         if (tsValue(reply.ts) <= floor) return false;
         if (reply.user === undefined || reply.user === botUserId) return false;
-        if (isAsideText(reply.text, botUserId)) return false;
-        return parseStatusCommand(reply.text, botUserId, this.settings) === null;
+        if (reply.deleted === true) return false;
+        const classificationText = reply.firstSeenText ?? reply.text;
+        if (isAsideText(classificationText, botUserId)) return false;
+        return parseStatusCommand(classificationText, botUserId, this.settings) === null;
       })
-      .sort((left, right) => tsValue(left.ts) - tsValue(right.ts))
+      .sort((a, b) => tsValue(a.ts) - tsValue(b.ts))
       .map((reply) => ({
         ts: reply.ts,
         text: reply.text,
@@ -260,15 +317,14 @@ export class SlackTrackerClient implements RuntimeTrackerClient {
 
   private changeForSocketPayload(payload: Record<string, unknown> | undefined): TrackerChange {
     const event = payload?.event;
-    if (!event || typeof event !== "object" || Array.isArray(event)) return {};
-    const record = event as Record<string, unknown>;
-    if (record.type !== "message" && record.type !== "app_mention") return {};
-    if (typeof record.subtype === "string") return {};
-    const channel = typeof record.channel === "string" ? record.channel : null;
-    const ts = typeof record.ts === "string" ? record.ts : null;
-    const threadTs = typeof record.thread_ts === "string" ? record.thread_ts : null;
-    const text = typeof record.text === "string" ? record.text : null;
-    const user = typeof record.user === "string" ? record.user : null;
+    if (!isRecord(event)) return {};
+    if (event.type !== "message" && event.type !== "app_mention") return {};
+    if (typeof event.subtype === "string") return {};
+    const channel = typeof event.channel === "string" ? event.channel : null;
+    const ts = typeof event.ts === "string" ? event.ts : null;
+    const threadTs = typeof event.thread_ts === "string" ? event.thread_ts : null;
+    const text = typeof event.text === "string" ? event.text : null;
+    const user = typeof event.user === "string" ? event.user : null;
     if (!channel || !ts || !threadTs || threadTs === ts || !text || !user) return {};
     const { botUserId } = slackTrackerOptions(this.settings);
     if (user === botUserId || isAsideText(text, botUserId)) return {};
@@ -357,7 +413,7 @@ export class SlackTrackerClient implements RuntimeTrackerClient {
     const issues: Issue[] = [];
     for (const root of roots) {
       const thread = await resolveThreadState(this.settings, this.transport, root);
-      this.healStatusMirror(root, thread.state);
+      this.healStatusMirror(root, thread);
       issues.push(
         slackMessageToIssue(root, this.settings, {
           permalinkBase: base,
@@ -384,7 +440,8 @@ export class SlackTrackerClient implements RuntimeTrackerClient {
    * `mirroredStates` marks the issue at schedule time, so one heal is queued per state change
    * per issue no matter how many polls elapse while the queue drains.
    */
-  private healStatusMirror(root: SlackMessage, state: string): void {
+  private healStatusMirror(root: SlackMessage, thread: ThreadState): void {
+    const state = thread.state;
     const key = `${root.channel}:${root.ts}`;
     if (this.mirroredStates.get(key) === state) return;
     // Bounded like threadStateCache: a clear only lets already-converged mirrors re-check (the
@@ -399,19 +456,93 @@ export class SlackTrackerClient implements RuntimeTrackerClient {
       (reaction) => typeof map[reaction] === "string" && reaction !== target,
     );
     const missingTarget = target !== null && !root.botReactions.includes(target);
-    if (!staleManaged && !missingTarget) return;
+    // The workpad header is a second display mirror healed on the same state-change cadence
+    // (a human `!done` must not leave the workpad saying "In Progress" forever).
+    const workpad = thread.workpad;
+    if (!staleManaged && !missingTarget && workpad === undefined) return;
     // Capture only what the heal needs: the queued closure can outlive minutes of 429 backoff,
     // and holding `root` would pin every backlogged message body in memory until the queue drains.
     const { channel, ts } = root;
     const observed = [...root.botReactions];
+    const healReaction = staleManaged || missingTarget;
     this.mirrorHealQueue = this.mirrorHealQueue.then(async () => {
       try {
-        await mirrorStatusReaction(this.settings, this.transport, channel, ts, state, observed);
+        if (healReaction) {
+          await mirrorStatusReaction(this.settings, this.transport, channel, ts, state, observed);
+        }
+        if (workpad !== undefined) {
+          await upsertWorkpad(
+            this.settings,
+            this.transport,
+            channel,
+            ts,
+            {
+              issueId: key,
+              state,
+              ...(workpad.plan !== undefined ? { plan: workpad.plan } : {}),
+              ...(workpad.note !== undefined ? { note: workpad.note } : {}),
+            },
+            workpad,
+          );
+        }
       } catch {
         // Defensive only (mirror writes already swallow their own failures): a rejection here
         // would poison the serialized queue and silently skip every later heal.
       }
     });
+  }
+
+  /**
+   * Ephemeral "already running" notice: when a human posts a bare (command-less) bot-mention
+   * reply on an issue that is already in a beyond-initial active state, tell THAT author -
+   * quietly, once per issue+author per window - that replies queue as the agent's next turn
+   * and how to stop it. A politeness surface, never a lock: dispatch concurrency is the
+   * runtime's claim model.
+   */
+  private noticeIfBusyReply(payload: Record<string, unknown>): void {
+    const event = payload.event;
+    if (!isRecord(event)) return;
+    if (event.type !== "message" && event.type !== "app_mention") return;
+    if (typeof event.subtype === "string") return; // edits/deletes/system messages are not asks
+    const channel = typeof event.channel === "string" ? event.channel : null;
+    const ts = typeof event.ts === "string" ? event.ts : null;
+    const threadTs = typeof event.thread_ts === "string" ? event.thread_ts : null;
+    const user = typeof event.user === "string" ? event.user : null;
+    const text = typeof event.text === "string" ? event.text : "";
+    if (channel === null || ts === null || threadTs === null || threadTs === ts) return;
+    const { botUserId } = slackTrackerOptions(this.settings);
+    if (user === null || botUserId === undefined || user === botUserId) return;
+    if (!isBotMention(text, botUserId)) return;
+    if (isAsideText(text, botUserId)) return;
+    if (parseStatusCommand(text, botUserId, this.settings) !== null) return;
+    const noticeKey = `${channel}:${threadTs}:${user}`;
+    const now = Date.now();
+    const last = this.busyNoticeAt.get(noticeKey);
+    if (last !== undefined && now - last < BUSY_NOTICE_WINDOW_MS) return;
+    this.busyNoticeAt.set(noticeKey, now);
+    if (this.busyNoticeAt.size >= MIRRORED_STATES_MAX) this.busyNoticeAt.clear();
+    void this.postBusyNotice(channel, threadTs, user).catch(() => {
+      // Best-effort by definition; a failed notice must never surface anywhere.
+    });
+  }
+
+  private async postBusyNotice(channel: string, threadTs: string, user: string): Promise<void> {
+    const root = await this.transport.getMessage(channel, threadTs);
+    if (!root) return;
+    const thread = await resolveThreadState(this.settings, this.transport, root);
+    const active = this.settings.tracker.activeStates;
+    const stateLower = thread.state.trim().toLowerCase();
+    const activeIndex = active.findIndex((s) => s.trim().toLowerCase() === stateLower);
+    // Only states BEYOND the initial one read as "an agent is on this": Todo-like issues are
+    // simply awaiting dispatch and a notice would be noise.
+    if (activeIndex <= 0) return;
+    await this.transport.postEphemeral(
+      channel,
+      user,
+      threadTs,
+      `Lorenz is already working on this issue (status: ${thread.state}). Replies reach the ` +
+        "agent as its next queued turn; `@bot !cancel` (or the workpad's Cancel button) stops it.",
+    );
   }
 
   /**

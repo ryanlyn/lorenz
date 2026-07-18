@@ -18,10 +18,12 @@ import { slackTrackerOptions } from "./options.js";
 import { resolveThreadState, stateFromThread } from "./threadState.js";
 import type { SlackTransport } from "./transport.js";
 import { SlackWebTransport } from "./webTransport.js";
+import { upsertWorkpad } from "./workpad.js";
 
 const TOOL_NAMES = [
   "slack_update_status",
   "slack_comment",
+  "slack_workpad",
   "slack_read_thread",
   "slack_query",
   "slack_user_info",
@@ -52,11 +54,31 @@ export function slackToolSpecs(): ToolSpec[] {
     },
     {
       name: "slack_comment",
-      description: "Reply in the Slack issue's thread. Args: issueId, body.",
+      description:
+        "Reply in the Slack issue's thread. Use for milestone updates and findings that " +
+        "SHOULD notify the thread (replies notify; workpad edits do not). Args: issueId, body.",
       inputSchema: {
         type: "object",
         properties: { issueId: { type: "string" }, body: { type: "string" } },
         required: ["issueId", "body"],
+      },
+    },
+    {
+      name: "slack_workpad",
+      description:
+        "Create or update the issue's workpad: ONE bot message in the thread, edited in place, " +
+        "carrying the live plan checklist and latest note (plus Cancel/Details buttons). Use it " +
+        "for the continuously-changing checklist instead of posting new comments - edits do not " +
+        "notify the thread. Omitting plan/note keeps the existing section. Args: issueId, " +
+        "plan? (mrkdwn checklist), note? (short status line).",
+      inputSchema: {
+        type: "object",
+        properties: {
+          issueId: { type: "string" },
+          plan: { type: "string" },
+          note: { type: "string" },
+        },
+        required: ["issueId"],
       },
     },
     {
@@ -163,6 +185,29 @@ export async function executeSlackTool(
         await transport.postReply(channel, ts, requireStr(args, "body"));
         return toolSuccess({ ok: true });
       }
+      case "slack_workpad": {
+        const root = await requireTrackedMessage(settings, transport, channel, ts);
+        const replies = await transport.getThread(channel, ts);
+        const thread = stateFromThread(root, replies, settings);
+        // A partial update keeps the other section: the workpad metadata round-trips both, so
+        // an agent refreshing its note between milestones does not blank the plan.
+        const plan = optionalStr(args, "plan") ?? thread.workpad?.plan;
+        const note = optionalStr(args, "note") ?? thread.workpad?.note;
+        const workpadTs = await upsertWorkpad(
+          settings,
+          transport,
+          channel,
+          ts,
+          {
+            issueId: `${channel}:${ts}`,
+            state: thread.state,
+            ...(plan !== undefined ? { plan } : {}),
+            ...(note !== undefined ? { note } : {}),
+          },
+          thread.workpad,
+        );
+        return toolSuccess({ ok: true, workpadTs });
+      }
       case "slack_read_thread": {
         // Same trust-boundary check as the write tools: only read a watched, tracked issue.
         const root = await requireTrackedMessage(settings, transport, channel, ts);
@@ -172,6 +217,9 @@ export async function executeSlackTool(
         return toolSuccess({
           issueId: `${channel}:${ts}`,
           status: thread.state,
+          // The folded transition history (who moved the issue where, and when): the audit
+          // trail an agent needs to distinguish "human cancelled" from "I finished".
+          statusEvents: thread.events,
           text: root.text,
           ...(thread.request !== undefined ? { request: thread.request } : {}),
           reactions: root.reactions,
@@ -295,5 +343,12 @@ function windowArg(value: unknown, label: string): number {
 function requireStr(args: Record<string, unknown>, key: string): string {
   const value = args[key];
   if (typeof value !== "string" || value.trim() === "") throw new Error(`'${key}' is required`);
+  return value;
+}
+
+function optionalStr(args: Record<string, unknown>, key: string): string | undefined {
+  const value = args[key];
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== "string") throw new Error(`'${key}' must be a string`);
   return value;
 }

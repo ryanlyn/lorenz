@@ -26,6 +26,7 @@ test("slack dispatch mounts the slack pack by default", () => {
     [
       "slack_update_status",
       "slack_comment",
+      "slack_workpad",
       "slack_read_thread",
       "slack_query",
       "slack_user_info",

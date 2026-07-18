@@ -30,6 +30,7 @@ export const slackTrackerProvider: TrackerProvider = {
     marker_emoji: "markerEmoji",
     reply_lookback_days: "replyLookbackDays",
     scan_lookback_days: "scanLookbackDays",
+    reconcile_interval_ms: "reconcileIntervalMs",
   },
   envFallbacks: { apiKey: "SLACK_BOT_TOKEN" },
   defaultEndpoint: SLACK_DEFAULT_ENDPOINT,
@@ -45,6 +46,7 @@ export const slackTrackerProvider: TrackerProvider = {
         "markerEmoji",
         "replyLookbackDays",
         "scanLookbackDays",
+        "reconcileIntervalMs",
       ],
       "slack",
     );
@@ -71,6 +73,7 @@ export const slackTrackerProvider: TrackerProvider = {
     const markerEmoji = stringOption(options, "markerEmoji");
     const replyLookbackDays = numberOption(options, "replyLookbackDays");
     const scanLookbackDays = numberOption(options, "scanLookbackDays");
+    const reconcileIntervalMs = numberOption(options, "reconcileIntervalMs");
     return {
       ...(channels !== undefined && channels.length > 0 ? { channels } : {}),
       ...(users !== undefined && users.length > 0 ? { users } : {}),
@@ -80,6 +83,7 @@ export const slackTrackerProvider: TrackerProvider = {
       ...(markerEmoji !== undefined ? { markerEmoji } : {}),
       ...(replyLookbackDays !== undefined ? { replyLookbackDays } : {}),
       ...(scanLookbackDays !== undefined ? { scanLookbackDays } : {}),
+      ...(reconcileIntervalMs !== undefined ? { reconcileIntervalMs } : {}),
     };
   },
   validateDispatch(settings) {
