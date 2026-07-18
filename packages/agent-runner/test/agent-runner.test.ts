@@ -118,7 +118,7 @@ test("live issue events are submitted immediately and consumed as the next queue
     settings,
     fetchIssue: async (issue) => issue,
     fetchIssueEvents: async (sinceTs) =>
-      sinceTs === "0" ? [{ ts: "10.0", author: "ryan", text: "original request" }] : [],
+      sinceTs === "0" ? [{ ts: "9007199254740992", author: "ryan", text: "original request" }] : [],
     subscribeIssueEvents: (listener) => {
       issueEventListener = listener;
       return () => {
@@ -130,7 +130,7 @@ test("live issue events are submitted immediately and consumed as the next queue
 
   await firstTurnStarted;
   assert.ok(issueEventListener);
-  issueEventListener([{ ts: "11.0", author: "ryan", text: "steer left" }]);
+  issueEventListener([{ ts: "9007199254740993", author: "ryan", text: "steer left" }]);
   await vi.waitFor(() => assert.equal(queuedPrompts.length, 1));
   assert.equal(releaseFirstTurn === undefined, false);
   assert.equal(normalPrompts.length, 1);
@@ -144,6 +144,134 @@ test("live issue events are submitted immediately and consumed as the next queue
   assert.notMatch(queuedPrompts[0]!, /original request/);
   assert.notMatch(queuedPrompts[0]!, /Continuation guidance/);
   assert.equal(subscriptionClosed, true);
+});
+
+test("events observed during setup survive an overlapping baseline snapshot", async () => {
+  const settings = fakeSettings({ agent: { ...defaultSettings().agent, maxTurns: 2 } });
+  const queuedPrompts: string[] = [];
+  let issueEventListener: ((events: TrackerIssueEvent[]) => void) | undefined;
+  let resolveBaseline: ((events: TrackerIssueEvent[]) => void) | undefined;
+  let releaseWorkspace: (() => void) | undefined;
+  const baseline = new Promise<TrackerIssueEvent[]>((resolve) => {
+    resolveBaseline = resolve;
+  });
+  const workspaceGate = new Promise<void>((resolve) => {
+    releaseWorkspace = resolve;
+  });
+  const session = fakeSession({
+    queueTurn: async (prompt) => {
+      queuedPrompts.push(prompt);
+      return [{ type: "turn_completed" }];
+    },
+  });
+
+  const attempt = runAgentAttempt({
+    issue: fakeIssue(),
+    workflow: { path: "/workflow.md", config: {}, promptTemplate: "Fix it", settings },
+    settings,
+    fetchIssueEvents: async () => baseline,
+    subscribeIssueEvents: (listener) => {
+      issueEventListener = listener;
+      return () => {};
+    },
+    adapters: fakeAdapters({
+      createWorkspaceForIssue: async () => {
+        await workspaceGate;
+        return "/tmp/workspace/TEST-1";
+      },
+      executorFactory: () =>
+        fakeExecutor({
+          session: {
+            queueTurn: session.queueTurn,
+          },
+        }),
+    }),
+  });
+
+  await vi.waitFor(() => assert.ok(issueEventListener));
+  issueEventListener?.([{ ts: "11.0", author: "ryan", text: "during setup" }]);
+  resolveBaseline?.([
+    { ts: "10.0", author: "ryan", text: "original request" },
+    { ts: "11.0", author: "ryan", text: "during setup" },
+  ]);
+  releaseWorkspace?.();
+
+  const result = await attempt;
+  assert.equal(result.turnCount, 2);
+  assert.equal(queuedPrompts.length, 1);
+  assert.match(queuedPrompts[0]!, /during setup/);
+  assert.notMatch(queuedPrompts[0]!, /original request/);
+});
+
+test("live delivery does not advance the recovery cursor past missed events", async () => {
+  const settings = fakeSettings({ agent: { ...defaultSettings().agent, maxTurns: 3 } });
+  const queuedPrompts: string[] = [];
+  const recoveryCursors: string[] = [];
+  let issueEventListener: ((events: TrackerIssueEvent[]) => void) | undefined;
+  let releaseFirstTurn: (() => void) | undefined;
+  let markFirstTurnStarted: (() => void) | undefined;
+  const firstTurnStarted = new Promise<void>((resolve) => {
+    markFirstTurnStarted = resolve;
+  });
+  const firstTurnRelease = new Promise<void>((resolve) => {
+    releaseFirstTurn = resolve;
+  });
+  const session = fakeSession({
+    queueTurn: async (prompt) => {
+      queuedPrompts.push(prompt);
+      return [{ type: "turn_completed" }];
+    },
+  });
+  const executor: AgentExecutor = {
+    kind: "codex",
+    async startSession() {
+      return session;
+    },
+    async runTurn() {
+      markFirstTurnStarted?.();
+      await firstTurnRelease;
+      return [{ type: "turn_completed" }];
+    },
+  };
+
+  const attempt = runAgentAttempt({
+    issue: fakeIssue(),
+    workflow: { path: "/workflow.md", config: {}, promptTemplate: "Fix it", settings },
+    settings,
+    fetchIssue: async (issue) => issue,
+    fetchIssueEvents: async (sinceTs) => {
+      recoveryCursors.push(sinceTs);
+      if (sinceTs === "0") {
+        return [{ ts: "10.0", author: "ryan", text: "original request" }];
+      }
+      if (sinceTs === "10.0") {
+        return [
+          { ts: "11.0", author: "ryan", text: "missed event" },
+          { ts: "12.0", author: "ryan", text: "live event" },
+        ];
+      }
+      return [];
+    },
+    subscribeIssueEvents: (listener) => {
+      issueEventListener = listener;
+      return () => {};
+    },
+    adapters: fakeAdapters({ executorFactory: () => executor }),
+  });
+
+  await firstTurnStarted;
+  assert.ok(issueEventListener);
+  issueEventListener?.([{ ts: "12.0", author: "ryan", text: "live event" }]);
+  await vi.waitFor(() => assert.equal(queuedPrompts.length, 1));
+  releaseFirstTurn?.();
+
+  const result = await attempt;
+  assert.equal(result.turnCount, 3);
+  assert.deepEqual(recoveryCursors, ["0", "10.0"]);
+  assert.match(queuedPrompts[0]!, /live event/);
+  assert.notMatch(queuedPrompts[0]!, /missed event/);
+  assert.match(queuedPrompts[1]!, /missed event/);
+  assert.notMatch(queuedPrompts[1]!, /live event/);
 });
 
 function fakeSettingsWithTimeouts(

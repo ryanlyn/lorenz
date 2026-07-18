@@ -718,7 +718,7 @@ export interface WorkflowDefinition {
 
 /** One human-authored tracker event, such as a reply on an issue thread. */
 export interface TrackerIssueEvent {
-  /** Tracker-native numeric ordering key encoded as a string. */
+  /** Unique tracker-native ordering key encoded as a canonical non-negative decimal string. */
   ts: string;
   /** Author id or display name when known. */
   author?: string | undefined;

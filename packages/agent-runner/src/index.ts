@@ -125,23 +125,44 @@ class RunController {
     const size = ensembleSize(issue) ?? settings.agent.ensembleSize;
     const slotIndex = input.slotIndex ?? 0;
     const workerHost = input.workerHost ?? null;
-    const workspace = await runSetupStage(
-      workspaceCreateStage,
-      workspaceCreateTimeoutMs(runtime),
-      async ({ abortSignal }) =>
-        createWorkspaceForIssue(input.adapters, runtime, issue, {
-          slotIndex,
-          ensembleSize: size,
-          workerHost,
-          // Gated co-residence: force the slot suffix so two solo same-issue runs
-          // that co-reside on one machine get distinct dirs. Default false keeps
-          // the single-slot bare layout byte-identical.
-          forceSlotSuffix: input.forceSlotSuffix ?? false,
-          abortSignal,
-          onHookEvent: (message) => this.emitHookUpdate(message),
-        }),
-      input.abortSignal,
+    let bufferedIssueEvents: TrackerIssueEvent[] = [];
+    let receiveIssueEvents = (events: TrackerIssueEvent[]): void => {
+      bufferedIssueEvents.push(...events);
+    };
+    const unsubscribeIssueEvents = input.subscribeIssueEvents?.((events) =>
+      receiveIssueEvents(events),
     );
+    const baselineIssueEvents = input.fetchIssueEvents
+      ? Promise.resolve()
+          .then(async () => input.fetchIssueEvents?.("0") ?? [])
+          .then(
+            (events) => ({ events }),
+            (error: unknown) => ({ error }),
+          )
+      : undefined;
+    let workspace: string;
+    try {
+      workspace = await runSetupStage(
+        workspaceCreateStage,
+        workspaceCreateTimeoutMs(runtime),
+        async ({ abortSignal }) =>
+          createWorkspaceForIssue(input.adapters, runtime, issue, {
+            slotIndex,
+            ensembleSize: size,
+            workerHost,
+            // Gated co-residence: force the slot suffix so two solo same-issue runs
+            // that co-reside on one machine get distinct dirs. Default false keeps
+            // the single-slot bare layout byte-identical.
+            forceSlotSuffix: input.forceSlotSuffix ?? false,
+            abortSignal,
+            onHookEvent: (message) => this.emitHookUpdate(message),
+          }),
+        input.abortSignal,
+      );
+    } catch (error) {
+      unsubscribeIssueEvents?.();
+      throw error;
+    }
     input.onUpdate?.({
       type: "workspace_prepared",
       workspacePath: workspace,
@@ -153,7 +174,6 @@ class RunController {
 
     let turnCount = 0;
     let submittedTurnCount = 0;
-    let unsubscribeIssueEvents: (() => void) | undefined;
     let runError: unknown;
     let stopError: unknown;
     try {
@@ -211,9 +231,9 @@ class RunController {
       };
       session = await executor.startSession(startSessionInput);
 
-      let steeringWatermarkTs = "0";
+      let steeringRecoveryCursorTs = "0";
       let steeringReady = false;
-      let bufferedIssueEvents: TrackerIssueEvent[] = [];
+      const seenSteeringEventTs = new Set<string>();
       const queuedTurns: QueuedTurn[] = [];
       const reportSteeringFailure = (stage: string, error: unknown): void => {
         input.onUpdate?.({
@@ -228,49 +248,55 @@ class RunController {
           return;
         }
         if (!session?.queueTurn || submittedTurnCount >= runtime.agent.maxTurns) return;
-        const fresh = steeringEventsAfter(events, steeringWatermarkTs);
-        if (fresh.length === 0) return;
-        const prompt = issueEventsPrompt(fresh);
         try {
+          const fresh = freshSteeringEvents(events, seenSteeringEventTs);
+          if (fresh.length === 0) return;
+          const prompt = issueEventsPrompt(fresh);
           const outcome = session.queueTurn(prompt).then<TurnOutcome, TurnOutcome>(
             (updates) => ({ updates }),
             (error: unknown) => ({ error }),
           );
           queuedTurns.push({ outcome });
           submittedTurnCount += 1;
-          steeringWatermarkTs = maxSteeringTs(fresh, steeringWatermarkTs);
+          for (const event of fresh) seenSteeringEventTs.add(event.ts);
         } catch (error) {
           reportSteeringFailure("queue", error);
         }
       };
       const initializeSteering = async (): Promise<void> => {
-        if (input.fetchIssueEvents) {
-          try {
-            steeringWatermarkTs = maxSteeringTs(
-              await input.fetchIssueEvents("0"),
-              steeringWatermarkTs,
-            );
-          } catch (error) {
-            reportSteeringFailure("watermark", error);
+        const baseline = await baselineIssueEvents;
+        const buffered = bufferedIssueEvents;
+        bufferedIssueEvents = [];
+        if (baseline) {
+          if ("error" in baseline) {
+            reportSteeringFailure("baseline", baseline.error);
+          } else {
+            try {
+              const bufferedTs = new Set(buffered.map((event) => event.ts));
+              for (const event of baseline.events) {
+                if (!bufferedTs.has(event.ts)) seenSteeringEventTs.add(event.ts);
+              }
+              steeringRecoveryCursorTs = maxSteeringTs(baseline.events, steeringRecoveryCursorTs);
+            } catch (error) {
+              reportSteeringFailure("baseline", error);
+            }
           }
         }
         steeringReady = true;
-        const buffered = bufferedIssueEvents;
-        bufferedIssueEvents = [];
         queueIssueEvents(buffered);
       };
       const recoverSteering = async (): Promise<void> => {
         if (!input.fetchIssueEvents || submittedTurnCount >= runtime.agent.maxTurns) return;
         try {
-          queueIssueEvents(await input.fetchIssueEvents(steeringWatermarkTs));
+          const recovered = await input.fetchIssueEvents(steeringRecoveryCursorTs);
+          queueIssueEvents(recovered);
+          steeringRecoveryCursorTs = maxSteeringTs(recovered, steeringRecoveryCursorTs);
         } catch (error) {
           reportSteeringFailure("recovery", error);
         }
       };
 
-      if (session.queueTurn && input.subscribeIssueEvents) {
-        unsubscribeIssueEvents = input.subscribeIssueEvents(queueIssueEvents);
-      }
+      receiveIssueEvents = queueIssueEvents;
 
       while (turnCount < runtime.agent.maxTurns) {
         throwIfAborted(input.abortSignal);
@@ -455,22 +481,54 @@ async function queuedTurnWithAbort(
   }
 }
 
-function steeringEventsAfter(
+function freshSteeringEvents(
   events: TrackerIssueEvent[],
-  watermarkTs: string,
+  seenTs: ReadonlySet<string>,
 ): TrackerIssueEvent[] {
-  const floor = Number.parseFloat(watermarkTs);
+  const batchTs = new Set<string>();
   return events
-    .filter((event) => Number.parseFloat(event.ts) > floor)
-    .sort((left, right) => Number.parseFloat(left.ts) - Number.parseFloat(right.ts));
+    .filter((event) => {
+      if (seenTs.has(event.ts) || batchTs.has(event.ts)) return false;
+      batchTs.add(event.ts);
+      return true;
+    })
+    .sort((left, right) => compareSteeringTs(left.ts, right.ts));
 }
 
 function maxSteeringTs(events: TrackerIssueEvent[], current: string): string {
   let max = current;
   for (const event of events) {
-    if (Number.parseFloat(event.ts) > Number.parseFloat(max)) max = event.ts;
+    if (compareSteeringTs(event.ts, max) > 0) max = event.ts;
   }
   return max;
+}
+
+function compareSteeringTs(left: string, right: string): number {
+  const leftParts = decimalOrderingKey(left);
+  const rightParts = decimalOrderingKey(right);
+  if (!leftParts || !rightParts) {
+    throw new Error(`invalid tracker issue event ordering key: ${!leftParts ? left : right}`);
+  }
+  if (leftParts.integer.length !== rightParts.integer.length) {
+    return leftParts.integer.length - rightParts.integer.length;
+  }
+  if (leftParts.integer !== rightParts.integer) {
+    return leftParts.integer < rightParts.integer ? -1 : 1;
+  }
+  const width = Math.max(leftParts.fraction.length, rightParts.fraction.length);
+  const leftFraction = leftParts.fraction.padEnd(width, "0");
+  const rightFraction = rightParts.fraction.padEnd(width, "0");
+  if (leftFraction === rightFraction) return 0;
+  return leftFraction < rightFraction ? -1 : 1;
+}
+
+function decimalOrderingKey(value: string): { integer: string; fraction: string } | null {
+  const match = /^(\d+)(?:\.(\d+))?$/.exec(value);
+  if (!match) return null;
+  return {
+    integer: match[1]!.replace(/^0+(?=\d)/, ""),
+    fraction: (match[2] ?? "").replace(/0+$/, ""),
+  };
 }
 
 /** True for a streamed ACP session notification describing a tool call. */

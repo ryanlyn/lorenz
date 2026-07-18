@@ -66,8 +66,9 @@ interface RuntimeTrackerClient {
   A change can carry human-authored issue events, which the runtime forwards to active runs without
   waiting for that poll.
 - `fetchIssueEvents(issueId, sinceTs)` is an optional recovery feed for events missed across a
-  change-stream gap. Live events are delivered first; the agent runner uses the numeric timestamp
-  watermark to avoid replaying an event.
+  change-stream gap. Each event uses a unique, canonical non-negative decimal `ts` key. The feed
+  returns events newer than `sinceTs`; the runner advances that recovery cursor only from feed
+  results and deduplicates live delivery independently.
 
 Each client returns the domain `Issue` shape, not the backend's raw payload. `Issue` requires
 `stateType: IssueStateType` (one of `backlog`, `unstarted`, `started`, `completed`, `canceled`,
