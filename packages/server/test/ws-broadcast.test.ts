@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { TraceWatcher } from "@lorenz/traceviz-server";
+import { TraceWatcher } from "@lorenz/traceviz-core";
 import { settle } from "@lorenz/test-utils";
 
 describe("TraceWatcher broadcast callback", () => {

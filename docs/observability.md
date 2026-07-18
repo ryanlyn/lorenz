@@ -111,7 +111,7 @@ Capture is a 1:1 byte trail. In `apps/cli/src/main.ts`, the runtime's `onAgentUp
 <p align="center"><img src="assets/diagrams/traceviz-flow.svg" alt="traceviz flow diagram" width="920" style="width:100%;max-width:920px;height:auto" /></p>
 *Each runtime `AgentUpdate` is written to `trace.jsonl`, polled by the `TraceWatcher`, parsed into `DisplayEvent`s, and pushed to the dashboard over `/ws`.*
 
-Two pieces read those files, both from `@lorenz/traceviz-server`:
+Two pieces read those files, both from `@lorenz/traceviz-core`:
 
 - `TraceWatcher` polls the trace directory every 500ms, reading files incrementally as they grow.
 - `parseTraceLines` turns raw `TraceEvent` lines into presentation-ready `DisplayEvent`s. It coalesces consecutive message and thought chunks, pairs each `tool_call` with its `tool_call_update` to compute duration and error state, and drops runtime types (`rate_limit`, `session_started`, `process_exit`, `stderr`, `fs_write`) that have no place in the timeline.

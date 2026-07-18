@@ -9,7 +9,7 @@ import {
   invalidPathParameterError,
   type TraceDataSource,
 } from "@lorenz/server/trace-routes";
-import type { TraceStats } from "@lorenz/traceviz-server";
+import type { TraceStats } from "@lorenz/traceviz-core";
 
 export type TracevizAppOptions = {
   dashboardDist: string;

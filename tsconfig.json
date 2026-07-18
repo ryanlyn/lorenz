@@ -71,10 +71,10 @@
       "path": "./packages/tool-sdk"
     },
     {
-      "path": "./packages/traceviz-emitter"
+      "path": "./packages/traceviz-core"
     },
     {
-      "path": "./packages/traceviz-server"
+      "path": "./packages/traceviz-emitter"
     },
     {
       "path": "./packages/tracker-sdk"

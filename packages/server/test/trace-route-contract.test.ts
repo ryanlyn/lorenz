@@ -1,4 +1,4 @@
-import type { DisplayEvent, TicketInfo } from "@lorenz/traceviz-server";
+import type { DisplayEvent, TicketInfo } from "@lorenz/traceviz-core";
 import { describe, expect, it } from "vitest";
 
 import {

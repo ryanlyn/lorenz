@@ -14,7 +14,7 @@
       "path": "../../packages/server"
     },
     {
-      "path": "../../packages/traceviz-server"
+      "path": "../../packages/traceviz-core"
     }
   ]
 }

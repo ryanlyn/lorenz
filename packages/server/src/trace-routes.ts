@@ -6,7 +6,7 @@ import {
   type TicketInfo,
   type TicketTraceResponse,
   type TicketsResponse,
-} from "@lorenz/traceviz-server";
+} from "@lorenz/traceviz-core";
 
 import type { IssueStore } from "./issue-store.js";
 import { decodePathParam, invalidPathParameterError } from "./path-params.js";

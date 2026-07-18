@@ -1,7 +1,7 @@
 import { serve, type ServerType } from "@hono/node-server";
 import { Hono } from "hono";
 import { describe, expect, test, vi } from "vitest";
-import type { DisplayEvent, TicketInfo, TraceWatcher } from "@lorenz/traceviz-server";
+import type { DisplayEvent, TicketInfo, TraceWatcher } from "@lorenz/traceviz-core";
 import { settle } from "@lorenz/test-utils";
 
 import type { RuntimeServerSource } from "../src/index.js";

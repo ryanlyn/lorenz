@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from "react";
-import type { WsClientMessage, WsServerMessage } from "@lorenz/traceviz-server";
+import type { WsClientMessage, WsServerMessage } from "@lorenz/traceviz-core";
 
-export type { WsServerMessage as WsMessage } from "@lorenz/traceviz-server";
+export type { WsServerMessage as WsMessage } from "@lorenz/traceviz-core";
 
 type WsStatus = "connecting" | "connected" | "disconnected";
 
