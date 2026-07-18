@@ -451,7 +451,8 @@ class RunController {
         let queuedTurn = queuedTurns[0];
         if (queuedTurn && !queuedTurn.activated) {
           if (!input.fetchIssue) {
-            queuedTurn.activate();
+            reportSteeringFailure("issue refresh", new Error("issue refresh is unavailable"));
+            break;
           } else {
             try {
               issue = await input.fetchIssue(issue);
@@ -566,8 +567,7 @@ class RunController {
         }
         if (!input.fetchIssue) {
           if (queuedTurns.length > 0) {
-            queuedTurns[0]?.activate();
-            continue;
+            reportSteeringFailure("issue refresh", new Error("issue refresh is unavailable"));
           }
           break;
         }

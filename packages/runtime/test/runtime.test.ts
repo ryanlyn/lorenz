@@ -1514,6 +1514,7 @@ test("active runs retain their tracker client across workflow reloads", async ()
     issueEventCursor: "10.0",
   };
   const callbacks: Array<((change?: TrackerChange) => void) | undefined> = [];
+  const streamCloses = [0, 0];
   const recoveryCalls = [0, 0];
   const delivered: TrackerIssueEvent[] = [];
   let clientBuilds = 0;
@@ -1540,7 +1541,11 @@ test("active runs retain their tracker client across workflow reloads", async ()
           },
           watch: (onChange) => {
             callbacks[index] = onChange;
-            return { close: () => {} };
+            return {
+              close: () => {
+                streamCloses[index] = (streamCloses[index] ?? 0) + 1;
+              },
+            };
           },
         };
       },
@@ -1582,10 +1587,57 @@ test("active runs retain their tracker client across workflow reloads", async ()
     });
     await Promise.resolve();
     assert.deepEqual(delivered, []);
+
+    callbacks[0]?.({
+      issueEvents: {
+        issueId: issue.id,
+        events: [{ ts: "11.0", author: "ryan", text: "pinned client event" }],
+      },
+    });
+    await waitFor(() => delivered.length === 1, 1_000);
+    assert.equal(delivered[0]?.text, "pinned client event");
+    assert.deepEqual(streamCloses, [0, 0]);
+
+    finishRun?.();
+    await waitFor(() => runtime.snapshot().running.length === 0, 1_000);
+    await waitFor(() => streamCloses[0] === 1, 1_000);
+    assert.deepEqual(streamCloses, [1, 0]);
   } finally {
     finishRun?.();
     runtime.stop();
   }
+});
+
+test("active-run issue refresh rejects a deleted tracker issue", async () => {
+  const issue = issueFixture("deleted-active-issue", "MT-DELETED-ACTIVE");
+  let issueFetches = 0;
+  let refreshRejected = false;
+  const runtime = new LorenzRuntime(
+    runtimeOptions({
+      workflow: workflowFixture(),
+      client: {
+        fetchCandidateIssues: async () => [issue],
+        fetchIssuesByIds: async () => {
+          issueFetches += 1;
+          return issueFetches === 1 ? [issue] : [];
+        },
+      },
+      runner: async (input) => {
+        try {
+          await input.fetchIssue?.(issue);
+        } catch (error) {
+          refreshRejected =
+            error instanceof Error &&
+            error.message === `tracker issue missing during active run: ${issue.id}`;
+        }
+        return { workspace: "/tmp/lorenz/MT-DELETED-ACTIVE", finalIssue: issue };
+      },
+    }),
+  );
+
+  await runtime.pollOnce({ waitForRuns: true });
+
+  assert.equal(refreshRejected, true);
 });
 
 test("runtime preflights dispatch config before candidate fetches", async () => {
@@ -5599,7 +5651,7 @@ test("worker pool: a reload whose reconcile throws keeps last-good settings AND 
   await runtime.pollOnce({ dryRun: true });
 
   assert.equal(reloads, 1);
-  assert.equal(clientBuilds, 1);
+  assert.equal(clientBuilds, 2);
   assert.equal(runtime.workflow.settings.worker.workerPool?.max, 1);
   assert.equal(runtime.workflow.path, firstWorkflow.path);
   assert.equal(runtime.workflow, firstWorkflow);
@@ -5614,7 +5666,7 @@ test("worker pool: a reload whose reconcile throws keeps last-good settings AND 
   );
 });
 
-test("worker pool: tracker construction failure restores the accepted pool settings", async () => {
+test("worker pool: tracker construction failure leaves the accepted pool untouched", async () => {
   const issue = issueFixture("issue-bp-reload-client-throws", "MT-BP-RELOAD-CLIENT");
   const firstWorkflow = workerPoolWorkflowFixture();
   const secondWorkflow = workerPoolWorkflowFixture("/tmp/lorenz-runtime-workerpool-reload-client", {
@@ -5641,9 +5693,7 @@ test("worker pool: tracker construction failure restores the accepted pool setti
   await runtime.pollOnce({ dryRun: true });
 
   assert.equal(clientBuilds, 2);
-  assert.equal(workerPool.reconcileCalls.length, 2);
-  assert.equal(workerPool.reconcileCalls[0]?.max, 3);
-  assert.equal(workerPool.reconcileCalls[1]?.max, 1);
+  assert.equal(workerPool.reconcileCalls.length, 0);
   assert.equal(runtime.workflow, firstWorkflow);
   const reloadFailed = runtime
     .snapshot()

@@ -287,6 +287,7 @@ class ActiveRunHandle {
     readonly runId: string,
     readonly trackerClient: RuntimeTrackerClient,
     private readonly activeRuns: Map<string, ActiveRunHandle>,
+    private readonly onRelease: (handle: ActiveRunHandle) => void,
   ) {}
 
   get signal(): AbortSignal {
@@ -347,7 +348,9 @@ class ActiveRunHandle {
   }
 
   release(): void {
-    if (this.isActive) this.activeRuns.delete(this.key);
+    if (!this.isActive) return;
+    this.activeRuns.delete(this.key);
+    this.onRelease(this);
   }
 }
 
@@ -380,15 +383,14 @@ export class LorenzRuntime {
   private claimOwnerHeartbeatTimer: TimerHandle | null = null;
   private pendingStoppedClaimSettlements = 0;
   /**
-   * Live tracker push subscription (see {@link RuntimeTrackerClient.watch}), opened by the
-   * recurring `start()` loop, rebound when a workflow reload replaces the client, and closed on
-   * `stop()`. `undefined` for pull-only trackers and the `--once` path. A tracker that pushes
-   * nudges an immediate poll so new work dispatches without waiting out `polling.intervalMs`.
+   * Live tracker push subscriptions (see {@link RuntimeTrackerClient.watch}), keyed by the client
+   * that owns each stream. A replaced client keeps its stream while active runs remain pinned to
+   * it, then releases the stream when the last run settles. All streams close on `stop()`.
    */
-  private changeStream: TrackerChangeStream | undefined;
+  private readonly changeStreams = new Map<RuntimeTrackerClient, TrackerChangeStream>();
   private readonly openingChangeStreamClients = new Set<RuntimeTrackerClient>();
+  private readonly changeStreamGenerations = new Map<RuntimeTrackerClient, number>();
   private changeStreamEnabled = false;
-  private changeStreamGeneration = 0;
   private issueEventRecoveryWarningIssued = false;
   /**
    * The reload-surviving coordinator singleton. Built here from either the
@@ -514,10 +516,9 @@ export class LorenzRuntime {
     this.changeStreamEnabled = false;
     this.appStatus = "stopping";
     this.pendingPollOptions = null;
-    // Fire-and-forget: stop() stays synchronous like its sibling abort sites. The stream's
-    // close() is idempotent, so an in-flight openChangeStream that resolves after this still
-    // closes the freshly-opened stream (it observes this.stopped).
-    void this.closeChangeStream();
+    // Fire-and-forget: stop() stays synchronous like its sibling abort sites. Stream close is
+    // idempotent, and an in-flight open observes this.stopped before retaining its result.
+    void this.closeAllChangeStreams();
     // finishExternally (abort + release) mirrors the other abort sites and clears
     // isActive, so the resulting agent_run_aborted rejection is treated as a clean
     // shutdown in runClaim rather than recorded as a failed run. Durable claims are
@@ -605,15 +606,17 @@ export class LorenzRuntime {
    * that races an in-flight open is honored by closing the freshly-opened stream. Callers do not
    * await this method, so a provider that never settles cannot block polling or workflow reload.
    */
-  private async openChangeStream(): Promise<void> {
-    const client = this.client;
+  private async openChangeStream(client: RuntimeTrackerClient = this.client): Promise<void> {
     const watch = client.watch?.bind(client);
-    if (!watch || this.changeStream || this.openingChangeStreamClients.has(client)) return;
+    if (!watch || this.changeStreams.has(client) || this.openingChangeStreamClients.has(client)) {
+      return;
+    }
     this.openingChangeStreamClients.add(client);
-    const generation = ++this.changeStreamGeneration;
+    const generation = (this.changeStreamGenerations.get(client) ?? 0) + 1;
+    this.changeStreamGenerations.set(client, generation);
     try {
       const stream = await watch((change) => {
-        if (generation !== this.changeStreamGeneration || client !== this.client) return;
+        if (generation !== this.changeStreamGenerations.get(client)) return;
         this.nudgePollForTrackerChange(client, change);
       });
       // A null stream means the tracker has no push for this config (e.g. credential unset); stay
@@ -622,13 +625,13 @@ export class LorenzRuntime {
       if (
         this.stopped ||
         !this.changeStreamEnabled ||
-        generation !== this.changeStreamGeneration ||
-        client !== this.client
+        generation !== this.changeStreamGenerations.get(client) ||
+        (client !== this.client && !this.hasActiveRunsForTrackerClient(client))
       ) {
         await this.closeTrackerChangeStream(stream);
         return;
       }
-      this.changeStream = stream;
+      this.changeStreams.set(client, stream);
       this.addEvent("tracker_watch_started", this.workflow.settings.tracker.kind ?? "tracker");
     } catch (error) {
       this.addEvent("tracker_watch_error", errorMessage(error));
@@ -637,20 +640,41 @@ export class LorenzRuntime {
       if (
         !this.stopped &&
         this.changeStreamEnabled &&
-        !this.changeStream &&
-        generation !== this.changeStreamGeneration
+        !this.changeStreams.has(client) &&
+        generation !== this.changeStreamGenerations.get(client) &&
+        (client === this.client || this.hasActiveRunsForTrackerClient(client))
       ) {
-        void this.openChangeStream();
+        void this.openChangeStream(client);
       }
     }
   }
 
-  private async closeChangeStream(): Promise<void> {
-    this.changeStreamGeneration += 1;
-    const stream = this.changeStream;
-    this.changeStream = undefined;
+  private async closeChangeStream(client: RuntimeTrackerClient): Promise<void> {
+    this.changeStreamGenerations.set(client, (this.changeStreamGenerations.get(client) ?? 0) + 1);
+    const stream = this.changeStreams.get(client);
+    this.changeStreams.delete(client);
     if (!stream) return;
     await this.closeTrackerChangeStream(stream);
+  }
+
+  private async closeAllChangeStreams(): Promise<void> {
+    const clients = new Set([
+      ...this.changeStreams.keys(),
+      ...this.openingChangeStreamClients.values(),
+    ]);
+    await Promise.all([...clients].map(async (client) => this.closeChangeStream(client)));
+  }
+
+  private hasActiveRunsForTrackerClient(client: RuntimeTrackerClient): boolean {
+    for (const handle of this.activeRuns.values()) {
+      if (handle.trackerClient === client) return true;
+    }
+    return false;
+  }
+
+  private retireTrackerClientStream(client: RuntimeTrackerClient): void {
+    if (client === this.client || this.hasActiveRunsForTrackerClient(client)) return;
+    void this.closeChangeStream(client);
   }
 
   private async closeTrackerChangeStream(stream: TrackerChangeStream): Promise<void> {
@@ -682,10 +706,11 @@ export class LorenzRuntime {
    */
   private nudgePollForTrackerChange(client: RuntimeTrackerClient, change?: TrackerChange): void {
     if (this.stopped) return;
+    if (client !== this.client && !this.hasActiveRunsForTrackerClient(client)) return;
     this.addEvent("tracker_push", this.workflow.settings.tracker.kind ?? "tracker");
     const issueEvents = change?.issueEvents;
     if (issueEvents) {
-      if (!this.client.fetchIssueEvents && !this.issueEventRecoveryWarningIssued) {
+      if (!client.fetchIssueEvents && !this.issueEventRecoveryWarningIssued) {
         this.issueEventRecoveryWarningIssued = true;
         this.addEvent(
           "tracker_watch_error",
@@ -698,6 +723,7 @@ export class LorenzRuntime {
         }
       }
     }
+    if (client !== this.client) return;
     if (this.pollInProgress) {
       this.queuePendingPoll({}, true);
       return;
@@ -816,6 +842,7 @@ export class LorenzRuntime {
       runId,
       this.client,
       this.activeRuns,
+      (released) => this.retireTrackerClientStream(released.trackerClient),
     );
     this.activeRuns.set(key, handle);
     try {
@@ -1147,7 +1174,9 @@ export class LorenzRuntime {
         onUpdate: enqueueUpdate,
         fetchIssue: async (current) => {
           const refreshed = await trackerClient.fetchIssuesByIds([current.id]);
-          return refreshed[0] ?? current;
+          const next = refreshed[0];
+          if (!next) throw new Error(`tracker issue missing during active run: ${current.id}`);
+          return next;
         },
         subscribeIssueEvents: (listener) => handle.subscribeIssueEvents(listener),
         ...(trackerClient.fetchIssueEvents
@@ -1338,65 +1367,35 @@ export class LorenzRuntime {
         this.coordinator?.capabilities,
       );
       if (gateMessage !== null) throw new Error(gateMessage);
-      // Apply every rejectable worker-pool gate before constructing a replacement
-      // tracker client. Some tracker clients begin asynchronous discovery during
-      // construction, so a client must only be created for a workflow the runtime
-      // can accept.
-      //
-      // The coordinator (and its pool) is a reload-surviving singleton: diff
-      // prev-vs-next worker-pool settings instead of being reconstructed. The pool is
-      // the single dispatch path, so a parsed config always carries a worker_pool (an
-      // absent block defaults to the enabled `local` pool). The
-      // `disabledWorkerPoolSettings(prevWorkerPool)` fallback only fires for a settings
-      // object built outside parseConfig that genuinely omits the block; reconcile then
-      // drains the live pool to zero instead of leaking its (paid) workers. A present
-      // block (including an explicit `enabled: false`) reconciles directly: reconcile
-      // handles the disable-and-drain itself.
-      let reconciledPool = false;
+      // Construct the replacement tracker before mutating the live pool. Client construction is
+      // fallible, while a successful pool reconcile may begin provisioning or draining that
+      // cannot be reversed by applying the previous settings again.
+      const previousClient = this.client;
+      const nextClient =
+        !this.input.client && this.input.clientFactory
+          ? this.input.clientFactory(workflow.settings)
+          : previousClient;
+
+      // The coordinator (and its pool) is a reload-surviving singleton. The pool is the single
+      // dispatch path, so parsed settings carry a worker_pool even when the workflow omits the
+      // block. The disabled fallback handles settings objects built outside parseConfig.
       let nextPool: WorkerPoolSettings | undefined;
       if (this.coordinator) {
         nextPool =
           workflow.settings.worker.workerPool ?? disabledWorkerPoolSettings(prevWorkerPool);
-        // Awaited: reconcile is async so the coordinator's injected driverLoader
-        // can dynamic-import an out-of-tree driver module BEFORE the (still
-        // synchronous) pool reconcile. A rejection lands in the catch below,
-        // keeping last-good settings and emitting workflow_reload_failed.
         if (nextPool) {
           await this.coordinator.reconcile(nextPool);
-          reconciledPool = true;
         }
       }
-      let nextClient: RuntimeTrackerClient;
-      try {
-        nextClient =
-          !this.input.client && this.input.clientFactory
-            ? this.input.clientFactory(workflow.settings)
-            : this.client;
-      } catch (error) {
-        // Client construction is the final rejectable reload step. Restore the
-        // accepted pool settings before the reload failure is reported.
-        if (this.coordinator && reconciledPool) {
-          const rollbackPool = prevWorkerPool ?? disabledWorkerPoolSettings(nextPool);
-          if (rollbackPool) {
-            try {
-              await this.coordinator.reconcile(rollbackPool);
-            } catch (rollbackError) {
-              throw new Error(
-                `tracker client construction failed: ${errorMessage(error)}; worker pool rollback failed: ${errorMessage(rollbackError)}`,
-                { cause: rollbackError },
-              );
-            }
-          }
-        }
-        throw error;
-      }
-      const clientChanged = nextClient !== this.client;
-      if (clientChanged) await this.closeChangeStream();
+      const clientChanged = nextClient !== previousClient;
       this.input.workflow = workflow;
       this.orchestrator.settings = workflow.settings;
       this.client = nextClient;
       if (clientChanged) this.issueEventRecoveryWarningIssued = false;
-      if (clientChanged && this.changeStreamEnabled) void this.openChangeStream();
+      if (clientChanged && this.changeStreamEnabled) void this.openChangeStream(nextClient);
+      if (clientChanged && !this.hasActiveRunsForTrackerClient(previousClient)) {
+        await this.closeChangeStream(previousClient);
+      }
       this.addEvent("workflow_reloaded", workflow.path);
     } catch (error) {
       // Keeps last-good settings. errorMessage(error) already surfaces the

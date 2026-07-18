@@ -185,6 +185,7 @@ test("live delivery ignores events represented by the initial issue snapshot", a
     issue: fakeIssue({ issueEventCursor: "11.0" }),
     workflow: { path: "/workflow.md", config: {}, promptTemplate: "Fix it", settings },
     settings,
+    fetchIssue: async (issue) => issue,
     subscribeIssueEvents: (listener) => {
       issueEventListener = listener;
       return () => {};
@@ -242,6 +243,7 @@ test("live delivery preserves valid events beside a malformed ordering key", asy
     issue: fakeIssue({ issueEventCursor: "10.0" }),
     workflow: { path: "/workflow.md", config: {}, promptTemplate: "Fix it", settings },
     settings,
+    fetchIssue: async (issue) => issue,
     subscribeIssueEvents: (listener) => {
       issueEventListener = listener;
       return () => {};
@@ -307,6 +309,7 @@ test("a run defers steering beyond its turn limit without failing", async () => 
     issue: fakeIssue(),
     workflow: { path: "/workflow.md", config: {}, promptTemplate: "Fix it", settings },
     settings,
+    fetchIssue: async (issue) => issue,
     subscribeIssueEvents: (listener) => {
       issueEventListener = listener;
       return () => {};
@@ -388,6 +391,69 @@ test("accepted steering remains inactive when issue refresh fails", async () => 
   assert.equal(issueRefreshes, 1);
   assert.equal(backendActivations, 0);
   assert.match(queuedPrompts[0]!, /finish this first/);
+});
+
+test("accepted steering remains inactive without issue refresh support", async () => {
+  const settings = fakeSettings({ agent: { ...defaultSettings().agent, maxTurns: 1 } });
+  const updates: AgentUpdate[] = [];
+  let issueEventListener: ((events: TrackerIssueEvent[]) => void) | undefined;
+  let releaseFirstTurn: (() => void) | undefined;
+  let markFirstTurnStarted: (() => void) | undefined;
+  const firstTurnStarted = new Promise<void>((resolve) => {
+    markFirstTurnStarted = resolve;
+  });
+  const firstTurnRelease = new Promise<void>((resolve) => {
+    releaseFirstTurn = resolve;
+  });
+  let backendActivations = 0;
+  const session = fakeSession({
+    queueTurn: async (_prompt, options) => {
+      await options?.startWhen;
+      backendActivations += 1;
+      return [{ type: "turn_completed" }];
+    },
+  });
+
+  const attempt = runAgentAttempt({
+    issue: fakeIssue(),
+    workflow: { path: "/workflow.md", config: {}, promptTemplate: "Fix it", settings },
+    settings,
+    subscribeIssueEvents: (listener) => {
+      issueEventListener = listener;
+      return () => {};
+    },
+    onUpdate: (update) => updates.push(update),
+    adapters: fakeAdapters({
+      executorFactory: () => ({
+        kind: "codex",
+        async startSession() {
+          return session;
+        },
+        async runTurn() {
+          markFirstTurnStarted?.();
+          await firstTurnRelease;
+          return [{ type: "turn_completed" }];
+        },
+      }),
+    }),
+  });
+
+  await firstTurnStarted;
+  issueEventListener?.([{ ts: "11.0", author: "ryan", text: "do not activate" }]);
+  releaseFirstTurn?.();
+
+  const result = await attempt;
+  assert.equal(result.turnCount, 1);
+  assert.equal(backendActivations, 0);
+  assert.ok(
+    updates.some(
+      (update) =>
+        update.type === "stderr" &&
+        update.message.includes(
+          "Ignoring steering issue refresh failure: issue refresh is unavailable",
+        ),
+    ),
+  );
 });
 
 test("accepted steering is cancelled when the issue becomes inactive", async () => {
@@ -728,6 +794,7 @@ test("events observed during setup enter the queue after the initial turn starts
     issue: fakeIssue(),
     workflow: { path: "/workflow.md", config: {}, promptTemplate: "Fix it", settings },
     settings,
+    fetchIssue: async (issue) => issue,
     subscribeIssueEvents: (listener) => {
       issueEventListener = listener;
       return () => {};
@@ -1218,6 +1285,7 @@ test("live steering is drained after the autonomous turn budget is exhausted", a
     issue: fakeIssue(),
     workflow: { path: "/workflow.md", config: {}, promptTemplate: "Fix it", settings },
     settings,
+    fetchIssue: async (issue) => issue,
     subscribeIssueEvents: (listener) => {
       issueEventListener = listener;
       return () => {};

@@ -797,7 +797,7 @@ export interface RuntimeTrackerClient {
 
 /**
  * A live subscription opened by {@link RuntimeTrackerClient.watch}. The runtime owns its
- * lifecycle and calls {@link close} when the stream is superseded or the runtime stops.
+ * lifecycle and calls {@link close} when no active run retains the client or the runtime stops.
  * Implementations must make close idempotent, settle promptly, and release any sockets or timers
  * they hold. The runtime bounds its wait so a faulty stream cannot stop polling or configuration
  * reloads indefinitely.
