@@ -147,12 +147,9 @@ export class Executor implements AgentExecutor {
     settings: Settings;
     workerHost?: string | null;
     /**
-     * A pre-resolved per-run MCP endpoint lease threaded in by the dispatch
-     * coordinator (it owns the whole lease for the run). When present (non-null) acp
-     * USES it instead of acquiring its own AND skips releasing it in `stopSession`
-     * (the coordinator's `slot.release` closes it - single ownership). When absent
-     * (null / local / non-pool) acp acquires AND releases its OWN endpoint exactly
-     * as before.
+     * A coordinator-owned MCP endpoint lease for this run. ACP uses the supplied
+     * lease without acquiring or releasing it. When absent, ACP owns the lease it
+     * acquires.
      */
     mcpEndpoint?: AgentMcpEndpointLease | null;
     onUpdate?: (update: AgentUpdate) => void;
@@ -164,8 +161,7 @@ export class Executor implements AgentExecutor {
     );
     const agentKind = input.settings.agent.kind;
     const agentConfig = resolveAgentConfig(input.settings, agentKind);
-    // The coordinator owns the lease ONLY when one was threaded in; otherwise acp
-    // owns the endpoint it acquires below and must release it on stop.
+    // Exactly one component owns endpoint release for the run.
     const threadedEndpoint = input.mcpEndpoint ?? null;
     const ownsMcpEndpoint = threadedEndpoint === null;
     const acpOptions = acpAgentOptions(agentConfig);
@@ -245,10 +241,8 @@ export class Executor implements AgentExecutor {
     } catch (error) {
       if (session) await this.stopSession(session);
       else {
-        if (child) await stopChild(child);
-        // Only release the endpoint acp OWNS. A threaded lease belongs to the
-        // coordinator's slot.release, so acp must never release it (even on a
-        // startup error) or it would double-close the token+local-server+tunnel.
+        if (child) await stopChild(child, { processGroup: !input.workerHost });
+        // Coordinator-provided leases remain under coordinator ownership.
         if (ownsMcpEndpoint) await mcpEndpoint?.release();
       }
       throw error;
@@ -875,6 +869,27 @@ function startBridgeProcess(
     const script = remoteBridgeScript(workspace, bridge);
     return startSshProcess(workerHost, `bash -lc ${shellEscape(script)}`);
   }
+  if (process.platform === "win32") {
+    return execa(
+      "powershell.exe",
+      [
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        windowsBridgeGuardianScript,
+        workspace,
+        Buffer.from(bridge, "utf8").toString("base64"),
+      ],
+      {
+        stdin: "pipe",
+        stdout: "pipe",
+        stderr: "pipe",
+        reject: false,
+        buffer: false,
+        env: hostAgentBinaryEnv(),
+      },
+    ) as unknown as ChildProcessWithoutNullStreams;
+  }
   return execa("bash", ["-lc", `exec ${bridge}`], {
     cwd: workspace,
     stdin: "pipe",
@@ -888,9 +903,176 @@ function startBridgeProcess(
     // until the process exits, a leading memory leak in a long-running daemon.
     buffer: false,
     env: hostAgentBinaryEnv(),
-    detached: process.platform !== "win32",
+    detached: true,
   }) as unknown as ChildProcessWithoutNullStreams;
 }
+
+const windowsBridgeGuardianScript = String.raw`
+$ErrorActionPreference = "Stop"
+Add-Type -TypeDefinition @"
+using System;
+using System.ComponentModel;
+using System.IO;
+using System.Runtime.InteropServices;
+using System.Threading.Tasks;
+
+public static class LorenzProcessJob
+{
+    private const uint JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000;
+    private const int JobObjectExtendedLimitInformation = 9;
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct JOBOBJECT_BASIC_LIMIT_INFORMATION
+    {
+        public long PerProcessUserTimeLimit;
+        public long PerJobUserTimeLimit;
+        public uint LimitFlags;
+        public UIntPtr MinimumWorkingSetSize;
+        public UIntPtr MaximumWorkingSetSize;
+        public uint ActiveProcessLimit;
+        public UIntPtr Affinity;
+        public uint PriorityClass;
+        public uint SchedulingClass;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct IO_COUNTERS
+    {
+        public ulong ReadOperationCount;
+        public ulong WriteOperationCount;
+        public ulong OtherOperationCount;
+        public ulong ReadTransferCount;
+        public ulong WriteTransferCount;
+        public ulong OtherTransferCount;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct JOBOBJECT_EXTENDED_LIMIT_INFORMATION
+    {
+        public JOBOBJECT_BASIC_LIMIT_INFORMATION BasicLimitInformation;
+        public IO_COUNTERS IoInfo;
+        public UIntPtr ProcessMemoryLimit;
+        public UIntPtr JobMemoryLimit;
+        public UIntPtr PeakProcessMemoryUsed;
+        public UIntPtr PeakJobMemoryUsed;
+    }
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern IntPtr CreateJobObject(IntPtr securityAttributes, string name);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool SetInformationJobObject(
+        IntPtr job,
+        int informationClass,
+        ref JOBOBJECT_EXTENDED_LIMIT_INFORMATION information,
+        uint informationLength);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool AssignProcessToJobObject(IntPtr job, IntPtr process);
+
+    public static IntPtr Create()
+    {
+        IntPtr job = CreateJobObject(IntPtr.Zero, null);
+        if (job == IntPtr.Zero)
+        {
+            throw new Win32Exception(Marshal.GetLastWin32Error());
+        }
+
+        var information = new JOBOBJECT_EXTENDED_LIMIT_INFORMATION();
+        information.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        uint length = (uint)Marshal.SizeOf(typeof(JOBOBJECT_EXTENDED_LIMIT_INFORMATION));
+        if (!SetInformationJobObject(job, JobObjectExtendedLimitInformation, ref information, length))
+        {
+            int error = Marshal.GetLastWin32Error();
+            throw new Win32Exception(error);
+        }
+        return job;
+    }
+
+    public static void Assign(IntPtr job, IntPtr process)
+    {
+        if (!AssignProcessToJobObject(job, process))
+        {
+            throw new Win32Exception(Marshal.GetLastWin32Error());
+        }
+    }
+
+    public static async Task CopyInput(Stream source, Stream target)
+    {
+        try
+        {
+            await source.CopyToAsync(target);
+        }
+        finally
+        {
+            target.Close();
+        }
+    }
+
+    public static Task CopyOutput(Stream source, Stream target)
+    {
+        return source.CopyToAsync(target);
+    }
+}
+"@
+
+$workspace = $args[0]
+$bridge = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($args[1]))
+$scriptPath = [IO.Path]::GetTempFileName()
+$utf8 = [Text.UTF8Encoding]::new($false)
+[IO.File]::WriteAllText($scriptPath, "exec " + $bridge + [Environment]::NewLine, $utf8)
+
+$job = [LorenzProcessJob]::Create()
+$guardian = [Diagnostics.Process]::GetCurrentProcess()
+[LorenzProcessJob]::Assign($job, $guardian.Handle)
+$process = $null
+$exitCode = 1
+try {
+  $startInfo = [Diagnostics.ProcessStartInfo]::new()
+  $startInfo.FileName = "bash.exe"
+  $startInfo.Arguments = '"' + $scriptPath + '"'
+  $startInfo.WorkingDirectory = $workspace
+  $startInfo.UseShellExecute = $false
+  $startInfo.CreateNoWindow = $true
+  $startInfo.RedirectStandardInput = $true
+  $startInfo.RedirectStandardOutput = $true
+  $startInfo.RedirectStandardError = $true
+
+  $process = [Diagnostics.Process]::new()
+  $process.StartInfo = $startInfo
+  if (-not $process.Start()) {
+    throw "bridge process did not start"
+  }
+
+  $stdinTask = [LorenzProcessJob]::CopyInput(
+    [Console]::OpenStandardInput(),
+    $process.StandardInput.BaseStream
+  )
+  $stdoutTask = [LorenzProcessJob]::CopyOutput(
+    $process.StandardOutput.BaseStream,
+    [Console]::OpenStandardOutput()
+  )
+  $stderrTask = [LorenzProcessJob]::CopyOutput(
+    $process.StandardError.BaseStream,
+    [Console]::OpenStandardError()
+  )
+  $process.WaitForExit()
+  $exitCode = $process.ExitCode
+  try {
+    [void][Threading.Tasks.Task]::WaitAll(
+      [Threading.Tasks.Task[]]@($stdoutTask, $stderrTask),
+      1000
+    )
+  } catch {
+  }
+} finally {
+  if ($null -ne $process) {
+    $process.Dispose()
+  }
+  Remove-Item -LiteralPath $scriptPath -Force -ErrorAction SilentlyContinue
+}
+exit $exitCode
+`;
 
 function remoteBridgeScript(workspace: string, bridge: string): string {
   return [

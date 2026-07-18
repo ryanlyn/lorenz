@@ -80,33 +80,12 @@ export async function stopChild(
 
 async function stopWindowsProcessTree(child: ChildProcessWithoutNullStreams): Promise<void> {
   const pid = child.pid;
-  if (pid === undefined) return;
-  let taskkillError: Error | undefined;
-  if (child.exitCode === null && child.signalCode === null) {
-    try {
-      await runWindowsCommand("taskkill", ["/PID", String(pid), "/T", "/F"]);
-      return;
-    } catch (error) {
-      taskkillError = error instanceof Error ? error : new Error(String(error));
-    }
-  }
-
+  if (pid === undefined || child.exitCode !== null || child.signalCode !== null) return;
   try {
-    await runWindowsCommand("powershell.exe", [
-      "-NoProfile",
-      "-NonInteractive",
-      "-Command",
-      windowsDescendantCleanupScript,
-      String(pid),
-      String(child.exitCode === null && child.signalCode === null),
-    ]);
+    await runWindowsCommand("taskkill", ["/PID", String(pid), "/T", "/F"]);
   } catch (error) {
-    const cleanupError = error instanceof Error ? error : new Error(String(error));
-    throw new AggregateError(
-      taskkillError ? [taskkillError, cleanupError] : [cleanupError],
-      `failed to terminate Windows process tree ${pid}`,
-      { cause: error },
-    );
+    if (child.exitCode !== null || child.signalCode !== null) return;
+    throw error;
   }
 }
 
@@ -125,30 +104,3 @@ async function runWindowsCommand(command: string, args: string[]): Promise<void>
     });
   });
 }
-
-const windowsDescendantCleanupScript = String.raw`
-$ErrorActionPreference = "Stop"
-$rootProcessId = [uint32]$args[0]
-$stopRoot = $args[1] -eq "true"
-$processes = @(Get-CimInstance Win32_Process | Select-Object ProcessId, ParentProcessId)
-$known = [System.Collections.Generic.HashSet[uint32]]::new()
-$descendants = [System.Collections.Generic.List[uint32]]::new()
-[void]$known.Add($rootProcessId)
-do {
-  $found = $false
-  foreach ($item in $processes) {
-    $processId = [uint32]$item.ProcessId
-    $parentProcessId = [uint32]$item.ParentProcessId
-    if ($processId -ne $rootProcessId -and $known.Contains($parentProcessId) -and $known.Add($processId)) {
-      [void]$descendants.Add($processId)
-      $found = $true
-    }
-  }
-} while ($found)
-for ($index = $descendants.Count - 1; $index -ge 0; $index--) {
-  Stop-Process -Id $descendants[$index] -Force -ErrorAction SilentlyContinue
-}
-if ($stopRoot) {
-  Stop-Process -Id $rootProcessId -Force -ErrorAction SilentlyContinue
-}
-`;

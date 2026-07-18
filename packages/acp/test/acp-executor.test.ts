@@ -509,6 +509,24 @@ test("remote bridge wrapper fails closed and completes process-group cleanup", a
   assert.match(script, /"cleanup"/);
 });
 
+test("Windows bridge guardian owns descendants through a Job Object", async () => {
+  const source = await fs.readFile(path.resolve("packages/acp/src/index.ts"), "utf8");
+  const guardianStart = source.indexOf("const windowsBridgeGuardianScript");
+  const guardianEnd = source.indexOf("function remoteBridgeScript", guardianStart);
+  const guardian = source.slice(guardianStart, guardianEnd);
+
+  assert.match(guardian, /JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE/);
+  assert.match(guardian, /AssignProcessToJobObject/);
+  const guardianAssignment = guardian.indexOf("[LorenzProcessJob]::Assign($job, $guardian.Handle)");
+  const bridgeStart = guardian.indexOf("$process.Start()");
+  assert.ok(guardianAssignment >= 0);
+  assert.ok(bridgeStart > guardianAssignment);
+  assert.match(
+    source,
+    /if \(child\) await stopChild\(child, \{ processGroup: !input\.workerHost \}\)/,
+  );
+});
+
 test("ACP executor can pass through cumulative bridge usage without double counting", async () => {
   const root = await tempDir("lorenz-acp-cumulative-usage");
   const fake = await writeFakeBridge(root);
