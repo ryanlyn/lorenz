@@ -631,6 +631,14 @@ export class LorenzRuntime {
       this.addEvent("tracker_watch_error", errorMessage(error));
     } finally {
       this.changeStreamOpening = false;
+      if (
+        !this.stopped &&
+        this.changeStreamEnabled &&
+        !this.changeStream &&
+        generation !== this.changeStreamGeneration
+      ) {
+        void this.openChangeStream();
+      }
     }
   }
 

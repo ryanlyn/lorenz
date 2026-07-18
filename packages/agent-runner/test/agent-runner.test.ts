@@ -311,8 +311,10 @@ test("a run defers steering beyond its turn limit without failing", async () => 
 
   await firstTurnStarted;
   issueEventListener?.([{ ts: "11.0", author: "ryan", text: "accepted steering" }]);
-  issueEventListener?.([{ ts: "12.0", author: "ryan", text: "deferred steering" }]);
   await vi.waitFor(() => assert.equal(queuedPrompts.length, 1));
+  issueEventListener?.([{ ts: "12.0", author: "ryan", text: "deferred steering" }]);
+  await Promise.resolve();
+  await Promise.resolve();
   releaseFirstTurn?.();
 
   const result = await attempt;
@@ -607,6 +609,41 @@ test("initial recovery queues events missed after the issue snapshot", async () 
   assert.deepEqual(recoveryCursors, ["10.0", "11.0"]);
 });
 
+test("a failed initial turn stays observed while recovery is pending", async () => {
+  const settings = fakeSettings({ agent: { ...defaultSettings().agent, maxTurns: 1 } });
+  let releaseRecovery: (() => void) | undefined;
+  const recoveryGate = new Promise<void>((resolve) => {
+    releaseRecovery = resolve;
+  });
+
+  const attempt = runAgentAttempt({
+    issue: fakeIssue({ issueEventCursor: "10.0" }),
+    workflow: { path: "/workflow.md", config: {}, promptTemplate: "Fix it", settings },
+    settings,
+    fetchIssueEvents: async () => {
+      await recoveryGate;
+      return [];
+    },
+    adapters: fakeAdapters({
+      executorFactory: () =>
+        fakeExecutor({
+          session: {
+            queueTurn: async () => [{ type: "turn_completed" }],
+          },
+          throwOnTurn: new Error("initial turn failed"),
+        }),
+    }),
+  });
+  const observed = observePromise(attempt);
+
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.deepEqual(await observedPromiseState(observed), { status: "pending" });
+  releaseRecovery?.();
+
+  await assert.rejects(() => attempt, /initial turn failed/);
+});
+
 test("final recovery drains a missed event after the issue becomes inactive", async () => {
   const settings = fakeSettings({ agent: { ...defaultSettings().agent, maxTurns: 2 } });
   const queuedPrompts: string[] = [];
@@ -649,7 +686,7 @@ test("final recovery drains a missed event after the issue becomes inactive", as
   assert.match(queuedPrompts[0]!, /missed before completion/);
 });
 
-test("live delivery does not advance the recovery cursor past missed events", async () => {
+test("live delivery reconciles missed events before newer messages", async () => {
   const settings = fakeSettings({ agent: { ...defaultSettings().agent, maxTurns: 3 } });
   const queuedPrompts: string[] = [];
   const recoveryCursors: string[] = [];
@@ -709,12 +746,77 @@ test("live delivery does not advance the recovery cursor past missed events", as
   releaseFirstTurn?.();
 
   const result = await attempt;
-  assert.equal(result.turnCount, 3);
-  assert.deepEqual(recoveryCursors, ["10.0", "12.0"]);
+  assert.equal(result.turnCount, 2);
+  assert.deepEqual(recoveryCursors, ["10.0", "12.0", "12.0"]);
+  assert.equal(queuedPrompts.length, 1);
   assert.match(queuedPrompts[0]!, /live event/);
-  assert.notMatch(queuedPrompts[0]!, /missed event/);
-  assert.match(queuedPrompts[1]!, /missed event/);
-  assert.notMatch(queuedPrompts[1]!, /live event/);
+  assert.match(queuedPrompts[0]!, /missed event/);
+  assert.ok(queuedPrompts[0]!.indexOf("missed event") < queuedPrompts[0]!.indexOf("live event"));
+});
+
+test("live delivery chunks large batches and shortens oversized messages", async () => {
+  const settings = fakeSettings({ agent: { ...defaultSettings().agent, maxTurns: 3 } });
+  const queuedPrompts: string[] = [];
+  let recoveryEvents: TrackerIssueEvent[] = [];
+  let issueEventListener: ((events: TrackerIssueEvent[]) => void) | undefined;
+  let releaseFirstTurn: (() => void) | undefined;
+  let markFirstTurnStarted: (() => void) | undefined;
+  const firstTurnStarted = new Promise<void>((resolve) => {
+    markFirstTurnStarted = resolve;
+  });
+  const firstTurnRelease = new Promise<void>((resolve) => {
+    releaseFirstTurn = resolve;
+  });
+  const session = fakeSession({
+    queueTurn: async (prompt) => {
+      queuedPrompts.push(prompt);
+      return [{ type: "turn_completed" }];
+    },
+  });
+  const executor: AgentExecutor = {
+    kind: "codex",
+    async startSession() {
+      return session;
+    },
+    async runTurn() {
+      markFirstTurnStarted?.();
+      await firstTurnRelease;
+      return [{ type: "turn_completed" }];
+    },
+  };
+
+  const attempt = runAgentAttempt({
+    issue: fakeIssue({ issueEventCursor: "10.0" }),
+    workflow: { path: "/workflow.md", config: {}, promptTemplate: "Fix it", settings },
+    settings,
+    fetchIssue: async (issue) => issue,
+    fetchIssueEvents: async () => recoveryEvents,
+    subscribeIssueEvents: (listener) => {
+      issueEventListener = listener;
+      return () => {};
+    },
+    adapters: fakeAdapters({ executorFactory: () => executor }),
+  });
+
+  await firstTurnStarted;
+  recoveryEvents = [
+    { ts: "11.0", author: "ryan", text: "a".repeat(40 * 1024) },
+    { ts: "12.0", author: "ryan", text: "b".repeat(40 * 1024) },
+    {
+      ts: "13.0",
+      author: "ryan",
+      text: `${"c".repeat(100 * 1024)}tail-marker`,
+    },
+  ];
+  issueEventListener?.(recoveryEvents);
+  await vi.waitFor(() => assert.equal(queuedPrompts.length, 3));
+  releaseFirstTurn?.();
+
+  const result = await attempt;
+  assert.equal(result.turnCount, 4);
+  assert.ok(queuedPrompts.every((prompt) => Buffer.byteLength(prompt) < 70 * 1024));
+  assert.match(queuedPrompts[2]!, /message shortened for live delivery/);
+  assert.match(queuedPrompts[2]!, /tail-marker/);
 });
 
 test("recovery can queue a missed event before the no-tool completion exit", async () => {
