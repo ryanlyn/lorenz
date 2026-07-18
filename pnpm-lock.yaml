@@ -434,6 +434,9 @@ importers:
       '@hono/node-server':
         specifier: 'catalog:'
         version: 1.19.14(hono@4.12.23)
+      '@lorenz/server':
+        specifier: workspace:*
+        version: link:../../packages/server
       '@lorenz/traceviz-server':
         specifier: workspace:*
         version: link:../../packages/traceviz-server
@@ -818,9 +821,6 @@ importers:
 
   packages/policies:
     dependencies:
-      '@lorenz/dispatch':
-        specifier: workspace:*
-        version: link:../dispatch
       '@lorenz/domain':
         specifier: workspace:*
         version: link:../domain
@@ -863,9 +863,6 @@ importers:
       '@lorenz/orchestrator':
         specifier: workspace:*
         version: link:../orchestrator
-      '@lorenz/policies':
-        specifier: workspace:*
-        version: link:../policies
       '@lorenz/runtime-events':
         specifier: workspace:*
         version: link:../runtime-events

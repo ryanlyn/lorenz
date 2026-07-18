@@ -98,4 +98,22 @@ describe("standalone traceviz routes", () => {
     );
     expect(statsResponse.status).toBe(404);
   });
+
+  it.each(["events", "stats"])(
+    "returns structured 400 for malformed ticket ids on the %s route",
+    async (route) => {
+      const fetch = await loadStandaloneFetch();
+
+      const response = await fetch(
+        new Request(`http://localhost/api/v1/tickets/%E0%A4%A/${route}`),
+      );
+      expect(response.status).toBe(400);
+      expect(await response.json()).toEqual({
+        error: {
+          code: "invalid_path_parameter",
+          message: "Malformed percent encoding in path parameter",
+        },
+      });
+    },
+  );
 });

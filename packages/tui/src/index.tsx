@@ -1,8 +1,15 @@
 import React, { useEffect, useRef, useState } from "react";
 import { Box, Text, useApp, useInput, useStdin, useStdout } from "ink";
-import { dispatchBlockReasonLabel, type AgentUpdateType } from "@lorenz/domain";
+import { dispatchBlockReasonLabel, isRecord, type AgentUpdateType } from "@lorenz/domain";
 import type { RuntimeSnapshot } from "@lorenz/runtime-events";
-import { humanizeAgentMessage } from "@lorenz/humanize";
+import {
+  arrayAt,
+  humanizeAgentMessage,
+  sanitizeTerminalText,
+  stripAnsiSequences,
+  stringAt,
+  truncateTerminalText,
+} from "@lorenz/humanize";
 
 const REFRESH_INTERVAL_MS = 250;
 
@@ -179,49 +186,6 @@ export function RuntimeApp({
               runSparkline: (run) =>
                 tokenRateSparkline(runSamplesRef.current.get(runKey(run)) ?? [], now),
             })}
-      </Text>
-    </Box>
-  );
-}
-
-export function RuntimeDashboard({
-  snapshot,
-  throughputTps,
-  dashboardUrl,
-  trackerKind,
-  agentKind,
-  now,
-  snapshotReceivedAt,
-  columns,
-  rows,
-  maxAgents,
-}: {
-  snapshot: RuntimeSnapshot;
-  throughputTps?: number | undefined;
-  dashboardUrl?: string | null | undefined;
-  trackerKind?: string | undefined;
-  agentKind?: string | undefined;
-  now?: Date | string | number | undefined;
-  snapshotReceivedAt?: Date | string | number | undefined;
-  columns?: number | undefined;
-  rows?: number | undefined;
-  maxAgents?: number | undefined;
-}) {
-  return (
-    <Box flexDirection="column" marginTop={1}>
-      <Text>
-        {formatDashboard(snapshot, {
-          dashboardUrl,
-          trackerKind,
-          agentKind,
-          throughputTps,
-          now,
-          snapshotReceivedAt,
-          columns,
-          rows,
-          maxAgents,
-          ansi: true,
-        })}
       </Text>
     </Box>
   );
@@ -562,7 +526,7 @@ function tableHeader(layout: TableLayout, ansi: boolean): string {
     .map(({ spec, width }) =>
       spec.align === "right"
         ? spec.label.padStart(width)
-        : truncate(spec.label, width).padEnd(width),
+        : truncateTerminalText(spec.label, width).padEnd(width),
     )
     .join(" ".repeat(layout.gap));
   return s("90", prefix + header, ansi);
@@ -824,8 +788,7 @@ function fitLine(mandatory: string, optional: string[], sep: string, columns: nu
 }
 
 function visibleLength(value: string): number {
-  // eslint-disable-next-line no-control-regex
-  return value.replace(/\x1b\[[0-9;]*m/g, "").length;
+  return stripAnsiSequences(value).length;
 }
 
 function headerLines(
@@ -1122,7 +1085,7 @@ function eventColor(type: string): string {
 }
 
 function formatClockTime(iso: string): string {
-  const time = sanitize(iso).slice(11, 19);
+  const time = sanitizeTerminalText(iso).slice(11, 19);
   return time.length === 8 ? time : "--:--:--";
 }
 
@@ -1308,50 +1271,9 @@ function styledCell(
 }
 
 function terminalCell(value: string, options?: TerminalCellOptions): string {
-  let cell = sanitize(value);
-  if (options?.max !== undefined) cell = truncate(cell, options.max);
+  let cell = sanitizeTerminalText(value);
+  if (options?.max !== undefined) cell = truncateTerminalText(cell, options.max);
   if (options?.padEnd !== undefined) cell = cell.padEnd(options.padEnd);
   if (options?.padStart !== undefined) cell = cell.padStart(options.padStart);
   return cell;
-}
-
-const escapeCharacter = String.fromCharCode(27);
-const asciiControlCharacters = `${String.fromCharCode(0)}-${String.fromCharCode(31)}${String.fromCharCode(127)}`;
-const ANSI_CONTROL_SEQUENCE = new RegExp(`${escapeCharacter}\\[[0-9;]*[A-Za-z]`, "g");
-const ANSI_ESCAPE_SEQUENCE = new RegExp(`${escapeCharacter}.`, "g");
-const ASCII_CONTROL_CHARACTER = new RegExp(`[${asciiControlCharacters}]`, "g");
-
-function sanitize(value: string): string {
-  return value
-    .replace(ANSI_CONTROL_SEQUENCE, "")
-    .replace(ANSI_ESCAPE_SEQUENCE, "")
-    .replace(ASCII_CONTROL_CHARACTER, "")
-    .trim();
-}
-
-function truncate(value: string, max: number): string {
-  return value.length > max ? `${value.slice(0, Math.max(0, max - 3))}...` : value;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function arrayAt(value: unknown, path: string[]): unknown[] | null {
-  const found = valueAt(value, path);
-  return Array.isArray(found) ? found : null;
-}
-
-function stringAt(value: unknown, path: string[]): string | null {
-  const found = valueAt(value, path);
-  return typeof found === "string" && found.trim() !== "" ? found : null;
-}
-
-function valueAt(value: unknown, path: string[]): unknown {
-  let current = value;
-  for (const part of path) {
-    if (!isRecord(current)) return undefined;
-    current = current[part];
-  }
-  return current;
 }
