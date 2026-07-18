@@ -322,11 +322,11 @@ test("ACP session ignores prompt queue capabilities without the Lorenz contract"
   }
 });
 
-test("ACP queued turn starts its lifecycle after a timed-out predecessor releases the bridge", async () => {
+test("ACP turn timeout rejects queued turns and stops the session", async () => {
   const root = await tempDir("lorenz-acp-queued-timeout");
   const fake = await writeFakeBridge(root);
   const trace = path.join(root, "trace.jsonl");
-  const settings = acpSettings(root, fake, trace, "queued-timeout", 50);
+  const settings = acpSettings(root, fake, trace, "queued-timeout", 500);
   const updates: AgentUpdate[] = [];
   const executor = new Executor("claude");
   const session = await executor.startSession({
@@ -343,29 +343,28 @@ test("ACP queued turn starts its lifecycle after a timed-out predecessor release
       .catch((error: unknown) => error);
     await waitForTraceEvent(trace, "firstPromptWaiting");
     assert.ok(session.queueTurn);
-    const queued = session.queueTurn("new direction");
+    const queued = session.queueTurn("new direction").catch((error: unknown) => error);
     await waitForTraceEvent(trace, "queuedPromptWaiting");
 
     assert.match(String(await active), /acp turn timed out/);
-    const queuedUpdates = await queued;
-    assert.ok(queuedUpdates.some((update) => update.type === "turn_completed"));
+    assert.match(String(await queued), /acp session stopped after turn timeout/);
   } finally {
     await session.stop();
   }
 
-  assert.equal(updates.filter((update) => update.type === "turn_started").length, 2);
+  assert.equal(updates.filter((update) => update.type === "turn_started").length, 1);
   const events = await readTrace(trace);
-  const releasedIndex = events.findIndex((event) => event.method === "firstPromptReleased");
-  const runningIndex = events.findIndex((event) => event.method === "queuedPromptRunning");
-  assert.ok(releasedIndex >= 0);
-  assert.ok(runningIndex > releasedIndex);
+  assert.equal(
+    events.some((event) => event.method === "queuedPromptRunning"),
+    false,
+  );
 });
 
-test("ACP queued turns reject when a timed-out backend does not release its slot", async () => {
+test("ACP timeout rejects queued turns when the backend is unresponsive", async () => {
   const root = await tempDir("lorenz-acp-queued-wedged-timeout");
   const fake = await writeFakeBridge(root);
   const trace = path.join(root, "trace.jsonl");
-  const settings = acpSettings(root, fake, trace, "queued-wedged-timeout", 50);
+  const settings = acpSettings(root, fake, trace, "queued-wedged-timeout", 500);
   const executor = new Executor("claude");
   const session = await executor.startSession({
     workspace: root,
@@ -383,7 +382,7 @@ test("ACP queued turns reject when a timed-out backend does not release its slot
     const queued = session.queueTurn("new direction");
 
     assert.match(String(await active), /acp turn timed out/);
-    await expectRejectsWithin(() => queued, 7_000, /acp backend cancellation timed out/);
+    await expectRejectsWithin(() => queued, 1_000, /acp session stopped after turn timeout/);
   } finally {
     await session.stop();
   }
@@ -688,7 +687,7 @@ test("ACP executor ignores session updates for a different active session", asyn
   assert.equal(closeSession?.params?.sessionId, "acp-new");
 });
 
-test("ACP executor times out stalled bridge turns and emits a typed failure", async () => {
+test("ACP executor stops the bridge when a turn stalls", async () => {
   const root = await tempDir("lorenz-acp-stall");
   const fake = await writeFakeBridge(root);
   const trace = path.join(root, "trace.jsonl");
@@ -707,13 +706,15 @@ test("ACP executor times out stalled bridge turns and emits a typed failure", as
       500,
       /acp turn timed out/,
     );
+    await vi.waitFor(() => {
+      assert.ok(updates.some((update) => update.type === "process_exit"));
+    });
   } finally {
     await session.stop();
   }
 
   assert.ok(updates.some((update) => update.type === "turn_started"));
-  const traceEvents = await readTrace(trace);
-  assert.ok(traceEvents.some((event) => event.method === "cancel"));
+  assert.ok(updates.some((update) => update.type === "process_exit"));
 });
 
 test("ACP executor resets the stall timeout on session notifications", async () => {
@@ -822,7 +823,7 @@ test("ACP executor emits matching terminal sessionUpdate kinds for cancelled and
   }
 });
 
-test("ACP executor suppresses late terminal updates after turn timeout", async () => {
+test("ACP executor suppresses terminal updates after turn timeout", async () => {
   const root = await tempDir("lorenz-acp-late-timeout");
   const fake = await writeFakeBridge(root);
   const trace = path.join(root, "trace.jsonl");
@@ -840,20 +841,20 @@ test("ACP executor suppresses late terminal updates after turn timeout", async (
       () => executor.runTurn(session, "hello", sampleIssue),
       /acp turn timed out/,
     );
-    await waitForTraceEvent(trace, "promptResolvedAfterCancel");
+    await vi.waitFor(() => {
+      assert.ok(updates.some((update) => update.type === "process_exit"));
+    });
   } finally {
     await session.stop();
   }
 
-  const traceEvents = await readTrace(trace);
-  assert.ok(traceEvents.some((event) => event.method === "cancel"));
   assert.equal(
     updates.some((update) => update.type === "turn_completed" || update.type === "turn_cancelled"),
     false,
   );
 });
 
-test("ACP executor does not rearm stall cancellation after turn timeout", async () => {
+test("ACP executor does not rearm the stall timer after turn timeout", async () => {
   const root = await tempDir("lorenz-acp-late-activity-timeout");
   const fake = await writeFakeBridge(root);
   const trace = path.join(root, "trace.jsonl");
@@ -861,16 +862,24 @@ test("ACP executor does not rearm stall cancellation after turn timeout", async 
     stallTimeoutMs: 100,
   });
   const executor = new Executor("claude");
-  const session = await executor.startSession({ workspace: root, settings, issue: sampleIssue });
+  const updates: AgentUpdate[] = [];
+  const session = await executor.startSession({
+    workspace: root,
+    settings,
+    issue: sampleIssue,
+    onUpdate: (update) => updates.push(update),
+  });
   try {
     await assert.rejects(
       () => executor.runTurn(session, "hello", sampleIssue),
       /acp turn timed out/,
     );
-    await waitForTraceEvent(trace, "lateActivityAfterTimeout");
+    await vi.waitFor(() => {
+      assert.ok(updates.some((update) => update.type === "process_exit"));
+    });
     await settle(150);
     const traceEvents = await readTrace(trace);
-    assert.equal(traceEvents.filter((event) => event.method === "cancel").length, 1);
+    assert.equal(traceEvents.filter((event) => event.method === "cancel").length, 0);
   } finally {
     await session.stop();
   }

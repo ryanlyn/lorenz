@@ -63,7 +63,6 @@ export {
 
 /** The SSH worker-host pool provisions the reverse tunnels behind remote MCP endpoints. */
 const mcpTunnelTransport: RemoteMcpTunnelTransport = workerHostPool;
-const ACP_CANCEL_GRACE_MS = 5_000;
 
 interface Session extends AgentSession {
   connection: ClientSideConnection;
@@ -289,21 +288,13 @@ export class Executor implements AgentExecutor {
     return new Promise<AgentUpdate[]>((resolve, reject) => {
       const cancelTurn = () => {
         if (turn.settled) return;
-        void session.connection.cancel({ sessionId: requireSessionId(session) }).catch((err) => {
-          process.stderr.write(`session cancel failed: ${err}\n`);
+        rejectTimedOutSession(session);
+        void stopChild(session.process).catch((err) => {
+          process.stderr.write(`acp bridge stop failed: ${err}\n`);
         });
-        finishReject(new Error("acp turn timed out"));
-        cancelGraceTimer = setTimeout(() => {
-          if (!session.pendingTurns.includes(turn)) return;
-          rejectPendingTurns(session, new Error("acp backend cancellation timed out"));
-          void stopChild(session.process).catch((err) => {
-            process.stderr.write(`acp bridge stop failed: ${err}\n`);
-          });
-        }, ACP_CANCEL_GRACE_MS);
       };
       let stallTimer: ReturnType<typeof setTimeout> | undefined;
       let hardTimer: ReturnType<typeof setTimeout> | undefined;
-      let cancelGraceTimer: ReturnType<typeof setTimeout> | undefined;
       const resetStallTimer = () => {
         if (!turn.active || turn.settled || session.agentConfig.stallTimeoutMs <= 0) return;
         if (stallTimer) clearTimeout(stallTimer);
@@ -313,7 +304,6 @@ export class Executor implements AgentExecutor {
       const clearTimers = () => {
         if (hardTimer) clearTimeout(hardTimer);
         if (stallTimer) clearTimeout(stallTimer);
-        if (cancelGraceTimer) clearTimeout(cancelGraceTimer);
       };
 
       const releaseBackendSlot = () => {
@@ -913,6 +903,13 @@ function wireProcessEvents(session: Session): void {
 function rejectPendingTurns(session: Session, error: Error): void {
   const pending = session.pendingTurns.splice(0);
   for (const turn of pending) turn.reject(error);
+}
+
+function rejectTimedOutSession(session: Session): void {
+  const [timedOut, ...queued] = session.pendingTurns.splice(0);
+  timedOut?.reject(new Error("acp turn timed out"));
+  const queuedError = new Error("acp session stopped after turn timeout");
+  for (const turn of queued) turn.reject(queuedError);
 }
 
 function submitEligiblePrompts(session: Session): void {

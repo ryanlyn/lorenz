@@ -55,10 +55,10 @@ Only one turn runs per session at a time. A second `runTurn` while a turn is pen
 
 Two timers guard a turn, both set per kind and both reset on each `runTurn`:
 
-- **Turn timeout** (`turn_timeout_ms`, internal `turnTimeoutMs`, default `3600000`) is a hard timer. When it fires it calls `connection.cancel({sessionId})` and rejects with `acp turn timed out`.
-- **Stall timeout** (`stall_timeout_ms`, internal `stallTimeoutMs`, default `300000`) is an inactivity timer. It is reset on every incoming `AgentUpdate`, which means every session notification or stderr update. If no update arrives within the window, it fires the same `cancelTurn` path as the hard timer. Setting `stall_timeout_ms` to `0` or less disables stall detection entirely.
+- **Turn timeout** (`turn_timeout_ms`, internal `turnTimeoutMs`, default `3600000`) is a hard timer. When it fires it rejects the active turn with `acp turn timed out`, rejects queued turns with `acp session stopped after turn timeout`, and stops the bridge.
+- **Stall timeout** (`stall_timeout_ms`, internal `stallTimeoutMs`, default `300000`) is an inactivity timer. It is reset on every incoming `AgentUpdate`, which means every session notification or stderr update. If no update arrives within the window, it fires the same session-stopping path as the hard timer. Setting `stall_timeout_ms` to `0` or less disables stall detection entirely.
 
-Both timers route through the same cancel-and-reject path. Late terminal updates that arrive after a timeout has settled the turn are suppressed by a settled guard. You can set both timeouts once under the `agents:` block as shared defaults and override them per kind; the per-kind value wins.
+Both timers stop the session because ACP cancellation is session-scoped and cannot safely distinguish a timed-out turn from a queued successor. You can set both timeouts once under the `agents:` block as shared defaults and override them per kind; the per-kind value wins.
 
 ## The executor extension model
 
