@@ -495,12 +495,13 @@ export class Executor implements AgentExecutor {
     } catch {
       // Closing is best effort because the bridge may already be gone.
     } finally {
-      // Release ONLY the endpoint acp owns. When the coordinator threaded a
-      // per-run lease in (`ownsMcpEndpoint === false`) the slot.release closes it,
-      // so acp skips its own release to avoid a double-close of the shared
-      // token+local-server+tunnel.
-      await stopChild(session.process, { processGroup: !session.workerHost });
-      if (session.ownsMcpEndpoint) await session.mcpEndpoint.release();
+      try {
+        await stopChild(session.process, { processGroup: !session.workerHost });
+      } finally {
+        // A coordinator-provided per-run lease owns its endpoint lifecycle.
+        // ACP releases only endpoints that it created itself.
+        if (session.ownsMcpEndpoint) await session.mcpEndpoint.release();
+      }
     }
   }
 }

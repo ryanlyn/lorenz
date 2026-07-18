@@ -1,4 +1,4 @@
-import type { ChildProcessWithoutNullStreams } from "node:child_process";
+import { execFile, type ChildProcessWithoutNullStreams } from "node:child_process";
 
 export interface StopChildOptions {
   processGroup?: boolean | undefined;
@@ -26,6 +26,17 @@ export async function stopChild(
   child: ChildProcessWithoutNullStreams,
   options: StopChildOptions = {},
 ): Promise<void> {
+  if (
+    options.processGroup === true &&
+    process.platform === "win32" &&
+    child.pid !== undefined &&
+    child.exitCode === null &&
+    child.signalCode === null
+  ) {
+    await stopWindowsProcessTree(child.pid);
+    return;
+  }
+
   const processGroupId =
     options.processGroup === true && process.platform !== "win32" ? child.pid : undefined;
   const sendSignal = (signal: NodeJS.Signals): void => {
@@ -70,5 +81,26 @@ export async function stopChild(
       resolve();
     });
     sendSignal("SIGTERM");
+  });
+}
+
+async function stopWindowsProcessTree(pid: number): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    execFile(
+      "taskkill",
+      ["/PID", String(pid), "/T", "/F"],
+      { windowsHide: true },
+      (error, _stdout, stderr) => {
+        if (!error) {
+          resolve();
+          return;
+        }
+        reject(
+          new Error(`taskkill failed for process tree ${pid}: ${stderr.trim() || error.message}`, {
+            cause: error,
+          }),
+        );
+      },
+    );
   });
 }
