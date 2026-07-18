@@ -443,6 +443,9 @@ importers:
       '@hono/node-server':
         specifier: 'catalog:'
         version: 1.19.14(hono@4.12.23)
+      '@lorenz/server':
+        specifier: workspace:*
+        version: link:../../packages/server
       '@lorenz/traceviz-server':
         specifier: workspace:*
         version: link:../../packages/traceviz-server

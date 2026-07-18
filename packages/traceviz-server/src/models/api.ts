@@ -13,8 +13,8 @@ export interface HealthResponse {
 export interface TicketInfo {
   issueId: string;
   identifier: string;
-  title?: string | undefined;
-  url?: string | undefined;
+  title?: string | null | undefined;
+  url?: string | null | undefined;
   agentKind?: string | undefined;
   startedAt?: string | undefined;
   turnCount: number;
