@@ -452,7 +452,7 @@ export class Executor implements AgentExecutor {
       const turn: PendingTurn = {
         active: false,
         settled: false,
-        allowSessionIdRotation: true,
+        allowSessionIdRotation: !supportsStableSessionId(session.init),
         activate: () => {
           backendSlotAvailable = true;
           beginTurn();
@@ -551,6 +551,7 @@ function handleSessionUpdate(session: Session, notification: SessionNotification
     timestamp: new Date(),
     ...(usage && { usage, usageKind: "cumulative" as const }),
   });
+  submitEligiblePrompts(session);
 }
 
 /**
@@ -895,6 +896,7 @@ function startBridgeProcess(
   if (workerHost) {
     // Remote bridges resolve their own binaries on the worker host.
     const script = bridgeGuardianScript(workspace, bridge);
+    // startSshProcess supplies the single bash -lc boundary for this script.
     return startSshProcess(workerHost, script);
   }
   if (process.platform === "win32") {
@@ -1221,13 +1223,23 @@ function rejectTimedOutSession(session: Session): void {
 }
 
 function submitEligiblePrompts(session: Session): void {
-  for (const turn of session.pendingTurns) {
+  for (const [index, turn] of session.pendingTurns.entries()) {
+    if (
+      index > 0 &&
+      session.pendingTurns.slice(0, index).some((pending) => pending.allowSessionIdRotation)
+    ) {
+      return;
+    }
     if (!turn.trySubmitPrompt()) return;
   }
 }
 
 function supportsPromptQueue(init: InitializeResponse): boolean {
   return init.agentCapabilities?._meta?.["symphony/promptQueueing"] === true;
+}
+
+function supportsStableSessionId(init: InitializeResponse): boolean {
+  return init.agentCapabilities?._meta?.["symphony/stableSessionId"] === true;
 }
 
 function clientCapabilities(workerHost: string | null): ClientCapabilities {

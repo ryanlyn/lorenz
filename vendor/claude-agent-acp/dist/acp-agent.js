@@ -341,6 +341,7 @@ export class ClaudeAcpAgent {
             agentCapabilities: {
                 _meta: {
                     "symphony/promptQueueing": true,
+                    "symphony/stableSessionId": true,
                     claudeCode: {
                         promptQueueing: true,
                     },

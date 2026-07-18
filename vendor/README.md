@@ -41,6 +41,9 @@ so they ride the protocol's sanctioned extension point:
 - `initialize` response capability
   `agentCapabilities._meta["symphony/promptQueueing"]` (both bridges) -
   advertises that concurrent prompts are accepted and run in submission order.
+- `initialize` response capability
+  `agentCapabilities._meta["symphony/stableSessionId"]` (both bridges) -
+  advertises that session IDs remain stable while prompts are queued.
 - Concurrent `session/prompt` requests (codex) are queued per session before
   reaching app-server, which permits one active turn per thread. The Claude
   bridge provides the same FIFO prompt behavior.

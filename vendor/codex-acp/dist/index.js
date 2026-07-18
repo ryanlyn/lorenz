@@ -20079,7 +20079,8 @@ var CodexAcpServer = class _CodexAcpServer {
       },
       agentCapabilities: {
         _meta: {
-          "symphony/promptQueueing": true
+          "symphony/promptQueueing": true,
+          "symphony/stableSessionId": true
         },
         auth: {
           logout: {}

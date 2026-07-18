@@ -192,7 +192,7 @@ test("ACP session preserves submission order across an activation gate", async (
   assert.equal(prompts[2]?.params?.prompt?.[0]?.text, "later direction");
 });
 
-test("ACP gated turn uses the session id active at submission", async () => {
+test("ACP queued turn waits for an eligible session id before submission", async () => {
   const root = await tempDir("lorenz-acp-gated-session-rotation");
   const fake = await writeFakeBridge(root);
   const trace = path.join(root, "trace.jsonl");
@@ -205,25 +205,22 @@ test("ACP gated turn uses the session id active at submission", async () => {
     issue: sampleIssue,
     onUpdate: (update) => updates.push(update),
   });
-  let allowActivation: (() => void) | undefined;
-  const startWhen = new Promise<void>((resolve) => {
-    allowActivation = resolve;
-  });
-
   try {
     const active = executor.runTurn(session, "initial work", sampleIssue);
     await waitForTraceEvent(trace, "rotationPromptWaiting");
     assert.ok(session.queueTurn);
-    const queued = session.queueTurn("validated direction", { startWhen });
+    const queued = session.queueTurn("validated direction");
+
+    await settle(20);
+    const prompts = (await readTrace(trace)).filter((event) => event.method === "prompt");
+    assert.equal(prompts.length, 1);
 
     await fs.writeFile(`${trace}.rotate`, "");
     await active;
     assert.equal(session.sessionId, "acp-rotated");
 
-    allowActivation?.();
     await queued;
   } finally {
-    allowActivation?.();
     await session.stop();
   }
 
@@ -438,6 +435,8 @@ test("vendored prompt queues advertise capability and isolate Claude usage at ha
   const codexSource = await fs.readFile(path.resolve("vendor/codex-acp/dist/index.js"), "utf8");
   assert.match(claudeSource, /"symphony\/promptQueueing": true/);
   assert.match(codexSource, /"symphony\/promptQueueing": true/);
+  assert.match(claudeSource, /"symphony\/stableSessionId": true/);
+  assert.match(codexSource, /"symphony\/stableSessionId": true/);
 
   const promptStart = claudeSource.indexOf("async prompt(params)");
   const queuedHandoff = claudeSource.indexOf("const cancelled = await", promptStart);
@@ -1275,7 +1274,12 @@ class FakeAgent {
     if (mode === "queued-external-capability") {
       agentCapabilities._meta = { claudeCode: { promptQueueing: true } };
     } else if (mode.startsWith("queued")) {
-      agentCapabilities._meta = { "symphony/promptQueueing": true };
+      agentCapabilities._meta = {
+        "symphony/promptQueueing": true,
+        ...(mode === "queued-session-rotation"
+          ? {}
+          : { "symphony/stableSessionId": true })
+      };
     }
     return { protocolVersion: acp.PROTOCOL_VERSION, agentCapabilities };
   }
