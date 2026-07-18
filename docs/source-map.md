@@ -10,9 +10,9 @@ Packages stack in dependency order. Each layer depends only on the ones above it
 
 | Layer | Packages | Owns |
 | --- | --- | --- |
-| Leaf / domain | `domain`, `issue`, `log-file` | Pure vocabulary, types, bounds, issue normalization |
+| Leaf / domain | `domain`, `policies`, `issue`, `log-file` | Pure vocabulary, dependency-light policy logic, bounds, issue normalization |
 | Extension SDKs | `tracker-sdk`, `tool-sdk`, `agent-sdk`, `worker-sdk` | The four builder-facing contracts plus registries |
-| Engine | `config`, `workflow`, `prompt`, `dispatch`, `policies`, `retry-scheduler`, `orchestrator`, `runtime`, `runtime-events`, `projections`, `dispatch-coordinator`, `worker-pool`, `worker-host-pool`, `ssh`, `static-worker`, `agent-runner`, `acp`, `mcp`, `server`, `presenter`, `humanize`, `traceviz-emitter`, `traceviz-core`, `tui`, `workspace`, `test-utils` | The poll/dispatch loop, agent execution, MCP, observability |
+| Engine | `config`, `workflow`, `dispatch`, `retry-scheduler`, `orchestrator`, `runtime`, `runtime-events`, `dispatch-coordinator`, `worker-pool`, `worker-host-pool`, `ssh`, `static-worker`, `agent-runner`, `acp`, `mcp`, `server`, `presenter`, `humanize`, `traceviz-emitter`, `traceviz-core`, `tui`, `workspace`, `test-utils` | The poll/dispatch loop, agent execution, MCP, observability |
 | Extensions | `extensions/linear-tracker`, `extensions/jira-tracker`, `extensions/local-tracker`, `extensions/memory-tracker`, `extensions/slack-tracker`, `extensions/docker-worker` | Concrete trackers and one worker driver |
 | Apps | `apps/cli`, `apps/web`, `apps/traceviz` | The `lorenz` binary, the React SPA, the standalone trace viewer |
 | Vendored | `vendor/codex-acp`, `vendor/claude-agent-acp` | Patched ACP bridge subprocesses |
@@ -21,11 +21,12 @@ The composition root in `apps/cli/src/daemon.ts` (`registerBuiltinBackends`) is 
 
 ## Leaf and domain packages
 
-The bottom of the stack. Everything else imports them. `@lorenz/domain` is the true leaf: its only runtime dependency is `@agentclientprotocol/sdk`. `@lorenz/issue` depends on `@lorenz/domain`, and `@lorenz/log-file` pulls in `pino` and `pino-roll` for the rolling event log.
+The bottom of the stack. Everything else imports them. `@lorenz/domain` is the true leaf: its only runtime dependency is `@agentclientprotocol/sdk`. `@lorenz/policies` depends only on domain. `@lorenz/issue` also depends on domain, and `@lorenz/log-file` pulls in `pino` and `pino-roll` for the rolling event log.
 
 | Package | What it owns |
 | --- | --- |
 | `@lorenz/domain` | The cross-cutting vocabulary: `Issue`, `Settings` and every sub-settings interface, `AgentConfig`, `TrackerSettings`, the `AgentUpdate` union, `ClockPort`, bounds constants and validators. Also the executor runtime contracts `AgentExecutor` / `AgentSession` / `AgentUpdate`, which live here, not in `agent-sdk`. `TrackerKind` / `AgentKind` / `WorkerDriverKind` are open-ended `string` aliases, not closed unions. |
+| `@lorenz/policies` | Dependency-light retry, stop-reason, usage, and worker-host policy functions. |
 | `@lorenz/issue` | Issue normalization: `normalizeIssue`, `defaultStateType`, `ensembleSize`, `isTerminalState`. |
 | `@lorenz/log-file` | `defaultLogFile(root)`, the optional JSON event-log path helper. |
 
@@ -50,7 +51,6 @@ These turn a `WORKFLOW.md` file into typed `Settings` plus a renderable prompt.
 | --- | --- | --- |
 | `@lorenz/config` | The whole config schema (Zod), snake_case-to-camelCase aliasing, secret resolution, `status_overrides`, dispatch validation | `src/parse.ts`, `src/defaults.ts`, `src/schemas.ts` |
 | `@lorenz/workflow` | Front-matter/body split, file location (`LORENZ_WORKFLOW`), content stamping for change detection, `loadWorkflow` | `src/index.ts` |
-| `@lorenz/prompt` | Liquid prompt rendering at dispatch time: `buildPrompt`, `continuationPrompt` | `src/index.ts` |
 
 `config`'s `src/parse.ts` is the main entry (`parseConfig`, `settingsForIssueState`, `validateDispatchConfig`); `src/defaults.ts` holds every default value and `DEFAULT_CLAUDE_MODEL`. Hot-reload itself lives in `runtime`, not here. See [workflows.md](workflows.md) and [reference/configuration.md](reference/configuration.md).
 
@@ -61,7 +61,7 @@ Pure, side-effect-free policy split across small packages. The orchestrator and 
 | Package | What it owns | First files to open |
 | --- | --- | --- |
 | `@lorenz/dispatch` | Eligibility predicates, routing, concurrency-cap reasons, deterministic sort, ensemble slot selection | `src/index.ts` |
-| `@lorenz/policies` | Retry backoff math, stop-reason classification, reconciliation reasons, monotonic usage merge, least-loaded host selection | `src/retry.ts`, `src/reconciliation.ts`, `src/workerHost.ts` |
+| `@lorenz/policies` | Retry backoff math, stop-reason classification, monotonic usage merge, least-loaded host selection | `src/retry.ts`, `src/stopReason.ts`, `src/workerHost.ts` |
 | `@lorenz/retry-scheduler` | A per-issue timer firing `onDue` at a retry's monotonic deadline to nudge the poll | `src/index.ts` |
 
 `dispatch`'s `src/index.ts` holds `shouldDispatchIssue`, `dispatchBlockReason`, `sortForDispatch`, and `firstUnclaimedSlot`. See [dispatch.md](dispatch.md) and [features/dispatch-routing.md](features/dispatch-routing.md).
@@ -74,7 +74,7 @@ recovery and retry durability for operators that select them.
 | Package | What it owns | First files to open |
 | --- | --- | --- |
 | `@lorenz/orchestrator` | The single authoritative in-memory scheduling state and the only mutator of it: eligibility, slot claiming, pool reservations, agent-update application, retries, reconciliation | `src/index.ts` |
-| `@lorenz/runtime` | The recurring poll loop, per-run dispatch promises, reconciliation passes, transactional workflow reload, bounded projection state, and `RuntimeSnapshot` assembly | `src/index.ts`, `src/projection.ts` |
+| `@lorenz/runtime` | The recurring poll loop, per-run dispatch promises, reconciliation passes, transactional workflow reload, bounded projection state, and `RuntimeSnapshot` assembly | `src/index.ts`, `src/reconciliation.ts`, `src/projection.ts` |
 | `@lorenz/runtime-events` | The `RuntimeSnapshot` shape and the canonical `RUNTIME_EVENT_TYPES` / `RUNTIME_RUN_OUTCOMES` vocabularies | `src/index.ts` |
 
 `orchestrator`'s `src/index.ts` holds `Orchestrator`, `OrchestratorState`, and `createState`. `runtime`'s `src/index.ts` holds `LorenzRuntime` and `LorenzRuntimeOptions`, the dependency-injection bag the CLI binds, while `src/projection.ts` owns bounded snapshot projection state. See [agent-orchestrator.md](agent-orchestrator.md) and [reference/events.md](reference/events.md).
@@ -99,7 +99,7 @@ How one coding-agent turn actually runs.
 
 | Package | What it owns | First files to open |
 | --- | --- | --- |
-| `@lorenz/agent-runner` | The run loop: workspace creation, before/after hooks, session open, the `runTurn` loop up to `agent.max_turns` | `src/index.ts` |
+| `@lorenz/agent-runner` | Prompt rendering and the run loop: workspace creation, before/after hooks, session open, and turns up to `agent.max_turns` | `src/prompt.ts`, `src/index.ts` |
 | `@lorenz/acp` | The single built-in executor (`executor: "acp"`): spawns the bridge subprocess, drives the Agent Client Protocol, enforces turn and stall timeouts, accounts usage | `src/index.ts`, `src/options.ts` |
 | `@lorenz/workspace` | Per-issue workspace creation, skill overlay, hook execution, cleanup (`createWorkspaceForIssue`, `runHook`, `removeIssueWorkspaces`) | `src/index.ts` |
 

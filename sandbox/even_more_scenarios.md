@@ -98,7 +98,7 @@ npx tsx demo/sandbox.ts --inline '{"issues":[{"id":"ens-1","identifier":"ENS-1",
 
 ### Failure 17: S-1254 (Round 4)
 **Invariant Violated:** `reconciliationStopReason` SHALL distinguish terminal from merely inactive states  
-**Code Location:** `packages/policies/src/reconciliation.ts` — `reconciliationStopReason`  
+**Code Location:** `packages/runtime/src/reconciliation.ts` - `reconciliationStopReason`
 **Explanation:** The function checks `!issueIsActive(issue, settings)` first and returns `"terminal"` whenever this is true. But `issueIsActive` returns false for ANY state not in `activeStates` — including paused/hold states that are also not in `terminalStates`. The `"inactive"` return value is dead code for its intended purpose.  
 **Reproduction:**
 ```bash

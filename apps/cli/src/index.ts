@@ -31,7 +31,7 @@ export {
   workflowFilePath,
 } from "@lorenz/workflow";
 export { normalizeIssue, ensembleSize, isTerminalState } from "@lorenz/issue";
-export { buildPrompt, continuationPrompt } from "@lorenz/prompt";
+export { buildPrompt, continuationPrompt } from "@lorenz/agent-runner";
 export {
   safeIdentifier,
   workspacePath,
