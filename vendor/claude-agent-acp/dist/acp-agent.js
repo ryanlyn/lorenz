@@ -834,11 +834,11 @@ export class ClaudeAcpAgent {
                             }
                             const pending = session.pendingMessages.get(message.uuid);
                             if (pending) {
-                                pending.resolve(false);
                                 session.pendingMessages.delete(message.uuid);
                                 handedOff = true;
                                 // the current loop stops with end_turn,
                                 // the loop of the next prompt continues running
+                                settlePendingPrompt(pending, false);
                                 return { stopReason: "end_turn", usage: sessionUsage(session) };
                             }
                             if ("isReplay" in message && message.isReplay) {
@@ -1024,8 +1024,8 @@ export class ClaudeAcpAgent {
                     // next pending prompt call to ensure no prompts get stuck.
                     const next = [...session.pendingMessages.entries()].sort((a, b) => a[1].order - b[1].order)[0];
                     if (next) {
-                        next[1].resolve(false);
                         session.pendingMessages.delete(next[0]);
+                        settlePendingPrompt(next[1], false);
                     }
                 }
             }
@@ -1826,9 +1826,14 @@ function sessionUsage(session) {
 
 function cancelPendingPrompts(session) {
     for (const pending of session.pendingMessages.values()) {
-        pending.resolve(true);
+        settlePendingPrompt(pending, true);
     }
     session.pendingMessages.clear();
+}
+function settlePendingPrompt(pending, cancelled) {
+    // Let the current prompt response reach the transport before the next
+    // prompt can emit notifications or a response under the same session.
+    setImmediate(() => pending.resolve(cancelled));
 }
 /** Sum all four fields as a proxy for post-turn context occupancy: the current
  *  turn's output becomes next turn's input. Per the Anthropic API, input_tokens

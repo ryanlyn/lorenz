@@ -17,7 +17,7 @@ import type { AgentUpdate } from "@lorenz/cli";
 import { AgentExecutorRegistry } from "@lorenz/agent-sdk";
 import type { AgentMcpEndpointLease } from "@lorenz/mcp";
 import { workerHostPool } from "@lorenz/worker-host-pool";
-import { assert, sampleIssue, tempDir, writeExecutable } from "@lorenz/test-utils";
+import { assert, sampleIssue, settle, tempDir, writeExecutable } from "@lorenz/test-utils";
 
 import { acpExecutorProvider } from "@lorenz/acp";
 
@@ -144,6 +144,56 @@ test("ACP session submits a queued turn before the active turn finishes", async 
   const prompts = (await readTrace(trace)).filter((event) => event.method === "prompt");
   assert.equal(prompts[0]?.params?.prompt?.[0]?.text, "initial work");
   assert.equal(prompts[1]?.params?.prompt?.[0]?.text, "new direction");
+});
+
+test("ACP session publishes queued responses in turn lifecycle order", async () => {
+  const root = await tempDir("lorenz-acp-queued-response-order");
+  const fake = await writeFakeBridge(root);
+  const trace = path.join(root, "trace.jsonl");
+  const settings = acpSettings(root, fake, trace, "queued-response-order");
+  const updates: AgentUpdate[] = [];
+  const executor = new Executor("claude");
+  const session = await executor.startSession({
+    workspace: root,
+    settings,
+    issue: sampleIssue,
+    onUpdate: (update) => updates.push(update),
+  });
+
+  try {
+    const active = executor.runTurn(session, "initial work", sampleIssue);
+    await waitForTraceEvent(trace, "firstPromptWaiting");
+    assert.ok(session.queueTurn);
+    let queuedSettled = false;
+    const queued = session.queueTurn("new direction").then((result) => {
+      queuedSettled = true;
+      return result;
+    });
+
+    await waitForTraceEvent(trace, "queuedPromptResolved");
+    await settle(20);
+    try {
+      assert.equal(queuedSettled, false);
+      assert.deepEqual(
+        updates.map((update) => update.type),
+        ["session_started", "turn_started"],
+      );
+    } finally {
+      await fs.writeFile(`${trace}.release`, "");
+    }
+
+    await active;
+    await queued;
+  } finally {
+    await session.stop();
+  }
+
+  assert.deepEqual(
+    updates
+      .filter((update) => update.type === "turn_started" || update.type === "turn_completed")
+      .map((update) => update.type),
+    ["turn_started", "turn_completed", "turn_started", "turn_completed"],
+  );
 });
 
 test("ACP session exposes queueTurn only when the bridge advertises prompt queuing", async () => {
@@ -987,6 +1037,17 @@ class FakeAgent {
         record({ method: "queuedPromptAccepted" });
         await sleep(30);
       }
+      return { stopReason: "end_turn" };
+    }
+    if (mode === "queued-response-order") {
+      const promptNumber = this.promptCount;
+      if (promptNumber === 1) {
+        record({ method: "firstPromptWaiting" });
+        while (!fs.existsSync(trace + ".release")) await sleep(5);
+        record({ method: "firstPromptResolved" });
+        return { stopReason: "end_turn" };
+      }
+      record({ method: "queuedPromptResolved" });
       return { stopReason: "end_turn" };
     }
     if (mode === "queued-timeout") {

@@ -272,6 +272,7 @@ export class Executor implements AgentExecutor {
 
   private async startTurn(session: Session, prompt: string): Promise<AgentUpdate[]> {
     let settled = false;
+    let backendCompletion: (() => void) | undefined;
 
     return new Promise<AgentUpdate[]>((resolve, reject) => {
       const cancelTurn = () => {
@@ -300,6 +301,21 @@ export class Executor implements AgentExecutor {
         const wasActive = index === 0;
         session.pendingTurns.splice(index, 1);
         if (wasActive) session.pendingTurns[0]?.activate();
+      };
+
+      const flushBackendCompletion = () => {
+        if (!turn.active || !backendCompletion) return;
+        const complete = backendCompletion;
+        backendCompletion = undefined;
+        try {
+          complete();
+        } catch (error) {
+          if (!settled) {
+            finishReject(error instanceof Error ? error : new Error(errorMessage(error)));
+          }
+        } finally {
+          releaseBackendSlot();
+        }
       };
 
       const finishResolve = (value: AgentUpdate[]) => {
@@ -336,6 +352,7 @@ export class Executor implements AgentExecutor {
             message: { prompt: [{ type: "text", text: prompt }] },
             timestamp: new Date(),
           });
+          flushBackendCompletion();
         },
         touch: resetStallTimer,
         reject: finishReject,
@@ -348,48 +365,55 @@ export class Executor implements AgentExecutor {
           sessionId,
           prompt: [{ type: "text", text: prompt }],
         })
-        .then((response) => {
-          if (settled) return;
-          const usage = finalizeTurnUsage(session, extractUsage(response.usage ?? undefined));
-          const action = actionForStopReason(response.stopReason);
-          const terminalType =
-            action === "continue"
-              ? "turn_completed"
-              : action === "cancel"
-                ? "turn_cancelled"
-                : "turn_failed";
-          const base = {
-            sessionUpdate: acpProtocolUpdate(session, terminalType, { response }),
-            sessionId: session.sessionId,
-            executorPid: session.executorPid,
-            message: { response },
-            timestamp: new Date(),
-            ...(usage && { usage, usageKind: "cumulative" as const }),
-          };
-          if (action === "continue") {
-            const terminal: AgentUpdate = { ...base, type: "turn_completed" };
-            this.emit(session, terminal);
-            finishResolve([terminal]);
-          } else if (action === "cancel") {
-            this.emit(session, { ...base, type: "turn_cancelled" });
-            finishReject(new Error("acp_turn_cancelled"));
-          } else {
-            this.emit(session, { ...base, type: "turn_failed" });
-            finishReject(new Error(`acp_turn_failed: ${response.stopReason}`));
-          }
-        })
-        .catch((error: unknown) => {
-          if (settled) return;
-          const message = errorMessage(error);
-          this.emit(session, {
-            type: "turn_failed",
-            sessionId,
-            message,
-            timestamp: new Date(),
-          });
-          finishReject(error instanceof Error ? error : new Error(message));
-        })
-        .finally(releaseBackendSlot);
+        .then(
+          (response) => {
+            backendCompletion = () => {
+              if (settled) return;
+              const usage = finalizeTurnUsage(session, extractUsage(response.usage ?? undefined));
+              const action = actionForStopReason(response.stopReason);
+              const terminalType =
+                action === "continue"
+                  ? "turn_completed"
+                  : action === "cancel"
+                    ? "turn_cancelled"
+                    : "turn_failed";
+              const base = {
+                sessionUpdate: acpProtocolUpdate(session, terminalType, { response }),
+                sessionId: session.sessionId,
+                executorPid: session.executorPid,
+                message: { response },
+                timestamp: new Date(),
+                ...(usage && { usage, usageKind: "cumulative" as const }),
+              };
+              if (action === "continue") {
+                const terminal: AgentUpdate = { ...base, type: "turn_completed" };
+                this.emit(session, terminal);
+                finishResolve([terminal]);
+              } else if (action === "cancel") {
+                this.emit(session, { ...base, type: "turn_cancelled" });
+                finishReject(new Error("acp_turn_cancelled"));
+              } else {
+                this.emit(session, { ...base, type: "turn_failed" });
+                finishReject(new Error(`acp_turn_failed: ${response.stopReason}`));
+              }
+            };
+            flushBackendCompletion();
+          },
+          (error: unknown) => {
+            backendCompletion = () => {
+              if (settled) return;
+              const message = errorMessage(error);
+              this.emit(session, {
+                type: "turn_failed",
+                sessionId,
+                message,
+                timestamp: new Date(),
+              });
+              finishReject(error instanceof Error ? error : new Error(message));
+            };
+            flushBackendCompletion();
+          },
+        );
     });
   }
 
