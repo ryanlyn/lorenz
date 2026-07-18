@@ -1118,6 +1118,7 @@ test("live delivery bounds oversized event metadata", async () => {
   assert.ok(Buffer.byteLength(queuedPrompts[0]!) <= 64 * 1024);
   assert.match(queuedPrompts[0]!, /\[field shortened for live delivery\]/);
   assert.match(queuedPrompts[0]!, /bounded message/);
+  assert.equal(queuedPrompts[0]!.match(/bounded message/g)?.length, 1);
 });
 
 test("live delivery includes rendered formatting in the prompt byte limit", async () => {

@@ -1516,6 +1516,7 @@ test("active runs retain their tracker client across workflow reloads", async ()
   const callbacks: Array<((change?: TrackerChange) => void) | undefined> = [];
   const streamCloses = [0, 0];
   const recoveryCalls = [0, 0];
+  const issueRefreshCalls = [0, 0];
   const delivered: TrackerIssueEvent[] = [];
   let clientBuilds = 0;
   let activeRecovery:
@@ -1534,7 +1535,10 @@ test("active runs retain their tracker client across workflow reloads", async ()
         clientBuilds += 1;
         return {
           fetchCandidateIssues: async () => (index === 0 ? [issue] : []),
-          fetchIssuesByIds: async () => [issue],
+          fetchIssuesByIds: async () => {
+            issueRefreshCalls[index] = (issueRefreshCalls[index] ?? 0) + 1;
+            return index === 0 ? [issue] : [];
+          },
           fetchIssueEvents: async () => {
             recoveryCalls[index] = (recoveryCalls[index] ?? 0) + 1;
             return [];
@@ -1575,6 +1579,7 @@ test("active runs retain their tracker client across workflow reloads", async ()
     await runtime.pollOnce({ dryRun: true });
     assert.equal(clientBuilds, 2);
     assert.ok(callbacks[1]);
+    assert.deepEqual(issueRefreshCalls, [2, 0]);
 
     await activeRecovery?.("10.0");
     assert.deepEqual(recoveryCalls, [1, 0]);
@@ -1587,6 +1592,7 @@ test("active runs retain their tracker client across workflow reloads", async ()
     });
     await Promise.resolve();
     assert.deepEqual(delivered, []);
+    await waitFor(() => issueRefreshCalls[0] === 3, 1_000);
 
     callbacks[0]?.({
       issueEvents: {
@@ -1596,6 +1602,8 @@ test("active runs retain their tracker client across workflow reloads", async ()
     });
     await waitFor(() => delivered.length === 1, 1_000);
     assert.equal(delivered[0]?.text, "pinned client event");
+    await waitFor(() => issueRefreshCalls[0] === 4, 1_000);
+    assert.deepEqual(issueRefreshCalls, [4, 0]);
     assert.deepEqual(streamCloses, [0, 0]);
 
     finishRun?.();

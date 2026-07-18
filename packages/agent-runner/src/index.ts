@@ -820,7 +820,16 @@ function shortenIssueEvent(event: TrackerIssueEvent, maxBytes: number): TrackerI
     event.author === undefined ? undefined : shortenIssueEventField(event.author, fieldBudget);
   const metadataBytes =
     Buffer.byteLength(ts) + Buffer.byteLength(author ?? "") + Buffer.byteLength(marker);
-  const textBytes = Math.max(0, maxBytes - metadataBytes);
+  const availableTextBytes = Math.max(0, maxBytes - metadataBytes);
+  const eventTextBytes = Buffer.byteLength(event.text);
+  if (eventTextBytes <= availableTextBytes) {
+    return {
+      ts,
+      ...(author === undefined ? {} : { author }),
+      text: `${event.text}${marker}`,
+    };
+  }
+  const textBytes = Math.min(eventTextBytes, availableTextBytes);
   const prefixBytes = Math.ceil(textBytes / 2);
   const suffixBytes = Math.floor(textBytes / 2);
   return {

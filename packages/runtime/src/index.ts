@@ -723,7 +723,6 @@ export class LorenzRuntime {
         }
       }
     }
-    if (client !== this.client) return;
     if (this.pollInProgress) {
       this.queuePendingPoll({}, true);
       return;
@@ -1414,6 +1413,7 @@ export class LorenzRuntime {
       {
         kind: "claim" | "retry";
         identifier: string;
+        trackerClient: RuntimeTrackerClient;
         workerHost?: string | null | undefined;
         workspacePath?: string | null | undefined;
       }
@@ -1426,6 +1426,9 @@ export class LorenzRuntime {
       tracked.set(entry.issueId, {
         kind: "claim",
         identifier: entry.identifier,
+        trackerClient:
+          this.activeRuns.get(slotKey(entry.issueId, entry.slotIndex))?.trackerClient ??
+          this.client,
         workerHost: null,
         workspacePath: null,
       });
@@ -1435,6 +1438,9 @@ export class LorenzRuntime {
       tracked.set(entry.issue.id, {
         kind: "claim",
         identifier: entry.issue.identifier,
+        trackerClient:
+          this.activeRuns.get(slotKey(entry.issue.id, entry.slotIndex))?.trackerClient ??
+          this.client,
         workerHost: entry.workerHost,
         workspacePath: entry.workspacePath,
       });
@@ -1445,18 +1451,30 @@ export class LorenzRuntime {
       tracked.set(entry.issueId, {
         kind: "retry",
         identifier: entry.identifier,
+        trackerClient: this.client,
         workerHost: entry.workerHost,
         workspacePath: entry.workspacePath,
       });
     }
     if (tracked.size === 0) return empty;
 
-    let refreshed: Issue[];
-    try {
-      refreshed = await this.client.fetchIssuesByIds([...tracked.keys()]);
-    } catch (error) {
-      this.addEvent("reconcile_refresh_failed", errorMessage(error));
-      return empty;
+    const trackedByClient = new Map<RuntimeTrackerClient, string[]>();
+    for (const [issueId, meta] of tracked) {
+      const issueIds = trackedByClient.get(meta.trackerClient) ?? [];
+      issueIds.push(issueId);
+      trackedByClient.set(meta.trackerClient, issueIds);
+    }
+    const refreshed: Issue[] = [];
+    const completedRefreshIds = new Set<string>();
+    for (const [trackerClient, issueIds] of trackedByClient) {
+      try {
+        const requestedIds = new Set(issueIds);
+        const issues = await trackerClient.fetchIssuesByIds(issueIds);
+        refreshed.push(...issues.filter((issue) => requestedIds.has(issue.id)));
+        issueIds.forEach((issueId) => completedRefreshIds.add(issueId));
+      } catch (error) {
+        this.addEvent("reconcile_refresh_failed", errorMessage(error));
+      }
     }
     const refreshedIds = new Set(refreshed.map((issue) => issue.id));
     const outcome: ReconcileOutcome = { dueRetryCandidates: [], retryTimerIssues: [] };
@@ -1492,7 +1510,7 @@ export class LorenzRuntime {
       }
     }
     for (const [issueId, meta] of tracked.entries()) {
-      if (refreshedIds.has(issueId)) continue;
+      if (!completedRefreshIds.has(issueId) || refreshedIds.has(issueId)) continue;
       try {
         await this.orchestrator.cleanupIssueAsync(issueId);
       } catch (error) {
