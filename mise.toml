@@ -11,11 +11,9 @@ experimental = true
 node = "24"
 pnpm = "10.19.0"
 prek = "0.4.3"
-# The claude and codex agent binaries are supplied out of band from the
-# operator's own PATH; this repo does not pin or install them. The ACP
-# bridges are vendored at vendor/ and resolved from the pnpm workspace;
-# local runs do not use PATH installs. Remote SSH worker hosts install
-# their own bridges.
+# The ACP bridges are vendored at vendor/ and resolved from the pnpm
+# workspace; local runs do not use PATH installs. Remote SSH worker hosts
+# install their own bridges.
 
 [tasks.check-env]
 run = '''
