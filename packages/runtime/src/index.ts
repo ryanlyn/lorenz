@@ -1,5 +1,4 @@
 import { issueHasOpenBlockers, issueIsActive, routedToThisWorker, slotKey } from "@lorenz/dispatch";
-import { reconciliationStopReason } from "@lorenz/policies/reconciliation";
 import { isTerminalState } from "@lorenz/issue";
 import { Orchestrator, type ClaimStoreLike, type SlotReservation } from "@lorenz/orchestrator";
 import { settingsForIssueState, validateDispatchConfig } from "@lorenz/config";
@@ -49,6 +48,7 @@ import {
 } from "@lorenz/dispatch-coordinator";
 
 import { ProjectionActor } from "./projection.js";
+import { reconciliationStopReason } from "./reconciliation.js";
 
 export type RuntimeRunner = (input: Parameters<typeof runAgentAttempt>[0]) => Promise<RunResult>;
 
@@ -71,8 +71,9 @@ export type {
 } from "@lorenz/runtime-events";
 export {
   RUNTIME_RECONCILIATION_REASONS,
+  reconciliationStopReason,
   type RuntimeReconciliationReason,
-} from "@lorenz/policies/reconciliation";
+} from "./reconciliation.js";
 
 export interface LorenzRuntimeOptions {
   workflow: WorkflowDefinition;

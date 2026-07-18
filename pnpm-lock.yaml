@@ -830,9 +830,6 @@ importers:
 
   packages/policies:
     dependencies:
-      '@lorenz/dispatch':
-        specifier: workspace:*
-        version: link:../dispatch
       '@lorenz/domain':
         specifier: workspace:*
         version: link:../domain
@@ -896,9 +893,6 @@ importers:
       '@lorenz/orchestrator':
         specifier: workspace:*
         version: link:../orchestrator
-      '@lorenz/policies':
-        specifier: workspace:*
-        version: link:../policies
       '@lorenz/retry-scheduler':
         specifier: workspace:*
         version: link:../retry-scheduler

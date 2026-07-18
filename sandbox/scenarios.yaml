@@ -206,7 +206,7 @@ failures:
     status: OPEN
     severity: Low
     invariant_violated: "reconciliationStopReason SHALL distinguish terminal from merely inactive states"
-    code_location: "packages/policies/src/reconciliation.ts — reconciliationStopReason"
+    code_location: "packages/runtime/src/reconciliation.ts - reconciliationStopReason"
     explanation: >
       The function checks !issueIsActive(issue, settings) first and returns "terminal" whenever this is true. But issueIsActive returns
       false for ANY state not in activeStates — including paused/hold states that are also not in terminalStates. The "inactive" return
