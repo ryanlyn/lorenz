@@ -12,7 +12,7 @@ Packages stack in dependency order. Each layer depends only on the ones above it
 | --- | --- | --- |
 | Leaf / domain | `domain`, `policies`, `issue`, `log-file` | Pure vocabulary, dependency-light policy logic, bounds, issue normalization |
 | Extension SDKs | `tracker-sdk`, `tool-sdk`, `agent-sdk`, `worker-sdk` | The four builder-facing contracts plus registries |
-| Engine | `config`, `workflow`, `prompt`, `dispatch`, `retry-scheduler`, `orchestrator`, `runtime`, `runtime-events`, `projections`, `dispatch-coordinator`, `worker-pool`, `worker-host-pool`, `ssh`, `static-worker`, `agent-runner`, `acp`, `mcp`, `server`, `presenter`, `humanize`, `traceviz-emitter`, `traceviz-server`, `tui`, `cli-kit`, `workspace`, `test-utils` | The poll/dispatch loop, agent execution, MCP, observability |
+| Engine | `config`, `workflow`, `dispatch`, `retry-scheduler`, `orchestrator`, `runtime`, `runtime-events`, `dispatch-coordinator`, `worker-pool`, `worker-host-pool`, `ssh`, `static-worker`, `agent-runner`, `acp`, `mcp`, `server`, `presenter`, `humanize`, `traceviz-emitter`, `traceviz-server`, `tui`, `workspace`, `test-utils` | The poll/dispatch loop, agent execution, MCP, observability |
 | Extensions | `extensions/linear-tracker`, `extensions/jira-tracker`, `extensions/local-tracker`, `extensions/memory-tracker`, `extensions/slack-tracker`, `extensions/docker-worker` | Concrete trackers and one worker driver |
 | Apps | `apps/cli`, `apps/web`, `apps/traceviz` | The `lorenz` binary, the React SPA, the standalone trace viewer |
 | Vendored | `vendor/codex-acp`, `vendor/claude-agent-acp` | Patched ACP bridge subprocesses |
@@ -51,7 +51,6 @@ These turn a `WORKFLOW.md` file into typed `Settings` plus a renderable prompt.
 | --- | --- | --- |
 | `@lorenz/config` | The whole config schema (Zod), snake_case-to-camelCase aliasing, secret resolution, `status_overrides`, dispatch validation | `src/parse.ts`, `src/defaults.ts`, `src/schemas.ts` |
 | `@lorenz/workflow` | Front-matter/body split, file location (`LORENZ_WORKFLOW`), content stamping for change detection, `loadWorkflow` | `src/index.ts` |
-| `@lorenz/prompt` | Liquid prompt rendering at dispatch time: `buildPrompt`, `continuationPrompt` | `src/index.ts` |
 
 `config`'s `src/parse.ts` is the main entry (`parseConfig`, `settingsForIssueState`, `validateDispatchConfig`); `src/defaults.ts` holds every default value and `DEFAULT_CLAUDE_MODEL`. Hot-reload itself lives in `runtime`, not here. See [workflows.md](workflows.md) and [reference/configuration.md](reference/configuration.md).
 
@@ -100,7 +99,7 @@ How one coding-agent turn actually runs.
 
 | Package | What it owns | First files to open |
 | --- | --- | --- |
-| `@lorenz/agent-runner` | The run loop: workspace creation, before/after hooks, session open, the `runTurn` loop up to `agent.max_turns` | `src/index.ts` |
+| `@lorenz/agent-runner` | Prompt rendering and the run loop: workspace creation, before/after hooks, session open, and turns up to `agent.max_turns` | `src/prompt.ts`, `src/index.ts` |
 | `@lorenz/acp` | The single built-in executor (`executor: "acp"`): spawns the bridge subprocess, drives the Agent Client Protocol, enforces turn and stall timeouts, accounts usage | `src/index.ts`, `src/options.ts` |
 | `@lorenz/workspace` | Per-issue workspace creation, skill overlay, hook execution, cleanup (`createWorkspaceForIssue`, `runHook`, `removeIssueWorkspaces`) | `src/index.ts` |
 
@@ -128,7 +127,6 @@ Turning the runtime snapshot into operator-facing views.
 | `@lorenz/tui` | The Ink terminal dashboard (`RuntimeApp`, `formatDashboard`) | `src/index.tsx` |
 | `@lorenz/traceviz-emitter` | `TraceEmitter`: appends one JSON line per `AgentUpdate` to `<traceDir>/<issueId>/trace.jsonl` | `src/index.ts` |
 | `@lorenz/traceviz-server` | The framework-free trace library: `TraceWatcher`, `parseTraceLines`, `computeStats` | `src/watcher.ts`, `src/parser.ts` |
-| `@lorenz/cli-kit` | Shared Commander helpers (arg parsers, help/error normalization) | `src/index.ts` |
 
 See [observability.md](observability.md) and [reference/http-api.md](reference/http-api.md).
 

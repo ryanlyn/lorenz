@@ -329,9 +329,6 @@ importers:
       '@lorenz/agent-sdk':
         specifier: workspace:*
         version: link:../../packages/agent-sdk
-      '@lorenz/cli-kit':
-        specifier: workspace:*
-        version: link:../../packages/cli-kit
       '@lorenz/config':
         specifier: workspace:*
         version: link:../../packages/config
@@ -383,9 +380,6 @@ importers:
       '@lorenz/presenter':
         specifier: workspace:*
         version: link:../../packages/presenter
-      '@lorenz/prompt':
-        specifier: workspace:*
-        version: link:../../packages/prompt
       '@lorenz/retry-scheduler':
         specifier: workspace:*
         version: link:../../packages/retry-scheduler
@@ -465,6 +459,9 @@ importers:
 
   apps/web:
     dependencies:
+      '@lorenz/domain':
+        specifier: workspace:*
+        version: link:../../packages/domain
       '@lorenz/presenter':
         specifier: workspace:*
         version: link:../../packages/presenter
@@ -653,9 +650,12 @@ importers:
       '@lorenz/mcp':
         specifier: workspace:*
         version: link:../mcp
-      '@lorenz/prompt':
+      '@lorenz/workflow':
         specifier: workspace:*
-        version: link:../prompt
+        version: link:../workflow
+      liquidjs:
+        specifier: 'catalog:'
+        version: 10.27.0
     devDependencies:
       '@agentclientprotocol/sdk':
         specifier: 'catalog:'
@@ -666,12 +666,6 @@ importers:
       '@lorenz/domain':
         specifier: workspace:*
         version: link:../domain
-
-  packages/cli-kit:
-    dependencies:
-      commander:
-        specifier: 'catalog:'
-        version: 14.0.3
 
   packages/config:
     dependencies:
@@ -848,18 +842,6 @@ importers:
       zod:
         specifier: 'catalog:'
         version: 4.4.3
-
-  packages/prompt:
-    dependencies:
-      '@lorenz/domain':
-        specifier: workspace:*
-        version: link:../domain
-      '@lorenz/workflow':
-        specifier: workspace:*
-        version: link:../workflow
-      liquidjs:
-        specifier: 'catalog:'
-        version: 10.27.0
 
   packages/retry-scheduler:
     dependencies:

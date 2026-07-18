@@ -1,8 +1,9 @@
 import { Liquid } from "liquidjs";
 import { test } from "vitest";
-import { buildPrompt, continuationPrompt } from "@lorenz/cli";
 import type { Issue, ParsedPromptTemplate } from "@lorenz/domain";
 import { assert, issueWith } from "@lorenz/test-utils";
+
+import { buildPrompt, continuationPrompt } from "../src/index.js";
 
 function makeIssue(overrides: Partial<Issue> = {}): Issue {
   return issueWith({
