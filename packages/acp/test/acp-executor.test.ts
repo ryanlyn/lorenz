@@ -507,6 +507,8 @@ test("remote bridge wrapper fails closed and completes process-group cleanup", a
   assert.equal(script.includes(`'  kill "$force_pid" 2>/dev/null || true'`), false);
   assert.match(script, /"status=\$\?"/);
   assert.match(script, /"cleanup"/);
+  assert.match(source, /return startSshProcess\(workerHost, script\)/);
+  assert.equal(source.includes("startSshProcess(workerHost, `bash -lc"), false);
 });
 
 test("Windows bridge guardian owns descendants through a Job Object", async () => {
@@ -518,10 +520,11 @@ test("Windows bridge guardian owns descendants through a Job Object", async () =
   assert.match(guardian, /JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE/);
   assert.match(guardian, /AssignProcessToJobObject/);
   assert.match(guardian, /Buffer\.from\(workspace, "utf8"\)\.toString\("base64"\)/);
-  assert.match(guardian, /Buffer\.from\(bridge, "utf8"\)\.toString\("base64"\)/);
+  assert.match(guardian, /Buffer\.from\(scriptPath, "utf8"\)\.toString\("base64"\)/);
   assert.equal(guardian.includes("$args["), false);
-  assert.match(source, /"-Command", windowsBridgeGuardianScript\(workspace, bridge\)\]/);
-  assert.match(guardian, /\[char\]10 \+ "exec "/);
+  assert.match(source, /windowsBridgeGuardianScript\(workspace, scriptPath\)/);
+  assert.match(source, /writeFileSync\(scriptPath, `IFS= read -r _lorenz_ready/);
+  assert.match(source, /await fs\.rm\(cleanupDir, \{ recursive: true, force: true \}\)/);
   const bridgeStart = guardian.indexOf("$process.Start()");
   const bridgeAssignment = guardian.indexOf("[LorenzProcessJob]::Assign($job, $process.Handle)");
   const bridgeRelease = guardian.indexOf('$process.StandardInput.WriteLine("ready")');
@@ -532,10 +535,7 @@ test("Windows bridge guardian owns descendants through a Job Object", async () =
   assert.ok(bridgeRelease > bridgeAssignment);
   assert.ok(jobClose > bridgeRelease);
   assert.ok(outputDrain > jobClose);
-  assert.match(
-    source,
-    /if \(child\) await stopChild\(child, \{ processGroup: !input\.workerHost \}\)/,
-  );
+  assert.match(source, /if \(child\) await stopBridgeProcess\(child, !input\.workerHost\)/);
 });
 
 test("ACP executor can pass through cumulative bridge usage without double counting", async () => {

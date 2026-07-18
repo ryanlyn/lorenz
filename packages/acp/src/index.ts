@@ -1,5 +1,7 @@
 import fs from "node:fs/promises";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
+import os from "node:os";
 import path from "node:path";
 import { execFileSync, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { Readable, Writable } from "node:stream";
@@ -89,6 +91,8 @@ interface Session extends AgentSession {
   terminalError?: Error | undefined;
   shutdown?: Promise<void> | undefined;
 }
+
+const bridgeProcessCleanupDirs = new WeakMap<ChildProcessWithoutNullStreams, string>();
 
 interface PendingTurn {
   active: boolean;
@@ -241,7 +245,7 @@ export class Executor implements AgentExecutor {
     } catch (error) {
       if (session) await this.stopSession(session);
       else {
-        if (child) await stopChild(child, { processGroup: !input.workerHost });
+        if (child) await stopBridgeProcess(child, !input.workerHost);
         // Coordinator-provided leases remain under coordinator ownership.
         if (ownsMcpEndpoint) await mcpEndpoint?.release();
       }
@@ -486,7 +490,7 @@ export class Executor implements AgentExecutor {
       // Closing is best effort because the bridge may already be gone.
     } finally {
       try {
-        await stopChild(session.process, { processGroup: !session.workerHost });
+        await stopBridgeProcess(session.process, !session.workerHost);
       } finally {
         // A coordinator-provided per-run lease owns its endpoint lifecycle.
         // ACP releases only endpoints that it created itself.
@@ -867,21 +871,39 @@ function startBridgeProcess(
   if (workerHost) {
     // Remote bridges resolve their own binaries on the worker host.
     const script = remoteBridgeScript(workspace, bridge);
-    return startSshProcess(workerHost, `bash -lc ${shellEscape(script)}`);
+    return startSshProcess(workerHost, script);
   }
   if (process.platform === "win32") {
-    return execa(
-      "powershell.exe",
-      ["-NoProfile", "-NonInteractive", "-Command", windowsBridgeGuardianScript(workspace, bridge)],
-      {
-        stdin: "pipe",
-        stdout: "pipe",
-        stderr: "pipe",
-        reject: false,
-        buffer: false,
-        env: hostAgentBinaryEnv(),
-      },
-    ) as unknown as ChildProcessWithoutNullStreams;
+    const cleanupDir = mkdtempSync(path.join(os.tmpdir(), "lorenz-acp-"));
+    const scriptPath = path.join(cleanupDir, "bridge.sh");
+    try {
+      writeFileSync(scriptPath, `IFS= read -r _lorenz_ready || exit 1\nexec ${bridge}\n`, {
+        encoding: "utf8",
+        mode: 0o600,
+      });
+      const child = execa(
+        "powershell.exe",
+        [
+          "-NoProfile",
+          "-NonInteractive",
+          "-Command",
+          windowsBridgeGuardianScript(workspace, scriptPath),
+        ],
+        {
+          stdin: "pipe",
+          stdout: "pipe",
+          stderr: "pipe",
+          reject: false,
+          buffer: false,
+          env: hostAgentBinaryEnv(),
+        },
+      ) as unknown as ChildProcessWithoutNullStreams;
+      bridgeProcessCleanupDirs.set(child, cleanupDir);
+      return child;
+    } catch (error) {
+      rmSync(cleanupDir, { recursive: true, force: true });
+      throw error;
+    }
   }
   return execa("bash", ["-lc", `exec ${bridge}`], {
     cwd: workspace,
@@ -900,9 +922,24 @@ function startBridgeProcess(
   }) as unknown as ChildProcessWithoutNullStreams;
 }
 
-function windowsBridgeGuardianScript(workspace: string, bridge: string): string {
+async function stopBridgeProcess(
+  child: ChildProcessWithoutNullStreams,
+  processGroup: boolean,
+): Promise<void> {
+  try {
+    await stopChild(child, { processGroup });
+  } finally {
+    const cleanupDir = bridgeProcessCleanupDirs.get(child);
+    if (cleanupDir) {
+      bridgeProcessCleanupDirs.delete(child);
+      await fs.rm(cleanupDir, { recursive: true, force: true });
+    }
+  }
+}
+
+function windowsBridgeGuardianScript(workspace: string, scriptPath: string): string {
   const encodedWorkspace = Buffer.from(workspace, "utf8").toString("base64");
-  const encodedBridge = Buffer.from(bridge, "utf8").toString("base64");
+  const encodedScriptPath = Buffer.from(scriptPath, "utf8").toString("base64");
   return String.raw`
 $ErrorActionPreference = "Stop"
 Add-Type -TypeDefinition @"
@@ -1025,11 +1062,7 @@ public static class LorenzProcessJob
 "@
 
 $workspace = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String("${encodedWorkspace}"))
-$bridge = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String("${encodedBridge}"))
-$scriptPath = [IO.Path]::GetTempFileName()
-$utf8 = [Text.UTF8Encoding]::new($false)
-$script = "IFS= read -r _lorenz_ready || exit 1" + [char]10 + "exec " + $bridge + [char]10
-[IO.File]::WriteAllText($scriptPath, $script, $utf8)
+$scriptPath = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String("${encodedScriptPath}"))
 
 $job = [LorenzProcessJob]::Create()
 $process = $null
@@ -1090,7 +1123,6 @@ try {
     }
     $process.Dispose()
   }
-  Remove-Item -LiteralPath $scriptPath -Force -ErrorAction SilentlyContinue
 }
 exit $exitCode
 `;
