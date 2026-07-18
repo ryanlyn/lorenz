@@ -730,6 +730,22 @@ export interface TrackerIssueEvent {
   text: string;
 }
 
+/** Bounds and cancellation for one page of recovered issue events. */
+export interface TrackerIssueEventQuery {
+  /** Maximum number of events the page may contain. */
+  maxEvents: number;
+  /** Maximum aggregate UTF-8 bytes across event timestamps, authors, and text. */
+  maxBytes: number;
+  abortSignal?: AbortSignal | undefined;
+}
+
+/** One bounded page from an issue-event recovery feed. */
+export interface TrackerIssueEventPage {
+  events: TrackerIssueEvent[];
+  /** True when the backend omitted newer matching events from this page. */
+  hasMore: boolean;
+}
+
 /** Structured data attached to a tracker change notification. */
 export interface TrackerChange {
   /** Human-authored events that can steer every active run for this issue. */
@@ -783,16 +799,18 @@ export interface RuntimeTrackerClient {
     onChange: (change?: TrackerChange) => void,
   ): TrackerChangeStream | null | Promise<TrackerChangeStream | null>;
   /**
-   * Optional recovery feed for human-authored issue events newer than `sinceTs`, returned in
-   * ascending order. `"0"` means from the beginning. Tracker issue snapshots provide the initial
-   * prompt-visible boundary through {@link Issue.issueEventCursor}; live push is the primary
-   * delivery path and this pull hook recovers events missed across connection gaps.
+   * Optional recovery feed for human-authored issue events newer than `sinceTs`. Each page
+   * contains the oldest matching events in ascending order and must obey both query bounds.
+   * `"0"` means from the beginning. Set `hasMore` when newer matching events remain so callers
+   * can advance through accepted pages without skipping events. Tracker issue snapshots provide
+   * the initial prompt-visible boundary through {@link Issue.issueEventCursor}; live push is the
+   * primary delivery path and this pull hook recovers events missed across connection gaps.
    */
   fetchIssueEvents?(
     issueId: string,
     sinceTs: string,
-    abortSignal?: AbortSignal,
-  ): Promise<TrackerIssueEvent[]>;
+    query: TrackerIssueEventQuery,
+  ): Promise<TrackerIssueEventPage>;
 }
 
 /**

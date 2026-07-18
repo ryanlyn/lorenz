@@ -12,6 +12,8 @@ import {
   type Issue,
   type Settings,
   type TrackerIssueEvent,
+  type TrackerIssueEventPage,
+  type TrackerIssueEventQuery,
   type WorkflowDefinition,
 } from "@lorenz/domain";
 
@@ -21,6 +23,7 @@ const beforeRunHookStage = "workspace.run_before_run_hook";
 const afterRunHookStage = "workspace.run_after_run_hook";
 const issueEventsFeedStage = "tracker.fetch_issue_events";
 const maxBufferedIssueEventBytes = 64 * 1024;
+const maxRecoveredIssueEvents = 1_000;
 
 interface SetupStageSignalOptions {
   abortSignal?: AbortSignal | undefined;
@@ -114,7 +117,10 @@ export interface RunAgentAttemptInput {
   /** Subscribe to live human-authored events for this run's issue. */
   subscribeIssueEvents?: (listener: (events: TrackerIssueEvent[]) => void) => () => void;
   /** Recover issue events missed by the live subscription. */
-  fetchIssueEvents?: (sinceTs: string, abortSignal?: AbortSignal) => Promise<TrackerIssueEvent[]>;
+  fetchIssueEvents?: (
+    sinceTs: string,
+    query: TrackerIssueEventQuery,
+  ) => Promise<TrackerIssueEventPage>;
   abortSignal?: AbortSignal | undefined;
   adapters?: Partial<RunAgentAttemptAdapters> | undefined;
 }
@@ -287,14 +293,23 @@ class RunController {
         steeringDeliveryClosed = true;
         steeringRecoveryController.abort();
       };
-      const fetchSteeringIssueEvents = async (sinceTs: string): Promise<TrackerIssueEvent[]> => {
-        if (!input.fetchIssueEvents || !steeringRecoveryAvailable) return [];
-        return runSetupStage(
+      const fetchSteeringIssueEvents = async (sinceTs: string): Promise<TrackerIssueEventPage> => {
+        if (!input.fetchIssueEvents || !steeringRecoveryAvailable) {
+          return { events: [], hasMore: false };
+        }
+        const page = await runSetupStage(
           issueEventsFeedStage,
           steeringFeedTimeoutMs(runtime),
-          async ({ abortSignal }) => input.fetchIssueEvents?.(sinceTs, abortSignal) ?? [],
+          async ({ abortSignal }) =>
+            input.fetchIssueEvents?.(sinceTs, {
+              maxEvents: maxRecoveredIssueEvents,
+              maxBytes: maxBufferedIssueEventBytes,
+              abortSignal,
+            }) ?? { events: [], hasMore: false },
           steeringRecoverySignal,
         );
+        validateIssueEventPage(page, maxRecoveredIssueEvents, maxBufferedIssueEventBytes);
+        return page;
       };
       const steeringSnapshotCursorTs = issue.issueEventCursor;
       if (
@@ -317,6 +332,7 @@ class RunController {
       };
       const queueIssueEvents = (
         events: TrackerIssueEvent[],
+        includeBuffered = true,
       ): {
         acceptedThrough: string | null;
         failed: boolean;
@@ -329,9 +345,11 @@ class RunController {
         if (!session?.queueTurn) {
           return { acceptedThrough: null, failed: false };
         }
-        const candidates = [...bufferedIssueEvents, ...events];
-        bufferedIssueEvents = [];
-        bufferedIssueEventBytes = 0;
+        const candidates = includeBuffered ? [...bufferedIssueEvents, ...events] : events;
+        if (includeBuffered) {
+          bufferedIssueEvents = [];
+          bufferedIssueEventBytes = 0;
+        }
         const { fresh, invalidTs } = freshSteeringEvents(
           candidates,
           seenSteeringEventTs,
@@ -395,15 +413,22 @@ class RunController {
       };
       const recoverSteering = async (required: boolean): Promise<void> => {
         try {
-          const recovered = steeringRecoveryAvailable
+          const page = steeringRecoveryAvailable
             ? await fetchSteeringIssueEvents(steeringRecoveryCursorTs)
-            : [];
-          const queued = queueIssueEvents(recovered);
+            : { events: [], hasMore: false };
+          const queued = queueIssueEvents(page.events, !page.hasMore);
           if (
             queued.acceptedThrough !== null &&
             compareSteeringTs(queued.acceptedThrough, steeringRecoveryCursorTs) > 0
           ) {
             steeringRecoveryCursorTs = queued.acceptedThrough;
+          }
+          if (
+            page.hasMore &&
+            queued.acceptedThrough === null &&
+            steeringTurnCount < runtime.agent.maxTurns
+          ) {
+            throw new Error("steering recovery page made no progress");
           }
           if (queued.failed) throw new Error("steering_event_queue_failed");
         } catch (error) {
@@ -897,6 +922,25 @@ function issueEventBytes(events: readonly TrackerIssueEvent[]): number {
     bytes += Buffer.byteLength(event.text);
   }
   return bytes;
+}
+
+function validateIssueEventPage(
+  page: TrackerIssueEventPage,
+  maxEvents: number,
+  maxBytes: number,
+): void {
+  if (page.events.length > maxEvents) {
+    throw new Error(
+      `tracker issue event page exceeds event limit: ${page.events.length} > ${maxEvents}`,
+    );
+  }
+  const pageBytes = issueEventBytes(page.events);
+  if (pageBytes > maxBytes) {
+    throw new Error(`tracker issue event page exceeds byte limit: ${pageBytes} > ${maxBytes}`);
+  }
+  if (page.hasMore && page.events.length === 0) {
+    throw new Error("tracker issue event page cannot report more events without making progress");
+  }
 }
 
 function issueEventsPromptBytes(events: readonly TrackerIssueEvent[]): number {

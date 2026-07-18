@@ -39,6 +39,7 @@ import type {
   RuntimeTrackerClient,
   TrackerChangeStream,
   TrackerIssueEvent,
+  TrackerIssueEventQuery,
   WorkflowDefinition,
 } from "@lorenz/domain";
 import type { WorkerOutcome, WorkerPool } from "@lorenz/worker-pool";
@@ -285,6 +286,7 @@ class ActiveRunHandle {
     readonly slotIndex: number,
     readonly key: string,
     readonly runId: string,
+    readonly workflow: WorkflowDefinition,
     readonly trackerClient: RuntimeTrackerClient,
     private readonly activeRuns: Map<string, ActiveRunHandle>,
     private readonly onRelease: (handle: ActiveRunHandle) => void,
@@ -389,7 +391,7 @@ export class LorenzRuntime {
    */
   private readonly changeStreams = new Map<RuntimeTrackerClient, TrackerChangeStream>();
   private readonly openingChangeStreamClients = new Set<RuntimeTrackerClient>();
-  private readonly changeStreamGenerations = new Map<RuntimeTrackerClient, number>();
+  private readonly changeStreamGenerations = new WeakMap<RuntimeTrackerClient, number>();
   private changeStreamEnabled = false;
   private issueEventRecoveryWarningIssued = false;
   /**
@@ -839,6 +841,7 @@ export class LorenzRuntime {
       slotIndex,
       key,
       runId,
+      this.workflow,
       this.client,
       this.activeRuns,
       (released) => this.retireTrackerClientStream(released.trackerClient),
@@ -991,12 +994,12 @@ export class LorenzRuntime {
         // Sticky retry affinity travels on the reservation (the prior run's
         // CONCRETE host from the consumed retry entry).
         affinityKey: reservation.affinityHost,
-        timeoutMs: this.workflow.settings.worker.workerPool?.acquireTimeoutMs ?? 30_000,
+        timeoutMs: handle.workflow.settings.worker.workerPool?.acquireTimeoutMs ?? 30_000,
         signal: handle.signal,
         // Thread the FULL workflow Settings (with server.port) so the per-run
         // endpoint manager can build the remote endpoint; the WorkerPoolSettings the
         // coordinator holds has no server.port and would fail every acquire.
-        settings: this.workflow.settings,
+        settings: handle.workflow.settings,
         // The ACP executor - the only executor - consumes the per-run MCP
         // endpoint over the reverse tunnel, so every run needs one. The flag
         // stays on the request so a future executor that runs its tools
@@ -1136,6 +1139,7 @@ export class LorenzRuntime {
     slot: RunSlot | null = null,
   ): Promise<void> {
     const trackerClient = handle.trackerClient;
+    const workflow = handle.workflow;
     const startedAt = this.clock.now().toISOString();
     const effectiveWorkerHost = workerHost;
     let workerOutcome: WorkerOutcome = "healthy";
@@ -1157,7 +1161,7 @@ export class LorenzRuntime {
     try {
       const result = await this.runner({
         issue,
-        workflow: this.workflow,
+        workflow,
         workerHost: effectiveWorkerHost,
         slotIndex,
         // Thread the bound slot's per-run MCP endpoint (or null on the local /
@@ -1169,7 +1173,7 @@ export class LorenzRuntime {
         // issue could land on one worker and would otherwise share a workspace
         // path; force the per-slot suffix whenever co-residence is possible.
         // Single-tenant (default) keeps the bare path.
-        forceSlotSuffix: (this.workflow.settings.worker.workerPool?.slotsPerMachine ?? 1) > 1,
+        forceSlotSuffix: (workflow.settings.worker.workerPool?.slotsPerMachine ?? 1) > 1,
         onUpdate: enqueueUpdate,
         fetchIssue: async (current) => {
           const refreshed = await trackerClient.fetchIssuesByIds([current.id]);
@@ -1180,8 +1184,11 @@ export class LorenzRuntime {
         subscribeIssueEvents: (listener) => handle.subscribeIssueEvents(listener),
         ...(trackerClient.fetchIssueEvents
           ? {
-              fetchIssueEvents: async (sinceTs: string, abortSignal?: AbortSignal) =>
-                (await trackerClient.fetchIssueEvents?.(issue.id, sinceTs, abortSignal)) ?? [],
+              fetchIssueEvents: async (sinceTs: string, query: TrackerIssueEventQuery) =>
+                (await trackerClient.fetchIssueEvents?.(issue.id, sinceTs, query)) ?? {
+                  events: [],
+                  hasMore: false,
+                },
             }
           : {}),
         abortSignal: handle.signal,
@@ -1414,6 +1421,7 @@ export class LorenzRuntime {
         kind: "claim" | "retry";
         identifier: string;
         trackerClient: RuntimeTrackerClient;
+        workflow: WorkflowDefinition;
         workerHost?: string | null | undefined;
         workspacePath?: string | null | undefined;
       }
@@ -1423,24 +1431,24 @@ export class LorenzRuntime {
     // entries below override with their richer metadata when present.
     for (const entry of snapshot.reserving) {
       if (!(await this.orchestrator.ownsClaimAsync(entry.issueId, entry.slotIndex))) continue;
+      const handle = this.activeRuns.get(slotKey(entry.issueId, entry.slotIndex));
       tracked.set(entry.issueId, {
         kind: "claim",
         identifier: entry.identifier,
-        trackerClient:
-          this.activeRuns.get(slotKey(entry.issueId, entry.slotIndex))?.trackerClient ??
-          this.client,
+        trackerClient: handle?.trackerClient ?? this.client,
+        workflow: handle?.workflow ?? this.workflow,
         workerHost: null,
         workspacePath: null,
       });
     }
     for (const entry of snapshot.running) {
       if (!(await this.orchestrator.ownsClaimAsync(entry.issue.id, entry.slotIndex))) continue;
+      const handle = this.activeRuns.get(slotKey(entry.issue.id, entry.slotIndex));
       tracked.set(entry.issue.id, {
         kind: "claim",
         identifier: entry.issue.identifier,
-        trackerClient:
-          this.activeRuns.get(slotKey(entry.issue.id, entry.slotIndex))?.trackerClient ??
-          this.client,
+        trackerClient: handle?.trackerClient ?? this.client,
+        workflow: handle?.workflow ?? this.workflow,
         workerHost: entry.workerHost,
         workspacePath: entry.workspacePath,
       });
@@ -1452,6 +1460,7 @@ export class LorenzRuntime {
         kind: "retry",
         identifier: entry.identifier,
         trackerClient: this.client,
+        workflow: this.workflow,
         workerHost: entry.workerHost,
         workspacePath: entry.workspacePath,
       });
@@ -1480,9 +1489,11 @@ export class LorenzRuntime {
     const outcome: ReconcileOutcome = { dueRetryCandidates: [], retryTimerIssues: [] };
     for (const issue of refreshed) {
       const meta = tracked.get(issue.id);
-      const active = issueIsActive(issue, this.workflow.settings);
-      const routed = routedToThisWorker(issue, this.workflow.settings);
-      if (active && routed && !issueHasOpenBlockers(issue, this.workflow.settings)) {
+      if (!meta) continue;
+      const settings = meta.workflow.settings;
+      const active = issueIsActive(issue, settings);
+      const routed = routedToThisWorker(issue, settings);
+      if (active && routed && !issueHasOpenBlockers(issue, settings)) {
         await this.orchestrator.refreshRunningIssueAsync(issue);
         if (dueRetryIds.has(issue.id)) outcome.dueRetryCandidates.push(issue);
         else outcome.retryTimerIssues.push(issue);
@@ -1496,12 +1507,12 @@ export class LorenzRuntime {
       }
       this.abortIssueRuns(issue.id);
       this.clearRetryTimer(issue.id);
-      const reason = reconciliationStopReason(issue, this.workflow.settings);
-      if (isTerminalState(issue.state, this.workflow.settings.tracker.terminalStates)) {
+      const reason = reconciliationStopReason(issue, settings);
+      if (isTerminalState(issue.state, settings.tracker.terminalStates)) {
         await this.removeIssueWorkspaces(
-          this.workflow.settings,
-          issue.identifier || meta?.identifier,
-          meta?.workerHost,
+          settings,
+          issue.identifier || meta.identifier,
+          meta.workerHost,
           issue,
         );
         this.addEvent("workspace_cleanup", `${issue.identifier} ${reason}`);
@@ -1535,7 +1546,12 @@ export class LorenzRuntime {
         continue;
       const currentEntry = await this.runningEntry(snapshotEntry.issue.id, snapshotEntry.slotIndex);
       if (!currentEntry) continue;
-      const effective = settingsForIssueState(this.workflow.settings, currentEntry.issue.state);
+      const key = slotKey(currentEntry.issue.id, currentEntry.slotIndex);
+      const activeHandle = this.activeRuns.get(key);
+      const effective = settingsForIssueState(
+        activeHandle?.workflow.settings ?? this.workflow.settings,
+        currentEntry.issue.state,
+      );
       const agent = effective.agents[currentEntry.agentKind];
       if (!agent) throw new Error(`agents.${currentEntry.agentKind} is required`);
       const timeoutMs = agent.stallTimeoutMs;
@@ -1544,8 +1560,6 @@ export class LorenzRuntime {
       const elapsedMs = this.clock.now().getTime() - lastActivity.getTime();
       if (elapsedMs <= timeoutMs) continue;
 
-      const key = slotKey(currentEntry.issue.id, currentEntry.slotIndex);
-      const activeHandle = this.activeRuns.get(key);
       const runId =
         activeHandle?.runId ?? `stalled-${currentEntry.issue.id}-${currentEntry.slotIndex}`;
       const error = `agent_stalled after ${timeoutMs}ms`;

@@ -264,9 +264,13 @@ describe("INVARIANT: When the backend profile changes between turns, the system 
       fetchIssue: async (iss) => ({ ...iss, state: "In Progress" }),
       fetchIssueEvents: async () => {
         recoveryCalls += 1;
-        return recoveryCalls === 1
-          ? []
-          : [{ ts: "11.0", author: "ryan", text: "use the new backend" }];
+        return {
+          events:
+            recoveryCalls === 1
+              ? []
+              : [{ ts: "11.0", author: "ryan", text: "use the new backend" }],
+          hasMore: false,
+        };
       },
       adapters: fakeAdapters({
         executorFactory: () => ({

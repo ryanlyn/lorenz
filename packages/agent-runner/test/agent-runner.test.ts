@@ -7,6 +7,7 @@ import type {
   SessionNotification,
   Settings,
   TrackerIssueEvent,
+  TrackerIssueEventPage,
 } from "@lorenz/domain";
 import { defaultSettings } from "@lorenz/config";
 import { assert } from "@lorenz/test-utils";
@@ -16,6 +17,10 @@ import { runAgentAttempt, type RunAgentAttemptAdapters } from "../src/index.js";
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+function issueEventPage(events: TrackerIssueEvent[], hasMore = false): TrackerIssueEventPage {
+  return { events, hasMore };
+}
 
 function fakeIssue(overrides: Partial<Issue> = {}): Issue {
   return {
@@ -142,7 +147,7 @@ test("live issue events are submitted immediately and consumed as the next queue
   releaseFirstTurn?.();
 
   const result = await attempt;
-  assert.equal(result.turnCount, 3);
+  assert.equal(result.turnCount, 2 + queuedPrompts.length);
   assert.equal(normalPrompts.length, 2);
   assert.equal(activatedPrompts.length, 1);
   assert.match(queuedPrompts[0]!, /<issue_messages>/);
@@ -864,9 +869,11 @@ test("initial recovery queues events missed after the issue snapshot", async () 
     fetchIssue: async (issue) => issue,
     fetchIssueEvents: async (sinceTs) => {
       recoveryCursors.push(sinceTs);
-      return sinceTs === "10.0"
-        ? [{ ts: "11.0", author: "ryan", text: "missed before subscription" }]
-        : [];
+      return issueEventPage(
+        sinceTs === "10.0"
+          ? [{ ts: "11.0", author: "ryan", text: "missed before subscription" }]
+          : [],
+      );
     },
     adapters: fakeAdapters({ executorFactory: () => executor }),
   });
@@ -889,12 +896,12 @@ test("a failed initial turn cancels pending recovery", async () => {
     issue: fakeIssue({ issueEventCursor: "10.0" }),
     workflow: { path: "/workflow.md", config: {}, promptTemplate: "Fix it", settings },
     settings,
-    fetchIssueEvents: async (_sinceTs, abortSignal) =>
-      new Promise<TrackerIssueEvent[]>((_resolve, reject) => {
-        recoverySignal = abortSignal;
-        abortSignal?.addEventListener(
+    fetchIssueEvents: async (_sinceTs, query) =>
+      new Promise<TrackerIssueEventPage>((_resolve, reject) => {
+        recoverySignal = query.abortSignal;
+        query.abortSignal?.addEventListener(
           "abort",
-          () => reject(abortSignal.reason ?? new Error("aborted")),
+          () => reject(query.abortSignal?.reason ?? new Error("aborted")),
           { once: true },
         );
       }),
@@ -935,7 +942,9 @@ test("recovery stops when the issue becomes inactive", async () => {
     }),
     fetchIssueEvents: async () => {
       recoveryCalls += 1;
-      return recoveryCalls === 2 ? [{ ts: "11.0", author: "ryan", text: "late steering" }] : [];
+      return issueEventPage(
+        recoveryCalls === 2 ? [{ ts: "11.0", author: "ryan", text: "late steering" }] : [],
+      );
     },
     adapters: fakeAdapters({
       executorFactory: () =>
@@ -991,12 +1000,12 @@ test("live delivery reconciles missed events before newer messages", async () =>
     fetchIssueEvents: async (sinceTs) => {
       recoveryCursors.push(sinceTs);
       if (sinceTs === "10.0") {
-        return [
-          { ts: "11.0", author: "ryan", text: "missed event" },
-          { ts: "12.0", author: "ryan", text: "live event" },
-        ];
+        return issueEventPage([{ ts: "11.0", author: "ryan", text: "first missed event" }], true);
       }
-      return [];
+      if (sinceTs === "11.0") {
+        return issueEventPage([{ ts: "12.0", author: "ryan", text: "second missed event" }]);
+      }
+      return issueEventPage([]);
     },
     subscribeIssueEvents: (listener) => {
       issueEventListener = listener;
@@ -1007,23 +1016,26 @@ test("live delivery reconciles missed events before newer messages", async () =>
 
   await firstTurnStarted;
   assert.ok(issueEventListener);
-  issueEventListener?.([{ ts: "12.0", author: "ryan", text: "live event" }]);
-  await vi.waitFor(() => assert.equal(queuedPrompts.length, 1));
+  issueEventListener?.([{ ts: "13.0", author: "ryan", text: "live event" }]);
+  await vi.waitFor(() => assert.equal(queuedPrompts.length, 2));
   releaseFirstTurn?.();
 
   const result = await attempt;
-  assert.equal(result.turnCount, 3);
-  assert.deepEqual(recoveryCursors, ["10.0", "12.0", "12.0", "12.0"]);
-  assert.equal(queuedPrompts.length, 1);
-  assert.match(queuedPrompts[0]!, /live event/);
-  assert.match(queuedPrompts[0]!, /missed event/);
-  assert.ok(queuedPrompts[0]!.indexOf("missed event") < queuedPrompts[0]!.indexOf("live event"));
+  assert.equal(result.turnCount, 2 + queuedPrompts.length);
+  assert.deepEqual(recoveryCursors.slice(0, 2), ["10.0", "11.0"]);
+  assert.equal(queuedPrompts.length, 2);
+  assert.match(queuedPrompts[0]!, /first missed event/);
+  assert.notMatch(queuedPrompts[0]!, /live event/);
+  assert.match(queuedPrompts[1]!, /second missed event/);
+  assert.match(queuedPrompts[1]!, /live event/);
+  assert.ok(
+    queuedPrompts[1]!.indexOf("second missed event") < queuedPrompts[1]!.indexOf("live event"),
+  );
 });
 
-test("live delivery chunks large batches and shortens oversized messages", async () => {
+test("live delivery chunks large batches within the recovery byte bound", async () => {
   const settings = fakeSettings({ agent: { ...defaultSettings().agent, maxTurns: 3 } });
   const queuedPrompts: string[] = [];
-  let recoveryEvents: TrackerIssueEvent[] = [];
   let issueEventListener: ((events: TrackerIssueEvent[]) => void) | undefined;
   let releaseFirstTurn: (() => void) | undefined;
   let markFirstTurnStarted: (() => void) | undefined;
@@ -1056,7 +1068,7 @@ test("live delivery chunks large batches and shortens oversized messages", async
     workflow: { path: "/workflow.md", config: {}, promptTemplate: "Fix it", settings },
     settings,
     fetchIssue: async (issue) => issue,
-    fetchIssueEvents: async () => recoveryEvents,
+    fetchIssueEvents: async () => issueEventPage([]),
     subscribeIssueEvents: (listener) => {
       issueEventListener = listener;
       return () => {};
@@ -1065,31 +1077,25 @@ test("live delivery chunks large batches and shortens oversized messages", async
   });
 
   await firstTurnStarted;
-  recoveryEvents = [
-    { ts: "11.0", author: "ryan", text: "a".repeat(40 * 1024) },
-    { ts: "12.0", author: "ryan", text: "b".repeat(40 * 1024) },
-    {
-      ts: "13.0",
-      author: "ryan",
-      text: `${"c".repeat(100 * 1024)}tail-marker`,
-    },
-  ];
-  issueEventListener?.(recoveryEvents);
-  await vi.waitFor(() => assert.equal(queuedPrompts.length, 3));
+  issueEventListener?.(
+    Array.from({ length: 1_000 }, (_, index) => ({
+      ts: `${index + 11}`,
+      text: "x".repeat(55),
+    })),
+  );
+  await vi.waitFor(() => assert.ok(queuedPrompts.length > 1));
   releaseFirstTurn?.();
 
   const result = await attempt;
-  assert.equal(result.turnCount, 5);
+  assert.equal(result.turnCount, 2 + queuedPrompts.length);
   assert.ok(queuedPrompts.every((prompt) => Buffer.byteLength(prompt) <= 64 * 1024));
-  assert.match(queuedPrompts[2]!, /message shortened for live delivery/);
-  assert.match(queuedPrompts[2]!, /tail-marker/);
 });
 
 test("live delivery bounds oversized event metadata", async () => {
   const settings = fakeSettings({ agent: { ...defaultSettings().agent, maxTurns: 1 } });
   const queuedPrompts: string[] = [];
-  const longTimestamp = "1".repeat(70 * 1024);
-  const longAuthor = "a".repeat(70 * 1024);
+  const longTimestamp = "1".repeat(32_755);
+  const longAuthor = "a".repeat(32_755);
 
   const result = await runAgentAttempt({
     issue: fakeIssue({ issueEventCursor: "10.0" }),
@@ -1097,9 +1103,11 @@ test("live delivery bounds oversized event metadata", async () => {
     settings,
     fetchIssue: async (issue) => issue,
     fetchIssueEvents: async (sinceTs) =>
-      sinceTs === "10.0"
-        ? [{ ts: longTimestamp, author: longAuthor, text: "bounded message" }]
-        : [],
+      issueEventPage(
+        sinceTs === "10.0"
+          ? [{ ts: longTimestamp, author: longAuthor, text: "bounded message" }]
+          : [],
+      ),
     adapters: fakeAdapters({
       executorFactory: () =>
         fakeExecutor({
@@ -1124,9 +1132,9 @@ test("live delivery bounds oversized event metadata", async () => {
 test("live delivery includes rendered formatting in the prompt byte limit", async () => {
   const settings = fakeSettings({ agent: { ...defaultSettings().agent, maxTurns: 3 } });
   const queuedPrompts: string[] = [];
-  const events = Array.from({ length: 6_000 }, (_, index) => ({
+  const events = Array.from({ length: 1_000 }, (_, index) => ({
     ts: `${index + 11}`,
-    text: "",
+    text: "x".repeat(50),
   }));
 
   await runAgentAttempt({
@@ -1134,7 +1142,7 @@ test("live delivery includes rendered formatting in the prompt byte limit", asyn
     workflow: { path: "/workflow.md", config: {}, promptTemplate: "Fix it", settings },
     settings,
     fetchIssue: async (issue) => issue,
-    fetchIssueEvents: async (sinceTs) => (sinceTs === "10" ? events : []),
+    fetchIssueEvents: async (sinceTs) => issueEventPage(sinceTs === "10" ? events : []),
     adapters: fakeAdapters({
       executorFactory: () =>
         fakeExecutor({
@@ -1150,6 +1158,46 @@ test("live delivery includes rendered formatting in the prompt byte limit", asyn
 
   assert.ok(queuedPrompts.length > 1);
   assert.ok(queuedPrompts.every((prompt) => Buffer.byteLength(prompt) <= 64 * 1024));
+});
+
+test("recovery rejects pages that exceed the negotiated bounds", async () => {
+  const settings = fakeSettings({ agent: { ...defaultSettings().agent, maxTurns: 1 } });
+  const updates: AgentUpdate[] = [];
+  const queries: Array<{ maxEvents: number; maxBytes: number }> = [];
+
+  const result = await runAgentAttempt({
+    issue: fakeIssue({ issueEventCursor: "10" }),
+    workflow: { path: "/workflow.md", config: {}, promptTemplate: "Fix it", settings },
+    settings,
+    fetchIssueEvents: async (_sinceTs, query) => {
+      queries.push({ maxEvents: query.maxEvents, maxBytes: query.maxBytes });
+      return issueEventPage(
+        Array.from({ length: query.maxEvents + 1 }, (_, index) => ({
+          ts: `${index + 11}`,
+          text: "",
+        })),
+      );
+    },
+    onUpdate: (update) => updates.push(update),
+    adapters: fakeAdapters({
+      executorFactory: () =>
+        fakeExecutor({
+          session: {
+            queueTurn: async () => [{ type: "turn_completed" }],
+          },
+        }),
+    }),
+  });
+
+  assert.equal(result.turnCount, 1);
+  assert.deepEqual(queries, [{ maxEvents: 1_000, maxBytes: 64 * 1024 }]);
+  assert.ok(
+    updates.some(
+      (update) =>
+        update.type === "stderr" &&
+        update.message.includes("tracker issue event page exceeds event limit"),
+    ),
+  );
 });
 
 test("recovery can queue a missed event before the no-tool completion exit", async () => {
@@ -1170,9 +1218,11 @@ test("recovery can queue a missed event before the no-tool completion exit", asy
     fetchIssue: async (issue) => issue,
     fetchIssueEvents: async (sinceTs) => {
       feedCursors.push(sinceTs);
-      return feedCursors.length === 2
-        ? [{ ts: "11.0", author: "ryan", text: "missed during turn" }]
-        : [];
+      return issueEventPage(
+        feedCursors.length === 2
+          ? [{ ts: "11.0", author: "ryan", text: "missed during turn" }]
+          : [],
+      );
     },
     adapters: fakeAdapters({
       executorFactory: () =>
@@ -1232,9 +1282,11 @@ test("a state override can add turn capacity for steering recovery", async () =>
     fetchIssue: async (issue) => ({ ...issue, state: "In Progress" }),
     fetchIssueEvents: async (sinceTs) => {
       feedCursors.push(sinceTs);
-      return sinceTs === "10.0"
-        ? [{ ts: "11.0", author: "ryan", text: "recovered after transition" }]
-        : [];
+      return issueEventPage(
+        sinceTs === "10.0"
+          ? [{ ts: "11.0", author: "ryan", text: "recovered after transition" }]
+          : [],
+      );
     },
     adapters: fakeAdapters({
       executorFactory: () =>
@@ -1317,7 +1369,7 @@ test("sessions without queued turns do not start issue event recovery", async ()
     fetchIssue: async (issue) => issue,
     fetchIssueEvents: async () => {
       feedCalls += 1;
-      return never<TrackerIssueEvent[]>();
+      return never<TrackerIssueEventPage>();
     },
     subscribeIssueEvents: () => () => {
       subscriptionClosed = true;
@@ -1348,15 +1400,15 @@ test("run cancellation aborts an active steering recovery request", async () => 
     workflow: { path: "/workflow.md", config: {}, promptTemplate: "Fix it", settings },
     settings,
     fetchIssue: async (issue) => issue,
-    fetchIssueEvents: async (_sinceTs, abortSignal) => {
+    fetchIssueEvents: async (_sinceTs, query) => {
       feedCalls += 1;
-      if (feedCalls === 1) return [];
-      feedSignal = abortSignal;
+      if (feedCalls === 1) return issueEventPage([]);
+      feedSignal = query.abortSignal;
       markFeedStarted?.();
-      return new Promise<TrackerIssueEvent[]>((_resolve, reject) => {
-        abortSignal?.addEventListener(
+      return new Promise<TrackerIssueEventPage>((_resolve, reject) => {
+        query.abortSignal?.addEventListener(
           "abort",
-          () => reject(abortSignal.reason ?? new Error("aborted")),
+          () => reject(query.abortSignal?.reason ?? new Error("aborted")),
           { once: true },
         );
       });
@@ -1481,7 +1533,7 @@ test("a non-settling final steering recovery fails within the agent timeout", as
     fetchIssue: async (issue) => issue,
     fetchIssueEvents: async () => {
       feedCalls += 1;
-      return never<TrackerIssueEvent[]>();
+      return never<TrackerIssueEventPage>();
     },
     onUpdate: (update) => updates.push(update),
     adapters: fakeAdapters({

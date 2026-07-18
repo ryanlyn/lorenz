@@ -37,7 +37,12 @@ import type {
   LorenzRuntimeOptions,
   WorkflowDefinition,
 } from "@lorenz/cli";
-import type { ClockPort, WorkerPoolSettings } from "@lorenz/domain";
+import type {
+  ClockPort,
+  TrackerIssueEventPage,
+  TrackerIssueEventQuery,
+  WorkerPoolSettings,
+} from "@lorenz/domain";
 import type { AgentMcpEndpointLease } from "@lorenz/mcp";
 import type { AcquireResult, WorkerLease, WorkerOutcome, WorkerPool } from "@lorenz/worker-pool";
 import { assert, settle, tempDir, writeExecutable } from "@lorenz/test-utils";
@@ -1520,7 +1525,7 @@ test("active runs retain their tracker client across workflow reloads", async ()
   const delivered: TrackerIssueEvent[] = [];
   let clientBuilds = 0;
   let activeRecovery:
-    | ((sinceTs: string, abortSignal?: AbortSignal) => Promise<TrackerIssueEvent[]>)
+    | ((sinceTs: string, query: TrackerIssueEventQuery) => Promise<TrackerIssueEventPage>)
     | undefined;
   let finishRun: (() => void) | undefined;
   const runFinished = new Promise<void>((resolve) => {
@@ -1529,7 +1534,19 @@ test("active runs retain their tracker client across workflow reloads", async ()
   const runtime = new LorenzRuntime(
     runtimeOptions({
       workflow,
-      reloadWorkflow: async () => loadWorkflow(workflowFile, {}, { cwd: dir }),
+      reloadWorkflow: async () => {
+        const reloaded = await loadWorkflow(workflowFile, {}, { cwd: dir });
+        return {
+          ...reloaded,
+          settings: {
+            ...reloaded.settings,
+            tracker: {
+              ...reloaded.settings.tracker,
+              activeStates: ["Other"],
+            },
+          },
+        };
+      },
       clientFactory: () => {
         const index = clientBuilds;
         clientBuilds += 1;
@@ -1541,7 +1558,7 @@ test("active runs retain their tracker client across workflow reloads", async ()
           },
           fetchIssueEvents: async () => {
             recoveryCalls[index] = (recoveryCalls[index] ?? 0) + 1;
-            return [];
+            return { events: [], hasMore: false };
           },
           watch: (onChange) => {
             callbacks[index] = onChange;
@@ -1581,7 +1598,7 @@ test("active runs retain their tracker client across workflow reloads", async ()
     assert.ok(callbacks[1]);
     assert.deepEqual(issueRefreshCalls, [2, 0]);
 
-    await activeRecovery?.("10.0");
+    await activeRecovery?.("10.0", { maxEvents: 1, maxBytes: 1 });
     assert.deepEqual(recoveryCalls, [1, 0]);
 
     callbacks[1]?.({
@@ -2470,7 +2487,7 @@ test("a tracker push delivers issue events to every active run for that issue", 
       client: {
         fetchCandidateIssues: async () => [issue],
         fetchIssuesByIds: async () => [issue],
-        fetchIssueEvents: async () => [],
+        fetchIssueEvents: async () => ({ events: [], hasMore: false }),
         watch: (onChange) => {
           captured = onChange;
           return { close: () => {} };
@@ -2523,7 +2540,7 @@ test("pending issue event delivery is bounded before the runner subscribes", asy
       client: {
         fetchCandidateIssues: async () => [issue],
         fetchIssuesByIds: async () => [issue],
-        fetchIssueEvents: async () => [],
+        fetchIssueEvents: async () => ({ events: [], hasMore: false }),
         watch: (onChange) => {
           captured = onChange;
           return { close: () => {} };
@@ -2580,7 +2597,7 @@ test("issue event delivery remains closed after the runner unsubscribes", async 
       client: {
         fetchCandidateIssues: async () => [issue],
         fetchIssuesByIds: async () => [issue],
-        fetchIssueEvents: async () => [],
+        fetchIssueEvents: async () => ({ events: [], hasMore: false }),
         watch: (onChange) => {
           captured = onChange;
           return { close: () => {} };
