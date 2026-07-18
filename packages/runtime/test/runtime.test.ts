@@ -1438,7 +1438,7 @@ test("runtime bounds tracker stream shutdown during reload", async () => {
   }
 });
 
-test("runtime opens the replacement stream after a reload interrupts an opening stream", async () => {
+test("runtime opens a replacement stream while the superseded stream is still opening", async () => {
   const dir = await tempDir("lorenz-runtime-reload-opening-watch");
   const workflowFile = path.join(dir, "WORKFLOW.md");
   await fs.writeFile(workflowFile, workflowMarkdown({ intervalMs: 600_000 }));
@@ -1480,14 +1480,15 @@ test("runtime opens the replacement stream after a reload interrupts an opening 
 
     await runtime.pollOnce({ dryRun: true });
     assert.equal(clientBuilds, 2);
-    assert.equal(callbacks[1], undefined);
+    assert.ok(callbacks[1]);
+    assert.equal(firstStreamCloses, 0);
 
     resolveFirstStream?.({
       close: () => {
         firstStreamCloses += 1;
       },
     });
-    await waitFor(() => callbacks[1] !== undefined, 1_000);
+    await waitFor(() => firstStreamCloses === 1, 1_000);
     assert.equal(firstStreamCloses, 1);
   } finally {
     resolveFirstStream?.({ close: () => {} });
@@ -5515,6 +5516,48 @@ test("worker pool: a reload whose reconcile throws keeps last-good settings AND 
     .recentEvents.find((event) => event.type === "workflow_reload_failed");
   assert.ok(reloadFailed);
   assert.ok(reloadFailed.message.includes("driver unavailable"));
+  assert.equal(
+    runtime.snapshot().recentEvents.some((event) => event.type === "workflow_reloaded"),
+    false,
+  );
+});
+
+test("worker pool: tracker construction failure restores the accepted pool settings", async () => {
+  const issue = issueFixture("issue-bp-reload-client-throws", "MT-BP-RELOAD-CLIENT");
+  const firstWorkflow = workerPoolWorkflowFixture();
+  const secondWorkflow = workerPoolWorkflowFixture("/tmp/lorenz-runtime-workerpool-reload-client", {
+    max: 3,
+  });
+  const workerPool = makeFakeWorkerPool({ canAcquire: false });
+  let clientBuilds = 0;
+  const runtime = new LorenzRuntime(
+    runtimeOptions({
+      workflow: firstWorkflow,
+      workerPool,
+      reloadWorkflow: async () => secondWorkflow,
+      clientFactory: () => {
+        clientBuilds += 1;
+        if (clientBuilds > 1) throw new Error("tracker construction failed");
+        return {
+          fetchCandidateIssues: async () => [issue],
+          fetchIssuesByIds: async () => [issue],
+        };
+      },
+    }),
+  );
+
+  await runtime.pollOnce({ dryRun: true });
+
+  assert.equal(clientBuilds, 2);
+  assert.equal(workerPool.reconcileCalls.length, 2);
+  assert.equal(workerPool.reconcileCalls[0]?.max, 3);
+  assert.equal(workerPool.reconcileCalls[1]?.max, 1);
+  assert.equal(runtime.workflow, firstWorkflow);
+  const reloadFailed = runtime
+    .snapshot()
+    .recentEvents.find((event) => event.type === "workflow_reload_failed");
+  assert.ok(reloadFailed);
+  assert.ok(reloadFailed.message.includes("tracker construction failed"));
   assert.equal(
     runtime.snapshot().recentEvents.some((event) => event.type === "workflow_reloaded"),
     false,

@@ -385,7 +385,7 @@ export class LorenzRuntime {
    * nudges an immediate poll so new work dispatches without waiting out `polling.intervalMs`.
    */
   private changeStream: TrackerChangeStream | undefined;
-  private changeStreamOpening = false;
+  private readonly openingChangeStreamClients = new Set<RuntimeTrackerClient>();
   private changeStreamEnabled = false;
   private changeStreamGeneration = 0;
   private issueEventRecoveryWarningIssued = false;
@@ -606,8 +606,8 @@ export class LorenzRuntime {
   private async openChangeStream(): Promise<void> {
     const client = this.client;
     const watch = client.watch?.bind(client);
-    if (!watch || this.changeStream || this.changeStreamOpening) return;
-    this.changeStreamOpening = true;
+    if (!watch || this.changeStream || this.openingChangeStreamClients.has(client)) return;
+    this.openingChangeStreamClients.add(client);
     const generation = ++this.changeStreamGeneration;
     try {
       const stream = await watch((change) => {
@@ -631,7 +631,7 @@ export class LorenzRuntime {
     } catch (error) {
       this.addEvent("tracker_watch_error", errorMessage(error));
     } finally {
-      this.changeStreamOpening = false;
+      this.openingChangeStreamClients.delete(client);
       if (
         !this.stopped &&
         this.changeStreamEnabled &&
@@ -1339,19 +1339,44 @@ export class LorenzRuntime {
       // drains the live pool to zero instead of leaking its (paid) workers. A present
       // block (including an explicit `enabled: false`) reconciles directly: reconcile
       // handles the disable-and-drain itself.
+      let reconciledPool = false;
+      let nextPool: WorkerPoolSettings | undefined;
       if (this.coordinator) {
-        const next =
+        nextPool =
           workflow.settings.worker.workerPool ?? disabledWorkerPoolSettings(prevWorkerPool);
         // Awaited: reconcile is async so the coordinator's injected driverLoader
         // can dynamic-import an out-of-tree driver module BEFORE the (still
         // synchronous) pool reconcile. A rejection lands in the catch below,
         // keeping last-good settings and emitting workflow_reload_failed.
-        if (next) await this.coordinator.reconcile(next);
+        if (nextPool) {
+          await this.coordinator.reconcile(nextPool);
+          reconciledPool = true;
+        }
       }
-      const nextClient =
-        !this.input.client && this.input.clientFactory
-          ? this.input.clientFactory(workflow.settings)
-          : this.client;
+      let nextClient: RuntimeTrackerClient;
+      try {
+        nextClient =
+          !this.input.client && this.input.clientFactory
+            ? this.input.clientFactory(workflow.settings)
+            : this.client;
+      } catch (error) {
+        // Client construction is the final rejectable reload step. Restore the
+        // accepted pool settings before the reload failure is reported.
+        if (this.coordinator && reconciledPool) {
+          const rollbackPool = prevWorkerPool ?? disabledWorkerPoolSettings(nextPool);
+          if (rollbackPool) {
+            try {
+              await this.coordinator.reconcile(rollbackPool);
+            } catch (rollbackError) {
+              throw new Error(
+                `tracker client construction failed: ${errorMessage(error)}; worker pool rollback failed: ${errorMessage(rollbackError)}`,
+                { cause: rollbackError },
+              );
+            }
+          }
+        }
+        throw error;
+      }
       const clientChanged = nextClient !== this.client;
       if (clientChanged) await this.closeChangeStream();
       this.input.workflow = workflow;
