@@ -228,7 +228,7 @@ The repository root ships three example workflows. Each is a complete, runnable 
 
 | File | Tracker | Demonstrates |
 | --- | --- | --- |
-| `WORKFLOW.md` | Linear | The reference Linear flow: `project_slug`, an `Agent Review` state with an autonomous review protocol, both `codex` and `claude` configured (`claude` with `bypassPermissions`), and a full multi-step prompt with a `## Codex Workpad` comment protocol and a `lorenz-land` handoff |
+| `WORKFLOW.md` | Linear | The reference flow: `project_slug`, an `Agent Review` state with an autonomous review protocol, both `codex` and `claude` configured (`claude` with `bypassPermissions`), and a tracker-agnostic prompt body — `## Lorenz Workpad` protocol, `lorenz-land` handoff — that defers all Linear mechanics to the `lorenz-tracker-linear` skill |
 | `WORKFLOW.local.md` | Local board | No credentials and no Linear: `tracker.kind: local` with `id_prefix`, the `local_*` tools, and a prompt that reads state through `local_read_issue` |
 | `WORKFLOW.slack.md` | Slack | Issues from bot @-mentions: `channels`, `bot_user_id`, `emoji_states`, hashtag routing with `route_label_prefix: "route-"`, and the `slack_*` tools |
 

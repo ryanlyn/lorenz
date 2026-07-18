@@ -139,7 +139,7 @@ complete variable list is in the [Workflow prompt reference](./docs/reference/wo
 ## Skills
 
 The `skills/` directory holds orchestration skills (`lorenz-commit`, `lorenz-push`, `lorenz-pull`,
-`lorenz-land`, `lorenz-debug`) referenced by the example workflows. Lorenz installs skills into
+`lorenz-land`, `lorenz-debug`, `lorenz-tracker-linear`) referenced by the example workflows. Lorenz installs skills into
 `.lorenz/skills/` in each prepared workspace before the agent starts. See
 [Skills](./docs/agents/skills.md) for how `agent.skills` and tool-pack skills are resolved.
 

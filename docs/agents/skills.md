@@ -32,7 +32,7 @@ Each sync writes a `.gitignore` containing a single `*` at the skills root (`.lo
 
 ## Shipped orchestration skills
 
-Lorenz ships six skills under `skills/` in the repository. Four document the git and PR workflow an agent runs after writing code, and `lorenz-debug` traces stuck runs. The sixth, `lorenz-linear`, also lives under `skills/`, but its runtime overlay comes from a copy bundled with the Linear tool pack at `extensions/linear-tracker/skills/lorenz-linear`, not from `skills/lorenz-linear`.
+Lorenz ships seven skills under `skills/` in the repository. Four document the git and PR workflow an agent runs after writing code, `lorenz-debug` traces stuck runs, and `lorenz-tracker-linear` maps the tracker-agnostic workflow contract (workpad, status changes, follow-up issues, PR linkage) onto Linear. The seventh, `lorenz-linear`, also lives under `skills/`, but its runtime overlay comes from a copy bundled with the Linear tool pack at `extensions/linear-tracker/skills/lorenz-linear`, not from `skills/lorenz-linear`.
 
 | Skill | What it does |
 | --- | --- |
@@ -41,6 +41,7 @@ Lorenz ships six skills under `skills/` in the repository. Four document the git
 | `lorenz-pull` | Merges `origin/main` into the current branch (merge, not rebase) and guides conflict resolution, enabling `rerere` first. |
 | `lorenz-land` | Lands a PR: keeps it conflict-free with main, waits for checks, and squash-merges once green. |
 | `lorenz-debug` | Investigates stuck, retrying, or failing runs by correlating issue and session identifiers across the Lorenz and Codex logs. |
+| `lorenz-tracker-linear` | Maps the workflow's tracker contract onto Linear: workpad comment mechanics, status transitions, follow-up issues, PR attachments, and media evidence. |
 | `lorenz-linear` | Teaches the agent to run raw Linear GraphQL through the `linear_graphql` tool, reusing Lorenz's configured Linear auth. |
 
 To use the orchestration skills, list the directories under `agent.skills`:
@@ -53,6 +54,7 @@ agent:
     - ./skills/lorenz-pull
     - ./skills/lorenz-land
     - ./skills/lorenz-debug
+    - ./skills/lorenz-tracker-linear
 ```
 
 `lorenz-linear` is the exception: enable Linear tools and the pack overlays it for you.
