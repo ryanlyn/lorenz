@@ -50,9 +50,6 @@
       "path": "./packages/presenter"
     },
     {
-      "path": "./packages/projections"
-    },
-    {
       "path": "./packages/prompt"
     },
     {

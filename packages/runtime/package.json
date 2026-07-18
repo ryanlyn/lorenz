@@ -17,7 +17,6 @@
     "@lorenz/issue": "workspace:*",
     "@lorenz/orchestrator": "workspace:*",
     "@lorenz/policies": "workspace:*",
-    "@lorenz/projections": "workspace:*",
     "@lorenz/runtime-events": "workspace:*",
     "@lorenz/worker-pool": "workspace:*",
     "@lorenz/workflow": "workspace:*"

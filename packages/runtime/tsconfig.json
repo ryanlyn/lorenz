@@ -35,9 +35,6 @@
       "path": "../policies"
     },
     {
-      "path": "../projections"
-    },
-    {
       "path": "../runtime-events"
     },
     {

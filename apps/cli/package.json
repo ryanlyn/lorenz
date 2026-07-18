@@ -41,7 +41,6 @@
     "@lorenz/orchestrator": "workspace:*",
     "@lorenz/policies": "workspace:*",
     "@lorenz/presenter": "workspace:*",
-    "@lorenz/projections": "workspace:*",
     "@lorenz/prompt": "workspace:*",
     "@lorenz/runtime": "workspace:*",
     "@lorenz/server": "workspace:*",

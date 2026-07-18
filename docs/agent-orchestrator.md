@@ -4,11 +4,10 @@ Contributor reference for the control-plane core: how Lorenz schedules work. It 
 
 ## The two halves and one source of truth
 
-The control plane splits across four packages with one rule between them.
+The control plane splits across three packages with one rule between them.
 
 - `@lorenz/orchestrator` owns the single authoritative `OrchestratorState` and is the only component that mutates scheduling state. It decides eligibility, claims slots, reserves pool-governed slots, applies agent updates, finishes runs, schedules retries, and reconciles in-memory state against fresh issues.
-- `@lorenz/runtime` (`LorenzRuntime`) drives the recurring poll loop, dispatches each eligible issue as a detached per-run promise, runs the reconciliation passes, reloads workflow config transactionally, and assembles the snapshot.
-- `@lorenz/projections` (`ProjectionActor`) is an in-memory ring buffer: the last 20 events and the last 50 run-history entries, merged with the live orchestrator and runtime fields into the final `RuntimeSnapshot`.
+- `@lorenz/runtime` (`LorenzRuntime`) drives the recurring poll loop, dispatches each eligible issue as a detached per-run promise, runs the reconciliation passes, reloads workflow config transactionally, and assembles the snapshot. Its `ProjectionActor` is an in-memory ring buffer for the last 20 events and the last 50 run-history entries.
 - `@lorenz/runtime-events` is a pure type and constant package: the snapshot shape, the `RUNTIME_EVENT_TYPES` vocabulary, and `RUNTIME_RUN_OUTCOMES`.
 
 The orchestrator is a state machine with no I/O; the runtime is the I/O shell that calls into it. Every scheduling decision belongs to the orchestrator. Every fetch, spawn, timer, and broadcast belongs to the runtime.

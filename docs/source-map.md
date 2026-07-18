@@ -12,7 +12,7 @@ Packages stack in dependency order. Each layer depends only on the ones above it
 | --- | --- | --- |
 | Leaf / domain | `domain`, `issue`, `log-file` | Pure vocabulary, types, bounds, issue normalization |
 | Extension SDKs | `tracker-sdk`, `tool-sdk`, `agent-sdk`, `worker-sdk` | The four builder-facing contracts plus registries |
-| Engine | `config`, `workflow`, `prompt`, `dispatch`, `policies`, `orchestrator`, `runtime`, `runtime-events`, `projections`, `dispatch-coordinator`, `worker-pool`, `worker-host-pool`, `ssh`, `static-worker`, `agent-runner`, `acp`, `mcp`, `server`, `presenter`, `humanize`, `traceviz-emitter`, `traceviz-server`, `tui`, `cli-kit`, `workspace`, `test-utils` | The poll/dispatch loop, agent execution, MCP, observability |
+| Engine | `config`, `workflow`, `prompt`, `dispatch`, `policies`, `orchestrator`, `runtime`, `runtime-events`, `dispatch-coordinator`, `worker-pool`, `worker-host-pool`, `ssh`, `static-worker`, `agent-runner`, `acp`, `mcp`, `server`, `presenter`, `humanize`, `traceviz-emitter`, `traceviz-server`, `tui`, `cli-kit`, `workspace`, `test-utils` | The poll/dispatch loop, agent execution, MCP, observability |
 | Extensions | `extensions/linear-tracker`, `extensions/jira-tracker`, `extensions/local-tracker`, `extensions/memory-tracker`, `extensions/slack-tracker`, `extensions/docker-worker` | Concrete trackers and one worker driver |
 | Apps | `apps/cli`, `apps/web`, `apps/traceviz` | The `lorenz` binary, the React SPA, the standalone trace viewer |
 | Vendored | `vendor/codex-acp`, `vendor/claude-agent-acp` | Patched ACP bridge subprocesses |
@@ -73,11 +73,10 @@ recovery and retry durability for operators that select them.
 | Package | What it owns | First files to open |
 | --- | --- | --- |
 | `@lorenz/orchestrator` | The single authoritative in-memory scheduling state and the only mutator of it: eligibility, slot claiming, pool reservations, agent-update application, retries, reconciliation | `src/index.ts` |
-| `@lorenz/runtime` | The recurring poll loop, per-run dispatch promises, retry timers, reconciliation passes, transactional workflow reload, `RuntimeSnapshot` assembly | `src/index.ts`, `src/retry-scheduler.ts` |
+| `@lorenz/runtime` | The recurring poll loop, per-run dispatch promises, retry timers, reconciliation passes, transactional workflow reload, bounded projection state, and `RuntimeSnapshot` assembly | `src/index.ts`, `src/projection.ts`, `src/retry-scheduler.ts` |
 | `@lorenz/runtime-events` | The `RuntimeSnapshot` shape and the canonical `RUNTIME_EVENT_TYPES` / `RUNTIME_RUN_OUTCOMES` vocabularies | `src/index.ts` |
-| `@lorenz/projections` | A bounded ring buffer: the last 20 events and last 50 run-history entries, merged into the snapshot | `src/index.ts` |
 
-`orchestrator`'s `src/index.ts` holds `Orchestrator`, `OrchestratorState`, and `createState`. `runtime`'s `src/index.ts` holds `LorenzRuntime` and `LorenzRuntimeOptions`, the dependency-injection bag the CLI binds. See [agent-orchestrator.md](agent-orchestrator.md) and [reference/events.md](reference/events.md).
+`orchestrator`'s `src/index.ts` holds `Orchestrator`, `OrchestratorState`, and `createState`. `runtime`'s `src/index.ts` holds `LorenzRuntime` and `LorenzRuntimeOptions`, the dependency-injection bag the CLI binds, while `src/projection.ts` owns bounded snapshot projection state. See [agent-orchestrator.md](agent-orchestrator.md) and [reference/events.md](reference/events.md).
 
 ## Dispatch coordinator and worker pool
 

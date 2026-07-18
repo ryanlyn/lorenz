@@ -60,7 +60,6 @@
     "@lorenz/memory-tracker": "workspace:*",
     "@lorenz/orchestrator": "workspace:*",
     "@lorenz/policies": "workspace:*",
-    "@lorenz/projections": "workspace:*",
     "@lorenz/runtime": "workspace:*",
     "@lorenz/runtime-events": "workspace:*",
     "@lorenz/server": "workspace:*",
