@@ -846,6 +846,12 @@ importers:
         specifier: 'catalog:'
         version: 4.4.3
 
+  packages/process-supervisor:
+    devDependencies:
+      '@types/node':
+        specifier: 'catalog:'
+        version: 22.19.19
+
   packages/retry-scheduler:
     dependencies:
       '@lorenz/domain':
@@ -936,6 +942,9 @@ importers:
       '@lorenz/domain':
         specifier: workspace:*
         version: link:../domain
+      '@lorenz/process-supervisor':
+        specifier: workspace:*
+        version: link:../process-supervisor
       execa:
         specifier: 'catalog:'
         version: 9.6.1
@@ -1088,6 +1097,9 @@ importers:
       '@lorenz/domain':
         specifier: workspace:*
         version: link:../domain
+      '@lorenz/process-supervisor':
+        specifier: workspace:*
+        version: link:../process-supervisor
       '@lorenz/ssh':
         specifier: workspace:*
         version: link:../ssh

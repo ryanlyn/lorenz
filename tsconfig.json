@@ -47,6 +47,9 @@
       "path": "./packages/presenter"
     },
     {
+      "path": "./packages/process-supervisor"
+    },
+    {
       "path": "./packages/retry-scheduler"
     },
     {
