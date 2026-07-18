@@ -535,6 +535,7 @@ class RunController {
         }
         await steeringFlushTail;
         const activeIssue = issueIsActive(issue, settings);
+        if (!activeIssue) break;
         const refreshed = settingsForIssueState(settings, issue.state);
         const backendChanged =
           refreshed.agent.kind !== runtime.agent.kind ||
@@ -543,10 +544,9 @@ class RunController {
         runtime = refreshed;
         if (queuedTurns.length > 0) continue;
         await enqueueSteeringFlush(
-          completedWithoutTools || autonomousTurnCount >= runtime.agent.maxTurns || !activeIssue,
+          completedWithoutTools || autonomousTurnCount >= runtime.agent.maxTurns,
         );
         if (queuedTurns.length > 0) continue;
-        if (!activeIssue) break;
         if (completedWithoutTools && queuedTurns.length === 0) break;
       }
     } catch (error) {

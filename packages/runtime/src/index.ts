@@ -54,6 +54,7 @@ import {
 export type RuntimeRunner = (input: Parameters<typeof runAgentAttempt>[0]) => Promise<RunResult>;
 
 const maxPendingIssueEventBytes = 64 * 1024;
+const trackerChangeStreamCloseTimeoutMs = 5_000;
 
 export { RUNTIME_EVENT_TYPES, RUNTIME_RUN_OUTCOMES } from "@lorenz/runtime-events";
 export type {
@@ -622,7 +623,7 @@ export class LorenzRuntime {
         generation !== this.changeStreamGeneration ||
         client !== this.client
       ) {
-        await stream.close();
+        await this.closeTrackerChangeStream(stream);
         return;
       }
       this.changeStream = stream;
@@ -647,10 +648,27 @@ export class LorenzRuntime {
     const stream = this.changeStream;
     this.changeStream = undefined;
     if (!stream) return;
+    await this.closeTrackerChangeStream(stream);
+  }
+
+  private async closeTrackerChangeStream(stream: TrackerChangeStream): Promise<void> {
+    let timeout: TimerHandle | undefined;
+    const timeoutPromise = new Promise<never>((_resolve, reject) => {
+      timeout = this.clock.setTimeout(() => {
+        reject(
+          new Error(
+            `tracker change stream close timed out after ${trackerChangeStreamCloseTimeoutMs}ms`,
+          ),
+        );
+      }, trackerChangeStreamCloseTimeoutMs);
+      timeout.unref?.();
+    });
     try {
-      await stream.close();
+      await Promise.race([Promise.resolve().then(async () => stream.close()), timeoutPromise]);
     } catch (error) {
       this.addEvent("tracker_watch_error", errorMessage(error));
+    } finally {
+      if (timeout) this.clock.clearTimeout(timeout);
     }
   }
 

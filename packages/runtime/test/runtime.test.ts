@@ -1355,6 +1355,89 @@ test("runtime rebinds tracker push delivery when a reload replaces the client", 
   }
 });
 
+test("runtime bounds tracker stream shutdown during reload", async () => {
+  const dir = await tempDir("lorenz-runtime-reload-watch-close-timeout");
+  const workflowFile = path.join(dir, "WORKFLOW.md");
+  await fs.writeFile(workflowFile, workflowMarkdown({ intervalMs: 600_000 }));
+  const workflow = await loadWorkflow(workflowFile, {}, { cwd: dir });
+  const fetches = [0, 0];
+  let clientBuilds = 0;
+  let oldStreamCloseCalls = 0;
+  let replacementWatchCalls = 0;
+  let markOldStreamCloseStarted: (() => void) | undefined;
+  const oldStreamCloseStarted = new Promise<void>((resolve) => {
+    markOldStreamCloseStarted = resolve;
+  });
+  const runtime = new LorenzRuntime(
+    runtimeOptions({
+      workflow,
+      reloadWorkflow: async () => loadWorkflow(workflowFile, {}, { cwd: dir }),
+      clientFactory: () => {
+        const index = clientBuilds;
+        clientBuilds += 1;
+        return {
+          fetchCandidateIssues: async () => {
+            fetches[index] = (fetches[index] ?? 0) + 1;
+            return [];
+          },
+          fetchIssuesByIds: async () => [],
+          watch: () => {
+            if (index > 0) {
+              replacementWatchCalls += 1;
+              return { close: () => {} };
+            }
+            return {
+              close: () => {
+                oldStreamCloseCalls += 1;
+                markOldStreamCloseStarted?.();
+                return new Promise<void>(() => {});
+              },
+            };
+          },
+        };
+      },
+    }),
+  );
+
+  void runtime.start({ once: false });
+  try {
+    await waitFor(() => (fetches[0] ?? 0) >= 1 && runtime.snapshot().poll.status === "idle", 1_000);
+    await fs.writeFile(
+      workflowFile,
+      workflowMarkdown({ intervalMs: 600_000, prompt: "Reload after bounded close" }),
+    );
+
+    vi.useFakeTimers();
+    let reloadSettled = false;
+    const reload = runtime.pollOnce({ dryRun: true }).then(() => {
+      reloadSettled = true;
+    });
+    await oldStreamCloseStarted;
+    assert.equal(oldStreamCloseCalls, 1);
+
+    await vi.advanceTimersByTimeAsync(4_999);
+    assert.equal(reloadSettled, false);
+    await vi.advanceTimersByTimeAsync(1);
+    await reload;
+
+    assert.equal(reloadSettled, true);
+    assert.equal(replacementWatchCalls, 1);
+    assert.ok(
+      runtime
+        .snapshot()
+        .recentEvents.some(
+          (event) =>
+            event.type === "tracker_watch_error" &&
+            event.message.includes("tracker change stream close timed out"),
+        ),
+    );
+  } finally {
+    runtime.stop();
+    await Promise.resolve();
+    vi.useRealTimers();
+  }
+});
+
 test("runtime opens the replacement stream after a reload interrupts an opening stream", async () => {
   const dir = await tempDir("lorenz-runtime-reload-opening-watch");
   const workflowFile = path.join(dir, "WORKFLOW.md");

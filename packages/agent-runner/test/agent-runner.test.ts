@@ -381,6 +381,72 @@ test("accepted steering survives a fallible issue refresh", async () => {
   assert.match(queuedPrompts[0]!, /finish this first/);
 });
 
+test("accepted steering is cancelled when the issue becomes inactive", async () => {
+  const settings = fakeSettings({ agent: { ...defaultSettings().agent, maxTurns: 2 } });
+  const queuedPrompts: string[] = [];
+  let issueEventListener: ((events: TrackerIssueEvent[]) => void) | undefined;
+  let releaseFirstTurn: (() => void) | undefined;
+  let markFirstTurnStarted: (() => void) | undefined;
+  let markQueuedTurnSubmitted: (() => void) | undefined;
+  const firstTurnStarted = new Promise<void>((resolve) => {
+    markFirstTurnStarted = resolve;
+  });
+  const firstTurnRelease = new Promise<void>((resolve) => {
+    releaseFirstTurn = resolve;
+  });
+  const queuedTurnSubmitted = new Promise<void>((resolve) => {
+    markQueuedTurnSubmitted = resolve;
+  });
+  let stopCalls = 0;
+  const session = fakeSession({
+    queueTurn: async (prompt) => {
+      queuedPrompts.push(prompt);
+      markQueuedTurnSubmitted?.();
+      return [{ type: "turn_completed" }];
+    },
+    stop: async () => {
+      stopCalls += 1;
+    },
+  });
+  const executor: AgentExecutor = {
+    kind: "codex",
+    async startSession() {
+      return session;
+    },
+    async runTurn() {
+      markFirstTurnStarted?.();
+      await firstTurnRelease;
+      return [{ type: "turn_completed" }];
+    },
+  };
+
+  const attempt = runAgentAttempt({
+    issue: fakeIssue(),
+    workflow: { path: "/workflow.md", config: {}, promptTemplate: "Fix it", settings },
+    settings,
+    fetchIssue: async (issue) => ({
+      ...issue,
+      state: "Done",
+      stateType: "completed",
+    }),
+    subscribeIssueEvents: (listener) => {
+      issueEventListener = listener;
+      return () => {};
+    },
+    adapters: fakeAdapters({ executorFactory: () => executor }),
+  });
+
+  await firstTurnStarted;
+  issueEventListener?.([{ ts: "11.0", author: "ryan", text: "late steering" }]);
+  await queuedTurnSubmitted;
+  releaseFirstTurn?.();
+
+  const result = await attempt;
+  assert.equal(result.turnCount, 1);
+  assert.equal(stopCalls, 1);
+  assert.equal(queuedPrompts.length, 1);
+});
+
 test("steering accepted during a failed issue refresh still completes", async () => {
   const settings = fakeSettings({ agent: { ...defaultSettings().agent, maxTurns: 2 } });
   const queuedPrompts: string[] = [];
@@ -641,7 +707,7 @@ test("a failed initial turn cancels pending recovery", async () => {
   assert.equal(recoverySignal?.aborted, true);
 });
 
-test("final recovery drains a missed event after the issue becomes inactive", async () => {
+test("recovery stops when the issue becomes inactive", async () => {
   const settings = fakeSettings({ agent: { ...defaultSettings().agent, maxTurns: 2 } });
   const queuedPrompts: string[] = [];
   let recoveryCalls = 0;
@@ -663,9 +729,7 @@ test("final recovery drains a missed event after the issue becomes inactive", as
     }),
     fetchIssueEvents: async () => {
       recoveryCalls += 1;
-      return recoveryCalls === 2
-        ? [{ ts: "11.0", author: "ryan", text: "missed before completion" }]
-        : [];
+      return recoveryCalls === 2 ? [{ ts: "11.0", author: "ryan", text: "late steering" }] : [];
     },
     adapters: fakeAdapters({
       executorFactory: () =>
@@ -677,10 +741,9 @@ test("final recovery drains a missed event after the issue becomes inactive", as
     }),
   });
 
-  assert.equal(result.turnCount, 2);
-  assert.equal(recoveryCalls, 3);
-  assert.equal(queuedPrompts.length, 1);
-  assert.match(queuedPrompts[0]!, /missed before completion/);
+  assert.equal(result.turnCount, 1);
+  assert.equal(recoveryCalls, 1);
+  assert.equal(queuedPrompts.length, 0);
 });
 
 test("live delivery reconciles missed events before newer messages", async () => {
