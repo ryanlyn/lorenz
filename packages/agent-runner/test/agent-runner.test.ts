@@ -80,7 +80,7 @@ function fakeAdapters(overrides: Partial<RunAgentAttemptAdapters> = {}): RunAgen
 }
 
 test("live issue events are submitted immediately and consumed as the next queued turn", async () => {
-  const settings = fakeSettings({ agent: { ...defaultSettings().agent, maxTurns: 2 } });
+  const settings = fakeSettings({ agent: { ...defaultSettings().agent, maxTurns: 3 } });
   const normalPrompts: string[] = [];
   const queuedPrompts: string[] = [];
   let issueEventListener: ((events: TrackerIssueEvent[]) => void) | undefined;
@@ -117,8 +117,6 @@ test("live issue events are submitted immediately and consumed as the next queue
     workflow: { path: "/workflow.md", config: {}, promptTemplate: "Fix it", settings },
     settings,
     fetchIssue: async (issue) => issue,
-    fetchIssueEvents: async (sinceTs) =>
-      sinceTs === "0" ? [{ ts: "9007199254740992", author: "ryan", text: "original request" }] : [],
     subscribeIssueEvents: (listener) => {
       issueEventListener = listener;
       return () => {
@@ -130,7 +128,10 @@ test("live issue events are submitted immediately and consumed as the next queue
 
   await firstTurnStarted;
   assert.ok(issueEventListener);
-  issueEventListener([{ ts: "9007199254740993", author: "ryan", text: "steer left" }]);
+  issueEventListener([
+    { ts: "9007199254740993", author: "ryan", text: "steer second" },
+    { ts: "9007199254740992", author: "ryan", text: "steer first" },
+  ]);
   await vi.waitFor(() => assert.equal(queuedPrompts.length, 1));
   assert.equal(releaseFirstTurn === undefined, false);
   assert.equal(normalPrompts.length, 1);
@@ -140,21 +141,79 @@ test("live issue events are submitted immediately and consumed as the next queue
   assert.equal(result.turnCount, 2);
   assert.equal(normalPrompts.length, 1);
   assert.match(queuedPrompts[0]!, /<issue_messages>/);
-  assert.match(queuedPrompts[0]!, /steer left/);
-  assert.notMatch(queuedPrompts[0]!, /original request/);
+  assert.ok(queuedPrompts[0]!.indexOf("steer first") < queuedPrompts[0]!.indexOf("steer second"));
   assert.notMatch(queuedPrompts[0]!, /Continuation guidance/);
   assert.equal(subscriptionClosed, true);
 });
 
-test("events observed during setup survive an overlapping baseline snapshot", async () => {
+test("a queued turn with streamed tool activity permits a continuation turn", async () => {
+  const settings = fakeSettings({ agent: { ...defaultSettings().agent, maxTurns: 3 } });
+  const normalPrompts: string[] = [];
+  let issueEventListener: ((events: TrackerIssueEvent[]) => void) | undefined;
+  let sessionOnUpdate: ((update: AgentUpdate) => void) | undefined;
+  let releaseFirstTurn: (() => void) | undefined;
+  let markFirstTurnStarted: (() => void) | undefined;
+  const firstTurnStarted = new Promise<void>((resolve) => {
+    markFirstTurnStarted = resolve;
+  });
+  const firstTurnRelease = new Promise<void>((resolve) => {
+    releaseFirstTurn = resolve;
+  });
+  const toolUpdate: AgentUpdate = {
+    type: "session_notification",
+    message: { update: { sessionUpdate: "tool_call" } } as SessionNotification,
+  };
+  const session = fakeSession({
+    queueTurn: async () => {
+      await firstTurnRelease;
+      sessionOnUpdate?.({ type: "turn_started", message: { prompt: [] } });
+      sessionOnUpdate?.(toolUpdate);
+      return [{ type: "turn_completed" }];
+    },
+  });
+  const executor: AgentExecutor = {
+    kind: "codex",
+    async startSession(input) {
+      sessionOnUpdate = input.onUpdate;
+      return session;
+    },
+    async runTurn(_session, prompt) {
+      normalPrompts.push(prompt);
+      sessionOnUpdate?.({ type: "turn_started", message: { prompt: [] } });
+      if (normalPrompts.length === 1) {
+        markFirstTurnStarted?.();
+        await firstTurnRelease;
+      }
+      return [{ type: "turn_completed" }];
+    },
+  };
+
+  const attempt = runAgentAttempt({
+    issue: fakeIssue(),
+    workflow: { path: "/workflow.md", config: {}, promptTemplate: "Fix it", settings },
+    settings,
+    fetchIssue: async (issue) => issue,
+    subscribeIssueEvents: (listener) => {
+      issueEventListener = listener;
+      return () => {};
+    },
+    adapters: fakeAdapters({ executorFactory: () => executor }),
+  });
+
+  await firstTurnStarted;
+  issueEventListener?.([{ ts: "11.0", author: "ryan", text: "make the change" }]);
+  releaseFirstTurn?.();
+
+  const result = await attempt;
+  assert.equal(result.turnCount, 3);
+  assert.equal(normalPrompts.length, 2);
+});
+
+test("events observed during setup enter the queue after the initial turn starts", async () => {
   const settings = fakeSettings({ agent: { ...defaultSettings().agent, maxTurns: 2 } });
   const queuedPrompts: string[] = [];
   let issueEventListener: ((events: TrackerIssueEvent[]) => void) | undefined;
-  let resolveBaseline: ((events: TrackerIssueEvent[]) => void) | undefined;
   let releaseWorkspace: (() => void) | undefined;
-  const baseline = new Promise<TrackerIssueEvent[]>((resolve) => {
-    resolveBaseline = resolve;
-  });
   const workspaceGate = new Promise<void>((resolve) => {
     releaseWorkspace = resolve;
   });
@@ -169,7 +228,6 @@ test("events observed during setup survive an overlapping baseline snapshot", as
     issue: fakeIssue(),
     workflow: { path: "/workflow.md", config: {}, promptTemplate: "Fix it", settings },
     settings,
-    fetchIssueEvents: async () => baseline,
     subscribeIssueEvents: (listener) => {
       issueEventListener = listener;
       return () => {};
@@ -190,17 +248,12 @@ test("events observed during setup survive an overlapping baseline snapshot", as
 
   await vi.waitFor(() => assert.ok(issueEventListener));
   issueEventListener?.([{ ts: "11.0", author: "ryan", text: "during setup" }]);
-  resolveBaseline?.([
-    { ts: "10.0", author: "ryan", text: "original request" },
-    { ts: "11.0", author: "ryan", text: "during setup" },
-  ]);
   releaseWorkspace?.();
 
   const result = await attempt;
   assert.equal(result.turnCount, 2);
   assert.equal(queuedPrompts.length, 1);
   assert.match(queuedPrompts[0]!, /during setup/);
-  assert.notMatch(queuedPrompts[0]!, /original request/);
 });
 
 test("live delivery does not advance the recovery cursor past missed events", async () => {
@@ -235,15 +288,12 @@ test("live delivery does not advance the recovery cursor past missed events", as
   };
 
   const attempt = runAgentAttempt({
-    issue: fakeIssue(),
+    issue: fakeIssue({ issueEventCursor: "10.0" }),
     workflow: { path: "/workflow.md", config: {}, promptTemplate: "Fix it", settings },
     settings,
     fetchIssue: async (issue) => issue,
     fetchIssueEvents: async (sinceTs) => {
       recoveryCursors.push(sinceTs);
-      if (sinceTs === "0") {
-        return [{ ts: "10.0", author: "ryan", text: "original request" }];
-      }
       if (sinceTs === "10.0") {
         return [
           { ts: "11.0", author: "ryan", text: "missed event" },
@@ -267,54 +317,11 @@ test("live delivery does not advance the recovery cursor past missed events", as
 
   const result = await attempt;
   assert.equal(result.turnCount, 3);
-  assert.deepEqual(recoveryCursors, ["0", "10.0"]);
+  assert.deepEqual(recoveryCursors, ["10.0"]);
   assert.match(queuedPrompts[0]!, /live event/);
   assert.notMatch(queuedPrompts[0]!, /missed event/);
   assert.match(queuedPrompts[1]!, /missed event/);
   assert.notMatch(queuedPrompts[1]!, /live event/);
-});
-
-test("a failed steering baseline disables recovery for the run", async () => {
-  const settings = fakeSettings({ agent: { ...defaultSettings().agent, maxTurns: 2 } });
-  const feedCursors: string[] = [];
-  const queuedPrompts: string[] = [];
-  const updates: AgentUpdate[] = [];
-  const session = fakeSession({
-    queueTurn: async (prompt) => {
-      queuedPrompts.push(prompt);
-      return [{ type: "turn_completed" }];
-    },
-  });
-
-  const result = await runAgentAttempt({
-    issue: fakeIssue(),
-    workflow: { path: "/workflow.md", config: {}, promptTemplate: "Fix it", settings },
-    settings,
-    fetchIssue: async (issue) => issue,
-    fetchIssueEvents: async (sinceTs) => {
-      feedCursors.push(sinceTs);
-      if (sinceTs === "0") throw new Error("feed unavailable");
-      return [{ ts: "1.0", author: "ryan", text: "historical request" }];
-    },
-    onUpdate: (update) => updates.push(update),
-    adapters: fakeAdapters({
-      executorFactory: () =>
-        fakeExecutor({
-          session: {
-            queueTurn: session.queueTurn,
-          },
-        }),
-    }),
-  });
-
-  assert.equal(result.turnCount, 2);
-  assert.deepEqual(feedCursors, ["0"]);
-  assert.deepEqual(queuedPrompts, []);
-  assert.ok(
-    updates.some(
-      (update) => update.type === "stderr" && update.message.includes("steering baseline failure"),
-    ),
-  );
 });
 
 test("sessions without queued turns do not start issue event recovery", async () => {
@@ -323,7 +330,7 @@ test("sessions without queued turns do not start issue event recovery", async ()
   let subscriptionClosed = false;
 
   const result = await runAgentAttempt({
-    issue: fakeIssue(),
+    issue: fakeIssue({ issueEventCursor: "10.0" }),
     workflow: { path: "/workflow.md", config: {}, promptTemplate: "Fix it", settings },
     settings,
     fetchIssue: async (issue) => issue,
@@ -342,7 +349,7 @@ test("sessions without queued turns do not start issue event recovery", async ()
   assert.equal(subscriptionClosed, true);
 });
 
-test("a non-settling steering baseline is bounded by the agent timeout", async () => {
+test("a non-settling steering recovery feed is bounded by the agent timeout", async () => {
   const baseSettings = fakeSettingsWithTimeouts({ setupTimeoutMs: 20 });
   const settings: Settings = {
     ...baseSettings,
@@ -355,7 +362,7 @@ test("a non-settling steering baseline is bounded by the agent timeout", async (
   });
 
   const result = await runAgentAttempt({
-    issue: fakeIssue(),
+    issue: fakeIssue({ issueEventCursor: "10.0" }),
     workflow: { path: "/workflow.md", config: {}, promptTemplate: "Fix it", settings },
     settings,
     fetchIssue: async (issue) => issue,

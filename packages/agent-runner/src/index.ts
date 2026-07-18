@@ -73,8 +73,13 @@ export interface RunResult {
 
 type TurnOutcome = { updates: AgentUpdate[] } | { error: unknown };
 
+interface TurnActivity {
+  sawToolCall: boolean;
+}
+
 interface QueuedTurn {
   outcome: Promise<TurnOutcome>;
+  activity: TurnActivity;
 }
 
 export interface RunAgentAttemptInput {
@@ -163,8 +168,6 @@ class RunController {
     });
     let session: AgentSession | null = null;
     let steeringFeedAbortController: AbortController | undefined;
-    // Reset at the start of every turn; set by the streamed updates below.
-    let sawToolCallThisTurn: boolean;
 
     let turnCount = 0;
     let submittedTurnCount = 0;
@@ -195,6 +198,10 @@ class RunController {
       }
 
       const executor = await executorFor(input.adapters, runtime);
+      const queuedTurns: QueuedTurn[] = [];
+      const pendingStreamActivities: TurnActivity[] = [];
+      let activeStreamActivity: TurnActivity | undefined;
+      let currentNormalActivity: TurnActivity | undefined;
       // Thread the coordinator's per-run endpoint (or null on the local/non-pool
       // path) into the executor: the acp executor consumes a non-null lease and
       // skips its own acquire+release. Built as a typed value so the optional
@@ -219,7 +226,13 @@ class RunController {
         // to know whether the turn issued a tool call, so that single bit is
         // folded out of the stream here.
         onUpdate: (update) => {
-          if (isToolCallNotification(update)) sawToolCallThisTurn = true;
+          if (update.type === "turn_started") {
+            activeStreamActivity = pendingStreamActivities.shift();
+          }
+          if (isToolCallNotification(update)) {
+            const activity = activeStreamActivity ?? currentNormalActivity;
+            if (activity) activity.sawToolCall = true;
+          }
           input.onUpdate?.(update);
         },
       };
@@ -235,6 +248,7 @@ class RunController {
         typeof session.queueTurn === "function" &&
         Boolean(input.fetchIssue) &&
         Boolean(input.fetchIssueEvents) &&
+        typeof issue.issueEventCursor === "string" &&
         runtime.agent.maxTurns > 1;
       steeringFeedAbortController = canRecoverSteering ? new AbortController() : undefined;
       const fetchSteeringIssueEvents = async (sinceTs: string): Promise<TrackerIssueEvent[]> => {
@@ -246,18 +260,9 @@ class RunController {
           steeringFeedAbortController.signal,
         );
       };
-      const baselineIssueEvents = canRecoverSteering
-        ? fetchSteeringIssueEvents("0").then(
-            (events) => ({ events }),
-            (error: unknown) => ({ error }),
-          )
-        : undefined;
-      let steeringRecoveryCursorTs = "0";
-      let steeringRecoveryInitialized = false;
-      let steeringRecoveryEnabled = canRecoverSteering;
+      let steeringRecoveryCursorTs = issue.issueEventCursor ?? "0";
       let steeringReady = false;
       const seenSteeringEventTs = new Set<string>();
-      const queuedTurns: QueuedTurn[] = [];
       const reportSteeringFailure = (stage: string, error: unknown): void => {
         input.onUpdate?.({
           type: "stderr",
@@ -275,11 +280,20 @@ class RunController {
           const fresh = freshSteeringEvents(events, seenSteeringEventTs);
           if (fresh.length === 0) return;
           const prompt = issueEventsPrompt(fresh);
-          const outcome = session.queueTurn(prompt).then<TurnOutcome, TurnOutcome>(
-            (updates) => ({ updates }),
-            (error: unknown) => ({ error }),
-          );
-          queuedTurns.push({ outcome });
+          const activity = { sawToolCall: false };
+          pendingStreamActivities.push(activity);
+          let outcome: Promise<TurnOutcome>;
+          try {
+            outcome = session.queueTurn(prompt).then<TurnOutcome, TurnOutcome>(
+              (updates) => ({ updates }),
+              (error: unknown) => ({ error }),
+            );
+          } catch (error) {
+            removePendingActivity(pendingStreamActivities, activity);
+            throw error;
+          }
+          const queuedTurn = { outcome, activity };
+          queuedTurns.push(queuedTurn);
           submittedTurnCount += 1;
           for (const event of fresh) seenSteeringEventTs.add(event.ts);
         } catch (error) {
@@ -292,35 +306,8 @@ class RunController {
         steeringReady = true;
         queueIssueEvents(buffered);
       };
-      const establishSteeringRecovery = async (): Promise<boolean> => {
-        if (steeringRecoveryInitialized) return steeringRecoveryEnabled;
-        steeringRecoveryInitialized = true;
-        const baseline = await baselineIssueEvents;
-        if (!baseline) {
-          steeringRecoveryEnabled = false;
-          return false;
-        }
-        if ("error" in baseline) {
-          reportSteeringFailure("baseline", baseline.error);
-          steeringRecoveryEnabled = false;
-          return false;
-        }
-        try {
-          for (const event of baseline.events) seenSteeringEventTs.add(event.ts);
-          steeringRecoveryCursorTs = maxSteeringTs(baseline.events, steeringRecoveryCursorTs);
-          return true;
-        } catch (error) {
-          reportSteeringFailure("baseline", error);
-          steeringRecoveryEnabled = false;
-          return false;
-        }
-      };
       const recoverSteering = async (): Promise<void> => {
-        if (
-          !steeringRecoveryEnabled ||
-          submittedTurnCount >= runtime.agent.maxTurns ||
-          !(await establishSteeringRecovery())
-        ) {
+        if (!canRecoverSteering || submittedTurnCount >= runtime.agent.maxTurns) {
           return;
         }
         try {
@@ -338,13 +325,17 @@ class RunController {
         throwIfAborted(input.abortSignal);
         const queuedTurn = queuedTurns.shift();
         if (!queuedTurn && submittedTurnCount >= runtime.agent.maxTurns) break;
-        sawToolCallThisTurn = false;
         let turnUpdates: AgentUpdate[];
+        let turnActivity: TurnActivity;
         if (queuedTurn) {
+          turnActivity = queuedTurn.activity;
           const outcome = await queuedTurnWithAbort(queuedTurn.outcome, session, input.abortSignal);
           if ("error" in outcome) throw outcome.error;
           turnUpdates = outcome.updates;
+          removePendingActivity(pendingStreamActivities, turnActivity);
+          if (activeStreamActivity === turnActivity) activeStreamActivity = undefined;
         } else {
+          turnActivity = { sawToolCall: false };
           const prompt =
             turnCount === 0
               ? await buildPrompt(
@@ -357,10 +348,24 @@ class RunController {
                   },
                 )
               : continuationPrompt(turnCount + 1, runtime.agent.maxTurns);
-          const turnPromise = runTurnWithAbort(executor, session, prompt, issue, input.abortSignal);
-          submittedTurnCount += 1;
-          if (turnCount === 0) initializeSteering();
-          turnUpdates = await turnPromise;
+          pendingStreamActivities.push(turnActivity);
+          currentNormalActivity = turnActivity;
+          try {
+            const turnPromise = runTurnWithAbort(
+              executor,
+              session,
+              prompt,
+              issue,
+              input.abortSignal,
+            );
+            submittedTurnCount += 1;
+            if (turnCount === 0) initializeSteering();
+            turnUpdates = await turnPromise;
+          } finally {
+            currentNormalActivity = undefined;
+            removePendingActivity(pendingStreamActivities, turnActivity);
+            if (activeStreamActivity === turnActivity) activeStreamActivity = undefined;
+          }
         }
         turnCount += 1;
 
@@ -372,10 +377,9 @@ class RunController {
         // AgentExecutor.runTurn), so an early tool call could be missing from it.
         if (
           turnCount > 1 &&
-          !queuedTurn &&
           queuedTurns.length === 0 &&
           runtime.agents[runtime.agent.kind]?.executor === "acp" &&
-          !sawToolCallThisTurn &&
+          !turnActivity.sawToolCall &&
           !turnUpdates.some(isToolCallNotification)
         ) {
           break;
@@ -566,6 +570,11 @@ function decimalOrderingKey(value: string): { integer: string; fraction: string 
     integer: match[1]!.replace(/^0+(?=\d)/, ""),
     fraction: (match[2] ?? "").replace(/0+$/, ""),
   };
+}
+
+function removePendingActivity(pending: TurnActivity[], activity: TurnActivity): void {
+  const index = pending.indexOf(activity);
+  if (index !== -1) pending.splice(index, 1);
 }
 
 /** True for a streamed ACP session notification describing a tool call. */
