@@ -462,6 +462,9 @@ importers:
 
   apps/web:
     dependencies:
+      '@lorenz/domain':
+        specifier: workspace:*
+        version: link:../../packages/domain
       '@lorenz/presenter':
         specifier: workspace:*
         version: link:../../packages/presenter
