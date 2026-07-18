@@ -1,5 +1,5 @@
 {
-  "name": "@lorenz/ssh",
+  "name": "@lorenz/process-supervisor",
   "version": "0.1.1",
   "private": true,
   "type": "module",
@@ -10,10 +10,5 @@
   },
   "devDependencies": {
     "@types/node": "catalog:"
-  },
-  "dependencies": {
-    "execa": "catalog:",
-    "@lorenz/domain": "workspace:*",
-    "@lorenz/process-supervisor": "workspace:*"
   }
 }
