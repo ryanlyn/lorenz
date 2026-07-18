@@ -274,6 +274,117 @@ test("live delivery does not advance the recovery cursor past missed events", as
   assert.notMatch(queuedPrompts[1]!, /live event/);
 });
 
+test("a failed steering baseline disables recovery for the run", async () => {
+  const settings = fakeSettings({ agent: { ...defaultSettings().agent, maxTurns: 2 } });
+  const feedCursors: string[] = [];
+  const queuedPrompts: string[] = [];
+  const updates: AgentUpdate[] = [];
+  const session = fakeSession({
+    queueTurn: async (prompt) => {
+      queuedPrompts.push(prompt);
+      return [{ type: "turn_completed" }];
+    },
+  });
+
+  const result = await runAgentAttempt({
+    issue: fakeIssue(),
+    workflow: { path: "/workflow.md", config: {}, promptTemplate: "Fix it", settings },
+    settings,
+    fetchIssue: async (issue) => issue,
+    fetchIssueEvents: async (sinceTs) => {
+      feedCursors.push(sinceTs);
+      if (sinceTs === "0") throw new Error("feed unavailable");
+      return [{ ts: "1.0", author: "ryan", text: "historical request" }];
+    },
+    onUpdate: (update) => updates.push(update),
+    adapters: fakeAdapters({
+      executorFactory: () =>
+        fakeExecutor({
+          session: {
+            queueTurn: session.queueTurn,
+          },
+        }),
+    }),
+  });
+
+  assert.equal(result.turnCount, 2);
+  assert.deepEqual(feedCursors, ["0"]);
+  assert.deepEqual(queuedPrompts, []);
+  assert.ok(
+    updates.some(
+      (update) => update.type === "stderr" && update.message.includes("steering baseline failure"),
+    ),
+  );
+});
+
+test("sessions without queued turns do not start issue event recovery", async () => {
+  const settings = fakeSettings({ agent: { ...defaultSettings().agent, maxTurns: 1 } });
+  let feedCalls = 0;
+  let subscriptionClosed = false;
+
+  const result = await runAgentAttempt({
+    issue: fakeIssue(),
+    workflow: { path: "/workflow.md", config: {}, promptTemplate: "Fix it", settings },
+    settings,
+    fetchIssue: async (issue) => issue,
+    fetchIssueEvents: async () => {
+      feedCalls += 1;
+      return never<TrackerIssueEvent[]>();
+    },
+    subscribeIssueEvents: () => () => {
+      subscriptionClosed = true;
+    },
+    adapters: fakeAdapters(),
+  });
+
+  assert.equal(result.turnCount, 1);
+  assert.equal(feedCalls, 0);
+  assert.equal(subscriptionClosed, true);
+});
+
+test("a non-settling steering baseline is bounded by the agent timeout", async () => {
+  const baseSettings = fakeSettingsWithTimeouts({ setupTimeoutMs: 20 });
+  const settings: Settings = {
+    ...baseSettings,
+    agent: { ...baseSettings.agent, maxTurns: 2 },
+  };
+  const updates: AgentUpdate[] = [];
+  let feedCalls = 0;
+  const session = fakeSession({
+    queueTurn: async () => [{ type: "turn_completed" }],
+  });
+
+  const result = await runAgentAttempt({
+    issue: fakeIssue(),
+    workflow: { path: "/workflow.md", config: {}, promptTemplate: "Fix it", settings },
+    settings,
+    fetchIssue: async (issue) => issue,
+    fetchIssueEvents: async () => {
+      feedCalls += 1;
+      return never<TrackerIssueEvent[]>();
+    },
+    onUpdate: (update) => updates.push(update),
+    adapters: fakeAdapters({
+      executorFactory: () =>
+        fakeExecutor({
+          session: {
+            queueTurn: session.queueTurn,
+          },
+        }),
+    }),
+  });
+
+  assert.equal(result.turnCount, 2);
+  assert.equal(feedCalls, 1);
+  assert.ok(
+    updates.some(
+      (update) =>
+        update.type === "stderr" &&
+        update.message.includes("tracker.fetch_issue_events timed out after 20ms"),
+    ),
+  );
+});
+
 function fakeSettingsWithTimeouts(
   opts: {
     setupTimeoutMs?: number | undefined;

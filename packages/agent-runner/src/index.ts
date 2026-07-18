@@ -19,6 +19,7 @@ const workerSetupTimeoutGraceMs = 1_000;
 const workspaceCreateStage = "workspace.create_for_issue";
 const beforeRunHookStage = "workspace.run_before_run_hook";
 const afterRunHookStage = "workspace.run_after_run_hook";
+const issueEventsFeedStage = "tracker.fetch_issue_events";
 
 interface SetupStageSignalOptions {
   abortSignal?: AbortSignal | undefined;
@@ -129,17 +130,9 @@ class RunController {
     let receiveIssueEvents = (events: TrackerIssueEvent[]): void => {
       bufferedIssueEvents.push(...events);
     };
-    const unsubscribeIssueEvents = input.subscribeIssueEvents?.((events) =>
+    let unsubscribeIssueEvents = input.subscribeIssueEvents?.((events) =>
       receiveIssueEvents(events),
     );
-    const baselineIssueEvents = input.fetchIssueEvents
-      ? Promise.resolve()
-          .then(async () => input.fetchIssueEvents?.("0") ?? [])
-          .then(
-            (events) => ({ events }),
-            (error: unknown) => ({ error }),
-          )
-      : undefined;
     let workspace: string;
     try {
       workspace = await runSetupStage(
@@ -169,6 +162,7 @@ class RunController {
       message: `workspace prepared at ${workspace}`,
     });
     let session: AgentSession | null = null;
+    let steeringFeedAbortController: AbortController | undefined;
     // Reset at the start of every turn; set by the streamed updates below.
     let sawToolCallThisTurn: boolean;
 
@@ -231,7 +225,36 @@ class RunController {
       };
       session = await executor.startSession(startSessionInput);
 
+      if (!session.queueTurn) {
+        unsubscribeIssueEvents?.();
+        unsubscribeIssueEvents = undefined;
+        bufferedIssueEvents = [];
+        receiveIssueEvents = () => {};
+      }
+      const canRecoverSteering =
+        typeof session.queueTurn === "function" &&
+        Boolean(input.fetchIssue) &&
+        Boolean(input.fetchIssueEvents) &&
+        runtime.agent.maxTurns > 1;
+      steeringFeedAbortController = canRecoverSteering ? new AbortController() : undefined;
+      const fetchSteeringIssueEvents = async (sinceTs: string): Promise<TrackerIssueEvent[]> => {
+        if (!input.fetchIssueEvents || !steeringFeedAbortController) return [];
+        return runSetupStage(
+          issueEventsFeedStage,
+          steeringFeedTimeoutMs(runtime),
+          async () => input.fetchIssueEvents?.(sinceTs) ?? [],
+          steeringFeedAbortController.signal,
+        );
+      };
+      const baselineIssueEvents = canRecoverSteering
+        ? fetchSteeringIssueEvents("0").then(
+            (events) => ({ events }),
+            (error: unknown) => ({ error }),
+          )
+        : undefined;
       let steeringRecoveryCursorTs = "0";
+      let steeringRecoveryInitialized = false;
+      let steeringRecoveryEnabled = canRecoverSteering;
       let steeringReady = false;
       const seenSteeringEventTs = new Set<string>();
       const queuedTurns: QueuedTurn[] = [];
@@ -263,32 +286,45 @@ class RunController {
           reportSteeringFailure("queue", error);
         }
       };
-      const initializeSteering = async (): Promise<void> => {
-        const baseline = await baselineIssueEvents;
+      const initializeSteering = (): void => {
         const buffered = bufferedIssueEvents;
         bufferedIssueEvents = [];
-        if (baseline) {
-          if ("error" in baseline) {
-            reportSteeringFailure("baseline", baseline.error);
-          } else {
-            try {
-              const bufferedTs = new Set(buffered.map((event) => event.ts));
-              for (const event of baseline.events) {
-                if (!bufferedTs.has(event.ts)) seenSteeringEventTs.add(event.ts);
-              }
-              steeringRecoveryCursorTs = maxSteeringTs(baseline.events, steeringRecoveryCursorTs);
-            } catch (error) {
-              reportSteeringFailure("baseline", error);
-            }
-          }
-        }
         steeringReady = true;
         queueIssueEvents(buffered);
       };
-      const recoverSteering = async (): Promise<void> => {
-        if (!input.fetchIssueEvents || submittedTurnCount >= runtime.agent.maxTurns) return;
+      const establishSteeringRecovery = async (): Promise<boolean> => {
+        if (steeringRecoveryInitialized) return steeringRecoveryEnabled;
+        steeringRecoveryInitialized = true;
+        const baseline = await baselineIssueEvents;
+        if (!baseline) {
+          steeringRecoveryEnabled = false;
+          return false;
+        }
+        if ("error" in baseline) {
+          reportSteeringFailure("baseline", baseline.error);
+          steeringRecoveryEnabled = false;
+          return false;
+        }
         try {
-          const recovered = await input.fetchIssueEvents(steeringRecoveryCursorTs);
+          for (const event of baseline.events) seenSteeringEventTs.add(event.ts);
+          steeringRecoveryCursorTs = maxSteeringTs(baseline.events, steeringRecoveryCursorTs);
+          return true;
+        } catch (error) {
+          reportSteeringFailure("baseline", error);
+          steeringRecoveryEnabled = false;
+          return false;
+        }
+      };
+      const recoverSteering = async (): Promise<void> => {
+        if (
+          !steeringRecoveryEnabled ||
+          submittedTurnCount >= runtime.agent.maxTurns ||
+          !(await establishSteeringRecovery())
+        ) {
+          return;
+        }
+        try {
+          const recovered = await fetchSteeringIssueEvents(steeringRecoveryCursorTs);
           queueIssueEvents(recovered);
           steeringRecoveryCursorTs = maxSteeringTs(recovered, steeringRecoveryCursorTs);
         } catch (error) {
@@ -323,7 +359,7 @@ class RunController {
               : continuationPrompt(turnCount + 1, runtime.agent.maxTurns);
           const turnPromise = runTurnWithAbort(executor, session, prompt, issue, input.abortSignal);
           submittedTurnCount += 1;
-          if (turnCount === 0) await initializeSteering();
+          if (turnCount === 0) initializeSteering();
           turnUpdates = await turnPromise;
         }
         turnCount += 1;
@@ -364,6 +400,7 @@ class RunController {
     } catch (error) {
       runError = error;
     } finally {
+      steeringFeedAbortController?.abort(new Error("agent_run_finished"));
       unsubscribeIssueEvents?.();
       if (session) {
         try {
@@ -559,6 +596,14 @@ function workspaceCreateTimeoutMs(settings: Settings): number {
 
 function hookStageTimeoutMs(settings: Settings): number {
   return settings.hooks.timeoutMs + workerSetupTimeoutGraceMs;
+}
+
+function steeringFeedTimeoutMs(settings: Settings): number {
+  const agent = settings.agents[settings.agent.kind];
+  if (!agent) throw new Error(`agents.${settings.agent.kind} is required`);
+  return agent.stallTimeoutMs > 0
+    ? Math.min(agent.stallTimeoutMs, agent.turnTimeoutMs)
+    : agent.turnTimeoutMs;
 }
 
 class SetupStageTimeoutError extends Error {
