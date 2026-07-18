@@ -4,7 +4,5 @@ export { actionForStopReason } from "./stopReason.js";
 export type { StopReasonAction } from "./stopReason.js";
 export { mergeMonotonicUsage } from "./usage.js";
 export type { UsageMergeInput, UsageMergeResult } from "./usage.js";
-export { RUNTIME_RECONCILIATION_REASONS, reconciliationStopReason } from "./reconciliation.js";
-export type { RuntimeReconciliationReason } from "./reconciliation.js";
 export { selectLeastLoadedHost } from "./workerHost.js";
 export type { WorkerHostSelectionInput } from "./workerHost.js";

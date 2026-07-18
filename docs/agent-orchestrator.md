@@ -120,7 +120,7 @@ A stall-finished run poisons its worker even if the underlying runner resolves s
   - Otherwise it emits `run_reconciled`.
 - **Missing from the refetch.** Reconciled as `missing`, treated the same as ineligible.
 
-`reconciliationStopReason` in `packages/policies/src/reconciliation.ts` classifies why a tracked run was stopped, returning one of `terminal`, `unrouted`, `blocked`, or `inactive`. A failed refetch emits `reconcile_refresh_failed` and keeps everything running; reconciliation never tears down a live run on a transient tracker error.
+`reconciliationStopReason` in `packages/runtime/src/reconciliation.ts` classifies why a tracked run was stopped, returning one of `terminal`, `unrouted`, `blocked`, or `inactive`. A failed refetch emits `reconcile_refresh_failed` and keeps everything running; reconciliation never tears down a live run on a transient tracker error.
 
 The per-issue decision tree:
 
