@@ -510,8 +510,6 @@ class RunController {
         }
         turnCount += 1;
 
-        if (queuedTurns.length > 0) continue;
-
         // ACP turn continuation is derived from its event vocabulary. The signal
         // primarily comes from streamed updates because the returned batch may be
         // bounded for very long turns, which can omit an early tool call.
@@ -536,7 +534,6 @@ class RunController {
           continue;
         }
         await steeringFlushTail;
-        if (queuedTurns.length > 0) continue;
         const activeIssue = issueIsActive(issue, settings);
         const refreshed = settingsForIssueState(settings, issue.state);
         const backendChanged =
@@ -544,6 +541,7 @@ class RunController {
           backendProfile(refreshed) !== backendProfile(runtime);
         if (backendChanged) break;
         runtime = refreshed;
+        if (queuedTurns.length > 0) continue;
         await enqueueSteeringFlush(
           completedWithoutTools || autonomousTurnCount >= runtime.agent.maxTurns || !activeIssue,
         );

@@ -324,7 +324,7 @@ test("a run defers steering beyond its turn limit without failing", async () => 
   assert.notMatch(queuedPrompts[0]!, /deferred steering/);
 });
 
-test("accepted steering runs before a fallible issue refresh", async () => {
+test("accepted steering survives a fallible issue refresh", async () => {
   const settings = fakeSettings({ agent: { ...defaultSettings().agent, maxTurns: 2 } });
   const queuedPrompts: string[] = [];
   let issueEventListener: ((events: TrackerIssueEvent[]) => void) | undefined;
@@ -377,7 +377,7 @@ test("accepted steering runs before a fallible issue refresh", async () => {
 
   const result = await attempt;
   assert.equal(result.turnCount, 2);
-  assert.equal(issueRefreshes, 0);
+  assert.equal(issueRefreshes, 1);
   assert.match(queuedPrompts[0]!, /finish this first/);
 });
 

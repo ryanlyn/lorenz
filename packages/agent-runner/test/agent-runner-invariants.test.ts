@@ -1,6 +1,6 @@
 import { test, describe } from "vitest";
 import fc from "fast-check";
-import type { AgentSession, AgentUpdate, Issue, Settings } from "@lorenz/domain";
+import type { AgentSession, AgentUpdate, Issue, Settings, TrackerIssueEvent } from "@lorenz/domain";
 import type { SessionNotification } from "@agentclientprotocol/sdk";
 import { defaultSettings } from "@lorenz/config";
 import { assert } from "@lorenz/test-utils";
@@ -296,6 +296,75 @@ describe("INVARIANT: When the backend profile changes between turns, the system 
     assert.equal(result.turnCount, 1);
     assert.equal(recoveryCalls, 1);
     assert.deepEqual(queuedPrompts, []);
+  });
+
+  test("queued steering is not drained after the backend profile changes", async () => {
+    const overrides = new Map<string, { agent?: Partial<Settings["agent"]> }>();
+    overrides.set("in progress", {
+      agent: { kind: "claude" },
+    });
+    const settings = fakeSettings({
+      agent: { ...defaultSettings().agent, maxTurns: 10, kind: "codex" },
+      statusOverrides: overrides as Settings["statusOverrides"],
+    });
+    const queuedPrompts: string[] = [];
+    let issueEventListener: ((events: TrackerIssueEvent[]) => void) | undefined;
+    let markFirstTurnStarted: (() => void) | undefined;
+    let releaseFirstTurn: (() => void) | undefined;
+    let markQueuedTurnSubmitted: (() => void) | undefined;
+    const firstTurnStarted = new Promise<void>((resolve) => {
+      markFirstTurnStarted = resolve;
+    });
+    const firstTurnRelease = new Promise<void>((resolve) => {
+      releaseFirstTurn = resolve;
+    });
+    const queuedTurnSubmitted = new Promise<void>((resolve) => {
+      markQueuedTurnSubmitted = resolve;
+    });
+    let stopCalls = 0;
+
+    const attempt = runAgentAttempt({
+      issue: fakeIssue({ state: "Todo" }),
+      workflow: { path: "/workflow.md", config: {}, promptTemplate: "Fix it", settings },
+      settings,
+      fetchIssue: async (issue) => ({ ...issue, state: "In Progress" }),
+      subscribeIssueEvents: (listener) => {
+        issueEventListener = listener;
+        return () => {};
+      },
+      adapters: fakeAdapters({
+        executorFactory: () => ({
+          kind: "codex",
+          async startSession() {
+            return fakeSession({
+              queueTurn: async (prompt) => {
+                queuedPrompts.push(prompt);
+                markQueuedTurnSubmitted?.();
+                return [{ type: "turn_completed" }];
+              },
+              stop: async () => {
+                stopCalls += 1;
+              },
+            });
+          },
+          async runTurn() {
+            markFirstTurnStarted?.();
+            await firstTurnRelease;
+            return [fakeToolCallNotification(), { type: "turn_completed" }];
+          },
+        }),
+      }),
+    });
+
+    await firstTurnStarted;
+    issueEventListener?.([{ ts: "11.0", author: "ryan", text: "use the new backend" }]);
+    await queuedTurnSubmitted;
+    releaseFirstTurn?.();
+
+    const result = await attempt;
+    assert.equal(result.turnCount, 1);
+    assert.equal(stopCalls, 1);
+    assert.equal(queuedPrompts.length, 1);
   });
 
   test("session continues when profile stays the same across turns (ACP)", async () => {

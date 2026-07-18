@@ -1307,18 +1307,10 @@ export class LorenzRuntime {
         this.coordinator?.capabilities,
       );
       if (gateMessage !== null) throw new Error(gateMessage);
-      const nextClient =
-        !this.input.client && this.input.clientFactory
-          ? this.input.clientFactory(workflow.settings)
-          : this.client;
-      const clientChanged = nextClient !== this.client;
-      // TRANSACTIONAL reload: run EVERY throwing side effect FIRST (the gate above,
-      // then the coordinator/pool reconcile), and ONLY swap the runtime settings
-      // (this.input.workflow + this.orchestrator.settings + the client) AFTER they
-      // ALL succeed. If reconcile throws (e.g. driver unavailable / invalid
-      // driverOptions) the catch below leaves BOTH the runtime settings AND the
-      // pool/coordinator state on the PREVIOUS config - last-good is never partially
-      // applied, so dispatch can never use settings that do not match the live pool.
+      // Apply every rejectable worker-pool gate before constructing a replacement
+      // tracker client. Some tracker clients begin asynchronous discovery during
+      // construction, so a client must only be created for a workflow the runtime
+      // can accept.
       //
       // The coordinator (and its pool) is a reload-surviving singleton: diff
       // prev-vs-next worker-pool settings instead of being reconstructed. The pool is
@@ -1338,6 +1330,11 @@ export class LorenzRuntime {
         // keeping last-good settings and emitting workflow_reload_failed.
         if (next) await this.coordinator.reconcile(next);
       }
+      const nextClient =
+        !this.input.client && this.input.clientFactory
+          ? this.input.clientFactory(workflow.settings)
+          : this.client;
+      const clientChanged = nextClient !== this.client;
       if (clientChanged) await this.closeChangeStream();
       this.input.workflow = workflow;
       this.orchestrator.settings = workflow.settings;

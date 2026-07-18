@@ -5385,15 +5385,8 @@ test("worker pool: a default (slotsPerMachine=1) reload applies unchanged throug
 });
 
 test("worker pool: a reload whose reconcile throws keeps last-good settings AND the live pool unchanged (transactional)", async () => {
-  // Codex iter-5 HIGH (non-transactional reload): the reload assigned
-  // this.input.workflow + this.orchestrator.settings BEFORE coordinator.reconcile.
-  // If reconcile throws (e.g. driver unavailable / invalid driverOptions), the
-  // catch emits workflow_reload_failed but the runtime has ALREADY switched to the
-  // failed settings - 'last-good' is violated and dispatch uses settings that do not
-  // match the live pool/coordinator. The reload must be transactional: run the
-  // throwing reconcile side effect FIRST and only swap runtime settings AFTER it
-  // succeeds. On failure, BOTH the runtime settings AND the pool state stay on the
-  // PREVIOUS config.
+  // A rejected pool configuration leaves runtime settings, pool state, and tracker
+  // client ownership on the accepted workflow.
   const issue = issueFixture("issue-bp-reload-reconcile-throws", "MT-BP-RELOAD-RECONCILE");
   const firstWorkflow = workerPoolWorkflowFixture();
   assert.equal(firstWorkflow.settings.worker.workerPool?.max, 1);
@@ -5408,6 +5401,7 @@ test("worker pool: a reload whose reconcile throws keeps last-good settings AND 
     reconcileError: "driver unavailable",
   });
   let reloads = 0;
+  let clientBuilds = 0;
   const runtime = new LorenzRuntime(
     runtimeOptions({
       workflow: firstWorkflow,
@@ -5416,9 +5410,12 @@ test("worker pool: a reload whose reconcile throws keeps last-good settings AND 
         reloads += 1;
         return secondWorkflow;
       },
-      client: {
-        fetchCandidateIssues: async () => [issue],
-        fetchIssuesByIds: async () => [issue],
+      clientFactory: () => {
+        clientBuilds += 1;
+        return {
+          fetchCandidateIssues: async () => [issue],
+          fetchIssuesByIds: async () => [issue],
+        };
       },
     }),
   );
@@ -5426,18 +5423,15 @@ test("worker pool: a reload whose reconcile throws keeps last-good settings AND 
   await runtime.pollOnce({ dryRun: true });
 
   assert.equal(reloads, 1);
-  // Last-good is preserved: the runtime still carries the FIRST workflow's settings
-  // (workerPool.max unchanged at 1, NOT the failed reload's 3) and the FIRST workflow.
+  assert.equal(clientBuilds, 1);
   assert.equal(runtime.workflow.settings.worker.workerPool?.max, 1);
   assert.equal(runtime.workflow.path, firstWorkflow.path);
   assert.equal(runtime.workflow, firstWorkflow);
-  // The failure surfaced as workflow_reload_failed carrying the reconcile message...
   const reloadFailed = runtime
     .snapshot()
     .recentEvents.find((event) => event.type === "workflow_reload_failed");
   assert.ok(reloadFailed);
   assert.ok(reloadFailed.message.includes("driver unavailable"));
-  // ...and NO workflow_reloaded event was emitted for the rejected reload.
   assert.equal(
     runtime.snapshot().recentEvents.some((event) => event.type === "workflow_reloaded"),
     false,
