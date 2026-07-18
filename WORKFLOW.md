@@ -53,12 +53,12 @@ agents:
         inherit: all
       model_reasoning_effort: xhigh
       service_tier: flex
-      model: gpt-5.5
+      model: gpt-5.6-sol
   claude:
     executor: acp
     bridge_command: 'env CLAUDE_CODE_EXECUTABLE="$(command -v claude)" claude-agent-acp'
     provider_config:
-      model: claude-opus-4-8[1m]
+      model: claude-fable-5
       effortLevel: xhigh
       permissions:
         defaultMode: bypassPermissions
