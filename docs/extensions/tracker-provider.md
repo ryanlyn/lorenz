@@ -70,15 +70,17 @@ interface RuntimeTrackerClient {
   caller skips those flows.
 - `watch(onChange)` is optional. It opens a live change stream that nudges an immediate poll.
   A change can carry human-authored issue events, which the runtime forwards to active runs without
-  waiting for that poll.
-- `fetchIssueEvents(issueId, sinceTs)` is an optional recovery feed for events missed across a
-  change-stream gap. Each event uses a unique, canonical non-negative decimal `ts` key. The feed
-  returns events newer than `sinceTs`. Set `Issue.issueEventCursor` to the latest event key already
-  represented in prompt-visible fields of each issue snapshot. The runner ignores live replays at
-  or before that immutable boundary, advances its recovery cursor only after accepting feed
-  results, and submits later human events even when the autonomous turn budget is exhausted. A run
-  accepts at most `agent.max_turns` steering turns; additional prompt-visible events remain eligible
-  for the next attempt. Stop the request when `abortSignal` aborts.
+  waiting for that poll. A provider that publishes issue events must implement the recovery feed
+  and snapshot boundary below.
+- `fetchIssueEvents(issueId, sinceTs)` recovers events missed across a change-stream or run-lifecycle
+  gap. It is optional for providers that never publish issue events. Each event uses a unique,
+  canonical non-negative decimal `ts` key. The feed returns events newer than `sinceTs`. Set
+  `Issue.issueEventCursor` to the latest event key already represented in prompt-visible fields of
+  each issue snapshot. The runner ignores live replays at or before that immutable boundary,
+  advances its recovery cursor only after accepting feed results, and submits later human events
+  even when the autonomous turn budget is exhausted. A run accepts at most `agent.max_turns`
+  steering turns; additional prompt-visible events remain eligible for the next attempt. Stop the
+  request when `abortSignal` aborts.
 
 Each client returns the domain `Issue` shape, not the backend's raw payload. `Issue` requires
 `stateType: IssueStateType` (one of `backlog`, `unstarted`, `started`, `completed`, `canceled`,

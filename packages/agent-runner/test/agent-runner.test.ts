@@ -268,7 +268,7 @@ test("live delivery preserves valid events beside a malformed ordering key", asy
   );
 });
 
-test("a run bounds externally submitted steering turns", async () => {
+test("a run defers steering beyond its turn limit without failing", async () => {
   const settings = fakeSettings({ agent: { ...defaultSettings().agent, maxTurns: 1 } });
   const queuedPrompts: string[] = [];
   let issueEventListener: ((events: TrackerIssueEvent[]) => void) | undefined;
@@ -315,7 +315,8 @@ test("a run bounds externally submitted steering turns", async () => {
   await vi.waitFor(() => assert.equal(queuedPrompts.length, 1));
   releaseFirstTurn?.();
 
-  await assert.rejects(() => attempt, /steering_turn_limit_reached/);
+  const result = await attempt;
+  assert.equal(result.turnCount, 2);
   assert.equal(queuedPrompts.length, 1);
   assert.match(queuedPrompts[0]!, /accepted steering/);
   assert.notMatch(queuedPrompts[0]!, /deferred steering/);
@@ -502,7 +503,7 @@ test("a queued turn with streamed tool activity permits a continuation turn", as
 });
 
 test("events observed during setup enter the queue after the initial turn starts", async () => {
-  const settings = fakeSettings({ agent: { ...defaultSettings().agent, maxTurns: 2 } });
+  const settings = fakeSettings({ agent: { ...defaultSettings().agent, maxTurns: 1 } });
   const queuedPrompts: string[] = [];
   let issueEventListener: ((events: TrackerIssueEvent[]) => void) | undefined;
   let releaseWorkspace: (() => void) | undefined;
@@ -539,13 +540,113 @@ test("events observed during setup enter the queue after the initial turn starts
   });
 
   await vi.waitFor(() => assert.ok(issueEventListener));
-  issueEventListener?.([{ ts: "11.0", author: "ryan", text: "during setup" }]);
+  issueEventListener?.([
+    { ts: "11.0", author: "ryan", text: "first during setup" },
+    { ts: "12.0", author: "ryan", text: "second during setup" },
+  ]);
   releaseWorkspace?.();
 
   const result = await attempt;
   assert.equal(result.turnCount, 2);
   assert.equal(queuedPrompts.length, 1);
-  assert.match(queuedPrompts[0]!, /during setup/);
+  assert.match(queuedPrompts[0]!, /first during setup/);
+  assert.match(queuedPrompts[0]!, /second during setup/);
+});
+
+test("initial recovery queues events missed after the issue snapshot", async () => {
+  const settings = fakeSettings({ agent: { ...defaultSettings().agent, maxTurns: 1 } });
+  const queuedPrompts: string[] = [];
+  const recoveryCursors: string[] = [];
+  let releaseFirstTurn: (() => void) | undefined;
+  let markFirstTurnStarted: (() => void) | undefined;
+  const firstTurnStarted = new Promise<void>((resolve) => {
+    markFirstTurnStarted = resolve;
+  });
+  const firstTurnRelease = new Promise<void>((resolve) => {
+    releaseFirstTurn = resolve;
+  });
+  const session = fakeSession({
+    queueTurn: async (prompt) => {
+      queuedPrompts.push(prompt);
+      return [{ type: "turn_completed" }];
+    },
+  });
+  const executor: AgentExecutor = {
+    kind: "codex",
+    async startSession() {
+      return session;
+    },
+    async runTurn() {
+      markFirstTurnStarted?.();
+      await firstTurnRelease;
+      return [{ type: "turn_completed" }];
+    },
+  };
+
+  const attempt = runAgentAttempt({
+    issue: fakeIssue({ issueEventCursor: "10.0" }),
+    workflow: { path: "/workflow.md", config: {}, promptTemplate: "Fix it", settings },
+    settings,
+    fetchIssue: async (issue) => issue,
+    fetchIssueEvents: async (sinceTs) => {
+      recoveryCursors.push(sinceTs);
+      return sinceTs === "10.0"
+        ? [{ ts: "11.0", author: "ryan", text: "missed before subscription" }]
+        : [];
+    },
+    adapters: fakeAdapters({ executorFactory: () => executor }),
+  });
+
+  await firstTurnStarted;
+  await vi.waitFor(() => assert.equal(queuedPrompts.length, 1));
+  assert.match(queuedPrompts[0]!, /missed before subscription/);
+  releaseFirstTurn?.();
+
+  const result = await attempt;
+  assert.equal(result.turnCount, 2);
+  assert.deepEqual(recoveryCursors, ["10.0", "11.0"]);
+});
+
+test("final recovery drains a missed event after the issue becomes inactive", async () => {
+  const settings = fakeSettings({ agent: { ...defaultSettings().agent, maxTurns: 2 } });
+  const queuedPrompts: string[] = [];
+  let recoveryCalls = 0;
+  const session = fakeSession({
+    queueTurn: async (prompt) => {
+      queuedPrompts.push(prompt);
+      return [{ type: "turn_completed" }];
+    },
+  });
+
+  const result = await runAgentAttempt({
+    issue: fakeIssue({ issueEventCursor: "10.0" }),
+    workflow: { path: "/workflow.md", config: {}, promptTemplate: "Fix it", settings },
+    settings,
+    fetchIssue: async (issue) => ({
+      ...issue,
+      state: "Done",
+      stateType: "completed",
+    }),
+    fetchIssueEvents: async () => {
+      recoveryCalls += 1;
+      return recoveryCalls === 2
+        ? [{ ts: "11.0", author: "ryan", text: "missed before completion" }]
+        : [];
+    },
+    adapters: fakeAdapters({
+      executorFactory: () =>
+        fakeExecutor({
+          session: {
+            queueTurn: session.queueTurn,
+          },
+        }),
+    }),
+  });
+
+  assert.equal(result.turnCount, 2);
+  assert.equal(recoveryCalls, 3);
+  assert.equal(queuedPrompts.length, 1);
+  assert.match(queuedPrompts[0]!, /missed before completion/);
 });
 
 test("live delivery does not advance the recovery cursor past missed events", async () => {
@@ -648,7 +749,7 @@ test("recovery can queue a missed event before the no-tool completion exit", asy
     }),
   });
 
-  assert.equal(result.turnCount, 3);
+  assert.equal(result.turnCount, 2);
   assert.deepEqual(feedCursors, ["10.0", "10.0", "11.0"]);
   assert.equal(queuedPrompts.length, 1);
   assert.match(queuedPrompts[0]!, /missed during turn/);
@@ -958,7 +1059,7 @@ test("a non-settling final steering recovery fails within the agent timeout", as
   });
 
   await assert.rejects(() => attempt, /tracker\.fetch_issue_events timed out after 20ms/);
-  assert.equal(feedCalls, 2);
+  assert.equal(feedCalls, 3);
   assert.ok(
     updates.some(
       (update) =>

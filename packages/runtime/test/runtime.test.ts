@@ -2161,7 +2161,10 @@ test("a tracker push nudges an immediate poll between intervals", async () => {
 });
 
 test("a tracker push delivers issue events to every active run for that issue", async () => {
-  const issue = issueFixture("issue-live-steering", "MT-LIVE-STEERING");
+  const issue = {
+    ...issueFixture("issue-live-steering", "MT-LIVE-STEERING"),
+    issueEventCursor: "10.0",
+  };
   let captured: ((change?: TrackerChange) => void) | null = null;
   const delivered: TrackerIssueEvent[] = [];
   let finishRun: (() => void) | undefined;
@@ -2174,6 +2177,7 @@ test("a tracker push delivers issue events to every active run for that issue", 
       client: {
         fetchCandidateIssues: async () => [issue],
         fetchIssuesByIds: async () => [issue],
+        fetchIssueEvents: async () => [],
         watch: (onChange) => {
           captured = onChange;
           return { close: () => {} };
@@ -2205,8 +2209,67 @@ test("a tracker push delivers issue events to every active run for that issue", 
   }
 });
 
+test("pending issue event delivery is bounded before the runner subscribes", async () => {
+  const issue = {
+    ...issueFixture("issue-bounded-steering", "MT-BOUNDED-STEERING"),
+    issueEventCursor: "10.0",
+  };
+  let captured: ((change?: TrackerChange) => void) | null = null;
+  let markRunnerStarted: (() => void) | undefined;
+  let releaseSubscription: (() => void) | undefined;
+  const runnerStarted = new Promise<void>((resolve) => {
+    markRunnerStarted = resolve;
+  });
+  const subscriptionGate = new Promise<void>((resolve) => {
+    releaseSubscription = resolve;
+  });
+  const delivered: TrackerIssueEvent[] = [];
+  const runtime = new LorenzRuntime(
+    runtimeOptions({
+      workflow: pushWorkflowFixture(),
+      client: {
+        fetchCandidateIssues: async () => [issue],
+        fetchIssuesByIds: async () => [issue],
+        fetchIssueEvents: async () => [],
+        watch: (onChange) => {
+          captured = onChange;
+          return { close: () => {} };
+        },
+      },
+      runner: async (input) => {
+        markRunnerStarted?.();
+        await subscriptionGate;
+        const unsubscribe = input.subscribeIssueEvents?.((events) => delivered.push(...events));
+        unsubscribe?.();
+        return { workspace: "/tmp/lorenz/MT-BOUNDED-STEERING", finalIssue: issue };
+      },
+    }),
+  );
+
+  void runtime.start({ once: false });
+  try {
+    await waitFor(() => captured !== null && runtime.snapshot().running.length === 1, 1_000);
+    await runnerStarted;
+    captured!({
+      issueEvents: {
+        issueId: issue.id,
+        events: [{ ts: "11.0", author: "ryan", text: "x".repeat(64 * 1024) }],
+      },
+    });
+    releaseSubscription?.();
+    await waitFor(() => runtime.snapshot().runHistory.length === 1, 1_000);
+    assert.deepEqual(delivered, []);
+  } finally {
+    releaseSubscription?.();
+    runtime.stop();
+  }
+});
+
 test("issue event delivery remains closed after the runner unsubscribes", async () => {
-  const issue = issueFixture("issue-closed-steering", "MT-CLOSED-STEERING");
+  const issue = {
+    ...issueFixture("issue-closed-steering", "MT-CLOSED-STEERING"),
+    issueEventCursor: "10.0",
+  };
   let captured: ((change?: TrackerChange) => void) | null = null;
   let subscribeAgain: ((listener: (events: TrackerIssueEvent[]) => void) => () => void) | undefined;
   let markUnsubscribed: (() => void) | undefined;
@@ -2224,6 +2287,7 @@ test("issue event delivery remains closed after the runner unsubscribes", async 
       client: {
         fetchCandidateIssues: async () => [issue],
         fetchIssuesByIds: async () => [issue],
+        fetchIssueEvents: async () => [],
         watch: (onChange) => {
           captured = onChange;
           return { close: () => {} };

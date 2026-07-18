@@ -767,8 +767,10 @@ export interface RuntimeTrackerClient {
   /**
    * Optional push capability: open a live change stream that invokes `onChange` whenever the
    * backend signals new or updated work. A tracker can attach issue events for immediate delivery
-   * to active agent sessions. Backends that can only be pulled omit this and the runtime relies on
-   * interval polling alone.
+   * to active agent sessions. A tracker that attaches issue events must also implement
+   * {@link fetchIssueEvents} and provide an {@link Issue.issueEventCursor} snapshot boundary so
+   * delivery can recover across connection and run-lifecycle gaps. Backends that can only be
+   * pulled omit this and the runtime relies on interval polling alone.
    *
    * The interval poll always stays active as a safety net, so `onChange` need not be exhaustive
    * or reliable: a missed signal is at worst recovered on the next interval, and the runtime

@@ -53,6 +53,8 @@ import {
 
 export type RuntimeRunner = (input: Parameters<typeof runAgentAttempt>[0]) => Promise<RunResult>;
 
+const maxPendingIssueEventBytes = 64 * 1024;
+
 export { RUNTIME_EVENT_TYPES, RUNTIME_RUN_OUTCOMES } from "@lorenz/runtime-events";
 export type {
   RuntimeAppStatus,
@@ -266,7 +268,8 @@ function throwRuntimeError(error: Error): never {
 class ActiveRunHandle {
   readonly controller = new AbortController();
   private readonly issueEventListeners = new Set<(events: TrackerIssueEvent[]) => void>();
-  private pendingIssueEvents: TrackerIssueEvent[] = [];
+  private pendingIssueEventBatches: TrackerIssueEvent[][] = [];
+  private pendingIssueEventBytes = 0;
   private issueEventDeliveryClosed = false;
   /**
    * Set when the run is force-finished externally (e.g. a stall reconciliation aborts it). The
@@ -299,10 +302,11 @@ class ActiveRunHandle {
   subscribeIssueEvents(listener: (events: TrackerIssueEvent[]) => void): () => void {
     if (this.issueEventDeliveryClosed) return () => {};
     this.issueEventListeners.add(listener);
-    if (this.pendingIssueEvents.length > 0) {
-      const pending = this.pendingIssueEvents;
-      this.pendingIssueEvents = [];
-      listener(pending);
+    if (this.pendingIssueEventBatches.length > 0) {
+      const pending = this.pendingIssueEventBatches;
+      this.pendingIssueEventBatches = [];
+      this.pendingIssueEventBytes = 0;
+      for (const batch of pending) listener(batch);
     }
     let subscribed = true;
     return () => {
@@ -311,7 +315,8 @@ class ActiveRunHandle {
       this.issueEventListeners.delete(listener);
       if (this.issueEventListeners.size === 0) {
         this.issueEventDeliveryClosed = true;
-        this.pendingIssueEvents = [];
+        this.pendingIssueEventBatches = [];
+        this.pendingIssueEventBytes = 0;
       }
     };
   }
@@ -319,7 +324,11 @@ class ActiveRunHandle {
   publishIssueEvents(events: TrackerIssueEvent[]): void {
     if (!this.isActive || this.issueEventDeliveryClosed || events.length === 0) return;
     if (this.issueEventListeners.size === 0) {
-      this.pendingIssueEvents.push(...events);
+      const batchBytes = issueEventBytes(events);
+      if (this.pendingIssueEventBytes + batchBytes <= maxPendingIssueEventBytes) {
+        this.pendingIssueEventBatches.push(events);
+        this.pendingIssueEventBytes += batchBytes;
+      }
       return;
     }
     for (const listener of this.issueEventListeners) listener(events);
@@ -378,6 +387,7 @@ export class LorenzRuntime {
   private changeStreamOpening = false;
   private changeStreamEnabled = false;
   private changeStreamGeneration = 0;
+  private issueEventRecoveryWarningIssued = false;
   /**
    * The reload-surviving coordinator singleton. Built here from either the
    * pre-built `input.coordinator` (preferred), or a null-endpoint passthrough
@@ -647,6 +657,13 @@ export class LorenzRuntime {
     this.addEvent("tracker_push", this.workflow.settings.tracker.kind ?? "tracker");
     const issueEvents = change?.issueEvents;
     if (issueEvents) {
+      if (!this.client.fetchIssueEvents && !this.issueEventRecoveryWarningIssued) {
+        this.issueEventRecoveryWarningIssued = true;
+        this.addEvent(
+          "tracker_watch_error",
+          "tracker issue event push requires fetchIssueEvents recovery",
+        );
+      }
       for (const handle of this.activeRuns.values()) {
         if (handle.issueId === issueEvents.issueId) {
           handle.publishIssueEvents(issueEvents.events);
@@ -1317,6 +1334,7 @@ export class LorenzRuntime {
       this.input.workflow = workflow;
       this.orchestrator.settings = workflow.settings;
       this.client = nextClient;
+      if (clientChanged) this.issueEventRecoveryWarningIssued = false;
       if (clientChanged && this.changeStreamEnabled) await this.openChangeStream();
       this.addEvent("workflow_reloaded", workflow.path);
     } catch (error) {
@@ -1850,6 +1868,16 @@ function hookExecutionRuntimeMessage(
 
 function inlineLogValue(value: string): string {
   return JSON.stringify(value.replace(/\s+/g, " ").trim());
+}
+
+function issueEventBytes(events: readonly TrackerIssueEvent[]): number {
+  let bytes = 0;
+  for (const event of events) {
+    bytes += Buffer.byteLength(event.ts);
+    bytes += Buffer.byteLength(event.author ?? "");
+    bytes += Buffer.byteLength(event.text);
+  }
+  return bytes;
 }
 
 async function delay(clock: ClockPort, ms: number, stopped: () => boolean): Promise<void> {

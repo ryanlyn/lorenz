@@ -20,6 +20,7 @@ const workspaceCreateStage = "workspace.create_for_issue";
 const beforeRunHookStage = "workspace.run_before_run_hook";
 const afterRunHookStage = "workspace.run_after_run_hook";
 const issueEventsFeedStage = "tracker.fetch_issue_events";
+const maxBufferedIssueEventBytes = 64 * 1024;
 
 interface SetupStageSignalOptions {
   abortSignal?: AbortSignal | undefined;
@@ -132,11 +133,16 @@ class RunController {
     const slotIndex = input.slotIndex ?? 0;
     const workerHost = input.workerHost ?? null;
     let bufferedIssueEvents: TrackerIssueEvent[] = [];
+    let bufferedIssueEventBytes = 0;
     let issueEventBufferOverflow = false;
     const bufferIssueEvents = (events: TrackerIssueEvent[]): void => {
-      const available = Math.max(0, runtime.agent.maxTurns - bufferedIssueEvents.length);
-      bufferedIssueEvents.push(...events.slice(0, available));
-      if (events.length > available) issueEventBufferOverflow = true;
+      const batchBytes = issueEventBytes(events);
+      if (bufferedIssueEventBytes + batchBytes > maxBufferedIssueEventBytes) {
+        issueEventBufferOverflow = true;
+        return;
+      }
+      bufferedIssueEvents.push(...events);
+      bufferedIssueEventBytes += batchBytes;
     };
     let receiveIssueEvents = (events: TrackerIssueEvent[]): void => {
       bufferIssueEvents(events);
@@ -267,7 +273,6 @@ class RunController {
       }
       const steeringRecoveryAvailable =
         typeof session.queueTurn === "function" &&
-        Boolean(input.fetchIssue) &&
         Boolean(input.fetchIssueEvents) &&
         typeof issue.issueEventCursor === "string";
       const fetchSteeringIssueEvents = async (sinceTs: string): Promise<TrackerIssueEvent[]> => {
@@ -290,7 +295,6 @@ class RunController {
       let steeringRecoveryCursorTs = steeringSnapshotCursorTs ?? "0";
       let steeringReady = false;
       let steeringTurnCount = 0;
-      let steeringBacklogPending = issueEventBufferOverflow;
       const seenSteeringEventTs = new Set<string>();
       const reportSteeringFailure = (stage: string, error: unknown): void => {
         input.onUpdate?.({
@@ -302,12 +306,12 @@ class RunController {
       const queueIssueEvents = (events: TrackerIssueEvent[]): boolean => {
         if (!steeringReady) {
           bufferIssueEvents(events);
-          steeringBacklogPending ||= issueEventBufferOverflow;
           return false;
         }
         if (!session?.queueTurn) return false;
         const candidates = [...bufferedIssueEvents, ...events];
         bufferedIssueEvents = [];
+        bufferedIssueEventBytes = 0;
         const { fresh, invalidTs } = freshSteeringEvents(
           candidates,
           seenSteeringEventTs,
@@ -321,7 +325,6 @@ class RunController {
         }
         if (fresh.length === 0) return true;
         if (steeringTurnCount >= runtime.agent.maxTurns) {
-          steeringBacklogPending = true;
           return false;
         }
         try {
@@ -345,8 +348,8 @@ class RunController {
           return true;
         } catch (error) {
           bufferedIssueEvents = [];
+          bufferedIssueEventBytes = 0;
           bufferIssueEvents(fresh);
-          steeringBacklogPending = true;
           reportSteeringFailure("queue", error);
           return false;
         }
@@ -354,18 +357,25 @@ class RunController {
       const initializeSteering = (): void => {
         const buffered = bufferedIssueEvents;
         bufferedIssueEvents = [];
+        bufferedIssueEventBytes = 0;
         steeringReady = true;
         queueIssueEvents(buffered);
+        if (issueEventBufferOverflow) {
+          reportSteeringFailure(
+            "buffer",
+            new Error("pending issue messages exceeded the live-delivery buffer"),
+          );
+        }
       };
       const recoverSteering = async (required: boolean): Promise<void> => {
         if (!steeringRecoveryAvailable) return;
         try {
           const recovered = await fetchSteeringIssueEvents(steeringRecoveryCursorTs);
           if (!queueIssueEvents(recovered)) {
+            if (steeringTurnCount >= runtime.agent.maxTurns) return;
             throw new Error("steering_event_queue_failed");
           }
           steeringRecoveryCursorTs = maxSteeringTs(recovered, steeringRecoveryCursorTs);
-          steeringBacklogPending = false;
         } catch (error) {
           throwIfAborted(input.abortSignal);
           if (required) throw error;
@@ -418,7 +428,10 @@ class RunController {
               input.abortSignal,
             );
             autonomousTurnCount += 1;
-            if (autonomousTurnCount === 1) initializeSteering();
+            if (autonomousTurnCount === 1) {
+              initializeSteering();
+              await recoverSteering(false);
+            }
             turnUpdates = await turnPromise;
           } finally {
             currentNormalActivity = undefined;
@@ -453,23 +466,22 @@ class RunController {
           continue;
         }
         if (queuedTurns.length > 0) continue;
-        if (!issueIsActive(issue, settings)) break;
+        const activeIssue = issueIsActive(issue, settings);
         const refreshed = settingsForIssueState(settings, issue.state);
-        if (
+        const backendChanged =
           refreshed.agent.kind !== runtime.agent.kind ||
-          backendProfile(refreshed) !== backendProfile(runtime)
-        ) {
-          break;
-        }
-        runtime = refreshed;
+          backendProfile(refreshed) !== backendProfile(runtime);
+        if (!backendChanged) runtime = refreshed;
         queueIssueEvents([]);
         await recoverSteering(
-          completedWithoutTools || autonomousTurnCount >= runtime.agent.maxTurns,
+          completedWithoutTools ||
+            autonomousTurnCount >= runtime.agent.maxTurns ||
+            !activeIssue ||
+            backendChanged,
         );
+        if (queuedTurns.length > 0) continue;
+        if (!activeIssue || backendChanged) break;
         if (completedWithoutTools && queuedTurns.length === 0) break;
-      }
-      if (steeringBacklogPending) {
-        throw new Error("steering_turn_limit_reached");
       }
     } catch (error) {
       runError = error;
@@ -628,6 +640,16 @@ function maxSteeringTs(events: TrackerIssueEvent[], current: string): string {
     if (compareSteeringTs(event.ts, max) > 0) max = event.ts;
   }
   return max;
+}
+
+function issueEventBytes(events: readonly TrackerIssueEvent[]): number {
+  let bytes = 0;
+  for (const event of events) {
+    bytes += Buffer.byteLength(event.ts);
+    bytes += Buffer.byteLength(event.author ?? "");
+    bytes += Buffer.byteLength(event.text);
+  }
+  return bytes;
 }
 
 function compareSteeringTs(left: string, right: string): number {
