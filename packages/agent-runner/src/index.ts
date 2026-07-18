@@ -761,23 +761,53 @@ function steeringEventChunk(
   start: number,
   maxBytes: number,
 ): { sourceEvents: TrackerIssueEvent[]; promptEvents: TrackerIssueEvent[] } {
-  const sourceEvents: TrackerIssueEvent[] = [];
-  const promptEvents: TrackerIssueEvent[] = [];
+  const candidates: TrackerIssueEvent[] = [];
   let bytes = 0;
   for (let index = start; index < events.length; index += 1) {
     const event = events[index]!;
     const eventBytes = issueEventBytes([event]);
-    if (sourceEvents.length === 0 && eventBytes > maxBytes) {
-      sourceEvents.push(event);
-      promptEvents.push(shortenIssueEvent(event, maxBytes));
-      break;
-    }
+    if (candidates.length === 0 && eventBytes > maxBytes)
+      return shortenedEventChunk(event, maxBytes);
     if (bytes + eventBytes > maxBytes) break;
-    sourceEvents.push(event);
-    promptEvents.push(event);
+    candidates.push(event);
     bytes += eventBytes;
   }
-  return { sourceEvents, promptEvents };
+  if (candidates.length === 0) return { sourceEvents: [], promptEvents: [] };
+  if (issueEventsPromptBytes(candidates) <= maxBytes) {
+    return { sourceEvents: candidates, promptEvents: candidates };
+  }
+  if (issueEventsPromptBytes([candidates[0]!]) > maxBytes) {
+    return shortenedEventChunk(candidates[0]!, maxBytes);
+  }
+
+  let lower = 1;
+  let upper = candidates.length;
+  while (lower < upper) {
+    const middle = Math.ceil((lower + upper) / 2);
+    if (issueEventsPromptBytes(candidates.slice(0, middle)) <= maxBytes) {
+      lower = middle;
+    } else {
+      upper = middle - 1;
+    }
+  }
+  const sourceEvents = candidates.slice(0, lower);
+  return { sourceEvents, promptEvents: sourceEvents };
+}
+
+function shortenedEventChunk(
+  event: TrackerIssueEvent,
+  maxBytes: number,
+): { sourceEvents: TrackerIssueEvent[]; promptEvents: TrackerIssueEvent[] } {
+  const emptyEvent: TrackerIssueEvent = {
+    ts: "",
+    ...(event.author === undefined ? {} : { author: "" }),
+    text: "",
+  };
+  const contentBudget = Math.max(0, maxBytes - issueEventsPromptBytes([emptyEvent]));
+  return {
+    sourceEvents: [event],
+    promptEvents: [shortenIssueEvent(event, contentBudget)],
+  };
 }
 
 function shortenIssueEvent(event: TrackerIssueEvent, maxBytes: number): TrackerIssueEvent {
@@ -858,6 +888,10 @@ function issueEventBytes(events: readonly TrackerIssueEvent[]): number {
     bytes += Buffer.byteLength(event.text);
   }
   return bytes;
+}
+
+function issueEventsPromptBytes(events: readonly TrackerIssueEvent[]): number {
+  return Buffer.byteLength(issueEventsPrompt(events));
 }
 
 function compareSteeringTs(left: string, right: string): number {

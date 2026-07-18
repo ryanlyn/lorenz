@@ -70,8 +70,9 @@ interface RuntimeTrackerClient {
   caller skips those flows.
 - `watch(onChange)` is optional. It opens a live change stream that nudges an immediate poll.
   A change can carry human-authored issue events, which the runtime forwards to active runs without
-  waiting for that poll. A provider that publishes issue events must implement the recovery feed
-  and snapshot boundary below.
+  waiting for that poll. Active runs retain the client instance that dispatched them, so a workflow
+  reload cannot mix recovery or pushed events across tracker configurations. A provider that
+  publishes issue events must implement the recovery feed and snapshot boundary below.
 - `fetchIssueEvents(issueId, sinceTs)` recovers events missed across a change-stream or run-lifecycle
   gap. It is optional for providers that never publish issue events. Each event uses a unique,
   canonical non-negative decimal `ts` key. The feed returns events newer than `sinceTs`. Set

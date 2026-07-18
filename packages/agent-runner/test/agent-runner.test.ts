@@ -1013,7 +1013,7 @@ test("live delivery chunks large batches and shortens oversized messages", async
 
   const result = await attempt;
   assert.equal(result.turnCount, 5);
-  assert.ok(queuedPrompts.every((prompt) => Buffer.byteLength(prompt) < 70 * 1024));
+  assert.ok(queuedPrompts.every((prompt) => Buffer.byteLength(prompt) <= 64 * 1024));
   assert.match(queuedPrompts[2]!, /message shortened for live delivery/);
   assert.match(queuedPrompts[2]!, /tail-marker/);
 });
@@ -1048,9 +1048,40 @@ test("live delivery bounds oversized event metadata", async () => {
 
   assert.equal(result.turnCount, 2);
   assert.equal(queuedPrompts.length, 1);
-  assert.ok(Buffer.byteLength(queuedPrompts[0]!) < 70 * 1024);
+  assert.ok(Buffer.byteLength(queuedPrompts[0]!) <= 64 * 1024);
   assert.match(queuedPrompts[0]!, /\[field shortened for live delivery\]/);
   assert.match(queuedPrompts[0]!, /bounded message/);
+});
+
+test("live delivery includes rendered formatting in the prompt byte limit", async () => {
+  const settings = fakeSettings({ agent: { ...defaultSettings().agent, maxTurns: 3 } });
+  const queuedPrompts: string[] = [];
+  const events = Array.from({ length: 6_000 }, (_, index) => ({
+    ts: `${index + 11}`,
+    text: "",
+  }));
+
+  await runAgentAttempt({
+    issue: fakeIssue({ issueEventCursor: "10" }),
+    workflow: { path: "/workflow.md", config: {}, promptTemplate: "Fix it", settings },
+    settings,
+    fetchIssue: async (issue) => issue,
+    fetchIssueEvents: async (sinceTs) => (sinceTs === "10" ? events : []),
+    adapters: fakeAdapters({
+      executorFactory: () =>
+        fakeExecutor({
+          session: {
+            queueTurn: async (prompt) => {
+              queuedPrompts.push(prompt);
+              return [{ type: "turn_completed" }];
+            },
+          },
+        }),
+    }),
+  });
+
+  assert.ok(queuedPrompts.length > 1);
+  assert.ok(queuedPrompts.every((prompt) => Buffer.byteLength(prompt) <= 64 * 1024));
 });
 
 test("recovery can queue a missed event before the no-tool completion exit", async () => {

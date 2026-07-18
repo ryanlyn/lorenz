@@ -285,6 +285,7 @@ class ActiveRunHandle {
     readonly slotIndex: number,
     readonly key: string,
     readonly runId: string,
+    readonly trackerClient: RuntimeTrackerClient,
     private readonly activeRuns: Map<string, ActiveRunHandle>,
   ) {}
 
@@ -613,7 +614,7 @@ export class LorenzRuntime {
     try {
       const stream = await watch((change) => {
         if (generation !== this.changeStreamGeneration || client !== this.client) return;
-        this.nudgePollForTrackerChange(change);
+        this.nudgePollForTrackerChange(client, change);
       });
       // A null stream means the tracker has no push for this config (e.g. credential unset); stay
       // on interval polling silently rather than logging it as a failure.
@@ -679,7 +680,7 @@ export class LorenzRuntime {
    * poll's fetch is not lost, and a burst of pushes collapses into a single follow-up. The
    * interval poll remains the safety net, so a dropped push is at worst recovered next interval.
    */
-  private nudgePollForTrackerChange(change?: TrackerChange): void {
+  private nudgePollForTrackerChange(client: RuntimeTrackerClient, change?: TrackerChange): void {
     if (this.stopped) return;
     this.addEvent("tracker_push", this.workflow.settings.tracker.kind ?? "tracker");
     const issueEvents = change?.issueEvents;
@@ -692,7 +693,7 @@ export class LorenzRuntime {
         );
       }
       for (const handle of this.activeRuns.values()) {
-        if (handle.issueId === issueEvents.issueId) {
+        if (handle.trackerClient === client && handle.issueId === issueEvents.issueId) {
           handle.publishIssueEvents(issueEvents.events);
         }
       }
@@ -808,7 +809,14 @@ export class LorenzRuntime {
     // The handle is registered for the WHOLE run lifecycle - including the reserved
     // path's acquire window - so stop()/reconcile abort an in-acquire run (the
     // signal reaches the pool's FIFO waiter) exactly as they abort a running one.
-    const handle = new ActiveRunHandle(refreshed.id, slotIndex, key, runId, this.activeRuns);
+    const handle = new ActiveRunHandle(
+      refreshed.id,
+      slotIndex,
+      key,
+      runId,
+      this.client,
+      this.activeRuns,
+    );
     this.activeRuns.set(key, handle);
     try {
       this.syncRetryTimer(refreshed.id);
@@ -1101,6 +1109,7 @@ export class LorenzRuntime {
     handle: ActiveRunHandle,
     slot: RunSlot | null = null,
   ): Promise<void> {
+    const trackerClient = handle.trackerClient;
     const startedAt = this.clock.now().toISOString();
     const effectiveWorkerHost = workerHost;
     let workerOutcome: WorkerOutcome = "healthy";
@@ -1137,14 +1146,14 @@ export class LorenzRuntime {
         forceSlotSuffix: (this.workflow.settings.worker.workerPool?.slotsPerMachine ?? 1) > 1,
         onUpdate: enqueueUpdate,
         fetchIssue: async (current) => {
-          const refreshed = await this.client.fetchIssuesByIds([current.id]);
+          const refreshed = await trackerClient.fetchIssuesByIds([current.id]);
           return refreshed[0] ?? current;
         },
         subscribeIssueEvents: (listener) => handle.subscribeIssueEvents(listener),
-        ...(this.client.fetchIssueEvents
+        ...(trackerClient.fetchIssueEvents
           ? {
               fetchIssueEvents: async (sinceTs: string, abortSignal?: AbortSignal) =>
-                (await this.client.fetchIssueEvents?.(issue.id, sinceTs, abortSignal)) ?? [],
+                (await trackerClient.fetchIssueEvents?.(issue.id, sinceTs, abortSignal)) ?? [],
             }
           : {}),
         abortSignal: handle.signal,
@@ -1152,7 +1161,7 @@ export class LorenzRuntime {
       await updateQueue;
       if (claimStoreRuntimeError) throwRuntimeError(claimStoreRuntimeError);
       if (!handle.isActive) return;
-      const finalIssue = result.finalIssue ?? (await this.fetchIssueOrSelf(issue));
+      const finalIssue = result.finalIssue ?? (await this.fetchIssueOrSelf(issue, trackerClient));
       if (!handle.isActive) return;
       let finished: RunningEntry | null;
       try {
@@ -1300,8 +1309,11 @@ export class LorenzRuntime {
     }
   }
 
-  private async fetchIssueOrSelf(issue: Issue): Promise<Issue> {
-    const refreshed = await this.client.fetchIssuesByIds([issue.id]);
+  private async fetchIssueOrSelf(
+    issue: Issue,
+    trackerClient: RuntimeTrackerClient,
+  ): Promise<Issue> {
+    const refreshed = await trackerClient.fetchIssuesByIds([issue.id]);
     return refreshed[0] ?? issue;
   }
 

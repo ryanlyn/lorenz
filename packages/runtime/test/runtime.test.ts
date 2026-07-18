@@ -1504,6 +1504,90 @@ test("runtime polling does not wait for replacement stream startup", async () =>
   }
 });
 
+test("active runs retain their tracker client across workflow reloads", async () => {
+  const dir = await tempDir("lorenz-runtime-reload-active-client");
+  const workflowFile = path.join(dir, "WORKFLOW.md");
+  await fs.writeFile(workflowFile, workflowMarkdown({ intervalMs: 600_000 }));
+  const workflow = await loadWorkflow(workflowFile, {}, { cwd: dir });
+  const issue = {
+    ...issueFixture("shared-issue-id", "MT-PINNED-CLIENT"),
+    issueEventCursor: "10.0",
+  };
+  const callbacks: Array<((change?: TrackerChange) => void) | undefined> = [];
+  const recoveryCalls = [0, 0];
+  const delivered: TrackerIssueEvent[] = [];
+  let clientBuilds = 0;
+  let activeRecovery:
+    | ((sinceTs: string, abortSignal?: AbortSignal) => Promise<TrackerIssueEvent[]>)
+    | undefined;
+  let finishRun: (() => void) | undefined;
+  const runFinished = new Promise<void>((resolve) => {
+    finishRun = resolve;
+  });
+  const runtime = new LorenzRuntime(
+    runtimeOptions({
+      workflow,
+      reloadWorkflow: async () => loadWorkflow(workflowFile, {}, { cwd: dir }),
+      clientFactory: () => {
+        const index = clientBuilds;
+        clientBuilds += 1;
+        return {
+          fetchCandidateIssues: async () => (index === 0 ? [issue] : []),
+          fetchIssuesByIds: async () => [issue],
+          fetchIssueEvents: async () => {
+            recoveryCalls[index] = (recoveryCalls[index] ?? 0) + 1;
+            return [];
+          },
+          watch: (onChange) => {
+            callbacks[index] = onChange;
+            return { close: () => {} };
+          },
+        };
+      },
+      runner: async (input) => {
+        activeRecovery = input.fetchIssueEvents;
+        const unsubscribe = input.subscribeIssueEvents?.((events) => delivered.push(...events));
+        await runFinished;
+        unsubscribe?.();
+        return { workspace: "/tmp/lorenz/MT-PINNED-CLIENT", finalIssue: issue };
+      },
+    }),
+  );
+
+  void runtime.start({ once: false });
+  try {
+    await waitFor(
+      () =>
+        callbacks[0] !== undefined &&
+        activeRecovery !== undefined &&
+        runtime.snapshot().running.length === 1,
+      1_000,
+    );
+    await fs.writeFile(
+      workflowFile,
+      workflowMarkdown({ intervalMs: 600_000, prompt: "Reloaded prompt" }),
+    );
+    await runtime.pollOnce({ dryRun: true });
+    assert.equal(clientBuilds, 2);
+    assert.ok(callbacks[1]);
+
+    await activeRecovery?.("10.0");
+    assert.deepEqual(recoveryCalls, [1, 0]);
+
+    callbacks[1]?.({
+      issueEvents: {
+        issueId: issue.id,
+        events: [{ ts: "11.0", author: "ryan", text: "replacement client event" }],
+      },
+    });
+    await Promise.resolve();
+    assert.deepEqual(delivered, []);
+  } finally {
+    finishRun?.();
+    runtime.stop();
+  }
+});
+
 test("runtime preflights dispatch config before candidate fetches", async () => {
   const workflow = workflowFixture();
   workflow.settings.tracker.kind = undefined;
