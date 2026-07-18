@@ -537,6 +537,7 @@ test("Windows bridge guardian owns descendants through a Job Object", async () =
   assert.ok(jobClose > bridgeRelease);
   assert.ok(outputDrain > jobClose);
   assert.match(source, /if \(child\) await stopBridgeProcess\(child, !input\.workerHost\)/);
+  assert.match(source, /stopChild\(child, \{ windowsProcessTree: manageLocalTree \}\)/);
 });
 
 test("ACP executor can pass through cumulative bridge usage without double counting", async () => {

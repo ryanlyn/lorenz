@@ -1,7 +1,7 @@
 import { execFile, type ChildProcessWithoutNullStreams } from "node:child_process";
 
 export interface StopChildOptions {
-  processGroup?: boolean | undefined;
+  windowsProcessTree?: boolean | undefined;
 }
 
 export async function withTimeout<T>(
@@ -26,22 +26,12 @@ export async function stopChild(
   child: ChildProcessWithoutNullStreams,
   options: StopChildOptions = {},
 ): Promise<void> {
-  if (options.processGroup === true && process.platform === "win32" && child.pid !== undefined) {
+  if (options.windowsProcessTree === true && process.platform === "win32") {
     await stopWindowsProcessTree(child);
     return;
   }
 
-  const processGroupId =
-    options.processGroup === true && process.platform !== "win32" ? child.pid : undefined;
   const sendSignal = (signal: NodeJS.Signals): void => {
-    if (processGroupId !== undefined) {
-      try {
-        process.kill(-processGroupId, signal);
-        return;
-      } catch {
-        // Fall back to the direct child when its process group has already exited.
-      }
-    }
     child.kill(signal);
   };
 

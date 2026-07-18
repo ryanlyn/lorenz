@@ -948,10 +948,10 @@ function startBridgeProcess(
 
 async function stopBridgeProcess(
   child: ChildProcessWithoutNullStreams,
-  processGroup: boolean,
+  manageLocalTree: boolean,
 ): Promise<void> {
   try {
-    await stopChild(child, { processGroup });
+    await stopChild(child, { windowsProcessTree: manageLocalTree });
   } finally {
     const cleanupDir = bridgeProcessCleanupDirs.get(child);
     if (cleanupDir) {
