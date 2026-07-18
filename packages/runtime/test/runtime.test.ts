@@ -1289,6 +1289,72 @@ test("runtime reloads stamped workflow when file content changes", async () => {
   );
 });
 
+test("runtime rebinds tracker push delivery when a reload replaces the client", async () => {
+  const dir = await tempDir("lorenz-runtime-reload-watch");
+  const workflowFile = path.join(dir, "WORKFLOW.md");
+  await fs.writeFile(workflowFile, workflowMarkdown({ intervalMs: 600_000 }));
+  const workflow = await loadWorkflow(workflowFile, {}, { cwd: dir });
+  const callbacks: Array<((change?: TrackerChange) => void) | undefined> = [];
+  const fetches = [0, 0];
+  const closes = [0, 0];
+  let clientBuilds = 0;
+  const runtime = new LorenzRuntime(
+    runtimeOptions({
+      workflow,
+      reloadWorkflow: async () => loadWorkflow(workflowFile, {}, { cwd: dir }),
+      clientFactory: () => {
+        const index = clientBuilds;
+        clientBuilds += 1;
+        return {
+          fetchCandidateIssues: async () => {
+            fetches[index] = (fetches[index] ?? 0) + 1;
+            return [];
+          },
+          fetchIssuesByIds: async () => [],
+          watch: (onChange) => {
+            callbacks[index] = onChange;
+            return {
+              close: () => {
+                closes[index] = (closes[index] ?? 0) + 1;
+              },
+            };
+          },
+        };
+      },
+    }),
+  );
+
+  void runtime.start({ once: false });
+  try {
+    await waitFor(() => callbacks[0] !== undefined && (fetches[0] ?? 0) >= 1, 1_000);
+    await fs.writeFile(
+      workflowFile,
+      workflowMarkdown({ intervalMs: 600_000, prompt: "Reloaded prompt" }),
+    );
+
+    await runtime.pollOnce({ dryRun: true });
+    assert.equal(clientBuilds, 2);
+    assert.equal(closes[0], 1);
+    assert.ok(callbacks[1]);
+
+    const pushesBeforeStaleCallback = runtime
+      .snapshot()
+      .recentEvents.filter((event) => event.type === "tracker_push").length;
+    callbacks[0]?.();
+    await Promise.resolve();
+    assert.equal(
+      runtime.snapshot().recentEvents.filter((event) => event.type === "tracker_push").length,
+      pushesBeforeStaleCallback,
+    );
+
+    const newClientFetches = fetches[1] ?? 0;
+    callbacks[1]?.();
+    await waitFor(() => (fetches[1] ?? 0) > newClientFetches, 1_000);
+  } finally {
+    runtime.stop();
+  }
+});
+
 test("runtime preflights dispatch config before candidate fetches", async () => {
   const workflow = workflowFixture();
   workflow.settings.tracker.kind = undefined;

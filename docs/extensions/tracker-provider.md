@@ -76,8 +76,9 @@ interface RuntimeTrackerClient {
   returns events newer than `sinceTs`. Set `Issue.issueEventCursor` to the latest event key already
   represented in prompt-visible fields of each issue snapshot. The runner ignores live replays at
   or before that immutable boundary, advances its recovery cursor only after accepting feed
-  results, and submits later human events even when the autonomous turn budget is exhausted. Stop
-  the request when `abortSignal` aborts.
+  results, and submits later human events even when the autonomous turn budget is exhausted. A run
+  accepts at most `agent.max_turns` steering turns; additional prompt-visible events remain eligible
+  for the next attempt. Stop the request when `abortSignal` aborts.
 
 Each client returns the domain `Issue` shape, not the backend's raw payload. `Issue` requires
 `stateType: IssueStateType` (one of `backlog`, `unstarted`, `started`, `completed`, `canceled`,

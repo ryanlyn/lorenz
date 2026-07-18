@@ -369,13 +369,15 @@ export class LorenzRuntime {
   private claimOwnerHeartbeatTimer: TimerHandle | null = null;
   private pendingStoppedClaimSettlements = 0;
   /**
-   * Live tracker push subscription (see {@link RuntimeTrackerClient.watch}), opened once in the
-   * recurring `start()` loop and closed on `stop()`. `undefined` for pull-only trackers and the
-   * `--once` path. A tracker that pushes (e.g. Slack Socket Mode) nudges an immediate poll so
-   * new work dispatches without waiting out `polling.intervalMs`.
+   * Live tracker push subscription (see {@link RuntimeTrackerClient.watch}), opened by the
+   * recurring `start()` loop, rebound when a workflow reload replaces the client, and closed on
+   * `stop()`. `undefined` for pull-only trackers and the `--once` path. A tracker that pushes
+   * nudges an immediate poll so new work dispatches without waiting out `polling.intervalMs`.
    */
   private changeStream: TrackerChangeStream | undefined;
   private changeStreamOpening = false;
+  private changeStreamEnabled = false;
+  private changeStreamGeneration = 0;
   /**
    * The reload-surviving coordinator singleton. Built here from either the
    * pre-built `input.coordinator` (preferred), or a null-endpoint passthrough
@@ -472,6 +474,7 @@ export class LorenzRuntime {
   async start(options: RuntimeStartOptions = {}): Promise<void> {
     if (this.stopped) return;
     this.stopped = false;
+    this.changeStreamEnabled = !options.once;
     // Open the tracker's push subscription (if any) so a real backend event re-polls
     // immediately instead of waiting out polling.intervalMs. Skipped for --once (which polls
     // exactly once and exits) and for pull-only trackers that do not implement watch().
@@ -496,6 +499,7 @@ export class LorenzRuntime {
 
   stop(): void {
     this.stopped = true;
+    this.changeStreamEnabled = false;
     this.appStatus = "stopping";
     this.pendingPollOptions = null;
     // Fire-and-forget: stop() stays synchronous like its sibling abort sites. The stream's
@@ -589,14 +593,25 @@ export class LorenzRuntime {
    * that races an in-flight open is honored by closing the freshly-opened stream.
    */
   private async openChangeStream(): Promise<void> {
-    if (!this.client.watch || this.changeStream || this.changeStreamOpening) return;
+    const client = this.client;
+    const watch = client.watch?.bind(client);
+    if (!watch || this.changeStream || this.changeStreamOpening) return;
     this.changeStreamOpening = true;
+    const generation = ++this.changeStreamGeneration;
     try {
-      const stream = await this.client.watch((change) => this.nudgePollForTrackerChange(change));
+      const stream = await watch((change) => {
+        if (generation !== this.changeStreamGeneration || client !== this.client) return;
+        this.nudgePollForTrackerChange(change);
+      });
       // A null stream means the tracker has no push for this config (e.g. credential unset); stay
       // on interval polling silently rather than logging it as a failure.
       if (!stream) return;
-      if (this.stopped) {
+      if (
+        this.stopped ||
+        !this.changeStreamEnabled ||
+        generation !== this.changeStreamGeneration ||
+        client !== this.client
+      ) {
         await stream.close();
         return;
       }
@@ -610,6 +625,7 @@ export class LorenzRuntime {
   }
 
   private async closeChangeStream(): Promise<void> {
+    this.changeStreamGeneration += 1;
     const stream = this.changeStream;
     this.changeStream = undefined;
     if (!stream) return;
@@ -1266,6 +1282,11 @@ export class LorenzRuntime {
         this.coordinator?.capabilities,
       );
       if (gateMessage !== null) throw new Error(gateMessage);
+      const nextClient =
+        !this.input.client && this.input.clientFactory
+          ? this.input.clientFactory(workflow.settings)
+          : this.client;
+      const clientChanged = nextClient !== this.client;
       // TRANSACTIONAL reload: run EVERY throwing side effect FIRST (the gate above,
       // then the coordinator/pool reconcile), and ONLY swap the runtime settings
       // (this.input.workflow + this.orchestrator.settings + the client) AFTER they
@@ -1292,11 +1313,11 @@ export class LorenzRuntime {
         // keeping last-good settings and emitting workflow_reload_failed.
         if (next) await this.coordinator.reconcile(next);
       }
+      if (clientChanged) await this.closeChangeStream();
       this.input.workflow = workflow;
       this.orchestrator.settings = workflow.settings;
-      if (!this.input.client && this.input.clientFactory) {
-        this.client = this.input.clientFactory(workflow.settings);
-      }
+      this.client = nextClient;
+      if (clientChanged && this.changeStreamEnabled) await this.openChangeStream();
       this.addEvent("workflow_reloaded", workflow.path);
     } catch (error) {
       // Keeps last-good settings. errorMessage(error) already surfaces the

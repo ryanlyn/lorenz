@@ -132,8 +132,14 @@ class RunController {
     const slotIndex = input.slotIndex ?? 0;
     const workerHost = input.workerHost ?? null;
     let bufferedIssueEvents: TrackerIssueEvent[] = [];
+    let issueEventBufferOverflow = false;
+    const bufferIssueEvents = (events: TrackerIssueEvent[]): void => {
+      const available = Math.max(0, runtime.agent.maxTurns - bufferedIssueEvents.length);
+      bufferedIssueEvents.push(...events.slice(0, available));
+      if (events.length > available) issueEventBufferOverflow = true;
+    };
     let receiveIssueEvents = (events: TrackerIssueEvent[]): void => {
-      bufferedIssueEvents.push(...events);
+      bufferIssueEvents(events);
     };
     let unsubscribeIssueEvents = input.subscribeIssueEvents?.((events) =>
       receiveIssueEvents(events),
@@ -274,8 +280,17 @@ class RunController {
         );
       };
       const steeringSnapshotCursorTs = issue.issueEventCursor;
+      if (
+        steeringSnapshotCursorTs !== null &&
+        steeringSnapshotCursorTs !== undefined &&
+        !decimalOrderingKey(steeringSnapshotCursorTs)
+      ) {
+        throw new Error(`invalid tracker issue event ordering key: ${steeringSnapshotCursorTs}`);
+      }
       let steeringRecoveryCursorTs = steeringSnapshotCursorTs ?? "0";
       let steeringReady = false;
+      let steeringTurnCount = 0;
+      let steeringBacklogPending = issueEventBufferOverflow;
       const seenSteeringEventTs = new Set<string>();
       const reportSteeringFailure = (stage: string, error: unknown): void => {
         input.onUpdate?.({
@@ -286,20 +301,29 @@ class RunController {
       };
       const queueIssueEvents = (events: TrackerIssueEvent[]): boolean => {
         if (!steeringReady) {
-          bufferedIssueEvents.push(...events);
+          bufferIssueEvents(events);
+          steeringBacklogPending ||= issueEventBufferOverflow;
           return false;
         }
         if (!session?.queueTurn) return false;
         const candidates = [...bufferedIssueEvents, ...events];
         bufferedIssueEvents = [];
-        let fresh: TrackerIssueEvent[];
-        try {
-          fresh = freshSteeringEvents(candidates, seenSteeringEventTs, steeringSnapshotCursorTs);
-        } catch (error) {
-          reportSteeringFailure("queue", error);
-          return false;
+        const { fresh, invalidTs } = freshSteeringEvents(
+          candidates,
+          seenSteeringEventTs,
+          steeringSnapshotCursorTs,
+        );
+        if (invalidTs.length > 0) {
+          reportSteeringFailure(
+            "event validation",
+            new Error(`invalid ordering keys: ${invalidTs.join(", ")}`),
+          );
         }
         if (fresh.length === 0) return true;
+        if (steeringTurnCount >= runtime.agent.maxTurns) {
+          steeringBacklogPending = true;
+          return false;
+        }
         try {
           const prompt = issueEventsPrompt(fresh);
           const activity = { sawToolCall: false };
@@ -316,10 +340,13 @@ class RunController {
           }
           const queuedTurn = { outcome, activity };
           queuedTurns.push(queuedTurn);
+          steeringTurnCount += 1;
           for (const event of fresh) seenSteeringEventTs.add(event.ts);
           return true;
         } catch (error) {
-          bufferedIssueEvents = fresh;
+          bufferedIssueEvents = [];
+          bufferIssueEvents(fresh);
+          steeringBacklogPending = true;
           reportSteeringFailure("queue", error);
           return false;
         }
@@ -338,6 +365,7 @@ class RunController {
             throw new Error("steering_event_queue_failed");
           }
           steeringRecoveryCursorTs = maxSteeringTs(recovered, steeringRecoveryCursorTs);
+          steeringBacklogPending = false;
         } catch (error) {
           throwIfAborted(input.abortSignal);
           if (required) throw error;
@@ -439,6 +467,9 @@ class RunController {
           completedWithoutTools || autonomousTurnCount >= runtime.agent.maxTurns,
         );
         if (completedWithoutTools && queuedTurns.length === 0) break;
+      }
+      if (steeringBacklogPending) {
+        throw new Error("steering_turn_limit_reached");
       }
     } catch (error) {
       runError = error;
@@ -566,10 +597,15 @@ function freshSteeringEvents(
   events: TrackerIssueEvent[],
   seenTs: ReadonlySet<string>,
   snapshotCursorTs: string | null | undefined,
-): TrackerIssueEvent[] {
+): { fresh: TrackerIssueEvent[]; invalidTs: string[] } {
   const batchTs = new Set<string>();
-  return events
+  const invalidTs: string[] = [];
+  const fresh = events
     .filter((event) => {
+      if (!decimalOrderingKey(event.ts)) {
+        invalidTs.push(event.ts);
+        return false;
+      }
       if (
         snapshotCursorTs !== null &&
         snapshotCursorTs !== undefined &&
@@ -582,11 +618,13 @@ function freshSteeringEvents(
       return true;
     })
     .sort((left, right) => compareSteeringTs(left.ts, right.ts));
+  return { fresh, invalidTs };
 }
 
 function maxSteeringTs(events: TrackerIssueEvent[], current: string): string {
   let max = current;
   for (const event of events) {
+    if (!decimalOrderingKey(event.ts)) continue;
     if (compareSteeringTs(event.ts, max) > 0) max = event.ts;
   }
   return max;
