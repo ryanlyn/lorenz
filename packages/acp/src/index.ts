@@ -74,12 +74,8 @@ interface Session extends AgentSession {
   init: InitializeResponse;
   mcpEndpoint: AgentMcpEndpointLease;
   /**
-   * True when {@link AcpSession.mcpEndpoint} was THREADED in by the dispatch
-   * coordinator (it owns the whole lease for this run). acp must then SKIP both its
-   * own `acquireAgentMcpEndpoint` AND its own `mcpEndpoint.release()` so the
-   * coordinator's `slot.release` is the single owner (no double-close / orphaned
-   * token+local-server+tunnel). False on the local / non-pool path, where acp
-   * acquires AND releases its own endpoint byte-for-byte as before.
+   * True when ACP created the endpoint lease. A coordinator-provided lease remains
+   * under the coordinator's lifecycle so only one owner can release it.
    */
   ownsMcpEndpoint: boolean;
   workerHost?: string | null | undefined;
@@ -899,10 +895,13 @@ function startBridgeProcess(
 function remoteBridgeScript(workspace: string, bridge: string): string {
   return [
     "set -m",
-    `cd ${shellEscape(workspace)}`,
+    `cd ${shellEscape(workspace)} || exit 1`,
     `${bridge} <&0 &`,
     "bridge_pid=$!",
+    "cleaned=0",
     "cleanup() {",
+    '  [ "$cleaned" -eq 1 ] && return',
+    "  cleaned=1",
     "  trap - HUP INT TERM EXIT",
     '  kill -TERM -- "-$bridge_pid" 2>/dev/null || true',
     "  (",
@@ -911,13 +910,12 @@ function remoteBridgeScript(workspace: string, bridge: string): string {
     "  ) &",
     "  force_pid=$!",
     '  wait "$bridge_pid" 2>/dev/null || true',
-    '  kill "$force_pid" 2>/dev/null || true',
     '  wait "$force_pid" 2>/dev/null || true',
     "}",
     "trap cleanup HUP INT TERM EXIT",
     'wait "$bridge_pid"',
     "status=$?",
-    "trap - HUP INT TERM EXIT",
+    "cleanup",
     'exit "$status"',
   ].join("\n");
 }

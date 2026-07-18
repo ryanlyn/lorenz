@@ -471,13 +471,36 @@ test("vendored prompt queues advertise capability and isolate Claude usage at ha
   const cancelStart = claudeSource.indexOf("async cancel(params)");
   const teardownStart = claudeSource.indexOf("async teardownSession", cancelStart);
   const cancelBody = claudeSource.slice(cancelStart, teardownStart);
-  assert.equal(/pendingMessages/.test(cancelBody), false);
+  assert.match(cancelBody, /cancelQueuedPrompts\(session\)/);
+  assert.match(cancelBody, /this\.discardSession\(params\.sessionId, session\)/);
   assert.match(claudeSource.slice(teardownStart), /cancelPendingPrompts\(session\)/);
+  assert.match(claudeSource, /function cancelQueuedPrompts\(session\)/);
   assert.match(claudeSource, /settleNextPendingPrompt\(session\)/);
 
   const codexPromptStart = codexSource.indexOf("async prompt(params)");
   const codexRunPromptStart = codexSource.indexOf("async runPrompt(params)", codexPromptStart);
-  assert.match(codexSource.slice(codexPromptStart, codexRunPromptStart), /setImmediate\(resolve\)/);
+  const codexPromptBody = codexSource.slice(codexPromptStart, codexRunPromptStart);
+  assert.match(codexPromptBody, /promptGenerations\.get\(params\.sessionId\)/);
+  assert.match(codexPromptBody, /stopReason: "cancelled"/);
+  assert.match(codexPromptBody, /setImmediate\(resolve\)/);
+  const codexCancelStart = codexSource.indexOf("async cancel(params)", codexRunPromptStart);
+  assert.match(
+    codexSource.slice(codexCancelStart),
+    /this\.promptGenerations\.set\(\s*params\.sessionId,/,
+  );
+});
+
+test("remote bridge wrapper fails closed and completes process-group cleanup", async () => {
+  const source = await fs.readFile(path.resolve("packages/acp/src/index.ts"), "utf8");
+  const scriptStart = source.indexOf("function remoteBridgeScript");
+  const scriptEnd = source.indexOf("function wireProcessEvents", scriptStart);
+  const script = source.slice(scriptStart, scriptEnd);
+
+  assert.match(script, /`cd \$\{shellEscape\(workspace\)\} \|\| exit 1`/);
+  assert.match(script, /' {2}wait "\$force_pid" 2>\/dev\/null \|\| true'/);
+  assert.equal(script.includes(`'  kill "$force_pid" 2>/dev/null || true'`), false);
+  assert.match(script, /"status=\$\?"/);
+  assert.match(script, /"cleanup"/);
 });
 
 test("ACP executor can pass through cumulative bridge usage without double counting", async () => {

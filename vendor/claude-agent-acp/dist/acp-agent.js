@@ -980,6 +980,9 @@ export class ClaudeAcpAgent {
             throw new Error("Session did not end in result");
         }
         catch (error) {
+            if (session.cancelled) {
+                return { stopReason: "cancelled" };
+            }
             errored = true;
             const hasSubmittedPendingInput = [...session.pendingMessages.values()].some((pending) => pending.inputSubmitted);
             if (hasSubmittedPendingInput) {
@@ -1047,7 +1050,19 @@ export class ClaudeAcpAgent {
             return;
         }
         session.cancelled = true;
-        await session.query.interrupt();
+        const discard = cancelQueuedPrompts(session);
+        let interruption;
+        try {
+            interruption = session.query.interrupt();
+        }
+        finally {
+            if (discard) {
+                // Submitted SDK input cannot be removed from its queue. Discarding the
+                // session prevents cancelled prompts from executing after interruption.
+                this.discardSession(params.sessionId, session);
+            }
+        }
+        await interruption;
     }
     discardSession(sessionId, session) {
         if (this.sessions[sessionId] !== session) {
@@ -1850,6 +1865,14 @@ function cancelPendingPrompts(session) {
             pending.resolve(true);
         }
     });
+}
+function cancelQueuedPrompts(session) {
+    const pendingPrompts = [...session.pendingMessages.values()];
+    session.pendingMessages.clear();
+    for (const pending of pendingPrompts) {
+        settlePendingPrompt(pending, true);
+    }
+    return pendingPrompts.some((pending) => pending.inputSubmitted);
 }
 function settlePendingPrompt(pending, cancelled) {
     // Let the current prompt response reach the transport before the next

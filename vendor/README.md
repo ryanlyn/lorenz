@@ -44,6 +44,9 @@ so they ride the protocol's sanctioned extension point:
 - Concurrent `session/prompt` requests (codex) are queued per session before
   reaching app-server, which permits one active turn per thread. The Claude
   bridge provides the same FIFO prompt behavior.
+- `session/cancel` invalidates prompts that entered either bridge's queue before
+  the cancellation boundary. The Claude bridge discards a session when
+  submitted SDK input cannot be withdrawn safely.
 
 ## Refreshing from upstream
 
