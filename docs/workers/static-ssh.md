@@ -69,6 +69,34 @@ export LORENZ_SSH_CONFIG=/etc/lorenz/ssh_config
 
 Then a `worker.ssh_hosts` entry like `build-1` resolves through that file's `Host build-1` block (hostname, user, port, key). This keeps the host list short and pushes connection detail into standard OpenSSH config.
 
+## Enforced connection contract
+
+Lorenz applies one fail-closed policy to worker commands, long-running remote processes, readiness probes, and reverse tunnels. Every connection uses OpenSSH batch mode, disables password and keyboard-interactive authentication, permits zero password prompts, makes one connection attempt with a 10-second connect timeout, requires strict host-key checking, and disables automatic host-key updates.
+
+This policy has two operator-visible consequences:
+
+- Authentication must already be non-interactive. Use an unencrypted deployment key with appropriate file permissions or load a passphrase-protected key into an SSH agent before starting Lorenz. A password, keyboard-interactive challenge, or key passphrase prompt fails instead of waiting.
+- The destination must already have a verified key in an effective `UserKnownHostsFile`. Unknown hosts fail. A host whose key changed also fails until an operator verifies the new fingerprint and deliberately replaces the old entry.
+
+`LORENZ_SSH_CONFIG` can still select aliases, users, identity files, proxy or jump hosts, and known-hosts locations. It cannot relax the enforced batch-mode or host-key policy.
+
+Before enrolling or rotating a key, inspect the values OpenSSH will actually use. Include `-F "$LORENZ_SSH_CONFIG"` when Lorenz uses a custom config. For a Lorenz destination with a `:port` suffix, remove that suffix and pass the port with `-p`, as Lorenz does:
+
+```sh
+ssh -G -F "$LORENZ_SSH_CONFIG" -p 2222 alice@build-3 | awk '$1 == "hostname" || $1 == "port" || $1 == "hostkeyalias" || $1 == "userknownhostsfile"'
+```
+
+Use `hostkeyalias` as the known-hosts lookup name when it is set. Otherwise use `hostname` for port 22 and `[hostname]:port` for a non-standard port. Add the host key, verified through a trusted provisioning channel, under that lookup name in one of the reported `userknownhostsfile` paths. Do not accept an unverified `ssh-keyscan` result as identity proof.
+
+For a legitimate rotation, verify the replacement fingerprint first, then inspect and remove the old entry from the exact file that contains it. For example, when the effective lookup name is `[10.0.0.12]:2222` and the effective file is `/etc/lorenz/known_hosts`:
+
+```sh
+ssh-keygen -F '[10.0.0.12]:2222' -f /etc/lorenz/known_hosts
+ssh-keygen -R '[10.0.0.12]:2222' -f /etc/lorenz/known_hosts
+```
+
+Add the verified replacement under the same lookup name before restarting the worker connection.
+
 ## How runs shard across hosts
 
 For each run the runtime picks one host from `worker.ssh_hosts` by least current load:
@@ -86,7 +114,7 @@ There is no provisioning, probing, or teardown of the machines themselves. The r
 
 Before listing a host in `worker.ssh_hosts`, confirm:
 
-- `ssh <destination> printf ready` succeeds from the daemon host with no password prompt. Static SSH assumes non-interactive key-based auth. Add the host key to `known_hosts` first so the first connection does not block on a prompt.
+- `ssh -o BatchMode=yes -o StrictHostKeyChecking=yes <destination> printf ready` succeeds from the daemon host. Static SSH requires non-interactive authentication and a pre-enrolled host key.
 - The remote has the tools your agent and workspace hooks need (git, your language toolchain, the agent CLI if your executor runs remotely).
 - The remote login shell (`bash -lc`) exports the `PATH` and environment your hooks expect.
 - The daemon's `ssh` binary is on `PATH`. Check with `lorenz doctor`, which reports the configured host count.
@@ -136,6 +164,9 @@ With this config Lorenz can run up to six agents at once (three per host across 
 | --- | --- |
 | `ssh_not_found` | No `ssh` on the daemon's `PATH`. |
 | `ssh_timeout` | A command exceeded `worker.ssh_timeout_ms`. On timeout Lorenz sends `SIGTERM`, then `SIGKILL` after 5 seconds, to the whole remote process group. |
+| `Host key verification failed` | The destination is unknown or its key changed. Verify the fingerprint through a trusted channel, then update the effective known-hosts file and lookup name described above. |
+| `Permission denied (publickey)` | No non-interactive credential was accepted. Load the key into the daemon's SSH agent or configure an available deployment identity. |
+| `remote_mcp_tunnel_setup_failed ... stderr_tail=...` | Reverse-tunnel setup failed. The bounded, secret-redacted stderr tail contains the OpenSSH authentication, host-key, routing, or forwarding diagnostic. |
 | `invalid_ssh_destination` | A host entry is empty or starts with `-`. |
 | Runs never leave local execution | `worker.ssh_hosts` is empty, or a parse error rejected the combination with `worker.kind` or `worker.worker_pool`. |
 | Dispatch stalls with `worker_host_capacity` | Every host is at `max_concurrent_agents_per_host`. Raise the cap or add hosts. |

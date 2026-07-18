@@ -40,11 +40,11 @@
 
 import EventEmitter from "node:events";
 import { createServer } from "node:net";
-import type { ChildProcessWithoutNullStreams } from "node:child_process";
 
 import { assert, settle } from "@lorenz/test-utils";
 import { afterEach, beforeEach, test, vi } from "vitest";
 import { startReverseTunnel } from "@lorenz/ssh";
+import type { ReverseTunnelProcess } from "@lorenz/ssh";
 import { parseConfig } from "@lorenz/config";
 import type { WorkerPoolSettings } from "@lorenz/domain";
 import { acquireAgentMcpEndpointForRun, resolveRunClaim } from "@lorenz/mcp";
@@ -87,7 +87,7 @@ interface FakeProcess extends EventEmitter {
   kill: ReturnType<typeof vi.fn>;
 }
 
-function makeFakeProcess(processes: FakeProcess[]): ChildProcessWithoutNullStreams {
+function makeFakeProcess(processes: FakeProcess[]): ReverseTunnelProcess {
   const emitter = new EventEmitter() as FakeProcess;
   // Port recycling is deferred until the ssh child actually ends, so the fake
   // child ends (emits close) as soon as it is killed.
@@ -96,8 +96,10 @@ function makeFakeProcess(processes: FakeProcess[]): ChildProcessWithoutNullStrea
     return true;
   });
   (emitter as unknown as Record<string, unknown>).pid = 4242;
+  (emitter as unknown as Record<string, unknown>).readStderrTail = vi.fn(() => "");
+  (emitter as unknown as Record<string, unknown>).waitForStderr = vi.fn(async () => {});
   processes.push(emitter);
-  return emitter as unknown as ChildProcessWithoutNullStreams;
+  return emitter as unknown as ReverseTunnelProcess;
 }
 
 // A free localhost TCP port for the refcounted local MCP server, so the suite

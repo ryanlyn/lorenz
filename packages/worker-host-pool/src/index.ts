@@ -1,4 +1,8 @@
+import { errorMessage, redactDiagnosticText } from "@lorenz/domain";
 import { startReverseTunnel, waitForRemoteTcpPort } from "@lorenz/ssh";
+
+const REMOTE_MCP_TUNNEL_ERROR_REASON_MAX_CHARS = 1_024;
+const REMOTE_MCP_TUNNEL_STDERR_MAX_CHARS = 4_096;
 
 export interface RemoteMcpTunnelLease {
   leaseId: string;
@@ -271,6 +275,7 @@ export class WorkerHostPool {
       throw this.remoteMcpTunnelSetupError(entry, error);
     }
     if (entry.processEnded) {
+      await entry.process.waitForStderr();
       throw this.remoteMcpTunnelSetupError(entry, new Error("reverse_tunnel_process_ended"));
     }
   }
@@ -303,28 +308,31 @@ export class WorkerHostPool {
       const onClose = (code: number | null, signal: NodeJS.Signals | null): void => {
         rejectOnce(`reverse_tunnel_closed: ${code ?? "null"} ${signal ?? "null"}`);
       };
-      const onExit = (code: number | null, signal: NodeJS.Signals | null): void => {
-        rejectOnce(`reverse_tunnel_exited: ${code ?? "null"} ${signal ?? "null"}`);
-      };
       const onError = (error: Error): void => {
         rejectOnce(`reverse_tunnel_error: ${error.message}`);
       };
       dispose = (): void => {
         entry.process.off("close", onClose);
-        entry.process.off("exit", onExit);
         entry.process.off("error", onError);
       };
       entry.process.once("close", onClose);
-      entry.process.once("exit", onExit);
       entry.process.once("error", onError);
     });
     return { promise, dispose };
   }
 
   private remoteMcpTunnelSetupError(entry: RemoteMcpTunnelEntry, cause: unknown): Error {
-    return new Error(`remote_mcp_tunnel_setup_failed: ${entry.workerHost} ${entry.remotePort}`, {
-      cause,
-    });
+    const reason = setupErrorReason(cause);
+    const reasonDetails = reason === "" ? "" : ` reason=${JSON.stringify(reason)}`;
+    const stderrTail = setupDiagnostic(
+      entry.process.readStderrTail(),
+      REMOTE_MCP_TUNNEL_STDERR_MAX_CHARS,
+    );
+    const stderrDetails = stderrTail === "" ? "" : ` stderr_tail=${JSON.stringify(stderrTail)}`;
+    return new Error(
+      `remote_mcp_tunnel_setup_failed: ${entry.workerHost} ${entry.remotePort}${reasonDetails}${stderrDetails}`,
+      { cause },
+    );
   }
 
   private recycleRemoteMcpPort(remotePort: number): void {
@@ -352,6 +360,14 @@ export class WorkerHostPool {
   ): string {
     return `${workerHost}\0${localHost}\0${localPort}`;
   }
+}
+
+function setupErrorReason(cause: unknown): string {
+  return setupDiagnostic(errorMessage(cause), REMOTE_MCP_TUNNEL_ERROR_REASON_MAX_CHARS);
+}
+
+function setupDiagnostic(value: string, maxChars: number): string {
+  return redactDiagnosticText(value).trim().slice(-maxChars);
 }
 
 function perRunKey(workerHost: string, runKey: string): string {

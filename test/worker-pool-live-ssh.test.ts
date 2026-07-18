@@ -514,6 +514,7 @@ async function setupNativeSshdWorker(runId: string): Promise<WorkerSetup> {
   const hostKeyPath = path.join(root, "ssh_host_ed25519_key");
   const configPath = path.join(root, "sshd_config");
   const clientConfigPath = path.join(root, "ssh_config");
+  const knownHostsPath = path.join(root, "known_hosts");
   const authorizedKeysPath = path.join(root, "authorized_keys");
   const logPath = path.join(root, "sshd.log");
   const pidPath = path.join(root, "sshd.pid");
@@ -525,10 +526,14 @@ async function setupNativeSshdWorker(runId: string): Promise<WorkerSetup> {
 
   await execFileAsync("ssh-keygen", ["-q", "-t", "ed25519", "-N", "", "-f", keyPath]);
   await execFileAsync("ssh-keygen", ["-q", "-t", "ed25519", "-N", "", "-f", hostKeyPath]);
+  const { stdout: hostPublicKey } = await execFileAsync("ssh-keygen", ["-y", "-f", hostKeyPath]);
   await fs.copyFile(`${keyPath}.pub`, authorizedKeysPath);
   await fs.chmod(root, 0o700);
   await fs.chmod(keyPath, 0o600);
   await fs.chmod(authorizedKeysPath, 0o600);
+  await fs.writeFile(knownHostsPath, `[localhost]:${port} ${hostPublicKey.trim()}\n`, {
+    mode: 0o600,
+  });
   await fs.writeFile(
     configPath,
     [
@@ -556,8 +561,7 @@ async function setupNativeSshdWorker(runId: string): Promise<WorkerSetup> {
       `  User ${user}`,
       `  IdentityFile ${keyPath}`,
       "  IdentitiesOnly yes",
-      "  StrictHostKeyChecking no",
-      "  UserKnownHostsFile /dev/null",
+      `  UserKnownHostsFile ${knownHostsPath}`,
       "  LogLevel ERROR",
       "",
     ].join("\n"),
@@ -568,9 +572,9 @@ async function setupNativeSshdWorker(runId: string): Promise<WorkerSetup> {
   process.env.LORENZ_SSH_CONFIG = clientConfigPath;
 
   const cleanup = async () => {
+    await cleanupRemoteRoot([host], runRoot);
     if (previousSshConfig === undefined) delete process.env.LORENZ_SSH_CONFIG;
     else process.env.LORENZ_SSH_CONFIG = previousSshConfig;
-    await cleanupRemoteRoot([host], runRoot);
     const pid = await fs.readFile(pidPath, "utf8").catch(() => "");
     if (pid.trim()) {
       try {
