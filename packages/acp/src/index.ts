@@ -357,7 +357,6 @@ export class Executor implements AgentExecutor {
         reject(error);
       };
 
-      const sessionId = requireSessionId(session);
       let backendSlotAvailable = false;
       let activationReady = options?.startWhen === undefined;
       let promptSubmitted = false;
@@ -367,7 +366,7 @@ export class Executor implements AgentExecutor {
         promptSubmitted = true;
         session.connection
           .prompt({
-            sessionId,
+            sessionId: requireSessionId(session),
             prompt: [{ type: "text", text: prompt }],
           })
           .then(
@@ -410,7 +409,7 @@ export class Executor implements AgentExecutor {
                 const message = errorMessage(error);
                 this.emit(session, {
                   type: "turn_failed",
-                  sessionId,
+                  sessionId: requireSessionId(session),
                   message,
                   timestamp: new Date(),
                 });
@@ -430,7 +429,7 @@ export class Executor implements AgentExecutor {
         resetStallTimer();
         emitUpdate({
           type: "turn_started",
-          sessionId,
+          sessionId: requireSessionId(session),
           message: { prompt: [{ type: "text", text: prompt }] },
           timestamp: new Date(),
         });

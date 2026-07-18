@@ -192,6 +192,50 @@ test("ACP session preserves submission order across an activation gate", async (
   assert.equal(prompts[2]?.params?.prompt?.[0]?.text, "later direction");
 });
 
+test("ACP gated turn uses the session id active at submission", async () => {
+  const root = await tempDir("lorenz-acp-gated-session-rotation");
+  const fake = await writeFakeBridge(root);
+  const trace = path.join(root, "trace.jsonl");
+  const settings = acpSettings(root, fake, trace, "queued-session-rotation");
+  const updates: AgentUpdate[] = [];
+  const executor = new Executor("claude");
+  const session = await executor.startSession({
+    workspace: root,
+    settings,
+    issue: sampleIssue,
+    onUpdate: (update) => updates.push(update),
+  });
+  let allowActivation: (() => void) | undefined;
+  const startWhen = new Promise<void>((resolve) => {
+    allowActivation = resolve;
+  });
+
+  try {
+    const active = executor.runTurn(session, "initial work", sampleIssue);
+    await waitForTraceEvent(trace, "rotationPromptWaiting");
+    assert.ok(session.queueTurn);
+    const queued = session.queueTurn("validated direction", { startWhen });
+
+    await fs.writeFile(`${trace}.rotate`, "");
+    await active;
+    assert.equal(session.sessionId, "acp-rotated");
+
+    allowActivation?.();
+    await queued;
+  } finally {
+    allowActivation?.();
+    await session.stop();
+  }
+
+  const prompts = (await readTrace(trace)).filter((event) => event.method === "prompt");
+  assert.equal(prompts.length, 2);
+  assert.equal(prompts[1]?.params?.sessionId, "acp-rotated");
+  assert.equal(
+    updates.filter((update) => update.type === "turn_started").at(-1)?.sessionId,
+    "acp-rotated",
+  );
+});
+
 test("ACP session publishes queued responses in turn lifecycle order", async () => {
   const root = await tempDir("lorenz-acp-queued-response-order");
   const fake = await writeFakeBridge(root);
@@ -1219,6 +1263,21 @@ class FakeAgent {
         record({ method: "gatedFirstPromptReleased" });
       } else {
         record({ method: "gatedQueuedPromptRunning" });
+      }
+      return { stopReason: "end_turn" };
+    }
+    if (mode === "queued-session-rotation") {
+      if (this.promptCount === 1) {
+        record({ method: "rotationPromptWaiting" });
+        while (!fs.existsSync(trace + ".rotate")) await sleep(5);
+        await this.connection.sessionUpdate({
+          sessionId: "acp-rotated",
+          update: {
+            sessionUpdate: "agent_message_chunk",
+            content: { type: "text", text: "rotated session" }
+          }
+        });
+        record({ method: "rotationPromptReleased" });
       }
       return { stopReason: "end_turn" };
     }
