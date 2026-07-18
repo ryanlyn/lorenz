@@ -74,11 +74,10 @@ recovery and retry durability for operators that select them.
 | Package | What it owns | First files to open |
 | --- | --- | --- |
 | `@lorenz/orchestrator` | The single authoritative in-memory scheduling state and the only mutator of it: eligibility, slot claiming, pool reservations, agent-update application, retries, reconciliation | `src/index.ts` |
-| `@lorenz/runtime` | The recurring poll loop, per-run dispatch promises, reconciliation passes, transactional workflow reload, `RuntimeSnapshot` assembly | `src/index.ts` |
+| `@lorenz/runtime` | The recurring poll loop, per-run dispatch promises, reconciliation passes, transactional workflow reload, bounded projection state, and `RuntimeSnapshot` assembly | `src/index.ts`, `src/projection.ts` |
 | `@lorenz/runtime-events` | The `RuntimeSnapshot` shape and the canonical `RUNTIME_EVENT_TYPES` / `RUNTIME_RUN_OUTCOMES` vocabularies | `src/index.ts` |
-| `@lorenz/projections` | A bounded ring buffer: the last 20 events and last 50 run-history entries, merged into the snapshot | `src/index.ts` |
 
-`orchestrator`'s `src/index.ts` holds `Orchestrator`, `OrchestratorState`, and `createState`. `runtime`'s `src/index.ts` holds `LorenzRuntime` and `LorenzRuntimeOptions`, the dependency-injection bag the CLI binds. See [agent-orchestrator.md](agent-orchestrator.md) and [reference/events.md](reference/events.md).
+`orchestrator`'s `src/index.ts` holds `Orchestrator`, `OrchestratorState`, and `createState`. `runtime`'s `src/index.ts` holds `LorenzRuntime` and `LorenzRuntimeOptions`, the dependency-injection bag the CLI binds, while `src/projection.ts` owns bounded snapshot projection state. See [agent-orchestrator.md](agent-orchestrator.md) and [reference/events.md](reference/events.md).
 
 ## Dispatch coordinator and worker pool
 
