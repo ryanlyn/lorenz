@@ -284,7 +284,7 @@ export class Executor implements AgentExecutor {
       let stallTimer: ReturnType<typeof setTimeout> | undefined;
       let hardTimer: ReturnType<typeof setTimeout> | undefined;
       const resetStallTimer = () => {
-        if (!turn.active || session.agentConfig.stallTimeoutMs <= 0) return;
+        if (!turn.active || turn.settled || session.agentConfig.stallTimeoutMs <= 0) return;
         if (stallTimer) clearTimeout(stallTimer);
         stallTimer = setTimeout(cancelTurn, session.agentConfig.stallTimeoutMs);
       };

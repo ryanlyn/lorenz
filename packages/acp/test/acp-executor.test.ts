@@ -715,6 +715,29 @@ test("ACP executor suppresses late terminal updates after turn timeout", async (
   );
 });
 
+test("ACP executor does not rearm stall cancellation after turn timeout", async () => {
+  const root = await tempDir("lorenz-acp-late-activity-timeout");
+  const fake = await writeFakeBridge(root);
+  const trace = path.join(root, "trace.jsonl");
+  const settings = acpSettings(root, fake, trace, "late-activity-after-timeout", 50, {
+    stallTimeoutMs: 100,
+  });
+  const executor = new Executor("claude");
+  const session = await executor.startSession({ workspace: root, settings, issue: sampleIssue });
+  try {
+    await assert.rejects(
+      () => executor.runTurn(session, "hello", sampleIssue),
+      /acp turn timed out/,
+    );
+    await waitForTraceEvent(trace, "lateActivityAfterTimeout");
+    await settle(150);
+    const traceEvents = await readTrace(trace);
+    assert.equal(traceEvents.filter((event) => event.method === "cancel").length, 1);
+  } finally {
+    await session.stop();
+  }
+});
+
 test("ACP MCP endpoint leases reuse one reverse tunnel per worker host with per-session tokens", async () => {
   const root = await tempDir("lorenz-acp-remote-mcp");
   const trace = path.join(root, "ssh.trace");
@@ -1142,6 +1165,18 @@ class FakeAgent {
           totalTokens: 10
         }
       };
+    }
+    if (mode === "late-activity-after-timeout") {
+      await this.waitForCancel();
+      await this.connection.sessionUpdate({
+        sessionId: params.sessionId,
+        update: {
+          sessionUpdate: "agent_message_chunk",
+          content: { type: "text", text: "late activity" }
+        }
+      });
+      record({ method: "lateActivityAfterTimeout" });
+      await new Promise(() => {});
     }
     if (mode === "active-long-turn") {
       for (let i = 0; i < 3; i += 1) {
