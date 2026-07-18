@@ -348,6 +348,14 @@ test("ACP turn timeout rejects queued turns and stops the session", async () => 
 
     assert.match(String(await active), /acp turn timed out/);
     assert.match(String(await queued), /acp session stopped after turn timeout/);
+    await assert.rejects(
+      () => executor.runTurn(session, "more work", sampleIssue),
+      /acp session stopped after turn timeout/,
+    );
+    await assert.rejects(
+      () => session.queueTurn?.("more direction"),
+      /acp session stopped after turn timeout/,
+    );
   } finally {
     await session.stop();
   }

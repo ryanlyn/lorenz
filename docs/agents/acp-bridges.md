@@ -55,7 +55,7 @@ Only one turn runs per session at a time. A second `runTurn` while a turn is pen
 
 Two timers guard a turn, both set per kind and both reset on each `runTurn`:
 
-- **Turn timeout** (`turn_timeout_ms`, internal `turnTimeoutMs`, default `3600000`) is a hard timer. When it fires it rejects the active turn with `acp turn timed out`, rejects queued turns with `acp session stopped after turn timeout`, and stops the bridge.
+- **Turn timeout** (`turn_timeout_ms`, internal `turnTimeoutMs`, default `3600000`) is a hard timer. When it fires it rejects the active turn with `acp turn timed out`, rejects queued turns with `acp session stopped after turn timeout`, marks the session terminal, requests bridge-level session teardown when supported, and terminates the bridge process tree.
 - **Stall timeout** (`stall_timeout_ms`, internal `stallTimeoutMs`, default `300000`) is an inactivity timer. It is reset on every incoming `AgentUpdate`, which means every session notification or stderr update. If no update arrives within the window, it fires the same session-stopping path as the hard timer. Setting `stall_timeout_ms` to `0` or less disables stall detection entirely.
 
 Both timers stop the session because ACP cancellation is session-scoped and cannot safely distinguish a timed-out turn from a queued successor. You can set both timeouts once under the `agents:` block as shared defaults and override them per kind; the per-kind value wins.
@@ -74,7 +74,7 @@ An `AgentExecutorProvider` (defined in `packages/agent-sdk/src/provider.ts`) con
 | `validateAgent?` | startup validation of the per-kind config |
 | `createExecutor` | required; returns the `AgentExecutor` that drives a session |
 
-`acpExecutorProvider` registers `executor: "acp"`, maps the aliases `bridge_command`, `usage_accounting`, `provider_config`, and `strict_mcp_config`, rejects a blank `bridge_command` in `validateAgent`, and returns a fresh `Executor(kind)` from `createExecutor`. The `Executor` is the `AgentExecutor`: `startSession` spawns the bridge and runs `initialize` + `session/new`, `runTurn` sends the prompt and enforces the two timeouts, `AgentSession.queueTurn` submits a later prompt immediately while preserving FIFO order, and `stopSession` runs `session/close` (5000ms, only if the bridge advertised `sessionCapabilities.close`) then `SIGTERM` followed by `SIGKILL` after a 1000ms grace.
+`acpExecutorProvider` registers `executor: "acp"`, maps the aliases `bridge_command`, `usage_accounting`, `provider_config`, and `strict_mcp_config`, rejects a blank `bridge_command` in `validateAgent`, and returns a fresh `Executor(kind)` from `createExecutor`. The `Executor` is the `AgentExecutor`: `startSession` spawns the bridge and runs `initialize` + `session/new`, `runTurn` sends the prompt and enforces the two timeouts, `AgentSession.queueTurn` submits a later prompt immediately while preserving FIFO order, and `stopSession` runs `session/close` (5000ms, only if the bridge advertised `sessionCapabilities.close`) before terminating the local process group. Remote bridge commands run under a shell wrapper that applies the same `SIGTERM` then `SIGKILL` boundary on disconnect.
 
 ACP permits the client to have more than one `session/prompt` request in flight. The Claude bridge inserts later requests into its live SDK input queue. The Codex bridge queues requests per session before sending them to app-server, which permits one active turn per thread. Lorenz starts a queued turn's timeout clocks only after the preceding turn settles.
 

@@ -90,6 +90,8 @@ interface Session extends AgentSession {
   lastCallUsageSeq: number;
   callUsageBaseline?: UsageTokenUpdate | undefined;
   pendingTurns: PendingTurn[];
+  terminalError?: Error | undefined;
+  shutdown?: Promise<void> | undefined;
 }
 
 interface PendingTurn {
@@ -221,6 +223,8 @@ export class Executor implements AgentExecutor {
         turnStartTotals: emptyUsageTotals(),
         lastCallUsageSeq: 0,
         pendingTurns: [],
+        terminalError: undefined,
+        shutdown: undefined,
         ...(supportsPromptQueue(init) && {
           queueTurn: async (prompt: string, options?: QueuedTurnOptions) =>
             this.queueTurn(nextSession, prompt, options),
@@ -265,6 +269,7 @@ export class Executor implements AgentExecutor {
    * long-running daemon, so the batch is not kept.
    */
   async runTurn(session: Session, prompt: string, _issue?: Issue): Promise<AgentUpdate[]> {
+    if (session.terminalError) throw session.terminalError;
     if (session.pendingTurns.length > 0) throw new Error("ACP turn already running");
     return this.startTurn(session, prompt);
   }
@@ -274,6 +279,7 @@ export class Executor implements AgentExecutor {
     prompt: string,
     options?: QueuedTurnOptions,
   ): Promise<AgentUpdate[]> {
+    if (session.terminalError) throw session.terminalError;
     return this.startTurn(session, prompt, options);
   }
 
@@ -289,8 +295,8 @@ export class Executor implements AgentExecutor {
       const cancelTurn = () => {
         if (turn.settled) return;
         rejectTimedOutSession(session);
-        void stopChild(session.process).catch((err) => {
-          process.stderr.write(`acp bridge stop failed: ${err}\n`);
+        void this.beginSessionShutdown(session, 1_000).catch((err) => {
+          process.stderr.write(`acp session shutdown failed: ${err}\n`);
         });
       };
       let stallTimer: ReturnType<typeof setTimeout> | undefined;
@@ -466,24 +472,34 @@ export class Executor implements AgentExecutor {
   }
 
   private async stopSession(session: Session): Promise<void> {
+    session.terminalError ??= new Error("acp session stopped");
+    rejectPendingTurns(session, session.terminalError);
+    await this.beginSessionShutdown(session, 5_000);
+  }
+
+  private async beginSessionShutdown(session: Session, closeTimeoutMs: number): Promise<void> {
+    session.shutdown ??= this.shutdownSession(session, closeTimeoutMs);
+    return session.shutdown;
+  }
+
+  private async shutdownSession(session: Session, closeTimeoutMs: number): Promise<void> {
     const sessionId = session.sessionId;
-    rejectPendingTurns(session, new Error("acp session stopped"));
     try {
       if (sessionId && supportsClose(session.init)) {
         await withTimeout(
           session.connection.closeSession({ sessionId }),
-          5_000,
+          closeTimeoutMs,
           "acp close timed out",
         );
       }
     } catch {
       // Closing is best effort because the bridge may already be gone.
     } finally {
-      await stopChild(session.process);
       // Release ONLY the endpoint acp owns. When the coordinator threaded a
       // per-run lease in (`ownsMcpEndpoint === false`) the slot.release closes it,
       // so acp skips its own release to avoid a double-close of the shared
       // token+local-server+tunnel.
+      await stopChild(session.process, { processGroup: !session.workerHost });
       if (session.ownsMcpEndpoint) await session.mcpEndpoint.release();
     }
   }
@@ -856,12 +872,13 @@ function startBridgeProcess(
   workspace: string,
   workerHost: string | null,
 ): ChildProcessWithoutNullStreams {
-  const command = `exec ${resolveBridgeCommand(bridgeCommand, workerHost)}`;
+  const bridge = resolveBridgeCommand(bridgeCommand, workerHost);
   if (workerHost) {
     // Remote bridges resolve their own binaries on the worker host.
-    return startSshProcess(workerHost, `cd ${shellEscape(workspace)} && ${command}`);
+    const script = remoteBridgeScript(workspace, bridge);
+    return startSshProcess(workerHost, `bash -lc ${shellEscape(script)}`);
   }
-  return execa("bash", ["-lc", command], {
+  return execa("bash", ["-lc", `exec ${bridge}`], {
     cwd: workspace,
     stdin: "pipe",
     stdout: "pipe",
@@ -874,7 +891,34 @@ function startBridgeProcess(
     // until the process exits, a leading memory leak in a long-running daemon.
     buffer: false,
     env: hostAgentBinaryEnv(),
+    detached: process.platform !== "win32",
   }) as unknown as ChildProcessWithoutNullStreams;
+}
+
+function remoteBridgeScript(workspace: string, bridge: string): string {
+  return [
+    "set -m",
+    `cd ${shellEscape(workspace)}`,
+    `${bridge} <&0 &`,
+    "bridge_pid=$!",
+    "cleanup() {",
+    "  trap - HUP INT TERM EXIT",
+    '  kill -TERM -- "-$bridge_pid" 2>/dev/null || true',
+    "  (",
+    "    sleep 1",
+    '    kill -KILL -- "-$bridge_pid" 2>/dev/null || true',
+    "  ) &",
+    "  force_pid=$!",
+    '  wait "$bridge_pid" 2>/dev/null || true',
+    '  kill "$force_pid" 2>/dev/null || true',
+    '  wait "$force_pid" 2>/dev/null || true',
+    "}",
+    "trap cleanup HUP INT TERM EXIT",
+    'wait "$bridge_pid"',
+    "status=$?",
+    "trap - HUP INT TERM EXIT",
+    'exit "$status"',
+  ].join("\n");
 }
 
 function wireProcessEvents(session: Session): void {
@@ -895,8 +939,9 @@ function wireProcessEvents(session: Session): void {
       stderr = "";
     }
     const message = `acp bridge exited${code === null ? "" : ` with status ${code}`}${signal ? ` signal ${signal}` : ""}`;
+    session.terminalError ??= new Error(message);
     session.onUpdate?.({ type: "process_exit", message, timestamp: new Date() });
-    rejectPendingTurns(session, new Error(message));
+    rejectPendingTurns(session, session.terminalError);
   });
 }
 
@@ -907,8 +952,9 @@ function rejectPendingTurns(session: Session, error: Error): void {
 
 function rejectTimedOutSession(session: Session): void {
   const [timedOut, ...queued] = session.pendingTurns.splice(0);
-  timedOut?.reject(new Error("acp turn timed out"));
   const queuedError = new Error("acp session stopped after turn timeout");
+  session.terminalError = queuedError;
+  timedOut?.reject(new Error("acp turn timed out"));
   for (const turn of queued) turn.reject(queuedError);
 }
 
