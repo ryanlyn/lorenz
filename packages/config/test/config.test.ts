@@ -703,67 +703,13 @@ test("dispatch config rejects blank routes and normalizes unique route names", (
   );
 });
 
-test("dispatch route_agents parses via snake_case and normalizes route keys", () => {
-  assert.deepEqual(parseConfig().tracker.dispatch.routeAgents, {});
-
-  const settings = parseConfig({
-    tracker: {
-      dispatch: {
-        route_agents: { " Claude ": " claude ", CODEX: "codex" },
-      },
-    },
-  });
-  assert.deepEqual(settings.tracker.dispatch.routeAgents, {
-    claude: "claude",
-    codex: "codex",
-  });
-});
-
-test("dispatch route_agents rejects invalid and conflicting entries", () => {
-  assert.throws(
-    () => parseConfig({ tracker: { dispatch: { route_agents: { " ": "claude" } } } }),
-    /tracker.dispatch.route_agents must not contain blank routes/,
-  );
-  assert.throws(
-    () => parseConfig({ tracker: { dispatch: { route_agents: { backend: " " } } } }),
-    /tracker.dispatch.route_agents.backend must not be blank/,
-  );
+test("dispatch rejects a separate route_agents map", () => {
   assert.throws(
     () =>
       parseConfig({
-        tracker: { dispatch: { route_agents: { Backend: "claude", " backend ": "codex" } } },
+        tracker: { dispatch: { route_agents: { backend: "claude" } } },
       }),
-    /route_agents maps route "backend" to conflicting agent kinds/,
-  );
-  assert.deepEqual(
-    parseConfig({
-      tracker: { dispatch: { route_agents: { Backend: "claude", " backend ": "claude" } } },
-    }).tracker.dispatch.routeAgents,
-    { backend: "claude" },
-  );
-});
-
-test("dispatch validation requires configured route_agents targets", () => {
-  assert.throws(
-    () =>
-      validateDispatchConfig(
-        parseConfig({
-          tracker: { kind: "memory", dispatch: { route_agents: { backend: "ghost" } } },
-        }),
-      ),
-    /tracker\.dispatch\.route_agents\.backend: agents\.ghost is required/,
-  );
-
-  validateDispatchConfig(
-    parseConfig({
-      tracker: { kind: "memory", dispatch: { route_agents: { backend: "claude" } } },
-    }),
-  );
-  validateDispatchConfig(
-    parseConfig({
-      tracker: { kind: "memory", dispatch: { route_agents: { backend: "pi" } } },
-      agents: { pi: { bridge_command: "pi-acp" } },
-    }),
+    /tracker\.dispatch contains unsupported keys: route_agents/,
   );
 });
 
@@ -994,6 +940,15 @@ test("dispatch validation requires configured agents for active and override sta
   });
   assert.throws(
     () => validateDispatchConfig(invalidBridge),
+    /agents\.pi\.bridgeCommand is required/,
+  );
+
+  const invalidRouteableAgent = parseConfig({
+    tracker: { kind: "memory" },
+    agents: { pi: { executor: "acp", bridge_command: "" } },
+  });
+  assert.throws(
+    () => validateDispatchConfig(invalidRouteableAgent),
     /agents\.pi\.bridgeCommand is required/,
   );
 });

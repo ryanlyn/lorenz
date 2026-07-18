@@ -9,20 +9,22 @@ import {
   settingsWithRouteAgent,
 } from "@lorenz/dispatch";
 
-function settingsWithRouteAgents(
-  routeAgents: Record<string, string>,
+function settingsWithAgentKinds(
+  agentKinds: string[],
   overrides: Parameters<typeof settingsWith>[0] = {},
 ): Settings {
   const settings = settingsWith({ routeLabelPrefix: "route-", ...overrides });
-  settings.tracker.dispatch.routeAgents = routeAgents;
+  for (const agentKind of agentKinds) {
+    settings.agents[agentKind] = { ...settings.agents.claude! };
+  }
   return settings;
 }
 
-test("routeAgentKind resolves one mapped route and ignores unmapped routes", () => {
-  const settings = settingsWithRouteAgents({ claude: "claude", codex: "codex" });
+test("routeAgentKind selects any configured agents key and ignores other routes", () => {
+  const settings = settingsWithAgentKinds(["reviewer"]);
 
-  assert.deepEqual(routeAgentKind(issueWith({ labels: ["route-claude"] }), settings), {
-    agentKind: "claude",
+  assert.deepEqual(routeAgentKind(issueWith({ labels: ["route-reviewer"] }), settings), {
+    agentKind: "reviewer",
     conflicts: null,
   });
   assert.deepEqual(routeAgentKind(issueWith({ labels: ["route-backend"] }), settings), {
@@ -35,16 +37,16 @@ test("routeAgentKind resolves one mapped route and ignores unmapped routes", () 
   });
 });
 
-test("routeAgentKind matches normalized route labels case-insensitively", () => {
-  const settings = settingsWithRouteAgents({ claude: "claude" });
+test("routeAgentKind matches normalized route labels to agent keys case-insensitively", () => {
+  const settings = settingsWithAgentKinds(["ReviewAgent"]);
   assert.equal(
-    routeAgentKind(issueWith({ labels: ["Route-Claude"] }), settings).agentKind,
-    "claude",
+    routeAgentKind(issueWith({ labels: ["Route-ReviewAgent"] }), settings).agentKind,
+    "ReviewAgent",
   );
 });
 
-test("routeAgentKind reports conflicting mapped routes instead of guessing", () => {
-  const settings = settingsWithRouteAgents({ claude: "claude", codex: "codex" });
+test("routeAgentKind reports conflicting agent routes instead of guessing", () => {
+  const settings = settingsWith({ routeLabelPrefix: "route-" });
 
   assert.deepEqual(
     routeAgentKind(issueWith({ labels: ["route-claude", "route-codex"] }), settings),
@@ -58,16 +60,16 @@ test("routeAgentKind reports conflicting mapped routes instead of guessing", () 
   );
 });
 
-test("routeAgentKind accepts several routes that agree on one kind", () => {
-  const settings = settingsWithRouteAgents({ backend: "claude", frontend: "claude" });
+test("routeAgentKind deduplicates repeated labels for one agent", () => {
+  const settings = settingsWith({ routeLabelPrefix: "route-" });
   assert.deepEqual(
-    routeAgentKind(issueWith({ labels: ["route-backend", "route-frontend"] }), settings),
+    routeAgentKind(issueWith({ labels: ["route-claude", "route-claude"] }), settings),
     { agentKind: "claude", conflicts: null },
   );
 });
 
 test("agent kind precedence is route, then state override, then default", () => {
-  const settings = settingsWithRouteAgents({ claude: "claude" });
+  const settings = settingsWith({ routeLabelPrefix: "route-" });
   settings.statusOverrides.set("todo", { agent: { kind: "state-kind" } });
 
   assert.equal(
@@ -82,7 +84,7 @@ test("agent kind precedence is route, then state override, then default", () => 
 });
 
 test("a route conflict falls back to the state or default kind", () => {
-  const settings = settingsWithRouteAgents({ claude: "claude", codex: "codex" });
+  const settings = settingsWith({ routeLabelPrefix: "route-" });
   settings.statusOverrides.set("todo", { agent: { kind: "state-kind" } });
 
   assert.equal(
@@ -94,18 +96,16 @@ test("a route conflict falls back to the state or default kind", () => {
   );
 });
 
-test("settingsWithRouteAgent preserves identity when no mapping applies", () => {
-  const settings = settingsWithRouteAgents({ claude: "claude" });
+test("settingsWithRouteAgent preserves identity when no agent key matches", () => {
+  const settings = settingsWith({ routeLabelPrefix: "route-" });
   assert.equal(
     settingsWithRouteAgent(settings, issueWith({ labels: ["route-backend"] })),
     settings,
   );
-  const bare = settingsWith({ routeLabelPrefix: "route-" });
-  assert.equal(settingsWithRouteAgent(bare, issueWith({ labels: ["route-claude"] })), bare);
 });
 
 test("settingsWithRouteAgent pins the kind and keeps other override fields", () => {
-  const settings = settingsWithRouteAgents({ claude: "claude" });
+  const settings = settingsWith({ routeLabelPrefix: "route-" });
   settings.statusOverrides.set("todo", {
     agent: { kind: "state-kind", maxTurns: 7 },
     agents: { claude: { turnTimeoutMs: 1_234 } },
@@ -121,12 +121,12 @@ test("settingsWithRouteAgent pins the kind and keeps other override fields", () 
   assert.equal(settings.agent.kind, "codex");
 });
 
-test("route_agents does not change routing eligibility", () => {
+test("agent route selection does not change routing eligibility", () => {
   const issue = issueWith({ labels: ["route-claude"] });
-  const filtered = settingsWithRouteAgents({ claude: "claude" }, { onlyRoutes: ["backend"] });
+  const filtered = settingsWith({ routeLabelPrefix: "route-", onlyRoutes: ["backend"] });
   assert.equal(routedToThisWorker(issue, filtered), false);
 
-  const open = settingsWithRouteAgents({ claude: "claude" }, { onlyRoutes: null });
+  const open = settingsWith({ routeLabelPrefix: "route-", onlyRoutes: null });
   const bare = settingsWith({ routeLabelPrefix: "route-", onlyRoutes: null });
   assert.equal(routedToThisWorker(issue, open), routedToThisWorker(issue, bare));
 });

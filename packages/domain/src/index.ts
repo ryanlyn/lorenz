@@ -304,12 +304,6 @@ export interface DispatchSettings {
    * `Lorenz:backend` into route `backend`.
    */
   routeLabelPrefix: string;
-  /**
-   * Map of normalized route names to agent kinds. For an accepted issue, an unambiguous mapped
-   * route overrides the per-state and default agent kind without changing routing eligibility.
-   * When multiple routes map to different kinds, no route override applies.
-   */
-  routeAgents?: Record<string, AgentKind> | undefined;
 }
 
 /**

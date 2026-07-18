@@ -80,7 +80,6 @@ The core tracker bundle. `tracker.kind` selects the provider. There is no defaul
 | `tracker.dispatch.accept_unrouted` | boolean | `true` | Dispatch issues that carry no route label. |
 | `tracker.dispatch.only_routes` | string[] \| null | `null` | Restrict dispatch to these routes; `null` means no restriction. |
 | `tracker.dispatch.route_label_prefix` | string | `Lorenz:` | Label prefix that marks a route (for example `Lorenz:Backend` to route `backend`). |
-| `tracker.dispatch.route_agents` | map<string, string> | `{}` | Map normalized route names to configured agent kinds. An unambiguous route overrides the per-state and default kind without changing eligibility. |
 
 `active_states`, `terminal_states`, and the `dispatch.*` keys are core fields shared by every provider, not provider-specific. See [dispatch](../dispatch.md) and [dispatch-routing](../features/dispatch-routing.md).
 
@@ -297,6 +296,10 @@ Executor records keyed by kind, plus shared timeout defaults. The `agents` block
 | `agents.<kind>.usage_accounting` | `per-turn` \| `cumulative` | `per-turn` | How per-turn token usage is accounted. Inferred when unset; built-in records set `per-turn`. |
 | `agents.<kind>.provider_config` | record | (none) | Per-session config overlay. Claude receives a `settings.json` shape; everything else a `config.toml` shape. |
 | `agents.<kind>.strict_mcp_config` | boolean | `true` | Parsed and validated but not consumed at runtime today. |
+
+Every `agents.<kind>` key is also eligible as a same-named route. A `Lorenz:claude` label selects
+`agents.claude` when the route prefix is `Lorenz:`. This selection does not change
+`accept_unrouted` or `only_routes` eligibility.
 
 The built-in `codex` record uses `bridge_command: codex-acp`. The built-in `claude` record uses `bridge_command: claude-agent-acp` and a `provider_config` of `{model: claude-opus-4-6[1m], permissions: {defaultMode: dontAsk}}`. That model pin is `DEFAULT_CLAUDE_MODEL` (currently `claude-opus-4-6[1m]`; the authoritative value lives in `packages/config/src/defaults.ts`). The `bridge_command` is a single shell command string split on whitespace; there is no `bridge_args` key. See [codex](../agents/codex.md) and [claude](../agents/claude.md).
 

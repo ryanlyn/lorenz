@@ -712,7 +712,7 @@ export class LorenzRuntime {
         .join(", ");
       this.addEvent(
         "poll_error",
-        `${refreshed.identifier} route_agents_conflict (${mappings}); no route agent override applied`,
+        `${refreshed.identifier} agent_route_conflict (${mappings}); no route agent override applied`,
       );
     }
     const slotIndex =

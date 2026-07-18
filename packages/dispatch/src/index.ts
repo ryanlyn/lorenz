@@ -43,23 +43,29 @@ export interface RouteAgentResolution {
 }
 
 /**
- * Resolve an issue's route labels against `tracker.dispatch.route_agents`. This does not affect
- * whether the issue is eligible for this worker.
+ * Resolve issue routes that match configured `agents` keys. This does not affect whether the
+ * issue is eligible for this worker.
  */
 export function routeAgentKind(issue: Issue, settings: Settings): RouteAgentResolution {
-  const routeAgents = settings.tracker.dispatch.routeAgents ?? {};
-  const mapped = new Map<string, AgentKind>();
-  for (const route of routeNames(issue, settings)) {
-    const agentKind = routeAgents[route];
-    if (agentKind !== undefined) mapped.set(route, agentKind);
+  const configured = new Map<string, AgentKind[]>();
+  for (const agentKind of Object.keys(settings.agents)) {
+    const route = normalizeRouteName(agentKind);
+    if (route === "") continue;
+    const kinds = configured.get(route) ?? [];
+    kinds.push(agentKind);
+    configured.set(route, kinds);
   }
-  const kinds = new Set(mapped.values());
+
+  const mapped: Array<{ route: string; agentKind: AgentKind }> = [];
+  for (const route of new Set(routeNames(issue, settings))) {
+    for (const agentKind of configured.get(route) ?? []) {
+      mapped.push({ route, agentKind });
+    }
+  }
+  const kinds = new Set(mapped.map(({ agentKind }) => agentKind));
   if (kinds.size === 0) return { agentKind: null, conflicts: null };
   if (kinds.size > 1) {
-    return {
-      agentKind: null,
-      conflicts: [...mapped].map(([route, agentKind]) => ({ route, agentKind })),
-    };
+    return { agentKind: null, conflicts: mapped };
   }
   return { agentKind: [...kinds][0]!, conflicts: null };
 }

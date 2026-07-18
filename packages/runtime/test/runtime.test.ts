@@ -816,7 +816,6 @@ test("runtime pins the route-selected agent kind into runner settings", async ()
     blockers: [],
   });
   const workflow = workflowFixture();
-  workflow.settings.tracker.dispatch.routeAgents = { claude: "claude" };
   const runnerSettings: Settings[] = [];
   const runtime = new LorenzRuntime(
     runtimeOptions({
@@ -843,7 +842,7 @@ test("runtime pins the route-selected agent kind into runner settings", async ()
   assert.equal(runtime.snapshot().runHistory[0]?.agentKind, "claude");
 });
 
-test("runtime warns and applies no override when route_agents conflict", async () => {
+test("runtime warns and applies no override when agent routes conflict", async () => {
   const conflicted = normalizeIssue({
     id: "issue-route-agent-conflict",
     identifier: "MT-ROUTE-AGENT-CONFLICT",
@@ -853,7 +852,6 @@ test("runtime warns and applies no override when route_agents conflict", async (
     blockers: [],
   });
   const workflow = workflowFixture();
-  workflow.settings.tracker.dispatch.routeAgents = { claude: "claude", codex: "codex" };
   const runnerSettings: Settings[] = [];
   const runtime = new LorenzRuntime(
     runtimeOptions({
@@ -880,7 +878,7 @@ test("runtime warns and applies no override when route_agents conflict", async (
   assert.equal(runnerSettings[0]?.agent.kind, "codex");
   const conflict = runtime
     .snapshot()
-    .recentEvents.find((event) => event.message.includes("route_agents_conflict"));
+    .recentEvents.find((event) => event.message.includes("agent_route_conflict"));
   assert.equal(conflict?.type, "poll_error");
   assert.match(conflict?.message ?? "", /claude=claude, codex=codex/);
 });

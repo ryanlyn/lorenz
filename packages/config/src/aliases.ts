@@ -11,7 +11,6 @@ const dispatchAliases = {
   accept_unrouted: "acceptUnrouted",
   only_routes: "onlyRoutes",
   route_label_prefix: "routeLabelPrefix",
-  route_agents: "routeAgents",
 };
 const pollingAliases = { interval_ms: "intervalMs" };
 const workspaceAliases = {};
