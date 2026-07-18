@@ -112,11 +112,12 @@ export interface AgentSession {
   agentKind: AgentKind;
   sessionId?: string | null | undefined;
   executorPid?: string | null | undefined;
+  queueTurn?(prompt: string): Promise<AgentUpdate[]>;
   stop(): Promise<void>;
 }
 ```
 
-`sessionId` is the backend session id, populated once your executor receives it. `executorPid` is the OS pid of the agent child as a string, or `null` when there is no child process. `stop` closes the session and tears down the process; it must be safe to call from a `finally` block, including before the first turn.
+`sessionId` is the backend session id, populated once your executor receives it. `executorPid` is the OS pid of the agent child as a string, or `null` when there is no child process. An executor that supports live user input implements `queueTurn`: it must submit the prompt to its backend immediately, preserve prompt order, and resolve the returned promise when the queued turn finishes. `stop` closes the session and tears down the process; it must be safe to call from a `finally` block, including before the first turn.
 
 ### `AgentUpdate`
 

@@ -88,7 +88,16 @@ interface Session extends AgentSession {
   turnStartTotals: UsageTotals;
   lastCallUsageSeq: number;
   callUsageBaseline?: UsageTokenUpdate | undefined;
-  pendingTurn?: { reject: (error: Error) => void; allowSessionIdRotation: boolean } | undefined;
+  pendingTurns: PendingTurn[];
+}
+
+interface PendingTurn {
+  active: boolean;
+  settled: boolean;
+  allowSessionIdRotation: boolean;
+  activate(): void;
+  touch(): void;
+  reject(error: Error): void;
 }
 
 /**
@@ -209,6 +218,8 @@ export class Executor implements AgentExecutor {
         sawCallUsageThisTurn: false,
         turnStartTotals: emptyUsageTotals(),
         lastCallUsageSeq: 0,
+        pendingTurns: [],
+        queueTurn: async (prompt) => this.queueTurn(nextSession, prompt),
         stop: async () => {
           await this.stopSession(nextSession);
         },
@@ -249,8 +260,15 @@ export class Executor implements AgentExecutor {
    * long-running daemon, so the batch is not kept.
    */
   async runTurn(session: Session, prompt: string, _issue?: Issue): Promise<AgentUpdate[]> {
-    if (session.pendingTurn) throw new Error("ACP turn already running");
-    const previous = session.onUpdate;
+    if (session.pendingTurns.length > 0) throw new Error("ACP turn already running");
+    return this.startTurn(session, prompt);
+  }
+
+  private async queueTurn(session: Session, prompt: string): Promise<AgentUpdate[]> {
+    return this.startTurn(session, prompt);
+  }
+
+  private async startTurn(session: Session, prompt: string): Promise<AgentUpdate[]> {
     let settled = false;
 
     return new Promise<AgentUpdate[]>((resolve, reject) => {
@@ -261,23 +279,27 @@ export class Executor implements AgentExecutor {
         finishReject(new Error("acp turn timed out"));
       };
       let stallTimer: ReturnType<typeof setTimeout> | undefined;
+      let hardTimer: ReturnType<typeof setTimeout> | undefined;
       const resetStallTimer = () => {
-        if (session.agentConfig.stallTimeoutMs <= 0) return;
+        if (!turn.active || session.agentConfig.stallTimeoutMs <= 0) return;
         if (stallTimer) clearTimeout(stallTimer);
         stallTimer = setTimeout(cancelTurn, session.agentConfig.stallTimeoutMs);
       };
-      const hardTimer = setTimeout(cancelTurn, session.agentConfig.turnTimeoutMs);
 
       const cleanup = () => {
-        clearTimeout(hardTimer);
+        if (hardTimer) clearTimeout(hardTimer);
         if (stallTimer) clearTimeout(stallTimer);
-        session.onUpdate = previous;
-        session.pendingTurn = undefined;
+        const index = session.pendingTurns.indexOf(turn);
+        if (index === -1) return;
+        const wasActive = index === 0;
+        session.pendingTurns.splice(index, 1);
+        if (wasActive) session.pendingTurns[0]?.activate();
       };
 
       const finishResolve = (value: AgentUpdate[]) => {
         if (settled) return;
         settled = true;
+        turn.settled = true;
         cleanup();
         resolve(value);
       };
@@ -285,18 +307,28 @@ export class Executor implements AgentExecutor {
       const finishReject = (error: Error) => {
         if (settled) return;
         settled = true;
+        turn.settled = true;
         cleanup();
         reject(error);
       };
 
-      resetStallTimer();
-      session.sawCallUsageThisTurn = false;
-      session.turnStartTotals = { ...session.usageTotals };
-      session.pendingTurn = { reject: finishReject, allowSessionIdRotation: true };
-      session.onUpdate = (update) => {
-        resetStallTimer();
-        previous?.(update);
+      const turn: PendingTurn = {
+        active: false,
+        settled: false,
+        allowSessionIdRotation: true,
+        activate: () => {
+          if (turn.active || turn.settled) return;
+          turn.active = true;
+          session.sawCallUsageThisTurn = false;
+          session.turnStartTotals = { ...session.usageTotals };
+          hardTimer = setTimeout(cancelTurn, session.agentConfig.turnTimeoutMs);
+          resetStallTimer();
+        },
+        touch: resetStallTimer,
+        reject: finishReject,
       };
+      session.pendingTurns.push(turn);
+      if (session.pendingTurns[0] === turn) turn.activate();
 
       const sessionId = requireSessionId(session);
       this.emit(session, {
@@ -361,7 +393,7 @@ export class Executor implements AgentExecutor {
 
   private async stopSession(session: Session): Promise<void> {
     const sessionId = session.sessionId;
-    session.pendingTurn?.reject(new Error("acp session stopped"));
+    rejectPendingTurns(session, new Error("acp session stopped"));
     try {
       if (sessionId && supportsClose(session.init)) {
         await withTimeout(
@@ -384,8 +416,9 @@ export class Executor implements AgentExecutor {
 }
 
 function handleSessionUpdate(session: Session, notification: SessionNotification): void {
+  session.pendingTurns[0]?.touch();
   const canAcceptRotation =
-    session.pendingTurn?.allowSessionIdRotation === true && Boolean(session.sessionId);
+    session.pendingTurns[0]?.allowSessionIdRotation === true && Boolean(session.sessionId);
   if (session.sessionId && notification.sessionId !== session.sessionId && !canAcceptRotation) {
     session.onUpdate?.({
       type: "malformed",
@@ -397,7 +430,7 @@ function handleSessionUpdate(session: Session, notification: SessionNotification
     });
     return;
   }
-  if (session.pendingTurn) session.pendingTurn.allowSessionIdRotation = false;
+  if (session.pendingTurns[0]) session.pendingTurns[0].allowSessionIdRotation = false;
   session.sessionId = notification.sessionId;
   const usage = consumeCallUsage(session, notification);
   session.onUpdate?.({
@@ -774,6 +807,7 @@ function wireProcessEvents(session: Session): void {
   let stderr = "";
   session.process.stderr.setEncoding("utf8");
   session.process.stderr.on("data", (chunk: string) => {
+    session.pendingTurns[0]?.touch();
     stderr += chunk;
     const lines = stderr.split(/\r?\n/);
     stderr = lines.pop() ?? "";
@@ -788,8 +822,12 @@ function wireProcessEvents(session: Session): void {
     }
     const message = `acp bridge exited${code === null ? "" : ` with status ${code}`}${signal ? ` signal ${signal}` : ""}`;
     session.onUpdate?.({ type: "process_exit", message, timestamp: new Date() });
-    session.pendingTurn?.reject(new Error(message));
+    rejectPendingTurns(session, new Error(message));
   });
+}
+
+function rejectPendingTurns(session: Session, error: Error): void {
+  for (const turn of [...session.pendingTurns]) turn.reject(error);
 }
 
 function clientCapabilities(workerHost: string | null): ClientCapabilities {

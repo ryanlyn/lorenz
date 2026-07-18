@@ -109,6 +109,43 @@ test("ACP executor starts a session, translates updates, approves permissions, a
   assert.equal(permission?.response?.outcome?.optionId, "allow");
 });
 
+test("ACP session submits a queued turn before the active turn finishes", async () => {
+  const root = await tempDir("lorenz-acp-queued-turn");
+  const fake = await writeFakeBridge(root);
+  const trace = path.join(root, "trace.jsonl");
+  const settings = acpSettings(root, fake, trace, "queued-turn");
+  const executor = new Executor("claude");
+  const session = await executor.startSession({
+    workspace: root,
+    settings,
+    issue: sampleIssue,
+  });
+
+  try {
+    const active = executor.runTurn(session, "initial work", sampleIssue);
+    await waitForTraceEvent(trace, "firstPromptWaiting");
+    assert.ok(session.queueTurn);
+    const queued = session.queueTurn("new direction");
+
+    await vi.waitFor(
+      async () => {
+        const prompts = (await readTrace(trace)).filter((event) => event.method === "prompt");
+        assert.equal(prompts.length, 2);
+      },
+      { timeout: 10_000, interval: 20 },
+    );
+
+    await active;
+    await queued;
+  } finally {
+    await session.stop();
+  }
+
+  const prompts = (await readTrace(trace)).filter((event) => event.method === "prompt");
+  assert.equal(prompts[0]?.params?.prompt?.[0]?.text, "initial work");
+  assert.equal(prompts[1]?.params?.prompt?.[0]?.text, "new direction");
+});
+
 test("ACP executor can pass through cumulative bridge usage without double counting", async () => {
   const root = await tempDir("lorenz-acp-cumulative-usage");
   const fake = await writeFakeBridge(root);
@@ -227,7 +264,10 @@ test("ACP executor does not retain a flood turn's stream (bridge stdout, per-tur
     // The stream really flowed (3000 chunks x ~16KB) and the resolved batch is
     // just the terminal update, not the turn's history.
     assert.ok(streamedChunks >= 3000, `expected the flood to stream, got ${streamedChunks}`);
-    assert.ok(turnUpdates.length <= 1, `expected only the terminal update, got ${turnUpdates.length}`);
+    assert.ok(
+      turnUpdates.length <= 1,
+      `expected only the terminal update, got ${turnUpdates.length}`,
+    );
     const maxGrowth = 20 * 1024 * 1024;
     assert.ok(
       growth < maxGrowth,
@@ -814,6 +854,19 @@ class FakeAgent {
       }
       await sendBucket(1, turnUsage(1));
       await sendBucket(3, turnUsage(3));
+      return { stopReason: "end_turn" };
+    }
+    if (mode === "queued-turn") {
+      const promptNumber = this.promptCount;
+      if (promptNumber === 1) {
+        record({ method: "firstPromptWaiting" });
+        while (this.promptCount < 2) await sleep(10);
+        record({ method: "firstPromptReleased" });
+        await sleep(10);
+      } else {
+        record({ method: "queuedPromptAccepted" });
+        await sleep(30);
+      }
       return { stopReason: "end_turn" };
     }
     if (mode === "stall") {

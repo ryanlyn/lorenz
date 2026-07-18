@@ -74,7 +74,9 @@ An `AgentExecutorProvider` (defined in `packages/agent-sdk/src/provider.ts`) con
 | `validateAgent?` | startup validation of the per-kind config |
 | `createExecutor` | required; returns the `AgentExecutor` that drives a session |
 
-`acpExecutorProvider` registers `executor: "acp"`, maps the aliases `bridge_command`, `usage_accounting`, `provider_config`, and `strict_mcp_config`, rejects a blank `bridge_command` in `validateAgent`, and returns a fresh `Executor(kind)` from `createExecutor`. The `Executor` is the `AgentExecutor`: `startSession` spawns the bridge and runs `initialize` + `session/new`, `runTurn` sends the prompt and enforces the two timeouts, and `stopSession` runs `session/close` (5000ms, only if the bridge advertised `sessionCapabilities.close`) then `SIGTERM` followed by `SIGKILL` after a 1000ms grace.
+`acpExecutorProvider` registers `executor: "acp"`, maps the aliases `bridge_command`, `usage_accounting`, `provider_config`, and `strict_mcp_config`, rejects a blank `bridge_command` in `validateAgent`, and returns a fresh `Executor(kind)` from `createExecutor`. The `Executor` is the `AgentExecutor`: `startSession` spawns the bridge and runs `initialize` + `session/new`, `runTurn` sends the prompt and enforces the two timeouts, `AgentSession.queueTurn` submits a later prompt immediately while preserving FIFO order, and `stopSession` runs `session/close` (5000ms, only if the bridge advertised `sessionCapabilities.close`) then `SIGTERM` followed by `SIGKILL` after a 1000ms grace.
+
+ACP permits the client to have more than one `session/prompt` request in flight. The Claude bridge inserts later requests into its live SDK input queue. The Codex bridge queues requests per session before sending them to app-server, which permits one active turn per thread. Lorenz starts a queued turn's timeout clocks only after the preceding turn settles.
 
 The runtime contracts `AgentExecutor`, `AgentSession`, and `AgentUpdate` live in `@lorenz/domain`, not in `agent-sdk`. The SDK package owns only the build-time provider contract and the registry.
 

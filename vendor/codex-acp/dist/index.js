@@ -20048,9 +20048,14 @@ var CodexAcpServer = class _CodexAcpServer {
   availableCommands;
   sessions;
   pendingMcpStartupSessions;
+  // symphony-patch: serialize concurrent ACP prompt requests per session. ACP clients can submit
+  // the next user message while a turn is active; Codex app-server accepts one active turn per
+  // thread, so the bridge owns the FIFO boundary.
+  pendingPrompts;
   constructor(connection, codexAcpClient, defaultAuthRequest, getExitCode) {
     this.sessions = /* @__PURE__ */ new Map();
     this.pendingMcpStartupSessions = /* @__PURE__ */ new Map();
+    this.pendingPrompts = /* @__PURE__ */ new Map();
     this.connection = connection;
     this.codexAcpClient = codexAcpClient;
     this.defaultAuthRequest = defaultAuthRequest ?? null;
@@ -20655,6 +20660,20 @@ ${item.text}`
     }
   }
   async prompt(params) {
+    // symphony-patch: register the request immediately, then run it after the preceding prompt for
+    // this session settles. This matches the queue already provided by the Claude ACP bridge.
+    const previous = this.pendingPrompts.get(params.sessionId) ?? Promise.resolve();
+    const queued = previous.catch(() => void 0).then(() => this.runPrompt(params));
+    this.pendingPrompts.set(params.sessionId, queued);
+    try {
+      return await queued;
+    } finally {
+      if (this.pendingPrompts.get(params.sessionId) === queued) {
+        this.pendingPrompts.delete(params.sessionId);
+      }
+    }
+  }
+  async runPrompt(params) {
     logger.log("Prompt received", {
       sessionId: params.sessionId,
       prompt: params.prompt

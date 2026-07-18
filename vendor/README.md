@@ -38,6 +38,9 @@ so they ride the protocol's sanctioned extension point:
   settings overlay (same shape as `settings.json`), merged over the resolved
   file settings so `model`, `permissions.defaultMode`, `effortLevel`, and
   `availableModels` work without writing settings files into the workspace.
+- Concurrent `session/prompt` requests (codex) are queued per session before
+  reaching app-server, which permits one active turn per thread. The Claude
+  bridge already provides the same FIFO prompt behavior.
 
 ## Refreshing from upstream
 

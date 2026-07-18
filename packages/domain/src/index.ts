@@ -1064,6 +1064,14 @@ export interface AgentSession {
   sessionId?: string | null | undefined;
   /** OS pid of the agent child as a string; `null` if not applicable. */
   executorPid?: string | null | undefined;
+  /**
+   * Submits another prompt while the current turn is still running. The executor must hand the
+   * prompt to its backend immediately and preserve submission order. The returned promise settles
+   * when that queued turn finishes.
+   *
+   * Optional because not every executor backend supports live prompt queuing.
+   */
+  queueTurn?(prompt: string): Promise<AgentUpdate[]>;
   /** Closes the session and tears down the underlying process; must be safe to call from a `finally` block. */
   stop(): Promise<void>;
 }
