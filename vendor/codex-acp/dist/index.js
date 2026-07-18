@@ -20048,14 +20048,15 @@ var CodexAcpServer = class _CodexAcpServer {
   availableCommands;
   sessions;
   pendingMcpStartupSessions;
-  // symphony-patch: serialize concurrent ACP prompt requests per session. ACP clients can submit
-  // the next user message while a turn is active; Codex app-server accepts one active turn per
-  // thread, so the bridge owns the FIFO boundary.
+  // ACP clients can submit a user message while a turn is active. Codex app-server
+  // accepts one active turn per thread, so the bridge owns the FIFO boundary.
   pendingPrompts;
+  promptGenerations;
   constructor(connection, codexAcpClient, defaultAuthRequest, getExitCode) {
     this.sessions = /* @__PURE__ */ new Map();
     this.pendingMcpStartupSessions = /* @__PURE__ */ new Map();
     this.pendingPrompts = /* @__PURE__ */ new Map();
+    this.promptGenerations = /* @__PURE__ */ new Map();
     this.connection = connection;
     this.codexAcpClient = codexAcpClient;
     this.defaultAuthRequest = defaultAuthRequest ?? null;
@@ -20078,7 +20079,8 @@ var CodexAcpServer = class _CodexAcpServer {
       },
       agentCapabilities: {
         _meta: {
-          "symphony/promptQueueing": true
+          "symphony/promptQueueing": true,
+          "symphony/stableSessionId": true
         },
         auth: {
           logout: {}
@@ -20663,10 +20665,13 @@ ${item.text}`
     }
   }
   async prompt(params) {
-    // symphony-patch: register the request immediately, then run it after the preceding prompt for
-    // this session reaches the transport boundary.
+    // Register the request immediately, then run it after the preceding prompt
+    // reaches the transport boundary.
+    const generation = this.promptGenerations.get(params.sessionId) ?? 0;
     const previous = this.pendingPrompts.get(params.sessionId) ?? Promise.resolve();
-    const queued = previous.catch(() => void 0).then(() => this.runPrompt(params));
+    const queued = previous.catch(() => void 0).then(
+      () => (this.promptGenerations.get(params.sessionId) ?? 0) === generation ? this.runPrompt(params, generation) : { stopReason: "cancelled" }
+    );
     const boundary = queued.then(
       () => new Promise((resolve) => setImmediate(resolve)),
       () => new Promise((resolve) => setImmediate(resolve))
@@ -20679,7 +20684,7 @@ ${item.text}`
     });
     return await queued;
   }
-  async runPrompt(params) {
+  async runPrompt(params, generation) {
     logger.log("Prompt received", {
       sessionId: params.sessionId,
       prompt: params.prompt
@@ -20693,15 +20698,31 @@ ${item.text}`
       const elicitationHandler = new CodexElicitationHandler(this.connection, sessionState);
       await this.codexAcpClient.subscribeToSessionEvents(
         params.sessionId,
-        (event) => {
+        async (event) => {
           elicitationHandler.handleNotification(event);
-          return eventHandler.handleNotification(event);
+          await eventHandler.handleNotification(event);
+          if (event.method === "turn/started" && (this.promptGenerations.get(params.sessionId) ?? 0) !== generation) {
+            try {
+              await this.codexAcpClient.turnInterrupt({
+                threadId: params.sessionId,
+                turnId: event.params.turn.id
+              });
+            } catch (err) {
+              logger.error(`Cancel - deferred turnInterrupt failed`, err);
+            }
+          }
         },
         approvalHandler,
         elicitationHandler
       );
+      if ((this.promptGenerations.get(params.sessionId) ?? 0) !== generation) {
+        return { stopReason: "cancelled" };
+      }
       if (await this.availableCommands.tryHandleCommand(params.prompt, sessionState)) {
         logger.log("Prompt handled by a command");
+        if ((this.promptGenerations.get(params.sessionId) ?? 0) !== generation) {
+          return { stopReason: "cancelled" };
+        }
         return {
           stopReason: "end_turn",
           usage: this.buildPromptUsage(sessionState.lastTokenUsage),
@@ -20728,6 +20749,13 @@ ${item.text}`
       const turnCompleted = await this.runWithProcessCheck(
         () => this.codexAcpClient.sendPrompt(params, agentMode, modelId, serviceTier, disableSummary, sessionState.cwd)
       );
+      if ((this.promptGenerations.get(params.sessionId) ?? 0) !== generation) {
+        return {
+          stopReason: "cancelled",
+          usage: this.buildPromptUsage(sessionState.lastTokenUsage),
+          _meta: this.buildQuotaMeta(sessionState)
+        };
+      }
       if (turnCompleted.turn.status === "interrupted") {
         await this.connection.sessionUpdate({
           sessionId: params.sessionId,
@@ -20795,6 +20823,10 @@ ${item.text}`
     }
   }
   async cancel(params) {
+    this.promptGenerations.set(
+      params.sessionId,
+      (this.promptGenerations.get(params.sessionId) ?? 0) + 1
+    );
     const sessionState = this.sessions.get(params.sessionId);
     if (!sessionState) {
       logger.log("Cancel request rejected: session not found", { sessionId: params.sessionId });

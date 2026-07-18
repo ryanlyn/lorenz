@@ -146,6 +146,93 @@ test("ACP session submits a queued turn before the active turn finishes", async 
   assert.equal(prompts[1]?.params?.prompt?.[0]?.text, "new direction");
 });
 
+test("ACP session preserves submission order across an activation gate", async () => {
+  const root = await tempDir("lorenz-acp-gated-queued-turn");
+  const fake = await writeFakeBridge(root);
+  const trace = path.join(root, "trace.jsonl");
+  const settings = acpSettings(root, fake, trace, "queued-activation-gate");
+  const executor = new Executor("claude");
+  const session = await executor.startSession({
+    workspace: root,
+    settings,
+    issue: sampleIssue,
+  });
+  let allowActivation: (() => void) | undefined;
+  const startWhen = new Promise<void>((resolve) => {
+    allowActivation = resolve;
+  });
+
+  try {
+    const active = executor.runTurn(session, "initial work", sampleIssue);
+    await waitForTraceEvent(trace, "gatedFirstPromptWaiting");
+    assert.ok(session.queueTurn);
+    const queued = session.queueTurn("validated direction", { startWhen });
+    const later = session.queueTurn("later direction");
+
+    await settle(20);
+    let prompts = (await readTrace(trace)).filter((event) => event.method === "prompt");
+    assert.equal(prompts.length, 1);
+
+    await fs.writeFile(`${trace}.release`, "");
+    await active;
+    await settle(20);
+    prompts = (await readTrace(trace)).filter((event) => event.method === "prompt");
+    assert.equal(prompts.length, 1);
+
+    allowActivation?.();
+    await Promise.all([queued, later]);
+  } finally {
+    allowActivation?.();
+    await session.stop();
+  }
+
+  const prompts = (await readTrace(trace)).filter((event) => event.method === "prompt");
+  assert.equal(prompts.length, 3);
+  assert.equal(prompts[1]?.params?.prompt?.[0]?.text, "validated direction");
+  assert.equal(prompts[2]?.params?.prompt?.[0]?.text, "later direction");
+});
+
+test("ACP queued turn waits for an eligible session id before submission", async () => {
+  const root = await tempDir("lorenz-acp-gated-session-rotation");
+  const fake = await writeFakeBridge(root);
+  const trace = path.join(root, "trace.jsonl");
+  const settings = acpSettings(root, fake, trace, "queued-session-rotation");
+  const updates: AgentUpdate[] = [];
+  const executor = new Executor("claude");
+  const session = await executor.startSession({
+    workspace: root,
+    settings,
+    issue: sampleIssue,
+    onUpdate: (update) => updates.push(update),
+  });
+  try {
+    const active = executor.runTurn(session, "initial work", sampleIssue);
+    await waitForTraceEvent(trace, "rotationPromptWaiting");
+    assert.ok(session.queueTurn);
+    const queued = session.queueTurn("validated direction");
+
+    await settle(20);
+    const prompts = (await readTrace(trace)).filter((event) => event.method === "prompt");
+    assert.equal(prompts.length, 1);
+
+    await fs.writeFile(`${trace}.rotate`, "");
+    await active;
+    assert.equal(session.sessionId, "acp-rotated");
+
+    await queued;
+  } finally {
+    await session.stop();
+  }
+
+  const prompts = (await readTrace(trace)).filter((event) => event.method === "prompt");
+  assert.equal(prompts.length, 2);
+  assert.equal(prompts[1]?.params?.sessionId, "acp-rotated");
+  assert.equal(
+    updates.filter((update) => update.type === "turn_started").at(-1)?.sessionId,
+    "acp-rotated",
+  );
+});
+
 test("ACP session publishes queued responses in turn lifecycle order", async () => {
   const root = await tempDir("lorenz-acp-queued-response-order");
   const fake = await writeFakeBridge(root);
@@ -232,11 +319,11 @@ test("ACP session ignores prompt queue capabilities without the Lorenz contract"
   }
 });
 
-test("ACP queued turn starts its lifecycle after a timed-out predecessor releases the bridge", async () => {
+test("ACP turn timeout rejects queued turns and stops the session", async () => {
   const root = await tempDir("lorenz-acp-queued-timeout");
   const fake = await writeFakeBridge(root);
   const trace = path.join(root, "trace.jsonl");
-  const settings = acpSettings(root, fake, trace, "queued-timeout", 50);
+  const settings = acpSettings(root, fake, trace, "queued-timeout", 500);
   const updates: AgentUpdate[] = [];
   const executor = new Executor("claude");
   const session = await executor.startSession({
@@ -253,29 +340,36 @@ test("ACP queued turn starts its lifecycle after a timed-out predecessor release
       .catch((error: unknown) => error);
     await waitForTraceEvent(trace, "firstPromptWaiting");
     assert.ok(session.queueTurn);
-    const queued = session.queueTurn("new direction");
+    const queued = session.queueTurn("new direction").catch((error: unknown) => error);
     await waitForTraceEvent(trace, "queuedPromptWaiting");
 
     assert.match(String(await active), /acp turn timed out/);
-    const queuedUpdates = await queued;
-    assert.ok(queuedUpdates.some((update) => update.type === "turn_completed"));
+    assert.match(String(await queued), /acp session stopped after turn timeout/);
+    await assert.rejects(
+      () => executor.runTurn(session, "more work", sampleIssue),
+      /acp session stopped after turn timeout/,
+    );
+    await assert.rejects(
+      () => session.queueTurn?.("more direction"),
+      /acp session stopped after turn timeout/,
+    );
   } finally {
     await session.stop();
   }
 
-  assert.equal(updates.filter((update) => update.type === "turn_started").length, 2);
+  assert.equal(updates.filter((update) => update.type === "turn_started").length, 1);
   const events = await readTrace(trace);
-  const releasedIndex = events.findIndex((event) => event.method === "firstPromptReleased");
-  const runningIndex = events.findIndex((event) => event.method === "queuedPromptRunning");
-  assert.ok(releasedIndex >= 0);
-  assert.ok(runningIndex > releasedIndex);
+  assert.equal(
+    events.some((event) => event.method === "queuedPromptRunning"),
+    false,
+  );
 });
 
-test("ACP queued turns reject when a timed-out backend does not release its slot", async () => {
+test("ACP timeout rejects queued turns when the backend is unresponsive", async () => {
   const root = await tempDir("lorenz-acp-queued-wedged-timeout");
   const fake = await writeFakeBridge(root);
   const trace = path.join(root, "trace.jsonl");
-  const settings = acpSettings(root, fake, trace, "queued-wedged-timeout", 50);
+  const settings = acpSettings(root, fake, trace, "queued-wedged-timeout", 500);
   const executor = new Executor("claude");
   const session = await executor.startSession({
     workspace: root,
@@ -293,7 +387,7 @@ test("ACP queued turns reject when a timed-out backend does not release its slot
     const queued = session.queueTurn("new direction");
 
     assert.match(String(await active), /acp turn timed out/);
-    await expectRejectsWithin(() => queued, 7_000, /acp backend cancellation timed out/);
+    await expectRejectsWithin(() => queued, 1_000, /acp session stopped after turn timeout/);
   } finally {
     await session.stop();
   }
@@ -341,6 +435,8 @@ test("vendored prompt queues advertise capability and isolate Claude usage at ha
   const codexSource = await fs.readFile(path.resolve("vendor/codex-acp/dist/index.js"), "utf8");
   assert.match(claudeSource, /"symphony\/promptQueueing": true/);
   assert.match(codexSource, /"symphony\/promptQueueing": true/);
+  assert.match(claudeSource, /"symphony\/stableSessionId": true/);
+  assert.match(codexSource, /"symphony\/stableSessionId": true/);
 
   const promptStart = claudeSource.indexOf("async prompt(params)");
   const queuedHandoff = claudeSource.indexOf("const cancelled = await", promptStart);
@@ -351,23 +447,120 @@ test("vendored prompt queues advertise capability and isolate Claude usage at ha
   assert.ok(cancellationReset > queuedHandoff);
   assert.ok(usageReset > queuedHandoff);
   const queueSubmission = claudeSource.slice(promptStart, cancellationReset);
+  assert.match(
+    queueSubmission,
+    /if \(session\.recovering\) \{\s*return \{ stopReason: "cancelled" \}/,
+  );
   assert.match(queueSubmission, /const deferInput = isLocalOnlyCommand \|\|/);
   assert.match(queueSubmission, /if \(!deferInput\) \{\s*session\.input\.push\(userMessage\)/);
   assert.match(
     queueSubmission,
     /if \(!pendingPrompt\.inputSubmitted\) \{\s*session\.input\.push\(userMessage\)/,
   );
+  const promptErrorStart = claudeSource.indexOf("catch (error)", promptStart);
+  const promptFinallyStart = claudeSource.indexOf("finally {", promptErrorStart);
+  const promptErrorBody = claudeSource.slice(promptErrorStart, promptFinallyStart);
+  const recoverySeal = promptErrorBody.indexOf("session.recovering = true");
+  const recoveryAwait = promptErrorBody.indexOf("await session.query.interrupt()");
+  assert.ok(recoverySeal >= 0);
+  assert.ok(recoveryAwait > recoverySeal);
+  assert.match(promptErrorBody, /some\(\(pending\) => pending\.inputSubmitted\)/);
+  assert.match(promptErrorBody, /this\.discardSession\(params\.sessionId, session\)/);
+  const promptMethodEnd = claudeSource.indexOf("async cancel(params)", promptFinallyStart);
+  assert.match(
+    claudeSource.slice(promptFinallyStart, promptMethodEnd),
+    /setImmediate\(\(\) => \{\s*session\.recovering = false/,
+  );
+  const replayCheck = claudeSource.indexOf("// Check for prompt replay", queuedHandoff);
+  const cancelledMessageCheck = claudeSource.indexOf("if (session.cancelled)", replayCheck);
+  assert.ok(replayCheck > queuedHandoff);
+  assert.ok(cancelledMessageCheck > replayCheck);
+  assert.match(
+    claudeSource.slice(replayCheck, cancelledMessageCheck),
+    /stopReason: session\.cancelled \? "cancelled" : "end_turn"/,
+  );
+  const replayHandoff = claudeSource.slice(replayCheck, cancelledMessageCheck);
+  assert.equal(/pendingMessages\.delete\(message\.uuid\)/.test(replayHandoff), false);
+  assert.match(replayHandoff, /settlePendingPrompt\(session, message\.uuid, pending\)/);
 
-  const cancelStart = claudeSource.indexOf("async cancel(params)");
+  const cancelStart = promptMethodEnd;
   const teardownStart = claudeSource.indexOf("async teardownSession", cancelStart);
   const cancelBody = claudeSource.slice(cancelStart, teardownStart);
-  assert.equal(/pendingMessages/.test(cancelBody), false);
+  assert.match(cancelBody, /cancelQueuedPrompts\(session\)/);
+  assert.match(cancelBody, /this\.interruptSession\(params\.sessionId, session, discard\)/);
+  assert.match(cancelBody, /this\.discardSession\(sessionId, session\)/);
   assert.match(claudeSource.slice(teardownStart), /cancelPendingPrompts\(session\)/);
+  assert.match(claudeSource, /function cancelQueuedPrompts\(session\)/);
   assert.match(claudeSource, /settleNextPendingPrompt\(session\)/);
 
   const codexPromptStart = codexSource.indexOf("async prompt(params)");
   const codexRunPromptStart = codexSource.indexOf("async runPrompt(params)", codexPromptStart);
-  assert.match(codexSource.slice(codexPromptStart, codexRunPromptStart), /setImmediate\(resolve\)/);
+  const codexPromptBody = codexSource.slice(codexPromptStart, codexRunPromptStart);
+  assert.match(codexPromptBody, /promptGenerations\.get\(params\.sessionId\)/);
+  assert.match(codexPromptBody, /stopReason: "cancelled"/);
+  assert.match(codexPromptBody, /setImmediate\(resolve\)/);
+  const codexCancelStart = codexSource.indexOf("async cancel(params)", codexRunPromptStart);
+  assert.match(
+    codexSource.slice(codexCancelStart),
+    /this\.promptGenerations\.set\(\s*params\.sessionId,/,
+  );
+});
+
+test("bridge guardian fails closed and completes process-group cleanup", async () => {
+  const source = await fs.readFile(path.resolve("packages/acp/src/index.ts"), "utf8");
+  const scriptStart = source.indexOf("function bridgeGuardianScript");
+  const scriptEnd = source.indexOf("function wireProcessEvents", scriptStart);
+  const script = source.slice(scriptStart, scriptEnd);
+
+  assert.match(script, /`cd \$\{shellEscape\(workspace\)\} \|\| exit 1`/);
+  assert.match(script, /`bash -c \$\{shellEscape\(guardedBridge\)\} <&0 &`/);
+  assert.match(script, /trap '' HUP INT TERM; while :; do sleep 3600; done/);
+  const trapInstall = script.indexOf("trap cleanup HUP INT TERM EXIT");
+  const bridgeLaunch = script.indexOf("bash -c ${shellEscape(guardedBridge)}");
+  assert.ok(trapInstall >= 0);
+  assert.ok(bridgeLaunch > trapInstall);
+  assert.match(script, /if \[ -z "\$bridge_pid" \]; then/);
+  assert.match(script, /if \[ "\$stop_requested" -eq 1 \]; then/);
+  assert.equal(script.includes("`${bridge} <&0 &`"), false);
+  assert.match(script, /' {2}wait "\$force_pid" 2>\/dev\/null \|\| true'/);
+  assert.equal(script.includes(`'  kill "$force_pid" 2>/dev/null || true'`), false);
+  assert.match(script, /"status=\$\?"/);
+  assert.match(script, /"cleanup"/);
+  const forceWait = script.indexOf('wait "$force_pid"');
+  const bridgeWait = script.indexOf('wait "$bridge_pid"', forceWait);
+  assert.ok(forceWait >= 0);
+  assert.ok(bridgeWait > forceWait);
+  assert.match(source, /return startSshProcess\(workerHost, script\)/);
+  assert.equal(source.includes("startSshProcess(workerHost, `bash -lc"), false);
+  assert.match(source, /execa\("bash", \["-lc", bridgeGuardianScript\(workspace, bridge\)\]/);
+});
+
+test("Windows bridge guardian owns descendants through a Job Object", async () => {
+  const source = await fs.readFile(path.resolve("packages/acp/src/index.ts"), "utf8");
+  const guardianStart = source.indexOf("function windowsBridgeGuardianScript");
+  const guardianEnd = source.indexOf("function bridgeGuardianScript", guardianStart);
+  const guardian = source.slice(guardianStart, guardianEnd);
+
+  assert.match(guardian, /JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE/);
+  assert.match(guardian, /AssignProcessToJobObject/);
+  assert.match(guardian, /Buffer\.from\(workspace, "utf8"\)\.toString\("base64"\)/);
+  assert.match(guardian, /Buffer\.from\(scriptPath, "utf8"\)\.toString\("base64"\)/);
+  assert.equal(guardian.includes("$args["), false);
+  assert.match(source, /windowsBridgeGuardianScript\(workspace, scriptPath\)/);
+  assert.match(source, /writeFileSync\(scriptPath, `IFS= read -r _lorenz_ready/);
+  assert.match(source, /await fs\.rm\(cleanupDir, \{ recursive: true, force: true \}\)/);
+  const bridgeStart = guardian.indexOf("$process.Start()");
+  const bridgeAssignment = guardian.indexOf("[LorenzProcessJob]::Assign($job, $process.Handle)");
+  const bridgeRelease = guardian.indexOf('$process.StandardInput.WriteLine("ready")');
+  const jobClose = guardian.indexOf("[LorenzProcessJob]::Close($job)", bridgeRelease);
+  const outputDrain = guardian.indexOf("[Threading.Tasks.Task]::WaitAll(", jobClose);
+  assert.ok(bridgeStart >= 0);
+  assert.ok(bridgeAssignment > bridgeStart);
+  assert.ok(bridgeRelease > bridgeAssignment);
+  assert.ok(jobClose > bridgeRelease);
+  assert.ok(outputDrain > jobClose);
+  assert.match(source, /if \(child\) await stopBridgeProcess\(child, !input\.workerHost\)/);
+  assert.match(source, /stopChild\(child, \{ windowsProcessTree: manageLocalTree \}\)/);
 });
 
 test("ACP executor can pass through cumulative bridge usage without double counting", async () => {
@@ -585,7 +778,7 @@ test("ACP executor ignores session updates for a different active session", asyn
   assert.equal(closeSession?.params?.sessionId, "acp-new");
 });
 
-test("ACP executor times out stalled bridge turns and emits a typed failure", async () => {
+test("ACP executor stops the bridge when a turn stalls", async () => {
   const root = await tempDir("lorenz-acp-stall");
   const fake = await writeFakeBridge(root);
   const trace = path.join(root, "trace.jsonl");
@@ -604,13 +797,18 @@ test("ACP executor times out stalled bridge turns and emits a typed failure", as
       500,
       /acp turn timed out/,
     );
+    await vi.waitFor(
+      () => {
+        assert.ok(updates.some((update) => update.type === "process_exit"));
+      },
+      { timeout: 2_000 },
+    );
   } finally {
     await session.stop();
   }
 
   assert.ok(updates.some((update) => update.type === "turn_started"));
-  const traceEvents = await readTrace(trace);
-  assert.ok(traceEvents.some((event) => event.method === "cancel"));
+  assert.ok(updates.some((update) => update.type === "process_exit"));
 });
 
 test("ACP executor resets the stall timeout on session notifications", async () => {
@@ -719,7 +917,7 @@ test("ACP executor emits matching terminal sessionUpdate kinds for cancelled and
   }
 });
 
-test("ACP executor suppresses late terminal updates after turn timeout", async () => {
+test("ACP executor suppresses terminal updates after turn timeout", async () => {
   const root = await tempDir("lorenz-acp-late-timeout");
   const fake = await writeFakeBridge(root);
   const trace = path.join(root, "trace.jsonl");
@@ -737,20 +935,23 @@ test("ACP executor suppresses late terminal updates after turn timeout", async (
       () => executor.runTurn(session, "hello", sampleIssue),
       /acp turn timed out/,
     );
-    await waitForTraceEvent(trace, "promptResolvedAfterCancel");
+    await vi.waitFor(
+      () => {
+        assert.ok(updates.some((update) => update.type === "process_exit"));
+      },
+      { timeout: 2_000 },
+    );
   } finally {
     await session.stop();
   }
 
-  const traceEvents = await readTrace(trace);
-  assert.ok(traceEvents.some((event) => event.method === "cancel"));
   assert.equal(
     updates.some((update) => update.type === "turn_completed" || update.type === "turn_cancelled"),
     false,
   );
 });
 
-test("ACP executor does not rearm stall cancellation after turn timeout", async () => {
+test("ACP executor does not rearm the stall timer after turn timeout", async () => {
   const root = await tempDir("lorenz-acp-late-activity-timeout");
   const fake = await writeFakeBridge(root);
   const trace = path.join(root, "trace.jsonl");
@@ -758,16 +959,27 @@ test("ACP executor does not rearm stall cancellation after turn timeout", async 
     stallTimeoutMs: 100,
   });
   const executor = new Executor("claude");
-  const session = await executor.startSession({ workspace: root, settings, issue: sampleIssue });
+  const updates: AgentUpdate[] = [];
+  const session = await executor.startSession({
+    workspace: root,
+    settings,
+    issue: sampleIssue,
+    onUpdate: (update) => updates.push(update),
+  });
   try {
     await assert.rejects(
       () => executor.runTurn(session, "hello", sampleIssue),
       /acp turn timed out/,
     );
-    await waitForTraceEvent(trace, "lateActivityAfterTimeout");
+    await vi.waitFor(
+      () => {
+        assert.ok(updates.some((update) => update.type === "process_exit"));
+      },
+      { timeout: 2_000 },
+    );
     await settle(150);
     const traceEvents = await readTrace(trace);
-    assert.equal(traceEvents.filter((event) => event.method === "cancel").length, 1);
+    assert.equal(traceEvents.filter((event) => event.method === "cancel").length, 0);
   } finally {
     await session.stop();
   }
@@ -1068,7 +1280,12 @@ class FakeAgent {
     if (mode === "queued-external-capability") {
       agentCapabilities._meta = { claudeCode: { promptQueueing: true } };
     } else if (mode.startsWith("queued")) {
-      agentCapabilities._meta = { "symphony/promptQueueing": true };
+      agentCapabilities._meta = {
+        "symphony/promptQueueing": true,
+        ...(mode === "queued-session-rotation"
+          ? {}
+          : { "symphony/stableSessionId": true })
+      };
     }
     return { protocolVersion: acp.PROTOCOL_VERSION, agentCapabilities };
   }
@@ -1149,6 +1366,32 @@ class FakeAgent {
       } else {
         record({ method: "queuedPromptAccepted" });
         await sleep(30);
+      }
+      return { stopReason: "end_turn" };
+    }
+    if (mode === "queued-activation-gate") {
+      const promptNumber = this.promptCount;
+      if (promptNumber === 1) {
+        record({ method: "gatedFirstPromptWaiting" });
+        while (!fs.existsSync(trace + ".release")) await sleep(5);
+        record({ method: "gatedFirstPromptReleased" });
+      } else {
+        record({ method: "gatedQueuedPromptRunning" });
+      }
+      return { stopReason: "end_turn" };
+    }
+    if (mode === "queued-session-rotation") {
+      if (this.promptCount === 1) {
+        record({ method: "rotationPromptWaiting" });
+        while (!fs.existsSync(trace + ".rotate")) await sleep(5);
+        await this.connection.sessionUpdate({
+          sessionId: "acp-rotated",
+          update: {
+            sessionUpdate: "agent_message_chunk",
+            content: { type: "text", text: "rotated session" }
+          }
+        });
+        record({ method: "rotationPromptReleased" });
       }
       return { stopReason: "end_turn" };
     }

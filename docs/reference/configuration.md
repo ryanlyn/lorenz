@@ -290,12 +290,12 @@ Executor records keyed by kind, plus shared timeout defaults. The `agents` block
 | `agents.turn_timeout_ms` | integer (positive) | `3600000` | Shared turn-timeout default applied to every record. |
 | `agents.stall_timeout_ms` | integer (>= 0) | `300000` | Shared stall-timeout default. The one timeout that may be `0`, which disables stall detection. |
 | `agents.<kind>.executor` | string | `acp` | Executor selector. The only built-in value is `acp`. Cannot be overridden per state. |
-| `agents.<kind>.turn_timeout_ms` | integer (positive) | `3600000` | Hard turn cancel. Overrides the shared default. |
-| `agents.<kind>.stall_timeout_ms` | integer (>= 0) | `300000` | Inactivity cancel, reset on every update. `<= 0` disables it. |
+| `agents.<kind>.turn_timeout_ms` | integer (positive) | `3600000` | Hard turn deadline. An ACP timeout rejects queued turns and terminates the session. Overrides the shared default. |
+| `agents.<kind>.stall_timeout_ms` | integer (>= 0) | `300000` | Inactivity deadline, reset on every update. An ACP timeout rejects queued turns and terminates the session. `<= 0` disables it. |
 | `agents.<kind>.bridge_command` | string | `codex-acp` / `claude-agent-acp` | The ACP bridge command (non-blank). Bare names resolve to vendored packages locally. |
 | `agents.<kind>.usage_accounting` | `per-turn` \| `cumulative` | `per-turn` | How per-turn token usage is accounted. Inferred when unset; built-in records set `per-turn`. |
 | `agents.<kind>.provider_config` | record | (none) | Per-session config overlay. Claude receives a `settings.json` shape; everything else a `config.toml` shape. |
-| `agents.<kind>.strict_mcp_config` | boolean | `true` | Parsed and validated but not consumed at runtime today. |
+| `agents.<kind>.strict_mcp_config` | boolean | `true` | Parsed and validated but not consumed at runtime. |
 
 The built-in `codex` record uses `bridge_command: codex-acp`. The built-in `claude` record uses `bridge_command: claude-agent-acp` and a `provider_config` of `{model: claude-opus-4-6[1m], permissions: {defaultMode: dontAsk}}`. That model pin is `DEFAULT_CLAUDE_MODEL` (currently `claude-opus-4-6[1m]`; the authoritative value lives in `packages/config/src/defaults.ts`). The `bridge_command` is a single shell command string split on whitespace; there is no `bridge_args` key. See [codex](../agents/codex.md) and [claude](../agents/claude.md).
 

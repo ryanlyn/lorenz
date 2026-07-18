@@ -1,4 +1,8 @@
-import type { ChildProcessWithoutNullStreams } from "node:child_process";
+import { execFile, type ChildProcessWithoutNullStreams } from "node:child_process";
+
+export interface StopChildOptions {
+  windowsProcessTree?: boolean | undefined;
+}
 
 export async function withTimeout<T>(
   promise: Promise<T>,
@@ -18,19 +22,63 @@ export async function withTimeout<T>(
   }
 }
 
-export async function stopChild(child: ChildProcessWithoutNullStreams): Promise<void> {
+export async function stopChild(
+  child: ChildProcessWithoutNullStreams,
+  options: StopChildOptions = {},
+): Promise<void> {
+  if (options.windowsProcessTree === true && process.platform === "win32") {
+    await stopWindowsProcessTree(child);
+    return;
+  }
+
+  const sendSignal = (signal: NodeJS.Signals): void => {
+    child.kill(signal);
+  };
+
   if (child.exitCode !== null || child.signalCode !== null) return;
 
   await new Promise<void>((resolve) => {
-    let closed = false;
-    const timer = setTimeout(() => {
-      if (!closed) child.kill("SIGKILL");
+    let exited = false;
+    const forceTimer = setTimeout(() => {
+      if (!exited) sendSignal("SIGKILL");
     }, 1_000);
+    const stopTimer = setTimeout(resolve, 2_000);
+    child.once("exit", () => {
+      exited = true;
+      clearTimeout(forceTimer);
+    });
     child.once("close", () => {
-      closed = true;
-      clearTimeout(timer);
+      clearTimeout(forceTimer);
+      clearTimeout(stopTimer);
       resolve();
     });
-    child.kill("SIGTERM");
+    sendSignal("SIGTERM");
+  });
+}
+
+async function stopWindowsProcessTree(child: ChildProcessWithoutNullStreams): Promise<void> {
+  const pid = child.pid;
+  if (pid === undefined || child.exitCode !== null || child.signalCode !== null) return;
+  try {
+    await runWindowsCommand("taskkill", ["/PID", String(pid), "/T", "/F"]);
+  } catch (error) {
+    if (child.exitCode !== null || child.signalCode !== null) return;
+    throw error;
+  }
+}
+
+async function runWindowsCommand(command: string, args: string[]): Promise<void> {
+  return new Promise((resolve, reject) => {
+    execFile(command, args, { windowsHide: true }, (error, _stdout, stderr) => {
+      if (!error) {
+        resolve();
+        return;
+      }
+      reject(
+        new Error(`${command} failed: ${stderr.trim() || error.message}`, {
+          cause: error,
+        }),
+      );
+    });
   });
 }

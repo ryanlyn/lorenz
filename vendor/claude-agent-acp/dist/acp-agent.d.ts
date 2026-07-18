@@ -46,9 +46,11 @@ type Session = {
     modelInfos: ModelInfo[];
     configOptions: SessionConfigOption[];
     promptRunning: boolean;
+    recovering: boolean;
     pendingMessages: Map<string, {
         resolve: (cancelled: boolean) => void;
         order: number;
+        inputSubmitted: boolean;
     }>;
     nextPendingOrder: number;
     abortController: AbortController;
