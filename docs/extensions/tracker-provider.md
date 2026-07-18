@@ -49,6 +49,8 @@ interface RuntimeTrackerClient {
   fetchCandidateIssues(): Promise<Issue[]>;
   fetchIssuesByIds(ids: string[]): Promise<Issue[]>;
   fetchIssuesByStates?(states: string[]): Promise<Issue[]>;
+  watch?(onChange: (change?: TrackerChange) => void): TrackerChangeStream | null;
+  fetchIssueEvents?(issueId: string, sinceTs: string): Promise<TrackerIssueEvent[]>;
 }
 ```
 
@@ -60,6 +62,12 @@ interface RuntimeTrackerClient {
 - `fetchIssuesByStates(states)` is optional. It backs best-effort flows, notably terminal-state
   workspace cleanup at startup. A backend that cannot answer state queries cheaply omits it, and the
   caller skips those flows.
+- `watch(onChange)` is optional. It opens a live change stream that nudges an immediate poll.
+  A change can carry human-authored issue events, which the runtime forwards to active runs without
+  waiting for that poll.
+- `fetchIssueEvents(issueId, sinceTs)` is an optional recovery feed for events missed across a
+  change-stream gap. Live events are delivered first; the agent runner uses the numeric timestamp
+  watermark to avoid replaying an event.
 
 Each client returns the domain `Issue` shape, not the backend's raw payload. `Issue` requires
 `stateType: IssueStateType` (one of `backlog`, `unstarted`, `started`, `completed`, `canceled`,

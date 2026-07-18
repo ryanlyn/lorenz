@@ -2,7 +2,7 @@ import { settingsForIssueState } from "@lorenz/config";
 import { issueIsActive } from "@lorenz/dispatch";
 import type { AgentMcpEndpointLease } from "@lorenz/mcp";
 import { ensembleSize } from "@lorenz/issue";
-import { buildPrompt, continuationPrompt } from "@lorenz/prompt";
+import { buildPrompt, continuationPrompt, issueEventsPrompt } from "@lorenz/prompt";
 import {
   errorMessage,
   type AgentExecutor,
@@ -11,6 +11,7 @@ import {
   type HookExecutionMessage,
   type Issue,
   type Settings,
+  type TrackerIssueEvent,
   type WorkflowDefinition,
 } from "@lorenz/domain";
 
@@ -69,6 +70,12 @@ export interface RunResult {
   finalIssue?: Issue | undefined;
 }
 
+type TurnOutcome = { updates: AgentUpdate[] } | { error: unknown };
+
+interface QueuedTurn {
+  outcome: Promise<TurnOutcome>;
+}
+
 export interface RunAgentAttemptInput {
   issue: Issue;
   workflow: WorkflowDefinition;
@@ -95,6 +102,10 @@ export interface RunAgentAttemptInput {
   forceSlotSuffix?: boolean;
   onUpdate?: (update: AgentUpdate) => void;
   fetchIssue?: (issue: Issue) => Promise<Issue>;
+  /** Subscribe to live human-authored events for this run's issue. */
+  subscribeIssueEvents?: (listener: (events: TrackerIssueEvent[]) => void) => () => void;
+  /** Recover issue events missed by the live subscription. */
+  fetchIssueEvents?: (sinceTs: string) => Promise<TrackerIssueEvent[]>;
   abortSignal?: AbortSignal | undefined;
   adapters?: Partial<RunAgentAttemptAdapters> | undefined;
 }
@@ -141,6 +152,8 @@ class RunController {
     let sawToolCallThisTurn: boolean;
 
     let turnCount = 0;
+    let submittedTurnCount = 0;
+    let unsubscribeIssueEvents: (() => void) | undefined;
     let runError: unknown;
     let stopError: unknown;
     try {
@@ -198,28 +211,95 @@ class RunController {
       };
       session = await executor.startSession(startSessionInput);
 
+      let steeringWatermarkTs = "0";
+      let steeringReady = false;
+      let bufferedIssueEvents: TrackerIssueEvent[] = [];
+      const queuedTurns: QueuedTurn[] = [];
+      const reportSteeringFailure = (stage: string, error: unknown): void => {
+        input.onUpdate?.({
+          type: "stderr",
+          workspacePath: workspace,
+          message: `Ignoring steering ${stage} failure: ${errorMessage(error)}`,
+        });
+      };
+      const queueIssueEvents = (events: TrackerIssueEvent[]): void => {
+        if (!steeringReady) {
+          bufferedIssueEvents.push(...events);
+          return;
+        }
+        if (!session?.queueTurn || submittedTurnCount >= runtime.agent.maxTurns) return;
+        const fresh = steeringEventsAfter(events, steeringWatermarkTs);
+        if (fresh.length === 0) return;
+        const prompt = issueEventsPrompt(fresh);
+        try {
+          const outcome = session.queueTurn(prompt).then<TurnOutcome, TurnOutcome>(
+            (updates) => ({ updates }),
+            (error: unknown) => ({ error }),
+          );
+          queuedTurns.push({ outcome });
+          submittedTurnCount += 1;
+          steeringWatermarkTs = maxSteeringTs(fresh, steeringWatermarkTs);
+        } catch (error) {
+          reportSteeringFailure("queue", error);
+        }
+      };
+      const initializeSteering = async (): Promise<void> => {
+        if (input.fetchIssueEvents) {
+          try {
+            steeringWatermarkTs = maxSteeringTs(
+              await input.fetchIssueEvents("0"),
+              steeringWatermarkTs,
+            );
+          } catch (error) {
+            reportSteeringFailure("watermark", error);
+          }
+        }
+        steeringReady = true;
+        const buffered = bufferedIssueEvents;
+        bufferedIssueEvents = [];
+        queueIssueEvents(buffered);
+      };
+      const recoverSteering = async (): Promise<void> => {
+        if (!input.fetchIssueEvents || submittedTurnCount >= runtime.agent.maxTurns) return;
+        try {
+          queueIssueEvents(await input.fetchIssueEvents(steeringWatermarkTs));
+        } catch (error) {
+          reportSteeringFailure("recovery", error);
+        }
+      };
+
+      if (session.queueTurn && input.subscribeIssueEvents) {
+        unsubscribeIssueEvents = input.subscribeIssueEvents(queueIssueEvents);
+      }
+
       while (turnCount < runtime.agent.maxTurns) {
         throwIfAborted(input.abortSignal);
-        const prompt =
-          turnCount === 0
-            ? await buildPrompt(
-                input.workflow.parsedPromptTemplate ?? input.workflow.promptTemplate,
-                issue,
-                {
-                  attempt: input.attempt ?? null,
-                  slotIndex,
-                  ensembleSize: size,
-                },
-              )
-            : continuationPrompt(turnCount + 1, runtime.agent.maxTurns);
+        const queuedTurn = queuedTurns.shift();
+        if (!queuedTurn && submittedTurnCount >= runtime.agent.maxTurns) break;
         sawToolCallThisTurn = false;
-        const turnUpdates = await runTurnWithAbort(
-          executor,
-          session,
-          prompt,
-          issue,
-          input.abortSignal,
-        );
+        let turnUpdates: AgentUpdate[];
+        if (queuedTurn) {
+          const outcome = await queuedTurnWithAbort(queuedTurn.outcome, session, input.abortSignal);
+          if ("error" in outcome) throw outcome.error;
+          turnUpdates = outcome.updates;
+        } else {
+          const prompt =
+            turnCount === 0
+              ? await buildPrompt(
+                  input.workflow.parsedPromptTemplate ?? input.workflow.promptTemplate,
+                  issue,
+                  {
+                    attempt: input.attempt ?? null,
+                    slotIndex,
+                    ensembleSize: size,
+                  },
+                )
+              : continuationPrompt(turnCount + 1, runtime.agent.maxTurns);
+          const turnPromise = runTurnWithAbort(executor, session, prompt, issue, input.abortSignal);
+          submittedTurnCount += 1;
+          if (turnCount === 0) await initializeSteering();
+          turnUpdates = await turnPromise;
+        }
         turnCount += 1;
 
         // Known seam leak: turn-continuation is decided from ACP event vocabulary here
@@ -230,6 +310,8 @@ class RunController {
         // AgentExecutor.runTurn), so an early tool call could be missing from it.
         if (
           turnCount > 1 &&
+          !queuedTurn &&
+          queuedTurns.length === 0 &&
           runtime.agents[runtime.agent.kind]?.executor === "acp" &&
           !sawToolCallThisTurn &&
           !turnUpdates.some(isToolCallNotification)
@@ -237,7 +319,10 @@ class RunController {
           break;
         }
 
-        if (!input.fetchIssue) break;
+        if (!input.fetchIssue) {
+          if (queuedTurns.length > 0) continue;
+          break;
+        }
         issue = await input.fetchIssue(issue);
         if (!issueIsActive(issue, settings)) break;
         const refreshed = settingsForIssueState(settings, issue.state);
@@ -248,10 +333,12 @@ class RunController {
           break;
         }
         runtime = refreshed;
+        await recoverSteering();
       }
     } catch (error) {
       runError = error;
     } finally {
+      unsubscribeIssueEvents?.();
       if (session) {
         try {
           await session.stop();
@@ -342,6 +429,48 @@ async function runTurnWithAbort(
   } finally {
     if (onAbort) abortSignal?.removeEventListener("abort", onAbort);
   }
+}
+
+async function queuedTurnWithAbort(
+  outcome: Promise<TurnOutcome>,
+  session: AgentSession,
+  abortSignal: AbortSignal | undefined,
+): Promise<TurnOutcome> {
+  if (!abortSignal) return outcome;
+  throwIfAborted(abortSignal);
+  let onAbort: (() => void) | null = null;
+  const abortPromise = new Promise<TurnOutcome>((_resolve, reject) => {
+    onAbort = () => {
+      reject(new Error("agent_run_aborted"));
+      void session.stop().catch((err) => {
+        process.stderr.write(`session.stop failed: ${err}\n`);
+      });
+    };
+    abortSignal.addEventListener("abort", onAbort, { once: true });
+  });
+  try {
+    return await Promise.race([outcome, abortPromise]);
+  } finally {
+    if (onAbort) abortSignal.removeEventListener("abort", onAbort);
+  }
+}
+
+function steeringEventsAfter(
+  events: TrackerIssueEvent[],
+  watermarkTs: string,
+): TrackerIssueEvent[] {
+  const floor = Number.parseFloat(watermarkTs);
+  return events
+    .filter((event) => Number.parseFloat(event.ts) > floor)
+    .sort((left, right) => Number.parseFloat(left.ts) - Number.parseFloat(right.ts));
+}
+
+function maxSteeringTs(events: TrackerIssueEvent[], current: string): string {
+  let max = current;
+  for (const event of events) {
+    if (Number.parseFloat(event.ts) > Number.parseFloat(max)) max = event.ts;
+  }
+  return max;
 }
 
 /** True for a streamed ACP session notification describing a tool call. */

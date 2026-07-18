@@ -32,6 +32,8 @@ import type {
   McpEndpointManager,
   RunResult,
   Settings,
+  TrackerChange,
+  TrackerIssueEvent,
   LorenzRuntimeOptions,
   WorkflowDefinition,
 } from "@lorenz/cli";
@@ -2088,6 +2090,51 @@ test("a tracker push nudges an immediate poll between intervals", async () => {
     assert.ok(snapshot.recentEvents.some((event) => event.type === "tracker_watch_started"));
     assert.ok(snapshot.recentEvents.some((event) => event.type === "tracker_push"));
   } finally {
+    runtime.stop();
+  }
+});
+
+test("a tracker push delivers issue events to every active run for that issue", async () => {
+  const issue = issueFixture("issue-live-steering", "MT-LIVE-STEERING");
+  let captured: ((change?: TrackerChange) => void) | null = null;
+  const delivered: TrackerIssueEvent[] = [];
+  let finishRun: (() => void) | undefined;
+  const runFinished = new Promise<void>((resolve) => {
+    finishRun = resolve;
+  });
+  const runtime = new LorenzRuntime(
+    runtimeOptions({
+      workflow: pushWorkflowFixture(),
+      client: {
+        fetchCandidateIssues: async () => [issue],
+        fetchIssuesByIds: async () => [issue],
+        watch: (onChange) => {
+          captured = onChange;
+          return { close: () => {} };
+        },
+      },
+      runner: async (input) => {
+        const unsubscribe = input.subscribeIssueEvents?.((events) => delivered.push(...events));
+        await runFinished;
+        unsubscribe?.();
+        return { workspace: "/tmp/lorenz/MT-LIVE-STEERING", finalIssue: issue };
+      },
+    }),
+  );
+
+  void runtime.start({ once: false });
+  try {
+    await waitFor(() => captured !== null && runtime.snapshot().running.length === 1, 1_000);
+    captured!({
+      issueEvents: {
+        issueId: issue.id,
+        events: [{ ts: "11.0", author: "ryan", text: "steer left" }],
+      },
+    });
+    await waitFor(() => delivered.length === 1, 1_000);
+    assert.deepEqual(delivered, [{ ts: "11.0", author: "ryan", text: "steer left" }]);
+  } finally {
+    finishRun?.();
     runtime.stop();
   }
 });

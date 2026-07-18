@@ -35,8 +35,10 @@ import type {
   HookExecutionMessage,
   Issue,
   RunningEntry,
+  TrackerChange,
   RuntimeTrackerClient,
   TrackerChangeStream,
+  TrackerIssueEvent,
   WorkflowDefinition,
 } from "@lorenz/domain";
 import type { WorkerOutcome, WorkerPool } from "@lorenz/worker-pool";
@@ -263,6 +265,8 @@ function throwRuntimeError(error: Error): never {
 
 class ActiveRunHandle {
   readonly controller = new AbortController();
+  private readonly issueEventListeners = new Set<(events: TrackerIssueEvent[]) => void>();
+  private pendingIssueEvents: TrackerIssueEvent[] = [];
   /**
    * Set when the run is force-finished externally (e.g. a stall reconciliation aborts it). The
    * worker pool reads this so a stall-finished run poisons its worker even though the runner surfaces a
@@ -289,6 +293,25 @@ class ActiveRunHandle {
 
   abort(): void {
     this.controller.abort();
+  }
+
+  subscribeIssueEvents(listener: (events: TrackerIssueEvent[]) => void): () => void {
+    this.issueEventListeners.add(listener);
+    if (this.pendingIssueEvents.length > 0) {
+      const pending = this.pendingIssueEvents;
+      this.pendingIssueEvents = [];
+      listener(pending);
+    }
+    return () => this.issueEventListeners.delete(listener);
+  }
+
+  publishIssueEvents(events: TrackerIssueEvent[]): void {
+    if (!this.isActive || events.length === 0) return;
+    if (this.issueEventListeners.size === 0) {
+      this.pendingIssueEvents.push(...events);
+      return;
+    }
+    for (const listener of this.issueEventListeners) listener(events);
   }
 
   finishExternally(
@@ -558,7 +581,7 @@ export class LorenzRuntime {
     if (!this.client.watch || this.changeStream || this.changeStreamOpening) return;
     this.changeStreamOpening = true;
     try {
-      const stream = await this.client.watch(() => this.nudgePollForTrackerChange());
+      const stream = await this.client.watch((change) => this.nudgePollForTrackerChange(change));
       // A null stream means the tracker has no push for this config (e.g. credential unset); stay
       // on interval polling silently rather than logging it as a failure.
       if (!stream) return;
@@ -592,9 +615,17 @@ export class LorenzRuntime {
    * poll's fetch is not lost, and a burst of pushes collapses into a single follow-up. The
    * interval poll remains the safety net, so a dropped push is at worst recovered next interval.
    */
-  private nudgePollForTrackerChange(): void {
+  private nudgePollForTrackerChange(change?: TrackerChange): void {
     if (this.stopped) return;
     this.addEvent("tracker_push", this.workflow.settings.tracker.kind ?? "tracker");
+    const issueEvents = change?.issueEvents;
+    if (issueEvents) {
+      for (const handle of this.activeRuns.values()) {
+        if (handle.issueId === issueEvents.issueId) {
+          handle.publishIssueEvents(issueEvents.events);
+        }
+      }
+    }
     if (this.pollInProgress) {
       this.queuePendingPoll({}, true);
       return;
@@ -1038,6 +1069,13 @@ export class LorenzRuntime {
           const refreshed = await this.client.fetchIssuesByIds([current.id]);
           return refreshed[0] ?? current;
         },
+        subscribeIssueEvents: (listener) => handle.subscribeIssueEvents(listener),
+        ...(this.client.fetchIssueEvents
+          ? {
+              fetchIssueEvents: async (sinceTs: string) =>
+                (await this.client.fetchIssueEvents?.(issue.id, sinceTs)) ?? [],
+            }
+          : {}),
         abortSignal: handle.signal,
       });
       await updateQueue;

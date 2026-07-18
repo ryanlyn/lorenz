@@ -6,6 +6,7 @@ import type {
   Issue,
   SessionNotification,
   Settings,
+  TrackerIssueEvent,
 } from "@lorenz/domain";
 import { defaultSettings } from "@lorenz/config";
 import { assert } from "@lorenz/test-utils";
@@ -77,6 +78,73 @@ function fakeAdapters(overrides: Partial<RunAgentAttemptAdapters> = {}): RunAgen
     ...overrides,
   };
 }
+
+test("live issue events are submitted immediately and consumed as the next queued turn", async () => {
+  const settings = fakeSettings({ agent: { ...defaultSettings().agent, maxTurns: 2 } });
+  const normalPrompts: string[] = [];
+  const queuedPrompts: string[] = [];
+  let issueEventListener: ((events: TrackerIssueEvent[]) => void) | undefined;
+  let subscriptionClosed = false;
+  let releaseFirstTurn: (() => void) | undefined;
+  let markFirstTurnStarted: (() => void) | undefined;
+  const firstTurnStarted = new Promise<void>((resolve) => {
+    markFirstTurnStarted = resolve;
+  });
+  const firstTurnRelease = new Promise<void>((resolve) => {
+    releaseFirstTurn = resolve;
+  });
+  const session = fakeSession({
+    queueTurn: async (prompt) => {
+      queuedPrompts.push(prompt);
+      return [{ type: "turn_completed" }];
+    },
+  });
+  const executor: AgentExecutor = {
+    kind: "codex",
+    async startSession() {
+      return session;
+    },
+    async runTurn(_session, prompt) {
+      normalPrompts.push(prompt);
+      markFirstTurnStarted?.();
+      await firstTurnRelease;
+      return [{ type: "turn_completed" }];
+    },
+  };
+
+  const attempt = runAgentAttempt({
+    issue: fakeIssue(),
+    workflow: { path: "/workflow.md", config: {}, promptTemplate: "Fix it", settings },
+    settings,
+    fetchIssue: async (issue) => issue,
+    fetchIssueEvents: async (sinceTs) =>
+      sinceTs === "0" ? [{ ts: "10.0", author: "ryan", text: "original request" }] : [],
+    subscribeIssueEvents: (listener) => {
+      issueEventListener = listener;
+      return () => {
+        subscriptionClosed = true;
+      };
+    },
+    adapters: fakeAdapters({ executorFactory: () => executor }),
+  });
+
+  await firstTurnStarted;
+  assert.ok(issueEventListener);
+  issueEventListener([{ ts: "11.0", author: "ryan", text: "steer left" }]);
+  await vi.waitFor(() => assert.equal(queuedPrompts.length, 1));
+  assert.equal(releaseFirstTurn === undefined, false);
+  assert.equal(normalPrompts.length, 1);
+  releaseFirstTurn?.();
+
+  const result = await attempt;
+  assert.equal(result.turnCount, 2);
+  assert.equal(normalPrompts.length, 1);
+  assert.match(queuedPrompts[0]!, /<issue_messages>/);
+  assert.match(queuedPrompts[0]!, /steer left/);
+  assert.notMatch(queuedPrompts[0]!, /original request/);
+  assert.notMatch(queuedPrompts[0]!, /Continuation guidance/);
+  assert.equal(subscriptionClosed, true);
+});
 
 function fakeSettingsWithTimeouts(
   opts: {

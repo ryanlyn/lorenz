@@ -716,6 +716,24 @@ export interface WorkflowDefinition {
   settings: Settings;
 }
 
+/** One human-authored tracker event, such as a reply on an issue thread. */
+export interface TrackerIssueEvent {
+  /** Tracker-native numeric ordering key encoded as a string. */
+  ts: string;
+  /** Author id or display name when known. */
+  author?: string | undefined;
+  text: string;
+}
+
+/** Structured data attached to a tracker change notification. */
+export interface TrackerChange {
+  /** Human-authored events that can steer every active run for this issue. */
+  issueEvents?: {
+    issueId: string;
+    events: TrackerIssueEvent[];
+  };
+}
+
 /**
  * Minimum interface the runtime needs from any issue tracker backend. Lets the in-process
  * memory tracker stand in for the real Linear-backed client without further coupling.
@@ -743,9 +761,9 @@ export interface RuntimeTrackerClient {
   fetchIssuesByStates?(states: string[]): Promise<Issue[]>;
   /**
    * Optional push capability: open a live change stream that invokes `onChange` whenever the
-   * backend signals new or updated work, so the runtime can re-poll IMMEDIATELY instead of
-   * waiting out `polling.intervalMs`. Backends that can only be pulled omit this and the runtime
-   * relies on interval polling alone.
+   * backend signals new or updated work. A tracker can attach issue events for immediate delivery
+   * to active agent sessions. Backends that can only be pulled omit this and the runtime relies on
+   * interval polling alone.
    *
    * The interval poll always stays active as a safety net, so `onChange` need not be exhaustive
    * or reliable: a missed signal is at worst recovered on the next interval, and the runtime
@@ -754,7 +772,15 @@ export interface RuntimeTrackerClient {
    * (e.g. the credential that enables it is unset) - the runtime stays on interval polling without
    * treating it as an error.
    */
-  watch?(onChange: () => void): TrackerChangeStream | null | Promise<TrackerChangeStream | null>;
+  watch?(
+    onChange: (change?: TrackerChange) => void,
+  ): TrackerChangeStream | null | Promise<TrackerChangeStream | null>;
+  /**
+   * Optional recovery feed for human-authored issue events newer than `sinceTs`, returned in
+   * ascending order. `"0"` means from the beginning. Live push is the primary delivery path;
+   * this pull hook recovers events missed across connection gaps.
+   */
+  fetchIssueEvents?(issueId: string, sinceTs: string): Promise<TrackerIssueEvent[]>;
 }
 
 /**
