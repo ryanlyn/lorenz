@@ -515,6 +515,12 @@ test("bridge guardian fails closed and completes process-group cleanup", async (
   assert.match(script, /`cd \$\{shellEscape\(workspace\)\} \|\| exit 1`/);
   assert.match(script, /`bash -c \$\{shellEscape\(guardedBridge\)\} <&0 &`/);
   assert.match(script, /trap '' HUP INT TERM; while :; do sleep 3600; done/);
+  const trapInstall = script.indexOf("trap cleanup HUP INT TERM EXIT");
+  const bridgeLaunch = script.indexOf("bash -c ${shellEscape(guardedBridge)}");
+  assert.ok(trapInstall >= 0);
+  assert.ok(bridgeLaunch > trapInstall);
+  assert.match(script, /if \[ -z "\$bridge_pid" \]; then/);
+  assert.match(script, /if \[ "\$stop_requested" -eq 1 \]; then/);
   assert.equal(script.includes("`${bridge} <&0 &`"), false);
   assert.match(script, /' {2}wait "\$force_pid" 2>\/dev\/null \|\| true'/);
   assert.equal(script.includes(`'  kill "$force_pid" 2>/dev/null || true'`), false);
