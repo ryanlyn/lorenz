@@ -106,6 +106,7 @@ async function setupLiveWorkers(): Promise<LiveWorkerSetupResult> {
   const sshRoot = path.join(root, "ssh");
   const keyPath = path.join(sshRoot, "id_ed25519");
   const configPath = path.join(sshRoot, "config");
+  const knownHostsPath = path.join(sshRoot, "known_hosts");
   const ports = [await reserveTcpPort(), await reserveTcpPort()];
   const hosts = ports.map((port) => `localhost:${port}`);
   const dockerSupportDir = path.resolve(import.meta.dirname, "support", "live_e2e_docker");
@@ -132,8 +133,7 @@ async function setupLiveWorkers(): Promise<LiveWorkerSetupResult> {
       "  User root",
       `  IdentityFile ${keyPath}`,
       "  IdentitiesOnly yes",
-      "  StrictHostKeyChecking no",
-      "  UserKnownHostsFile /dev/null",
+      `  UserKnownHostsFile ${knownHostsPath}`,
       "  LogLevel ERROR",
       "",
     ].join("\n"),
@@ -141,8 +141,8 @@ async function setupLiveWorkers(): Promise<LiveWorkerSetupResult> {
   vi.stubEnv("LORENZ_SSH_CONFIG", configPath);
 
   const cleanup = async () => {
-    vi.unstubAllEnvs();
     await cleanupRemoteRoot(hosts, `~/.${runId}`);
+    vi.unstubAllEnvs();
     await execFileAsync(
       "docker",
       ["compose", "-f", "docker-compose.yml", "-p", projectName, "down", "-v", "--remove-orphans"],
@@ -164,6 +164,7 @@ async function setupLiveWorkers(): Promise<LiveWorkerSetupResult> {
         maxBuffer: 20 * 1024 * 1024,
       },
     );
+    await writeScannedKnownHosts(ports, knownHostsPath);
     await waitForSshHosts(hosts);
   } catch (error) {
     await cleanup();
@@ -189,6 +190,7 @@ async function setupNativeSshdWorker(runId: string): Promise<LiveWorkerSetup> {
   const hostKeyPath = path.join(root, "ssh_host_ed25519_key");
   const configPath = path.join(root, "sshd_config");
   const clientConfigPath = path.join(root, "ssh_config");
+  const knownHostsPath = path.join(root, "known_hosts");
   const authorizedKeysPath = path.join(root, "authorized_keys");
   const logPath = path.join(root, "sshd.log");
   const pidPath = path.join(root, "sshd.pid");
@@ -198,10 +200,14 @@ async function setupNativeSshdWorker(runId: string): Promise<LiveWorkerSetup> {
 
   await execFileAsync("ssh-keygen", ["-q", "-t", "ed25519", "-N", "", "-f", keyPath]);
   await execFileAsync("ssh-keygen", ["-q", "-t", "ed25519", "-N", "", "-f", hostKeyPath]);
+  const { stdout: hostPublicKey } = await execFileAsync("ssh-keygen", ["-y", "-f", hostKeyPath]);
   await fs.copyFile(`${keyPath}.pub`, authorizedKeysPath);
   await fs.chmod(root, 0o700);
   await fs.chmod(keyPath, 0o600);
   await fs.chmod(authorizedKeysPath, 0o600);
+  await fs.writeFile(knownHostsPath, `[localhost]:${port} ${hostPublicKey.trim()}\n`, {
+    mode: 0o600,
+  });
   await fs.writeFile(
     configPath,
     [
@@ -230,8 +236,7 @@ async function setupNativeSshdWorker(runId: string): Promise<LiveWorkerSetup> {
       `  User ${user}`,
       `  IdentityFile ${keyPath}`,
       "  IdentitiesOnly yes",
-      "  StrictHostKeyChecking no",
-      "  UserKnownHostsFile /dev/null",
+      `  UserKnownHostsFile ${knownHostsPath}`,
       "  LogLevel ERROR",
       "  SendEnv CLAUDE_CODE_OAUTH_TOKEN",
       "",
@@ -243,8 +248,8 @@ async function setupNativeSshdWorker(runId: string): Promise<LiveWorkerSetup> {
   vi.stubEnv("LORENZ_SSH_CONFIG", clientConfigPath);
 
   const cleanup = async () => {
-    vi.unstubAllEnvs();
     await cleanupRemoteRoot([host], `~/.${runId}`);
+    vi.unstubAllEnvs();
     const pid = await fs.readFile(pidPath, "utf8").catch(() => "");
     if (pid.trim()) {
       try {
@@ -452,6 +457,30 @@ async function waitForSshHosts(hosts: string[]): Promise<void> {
       { timeout: 60_000, interval: 1_000 },
     );
   }
+}
+
+async function writeScannedKnownHosts(ports: number[], knownHostsPath: string): Promise<void> {
+  const entries = await Promise.all(
+    ports.map(async (port) => {
+      let hostKeys = "";
+      await vi.waitFor(
+        async () => {
+          const { stdout } = await execFileAsync("ssh-keyscan", [
+            "-T",
+            "5",
+            "-p",
+            String(port),
+            "localhost",
+          ]);
+          hostKeys = stdout.trim();
+          if (hostKeys === "") throw new Error(`SSH host key for localhost:${port} not ready`);
+        },
+        { timeout: 60_000, interval: 1_000 },
+      );
+      return hostKeys;
+    }),
+  );
+  await fs.writeFile(knownHostsPath, `${entries.join("\n")}\n`, { mode: 0o600 });
 }
 
 async function cleanupRemoteRoot(hosts: string[], remoteRoot: string): Promise<void> {

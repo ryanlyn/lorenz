@@ -1,4 +1,4 @@
-import { startReverseTunnel, waitForRemoteTcpPort } from "@lorenz/ssh";
+import { readReverseTunnelStderrTail, startReverseTunnel, waitForRemoteTcpPort } from "@lorenz/ssh";
 
 export interface RemoteMcpTunnelLease {
   leaseId: string;
@@ -322,9 +322,12 @@ export class WorkerHostPool {
   }
 
   private remoteMcpTunnelSetupError(entry: RemoteMcpTunnelEntry, cause: unknown): Error {
-    return new Error(`remote_mcp_tunnel_setup_failed: ${entry.workerHost} ${entry.remotePort}`, {
-      cause,
-    });
+    const stderrTail = readReverseTunnelStderrTail(entry.process).trim();
+    const stderrDetails = stderrTail === "" ? "" : ` stderr_tail=${JSON.stringify(stderrTail)}`;
+    return new Error(
+      `remote_mcp_tunnel_setup_failed: ${entry.workerHost} ${entry.remotePort}${stderrDetails}`,
+      { cause },
+    );
   }
 
   private recycleRemoteMcpPort(remotePort: number): void {

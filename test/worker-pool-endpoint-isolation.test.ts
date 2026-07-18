@@ -66,6 +66,7 @@ import type {
 // `waitForRemoteTcpPort` resolves immediately so the suite exercises the lease
 // lifecycle, not the readiness probe.
 vi.mock("@lorenz/ssh", () => ({
+  readReverseTunnelStderrTail: vi.fn(() => ""),
   startReverseTunnel: vi.fn(),
   waitForRemoteTcpPort: vi.fn(async () => {}),
 }));

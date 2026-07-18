@@ -15,6 +15,7 @@ import { resolveRunClaim } from "../src/auth.js";
 // Avoid spawning a real `ssh -N` reverse tunnel; the per-run tunnel allocation
 // logic in WorkerHostPool is exercised against a fake child process.
 vi.mock("@lorenz/ssh", () => ({
+  readReverseTunnelStderrTail: vi.fn(() => ""),
   startReverseTunnel: vi.fn(),
   // The pool awaits remote-port readiness before returning a lease; the fake
   // resolves immediately so these tests exercise the lease lifecycle, not the

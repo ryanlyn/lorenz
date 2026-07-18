@@ -206,6 +206,31 @@ describe("INVARIANT: When shellEscape is applied, the output SHALL be reversible
     );
   });
 
+  test("sshArgs always enforces the strict connection options", () => {
+    const requiredOptions = [
+      "BatchMode=yes",
+      "NumberOfPasswordPrompts=0",
+      "PasswordAuthentication=no",
+      "KbdInteractiveAuthentication=no",
+      "StrictHostKeyChecking=yes",
+      "UpdateHostKeys=no",
+      "ConnectionAttempts=1",
+      "ConnectTimeout=10",
+    ];
+
+    fc.assert(
+      fc.property(sshTargetAny, shellDangerousString, (host, command) => {
+        const args = sshArgs(host, command);
+        for (const option of requiredOptions) {
+          const optionIndex = args.indexOf(option);
+          assert.ok(optionIndex > 0);
+          assert.equal(args[optionIndex - 1], "-o");
+        }
+      }),
+      { numRuns: 500 },
+    );
+  });
+
   test("negative: shellEscape output never contains unbalanced quotes", () => {
     fc.assert(
       fc.property(shellDangerousString, (input) => {

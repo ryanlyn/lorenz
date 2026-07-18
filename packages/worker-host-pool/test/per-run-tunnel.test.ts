@@ -8,6 +8,7 @@ import { assert } from "@lorenz/test-utils";
 import { WorkerHostPool } from "@lorenz/worker-host-pool";
 
 vi.mock("@lorenz/ssh", () => ({
+  readReverseTunnelStderrTail: vi.fn(() => ""),
   startReverseTunnel: vi.fn(),
   // The pool awaits remote-port readiness before returning a lease; the fake
   // resolves immediately so these tests exercise allocation and lifecycle,

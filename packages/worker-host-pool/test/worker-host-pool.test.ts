@@ -2,16 +2,18 @@ import EventEmitter from "node:events";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 
 import { beforeEach, test, vi } from "vitest";
-import { startReverseTunnel, waitForRemoteTcpPort } from "@lorenz/ssh";
+import { readReverseTunnelStderrTail, startReverseTunnel, waitForRemoteTcpPort } from "@lorenz/ssh";
 import { assert } from "@lorenz/test-utils";
 
 import { WorkerHostPool } from "@lorenz/worker-host-pool";
 
 vi.mock("@lorenz/ssh", () => ({
+  readReverseTunnelStderrTail: vi.fn(() => ""),
   startReverseTunnel: vi.fn(),
   waitForRemoteTcpPort: vi.fn(),
 }));
 
+const mockReadReverseTunnelStderrTail = vi.mocked(readReverseTunnelStderrTail);
 const mockStartReverseTunnel = vi.mocked(startReverseTunnel);
 const mockWaitForRemoteTcpPort = vi.mocked(waitForRemoteTcpPort);
 
@@ -23,6 +25,8 @@ function makeFakeProcess(): ChildProcessWithoutNullStreams {
 }
 
 beforeEach(() => {
+  mockReadReverseTunnelStderrTail.mockReset();
+  mockReadReverseTunnelStderrTail.mockReturnValue("");
   mockStartReverseTunnel.mockReset();
   mockWaitForRemoteTcpPort.mockReset();
   mockWaitForRemoteTcpPort.mockResolvedValue(undefined);
@@ -78,13 +82,17 @@ test("acquireRemoteMcpTunnel creates a new MCP tunnel lease for a session", asyn
 test("acquireRemoteMcpTunnel rejects when reverse tunnel closes before readiness", async () => {
   const fakeProcess = makeFakeProcess() as ChildProcessWithoutNullStreams & EventEmitter;
   mockStartReverseTunnel.mockReturnValue(fakeProcess);
+  mockReadReverseTunnelStderrTail.mockReturnValue("Host key verification failed.");
   mockWaitForRemoteTcpPort.mockImplementation(() => new Promise(() => {}));
   const pool = new WorkerHostPool();
 
   const acquisition = pool.acquireRemoteMcpTunnel("worker-1", "127.0.0.1", 3000);
   fakeProcess.emit("close", 255);
 
-  await assert.rejects(() => acquisition, /remote_mcp_tunnel_setup_failed/);
+  await assert.rejects(
+    () => acquisition,
+    /remote_mcp_tunnel_setup_failed: worker-1 46000 stderr_tail="Host key verification failed\."/,
+  );
 
   mockStartReverseTunnel.mockImplementation(() => makeFakeProcess());
   mockWaitForRemoteTcpPort.mockResolvedValue(undefined);

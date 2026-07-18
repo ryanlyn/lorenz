@@ -1,3 +1,4 @@
+import { once } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
@@ -11,14 +12,36 @@ import { assert, settle, tempDir, writeExecutable } from "@lorenz/test-utils";
 
 import {
   parseSshTarget,
+  readReverseTunnelStderrTail,
   remoteShellCommand,
   reverseTunnelArgs,
   runSsh,
   shellEscape,
+  startReverseTunnel,
+  startSshProcess,
   sshArgs,
   waitForRemoteTcpPort,
   writeRemoteFile,
 } from "@lorenz/ssh";
+
+const STRICT_SSH_CONNECTION_ARGS = [
+  "-o",
+  "BatchMode=yes",
+  "-o",
+  "NumberOfPasswordPrompts=0",
+  "-o",
+  "PasswordAuthentication=no",
+  "-o",
+  "KbdInteractiveAuthentication=no",
+  "-o",
+  "StrictHostKeyChecking=yes",
+  "-o",
+  "UpdateHostKeys=no",
+  "-o",
+  "ConnectionAttempts=1",
+  "-o",
+  "ConnectTimeout=10",
+] as const;
 
 let savedEnv: { PATH: string | undefined; LORENZ_SSH_CONFIG: string | undefined };
 
@@ -44,6 +67,7 @@ test("SSH target parsing and command args match host:port behavior", () => {
   assert.deepEqual(parseSshTarget("::1:2200"), { destination: "::1:2200", port: null });
   assert.equal(remoteShellCommand("printf 'hello'"), "bash -lc 'printf '\"'\"'hello'\"'\"''");
   assert.deepEqual(sshArgs("localhost:2222", "echo ready"), [
+    ...STRICT_SSH_CONNECTION_ARGS,
     "-T",
     "-p",
     "2222",
@@ -52,6 +76,7 @@ test("SSH target parsing and command args match host:port behavior", () => {
     "bash -lc 'echo ready'",
   ]);
   assert.deepEqual(reverseTunnelArgs("localhost:2222", 9000, "127.0.0.1", 4040), [
+    ...STRICT_SSH_CONNECTION_ARGS,
     "-T",
     "-N",
     "-o",
@@ -63,6 +88,54 @@ test("SSH target parsing and command args match host:port behavior", () => {
     "--",
     "localhost",
   ]);
+});
+
+test("SSH remote process startup uses the strict shared connection policy", async () => {
+  const root = await tempDir("lorenz-ssh-process");
+  const trace = path.join(root, "ssh.trace");
+  await installFakeSsh(
+    root,
+    trace,
+    `#!/bin/sh
+printf 'ARGV:%s\\n' "$*" >> ${shellEscape(trace)}
+exit 0
+`,
+  );
+
+  const process = startSshProcess("worker.example:2222", "echo ready");
+  process.stdin.end();
+  await once(process, "close");
+
+  const traceText = await fs.readFile(trace, "utf8");
+  assertStrictSshTrace(traceText);
+  assert.match(traceText, /-T -p 2222 -- worker\.example bash -lc/);
+});
+
+test("SSH reverse tunnel startup uses the strict policy and retains bounded diagnostics", async () => {
+  const root = await tempDir("lorenz-ssh-tunnel");
+  const trace = path.join(root, "ssh.trace");
+  await installFakeSsh(
+    root,
+    trace,
+    `#!/bin/sh
+printf 'ARGV:%s\\n' "$*" >> ${shellEscape(trace)}
+printf '%s' '${"x".repeat(5_000)}Host key verification failed.' >&2
+exit 255
+`,
+  );
+
+  const process = startReverseTunnel("worker.example:2222", 46_000, "127.0.0.1", 4040);
+  await once(process, "close");
+
+  const traceText = await fs.readFile(trace, "utf8");
+  assertStrictSshTrace(traceText);
+  assert.match(
+    traceText,
+    /-T -N -o ExitOnForwardFailure=yes -p 2222 -R 46000:127\.0\.0\.1:4040 -- worker\.example/,
+  );
+  const stderrTail = readReverseTunnelStderrTail(process);
+  assert.equal(stderrTail.length, 4_096);
+  assert.match(stderrTail, /Host key verification failed\.$/);
 });
 
 test("SSH args reject empty and option-like targets", () => {
@@ -101,7 +174,9 @@ exit 7
   assert.equal(result.stdout, "out\nerr\n");
   assert.equal(result.stderr, "");
   const traceText = await fs.readFile(trace, "utf8");
-  assert.match(traceText, /-F \/tmp\/lorenz-test-ssh-config -T -p 2222 -- localhost bash -lc/);
+  assert.match(traceText, /-F \/tmp\/lorenz-test-ssh-config/);
+  assertStrictSshTrace(traceText);
+  assert.match(traceText, /-T -p 2222 -- localhost bash -lc/);
   assert.match(traceText, /echo ready/);
 
   const emptyPath = await tempDir("lorenz-ssh-empty-path");
@@ -334,6 +409,12 @@ async function installFakeSsh(root: string, trace: string, source: string): Prom
   process.env.PATH = `${bin}:${process.env.PATH ?? ""}`;
   await fs.writeFile(trace, "");
   return sshExecutablePath;
+}
+
+function assertStrictSshTrace(trace: string): void {
+  for (let index = 1; index < STRICT_SSH_CONNECTION_ARGS.length; index += 2) {
+    assert.match(trace, new RegExp(`-o ${STRICT_SSH_CONNECTION_ARGS[index]}`));
+  }
 }
 
 function restoreEnv(key: string, value: string | undefined): void {

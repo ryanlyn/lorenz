@@ -11,10 +11,22 @@ const FORCE_KILL_DELAY_MS = 5_000;
 const DEFAULT_REMOTE_TCP_PORT_READY_TIMEOUT_MS = 10_000;
 const DEFAULT_REMOTE_TCP_PORT_READY_INTERVAL_MS = 200;
 const DEFAULT_REMOTE_TCP_PORT_READY_ATTEMPT_TIMEOUT_MS = 1_000;
+const REVERSE_TUNNEL_STDERR_TAIL_MAX_CHARS = 4_096;
 const TCP_PORT_MAX = 65_535;
 const NUMERIC_CHMOD_MODE = /^[0-7]{3,4}$/;
 const SYMBOLIC_CHMOD_MODE =
   /^(?:[ugoa]*(?:(?:[+-][rwxXstugo]+)|(?:=[rwxXstugo]*)))(?:,(?:[ugoa]*(?:(?:[+-][rwxXstugo]+)|(?:=[rwxXstugo]*))))*$/;
+const SSH_CONNECTION_OPTIONS = [
+  "BatchMode=yes",
+  "NumberOfPasswordPrompts=0",
+  "PasswordAuthentication=no",
+  "KbdInteractiveAuthentication=no",
+  "StrictHostKeyChecking=yes",
+  "UpdateHostKeys=no",
+  "ConnectionAttempts=1",
+  "ConnectTimeout=10",
+] as const;
+const reverseTunnelStderrTails = new WeakMap<ChildProcessWithoutNullStreams, string>();
 
 function requireSshExecutable(): string {
   const pathValue = process.env.PATH ?? "";
@@ -189,12 +201,19 @@ export function startReverseTunnel(
       buffer: false,
     },
   ) as unknown as ChildProcessWithoutNullStreams;
-  // No caller consumes tunnel output. With buffering off, someone must drain
-  // the pipes or a chatty ssh (warnings, debug output) eventually fills them
-  // and blocks the tunnel; discard the data instead of retaining it.
+  reverseTunnelStderrTails.set(subprocess, "");
+  subprocess.stderr.on("data", (chunk: Buffer | string) => {
+    const stderr = `${reverseTunnelStderrTails.get(subprocess) ?? ""}${chunk.toString()}`;
+    reverseTunnelStderrTails.set(subprocess, stderr.slice(-REVERSE_TUNNEL_STDERR_TAIL_MAX_CHARS));
+  });
+  // No caller consumes tunnel stdout. With buffering off, someone must drain
+  // the pipe or a chatty ssh eventually fills it and blocks the tunnel.
   subprocess.stdout.resume();
-  subprocess.stderr.resume();
   return subprocess;
+}
+
+export function readReverseTunnelStderrTail(process: ChildProcessWithoutNullStreams): string {
+  return reverseTunnelStderrTails.get(process) ?? "";
 }
 
 export async function waitForRemoteTcpPort(
@@ -262,7 +281,7 @@ export async function writeRemoteFile(
 export function sshArgs(host: string, command: string): string[] {
   const target = parseSshTarget(host);
   return [
-    ...sshConfigArgs(),
+    ...sshConnectionArgs(),
     "-T",
     ...(target.port ? ["-p", target.port] : []),
     "--",
@@ -279,7 +298,7 @@ export function reverseTunnelArgs(
 ): string[] {
   const target = parseSshTarget(host);
   return [
-    ...sshConfigArgs(),
+    ...sshConnectionArgs(),
     "-T",
     "-N",
     "-o",
@@ -331,9 +350,12 @@ function sshMissingExitCodeError(host: string, result: SshExitMetadata): Error {
   });
 }
 
-function sshConfigArgs(): string[] {
+function sshConnectionArgs(): string[] {
   const configPath = process.env.LORENZ_SSH_CONFIG;
-  return configPath ? ["-F", configPath] : [];
+  return [
+    ...(configPath ? ["-F", configPath] : []),
+    ...SSH_CONNECTION_OPTIONS.flatMap((option) => ["-o", option]),
+  ];
 }
 
 function validPortDestination(destination: string): boolean {
