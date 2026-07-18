@@ -329,9 +329,6 @@ importers:
       '@lorenz/agent-sdk':
         specifier: workspace:*
         version: link:../../packages/agent-sdk
-      '@lorenz/cli-kit':
-        specifier: workspace:*
-        version: link:../../packages/cli-kit
       '@lorenz/config':
         specifier: workspace:*
         version: link:../../packages/config
@@ -666,12 +663,6 @@ importers:
       '@lorenz/domain':
         specifier: workspace:*
         version: link:../domain
-
-  packages/cli-kit:
-    dependencies:
-      commander:
-        specifier: 'catalog:'
-        version: 14.0.3
 
   packages/config:
     dependencies:
