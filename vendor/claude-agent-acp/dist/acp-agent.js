@@ -841,11 +841,10 @@ export class ClaudeAcpAgent {
                             }
                             const pending = session.pendingMessages.get(message.uuid);
                             if (pending) {
-                                session.pendingMessages.delete(message.uuid);
                                 handedOff = true;
                                 // The current owner stops and the next prompt
                                 // continues with the same query loop.
-                                settlePendingPrompt(pending, false);
+                                settlePendingPrompt(session, message.uuid, pending);
                                 return {
                                     stopReason: session.cancelled ? "cancelled" : "end_turn",
                                     usage: sessionUsage(session),
@@ -1051,6 +1050,9 @@ export class ClaudeAcpAgent {
         }
         session.cancelled = true;
         const discard = cancelQueuedPrompts(session);
+        await this.interruptSession(params.sessionId, session, discard);
+    }
+    interruptSession(sessionId, session, discard) {
         let interruption;
         try {
             interruption = session.query.interrupt();
@@ -1059,10 +1061,10 @@ export class ClaudeAcpAgent {
             if (discard) {
                 // Submitted SDK input cannot be removed from its queue. Discarding the
                 // session prevents cancelled prompts from executing after interruption.
-                this.discardSession(params.sessionId, session);
+                this.discardSession(sessionId, session);
             }
         }
-        await interruption;
+        return interruption;
     }
     discardSession(sessionId, session) {
         if (this.sessions[sessionId] !== session) {
@@ -1082,8 +1084,8 @@ export class ClaudeAcpAgent {
             return;
         }
         cancelPendingPrompts(session);
-        await this.cancel({ sessionId });
-        this.discardSession(sessionId, session);
+        session.cancelled = true;
+        await this.interruptSession(sessionId, session, true);
     }
     /** Tear down all active sessions. Called when the ACP connection closes. */
     async dispose() {
@@ -1857,27 +1859,34 @@ function sessionUsage(session) {
 }
 
 function cancelPendingPrompts(session) {
-    setImmediate(() => {
-        const pendingPrompts = [...session.pendingMessages.values()];
-        session.pendingMessages.clear();
-        session.promptRunning = false;
-        for (const pending of pendingPrompts) {
-            pending.resolve(true);
-        }
-    });
+    const pendingPrompts = [...session.pendingMessages.values()];
+    session.pendingMessages.clear();
+    session.promptRunning = false;
+    for (const pending of pendingPrompts) {
+        settleCancelledPrompt(pending);
+    }
 }
 function cancelQueuedPrompts(session) {
     const pendingPrompts = [...session.pendingMessages.values()];
     session.pendingMessages.clear();
     for (const pending of pendingPrompts) {
-        settlePendingPrompt(pending, true);
+        settleCancelledPrompt(pending);
     }
     return pendingPrompts.some((pending) => pending.inputSubmitted);
 }
-function settlePendingPrompt(pending, cancelled) {
+function settleCancelledPrompt(pending) {
+    setImmediate(() => pending.resolve(true));
+}
+function settlePendingPrompt(session, promptUuid, pending) {
     // Let the current prompt response reach the transport before the next
     // prompt can emit notifications or a response under the same session.
-    setImmediate(() => pending.resolve(cancelled));
+    setImmediate(() => {
+        if (session.pendingMessages.get(promptUuid) !== pending) {
+            return;
+        }
+        session.pendingMessages.delete(promptUuid);
+        pending.resolve(false);
+    });
 }
 function settleNextPendingPrompt(session) {
     // Keep ownership reserved until the current prompt response reaches the

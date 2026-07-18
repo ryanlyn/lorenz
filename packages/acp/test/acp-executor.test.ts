@@ -467,12 +467,16 @@ test("vendored prompt queues advertise capability and isolate Claude usage at ha
     claudeSource.slice(replayCheck, cancelledMessageCheck),
     /stopReason: session\.cancelled \? "cancelled" : "end_turn"/,
   );
+  const replayHandoff = claudeSource.slice(replayCheck, cancelledMessageCheck);
+  assert.equal(/pendingMessages\.delete\(message\.uuid\)/.test(replayHandoff), false);
+  assert.match(replayHandoff, /settlePendingPrompt\(session, message\.uuid, pending\)/);
 
   const cancelStart = claudeSource.indexOf("async cancel(params)");
   const teardownStart = claudeSource.indexOf("async teardownSession", cancelStart);
   const cancelBody = claudeSource.slice(cancelStart, teardownStart);
   assert.match(cancelBody, /cancelQueuedPrompts\(session\)/);
-  assert.match(cancelBody, /this\.discardSession\(params\.sessionId, session\)/);
+  assert.match(cancelBody, /this\.interruptSession\(params\.sessionId, session, discard\)/);
+  assert.match(cancelBody, /this\.discardSession\(sessionId, session\)/);
   assert.match(claudeSource.slice(teardownStart), /cancelPendingPrompts\(session\)/);
   assert.match(claudeSource, /function cancelQueuedPrompts\(session\)/);
   assert.match(claudeSource, /settleNextPendingPrompt\(session\)/);
@@ -497,6 +501,8 @@ test("remote bridge wrapper fails closed and completes process-group cleanup", a
   const script = source.slice(scriptStart, scriptEnd);
 
   assert.match(script, /`cd \$\{shellEscape\(workspace\)\} \|\| exit 1`/);
+  assert.match(script, /`bash -c \$\{shellEscape\(bridge\)\} <&0 &`/);
+  assert.equal(script.includes("`${bridge} <&0 &`"), false);
   assert.match(script, /' {2}wait "\$force_pid" 2>\/dev\/null \|\| true'/);
   assert.equal(script.includes(`'  kill "$force_pid" 2>/dev/null || true'`), false);
   assert.match(script, /"status=\$\?"/);

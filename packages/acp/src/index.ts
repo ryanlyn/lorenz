@@ -896,7 +896,7 @@ function remoteBridgeScript(workspace: string, bridge: string): string {
   return [
     "set -m",
     `cd ${shellEscape(workspace)} || exit 1`,
-    `${bridge} <&0 &`,
+    `bash -c ${shellEscape(bridge)} <&0 &`,
     "bridge_pid=$!",
     "cleaned=0",
     "cleanup() {",
