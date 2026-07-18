@@ -470,16 +470,27 @@ export class ClaudeAcpAgent {
         const firstText = params.prompt[0]?.type === "text" ? params.prompt[0].text : "";
         const isLocalOnlyCommand = firstText.startsWith("/") && LOCAL_ONLY_COMMANDS.has(firstText.split(" ", 1)[0]);
         if (session.promptRunning) {
-            // Register the ACP request immediately, then submit its SDK input
-            // only when this request owns the session's FIFO prompt slot.
             const order = session.nextPendingOrder++;
+            // Regular input enters the live SDK queue immediately. Commands
+            // without an input replay, and requests behind them, wait for
+            // ownership so every ACP prompt keeps FIFO response attribution.
+            const deferInput = isLocalOnlyCommand ||
+                [...session.pendingMessages.values()].some((pending) => !pending.inputSubmitted);
+            let pendingPrompt;
             const cancelled = await new Promise((resolve) => {
-                session.pendingMessages.set(promptUuid, { resolve, order });
+                pendingPrompt = { resolve, order, inputSubmitted: !deferInput };
+                session.pendingMessages.set(promptUuid, pendingPrompt);
+                if (!deferInput) {
+                    session.input.push(userMessage);
+                }
             });
             if (cancelled) {
                 return { stopReason: "cancelled" };
             }
-            session.input.push(userMessage);
+            if (!pendingPrompt.inputSubmitted) {
+                session.input.push(userMessage);
+                pendingPrompt.inputSubmitted = true;
+            }
         }
         else {
             session.input.push(userMessage);

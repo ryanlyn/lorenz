@@ -344,14 +344,19 @@ test("vendored prompt queues advertise capability and isolate Claude usage at ha
 
   const promptStart = claudeSource.indexOf("async prompt(params)");
   const queuedHandoff = claudeSource.indexOf("const cancelled = await", promptStart);
-  const queuedInputPush = claudeSource.indexOf("session.input.push(userMessage)", queuedHandoff);
   const cancellationReset = claudeSource.indexOf("session.cancelled = false", promptStart);
   const usageReset = claudeSource.indexOf("session.accumulatedUsage = {", promptStart);
   assert.ok(promptStart >= 0);
   assert.ok(queuedHandoff > promptStart);
-  assert.ok(queuedInputPush > queuedHandoff);
   assert.ok(cancellationReset > queuedHandoff);
   assert.ok(usageReset > queuedHandoff);
+  const queueSubmission = claudeSource.slice(promptStart, cancellationReset);
+  assert.match(queueSubmission, /const deferInput = isLocalOnlyCommand \|\|/);
+  assert.match(queueSubmission, /if \(!deferInput\) \{\s*session\.input\.push\(userMessage\)/);
+  assert.match(
+    queueSubmission,
+    /if \(!pendingPrompt\.inputSubmitted\) \{\s*session\.input\.push\(userMessage\)/,
+  );
 
   const cancelStart = claudeSource.indexOf("async cancel(params)");
   const teardownStart = claudeSource.indexOf("async teardownSession", cancelStart);
