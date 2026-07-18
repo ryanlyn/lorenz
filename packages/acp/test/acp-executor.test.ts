@@ -146,7 +146,7 @@ test("ACP session submits a queued turn before the active turn finishes", async 
   assert.equal(prompts[1]?.params?.prompt?.[0]?.text, "new direction");
 });
 
-test("ACP session retains a gated turn until activation is allowed", async () => {
+test("ACP session preserves submission order across an activation gate", async () => {
   const root = await tempDir("lorenz-acp-gated-queued-turn");
   const fake = await writeFakeBridge(root);
   const trace = path.join(root, "trace.jsonl");
@@ -167,6 +167,7 @@ test("ACP session retains a gated turn until activation is allowed", async () =>
     await waitForTraceEvent(trace, "gatedFirstPromptWaiting");
     assert.ok(session.queueTurn);
     const queued = session.queueTurn("validated direction", { startWhen });
+    const later = session.queueTurn("later direction");
 
     await settle(20);
     let prompts = (await readTrace(trace)).filter((event) => event.method === "prompt");
@@ -179,15 +180,16 @@ test("ACP session retains a gated turn until activation is allowed", async () =>
     assert.equal(prompts.length, 1);
 
     allowActivation?.();
-    await queued;
+    await Promise.all([queued, later]);
   } finally {
     allowActivation?.();
     await session.stop();
   }
 
   const prompts = (await readTrace(trace)).filter((event) => event.method === "prompt");
-  assert.equal(prompts.length, 2);
+  assert.equal(prompts.length, 3);
   assert.equal(prompts[1]?.params?.prompt?.[0]?.text, "validated direction");
+  assert.equal(prompts[2]?.params?.prompt?.[0]?.text, "later direction");
 });
 
 test("ACP session publishes queued responses in turn lifecycle order", async () => {

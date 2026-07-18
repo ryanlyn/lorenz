@@ -98,6 +98,7 @@ interface PendingTurn {
   settled: boolean;
   allowSessionIdRotation: boolean;
   activate(): void;
+  trySubmitPrompt(): boolean;
   touch(): void;
   reject(error: Error): void;
 }
@@ -321,6 +322,7 @@ export class Executor implements AgentExecutor {
         if (index === -1) return;
         const wasActive = index === 0;
         session.pendingTurns.splice(index, 1);
+        submitEligiblePrompts(session);
         if (wasActive) session.pendingTurns[0]?.activate();
       };
 
@@ -442,15 +444,22 @@ export class Executor implements AgentExecutor {
           backendSlotAvailable = true;
           beginTurn();
         },
+        trySubmitPrompt: () => {
+          if (turn.settled || promptSubmitted) return true;
+          if (!activationReady) return false;
+          submitPrompt();
+          return true;
+        },
         touch: resetStallTimer,
         reject: finishReject,
       };
       session.pendingTurns.push(turn);
-      if (options?.startWhen === undefined) submitPrompt();
+      submitEligiblePrompts(session);
       if (session.pendingTurns[0] === turn) turn.activate();
       void options?.startWhen?.then(
         () => {
           activationReady = true;
+          submitEligiblePrompts(session);
           beginTurn();
         },
         (error: unknown) => {
@@ -905,6 +914,12 @@ function wireProcessEvents(session: Session): void {
 function rejectPendingTurns(session: Session, error: Error): void {
   const pending = session.pendingTurns.splice(0);
   for (const turn of pending) turn.reject(error);
+}
+
+function submitEligiblePrompts(session: Session): void {
+  for (const turn of session.pendingTurns) {
+    if (!turn.trySubmitPrompt()) return;
+  }
 }
 
 function supportsPromptQueue(init: InitializeResponse): boolean {
