@@ -2,7 +2,6 @@ import { settingsForIssueState } from "@lorenz/config";
 import { issueIsActive } from "@lorenz/dispatch";
 import type { AgentMcpEndpointLease } from "@lorenz/mcp";
 import { ensembleSize } from "@lorenz/issue";
-import { buildPrompt, continuationPrompt } from "@lorenz/prompt";
 import {
   errorMessage,
   type AgentExecutor,
@@ -14,10 +13,14 @@ import {
   type WorkflowDefinition,
 } from "@lorenz/domain";
 
+import { buildPrompt, continuationPrompt } from "./prompt.js";
+
 const workerSetupTimeoutGraceMs = 1_000;
 const workspaceCreateStage = "workspace.create_for_issue";
 const beforeRunHookStage = "workspace.run_before_run_hook";
 const afterRunHookStage = "workspace.run_after_run_hook";
+
+export { buildPrompt, continuationPrompt } from "./prompt.js";
 
 interface SetupStageSignalOptions {
   abortSignal?: AbortSignal | undefined;
