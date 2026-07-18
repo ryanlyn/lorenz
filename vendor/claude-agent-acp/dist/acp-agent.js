@@ -447,6 +447,9 @@ export class ClaudeAcpAgent {
         if (!session) {
             throw new Error("Session not found");
         }
+        if (session.recovering) {
+            return { stopReason: "cancelled" };
+        }
         let lastAssistantTotalUsage = null;
         let lastAssistantUsage = null;
         let lastAssistantModel = null;
@@ -983,6 +986,10 @@ export class ClaudeAcpAgent {
                 return { stopReason: "cancelled" };
             }
             errored = true;
+            // Seal SDK input submission before recovery performs its first await.
+            // Inputs already submitted require session discard; later ACP prompts
+            // receive cancellation without entering the SDK queue.
+            session.recovering = true;
             const hasSubmittedPendingInput = [...session.pendingMessages.values()].some((pending) => pending.inputSubmitted);
             if (hasSubmittedPendingInput) {
                 // Submitted inputs cannot be removed from the SDK queue. Closing the
@@ -1036,6 +1043,9 @@ export class ClaudeAcpAgent {
                     // A failed owner cannot hand pending prompts onto reliable query
                     // state. Cancel them so the client can decide whether to retry.
                     cancelPendingPrompts(session);
+                    setImmediate(() => {
+                        session.recovering = false;
+                    });
                 }
                 else {
                     settleNextPendingPrompt(session);
@@ -1822,6 +1832,7 @@ export class ClaudeAcpAgent {
             modelInfos: allowedModels,
             configOptions,
             promptRunning: false,
+            recovering: false,
             pendingMessages: new Map(),
             nextPendingOrder: 0,
             abortController,

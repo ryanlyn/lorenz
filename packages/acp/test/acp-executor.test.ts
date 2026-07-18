@@ -448,6 +448,10 @@ test("vendored prompt queues advertise capability and isolate Claude usage at ha
   assert.ok(cancellationReset > queuedHandoff);
   assert.ok(usageReset > queuedHandoff);
   const queueSubmission = claudeSource.slice(promptStart, cancellationReset);
+  assert.match(
+    queueSubmission,
+    /if \(session\.recovering\) \{\s*return \{ stopReason: "cancelled" \}/,
+  );
   assert.match(queueSubmission, /const deferInput = isLocalOnlyCommand \|\|/);
   assert.match(queueSubmission, /if \(!deferInput\) \{\s*session\.input\.push\(userMessage\)/);
   assert.match(
@@ -457,8 +461,17 @@ test("vendored prompt queues advertise capability and isolate Claude usage at ha
   const promptErrorStart = claudeSource.indexOf("catch (error)", promptStart);
   const promptFinallyStart = claudeSource.indexOf("finally {", promptErrorStart);
   const promptErrorBody = claudeSource.slice(promptErrorStart, promptFinallyStart);
+  const recoverySeal = promptErrorBody.indexOf("session.recovering = true");
+  const recoveryAwait = promptErrorBody.indexOf("await session.query.interrupt()");
+  assert.ok(recoverySeal >= 0);
+  assert.ok(recoveryAwait > recoverySeal);
   assert.match(promptErrorBody, /some\(\(pending\) => pending\.inputSubmitted\)/);
   assert.match(promptErrorBody, /this\.discardSession\(params\.sessionId, session\)/);
+  const promptMethodEnd = claudeSource.indexOf("async cancel(params)", promptFinallyStart);
+  assert.match(
+    claudeSource.slice(promptFinallyStart, promptMethodEnd),
+    /setImmediate\(\(\) => \{\s*session\.recovering = false/,
+  );
   const replayCheck = claudeSource.indexOf("// Check for prompt replay", queuedHandoff);
   const cancelledMessageCheck = claudeSource.indexOf("if (session.cancelled)", replayCheck);
   assert.ok(replayCheck > queuedHandoff);
@@ -471,7 +484,7 @@ test("vendored prompt queues advertise capability and isolate Claude usage at ha
   assert.equal(/pendingMessages\.delete\(message\.uuid\)/.test(replayHandoff), false);
   assert.match(replayHandoff, /settlePendingPrompt\(session, message\.uuid, pending\)/);
 
-  const cancelStart = claudeSource.indexOf("async cancel(params)");
+  const cancelStart = promptMethodEnd;
   const teardownStart = claudeSource.indexOf("async teardownSession", cancelStart);
   const cancelBody = claudeSource.slice(cancelStart, teardownStart);
   assert.match(cancelBody, /cancelQueuedPrompts\(session\)/);
