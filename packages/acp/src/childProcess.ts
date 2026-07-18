@@ -44,34 +44,22 @@ export async function stopChild(
     }
     child.kill(signal);
   };
-  const processGroupExists = (): boolean => {
-    if (processGroupId === undefined) return false;
-    try {
-      process.kill(-processGroupId, 0);
-      return true;
-    } catch {
-      return false;
-    }
-  };
 
-  if (child.exitCode !== null || child.signalCode !== null) {
-    if (!processGroupExists()) return;
-    sendSignal("SIGTERM");
-    await new Promise((resolve) => setTimeout(resolve, 1_000));
-    sendSignal("SIGKILL");
-    return;
-  }
+  if (child.exitCode !== null || child.signalCode !== null) return;
 
   await new Promise<void>((resolve) => {
-    let closed = false;
-    const timer = setTimeout(() => {
-      if (!closed || processGroupExists()) sendSignal("SIGKILL");
-      if (processGroupId !== undefined) resolve();
+    let exited = false;
+    const forceTimer = setTimeout(() => {
+      if (!exited) sendSignal("SIGKILL");
     }, 1_000);
+    const stopTimer = setTimeout(resolve, 2_000);
+    child.once("exit", () => {
+      exited = true;
+      clearTimeout(forceTimer);
+    });
     child.once("close", () => {
-      closed = true;
-      if (processGroupExists()) return;
-      clearTimeout(timer);
+      clearTimeout(forceTimer);
+      clearTimeout(stopTimer);
       resolve();
     });
     sendSignal("SIGTERM");

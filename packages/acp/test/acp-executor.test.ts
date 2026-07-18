@@ -494,9 +494,9 @@ test("vendored prompt queues advertise capability and isolate Claude usage at ha
   );
 });
 
-test("remote bridge wrapper fails closed and completes process-group cleanup", async () => {
+test("bridge guardian fails closed and completes process-group cleanup", async () => {
   const source = await fs.readFile(path.resolve("packages/acp/src/index.ts"), "utf8");
-  const scriptStart = source.indexOf("function remoteBridgeScript");
+  const scriptStart = source.indexOf("function bridgeGuardianScript");
   const scriptEnd = source.indexOf("function wireProcessEvents", scriptStart);
   const script = source.slice(scriptStart, scriptEnd);
 
@@ -509,12 +509,13 @@ test("remote bridge wrapper fails closed and completes process-group cleanup", a
   assert.match(script, /"cleanup"/);
   assert.match(source, /return startSshProcess\(workerHost, script\)/);
   assert.equal(source.includes("startSshProcess(workerHost, `bash -lc"), false);
+  assert.match(source, /execa\("bash", \["-lc", bridgeGuardianScript\(workspace, bridge\)\]/);
 });
 
 test("Windows bridge guardian owns descendants through a Job Object", async () => {
   const source = await fs.readFile(path.resolve("packages/acp/src/index.ts"), "utf8");
   const guardianStart = source.indexOf("function windowsBridgeGuardianScript");
-  const guardianEnd = source.indexOf("function remoteBridgeScript", guardianStart);
+  const guardianEnd = source.indexOf("function bridgeGuardianScript", guardianStart);
   const guardian = source.slice(guardianStart, guardianEnd);
 
   assert.match(guardian, /JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE/);
@@ -772,9 +773,12 @@ test("ACP executor stops the bridge when a turn stalls", async () => {
       500,
       /acp turn timed out/,
     );
-    await vi.waitFor(() => {
-      assert.ok(updates.some((update) => update.type === "process_exit"));
-    });
+    await vi.waitFor(
+      () => {
+        assert.ok(updates.some((update) => update.type === "process_exit"));
+      },
+      { timeout: 2_000 },
+    );
   } finally {
     await session.stop();
   }
@@ -907,9 +911,12 @@ test("ACP executor suppresses terminal updates after turn timeout", async () => 
       () => executor.runTurn(session, "hello", sampleIssue),
       /acp turn timed out/,
     );
-    await vi.waitFor(() => {
-      assert.ok(updates.some((update) => update.type === "process_exit"));
-    });
+    await vi.waitFor(
+      () => {
+        assert.ok(updates.some((update) => update.type === "process_exit"));
+      },
+      { timeout: 2_000 },
+    );
   } finally {
     await session.stop();
   }
@@ -940,9 +947,12 @@ test("ACP executor does not rearm the stall timer after turn timeout", async () 
       () => executor.runTurn(session, "hello", sampleIssue),
       /acp turn timed out/,
     );
-    await vi.waitFor(() => {
-      assert.ok(updates.some((update) => update.type === "process_exit"));
-    });
+    await vi.waitFor(
+      () => {
+        assert.ok(updates.some((update) => update.type === "process_exit"));
+      },
+      { timeout: 2_000 },
+    );
     await settle(150);
     const traceEvents = await readTrace(trace);
     assert.equal(traceEvents.filter((event) => event.method === "cancel").length, 0);

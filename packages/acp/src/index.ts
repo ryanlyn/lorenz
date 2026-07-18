@@ -243,11 +243,35 @@ export class Executor implements AgentExecutor {
       });
       return session;
     } catch (error) {
-      if (session) await this.stopSession(session);
-      else {
-        if (child) await stopBridgeProcess(child, !input.workerHost);
-        // Coordinator-provided leases remain under coordinator ownership.
-        if (ownsMcpEndpoint) await mcpEndpoint?.release();
+      const cleanupErrors: unknown[] = [];
+      if (session) {
+        try {
+          await this.stopSession(session);
+        } catch (cleanupError) {
+          cleanupErrors.push(cleanupError);
+        }
+      } else {
+        try {
+          if (child) await stopBridgeProcess(child, !input.workerHost);
+        } catch (cleanupError) {
+          cleanupErrors.push(cleanupError);
+        } finally {
+          // Coordinator-provided leases remain under coordinator ownership.
+          if (ownsMcpEndpoint) {
+            try {
+              await mcpEndpoint?.release();
+            } catch (cleanupError) {
+              cleanupErrors.push(cleanupError);
+            }
+          }
+        }
+      }
+      if (cleanupErrors.length > 0) {
+        throw new AggregateError(
+          [error, ...cleanupErrors],
+          "acp session startup failed and cleanup did not complete",
+          { cause: error },
+        );
       }
       throw error;
     }
@@ -870,7 +894,7 @@ function startBridgeProcess(
   const bridge = resolveBridgeCommand(bridgeCommand, workerHost);
   if (workerHost) {
     // Remote bridges resolve their own binaries on the worker host.
-    const script = remoteBridgeScript(workspace, bridge);
+    const script = bridgeGuardianScript(workspace, bridge);
     return startSshProcess(workerHost, script);
   }
   if (process.platform === "win32") {
@@ -905,7 +929,7 @@ function startBridgeProcess(
       throw error;
     }
   }
-  return execa("bash", ["-lc", `exec ${bridge}`], {
+  return execa("bash", ["-lc", bridgeGuardianScript(workspace, bridge)], {
     cwd: workspace,
     stdin: "pipe",
     stdout: "pipe",
@@ -1128,7 +1152,7 @@ exit $exitCode
 `;
 }
 
-function remoteBridgeScript(workspace: string, bridge: string): string {
+function bridgeGuardianScript(workspace: string, bridge: string): string {
   return [
     "set -m",
     `cd ${shellEscape(workspace)} || exit 1`,
