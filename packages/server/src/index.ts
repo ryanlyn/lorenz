@@ -31,7 +31,7 @@ import {
   type PresenterParams,
 } from "@lorenz/presenter";
 import type { RuntimeSnapshot } from "@lorenz/runtime-events";
-import type { TraceWatcher } from "@lorenz/traceviz-server";
+import type { TraceWatcher } from "@lorenz/traceviz-core";
 
 import { createTraceRoutes } from "./trace-routes.js";
 import { createWsHandler } from "./ws.js";

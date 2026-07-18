@@ -28,7 +28,7 @@
       "path": "../../packages/presenter"
     },
     {
-      "path": "../../packages/traceviz-server"
+      "path": "../../packages/traceviz-core"
     }
   ]
 }
