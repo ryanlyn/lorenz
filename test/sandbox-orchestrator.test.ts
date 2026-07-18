@@ -6,9 +6,9 @@ import type { ChaosLinearClient } from "../sandbox/sandbox.js";
 /**
  * Integration tests for Orchestrator Scheduling invariants via full sandbox runs.
  *
- * These exercise the complete runtime pipeline: claim, finish, retry timing,
+ * These exercise the complete runtime pipeline: claimAsync, finishAsync, retry timing,
  * ensemble slots, cleanup, usage tracking, worker host selection, and concurrency.
- * Covers claim, finish, retry timing, ensemble slots, cleanup, usage tracking,
+ * Covers claimAsync, finishAsync, retry timing, ensemble slots, cleanup, usage tracking,
  * worker host selection, and concurrency.
  */
 describe("Sandbox: Orchestrator Scheduling", () => {
@@ -60,7 +60,7 @@ describe("Sandbox: Orchestrator Scheduling", () => {
     },
   );
 
-  test("finish() creates retry entry -> issue re-dispatched on next tick", async () => {
+  test("finishAsync() creates retry entry -> issue re-dispatched on next tick", async () => {
     const result = await runScenario({
       issues: [makeIssue("retry-1", "RETRY-1")],
       settingsOverrides: { agent: { maxConcurrentAgents: 5, maxRetryBackoffMs: 1000 } },
@@ -101,7 +101,7 @@ describe("Sandbox: Orchestrator Scheduling", () => {
     expect(failedEvents.length).toBeGreaterThanOrEqual(1);
   });
 
-  test("cleanupIssue on terminal transition -> not re-dispatched", async () => {
+  test("cleanupIssueAsync on terminal transition -> not re-dispatched", async () => {
     const result = await runScenario({
       issues: [makeIssue("term-1", "TERM-1", { state: "In Progress", stateType: "started" })],
       settingsOverrides: { agent: { maxConcurrentAgents: 5, maxRetryBackoffMs: 50 } },
@@ -195,7 +195,7 @@ describe("Sandbox: Orchestrator Scheduling", () => {
     expect(result.events.some((e) => e.type === "run_started")).toBe(true);
   });
 
-  test("finish() for non-existent does not crash (issue removed during run)", async () => {
+  test("finishAsync() for non-existent does not crash (issue removed during run)", async () => {
     const result = await runScenario({
       issues: [makeIssue("ghost-1", "GHOST-1")],
       settingsOverrides: { agent: { maxConcurrentAgents: 5 } },
@@ -264,7 +264,7 @@ describe("Sandbox: Orchestrator Scheduling", () => {
     expect(slot0Events.length).toBeGreaterThanOrEqual(1);
   });
 
-  test("double-finish is safe (no crash)", async () => {
+  test("double-finishAsync is safe (no crash)", async () => {
     const result = await runScenario({
       issues: [makeIssue("double-1", "DOUBLE-1")],
       settingsOverrides: { agent: { maxConcurrentAgents: 5 } },
@@ -273,7 +273,7 @@ describe("Sandbox: Orchestrator Scheduling", () => {
       tickDelayMs: 10,
     });
 
-    // The system should handle finish being called and then the same issue
+    // The system should handle finishAsync being called and then the same issue
     // completing again without crashing
     expect(result.ticksExecuted).toBe(2);
     // No unhandled exceptions

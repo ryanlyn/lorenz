@@ -83,7 +83,7 @@ test("projection actor owns bounded read models and snapshots defensively", () =
   assert.equal(second.runHistory[0]?.usageTotals?.totalTokens, 3);
 });
 
-test("ugly retry flow keeps capacity authority in the orchestrator", () => {
+test("ugly retry flow keeps capacity authority in the orchestrator", async () => {
   const settings = parseConfig({
     agent: { ensemble_size: 2, max_concurrent_agents: 2, max_retry_backoff_ms: 10_000 },
   });
@@ -107,8 +107,8 @@ test("ugly retry flow keeps capacity authority in the orchestrator", () => {
     state: { name: "Todo", type: "unstarted" },
   });
 
-  assert.ok(orchestrator.claim(issue));
-  assert.ok(orchestrator.claim(issue));
+  assert.ok(await orchestrator.claimAsync(issue));
+  assert.ok(await orchestrator.claimAsync(issue));
   orchestrator.state.retryAttempts.set(issue.id, {
     issueId: issue.id,
     identifier: issue.identifier,
@@ -119,18 +119,18 @@ test("ugly retry flow keeps capacity authority in the orchestrator", () => {
     error: "agent_stalled",
   });
 
-  assert.deepEqual(orchestrator.eligibleIssues([issue]), []);
+  assert.deepEqual(await orchestrator.eligibleIssuesAsync([issue]), []);
   assert.equal(orchestrator.snapshot().running.length, 2);
   assert.equal(orchestrator.snapshot().retrying.length, 1);
   assert.equal(orchestrator.snapshot().retrying[0]?.attempt, 2);
   assert.equal(orchestrator.snapshot().retrying[0]?.monotonicDeadlineMs, 20_000);
 
-  orchestrator.finish(issue.id, 1, false);
-  assert.deepEqual(orchestrator.eligibleIssues([issue]), []);
+  await orchestrator.finishAsync(issue.id, 1, false);
+  assert.deepEqual(await orchestrator.eligibleIssuesAsync([issue]), []);
 
   clock.advance(10_000);
-  assert.equal(orchestrator.eligibleIssues([issue])[0]?.identifier, issue.identifier);
-  const reclaimed = orchestrator.claim(issue);
+  assert.equal((await orchestrator.eligibleIssuesAsync([issue]))[0]?.identifier, issue.identifier);
+  const reclaimed = await orchestrator.claimAsync(issue);
   assert.equal(reclaimed?.kind === "running" ? reclaimed.entry.slotIndex : null, 1);
   assert.equal(orchestrator.state.claimed.has(slotKey(issue.id, 1)), true);
 });
