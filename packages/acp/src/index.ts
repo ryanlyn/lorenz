@@ -872,14 +872,7 @@ function startBridgeProcess(
   if (process.platform === "win32") {
     return execa(
       "powershell.exe",
-      [
-        "-NoProfile",
-        "-NonInteractive",
-        "-Command",
-        windowsBridgeGuardianScript,
-        workspace,
-        Buffer.from(bridge, "utf8").toString("base64"),
-      ],
+      ["-NoProfile", "-NonInteractive", "-Command", windowsBridgeGuardianScript(workspace, bridge)],
       {
         stdin: "pipe",
         stdout: "pipe",
@@ -907,7 +900,10 @@ function startBridgeProcess(
   }) as unknown as ChildProcessWithoutNullStreams;
 }
 
-const windowsBridgeGuardianScript = String.raw`
+function windowsBridgeGuardianScript(workspace: string, bridge: string): string {
+  const encodedWorkspace = Buffer.from(workspace, "utf8").toString("base64");
+  const encodedBridge = Buffer.from(bridge, "utf8").toString("base64");
+  return String.raw`
 $ErrorActionPreference = "Stop"
 Add-Type -TypeDefinition @"
 using System;
@@ -1016,8 +1012,8 @@ public static class LorenzProcessJob
 }
 "@
 
-$workspace = $args[0]
-$bridge = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($args[1]))
+$workspace = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String("${encodedWorkspace}"))
+$bridge = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String("${encodedBridge}"))
 $scriptPath = [IO.Path]::GetTempFileName()
 $utf8 = [Text.UTF8Encoding]::new($false)
 [IO.File]::WriteAllText($scriptPath, "exec " + $bridge + [Environment]::NewLine, $utf8)
@@ -1073,6 +1069,7 @@ try {
 }
 exit $exitCode
 `;
+}
 
 function remoteBridgeScript(workspace: string, bridge: string): string {
   return [

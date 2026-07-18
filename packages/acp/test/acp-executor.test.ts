@@ -511,12 +511,16 @@ test("remote bridge wrapper fails closed and completes process-group cleanup", a
 
 test("Windows bridge guardian owns descendants through a Job Object", async () => {
   const source = await fs.readFile(path.resolve("packages/acp/src/index.ts"), "utf8");
-  const guardianStart = source.indexOf("const windowsBridgeGuardianScript");
+  const guardianStart = source.indexOf("function windowsBridgeGuardianScript");
   const guardianEnd = source.indexOf("function remoteBridgeScript", guardianStart);
   const guardian = source.slice(guardianStart, guardianEnd);
 
   assert.match(guardian, /JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE/);
   assert.match(guardian, /AssignProcessToJobObject/);
+  assert.match(guardian, /Buffer\.from\(workspace, "utf8"\)\.toString\("base64"\)/);
+  assert.match(guardian, /Buffer\.from\(bridge, "utf8"\)\.toString\("base64"\)/);
+  assert.equal(guardian.includes("$args["), false);
+  assert.match(source, /"-Command", windowsBridgeGuardianScript\(workspace, bridge\)\]/);
   const guardianAssignment = guardian.indexOf("[LorenzProcessJob]::Assign($job, $guardian.Handle)");
   const bridgeStart = guardian.indexOf("$process.Start()");
   assert.ok(guardianAssignment >= 0);
