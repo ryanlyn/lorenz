@@ -312,6 +312,7 @@ export class Executor implements AgentExecutor {
         reject(error);
       };
 
+      const sessionId = requireSessionId(session);
       const turn: PendingTurn = {
         active: false,
         settled: false,
@@ -323,20 +324,18 @@ export class Executor implements AgentExecutor {
           session.turnStartTotals = { ...session.usageTotals };
           hardTimer = setTimeout(cancelTurn, session.agentConfig.turnTimeoutMs);
           resetStallTimer();
+          this.emit(session, {
+            type: "turn_started",
+            sessionId,
+            message: { prompt: [{ type: "text", text: prompt }] },
+            timestamp: new Date(),
+          });
         },
         touch: resetStallTimer,
         reject: finishReject,
       };
       session.pendingTurns.push(turn);
       if (session.pendingTurns[0] === turn) turn.activate();
-
-      const sessionId = requireSessionId(session);
-      this.emit(session, {
-        type: "turn_started",
-        sessionId,
-        message: { prompt: [{ type: "text", text: prompt }] },
-        timestamp: new Date(),
-      });
 
       session.connection
         .prompt({
