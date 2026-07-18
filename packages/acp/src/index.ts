@@ -418,6 +418,7 @@ export class Executor implements AgentExecutor {
   }
 
   private emit(session: Session | null, update: AgentUpdate): void {
+    session?.pendingTurns[0]?.touch();
     session?.onUpdate?.(update);
   }
 
@@ -862,14 +863,7 @@ function rejectPendingTurns(session: Session, error: Error): void {
 }
 
 function supportsPromptQueue(init: InitializeResponse): boolean {
-  const meta = init.agentCapabilities?._meta;
-  if (meta?.["symphony/promptQueueing"] === true) return true;
-  const claudeCode = meta?.["claudeCode"];
-  return (
-    typeof claudeCode === "object" &&
-    claudeCode !== null &&
-    (claudeCode as Record<string, unknown>)["promptQueueing"] === true
-  );
+  return init.agentCapabilities?._meta?.["symphony/promptQueueing"] === true;
 }
 
 function clientCapabilities(workerHost: string | null): ClientCapabilities {

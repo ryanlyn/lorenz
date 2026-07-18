@@ -214,6 +214,24 @@ test("ACP session exposes queueTurn only when the bridge advertises prompt queui
   }
 });
 
+test("ACP session ignores prompt queue capabilities without the Lorenz contract", async () => {
+  const root = await tempDir("lorenz-acp-external-prompt-queue");
+  const fake = await writeFakeBridge(root);
+  const trace = path.join(root, "trace.jsonl");
+  const settings = acpSettings(root, fake, trace, "queued-external-capability");
+  const session = await new Executor("claude").startSession({
+    workspace: root,
+    settings,
+    issue: sampleIssue,
+  });
+
+  try {
+    assert.equal(session.queueTurn, undefined);
+  } finally {
+    await session.stop();
+  }
+});
+
 test("ACP queued turn starts its lifecycle after a timed-out predecessor releases the bridge", async () => {
   const root = await tempDir("lorenz-acp-queued-timeout");
   const fake = await writeFakeBridge(root);
@@ -310,6 +328,11 @@ test("vendored prompt queues advertise capability and isolate Claude usage at ha
   const cancelBody = claudeSource.slice(cancelStart, teardownStart);
   assert.equal(/pendingMessages/.test(cancelBody), false);
   assert.match(claudeSource.slice(teardownStart), /cancelPendingPrompts\(session\)/);
+  assert.match(claudeSource, /settleNextPendingPrompt\(session\)/);
+
+  const codexPromptStart = codexSource.indexOf("async prompt(params)");
+  const codexRunPromptStart = codexSource.indexOf("async runPrompt(params)", codexPromptStart);
+  assert.match(codexSource.slice(codexPromptStart, codexRunPromptStart), /setImmediate\(resolve\)/);
 });
 
 test("ACP executor can pass through cumulative bridge usage without double counting", async () => {
@@ -578,6 +601,36 @@ test("ACP executor resets the stall timeout on session notifications", async () 
   }
 
   assert.ok(updates.some((update) => update.type === "session_notification"));
+  const traceEvents = await readTrace(trace);
+  assert.equal(
+    traceEvents.some((event) => event.method === "cancel"),
+    false,
+  );
+});
+
+test("ACP executor resets the stall timeout on client activity", async () => {
+  const root = await tempDir("lorenz-acp-client-activity-stall-reset");
+  const fake = await writeFakeBridge(root);
+  const trace = path.join(root, "trace.jsonl");
+  const settings = acpSettings(root, fake, trace, "active-client-events", 5_000, {
+    stallTimeoutMs: 350,
+  });
+  const updates: AgentUpdate[] = [];
+  const executor = new Executor("claude");
+  const session = await executor.startSession({
+    workspace: root,
+    settings,
+    issue: sampleIssue,
+    onUpdate: (update) => updates.push(update),
+  });
+  try {
+    const turnUpdates = await executor.runTurn(session, "hello", sampleIssue);
+    assert.ok(turnUpdates.some((update) => update.type === "turn_completed"));
+  } finally {
+    await session.stop();
+  }
+
+  assert.equal(updates.filter((update) => update.type === "fs_write").length, 3);
   const traceEvents = await readTrace(trace);
   assert.equal(
     traceEvents.some((event) => event.method === "cancel"),
@@ -954,7 +1007,9 @@ class FakeAgent {
   async initialize(params) {
     record({ method: "initialize", params });
     const agentCapabilities = { sessionCapabilities: { close: {} } };
-    if (mode.startsWith("queued")) {
+    if (mode === "queued-external-capability") {
+      agentCapabilities._meta = { claudeCode: { promptQueueing: true } };
+    } else if (mode.startsWith("queued")) {
       agentCapabilities._meta = { "symphony/promptQueueing": true };
     }
     return { protocolVersion: acp.PROTOCOL_VERSION, agentCapabilities };
@@ -1110,6 +1165,17 @@ class FakeAgent {
           totalTokens: 10
         }
       };
+    }
+    if (mode === "active-client-events") {
+      for (let i = 0; i < 3; i += 1) {
+        await sleep(200);
+        await this.connection.writeTextFile({
+          sessionId: params.sessionId,
+          path: path.join(process.cwd(), "active-" + i + ".txt"),
+          content: "still working"
+        });
+      }
+      return { stopReason: "end_turn" };
     }
     if (mode === "cancelled-turn") {
       return {

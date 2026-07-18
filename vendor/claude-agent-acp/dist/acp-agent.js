@@ -1010,7 +1010,6 @@ export class ClaudeAcpAgent {
         }
         finally {
             if (!handedOff) {
-                session.promptRunning = false;
                 if (errored) {
                     // The query stream was just drained — handing pending prompts off
                     // onto it would let them race with the recovery. Cancel them so
@@ -1018,15 +1017,8 @@ export class ClaudeAcpAgent {
                     // client can decide whether to retry.
                     cancelPendingPrompts(session);
                 }
-                else if (session.pendingMessages.size > 0) {
-                    // This usually should not happen, but in case the loop finishes
-                    // without claude sending all message replays, we resolve the
-                    // next pending prompt call to ensure no prompts get stuck.
-                    const next = [...session.pendingMessages.entries()].sort((a, b) => a[1].order - b[1].order)[0];
-                    if (next) {
-                        session.pendingMessages.delete(next[0]);
-                        settlePendingPrompt(next[1], false);
-                    }
+                else {
+                    settleNextPendingPrompt(session);
                 }
             }
         }
@@ -1825,15 +1817,32 @@ function sessionUsage(session) {
 }
 
 function cancelPendingPrompts(session) {
-    for (const pending of session.pendingMessages.values()) {
-        settlePendingPrompt(pending, true);
-    }
-    session.pendingMessages.clear();
+    setImmediate(() => {
+        const pendingPrompts = [...session.pendingMessages.values()];
+        session.pendingMessages.clear();
+        session.promptRunning = false;
+        for (const pending of pendingPrompts) {
+            pending.resolve(true);
+        }
+    });
 }
 function settlePendingPrompt(pending, cancelled) {
     // Let the current prompt response reach the transport before the next
     // prompt can emit notifications or a response under the same session.
     setImmediate(() => pending.resolve(cancelled));
+}
+function settleNextPendingPrompt(session) {
+    // Keep ownership reserved until the current prompt response reaches the
+    // transport, then hand the query loop to the oldest waiting prompt.
+    setImmediate(() => {
+        const next = [...session.pendingMessages.entries()].sort((a, b) => a[1].order - b[1].order)[0];
+        if (!next) {
+            session.promptRunning = false;
+            return;
+        }
+        session.pendingMessages.delete(next[0]);
+        next[1].resolve(false);
+    });
 }
 /** Sum all four fields as a proxy for post-turn context occupancy: the current
  *  turn's output becomes next turn's input. Per the Anthropic API, input_tokens

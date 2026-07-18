@@ -20664,17 +20664,20 @@ ${item.text}`
   }
   async prompt(params) {
     // symphony-patch: register the request immediately, then run it after the preceding prompt for
-    // this session settles. This matches the queue already provided by the Claude ACP bridge.
+    // this session reaches the transport boundary.
     const previous = this.pendingPrompts.get(params.sessionId) ?? Promise.resolve();
     const queued = previous.catch(() => void 0).then(() => this.runPrompt(params));
-    this.pendingPrompts.set(params.sessionId, queued);
-    try {
-      return await queued;
-    } finally {
-      if (this.pendingPrompts.get(params.sessionId) === queued) {
+    const boundary = queued.then(
+      () => new Promise((resolve) => setImmediate(resolve)),
+      () => new Promise((resolve) => setImmediate(resolve))
+    );
+    this.pendingPrompts.set(params.sessionId, boundary);
+    void boundary.then(() => {
+      if (this.pendingPrompts.get(params.sessionId) === boundary) {
         this.pendingPrompts.delete(params.sessionId);
       }
-    }
+    });
+    return await queued;
   }
   async runPrompt(params) {
     logger.log("Prompt received", {
