@@ -377,9 +377,6 @@ importers:
       '@lorenz/presenter':
         specifier: workspace:*
         version: link:../../packages/presenter
-      '@lorenz/prompt':
-        specifier: workspace:*
-        version: link:../../packages/prompt
       '@lorenz/runtime':
         specifier: workspace:*
         version: link:../../packages/runtime
@@ -647,9 +644,12 @@ importers:
       '@lorenz/mcp':
         specifier: workspace:*
         version: link:../mcp
-      '@lorenz/prompt':
+      '@lorenz/workflow':
         specifier: workspace:*
-        version: link:../prompt
+        version: link:../workflow
+      liquidjs:
+        specifier: 'catalog:'
+        version: 10.27.0
     devDependencies:
       '@agentclientprotocol/sdk':
         specifier: 'catalog:'
@@ -839,18 +839,6 @@ importers:
       zod:
         specifier: 'catalog:'
         version: 4.4.3
-
-  packages/prompt:
-    dependencies:
-      '@lorenz/domain':
-        specifier: workspace:*
-        version: link:../domain
-      '@lorenz/workflow':
-        specifier: workspace:*
-        version: link:../workflow
-      liquidjs:
-        specifier: 'catalog:'
-        version: 10.27.0
 
   packages/runtime:
     dependencies:
