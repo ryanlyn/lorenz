@@ -14,7 +14,8 @@
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "catalog:",
-    "@lorenz/domain": "workspace:*"
+    "@lorenz/domain": "workspace:*",
+    "@lorenz/presenter": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "catalog:",
