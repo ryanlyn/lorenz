@@ -110,6 +110,21 @@ export interface ReservationSnapshotEntry {
   reservedAtIso: string;
 }
 
+export interface TrackedIssueSnapshotEntry {
+  issueId: string;
+  identifier: string;
+  workerHost?: string | null | undefined;
+}
+
+export interface TrackedRetrySnapshotEntry extends TrackedIssueSnapshotEntry {
+  monotonicDeadlineMs: number;
+}
+
+export interface TrackedIssueSnapshot {
+  claims: TrackedIssueSnapshotEntry[];
+  retrying: TrackedRetrySnapshotEntry[];
+}
+
 function zeroUsageTotals(): UsageTotals {
   return { inputTokens: 0, outputTokens: 0, totalTokens: 0, secondsRunning: 0 };
 }
@@ -894,6 +909,33 @@ export class Orchestrator {
     return this.claimStore.read(() => this.snapshotInTransaction());
   }
 
+  retryingForIssueHead(issueId: string): RetryEntry | undefined {
+    if (isAsyncClaimStore(this.claimStore)) return this.retryingForIssueHeadInTransaction(issueId);
+    return this.syncClaimStore().read(() => this.retryingForIssueHeadInTransaction(issueId));
+  }
+
+  retryingByIssueIds(issueIds: readonly string[]): Map<string, RetryEntry> {
+    if (issueIds.length === 0) return new Map();
+    if (isAsyncClaimStore(this.claimStore)) return this.retryingByIssueIdsInTransaction(issueIds);
+    return this.syncClaimStore().read(() => this.retryingByIssueIdsInTransaction(issueIds));
+  }
+
+  async trackedIssueSnapshotAsync(): Promise<TrackedIssueSnapshot> {
+    return this.claimStore.read(() => this.trackedIssueSnapshotInTransaction());
+  }
+
+  async ownedRunningEntriesAsync(): Promise<RunningEntry[]> {
+    return this.claimStore.read(() =>
+      [...this.state.running.entries()]
+        .filter(([key]) => this.claimIsOwnedByThisStore(key))
+        .map(([, entry]) => entry),
+    );
+  }
+
+  async runningEntryAsync(issueId: string, slotIndex: number): Promise<RunningEntry | undefined> {
+    return this.claimStore.read(() => this.state.running.get(slotKey(issueId, slotIndex)));
+  }
+
   private snapshotInTransaction(): OrchestratorSnapshot {
     return {
       running: [...this.state.running.values()],
@@ -910,6 +952,54 @@ export class Orchestrator {
       usageTotals: { ...this.state.usageTotals },
       rateLimits: this.state.rateLimits,
       claimStore: this.claimStore.status(),
+    };
+  }
+
+  private retryingForIssueHeadInTransaction(issueId: string): RetryEntry | undefined {
+    for (const retry of this.state.retryAttempts.values()) {
+      if (retry.issueId !== issueId) continue;
+      return { ...retry };
+    }
+    return undefined;
+  }
+
+  private retryingByIssueIdsInTransaction(issueIds: readonly string[]): Map<string, RetryEntry> {
+    const requested = new Set(issueIds);
+    const retryByIssueId = new Map<string, RetryEntry>();
+    for (const retry of this.state.retryAttempts.values()) {
+      if (!requested.has(retry.issueId)) continue;
+      if (retryByIssueId.has(retry.issueId)) continue;
+      retryByIssueId.set(retry.issueId, { ...retry });
+    }
+    return retryByIssueId;
+  }
+
+  private trackedIssueSnapshotInTransaction(): TrackedIssueSnapshot {
+    const claims: TrackedIssueSnapshotEntry[] = [];
+    for (const record of this.state.reserved.values()) {
+      if (!this.claimIsOwnedByThisStore(slotKey(record.issue.id, record.slotIndex))) continue;
+      claims.push({
+        issueId: record.issue.id,
+        identifier: record.issue.identifier,
+        workerHost: null,
+      });
+    }
+    for (const [key, entry] of this.state.running.entries()) {
+      if (!this.claimIsOwnedByThisStore(key)) continue;
+      claims.push({
+        issueId: entry.issue.id,
+        identifier: entry.issue.identifier,
+        workerHost: entry.workerHost,
+      });
+    }
+    return {
+      claims,
+      retrying: [...this.state.retryAttempts.values()].map((entry) => ({
+        issueId: entry.issueId,
+        identifier: entry.identifier,
+        workerHost: entry.workerHost,
+        monotonicDeadlineMs: entry.monotonicDeadlineMs,
+      })),
     };
   }
 

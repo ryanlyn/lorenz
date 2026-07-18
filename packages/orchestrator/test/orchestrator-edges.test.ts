@@ -90,6 +90,85 @@ test("claim — preferred slot honored on retry", () => {
   assert.equal(claimed?.retryAttempt, 1);
 });
 
+test("retry projection preserves snapshot order and returns cloned entries", () => {
+  const orchestrator = new Orchestrator(parseConfig({ agent: { ensemble_size: 3 } }));
+  const issue = makeIssue();
+  const other = makeIssue({ id: "other", identifier: "MT-OTHER" });
+  orchestrator.state.retryAttempts.set(slotKey(issue.id, 2), {
+    issueId: issue.id,
+    identifier: issue.identifier,
+    attempt: 1,
+    monotonicDeadlineMs: 200,
+    dueAtIso: "2026-01-01T00:00:00.200Z",
+    slotIndex: 2,
+    error: "failed",
+  });
+  orchestrator.state.retryAttempts.set(slotKey(issue.id, 0), {
+    issueId: issue.id,
+    identifier: issue.identifier,
+    attempt: 2,
+    monotonicDeadlineMs: 100,
+    dueAtIso: "2026-01-01T00:00:00.100Z",
+    slotIndex: 0,
+    error: "failed again",
+  });
+  orchestrator.state.retryAttempts.set(slotKey(other.id, 0), {
+    issueId: other.id,
+    identifier: other.identifier,
+    attempt: 1,
+    monotonicDeadlineMs: 300,
+    dueAtIso: "2026-01-01T00:00:00.300Z",
+    slotIndex: 0,
+  });
+
+  const retryHead = orchestrator.retryingForIssueHead(issue.id);
+  assert.equal(retryHead?.slotIndex, 2);
+  retryHead!.attempt = 99;
+  assert.equal(orchestrator.retryingForIssueHead(issue.id)?.attempt, 1);
+
+  const retryByIssue = orchestrator.retryingByIssueIds([issue.id]);
+  assert.deepEqual([...retryByIssue.keys()], [issue.id]);
+  assert.equal(retryByIssue.get(issue.id)?.slotIndex, 2);
+  assert.deepEqual([...orchestrator.retryingByIssueIds([]).keys()], []);
+});
+
+test("running and tracked issue projections expose only lifecycle state", async () => {
+  const orchestrator = new Orchestrator(parseConfig());
+  const runningIssue = makeIssue();
+  const retryingIssue = makeIssue({ id: "retrying", identifier: "MT-RETRYING" });
+  const running = claimEntry(orchestrator, runningIssue);
+  assert.ok(running);
+  orchestrator.state.retryAttempts.set(slotKey(retryingIssue.id, 0), {
+    issueId: retryingIssue.id,
+    identifier: retryingIssue.identifier,
+    attempt: 1,
+    monotonicDeadlineMs: 200,
+    dueAtIso: "2026-01-01T00:00:00.200Z",
+    slotIndex: 0,
+  });
+
+  assert.deepEqual(await orchestrator.ownedRunningEntriesAsync(), [running]);
+  assert.equal(await orchestrator.runningEntryAsync(runningIssue.id, 0), running);
+  assert.equal(await orchestrator.runningEntryAsync("missing", 0), undefined);
+  assert.deepEqual(await orchestrator.trackedIssueSnapshotAsync(), {
+    claims: [
+      {
+        issueId: runningIssue.id,
+        identifier: runningIssue.identifier,
+        workerHost: running?.workerHost,
+      },
+    ],
+    retrying: [
+      {
+        issueId: retryingIssue.id,
+        identifier: retryingIssue.identifier,
+        monotonicDeadlineMs: 200,
+        workerHost: undefined,
+      },
+    ],
+  });
+});
+
 test("claim — non-existent retry does not interfere with fresh claim", () => {
   const settings = parseConfig();
   const orchestrator = new Orchestrator(settings);
