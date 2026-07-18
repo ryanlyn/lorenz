@@ -50,9 +50,6 @@
       "path": "./packages/process-supervisor"
     },
     {
-      "path": "./packages/retry-scheduler"
-    },
-    {
       "path": "./packages/runtime"
     },
     {

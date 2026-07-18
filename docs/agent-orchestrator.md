@@ -139,7 +139,7 @@ refetch tracked issue
 
 ## Retry timers fire off the poll cadence
 
-Retries do not wait for the next poll. `RetryScheduler` (`packages/retry-scheduler/src/index.ts`) keeps one timer per issue id. `syncRetryTimersForIssues` arms a timer at `monotonicDeadlineMs + RETRY_SCHEDULER_SYNC_DELAY_MS`, where the constant is `5` ms. When a timer fires, if a poll is already running it queues a forced poll, otherwise it calls `pollOnce()`. The 5 ms guard fires the timer slightly late on purpose, so `setTimeout` clock skew never fires it before `sortForDispatch` considers the issue due. Timers are `unref()`'d, so a pending retry never keeps the process alive.
+Retries do not wait for the next poll. Runtime's `RetryScheduler` (`packages/runtime/src/retry-scheduler.ts`) keeps one timer per issue id. `syncRetryTimersForIssues` arms a timer at `monotonicDeadlineMs + RETRY_SCHEDULER_SYNC_DELAY_MS`, where the constant is `5` ms. When a timer fires, if a poll is already running it queues a forced poll, otherwise it calls `pollOnce()`. The 5 ms guard fires the timer slightly late on purpose, so `setTimeout` clock skew never fires it before `sortForDispatch` considers the issue due. Timers are `unref()`'d, so a pending retry never keeps the process alive.
 
 ## RuntimeSnapshot assembly
 

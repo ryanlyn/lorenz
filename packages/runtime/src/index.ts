@@ -3,7 +3,6 @@ import { isTerminalState } from "@lorenz/issue";
 import { Orchestrator, type ClaimStoreLike, type SlotReservation } from "@lorenz/orchestrator";
 import { settingsForIssueState, validateDispatchConfig } from "@lorenz/config";
 import { runAgentAttempt, type RunResult } from "@lorenz/agent-runner";
-import { RetryScheduler } from "@lorenz/retry-scheduler";
 import { workflowFileChanged, workflowStampsEqual } from "@lorenz/workflow";
 import {
   durationMs,
@@ -48,6 +47,7 @@ import {
 } from "@lorenz/dispatch-coordinator";
 
 import { ProjectionActor } from "./projection.js";
+import { RetryScheduler } from "./retry-scheduler.js";
 import { reconciliationStopReason } from "./reconciliation.js";
 
 export type RuntimeRunner = (input: Parameters<typeof runAgentAttempt>[0]) => Promise<RunResult>;

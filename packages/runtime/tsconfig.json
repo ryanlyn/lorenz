@@ -32,9 +32,6 @@
       "path": "../orchestrator"
     },
     {
-      "path": "../retry-scheduler"
-    },
-    {
       "path": "../runtime-events"
     },
     {

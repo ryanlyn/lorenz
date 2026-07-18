@@ -16,7 +16,6 @@
     "@lorenz/domain": "workspace:*",
     "@lorenz/issue": "workspace:*",
     "@lorenz/orchestrator": "workspace:*",
-    "@lorenz/retry-scheduler": "workspace:*",
     "@lorenz/runtime-events": "workspace:*",
     "@lorenz/worker-pool": "workspace:*",
     "@lorenz/workflow": "workspace:*"

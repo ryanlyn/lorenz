@@ -218,9 +218,6 @@ importers:
       '@lorenz/policies':
         specifier: workspace:*
         version: link:packages/policies
-      '@lorenz/retry-scheduler':
-        specifier: workspace:*
-        version: link:packages/retry-scheduler
       '@lorenz/runtime':
         specifier: workspace:*
         version: link:packages/runtime
@@ -380,9 +377,6 @@ importers:
       '@lorenz/presenter':
         specifier: workspace:*
         version: link:../../packages/presenter
-      '@lorenz/retry-scheduler':
-        specifier: workspace:*
-        version: link:../../packages/retry-scheduler
       '@lorenz/runtime':
         specifier: workspace:*
         version: link:../../packages/runtime
@@ -852,15 +846,6 @@ importers:
         specifier: 'catalog:'
         version: 22.19.19
 
-  packages/retry-scheduler:
-    dependencies:
-      '@lorenz/domain':
-        specifier: workspace:*
-        version: link:../domain
-      '@lorenz/runtime-events':
-        specifier: workspace:*
-        version: link:../runtime-events
-
   packages/runtime:
     dependencies:
       '@lorenz/agent-runner':
@@ -884,9 +869,6 @@ importers:
       '@lorenz/orchestrator':
         specifier: workspace:*
         version: link:../orchestrator
-      '@lorenz/retry-scheduler':
-        specifier: workspace:*
-        version: link:../retry-scheduler
       '@lorenz/runtime-events':
         specifier: workspace:*
         version: link:../runtime-events
@@ -987,12 +969,6 @@ importers:
         specifier: workspace:*
         version: link:../domain
 
-  packages/traceviz-emitter:
-    dependencies:
-      '@lorenz/domain':
-        specifier: workspace:*
-        version: link:../domain
-
   packages/traceviz-core:
     dependencies:
       '@agentclientprotocol/sdk':
@@ -1014,6 +990,12 @@ importers:
       typescript:
         specifier: 'catalog:'
         version: 5.9.3
+
+  packages/traceviz-emitter:
+    dependencies:
+      '@lorenz/domain':
+        specifier: workspace:*
+        version: link:../domain
 
   packages/tracker-sdk:
     dependencies:
