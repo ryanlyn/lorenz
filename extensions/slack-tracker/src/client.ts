@@ -4,7 +4,9 @@ import type {
   IssueStateType,
   RuntimeTrackerClient,
   Settings,
+  TrackerChange,
   TrackerChangeStream,
+  TrackerIssueEvent,
 } from "@lorenz/domain";
 
 import {
@@ -16,7 +18,12 @@ import {
 import { mirrorStatusReaction, requireTrackedMessage } from "./operations.js";
 import { slackEndpoint, slackTrackerOptions } from "./options.js";
 import { SlackSocketMode, type SlackSocketModeOptions } from "./socketMode.js";
-import { resolveThreadState, type ThreadState } from "./threadState.js";
+import {
+  isAsideText,
+  parseStatusCommand,
+  resolveThreadState,
+  type ThreadState,
+} from "./threadState.js";
 import { isBotMarked } from "./transport.js";
 import type { SlackChannelScan, SlackMessage, SlackTransport } from "./transport.js";
 
@@ -217,17 +224,61 @@ export class SlackTrackerClient implements RuntimeTrackerClient {
    * before) when no app token is set or no channels are watched, so push is strictly opt-in and
    * never changes behavior for existing single-token deployments.
    */
-  watch(onChange: () => void): TrackerChangeStream | null {
+  watch(onChange: (change?: TrackerChange) => void): TrackerChangeStream | null {
     const { channels, appToken } = slackTrackerOptions(this.settings);
     if (!appToken || appToken.trim() === "" || channels.length === 0) return null;
     const socket = this.createSocketMode({
       endpoint: slackEndpoint(this.settings),
       appToken,
       channels,
-      onChange,
+      onChange: (payload) => onChange(this.changeForSocketPayload(payload)),
     });
     socket.start();
     return socket;
+  }
+
+  async fetchIssueEvents(issueId: string, sinceTs: string): Promise<TrackerIssueEvent[]> {
+    const parts = splitIssueId(issueId);
+    if (!parts) return [];
+    const [channel, threadTs] = parts;
+    const { botUserId } = slackTrackerOptions(this.settings);
+    const floor = tsValue(sinceTs);
+    return (await this.transport.getThread(channel, threadTs))
+      .filter((reply) => {
+        if (tsValue(reply.ts) <= floor) return false;
+        if (reply.user === undefined || reply.user === botUserId) return false;
+        if (isAsideText(reply.text, botUserId)) return false;
+        return parseStatusCommand(reply.text, botUserId, this.settings) === null;
+      })
+      .sort((left, right) => tsValue(left.ts) - tsValue(right.ts))
+      .map((reply) => ({
+        ts: reply.ts,
+        text: reply.text,
+        ...(reply.user !== undefined ? { author: reply.user } : {}),
+      }));
+  }
+
+  private changeForSocketPayload(payload: Record<string, unknown> | undefined): TrackerChange {
+    const event = payload?.event;
+    if (!event || typeof event !== "object" || Array.isArray(event)) return {};
+    const record = event as Record<string, unknown>;
+    if (record.type !== "message" && record.type !== "app_mention") return {};
+    if (typeof record.subtype === "string") return {};
+    const channel = typeof record.channel === "string" ? record.channel : null;
+    const ts = typeof record.ts === "string" ? record.ts : null;
+    const threadTs = typeof record.thread_ts === "string" ? record.thread_ts : null;
+    const text = typeof record.text === "string" ? record.text : null;
+    const user = typeof record.user === "string" ? record.user : null;
+    if (!channel || !ts || !threadTs || threadTs === ts || !text || !user) return {};
+    const { botUserId } = slackTrackerOptions(this.settings);
+    if (user === botUserId || isAsideText(text, botUserId)) return {};
+    if (parseStatusCommand(text, botUserId, this.settings) !== null) return {};
+    return {
+      issueEvents: {
+        issueId: `${channel}:${threadTs}`,
+        events: [{ ts, author: user, text }],
+      },
+    };
   }
 
   /** Resolve a tracked root's thread state and map it to a normalized issue. */

@@ -58,7 +58,7 @@ async function flush(): Promise<void> {
 
 function makeSocketMode(overrides: {
   channels?: string[];
-  onChange: () => void;
+  onChange: (payload?: Record<string, unknown>) => void;
   fetchImpl?: typeof fetch;
   socketQueue: FakeSocket[];
   reconnectDelayMs?: (attempt: number) => number;
@@ -83,8 +83,15 @@ function makeSocketMode(overrides: {
 
 test("an app_mention in a watched channel acks the envelope and nudges onChange", async () => {
   let nudges = 0;
+  let received: Record<string, unknown> | undefined;
   const socket = new FakeSocket();
-  const sm = makeSocketMode({ onChange: () => (nudges += 1), socketQueue: [socket] });
+  const sm = makeSocketMode({
+    onChange: (payload) => {
+      nudges += 1;
+      received = payload;
+    },
+    socketQueue: [socket],
+  });
   sm.start();
   await flush();
 
@@ -96,6 +103,9 @@ test("an app_mention in a watched channel acks the envelope and nudges onChange"
   });
 
   assert.equal(nudges, 1);
+  assert.deepEqual(received, {
+    event: { type: "app_mention", channel: "C1", ts: "1.1" },
+  });
   // The envelope is acked (Slack redelivers otherwise); hello carries no envelope_id so the only
   // ack is for env-1.
   assert.deepEqual(socket.sent, [JSON.stringify({ envelope_id: "env-1" })]);

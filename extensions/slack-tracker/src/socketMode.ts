@@ -43,8 +43,8 @@ export interface SlackSocketModeOptions {
   appToken: string;
   /** Watched channel ids; events outside these are ignored so we never poll on unrelated traffic. */
   channels: string[];
-  /** Invoked when a watched channel sees a mention/reply/reaction so the runtime re-polls promptly. */
-  onChange: () => void;
+  /** Invoked with the watched event payload so the tracker can attach structured change data. */
+  onChange: (payload?: Record<string, unknown>) => void;
   fetchImpl?: typeof fetch;
   webSocketFactory?: SlackWebSocketFactory;
   logger?: SlackTrackerLogger;
@@ -70,7 +70,7 @@ export class SlackSocketMode implements TrackerChangeStream {
   private readonly endpoint: string;
   private readonly appToken: string;
   private readonly channels: Set<string>;
-  private readonly onChange: () => void;
+  private readonly onChange: (payload?: Record<string, unknown>) => void;
   private readonly fetchImpl: typeof fetch;
   private readonly webSocketFactory: SlackWebSocketFactory;
   private readonly logger: SlackTrackerLogger;
@@ -208,7 +208,7 @@ export class SlackSocketMode implements TrackerChangeStream {
       return;
     }
     if (frame.type === "events_api" && this.eventTouchesWatchedChannel(frame.payload)) {
-      this.onChange();
+      this.onChange(frame.payload as Record<string, unknown>);
     }
   }
 

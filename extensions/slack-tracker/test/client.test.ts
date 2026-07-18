@@ -1,4 +1,5 @@
 import { test } from "vitest";
+import type { TrackerChange } from "@lorenz/domain";
 import { assert } from "@lorenz/test-utils";
 
 import { parseSlackConfig } from "./helpers.js";
@@ -857,7 +858,8 @@ test("watch opens Socket Mode with the resolved app token and watched channels",
     } as unknown as SlackSocketMode;
   });
 
-  const onChange = () => {};
+  const changes: Array<TrackerChange | undefined> = [];
+  const onChange = (change?: TrackerChange) => changes.push(change);
   const stream = client.watch(onChange);
   assert.ok(stream !== null);
   assert.equal(started, true);
@@ -866,8 +868,103 @@ test("watch opens Socket Mode with the resolved app token and watched channels",
   assert.equal(opts.appToken, "xapp-123");
   assert.equal(opts.endpoint, "https://slack.com/api");
   assert.deepEqual(opts.channels, ["C1", "C2"]);
-  assert.equal(opts.onChange, onChange);
+  opts.onChange({
+    event: {
+      type: "message",
+      channel: "C1",
+      ts: "1700000001.000200",
+      thread_ts: "1700000000.000100",
+      user: "U_HUMAN",
+      text: "steer left",
+    },
+  });
+  assert.deepEqual(changes, [
+    {
+      issueEvents: {
+        issueId: "C1:1700000000.000100",
+        events: [
+          {
+            ts: "1700000001.000200",
+            author: "U_HUMAN",
+            text: "steer left",
+          },
+        ],
+      },
+    },
+  ]);
 
   stream!.close();
   assert.equal(closed, true);
+});
+
+test("watch excludes replies that are not agent steering", () => {
+  const transport = new InMemorySlackTransport({ C1: [] });
+  const withApp = parseSlackConfig(
+    {
+      tracker: {
+        kind: "slack",
+        channels: ["C1"],
+        bot_user_id: "U_BOT",
+        active_states: ["Todo"],
+      },
+    },
+    { SLACK_BOT_TOKEN: "xoxb-test", SLACK_APP_TOKEN: "xapp-123" },
+  );
+
+  let opened: SlackSocketModeOptions | null = null;
+  const changes: Array<TrackerChange | undefined> = [];
+  const client = new SlackTrackerClient(withApp, transport, (options) => {
+    opened = options;
+    return {
+      start: () => {},
+      close: () => {},
+    } as unknown as SlackSocketMode;
+  });
+  client.watch((change) => changes.push(change));
+  const emit = (event: Record<string, unknown>) =>
+    (opened as unknown as SlackSocketModeOptions).onChange({ event });
+  const reply = {
+    type: "message",
+    channel: "C1",
+    ts: "1700000001.000200",
+    thread_ts: "1700000000.000100",
+    user: "U_HUMAN",
+  };
+
+  emit({ ...reply, user: "U_BOT", text: "status: In Progress" });
+  emit({ ...reply, text: "<@U_BOT> !done" });
+  emit({ ...reply, text: "<@U_BOT> !aside context only" });
+  emit({ ...reply, subtype: "message_changed", text: "edited" });
+  emit({ ...reply, thread_ts: undefined, text: "root message" });
+
+  assert.deepEqual(changes, [{}, {}, {}, {}, {}]);
+});
+
+test("fetchIssueEvents returns only new human steering replies", async () => {
+  const transport = new InMemorySlackTransport({
+    C1: [
+      {
+        ts: "1700000000.000100",
+        text: "<@U_BOT> do it",
+        reactions: ["eyes"],
+        replies: [
+          { ts: "1700000000.000200", text: "already delivered", user: "U_HUMAN" },
+          { ts: "1700000000.000300", text: "status: In Progress", user: "U_BOT" },
+          { ts: "1700000000.000400", text: "<@U_BOT> !done", user: "U_HUMAN" },
+          { ts: "1700000000.000500", text: "!aside context only", user: "U_HUMAN" },
+          { ts: "1700000000.000600", text: "steer left", user: "U_HUMAN" },
+          { ts: "1700000000.000700", text: "missing author" },
+        ],
+      },
+    ],
+  });
+  const client = new SlackTrackerClient(settings(), transport);
+
+  assert.deepEqual(await client.fetchIssueEvents("C1:1700000000.000100", "1700000000.000200"), [
+    {
+      ts: "1700000000.000600",
+      author: "U_HUMAN",
+      text: "steer left",
+    },
+  ]);
 });

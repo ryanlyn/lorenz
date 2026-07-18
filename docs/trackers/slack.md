@@ -2,9 +2,10 @@
 
 Use Slack channels as the source of work. An `@`-mention of your bot becomes an issue, the
 mention's thread carries the status, and Lorenz reads the watched channels over the Slack Web API.
-Optional Socket Mode push can wake the poll loop immediately after relevant Slack events; the Web
-API poll remains the source of truth. This page is for operators: it covers the Slack app setup, the
-required config, the status model, and the `slack_*` agent tools. The provider lives in
+Optional Socket Mode push can wake the poll loop immediately after relevant Slack events and send a
+human thread reply directly to the active agent as its next queued turn. The Web API poll remains
+the source of truth for discovery and status. This page is for operators: it covers the Slack app
+setup, the required config, the status model, and the `slack_*` agent tools. The provider lives in
 `extensions/slack-tracker`.
 
 ## The model in one screen
@@ -41,11 +42,11 @@ the transport calls; they are not declared in the extension source.
 
 Socket Mode is optional. Without an app token, discovery is pure polling of
 `conversations.history`. With an app-level token, Lorenz opens a Socket Mode connection and treats
-watched `app_mention`, `message`, and reaction events as a prompt to re-poll immediately. Event
-handling is deliberately only a wakeup: the subsequent poll re-derives candidates, status, routing,
-and reconciliation from the Web API, and the interval poll remains the safety net for missed events.
-A per-channel incremental watermark is a deferred enhancement; each poll re-scans recent history
-from the newest message.
+watched `app_mention`, `message`, and reaction events as a prompt to re-poll immediately. Candidate
+discovery, status, routing, and reconciliation are still re-derived from the Web API. A new human
+thread reply is also attached to that push as a structured issue event and submitted immediately to
+the active ACP session as its next queued user turn. `conversations.replies` recovers missed replies
+after a reconnect or turn boundary, and the interval poll remains the safety net for missed events.
 
 To receive Socket Mode wakeups, enable Event Subscriptions in the Slack app and subscribe to the bot
 events Lorenz watches: `app_mention`, `message.channels` for public channels, `message.groups` for
@@ -170,6 +171,11 @@ A bare bot-mention reply with no recognized command reopens a terminal issue to 
 active state. Reaction-only state is treated as having ts of negative infinity, so any later bare
 mention reopens it. Re-mentioning the bot always means "this needs attention again".
 
+Prefix a reply with `!aside`, optionally after the bot mention, to keep it visible in the Slack
+thread without steering the active agent or changing issue state. For example,
+`@bot !aside deployment logs are archived elsewhere` is context for humans and future thread reads,
+not a queued agent turn.
+
 ### Reactions as a mirror
 
 `slack_update_status` is transactional: it resolves the canonical state name (rejecting an unknown
@@ -238,6 +244,18 @@ With Socket Mode enabled, push is a latency trigger rather than a separate candi
 watched Slack event queues the same full poll path the interval uses, so reconciliation, retry
 timers, terminal cleanup, blocked-dispatch snapshots, and candidate counts stay consistent. The
 interval still runs to recover any dropped event or reconnect gap.
+
+### Steering a running agent
+
+A new human thread reply is submitted to the active ACP session immediately when Socket Mode
+delivers it. ACP queues the prompt behind any turn already executing, so that reply itself is the
+next turn. The runner consumes the queued result as the next turn slot and does not append the reply
+to a separate continuation prompt.
+
+Bot-authored replies, status commands, `!aside` replies, message edits, system messages, and channel
+roots do not steer the agent. A thread read recovers eligible human replies after a reconnect or
+turn boundary using the latest submitted Slack timestamp as a watermark. Without Socket Mode,
+eligible replies are recovered between turns rather than pushed during an executing turn.
 
 Reads retry on 429 and 5xx. Each retry wait is logged so a rate-limited scan is visible in daemon
 logs instead of looking hung. `chat.postMessage` retries only on 429, never on an ambiguous 5xx,
