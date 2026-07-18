@@ -1,7 +1,7 @@
 import type * as NodeFs from "node:fs";
 import { fileURLToPath } from "node:url";
 
-import type { TicketTraceResponse } from "@lorenz/traceviz-server";
+import type { TicketTraceResponse } from "@lorenz/traceviz-core";
 import { describe, expect, it, vi } from "vitest";
 
 const serverMock = vi.hoisted(() => ({
@@ -42,7 +42,7 @@ vi.mock("node:fs", async (importOriginal) => {
 });
 
 const fixturePath = fileURLToPath(
-  new URL("../../../packages/traceviz-server/test/fixtures/minimal-trace.jsonl", import.meta.url),
+  new URL("../../../packages/traceviz-core/test/fixtures/minimal-trace.jsonl", import.meta.url),
 );
 
 async function loadStandaloneFetch(): Promise<(request: Request) => Response | Promise<Response>> {

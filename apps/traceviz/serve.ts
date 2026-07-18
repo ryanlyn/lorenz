@@ -10,7 +10,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { serve } from "@hono/node-server";
-import { parseTraceLines, extractTicketMetadata, computeStats } from "@lorenz/traceviz-server";
+import { parseTraceLines, extractTicketMetadata, computeStats } from "@lorenz/traceviz-core";
 
 import { createTracevizApp } from "./app.js";
 

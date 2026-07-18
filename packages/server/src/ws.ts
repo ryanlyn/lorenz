@@ -14,7 +14,7 @@ import type {
   TraceWatcher,
   WsClientMessage,
   WsServerMessage,
-} from "@lorenz/traceviz-server";
+} from "@lorenz/traceviz-core";
 import type { WSContext } from "hono/ws";
 
 import { snapshotWithDaemonStatus, type RuntimeServerSource } from "./source.js";

@@ -9,7 +9,7 @@
   },
   "dependencies": {
     "@hono/node-server": "catalog:",
-    "@lorenz/traceviz-server": "workspace:*",
+    "@lorenz/traceviz-core": "workspace:*",
     "hono": "catalog:"
   },
   "devDependencies": {

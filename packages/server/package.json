@@ -15,7 +15,7 @@
     "@lorenz/mcp": "workspace:*",
     "@lorenz/presenter": "workspace:*",
     "@lorenz/runtime-events": "workspace:*",
-    "@lorenz/traceviz-server": "workspace:*",
+    "@lorenz/traceviz-core": "workspace:*",
     "better-sqlite3": "catalog:",
     "hono": "catalog:"
   },

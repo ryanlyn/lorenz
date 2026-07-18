@@ -443,9 +443,9 @@ importers:
       '@hono/node-server':
         specifier: 'catalog:'
         version: 1.19.14(hono@4.12.23)
-      '@lorenz/traceviz-server':
+      '@lorenz/traceviz-core':
         specifier: workspace:*
-        version: link:../../packages/traceviz-server
+        version: link:../../packages/traceviz-core
       hono:
         specifier: 'catalog:'
         version: 4.12.23
@@ -468,9 +468,9 @@ importers:
       '@lorenz/presenter':
         specifier: workspace:*
         version: link:../../packages/presenter
-      '@lorenz/traceviz-server':
+      '@lorenz/traceviz-core':
         specifier: workspace:*
-        version: link:../../packages/traceviz-server
+        version: link:../../packages/traceviz-core
       clsx:
         specifier: 'catalog:'
         version: 2.1.1
@@ -932,9 +932,9 @@ importers:
       '@lorenz/runtime-events':
         specifier: workspace:*
         version: link:../runtime-events
-      '@lorenz/traceviz-server':
+      '@lorenz/traceviz-core':
         specifier: workspace:*
-        version: link:../traceviz-server
+        version: link:../traceviz-core
       better-sqlite3:
         specifier: 'catalog:'
         version: 12.10.0
@@ -999,7 +999,7 @@ importers:
         specifier: workspace:*
         version: link:../domain
 
-  packages/traceviz-server:
+  packages/traceviz-core:
     dependencies:
       '@agentclientprotocol/sdk':
         specifier: 'catalog:'

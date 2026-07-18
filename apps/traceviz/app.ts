@@ -3,7 +3,7 @@ import path from "node:path";
 
 import { Hono } from "hono";
 import { serveStatic } from "@hono/node-server/serve-static";
-import type { DisplayEvent, TicketTraceResponse, TraceStats } from "@lorenz/traceviz-server";
+import type { DisplayEvent, TicketTraceResponse, TraceStats } from "@lorenz/traceviz-core";
 
 export type TracevizAppOptions = {
   dashboardDist: string;

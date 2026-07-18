@@ -7,7 +7,7 @@
  */
 
 import { Hono } from "hono";
-import { TraceWatcher } from "@lorenz/traceviz-server";
+import { TraceWatcher } from "@lorenz/traceviz-core";
 
 import type { IssueStore } from "./issue-store.js";
 import { decodePathParam, invalidPathParameterError } from "./path-params.js";

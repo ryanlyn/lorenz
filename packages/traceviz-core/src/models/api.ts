@@ -1,5 +1,5 @@
 /**
- * API response types for the traceviz server endpoints.
+ * TraceViz API response and WebSocket protocol types.
  */
 
 import type { OpsStatePayload } from "@lorenz/presenter";
