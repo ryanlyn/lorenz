@@ -5,13 +5,6 @@ import path from "node:path";
 
 import { Command } from "commander";
 import {
-  commanderErrorMessage,
-  configureCommandForParse,
-  hasHelpFlag,
-  parseRequiredValue,
-  type ParseResult,
-} from "@lorenz/cli-kit";
-import {
   collectConfigDeprecations,
   formatConfigDeprecation,
   settingsForIssueState,
@@ -28,6 +21,13 @@ import {
 import { defaultToolRegistry } from "@lorenz/tool-sdk";
 import { defaultTrackerRegistry } from "@lorenz/tracker-sdk";
 
+import {
+  commanderErrorMessage,
+  configureCommandForParse,
+  hasHelpFlag,
+  parseRequiredValue,
+  type ParseResult,
+} from "./commander.js";
 import { registerBuiltinBackends, runtimeDefaultSettingsOptions } from "./daemon.js";
 import { accumulateOption, resolveAppFlags } from "./flags-manifest.js";
 

@@ -23,9 +23,6 @@
       "path": "../../packages/worker-sdk"
     },
     {
-      "path": "../../packages/cli-kit"
-    },
-    {
       "path": "../../packages/config"
     },
     {

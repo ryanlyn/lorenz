@@ -23,7 +23,6 @@
     "@lorenz/agent-runner": "workspace:*",
     "@lorenz/agent-sdk": "workspace:*",
     "@lorenz/worker-sdk": "workspace:*",
-    "@lorenz/cli-kit": "workspace:*",
     "@lorenz/config": "workspace:*",
     "@lorenz/dispatch": "workspace:*",
     "@lorenz/dispatch-coordinator": "workspace:*",
