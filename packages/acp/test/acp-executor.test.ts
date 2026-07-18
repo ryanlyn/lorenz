@@ -403,6 +403,11 @@ test("vendored prompt queues advertise capability and isolate Claude usage at ha
     queueSubmission,
     /if \(!pendingPrompt\.inputSubmitted\) \{\s*session\.input\.push\(userMessage\)/,
   );
+  const promptErrorStart = claudeSource.indexOf("catch (error)", promptStart);
+  const promptFinallyStart = claudeSource.indexOf("finally {", promptErrorStart);
+  const promptErrorBody = claudeSource.slice(promptErrorStart, promptFinallyStart);
+  assert.match(promptErrorBody, /some\(\(pending\) => pending\.inputSubmitted\)/);
+  assert.match(promptErrorBody, /this\.discardSession\(params\.sessionId, session\)/);
 
   const cancelStart = claudeSource.indexOf("async cancel(params)");
   const teardownStart = claudeSource.indexOf("async teardownSession", cancelStart);

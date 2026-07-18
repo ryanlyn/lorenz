@@ -978,28 +978,37 @@ export class ClaudeAcpAgent {
         }
         catch (error) {
             errored = true;
-            // A failed turn typically leaves a trailing `session_state_changed: idle`
-            // (and possibly more) in the query iterator. If we don't drain it here,
-            // the next prompt's first `query.next()` consumes that stale idle and
-            // short-circuits to end_turn with zero usage
-            // Bounded so a misbehaving SDK can't hang the next prompt indefinitely.
-            try {
-                await session.query.interrupt();
-                const MAX_DRAIN = 100;
-                for (let i = 0; i < MAX_DRAIN; i++) {
-                    const { value: m, done } = await session.query.next();
-                    if (done || !m)
-                        break;
-                    if (m.type === "system" && m.subtype === "session_state_changed" && m.state === "idle") {
-                        break;
-                    }
-                    if (i === MAX_DRAIN - 1) {
-                        this.logger.error(`Session ${params.sessionId}: drained ${MAX_DRAIN} messages after error without observing idle`);
+            const hasSubmittedPendingInput = [...session.pendingMessages.values()].some((pending) => pending.inputSubmitted);
+            if (hasSubmittedPendingInput) {
+                // Submitted inputs cannot be removed from the SDK queue. Closing the
+                // session prevents cancelled ACP prompts from executing after their
+                // owning turn fails.
+                this.discardSession(params.sessionId, session);
+            }
+            else {
+                // A failed turn typically leaves a trailing `session_state_changed: idle`
+                // (and possibly more) in the query iterator. If we don't drain it here,
+                // the next prompt's first `query.next()` consumes that stale idle and
+                // short-circuits to end_turn with zero usage
+                // Bounded so a misbehaving SDK can't hang the next prompt indefinitely.
+                try {
+                    await session.query.interrupt();
+                    const MAX_DRAIN = 100;
+                    for (let i = 0; i < MAX_DRAIN; i++) {
+                        const { value: m, done } = await session.query.next();
+                        if (done || !m)
+                            break;
+                        if (m.type === "system" && m.subtype === "session_state_changed" && m.state === "idle") {
+                            break;
+                        }
+                        if (i === MAX_DRAIN - 1) {
+                            this.logger.error(`Session ${params.sessionId}: drained ${MAX_DRAIN} messages after error without observing idle`);
+                        }
                     }
                 }
-            }
-            catch (drainErr) {
-                this.logger.error(`Session ${params.sessionId}: failed to drain query after prompt error:`, drainErr);
+                catch (drainErr) {
+                    this.logger.error(`Session ${params.sessionId}: failed to drain query after prompt error:`, drainErr);
+                }
             }
             if (error instanceof RequestError || !(error instanceof Error)) {
                 throw error;
@@ -1011,9 +1020,7 @@ export class ClaudeAcpAgent {
                 message.includes("process terminated by signal") ||
                 message.includes("Failed to write to process stdin")) {
                 this.logger.error(`Session ${params.sessionId}: Claude Agent process died: ${message}`);
-                session.settingsManager.dispose();
-                session.input.end();
-                delete this.sessions[params.sessionId];
+                this.discardSession(params.sessionId, session);
                 throw RequestError.internalError(undefined, "The Claude Agent process exited unexpectedly. Please start a new session.");
             }
             throw error;
@@ -1021,10 +1028,8 @@ export class ClaudeAcpAgent {
         finally {
             if (!handedOff) {
                 if (errored) {
-                    // The query stream was just drained — handing pending prompts off
-                    // onto it would let them race with the recovery. Cancel them so
-                    // each waiting prompt() returns stopReason: "cancelled" and the
-                    // client can decide whether to retry.
+                    // A failed owner cannot hand pending prompts onto reliable query
+                    // state. Cancel them so the client can decide whether to retry.
                     cancelPendingPrompts(session);
                 }
                 else {
@@ -1041,6 +1046,16 @@ export class ClaudeAcpAgent {
         session.cancelled = true;
         await session.query.interrupt();
     }
+    discardSession(sessionId, session) {
+        if (this.sessions[sessionId] !== session) {
+            return;
+        }
+        session.settingsManager.dispose();
+        session.input.end();
+        session.abortController.abort();
+        session.query.close();
+        delete this.sessions[sessionId];
+    }
     /** Cleanly tear down a session: cancel in-flight work, dispose resources,
      *  and remove it from the session map. */
     async teardownSession(sessionId) {
@@ -1050,10 +1065,7 @@ export class ClaudeAcpAgent {
         }
         cancelPendingPrompts(session);
         await this.cancel({ sessionId });
-        session.settingsManager.dispose();
-        session.abortController.abort();
-        session.query.close();
-        delete this.sessions[sessionId];
+        this.discardSession(sessionId, session);
     }
     /** Tear down all active sessions. Called when the ACP connection closes. */
     async dispose() {

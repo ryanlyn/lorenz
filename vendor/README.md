@@ -43,7 +43,7 @@ so they ride the protocol's sanctioned extension point:
   advertises that concurrent prompts are accepted and run in submission order.
 - Concurrent `session/prompt` requests (codex) are queued per session before
   reaching app-server, which permits one active turn per thread. The Claude
-  bridge already provides the same FIFO prompt behavior.
+  bridge provides the same FIFO prompt behavior.
 
 ## Refreshing from upstream
 
