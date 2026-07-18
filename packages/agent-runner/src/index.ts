@@ -169,7 +169,7 @@ class RunController {
     let session: AgentSession | null = null;
 
     let turnCount = 0;
-    let submittedTurnCount = 0;
+    let autonomousTurnCount = 0;
     let runError: unknown;
     let stopError: unknown;
     let stopSession: (() => Promise<void>) | undefined;
@@ -273,7 +273,8 @@ class RunController {
           input.abortSignal,
         );
       };
-      let steeringRecoveryCursorTs = issue.issueEventCursor ?? "0";
+      const steeringSnapshotCursorTs = issue.issueEventCursor;
+      let steeringRecoveryCursorTs = steeringSnapshotCursorTs ?? "0";
       let steeringReady = false;
       const seenSteeringEventTs = new Set<string>();
       const reportSteeringFailure = (stage: string, error: unknown): void => {
@@ -283,26 +284,22 @@ class RunController {
           message: `Ignoring steering ${stage} failure: ${errorMessage(error)}`,
         });
       };
-      const queueIssueEvents = (events: TrackerIssueEvent[]): void => {
+      const queueIssueEvents = (events: TrackerIssueEvent[]): boolean => {
         if (!steeringReady) {
           bufferedIssueEvents.push(...events);
-          return;
+          return false;
         }
-        if (!session?.queueTurn) return;
+        if (!session?.queueTurn) return false;
         const candidates = [...bufferedIssueEvents, ...events];
         bufferedIssueEvents = [];
         let fresh: TrackerIssueEvent[];
         try {
-          fresh = freshSteeringEvents(candidates, seenSteeringEventTs);
+          fresh = freshSteeringEvents(candidates, seenSteeringEventTs, steeringSnapshotCursorTs);
         } catch (error) {
           reportSteeringFailure("queue", error);
-          return;
+          return false;
         }
-        if (fresh.length === 0) return;
-        if (submittedTurnCount >= runtime.agent.maxTurns) {
-          bufferedIssueEvents = fresh;
-          return;
-        }
+        if (fresh.length === 0) return true;
         try {
           const prompt = issueEventsPrompt(fresh);
           const activity = { sawToolCall: false };
@@ -319,11 +316,12 @@ class RunController {
           }
           const queuedTurn = { outcome, activity };
           queuedTurns.push(queuedTurn);
-          submittedTurnCount += 1;
           for (const event of fresh) seenSteeringEventTs.add(event.ts);
+          return true;
         } catch (error) {
           bufferedIssueEvents = fresh;
           reportSteeringFailure("queue", error);
+          return false;
         }
       };
       const initializeSteering = (): void => {
@@ -332,26 +330,27 @@ class RunController {
         steeringReady = true;
         queueIssueEvents(buffered);
       };
-      const recoverSteering = async (): Promise<void> => {
-        if (!steeringRecoveryAvailable || submittedTurnCount >= runtime.agent.maxTurns) {
-          return;
-        }
+      const recoverSteering = async (required: boolean): Promise<void> => {
+        if (!steeringRecoveryAvailable) return;
         try {
           const recovered = await fetchSteeringIssueEvents(steeringRecoveryCursorTs);
-          queueIssueEvents(recovered);
+          if (!queueIssueEvents(recovered)) {
+            throw new Error("steering_event_queue_failed");
+          }
           steeringRecoveryCursorTs = maxSteeringTs(recovered, steeringRecoveryCursorTs);
         } catch (error) {
           throwIfAborted(input.abortSignal);
+          if (required) throw error;
           reportSteeringFailure("recovery", error);
         }
       };
 
       receiveIssueEvents = queueIssueEvents;
 
-      while (turnCount < runtime.agent.maxTurns) {
+      while (autonomousTurnCount < runtime.agent.maxTurns || queuedTurns.length > 0) {
         throwIfAborted(input.abortSignal);
         const queuedTurn = queuedTurns.shift();
-        if (!queuedTurn && submittedTurnCount >= runtime.agent.maxTurns) break;
+        if (!queuedTurn && autonomousTurnCount >= runtime.agent.maxTurns) break;
         let turnUpdates: AgentUpdate[];
         let turnActivity: TurnActivity;
         if (queuedTurn) {
@@ -368,7 +367,7 @@ class RunController {
         } else {
           turnActivity = { sawToolCall: false };
           const prompt =
-            turnCount === 0
+            autonomousTurnCount === 0
               ? await buildPrompt(
                   input.workflow.parsedPromptTemplate ?? input.workflow.promptTemplate,
                   issue,
@@ -378,7 +377,7 @@ class RunController {
                     ensembleSize: size,
                   },
                 )
-              : continuationPrompt(turnCount + 1, runtime.agent.maxTurns);
+              : continuationPrompt(autonomousTurnCount + 1, runtime.agent.maxTurns);
           pendingStreamActivities.push(turnActivity);
           currentNormalActivity = turnActivity;
           try {
@@ -390,8 +389,8 @@ class RunController {
               stopSession,
               input.abortSignal,
             );
-            submittedTurnCount += 1;
-            if (turnCount === 0) initializeSteering();
+            autonomousTurnCount += 1;
+            if (autonomousTurnCount === 1) initializeSteering();
             turnUpdates = await turnPromise;
           } finally {
             currentNormalActivity = undefined;
@@ -436,7 +435,9 @@ class RunController {
         }
         runtime = refreshed;
         queueIssueEvents([]);
-        await recoverSteering();
+        await recoverSteering(
+          completedWithoutTools || autonomousTurnCount >= runtime.agent.maxTurns,
+        );
         if (completedWithoutTools && queuedTurns.length === 0) break;
       }
     } catch (error) {
@@ -564,10 +565,18 @@ async function queuedTurnWithAbort(
 function freshSteeringEvents(
   events: TrackerIssueEvent[],
   seenTs: ReadonlySet<string>,
+  snapshotCursorTs: string | null | undefined,
 ): TrackerIssueEvent[] {
   const batchTs = new Set<string>();
   return events
     .filter((event) => {
+      if (
+        snapshotCursorTs !== null &&
+        snapshotCursorTs !== undefined &&
+        compareSteeringTs(event.ts, snapshotCursorTs) <= 0
+      ) {
+        return false;
+      }
       if (seenTs.has(event.ts) || batchTs.has(event.ts)) return false;
       batchTs.add(event.ts);
       return true;

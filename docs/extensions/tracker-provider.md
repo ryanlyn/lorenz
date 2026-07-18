@@ -73,10 +73,11 @@ interface RuntimeTrackerClient {
   waiting for that poll.
 - `fetchIssueEvents(issueId, sinceTs)` is an optional recovery feed for events missed across a
   change-stream gap. Each event uses a unique, canonical non-negative decimal `ts` key. The feed
-  returns events newer than `sinceTs`. Set `Issue.issueEventCursor` to the latest event key included
-  in each issue snapshot; the runner starts recovery there, advances the cursor only from feed
-  results, and deduplicates live delivery independently. Stop the request when `abortSignal`
-  aborts.
+  returns events newer than `sinceTs`. Set `Issue.issueEventCursor` to the latest event key already
+  represented in prompt-visible fields of each issue snapshot. The runner ignores live replays at
+  or before that immutable boundary, advances its recovery cursor only after accepting feed
+  results, and submits later human events even when the autonomous turn budget is exhausted. Stop
+  the request when `abortSignal` aborts.
 
 Each client returns the domain `Issue` shape, not the backend's raw payload. `Issue` requires
 `stateType: IssueStateType` (one of `backlog`, `unstarted`, `started`, `completed`, `canceled`,

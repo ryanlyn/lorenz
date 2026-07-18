@@ -277,8 +277,8 @@ export interface Issue {
   /** ISO-8601 timestamp string as returned by the tracker; not parsed into a Date. */
   updatedAt?: string | null | undefined;
   /**
-   * Latest issue-event ordering key included in this snapshot. Event recovery begins after this
-   * cursor so changes that arrive after the snapshot remain eligible for agent steering.
+   * Latest issue-event ordering key represented in prompt-visible fields of this snapshot. Event
+   * recovery begins after this cursor, and live delivery ignores replays at or before it.
    */
   issueEventCursor?: string | null | undefined;
   /** Lower-cased label names; ensemble size is encoded as `ensemble:<n>`. */
@@ -783,8 +783,8 @@ export interface RuntimeTrackerClient {
   /**
    * Optional recovery feed for human-authored issue events newer than `sinceTs`, returned in
    * ascending order. `"0"` means from the beginning. Tracker issue snapshots provide the initial
-   * boundary through {@link Issue.issueEventCursor}; live push is the primary delivery path and
-   * this pull hook recovers events missed across connection gaps.
+   * prompt-visible boundary through {@link Issue.issueEventCursor}; live push is the primary
+   * delivery path and this pull hook recovers events missed across connection gaps.
    */
   fetchIssueEvents?(
     issueId: string,

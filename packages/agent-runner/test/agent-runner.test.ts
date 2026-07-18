@@ -146,6 +146,62 @@ test("live issue events are submitted immediately and consumed as the next queue
   assert.equal(subscriptionClosed, true);
 });
 
+test("live delivery ignores events represented by the initial issue snapshot", async () => {
+  const settings = fakeSettings({ agent: { ...defaultSettings().agent, maxTurns: 1 } });
+  const queuedPrompts: string[] = [];
+  let issueEventListener: ((events: TrackerIssueEvent[]) => void) | undefined;
+  let releaseFirstTurn: (() => void) | undefined;
+  let markFirstTurnStarted: (() => void) | undefined;
+  const firstTurnStarted = new Promise<void>((resolve) => {
+    markFirstTurnStarted = resolve;
+  });
+  const firstTurnRelease = new Promise<void>((resolve) => {
+    releaseFirstTurn = resolve;
+  });
+  const session = fakeSession({
+    queueTurn: async (prompt) => {
+      queuedPrompts.push(prompt);
+      return [{ type: "turn_completed" }];
+    },
+  });
+  const executor: AgentExecutor = {
+    kind: "codex",
+    async startSession() {
+      return session;
+    },
+    async runTurn() {
+      markFirstTurnStarted?.();
+      await firstTurnRelease;
+      return [{ type: "turn_completed" }];
+    },
+  };
+
+  const attempt = runAgentAttempt({
+    issue: fakeIssue({ issueEventCursor: "11.0" }),
+    workflow: { path: "/workflow.md", config: {}, promptTemplate: "Fix it", settings },
+    settings,
+    subscribeIssueEvents: (listener) => {
+      issueEventListener = listener;
+      return () => {};
+    },
+    adapters: fakeAdapters({ executorFactory: () => executor }),
+  });
+
+  await firstTurnStarted;
+  issueEventListener?.([
+    { ts: "10.0", author: "ryan", text: "older snapshot context" },
+    { ts: "11.0", author: "ryan", text: "latest snapshot context" },
+    { ts: "12.0", author: "ryan", text: "new steering" },
+  ]);
+  await vi.waitFor(() => assert.equal(queuedPrompts.length, 1));
+  releaseFirstTurn?.();
+
+  const result = await attempt;
+  assert.equal(result.turnCount, 2);
+  assert.notMatch(queuedPrompts[0]!, /snapshot context/);
+  assert.match(queuedPrompts[0]!, /new steering/);
+});
+
 test("accepted steering runs before a fallible issue refresh", async () => {
   const settings = fakeSettings({ agent: { ...defaultSettings().agent, maxTurns: 2 } });
   const queuedPrompts: string[] = [];
@@ -434,7 +490,7 @@ test("live delivery does not advance the recovery cursor past missed events", as
 
   const result = await attempt;
   assert.equal(result.turnCount, 3);
-  assert.deepEqual(recoveryCursors, ["10.0"]);
+  assert.deepEqual(recoveryCursors, ["10.0", "12.0"]);
   assert.match(queuedPrompts[0]!, /live event/);
   assert.notMatch(queuedPrompts[0]!, /missed event/);
   assert.match(queuedPrompts[1]!, /missed event/);
@@ -474,7 +530,7 @@ test("recovery can queue a missed event before the no-tool completion exit", asy
   });
 
   assert.equal(result.turnCount, 3);
-  assert.deepEqual(feedCursors, ["10.0", "10.0"]);
+  assert.deepEqual(feedCursors, ["10.0", "10.0", "11.0"]);
   assert.equal(queuedPrompts.length, 1);
   assert.match(queuedPrompts[0]!, /missed during turn/);
 });
@@ -541,13 +597,8 @@ test("a state override can add turn capacity for steering recovery", async () =>
   assert.match(queuedPrompts[0]!, /recovered after transition/);
 });
 
-test("a state override can add turn capacity for a buffered live event", async () => {
-  const overrides = new Map<string, { agent?: Partial<Settings["agent"]> }>();
-  overrides.set("in progress", { agent: { maxTurns: 2 } });
-  const settings = fakeSettings({
-    agent: { ...defaultSettings().agent, maxTurns: 1 },
-    statusOverrides: overrides as Settings["statusOverrides"],
-  });
+test("live steering is drained after the autonomous turn budget is exhausted", async () => {
+  const settings = fakeSettings({ agent: { ...defaultSettings().agent, maxTurns: 1 } });
   const queuedPrompts: string[] = [];
   let issueEventListener: ((events: TrackerIssueEvent[]) => void) | undefined;
   let releaseFirstTurn: (() => void) | undefined;
@@ -580,7 +631,6 @@ test("a state override can add turn capacity for a buffered live event", async (
     issue: fakeIssue(),
     workflow: { path: "/workflow.md", config: {}, promptTemplate: "Fix it", settings },
     settings,
-    fetchIssue: async (issue) => ({ ...issue, state: "In Progress" }),
     subscribeIssueEvents: (listener) => {
       issueEventListener = listener;
       return () => {};
@@ -589,14 +639,14 @@ test("a state override can add turn capacity for a buffered live event", async (
   });
 
   await firstTurnStarted;
-  issueEventListener?.([{ ts: "11.0", author: "ryan", text: "use the new capacity" }]);
-  assert.equal(queuedPrompts.length, 0);
+  issueEventListener?.([{ ts: "11.0", author: "ryan", text: "finish after the budget" }]);
+  await vi.waitFor(() => assert.equal(queuedPrompts.length, 1));
   releaseFirstTurn?.();
 
   const result = await attempt;
   assert.equal(result.turnCount, 2);
   assert.equal(queuedPrompts.length, 1);
-  assert.match(queuedPrompts[0]!, /use the new capacity/);
+  assert.match(queuedPrompts[0]!, /finish after the budget/);
 });
 
 test("sessions without queued turns do not start issue event recovery", async () => {
@@ -756,7 +806,7 @@ test("run cancellation stops queued ACP work during an issue refresh", async () 
   assert.equal(stopCalls, 1);
 });
 
-test("a non-settling steering recovery feed is bounded by the agent timeout", async () => {
+test("a non-settling final steering recovery fails within the agent timeout", async () => {
   const baseSettings = fakeSettingsWithTimeouts({ setupTimeoutMs: 20 });
   const settings: Settings = {
     ...baseSettings,
@@ -768,7 +818,7 @@ test("a non-settling steering recovery feed is bounded by the agent timeout", as
     queueTurn: async () => [{ type: "turn_completed" }],
   });
 
-  const result = await runAgentAttempt({
+  const attempt = runAgentAttempt({
     issue: fakeIssue({ issueEventCursor: "10.0" }),
     workflow: { path: "/workflow.md", config: {}, promptTemplate: "Fix it", settings },
     settings,
@@ -788,8 +838,8 @@ test("a non-settling steering recovery feed is bounded by the agent timeout", as
     }),
   });
 
-  assert.equal(result.turnCount, 2);
-  assert.equal(feedCalls, 1);
+  await assert.rejects(() => attempt, /tracker\.fetch_issue_events timed out after 20ms/);
+  assert.equal(feedCalls, 2);
   assert.ok(
     updates.some(
       (update) =>

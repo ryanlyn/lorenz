@@ -182,9 +182,10 @@ Continuation guidance:
 - Focus on the remaining ticket work and do not end the turn while the issue stays active unless you are truly blocked.
 ```
 
-`turnNumber` is the continuation turn count and `maxTurns` is the configured turn ceiling
+`turnNumber` is the autonomous turn count and `maxTurns` is the configured autonomous turn ceiling
 (`agent.max_turns`, default `20`). The workflow template renders once at the start of a run; the
-continuation prompt drives subsequent turns of the same run.
+continuation prompt drives later autonomous turns. Human steering arrives as standalone queued user
+turns and is not rendered as continuation guidance.
 
 ## Hooks also render Liquid
 
