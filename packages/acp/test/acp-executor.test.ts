@@ -514,12 +514,17 @@ test("bridge guardian fails closed and completes process-group cleanup", async (
   const script = source.slice(scriptStart, scriptEnd);
 
   assert.match(script, /`cd \$\{shellEscape\(workspace\)\} \|\| exit 1`/);
-  assert.match(script, /`bash -c \$\{shellEscape\(bridge\)\} <&0 &`/);
+  assert.match(script, /`bash -c \$\{shellEscape\(guardedBridge\)\} <&0 &`/);
+  assert.match(script, /trap '' HUP INT TERM; while :; do sleep 3600; done/);
   assert.equal(script.includes("`${bridge} <&0 &`"), false);
   assert.match(script, /' {2}wait "\$force_pid" 2>\/dev\/null \|\| true'/);
   assert.equal(script.includes(`'  kill "$force_pid" 2>/dev/null || true'`), false);
   assert.match(script, /"status=\$\?"/);
   assert.match(script, /"cleanup"/);
+  const forceWait = script.indexOf('wait "$force_pid"');
+  const bridgeWait = script.indexOf('wait "$bridge_pid"', forceWait);
+  assert.ok(forceWait >= 0);
+  assert.ok(bridgeWait > forceWait);
   assert.match(source, /return startSshProcess\(workerHost, script\)/);
   assert.equal(source.includes("startSshProcess(workerHost, `bash -lc"), false);
   assert.match(source, /execa\("bash", \["-lc", bridgeGuardianScript\(workspace, bridge\)\]/);

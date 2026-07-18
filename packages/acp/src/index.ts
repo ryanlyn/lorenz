@@ -1153,10 +1153,13 @@ exit $exitCode
 }
 
 function bridgeGuardianScript(workspace: string, bridge: string): string {
+  const guardedBridge = ["(trap '' HUP INT TERM; while :; do sleep 3600; done) &", bridge].join(
+    "\n",
+  );
   return [
     "set -m",
     `cd ${shellEscape(workspace)} || exit 1`,
-    `bash -c ${shellEscape(bridge)} <&0 &`,
+    `bash -c ${shellEscape(guardedBridge)} <&0 &`,
     "bridge_pid=$!",
     "cleaned=0",
     "cleanup() {",
@@ -1169,8 +1172,8 @@ function bridgeGuardianScript(workspace: string, bridge: string): string {
     '    kill -KILL -- "-$bridge_pid" 2>/dev/null || true',
     "  ) &",
     "  force_pid=$!",
-    '  wait "$bridge_pid" 2>/dev/null || true',
     '  wait "$force_pid" 2>/dev/null || true',
+    '  wait "$bridge_pid" 2>/dev/null || true',
     "}",
     "trap cleanup HUP INT TERM EXIT",
     'wait "$bridge_pid"',
