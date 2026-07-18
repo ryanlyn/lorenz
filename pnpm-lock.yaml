@@ -1031,6 +1031,9 @@ importers:
       '@lorenz/domain':
         specifier: workspace:*
         version: link:../domain
+      '@lorenz/presenter':
+        specifier: workspace:*
+        version: link:../presenter
     devDependencies:
       '@types/node':
         specifier: 'catalog:'
