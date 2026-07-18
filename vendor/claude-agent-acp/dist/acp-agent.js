@@ -447,7 +447,6 @@ export class ClaudeAcpAgent {
         if (!session) {
             throw new Error("Session not found");
         }
-        session.cancelled = false;
         let lastAssistantTotalUsage = null;
         let lastAssistantUsage = null;
         let lastAssistantModel = null;
@@ -486,6 +485,9 @@ export class ClaudeAcpAgent {
         else {
             session.input.push(userMessage);
         }
+        // Cancellation belongs to the prompt that owns the query loop. A
+        // queued prompt clears the predecessor's state only when it takes over.
+        session.cancelled = false;
         // Usage belongs to the prompt that owns the query loop. A queued prompt
         // reaches this point only after the preceding prompt hands off.
         session.accumulatedUsage = {
@@ -1014,10 +1016,7 @@ export class ClaudeAcpAgent {
                     // onto it would let them race with the recovery. Cancel them so
                     // each waiting prompt() returns stopReason: "cancelled" and the
                     // client can decide whether to retry.
-                    for (const pending of session.pendingMessages.values()) {
-                        pending.resolve(true);
-                    }
-                    session.pendingMessages.clear();
+                    cancelPendingPrompts(session);
                 }
                 else if (session.pendingMessages.size > 0) {
                     // This usually should not happen, but in case the loop finishes
@@ -1038,10 +1037,6 @@ export class ClaudeAcpAgent {
             return;
         }
         session.cancelled = true;
-        for (const [, pending] of session.pendingMessages) {
-            pending.resolve(true);
-        }
-        session.pendingMessages.clear();
         await session.query.interrupt();
     }
     /** Cleanly tear down a session: cancel in-flight work, dispose resources,
@@ -1051,6 +1046,7 @@ export class ClaudeAcpAgent {
         if (!session) {
             return;
         }
+        cancelPendingPrompts(session);
         await this.cancel({ sessionId });
         session.settingsManager.dispose();
         session.abortController.abort();
@@ -1826,6 +1822,13 @@ function sessionUsage(session) {
             session.accumulatedUsage.cachedReadTokens +
             session.accumulatedUsage.cachedWriteTokens,
     };
+}
+
+function cancelPendingPrompts(session) {
+    for (const pending of session.pendingMessages.values()) {
+        pending.resolve(true);
+    }
+    session.pendingMessages.clear();
 }
 /** Sum all four fields as a proxy for post-turn context occupancy: the current
  *  turn's output becomes next turn's input. Per the Anthropic API, input_tokens

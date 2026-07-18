@@ -248,10 +248,18 @@ test("vendored prompt queues advertise capability and isolate Claude usage at ha
 
   const promptStart = claudeSource.indexOf("async prompt(params)");
   const queuedHandoff = claudeSource.indexOf("const cancelled = await", promptStart);
+  const cancellationReset = claudeSource.indexOf("session.cancelled = false", promptStart);
   const usageReset = claudeSource.indexOf("session.accumulatedUsage = {", promptStart);
   assert.ok(promptStart >= 0);
   assert.ok(queuedHandoff > promptStart);
+  assert.ok(cancellationReset > queuedHandoff);
   assert.ok(usageReset > queuedHandoff);
+
+  const cancelStart = claudeSource.indexOf("async cancel(params)");
+  const teardownStart = claudeSource.indexOf("async teardownSession", cancelStart);
+  const cancelBody = claudeSource.slice(cancelStart, teardownStart);
+  assert.equal(/pendingMessages/.test(cancelBody), false);
+  assert.match(claudeSource.slice(teardownStart), /cancelPendingPrompts\(session\)/);
 });
 
 test("ACP executor can pass through cumulative bridge usage without double counting", async () => {
