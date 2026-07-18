@@ -329,7 +329,7 @@ test("a run defers steering beyond its turn limit without failing", async () => 
   assert.notMatch(queuedPrompts[0]!, /deferred steering/);
 });
 
-test("accepted steering survives a fallible issue refresh", async () => {
+test("accepted steering remains inactive when issue refresh fails", async () => {
   const settings = fakeSettings({ agent: { ...defaultSettings().agent, maxTurns: 2 } });
   const queuedPrompts: string[] = [];
   let issueEventListener: ((events: TrackerIssueEvent[]) => void) | undefined;
@@ -342,9 +342,12 @@ test("accepted steering survives a fallible issue refresh", async () => {
     releaseFirstTurn = resolve;
   });
   let issueRefreshes = 0;
+  let backendActivations = 0;
   const session = fakeSession({
-    queueTurn: async (prompt) => {
+    queueTurn: async (prompt, options) => {
       queuedPrompts.push(prompt);
+      await options?.startWhen;
+      backendActivations += 1;
       return [{ type: "turn_completed" }];
     },
   });
@@ -381,8 +384,9 @@ test("accepted steering survives a fallible issue refresh", async () => {
   releaseFirstTurn?.();
 
   const result = await attempt;
-  assert.equal(result.turnCount, 2);
-  assert.equal(issueRefreshes, 2);
+  assert.equal(result.turnCount, 1);
+  assert.equal(issueRefreshes, 1);
+  assert.equal(backendActivations, 0);
   assert.match(queuedPrompts[0]!, /finish this first/);
 });
 
@@ -456,7 +460,7 @@ test("accepted steering is cancelled when the issue becomes inactive", async () 
   assert.equal(backendActivations, 0);
 });
 
-test("steering accepted during a failed issue refresh still completes", async () => {
+test("steering accepted during a failed issue refresh remains inactive", async () => {
   const settings = fakeSettings({ agent: { ...defaultSettings().agent, maxTurns: 2 } });
   const queuedPrompts: string[] = [];
   const updates: AgentUpdate[] = [];
@@ -469,9 +473,12 @@ test("steering accepted during a failed issue refresh still completes", async ()
   const issueRefresh = new Promise<Issue>((_resolve, reject) => {
     rejectIssueRefresh = reject;
   });
+  let backendActivations = 0;
   const session = fakeSession({
-    queueTurn: async (prompt) => {
+    queueTurn: async (prompt, options) => {
       queuedPrompts.push(prompt);
+      await options?.startWhen;
+      backendActivations += 1;
       return [{ type: "turn_completed" }];
     },
   });
@@ -505,7 +512,8 @@ test("steering accepted during a failed issue refresh still completes", async ()
   rejectIssueRefresh?.(new Error("tracker unavailable"));
 
   const result = await attempt;
-  assert.equal(result.turnCount, 2);
+  assert.equal(result.turnCount, 1);
+  assert.equal(backendActivations, 0);
   assert.ok(
     updates.some(
       (update) =>
@@ -636,6 +644,69 @@ test("a text-only queued turn does not stop autonomous continuation", async () =
   const result = await attempt;
   assert.equal(result.turnCount, 3);
   assert.equal(normalPrompts.length, 2);
+});
+
+test("accepted live-only steering drains after an autonomous no-tool turn", async () => {
+  const settings = fakeSettings({ agent: { ...defaultSettings().agent, maxTurns: 3 } });
+  const normalPrompts: string[] = [];
+  let issueEventListener: ((events: TrackerIssueEvent[]) => void) | undefined;
+  let releaseSecondTurn: (() => void) | undefined;
+  let markSecondTurnStarted: (() => void) | undefined;
+  let markQueuedTurnSubmitted: (() => void) | undefined;
+  const secondTurnStarted = new Promise<void>((resolve) => {
+    markSecondTurnStarted = resolve;
+  });
+  const secondTurnRelease = new Promise<void>((resolve) => {
+    releaseSecondTurn = resolve;
+  });
+  const queuedTurnSubmitted = new Promise<void>((resolve) => {
+    markQueuedTurnSubmitted = resolve;
+  });
+  let backendActivations = 0;
+  const session = fakeSession({
+    queueTurn: async (_prompt, options) => {
+      markQueuedTurnSubmitted?.();
+      await options?.startWhen;
+      backendActivations += 1;
+      return [{ type: "turn_completed" }];
+    },
+  });
+  const executor: AgentExecutor = {
+    kind: "codex",
+    async startSession() {
+      return session;
+    },
+    async runTurn(_session, prompt) {
+      normalPrompts.push(prompt);
+      if (normalPrompts.length === 2) {
+        markSecondTurnStarted?.();
+        await secondTurnRelease;
+      }
+      return [{ type: "turn_completed" }];
+    },
+  };
+
+  const attempt = runAgentAttempt({
+    issue: fakeIssue(),
+    workflow: { path: "/workflow.md", config: {}, promptTemplate: "Fix it", settings },
+    settings,
+    fetchIssue: async (issue) => issue,
+    subscribeIssueEvents: (listener) => {
+      issueEventListener = listener;
+      return () => {};
+    },
+    adapters: fakeAdapters({ executorFactory: () => executor }),
+  });
+
+  await secondTurnStarted;
+  issueEventListener?.([{ ts: "11.0", author: "ryan", text: "do this before continuing" }]);
+  await queuedTurnSubmitted;
+  releaseSecondTurn?.();
+
+  const result = await attempt;
+  assert.equal(result.turnCount, 4);
+  assert.equal(normalPrompts.length, 3);
+  assert.equal(backendActivations, 1);
 });
 
 test("events observed during setup enter the queue after the initial turn starts", async () => {
@@ -945,6 +1016,41 @@ test("live delivery chunks large batches and shortens oversized messages", async
   assert.ok(queuedPrompts.every((prompt) => Buffer.byteLength(prompt) < 70 * 1024));
   assert.match(queuedPrompts[2]!, /message shortened for live delivery/);
   assert.match(queuedPrompts[2]!, /tail-marker/);
+});
+
+test("live delivery bounds oversized event metadata", async () => {
+  const settings = fakeSettings({ agent: { ...defaultSettings().agent, maxTurns: 1 } });
+  const queuedPrompts: string[] = [];
+  const longTimestamp = "1".repeat(70 * 1024);
+  const longAuthor = "a".repeat(70 * 1024);
+
+  const result = await runAgentAttempt({
+    issue: fakeIssue({ issueEventCursor: "10.0" }),
+    workflow: { path: "/workflow.md", config: {}, promptTemplate: "Fix it", settings },
+    settings,
+    fetchIssue: async (issue) => issue,
+    fetchIssueEvents: async (sinceTs) =>
+      sinceTs === "10.0"
+        ? [{ ts: longTimestamp, author: longAuthor, text: "bounded message" }]
+        : [],
+    adapters: fakeAdapters({
+      executorFactory: () =>
+        fakeExecutor({
+          session: {
+            queueTurn: async (prompt) => {
+              queuedPrompts.push(prompt);
+              return [{ type: "turn_completed" }];
+            },
+          },
+        }),
+    }),
+  });
+
+  assert.equal(result.turnCount, 2);
+  assert.equal(queuedPrompts.length, 1);
+  assert.ok(Buffer.byteLength(queuedPrompts[0]!) < 70 * 1024);
+  assert.match(queuedPrompts[0]!, /\[field shortened for live delivery\]/);
+  assert.match(queuedPrompts[0]!, /bounded message/);
 });
 
 test("recovery can queue a missed event before the no-tool completion exit", async () => {

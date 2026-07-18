@@ -458,9 +458,8 @@ class RunController {
             } catch (error) {
               throwIfAborted(input.abortSignal);
               await steeringFlushTail;
-              if (queuedTurns.length === 0) throw error;
               reportSteeringFailure("issue refresh", error);
-              queuedTurns[0]?.activate();
+              break;
             }
             await steeringFlushTail;
             const activeIssue = issueIsActive(issue, settings);
@@ -561,7 +560,10 @@ class RunController {
           !turnActivity.sawToolCall &&
           !turnUpdates.some(isToolCallNotification);
 
-        if (completedWithoutTools && !steeringRecoveryAvailable) break;
+        if (completedWithoutTools && !steeringRecoveryAvailable) {
+          await steeringFlushTail;
+          if (queuedTurns.length === 0) break;
+        }
         if (!input.fetchIssue) {
           if (queuedTurns.length > 0) {
             queuedTurns[0]?.activate();
@@ -574,13 +576,12 @@ class RunController {
         } catch (error) {
           throwIfAborted(input.abortSignal);
           await steeringFlushTail;
-          if (queuedTurns.length === 0) {
-            if (queuedTurn) break;
-            throw error;
+          if (queuedTurns.length > 0) {
+            reportSteeringFailure("issue refresh", error);
+            break;
           }
-          reportSteeringFailure("issue refresh", error);
-          queuedTurns[0]?.activate();
-          continue;
+          if (queuedTurn) break;
+          throw error;
         }
         await steeringFlushTail;
         const activeIssue = issueIsActive(issue, settings);
@@ -782,15 +783,33 @@ function steeringEventChunk(
 function shortenIssueEvent(event: TrackerIssueEvent, maxBytes: number): TrackerIssueEvent {
   const marker =
     "\n[message shortened for live delivery; the complete message remains on the issue]\n";
+  const metadataBudget = Math.max(0, maxBytes - Buffer.byteLength(marker));
+  const fieldBudget = Math.floor(metadataBudget / 3);
+  const ts = shortenIssueEventField(event.ts, fieldBudget);
+  const author =
+    event.author === undefined ? undefined : shortenIssueEventField(event.author, fieldBudget);
   const metadataBytes =
-    Buffer.byteLength(event.ts) + Buffer.byteLength(event.author ?? "") + Buffer.byteLength(marker);
+    Buffer.byteLength(ts) + Buffer.byteLength(author ?? "") + Buffer.byteLength(marker);
   const textBytes = Math.max(0, maxBytes - metadataBytes);
   const prefixBytes = Math.ceil(textBytes / 2);
   const suffixBytes = Math.floor(textBytes / 2);
   return {
-    ...event,
+    ts,
+    ...(author === undefined ? {} : { author }),
     text: `${utf8Prefix(event.text, prefixBytes)}${marker}${utf8Suffix(event.text, suffixBytes)}`,
   };
+}
+
+function shortenIssueEventField(value: string, maxBytes: number): string {
+  if (Buffer.byteLength(value) <= maxBytes) return value;
+  const marker = "[field shortened for live delivery]";
+  const markerBytes = Buffer.byteLength(marker);
+  if (markerBytes >= maxBytes) return utf8Prefix(marker, maxBytes);
+  const contentBytes = maxBytes - markerBytes;
+  return `${utf8Prefix(value, Math.ceil(contentBytes / 2))}${marker}${utf8Suffix(
+    value,
+    Math.floor(contentBytes / 2),
+  )}`;
 }
 
 function utf8Prefix(value: string, maxBytes: number): string {
