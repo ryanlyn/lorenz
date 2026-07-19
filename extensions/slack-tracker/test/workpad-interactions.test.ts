@@ -45,8 +45,9 @@ test("broadcast tokens are rewritten to inert text; user mentions survive", () =
   );
   assert.equal(
     stripBroadcastMentions("cc <!subteam^S042ABC|@eng> and <!subteam^S042DEF>"),
-    "cc @eng and @group",
+    "cc @group and @group",
   );
+  assert.equal(stripBroadcastMentions("<!subteam^S0|<!>channel>"), "@groupchannel>");
 });
 
 test("postReply sanitizes agent-authored bodies unconditionally", async () => {
@@ -75,7 +76,7 @@ test("workpad blocks and metadata sanitize broadcast tokens", () => {
   const serialized = JSON.stringify(rendered);
   assert.ok(!serialized.includes("<!"));
   assert.ok(serialized.includes("@channel"));
-  assert.ok(serialized.includes("@eng"));
+  assert.ok(serialized.includes("@group"));
   assert.ok(serialized.includes("@here"));
   assert.ok(!serialized.includes("lorenz_cancel"));
 });
@@ -203,6 +204,52 @@ test("slack_workpad creates one message, then partial updates preserve the other
   assert.equal(workpads.length, 1);
   assert.equal(workpads[0]!.metadata!.payload.plan, "- [ ] reproduce\n- [ ] fix");
   assert.equal(workpads[0]!.metadata!.payload.note, "tests running");
+});
+
+test("concurrent partial workpad updates serialize into one merged message", async () => {
+  const transport = new InMemorySlackTransport(
+    { C1: [{ ts: "1.0", text: "<@U_BOT> do it", user: "U2" }] },
+    { botUserId: "U_BOT" },
+  );
+  const originalPostReply = transport.postReply.bind(transport);
+  let reportPostStarted!: () => void;
+  let releasePost!: () => void;
+  const postStarted = new Promise<void>((resolve) => {
+    reportPostStarted = resolve;
+  });
+  const postGate = new Promise<void>((resolve) => {
+    releasePost = resolve;
+  });
+  transport.postReply = async (...args) => {
+    reportPostStarted();
+    await postGate;
+    return originalPostReply(...args);
+  };
+  const s = settings();
+
+  const planUpdate = executeSlackTool(
+    "slack_workpad",
+    { issueId: "C1:1.0", plan: "- [ ] reproduce" },
+    s,
+    transport,
+  );
+  await postStarted;
+  const noteUpdate = executeSlackTool(
+    "slack_workpad",
+    { issueId: "C1:1.0", note: "investigating" },
+    s,
+    transport,
+  );
+  releasePost();
+  const [planResult, noteResult] = await Promise.all([planUpdate, noteUpdate]);
+
+  assert.equal(planResult.success, true);
+  assert.equal(noteResult.success, true);
+  const replies = await transport.getThread("C1", "1.0");
+  const workpads = replies.filter((reply) => reply.metadata?.eventType === WORKPAD_METADATA_EVENT);
+  assert.equal(workpads.length, 1);
+  assert.equal(workpads[0]!.metadata!.payload.plan, "- [ ] reproduce");
+  assert.equal(workpads[0]!.metadata!.payload.note, "investigating");
 });
 
 test("a transient workpad update failure propagates without posting a duplicate", async () => {

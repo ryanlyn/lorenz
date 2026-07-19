@@ -625,3 +625,91 @@ test("mirror thread pages preserve Slack microsecond timestamp ordering", async 
     ["1700000000.000002", "1700000000.000003"],
   );
 });
+
+test("a mirror page cursor resumes through the API after the socket becomes unhealthy", async () => {
+  const inner = new InMemorySlackTransport(
+    {
+      C1: [
+        {
+          ts: "1.0",
+          text: "<@U_BOT> tracked",
+          user: "U2",
+          replies: [
+            { ts: "1.1", text: "first", user: "U2" },
+            { ts: "1.2", text: "second", user: "U2" },
+          ],
+        },
+      ],
+    },
+    { botUserId: "U_BOT" },
+  );
+  const mirror = mirrored(inner);
+  await mirror.scanChannels(["C1"]);
+  await mirror.getThread("C1", "1.0");
+
+  const first = await mirror.getThreadPage("C1", "1.0", { afterTs: "1.0", limit: 1 });
+  assert.deepEqual(
+    first.replies.map((reply) => reply.ts),
+    ["1.1"],
+  );
+  assert.equal(first.nextCursor, "mirror:1.1");
+
+  mirror.setSocketHealthy(false);
+  const second = await mirror.getThreadPage("C1", "1.0", {
+    afterTs: "1.0",
+    limit: 1,
+    cursor: first.nextCursor,
+  });
+  assert.deepEqual(
+    second.replies.map((reply) => reply.ts),
+    ["1.2"],
+  );
+});
+
+test("an API page cursor remains delegated when the mirror becomes authoritative", async () => {
+  const inner = counting(
+    new InMemorySlackTransport(
+      {
+        C1: [
+          {
+            ts: "1.0",
+            text: "<@U_BOT> tracked",
+            user: "U2",
+            replies: [
+              { ts: "1.1", text: "first", user: "U2" },
+              { ts: "1.2", text: "second", user: "U2" },
+            ],
+          },
+        ],
+      },
+      { botUserId: "U_BOT" },
+    ),
+  );
+  const delegatedCursors: Array<string | undefined> = [];
+  inner.getThreadPage = async (_channel, _ts, query) => {
+    delegatedCursors.push(query.cursor);
+    return query.cursor === undefined
+      ? {
+          replies: [{ ts: "1.1", text: "first", user: "U2" }],
+          nextCursor: "OPAQUE",
+        }
+      : { replies: [{ ts: "1.2", text: "second", user: "U2" }] };
+  };
+  const mirror = mirrored(inner);
+  await mirror.scanChannels(["C1"]);
+
+  const first = await mirror.getThreadPage("C1", "1.0", { afterTs: "1.0", limit: 1 });
+  assert.equal(first.nextCursor, "api:OPAQUE");
+  await mirror.getThread("C1", "1.0");
+  const second = await mirror.getThreadPage("C1", "1.0", {
+    afterTs: "1.0",
+    limit: 1,
+    cursor: first.nextCursor,
+  });
+
+  assert.deepEqual(
+    second.replies.map((reply) => reply.ts),
+    ["1.2"],
+  );
+  assert.deepEqual(delegatedCursors, [undefined, "OPAQUE"]);
+});

@@ -37,6 +37,8 @@ const SLACK_EXPAND_FIELDS = new Set(["thread", "reactions"]);
 /** Bounds for the `slack_channel_context` window. */
 const CONTEXT_DEFAULT = 10;
 const CONTEXT_MAX = 50;
+/** Per-runtime queues protecting each workpad's read-modify-write operation. */
+const workpadQueues = new WeakMap<Settings, Map<string, Promise<void>>>();
 
 export function slackToolSpecs(): ToolSpec[] {
   return [
@@ -187,26 +189,29 @@ export async function executeSlackTool(
         return toolSuccess({ ok: true });
       }
       case "slack_workpad": {
-        const root = await requireTrackedMessage(settings, transport, channel, ts);
-        const replies = await transport.getThread(channel, ts);
-        const thread = stateFromThread(root, replies, settings);
-        // A partial update keeps the other section: the workpad metadata round-trips both, so
-        // an agent refreshing its note between milestones does not blank the plan.
-        const plan = optionalStr(args, "plan") ?? thread.workpad?.plan;
-        const note = optionalStr(args, "note") ?? thread.workpad?.note;
-        const workpadTs = await upsertWorkpad(
-          settings,
-          transport,
-          channel,
-          ts,
-          {
-            issueId: `${channel}:${ts}`,
-            ...(plan !== undefined ? { plan } : {}),
-            ...(note !== undefined ? { note } : {}),
-          },
-          thread.workpad,
-        );
-        return toolSuccess({ ok: true, workpadTs });
+        const issueId = `${channel}:${ts}`;
+        return await serializeWorkpadUpdate(settings, issueId, async () => {
+          const root = await requireTrackedMessage(settings, transport, channel, ts);
+          const replies = await transport.getThread(channel, ts);
+          const thread = stateFromThread(root, replies, settings);
+          // A partial update keeps the other section: the workpad metadata round-trips both, so
+          // an agent refreshing its note between milestones does not blank the plan.
+          const plan = optionalStr(args, "plan") ?? thread.workpad?.plan;
+          const note = optionalStr(args, "note") ?? thread.workpad?.note;
+          const workpadTs = await upsertWorkpad(
+            settings,
+            transport,
+            channel,
+            ts,
+            {
+              issueId,
+              ...(plan !== undefined ? { plan } : {}),
+              ...(note !== undefined ? { note } : {}),
+            },
+            thread.workpad,
+          );
+          return toolSuccess({ ok: true, workpadTs });
+        });
       }
       case "slack_read_thread": {
         // Same trust-boundary check as the write tools: only read a watched, tracked issue.
@@ -249,6 +254,32 @@ export async function executeSlackTool(
     }
   } catch (error) {
     return toolFailure(errorMessage(error));
+  }
+}
+
+async function serializeWorkpadUpdate<T>(
+  settings: Settings,
+  issueId: string,
+  update: () => Promise<T>,
+): Promise<T> {
+  let queues = workpadQueues.get(settings);
+  if (queues === undefined) {
+    queues = new Map();
+    workpadQueues.set(settings, queues);
+  }
+  const previous = queues.get(issueId) ?? Promise.resolve();
+  let release!: () => void;
+  const turn = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const tail = previous.then(async () => turn);
+  queues.set(issueId, tail);
+  await previous;
+  try {
+    return await update();
+  } finally {
+    release();
+    if (queues.get(issueId) === tail) queues.delete(issueId);
   }
 }
 

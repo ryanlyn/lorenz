@@ -352,15 +352,17 @@ edits, system/root messages, and deleted replies. The shipped workflow still man
 the thread at milestones and before finishing so status and visible context are verified together.
 
 Every outbound bot message is broadcast-sanitized: `<!channel>`, `<!here>`, `<!everyone>`, and
-`<!subteam^...>` tokens are rewritten to inert plain text (`@channel`, ...) unconditionally. An
-agent cannot page a channel; there is no knob to get wrong.
+`<!subteam^...>` tokens are rewritten to inert plain text (`@channel` or `@group`)
+unconditionally. User-group labels are discarded so their contents cannot reconstruct another
+broadcast token. An agent cannot page a channel; there is no knob to get wrong.
 
 ## The `slack_*` tools
 
 The `slack` tool pack mounts automatically for the Slack tracker (its `defaultToolPacks` returns
 `["slack"]`), and it is the only pack the Slack tracker mounts. Its Slack-native tools expose the
 thread model directly: `slack_update_status` and `slack_comment` write the bot's reply,
-`slack_workpad` creates/edits the single in-place plan message, `slack_read_thread` returns the
+`slack_workpad` creates/edits the single in-place plan message, with per-issue serialization so
+concurrent partial updates merge against the latest metadata. `slack_read_thread` returns the
 authoritative thread-derived state plus the folded `statusEvents` audit trail, `slack_query` runs
 the read-only `where` DSL, and `slack_user_info` / `slack_channel_context` resolve people and
 surrounding conversation.

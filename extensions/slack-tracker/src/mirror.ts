@@ -1,6 +1,6 @@
 import { errorMessage, isRecord, type Settings } from "@lorenz/domain";
 
-import { compareSlackTs } from "./ids.js";
+import { compareSlackTs, isSlackTs } from "./ids.js";
 import { isAllowedAuthor, isBotMention } from "./mapping.js";
 import { slackTrackerOptions } from "./options.js";
 import { parseStatusCommand } from "./threadState.js";
@@ -40,6 +40,8 @@ import { toMessageMetadata, type SlackTrackerLogger } from "./webTransport.js";
 
 /** Default standing-repair cadence while the socket is healthy (overridable per tracker). */
 const DEFAULT_RECONCILE_INTERVAL_MS = 15 * 60_000;
+const MIRROR_THREAD_CURSOR_PREFIX = "mirror:";
+const API_THREAD_CURSOR_PREFIX = "api:";
 
 interface MirrorReply {
   ts: string;
@@ -251,25 +253,46 @@ export class MirrorBackedSlackTransport implements SlackTransport {
     query.abortSignal?.throwIfAborted();
     await this.settleEvents();
     query.abortSignal?.throwIfAborted();
+    const cursor = parseThreadPageCursor(query.cursor);
     const state = this.channels.get(channel);
-    if (state && this.isFresh(channel) && state.authoritativeThreads.has(ts)) {
-      const offset = query.cursor === undefined ? 0 : Number.parseInt(query.cursor, 10);
-      if (!Number.isInteger(offset) || offset < 0) {
-        throw new Error(`invalid Slack mirror thread cursor: ${query.cursor}`);
-      }
+    const canReadMirror =
+      cursor?.source !== "api" &&
+      state !== undefined &&
+      this.isFresh(channel) &&
+      state.authoritativeThreads.has(ts);
+    if (canReadMirror) {
+      const afterTs =
+        cursor?.source === "mirror" && compareSlackTs(cursor.afterTs, query.afterTs) > 0
+          ? cursor.afterTs
+          : query.afterTs;
       const replies = [...(state.threads.get(ts)?.values() ?? [])]
-        .filter((reply) => compareSlackTs(reply.ts, query.afterTs) > 0)
+        .filter((reply) => compareSlackTs(reply.ts, afterTs) > 0)
         .sort((left, right) => compareSlackTs(left.ts, right.ts));
-      const end = Math.min(replies.length, offset + query.limit);
+      const pageReplies = replies.slice(0, query.limit);
       return {
-        replies: replies.slice(offset, end).map((reply) => toThreadReply(reply)),
-        ...(end < replies.length ? { nextCursor: String(end) } : {}),
+        replies: pageReplies.map((reply) => toThreadReply(reply)),
+        ...(pageReplies.length < replies.length
+          ? {
+              nextCursor: `${MIRROR_THREAD_CURSOR_PREFIX}${pageReplies.at(-1)!.ts}`,
+            }
+          : {}),
       };
     }
-    const page = await this.inner.getThreadPage(channel, ts, query);
+    const delegatedAfterTs =
+      cursor?.source === "mirror" && compareSlackTs(cursor.afterTs, query.afterTs) > 0
+        ? cursor.afterTs
+        : query.afterTs;
+    const { cursor: _cursor, ...rest } = query;
+    const page = await this.inner.getThreadPage(channel, ts, {
+      ...rest,
+      afterTs: delegatedAfterTs,
+      ...(cursor?.source === "api" ? { cursor: cursor.cursor } : {}),
+    });
     return {
       replies: page.replies.map((reply) => this.enrichFetchedReply(channel, ts, reply)),
-      ...(page.nextCursor !== undefined ? { nextCursor: page.nextCursor } : {}),
+      ...(page.nextCursor !== undefined
+        ? { nextCursor: `${API_THREAD_CURSOR_PREFIX}${page.nextCursor}` }
+        : {}),
     };
   }
 
@@ -899,6 +922,21 @@ function latestTsOf(thread: Map<string, MirrorReply>): string | undefined {
     if (latest === undefined || compareSlackTs(reply.ts, latest) > 0) latest = reply.ts;
   }
   return latest;
+}
+
+function parseThreadPageCursor(
+  cursor: string | undefined,
+): { source: "mirror"; afterTs: string } | { source: "api"; cursor: string } | undefined {
+  if (cursor === undefined) return undefined;
+  if (cursor.startsWith(MIRROR_THREAD_CURSOR_PREFIX)) {
+    const afterTs = cursor.slice(MIRROR_THREAD_CURSOR_PREFIX.length);
+    if (isSlackTs(afterTs)) return { source: "mirror", afterTs };
+  }
+  if (cursor.startsWith(API_THREAD_CURSOR_PREFIX)) {
+    const apiCursor = cursor.slice(API_THREAD_CURSOR_PREFIX.length);
+    if (apiCursor !== "") return { source: "api", cursor: apiCursor };
+  }
+  throw new Error(`invalid Slack thread page cursor: ${cursor}`);
 }
 
 /**

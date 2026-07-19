@@ -27,10 +27,5 @@ const SUBTEAM_COMMAND_RE = /<!subteam\^[A-Z0-9]+(?:\|([^>]*))?>/gi;
 export function stripBroadcastMentions(text: string): string {
   return text
     .replace(BROADCAST_COMMAND_RE, (_match, name: string) => `@${name.toLowerCase()}`)
-    .replace(SUBTEAM_COMMAND_RE, (_match, label: string | undefined) => {
-      // The pipe label is Slack's own display text for the group (e.g. `@eng`); reuse it when
-      // present so the message still reads naturally, minus the ping.
-      const display = label?.trim();
-      return display !== undefined && display !== "" ? display : "@group";
-    });
+    .replace(SUBTEAM_COMMAND_RE, "@group");
 }
