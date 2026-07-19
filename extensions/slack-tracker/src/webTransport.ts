@@ -9,6 +9,8 @@ import type {
   SlackMessageMetadata,
   SlackPostOptions,
   SlackThreadReply,
+  SlackThreadReplyPage,
+  SlackThreadReplyPageQuery,
   SlackTransport,
   SlackUser,
 } from "./transport.js";
@@ -17,6 +19,9 @@ interface RawSlackMessage {
   ts?: string;
   text?: string;
   user?: string;
+  bot_id?: string;
+  subtype?: string;
+  edited?: unknown;
   reply_count?: number;
   latest_reply?: string;
   reactions?: Array<{ name?: string; users?: string[] }>;
@@ -45,10 +50,23 @@ const MAX_RETRY_DELAY_MS = 60_000;
  */
 const teamUrlByAuth = new Map<string, string | null>();
 
-type Sleep = (delayMs: number) => Promise<void>;
+type Sleep = (delayMs: number, abortSignal?: AbortSignal) => Promise<void>;
 
-const defaultSleep: Sleep = async (delayMs) =>
-  new Promise((resolve) => setTimeout(resolve, delayMs));
+const defaultSleep: Sleep = async (delayMs, abortSignal) =>
+  new Promise((resolve, reject) => {
+    abortSignal?.throwIfAborted();
+    const onAbort = () => {
+      clearTimeout(timer);
+      abortSignal?.removeEventListener("abort", onAbort);
+      const reason = abortSignal?.reason as unknown;
+      reject(reason instanceof Error ? reason : new Error("Slack request aborted"));
+    };
+    const timer = setTimeout(() => {
+      abortSignal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, delayMs);
+    abortSignal?.addEventListener("abort", onAbort, { once: true });
+  });
 
 /** Minimal logging surface so a skipped (unreadable) channel is surfaced (default: console.warn). */
 export interface SlackTrackerLogger {
@@ -315,7 +333,11 @@ export class SlackWebTransport implements SlackTransport {
     return [...merged.values()].sort((a, b) => Number.parseFloat(a.ts) - Number.parseFloat(b.ts));
   }
 
-  async getThread(channel: string, ts: string): Promise<SlackThreadReply[]> {
+  async getThread(
+    channel: string,
+    ts: string,
+    abortSignal?: AbortSignal,
+  ): Promise<SlackThreadReply[]> {
     // conversations.replies returns the parent (root) message FIRST followed by its replies. Page
     // through next_cursor like listMentions (a pure read, safe to retry on 429/5xx) and drop the
     // parent (the message whose ts === the thread ts) so only the replies are returned.
@@ -324,21 +346,14 @@ export class SlackWebTransport implements SlackTransport {
     const out: SlackThreadReply[] = [];
     let cursor: string | undefined;
     for (let page = 0; page < this.maxHistoryPages; page += 1) {
-      const params: Record<string, string> = {
-        channel,
-        ts,
-        limit: "200",
-        include_all_metadata: "true",
-      };
-      if (cursor) params.cursor = cursor;
-      const body = await this.get("conversations.replies", params);
-      const messages = Array.isArray(body.messages) ? (body.messages as RawSlackMessage[]) : [];
-      for (const m of messages) {
-        if (typeof m.ts !== "string") continue;
-        if (m.ts === ts) continue;
-        out.push(toThreadReply(m));
-      }
-      cursor = nextCursor(body);
+      const pageResult = await this.getThreadPage(channel, ts, {
+        afterTs: "0",
+        limit: 200,
+        ...(cursor ? { cursor } : {}),
+        ...(abortSignal ? { abortSignal } : {}),
+      });
+      out.push(...pageResult.replies);
+      cursor = pageResult.nextCursor;
       if (!cursor) break;
     }
     // Same loud-truncation contract as the history scan: a silently partial thread would let a
@@ -350,6 +365,33 @@ export class SlackWebTransport implements SlackTransport {
       );
     }
     return out;
+  }
+
+  async getThreadPage(
+    channel: string,
+    ts: string,
+    query: SlackThreadReplyPageQuery,
+  ): Promise<SlackThreadReplyPage> {
+    query.abortSignal?.throwIfAborted();
+    const params: Record<string, string> = {
+      channel,
+      ts,
+      oldest: query.afterTs,
+      inclusive: "false",
+      limit: String(Math.min(200, Math.max(1, query.limit))),
+      include_all_metadata: "true",
+    };
+    if (query.cursor) params.cursor = query.cursor;
+    const body = await this.get("conversations.replies", params, query.abortSignal);
+    const messages = Array.isArray(body.messages) ? (body.messages as RawSlackMessage[]) : [];
+    const replies = messages
+      .filter((message) => typeof message.ts === "string" && message.ts !== ts)
+      .map(toThreadReply);
+    const cursor = nextCursor(body);
+    return {
+      replies,
+      ...(cursor ? { nextCursor: cursor } : {}),
+    };
   }
 
   async addReaction(channel: string, ts: string, name: string): Promise<void> {
@@ -377,7 +419,7 @@ export class SlackWebTransport implements SlackTransport {
     // been delivered - is resolved by metadata reconciliation when the post carries a unique
     // marker (`metadata.payload.seq`): scan the thread for the marker; found means the original
     // send landed (return its real ts), not found proves it did not (a retry cannot duplicate).
-    // Without a marker the historical contract stands: ambiguous outcomes fail loudly.
+    // Without a marker, ambiguous outcomes fail loudly.
     const params: Record<string, unknown> = {
       channel,
       thread_ts: threadTs,
@@ -412,27 +454,39 @@ export class SlackWebTransport implements SlackTransport {
   }
 
   /**
-   * Scan the thread for a bot reply carrying the given metadata marker; the marker's `seq` is
-   * unique per logical post, so at most one reply matches. Read failures resolve to "not found"
-   * conservatively - the caller then retries the post, and a duplicate is impossible because a
-   * A read failure propagates instead of being treated as "not found": absence is proof that a
-   * retry is safe only after an authoritative thread read succeeds.
+   * Scan the complete thread for this bot's reply carrying the metadata marker. A read failure or
+   * safety-cap truncation propagates: absence proves a retry is safe only after an authoritative
+   * scan reaches the end of the thread.
    */
   private async findReplyByMarker(
     channel: string,
     threadTs: string,
     marker: { eventType: string; seq: string },
   ): Promise<string | null> {
-    const replies = await this.getThread(channel, threadTs);
-    for (const reply of replies) {
-      if (
-        reply.metadata?.eventType === marker.eventType &&
-        reply.metadata.payload.seq === marker.seq
-      ) {
-        return reply.ts;
+    let cursor: string | undefined;
+    for (let page = 0; page < this.maxHistoryPages; page += 1) {
+      const result = await this.getThreadPage(channel, threadTs, {
+        afterTs: "0",
+        limit: 200,
+        ...(cursor ? { cursor } : {}),
+      });
+      for (const reply of result.replies) {
+        if (
+          this.botUserId !== undefined &&
+          reply.user === this.botUserId &&
+          reply.metadata?.eventType === marker.eventType &&
+          reply.metadata.payload.seq === marker.seq
+        ) {
+          return reply.ts;
+        }
       }
+      cursor = result.nextCursor;
+      if (!cursor) return null;
     }
-    return null;
+    throw new Error(
+      `slack conversations.replies reconciliation for ${channel}:${threadTs} hit the ` +
+        `${this.maxHistoryPages}-page safety cap with more replies remaining`,
+    );
   }
 
   async updateMessage(
@@ -489,18 +543,22 @@ export class SlackWebTransport implements SlackTransport {
   private async get(
     method: string,
     params: Record<string, string>,
+    abortSignal?: AbortSignal,
   ): Promise<Record<string, unknown>> {
     const url = `${this.endpoint}/${method}?${new URLSearchParams(params).toString()}`;
     // GET (conversations.history) is a pure read: safe to retry on both 429 and 5xx.
     const response = await this.fetchWithRetry(
       method,
-      async () =>
-        this.fetchImpl(url, {
+      async () => {
+        abortSignal?.throwIfAborted();
+        const timeoutSignal = AbortSignal.timeout(30_000);
+        return this.fetchImpl(url, {
           method: "GET",
           headers: { authorization: `Bearer ${this.token}` },
-          signal: AbortSignal.timeout(30_000),
-        }),
-      { idempotent: true },
+          signal: abortSignal ? AbortSignal.any([abortSignal, timeoutSignal]) : timeoutSignal,
+        });
+      },
+      { idempotent: true, ...(abortSignal ? { abortSignal } : {}) },
     );
     return this.parse(method, response);
   }
@@ -530,9 +588,10 @@ export class SlackWebTransport implements SlackTransport {
   private async fetchWithRetry(
     method: string,
     send: () => Promise<Response>,
-    options: { idempotent: boolean },
+    options: { idempotent: boolean; abortSignal?: AbortSignal },
   ): Promise<Response> {
     for (let retryCount = 0; ; retryCount += 1) {
+      options.abortSignal?.throwIfAborted();
       let response: Response;
       try {
         response = await send();
@@ -572,7 +631,7 @@ export class SlackWebTransport implements SlackTransport {
         `slack ${method}: HTTP ${response.status}; backing off ${Math.round(delayMs / 1000)}s ` +
           `before retry ${retryCount + 1}/${MAX_RETRIES}`,
       );
-      await this.sleep(delayMs);
+      await this.sleep(delayMs, options.abortSignal);
     }
   }
 
@@ -655,6 +714,9 @@ function toThreadReply(m: RawSlackMessage): SlackThreadReply {
   // exactOptionalPropertyTypes: only set `user` when present rather than assigning undefined.
   const reply: SlackThreadReply = { ts: m.ts ?? "", text: m.text ?? "" };
   if (typeof m.user === "string") reply.user = m.user;
+  if (typeof m.subtype === "string") reply.subtype = m.subtype;
+  if (typeof m.bot_id === "string" || m.subtype === "bot_message") reply.isBot = true;
+  if (m.edited !== undefined) reply.edited = true;
   const metadata = toMessageMetadata(m.metadata);
   if (metadata !== undefined) reply.metadata = metadata;
   return reply;

@@ -1,5 +1,6 @@
 import { errorMessage, isRecord, type Settings } from "@lorenz/domain";
 
+import { compareSlackTs } from "./ids.js";
 import { isAllowedAuthor, isBotMention } from "./mapping.js";
 import { slackTrackerOptions } from "./options.js";
 import { parseStatusCommand } from "./threadState.js";
@@ -9,6 +10,8 @@ import type {
   SlackMessageMetadata,
   SlackPostOptions,
   SlackThreadReply,
+  SlackThreadReplyPage,
+  SlackThreadReplyPageQuery,
   SlackTransport,
   SlackUser,
 } from "./transport.js";
@@ -29,8 +32,7 @@ import { toMessageMetadata, type SlackTrackerLogger } from "./webTransport.js";
  *   every socket reconnect (Slack replays nothing missed while disconnected), whenever an event
  *   cannot be applied cleanly (the channel is marked DIRTY rather than guessed at), and on a
  *   slow reconciliation interval as a standing repair pass. While the socket is unhealthy the
- *   mirror never serves at all, so a pull-only or degraded deployment behaves exactly like the
- *   pre-mirror tracker.
+ *   mirror never serves at all, so a pull-only or degraded deployment uses the raw transport.
  *
  * The fold over thread events is idempotent, which is what makes this safe: a duplicated,
  * reordered, or re-scanned input re-derives the same state.
@@ -42,6 +44,9 @@ const DEFAULT_RECONCILE_INTERVAL_MS = 15 * 60_000;
 interface MirrorReply {
   ts: string;
   text: string;
+  subtype?: string | undefined;
+  isBot?: boolean | undefined;
+  edited: boolean;
   /**
    * Text at first observation. Command classification folds THIS (first-seen wins): a later
    * edit cannot retroactively rewrite a transition. Slack's API cannot return pre-edit text,
@@ -201,20 +206,56 @@ export class MirrorBackedSlackTransport implements SlackTransport {
     return (await this.scanChannels(channels)).mentions;
   }
 
-  async getThread(channel: string, ts: string): Promise<SlackThreadReply[]> {
+  async getThread(
+    channel: string,
+    ts: string,
+    abortSignal?: AbortSignal,
+  ): Promise<SlackThreadReply[]> {
+    abortSignal?.throwIfAborted();
     await this.settleEvents();
+    abortSignal?.throwIfAborted();
     const state = this.channels.get(channel);
     if (state && this.isFresh(channel) && state.authoritativeThreads.has(ts)) {
       const thread = state.threads.get(ts);
       if (thread) {
         return [...thread.values()]
-          .sort((a, b) => tsValue(a.ts) - tsValue(b.ts))
+          .sort((a, b) => compareSlackTs(a.ts, b.ts))
           .map((reply) => toThreadReply(reply));
       }
     }
-    const replies = await this.inner.getThread(channel, ts);
+    const replies = await this.inner.getThread(channel, ts, abortSignal);
     this.storeFetchedThread(channel, ts, replies);
     return replies.map((reply) => this.enrichFetchedReply(channel, ts, reply));
+  }
+
+  async getThreadPage(
+    channel: string,
+    ts: string,
+    query: SlackThreadReplyPageQuery,
+  ): Promise<SlackThreadReplyPage> {
+    query.abortSignal?.throwIfAborted();
+    await this.settleEvents();
+    query.abortSignal?.throwIfAborted();
+    const state = this.channels.get(channel);
+    if (state && this.isFresh(channel) && state.authoritativeThreads.has(ts)) {
+      const offset = query.cursor === undefined ? 0 : Number.parseInt(query.cursor, 10);
+      if (!Number.isInteger(offset) || offset < 0) {
+        throw new Error(`invalid Slack mirror thread cursor: ${query.cursor}`);
+      }
+      const replies = [...(state.threads.get(ts)?.values() ?? [])]
+        .filter((reply) => compareSlackTs(reply.ts, query.afterTs) > 0)
+        .sort((left, right) => compareSlackTs(left.ts, right.ts));
+      const end = Math.min(replies.length, offset + query.limit);
+      return {
+        replies: replies.slice(offset, end).map((reply) => toThreadReply(reply)),
+        ...(end < replies.length ? { nextCursor: String(end) } : {}),
+      };
+    }
+    const page = await this.inner.getThreadPage(channel, ts, query);
+    return {
+      replies: page.replies.map((reply) => this.enrichFetchedReply(channel, ts, reply)),
+      ...(page.nextCursor !== undefined ? { nextCursor: page.nextCursor } : {}),
+    };
   }
 
   // ------------------------------------------------------------------ delegated reads
@@ -470,6 +511,9 @@ export class MirrorBackedSlackTransport implements SlackTransport {
       thread.set(reply.ts, {
         ts: reply.ts,
         text: reply.text,
+        subtype: reply.subtype,
+        isBot: reply.isBot,
+        edited: reply.edited === true,
         // A re-fetch cannot recover pre-edit text; preserve the first observation when we have
         // one so the in-session first-seen guarantee survives the re-fetch.
         firstSeenText: existing?.firstSeenText ?? reply.text,
@@ -496,8 +540,13 @@ export class MirrorBackedSlackTransport implements SlackTransport {
     reply: SlackThreadReply,
   ): SlackThreadReply {
     const stored = this.channels.get(channel)?.threads.get(rootTs)?.get(reply.ts);
-    if (!stored || stored.firstSeenText === reply.text) return reply;
-    return { ...reply, firstSeenText: stored.firstSeenText };
+    if (!stored) return reply;
+    return {
+      ...reply,
+      ...(stored.firstSeenText !== reply.text ? { firstSeenText: stored.firstSeenText } : {}),
+      ...(stored.edited ? { edited: true } : {}),
+      ...(stored.deleted ? { deleted: true } : {}),
+    };
   }
 
   private mutateRoot(channel: string, ts: string, mutate: (root: MirrorRoot) => void): void {
@@ -543,7 +592,17 @@ export class MirrorBackedSlackTransport implements SlackTransport {
     const metadata = toMessageMetadata(isRecord(event.metadata) ? event.metadata : undefined);
     const threadTs = typeof event.thread_ts === "string" ? event.thread_ts : undefined;
     if (threadTs !== undefined && threadTs !== ts) {
-      await this.applyReplyUpsert(channel, threadTs, { ts, text, user, metadata });
+      await this.applyReplyUpsert(channel, threadTs, {
+        ts,
+        text,
+        user,
+        metadata,
+        subtype,
+        isBot:
+          typeof event.bot_id === "string" ||
+          subtype === "bot_message" ||
+          (user !== undefined && user === this.botUserId),
+      });
     } else {
       this.applyRootUpsert(channel, { ts, text, user });
     }
@@ -578,12 +637,14 @@ export class MirrorBackedSlackTransport implements SlackTransport {
       text: string;
       user?: string | undefined;
       metadata?: SlackMessageMetadata | undefined;
+      subtype?: string | undefined;
+      isBot?: boolean | undefined;
     },
   ): Promise<void> {
     const state = this.channelState(channel);
     if (!state.roots.has(rootTs)) {
       // A reply into a thread whose root the mirror does not carry (older than the scan window,
-      // or a plain message that only now grew a thread). Fetch the root - one authoritative
+      // or a plain message receiving its first reply). Fetch the root - one authoritative
       // point read - rather than guessing or dirtying the whole channel; an unreadable root is
       // the doubt case that DOES dirty.
       const root = await this.inner.getMessage(channel, rootTs);
@@ -623,6 +684,9 @@ export class MirrorBackedSlackTransport implements SlackTransport {
     thread.set(reply.ts, {
       ts: reply.ts,
       text: reply.text,
+      subtype: reply.subtype,
+      isBot: reply.isBot,
+      edited: false,
       firstSeenText: reply.text,
       user: reply.user,
       metadata: reply.metadata,
@@ -635,7 +699,7 @@ export class MirrorBackedSlackTransport implements SlackTransport {
       const latest = latestTsOf(thread);
       if (
         root.latestReplyHint === undefined ||
-        (latest !== undefined && tsValue(latest) > tsValue(root.latestReplyHint))
+        (latest !== undefined && compareSlackTs(latest, root.latestReplyHint) > 0)
       ) {
         root.latestReplyHint = latest;
       }
@@ -661,6 +725,7 @@ export class MirrorBackedSlackTransport implements SlackTransport {
     if (!reply) return;
     const previous = reply.text;
     reply.text = newText;
+    reply.edited = true;
     const metadata = toMessageMetadata(isRecord(edited.metadata) ? edited.metadata : undefined);
     if (metadata !== undefined) reply.metadata = metadata;
     if (reply.firstSeenText === newText || previous === newText) return;
@@ -752,6 +817,9 @@ export class MirrorBackedSlackTransport implements SlackTransport {
 function toThreadReply(reply: MirrorReply): SlackThreadReply {
   const out: SlackThreadReply = { ts: reply.ts, text: reply.text };
   if (reply.user !== undefined) out.user = reply.user;
+  if (reply.subtype !== undefined) out.subtype = reply.subtype;
+  if (reply.isBot !== undefined) out.isBot = reply.isBot;
+  if (reply.edited) out.edited = true;
   if (reply.metadata !== undefined) out.metadata = reply.metadata;
   if (reply.firstSeenText !== reply.text) out.firstSeenText = reply.firstSeenText;
   if (reply.deleted) out.deleted = true;
@@ -761,14 +829,9 @@ function toThreadReply(reply: MirrorReply): SlackThreadReply {
 function latestTsOf(thread: Map<string, MirrorReply>): string | undefined {
   let latest: string | undefined;
   for (const reply of thread.values()) {
-    if (latest === undefined || tsValue(reply.ts) > tsValue(latest)) latest = reply.ts;
+    if (latest === undefined || compareSlackTs(reply.ts, latest) > 0) latest = reply.ts;
   }
   return latest;
-}
-
-function tsValue(ts: string): number {
-  const value = Number.parseFloat(ts);
-  return Number.isFinite(value) ? value : 0;
 }
 
 /** Channel of an events_api payload, for scoping failure fallout. */

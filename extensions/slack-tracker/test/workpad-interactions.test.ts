@@ -92,7 +92,7 @@ test("the fold prefers status metadata over text, so attributions can ride along
   const replies = [
     {
       ts: "1.5",
-      // Multi-line body the legacy regex would NOT match - metadata carries the state.
+      // The multi-line body is not a text-only status line; metadata carries the state.
       text: "status: Cancelled\n(requested by <@U9> via the workpad Cancel button)",
       user: "U_BOT",
       metadata: {
@@ -281,9 +281,22 @@ test("fetchIssueEvents returns human context only, ascending, above the watermar
     { botUserId: "U_BOT" },
   );
   const client = new SlackTrackerClient(settings(), transport);
-  const events = await client.fetchIssueEvents("C1:1.0", "1.1");
+  const page = await client.fetchIssueEvents("C1:1.0", "1.1", {
+    maxEvents: 10,
+    maxBytes: 64 * 1024,
+  });
   // Bot replies, `!` commands (they act through the fold), and asides are all excluded.
-  assert.deepEqual(events, [{ ts: "1.5", text: "also handle the edge case", author: "U3" }]);
+  assert.deepEqual(page, {
+    events: [
+      {
+        authorizedForSteering: true,
+        ts: "1.5",
+        text: "also handle the edge case",
+        author: "U3",
+      },
+    ],
+    hasMore: false,
+  });
 });
 
 // ------------------------------------------------------------------ send reconciliation
@@ -423,7 +436,52 @@ test("a failed reconciliation read never retries an ambiguous post", async () =>
   assert.equal(postAttempts, 1);
 });
 
-test("a bare (marker-less) post keeps the historical fail-loud contract on ambiguity", async () => {
+test("a truncated reconciliation scan never retries an ambiguous post", async () => {
+  let postAttempts = 0;
+  let replyReads = 0;
+  const fetchImpl = (async (url: string | URL) => {
+    const u = String(url);
+    if (u.includes("chat.postMessage")) {
+      postAttempts += 1;
+      return jsonResponse({ ok: false }, 503);
+    }
+    if (u.includes("conversations.replies")) {
+      replyReads += 1;
+      return jsonResponse({
+        ok: true,
+        messages: [{ ts: `1.${replyReads}`, text: "unrelated", user: "U1" }],
+        response_metadata: { next_cursor: `page-${replyReads + 1}` },
+      });
+    }
+    return jsonResponse({ ok: true, messages: [] });
+  }) as typeof fetch;
+
+  const transport = new SlackWebTransport(
+    parseSlackConfig(
+      { tracker: { kind: "slack", channels: ["C1"], bot_user_id: "U1" } },
+      { SLACK_BOT_TOKEN: "xoxb" },
+    ),
+    fetchImpl,
+    () => Promise.resolve(),
+    silentLogger,
+    { maxHistoryPages: 2 },
+  );
+
+  await assert.rejects(
+    () =>
+      transport.postReply("C1", "1.0", "status: Done", {
+        metadata: {
+          eventType: STATUS_METADATA_EVENT,
+          payload: { issue: "C1:1.0", state: "Done", seq: "seq-truncated" },
+        },
+      }),
+    /reconciliation.*safety cap/,
+  );
+  assert.equal(postAttempts, 1);
+  assert.equal(replyReads, 2);
+});
+
+test("a marker-less post fails loudly on an ambiguous outcome", async () => {
   const fetchImpl = (async (url: string | URL) => {
     if (String(url).includes("chat.postMessage")) return jsonResponse({ ok: false }, 502);
     return jsonResponse({ ok: true, messages: [] });

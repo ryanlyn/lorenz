@@ -52,6 +52,7 @@ export function normalizeIssue(input: Record<string, unknown>, assignee?: string
     priority: priorityOrNull(input.priority),
     createdAt: optionalString(input.created_at ?? input.createdAt),
     updatedAt: optionalString(input.updated_at ?? input.updatedAt),
+    issueEventCursor: optionalString(input.issue_event_cursor ?? input.issueEventCursor),
     labels,
     blockers,
     assigneeId,

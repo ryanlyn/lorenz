@@ -284,7 +284,7 @@ test("markAllDirty and an unhealthy socket both force real scans", async () => {
   await mirror.scanChannels(["C1"]);
   assert.equal(inner.scans, 2);
 
-  // A disconnected socket means events may be missing right now - never serve.
+  // A disconnected socket means events may be missing, so the mirror must not serve.
   mirror.setSocketHealthy(false);
   await mirror.scanChannels(["C1"]);
   assert.equal(inner.scans, 3);
@@ -369,4 +369,36 @@ test("a reply into an unknown root fetches the root instead of dirtying the chan
   const threaded = scan.threadedRoots.find((m) => m.ts === "5.0");
   assert.ok(threaded !== undefined);
   assert.equal(threaded!.replyCount, 1);
+});
+
+test("mirror thread pages preserve Slack microsecond timestamp ordering", async () => {
+  const inner = new InMemorySlackTransport(
+    {
+      C1: [
+        {
+          ts: "1700000000.000001",
+          text: "<@U_BOT> preserve ordering",
+          user: "U2",
+          replies: [
+            { ts: "1700000000.000003", text: "third", user: "U2" },
+            { ts: "1700000000.000002", text: "second", user: "U2" },
+          ],
+        },
+      ],
+    },
+    { botUserId: "U_BOT" },
+  );
+  const mirror = mirrored(inner);
+  await mirror.scanChannels(["C1"]);
+  await mirror.getThread("C1", "1700000000.000001");
+
+  const page = await mirror.getThreadPage("C1", "1700000000.000001", {
+    afterTs: "1700000000.000001",
+    limit: 10,
+  });
+
+  assert.deepEqual(
+    page.replies.map((reply) => reply.ts),
+    ["1700000000.000002", "1700000000.000003"],
+  );
 });

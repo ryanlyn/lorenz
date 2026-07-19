@@ -35,6 +35,8 @@ the transport calls; they are not declared in the extension source.
 | ------------------- | ----------------------------------------------------------------------------------------------- |
 | `channels:history`  | Read message history in public channels (`conversations.history`, `conversations.replies`).     |
 | `groups:history`    | Read history in private channels.                                                               |
+| `im:history`        | Read direct-message history.                                                                    |
+| `mpim:history`      | Read multiparty direct-message history.                                                         |
 | `app_mentions:read` | Receive `app_mention` events when Socket Mode push wakeups are enabled.                         |
 | `reactions:read`    | Read reactions to derive fallback status and detect the bot's marker.                           |
 | `reactions:write`   | Add and remove the bot's own marker and status reactions (`reactions.add`, `reactions.remove`). |
@@ -59,8 +61,9 @@ reconnect.
 
 To receive Socket Mode wakeups, enable Event Subscriptions in the Slack app and subscribe to the bot
 events Lorenz watches: `app_mention`, `message.channels` for public channels, `message.groups` for
-private channels, plus `reaction_added` and `reaction_removed`. Socket Mode delivers those events
-over the WebSocket; the bot token still performs every read and write.
+private channels, `message.im` for direct messages, `message.mpim` for multiparty direct messages,
+plus `reaction_added` and `reaction_removed`. Socket Mode delivers those events over the WebSocket;
+the bot token still performs every read and write.
 
 The bot needs two distinct identifiers from the app, plus an optional Socket Mode token:
 
@@ -92,10 +95,11 @@ trackers:
 | Key                   | Env fallback        | Default                                                       | Meaning                                                                                                                               |
 | --------------------- | ------------------- | ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
 | `kind` / `provider`   |                     |                                                               | `tracker.kind: slack` selects the bundle; `trackers.slack.provider: slack` names the implementation.                                  |
-| `channels`            |                     |                                                               | Required. List of `C...` channel ids. Entries resolve `$VAR` references; an unresolved ref collapses to empty and is dropped.         |
+| `channels`            |                     |                                                               | Required. List of public (`C...`), private or multiparty (`G...`), or direct-message (`D...`) conversation ids. Entries resolve `$VAR` references; an unresolved ref collapses to empty and is dropped. |
 | `bot_user_id`         | `SLACK_BOT_USER_ID` |                                                               | Required. The bot's `U...` id. An empty string does not satisfy it.                                                                   |
 | `api_key`             | `SLACK_BOT_TOKEN`   |                                                               | The `xoxb-` bot token.                                                                                                                |
-| `app_token`           | `SLACK_APP_TOKEN`   |                                                               | Optional `xapp-` app-level token for Socket Mode push wakeups.                                                                        |
+| `app_token`           | `SLACK_APP_TOKEN`   |                                                               | Optional `xapp-` app-level token for Socket Mode wakeups and immediate live steering.                                                  |
+| `users`               |                     | Any authenticated human                                       | Optional author allowlist applied to issue creation and steering replies.                                                             |
 | `endpoint`            |                     | `https://slack.com/api`                                       | Slack Web API base.                                                                                                                   |
 | `emoji_states`        |                     | `eyes: In Progress`, `white_check_mark: Done`, `x: Cancelled` | Emoji name to state name, merged over the built-in `DEFAULT_EMOJI_STATES`.                                                            |
 | `marker_emoji`        |                     | `robot_face`                                                  | The reaction the bot adds to mark a tracked thread root.                                                                              |
@@ -159,7 +163,7 @@ Two event kinds count:
   metadata** (`lorenz_status` with the canonical state and a unique `seq`), which the fold
   prefers over text parsing: only the posting app can attach metadata, so it cannot be forged,
   and the text is free to carry extra lines (for example a Cancel-button attribution). Replies
-  that predate metadata still fold through the `^status:\s*(.+)$` regex (case-insensitive).
+  Bot replies without metadata still fold through the `^status:\s*(.+)$` regex (case-insensitive).
   The `seq` also upgrades delivery to exactly-once: an ambiguous outcome (5xx/timeout after the
   request was sent) is reconciled against the thread by its marker instead of silently losing -
   or duplicating - a transition.
@@ -178,7 +182,7 @@ Two escape hatches around the events:
   scan, where the substrate has forgotten it and the fold re-derives. Across a restart the
   rebuild scan can only fold current text (Slack's API cannot return pre-edit text) - the
   first-seen guarantee is in-session, stated plainly rather than pretended durable. Root edits
-  track current text: editing the mention away untracks the issue, as before.
+  track current text: editing the mention away untracks the issue.
 
 If the thread has no status event, state falls back to the BOT's own reactions when the root is a
 mention, otherwise `Todo`. Human reactions never count toward state.
@@ -273,6 +277,24 @@ reconnects, on dirty channels, and on the `reconcile_interval_ms` cadence - the 
 keeps running as the safety net, it is just cheap. This is also what keeps the tracker viable
 under Slack's restricted non-Marketplace rate tier (~1 `conversations.history` request/minute):
 the hot path stops depending on history reads entirely.
+
+### Steering a running agent
+
+A new human thread reply is submitted to the active ACP session immediately when Socket Mode
+delivers it. ACP queues the prompt behind any turn already executing, so that reply itself is the
+next turn. The runner consumes the queued result as the next turn slot and does not append the reply
+to a separate continuation prompt.
+
+Slack authenticates the reply author. The same `tracker.users` policy used for issue creation
+authorizes steering: when the list is non-empty only listed users can direct the agent; when it is
+empty any authenticated human in a watched channel is eligible. Bot-authored replies, unknown
+authors, status commands, `!aside` replies, message edits, system messages, and channel roots do not
+steer the agent.
+
+`conversations.replies` recovers eligible messages after a reconnect or turn boundary. Recovery
+returns oldest-first bounded pages, advances only through accepted events, and shortens oversized
+live-delivery text without changing its Slack timestamp or author. Without Socket Mode, eligible
+replies are recovered between turns rather than pushed during an executing turn.
 
 Reads retry on 429 and 5xx. Each retry wait is logged so a rate-limited scan is visible in daemon
 logs instead of looking hung. `chat.postMessage` retries only on 429, never blindly on an

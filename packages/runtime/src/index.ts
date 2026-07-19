@@ -8,11 +8,13 @@ import { ProjectionActor } from "@lorenz/projections";
 import { RetryScheduler } from "@lorenz/retry-scheduler";
 import { workflowFileChanged, workflowStampsEqual } from "@lorenz/workflow";
 import {
+  boundTrackerIssueEventText,
   durationMs,
   errorMessage,
   redactDiagnosticText,
   redactDiagnosticValue,
   systemClock,
+  trackerIssueEventsBytes,
   withDerivedMaxInFlight,
   type ClockPort,
   type TimerHandle,
@@ -39,6 +41,7 @@ import type {
   RuntimeTrackerClient,
   TrackerChangeStream,
   TrackerIssueEvent,
+  TrackerIssueEventQuery,
   WorkflowDefinition,
 } from "@lorenz/domain";
 import type { WorkerOutcome, WorkerPool } from "@lorenz/worker-pool";
@@ -52,6 +55,9 @@ import {
 } from "@lorenz/dispatch-coordinator";
 
 export type RuntimeRunner = (input: Parameters<typeof runAgentAttempt>[0]) => Promise<RunResult>;
+
+const maxPendingIssueEventBytes = 64 * 1024;
+const trackerChangeStreamCloseTimeoutMs = 5_000;
 
 export { RUNTIME_EVENT_TYPES, RUNTIME_RUN_OUTCOMES } from "@lorenz/runtime-events";
 export type {
@@ -266,7 +272,9 @@ function throwRuntimeError(error: Error): never {
 class ActiveRunHandle {
   readonly controller = new AbortController();
   private readonly issueEventListeners = new Set<(events: TrackerIssueEvent[]) => void>();
-  private pendingIssueEvents: TrackerIssueEvent[] = [];
+  private pendingIssueEventBatches: TrackerIssueEvent[][] = [];
+  private pendingIssueEventBytes = 0;
+  private issueEventDeliveryClosed = false;
   /**
    * Set when the run is force-finished externally (e.g. a stall reconciliation aborts it). The
    * worker pool reads this so a stall-finished run poisons its worker even though the runner surfaces a
@@ -280,7 +288,11 @@ class ActiveRunHandle {
     readonly slotIndex: number,
     readonly key: string,
     readonly runId: string,
+    readonly workflow: WorkflowDefinition,
+    readonly trackerClient: RuntimeTrackerClient,
     private readonly activeRuns: Map<string, ActiveRunHandle>,
+    private readonly onRelease: (handle: ActiveRunHandle) => void,
+    private readonly onExternalFinish: (handle: ActiveRunHandle) => void,
   ) {}
 
   get signal(): AbortSignal {
@@ -296,19 +308,40 @@ class ActiveRunHandle {
   }
 
   subscribeIssueEvents(listener: (events: TrackerIssueEvent[]) => void): () => void {
+    if (this.issueEventDeliveryClosed) return () => {};
     this.issueEventListeners.add(listener);
-    if (this.pendingIssueEvents.length > 0) {
-      const pending = this.pendingIssueEvents;
-      this.pendingIssueEvents = [];
-      listener(pending);
+    if (this.pendingIssueEventBatches.length > 0) {
+      const pending = this.pendingIssueEventBatches;
+      this.pendingIssueEventBatches = [];
+      this.pendingIssueEventBytes = 0;
+      for (const batch of pending) listener(batch);
     }
-    return () => this.issueEventListeners.delete(listener);
+    let subscribed = true;
+    return () => {
+      if (!subscribed) return;
+      subscribed = false;
+      this.issueEventListeners.delete(listener);
+      if (this.issueEventListeners.size === 0) {
+        this.issueEventDeliveryClosed = true;
+        this.pendingIssueEventBatches = [];
+        this.pendingIssueEventBytes = 0;
+      }
+    };
   }
 
   publishIssueEvents(events: TrackerIssueEvent[]): void {
-    if (!this.isActive || events.length === 0) return;
+    if (!this.isActive || this.issueEventDeliveryClosed || events.length === 0) return;
     if (this.issueEventListeners.size === 0) {
-      this.pendingIssueEvents.push(...events);
+      const boundedEvents: TrackerIssueEvent[] = [];
+      for (const event of events) {
+        const bounded = boundTrackerIssueEventText(event, maxPendingIssueEventBytes);
+        if (!bounded) continue;
+        const eventBytes = trackerIssueEventsBytes([bounded]);
+        if (this.pendingIssueEventBytes + eventBytes > maxPendingIssueEventBytes) continue;
+        boundedEvents.push(bounded);
+        this.pendingIssueEventBytes += eventBytes;
+      }
+      if (boundedEvents.length > 0) this.pendingIssueEventBatches.push(boundedEvents);
       return;
     }
     for (const listener of this.issueEventListeners) listener(events);
@@ -318,14 +351,18 @@ class ActiveRunHandle {
     reason: "stalled" | null = null,
     options: { abandonClaimOnSettlement?: boolean | undefined } = {},
   ): void {
+    const wasActive = this.isActive;
     if (reason) this.reason = reason;
     if (options.abandonClaimOnSettlement) this.abandonClaimOnSettlement = true;
     this.abort();
+    if (wasActive) this.onExternalFinish(this);
     this.release();
   }
 
   release(): void {
-    if (this.isActive) this.activeRuns.delete(this.key);
+    if (!this.isActive) return;
+    this.activeRuns.delete(this.key);
+    this.onRelease(this);
   }
 }
 
@@ -339,6 +376,7 @@ export class LorenzRuntime {
   private readonly listeners = new Set<(snapshot: RuntimeSnapshot) => void>();
   private readonly retryScheduler: RetryScheduler;
   private readonly inFlight = new Set<Promise<void>>();
+  private readonly settlingRunOwnership = new Set<ActiveRunHandle>();
   private stopped = false;
   private appStatus: RuntimeAppStatus = "starting";
   private pollStatus: RuntimePollStatus = "idle";
@@ -358,13 +396,15 @@ export class LorenzRuntime {
   private claimOwnerHeartbeatTimer: TimerHandle | null = null;
   private pendingStoppedClaimSettlements = 0;
   /**
-   * Live tracker push subscription (see {@link RuntimeTrackerClient.watch}), opened once in the
-   * recurring `start()` loop and closed on `stop()`. `undefined` for pull-only trackers and the
-   * `--once` path. A tracker that pushes (e.g. Slack Socket Mode) nudges an immediate poll so
-   * new work dispatches without waiting out `polling.intervalMs`.
+   * Live tracker push subscriptions (see {@link RuntimeTrackerClient.watch}), keyed by the client
+   * that owns each stream. A replaced client keeps its stream while active runs remain pinned to
+   * it, then releases the stream when the last run settles. All streams close on `stop()`.
    */
-  private changeStream: TrackerChangeStream | undefined;
-  private changeStreamOpening = false;
+  private readonly changeStreams = new Map<RuntimeTrackerClient, TrackerChangeStream>();
+  private readonly openingChangeStreamClients = new WeakSet<RuntimeTrackerClient>();
+  private readonly changeStreamGenerations = new WeakMap<RuntimeTrackerClient, number>();
+  private changeStreamEnabled = false;
+  private issueEventRecoveryWarningIssued = false;
   /**
    * The reload-surviving coordinator singleton. Built here from either the
    * pre-built `input.coordinator` (preferred), or a null-endpoint passthrough
@@ -461,10 +501,11 @@ export class LorenzRuntime {
   async start(options: RuntimeStartOptions = {}): Promise<void> {
     if (this.stopped) return;
     this.stopped = false;
+    this.changeStreamEnabled = !options.once;
     // Open the tracker's push subscription (if any) so a real backend event re-polls
     // immediately instead of waiting out polling.intervalMs. Skipped for --once (which polls
     // exactly once and exits) and for pull-only trackers that do not implement watch().
-    if (!options.once) await this.openChangeStream();
+    if (!options.once) void this.openChangeStream();
     do {
       if (options.once) {
         await this.pollOnce({ dryRun: options.dryRun, waitForRuns: true });
@@ -485,12 +526,12 @@ export class LorenzRuntime {
 
   stop(): void {
     this.stopped = true;
+    this.changeStreamEnabled = false;
     this.appStatus = "stopping";
     this.pendingPollOptions = null;
-    // Fire-and-forget: stop() stays synchronous like its sibling abort sites. The stream's
-    // close() is idempotent, so an in-flight openChangeStream that resolves after this still
-    // closes the freshly-opened stream (it observes this.stopped).
-    void this.closeChangeStream();
+    // Fire-and-forget: stop() stays synchronous like its sibling abort sites. Stream close is
+    // idempotent, and an in-flight open observes this.stopped before retaining its result.
+    void this.closeAllChangeStreams();
     // finishExternally (abort + release) mirrors the other abort sites and clears
     // isActive, so the resulting agent_run_aborted rejection is treated as a clean
     // shutdown in runClaim rather than recorded as a failed run. Durable claims are
@@ -575,37 +616,115 @@ export class LorenzRuntime {
    * implemented) so a real backend event triggers an immediate poll. Idempotent and
    * fail-soft: a watch() that rejects (or is absent) leaves the runtime on interval polling
    * alone, surfaced as a `tracker_watch_error` event rather than aborting startup. A stop()
-   * that races an in-flight open is honored by closing the freshly-opened stream.
+   * that races an in-flight open is honored by closing the freshly-opened stream. Callers do not
+   * await this method, so a provider that never settles cannot block polling or workflow reload.
    */
-  private async openChangeStream(): Promise<void> {
-    if (!this.client.watch || this.changeStream || this.changeStreamOpening) return;
-    this.changeStreamOpening = true;
+  private async openChangeStream(client: RuntimeTrackerClient = this.client): Promise<void> {
+    const watch = client.watch?.bind(client);
+    if (!watch || this.changeStreams.has(client) || this.openingChangeStreamClients.has(client)) {
+      return;
+    }
+    this.openingChangeStreamClients.add(client);
+    const generation = (this.changeStreamGenerations.get(client) ?? 0) + 1;
+    this.changeStreamGenerations.set(client, generation);
     try {
-      const stream = await this.client.watch((change) => this.nudgePollForTrackerChange(change));
+      const stream = await watch((change) => {
+        if (generation !== this.changeStreamGenerations.get(client)) return;
+        this.nudgePollForTrackerChange(client, change);
+      });
       // A null stream means the tracker has no push for this config (e.g. credential unset); stay
       // on interval polling silently rather than logging it as a failure.
       if (!stream) return;
-      if (this.stopped) {
-        await stream.close();
+      if (
+        this.stopped ||
+        !this.changeStreamEnabled ||
+        generation !== this.changeStreamGenerations.get(client) ||
+        (client !== this.client && !this.hasActiveRunsForTrackerClient(client))
+      ) {
+        await this.closeTrackerChangeStream(stream);
         return;
       }
-      this.changeStream = stream;
+      this.changeStreams.set(client, stream);
       this.addEvent("tracker_watch_started", this.workflow.settings.tracker.kind ?? "tracker");
     } catch (error) {
       this.addEvent("tracker_watch_error", errorMessage(error));
     } finally {
-      this.changeStreamOpening = false;
+      if (generation === this.changeStreamGenerations.get(client)) {
+        this.openingChangeStreamClients.delete(client);
+      }
+      if (
+        !this.stopped &&
+        this.changeStreamEnabled &&
+        !this.changeStreams.has(client) &&
+        generation !== this.changeStreamGenerations.get(client) &&
+        (client === this.client || this.hasActiveRunsForTrackerClient(client))
+      ) {
+        void this.openChangeStream(client);
+      }
     }
   }
 
-  private async closeChangeStream(): Promise<void> {
-    const stream = this.changeStream;
-    this.changeStream = undefined;
+  private async closeChangeStream(client: RuntimeTrackerClient): Promise<void> {
+    this.changeStreamGenerations.set(client, (this.changeStreamGenerations.get(client) ?? 0) + 1);
+    this.openingChangeStreamClients.delete(client);
+    const stream = this.changeStreams.get(client);
+    this.changeStreams.delete(client);
     if (!stream) return;
+    await this.closeTrackerChangeStream(stream);
+  }
+
+  private async closeAllChangeStreams(): Promise<void> {
+    const clients = new Set<RuntimeTrackerClient>([this.client, ...this.changeStreams.keys()]);
+    for (const handle of this.activeRuns.values()) clients.add(handle.trackerClient);
+    for (const handle of this.settlingRunOwnership) clients.add(handle.trackerClient);
+    await Promise.all([...clients].map(async (client) => this.closeChangeStream(client)));
+  }
+
+  private hasActiveRunsForTrackerClient(client: RuntimeTrackerClient): boolean {
+    for (const handle of this.activeRuns.values()) {
+      if (handle.trackerClient === client) return true;
+    }
+    for (const handle of this.settlingRunOwnership) {
+      if (handle.trackerClient === client) return true;
+    }
+    return false;
+  }
+
+  private hasDispatchOwnershipConflict(issueId: string): boolean {
+    for (const handle of this.activeRuns.values()) {
+      if (handle.issueId !== issueId) continue;
+      if (handle.trackerClient !== this.client || handle.workflow !== this.workflow) return true;
+    }
+    for (const handle of this.settlingRunOwnership) {
+      if (handle.issueId !== issueId) continue;
+      if (handle.trackerClient !== this.client || handle.workflow !== this.workflow) return true;
+    }
+    return false;
+  }
+
+  private retireTrackerClientStream(client: RuntimeTrackerClient): void {
+    if (client === this.client || this.hasActiveRunsForTrackerClient(client)) return;
+    void this.closeChangeStream(client);
+  }
+
+  private async closeTrackerChangeStream(stream: TrackerChangeStream): Promise<void> {
+    let timeout: TimerHandle | undefined;
+    const timeoutPromise = new Promise<never>((_resolve, reject) => {
+      timeout = this.clock.setTimeout(() => {
+        reject(
+          new Error(
+            `tracker change stream close timed out after ${trackerChangeStreamCloseTimeoutMs}ms`,
+          ),
+        );
+      }, trackerChangeStreamCloseTimeoutMs);
+      timeout.unref?.();
+    });
     try {
-      await stream.close();
+      await Promise.race([Promise.resolve().then(async () => stream.close()), timeoutPromise]);
     } catch (error) {
       this.addEvent("tracker_watch_error", errorMessage(error));
+    } finally {
+      if (timeout) this.clock.clearTimeout(timeout);
     }
   }
 
@@ -615,14 +734,28 @@ export class LorenzRuntime {
    * poll's fetch is not lost, and a burst of pushes collapses into a single follow-up. The
    * interval poll remains the safety net, so a dropped push is at worst recovered next interval.
    */
-  private nudgePollForTrackerChange(change?: TrackerChange): void {
+  private nudgePollForTrackerChange(client: RuntimeTrackerClient, change?: TrackerChange): void {
     if (this.stopped) return;
+    if (client !== this.client && !this.hasActiveRunsForTrackerClient(client)) return;
     this.addEvent("tracker_push", this.workflow.settings.tracker.kind ?? "tracker");
     const issueEvents = change?.issueEvents;
     if (issueEvents) {
-      for (const handle of this.activeRuns.values()) {
-        if (handle.issueId === issueEvents.issueId) {
-          handle.publishIssueEvents(issueEvents.events);
+      if (!client.fetchIssueEvents) {
+        if (!this.issueEventRecoveryWarningIssued) {
+          this.issueEventRecoveryWarningIssued = true;
+          this.addEvent(
+            "tracker_watch_error",
+            "tracker issue event push requires fetchIssueEvents recovery",
+          );
+        }
+      } else {
+        const authorizedEvents = issueEvents.events.filter(
+          (event) => event.authorizedForSteering === true,
+        );
+        for (const handle of this.activeRuns.values()) {
+          if (handle.trackerClient === client && handle.issueId === issueEvents.issueId) {
+            handle.publishIssueEvents(authorizedEvents);
+          }
         }
       }
     }
@@ -718,6 +851,10 @@ export class LorenzRuntime {
   }
 
   private async maybeDispatch(issue: Issue): Promise<Array<Promise<void>>> {
+    if (this.hasDispatchOwnershipConflict(issue.id)) {
+      this.addEvent("dispatch_skipped", `${issue.identifier} retained_run_ownership`);
+      return [];
+    }
     const refreshed = await this.fetchIssueForDispatch(issue);
     if (!refreshed) {
       this.addEvent("dispatch_skipped", `${issue.identifier} missing_before_dispatch`);
@@ -737,7 +874,17 @@ export class LorenzRuntime {
     // The handle is registered for the WHOLE run lifecycle - including the reserved
     // path's acquire window - so stop()/reconcile abort an in-acquire run (the
     // signal reaches the pool's FIFO waiter) exactly as they abort a running one.
-    const handle = new ActiveRunHandle(refreshed.id, slotIndex, key, runId, this.activeRuns);
+    const handle = new ActiveRunHandle(
+      refreshed.id,
+      slotIndex,
+      key,
+      runId,
+      this.workflow,
+      this.client,
+      this.activeRuns,
+      (released) => this.retireTrackerClientStream(released.trackerClient),
+      (settling) => this.settlingRunOwnership.add(settling),
+    );
     this.activeRuns.set(key, handle);
     try {
       this.syncRetryTimer(refreshed.id);
@@ -777,6 +924,8 @@ export class LorenzRuntime {
         : this.runReservedClaim(refreshed, claim.reservation, runId, handle);
     this.inFlight.add(run);
     void run.finally(() => {
+      this.settlingRunOwnership.delete(handle);
+      this.retireTrackerClientStream(handle.trackerClient);
       this.inFlight.delete(run);
       this.stopClaimOwnerHeartbeatIfIdle();
       this.updateAppStatusFromInFlight();
@@ -886,12 +1035,12 @@ export class LorenzRuntime {
         // Sticky retry affinity travels on the reservation (the prior run's
         // CONCRETE host from the consumed retry entry).
         affinityKey: reservation.affinityHost,
-        timeoutMs: this.workflow.settings.worker.workerPool?.acquireTimeoutMs ?? 30_000,
+        timeoutMs: handle.workflow.settings.worker.workerPool?.acquireTimeoutMs ?? 30_000,
         signal: handle.signal,
         // Thread the FULL workflow Settings (with server.port) so the per-run
         // endpoint manager can build the remote endpoint; the WorkerPoolSettings the
         // coordinator holds has no server.port and would fail every acquire.
-        settings: this.workflow.settings,
+        settings: handle.workflow.settings,
         // The ACP executor - the only executor - consumes the per-run MCP
         // endpoint over the reverse tunnel, so every run needs one. The flag
         // stays on the request so a future executor that runs its tools
@@ -1030,6 +1179,8 @@ export class LorenzRuntime {
     handle: ActiveRunHandle,
     slot: RunSlot | null = null,
   ): Promise<void> {
+    const trackerClient = handle.trackerClient;
+    const workflow = handle.workflow;
     const startedAt = this.clock.now().toISOString();
     const effectiveWorkerHost = workerHost;
     let workerOutcome: WorkerOutcome = "healthy";
@@ -1051,7 +1202,7 @@ export class LorenzRuntime {
     try {
       const result = await this.runner({
         issue,
-        workflow: this.workflow,
+        workflow,
         workerHost: effectiveWorkerHost,
         slotIndex,
         // Thread the bound slot's per-run MCP endpoint (or null on the local /
@@ -1063,17 +1214,22 @@ export class LorenzRuntime {
         // issue could land on one worker and would otherwise share a workspace
         // path; force the per-slot suffix whenever co-residence is possible.
         // Single-tenant (default) keeps the bare path.
-        forceSlotSuffix: (this.workflow.settings.worker.workerPool?.slotsPerMachine ?? 1) > 1,
+        forceSlotSuffix: (workflow.settings.worker.workerPool?.slotsPerMachine ?? 1) > 1,
         onUpdate: enqueueUpdate,
         fetchIssue: async (current) => {
-          const refreshed = await this.client.fetchIssuesByIds([current.id]);
-          return refreshed[0] ?? current;
+          const refreshed = await trackerClient.fetchIssuesByIds([current.id]);
+          const next = refreshed[0];
+          if (!next) throw new Error(`tracker issue missing during active run: ${current.id}`);
+          return next;
         },
         subscribeIssueEvents: (listener) => handle.subscribeIssueEvents(listener),
-        ...(this.client.fetchIssueEvents
+        ...(trackerClient.fetchIssueEvents
           ? {
-              fetchIssueEvents: async (sinceTs: string) =>
-                (await this.client.fetchIssueEvents?.(issue.id, sinceTs)) ?? [],
+              fetchIssueEvents: async (sinceTs: string, query: TrackerIssueEventQuery) =>
+                (await trackerClient.fetchIssueEvents?.(issue.id, sinceTs, query)) ?? {
+                  events: [],
+                  hasMore: false,
+                },
             }
           : {}),
         abortSignal: handle.signal,
@@ -1081,7 +1237,7 @@ export class LorenzRuntime {
       await updateQueue;
       if (claimStoreRuntimeError) throwRuntimeError(claimStoreRuntimeError);
       if (!handle.isActive) return;
-      const finalIssue = result.finalIssue ?? (await this.fetchIssueOrSelf(issue));
+      const finalIssue = result.finalIssue ?? (await this.fetchIssueOrSelf(issue, trackerClient));
       if (!handle.isActive) return;
       let finished: RunningEntry | null;
       try {
@@ -1229,8 +1385,11 @@ export class LorenzRuntime {
     }
   }
 
-  private async fetchIssueOrSelf(issue: Issue): Promise<Issue> {
-    const refreshed = await this.client.fetchIssuesByIds([issue.id]);
+  private async fetchIssueOrSelf(
+    issue: Issue,
+    trackerClient: RuntimeTrackerClient,
+  ): Promise<Issue> {
+    const refreshed = await trackerClient.fetchIssuesByIds([issue.id]);
     return refreshed[0] ?? issue;
   }
 
@@ -1255,36 +1414,34 @@ export class LorenzRuntime {
         this.coordinator?.capabilities,
       );
       if (gateMessage !== null) throw new Error(gateMessage);
-      // TRANSACTIONAL reload: run EVERY throwing side effect FIRST (the gate above,
-      // then the coordinator/pool reconcile), and ONLY swap the runtime settings
-      // (this.input.workflow + this.orchestrator.settings + the client) AFTER they
-      // ALL succeed. If reconcile throws (e.g. driver unavailable / invalid
-      // driverOptions) the catch below leaves BOTH the runtime settings AND the
-      // pool/coordinator state on the PREVIOUS config - last-good is never partially
-      // applied, so dispatch can never use settings that do not match the live pool.
-      //
-      // The coordinator (and its pool) is a reload-surviving singleton: diff
-      // prev-vs-next worker-pool settings instead of being reconstructed. The pool is
-      // the single dispatch path, so a parsed config always carries a worker_pool (an
-      // absent block defaults to the enabled `local` pool). The
-      // `disabledWorkerPoolSettings(prevWorkerPool)` fallback only fires for a settings
-      // object built outside parseConfig that genuinely omits the block; reconcile then
-      // drains the live pool to zero instead of leaking its (paid) workers. A present
-      // block (including an explicit `enabled: false`) reconciles directly: reconcile
-      // handles the disable-and-drain itself.
+      // Construct the replacement tracker before mutating the live pool. Client construction is
+      // fallible, while a successful pool reconcile may begin provisioning or draining that
+      // cannot be reversed by applying the previous settings again.
+      const previousClient = this.client;
+      const nextClient =
+        !this.input.client && this.input.clientFactory
+          ? this.input.clientFactory(workflow.settings)
+          : previousClient;
+
+      // The coordinator (and its pool) is a reload-surviving singleton. The pool is the single
+      // dispatch path, so parsed settings carry a worker_pool even when the workflow omits the
+      // block. The disabled fallback handles settings objects built outside parseConfig.
+      let nextPool: WorkerPoolSettings | undefined;
       if (this.coordinator) {
-        const next =
+        nextPool =
           workflow.settings.worker.workerPool ?? disabledWorkerPoolSettings(prevWorkerPool);
-        // Awaited: reconcile is async so the coordinator's injected driverLoader
-        // can dynamic-import an out-of-tree driver module BEFORE the (still
-        // synchronous) pool reconcile. A rejection lands in the catch below,
-        // keeping last-good settings and emitting workflow_reload_failed.
-        if (next) await this.coordinator.reconcile(next);
+        if (nextPool) {
+          await this.coordinator.reconcile(nextPool);
+        }
       }
+      const clientChanged = nextClient !== previousClient;
       this.input.workflow = workflow;
       this.orchestrator.settings = workflow.settings;
-      if (!this.input.client && this.input.clientFactory) {
-        this.client = this.input.clientFactory(workflow.settings);
+      this.client = nextClient;
+      if (clientChanged) this.issueEventRecoveryWarningIssued = false;
+      if (clientChanged && this.changeStreamEnabled) void this.openChangeStream(nextClient);
+      if (clientChanged && !this.hasActiveRunsForTrackerClient(previousClient)) {
+        await this.closeChangeStream(previousClient);
       }
       this.addEvent("workflow_reloaded", workflow.path);
     } catch (error) {
@@ -1299,62 +1456,112 @@ export class LorenzRuntime {
     const snapshot = await this.orchestrator.snapshotAsync();
     const empty: ReconcileOutcome = { dueRetryCandidates: [], retryTimerIssues: [] };
     const dueRetryIds = new Set<string>();
+    const mixedOwnershipIssueIds = new Set<string>();
     const tracked = new Map<
       string,
       {
         kind: "claim" | "retry";
         identifier: string;
+        trackerClient: RuntimeTrackerClient;
+        workflow: WorkflowDefinition;
         workerHost?: string | null | undefined;
         workspacePath?: string | null | undefined;
       }
     >();
+    const track = (
+      issueId: string,
+      meta: {
+        kind: "claim" | "retry";
+        identifier: string;
+        trackerClient: RuntimeTrackerClient;
+        workflow: WorkflowDefinition;
+        workerHost?: string | null | undefined;
+        workspacePath?: string | null | undefined;
+      },
+    ): void => {
+      if (mixedOwnershipIssueIds.has(issueId)) return;
+      const existing = tracked.get(issueId);
+      if (
+        existing &&
+        (existing.trackerClient !== meta.trackerClient || existing.workflow !== meta.workflow)
+      ) {
+        tracked.delete(issueId);
+        mixedOwnershipIssueIds.add(issueId);
+        return;
+      }
+      tracked.set(issueId, meta);
+    };
     // Reserving (in-acquire) slots are tracked host-less so an issue that goes
     // terminal mid-acquire is still aborted and cleaned up; running/retrying
     // entries below override with their richer metadata when present.
     for (const entry of snapshot.reserving) {
       if (!(await this.orchestrator.ownsClaimAsync(entry.issueId, entry.slotIndex))) continue;
-      tracked.set(entry.issueId, {
+      const handle = this.activeRuns.get(slotKey(entry.issueId, entry.slotIndex));
+      track(entry.issueId, {
         kind: "claim",
         identifier: entry.identifier,
+        trackerClient: handle?.trackerClient ?? this.client,
+        workflow: handle?.workflow ?? this.workflow,
         workerHost: null,
         workspacePath: null,
       });
     }
     for (const entry of snapshot.running) {
       if (!(await this.orchestrator.ownsClaimAsync(entry.issue.id, entry.slotIndex))) continue;
-      tracked.set(entry.issue.id, {
+      const handle = this.activeRuns.get(slotKey(entry.issue.id, entry.slotIndex));
+      track(entry.issue.id, {
         kind: "claim",
         identifier: entry.issue.identifier,
+        trackerClient: handle?.trackerClient ?? this.client,
+        workflow: handle?.workflow ?? this.workflow,
         workerHost: entry.workerHost,
         workspacePath: entry.workspacePath,
       });
     }
     for (const entry of snapshot.retrying) {
       if (this.retrySnapshotIsDue(entry)) dueRetryIds.add(entry.issueId);
-      if (tracked.has(entry.issueId)) continue;
-      tracked.set(entry.issueId, {
+      if (tracked.has(entry.issueId) || mixedOwnershipIssueIds.has(entry.issueId)) continue;
+      track(entry.issueId, {
         kind: "retry",
         identifier: entry.identifier,
+        trackerClient: this.client,
+        workflow: this.workflow,
         workerHost: entry.workerHost,
         workspacePath: entry.workspacePath,
       });
     }
+    for (const issueId of mixedOwnershipIssueIds) {
+      this.addEvent("reconcile_refresh_failed", `mixed tracker ownership for issue ${issueId}`);
+    }
     if (tracked.size === 0) return empty;
 
-    let refreshed: Issue[];
-    try {
-      refreshed = await this.client.fetchIssuesByIds([...tracked.keys()]);
-    } catch (error) {
-      this.addEvent("reconcile_refresh_failed", errorMessage(error));
-      return empty;
+    const trackedByClient = new Map<RuntimeTrackerClient, string[]>();
+    for (const [issueId, meta] of tracked) {
+      const issueIds = trackedByClient.get(meta.trackerClient) ?? [];
+      issueIds.push(issueId);
+      trackedByClient.set(meta.trackerClient, issueIds);
+    }
+    const refreshed: Issue[] = [];
+    const completedRefreshIds = new Set<string>();
+    for (const [trackerClient, issueIds] of trackedByClient) {
+      try {
+        const requestedIds = new Set(issueIds);
+        const issues = await trackerClient.fetchIssuesByIds(issueIds);
+        refreshed.push(...issues.filter((issue) => requestedIds.has(issue.id)));
+        issueIds.forEach((issueId) => completedRefreshIds.add(issueId));
+      } catch (error) {
+        this.addEvent("reconcile_refresh_failed", errorMessage(error));
+      }
     }
     const refreshedIds = new Set(refreshed.map((issue) => issue.id));
     const outcome: ReconcileOutcome = { dueRetryCandidates: [], retryTimerIssues: [] };
     for (const issue of refreshed) {
       const meta = tracked.get(issue.id);
-      const active = issueIsActive(issue, this.workflow.settings);
-      const routed = routedToThisWorker(issue, this.workflow.settings);
-      if (active && routed && !issueHasOpenBlockers(issue, this.workflow.settings)) {
+      if (!meta) continue;
+      const settings = meta.workflow.settings;
+      const active = issueIsActive(issue, settings);
+      const routed = routedToThisWorker(issue, settings);
+      if (active && routed && !issueHasOpenBlockers(issue, settings)) {
         await this.orchestrator.refreshRunningIssueAsync(issue);
         if (dueRetryIds.has(issue.id)) outcome.dueRetryCandidates.push(issue);
         else outcome.retryTimerIssues.push(issue);
@@ -1368,12 +1575,12 @@ export class LorenzRuntime {
       }
       this.abortIssueRuns(issue.id);
       this.clearRetryTimer(issue.id);
-      const reason = reconciliationStopReason(issue, this.workflow.settings);
-      if (isTerminalState(issue.state, this.workflow.settings.tracker.terminalStates)) {
+      const reason = reconciliationStopReason(issue, settings);
+      if (isTerminalState(issue.state, settings.tracker.terminalStates)) {
         await this.removeIssueWorkspaces(
-          this.workflow.settings,
-          issue.identifier || meta?.identifier,
-          meta?.workerHost,
+          settings,
+          issue.identifier || meta.identifier,
+          meta.workerHost,
           issue,
         );
         this.addEvent("workspace_cleanup", `${issue.identifier} ${reason}`);
@@ -1382,7 +1589,7 @@ export class LorenzRuntime {
       }
     }
     for (const [issueId, meta] of tracked.entries()) {
-      if (refreshedIds.has(issueId)) continue;
+      if (!completedRefreshIds.has(issueId) || refreshedIds.has(issueId)) continue;
       try {
         await this.orchestrator.cleanupIssueAsync(issueId);
       } catch (error) {
@@ -1407,7 +1614,12 @@ export class LorenzRuntime {
         continue;
       const currentEntry = await this.runningEntry(snapshotEntry.issue.id, snapshotEntry.slotIndex);
       if (!currentEntry) continue;
-      const effective = settingsForIssueState(this.workflow.settings, currentEntry.issue.state);
+      const key = slotKey(currentEntry.issue.id, currentEntry.slotIndex);
+      const activeHandle = this.activeRuns.get(key);
+      const effective = settingsForIssueState(
+        activeHandle?.workflow.settings ?? this.workflow.settings,
+        currentEntry.issue.state,
+      );
       const agent = effective.agents[currentEntry.agentKind];
       if (!agent) throw new Error(`agents.${currentEntry.agentKind} is required`);
       const timeoutMs = agent.stallTimeoutMs;
@@ -1416,8 +1628,6 @@ export class LorenzRuntime {
       const elapsedMs = this.clock.now().getTime() - lastActivity.getTime();
       if (elapsedMs <= timeoutMs) continue;
 
-      const key = slotKey(currentEntry.issue.id, currentEntry.slotIndex);
-      const activeHandle = this.activeRuns.get(key);
       const runId =
         activeHandle?.runId ?? `stalled-${currentEntry.issue.id}-${currentEntry.slotIndex}`;
       const error = `agent_stalled after ${timeoutMs}ms`;

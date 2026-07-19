@@ -1,19 +1,24 @@
 import { defaultStateType, normalizeIssue } from "@lorenz/issue";
-import { isRecord } from "@lorenz/domain";
-import type {
-  Issue,
-  IssueStateType,
-  RuntimeTrackerClient,
-  Settings,
-  TrackerChange,
-  TrackerChangeStream,
-  TrackerIssueEvent,
+import {
+  boundTrackerIssueEventText,
+  isRecord,
+  trackerIssueEventsBytes,
+  type Issue,
+  type IssueStateType,
+  type RuntimeTrackerClient,
+  type Settings,
+  type TrackerChange,
+  type TrackerChangeStream,
+  type TrackerIssueEvent,
+  type TrackerIssueEventPage,
+  type TrackerIssueEventQuery,
 } from "@lorenz/domain";
 
-import { splitIssueId } from "./ids.js";
+import { compareSlackTs, isSlackTs, splitIssueId } from "./ids.js";
 import { handleSlackInteraction } from "./interactions.js";
 import {
   emojiForState,
+  isAllowedAuthor,
   isBotMention,
   stateFromReactions,
   statusEmojiMap,
@@ -30,11 +35,16 @@ import {
   type ThreadState,
 } from "./threadState.js";
 import { isBotMarked } from "./transport.js";
-import type { SlackChannelScan, SlackMessage, SlackTransport } from "./transport.js";
+import type {
+  SlackChannelScan,
+  SlackMessage,
+  SlackThreadReply,
+  SlackTransport,
+} from "./transport.js";
 import { upsertWorkpad } from "./workpad.js";
 
-// Re-exported here for API stability: the id helper predates ids.ts and package consumers (and
-// the tool pack) import it from the client module.
+// Re-exported here for API stability because package consumers and the tool pack import it from
+// the client module.
 export { splitIssueId };
 
 /**
@@ -161,6 +171,7 @@ function slackMessageToIssue(
     state: row.state,
     state_type: row.stateType,
     labels: row.labels,
+    issue_event_cursor: context.request?.ts ?? "0",
     ...(row.url !== undefined ? { url: row.url } : {}),
     ...(Number.isFinite(createdAtMs) ? { created_at: new Date(createdAtMs).toISOString() } : {}),
     raw: message,
@@ -192,6 +203,9 @@ const MIRRORED_STATES_MAX = 5_000;
 /** Minimum gap between "already running" ephemerals for one issue+author pair. */
 const BUSY_NOTICE_WINDOW_MS = 10 * 60_000;
 
+/** Bound on Slack API pages inspected by one recovery request. */
+const MAX_THREAD_RECOVERY_PAGES = 500;
+
 export class SlackTrackerClient implements RuntimeTrackerClient {
   private scanCache: { at: number; key: string; scan: SlackChannelScan } | null = null;
   /** Last state the reaction mirror was reconciled to, per issue (see healStatusMirror). */
@@ -210,7 +224,7 @@ export class SlackTrackerClient implements RuntimeTrackerClient {
   /**
    * The effective transport. With an app token this is the event-fed channel mirror wrapping
    * the real transport (polls read memory; the scan becomes reconciliation); without one it is
-   * the raw transport and every poll is a real scan, exactly the pre-mirror behavior.
+   * the raw transport and every poll is a real scan.
    */
   private readonly transport: SlackTransport;
   private readonly channelMirror: MirrorBackedSlackTransport | null;
@@ -245,13 +259,10 @@ export class SlackTrackerClient implements RuntimeTrackerClient {
 
   /**
    * Push capability (see {@link RuntimeTrackerClient.watch}). When an app-level token is
-   * configured, open a Slack Socket Mode connection. The socket is a DATA FEED, not just a
-   * doorbell: every watched event payload is applied to the channel mirror first, so the poll
-   * the nudge triggers reads local state instead of re-scanning Slack; `interactive` envelopes
-   * (the workpad's Cancel/Details buttons) route to the interaction handler over the same
-   * connection. Returns `null` (pull-only, as before) when no app token is set or no channels
-   * are watched, so push is strictly opt-in and never changes behavior for existing
-   * single-token deployments.
+   * configured, open a Slack Socket Mode connection. Watched events update the channel mirror
+   * before nudging the poll path, eligible thread replies also carry structured steering input,
+   * and interactive envelopes route workpad actions through the same connection. Returns `null`
+   * when no app token is set or no channels are watched, leaving the tracker pull-only.
    */
   watch(onChange: (change?: TrackerChange) => void): TrackerChangeStream | null {
     const { channels, appToken } = slackTrackerOptions(this.settings);
@@ -284,55 +295,97 @@ export class SlackTrackerClient implements RuntimeTrackerClient {
   }
 
   /**
-   * Steering feed (see {@link RuntimeTrackerClient.fetchIssueEvents}): human thread replies
-   * newer than `sinceTs`, ascending, for recovery into the active ACP queue. Excluded on
-   * purpose: the bot's own replies (the agent wrote them), `!` command replies (they act
-   * through the status fold, not the prompt), asides (`!aside` opts a reply out of delivery),
-   * and tombstoned deletions. With the mirror active this is a memory read.
+   * Return bounded, oldest-first steering events newer than `sinceTs`. With the channel mirror
+   * active, the same transport contract is served from event-fed memory between reconciliations.
    */
-  async fetchIssueEvents(issueId: string, sinceTs: string): Promise<TrackerIssueEvent[]> {
+  async fetchIssueEvents(
+    issueId: string,
+    sinceTs: string,
+    query: TrackerIssueEventQuery,
+  ): Promise<TrackerIssueEventPage> {
+    if (!Number.isInteger(query.maxEvents) || query.maxEvents <= 0) {
+      throw new Error("Slack issue-event maxEvents must be a positive integer");
+    }
+    if (!Number.isInteger(query.maxBytes) || query.maxBytes <= 0) {
+      throw new Error("Slack issue-event maxBytes must be a positive integer");
+    }
+    if (!isSlackTs(sinceTs)) {
+      throw new Error(`invalid Slack issue-event cursor: ${sinceTs}`);
+    }
     const parts = splitIssueId(issueId);
-    if (!parts) return [];
-    const [channel, ts] = parts;
-    const { botUserId } = slackTrackerOptions(this.settings);
-    const parsedSince = Number.parseFloat(sinceTs);
-    const floor = Number.isFinite(parsedSince) ? parsedSince : 0;
-    const replies = await this.transport.getThread(channel, ts);
-    return replies
-      .filter((reply) => {
-        if (tsValue(reply.ts) <= floor) return false;
-        if (reply.user === undefined || reply.user === botUserId) return false;
-        if (reply.deleted === true) return false;
-        const classificationText = reply.firstSeenText ?? reply.text;
-        if (isAsideText(classificationText, botUserId)) return false;
-        return parseStatusCommand(classificationText, botUserId, this.settings) === null;
-      })
-      .sort((a, b) => tsValue(a.ts) - tsValue(b.ts))
-      .map((reply) => ({
-        ts: reply.ts,
-        text: reply.text,
-        ...(reply.user !== undefined ? { author: reply.user } : {}),
-      }));
+    if (!parts) return { events: [], hasMore: false };
+    const [channel, threadTs] = parts;
+    query.abortSignal?.throwIfAborted();
+    const events: TrackerIssueEvent[] = [];
+    let bytes = 0;
+    let cursor: string | undefined;
+    for (let pageIndex = 0; pageIndex < MAX_THREAD_RECOVERY_PAGES; pageIndex += 1) {
+      const page = await this.transport.getThreadPage(channel, threadTs, {
+        afterTs: sinceTs,
+        limit: 200,
+        ...(cursor ? { cursor } : {}),
+        ...(query.abortSignal ? { abortSignal: query.abortSignal } : {}),
+      });
+      for (let index = 0; index < page.replies.length; index += 1) {
+        const event = steeringEventForReply(page.replies[index]!, this.settings);
+        if (!event || compareSlackTs(event.ts, sinceTs) <= 0) continue;
+        const bounded = boundTrackerIssueEventText(event, query.maxBytes);
+        if (!bounded) {
+          throw new Error(`Slack issue-event metadata exceeds the page byte limit: ${event.ts}`);
+        }
+        const eventBytes = trackerIssueEventsBytes([bounded]);
+        if (bytes + eventBytes > query.maxBytes) {
+          return { events, hasMore: true };
+        }
+        events.push(bounded);
+        bytes += eventBytes;
+        if (events.length >= query.maxEvents) {
+          const hasUnexaminedReplies =
+            page.replies.slice(index + 1).some((reply) => {
+              const remaining = steeringEventForReply(reply, this.settings);
+              return remaining !== null && compareSlackTs(remaining.ts, sinceTs) > 0;
+            }) || page.nextCursor !== undefined;
+          return { events, hasMore: hasUnexaminedReplies };
+        }
+      }
+      cursor = page.nextCursor;
+      if (!cursor) return { events, hasMore: false };
+    }
+    if (events.length === 0) {
+      throw new Error(
+        `Slack issue-event recovery exceeded ${MAX_THREAD_RECOVERY_PAGES} pages without progress`,
+      );
+    }
+    return { events, hasMore: true };
   }
 
   private changeForSocketPayload(payload: Record<string, unknown> | undefined): TrackerChange {
     const event = payload?.event;
     if (!isRecord(event)) return {};
-    if (event.type !== "message" && event.type !== "app_mention") return {};
-    if (typeof event.subtype === "string") return {};
-    const channel = typeof event.channel === "string" ? event.channel : null;
-    const ts = typeof event.ts === "string" ? event.ts : null;
-    const threadTs = typeof event.thread_ts === "string" ? event.thread_ts : null;
-    const text = typeof event.text === "string" ? event.text : null;
-    const user = typeof event.user === "string" ? event.user : null;
+    const record = event;
+    if (record.type !== "message" && record.type !== "app_mention") return {};
+    const subtype = typeof record.subtype === "string" ? record.subtype : null;
+    const channel = typeof record.channel === "string" ? record.channel : null;
+    const ts = typeof record.ts === "string" ? record.ts : null;
+    const threadTs = typeof record.thread_ts === "string" ? record.thread_ts : null;
+    const text = typeof record.text === "string" ? record.text : null;
+    const user = typeof record.user === "string" ? record.user : null;
     if (!channel || !ts || !threadTs || threadTs === ts || !text || !user) return {};
-    const { botUserId } = slackTrackerOptions(this.settings);
-    if (user === botUserId || isAsideText(text, botUserId)) return {};
-    if (parseStatusCommand(text, botUserId, this.settings) !== null) return {};
+    const steeringEvent = steeringEventForReply(
+      {
+        ts,
+        text,
+        user,
+        ...(subtype ? { subtype } : {}),
+        isBot: typeof record.bot_id === "string",
+      },
+      this.settings,
+    );
+    if (!steeringEvent) return {};
     return {
       issueEvents: {
         issueId: `${channel}:${threadTs}`,
-        events: [{ ts, author: user, text }],
+        events: [steeringEvent],
       },
     };
   }
@@ -582,4 +635,32 @@ function tsValue(ts: string | undefined): number {
   if (ts === undefined) return 0;
   const value = Number.parseFloat(ts);
   return Number.isFinite(value) ? value : 0;
+}
+
+function steeringEventForReply(
+  reply: SlackThreadReply,
+  settings: Settings,
+): TrackerIssueEvent | null {
+  const { botUserId, users } = slackTrackerOptions(settings);
+  if (!isSlackTs(reply.ts) || compareSlackTs(reply.ts, "0") <= 0) return null;
+  if (reply.subtype !== undefined && reply.subtype !== "thread_broadcast") return null;
+  if (
+    reply.user === undefined ||
+    reply.isBot === true ||
+    reply.edited === true ||
+    reply.deleted === true ||
+    reply.user === botUserId
+  ) {
+    return null;
+  }
+  if (!isAllowedAuthor(reply.user, users)) return null;
+  const classificationText = reply.firstSeenText ?? reply.text;
+  if (isAsideText(classificationText, botUserId)) return null;
+  if (parseStatusCommand(classificationText, botUserId, settings) !== null) return null;
+  return {
+    authorizedForSteering: true,
+    ts: reply.ts,
+    author: reply.user,
+    text: reply.text,
+  };
 }

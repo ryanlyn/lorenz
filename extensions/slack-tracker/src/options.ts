@@ -20,10 +20,10 @@ export interface SlackTrackerOptions {
   botUserId?: string | undefined;
   /**
    * Slack app-level token (`xapp-...`) with the `connections:write` scope, enabling Socket Mode
-   * push: the client opens a WebSocket to Slack and re-polls the instant a watched mention or
-   * thread reply arrives, instead of waiting out `polling.intervalMs`. Optional; when unset the
-   * tracker is pull-only (interval polling), exactly as before. Bot-token reads/writes are
-   * unaffected either way - this token is used ONLY to open the events socket.
+   * push. The event feed keeps the channel mirror current, wakes polling for relevant changes,
+   * delivers eligible thread replies as live steering, and carries interactive workpad actions.
+   * Optional; when unset the tracker is pull-only and Slack interactions are unavailable.
+   * Bot-token reads and writes are unaffected either way.
    */
   appToken?: string | undefined;
   /**
@@ -62,7 +62,7 @@ export interface SlackTrackerOptions {
    * scan while the Socket Mode feed is healthy (default 15 minutes). The mirror serves polls
    * from memory between re-syncs; this is the standing repair pass that catches anything the
    * event feed missed. Only meaningful with `app_token` set - without a socket the tracker is
-   * pull-only and every poll is a real scan, exactly as before the mirror existed.
+   * pull-only and every poll is a real scan.
    */
   reconcileIntervalMs?: number | undefined;
 }

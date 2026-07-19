@@ -17,9 +17,10 @@ trackers:
     # With Socket Mode, how often the event-fed mirror re-syncs from a real history scan.
     # Bootstrap, reconnects, and events that cannot be applied also force a real scan.
     # reconcile_interval_ms: 900000
-    # Optional author allowlist: when set, only these users' bot-mentions create issues. Leave it
-    # out for no author constraint. Recommended when watching a DM channel, since anyone can DM the
-    # bot - constraining to known requesters keeps dispatch scoped.
+    # Optional author allowlist: when set, only these users' bot-mentions create issues and only
+    # their eligible thread replies steer active agents. Leave it out for no author constraint.
+    # Recommended when watching a DM channel, since anyone can DM the bot - constraining to known
+    # requesters keeps dispatch and steering scoped.
     # users:
     #   - U0123ABCD
     emoji_states:
@@ -54,7 +55,7 @@ polling:
   # internal customer-built apps than for restricted-tier apps), and each poll re-scans recent
   # channel history (bounded by scan_lookback_days above). Keep this interval conservative
   # (60s) so a busy channel does not trigger sustained 429s; watched channels should be dedicated
-  # and low-traffic. The 429/Retry-After backoff (each wait is now logged) and per-channel
+  # and low-traffic. The 429/Retry-After backoff (each wait is logged) and per-channel
   # poll_error handling cover transient limits on top of this; the runtime also emits a
   # poll_progress heartbeat so a long first scan is visible rather than silent.
   #
@@ -159,7 +160,7 @@ Status transitions are ts-ordered events in the issue's thread; the latest wins:
 
 - You (the agent) set status with `slack_update_status`, which posts the bot's authoritative `status: <Name>` thread reply with machine-readable metadata and then mirrors the state onto the bot's own reaction for glanceability.
 - Humans transition status by mentioning the bot with a `!`-prefixed command reply: `@bot !done`, `@bot !cancel`, `@bot !reopen`, `@bot !in progress`, `@bot !status <Name>`. The workpad Cancel button is the one-click form of `@bot !cancel`.
-- Ordinary human thread replies steer an active agent. With Socket Mode they are submitted immediately as the next queued ACP turn; without Socket Mode they are recovered between turns. Prefix a reply with `!aside`, optionally after the bot mention, to keep it as thread context without steering the agent or changing status.
+- Thread replies from authenticated humans allowed by `tracker.users` steer an active agent. Leaving `tracker.users` unset permits any authenticated human in a watched channel. With Socket Mode an eligible reply is submitted immediately as the next queued ACP turn; without Socket Mode it is recovered between turns. Prefix a reply with `!aside`, optionally after the bot mention, to keep it as thread context without steering the agent or changing status.
 - A human mention with **no** recognized command re-opens a terminal issue to the first active state: re-mentioning the bot always means "this needs attention again".
 - Status commands are first-seen within a daemon session. Editing an old command does not rewrite status; post a new command instead.
 - Reactions are per-author in Slack (the bot cannot remove a human's reaction and vice versa), so reactions are never the source of truth once a status event exists; do not reason about status from reactions.

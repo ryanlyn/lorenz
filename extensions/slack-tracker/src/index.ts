@@ -4,6 +4,8 @@ export type {
   SlackMessageMetadata,
   SlackPostOptions,
   SlackThreadReply,
+  SlackThreadReplyPage,
+  SlackThreadReplyPageQuery,
   SlackTransport,
   SlackUser,
 } from "./transport.js";

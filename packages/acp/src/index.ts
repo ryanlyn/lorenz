@@ -1,5 +1,7 @@
 import fs from "node:fs/promises";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
+import os from "node:os";
 import path from "node:path";
 import { execFileSync, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { Readable, Writable } from "node:stream";
@@ -38,6 +40,7 @@ import {
   type AgentUpdate,
   type AgentUpdateType,
   type Issue,
+  type QueuedTurnOptions,
   type Settings,
   type UsageTokenUpdate,
   type UsageTotals,
@@ -73,12 +76,8 @@ interface Session extends AgentSession {
   init: InitializeResponse;
   mcpEndpoint: AgentMcpEndpointLease;
   /**
-   * True when {@link AcpSession.mcpEndpoint} was THREADED in by the dispatch
-   * coordinator (it owns the whole lease for this run). acp must then SKIP both its
-   * own `acquireAgentMcpEndpoint` AND its own `mcpEndpoint.release()` so the
-   * coordinator's `slot.release` is the single owner (no double-close / orphaned
-   * token+local-server+tunnel). False on the local / non-pool path, where acp
-   * acquires AND releases its own endpoint byte-for-byte as before.
+   * True when ACP created the endpoint lease. A coordinator-provided lease remains
+   * under the coordinator's lifecycle so only one owner can release it.
    */
   ownsMcpEndpoint: boolean;
   workerHost?: string | null | undefined;
@@ -89,13 +88,18 @@ interface Session extends AgentSession {
   lastCallUsageSeq: number;
   callUsageBaseline?: UsageTokenUpdate | undefined;
   pendingTurns: PendingTurn[];
+  terminalError?: Error | undefined;
+  shutdown?: Promise<void> | undefined;
 }
+
+const bridgeProcessCleanupDirs = new WeakMap<ChildProcessWithoutNullStreams, string>();
 
 interface PendingTurn {
   active: boolean;
   settled: boolean;
   allowSessionIdRotation: boolean;
   activate(): void;
+  trySubmitPrompt(): boolean;
   touch(): void;
   reject(error: Error): void;
 }
@@ -147,12 +151,9 @@ export class Executor implements AgentExecutor {
     settings: Settings;
     workerHost?: string | null;
     /**
-     * A pre-resolved per-run MCP endpoint lease threaded in by the dispatch
-     * coordinator (it owns the whole lease for the run). When present (non-null) acp
-     * USES it instead of acquiring its own AND skips releasing it in `stopSession`
-     * (the coordinator's `slot.release` closes it - single ownership). When absent
-     * (null / local / non-pool) acp acquires AND releases its OWN endpoint exactly
-     * as before.
+     * A coordinator-owned MCP endpoint lease for this run. ACP uses the supplied
+     * lease without acquiring or releasing it. When absent, ACP owns the lease it
+     * acquires.
      */
     mcpEndpoint?: AgentMcpEndpointLease | null;
     onUpdate?: (update: AgentUpdate) => void;
@@ -164,8 +165,7 @@ export class Executor implements AgentExecutor {
     );
     const agentKind = input.settings.agent.kind;
     const agentConfig = resolveAgentConfig(input.settings, agentKind);
-    // The coordinator owns the lease ONLY when one was threaded in; otherwise acp
-    // owns the endpoint it acquires below and must release it on stop.
+    // Exactly one component owns endpoint release for the run.
     const threadedEndpoint = input.mcpEndpoint ?? null;
     const ownsMcpEndpoint = threadedEndpoint === null;
     const acpOptions = acpAgentOptions(agentConfig);
@@ -219,7 +219,12 @@ export class Executor implements AgentExecutor {
         turnStartTotals: emptyUsageTotals(),
         lastCallUsageSeq: 0,
         pendingTurns: [],
-        queueTurn: async (prompt) => this.queueTurn(nextSession, prompt),
+        terminalError: undefined,
+        shutdown: undefined,
+        ...(supportsPromptQueue(init) && {
+          queueTurn: async (prompt: string, options?: QueuedTurnOptions) =>
+            this.queueTurn(nextSession, prompt, options),
+        }),
         stop: async () => {
           await this.stopSession(nextSession);
         },
@@ -238,13 +243,35 @@ export class Executor implements AgentExecutor {
       });
       return session;
     } catch (error) {
-      if (session) await this.stopSession(session);
-      else {
-        if (child) await stopChild(child);
-        // Only release the endpoint acp OWNS. A threaded lease belongs to the
-        // coordinator's slot.release, so acp must never release it (even on a
-        // startup error) or it would double-close the token+local-server+tunnel.
-        if (ownsMcpEndpoint) await mcpEndpoint?.release();
+      const cleanupErrors: unknown[] = [];
+      if (session) {
+        try {
+          await this.stopSession(session);
+        } catch (cleanupError) {
+          cleanupErrors.push(cleanupError);
+        }
+      } else {
+        try {
+          if (child) await stopBridgeProcess(child, !input.workerHost);
+        } catch (cleanupError) {
+          cleanupErrors.push(cleanupError);
+        } finally {
+          // Coordinator-provided leases remain under coordinator ownership.
+          if (ownsMcpEndpoint) {
+            try {
+              await mcpEndpoint?.release();
+            } catch (cleanupError) {
+              cleanupErrors.push(cleanupError);
+            }
+          }
+        }
+      }
+      if (cleanupErrors.length > 0) {
+        throw new AggregateError(
+          [error, ...cleanupErrors],
+          "acp session startup failed and cleanup did not complete",
+          { cause: error },
+        );
       }
       throw error;
     }
@@ -260,156 +287,239 @@ export class Executor implements AgentExecutor {
    * long-running daemon, so the batch is not kept.
    */
   async runTurn(session: Session, prompt: string, _issue?: Issue): Promise<AgentUpdate[]> {
+    if (session.terminalError) throw session.terminalError;
     if (session.pendingTurns.length > 0) throw new Error("ACP turn already running");
     return this.startTurn(session, prompt);
   }
 
-  private async queueTurn(session: Session, prompt: string): Promise<AgentUpdate[]> {
-    return this.startTurn(session, prompt);
+  private async queueTurn(
+    session: Session,
+    prompt: string,
+    options?: QueuedTurnOptions,
+  ): Promise<AgentUpdate[]> {
+    if (session.terminalError) throw session.terminalError;
+    return this.startTurn(session, prompt, options);
   }
 
-  private async startTurn(session: Session, prompt: string): Promise<AgentUpdate[]> {
+  private async startTurn(
+    session: Session,
+    prompt: string,
+    options?: QueuedTurnOptions,
+  ): Promise<AgentUpdate[]> {
     let settled = false;
+    let backendCompletion: (() => void) | undefined;
 
     return new Promise<AgentUpdate[]>((resolve, reject) => {
       const cancelTurn = () => {
-        void session.connection.cancel({ sessionId: requireSessionId(session) }).catch((err) => {
-          process.stderr.write(`session cancel failed: ${err}\n`);
+        if (turn.settled) return;
+        rejectTimedOutSession(session);
+        void this.beginSessionShutdown(session, 1_000).catch((err) => {
+          process.stderr.write(`acp session shutdown failed: ${err}\n`);
         });
-        finishReject(new Error("acp turn timed out"));
       };
       let stallTimer: ReturnType<typeof setTimeout> | undefined;
       let hardTimer: ReturnType<typeof setTimeout> | undefined;
       const resetStallTimer = () => {
-        if (!turn.active || session.agentConfig.stallTimeoutMs <= 0) return;
+        if (!turn.active || turn.settled || session.agentConfig.stallTimeoutMs <= 0) return;
         if (stallTimer) clearTimeout(stallTimer);
         stallTimer = setTimeout(cancelTurn, session.agentConfig.stallTimeoutMs);
       };
 
-      const cleanup = () => {
+      const clearTimers = () => {
         if (hardTimer) clearTimeout(hardTimer);
         if (stallTimer) clearTimeout(stallTimer);
+      };
+
+      const releaseBackendSlot = () => {
+        clearTimers();
         const index = session.pendingTurns.indexOf(turn);
         if (index === -1) return;
         const wasActive = index === 0;
         session.pendingTurns.splice(index, 1);
+        submitEligiblePrompts(session);
         if (wasActive) session.pendingTurns[0]?.activate();
+      };
+
+      const flushBackendCompletion = () => {
+        if (!turn.active || !backendCompletion) return;
+        const complete = backendCompletion;
+        backendCompletion = undefined;
+        try {
+          complete();
+        } catch (error) {
+          if (!settled) {
+            finishReject(error instanceof Error ? error : new Error(errorMessage(error)));
+          }
+        } finally {
+          releaseBackendSlot();
+        }
       };
 
       const finishResolve = (value: AgentUpdate[]) => {
         if (settled) return;
         settled = true;
         turn.settled = true;
-        cleanup();
+        clearTimers();
         resolve(value);
       };
 
       const finishReject = (error: Error) => {
+        clearTimers();
         if (settled) return;
         settled = true;
         turn.settled = true;
-        cleanup();
         reject(error);
       };
 
-      const sessionId = requireSessionId(session);
+      let backendSlotAvailable = false;
+      let activationReady = options?.startWhen === undefined;
+      let promptSubmitted = false;
+      const emitUpdate = (update: AgentUpdate): void => this.emit(session, update);
+      const submitPrompt = (): void => {
+        if (promptSubmitted || turn.settled) return;
+        promptSubmitted = true;
+        session.connection
+          .prompt({
+            sessionId: requireSessionId(session),
+            prompt: [{ type: "text", text: prompt }],
+          })
+          .then(
+            (response) => {
+              backendCompletion = () => {
+                if (settled) return;
+                const usage = finalizeTurnUsage(session, extractUsage(response.usage ?? undefined));
+                const action = actionForStopReason(response.stopReason);
+                const terminalType =
+                  action === "continue"
+                    ? "turn_completed"
+                    : action === "cancel"
+                      ? "turn_cancelled"
+                      : "turn_failed";
+                const base = {
+                  sessionUpdate: acpProtocolUpdate(session, terminalType, { response }),
+                  sessionId: session.sessionId,
+                  executorPid: session.executorPid,
+                  message: { response },
+                  timestamp: new Date(),
+                  ...(usage && { usage, usageKind: "cumulative" as const }),
+                };
+                if (action === "continue") {
+                  const terminal: AgentUpdate = { ...base, type: "turn_completed" };
+                  this.emit(session, terminal);
+                  finishResolve([terminal]);
+                } else if (action === "cancel") {
+                  this.emit(session, { ...base, type: "turn_cancelled" });
+                  finishReject(new Error("acp_turn_cancelled"));
+                } else {
+                  this.emit(session, { ...base, type: "turn_failed" });
+                  finishReject(new Error(`acp_turn_failed: ${response.stopReason}`));
+                }
+              };
+              flushBackendCompletion();
+            },
+            (error: unknown) => {
+              backendCompletion = () => {
+                if (settled) return;
+                const message = errorMessage(error);
+                this.emit(session, {
+                  type: "turn_failed",
+                  sessionId: requireSessionId(session),
+                  message,
+                  timestamp: new Date(),
+                });
+                finishReject(error instanceof Error ? error : new Error(message));
+              };
+              flushBackendCompletion();
+            },
+          );
+      };
+      function beginTurn(): void {
+        if (!backendSlotAvailable || !activationReady || turn.active || turn.settled) return;
+        turn.active = true;
+        submitPrompt();
+        session.sawCallUsageThisTurn = false;
+        session.turnStartTotals = { ...session.usageTotals };
+        hardTimer = setTimeout(cancelTurn, session.agentConfig.turnTimeoutMs);
+        resetStallTimer();
+        emitUpdate({
+          type: "turn_started",
+          sessionId: requireSessionId(session),
+          message: { prompt: [{ type: "text", text: prompt }] },
+          timestamp: new Date(),
+        });
+        flushBackendCompletion();
+      }
       const turn: PendingTurn = {
         active: false,
         settled: false,
-        allowSessionIdRotation: true,
+        allowSessionIdRotation: !supportsStableSessionId(session.init),
         activate: () => {
-          if (turn.active || turn.settled) return;
-          turn.active = true;
-          session.sawCallUsageThisTurn = false;
-          session.turnStartTotals = { ...session.usageTotals };
-          hardTimer = setTimeout(cancelTurn, session.agentConfig.turnTimeoutMs);
-          resetStallTimer();
-          this.emit(session, {
-            type: "turn_started",
-            sessionId,
-            message: { prompt: [{ type: "text", text: prompt }] },
-            timestamp: new Date(),
-          });
+          backendSlotAvailable = true;
+          beginTurn();
+        },
+        trySubmitPrompt: () => {
+          if (turn.settled || promptSubmitted) return true;
+          if (!activationReady) return false;
+          submitPrompt();
+          return true;
         },
         touch: resetStallTimer,
         reject: finishReject,
       };
       session.pendingTurns.push(turn);
+      submitEligiblePrompts(session);
       if (session.pendingTurns[0] === turn) turn.activate();
-
-      session.connection
-        .prompt({
-          sessionId,
-          prompt: [{ type: "text", text: prompt }],
-        })
-        .then((response) => {
-          if (settled) return;
-          const usage = finalizeTurnUsage(session, extractUsage(response.usage ?? undefined));
-          const action = actionForStopReason(response.stopReason);
-          const terminalType =
-            action === "continue"
-              ? "turn_completed"
-              : action === "cancel"
-                ? "turn_cancelled"
-                : "turn_failed";
-          const base = {
-            sessionUpdate: acpProtocolUpdate(session, terminalType, { response }),
-            sessionId: session.sessionId,
-            executorPid: session.executorPid,
-            message: { response },
-            timestamp: new Date(),
-            ...(usage && { usage, usageKind: "cumulative" as const }),
-          };
-          if (action === "continue") {
-            const terminal: AgentUpdate = { ...base, type: "turn_completed" };
-            this.emit(session, terminal);
-            finishResolve([terminal]);
-          } else if (action === "cancel") {
-            this.emit(session, { ...base, type: "turn_cancelled" });
-            finishReject(new Error("acp_turn_cancelled"));
-          } else {
-            this.emit(session, { ...base, type: "turn_failed" });
-            finishReject(new Error(`acp_turn_failed: ${response.stopReason}`));
-          }
-        })
-        .catch((error: unknown) => {
-          if (settled) return;
-          const message = errorMessage(error);
-          this.emit(session, {
-            type: "turn_failed",
-            sessionId,
-            message,
-            timestamp: new Date(),
-          });
-          finishReject(error instanceof Error ? error : new Error(message));
-        });
+      void options?.startWhen?.then(
+        () => {
+          activationReady = true;
+          submitEligiblePrompts(session);
+          beginTurn();
+        },
+        (error: unknown) => {
+          if (turn.settled) return;
+          finishReject(error instanceof Error ? error : new Error(errorMessage(error)));
+          releaseBackendSlot();
+        },
+      );
     });
   }
 
   private emit(session: Session | null, update: AgentUpdate): void {
+    session?.pendingTurns[0]?.touch();
     session?.onUpdate?.(update);
   }
 
   private async stopSession(session: Session): Promise<void> {
+    session.terminalError ??= new Error("acp session stopped");
+    rejectPendingTurns(session, session.terminalError);
+    await this.beginSessionShutdown(session, 5_000);
+  }
+
+  private async beginSessionShutdown(session: Session, closeTimeoutMs: number): Promise<void> {
+    session.shutdown ??= this.shutdownSession(session, closeTimeoutMs);
+    return session.shutdown;
+  }
+
+  private async shutdownSession(session: Session, closeTimeoutMs: number): Promise<void> {
     const sessionId = session.sessionId;
-    rejectPendingTurns(session, new Error("acp session stopped"));
     try {
       if (sessionId && supportsClose(session.init)) {
         await withTimeout(
           session.connection.closeSession({ sessionId }),
-          5_000,
+          closeTimeoutMs,
           "acp close timed out",
         );
       }
     } catch {
       // Closing is best effort because the bridge may already be gone.
     } finally {
-      await stopChild(session.process);
-      // Release ONLY the endpoint acp owns. When the coordinator threaded a
-      // per-run lease in (`ownsMcpEndpoint === false`) the slot.release closes it,
-      // so acp skips its own release to avoid a double-close of the shared
-      // token+local-server+tunnel.
-      if (session.ownsMcpEndpoint) await session.mcpEndpoint.release();
+      try {
+        await stopBridgeProcess(session.process, !session.workerHost);
+      } finally {
+        // A coordinator-provided per-run lease owns its endpoint lifecycle.
+        // ACP releases only endpoints that it created itself.
+        if (session.ownsMcpEndpoint) await session.mcpEndpoint.release();
+      }
     }
   }
 }
@@ -441,6 +551,7 @@ function handleSessionUpdate(session: Session, notification: SessionNotification
     timestamp: new Date(),
     ...(usage && { usage, usageKind: "cumulative" as const }),
   });
+  submitEligiblePrompts(session);
 }
 
 /**
@@ -781,12 +892,46 @@ function startBridgeProcess(
   workspace: string,
   workerHost: string | null,
 ): ChildProcessWithoutNullStreams {
-  const command = `exec ${resolveBridgeCommand(bridgeCommand, workerHost)}`;
+  const bridge = resolveBridgeCommand(bridgeCommand, workerHost);
   if (workerHost) {
     // Remote bridges resolve their own binaries on the worker host.
-    return startSshProcess(workerHost, `cd ${shellEscape(workspace)} && ${command}`);
+    const script = bridgeGuardianScript(workspace, bridge);
+    // startSshProcess supplies the single bash -lc boundary for this script.
+    return startSshProcess(workerHost, script);
   }
-  return execa("bash", ["-lc", command], {
+  if (process.platform === "win32") {
+    const cleanupDir = mkdtempSync(path.join(os.tmpdir(), "lorenz-acp-"));
+    const scriptPath = path.join(cleanupDir, "bridge.sh");
+    try {
+      writeFileSync(scriptPath, `IFS= read -r _lorenz_ready || exit 1\nexec ${bridge}\n`, {
+        encoding: "utf8",
+        mode: 0o600,
+      });
+      const child = execa(
+        "powershell.exe",
+        [
+          "-NoProfile",
+          "-NonInteractive",
+          "-Command",
+          windowsBridgeGuardianScript(workspace, scriptPath),
+        ],
+        {
+          stdin: "pipe",
+          stdout: "pipe",
+          stderr: "pipe",
+          reject: false,
+          buffer: false,
+          env: hostAgentBinaryEnv(),
+        },
+      ) as unknown as ChildProcessWithoutNullStreams;
+      bridgeProcessCleanupDirs.set(child, cleanupDir);
+      return child;
+    } catch (error) {
+      rmSync(cleanupDir, { recursive: true, force: true });
+      throw error;
+    }
+  }
+  return execa("bash", ["-lc", bridgeGuardianScript(workspace, bridge)], {
     cwd: workspace,
     stdin: "pipe",
     stdout: "pipe",
@@ -799,7 +944,255 @@ function startBridgeProcess(
     // until the process exits, a leading memory leak in a long-running daemon.
     buffer: false,
     env: hostAgentBinaryEnv(),
+    detached: true,
   }) as unknown as ChildProcessWithoutNullStreams;
+}
+
+async function stopBridgeProcess(
+  child: ChildProcessWithoutNullStreams,
+  manageLocalTree: boolean,
+): Promise<void> {
+  try {
+    await stopChild(child, { windowsProcessTree: manageLocalTree });
+  } finally {
+    const cleanupDir = bridgeProcessCleanupDirs.get(child);
+    if (cleanupDir) {
+      bridgeProcessCleanupDirs.delete(child);
+      await fs.rm(cleanupDir, { recursive: true, force: true });
+    }
+  }
+}
+
+function windowsBridgeGuardianScript(workspace: string, scriptPath: string): string {
+  const encodedWorkspace = Buffer.from(workspace, "utf8").toString("base64");
+  const encodedScriptPath = Buffer.from(scriptPath, "utf8").toString("base64");
+  return String.raw`
+$ErrorActionPreference = "Stop"
+Add-Type -TypeDefinition @"
+using System;
+using System.ComponentModel;
+using System.IO;
+using System.Runtime.InteropServices;
+using System.Threading.Tasks;
+
+public static class LorenzProcessJob
+{
+    private const uint JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000;
+    private const int JobObjectExtendedLimitInformation = 9;
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct JOBOBJECT_BASIC_LIMIT_INFORMATION
+    {
+        public long PerProcessUserTimeLimit;
+        public long PerJobUserTimeLimit;
+        public uint LimitFlags;
+        public UIntPtr MinimumWorkingSetSize;
+        public UIntPtr MaximumWorkingSetSize;
+        public uint ActiveProcessLimit;
+        public UIntPtr Affinity;
+        public uint PriorityClass;
+        public uint SchedulingClass;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct IO_COUNTERS
+    {
+        public ulong ReadOperationCount;
+        public ulong WriteOperationCount;
+        public ulong OtherOperationCount;
+        public ulong ReadTransferCount;
+        public ulong WriteTransferCount;
+        public ulong OtherTransferCount;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct JOBOBJECT_EXTENDED_LIMIT_INFORMATION
+    {
+        public JOBOBJECT_BASIC_LIMIT_INFORMATION BasicLimitInformation;
+        public IO_COUNTERS IoInfo;
+        public UIntPtr ProcessMemoryLimit;
+        public UIntPtr JobMemoryLimit;
+        public UIntPtr PeakProcessMemoryUsed;
+        public UIntPtr PeakJobMemoryUsed;
+    }
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern IntPtr CreateJobObject(IntPtr securityAttributes, string name);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool SetInformationJobObject(
+        IntPtr job,
+        int informationClass,
+        ref JOBOBJECT_EXTENDED_LIMIT_INFORMATION information,
+        uint informationLength);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool AssignProcessToJobObject(IntPtr job, IntPtr process);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool CloseHandle(IntPtr handle);
+
+    public static IntPtr Create()
+    {
+        IntPtr job = CreateJobObject(IntPtr.Zero, null);
+        if (job == IntPtr.Zero)
+        {
+            throw new Win32Exception(Marshal.GetLastWin32Error());
+        }
+
+        var information = new JOBOBJECT_EXTENDED_LIMIT_INFORMATION();
+        information.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        uint length = (uint)Marshal.SizeOf(typeof(JOBOBJECT_EXTENDED_LIMIT_INFORMATION));
+        if (!SetInformationJobObject(job, JobObjectExtendedLimitInformation, ref information, length))
+        {
+            int error = Marshal.GetLastWin32Error();
+            CloseHandle(job);
+            throw new Win32Exception(error);
+        }
+        return job;
+    }
+
+    public static void Assign(IntPtr job, IntPtr process)
+    {
+        if (!AssignProcessToJobObject(job, process))
+        {
+            throw new Win32Exception(Marshal.GetLastWin32Error());
+        }
+    }
+
+    public static void Close(IntPtr job)
+    {
+        if (job != IntPtr.Zero && !CloseHandle(job))
+        {
+            throw new Win32Exception(Marshal.GetLastWin32Error());
+        }
+    }
+
+    public static async Task CopyInput(Stream source, Stream target)
+    {
+        try
+        {
+            await source.CopyToAsync(target);
+        }
+        finally
+        {
+            target.Close();
+        }
+    }
+
+    public static Task CopyOutput(Stream source, Stream target)
+    {
+        return source.CopyToAsync(target);
+    }
+}
+"@
+
+$workspace = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String("${encodedWorkspace}"))
+$scriptPath = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String("${encodedScriptPath}"))
+
+$job = [LorenzProcessJob]::Create()
+$process = $null
+$exitCode = 1
+try {
+  $startInfo = [Diagnostics.ProcessStartInfo]::new()
+  $startInfo.FileName = "bash.exe"
+  $startInfo.Arguments = '"' + $scriptPath + '"'
+  $startInfo.WorkingDirectory = $workspace
+  $startInfo.UseShellExecute = $false
+  $startInfo.CreateNoWindow = $true
+  $startInfo.RedirectStandardInput = $true
+  $startInfo.RedirectStandardOutput = $true
+  $startInfo.RedirectStandardError = $true
+
+  $process = [Diagnostics.Process]::new()
+  $process.StartInfo = $startInfo
+  if (-not $process.Start()) {
+    throw "bridge process did not start"
+  }
+  [LorenzProcessJob]::Assign($job, $process.Handle)
+  $process.StandardInput.WriteLine("ready")
+  $process.StandardInput.Flush()
+
+  $stdinTask = [LorenzProcessJob]::CopyInput(
+    [Console]::OpenStandardInput(),
+    $process.StandardInput.BaseStream
+  )
+  $stdoutTask = [LorenzProcessJob]::CopyOutput(
+    $process.StandardOutput.BaseStream,
+    [Console]::OpenStandardOutput()
+  )
+  $stderrTask = [LorenzProcessJob]::CopyOutput(
+    $process.StandardError.BaseStream,
+    [Console]::OpenStandardError()
+  )
+  $process.WaitForExit()
+  $exitCode = $process.ExitCode
+  [LorenzProcessJob]::Close($job)
+  $job = [IntPtr]::Zero
+  [Threading.Tasks.Task]::WaitAll(
+    [Threading.Tasks.Task[]]@($stdoutTask, $stderrTask)
+  )
+} finally {
+  if ($job -ne [IntPtr]::Zero) {
+    try {
+      [LorenzProcessJob]::Close($job)
+    } catch {
+    }
+  }
+  if ($null -ne $process) {
+    try {
+      if (-not $process.HasExited) {
+        $process.Kill()
+        $process.WaitForExit()
+      }
+    } catch {
+    }
+    $process.Dispose()
+  }
+}
+exit $exitCode
+`;
+}
+
+function bridgeGuardianScript(workspace: string, bridge: string): string {
+  const guardedBridge = ["(trap '' HUP INT TERM; while :; do sleep 3600; done) &", bridge].join(
+    "\n",
+  );
+  return [
+    "set -m",
+    'bridge_pid=""',
+    "cleaned=0",
+    "stop_requested=0",
+    "cleanup() {",
+    '  if [ -z "$bridge_pid" ]; then',
+    "    stop_requested=1",
+    "    return",
+    "  fi",
+    '  [ "$cleaned" -eq 1 ] && return',
+    "  cleaned=1",
+    "  trap - HUP INT TERM EXIT",
+    '  kill -TERM -- "-$bridge_pid" 2>/dev/null || true',
+    "  (",
+    "    sleep 1",
+    '    kill -KILL -- "-$bridge_pid" 2>/dev/null || true',
+    "  ) &",
+    "  force_pid=$!",
+    '  wait "$force_pid" 2>/dev/null || true',
+    '  wait "$bridge_pid" 2>/dev/null || true',
+    "}",
+    "trap cleanup HUP INT TERM EXIT",
+    `cd ${shellEscape(workspace)} || exit 1`,
+    `bash -c ${shellEscape(guardedBridge)} <&0 &`,
+    "bridge_pid=$!",
+    'if [ "$stop_requested" -eq 1 ]; then',
+    "  cleanup",
+    "  exit 1",
+    "fi",
+    'wait "$bridge_pid"',
+    "status=$?",
+    "cleanup",
+    'exit "$status"',
+  ].join("\n");
 }
 
 function wireProcessEvents(session: Session): void {
@@ -820,13 +1213,43 @@ function wireProcessEvents(session: Session): void {
       stderr = "";
     }
     const message = `acp bridge exited${code === null ? "" : ` with status ${code}`}${signal ? ` signal ${signal}` : ""}`;
+    session.terminalError ??= new Error(message);
     session.onUpdate?.({ type: "process_exit", message, timestamp: new Date() });
-    rejectPendingTurns(session, new Error(message));
+    rejectPendingTurns(session, session.terminalError);
   });
 }
 
 function rejectPendingTurns(session: Session, error: Error): void {
-  for (const turn of [...session.pendingTurns]) turn.reject(error);
+  const pending = session.pendingTurns.splice(0);
+  for (const turn of pending) turn.reject(error);
+}
+
+function rejectTimedOutSession(session: Session): void {
+  const [timedOut, ...queued] = session.pendingTurns.splice(0);
+  const queuedError = new Error("acp session stopped after turn timeout");
+  session.terminalError = queuedError;
+  timedOut?.reject(new Error("acp turn timed out"));
+  for (const turn of queued) turn.reject(queuedError);
+}
+
+function submitEligiblePrompts(session: Session): void {
+  for (const [index, turn] of session.pendingTurns.entries()) {
+    if (
+      index > 0 &&
+      session.pendingTurns.slice(0, index).some((pending) => pending.allowSessionIdRotation)
+    ) {
+      return;
+    }
+    if (!turn.trySubmitPrompt()) return;
+  }
+}
+
+function supportsPromptQueue(init: InitializeResponse): boolean {
+  return init.agentCapabilities?._meta?.["symphony/promptQueueing"] === true;
+}
+
+function supportsStableSessionId(init: InitializeResponse): boolean {
+  return init.agentCapabilities?._meta?.["symphony/stableSessionId"] === true;
 }
 
 function clientCapabilities(workerHost: string | null): ClientCapabilities {
