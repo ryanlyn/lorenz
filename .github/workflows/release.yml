@@ -95,14 +95,6 @@ jobs:
           version="$(pnpm exec tsx scripts/bump-release-version.ts "${bump_args[@]}")"
           tag="v${version}"
 
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add package.json
-          git commit -m "chore: release ${tag}"
-          git tag "$tag"
-          git push origin "HEAD:${GITHUB_REF_NAME}"
-          git push origin "$tag"
-
           echo "version=${version}" >> "$GITHUB_OUTPUT"
           echo "tag=${tag}" >> "$GITHUB_OUTPUT"
 
@@ -124,6 +116,21 @@ jobs:
           echo "version=${version}" >> "$GITHUB_OUTPUT"
           echo "tarball=dist/release/${tarball}" >> "$GITHUB_OUTPUT"
           echo "staged=${staged}" >> "$GITHUB_OUTPUT"
+
+      - name: Commit scheduled release
+        if: ${{ github.event_name == 'schedule' && steps.scheduled.outputs.should_release == 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${{ steps.bump.outputs.tag }}"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add package.json
+          git commit -m "chore: release ${tag}"
+          git tag "$tag"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
+          git push origin "$tag"
 
       - name: Publish release asset
         if: ${{ steps.scheduled.outputs.should_release != 'false' }}
