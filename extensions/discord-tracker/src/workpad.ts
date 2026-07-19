@@ -1,6 +1,6 @@
 import type { Settings } from "@lorenz/domain";
 
-import { interactiveStatuses, statusButtonId } from "./interactions.js";
+import { DISCORD_STATUS_SELECT_ID, interactiveStatuses } from "./interactions.js";
 import type { DiscordWorkpad } from "./transport.js";
 
 export const DISCORD_COMPONENTS_V2_FLAG = 1 << 15;
@@ -25,16 +25,25 @@ export function workpadMessage(
   appendSection(children, "Validation", codeBlock(workpad.validationCommands));
   appendSection(children, "Progress", bullets(workpad.progress));
 
-  const buttons = interactiveStatuses(settings).map((action) => ({
-    type: 2,
-    style: action.style,
-    label: action.label,
-    emoji: { name: action.emoji },
-    custom_id: statusButtonId(action.status),
-  }));
-  if (buttons.length > 0) {
+  const statuses = interactiveStatuses(settings);
+  if (statuses.length > 0) {
     children.push({ type: 14, divider: true, spacing: 1 });
-    children.push({ type: 1, components: buttons });
+    children.push({
+      type: 1,
+      components: [
+        {
+          type: 3,
+          custom_id: DISCORD_STATUS_SELECT_ID,
+          placeholder: "Change status",
+          min_values: 1,
+          max_values: 1,
+          options: statuses.map((status) => ({
+            label: status.slice(0, 100),
+            value: status,
+          })),
+        },
+      ],
+    });
   }
 
   return {

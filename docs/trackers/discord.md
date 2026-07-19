@@ -105,7 +105,7 @@ Status lives in the native thread. The latest valid event wins:
 
 - `discord_update_status` posts `status: <Name>` as the bot.
 - A human can use `/status`, `/start`, `/done`, `/cancel`, or `/reopen` inside the issue thread.
-- A human can select **Start**, **Done**, **Cancel**, or **Reopen** on a rich Workpad.
+- A human can select another workflow-configured status on a rich Workpad.
 - A later allowed human mention continues the issue in `In Progress`, including from `Todo` or a
   terminal state.
 - When no thread status exists, only reactions owned by the bot can provide state. Human reactions
@@ -128,8 +128,10 @@ Mirror failures do not change the thread-derived authoritative state.
 
 `discord_workpad` posts a native Components V2 card in the issue thread. It renders the environment,
 plan, acceptance criteria, validation commands, and progress as separate Markdown sections inside
-an accented container. Its action row provides status buttons for the configured workflow. Outbound
-mentions are disabled, and long sections are split across bounded Text Display components.
+an accented container. Its action row derives every option from the configured active and terminal
+states, so the same selector remains valid across later status changes. The selector supports
+Discord's native limit of 25 options. Outbound mentions are disabled, and long sections are split
+across bounded Text Display components.
 
 Use `discord_comment` for incremental progress after the initial Workpad. Plain comments remain
 appropriate for chronological notes, while the Workpad provides a compact structured starting
@@ -144,9 +146,9 @@ Discord adds native interaction surfaces while preserving the same recovery mode
 | Behavior | Slack | Discord |
 | --- | --- | --- |
 | Create work | Bot mention in a root or reply | Bot or managed-role mention, plus **Track with Lorenz** on any allowed source message |
-| Human status control | Text commands in the thread | Slash commands and Workpad buttons with private confirmations |
+| Human status control | Text commands in the thread | Slash commands and a Workpad status selector with private confirmations |
 | Push path | Optional Socket Mode and a second app token | Gateway using the existing bot token |
-| Workpad | Plain thread reply | Components V2 container with Markdown sections and action buttons |
+| Workpad | Plain thread reply | Components V2 container with Markdown sections and a status selector |
 | Conversation | Slack thread | Native Discord thread |
 | Recovery | REST polling and authoritative thread read | REST polling and authoritative thread read |
 
@@ -161,7 +163,7 @@ The tracker automatically mounts the `discord` tool pack:
 | Tool                      | Purpose                                                                  |
 | ------------------------- | ------------------------------------------------------------------------ |
 | `discord_update_status`   | Post the authoritative status event and update the reaction mirror.      |
-| `discord_workpad`         | Post a structured Components V2 Workpad with native status buttons.      |
+| `discord_workpad`         | Post a structured Components V2 Workpad with a native status selector.   |
 | `discord_comment`         | Post a progress note in the native issue thread.                         |
 | `discord_read_thread`     | Read the source, resolved state, permalink, reactions, and thread.       |
 | `discord_query`           | Query tracked messages with filtering, projection, ordering, and paging. |

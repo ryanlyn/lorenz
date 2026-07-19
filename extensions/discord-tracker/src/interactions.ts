@@ -5,6 +5,7 @@ import type { DiscordApplicationCommand, DiscordInteraction } from "./transport.
 
 export const DISCORD_TRACK_MESSAGE_COMMAND = "Track with Lorenz";
 export const DISCORD_STATUS_COMPONENT_PREFIX = "lorenz:status:";
+export const DISCORD_STATUS_SELECT_ID = "lorenz:status";
 
 export type DiscordInteractionAction =
   | { kind: "status"; status: string }
@@ -45,9 +46,13 @@ export function interactionAction(
   settings: Settings,
 ): DiscordInteractionAction | null {
   if (interaction.type === "component") {
-    if (!interaction.customId?.startsWith(DISCORD_STATUS_COMPONENT_PREFIX)) return null;
-    const encoded = interaction.customId.slice(DISCORD_STATUS_COMPONENT_PREFIX.length);
-    const status = resolveStateName(safeDecode(encoded), settings);
+    const requested =
+      interaction.customId === DISCORD_STATUS_SELECT_ID
+        ? interaction.componentValues?.[0]
+        : interaction.customId?.startsWith(DISCORD_STATUS_COMPONENT_PREFIX)
+          ? safeDecode(interaction.customId.slice(DISCORD_STATUS_COMPONENT_PREFIX.length))
+          : undefined;
+    const status = requested ? resolveStateName(requested, settings) : null;
     return status ? { kind: "status", status } : null;
   }
 
@@ -69,31 +74,8 @@ export function statusButtonId(status: string): string {
   return `${DISCORD_STATUS_COMPONENT_PREFIX}${encodeURIComponent(status)}`.slice(0, 100);
 }
 
-export function interactiveStatuses(settings: Settings): Array<{
-  status: string;
-  label: string;
-  style: number;
-  emoji: string;
-}> {
-  const out: Array<{ status: string; label: string; style: number; emoji: string }> = [];
-  const add = (
-    action: "start" | "done" | "cancel",
-    label: string,
-    style: number,
-    emoji: string,
-  ): void => {
-    const status = workflowStatus(action, settings);
-    if (!status || out.some((candidate) => candidate.status === status)) return;
-    out.push({ status, label, style, emoji });
-  };
-  add("start", "Start", 1, "👀");
-  add("done", "Done", 3, "✅");
-  add("cancel", "Cancel", 4, "❌");
-  const reopen = settings.tracker.activeStates[0];
-  if (reopen && !out.some((candidate) => candidate.status === reopen)) {
-    out.push({ status: reopen, label: "Reopen", style: 2, emoji: "↩️" });
-  }
-  return out.slice(0, 5);
+export function interactiveStatuses(settings: Settings): string[] {
+  return uniqueStates(settings).slice(0, 25);
 }
 
 function statusAliases(settings: Settings): Array<{

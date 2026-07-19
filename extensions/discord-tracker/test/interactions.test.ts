@@ -5,6 +5,7 @@ import { parseDiscordConfig } from "./helpers.js";
 
 import {
   DISCORD_COMPONENTS_V2_FLAG,
+  DISCORD_STATUS_SELECT_ID,
   DISCORD_TRACK_MESSAGE_COMMAND,
   discordApplicationCommands,
   interactionAction,
@@ -34,7 +35,7 @@ test("defines native guild commands for status, common transitions, and message 
   );
 });
 
-test("resolves slash commands and Workpad buttons through configured workflow states", () => {
+test("resolves slash commands and Workpad controls through configured workflow states", () => {
   const settings = parseDiscordConfig({
     active_states: ["Open", "Working"],
     terminal_states: ["Closed", "Abandoned"],
@@ -60,16 +61,35 @@ test("resolves slash commands and Workpad buttons through configured workflow st
     ),
     { kind: "status", status: "Abandoned" },
   );
+  assert.deepEqual(
+    interactionAction(
+      {
+        ...commandInteraction("ignored"),
+        type: "component",
+        commandName: undefined,
+        customId: DISCORD_STATUS_SELECT_ID,
+        componentValues: ["working"],
+      },
+      settings,
+    ),
+    { kind: "status", status: "Working" },
+  );
 });
 
-test("renders the Workpad as a Components V2 card with native status buttons", () => {
-  const payload = workpadMessage(parseDiscordConfig(), {
-    environment: "host:/workspace@abc1234",
-    plan: ["Reproduce the issue", "Implement the fix"],
-    acceptanceCriteria: ["The interaction is acknowledged immediately"],
-    validationCommands: ["mise run test", "mise run check"],
-    progress: ["23:10 - reproduced"],
-  });
+test("renders the Workpad with configured workflow statuses", () => {
+  const payload = workpadMessage(
+    parseDiscordConfig({
+      active_states: ["Open", "Working"],
+      terminal_states: ["Closed", "Abandoned"],
+    }),
+    {
+      environment: "host:/workspace@abc1234",
+      plan: ["Reproduce the issue", "Implement the fix"],
+      acceptanceCriteria: ["The interaction is acknowledged immediately"],
+      validationCommands: ["mise run test", "mise run check"],
+      progress: ["23:10 - reproduced"],
+    },
+  );
 
   assert.equal(payload.flags, DISCORD_COMPONENTS_V2_FLAG);
   assert.deepEqual(payload.allowed_mentions, { parse: [] });
@@ -80,16 +100,20 @@ test("renders the Workpad as a Components V2 card with native status buttons", (
   assert.match(JSON.stringify(children), /Acceptance criteria/);
   assert.match(JSON.stringify(children), /mise run check/);
   const actionRow = children.find((component) => component.type === 1);
-  const buttons = actionRow?.components as Array<Record<string, unknown>>;
+  const components = actionRow?.components as Array<Record<string, unknown>>;
+  const selector = components[0];
+  const options = selector?.options as Array<Record<string, unknown>>;
+  assert.equal(selector?.type, 3);
+  assert.equal(selector?.custom_id, DISCORD_STATUS_SELECT_ID);
+  assert.equal(selector?.placeholder, "Change status");
   assert.deepEqual(
-    buttons.map((button) => button.label),
-    ["Start", "Done", "Cancel", "Reopen"],
-  );
-  assert.ok(
-    buttons.every(
-      (button) =>
-        typeof button.custom_id === "string" && button.custom_id.startsWith("lorenz:status:"),
-    ),
+    options.map((option) => [option.label, option.value]),
+    [
+      ["Open", "Open"],
+      ["Working", "Working"],
+      ["Closed", "Closed"],
+      ["Abandoned", "Abandoned"],
+    ],
   );
 });
 
