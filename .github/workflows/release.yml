@@ -173,20 +173,32 @@ jobs:
 
           {
             echo "## Install"
-            echo
-            echo "Run this release directly with \`npx\`:"
-            echo
-            echo '```sh'
-            echo "npx ${download_url}"
-            echo '```'
             if [ "$prerelease" = false ]; then
               echo
-              echo "Or install the published npm package:"
+              echo "Run the published npm package directly:"
+              echo
+              echo '```sh'
+              echo "npx lorenz@${version}"
+              echo '```'
+              echo
+              echo "Or install the published npm package globally:"
               echo
               echo '```sh'
               echo "npm install -g lorenz@${version}"
               echo '```'
             fi
+            echo
+            echo "Run this release tarball directly:"
+            echo
+            echo '```sh'
+            echo "npx ${download_url}"
+            echo '```'
+            echo
+            echo "Or install this release tarball globally:"
+            echo
+            echo '```sh'
+            echo "npm install -g ${download_url}"
+            echo '```'
             if [ -n "$changelog" ]; then
               echo
               echo "$changelog"
