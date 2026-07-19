@@ -1,6 +1,12 @@
 import type { Settings } from "@lorenz/domain";
 
-import { emojiForState, isAllowedAuthor, isBotMention, statusEmojiMap } from "./mapping.js";
+import {
+  emojiForState,
+  isAllowedAuthor,
+  isBotMention,
+  stateFromReactions,
+  statusEmojiMap,
+} from "./mapping.js";
 import { slackTrackerOptions } from "./options.js";
 import {
   BOT_STATUS_PREFIX,
@@ -28,6 +34,12 @@ export function requireBotUserId(settings: Settings): string {
   return botUserId;
 }
 
+/** True when the root carries a bot-owned status reaction that proves it was accepted. */
+export function isBotStatusMarked(message: SlackMessage, settings: Settings): boolean {
+  const statusEmoji = new Set(Object.keys(statusEmojiMap(settings)));
+  return message.botReactions.some((reaction) => statusEmoji.has(reaction));
+}
+
 /**
  * Enforce the agent trust boundary: the issueId must reference a configured (watched) channel
  * and an existing message that is tracked. Root mentions must still be eligible, or carry the
@@ -53,6 +65,35 @@ export async function requireTrackedMessage(
     // A dedicated marker records acceptance by an earlier poll. It keeps a root mention tracked
     // if the author allowlist is later tightened, while new issues still honor the allowlist.
     if (isAllowedAuthor(message.user, users) || isBotMarked(message, markerEmoji)) return message;
+    // A bot-owned status reaction is an established acceptance record. Preserve that trust
+    // decision and normalize the thread to durable origin metadata plus the dedicated marker.
+    // A failed backfill retries on a later read without orphaning the active issue.
+    if (isBotStatusMarked(message, settings)) {
+      try {
+        let replies = await transport.getThread(channel, ts);
+        const thread = stateFromObservedThread(message, replies, settings, transport);
+        const tracking = await ensureSlackTrackingRecord(settings, transport, message, thread);
+        if (tracking !== undefined) {
+          if (thread.events.length === 0) {
+            const state = stateFromReactions(
+              message.botReactions,
+              statusEmojiMap(settings),
+              settings,
+            );
+            await postStatusReply(transport, channel, ts, state, {});
+          }
+          await transport.addReaction(channel, ts, markerEmoji);
+          replies = await transport.getThread(channel, ts);
+          message.replyCount = replies.length;
+          message.latestReply = replies.at(-1)?.ts;
+          if (!message.reactions.includes(markerEmoji)) message.reactions.push(markerEmoji);
+          if (!message.botReactions.includes(markerEmoji)) message.botReactions.push(markerEmoji);
+        }
+      } catch {
+        // The bot-owned status reaction remains sufficient migration evidence for this read.
+      }
+      return message;
+    }
   }
   // Reply-tracked thread: reconstruct the accepted request from the thread. This check is also
   // what rejects a root mention edited away while the daemon was offline, even if its marker or

@@ -1543,6 +1543,7 @@ test("active runs retain pinned issue reads while steering moves to the replacem
       workflow,
       reloadWorkflow: async () => {
         const reloaded = await loadWorkflow(workflowFile, {}, { cwd: dir });
+        const incompatibleSource = reloaded.promptTemplate.includes("Incompatible prompt");
         return {
           ...reloaded,
           settings: {
@@ -1550,6 +1551,7 @@ test("active runs retain pinned issue reads while steering moves to the replacem
             tracker: {
               ...reloaded.settings.tracker,
               activeStates: ["Other"],
+              ...(incompatibleSource ? { endpoint: "https://other-tracker.test" } : {}),
             },
             agent: {
               ...reloaded.settings.agent,
@@ -1645,9 +1647,37 @@ test("active runs retain pinned issue reads while steering moves to the replacem
     assert.deepEqual(issueRefreshCalls, [3, 0]);
     assert.deepEqual(streamCloses, [1, 0]);
 
+    await fs.writeFile(
+      workflowFile,
+      workflowMarkdown({ intervalMs: 600_000, prompt: "Incompatible prompt" }),
+    );
+    await runtime.pollOnce({ dryRun: true });
+    assert.equal(clientBuilds, 3);
+    assert.equal(callbacks[2], undefined);
+    assert.deepEqual(streamCloses, [1, 0]);
+
+    await activeRecovery?.("11.0", { maxEvents: 1, maxBytes: 1 });
+    assert.deepEqual(recoveryCalls, [0, 2]);
+    callbacks[1]?.({
+      issueEvents: {
+        issueId: issue.id,
+        events: [
+          {
+            authorizedForSteering: true,
+            ts: "12.0",
+            author: "ryan",
+            text: "retained source event",
+          },
+        ],
+      },
+    });
+    await waitFor(() => delivered.length === 2, 1_000);
+    assert.equal(delivered[1]?.text, "retained source event");
+
     finishRun?.();
     await waitFor(() => runtime.snapshot().running.length === 0, 1_000);
-    assert.deepEqual(streamCloses, [1, 0]);
+    await waitFor(() => callbacks[2] !== undefined, 1_000);
+    assert.deepEqual(streamCloses, [1, 1]);
   } finally {
     finishRun?.();
     runtime.stop();

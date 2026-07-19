@@ -433,6 +433,47 @@ test("markAllDirty and an unhealthy socket both force real scans", async () => {
   assert.equal(inner.scans, 3);
 });
 
+test("reconnect invalidation survives an in-flight history snapshot", async () => {
+  const raw = new InMemorySlackTransport(
+    { C1: [{ ts: "1.0", text: "<@U_BOT> fix the build", user: "U2" }] },
+    { botUserId: "U_BOT" },
+  );
+  const inner = counting(raw);
+  const scan = inner.scanChannels.bind(inner);
+  let delayScan = false;
+  let releaseScan!: () => void;
+  let reportScanStarted!: () => void;
+  const scanGate = new Promise<void>((resolve) => {
+    releaseScan = resolve;
+  });
+  const scanStarted = new Promise<void>((resolve) => {
+    reportScanStarted = resolve;
+  });
+  inner.scanChannels = async (channels) => {
+    const snapshot = await scan(channels);
+    if (delayScan) {
+      reportScanStarted();
+      await scanGate;
+    }
+    return snapshot;
+  };
+  let clock = 0;
+  const mirror = mirrored(inner, () => clock);
+  await mirror.scanChannels(["C1"]);
+
+  clock = 120_000;
+  delayScan = true;
+  const reconciling = mirror.scanChannels(["C1"]);
+  await scanStarted;
+  mirror.markAllDirty("socket reconnected during snapshot");
+  releaseScan();
+  await reconciling;
+  assert.equal(inner.scans, 2);
+
+  await mirror.scanChannels(["C1"]);
+  assert.equal(inner.scans, 3);
+});
+
 test("reaction events maintain the bot marker on threaded roots", async () => {
   const inner = counting(
     new InMemorySlackTransport(

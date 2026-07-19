@@ -7,6 +7,7 @@ import { parseSlackConfig } from "./helpers.js";
 import {
   InMemorySlackTransport,
   SlackTrackerClient,
+  TRACKING_METADATA_EVENT,
   WORKPAD_METADATA_EVENT,
   type SlackSocketMode,
   type SlackSocketModeOptions,
@@ -359,6 +360,13 @@ test("tracker.users gates the tool trust boundary, but a bot-marked root stays t
           user: "U_CAROL",
           reactions: ["robot_face"],
         },
+        // Bot-owned status reactions normalize to the dedicated marker on refresh.
+        {
+          ts: "1700000000.000400",
+          text: "<@U_BOT> from dave",
+          user: "U_DAVE",
+          reactions: ["eyes"],
+        },
       ],
     },
     { botUserId: "U_BOT", allowedUsers: ["U_ALICE"] },
@@ -375,6 +383,18 @@ test("tracker.users gates the tool trust boundary, but a bot-marked root stays t
   assert.deepEqual(
     (await client.fetchIssuesByIds(["C1:1700000000.000300"])).map((i) => i.id),
     ["C1:1700000000.000300"],
+  );
+  assert.deepEqual(
+    (await client.fetchIssuesByIds(["C1:1700000000.000400"])).map((i) => i.id),
+    ["C1:1700000000.000400"],
+  );
+  assert.deepEqual((await transport.getMessage("C1", "1700000000.000400"))!.botReactions, [
+    "eyes",
+    "robot_face",
+  ]);
+  assert.equal(
+    (await transport.getThread("C1", "1700000000.000400"))[0]!.metadata?.eventType,
+    TRACKING_METADATA_EVENT,
   );
 });
 

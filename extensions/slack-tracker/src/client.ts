@@ -27,6 +27,7 @@ import {
 import { MirrorBackedSlackTransport } from "./mirror.js";
 import {
   ensureSlackTrackingRecord,
+  isBotStatusMarked,
   mirrorStatusReaction,
   requireTrackedMessage,
 } from "./operations.js";
@@ -452,7 +453,9 @@ export class SlackTrackerClient implements RuntimeTrackerClient {
       const { botUserId, users } = slackTrackerOptions(this.settings);
       const rootMentionIsTracked =
         isBotMention(root.text, botUserId) &&
-        (isAllowedAuthor(root.user, users) || isBotMarked(root, markerEmoji));
+        (isAllowedAuthor(root.user, users) ||
+          isBotMarked(root, markerEmoji) ||
+          isBotStatusMarked(root, this.settings));
       if (!rootMentionIsTracked && thread.request === undefined) continue;
       out.push(this.issueFromRoot(root, base, thread));
     }

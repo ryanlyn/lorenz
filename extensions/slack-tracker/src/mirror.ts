@@ -146,8 +146,15 @@ export class MirrorBackedSlackTransport implements SlackTransport {
   /** Force real scans everywhere (reconnect gaps, operator suspicion). */
   markAllDirty(reason: string): void {
     void this.enqueueMutation(() => {
-      for (const state of this.channels.values()) state.dirty = true;
-      if (this.channels.size > 0) {
+      const channels = new Set([...this.channels.keys(), ...this.snapshotOverlays.keys()]);
+      for (const channel of channels) {
+        const invalidate = (): void => {
+          this.channelState(channel).dirty = true;
+        };
+        this.recordSnapshotMutation(channel, invalidate);
+        invalidate();
+      }
+      if (channels.size > 0) {
         this.logger.warn(`slack mirror: marked all channels dirty (${reason})`);
       }
     });

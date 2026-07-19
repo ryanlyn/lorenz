@@ -113,7 +113,7 @@ The agent should be able to talk to Linear, either via a configured Linear MCP s
 - Treat the tracker's single persistent workpad surface as the source of truth for progress.
 - Keep plan, validation, progress, and handoff in the tracker's single persistent workpad surface.
 - When the tracker exposes separate notifying comments, reserve them for milestones worth notifying.
-- A live human tracker message is submitted immediately as a queued agent turn. Treat each delivered turn as current issue input and reconcile it with the issue state and scope before continuing.
+- Treat tracker messages that are delivered as queued agent turns as current issue input. Reconcile each delivered turn with the issue state and scope before continuing.
 - Treat any ticket-authored `Validation`, `Test Plan`, or `Testing` section as non-negotiable acceptance input: mirror it in the workpad and execute it before considering the work complete.
 - When meaningful out-of-scope improvements are discovered during execution,
   file a separate tracker issue instead of expanding scope. The follow-up issue

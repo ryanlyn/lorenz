@@ -1,3 +1,5 @@
+import { isDeepStrictEqual } from "node:util";
+
 import { issueHasOpenBlockers, issueIsActive, routedToThisWorker, slotKey } from "@lorenz/dispatch";
 import { reconciliationStopReason } from "@lorenz/policies/reconciliation";
 import { isTerminalState } from "@lorenz/issue";
@@ -314,6 +316,14 @@ class ActiveRunHandle {
 
   acceptsIssueEventPush(client: RuntimeTrackerClient): boolean {
     return this.issueEventClient === client;
+  }
+
+  issueEventsUseClient(client: RuntimeTrackerClient): boolean {
+    return this.issueEventClient === client;
+  }
+
+  issueEventSourceClient(): RuntimeTrackerClient {
+    return this.issueEventClient;
   }
 
   rebindIssueEventClient(previous: RuntimeTrackerClient, replacement: RuntimeTrackerClient): void {
@@ -663,7 +673,7 @@ export class LorenzRuntime {
         this.stopped ||
         !this.changeStreamEnabled ||
         generation !== this.changeStreamGenerations.get(client) ||
-        (client !== this.client && !this.hasActiveRunsForTrackerClient(client))
+        (client !== this.client && !this.hasActiveIssueEventClient(client))
       ) {
         await this.closeTrackerChangeStream(stream);
         return;
@@ -681,7 +691,7 @@ export class LorenzRuntime {
         this.changeStreamEnabled &&
         !this.changeStreams.has(client) &&
         generation !== this.changeStreamGenerations.get(client) &&
-        (client === this.client || this.hasActiveRunsForTrackerClient(client))
+        (client === this.client || this.hasActiveIssueEventClient(client))
       ) {
         void this.openChangeStream(client);
       }
@@ -699,7 +709,10 @@ export class LorenzRuntime {
 
   private async closeAllChangeStreams(): Promise<void> {
     const clients = new Set<RuntimeTrackerClient>([this.client, ...this.changeStreams.keys()]);
-    for (const handle of this.activeRuns.values()) clients.add(handle.trackerClient);
+    for (const handle of this.activeRuns.values()) {
+      clients.add(handle.trackerClient);
+      clients.add(handle.issueEventSourceClient());
+    }
     for (const handle of this.settlingRunOwnership) clients.add(handle.trackerClient);
     await Promise.all([...clients].map(async (client) => this.closeChangeStream(client)));
   }
@@ -710,6 +723,20 @@ export class LorenzRuntime {
     }
     for (const handle of this.settlingRunOwnership) {
       if (handle.trackerClient === client) return true;
+    }
+    return false;
+  }
+
+  private hasActiveIssueEventClient(client: RuntimeTrackerClient): boolean {
+    for (const handle of this.activeRuns.values()) {
+      if (handle.issueEventsUseClient(client)) return true;
+    }
+    return false;
+  }
+
+  private hasActiveIssueEventClientOtherThan(client: RuntimeTrackerClient): boolean {
+    for (const handle of this.activeRuns.values()) {
+      if (!handle.issueEventsUseClient(client)) return true;
     }
     return false;
   }
@@ -727,8 +754,16 @@ export class LorenzRuntime {
   }
 
   private retireTrackerClientStream(client: RuntimeTrackerClient): void {
-    if (client === this.client || this.hasActiveRunsForTrackerClient(client)) return;
-    void this.closeChangeStream(client);
+    if (client === this.client || this.hasActiveIssueEventClient(client)) return;
+    void this.closeChangeStream(client).then(() => {
+      if (
+        !this.stopped &&
+        this.changeStreamEnabled &&
+        !this.hasActiveIssueEventClientOtherThan(this.client)
+      ) {
+        void this.openChangeStream(this.client);
+      }
+    });
   }
 
   private async closeTrackerChangeStream(stream: TrackerChangeStream): Promise<void> {
@@ -760,7 +795,7 @@ export class LorenzRuntime {
    */
   private nudgePollForTrackerChange(client: RuntimeTrackerClient, change?: TrackerChange): void {
     if (this.stopped) return;
-    if (client !== this.client && !this.hasActiveRunsForTrackerClient(client)) return;
+    if (client !== this.client && !this.hasActiveIssueEventClient(client)) return;
     this.addEvent("tracker_push", this.workflow.settings.tracker.kind ?? "tracker");
     const issueEvents = change?.issueEvents;
     if (issueEvents) {
@@ -906,7 +941,7 @@ export class LorenzRuntime {
       this.workflow,
       this.client,
       this.activeRuns,
-      (released) => this.retireTrackerClientStream(released.trackerClient),
+      (released) => this.retireTrackerClientStream(released.issueEventSourceClient()),
       (settling) => this.settlingRunOwnership.add(settling),
     );
     this.activeRuns.set(key, handle);
@@ -1461,14 +1496,22 @@ export class LorenzRuntime {
       this.client = nextClient;
       if (clientChanged) this.issueEventRecoveryWarningIssued = false;
       if (clientChanged && this.changeStreamEnabled) {
-        // Exclusive push backends cannot overlap old and replacement subscriptions. Close the
-        // old feed first. Active runs keep their execution reads pinned, while steering recovery
-        // moves with the replacement feed so both paths share one authorization policy.
-        for (const handle of this.activeRuns.values()) {
-          handle.rebindIssueEventClient(previousClient, nextClient);
+        const compatibleEventSource = trackerEventSourcesCompatible(previous, workflow);
+        if (compatibleEventSource) {
+          // The replacement reaches the same tracker namespace, so move both live delivery and
+          // recovery together while issue/status reads remain pinned to the run's original client.
+          for (const handle of this.activeRuns.values()) {
+            handle.rebindIssueEventClient(previousClient, nextClient);
+          }
         }
-        await this.closeChangeStream(previousClient);
-        void this.openChangeStream(nextClient);
+        if (compatibleEventSource || !this.hasActiveIssueEventClient(previousClient)) {
+          await this.closeChangeStream(previousClient);
+        }
+        // An incompatible source stays exclusive until its active runs settle. The current
+        // client continues pull polling and opens its feed as soon as the retained source closes.
+        if (!this.hasActiveIssueEventClientOtherThan(nextClient)) {
+          void this.openChangeStream(nextClient);
+        }
       } else if (clientChanged && !this.hasActiveRunsForTrackerClient(previousClient)) {
         await this.closeChangeStream(previousClient);
       }
@@ -2066,6 +2109,26 @@ async function delay(clock: ClockPort, ms: number, stopped: () => boolean): Prom
     await new Promise<void>((resolve) => clock.setTimeout(resolve, Math.min(stepMs, remaining)));
     remaining -= stepMs;
   }
+}
+
+/**
+ * Decide whether a replacement client addresses the same tracker namespace. State and dispatch
+ * policy may change without moving issues, while connection, credential, assignee, and provider
+ * options can select a different backend, workspace, project, or channel set.
+ */
+function trackerEventSourcesCompatible(
+  previous: WorkflowDefinition,
+  replacement: WorkflowDefinition,
+): boolean {
+  const left = previous.settings.tracker;
+  const right = replacement.settings.tracker;
+  return (
+    left.kind === right.kind &&
+    left.endpoint === right.endpoint &&
+    left.apiKey === right.apiKey &&
+    left.assignee === right.assignee &&
+    isDeepStrictEqual(left.options, right.options)
+  );
 }
 
 function missingRuntimeClient(): RuntimeTrackerClient {
