@@ -335,6 +335,22 @@ test("RuntimeApp narrows into an agent card on digit keys and returns on escape"
   }
 });
 
+test("RuntimeApp requests daemon shutdown when q is pressed", async () => {
+  const snapshot = snapshotFixture();
+  const runtime: RuntimeViewSource = {
+    snapshot: () => snapshot,
+    subscribe: () => () => {},
+  };
+  const onQuit = vi.fn();
+  const { stdin, unmount } = render(React.createElement(RuntimeApp, { runtime, onQuit }));
+  try {
+    stdin.write("q");
+    await vi.waitFor(() => assert.equal(onQuit.mock.calls.length, 1));
+  } finally {
+    unmount();
+  }
+});
+
 test("agent detail formatter shows run vitals and agent-filtered events", () => {
   const snapshot = dashboardSnapshot({
     now: "2026-05-05T02:00:00.000Z",

@@ -427,6 +427,7 @@ export async function runDaemon(options: CliOptions): Promise<number> {
                 trackerKind: workflow.settings.tracker.kind,
                 agentKind: workflow.settings.agent.kind,
                 maxAgents: workflow.settings.agent.maxConcurrentAgents,
+                onQuit: requestStop,
               }),
             )
           : null;

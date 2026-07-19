@@ -37,12 +37,14 @@ export function RuntimeApp({
   trackerKind,
   agentKind,
   maxAgents,
+  onQuit,
 }: {
   runtime: RuntimeViewSource;
   dashboardUrl?: string | null | undefined;
   trackerKind?: string | undefined;
   agentKind?: string | undefined;
   maxAgents?: number | undefined;
+  onQuit?: (() => void) | undefined;
 }) {
   const runSamplesRef = useRef<Map<string, TokenSample[]>>(new Map());
   const globalSamplesRef = useRef<TokenSample[]>([]);
@@ -101,6 +103,7 @@ export function RuntimeApp({
   useInput(
     (input, key) => {
       if (input === "q") {
+        onQuit?.();
         exit();
         return;
       }
