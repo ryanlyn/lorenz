@@ -1,4 +1,5 @@
-import { test } from "vitest";
+import { test, vi } from "vitest";
+import { settingsForIssueState } from "@lorenz/config";
 import { assert } from "@lorenz/test-utils";
 
 import { registerSlackRuntimeTransport } from "../src/toolTransport.js";
@@ -152,13 +153,23 @@ test("an event arriving during reconciliation is applied after the API snapshot"
       user: "U3",
     }),
   );
-  releaseScan();
+  let markerSettled = false;
+  const markerWrite = mirror.addReaction("C1", "1.0", "robot_face").then(() => {
+    markerSettled = true;
+  });
+  try {
+    await vi.waitFor(() => assert.equal(markerSettled, true));
+  } finally {
+    releaseScan();
+  }
 
+  await markerWrite;
   const result = await reconciling;
   assert.deepEqual(
     result.mentions.map((message) => message.ts),
     ["1.0", "2.0"],
   );
+  assert.deepEqual(result.mentions[0]!.botReactions, ["robot_face"]);
 });
 
 test("an event arriving during a thread read survives snapshot installation", async () => {
@@ -663,7 +674,7 @@ test("an irrelevant edit to an unmirrored root performs no serialized point read
   assert.equal(scan.threadedRoots.length, 0);
 });
 
-test("editing a root mention away suppresses its status reaction as a tracking marker", async () => {
+test("editing a root mention away cannot survive on its tracking marker", async () => {
   const raw = new InMemorySlackTransport(
     {
       C1: [
@@ -671,7 +682,7 @@ test("editing a root mention away suppresses its status reaction as a tracking m
           ts: "1.0",
           text: "<@U_BOT> tracked",
           user: "U2",
-          reactions: ["eyes"],
+          reactions: ["robot_face", "eyes"],
           replies: [{ ts: "1.5", text: "status: In Progress", user: "U_BOT" }],
         },
       ],
@@ -694,13 +705,13 @@ test("editing a root mention away suppresses its status reaction as a tracking m
 
   let scan = await mirror.scanChannels(["C1"]);
   assert.equal(scan.mentions.length, 0);
-  assert.equal(scan.threadedRoots[0]!.trackingSuppressed, true);
+  assert.deepEqual(scan.threadedRoots[0]!.botReactions, ["robot_face", "eyes"]);
   const client = new SlackTrackerClient(settings(), mirror);
   assert.deepEqual(await client.fetchIssuesByIds(["C1:1.0"]), []);
 
   clock = 60_001;
   scan = await mirror.scanChannels(["C1"]);
-  assert.equal(scan.threadedRoots[0]!.trackingSuppressed, true);
+  assert.deepEqual(scan.threadedRoots[0]!.botReactions, ["robot_face", "eyes"]);
   assert.deepEqual(await client.fetchIssuesByIds(["C1:1.0"]), []);
 });
 
@@ -777,6 +788,7 @@ test("reconciliation does not promote a deleted status event's reaction mirror",
     { botUserId: "U_BOT" },
   );
   await raw.addReaction("C1", "1.0", "white_check_mark");
+  await raw.addReaction("C1", "1.0", "robot_face");
   let clock = 0;
   const mirror = mirrored(raw, () => clock);
   await mirror.scanChannels(["C1"]);
@@ -811,8 +823,7 @@ test("reconciliation does not promote a deleted status event's reaction mirror",
   const root = scan.mentions[0]!;
   const replies = await mirror.getThread("C1", "1.0");
 
-  assert.equal(root.threadEventsObserved, true);
-  assert.deepEqual(root.botReactions, ["white_check_mark"]);
+  assert.deepEqual(root.botReactions, ["white_check_mark", "robot_face"]);
   assert.equal(replies.length, 0);
   assert.equal(stateFromThread(root, replies, settings()).state, "Todo");
 });
@@ -859,7 +870,7 @@ test("agent thread reads share the mirror's first-seen command classification", 
     "slack_read_thread",
     { issueId: "C1:1.0" },
     {
-      settings: s,
+      settings: settingsForIssueState(s, "Todo"),
       fetchImpl: (async () => {
         throw new Error("unexpected direct Slack read");
       }) as typeof fetch,

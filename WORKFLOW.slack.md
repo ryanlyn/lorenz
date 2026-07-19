@@ -27,6 +27,8 @@ trackers:
       eyes: In Progress
       white_check_mark: Done
       x: Cancelled
+    # Dedicated tracking and thread-authority marker. It must not appear in emoji_states.
+    marker_emoji: robot_face
     active_states:
       - Todo
       - In Progress
@@ -108,7 +110,7 @@ You are working on a Slack issue `{{ issue.id }}`
 Continuation context:
 
 - This is retry attempt #{{ attempt }} because the issue is still in an active state.
-- Resume from the current workspace state instead of restarting from scratch. Your resumable state is your restored git workspace (your branch, commits, and any open PR) plus the issue's current status (the managed emoji reaction) and the source message - reconstruct what is already done from those.
+- Resume from the current workspace state instead of restarting from scratch. Your resumable state is your restored git workspace (your branch, commits, and any open PR) plus the issue's authoritative thread state and source message - reconstruct what is already done from those.
 - The rendered issue context above is your initial snapshot. To recover authoritative state, call `slack_read_thread(issueId)`: it returns the current status, the source message, and your prior `slack_comment` thread replies, so you can re-read the plan/validation notes you posted on earlier turns and pick up where you left off.
 - Do not repeat already-completed investigation or validation unless needed for new code changes.
 - Do not end the turn while the issue remains in an active state unless you are blocked by missing required permissions/secrets.
@@ -140,12 +142,12 @@ Work only in the provided repository copy. Do not touch any other path.
 This workflow is backed by **Slack**, not Linear. There is **no Linear and no `linear_graphql` tool**.
 
 - `tracker.bot_user_id` (`SLACK_BOT_USER_ID`) is **required**. It scopes issue creation to the bot's own mentions: only messages that @-mention this exact user become issues. Without it the tracker refuses to run (config validation fails) and the production transport fails closed (matches nothing), so ordinary human-to-human `<@U...>` mentions never spawn agents or expose their text to workers.
-- A task is created when someone **@-mentions the bot** (`$SLACK_BOT_USER_ID`) in one of the watched `tracker.channels` - in a channel message OR in a thread reply. A channel-message mention is the issue itself; a thread-reply mention tracks that thread as an issue (anchored at the thread root) with the mention reply as the request, and the bot marks the root with its tracking reaction.
+- A task is created when someone **@-mentions the bot** (`$SLACK_BOT_USER_ID`) in one of the watched `tracker.channels` - in a channel message OR in a thread reply. A channel-message mention is the issue itself; a thread-reply mention tracks that thread as an issue (anchored at the thread root) with the mention reply as the request. The bot's dedicated tracking reaction records that the thread has authoritative request or status events; status reactions never act as tracking markers.
 - `tracker.channels` may include **direct-message channels** (`D...`) alongside public/private channels: they are watched identically, so an @-mention of the bot in a watched DM creates an issue just like a channel mention does. (Slack DM channel ids are stable per conversation; obtain one from the DM's "copy link" or `conversations.open`.)
 - `tracker.users` is an **optional author allowlist**. When non-empty, only messages authored by a listed user id create issues (the bot-mention requirement still applies on top of it); it only narrows dispatch, never widens it. Leaving it unset imposes no author constraint. Because anyone can DM the bot, set `tracker.users` when watching a DM channel so only known requesters can spawn agents.
 - The request message's text **is the issue description/title**; threaded replies on the root message are the discussion/context.
 - The issue id is the Slack message reference of the THREAD ROOT in `<channel>:<ts>` form (for example `C0123456789:1717000000.000100`). This is the `{{ issue.id }}` you operate on and the `issueId` you pass to `slack_update_status` / `slack_comment`. The display label `{{ issue.identifier }}` (for example `SLK-C0123456789-1717000000-000100`) is for reference only and is **not** a valid `issueId`; never pass it to a tool.
-- **Status lives in the thread**: the latest status event wins, where events are the bot's own `status: <Name>` replies (posted by `slack_update_status`) and human `!` command mentions (`@bot !done`, `@bot !cancel`, `@bot !reopen`, `@bot !status <Name>`). Reactions are only the bot's visibility mirror; threads that have never seen a status event fall back to the bot's own reaction reading (human reactions never count toward status).
+- **Status lives in the thread**: the latest status event wins, where events are the bot's own `status: <Name>` replies (posted by `slack_update_status`) and human `!` command mentions (`@bot !done`, `@bot !cancel`, `@bot !reopen`, `@bot !status <Name>`). Reactions are only the bot's visibility mirror. Legacy roots without the dedicated tracking marker retain the bot's reaction reading until a request or status event makes the thread authoritative; human reactions never count toward status.
 
 ## Routing with hashtags
 
@@ -173,7 +175,7 @@ You have seven Slack tools:
 - `slack_comment` - post a threaded reply on the source message. Args: `issueId` (`<channel>:<ts>`), `body`. Use it for milestones that should notify the thread.
 - `slack_workpad` - create or update one bot message carrying the live plan checklist and latest note. With Socket Mode it also carries Cancel/Details buttons. Args: `issueId`, `plan?`, `note?`. Omitted sections keep their current value; unusually long combined content is clipped to Slack's payload budget.
 - `slack_read_thread` - read the issue's authoritative state. Args: `issueId` (`<channel>:<ts>`). Returns the folded status and audit trail, source message, request, workpad, reactions, permalink, and replies.
-- `slack_query` - read-only query over the tracked issues in the watched channels (bot-mention roots and bot-marked threads), with thread-derived state. Args: `channels?`, `where?`, `select?`, `expand?` (`thread`, `reactions`), `order_by?`, `limit?`, `offset?`. Use it to survey related issues; it never mutates anything.
+- `slack_query` - read-only query over the tracked issues in the watched channels (eligible bot-mention roots and marker-bearing threads whose request still exists), with thread-derived state. Args: `channels?`, `where?`, `select?`, `expand?` (`thread`, `reactions`), `order_by?`, `limit?`, `offset?`. Use it to survey related issues; it never mutates anything.
 - `slack_user_info` - resolve a `U...` user id (from a `<@U...>` mention or a reply's `user` field) to its profile (name, real name, display name, bot flag). Args: `userId`.
 - `slack_channel_context` - read the channel conversation around the issue's source message (read-only, ascending). Args: `issueId`, `before?` (default 10, max 50), `after?` (default 10, max 50). Use it when the request references surrounding discussion ("see the message above").
 

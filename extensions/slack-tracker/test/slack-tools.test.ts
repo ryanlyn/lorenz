@@ -295,7 +295,7 @@ test("slack_update_status posts the authoritative status reply and mirrors the r
   assert.deepEqual(transport.replies, [{ channel: "C1", threadTs: "1.1", body: "status: Done" }]);
   // ...and the bot's reaction mirror tracks it for glanceability.
   const msg = await transport.getMessage("C1", "1.1");
-  assert.deepEqual(msg!.reactions, ["white_check_mark"]);
+  assert.deepEqual(msg!.reactions, ["robot_face", "white_check_mark"]);
 
   const replied = await executeSlackTool(
     "slack_comment",
@@ -407,7 +407,10 @@ test("slack_update_status only removes managed reactions present on the root", a
 
   assert.equal(result.success, true);
   assert.deepEqual(removed, ["eyes"]);
-  assert.deepEqual((await transport.getMessage("C1", "1.1"))!.reactions, ["white_check_mark"]);
+  assert.deepEqual((await transport.getMessage("C1", "1.1"))!.reactions, [
+    "robot_face",
+    "white_check_mark",
+  ]);
 });
 
 test("a failing reaction mirror never fails the status transition", async () => {

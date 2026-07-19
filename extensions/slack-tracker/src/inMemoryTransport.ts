@@ -15,7 +15,7 @@ interface SeedMessage {
   ts: string;
   text: string;
   user?: string;
-  /** Reactions authored by the BOT (the mirror/marker), as if written in an earlier session. */
+  /** Reactions authored by the bot, including status mirrors and the tracking marker. */
   reactions?: string[];
   /** Reactions authored by humans: visible on the message but never state-bearing. */
   humanReactions?: string[];

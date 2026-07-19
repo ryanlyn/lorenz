@@ -31,6 +31,7 @@ const defaultWebSocketFactory: SlackWebSocketFactory = (url) => {
 /** Cap on reconnect backoff: a persistently failing socket retries at most this often. */
 const MAX_RECONNECT_DELAY_MS = 30_000;
 const BASE_RECONNECT_DELAY_MS = 1_000;
+const PROCESSED_ENVELOPES_MAX = 5_000;
 
 /**
  * Capped exponential backoff with ±15% jitter. The jitter matters when several daemons watch
@@ -115,6 +116,8 @@ export class SlackSocketMode implements TrackerChangeStream {
   private connected = false;
   /** Connections rejected for splitting the feed never acknowledge buffered envelopes. */
   private readonly rejectedSockets = new WeakSet<SlackWebSocketLike>();
+  /** Bounded delivery ledger retained across reconnects for Slack's at-least-once envelopes. */
+  private readonly processedEnvelopeIds = new Set<string>();
 
   constructor(options: SlackSocketModeOptions) {
     this.endpoint = options.endpoint.replace(/\/+$/, "");
@@ -253,12 +256,18 @@ export class SlackSocketMode implements TrackerChangeStream {
 
     // Every envelope-bearing frame MUST be acknowledged or Slack treats delivery as failed and
     // redelivers; ack first, then act, so a throw in handling never drops the ack.
-    if (typeof frame.envelope_id === "string") {
+    const envelopeId = typeof frame.envelope_id === "string" ? frame.envelope_id : null;
+    if (envelopeId !== null) {
       try {
-        socket.send(JSON.stringify({ envelope_id: frame.envelope_id }));
+        socket.send(JSON.stringify({ envelope_id: envelopeId }));
       } catch {
         // A send on a half-closed socket throws; the close handler will reconnect.
       }
+      // A lost acknowledgement can cause Slack to redeliver the same action. Acknowledge every
+      // copy, but let only the first delivery mutate state. The ledger belongs to the client,
+      // rather than a connection, so reconnects do not reopen the duplicate window.
+      if (this.processedEnvelopeIds.has(envelopeId)) return;
+      rememberBounded(this.processedEnvelopeIds, envelopeId, PROCESSED_ENVELOPES_MAX);
     }
 
     if (frame.type === "disconnect") {
@@ -341,6 +350,15 @@ export class SlackSocketMode implements TrackerChangeStream {
     // A daemon shutting down must not be held open by a pending reconnect timer.
     this.reconnectTimer.unref?.();
   }
+}
+
+function rememberBounded(values: Set<string>, value: string, max: number): void {
+  while (values.size >= max) {
+    const oldest = values.values().next().value;
+    if (oldest === undefined) break;
+    values.delete(oldest);
+  }
+  values.add(value);
 }
 
 /** Channel id carried by an Events API event: top-level for messages/mentions, `item` for reactions. */

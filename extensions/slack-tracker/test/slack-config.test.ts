@@ -311,3 +311,21 @@ test("emoji_states parses to the same options identity regardless of YAML key or
   );
   assert.equal(JSON.stringify(a.tracker.options), JSON.stringify(b.tracker.options));
 });
+
+test("the tracking marker cannot also be a status reaction", () => {
+  const settings = parseSlackConfig(
+    {
+      tracker: {
+        kind: "slack",
+        channels: ["C1"],
+        bot_user_id: "U1",
+        marker_emoji: "eyes",
+      },
+    },
+    { SLACK_BOT_TOKEN: "xoxb" },
+  );
+  assert.throws(
+    () => validateSlackDispatch(settings),
+    /marker_emoji 'eyes' must not also map to a workflow state/,
+  );
+});

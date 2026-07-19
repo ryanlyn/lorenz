@@ -2,7 +2,7 @@ import type { Settings } from "@lorenz/domain";
 
 import { emojiForState, isAllowedAuthor, isBotMention, statusEmojiMap } from "./mapping.js";
 import { slackTrackerOptions } from "./options.js";
-import { BOT_STATUS_PREFIX, resolveStateName } from "./threadState.js";
+import { BOT_STATUS_PREFIX, resolveStateName, stateFromThread } from "./threadState.js";
 import { isBotMarked, STATUS_METADATA_EVENT } from "./transport.js";
 import type { SlackMessage, SlackTransport } from "./transport.js";
 import { makeMetadataSeq } from "./webTransport.js";
@@ -24,9 +24,9 @@ export function requireBotUserId(settings: Settings): string {
 
 /**
  * Enforce the agent trust boundary: the issueId must reference a configured (watched) channel
- * and an existing message that is tracked - the root mentions the bot, the bot has marked it
- * (its own reaction), or a thread reply mentions the bot. Throws with a caller-facing message
- * otherwise.
+ * and an existing message that is tracked. Root mentions must still be eligible, or carry the
+ * dedicated marker from an earlier accepted poll. Non-mention roots must retain an eligible
+ * request reply, so a stale marker cannot keep an edited-away issue alive.
  */
 export async function requireTrackedMessage(
   settings: Settings,
@@ -34,7 +34,7 @@ export async function requireTrackedMessage(
   channel: string,
   ts: string,
 ): Promise<SlackMessage> {
-  const { channels, users } = slackTrackerOptions(settings);
+  const { channels, users, markerEmoji = "robot_face" } = slackTrackerOptions(settings);
   const botUserId = requireBotUserId(settings);
   if (!channels.includes(channel)) {
     throw new Error(`channel '${channel}' is not a configured tracker channel`);
@@ -43,28 +43,17 @@ export async function requireTrackedMessage(
   if (!message) {
     throw new Error(`no tracked issue at ${channel}:${ts}`);
   }
-  if (message.trackingSuppressed === true) {
-    throw new Error("message is no longer a tracked bot-mention issue");
+  if (isBotMention(message.text, botUserId)) {
+    // A dedicated marker records acceptance by an earlier poll. It keeps a root mention tracked
+    // if the author allowlist is later tightened, while new issues still honor the allowlist.
+    if (isAllowedAuthor(message.user, users) || isBotMarked(message, markerEmoji)) return message;
   }
-  // A root the bot already marked (its own reaction) stays tracked regardless of the author
-  // allowlist: it was accepted on an earlier poll, so tightening `users` later must not orphan
-  // an issue the agent is mid-flight on. New tracking honors the allowlist on the author.
-  if (
-    (isBotMention(message.text, botUserId) && isAllowedAuthor(message.user, users)) ||
-    isBotMarked(message)
-  ) {
-    return message;
-  }
-  // Reply-tracked thread: the request lives in a reply rather than the root. Last resort
-  // because it costs a conversations.replies fetch.
+  // Reply-tracked thread: reconstruct the accepted request from the thread. This check is also
+  // what rejects a root mention edited away while the daemon was offline, even if its marker or
+  // status mirror remains.
   if ((message.replyCount ?? 0) > 0) {
     const replies = await transport.getThread(channel, ts);
-    if (
-      replies.some(
-        (reply) => isBotMention(reply.text, botUserId) && isAllowedAuthor(reply.user, users),
-      )
-    )
-      return message;
+    if (stateFromThread(message, replies, settings).request !== undefined) return message;
   }
   throw new Error("message is not a tracked bot-mention issue");
 }
@@ -208,6 +197,14 @@ export async function mirrorStatusReaction(
 ): Promise<void> {
   const map = statusEmojiMap(settings);
   const target = emojiForState(state, map);
+  const markerEmoji = slackTrackerOptions(settings).markerEmoji ?? "robot_face";
+  if (!observed.includes(markerEmoji)) {
+    try {
+      await transport.addReaction(channel, ts, markerEmoji);
+    } catch {
+      // The status reply remains authoritative; the next poll retries the marker.
+    }
+  }
   for (const emoji of observed) {
     if (emoji === target || typeof map[emoji] !== "string") continue;
     try {

@@ -48,7 +48,7 @@ test("isBotMention matches only the bot when botUserId is set", () => {
   assert.equal(isBotMention("no mention here", "U_BOT"), false);
 });
 
-test("isBotMention matches any user mention when botUserId is unset (back-compat)", () => {
+test("isBotMention matches any user mention when botUserId is unset", () => {
   assert.equal(isBotMention("<@U_OTHER> hi"), true);
   assert.equal(isBotMention("<@U123|alice> hi"), true);
   assert.equal(isBotMention("plain text"), false);

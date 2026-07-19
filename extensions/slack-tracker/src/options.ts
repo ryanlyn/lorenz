@@ -36,7 +36,10 @@ export interface SlackTrackerOptions {
   users: string[];
   /** Slack emoji-name → workflow-state overrides (merged over the defaults). */
   emojiStates?: Record<string, string> | undefined;
-  /** Emoji the bot reacts with to mark a reply-tracked thread root (default `robot_face`). */
+  /**
+   * Emoji the bot uses as the dedicated tracking and thread-authority marker (default
+   * `robot_face`). It must not also map to a workflow state.
+   */
   markerEmoji?: string | undefined;
   /**
    * How far back (days) untracked threads are inspected for new reply-mention requests

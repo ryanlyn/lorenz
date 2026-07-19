@@ -110,7 +110,7 @@ The agent should be able to talk to Linear, either via a configured Linear MCP s
 - Spend extra effort up front on planning and verification design before implementation.
 - Reproduce first: always confirm the current behavior/issue signal before changing code so the fix target is explicit.
 - Keep ticket metadata current (state, checklist, acceptance criteria, links).
-- Treat a single persistent Linear comment as the source of truth for progress.
+- Treat the tracker's single persistent workpad surface as the source of truth for progress.
 - Keep plan, validation, progress, and handoff in the tracker's single persistent workpad surface.
 - When the tracker exposes separate notifying comments, reserve them for milestones worth notifying.
 - Treat a human tracker message delivered as a queued turn as current issue input. Reconcile it with the issue state and scope before continuing.

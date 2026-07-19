@@ -20,28 +20,15 @@ export interface SlackMessage {
   replyCount?: number | undefined;
   /** ts of the newest thread reply (root messages only). */
   latestReply?: string | undefined;
-  /**
-   * Set by the channel mirror after it has observed a thread-derived status transition. Reaction
-   * fallback stays disabled if that transition is later deleted during reconciliation, so the
-   * bot's derived visibility reaction cannot become authoritative.
-   */
-  threadEventsObserved?: boolean | undefined;
-  /**
-   * Set by the event mirror after a root-mention issue is edited so it is no longer eligible.
-   * Bot-owned status reactions remain visible, but cannot keep that root tracked. Editing the
-   * root back to an eligible mention clears the suppression.
-   */
-  trackingSuppressed?: boolean | undefined;
 }
 
 /**
- * True when the bot itself has reacted to the message - its tracking marker. A bot-marked root
- * is (and stays) a tracked issue: reply-tracked threads are recognized across restarts by the
- * marker alone, and the tool trust boundary accepts a marked root even if the author allowlist
- * has since been tightened.
+ * True when the bot's dedicated tracking reaction is present. Status reactions are deliberately
+ * excluded so a derived visibility mirror cannot become issue ownership or status authority
+ * after a restart.
  */
-export function isBotMarked(message: SlackMessage): boolean {
-  return message.trackingSuppressed !== true && message.botReactions.length > 0;
+export function isBotMarked(message: SlackMessage, markerEmoji: string): boolean {
+  return message.botReactions.includes(markerEmoji);
 }
 
 /**
@@ -170,7 +157,7 @@ export interface SlackTransport {
     options?: SlackPostOptions,
   ): Promise<string>;
   /**
-   * Edit a previously posted bot message in place (`chat.update`). Used only for display
+   * Edit an existing bot message in place (`chat.update`). Used only for display
    * mirrors (the workpad); never for fold events, which are append-only.
    */
   updateMessage(

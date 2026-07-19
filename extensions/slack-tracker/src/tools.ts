@@ -13,11 +13,12 @@ import {
 } from "@lorenz/tool-sdk";
 
 import { slackMessageToRow, slackPermalink, splitIssueId, trackedRootsOf } from "./client.js";
+import { isAllowedAuthor, isBotMention } from "./mapping.js";
 import { requireBotUserId, requireTrackedMessage, updateSlackStatus } from "./operations.js";
 import { slackTrackerOptions } from "./options.js";
 import { resolveThreadState, stateFromThread } from "./threadState.js";
-import { slackRuntimeTransport } from "./toolTransport.js";
-import type { SlackTransport } from "./transport.js";
+import { slackRuntimeKey, slackRuntimeTransport } from "./toolTransport.js";
+import { isBotMarked, type SlackTransport } from "./transport.js";
 import { SlackWebTransport } from "./webTransport.js";
 import { upsertWorkpad } from "./workpad.js";
 
@@ -39,7 +40,7 @@ const SLACK_EXPAND_FIELDS = new Set(["thread", "reactions"]);
 const CONTEXT_DEFAULT = 10;
 const CONTEXT_MAX = 50;
 /** Per-runtime queues protecting each workpad's read-modify-write operation. */
-const workpadQueues = new WeakMap<Settings, Map<string, Promise<void>>>();
+const workpadQueues = new Map<string, Map<string, Promise<void>>>();
 
 export function slackToolSpecs(): ToolSpec[] {
   return [
@@ -263,10 +264,11 @@ async function serializeWorkpadUpdate<T>(
   issueId: string,
   update: () => Promise<T>,
 ): Promise<T> {
-  let queues = workpadQueues.get(settings);
+  const runtimeKey = slackRuntimeKey(settings);
+  let queues = workpadQueues.get(runtimeKey);
   if (queues === undefined) {
     queues = new Map();
-    workpadQueues.set(settings, queues);
+    workpadQueues.set(runtimeKey, queues);
   }
   const previous = queues.get(issueId) ?? Promise.resolve();
   let release!: () => void;
@@ -280,7 +282,10 @@ async function serializeWorkpadUpdate<T>(
     return await update();
   } finally {
     release();
-    if (queues.get(issueId) === tail) queues.delete(issueId);
+    if (queues.get(issueId) === tail) {
+      queues.delete(issueId);
+      if (queues.size === 0) workpadQueues.delete(runtimeKey);
+    }
   }
 }
 
@@ -300,10 +305,10 @@ export const slackToolProvider: ToolProvider = {
 
 /**
  * Read-only query over tracked Slack issues. The trust boundary is enforced structurally:
- * rows come only from the channel scan's tracked roots (bot-mention roots and bot-marked
- * threads; the scan fails closed without a bot user id), and the scanned channels are always
- * intersected with the configured allow-list - the query cannot become an oracle for arbitrary
- * messages. Filtering/projection/paging then run in memory over those rows.
+ * rows come only from validated bot-mention roots and marker-bearing threads whose accepted
+ * request reply still exists. The scanned channels are always intersected with the configured
+ * allow-list, so the query cannot become an oracle for arbitrary messages. Filtering,
+ * projection, and paging then run in memory over those rows.
  */
 async function executeSlackQuery(
   args: Record<string, unknown>,
@@ -316,13 +321,19 @@ async function executeSlackQuery(
   const spec = parseQuerySpec(args);
   const select = parseSelect(args.select) ?? DEFAULT_SLACK_SELECT;
   const expand = parseSlackExpand(args.expand);
-  const allow = slackTrackerOptions(settings).channels;
+  const options = slackTrackerOptions(settings);
+  const allow = options.channels;
+  const markerEmoji = options.markerEmoji ?? "robot_face";
   const requested = parseStringArray(args.channels, "channels");
   const channels = requested ? requested.filter((c) => allow.includes(c)) : allow;
   const [scan, base] = await Promise.all([transport.scanChannels(channels), transport.teamUrl()]);
   const records: Array<Record<string, unknown>> = [];
-  for (const root of trackedRootsOf(scan)) {
+  for (const root of trackedRootsOf(scan, markerEmoji)) {
     const thread = await resolveThreadState(settings, transport, root);
+    const rootMentionIsTracked =
+      isBotMention(root.text, options.botUserId) &&
+      (isAllowedAuthor(root.user, options.users) || isBotMarked(root, markerEmoji));
+    if (!rootMentionIsTracked && thread.request === undefined) continue;
     records.push(
       slackMessageToRow(root, settings, {
         permalinkBase: base,

@@ -3,7 +3,7 @@ import { errorMessage, isRecord, type Settings } from "@lorenz/domain";
 import { compareSlackTs, isSlackTs } from "./ids.js";
 import { isAllowedAuthor, isBotMention } from "./mapping.js";
 import { slackTrackerOptions } from "./options.js";
-import { parseStatusCommand, stateFromThread } from "./threadState.js";
+import { parseStatusCommand } from "./threadState.js";
 import type {
   SlackChannelScan,
   SlackMessage,
@@ -86,12 +86,6 @@ interface ChannelState {
   replyIndex: Map<string, string>;
   /** Edited/deleted root timestamps that delayed duplicate create events must not overwrite. */
   rootCreateBarriers: Set<string>;
-  /** Roots observed as eligible root-mention issues, retained across scan-window aging. */
-  rootMentionTracked: Set<string>;
-  /** Root-mention issues whose current edit removed their tracking eligibility. */
-  rootTrackingSuppressions: Set<string>;
-  /** Roots that have observed at least one thread-derived status transition. */
-  rootsWithThreadEvents: Set<string>;
   /** Last successful real scan; null until bootstrapped. */
   syncedAt: number | null;
   /** Set on any doubt; forces the next scan to be a real one. */
@@ -118,6 +112,14 @@ export class MirrorBackedSlackTransport implements SlackTransport {
    * while the request was in flight.
    */
   private mutationQueue: Promise<void> = Promise.resolve();
+  /**
+   * Mutations received while an API snapshot is in flight. Each mutation applies immediately to
+   * the current mirror and replays after the snapshot is installed, so history and thread reads
+   * never hold the queue while still preserving arrival order.
+   */
+  private readonly snapshotOverlays = new Map<string, Set<Array<() => void | Promise<void>>>>();
+  /** Coalesces concurrent reconciliation requests for the same channel. */
+  private readonly channelRebuilds = new Map<string, Promise<void>>();
   /** Reply ts values whose ignored edit already produced a thread notice (one per message). */
   private readonly editNoticed = new Set<string>();
 
@@ -158,16 +160,10 @@ export class MirrorBackedSlackTransport implements SlackTransport {
    */
   applyEvent(payload: Record<string, unknown>): void {
     void this.enqueueMutation(async () => {
-      try {
-        await this.applyEventNow(payload);
-      } catch (error) {
-        // An unapplied event means the mirror can no longer claim event-completeness for that
-        // channel; fail to the scan rather than serving a mirror with a known hole.
-        this.logger.warn(`slack mirror: event application failed: ${errorMessage(error)}`);
-        const channel = eventChannel(payload);
-        if (channel !== null) this.markDirty(channel, "event application failed");
-        else this.markAllDirty("event application failed (unknown channel)");
-      }
+      const channel = eventChannel(payload);
+      const apply = async () => this.applyEventSafely(payload);
+      if (channel !== null) this.recordSnapshotMutation(channel, apply);
+      await apply();
     });
   }
 
@@ -190,8 +186,8 @@ export class MirrorBackedSlackTransport implements SlackTransport {
         }
       }),
     );
-    // Events arriving during an API scan are queued behind snapshot installation. Settle them
-    // before collecting so this poll includes both the snapshot and its concurrent live events.
+    // Events arriving during an API scan apply immediately and replay over the snapshot. Settle
+    // follow-up mutations before collecting so this poll includes both sources.
     await this.settleEvents();
     const failures = results.filter((r) => !r.ok);
     if (failures.length > 0 && failures.length === channels.length) {
@@ -238,13 +234,12 @@ export class MirrorBackedSlackTransport implements SlackTransport {
           .map((reply) => toThreadReply(reply));
       }
     }
-    const fetch = settlePromise(this.inner.getThread(channel, ts, abortSignal));
-    await this.enqueueMutation(async () => {
-      const result = await fetch;
-      if (!result.ok) throw result.error;
-      this.storeFetchedThread(channel, ts, result.value);
-    });
-    // A live event queued while the API read was in flight applies after the fetched snapshot.
+    await this.withChannelSnapshot(
+      channel,
+      async () => this.inner.getThread(channel, ts, abortSignal),
+      (replies) => this.storeFetchedThread(channel, ts, replies),
+    );
+    // Settle events queued after snapshot installation before returning the stored thread.
     await this.settleEvents();
     const stored = this.channels.get(channel)?.threads.get(ts);
     return stored
@@ -312,12 +307,7 @@ export class MirrorBackedSlackTransport implements SlackTransport {
     // (requireTrackedMessage) and the claimed-issue fallback, where staleness is not acceptable.
     const message = await this.inner.getMessage(channel, ts);
     if (message === null) return null;
-    const state = this.channels.get(channel);
-    return {
-      ...message,
-      ...(state?.rootsWithThreadEvents.has(ts) ? { threadEventsObserved: true } : {}),
-      ...(state?.rootTrackingSuppressions.has(ts) ? { trackingSuppressed: true } : {}),
-    };
+    return message;
   }
 
   async teamUrl(): Promise<string | null> {
@@ -342,24 +332,34 @@ export class MirrorBackedSlackTransport implements SlackTransport {
     await this.inner.addReaction(channel, ts, name);
     // The bot's own reactions are state-bearing (marker + mirror), so reflect them immediately
     // rather than waiting for the reaction event to echo back.
-    await this.enqueueMutation(() => {
+    const apply = (): void => {
       this.mutateRoot(channel, ts, (root) => {
         if (!root.reactions.includes(name)) root.reactions.push(name);
         if (!root.botReactions.includes(name)) root.botReactions.push(name);
       });
-    });
+    };
+    const mutation = (): void => {
+      this.recordSnapshotMutation(channel, apply);
+      apply();
+    };
+    await this.enqueueMutation(mutation);
   }
 
   async removeReaction(channel: string, ts: string, name: string): Promise<void> {
     await this.inner.removeReaction(channel, ts, name);
-    await this.enqueueMutation(() => {
+    const apply = (): void => {
       this.mutateRoot(channel, ts, (root) => {
         root.botReactions = root.botReactions.filter((r) => r !== name);
         // Display list keeps the name only if a human also reacted with it; we cannot know from
         // here, so drop it and let the next event/scan restore a human copy.
         root.reactions = root.reactions.filter((r) => r !== name);
       });
-    });
+    };
+    const mutation = (): void => {
+      this.recordSnapshotMutation(channel, apply);
+      apply();
+    };
+    await this.enqueueMutation(mutation);
   }
 
   async postReply(
@@ -404,7 +404,7 @@ export class MirrorBackedSlackTransport implements SlackTransport {
     await this.inner.updateMessage(channel, ts, body, options);
     // The bot's own edits (workpad refreshes) update the mirror text directly; they are display
     // mirrors, never folded commands, so first-seen protection deliberately does not apply.
-    await this.enqueueMutation(() => {
+    const apply = (): void => {
       const state = this.channels.get(channel);
       const rootTs = state?.replyIndex.get(ts);
       if (state && rootTs !== undefined) {
@@ -415,7 +415,12 @@ export class MirrorBackedSlackTransport implements SlackTransport {
           if (options?.metadata !== undefined) reply.metadata = options.metadata;
         }
       }
-    });
+    };
+    const mutation = (): void => {
+      this.recordSnapshotMutation(channel, apply);
+      apply();
+    };
+    await this.enqueueMutation(mutation);
   }
 
   async postEphemeral(
@@ -480,9 +485,6 @@ export class MirrorBackedSlackTransport implements SlackTransport {
         authoritativeThreads: new Set(),
         replyIndex: new Map(),
         rootCreateBarriers: new Set(),
-        rootMentionTracked: new Set(),
-        rootTrackingSuppressions: new Set(),
-        rootsWithThreadEvents: new Set(),
         syncedAt: null,
         dirty: false,
       };
@@ -498,32 +500,84 @@ export class MirrorBackedSlackTransport implements SlackTransport {
    * survives for replies the substrate still carries.
    */
   private async rebuildChannel(channel: string): Promise<void> {
-    // Start reads concurrently across channels, then install each completed snapshot through the
-    // mutation queue. Events received after this call are queued behind the snapshot and replayed
-    // onto it, so the snapshot cannot erase them.
-    const fetch = settlePromise(this.inner.scanChannels([channel]));
-    await this.enqueueMutation(async () => {
-      const result = await fetch;
-      if (!result.ok) throw result.error;
-      this.installChannelSnapshot(channel, result.value);
+    const existing = this.channelRebuilds.get(channel);
+    if (existing) return existing;
+    const rebuild = this.withChannelSnapshot(
+      channel,
+      async () => this.inner.scanChannels([channel]),
+      (scan) => this.installChannelSnapshot(channel, scan),
+    ).finally(() => {
+      if (this.channelRebuilds.get(channel) === rebuild) this.channelRebuilds.delete(channel);
     });
+    this.channelRebuilds.set(channel, rebuild);
+    return rebuild;
+  }
+
+  /**
+   * Fetch an authoritative snapshot without blocking live mirror mutations. Events applied while
+   * the request is in flight are recorded per channel, then replayed in order immediately after
+   * snapshot installation. Registration and installation share the mutation queue, which closes
+   * both races without putting Slack latency on that queue.
+   */
+  private async withChannelSnapshot<T>(
+    channel: string,
+    fetchSnapshot: () => Promise<T>,
+    installSnapshot: (snapshot: T) => void,
+  ): Promise<void> {
+    const overlay: Array<() => void | Promise<void>> = [];
+    await this.enqueueMutation(() => {
+      let overlays = this.snapshotOverlays.get(channel);
+      if (!overlays) {
+        overlays = new Set();
+        this.snapshotOverlays.set(channel, overlays);
+      }
+      overlays.add(overlay);
+    });
+    let snapshot: T;
+    try {
+      snapshot = await fetchSnapshot();
+    } catch (error) {
+      await this.enqueueMutation(() => this.removeSnapshotOverlay(channel, overlay));
+      throw error;
+    }
+    await this.enqueueMutation(async () => {
+      this.removeSnapshotOverlay(channel, overlay);
+      installSnapshot(snapshot);
+      for (const replay of overlay) await replay();
+    });
+  }
+
+  private removeSnapshotOverlay(channel: string, overlay: Array<() => void | Promise<void>>): void {
+    const overlays = this.snapshotOverlays.get(channel);
+    overlays?.delete(overlay);
+    if (overlays?.size === 0) this.snapshotOverlays.delete(channel);
+  }
+
+  private recordSnapshotMutation(channel: string, replay: () => void | Promise<void>): void {
+    for (const overlay of this.snapshotOverlays.get(channel) ?? []) overlay.push(replay);
+  }
+
+  private async applyEventSafely(payload: Record<string, unknown>): Promise<void> {
+    try {
+      await this.applyEventNow(payload);
+    } catch (error) {
+      // An unapplied event means the mirror can no longer claim event-completeness for that
+      // channel. Fall back to reconciliation instead of serving a mirror with a known hole.
+      this.logger.warn(`slack mirror: event application failed: ${errorMessage(error)}`);
+      const channel = eventChannel(payload);
+      if (channel !== null) this.markDirty(channel, "event application failed");
+      else this.markAllDirty("event application failed (unknown channel)");
+    }
   }
 
   private installChannelSnapshot(channel: string, scan: SlackChannelScan): void {
     const state = this.channelState(channel);
     const seen = new Set<string>();
-    const mentionTimestamps = new Set(scan.mentions.map((message) => message.ts));
     const previousRoots = state.roots;
     state.roots = new Map();
     for (const message of [...scan.mentions, ...scan.threadedRoots]) {
       seen.add(message.ts);
       this.storeRoot(state, message, true);
-      if (mentionTimestamps.has(message.ts)) {
-        rememberBounded(state.rootMentionTracked, message.ts, ROOT_CREATE_BARRIERS_MAX);
-        state.rootTrackingSuppressions.delete(message.ts);
-      } else if (state.rootMentionTracked.has(message.ts)) {
-        rememberBounded(state.rootTrackingSuppressions, message.ts, ROOT_CREATE_BARRIERS_MAX);
-      }
       const thread = state.threads.get(message.ts);
       if (thread) {
         for (const [ts, reply] of [...thread]) {
@@ -594,8 +648,6 @@ export class MirrorBackedSlackTransport implements SlackTransport {
       ...(root.user !== undefined ? { user: root.user } : {}),
       ...(replyCount > 0 ? { replyCount } : {}),
       ...(latestReply !== undefined ? { latestReply } : {}),
-      ...(state.rootsWithThreadEvents.has(root.ts) ? { threadEventsObserved: true } : {}),
-      ...(state.rootTrackingSuppressions.has(root.ts) ? { trackingSuppressed: true } : {}),
     };
   }
 
@@ -630,28 +682,6 @@ export class MirrorBackedSlackTransport implements SlackTransport {
     if (root) {
       root.replyCountHint = thread.size;
       root.latestReplyHint = latestTsOf(thread);
-    }
-    this.rememberThreadEvents(channel, rootTs);
-  }
-
-  private rememberThreadEvents(channel: string, rootTs: string): void {
-    const state = this.channels.get(channel);
-    const root = state?.roots.get(rootTs);
-    const thread = state?.threads.get(rootTs);
-    if (!state || !root || !thread || state.rootsWithThreadEvents.has(rootTs)) return;
-    const replies = [...thread.values()]
-      .sort((left, right) => compareSlackTs(left.ts, right.ts))
-      .map(toThreadReply);
-    const message: SlackMessage = {
-      channel,
-      ts: root.ts,
-      text: root.text,
-      reactions: [...root.reactions],
-      botReactions: [...root.botReactions],
-      ...(root.user !== undefined ? { user: root.user } : {}),
-    };
-    if (stateFromThread(message, replies, this.settings).events.length > 0) {
-      state.rootsWithThreadEvents.add(rootTs);
     }
   }
 
@@ -736,13 +766,6 @@ export class MirrorBackedSlackTransport implements SlackTransport {
   ): void {
     const state = this.channelState(channel);
     if (state.rootCreateBarriers.has(message.ts)) return;
-    if (
-      isBotMention(message.text, this.botUserId) &&
-      isAllowedAuthor(message.user, this.allowedUsers)
-    ) {
-      rememberBounded(state.rootMentionTracked, message.ts, ROOT_CREATE_BARRIERS_MAX);
-      state.rootTrackingSuppressions.delete(message.ts);
-    }
     const existing = state.roots.get(message.ts);
     if (existing) {
       // Root text changes arrive as `message_changed`. A plain message/app_mention event for an
@@ -815,7 +838,6 @@ export class MirrorBackedSlackTransport implements SlackTransport {
       // Duplicate delivery (app_mention + message, redelivered envelope): first one won.
       if (existing.metadata === undefined && reply.metadata !== undefined) {
         existing.metadata = reply.metadata;
-        this.rememberThreadEvents(channel, rootTs);
       }
       return;
     }
@@ -842,7 +864,6 @@ export class MirrorBackedSlackTransport implements SlackTransport {
         root.latestReplyHint = latest;
       }
     }
-    this.rememberThreadEvents(channel, rootTs);
   }
 
   private async applyEdit(channel: string, event: Record<string, unknown>): Promise<void> {
@@ -856,14 +877,6 @@ export class MirrorBackedSlackTransport implements SlackTransport {
       // Root edits track current text: an edit that removes the mention untracks the issue at
       // the next fold, exactly as a re-scan would observe it (the documented contract).
       rememberBounded(state.rootCreateBarriers, ts, ROOT_CREATE_BARRIERS_MAX);
-      const eligibleNow =
-        isBotMention(newText, this.botUserId) && isAllowedAuthor(root.user, this.allowedUsers);
-      if (eligibleNow) {
-        rememberBounded(state.rootMentionTracked, ts, ROOT_CREATE_BARRIERS_MAX);
-        state.rootTrackingSuppressions.delete(ts);
-      } else if (state.rootMentionTracked.has(ts)) {
-        rememberBounded(state.rootTrackingSuppressions, ts, ROOT_CREATE_BARRIERS_MAX);
-      }
       root.text = newText;
       return;
     }
@@ -883,9 +896,6 @@ export class MirrorBackedSlackTransport implements SlackTransport {
         isBotMention(newText, this.botUserId) && isAllowedAuthor(editedUser, this.allowedUsers);
       rememberBounded(state.rootCreateBarriers, ts, ROOT_CREATE_BARRIERS_MAX);
       if (!eligibleNow) {
-        if (state.rootMentionTracked.has(ts)) {
-          rememberBounded(state.rootTrackingSuppressions, ts, ROOT_CREATE_BARRIERS_MAX);
-        }
         return;
       }
       // A root outside the scan may become an issue when edited to mention the bot. Fetch its
@@ -893,8 +903,6 @@ export class MirrorBackedSlackTransport implements SlackTransport {
       const message = await this.inner.getMessage(channel, ts);
       if (message !== null) {
         this.storeRoot(state, message, true);
-        rememberBounded(state.rootMentionTracked, ts, ROOT_CREATE_BARRIERS_MAX);
-        state.rootTrackingSuppressions.delete(ts);
       }
       return;
     }
@@ -1046,20 +1054,6 @@ function parseThreadPageCursor(
     if (apiCursor !== "") return { source: "api", cursor: apiCursor };
   }
   throw new Error(`invalid Slack thread page cursor: ${cursor}`);
-}
-
-/**
- * Observe an in-flight API read immediately while carrying its rejection into the mutation queue.
- * This keeps concurrent reads from producing an unhandled rejection while another queued
- * snapshot is still installing.
- */
-async function settlePromise<T>(
-  promise: Promise<T>,
-): Promise<{ ok: true; value: T } | { ok: false; error: unknown }> {
-  return promise.then(
-    (value) => ({ ok: true, value }),
-    (error: unknown) => ({ ok: false, error }),
-  );
 }
 
 /** Channel of an events_api payload, for scoping failure fallout. */

@@ -34,7 +34,7 @@ class FakeSocket implements SlackWebSocketLike {
     this.emit("message", { data: JSON.stringify(frame) });
   }
 
-  /** True once a listener of `type` is registered — lets tests poll for wiring. */
+  /** True once a listener of `type` is registered; lets tests poll for wiring. */
   hasListener(type: string): boolean {
     return (this.listeners.get(type)?.length ?? 0) > 0;
   }
@@ -211,7 +211,7 @@ test("close() stops reconnecting after the socket drops", async () => {
 
   sm.close();
   // A close that originates from us must not schedule a reconnect. This asserts
-  // an absence, which cannot be polled for — settle briefly then confirm no
+  // an absence, which cannot be polled for; settle briefly then confirm no
   // second connection was attempted.
   first.emit("close");
   await settle(5);
@@ -310,6 +310,40 @@ test("interactive envelopes are acked and routed to onInteractive, never onChang
   assert.equal(interactions.length, 1);
   assert.equal(interactions[0]!.type, "block_actions");
   assert.deepEqual(socket.sent, [JSON.stringify({ envelope_id: "env-i" })]);
+  sm.close();
+});
+
+test("retried interactive envelopes are acknowledged but handled once", async () => {
+  const interactions: Array<Record<string, unknown>> = [];
+  const first = new FakeSocket();
+  const second = new FakeSocket();
+  const sm = makeSocketMode({
+    onChange: () => {},
+    onInteractive: (payload) => interactions.push(payload),
+    socketQueue: [first, second],
+    reconnectDelayMs: () => 0,
+  });
+  sm.start();
+  await flush();
+
+  first.receive({ type: "hello" });
+  const envelope = {
+    type: "interactive",
+    envelope_id: "env-retried-action",
+    payload: {
+      type: "block_actions",
+      actions: [{ action_id: "lorenz_cancel", value: "C1:1.1" }],
+    },
+  };
+  first.receive(envelope);
+  first.close();
+  await vi.waitFor(() => assert.equal(second.hasListener("message"), true));
+  second.receive({ type: "hello" });
+  second.receive(envelope);
+
+  assert.equal(interactions.length, 1);
+  assert.deepEqual(first.sent, [JSON.stringify({ envelope_id: "env-retried-action" })]);
+  assert.deepEqual(second.sent, [JSON.stringify({ envelope_id: "env-retried-action" })]);
   sm.close();
 });
 

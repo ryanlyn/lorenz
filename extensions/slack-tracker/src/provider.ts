@@ -7,6 +7,7 @@ import {
 } from "@lorenz/tracker-sdk";
 
 import { SlackTrackerClient } from "./client.js";
+import { statusEmojiMap } from "./mapping.js";
 import {
   emojiStatesValue,
   numberOption,
@@ -98,7 +99,7 @@ export const slackTrackerProvider: TrackerProvider = {
           "no assignee to filter on)",
       );
     }
-    const { channels, botUserId } = slackTrackerOptions(settings);
+    const { channels, botUserId, markerEmoji = "robot_face" } = slackTrackerOptions(settings);
     if (channels.length === 0) {
       throw new Error("tracker.channels is required for the slack tracker");
     }
@@ -107,6 +108,11 @@ export const slackTrackerProvider: TrackerProvider = {
         "tracker.bot_user_id (or SLACK_BOT_USER_ID) is required for the slack tracker so issue " +
           "creation is scoped to the bot's own mentions; without it any human-to-human mention " +
           "in a watched channel would spawn an agent",
+      );
+    }
+    if (Object.hasOwn(statusEmojiMap(settings), markerEmoji)) {
+      throw new Error(
+        `tracker.marker_emoji '${markerEmoji}' must not also map to a workflow state`,
       );
     }
   },

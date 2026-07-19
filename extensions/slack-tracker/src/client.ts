@@ -179,12 +179,15 @@ function slackMessageToIssue(
 }
 
 /**
- * Tracked roots of one scan: every bot-mention root, plus every threaded root the bot has
- * marked with its own reaction (reply-tracked issues recognized across restarts without
- * re-reading their threads).
+ * Candidate roots of one scan: every bot-mention root, plus threaded roots carrying the
+ * dedicated tracking marker. Callers still validate that non-mention roots retain their
+ * accepted request reply before exposing or dispatching them.
  */
-export function trackedRootsOf(scan: SlackChannelScan): SlackMessage[] {
-  return [...scan.mentions, ...scan.threadedRoots.filter(isBotMarked)];
+export function trackedRootsOf(scan: SlackChannelScan, markerEmoji: string): SlackMessage[] {
+  return [
+    ...scan.mentions,
+    ...scan.threadedRoots.filter((message) => isBotMarked(message, markerEmoji)),
+  ];
 }
 
 /**
@@ -397,8 +400,7 @@ export class SlackTrackerClient implements RuntimeTrackerClient {
   }
 
   /** Resolve a tracked root's thread state and map it to a normalized issue. */
-  private async issueFromRoot(root: SlackMessage, base: string | null): Promise<Issue> {
-    const thread = await resolveThreadState(this.settings, this.transport, root);
+  private issueFromRoot(root: SlackMessage, base: string | null, thread: ThreadState): Issue {
     return slackMessageToIssue(root, this.settings, {
       permalinkBase: base,
       state: thread.state,
@@ -425,8 +427,9 @@ export class SlackTrackerClient implements RuntimeTrackerClient {
       this.scanCached({ forceRefresh: true }),
       this.transport.teamUrl(),
     ]);
+    const markerEmoji = this.markerEmoji();
     const scannedById = new Map<string, SlackMessage>(
-      trackedRootsOf(scan).map((root) => [`${root.channel}:${root.ts}`, root]),
+      trackedRootsOf(scan, markerEmoji).map((root) => [`${root.channel}:${root.ts}`, root]),
     );
     const out: Issue[] = [];
     for (const [id, parts] of parsed) {
@@ -440,7 +443,13 @@ export class SlackTrackerClient implements RuntimeTrackerClient {
           continue;
         }
       }
-      out.push(await this.issueFromRoot(root, base));
+      const thread = await resolveThreadState(this.settings, this.transport, root);
+      const { botUserId, users } = slackTrackerOptions(this.settings);
+      const rootMentionIsTracked =
+        isBotMention(root.text, botUserId) &&
+        (isAllowedAuthor(root.user, users) || isBotMarked(root, markerEmoji));
+      if (!rootMentionIsTracked && thread.request === undefined) continue;
+      out.push(this.issueFromRoot(root, base, thread));
     }
     return out;
   }
@@ -453,33 +462,46 @@ export class SlackTrackerClient implements RuntimeTrackerClient {
 
   private async trackedIssues(): Promise<Issue[]> {
     const [scan, base] = await Promise.all([this.scanCached(), this.transport.teamUrl()]);
-    const roots = trackedRootsOf(scan);
+    const markerEmoji = this.markerEmoji();
+    const roots = trackedRootsOf(scan, markerEmoji);
     // Hunt for NEW reply-mention requests: untracked threads with activity inside the lookback
     // window. A thread is tracked once a reply mentions the bot; the bot then marks the root
     // with its own reaction so later polls (and restarts) recognize it from the scan alone.
     for (const root of scan.threadedRoots) {
-      if (isBotMarked(root)) continue;
+      if (isBotMarked(root, markerEmoji)) continue;
       if (tsValue(root.latestReply) <= this.replyFloor) continue;
       const thread = await resolveThreadState(this.settings, this.transport, root);
       if (!thread.request) continue;
       roots.push(root);
-      try {
-        await this.transport.addReaction(root.channel, root.ts, this.markerEmoji());
-      } catch {
-        // Tracking still works this poll; the marker retries on the next discovery pass.
-      }
     }
     const issues: Issue[] = [];
+    const { botUserId, users } = slackTrackerOptions(this.settings);
     for (const root of roots) {
+      const rootIsMention = isBotMention(root.text, botUserId);
+      if (rootIsMention && !isAllowedAuthor(root.user, users) && !isBotMarked(root, markerEmoji)) {
+        continue;
+      }
       const thread = await resolveThreadState(this.settings, this.transport, root);
+      if (!rootIsMention && thread.request === undefined) {
+        // A root edited away while the daemon was offline can retain its marker. Reconstructing
+        // the request from the thread prevents that stale reaction from keeping the issue alive.
+        continue;
+      }
+      // The marker records thread authority, rather than merely bot ownership. Reply-tracked
+      // roots and roots with status events get it; untouched and reaction-only root mentions
+      // keep their fallback until a thread event occurs.
+      const threadIsAuthoritative = thread.request !== undefined || thread.events.length > 0;
+      if (threadIsAuthoritative && !isBotMarked(root, markerEmoji)) {
+        try {
+          await this.transport.addReaction(root.channel, root.ts, markerEmoji);
+          if (!root.reactions.includes(markerEmoji)) root.reactions.push(markerEmoji);
+          if (!root.botReactions.includes(markerEmoji)) root.botReactions.push(markerEmoji);
+        } catch {
+          // Tracking still works this poll; the marker retries on the next discovery pass.
+        }
+      }
       this.healStatusMirror(root, thread);
-      issues.push(
-        slackMessageToIssue(root, this.settings, {
-          permalinkBase: base,
-          state: thread.state,
-          request: thread.request,
-        }),
-      );
+      issues.push(this.issueFromRoot(root, base, thread));
     }
     return issues;
   }

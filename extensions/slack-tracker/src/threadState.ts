@@ -24,8 +24,8 @@ import type { SlackMessage, SlackThreadReply, SlackTransport } from "./transport
  * - The bot (agent/runtime) transitions status by posting a `status: <Name>` reply.
  * - A bot-mention reply with NO command re-opens a terminal issue to the default
  *   non-terminal state: mentioning the bot again always means "this needs attention".
- * - The latest event by ts wins. Reactions remain a bot-owned visibility mirror and the
- *   fallback source for threads that have never seen a command or bot status reply.
+ * - The latest event by ts wins. Reactions remain a bot-owned visibility mirror. An unmarked
+ *   root uses reaction-derived state; the dedicated tracking marker declares thread authority.
  */
 
 /** Recognized prefix of the bot's own authoritative status replies. */
@@ -158,16 +158,16 @@ export interface ThreadWorkpad {
 
 /**
  * Fold a thread into its current state. Events (bot `status:` replies and human command
- * mentions) are applied in ts order and the latest wins; with no events at all the state falls
- * back to the reaction-derived reading (back-compat for reaction-managed threads). A trailing
- * bare bot-mention re-opens a terminal state.
+ * mentions) are applied in ts order and the latest wins. Unmarked roots use reaction-derived
+ * fallback; a dedicated tracking marker identifies thread-authoritative roots across restarts.
+ * A trailing bare bot mention re-opens a terminal state.
  */
 export function stateFromThread(
   root: SlackMessage,
   replies: SlackThreadReply[],
   settings: Settings,
 ): ThreadState {
-  const { botUserId, users } = slackTrackerOptions(settings);
+  const { botUserId, users, markerEmoji = "robot_face" } = slackTrackerOptions(settings);
   const ordered = [...replies].sort((a, b) => compareSlackTs(a.ts, b.ts));
   const rootIsMention = isBotMention(root.text, botUserId);
 
@@ -262,11 +262,11 @@ export function stateFromThread(
   }
 
   const hasExplicitStatus = foldInputs.some((input) => input.kind === "status");
-  // Reactions are an unordered fallback only when the thread has never had an explicit
-  // transition. The mirror remembers that history across reconciliation so deleting the sole
-  // event cannot promote its derived visibility reaction into authority.
+  // Reactions are an unordered fallback only for unmarked roots. Once marked, the thread remains
+  // authoritative across daemon restarts, including when the latest status event is deleted and
+  // a derived visibility reaction remains.
   let state = rootIsMention
-    ? root.threadEventsObserved === true
+    ? root.botReactions.includes(markerEmoji)
       ? reopenState(settings)
       : stateFromReactions(root.botReactions, statusEmojiMap(settings), settings)
     : "Todo";
@@ -324,11 +324,7 @@ export async function resolveThreadState(
   const key = `${root.channel}:${root.ts}`;
   const latestReply = root.latestReply ?? "";
   // Only bot-authored reactions can change the derived state, so only they invalidate.
-  const reactionsKey = `${root.threadEventsObserved === true ? "events" : "fallback"}:${[
-    ...root.botReactions,
-  ]
-    .sort()
-    .join(",")}`;
+  const reactionsKey = [...root.botReactions].sort().join(",");
   const cached = threadStateCache.get(key);
   if (
     cached &&

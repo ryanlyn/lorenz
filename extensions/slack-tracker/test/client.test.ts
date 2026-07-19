@@ -93,7 +93,13 @@ test("hashtag tokens in the message become deduped, lowercased labels", async ()
 
 test("channel references and user mentions are not mistaken for hashtag labels", async () => {
   const transport = new InMemorySlackTransport({
-    C1: [{ ts: "1700000000.000450", text: "<@U1> see <#C0ABC|general> #backend", reactions: [] }],
+    C1: [
+      {
+        ts: "1700000000.000450",
+        text: "<@U_BOT> ask <@U1> in <#C0ABC|general> #backend",
+        reactions: [],
+      },
+    ],
   });
   const client = new SlackTrackerClient(settings(), transport);
 
@@ -308,7 +314,7 @@ test("tracker.users gates the tool trust boundary, but a bot-marked root stays t
           ts: "1700000000.000300",
           text: "<@U_BOT> from carol",
           user: "U_CAROL",
-          reactions: ["eyes"],
+          reactions: ["robot_face"],
         },
       ],
     },
@@ -504,6 +510,7 @@ test("the bot's reaction mirror self-heals after a human command", async () => {
   assert.deepEqual(await client.fetchCandidateIssues(), []);
   await client.flushStatusMirrorHeals();
   assert.deepEqual((await transport.getMessage("C1", "1700000000.000100"))!.reactions, [
+    "robot_face",
     "white_check_mark",
   ]);
   assert.ok(reactionCalls > 0);
@@ -602,7 +609,7 @@ test("a mirror heal only removes managed reactions actually present on the messa
   await client.fetchCandidateIssues();
   await client.flushStatusMirrorHeals();
   assert.deepEqual(removed, ["eyes"]);
-  assert.deepEqual(added, ["white_check_mark"]);
+  assert.deepEqual(added, ["robot_face", "white_check_mark"]);
 });
 
 test("a heal that is only missing its target emoji costs one add and zero removes", async () => {
@@ -636,7 +643,7 @@ test("a heal that is only missing its target emoji costs one add and zero remove
   await client.fetchCandidateIssues();
   await client.flushStatusMirrorHeals();
   assert.equal(removes, 0);
-  assert.equal(adds, 1);
+  assert.equal(adds, 2);
 });
 
 test("a rate-limited mirror heal does not block candidate discovery", async () => {
@@ -677,7 +684,9 @@ test("a rate-limited mirror heal does not block candidate discovery", async () =
   // Unblock the stuck remove and let the heal settle; the mirror still converges.
   releaseRemove();
   await client.flushStatusMirrorHeals();
-  assert.deepEqual((await transport.getMessage("C1", "1700000000.000100"))!.reactions, []);
+  assert.deepEqual((await transport.getMessage("C1", "1700000000.000100"))!.reactions, [
+    "robot_face",
+  ]);
 });
 
 test("a delayed reaction heal leaves workpad plan and note untouched", async () => {
