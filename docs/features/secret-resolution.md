@@ -42,7 +42,7 @@ Leave the field out of the front matter and the tracker provider supplies a fall
 | `jira` | `api_key` | `JIRA_API_KEY` |
 | `slack` | `api_key` | `SLACK_BOT_TOKEN` |
 
-Each provider declares its fallbacks in `envFallbacks` (see `extensions/linear-tracker/src/provider.ts`, `extensions/jira-tracker/src/provider.ts`, `extensions/slack-tracker/src/provider.ts`). A provider with no entry for a field has no fallback for it.
+Each provider declares its fallbacks in `envFallbacks` (see `extensions/linear-tracker/src/provider.ts`, `extensions/jira-tracker/src/provider.ts`, `extensions/slack-tracker/src/provider.ts`, and `extensions/discord-tracker/src/provider.ts`). A provider with no entry for a field has no fallback for it.
 
 For Linear, omit `api_key` entirely and export `LINEAR_API_KEY` in the environment:
 

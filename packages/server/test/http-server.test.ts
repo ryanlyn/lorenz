@@ -51,9 +51,9 @@ test("observability HTTP API exposes state, issue, runs, refresh, and errors", a
     labels: [],
     blockers: [],
   });
-  const claimed = orchestrator.claim(issue);
+  const claimed = await orchestrator.claimAsync(issue);
   assert.ok(claimed);
-  orchestrator.applyUpdate(issue.id, 0, {
+  await orchestrator.applyUpdateAsync(issue.id, 0, {
     type: "session_notification",
     sessionId: "thread-http",
     message: { sessionId: "thread-http", update: { sessionUpdate: "agent_message_chunk" } },

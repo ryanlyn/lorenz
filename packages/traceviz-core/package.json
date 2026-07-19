@@ -1,0 +1,25 @@
+{
+  "name": "@lorenz/traceviz-core",
+  "version": "0.1.1",
+  "private": true,
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": "./dist/index.js",
+    "./stats": "./dist/stats.js"
+  },
+  "scripts": {
+    "build": "tsc"
+  },
+  "dependencies": {
+    "@agentclientprotocol/sdk": "catalog:",
+    "@lorenz/domain": "workspace:*",
+    "@lorenz/presenter": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "tsx": "catalog:",
+    "typescript": "catalog:"
+  }
+}

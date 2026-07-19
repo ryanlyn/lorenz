@@ -49,6 +49,8 @@ interface RuntimeTrackerClient {
   fetchCandidateIssues(): Promise<Issue[]>;
   fetchIssuesByIds(ids: string[]): Promise<Issue[]>;
   fetchIssuesByStates?(states: string[]): Promise<Issue[]>;
+  acknowledgeIssue?(issue: Issue): Promise<boolean>;
+  watch?(onChange: () => void): TrackerChangeStream | null;
 }
 ```
 
@@ -60,6 +62,11 @@ interface RuntimeTrackerClient {
 - `fetchIssuesByStates(states)` is optional. It backs best-effort flows, notably terminal-state
   workspace cleanup at startup. A backend that cannot answer state queries cheaply omits it, and the
   caller skips those flows.
+- `acknowledgeIssue(issue)` is optional. After a successful claim, the runtime starts it alongside
+  agent setup so a provider can expose immediate human-visible feedback. It returns `true` when it
+  wrote an acknowledgement. Failures are observable and never fail the claimed run.
+- `watch(onChange)` is optional. It opens a push stream that requests an immediate authoritative
+  poll while interval polling remains the recovery path.
 
 Each client returns the domain `Issue` shape, not the backend's raw payload. `Issue` requires
 `stateType: IssueStateType` (one of `backlog`, `unstarted`, `started`, `completed`, `canceled`,
@@ -131,6 +138,8 @@ Each built-in tracker owns its own pack:
   `local_create_issue`, `local_read_issue`, and `local_query`.
 - The `slack` tracker mounts its `slack` pack: `slack_update_status`, `slack_comment`,
   `slack_read_thread`, `slack_query`, `slack_user_info`, and `slack_channel_context`.
+- The `discord` tracker mounts its `discord` pack: `discord_update_status`, `discord_comment`,
+  `discord_read_thread`, `discord_query`, `discord_user_info`, and `discord_channel_context`.
 - The `memory` tracker declares no `defaultToolPacks`, so it advertises no tools.
 
 The select/filter projection for `jira_query` lives alongside the pack in
@@ -172,7 +181,7 @@ Adding a tracker is a new package plus one registration call.
 4. **Wire it into the composition root.** `registerBuiltinBackends()` in `apps/cli/src/daemon.ts` is
    the single place backend identity is hardcoded. Import your register function and add one call
    inside it, alongside `registerLinearTracker`, `registerJiraTrackers`, `registerLocalTracker`,
-   `registerMemoryTracker`, and `registerSlackTracker`. That is the one registration line.
+   `registerMemoryTracker`, `registerSlackTracker`, and `registerDiscordTracker`. That is the one registration line.
 
 5. **Install and reference the package.** Run `pnpm install` to link the new workspace package, then
    add a `references` entry pointing at `../../extensions/<name>-tracker` to `apps/cli/tsconfig.json`

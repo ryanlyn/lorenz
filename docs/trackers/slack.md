@@ -212,7 +212,7 @@ See [dispatch.md](../dispatch.md) for the full route resolution chain.
 
 ## Polling, push, and rate limits
 
-The shipped `WORKFLOW.slack.md` sets `polling.interval_ms` to `60000`, a 60-second cadence. The
+The Slack bundle in `WORKFLOW.chat.md` sets `polling.interval_ms` to `60000`, a 60-second cadence. The
 interval is deliberately conservative: `conversations.history` can be throttled to roughly one
 request per minute for newer non-Marketplace apps, while Marketplace-approved apps and internal
 customer-built apps keep the higher tier. Each full poll re-scans recent channel history.
@@ -268,10 +268,10 @@ threads through `slack_read_thread`, `slack_query`, `slack_update_status`, and `
 
 ## Workflow example
 
-`WORKFLOW.slack.md` at the repo root is the complete shipped example: the front-matter config above,
-the routing rules, the status map, and the agent prompt that drives `slack_read_thread` first and
-re-checks the thread before finishing each turn. Use it as the starting point for your own Slack
-workflow.
+`WORKFLOW.chat.md` at the repo root is the complete shipped chat example. Change `tracker.kind` to
+`slack` to select its Slack bundle. The file includes the routing rules, status map, and agent
+prompt that drives `slack_read_thread` first and re-checks the thread before finishing each turn.
+Use it as the starting point for your own Slack workflow.
 
 ## See also
 

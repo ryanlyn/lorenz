@@ -6,7 +6,7 @@
 
 </div>
 
-Originated from [OpenAI Symphony](https://openai.com/index/open-source-codex-orchestration-symphony/), **Lorenz** lets you declare work on a tracker (in-memory, Obsidian markdown files, Linear, Jira, Slack) and manages the dispatch, execution, and convergence of concurrent agent sessions until they reach a specified terminal state. It is harness-agnostic through the [Agent-Client Protocol](https://agentclientprotocol.com/get-started/introduction), running agents on local machines, static SSH boxes, or (experimental) cloud-brokered VMs.
+Originated from [OpenAI Symphony](https://openai.com/index/open-source-codex-orchestration-symphony/), **Lorenz** lets you declare work on a tracker (in-memory, Obsidian markdown files, Linear, Jira, Slack, Discord) and manages the dispatch, execution, and convergence of concurrent agent sessions until they reach a specified terminal state. It is harness-agnostic through the [Agent-Client Protocol](https://agentclientprotocol.com/get-started/introduction), running agents on local machines, static SSH boxes, or (experimental) cloud-brokered VMs.
 
 ## Features
 
@@ -15,7 +15,7 @@ Originated from [OpenAI Symphony](https://openai.com/index/open-source-codex-orc
 <td width="50%" valign="top">
 
 **Any tracker**<br>
-Linear, Jira, Slack, Obsidian, local files, or in-memory.
+Linear, Jira, Slack, Discord, Obsidian, local files, or in-memory.
 
 </td>
 <td width="50%" valign="top">
@@ -73,7 +73,8 @@ lorenz runs [--issue ID] [--failed] [--cost] [--retries] [--id RUN_ID] [--limit 
 `--logs-root <path>` writes logs under `<path>/log/lorenz.log`. With no workflow path the CLI reads
 `LORENZ_WORKFLOW`, then `./WORKFLOW.md`. See [CLI](./docs/cli.md) for every flag and command.
 
-Runtime needs depend on the workflow: `LINEAR_API_KEY` for Linear, `codex` on `PATH` for Codex
+Runtime needs depend on the workflow: tracker credentials such as `LINEAR_API_KEY` or
+`DISCORD_BOT_TOKEN`, `codex` on `PATH` for Codex
 runs, a Claude ACP bridge for Claude runs, and SSH access for remote workers. See
 [Getting started](./docs/getting-started.md) for the full list. Run commands from the repository
 root unless a command says otherwise.
@@ -107,7 +108,7 @@ The published documentation site is at **[ryanlyn.github.io/lorenz](https://ryan
 - [Getting started](./docs/getting-started.md) - install, write a `WORKFLOW.md`, run your first issue.
 - [How it works](./docs/how-it-works.md) - the polling, dispatch, and run lifecycle.
 - [Configuration reference](./docs/reference/configuration.md) - every front-matter key, default, and meaning.
-- [Trackers](./docs/trackers/index.md) - Linear, Jira, Slack, local, and memory sources of issues.
+- [Trackers](./docs/trackers/index.md) - Linear, Jira, Slack, Discord, local, and memory sources of issues.
 - [CLI](./docs/cli.md) - commands, flags, and run history.
 
 ## Configuration
@@ -127,7 +128,7 @@ whole-value `$VAR` expansion, and `LORENZ_WORKSPACE_ROOT` overrides it at runtim
 Linear is the default tracker: issues live in a Linear project, read access uses `LINEAR_API_KEY`,
 and project selection uses `project_slug`. Route labels such as `Lorenz:backend` let multiple
 instances share one project. Setup and configuration are in
-[Linear tracker](./docs/trackers/linear.md). Other sources (Jira, Slack, local, memory) are covered
+[Linear tracker](./docs/trackers/linear.md). Other sources (Jira, Slack, Discord, local, memory) are covered
 under [Trackers](./docs/trackers/index.md).
 
 ## Workflow Prompt
@@ -222,7 +223,7 @@ evidence stay at the workspace root.
 
 ### Compatibility Contracts
 
-The checked-in workflow files (`WORKFLOW.md`, `WORKFLOW.local.md`, `WORKFLOW.slack.md`) are executable fixtures.
+The checked-in workflow files (`WORKFLOW.md`, `WORKFLOW.local.md`, and `WORKFLOW.chat.md`) are executable fixtures.
 `pnpm test` guards workflow docs, prompt rendering, dashboard snapshots, runtime behavior, and CLI
 documentation. Update the fixture and the matching test together when the public contract changes.
 

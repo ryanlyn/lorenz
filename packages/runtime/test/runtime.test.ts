@@ -339,6 +339,79 @@ test("runtime start honors a stop requested before startup", async () => {
   assert.equal(runtime.snapshot().appStatus, "stopping");
 });
 
+test("runtime starts tracker acknowledgement alongside the claimed run", async () => {
+  const issue = issueFixture("issue-acknowledgement", "MT-ACKNOWLEDGEMENT");
+  let acknowledgementStarted = false;
+  let runnerStarted = false;
+  let releaseAcknowledgement!: () => void;
+  const acknowledgementBlocked = new Promise<void>((resolve) => {
+    releaseAcknowledgement = resolve;
+  });
+  const runtime = new LorenzRuntime(
+    runtimeOptions({
+      workflow: workflowFixture(),
+      client: {
+        fetchCandidateIssues: async () => [issue],
+        fetchIssuesByIds: async () => [issue],
+        acknowledgeIssue: async () => {
+          acknowledgementStarted = true;
+          await acknowledgementBlocked;
+          return true;
+        },
+      },
+      runner: async () => {
+        runnerStarted = true;
+        return { workspace: "/tmp/lorenz/MT-ACKNOWLEDGEMENT", finalIssue: issue };
+      },
+    }),
+  );
+
+  const poll = runtime.pollOnce({ waitForRuns: true });
+  await vi.waitFor(() => {
+    assert.equal(acknowledgementStarted, true);
+    assert.equal(runnerStarted, true);
+  });
+  releaseAcknowledgement();
+  await poll;
+
+  assert.ok(runtime.snapshot().recentEvents.some((event) => event.type === "tracker_acknowledged"));
+});
+
+test("tracker acknowledgement failures do not fail the claimed run", async () => {
+  const issue = issueFixture("issue-acknowledgement-failure", "MT-ACKNOWLEDGEMENT-FAILURE");
+  let runnerCalls = 0;
+  const runtime = new LorenzRuntime(
+    runtimeOptions({
+      workflow: workflowFixture(),
+      client: {
+        fetchCandidateIssues: async () => [issue],
+        fetchIssuesByIds: async () => [issue],
+        acknowledgeIssue: async () => {
+          throw new Error("acknowledgement unavailable");
+        },
+      },
+      runner: async () => {
+        runnerCalls += 1;
+        return { workspace: "/tmp/lorenz/MT-ACKNOWLEDGEMENT-FAILURE", finalIssue: issue };
+      },
+    }),
+  );
+
+  await runtime.pollOnce({ waitForRuns: true });
+
+  assert.equal(runnerCalls, 1);
+  assert.ok(
+    runtime
+      .snapshot()
+      .recentEvents.some(
+        (event) =>
+          event.type === "tracker_acknowledge_failed" &&
+          event.message.includes("acknowledgement unavailable"),
+      ),
+  );
+  assert.ok(runtime.snapshot().recentEvents.some((event) => event.type === "run_completed"));
+});
+
 test("runtime abandons a claim when owner heartbeat startup fails before runner starts", async () => {
   const issue = issueFixture("issue-heartbeat-start-failure", "MT-HEARTBEAT-START-FAILURE");
   const store = new FailingHeartbeatClaimStore(createState(), {
@@ -1579,7 +1652,7 @@ test("runtime keeps tracked work running when tracker refresh fails during recon
   const issue = issueFixture("issue-refresh-failure", "MT-REFRESH-FAILURE");
   const workflow = workflowFixture();
   const orchestrator = new Orchestrator(workflow.settings);
-  assert.ok(orchestrator.claim(issue));
+  assert.ok(await orchestrator.claimAsync(issue));
   let candidateFetches = 0;
   const runtime = new LorenzRuntime(
     runtimeOptions({
@@ -1748,7 +1821,7 @@ test("runtime stalled reconciliation does not record a stalled run when durable 
   workflow.settings.agents.codex.stallTimeoutMs = 50;
   const store = new FailingFinishClaimStore(createState(), { ownerId: "stall-finish-failure" });
   const orchestrator = new Orchestrator(workflow.settings, undefined, store);
-  assert.ok(orchestrator.claim(issue));
+  assert.ok(await orchestrator.claimAsync(issue));
   const running = orchestrator.snapshot().running[0];
   assert.ok(running);
   running.lastAgentTimestamp = new Date(Date.now() - 1_000);
@@ -2571,8 +2644,8 @@ test("runtime reconciliation removes terminal retry workspaces before polling", 
   await fs.writeFile(path.join(workspace, "scratch.txt"), "remove me\n");
 
   const orchestrator = new Orchestrator(workflow.settings);
-  assert.ok(orchestrator.claim(activeIssue));
-  orchestrator.finish(activeIssue.id, 0, true);
+  assert.ok(await orchestrator.claimAsync(activeIssue));
+  await orchestrator.finishAsync(activeIssue.id, 0, true);
   const cleanupIssues: Array<Issue | undefined> = [];
 
   const runtime = new LorenzRuntime(
@@ -2663,7 +2736,7 @@ test("runtime reconciliation preserves retry metadata for active issues routed t
 test("runtime reconcile refreshes the running stage when the tracker state changes", async () => {
   const workflow = workflowFixture();
   const orchestrator = new Orchestrator(workflow.settings);
-  assert.ok(orchestrator.claim(issueFixture("issue-1", "MT-1")));
+  assert.ok(await orchestrator.claimAsync(issueFixture("issue-1", "MT-1")));
 
   const moved: Issue = { ...issueFixture("issue-1", "MT-1"), state: "In Progress" };
   const runtime = new LorenzRuntime(
@@ -2920,7 +2993,7 @@ test("runtime promotes a due retry even when another slot for the same issue is 
   const issue = issueFixture("issue-aged-out-multislot-retry", "MT-AGED-MULTISLOT");
   const workflow = workflowFixture();
   const orchestrator = new Orchestrator(workflow.settings);
-  assert.ok(orchestrator.claim(issue));
+  assert.ok(await orchestrator.claimAsync(issue));
   orchestrator.state.retryAttempts.set(slotKey(issue.id, 1), {
     issueId: issue.id,
     identifier: issue.identifier,
@@ -3498,6 +3571,7 @@ test("worker pool: a codex run is skipped when the per-run endpoint open THROWS 
     canAcquire: () => true,
   });
   let runnerCalls = 0;
+  let acknowledgements = 0;
   const runtime = new LorenzRuntime(
     runtimeOptions({
       workflow,
@@ -3506,6 +3580,10 @@ test("worker pool: a codex run is skipped when the per-run endpoint open THROWS 
       client: {
         fetchCandidateIssues: async () => [issue],
         fetchIssuesByIds: async () => [issue],
+        acknowledgeIssue: async () => {
+          acknowledgements += 1;
+          return true;
+        },
       },
       runner: async () => {
         runnerCalls += 1;
@@ -3520,6 +3598,7 @@ test("worker pool: a codex run is skipped when the per-run endpoint open THROWS 
   // ran, and the dispatch was skipped with a clear acquire error.
   assert.equal(openCalls, 1);
   assert.equal(runnerCalls, 0);
+  assert.equal(acknowledgements, 0);
   const snapshot = runtime.snapshot();
   assert.equal(snapshot.runHistory.length, 0);
   assert.equal(snapshot.retrying.length, 0);
@@ -3565,6 +3644,7 @@ test("worker pool: an ACP/claude run STILL opens its per-run endpoint (the per-r
     settings: workflow.settings.worker.workerPool!,
   });
   let runnerEndpoint: AgentMcpEndpointLease | null | undefined = "unset" as never;
+  let acknowledgements = 0;
   const runtime = new LorenzRuntime(
     runtimeOptions({
       workflow,
@@ -3572,6 +3652,10 @@ test("worker pool: an ACP/claude run STILL opens its per-run endpoint (the per-r
       client: {
         fetchCandidateIssues: async () => [issue],
         fetchIssuesByIds: async () => [issue],
+        acknowledgeIssue: async () => {
+          acknowledgements += 1;
+          return true;
+        },
       },
       runner: async ({ mcpEndpoint }) => {
         runnerEndpoint = mcpEndpoint;
@@ -3589,6 +3673,7 @@ test("worker pool: an ACP/claude run STILL opens its per-run endpoint (the per-r
 
   // The ACP run opened its per-run endpoint exactly once and the runner consumed it.
   assert.equal(openCalls, 1);
+  assert.equal(acknowledgements, 1);
   assert.equal(runnerEndpoint, endpointLease);
   assert.equal(runtime.snapshot().runHistory[0]?.outcome, "success");
 });
@@ -3671,7 +3756,7 @@ test("worker pool: acquire uses the prior real workerHost as affinityKey on retr
     governs: () => true,
     canAcquire: () => true,
   });
-  // Seed a retry record carrying the prior real worker host (as finish() would).
+  // Seed a retry record carrying the prior real worker host (as finishAsync() would).
   orchestrator.state.retryAttempts.set(slotKey(issue.id, 0), {
     issueId: issue.id,
     identifier: issue.identifier,
@@ -4555,7 +4640,7 @@ test("worker pool: a reserving (in-acquire) slot is never stall-finished and rec
 });
 
 test("worker pool: a bind after cleanup releases the worker healthy and skips as reservation_lapsed", async () => {
-  // Failure path C: the issue went terminal mid-acquire (cleanupIssue cancelled
+  // Failure path C: the issue went terminal mid-acquire (cleanupIssueAsync cancelled
   // the reservation), then the acquire resolves bound. The late bind is token
   // guarded to null; the runtime releases the just-bound worker HEALTHY (back to
   // warm inventory) and skips the run with the reservation_lapsed detail.
@@ -5304,14 +5389,14 @@ test("worker pool undefined: static path does not acquire or classify worker lea
 
 test("runtime reconcile tracks a reserved (in-acquire) issue with a null workerHost and cleans it up", async () => {
   const workflow = workflowFixture();
-  // A governing capacity probe makes claim() hold a host-less reservation,
+  // A governing capacity probe makes claimAsync() hold a host-less reservation,
   // reproducing the claim->acquire window where no real worker is bound yet.
   const orchestrator = new Orchestrator(workflow.settings, undefined, undefined, {
     governs: () => true,
     canAcquire: () => true,
   });
   const issue = issueFixture("issue-reserved-terminal", "MT-RESERVED-TERMINAL");
-  const claimed = orchestrator.claim(issue);
+  const claimed = await orchestrator.claimAsync(issue);
   assert.equal(claimed?.kind, "reserved");
 
   const doneIssue: Issue = { ...issue, state: "Done", stateType: "completed" };
@@ -5343,10 +5428,13 @@ test("runtime reconcile tracks a reserved (in-acquire) issue with a null workerH
     runtime.snapshot().recentEvents.some((event) => event.type === "workspace_cleanup"),
     true,
   );
-  // cleanupIssue cancelled the reservation, so a late bind is a guarded no-op.
+  // cleanupIssueAsync cancelled the reservation, so a late bind is a guarded no-op.
   assert.equal(orchestrator.state.reserved.size, 0);
   if (claimed?.kind === "reserved") {
-    assert.equal(orchestrator.bindReservation(claimed.reservation, "ssh://late-worker"), null);
+    assert.equal(
+      await orchestrator.bindReservationAsync(claimed.reservation, "ssh://late-worker"),
+      null,
+    );
   }
 });
 
@@ -5357,11 +5445,11 @@ test("runtime reconcile still passes a real workerHost to remote workspace clean
     canAcquire: () => true,
   });
   const issue = issueFixture("issue-real-terminal", "MT-REAL-TERMINAL");
-  const claimed = orchestrator.claim(issue);
+  const claimed = await orchestrator.claimAsync(issue);
   assert.equal(claimed?.kind, "reserved");
   // The acquire resolved: the reservation bound to the concrete worker address.
   if (claimed?.kind !== "reserved") return;
-  assert.ok(orchestrator.bindReservation(claimed.reservation, "ssh://worker-real"));
+  assert.ok(await orchestrator.bindReservationAsync(claimed.reservation, "ssh://worker-real"));
 
   const doneIssue: Issue = { ...issue, state: "Done", stateType: "completed" };
   let observedWorkerHost: string | null | undefined = "unset";
@@ -5391,7 +5479,7 @@ test("runtime reconcile of a reserved issue cancels the reservation without remo
     canAcquire: () => true,
   });
   const issue = issueFixture("issue-reserved-resume", "MT-RESERVED-RESUME");
-  const claimed = orchestrator.claim(issue);
+  const claimed = await orchestrator.claimAsync(issue);
   assert.equal(claimed?.kind, "reserved");
 
   // Non-terminal but inactive (state not in active_states, not terminal) -> the
@@ -5418,7 +5506,10 @@ test("runtime reconcile of a reserved issue cancels the reservation without remo
   );
   // The in-flight acquire's late bind no-ops against the cancelled reservation.
   if (claimed?.kind === "reserved") {
-    assert.equal(orchestrator.bindReservation(claimed.reservation, "ssh://late-worker"), null);
+    assert.equal(
+      await orchestrator.bindReservationAsync(claimed.reservation, "ssh://late-worker"),
+      null,
+    );
   }
 });
 

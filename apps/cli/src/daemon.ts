@@ -17,6 +17,7 @@ import {
 } from "@lorenz/worker-sdk";
 import { trackerSpecifierFromConfig, type DefaultSettingsOptions } from "@lorenz/config";
 import { registerDockerWorkerDriver } from "@lorenz/docker-worker";
+import { registerDiscordTracker } from "@lorenz/discord-tracker";
 import { systemClock, type RuntimeTrackerClient, type Settings } from "@lorenz/domain";
 import { registerJiraTrackers } from "@lorenz/jira-tracker";
 import { registerLinearTracker } from "@lorenz/linear-tracker";
@@ -71,6 +72,7 @@ export function registerBuiltinBackends(registries: BackendRegistries = {}): voi
   registerMemoryTracker({ trackers });
   registerJiraTrackers({ trackers, tools });
   registerSlackTracker({ trackers, tools });
+  registerDiscordTracker({ trackers, tools });
   if (executors.get(acpExecutorProvider.executor) === undefined) {
     executors.register(acpExecutorProvider);
   }
@@ -279,6 +281,8 @@ function createRunAgentAttemptAdapters(): RunAgentAttemptAdapters {
 }
 
 export async function runAgentAttempt(input: RunAgentAttemptInput): Promise<RunResult> {
+  // The daemon is the production composition point for the agent-runner seam.
+  // Keep these defaults complete, then layer test or call-site overrides on top.
   return runAgentAttemptCore({
     ...input,
     adapters: { ...createRunAgentAttemptAdapters(), ...input.adapters },

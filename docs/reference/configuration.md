@@ -70,7 +70,7 @@ The core tracker bundle. `tracker.kind` selects the provider. There is no defaul
 
 | Key | Type | Default | Meaning |
 | --- | --- | --- | --- |
-| `tracker.kind` | string | (none) | Selects the provider: `linear`, `jira`, `jira-mcp`, `local`, `slack`, `memory`, or `dispatch`, or an out-of-tree module specifier. Required. |
+| `tracker.kind` | string | (none) | Selects the provider: `linear`, `jira`, `jira-mcp`, `local`, `slack`, `discord`, `memory`, or `dispatch`, or an out-of-tree module specifier. Required. |
 | `tracker.provider` | string | (none) | Provider name when `kind` names a bundle rather than a provider directly. |
 | `tracker.endpoint` | string | provider default | API base URL. Falls back to the provider's `defaultEndpoint`. |
 | `tracker.api_key` | string (secret) | (none) | API credential. Resolves `$VAR` / `op://` / provider env fallback. |
@@ -175,6 +175,25 @@ Slack as a tracker: an @-mention of the bot becomes an issue. See [trackers/slac
 | `reply_lookback_days` | number | `2` | How far back to discover new reply-mention threads. |
 
 The shipped Slack workflow uses `polling.interval_ms: 60000` and `dispatch.route_label_prefix: route-`, because `conversations.history` can be throttled to roughly one request per minute.
+
+### `discord`
+
+Discord as a tracker: a bot-user or bot-managed-role mention in a configured guild channel becomes
+an issue whose native thread carries status and progress. See
+[trackers/discord.md](../trackers/discord.md). Requires `guild_id`, `channels`, `bot_user_id`, and a
+bot token. `assignee` is rejected for this kind.
+
+| Key | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `guild_id` | string | env `DISCORD_GUILD_ID` | Guild id used to scope Gateway events and permalinks. |
+| `channels` | string[] | (required) | Guild text or announcement channel ids. Supports `$VAR` refs. |
+| `bot_user_id` | string | env `DISCORD_BOT_USER_ID` | Bot id used for user and managed-role mentions. |
+| `users` | string[] | `[]` | Optional requester id allowlist. Empty permits any non-bot author. |
+| `api_key` | string (secret) | env `DISCORD_BOT_TOKEN` | Bot token for REST and Gateway authentication. |
+| `endpoint` | string | `https://discord.com/api/v10` | Discord REST API base URL. |
+| `emoji_states` | map | `{👀: In Progress, ✅: Done, ❌: Cancelled}` | Emoji-to-state map merged over the defaults. |
+| `marker_emoji` | string | `🤖` | Bot-owned reaction that marks a context-menu tracked message. |
+| `scan_lookback_days` | number | `0` | Fixed trailing candidate scan window. Zero is unbounded. |
 
 ### `memory`
 

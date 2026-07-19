@@ -1,4 +1,6 @@
 import { Command } from "commander";
+import { loadWorkflow } from "@lorenz/workflow";
+
 import {
   commanderErrorMessage,
   configureCommandForParse,
@@ -7,9 +9,7 @@ import {
   parsePositiveInteger,
   parseRequiredValue,
   type ParseResult,
-} from "@lorenz/cli-kit";
-import { loadWorkflow } from "@lorenz/workflow";
-
+} from "./commander.js";
 import {
   apiErrorMessage,
   normalizeHttpBaseUrl,

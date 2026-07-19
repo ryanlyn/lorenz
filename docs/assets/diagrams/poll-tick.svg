@@ -70,7 +70,7 @@
   <g>
     <rect x="20" y="516" width="360" height="56" rx="10" fill="#E0E7FF" stroke="#6366F1" stroke-width="1.5"/>
     <text x="200" y="537" text-anchor="middle" font-size="13" font-weight="600" fill="#312E81">7 · Eligibility filter + sort</text>
-    <text x="200" y="555" text-anchor="middle" font-size="11" fill="#475569" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace">orchestrator.eligibleIssues(issues)</text>
+    <text x="200" y="555" text-anchor="middle" font-size="11" fill="#475569" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace">orchestrator.eligibleIssuesAsync(issues)</text>
   </g>
   <!-- step 8 -->
   <g>

@@ -7,9 +7,9 @@ export type {
   TurnFailedDisplayEvent as TurnFailedEvent,
   NotificationDisplayEvent as NotificationEvent,
   UnknownDisplayEvent as UnknownEvent,
-} from "@lorenz/traceviz-server";
+} from "@lorenz/traceviz-core";
 
-export type { TicketInfo, TraceStats as Stats } from "@lorenz/traceviz-server";
+export type { TicketInfo, TraceStats as Stats } from "@lorenz/traceviz-core";
 
 /** Mirrors IssueRecord from @lorenz/server — kept local to avoid a Node.js dependency in the browser bundle. */
 export interface IssueRecord {

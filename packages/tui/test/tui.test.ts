@@ -14,17 +14,13 @@ import {
   humanizeCodexMessage,
   rollingThroughput,
   RuntimeApp,
-  RuntimeDashboard,
   tokenRateSparkline,
   updateTokenSamples,
 } from "@lorenz/tui";
 import type { RuntimeViewSource } from "@lorenz/tui";
 
-test("Ink dashboard renders the flight board with an event tape at the bottom", () => {
-  const { lastFrame } = render(
-    React.createElement(RuntimeDashboard, { snapshot: snapshotFixture() }),
-  );
-  const frame = stripAnsi(lastFrame() ?? "");
+test("dashboard formatter renders the flight board with an event tape at the bottom", () => {
+  const frame = stripAnsi(formatDashboard(snapshotFixture(), { ansi: true }));
 
   assert.match(frame, /LORENZ/);
   // Running count lives in the status-bar "active" legend, not a separate stat.
@@ -334,6 +330,22 @@ test("RuntimeApp narrows into an agent card on digit keys and returns on escape"
 
     stdin.write("\u001B"); // escape key
     await vi.waitFor(() => assert.match(lastFrame(), /LAST ACTIVITY/));
+  } finally {
+    unmount();
+  }
+});
+
+test("RuntimeApp requests daemon shutdown when q is pressed", async () => {
+  const snapshot = snapshotFixture();
+  const runtime: RuntimeViewSource = {
+    snapshot: () => snapshot,
+    subscribe: () => () => {},
+  };
+  const onQuit = vi.fn();
+  const { stdin, unmount } = render(React.createElement(RuntimeApp, { runtime, onQuit }));
+  try {
+    stdin.write("q");
+    await vi.waitFor(() => assert.equal(onQuit.mock.calls.length, 1));
   } finally {
     unmount();
   }

@@ -42,17 +42,12 @@ function fakeClock(initial = new Date()) {
   return clock;
 }
 
-/** Claims on the static/local path, asserting the union arm and unwrapping the entry. */
-function claimEntry(orchestrator: Orchestrator, issue: Issue): RunningEntry | null {
-  const result = orchestrator.claim(issue);
-  if (result === null) return null;
-  assert.equal(result.kind, "running");
-  return result.kind === "running" ? result.entry : null;
-}
-
 /** Claims on the pool-governed path, asserting the union arm and unwrapping the reservation. */
-function claimReservation(orchestrator: Orchestrator, issue: Issue): SlotReservation | null {
-  const result = orchestrator.claim(issue);
+async function claimReservation(
+  orchestrator: Orchestrator,
+  issue: Issue,
+): Promise<SlotReservation | null> {
+  const result = await orchestrator.claimAsync(issue);
   if (result === null) return null;
   assert.equal(result.kind, "reserved");
   return result.kind === "reserved" ? result.reservation : null;
@@ -221,7 +216,7 @@ test("orchestrator wraps legacy injected state in an in-memory claim store", () 
   assert.match(status.ownerId, /^memory:/);
 });
 
-test("orchestrator accepts an injected claim store and reports hydrated retry claims", () => {
+test("orchestrator accepts an injected claim store and reports hydrated retry claims", async () => {
   const clock = fakeClock(new Date("2026-01-01T00:00:00.000Z"));
   const settings = parseConfig({
     worker: { ssh_hosts: ["worker-a"], max_concurrent_agents_per_host: 1 },
@@ -252,9 +247,9 @@ test("orchestrator accepts an injected claim store and reports hydrated retry cl
   const orchestrator = new Orchestrator(settings, clock, store);
 
   assert.equal(orchestrator.state, state);
-  assert.equal(orchestrator.eligibleIssues([issue])[0]?.identifier, issue.identifier);
+  assert.equal((await orchestrator.eligibleIssuesAsync([issue]))[0]?.identifier, issue.identifier);
 
-  const retry = claimEntry(orchestrator, issue);
+  const retry = await claimEntryAsync(orchestrator, issue);
   assert.equal(retry?.retryAttempt, 3);
   assert.equal(retry?.workerHost, "worker-a");
   assert.equal(orchestrator.snapshot().retrying.length, 0);
@@ -274,10 +269,10 @@ test("orchestrator accepts an injected claim store and reports hydrated retry cl
   });
 });
 
-test("orchestrator does not report ownership for absent claim slots", () => {
+test("orchestrator does not report ownership for absent claim slots", async () => {
   const orchestrator = new Orchestrator(parseConfig());
 
-  assert.equal(orchestrator.ownsClaim("missing-issue", 0), false);
+  assert.equal(await orchestrator.ownsClaimAsync("missing-issue", 0), false);
 });
 
 test("persistent claim store default owner id includes restart-unique entropy", () => {
@@ -286,7 +281,7 @@ test("persistent claim store default owner id includes restart-unique entropy", 
   assert.match(store.ownerId, /^memory-checkpoint:\d+:\d+:[0-9a-f-]{36}$/);
 });
 
-test("persistent claim store skips checkpoints for unchanged eligible issue polls", () => {
+test("persistent claim store skips checkpoints for unchanged eligible issue polls", async () => {
   const backend = new MemoryCheckpointBackend();
   const store = new PersistentClaimStore(backend, { ownerId: "owner-a" });
   const orchestrator = new Orchestrator(parseConfig(), systemClock, store);
@@ -297,12 +292,12 @@ test("persistent claim store skips checkpoints for unchanged eligible issue poll
     state: { name: "Todo", type: "unstarted" },
   });
 
-  assert.equal(orchestrator.eligibleIssues([issue])[0]?.identifier, issue.identifier);
+  assert.equal((await orchestrator.eligibleIssuesAsync([issue]))[0]?.identifier, issue.identifier);
   assert.equal(backend.saved.length, 0);
   assert.equal(orchestrator.snapshot().claimStore.transactionsApplied, 0);
 });
 
-test("persistent claim store checkpoints eligible issue polls when block state changes", () => {
+test("persistent claim store checkpoints eligible issue polls when block state changes", async () => {
   const backend = new MemoryCheckpointBackend();
   const store = new PersistentClaimStore(backend, { ownerId: "owner-a" });
   const orchestrator = new Orchestrator(
@@ -323,15 +318,15 @@ test("persistent claim store checkpoints eligible issue polls when block state c
     state: { name: "Todo", type: "unstarted" },
   });
 
-  assert.ok(claimEntry(orchestrator, running));
+  assert.ok(await claimEntryAsync(orchestrator, running));
   assert.equal(backend.saved.length, 1);
 
-  assert.deepEqual(orchestrator.eligibleIssues([blocked]), []);
+  assert.deepEqual(await orchestrator.eligibleIssuesAsync([blocked]), []);
   assert.equal(backend.saved.length, 2);
   assert.equal(backend.saved.at(-1)?.operation, "eligible_issues");
   assert.equal(orchestrator.snapshot().blocked[0]?.reason, "global_concurrency_cap");
 
-  assert.deepEqual(orchestrator.eligibleIssues([blocked]), []);
+  assert.deepEqual(await orchestrator.eligibleIssuesAsync([blocked]), []);
   assert.equal(backend.saved.length, 2);
 });
 
@@ -351,7 +346,7 @@ test("async persistent claim store skips checkpoints for unchanged eligible issu
   assert.equal((await orchestrator.snapshotAsync()).claimStore.transactionsApplied, 0);
 });
 
-test("persistent claim store skips checkpoints for live-only session notifications", () => {
+test("persistent claim store skips checkpoints for live-only session notifications", async () => {
   const backend = new MemoryCheckpointBackend();
   const store = new PersistentClaimStore(backend, { ownerId: "owner-a" });
   const orchestrator = new Orchestrator(parseConfig(), systemClock, store);
@@ -362,10 +357,10 @@ test("persistent claim store skips checkpoints for live-only session notificatio
     state: { name: "Todo", type: "unstarted" },
   });
 
-  assert.ok(claimEntry(orchestrator, issue));
+  assert.ok(await claimEntryAsync(orchestrator, issue));
   assert.equal(backend.saved.length, 1);
 
-  orchestrator.applyUpdate(issue.id, 0, {
+  await orchestrator.applyUpdateAsync(issue.id, 0, {
     type: "session_notification",
     message: { sessionUpdate: "thinking" } as never,
     sessionId: "session-live",
@@ -376,7 +371,7 @@ test("persistent claim store skips checkpoints for live-only session notificatio
   assert.equal(orchestrator.snapshot().running[0]?.lastAgentEvent, "session_notification");
   assert.equal(orchestrator.snapshot().running[0]?.sessionId, "session-live");
 
-  orchestrator.applyUpdate(issue.id, 0, {
+  await orchestrator.applyUpdateAsync(issue.id, 0, {
     type: "session_notification",
     message: { sessionUpdate: "usage" } as never,
     usageKind: "cumulative",
@@ -386,7 +381,7 @@ test("persistent claim store skips checkpoints for live-only session notificatio
   assert.equal(backend.saved.at(-1)?.operation, "apply_update");
 
   // A workspacePath carries durable state, so it must NOT take the skip-checkpoint fast path.
-  orchestrator.applyUpdate(issue.id, 0, {
+  await orchestrator.applyUpdateAsync(issue.id, 0, {
     type: "session_notification",
     message: { sessionUpdate: "thinking" } as never,
     workspacePath: "/tmp/lorenz/MT-PERSIST-STREAM",
@@ -395,7 +390,7 @@ test("persistent claim store skips checkpoints for live-only session notificatio
   assert.equal(backend.saved.at(-1)?.operation, "apply_update");
 
   // rateLimits likewise must be persisted rather than skipped.
-  orchestrator.applyUpdate(issue.id, 0, {
+  await orchestrator.applyUpdateAsync(issue.id, 0, {
     type: "session_notification",
     message: { sessionUpdate: "thinking" } as never,
     rateLimits: { remaining: 3 },
@@ -404,7 +399,7 @@ test("persistent claim store skips checkpoints for live-only session notificatio
   assert.equal(backend.saved.at(-1)?.operation, "apply_update");
 });
 
-test("shared persistent claim store applies live-only session notifications without reload", () => {
+test("shared persistent claim store applies live-only session notifications without reload", async () => {
   const backend = new MemoryCheckpointBackend({ sharedAcrossProcesses: true });
   const store = new PersistentClaimStore(backend, { ownerId: "owner-a" });
   const orchestrator = new Orchestrator(parseConfig(), systemClock, store);
@@ -415,10 +410,10 @@ test("shared persistent claim store applies live-only session notifications with
     state: { name: "Todo", type: "unstarted" },
   });
 
-  assert.ok(claimEntry(orchestrator, issue));
+  assert.ok(await claimEntryAsync(orchestrator, issue));
   const transactionsBefore = backend.exclusiveTransactions;
 
-  orchestrator.applyUpdate(issue.id, 0, {
+  await orchestrator.applyUpdateAsync(issue.id, 0, {
     type: "session_notification",
     message: { sessionUpdate: "thinking" } as never,
     sessionId: "session-live",
@@ -462,7 +457,7 @@ test("async shared persistent claim store applies live-only session notification
   assert.equal(running?.executorPid, "pid-live");
 });
 
-test("persistent claim store checkpoints and hydrates retry state across owners", () => {
+test("persistent claim store checkpoints and hydrates retry state across owners", async () => {
   const clock = fakeClock(new Date("2026-01-01T00:00:00.000Z"));
   const backend = new MemoryCheckpointBackend();
   const settings = parseConfig({ agent: { max_retry_backoff_ms: 60_000 } });
@@ -479,8 +474,8 @@ test("persistent claim store checkpoints and hydrates retry state across owners"
     now: () => clock.now(),
   });
   const first = new Orchestrator(settings, clock, firstStore);
-  assert.ok(claimEntry(first, issue));
-  first.finish(issue.id, 0, true, "failed once");
+  assert.ok(await claimEntryAsync(first, issue));
+  await first.finishAsync(issue.id, 0, true, "failed once");
 
   assert.equal(backend.saved.length, 2);
   assert.equal(first.snapshot().claimStore.lastCheckpointAt, "2026-01-01T00:00:00.000Z");
@@ -516,7 +511,7 @@ test("persistent claim store checkpoints and hydrates retry state across owners"
   });
 });
 
-test("persistent claim store checkpoints normalized issues without opaque raw payloads", () => {
+test("persistent claim store checkpoints normalized issues without opaque raw payloads", async () => {
   const backend = new MemoryCheckpointBackend();
   const settings = parseConfig();
   const issue = normalizeIssue({
@@ -529,8 +524,8 @@ test("persistent claim store checkpoints normalized issues without opaque raw pa
   const store = new PersistentClaimStore(backend, { ownerId: "owner-a" });
   const orchestrator = new Orchestrator(settings, systemClock, store);
 
-  assert.ok(claimEntry(orchestrator, issue));
-  orchestrator.applyUpdate(issue.id, 0, {
+  assert.ok(await claimEntryAsync(orchestrator, issue));
+  await orchestrator.applyUpdateAsync(issue.id, 0, {
     type: "stderr",
     message: "agent-secret",
     sessionId: "session-secret",
@@ -546,7 +541,7 @@ test("persistent claim store checkpoints normalized issues without opaque raw pa
   assert.equal(serializedCheckpoint.includes("pid-secret"), false);
 });
 
-test("shared persistent claim store preserves owned live metadata across reload", () => {
+test("shared persistent claim store preserves owned live metadata across reload", async () => {
   const backend = new MemoryCheckpointBackend({ sharedAcrossProcesses: true });
   const settings = parseConfig();
   const issue = normalizeIssue({
@@ -558,8 +553,8 @@ test("shared persistent claim store preserves owned live metadata across reload"
   const store = new PersistentClaimStore(backend, { ownerId: "owner-a" });
   const orchestrator = new Orchestrator(settings, systemClock, store);
 
-  assert.ok(claimEntry(orchestrator, issue));
-  orchestrator.applyUpdate(issue.id, 0, {
+  assert.ok(await claimEntryAsync(orchestrator, issue));
+  await orchestrator.applyUpdateAsync(issue.id, 0, {
     type: "stderr",
     message: "agent-live-message",
     sessionId: "session-live",
@@ -577,7 +572,7 @@ test("shared persistent claim store preserves owned live metadata across reload"
   assert.equal(running?.executorPid, "pid-live");
 });
 
-test("persistent claim store rolls back in-memory state when checkpoint save fails", () => {
+test("persistent claim store rolls back in-memory state when checkpoint save fails", async () => {
   const backend = new FailingSaveBackend();
   const settings = parseConfig();
   const issue = normalizeIssue({
@@ -591,7 +586,7 @@ test("persistent claim store rolls back in-memory state when checkpoint save fai
   let error: unknown;
 
   try {
-    orchestrator.claim(issue);
+    await orchestrator.claimAsync(issue);
   } catch (caught) {
     error = caught;
   }
@@ -602,7 +597,7 @@ test("persistent claim store rolls back in-memory state when checkpoint save fai
   assert.equal(orchestrator.snapshot().claimStore.lastOperation, null);
 });
 
-test("persistent claim store rolls back in-memory state when backend commit fails", () => {
+test("persistent claim store rolls back in-memory state when backend commit fails", async () => {
   const backend = new FailingCommitBackend();
   const settings = parseConfig();
   const issue = normalizeIssue({
@@ -617,7 +612,7 @@ test("persistent claim store rolls back in-memory state when backend commit fail
   let error: unknown;
 
   try {
-    orchestrator.claim(issue);
+    await orchestrator.claimAsync(issue);
   } catch (caught) {
     error = caught;
   }
@@ -631,7 +626,7 @@ test("persistent claim store rolls back in-memory state when backend commit fail
   assert.equal(orchestrator.snapshot().claimStore.lastCheckpointAt, null);
 });
 
-test("persistent claim store rolls back usage delta bookkeeping when backend commit fails", () => {
+test("persistent claim store rolls back usage delta bookkeeping when backend commit fails", async () => {
   const backend = new FailingCommitBackend();
   const settings = parseConfig();
   const issue = normalizeIssue({
@@ -642,12 +637,12 @@ test("persistent claim store rolls back usage delta bookkeeping when backend com
   });
   const store = new PersistentClaimStore(backend, { ownerId: "owner-a" });
   const orchestrator = new Orchestrator(settings, systemClock, store);
-  assert.ok(claimEntry(orchestrator, issue));
+  assert.ok(await claimEntryAsync(orchestrator, issue));
   backend.failCommit = true;
   let error: unknown;
 
   try {
-    orchestrator.applyUpdate(issue.id, 0, {
+    await orchestrator.applyUpdateAsync(issue.id, 0, {
       type: "turn_completed",
       usageKind: "delta",
       usage: { inputTokens: 5, outputTokens: 7, totalTokens: 12 },
@@ -672,7 +667,7 @@ test("persistent claim store rolls back usage delta bookkeeping when backend com
     secondsRunning: 0,
   });
 
-  orchestrator.applyUpdate(issue.id, 0, {
+  await orchestrator.applyUpdateAsync(issue.id, 0, {
     type: "turn_completed",
     usageKind: "delta",
     usage: { inputTokens: 5, outputTokens: 7, totalTokens: 12 },
@@ -693,7 +688,7 @@ test("persistent claim store rolls back usage delta bookkeeping when backend com
   });
 });
 
-test("persistent claim store abandons reserved slots on hydrate and restores consumed retries", () => {
+test("persistent claim store abandons reserved slots on hydrate and restores consumed retries", async () => {
   const clock = fakeClock(new Date("2026-01-01T00:00:00.000Z"));
   const backend = new MemoryCheckpointBackend();
   const settings = parseConfig();
@@ -729,7 +724,7 @@ test("persistent claim store abandons reserved slots on hydrate and restores con
   const first = new Orchestrator(settings, clock, firstStore, probe);
   first.state.retryAttempts.set(key, consumed);
 
-  const reservation = claimReservation(first, issue);
+  const reservation = await claimReservation(first, issue);
   assert.ok(reservation);
   assert.equal(first.snapshot().reserving.length, 1);
   assert.equal(first.snapshot().retrying.length, 0);
@@ -751,10 +746,10 @@ test("persistent claim store abandons reserved slots on hydrate and restores con
   assert.equal(retry?.attempt, 2);
   assert.equal(retry?.workerHost, "worker-a");
   assert.equal(retry?.monotonicDeadlineMs, restartClock.monotonicMs());
-  assert.equal(restarted.bindReservation(reservation!, "late-worker"), null);
+  assert.equal(await restarted.bindReservationAsync(reservation!, "late-worker"), null);
 });
 
-test("persistent claim store abandons running claims on non-shared hydrate", () => {
+test("persistent claim store abandons running claims on non-shared hydrate", async () => {
   const clock = fakeClock(new Date("2026-01-01T00:00:00.000Z"));
   const backend = new MemoryCheckpointBackend();
   const settings = parseConfig();
@@ -770,7 +765,7 @@ test("persistent claim store abandons running claims on non-shared hydrate", () 
     now: () => clock.now(),
   });
   const first = new Orchestrator(settings, clock, firstStore);
-  assert.ok(claimEntry(first, issue));
+  assert.ok(await claimEntryAsync(first, issue));
   assert.equal(first.snapshot().running.length, 1);
 
   const restartClock = fakeClock(new Date("2026-01-01T00:00:05.000Z"));
@@ -786,10 +781,10 @@ test("persistent claim store abandons running claims on non-shared hydrate", () 
 
   assert.equal(restarted.snapshot().running.length, 0);
   assert.equal(restarted.state.claimed.has(slotKey(issue.id, 0)), false);
-  assert.ok(claimEntry(restarted, issue));
+  assert.ok(await claimEntryAsync(restarted, issue));
 });
 
-test("persistent claim store restores retry metadata from abandoned running claims", () => {
+test("persistent claim store restores retry metadata from abandoned running claims", async () => {
   const clock = fakeClock(new Date("2026-01-01T00:00:00.000Z"));
   const backend = new MemoryCheckpointBackend();
   const settings = parseConfig({
@@ -826,8 +821,8 @@ test("persistent claim store restores retry metadata from abandoned running clai
     error: "previous run failed",
   });
   firstStore.flush();
-  assert.equal(claimEntry(first, issue)?.retryAttempt, 2);
-  first.applyUpdate(issue.id, 0, {
+  assert.equal((await claimEntryAsync(first, issue))?.retryAttempt, 2);
+  await first.applyUpdateAsync(issue.id, 0, {
     type: "turn_completed",
     workspacePath: "/tmp/lorenz/MT-PERSIST-RUNNING-RETRY",
   });
@@ -854,7 +849,7 @@ test("persistent claim store restores retry metadata from abandoned running clai
   assert.equal(retry?.monotonicDeadlineMs, restartClock.monotonicMs());
 });
 
-test("shared persistent claim store reloads under an exclusive backend transaction", () => {
+test("shared persistent claim store reloads under an exclusive backend transaction", async () => {
   const clock = fakeClock(new Date("2026-01-01T00:00:00.000Z"));
   const backend = new MemoryCheckpointBackend({ sharedAcrossProcesses: true });
   const settings = parseConfig({ agent: { max_concurrent_agents: 1 } });
@@ -881,9 +876,9 @@ test("shared persistent claim store reloads under an exclusive backend transacti
   const first = new Orchestrator(settings, clock, firstStore);
   const second = new Orchestrator(settings, clock, secondStore);
 
-  assert.ok(claimEntry(first, issue));
+  assert.ok(await claimEntryAsync(first, issue));
   assert.equal(second.snapshot().running.length, 1);
-  assert.equal(claimEntry(second, issue), null);
+  assert.equal(await claimEntryAsync(second, issue), null);
   assert.equal(second.state.running.size, 1);
   assert.equal(second.state.claimed.has(slotKey(issue.id, 0)), true);
   assert.ok(backend.exclusiveTransactions >= 3);
@@ -1169,7 +1164,7 @@ test("Turso claim store serializes concurrent claims for the same slot", async (
   }
 });
 
-test("shared persistent claim store flush preserves newer backend state", () => {
+test("shared persistent claim store flush preserves newer backend state", async () => {
   const clock = fakeClock(new Date("2026-01-01T00:00:00.000Z"));
   const backend = new MemoryCheckpointBackend({ sharedAcrossProcesses: true });
   const settings = parseConfig({ agent: { max_concurrent_agents: 2 } });
@@ -1202,8 +1197,8 @@ test("shared persistent claim store flush preserves newer backend state", () => 
   const first = new Orchestrator(settings, clock, firstStore);
   const second = new Orchestrator(settings, clock, secondStore);
 
-  assert.ok(claimEntry(first, firstIssue));
-  assert.ok(claimEntry(second, secondIssue));
+  assert.ok(await claimEntryAsync(first, firstIssue));
+  assert.ok(await claimEntryAsync(second, secondIssue));
   assert.equal(first.state.running.size, 1);
 
   firstStore.flush();
@@ -1223,7 +1218,7 @@ test("shared persistent claim store flush preserves newer backend state", () => 
   );
 });
 
-test("shared persistent claim store prevents non-owner finish", () => {
+test("shared persistent claim store prevents non-owner finish", async () => {
   const clock = fakeClock(new Date("2026-01-01T00:00:00.000Z"));
   const backend = new MemoryCheckpointBackend({ sharedAcrossProcesses: true });
   const settings = parseConfig();
@@ -1250,21 +1245,21 @@ test("shared persistent claim store prevents non-owner finish", () => {
   const first = new Orchestrator(settings, clock, firstStore);
   const second = new Orchestrator(settings, clock, secondStore);
 
-  assert.ok(claimEntry(first, issue));
+  assert.ok(await claimEntryAsync(first, issue));
   assert.equal(second.snapshot().running.length, 1);
-  assert.equal(second.ownsClaim(issue.id, 0), false);
+  assert.equal(await second.ownsClaimAsync(issue.id, 0), false);
 
-  second.finish(issue.id, 0, true, "non-owner attempted finish");
+  await second.finishAsync(issue.id, 0, true, "non-owner attempted finish");
 
   assert.equal(second.snapshot().running.length, 1);
   assert.equal(second.snapshot().retrying.length, 0);
   assert.equal(first.snapshot().running.length, 1);
-  first.finish(issue.id, 0, true, "owner finished");
+  await first.finishAsync(issue.id, 0, true, "owner finished");
   assert.equal(first.snapshot().running.length, 0);
   assert.equal(first.snapshot().retrying.length, 1);
 });
 
-test("shared persistent claim store recovers stale owner running claims", () => {
+test("shared persistent claim store recovers stale owner running claims", async () => {
   const clock = fakeClock(new Date("2026-01-01T00:00:00.000Z"));
   const backend = new MemoryCheckpointBackend({ sharedAcrossProcesses: true });
   const settings = parseConfig();
@@ -1285,7 +1280,7 @@ test("shared persistent claim store recovers stale owner running claims", () => 
     ownerLeaseStaleMs: 60_000,
   });
   const first = new Orchestrator(settings, clock, firstStore);
-  assert.ok(claimEntry(first, issue));
+  assert.ok(await claimEntryAsync(first, issue));
   assert.equal(first.snapshot().running.length, 1);
 
   clock.advance(60_001);
@@ -1300,10 +1295,10 @@ test("shared persistent claim store recovers stale owner running claims", () => 
   assert.equal(backend.saved.at(-1)?.operation, "recover_stale_owners");
   assert.equal(restarted.snapshot().running.length, 0);
   assert.equal(restarted.state.claimed.has(slotKey(issue.id, 0)), false);
-  assert.ok(claimEntry(restarted, issue));
+  assert.ok(await claimEntryAsync(restarted, issue));
 });
 
-test("shared persistent eligible no-op preserves stale-owner recovery", () => {
+test("shared persistent eligible no-op preserves stale-owner recovery", async () => {
   const clock = fakeClock(new Date("2026-01-01T00:00:00.000Z"));
   const backend = new TransactionalMemoryCheckpointBackend({ sharedAcrossProcesses: true });
   const settings = parseConfig();
@@ -1324,7 +1319,7 @@ test("shared persistent eligible no-op preserves stale-owner recovery", () => {
     ownerLeaseStaleMs: 60_000,
   });
   const first = new Orchestrator(settings, clock, firstStore);
-  assert.ok(claimEntry(first, issue));
+  assert.ok(await claimEntryAsync(first, issue));
 
   const secondStore = new PersistentClaimStore(backend, {
     ownerId: "owner-b",
@@ -1336,7 +1331,7 @@ test("shared persistent eligible no-op preserves stale-owner recovery", () => {
   assert.equal(second.snapshot().running.length, 1);
 
   clock.advance(60_001);
-  assert.equal(second.eligibleIssues([issue])[0]?.identifier, issue.identifier);
+  assert.equal((await second.eligibleIssuesAsync([issue]))[0]?.identifier, issue.identifier);
 
   assert.equal(backend.saved.at(-1)?.operation, "recover_stale_owners");
   assert.equal(second.snapshot().running.length, 0);
@@ -1383,7 +1378,7 @@ test("async shared persistent eligible no-op preserves stale-owner recovery", as
   assert.equal(second.state.claimed.has(slotKey(issue.id, 0)), false);
 });
 
-test("shared persistent claim store recovers retry metadata from stale running claims", () => {
+test("shared persistent claim store recovers retry metadata from stale running claims", async () => {
   const clock = fakeClock(new Date("2026-01-01T00:00:00.000Z"));
   const backend = new MemoryCheckpointBackend({ sharedAcrossProcesses: true });
   const settings = parseConfig({
@@ -1423,10 +1418,10 @@ test("shared persistent claim store recovers retry metadata from stale running c
       error: "previous run failed",
     });
   });
-  const running = claimEntry(first, issue);
+  const running = await claimEntryAsync(first, issue);
   assert.equal(running?.retryAttempt, 2);
   assert.equal(first.state.retryAttempts.has(key), false);
-  first.applyUpdate(issue.id, 0, {
+  await first.applyUpdateAsync(issue.id, 0, {
     type: "turn_completed",
     workspacePath: "/tmp/lorenz/MT-SHARED-STALE-RETRY",
   });
@@ -1452,7 +1447,7 @@ test("shared persistent claim store recovers retry metadata from stale running c
   assert.equal(retry?.monotonicDeadlineMs, clock.monotonicMs());
 });
 
-test("shared persistent claim store keeps live owner claims after lease heartbeat", () => {
+test("shared persistent claim store keeps live owner claims after lease heartbeat", async () => {
   const clock = fakeClock(new Date("2026-01-01T00:00:00.000Z"));
   const backend = new MemoryCheckpointBackend({ sharedAcrossProcesses: true });
   const settings = parseConfig();
@@ -1473,11 +1468,11 @@ test("shared persistent claim store keeps live owner claims after lease heartbea
     ownerLeaseStaleMs: 60_000,
   });
   const first = new Orchestrator(settings, clock, firstStore);
-  assert.ok(claimEntry(first, issue));
+  assert.ok(await claimEntryAsync(first, issue));
   assert.equal(first.snapshot().running.length, 1);
 
   clock.advance(60_001);
-  first.heartbeatClaimOwner();
+  await first.heartbeatClaimOwnerAsync();
   const secondStore = new PersistentClaimStore(backend, {
     ownerId: "owner-b",
     now: () => clock.now(),
@@ -1489,10 +1484,10 @@ test("shared persistent claim store keeps live owner claims after lease heartbea
   assert.notEqual(backend.saved.at(-1)?.operation, "recover_stale_owners");
   assert.equal(second.snapshot().running.length, 1);
   assert.equal(second.state.claimed.has(slotKey(issue.id, 0)), true);
-  assert.equal(claimEntry(second, issue), null);
+  assert.equal(await claimEntryAsync(second, issue), null);
 });
 
-test("shared persistent claim store checkpoints abandoned running claims", () => {
+test("shared persistent claim store checkpoints abandoned running claims", async () => {
   const clock = fakeClock(new Date("2026-01-01T00:00:00.000Z"));
   const backend = new MemoryCheckpointBackend({ sharedAcrossProcesses: true });
   const settings = parseConfig();
@@ -1519,16 +1514,16 @@ test("shared persistent claim store checkpoints abandoned running claims", () =>
   const first = new Orchestrator(settings, clock, firstStore);
   const second = new Orchestrator(settings, clock, secondStore);
 
-  assert.ok(claimEntry(first, issue));
-  first.abandonClaim(issue.id, 0);
+  assert.ok(await claimEntryAsync(first, issue));
+  await first.abandonClaimAsync(issue.id, 0);
 
   assert.equal(backend.saved.at(-1)?.operation, "abandon_claim");
   assert.equal(second.snapshot().running.length, 0);
   assert.equal(second.state.claimed.has(slotKey(issue.id, 0)), false);
-  assert.ok(claimEntry(second, issue));
+  assert.ok(await claimEntryAsync(second, issue));
 });
 
-test("shared persistent claim store restores retry metadata from abandoned running retries", () => {
+test("shared persistent claim store restores retry metadata from abandoned running retries", async () => {
   const clock = fakeClock(new Date("2026-01-01T00:00:00.000Z"));
   const backend = new MemoryCheckpointBackend({ sharedAcrossProcesses: true });
   const settings = parseConfig({
@@ -1574,15 +1569,15 @@ test("shared persistent claim store restores retry metadata from abandoned runni
       error: "previous run failed",
     });
   });
-  const running = claimEntry(first, issue);
+  const running = await claimEntryAsync(first, issue);
   assert.equal(running?.retryAttempt, 2);
   assert.equal(first.state.retryAttempts.has(key), false);
-  first.applyUpdate(issue.id, 0, {
+  await first.applyUpdateAsync(issue.id, 0, {
     type: "turn_completed",
     workspacePath,
   });
 
-  first.abandonClaim(issue.id, 0);
+  await first.abandonClaimAsync(issue.id, 0);
 
   const second = new Orchestrator(settings, clock, secondStore);
   const retry = second.snapshot().retrying[0];
@@ -1592,10 +1587,10 @@ test("shared persistent claim store restores retry metadata from abandoned runni
   assert.equal(retry?.workspacePath, workspacePath);
   assert.equal(retry?.issueUrl, issue.url);
   assert.equal(retry?.monotonicDeadlineMs, clock.monotonicMs());
-  assert.equal(claimEntry(second, issue)?.retryAttempt, 2);
+  assert.equal((await claimEntryAsync(second, issue))?.retryAttempt, 2);
 });
 
-test("shared persistent reservations reject late binds from another owner", () => {
+test("shared persistent reservations reject late binds from another owner", async () => {
   const clock = fakeClock(new Date("2026-01-01T00:00:00.000Z"));
   const backend = new MemoryCheckpointBackend({ sharedAcrossProcesses: true });
   const settings = parseConfig();
@@ -1623,22 +1618,22 @@ test("shared persistent reservations reject late binds from another owner", () =
   const first = new Orchestrator(settings, clock, firstStore, probe);
   const second = new Orchestrator(settings, clock, secondStore, probe);
 
-  const firstReservation = claimReservation(first, issue);
+  const firstReservation = await claimReservation(first, issue);
   assert.ok(firstReservation);
-  first.cancelReservation(firstReservation!);
-  const secondReservation = claimReservation(second, issue);
+  await first.cancelReservationAsync(firstReservation!);
+  const secondReservation = await claimReservation(second, issue);
   assert.ok(secondReservation);
   assert.notEqual(firstReservation?.token, secondReservation?.token);
 
-  assert.equal(first.bindReservation(firstReservation!, "late-worker"), null);
+  assert.equal(await first.bindReservationAsync(firstReservation!, "late-worker"), null);
   assert.equal(second.snapshot().reserving.length, 1);
   assert.equal(
-    second.bindReservation(secondReservation!, "fresh-worker")?.workerHost,
+    (await second.bindReservationAsync(secondReservation!, "fresh-worker"))?.workerHost,
     "fresh-worker",
   );
 });
 
-test("orchestrator claims ensemble slots independently and snapshots backend-neutral fields", () => {
+test("orchestrator claims ensemble slots independently and snapshots backend-neutral fields", async () => {
   const settings = parseConfig({
     agent: { ensemble_size: 2 },
     status_overrides: { Todo: { agent: { kind: "claude" } } },
@@ -1651,16 +1646,16 @@ test("orchestrator claims ensemble slots independently and snapshots backend-neu
     state: { name: "Todo", type: "unstarted" },
   });
 
-  const first = claimEntry(orchestrator, issue);
-  const second = claimEntry(orchestrator, issue);
-  const third = claimEntry(orchestrator, issue);
+  const first = await claimEntryAsync(orchestrator, issue);
+  const second = await claimEntryAsync(orchestrator, issue);
+  const third = await claimEntryAsync(orchestrator, issue);
 
   assert.equal(first?.slotIndex, 0);
   assert.equal(second?.slotIndex, 1);
   assert.equal(third, null);
   assert.equal(first?.agentKind, "claude");
 
-  orchestrator.applyUpdate(issue.id, 0, {
+  await orchestrator.applyUpdateAsync(issue.id, 0, {
     type: "turn_completed",
     sessionId: "session-1",
     executorPid: "123",
@@ -1672,11 +1667,11 @@ test("orchestrator claims ensemble slots independently and snapshots backend-neu
   assert.equal(snapshot.running[0]?.executorPid, "123");
   assert.equal(snapshot.usageTotals.totalTokens, 15);
 
-  orchestrator.finish(issue.id, 0, true);
+  await orchestrator.finishAsync(issue.id, 0, true);
   assert.equal(orchestrator.snapshot().retrying[0]?.attempt, 1);
 });
 
-test("orchestrator claim resolves an agents key route over the per-state override", () => {
+test("orchestrator claim resolves an agents key route over the per-state override", async () => {
   const settings = parseConfig({
     status_overrides: { Todo: { agent: { kind: "claude" } } },
     agents: { pi: { bridge_command: "pi-acp" } },
@@ -1696,11 +1691,11 @@ test("orchestrator claim resolves an agents key route over the per-state overrid
     state: { name: "Todo", type: "unstarted" },
   });
 
-  assert.equal(claimEntry(orchestrator, routed)?.agentKind, "pi");
-  assert.equal(claimEntry(orchestrator, unrouted)?.agentKind, "claude");
+  assert.equal((await claimEntryAsync(orchestrator, routed))?.agentKind, "pi");
+  assert.equal((await claimEntryAsync(orchestrator, unrouted))?.agentKind, "claude");
 });
 
-test("orchestrator claim applies no route override when agent routes conflict", () => {
+test("orchestrator claim applies no route override when agent routes conflict", async () => {
   const settings = parseConfig();
   const orchestrator = new Orchestrator(settings);
   const conflicted = normalizeIssue({
@@ -1711,10 +1706,10 @@ test("orchestrator claim applies no route override when agent routes conflict", 
     labels: [{ name: "Lorenz:Claude" }, { name: "Lorenz:Codex" }],
   });
 
-  assert.equal(claimEntry(orchestrator, conflicted)?.agentKind, "codex");
+  assert.equal((await claimEntryAsync(orchestrator, conflicted))?.agentKind, "codex");
 });
 
-test("orchestrator preserves pending ensemble retries per slot", () => {
+test("orchestrator preserves pending ensemble retries per slot", async () => {
   const clock = fakeClock(new Date("2026-01-01T00:00:00.000Z"));
   const settings = parseConfig({
     agent: { ensemble_size: 2, max_retry_backoff_ms: 60_000 },
@@ -1728,22 +1723,22 @@ test("orchestrator preserves pending ensemble retries per slot", () => {
     state: { name: "Todo", type: "unstarted" },
   });
 
-  const first = claimEntry(orchestrator, issue);
-  const second = claimEntry(orchestrator, issue);
+  const first = await claimEntryAsync(orchestrator, issue);
+  const second = await claimEntryAsync(orchestrator, issue);
   assert.equal(first?.slotIndex, 0);
   assert.equal(second?.slotIndex, 1);
 
-  orchestrator.applyUpdate(issue.id, 0, {
+  await orchestrator.applyUpdateAsync(issue.id, 0, {
     type: "turn_completed",
     workspacePath: "/work/slot-0",
   });
-  orchestrator.applyUpdate(issue.id, 1, {
+  await orchestrator.applyUpdateAsync(issue.id, 1, {
     type: "turn_completed",
     workspacePath: "/work/slot-1",
   });
 
-  orchestrator.finish(issue.id, 0, true, "slot 0 failed");
-  orchestrator.finish(issue.id, 1, true, "slot 1 failed");
+  await orchestrator.finishAsync(issue.id, 0, true, "slot 0 failed");
+  await orchestrator.finishAsync(issue.id, 1, true, "slot 1 failed");
 
   const pending = orchestrator
     .snapshot()
@@ -1759,9 +1754,9 @@ test("orchestrator preserves pending ensemble retries per slot", () => {
   assert.equal(pending[1]?.error, "slot 1 failed");
 
   clock.advance(10_000);
-  assert.equal(orchestrator.eligibleIssues([issue])[0]?.identifier, issue.identifier);
+  assert.equal((await orchestrator.eligibleIssuesAsync([issue]))[0]?.identifier, issue.identifier);
 
-  const retryFirst = claimEntry(orchestrator, issue);
+  const retryFirst = await claimEntryAsync(orchestrator, issue);
   assert.equal(retryFirst?.slotIndex, 0);
   assert.equal(retryFirst?.retryAttempt, 1);
   assert.equal(retryFirst?.workerHost, first?.workerHost);
@@ -1770,14 +1765,14 @@ test("orchestrator preserves pending ensemble retries per slot", () => {
   assert.equal(remaining[0]?.slotIndex, 1);
   assert.equal(remaining[0]?.workspacePath, "/work/slot-1");
 
-  const retrySecond = claimEntry(orchestrator, issue);
+  const retrySecond = await claimEntryAsync(orchestrator, issue);
   assert.equal(retrySecond?.slotIndex, 1);
   assert.equal(retrySecond?.retryAttempt, 1);
   assert.equal(retrySecond?.workerHost, second?.workerHost);
   assert.equal(orchestrator.snapshot().retrying.length, 0);
 });
 
-test("refreshRunningIssue updates the tracker state of all slots for a running issue", () => {
+test("refreshRunningIssueAsync updates the tracker state of all slots for a running issue", async () => {
   const orchestrator = new Orchestrator(parseConfig({ agent: { ensemble_size: 2 } }));
   const issue = normalizeIssue({
     id: "i1",
@@ -1785,18 +1780,22 @@ test("refreshRunningIssue updates the tracker state of all slots for a running i
     title: "Title",
     state: { name: "Todo", type: "unstarted" },
   });
-  assert.ok(claimEntry(orchestrator, issue));
-  assert.ok(claimEntry(orchestrator, issue));
+  assert.ok(await claimEntryAsync(orchestrator, issue));
+  assert.ok(await claimEntryAsync(orchestrator, issue));
   assert.equal(orchestrator.snapshot().running[0]?.issue.state, "Todo");
   assert.equal(orchestrator.snapshot().running[1]?.issue.state, "Todo");
 
-  orchestrator.refreshRunningIssue({ ...issue, state: "In Progress", stateType: "started" });
+  await orchestrator.refreshRunningIssueAsync({
+    ...issue,
+    state: "In Progress",
+    stateType: "started",
+  });
 
   assert.equal(orchestrator.snapshot().running[0]?.issue.state, "In Progress");
   assert.equal(orchestrator.snapshot().running[1]?.issue.state, "In Progress");
 });
 
-test("orchestrator keeps per-entry usage totals monotonic across runner corrections", () => {
+test("orchestrator keeps per-entry usage totals monotonic across runner corrections", async () => {
   const orchestrator = new Orchestrator(parseConfig());
   const issue = normalizeIssue({
     id: "usage-non-monotonic",
@@ -1805,12 +1804,12 @@ test("orchestrator keeps per-entry usage totals monotonic across runner correcti
     state: { name: "Todo", type: "unstarted" },
   });
 
-  assert.ok(claimEntry(orchestrator, issue));
-  orchestrator.applyUpdate(issue.id, 0, {
+  assert.ok(await claimEntryAsync(orchestrator, issue));
+  await orchestrator.applyUpdateAsync(issue.id, 0, {
     type: "usage",
     usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 },
   });
-  orchestrator.applyUpdate(issue.id, 0, {
+  await orchestrator.applyUpdateAsync(issue.id, 0, {
     type: "usage",
     usage: { inputTokens: 8, outputTokens: 4, totalTokens: 12 },
   });
@@ -1830,7 +1829,7 @@ test("orchestrator keeps per-entry usage totals monotonic across runner correcti
   });
 });
 
-test("orchestrator accumulates per-turn usage deltas for dashboard snapshots", () => {
+test("orchestrator accumulates per-turn usage deltas for dashboard snapshots", async () => {
   const orchestrator = new Orchestrator(parseConfig());
   const issue = normalizeIssue({
     id: "usage-deltas",
@@ -1839,13 +1838,13 @@ test("orchestrator accumulates per-turn usage deltas for dashboard snapshots", (
     state: { name: "Todo", type: "unstarted" },
   });
 
-  assert.ok(claimEntry(orchestrator, issue));
-  orchestrator.applyUpdate(issue.id, 0, {
+  assert.ok(await claimEntryAsync(orchestrator, issue));
+  await orchestrator.applyUpdateAsync(issue.id, 0, {
     type: "turn_completed",
     usageKind: "delta",
     usage: { inputTokens: 100, outputTokens: 50, totalTokens: 150 },
   });
-  orchestrator.applyUpdate(issue.id, 0, {
+  await orchestrator.applyUpdateAsync(issue.id, 0, {
     type: "turn_completed",
     usageKind: "delta",
     usage: { inputTokens: 200, outputTokens: 100, totalTokens: 300 },
@@ -1866,7 +1865,7 @@ test("orchestrator accumulates per-turn usage deltas for dashboard snapshots", (
   });
 });
 
-test("orchestrator does not double count streamed cumulative usage before final turn deltas", () => {
+test("orchestrator does not double count streamed cumulative usage before final turn deltas", async () => {
   const orchestrator = new Orchestrator(parseConfig());
   const issue = normalizeIssue({
     id: "usage-mixed",
@@ -1875,23 +1874,23 @@ test("orchestrator does not double count streamed cumulative usage before final 
     state: { name: "Todo", type: "unstarted" },
   });
 
-  assert.ok(claimEntry(orchestrator, issue));
-  orchestrator.applyUpdate(issue.id, 0, {
+  assert.ok(await claimEntryAsync(orchestrator, issue));
+  await orchestrator.applyUpdateAsync(issue.id, 0, {
     type: "session_notification",
     usageKind: "cumulative",
     usage: { totalTokens: 150 },
   });
-  orchestrator.applyUpdate(issue.id, 0, {
+  await orchestrator.applyUpdateAsync(issue.id, 0, {
     type: "turn_completed",
     usageKind: "delta",
     usage: { inputTokens: 100, outputTokens: 50, totalTokens: 150 },
   });
-  orchestrator.applyUpdate(issue.id, 0, {
+  await orchestrator.applyUpdateAsync(issue.id, 0, {
     type: "session_notification",
     usageKind: "cumulative",
     usage: { totalTokens: 450 },
   });
-  orchestrator.applyUpdate(issue.id, 0, {
+  await orchestrator.applyUpdateAsync(issue.id, 0, {
     type: "turn_completed",
     usageKind: "delta",
     usage: { inputTokens: 200, outputTokens: 100, totalTokens: 300 },
@@ -1912,7 +1911,7 @@ test("orchestrator does not double count streamed cumulative usage before final 
   });
 });
 
-test("orchestrator does not double-count ACP usage updates when turn completion repeats the same total", () => {
+test("orchestrator does not double-count ACP usage updates when turn completion repeats the same total", async () => {
   const orchestrator = new Orchestrator(parseConfig());
   const issue = normalizeIssue({
     id: "usage-acp",
@@ -1921,8 +1920,8 @@ test("orchestrator does not double-count ACP usage updates when turn completion 
     state: { name: "Todo", type: "unstarted" },
   });
 
-  assert.ok(claimEntry(orchestrator, issue));
-  orchestrator.applyUpdate(issue.id, 0, {
+  assert.ok(await claimEntryAsync(orchestrator, issue));
+  await orchestrator.applyUpdateAsync(issue.id, 0, {
     type: "session_notification",
     usageKind: "cumulative",
     usage: { totalTokens: 5 },
@@ -1942,7 +1941,7 @@ test("orchestrator does not double-count ACP usage updates when turn completion 
     secondsRunning: 0,
   });
 
-  orchestrator.applyUpdate(issue.id, 0, {
+  await orchestrator.applyUpdateAsync(issue.id, 0, {
     type: "turn_completed",
     usageKind: "delta",
     usage: { inputTokens: 2, outputTokens: 3, totalTokens: 5 },
@@ -1963,7 +1962,7 @@ test("orchestrator does not double-count ACP usage updates when turn completion 
   });
 });
 
-test("orchestrator counts ACP tool-call starts without counting tool updates", () => {
+test("orchestrator counts ACP tool-call starts without counting tool updates", async () => {
   const orchestrator = new Orchestrator(parseConfig());
   const issue = normalizeIssue({
     id: "tool-count",
@@ -1972,20 +1971,20 @@ test("orchestrator counts ACP tool-call starts without counting tool updates", (
     state: { name: "Todo", type: "unstarted" },
   });
 
-  assert.ok(claimEntry(orchestrator, issue));
-  orchestrator.applyUpdate(issue.id, 0, {
+  assert.ok(await claimEntryAsync(orchestrator, issue));
+  await orchestrator.applyUpdateAsync(issue.id, 0, {
     type: "session_notification",
     message: { sessionId: "session-tools", update: { sessionUpdate: "tool_call" } },
   });
-  orchestrator.applyUpdate(issue.id, 0, {
+  await orchestrator.applyUpdateAsync(issue.id, 0, {
     type: "session_notification",
     message: { sessionId: "session-tools", update: { sessionUpdate: "tool_call_update" } },
   });
-  orchestrator.applyUpdate(issue.id, 0, {
+  await orchestrator.applyUpdateAsync(issue.id, 0, {
     type: "session_notification",
     message: { sessionId: "session-tools", update: { sessionUpdate: "agent_message_chunk" } },
   });
-  orchestrator.applyUpdate(issue.id, 0, {
+  await orchestrator.applyUpdateAsync(issue.id, 0, {
     type: "session_notification",
     message: { sessionId: "session-tools", update: { sessionUpdate: "tool_call" } },
   });
@@ -1993,7 +1992,7 @@ test("orchestrator counts ACP tool-call starts without counting tool updates", (
   assert.equal(orchestrator.snapshot().running[0]?.toolCallCount, 2);
 });
 
-test("orchestrator assigns SSH worker hosts by least loaded capacity", () => {
+test("orchestrator assigns SSH worker hosts by least loaded capacity", async () => {
   const settings = parseConfig({
     worker: { ssh_hosts: ["worker-a:2200", "worker-b:2200"], max_concurrent_agents_per_host: 1 },
     agent: { max_concurrent_agents: 2 },
@@ -2018,15 +2017,15 @@ test("orchestrator assigns SSH worker hosts by least loaded capacity", () => {
     state: { name: "Todo", type: "unstarted" },
   });
 
-  assert.equal(claimEntry(orchestrator, firstIssue)?.workerHost, "worker-a:2200");
-  assert.equal(claimEntry(orchestrator, secondIssue)?.workerHost, "worker-b:2200");
-  assert.equal(claimEntry(orchestrator, thirdIssue), null);
+  assert.equal((await claimEntryAsync(orchestrator, firstIssue))?.workerHost, "worker-a:2200");
+  assert.equal((await claimEntryAsync(orchestrator, secondIssue))?.workerHost, "worker-b:2200");
+  assert.equal(await claimEntryAsync(orchestrator, thirdIssue), null);
 
-  orchestrator.finish(firstIssue.id, 0, false);
-  assert.equal(claimEntry(orchestrator, thirdIssue)?.workerHost, "worker-a:2200");
+  await orchestrator.finishAsync(firstIssue.id, 0, false);
+  assert.equal((await claimEntryAsync(orchestrator, thirdIssue))?.workerHost, "worker-a:2200");
 });
 
-test("orchestrator retries on the previous worker host while it has capacity", () => {
+test("orchestrator retries on the previous worker host while it has capacity", async () => {
   const settings = parseConfig({
     worker: { ssh_hosts: ["worker-a", "worker-b"], max_concurrent_agents_per_host: 2 },
     agent: { max_concurrent_agents: 4 },
@@ -2045,7 +2044,7 @@ test("orchestrator retries on the previous worker host while it has capacity", (
     state: { name: "Todo", type: "unstarted" },
   });
 
-  assert.equal(claimEntry(orchestrator, runningIssue)?.workerHost, "worker-a");
+  assert.equal((await claimEntryAsync(orchestrator, runningIssue))?.workerHost, "worker-a");
   orchestrator.state.retryAttempts.set(slotKey(retryIssue.id, 0), {
     issueId: retryIssue.id,
     identifier: retryIssue.identifier,
@@ -2058,13 +2057,13 @@ test("orchestrator retries on the previous worker host while it has capacity", (
     error: "agent exited",
   });
 
-  const retryClaim = claimEntry(orchestrator, retryIssue);
+  const retryClaim = await claimEntryAsync(orchestrator, retryIssue);
 
   assert.equal(retryClaim?.workerHost, "worker-a");
   assert.equal(retryClaim?.retryAttempt, 1);
 });
 
-test("config reload that adds worker pools leaves running workspaces in place", () => {
+test("config reload that adds worker pools leaves running workspaces in place", async () => {
   // Mirrors runtime.reloadWorkflowIfConfigured, which swaps orchestrator.settings in place.
   const orchestrator = new Orchestrator(
     parseConfig({
@@ -2080,9 +2079,9 @@ test("config reload that adds worker pools leaves running workspaces in place", 
     stateType: "unstarted",
   });
 
-  const claimed = claimEntry(orchestrator, issue);
+  const claimed = await claimEntryAsync(orchestrator, issue);
   assert.equal(claimed?.workerHost, "worker-a");
-  orchestrator.applyUpdate(issue.id, 0, {
+  await orchestrator.applyUpdateAsync(issue.id, 0, {
     type: "turn_completed",
     sessionId: "session-1",
     workspacePath: "/work/worker-a/MT-1",
@@ -2109,11 +2108,11 @@ test("config reload that adds worker pools leaves running workspaces in place", 
     state: "Todo",
     stateType: "unstarted",
   });
-  assert.equal(claimEntry(orchestrator, secondIssue)?.workerHost, "worker-b");
+  assert.equal((await claimEntryAsync(orchestrator, secondIssue))?.workerHost, "worker-b");
   assert.equal(orchestrator.snapshot().running[0]?.workerHost, "worker-a");
 });
 
-test("config reload that removes a worker pool keeps its running workspace until completion", () => {
+test("config reload that removes a worker pool keeps its running workspace until completion", async () => {
   const orchestrator = new Orchestrator(
     parseConfig({
       worker: { ssh_hosts: ["worker-a", "worker-b"], max_concurrent_agents_per_host: 1 },
@@ -2135,10 +2134,10 @@ test("config reload that removes a worker pool keeps its running workspace until
     stateType: "unstarted",
   });
 
-  assert.equal(claimEntry(orchestrator, first)?.workerHost, "worker-a");
-  const onRemovedHost = claimEntry(orchestrator, second);
+  assert.equal((await claimEntryAsync(orchestrator, first))?.workerHost, "worker-a");
+  const onRemovedHost = await claimEntryAsync(orchestrator, second);
   assert.equal(onRemovedHost?.workerHost, "worker-b");
-  orchestrator.applyUpdate(second.id, 0, {
+  await orchestrator.applyUpdateAsync(second.id, 0, {
     type: "turn_completed",
     workspacePath: "/work/worker-b/MT-2",
   });
@@ -2164,11 +2163,11 @@ test("config reload that removes a worker pool keeps its running workspace until
     state: "Todo",
     stateType: "unstarted",
   });
-  assert.deepEqual(orchestrator.eligibleIssues([third]), []);
+  assert.deepEqual(await orchestrator.eligibleIssuesAsync([third]), []);
   assert.equal(orchestrator.snapshot().blocked[0]?.reason, "worker_host_capacity");
 });
 
-test("orchestrator snapshots capacity-blocked dispatch candidates", () => {
+test("orchestrator snapshots capacity-blocked dispatch candidates", async () => {
   const globalSettings = parseConfig({ agent: { max_concurrent_agents: 1 } });
   const globalOrchestrator = new Orchestrator(globalSettings);
   const running = normalizeIssue({
@@ -2183,8 +2182,8 @@ test("orchestrator snapshots capacity-blocked dispatch candidates", () => {
     title: "Blocked",
     state: { name: "Todo", type: "unstarted" },
   });
-  assert.ok(claimEntry(globalOrchestrator, running));
-  assert.deepEqual(globalOrchestrator.eligibleIssues([blocked]), []);
+  assert.ok(await claimEntryAsync(globalOrchestrator, running));
+  assert.deepEqual(await globalOrchestrator.eligibleIssuesAsync([blocked]), []);
   assert.equal(globalOrchestrator.snapshot().blocked[0]?.reason, "global_concurrency_cap");
 
   const localSettings = parseConfig({
@@ -2192,8 +2191,8 @@ test("orchestrator snapshots capacity-blocked dispatch candidates", () => {
     status_overrides: { Todo: { agent: { max_concurrent_agents: 1 } } },
   });
   const localOrchestrator = new Orchestrator(localSettings);
-  assert.ok(claimEntry(localOrchestrator, running));
-  assert.deepEqual(localOrchestrator.eligibleIssues([blocked]), []);
+  assert.ok(await claimEntryAsync(localOrchestrator, running));
+  assert.deepEqual(await localOrchestrator.eligibleIssuesAsync([blocked]), []);
   assert.equal(localOrchestrator.snapshot().blocked[0]?.reason, "local_concurrency_cap");
 
   const workerSettings = parseConfig({
@@ -2201,12 +2200,12 @@ test("orchestrator snapshots capacity-blocked dispatch candidates", () => {
     agent: { max_concurrent_agents: 5 },
   });
   const workerOrchestrator = new Orchestrator(workerSettings);
-  assert.ok(claimEntry(workerOrchestrator, running));
-  assert.deepEqual(workerOrchestrator.eligibleIssues([blocked]), []);
+  assert.ok(await claimEntryAsync(workerOrchestrator, running));
+  assert.deepEqual(await workerOrchestrator.eligibleIssuesAsync([blocked]), []);
   assert.equal(workerOrchestrator.snapshot().blocked[0]?.reason, "worker_host_capacity");
 });
 
-test("orchestrator reschedules due retries that are still capacity-blocked", () => {
+test("orchestrator reschedules due retries that are still capacity-blocked", async () => {
   const clock = fakeClock(new Date("2026-01-01T00:00:00.000Z"));
   const settings = parseConfig({
     agent: { max_concurrent_agents: 1, max_retry_backoff_ms: 60_000 },
@@ -2225,7 +2224,7 @@ test("orchestrator reschedules due retries that are still capacity-blocked", () 
     state: { name: "Todo", type: "unstarted" },
   });
 
-  assert.ok(claimEntry(orchestrator, running));
+  assert.ok(await claimEntryAsync(orchestrator, running));
   orchestrator.state.retryAttempts.set(slotKey(retryIssue.id, 0), {
     issueId: retryIssue.id,
     identifier: retryIssue.identifier,
@@ -2239,7 +2238,7 @@ test("orchestrator reschedules due retries that are still capacity-blocked", () 
     error: "agent exited",
   });
 
-  assert.deepEqual(orchestrator.eligibleIssues([retryIssue]), []);
+  assert.deepEqual(await orchestrator.eligibleIssuesAsync([retryIssue]), []);
   let retry = orchestrator.snapshot().retrying[0];
   assert.equal(orchestrator.snapshot().blocked[0]?.reason, "global_concurrency_cap");
   assert.equal(retry?.attempt, 2);
@@ -2247,14 +2246,14 @@ test("orchestrator reschedules due retries that are still capacity-blocked", () 
   assert.equal(retry?.dueAtIso, "2026-01-01T00:00:20.000Z");
   assert.equal(retry?.error, "dispatch blocked by global concurrency cap");
 
-  assert.deepEqual(orchestrator.eligibleIssues([retryIssue]), []);
+  assert.deepEqual(await orchestrator.eligibleIssuesAsync([retryIssue]), []);
   retry = orchestrator.snapshot().retrying[0];
   assert.equal(orchestrator.snapshot().blocked.length, 0);
   assert.equal(retry?.attempt, 2);
   assert.equal(retry?.monotonicDeadlineMs, clock.monotonicMs() + 20_000);
 
   clock.advance(20_000);
-  assert.deepEqual(orchestrator.eligibleIssues([retryIssue]), []);
+  assert.deepEqual(await orchestrator.eligibleIssuesAsync([retryIssue]), []);
   retry = orchestrator.snapshot().retrying[0];
   assert.equal(orchestrator.snapshot().blocked[0]?.reason, "global_concurrency_cap");
   assert.equal(retry?.attempt, 3);
@@ -2262,7 +2261,7 @@ test("orchestrator reschedules due retries that are still capacity-blocked", () 
   assert.equal(retry?.dueAtIso, "2026-01-01T00:01:00.000Z");
 });
 
-test("orchestrator gates retry attempts until backoff is due and clears terminal retries", () => {
+test("orchestrator gates retry attempts until backoff is due and clears terminal retries", async () => {
   const clock = fakeClock();
   const settings = parseConfig({ agent: { max_retry_backoff_ms: 2_000 } });
   const orchestrator = new Orchestrator(settings, clock);
@@ -2274,25 +2273,25 @@ test("orchestrator gates retry attempts until backoff is due and clears terminal
   });
   const doneIssue = normalizeIssue({ ...issue, state: "Done", stateType: "completed" });
 
-  assert.ok(claimEntry(orchestrator, issue));
-  orchestrator.finish(issue.id, 0, true);
+  assert.ok(await claimEntryAsync(orchestrator, issue));
+  await orchestrator.finishAsync(issue.id, 0, true);
   const retry = orchestrator.snapshot().retrying[0];
   assert.equal(retry?.attempt, 1);
   // Issue will only be available for a retry after the retry backoff is due
-  assert.deepEqual(orchestrator.eligibleIssues([issue]), []);
+  assert.deepEqual(await orchestrator.eligibleIssuesAsync([issue]), []);
   // Advance the clock to make sure the retry backoff is due
   clock.advance(100_000);
 
-  assert.equal(orchestrator.eligibleIssues([issue])[0]?.identifier, "MT-RETRY");
-  assert.equal(claimEntry(orchestrator, issue)?.retryAttempt, 1);
-  orchestrator.finish(issue.id, 0, true);
+  assert.equal((await orchestrator.eligibleIssuesAsync([issue]))[0]?.identifier, "MT-RETRY");
+  assert.equal((await claimEntryAsync(orchestrator, issue))?.retryAttempt, 1);
+  await orchestrator.finishAsync(issue.id, 0, true);
   assert.equal(orchestrator.snapshot().retrying[0]?.attempt, 2);
 
-  assert.deepEqual(orchestrator.eligibleIssues([doneIssue]), []);
+  assert.deepEqual(await orchestrator.eligibleIssuesAsync([doneIssue]), []);
   assert.equal(orchestrator.snapshot().retrying.length, 0);
 });
 
-test("orchestrator uses configured retry delays for failures and active continuations", () => {
+test("orchestrator uses configured retry delays for failures and active continuations", async () => {
   const settings = parseConfig({ agent: { max_retry_backoff_ms: 60_000 } });
   const orchestrator = new Orchestrator(settings);
   const issue = normalizeIssue({
@@ -2302,36 +2301,36 @@ test("orchestrator uses configured retry delays for failures and active continua
     state: { name: "Todo", type: "unstarted" },
   });
 
-  assert.ok(claimEntry(orchestrator, issue));
+  assert.ok(await claimEntryAsync(orchestrator, issue));
   const beforeFailure = Date.now();
-  orchestrator.finish(issue.id, 0, true, "agent exited", "failure");
+  await orchestrator.finishAsync(issue.id, 0, true, "agent exited", "failure");
   let retry = orchestrator.snapshot().retrying[0];
   assert.ok(retry);
   assert.equal(retry.attempt, 1);
   assert.ok(Date.parse(retry.dueAtIso) - beforeFailure >= 9_900);
 
   const continuationOrchestrator = new Orchestrator(settings);
-  assert.ok(claimEntry(continuationOrchestrator, issue));
+  assert.ok(await claimEntryAsync(continuationOrchestrator, issue));
   const beforeContinuation = Date.now();
-  continuationOrchestrator.finish(issue.id, 0, true, undefined, "continuation");
+  await continuationOrchestrator.finishAsync(issue.id, 0, true, undefined, "continuation");
   retry = continuationOrchestrator.snapshot().retrying[0];
   assert.ok(retry);
   assert.equal(retry.attempt, 1);
   const continuationDelay = Date.parse(retry.dueAtIso) - beforeContinuation;
   assert.ok(continuationDelay >= 900 && continuationDelay <= 1_500);
 
-  assert.equal(claimEntry(continuationOrchestrator, issue)?.retryAttempt, 1);
+  assert.equal((await claimEntryAsync(continuationOrchestrator, issue))?.retryAttempt, 1);
   const beforeSecondContinuation = Date.now();
-  continuationOrchestrator.finish(issue.id, 0, true, undefined, "continuation");
+  await continuationOrchestrator.finishAsync(issue.id, 0, true, undefined, "continuation");
   retry = continuationOrchestrator.snapshot().retrying[0];
   assert.ok(retry);
   assert.equal(retry.attempt, 1);
   const secondContinuationDelay = Date.parse(retry.dueAtIso) - beforeSecondContinuation;
   assert.ok(secondContinuationDelay >= 900 && secondContinuationDelay <= 1_500);
 
-  assert.equal(claimEntry(continuationOrchestrator, issue)?.retryAttempt, 1);
+  assert.equal((await claimEntryAsync(continuationOrchestrator, issue))?.retryAttempt, 1);
   const beforeFailureAfterContinuations = Date.now();
-  continuationOrchestrator.finish(
+  await continuationOrchestrator.finishAsync(
     issue.id,
     0,
     true,
@@ -2345,7 +2344,7 @@ test("orchestrator uses configured retry delays for failures and active continua
   assert.ok(failureDelay >= 19_900 && failureDelay <= 20_500);
 });
 
-test("orchestrator retry dispatch reopens slots blocked only by stale claims", () => {
+test("orchestrator retry dispatch reopens slots blocked only by stale claims", async () => {
   const settings = parseConfig();
   const orchestrator = new Orchestrator(settings);
   const issue = normalizeIssue({
@@ -2364,14 +2363,14 @@ test("orchestrator retry dispatch reopens slots blocked only by stale claims", (
     error: "agent exited: boom",
   });
 
-  assert.equal(orchestrator.eligibleIssues([issue])[0]?.identifier, "MT-STALE");
-  const claim = claimEntry(orchestrator, issue);
+  assert.equal((await orchestrator.eligibleIssuesAsync([issue]))[0]?.identifier, "MT-STALE");
+  const claim = await claimEntryAsync(orchestrator, issue);
   assert.equal(claim?.slotIndex, 0);
   assert.equal(claim?.retryAttempt, 1);
   assert.equal(orchestrator.snapshot().retrying.length, 0);
 });
 
-test("orchestrator retries an ensemble issue in its original slot", () => {
+test("orchestrator retries an ensemble issue in its original slot", async () => {
   const settings = parseConfig({ agent: { ensemble_size: 3 } });
   const orchestrator = new Orchestrator(settings);
   const issue = normalizeIssue({
@@ -2391,10 +2390,10 @@ test("orchestrator retries an ensemble issue in its original slot", () => {
     error: "agent exited",
   });
 
-  assert.equal(claimEntry(orchestrator, issue)?.slotIndex, 2);
+  assert.equal((await claimEntryAsync(orchestrator, issue))?.slotIndex, 2);
 });
 
-test("orchestrator workerCapacityAvailable consults capacityProbe.canAcquire when present", () => {
+test("orchestrator workerCapacityAvailable consults capacityProbe.canAcquire when present", async () => {
   const settings = parseConfig();
   let available = false;
   const probe = { governs: () => true, canAcquire: () => available };
@@ -2407,16 +2406,16 @@ test("orchestrator workerCapacityAvailable consults capacityProbe.canAcquire whe
     stateType: "unstarted",
   });
 
-  assert.deepEqual(orchestrator.eligibleIssues([issue]), []);
+  assert.deepEqual(await orchestrator.eligibleIssuesAsync([issue]), []);
   assert.equal(orchestrator.snapshot().blocked[0]?.reason, "worker_host_capacity");
-  assert.equal(orchestrator.claim(issue), null);
+  assert.equal(await orchestrator.claimAsync(issue), null);
 
   available = true;
-  assert.equal(orchestrator.eligibleIssues([issue])[0]?.identifier, "MT-PROBE");
-  assert.ok(claimReservation(orchestrator, issue));
+  assert.equal((await orchestrator.eligibleIssuesAsync([issue]))[0]?.identifier, "MT-PROBE");
+  assert.ok(await claimReservation(orchestrator, issue));
 });
 
-test("orchestrator claim with a governing probe returns a host-less reservation (never a running entry)", () => {
+test("orchestrator claimAsync with a governing probe returns a host-less reservation (never a running entry)", async () => {
   const settings = parseConfig();
   const probe = { governs: () => true, canAcquire: () => true };
   const orchestrator = new Orchestrator(settings, systemClock, createState(), probe);
@@ -2428,7 +2427,7 @@ test("orchestrator claim with a governing probe returns a host-less reservation 
     stateType: "unstarted",
   });
 
-  const reservation = claimReservation(orchestrator, issue);
+  const reservation = await claimReservation(orchestrator, issue);
   assert.ok(reservation);
   assert.equal(reservation?.issueId, issue.id);
   assert.equal(reservation?.slotIndex, 0);
@@ -2443,10 +2442,10 @@ test("orchestrator claim with a governing probe returns a host-less reservation 
   assert.equal(orchestrator.snapshot().reserving[0]?.issueId, issue.id);
   assert.equal(orchestrator.snapshot().reserving[0]?.affinityHost, null);
   // The held slot cannot be double-reserved.
-  assert.equal(orchestrator.claim(issue), null);
+  assert.equal(await orchestrator.claimAsync(issue), null);
 });
 
-test("orchestrator reservation carries affinityHost = retry.workerHost (retry affinity preserved)", () => {
+test("orchestrator reservation carries affinityHost = retry.workerHost (retry affinity preserved)", async () => {
   const settings = parseConfig();
   const probe = { governs: () => true, canAcquire: () => true };
   const orchestrator = new Orchestrator(settings, systemClock, createState(), probe);
@@ -2469,14 +2468,14 @@ test("orchestrator reservation carries affinityHost = retry.workerHost (retry af
     error: "agent exited",
   });
 
-  const reservation = claimReservation(orchestrator, issue);
+  const reservation = await claimReservation(orchestrator, issue);
   assert.equal(reservation?.affinityHost, "warm-worker-7:2200");
   assert.equal(reservation?.retryAttempt, 1);
   // The due retry entry was consumed (stashed on the reservation record).
   assert.equal(orchestrator.state.retryAttempts.size, 0);
 });
 
-test("orchestrator static sshHosts path unchanged when no capacity probe is present", () => {
+test("orchestrator static sshHosts path unchanged when no capacity probe is present", async () => {
   const settings = parseConfig({
     worker: { ssh_hosts: ["worker-a:2200", "worker-b:2200"], max_concurrent_agents_per_host: 1 },
     agent: { max_concurrent_agents: 2 },
@@ -2497,14 +2496,14 @@ test("orchestrator static sshHosts path unchanged when no capacity probe is pres
     stateType: "unstarted",
   });
 
-  const firstEntry = claimEntry(orchestrator, first);
-  const secondEntry = claimEntry(orchestrator, second);
+  const firstEntry = await claimEntryAsync(orchestrator, first);
+  const secondEntry = await claimEntryAsync(orchestrator, second);
   assert.equal(firstEntry?.workerHost, "worker-a:2200");
   assert.equal(secondEntry?.workerHost, "worker-b:2200");
-  assert.equal(claimEntry(orchestrator, first), null);
+  assert.equal(await claimEntryAsync(orchestrator, first), null);
 });
 
-test("orchestrator bindReservation mints the RunningEntry with the CONCRETE bound host", () => {
+test("orchestrator bindReservationAsync mints the RunningEntry with the CONCRETE bound host", async () => {
   const clock = fakeClock(new Date("2026-01-01T00:00:00.000Z"));
   const settings = parseConfig();
   const probe = { governs: () => true, canAcquire: () => true };
@@ -2517,12 +2516,12 @@ test("orchestrator bindReservation mints the RunningEntry with the CONCRETE boun
     stateType: "unstarted",
   });
 
-  const reservation = claimReservation(orchestrator, issue);
+  const reservation = await claimReservation(orchestrator, issue);
   assert.ok(reservation);
 
   // startedAt is the BIND time, so run seconds never bill the provision wait.
   clock.advance(5_000);
-  const entry = orchestrator.bindReservation(reservation!, "leased-worker-3:2200");
+  const entry = await orchestrator.bindReservationAsync(reservation!, "leased-worker-3:2200");
   assert.equal(entry?.workerHost, "leased-worker-3:2200");
   assert.equal(entry?.startedAt.toISOString(), "2026-01-01T00:00:05.000Z");
   assert.equal(entry?.slotIndex, 0);
@@ -2537,10 +2536,10 @@ test("orchestrator bindReservation mints the RunningEntry with the CONCRETE boun
   assert.equal(orchestrator.snapshot().running[0]?.workerHost, "leased-worker-3:2200");
 
   // Bind is single-shot: the token was retired with the record.
-  assert.equal(orchestrator.bindReservation(reservation!, "leased-worker-4:2200"), null);
+  assert.equal(await orchestrator.bindReservationAsync(reservation!, "leased-worker-4:2200"), null);
 });
 
-test("orchestrator cancelReservation frees the slot with NO retry record, leaving the slot re-claimable", () => {
+test("orchestrator cancelReservationAsync frees the slot with NO retry record, leaving the slot re-claimable", async () => {
   const settings = parseConfig();
   const probe = { governs: () => true, canAcquire: () => true };
   const orchestrator = new Orchestrator(settings, systemClock, createState(), probe);
@@ -2552,12 +2551,12 @@ test("orchestrator cancelReservation frees the slot with NO retry record, leavin
     stateType: "unstarted",
   });
 
-  const reservation = claimReservation(orchestrator, issue);
+  const reservation = await claimReservation(orchestrator, issue);
   assert.ok(reservation);
   assert.equal(orchestrator.state.claimed.has(slotKey(issue.id, 0)), true);
   const retryAttemptsBefore = orchestrator.state.retryAttempts.size;
 
-  orchestrator.cancelReservation(reservation!);
+  await orchestrator.cancelReservationAsync(reservation!);
 
   assert.equal(orchestrator.state.reserved.has(slotKey(issue.id, 0)), false);
   assert.equal(orchestrator.state.claimed.has(slotKey(issue.id, 0)), false);
@@ -2566,16 +2565,16 @@ test("orchestrator cancelReservation frees the slot with NO retry record, leavin
   assert.equal(orchestrator.snapshot().usageTotals.secondsRunning, 0);
 
   // Idempotent: a second cancel of the same (retired) token is a no-op.
-  orchestrator.cancelReservation(reservation!);
+  await orchestrator.cancelReservationAsync(reservation!);
 
   // A cancelled reservation cannot be bound...
-  assert.equal(orchestrator.bindReservation(reservation!, "leased-worker-9:2200"), null);
+  assert.equal(await orchestrator.bindReservationAsync(reservation!, "leased-worker-9:2200"), null);
   // ...and the slot is immediately re-claimable.
-  const reclaim = claimReservation(orchestrator, issue);
+  const reclaim = await claimReservation(orchestrator, issue);
   assert.equal(reclaim?.slotIndex, 0);
 });
 
-test("orchestrator bindReservation is token-guarded: a cancel + re-reserve defeats a late bind (ABA)", () => {
+test("orchestrator bindReservationAsync is token-guarded: a cancel + re-reserve defeats a late bind (ABA)", async () => {
   const settings = parseConfig();
   const probe = { governs: () => true, canAcquire: () => true };
   const orchestrator = new Orchestrator(settings, systemClock, createState(), probe);
@@ -2587,27 +2586,27 @@ test("orchestrator bindReservation is token-guarded: a cancel + re-reserve defea
     stateType: "unstarted",
   });
 
-  const first = claimReservation(orchestrator, issue);
+  const first = await claimReservation(orchestrator, issue);
   assert.ok(first);
-  orchestrator.cancelReservation(first!);
-  const second = claimReservation(orchestrator, issue);
+  await orchestrator.cancelReservationAsync(first!);
+  const second = await claimReservation(orchestrator, issue);
   assert.ok(second);
   assert.notEqual(first?.token, second?.token);
 
   // The FIRST acquire resolves late: its bind must NOT activate against the
   // successor's record.
-  assert.equal(orchestrator.bindReservation(first!, "stale-worker:2200"), null);
+  assert.equal(await orchestrator.bindReservationAsync(first!, "stale-worker:2200"), null);
   assert.equal(orchestrator.state.reserved.size, 1);
   // A stale cancel must not free the successor's slot either.
-  orchestrator.cancelReservation(first!);
+  await orchestrator.cancelReservationAsync(first!);
   assert.equal(orchestrator.state.reserved.size, 1);
 
   // The successor binds normally.
-  const entry = orchestrator.bindReservation(second!, "fresh-worker:2200");
+  const entry = await orchestrator.bindReservationAsync(second!, "fresh-worker:2200");
   assert.equal(entry?.workerHost, "fresh-worker:2200");
 });
 
-test("orchestrator cancelReservation restores the consumed RetryEntry without clobbering a newer one", () => {
+test("orchestrator cancelReservationAsync restores the consumed RetryEntry without clobbering a newer one", async () => {
   const settings = parseConfig();
   const probe = { governs: () => true, canAcquire: () => true };
   const orchestrator = new Orchestrator(settings, systemClock, createState(), probe);
@@ -2632,23 +2631,23 @@ test("orchestrator cancelReservation restores the consumed RetryEntry without cl
   };
   orchestrator.state.retryAttempts.set(key, consumed);
 
-  const reservation = claimReservation(orchestrator, issue);
+  const reservation = await claimReservation(orchestrator, issue);
   assert.equal(orchestrator.state.retryAttempts.has(key), false);
-  orchestrator.cancelReservation(reservation!);
+  await orchestrator.cancelReservationAsync(reservation!);
   // Restored verbatim: affinity host and attempt counter survive the capacity miss.
   assert.deepEqual(orchestrator.state.retryAttempts.get(key), consumed);
 
   // A second round: when a NEWER entry occupies the key at cancel time, the
   // restore must not clobber it.
-  const again = claimReservation(orchestrator, issue);
+  const again = await claimReservation(orchestrator, issue);
   assert.ok(again);
   const newer = { ...consumed, attempt: 9, workerHost: "warm-worker-9:2200" };
   orchestrator.state.retryAttempts.set(key, newer);
-  orchestrator.cancelReservation(again!);
+  await orchestrator.cancelReservationAsync(again!);
   assert.deepEqual(orchestrator.state.retryAttempts.get(key), newer);
 });
 
-test("orchestrator counts reserved slots against the global concurrency cap", () => {
+test("orchestrator counts reserved slots against the global concurrency cap", async () => {
   const settings = parseConfig({ agent: { max_concurrent_agents: 1 } });
   const probe = { governs: () => true, canAcquire: () => true };
   const orchestrator = new Orchestrator(settings, systemClock, createState(), probe);
@@ -2667,15 +2666,15 @@ test("orchestrator counts reserved slots against the global concurrency cap", ()
     stateType: "unstarted",
   });
 
-  assert.ok(claimReservation(orchestrator, reservedIssue));
+  assert.ok(await claimReservation(orchestrator, reservedIssue));
   // The in-acquire reservation holds the single global slot at BOTH computation
   // sites: eligibility and claim's precheck.
-  assert.deepEqual(orchestrator.eligibleIssues([blockedIssue]), []);
+  assert.deepEqual(await orchestrator.eligibleIssuesAsync([blockedIssue]), []);
   assert.equal(orchestrator.snapshot().blocked[0]?.reason, "global_concurrency_cap");
-  assert.equal(orchestrator.claim(blockedIssue), null);
+  assert.equal(await orchestrator.claimAsync(blockedIssue), null);
 });
 
-test("orchestrator counts reserved slots against per-state concurrency caps", () => {
+test("orchestrator counts reserved slots against per-state concurrency caps", async () => {
   const settings = parseConfig({
     agent: { max_concurrent_agents: 5 },
     status_overrides: { Todo: { agent: { max_concurrent_agents: 1 } } },
@@ -2697,13 +2696,13 @@ test("orchestrator counts reserved slots against per-state concurrency caps", ()
     stateType: "unstarted",
   });
 
-  assert.ok(claimReservation(orchestrator, reservedIssue));
-  assert.deepEqual(orchestrator.eligibleIssues([blockedIssue]), []);
+  assert.ok(await claimReservation(orchestrator, reservedIssue));
+  assert.deepEqual(await orchestrator.eligibleIssuesAsync([blockedIssue]), []);
   assert.equal(orchestrator.snapshot().blocked[0]?.reason, "local_concurrency_cap");
-  assert.equal(orchestrator.claim(blockedIssue), null);
+  assert.equal(await orchestrator.claimAsync(blockedIssue), null);
 });
 
-test("orchestrator releaseStaleClaimsForRetry skips a live reservation's claimed key", () => {
+test("orchestrator releaseStaleClaimsForRetry skips a live reservation's claimed key", async () => {
   const clock = fakeClock(new Date("2026-01-01T00:00:00.000Z"));
   const settings = parseConfig({ agent: { ensemble_size: 2, max_concurrent_agents: 4 } });
   const probe = { governs: () => true, canAcquire: () => true };
@@ -2717,7 +2716,7 @@ test("orchestrator releaseStaleClaimsForRetry skips a live reservation's claimed
   });
 
   // Slot 0 is mid-acquire (claimed-without-running, a legitimate state now).
-  const reservation = claimReservation(orchestrator, issue);
+  const reservation = await claimReservation(orchestrator, issue);
   assert.equal(reservation?.slotIndex, 0);
   // Slot 1 has a DUE retry, which triggers releaseStaleClaimsForRetry.
   orchestrator.state.retryAttempts.set(slotKey(issue.id, 1), {
@@ -2730,16 +2729,16 @@ test("orchestrator releaseStaleClaimsForRetry skips a live reservation's claimed
     error: "agent exited",
   });
 
-  assert.equal(orchestrator.eligibleIssues([issue])[0]?.identifier, issue.identifier);
+  assert.equal((await orchestrator.eligibleIssuesAsync([issue]))[0]?.identifier, issue.identifier);
   // The live reservation survived the stale-claim release...
   assert.equal(orchestrator.state.reserved.has(slotKey(issue.id, 0)), true);
   assert.equal(orchestrator.state.claimed.has(slotKey(issue.id, 0)), true);
   // ...so the retry claim lands on ITS slot, never duplicating slot 0.
-  const retryReservation = claimReservation(orchestrator, issue);
+  const retryReservation = await claimReservation(orchestrator, issue);
   assert.equal(retryReservation?.slotIndex, 1);
 });
 
-test("orchestrator expiry sweep cancels a past-expiry reservation and restores its retry entry", () => {
+test("orchestrator expiry sweep cancels a past-expiry reservation and restores its retry entry", async () => {
   const clock = fakeClock(new Date("2026-01-01T00:00:00.000Z"));
   const settings = parseConfig();
   const probe = { governs: () => true, canAcquire: () => true };
@@ -2764,28 +2763,28 @@ test("orchestrator expiry sweep cancels a past-expiry reservation and restores i
   };
   orchestrator.state.retryAttempts.set(key, consumed);
 
-  const reservation = claimReservation(orchestrator, issue);
+  const reservation = await claimReservation(orchestrator, issue);
   assert.ok(reservation);
   // Default acquireTimeoutMs (30s, no workerPool configured): expiry = 2x + 60s grace.
   assert.equal(reservation?.expiresAtMonotonicMs, clock.monotonicMs() + 120_000);
 
   // Not yet expired: the sweep leaves the reservation alone.
   clock.advance(119_999);
-  orchestrator.eligibleIssues([]);
+  await orchestrator.eligibleIssuesAsync([]);
   assert.equal(orchestrator.state.reserved.size, 1);
 
   // Past expiry: the sweep cancels (a hung acquire cannot strand the slot) and
   // restores the consumed retry entry.
   clock.advance(1);
-  orchestrator.eligibleIssues([]);
+  await orchestrator.eligibleIssuesAsync([]);
   assert.equal(orchestrator.state.reserved.size, 0);
   assert.equal(orchestrator.state.claimed.has(key), false);
   assert.deepEqual(orchestrator.state.retryAttempts.get(key), consumed);
   // A late successful acquire after the sweep is token-guarded to a null bind.
-  assert.equal(orchestrator.bindReservation(reservation!, "late-worker:2200"), null);
+  assert.equal(await orchestrator.bindReservationAsync(reservation!, "late-worker:2200"), null);
 });
 
-test("orchestrator cleanupIssue cancels a mid-acquire reservation and clears its retry state", () => {
+test("orchestrator cleanupIssueAsync cancels a mid-acquire reservation and clears its retry state", async () => {
   const settings = parseConfig();
   const probe = { governs: () => true, canAcquire: () => true };
   const orchestrator = new Orchestrator(settings, systemClock, createState(), probe);
@@ -2807,10 +2806,10 @@ test("orchestrator cleanupIssue cancels a mid-acquire reservation and clears its
     workerHost: "warm-worker-1:2200",
     error: "agent exited",
   });
-  const reservation = claimReservation(orchestrator, issue);
+  const reservation = await claimReservation(orchestrator, issue);
   assert.ok(reservation);
 
-  orchestrator.cleanupIssue(issue.id);
+  await orchestrator.cleanupIssueAsync(issue.id);
 
   assert.equal(orchestrator.state.reserved.size, 0);
   assert.equal(orchestrator.state.claimed.size, 0);
@@ -2819,10 +2818,10 @@ test("orchestrator cleanupIssue cancels a mid-acquire reservation and clears its
   assert.equal(orchestrator.state.retryAttempts.size, 0);
   assert.equal(orchestrator.state.completed.has(issue.id), true);
   // The in-flight acquire resolves afterwards: its bind is a guarded null.
-  assert.equal(orchestrator.bindReservation(reservation!, "late-worker:2200"), null);
+  assert.equal(await orchestrator.bindReservationAsync(reservation!, "late-worker:2200"), null);
 });
 
-test("orchestrator refreshRunningIssue updates reserved records' issue for cap accounting", () => {
+test("orchestrator refreshRunningIssueAsync updates reserved records' issue for cap accounting", async () => {
   const settings = parseConfig({
     agent: { max_concurrent_agents: 5 },
     status_overrides: { "In Progress": { agent: { max_concurrent_agents: 1 } } },
@@ -2837,8 +2836,12 @@ test("orchestrator refreshRunningIssue updates reserved records' issue for cap a
     stateType: "unstarted",
   });
 
-  assert.ok(claimReservation(orchestrator, issue));
-  orchestrator.refreshRunningIssue({ ...issue, state: "In Progress", stateType: "started" });
+  assert.ok(await claimReservation(orchestrator, issue));
+  await orchestrator.refreshRunningIssueAsync({
+    ...issue,
+    state: "In Progress",
+    stateType: "started",
+  });
   assert.equal(orchestrator.state.reserved.get(slotKey(issue.id, 0))?.issue.state, "In Progress");
 
   // The refreshed state feeds per-state cap accounting during a long acquire.
@@ -2849,11 +2852,11 @@ test("orchestrator refreshRunningIssue updates reserved records' issue for cap a
     state: "In Progress",
     stateType: "started",
   });
-  assert.deepEqual(orchestrator.eligibleIssues([blocked]), []);
+  assert.deepEqual(await orchestrator.eligibleIssuesAsync([blocked]), []);
   assert.equal(orchestrator.snapshot().blocked[0]?.reason, "local_concurrency_cap");
 });
 
-test("orchestrator reserved map stays empty on the static path (no governing probe)", () => {
+test("orchestrator reserved map stays empty on the static path (no governing probe)", async () => {
   const orchestrator = new Orchestrator(parseConfig({ agent: { max_concurrent_agents: 4 } }));
   for (let index = 0; index < 4; index += 1) {
     const issue = normalizeIssue({
@@ -2863,15 +2866,15 @@ test("orchestrator reserved map stays empty on the static path (no governing pro
       state: "Todo",
       stateType: "unstarted",
     });
-    assert.ok(claimEntry(orchestrator, issue));
+    assert.ok(await claimEntryAsync(orchestrator, issue));
     assert.equal(orchestrator.state.reserved.size, 0);
     assert.equal(orchestrator.snapshot().reserving.length, 0);
   }
 });
 
-test("cap parity property: running + reserved never exceeds the cap and claimed === union(running, reserved)", () => {
-  fc.assert(
-    fc.property(
+test("cap parity property: running + reserved never exceeds the cap and claimed === union(running, reserved)", async () => {
+  await fc.assert(
+    fc.asyncProperty(
       fc.integer({ min: 1, max: 4 }),
       fc.array(
         fc.record({
@@ -2880,7 +2883,7 @@ test("cap parity property: running + reserved never exceeds the cap and claimed 
         }),
         { maxLength: 80 },
       ),
-      (maxConcurrent, ops) => {
+      async (maxConcurrent, ops) => {
         const clock = fakeClock(new Date("2026-01-01T00:00:00.000Z"));
         const settings = parseConfig({ agent: { max_concurrent_agents: maxConcurrent } });
         const probe = { governs: () => true, canAcquire: () => true };
@@ -2912,24 +2915,27 @@ test("cap parity property: running + reserved never exceeds the cap and claimed 
         for (const { op, pick } of ops) {
           if (op === "claim") {
             const issue = issues[pick % issues.length]!;
-            const result = orchestrator.claim(issue);
+            const result = await orchestrator.claimAsync(issue);
             if (result) {
               assert.equal(result.kind, "reserved");
               if (result.kind === "reserved") reservations.push(result.reservation);
             }
           } else if (op === "bind" && reservations.length > 0) {
             const [reservation] = reservations.splice(pick % reservations.length, 1);
-            const entry = orchestrator.bindReservation(reservation!, `worker-${pick}:2200`);
+            const entry = await orchestrator.bindReservationAsync(
+              reservation!,
+              `worker-${pick}:2200`,
+            );
             if (entry) {
               runningSlots.push({ issueId: reservation!.issueId, slotIndex: entry.slotIndex });
             }
           } else if (op === "cancel" && reservations.length > 0) {
             const [reservation] = reservations.splice(pick % reservations.length, 1);
-            orchestrator.cancelReservation(reservation!);
+            await orchestrator.cancelReservationAsync(reservation!);
           } else if (op === "finish" && runningSlots.length > 0) {
             const [slot] = runningSlots.splice(pick % runningSlots.length, 1);
             clock.advance(1_000);
-            orchestrator.finish(slot!.issueId, slot!.slotIndex, true);
+            await orchestrator.finishAsync(slot!.issueId, slot!.slotIndex, true);
           }
           assertInvariants();
         }
@@ -2939,7 +2945,7 @@ test("cap parity property: running + reserved never exceeds the cap and claimed 
   );
 });
 
-test("orchestrator workerCapacityAvailable falls through to local (true) when probe is present but not governing", () => {
+test("orchestrator workerCapacityAvailable falls through to local (true) when probe is present but not governing", async () => {
   // A disabled (reloaded-off) pool's probe is still installed for the lifetime, but
   // its canAcquire() returns false. When it no longer governs capacity the
   // orchestrator must NOT block on it; it must fall through to the static/local
@@ -2956,11 +2962,14 @@ test("orchestrator workerCapacityAvailable falls through to local (true) when pr
     stateType: "unstarted",
   });
 
-  assert.equal(orchestrator.eligibleIssues([issue])[0]?.identifier, "MT-FALLTHROUGH-LOCAL");
+  assert.equal(
+    (await orchestrator.eligibleIssuesAsync([issue]))[0]?.identifier,
+    "MT-FALLTHROUGH-LOCAL",
+  );
   assert.equal(orchestrator.snapshot().blocked.length, 0);
 });
 
-test("orchestrator workerCapacityAvailable honors static ssh_hosts when probe is present but not governing", () => {
+test("orchestrator workerCapacityAvailable honors static ssh_hosts when probe is present but not governing", async () => {
   // When the probe does not govern, the static sshHosts host-selection path is the
   // source of truth: a saturated host pool still reports no capacity.
   const settings = parseConfig({
@@ -2985,12 +2994,12 @@ test("orchestrator workerCapacityAvailable honors static ssh_hosts when probe is
   });
 
   // The claim takes the static selectWorkerHost path (real host, no reservation).
-  assert.equal(claimEntry(orchestrator, running)?.workerHost, "worker-a");
-  assert.deepEqual(orchestrator.eligibleIssues([blocked]), []);
+  assert.equal((await claimEntryAsync(orchestrator, running))?.workerHost, "worker-a");
+  assert.deepEqual(await orchestrator.eligibleIssuesAsync([blocked]), []);
   assert.equal(orchestrator.snapshot().blocked[0]?.reason, "worker_host_capacity");
 });
 
-test("orchestrator claim does NOT reserve when probe is present but not governing", () => {
+test("orchestrator claimAsync does NOT reserve when probe is present but not governing", async () => {
   // A non-governing probe must use the normal selectWorkerHost path, which yields
   // a running entry with null/local host (no ssh_hosts) instead of a reservation.
   const settings = parseConfig();
@@ -3004,7 +3013,7 @@ test("orchestrator claim does NOT reserve when probe is present but not governin
     stateType: "unstarted",
   });
 
-  const entry = claimEntry(orchestrator, issue);
+  const entry = await claimEntryAsync(orchestrator, issue);
   assert.ok(entry);
   assert.equal(entry?.workerHost, null);
   assert.equal(orchestrator.state.reserved.size, 0);

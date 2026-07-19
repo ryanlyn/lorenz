@@ -67,7 +67,7 @@ opens a durable store and passes it into the runtime. See
 
 Startup runs in order: register backends, load and validate the workflow, acquire the same-host daemon lease when the `daemon` feature is enabled (long-running mode), open the selected claim store, build the coordinator, gate co-residence, construct the runtime, start the server and TUI, then poll.
 
-`registerBuiltinBackends()` runs first and wires every built-in tracker (`linear`, `local`, `memory`, `jira`, `slack`), the jira tool pack (tool kind `jira`), the ACP agent executor, and the built-in worker drivers (`fake`, `static-ssh`, `docker`) into the process-wide registries. It is idempotent.
+`registerBuiltinBackends()` runs first and wires every built-in tracker (`linear`, `local`, `memory`, `jira`, `slack`, `discord`), their tool packs, the ACP agent executor, and the built-in worker drivers (`fake`, `static-ssh`, `docker`) into the process-wide registries. It is idempotent.
 
 The coordinator anchors at `baseDir = dirname(workflow.path)`, the directory of the workflow file. `assertSlotsPerMachineGate` then runs as a post-construction check (see [Co-residence gate](#co-residence-gate)). `validateDispatchConfig` runs at startup and again as the runtime's per-reload `validateDispatch` hook, so a bad edit to `WORKFLOW.md` is caught on the next poll rather than at dispatch time.
 
