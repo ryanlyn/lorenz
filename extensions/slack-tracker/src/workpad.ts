@@ -22,8 +22,11 @@ import { makeMetadataSeq, SlackApiError } from "./webTransport.js";
 export const WORKPAD_CANCEL_ACTION = "lorenz_cancel";
 export const WORKPAD_DETAILS_ACTION = "lorenz_details";
 
-/** Bound on the metadata-carried sections; Slack caps message metadata at a few KB. */
+/** Per-block bound; the shared content budget below also keeps fallback and metadata bounded. */
 const SECTION_MAX_CHARS = 2_000;
+/** Shared plan/note budget, leaving room for metadata keys and the plain-text fallback header. */
+const CONTENT_MAX_CHARS = 2_800;
+const CLIPPED_SUFFIX = "\n… (clipped)";
 
 export interface WorkpadContent {
   issueId: string;
@@ -32,19 +35,34 @@ export interface WorkpadContent {
 }
 
 /** Clamp a section to the metadata budget, marking the cut so nothing truncates silently. */
-function clampWorkpadSection(text: string | undefined): string | undefined {
+function clampWorkpadSection(
+  text: string | undefined,
+  maxChars = SECTION_MAX_CHARS,
+): string | undefined {
   if (text === undefined) return undefined;
-  if (text.length <= SECTION_MAX_CHARS) return text;
-  return `${text.slice(0, SECTION_MAX_CHARS - 12)}\n… (clipped)`;
+  if (text.length <= maxChars) return text;
+  return `${text.slice(0, Math.max(0, maxChars - CLIPPED_SUFFIX.length))}${CLIPPED_SUFFIX}`;
+}
+
+/** Sanitize and fit both sections into one payload budget, preserving plan space first. */
+function normalizeWorkpadContent(content: WorkpadContent): WorkpadContent {
+  const rawPlan = content.plan === undefined ? undefined : stripBroadcastMentions(content.plan);
+  const rawNote = content.note === undefined ? undefined : stripBroadcastMentions(content.note);
+  const plan = clampWorkpadSection(rawPlan);
+  const note = clampWorkpadSection(
+    rawNote,
+    Math.min(SECTION_MAX_CHARS, CONTENT_MAX_CHARS - (plan?.length ?? 0)),
+  );
+  return {
+    ...content,
+    ...(plan !== undefined ? { plan } : {}),
+    ...(note !== undefined ? { note } : {}),
+  };
 }
 
 /** The workpad's Block Kit body plus its plain-text fallback. */
 export function renderWorkpadBlocks(content: WorkpadContent, settings: Settings): SlackPostOptions {
-  const safeContent: WorkpadContent = {
-    ...content,
-    plan: sanitizeWorkpadSection(content.plan),
-    note: sanitizeWorkpadSection(content.note),
-  };
+  const safeContent = normalizeWorkpadContent(content);
   const blocks: unknown[] = [
     { type: "section", text: { type: "mrkdwn", text: "*Lorenz workpad*" } },
   ];
@@ -125,11 +143,7 @@ export async function upsertWorkpad(
   content: WorkpadContent,
   existing: ThreadWorkpad | undefined,
 ): Promise<string> {
-  const clamped: WorkpadContent = {
-    ...content,
-    plan: sanitizeWorkpadSection(content.plan),
-    note: sanitizeWorkpadSection(content.note),
-  };
+  const clamped = normalizeWorkpadContent(content);
   const options = renderWorkpadBlocks(clamped, settings);
   const fallback = workpadFallback(clamped);
   if (existing !== undefined) {
@@ -148,9 +162,4 @@ export async function upsertWorkpad(
     }
   }
   return transport.postReply(channel, rootTs, fallback, options);
-}
-
-function sanitizeWorkpadSection(text: string | undefined): string | undefined {
-  const clamped = clampWorkpadSection(text);
-  return clamped === undefined ? undefined : stripBroadcastMentions(clamped);
 }

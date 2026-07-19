@@ -1,7 +1,7 @@
 import { errorMessage, isRecord, type Settings } from "@lorenz/domain";
 
 import { splitIssueId } from "./ids.js";
-import { requireTrackedMessage, updateSlackStatus } from "./operations.js";
+import { requireTrackedMessage, updateSlackStatusFromWorkpad } from "./operations.js";
 import { stateFromThread, type ThreadState } from "./threadState.js";
 import type { SlackTransport } from "./transport.js";
 import type { SlackTrackerLogger } from "./webTransport.js";
@@ -11,11 +11,11 @@ import { WORKPAD_CANCEL_ACTION, WORKPAD_DETAILS_ACTION } from "./workpad.js";
  * Block-action handling for the workpad buttons, delivered over the same Socket Mode connection
  * as events (no public HTTP endpoint). Two invariants:
  *
- * - The Cancel button is a SHORTCUT for typing `@bot !cancel`, not a new privilege: it goes
- *   through the exact same authoritative path (a bot `status: Cancelled` reply, folded like any
- *   other event, aborted by the runtime's reconciliation) and is permitted for any human,
- *   matching the `!`-command model where the author allowlist gates issue CREATION only. The
- *   attribution line in the reply keeps the transition auditable to a person.
+ * - The Cancel button is a SHORTCUT for typing `@bot !cancel`, not a new privilege. Its trusted,
+ *   bot-authored action value is validated against configured channels without a Slack history
+ *   read, then posts the same authoritative `status: Cancelled` event and nudges reconciliation
+ *   immediately. Any human may use it, matching the `!`-command model where the author allowlist
+ *   gates issue CREATION only. The attribution line keeps the transition auditable to a person.
  * - The Details modal is per-user and ephemeral: it renders the issue's session state (folded
  *   status history, current run surface, artifacts) from reads the daemon already serves
  *   cheaply, and it must be built within the trigger_id's ~3-second validity.
@@ -67,10 +67,6 @@ export async function handleSlackInteraction(
     }
   } catch (error) {
     context.logger.warn(`slack interaction handling failed: ${errorMessage(error)}`);
-  } finally {
-    // Whatever the interaction did (posted a status, or nothing), a poll against the mirror is
-    // cheap - and for a cancel it is what turns the posted status into an aborted run.
-    context.nudge?.();
   }
 }
 
@@ -89,13 +85,17 @@ async function handleCancel(
       : "(requested via the workpad Cancel button)";
   let outcome;
   try {
-    outcome = await updateSlackStatus(
+    outcome = await updateSlackStatusFromWorkpad(
       context.settings,
       context.transport,
       channel,
       ts,
       "Cancelled",
-      { attribution, ...(userId !== null ? { actor: userId } : {}) },
+      {
+        attribution,
+        ...(userId !== null ? { actor: userId } : {}),
+        ...(context.nudge !== undefined ? { onPosted: context.nudge } : {}),
+      },
     );
   } catch (error) {
     await reportCancelFailure(issueId, channel, ts, userId, errorMessage(error), context);
@@ -103,6 +103,7 @@ async function handleCancel(
   }
   if (!outcome.ok) {
     await reportCancelFailure(issueId, channel, ts, userId, outcome.message, context);
+    return;
   }
 }
 

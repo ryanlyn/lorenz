@@ -323,15 +323,18 @@ a section. It is a display surface, never state. Status remains in the thread ev
 bot-owned reaction mirror, so workpad updates only touch plan and note content. A workpad that
 cannot be edited because Slack definitively rejects its stored message identity is reposted.
 The top-level plain-text fallback includes the plan and note for clients and accessibility tools
-that do not render Block Kit content.
+that do not render Block Kit content. Plan and note share one bounded content budget, so the
+fallback and message metadata remain valid when an update supplies unusually long sections.
 
 With Socket Mode enabled, the workpad carries two buttons delivered as `interactive` envelopes.
 Pull-only workpads omit the actions because no interaction stream is available:
 
 - **Cancel** posts the authoritative `status: Cancelled` reply with an attribution line naming
-  the clicker, then nudges a poll so the runtime's reconciliation aborts the running agent within
-  seconds. It is a shortcut for typing `@bot !cancel`, not a new privilege: any human can use it,
-  matching the `!`-command model (the author allowlist gates issue creation, not transitions).
+  the clicker, then immediately nudges a poll so the runtime's reconciliation aborts the running
+  agent. The trusted workpad action validates its configured channel without waiting for a
+  history read, and the display reaction heals in the background. It is a shortcut for typing
+  `@bot !cancel`, not a new privilege: any human can use it, matching the `!`-command model (the
+  author allowlist gates issue creation, not transitions).
 - **Details** opens a per-user modal - the in-Slack session view: current status, the folded
   status history (who moved the issue where, when), the request, the live plan/note, and artifact
   links harvested from the bot's replies, with a Refresh button. It consumes Slack's short-lived

@@ -232,6 +232,33 @@ test("the workpad fallback carries plan and note text", async () => {
   );
 });
 
+test("the workpad shares one bounded budget across plan, note, fallback, and metadata", async () => {
+  const transport = new InMemorySlackTransport(
+    { C1: [{ ts: "1.0", text: "<@U_BOT> do it", user: "U2" }] },
+    { botUserId: "U_BOT" },
+  );
+
+  await upsertWorkpad(
+    settings(),
+    transport,
+    "C1",
+    "1.0",
+    {
+      issueId: "C1:1.0",
+      plan: "p".repeat(2_000),
+      note: "n".repeat(2_000),
+    },
+    undefined,
+  );
+
+  const reply = (await transport.getThread("C1", "1.0"))[0]!;
+  const plan = reply.metadata!.payload.plan as string;
+  const note = reply.metadata!.payload.note as string;
+  assert.equal(plan.length + note.length, 2_800);
+  assert.ok(note.endsWith("… (clipped)"));
+  assert.ok(transport.replies[0]!.body.length < 4_000);
+});
+
 test("concurrent partial workpad updates serialize into one merged message", async () => {
   const transport = new InMemorySlackTransport(
     { C1: [{ ts: "1.0", text: "<@U_BOT> do it", user: "U2" }] },
@@ -352,6 +379,43 @@ test("the Cancel button posts an attributed authoritative status reply and nudge
   const folded = stateFromThread(root, replies, settings());
   assert.equal(folded.state, "Cancelled");
   assert.equal(folded.events.at(-1)?.actor, "U9");
+});
+
+test("the Cancel button nudges after the status post without waiting for a root read", async () => {
+  const transport = new InMemorySlackTransport(
+    { C1: [{ ts: "1.0", text: "<@U_BOT> do it", user: "U2" }] },
+    { botUserId: "U_BOT" },
+  );
+  const getMessage = transport.getMessage.bind(transport);
+  let reportReadStarted!: () => void;
+  let releaseRead!: () => void;
+  const readStarted = new Promise<void>((resolve) => {
+    reportReadStarted = resolve;
+  });
+  const readGate = new Promise<void>((resolve) => {
+    releaseRead = resolve;
+  });
+  transport.getMessage = async (channel, ts) => {
+    assert.equal(nudges, 1);
+    reportReadStarted();
+    await readGate;
+    return getMessage(channel, ts);
+  };
+  let nudges = 0;
+
+  await handleSlackInteraction(
+    {
+      type: "block_actions",
+      user: { id: "U9" },
+      actions: [{ action_id: "lorenz_cancel", value: "C1:1.0" }],
+    },
+    { settings: settings(), transport, logger: silentLogger, nudge: () => (nudges += 1) },
+  );
+
+  await readStarted;
+  assert.equal(nudges, 1);
+  assert.equal(transport.replies.length, 1);
+  releaseRead();
 });
 
 test("the Cancel button reports a failed status write to the clicker", async () => {

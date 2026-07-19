@@ -26,6 +26,12 @@ export interface SlackMessage {
    * bot's derived visibility reaction cannot become authoritative.
    */
   threadEventsObserved?: boolean | undefined;
+  /**
+   * Set by the event mirror after a root-mention issue is edited so it is no longer eligible.
+   * Bot-owned status reactions remain visible, but cannot keep that root tracked. Editing the
+   * root back to an eligible mention clears the suppression.
+   */
+  trackingSuppressed?: boolean | undefined;
 }
 
 /**
@@ -35,7 +41,7 @@ export interface SlackMessage {
  * has since been tightened.
  */
 export function isBotMarked(message: SlackMessage): boolean {
-  return message.botReactions.length > 0;
+  return message.trackingSuppressed !== true && message.botReactions.length > 0;
 }
 
 /**

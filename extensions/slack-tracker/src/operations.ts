@@ -43,6 +43,9 @@ export async function requireTrackedMessage(
   if (!message) {
     throw new Error(`no tracked issue at ${channel}:${ts}`);
   }
+  if (message.trackingSuppressed === true) {
+    throw new Error("message is no longer a tracked bot-mention issue");
+  }
   // A root the bot already marked (its own reaction) stays tracked regardless of the author
   // allowlist: it was accepted on an earlier poll, so tightening `users` later must not orphan
   // an issue the agent is mid-flight on. New tracking honors the allowlist on the author.
@@ -90,12 +93,7 @@ export async function updateSlackStatus(
 ): Promise<SlackStatusUpdateOutcome> {
   const canonical = resolveStateName(status, settings);
   if (canonical === null) {
-    return {
-      ok: false,
-      message:
-        `unknown status '${status}': use one of the workflow's active/terminal states ` +
-        `(${[...settings.tracker.activeStates, ...settings.tracker.terminalStates].join(", ")})`,
-    };
+    return unknownStatusOutcome(status, settings);
   }
   // Trust-boundary check: the agent-supplied issueId must point at a watched channel and a
   // tracked message before we write into its thread.
@@ -105,6 +103,61 @@ export async function updateSlackStatus(
   // fold prefers: only the posting app can attach metadata, so it cannot be forged, and the
   // unique `seq` upgrades delivery to exactly-once (an ambiguous outcome reconciles against the
   // thread instead of silently losing - or duplicating - a transition).
+  await postStatusReply(transport, channel, ts, canonical, options);
+  await mirrorStatusReaction(settings, transport, channel, ts, canonical, root.botReactions);
+  return { ok: true, status: canonical, root };
+}
+
+/**
+ * Post a status selected from a workpad action.
+ *
+ * The action value comes from a bot-authored block delivered over authenticated Socket Mode, so
+ * it does not need an API read to re-establish the tool trust boundary. The configured channel
+ * and status are still validated before the append-only reply is posted. Reaction healing starts
+ * in the background because it is display-only and can wait behind Slack rate limits without
+ * delaying cancellation.
+ */
+export async function updateSlackStatusFromWorkpad(
+  settings: Settings,
+  transport: SlackTransport,
+  channel: string,
+  ts: string,
+  status: string,
+  options: { attribution?: string; actor?: string; onPosted?: () => void } = {},
+): Promise<{ ok: true; status: string } | { ok: false; message: string }> {
+  const canonical = resolveStateName(status, settings);
+  if (canonical === null) {
+    return unknownStatusOutcome(status, settings);
+  }
+  requireBotUserId(settings);
+  if (!slackTrackerOptions(settings).channels.includes(channel)) {
+    return { ok: false, message: `channel '${channel}' is not a configured tracker channel` };
+  }
+  const { onPosted, ...postOptions } = options;
+  await postStatusReply(transport, channel, ts, canonical, postOptions);
+  onPosted?.();
+  void healStatusReactionFromCurrentRoot(settings, transport, channel, ts, canonical).catch(() => {
+    // Display-only healing retries during normal tracker reconciliation.
+  });
+  return { ok: true, status: canonical };
+}
+
+function unknownStatusOutcome(status: string, settings: Settings): { ok: false; message: string } {
+  return {
+    ok: false,
+    message:
+      `unknown status '${status}': use one of the workflow's active/terminal states ` +
+      `(${[...settings.tracker.activeStates, ...settings.tracker.terminalStates].join(", ")})`,
+  };
+}
+
+async function postStatusReply(
+  transport: SlackTransport,
+  channel: string,
+  ts: string,
+  canonical: string,
+  options: { attribution?: string; actor?: string },
+): Promise<void> {
   const body =
     options.attribution === undefined
       ? `${BOT_STATUS_PREFIX} ${canonical}`
@@ -120,8 +173,18 @@ export async function updateSlackStatus(
       },
     },
   });
-  await mirrorStatusReaction(settings, transport, channel, ts, canonical, root.botReactions);
-  return { ok: true, status: canonical, root };
+}
+
+async function healStatusReactionFromCurrentRoot(
+  settings: Settings,
+  transport: SlackTransport,
+  channel: string,
+  ts: string,
+  state: string,
+): Promise<void> {
+  const root = await transport.getMessage(channel, ts);
+  if (root === null) return;
+  await mirrorStatusReaction(settings, transport, channel, ts, state, root.botReactions);
 }
 
 /**

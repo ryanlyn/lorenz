@@ -9,6 +9,7 @@ import { parseSlackConfig } from "./helpers.js";
 import {
   InMemorySlackTransport,
   MirrorBackedSlackTransport,
+  SlackTrackerClient,
   stateFromThread,
   WORKPAD_METADATA_EVENT,
   type SlackMessage,
@@ -628,6 +629,79 @@ test("editing an unmirrored root to mention the bot makes it immediately discove
     updated.mentions.map((message) => message.ts),
     ["5.0"],
   );
+  assert.equal(inner.messageReads, 1);
+});
+
+test("an irrelevant edit to an unmirrored root performs no serialized point read", async () => {
+  const inner = counting(
+    new InMemorySlackTransport(
+      {
+        C1: [
+          { ts: "1.0", text: "<@U_BOT> tracked", user: "U2" },
+          { ts: "5.0", text: "plain root", user: "U3" },
+        ],
+      },
+      { botUserId: "U_BOT" },
+    ),
+  );
+  const mirror = mirrored(inner);
+  await mirror.scanChannels(["C1"]);
+
+  mirror.applyEvent(
+    messageEvent({
+      type: "message",
+      subtype: "message_changed",
+      channel: "C1",
+      message: { ts: "5.0", text: "still plain", user: "U3" },
+    }),
+  );
+  const scan = await mirror.scanChannels(["C1"]);
+
+  assert.equal(inner.messageReads, 0);
+  assert.equal(inner.scans, 1);
+  assert.equal(scan.mentions.length, 1);
+  assert.equal(scan.threadedRoots.length, 0);
+});
+
+test("editing a root mention away suppresses its status reaction as a tracking marker", async () => {
+  const raw = new InMemorySlackTransport(
+    {
+      C1: [
+        {
+          ts: "1.0",
+          text: "<@U_BOT> tracked",
+          user: "U2",
+          reactions: ["eyes"],
+          replies: [{ ts: "1.5", text: "status: In Progress", user: "U_BOT" }],
+        },
+      ],
+    },
+    { botUserId: "U_BOT" },
+  );
+  let clock = 0;
+  const mirror = mirrored(raw, () => clock);
+  await mirror.scanChannels(["C1"]);
+  await raw.updateMessage("C1", "1.0", "mention removed");
+
+  mirror.applyEvent(
+    messageEvent({
+      type: "message",
+      subtype: "message_changed",
+      channel: "C1",
+      message: { ts: "1.0", text: "mention removed", user: "U2" },
+    }),
+  );
+
+  let scan = await mirror.scanChannels(["C1"]);
+  assert.equal(scan.mentions.length, 0);
+  assert.equal(scan.threadedRoots[0]!.trackingSuppressed, true);
+  const client = new SlackTrackerClient(settings(), mirror);
+  assert.deepEqual(await client.fetchIssuesByIds(["C1:1.0"]), []);
+
+  clock = 60_001;
+  scan = await mirror.scanChannels(["C1"]);
+  assert.equal(scan.threadedRoots[0]!.trackingSuppressed, true);
+  assert.deepEqual(await client.fetchIssuesByIds(["C1:1.0"]), []);
 });
 
 test("delayed root create events cannot undo an edit or resurrect a deletion", async () => {

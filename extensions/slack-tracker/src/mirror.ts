@@ -86,6 +86,10 @@ interface ChannelState {
   replyIndex: Map<string, string>;
   /** Edited/deleted root timestamps that delayed duplicate create events must not overwrite. */
   rootCreateBarriers: Set<string>;
+  /** Roots observed as eligible root-mention issues, retained across scan-window aging. */
+  rootMentionTracked: Set<string>;
+  /** Root-mention issues whose current edit removed their tracking eligibility. */
+  rootTrackingSuppressions: Set<string>;
   /** Roots that have observed at least one thread-derived status transition. */
   rootsWithThreadEvents: Set<string>;
   /** Last successful real scan; null until bootstrapped. */
@@ -307,10 +311,13 @@ export class MirrorBackedSlackTransport implements SlackTransport {
     // Point reads stay authoritative API reads: they back the tool trust boundary
     // (requireTrackedMessage) and the claimed-issue fallback, where staleness is not acceptable.
     const message = await this.inner.getMessage(channel, ts);
-    if (message === null || !this.channels.get(channel)?.rootsWithThreadEvents.has(ts)) {
-      return message;
-    }
-    return { ...message, threadEventsObserved: true };
+    if (message === null) return null;
+    const state = this.channels.get(channel);
+    return {
+      ...message,
+      ...(state?.rootsWithThreadEvents.has(ts) ? { threadEventsObserved: true } : {}),
+      ...(state?.rootTrackingSuppressions.has(ts) ? { trackingSuppressed: true } : {}),
+    };
   }
 
   async teamUrl(): Promise<string | null> {
@@ -473,6 +480,8 @@ export class MirrorBackedSlackTransport implements SlackTransport {
         authoritativeThreads: new Set(),
         replyIndex: new Map(),
         rootCreateBarriers: new Set(),
+        rootMentionTracked: new Set(),
+        rootTrackingSuppressions: new Set(),
         rootsWithThreadEvents: new Set(),
         syncedAt: null,
         dirty: false,
@@ -503,11 +512,18 @@ export class MirrorBackedSlackTransport implements SlackTransport {
   private installChannelSnapshot(channel: string, scan: SlackChannelScan): void {
     const state = this.channelState(channel);
     const seen = new Set<string>();
+    const mentionTimestamps = new Set(scan.mentions.map((message) => message.ts));
     const previousRoots = state.roots;
     state.roots = new Map();
     for (const message of [...scan.mentions, ...scan.threadedRoots]) {
       seen.add(message.ts);
       this.storeRoot(state, message, true);
+      if (mentionTimestamps.has(message.ts)) {
+        rememberBounded(state.rootMentionTracked, message.ts, ROOT_CREATE_BARRIERS_MAX);
+        state.rootTrackingSuppressions.delete(message.ts);
+      } else if (state.rootMentionTracked.has(message.ts)) {
+        rememberBounded(state.rootTrackingSuppressions, message.ts, ROOT_CREATE_BARRIERS_MAX);
+      }
       const thread = state.threads.get(message.ts);
       if (thread) {
         for (const [ts, reply] of [...thread]) {
@@ -579,6 +595,7 @@ export class MirrorBackedSlackTransport implements SlackTransport {
       ...(replyCount > 0 ? { replyCount } : {}),
       ...(latestReply !== undefined ? { latestReply } : {}),
       ...(state.rootsWithThreadEvents.has(root.ts) ? { threadEventsObserved: true } : {}),
+      ...(state.rootTrackingSuppressions.has(root.ts) ? { trackingSuppressed: true } : {}),
     };
   }
 
@@ -719,6 +736,13 @@ export class MirrorBackedSlackTransport implements SlackTransport {
   ): void {
     const state = this.channelState(channel);
     if (state.rootCreateBarriers.has(message.ts)) return;
+    if (
+      isBotMention(message.text, this.botUserId) &&
+      isAllowedAuthor(message.user, this.allowedUsers)
+    ) {
+      rememberBounded(state.rootMentionTracked, message.ts, ROOT_CREATE_BARRIERS_MAX);
+      state.rootTrackingSuppressions.delete(message.ts);
+    }
     const existing = state.roots.get(message.ts);
     if (existing) {
       // Root text changes arrive as `message_changed`. A plain message/app_mention event for an
@@ -749,12 +773,12 @@ export class MirrorBackedSlackTransport implements SlackTransport {
     },
   ): Promise<void> {
     const state = this.channelState(channel);
+    const eligibleReplyMention =
+      reply.user !== undefined &&
+      isAllowedAuthor(reply.user, this.allowedUsers) &&
+      isBotMention(reply.text, this.botUserId);
     if (!state.roots.has(rootTs)) {
-      const couldTrackRoot =
-        reply.user === this.botUserId ||
-        (reply.user !== undefined &&
-          isAllowedAuthor(reply.user, this.allowedUsers) &&
-          isBotMention(reply.text, this.botUserId));
+      const couldTrackRoot = reply.user === this.botUserId || eligibleReplyMention;
       if (!couldTrackRoot) return;
       // A reply into a thread whose root the mirror does not carry (older than the scan window,
       // or a plain message receiving its first relevant reply) needs one authoritative point
@@ -832,6 +856,14 @@ export class MirrorBackedSlackTransport implements SlackTransport {
       // Root edits track current text: an edit that removes the mention untracks the issue at
       // the next fold, exactly as a re-scan would observe it (the documented contract).
       rememberBounded(state.rootCreateBarriers, ts, ROOT_CREATE_BARRIERS_MAX);
+      const eligibleNow =
+        isBotMention(newText, this.botUserId) && isAllowedAuthor(root.user, this.allowedUsers);
+      if (eligibleNow) {
+        rememberBounded(state.rootMentionTracked, ts, ROOT_CREATE_BARRIERS_MAX);
+        state.rootTrackingSuppressions.delete(ts);
+      } else if (state.rootMentionTracked.has(ts)) {
+        rememberBounded(state.rootTrackingSuppressions, ts, ROOT_CREATE_BARRIERS_MAX);
+      }
       root.text = newText;
       return;
     }
@@ -844,12 +876,25 @@ export class MirrorBackedSlackTransport implements SlackTransport {
         this.markDirty(channel, `edit ${ts} references an unknown reply in ${threadTs}`);
         return;
       }
+      // Root edits that remain ineligible cannot create an issue, so record their ordering
+      // barrier without putting the serialized event queue behind a Slack history read.
+      const editedUser = typeof edited.user === "string" ? edited.user : undefined;
+      const eligibleNow =
+        isBotMention(newText, this.botUserId) && isAllowedAuthor(editedUser, this.allowedUsers);
+      rememberBounded(state.rootCreateBarriers, ts, ROOT_CREATE_BARRIERS_MAX);
+      if (!eligibleNow) {
+        if (state.rootMentionTracked.has(ts)) {
+          rememberBounded(state.rootTrackingSuppressions, ts, ROOT_CREATE_BARRIERS_MAX);
+        }
+        return;
+      }
       // A root outside the scan may become an issue when edited to mention the bot. Fetch its
       // authoritative shape and add it to the mirror before the event-triggered poll collects.
       const message = await this.inner.getMessage(channel, ts);
       if (message !== null) {
         this.storeRoot(state, message, true);
-        rememberBounded(state.rootCreateBarriers, ts, ROOT_CREATE_BARRIERS_MAX);
+        rememberBounded(state.rootMentionTracked, ts, ROOT_CREATE_BARRIERS_MAX);
+        state.rootTrackingSuppressions.delete(ts);
       }
       return;
     }
