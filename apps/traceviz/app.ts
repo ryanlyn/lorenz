@@ -3,50 +3,29 @@ import path from "node:path";
 
 import { Hono } from "hono";
 import { serveStatic } from "@hono/node-server/serve-static";
-import type { DisplayEvent, TicketTraceResponse, TraceStats } from "@lorenz/traceviz-server";
+import {
+  createTraceTicketRoutes,
+  decodePathParam,
+  invalidPathParameterError,
+  type TraceDataSource,
+} from "@lorenz/server/trace-routes";
+import type { TraceStats } from "@lorenz/traceviz-core";
 
 export type TracevizAppOptions = {
   dashboardDist: string;
-  events: DisplayEvent[];
-  identifier: string;
-  issueId: string;
+  source: TraceDataSource;
   stats: TraceStats;
 };
 
-export function createTracevizApp({
-  dashboardDist,
-  events,
-  identifier,
-  issueId,
-  stats,
-}: TracevizAppOptions): Hono {
+export function createTracevizApp({ dashboardDist, source, stats }: TracevizAppOptions): Hono {
   const app = new Hono();
 
-  app.get("/api/v1/tickets", (c) => {
-    return c.json({
-      tickets: [
-        {
-          issueId,
-          identifier,
-          turnCount: events.filter((e) => e.kind === "turn_started").length,
-          status: "completed" as const,
-          startedAt: events[0]?.timestamp,
-        },
-      ],
-    });
-  });
-
-  app.get("/api/v1/tickets/:id/events", (c) => {
-    if (decodeURIComponent(c.req.param("id")) !== issueId) {
-      return c.json({ error: "Ticket not found" }, 404);
-    }
-
-    const response: TicketTraceResponse = { issueId, identifier, events };
-    return c.json(response);
-  });
+  app.route("/", createTraceTicketRoutes(source));
 
   app.get("/api/v1/tickets/:id/stats", (c) => {
-    if (decodeURIComponent(c.req.param("id")) !== issueId) {
+    const issueId = decodePathParam(c.req.param("id"));
+    if (issueId === null) return c.json({ error: invalidPathParameterError }, 400);
+    if (source.getTicketTrace(issueId) === null) {
       return c.json({ error: "Ticket not found" }, 404);
     }
 

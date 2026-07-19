@@ -23,7 +23,7 @@
       "path": "../runtime-events"
     },
     {
-      "path": "../traceviz-server"
+      "path": "../traceviz-core"
     }
   ]
 }

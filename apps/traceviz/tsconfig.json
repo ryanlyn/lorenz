@@ -11,7 +11,10 @@
   ],
   "references": [
     {
-      "path": "../../packages/traceviz-server"
+      "path": "../../packages/server"
+    },
+    {
+      "path": "../../packages/traceviz-core"
     }
   ]
 }

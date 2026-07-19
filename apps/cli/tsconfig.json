@@ -23,9 +23,6 @@
       "path": "../../packages/worker-sdk"
     },
     {
-      "path": "../../packages/cli-kit"
-    },
-    {
       "path": "../../packages/config"
     },
     {
@@ -36,6 +33,9 @@
     },
     {
       "path": "../../extensions/docker-worker"
+    },
+    {
+      "path": "../../extensions/discord-tracker"
     },
     {
       "path": "../../packages/domain"
@@ -75,15 +75,6 @@
     },
     {
       "path": "../../packages/presenter"
-    },
-    {
-      "path": "../../packages/projections"
-    },
-    {
-      "path": "../../packages/prompt"
-    },
-    {
-      "path": "../../packages/retry-scheduler"
     },
     {
       "path": "../../packages/runtime"

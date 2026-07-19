@@ -7,10 +7,10 @@ import { assert, tempDir, writeExecutable } from "@lorenz/test-utils";
 
 const repoRoot = path.resolve(import.meta.dirname, "..");
 const linearWorkflowFiles = ["WORKFLOW.md"];
-const workflowFiles = [...linearWorkflowFiles, "WORKFLOW.local.md"];
+const bootstrapWorkflowFiles = [...linearWorkflowFiles, "WORKFLOW.local.md"];
 
-test("packaged workflow files use TypeScript workspace bootstrap hooks", async () => {
-  for (const filename of workflowFiles) {
+test("repository workflows use TypeScript workspace bootstrap hooks", async () => {
+  for (const filename of bootstrapWorkflowFiles) {
     const workflow = await fs.readFile(path.join(repoRoot, filename), "utf8");
     assert.match(workflow, /mise trust\s+mise exec -- pnpm install --frozen-lockfile/);
     assert.notMatch(workflow, /cd elixir/);
@@ -19,8 +19,16 @@ test("packaged workflow files use TypeScript workspace bootstrap hooks", async (
   }
 });
 
+test("the chat workflow leaves repository setup to the dispatched agent", async () => {
+  const workflow = await fs.readFile(path.join(repoRoot, "WORKFLOW.chat.md"), "utf8");
+
+  assert.notMatch(workflow, /^\s+after_create:/m);
+  assert.notMatch(workflow, /^\s+git clone\b/m);
+  assert.match(workflow, /per-issue workspace starts empty/);
+});
+
 test("workspace bootstrap hooks fail when clone fails without mise", async () => {
-  for (const filename of workflowFiles) {
+  for (const filename of bootstrapWorkflowFiles) {
     const workflow = await fs.readFile(path.join(repoRoot, filename), "utf8");
     const hookBody = extractAfterCreateHook(workflow);
     const temp = await tempDir("lorenz-workflow-bootstrap");

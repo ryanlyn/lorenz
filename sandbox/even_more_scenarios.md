@@ -11,7 +11,7 @@
 
 ### Failure 12: S-1251  
 **Invariant Violated:** Per-state concurrency cap SHALL be enforced regardless of state name casing  
-**Code Location:** `packages/orchestrator/src/index.ts` — `eligibleIssues` / `claim` (runningByState Map construction) and `packages/dispatch/src/index.ts` — `dispatchBlockReason` (line 64)  
+**Code Location:** `packages/orchestrator/src/index.ts` — `eligibleIssuesAsync` / `claimAsync` (runningByState Map construction) and `packages/dispatch/src/index.ts` — `dispatchBlockReason` (line 64)
 **Explanation:** The `runningByState` Map is built using raw `entry.issue.state` strings as keys (case-sensitive). However, `settingsForIssueState` resolves the per-state cap via `normalizeStateName()` which does `state.trim().toLowerCase()`. Two issues with states `"In Progress"` and `"in progress"` are logically the same state but get separate counts in the Map, allowing both to bypass the per-state cap.  
 **Reproduction:**
 ```bash
@@ -52,7 +52,7 @@ if (runningSlots.length > currentSize) {
 
 ### Failure 14: S-1253 (Round 2)
 **Invariant Violated:** Per-state concurrency cap SHALL count distinct issues, not individual ensemble slots  
-**Code Location:** `packages/dispatch/src/index.ts` — `dispatchBlockReason` (line 63-64) and `packages/orchestrator/src/index.ts` — `eligibleIssues` (runningByState construction)  
+**Code Location:** `packages/dispatch/src/index.ts` — `dispatchBlockReason` (line 63-64) and `packages/orchestrator/src/index.ts` — `eligibleIssuesAsync` (runningByState construction)
 **Explanation:** The `runningByState` map counts each running entry (each ensemble slot) as a separate agent toward the per-state cap. An `ensemble:3` issue occupies 3 units against a per-state cap of 2, preventing full ensemble deployment. The per-state cap was designed to limit distinct issues, not individual ensemble slots of the same issue.  
 **Reproduction:**
 ```bash
@@ -74,7 +74,7 @@ for (const entry of this.state.running.values()) {
 
 ### Failure 15: S-1253 (Round 3)
 **Invariant Violated:** Ensemble retry SHALL be per-slot, not per-issue — un-dispatched slots must remain eligible during another slot's retry delay  
-**Code Location:** `packages/orchestrator/src/index.ts` — `eligibleIssues` (line 68) and `finish` (line 210)  
+**Code Location:** `packages/orchestrator/src/index.ts` — `eligibleIssuesAsync` (line 68) and `finishAsync` (line 210)
 **Explanation:** The `retryAttempts` Map is keyed by `issueId`, not by `(issueId, slotIndex)`. When one ensemble slot fails and creates a retry entry with `dueAt` in the future, the check at line 68 (`if (retry && retry.dueAt > now) return false`) blocks the ENTIRE issue from dispatch — starving all other un-dispatched slots until the retry delay expires.  
 **Reproduction:**
 ```bash
@@ -98,7 +98,7 @@ npx tsx demo/sandbox.ts --inline '{"issues":[{"id":"ens-1","identifier":"ENS-1",
 
 ### Failure 17: S-1254 (Round 4)
 **Invariant Violated:** `reconciliationStopReason` SHALL distinguish terminal from merely inactive states  
-**Code Location:** `packages/policies/src/reconciliation.ts` — `reconciliationStopReason`  
+**Code Location:** `packages/runtime/src/reconciliation.ts` - `reconciliationStopReason`
 **Explanation:** The function checks `!issueIsActive(issue, settings)` first and returns `"terminal"` whenever this is true. But `issueIsActive` returns false for ANY state not in `activeStates` — including paused/hold states that are also not in `terminalStates`. The `"inactive"` return value is dead code for its intended purpose.  
 **Reproduction:**
 ```bash
@@ -116,20 +116,20 @@ if (!issueIsActive(issue, settings)) return "inactive";
 
 ### Failure 18: S-1255
 **Invariant Violated:** Ensemble retry SHALL NOT permanently degrade ensemble:N to effective ensemble:1  
-**Code Location:** `packages/orchestrator/src/index.ts` — `finish` (line 210) and `claim` (line 109-113)  
-**Explanation:** After slot 0 fails, `finish()` stores a retry entry with `slotIndex:0`. When the retry fires, `claim()` calls `firstUnclaimedSlot` with `preferredSlotIndex=0`, dispatches only slot 0, and only one slot is dispatched per `claim()` call. The retry cycle repeats: dispatch slot 0 → fail → retry with slot 0. Slots 1-N are permanently starved.  
+**Code Location:** `packages/orchestrator/src/index.ts` — `finishAsync` (line 210) and `claimAsync` (line 109-113)
+**Explanation:** After slot 0 fails, `finishAsync()` stores a retry entry with `slotIndex:0`. When the retry fires, `claimAsync()` calls `firstUnclaimedSlot` with `preferredSlotIndex=0`, dispatches only slot 0, and only one slot is dispatched per `claimAsync()` call. The retry cycle repeats: dispatch slot 0 → fail → retry with slot 0. Slots 1-N are permanently starved.
 **Reproduction:**
 ```bash
 npx tsx demo/sandbox.ts --inline '{"issues":[{"id":"i1","identifier":"I-1","title":"Ensemble Retry Blocks Other Slots","state":"In Progress","stateType":"started","labels":["ensemble:3"],"blockers":[],"priority":1}],"settingsOverrides":{"agent":{"maxConcurrentAgents":10,"maxRetryBackoffMs":50}},"runnerConfig":{"defaultBehavior":{"shouldSucceed":false,"turnCount":1,"latencyPerTurnMs":0}},"pollTicks":5,"tickDelayMs":100,"assertions":[{"type":"event_occurred","eventType":"run_started","messageContains":"I-1 slot=1"}]}'
 ```
 **Result:** FAILED — Only slot 0 ever dispatched across all retries  
-**Suggested Fix:** After a retry claim succeeds, loop to claim remaining unclaimed slots for the same issue.
+**Suggested Fix:** After a retry claimAsync succeeds, loop to claim remaining unclaimed slots for the same issue.
 
 ---
 
 ### Failure 19: S-1255 (Round 5)
 **Invariant Violated:** Per-state concurrency cap SHALL be enforced regardless of whitespace in state names  
-**Code Location:** `packages/orchestrator/src/index.ts` — `eligibleIssues` / `claim` (runningByState Map) and `packages/dispatch/src/index.ts` — `dispatchBlockReason` (line 64)  
+**Code Location:** `packages/orchestrator/src/index.ts` — `eligibleIssuesAsync` / `claimAsync` (runningByState Map) and `packages/dispatch/src/index.ts` — `dispatchBlockReason` (line 64)
 **Explanation:** Same class of bug as Failure 12 (case-sensitivity), but for whitespace. States `"In Progress"` and `" In Progress "` normalize to the same override via `trim().toLowerCase()`, but get separate counts in the raw `runningByState` Map.  
 **Reproduction:**
 ```bash
@@ -175,15 +175,15 @@ private abortIssueRuns(issueId: string): void {
 ---
 
 ### Failure 22: S-1258
-**Invariant Violated:** `claim()` SHALL respect retry delay — same issue SHALL NOT be re-claimed within retry period  
-**Code Location:** `packages/orchestrator/src/index.ts` — `claim` (lines 91-148)  
-**Explanation:** `claim()` does not check `retryAttempts` for a future `dueAt`. The retry-delay enforcement only exists in `eligibleIssues()`. When the same issue ID appears twice in the eligible list (tracker duplicates), the first dispatch finishes (setting continuation retry with future `dueAt`), and the second dispatch successfully claims the same slot because `finish()` already removed it from `claimed`.  
+**Invariant Violated:** `claimAsync()` SHALL respect retry delay — same issue SHALL NOT be re-claimed within retry period
+**Code Location:** `packages/orchestrator/src/index.ts` — `claimAsync` (lines 91-148)
+**Explanation:** `claimAsync()` does not check `retryAttempts` for a future `dueAt`. The retry-delay enforcement only exists in `eligibleIssuesAsync()`. When the same issue ID appears twice in the eligible list (tracker duplicates), the first dispatch finishes (setting continuation retry with future `dueAt`), and the second dispatch successfully claims the same slot because `finishAsync()` already removed it from `claimed`.
 **Reproduction:**
 ```bash
 npx tsx demo/sandbox.ts --inline '{"issues":[{"id":"dup-me","identifier":"DUP-1","title":"First copy of issue","state":"In Progress","stateType":"started","labels":[],"blockers":[],"priority":1},{"id":"dup-me","identifier":"DUP-1","title":"Second copy same ID","state":"In Progress","stateType":"started","labels":[],"blockers":[],"priority":1}],"settingsOverrides":{"agent":{"maxConcurrentAgents":5,"maxRetryBackoffMs":60000}},"runnerConfig":{"defaultBehavior":{"shouldSucceed":true,"turnCount":1,"latencyPerTurnMs":0}},"pollTicks":1,"assertions":[{"type":"concurrency_cap","maxConcurrent":1}]}'
 ```
 **Result:** PASSED (max concurrent was 1 since runs are serial), but run history shows TWO dispatches of same issue in same tick — usage is double-counted  
-**Suggested Fix:** Add retry check in `claim()`:
+**Suggested Fix:** Add retry check in `claimAsync()`:
 ```ts
 const existingRetry = this.state.retryAttempts.get(issue.id);
 if (existingRetry && existingRetry.dueAt.getTime() > this.clock.now().getTime()) return null;
@@ -206,16 +206,16 @@ npx tsx demo/sandbox.ts --inline '{"issues":[{"id":"issue-1","identifier":"TEST-
 
 ### Failure 24: S-1259
 **Invariant Violated:** Retry backoff SHALL persist across state transitions — terminal transition SHALL NOT erase backoff  
-**Code Location:** `packages/orchestrator/src/index.ts` — `cleanupIssue` (line 232: `this.state.retryAttempts.delete(issueId)`)  
-**Explanation:** `cleanupIssue()` unconditionally deletes retry entries when an issue transitions to terminal state. If the issue is later reopened (terminal → active), the retry backoff is completely erased. The issue is immediately re-dispatched without delay, and the attempt counter resets, preventing backoff escalation. This creates an infinite rapid-retry loop.  
+**Code Location:** `packages/orchestrator/src/index.ts` — `cleanupIssueAsync` (line 232: `this.state.retryAttempts.delete(issueId)`)
+**Explanation:** `cleanupIssueAsync()` unconditionally deletes retry entries when an issue transitions to terminal state. If the issue is later reopened (terminal → active), the retry backoff is completely erased. The issue is immediately re-dispatched without delay, and the attempt counter resets, preventing backoff escalation. This creates an infinite rapid-retry loop.
 **Reproduction:**
 ```bash
 npx tsx demo/sandbox.ts --inline '{"issues":[{"id":"retry-bypass","identifier":"RB-1","title":"Retry Bypass","state":"In Progress","stateType":"started","labels":[],"blockers":[],"priority":1}],"settingsOverrides":{"agent":{"maxConcurrentAgents":5,"maxRetryBackoffMs":60000}},"runnerConfig":{"defaultBehavior":{"shouldSucceed":false,"turnCount":1,"latencyPerTurnMs":0}},"pollTicks":4,"tickDelayMs":100,"timedMutations":[{"afterMs":100,"mutate":{"type":"change_state","issueId":"retry-bypass","state":"Done","stateType":"completed"}},{"afterMs":150,"mutate":{"type":"change_state","issueId":"retry-bypass","state":"In Progress","stateType":"started"}}],"assertions":[{"type":"retry_count","issueId":"retry-bypass","minAttempts":2}]}'
 ```
-**Result:** FAILED — Retry attempt never escalates beyond 1 (counter reset by cleanupIssue)  
+**Result:** FAILED — Retry attempt never escalates beyond 1 (counter reset by cleanupIssueAsync)
 **Suggested Fix:** Preserve retry entries on terminal transition, or add a cooldown:
 ```ts
-cleanupIssue(issueId: string): void {
+async cleanupIssueAsync(issueId: string): Promise<void> {
   // ... remove from running/claimed ...
   // DON'T delete retryAttempts — let it expire naturally
   // this.state.retryAttempts.delete(issueId);  // REMOVED
@@ -226,9 +226,9 @@ cleanupIssue(issueId: string): void {
 ---
 
 ### Failure 25: S-1260
-**Invariant Violated:** `eligibleIssues` reported count SHALL match actual dispatchable count  
-**Code Location:** `packages/orchestrator/src/index.ts` — `eligibleIssues` (stale `runningCount` during filtering)  
-**Explanation:** `eligibleIssues()` computes `runningCount` and `runningByState` ONCE before filtering. As the dispatch loop claims issues (adding to running), the actual count increases but the filter has already passed all issues. Issues that pass the filter but fail in `claim()` get `dispatch_skipped` events but never appear in `blockedDispatches`.  
+**Invariant Violated:** `eligibleIssuesAsync` reported count SHALL match actual dispatchable count
+**Code Location:** `packages/orchestrator/src/index.ts` — `eligibleIssuesAsync` (stale `runningCount` during filtering)
+**Explanation:** `eligibleIssuesAsync()` computes `runningCount` and `runningByState` ONCE before filtering. As the dispatch loop claims issues (adding to running), the actual count increases but the filter has already passed all issues. Issues that pass the filter but fail in `claimAsync()` get `dispatch_skipped` events but never appear in `blockedDispatches`.
 **Result:** PASSED (observability gap, not correctness bug)  
 **Severity:** Low (monitoring)
 
@@ -237,7 +237,7 @@ cleanupIssue(issueId: string): void {
 ### Failure 26: S-1260 (Round 10)
 **Invariant Violated:** Global concurrency cap SHALL be a hard limit per poll tick, not bypassable by fast-completing runs  
 **Code Location:** `packages/runtime/src/index.ts` — `pollOnceUnlocked` (dispatch loop with await points)  
-**Explanation:** The dispatch loop calls `await this.maybeDispatch(issue)` for each eligible issue. `maybeDispatch` awaits `fetchIssueForDispatch` (an async call). This await creates a yield point where the event loop processes microtasks. If a runner completes with 0ms latency, its `finish()` removes the entry from `running`. By the time the next issue's `claim()` is called, `running.size` is back to 0, bypassing the cap.  
+**Explanation:** The dispatch loop calls `await this.maybeDispatch(issue)` for each eligible issue. `maybeDispatch` awaits `fetchIssueForDispatch` (an async call). This await creates a yield point where the event loop processes microtasks. If a runner completes with 0ms latency, its `finishAsync()` removes the entry from `running`. By the time the next issue's `claimAsync()` is called, `running.size` is back to 0, bypassing the cap.
 **Reproduction:**
 ```bash
 npx tsx demo/sandbox.ts --inline '{"issues":[{"id":"a","identifier":"A-1","title":"Issue A","state":"In Progress","stateType":"started","labels":[],"blockers":[],"priority":1},{"id":"b","identifier":"B-1","title":"Issue B","state":"In Progress","stateType":"started","labels":[],"blockers":[],"priority":2},{"id":"c","identifier":"C-1","title":"Issue C","state":"In Progress","stateType":"started","labels":[],"blockers":[],"priority":3}],"settingsOverrides":{"agent":{"maxConcurrentAgents":1}},"runnerConfig":{"defaultBehavior":{"shouldSucceed":true,"turnCount":1,"latencyPerTurnMs":0}},"pollTicks":1,"assertions":[{"type":"event_not_occurred","eventType":"run_started","messageContains":"B-1"},{"type":"event_not_occurred","eventType":"run_started","messageContains":"C-1"}]}'
@@ -281,9 +281,9 @@ npx tsx demo/sandbox.ts --inline '{"issues":[{"id":"a","identifier":"A-1","title
 | 14 | `runtime` (abortIssueRuns) | slotKey prefix collision aborts unrelated issues with colon in ID | **High** |
 | 15 | `dispatch` (reporting) | dispatchBlockReason returns null for basic check failures — observability gap | Low |
 | 16 | `policies` (reconciliation) | reconciliationStopReason mislabels inactive states as "terminal" | Low |
-| 17 | `orchestrator` (claim) | claim() ignores retryAttempts dueAt — same slot dispatched twice | Medium |
+| 17 | `orchestrator` (claim) | claimAsync() ignores retryAttempts dueAt — same slot dispatched twice | Medium |
 | 18 | `orchestrator` (selectWorkerHost) | Empty-string SSH host bypasses capacity tracking (falsy check) | Medium |
-| 19 | `orchestrator` (cleanupIssue) | Terminal transition erases retry backoff — rapid retry on reopen | **High** |
+| 19 | `orchestrator` (cleanupIssueAsync) | Terminal transition erases retry backoff — rapid retry on reopen | **High** |
 | 20 | `runtime` (dispatch loop) | Microtask race: fast-completing runs reset caps mid-dispatch | **High** |
 | 21 | `runtime` (dispatch loop) | Same microtask race bypasses per-host capacity | **High** |
 

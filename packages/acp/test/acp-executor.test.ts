@@ -427,7 +427,7 @@ test("ACP session stop rejects queued turns without activating them", async () =
   assert.equal(updates.filter((update) => update.type === "turn_started").length, 1);
 });
 
-test("vendored prompt queues advertise capability and isolate Claude usage at handoff", async () => {
+test("vendored prompt queues advertise capability and enforce per-session FIFO boundaries", async () => {
   const claudeSource = await fs.readFile(
     path.resolve("vendor/claude-agent-acp/dist/acp-agent.js"),
     "utf8",
@@ -439,70 +439,43 @@ test("vendored prompt queues advertise capability and isolate Claude usage at ha
   assert.match(codexSource, /"symphony\/stableSessionId": true/);
 
   const promptStart = claudeSource.indexOf("async prompt(params)");
-  const queuedHandoff = claudeSource.indexOf("const cancelled = await", promptStart);
-  const cancellationReset = claudeSource.indexOf("session.cancelled = false", promptStart);
-  const usageReset = claudeSource.indexOf("session.accumulatedUsage = {", promptStart);
+  const consumerStart = claudeSource.indexOf("async runConsumer(session, params)", promptStart);
   assert.ok(promptStart >= 0);
-  assert.ok(queuedHandoff > promptStart);
-  assert.ok(cancellationReset > queuedHandoff);
-  assert.ok(usageReset > queuedHandoff);
-  const queueSubmission = claudeSource.slice(promptStart, cancellationReset);
-  assert.match(
-    queueSubmission,
-    /if \(session\.recovering\) \{\s*return \{ stopReason: "cancelled" \}/,
-  );
-  assert.match(queueSubmission, /const deferInput = isLocalOnlyCommand \|\|/);
-  assert.match(queueSubmission, /if \(!deferInput\) \{\s*session\.input\.push\(userMessage\)/);
-  assert.match(
-    queueSubmission,
-    /if \(!pendingPrompt\.inputSubmitted\) \{\s*session\.input\.push\(userMessage\)/,
-  );
-  const promptErrorStart = claudeSource.indexOf("catch (error)", promptStart);
-  const promptFinallyStart = claudeSource.indexOf("finally {", promptErrorStart);
-  const promptErrorBody = claudeSource.slice(promptErrorStart, promptFinallyStart);
-  const recoverySeal = promptErrorBody.indexOf("session.recovering = true");
-  const recoveryAwait = promptErrorBody.indexOf("await session.query.interrupt()");
-  assert.ok(recoverySeal >= 0);
-  assert.ok(recoveryAwait > recoverySeal);
-  assert.match(promptErrorBody, /some\(\(pending\) => pending\.inputSubmitted\)/);
-  assert.match(promptErrorBody, /this\.discardSession\(params\.sessionId, session\)/);
-  const promptMethodEnd = claudeSource.indexOf("async cancel(params)", promptFinallyStart);
-  assert.match(
-    claudeSource.slice(promptFinallyStart, promptMethodEnd),
-    /setImmediate\(\(\) => \{\s*session\.recovering = false/,
-  );
-  const replayCheck = claudeSource.indexOf("// Check for prompt replay", queuedHandoff);
-  const cancelledMessageCheck = claudeSource.indexOf("if (session.cancelled)", replayCheck);
-  assert.ok(replayCheck > queuedHandoff);
-  assert.ok(cancelledMessageCheck > replayCheck);
-  assert.match(
-    claudeSource.slice(replayCheck, cancelledMessageCheck),
-    /stopReason: session\.cancelled \? "cancelled" : "end_turn"/,
-  );
-  const replayHandoff = claudeSource.slice(replayCheck, cancelledMessageCheck);
-  assert.equal(/pendingMessages\.delete\(message\.uuid\)/.test(replayHandoff), false);
-  assert.match(replayHandoff, /settlePendingPrompt\(session, message\.uuid, pending\)/);
+  assert.ok(consumerStart > promptStart);
+  const claudePromptBody = claudeSource.slice(promptStart, consumerStart);
+  assert.match(claudePromptBody, /session\.turnQueue\.push\(turn\)/);
+  assert.match(claudePromptBody, /session\.input\.push\(userMessage\)/);
+  assert.match(claudePromptBody, /this\.ensureConsumer\(session, params\.sessionId\)/);
+  assert.match(claudePromptBody, /return response/);
 
-  const cancelStart = promptMethodEnd;
+  const cancelStart = claudeSource.indexOf("async cancel(params)", consumerStart);
   const teardownStart = claudeSource.indexOf("async teardownSession", cancelStart);
+  const consumerBody = claudeSource.slice(consumerStart, cancelStart);
+  assert.match(
+    consumerBody,
+    /const activateTurn = \(turn\) => \{[\s\S]*session\.cancelled = false[\s\S]*resetTurnScratch\(\)/,
+  );
+  assert.match(consumerBody, /session\.accumulatedUsage = \{/);
   const cancelBody = claudeSource.slice(cancelStart, teardownStart);
-  assert.match(cancelBody, /cancelQueuedPrompts\(session\)/);
-  assert.match(cancelBody, /this\.interruptSession\(params\.sessionId, session, discard\)/);
-  assert.match(cancelBody, /this\.discardSession\(sessionId, session\)/);
-  assert.match(claudeSource.slice(teardownStart), /cancelPendingPrompts\(session\)/);
-  assert.match(claudeSource, /function cancelQueuedPrompts\(session\)/);
-  assert.match(claudeSource, /settleNextPendingPrompt\(session\)/);
+  assert.match(cancelBody, /turn\.resolve\(\{ stopReason: "cancelled" \}\)/);
+  assert.match(cancelBody, /session\.turnQueue = session\.turnQueue\.filter/);
 
-  const codexPromptStart = codexSource.indexOf("async prompt(params)");
-  const codexRunPromptStart = codexSource.indexOf("async runPrompt(params)", codexPromptStart);
+  const codexPromptStart = codexSource.indexOf("async prompt(params, signal)");
+  const codexRunPromptStart = codexSource.indexOf(
+    "async runPrompt(params, signal)",
+    codexPromptStart,
+  );
+  assert.ok(codexPromptStart >= 0);
+  assert.ok(codexRunPromptStart > codexPromptStart);
   const codexPromptBody = codexSource.slice(codexPromptStart, codexRunPromptStart);
-  assert.match(codexPromptBody, /promptGenerations\.get\(params\.sessionId\)/);
+  assert.match(codexPromptBody, /const generation = this\.getPromptGeneration\(sessionId\)/);
+  assert.match(codexPromptBody, /return await this\.runPrompt\(params, signal\)/);
   assert.match(codexPromptBody, /stopReason: "cancelled"/);
   assert.match(codexPromptBody, /setImmediate\(resolve\)/);
   const codexCancelStart = codexSource.indexOf("async cancel(params)", codexRunPromptStart);
   assert.match(
     codexSource.slice(codexCancelStart),
-    /this\.promptGenerations\.set\(\s*params\.sessionId,/,
+    /this\.invalidatePromptQueue\(params\.sessionId\)/,
   );
 });
 

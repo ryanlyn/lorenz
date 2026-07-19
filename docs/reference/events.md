@@ -25,7 +25,7 @@ These fire as the runtime moves an issue from eligible candidate to a live run.
 | `poll_error` | A poll tick threw (including a `validateDispatch` failure that aborts the tick). | The whole tick failed; reconciliation and dispatch did not complete that tick. Also surfaced as `poll.lastError`. |
 | `dispatch_skipped` | An eligible issue could not claim a slot, or a pool reservation found no capacity. | A capacity or worker-host block. The message carries the reason: `global_concurrency_cap`, `local_concurrency_cap`, `worker_host_capacity`, `worker_pool_acquire_error <msg>`. |
 | `run_reserving` | The pool path claims a host-less reservation before acquiring a worker. | A two-phase pool dispatch entered its acquire window. The slot occupies concurrency but has no host yet. |
-| `run_started` | A run binds to a concrete host: immediately on the static/local path, or after `bindReservation` on the pool path. | The agent run is live. |
+| `run_started` | A run binds to a concrete host: immediately on the static/local path, or after `bindReservationAsync` on the pool path. | The agent run is live. |
 | `dispatch_refresh_failed` | Re-fetching an issue immediately before dispatch failed. | The pre-dispatch state refresh errored; the issue is not dispatched this tick. |
 | `run_completed` | A run finished cleanly (clean worker exit). | The run ended; a `continuation` retry is scheduled. |
 | `run_failed` | A run finished with a fault. | The run ended in error; a `failure` retry is scheduled with exponential backoff. |

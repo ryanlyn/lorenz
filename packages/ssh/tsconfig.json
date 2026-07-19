@@ -15,6 +15,9 @@
   "references": [
     {
       "path": "../domain"
+    },
+    {
+      "path": "../process-supervisor"
     }
   ]
 }

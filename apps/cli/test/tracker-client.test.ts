@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 
+import { DiscordTrackerClient, discordTrackerOptions } from "@lorenz/discord-tracker";
 import { LocalTrackerClient } from "@lorenz/local-tracker";
 import { SlackTrackerClient, slackTrackerOptions } from "@lorenz/slack-tracker";
 import { beforeAll, test } from "vitest";
@@ -115,7 +116,7 @@ test("tracker factory rejects unregistered tracker kinds with the known kinds", 
   const settings = parseConfig({ tracker: { kind: "github" } }, {});
   assert.throws(
     () => createTrackerClient(settings),
-    /unsupported tracker\.kind: github \(known kinds: jira, jira-mcp, linear, local, memory, slack\)/,
+    /unsupported tracker\.kind: github \(known kinds: discord, jira, jira-mcp, linear, local, memory, slack\)/,
   );
 });
 
@@ -167,25 +168,49 @@ test("tracker factory selects slack adapter from the workflow-slack fixture", as
   assert.ok(createTrackerClient(settings) instanceof SlackTrackerClient);
 });
 
-test("shipped WORKFLOW.slack.md selects a slack tracker client with a real playbook body", async () => {
-  const raw = await readFile(path.join(import.meta.dirname, "../../../WORKFLOW.slack.md"), "utf8");
-  const settings = parseConfig(frontmatter(raw), {
+test("shipped WORKFLOW.chat.md selects Discord and keeps a switchable Slack bundle", async () => {
+  const raw = await readFile(path.join(import.meta.dirname, "../../../WORKFLOW.chat.md"), "utf8");
+  const config = frontmatter(raw);
+  const discordSettings = parseConfig(config, {
+    DISCORD_BOT_TOKEN: "discord-token",
+    DISCORD_GUILD_ID: "123456789012345678",
+    DISCORD_CHANNEL_ID: "223456789012345678",
+    DISCORD_BOT_USER_ID: "323456789012345678",
+  });
+
+  assert.equal(discordSettings.tracker.kind, "discord");
+  assert.deepEqual(discordTrackerOptions(discordSettings).channels, ["223456789012345678"]);
+  assert.ok(createTrackerClient(discordSettings) instanceof DiscordTrackerClient);
+  assert.equal(
+    discordSettings.agents.codex?.options.bridgeCommand,
+    'env CODEX_PATH="$(command -v codex)" codex-acp',
+  );
+  assert.deepEqual(discordSettings.agents.codex?.options.providerConfig, {
+    shell_environment_policy: { inherit: "all" },
+    model_reasoning_effort: "xhigh",
+    service_tier: "flex",
+    model: "gpt-5.6-sol",
+  });
+  assert.equal(discordSettings.agents.claude?.executor, "acp");
+  assert.equal(
+    discordSettings.agents.claude?.options.bridgeCommand,
+    'env CLAUDE_CODE_EXECUTABLE="$(command -v claude)" claude-agent-acp',
+  );
+
+  const slackConfig = structuredClone(config);
+  slackConfig.tracker = { kind: "slack" };
+  const slackSettings = parseConfig(slackConfig, {
     SLACK_BOT_TOKEN: "xoxb-test",
+    SLACK_CHANNEL_ID: "C0123456789",
     SLACK_BOT_USER_ID: "U999",
   });
-  assert.equal(settings.tracker.kind, "slack");
-  assert.deepEqual(slackTrackerOptions(settings).channels, ["C0123456789"]);
-  assert.equal(slackTrackerOptions(settings).botUserId, "U999");
-  assert.deepEqual(slackTrackerOptions(settings).emojiStates, {
-    eyes: "In Progress",
-    white_check_mark: "Done",
-    x: "Cancelled",
-  });
-  assert.ok(createTrackerClient(settings) instanceof SlackTrackerClient);
+
+  assert.equal(slackSettings.tracker.kind, "slack");
+  assert.deepEqual(slackTrackerOptions(slackSettings).channels, ["C0123456789"]);
+  assert.ok(createTrackerClient(slackSettings) instanceof SlackTrackerClient);
 
   const prose = body(raw);
-  assert.ok(prose.split("\n").length > 20, "slack playbook body should be a real playbook");
-  assert.match(prose, /slack_update_status/);
-  assert.match(prose, /slack_comment/);
+  assert.match(prose, /discord_read_thread/);
+  assert.match(prose, /slack_read_thread/);
   assert.notMatch(prose, /stop and ask the user to configure Linear/i);
 });

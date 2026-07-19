@@ -1,6 +1,13 @@
 import { ensembleSize, isTerminalState } from "@lorenz/issue";
 import { normalizeRouteName, normalizeStateName, settingsForIssueState } from "@lorenz/config";
-import type { DispatchBlockReason, Issue, Priority, Settings } from "@lorenz/domain";
+import type {
+  AgentKind,
+  DispatchBlockReason,
+  Issue,
+  PartialRuntimeSettings,
+  Priority,
+  Settings,
+} from "@lorenz/domain";
 
 export function routeNames(issue: Issue, settings: Settings): string[] {
   const prefix = settings.tracker.dispatch.routeLabelPrefix.trim().toLowerCase();
@@ -28,6 +35,71 @@ export function issueHasOpenBlockers(issue: Issue, settings: Settings): boolean 
   return issue.blockers.some(
     (blocker) => !isTerminalState(blocker.state, settings.tracker.terminalStates),
   );
+}
+
+export interface RouteAgentResolution {
+  agentKind: AgentKind | null;
+  conflicts: Array<{ route: string; agentKind: AgentKind }> | null;
+}
+
+/**
+ * Resolve issue routes that match configured `agents` keys. This does not affect whether the
+ * issue is eligible for this worker.
+ */
+export function routeAgentKind(issue: Issue, settings: Settings): RouteAgentResolution {
+  const configured = new Map<string, AgentKind[]>();
+  for (const agentKind of Object.keys(settings.agents)) {
+    const route = normalizeRouteName(agentKind);
+    if (route === "") continue;
+    const kinds = configured.get(route) ?? [];
+    kinds.push(agentKind);
+    configured.set(route, kinds);
+  }
+
+  const mapped: Array<{ route: string; agentKind: AgentKind }> = [];
+  for (const route of new Set(routeNames(issue, settings))) {
+    for (const agentKind of configured.get(route) ?? []) {
+      mapped.push({ route, agentKind });
+    }
+  }
+  const kinds = new Set(mapped.map(({ agentKind }) => agentKind));
+  if (kinds.size === 0) return { agentKind: null, conflicts: null };
+  if (kinds.size > 1) {
+    return { agentKind: null, conflicts: mapped };
+  }
+  return { agentKind: [...kinds][0]!, conflicts: null };
+}
+
+/**
+ * Pin an unambiguous route-selected agent kind so later per-state resolution cannot replace it.
+ * Other per-state agent and per-kind fields continue to merge normally.
+ */
+export function settingsWithRouteAgent(settings: Settings, issue: Issue): Settings {
+  const { agentKind } = routeAgentKind(issue, settings);
+  if (agentKind === null) return settings;
+  const statusOverrides = new Map<string, PartialRuntimeSettings>();
+  for (const [state, override] of settings.statusOverrides) {
+    statusOverrides.set(state, withoutAgentKindOverride(override));
+  }
+  return {
+    ...settings,
+    agent: { ...settings.agent, kind: agentKind },
+    statusOverrides,
+  };
+}
+
+function withoutAgentKindOverride(override: PartialRuntimeSettings): PartialRuntimeSettings {
+  if (override.agent?.kind === undefined) return override;
+  const { kind: _kind, ...agent } = override.agent;
+  const next: PartialRuntimeSettings = {};
+  if (Object.keys(agent).length > 0) next.agent = agent;
+  if (override.agents !== undefined) next.agents = override.agents;
+  return next;
+}
+
+/** Effective claim-time kind with route override > per-state override > default kind. */
+export function agentKindForIssue(settings: Settings, issue: Issue): AgentKind {
+  return settingsForIssueState(settingsWithRouteAgent(settings, issue), issue.state).agent.kind;
 }
 
 export function routedToThisWorker(issue: Issue, settings: Settings): boolean {

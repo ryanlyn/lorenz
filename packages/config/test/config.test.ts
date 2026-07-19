@@ -703,6 +703,16 @@ test("dispatch config rejects blank routes and normalizes unique route names", (
   );
 });
 
+test("dispatch rejects a separate route_agents map", () => {
+  assert.throws(
+    () =>
+      parseConfig({
+        tracker: { dispatch: { route_agents: { backend: "claude" } } },
+      }),
+    /tracker\.dispatch contains unsupported keys: route_agents/,
+  );
+});
+
 test("config validates literal-only backend names and rejects removed Codex keys", () => {
   const settings = parseConfig({
     tracker: { kind: "memory" },
@@ -930,6 +940,15 @@ test("dispatch validation requires configured agents for active and override sta
   });
   assert.throws(
     () => validateDispatchConfig(invalidBridge),
+    /agents\.pi\.bridgeCommand is required/,
+  );
+
+  const invalidRouteableAgent = parseConfig({
+    tracker: { kind: "memory" },
+    agents: { pi: { executor: "acp", bridge_command: "" } },
+  });
+  assert.throws(
+    () => validateDispatchConfig(invalidRouteableAgent),
     /agents\.pi\.bridgeCommand is required/,
   );
 });

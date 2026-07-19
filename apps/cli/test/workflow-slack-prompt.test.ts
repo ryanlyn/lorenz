@@ -45,11 +45,11 @@ function slackSettings() {
 }
 
 async function slackWorkflowBody(): Promise<string> {
-  const raw = await readFile(path.join(import.meta.dirname, "../../../WORKFLOW.slack.md"), "utf8");
+  const raw = await readFile(path.join(import.meta.dirname, "../../../WORKFLOW.chat.md"), "utf8");
   return parseWorkflowContent(raw).body;
 }
 
-test("WORKFLOW.slack.md renders the canonical issue id (not the SLK identifier) as the issueId", async () => {
+test("WORKFLOW.chat.md renders the canonical Slack issue id as the issueId", async () => {
   const rendered = await buildPrompt(await slackWorkflowBody(), slackIssue());
 
   // The canonical `<channel>:<ts>` id is present and labelled as the issueId to pass to tools.
@@ -59,7 +59,7 @@ test("WORKFLOW.slack.md renders the canonical issue id (not the SLK identifier) 
   assert.notMatch(rendered, /issueId you pass to tools[^]*SLK-C0123456789-1717000000-000100/);
 });
 
-test("the id rendered into WORKFLOW.slack.md is accepted by slack_update_status", async () => {
+test("the Slack id rendered into WORKFLOW.chat.md is accepted by slack_update_status", async () => {
   const rendered = await buildPrompt(await slackWorkflowBody(), slackIssue());
 
   // Pull the exact id string out of the rendered prompt so the test exercises what an agent sees.

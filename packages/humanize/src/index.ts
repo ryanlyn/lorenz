@@ -1,12 +1,18 @@
+import { arrayAt, isRecord, numberAt, recordAt, stringAt } from "./nested-value.js";
+import { sanitizeTerminalText, truncateTerminalText } from "./terminal-text.js";
+
+export { arrayAt, stringAt } from "./nested-value.js";
+export { sanitizeTerminalText, stripAnsiSequences, truncateTerminalText } from "./terminal-text.js";
+
 export function humanizeAgentMessage(message: unknown): string {
   if (message === null || message === undefined) return "no agent message yet";
   const record = isRecord(message) ? message : null;
   if (record?.agent_kind === "claude")
-    return truncate(humanizeClaudeMessage(record) ?? humanizeCodexMessage(record), 140);
+    return truncateTerminalText(humanizeClaudeMessage(record) ?? humanizeCodexMessage(record), 140);
   if (record && isRecord(record.message) && typeof record.message.type === "string") {
-    return truncate(humanizeClaudeMessage(record) ?? humanizeCodexMessage(record), 140);
+    return truncateTerminalText(humanizeClaudeMessage(record) ?? humanizeCodexMessage(record), 140);
   }
-  return truncate(humanizeCodexMessage(message), 140);
+  return truncateTerminalText(humanizeCodexMessage(message), 140);
 }
 
 export function humanizeCodexMessage(message: unknown): string {
@@ -126,9 +132,9 @@ function humanizeCodexPayload(payload: unknown): string {
     const sessionId = stringAt(payload, ["session_id"]) ?? stringAt(payload, ["sessionId"]);
     if (sessionId) return `session started (${sessionId})`;
     if ("error" in payload) return `error: ${formatReason(payload.error)}`;
-    return sanitize(JSON.stringify(payload));
+    return sanitizeTerminalText(JSON.stringify(payload));
   }
-  return sanitize(String(payload));
+  return sanitizeTerminalText(String(payload));
 }
 
 function humanizeHookExecution(payload: Record<string, unknown>): string | null {
@@ -302,56 +308,5 @@ function formatReason(value: unknown): string {
 }
 
 function inlineText(value: string): string {
-  return sanitize(value.replace(/\s+/g, " "));
-}
-
-const escapeCharacter = String.fromCharCode(27);
-const asciiControlCharacters = `${String.fromCharCode(0)}-${String.fromCharCode(31)}${String.fromCharCode(127)}`;
-const ANSI_CONTROL_SEQUENCE = new RegExp(`${escapeCharacter}\\[[0-9;]*[A-Za-z]`, "g");
-const ANSI_ESCAPE_SEQUENCE = new RegExp(`${escapeCharacter}.`, "g");
-const ASCII_CONTROL_CHARACTER = new RegExp(`[${asciiControlCharacters}]`, "g");
-
-function sanitize(value: string): string {
-  return value
-    .replace(ANSI_CONTROL_SEQUENCE, "")
-    .replace(ANSI_ESCAPE_SEQUENCE, "")
-    .replace(ASCII_CONTROL_CHARACTER, "")
-    .trim();
-}
-
-function truncate(value: string, max: number): string {
-  return value.length > max ? `${value.slice(0, Math.max(0, max - 3))}...` : value;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function recordAt(value: unknown, path: string[]): Record<string, unknown> | null {
-  const found = valueAt(value, path);
-  return isRecord(found) ? found : null;
-}
-
-function arrayAt(value: unknown, path: string[]): unknown[] | null {
-  const found = valueAt(value, path);
-  return Array.isArray(found) ? found : null;
-}
-
-function stringAt(value: unknown, path: string[]): string | null {
-  const found = valueAt(value, path);
-  return typeof found === "string" && found.trim() !== "" ? found : null;
-}
-
-function numberAt(value: unknown, path: string[]): number | null {
-  const found = valueAt(value, path);
-  return typeof found === "number" && Number.isFinite(found) ? found : null;
-}
-
-function valueAt(value: unknown, path: string[]): unknown {
-  let current = value;
-  for (const part of path) {
-    if (!isRecord(current)) return undefined;
-    current = current[part];
-  }
-  return current;
+  return sanitizeTerminalText(value.replace(/\s+/g, " "));
 }

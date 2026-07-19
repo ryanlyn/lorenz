@@ -119,7 +119,7 @@ Starting work is half the loop; reconciliation stops work that should no longer 
 Keep the package boundary in mind when tracing behavior:
 
 - `@lorenz/dispatch` and `@lorenz/policies` are **pure**. Given the same inputs, they return the same verdict. No I/O, no clock reads, no mutation. This is what the deterministic sandbox exercises.
-- `@lorenz/orchestrator`, `@lorenz/runtime`, and `@lorenz/retry-scheduler` are **stateful**. They hold the in-memory scheduling state, drive timers, talk to trackers and workers, and call the pure functions to make decisions.
+- `@lorenz/orchestrator` and `@lorenz/runtime` are **stateful**. They hold the in-memory scheduling state, drive timers, talk to trackers and workers, and call the pure functions to make decisions.
 
 When a dispatch decision looks wrong, ask first whether the pure verdict is wrong (a config or eligibility issue) or whether the wiring fed it the wrong state (a runtime issue).
 
