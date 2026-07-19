@@ -316,7 +316,6 @@ export class SlackTrackerClient implements RuntimeTrackerClient {
     const record = event as Record<string, unknown>;
     if (record.type !== "message" && record.type !== "app_mention") return {};
     const subtype = typeof record.subtype === "string" ? record.subtype : null;
-    if (subtype !== null && subtype !== "thread_broadcast") return {};
     const channel = typeof record.channel === "string" ? record.channel : null;
     const ts = typeof record.ts === "string" ? record.ts : null;
     const threadTs = typeof record.thread_ts === "string" ? record.thread_ts : null;
@@ -328,6 +327,7 @@ export class SlackTrackerClient implements RuntimeTrackerClient {
         ts,
         text,
         user,
+        ...(subtype ? { subtype } : {}),
         isBot: typeof record.bot_id === "string",
       },
       this.settings,
@@ -519,6 +519,7 @@ function steeringEventForReply(
 ): TrackerIssueEvent | null {
   const { botUserId, users } = slackTrackerOptions(settings);
   if (!slackTsParts(reply.ts) || compareSlackTs(reply.ts, "0") <= 0) return null;
+  if (reply.subtype !== undefined && reply.subtype !== "thread_broadcast") return null;
   if (
     reply.user === undefined ||
     reply.isBot === true ||

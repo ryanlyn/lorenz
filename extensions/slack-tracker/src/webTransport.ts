@@ -46,10 +46,23 @@ const MAX_RETRY_DELAY_MS = 60_000;
  */
 const teamUrlByAuth = new Map<string, string | null>();
 
-type Sleep = (delayMs: number) => Promise<void>;
+type Sleep = (delayMs: number, abortSignal?: AbortSignal) => Promise<void>;
 
-const defaultSleep: Sleep = async (delayMs) =>
-  new Promise((resolve) => setTimeout(resolve, delayMs));
+const defaultSleep: Sleep = async (delayMs, abortSignal) =>
+  new Promise((resolve, reject) => {
+    abortSignal?.throwIfAborted();
+    const onAbort = () => {
+      clearTimeout(timer);
+      abortSignal?.removeEventListener("abort", onAbort);
+      const reason = abortSignal?.reason as unknown;
+      reject(reason instanceof Error ? reason : new Error("Slack request aborted"));
+    };
+    const timer = setTimeout(() => {
+      abortSignal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, delayMs);
+    abortSignal?.addEventListener("abort", onAbort, { once: true });
+  });
 
 /** Minimal logging surface so a skipped (unreadable) channel is surfaced (default: console.warn). */
 export interface SlackTrackerLogger {
@@ -478,7 +491,7 @@ export class SlackWebTransport implements SlackTransport {
         `slack ${method}: HTTP ${response.status}; backing off ${Math.round(delayMs / 1000)}s ` +
           `before retry ${retryCount + 1}/${MAX_RETRIES}`,
       );
-      await sleepWithAbort(this.sleep(delayMs), options.abortSignal);
+      await this.sleep(delayMs, options.abortSignal);
     }
   }
 
@@ -561,31 +574,8 @@ function toThreadReply(m: RawSlackMessage): SlackThreadReply {
   // exactOptionalPropertyTypes: only set `user` when present rather than assigning undefined.
   const reply: SlackThreadReply = { ts: m.ts ?? "", text: m.text ?? "" };
   if (typeof m.user === "string") reply.user = m.user;
+  if (typeof m.subtype === "string") reply.subtype = m.subtype;
   if (typeof m.bot_id === "string" || m.subtype === "bot_message") reply.isBot = true;
   if (m.edited !== undefined) reply.edited = true;
   return reply;
-}
-
-async function sleepWithAbort(
-  sleep: Promise<void>,
-  abortSignal: AbortSignal | undefined,
-): Promise<void> {
-  if (!abortSignal) {
-    await sleep;
-    return;
-  }
-  abortSignal.throwIfAborted();
-  let onAbort: (() => void) | undefined;
-  const aborted = new Promise<never>((_resolve, reject) => {
-    onAbort = () => {
-      const reason = abortSignal.reason as unknown;
-      reject(reason instanceof Error ? reason : new Error("Slack request aborted"));
-    };
-    abortSignal.addEventListener("abort", onAbort, { once: true });
-  });
-  try {
-    await Promise.race([sleep, aborted]);
-  } finally {
-    if (onAbort) abortSignal.removeEventListener("abort", onAbort);
-  }
 }

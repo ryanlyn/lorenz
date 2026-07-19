@@ -818,6 +818,7 @@ test("getThread reads conversations.replies and drops the parent message", async
             user: "U_HUMAN",
             edited: { user: "U_HUMAN", ts: "1.6" },
           },
+          { ts: "1.6", text: "file upload", user: "U_HUMAN", subtype: "file_share" },
         ],
       }),
       { status: 200, headers: { "content-type": "application/json" } },
@@ -832,6 +833,7 @@ test("getThread reads conversations.replies and drops the parent message", async
     { ts: "1.3", text: "second reply" },
     { ts: "1.4", text: "automation", user: "U_AUTOMATION", isBot: true },
     { ts: "1.5", text: "edited reply", user: "U_HUMAN", edited: true },
+    { ts: "1.6", text: "file upload", user: "U_HUMAN", subtype: "file_share" },
   ]);
   assert.match(calls[0]!.url, /\/conversations\.replies\?/);
   assert.match(calls[0]!.url, /channel=C1/);
@@ -893,6 +895,50 @@ test("getThread propagates cancellation to the Slack request", async () => {
 
   await assert.rejects(() => pending, /stop thread recovery/);
   assert.equal(receivedSignal?.aborted, true);
+});
+
+test("getThreadPage cancels a retry backoff before another request", async () => {
+  const controller = new AbortController();
+  let requests = 0;
+  let sleepSignal: AbortSignal | undefined;
+  let notifySleepStarted: (() => void) | undefined;
+  const sleepStarted = new Promise<void>((resolve) => {
+    notifySleepStarted = resolve;
+  });
+  const fetchImpl = (async () => {
+    requests += 1;
+    return new Response("rate limited", {
+      status: 429,
+      headers: { "retry-after": "60" },
+    });
+  }) as typeof fetch;
+  const sleep = (_delayMs: number, abortSignal?: AbortSignal) => {
+    sleepSignal = abortSignal;
+    notifySleepStarted?.();
+    return new Promise<void>((_resolve, reject) => {
+      abortSignal?.addEventListener(
+        "abort",
+        () => {
+          const reason = abortSignal.reason as unknown;
+          reject(reason instanceof Error ? reason : new Error("request aborted"));
+        },
+        { once: true },
+      );
+    });
+  };
+  const transport = new SlackWebTransport(settings(), fetchImpl, sleep);
+  const pending = transport.getThreadPage("C1", "1.1", {
+    afterTs: "1.2",
+    limit: 20,
+    abortSignal: controller.signal,
+  });
+
+  await sleepStarted;
+  controller.abort(new Error("stop retry backoff"));
+
+  await assert.rejects(() => pending, /stop retry backoff/);
+  assert.equal(sleepSignal, controller.signal);
+  assert.equal(requests, 1);
 });
 
 test("getThread follows next_cursor across pages, excluding the parent on each page", async () => {

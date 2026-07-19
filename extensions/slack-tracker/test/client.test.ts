@@ -948,6 +948,7 @@ test("watch applies steering policy while admitting thread broadcasts", () => {
   emit({ ...reply, text: "<@U_BOT> !aside context only" });
   emit({ ...reply, bot_id: "B_OTHER", text: "bot reply" });
   emit({ ...reply, subtype: "message_changed", text: "edited" });
+  emit({ ...reply, user: "U_ALICE", subtype: "file_share", text: "system subtype" });
   emit({ ...reply, thread_ts: undefined, text: "root message" });
   emit({
     ...reply,
@@ -957,6 +958,7 @@ test("watch applies steering policy while admitting thread broadcasts", () => {
   });
 
   assert.deepEqual(changes, [
+    {},
     {},
     {},
     {},
@@ -999,6 +1001,12 @@ test("fetchIssueEvents returns a bounded page of authorized human steering repli
             text: "edited into steering",
             user: "U_HUMAN",
             edited: true,
+          },
+          {
+            ts: "1700000000.000670",
+            text: "file upload",
+            user: "U_HUMAN",
+            subtype: "file_share",
           },
           { ts: "1700000000.000675", text: "another bot", user: "U_OTHER_BOT", isBot: true },
           { ts: "1700000000.000700", text: "missing author" },

@@ -37,6 +37,8 @@ export interface SlackThreadReply {
   ts: string;
   text: string;
   user?: string;
+  /** Slack message subtype, when present. Only `thread_broadcast` is steering-eligible. */
+  subtype?: string;
   /** True when Slack marks the reply as bot-authored. */
   isBot?: boolean;
   /** True when Slack reports that the stored reply text was edited. */
