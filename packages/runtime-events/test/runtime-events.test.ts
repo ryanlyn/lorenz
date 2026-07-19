@@ -37,6 +37,8 @@ test("RUNTIME_EVENT_TYPES is a strict superset of AGENT_UPDATE_TYPES with no dup
     "dispatch_skipped",
     "run_reserving",
     "run_started",
+    "tracker_acknowledged",
+    "tracker_acknowledge_failed",
     "dispatch_refresh_failed",
     "run_completed",
     "run_failed",

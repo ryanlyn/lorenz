@@ -13,7 +13,7 @@ Packages stack in dependency order. Each layer depends only on the ones above it
 | Leaf / domain | `domain`, `policies`, `issue`, `log-file` | Pure vocabulary, dependency-light policy logic, bounds, issue normalization |
 | Extension SDKs | `tracker-sdk`, `tool-sdk`, `agent-sdk`, `worker-sdk` | The four builder-facing contracts plus registries |
 | Engine | `config`, `workflow`, `dispatch`, `orchestrator`, `runtime`, `runtime-events`, `dispatch-coordinator`, `worker-pool`, `worker-host-pool`, `ssh`, `static-worker`, `agent-runner`, `acp`, `mcp`, `server`, `presenter`, `humanize`, `traceviz-emitter`, `traceviz-core`, `tui`, `workspace`, `test-utils` | The poll/dispatch loop, agent execution, MCP, observability |
-| Extensions | `extensions/linear-tracker`, `extensions/jira-tracker`, `extensions/local-tracker`, `extensions/memory-tracker`, `extensions/slack-tracker`, `extensions/docker-worker` | Concrete trackers and one worker driver |
+| Extensions | `extensions/linear-tracker`, `extensions/jira-tracker`, `extensions/local-tracker`, `extensions/memory-tracker`, `extensions/slack-tracker`, `extensions/discord-tracker`, `extensions/docker-worker` | Concrete trackers and one worker driver |
 | Apps | `apps/cli`, `apps/web`, `apps/traceviz` | The `lorenz` binary, the React SPA, the standalone trace viewer |
 | Vendored | `vendor/codex-acp`, `vendor/claude-agent-acp` | Patched ACP bridge subprocesses |
 
