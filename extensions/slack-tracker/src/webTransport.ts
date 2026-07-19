@@ -2,9 +2,12 @@ import { errorMessage, isRecord, type Settings } from "@lorenz/domain";
 
 import { isAllowedAuthor, isBotMention } from "./mapping.js";
 import { slackEndpoint, slackTrackerOptions } from "./options.js";
+import { stripBroadcastMentions } from "./sanitize.js";
 import type {
   SlackChannelScan,
   SlackMessage,
+  SlackMessageMetadata,
+  SlackPostOptions,
   SlackThreadReply,
   SlackThreadReplyPage,
   SlackThreadReplyPageQuery,
@@ -22,6 +25,7 @@ interface RawSlackMessage {
   reply_count?: number;
   latest_reply?: string;
   reactions?: Array<{ name?: string; users?: string[] }>;
+  metadata?: { event_type?: string; event_payload?: unknown };
 }
 
 // Generous safety cap on conversations.history pages. The normal terminal condition is Slack
@@ -337,6 +341,8 @@ export class SlackWebTransport implements SlackTransport {
     // conversations.replies returns the parent (root) message FIRST followed by its replies. Page
     // through next_cursor like listMentions (a pure read, safe to retry on 429/5xx) and drop the
     // parent (the message whose ts === the thread ts) so only the replies are returned.
+    // include_all_metadata carries back the bot's own message metadata, which the fold prefers
+    // over parsing reply text and which send reconciliation matches markers against.
     const out: SlackThreadReply[] = [];
     let cursor: string | undefined;
     for (let page = 0; page < this.maxHistoryPages; page += 1) {
@@ -373,6 +379,7 @@ export class SlackWebTransport implements SlackTransport {
       oldest: query.afterTs,
       inclusive: "false",
       limit: String(Math.min(200, Math.max(1, query.limit))),
+      include_all_metadata: "true",
     };
     if (query.cursor) params.cursor = query.cursor;
     const body = await this.get("conversations.replies", params, query.abortSignal);
@@ -400,16 +407,134 @@ export class SlackWebTransport implements SlackTransport {
     await this.post("reactions.remove", { channel, timestamp: ts, name }, { idempotent: true });
   }
 
-  async postReply(channel: string, threadTs: string, body: string): Promise<void> {
-    // chat.postMessage is NOT idempotent: a retry posts a DUPLICATE reply. It may retry only on a
-    // 429 (rejected before processing), never on an ambiguous 5xx where the reply may have applied.
-    await this.post(
-      "chat.postMessage",
-      { channel, thread_ts: threadTs, text: body },
-      {
-        idempotent: false,
-      },
+  async postReply(
+    channel: string,
+    threadTs: string,
+    body: string,
+    options: SlackPostOptions = {},
+  ): Promise<string> {
+    // chat.postMessage is NOT idempotent: a blind retry posts a DUPLICATE reply. It may retry
+    // internally only on a 429 (rejected before processing). An AMBIGUOUS outcome - a 5xx or a
+    // network/timeout failure after the request was sent, where the reply may or may not have
+    // been delivered - is checked by metadata reconciliation when the post carries a unique
+    // marker (`metadata.payload.seq`). A found marker recovers the original send's real ts. An
+    // absent marker is not proof of non-delivery because Slack may still be processing or
+    // indexing the post, so the ambiguous error is surfaced without retrying.
+    const params: Record<string, unknown> = {
+      channel,
+      thread_ts: threadTs,
+      text: stripBroadcastMentions(body),
+    };
+    if (options.blocks !== undefined) params.blocks = options.blocks;
+    if (options.metadata !== undefined) {
+      params.metadata = {
+        event_type: options.metadata.eventType,
+        event_payload: options.metadata.payload,
+      };
+    }
+    const marker = reconcilableMarker(options.metadata);
+    try {
+      const response = await this.post("chat.postMessage", params, { idempotent: false });
+      return typeof response.ts === "string" ? response.ts : "";
+    } catch (error) {
+      if (marker === null || !(error instanceof SlackAmbiguousDeliveryError)) {
+        throw error;
+      }
+      this.logger.warn(
+        `slack chat.postMessage outcome unknown (${errorMessage(error)}); checking the ` +
+          `metadata marker before surfacing failure`,
+      );
+      const deliveredTs = await this.findReplyByMarker(channel, threadTs, marker);
+      if (deliveredTs !== null) return deliveredTs;
+      throw error;
+    }
+  }
+
+  /**
+   * Scan the complete thread for this bot's reply carrying the metadata marker. A read failure or
+   * safety-cap truncation propagates. A complete scan can recover an already-visible send, but
+   * absence never authorizes another non-idempotent post.
+   */
+  private async findReplyByMarker(
+    channel: string,
+    threadTs: string,
+    marker: { eventType: string; seq: string },
+  ): Promise<string | null> {
+    let cursor: string | undefined;
+    for (let page = 0; page < this.maxHistoryPages; page += 1) {
+      const result = await this.getThreadPage(channel, threadTs, {
+        afterTs: "0",
+        limit: 200,
+        ...(cursor ? { cursor } : {}),
+      });
+      for (const reply of result.replies) {
+        if (
+          this.botUserId !== undefined &&
+          reply.user === this.botUserId &&
+          reply.metadata?.eventType === marker.eventType &&
+          reply.metadata.payload.seq === marker.seq
+        ) {
+          return reply.ts;
+        }
+      }
+      cursor = result.nextCursor;
+      if (!cursor) return null;
+    }
+    throw new Error(
+      `slack conversations.replies reconciliation for ${channel}:${threadTs} hit the ` +
+        `${this.maxHistoryPages}-page safety cap with more replies remaining`,
     );
+  }
+
+  async updateMessage(
+    channel: string,
+    ts: string,
+    body: string,
+    options: SlackPostOptions = {},
+  ): Promise<void> {
+    // chat.update converges to the same content on repeat, so retrying an ambiguous outcome is
+    // safe (idempotent in effect, unlike chat.postMessage).
+    const params: Record<string, unknown> = { channel, ts, text: stripBroadcastMentions(body) };
+    if (options.blocks !== undefined) params.blocks = options.blocks;
+    if (options.metadata !== undefined) {
+      params.metadata = {
+        event_type: options.metadata.eventType,
+        event_payload: options.metadata.payload,
+      };
+    }
+    await this.post("chat.update", params, { idempotent: true });
+  }
+
+  async postEphemeral(
+    channel: string,
+    user: string,
+    threadTs: string,
+    body: string,
+  ): Promise<void> {
+    // Ephemeral notices are best-effort accents (callers swallow failures); like any
+    // non-idempotent post, retry only the pre-processing 429 rejection.
+    await this.post(
+      "chat.postEphemeral",
+      { channel, user, thread_ts: threadTs, text: stripBroadcastMentions(body) },
+      { idempotent: false },
+    );
+  }
+
+  async openView(triggerId: string, view: Record<string, unknown>): Promise<string | null> {
+    // trigger_ids expire in ~3 seconds, so there is no meaningful retry budget beyond the
+    // internal 429 handling; a failure surfaces to the interaction handler, which logs it.
+    const response = await this.post(
+      "views.open",
+      { trigger_id: triggerId, view },
+      { idempotent: false },
+    );
+    return isRecord(response.view) && typeof response.view.id === "string"
+      ? response.view.id
+      : null;
+  }
+
+  async updateView(viewId: string, view: Record<string, unknown>): Promise<void> {
+    await this.post("views.update", { view_id: viewId, view }, { idempotent: true });
   }
 
   private async get(
@@ -437,7 +562,7 @@ export class SlackWebTransport implements SlackTransport {
 
   private async post(
     method: string,
-    params: Record<string, string>,
+    params: Record<string, unknown>,
     options: { idempotent: boolean },
   ): Promise<Record<string, unknown>> {
     const response = await this.fetchWithRetry(
@@ -468,16 +593,28 @@ export class SlackWebTransport implements SlackTransport {
       try {
         response = await send();
       } catch (error) {
-        throw new Error(`slack ${method} request failed: ${errorMessage(error)}`, {
-          cause: error,
-        });
+        // A network/timeout failure is AMBIGUOUS for a write: the request may have been sent and
+        // processed before the connection died. Typed so postReply can reconcile-by-marker
+        // instead of failing; for pure reads the distinction is harmless.
+        throw new SlackAmbiguousDeliveryError(
+          `slack ${method} request failed: ${errorMessage(error)}`,
+          error,
+        );
       }
       // A non-idempotent write (chat.postMessage) may retry only on a 429, which Slack rejects
       // BEFORE processing the request - so no reply was posted and a retry cannot duplicate it.
-      // An ambiguous 5xx (the reply may have already been delivered) must NOT be retried.
+      // An ambiguous 5xx (the reply may have already been delivered) must NOT be retried here;
+      // it surfaces as SlackAmbiguousDeliveryError so metadata-marked posts can reconcile.
       const canRetry = options.idempotent ? isRetryable(response.status) : response.status === 429;
       if (!canRetry || retryCount >= MAX_RETRIES) {
+        if (response.status >= 500) {
+          throw new SlackAmbiguousDeliveryError(
+            `slack ${method} failed: status ${response.status}`,
+          );
+        }
         if (isRetryable(response.status)) {
+          // A 429 at retry exhaustion is definitive: Slack rejected every attempt before
+          // processing, so nothing was delivered.
           throw new Error(`slack ${method} failed: status ${response.status}`);
         }
         return response;
@@ -512,7 +649,7 @@ export class SlackWebTransport implements SlackTransport {
       // (the goal). reactions.remove: no_reaction means the reaction is already absent (the goal).
       if (method === "reactions.add" && reason === "already_reacted") return body;
       if (method === "reactions.remove" && reason === "no_reaction") return body;
-      throw new Error(`slack ${method} failed: ${reason}`);
+      throw new SlackApiError(method, reason);
     }
     return body;
   }
@@ -577,5 +714,57 @@ function toThreadReply(m: RawSlackMessage): SlackThreadReply {
   if (typeof m.subtype === "string") reply.subtype = m.subtype;
   if (typeof m.bot_id === "string" || m.subtype === "bot_message") reply.isBot = true;
   if (m.edited !== undefined) reply.edited = true;
+  const metadata = toMessageMetadata(m.metadata);
+  if (metadata !== undefined) reply.metadata = metadata;
   return reply;
+}
+
+/** Map Slack's raw `metadata` field onto {@link SlackMessageMetadata}; undefined when absent. */
+export function toMessageMetadata(
+  raw: { event_type?: string; event_payload?: unknown } | undefined,
+): SlackMessageMetadata | undefined {
+  if (!raw || typeof raw.event_type !== "string" || !isRecord(raw.event_payload)) {
+    return undefined;
+  }
+  return { eventType: raw.event_type, payload: raw.event_payload };
+}
+
+/**
+ * An ambiguous write outcome: the request may or may not have been applied. postReply can recover
+ * one whose metadata marker is already visible; it never retries an unresolved send.
+ */
+class SlackAmbiguousDeliveryError extends Error {
+  constructor(message: string, cause?: unknown) {
+    super(message, cause === undefined ? undefined : { cause });
+    this.name = "SlackAmbiguousDeliveryError";
+  }
+}
+
+/** A definitive Slack Web API error response with its machine-readable error code. */
+export class SlackApiError extends Error {
+  constructor(
+    readonly method: string,
+    readonly code: string,
+  ) {
+    super(`slack ${method} failed: ${code}`);
+    this.name = "SlackApiError";
+  }
+}
+
+/** The reconciliation key of a metadata payload: present only when `seq` is a unique string. */
+function reconcilableMarker(
+  metadata: SlackMessageMetadata | undefined,
+): { eventType: string; seq: string } | null {
+  if (!metadata) return null;
+  const seq = metadata.payload.seq;
+  if (typeof seq !== "string" || seq === "") return null;
+  return { eventType: metadata.eventType, seq };
+}
+
+/**
+ * A unique per-post marker value for send reconciliation. Time-prefixed for log readability;
+ * the random suffix is what makes it unique - two posts can share a millisecond.
+ */
+export function makeMetadataSeq(): string {
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }

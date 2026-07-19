@@ -1452,6 +1452,7 @@ test("runtime rebinds tracker push delivery when a reload replaces the client", 
   const callbacks: Array<((change?: TrackerChange) => void) | undefined> = [];
   const fetches = [0, 0];
   const closes = [0, 0];
+  const streamOrder: string[] = [];
   let clientBuilds = 0;
   const runtime = new LorenzRuntime(
     runtimeOptions({
@@ -1467,9 +1468,11 @@ test("runtime rebinds tracker push delivery when a reload replaces the client", 
           },
           fetchIssuesByIds: async () => [],
           watch: (onChange) => {
+            streamOrder.push(`watch:${index}`);
             callbacks[index] = onChange;
             return {
               close: () => {
+                streamOrder.push(`close:${index}`);
                 closes[index] = (closes[index] ?? 0) + 1;
               },
             };
@@ -1491,6 +1494,7 @@ test("runtime rebinds tracker push delivery when a reload replaces the client", 
     assert.equal(clientBuilds, 2);
     assert.equal(closes[0], 1);
     assert.ok(callbacks[1]);
+    assert.deepEqual(streamOrder.slice(-2), ["close:0", "watch:1"]);
 
     const pushesBeforeStaleCallback = runtime
       .snapshot()
@@ -1659,7 +1663,7 @@ test("runtime polling does not wait for replacement stream startup", async () =>
   }
 });
 
-test("active runs retain their tracker client across workflow reloads", async () => {
+test("active runs retain pinned issue reads while steering moves to the replacement client", async () => {
   const dir = await tempDir("lorenz-runtime-reload-active-client");
   const workflowFile = path.join(dir, "WORKFLOW.md");
   await fs.writeFile(workflowFile, workflowMarkdown({ intervalMs: 600_000 }));
@@ -1689,6 +1693,7 @@ test("active runs retain their tracker client across workflow reloads", async ()
       workflow,
       reloadWorkflow: async () => {
         const reloaded = await loadWorkflow(workflowFile, {}, { cwd: dir });
+        const incompatibleSource = reloaded.promptTemplate.includes("Incompatible prompt");
         return {
           ...reloaded,
           settings: {
@@ -1696,6 +1701,7 @@ test("active runs retain their tracker client across workflow reloads", async ()
             tracker: {
               ...reloaded.settings.tracker,
               activeStates: ["Other"],
+              ...(incompatibleSource ? { endpoint: "https://other-tracker.test" } : {}),
             },
             agent: {
               ...reloaded.settings.agent,
@@ -1759,7 +1765,7 @@ test("active runs retain their tracker client across workflow reloads", async ()
     assert.equal(runtime.snapshot().running.length, 1);
 
     await activeRecovery?.("10.0", { maxEvents: 1, maxBytes: 1 });
-    assert.deepEqual(recoveryCalls, [1, 0]);
+    assert.deepEqual(recoveryCalls, [0, 1]);
 
     callbacks[1]?.({
       issueEvents: {
@@ -1775,7 +1781,7 @@ test("active runs retain their tracker client across workflow reloads", async ()
       },
     });
     await Promise.resolve();
-    assert.deepEqual(delivered, []);
+    assert.equal(delivered[0]?.text, "replacement client event");
     await waitFor(() => issueRefreshCalls[0] === 3, 1_000);
 
     callbacks[0]?.({
@@ -1786,16 +1792,42 @@ test("active runs retain their tracker client across workflow reloads", async ()
         ],
       },
     });
-    await waitFor(() => delivered.length === 1, 1_000);
-    assert.equal(delivered[0]?.text, "pinned client event");
-    await waitFor(() => issueRefreshCalls[0] === 4, 1_000);
-    assert.deepEqual(issueRefreshCalls, [4, 0]);
-    assert.deepEqual(streamCloses, [0, 0]);
+    await Promise.resolve();
+    assert.equal(delivered.length, 1);
+    assert.deepEqual(issueRefreshCalls, [3, 0]);
+    assert.deepEqual(streamCloses, [1, 0]);
+
+    await fs.writeFile(
+      workflowFile,
+      workflowMarkdown({ intervalMs: 600_000, prompt: "Incompatible prompt" }),
+    );
+    await runtime.pollOnce({ dryRun: true });
+    assert.equal(clientBuilds, 3);
+    assert.equal(callbacks[2], undefined);
+    assert.deepEqual(streamCloses, [1, 0]);
+
+    await activeRecovery?.("11.0", { maxEvents: 1, maxBytes: 1 });
+    assert.deepEqual(recoveryCalls, [0, 2]);
+    callbacks[1]?.({
+      issueEvents: {
+        issueId: issue.id,
+        events: [
+          {
+            authorizedForSteering: true,
+            ts: "12.0",
+            author: "ryan",
+            text: "retained source event",
+          },
+        ],
+      },
+    });
+    await waitFor(() => delivered.length === 2, 1_000);
+    assert.equal(delivered[1]?.text, "retained source event");
 
     finishRun?.();
     await waitFor(() => runtime.snapshot().running.length === 0, 1_000);
-    await waitFor(() => streamCloses[0] === 1, 1_000);
-    assert.deepEqual(streamCloses, [1, 0]);
+    await waitFor(() => callbacks[2] !== undefined, 1_000);
+    assert.deepEqual(streamCloses, [1, 1]);
   } finally {
     finishRun?.();
     runtime.stop();

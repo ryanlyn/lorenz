@@ -1,10 +1,23 @@
 import type { Settings } from "@lorenz/domain";
 
-import { emojiForState, isAllowedAuthor, isBotMention, statusEmojiMap } from "./mapping.js";
+import {
+  emojiForState,
+  isAllowedAuthor,
+  isBotMention,
+  stateFromReactions,
+  statusEmojiMap,
+} from "./mapping.js";
 import { slackTrackerOptions } from "./options.js";
-import { BOT_STATUS_PREFIX, resolveStateName } from "./threadState.js";
-import { isBotMarked } from "./transport.js";
+import {
+  BOT_STATUS_PREFIX,
+  resolveStateName,
+  stateFromObservedThread,
+  type ThreadState,
+  type ThreadTracking,
+} from "./threadState.js";
+import { isBotMarked, STATUS_METADATA_EVENT, TRACKING_METADATA_EVENT } from "./transport.js";
 import type { SlackMessage, SlackTransport } from "./transport.js";
+import { makeMetadataSeq } from "./webTransport.js";
 
 /**
  * The configured bot user id, or a clear configuration error. Every agent-facing read and
@@ -21,11 +34,17 @@ export function requireBotUserId(settings: Settings): string {
   return botUserId;
 }
 
+/** True when the root carries a bot-owned status reaction that proves it was accepted. */
+export function isBotStatusMarked(message: SlackMessage, settings: Settings): boolean {
+  const statusEmoji = new Set(Object.keys(statusEmojiMap(settings)));
+  return message.botReactions.some((reaction) => statusEmoji.has(reaction));
+}
+
 /**
  * Enforce the agent trust boundary: the issueId must reference a configured (watched) channel
- * and an existing message that is tracked - the root mentions the bot, the bot has marked it
- * (its own reaction), or a thread reply mentions the bot. Throws with a caller-facing message
- * otherwise.
+ * and an existing message that is tracked. Root mentions must still be eligible, or carry the
+ * dedicated marker from an earlier accepted poll. Non-mention roots must retain an eligible
+ * request reply, so a stale marker cannot keep an edited-away issue alive.
  */
 export async function requireTrackedMessage(
   settings: Settings,
@@ -33,7 +52,7 @@ export async function requireTrackedMessage(
   channel: string,
   ts: string,
 ): Promise<SlackMessage> {
-  const { channels, users } = slackTrackerOptions(settings);
+  const { channels, users, markerEmoji = "robot_face" } = slackTrackerOptions(settings);
   const botUserId = requireBotUserId(settings);
   if (!channels.includes(channel)) {
     throw new Error(`channel '${channel}' is not a configured tracker channel`);
@@ -42,25 +61,48 @@ export async function requireTrackedMessage(
   if (!message) {
     throw new Error(`no tracked issue at ${channel}:${ts}`);
   }
-  // A root the bot already marked (its own reaction) stays tracked regardless of the author
-  // allowlist: it was accepted on an earlier poll, so tightening `users` later must not orphan
-  // an issue the agent is mid-flight on. New tracking honors the allowlist on the author.
-  if (
-    (isBotMention(message.text, botUserId) && isAllowedAuthor(message.user, users)) ||
-    isBotMarked(message)
-  ) {
-    return message;
+  if (isBotMention(message.text, botUserId)) {
+    // A dedicated marker records acceptance by an earlier poll. It keeps a root mention tracked
+    // if the author allowlist is later tightened, while new issues still honor the allowlist.
+    if (isAllowedAuthor(message.user, users) || isBotMarked(message, markerEmoji)) return message;
+    // A bot-owned status reaction is an established acceptance record. Preserve that trust
+    // decision and normalize the thread to durable origin metadata plus the dedicated marker.
+    // A failed backfill retries on a later read without orphaning the active issue.
+    if (isBotStatusMarked(message, settings)) {
+      try {
+        let replies = await transport.getThread(channel, ts);
+        const thread = stateFromObservedThread(message, replies, settings, transport);
+        const tracking = await ensureSlackTrackingRecord(settings, transport, message, thread);
+        if (tracking !== undefined) {
+          if (thread.events.length === 0) {
+            const state = stateFromReactions(
+              message.botReactions,
+              statusEmojiMap(settings),
+              settings,
+            );
+            await postStatusReply(transport, channel, ts, state, {});
+          }
+          await transport.addReaction(channel, ts, markerEmoji);
+          replies = await transport.getThread(channel, ts);
+          message.replyCount = replies.length;
+          message.latestReply = replies.at(-1)?.ts;
+          if (!message.reactions.includes(markerEmoji)) message.reactions.push(markerEmoji);
+          if (!message.botReactions.includes(markerEmoji)) message.botReactions.push(markerEmoji);
+        }
+      } catch {
+        // The bot-owned status reaction remains sufficient migration evidence for this read.
+      }
+      return message;
+    }
   }
-  // Reply-tracked thread: the request lives in a reply rather than the root. Last resort
-  // because it costs a conversations.replies fetch.
+  // Reply-tracked thread: reconstruct the accepted request from the thread. This check is also
+  // what rejects a root mention edited away while the daemon was offline, even if its marker or
+  // status mirror remains.
   if ((message.replyCount ?? 0) > 0) {
     const replies = await transport.getThread(channel, ts);
-    if (
-      replies.some(
-        (reply) => isBotMention(reply.text, botUserId) && isAllowedAuthor(reply.user, users),
-      )
-    )
+    if (stateFromObservedThread(message, replies, settings, transport).request !== undefined) {
       return message;
+    }
   }
   throw new Error("message is not a tracked bot-mention issue");
 }
@@ -85,22 +127,142 @@ export async function updateSlackStatus(
   channel: string,
   ts: string,
   status: string,
+  options: { attribution?: string; actor?: string } = {},
 ): Promise<SlackStatusUpdateOutcome> {
   const canonical = resolveStateName(status, settings);
   if (canonical === null) {
-    return {
-      ok: false,
-      message:
-        `unknown status '${status}': use one of the workflow's active/terminal states ` +
-        `(${[...settings.tracker.activeStates, ...settings.tracker.terminalStates].join(", ")})`,
-    };
+    return unknownStatusOutcome(status, settings);
   }
   // Trust-boundary check: the agent-supplied issueId must point at a watched channel and a
   // tracked message before we write into its thread.
   const root = await requireTrackedMessage(settings, transport, channel, ts);
-  await transport.postReply(channel, ts, `${BOT_STATUS_PREFIX} ${canonical}`);
+  await ensureSlackTrackingRecord(settings, transport, root);
+  // The reply text stays human-readable (`status: <Name>`, plus an optional attribution line for
+  // e.g. button-initiated transitions), while the metadata is the machine-readable event the
+  // fold prefers: only the posting app can attach metadata, so it cannot be forged, and the
+  // unique `seq` lets an ambiguous outcome recover when the original reply is already visible in
+  // the thread. If it is not visible yet, the post remains at-most-once and fails without retry.
+  await postStatusReply(transport, channel, ts, canonical, options);
   await mirrorStatusReaction(settings, transport, channel, ts, canonical, root.botReactions);
   return { ok: true, status: canonical, root };
+}
+
+/**
+ * Persist whether an accepted issue originated at its root or in a reply. The record lets later
+ * reads preserve the original authorization decision and reject a root request whose mention was
+ * edited away, without treating a later command or steering reply as a new request.
+ */
+export async function ensureSlackTrackingRecord(
+  settings: Settings,
+  transport: SlackTransport,
+  root: SlackMessage,
+  knownThread?: ThreadState,
+): Promise<ThreadTracking | undefined> {
+  const thread =
+    knownThread ??
+    stateFromObservedThread(
+      root,
+      await transport.getThread(root.channel, root.ts),
+      settings,
+      transport,
+    );
+  if (thread.tracking !== undefined) return thread.tracking;
+  const botUserId = requireBotUserId(settings);
+  const tracking: ThreadTracking | undefined = isBotMention(root.text, botUserId)
+    ? { origin: "root" }
+    : thread.request !== undefined
+      ? { origin: "reply", requestTs: thread.request.ts }
+      : undefined;
+  if (tracking === undefined) return undefined;
+  await transport.postReply(root.channel, root.ts, "Lorenz tracking record.", {
+    metadata: {
+      eventType: TRACKING_METADATA_EVENT,
+      payload:
+        tracking.origin === "root"
+          ? { origin: "root" }
+          : { origin: "reply", request_ts: tracking.requestTs },
+    },
+  });
+  return tracking;
+}
+
+/**
+ * Post a status selected from a workpad action.
+ *
+ * The action value comes from a bot-authored block delivered over authenticated Socket Mode, so
+ * it does not need an API read to re-establish the tool trust boundary. The configured channel
+ * and status are still validated before the append-only reply is posted. Reaction healing starts
+ * in the background because it is display-only and can wait behind Slack rate limits without
+ * delaying cancellation.
+ */
+export async function updateSlackStatusFromWorkpad(
+  settings: Settings,
+  transport: SlackTransport,
+  channel: string,
+  ts: string,
+  status: string,
+  options: { attribution?: string; actor?: string; onPosted?: () => void } = {},
+): Promise<{ ok: true; status: string } | { ok: false; message: string }> {
+  const canonical = resolveStateName(status, settings);
+  if (canonical === null) {
+    return unknownStatusOutcome(status, settings);
+  }
+  requireBotUserId(settings);
+  if (!slackTrackerOptions(settings).channels.includes(channel)) {
+    return { ok: false, message: `channel '${channel}' is not a configured tracker channel` };
+  }
+  const { onPosted, ...postOptions } = options;
+  await postStatusReply(transport, channel, ts, canonical, postOptions);
+  onPosted?.();
+  void healStatusReactionFromCurrentRoot(settings, transport, channel, ts, canonical).catch(() => {
+    // Display-only healing retries during normal tracker reconciliation.
+  });
+  return { ok: true, status: canonical };
+}
+
+function unknownStatusOutcome(status: string, settings: Settings): { ok: false; message: string } {
+  return {
+    ok: false,
+    message:
+      `unknown status '${status}': use one of the workflow's active/terminal states ` +
+      `(${[...settings.tracker.activeStates, ...settings.tracker.terminalStates].join(", ")})`,
+  };
+}
+
+async function postStatusReply(
+  transport: SlackTransport,
+  channel: string,
+  ts: string,
+  canonical: string,
+  options: { attribution?: string; actor?: string },
+): Promise<void> {
+  const body =
+    options.attribution === undefined
+      ? `${BOT_STATUS_PREFIX} ${canonical}`
+      : `${BOT_STATUS_PREFIX} ${canonical}\n${options.attribution}`;
+  await transport.postReply(channel, ts, body, {
+    metadata: {
+      eventType: STATUS_METADATA_EVENT,
+      payload: {
+        issue: `${channel}:${ts}`,
+        state: canonical,
+        seq: makeMetadataSeq(),
+        ...(options.actor !== undefined ? { actor: options.actor } : {}),
+      },
+    },
+  });
+}
+
+async function healStatusReactionFromCurrentRoot(
+  settings: Settings,
+  transport: SlackTransport,
+  channel: string,
+  ts: string,
+  state: string,
+): Promise<void> {
+  const root = await transport.getMessage(channel, ts);
+  if (root === null) return;
+  await mirrorStatusReaction(settings, transport, channel, ts, state, root.botReactions);
 }
 
 /**
@@ -124,6 +286,14 @@ export async function mirrorStatusReaction(
 ): Promise<void> {
   const map = statusEmojiMap(settings);
   const target = emojiForState(state, map);
+  const markerEmoji = slackTrackerOptions(settings).markerEmoji ?? "robot_face";
+  if (!observed.includes(markerEmoji)) {
+    try {
+      await transport.addReaction(channel, ts, markerEmoji);
+    } catch {
+      // The status reply remains authoritative; the next poll retries the marker.
+    }
+  }
   for (const emoji of observed) {
     if (emoji === target || typeof map[emoji] !== "string") continue;
     try {

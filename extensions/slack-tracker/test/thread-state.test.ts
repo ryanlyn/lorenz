@@ -105,6 +105,10 @@ test("a bare mention after a terminal event reopens; before it, it does not", ()
     s,
   );
   assert.equal(reopened.state, "Todo");
+  assert.deepEqual(reopened.events, [
+    { ts: "101.1", state: "Done", actor: "U_BOT" },
+    { ts: "102.1", state: "Todo", actor: "U_HUMAN" },
+  ]);
 
   const settled = stateFromThread(
     root("<@U_BOT> fix it"),
@@ -114,7 +118,26 @@ test("a bare mention after a terminal event reopens; before it, it does not", ()
   assert.equal(settled.state, "Done");
 });
 
-test("threads without commands fall back to the reaction-derived state (legacy)", () => {
+test("the audit trail retains an effective reopen followed by another status", () => {
+  const result = stateFromThread(
+    root("<@U_BOT> fix it"),
+    [
+      reply("101.1", "status: Done", "U_BOT"),
+      reply("102.1", "<@U_BOT> one more fix", "U_HUMAN"),
+      reply("103.1", "status: Done", "U_BOT"),
+    ],
+    settings(),
+  );
+
+  assert.equal(result.state, "Done");
+  assert.deepEqual(result.events, [
+    { ts: "101.1", state: "Done", actor: "U_BOT" },
+    { ts: "102.1", state: "Todo", actor: "U_HUMAN" },
+    { ts: "103.1", state: "Done", actor: "U_BOT" },
+  ]);
+});
+
+test("threads without commands fall back to the reaction-derived state", () => {
   const s = settings({
     emoji_states: { check_mark: "Done", "green-check-mark": "Done" },
   });
@@ -141,6 +164,7 @@ test("a bare re-mention reopens even a reaction-derived terminal state", () => {
     s,
   );
   assert.equal(result.state, "Todo");
+  assert.deepEqual(result.events, [{ ts: "101.1", state: "Todo", actor: "U_HUMAN" }]);
 });
 
 test("a reply mention in a non-mention thread is the request, not a transition", () => {

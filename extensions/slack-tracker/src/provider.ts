@@ -7,6 +7,7 @@ import {
 } from "@lorenz/tracker-sdk";
 
 import { SlackTrackerClient } from "./client.js";
+import { statusEmojiMap } from "./mapping.js";
 import {
   emojiStatesValue,
   numberOption,
@@ -30,6 +31,7 @@ export const slackTrackerProvider: TrackerProvider = {
     marker_emoji: "markerEmoji",
     reply_lookback_days: "replyLookbackDays",
     scan_lookback_days: "scanLookbackDays",
+    reconcile_interval_ms: "reconcileIntervalMs",
   },
   envFallbacks: { apiKey: "SLACK_BOT_TOKEN" },
   defaultEndpoint: SLACK_DEFAULT_ENDPOINT,
@@ -45,6 +47,7 @@ export const slackTrackerProvider: TrackerProvider = {
         "markerEmoji",
         "replyLookbackDays",
         "scanLookbackDays",
+        "reconcileIntervalMs",
       ],
       "slack",
     );
@@ -71,6 +74,7 @@ export const slackTrackerProvider: TrackerProvider = {
     const markerEmoji = stringOption(options, "markerEmoji");
     const replyLookbackDays = numberOption(options, "replyLookbackDays");
     const scanLookbackDays = numberOption(options, "scanLookbackDays");
+    const reconcileIntervalMs = numberOption(options, "reconcileIntervalMs");
     return {
       ...(channels !== undefined && channels.length > 0 ? { channels } : {}),
       ...(users !== undefined && users.length > 0 ? { users } : {}),
@@ -80,6 +84,7 @@ export const slackTrackerProvider: TrackerProvider = {
       ...(markerEmoji !== undefined ? { markerEmoji } : {}),
       ...(replyLookbackDays !== undefined ? { replyLookbackDays } : {}),
       ...(scanLookbackDays !== undefined ? { scanLookbackDays } : {}),
+      ...(reconcileIntervalMs !== undefined ? { reconcileIntervalMs } : {}),
     };
   },
   validateDispatch(settings) {
@@ -94,7 +99,7 @@ export const slackTrackerProvider: TrackerProvider = {
           "no assignee to filter on)",
       );
     }
-    const { channels, botUserId } = slackTrackerOptions(settings);
+    const { channels, botUserId, markerEmoji = "robot_face" } = slackTrackerOptions(settings);
     if (channels.length === 0) {
       throw new Error("tracker.channels is required for the slack tracker");
     }
@@ -103,6 +108,11 @@ export const slackTrackerProvider: TrackerProvider = {
         "tracker.bot_user_id (or SLACK_BOT_USER_ID) is required for the slack tracker so issue " +
           "creation is scoped to the bot's own mentions; without it any human-to-human mention " +
           "in a watched channel would spawn an agent",
+      );
+    }
+    if (Object.hasOwn(statusEmojiMap(settings), markerEmoji)) {
+      throw new Error(
+        `tracker.marker_emoji '${markerEmoji}' must not also map to a workflow state`,
       );
     }
   },

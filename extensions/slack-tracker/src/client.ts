@@ -1,6 +1,7 @@
 import { defaultStateType, normalizeIssue } from "@lorenz/issue";
 import {
   boundTrackerIssueEventText,
+  isRecord,
   trackerIssueEventsBytes,
   type Issue,
   type IssueStateType,
@@ -13,22 +14,33 @@ import {
   type TrackerIssueEventQuery,
 } from "@lorenz/domain";
 
+import { compareSlackTs, isSlackTs, splitIssueId } from "./ids.js";
+import { handleSlackInteraction } from "./interactions.js";
 import {
   emojiForState,
   isAllowedAuthor,
+  isBotMention,
   stateFromReactions,
   statusEmojiMap,
   stripLeadingMention,
 } from "./mapping.js";
-import { mirrorStatusReaction, requireTrackedMessage } from "./operations.js";
+import { MirrorBackedSlackTransport } from "./mirror.js";
+import {
+  ensureSlackTrackingRecord,
+  isBotStatusMarked,
+  mirrorStatusReaction,
+  requireTrackedMessage,
+} from "./operations.js";
 import { slackEndpoint, slackTrackerOptions } from "./options.js";
 import { SlackSocketMode, type SlackSocketModeOptions } from "./socketMode.js";
 import {
   isAsideText,
   parseStatusCommand,
   resolveThreadState,
+  stateFromObservedThread,
   type ThreadState,
 } from "./threadState.js";
+import { registerSlackRuntimeTransport } from "./toolTransport.js";
 import { isBotMarked } from "./transport.js";
 import type {
   SlackChannelScan,
@@ -37,11 +49,9 @@ import type {
   SlackTransport,
 } from "./transport.js";
 
-export function splitIssueId(id: string): [string, string] | null {
-  const idx = id.indexOf(":");
-  if (idx === -1) return null;
-  return [id.slice(0, idx), id.slice(idx + 1)];
-}
+// Re-exported here for API stability because package consumers and the tool pack import it from
+// the client module.
+export { splitIssueId };
 
 /**
  * Derive labels from hashtag tokens in `text`: match `#tag`, strip the leading `#`, lowercase,
@@ -175,12 +185,15 @@ function slackMessageToIssue(
 }
 
 /**
- * Tracked roots of one scan: every bot-mention root, plus every threaded root the bot has
- * marked with its own reaction (reply-tracked issues recognized across restarts without
- * re-reading their threads).
+ * Candidate roots of one scan: every bot-mention root, plus threaded roots carrying the
+ * dedicated tracking marker. Callers still validate that non-mention roots retain their
+ * accepted request reply before exposing or dispatching them.
  */
-export function trackedRootsOf(scan: SlackChannelScan): SlackMessage[] {
-  return [...scan.mentions, ...scan.threadedRoots.filter(isBotMarked)];
+export function trackedRootsOf(scan: SlackChannelScan, markerEmoji: string): SlackMessage[] {
+  return [
+    ...scan.mentions,
+    ...scan.threadedRoots.filter((message) => isBotMarked(message, markerEmoji)),
+  ];
 }
 
 /**
@@ -196,6 +209,9 @@ const DEFAULT_REPLY_LOOKBACK_DAYS = 2;
 /** Entry cap for the per-issue mirror reconciliation cache (matches THREAD_STATE_CACHE_MAX). */
 const MIRRORED_STATES_MAX = 5_000;
 
+/** Minimum gap between "already running" ephemerals for one issue+author pair. */
+const BUSY_NOTICE_WINDOW_MS = 10 * 60_000;
+
 /** Bound on Slack API pages inspected by one recovery request. */
 const MAX_THREAD_RECOVERY_PAGES = 500;
 
@@ -205,6 +221,8 @@ export class SlackTrackerClient implements RuntimeTrackerClient {
   private readonly mirroredStates = new Map<string, string>();
   /** Serialized background queue of pending reaction-mirror heals (see healStatusMirror). */
   private mirrorHealQueue: Promise<void> = Promise.resolve();
+  /** Last "already running" ephemeral per issue+author, so a chatty thread is nudged once. */
+  private readonly busyNoticeAt = new Map<string, number>();
   /**
    * Oldest thread activity (epoch seconds) considered when hunting for NEW reply-mention
    * requests in untracked threads. Once tracked, a thread is marked with the bot's reaction
@@ -212,18 +230,37 @@ export class SlackTrackerClient implements RuntimeTrackerClient {
    * mention posted while the daemon was down longer than the lookback is not picked up.
    */
   private readonly replyFloor: number;
+  /**
+   * The effective transport. With an app token this is the event-fed channel mirror wrapping
+   * the real transport (polls read memory; the scan becomes reconciliation); without one it is
+   * the raw transport and every poll is a real scan.
+   */
+  private readonly transport: SlackTransport;
+  private readonly channelMirror: MirrorBackedSlackTransport | null;
 
   constructor(
     private readonly settings: Settings,
-    private readonly transport: SlackTransport,
+    transport: SlackTransport,
     // Seam for tests: lets a fake Socket Mode (or one with an injected WebSocket) stand in.
     private readonly createSocketMode: (options: SlackSocketModeOptions) => SlackSocketMode = (
       options,
     ) => new SlackSocketMode(options),
   ) {
-    const lookbackDays =
-      slackTrackerOptions(settings).replyLookbackDays ?? DEFAULT_REPLY_LOOKBACK_DAYS;
+    const options = slackTrackerOptions(settings);
+    const lookbackDays = options.replyLookbackDays ?? DEFAULT_REPLY_LOOKBACK_DAYS;
     this.replyFloor = Date.now() / 1000 - lookbackDays * 86_400;
+    // The mirror is only worth constructing when a socket can feed it; it refuses to serve
+    // until the socket reports healthy anyway (isFresh), so this is belt and braces.
+    this.channelMirror =
+      options.appToken !== undefined &&
+      options.appToken.trim() !== "" &&
+      options.channels.length > 0
+        ? new MirrorBackedSlackTransport(transport, settings, {
+            reconcileIntervalMs: options.reconcileIntervalMs,
+          })
+        : null;
+    this.transport = this.channelMirror ?? transport;
+    registerSlackRuntimeTransport(settings, this.transport);
   }
 
   async fetchCandidateIssues(): Promise<Issue[]> {
@@ -232,9 +269,10 @@ export class SlackTrackerClient implements RuntimeTrackerClient {
 
   /**
    * Push capability (see {@link RuntimeTrackerClient.watch}). When an app-level token is
-   * configured, open a Slack Socket Mode connection. Watched mentions and reactions nudge an
-   * immediate poll, while eligible thread replies also carry structured steering input. Returns
-   * `null` when no app token is set or no channels are watched, leaving the tracker pull-only.
+   * configured, open a Slack Socket Mode connection. Watched events update the channel mirror
+   * before nudging the poll path, eligible thread replies also carry structured steering input,
+   * and interactive envelopes route workpad actions through the same connection. Returns `null`
+   * when no app token is set or no channels are watched, leaving the tracker pull-only.
    */
   watch(onChange: (change?: TrackerChange) => void): TrackerChangeStream | null {
     const { channels, appToken } = slackTrackerOptions(this.settings);
@@ -244,11 +282,37 @@ export class SlackTrackerClient implements RuntimeTrackerClient {
       appToken,
       channels,
       onChange: (payload) => onChange(this.changeForSocketPayload(payload)),
+      onEvent: (payload) => {
+        this.channelMirror?.applyEvent(payload);
+        this.scanCache = null;
+        this.noticeIfBusyReply(payload);
+      },
+      onInteractive: (payload) => {
+        void handleSlackInteraction(payload, {
+          settings: this.settings,
+          transport: this.transport,
+          logger: { warn: (message) => console.warn(message) },
+          nudge: () => onChange(),
+        });
+      },
+      // Each accepted connection closes the gap after the preceding API snapshot. Clear both
+      // cache layers and nudge immediately so activity missed while disconnected is reconciled
+      // now, independently of the configured polling interval.
+      onReconnect: () => {
+        this.channelMirror?.markAllDirty("socket connection ready");
+        this.scanCache = null;
+        onChange();
+      },
+      onConnectionState: (connected) => this.channelMirror?.setSocketHealthy(connected),
     });
     socket.start();
     return socket;
   }
 
+  /**
+   * Return bounded, oldest-first steering events newer than `sinceTs`. With the channel mirror
+   * active, the same transport contract is served from event-fed memory between reconciliations.
+   */
   async fetchIssueEvents(
     issueId: string,
     sinceTs: string,
@@ -260,7 +324,7 @@ export class SlackTrackerClient implements RuntimeTrackerClient {
     if (!Number.isInteger(query.maxBytes) || query.maxBytes <= 0) {
       throw new Error("Slack issue-event maxBytes must be a positive integer");
     }
-    if (!slackTsParts(sinceTs)) {
+    if (!isSlackTs(sinceTs)) {
       throw new Error(`invalid Slack issue-event cursor: ${sinceTs}`);
     }
     const parts = splitIssueId(issueId);
@@ -312,8 +376,8 @@ export class SlackTrackerClient implements RuntimeTrackerClient {
 
   private changeForSocketPayload(payload: Record<string, unknown> | undefined): TrackerChange {
     const event = payload?.event;
-    if (!event || typeof event !== "object" || Array.isArray(event)) return {};
-    const record = event as Record<string, unknown>;
+    if (!isRecord(event)) return {};
+    const record = event;
     if (record.type !== "message" && record.type !== "app_mention") return {};
     const subtype = typeof record.subtype === "string" ? record.subtype : null;
     const channel = typeof record.channel === "string" ? record.channel : null;
@@ -342,8 +406,7 @@ export class SlackTrackerClient implements RuntimeTrackerClient {
   }
 
   /** Resolve a tracked root's thread state and map it to a normalized issue. */
-  private async issueFromRoot(root: SlackMessage, base: string | null): Promise<Issue> {
-    const thread = await resolveThreadState(this.settings, this.transport, root);
+  private issueFromRoot(root: SlackMessage, base: string | null, thread: ThreadState): Issue {
     return slackMessageToIssue(root, this.settings, {
       permalinkBase: base,
       state: thread.state,
@@ -370,8 +433,9 @@ export class SlackTrackerClient implements RuntimeTrackerClient {
       this.scanCached({ forceRefresh: true }),
       this.transport.teamUrl(),
     ]);
+    const markerEmoji = this.markerEmoji();
     const scannedById = new Map<string, SlackMessage>(
-      trackedRootsOf(scan).map((root) => [`${root.channel}:${root.ts}`, root]),
+      trackedRootsOf(scan, markerEmoji).map((root) => [`${root.channel}:${root.ts}`, root]),
     );
     const out: Issue[] = [];
     for (const [id, parts] of parsed) {
@@ -385,7 +449,15 @@ export class SlackTrackerClient implements RuntimeTrackerClient {
           continue;
         }
       }
-      out.push(await this.issueFromRoot(root, base));
+      const thread = await resolveThreadState(this.settings, this.transport, root);
+      const { botUserId, users } = slackTrackerOptions(this.settings);
+      const rootMentionIsTracked =
+        isBotMention(root.text, botUserId) &&
+        (isAllowedAuthor(root.user, users) ||
+          isBotMarked(root, markerEmoji) ||
+          isBotStatusMarked(root, this.settings));
+      if (!rootMentionIsTracked && thread.request === undefined) continue;
+      out.push(this.issueFromRoot(root, base, thread));
     }
     return out;
   }
@@ -398,33 +470,63 @@ export class SlackTrackerClient implements RuntimeTrackerClient {
 
   private async trackedIssues(): Promise<Issue[]> {
     const [scan, base] = await Promise.all([this.scanCached(), this.transport.teamUrl()]);
-    const roots = trackedRootsOf(scan);
+    const markerEmoji = this.markerEmoji();
+    const roots = trackedRootsOf(scan, markerEmoji);
     // Hunt for NEW reply-mention requests: untracked threads with activity inside the lookback
     // window. A thread is tracked once a reply mentions the bot; the bot then marks the root
     // with its own reaction so later polls (and restarts) recognize it from the scan alone.
     for (const root of scan.threadedRoots) {
-      if (isBotMarked(root)) continue;
+      if (isBotMarked(root, markerEmoji)) continue;
       if (tsValue(root.latestReply) <= this.replyFloor) continue;
       const thread = await resolveThreadState(this.settings, this.transport, root);
       if (!thread.request) continue;
       roots.push(root);
-      try {
-        await this.transport.addReaction(root.channel, root.ts, this.markerEmoji());
-      } catch {
-        // Tracking still works this poll; the marker retries on the next discovery pass.
-      }
     }
     const issues: Issue[] = [];
+    const { botUserId, users } = slackTrackerOptions(this.settings);
     for (const root of roots) {
+      const rootIsMention = isBotMention(root.text, botUserId);
+      if (rootIsMention && !isAllowedAuthor(root.user, users) && !isBotMarked(root, markerEmoji)) {
+        continue;
+      }
       const thread = await resolveThreadState(this.settings, this.transport, root);
-      this.healStatusMirror(root, thread.state);
-      issues.push(
-        slackMessageToIssue(root, this.settings, {
-          permalinkBase: base,
-          state: thread.state,
-          request: thread.request,
-        }),
-      );
+      if (!rootIsMention && thread.request === undefined) {
+        // A root edited away while the daemon was offline can retain its marker. Reconstructing
+        // the request from the thread prevents that stale reaction from keeping the issue alive.
+        continue;
+      }
+      // The marker records thread authority, rather than merely bot ownership. Reply-tracked
+      // roots and roots with status events get it; untouched and reaction-only root mentions
+      // keep their fallback until a thread event occurs.
+      const threadIsAuthoritative = thread.request !== undefined || thread.events.length > 0;
+      let trackingReady = thread.tracking !== undefined;
+      if (threadIsAuthoritative && !trackingReady) {
+        try {
+          const tracking = await ensureSlackTrackingRecord(
+            this.settings,
+            this.transport,
+            root,
+            thread,
+          );
+          if (tracking !== undefined) {
+            thread.tracking = tracking;
+            trackingReady = true;
+          }
+        } catch {
+          // The issue remains valid this poll; the durable record retries on the next pass.
+        }
+      }
+      if (threadIsAuthoritative && trackingReady && !isBotMarked(root, markerEmoji)) {
+        try {
+          await this.transport.addReaction(root.channel, root.ts, markerEmoji);
+          if (!root.reactions.includes(markerEmoji)) root.reactions.push(markerEmoji);
+          if (!root.botReactions.includes(markerEmoji)) root.botReactions.push(markerEmoji);
+        } catch {
+          // Tracking still works this poll; the marker retries on the next discovery pass.
+        }
+      }
+      this.healStatusMirror(root, thread);
+      issues.push(this.issueFromRoot(root, base, thread));
     }
     return issues;
   }
@@ -444,7 +546,8 @@ export class SlackTrackerClient implements RuntimeTrackerClient {
    * `mirroredStates` marks the issue at schedule time, so one heal is queued per state change
    * per issue no matter how many polls elapse while the queue drains.
    */
-  private healStatusMirror(root: SlackMessage, state: string): void {
+  private healStatusMirror(root: SlackMessage, thread: ThreadState): void {
+    const state = thread.state;
     const key = `${root.channel}:${root.ts}`;
     if (this.mirroredStates.get(key) === state) return;
     // Bounded like threadStateCache: a clear only lets already-converged mirrors re-check (the
@@ -464,14 +567,77 @@ export class SlackTrackerClient implements RuntimeTrackerClient {
     // and holding `root` would pin every backlogged message body in memory until the queue drains.
     const { channel, ts } = root;
     const observed = [...root.botReactions];
+    const healReaction = staleManaged || missingTarget;
     this.mirrorHealQueue = this.mirrorHealQueue.then(async () => {
       try {
-        await mirrorStatusReaction(this.settings, this.transport, channel, ts, state, observed);
+        if (healReaction) {
+          await mirrorStatusReaction(this.settings, this.transport, channel, ts, state, observed);
+        }
       } catch {
-        // Defensive only (mirror writes already swallow their own failures): a rejection here
-        // would poison the serialized queue and silently skip every later heal.
+        // Defensive only: a rejection here would poison the serialized queue and silently skip
+        // every later heal. Let the next poll reschedule this issue.
+        this.mirroredStates.delete(key);
       }
     });
+  }
+
+  /**
+   * Ephemeral "already running" notice: when a human posts a bare (command-less) bot-mention
+   * reply on an issue that is already in a beyond-initial active state, tell THAT author -
+   * quietly, once per issue+author per window - that replies queue as the agent's next turn
+   * and how to stop it. A politeness surface, never a lock: dispatch concurrency is the
+   * runtime's claim model.
+   */
+  private noticeIfBusyReply(payload: Record<string, unknown>): void {
+    const event = payload.event;
+    if (!isRecord(event)) return;
+    if (event.type !== "message" && event.type !== "app_mention") return;
+    if (typeof event.subtype === "string") return; // edits/deletes/system messages are not asks
+    const channel = typeof event.channel === "string" ? event.channel : null;
+    const ts = typeof event.ts === "string" ? event.ts : null;
+    const threadTs = typeof event.thread_ts === "string" ? event.thread_ts : null;
+    const user = typeof event.user === "string" ? event.user : null;
+    const text = typeof event.text === "string" ? event.text : "";
+    if (channel === null || ts === null || threadTs === null || threadTs === ts) return;
+    const { botUserId, users } = slackTrackerOptions(this.settings);
+    if (user === null || botUserId === undefined || user === botUserId) return;
+    if (!isAllowedAuthor(user, users)) return;
+    if (!isBotMention(text, botUserId)) return;
+    if (isAsideText(text, botUserId)) return;
+    if (parseStatusCommand(text, botUserId, this.settings) !== null) return;
+    const noticeKey = `${channel}:${threadTs}:${user}`;
+    const now = Date.now();
+    const last = this.busyNoticeAt.get(noticeKey);
+    if (last !== undefined && now - last < BUSY_NOTICE_WINDOW_MS) return;
+    this.busyNoticeAt.set(noticeKey, now);
+    if (this.busyNoticeAt.size >= MIRRORED_STATES_MAX) this.busyNoticeAt.clear();
+    void this.postBusyNotice(channel, threadTs, user).catch(() => {
+      // Best-effort by definition; a failed notice must never surface anywhere.
+    });
+  }
+
+  private async postBusyNotice(channel: string, threadTs: string, user: string): Promise<void> {
+    const cached = await this.channelMirror?.getCachedThread(channel, threadTs);
+    if (!cached) return;
+    const thread = stateFromObservedThread(
+      cached.root,
+      cached.replies,
+      this.settings,
+      this.transport,
+    );
+    const active = this.settings.tracker.activeStates;
+    const stateLower = thread.state.trim().toLowerCase();
+    const activeIndex = active.findIndex((s) => s.trim().toLowerCase() === stateLower);
+    // Only states BEYOND the initial one read as "an agent is on this": Todo-like issues are
+    // simply awaiting dispatch and a notice would be noise.
+    if (activeIndex <= 0) return;
+    await this.transport.postEphemeral(
+      channel,
+      user,
+      threadTs,
+      `Lorenz is already working on this issue (status: ${thread.state}). Replies reach the ` +
+        "agent as its next queued turn; `@bot !cancel` (or the workpad's Cancel button) stops it.",
+    );
   }
 
   /**
@@ -518,51 +684,25 @@ function steeringEventForReply(
   settings: Settings,
 ): TrackerIssueEvent | null {
   const { botUserId, users } = slackTrackerOptions(settings);
-  if (!slackTsParts(reply.ts) || compareSlackTs(reply.ts, "0") <= 0) return null;
+  if (!isSlackTs(reply.ts) || compareSlackTs(reply.ts, "0") <= 0) return null;
   if (reply.subtype !== undefined && reply.subtype !== "thread_broadcast") return null;
   if (
     reply.user === undefined ||
     reply.isBot === true ||
     reply.edited === true ||
+    reply.deleted === true ||
     reply.user === botUserId
   ) {
     return null;
   }
   if (!isAllowedAuthor(reply.user, users)) return null;
-  if (isAsideText(reply.text, botUserId)) return null;
-  if (parseStatusCommand(reply.text, botUserId, settings) !== null) return null;
+  const classificationText = reply.firstSeenText ?? reply.text;
+  if (isAsideText(classificationText, botUserId)) return null;
+  if (parseStatusCommand(classificationText, botUserId, settings) !== null) return null;
   return {
     authorizedForSteering: true,
     ts: reply.ts,
     author: reply.user,
     text: reply.text,
   };
-}
-
-function compareSlackTs(left: string, right: string): number {
-  const leftParts = slackTsParts(left);
-  const rightParts = slackTsParts(right);
-  if (!leftParts || !rightParts) {
-    throw new Error(`invalid Slack timestamp: ${!leftParts ? left : right}`);
-  }
-  if (leftParts.integer.length !== rightParts.integer.length) {
-    return leftParts.integer.length - rightParts.integer.length;
-  }
-  if (leftParts.integer !== rightParts.integer) {
-    return leftParts.integer < rightParts.integer ? -1 : 1;
-  }
-  const width = Math.max(leftParts.fraction.length, rightParts.fraction.length);
-  const leftFraction = leftParts.fraction.padEnd(width, "0");
-  const rightFraction = rightParts.fraction.padEnd(width, "0");
-  if (leftFraction === rightFraction) return 0;
-  return leftFraction < rightFraction ? -1 : 1;
-}
-
-function slackTsParts(value: string): { integer: string; fraction: string } | null {
-  const match = /^(\d+)(?:\.(\d+))?$/.exec(value);
-  if (!match) return null;
-  const integer = match[1]!.replace(/^0+(?=\d)/, "");
-  const fraction = (match[2] ?? "").replace(/0+$/, "");
-  if (integer === "0" && fraction === "" && value !== "0") return null;
-  return { integer, fraction };
 }

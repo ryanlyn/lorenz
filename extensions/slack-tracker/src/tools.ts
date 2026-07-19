@@ -13,15 +13,19 @@ import {
 } from "@lorenz/tool-sdk";
 
 import { slackMessageToRow, slackPermalink, splitIssueId, trackedRootsOf } from "./client.js";
+import { isAllowedAuthor, isBotMention } from "./mapping.js";
 import { requireBotUserId, requireTrackedMessage, updateSlackStatus } from "./operations.js";
 import { slackTrackerOptions } from "./options.js";
-import { resolveThreadState, stateFromThread } from "./threadState.js";
-import type { SlackTransport } from "./transport.js";
+import { resolveThreadState, stateFromObservedThread } from "./threadState.js";
+import { slackRuntimeKey, slackRuntimeTransport } from "./toolTransport.js";
+import { isBotMarked, type SlackTransport } from "./transport.js";
 import { SlackWebTransport } from "./webTransport.js";
+import { upsertWorkpad } from "./workpad.js";
 
 const TOOL_NAMES = [
   "slack_update_status",
   "slack_comment",
+  "slack_workpad",
   "slack_read_thread",
   "slack_query",
   "slack_user_info",
@@ -35,6 +39,8 @@ const SLACK_EXPAND_FIELDS = new Set(["thread", "reactions"]);
 /** Bounds for the `slack_channel_context` window. */
 const CONTEXT_DEFAULT = 10;
 const CONTEXT_MAX = 50;
+/** Per-runtime queues protecting each workpad's read-modify-write operation. */
+const workpadQueues = new Map<string, Map<string, Promise<void>>>();
 
 export function slackToolSpecs(): ToolSpec[] {
   return [
@@ -52,7 +58,9 @@ export function slackToolSpecs(): ToolSpec[] {
     },
     {
       name: "slack_comment",
-      description: "Reply in the Slack issue's thread. Args: issueId, body.",
+      description:
+        "Reply in the Slack issue's thread. Use for milestone updates and findings that " +
+        "SHOULD notify the thread (replies notify; workpad edits do not). Args: issueId, body.",
       inputSchema: {
         type: "object",
         properties: { issueId: { type: "string" }, body: { type: "string" } },
@@ -60,11 +68,30 @@ export function slackToolSpecs(): ToolSpec[] {
       },
     },
     {
+      name: "slack_workpad",
+      description:
+        "Create or update the issue's workpad: one bot message in the thread, edited in place, " +
+        "carrying the live plan checklist and latest note. Socket Mode adds Cancel/Details " +
+        "buttons. Use it " +
+        "for the continuously-changing checklist instead of posting new comments - edits do not " +
+        "notify the thread. Omitting plan/note keeps the existing section. Args: issueId, " +
+        "plan? (mrkdwn checklist), note? (short status line).",
+      inputSchema: {
+        type: "object",
+        properties: {
+          issueId: { type: "string" },
+          plan: { type: "string" },
+          note: { type: "string" },
+        },
+        required: ["issueId"],
+      },
+    },
+    {
       name: "slack_read_thread",
       description:
         "Read a Slack issue's authoritative state: its source message, thread-derived status " +
-        "(human `@bot !` commands and bot `status:` replies, latest wins), reactions, permalink, " +
-        "and the thread replies. Args: issueId.",
+        "(human `@bot !` commands and bot `status:` replies, latest wins), status audit trail, " +
+        "workpad, reactions, permalink, and thread replies. Args: issueId.",
       inputSchema: {
         type: "object",
         properties: { issueId: { type: "string" } },
@@ -163,17 +190,46 @@ export async function executeSlackTool(
         await transport.postReply(channel, ts, requireStr(args, "body"));
         return toolSuccess({ ok: true });
       }
+      case "slack_workpad": {
+        const issueId = `${channel}:${ts}`;
+        return await serializeWorkpadUpdate(settings, issueId, async () => {
+          const root = await requireTrackedMessage(settings, transport, channel, ts);
+          const replies = await transport.getThread(channel, ts);
+          const thread = stateFromObservedThread(root, replies, settings, transport);
+          // A partial update keeps the other section: the workpad metadata round-trips both, so
+          // an agent refreshing its note between milestones does not blank the plan.
+          const plan = optionalStr(args, "plan") ?? thread.workpad?.plan;
+          const note = optionalStr(args, "note") ?? thread.workpad?.note;
+          const workpadTs = await upsertWorkpad(
+            settings,
+            transport,
+            channel,
+            ts,
+            {
+              issueId,
+              ...(plan !== undefined ? { plan } : {}),
+              ...(note !== undefined ? { note } : {}),
+            },
+            thread.workpad,
+          );
+          return toolSuccess({ ok: true, workpadTs });
+        });
+      }
       case "slack_read_thread": {
         // Same trust-boundary check as the write tools: only read a watched, tracked issue.
         const root = await requireTrackedMessage(settings, transport, channel, ts);
         const replies = await transport.getThread(channel, ts);
-        const thread = stateFromThread(root, replies, settings);
+        const thread = stateFromObservedThread(root, replies, settings, transport);
         const base = await transport.teamUrl();
         return toolSuccess({
           issueId: `${channel}:${ts}`,
           status: thread.state,
+          // The folded transition history (who moved the issue where, and when): the audit
+          // trail an agent needs to distinguish "human cancelled" from "I finished".
+          statusEvents: thread.events,
           text: root.text,
           ...(thread.request !== undefined ? { request: thread.request } : {}),
+          ...(thread.workpad !== undefined ? { workpad: thread.workpad } : {}),
           reactions: root.reactions,
           ...(base ? { permalink: slackPermalink(base, channel, ts) } : {}),
           replies,
@@ -203,6 +259,36 @@ export async function executeSlackTool(
   }
 }
 
+async function serializeWorkpadUpdate<T>(
+  settings: Settings,
+  issueId: string,
+  update: () => Promise<T>,
+): Promise<T> {
+  const runtimeKey = slackRuntimeKey(settings);
+  let queues = workpadQueues.get(runtimeKey);
+  if (queues === undefined) {
+    queues = new Map();
+    workpadQueues.set(runtimeKey, queues);
+  }
+  const previous = queues.get(issueId) ?? Promise.resolve();
+  let release!: () => void;
+  const turn = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const tail = previous.then(async () => turn);
+  queues.set(issueId, tail);
+  await previous;
+  try {
+    return await update();
+  } finally {
+    release();
+    if (queues.get(issueId) === tail) {
+      queues.delete(issueId);
+      if (queues.size === 0) workpadQueues.delete(runtimeKey);
+    }
+  }
+}
+
 /** The Slack tool pack: status, threaded comments, reads, and scoped channel context. */
 export const slackToolProvider: ToolProvider = {
   name: "slack",
@@ -212,16 +298,17 @@ export const slackToolProvider: ToolProvider = {
       name,
       input,
       context.settings,
-      new SlackWebTransport(context.settings, context.fetchImpl),
+      slackRuntimeTransport(context.settings) ??
+        new SlackWebTransport(context.settings, context.fetchImpl),
     ),
 };
 
 /**
  * Read-only query over tracked Slack issues. The trust boundary is enforced structurally:
- * rows come only from the channel scan's tracked roots (bot-mention roots and bot-marked
- * threads; the scan fails closed without a bot user id), and the scanned channels are always
- * intersected with the configured allow-list - the query cannot become an oracle for arbitrary
- * messages. Filtering/projection/paging then run in memory over those rows.
+ * rows come only from validated bot-mention roots and marker-bearing threads whose accepted
+ * request reply still exists. The scanned channels are always intersected with the configured
+ * allow-list, so the query cannot become an oracle for arbitrary messages. Filtering,
+ * projection, and paging then run in memory over those rows.
  */
 async function executeSlackQuery(
   args: Record<string, unknown>,
@@ -234,13 +321,19 @@ async function executeSlackQuery(
   const spec = parseQuerySpec(args);
   const select = parseSelect(args.select) ?? DEFAULT_SLACK_SELECT;
   const expand = parseSlackExpand(args.expand);
-  const allow = slackTrackerOptions(settings).channels;
+  const options = slackTrackerOptions(settings);
+  const allow = options.channels;
+  const markerEmoji = options.markerEmoji ?? "robot_face";
   const requested = parseStringArray(args.channels, "channels");
   const channels = requested ? requested.filter((c) => allow.includes(c)) : allow;
   const [scan, base] = await Promise.all([transport.scanChannels(channels), transport.teamUrl()]);
   const records: Array<Record<string, unknown>> = [];
-  for (const root of trackedRootsOf(scan)) {
+  for (const root of trackedRootsOf(scan, markerEmoji)) {
     const thread = await resolveThreadState(settings, transport, root);
+    const rootMentionIsTracked =
+      isBotMention(root.text, options.botUserId) &&
+      (isAllowedAuthor(root.user, options.users) || isBotMarked(root, markerEmoji));
+    if (!rootMentionIsTracked && thread.request === undefined) continue;
     records.push(
       slackMessageToRow(root, settings, {
         permalinkBase: base,
@@ -295,5 +388,12 @@ function windowArg(value: unknown, label: string): number {
 function requireStr(args: Record<string, unknown>, key: string): string {
   const value = args[key];
   if (typeof value !== "string" || value.trim() === "") throw new Error(`'${key}' is required`);
+  return value;
+}
+
+function optionalStr(args: Record<string, unknown>, key: string): string | undefined {
+  const value = args[key];
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== "string") throw new Error(`'${key}' must be a string`);
   return value;
 }

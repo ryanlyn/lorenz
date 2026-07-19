@@ -80,7 +80,7 @@ test("the Slack id rendered into WORKFLOW.chat.md is accepted by slack_update_st
   );
   assert.equal(result.success, true);
   const msg = await transport.getMessage(CHANNEL, TS);
-  assert.deepEqual(msg!.reactions, ["white_check_mark"]);
+  assert.deepEqual(msg!.reactions, ["robot_face", "white_check_mark"]);
 });
 
 test("the SLK display label would be rejected by slack_update_status (regression guard)", async () => {

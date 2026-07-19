@@ -31,9 +31,17 @@ const defaultWebSocketFactory: SlackWebSocketFactory = (url) => {
 /** Cap on reconnect backoff: a persistently failing socket retries at most this often. */
 const MAX_RECONNECT_DELAY_MS = 30_000;
 const BASE_RECONNECT_DELAY_MS = 1_000;
+const PROCESSED_ENVELOPES_MAX = 5_000;
 
-const defaultReconnectDelayMs = (attempt: number): number =>
-  Math.min(BASE_RECONNECT_DELAY_MS * 2 ** attempt, MAX_RECONNECT_DELAY_MS);
+/**
+ * Capped exponential backoff with ±15% jitter. The jitter matters when several daemons watch
+ * one workspace (or one daemon watches several accounts): a Slack-side blip disconnects them
+ * all at once, and synchronized retries would then hammer `apps.connections.open` in lockstep.
+ */
+const defaultReconnectDelayMs = (attempt: number): number => {
+  const base = Math.min(BASE_RECONNECT_DELAY_MS * 2 ** attempt, MAX_RECONNECT_DELAY_MS);
+  return Math.round(base * (0.85 + Math.random() * 0.3));
+};
 
 /** Dependencies and knobs for {@link SlackSocketMode}; production callers rely on the defaults. */
 export interface SlackSocketModeOptions {
@@ -43,8 +51,28 @@ export interface SlackSocketModeOptions {
   appToken: string;
   /** Watched channel ids; events outside these are ignored so we never poll on unrelated traffic. */
   channels: string[];
-  /** Invoked with the watched event payload so the tracker can attach structured change data. */
+  /** Invoked with the watched event payload after `onEvent` updates the local mirror. */
   onChange: (payload?: Record<string, unknown>) => void;
+  /**
+   * Invoked with the full Events API payload of every watched-channel event, BEFORE `onChange`.
+   * This is what makes the socket a data feed rather than a doorbell: the channel mirror applies
+   * the payload so the nudged poll that follows reads local state instead of re-scanning Slack.
+   * Must not throw (a throw here must never cost the ack or the nudge).
+   */
+  onEvent?: (payload: Record<string, unknown>) => void;
+  /**
+   * Invoked with every `interactive` envelope payload (block actions, view submissions) - the
+   * workpad's Cancel/Details buttons arrive here, over the same socket, so interactivity needs
+   * no public HTTP endpoint.
+   */
+  onInteractive?: (payload: Record<string, unknown>) => void;
+  /**
+   * Invoked whenever an exclusive connection becomes ready. The mirror re-syncs from a real scan
+   * because Slack does not replay activity between the preceding API snapshot and this hello.
+   */
+  onReconnect?: () => void;
+  /** Invoked on connect (`true`, on hello) and disconnect (`false`); drives mirror freshness. */
+  onConnectionState?: (connected: boolean) => void;
   fetchImpl?: typeof fetch;
   webSocketFactory?: SlackWebSocketFactory;
   logger?: SlackTrackerLogger;
@@ -63,14 +91,18 @@ export interface SlackSocketModeOptions {
  * The connection self-heals: Slack recycles Socket Mode connections periodically (a `disconnect`
  * frame precedes closure) and the network can drop, so a closed socket reconnects with capped
  * exponential backoff. The nudge is best-effort by contract - the interval poll remains the safety
- * net - so a dropped frame or a reconnect gap only delays discovery to the next interval, never
- * loses an issue.
+ * net. Every accepted hello also triggers reconciliation, closing the gap between the preceding
+ * API snapshot and the live feed.
  */
 export class SlackSocketMode implements TrackerChangeStream {
   private readonly endpoint: string;
   private readonly appToken: string;
   private readonly channels: Set<string>;
   private readonly onChange: (payload?: Record<string, unknown>) => void;
+  private readonly onEvent: ((payload: Record<string, unknown>) => void) | undefined;
+  private readonly onInteractive: ((payload: Record<string, unknown>) => void) | undefined;
+  private readonly onReconnect: (() => void) | undefined;
+  private readonly onConnectionState: ((connected: boolean) => void) | undefined;
   private readonly fetchImpl: typeof fetch;
   private readonly webSocketFactory: SlackWebSocketFactory;
   private readonly logger: SlackTrackerLogger;
@@ -80,12 +112,22 @@ export class SlackSocketMode implements TrackerChangeStream {
   private closed = false;
   private reconnectAttempts = 0;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Tracks the live-connection state so close/error only reports a transition once. */
+  private connected = false;
+  /** Connections rejected for splitting the feed never acknowledge buffered envelopes. */
+  private readonly rejectedSockets = new WeakSet<SlackWebSocketLike>();
+  /** Bounded delivery ledger retained across reconnects for Slack's at-least-once envelopes. */
+  private readonly processedEnvelopeIds = new Set<string>();
 
   constructor(options: SlackSocketModeOptions) {
     this.endpoint = options.endpoint.replace(/\/+$/, "");
     this.appToken = options.appToken;
     this.channels = new Set(options.channels);
     this.onChange = options.onChange;
+    this.onEvent = options.onEvent;
+    this.onInteractive = options.onInteractive;
+    this.onReconnect = options.onReconnect;
+    this.onConnectionState = options.onConnectionState;
     this.fetchImpl = options.fetchImpl ?? fetch;
     this.webSocketFactory = options.webSocketFactory ?? defaultWebSocketFactory;
     this.logger = options.logger ?? { warn: (message) => console.warn(message) };
@@ -105,6 +147,7 @@ export class SlackSocketMode implements TrackerChangeStream {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
+    this.reportDisconnected();
     const socket = this.socket;
     this.socket = null;
     if (socket) {
@@ -181,22 +224,53 @@ export class SlackSocketMode implements TrackerChangeStream {
       return;
     }
     if (!isRecord(frame)) return;
+    if (this.socket !== socket || this.rejectedSockets.has(socket)) return;
+
+    if (frame.type === "hello") {
+      // Slack routes each envelope to one open connection. Reject a connection that would split
+      // the feed, before accepting any envelopes on it. An unacknowledged envelope is retried by
+      // Slack on the remaining connection, preserving the single-feed mirror invariant.
+      const connections = numConnectionsOf(frame);
+      if (connections !== null && connections > 1) {
+        this.logger.warn(
+          `slack socket mode: this app has ${connections} open socket connections; events are ` +
+            "split across them, so this connection is closing to preserve exclusive ownership",
+        );
+        this.rejectedSockets.add(socket);
+        try {
+          socket.close();
+        } catch {
+          // The standard close path schedules another ownership attempt.
+        }
+        return;
+      }
+      // A live exclusive connection resets the backoff so the next drop retries promptly.
+      this.reconnectAttempts = 0;
+      this.connected = true;
+      // This includes the first hello: a bootstrap scan may have completed while the socket was
+      // opening, so every accepted connection closes its preceding API-to-feed gap. Publish the
+      // healthy edge first so the reconciliation nudge can serve the newly accepted feed.
+      this.safeNotify(() => this.onConnectionState?.(true), "onConnectionState");
+      this.safeNotify(this.onReconnect, "onReconnect");
+      return;
+    }
 
     // Every envelope-bearing frame MUST be acknowledged or Slack treats delivery as failed and
     // redelivers; ack first, then act, so a throw in handling never drops the ack.
-    if (typeof frame.envelope_id === "string") {
+    const envelopeId = typeof frame.envelope_id === "string" ? frame.envelope_id : null;
+    if (envelopeId !== null) {
       try {
-        socket.send(JSON.stringify({ envelope_id: frame.envelope_id }));
+        socket.send(JSON.stringify({ envelope_id: envelopeId }));
       } catch {
         // A send on a half-closed socket throws; the close handler will reconnect.
       }
+      // A lost acknowledgement can cause Slack to redeliver the same action. Acknowledge every
+      // copy, but let only the first delivery mutate state. The ledger belongs to the client,
+      // rather than a connection, so reconnects do not reopen the duplicate window.
+      if (this.processedEnvelopeIds.has(envelopeId)) return;
+      rememberBounded(this.processedEnvelopeIds, envelopeId, PROCESSED_ENVELOPES_MAX);
     }
 
-    if (frame.type === "hello") {
-      // A live connection resets the backoff so the NEXT drop retries promptly.
-      this.reconnectAttempts = 0;
-      return;
-    }
     if (frame.type === "disconnect") {
       // Slack is recycling this connection. Close so the standard reconnect path opens a fresh
       // one (the interval poll covers the brief gap).
@@ -207,8 +281,27 @@ export class SlackSocketMode implements TrackerChangeStream {
       }
       return;
     }
+    if (frame.type === "interactive" && isRecord(frame.payload)) {
+      const payload = frame.payload;
+      this.safeNotify(() => this.onInteractive?.(payload), "onInteractive");
+      return;
+    }
     if (frame.type === "events_api" && this.eventTouchesWatchedChannel(frame.payload)) {
-      this.onChange(frame.payload as Record<string, unknown>);
+      // Deliver the payload BEFORE the nudge so the poll the nudge triggers reads a mirror that
+      // already reflects this event.
+      const payload = frame.payload as Record<string, unknown>;
+      this.safeNotify(() => this.onEvent?.(payload), "onEvent");
+      this.onChange(payload);
+    }
+  }
+
+  /** A consumer callback must never break the socket loop (the ack already went out). */
+  private safeNotify(callback: (() => void) | undefined, label: string): void {
+    if (!callback) return;
+    try {
+      callback();
+    } catch (error) {
+      this.logger.warn(`slack socket mode: ${label} handler failed: ${errorMessage(error)}`);
     }
   }
 
@@ -239,7 +332,14 @@ export class SlackSocketMode implements TrackerChangeStream {
   private onSocketClosed(socket: SlackWebSocketLike): void {
     if (this.socket !== socket) return; // a stale socket (already replaced); ignore.
     this.socket = null;
+    this.reportDisconnected();
     this.scheduleReconnect("socket closed");
+  }
+
+  private reportDisconnected(): void {
+    if (!this.connected) return;
+    this.connected = false;
+    this.safeNotify(() => this.onConnectionState?.(false), "onConnectionState");
   }
 
   private scheduleReconnect(reason: string): void {
@@ -256,10 +356,25 @@ export class SlackSocketMode implements TrackerChangeStream {
   }
 }
 
+function rememberBounded(values: Set<string>, value: string, max: number): void {
+  while (values.size >= max) {
+    const oldest = values.values().next().value;
+    if (oldest === undefined) break;
+    values.delete(oldest);
+  }
+  values.add(value);
+}
+
 /** Channel id carried by an Events API event: top-level for messages/mentions, `item` for reactions. */
 function channelOfEvent(event: Record<string, unknown>): string | null {
   if (typeof event.channel === "string") return event.channel;
   const item = event.item;
   if (isRecord(item) && typeof item.channel === "string") return item.channel;
   return null;
+}
+
+/** `num_connections` reported by the `hello` frame, or null when absent/malformed. */
+function numConnectionsOf(frame: Record<string, unknown>): number | null {
+  const value = frame.num_connections;
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
 }

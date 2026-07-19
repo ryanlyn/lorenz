@@ -19,7 +19,7 @@ function escapeRegExp(value: string): string {
 
 /**
  * Build a regex matching a mention of `botUserId` (plain `<@BOTID>` or piped `<@BOTID|label>`),
- * or any user mention when `botUserId` is not set (documented back-compat).
+ * or any user mention when `botUserId` is not set.
  */
 function mentionRegExp(botUserId?: string): RegExp {
   if (!botUserId) return new RegExp(ANY_MENTION.source);
@@ -28,7 +28,7 @@ function mentionRegExp(botUserId?: string): RegExp {
 
 /**
  * True when `text` mentions the bot. With `botUserId` set, only mentions of that specific user
- * count; without it, any `<@U...>` mention counts (back-compat).
+ * count; without it, any `<@U...>` mention counts.
  */
 export function isBotMention(text: string, botUserId?: string): boolean {
   return mentionRegExp(botUserId).test(text);
@@ -36,7 +36,7 @@ export function isBotMention(text: string, botUserId?: string): boolean {
 
 /**
  * True when a message authored by `user` is allowed to create issues. An empty `allowedUsers`
- * list means no author constraint (back-compat: any author, as long as the bot is mentioned).
+ * list means no author constraint: any author can create an issue when the bot is mentioned.
  * With a non-empty list only the listed user ids match, and a message with no known author never
  * matches (fail closed). The allowlist can only narrow dispatch, never widen it: the bot-mention
  * requirement still applies on top of it. It lets an operator constrain dispatch to a known set
@@ -77,7 +77,7 @@ export function statusEmojiMap(settings: Settings): Record<string, string> {
  * reactions are present, regardless of reaction order. Custom state names (no known category)
  * rank by their configured role: terminal states rank with completed and active states with
  * started, so when the bot's mirror carries both a custom terminal emoji and an in-progress one
- * (mid-swap, or a legacy thread), the terminal reading wins.
+ * (for example, during a mirror swap), the terminal reading wins.
  */
 function stateRank(state: string, settings?: Settings): number {
   switch (defaultStateType(state)) {

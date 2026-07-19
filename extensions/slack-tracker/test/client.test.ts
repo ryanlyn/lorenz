@@ -7,6 +7,8 @@ import { parseSlackConfig } from "./helpers.js";
 import {
   InMemorySlackTransport,
   SlackTrackerClient,
+  TRACKING_METADATA_EVENT,
+  WORKPAD_METADATA_EVENT,
   type SlackSocketMode,
   type SlackSocketModeOptions,
 } from "@lorenz/slack-tracker";
@@ -92,7 +94,13 @@ test("hashtag tokens in the message become deduped, lowercased labels", async ()
 
 test("channel references and user mentions are not mistaken for hashtag labels", async () => {
   const transport = new InMemorySlackTransport({
-    C1: [{ ts: "1700000000.000450", text: "<@U1> see <#C0ABC|general> #backend", reactions: [] }],
+    C1: [
+      {
+        ts: "1700000000.000450",
+        text: "<@U_BOT> ask <@U1> in <#C0ABC|general> #backend",
+        reactions: [],
+      },
+    ],
   });
   const client = new SlackTrackerClient(settings(), transport);
 
@@ -284,6 +292,50 @@ test("tracker.users gates reply-mention tracking by the request reply's author",
   );
 });
 
+test("reply tracking retains the authorization recorded when the request was accepted", async () => {
+  const rootTs = "1700000000.000100";
+  const requestTs = "1700000000.000200";
+  const retentionSettings = (users: string[]) =>
+    parseSlackConfig(
+      {
+        tracker: {
+          kind: "slack",
+          channels: ["C1"],
+          bot_user_id: "U_BOT",
+          users,
+          // This test covers authorization retention, independently of the moving discovery
+          // cutoff exercised by the reply-lookback tests below.
+          reply_lookback_days: 1_000_000,
+          active_states: ["Todo", "In Progress"],
+        },
+      },
+      { SLACK_BOT_TOKEN: "xoxb-test" },
+    );
+  const transport = new InMemorySlackTransport(
+    {
+      C1: [
+        {
+          ts: rootTs,
+          text: "discussion",
+          replies: [{ ts: requestTs, text: "<@U_BOT> handle this", user: "U_ALICE" }],
+        },
+      ],
+    },
+    { botUserId: "U_BOT", allowedUsers: ["U_ALICE"] },
+  );
+  const initial = new SlackTrackerClient(retentionSettings(["U_ALICE"]), transport);
+  assert.deepEqual(
+    (await initial.fetchCandidateIssues()).map((issue) => issue.id),
+    [`C1:${rootTs}`],
+  );
+
+  const tightened = new SlackTrackerClient(retentionSettings(["U_BOB"]), transport);
+  assert.deepEqual(
+    (await tightened.fetchIssuesByIds([`C1:${rootTs}`])).map((issue) => issue.id),
+    [`C1:${rootTs}`],
+  );
+});
+
 test("tracker.users gates the tool trust boundary, but a bot-marked root stays tracked", async () => {
   const transport = new InMemorySlackTransport(
     {
@@ -307,6 +359,13 @@ test("tracker.users gates the tool trust boundary, but a bot-marked root stays t
           ts: "1700000000.000300",
           text: "<@U_BOT> from carol",
           user: "U_CAROL",
+          reactions: ["robot_face"],
+        },
+        // Bot-owned status reactions normalize to the dedicated marker on refresh.
+        {
+          ts: "1700000000.000400",
+          text: "<@U_BOT> from dave",
+          user: "U_DAVE",
           reactions: ["eyes"],
         },
       ],
@@ -325,6 +384,18 @@ test("tracker.users gates the tool trust boundary, but a bot-marked root stays t
   assert.deepEqual(
     (await client.fetchIssuesByIds(["C1:1700000000.000300"])).map((i) => i.id),
     ["C1:1700000000.000300"],
+  );
+  assert.deepEqual(
+    (await client.fetchIssuesByIds(["C1:1700000000.000400"])).map((i) => i.id),
+    ["C1:1700000000.000400"],
+  );
+  assert.deepEqual((await transport.getMessage("C1", "1700000000.000400"))!.botReactions, [
+    "eyes",
+    "robot_face",
+  ]);
+  assert.equal(
+    (await transport.getThread("C1", "1700000000.000400"))[0]!.metadata?.eventType,
+    TRACKING_METADATA_EVENT,
   );
 });
 
@@ -447,6 +518,57 @@ test("a bot mention in a reply tracks the thread: request title, marker, restart
   );
 });
 
+test("a recorded root request cannot become reply-tracked after the root mention is removed", async () => {
+  const transport = new InMemorySlackTransport(
+    {
+      C1: [
+        {
+          ts: "1700000000.000100",
+          text: "<@U_BOT> original request",
+          user: "U_ALICE",
+          replies: [
+            { ts: "1700000000.000200", text: "status: In Progress", user: "U_BOT" },
+            { ts: "1700000000.000300", text: "<@U_BOT> later follow-up", user: "U_ALICE" },
+          ],
+        },
+      ],
+    },
+    { botUserId: "U_BOT" },
+  );
+  const client = new SlackTrackerClient(settings(), transport);
+  assert.deepEqual(
+    (await client.fetchCandidateIssues()).map((issue) => issue.id),
+    ["C1:1700000000.000100"],
+  );
+
+  await transport.updateMessage("C1", "1700000000.000100", "mention removed");
+  assert.deepEqual(await client.fetchIssuesByIds(["C1:1700000000.000100"]), []);
+});
+
+test("pull-only reads preserve the first observed command classification after an edit", async () => {
+  const transport = new InMemorySlackTransport(
+    {
+      C1: [
+        {
+          ts: "1700000000.000100",
+          text: "<@U_BOT> tracked",
+          replies: [{ ts: "1700000000.000200", text: "<@U_BOT> !done", user: "U_HUMAN" }],
+        },
+      ],
+    },
+    { botUserId: "U_BOT" },
+  );
+  const client = new SlackTrackerClient(settings(), transport);
+  assert.equal((await client.fetchIssuesByIds(["C1:1700000000.000100"]))[0]?.state, "Done");
+
+  await transport.updateMessage(
+    "C1",
+    "1700000000.000200",
+    "<@U_BOT> this should not reinterpret the transition",
+  );
+  assert.equal((await client.fetchIssuesByIds(["C1:1700000000.000100"]))[0]?.state, "Done");
+});
+
 test("untracked threads older than the reply lookback are not inspected", async () => {
   const transport = new InMemorySlackTransport(
     {
@@ -503,6 +625,7 @@ test("the bot's reaction mirror self-heals after a human command", async () => {
   assert.deepEqual(await client.fetchCandidateIssues(), []);
   await client.flushStatusMirrorHeals();
   assert.deepEqual((await transport.getMessage("C1", "1700000000.000100"))!.reactions, [
+    "robot_face",
     "white_check_mark",
   ]);
   assert.ok(reactionCalls > 0);
@@ -601,7 +724,7 @@ test("a mirror heal only removes managed reactions actually present on the messa
   await client.fetchCandidateIssues();
   await client.flushStatusMirrorHeals();
   assert.deepEqual(removed, ["eyes"]);
-  assert.deepEqual(added, ["white_check_mark"]);
+  assert.deepEqual(added, ["robot_face", "white_check_mark"]);
 });
 
 test("a heal that is only missing its target emoji costs one add and zero removes", async () => {
@@ -635,7 +758,7 @@ test("a heal that is only missing its target emoji costs one add and zero remove
   await client.fetchCandidateIssues();
   await client.flushStatusMirrorHeals();
   assert.equal(removes, 0);
-  assert.equal(adds, 1);
+  assert.equal(adds, 2);
 });
 
 test("a rate-limited mirror heal does not block candidate discovery", async () => {
@@ -676,7 +799,72 @@ test("a rate-limited mirror heal does not block candidate discovery", async () =
   // Unblock the stuck remove and let the heal settle; the mirror still converges.
   releaseRemove();
   await client.flushStatusMirrorHeals();
-  assert.deepEqual((await transport.getMessage("C1", "1700000000.000100"))!.reactions, []);
+  assert.deepEqual((await transport.getMessage("C1", "1700000000.000100"))!.reactions, [
+    "robot_face",
+  ]);
+});
+
+test("a delayed reaction heal leaves workpad plan and note untouched", async () => {
+  const rootTs = "1700000000.000100";
+  const workpadTs = "1700000000.000160";
+  const transport = new InMemorySlackTransport(
+    {
+      C1: [
+        {
+          ts: rootTs,
+          text: "<@U_BOT> preserve the workpad",
+          reactions: ["eyes"],
+          replies: [
+            { ts: "1700000000.000150", text: "<@U_BOT> !done", user: "U_HUMAN" },
+            {
+              ts: workpadTs,
+              text: "Lorenz workpad",
+              user: "U_BOT",
+              metadata: {
+                eventType: WORKPAD_METADATA_EVENT,
+                payload: {
+                  issue: `C1:${rootTs}`,
+                  seq: "workpad",
+                  plan: "old plan",
+                  note: "old note",
+                },
+              },
+            },
+          ],
+        },
+      ],
+    },
+    { botUserId: "U_BOT" },
+  );
+  let releaseRemove!: () => void;
+  const removeGate = new Promise<void>((resolve) => {
+    releaseRemove = resolve;
+  });
+  const remove = transport.removeReaction.bind(transport);
+  transport.removeReaction = async (channel, ts, name) => {
+    await removeGate;
+    return remove(channel, ts, name);
+  };
+  const client = new SlackTrackerClient(settings(), transport);
+
+  await client.fetchCandidateIssues();
+  await transport.updateMessage("C1", workpadTs, "Lorenz workpad", {
+    metadata: {
+      eventType: WORKPAD_METADATA_EVENT,
+      payload: {
+        issue: `C1:${rootTs}`,
+        seq: "workpad-update",
+        plan: "new plan",
+        note: "new note",
+      },
+    },
+  });
+  releaseRemove();
+  await client.flushStatusMirrorHeals();
+
+  const workpad = (await transport.getThread("C1", rootTs)).find((reply) => reply.ts === workpadTs);
+  assert.equal(workpad!.metadata!.payload.plan, "new plan");
+  assert.equal(workpad!.metadata!.payload.note, "new note");
 });
 
 test("fetchIssuesByIds derives in-window issues from the scan and warms the candidate cache", async () => {
@@ -907,6 +1095,72 @@ test("watch opens Socket Mode with the resolved app token and watched channels",
   assert.equal(closed, true);
 });
 
+test("an accepted Socket Mode connection invalidates scans and nudges reconciliation", async () => {
+  const transport = new InMemorySlackTransport({ C1: [] });
+  let scans = 0;
+  let includeMissedIssue = false;
+  transport.scanChannels = async () => {
+    scans += 1;
+    return {
+      mentions: [
+        {
+          channel: "C1",
+          ts: "1.0",
+          text: "<@U_BOT> before connection",
+          user: "U1",
+          reactions: [],
+          botReactions: [],
+        },
+        ...(includeMissedIssue
+          ? [
+              {
+                channel: "C1",
+                ts: "2.0",
+                text: "<@U_BOT> arrived while disconnected",
+                user: "U2",
+                reactions: [],
+                botReactions: [],
+              },
+            ]
+          : []),
+      ],
+      threadedRoots: [],
+    };
+  };
+  const withApp = parseSlackConfig(
+    {
+      tracker: {
+        kind: "slack",
+        channels: ["C1"],
+        bot_user_id: "U_BOT",
+        active_states: ["Todo"],
+      },
+    },
+    { SLACK_BOT_TOKEN: "xoxb-test", SLACK_APP_TOKEN: "xapp-123" },
+  );
+  let opened: SlackSocketModeOptions | null = null;
+  const client = new SlackTrackerClient(withApp, transport, (options) => {
+    opened = options;
+    return { start: () => {}, close: () => {} } as unknown as SlackSocketMode;
+  });
+
+  assert.equal((await client.fetchCandidateIssues()).length, 1);
+  assert.equal(scans, 1);
+  includeMissedIssue = true;
+  const changes: Array<TrackerChange | undefined> = [];
+  client.watch((change) => changes.push(change));
+  const opts = opened as unknown as SlackSocketModeOptions;
+  opts.onConnectionState?.(true);
+  opts.onReconnect?.();
+
+  assert.deepEqual(changes, [undefined]);
+  assert.deepEqual(
+    (await client.fetchCandidateIssues()).map((issue) => issue.id),
+    ["C1:1.0", "C1:2.0"],
+  );
+  assert.equal(scans, 2);
+});
+
 test("watch applies steering policy while admitting thread broadcasts", () => {
   const transport = new InMemorySlackTransport({ C1: [] });
   const withApp = parseSlackConfig(
@@ -980,6 +1234,65 @@ test("watch applies steering policy while admitting thread broadcasts", () => {
       },
     },
   ]);
+});
+
+test("busy notices follow the same author allowlist as live steering", async () => {
+  const transport = new InMemorySlackTransport(
+    {
+      C1: [
+        {
+          ts: "1700000000.000100",
+          text: "<@U_BOT> do it",
+          user: "U_ALICE",
+          reactions: ["eyes"],
+        },
+      ],
+    },
+    { botUserId: "U_BOT" },
+  );
+  const withApp = parseSlackConfig(
+    {
+      tracker: {
+        kind: "slack",
+        channels: ["C1"],
+        bot_user_id: "U_BOT",
+        users: ["U_ALICE"],
+        active_states: ["Todo", "In Progress"],
+      },
+    },
+    { SLACK_BOT_TOKEN: "xoxb-test", SLACK_APP_TOKEN: "xapp-test" },
+  );
+  let opened: SlackSocketModeOptions | null = null;
+  const client = new SlackTrackerClient(withApp, transport, (options) => {
+    opened = options;
+    return { start: () => {}, close: () => {} } as unknown as SlackSocketMode;
+  });
+  let messageReads = 0;
+  const getMessage = transport.getMessage.bind(transport);
+  transport.getMessage = async (channel, ts) => {
+    messageReads += 1;
+    return getMessage(channel, ts);
+  };
+  await client.fetchCandidateIssues();
+  const readsAfterBootstrap = messageReads;
+  client.watch(() => {});
+  const onEvent = (opened as unknown as SlackSocketModeOptions).onEvent!;
+  const reply = {
+    type: "message",
+    channel: "C1",
+    thread_ts: "1700000000.000100",
+    text: "<@U_BOT> another request",
+  };
+
+  onEvent({ event: { ...reply, ts: "1700000000.000200", user: "U_BOB" } });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(transport.ephemerals.length, 0);
+
+  onEvent({ event: { ...reply, ts: "1700000000.000300", user: "U_ALICE" } });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(transport.ephemerals.length, 1);
+  assert.equal(transport.ephemerals[0]!.user, "U_ALICE");
+  assert.equal(messageReads, readsAfterBootstrap);
 });
 
 test("fetchIssueEvents returns a bounded page of authorized human steering replies", async () => {

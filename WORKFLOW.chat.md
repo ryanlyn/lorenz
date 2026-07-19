@@ -38,8 +38,13 @@ trackers:
       # Direct-message channels (D...) are watched the same way.
       # - $SLACK_DM_CHANNEL_ID
     bot_user_id: $SLACK_BOT_USER_ID
-    # Optional Socket Mode token (xapp-..., scope connections:write) for low-latency wake-ups.
+    # Optional Socket Mode token (xapp-..., scope connections:write). Events feed the in-memory
+    # channel mirror, queued tracker messages arrive immediately, and workpad buttons become
+    # available. Leave it unset to use pull-only scans.
     app_token: $SLACK_APP_TOKEN
+    # With Socket Mode, re-sync the event-fed mirror from channel history on this cadence.
+    # Reconnects and events that cannot be applied also force a real scan.
+    # reconcile_interval_ms: 900000
     # Restrict issue creation and active-agent steering to known requesters when a channel has a
     # broad audience.
     # users:
@@ -48,6 +53,8 @@ trackers:
       eyes: In Progress
       white_check_mark: Done
       x: Cancelled
+    # Dedicated tracking marker. It must not also appear in emoji_states.
+    marker_emoji: robot_face
     scan_lookback_days: 30
     active_states:
       - Todo
@@ -62,7 +69,7 @@ trackers:
       # Any route matching a key under agents selects that agent without changing eligibility.
       # For example, #route-claude selects agents.claude below.
 polling:
-  # Gateway or Socket Mode events provide prompt wake-ups. Polling remains the recovery path.
+  # Gateway or Socket Mode events provide prompt wake-ups. Polling reconciles missed events.
   interval_ms: 60000
 workspace:
   root: ~/dev/lorenz-workspaces
@@ -155,7 +162,8 @@ tracker selected by `tracker.kind`.
 - Start by calling `slack_read_thread(issueId)`. The Slack thread is authoritative for status,
   progress, and human follow-up.
 - Set `In Progress` with `slack_update_status` before active work.
-- Post the plan, acceptance criteria, reproduction evidence, and milestones with `slack_comment`.
+- Keep the plan, acceptance criteria, and latest validation note in one `slack_workpad` message
+  updated in place. Use `slack_comment` for milestones worth notifying to the thread.
 - Re-read the thread at milestones and immediately before finishing so late commands and scope
   changes are honored.
 - Set `Done` with `slack_update_status` only after implementation and validation are complete.
@@ -174,7 +182,8 @@ tracker selected by `tracker.kind`.
    - `Todo`: move to `In Progress`, then begin execution.
    - `In Progress`: resume from the workspace and existing thread notes.
    - `Done` or `Cancelled`: do nothing and stop.
-4. Post a human-visible workpad. Use `discord_workpad` for Discord and `slack_comment` for Slack.
+4. Post a human-visible workpad with `discord_workpad` or `slack_workpad`. Keep it current in
+   place and use the selected tracker's comment tool for milestones worth notifying.
    Include:
    - a compact environment stamp: `<host>:<abs-workdir>@<short-sha>`
    - a hierarchical plan

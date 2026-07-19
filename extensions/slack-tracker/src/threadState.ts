@@ -8,7 +8,13 @@ import {
   statusEmojiMap,
   stripLeadingMention,
 } from "./mapping.js";
+import { compareSlackTs } from "./ids.js";
 import { slackTrackerOptions } from "./options.js";
+import {
+  STATUS_METADATA_EVENT,
+  TRACKING_METADATA_EVENT,
+  WORKPAD_METADATA_EVENT,
+} from "./transport.js";
 import type { SlackMessage, SlackThreadReply, SlackTransport } from "./transport.js";
 
 /**
@@ -22,8 +28,8 @@ import type { SlackMessage, SlackThreadReply, SlackTransport } from "./transport
  * - The bot (agent/runtime) transitions status by posting a `status: <Name>` reply.
  * - A bot-mention reply with NO command re-opens a terminal issue to the default
  *   non-terminal state: mentioning the bot again always means "this needs attention".
- * - The latest event by ts wins. Reactions remain a bot-owned visibility mirror and the
- *   back-compat source for threads that have never seen a command or bot status reply.
+ * - The latest event by ts wins. Reactions remain a bot-owned visibility mirror. An unmarked
+ *   root uses reaction-derived state; the dedicated tracking marker declares thread authority.
  */
 
 /** Recognized prefix of the bot's own authoritative status replies. */
@@ -116,8 +122,11 @@ export function parseStatusCommand(
 }
 
 /**
- * True when the first line begins with `!aside` after an optional leading bot mention.
- * Asides remain visible in Slack but do not steer the agent or change issue state.
+ * True when the reply is an ASIDE: a first line starting with `!aside` (after an optional
+ * leading bot mention). Asides are for humans talking near the issue without addressing it -
+ * they are never a command, never a bare re-mention (so they cannot re-open a terminal issue),
+ * and never delivered as steering context. They stay visible in the thread and in
+ * `slack_read_thread`'s raw replies; the marker only opts them out of being PUSHED at the agent.
  */
 export function isAsideText(text: string, botUserId: string | undefined): boolean {
   const stripped = stripLeadingMention(text.trim(), botUserId);
@@ -125,85 +134,239 @@ export function isAsideText(text: string, botUserId: string | undefined): boolea
   return /^!aside(?:\s|$)/i.test(firstLine);
 }
 
+/** One folded status transition: who moved the issue where, and when. */
+export interface ThreadStatusEvent {
+  ts: string;
+  state: string;
+  /** The transitioning author's user id (the bot's own id for `status:` replies). */
+  actor?: string | undefined;
+}
+
 /** Derived status of one tracked thread plus, for reply-tracked threads, the request reply. */
 export interface ThreadState {
   state: string;
   /** First bot-mention reply when the ROOT does not mention the bot (the actual request). */
   request?: { ts: string; text: string; user?: string | undefined } | undefined;
+  /** Durable origin recorded by the bot after accepting a root or reply request. */
+  tracking?: ThreadTracking | undefined;
+  /** The folded status transitions in ts order (the audit trail the session modal renders). */
+  events: ThreadStatusEvent[];
+  /** The bot's workpad message in this thread, when one exists (see workpad.ts). */
+  workpad?: ThreadWorkpad | undefined;
 }
+
+/** The workpad reply's identity and its metadata-carried sections (the plan/note round-trip). */
+export interface ThreadWorkpad {
+  ts: string;
+  plan?: string | undefined;
+  note?: string | undefined;
+}
+
+export type ThreadTracking = { origin: "root" } | { origin: "reply"; requestTs: string };
 
 /**
  * Fold a thread into its current state. Events (bot `status:` replies and human command
- * mentions) are applied in ts order and the latest wins; with no events at all the state falls
- * back to the reaction-derived reading (back-compat for reaction-managed threads). A trailing
- * bare bot-mention re-opens a terminal state.
+ * mentions) are applied in ts order and the latest wins. Unmarked roots use reaction-derived
+ * fallback; a dedicated tracking marker identifies thread-authoritative roots across restarts.
+ * A trailing bare bot mention re-opens a terminal state.
  */
 export function stateFromThread(
   root: SlackMessage,
   replies: SlackThreadReply[],
   settings: Settings,
 ): ThreadState {
-  const { botUserId, users } = slackTrackerOptions(settings);
-  const ordered = [...replies].sort((a, b) => tsValue(a.ts) - tsValue(b.ts));
+  const { botUserId, users, markerEmoji = "robot_face" } = slackTrackerOptions(settings);
+  const ordered = [...replies].sort((a, b) => compareSlackTs(a.ts, b.ts));
   const rootIsMention = isBotMention(root.text, botUserId);
+  const tracking = trackingRecordOf(ordered, botUserId);
+  const rootOrigin = tracking?.origin === "root";
+  const markerRecordsReplyOrigin =
+    !rootIsMention && tracking === undefined && root.botReactions.includes(markerEmoji);
 
-  const events: Array<{ ts: string; state: string }> = [];
-  const bareMentionTs: string[] = [];
+  type FoldInput =
+    | { kind: "status"; event: ThreadStatusEvent }
+    | { kind: "bare"; ts: string; actor?: string | undefined };
+  const foldInputs: FoldInput[] = [];
+  const events: ThreadStatusEvent[] = [];
   let request: ThreadState["request"];
+  let workpad: ThreadWorkpad | undefined;
 
   for (const reply of ordered) {
+    // FIRST-SEEN text classifies a reply when the mirror recorded one: an edit must not
+    // retroactively rewrite a folded transition (post a new command instead). Tombstoned
+    // (deleted) replies keep their folded role for the same reason - both are the mirror's
+    // in-session guarantee; API-served replies can only ever carry the current text.
+    const classificationText = reply.firstSeenText ?? reply.text;
     if (botUserId !== undefined && reply.user === botUserId) {
+      // Metadata is the machine-readable form of the bot's own writes: only the posting app can
+      // attach it, so a metadata-bearing status reply needs no text parsing (and its text is
+      // free to carry extra lines, e.g. a button-click attribution).
+      const metadata = reply.metadata;
+      if (metadata?.eventType === TRACKING_METADATA_EVENT) continue;
+      if (metadata?.eventType === WORKPAD_METADATA_EVENT) {
+        // The metadata payload round-trips the editable sections, so a partial tool update can
+        // preserve omitted content without parsing rendered blocks.
+        const plan = metadata.payload.plan;
+        const note = metadata.payload.note;
+        workpad = {
+          ts: reply.ts,
+          ...(typeof plan === "string" ? { plan } : {}),
+          ...(typeof note === "string" ? { note } : {}),
+        };
+        continue;
+      }
+      if (metadata?.eventType === STATUS_METADATA_EVENT) {
+        const raw = metadata.payload.state;
+        const state = typeof raw === "string" ? resolveStateName(raw, settings) : null;
+        if (state) {
+          const actor =
+            typeof metadata.payload.actor === "string" ? metadata.payload.actor : botUserId;
+          foldInputs.push({
+            kind: "status",
+            event: { ts: reply.ts, state, actor },
+          });
+          continue;
+        }
+        // An unresolvable metadata state falls through to the text parse rather than being
+        // silently dropped: the reply may still carry a valid `status:` line.
+      }
       const status = BOT_STATUS_RE.exec(reply.text.trim());
       if (status) {
         const state = resolveStateName(status[1]!, settings);
-        if (state) events.push({ ts: reply.ts, state });
+        if (state) {
+          foldInputs.push({
+            kind: "status",
+            event: { ts: reply.ts, state, actor: botUserId },
+          });
+        }
       }
       continue;
     }
-    if (isAsideText(reply.text, botUserId)) continue;
-    if (!isBotMention(reply.text, botUserId)) continue;
-    if (!rootIsMention && request === undefined) {
-      // The first bot-mention reply from an allowed author in a non-mention thread is the request
-      // itself, not a transition. A reply from a non-allowed author is skipped so a later allowed
-      // reply can still become the request (the author allowlist narrows who can create issues).
-      if (isAllowedAuthor(reply.user, users)) {
+    // Asides opt out of the fold entirely: not a command, and - crucially - not a bare mention,
+    // so `@bot !aside fyi...` on a Done issue does not re-open it.
+    if (isAsideText(classificationText, botUserId)) continue;
+    if (!isBotMention(classificationText, botUserId)) continue;
+    if (!rootIsMention && !rootOrigin && request === undefined) {
+      // A recorded request keeps the authorization it had when accepted, while still requiring
+      // that exact reply and mention to exist. Marker-only records use the first mention because
+      // the marker itself is the durable acceptance decision.
+      const matchesRecordedRequest =
+        tracking?.origin === "reply" && reply.ts === tracking.requestTs;
+      const command = parseStatusCommand(classificationText, botUserId, settings);
+      const canUseMarkerRecord =
+        markerRecordsReplyOrigin && command === null && foldInputs.length === 0;
+      const canCreateRequest =
+        tracking === undefined &&
+        !markerRecordsReplyOrigin &&
+        command === null &&
+        isAllowedAuthor(reply.user, users);
+      if (matchesRecordedRequest || canUseMarkerRecord || canCreateRequest) {
         request = { ts: reply.ts, text: reply.text, user: reply.user };
       }
       continue;
     }
-    const command = parseStatusCommand(reply.text, botUserId, settings);
-    if (command) events.push({ ts: reply.ts, state: command.state });
-    else bareMentionTs.push(reply.ts);
+    const command = parseStatusCommand(classificationText, botUserId, settings);
+    if (command) {
+      foldInputs.push({
+        kind: "status",
+        event: {
+          ts: reply.ts,
+          state: command.state,
+          ...(reply.user !== undefined ? { actor: reply.user } : {}),
+        },
+      });
+    } else {
+      foldInputs.push({
+        kind: "bare",
+        ts: reply.ts,
+        ...(reply.user !== undefined ? { actor: reply.user } : {}),
+      });
+    }
   }
 
-  let state: string;
-  let lastEventTs: number;
-  const lastEvent = events[events.length - 1];
-  if (lastEvent) {
-    state = lastEvent.state;
-    lastEventTs = tsValue(lastEvent.ts);
-  } else if (rootIsMention) {
-    // Only the BOT's own reactions read as state: the mirror it wrote in an earlier session, or
-    // legacy reaction-managed threads. A human's reaction never moves an issue - humans
-    // transition through `!`-command replies, which are ts-ordered and auditable.
-    state = stateFromReactions(root.botReactions, statusEmojiMap(settings), settings);
-    // Reactions carry no ordering, so any later bare mention may re-open a terminal reading.
-    lastEventTs = Number.NEGATIVE_INFINITY;
-  } else {
-    state = "Todo";
-    lastEventTs = Number.NEGATIVE_INFINITY;
-  }
-
-  if (isTerminalState(state, settings) && bareMentionTs.some((ts) => tsValue(ts) > lastEventTs)) {
+  const hasExplicitStatus = foldInputs.some((input) => input.kind === "status");
+  // Reactions are an unordered fallback only for unmarked roots. Once marked, the thread remains
+  // authoritative across daemon restarts, including when the latest status event is deleted and
+  // a derived visibility reaction remains.
+  let state = rootIsMention
+    ? root.botReactions.includes(markerEmoji)
+      ? reopenState(settings)
+      : stateFromReactions(root.botReactions, statusEmojiMap(settings), settings)
+    : "Todo";
+  let explicitStatusSeen = !hasExplicitStatus;
+  for (const input of foldInputs) {
+    if (input.kind === "status") {
+      state = input.event.state;
+      events.push(input.event);
+      explicitStatusSeen = true;
+      continue;
+    }
+    if (!explicitStatusSeen || !isTerminalState(state, settings)) continue;
     state = reopenState(settings);
+    events.push({
+      ts: input.ts,
+      state,
+      ...(input.actor !== undefined ? { actor: input.actor } : {}),
+    });
   }
 
-  return { state, ...(request !== undefined ? { request } : {}) };
+  return {
+    state,
+    events,
+    ...(request !== undefined ? { request } : {}),
+    ...(tracking !== undefined ? { tracking } : {}),
+    ...(workpad !== undefined ? { workpad } : {}),
+  };
 }
 
-function tsValue(ts: string): number {
-  const value = Number.parseFloat(ts);
-  return Number.isFinite(value) ? value : 0;
+function trackingRecordOf(
+  replies: SlackThreadReply[],
+  botUserId: string | undefined,
+): ThreadTracking | undefined {
+  if (botUserId === undefined) return undefined;
+  for (const reply of replies) {
+    if (reply.user !== botUserId || reply.metadata?.eventType !== TRACKING_METADATA_EVENT) continue;
+    const origin = reply.metadata.payload.origin;
+    if (origin === "root") return { origin };
+    const requestTs = reply.metadata.payload.request_ts;
+    if (origin === "reply" && typeof requestTs === "string" && requestTs !== "") {
+      return { origin, requestTs };
+    }
+  }
+  return undefined;
+}
+
+const firstSeenReplyText = new WeakMap<SlackTransport, Map<string, string>>();
+const FIRST_SEEN_REPLY_TEXT_MAX = 10_000;
+
+/**
+ * Fold a transport observation while retaining the first text seen for each reply during this
+ * process. The event mirror supplies its own first-seen value; pull-only transports use this
+ * ledger so later API reads cannot reinterpret an edited command.
+ */
+export function stateFromObservedThread(
+  root: SlackMessage,
+  replies: SlackThreadReply[],
+  settings: Settings,
+  transport: SlackTransport,
+): ThreadState {
+  let ledger = firstSeenReplyText.get(transport);
+  if (!ledger) {
+    ledger = new Map();
+    firstSeenReplyText.set(transport, ledger);
+  }
+  const observed = replies.map((reply) => {
+    const key = `${root.channel}:${root.ts}:${reply.ts}`;
+    const supplied = reply.firstSeenText;
+    let firstSeen = supplied ?? ledger.get(key);
+    if (firstSeen === undefined) {
+      if (ledger.size >= FIRST_SEEN_REPLY_TEXT_MAX) ledger.clear();
+      firstSeen = reply.text;
+    }
+    ledger.set(key, firstSeen);
+    return firstSeen === reply.firstSeenText ? reply : { ...reply, firstSeenText: firstSeen };
+  });
+  return stateFromThread(root, observed, settings);
 }
 
 interface ThreadStateCacheEntry {
@@ -230,7 +393,7 @@ export async function resolveThreadState(
 ): Promise<ThreadState> {
   const replyCount = root.replyCount ?? 0;
   if (replyCount === 0) {
-    return stateFromThread(root, [], settings);
+    return stateFromObservedThread(root, [], settings, transport);
   }
   const key = `${root.channel}:${root.ts}`;
   const latestReply = root.latestReply ?? "";
@@ -246,7 +409,7 @@ export async function resolveThreadState(
     return cached.resolved;
   }
   const replies = await transport.getThread(root.channel, root.ts);
-  const resolved = stateFromThread(root, replies, settings);
+  const resolved = stateFromObservedThread(root, replies, settings, transport);
   if (threadStateCache.size >= THREAD_STATE_CACHE_MAX) threadStateCache.clear();
   threadStateCache.set(key, { latestReply, replyCount, reactionsKey, resolved });
   return resolved;

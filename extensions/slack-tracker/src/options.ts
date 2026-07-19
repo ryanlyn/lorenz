@@ -20,10 +20,10 @@ export interface SlackTrackerOptions {
   botUserId?: string | undefined;
   /**
    * Slack app-level token (`xapp-...`) with the `connections:write` scope, enabling Socket Mode
-   * push: the client opens a WebSocket to Slack and re-polls the instant a watched mention or
-   * thread reply arrives, instead of waiting out `polling.intervalMs`. Optional; when unset the
-   * tracker is pull-only (interval polling), exactly as before. Bot-token reads/writes are
-   * unaffected either way - this token is used ONLY to open the events socket.
+   * push. The event feed keeps the channel mirror current, wakes polling for relevant changes,
+   * delivers eligible thread replies as live steering, and carries interactive workpad actions.
+   * Optional; when unset the tracker is pull-only and Slack interactions are unavailable.
+   * Bot-token reads and writes are unaffected either way.
    */
   appToken?: string | undefined;
   /**
@@ -36,7 +36,10 @@ export interface SlackTrackerOptions {
   users: string[];
   /** Slack emoji-name → workflow-state overrides (merged over the defaults). */
   emojiStates?: Record<string, string> | undefined;
-  /** Emoji the bot reacts with to mark a reply-tracked thread root (default `robot_face`). */
+  /**
+   * Emoji the bot uses as the dedicated tracking and thread-authority marker (default
+   * `robot_face`). It must not also map to a workflow state.
+   */
   markerEmoji?: string | undefined;
   /**
    * How far back (days) untracked threads are inspected for new reply-mention requests
@@ -57,6 +60,14 @@ export interface SlackTrackerOptions {
    * Set it generously on channels with long-lived issues or revived old threads.
    */
   scanLookbackDays?: number | undefined;
+  /**
+   * How often (ms) the event-fed channel mirror re-syncs from a REAL `conversations.history`
+   * scan while the Socket Mode feed is healthy (default 15 minutes). The mirror serves polls
+   * from memory between re-syncs; this is the standing repair pass that catches anything the
+   * event feed missed. Only meaningful with `app_token` set - without a socket the tracker is
+   * pull-only and every poll is a real scan.
+   */
+  reconcileIntervalMs?: number | undefined;
 }
 
 /** Typed view over `settings.tracker.options` for the Slack provider. */
@@ -68,6 +79,7 @@ export function slackTrackerOptions(settings: Settings): SlackTrackerOptions {
   const markerEmoji = stringOption(options, "markerEmoji");
   const replyLookbackDays = numberOption(options, "replyLookbackDays");
   const scanLookbackDays = numberOption(options, "scanLookbackDays");
+  const reconcileIntervalMs = numberOption(options, "reconcileIntervalMs");
   return {
     channels: stringListOption(options, "channels") ?? [],
     users: stringListOption(options, "users") ?? [],
@@ -77,6 +89,7 @@ export function slackTrackerOptions(settings: Settings): SlackTrackerOptions {
     ...(markerEmoji !== undefined ? { markerEmoji } : {}),
     ...(replyLookbackDays !== undefined ? { replyLookbackDays } : {}),
     ...(scanLookbackDays !== undefined ? { scanLookbackDays } : {}),
+    ...(reconcileIntervalMs !== undefined ? { reconcileIntervalMs } : {}),
   };
 }
 

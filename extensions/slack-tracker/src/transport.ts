@@ -7,7 +7,7 @@ export interface SlackMessage {
   /**
    * Reaction names authored by the BOT itself (a subset of `reactions`). These are the only
    * reactions that carry meaning: the status mirror and the reaction-derived state fallback
-   * read them, and a non-empty list is the bot's tracking marker. Human reactions are
+   * read them, and the configured marker reaction identifies tracked threads. Human reactions are
    * deliberately excluded - humans transition status through `!`-command thread replies, and
    * a reaction from a random channel member must not silently move an issue. Derived from each
    * reaction's `users` list, which Slack may truncate on heavily-reacted messages; the thread
@@ -23,14 +23,31 @@ export interface SlackMessage {
 }
 
 /**
- * True when the bot itself has reacted to the message - its tracking marker. A bot-marked root
- * is (and stays) a tracked issue: reply-tracked threads are recognized across restarts by the
- * marker alone, and the tool trust boundary accepts a marked root even if the author allowlist
- * has since been tightened.
+ * True when the bot's dedicated tracking reaction is present. Status reactions are deliberately
+ * excluded so a derived visibility mirror cannot become issue ownership or status authority
+ * after a restart.
  */
-export function isBotMarked(message: SlackMessage): boolean {
-  return message.botReactions.length > 0;
+export function isBotMarked(message: SlackMessage, markerEmoji: string): boolean {
+  return message.botReactions.includes(markerEmoji);
 }
+
+/**
+ * Slack message metadata (`metadata.event_type` / `metadata.event_payload`) on a bot post.
+ * Metadata can only be attached by the app that posted the message, so a metadata-bearing reply
+ * whose author is the bot is machine-readable state that neither a human nor another app can
+ * forge - the fold prefers it over parsing the reply text.
+ */
+export interface SlackMessageMetadata {
+  eventType: string;
+  payload: Record<string, unknown>;
+}
+
+/** `event_type` of the bot's authoritative status replies (see operations.ts). */
+export const STATUS_METADATA_EVENT = "lorenz_status";
+/** `event_type` of the bot's durable issue-origin record. */
+export const TRACKING_METADATA_EVENT = "lorenz_tracking";
+/** `event_type` of the bot's per-issue workpad message (see workpad.ts). */
+export const WORKPAD_METADATA_EVENT = "lorenz_workpad";
 
 /** A single reply in a Slack thread, excluding the parent (root) message. */
 export interface SlackThreadReply {
@@ -43,6 +60,21 @@ export interface SlackThreadReply {
   isBot?: boolean;
   /** True when Slack reports that the stored reply text was edited. */
   edited?: boolean;
+  /** Message metadata when present (bot posts carry machine-readable state here). */
+  metadata?: SlackMessageMetadata | undefined;
+  /**
+   * Set by the channel mirror: the text this reply had when FIRST observed. Human `!` command
+   * classification uses this (first-seen wins), so a later edit cannot retroactively rewrite a
+   * folded transition. Absent on API-served replies (Slack cannot return pre-edit text).
+   */
+  firstSeenText?: string | undefined;
+  /**
+   * Set by the channel mirror: the reply was deleted after being observed. Tombstoned replies
+   * keep their folded role for the daemon session (a deleted `!done` does not silently re-open
+   * the issue) and are dropped at the next reconciliation, where the substrate has forgotten
+   * them. Also excluded from steering context.
+   */
+  deleted?: boolean | undefined;
 }
 
 /** One Slack API page of thread replies newer than an event cursor. */
@@ -112,5 +144,43 @@ export interface SlackTransport {
   ): Promise<SlackMessage[]>;
   addReaction(channel: string, ts: string, name: string): Promise<void>;
   removeReaction(channel: string, ts: string, name: string): Promise<void>;
-  postReply(channel: string, threadTs: string, body: string): Promise<void>;
+  /**
+   * Post a thread reply and return its ts. `options.metadata` attaches machine-readable message
+   * metadata and gives an ambiguous post (5xx/network after the request was sent) a recovery
+   * marker. If the original reply is already visible, reconciliation returns its ts. Otherwise
+   * the post fails at-most-once without retrying because marker absence cannot prove that Slack
+   * will not finish the original request. `options.blocks` attaches Block Kit blocks with `body`
+   * as fallback. Every body is broadcast-sanitized (see sanitize.ts).
+   */
+  postReply(
+    channel: string,
+    threadTs: string,
+    body: string,
+    options?: SlackPostOptions,
+  ): Promise<string>;
+  /**
+   * Edit an existing bot message in place (`chat.update`). Used only for display
+   * mirrors (the workpad); never for fold events, which are append-only.
+   */
+  updateMessage(
+    channel: string,
+    ts: string,
+    body: string,
+    options?: SlackPostOptions,
+  ): Promise<void>;
+  /** Post an ephemeral message visible only to `user`, threaded under `threadTs`. */
+  postEphemeral(channel: string, user: string, threadTs: string, body: string): Promise<void>;
+  /**
+   * Open a modal for the interaction identified by `triggerId` and return its view id when Slack
+   * supplies one. Trigger ids are valid for only a few seconds.
+   */
+  openView(triggerId: string, view: Record<string, unknown>): Promise<string | null>;
+  /** Replace the contents of an already-open modal. */
+  updateView(viewId: string, view: Record<string, unknown>): Promise<void>;
+}
+
+/** Optional attachments for a bot write (see {@link SlackTransport.postReply}). */
+export interface SlackPostOptions {
+  metadata?: SlackMessageMetadata | undefined;
+  blocks?: unknown[] | undefined;
 }
