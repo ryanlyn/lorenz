@@ -249,6 +249,28 @@ export class MirrorBackedSlackTransport implements SlackTransport {
       : [];
   }
 
+  /**
+   * Read a complete root and thread from the event-fed mirror without falling through to Slack.
+   * Best-effort notification paths use this surface so they never compete with reconciliation
+   * for history-read capacity.
+   */
+  async getCachedThread(
+    channel: string,
+    ts: string,
+  ): Promise<{ root: SlackMessage; replies: SlackThreadReply[] } | null> {
+    await this.settleEvents();
+    const state = this.channels.get(channel);
+    const root = state?.roots.get(ts);
+    const thread = state?.threads.get(ts);
+    if (!state || !root || !thread || !state.authoritativeThreads.has(ts)) return null;
+    return {
+      root: this.toScanMessage(channel, state, root),
+      replies: [...thread.values()]
+        .sort((left, right) => compareSlackTs(left.ts, right.ts))
+        .map(toThreadReply),
+    };
+  }
+
   async getThreadPage(
     channel: string,
     ts: string,

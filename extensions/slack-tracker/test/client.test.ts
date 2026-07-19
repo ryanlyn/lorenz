@@ -291,6 +291,49 @@ test("tracker.users gates reply-mention tracking by the request reply's author",
   );
 });
 
+test("reply tracking retains the authorization recorded when the request was accepted", async () => {
+  const now = Date.now() / 1000;
+  const rootTs = `${(now - 3600).toFixed(6)}`;
+  const requestTs = `${(now - 1800).toFixed(6)}`;
+  const transport = new InMemorySlackTransport(
+    {
+      C1: [
+        {
+          ts: rootTs,
+          text: "discussion",
+          replies: [{ ts: requestTs, text: "<@U_BOT> handle this", user: "U_ALICE" }],
+        },
+      ],
+    },
+    { botUserId: "U_BOT", allowedUsers: ["U_ALICE"] },
+  );
+  const initial = new SlackTrackerClient(allowlistSettings(), transport);
+  assert.deepEqual(
+    (await initial.fetchCandidateIssues()).map((issue) => issue.id),
+    [`C1:${rootTs}`],
+  );
+
+  const tightened = new SlackTrackerClient(
+    parseSlackConfig(
+      {
+        tracker: {
+          kind: "slack",
+          channels: ["C1"],
+          bot_user_id: "U_BOT",
+          users: ["U_BOB"],
+          active_states: ["Todo", "In Progress"],
+        },
+      },
+      { SLACK_BOT_TOKEN: "xoxb-test" },
+    ),
+    transport,
+  );
+  assert.deepEqual(
+    (await tightened.fetchIssuesByIds([`C1:${rootTs}`])).map((issue) => issue.id),
+    [`C1:${rootTs}`],
+  );
+});
+
 test("tracker.users gates the tool trust boundary, but a bot-marked root stays tracked", async () => {
   const transport = new InMemorySlackTransport(
     {
@@ -452,6 +495,57 @@ test("a bot mention in a reply tracks the thread: request title, marker, restart
     (await restarted.fetchCandidateIssues()).map((i) => i.id),
     [`C1:${rootTs}`],
   );
+});
+
+test("a recorded root request cannot become reply-tracked after the root mention is removed", async () => {
+  const transport = new InMemorySlackTransport(
+    {
+      C1: [
+        {
+          ts: "1700000000.000100",
+          text: "<@U_BOT> original request",
+          user: "U_ALICE",
+          replies: [
+            { ts: "1700000000.000200", text: "status: In Progress", user: "U_BOT" },
+            { ts: "1700000000.000300", text: "<@U_BOT> later follow-up", user: "U_ALICE" },
+          ],
+        },
+      ],
+    },
+    { botUserId: "U_BOT" },
+  );
+  const client = new SlackTrackerClient(settings(), transport);
+  assert.deepEqual(
+    (await client.fetchCandidateIssues()).map((issue) => issue.id),
+    ["C1:1700000000.000100"],
+  );
+
+  await transport.updateMessage("C1", "1700000000.000100", "mention removed");
+  assert.deepEqual(await client.fetchIssuesByIds(["C1:1700000000.000100"]), []);
+});
+
+test("pull-only reads preserve the first observed command classification after an edit", async () => {
+  const transport = new InMemorySlackTransport(
+    {
+      C1: [
+        {
+          ts: "1700000000.000100",
+          text: "<@U_BOT> tracked",
+          replies: [{ ts: "1700000000.000200", text: "<@U_BOT> !done", user: "U_HUMAN" }],
+        },
+      ],
+    },
+    { botUserId: "U_BOT" },
+  );
+  const client = new SlackTrackerClient(settings(), transport);
+  assert.equal((await client.fetchIssuesByIds(["C1:1700000000.000100"]))[0]?.state, "Done");
+
+  await transport.updateMessage(
+    "C1",
+    "1700000000.000200",
+    "<@U_BOT> this should not reinterpret the transition",
+  );
+  assert.equal((await client.fetchIssuesByIds(["C1:1700000000.000100"]))[0]?.state, "Done");
 });
 
 test("untracked threads older than the reply lookback are not inspected", async () => {
@@ -1152,6 +1246,14 @@ test("busy notices follow the same author allowlist as live steering", async () 
     opened = options;
     return { start: () => {}, close: () => {} } as unknown as SlackSocketMode;
   });
+  let messageReads = 0;
+  const getMessage = transport.getMessage.bind(transport);
+  transport.getMessage = async (channel, ts) => {
+    messageReads += 1;
+    return getMessage(channel, ts);
+  };
+  await client.fetchCandidateIssues();
+  const readsAfterBootstrap = messageReads;
   client.watch(() => {});
   const onEvent = (opened as unknown as SlackSocketModeOptions).onEvent!;
   const reply = {
@@ -1169,6 +1271,7 @@ test("busy notices follow the same author allowlist as live steering", async () 
   await new Promise<void>((resolve) => setImmediate(resolve));
   assert.equal(transport.ephemerals.length, 1);
   assert.equal(transport.ephemerals[0]!.user, "U_ALICE");
+  assert.equal(messageReads, readsAfterBootstrap);
 });
 
 test("fetchIssueEvents returns a bounded page of authorized human steering replies", async () => {

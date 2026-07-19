@@ -35,6 +35,17 @@ interface InMemoryOptions {
   users?: Record<string, SlackUser>;
 }
 
+const SLACK_TS_SCALE = 1_000_000n;
+
+function slackTsMicros(ts: string): bigint {
+  const [seconds = "0", fraction = ""] = ts.split(".", 2);
+  return BigInt(seconds) * SLACK_TS_SCALE + BigInt(fraction.padEnd(6, "0").slice(0, 6));
+}
+
+function slackTsFromMicros(value: bigint): string {
+  return `${value / SLACK_TS_SCALE}.${String(value % SLACK_TS_SCALE).padStart(6, "0")}`;
+}
+
 export class InMemorySlackTransport implements SlackTransport {
   readonly replies: Array<{ channel: string; threadTs: string; body: string }> = [];
   readonly ephemerals: Array<{ channel: string; user: string; threadTs: string; body: string }> =
@@ -169,9 +180,13 @@ export class InMemorySlackTransport implements SlackTransport {
     // Append the reply to the parent message's thread so a posted reply can be read back via
     // getThread in tests. The reply is authored by the bot, with a ts after the parent's.
     const parent = (this.messages.get(channel) ?? []).find((m) => m.ts === threadTs);
-    const ts = parent
-      ? `${Number.parseFloat(threadTs) + parent.thread.length + 1}.000000`
-      : `${Number.parseFloat(threadTs) + 1}.000000`;
+    const latestTs = parent
+      ? parent.thread.reduce(
+          (latest, reply) => (slackTsMicros(reply.ts) > slackTsMicros(latest) ? reply.ts : latest),
+          threadTs,
+        )
+      : threadTs;
+    const ts = slackTsFromMicros(slackTsMicros(latestTs) + 1n);
     if (parent) {
       const reply: SlackThreadReply = { ts, text };
       if (this.botUserId !== undefined) reply.user = this.botUserId;

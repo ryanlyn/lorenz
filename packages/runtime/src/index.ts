@@ -397,8 +397,9 @@ export class LorenzRuntime {
   private pendingStoppedClaimSettlements = 0;
   /**
    * Live tracker push subscriptions (see {@link RuntimeTrackerClient.watch}), keyed by the client
-   * that owns each stream. A replaced client keeps its stream while active runs remain pinned to
-   * it, then releases the stream when the last run settles. All streams close on `stop()`.
+   * that owns each stream. Reload hands ownership to the replacement client before opening its
+   * stream, preventing backends with exclusive subscriptions from splitting or rejecting the
+   * replacement feed. All streams close on `stop()`.
    */
   private readonly changeStreams = new Map<RuntimeTrackerClient, TrackerChangeStream>();
   private readonly openingChangeStreamClients = new WeakSet<RuntimeTrackerClient>();
@@ -753,7 +754,10 @@ export class LorenzRuntime {
           (event) => event.authorizedForSteering === true,
         );
         for (const handle of this.activeRuns.values()) {
-          if (handle.trackerClient === client && handle.issueId === issueEvents.issueId) {
+          if (
+            handle.issueId === issueEvents.issueId &&
+            (handle.trackerClient === client || client === this.client)
+          ) {
             handle.publishIssueEvents(authorizedEvents);
           }
         }
@@ -1439,8 +1443,13 @@ export class LorenzRuntime {
       this.orchestrator.settings = workflow.settings;
       this.client = nextClient;
       if (clientChanged) this.issueEventRecoveryWarningIssued = false;
-      if (clientChanged && this.changeStreamEnabled) void this.openChangeStream(nextClient);
-      if (clientChanged && !this.hasActiveRunsForTrackerClient(previousClient)) {
+      if (clientChanged && this.changeStreamEnabled) {
+        // Exclusive push backends cannot overlap old and replacement subscriptions. Close the
+        // old feed first, then route replacement events to matching active runs regardless of
+        // which client owns their in-flight attempt.
+        await this.closeChangeStream(previousClient);
+        void this.openChangeStream(nextClient);
+      } else if (clientChanged && !this.hasActiveRunsForTrackerClient(previousClient)) {
         await this.closeChangeStream(previousClient);
       }
       this.addEvent("workflow_reloaded", workflow.path);

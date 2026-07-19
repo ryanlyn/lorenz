@@ -12,6 +12,7 @@ import {
   MirrorBackedSlackTransport,
   SlackTrackerClient,
   stateFromThread,
+  TRACKING_METADATA_EVENT,
   WORKPAD_METADATA_EVENT,
   type SlackMessage,
   type SlackTransport,
@@ -784,7 +785,26 @@ test("delayed root create events cannot undo an edit or resurrect a deletion", a
 
 test("reconciliation does not promote a deleted status event's reaction mirror", async () => {
   const raw = new InMemorySlackTransport(
-    { C1: [{ ts: "1.0", text: "<@U_BOT> tracked", user: "U2" }] },
+    {
+      C1: [
+        {
+          ts: "1.0",
+          text: "<@U_BOT> tracked",
+          user: "U2",
+          replies: [
+            {
+              ts: "1.1",
+              text: "Lorenz tracking record.",
+              user: "U_BOT",
+              metadata: {
+                eventType: TRACKING_METADATA_EVENT,
+                payload: { origin: "root" },
+              },
+            },
+          ],
+        },
+      ],
+    },
     { botUserId: "U_BOT" },
   );
   await raw.addReaction("C1", "1.0", "white_check_mark");
@@ -824,7 +844,8 @@ test("reconciliation does not promote a deleted status event's reaction mirror",
   const replies = await mirror.getThread("C1", "1.0");
 
   assert.deepEqual(root.botReactions, ["white_check_mark", "robot_face"]);
-  assert.equal(replies.length, 0);
+  assert.equal(replies.length, 1);
+  assert.equal(replies[0]!.metadata?.eventType, TRACKING_METADATA_EVENT);
   assert.equal(stateFromThread(root, replies, settings()).state, "Todo");
 });
 

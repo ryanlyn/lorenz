@@ -7,6 +7,7 @@ import {
   executeSlackTool,
   InMemorySlackTransport,
   slackToolSpecs,
+  TRACKING_METADATA_EVENT,
   WORKPAD_METADATA_EVENT,
 } from "@lorenz/slack-tracker";
 
@@ -291,9 +292,15 @@ test("slack_update_status posts the authoritative status reply and mirrors the r
   );
   assert.equal(moved.success, true);
   assert.deepEqual(moved.result, { ok: true, status: "Done" });
-  // The thread reply is the source of truth...
-  assert.deepEqual(transport.replies, [{ channel: "C1", threadTs: "1.1", body: "status: Done" }]);
-  // ...and the bot's reaction mirror tracks it for glanceability.
+  // The durable origin record precedes the authoritative status reply.
+  assert.deepEqual(
+    transport.replies.map((reply) => reply.body),
+    ["Lorenz tracking record.", "status: Done"],
+  );
+  const thread = await transport.getThread("C1", "1.1");
+  assert.equal(thread[0]!.metadata?.eventType, TRACKING_METADATA_EVENT);
+  assert.deepEqual(thread[0]!.metadata?.payload, { origin: "root" });
+  // The bot's reaction mirror tracks the status for glanceability.
   const msg = await transport.getMessage("C1", "1.1");
   assert.deepEqual(msg!.reactions, ["robot_face", "white_check_mark"]);
 
@@ -304,7 +311,11 @@ test("slack_update_status posts the authoritative status reply and mirrors the r
     transport,
   );
   assert.equal(replied.success, true);
-  assert.deepEqual(transport.replies[1], { channel: "C1", threadTs: "1.1", body: "done!" });
+  assert.deepEqual(transport.replies.at(-1), {
+    channel: "C1",
+    threadTs: "1.1",
+    body: "done!",
+  });
 });
 
 test("slack_update_status resolves a case-variant status to the canonical name", async () => {
@@ -322,7 +333,10 @@ test("slack_update_status resolves a case-variant status to the canonical name",
 
   assert.equal(result.success, true);
   assert.equal((result.result as { status: string }).status, "Done");
-  assert.deepEqual(transport.replies, [{ channel: "C1", threadTs: "1.1", body: "status: Done" }]);
+  assert.deepEqual(
+    transport.replies.map((reply) => reply.body),
+    ["Lorenz tracking record.", "status: Done"],
+  );
 });
 
 test("slack_update_status rejects a status outside the workflow's states", async () => {
@@ -371,9 +385,10 @@ test("slack_update_status works for custom states with no mapped emoji", async (
   );
 
   assert.equal(result.success, true);
-  assert.deepEqual(transport.replies, [
-    { channel: "C1", threadTs: "1.1", body: "status: Shipped" },
-  ]);
+  assert.deepEqual(
+    transport.replies.map((reply) => reply.body),
+    ["Lorenz tracking record.", "status: Shipped"],
+  );
 
   const read = await executeSlackTool(
     "slack_read_thread",
@@ -433,7 +448,10 @@ test("a failing reaction mirror never fails the status transition", async () => 
   );
 
   assert.equal(result.success, true);
-  assert.deepEqual(transport.replies, [{ channel: "C1", threadTs: "1.1", body: "status: Done" }]);
+  assert.deepEqual(
+    transport.replies.map((reply) => reply.body),
+    ["Lorenz tracking record.", "status: Done"],
+  );
 });
 
 test("a human command in the thread overrides the reaction reading", async () => {

@@ -1302,6 +1302,7 @@ test("runtime rebinds tracker push delivery when a reload replaces the client", 
   const callbacks: Array<((change?: TrackerChange) => void) | undefined> = [];
   const fetches = [0, 0];
   const closes = [0, 0];
+  const streamOrder: string[] = [];
   let clientBuilds = 0;
   const runtime = new LorenzRuntime(
     runtimeOptions({
@@ -1317,9 +1318,11 @@ test("runtime rebinds tracker push delivery when a reload replaces the client", 
           },
           fetchIssuesByIds: async () => [],
           watch: (onChange) => {
+            streamOrder.push(`watch:${index}`);
             callbacks[index] = onChange;
             return {
               close: () => {
+                streamOrder.push(`close:${index}`);
                 closes[index] = (closes[index] ?? 0) + 1;
               },
             };
@@ -1341,6 +1344,7 @@ test("runtime rebinds tracker push delivery when a reload replaces the client", 
     assert.equal(clientBuilds, 2);
     assert.equal(closes[0], 1);
     assert.ok(callbacks[1]);
+    assert.deepEqual(streamOrder.slice(-2), ["close:0", "watch:1"]);
 
     const pushesBeforeStaleCallback = runtime
       .snapshot()
@@ -1509,7 +1513,7 @@ test("runtime polling does not wait for replacement stream startup", async () =>
   }
 });
 
-test("active runs retain their tracker client across workflow reloads", async () => {
+test("active runs retain pinned reads while replacement push events reach the run", async () => {
   const dir = await tempDir("lorenz-runtime-reload-active-client");
   const workflowFile = path.join(dir, "WORKFLOW.md");
   await fs.writeFile(workflowFile, workflowMarkdown({ intervalMs: 600_000 }));
@@ -1625,7 +1629,7 @@ test("active runs retain their tracker client across workflow reloads", async ()
       },
     });
     await Promise.resolve();
-    assert.deepEqual(delivered, []);
+    assert.equal(delivered[0]?.text, "replacement client event");
     await waitFor(() => issueRefreshCalls[0] === 3, 1_000);
 
     callbacks[0]?.({
@@ -1636,15 +1640,13 @@ test("active runs retain their tracker client across workflow reloads", async ()
         ],
       },
     });
-    await waitFor(() => delivered.length === 1, 1_000);
-    assert.equal(delivered[0]?.text, "pinned client event");
-    await waitFor(() => issueRefreshCalls[0] === 4, 1_000);
-    assert.deepEqual(issueRefreshCalls, [4, 0]);
-    assert.deepEqual(streamCloses, [0, 0]);
+    await Promise.resolve();
+    assert.equal(delivered.length, 1);
+    assert.deepEqual(issueRefreshCalls, [3, 0]);
+    assert.deepEqual(streamCloses, [1, 0]);
 
     finishRun?.();
     await waitFor(() => runtime.snapshot().running.length === 0, 1_000);
-    await waitFor(() => streamCloses[0] === 1, 1_000);
     assert.deepEqual(streamCloses, [1, 0]);
   } finally {
     finishRun?.();

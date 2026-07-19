@@ -25,13 +25,18 @@ import {
   stripLeadingMention,
 } from "./mapping.js";
 import { MirrorBackedSlackTransport } from "./mirror.js";
-import { mirrorStatusReaction, requireTrackedMessage } from "./operations.js";
+import {
+  ensureSlackTrackingRecord,
+  mirrorStatusReaction,
+  requireTrackedMessage,
+} from "./operations.js";
 import { slackEndpoint, slackTrackerOptions } from "./options.js";
 import { SlackSocketMode, type SlackSocketModeOptions } from "./socketMode.js";
 import {
   isAsideText,
   parseStatusCommand,
   resolveThreadState,
+  stateFromObservedThread,
   type ThreadState,
 } from "./threadState.js";
 import { registerSlackRuntimeTransport } from "./toolTransport.js";
@@ -491,7 +496,24 @@ export class SlackTrackerClient implements RuntimeTrackerClient {
       // roots and roots with status events get it; untouched and reaction-only root mentions
       // keep their fallback until a thread event occurs.
       const threadIsAuthoritative = thread.request !== undefined || thread.events.length > 0;
-      if (threadIsAuthoritative && !isBotMarked(root, markerEmoji)) {
+      let trackingReady = thread.tracking !== undefined;
+      if (threadIsAuthoritative && !trackingReady) {
+        try {
+          const tracking = await ensureSlackTrackingRecord(
+            this.settings,
+            this.transport,
+            root,
+            thread,
+          );
+          if (tracking !== undefined) {
+            thread.tracking = tracking;
+            trackingReady = true;
+          }
+        } catch {
+          // The issue remains valid this poll; the durable record retries on the next pass.
+        }
+      }
+      if (threadIsAuthoritative && trackingReady && !isBotMarked(root, markerEmoji)) {
         try {
           await this.transport.addReaction(root.channel, root.ts, markerEmoji);
           if (!root.reactions.includes(markerEmoji)) root.reactions.push(markerEmoji);
@@ -592,9 +614,14 @@ export class SlackTrackerClient implements RuntimeTrackerClient {
   }
 
   private async postBusyNotice(channel: string, threadTs: string, user: string): Promise<void> {
-    const root = await this.transport.getMessage(channel, threadTs);
-    if (!root) return;
-    const thread = await resolveThreadState(this.settings, this.transport, root);
+    const cached = await this.channelMirror?.getCachedThread(channel, threadTs);
+    if (!cached) return;
+    const thread = stateFromObservedThread(
+      cached.root,
+      cached.replies,
+      this.settings,
+      this.transport,
+    );
     const active = this.settings.tracker.activeStates;
     const stateLower = thread.state.trim().toLowerCase();
     const activeIndex = active.findIndex((s) => s.trim().toLowerCase() === stateLower);

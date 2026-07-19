@@ -2,7 +2,7 @@ import { errorMessage, isRecord, type Settings } from "@lorenz/domain";
 
 import { splitIssueId } from "./ids.js";
 import { requireTrackedMessage, updateSlackStatusFromWorkpad } from "./operations.js";
-import { stateFromThread, type ThreadState } from "./threadState.js";
+import { stateFromObservedThread, type ThreadState } from "./threadState.js";
 import type { SlackTransport } from "./transport.js";
 import type { SlackTrackerLogger } from "./webTransport.js";
 import { WORKPAD_CANCEL_ACTION, WORKPAD_DETAILS_ACTION } from "./workpad.js";
@@ -174,7 +174,7 @@ async function buildSessionModalView(
   try {
     const root = await requireTrackedMessage(context.settings, context.transport, channel, ts);
     const replies = await context.transport.getThread(channel, ts);
-    thread = stateFromThread(root, replies, context.settings);
+    thread = stateFromObservedThread(root, replies, context.settings, context.transport);
     rootText = thread.request?.text ?? root.text;
     links = harvestLinks(
       replies.filter((r) => r.user !== undefined && isBotReply(r.user, context.settings)),

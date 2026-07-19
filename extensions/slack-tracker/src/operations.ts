@@ -2,8 +2,14 @@ import type { Settings } from "@lorenz/domain";
 
 import { emojiForState, isAllowedAuthor, isBotMention, statusEmojiMap } from "./mapping.js";
 import { slackTrackerOptions } from "./options.js";
-import { BOT_STATUS_PREFIX, resolveStateName, stateFromThread } from "./threadState.js";
-import { isBotMarked, STATUS_METADATA_EVENT } from "./transport.js";
+import {
+  BOT_STATUS_PREFIX,
+  resolveStateName,
+  stateFromObservedThread,
+  type ThreadState,
+  type ThreadTracking,
+} from "./threadState.js";
+import { isBotMarked, STATUS_METADATA_EVENT, TRACKING_METADATA_EVENT } from "./transport.js";
 import type { SlackMessage, SlackTransport } from "./transport.js";
 import { makeMetadataSeq } from "./webTransport.js";
 
@@ -53,7 +59,9 @@ export async function requireTrackedMessage(
   // status mirror remains.
   if ((message.replyCount ?? 0) > 0) {
     const replies = await transport.getThread(channel, ts);
-    if (stateFromThread(message, replies, settings).request !== undefined) return message;
+    if (stateFromObservedThread(message, replies, settings, transport).request !== undefined) {
+      return message;
+    }
   }
   throw new Error("message is not a tracked bot-mention issue");
 }
@@ -87,6 +95,7 @@ export async function updateSlackStatus(
   // Trust-boundary check: the agent-supplied issueId must point at a watched channel and a
   // tracked message before we write into its thread.
   const root = await requireTrackedMessage(settings, transport, channel, ts);
+  await ensureSlackTrackingRecord(settings, transport, root);
   // The reply text stays human-readable (`status: <Name>`, plus an optional attribution line for
   // e.g. button-initiated transitions), while the metadata is the machine-readable event the
   // fold prefers: only the posting app can attach metadata, so it cannot be forged, and the
@@ -95,6 +104,45 @@ export async function updateSlackStatus(
   await postStatusReply(transport, channel, ts, canonical, options);
   await mirrorStatusReaction(settings, transport, channel, ts, canonical, root.botReactions);
   return { ok: true, status: canonical, root };
+}
+
+/**
+ * Persist whether an accepted issue originated at its root or in a reply. The record lets later
+ * reads preserve the original authorization decision and reject a root request whose mention was
+ * edited away, without treating a later command or steering reply as a new request.
+ */
+export async function ensureSlackTrackingRecord(
+  settings: Settings,
+  transport: SlackTransport,
+  root: SlackMessage,
+  knownThread?: ThreadState,
+): Promise<ThreadTracking | undefined> {
+  const thread =
+    knownThread ??
+    stateFromObservedThread(
+      root,
+      await transport.getThread(root.channel, root.ts),
+      settings,
+      transport,
+    );
+  if (thread.tracking !== undefined) return thread.tracking;
+  const botUserId = requireBotUserId(settings);
+  const tracking: ThreadTracking | undefined = isBotMention(root.text, botUserId)
+    ? { origin: "root" }
+    : thread.request !== undefined
+      ? { origin: "reply", requestTs: thread.request.ts }
+      : undefined;
+  if (tracking === undefined) return undefined;
+  await transport.postReply(root.channel, root.ts, "Lorenz tracking record.", {
+    metadata: {
+      eventType: TRACKING_METADATA_EVENT,
+      payload:
+        tracking.origin === "root"
+          ? { origin: "root" }
+          : { origin: "reply", request_ts: tracking.requestTs },
+    },
+  });
+  return tracking;
 }
 
 /**

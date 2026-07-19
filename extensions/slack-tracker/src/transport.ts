@@ -7,7 +7,7 @@ export interface SlackMessage {
   /**
    * Reaction names authored by the BOT itself (a subset of `reactions`). These are the only
    * reactions that carry meaning: the status mirror and the reaction-derived state fallback
-   * read them, and a non-empty list is the bot's tracking marker. Human reactions are
+   * read them, and the configured marker reaction identifies tracked threads. Human reactions are
    * deliberately excluded - humans transition status through `!`-command thread replies, and
    * a reaction from a random channel member must not silently move an issue. Derived from each
    * reaction's `users` list, which Slack may truncate on heavily-reacted messages; the thread
@@ -44,6 +44,8 @@ export interface SlackMessageMetadata {
 
 /** `event_type` of the bot's authoritative status replies (see operations.ts). */
 export const STATUS_METADATA_EVENT = "lorenz_status";
+/** `event_type` of the bot's durable issue-origin record. */
+export const TRACKING_METADATA_EVENT = "lorenz_tracking";
 /** `event_type` of the bot's per-issue workpad message (see workpad.ts). */
 export const WORKPAD_METADATA_EVENT = "lorenz_workpad";
 

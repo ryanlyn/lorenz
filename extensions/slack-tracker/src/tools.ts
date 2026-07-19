@@ -16,7 +16,7 @@ import { slackMessageToRow, slackPermalink, splitIssueId, trackedRootsOf } from 
 import { isAllowedAuthor, isBotMention } from "./mapping.js";
 import { requireBotUserId, requireTrackedMessage, updateSlackStatus } from "./operations.js";
 import { slackTrackerOptions } from "./options.js";
-import { resolveThreadState, stateFromThread } from "./threadState.js";
+import { resolveThreadState, stateFromObservedThread } from "./threadState.js";
 import { slackRuntimeKey, slackRuntimeTransport } from "./toolTransport.js";
 import { isBotMarked, type SlackTransport } from "./transport.js";
 import { SlackWebTransport } from "./webTransport.js";
@@ -195,7 +195,7 @@ export async function executeSlackTool(
         return await serializeWorkpadUpdate(settings, issueId, async () => {
           const root = await requireTrackedMessage(settings, transport, channel, ts);
           const replies = await transport.getThread(channel, ts);
-          const thread = stateFromThread(root, replies, settings);
+          const thread = stateFromObservedThread(root, replies, settings, transport);
           // A partial update keeps the other section: the workpad metadata round-trips both, so
           // an agent refreshing its note between milestones does not blank the plan.
           const plan = optionalStr(args, "plan") ?? thread.workpad?.plan;
@@ -219,7 +219,7 @@ export async function executeSlackTool(
         // Same trust-boundary check as the write tools: only read a watched, tracked issue.
         const root = await requireTrackedMessage(settings, transport, channel, ts);
         const replies = await transport.getThread(channel, ts);
-        const thread = stateFromThread(root, replies, settings);
+        const thread = stateFromObservedThread(root, replies, settings, transport);
         const base = await transport.teamUrl();
         return toolSuccess({
           issueId: `${channel}:${ts}`,
