@@ -6,6 +6,8 @@ import type {
   SlackChannelScan,
   SlackMessage,
   SlackThreadReply,
+  SlackThreadReplyPage,
+  SlackThreadReplyPageQuery,
   SlackTransport,
   SlackUser,
 } from "./transport.js";
@@ -16,6 +18,7 @@ interface RawSlackMessage {
   user?: string;
   bot_id?: string;
   subtype?: string;
+  edited?: unknown;
   reply_count?: number;
   latest_reply?: string;
   reactions?: Array<{ name?: string; users?: string[] }>;
@@ -324,17 +327,14 @@ export class SlackWebTransport implements SlackTransport {
     const out: SlackThreadReply[] = [];
     let cursor: string | undefined;
     for (let page = 0; page < this.maxHistoryPages; page += 1) {
-      abortSignal?.throwIfAborted();
-      const params: Record<string, string> = { channel, ts, limit: "200" };
-      if (cursor) params.cursor = cursor;
-      const body = await this.get("conversations.replies", params, abortSignal);
-      const messages = Array.isArray(body.messages) ? (body.messages as RawSlackMessage[]) : [];
-      for (const m of messages) {
-        if (typeof m.ts !== "string") continue;
-        if (m.ts === ts) continue;
-        out.push(toThreadReply(m));
-      }
-      cursor = nextCursor(body);
+      const pageResult = await this.getThreadPage(channel, ts, {
+        afterTs: "0",
+        limit: 200,
+        ...(cursor ? { cursor } : {}),
+        ...(abortSignal ? { abortSignal } : {}),
+      });
+      out.push(...pageResult.replies);
+      cursor = pageResult.nextCursor;
       if (!cursor) break;
     }
     // Same loud-truncation contract as the history scan: a silently partial thread would let a
@@ -346,6 +346,32 @@ export class SlackWebTransport implements SlackTransport {
       );
     }
     return out;
+  }
+
+  async getThreadPage(
+    channel: string,
+    ts: string,
+    query: SlackThreadReplyPageQuery,
+  ): Promise<SlackThreadReplyPage> {
+    query.abortSignal?.throwIfAborted();
+    const params: Record<string, string> = {
+      channel,
+      ts,
+      oldest: query.afterTs,
+      inclusive: "false",
+      limit: String(Math.min(200, Math.max(1, query.limit))),
+    };
+    if (query.cursor) params.cursor = query.cursor;
+    const body = await this.get("conversations.replies", params, query.abortSignal);
+    const messages = Array.isArray(body.messages) ? (body.messages as RawSlackMessage[]) : [];
+    const replies = messages
+      .filter((message) => typeof message.ts === "string" && message.ts !== ts)
+      .map(toThreadReply);
+    const cursor = nextCursor(body);
+    return {
+      replies,
+      ...(cursor ? { nextCursor: cursor } : {}),
+    };
   }
 
   async addReaction(channel: string, ts: string, name: string): Promise<void> {
@@ -536,6 +562,7 @@ function toThreadReply(m: RawSlackMessage): SlackThreadReply {
   const reply: SlackThreadReply = { ts: m.ts ?? "", text: m.text ?? "" };
   if (typeof m.user === "string") reply.user = m.user;
   if (typeof m.bot_id === "string" || m.subtype === "bot_message") reply.isBot = true;
+  if (m.edited !== undefined) reply.edited = true;
   return reply;
 }
 

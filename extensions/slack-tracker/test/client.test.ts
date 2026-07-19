@@ -907,7 +907,7 @@ test("watch opens Socket Mode with the resolved app token and watched channels",
   assert.equal(closed, true);
 });
 
-test("watch excludes replies that are not agent steering", () => {
+test("watch applies steering policy while admitting thread broadcasts", () => {
   const transport = new InMemorySlackTransport({ C1: [] });
   const withApp = parseSlackConfig(
     {
@@ -949,7 +949,12 @@ test("watch excludes replies that are not agent steering", () => {
   emit({ ...reply, bot_id: "B_OTHER", text: "bot reply" });
   emit({ ...reply, subtype: "message_changed", text: "edited" });
   emit({ ...reply, thread_ts: undefined, text: "root message" });
-  emit({ ...reply, user: "U_ALICE", text: "allowed steering" });
+  emit({
+    ...reply,
+    user: "U_ALICE",
+    subtype: "thread_broadcast",
+    text: "allowed steering",
+  });
 
   assert.deepEqual(changes, [
     {},
@@ -989,12 +994,27 @@ test("fetchIssueEvents returns a bounded page of authorized human steering repli
           { ts: "1700000000.000500", text: "!aside context only", user: "U_HUMAN" },
           { ts: "1700000000.000600", text: "steer left", user: "U_HUMAN" },
           { ts: "1700000000.000650", text: "steer right", user: "U_HUMAN" },
+          {
+            ts: "1700000000.000660",
+            text: "edited into steering",
+            user: "U_HUMAN",
+            edited: true,
+          },
           { ts: "1700000000.000675", text: "another bot", user: "U_OTHER_BOT", isBot: true },
           { ts: "1700000000.000700", text: "missing author" },
         ],
       },
     ],
   });
+  transport.getThread = async () => {
+    throw new Error("full thread recovery is not allowed");
+  };
+  const pageQueries: Array<{ afterTs: string; limit: number }> = [];
+  const getThreadPage = transport.getThreadPage.bind(transport);
+  transport.getThreadPage = async (channel, ts, query) => {
+    pageQueries.push({ afterTs: query.afterTs, limit: query.limit });
+    return getThreadPage(channel, ts, query);
+  };
   const client = new SlackTrackerClient(settings(), transport);
 
   const first = await client.fetchIssueEvents("C1:1700000000.000100", "1700000000.000200", {
@@ -1028,6 +1048,53 @@ test("fetchIssueEvents returns a bounded page of authorized human steering repli
     ],
     hasMore: false,
   });
+  assert.deepEqual(pageQueries, [
+    { afterTs: "1700000000.000200", limit: 200 },
+    { afterTs: "1700000000.000600", limit: 200 },
+  ]);
+});
+
+test("fetchIssueEvents pages past ineligible replies before returning steering", async () => {
+  const transport = new InMemorySlackTransport({ C1: [] });
+  const queries: Array<{ afterTs: string; cursor?: string }> = [];
+  transport.getThreadPage = (_channel, _ts, query) => {
+    queries.push({
+      afterTs: query.afterTs,
+      ...(query.cursor ? { cursor: query.cursor } : {}),
+    });
+    return Promise.resolve(
+      query.cursor === undefined
+        ? {
+            replies: [{ ts: "1700000000.000300", text: "status: In Progress", user: "U_BOT" }],
+            nextCursor: "PAGE_2",
+          }
+        : {
+            replies: [{ ts: "1700000000.000400", text: "continue here", user: "U_HUMAN" }],
+          },
+    );
+  };
+  const client = new SlackTrackerClient(settings(), transport);
+
+  const page = await client.fetchIssueEvents("C1:1700000000.000100", "1700000000.000200", {
+    maxEvents: 1,
+    maxBytes: 64 * 1024,
+  });
+
+  assert.deepEqual(page, {
+    events: [
+      {
+        authorizedForSteering: true,
+        ts: "1700000000.000400",
+        author: "U_HUMAN",
+        text: "continue here",
+      },
+    ],
+    hasMore: false,
+  });
+  assert.deepEqual(queries, [
+    { afterTs: "1700000000.000200" },
+    { afterTs: "1700000000.000200", cursor: "PAGE_2" },
+  ]);
 });
 
 test("fetchIssueEvents applies tracker.users authorization and the page byte limit", async () => {

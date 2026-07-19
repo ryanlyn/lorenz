@@ -34,6 +34,8 @@ the transport calls; they are not declared in the extension source.
 | ------------------- | ----------------------------------------------------------------------------------------------- |
 | `channels:history`  | Read message history in public channels (`conversations.history`, `conversations.replies`).     |
 | `groups:history`    | Read history in private channels.                                                               |
+| `im:history`        | Read direct-message history.                                                                    |
+| `mpim:history`      | Read multiparty direct-message history.                                                         |
 | `app_mentions:read` | Receive `app_mention` events when Socket Mode push wakeups are enabled.                         |
 | `reactions:read`    | Read reactions to derive fallback status and detect the bot's marker.                           |
 | `reactions:write`   | Add and remove the bot's own marker and status reactions (`reactions.add`, `reactions.remove`). |
@@ -50,8 +52,9 @@ after a reconnect or turn boundary, and the interval poll remains the safety net
 
 To receive Socket Mode wakeups, enable Event Subscriptions in the Slack app and subscribe to the bot
 events Lorenz watches: `app_mention`, `message.channels` for public channels, `message.groups` for
-private channels, plus `reaction_added` and `reaction_removed`. Socket Mode delivers those events
-over the WebSocket; the bot token still performs every read and write.
+private channels, `message.im` for direct messages, `message.mpim` for multiparty direct messages,
+plus `reaction_added` and `reaction_removed`. Socket Mode delivers those events over the WebSocket;
+the bot token still performs every read and write.
 
 The bot needs two distinct identifiers from the app, plus an optional Socket Mode token:
 
@@ -83,7 +86,7 @@ trackers:
 | Key                   | Env fallback        | Default                                                       | Meaning                                                                                                                               |
 | --------------------- | ------------------- | ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
 | `kind` / `provider`   |                     |                                                               | `tracker.kind: slack` selects the bundle; `trackers.slack.provider: slack` names the implementation.                                  |
-| `channels`            |                     |                                                               | Required. List of `C...` channel ids. Entries resolve `$VAR` references; an unresolved ref collapses to empty and is dropped.         |
+| `channels`            |                     |                                                               | Required. List of public (`C...`), private or multiparty (`G...`), or direct-message (`D...`) conversation ids. Entries resolve `$VAR` references; an unresolved ref collapses to empty and is dropped. |
 | `bot_user_id`         | `SLACK_BOT_USER_ID` |                                                               | Required. The bot's `U...` id. An empty string does not satisfy it.                                                                   |
 | `api_key`             | `SLACK_BOT_TOKEN`   |                                                               | The `xoxb-` bot token.                                                                                                                |
 | `app_token`           | `SLACK_APP_TOKEN`   |                                                               | Optional `xapp-` app-level token for Socket Mode wakeups and immediate live steering.                                                  |

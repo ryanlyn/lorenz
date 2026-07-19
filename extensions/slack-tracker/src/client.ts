@@ -196,6 +196,9 @@ const DEFAULT_REPLY_LOOKBACK_DAYS = 2;
 /** Entry cap for the per-issue mirror reconciliation cache (matches THREAD_STATE_CACHE_MAX). */
 const MIRRORED_STATES_MAX = 5_000;
 
+/** Bound on Slack API pages inspected by one recovery request. */
+const MAX_THREAD_RECOVERY_PAGES = 500;
+
 export class SlackTrackerClient implements RuntimeTrackerClient {
   private scanCache: { at: number; key: string; scan: SlackChannelScan } | null = null;
   /** Last state the reaction mirror was reconciled to, per issue (see healStatusMirror). */
@@ -229,11 +232,9 @@ export class SlackTrackerClient implements RuntimeTrackerClient {
 
   /**
    * Push capability (see {@link RuntimeTrackerClient.watch}). When an app-level token is
-   * configured, open a Slack Socket Mode connection so a watched mention/reply/reaction nudges the
-   * runtime to re-poll immediately - the dispatch path stays the pull-based scan, this only
-   * collapses the up-to-`polling.intervalMs` wait to ~instant. Returns `null` (pull-only, as
-   * before) when no app token is set or no channels are watched, so push is strictly opt-in and
-   * never changes behavior for existing single-token deployments.
+   * configured, open a Slack Socket Mode connection. Watched mentions and reactions nudge an
+   * immediate poll, while eligible thread replies also carry structured steering input. Returns
+   * `null` when no app token is set or no channels are watched, leaving the tracker pull-only.
    */
   watch(onChange: (change?: TrackerChange) => void): TrackerChangeStream | null {
     const { channels, appToken } = slackTrackerOptions(this.settings);
@@ -266,27 +267,47 @@ export class SlackTrackerClient implements RuntimeTrackerClient {
     if (!parts) return { events: [], hasMore: false };
     const [channel, threadTs] = parts;
     query.abortSignal?.throwIfAborted();
-    const eligible = (await this.transport.getThread(channel, threadTs, query.abortSignal))
-      .flatMap((reply) => {
-        const event = steeringEventForReply(reply, this.settings);
-        return event && compareSlackTs(event.ts, sinceTs) > 0 ? [event] : [];
-      })
-      .sort((left, right) => compareSlackTs(left.ts, right.ts));
     const events: TrackerIssueEvent[] = [];
     let bytes = 0;
-    for (const event of eligible) {
-      const bounded = boundTrackerIssueEventText(event, query.maxBytes);
-      if (!bounded) {
-        throw new Error(`Slack issue-event metadata exceeds the page byte limit: ${event.ts}`);
+    let cursor: string | undefined;
+    for (let pageIndex = 0; pageIndex < MAX_THREAD_RECOVERY_PAGES; pageIndex += 1) {
+      const page = await this.transport.getThreadPage(channel, threadTs, {
+        afterTs: sinceTs,
+        limit: 200,
+        ...(cursor ? { cursor } : {}),
+        ...(query.abortSignal ? { abortSignal: query.abortSignal } : {}),
+      });
+      for (let index = 0; index < page.replies.length; index += 1) {
+        const event = steeringEventForReply(page.replies[index]!, this.settings);
+        if (!event || compareSlackTs(event.ts, sinceTs) <= 0) continue;
+        const bounded = boundTrackerIssueEventText(event, query.maxBytes);
+        if (!bounded) {
+          throw new Error(`Slack issue-event metadata exceeds the page byte limit: ${event.ts}`);
+        }
+        const eventBytes = trackerIssueEventsBytes([bounded]);
+        if (bytes + eventBytes > query.maxBytes) {
+          return { events, hasMore: true };
+        }
+        events.push(bounded);
+        bytes += eventBytes;
+        if (events.length >= query.maxEvents) {
+          const hasUnexaminedReplies =
+            page.replies.slice(index + 1).some((reply) => {
+              const remaining = steeringEventForReply(reply, this.settings);
+              return remaining !== null && compareSlackTs(remaining.ts, sinceTs) > 0;
+            }) || page.nextCursor !== undefined;
+          return { events, hasMore: hasUnexaminedReplies };
+        }
       }
-      const eventBytes = trackerIssueEventsBytes([bounded]);
-      if (events.length >= query.maxEvents || bytes + eventBytes > query.maxBytes) {
-        return { events, hasMore: true };
-      }
-      events.push(bounded);
-      bytes += eventBytes;
+      cursor = page.nextCursor;
+      if (!cursor) return { events, hasMore: false };
     }
-    return { events, hasMore: false };
+    if (events.length === 0) {
+      throw new Error(
+        `Slack issue-event recovery exceeded ${MAX_THREAD_RECOVERY_PAGES} pages without progress`,
+      );
+    }
+    return { events, hasMore: true };
   }
 
   private changeForSocketPayload(payload: Record<string, unknown> | undefined): TrackerChange {
@@ -294,7 +315,8 @@ export class SlackTrackerClient implements RuntimeTrackerClient {
     if (!event || typeof event !== "object" || Array.isArray(event)) return {};
     const record = event as Record<string, unknown>;
     if (record.type !== "message" && record.type !== "app_mention") return {};
-    if (typeof record.subtype === "string") return {};
+    const subtype = typeof record.subtype === "string" ? record.subtype : null;
+    if (subtype !== null && subtype !== "thread_broadcast") return {};
     const channel = typeof record.channel === "string" ? record.channel : null;
     const ts = typeof record.ts === "string" ? record.ts : null;
     const threadTs = typeof record.thread_ts === "string" ? record.thread_ts : null;
@@ -497,7 +519,14 @@ function steeringEventForReply(
 ): TrackerIssueEvent | null {
   const { botUserId, users } = slackTrackerOptions(settings);
   if (!slackTsParts(reply.ts) || compareSlackTs(reply.ts, "0") <= 0) return null;
-  if (reply.user === undefined || reply.isBot === true || reply.user === botUserId) return null;
+  if (
+    reply.user === undefined ||
+    reply.isBot === true ||
+    reply.edited === true ||
+    reply.user === botUserId
+  ) {
+    return null;
+  }
   if (!isAllowedAuthor(reply.user, users)) return null;
   if (isAsideText(reply.text, botUserId)) return null;
   if (parseStatusCommand(reply.text, botUserId, settings) !== null) return null;

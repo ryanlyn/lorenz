@@ -812,6 +812,12 @@ test("getThread reads conversations.replies and drops the parent message", async
           { ts: "1.2", text: "first reply", user: "U_HUMAN" },
           { ts: "1.3", text: "second reply" },
           { ts: "1.4", text: "automation", user: "U_AUTOMATION", bot_id: "B1" },
+          {
+            ts: "1.5",
+            text: "edited reply",
+            user: "U_HUMAN",
+            edited: { user: "U_HUMAN", ts: "1.6" },
+          },
         ],
       }),
       { status: 200, headers: { "content-type": "application/json" } },
@@ -825,10 +831,47 @@ test("getThread reads conversations.replies and drops the parent message", async
     { ts: "1.2", text: "first reply", user: "U_HUMAN" },
     { ts: "1.3", text: "second reply" },
     { ts: "1.4", text: "automation", user: "U_AUTOMATION", isBot: true },
+    { ts: "1.5", text: "edited reply", user: "U_HUMAN", edited: true },
   ]);
   assert.match(calls[0]!.url, /\/conversations\.replies\?/);
   assert.match(calls[0]!.url, /channel=C1/);
   assert.match(calls[0]!.url, /ts=1\.1/);
+});
+
+test("getThreadPage requests only replies after the event cursor", async () => {
+  const calls: string[] = [];
+  const fetchImpl = (async (url: string | URL) => {
+    calls.push(String(url));
+    return new Response(
+      JSON.stringify({
+        ok: true,
+        messages: [
+          { ts: "1.1", text: "root" },
+          { ts: "1.4", text: "new reply", user: "U_HUMAN" },
+        ],
+        response_metadata: { next_cursor: "CURSOR_2" },
+      }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+  }) as typeof fetch;
+
+  const page = await new SlackWebTransport(settings(), fetchImpl).getThreadPage("C1", "1.1", {
+    afterTs: "1.3",
+    limit: 17,
+    cursor: "CURSOR_1",
+  });
+
+  assert.deepEqual(page, {
+    replies: [{ ts: "1.4", text: "new reply", user: "U_HUMAN" }],
+    nextCursor: "CURSOR_2",
+  });
+  const params = new URL(calls[0]!).searchParams;
+  assert.equal(params.get("channel"), "C1");
+  assert.equal(params.get("ts"), "1.1");
+  assert.equal(params.get("oldest"), "1.3");
+  assert.equal(params.get("inclusive"), "false");
+  assert.equal(params.get("limit"), "17");
+  assert.equal(params.get("cursor"), "CURSOR_1");
 });
 
 test("getThread propagates cancellation to the Slack request", async () => {

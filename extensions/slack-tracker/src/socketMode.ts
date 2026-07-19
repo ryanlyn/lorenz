@@ -55,10 +55,10 @@ export interface SlackSocketModeOptions {
 /**
  * Slack Socket Mode client: opens a WebSocket via `apps.connections.open` and invokes
  * {@link SlackSocketModeOptions.onChange} the instant a watched channel sees an `app_mention`,
- * a `message` (covers thread-reply mentions and human `!status` commands), or a reaction change.
- * This is Slack's recommended push transport - no public HTTP endpoint, just an app-level token -
- * and it lets the runtime dispatch immediately instead of waiting out the (deliberately
- * conservative) poll interval.
+ * a `message` (covers issue mentions, human commands, and eligible steering replies), or a
+ * reaction change. This is Slack's recommended push transport - no public HTTP endpoint, just an
+ * app-level token - and it lets the runtime react immediately instead of waiting out the
+ * deliberately conservative poll interval.
  *
  * The connection self-heals: Slack recycles Socket Mode connections periodically (a `disconnect`
  * frame precedes closure) and the network can drop, so a closed socket reconnects with capped

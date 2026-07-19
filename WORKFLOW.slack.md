@@ -52,7 +52,7 @@ polling:
   # internal customer-built apps than for restricted-tier apps), and each poll re-scans recent
   # channel history (bounded by scan_lookback_days above). Keep this interval conservative
   # (60s) so a busy channel does not trigger sustained 429s; watched channels should be dedicated
-  # and low-traffic. The 429/Retry-After backoff (each wait is now logged) and per-channel
+  # and low-traffic. The 429/Retry-After backoff (each wait is logged) and per-channel
   # poll_error handling cover transient limits on top of this; the runtime also emits a
   # poll_progress heartbeat so a long first scan is visible rather than silent.
   #
