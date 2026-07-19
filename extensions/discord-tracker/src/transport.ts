@@ -37,15 +37,73 @@ export interface DiscordChannelScan {
   mentions: DiscordMessage[];
 }
 
+export interface DiscordApplicationCommandOptionChoice {
+  name: string;
+  value: string;
+}
+
+export interface DiscordApplicationCommandOption {
+  type: number;
+  name: string;
+  description: string;
+  required?: boolean | undefined;
+  choices?: DiscordApplicationCommandOptionChoice[] | undefined;
+}
+
+export interface DiscordApplicationCommand {
+  type: number;
+  name: string;
+  description?: string | undefined;
+  options?: DiscordApplicationCommandOption[] | undefined;
+}
+
+export interface DiscordInteraction {
+  id: string;
+  applicationId: string;
+  token: string;
+  type: "command" | "component";
+  guildId: string;
+  channelId: string;
+  userId: string;
+  userBot: boolean;
+  commandName?: string | undefined;
+  commandOptions?: Record<string, string> | undefined;
+  customId?: string | undefined;
+  targetId?: string | undefined;
+}
+
+export interface DiscordInteractionResult {
+  title: string;
+  description: string;
+  color: number;
+}
+
+export interface DiscordWorkpad {
+  environment: string;
+  plan: string[];
+  acceptanceCriteria: string[];
+  validationCommands: string[];
+  progress: string[];
+}
+
 export interface DiscordTransport {
   scanChannels(channels: string[]): Promise<DiscordChannelScan>;
   getMessage(channelId: string, messageId: string): Promise<DiscordMessage | null>;
   getThread(messageId: string): Promise<DiscordMessage[]>;
+  getChannelParent(channelId: string): Promise<string | null>;
   ensureThread(root: DiscordMessage, name: string): Promise<string>;
   postThreadMessage(threadId: string, body: string): Promise<void>;
+  postWorkpad(threadId: string, workpad: DiscordWorkpad): Promise<string>;
   addReaction(channelId: string, messageId: string, emoji: string): Promise<void>;
   removeReaction(channelId: string, messageId: string, emoji: string): Promise<void>;
   getUser(userId: string): Promise<DiscordUser | null>;
+  registerApplicationCommands(commands: DiscordApplicationCommand[]): Promise<void>;
+  deferInteraction(interactionId: string, interactionToken: string): Promise<void>;
+  completeInteraction(
+    applicationId: string,
+    interactionToken: string,
+    result: DiscordInteractionResult,
+  ): Promise<void>;
   listAround(
     channelId: string,
     messageId: string,

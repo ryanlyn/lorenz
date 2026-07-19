@@ -1,8 +1,11 @@
 import type {
+  DiscordApplicationCommand,
   DiscordChannelScan,
+  DiscordInteractionResult,
   DiscordMessage,
   DiscordTransport,
   DiscordUser,
+  DiscordWorkpad,
 } from "./transport.js";
 
 /** Deterministic transport for tracker and tool tests. */
@@ -11,6 +14,15 @@ export class InMemoryDiscordTransport implements DiscordTransport {
   readonly addedReactions: Array<{ channelId: string; messageId: string; emoji: string }> = [];
   readonly removedReactions: Array<{ channelId: string; messageId: string; emoji: string }> = [];
   readonly createdThreads: string[] = [];
+  readonly postedWorkpads: Array<{ threadId: string; messageId: string; workpad: DiscordWorkpad }> =
+    [];
+  readonly registeredCommands: DiscordApplicationCommand[] = [];
+  readonly deferredInteractions: Array<{ interactionId: string; interactionToken: string }> = [];
+  readonly completedInteractions: Array<{
+    applicationId: string;
+    interactionToken: string;
+    result: DiscordInteractionResult;
+  }> = [];
 
   constructor(
     readonly messages: DiscordMessage[] = [],
@@ -36,6 +48,11 @@ export class InMemoryDiscordTransport implements DiscordTransport {
     return Promise.resolve([...(this.threads.get(messageId) ?? [])]);
   }
 
+  async getChannelParent(channelId: string): Promise<string | null> {
+    const root = this.messages.find((message) => message.id === channelId && message.hasThread);
+    return Promise.resolve(root?.channelId ?? null);
+  }
+
   async ensureThread(root: DiscordMessage): Promise<string> {
     if (!root.hasThread) {
       root.hasThread = true;
@@ -48,6 +65,12 @@ export class InMemoryDiscordTransport implements DiscordTransport {
   async postThreadMessage(threadId: string, body: string): Promise<void> {
     this.postedMessages.push({ threadId, body });
     return Promise.resolve();
+  }
+
+  async postWorkpad(threadId: string, workpad: DiscordWorkpad): Promise<string> {
+    const messageId = String(900000000000000000n + BigInt(this.postedWorkpads.length));
+    this.postedWorkpads.push({ threadId, messageId, workpad });
+    return Promise.resolve(messageId);
   }
 
   async addReaction(channelId: string, messageId: string, emoji: string): Promise<void> {
@@ -70,6 +93,25 @@ export class InMemoryDiscordTransport implements DiscordTransport {
 
   async getUser(userId: string): Promise<DiscordUser | null> {
     return Promise.resolve(this.users.get(userId) ?? null);
+  }
+
+  async registerApplicationCommands(commands: DiscordApplicationCommand[]): Promise<void> {
+    this.registeredCommands.splice(0, this.registeredCommands.length, ...commands);
+    return Promise.resolve();
+  }
+
+  async deferInteraction(interactionId: string, interactionToken: string): Promise<void> {
+    this.deferredInteractions.push({ interactionId, interactionToken });
+    return Promise.resolve();
+  }
+
+  async completeInteraction(
+    applicationId: string,
+    interactionToken: string,
+    result: DiscordInteractionResult,
+  ): Promise<void> {
+    this.completedInteractions.push({ applicationId, interactionToken, result });
+    return Promise.resolve();
   }
 
   async listAround(

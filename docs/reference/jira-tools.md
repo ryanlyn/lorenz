@@ -1,6 +1,6 @@
 # Agent tool catalog
 
-This page is the exhaustive reference for the tools an agent can call while working an issue: the Jira extension's `jira_*` family, the read-only query DSL it shares, and the other provider-specific tool packs (`linear`, `local`, `slack`). It is written for integrators who need exact tool names, argument shapes, and the rules for which tracker supports which tool. Operators who want the conceptual picture should start with [how it works](../how-it-works.md); extension authors building a new pack should read [tool-pack extensions](../extensions/tool-pack.md).
+This page is the exhaustive reference for the tools an agent can call while working an issue: the Jira extension's `jira_*` family, the read-only query DSL it shares, and the other provider-specific tool packs (`linear`, `local`, `slack`, `discord`). It is written for integrators who need exact tool names, argument shapes, and the rules for which tracker supports which tool. Operators who want the conceptual picture should start with [how it works](../how-it-works.md); extension authors building a new pack should read [tool-pack extensions](../extensions/tool-pack.md).
 
 Lorenz serves these tools over an HTTP MCP (Model Context Protocol) endpoint at `POST /mcp`. Every tool is self-documenting: a `tools/list` JSON-RPC call returns the live specs (name, description, JSON-Schema `inputSchema`) for exactly the tools mounted under the current workflow settings. The tables below mirror those specs, but the endpoint is the source of truth at runtime.
 
@@ -143,12 +143,13 @@ There is no `slack_create_issue`: only a human creating an @-mention starts a Sl
 
 ### `discord` pack
 
-Six tools over configured Discord guild channels. Every per-issue tool requires a configured bot
-user id, an allowed channel, and a source message that mentions that bot.
+Seven tools over configured Discord guild channels. Every per-issue tool requires a configured bot
+user id, an allowed channel, and a source message tracked by a mention or the bot's marker reaction.
 
 | Tool | Required args | Optional args | Returns |
 | --- | --- | --- | --- |
 | `discord_update_status` | `issueId`, `status` | | `{ ok: true, status }` |
+| `discord_workpad` | `issueId`, `environment`, `plan`, `acceptanceCriteria`, `validationCommands` | `progress` | `{ ok: true, messageId }` |
 | `discord_comment` | `issueId`, `body` | | `{ ok: true }` |
 | `discord_read_thread` | `issueId` | | source message, state, reactions, permalink, thread messages |
 | `discord_query` | | `channels`, `where`, `select`, `expand`, `order_by`, `limit`, `offset` | `{ rows, total }` |
@@ -162,7 +163,8 @@ claimed `Todo` issue receives a best-effort `👀` acknowledgement while agent s
 query channels are intersected with the configured allowlist, and outbound tool messages disable
 Discord mention parsing.
 
-There is no `discord_create_issue`: only a human mentioning the bot starts a Discord issue.
+There is no `discord_create_issue`: a human mentions the bot or chooses the native **Track with
+Lorenz** message command to start a Discord issue.
 
 ## Jira and the `jira-mcp` external tool map
 

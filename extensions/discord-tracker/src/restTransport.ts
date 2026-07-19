@@ -1,14 +1,18 @@
 import type { APIChannel, APIMessage, APIRole, APIUser } from "discord-api-types/v10";
 import { errorMessage, type Settings } from "@lorenz/domain";
 
-import { isAllowedAuthor, isBotMention } from "./mapping.js";
+import { isAllowedAuthor, isBotMarked, isBotMention } from "./mapping.js";
 import { discordEndpoint, discordTrackerOptions } from "./options.js";
 import type {
+  DiscordApplicationCommand,
   DiscordChannelScan,
+  DiscordInteractionResult,
   DiscordMessage,
   DiscordTransport,
   DiscordUser,
+  DiscordWorkpad,
 } from "./transport.js";
+import { workpadMessage } from "./workpad.js";
 
 const MAX_HISTORY_PAGES = 500;
 const MAX_THREAD_PAGES = 100;
@@ -52,6 +56,7 @@ export class DiscordRestTransport implements DiscordTransport {
   private readonly token: string;
   private readonly guildId: string | undefined;
   private readonly botUserId: string | undefined;
+  private readonly markerEmoji: string;
   private readonly allowedUsers: string[];
   private readonly maxHistoryPages: number;
   private readonly maxThreadPages: number;
@@ -62,7 +67,7 @@ export class DiscordRestTransport implements DiscordTransport {
   private botRoleIdsRequest: Promise<string[]> | null = null;
 
   constructor(
-    settings: Settings,
+    private readonly settings: Settings,
     private readonly fetchImpl: typeof fetch = fetch,
     private readonly sleep: Sleep = defaultSleep,
     private readonly logger: DiscordTrackerLogger = { warn: (message) => console.warn(message) },
@@ -73,6 +78,7 @@ export class DiscordRestTransport implements DiscordTransport {
     const tracker = discordTrackerOptions(settings);
     this.guildId = tracker.guildId;
     this.botUserId = tracker.botUserId;
+    this.markerEmoji = tracker.markerEmoji;
     this.allowedUsers = tracker.users;
     this.maxHistoryPages = options.maxHistoryPages ?? MAX_HISTORY_PAGES;
     this.maxThreadPages = options.maxThreadPages ?? MAX_THREAD_PAGES;
@@ -144,15 +150,16 @@ export class DiscordRestTransport implements DiscordTransport {
           continue;
         }
         if (
-          (isBotMention(message, this.botUserId) || message.mentionRoleIds.length > 0) &&
-          isAllowedAuthor(message, this.allowedUsers)
+          isBotMarked(message, this.markerEmoji) ||
+          ((isBotMention(message, this.botUserId) || message.mentionRoleIds.length > 0) &&
+            isAllowedAuthor(message, this.allowedUsers))
         ) {
           out.push(message);
         }
       }
-      if (messages.length < 100 || reachedFloor) return this.keepBotMentions(out);
+      if (messages.length < 100 || reachedFloor) return this.keepTrackedMessages(out);
       before = messages.at(-1)?.id;
-      if (!before) return this.keepBotMentions(out);
+      if (!before) return this.keepTrackedMessages(out);
       truncated = page === this.maxHistoryPages - 1;
     }
     if (truncated) {
@@ -161,7 +168,7 @@ export class DiscordRestTransport implements DiscordTransport {
           `${this.maxHistoryPages}-page safety cap; older mentions may be missed this poll`,
       );
     }
-    return this.keepBotMentions(out);
+    return this.keepTrackedMessages(out);
   }
 
   async getMessage(channelId: string, messageId: string): Promise<DiscordMessage | null> {
@@ -206,6 +213,16 @@ export class DiscordRestTransport implements DiscordTransport {
         "returning a truncated thread",
     );
     return this.withBotRoleContext(out);
+  }
+
+  async getChannelParent(channelId: string): Promise<string | null> {
+    const channel = await this.requestJson<APIChannel>(
+      "GET",
+      `/channels/${routeSegment(channelId)}`,
+      { idempotent: true, allowNotFound: true },
+    );
+    if (!channel || !("parent_id" in channel)) return null;
+    return typeof channel.parent_id === "string" ? channel.parent_id : null;
   }
 
   async ensureThread(root: DiscordMessage, name: string): Promise<string> {
@@ -256,6 +273,18 @@ export class DiscordRestTransport implements DiscordTransport {
     }
   }
 
+  async postWorkpad(threadId: string, workpad: DiscordWorkpad): Promise<string> {
+    const posted = await this.requestJson<APIMessage>(
+      "POST",
+      `/channels/${routeSegment(threadId)}/messages`,
+      {
+        body: workpadMessage(this.settings, workpad),
+        idempotent: false,
+      },
+    );
+    return posted.id;
+  }
+
   async addReaction(channelId: string, messageId: string, emoji: string): Promise<void> {
     await this.requestJson<undefined>(
       "PUT",
@@ -284,6 +313,75 @@ export class DiscordRestTransport implements DiscordTransport {
       ...(user.global_name !== undefined ? { globalName: user.global_name } : {}),
       ...(user.bot !== undefined ? { bot: user.bot } : {}),
     };
+  }
+
+  async registerApplicationCommands(commands: DiscordApplicationCommand[]): Promise<void> {
+    if (!this.guildId || commands.length === 0) return;
+    const application = await this.requestJson<{ id?: string }>("GET", "/oauth2/applications/@me", {
+      idempotent: true,
+    });
+    if (typeof application.id !== "string") {
+      throw new Error("discord application metadata did not include an application id");
+    }
+    const path =
+      `/applications/${routeSegment(application.id)}/guilds/` +
+      `${routeSegment(this.guildId)}/commands`;
+    const current = await this.requestJson<Array<Record<string, unknown>>>("GET", path, {
+      idempotent: true,
+    });
+    for (const command of commands) {
+      const existing = current.find(
+        (candidate) => candidate.name === command.name && candidate.type === command.type,
+      );
+      if (existing && applicationCommandMatches(existing, command)) continue;
+      await this.requestJson<Record<string, unknown>>("POST", path, {
+        body: command,
+        idempotent: false,
+      });
+    }
+  }
+
+  async deferInteraction(interactionId: string, interactionToken: string): Promise<void> {
+    await this.requestJson<undefined>(
+      "POST",
+      `/interactions/${routeSegment(interactionId)}/${routeSegment(interactionToken)}/callback`,
+      {
+        body: { type: 5, data: { flags: 1 << 6 } },
+        idempotent: false,
+        authenticated: false,
+        globalRateLimit: false,
+        displayPath: "/interactions/:id/:token/callback",
+        timeoutMs: 2500,
+        maxRetries: 0,
+      },
+    );
+  }
+
+  async completeInteraction(
+    applicationId: string,
+    interactionToken: string,
+    result: DiscordInteractionResult,
+  ): Promise<void> {
+    await this.requestJson<Record<string, unknown>>(
+      "PATCH",
+      `/webhooks/${routeSegment(applicationId)}/${routeSegment(interactionToken)}/messages/@original`,
+      {
+        body: {
+          embeds: [
+            {
+              title: result.title,
+              description: result.description,
+              color: result.color,
+            },
+          ],
+          allowed_mentions: { parse: [] },
+        },
+        idempotent: true,
+        authenticated: false,
+        globalRateLimit: false,
+        displayPath: "/webhooks/:application/:token/messages/@original",
+      },
+    );
   }
 
   async listAround(
@@ -320,11 +418,12 @@ export class DiscordRestTransport implements DiscordTransport {
     return this.withBotRoleContext(messages);
   }
 
-  private async keepBotMentions(messages: DiscordMessage[]): Promise<DiscordMessage[]> {
+  private async keepTrackedMessages(messages: DiscordMessage[]): Promise<DiscordMessage[]> {
     const contextualized = await this.withBotRoleContext(messages);
     return contextualized.filter(
       (message) =>
-        isBotMention(message, this.botUserId) && isAllowedAuthor(message, this.allowedUsers),
+        isBotMarked(message, this.markerEmoji) ||
+        (isBotMention(message, this.botUserId) && isAllowedAuthor(message, this.allowedUsers)),
     );
   }
 
@@ -356,30 +455,38 @@ export class DiscordRestTransport implements DiscordTransport {
   }
 
   private async requestJson<T>(
-    method: "GET" | "POST" | "PUT" | "DELETE",
+    method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE",
     path: string,
     options: {
       body?: unknown;
       idempotent: boolean;
       allowNotFound?: boolean | undefined;
+      authenticated?: boolean | undefined;
+      globalRateLimit?: boolean | undefined;
+      displayPath?: string | undefined;
+      timeoutMs?: number | undefined;
+      maxRetries?: number | undefined;
     },
   ): Promise<T> {
+    const displayPath = options.displayPath ?? path;
+    const maxRetries = options.maxRetries ?? MAX_RETRIES;
     for (let retryCount = 0; ; retryCount += 1) {
-      await this.waitForGlobalRateLimit();
+      if (options.globalRateLimit !== false) await this.waitForGlobalRateLimit();
       let response: Response;
       try {
+        const headers: Record<string, string> = {
+          "content-type": "application/json",
+          "user-agent": DISCORD_USER_AGENT,
+        };
+        if (options.authenticated !== false) headers.authorization = `Bot ${this.token}`;
         response = await this.fetchImpl(`${this.endpoint}${path}`, {
           method,
-          headers: {
-            authorization: `Bot ${this.token}`,
-            "content-type": "application/json",
-            "user-agent": DISCORD_USER_AGENT,
-          },
+          headers,
           ...(options.body !== undefined ? { body: JSON.stringify(options.body) } : {}),
-          signal: AbortSignal.timeout(30_000),
+          signal: AbortSignal.timeout(options.timeoutMs ?? 30_000),
         });
       } catch (error) {
-        throw new Error(`discord ${method} ${path} request failed: ${errorMessage(error)}`, {
+        throw new Error(`discord ${method} ${displayPath} request failed: ${errorMessage(error)}`, {
           cause: error,
         });
       }
@@ -391,8 +498,8 @@ export class DiscordRestTransport implements DiscordTransport {
       const retryable =
         response.status === 429 ||
         (options.idempotent && response.status >= 500 && response.status < 600);
-      if (!retryable || retryCount >= MAX_RETRIES) {
-        throw new DiscordApiError(response.status, method, path, responseBody);
+      if (!retryable || retryCount >= maxRetries) {
+        throw new DiscordApiError(response.status, method, displayPath, responseBody);
       }
 
       const delayMs = retryDelayMs(response, responseBody, retryCount);
@@ -400,8 +507,8 @@ export class DiscordRestTransport implements DiscordTransport {
         this.globalRateLimitUntil = Math.max(this.globalRateLimitUntil, this.now() + delayMs);
       }
       this.logger.warn(
-        `discord ${method} ${path}: HTTP ${response.status}; backing off ` +
-          `${Math.round(delayMs / 1000)}s before retry ${retryCount + 1}/${MAX_RETRIES}`,
+        `discord ${method} ${displayPath}: HTTP ${response.status}; backing off ` +
+          `${Math.round(delayMs / 1000)}s before retry ${retryCount + 1}/${maxRetries}`,
       );
       await this.sleep(delayMs);
     }
@@ -509,6 +616,25 @@ function discordErrorSuffix(body: unknown): string {
   if (typeof body !== "object" || body === null || !("message" in body)) return "";
   const message = (body as { message?: unknown }).message;
   return typeof message === "string" && message !== "" ? ` (${message})` : "";
+}
+
+function applicationCommandMatches(
+  existing: Record<string, unknown>,
+  desired: DiscordApplicationCommand,
+): boolean {
+  const comparableExisting = {
+    type: existing.type,
+    name: existing.name,
+    ...(desired.description !== undefined ? { description: existing.description } : {}),
+    ...(desired.options !== undefined ? { options: existing.options ?? [] } : {}),
+  };
+  const comparableDesired = {
+    type: desired.type,
+    name: desired.name,
+    ...(desired.description !== undefined ? { description: desired.description } : {}),
+    ...(desired.options !== undefined ? { options: desired.options } : {}),
+  };
+  return JSON.stringify(comparableExisting) === JSON.stringify(comparableDesired);
 }
 
 function normalizeThreadName(name: string, fallback: string): string {

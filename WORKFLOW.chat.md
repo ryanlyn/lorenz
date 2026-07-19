@@ -17,6 +17,7 @@ trackers:
       "👀": In Progress
       "✅": Done
       "❌": Cancelled
+    marker_emoji: "🤖"
     scan_lookback_days: 30
     active_states:
       - Todo
@@ -134,14 +135,15 @@ tracker selected by `tracker.kind`.
   status, progress, and human follow-up.
 - Lorenz acknowledges a newly dispatched `Todo` issue as `In Progress` before agent setup. If the
   thread is still `Todo`, set `In Progress` with `discord_update_status` before active work.
-- Post the plan, acceptance criteria, reproduction evidence, and milestones with
-  `discord_comment`.
+- Post the initial structured workpad with `discord_workpad`. Use `discord_comment` for later
+  evidence, decisions, and milestone updates.
 - Re-read the thread at milestones and immediately before finishing so late commands and scope
   changes are honored.
 - Set `Done` with `discord_update_status` only after implementation and validation are complete.
 - Reactions are a visual mirror, not the source of truth.
-- Humans create work by mentioning the bot in a configured source channel. There is no
-  `discord_create_issue`.
+- Humans create work by mentioning the bot in a configured source channel or by choosing
+  **Apps > Track with Lorenz** on an existing message. They change status with slash commands or
+  the native buttons on a Workpad. There is no `discord_create_issue`.
 
 ## Slack contract
 
@@ -167,7 +169,8 @@ tracker selected by `tracker.kind`.
    - `Todo`: move to `In Progress`, then begin execution.
    - `In Progress`: resume from the workspace and existing thread notes.
    - `Done` or `Cancelled`: do nothing and stop.
-4. Post a human-visible workpad containing:
+4. Post a human-visible workpad. Use `discord_workpad` for Discord and `slack_comment` for Slack.
+   Include:
    - a compact environment stamp: `<host>:<abs-workdir>@<short-sha>`
    - a hierarchical plan
    - acceptance criteria

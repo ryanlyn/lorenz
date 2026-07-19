@@ -16,6 +16,7 @@ import {
   InMemoryDiscordTransport,
   discordMessageToRow,
   stateFromThread,
+  type DiscordInteraction,
 } from "@lorenz/discord-tracker";
 
 test("maps bot mentions to normalized issues with labels and Discord permalinks", async () => {
@@ -59,7 +60,10 @@ test("uses configured active and terminal states instead of the default Discord 
   const command = message({
     id: "823456789012345678",
     channelId: root.id,
-    content: `<@${BOT_ID}> !done`,
+    content: "status: Closed",
+    authorId: BOT_ID,
+    authorBot: true,
+    mentionUserIds: [],
   });
   const client = new DiscordTrackerClient(settings, new InMemoryDiscordTransport([root]));
 
@@ -85,7 +89,110 @@ test("Gateway wake-ups invalidate the REST scan cache", async () => {
   gatewayChange?.();
   assert.equal(changes, 1);
   assert.equal((await client.fetchCandidateIssues()).length, 2);
+  await Promise.resolve();
+  assert.deepEqual(
+    transport.registeredCommands.map((command) => command.name),
+    ["status", "Track with Lorenz", "done", "cancel", "reopen", "start"],
+  );
   stream?.close();
+});
+
+test("slash commands defer immediately and write authoritative status in the issue thread", async () => {
+  const settings = parseDiscordConfig();
+  const root = message({ id: "723456789012345678", hasThread: true });
+  const transport = new InMemoryDiscordTransport([root]);
+  const client = new DiscordTrackerClient(settings, transport);
+
+  const changed = await client.handleInteraction(
+    interaction({ channelId: root.id, commandName: "done" }),
+  );
+
+  assert.equal(changed, true);
+  assert.deepEqual(transport.deferredInteractions, [
+    { interactionId: "623456789012345678", interactionToken: "interaction-token" },
+  ]);
+  assert.deepEqual(transport.postedMessages, [{ threadId: root.id, body: "status: Done" }]);
+  assert.deepEqual(transport.addedReactions, [
+    { channelId: CHANNEL_ID, messageId: root.id, emoji: "✅" },
+  ]);
+  assert.deepEqual(transport.completedInteractions[0]?.result, {
+    title: "Status updated",
+    description: "This issue is now **Done**.",
+    color: 0x57f287,
+  });
+});
+
+test("message context command tracks existing channel messages without requiring a mention", async () => {
+  const settings = parseDiscordConfig();
+  const root = message({
+    id: "723456789012345678",
+    content: "investigate the intermittent timeout",
+    mentionUserIds: [],
+  });
+  const transport = new InMemoryDiscordTransport([root]);
+  const client = new DiscordTrackerClient(settings, transport);
+
+  const changed = await client.handleInteraction(
+    interaction({ commandName: "Track with Lorenz", targetId: root.id }),
+  );
+
+  assert.equal(changed, true);
+  assert.deepEqual(transport.addedReactions, [
+    { channelId: CHANNEL_ID, messageId: root.id, emoji: "🤖" },
+  ]);
+  assert.deepEqual(transport.createdThreads, [root.id]);
+  assert.deepEqual(transport.postedMessages, [{ threadId: root.id, body: "status: Todo" }]);
+  transport.scanChannels = async () => {
+    throw new Error("the immediate interaction candidate must not wait for a historical scan");
+  };
+  assert.deepEqual(
+    (await client.fetchCandidateIssues()).map((issue) => issue.id),
+    [`${CHANNEL_ID}:${root.id}`],
+  );
+  assert.equal(
+    (await client.fetchIssuesByIds([`${CHANNEL_ID}:${root.id}`]))[0]?.title,
+    "investigate the intermittent timeout",
+  );
+});
+
+test("message context command is idempotent for an already tracked message", async () => {
+  const settings = parseDiscordConfig();
+  const root = message({
+    id: "723456789012345678",
+    content: "investigate the intermittent timeout",
+    mentionUserIds: [],
+    reactions: [{ emoji: "🤖", me: true }],
+    hasThread: true,
+  });
+  const transport = new InMemoryDiscordTransport([root], new Map([[root.id, []]]));
+  const client = new DiscordTrackerClient(settings, transport);
+
+  const changed = await client.handleInteraction(
+    interaction({ commandName: "Track with Lorenz", targetId: root.id }),
+  );
+
+  assert.equal(changed, false);
+  assert.deepEqual(transport.addedReactions, []);
+  assert.deepEqual(transport.postedMessages, []);
+  assert.equal(transport.completedInteractions[0]?.result.title, "Already tracked");
+});
+
+test("slash commands fail privately outside an issue thread and do not mutate state", async () => {
+  const transport = new InMemoryDiscordTransport();
+  const client = new DiscordTrackerClient(parseDiscordConfig(), transport);
+
+  const changed = await client.handleInteraction(interaction({ commandName: "cancel" }));
+
+  assert.equal(changed, false);
+  assert.deepEqual(transport.postedMessages, []);
+  assert.equal(
+    transport.completedInteractions[0]?.result.title,
+    "Lorenz could not apply that action",
+  );
+  assert.match(
+    transport.completedInteractions[0]?.result.description ?? "",
+    /inside a Lorenz issue thread/,
+  );
 });
 
 test("issue fetches reject mismatched transport responses", async () => {
@@ -129,42 +236,79 @@ test("uses the native thread as authoritative state and filters candidate states
   assert.equal((await client.fetchIssuesByIds([`${CHANNEL_ID}:${done.id}`]))[0]?.state, "Done");
 });
 
-test("human commands transition state and a later bare mention reopens terminal work", () => {
+test("a later bare mention continues terminal work in progress", () => {
   const settings = parseDiscordConfig();
   const root = message({
     id: "723456789012345678",
     reactions: [{ emoji: "✅", me: true }],
   });
-  const command = message({
-    id: "823456789012345678",
-    channelId: root.id,
-    content: `<@${BOT_ID}> !cancel`,
-  });
-  assert.equal(stateFromThread(root, [command], settings), "Cancelled");
-
   const reopen = message({
-    id: "923456789012345678",
+    id: "823456789012345678",
     channelId: root.id,
     content: `<@${BOT_ID}> the failure is still happening`,
     authorId: USER_ID,
   });
-  assert.equal(stateFromThread(root, [command, reopen], settings), "Todo");
+  assert.equal(stateFromThread(root, [reopen], settings), "In Progress");
 });
 
-test("human status commands accept the bot managed role mention", () => {
+test("a bare managed-role mention also continues terminal work in progress", () => {
   const settings = parseDiscordConfig();
-  const root = message({ id: "723456789012345678" });
-  const command = message({
+  const root = message({
+    id: "723456789012345678",
+    reactions: [{ emoji: "✅", me: true }],
+  });
+  const reopen = message({
     id: "823456789012345678",
     channelId: root.id,
-    content: `<@&${BOT_ROLE_ID}> !cancel`,
+    content: `<@&${BOT_ROLE_ID}> this needs another pass`,
     mentionUserIds: [],
     mentionRoleIds: [BOT_ROLE_ID],
     botRoleIds: [BOT_ROLE_ID],
   });
 
-  assert.equal(stateFromThread(root, [command], settings), "Cancelled");
+  assert.equal(stateFromThread(root, [reopen], settings), "In Progress");
 });
+
+test("a bare mention folds todo work into progress", () => {
+  const settings = parseDiscordConfig();
+  const root = message({ id: "723456789012345678" });
+  const continuation = message({
+    id: "823456789012345678",
+    channelId: root.id,
+    content: `<@${BOT_ID}> keep going with the investigation`,
+  });
+
+  assert.equal(stateFromThread(root, [continuation], settings), "In Progress");
+});
+
+test("a bare mention uses the configured in-progress state", () => {
+  const settings = parseDiscordConfig({
+    active_states: ["Open", "Working"],
+    terminal_states: ["Closed"],
+  });
+  const root = message({ id: "723456789012345678" });
+  const continuation = message({
+    id: "823456789012345678",
+    channelId: root.id,
+    content: `<@${BOT_ID}> continue`,
+  });
+
+  assert.equal(stateFromThread(root, [continuation], settings), "Working");
+});
+
+test("a bare mention from a disallowed author does not change state", () => {
+  const settings = parseDiscordConfig({ users: ["623456789012345678"] });
+  const root = message({ id: "723456789012345678" });
+  const continuation = message({
+    id: "823456789012345678",
+    channelId: root.id,
+    content: `<@${BOT_ID}> continue`,
+    authorId: USER_ID,
+  });
+
+  assert.equal(stateFromThread(root, [continuation], settings), "Todo");
+});
+
 test("only bot-owned reactions provide the fallback state", () => {
   const settings = parseDiscordConfig();
   const humanReaction = message({
@@ -200,12 +344,14 @@ test("polling resolves thread state and heals the visual reaction mirror in the 
 
   const [issue] = await client.fetchCandidateIssues();
 
-  assert.equal(issue?.state, "Todo");
+  assert.equal(issue?.state, "In Progress");
   await client.flushStatusMirrorHeals();
   assert.deepEqual(transport.removedReactions, [
     { channelId: CHANNEL_ID, messageId: root.id, emoji: "✅" },
   ]);
-  assert.deepEqual(transport.addedReactions, []);
+  assert.deepEqual(transport.addedReactions, [
+    { channelId: CHANNEL_ID, messageId: root.id, emoji: "👀" },
+  ]);
 });
 
 test("dispatch acknowledgement immediately adds the In Progress reaction", async () => {
@@ -253,12 +399,12 @@ test("a blocked reaction heal never delays candidate discovery", async () => {
   const candidates = await client.fetchCandidateIssues();
   assert.deepEqual(
     candidates.map((issue) => [issue.id, issue.state]),
-    [[`${CHANNEL_ID}:${root.id}`, "Todo"]],
+    [[`${CHANNEL_ID}:${root.id}`, "In Progress"]],
   );
 
   releaseRemove();
   await client.flushStatusMirrorHeals();
-  assert.deepEqual(root.reactions, []);
+  assert.deepEqual(root.reactions, [{ emoji: "👀", me: true }]);
 });
 
 test("reuses thread state until Discord reports a newer thread message", async () => {
@@ -335,3 +481,17 @@ test("by-id reconciliation bypasses cached thread state", async () => {
   assert.equal((await client.fetchIssuesByIds([`${CHANNEL_ID}:${root.id}`]))[0]?.state, "Done");
   assert.equal(reads, 2);
 });
+
+function interaction(overrides: Partial<DiscordInteraction> = {}): DiscordInteraction {
+  return {
+    id: "623456789012345678",
+    applicationId: "323456789012345678",
+    token: "interaction-token",
+    type: "command",
+    guildId: GUILD_ID,
+    channelId: CHANNEL_ID,
+    userId: USER_ID,
+    userBot: false,
+    ...overrides,
+  };
+}

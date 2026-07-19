@@ -66,6 +66,82 @@ test("Gateway identifies with minimal message intents and filters wake-ups by ch
   stream.close();
 });
 
+test("Gateway forwards slash and component interactions without waiting for a poll", () => {
+  const socket = new FakeWebSocket();
+  const interactions: unknown[] = [];
+  const changes = vi.fn();
+  const stream = new DiscordGatewayChangeStream({
+    token: "token",
+    guildId: GUILD_ID,
+    botUserId: BOT_ID,
+    channels: new Set([CHANNEL_ID]),
+    trackedThreadIds: new Set(),
+    onChange: changes,
+    onInteraction: (interaction) => interactions.push(interaction),
+    createWebSocket: () => socket as unknown as WebSocket,
+  });
+  stream.start();
+
+  socket.receive({
+    op: 0,
+    t: "INTERACTION_CREATE",
+    s: 1,
+    d: {
+      id: "623456789012345678",
+      application_id: "323456789012345678",
+      token: "secret-token",
+      type: 2,
+      guild_id: GUILD_ID,
+      channel_id: "723456789012345678",
+      member: { user: { id: "523456789012345678", bot: false } },
+      data: { type: 1, name: "status", options: [{ type: 3, name: "state", value: "Done" }] },
+    },
+  });
+  socket.receive({
+    op: 0,
+    t: "INTERACTION_CREATE",
+    s: 2,
+    d: {
+      id: "623456789012345679",
+      application_id: "323456789012345678",
+      token: "secret-token-2",
+      type: 3,
+      guild_id: GUILD_ID,
+      channel_id: "723456789012345678",
+      member: { user: { id: "523456789012345678", bot: false } },
+      data: { component_type: 2, custom_id: "lorenz:status:Cancelled" },
+    },
+  });
+
+  assert.deepEqual(interactions, [
+    {
+      id: "623456789012345678",
+      applicationId: "323456789012345678",
+      token: "secret-token",
+      type: "command",
+      guildId: GUILD_ID,
+      channelId: "723456789012345678",
+      userId: "523456789012345678",
+      userBot: false,
+      commandName: "status",
+      commandOptions: { state: "Done" },
+    },
+    {
+      id: "623456789012345679",
+      applicationId: "323456789012345678",
+      token: "secret-token-2",
+      type: "component",
+      guildId: GUILD_ID,
+      channelId: "723456789012345678",
+      userId: "523456789012345678",
+      userBot: false,
+      customId: "lorenz:status:Cancelled",
+    },
+  ]);
+  assert.equal(changes.mock.calls.length, 0);
+  stream.close();
+});
+
 test("Gateway resumes with the last sequence after a reconnectable close", () => {
   vi.useFakeTimers();
   const sockets: FakeWebSocket[] = [];

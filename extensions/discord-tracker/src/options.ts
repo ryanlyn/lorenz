@@ -3,6 +3,7 @@ import { isRecord } from "@lorenz/domain";
 import { stringListOption, stringOption } from "@lorenz/tracker-sdk";
 
 export const DISCORD_DEFAULT_ENDPOINT = "https://discord.com/api/v10";
+export const DISCORD_DEFAULT_MARKER_EMOJI = "🤖";
 
 export interface DiscordTrackerOptions {
   /** Discord guild containing every watched channel. */
@@ -11,6 +12,8 @@ export interface DiscordTrackerOptions {
   channels: string[];
   /** Discord user id of the bot identity. */
   botUserId?: string | undefined;
+  /** Bot-owned reaction that keeps context-menu tracked messages discoverable. */
+  markerEmoji: string;
   /** Optional user-id allowlist for issue authors. Empty permits any non-bot author. */
   users: string[];
   /** Discord emoji key to workflow-state overrides, merged over the defaults. */
@@ -23,11 +26,13 @@ export function discordTrackerOptions(settings: Settings): DiscordTrackerOptions
   const options = settings.tracker.options;
   const guildId = stringOption(options, "guildId");
   const botUserId = stringOption(options, "botUserId");
+  const markerEmoji = stringOption(options, "markerEmoji") ?? DISCORD_DEFAULT_MARKER_EMOJI;
   const emojiStates = emojiStatesValue(options.emojiStates);
   const scanLookbackDays = numberOption(options, "scanLookbackDays");
   return {
     channels: stringListOption(options, "channels") ?? [],
     users: stringListOption(options, "users") ?? [],
+    markerEmoji,
     ...(guildId !== undefined ? { guildId } : {}),
     ...(botUserId !== undefined ? { botUserId } : {}),
     ...(emojiStates !== undefined ? { emojiStates } : {}),

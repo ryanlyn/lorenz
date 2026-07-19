@@ -45,6 +45,7 @@ test("parses Discord ids, emoji states, and environment fallbacks", () => {
     botUserId: BOT_ID,
     users: [USER_ID],
     emojiStates: { "🚀": "Shipped" },
+    markerEmoji: "🤖",
     scanLookbackDays: 30,
   });
 });

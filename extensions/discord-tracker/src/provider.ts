@@ -20,6 +20,7 @@ export const discordTrackerProvider: TrackerProvider = {
   configAliases: {
     guild_id: "guildId",
     bot_user_id: "botUserId",
+    marker_emoji: "markerEmoji",
     emoji_states: "emojiStates",
     scan_lookback_days: "scanLookbackDays",
   },
@@ -28,7 +29,15 @@ export const discordTrackerProvider: TrackerProvider = {
   parseOptions(options, context) {
     rejectUnknownOptions(
       options,
-      ["guildId", "channels", "botUserId", "users", "emojiStates", "scanLookbackDays"],
+      [
+        "guildId",
+        "channels",
+        "botUserId",
+        "markerEmoji",
+        "users",
+        "emojiStates",
+        "scanLookbackDays",
+      ],
       "discord",
     );
     const guildId = context.resolveSecret?.(stringOption(options, "guildId"), "DISCORD_GUILD_ID");
@@ -38,12 +47,14 @@ export const discordTrackerProvider: TrackerProvider = {
     );
     const channels = resolveIdList(options, "channels", context.env);
     const users = resolveIdList(options, "users", context.env, true);
+    const markerEmoji = stringOption(options, "markerEmoji");
     const emojiStates = emojiStatesValue(options.emojiStates);
     const scanLookbackDays = numberOption(options, "scanLookbackDays");
     return {
       ...(guildId ? { guildId } : {}),
       ...(channels.length > 0 ? { channels } : {}),
       ...(botUserId ? { botUserId } : {}),
+      ...(markerEmoji ? { markerEmoji } : {}),
       ...(users.length > 0 ? { users } : {}),
       ...(emojiStates !== undefined ? { emojiStates } : {}),
       ...(scanLookbackDays !== undefined ? { scanLookbackDays } : {}),

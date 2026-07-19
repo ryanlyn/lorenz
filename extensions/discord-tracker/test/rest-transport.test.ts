@@ -11,7 +11,7 @@ import {
   parseDiscordConfig,
 } from "./helpers.js";
 
-import { chunkDiscordText, DiscordRestTransport } from "@lorenz/discord-tracker";
+import { chunkDiscordText, DiscordRestTransport, workpadMessage } from "@lorenz/discord-tracker";
 
 test("REST scans paginate Discord history and enforce exact bot and author ids", async () => {
   const settings = parseDiscordConfig({ users: [USER_ID] });
@@ -116,6 +116,33 @@ test("REST recognizes the configured bot managed role and rejects unrelated role
   );
 });
 
+test("REST discovers messages marked by the bot even when the source has no mention", async () => {
+  const marked = rawMessage({
+    id: "799999999999999999",
+    mentions: [],
+    content: "track this existing message",
+    reactions: [{ name: "🤖", me: true }],
+  });
+  const unmarked = rawMessage({
+    id: "799999999999999998",
+    mentions: [],
+    content: "ordinary channel chatter",
+    reactions: [{ name: "🤖", me: false }],
+  });
+  const fetchMock = vi.fn().mockResolvedValueOnce(jsonResponse([marked, unmarked]));
+  const transport = new DiscordRestTransport(
+    parseDiscordConfig(),
+    fetchMock as unknown as typeof fetch,
+  );
+
+  const scan = await transport.scanChannels([CHANNEL_ID]);
+
+  assert.deepEqual(
+    scan.mentions.map((candidate) => candidate.id),
+    [marked.id],
+  );
+});
+
 test("REST uses exponential backoff when a retryable response omits Retry-After", async () => {
   const sleep = vi.fn(async () => {});
   const fetchMock = vi.fn(async () => jsonResponse({ message: "unavailable" }, 503));
@@ -167,6 +194,98 @@ test("REST creates the source-message thread and suppresses outbound mentions", 
   });
 });
 
+test("REST posts the Workpad using Components V2 and suppressed mentions", async () => {
+  const settings = parseDiscordConfig();
+  const fetchMock = vi
+    .fn()
+    .mockResolvedValueOnce(jsonResponse(rawMessage({ id: "823456789012345678" })));
+  const transport = new DiscordRestTransport(settings, fetchMock as unknown as typeof fetch);
+  const workpad = {
+    environment: "host:/workspace@abc1234",
+    plan: ["Reproduce", "Implement"],
+    acceptanceCriteria: ["Native controls work"],
+    validationCommands: ["mise run check"],
+    progress: [],
+  };
+
+  assert.equal(await transport.postWorkpad("723456789012345678", workpad), "823456789012345678");
+  const request = fetchMock.mock.calls[0];
+  assert.deepEqual(
+    JSON.parse(String((request?.[1] as RequestInit).body)),
+    workpadMessage(settings, workpad),
+  );
+});
+
+test("REST registers guild commands idempotently and acknowledges interactions without bot auth", async () => {
+  const settings = parseDiscordConfig();
+  const command = { type: 1, name: "done", description: "Mark this issue done" };
+  const fetchMock = vi
+    .fn()
+    .mockResolvedValueOnce(jsonResponse({ id: "323456789012345678" }))
+    .mockResolvedValueOnce(jsonResponse([]))
+    .mockResolvedValueOnce(jsonResponse({ id: "command-id", ...command }))
+    .mockResolvedValueOnce(new Response(null, { status: 204 }))
+    .mockResolvedValueOnce(jsonResponse({ id: "response-id" }));
+  const transport = new DiscordRestTransport(settings, fetchMock as unknown as typeof fetch);
+
+  await transport.registerApplicationCommands([command]);
+  await transport.deferInteraction("623456789012345678", "interaction-token");
+  await transport.completeInteraction("323456789012345678", "interaction-token", {
+    title: "Status updated",
+    description: "This issue is now **Done**.",
+    color: 0x57f287,
+  });
+
+  const registerRequest = fetchMock.mock.calls[2];
+  assert.equal((registerRequest?.[1] as RequestInit).method, "POST");
+  assert.deepEqual(JSON.parse(String((registerRequest?.[1] as RequestInit).body)), command);
+
+  const deferRequest = fetchMock.mock.calls[3];
+  assert.equal(
+    String(deferRequest?.[0]),
+    "https://discord.com/api/v10/interactions/623456789012345678/interaction-token/callback",
+  );
+  const deferHeaders = (deferRequest?.[1] as RequestInit).headers as Record<string, string>;
+  assert.equal(deferHeaders.authorization, undefined);
+  assert.deepEqual(JSON.parse(String((deferRequest?.[1] as RequestInit).body)), {
+    type: 5,
+    data: { flags: 64 },
+  });
+
+  const completeRequest = fetchMock.mock.calls[4];
+  assert.equal((completeRequest?.[1] as RequestInit).method, "PATCH");
+  assert.equal(
+    ((completeRequest?.[1] as RequestInit).headers as Record<string, string>).authorization,
+    undefined,
+  );
+  assert.deepEqual(JSON.parse(String((completeRequest?.[1] as RequestInit).body)), {
+    embeds: [
+      {
+        title: "Status updated",
+        description: "This issue is now **Done**.",
+        color: 0x57f287,
+      },
+    ],
+    allowed_mentions: { parse: [] },
+  });
+});
+
+test("REST does not rewrite application commands that already match", async () => {
+  const command = { type: 1, name: "done", description: "Mark this issue done" };
+  const fetchMock = vi
+    .fn()
+    .mockResolvedValueOnce(jsonResponse({ id: "323456789012345678" }))
+    .mockResolvedValueOnce(jsonResponse([{ id: "command-id", ...command }]));
+  const transport = new DiscordRestTransport(
+    parseDiscordConfig(),
+    fetchMock as unknown as typeof fetch,
+  );
+
+  await transport.registerApplicationCommands([command]);
+
+  assert.equal(fetchMock.mock.calls.length, 2);
+});
+
 test("Discord message chunking respects the 2000-character limit and Unicode code points", () => {
   const chunks = chunkDiscordText(`${"a".repeat(1998)}\n${"🦀".repeat(10)}`);
   assert.equal(chunks.length, 2);
@@ -192,6 +311,7 @@ function rawMessage(options: {
   mentions?: string[];
   mentionRoles?: string[];
   content?: string;
+  reactions?: Array<{ name: string; me: boolean }>;
 }) {
   return {
     id: options.id,
@@ -219,6 +339,11 @@ function rawMessage(options: {
     embeds: [],
     pinned: false,
     type: 0,
+    reactions: options.reactions?.map((reaction) => ({
+      count: 1,
+      me: reaction.me,
+      emoji: { id: null, name: reaction.name },
+    })),
   };
 }
 

@@ -24,6 +24,10 @@ export function isAllowedAuthor(message: DiscordMessage, allowedUsers: string[])
   return message.authorId !== undefined && allowedUsers.includes(message.authorId);
 }
 
+export function isBotMarked(message: DiscordMessage, markerEmoji: string): boolean {
+  return message.reactions.some((reaction) => reaction.me && reaction.emoji === markerEmoji);
+}
+
 export function stripLeadingMention(
   text: string,
   botUserId?: string,

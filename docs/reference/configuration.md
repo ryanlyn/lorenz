@@ -192,6 +192,7 @@ bot token. `assignee` is rejected for this kind.
 | `api_key` | string (secret) | env `DISCORD_BOT_TOKEN` | Bot token for REST and Gateway authentication. |
 | `endpoint` | string | `https://discord.com/api/v10` | Discord REST API base URL. |
 | `emoji_states` | map | `{👀: In Progress, ✅: Done, ❌: Cancelled}` | Emoji-to-state map merged over the defaults. |
+| `marker_emoji` | string | `🤖` | Bot-owned reaction that marks a context-menu tracked message. |
 | `scan_lookback_days` | number | `0` | Fixed trailing candidate scan window. Zero is unbounded. |
 
 ### `memory`

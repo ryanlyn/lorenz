@@ -1,6 +1,8 @@
 import WebSocket, { type RawData } from "ws";
 import type { TrackerChangeStream } from "@lorenz/domain";
 
+import type { DiscordInteraction } from "./transport.js";
+
 const GATEWAY_URL = "wss://gateway.discord.gg/?v=10&encoding=json";
 const READY_STATE_OPEN = 1;
 const MAX_RECONNECT_ATTEMPTS = 50;
@@ -51,6 +53,7 @@ export interface DiscordGatewayOptions {
   channels: ReadonlySet<string>;
   trackedThreadIds: ReadonlySet<string>;
   onChange: () => void;
+  onInteraction?: ((interaction: DiscordInteraction) => void) | undefined;
   logger?: DiscordGatewayLogger | undefined;
   createWebSocket?: DiscordWebSocketFactory | undefined;
   random?: (() => number) | undefined;
@@ -67,6 +70,7 @@ export class DiscordGatewayChangeStream implements TrackerChangeStream {
   private readonly channels: ReadonlySet<string>;
   private readonly trackedThreadIds: ReadonlySet<string>;
   private readonly onChange: () => void;
+  private readonly onInteraction: ((interaction: DiscordInteraction) => void) | undefined;
   private readonly logger: DiscordGatewayLogger;
   private readonly createWebSocket: DiscordWebSocketFactory;
   private readonly random: () => number;
@@ -89,6 +93,7 @@ export class DiscordGatewayChangeStream implements TrackerChangeStream {
     this.channels = options.channels;
     this.trackedThreadIds = options.trackedThreadIds;
     this.onChange = options.onChange;
+    this.onInteraction = options.onInteraction;
     this.logger = options.logger ?? { warn: (message) => console.warn(message) };
     this.createWebSocket =
       options.createWebSocket ?? ((url) => new WebSocket(url, { maxPayload: MAX_PAYLOAD_BYTES }));
@@ -196,6 +201,11 @@ export class DiscordGatewayChangeStream implements TrackerChangeStream {
     if (payload.t === "RESUMED") {
       this.reconnectAttempts = 0;
       this.consecutiveResumeFailures = 0;
+      return;
+    }
+    if (payload.t === "INTERACTION_CREATE") {
+      const interaction = parseInteraction(payload.d);
+      if (interaction?.guildId === this.guildId) this.onInteraction?.(interaction);
       return;
     }
     if (!RELEVANT_EVENTS.has(payload.t ?? "") || !isRecord(payload.d)) return;
@@ -326,6 +336,77 @@ const RELEVANT_EVENTS = new Set([
 function readHeartbeatInterval(value: unknown): number {
   if (!isRecord(value) || typeof value.heartbeat_interval !== "number") return 45_000;
   return Math.max(1000, value.heartbeat_interval);
+}
+
+function parseInteraction(value: unknown): DiscordInteraction | null {
+  if (!isRecord(value) || !isRecord(value.data)) return null;
+  const id = stringField(value, "id");
+  const applicationId = stringField(value, "application_id");
+  const token = stringField(value, "token");
+  const guildId = stringField(value, "guild_id");
+  const channelId = stringField(value, "channel_id");
+  const type = value.type;
+  const user =
+    isRecord(value.member) && isRecord(value.member.user) ? value.member.user : value.user;
+  if (
+    !id ||
+    !applicationId ||
+    !token ||
+    !guildId ||
+    !channelId ||
+    !isRecord(user) ||
+    (type !== 2 && type !== 3)
+  ) {
+    return null;
+  }
+  const userId = stringField(user, "id");
+  if (!userId) return null;
+
+  if (type === 2) {
+    const commandName = stringField(value.data, "name");
+    if (!commandName) return null;
+    return {
+      id,
+      applicationId,
+      token,
+      type: "command",
+      guildId,
+      channelId,
+      userId,
+      userBot: user.bot === true,
+      commandName,
+      commandOptions: interactionOptions(value.data.options),
+      ...(typeof value.data.target_id === "string" ? { targetId: value.data.target_id } : {}),
+    };
+  }
+
+  const customId = stringField(value.data, "custom_id");
+  if (!customId) return null;
+  return {
+    id,
+    applicationId,
+    token,
+    type: "component",
+    guildId,
+    channelId,
+    userId,
+    userBot: user.bot === true,
+    customId,
+  };
+}
+
+function interactionOptions(value: unknown): Record<string, string> {
+  if (!Array.isArray(value)) return {};
+  const out: Record<string, string> = {};
+  for (const option of value) {
+    if (!isRecord(option) || typeof option.name !== "string") continue;
+    if (typeof option.value === "string") out[option.name] = option.value;
+  }
+  return out;
+}
+
+function stringField(value: Record<string, unknown>, key: string): string | null {
+  return typeof value[key] === "string" ? value[key] : null;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

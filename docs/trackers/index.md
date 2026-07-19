@@ -50,7 +50,7 @@ An unknown provider fails fast at startup. `TrackerRegistry.require` throws
 | `jira-mcp` | Jira via an external MCP server | A separate MCP server already fronts your Jira; Lorenz proxies through it. |
 | `local` | Filesystem Markdown board | You want to try Lorenz with no external tracker, or drive it from files in the repo. |
 | `slack` | Slack channels and threads | Work arrives as `@bot` mentions in Slack rather than as tracker issues. |
-| `discord` | Discord guild channels and native threads | Work arrives as bot or managed-role mentions. |
+| `discord` | Discord guild channels and native threads | Work arrives through mentions or the native message command. |
 | `memory` | In-process fixture | Tests and dry runs; issues come from an env var, no network, no agent tools. |
 
 Each provider owns its own config slice and its own page:
@@ -134,6 +134,7 @@ Every tracker that exposes agent tools owns a pack and mounts it through the pro
 | `linear` | `linear` | `linear_graphql` |
 | `local` | `local` | `local_query`, `local_read_issue`, `local_update_status`, `local_comment`, `local_create_issue` |
 | `slack` | `slack` | `slack_update_status`, `slack_comment`, `slack_read_thread`, `slack_query`, `slack_user_info`, `slack_channel_context` |
+| `discord` | `discord` | `discord_update_status`, `discord_workpad`, `discord_comment`, `discord_read_thread`, `discord_query`, `discord_user_info`, `discord_channel_context` |
 
 The `memory` tracker declares no `defaultToolPacks`, so it ships no tools. The pack name (`linear`)
 stays distinct from the provider kind (`linear`) even when the strings match. Name a pack in the

@@ -1,6 +1,13 @@
 import type { Settings } from "@lorenz/domain";
 
-import { isAllowedAuthor, isBotMention, emojiForState, statusEmojiMap } from "./mapping.js";
+import {
+  emojiForState,
+  isAllowedAuthor,
+  isBotMarked,
+  isBotMention,
+  statusEmojiMap,
+  stripLeadingMention,
+} from "./mapping.js";
 import { discordTrackerOptions } from "./options.js";
 import { BOT_STATUS_PREFIX, resolveStateName } from "./threadState.js";
 import type { DiscordMessage, DiscordTransport } from "./transport.js";
@@ -31,8 +38,9 @@ export async function requireTrackedMessage(
   if (message.channelId !== channelId || message.id !== messageId) {
     throw new Error(`Discord returned a mismatched message for ${channelId}:${messageId}`);
   }
-  if (!isBotMention(message, botUserId) || !isAllowedAuthor(message, tracker.users)) {
-    throw new Error("message is not a tracked bot-mention issue");
+  const newlyEligible = isBotMention(message, botUserId) && isAllowedAuthor(message, tracker.users);
+  if (!newlyEligible && !isBotMarked(message, tracker.markerEmoji)) {
+    throw new Error("message is not a tracked Discord issue");
   }
   return message;
 }
@@ -41,8 +49,47 @@ export async function ensureIssueThread(
   transport: DiscordTransport,
   root: DiscordMessage,
 ): Promise<string> {
-  const title = root.content.replace(/^<@!?\d+>\s*/, "").trim();
+  const trackerTitle = stripLeadingMention(root.content, undefined, root.botRoleIds).replace(
+    /^<@!?\d+>\s*/,
+    "",
+  );
+  const title = trackerTitle.trim();
   return transport.ensureThread(root, title || `Lorenz issue ${root.id}`);
+}
+
+export type DiscordTrackOutcome =
+  | { ok: true; root: DiscordMessage; threadId: string; alreadyTracked: boolean }
+  | { ok: false; message: string };
+
+export async function trackDiscordMessage(
+  settings: Settings,
+  transport: DiscordTransport,
+  channelId: string,
+  messageId: string,
+): Promise<DiscordTrackOutcome> {
+  const tracker = discordTrackerOptions(settings);
+  if (!tracker.channels.includes(channelId)) {
+    return { ok: false, message: "That message is outside the configured tracker channels." };
+  }
+  const root = await transport.getMessage(channelId, messageId);
+  if (!root || root.channelId !== channelId || root.id !== messageId) {
+    return { ok: false, message: "Discord could not resolve that source message." };
+  }
+  if (!isAllowedAuthor(root, tracker.users)) {
+    return { ok: false, message: "That message's author is not allowed to create Lorenz work." };
+  }
+
+  const alreadyTracked =
+    isBotMention(root, tracker.botUserId) || isBotMarked(root, tracker.markerEmoji);
+  if (!isBotMarked(root, tracker.markerEmoji)) {
+    await transport.addReaction(channelId, messageId, tracker.markerEmoji);
+  }
+  const threadId = await ensureIssueThread(transport, root);
+  if (!alreadyTracked) {
+    const firstActive = settings.tracker.activeStates[0] ?? "Todo";
+    await transport.postThreadMessage(threadId, `${BOT_STATUS_PREFIX} ${firstActive}`);
+  }
+  return { ok: true, root, threadId, alreadyTracked };
 }
 
 export type DiscordStatusUpdateOutcome =

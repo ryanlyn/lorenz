@@ -5,20 +5,23 @@ import type {
   Settings,
   TrackerChangeStream,
 } from "@lorenz/domain";
+import { errorMessage } from "@lorenz/domain";
 import { defaultStateType, normalizeIssue } from "@lorenz/issue";
 
 import { DiscordGatewayChangeStream, type DiscordGatewayOptions } from "./gateway.js";
+import { discordApplicationCommands, interactionAction } from "./interactions.js";
 import {
   emojiForState,
   isAllowedAuthor,
+  isBotMarked,
   isBotMention,
   statusEmojiMap,
   stripLeadingMention,
 } from "./mapping.js";
-import { mirrorStatusReaction } from "./operations.js";
+import { mirrorStatusReaction, trackDiscordMessage, updateDiscordStatus } from "./operations.js";
 import { discordTrackerOptions } from "./options.js";
 import { stateFromThread } from "./threadState.js";
-import type { DiscordMessage, DiscordTransport } from "./transport.js";
+import type { DiscordInteraction, DiscordMessage, DiscordTransport } from "./transport.js";
 
 export function splitIssueId(id: string): [string, string] | null {
   const parts = id.split(":");
@@ -124,6 +127,7 @@ export class DiscordTrackerClient implements RuntimeTrackerClient {
     { at: number; version: string; state: string }
   >();
   private readonly mirroredStates = new Map<string, string>();
+  private readonly pendingInteractionIssues = new Map<string, DiscordMessage>();
   private mirrorHealQueue: Promise<void> = Promise.resolve();
   private scanGeneration = 0;
 
@@ -136,6 +140,17 @@ export class DiscordTrackerClient implements RuntimeTrackerClient {
   ) {}
 
   async fetchCandidateIssues(): Promise<Issue[]> {
+    if (this.pendingInteractionIssues.size > 0) {
+      const pending = [...this.pendingInteractionIssues.values()];
+      this.pendingInteractionIssues.clear();
+      const wanted = new Set(
+        this.settings.tracker.activeStates.map((state) => state.trim().toLowerCase()),
+      );
+      const issues = await Promise.all(
+        pending.map(async (message) => this.toIssue(message, false)),
+      );
+      return issues.filter((issue) => wanted.has(issue.state.trim().toLowerCase()));
+    }
     return this.fetchIssuesByStates(this.settings.tracker.activeStates);
   }
 
@@ -195,12 +210,22 @@ export class DiscordTrackerClient implements RuntimeTrackerClient {
     const tracker = discordTrackerOptions(this.settings);
     const token = this.settings.tracker.apiKey;
     if (!token || !tracker.guildId || tracker.channels.length === 0) return null;
+    void this.transport
+      .registerApplicationCommands(discordApplicationCommands(this.settings))
+      .catch((error) =>
+        console.warn(`discord command registration failed: ${errorMessage(error)}`),
+      );
     const stream = this.createGateway({
       token,
       guildId: tracker.guildId,
       botUserId: tracker.botUserId ?? "",
       channels: new Set(tracker.channels),
       trackedThreadIds: this.trackedThreadIds,
+      onInteraction: (interaction) => {
+        void this.handleInteraction(interaction).then((changed) => {
+          if (changed) onChange();
+        });
+      },
       onChange: () => {
         this.scanGeneration += 1;
         this.scanCache = null;
@@ -210,6 +235,93 @@ export class DiscordTrackerClient implements RuntimeTrackerClient {
     });
     stream.start();
     return stream;
+  }
+
+  async handleInteraction(interaction: DiscordInteraction): Promise<boolean> {
+    const action = interactionAction(interaction, this.settings);
+    if (!action) return false;
+    try {
+      await this.transport.deferInteraction(interaction.id, interaction.token);
+    } catch (error) {
+      console.warn(`discord interaction acknowledgement failed: ${errorMessage(error)}`);
+      return false;
+    }
+
+    try {
+      const tracker = discordTrackerOptions(this.settings);
+      if (interaction.guildId !== tracker.guildId) {
+        throw new Error("This command belongs to a different Discord guild.");
+      }
+      if (
+        interaction.userBot ||
+        (tracker.users.length > 0 && !tracker.users.includes(interaction.userId))
+      ) {
+        throw new Error("You are not allowed to change Lorenz issues in this guild.");
+      }
+
+      if (action.kind === "track") {
+        const outcome = await trackDiscordMessage(
+          this.settings,
+          this.transport,
+          interaction.channelId,
+          action.messageId,
+        );
+        if (!outcome.ok) throw new Error(outcome.message);
+        if (!outcome.alreadyTracked) {
+          this.trackedThreadIds.add(outcome.root.id);
+          this.pendingInteractionIssues.set(outcome.root.id, outcome.root);
+        }
+        await this.completeInteraction(interaction, {
+          title: outcome.alreadyTracked ? "Already tracked" : "Tracked with Lorenz",
+          description: outcome.alreadyTracked
+            ? "This message is already a Lorenz issue."
+            : "The message is now a Lorenz issue and is ready for dispatch.",
+          color: 0x5865f2,
+        });
+        return !outcome.alreadyTracked;
+      }
+
+      const parentChannelId = await this.transport.getChannelParent(interaction.channelId);
+      if (!parentChannelId || !tracker.channels.includes(parentChannelId)) {
+        throw new Error("Run this command inside a Lorenz issue thread.");
+      }
+      const outcome = await updateDiscordStatus(
+        this.settings,
+        this.transport,
+        parentChannelId,
+        interaction.channelId,
+        action.status,
+      );
+      if (!outcome.ok) throw new Error(outcome.message);
+      await this.completeInteraction(interaction, {
+        title: "Status updated",
+        description: `This issue is now **${outcome.status}**.`,
+        color: statusColor(outcome.status),
+      });
+      return true;
+    } catch (error) {
+      await this.completeInteraction(interaction, {
+        title: "Lorenz could not apply that action",
+        description: errorMessage(error),
+        color: 0xed4245,
+      });
+      return false;
+    }
+  }
+
+  private async completeInteraction(
+    interaction: DiscordInteraction,
+    result: { title: string; description: string; color: number },
+  ): Promise<void> {
+    try {
+      await this.transport.completeInteraction(
+        interaction.applicationId,
+        interaction.token,
+        result,
+      );
+    } catch (error) {
+      console.warn(`discord interaction response failed: ${errorMessage(error)}`);
+    }
   }
 
   private async toIssue(message: DiscordMessage, useThreadCache = true): Promise<Issue> {
@@ -273,7 +385,10 @@ export class DiscordTrackerClient implements RuntimeTrackerClient {
 
   private isTracked(message: DiscordMessage): boolean {
     const tracker = discordTrackerOptions(this.settings);
-    return isBotMention(message, tracker.botUserId) && isAllowedAuthor(message, tracker.users);
+    return (
+      isBotMarked(message, tracker.markerEmoji) ||
+      (isBotMention(message, tracker.botUserId) && isAllowedAuthor(message, tracker.users))
+    );
   }
 
   private async scanCached(): Promise<DiscordMessage[]> {
@@ -296,6 +411,13 @@ export class DiscordTrackerClient implements RuntimeTrackerClient {
     }
     return mentions;
   }
+}
+
+function statusColor(status: string): number {
+  const normalized = status.trim().toLowerCase();
+  if (normalized === "done" || normalized === "completed") return 0x57f287;
+  if (normalized === "cancelled" || normalized === "canceled") return 0xed4245;
+  return 0x5865f2;
 }
 
 function threadStateVersion(message: DiscordMessage): string | null {

@@ -31,6 +31,7 @@ import type { DiscordTransport } from "./transport.js";
 
 const TOOL_NAMES = [
   "discord_update_status",
+  "discord_workpad",
   "discord_comment",
   "discord_read_thread",
   "discord_query",
@@ -55,6 +56,25 @@ export function discordToolSpecs(): ToolSpec[] {
         type: "object",
         properties: { issueId: { type: "string" }, status: { type: "string" } },
         required: ["issueId", "status"],
+      },
+    },
+    {
+      name: "discord_workpad",
+      description:
+        "Post a native rich Workpad card in the Discord issue thread. The card includes status " +
+        "buttons for human interaction. Args: issueId, environment, plan, acceptanceCriteria, " +
+        "validationCommands, progress?.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          issueId: { type: "string" },
+          environment: { type: "string" },
+          plan: { type: "array", items: { type: "string" } },
+          acceptanceCriteria: { type: "array", items: { type: "string" } },
+          validationCommands: { type: "array", items: { type: "string" } },
+          progress: { type: "array", items: { type: "string" } },
+        },
+        required: ["issueId", "environment", "plan", "acceptanceCriteria", "validationCommands"],
       },
     },
     {
@@ -160,6 +180,18 @@ export async function executeDiscordTool(
         return outcome.ok
           ? toolSuccess({ ok: true, status: outcome.status })
           : toolFailure(outcome.message);
+      }
+      case "discord_workpad": {
+        const root = await requireTrackedMessage(settings, transport, channelId, messageId);
+        const threadId = await ensureIssueThread(transport, root);
+        const workpadMessageId = await transport.postWorkpad(threadId, {
+          environment: requireStr(args, "environment"),
+          plan: requireStringArray(args, "plan"),
+          acceptanceCriteria: requireStringArray(args, "acceptanceCriteria"),
+          validationCommands: requireStringArray(args, "validationCommands"),
+          progress: optionalStringArray(args, "progress"),
+        });
+        return toolSuccess({ ok: true, messageId: workpadMessageId });
       }
       case "discord_comment": {
         const body = requireStr(args, "body");
@@ -293,4 +325,35 @@ function requireStr(args: Record<string, unknown>, key: string): string {
     throw new Error(`'${key}' is required`);
   }
   return value;
+}
+
+function requireStringArray(args: Record<string, unknown>, key: string): string[] {
+  const value = args[key];
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new Error(`'${key}' must be a non-empty array of strings`);
+  }
+  const result: string[] = [];
+  for (const item of value) {
+    if (typeof item !== "string" || item.trim() === "") {
+      throw new Error(`'${key}' must be a non-empty array of strings`);
+    }
+    result.push(item);
+  }
+  return result;
+}
+
+function optionalStringArray(args: Record<string, unknown>, key: string): string[] {
+  const value = args[key];
+  if (value === undefined || value === null) return [];
+  if (!Array.isArray(value)) {
+    throw new Error(`'${key}' must be an array of strings`);
+  }
+  const result: string[] = [];
+  for (const item of value) {
+    if (typeof item !== "string" || item.trim() === "") {
+      throw new Error(`'${key}' must be an array of strings`);
+    }
+    result.push(item);
+  }
+  return result;
 }

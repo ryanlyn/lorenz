@@ -38,6 +38,41 @@ test("status updates create the native thread and mirror only the bot's reaction
   ]);
 });
 
+test("Workpad tool posts structured rich content instead of flattening it into a comment", async () => {
+  const settings = parseDiscordConfig();
+  const root = message({ id: "723456789012345678" });
+  const transport = new InMemoryDiscordTransport([root]);
+
+  const result = await executeDiscordTool(
+    "discord_workpad",
+    {
+      issueId: `${CHANNEL_ID}:${root.id}`,
+      environment: "host:/workspace@abc1234",
+      plan: ["Reproduce", "Implement"],
+      acceptanceCriteria: ["Slash commands respond immediately"],
+      validationCommands: ["mise run test"],
+      progress: ["23:10 - reproduced"],
+    },
+    settings,
+    transport,
+  );
+
+  assert.equal(result.success, true);
+  assert.deepEqual(transport.createdThreads, [root.id]);
+  assert.deepEqual(transport.postedMessages, []);
+  assert.deepEqual(transport.postedWorkpads[0], {
+    threadId: root.id,
+    messageId: "900000000000000000",
+    workpad: {
+      environment: "host:/workspace@abc1234",
+      plan: ["Reproduce", "Implement"],
+      acceptanceCriteria: ["Slash commands respond immediately"],
+      validationCommands: ["mise run test"],
+      progress: ["23:10 - reproduced"],
+    },
+  });
+});
+
 test("comments, reads, queries, user lookups, and context stay inside the tracker scope", async () => {
   const settings = parseDiscordConfig();
   const root = message({ id: "723456789012345678", hasThread: true });
@@ -112,7 +147,7 @@ test("tools reject unconfigured channels and non-mention messages", async () => 
     transport,
   );
   assert.equal(result.success, false);
-  assert.match(JSON.stringify(result), /not a tracked bot-mention issue/);
+  assert.match(JSON.stringify(result), /not a tracked Discord issue/);
   assert.deepEqual(transport.postedMessages, []);
 });
 
