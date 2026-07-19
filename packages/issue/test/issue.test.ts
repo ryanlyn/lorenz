@@ -64,6 +64,18 @@ test("normalizeIssue — extracts blocker relations (blocks type mapping)", () =
   assert.equal(issue.blockers[0]!.stateType, "completed");
 });
 
+test("normalizeIssue preserves the issue event recovery cursor", () => {
+  const issue = normalizeIssue({
+    id: "i1",
+    identifier: "MT-1",
+    title: "Title",
+    state: { name: "Todo", type: "unstarted" },
+    issue_event_cursor: "9007199254740993.1",
+  });
+
+  assert.equal(issue.issueEventCursor, "9007199254740993.1");
+});
+
 test("normalizeIssue — assigns assignedToWorker=false if assignee does not match current worker", () => {
   const issue = normalizeIssue(
     {

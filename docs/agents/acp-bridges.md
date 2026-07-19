@@ -36,7 +36,7 @@ Which `_meta` key carries `provider_config` is decided per bridge family by `isC
 
 ## One turn end to end
 
-`@lorenz/agent-runner` owns the run lifecycle. It calls `createWorkspaceForIssue`, runs the `before_run` hook, calls `executor.startSession` (which spawns the bridge and runs ACP `initialize` then `session/new`, each with a hardcoded 30000ms timeout), then loops `runTurn` up to `agent.max_turns` (default `20`). After the loop it calls `session.stop()` and then the `after_run` hook (best-effort).
+`@lorenz/agent-runner` owns the run lifecycle. It calls `createWorkspaceForIssue`, runs the `before_run` hook, calls `executor.startSession` (which spawns the bridge and runs ACP `initialize` then `session/new`, each with a hardcoded 30000ms timeout), then runs up to `agent.max_turns` autonomous turns (default `20`) while draining up to the same number of accepted human steering turns. After the loop it calls `session.stop()` and then the `after_run` hook (best-effort).
 
 Each `runTurn` is a single ACP `session/prompt`. The executor sends the prompt, reads every session notification the bridge streams back, and resolves the turn with all the `AgentUpdate` events it produced. The turn ends when the bridge returns a `PromptResponse` with a `stopReason`, which `actionForStopReason` maps:
 
@@ -55,10 +55,10 @@ Only one turn runs per session at a time. A second `runTurn` while a turn is pen
 
 Two timers guard a turn, both set per kind and both reset on each `runTurn`:
 
-- **Turn timeout** (`turn_timeout_ms`, internal `turnTimeoutMs`, default `3600000`) is a hard timer. When it fires it calls `connection.cancel({sessionId})` and rejects with `acp turn timed out`.
-- **Stall timeout** (`stall_timeout_ms`, internal `stallTimeoutMs`, default `300000`) is an inactivity timer. It is reset on every incoming `AgentUpdate`, which means every session notification or stderr update. If no update arrives within the window, it fires the same `cancelTurn` path as the hard timer. Setting `stall_timeout_ms` to `0` or less disables stall detection entirely.
+- **Turn timeout** (`turn_timeout_ms`, internal `turnTimeoutMs`, default `3600000`) is a hard timer. When it fires it rejects the active turn with `acp turn timed out`, rejects queued turns with `acp session stopped after turn timeout`, marks the session terminal, requests bridge-level session teardown when supported, and terminates the bridge process tree.
+- **Stall timeout** (`stall_timeout_ms`, internal `stallTimeoutMs`, default `300000`) is an inactivity timer. It is reset on every incoming `AgentUpdate`, which means every session notification or stderr update. If no update arrives within the window, it fires the same session-stopping path as the hard timer. Setting `stall_timeout_ms` to `0` or less disables stall detection entirely.
 
-Both timers route through the same cancel-and-reject path. Late terminal updates that arrive after a timeout has settled the turn are suppressed by a settled guard. You can set both timeouts once under the `agents:` block as shared defaults and override them per kind; the per-kind value wins.
+Both timers stop the session because `session/cancel` identifies the session rather than a specific prompt request and cannot safely distinguish a timed-out turn from a queued successor. You can set both timeouts once under the `agents:` block as shared defaults and override them per kind; the per-kind value wins.
 
 ## The executor extension model
 
@@ -74,9 +74,9 @@ An `AgentExecutorProvider` (defined in `packages/agent-sdk/src/provider.ts`) con
 | `validateAgent?` | startup validation of the per-kind config |
 | `createExecutor` | required; returns the `AgentExecutor` that drives a session |
 
-`acpExecutorProvider` registers `executor: "acp"`, maps the aliases `bridge_command`, `usage_accounting`, `provider_config`, and `strict_mcp_config`, rejects a blank `bridge_command` in `validateAgent`, and returns a fresh `Executor(kind)` from `createExecutor`. The `Executor` is the `AgentExecutor`: `startSession` spawns the bridge and runs `initialize` + `session/new`, `runTurn` sends the prompt and enforces the two timeouts, `AgentSession.queueTurn` submits a later prompt immediately while preserving FIFO order, and `stopSession` runs `session/close` (5000ms, only if the bridge advertised `sessionCapabilities.close`) then `SIGTERM` followed by `SIGKILL` after a 1000ms grace.
+`acpExecutorProvider` registers `executor: "acp"`, maps the aliases `bridge_command`, `usage_accounting`, `provider_config`, and `strict_mcp_config`, rejects a blank `bridge_command` in `validateAgent`, and returns a fresh `Executor(kind)` from `createExecutor`. The `Executor` is the `AgentExecutor`: `startSession` spawns the bridge and runs `initialize` + `session/new`, `runTurn` sends the prompt and enforces the two timeouts, `AgentSession.queueTurn` submits a later prompt immediately while preserving FIFO order, and `stopSession` runs `session/close` (5000ms, only if the bridge advertised `sessionCapabilities.close`) before terminating the local process tree. POSIX systems use process-group signals. Windows assigns the bridge to a Job Object whose close boundary terminates every member. Remote bridge commands run under a shell wrapper that applies `SIGTERM` then `SIGKILL` on disconnect.
 
-ACP permits the client to have more than one `session/prompt` request in flight. The Claude bridge inserts later requests into its live SDK input queue. The Codex bridge queues requests per session before sending them to app-server, which permits one active turn per thread. Lorenz starts a queued turn's timeout clocks only after the preceding turn settles.
+ACP permits the client to have more than one `session/prompt` request in flight. The built-in bridges advertise stable session IDs for queued prompts. A bridge that permits session ID rotation receives the queued request after the active turn's rotation window closes. The Claude bridge inserts eligible requests into its live SDK input queue. The Codex bridge queues requests per session before sending them to app-server, which permits one active turn per thread. Lorenz starts a queued turn's timeout clocks only after the preceding turn settles.
 
 The runtime contracts `AgentExecutor`, `AgentSession`, and `AgentUpdate` live in `@lorenz/domain`, not in `agent-sdk`. The SDK package owns only the build-time provider contract and the registry.
 
@@ -87,8 +87,8 @@ The runtime contracts `AgentExecutor`, `AgentSession`, and `AgentUpdate` live in
 
 `startSession` spawns the bridge one of two ways depending on whether a worker host is set:
 
-- **Local.** `execa('bash', ['-lc', 'exec <resolvedCommand>'], {cwd, env: hostAgentBinaryEnv()})`. Local runs resolve bare bridge names through `resolveBridgeCommand`, which rewrites `codex-acp` and `claude-agent-acp` to the vendored workspace package bins. The packaged CLI does not bundle agent binaries, so `hostAgentBinaryEnv` resolves `CLAUDE_CODE_EXECUTABLE` and `CODEX_PATH` by running `bash -lc 'command -v <bin>'`; an explicit env value always wins, and results are cached per command.
-- **Remote.** `startSshProcess(workerHost, 'cd <ws> && exec <command>')`. `resolveBridgeCommand` short-circuits when a worker host is set, so the remote host runs the configured command verbatim against whatever is on its `PATH`. The vendored packages are local-only.
+- **Local.** POSIX systems run the bridge under a detached shell guardian that terminates the bridge process group before exiting. Windows uses a PowerShell guardian that assigns the bridge and its descendants to a kill-on-close Job Object while forwarding the ACP streams. Local runs resolve bare bridge names through `resolveBridgeCommand`, which rewrites `codex-acp` and `claude-agent-acp` to the vendored workspace package bins. The packaged CLI does not bundle agent binaries, so `hostAgentBinaryEnv` resolves `CLAUDE_CODE_EXECUTABLE` and `CODEX_PATH` by running `bash -lc 'command -v <bin>'`; an explicit env value always wins, and results are cached per command.
+- **Remote.** `startSshProcess` runs a fail-closed workspace change followed by the configured bridge in its own remote process group. The SSH wrapper preserves the bridge status and terminates the group with `SIGTERM` followed by `SIGKILL` when the bridge or connection ends. `resolveBridgeCommand` short-circuits when a worker host is set, so the remote host runs the configured command verbatim against whatever is on its `PATH`. The vendored packages are local-only.
 
 Client filesystem access (`readTextFile` / `writeTextFile`) is exposed only for local runs and is path-sandboxed to the workspace root; out-of-bounds paths throw `acp_fs_path_must_be_absolute` or `acp_fs_path_outside_workspace`. The executor auto-approves permission requests: it selects the first option whose kind starts with `allow` and emits `approval_auto_approved`, or emits `approval_required` and returns `cancelled` when none match.
 

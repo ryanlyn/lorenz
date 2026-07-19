@@ -34,8 +34,8 @@ executor-owned `options` bag. For the `acp` executor the bag holds `bridge_comma
 | --- | --- | --- |
 | `executor` | `acp` | The runtime that drives a turn. `acp` is the only built-in executor. |
 | `bridge_command` | `claude-agent-acp` | The bridge subprocess the executor spawns. A single shell command string. |
-| `turn_timeout_ms` | `3600000` | Hard cap on one turn; the executor cancels the turn when it fires. |
-| `stall_timeout_ms` | `300000` | Inactivity cap, reset on every update; `<= 0` disables stall detection. |
+| `turn_timeout_ms` | `3600000` | Hard cap on one turn; a timeout rejects queued turns and terminates the ACP session. |
+| `stall_timeout_ms` | `300000` | Inactivity cap, reset on every update; a timeout rejects queued turns and terminates the ACP session. `<= 0` disables stall detection. |
 | `usage_accounting` | `per-turn` | How per-call token usage is folded into the cumulative total. |
 | `provider_config` | model pin + `permissions.defaultMode: dontAsk` | Per-session `settings.json` overlay handed to the bridge. |
 | `strict_mcp_config` | `true` | Parsed and validated, but not read at runtime by the executor. |

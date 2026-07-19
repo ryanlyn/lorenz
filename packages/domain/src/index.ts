@@ -276,6 +276,13 @@ export interface Issue {
   createdAt?: string | null | undefined;
   /** ISO-8601 timestamp string as returned by the tracker; not parsed into a Date. */
   updatedAt?: string | null | undefined;
+  /**
+   * Latest issue-event ordering key represented in prompt-visible fields of this snapshot. Event
+   * recovery begins after this cursor, and live delivery ignores replays at or before it. A
+   * tracker that implements issue-event recovery uses `"0"` when the snapshot contains no
+   * prompt-visible events.
+   */
+  issueEventCursor?: string | null | undefined;
   /** Lower-cased label names; ensemble size is encoded as `ensemble:<n>`. */
   labels: string[];
   blockers: IssueRef[];
@@ -499,7 +506,7 @@ export interface AgentSettings {
   kind: AgentKind;
   /** Upper bound on concurrent agent runs across the whole instance. */
   maxConcurrentAgents: number;
-  /** Maximum back-to-back turns a single worker session may run before exiting and yielding. */
+  /** Per-run limit applied separately to autonomous turns and human steering turns. */
   maxTurns: number;
   /** Cap (ms) on exponential retry backoff between attempts on the same issue. */
   maxRetryBackoffMs: number;
@@ -718,11 +725,94 @@ export interface WorkflowDefinition {
 
 /** One human-authored tracker event, such as a reply on an issue thread. */
 export interface TrackerIssueEvent {
-  /** Tracker-native numeric ordering key encoded as a string. */
+  /** Unique tracker-native ordering key encoded as a positive decimal string. Zero is reserved for an empty snapshot cursor. */
   ts: string;
+  /** True only after the tracker provider authorizes this event to steer an agent. */
+  authorizedForSteering: boolean;
   /** Author id or display name when known. */
   author?: string | undefined;
   text: string;
+}
+
+/** Bounds and cancellation for one page of recovered issue events. */
+export interface TrackerIssueEventQuery {
+  /** Maximum number of events the page may contain. */
+  maxEvents: number;
+  /** Maximum aggregate UTF-8 bytes across event timestamps, authors, and text. */
+  maxBytes: number;
+  abortSignal?: AbortSignal | undefined;
+}
+
+/** One bounded page from an issue-event recovery feed. */
+export interface TrackerIssueEventPage {
+  events: TrackerIssueEvent[];
+  /** True when the backend omitted newer matching events from this page. */
+  hasMore: boolean;
+}
+
+/** Aggregate UTF-8 content bytes for tracker issue events. */
+export function trackerIssueEventsBytes(events: readonly TrackerIssueEvent[]): number {
+  let bytes = 0;
+  for (const event of events) {
+    bytes += Buffer.byteLength(event.ts);
+    bytes += Buffer.byteLength(event.author ?? "");
+    bytes += Buffer.byteLength(event.text);
+  }
+  return bytes;
+}
+
+/**
+ * Fits one event within a live-delivery byte limit by shortening only its text. The ordering key
+ * and author remain unchanged so deduplication and attribution keep their tracker-native meaning.
+ * Returns `null` when metadata alone leaves no room for a shortening marker.
+ */
+export function boundTrackerIssueEventText(
+  event: TrackerIssueEvent,
+  maxBytes: number,
+): TrackerIssueEvent | null {
+  if (trackerIssueEventsBytes([event]) <= maxBytes) return event;
+  const metadataBytes = Buffer.byteLength(event.ts) + Buffer.byteLength(event.author ?? "");
+  const marker =
+    "\n[message shortened for live delivery; the complete message remains on the issue]\n";
+  const availableTextBytes = maxBytes - metadataBytes;
+  const markerBytes = Buffer.byteLength(marker);
+  if (availableTextBytes < markerBytes) return null;
+  const contentBytes = availableTextBytes - markerBytes;
+  const prefixBytes = Math.ceil(contentBytes / 2);
+  const suffixBytes = Math.floor(contentBytes / 2);
+  return {
+    ...event,
+    text: `${utf8Prefix(event.text, prefixBytes)}${marker}${utf8Suffix(event.text, suffixBytes)}`,
+  };
+}
+
+function utf8Prefix(value: string, maxBytes: number): string {
+  const parts: string[] = [];
+  let bytes = 0;
+  for (const character of value) {
+    const characterBytes = Buffer.byteLength(character);
+    if (bytes + characterBytes > maxBytes) break;
+    parts.push(character);
+    bytes += characterBytes;
+  }
+  return parts.join("");
+}
+
+function utf8Suffix(value: string, maxBytes: number): string {
+  const parts: string[] = [];
+  let bytes = 0;
+  for (let end = value.length; end > 0; ) {
+    let start = end - 1;
+    const trailing = value.charCodeAt(start);
+    if (trailing >= 0xdc00 && trailing <= 0xdfff && start > 0) start -= 1;
+    const character = value.slice(start, end);
+    const characterBytes = Buffer.byteLength(character);
+    if (bytes + characterBytes > maxBytes) break;
+    parts.push(character);
+    bytes += characterBytes;
+    end = start;
+  }
+  return parts.reverse().join("");
 }
 
 /** Structured data attached to a tracker change notification. */
@@ -762,7 +852,11 @@ export interface RuntimeTrackerClient {
   /**
    * Optional push capability: open a live change stream that invokes `onChange` whenever the
    * backend signals new or updated work. A tracker can attach issue events for immediate delivery
-   * to active agent sessions. Backends that can only be pulled omit this and the runtime relies on
+   * to active agent sessions. Set `authorizedForSteering` only after authenticating the author and
+   * applying the provider's steering policy; the runtime ignores events that are not authorized.
+   * A tracker that attaches issue events must also implement {@link fetchIssueEvents} and provide
+   * an {@link Issue.issueEventCursor} snapshot boundary so delivery can recover across connection
+   * and run-lifecycle gaps. Backends that can only be pulled omit this and the runtime relies on
    * interval polling alone.
    *
    * The interval poll always stays active as a safety net, so `onChange` need not be exhaustive
@@ -776,17 +870,29 @@ export interface RuntimeTrackerClient {
     onChange: (change?: TrackerChange) => void,
   ): TrackerChangeStream | null | Promise<TrackerChangeStream | null>;
   /**
-   * Optional recovery feed for human-authored issue events newer than `sinceTs`, returned in
-   * ascending order. `"0"` means from the beginning. Live push is the primary delivery path;
-   * this pull hook recovers events missed across connection gaps.
+   * Optional recovery feed for human-authored issue events newer than `sinceTs`. Each event key
+   * is a positive decimal string; zero is reserved for the empty snapshot cursor. Each page
+   * contains the oldest matching events in ascending order and must obey both query bounds.
+   * `"0"` means from the beginning. Set `hasMore` when newer matching events remain so callers
+   * can advance through accepted pages without skipping events. Tracker issue snapshots provide
+   * the initial prompt-visible boundary through {@link Issue.issueEventCursor}, including `"0"`
+   * when no event is represented in the snapshot. Return only events whose authenticated authors
+   * satisfy the provider's steering policy, with `authorizedForSteering` set to true. Live push is
+   * the primary delivery path and this pull hook recovers events missed across connection gaps.
    */
-  fetchIssueEvents?(issueId: string, sinceTs: string): Promise<TrackerIssueEvent[]>;
+  fetchIssueEvents?(
+    issueId: string,
+    sinceTs: string,
+    query: TrackerIssueEventQuery,
+  ): Promise<TrackerIssueEventPage>;
 }
 
 /**
  * A live subscription opened by {@link RuntimeTrackerClient.watch}. The runtime owns its
- * lifecycle and calls {@link close} exactly once on shutdown; implementations must make close
- * idempotent and release any sockets/timers it holds.
+ * lifecycle and calls {@link close} when no active run retains the client or the runtime stops.
+ * Implementations must make close idempotent, settle promptly, and release any sockets or timers
+ * they hold. The runtime bounds its wait so a faulty stream cannot stop polling or configuration
+ * reloads indefinitely.
  */
 export interface TrackerChangeStream {
   close(): void | Promise<void>;
@@ -1084,6 +1190,14 @@ export type TraceEvent = {
  * Handle to a started agent process, returned by {@link AgentExecutor.startSession}.
  * The same instance is passed back into `runTurn` for each prompt and closed via `stop`.
  */
+export interface QueuedTurnOptions {
+  /**
+   * Optional activation gate. The prompt enters the executor's queue immediately but must not
+   * begin backend execution until this promise resolves.
+   */
+  startWhen?: Promise<void> | undefined;
+}
+
 export interface AgentSession {
   agentKind: AgentKind;
   /** Provider session id; populated once the executor receives it from the backend. */
@@ -1092,12 +1206,13 @@ export interface AgentSession {
   executorPid?: string | null | undefined;
   /**
    * Submits another prompt while the current turn is still running. The executor must hand the
-   * prompt to its backend immediately and preserve submission order. The returned promise settles
-   * when that queued turn finishes.
+   * prompt to its queue immediately and preserve submission order. When {@link
+   * QueuedTurnOptions.startWhen} is present, the queued prompt remains inactive until the gate
+   * resolves. The returned promise settles when that queued turn finishes.
    *
    * Optional because not every executor backend supports live prompt queuing.
    */
-  queueTurn?(prompt: string): Promise<AgentUpdate[]>;
+  queueTurn?(prompt: string, options?: QueuedTurnOptions): Promise<AgentUpdate[]>;
   /** Closes the session and tears down the underlying process; must be safe to call from a `finally` block. */
   stop(): Promise<void>;
 }

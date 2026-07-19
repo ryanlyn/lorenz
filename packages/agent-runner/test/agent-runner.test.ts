@@ -7,6 +7,7 @@ import type {
   SessionNotification,
   Settings,
   TrackerIssueEvent,
+  TrackerIssueEventPage,
 } from "@lorenz/domain";
 import { defaultSettings } from "@lorenz/config";
 import { assert } from "@lorenz/test-utils";
@@ -16,6 +17,10 @@ import { runAgentAttempt, type RunAgentAttemptAdapters } from "../src/index.js";
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+function issueEventPage(events: TrackerIssueEvent[], hasMore = false): TrackerIssueEventPage {
+  return { events, hasMore };
+}
 
 function fakeIssue(overrides: Partial<Issue> = {}): Issue {
   return {
@@ -80,9 +85,10 @@ function fakeAdapters(overrides: Partial<RunAgentAttemptAdapters> = {}): RunAgen
 }
 
 test("live issue events are submitted immediately and consumed as the next queued turn", async () => {
-  const settings = fakeSettings({ agent: { ...defaultSettings().agent, maxTurns: 2 } });
+  const settings = fakeSettings({ agent: { ...defaultSettings().agent, maxTurns: 3 } });
   const normalPrompts: string[] = [];
   const queuedPrompts: string[] = [];
+  const activatedPrompts: string[] = [];
   let issueEventListener: ((events: TrackerIssueEvent[]) => void) | undefined;
   let subscriptionClosed = false;
   let releaseFirstTurn: (() => void) | undefined;
@@ -94,8 +100,10 @@ test("live issue events are submitted immediately and consumed as the next queue
     releaseFirstTurn = resolve;
   });
   const session = fakeSession({
-    queueTurn: async (prompt) => {
+    queueTurn: async (prompt, options) => {
       queuedPrompts.push(prompt);
+      await options?.startWhen;
+      activatedPrompts.push(prompt);
       return [{ type: "turn_completed" }];
     },
   });
@@ -117,8 +125,6 @@ test("live issue events are submitted immediately and consumed as the next queue
     workflow: { path: "/workflow.md", config: {}, promptTemplate: "Fix it", settings },
     settings,
     fetchIssue: async (issue) => issue,
-    fetchIssueEvents: async (sinceTs) =>
-      sinceTs === "0" ? [{ ts: "10.0", author: "ryan", text: "original request" }] : [],
     subscribeIssueEvents: (listener) => {
       issueEventListener = listener;
       return () => {
@@ -130,20 +136,1821 @@ test("live issue events are submitted immediately and consumed as the next queue
 
   await firstTurnStarted;
   assert.ok(issueEventListener);
-  issueEventListener([{ ts: "11.0", author: "ryan", text: "steer left" }]);
+  issueEventListener([
+    { authorizedForSteering: true, ts: "9007199254740993", author: "ryan", text: "steer second" },
+    { authorizedForSteering: true, ts: "9007199254740992", author: "ryan", text: "steer first" },
+  ]);
   await vi.waitFor(() => assert.equal(queuedPrompts.length, 1));
   assert.equal(releaseFirstTurn === undefined, false);
   assert.equal(normalPrompts.length, 1);
+  assert.equal(activatedPrompts.length, 0);
+  releaseFirstTurn?.();
+
+  const result = await attempt;
+  assert.equal(result.turnCount, 2 + queuedPrompts.length);
+  assert.equal(normalPrompts.length, 2);
+  assert.equal(activatedPrompts.length, 1);
+  assert.match(queuedPrompts[0]!, /<issue_messages>/);
+  assert.ok(queuedPrompts[0]!.indexOf("steer first") < queuedPrompts[0]!.indexOf("steer second"));
+  assert.notMatch(queuedPrompts[0]!, /Continuation guidance/);
+  assert.equal(subscriptionClosed, true);
+});
+
+test("live delivery ignores events represented by the initial issue snapshot", async () => {
+  const settings = fakeSettings({ agent: { ...defaultSettings().agent, maxTurns: 1 } });
+  const queuedPrompts: string[] = [];
+  let issueEventListener: ((events: TrackerIssueEvent[]) => void) | undefined;
+  let releaseFirstTurn: (() => void) | undefined;
+  let markFirstTurnStarted: (() => void) | undefined;
+  const firstTurnStarted = new Promise<void>((resolve) => {
+    markFirstTurnStarted = resolve;
+  });
+  const firstTurnRelease = new Promise<void>((resolve) => {
+    releaseFirstTurn = resolve;
+  });
+  const session = fakeSession({
+    queueTurn: async (prompt) => {
+      queuedPrompts.push(prompt);
+      return [{ type: "turn_completed" }];
+    },
+  });
+  const executor: AgentExecutor = {
+    kind: "codex",
+    async startSession() {
+      return session;
+    },
+    async runTurn() {
+      markFirstTurnStarted?.();
+      await firstTurnRelease;
+      return [{ type: "turn_completed" }];
+    },
+  };
+
+  const attempt = runAgentAttempt({
+    issue: fakeIssue({ issueEventCursor: "11.0" }),
+    workflow: { path: "/workflow.md", config: {}, promptTemplate: "Fix it", settings },
+    settings,
+    fetchIssue: async (issue) => issue,
+    subscribeIssueEvents: (listener) => {
+      issueEventListener = listener;
+      return () => {};
+    },
+    adapters: fakeAdapters({ executorFactory: () => executor }),
+  });
+
+  await firstTurnStarted;
+  issueEventListener?.([
+    { authorizedForSteering: true, ts: "10.0", author: "ryan", text: "older snapshot context" },
+    { authorizedForSteering: true, ts: "11.0", author: "ryan", text: "latest snapshot context" },
+    { authorizedForSteering: true, ts: "12.0", author: "ryan", text: "new steering" },
+  ]);
+  await vi.waitFor(() => assert.equal(queuedPrompts.length, 1));
   releaseFirstTurn?.();
 
   const result = await attempt;
   assert.equal(result.turnCount, 2);
-  assert.equal(normalPrompts.length, 1);
-  assert.match(queuedPrompts[0]!, /<issue_messages>/);
-  assert.match(queuedPrompts[0]!, /steer left/);
-  assert.notMatch(queuedPrompts[0]!, /original request/);
-  assert.notMatch(queuedPrompts[0]!, /Continuation guidance/);
+  assert.notMatch(queuedPrompts[0]!, /snapshot context/);
+  assert.match(queuedPrompts[0]!, /new steering/);
+});
+
+test("live delivery preserves valid events beside invalid and reserved ordering keys", async () => {
+  const settings = fakeSettings({ agent: { ...defaultSettings().agent, maxTurns: 1 } });
+  const queuedPrompts: string[] = [];
+  const updates: AgentUpdate[] = [];
+  let issueEventListener: ((events: TrackerIssueEvent[]) => void) | undefined;
+  let releaseFirstTurn: (() => void) | undefined;
+  let markFirstTurnStarted: (() => void) | undefined;
+  const firstTurnStarted = new Promise<void>((resolve) => {
+    markFirstTurnStarted = resolve;
+  });
+  const firstTurnRelease = new Promise<void>((resolve) => {
+    releaseFirstTurn = resolve;
+  });
+  const session = fakeSession({
+    queueTurn: async (prompt) => {
+      queuedPrompts.push(prompt);
+      return [{ type: "turn_completed" }];
+    },
+  });
+  const executor: AgentExecutor = {
+    kind: "codex",
+    async startSession() {
+      return session;
+    },
+    async runTurn() {
+      markFirstTurnStarted?.();
+      await firstTurnRelease;
+      return [{ type: "turn_completed" }];
+    },
+  };
+
+  const attempt = runAgentAttempt({
+    issue: fakeIssue({ issueEventCursor: "10.0" }),
+    workflow: { path: "/workflow.md", config: {}, promptTemplate: "Fix it", settings },
+    settings,
+    fetchIssue: async (issue) => issue,
+    subscribeIssueEvents: (listener) => {
+      issueEventListener = listener;
+      return () => {};
+    },
+    onUpdate: (update) => updates.push(update),
+    adapters: fakeAdapters({ executorFactory: () => executor }),
+  });
+
+  await firstTurnStarted;
+  issueEventListener?.([
+    {
+      authorizedForSteering: true,
+      ts: "not-a-decimal",
+      author: "ryan",
+      text: "malformed metadata",
+    },
+    {
+      authorizedForSteering: true,
+      ts: "0.0",
+      author: "ryan",
+      text: "reserved cursor boundary",
+    },
+    { authorizedForSteering: true, ts: "11.0", author: "ryan", text: "valid steering" },
+  ]);
+  await vi.waitFor(() => assert.equal(queuedPrompts.length, 1));
+  releaseFirstTurn?.();
+
+  const result = await attempt;
+  assert.equal(result.turnCount, 2);
+  assert.notMatch(queuedPrompts[0]!, /malformed metadata/);
+  assert.notMatch(queuedPrompts[0]!, /reserved cursor boundary/);
+  assert.match(queuedPrompts[0]!, /valid steering/);
+  assert.ok(
+    updates.some(
+      (update) =>
+        update.type === "stderr" &&
+        update.message.includes(
+          "Ignoring steering event validation failure: invalid ordering keys: not-a-decimal, 0.0",
+        ),
+    ),
+  );
+});
+
+test("a run defers steering beyond its turn limit without failing", async () => {
+  const settings = fakeSettings({ agent: { ...defaultSettings().agent, maxTurns: 1 } });
+  const queuedPrompts: string[] = [];
+  let issueEventListener: ((events: TrackerIssueEvent[]) => void) | undefined;
+  let releaseFirstTurn: (() => void) | undefined;
+  let markFirstTurnStarted: (() => void) | undefined;
+  const firstTurnStarted = new Promise<void>((resolve) => {
+    markFirstTurnStarted = resolve;
+  });
+  const firstTurnRelease = new Promise<void>((resolve) => {
+    releaseFirstTurn = resolve;
+  });
+  const session = fakeSession({
+    queueTurn: async (prompt) => {
+      queuedPrompts.push(prompt);
+      return [{ type: "turn_completed" }];
+    },
+  });
+  const executor: AgentExecutor = {
+    kind: "codex",
+    async startSession() {
+      return session;
+    },
+    async runTurn() {
+      markFirstTurnStarted?.();
+      await firstTurnRelease;
+      return [{ type: "turn_completed" }];
+    },
+  };
+
+  const attempt = runAgentAttempt({
+    issue: fakeIssue(),
+    workflow: { path: "/workflow.md", config: {}, promptTemplate: "Fix it", settings },
+    settings,
+    fetchIssue: async (issue) => issue,
+    subscribeIssueEvents: (listener) => {
+      issueEventListener = listener;
+      return () => {};
+    },
+    adapters: fakeAdapters({ executorFactory: () => executor }),
+  });
+
+  await firstTurnStarted;
+  issueEventListener?.([
+    { authorizedForSteering: true, ts: "11.0", author: "ryan", text: "accepted steering" },
+  ]);
+  await vi.waitFor(() => assert.equal(queuedPrompts.length, 1));
+  issueEventListener?.([
+    { authorizedForSteering: true, ts: "12.0", author: "ryan", text: "deferred steering" },
+  ]);
+  await Promise.resolve();
+  await Promise.resolve();
+  releaseFirstTurn?.();
+
+  const result = await attempt;
+  assert.equal(result.turnCount, 2);
+  assert.equal(queuedPrompts.length, 1);
+  assert.match(queuedPrompts[0]!, /accepted steering/);
+  assert.notMatch(queuedPrompts[0]!, /deferred steering/);
+});
+
+test("accepted steering remains inactive when issue refresh fails", async () => {
+  const settings = fakeSettings({ agent: { ...defaultSettings().agent, maxTurns: 2 } });
+  const queuedPrompts: string[] = [];
+  let issueEventListener: ((events: TrackerIssueEvent[]) => void) | undefined;
+  let releaseFirstTurn: (() => void) | undefined;
+  let markFirstTurnStarted: (() => void) | undefined;
+  const firstTurnStarted = new Promise<void>((resolve) => {
+    markFirstTurnStarted = resolve;
+  });
+  const firstTurnRelease = new Promise<void>((resolve) => {
+    releaseFirstTurn = resolve;
+  });
+  let issueRefreshes = 0;
+  let backendActivations = 0;
+  const session = fakeSession({
+    queueTurn: async (prompt, options) => {
+      queuedPrompts.push(prompt);
+      await options?.startWhen;
+      backendActivations += 1;
+      return [{ type: "turn_completed" }];
+    },
+  });
+  const executor: AgentExecutor = {
+    kind: "codex",
+    async startSession() {
+      return session;
+    },
+    async runTurn() {
+      markFirstTurnStarted?.();
+      await firstTurnRelease;
+      return [{ type: "turn_completed" }];
+    },
+  };
+
+  const attempt = runAgentAttempt({
+    issue: fakeIssue(),
+    workflow: { path: "/workflow.md", config: {}, promptTemplate: "Fix it", settings },
+    settings,
+    fetchIssue: async () => {
+      issueRefreshes += 1;
+      throw new Error("tracker unavailable");
+    },
+    subscribeIssueEvents: (listener) => {
+      issueEventListener = listener;
+      return () => {};
+    },
+    adapters: fakeAdapters({ executorFactory: () => executor }),
+  });
+
+  await firstTurnStarted;
+  issueEventListener?.([
+    { authorizedForSteering: true, ts: "11.0", author: "ryan", text: "finish this first" },
+  ]);
+  await vi.waitFor(() => assert.equal(queuedPrompts.length, 1));
+  releaseFirstTurn?.();
+
+  const result = await attempt;
+  assert.equal(result.turnCount, 1);
+  assert.equal(issueRefreshes, 1);
+  assert.equal(backendActivations, 0);
+  assert.match(queuedPrompts[0]!, /finish this first/);
+});
+
+test("accepted steering remains inactive without issue refresh support", async () => {
+  const settings = fakeSettings({ agent: { ...defaultSettings().agent, maxTurns: 1 } });
+  const updates: AgentUpdate[] = [];
+  let issueEventListener: ((events: TrackerIssueEvent[]) => void) | undefined;
+  let releaseFirstTurn: (() => void) | undefined;
+  let markFirstTurnStarted: (() => void) | undefined;
+  const firstTurnStarted = new Promise<void>((resolve) => {
+    markFirstTurnStarted = resolve;
+  });
+  const firstTurnRelease = new Promise<void>((resolve) => {
+    releaseFirstTurn = resolve;
+  });
+  let backendActivations = 0;
+  const session = fakeSession({
+    queueTurn: async (_prompt, options) => {
+      await options?.startWhen;
+      backendActivations += 1;
+      return [{ type: "turn_completed" }];
+    },
+  });
+
+  const attempt = runAgentAttempt({
+    issue: fakeIssue(),
+    workflow: { path: "/workflow.md", config: {}, promptTemplate: "Fix it", settings },
+    settings,
+    subscribeIssueEvents: (listener) => {
+      issueEventListener = listener;
+      return () => {};
+    },
+    onUpdate: (update) => updates.push(update),
+    adapters: fakeAdapters({
+      executorFactory: () => ({
+        kind: "codex",
+        async startSession() {
+          return session;
+        },
+        async runTurn() {
+          markFirstTurnStarted?.();
+          await firstTurnRelease;
+          return [{ type: "turn_completed" }];
+        },
+      }),
+    }),
+  });
+
+  await firstTurnStarted;
+  issueEventListener?.([
+    { authorizedForSteering: true, ts: "11.0", author: "ryan", text: "do not activate" },
+  ]);
+  releaseFirstTurn?.();
+
+  const result = await attempt;
+  assert.equal(result.turnCount, 1);
+  assert.equal(backendActivations, 0);
+  assert.ok(
+    updates.some(
+      (update) =>
+        update.type === "stderr" &&
+        update.message.includes(
+          "Ignoring steering issue refresh failure: issue refresh is unavailable",
+        ),
+    ),
+  );
+});
+
+test("accepted steering is cancelled when the issue becomes inactive", async () => {
+  const settings = fakeSettings({ agent: { ...defaultSettings().agent, maxTurns: 2 } });
+  const queuedPrompts: string[] = [];
+  let issueEventListener: ((events: TrackerIssueEvent[]) => void) | undefined;
+  let releaseFirstTurn: (() => void) | undefined;
+  let markFirstTurnStarted: (() => void) | undefined;
+  let markQueuedTurnSubmitted: (() => void) | undefined;
+  const firstTurnStarted = new Promise<void>((resolve) => {
+    markFirstTurnStarted = resolve;
+  });
+  const firstTurnRelease = new Promise<void>((resolve) => {
+    releaseFirstTurn = resolve;
+  });
+  const queuedTurnSubmitted = new Promise<void>((resolve) => {
+    markQueuedTurnSubmitted = resolve;
+  });
+  let stopCalls = 0;
+  let backendActivations = 0;
+  const session = fakeSession({
+    queueTurn: async (prompt, options) => {
+      queuedPrompts.push(prompt);
+      markQueuedTurnSubmitted?.();
+      await options?.startWhen;
+      backendActivations += 1;
+      return [{ type: "turn_completed" }];
+    },
+    stop: async () => {
+      stopCalls += 1;
+    },
+  });
+  const executor: AgentExecutor = {
+    kind: "codex",
+    async startSession() {
+      return session;
+    },
+    async runTurn() {
+      markFirstTurnStarted?.();
+      await firstTurnRelease;
+      return [{ type: "turn_completed" }];
+    },
+  };
+
+  const attempt = runAgentAttempt({
+    issue: fakeIssue(),
+    workflow: { path: "/workflow.md", config: {}, promptTemplate: "Fix it", settings },
+    settings,
+    fetchIssue: async (issue) => ({
+      ...issue,
+      state: "Done",
+      stateType: "completed",
+    }),
+    subscribeIssueEvents: (listener) => {
+      issueEventListener = listener;
+      return () => {};
+    },
+    adapters: fakeAdapters({ executorFactory: () => executor }),
+  });
+
+  await firstTurnStarted;
+  issueEventListener?.([
+    { authorizedForSteering: true, ts: "11.0", author: "ryan", text: "late steering" },
+  ]);
+  await queuedTurnSubmitted;
+  releaseFirstTurn?.();
+
+  const result = await attempt;
+  assert.equal(result.turnCount, 1);
+  assert.equal(stopCalls, 1);
+  assert.equal(queuedPrompts.length, 1);
+  assert.equal(backendActivations, 0);
+});
+
+test("steering accepted during a failed issue refresh remains inactive", async () => {
+  const settings = fakeSettings({ agent: { ...defaultSettings().agent, maxTurns: 2 } });
+  const queuedPrompts: string[] = [];
+  const updates: AgentUpdate[] = [];
+  let issueEventListener: ((events: TrackerIssueEvent[]) => void) | undefined;
+  let markIssueRefreshStarted: (() => void) | undefined;
+  let rejectIssueRefresh: ((error: Error) => void) | undefined;
+  const issueRefreshStarted = new Promise<void>((resolve) => {
+    markIssueRefreshStarted = resolve;
+  });
+  const issueRefresh = new Promise<Issue>((_resolve, reject) => {
+    rejectIssueRefresh = reject;
+  });
+  let backendActivations = 0;
+  const session = fakeSession({
+    queueTurn: async (prompt, options) => {
+      queuedPrompts.push(prompt);
+      await options?.startWhen;
+      backendActivations += 1;
+      return [{ type: "turn_completed" }];
+    },
+  });
+
+  const attempt = runAgentAttempt({
+    issue: fakeIssue(),
+    workflow: { path: "/workflow.md", config: {}, promptTemplate: "Fix it", settings },
+    settings,
+    fetchIssue: async () => {
+      markIssueRefreshStarted?.();
+      return issueRefresh;
+    },
+    subscribeIssueEvents: (listener) => {
+      issueEventListener = listener;
+      return () => {};
+    },
+    onUpdate: (update) => updates.push(update),
+    adapters: fakeAdapters({
+      executorFactory: () =>
+        fakeExecutor({
+          session: {
+            queueTurn: session.queueTurn,
+          },
+        }),
+    }),
+  });
+
+  await issueRefreshStarted;
+  issueEventListener?.([
+    { authorizedForSteering: true, ts: "11.0", author: "ryan", text: "accepted during refresh" },
+  ]);
+  await vi.waitFor(() => assert.equal(queuedPrompts.length, 1));
+  rejectIssueRefresh?.(new Error("tracker unavailable"));
+
+  const result = await attempt;
+  assert.equal(result.turnCount, 1);
+  assert.equal(backendActivations, 0);
+  assert.ok(
+    updates.some(
+      (update) =>
+        update.type === "stderr" &&
+        update.message.includes("Ignoring steering issue refresh failure: tracker unavailable"),
+    ),
+  );
+  assert.match(queuedPrompts[0]!, /accepted during refresh/);
+});
+
+test("a queued turn with streamed tool activity permits a continuation turn", async () => {
+  const settings = fakeSettings({ agent: { ...defaultSettings().agent, maxTurns: 3 } });
+  const normalPrompts: string[] = [];
+  let issueEventListener: ((events: TrackerIssueEvent[]) => void) | undefined;
+  let sessionOnUpdate: ((update: AgentUpdate) => void) | undefined;
+  let releaseFirstTurn: (() => void) | undefined;
+  let markFirstTurnStarted: (() => void) | undefined;
+  const firstTurnStarted = new Promise<void>((resolve) => {
+    markFirstTurnStarted = resolve;
+  });
+  const firstTurnRelease = new Promise<void>((resolve) => {
+    releaseFirstTurn = resolve;
+  });
+  const toolUpdate: AgentUpdate = {
+    type: "session_notification",
+    message: { update: { sessionUpdate: "tool_call" } } as SessionNotification,
+  };
+  const session = fakeSession({
+    queueTurn: async () => {
+      await firstTurnRelease;
+      sessionOnUpdate?.({ type: "turn_started", message: { prompt: [] } });
+      sessionOnUpdate?.(toolUpdate);
+      return [{ type: "turn_completed" }];
+    },
+  });
+  const executor: AgentExecutor = {
+    kind: "codex",
+    async startSession(input) {
+      sessionOnUpdate = input.onUpdate;
+      return session;
+    },
+    async runTurn(_session, prompt) {
+      normalPrompts.push(prompt);
+      sessionOnUpdate?.({ type: "turn_started", message: { prompt: [] } });
+      if (normalPrompts.length === 1) {
+        markFirstTurnStarted?.();
+        await firstTurnRelease;
+      }
+      return [{ type: "turn_completed" }];
+    },
+  };
+
+  const attempt = runAgentAttempt({
+    issue: fakeIssue(),
+    workflow: { path: "/workflow.md", config: {}, promptTemplate: "Fix it", settings },
+    settings,
+    fetchIssue: async (issue) => issue,
+    subscribeIssueEvents: (listener) => {
+      issueEventListener = listener;
+      return () => {};
+    },
+    adapters: fakeAdapters({ executorFactory: () => executor }),
+  });
+
+  await firstTurnStarted;
+  issueEventListener?.([
+    { authorizedForSteering: true, ts: "11.0", author: "ryan", text: "make the change" },
+  ]);
+  releaseFirstTurn?.();
+
+  const result = await attempt;
+  assert.equal(result.turnCount, 3);
+  assert.equal(normalPrompts.length, 2);
+});
+
+test("a text-only queued turn does not stop autonomous continuation", async () => {
+  const settings = fakeSettings({ agent: { ...defaultSettings().agent, maxTurns: 3 } });
+  const normalPrompts: string[] = [];
+  let issueEventListener: ((events: TrackerIssueEvent[]) => void) | undefined;
+  let releaseFirstTurn: (() => void) | undefined;
+  let markFirstTurnStarted: (() => void) | undefined;
+  const firstTurnStarted = new Promise<void>((resolve) => {
+    markFirstTurnStarted = resolve;
+  });
+  const firstTurnRelease = new Promise<void>((resolve) => {
+    releaseFirstTurn = resolve;
+  });
+  const toolUpdate: AgentUpdate = {
+    type: "session_notification",
+    message: { update: { sessionUpdate: "tool_call" } } as SessionNotification,
+  };
+  const session = fakeSession({
+    queueTurn: async (_prompt, options) => {
+      await options?.startWhen;
+      return [{ type: "turn_completed" }];
+    },
+  });
+  const executor: AgentExecutor = {
+    kind: "codex",
+    async startSession() {
+      return session;
+    },
+    async runTurn(_session, prompt) {
+      normalPrompts.push(prompt);
+      if (normalPrompts.length === 1) {
+        markFirstTurnStarted?.();
+        await firstTurnRelease;
+        return [toolUpdate, { type: "turn_completed" }];
+      }
+      return [{ type: "turn_completed" }];
+    },
+  };
+
+  const attempt = runAgentAttempt({
+    issue: fakeIssue(),
+    workflow: { path: "/workflow.md", config: {}, promptTemplate: "Fix it", settings },
+    settings,
+    fetchIssue: async (issue) => issue,
+    subscribeIssueEvents: (listener) => {
+      issueEventListener = listener;
+      return () => {};
+    },
+    adapters: fakeAdapters({ executorFactory: () => executor }),
+  });
+
+  await firstTurnStarted;
+  issueEventListener?.([
+    { authorizedForSteering: true, ts: "11.0", author: "ryan", text: "acknowledge this" },
+  ]);
+  releaseFirstTurn?.();
+
+  const result = await attempt;
+  assert.equal(result.turnCount, 3);
+  assert.equal(normalPrompts.length, 2);
+});
+
+test("accepted live-only steering drains after an autonomous no-tool turn", async () => {
+  const settings = fakeSettings({ agent: { ...defaultSettings().agent, maxTurns: 3 } });
+  const normalPrompts: string[] = [];
+  let issueEventListener: ((events: TrackerIssueEvent[]) => void) | undefined;
+  let releaseSecondTurn: (() => void) | undefined;
+  let markSecondTurnStarted: (() => void) | undefined;
+  let markQueuedTurnSubmitted: (() => void) | undefined;
+  const secondTurnStarted = new Promise<void>((resolve) => {
+    markSecondTurnStarted = resolve;
+  });
+  const secondTurnRelease = new Promise<void>((resolve) => {
+    releaseSecondTurn = resolve;
+  });
+  const queuedTurnSubmitted = new Promise<void>((resolve) => {
+    markQueuedTurnSubmitted = resolve;
+  });
+  let backendActivations = 0;
+  const session = fakeSession({
+    queueTurn: async (_prompt, options) => {
+      markQueuedTurnSubmitted?.();
+      await options?.startWhen;
+      backendActivations += 1;
+      return [{ type: "turn_completed" }];
+    },
+  });
+  const executor: AgentExecutor = {
+    kind: "codex",
+    async startSession() {
+      return session;
+    },
+    async runTurn(_session, prompt) {
+      normalPrompts.push(prompt);
+      if (normalPrompts.length === 2) {
+        markSecondTurnStarted?.();
+        await secondTurnRelease;
+      }
+      return [{ type: "turn_completed" }];
+    },
+  };
+
+  const attempt = runAgentAttempt({
+    issue: fakeIssue(),
+    workflow: { path: "/workflow.md", config: {}, promptTemplate: "Fix it", settings },
+    settings,
+    fetchIssue: async (issue) => issue,
+    subscribeIssueEvents: (listener) => {
+      issueEventListener = listener;
+      return () => {};
+    },
+    adapters: fakeAdapters({ executorFactory: () => executor }),
+  });
+
+  await secondTurnStarted;
+  issueEventListener?.([
+    { authorizedForSteering: true, ts: "11.0", author: "ryan", text: "do this before continuing" },
+  ]);
+  await queuedTurnSubmitted;
+  releaseSecondTurn?.();
+
+  const result = await attempt;
+  assert.equal(result.turnCount, 4);
+  assert.equal(normalPrompts.length, 3);
+  assert.equal(backendActivations, 1);
+});
+
+test("events observed during setup enter the queue after the initial turn starts", async () => {
+  const settings = fakeSettings({ agent: { ...defaultSettings().agent, maxTurns: 1 } });
+  const queuedPrompts: string[] = [];
+  let issueEventListener: ((events: TrackerIssueEvent[]) => void) | undefined;
+  let releaseWorkspace: (() => void) | undefined;
+  const workspaceGate = new Promise<void>((resolve) => {
+    releaseWorkspace = resolve;
+  });
+  const session = fakeSession({
+    queueTurn: async (prompt) => {
+      queuedPrompts.push(prompt);
+      return [{ type: "turn_completed" }];
+    },
+  });
+
+  const attempt = runAgentAttempt({
+    issue: fakeIssue(),
+    workflow: { path: "/workflow.md", config: {}, promptTemplate: "Fix it", settings },
+    settings,
+    fetchIssue: async (issue) => issue,
+    subscribeIssueEvents: (listener) => {
+      issueEventListener = listener;
+      return () => {};
+    },
+    adapters: fakeAdapters({
+      createWorkspaceForIssue: async () => {
+        await workspaceGate;
+        return "/tmp/workspace/TEST-1";
+      },
+      executorFactory: () =>
+        fakeExecutor({
+          session: {
+            queueTurn: session.queueTurn,
+          },
+        }),
+    }),
+  });
+
+  await vi.waitFor(() => assert.ok(issueEventListener));
+  issueEventListener?.([
+    { authorizedForSteering: true, ts: "11.0", author: "ryan", text: "first during setup" },
+    { authorizedForSteering: true, ts: "12.0", author: "ryan", text: "second during setup" },
+  ]);
+  releaseWorkspace?.();
+
+  const result = await attempt;
+  assert.equal(result.turnCount, 2);
+  assert.equal(queuedPrompts.length, 1);
+  assert.match(queuedPrompts[0]!, /first during setup/);
+  assert.match(queuedPrompts[0]!, /second during setup/);
+});
+
+test("initial recovery queues events missed after the issue snapshot", async () => {
+  const settings = fakeSettings({ agent: { ...defaultSettings().agent, maxTurns: 1 } });
+  const queuedPrompts: string[] = [];
+  const recoveryCursors: string[] = [];
+  let releaseFirstTurn: (() => void) | undefined;
+  let markFirstTurnStarted: (() => void) | undefined;
+  const firstTurnStarted = new Promise<void>((resolve) => {
+    markFirstTurnStarted = resolve;
+  });
+  const firstTurnRelease = new Promise<void>((resolve) => {
+    releaseFirstTurn = resolve;
+  });
+  const session = fakeSession({
+    queueTurn: async (prompt) => {
+      queuedPrompts.push(prompt);
+      return [{ type: "turn_completed" }];
+    },
+  });
+  const executor: AgentExecutor = {
+    kind: "codex",
+    async startSession() {
+      return session;
+    },
+    async runTurn() {
+      markFirstTurnStarted?.();
+      await firstTurnRelease;
+      return [{ type: "turn_completed" }];
+    },
+  };
+
+  const attempt = runAgentAttempt({
+    issue: fakeIssue({ issueEventCursor: "10.0" }),
+    workflow: { path: "/workflow.md", config: {}, promptTemplate: "Fix it", settings },
+    settings,
+    fetchIssue: async (issue) => issue,
+    fetchIssueEvents: async (sinceTs) => {
+      recoveryCursors.push(sinceTs);
+      return issueEventPage(
+        sinceTs === "10.0"
+          ? [
+              {
+                authorizedForSteering: true,
+                ts: "11.0",
+                author: "ryan",
+                text: "missed before subscription",
+              },
+            ]
+          : [],
+      );
+    },
+    adapters: fakeAdapters({ executorFactory: () => executor }),
+  });
+
+  await firstTurnStarted;
+  await vi.waitFor(() => assert.equal(queuedPrompts.length, 1));
+  assert.match(queuedPrompts[0]!, /missed before subscription/);
+  releaseFirstTurn?.();
+
+  const result = await attempt;
+  assert.equal(result.turnCount, 2);
+  assert.deepEqual(recoveryCursors, ["10.0", "11.0"]);
+});
+
+test("a failed initial turn cancels pending recovery", async () => {
+  const settings = fakeSettings({ agent: { ...defaultSettings().agent, maxTurns: 1 } });
+  let recoverySignal: AbortSignal | undefined;
+
+  const attempt = runAgentAttempt({
+    issue: fakeIssue({ issueEventCursor: "10.0" }),
+    workflow: { path: "/workflow.md", config: {}, promptTemplate: "Fix it", settings },
+    settings,
+    fetchIssueEvents: async (_sinceTs, query) =>
+      new Promise<TrackerIssueEventPage>((_resolve, reject) => {
+        recoverySignal = query.abortSignal;
+        query.abortSignal?.addEventListener(
+          "abort",
+          () => reject(query.abortSignal?.reason ?? new Error("aborted")),
+          { once: true },
+        );
+      }),
+    adapters: fakeAdapters({
+      executorFactory: () =>
+        fakeExecutor({
+          session: {
+            queueTurn: async () => [{ type: "turn_completed" }],
+          },
+          throwOnTurn: new Error("initial turn failed"),
+        }),
+    }),
+  });
+
+  await assert.rejects(() => attempt, /initial turn failed/);
+  assert.equal(recoverySignal?.aborted, true);
+});
+
+test("recovery stops when the issue becomes inactive", async () => {
+  const settings = fakeSettings({ agent: { ...defaultSettings().agent, maxTurns: 2 } });
+  const queuedPrompts: string[] = [];
+  let recoveryCalls = 0;
+  const session = fakeSession({
+    queueTurn: async (prompt) => {
+      queuedPrompts.push(prompt);
+      return [{ type: "turn_completed" }];
+    },
+  });
+
+  const result = await runAgentAttempt({
+    issue: fakeIssue({ issueEventCursor: "10.0" }),
+    workflow: { path: "/workflow.md", config: {}, promptTemplate: "Fix it", settings },
+    settings,
+    fetchIssue: async (issue) => ({
+      ...issue,
+      state: "Done",
+      stateType: "completed",
+    }),
+    fetchIssueEvents: async () => {
+      recoveryCalls += 1;
+      return issueEventPage(
+        recoveryCalls === 2
+          ? [{ authorizedForSteering: true, ts: "11.0", author: "ryan", text: "late steering" }]
+          : [],
+      );
+    },
+    adapters: fakeAdapters({
+      executorFactory: () =>
+        fakeExecutor({
+          session: {
+            queueTurn: session.queueTurn,
+          },
+        }),
+    }),
+  });
+
+  assert.equal(result.turnCount, 1);
+  assert.equal(recoveryCalls, 1);
+  assert.equal(queuedPrompts.length, 0);
+});
+
+test("recovered steering queued after a lifecycle refresh receives a new activation refresh", async () => {
+  const settings = fakeSettings({ agent: { ...defaultSettings().agent, maxTurns: 1 } });
+  const queuedPrompts: string[] = [];
+  let backendActivations = 0;
+  let issueRefreshes = 0;
+  let recoveryCalls = 0;
+  const session = fakeSession({
+    queueTurn: async (prompt, options) => {
+      queuedPrompts.push(prompt);
+      await options?.startWhen;
+      backendActivations += 1;
+      return [{ type: "turn_completed" }];
+    },
+  });
+
+  const result = await runAgentAttempt({
+    issue: fakeIssue({ issueEventCursor: "10.0" }),
+    workflow: { path: "/workflow.md", config: {}, promptTemplate: "Fix it", settings },
+    settings,
+    fetchIssue: async (issue) => {
+      issueRefreshes += 1;
+      if (issueRefreshes === 1) return issue;
+      return { ...issue, state: "Done", stateType: "completed" };
+    },
+    fetchIssueEvents: async () => {
+      recoveryCalls += 1;
+      return issueEventPage(
+        recoveryCalls === 2
+          ? [
+              {
+                authorizedForSteering: true,
+                ts: "11.0",
+                author: "ryan",
+                text: "queued after refresh",
+              },
+            ]
+          : [],
+      );
+    },
+    adapters: fakeAdapters({
+      executorFactory: () =>
+        fakeExecutor({
+          session: {
+            queueTurn: session.queueTurn,
+          },
+        }),
+    }),
+  });
+
+  assert.equal(result.turnCount, 1);
+  assert.equal(issueRefreshes, 2);
+  assert.equal(recoveryCalls, 2);
+  assert.equal(queuedPrompts.length, 1);
+  assert.equal(backendActivations, 0);
+});
+
+test("live delivery reconciles missed events before newer messages", async () => {
+  const settings = fakeSettings({ agent: { ...defaultSettings().agent, maxTurns: 3 } });
+  const queuedPrompts: string[] = [];
+  const recoveryCursors: string[] = [];
+  let issueEventListener: ((events: TrackerIssueEvent[]) => void) | undefined;
+  let releaseFirstTurn: (() => void) | undefined;
+  let markFirstTurnStarted: (() => void) | undefined;
+  const firstTurnStarted = new Promise<void>((resolve) => {
+    markFirstTurnStarted = resolve;
+  });
+  const firstTurnRelease = new Promise<void>((resolve) => {
+    releaseFirstTurn = resolve;
+  });
+  const session = fakeSession({
+    queueTurn: async (prompt) => {
+      queuedPrompts.push(prompt);
+      return [{ type: "turn_completed" }];
+    },
+  });
+  const executor: AgentExecutor = {
+    kind: "codex",
+    async startSession() {
+      return session;
+    },
+    async runTurn() {
+      markFirstTurnStarted?.();
+      await firstTurnRelease;
+      return [{ type: "turn_completed" }];
+    },
+  };
+
+  const attempt = runAgentAttempt({
+    issue: fakeIssue({ issueEventCursor: "10.0" }),
+    workflow: { path: "/workflow.md", config: {}, promptTemplate: "Fix it", settings },
+    settings,
+    fetchIssue: async (issue) => issue,
+    fetchIssueEvents: async (sinceTs) => {
+      recoveryCursors.push(sinceTs);
+      if (sinceTs === "10.0") {
+        return issueEventPage(
+          [{ authorizedForSteering: true, ts: "11.0", author: "ryan", text: "first missed event" }],
+          true,
+        );
+      }
+      if (sinceTs === "11.0") {
+        return issueEventPage([
+          { authorizedForSteering: true, ts: "12.0", author: "ryan", text: "second missed event" },
+        ]);
+      }
+      return issueEventPage([]);
+    },
+    subscribeIssueEvents: (listener) => {
+      issueEventListener = listener;
+      return () => {};
+    },
+    adapters: fakeAdapters({ executorFactory: () => executor }),
+  });
+
+  await firstTurnStarted;
+  assert.ok(issueEventListener);
+  issueEventListener?.([
+    { authorizedForSteering: true, ts: "13.0", author: "ryan", text: "live event" },
+  ]);
+  await vi.waitFor(() => assert.equal(queuedPrompts.length, 2));
+  releaseFirstTurn?.();
+
+  const result = await attempt;
+  assert.equal(result.turnCount, 2 + queuedPrompts.length);
+  assert.deepEqual(recoveryCursors.slice(0, 2), ["10.0", "11.0"]);
+  assert.equal(queuedPrompts.length, 2);
+  assert.match(queuedPrompts[0]!, /first missed event/);
+  assert.notMatch(queuedPrompts[0]!, /live event/);
+  assert.match(queuedPrompts[1]!, /second missed event/);
+  assert.match(queuedPrompts[1]!, /live event/);
+  assert.ok(
+    queuedPrompts[1]!.indexOf("second missed event") < queuedPrompts[1]!.indexOf("live event"),
+  );
+});
+
+test("live delivery chunks large batches within the recovery byte bound", async () => {
+  const settings = fakeSettings({ agent: { ...defaultSettings().agent, maxTurns: 3 } });
+  const queuedPrompts: string[] = [];
+  let issueEventListener: ((events: TrackerIssueEvent[]) => void) | undefined;
+  let releaseFirstTurn: (() => void) | undefined;
+  let markFirstTurnStarted: (() => void) | undefined;
+  const firstTurnStarted = new Promise<void>((resolve) => {
+    markFirstTurnStarted = resolve;
+  });
+  const firstTurnRelease = new Promise<void>((resolve) => {
+    releaseFirstTurn = resolve;
+  });
+  const session = fakeSession({
+    queueTurn: async (prompt) => {
+      queuedPrompts.push(prompt);
+      return [{ type: "turn_completed" }];
+    },
+  });
+  const executor: AgentExecutor = {
+    kind: "codex",
+    async startSession() {
+      return session;
+    },
+    async runTurn() {
+      markFirstTurnStarted?.();
+      await firstTurnRelease;
+      return [{ type: "turn_completed" }];
+    },
+  };
+
+  const attempt = runAgentAttempt({
+    issue: fakeIssue({ issueEventCursor: "10.0" }),
+    workflow: { path: "/workflow.md", config: {}, promptTemplate: "Fix it", settings },
+    settings,
+    fetchIssue: async (issue) => issue,
+    fetchIssueEvents: async () => issueEventPage([]),
+    subscribeIssueEvents: (listener) => {
+      issueEventListener = listener;
+      return () => {};
+    },
+    adapters: fakeAdapters({ executorFactory: () => executor }),
+  });
+
+  await firstTurnStarted;
+  issueEventListener?.(
+    Array.from({ length: 1_000 }, (_, index) => ({
+      authorizedForSteering: true,
+      ts: `${index + 11}`,
+      text: "x".repeat(55),
+    })),
+  );
+  await vi.waitFor(() => assert.ok(queuedPrompts.length > 1));
+  releaseFirstTurn?.();
+
+  const result = await attempt;
+  assert.equal(result.turnCount, 2 + queuedPrompts.length);
+  assert.ok(queuedPrompts.every((prompt) => Buffer.byteLength(prompt) <= 64 * 1024));
+});
+
+test("live delivery bounds aggregate bytes held in inactive queued turns", async () => {
+  const settings = fakeSettings({ agent: { ...defaultSettings().agent, maxTurns: 10 } });
+  let issueEventListener: ((events: TrackerIssueEvent[]) => void) | undefined;
+  let releaseFirstTurn: (() => void) | undefined;
+  let markFirstTurnStarted: (() => void) | undefined;
+  const firstTurnStarted = new Promise<void>((resolve) => {
+    markFirstTurnStarted = resolve;
+  });
+  const firstTurnRelease = new Promise<void>((resolve) => {
+    releaseFirstTurn = resolve;
+  });
+  let pendingPromptBytes = 0;
+  let maxPendingPromptBytes = 0;
+  let queuedPromptCount = 0;
+  const session = fakeSession({
+    queueTurn: async (prompt, options) => {
+      const promptBytes = Buffer.byteLength(prompt);
+      pendingPromptBytes += promptBytes;
+      maxPendingPromptBytes = Math.max(maxPendingPromptBytes, pendingPromptBytes);
+      queuedPromptCount += 1;
+      await options?.startWhen;
+      pendingPromptBytes -= promptBytes;
+      return [{ type: "turn_completed" }];
+    },
+  });
+  const executor: AgentExecutor = {
+    kind: "codex",
+    async startSession() {
+      return session;
+    },
+    async runTurn() {
+      markFirstTurnStarted?.();
+      await firstTurnRelease;
+      return [{ type: "turn_completed" }];
+    },
+  };
+
+  const attempt = runAgentAttempt({
+    issue: fakeIssue({ issueEventCursor: "10.0" }),
+    workflow: { path: "/workflow.md", config: {}, promptTemplate: "Fix it", settings },
+    settings,
+    fetchIssue: async (issue) => issue,
+    fetchIssueEvents: async () => issueEventPage([]),
+    subscribeIssueEvents: (listener) => {
+      issueEventListener = listener;
+      return () => {};
+    },
+    adapters: fakeAdapters({ executorFactory: () => executor }),
+  });
+
+  await firstTurnStarted;
+  for (let index = 0; index < 10; index += 1) {
+    issueEventListener?.([
+      {
+        authorizedForSteering: true,
+        ts: `${index + 11}.0`,
+        author: "ryan",
+        text: "x".repeat(55 * 1024),
+      },
+    ]);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  }
+  await vi.waitFor(() => assert.ok(queuedPromptCount >= 3));
+  assert.ok(maxPendingPromptBytes <= 256 * 1024);
+  assert.ok(queuedPromptCount < 10);
+
+  releaseFirstTurn?.();
+  await attempt;
+});
+
+test("live delivery shortens a single oversized message before queueing it", async () => {
+  const settings = fakeSettings({ agent: { ...defaultSettings().agent, maxTurns: 1 } });
+  const queuedPrompts: string[] = [];
+  let issueEventListener: ((events: TrackerIssueEvent[]) => void) | undefined;
+  let releaseFirstTurn: (() => void) | undefined;
+  let markFirstTurnStarted: (() => void) | undefined;
+  const firstTurnStarted = new Promise<void>((resolve) => {
+    markFirstTurnStarted = resolve;
+  });
+  const firstTurnRelease = new Promise<void>((resolve) => {
+    releaseFirstTurn = resolve;
+  });
+  const session = fakeSession({
+    queueTurn: async (prompt) => {
+      queuedPrompts.push(prompt);
+      return [{ type: "turn_completed" }];
+    },
+  });
+  const executor: AgentExecutor = {
+    kind: "codex",
+    async startSession() {
+      return session;
+    },
+    async runTurn() {
+      markFirstTurnStarted?.();
+      await firstTurnRelease;
+      return [{ type: "turn_completed" }];
+    },
+  };
+
+  const attempt = runAgentAttempt({
+    issue: fakeIssue({ issueEventCursor: "10.0" }),
+    workflow: { path: "/workflow.md", config: {}, promptTemplate: "Fix it", settings },
+    settings,
+    fetchIssue: async (issue) => issue,
+    fetchIssueEvents: async () => issueEventPage([]),
+    subscribeIssueEvents: (listener) => {
+      issueEventListener = listener;
+      return () => {};
+    },
+    adapters: fakeAdapters({ executorFactory: () => executor }),
+  });
+
+  await firstTurnStarted;
+  issueEventListener?.([
+    {
+      authorizedForSteering: true,
+      ts: "11.0",
+      author: "ryan",
+      text: `prefix-marker${"x".repeat(100 * 1024)}tail-marker`,
+    },
+  ]);
+  await vi.waitFor(() => assert.equal(queuedPrompts.length, 1));
+  releaseFirstTurn?.();
+
+  const result = await attempt;
+  assert.equal(result.turnCount, 2);
+  assert.ok(Buffer.byteLength(queuedPrompts[0]!) <= 64 * 1024);
+  assert.match(queuedPrompts[0]!, /prefix-marker/);
+  assert.match(queuedPrompts[0]!, /tail-marker/);
+  assert.match(queuedPrompts[0]!, /\[message shortened for live delivery/);
+});
+
+test("live delivery bounds oversized event metadata", async () => {
+  const settings = fakeSettings({ agent: { ...defaultSettings().agent, maxTurns: 1 } });
+  const queuedPrompts: string[] = [];
+  const longTimestamp = "1".repeat(32_755);
+  const longAuthor = "a".repeat(32_755);
+
+  const result = await runAgentAttempt({
+    issue: fakeIssue({ issueEventCursor: "10.0" }),
+    workflow: { path: "/workflow.md", config: {}, promptTemplate: "Fix it", settings },
+    settings,
+    fetchIssue: async (issue) => issue,
+    fetchIssueEvents: async (sinceTs) =>
+      issueEventPage(
+        sinceTs === "10.0"
+          ? [
+              {
+                authorizedForSteering: true,
+                ts: longTimestamp,
+                author: longAuthor,
+                text: "bounded message",
+              },
+            ]
+          : [],
+      ),
+    adapters: fakeAdapters({
+      executorFactory: () =>
+        fakeExecutor({
+          session: {
+            queueTurn: async (prompt) => {
+              queuedPrompts.push(prompt);
+              return [{ type: "turn_completed" }];
+            },
+          },
+        }),
+    }),
+  });
+
+  assert.equal(result.turnCount, 2);
+  assert.equal(queuedPrompts.length, 1);
+  assert.ok(Buffer.byteLength(queuedPrompts[0]!) <= 64 * 1024);
+  assert.match(queuedPrompts[0]!, /\[field shortened for live delivery\]/);
+  assert.match(queuedPrompts[0]!, /bounded message/);
+  assert.equal(queuedPrompts[0]!.match(/bounded message/g)?.length, 1);
+});
+
+test("live delivery includes rendered formatting in the prompt byte limit", async () => {
+  const settings = fakeSettings({ agent: { ...defaultSettings().agent, maxTurns: 3 } });
+  const queuedPrompts: string[] = [];
+  const events = Array.from({ length: 1_000 }, (_, index) => ({
+    authorizedForSteering: true,
+    ts: `${index + 11}`,
+    text: "x".repeat(50),
+  }));
+
+  await runAgentAttempt({
+    issue: fakeIssue({ issueEventCursor: "10" }),
+    workflow: { path: "/workflow.md", config: {}, promptTemplate: "Fix it", settings },
+    settings,
+    fetchIssue: async (issue) => issue,
+    fetchIssueEvents: async (sinceTs) => issueEventPage(sinceTs === "10" ? events : []),
+    adapters: fakeAdapters({
+      executorFactory: () =>
+        fakeExecutor({
+          session: {
+            queueTurn: async (prompt) => {
+              queuedPrompts.push(prompt);
+              return [{ type: "turn_completed" }];
+            },
+          },
+        }),
+    }),
+  });
+
+  assert.ok(queuedPrompts.length > 1);
+  assert.ok(queuedPrompts.every((prompt) => Buffer.byteLength(prompt) <= 64 * 1024));
+});
+
+test("recovery rejects pages that exceed the negotiated bounds", async () => {
+  const settings = fakeSettings({ agent: { ...defaultSettings().agent, maxTurns: 1 } });
+  const updates: AgentUpdate[] = [];
+  const queries: Array<{ maxEvents: number; maxBytes: number }> = [];
+
+  const result = await runAgentAttempt({
+    issue: fakeIssue({ issueEventCursor: "10" }),
+    workflow: { path: "/workflow.md", config: {}, promptTemplate: "Fix it", settings },
+    settings,
+    fetchIssueEvents: async (_sinceTs, query) => {
+      queries.push({ maxEvents: query.maxEvents, maxBytes: query.maxBytes });
+      return issueEventPage(
+        Array.from({ length: query.maxEvents + 1 }, (_, index) => ({
+          authorizedForSteering: true,
+          ts: `${index + 11}`,
+          text: "",
+        })),
+      );
+    },
+    onUpdate: (update) => updates.push(update),
+    adapters: fakeAdapters({
+      executorFactory: () =>
+        fakeExecutor({
+          session: {
+            queueTurn: async () => [{ type: "turn_completed" }],
+          },
+        }),
+    }),
+  });
+
+  assert.equal(result.turnCount, 1);
+  assert.deepEqual(queries, [{ maxEvents: 1_000, maxBytes: 64 * 1024 }]);
+  assert.ok(
+    updates.some(
+      (update) =>
+        update.type === "stderr" &&
+        update.message.includes("tracker issue event page exceeds event limit"),
+    ),
+  );
+});
+
+test("recovery rejects events that are not authorized for steering", async () => {
+  const settings = fakeSettings({ agent: { ...defaultSettings().agent, maxTurns: 1 } });
+  const updates: AgentUpdate[] = [];
+  let queuedTurns = 0;
+
+  const result = await runAgentAttempt({
+    issue: fakeIssue({ issueEventCursor: "10" }),
+    workflow: { path: "/workflow.md", config: {}, promptTemplate: "Fix it", settings },
+    settings,
+    fetchIssueEvents: async () =>
+      issueEventPage([
+        {
+          authorizedForSteering: false,
+          ts: "11",
+          author: "guest",
+          text: "untrusted direction",
+        },
+      ]),
+    onUpdate: (update) => updates.push(update),
+    adapters: fakeAdapters({
+      executorFactory: () =>
+        fakeExecutor({
+          session: {
+            queueTurn: async () => {
+              queuedTurns += 1;
+              return [{ type: "turn_completed" }];
+            },
+          },
+        }),
+    }),
+  });
+
+  assert.equal(result.turnCount, 1);
+  assert.equal(queuedTurns, 0);
+  assert.ok(
+    updates.some(
+      (update) =>
+        update.type === "stderr" && update.message.includes("event not authorized for steering"),
+    ),
+  );
+});
+
+test("recovery requires an explicit empty snapshot boundary", async () => {
+  const settings = fakeSettings({ agent: { ...defaultSettings().agent, maxTurns: 1 } });
+
+  await assert.rejects(
+    () =>
+      runAgentAttempt({
+        issue: fakeIssue({ issueEventCursor: null }),
+        workflow: { path: "/workflow.md", config: {}, promptTemplate: "Fix it", settings },
+        settings,
+        fetchIssueEvents: async () => issueEventPage([]),
+        adapters: fakeAdapters({
+          executorFactory: () =>
+            fakeExecutor({
+              session: {
+                queueTurn: async () => [{ type: "turn_completed" }],
+              },
+            }),
+        }),
+      }),
+    /tracker issue event cursor is required.*use "0" for an empty boundary/,
+  );
+});
+
+test("recovery can queue a missed event before the no-tool completion exit", async () => {
+  const settings = fakeSettings({ agent: { ...defaultSettings().agent, maxTurns: 3 } });
+  const feedCursors: string[] = [];
+  const queuedPrompts: string[] = [];
+  const session = fakeSession({
+    queueTurn: async (prompt) => {
+      queuedPrompts.push(prompt);
+      return [{ type: "turn_completed" }];
+    },
+  });
+
+  const result = await runAgentAttempt({
+    issue: fakeIssue({ issueEventCursor: "10.0" }),
+    workflow: { path: "/workflow.md", config: {}, promptTemplate: "Fix it", settings },
+    settings,
+    fetchIssue: async (issue) => issue,
+    fetchIssueEvents: async (sinceTs) => {
+      feedCursors.push(sinceTs);
+      return issueEventPage(
+        feedCursors.length === 2
+          ? [
+              {
+                authorizedForSteering: true,
+                ts: "11.0",
+                author: "ryan",
+                text: "missed during turn",
+              },
+            ]
+          : [],
+      );
+    },
+    adapters: fakeAdapters({
+      executorFactory: () =>
+        fakeExecutor({
+          session: {
+            queueTurn: session.queueTurn,
+          },
+        }),
+    }),
+  });
+
+  assert.equal(result.turnCount, 3);
+  assert.deepEqual(feedCursors, ["10.0", "10.0", "11.0", "11.0"]);
+  assert.equal(queuedPrompts.length, 1);
+  assert.match(queuedPrompts[0]!, /missed during turn/);
+});
+
+test("no-tool completion does not refresh the issue when recovery is unavailable", async () => {
+  const settings = fakeSettings({ agent: { ...defaultSettings().agent, maxTurns: 3 } });
+  let issueRefreshes = 0;
+
+  const result = await runAgentAttempt({
+    issue: fakeIssue(),
+    workflow: { path: "/workflow.md", config: {}, promptTemplate: "Fix it", settings },
+    settings,
+    fetchIssue: async (issue) => {
+      issueRefreshes += 1;
+      return issue;
+    },
+    adapters: fakeAdapters(),
+  });
+
+  assert.equal(result.turnCount, 2);
+  assert.equal(issueRefreshes, 1);
+});
+
+test("a state override can add turn capacity for steering recovery", async () => {
+  const overrides = new Map<string, { agent?: Partial<Settings["agent"]> }>();
+  overrides.set("in progress", { agent: { maxTurns: 3 } });
+  const settings = fakeSettings({
+    agent: { ...defaultSettings().agent, maxTurns: 1 },
+    statusOverrides: overrides as Settings["statusOverrides"],
+  });
+  const feedCursors: string[] = [];
+  const queuedPrompts: string[] = [];
+  const session = fakeSession({
+    queueTurn: async (prompt) => {
+      queuedPrompts.push(prompt);
+      return [{ type: "turn_completed" }];
+    },
+  });
+
+  const result = await runAgentAttempt({
+    issue: fakeIssue({ issueEventCursor: "10.0" }),
+    workflow: { path: "/workflow.md", config: {}, promptTemplate: "Fix it", settings },
+    settings,
+    fetchIssue: async (issue) => ({ ...issue, state: "In Progress" }),
+    fetchIssueEvents: async (sinceTs) => {
+      feedCursors.push(sinceTs);
+      return issueEventPage(
+        sinceTs === "10.0"
+          ? [
+              {
+                authorizedForSteering: true,
+                ts: "11.0",
+                author: "ryan",
+                text: "recovered after transition",
+              },
+            ]
+          : [],
+      );
+    },
+    adapters: fakeAdapters({
+      executorFactory: () =>
+        fakeExecutor({
+          session: {
+            queueTurn: session.queueTurn,
+          },
+        }),
+    }),
+  });
+
+  assert.equal(result.turnCount, 3);
+  assert.deepEqual(feedCursors, ["10.0", "11.0", "11.0"]);
+  assert.equal(queuedPrompts.length, 1);
+  assert.match(queuedPrompts[0]!, /recovered after transition/);
+});
+
+test("a state override can lower the steering turn limit before activation", async () => {
+  const overrides = new Map<string, { agent?: Partial<Settings["agent"]> }>();
+  overrides.set("in progress", { agent: { maxTurns: 1 } });
+  const settings = fakeSettings({
+    agent: { ...defaultSettings().agent, maxTurns: 3 },
+    statusOverrides: overrides as Settings["statusOverrides"],
+  });
+  const queuedPrompts: string[] = [];
+  let backendActivations = 0;
+  let issueEventListener: ((events: TrackerIssueEvent[]) => void) | undefined;
+  let releaseFirstTurn: (() => void) | undefined;
+  let markFirstTurnStarted: (() => void) | undefined;
+  const firstTurnStarted = new Promise<void>((resolve) => {
+    markFirstTurnStarted = resolve;
+  });
+  const firstTurnRelease = new Promise<void>((resolve) => {
+    releaseFirstTurn = resolve;
+  });
+  const session = fakeSession({
+    queueTurn: async (prompt, options) => {
+      queuedPrompts.push(prompt);
+      await options?.startWhen;
+      backendActivations += 1;
+      return [{ type: "turn_completed" }];
+    },
+  });
+  const executor: AgentExecutor = {
+    kind: "codex",
+    async startSession() {
+      return session;
+    },
+    async runTurn() {
+      markFirstTurnStarted?.();
+      await firstTurnRelease;
+      return [{ type: "turn_completed" }];
+    },
+  };
+
+  const attempt = runAgentAttempt({
+    issue: fakeIssue({ issueEventCursor: "10.0" }),
+    workflow: { path: "/workflow.md", config: {}, promptTemplate: "Fix it", settings },
+    settings,
+    fetchIssue: async (issue) => ({ ...issue, state: "In Progress" }),
+    fetchIssueEvents: async () => issueEventPage([]),
+    subscribeIssueEvents: (listener) => {
+      issueEventListener = listener;
+      return () => {};
+    },
+    adapters: fakeAdapters({ executorFactory: () => executor }),
+  });
+
+  await firstTurnStarted;
+  issueEventListener?.([
+    { authorizedForSteering: true, ts: "11.0", text: `first ${"a".repeat(40 * 1024)}` },
+  ]);
+  await vi.waitFor(() => assert.equal(queuedPrompts.length, 1));
+  issueEventListener?.([
+    { authorizedForSteering: true, ts: "12.0", text: `second ${"b".repeat(40 * 1024)}` },
+  ]);
+  await vi.waitFor(() => assert.equal(queuedPrompts.length, 2));
+  releaseFirstTurn?.();
+
+  const result = await attempt;
+  assert.equal(result.turnCount, 2);
+  assert.equal(queuedPrompts.length, 2);
+  assert.equal(backendActivations, 1);
+});
+
+test("live steering is drained after the autonomous turn budget is exhausted", async () => {
+  const settings = fakeSettings({ agent: { ...defaultSettings().agent, maxTurns: 1 } });
+  const queuedPrompts: string[] = [];
+  let issueEventListener: ((events: TrackerIssueEvent[]) => void) | undefined;
+  let releaseFirstTurn: (() => void) | undefined;
+  let markFirstTurnStarted: (() => void) | undefined;
+  const firstTurnStarted = new Promise<void>((resolve) => {
+    markFirstTurnStarted = resolve;
+  });
+  const firstTurnRelease = new Promise<void>((resolve) => {
+    releaseFirstTurn = resolve;
+  });
+  const session = fakeSession({
+    queueTurn: async (prompt) => {
+      queuedPrompts.push(prompt);
+      return [{ type: "turn_completed" }];
+    },
+  });
+  const executor: AgentExecutor = {
+    kind: "codex",
+    async startSession() {
+      return session;
+    },
+    async runTurn() {
+      markFirstTurnStarted?.();
+      await firstTurnRelease;
+      return [{ type: "turn_completed" }];
+    },
+  };
+
+  const attempt = runAgentAttempt({
+    issue: fakeIssue(),
+    workflow: { path: "/workflow.md", config: {}, promptTemplate: "Fix it", settings },
+    settings,
+    fetchIssue: async (issue) => issue,
+    subscribeIssueEvents: (listener) => {
+      issueEventListener = listener;
+      return () => {};
+    },
+    adapters: fakeAdapters({ executorFactory: () => executor }),
+  });
+
+  await firstTurnStarted;
+  issueEventListener?.([
+    { authorizedForSteering: true, ts: "11.0", author: "ryan", text: "finish after the budget" },
+  ]);
+  await vi.waitFor(() => assert.equal(queuedPrompts.length, 1));
+  releaseFirstTurn?.();
+
+  const result = await attempt;
+  assert.equal(result.turnCount, 2);
+  assert.equal(queuedPrompts.length, 1);
+  assert.match(queuedPrompts[0]!, /finish after the budget/);
+});
+
+test("sessions without queued turns do not start issue event recovery", async () => {
+  const settings = fakeSettings({ agent: { ...defaultSettings().agent, maxTurns: 1 } });
+  let feedCalls = 0;
+  let subscriptionClosed = false;
+
+  const result = await runAgentAttempt({
+    issue: fakeIssue({ issueEventCursor: "10.0" }),
+    workflow: { path: "/workflow.md", config: {}, promptTemplate: "Fix it", settings },
+    settings,
+    fetchIssue: async (issue) => issue,
+    fetchIssueEvents: async () => {
+      feedCalls += 1;
+      return never<TrackerIssueEventPage>();
+    },
+    subscribeIssueEvents: () => () => {
+      subscriptionClosed = true;
+    },
+    adapters: fakeAdapters(),
+  });
+
+  assert.equal(result.turnCount, 1);
+  assert.equal(feedCalls, 0);
   assert.equal(subscriptionClosed, true);
+});
+
+test("run cancellation aborts an active steering recovery request", async () => {
+  const settings = fakeSettings({ agent: { ...defaultSettings().agent, maxTurns: 3 } });
+  const controller = new AbortController();
+  let markFeedStarted: (() => void) | undefined;
+  const feedStarted = new Promise<void>((resolve) => {
+    markFeedStarted = resolve;
+  });
+  let feedSignal: AbortSignal | undefined;
+  let feedCalls = 0;
+  const session = fakeSession({
+    queueTurn: async () => [{ type: "turn_completed" }],
+  });
+
+  const attempt = runAgentAttempt({
+    issue: fakeIssue({ issueEventCursor: "10.0" }),
+    workflow: { path: "/workflow.md", config: {}, promptTemplate: "Fix it", settings },
+    settings,
+    fetchIssue: async (issue) => issue,
+    fetchIssueEvents: async (_sinceTs, query) => {
+      feedCalls += 1;
+      if (feedCalls === 1) return issueEventPage([]);
+      feedSignal = query.abortSignal;
+      markFeedStarted?.();
+      return new Promise<TrackerIssueEventPage>((_resolve, reject) => {
+        query.abortSignal?.addEventListener(
+          "abort",
+          () => reject(query.abortSignal?.reason ?? new Error("aborted")),
+          { once: true },
+        );
+      });
+    },
+    abortSignal: controller.signal,
+    adapters: fakeAdapters({
+      executorFactory: () =>
+        fakeExecutor({
+          session: {
+            queueTurn: session.queueTurn,
+          },
+        }),
+    }),
+  });
+
+  await feedStarted;
+  controller.abort();
+
+  await assert.rejects(() => attempt, /agent_run_aborted/);
+  assert.equal(feedCalls, 2);
+  assert.equal(feedSignal?.aborted, true);
+});
+
+test("run cancellation stops queued ACP work during an issue refresh", async () => {
+  const settings = fakeSettings({ agent: { ...defaultSettings().agent, maxTurns: 2 } });
+  const controller = new AbortController();
+  let issueEventListener: ((events: TrackerIssueEvent[]) => void) | undefined;
+  let releaseFirstTurn: (() => void) | undefined;
+  let markFirstTurnStarted: (() => void) | undefined;
+  let releaseIssueRefresh: (() => void) | undefined;
+  let markIssueRefreshStarted: (() => void) | undefined;
+  let markSessionStopped: (() => void) | undefined;
+  let markQueuedTurnSubmitted: (() => void) | undefined;
+  const firstTurnStarted = new Promise<void>((resolve) => {
+    markFirstTurnStarted = resolve;
+  });
+  const firstTurnRelease = new Promise<void>((resolve) => {
+    releaseFirstTurn = resolve;
+  });
+  const issueRefreshStarted = new Promise<void>((resolve) => {
+    markIssueRefreshStarted = resolve;
+  });
+  const issueRefreshRelease = new Promise<void>((resolve) => {
+    releaseIssueRefresh = resolve;
+  });
+  const sessionStopped = new Promise<void>((resolve) => {
+    markSessionStopped = resolve;
+  });
+  const queuedTurnSubmitted = new Promise<void>((resolve) => {
+    markQueuedTurnSubmitted = resolve;
+  });
+  let stopCalls = 0;
+  const session = fakeSession({
+    queueTurn: async () => {
+      markQueuedTurnSubmitted?.();
+      return never<AgentUpdate[]>();
+    },
+    stop: async () => {
+      stopCalls += 1;
+      markSessionStopped?.();
+    },
+  });
+  const executor: AgentExecutor = {
+    kind: "codex",
+    async startSession() {
+      return session;
+    },
+    async runTurn() {
+      markFirstTurnStarted?.();
+      await firstTurnRelease;
+      return [{ type: "turn_completed" }];
+    },
+  };
+
+  const attempt = runAgentAttempt({
+    issue: fakeIssue(),
+    workflow: { path: "/workflow.md", config: {}, promptTemplate: "Fix it", settings },
+    settings,
+    fetchIssue: async (issue) => {
+      markIssueRefreshStarted?.();
+      await issueRefreshRelease;
+      return issue;
+    },
+    subscribeIssueEvents: (listener) => {
+      issueEventListener = listener;
+      return () => {};
+    },
+    abortSignal: controller.signal,
+    adapters: fakeAdapters({ executorFactory: () => executor }),
+  });
+
+  await firstTurnStarted;
+  releaseFirstTurn?.();
+  await issueRefreshStarted;
+  issueEventListener?.([
+    { authorizedForSteering: true, ts: "11.0", author: "ryan", text: "queued work" },
+  ]);
+  await queuedTurnSubmitted;
+  controller.abort();
+  await sessionStopped;
+
+  assert.equal(stopCalls, 1);
+  releaseIssueRefresh?.();
+  await assert.rejects(() => attempt, /agent_run_aborted/);
+  assert.equal(stopCalls, 1);
+});
+
+test("a non-settling final steering recovery fails within the agent timeout", async () => {
+  const baseSettings = fakeSettingsWithTimeouts({ setupTimeoutMs: 20 });
+  const settings: Settings = {
+    ...baseSettings,
+    agent: { ...baseSettings.agent, maxTurns: 2 },
+  };
+  const updates: AgentUpdate[] = [];
+  let feedCalls = 0;
+  const session = fakeSession({
+    queueTurn: async () => [{ type: "turn_completed" }],
+  });
+
+  const attempt = runAgentAttempt({
+    issue: fakeIssue({ issueEventCursor: "10.0" }),
+    workflow: { path: "/workflow.md", config: {}, promptTemplate: "Fix it", settings },
+    settings,
+    fetchIssue: async (issue) => issue,
+    fetchIssueEvents: async () => {
+      feedCalls += 1;
+      return never<TrackerIssueEventPage>();
+    },
+    onUpdate: (update) => updates.push(update),
+    adapters: fakeAdapters({
+      executorFactory: () =>
+        fakeExecutor({
+          session: {
+            queueTurn: session.queueTurn,
+          },
+        }),
+    }),
+  });
+
+  await assert.rejects(() => attempt, /tracker\.fetch_issue_events timed out after 20ms/);
+  assert.equal(feedCalls, 3);
+  assert.ok(
+    updates.some(
+      (update) =>
+        update.type === "stderr" &&
+        update.message.includes("tracker.fetch_issue_events timed out after 20ms"),
+    ),
+  );
 });
 
 function fakeSettingsWithTimeouts(

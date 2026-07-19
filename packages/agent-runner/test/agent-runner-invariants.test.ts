@@ -1,6 +1,6 @@
 import { test, describe } from "vitest";
 import fc from "fast-check";
-import type { AgentSession, AgentUpdate, Issue, Settings } from "@lorenz/domain";
+import type { AgentSession, AgentUpdate, Issue, Settings, TrackerIssueEvent } from "@lorenz/domain";
 import type { SessionNotification } from "@agentclientprotocol/sdk";
 import { defaultSettings } from "@lorenz/config";
 import { assert } from "@lorenz/test-utils";
@@ -246,7 +246,9 @@ describe("INVARIANT: When a continuation turn begins, the system SHALL send only
 
 describe("INVARIANT: When the backend profile changes between turns, the system SHALL end the session and yield to the orchestrator.", () => {
   test("session ends when backend profile changes between turns via agent kind override (ACP)", async () => {
-    const issue = fakeIssue({ state: "Todo" });
+    const issue = fakeIssue({ state: "Todo", issueEventCursor: "10.0" });
+    const queuedPrompts: string[] = [];
+    let recoveryCalls = 0;
     const overrides = new Map<string, { agent?: Partial<Settings["agent"]> }>();
     overrides.set("in progress", {
       agent: { kind: "claude" },
@@ -260,6 +262,23 @@ describe("INVARIANT: When the backend profile changes between turns, the system 
       workflow: { path: "/workflow.md", config: {}, promptTemplate: "Fix it", settings },
       settings,
       fetchIssue: async (iss) => ({ ...iss, state: "In Progress" }),
+      fetchIssueEvents: async () => {
+        recoveryCalls += 1;
+        return {
+          events:
+            recoveryCalls === 1
+              ? []
+              : [
+                  {
+                    authorizedForSteering: true,
+                    ts: "11.0",
+                    author: "ryan",
+                    text: "use the new backend",
+                  },
+                ],
+          hasMore: false,
+        };
+      },
       adapters: fakeAdapters({
         executorFactory: () => ({
           kind: "codex",
@@ -269,7 +288,12 @@ describe("INVARIANT: When the backend profile changes between turns, the system 
               message: "session started (s1)",
               sessionId: "s1",
             });
-            return fakeSession();
+            return fakeSession({
+              queueTurn: async (prompt) => {
+                queuedPrompts.push(prompt);
+                return [{ type: "turn_completed" }];
+              },
+            });
           },
           async runTurn() {
             // Emit tool_use_requested so ACP check does not interfere
@@ -281,6 +305,83 @@ describe("INVARIANT: When the backend profile changes between turns, the system 
 
     // Session ends after 1 turn because agent kind changed from "codex" to "claude"
     assert.equal(result.turnCount, 1);
+    assert.equal(recoveryCalls, 1);
+    assert.deepEqual(queuedPrompts, []);
+  });
+
+  test("queued steering is not drained after the backend profile changes", async () => {
+    const overrides = new Map<string, { agent?: Partial<Settings["agent"]> }>();
+    overrides.set("in progress", {
+      agent: { kind: "claude" },
+    });
+    const settings = fakeSettings({
+      agent: { ...defaultSettings().agent, maxTurns: 10, kind: "codex" },
+      statusOverrides: overrides as Settings["statusOverrides"],
+    });
+    const queuedPrompts: string[] = [];
+    let issueEventListener: ((events: TrackerIssueEvent[]) => void) | undefined;
+    let markFirstTurnStarted: (() => void) | undefined;
+    let releaseFirstTurn: (() => void) | undefined;
+    let markQueuedTurnSubmitted: (() => void) | undefined;
+    const firstTurnStarted = new Promise<void>((resolve) => {
+      markFirstTurnStarted = resolve;
+    });
+    const firstTurnRelease = new Promise<void>((resolve) => {
+      releaseFirstTurn = resolve;
+    });
+    const queuedTurnSubmitted = new Promise<void>((resolve) => {
+      markQueuedTurnSubmitted = resolve;
+    });
+    let stopCalls = 0;
+    let backendActivations = 0;
+
+    const attempt = runAgentAttempt({
+      issue: fakeIssue({ state: "Todo" }),
+      workflow: { path: "/workflow.md", config: {}, promptTemplate: "Fix it", settings },
+      settings,
+      fetchIssue: async (issue) => ({ ...issue, state: "In Progress" }),
+      subscribeIssueEvents: (listener) => {
+        issueEventListener = listener;
+        return () => {};
+      },
+      adapters: fakeAdapters({
+        executorFactory: () => ({
+          kind: "codex",
+          async startSession() {
+            return fakeSession({
+              queueTurn: async (prompt, options) => {
+                queuedPrompts.push(prompt);
+                markQueuedTurnSubmitted?.();
+                await options?.startWhen;
+                backendActivations += 1;
+                return [{ type: "turn_completed" }];
+              },
+              stop: async () => {
+                stopCalls += 1;
+              },
+            });
+          },
+          async runTurn() {
+            markFirstTurnStarted?.();
+            await firstTurnRelease;
+            return [fakeToolCallNotification(), { type: "turn_completed" }];
+          },
+        }),
+      }),
+    });
+
+    await firstTurnStarted;
+    issueEventListener?.([
+      { authorizedForSteering: true, ts: "11.0", author: "ryan", text: "use the new backend" },
+    ]);
+    await queuedTurnSubmitted;
+    releaseFirstTurn?.();
+
+    const result = await attempt;
+    assert.equal(result.turnCount, 1);
+    assert.equal(stopCalls, 1);
+    assert.equal(queuedPrompts.length, 1);
+    assert.equal(backendActivations, 0);
   });
 
   test("session continues when profile stays the same across turns (ACP)", async () => {
