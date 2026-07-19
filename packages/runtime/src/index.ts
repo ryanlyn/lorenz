@@ -292,6 +292,7 @@ class ActiveRunHandle {
     readonly trackerClient: RuntimeTrackerClient,
     private readonly activeRuns: Map<string, ActiveRunHandle>,
     private readonly onRelease: (handle: ActiveRunHandle) => void,
+    private readonly onExternalFinish: (handle: ActiveRunHandle) => void,
   ) {}
 
   get signal(): AbortSignal {
@@ -350,9 +351,11 @@ class ActiveRunHandle {
     reason: "stalled" | null = null,
     options: { abandonClaimOnSettlement?: boolean | undefined } = {},
   ): void {
+    const wasActive = this.isActive;
     if (reason) this.reason = reason;
     if (options.abandonClaimOnSettlement) this.abandonClaimOnSettlement = true;
     this.abort();
+    if (wasActive) this.onExternalFinish(this);
     this.release();
   }
 
@@ -373,6 +376,7 @@ export class LorenzRuntime {
   private readonly listeners = new Set<(snapshot: RuntimeSnapshot) => void>();
   private readonly retryScheduler: RetryScheduler;
   private readonly inFlight = new Set<Promise<void>>();
+  private readonly settlingRunOwnership = new Set<ActiveRunHandle>();
   private stopped = false;
   private appStatus: RuntimeAppStatus = "starting";
   private pollStatus: RuntimePollStatus = "idle";
@@ -397,7 +401,7 @@ export class LorenzRuntime {
    * it, then releases the stream when the last run settles. All streams close on `stop()`.
    */
   private readonly changeStreams = new Map<RuntimeTrackerClient, TrackerChangeStream>();
-  private readonly openingChangeStreamClients = new Set<RuntimeTrackerClient>();
+  private readonly openingChangeStreamClients = new WeakSet<RuntimeTrackerClient>();
   private readonly changeStreamGenerations = new WeakMap<RuntimeTrackerClient, number>();
   private changeStreamEnabled = false;
   private issueEventRecoveryWarningIssued = false;
@@ -645,7 +649,9 @@ export class LorenzRuntime {
     } catch (error) {
       this.addEvent("tracker_watch_error", errorMessage(error));
     } finally {
-      this.openingChangeStreamClients.delete(client);
+      if (generation === this.changeStreamGenerations.get(client)) {
+        this.openingChangeStreamClients.delete(client);
+      }
       if (
         !this.stopped &&
         this.changeStreamEnabled &&
@@ -660,6 +666,7 @@ export class LorenzRuntime {
 
   private async closeChangeStream(client: RuntimeTrackerClient): Promise<void> {
     this.changeStreamGenerations.set(client, (this.changeStreamGenerations.get(client) ?? 0) + 1);
+    this.openingChangeStreamClients.delete(client);
     const stream = this.changeStreams.get(client);
     this.changeStreams.delete(client);
     if (!stream) return;
@@ -667,10 +674,9 @@ export class LorenzRuntime {
   }
 
   private async closeAllChangeStreams(): Promise<void> {
-    const clients = new Set([
-      ...this.changeStreams.keys(),
-      ...this.openingChangeStreamClients.values(),
-    ]);
+    const clients = new Set<RuntimeTrackerClient>([this.client, ...this.changeStreams.keys()]);
+    for (const handle of this.activeRuns.values()) clients.add(handle.trackerClient);
+    for (const handle of this.settlingRunOwnership) clients.add(handle.trackerClient);
     await Promise.all([...clients].map(async (client) => this.closeChangeStream(client)));
   }
 
@@ -678,11 +684,18 @@ export class LorenzRuntime {
     for (const handle of this.activeRuns.values()) {
       if (handle.trackerClient === client) return true;
     }
+    for (const handle of this.settlingRunOwnership) {
+      if (handle.trackerClient === client) return true;
+    }
     return false;
   }
 
-  private hasForeignActiveRunOwnership(issueId: string): boolean {
+  private hasDispatchOwnershipConflict(issueId: string): boolean {
     for (const handle of this.activeRuns.values()) {
+      if (handle.issueId !== issueId) continue;
+      if (handle.trackerClient !== this.client || handle.workflow !== this.workflow) return true;
+    }
+    for (const handle of this.settlingRunOwnership) {
       if (handle.issueId !== issueId) continue;
       if (handle.trackerClient !== this.client || handle.workflow !== this.workflow) return true;
     }
@@ -832,7 +845,7 @@ export class LorenzRuntime {
   }
 
   private async maybeDispatch(issue: Issue): Promise<Array<Promise<void>>> {
-    if (this.hasForeignActiveRunOwnership(issue.id)) {
+    if (this.hasDispatchOwnershipConflict(issue.id)) {
       this.addEvent("dispatch_skipped", `${issue.identifier} retained_run_ownership`);
       return [];
     }
@@ -864,6 +877,7 @@ export class LorenzRuntime {
       this.client,
       this.activeRuns,
       (released) => this.retireTrackerClientStream(released.trackerClient),
+      (settling) => this.settlingRunOwnership.add(settling),
     );
     this.activeRuns.set(key, handle);
     try {
@@ -904,6 +918,8 @@ export class LorenzRuntime {
         : this.runReservedClaim(refreshed, claim.reservation, runId, handle);
     this.inFlight.add(run);
     void run.finally(() => {
+      this.settlingRunOwnership.delete(handle);
+      this.retireTrackerClientStream(handle.trackerClient);
       this.inFlight.delete(run);
       this.stopClaimOwnerHeartbeatIfIdle();
       this.updateAppStatusFromInFlight();

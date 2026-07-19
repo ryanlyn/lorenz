@@ -1643,6 +1643,92 @@ test("active runs retain their tracker client across workflow reloads", async ()
   }
 });
 
+test("an externally finished run retains issue ownership until its runner settles", async () => {
+  const dir = await tempDir("lorenz-runtime-reload-settling-owner");
+  const workflowFile = path.join(dir, "WORKFLOW.md");
+  await fs.writeFile(workflowFile, workflowMarkdown({ intervalMs: 600_000 }));
+  const workflow = await loadWorkflow(workflowFile, {}, { cwd: dir });
+  const issue = issueFixture("shared-settling-issue", "MT-SETTLING-OWNER");
+  const inactiveIssue = { ...issue, state: "Done", stateType: "completed" as const };
+  const replacementIssue = { ...issue, state: "Other" };
+  const issueRefreshCalls = [0, 0];
+  let clientBuilds = 0;
+  let runnerCalls = 0;
+  let releaseFirstRunner: (() => void) | undefined;
+  const firstRunnerGate = new Promise<void>((resolve) => {
+    releaseFirstRunner = resolve;
+  });
+  const runtime = new LorenzRuntime(
+    runtimeOptions({
+      workflow,
+      reloadWorkflow: async () => {
+        const reloaded = await loadWorkflow(workflowFile, {}, { cwd: dir });
+        return {
+          ...reloaded,
+          settings: {
+            ...reloaded.settings,
+            tracker: {
+              ...reloaded.settings.tracker,
+              activeStates: ["Other"],
+            },
+          },
+        };
+      },
+      clientFactory: () => {
+        const index = clientBuilds;
+        clientBuilds += 1;
+        return {
+          fetchCandidateIssues: async () => (index === 0 ? [issue] : [replacementIssue]),
+          fetchIssuesByIds: async () => {
+            issueRefreshCalls[index] = (issueRefreshCalls[index] ?? 0) + 1;
+            if (index > 0) return [replacementIssue];
+            return issueRefreshCalls[index] === 1 ? [issue] : [inactiveIssue];
+          },
+        };
+      },
+      runner: async () => {
+        runnerCalls += 1;
+        if (runnerCalls === 1) await firstRunnerGate;
+        return {
+          workspace: "/tmp/lorenz/MT-SETTLING-OWNER",
+          finalIssue: runnerCalls === 1 ? inactiveIssue : replacementIssue,
+        };
+      },
+    }),
+  );
+
+  void runtime.start({ once: false });
+  try {
+    await waitFor(() => runtime.snapshot().running.length === 1 && runnerCalls === 1, 1_000);
+    await fs.writeFile(
+      workflowFile,
+      workflowMarkdown({ intervalMs: 600_000, prompt: "Reloaded prompt" }),
+    );
+
+    await runtime.pollOnce();
+    assert.equal(clientBuilds, 2);
+    assert.deepEqual(issueRefreshCalls, [2, 0]);
+    assert.equal(runnerCalls, 1);
+    assert.ok(
+      runtime
+        .snapshot()
+        .recentEvents.some(
+          (event) =>
+            event.type === "dispatch_skipped" && event.message.includes("retained_run_ownership"),
+        ),
+    );
+
+    releaseFirstRunner?.();
+    await waitFor(() => runtime.snapshot().appStatus === "idle", 1_000);
+    await runtime.pollOnce({ waitForRuns: true });
+    assert.equal(runnerCalls, 2);
+    assert.deepEqual(issueRefreshCalls, [2, 1]);
+  } finally {
+    releaseFirstRunner?.();
+    runtime.stop();
+  }
+});
+
 test("active-run issue refresh rejects a deleted tracker issue", async () => {
   const issue = issueFixture("deleted-active-issue", "MT-DELETED-ACTIVE");
   let issueFetches = 0;
