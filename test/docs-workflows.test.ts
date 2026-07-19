@@ -24,6 +24,8 @@ test("the chat workflow leaves repository setup to the dispatched agent", async 
 
   assert.notMatch(workflow, /^\s+after_create:/m);
   assert.notMatch(workflow, /^\s+git clone\b/m);
+  assert.match(workflow, /kind: dispatch/);
+  assert.match(workflow, /sources:\s*\n\s+- discord\s*\n\s+- slack/);
   assert.match(workflow, /per-issue workspace starts empty/);
 });
 

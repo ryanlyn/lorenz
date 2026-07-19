@@ -6,6 +6,7 @@ import type {
   AgentKind,
   AgentSettings,
   HooksSettings,
+  Issue,
   PartialRuntimeSettings,
   Settings,
   TrackerSettings,
@@ -14,9 +15,13 @@ import type {
 } from "@lorenz/domain";
 import {
   errorMessage,
+  isValidTrackerSource,
   isDiagnosticSecretKey,
   isRecord as isPlainRecord,
+  MULTI_TRACKER_KIND,
   normalizeHttpBindHost,
+  parseScopedTrackerIssueId,
+  scopedTrackerWorkspaceIdentifier,
   withDerivedMaxInFlight,
 } from "@lorenz/domain";
 import {
@@ -74,13 +79,15 @@ export function parseConfig(
   const parsed = parseWorkflowConfig(raw);
 
   const trackerRaw = parsed.tracker ?? {};
-  settings.tracker = parseTracker(
+  const trackerSelection = parseTrackers(
     settings.tracker,
     trackerRaw,
     parsed.trackers ?? {},
     env,
     registry,
   );
+  settings.tracker = trackerSelection.tracker;
+  settings.trackers = trackerSelection.trackers;
   settings.toolOptions = parseToolOptions(parsed.tools, env);
 
   const pollingRaw = parsed.polling ?? {};
@@ -180,6 +187,51 @@ export function settingsForIssueState(settings: Settings, state: string): Settin
   return merged;
 }
 
+/** Resolves the source tracker that owns an issue in multi-tracker dispatch mode. */
+export function trackerSettingsForIssue(settings: Settings, issueId: string): TrackerSettings {
+  if (settings.tracker.kind !== MULTI_TRACKER_KIND) return settings.tracker;
+  const reference = parseScopedTrackerIssueId(issueId);
+  if (!reference) throw new Error(`multi-tracker issue id is not scoped: ${issueId}`);
+  const tracker = settings.trackers[reference.source];
+  if (!tracker) throw new Error(`multi-tracker source is not configured: ${reference.source}`);
+  return tracker;
+}
+
+/**
+ * Produces the settings view for one tracker-backed run. Multi-tracker runs use an ephemeral MCP
+ * port so concurrent sources never share a server whose mounted tools or credentials differ.
+ */
+export function settingsForTrackerIssue(settings: Settings, issueId: string): Settings {
+  const scoped = cloneSettings(settings);
+  if (settings.tracker.kind !== MULTI_TRACKER_KIND) return scoped;
+  const reference = parseScopedTrackerIssueId(issueId);
+  if (!reference) throw new Error(`multi-tracker issue id is not scoped: ${issueId}`);
+  const tracker = scoped.trackers[reference.source];
+  if (!tracker) throw new Error(`multi-tracker source is not configured: ${reference.source}`);
+  scoped.tracker = tracker;
+  scoped.server.port = 0;
+  return scoped;
+}
+
+/** Returns the provider-native issue view rendered to an agent and passed to its tracker tools. */
+export function issueForTrackerAgent(settings: Settings, issue: Issue): Issue {
+  if (settings.tracker.kind !== MULTI_TRACKER_KIND) return issue;
+  const reference = parseScopedTrackerIssueId(issue.id);
+  if (!reference) throw new Error(`multi-tracker issue id is not scoped: ${issue.id}`);
+  return { ...issue, id: reference.issueId };
+}
+
+/** Returns the internal issue view used to allocate a source-scoped workspace directory. */
+export function workspaceIssueForTracker(settings: Settings, issue: Issue): Issue {
+  if (settings.tracker.kind !== MULTI_TRACKER_KIND) return issue;
+  const reference = parseScopedTrackerIssueId(issue.id);
+  if (!reference) throw new Error(`multi-tracker issue id is not scoped: ${issue.id}`);
+  return {
+    ...issue,
+    identifier: scopedTrackerWorkspaceIdentifier(reference.source, issue.identifier),
+  };
+}
+
 /**
  * Opt-in deprecation-warning surface for {@link validateDispatchConfig}. Callers that hold the
  * raw front matter (the daemon's first load, an embedder validating a config) pass it to have
@@ -202,8 +254,21 @@ export function validateDispatchConfig(
   // recommendation when a config both uses a deprecated key and fails to validate.
   if (deprecations) warnConfigDeprecations(deprecations.rawConfig, deprecations.warn);
 
-  const provider = trackers.require(settings.tracker.kind);
-  provider.validateDispatch?.(settings);
+  if (settings.tracker.kind === MULTI_TRACKER_KIND) {
+    const configured = Object.entries(settings.trackers);
+    if (configured.length === 0)
+      throw new Error("tracker.sources must select at least one tracker");
+    for (const [source, tracker] of configured) {
+      if (tracker.kind === MULTI_TRACKER_KIND) {
+        throw new Error(`trackers.${source}.provider must not be ${MULTI_TRACKER_KIND}`);
+      }
+      const provider = trackers.require(tracker.kind);
+      provider.validateDispatch?.({ ...settings, tracker });
+    }
+  } else {
+    const provider = trackers.require(settings.tracker.kind);
+    provider.validateDispatch?.(settings);
+  }
 
   if (tools && settings.toolOptions !== undefined) {
     for (const [pack, options] of Object.entries(settings.toolOptions)) {
@@ -236,31 +301,48 @@ export function validateDispatchConfig(
 }
 
 /**
- * The effective tracker selector a raw workflow config resolves to - the value
- * that becomes `settings.tracker.kind` - WITHOUT running the rest of config
- * parsing. The out-of-tree extension loader needs this BEFORE {@link parseConfig}
- * so it can dynamic-import a tracker module named by `tracker.kind` and register
- * it (under that exact string) into the registry the parser then resolves
- * `parseOptions`/`validateDispatch` against. Returns undefined when no tracker is
- * configured (the default tracker applies) or when a `trackers.<name>` bundle is
- * selected (a bundle is an in-repo composition, never a module specifier).
+ * Provider specifiers a raw workflow config resolves to without running the rest of config
+ * parsing. The out-of-tree extension loader needs these before {@link parseConfig} so every
+ * selected module is registered before provider options are parsed and validated.
  *
- * Mirrors {@link parseTracker}'s selection: `tracker.kind` is the selector; an
- * empty/blank value yields undefined. This reads only the selector, so a tracker
+ * Mirrors the tracker parser's selection: `tracker.kind` is the selector; an
+ * empty/blank value yields an empty list. This reads only the selector, so a tracker
  * module specifier in `tracker.kind` (e.g. `./acme-tracker.mjs`) surfaces here
- * verbatim for the loader, while a bundle selection is left to the registry's
- * built-ins.
+ * verbatim for the loader. Named bundles return their `provider`, and multi-tracker
+ * dispatch returns every selected source provider.
  */
-export function trackerSpecifierFromConfig(raw: Record<string, unknown> = {}): string | undefined {
+export function trackerSpecifiersFromConfig(raw: Record<string, unknown> = {}): string[] {
   const parsed = parseWorkflowConfig(raw);
   const trackersRaw = parsed.trackers ?? {};
   const selectorRecord = parseTrackerRecord(parsed.tracker ?? {}, "tracker");
   const selected = trackerKindValue(selectorRecord.kind);
-  if (selected === undefined) return undefined;
-  // A `trackers.<name>` bundle selection composes an in-repo provider via the
-  // bundle's `provider:` key; it is never an out-of-tree module specifier.
-  if (trackersRaw[selected] !== undefined) return undefined;
-  return selected;
+  if (selected === undefined) return [];
+  if (isMultiTrackerSelection(selected, selectorRecord, trackersRaw)) {
+    const sources = trackerSourceNames(selectorRecord.sources, trackersRaw);
+    return [
+      ...new Set(
+        sources.map((source) => {
+          const bundle = parseTrackerRecord(
+            requiredTrackerBundle(trackersRaw, source),
+            `trackers.${source}`,
+          );
+          const provider = trackerKindValue(bundle.provider);
+          if (!provider) throw new Error(`trackers.${source}.provider is required`);
+          return provider;
+        }),
+      ),
+    ];
+  }
+  const selectedBundle = trackersRaw[selected];
+  if (selectedBundle === undefined) return [selected];
+  const bundle = parseTrackerRecord(selectedBundle, `trackers.${selected}`);
+  const provider = trackerKindValue(bundle.provider);
+  if (!provider) throw new Error(`trackers.${selected}.provider is required`);
+  return [provider];
+}
+
+export function trackerSpecifierFromConfig(raw: Record<string, unknown> = {}): string | undefined {
+  return trackerSpecifiersFromConfig(raw)[0];
 }
 
 export function normalizeStateName(value: string): string {
@@ -288,6 +370,7 @@ const TRACKER_DISPATCH_ALIASES = {
 /** Keys of a selected tracker config record owned by the core; everything else belongs to the provider. */
 const TRACKER_COMMON_KEYS = new Set([
   "kind",
+  "sources",
   "provider",
   "endpoint",
   "apiKey",
@@ -297,21 +380,74 @@ const TRACKER_COMMON_KEYS = new Set([
   "dispatch",
 ]);
 
-function parseTracker(
+interface ParsedTrackerSelection {
+  tracker: TrackerSettings;
+  trackers: Record<string, TrackerSettings>;
+}
+
+function parseTrackers(
   defaults: TrackerSettings,
   trackerRaw: TrackerRaw,
   trackersRaw: TrackersRaw,
   env: NodeJS.ProcessEnv,
   registry: TrackerRegistry,
-): TrackerSettings {
+): ParsedTrackerSelection {
   assertTrackerBundleNames(trackersRaw);
 
   const selectorRecord = parseTrackerRecord(trackerRaw, "tracker");
   const selectedBundleName = trackerKindValue(selectorRecord.kind) ?? defaults.kind;
+  if (selectedBundleName !== MULTI_TRACKER_KIND && selectorRecord.sources !== undefined) {
+    throw new Error(`tracker.sources requires tracker.kind: ${MULTI_TRACKER_KIND}`);
+  }
+  if (isMultiTrackerSelection(selectedBundleName, selectorRecord, trackersRaw)) {
+    const sources = trackerSourceNames(selectorRecord.sources, trackersRaw);
+    const trackers: Record<string, TrackerSettings> = {};
+    for (const source of sources) {
+      const trackerRecord = bundledTrackerRecord(
+        selectorRecord,
+        requiredTrackerBundle(trackersRaw, source),
+        source,
+      );
+      if (trackerRecord.kind === MULTI_TRACKER_KIND) {
+        throw new Error(`trackers.${source}.provider must not be ${MULTI_TRACKER_KIND}`);
+      }
+      trackers[source] = parseTrackerSettings(defaults, trackerRecord, env, registry);
+    }
+    return {
+      tracker: {
+        kind: MULTI_TRACKER_KIND,
+        activeStates: uniqueTrackerStates(trackers, "activeStates", defaults.activeStates),
+        terminalStates: uniqueTrackerStates(trackers, "terminalStates", defaults.terminalStates),
+        dispatch: parseDispatch(defaults.dispatch, selectorRecord.dispatch ?? {}),
+        options: { sources },
+      },
+      trackers,
+    };
+  }
   const trackerRecord =
     selectedBundleName === undefined
       ? legacyTrackerRecord(selectorRecord, selectedBundleName, trackersRaw)
       : trackerRecordForSelection(selectorRecord, selectedBundleName, trackersRaw);
+  return { tracker: parseTrackerSettings(defaults, trackerRecord, env, registry), trackers: {} };
+}
+
+function isMultiTrackerSelection(
+  selected: string | undefined,
+  selector: TrackerRecordRaw,
+  trackersRaw: TrackersRaw,
+): boolean {
+  return (
+    selected === MULTI_TRACKER_KIND &&
+    (selector.sources !== undefined || trackersRaw[MULTI_TRACKER_KIND] === undefined)
+  );
+}
+
+function parseTrackerSettings(
+  defaults: TrackerSettings,
+  trackerRecord: TrackerRecordRaw,
+  env: NodeJS.ProcessEnv,
+  registry: TrackerRegistry,
+): TrackerSettings {
   const kind = trackerRecord.kind;
   // Unregistered kinds parse generically (options pass through unvalidated) and are
   // rejected with the full list of known kinds by validateDispatchConfig.
@@ -352,6 +488,42 @@ function parseTracker(
     dispatch: parseDispatch(defaults.dispatch, trackerRecord.dispatch ?? {}),
     options,
   };
+}
+
+function trackerSourceNames(configured: string[] | undefined, trackersRaw: TrackersRaw): string[] {
+  const rawSources = configured ?? Object.keys(trackersRaw);
+  const sources: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of rawSources) {
+    const source = raw.trim();
+    if (!source) throw new Error("tracker.sources must not contain blank names");
+    if (!isValidTrackerSource(source)) {
+      throw new Error(
+        "tracker source names must contain only letters, numbers, dots, underscores, or dashes",
+      );
+    }
+    if (seen.has(source)) continue;
+    requiredTrackerBundle(trackersRaw, source);
+    seen.add(source);
+    sources.push(source);
+  }
+  if (sources.length === 0) throw new Error("tracker.sources must select at least one tracker");
+  return sources;
+}
+
+function requiredTrackerBundle(trackersRaw: TrackersRaw, source: string): Record<string, unknown> {
+  const bundle = trackersRaw[source];
+  if (!bundle) throw new Error(`trackers.${source} is required by tracker.sources`);
+  return bundle;
+}
+
+function uniqueTrackerStates(
+  trackers: Record<string, TrackerSettings>,
+  field: "activeStates" | "terminalStates",
+  fallback: string[],
+): string[] {
+  const states = [...new Set(Object.values(trackers).flatMap((tracker) => tracker[field]))];
+  return states.length > 0 ? states : [...fallback];
 }
 
 function legacyTrackerRecord(

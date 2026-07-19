@@ -8,7 +8,7 @@ import { BOT_ID, CHANNEL_ID, GUILD_ID, discordTrackers } from "./helpers.js";
 
 const root = path.join(import.meta.dirname, "../../..");
 
-test("WORKFLOW.chat.md selects the Discord tracker and documents the canonical issue id", async () => {
+test("WORKFLOW.chat.md watches Discord and documents the canonical issue id", async () => {
   const workflow = await loadWorkflow(
     path.join(root, "WORKFLOW.chat.md"),
     {
@@ -20,7 +20,8 @@ test("WORKFLOW.chat.md selects the Discord tracker and documents the canonical i
     { cwd: root, trackers: discordTrackers },
   );
 
-  assert.equal(workflow.settings.tracker.kind, "discord");
+  assert.equal(workflow.settings.tracker.kind, "dispatch");
+  assert.equal(workflow.settings.trackers.discord?.kind, "discord");
   assert.equal(workflow.settings.polling.intervalMs, 60000);
   assert.equal(workflow.settings.hooks.afterCreate, null);
   assert.match(workflow.promptTemplate, /<channel-id>:<message-id>/);

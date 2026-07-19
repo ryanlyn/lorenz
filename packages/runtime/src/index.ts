@@ -1,7 +1,14 @@
 import { issueHasOpenBlockers, issueIsActive, routedToThisWorker, slotKey } from "@lorenz/dispatch";
 import { isTerminalState } from "@lorenz/issue";
 import { Orchestrator, type ClaimStoreLike, type SlotReservation } from "@lorenz/orchestrator";
-import { settingsForIssueState, validateDispatchConfig } from "@lorenz/config";
+import {
+  issueForTrackerAgent,
+  settingsForIssueState,
+  settingsForTrackerIssue,
+  trackerSettingsForIssue,
+  validateDispatchConfig,
+  workspaceIssueForTracker,
+} from "@lorenz/config";
 import { runAgentAttempt, type RunResult } from "@lorenz/agent-runner";
 import { workflowFileChanged, workflowStampsEqual } from "@lorenz/workflow";
 import {
@@ -886,7 +893,7 @@ export class LorenzRuntime {
         // Thread the FULL workflow Settings (with server.port) so the per-run
         // endpoint manager can build the remote endpoint; the WorkerPoolSettings the
         // coordinator holds has no server.port and would fail every acquire.
-        settings: this.workflow.settings,
+        settings: settingsForTrackerIssue(this.workflow.settings, issue.id),
         // The ACP executor - the only executor - consumes the per-run MCP
         // endpoint over the reverse tunnel, so every run needs one. The flag
         // stays on the request so a future executor that runs its tools
@@ -1032,6 +1039,9 @@ export class LorenzRuntime {
     slot: RunSlot | null = null,
   ): Promise<void> {
     const startedAt = this.clock.now().toISOString();
+    const trackerSettings = settingsForTrackerIssue(this.workflow.settings, issue.id);
+    const trackerWorkflow = { ...this.workflow, settings: trackerSettings };
+    const agentIssue = issueForTrackerAgent(this.workflow.settings, issue);
     const effectiveWorkerHost = workerHost;
     let workerOutcome: WorkerOutcome = "healthy";
     const heartbeatSlot = slot;
@@ -1051,8 +1061,9 @@ export class LorenzRuntime {
     };
     try {
       const result = await this.runner({
-        issue,
-        workflow: this.workflow,
+        issue: agentIssue,
+        workspaceIssue: workspaceIssueForTracker(this.workflow.settings, issue),
+        workflow: trackerWorkflow,
         workerHost: effectiveWorkerHost,
         slotIndex,
         // Thread the bound slot's per-run MCP endpoint (or null on the local /
@@ -1067,8 +1078,10 @@ export class LorenzRuntime {
         forceSlotSuffix: (this.workflow.settings.worker.workerPool?.slotsPerMachine ?? 1) > 1,
         onUpdate: enqueueUpdate,
         fetchIssue: async (current) => {
-          const refreshed = await this.client.fetchIssuesByIds([current.id]);
-          return refreshed[0] ?? current;
+          const refreshed = await this.client.fetchIssuesByIds([issue.id]);
+          return refreshed[0]
+            ? issueForTrackerAgent(this.workflow.settings, refreshed[0])
+            : current;
         },
         abortSignal: handle.signal,
       });
@@ -1363,12 +1376,14 @@ export class LorenzRuntime {
       this.abortIssueRuns(issue.id);
       this.clearRetryTimer(issue.id);
       const reason = reconciliationStopReason(issue, this.workflow.settings);
-      if (isTerminalState(issue.state, this.workflow.settings.tracker.terminalStates)) {
+      const tracker = trackerSettingsForIssue(this.workflow.settings, issue.id);
+      if (isTerminalState(issue.state, tracker.terminalStates)) {
+        const workspaceIssue = workspaceIssueForTracker(this.workflow.settings, issue);
         await this.removeIssueWorkspaces(
-          this.workflow.settings,
-          issue.identifier || meta?.identifier,
+          settingsForTrackerIssue(this.workflow.settings, issue.id),
+          workspaceIssue.identifier || meta?.identifier,
           meta?.workerHost,
-          issue,
+          issueForTrackerAgent(this.workflow.settings, issue),
         );
         this.addEvent("workspace_cleanup", `${issue.identifier} ${reason}`);
       } else {
@@ -1401,7 +1416,10 @@ export class LorenzRuntime {
         continue;
       const currentEntry = await this.runningEntry(snapshotEntry.issue.id, snapshotEntry.slotIndex);
       if (!currentEntry) continue;
-      const effective = settingsForIssueState(this.workflow.settings, currentEntry.issue.state);
+      const effective = settingsForIssueState(
+        settingsForTrackerIssue(this.workflow.settings, currentEntry.issue.id),
+        currentEntry.issue.state,
+      );
       const agent = effective.agents[currentEntry.agentKind];
       if (!agent) throw new Error(`agents.${currentEntry.agentKind} is required`);
       const timeoutMs = agent.stallTimeoutMs;
@@ -1483,12 +1501,14 @@ export class LorenzRuntime {
       const issues = await this.client.fetchIssuesByIds(identifiers);
       let cleaned = 0;
       for (const issue of issues) {
-        if (!isTerminalState(issue.state, this.workflow.settings.tracker.terminalStates)) continue;
+        const tracker = trackerSettingsForIssue(this.workflow.settings, issue.id);
+        if (!isTerminalState(issue.state, tracker.terminalStates)) continue;
+        const workspaceIssue = workspaceIssueForTracker(this.workflow.settings, issue);
         await this.removeIssueWorkspaces(
-          this.workflow.settings,
-          issue.identifier,
+          settingsForTrackerIssue(this.workflow.settings, issue.id),
+          workspaceIssue.identifier,
           undefined,
-          issue,
+          issueForTrackerAgent(this.workflow.settings, issue),
         );
         cleaned += 1;
       }

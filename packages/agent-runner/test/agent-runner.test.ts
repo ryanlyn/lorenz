@@ -690,6 +690,42 @@ test("createWorkspaceForIssue calls workspace adapter with correct issue/ensembl
   assert.equal(capturedOptions!.workerHost, null);
 });
 
+test("workspaceIssue scopes the workspace without changing the agent-facing issue", async () => {
+  const issue = fakeIssue({ id: "native-id", identifier: "CHAT-1" });
+  const workspaceIssue = fakeIssue({
+    id: "chat::native-id",
+    identifier: "4-chat-CHAT-1",
+  });
+  const settings = fakeSettings();
+  let capturedWorkspaceIssue: Issue | null = null;
+  let capturedAgentIssue: Issue | null = null;
+
+  await runAgentAttempt({
+    issue,
+    workspaceIssue,
+    workflow: { path: "/workflow.md", config: {}, promptTemplate: "{{ issue.id }}", settings },
+    settings,
+    adapters: fakeAdapters({
+      createWorkspaceForIssue: async (_settings, candidate) => {
+        capturedWorkspaceIssue = candidate;
+        return "/tmp/workspace/4-chat-CHAT-1";
+      },
+      executorFactory: () => ({
+        kind: "codex",
+        startSession: async (input) => {
+          capturedAgentIssue = input.issue;
+          return fakeSession();
+        },
+        runTurn: async () => [{ type: "turn_completed" }],
+      }),
+    }),
+  });
+
+  assert.equal(capturedWorkspaceIssue!.identifier, "4-chat-CHAT-1");
+  assert.equal(capturedAgentIssue!.id, "native-id");
+  assert.equal(capturedAgentIssue!.identifier, "CHAT-1");
+});
+
 // ---------------------------------------------------------------------------
 // runHook
 // ---------------------------------------------------------------------------

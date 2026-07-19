@@ -83,6 +83,12 @@ export interface RunResult {
 
 export interface RunAgentAttemptInput {
   issue: Issue;
+  /**
+   * Optional internal issue view used only to derive the workspace path. Multi-tracker dispatch
+   * supplies a source-scoped identifier here while keeping the provider-native issue in prompts,
+   * hooks, tools, and executor events.
+   */
+  workspaceIssue?: Issue | undefined;
   workflow: WorkflowDefinition;
   settings?: Settings;
   workerHost?: string | null;
@@ -130,7 +136,7 @@ class RunController {
       workspaceCreateStage,
       workspaceCreateTimeoutMs(runtime),
       async ({ abortSignal }) =>
-        createWorkspaceForIssue(input.adapters, runtime, issue, {
+        createWorkspaceForIssue(input.adapters, runtime, input.workspaceIssue ?? issue, {
           slotIndex,
           ensembleSize: size,
           workerHost,

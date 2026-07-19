@@ -35,7 +35,7 @@ import type {
   LorenzRuntimeOptions,
   WorkflowDefinition,
 } from "@lorenz/cli";
-import type { ClockPort, WorkerPoolSettings } from "@lorenz/domain";
+import { scopedTrackerIssueId, type ClockPort, type WorkerPoolSettings } from "@lorenz/domain";
 import type { AgentMcpEndpointLease } from "@lorenz/mcp";
 import type { AcquireResult, WorkerLease, WorkerOutcome, WorkerPool } from "@lorenz/worker-pool";
 import { assert, settle, tempDir, writeExecutable } from "@lorenz/test-utils";
@@ -375,6 +375,98 @@ test("runtime starts tracker acknowledgement alongside the claimed run", async (
   await poll;
 
   assert.ok(runtime.snapshot().recentEvents.some((event) => event.type === "tracker_acknowledged"));
+});
+
+test("runtime dispatches multiple tracker sources with native ids and source-scoped settings", async () => {
+  const settings = parseConfig({
+    tracker: { kind: "dispatch", sources: ["chat", "tasks"] },
+    trackers: {
+      chat: {
+        provider: "linear",
+        api_key: "chat-token",
+        project_slug: "chat",
+        active_states: ["Queued"],
+        terminal_states: ["Done"],
+      },
+      tasks: {
+        provider: "linear",
+        api_key: "tasks-token",
+        project_slug: "tasks",
+        active_states: ["Ready"],
+        terminal_states: ["Done"],
+      },
+    },
+    workspace: { root: "/tmp/lorenz-runtime-multi-tracker" },
+  });
+  const chat = normalizeIssue({
+    id: scopedTrackerIssueId("chat", "native-chat"),
+    identifier: "CHAT-1",
+    title: "Chat issue",
+    state: { name: "Queued", type: "unstarted" },
+  });
+  const tasks = normalizeIssue({
+    id: scopedTrackerIssueId("tasks", "native-task"),
+    identifier: "TASK-1",
+    title: "Task issue",
+    state: { name: "Ready", type: "unstarted" },
+  });
+  const observed: Array<{
+    id: string;
+    workspaceIdentifier: string | undefined;
+    kind: string | undefined;
+    apiKey: string | undefined;
+  }> = [];
+  const workflow: WorkflowDefinition = {
+    path: "/tmp/WORKFLOW.multi.md",
+    config: {},
+    promptTemplate: "Issue {{ issue.id }}",
+    settings,
+  };
+  const issues = [chat, tasks];
+  const runtime = new LorenzRuntime(
+    runtimeOptions({
+      workflow,
+      client: {
+        fetchCandidateIssues: async () => issues,
+        fetchIssuesByIds: async (ids) => issues.filter((issue) => ids.includes(issue.id)),
+      },
+      runner: async ({ issue, workspaceIssue, workflow: runWorkflow }) => {
+        observed.push({
+          id: issue.id,
+          workspaceIdentifier: workspaceIssue?.identifier,
+          kind: runWorkflow.settings.tracker.kind,
+          apiKey: runWorkflow.settings.tracker.apiKey,
+        });
+        return {
+          workspace: `/tmp/${issue.identifier}`,
+          turnCount: 1,
+          agentKind: "codex",
+          finalIssue: { ...issue, state: "Done", stateType: "completed" },
+        };
+      },
+    }),
+  );
+
+  await runtime.pollOnce({ waitForRuns: true });
+
+  assert.deepEqual(
+    observed.sort((left, right) => left.id.localeCompare(right.id)),
+    [
+      {
+        id: "native-chat",
+        workspaceIdentifier: "4-chat-CHAT-1",
+        kind: "linear",
+        apiKey: "chat-token",
+      },
+      {
+        id: "native-task",
+        workspaceIdentifier: "5-tasks-TASK-1",
+        kind: "linear",
+        apiKey: "tasks-token",
+      },
+    ],
+  );
+  assert.equal(runtime.snapshot().runHistory.length, 2);
 });
 
 test("tracker acknowledgement failures do not fail the claimed run", async () => {

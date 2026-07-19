@@ -27,6 +27,7 @@ export const defaultSettings = (options: DefaultSettingsOptions = {}): Settings 
       },
       options: {},
     },
+    trackers: {},
     polling: { intervalMs: 30_000 },
     workspace: {
       root: workspaceRoot,

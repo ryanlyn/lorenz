@@ -76,6 +76,27 @@ trackers:
 
 The flat form puts options directly under `tracker:` as terse shorthand and works only when no matching `trackers` bundle is present. Provider-specific keys (Linear's `project_slugs`, Slack's `channels`, the local board's `path`) pass through to the selected provider, which validates them. See [trackers/index.md](trackers/index.md) for the provider list.
 
+To watch several bundles concurrently, select the built-in `dispatch` mode:
+
+```yaml
+tracker:
+  kind: dispatch
+  sources: [discord, slack]
+trackers:
+  discord:
+    provider: discord
+    guild_id: $DISCORD_GUILD_ID
+    channels: [$DISCORD_CHANNEL_ID]
+    bot_user_id: $DISCORD_BOT_USER_ID
+  slack:
+    provider: slack
+    channels: [$SLACK_CHANNEL_ID]
+    bot_user_id: $SLACK_BOT_USER_ID
+```
+
+Each issue keeps the source bundle's states, routing, credentials, and tools. Agent and worker
+limits remain shared across the process.
+
 ### Agent selection
 
 `agent.kind` chooses which `agents.<kind>` record runs. The two built-in records are `codex` and `claude`, both using `executor: acp` over a bridge subprocess (`codex-acp`, `claude-agent-acp`). Per-kind config lives under `agents.<kind>`:

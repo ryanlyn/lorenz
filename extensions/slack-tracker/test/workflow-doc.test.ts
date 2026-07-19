@@ -12,12 +12,12 @@ const tsRoot = path.join(import.meta.dirname, "../../..");
 async function chatWorkflowWithSlackSelected() {
   const raw = await fs.readFile(path.join(tsRoot, "WORKFLOW.chat.md"), "utf8");
   const config = parseWorkflowContent(raw).config;
-  config.tracker = { kind: "slack" };
-  return parseSlackConfig(config, {
+  const settings = await parseSlackConfig(config, {
     SLACK_BOT_TOKEN: "xoxb-test",
     SLACK_CHANNEL_ID: "C0123456789",
     SLACK_BOT_USER_ID: "U999",
   });
+  return { ...settings, tracker: settings.trackers.slack! };
 }
 
 test("WORKFLOW.chat.md Slack bundle uses route- as the dispatch route_label_prefix", async () => {

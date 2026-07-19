@@ -77,6 +77,55 @@ export type AgentKind = string;
  */
 export type TrackerKind = string;
 
+/** Core selector that composes multiple named tracker bundles into one dispatch stream. */
+export const MULTI_TRACKER_KIND = "dispatch";
+
+const TRACKER_ISSUE_SCOPE_SEPARATOR = "::";
+const TRACKER_SOURCE_PATTERN = /^[A-Za-z0-9_.-]+$/;
+
+export function isValidTrackerSource(value: string): boolean {
+  return TRACKER_SOURCE_PATTERN.test(value);
+}
+
+export interface ScopedTrackerIssueId {
+  source: string;
+  issueId: string;
+}
+
+/**
+ * Namespaces a provider-native issue id by configured tracker source. The source prefix keeps
+ * durable claims, retries, workspaces, and traces collision-free when two backends reuse an id.
+ */
+export function scopedTrackerIssueId(source: string, issueId: string): string {
+  if (!isValidTrackerSource(source)) {
+    throw new Error(
+      "tracker source must contain only letters, numbers, dots, underscores, or dashes",
+    );
+  }
+  if (!issueId) throw new Error("tracker issue id must be non-empty");
+  return `${source}${TRACKER_ISSUE_SCOPE_SEPARATOR}${issueId}`;
+}
+
+/** Parses an id produced by {@link scopedTrackerIssueId}. */
+export function parseScopedTrackerIssueId(value: string): ScopedTrackerIssueId | null {
+  const separator = value.indexOf(TRACKER_ISSUE_SCOPE_SEPARATOR);
+  if (separator <= 0) return null;
+  const issueId = value.slice(separator + TRACKER_ISSUE_SCOPE_SEPARATOR.length);
+  if (!issueId) return null;
+  return { source: value.slice(0, separator), issueId };
+}
+
+/** Collision-free, filesystem-safe prefix for a source-owned workspace identifier. */
+export function scopedTrackerWorkspaceIdentifier(source: string, identifier: string): string {
+  if (!isValidTrackerSource(source)) {
+    throw new Error(
+      "tracker source must contain only letters, numbers, dots, underscores, or dashes",
+    );
+  }
+  if (!identifier) throw new Error("tracker issue identifier must be non-empty");
+  return `${source.length}-${source}-${identifier}`;
+}
+
 /**
  * Selector for the worker driver backend; keys into the worker-driver registry the
  * composition root assembles, so the set of supported kinds is open-ended
@@ -636,6 +685,12 @@ export interface WorkspaceSettings {
  */
 export interface Settings {
   tracker: TrackerSettings;
+  /**
+   * Parsed named tracker sources used when `tracker.kind` is `"dispatch"`. Empty for the
+   * legacy single-tracker path. Each source retains its own provider, credentials, states,
+   * routing rules, and opaque options.
+   */
+  trackers: Record<string, TrackerSettings>;
   /** Cadence at which the tracker is polled for candidate issues, in milliseconds. */
   polling: { intervalMs: number };
   workspace: WorkspaceSettings;

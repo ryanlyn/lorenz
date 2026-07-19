@@ -192,6 +192,47 @@ test("loadWorkflow: prepareTrackerExtensions loads the tracker before parse, and
   validateDispatchConfig(workflow.settings, registry, defaultAgentExecutorRegistry);
 });
 
+test("loadWorkflow: multi-tracker dispatch loads every out-of-tree source provider", async () => {
+  const dir = await tempDir("multi-tracker-loader");
+  await writeFixture(dir, "chat-tracker.mjs", trackerModuleSource({ kind: "chat" }));
+  await writeFixture(dir, "tasks-tracker.mjs", trackerModuleSource({ kind: "tasks" }));
+  const registry = privateRegistry();
+  const workflowPath = path.join(dir, "WORKFLOW.md");
+  await fs.writeFile(
+    workflowPath,
+    [
+      "---",
+      "tracker:",
+      "  kind: dispatch",
+      "  sources: [chat, tasks]",
+      "trackers:",
+      "  chat:",
+      "    provider: ./chat-tracker.mjs",
+      "  tasks:",
+      "    provider: ./tasks-tracker.mjs",
+      "---",
+      "Body.",
+    ].join("\n"),
+  );
+
+  const workflow = await loadWorkflow(
+    workflowPath,
+    {},
+    {
+      trackers: registry,
+      prepareRegistries: (rawConfig, ctx) =>
+        prepareTrackerExtensions(rawConfig, { baseDir: ctx.baseDir, trackers: registry }),
+    },
+  );
+
+  assert.equal(workflow.settings.tracker.kind, "dispatch");
+  assert.equal(workflow.settings.trackers.chat?.kind, "./chat-tracker.mjs");
+  assert.equal(workflow.settings.trackers.tasks?.kind, "./tasks-tracker.mjs");
+  assert.ok(registry.get("./chat-tracker.mjs"));
+  assert.ok(registry.get("./tasks-tracker.mjs"));
+  validateDispatchConfig(workflow.settings, registry, defaultAgentExecutorRegistry);
+});
+
 // named-export form (#name)
 
 test("a #exportName suffix selects a named export", async () => {

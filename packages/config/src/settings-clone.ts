@@ -16,6 +16,9 @@ export function cloneSettings(settings: Settings): Settings {
   return {
     ...settings,
     tracker: cloneTracker(settings.tracker),
+    trackers: Object.fromEntries(
+      Object.entries(settings.trackers).map(([name, tracker]) => [name, cloneTracker(tracker)]),
+    ),
     polling: { ...settings.polling },
     workspace: { ...settings.workspace },
     worker: cloneWorkerSettings(settings.worker),
