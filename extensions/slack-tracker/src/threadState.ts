@@ -191,8 +191,8 @@ export function stateFromThread(
       // free to carry extra lines, e.g. a button-click attribution).
       const metadata = reply.metadata;
       if (metadata?.eventType === WORKPAD_METADATA_EVENT) {
-        // The metadata payload round-trips the workpad's editable sections, so a header heal or
-        // a partial tool update can rewrite the message without re-deriving them from blocks.
+        // The metadata payload round-trips the editable sections, so a partial tool update can
+        // preserve omitted content without parsing rendered blocks.
         const plan = metadata.payload.plan;
         const note = metadata.payload.note;
         workpad = {
@@ -206,9 +206,11 @@ export function stateFromThread(
         const raw = metadata.payload.state;
         const state = typeof raw === "string" ? resolveStateName(raw, settings) : null;
         if (state) {
+          const actor =
+            typeof metadata.payload.actor === "string" ? metadata.payload.actor : botUserId;
           foldInputs.push({
             kind: "status",
-            event: { ts: reply.ts, state, actor: botUserId },
+            event: { ts: reply.ts, state, actor },
           });
           continue;
         }

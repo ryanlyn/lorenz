@@ -67,7 +67,6 @@ test("workpad blocks and metadata sanitize broadcast tokens", () => {
   const rendered = renderWorkpadBlocks(
     {
       issueId: "C1:1.0",
-      state: "In Progress",
       plan: "- [ ] tell <!channel> and <!subteam^S123|@eng>",
       note: "waiting on <!here>",
     },
@@ -94,7 +93,7 @@ test("workpad actions render only when Socket Mode can deliver interactions", ()
     { SLACK_BOT_TOKEN: "xoxb" },
   );
 
-  const rendered = renderWorkpadBlocks({ issueId: "C1:1.0", state: "In Progress" }, withSocket);
+  const rendered = renderWorkpadBlocks({ issueId: "C1:1.0" }, withSocket);
 
   assert.ok(JSON.stringify(rendered.blocks).includes("lorenz_cancel"));
 });
@@ -139,7 +138,7 @@ test("a workpad reply is recognized by metadata and never folds as a status even
   const replies = [
     {
       ts: "1.2",
-      text: "Lorenz workpad - status: Done",
+      text: "Lorenz workpad",
       user: "U_BOT",
       metadata: {
         eventType: WORKPAD_METADATA_EVENT,
@@ -148,7 +147,7 @@ test("a workpad reply is recognized by metadata and never folds as a status even
     },
   ];
   const thread = stateFromThread(root, replies, settings());
-  // The fallback text mentions "Done" but the workpad is display-only: state stays Todo.
+  // Workpad metadata is display-only and never creates a status event.
   assert.equal(thread.state, "Todo");
   assert.deepEqual(thread.workpad, { ts: "1.2", plan: "- [ ] step", note: "starting" });
 });
@@ -222,7 +221,7 @@ test("a transient workpad update failure propagates without posting a duplicate"
         transport,
         "C1",
         "1.0",
-        { issueId: "C1:1.0", state: "In Progress", plan: "- [ ] keep this" },
+        { issueId: "C1:1.0", plan: "- [ ] keep this" },
         { ts: "1.5", plan: "- [ ] keep this" },
       ),
     /temporary failure/,
@@ -244,7 +243,7 @@ test("a definitive missing-message error reposts the workpad", async () => {
     transport,
     "C1",
     "1.0",
-    { issueId: "C1:1.0", state: "In Progress", plan: "- [ ] keep this" },
+    { issueId: "C1:1.0", plan: "- [ ] keep this" },
     { ts: "1.5", plan: "- [ ] keep this" },
   );
 
@@ -273,10 +272,13 @@ test("the Cancel button posts an attributed authoritative status reply and nudge
   const status = replies.find((r) => r.metadata?.eventType === STATUS_METADATA_EVENT);
   assert.ok(status !== undefined);
   assert.equal(status!.metadata!.payload.state, "Cancelled");
+  assert.equal(status!.metadata!.payload.actor, "U9");
   assert.ok(status!.text.includes("<@U9>"));
   // And the fold agrees: the button IS the `!cancel` path.
   const root = (await transport.getMessage("C1", "1.0"))!;
-  assert.equal(stateFromThread(root, replies, settings()).state, "Cancelled");
+  const folded = stateFromThread(root, replies, settings());
+  assert.equal(folded.state, "Cancelled");
+  assert.equal(folded.events.at(-1)?.actor, "U9");
 });
 
 test("the Details button opens the session modal; refresh re-renders in place", async () => {

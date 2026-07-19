@@ -86,7 +86,7 @@ export async function updateSlackStatus(
   channel: string,
   ts: string,
   status: string,
-  options: { attribution?: string } = {},
+  options: { attribution?: string; actor?: string } = {},
 ): Promise<SlackStatusUpdateOutcome> {
   const canonical = resolveStateName(status, settings);
   if (canonical === null) {
@@ -112,7 +112,12 @@ export async function updateSlackStatus(
   await transport.postReply(channel, ts, body, {
     metadata: {
       eventType: STATUS_METADATA_EVENT,
-      payload: { issue: `${channel}:${ts}`, state: canonical, seq: makeMetadataSeq() },
+      payload: {
+        issue: `${channel}:${ts}`,
+        state: canonical,
+        seq: makeMetadataSeq(),
+        ...(options.actor !== undefined ? { actor: options.actor } : {}),
+      },
     },
   });
   await mirrorStatusReaction(settings, transport, channel, ts, canonical, root.botReactions);

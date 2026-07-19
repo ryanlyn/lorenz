@@ -86,8 +86,8 @@ export function slackToolSpecs(): ToolSpec[] {
       name: "slack_read_thread",
       description:
         "Read a Slack issue's authoritative state: its source message, thread-derived status " +
-        "(human `@bot !` commands and bot `status:` replies, latest wins), reactions, permalink, " +
-        "and the thread replies. Args: issueId.",
+        "(human `@bot !` commands and bot `status:` replies, latest wins), status audit trail, " +
+        "workpad, reactions, permalink, and thread replies. Args: issueId.",
       inputSchema: {
         type: "object",
         properties: { issueId: { type: "string" } },
@@ -201,7 +201,6 @@ export async function executeSlackTool(
           ts,
           {
             issueId: `${channel}:${ts}`,
-            state: thread.state,
             ...(plan !== undefined ? { plan } : {}),
             ...(note !== undefined ? { note } : {}),
           },
@@ -223,6 +222,7 @@ export async function executeSlackTool(
           statusEvents: thread.events,
           text: root.text,
           ...(thread.request !== undefined ? { request: thread.request } : {}),
+          ...(thread.workpad !== undefined ? { workpad: thread.workpad } : {}),
           reactions: root.reactions,
           ...(base ? { permalink: slackPermalink(base, channel, ts) } : {}),
           replies,

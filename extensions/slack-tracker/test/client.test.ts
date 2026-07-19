@@ -680,7 +680,7 @@ test("a rate-limited mirror heal does not block candidate discovery", async () =
   assert.deepEqual((await transport.getMessage("C1", "1700000000.000100"))!.reactions, []);
 });
 
-test("a delayed workpad header heal preserves newer plan and note text", async () => {
+test("a delayed reaction heal leaves workpad plan and note untouched", async () => {
   const rootTs = "1700000000.000100";
   const workpadTs = "1700000000.000160";
   const transport = new InMemorySlackTransport(
@@ -694,7 +694,7 @@ test("a delayed workpad header heal preserves newer plan and note text", async (
             { ts: "1700000000.000150", text: "<@U_BOT> !done", user: "U_HUMAN" },
             {
               ts: workpadTs,
-              text: "Lorenz workpad - status: In Progress",
+              text: "Lorenz workpad",
               user: "U_BOT",
               metadata: {
                 eventType: WORKPAD_METADATA_EVENT,
@@ -724,7 +724,7 @@ test("a delayed workpad header heal preserves newer plan and note text", async (
   const client = new SlackTrackerClient(settings(), transport);
 
   await client.fetchCandidateIssues();
-  await transport.updateMessage("C1", workpadTs, "Lorenz workpad - status: Done", {
+  await transport.updateMessage("C1", workpadTs, "Lorenz workpad", {
     metadata: {
       eventType: WORKPAD_METADATA_EVENT,
       payload: {
@@ -1044,6 +1044,56 @@ test("watch applies steering policy while admitting thread broadcasts", () => {
       },
     },
   ]);
+});
+
+test("busy notices follow the same author allowlist as live steering", async () => {
+  const transport = new InMemorySlackTransport(
+    {
+      C1: [
+        {
+          ts: "1700000000.000100",
+          text: "<@U_BOT> do it",
+          user: "U_ALICE",
+          reactions: ["eyes"],
+        },
+      ],
+    },
+    { botUserId: "U_BOT" },
+  );
+  const withApp = parseSlackConfig(
+    {
+      tracker: {
+        kind: "slack",
+        channels: ["C1"],
+        bot_user_id: "U_BOT",
+        users: ["U_ALICE"],
+        active_states: ["Todo", "In Progress"],
+      },
+    },
+    { SLACK_BOT_TOKEN: "xoxb-test", SLACK_APP_TOKEN: "xapp-test" },
+  );
+  let opened: SlackSocketModeOptions | null = null;
+  const client = new SlackTrackerClient(withApp, transport, (options) => {
+    opened = options;
+    return { start: () => {}, close: () => {} } as unknown as SlackSocketMode;
+  });
+  client.watch(() => {});
+  const onEvent = (opened as unknown as SlackSocketModeOptions).onEvent!;
+  const reply = {
+    type: "message",
+    channel: "C1",
+    thread_ts: "1700000000.000100",
+    text: "<@U_BOT> another request",
+  };
+
+  onEvent({ event: { ...reply, ts: "1700000000.000200", user: "U_BOB" } });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(transport.ephemerals.length, 0);
+
+  onEvent({ event: { ...reply, ts: "1700000000.000300", user: "U_ALICE" } });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(transport.ephemerals.length, 1);
+  assert.equal(transport.ephemerals[0]!.user, "U_ALICE");
 });
 
 test("fetchIssueEvents returns a bounded page of authorized human steering replies", async () => {

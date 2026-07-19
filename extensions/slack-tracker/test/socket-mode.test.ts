@@ -367,7 +367,7 @@ test("reconnect fires onReconnect (a gap) and onConnectionState tracks both edge
   sm.close();
 });
 
-test("a split Socket Mode feed disables mirror-backed reads", async () => {
+test("a split Socket Mode feed rejects the new connection", async () => {
   const socket = new FakeSocket();
   const states: boolean[] = [];
   const sm = makeSocketMode({
@@ -380,6 +380,7 @@ test("a split Socket Mode feed disables mirror-backed reads", async () => {
 
   socket.receive({ type: "hello", num_connections: 2 });
 
-  assert.deepEqual(states, [false]);
+  assert.equal(socket.closed, true);
+  assert.deepEqual(states, []);
   sm.close();
 });

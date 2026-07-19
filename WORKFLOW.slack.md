@@ -171,7 +171,7 @@ You have seven Slack tools:
 
 - `slack_update_status` - set the issue's status by posting the bot's `status:` thread reply (and mirroring the bot's reaction). Args: `issueId` (`<channel>:<ts>`), `status` (a configured active/terminal state name, e.g. `In Progress`, `Done`, `Cancelled`). Example: set `In Progress` when you pick it up, `Done` when complete.
 - `slack_comment` - post a threaded reply on the source message. Args: `issueId` (`<channel>:<ts>`), `body`. Use it for milestones that should notify the thread.
-- `slack_workpad` - create or update one bot message carrying the live plan checklist, latest note, and Cancel/Details buttons. Args: `issueId`, `plan?`, `note?`. Omitted sections keep their current value.
+- `slack_workpad` - create or update one bot message carrying the live plan checklist and latest note. With Socket Mode it also carries Cancel/Details buttons. Args: `issueId`, `plan?`, `note?`. Omitted sections keep their current value.
 - `slack_read_thread` - read the issue's authoritative state. Args: `issueId` (`<channel>:<ts>`). Returns the folded status and audit trail, source message, request, workpad, reactions, permalink, and replies.
 - `slack_query` - read-only query over the tracked issues in the watched channels (bot-mention roots and bot-marked threads), with thread-derived state. Args: `channels?`, `where?`, `select?`, `expand?` (`thread`, `reactions`), `order_by?`, `limit?`, `offset?`. Use it to survey related issues; it never mutates anything.
 - `slack_user_info` - resolve a `U...` user id (from a `<@U...>` mention or a reply's `user` field) to its profile (name, real name, display name, bot flag). Args: `userId`.

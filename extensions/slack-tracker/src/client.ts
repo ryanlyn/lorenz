@@ -32,7 +32,6 @@ import {
   isAsideText,
   parseStatusCommand,
   resolveThreadState,
-  stateFromThread,
   type ThreadState,
 } from "./threadState.js";
 import { isBotMarked } from "./transport.js";
@@ -42,7 +41,6 @@ import type {
   SlackThreadReply,
   SlackTransport,
 } from "./transport.js";
-import { upsertWorkpad } from "./workpad.js";
 
 // Re-exported here for API stability because package consumers and the tool pack import it from
 // the client module.
@@ -510,10 +508,7 @@ export class SlackTrackerClient implements RuntimeTrackerClient {
       (reaction) => typeof map[reaction] === "string" && reaction !== target,
     );
     const missingTarget = target !== null && !root.botReactions.includes(target);
-    // The workpad header is a second display mirror healed on the same state-change cadence
-    // (a human `!done` must not leave the workpad saying "In Progress" forever).
-    const hasWorkpad = thread.workpad !== undefined;
-    if (!staleManaged && !missingTarget && !hasWorkpad) return;
+    if (!staleManaged && !missingTarget) return;
     // Capture only what the heal needs: the queued closure can outlive minutes of 429 backoff,
     // and holding `root` would pin every backlogged message body in memory until the queue drains.
     const { channel, ts } = root;
@@ -524,32 +519,9 @@ export class SlackTrackerClient implements RuntimeTrackerClient {
         if (healReaction) {
           await mirrorStatusReaction(this.settings, this.transport, channel, ts, state, observed);
         }
-        if (hasWorkpad) {
-          // The queue may wait behind reaction backoff while the agent edits the workpad. Read its
-          // current metadata before healing the header so a delayed write cannot restore stale
-          // plan or note text.
-          const replies = await this.transport.getThread(channel, ts);
-          const current = stateFromThread(root, replies, this.settings);
-          const workpad = current.workpad;
-          if (workpad === undefined) return;
-          await upsertWorkpad(
-            this.settings,
-            this.transport,
-            channel,
-            ts,
-            {
-              issueId: key,
-              state: current.state,
-              ...(workpad.plan !== undefined ? { plan: workpad.plan } : {}),
-              ...(workpad.note !== undefined ? { note: workpad.note } : {}),
-            },
-            workpad,
-          );
-        }
       } catch {
-        // Defensive only (mirror writes already swallow their own failures): a rejection here
-        // would poison the serialized queue and silently skip every later heal. Let the next
-        // poll reschedule this issue if its workpad read or update failed.
+        // Defensive only: a rejection here would poison the serialized queue and silently skip
+        // every later heal. Let the next poll reschedule this issue.
         this.mirroredStates.delete(key);
       }
     });
@@ -573,8 +545,9 @@ export class SlackTrackerClient implements RuntimeTrackerClient {
     const user = typeof event.user === "string" ? event.user : null;
     const text = typeof event.text === "string" ? event.text : "";
     if (channel === null || ts === null || threadTs === null || threadTs === ts) return;
-    const { botUserId } = slackTrackerOptions(this.settings);
+    const { botUserId, users } = slackTrackerOptions(this.settings);
     if (user === null || botUserId === undefined || user === botUserId) return;
+    if (!isAllowedAuthor(user, users)) return;
     if (!isBotMention(text, botUserId)) return;
     if (isAsideText(text, botUserId)) return;
     if (parseStatusCommand(text, botUserId, this.settings) !== null) return;

@@ -474,15 +474,7 @@ export class MirrorBackedSlackTransport implements SlackTransport {
     state.roots = new Map();
     for (const message of [...scan.mentions, ...scan.threadedRoots]) {
       seen.add(message.ts);
-      state.roots.set(message.ts, {
-        ts: message.ts,
-        text: message.text,
-        user: message.user,
-        reactions: [...message.reactions],
-        botReactions: [...message.botReactions],
-        replyCountHint: message.replyCount ?? 0,
-        latestReplyHint: message.latestReply,
-      });
+      this.storeRoot(state, message);
       const thread = state.threads.get(message.ts);
       if (thread) {
         for (const [ts, reply] of [...thread]) {
@@ -513,6 +505,18 @@ export class MirrorBackedSlackTransport implements SlackTransport {
     }
     state.syncedAt = this.now();
     state.dirty = false;
+  }
+
+  private storeRoot(state: ChannelState, message: SlackMessage): void {
+    state.roots.set(message.ts, {
+      ts: message.ts,
+      text: message.text,
+      user: message.user,
+      reactions: [...message.reactions],
+      botReactions: [...message.botReactions],
+      replyCountHint: message.replyCount ?? 0,
+      latestReplyHint: message.latestReply,
+    });
   }
 
   private collectScan(channel: string, state: ChannelState, out: SlackChannelScan): void {
@@ -612,7 +616,7 @@ export class MirrorBackedSlackTransport implements SlackTransport {
     if (channel === null) return;
     const subtype = typeof event.subtype === "string" ? event.subtype : undefined;
     if (subtype === "message_changed") {
-      this.applyEdit(channel, event);
+      await this.applyEdit(channel, event);
       return;
     }
     if (subtype === "message_deleted") {
@@ -751,7 +755,7 @@ export class MirrorBackedSlackTransport implements SlackTransport {
     }
   }
 
-  private applyEdit(channel: string, event: Record<string, unknown>): void {
+  private async applyEdit(channel: string, event: Record<string, unknown>): Promise<void> {
     const edited = event.message;
     if (!isRecord(edited) || typeof edited.ts !== "string") return;
     const ts = edited.ts;
@@ -765,7 +769,20 @@ export class MirrorBackedSlackTransport implements SlackTransport {
       return;
     }
     const rootTs = state.replyIndex.get(ts);
-    if (rootTs === undefined) return; // an edit to a message the mirror never saw: nothing folded to protect.
+    if (rootTs === undefined) {
+      const threadTs = typeof edited.thread_ts === "string" ? edited.thread_ts : undefined;
+      if (threadTs !== undefined && threadTs !== ts) {
+        // The original reply event was not observed, so current text cannot establish first-seen
+        // command semantics. Reconcile the channel instead of guessing.
+        this.markDirty(channel, `edit ${ts} references an unknown reply in ${threadTs}`);
+        return;
+      }
+      // A root outside the scan may become an issue when edited to mention the bot. Fetch its
+      // authoritative shape and add it to the mirror before the event-triggered poll collects.
+      const message = await this.inner.getMessage(channel, ts);
+      if (message !== null) this.storeRoot(state, message);
+      return;
+    }
     const reply = state.threads.get(rootTs)?.get(ts);
     if (!reply) return;
     const previous = reply.text;

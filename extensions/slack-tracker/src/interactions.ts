@@ -93,7 +93,7 @@ async function handleCancel(
     channel,
     ts,
     "Cancelled",
-    { attribution },
+    { attribution, ...(userId !== null ? { actor: userId } : {}) },
   );
   if (!outcome.ok) {
     context.logger.warn(`slack workpad cancel for ${issueId} failed: ${outcome.message}`);

@@ -1,6 +1,5 @@
 import type { Settings } from "@lorenz/domain";
 
-import { emojiForState, statusEmojiMap } from "./mapping.js";
 import { slackTrackerOptions } from "./options.js";
 import { stripBroadcastMentions } from "./sanitize.js";
 import type { ThreadWorkpad } from "./threadState.js";
@@ -28,7 +27,6 @@ const SECTION_MAX_CHARS = 2_000;
 
 export interface WorkpadContent {
   issueId: string;
-  state: string;
   plan?: string | undefined;
   note?: string | undefined;
 }
@@ -47,9 +45,9 @@ export function renderWorkpadBlocks(content: WorkpadContent, settings: Settings)
     plan: sanitizeWorkpadSection(content.plan),
     note: sanitizeWorkpadSection(content.note),
   };
-  const emoji = emojiForState(safeContent.state, statusEmojiMap(settings));
-  const statusLine = `*Status:* ${emoji ? `:${emoji}: ` : ""}${safeContent.state}`;
-  const blocks: unknown[] = [{ type: "section", text: { type: "mrkdwn", text: statusLine } }];
+  const blocks: unknown[] = [
+    { type: "section", text: { type: "mrkdwn", text: "*Lorenz workpad*" } },
+  ];
   if (safeContent.plan !== undefined && safeContent.plan.trim() !== "") {
     blocks.push({ type: "section", text: { type: "mrkdwn", text: safeContent.plan } });
   }
@@ -105,8 +103,8 @@ export function renderWorkpadBlocks(content: WorkpadContent, settings: Settings)
 }
 
 /** Plain-text fallback shown by clients that do not render blocks. */
-function workpadFallback(content: WorkpadContent): string {
-  return `Lorenz workpad - status: ${content.state}`;
+function workpadFallback(): string {
+  return "Lorenz workpad";
 }
 
 /**
@@ -129,7 +127,7 @@ export async function upsertWorkpad(
     note: sanitizeWorkpadSection(content.note),
   };
   const options = renderWorkpadBlocks(clamped, settings);
-  const fallback = workpadFallback(clamped);
+  const fallback = workpadFallback();
   if (existing !== undefined) {
     try {
       await transport.updateMessage(channel, existing.ts, fallback, options);

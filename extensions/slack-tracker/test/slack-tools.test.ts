@@ -3,7 +3,12 @@ import { assert } from "@lorenz/test-utils";
 
 import { parseSlackConfig } from "./helpers.js";
 
-import { executeSlackTool, InMemorySlackTransport, slackToolSpecs } from "@lorenz/slack-tracker";
+import {
+  executeSlackTool,
+  InMemorySlackTransport,
+  slackToolSpecs,
+  WORKPAD_METADATA_EVENT,
+} from "@lorenz/slack-tracker";
 
 function settings() {
   return parseSlackConfig(
@@ -141,7 +146,18 @@ test("slack_read_thread returns text, derived status, reactions, and the thread 
         ts: "1.1",
         text: "<@U1> do the thing",
         reactions: ["eyes"],
-        replies: [{ ts: "1.2", text: "on it", user: "U2" }],
+        replies: [
+          { ts: "1.2", text: "on it", user: "U2" },
+          {
+            ts: "1.3",
+            text: "Lorenz workpad",
+            user: "U1",
+            metadata: {
+              eventType: WORKPAD_METADATA_EVENT,
+              payload: { issue: "C1:1.1", seq: "workpad", plan: "- [ ] test", note: "running" },
+            },
+          },
+        ],
       },
     ],
   });
@@ -161,9 +177,21 @@ test("slack_read_thread returns text, derived status, reactions, and the thread 
     // empty and the state falls back to the bot's own reaction reading.
     statusEvents: [],
     text: "<@U1> do the thing",
+    workpad: { ts: "1.3", plan: "- [ ] test", note: "running" },
     reactions: ["eyes"],
     permalink: "https://example.slack.com/archives/C1/p11",
-    replies: [{ ts: "1.2", text: "on it", user: "U2" }],
+    replies: [
+      { ts: "1.2", text: "on it", user: "U2" },
+      {
+        ts: "1.3",
+        text: "Lorenz workpad",
+        user: "U1",
+        metadata: {
+          eventType: WORKPAD_METADATA_EVENT,
+          payload: { issue: "C1:1.1", seq: "workpad", plan: "- [ ] test", note: "running" },
+        },
+      },
+    ],
   });
 });
 

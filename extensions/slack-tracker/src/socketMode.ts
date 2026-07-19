@@ -233,27 +233,32 @@ export class SlackSocketMode implements TrackerChangeStream {
     }
 
     if (frame.type === "hello") {
-      // A live connection resets the backoff so the NEXT drop retries promptly.
-      this.reconnectAttempts = 0;
-      this.connected = true;
-      // Slack routes each event to exactly one of an app's open Socket Mode connections. A split
-      // feed cannot back an authoritative mirror, so keep the socket for the envelopes it does
-      // receive but force tracker reads through the Web API.
+      // Slack routes each envelope to one open connection. Reject a connection that would split
+      // the feed, before accepting any envelopes on it. An unacknowledged envelope is retried by
+      // Slack on the remaining connection, preserving the single-feed mirror invariant.
       const connections = numConnectionsOf(frame);
-      const feedComplete = connections === null || connections <= 1;
-      if (!feedComplete) {
+      if (connections !== null && connections > 1) {
         this.logger.warn(
           `slack socket mode: this app has ${connections} open socket connections; events are ` +
-            "split across them, so mirror-backed reads are disabled",
+            "split across them, so this connection is closing to preserve exclusive ownership",
         );
+        try {
+          socket.close();
+        } catch {
+          // The standard close path schedules another ownership attempt.
+        }
+        return;
       }
+      // A live exclusive connection resets the backoff so the next drop retries promptly.
+      this.reconnectAttempts = 0;
+      this.connected = true;
       if (this.hadConnection) {
         // Anything delivered while we were between connections is gone (Slack replays nothing),
         // so a reconnect is a gap by definition - the mirror re-syncs from a real scan.
         this.safeNotify(this.onReconnect, "onReconnect");
       }
       this.hadConnection = true;
-      this.safeNotify(() => this.onConnectionState?.(feedComplete), "onConnectionState");
+      this.safeNotify(() => this.onConnectionState?.(true), "onConnectionState");
       return;
     }
     if (frame.type === "disconnect") {

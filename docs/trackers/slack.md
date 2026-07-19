@@ -52,9 +52,9 @@ reconciliation - at startup, after every reconnect (Slack replays nothing missed
 disconnected), whenever an event cannot be applied cleanly, and on the `reconcile_interval_ms`
 cadence as a standing repair pass. The fold over thread events is idempotent, so a duplicated or
 re-scanned input re-derives the same state; while the socket is unhealthy the mirror never serves
-and every poll is a real scan, exactly the pull-only behavior. The same fallback applies when
-Slack reports multiple open Socket Mode connections because it splits events across them.
-`interactive` envelopes (the
+and every poll is a real scan, exactly the pull-only behavior. Lorenz rejects an additional Socket
+Mode connection when Slack reports that it would split the feed, preserving exclusive ownership
+for the connection that already backs the mirror. `interactive` envelopes (the
 workpad's Cancel/Details buttons) arrive over the same connection, so interactivity needs no
 public HTTP endpoint - enable **Interactivity** in the Slack app config to use the buttons.
 Eligible human thread replies also travel with the event as structured issue data and are
@@ -314,9 +314,9 @@ edits it in place from then on - the live plan checklist and latest note, withou
 spam of posting each revision as a new reply (edits do not notify; genuinely notifying milestones
 still belong in `slack_comment` replies). The workpad is recognized by its `lorenz_workpad`
 message metadata, which also round-trips the plan/note so partial updates and restarts never lose
-a section. Like the reactions, it is a display mirror, never state: the daemon heals its status
-header on the same per-state-change cadence as the reaction mirror, and a workpad that cannot be
-edited (deleted, edit window closed) is simply reposted.
+a section. It is a display surface, never state. Status remains in the thread event fold and the
+bot-owned reaction mirror, so workpad updates only touch plan and note content. A workpad that
+cannot be edited because Slack definitively rejects its stored message identity is reposted.
 
 With Socket Mode enabled, the workpad carries two buttons delivered as `interactive` envelopes.
 Pull-only workpads omit the actions because no interaction stream is available:

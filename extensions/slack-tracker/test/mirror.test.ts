@@ -475,6 +475,37 @@ test("a reply into an unknown root fetches the root instead of dirtying the chan
   assert.equal(threaded!.replyCount, 1);
 });
 
+test("editing an unmirrored root to mention the bot makes it immediately discoverable", async () => {
+  const raw = new InMemorySlackTransport(
+    { C1: [{ ts: "5.0", text: "plain root", user: "U3" }] },
+    { botUserId: "U_BOT" },
+  );
+  const inner = counting(raw);
+  const getMessage = inner.getMessage.bind(inner);
+  inner.getMessage = async (channel, ts) => {
+    const message = await getMessage(channel, ts);
+    return message === null ? null : { ...message, text: "<@U_BOT> edited into a request" };
+  };
+  const mirror = mirrored(inner);
+  const initial = await mirror.scanChannels(["C1"]);
+  assert.equal(initial.mentions.length, 0);
+
+  mirror.applyEvent(
+    messageEvent({
+      type: "message",
+      subtype: "message_changed",
+      channel: "C1",
+      message: { ts: "5.0", text: "<@U_BOT> edited into a request", user: "U3" },
+    }),
+  );
+
+  const updated = await mirror.scanChannels(["C1"]);
+  assert.deepEqual(
+    updated.mentions.map((message) => message.ts),
+    ["5.0"],
+  );
+});
+
 test("mirror thread pages preserve Slack microsecond timestamp ordering", async () => {
   const inner = new InMemorySlackTransport(
     {
