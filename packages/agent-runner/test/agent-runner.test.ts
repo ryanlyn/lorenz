@@ -993,6 +993,62 @@ test("recovery stops when the issue becomes inactive", async () => {
   assert.equal(queuedPrompts.length, 0);
 });
 
+test("recovered steering queued after a lifecycle refresh receives a new activation refresh", async () => {
+  const settings = fakeSettings({ agent: { ...defaultSettings().agent, maxTurns: 1 } });
+  const queuedPrompts: string[] = [];
+  let backendActivations = 0;
+  let issueRefreshes = 0;
+  let recoveryCalls = 0;
+  const session = fakeSession({
+    queueTurn: async (prompt, options) => {
+      queuedPrompts.push(prompt);
+      await options?.startWhen;
+      backendActivations += 1;
+      return [{ type: "turn_completed" }];
+    },
+  });
+
+  const result = await runAgentAttempt({
+    issue: fakeIssue({ issueEventCursor: "10.0" }),
+    workflow: { path: "/workflow.md", config: {}, promptTemplate: "Fix it", settings },
+    settings,
+    fetchIssue: async (issue) => {
+      issueRefreshes += 1;
+      if (issueRefreshes === 1) return issue;
+      return { ...issue, state: "Done", stateType: "completed" };
+    },
+    fetchIssueEvents: async () => {
+      recoveryCalls += 1;
+      return issueEventPage(
+        recoveryCalls === 2
+          ? [
+              {
+                authorizedForSteering: true,
+                ts: "11.0",
+                author: "ryan",
+                text: "queued after refresh",
+              },
+            ]
+          : [],
+      );
+    },
+    adapters: fakeAdapters({
+      executorFactory: () =>
+        fakeExecutor({
+          session: {
+            queueTurn: session.queueTurn,
+          },
+        }),
+    }),
+  });
+
+  assert.equal(result.turnCount, 1);
+  assert.equal(issueRefreshes, 2);
+  assert.equal(recoveryCalls, 2);
+  assert.equal(queuedPrompts.length, 1);
+  assert.equal(backendActivations, 0);
+});
+
 test("live delivery reconciles missed events before newer messages", async () => {
   const settings = fakeSettings({ agent: { ...defaultSettings().agent, maxTurns: 3 } });
   const queuedPrompts: string[] = [];

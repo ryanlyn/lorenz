@@ -650,6 +650,7 @@ class RunController {
           }
           break;
         }
+        const queuedTurnBeforeIssueRefresh = queuedTurns[0];
         try {
           issue = await input.fetchIssue(issue);
         } catch (error) {
@@ -671,15 +672,17 @@ class RunController {
           backendProfile(refreshed) !== backendProfile(runtime);
         if (backendChanged) break;
         runtime = refreshed;
+        if (queuedTurnBeforeIssueRefresh && queuedTurns[0] === queuedTurnBeforeIssueRefresh) {
+          queuedTurnBeforeIssueRefresh.activate();
+          continue;
+        }
         if (queuedTurns.length > 0) {
-          queuedTurns[0]?.activate();
           continue;
         }
         await enqueueSteeringFlush(
           completedWithoutTools || autonomousTurnCount >= runtime.agent.maxTurns,
         );
         if (queuedTurns.length > 0) {
-          queuedTurns[0]?.activate();
           continue;
         }
         if (completedWithoutTools && queuedTurns.length === 0) break;
