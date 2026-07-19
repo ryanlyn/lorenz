@@ -218,7 +218,8 @@ export function validateDispatchConfig(
     }
   }
 
-  const requiredBackends = new Set<AgentKind>([settings.agent.kind]);
+  const requiredBackends = new Set<AgentKind>(Object.keys(settings.agents));
+  requiredBackends.add(settings.agent.kind);
   for (const override of settings.statusOverrides.values()) {
     if (override.agent?.kind) requiredBackends.add(override.agent.kind);
   }

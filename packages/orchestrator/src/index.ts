@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 
 import {
+  agentKindForIssue,
   dispatchBlockReason,
   firstUnclaimedSlot,
   issueIsActive,
@@ -9,7 +10,7 @@ import {
   sortForDispatch,
 } from "@lorenz/dispatch";
 import { ensembleSize } from "@lorenz/issue";
-import { normalizeStateName, settingsForIssueState } from "@lorenz/config";
+import { normalizeStateName } from "@lorenz/config";
 import { retryBackoffMs } from "@lorenz/policies/retry";
 import { mergeMonotonicUsage } from "@lorenz/policies/usage";
 import { selectLeastLoadedHost } from "@lorenz/policies/workerHost";
@@ -372,7 +373,6 @@ export class Orchestrator {
       throw new NoopClaimStoreMutation();
     }
     const workerHost = selected;
-    const effective = settingsForIssueState(this.settings, issue.state);
     const size = ensembleSize(issue) ?? this.settings.agent.ensembleSize;
     const key = slotKey(issue.id, slotIndex);
     const entry: RunningEntry = {
@@ -380,7 +380,7 @@ export class Orchestrator {
       identifier: issue.identifier,
       slotIndex,
       ensembleSize: size,
-      agentKind: effective.agent.kind,
+      agentKind: agentKindForIssue(this.settings, issue),
       workerHost,
       workspacePath: null,
       sessionId: null,
@@ -415,7 +415,6 @@ export class Orchestrator {
     slotIndex: number,
     retryEntry: [string, RetryEntry] | undefined,
   ): SlotReservation {
-    const effective = settingsForIssueState(this.settings, issue.state);
     const size = ensembleSize(issue) ?? this.settings.agent.ensembleSize;
     const key = slotKey(issue.id, slotIndex);
     const acquireTimeoutMs = this.settings.worker.workerPool?.acquireTimeoutMs ?? 30_000;
@@ -426,7 +425,7 @@ export class Orchestrator {
       issue,
       slotIndex,
       token: `reservation-${randomUUID()}`,
-      agentKind: effective.agent.kind,
+      agentKind: agentKindForIssue(this.settings, issue),
       ensembleSize: size,
       affinityHost: retryEntry?.[1].workerHost ?? null,
       retryAttempt: retryEntry?.[1].attempt ?? null,

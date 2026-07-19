@@ -1671,6 +1671,44 @@ test("orchestrator claims ensemble slots independently and snapshots backend-neu
   assert.equal(orchestrator.snapshot().retrying[0]?.attempt, 1);
 });
 
+test("orchestrator claim resolves an agents key route over the per-state override", async () => {
+  const settings = parseConfig({
+    status_overrides: { Todo: { agent: { kind: "claude" } } },
+    agents: { pi: { bridge_command: "pi-acp" } },
+  });
+  const orchestrator = new Orchestrator(settings);
+  const routed = normalizeIssue({
+    id: "route-agent-issue",
+    identifier: "MT-ROUTE-AGENT",
+    title: "Route selects the agent",
+    state: { name: "Todo", type: "unstarted" },
+    labels: [{ name: "Lorenz:Pi" }],
+  });
+  const unrouted = normalizeIssue({
+    id: "route-agent-default",
+    identifier: "MT-ROUTE-AGENT-DEFAULT",
+    title: "State override applies without a mapped route",
+    state: { name: "Todo", type: "unstarted" },
+  });
+
+  assert.equal((await claimEntryAsync(orchestrator, routed))?.agentKind, "pi");
+  assert.equal((await claimEntryAsync(orchestrator, unrouted))?.agentKind, "claude");
+});
+
+test("orchestrator claim applies no route override when agent routes conflict", async () => {
+  const settings = parseConfig();
+  const orchestrator = new Orchestrator(settings);
+  const conflicted = normalizeIssue({
+    id: "route-agent-conflict",
+    identifier: "MT-ROUTE-AGENT-CONFLICT",
+    title: "Ambiguity never guesses",
+    state: { name: "Todo", type: "unstarted" },
+    labels: [{ name: "Lorenz:Claude" }, { name: "Lorenz:Codex" }],
+  });
+
+  assert.equal((await claimEntryAsync(orchestrator, conflicted))?.agentKind, "codex");
+});
+
 test("orchestrator preserves pending ensemble retries per slot", async () => {
   const clock = fakeClock(new Date("2026-01-01T00:00:00.000Z"));
   const settings = parseConfig({

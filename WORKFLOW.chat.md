@@ -29,6 +29,8 @@ trackers:
       accept_unrouted: true
       only_routes: null
       route_label_prefix: "route-"
+      # Any route matching a key under agents selects that agent without changing eligibility.
+      # For example, #route-claude selects agents.claude below.
   slack:
     provider: slack
     channels:
@@ -56,6 +58,8 @@ trackers:
       accept_unrouted: true
       only_routes: null
       route_label_prefix: "route-"
+      # Any route matching a key under agents selects that agent without changing eligibility.
+      # For example, #route-claude selects agents.claude below.
 polling:
   # Gateway or Socket Mode events provide prompt wake-ups. Polling remains the recovery path.
   interval_ms: 60000

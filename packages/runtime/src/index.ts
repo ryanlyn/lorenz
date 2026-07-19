@@ -1,4 +1,11 @@
-import { issueHasOpenBlockers, issueIsActive, routedToThisWorker, slotKey } from "@lorenz/dispatch";
+import {
+  issueHasOpenBlockers,
+  issueIsActive,
+  routeAgentKind,
+  routedToThisWorker,
+  settingsWithRouteAgent,
+  slotKey,
+} from "@lorenz/dispatch";
 import { isTerminalState } from "@lorenz/issue";
 import { Orchestrator, type ClaimStoreLike, type SlotReservation } from "@lorenz/orchestrator";
 import { settingsForIssueState, validateDispatchConfig } from "@lorenz/config";
@@ -702,6 +709,16 @@ export class LorenzRuntime {
       this.addEvent("dispatch_skipped", `${refreshed.identifier} stale_before_dispatch`);
       return [];
     }
+    const routeAgent = routeAgentKind(refreshed, this.workflow.settings);
+    if (routeAgent.conflicts) {
+      const mappings = routeAgent.conflicts
+        .map(({ route, agentKind }) => `${route}=${agentKind}`)
+        .join(", ");
+      this.addEvent(
+        "poll_error",
+        `${refreshed.identifier} agent_route_conflict (${mappings}); no route agent override applied`,
+      );
+    }
     const slotIndex =
       claim.kind === "running" ? claim.entry.slotIndex : claim.reservation.slotIndex;
     const key = slotKey(refreshed.id, slotIndex);
@@ -1053,6 +1070,7 @@ export class LorenzRuntime {
       const result = await this.runner({
         issue,
         workflow: this.workflow,
+        settings: settingsWithRouteAgent(this.workflow.settings, issue),
         workerHost: effectiveWorkerHost,
         slotIndex,
         // Thread the bound slot's per-run MCP endpoint (or null on the local /

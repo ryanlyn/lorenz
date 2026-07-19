@@ -316,6 +316,10 @@ Executor records keyed by kind, plus shared timeout defaults. The `agents` block
 | `agents.<kind>.provider_config` | record | (none) | Per-session config overlay. Claude receives a `settings.json` shape; everything else a `config.toml` shape. |
 | `agents.<kind>.strict_mcp_config` | boolean | `true` | Parsed and validated but not consumed at runtime today. |
 
+Every `agents.<kind>` key is also eligible as a same-named route. A `Lorenz:claude` label selects
+`agents.claude` when the route prefix is `Lorenz:`. This selection does not change
+`accept_unrouted` or `only_routes` eligibility.
+
 The built-in `codex` record uses `bridge_command: codex-acp`. The built-in `claude` record uses `bridge_command: claude-agent-acp` and a `provider_config` of `{model: claude-opus-4-6[1m], permissions: {defaultMode: dontAsk}}`. That model pin is `DEFAULT_CLAUDE_MODEL` (currently `claude-opus-4-6[1m]`; the authoritative value lives in `packages/config/src/defaults.ts`). The `bridge_command` is a single shell command string split on whitespace; there is no `bridge_args` key. See [codex](../agents/codex.md) and [claude](../agents/claude.md).
 
 ### Legacy agent sugar
