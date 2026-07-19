@@ -2644,6 +2644,74 @@ test("a tracker push delivers issue events to every active run for that issue", 
   }
 });
 
+test("a tracker push does not steer when recovery is unavailable", async () => {
+  const issue = {
+    ...issueFixture("issue-live-steering-no-recovery", "MT-LIVE-STEERING-NO-RECOVERY"),
+    issueEventCursor: "10.0",
+  };
+  let captured: ((change?: TrackerChange) => void) | null = null;
+  const delivered: TrackerIssueEvent[] = [];
+  let finishRun: (() => void) | undefined;
+  const runFinished = new Promise<void>((resolve) => {
+    finishRun = resolve;
+  });
+  const runtime = new LorenzRuntime(
+    runtimeOptions({
+      workflow: pushWorkflowFixture(),
+      client: {
+        fetchCandidateIssues: async () => [issue],
+        fetchIssuesByIds: async () => [issue],
+        watch: (onChange) => {
+          captured = onChange;
+          return { close: () => {} };
+        },
+      },
+      runner: async (input) => {
+        const unsubscribe = input.subscribeIssueEvents?.((events) => delivered.push(...events));
+        await runFinished;
+        unsubscribe?.();
+        return {
+          workspace: "/tmp/lorenz/MT-LIVE-STEERING-NO-RECOVERY",
+          finalIssue: issue,
+        };
+      },
+    }),
+  );
+
+  void runtime.start({ once: false });
+  try {
+    await waitFor(() => captured !== null && runtime.snapshot().running.length === 1, 1_000);
+    captured!({
+      issueEvents: {
+        issueId: issue.id,
+        events: [
+          {
+            authorizedForSteering: true,
+            ts: "11.0",
+            author: "ryan",
+            text: "must not be delivered",
+          },
+        ],
+      },
+    });
+    await waitFor(
+      () =>
+        runtime
+          .snapshot()
+          .recentEvents.some(
+            (event) =>
+              event.type === "tracker_watch_error" &&
+              event.message.includes("requires fetchIssueEvents recovery"),
+          ),
+      1_000,
+    );
+    assert.deepEqual(delivered, []);
+  } finally {
+    finishRun?.();
+    runtime.stop();
+  }
+});
+
 test("pending issue event delivery shortens oversized text before the runner subscribes", async () => {
   const issue = {
     ...issueFixture("issue-bounded-steering", "MT-BOUNDED-STEERING"),

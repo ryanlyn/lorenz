@@ -740,19 +740,22 @@ export class LorenzRuntime {
     this.addEvent("tracker_push", this.workflow.settings.tracker.kind ?? "tracker");
     const issueEvents = change?.issueEvents;
     if (issueEvents) {
-      if (!client.fetchIssueEvents && !this.issueEventRecoveryWarningIssued) {
-        this.issueEventRecoveryWarningIssued = true;
-        this.addEvent(
-          "tracker_watch_error",
-          "tracker issue event push requires fetchIssueEvents recovery",
+      if (!client.fetchIssueEvents) {
+        if (!this.issueEventRecoveryWarningIssued) {
+          this.issueEventRecoveryWarningIssued = true;
+          this.addEvent(
+            "tracker_watch_error",
+            "tracker issue event push requires fetchIssueEvents recovery",
+          );
+        }
+      } else {
+        const authorizedEvents = issueEvents.events.filter(
+          (event) => event.authorizedForSteering === true,
         );
-      }
-      const authorizedEvents = issueEvents.events.filter(
-        (event) => event.authorizedForSteering === true,
-      );
-      for (const handle of this.activeRuns.values()) {
-        if (handle.trackerClient === client && handle.issueId === issueEvents.issueId) {
-          handle.publishIssueEvents(authorizedEvents);
+        for (const handle of this.activeRuns.values()) {
+          if (handle.trackerClient === client && handle.issueId === issueEvents.issueId) {
+            handle.publishIssueEvents(authorizedEvents);
+          }
         }
       }
     }
