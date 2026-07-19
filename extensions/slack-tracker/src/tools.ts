@@ -16,6 +16,7 @@ import { slackMessageToRow, slackPermalink, splitIssueId, trackedRootsOf } from 
 import { requireBotUserId, requireTrackedMessage, updateSlackStatus } from "./operations.js";
 import { slackTrackerOptions } from "./options.js";
 import { resolveThreadState, stateFromThread } from "./threadState.js";
+import { slackRuntimeTransport } from "./toolTransport.js";
 import type { SlackTransport } from "./transport.js";
 import { SlackWebTransport } from "./webTransport.js";
 import { upsertWorkpad } from "./workpad.js";
@@ -292,7 +293,8 @@ export const slackToolProvider: ToolProvider = {
       name,
       input,
       context.settings,
-      new SlackWebTransport(context.settings, context.fetchImpl),
+      slackRuntimeTransport(context.settings) ??
+        new SlackWebTransport(context.settings, context.fetchImpl),
     ),
 };
 

@@ -20,6 +20,12 @@ export interface SlackMessage {
   replyCount?: number | undefined;
   /** ts of the newest thread reply (root messages only). */
   latestReply?: string | undefined;
+  /**
+   * Set by the channel mirror after it has observed a thread-derived status transition. Reaction
+   * fallback stays disabled if that transition is later deleted during reconciliation, so the
+   * bot's derived visibility reaction cannot become authoritative.
+   */
+  threadEventsObserved?: boolean | undefined;
 }
 
 /**

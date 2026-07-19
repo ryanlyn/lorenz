@@ -1,6 +1,9 @@
 import { test } from "vitest";
 import { assert } from "@lorenz/test-utils";
 
+import { registerSlackRuntimeTransport } from "../src/toolTransport.js";
+import { slackToolProvider } from "../src/tools.js";
+
 import { parseSlackConfig } from "./helpers.js";
 
 import {
@@ -518,6 +521,39 @@ test("an irrelevant reply into an unknown root performs no serialized point read
   );
 });
 
+test("an unrelated bot reply into an unknown root performs no serialized point read", async () => {
+  const inner = counting(
+    new InMemorySlackTransport(
+      {
+        C1: [
+          { ts: "1.0", text: "<@U_BOT> tracked", user: "U2" },
+          { ts: "5.0", text: "plain root", user: "U3" },
+        ],
+      },
+      { botUserId: "U_BOT" },
+    ),
+  );
+  const mirror = mirrored(inner);
+  await mirror.scanChannels(["C1"]);
+
+  mirror.applyEvent(
+    messageEvent({
+      type: "message",
+      subtype: "bot_message",
+      bot_id: "B_OTHER",
+      user: "U_OTHER_BOT",
+      channel: "C1",
+      ts: "5.5",
+      thread_ts: "5.0",
+      text: "unrelated automation",
+    }),
+  );
+  await mirror.scanChannels(["C1"]);
+
+  assert.equal(inner.messageReads, 0);
+  assert.equal(inner.scans, 1);
+});
+
 test("standing reconciliation refetches threads whose replies may have been edited", async () => {
   const raw = new InMemorySlackTransport(
     {
@@ -592,6 +628,172 @@ test("editing an unmirrored root to mention the bot makes it immediately discove
     updated.mentions.map((message) => message.ts),
     ["5.0"],
   );
+});
+
+test("delayed root create events cannot undo an edit or resurrect a deletion", async () => {
+  const raw = new InMemorySlackTransport(
+    { C1: [{ ts: "5.0", text: "<@U_BOT> original request", user: "U3" }] },
+    { botUserId: "U_BOT" },
+  );
+  let clock = 0;
+  const mirror = mirrored(raw, () => clock);
+  await mirror.scanChannels(["C1"]);
+
+  await raw.updateMessage("C1", "5.0", "mention removed");
+  mirror.applyEvent(
+    messageEvent({
+      type: "message",
+      subtype: "message_changed",
+      channel: "C1",
+      message: { ts: "5.0", text: "mention removed", user: "U3" },
+    }),
+  );
+  mirror.applyEvent(
+    messageEvent({
+      type: "message",
+      channel: "C1",
+      ts: "5.0",
+      text: "<@U_BOT> original request",
+      user: "U3",
+    }),
+  );
+  const edited = await mirror.scanChannels(["C1"]);
+  assert.equal(edited.mentions.length, 0);
+
+  clock = 60_001;
+  await mirror.scanChannels(["C1"]);
+  mirror.applyEvent(
+    messageEvent({
+      type: "app_mention",
+      channel: "C1",
+      ts: "5.0",
+      text: "<@U_BOT> original request",
+      user: "U3",
+    }),
+  );
+  const agedOut = await mirror.scanChannels(["C1"]);
+  assert.equal(agedOut.mentions.length, 0);
+
+  mirror.applyEvent(
+    messageEvent({
+      type: "message",
+      subtype: "message_deleted",
+      channel: "C1",
+      deleted_ts: "5.0",
+      previous_message: { ts: "5.0", text: "mention removed", user: "U3" },
+    }),
+  );
+  mirror.applyEvent(
+    messageEvent({
+      type: "app_mention",
+      channel: "C1",
+      ts: "5.0",
+      text: "<@U_BOT> original request",
+      user: "U3",
+    }),
+  );
+  const deleted = await mirror.scanChannels(["C1"]);
+  assert.equal(deleted.mentions.length, 0);
+  assert.equal(deleted.threadedRoots.length, 0);
+});
+
+test("reconciliation does not promote a deleted status event's reaction mirror", async () => {
+  const raw = new InMemorySlackTransport(
+    { C1: [{ ts: "1.0", text: "<@U_BOT> tracked", user: "U2" }] },
+    { botUserId: "U_BOT" },
+  );
+  await raw.addReaction("C1", "1.0", "white_check_mark");
+  let clock = 0;
+  const mirror = mirrored(raw, () => clock);
+  await mirror.scanChannels(["C1"]);
+  mirror.applyEvent(
+    messageEvent({
+      type: "message",
+      channel: "C1",
+      ts: "1.5",
+      thread_ts: "1.0",
+      text: "<@U_BOT> !done",
+      user: "U2",
+    }),
+  );
+  await mirror.getThread("C1", "1.0");
+  mirror.applyEvent(
+    messageEvent({
+      type: "message",
+      subtype: "message_deleted",
+      channel: "C1",
+      deleted_ts: "1.5",
+      previous_message: {
+        ts: "1.5",
+        thread_ts: "1.0",
+        text: "<@U_BOT> !done",
+        user: "U2",
+      },
+    }),
+  );
+
+  clock = 60_001;
+  const scan = await mirror.scanChannels(["C1"]);
+  const root = scan.mentions[0]!;
+  const replies = await mirror.getThread("C1", "1.0");
+
+  assert.equal(root.threadEventsObserved, true);
+  assert.deepEqual(root.botReactions, ["white_check_mark"]);
+  assert.equal(replies.length, 0);
+  assert.equal(stateFromThread(root, replies, settings()).state, "Todo");
+});
+
+test("agent thread reads share the mirror's first-seen command classification", async () => {
+  const s = settings();
+  const raw = new InMemorySlackTransport(
+    { C1: [{ ts: "1.0", text: "<@U_BOT> tracked", user: "U2" }] },
+    { botUserId: "U_BOT" },
+  );
+  const mirror = new MirrorBackedSlackTransport(raw, s, {
+    reconcileIntervalMs: 60_000,
+    now: () => 0,
+    logger: silent,
+  });
+  mirror.setSocketHealthy(true);
+  await mirror.scanChannels(["C1"]);
+  mirror.applyEvent(
+    messageEvent({
+      type: "message",
+      channel: "C1",
+      ts: "1.5",
+      thread_ts: "1.0",
+      text: "<@U_BOT> !done",
+      user: "U2",
+    }),
+  );
+  mirror.applyEvent(
+    messageEvent({
+      type: "message",
+      subtype: "message_changed",
+      channel: "C1",
+      message: {
+        ts: "1.5",
+        thread_ts: "1.0",
+        text: "<@U_BOT> !cancel",
+        user: "U2",
+      },
+    }),
+  );
+  registerSlackRuntimeTransport(s, mirror);
+
+  const result = await slackToolProvider.executeTool(
+    "slack_read_thread",
+    { issueId: "C1:1.0" },
+    {
+      settings: s,
+      fetchImpl: (async () => {
+        throw new Error("unexpected direct Slack read");
+      }) as typeof fetch,
+    },
+  );
+
+  assert.equal(result.success, true);
+  assert.equal((result.result as { status: string }).status, "Done");
 });
 
 test("mirror thread pages preserve Slack microsecond timestamp ordering", async () => {

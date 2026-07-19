@@ -183,10 +183,13 @@ Two escape hatches around the events:
 - **Edits and deletions.** Command classification is **first-seen** for the daemon session: an
   edit to an already-folded `!` command is ignored (a one-time thread notice says so) - post a
   new command instead. A deleted command keeps its folded role until the next reconciliation
-  scan, where the substrate has forgotten it and the fold re-derives. Across a restart the
-  rebuild scan can only fold current text (Slack's API cannot return pre-edit text) - the
-  first-seen guarantee is in-session, stated plainly rather than pretended durable. Root edits
-  track current text: editing the mention away untracks the issue.
+  scan, where the substrate has forgotten it and the fold re-derives without falling back to the
+  event's derived reaction mirror. Agent-facing thread tools share the daemon's effective
+  transport, so their in-session reads use the same first-seen classification as runtime
+  reconciliation. Across a restart the rebuild scan can only fold current text (Slack's API
+  cannot return pre-edit text) - the first-seen guarantee is in-session, stated plainly rather
+  than pretended durable. Root edits track current text: editing the mention away untracks the
+  issue.
 
 If the thread has no status event, state falls back to the BOT's own reactions when the root is a
 mention, otherwise `Todo`. Human reactions never count toward state.
@@ -319,6 +322,8 @@ message metadata, which also round-trips the plan/note so partial updates and re
 a section. It is a display surface, never state. Status remains in the thread event fold and the
 bot-owned reaction mirror, so workpad updates only touch plan and note content. A workpad that
 cannot be edited because Slack definitively rejects its stored message identity is reposted.
+The top-level plain-text fallback includes the plan and note for clients and accessibility tools
+that do not render Block Kit content.
 
 With Socket Mode enabled, the workpad carries two buttons delivered as `interactive` envelopes.
 Pull-only workpads omit the actions because no interaction stream is available:

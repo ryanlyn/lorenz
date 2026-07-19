@@ -103,8 +103,12 @@ export function renderWorkpadBlocks(content: WorkpadContent, settings: Settings)
 }
 
 /** Plain-text fallback shown by clients that do not render blocks. */
-function workpadFallback(): string {
-  return "Lorenz workpad";
+function workpadFallback(content: WorkpadContent): string {
+  return [
+    "Lorenz workpad",
+    ...(content.plan !== undefined && content.plan.trim() !== "" ? [content.plan] : []),
+    ...(content.note !== undefined && content.note.trim() !== "" ? [content.note] : []),
+  ].join("\n\n");
 }
 
 /**
@@ -127,7 +131,7 @@ export async function upsertWorkpad(
     note: sanitizeWorkpadSection(content.note),
   };
   const options = renderWorkpadBlocks(clamped, settings);
-  const fallback = workpadFallback();
+  const fallback = workpadFallback(clamped);
   if (existing !== undefined) {
     try {
       await transport.updateMessage(channel, existing.ts, fallback, options);

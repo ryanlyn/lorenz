@@ -3,7 +3,7 @@ import { errorMessage, isRecord, type Settings } from "@lorenz/domain";
 import { compareSlackTs, isSlackTs } from "./ids.js";
 import { isAllowedAuthor, isBotMention } from "./mapping.js";
 import { slackTrackerOptions } from "./options.js";
-import { parseStatusCommand } from "./threadState.js";
+import { parseStatusCommand, stateFromThread } from "./threadState.js";
 import type {
   SlackChannelScan,
   SlackMessage,
@@ -42,6 +42,7 @@ import { toMessageMetadata, type SlackTrackerLogger } from "./webTransport.js";
 const DEFAULT_RECONCILE_INTERVAL_MS = 15 * 60_000;
 const MIRROR_THREAD_CURSOR_PREFIX = "mirror:";
 const API_THREAD_CURSOR_PREFIX = "api:";
+const ROOT_CREATE_BARRIERS_MAX = 5_000;
 
 interface MirrorReply {
   ts: string;
@@ -83,6 +84,10 @@ interface ChannelState {
   authoritativeThreads: Set<string>;
   /** reply ts -> root ts, so edits/deletes/reactions on replies find their thread. */
   replyIndex: Map<string, string>;
+  /** Edited/deleted root timestamps that delayed duplicate create events must not overwrite. */
+  rootCreateBarriers: Set<string>;
+  /** Roots that have observed at least one thread-derived status transition. */
+  rootsWithThreadEvents: Set<string>;
   /** Last successful real scan; null until bootstrapped. */
   syncedAt: number | null;
   /** Set on any doubt; forces the next scan to be a real one. */
@@ -301,7 +306,11 @@ export class MirrorBackedSlackTransport implements SlackTransport {
   async getMessage(channel: string, ts: string): Promise<SlackMessage | null> {
     // Point reads stay authoritative API reads: they back the tool trust boundary
     // (requireTrackedMessage) and the claimed-issue fallback, where staleness is not acceptable.
-    return this.inner.getMessage(channel, ts);
+    const message = await this.inner.getMessage(channel, ts);
+    if (message === null || !this.channels.get(channel)?.rootsWithThreadEvents.has(ts)) {
+      return message;
+    }
+    return { ...message, threadEventsObserved: true };
   }
 
   async teamUrl(): Promise<string | null> {
@@ -463,6 +472,8 @@ export class MirrorBackedSlackTransport implements SlackTransport {
         threads: new Map(),
         authoritativeThreads: new Set(),
         replyIndex: new Map(),
+        rootCreateBarriers: new Set(),
+        rootsWithThreadEvents: new Set(),
         syncedAt: null,
         dirty: false,
       };
@@ -496,7 +507,7 @@ export class MirrorBackedSlackTransport implements SlackTransport {
     state.roots = new Map();
     for (const message of [...scan.mentions, ...scan.threadedRoots]) {
       seen.add(message.ts);
-      this.storeRoot(state, message);
+      this.storeRoot(state, message, true);
       const thread = state.threads.get(message.ts);
       if (thread) {
         for (const [ts, reply] of [...thread]) {
@@ -525,7 +536,8 @@ export class MirrorBackedSlackTransport implements SlackTransport {
     state.dirty = false;
   }
 
-  private storeRoot(state: ChannelState, message: SlackMessage): void {
+  private storeRoot(state: ChannelState, message: SlackMessage, authoritative = false): void {
+    if (!authoritative && state.rootCreateBarriers.has(message.ts)) return;
     state.roots.set(message.ts, {
       ts: message.ts,
       text: message.text,
@@ -566,6 +578,7 @@ export class MirrorBackedSlackTransport implements SlackTransport {
       ...(root.user !== undefined ? { user: root.user } : {}),
       ...(replyCount > 0 ? { replyCount } : {}),
       ...(latestReply !== undefined ? { latestReply } : {}),
+      ...(state.rootsWithThreadEvents.has(root.ts) ? { threadEventsObserved: true } : {}),
     };
   }
 
@@ -600,6 +613,28 @@ export class MirrorBackedSlackTransport implements SlackTransport {
     if (root) {
       root.replyCountHint = thread.size;
       root.latestReplyHint = latestTsOf(thread);
+    }
+    this.rememberThreadEvents(channel, rootTs);
+  }
+
+  private rememberThreadEvents(channel: string, rootTs: string): void {
+    const state = this.channels.get(channel);
+    const root = state?.roots.get(rootTs);
+    const thread = state?.threads.get(rootTs);
+    if (!state || !root || !thread || state.rootsWithThreadEvents.has(rootTs)) return;
+    const replies = [...thread.values()]
+      .sort((left, right) => compareSlackTs(left.ts, right.ts))
+      .map(toThreadReply);
+    const message: SlackMessage = {
+      channel,
+      ts: root.ts,
+      text: root.text,
+      reactions: [...root.reactions],
+      botReactions: [...root.botReactions],
+      ...(root.user !== undefined ? { user: root.user } : {}),
+    };
+    if (stateFromThread(message, replies, this.settings).events.length > 0) {
+      state.rootsWithThreadEvents.add(rootTs);
     }
   }
 
@@ -683,9 +718,11 @@ export class MirrorBackedSlackTransport implements SlackTransport {
     message: { ts: string; text: string; user?: string | undefined },
   ): void {
     const state = this.channelState(channel);
+    if (state.rootCreateBarriers.has(message.ts)) return;
     const existing = state.roots.get(message.ts);
     if (existing) {
-      existing.text = message.text;
+      // Root text changes arrive as `message_changed`. A plain message/app_mention event for an
+      // existing timestamp is a duplicate create and must not overwrite a later edit.
       if (message.user !== undefined) existing.user = message.user;
       return;
     }
@@ -714,7 +751,6 @@ export class MirrorBackedSlackTransport implements SlackTransport {
     const state = this.channelState(channel);
     if (!state.roots.has(rootTs)) {
       const couldTrackRoot =
-        reply.isBot === true ||
         reply.user === this.botUserId ||
         (reply.user !== undefined &&
           isAllowedAuthor(reply.user, this.allowedUsers) &&
@@ -755,6 +791,7 @@ export class MirrorBackedSlackTransport implements SlackTransport {
       // Duplicate delivery (app_mention + message, redelivered envelope): first one won.
       if (existing.metadata === undefined && reply.metadata !== undefined) {
         existing.metadata = reply.metadata;
+        this.rememberThreadEvents(channel, rootTs);
       }
       return;
     }
@@ -781,6 +818,7 @@ export class MirrorBackedSlackTransport implements SlackTransport {
         root.latestReplyHint = latest;
       }
     }
+    this.rememberThreadEvents(channel, rootTs);
   }
 
   private async applyEdit(channel: string, event: Record<string, unknown>): Promise<void> {
@@ -793,6 +831,7 @@ export class MirrorBackedSlackTransport implements SlackTransport {
     if (root) {
       // Root edits track current text: an edit that removes the mention untracks the issue at
       // the next fold, exactly as a re-scan would observe it (the documented contract).
+      rememberBounded(state.rootCreateBarriers, ts, ROOT_CREATE_BARRIERS_MAX);
       root.text = newText;
       return;
     }
@@ -808,7 +847,10 @@ export class MirrorBackedSlackTransport implements SlackTransport {
       // A root outside the scan may become an issue when edited to mention the bot. Fetch its
       // authoritative shape and add it to the mirror before the event-triggered poll collects.
       const message = await this.inner.getMessage(channel, ts);
-      if (message !== null) this.storeRoot(state, message);
+      if (message !== null) {
+        this.storeRoot(state, message, true);
+        rememberBounded(state.rootCreateBarriers, ts, ROOT_CREATE_BARRIERS_MAX);
+      }
       return;
     }
     const reply = state.threads.get(rootTs)?.get(ts);
@@ -851,9 +893,21 @@ export class MirrorBackedSlackTransport implements SlackTransport {
           : null;
     if (deletedTs === null) return;
     const state = this.channelState(channel);
-    if (state.roots.has(deletedTs)) {
+    const previousMessage = isRecord(event.previous_message) ? event.previous_message : null;
+    const previousThreadTs =
+      previousMessage !== null && typeof previousMessage.thread_ts === "string"
+        ? previousMessage.thread_ts
+        : undefined;
+    const knownReplyRoot = state.replyIndex.get(deletedTs);
+    const rootDelete =
+      state.roots.has(deletedTs) ||
+      (knownReplyRoot === undefined &&
+        (previousThreadTs === undefined || previousThreadTs === deletedTs));
+    if (rootDelete) {
       // A deleted root is a deleted issue: it disappears exactly as it would from a re-scan,
-      // and the runtime reconciles the claim through the per-id fallback (getMessage -> null).
+      // and its mutation barrier rejects delayed duplicate create events. The runtime reconciles the
+      // claim through the per-id fallback (getMessage -> null).
+      rememberBounded(state.rootCreateBarriers, deletedTs, ROOT_CREATE_BARRIERS_MAX);
       state.roots.delete(deletedTs);
       state.threads.delete(deletedTs);
       state.authoritativeThreads.delete(deletedTs);
@@ -862,7 +916,7 @@ export class MirrorBackedSlackTransport implements SlackTransport {
       }
       return;
     }
-    const rootTs = state.replyIndex.get(deletedTs);
+    const rootTs = knownReplyRoot;
     if (rootTs === undefined) return;
     const reply = state.threads.get(rootTs)?.get(deletedTs);
     if (!reply || reply.deleted) return;
@@ -922,6 +976,16 @@ function latestTsOf(thread: Map<string, MirrorReply>): string | undefined {
     if (latest === undefined || compareSlackTs(reply.ts, latest) > 0) latest = reply.ts;
   }
   return latest;
+}
+
+function rememberBounded(values: Set<string>, value: string, max: number): void {
+  if (values.has(value)) return;
+  while (values.size >= max) {
+    const oldest = values.values().next().value;
+    if (oldest === undefined) break;
+    values.delete(oldest);
+  }
+  values.add(value);
 }
 
 function parseThreadPageCursor(

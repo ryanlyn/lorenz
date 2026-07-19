@@ -262,11 +262,13 @@ export function stateFromThread(
   }
 
   const hasExplicitStatus = foldInputs.some((input) => input.kind === "status");
-  // Reactions are an unordered fallback only when the thread has no explicit transition. When
-  // explicit events exist, bare mentions before the first one cannot be ordered against the
-  // reaction mirror and therefore do not create a transition.
+  // Reactions are an unordered fallback only when the thread has never had an explicit
+  // transition. The mirror remembers that history across reconciliation so deleting the sole
+  // event cannot promote its derived visibility reaction into authority.
   let state = rootIsMention
-    ? stateFromReactions(root.botReactions, statusEmojiMap(settings), settings)
+    ? root.threadEventsObserved === true
+      ? reopenState(settings)
+      : stateFromReactions(root.botReactions, statusEmojiMap(settings), settings)
     : "Todo";
   let explicitStatusSeen = !hasExplicitStatus;
   for (const input of foldInputs) {
@@ -322,7 +324,11 @@ export async function resolveThreadState(
   const key = `${root.channel}:${root.ts}`;
   const latestReply = root.latestReply ?? "";
   // Only bot-authored reactions can change the derived state, so only they invalidate.
-  const reactionsKey = [...root.botReactions].sort().join(",");
+  const reactionsKey = `${root.threadEventsObserved === true ? "events" : "fallback"}:${[
+    ...root.botReactions,
+  ]
+    .sort()
+    .join(",")}`;
   const cached = threadStateCache.get(key);
   if (
     cached &&

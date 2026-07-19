@@ -204,6 +204,32 @@ test("slack_workpad creates one message, then partial updates preserve the other
   assert.equal(workpads.length, 1);
   assert.equal(workpads[0]!.metadata!.payload.plan, "- [ ] reproduce\n- [ ] fix");
   assert.equal(workpads[0]!.metadata!.payload.note, "tests running");
+  assert.ok(transport.replies[0]!.body.includes("- [ ] reproduce"));
+});
+
+test("the workpad fallback carries plan and note text", async () => {
+  const transport = new InMemorySlackTransport(
+    { C1: [{ ts: "1.0", text: "<@U_BOT> do it", user: "U2" }] },
+    { botUserId: "U_BOT" },
+  );
+
+  await upsertWorkpad(
+    settings(),
+    transport,
+    "C1",
+    "1.0",
+    {
+      issueId: "C1:1.0",
+      plan: "- [ ] verify accessibility",
+      note: "reviewing",
+    },
+    undefined,
+  );
+
+  assert.equal(
+    transport.replies[0]!.body,
+    "Lorenz workpad\n\n- [ ] verify accessibility\n\nreviewing",
+  );
 });
 
 test("concurrent partial workpad updates serialize into one merged message", async () => {

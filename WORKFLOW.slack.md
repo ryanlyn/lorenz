@@ -162,7 +162,7 @@ Status transitions are ts-ordered events in the issue's thread; the latest wins:
 - Humans transition status by mentioning the bot with a `!`-prefixed command reply: `@bot !done`, `@bot !cancel`, `@bot !reopen`, `@bot !in progress`, `@bot !status <Name>`. The workpad Cancel button is the one-click form of `@bot !cancel`.
 - Thread replies from authenticated humans allowed by `tracker.users` steer an active agent. Leaving `tracker.users` unset permits any authenticated human in a watched channel. With Socket Mode an eligible reply is submitted immediately as the next queued ACP turn; without Socket Mode it is recovered between turns. Prefix a reply with `!aside`, optionally after the bot mention, to keep it as thread context without steering the agent or changing status.
 - A human mention with **no** recognized command re-opens a terminal issue to the first active state: re-mentioning the bot always means "this needs attention again".
-- Status commands are first-seen within a daemon session. Editing an old command does not rewrite status; post a new command instead.
+- Status commands are first-seen within a daemon session, and agent tool reads use the same runtime mirror. Editing an old command does not rewrite status; post a new command instead.
 - Reactions are per-author in Slack (the bot cannot remove a human's reaction and vice versa), so reactions are never the source of truth once a status event exists; do not reason about status from reactions.
 
 ## Available tools
