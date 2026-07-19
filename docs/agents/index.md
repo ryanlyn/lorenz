@@ -106,12 +106,13 @@ single executor.
 | Key | Default | Meaning |
 | --- | --- | --- |
 | `agent.max_concurrent_agents` | `10` | Global cap on agents running at once. |
-| `agent.max_turns` | `20` | Maximum `runTurn` iterations before the run loop stops. |
+| `agent.max_turns` | `20` | Per-run limit for autonomous turns and, separately, human steering turns. |
 | `agent.kind` | `codex` | Which `agents.<kind>` record a dispatched issue runs. |
 
-The run loop builds the workspace, runs the `before_run` hook, opens a session, loops `runTurn` up
-to `max_turns`, then runs the `after_run` hook on a best-effort basis. It also stops early when the
-issue goes inactive or the selected kind changes between turns. See
+The run loop builds the workspace, runs the `before_run` hook, opens a session, runs up to
+`max_turns` autonomous turns, drains up to `max_turns` accepted human steering turns, then runs the
+`after_run` hook on a best-effort basis. It also stops early when the issue goes inactive or the
+selected kind changes between turns. See
 [agent-orchestrator.md](../agent-orchestrator.md) for the dispatch and concurrency model.
 
 ## Legacy `codex:` / `claude:` sugar

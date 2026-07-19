@@ -36,7 +36,7 @@ Which `_meta` key carries `provider_config` is decided per bridge family by `isC
 
 ## One turn end to end
 
-`@lorenz/agent-runner` owns the run lifecycle. It calls `createWorkspaceForIssue`, runs the `before_run` hook, calls `executor.startSession` (which spawns the bridge and runs ACP `initialize` then `session/new`, each with a hardcoded 30000ms timeout), then loops `runTurn` up to `agent.max_turns` (default `20`). After the loop it calls `session.stop()` and then the `after_run` hook (best-effort).
+`@lorenz/agent-runner` owns the run lifecycle. It calls `createWorkspaceForIssue`, runs the `before_run` hook, calls `executor.startSession` (which spawns the bridge and runs ACP `initialize` then `session/new`, each with a hardcoded 30000ms timeout), then runs up to `agent.max_turns` autonomous turns (default `20`) while draining up to the same number of accepted human steering turns. After the loop it calls `session.stop()` and then the `after_run` hook (best-effort).
 
 Each `runTurn` is a single ACP `session/prompt`. The executor sends the prompt, reads every session notification the bridge streams back, and resolves the turn with all the `AgentUpdate` events it produced. The turn ends when the bridge returns a `PromptResponse` with a `stopReason`, which `actionForStopReason` maps:
 

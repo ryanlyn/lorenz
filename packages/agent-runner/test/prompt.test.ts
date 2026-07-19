@@ -3,7 +3,7 @@ import { test } from "vitest";
 import type { Issue, ParsedPromptTemplate } from "@lorenz/domain";
 import { assert, issueWith } from "@lorenz/test-utils";
 
-import { buildPrompt, continuationPrompt } from "../src/index.js";
+import { buildPrompt, continuationPrompt, issueEventsPrompt } from "../src/index.js";
 
 function makeIssue(overrides: Partial<Issue> = {}): Issue {
   return issueWith({
@@ -143,6 +143,40 @@ test("continuationPrompt includes resume-from-workspace guidance in output", () 
 
   assert.match(result, /Resume from the current workspace and workpad state/);
   assert.match(result, /instead of restarting from scratch/);
+});
+
+test("issueEventsPrompt renders each event as a standalone user turn", () => {
+  assert.equal(
+    issueEventsPrompt([
+      {
+        authorizedForSteering: true,
+        ts: "1626200000.000100",
+        author: "U123",
+        text: "please also update the docs",
+      },
+      {
+        authorizedForSteering: true,
+        ts: "1626200001.000200",
+        author: "ryan",
+        text: "target the v2 endpoint",
+      },
+    ]),
+    `<issue_messages>
+The following user messages were posted on the issue while you were working:
+- [1626200000.000100] U123: please also update the docs
+- [1626200001.000200] ryan: target the v2 endpoint
+</issue_messages>`,
+  );
+});
+
+test("issueEventsPrompt handles authorless and empty event lists", () => {
+  assert.match(
+    issueEventsPrompt([
+      { authorizedForSteering: true, ts: "42.1", text: "anonymous steering note" },
+    ]),
+    /- \[42\.1\] unknown: anonymous steering note/,
+  );
+  assert.equal(issueEventsPrompt([]), "");
 });
 
 // --- Template variable substitution ---

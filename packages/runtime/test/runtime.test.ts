@@ -32,10 +32,17 @@ import type {
   McpEndpointManager,
   RunResult,
   Settings,
+  TrackerChange,
+  TrackerIssueEvent,
   LorenzRuntimeOptions,
   WorkflowDefinition,
 } from "@lorenz/cli";
-import type { ClockPort, WorkerPoolSettings } from "@lorenz/domain";
+import type {
+  ClockPort,
+  TrackerIssueEventPage,
+  TrackerIssueEventQuery,
+  WorkerPoolSettings,
+} from "@lorenz/domain";
 import type { AgentMcpEndpointLease } from "@lorenz/mcp";
 import type { AcquireResult, WorkerLease, WorkerOutcome, WorkerPool } from "@lorenz/worker-pool";
 import { assert, settle, tempDir, writeExecutable } from "@lorenz/test-utils";
@@ -1437,6 +1444,482 @@ test("runtime reloads stamped workflow when file content changes", async () => {
   );
 });
 
+test("runtime rebinds tracker push delivery when a reload replaces the client", async () => {
+  const dir = await tempDir("lorenz-runtime-reload-watch");
+  const workflowFile = path.join(dir, "WORKFLOW.md");
+  await fs.writeFile(workflowFile, workflowMarkdown({ intervalMs: 600_000 }));
+  const workflow = await loadWorkflow(workflowFile, {}, { cwd: dir });
+  const callbacks: Array<((change?: TrackerChange) => void) | undefined> = [];
+  const fetches = [0, 0];
+  const closes = [0, 0];
+  let clientBuilds = 0;
+  const runtime = new LorenzRuntime(
+    runtimeOptions({
+      workflow,
+      reloadWorkflow: async () => loadWorkflow(workflowFile, {}, { cwd: dir }),
+      clientFactory: () => {
+        const index = clientBuilds;
+        clientBuilds += 1;
+        return {
+          fetchCandidateIssues: async () => {
+            fetches[index] = (fetches[index] ?? 0) + 1;
+            return [];
+          },
+          fetchIssuesByIds: async () => [],
+          watch: (onChange) => {
+            callbacks[index] = onChange;
+            return {
+              close: () => {
+                closes[index] = (closes[index] ?? 0) + 1;
+              },
+            };
+          },
+        };
+      },
+    }),
+  );
+
+  void runtime.start({ once: false });
+  try {
+    await waitFor(() => callbacks[0] !== undefined && (fetches[0] ?? 0) >= 1, 1_000);
+    await fs.writeFile(
+      workflowFile,
+      workflowMarkdown({ intervalMs: 600_000, prompt: "Reloaded prompt" }),
+    );
+
+    await runtime.pollOnce({ dryRun: true });
+    assert.equal(clientBuilds, 2);
+    assert.equal(closes[0], 1);
+    assert.ok(callbacks[1]);
+
+    const pushesBeforeStaleCallback = runtime
+      .snapshot()
+      .recentEvents.filter((event) => event.type === "tracker_push").length;
+    callbacks[0]?.();
+    await Promise.resolve();
+    assert.equal(
+      runtime.snapshot().recentEvents.filter((event) => event.type === "tracker_push").length,
+      pushesBeforeStaleCallback,
+    );
+
+    const newClientFetches = fetches[1] ?? 0;
+    callbacks[1]?.();
+    await waitFor(() => (fetches[1] ?? 0) > newClientFetches, 1_000);
+  } finally {
+    runtime.stop();
+  }
+});
+
+test("runtime bounds tracker stream shutdown during reload", async () => {
+  const dir = await tempDir("lorenz-runtime-reload-watch-close-timeout");
+  const workflowFile = path.join(dir, "WORKFLOW.md");
+  await fs.writeFile(workflowFile, workflowMarkdown({ intervalMs: 600_000 }));
+  const workflow = await loadWorkflow(workflowFile, {}, { cwd: dir });
+  const fetches = [0, 0];
+  let clientBuilds = 0;
+  let oldStreamCloseCalls = 0;
+  let replacementWatchCalls = 0;
+  let markOldStreamCloseStarted: (() => void) | undefined;
+  const oldStreamCloseStarted = new Promise<void>((resolve) => {
+    markOldStreamCloseStarted = resolve;
+  });
+  const runtime = new LorenzRuntime(
+    runtimeOptions({
+      workflow,
+      reloadWorkflow: async () => loadWorkflow(workflowFile, {}, { cwd: dir }),
+      clientFactory: () => {
+        const index = clientBuilds;
+        clientBuilds += 1;
+        return {
+          fetchCandidateIssues: async () => {
+            fetches[index] = (fetches[index] ?? 0) + 1;
+            return [];
+          },
+          fetchIssuesByIds: async () => [],
+          watch: () => {
+            if (index > 0) {
+              replacementWatchCalls += 1;
+              return { close: () => {} };
+            }
+            return {
+              close: () => {
+                oldStreamCloseCalls += 1;
+                markOldStreamCloseStarted?.();
+                return new Promise<void>(() => {});
+              },
+            };
+          },
+        };
+      },
+    }),
+  );
+
+  void runtime.start({ once: false });
+  try {
+    await waitFor(() => (fetches[0] ?? 0) >= 1 && runtime.snapshot().poll.status === "idle", 1_000);
+    await fs.writeFile(
+      workflowFile,
+      workflowMarkdown({ intervalMs: 600_000, prompt: "Reload after bounded close" }),
+    );
+
+    vi.useFakeTimers();
+    let reloadSettled = false;
+    const reload = runtime.pollOnce({ dryRun: true }).then(() => {
+      reloadSettled = true;
+    });
+    await oldStreamCloseStarted;
+    assert.equal(oldStreamCloseCalls, 1);
+
+    await vi.advanceTimersByTimeAsync(4_999);
+    assert.equal(reloadSettled, false);
+    await vi.advanceTimersByTimeAsync(1);
+    await reload;
+
+    assert.equal(reloadSettled, true);
+    assert.equal(replacementWatchCalls, 1);
+    assert.ok(
+      runtime
+        .snapshot()
+        .recentEvents.some(
+          (event) =>
+            event.type === "tracker_watch_error" &&
+            event.message.includes("tracker change stream close timed out"),
+        ),
+    );
+  } finally {
+    runtime.stop();
+    await Promise.resolve();
+    vi.useRealTimers();
+  }
+});
+
+test("runtime polling does not wait for replacement stream startup", async () => {
+  const dir = await tempDir("lorenz-runtime-reload-opening-watch");
+  const workflowFile = path.join(dir, "WORKFLOW.md");
+  await fs.writeFile(workflowFile, workflowMarkdown({ intervalMs: 600_000 }));
+  const workflow = await loadWorkflow(workflowFile, {}, { cwd: dir });
+  const callbacks: Array<((change?: TrackerChange) => void) | undefined> = [];
+  let resolveFirstStream: ((stream: { close(): void }) => void) | undefined;
+  const firstStream = new Promise<{ close(): void }>((resolve) => {
+    resolveFirstStream = resolve;
+  });
+  let firstStreamCloses = 0;
+  let replacementWatchCalls = 0;
+  const fetches = [0, 0];
+  let clientBuilds = 0;
+  const runtime = new LorenzRuntime(
+    runtimeOptions({
+      workflow,
+      reloadWorkflow: async () => loadWorkflow(workflowFile, {}, { cwd: dir }),
+      clientFactory: () => {
+        const index = clientBuilds;
+        clientBuilds += 1;
+        return {
+          fetchCandidateIssues: async () => {
+            fetches[index] = (fetches[index] ?? 0) + 1;
+            return [];
+          },
+          fetchIssuesByIds: async () => [],
+          watch: (onChange) => {
+            callbacks[index] = onChange;
+            if (index === 0) return firstStream;
+            replacementWatchCalls += 1;
+            return new Promise<never>(() => {});
+          },
+        };
+      },
+    }),
+  );
+
+  void runtime.start({ once: false });
+  try {
+    await waitFor(() => callbacks[0] !== undefined, 1_000);
+    await fs.writeFile(
+      workflowFile,
+      workflowMarkdown({ intervalMs: 600_000, prompt: "Reloaded while opening" }),
+    );
+
+    await runtime.pollOnce({ dryRun: true });
+    assert.equal(clientBuilds, 2);
+    assert.ok(callbacks[1]);
+    assert.equal(replacementWatchCalls, 1);
+    assert.equal(fetches[1], 1);
+    assert.equal(firstStreamCloses, 0);
+
+    resolveFirstStream?.({
+      close: () => {
+        firstStreamCloses += 1;
+      },
+    });
+    await waitFor(() => firstStreamCloses === 1, 1_000);
+    assert.equal(firstStreamCloses, 1);
+  } finally {
+    resolveFirstStream?.({ close: () => {} });
+    runtime.stop();
+  }
+});
+
+test("active runs retain their tracker client across workflow reloads", async () => {
+  const dir = await tempDir("lorenz-runtime-reload-active-client");
+  const workflowFile = path.join(dir, "WORKFLOW.md");
+  await fs.writeFile(workflowFile, workflowMarkdown({ intervalMs: 600_000 }));
+  const workflow = await loadWorkflow(workflowFile, {}, { cwd: dir });
+  workflow.settings.agent.ensembleSize = 2;
+  const issue = {
+    ...issueFixture("shared-issue-id", "MT-PINNED-CLIENT"),
+    issueEventCursor: "10.0",
+  };
+  const replacementIssue = { ...issue, state: "Other" };
+  const callbacks: Array<((change?: TrackerChange) => void) | undefined> = [];
+  const streamCloses = [0, 0];
+  const recoveryCalls = [0, 0];
+  const issueRefreshCalls = [0, 0];
+  const delivered: TrackerIssueEvent[] = [];
+  let clientBuilds = 0;
+  let runnerCalls = 0;
+  let activeRecovery:
+    | ((sinceTs: string, query: TrackerIssueEventQuery) => Promise<TrackerIssueEventPage>)
+    | undefined;
+  let finishRun: (() => void) | undefined;
+  const runFinished = new Promise<void>((resolve) => {
+    finishRun = resolve;
+  });
+  const runtime = new LorenzRuntime(
+    runtimeOptions({
+      workflow,
+      reloadWorkflow: async () => {
+        const reloaded = await loadWorkflow(workflowFile, {}, { cwd: dir });
+        return {
+          ...reloaded,
+          settings: {
+            ...reloaded.settings,
+            tracker: {
+              ...reloaded.settings.tracker,
+              activeStates: ["Other"],
+            },
+            agent: {
+              ...reloaded.settings.agent,
+              ensembleSize: 2,
+            },
+          },
+        };
+      },
+      clientFactory: () => {
+        const index = clientBuilds;
+        clientBuilds += 1;
+        return {
+          fetchCandidateIssues: async () => (index === 0 ? [issue] : [replacementIssue]),
+          fetchIssuesByIds: async () => {
+            issueRefreshCalls[index] = (issueRefreshCalls[index] ?? 0) + 1;
+            return index === 0 ? [issue] : [replacementIssue];
+          },
+          fetchIssueEvents: async () => {
+            recoveryCalls[index] = (recoveryCalls[index] ?? 0) + 1;
+            return { events: [], hasMore: false };
+          },
+          watch: (onChange) => {
+            callbacks[index] = onChange;
+            return {
+              close: () => {
+                streamCloses[index] = (streamCloses[index] ?? 0) + 1;
+              },
+            };
+          },
+        };
+      },
+      runner: async (input) => {
+        runnerCalls += 1;
+        activeRecovery = input.fetchIssueEvents;
+        const unsubscribe = input.subscribeIssueEvents?.((events) => delivered.push(...events));
+        await runFinished;
+        unsubscribe?.();
+        return { workspace: "/tmp/lorenz/MT-PINNED-CLIENT", finalIssue: issue };
+      },
+    }),
+  );
+
+  void runtime.start({ once: false });
+  try {
+    await waitFor(
+      () =>
+        callbacks[0] !== undefined &&
+        activeRecovery !== undefined &&
+        runtime.snapshot().running.length === 1,
+      1_000,
+    );
+    await fs.writeFile(
+      workflowFile,
+      workflowMarkdown({ intervalMs: 600_000, prompt: "Reloaded prompt" }),
+    );
+    await runtime.pollOnce({ dryRun: true });
+    assert.equal(clientBuilds, 2);
+    assert.ok(callbacks[1]);
+    assert.deepEqual(issueRefreshCalls, [2, 0]);
+    assert.equal(runnerCalls, 1);
+    assert.equal(runtime.snapshot().running.length, 1);
+
+    await activeRecovery?.("10.0", { maxEvents: 1, maxBytes: 1 });
+    assert.deepEqual(recoveryCalls, [1, 0]);
+
+    callbacks[1]?.({
+      issueEvents: {
+        issueId: issue.id,
+        events: [
+          {
+            authorizedForSteering: true,
+            ts: "11.0",
+            author: "ryan",
+            text: "replacement client event",
+          },
+        ],
+      },
+    });
+    await Promise.resolve();
+    assert.deepEqual(delivered, []);
+    await waitFor(() => issueRefreshCalls[0] === 3, 1_000);
+
+    callbacks[0]?.({
+      issueEvents: {
+        issueId: issue.id,
+        events: [
+          { authorizedForSteering: true, ts: "11.0", author: "ryan", text: "pinned client event" },
+        ],
+      },
+    });
+    await waitFor(() => delivered.length === 1, 1_000);
+    assert.equal(delivered[0]?.text, "pinned client event");
+    await waitFor(() => issueRefreshCalls[0] === 4, 1_000);
+    assert.deepEqual(issueRefreshCalls, [4, 0]);
+    assert.deepEqual(streamCloses, [0, 0]);
+
+    finishRun?.();
+    await waitFor(() => runtime.snapshot().running.length === 0, 1_000);
+    await waitFor(() => streamCloses[0] === 1, 1_000);
+    assert.deepEqual(streamCloses, [1, 0]);
+  } finally {
+    finishRun?.();
+    runtime.stop();
+  }
+});
+
+test("an externally finished run retains issue ownership until its runner settles", async () => {
+  const dir = await tempDir("lorenz-runtime-reload-settling-owner");
+  const workflowFile = path.join(dir, "WORKFLOW.md");
+  await fs.writeFile(workflowFile, workflowMarkdown({ intervalMs: 600_000 }));
+  const workflow = await loadWorkflow(workflowFile, {}, { cwd: dir });
+  const issue = issueFixture("shared-settling-issue", "MT-SETTLING-OWNER");
+  const inactiveIssue = { ...issue, state: "Done", stateType: "completed" as const };
+  const replacementIssue = { ...issue, state: "Other" };
+  const issueRefreshCalls = [0, 0];
+  let clientBuilds = 0;
+  let runnerCalls = 0;
+  let releaseFirstRunner: (() => void) | undefined;
+  const firstRunnerGate = new Promise<void>((resolve) => {
+    releaseFirstRunner = resolve;
+  });
+  const runtime = new LorenzRuntime(
+    runtimeOptions({
+      workflow,
+      reloadWorkflow: async () => {
+        const reloaded = await loadWorkflow(workflowFile, {}, { cwd: dir });
+        return {
+          ...reloaded,
+          settings: {
+            ...reloaded.settings,
+            tracker: {
+              ...reloaded.settings.tracker,
+              activeStates: ["Other"],
+            },
+          },
+        };
+      },
+      clientFactory: () => {
+        const index = clientBuilds;
+        clientBuilds += 1;
+        return {
+          fetchCandidateIssues: async () => (index === 0 ? [issue] : [replacementIssue]),
+          fetchIssuesByIds: async () => {
+            issueRefreshCalls[index] = (issueRefreshCalls[index] ?? 0) + 1;
+            if (index > 0) return [replacementIssue];
+            return issueRefreshCalls[index] === 1 ? [issue] : [inactiveIssue];
+          },
+        };
+      },
+      runner: async () => {
+        runnerCalls += 1;
+        if (runnerCalls === 1) await firstRunnerGate;
+        return {
+          workspace: "/tmp/lorenz/MT-SETTLING-OWNER",
+          finalIssue: runnerCalls === 1 ? inactiveIssue : replacementIssue,
+        };
+      },
+    }),
+  );
+
+  void runtime.start({ once: false });
+  try {
+    await waitFor(() => runtime.snapshot().running.length === 1 && runnerCalls === 1, 1_000);
+    await fs.writeFile(
+      workflowFile,
+      workflowMarkdown({ intervalMs: 600_000, prompt: "Reloaded prompt" }),
+    );
+
+    await runtime.pollOnce();
+    assert.equal(clientBuilds, 2);
+    assert.deepEqual(issueRefreshCalls, [2, 0]);
+    assert.equal(runnerCalls, 1);
+    assert.ok(
+      runtime
+        .snapshot()
+        .recentEvents.some(
+          (event) =>
+            event.type === "dispatch_skipped" && event.message.includes("retained_run_ownership"),
+        ),
+    );
+
+    releaseFirstRunner?.();
+    await waitFor(() => runtime.snapshot().appStatus === "idle", 1_000);
+    await runtime.pollOnce({ waitForRuns: true });
+    assert.equal(runnerCalls, 2);
+    assert.deepEqual(issueRefreshCalls, [2, 1]);
+  } finally {
+    releaseFirstRunner?.();
+    runtime.stop();
+  }
+});
+
+test("active-run issue refresh rejects a deleted tracker issue", async () => {
+  const issue = issueFixture("deleted-active-issue", "MT-DELETED-ACTIVE");
+  let issueFetches = 0;
+  let refreshRejected = false;
+  const runtime = new LorenzRuntime(
+    runtimeOptions({
+      workflow: workflowFixture(),
+      client: {
+        fetchCandidateIssues: async () => [issue],
+        fetchIssuesByIds: async () => {
+          issueFetches += 1;
+          return issueFetches === 1 ? [issue] : [];
+        },
+      },
+      runner: async (input) => {
+        try {
+          await input.fetchIssue?.(issue);
+        } catch (error) {
+          refreshRejected =
+            error instanceof Error &&
+            error.message === `tracker issue missing during active run: ${issue.id}`;
+        }
+        return { workspace: "/tmp/lorenz/MT-DELETED-ACTIVE", finalIssue: issue };
+      },
+    }),
+  );
+
+  await runtime.pollOnce({ waitForRuns: true });
+
+  assert.equal(refreshRejected, true);
+});
+
 test("runtime preflights dispatch config before candidate fetches", async () => {
   const workflow = workflowFixture();
   workflow.settings.tracker.kind = undefined;
@@ -2238,6 +2721,276 @@ test("a tracker push nudges an immediate poll between intervals", async () => {
     assert.ok(snapshot.recentEvents.some((event) => event.type === "tracker_watch_started"));
     assert.ok(snapshot.recentEvents.some((event) => event.type === "tracker_push"));
   } finally {
+    runtime.stop();
+  }
+});
+
+test("a tracker push delivers issue events to every active run for that issue", async () => {
+  const issue = {
+    ...issueFixture("issue-live-steering", "MT-LIVE-STEERING"),
+    issueEventCursor: "10.0",
+  };
+  let captured: ((change?: TrackerChange) => void) | null = null;
+  const delivered: TrackerIssueEvent[] = [];
+  let finishRun: (() => void) | undefined;
+  const runFinished = new Promise<void>((resolve) => {
+    finishRun = resolve;
+  });
+  const runtime = new LorenzRuntime(
+    runtimeOptions({
+      workflow: pushWorkflowFixture(),
+      client: {
+        fetchCandidateIssues: async () => [issue],
+        fetchIssuesByIds: async () => [issue],
+        fetchIssueEvents: async () => ({ events: [], hasMore: false }),
+        watch: (onChange) => {
+          captured = onChange;
+          return { close: () => {} };
+        },
+      },
+      runner: async (input) => {
+        const unsubscribe = input.subscribeIssueEvents?.((events) => delivered.push(...events));
+        await runFinished;
+        unsubscribe?.();
+        return { workspace: "/tmp/lorenz/MT-LIVE-STEERING", finalIssue: issue };
+      },
+    }),
+  );
+
+  void runtime.start({ once: false });
+  try {
+    await waitFor(() => captured !== null && runtime.snapshot().running.length === 1, 1_000);
+    captured!({
+      issueEvents: {
+        issueId: issue.id,
+        events: [
+          {
+            authorizedForSteering: false,
+            ts: "10.5",
+            author: "guest",
+            text: "untrusted direction",
+          },
+          {
+            authorizedForSteering: true,
+            ts: "11.0",
+            author: "ryan",
+            text: "steer left",
+          },
+        ],
+      },
+    });
+    await waitFor(() => delivered.length === 1, 1_000);
+    assert.deepEqual(delivered, [
+      {
+        authorizedForSteering: true,
+        ts: "11.0",
+        author: "ryan",
+        text: "steer left",
+      },
+    ]);
+  } finally {
+    finishRun?.();
+    runtime.stop();
+  }
+});
+
+test("a tracker push does not steer when recovery is unavailable", async () => {
+  const issue = {
+    ...issueFixture("issue-live-steering-no-recovery", "MT-LIVE-STEERING-NO-RECOVERY"),
+    issueEventCursor: "10.0",
+  };
+  let captured: ((change?: TrackerChange) => void) | null = null;
+  const delivered: TrackerIssueEvent[] = [];
+  let finishRun: (() => void) | undefined;
+  const runFinished = new Promise<void>((resolve) => {
+    finishRun = resolve;
+  });
+  const runtime = new LorenzRuntime(
+    runtimeOptions({
+      workflow: pushWorkflowFixture(),
+      client: {
+        fetchCandidateIssues: async () => [issue],
+        fetchIssuesByIds: async () => [issue],
+        watch: (onChange) => {
+          captured = onChange;
+          return { close: () => {} };
+        },
+      },
+      runner: async (input) => {
+        const unsubscribe = input.subscribeIssueEvents?.((events) => delivered.push(...events));
+        await runFinished;
+        unsubscribe?.();
+        return {
+          workspace: "/tmp/lorenz/MT-LIVE-STEERING-NO-RECOVERY",
+          finalIssue: issue,
+        };
+      },
+    }),
+  );
+
+  void runtime.start({ once: false });
+  try {
+    await waitFor(() => captured !== null && runtime.snapshot().running.length === 1, 1_000);
+    captured!({
+      issueEvents: {
+        issueId: issue.id,
+        events: [
+          {
+            authorizedForSteering: true,
+            ts: "11.0",
+            author: "ryan",
+            text: "must not be delivered",
+          },
+        ],
+      },
+    });
+    await waitFor(
+      () =>
+        runtime
+          .snapshot()
+          .recentEvents.some(
+            (event) =>
+              event.type === "tracker_watch_error" &&
+              event.message.includes("requires fetchIssueEvents recovery"),
+          ),
+      1_000,
+    );
+    assert.deepEqual(delivered, []);
+  } finally {
+    finishRun?.();
+    runtime.stop();
+  }
+});
+
+test("pending issue event delivery shortens oversized text before the runner subscribes", async () => {
+  const issue = {
+    ...issueFixture("issue-bounded-steering", "MT-BOUNDED-STEERING"),
+    issueEventCursor: "10.0",
+  };
+  let captured: ((change?: TrackerChange) => void) | null = null;
+  let markRunnerStarted: (() => void) | undefined;
+  let releaseSubscription: (() => void) | undefined;
+  const runnerStarted = new Promise<void>((resolve) => {
+    markRunnerStarted = resolve;
+  });
+  const subscriptionGate = new Promise<void>((resolve) => {
+    releaseSubscription = resolve;
+  });
+  const delivered: TrackerIssueEvent[] = [];
+  const runtime = new LorenzRuntime(
+    runtimeOptions({
+      workflow: pushWorkflowFixture(),
+      client: {
+        fetchCandidateIssues: async () => [issue],
+        fetchIssuesByIds: async () => [issue],
+        fetchIssueEvents: async () => ({ events: [], hasMore: false }),
+        watch: (onChange) => {
+          captured = onChange;
+          return { close: () => {} };
+        },
+      },
+      runner: async (input) => {
+        markRunnerStarted?.();
+        await subscriptionGate;
+        const unsubscribe = input.subscribeIssueEvents?.((events) => delivered.push(...events));
+        unsubscribe?.();
+        return { workspace: "/tmp/lorenz/MT-BOUNDED-STEERING", finalIssue: issue };
+      },
+    }),
+  );
+
+  void runtime.start({ once: false });
+  try {
+    await waitFor(() => captured !== null && runtime.snapshot().running.length === 1, 1_000);
+    await runnerStarted;
+    captured!({
+      issueEvents: {
+        issueId: issue.id,
+        events: [
+          {
+            authorizedForSteering: true,
+            ts: "11.0",
+            author: "ryan",
+            text: `prefix-marker${"x".repeat(100 * 1024)}tail-marker`,
+          },
+        ],
+      },
+    });
+    releaseSubscription?.();
+    await waitFor(() => runtime.snapshot().runHistory.length === 1, 1_000);
+    assert.equal(delivered.length, 1);
+    assert.equal(delivered[0]?.ts, "11.0");
+    assert.equal(delivered[0]?.author, "ryan");
+    assert.match(delivered[0]?.text ?? "", /^prefix-marker/);
+    assert.match(delivered[0]?.text ?? "", /tail-marker$/);
+    assert.match(delivered[0]?.text ?? "", /\[message shortened for live delivery/);
+    assert.ok(
+      Buffer.byteLength(delivered[0]?.ts ?? "") +
+        Buffer.byteLength(delivered[0]?.author ?? "") +
+        Buffer.byteLength(delivered[0]?.text ?? "") <=
+        64 * 1024,
+    );
+  } finally {
+    releaseSubscription?.();
+    runtime.stop();
+  }
+});
+
+test("issue event delivery remains closed after the runner unsubscribes", async () => {
+  const issue = {
+    ...issueFixture("issue-closed-steering", "MT-CLOSED-STEERING"),
+    issueEventCursor: "10.0",
+  };
+  let captured: ((change?: TrackerChange) => void) | null = null;
+  let subscribeAgain: ((listener: (events: TrackerIssueEvent[]) => void) => () => void) | undefined;
+  let markUnsubscribed: (() => void) | undefined;
+  const unsubscribed = new Promise<void>((resolve) => {
+    markUnsubscribed = resolve;
+  });
+  let finishRun: (() => void) | undefined;
+  const runFinished = new Promise<void>((resolve) => {
+    finishRun = resolve;
+  });
+  const replayed: TrackerIssueEvent[] = [];
+  const runtime = new LorenzRuntime(
+    runtimeOptions({
+      workflow: pushWorkflowFixture(),
+      client: {
+        fetchCandidateIssues: async () => [issue],
+        fetchIssuesByIds: async () => [issue],
+        fetchIssueEvents: async () => ({ events: [], hasMore: false }),
+        watch: (onChange) => {
+          captured = onChange;
+          return { close: () => {} };
+        },
+      },
+      runner: async (input) => {
+        subscribeAgain = input.subscribeIssueEvents;
+        const unsubscribe = input.subscribeIssueEvents?.(() => {});
+        unsubscribe?.();
+        markUnsubscribed?.();
+        await runFinished;
+        return { workspace: "/tmp/lorenz/MT-CLOSED-STEERING", finalIssue: issue };
+      },
+    }),
+  );
+
+  void runtime.start({ once: false });
+  try {
+    await waitFor(() => captured !== null && runtime.snapshot().running.length === 1, 1_000);
+    await unsubscribed;
+    captured!({
+      issueEvents: {
+        issueId: issue.id,
+        events: [
+          { authorizedForSteering: true, ts: "11.0", author: "ryan", text: "do not retain" },
+        ],
+      },
+    });
+    subscribeAgain?.((events) => replayed.push(...events));
+    assert.deepEqual(replayed, []);
+  } finally {
+    finishRun?.();
     runtime.stop();
   }
 });
@@ -5260,15 +6013,8 @@ test("worker pool: a default (slotsPerMachine=1) reload applies unchanged throug
 });
 
 test("worker pool: a reload whose reconcile throws keeps last-good settings AND the live pool unchanged (transactional)", async () => {
-  // Codex iter-5 HIGH (non-transactional reload): the reload assigned
-  // this.input.workflow + this.orchestrator.settings BEFORE coordinator.reconcile.
-  // If reconcile throws (e.g. driver unavailable / invalid driverOptions), the
-  // catch emits workflow_reload_failed but the runtime has ALREADY switched to the
-  // failed settings - 'last-good' is violated and dispatch uses settings that do not
-  // match the live pool/coordinator. The reload must be transactional: run the
-  // throwing reconcile side effect FIRST and only swap runtime settings AFTER it
-  // succeeds. On failure, BOTH the runtime settings AND the pool state stay on the
-  // PREVIOUS config.
+  // A rejected pool configuration leaves runtime settings, pool state, and tracker
+  // client ownership on the accepted workflow.
   const issue = issueFixture("issue-bp-reload-reconcile-throws", "MT-BP-RELOAD-RECONCILE");
   const firstWorkflow = workerPoolWorkflowFixture();
   assert.equal(firstWorkflow.settings.worker.workerPool?.max, 1);
@@ -5283,6 +6029,7 @@ test("worker pool: a reload whose reconcile throws keeps last-good settings AND 
     reconcileError: "driver unavailable",
   });
   let reloads = 0;
+  let clientBuilds = 0;
   const runtime = new LorenzRuntime(
     runtimeOptions({
       workflow: firstWorkflow,
@@ -5291,9 +6038,12 @@ test("worker pool: a reload whose reconcile throws keeps last-good settings AND 
         reloads += 1;
         return secondWorkflow;
       },
-      client: {
-        fetchCandidateIssues: async () => [issue],
-        fetchIssuesByIds: async () => [issue],
+      clientFactory: () => {
+        clientBuilds += 1;
+        return {
+          fetchCandidateIssues: async () => [issue],
+          fetchIssuesByIds: async () => [issue],
+        };
       },
     }),
   );
@@ -5301,18 +6051,55 @@ test("worker pool: a reload whose reconcile throws keeps last-good settings AND 
   await runtime.pollOnce({ dryRun: true });
 
   assert.equal(reloads, 1);
-  // Last-good is preserved: the runtime still carries the FIRST workflow's settings
-  // (workerPool.max unchanged at 1, NOT the failed reload's 3) and the FIRST workflow.
+  assert.equal(clientBuilds, 2);
   assert.equal(runtime.workflow.settings.worker.workerPool?.max, 1);
   assert.equal(runtime.workflow.path, firstWorkflow.path);
   assert.equal(runtime.workflow, firstWorkflow);
-  // The failure surfaced as workflow_reload_failed carrying the reconcile message...
   const reloadFailed = runtime
     .snapshot()
     .recentEvents.find((event) => event.type === "workflow_reload_failed");
   assert.ok(reloadFailed);
   assert.ok(reloadFailed.message.includes("driver unavailable"));
-  // ...and NO workflow_reloaded event was emitted for the rejected reload.
+  assert.equal(
+    runtime.snapshot().recentEvents.some((event) => event.type === "workflow_reloaded"),
+    false,
+  );
+});
+
+test("worker pool: tracker construction failure leaves the accepted pool untouched", async () => {
+  const issue = issueFixture("issue-bp-reload-client-throws", "MT-BP-RELOAD-CLIENT");
+  const firstWorkflow = workerPoolWorkflowFixture();
+  const secondWorkflow = workerPoolWorkflowFixture("/tmp/lorenz-runtime-workerpool-reload-client", {
+    max: 3,
+  });
+  const workerPool = makeFakeWorkerPool({ canAcquire: false });
+  let clientBuilds = 0;
+  const runtime = new LorenzRuntime(
+    runtimeOptions({
+      workflow: firstWorkflow,
+      workerPool,
+      reloadWorkflow: async () => secondWorkflow,
+      clientFactory: () => {
+        clientBuilds += 1;
+        if (clientBuilds > 1) throw new Error("tracker construction failed");
+        return {
+          fetchCandidateIssues: async () => [issue],
+          fetchIssuesByIds: async () => [issue],
+        };
+      },
+    }),
+  );
+
+  await runtime.pollOnce({ dryRun: true });
+
+  assert.equal(clientBuilds, 2);
+  assert.equal(workerPool.reconcileCalls.length, 0);
+  assert.equal(runtime.workflow, firstWorkflow);
+  const reloadFailed = runtime
+    .snapshot()
+    .recentEvents.find((event) => event.type === "workflow_reload_failed");
+  assert.ok(reloadFailed);
+  assert.ok(reloadFailed.message.includes("tracker construction failed"));
   assert.equal(
     runtime.snapshot().recentEvents.some((event) => event.type === "workflow_reloaded"),
     false,

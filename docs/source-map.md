@@ -98,7 +98,7 @@ How one coding-agent turn actually runs.
 
 | Package | What it owns | First files to open |
 | --- | --- | --- |
-| `@lorenz/agent-runner` | Prompt rendering and the run loop: workspace creation, before/after hooks, session open, and turns up to `agent.max_turns` | `src/prompt.ts`, `src/index.ts` |
+| `@lorenz/agent-runner` | Prompt rendering and the run loop: workspace creation, hooks, session open, autonomous turns, and accepted steering turns | `src/prompt.ts`, `src/index.ts` |
 | `@lorenz/acp` | The single built-in executor (`executor: "acp"`): spawns the bridge subprocess, drives the Agent Client Protocol, enforces turn and stall timeouts, accounts usage | `src/index.ts`, `src/options.ts` |
 | `@lorenz/workspace` | Per-issue workspace creation, skill overlay, hook execution, cleanup (`createWorkspaceForIssue`, `runHook`, `removeIssueWorkspaces`) | `src/index.ts` |
 

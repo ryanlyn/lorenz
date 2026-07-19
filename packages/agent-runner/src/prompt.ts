@@ -1,5 +1,5 @@
 import { Liquid } from "liquidjs";
-import type { EnsembleContext, Issue, IssueRef } from "@lorenz/domain";
+import type { EnsembleContext, Issue, IssueRef, TrackerIssueEvent } from "@lorenz/domain";
 import type { ParsedPromptTemplate } from "@lorenz/domain";
 import { effectivePromptTemplate, parsePromptTemplate } from "@lorenz/workflow";
 import type { Template } from "liquidjs";
@@ -55,6 +55,18 @@ export function continuationPrompt(turnNumber: number, maxTurns: number): string
 - The original task instructions and prior turn context are already present in this thread, so do not restate them before acting.
 - Focus on the remaining ticket work and do not end the turn while the issue stays active unless you are truly blocked.
 `;
+}
+
+/** Render newly posted issue messages as a standalone queued user turn. */
+export function issueEventsPrompt(events: readonly TrackerIssueEvent[]): string {
+  if (events.length === 0) return "";
+  const lines = events.map(
+    (event) => `- [${event.ts}] ${event.author ?? "unknown"}: ${event.text}`,
+  );
+  return `<issue_messages>
+The following user messages were posted on the issue while you were working:
+${lines.join("\n")}
+</issue_messages>`;
 }
 
 function issuePromptContext(issue: Issue): Record<string, unknown> {

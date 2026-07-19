@@ -175,7 +175,7 @@ meaning.
 | `worker.ssh_timeout_ms` | `60000` | SSH command timeout. |
 | `worker.max_concurrent_agents_per_host` | falls back to `agent.max_concurrent_agents` | Per-host cap. |
 | `agent.max_concurrent_agents` | `10` | Global concurrency cap. |
-| `agent.max_turns` | `20` | Back-to-back turns per worker lifetime. |
+| `agent.max_turns` | `20` | Per-run limit for autonomous turns and, separately, human steering turns. |
 | `agent.max_retry_backoff_ms` | `300000` | Failure backoff cap (5 minutes). |
 | `agent.ensemble_size` | `1` | Default slots per issue. |
 | `agents.<kind>.executor` | `acp` | Executor selector for an agent kind. |
@@ -251,12 +251,17 @@ These are the service's internal claim states, distinct from tracker states.
    completed without re-dispatch.
 
 A normal worker exit does not mean the issue is finished. One worker may run multiple back-to-back
-turns on the same live agent thread in the same workspace, up to `agent.max_turns`, re-checking the
-tracker state after each turn. The first turn sends the full rendered prompt; continuation turns send
-only continuation guidance to the existing thread. If a state refresh changes the effective backend
-profile (the `agents.<kind>.executor` or its options), the worker ends the session and yields so a
-future attempt starts with the new profile. After a normal exit the orchestrator always schedules a
-short continuation retry to re-check whether the issue still needs another session.
+autonomous turns on the same live agent thread in the same workspace, up to `agent.max_turns`,
+re-checking the tracker state after each turn. Human steering accepted by the active session is
+drained even when that autonomous budget is exhausted, with a separate `agent.max_turns` limit on
+steering turns per run. Accepted steering enters the session queue immediately but remains inactive
+until the tracker refresh confirms that the issue is active and its effective backend profile is
+unchanged. Additional prompt-visible issue messages remain eligible for the next attempt. The first
+autonomous turn sends the full rendered prompt; later autonomous turns send only continuation
+guidance to the existing thread. If a state refresh changes the effective backend profile (the
+`agents.<kind>.executor` or its options), the worker ends the session and yields so a future attempt
+starts with the new profile. After a normal exit the orchestrator always schedules a short
+continuation retry to re-check whether the issue still needs another session.
 
 ### 5.2 Poll tick
 
@@ -432,8 +437,9 @@ front matter, listed with their canonical aliases):
 
 The executor launches the bridge subprocess in the workspace, drives one ACP session across the
 worker's turns, and forwards normalized agent updates to the orchestrator. The session lifecycle
-(first turn sends the full prompt, continuation turns send only guidance, turn count bounded by
-`agent.max_turns`, profile change ends the session) matches Section 5.1. See
+(first turn sends the full prompt, continuation turns send only guidance, autonomous and steering
+turn counts are each bounded by `agent.max_turns`, profile change ends the session) matches Section
+5.1. See
 [agents/acp-bridges](../agents/acp-bridges.md) and [agents/index](../agents/index.md).
 
 Tooling reaches the agent through MCP, not a Codex client-tool channel. The mounted set is driven by
