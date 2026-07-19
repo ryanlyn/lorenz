@@ -198,6 +198,7 @@ test("RunningEntry.workerHost is optional and concrete-or-null", () => {
 
 test("boundTrackerIssueEventText preserves event identity within a byte limit", () => {
   const event = {
+    authorizedForSteering: true,
     ts: "11.0",
     author: "ryan",
     text: `prefix-marker${"🙂".repeat(30_000)}tail-marker`,
@@ -217,6 +218,7 @@ test("boundTrackerIssueEventText rejects metadata that leaves no text marker spa
   assert.equal(
     boundTrackerIssueEventText(
       {
+        authorizedForSteering: true,
         ts: "1".repeat(64),
         author: "ryan",
         text: "message",

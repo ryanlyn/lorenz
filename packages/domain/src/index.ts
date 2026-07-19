@@ -278,7 +278,9 @@ export interface Issue {
   updatedAt?: string | null | undefined;
   /**
    * Latest issue-event ordering key represented in prompt-visible fields of this snapshot. Event
-   * recovery begins after this cursor, and live delivery ignores replays at or before it.
+   * recovery begins after this cursor, and live delivery ignores replays at or before it. A
+   * tracker that implements issue-event recovery uses `"0"` when the snapshot contains no
+   * prompt-visible events.
    */
   issueEventCursor?: string | null | undefined;
   /** Lower-cased label names; ensemble size is encoded as `ensemble:<n>`. */
@@ -725,6 +727,8 @@ export interface WorkflowDefinition {
 export interface TrackerIssueEvent {
   /** Unique tracker-native ordering key encoded as a canonical non-negative decimal string. */
   ts: string;
+  /** True only after the tracker provider authorizes this event to steer an agent. */
+  authorizedForSteering: boolean;
   /** Author id or display name when known. */
   author?: string | undefined;
   text: string;
@@ -848,10 +852,12 @@ export interface RuntimeTrackerClient {
   /**
    * Optional push capability: open a live change stream that invokes `onChange` whenever the
    * backend signals new or updated work. A tracker can attach issue events for immediate delivery
-   * to active agent sessions. A tracker that attaches issue events must also implement
-   * {@link fetchIssueEvents} and provide an {@link Issue.issueEventCursor} snapshot boundary so
-   * delivery can recover across connection and run-lifecycle gaps. Backends that can only be
-   * pulled omit this and the runtime relies on interval polling alone.
+   * to active agent sessions. Set `authorizedForSteering` only after authenticating the author and
+   * applying the provider's steering policy; the runtime ignores events that are not authorized.
+   * A tracker that attaches issue events must also implement {@link fetchIssueEvents} and provide
+   * an {@link Issue.issueEventCursor} snapshot boundary so delivery can recover across connection
+   * and run-lifecycle gaps. Backends that can only be pulled omit this and the runtime relies on
+   * interval polling alone.
    *
    * The interval poll always stays active as a safety net, so `onChange` need not be exhaustive
    * or reliable: a missed signal is at worst recovered on the next interval, and the runtime
@@ -868,8 +874,10 @@ export interface RuntimeTrackerClient {
    * contains the oldest matching events in ascending order and must obey both query bounds.
    * `"0"` means from the beginning. Set `hasMore` when newer matching events remain so callers
    * can advance through accepted pages without skipping events. Tracker issue snapshots provide
-   * the initial prompt-visible boundary through {@link Issue.issueEventCursor}; live push is the
-   * primary delivery path and this pull hook recovers events missed across connection gaps.
+   * the initial prompt-visible boundary through {@link Issue.issueEventCursor}, including `"0"`
+   * when no event is represented in the snapshot. Return only events whose authenticated authors
+   * satisfy the provider's steering policy, with `authorizedForSteering` set to true. Live push is
+   * the primary delivery path and this pull hook recovers events missed across connection gaps.
    */
   fetchIssueEvents?(
     issueId: string,

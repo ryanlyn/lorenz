@@ -268,7 +268,14 @@ describe("INVARIANT: When the backend profile changes between turns, the system 
           events:
             recoveryCalls === 1
               ? []
-              : [{ ts: "11.0", author: "ryan", text: "use the new backend" }],
+              : [
+                  {
+                    authorizedForSteering: true,
+                    ts: "11.0",
+                    author: "ryan",
+                    text: "use the new backend",
+                  },
+                ],
           hasMore: false,
         };
       },
@@ -364,7 +371,9 @@ describe("INVARIANT: When the backend profile changes between turns, the system 
     });
 
     await firstTurnStarted;
-    issueEventListener?.([{ ts: "11.0", author: "ryan", text: "use the new backend" }]);
+    issueEventListener?.([
+      { authorizedForSteering: true, ts: "11.0", author: "ryan", text: "use the new backend" },
+    ]);
     await queuedTurnSubmitted;
     releaseFirstTurn?.();
 

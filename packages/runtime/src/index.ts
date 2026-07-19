@@ -747,9 +747,12 @@ export class LorenzRuntime {
           "tracker issue event push requires fetchIssueEvents recovery",
         );
       }
+      const authorizedEvents = issueEvents.events.filter(
+        (event) => event.authorizedForSteering === true,
+      );
       for (const handle of this.activeRuns.values()) {
         if (handle.trackerClient === client && handle.issueId === issueEvents.issueId) {
-          handle.publishIssueEvents(issueEvents.events);
+          handle.publishIssueEvents(authorizedEvents);
         }
       }
     }

@@ -25,6 +25,7 @@ const beforeRunHookStage = "workspace.run_before_run_hook";
 const afterRunHookStage = "workspace.run_after_run_hook";
 const issueEventsFeedStage = "tracker.fetch_issue_events";
 const maxBufferedIssueEventBytes = 64 * 1024;
+const maxQueuedIssueEventBytes = 4 * maxBufferedIssueEventBytes;
 const maxRecoveredIssueEvents = 1_000;
 
 interface SetupStageSignalOptions {
@@ -86,6 +87,7 @@ interface TurnActivity {
 interface QueuedTurn {
   outcome: Promise<TurnOutcome>;
   activity: TurnActivity;
+  promptBytes: number;
   activated: boolean;
   activate(): void;
 }
@@ -147,6 +149,7 @@ class RunController {
     let issueEventBufferOverflow = false;
     const bufferIssueEvents = (events: TrackerIssueEvent[]): void => {
       for (const event of events) {
+        if (event.authorizedForSteering !== true) continue;
         const bounded = boundTrackerIssueEventText(event, maxBufferedIssueEventBytes);
         if (!bounded) {
           issueEventBufferOverflow = true;
@@ -290,9 +293,12 @@ class RunController {
         receiveIssueEvents = () => {};
       }
       const steeringRecoveryAvailable =
-        typeof session.queueTurn === "function" &&
-        Boolean(input.fetchIssueEvents) &&
-        typeof issue.issueEventCursor === "string";
+        typeof session.queueTurn === "function" && Boolean(input.fetchIssueEvents);
+      if (steeringRecoveryAvailable && typeof issue.issueEventCursor !== "string") {
+        throw new Error(
+          'tracker issue event cursor is required when recovery is configured; use "0" for an empty boundary',
+        );
+      }
       let steeringDeliveryClosed = false;
       const steeringRecoveryController = new AbortController();
       const steeringRecoverySignal = input.abortSignal
@@ -331,6 +337,7 @@ class RunController {
       let steeringRecoveryCursorTs = steeringSnapshotCursorTs ?? "0";
       let steeringReady = false;
       let steeringTurnCount = 0;
+      let queuedSteeringBytes = 0;
       const seenSteeringEventTs = new Set<string>();
       const reportSteeringFailure = (stage: string, error: unknown): void => {
         input.onUpdate?.({
@@ -344,15 +351,18 @@ class RunController {
         includeBuffered = true,
       ): {
         acceptedThrough: string | null;
+        backpressured: boolean;
         failed: boolean;
       } => {
-        if (steeringDeliveryClosed) return { acceptedThrough: null, failed: false };
+        if (steeringDeliveryClosed) {
+          return { acceptedThrough: null, backpressured: false, failed: false };
+        }
         if (!steeringReady) {
           bufferIssueEvents(events);
-          return { acceptedThrough: null, failed: false };
+          return { acceptedThrough: null, backpressured: false, failed: false };
         }
         if (!session?.queueTurn) {
-          return { acceptedThrough: null, failed: false };
+          return { acceptedThrough: null, backpressured: false, failed: false };
         }
         const candidates = includeBuffered ? [...bufferedIssueEvents, ...events] : events;
         if (includeBuffered) {
@@ -375,6 +385,18 @@ class RunController {
         while (offset < fresh.length && steeringTurnCount < runtime.agent.maxTurns) {
           const chunk = steeringEventChunk(fresh, offset, maxBufferedIssueEventBytes);
           const prompt = issueEventsPrompt(chunk.promptEvents);
+          const promptBytes = Buffer.byteLength(prompt);
+          if (queuedSteeringBytes + promptBytes > maxQueuedIssueEventBytes) {
+            bufferIssueEvents(fresh.slice(offset));
+            if (issueEventBufferOverflow) {
+              reportSteeringFailure(
+                "buffer",
+                new Error("pending issue messages exceeded the live-delivery buffer"),
+              );
+              issueEventBufferOverflow = false;
+            }
+            return { acceptedThrough, backpressured: true, failed: false };
+          }
           const activity = { sawToolCall: false };
           pendingStreamActivities.push(activity);
           let releaseActivation: (() => void) | undefined;
@@ -396,12 +418,20 @@ class RunController {
           } catch (error) {
             removePendingActivity(pendingStreamActivities, activity);
             bufferIssueEvents(fresh.slice(offset));
+            if (issueEventBufferOverflow) {
+              reportSteeringFailure(
+                "buffer",
+                new Error("pending issue messages exceeded the live-delivery buffer"),
+              );
+              issueEventBufferOverflow = false;
+            }
             reportSteeringFailure("queue", error);
-            return { acceptedThrough, failed: true };
+            return { acceptedThrough, backpressured: false, failed: true };
           }
           const queuedTurn: QueuedTurn = {
             outcome,
             activity,
+            promptBytes,
             activated: false,
             activate() {
               if (queuedTurn.activated) return;
@@ -410,6 +440,7 @@ class RunController {
             },
           };
           queuedTurns.push(queuedTurn);
+          queuedSteeringBytes += promptBytes;
           steeringTurnCount += 1;
           for (const event of chunk.sourceEvents) seenSteeringEventTs.add(event.ts);
           acceptedThrough = maxSteeringTs(chunk.sourceEvents, acceptedThrough ?? "0");
@@ -417,6 +448,7 @@ class RunController {
         }
         return {
           acceptedThrough,
+          backpressured: false,
           failed: false,
         };
       };
@@ -435,6 +467,7 @@ class RunController {
           if (
             page.hasMore &&
             queued.acceptedThrough === null &&
+            !queued.backpressured &&
             steeringTurnCount < runtime.agent.maxTurns
           ) {
             throw new Error("steering recovery page made no progress");
@@ -522,15 +555,19 @@ class RunController {
         let turnActivity: TurnActivity;
         if (queuedTurn) {
           turnActivity = queuedTurn.activity;
-          const outcome = await queuedTurnWithAbort(
-            queuedTurn.outcome,
-            stopSession,
-            input.abortSignal,
-          );
-          if ("error" in outcome) throw outcome.error;
-          turnUpdates = outcome.updates;
-          removePendingActivity(pendingStreamActivities, turnActivity);
-          if (activeStreamActivity === turnActivity) activeStreamActivity = undefined;
+          try {
+            const outcome = await queuedTurnWithAbort(
+              queuedTurn.outcome,
+              stopSession,
+              input.abortSignal,
+            );
+            if ("error" in outcome) throw outcome.error;
+            turnUpdates = outcome.updates;
+          } finally {
+            queuedSteeringBytes = Math.max(0, queuedSteeringBytes - queuedTurn.promptBytes);
+            removePendingActivity(pendingStreamActivities, turnActivity);
+            if (activeStreamActivity === turnActivity) activeStreamActivity = undefined;
+          }
         } else {
           turnActivity = { sawToolCall: false };
           const prompt =
@@ -842,6 +879,7 @@ function shortenedEventChunk(
 ): { sourceEvents: TrackerIssueEvent[]; promptEvents: TrackerIssueEvent[] } {
   const emptyEvent: TrackerIssueEvent = {
     ts: "",
+    authorizedForSteering: true,
     ...(event.author === undefined ? {} : { author: "" }),
     text: "",
   };
@@ -867,6 +905,7 @@ function shortenIssueEvent(event: TrackerIssueEvent, maxBytes: number): TrackerI
   if (eventTextBytes <= availableTextBytes) {
     return {
       ts,
+      authorizedForSteering: event.authorizedForSteering,
       ...(author === undefined ? {} : { author }),
       text: `${event.text}${marker}`,
     };
@@ -876,6 +915,7 @@ function shortenIssueEvent(event: TrackerIssueEvent, maxBytes: number): TrackerI
   const suffixBytes = Math.floor(textBytes / 2);
   return {
     ts,
+    authorizedForSteering: event.authorizedForSteering,
     ...(author === undefined ? {} : { author }),
     text: `${utf8Prefix(event.text, prefixBytes)}${marker}${utf8Suffix(event.text, suffixBytes)}`,
   };
@@ -936,6 +976,9 @@ function validateIssueEventPage(
   maxEvents: number,
   maxBytes: number,
 ): void {
+  if (page.events.some((event) => event.authorizedForSteering !== true)) {
+    throw new Error("tracker issue event page contains an event not authorized for steering");
+  }
   if (page.events.length > maxEvents) {
     throw new Error(
       `tracker issue event page exceeds event limit: ${page.events.length} > ${maxEvents}`,

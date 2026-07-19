@@ -1614,7 +1614,14 @@ test("active runs retain their tracker client across workflow reloads", async ()
     callbacks[1]?.({
       issueEvents: {
         issueId: issue.id,
-        events: [{ ts: "11.0", author: "ryan", text: "replacement client event" }],
+        events: [
+          {
+            authorizedForSteering: true,
+            ts: "11.0",
+            author: "ryan",
+            text: "replacement client event",
+          },
+        ],
       },
     });
     await Promise.resolve();
@@ -1624,7 +1631,9 @@ test("active runs retain their tracker client across workflow reloads", async ()
     callbacks[0]?.({
       issueEvents: {
         issueId: issue.id,
-        events: [{ ts: "11.0", author: "ryan", text: "pinned client event" }],
+        events: [
+          { authorizedForSteering: true, ts: "11.0", author: "ryan", text: "pinned client event" },
+        ],
       },
     });
     await waitFor(() => delivered.length === 1, 1_000);
@@ -2604,11 +2613,31 @@ test("a tracker push delivers issue events to every active run for that issue", 
     captured!({
       issueEvents: {
         issueId: issue.id,
-        events: [{ ts: "11.0", author: "ryan", text: "steer left" }],
+        events: [
+          {
+            authorizedForSteering: false,
+            ts: "10.5",
+            author: "guest",
+            text: "untrusted direction",
+          },
+          {
+            authorizedForSteering: true,
+            ts: "11.0",
+            author: "ryan",
+            text: "steer left",
+          },
+        ],
       },
     });
     await waitFor(() => delivered.length === 1, 1_000);
-    assert.deepEqual(delivered, [{ ts: "11.0", author: "ryan", text: "steer left" }]);
+    assert.deepEqual(delivered, [
+      {
+        authorizedForSteering: true,
+        ts: "11.0",
+        author: "ryan",
+        text: "steer left",
+      },
+    ]);
   } finally {
     finishRun?.();
     runtime.stop();
@@ -2661,6 +2690,7 @@ test("pending issue event delivery shortens oversized text before the runner sub
         issueId: issue.id,
         events: [
           {
+            authorizedForSteering: true,
             ts: "11.0",
             author: "ryan",
             text: `prefix-marker${"x".repeat(100 * 1024)}tail-marker`,
@@ -2734,7 +2764,9 @@ test("issue event delivery remains closed after the runner unsubscribes", async 
     captured!({
       issueEvents: {
         issueId: issue.id,
-        events: [{ ts: "11.0", author: "ryan", text: "do not retain" }],
+        events: [
+          { authorizedForSteering: true, ts: "11.0", author: "ryan", text: "do not retain" },
+        ],
       },
     });
     subscribeAgain?.((events) => replayed.push(...events));

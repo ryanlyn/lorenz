@@ -70,9 +70,12 @@ interface RuntimeTrackerClient {
   caller skips those flows.
 - `watch(onChange)` is optional. It opens a live change stream that nudges an immediate poll.
   A change can carry human-authored issue events, which the runtime forwards to active runs without
-  waiting for that poll. Active runs retain the client instance that dispatched them, so a workflow
-  reload cannot mix recovery or pushed events across tracker configurations. A provider that
-  publishes issue events must implement the recovery feed and snapshot boundary below.
+  waiting for that poll. Authenticate each event author and set `authorizedForSteering` only when
+  the provider's steering policy permits that author to direct the agent. The runtime ignores
+  events without that authorization. Active runs retain the client instance that dispatched them,
+  so a workflow reload cannot mix recovery or pushed events across tracker configurations. A
+  provider that publishes issue events must implement the recovery feed and snapshot boundary
+  below.
 - `fetchIssueEvents(issueId, sinceTs, query)` recovers events missed across a change-stream or
   run-lifecycle gap. It is optional for providers that never publish issue events. Each event uses a
   unique, canonical non-negative decimal `ts` key. Return the oldest events newer than `sinceTs` in
@@ -80,14 +83,17 @@ interface RuntimeTrackerClient {
   page is available. Stop the request when `query.abortSignal` aborts. If one message exceeds the
   page byte limit, use `boundTrackerIssueEventText` from `@lorenz/domain` to preserve its ordering
   key and author while shortening its live-delivery text. The complete message remains on the issue.
-  Set `Issue.issueEventCursor` to the latest event key already represented in prompt-visible fields
-  of each issue snapshot. The runner ignores live replays at or before that immutable boundary,
-  accepts recovery pages before newer live events, and advances its recovery cursor only through
-  events accepted into bounded queued turns. The runner submits each accepted prompt to the session
-  queue immediately, then activates it after an issue refresh confirms that the issue is active and
-  the effective backend profile is unchanged. A run submits later human events even when the
-  autonomous turn budget is exhausted and accepts at most `agent.max_turns` steering turns;
-  additional prompt-visible events remain eligible for the next attempt.
+  Return only events authorized by the same steering policy used for live delivery, with
+  `authorizedForSteering` set to true. Set `Issue.issueEventCursor` to the latest event key already
+  represented in prompt-visible fields of each issue snapshot, or `"0"` when the snapshot contains
+  no events. The runner ignores live replays at or before that immutable boundary, accepts recovery
+  pages before newer live events, and advances its recovery cursor only through events accepted
+  into bounded queued turns. The runner submits each accepted prompt to the session queue
+  immediately within a bounded aggregate queue, then activates it after an issue refresh confirms
+  that the issue is active and the effective backend profile is unchanged. A run submits later
+  human events even when the autonomous turn budget is exhausted and accepts at most
+  `agent.max_turns` steering turns; additional prompt-visible events remain eligible for the next
+  attempt.
 
 Each client returns the domain `Issue` shape, not the backend's raw payload. `Issue` requires
 `stateType: IssueStateType` (one of `backlog`, `unstarted`, `started`, `completed`, `canceled`,

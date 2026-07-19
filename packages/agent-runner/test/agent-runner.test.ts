@@ -137,8 +137,8 @@ test("live issue events are submitted immediately and consumed as the next queue
   await firstTurnStarted;
   assert.ok(issueEventListener);
   issueEventListener([
-    { ts: "9007199254740993", author: "ryan", text: "steer second" },
-    { ts: "9007199254740992", author: "ryan", text: "steer first" },
+    { authorizedForSteering: true, ts: "9007199254740993", author: "ryan", text: "steer second" },
+    { authorizedForSteering: true, ts: "9007199254740992", author: "ryan", text: "steer first" },
   ]);
   await vi.waitFor(() => assert.equal(queuedPrompts.length, 1));
   assert.equal(releaseFirstTurn === undefined, false);
@@ -200,9 +200,9 @@ test("live delivery ignores events represented by the initial issue snapshot", a
 
   await firstTurnStarted;
   issueEventListener?.([
-    { ts: "10.0", author: "ryan", text: "older snapshot context" },
-    { ts: "11.0", author: "ryan", text: "latest snapshot context" },
-    { ts: "12.0", author: "ryan", text: "new steering" },
+    { authorizedForSteering: true, ts: "10.0", author: "ryan", text: "older snapshot context" },
+    { authorizedForSteering: true, ts: "11.0", author: "ryan", text: "latest snapshot context" },
+    { authorizedForSteering: true, ts: "12.0", author: "ryan", text: "new steering" },
   ]);
   await vi.waitFor(() => assert.equal(queuedPrompts.length, 1));
   releaseFirstTurn?.();
@@ -259,8 +259,13 @@ test("live delivery preserves valid events beside a malformed ordering key", asy
 
   await firstTurnStarted;
   issueEventListener?.([
-    { ts: "not-a-decimal", author: "ryan", text: "malformed metadata" },
-    { ts: "11.0", author: "ryan", text: "valid steering" },
+    {
+      authorizedForSteering: true,
+      ts: "not-a-decimal",
+      author: "ryan",
+      text: "malformed metadata",
+    },
+    { authorizedForSteering: true, ts: "11.0", author: "ryan", text: "valid steering" },
   ]);
   await vi.waitFor(() => assert.equal(queuedPrompts.length, 1));
   releaseFirstTurn?.();
@@ -323,9 +328,13 @@ test("a run defers steering beyond its turn limit without failing", async () => 
   });
 
   await firstTurnStarted;
-  issueEventListener?.([{ ts: "11.0", author: "ryan", text: "accepted steering" }]);
+  issueEventListener?.([
+    { authorizedForSteering: true, ts: "11.0", author: "ryan", text: "accepted steering" },
+  ]);
   await vi.waitFor(() => assert.equal(queuedPrompts.length, 1));
-  issueEventListener?.([{ ts: "12.0", author: "ryan", text: "deferred steering" }]);
+  issueEventListener?.([
+    { authorizedForSteering: true, ts: "12.0", author: "ryan", text: "deferred steering" },
+  ]);
   await Promise.resolve();
   await Promise.resolve();
   releaseFirstTurn?.();
@@ -387,7 +396,9 @@ test("accepted steering remains inactive when issue refresh fails", async () => 
   });
 
   await firstTurnStarted;
-  issueEventListener?.([{ ts: "11.0", author: "ryan", text: "finish this first" }]);
+  issueEventListener?.([
+    { authorizedForSteering: true, ts: "11.0", author: "ryan", text: "finish this first" },
+  ]);
   await vi.waitFor(() => assert.equal(queuedPrompts.length, 1));
   releaseFirstTurn?.();
 
@@ -444,7 +455,9 @@ test("accepted steering remains inactive without issue refresh support", async (
   });
 
   await firstTurnStarted;
-  issueEventListener?.([{ ts: "11.0", author: "ryan", text: "do not activate" }]);
+  issueEventListener?.([
+    { authorizedForSteering: true, ts: "11.0", author: "ryan", text: "do not activate" },
+  ]);
   releaseFirstTurn?.();
 
   const result = await attempt;
@@ -520,7 +533,9 @@ test("accepted steering is cancelled when the issue becomes inactive", async () 
   });
 
   await firstTurnStarted;
-  issueEventListener?.([{ ts: "11.0", author: "ryan", text: "late steering" }]);
+  issueEventListener?.([
+    { authorizedForSteering: true, ts: "11.0", author: "ryan", text: "late steering" },
+  ]);
   await queuedTurnSubmitted;
   releaseFirstTurn?.();
 
@@ -578,7 +593,9 @@ test("steering accepted during a failed issue refresh remains inactive", async (
   });
 
   await issueRefreshStarted;
-  issueEventListener?.([{ ts: "11.0", author: "ryan", text: "accepted during refresh" }]);
+  issueEventListener?.([
+    { authorizedForSteering: true, ts: "11.0", author: "ryan", text: "accepted during refresh" },
+  ]);
   await vi.waitFor(() => assert.equal(queuedPrompts.length, 1));
   rejectIssueRefresh?.(new Error("tracker unavailable"));
 
@@ -650,7 +667,9 @@ test("a queued turn with streamed tool activity permits a continuation turn", as
   });
 
   await firstTurnStarted;
-  issueEventListener?.([{ ts: "11.0", author: "ryan", text: "make the change" }]);
+  issueEventListener?.([
+    { authorizedForSteering: true, ts: "11.0", author: "ryan", text: "make the change" },
+  ]);
   releaseFirstTurn?.();
 
   const result = await attempt;
@@ -709,7 +728,9 @@ test("a text-only queued turn does not stop autonomous continuation", async () =
   });
 
   await firstTurnStarted;
-  issueEventListener?.([{ ts: "11.0", author: "ryan", text: "acknowledge this" }]);
+  issueEventListener?.([
+    { authorizedForSteering: true, ts: "11.0", author: "ryan", text: "acknowledge this" },
+  ]);
   releaseFirstTurn?.();
 
   const result = await attempt;
@@ -770,7 +791,9 @@ test("accepted live-only steering drains after an autonomous no-tool turn", asyn
   });
 
   await secondTurnStarted;
-  issueEventListener?.([{ ts: "11.0", author: "ryan", text: "do this before continuing" }]);
+  issueEventListener?.([
+    { authorizedForSteering: true, ts: "11.0", author: "ryan", text: "do this before continuing" },
+  ]);
   await queuedTurnSubmitted;
   releaseSecondTurn?.();
 
@@ -820,8 +843,8 @@ test("events observed during setup enter the queue after the initial turn starts
 
   await vi.waitFor(() => assert.ok(issueEventListener));
   issueEventListener?.([
-    { ts: "11.0", author: "ryan", text: "first during setup" },
-    { ts: "12.0", author: "ryan", text: "second during setup" },
+    { authorizedForSteering: true, ts: "11.0", author: "ryan", text: "first during setup" },
+    { authorizedForSteering: true, ts: "12.0", author: "ryan", text: "second during setup" },
   ]);
   releaseWorkspace?.();
 
@@ -871,7 +894,14 @@ test("initial recovery queues events missed after the issue snapshot", async () 
       recoveryCursors.push(sinceTs);
       return issueEventPage(
         sinceTs === "10.0"
-          ? [{ ts: "11.0", author: "ryan", text: "missed before subscription" }]
+          ? [
+              {
+                authorizedForSteering: true,
+                ts: "11.0",
+                author: "ryan",
+                text: "missed before subscription",
+              },
+            ]
           : [],
       );
     },
@@ -943,7 +973,9 @@ test("recovery stops when the issue becomes inactive", async () => {
     fetchIssueEvents: async () => {
       recoveryCalls += 1;
       return issueEventPage(
-        recoveryCalls === 2 ? [{ ts: "11.0", author: "ryan", text: "late steering" }] : [],
+        recoveryCalls === 2
+          ? [{ authorizedForSteering: true, ts: "11.0", author: "ryan", text: "late steering" }]
+          : [],
       );
     },
     adapters: fakeAdapters({
@@ -1000,10 +1032,15 @@ test("live delivery reconciles missed events before newer messages", async () =>
     fetchIssueEvents: async (sinceTs) => {
       recoveryCursors.push(sinceTs);
       if (sinceTs === "10.0") {
-        return issueEventPage([{ ts: "11.0", author: "ryan", text: "first missed event" }], true);
+        return issueEventPage(
+          [{ authorizedForSteering: true, ts: "11.0", author: "ryan", text: "first missed event" }],
+          true,
+        );
       }
       if (sinceTs === "11.0") {
-        return issueEventPage([{ ts: "12.0", author: "ryan", text: "second missed event" }]);
+        return issueEventPage([
+          { authorizedForSteering: true, ts: "12.0", author: "ryan", text: "second missed event" },
+        ]);
       }
       return issueEventPage([]);
     },
@@ -1016,7 +1053,9 @@ test("live delivery reconciles missed events before newer messages", async () =>
 
   await firstTurnStarted;
   assert.ok(issueEventListener);
-  issueEventListener?.([{ ts: "13.0", author: "ryan", text: "live event" }]);
+  issueEventListener?.([
+    { authorizedForSteering: true, ts: "13.0", author: "ryan", text: "live event" },
+  ]);
   await vi.waitFor(() => assert.equal(queuedPrompts.length, 2));
   releaseFirstTurn?.();
 
@@ -1079,6 +1118,7 @@ test("live delivery chunks large batches within the recovery byte bound", async 
   await firstTurnStarted;
   issueEventListener?.(
     Array.from({ length: 1_000 }, (_, index) => ({
+      authorizedForSteering: true,
       ts: `${index + 11}`,
       text: "x".repeat(55),
     })),
@@ -1089,6 +1129,76 @@ test("live delivery chunks large batches within the recovery byte bound", async 
   const result = await attempt;
   assert.equal(result.turnCount, 2 + queuedPrompts.length);
   assert.ok(queuedPrompts.every((prompt) => Buffer.byteLength(prompt) <= 64 * 1024));
+});
+
+test("live delivery bounds aggregate bytes held in inactive queued turns", async () => {
+  const settings = fakeSettings({ agent: { ...defaultSettings().agent, maxTurns: 10 } });
+  let issueEventListener: ((events: TrackerIssueEvent[]) => void) | undefined;
+  let releaseFirstTurn: (() => void) | undefined;
+  let markFirstTurnStarted: (() => void) | undefined;
+  const firstTurnStarted = new Promise<void>((resolve) => {
+    markFirstTurnStarted = resolve;
+  });
+  const firstTurnRelease = new Promise<void>((resolve) => {
+    releaseFirstTurn = resolve;
+  });
+  let pendingPromptBytes = 0;
+  let maxPendingPromptBytes = 0;
+  let queuedPromptCount = 0;
+  const session = fakeSession({
+    queueTurn: async (prompt, options) => {
+      const promptBytes = Buffer.byteLength(prompt);
+      pendingPromptBytes += promptBytes;
+      maxPendingPromptBytes = Math.max(maxPendingPromptBytes, pendingPromptBytes);
+      queuedPromptCount += 1;
+      await options?.startWhen;
+      pendingPromptBytes -= promptBytes;
+      return [{ type: "turn_completed" }];
+    },
+  });
+  const executor: AgentExecutor = {
+    kind: "codex",
+    async startSession() {
+      return session;
+    },
+    async runTurn() {
+      markFirstTurnStarted?.();
+      await firstTurnRelease;
+      return [{ type: "turn_completed" }];
+    },
+  };
+
+  const attempt = runAgentAttempt({
+    issue: fakeIssue({ issueEventCursor: "10.0" }),
+    workflow: { path: "/workflow.md", config: {}, promptTemplate: "Fix it", settings },
+    settings,
+    fetchIssue: async (issue) => issue,
+    fetchIssueEvents: async () => issueEventPage([]),
+    subscribeIssueEvents: (listener) => {
+      issueEventListener = listener;
+      return () => {};
+    },
+    adapters: fakeAdapters({ executorFactory: () => executor }),
+  });
+
+  await firstTurnStarted;
+  for (let index = 0; index < 10; index += 1) {
+    issueEventListener?.([
+      {
+        authorizedForSteering: true,
+        ts: `${index + 11}.0`,
+        author: "ryan",
+        text: "x".repeat(55 * 1024),
+      },
+    ]);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  }
+  await vi.waitFor(() => assert.ok(queuedPromptCount >= 3));
+  assert.ok(maxPendingPromptBytes <= 256 * 1024);
+  assert.ok(queuedPromptCount < 10);
+
+  releaseFirstTurn?.();
+  await attempt;
 });
 
 test("live delivery shortens a single oversized message before queueing it", async () => {
@@ -1137,6 +1247,7 @@ test("live delivery shortens a single oversized message before queueing it", asy
   await firstTurnStarted;
   issueEventListener?.([
     {
+      authorizedForSteering: true,
       ts: "11.0",
       author: "ryan",
       text: `prefix-marker${"x".repeat(100 * 1024)}tail-marker`,
@@ -1167,7 +1278,14 @@ test("live delivery bounds oversized event metadata", async () => {
     fetchIssueEvents: async (sinceTs) =>
       issueEventPage(
         sinceTs === "10.0"
-          ? [{ ts: longTimestamp, author: longAuthor, text: "bounded message" }]
+          ? [
+              {
+                authorizedForSteering: true,
+                ts: longTimestamp,
+                author: longAuthor,
+                text: "bounded message",
+              },
+            ]
           : [],
       ),
     adapters: fakeAdapters({
@@ -1195,6 +1313,7 @@ test("live delivery includes rendered formatting in the prompt byte limit", asyn
   const settings = fakeSettings({ agent: { ...defaultSettings().agent, maxTurns: 3 } });
   const queuedPrompts: string[] = [];
   const events = Array.from({ length: 1_000 }, (_, index) => ({
+    authorizedForSteering: true,
     ts: `${index + 11}`,
     text: "x".repeat(50),
   }));
@@ -1235,6 +1354,7 @@ test("recovery rejects pages that exceed the negotiated bounds", async () => {
       queries.push({ maxEvents: query.maxEvents, maxBytes: query.maxBytes });
       return issueEventPage(
         Array.from({ length: query.maxEvents + 1 }, (_, index) => ({
+          authorizedForSteering: true,
           ts: `${index + 11}`,
           text: "",
         })),
@@ -1262,6 +1382,71 @@ test("recovery rejects pages that exceed the negotiated bounds", async () => {
   );
 });
 
+test("recovery rejects events that are not authorized for steering", async () => {
+  const settings = fakeSettings({ agent: { ...defaultSettings().agent, maxTurns: 1 } });
+  const updates: AgentUpdate[] = [];
+  let queuedTurns = 0;
+
+  const result = await runAgentAttempt({
+    issue: fakeIssue({ issueEventCursor: "10" }),
+    workflow: { path: "/workflow.md", config: {}, promptTemplate: "Fix it", settings },
+    settings,
+    fetchIssueEvents: async () =>
+      issueEventPage([
+        {
+          authorizedForSteering: false,
+          ts: "11",
+          author: "guest",
+          text: "untrusted direction",
+        },
+      ]),
+    onUpdate: (update) => updates.push(update),
+    adapters: fakeAdapters({
+      executorFactory: () =>
+        fakeExecutor({
+          session: {
+            queueTurn: async () => {
+              queuedTurns += 1;
+              return [{ type: "turn_completed" }];
+            },
+          },
+        }),
+    }),
+  });
+
+  assert.equal(result.turnCount, 1);
+  assert.equal(queuedTurns, 0);
+  assert.ok(
+    updates.some(
+      (update) =>
+        update.type === "stderr" && update.message.includes("event not authorized for steering"),
+    ),
+  );
+});
+
+test("recovery requires an explicit empty snapshot boundary", async () => {
+  const settings = fakeSettings({ agent: { ...defaultSettings().agent, maxTurns: 1 } });
+
+  await assert.rejects(
+    () =>
+      runAgentAttempt({
+        issue: fakeIssue({ issueEventCursor: null }),
+        workflow: { path: "/workflow.md", config: {}, promptTemplate: "Fix it", settings },
+        settings,
+        fetchIssueEvents: async () => issueEventPage([]),
+        adapters: fakeAdapters({
+          executorFactory: () =>
+            fakeExecutor({
+              session: {
+                queueTurn: async () => [{ type: "turn_completed" }],
+              },
+            }),
+        }),
+      }),
+    /tracker issue event cursor is required.*use "0" for an empty boundary/,
+  );
+});
+
 test("recovery can queue a missed event before the no-tool completion exit", async () => {
   const settings = fakeSettings({ agent: { ...defaultSettings().agent, maxTurns: 3 } });
   const feedCursors: string[] = [];
@@ -1282,7 +1467,14 @@ test("recovery can queue a missed event before the no-tool completion exit", asy
       feedCursors.push(sinceTs);
       return issueEventPage(
         feedCursors.length === 2
-          ? [{ ts: "11.0", author: "ryan", text: "missed during turn" }]
+          ? [
+              {
+                authorizedForSteering: true,
+                ts: "11.0",
+                author: "ryan",
+                text: "missed during turn",
+              },
+            ]
           : [],
       );
     },
@@ -1346,7 +1538,14 @@ test("a state override can add turn capacity for steering recovery", async () =>
       feedCursors.push(sinceTs);
       return issueEventPage(
         sinceTs === "10.0"
-          ? [{ ts: "11.0", author: "ryan", text: "recovered after transition" }]
+          ? [
+              {
+                authorizedForSteering: true,
+                ts: "11.0",
+                author: "ryan",
+                text: "recovered after transition",
+              },
+            ]
           : [],
       );
     },
@@ -1409,7 +1608,9 @@ test("live steering is drained after the autonomous turn budget is exhausted", a
   });
 
   await firstTurnStarted;
-  issueEventListener?.([{ ts: "11.0", author: "ryan", text: "finish after the budget" }]);
+  issueEventListener?.([
+    { authorizedForSteering: true, ts: "11.0", author: "ryan", text: "finish after the budget" },
+  ]);
   await vi.waitFor(() => assert.equal(queuedPrompts.length, 1));
   releaseFirstTurn?.();
 
@@ -1565,7 +1766,9 @@ test("run cancellation stops queued ACP work during an issue refresh", async () 
   await firstTurnStarted;
   releaseFirstTurn?.();
   await issueRefreshStarted;
-  issueEventListener?.([{ ts: "11.0", author: "ryan", text: "queued work" }]);
+  issueEventListener?.([
+    { authorizedForSteering: true, ts: "11.0", author: "ryan", text: "queued work" },
+  ]);
   await queuedTurnSubmitted;
   controller.abort();
   await sessionStopped;
