@@ -8,17 +8,17 @@ Lorenz exposes one source of truth and three views over it. The source is the ru
 
 The runtime holds a single immutable `RuntimeSnapshot`: running agents, the retry/backoff queue, dispatch blocks, run history, token usage totals, rate limits, and recent events. Every operator view reads from this one structure, so they never disagree about live state.
 
-The path from runtime to screen is the same whichever view you open. `@lorenz/projections` keeps the bounded `recentEvents` and `runHistory` slices and deep-clones snapshot fields so a consumer can never mutate runtime state. `@lorenz/presenter` converts the camelCase snapshot into the snake_case JSON the HTTP API and WebSocket serve. `@lorenz/tui` formats the same snapshot into the terminal dashboard.
+The path from runtime to screen is the same whichever view you open. The runtime projection module keeps the bounded `recentEvents` and `runHistory` slices and deep-clones snapshot fields so a consumer can never mutate runtime state. `@lorenz/presenter` converts the camelCase snapshot into the snake_case JSON the HTTP API and WebSocket serve. `@lorenz/tui` formats the same snapshot into the terminal dashboard.
 
 <p align="center"><img src="assets/diagrams/observability-dataflow.svg" alt="observability dataflow diagram" width="920" style="width:100%;max-width:920px;height:auto" /></p>
-*One `RuntimeSnapshot` fans out through projections and the presenter into the HTTP JSON, the WebSocket `ops_state` push, and the TUI dashboard string.*
+*One `RuntimeSnapshot` fans out through runtime projection and the presenter into the HTTP JSON, the WebSocket `ops_state` push, and the TUI dashboard string.*
 
 A few facts hold across all three views:
 
 - `recentEvents` is capped at the last 20 entries, newest first.
 - `runHistory` is capped at the last 50 entries, newest first.
 - The presenter sets `cost.estimated_cost_usd` to `null` everywhere. Cost is reported from token totals, not dollars.
-- The snapshot's `reserving` field (slots mid-acquire) is carried by projections and surfaced only in the TUI (as the `rsv` lane); the web dashboard and `lorenz runs` do not show it.
+- The snapshot's `reserving` field (slots mid-acquire) is carried by runtime projection and surfaced only in the TUI (as the `rsv` lane); the web dashboard and `lorenz runs` do not show it.
 
 ## The terminal dashboard (TUI)
 
@@ -111,7 +111,7 @@ Capture is a 1:1 byte trail. In `apps/cli/src/main.ts`, the runtime's `onAgentUp
 <p align="center"><img src="assets/diagrams/traceviz-flow.svg" alt="traceviz flow diagram" width="920" style="width:100%;max-width:920px;height:auto" /></p>
 *Each runtime `AgentUpdate` is written to `trace.jsonl`, polled by the `TraceWatcher`, parsed into `DisplayEvent`s, and pushed to the dashboard over `/ws`.*
 
-Two pieces read those files, both from `@lorenz/traceviz-server`:
+Two pieces read those files, both from `@lorenz/traceviz-core`:
 
 - `TraceWatcher` polls the trace directory every 500ms, reading files incrementally as they grow.
 - `parseTraceLines` turns raw `TraceEvent` lines into presentation-ready `DisplayEvent`s. It coalesces consecutive message and thought chunks, pairs each `tool_call` with its `tool_call_update` to compute duration and error state, and drops runtime types (`rate_limit`, `session_started`, `process_exit`, `stderr`, `fs_write`) that have no place in the timeline.

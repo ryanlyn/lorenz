@@ -21,6 +21,8 @@ trackers:
       accept_unrouted: true
       only_routes: null
       route_label_prefix: "Lorenz:"
+      # Any route matching a key under agents selects that agent without changing eligibility.
+      # For example, the label Lorenz:claude selects agents.claude below.
 polling:
   interval_ms: 5000
 workspace:

@@ -23,7 +23,7 @@ back to the built-in `defaultPromptTemplate` whenever the trimmed body is empty.
 
 The body is parsed once at load time (`parsePromptTemplate`) and rendered per dispatch
 (`buildPrompt`). A syntax error in the template throws `template_parse_error` at load, with the
-offending template text attached. The render path is in `packages/prompt/src/index.ts`; the parse
+offending template text attached. The render path is in `packages/agent-runner/src/prompt.ts`; the parse
 path is in `packages/workflow/src/index.ts`.
 
 ## The render context
@@ -170,7 +170,7 @@ actually blank.
 When an agent run completes a turn but the issue is still in an active state, Lorenz injects a
 fixed continuation message on the next turn instead of re-rendering the workflow template. This
 string is not Liquid and not user-configurable; it comes from `continuationPrompt(turnNumber,
-maxTurns)` in `packages/prompt/src/index.ts`:
+maxTurns)` in `packages/agent-runner/src/prompt.ts`:
 
 ```text
 Continuation guidance:

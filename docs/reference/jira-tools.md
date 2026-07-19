@@ -1,6 +1,6 @@
 # Agent tool catalog
 
-This page is the exhaustive reference for the tools an agent can call while working an issue: the Jira extension's `jira_*` family, the read-only query DSL it shares, and the other provider-specific tool packs (`linear`, `local`, `slack`). It is written for integrators who need exact tool names, argument shapes, and the rules for which tracker supports which tool. Operators who want the conceptual picture should start with [how it works](../how-it-works.md); extension authors building a new pack should read [tool-pack extensions](../extensions/tool-pack.md).
+This page is the exhaustive reference for the tools an agent can call while working an issue: the Jira extension's `jira_*` family, the read-only query DSL it shares, and the other provider-specific tool packs (`linear`, `local`, `slack`, `discord`). It is written for integrators who need exact tool names, argument shapes, and the rules for which tracker supports which tool. Operators who want the conceptual picture should start with [how it works](../how-it-works.md); extension authors building a new pack should read [tool-pack extensions](../extensions/tool-pack.md).
 
 Lorenz serves these tools over an HTTP MCP (Model Context Protocol) endpoint at `POST /mcp`. Every tool is self-documenting: a `tools/list` JSON-RPC call returns the live specs (name, description, JSON-Schema `inputSchema`) for exactly the tools mounted under the current workflow settings. The tables below mirror those specs, but the endpoint is the source of truth at runtime.
 
@@ -13,7 +13,7 @@ The set of tools an agent sees is computed from the workflow settings, not fixed
 
 Pack selection order (first-seen wins, de-duplicated through a Set):
 
-1. The dispatch tracker's `defaultToolPacks(settings)`. Linear returns `["linear"]`, local returns `["local"]`, slack returns `["slack"]`, and `jira` / `jira-mcp` return `["jira"]`. When a tracker omits `defaultToolPacks`, the fallback mounts a pack whose name equals `tracker.kind` if one is registered. The `memory` tracker declares no `defaultToolPacks` and registers no pack of its own, so it ships no tools.
+1. The dispatch tracker's `defaultToolPacks(settings)`. Linear returns `["linear"]`, local returns `["local"]`, Slack returns `["slack"]`, Discord returns `["discord"]`, and `jira` / `jira-mcp` return `["jira"]`. When a tracker omits `defaultToolPacks`, the fallback mounts a pack whose name equals `tracker.kind` if one is registered. The `memory` tracker declares no `defaultToolPacks` and registers no pack of its own, so it ships no tools.
 2. Every key of the workflow `tools:` map (parsed into `settings.toolOptions`). Writing `tools: { linear: { api_key: "$LINEAR_API_KEY" } }` mounts the `linear` pack over any dispatch tracker.
 
 The namespace is flat. If two mounted packs declare the same tool name, the server throws `tool name collision: <name> is declared by both the "<a>" and "<b>" packs` at mount time. A pack re-declaring its own tool name is fine (ownership is by pack name).
@@ -53,13 +53,13 @@ The Jira extension owns the `jira` pack, which serves seven tools and is mounted
 
 ### Tracker availability
 
-All seven `jira_*` tools are available on the `jira` and `jira-mcp` backends, the only trackers that mount the `jira` pack. The other trackers (`linear`, `local`, `slack`, `memory`) do not serve the `jira_*` tools; Linear, local boards, and Slack each expose their own pack documented below, and `memory` ships no tools.
+All seven `jira_*` tools are available on the `jira` and `jira-mcp` backends, the only trackers that mount the `jira` pack. The other trackers (`linear`, `local`, `slack`, `discord`, `memory`) do not serve the `jira_*` tools; Linear, local boards, Slack, and Discord each expose their own pack documented below, and `memory` ships no tools.
 
 `jira_create_issue` assignee handling differs by Jira transport. Jira REST assigns to the configured owner; `jira-mcp` forwards a concrete assignee. The pack passes `assignee` straight through to the selected client.
 
 ## The read-only query DSL
 
-`jira_query` (and the structured pack tools `local_query` and `slack_query`) accept a side-effect-free query envelope: a filter predicate tree, a field projection, an ordering, and paging. The DSL is total. It has no regex, no `eval`, and no JSONPath, and it runs in memory over already-parsed records, so a query can never mutate the backend.
+`jira_query` (and the structured pack tools `local_query`, `slack_query`, and `discord_query`) accept a side-effect-free query envelope: a filter predicate tree, a field projection, an ordering, and paging. The DSL is total. It has no regex, no `eval`, and no JSONPath, and it runs in memory over already-parsed records, so a query can never mutate the backend.
 
 ### Filter predicates
 
@@ -141,6 +141,31 @@ A Slack `issueId` is `<channel>:<ts>` of the thread root. `slack_update_status` 
 
 There is no `slack_create_issue`: only a human creating an @-mention starts a Slack issue.
 
+### `discord` pack
+
+Seven tools over configured Discord guild channels. Every per-issue tool requires a configured bot
+user id, an allowed channel, and a source message tracked by a mention or the bot's marker reaction.
+
+| Tool | Required args | Optional args | Returns |
+| --- | --- | --- | --- |
+| `discord_update_status` | `issueId`, `status` | | `{ ok: true, status }` |
+| `discord_workpad` | `issueId`, `environment`, `plan`, `acceptanceCriteria`, `validationCommands` | `progress` | `{ ok: true, messageId }` |
+| `discord_comment` | `issueId`, `body` | | `{ ok: true }` |
+| `discord_read_thread` | `issueId` | | source message, state, reactions, permalink, thread messages |
+| `discord_query` | | `channels`, `where`, `select`, `expand`, `order_by`, `limit`, `offset` | `{ rows, total }` |
+| `discord_user_info` | `userId` | | `{ user }` |
+| `discord_channel_context` | `issueId` | `before`, `after` | `{ anchor, messages }` |
+
+A Discord `issueId` is `<channel-id>:<message-id>` of the source mention. Status events and progress
+notes live in a native thread whose id equals the source message id. Reactions owned by the bot are
+only a visual state mirror and are self-healed in the background after human commands. A newly
+claimed `Todo` issue receives a best-effort `👀` acknowledgement while agent setup runs. Requested
+query channels are intersected with the configured allowlist, and outbound tool messages disable
+Discord mention parsing.
+
+There is no `discord_create_issue`: a human mentions the bot or chooses the native **Track with
+Lorenz** message command to start a Discord issue.
+
 ## Jira and the `jira-mcp` external tool map
 
 The Jira extension owns the `jira` pack, so agents working a Jira issue use the `jira_*` tools, and the extension also ships a `lorenz-jira` skill documenting raw Jira REST v3 patterns. The `jira-mcp` variant backs the same `jira_*` tools against an external MCP server. Its outbound tool names default to the `jira_*` family and are overridable per operation under `trackers.jira-mcp.mcp.tools`:
@@ -161,4 +186,4 @@ The Jira extension owns the `jira` pack, so agents working a Jira issue use the 
 - [Tracker-provider extensions](../extensions/tracker-provider.md) - implement the `TrackerProvider` contract and declare `defaultToolPacks` to mount a pack.
 - [HTTP API](http-api.md) - the `POST /mcp` JSON-RPC endpoint, auth, and methods.
 - [Configuration](configuration.md) - the `tools:` map and per-tracker keys.
-- [Trackers](../trackers/index.md) - per-provider setup and behavior for Linear, Jira, local, Slack, and memory.
+- [Trackers](../trackers/index.md) - per-provider setup and behavior for Linear, Jira, local, Slack, Discord, and memory.

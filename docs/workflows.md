@@ -224,15 +224,18 @@ The `after_create` hook runs once when the per-issue workspace is created; `git 
 
 ## The checked-in examples
 
-The repository root ships three example workflows. Each is a complete, runnable file you can copy and adapt.
+The repository root ships three example workflows. Each is a complete, runnable file you can copy
+and adapt.
 
 | File | Tracker | Demonstrates |
 | --- | --- | --- |
 | `WORKFLOW.md` | Linear | The reference Linear flow: `project_slug`, an `Agent Review` state with an autonomous review protocol, both `codex` and `claude` configured (`claude` with `bypassPermissions`), and a full multi-step prompt with a `## Codex Workpad` comment protocol and a `lorenz-land` handoff |
 | `WORKFLOW.local.md` | Local board | No credentials and no Linear: `tracker.kind: local` with `id_prefix`, the `local_*` tools, and a prompt that reads state through `local_read_issue` |
-| `WORKFLOW.slack.md` | Slack | Issues from bot @-mentions: `channels`, `bot_user_id`, `emoji_states`, hashtag routing with `route_label_prefix: "route-"`, and the `slack_*` tools |
+| `WORKFLOW.chat.md` | Discord or Slack | Named Discord and Slack bundles in one file, with Discord selected by default and the canonical `WORKFLOW.md` agent configuration |
 
-The two non-Linear examples show how the prompt body changes with the tracker: each documents its own tool surface (`local_read_issue` / `slack_read_thread`) and tells the agent not to call Linear. See [trackers/index.md](trackers/index.md) for the matching provider pages.
+The non-Linear examples show how the prompt body changes with the tracker: each documents its own
+tool surface and tells the agent not to call Linear. See
+[trackers/index.md](trackers/index.md) for the matching provider pages.
 
 ## See also
 

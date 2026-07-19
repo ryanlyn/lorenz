@@ -260,6 +260,34 @@ test("runDaemon stops gracefully on the first SIGINT and returns success", async
   assertNoAddedProcessListeners("SIGTERM", sigtermBaseline);
 });
 
+test("runDaemon stops gracefully when the TUI requests quit", async () => {
+  mocks.loadWorkflow.mockResolvedValue(await workflowFixture());
+
+  const daemonPromise = runDaemon({
+    workflowPath: "WORKFLOW.md",
+    once: false,
+    dryRun: false,
+    tui: true,
+    dashboard: false,
+    port: null,
+    logsRoot: null,
+    featureTokens: ["daemon"],
+  });
+
+  const runtime = await waitForRuntimeInstance();
+  await runtime.startEntered;
+
+  const element = mocks.render.mock.calls[0]?.[0] as
+    | { props?: { onQuit?: () => void } }
+    | undefined;
+  assert.equal(typeof element?.props?.onQuit, "function");
+  element.props.onQuit();
+
+  assert.equal(runtime.stop.mock.calls.length, 1);
+  assert.equal(await daemonPromise, 0);
+  assert.equal(runtime.drainWorkerPool.mock.calls.length, 1);
+});
+
 test("runDaemon rejects a second live daemon for the same workflow", async () => {
   mocks.loadWorkflow.mockResolvedValue(await workflowFixture());
 

@@ -14,6 +14,8 @@ export const RUNTIME_EVENT_TYPES = [
   "dispatch_skipped",
   "run_reserving",
   "run_started",
+  "tracker_acknowledged",
+  "tracker_acknowledge_failed",
   "dispatch_refresh_failed",
   "run_completed",
   "run_failed",

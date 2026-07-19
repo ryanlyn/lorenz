@@ -293,9 +293,24 @@ test("tracker.users gates reply-mention tracking by the request reply's author",
 });
 
 test("reply tracking retains the authorization recorded when the request was accepted", async () => {
-  const now = Date.now() / 1000;
-  const rootTs = `${(now - 3600).toFixed(6)}`;
-  const requestTs = `${(now - 1800).toFixed(6)}`;
+  const rootTs = "1700000000.000100";
+  const requestTs = "1700000000.000200";
+  const retentionSettings = (users: string[]) =>
+    parseSlackConfig(
+      {
+        tracker: {
+          kind: "slack",
+          channels: ["C1"],
+          bot_user_id: "U_BOT",
+          users,
+          // This test covers authorization retention, independently of the moving discovery
+          // cutoff exercised by the reply-lookback tests below.
+          reply_lookback_days: 1_000_000,
+          active_states: ["Todo", "In Progress"],
+        },
+      },
+      { SLACK_BOT_TOKEN: "xoxb-test" },
+    );
   const transport = new InMemorySlackTransport(
     {
       C1: [
@@ -308,27 +323,13 @@ test("reply tracking retains the authorization recorded when the request was acc
     },
     { botUserId: "U_BOT", allowedUsers: ["U_ALICE"] },
   );
-  const initial = new SlackTrackerClient(allowlistSettings(), transport);
+  const initial = new SlackTrackerClient(retentionSettings(["U_ALICE"]), transport);
   assert.deepEqual(
     (await initial.fetchCandidateIssues()).map((issue) => issue.id),
     [`C1:${rootTs}`],
   );
 
-  const tightened = new SlackTrackerClient(
-    parseSlackConfig(
-      {
-        tracker: {
-          kind: "slack",
-          channels: ["C1"],
-          bot_user_id: "U_BOT",
-          users: ["U_BOB"],
-          active_states: ["Todo", "In Progress"],
-        },
-      },
-      { SLACK_BOT_TOKEN: "xoxb-test" },
-    ),
-    transport,
-  );
+  const tightened = new SlackTrackerClient(retentionSettings(["U_BOB"]), transport);
   assert.deepEqual(
     (await tightened.fetchIssuesByIds([`C1:${rootTs}`])).map((issue) => issue.id),
     [`C1:${rootTs}`],

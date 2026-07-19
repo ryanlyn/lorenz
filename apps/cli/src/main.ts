@@ -3,16 +3,6 @@ import path from "node:path";
 import React from "react";
 import { Command } from "commander";
 import { render } from "ink";
-import {
-  commanderErrorMessage,
-  configureCommandForMain,
-  configureCommandForParse,
-  hasHelpFlag,
-  isCommanderHelp,
-  parseNonNegativeInteger,
-  parseRequiredValue,
-  type ParseResult,
-} from "@lorenz/cli-kit";
 import { validateDispatchConfig } from "@lorenz/config";
 import { checkSlotsPerMachineGate } from "@lorenz/dispatch-coordinator";
 import { configureLogFile } from "@lorenz/log-file";
@@ -33,6 +23,16 @@ import { errorMessage, type Settings, type WorkflowDefinition } from "@lorenz/do
 import type { RuntimeSnapshot } from "@lorenz/runtime-events";
 import { setDefaultFlags } from "@lorenz/flags";
 
+import {
+  commanderErrorMessage,
+  configureCommandForMain,
+  configureCommandForParse,
+  hasHelpFlag,
+  isCommanderHelp,
+  parseNonNegativeInteger,
+  parseRequiredValue,
+  type ParseResult,
+} from "./commander.js";
 import { buildClaimStoreHandle, type ClaimStoreHandle } from "./claimStore.js";
 import {
   acquireDaemonLock,
@@ -427,6 +427,7 @@ export async function runDaemon(options: CliOptions): Promise<number> {
                 trackerKind: workflow.settings.tracker.kind,
                 agentKind: workflow.settings.agent.kind,
                 maxAgents: workflow.settings.agent.maxConcurrentAgents,
+                onQuit: requestStop,
               }),
             )
           : null;

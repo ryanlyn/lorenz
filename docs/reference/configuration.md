@@ -70,7 +70,7 @@ The core tracker bundle. `tracker.kind` selects the provider. There is no defaul
 
 | Key | Type | Default | Meaning |
 | --- | --- | --- | --- |
-| `tracker.kind` | string | (none) | Selects the provider: `linear`, `jira`, `jira-mcp`, `local`, `slack`, `memory`, or `dispatch`, or an out-of-tree module specifier. Required. |
+| `tracker.kind` | string | (none) | Selects the provider: `linear`, `jira`, `jira-mcp`, `local`, `slack`, `discord`, `memory`, or `dispatch`, or an out-of-tree module specifier. Required. |
 | `tracker.provider` | string | (none) | Provider name when `kind` names a bundle rather than a provider directly. |
 | `tracker.endpoint` | string | provider default | API base URL. Falls back to the provider's `defaultEndpoint`. |
 | `tracker.api_key` | string (secret) | (none) | API credential. Resolves `$VAR` / `op://` / provider env fallback. |
@@ -175,6 +175,25 @@ Slack as a tracker: an @-mention of the bot becomes an issue. See [trackers/slac
 | `reply_lookback_days` | number | `2` | How far back to discover new reply-mention threads. |
 
 The shipped Slack workflow uses `polling.interval_ms: 60000` and `dispatch.route_label_prefix: route-`, because `conversations.history` can be throttled to roughly one request per minute.
+
+### `discord`
+
+Discord as a tracker: a bot-user or bot-managed-role mention in a configured guild channel becomes
+an issue whose native thread carries status and progress. See
+[trackers/discord.md](../trackers/discord.md). Requires `guild_id`, `channels`, `bot_user_id`, and a
+bot token. `assignee` is rejected for this kind.
+
+| Key | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `guild_id` | string | env `DISCORD_GUILD_ID` | Guild id used to scope Gateway events and permalinks. |
+| `channels` | string[] | (required) | Guild text or announcement channel ids. Supports `$VAR` refs. |
+| `bot_user_id` | string | env `DISCORD_BOT_USER_ID` | Bot id used for user and managed-role mentions. |
+| `users` | string[] | `[]` | Optional requester id allowlist. Empty permits any non-bot author. |
+| `api_key` | string (secret) | env `DISCORD_BOT_TOKEN` | Bot token for REST and Gateway authentication. |
+| `endpoint` | string | `https://discord.com/api/v10` | Discord REST API base URL. |
+| `emoji_states` | map | `{👀: In Progress, ✅: Done, ❌: Cancelled}` | Emoji-to-state map merged over the defaults. |
+| `marker_emoji` | string | `🤖` | Bot-owned reaction that marks a context-menu tracked message. |
+| `scan_lookback_days` | number | `0` | Fixed trailing candidate scan window. Zero is unbounded. |
 
 ### `memory`
 
@@ -296,6 +315,10 @@ Executor records keyed by kind, plus shared timeout defaults. The `agents` block
 | `agents.<kind>.usage_accounting` | `per-turn` \| `cumulative` | `per-turn` | How per-turn token usage is accounted. Inferred when unset; built-in records set `per-turn`. |
 | `agents.<kind>.provider_config` | record | (none) | Per-session config overlay. Claude receives a `settings.json` shape; everything else a `config.toml` shape. |
 | `agents.<kind>.strict_mcp_config` | boolean | `true` | Parsed and validated but not consumed at runtime. |
+
+Every `agents.<kind>` key is also eligible as a same-named route. A `Lorenz:claude` label selects
+`agents.claude` when the route prefix is `Lorenz:`. This selection does not change
+`accept_unrouted` or `only_routes` eligibility.
 
 The built-in `codex` record uses `bridge_command: codex-acp`. The built-in `claude` record uses `bridge_command: claude-agent-acp` and a `provider_config` of `{model: claude-opus-4-6[1m], permissions: {defaultMode: dontAsk}}`. That model pin is `DEFAULT_CLAUDE_MODEL` (currently `claude-opus-4-6[1m]`; the authoritative value lives in `packages/config/src/defaults.ts`). The `bridge_command` is a single shell command string split on whitespace; there is no `bridge_args` key. See [codex](../agents/codex.md) and [claude](../agents/claude.md).
 
