@@ -11,9 +11,6 @@
       "path": "./packages/agent-sdk"
     },
     {
-      "path": "./packages/cli-kit"
-    },
-    {
       "path": "./packages/config"
     },
     {
@@ -50,13 +47,7 @@
       "path": "./packages/presenter"
     },
     {
-      "path": "./packages/projections"
-    },
-    {
-      "path": "./packages/prompt"
-    },
-    {
-      "path": "./packages/retry-scheduler"
+      "path": "./packages/process-supervisor"
     },
     {
       "path": "./packages/runtime"
@@ -80,10 +71,10 @@
       "path": "./packages/tool-sdk"
     },
     {
-      "path": "./packages/traceviz-emitter"
+      "path": "./packages/traceviz-core"
     },
     {
-      "path": "./packages/traceviz-server"
+      "path": "./packages/traceviz-emitter"
     },
     {
       "path": "./packages/tracker-sdk"

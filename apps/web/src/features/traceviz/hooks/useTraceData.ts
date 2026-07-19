@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from "react";
-// The stats subpath avoids pulling the server's Node-only watcher into the browser bundle.
-import { computeStats } from "@lorenz/traceviz-server/stats";
+// The stats subpath avoids pulling the Node-only watcher into the browser bundle.
+import { computeStats } from "@lorenz/traceviz-core/stats";
 
 import { useWebSocket } from "../../../shared/hooks/useWebSocket";
 import type { TicketInfo, DisplayEvent, Stats } from "../api/types";

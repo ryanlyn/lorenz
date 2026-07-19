@@ -23,9 +23,6 @@
       "path": "../../packages/worker-sdk"
     },
     {
-      "path": "../../packages/cli-kit"
-    },
-    {
       "path": "../../packages/config"
     },
     {
@@ -78,15 +75,6 @@
     },
     {
       "path": "../../packages/presenter"
-    },
-    {
-      "path": "../../packages/projections"
-    },
-    {
-      "path": "../../packages/prompt"
-    },
-    {
-      "path": "../../packages/retry-scheduler"
     },
     {
       "path": "../../packages/runtime"

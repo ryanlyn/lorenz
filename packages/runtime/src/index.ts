@@ -1,11 +1,8 @@
 import { issueHasOpenBlockers, issueIsActive, routedToThisWorker, slotKey } from "@lorenz/dispatch";
-import { reconciliationStopReason } from "@lorenz/policies/reconciliation";
 import { isTerminalState } from "@lorenz/issue";
 import { Orchestrator, type ClaimStoreLike, type SlotReservation } from "@lorenz/orchestrator";
 import { settingsForIssueState, validateDispatchConfig } from "@lorenz/config";
 import { runAgentAttempt, type RunResult } from "@lorenz/agent-runner";
-import { ProjectionActor } from "@lorenz/projections";
-import { RetryScheduler } from "@lorenz/retry-scheduler";
 import { workflowFileChanged, workflowStampsEqual } from "@lorenz/workflow";
 import {
   durationMs,
@@ -49,8 +46,14 @@ import {
   type RunSlot,
 } from "@lorenz/dispatch-coordinator";
 
+import { ProjectionActor } from "./projection.js";
+import { RetryScheduler } from "./retry-scheduler.js";
+import { reconciliationStopReason } from "./reconciliation.js";
+
 export type RuntimeRunner = (input: Parameters<typeof runAgentAttempt>[0]) => Promise<RunResult>;
 
+export { ProjectionActor } from "./projection.js";
+export type { RuntimeProjectionInput } from "./projection.js";
 export { RUNTIME_EVENT_TYPES, RUNTIME_RUN_OUTCOMES } from "@lorenz/runtime-events";
 export type {
   RuntimeAppStatus,
@@ -68,8 +71,9 @@ export type {
 } from "@lorenz/runtime-events";
 export {
   RUNTIME_RECONCILIATION_REASONS,
+  reconciliationStopReason,
   type RuntimeReconciliationReason,
-} from "@lorenz/policies/reconciliation";
+} from "./reconciliation.js";
 
 export interface LorenzRuntimeOptions {
   workflow: WorkflowDefinition;
@@ -714,7 +718,7 @@ export class LorenzRuntime {
       await this.startClaimOwnerHeartbeat();
       // On the static/local path the run starts immediately. On the pool-governed
       // path run_reserving marks dispatch intent and run_started moves AFTER
-      // bindReservation (inside runReservedClaim): a capacity-refused dispatch
+      // bindReservationAsync (inside runReservedClaim): a capacity-refused dispatch
       // never emits a phantom run_started.
       if (claim.kind === "running") {
         this.addEvent("run_started", `${refreshed.identifier} slot=${slotIndex}`);

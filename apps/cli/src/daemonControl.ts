@@ -1,9 +1,9 @@
 import { request as httpRequest } from "node:http";
 
 import { Command } from "commander";
-import { parseNonNegativeInteger, parseRequiredValue } from "@lorenz/cli-kit";
 import { loadWorkflow, workflowFilePath } from "@lorenz/workflow";
 
+import { parseNonNegativeInteger, parseRequiredValue } from "./commander.js";
 import {
   daemonLockPath,
   readDaemonLock,

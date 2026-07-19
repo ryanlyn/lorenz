@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "execa": "catalog:",
-    "@lorenz/domain": "workspace:*"
+    "@lorenz/domain": "workspace:*",
+    "@lorenz/process-supervisor": "workspace:*"
   }
 }

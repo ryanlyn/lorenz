@@ -11,8 +11,8 @@ export default defineConfig({
       // Resolve workspace value imports from source: the package exports map
       // points at dist/, which does not exist yet when this build runs on a
       // fresh checkout (pnpm build runs vite before tsc --build).
-      "@lorenz/traceviz-server/stats": fileURLToPath(
-        new URL("../../packages/traceviz-server/src/stats.ts", import.meta.url),
+      "@lorenz/traceviz-core/stats": fileURLToPath(
+        new URL("../../packages/traceviz-core/src/stats.ts", import.meta.url),
       ),
     },
   },

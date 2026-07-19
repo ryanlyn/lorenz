@@ -11,8 +11,6 @@ experimental = true
 node = "24"
 pnpm = "10.19.0"
 prek = "0.4.3"
-claude-code = "latest"
-"npm:@openai/codex" = "latest"
 # The ACP bridges are vendored at vendor/ and resolved from the pnpm
 # workspace; local runs do not use PATH installs. Remote SSH worker hosts
 # install their own bridges.

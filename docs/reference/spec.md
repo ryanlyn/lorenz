@@ -366,7 +366,7 @@ The reconciliation stop reason is classified as one of `terminal`, `unrouted`, `
 
 ### 5.8 Two-phase pool dispatch
 
-When a worker pool governs capacity, dispatch is two-phase. `claim()` returns a host-less
+When a worker pool governs capacity, dispatch is two-phase. `claimAsync()` returns a host-less
 `ReservationRecord` (claimed and reserved, surfaced in a separate `reserving` lane, emits
 `run_reserving`). The runtime then awaits the coordinator's `acquireRunSlot`. On `bound` it binds the
 host into a `RunningEntry` and emits `run_started`. On `no_capacity` it cancels the reservation with
@@ -374,7 +374,7 @@ no backoff (restoring the consumed retry so affinity and attempt count survive) 
 `dispatch_skipped` with reason `worker_host_capacity`. On an acquire throw it emits `dispatch_skipped`
 with `worker_pool_acquire_error`. Reservation tokens are an ABA guard: bind and cancel are no-ops on
 token mismatch, and a defensive expiry of `acquireTimeoutMs * 2 + 60000` ms sweeps a hung
-reservation. Without a governing pool, `claim()` mints the running entry immediately by selecting the
+reservation. Without a governing pool, `claimAsync()` mints the running entry immediately by selecting the
 least-loaded host among `worker.ssh_hosts` (honoring the per-host cap) and emits `run_started` right
 away. See [workers/worker-pool](../workers/worker-pool.md).
 

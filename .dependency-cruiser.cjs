@@ -8,7 +8,8 @@
  *   extension   extensions/*                        - SDKs + extension support + leaf
  *   engine      every other packages/*              - engine + SDKs + support + leaf
  *   sdk         packages/{tracker,tool,agent,worker}-sdk - leaf only
- *   support     packages/issue                      - leaf only
+ *   support     packages/issue                      - domain only
+ *   policy leaf packages/policies                   - domain only
  *   leaf        packages/domain                     - no workspace dependencies
  *
  * Extension membership is by directory: anything under extensions/ gets the extension
@@ -63,6 +64,13 @@ module.exports = {
       severity: "error",
       from: { path: "^(packages/domain)/" },
       to: { path: "^(?:packages|extensions|apps)/", pathNot: "^$1/" },
+    },
+    {
+      name: "policies-depend-on-domain-only",
+      comment: "policies stays dependency-light so engine packages can reuse pure policy logic.",
+      severity: "error",
+      from: { path: "^(packages/policies)/" },
+      to: { path: "^(?:packages|extensions|apps)/", pathNot: ["^$1/", `^${LEAF}`] },
     },
     {
       name: "sdks-depend-on-sdk-layers-only",

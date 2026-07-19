@@ -14,6 +14,9 @@
       "path": "../domain"
     },
     {
+      "path": "../process-supervisor"
+    },
+    {
       "path": "../ssh"
     }
   ]

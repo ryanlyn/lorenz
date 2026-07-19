@@ -14,17 +14,13 @@ import {
   humanizeCodexMessage,
   rollingThroughput,
   RuntimeApp,
-  RuntimeDashboard,
   tokenRateSparkline,
   updateTokenSamples,
 } from "@lorenz/tui";
 import type { RuntimeViewSource } from "@lorenz/tui";
 
-test("Ink dashboard renders the flight board with an event tape at the bottom", () => {
-  const { lastFrame } = render(
-    React.createElement(RuntimeDashboard, { snapshot: snapshotFixture() }),
-  );
-  const frame = stripAnsi(lastFrame() ?? "");
+test("dashboard formatter renders the flight board with an event tape at the bottom", () => {
+  const frame = stripAnsi(formatDashboard(snapshotFixture(), { ansi: true }));
 
   assert.match(frame, /LORENZ/);
   // Running count lives in the status-bar "active" legend, not a separate stat.

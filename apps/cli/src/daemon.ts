@@ -281,6 +281,8 @@ function createRunAgentAttemptAdapters(): RunAgentAttemptAdapters {
 }
 
 export async function runAgentAttempt(input: RunAgentAttemptInput): Promise<RunResult> {
+  // The daemon is the production composition point for the agent-runner seam.
+  // Keep these defaults complete, then layer test or call-site overrides on top.
   return runAgentAttemptCore({
     ...input,
     adapters: { ...createRunAgentAttemptAdapters(), ...input.adapters },

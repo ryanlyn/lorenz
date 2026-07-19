@@ -11,11 +11,9 @@
     "./stopReason": "./dist/stopReason.js",
     "./usage": "./dist/usage.js",
     "./resume": "./dist/resume.js",
-    "./reconciliation": "./dist/reconciliation.js",
     "./workerHost": "./dist/workerHost.js"
   },
   "dependencies": {
-    "@lorenz/dispatch": "workspace:*",
     "@lorenz/domain": "workspace:*"
   }
 }

@@ -1,5 +1,6 @@
-import { parseRequiredValue } from "@lorenz/cli-kit";
 import { httpUrlHost, isRecord, type WorkflowDefinition } from "@lorenz/domain";
+
+import { parseRequiredValue } from "./commander.js";
 
 export function workflowHttpBaseUrl(
   workflow: Pick<WorkflowDefinition, "settings">,

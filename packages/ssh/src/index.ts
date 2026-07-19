@@ -1,13 +1,12 @@
 import path from "node:path";
 import { accessSync, constants } from "node:fs";
-import { setTimeout, clearTimeout } from "node:timers";
 import { setTimeout as delay } from "node:timers/promises";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 
 import { execa } from "execa";
+import { processGroupTerminationAdapter, superviseChild } from "@lorenz/process-supervisor";
 
 const DEFAULT_SSH_TIMEOUT_MS = 60_000;
-const FORCE_KILL_DELAY_MS = 5_000;
 const DEFAULT_REMOTE_TCP_PORT_READY_TIMEOUT_MS = 10_000;
 const DEFAULT_REMOTE_TCP_PORT_READY_INTERVAL_MS = 200;
 const DEFAULT_REMOTE_TCP_PORT_READY_ATTEMPT_TIMEOUT_MS = 1_000;
@@ -79,11 +78,6 @@ export async function runSsh(
   if (options.abortSignal?.aborted) throw new Error(`ssh_aborted: ${host}`);
 
   try {
-    // Spawn in its own process group (detached) so we can kill the entire group on timeout.
-    // execa's built-in timeout only signals the direct child, leaving sub-processes alive
-    // with open pipes that block resolution until they exit naturally.
-    // SIGTERM first to allow trap handlers / graceful shutdown; SIGKILL after 5s as fallback.
-    // TODO - this may not be enough to ensure the remote ssh process cleans up its children
     const subprocess = execa(options.sshExecutablePath ?? "ssh", sshArgs(host, command), {
       reject: false,
       ...(options.stderrToStdout ? { all: true } : {}),
@@ -91,57 +85,22 @@ export async function runSsh(
       stripFinalNewline: false,
       detached: true,
     });
-    let timeoutTimer: ReturnType<typeof setTimeout> | undefined;
-    let forceKillTimer: ReturnType<typeof setTimeout> | undefined;
-    let terminationRequested = false;
-    let abortHandler: (() => void) | undefined;
-
-    const killProcessGroup = (signal: NodeJS.Signals): void => {
-      try {
-        process.kill(-subprocess.pid!, signal);
-      } catch {
-        /* process already exited */
-      }
-    };
-
-    const forceKillProcessGroup = (): void => {
-      forceKillTimer ??= setTimeout(() => {
-        killProcessGroup("SIGKILL");
-      }, FORCE_KILL_DELAY_MS);
-    };
-
-    const clearTimers = (): void => {
-      if (timeoutTimer !== undefined) clearTimeout(timeoutTimer);
-      // After timeout, descendants can still hold inherited pipes open even if the direct child exits.
-      if (!terminationRequested && forceKillTimer !== undefined) clearTimeout(forceKillTimer);
-      if (abortHandler) options.abortSignal?.removeEventListener("abort", abortHandler);
-    };
-
-    const clearForceKillTimer = (): void => {
-      if (forceKillTimer !== undefined) clearTimeout(forceKillTimer);
-    };
-
-    const terminate = (error: Error, reject: (reason: Error) => void): void => {
-      terminationRequested = true;
-      killProcessGroup("SIGTERM");
-      forceKillProcessGroup();
-      reject(error);
-    };
-
-    const timeout = new Promise<never>((_, reject) => {
-      timeoutTimer = setTimeout(() => {
-        terminate(new Error(`ssh_timeout: ${host} ${timeoutMs}`), reject);
-      }, timeoutMs);
+    const result = await superviseChild({
+      completion: subprocess,
+      termination: processGroupTerminationAdapter(subprocess.pid),
+      timeout: {
+        afterMs: timeoutMs,
+        error: () => new Error(`ssh_timeout: ${host} ${timeoutMs}`),
+      },
+      ...(options.abortSignal
+        ? {
+            cancellation: {
+              signal: options.abortSignal,
+              error: () => new Error(`ssh_aborted: ${host}`),
+            },
+          }
+        : {}),
     });
-    const abort = new Promise<never>((_, reject) => {
-      if (!options.abortSignal) return;
-      abortHandler = () => terminate(new Error(`ssh_aborted: ${host}`), reject);
-      options.abortSignal.addEventListener("abort", abortHandler, { once: true });
-    });
-
-    void subprocess.then(clearForceKillTimer, clearForceKillTimer);
-
-    const result = await Promise.race([subprocess, timeout, abort]).finally(clearTimers);
     if ((result as { code?: string }).code === "ENOENT") throw new Error("ssh_not_found");
     if (typeof result.exitCode !== "number") throw sshMissingExitCodeError(host, result);
     return {
