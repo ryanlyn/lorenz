@@ -11,9 +11,14 @@ export { defaultSettings } from "./defaults.js";
 export type { DefaultSettingsOptions } from "./defaults.js";
 export {
   parseConfig,
+  issueForTrackerAgent,
   settingsForIssueState,
+  settingsForTrackerIssue,
+  trackerSettingsForIssue,
+  workspaceIssueForTracker,
   validateDispatchConfig,
   trackerSpecifierFromConfig,
+  trackerSpecifiersFromConfig,
   normalizeStateName,
   normalizeRouteName,
 } from "./parse.js";

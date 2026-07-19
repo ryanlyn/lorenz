@@ -1,22 +1,34 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 
-import { DiscordTrackerClient, discordTrackerOptions } from "@lorenz/discord-tracker";
+import { discordTrackerOptions } from "@lorenz/discord-tracker";
 import { LocalTrackerClient } from "@lorenz/local-tracker";
 import { SlackTrackerClient, slackTrackerOptions } from "@lorenz/slack-tracker";
 import { beforeAll, test } from "vitest";
 import { parse as parseYaml } from "yaml";
 import { assert } from "@lorenz/test-utils";
+import {
+  MULTI_TRACKER_KIND,
+  scopedTrackerIssueId,
+  type Issue,
+  type RuntimeTrackerClient,
+  type TrackerSettings,
+} from "@lorenz/domain";
+import { TrackerRegistry, type TrackerProvider } from "@lorenz/tracker-sdk";
+import { toolSpecs } from "@lorenz/mcp";
 
 import { registerBuiltinBackends } from "../src/daemon.js";
 
 import {
   createTrackerClient,
+  defaultSettings,
   JiraClient,
   JiraMcpClient,
   memoryIssuesFromEnv,
   MemoryTrackerClient,
+  MultiTrackerClient,
   parseConfig,
+  settingsForTrackerIssue,
 } from "@lorenz/cli";
 
 // createTrackerClient resolves the configured kind through the process-default tracker
@@ -62,6 +74,94 @@ test("memory tracker adapter returns configured issues and filters by id", async
     ["MT-1", "MT-2"],
   );
   assert.deepEqual((await client.fetchCandidateIssues())[0]?.labels, ["lorenz:backend"]);
+});
+
+test("multi-tracker adapter scopes ids, routes reads and acknowledgements, and composes watches", async () => {
+  const registry = new TrackerRegistry();
+  const acknowledged: string[] = [];
+  const fetched: Record<string, string[][]> = { first: [], second: [] };
+  const closed: string[] = [];
+  let notify: (() => void) | undefined;
+
+  const clientFor = (source: "first" | "second"): RuntimeTrackerClient => {
+    const issue: Issue = {
+      id: "same-id",
+      identifier: `${source.toUpperCase()}-1`,
+      title: source,
+      state: source === "first" ? "Queued" : "Ready",
+      stateType: "unstarted",
+      labels: [],
+      blockers: [],
+    };
+    return {
+      fetchCandidateIssues: async () => [issue],
+      fetchIssuesByIds: async (ids) => {
+        fetched[source].push(ids);
+        return ids.includes(issue.id) ? [issue] : [];
+      },
+      fetchIssuesByStates: async () => [issue],
+      acknowledgeIssue: async (input) => {
+        acknowledged.push(`${source}:${input.id}`);
+        return true;
+      },
+      watch: async (onChange) => {
+        notify = onChange;
+        return { close: () => void closed.push(source) };
+      },
+    };
+  };
+  for (const source of ["first", "second"] as const) {
+    registry.register({
+      kind: source,
+      createClient: () => clientFor(source),
+    } satisfies TrackerProvider);
+  }
+
+  const settings = defaultSettings();
+  const sourceSettings = (kind: string, activeStates: string[]): TrackerSettings => ({
+    ...settings.tracker,
+    kind,
+    activeStates,
+    terminalStates: ["Done"],
+    dispatch: { ...settings.tracker.dispatch },
+    options: {},
+  });
+  settings.tracker = {
+    ...settings.tracker,
+    kind: MULTI_TRACKER_KIND,
+    options: { sources: ["first", "second"] },
+  };
+  settings.trackers = {
+    first: sourceSettings("first", ["Queued"]),
+    second: sourceSettings("second", ["Ready"]),
+  };
+
+  const client = new MultiTrackerClient(settings, {}, registry);
+  const candidates = await client.fetchCandidateIssues();
+  assert.deepEqual(
+    candidates.map((issue) => issue.id),
+    [scopedTrackerIssueId("first", "same-id"), scopedTrackerIssueId("second", "same-id")],
+  );
+
+  const secondId = scopedTrackerIssueId("second", "same-id");
+  const firstId = scopedTrackerIssueId("first", "same-id");
+  const byId = await client.fetchIssuesByIds([secondId, firstId]);
+  assert.deepEqual(
+    byId.map((issue) => issue.id),
+    [secondId, firstId],
+  );
+  assert.deepEqual(fetched.first, [["same-id"]]);
+  assert.deepEqual(fetched.second, [["same-id"]]);
+
+  assert.equal(await client.acknowledgeIssue(candidates[1]!), true);
+  assert.deepEqual(acknowledged, ["second:same-id"]);
+  const stream = await client.watch(() => void acknowledged.push("push"));
+  assert.ok(stream);
+  notify?.();
+  assert.equal(acknowledged.at(-1), "push");
+  await stream!.close();
+  assert.deepEqual(closed, ["first", "second"]);
+  await assert.rejects(() => client.fetchIssuesByIds(["same-id"]), /issue id is not scoped/);
 });
 
 test("tracker factory selects memory adapter from workflow settings and JSON env", async () => {
@@ -168,7 +268,7 @@ test("tracker factory selects slack adapter from the workflow-slack fixture", as
   assert.ok(createTrackerClient(settings) instanceof SlackTrackerClient);
 });
 
-test("shipped WORKFLOW.chat.md selects Discord and keeps a switchable Slack bundle", async () => {
+test("shipped WORKFLOW.chat.md composes Discord and Slack tracker clients", async () => {
   const raw = await readFile(path.join(import.meta.dirname, "../../../WORKFLOW.chat.md"), "utf8");
   const config = frontmatter(raw);
   const discordSettings = parseConfig(config, {
@@ -176,11 +276,33 @@ test("shipped WORKFLOW.chat.md selects Discord and keeps a switchable Slack bund
     DISCORD_GUILD_ID: "123456789012345678",
     DISCORD_CHANNEL_ID: "223456789012345678",
     DISCORD_BOT_USER_ID: "323456789012345678",
+    SLACK_BOT_TOKEN: "xoxb-test",
+    SLACK_CHANNEL_ID: "C0123456789",
+    SLACK_BOT_USER_ID: "U999",
   });
 
-  assert.equal(discordSettings.tracker.kind, "discord");
-  assert.deepEqual(discordTrackerOptions(discordSettings).channels, ["223456789012345678"]);
-  assert.ok(createTrackerClient(discordSettings) instanceof DiscordTrackerClient);
+  assert.equal(discordSettings.tracker.kind, "dispatch");
+  const discordSource = { ...discordSettings, tracker: discordSettings.trackers.discord! };
+  const slackSource = { ...discordSettings, tracker: discordSettings.trackers.slack! };
+  assert.deepEqual(discordTrackerOptions(discordSource).channels, ["223456789012345678"]);
+  assert.deepEqual(slackTrackerOptions(slackSource).channels, ["C0123456789"]);
+  assert.ok(createTrackerClient(discordSettings) instanceof MultiTrackerClient);
+  const discordTools = toolSpecs(
+    settingsForTrackerIssue(
+      discordSettings,
+      scopedTrackerIssueId("discord", "223456789012345678:423456789012345678"),
+    ),
+  ).map((tool) => tool.name);
+  const slackTools = toolSpecs(
+    settingsForTrackerIssue(
+      discordSettings,
+      scopedTrackerIssueId("slack", "C0123456789:1717000000.000100"),
+    ),
+  ).map((tool) => tool.name);
+  assert.ok(discordTools.includes("discord_read_thread"));
+  assert.equal(discordTools.includes("slack_read_thread"), false);
+  assert.ok(slackTools.includes("slack_read_thread"));
+  assert.equal(slackTools.includes("discord_read_thread"), false);
   assert.equal(
     discordSettings.agents.codex?.options.bridgeCommand,
     'env CODEX_PATH="$(command -v codex)" codex-acp',
@@ -196,18 +318,6 @@ test("shipped WORKFLOW.chat.md selects Discord and keeps a switchable Slack bund
     discordSettings.agents.claude?.options.bridgeCommand,
     'env CLAUDE_CODE_EXECUTABLE="$(command -v claude)" claude-agent-acp',
   );
-
-  const slackConfig = structuredClone(config);
-  slackConfig.tracker = { kind: "slack" };
-  const slackSettings = parseConfig(slackConfig, {
-    SLACK_BOT_TOKEN: "xoxb-test",
-    SLACK_CHANNEL_ID: "C0123456789",
-    SLACK_BOT_USER_ID: "U999",
-  });
-
-  assert.equal(slackSettings.tracker.kind, "slack");
-  assert.deepEqual(slackTrackerOptions(slackSettings).channels, ["C0123456789"]);
-  assert.ok(createTrackerClient(slackSettings) instanceof SlackTrackerClient);
 
   const prose = body(raw);
   assert.match(prose, /discord_read_thread/);

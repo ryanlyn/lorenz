@@ -1,8 +1,10 @@
 ---
-# Lorenz runs one dispatch tracker at a time. Change this selector to `slack` to use the Slack
-# bundle below; Discord is the default for this workflow.
+# Watch Discord and Slack concurrently. Each source keeps its own credentials, states, and routing.
 tracker:
-  kind: discord
+  kind: dispatch
+  sources:
+    - discord
+    - slack
 trackers:
   discord:
     provider: discord
@@ -120,8 +122,8 @@ No description provided.
 
 ## Tracker selection
 
-This workflow defines Discord and Slack tracker bundles, but Lorenz mounts tools only for the
-tracker selected by `tracker.kind`.
+This workflow watches Discord and Slack concurrently. Each run mounts tools only for the source
+tracker that produced its issue.
 
 - A Discord issue id is `<channel-id>:<message-id>`, with numeric Discord snowflakes on both sides.
   Use only `discord_*` tools for it.

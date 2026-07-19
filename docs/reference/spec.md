@@ -161,7 +161,8 @@ meaning.
 
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `tracker.kind` | required | Provider selector (`linear`, `jira`, `local`, `slack`, `discord`, `memory`). |
+| `tracker.kind` | required | Provider or bundle selector (`linear`, `jira`, `local`, `slack`, `discord`, `memory`), or `dispatch` for multiple named sources. |
+| `tracker.sources` | every named bundle | Source bundle names activated when `tracker.kind` is `dispatch`. |
 | `tracker.active_states` | `[Todo, In Progress]` | States eligible for dispatch. |
 | `tracker.terminal_states` | `[Closed, Cancelled, Canceled, Duplicate, Done]` | Terminal states; trigger workspace cleanup. |
 | `tracker.dispatch.route_label_prefix` | `Lorenz:` | Prefix that turns a label into a route. |

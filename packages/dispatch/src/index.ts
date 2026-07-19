@@ -1,9 +1,15 @@
 import { ensembleSize, isTerminalState } from "@lorenz/issue";
-import { normalizeRouteName, normalizeStateName, settingsForIssueState } from "@lorenz/config";
+import {
+  normalizeRouteName,
+  normalizeStateName,
+  settingsForIssueState,
+  trackerSettingsForIssue,
+} from "@lorenz/config";
 import type { DispatchBlockReason, Issue, Priority, Settings } from "@lorenz/domain";
 
 export function routeNames(issue: Issue, settings: Settings): string[] {
-  const prefix = settings.tracker.dispatch.routeLabelPrefix.trim().toLowerCase();
+  const tracker = trackerSettingsForIssue(settings, issue.id);
+  const prefix = tracker.dispatch.routeLabelPrefix.trim().toLowerCase();
   return issue.labels
     .filter((label) => label.toLowerCase().startsWith(prefix))
     .map((label) => normalizeRouteName(label.slice(prefix.length)))
@@ -11,30 +17,30 @@ export function routeNames(issue: Issue, settings: Settings): string[] {
 }
 
 export function hasRouteLabel(issue: Issue, settings: Settings): boolean {
-  const prefix = settings.tracker.dispatch.routeLabelPrefix.trim().toLowerCase();
+  const tracker = trackerSettingsForIssue(settings, issue.id);
+  const prefix = tracker.dispatch.routeLabelPrefix.trim().toLowerCase();
   return issue.labels.some((label) => label.toLowerCase().startsWith(prefix));
 }
 
 export function issueIsActive(issue: Issue, settings: Settings): boolean {
+  const tracker = trackerSettingsForIssue(settings, issue.id);
   return (
-    stateIn(issue.state, settings.tracker.activeStates) &&
-    !stateIn(issue.state, settings.tracker.terminalStates)
+    stateIn(issue.state, tracker.activeStates) && !stateIn(issue.state, tracker.terminalStates)
   );
 }
 
 export function issueHasOpenBlockers(issue: Issue, settings: Settings): boolean {
   if (issue.stateType !== "unstarted") return false;
+  const tracker = trackerSettingsForIssue(settings, issue.id);
 
-  return issue.blockers.some(
-    (blocker) => !isTerminalState(blocker.state, settings.tracker.terminalStates),
-  );
+  return issue.blockers.some((blocker) => !isTerminalState(blocker.state, tracker.terminalStates));
 }
 
 export function routedToThisWorker(issue: Issue, settings: Settings): boolean {
   if (issue.assignedToWorker === false) return false;
 
   const routes = routeNames(issue, settings);
-  const dispatch = settings.tracker.dispatch;
+  const dispatch = trackerSettingsForIssue(settings, issue.id).dispatch;
   if (routes.length === 0) return hasRouteLabel(issue, settings) ? false : dispatch.acceptUnrouted;
   if (dispatch.onlyRoutes === null) return true;
   if (dispatch.onlyRoutes.length === 0) return false;

@@ -22,7 +22,7 @@ agent:
 You are working on {{ issue.identifier }}: {{ issue.title }}.
 ```
 
-The nested bundle form above is the recommended shape: `tracker.kind` selects the bundle and the matching `trackers.<bundle>.provider` names the implementation. The flat form (provider options directly under `tracker`) is a terser shorthand for the same config; see [Bundle and flat shapes](#bundle-and-flat-shapes).
+The nested bundle form above is the recommended shape: `tracker.kind` selects the bundle and the matching `trackers.<bundle>.provider` names the implementation. Set `tracker.kind: dispatch` with `tracker.sources` to watch several bundles concurrently. The flat form (provider options directly under `tracker`) is a terser shorthand for one tracker; see [Bundle and flat shapes](#bundle-and-flat-shapes).
 
 ## How keys are named
 
@@ -66,11 +66,12 @@ These are read directly, outside the front matter.
 
 ## `tracker`
 
-The core tracker bundle. `tracker.kind` selects the provider. There is no default kind: `validateDispatchConfig` throws `tracker.kind is required` if it is unset, so this key is effectively mandatory. See [trackers](../trackers/index.md).
+The core tracker selector. `tracker.kind` selects one bundle or the built-in multi-tracker `dispatch` mode. There is no default kind: `validateDispatchConfig` throws `tracker.kind is required` if it is unset, so this key is effectively mandatory. See [trackers](../trackers/index.md).
 
 | Key | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `tracker.kind` | string | (none) | Selects the provider: `linear`, `jira`, `jira-mcp`, `local`, `slack`, `discord`, `memory`, or `dispatch`, or an out-of-tree module specifier. Required. |
+| `tracker.sources` | string[] | every named bundle | Bundles watched concurrently when `tracker.kind` is `dispatch`. Rejected for every other kind. |
 | `tracker.provider` | string | (none) | Provider name when `kind` names a bundle rather than a provider directly. |
 | `tracker.endpoint` | string | provider default | API base URL. Falls back to the provider's `defaultEndpoint`. |
 | `tracker.api_key` | string (secret) | (none) | API credential. Resolves `$VAR` / `op://` / provider env fallback. |
@@ -87,13 +88,39 @@ The core tracker bundle. `tracker.kind` selects the provider. There is no defaul
 
 The recommended nested bundle shape names the implementation explicitly: `tracker.kind` selects the bundle and the matching `trackers.<bundle>.provider` names the provider (it does not default to the bundle name). The selector options under `tracker` merge into that bundle.
 
-The flat shape (`tracker.kind: <provider>` with provider options directly under `tracker`) still works when no matching `trackers.<name>` bundle is present, but it is **deprecated**: provider-specific keys placed directly under `tracker` (anything outside the core selector keys `kind`, `provider`, `endpoint`, `api_key`, `assignee`, `active_states`, `terminal_states`, `dispatch`) emit a deprecation warning recommending you move them into a `trackers.<name>` bundle selected by `tracker.kind`. The warning is printed at daemon start, at config validation, and as a `config_deprecation_*` check in `lorenz doctor`. Unregistered kinds parse generically (options pass through unvalidated) and are rejected at dispatch validation.
+The flat shape (`tracker.kind: <provider>` with provider options directly under `tracker`) still works when no matching `trackers.<name>` bundle is present, but it is **deprecated**: provider-specific keys placed directly under `tracker` (anything outside the core selector keys `kind`, `sources`, `provider`, `endpoint`, `api_key`, `assignee`, `active_states`, `terminal_states`, `dispatch`) emit a deprecation warning recommending you move them into a `trackers.<name>` bundle selected by `tracker.kind`. The warning is printed at daemon start, at config validation, and as a `config_deprecation_*` check in `lorenz doctor`. Unregistered kinds parse generically (options pass through unvalidated) and are rejected at dispatch validation.
+
+### Multiple trackers
+
+`dispatch` composes selected bundles into one poll and push stream:
+
+```yaml
+tracker:
+  kind: dispatch
+  sources:
+    - discord
+    - slack
+trackers:
+  discord:
+    provider: discord
+    guild_id: $DISCORD_GUILD_ID
+    channels: [$DISCORD_CHANNEL_ID]
+    bot_user_id: $DISCORD_BOT_USER_ID
+  slack:
+    provider: slack
+    channels: [$SLACK_CHANNEL_ID]
+    bot_user_id: $SLACK_BOT_USER_ID
+```
+
+Each source is parsed and validated independently, including its credentials, active and terminal states, routing rules, and provider options. Lorenz namespaces issue ids internally by source so equal native ids cannot share a claim, retry, workspace, or trace. The agent still receives the provider-native issue id. Its run mounts only the source provider's default tool pack and uses an isolated MCP endpoint, so one source cannot borrow another source's credentials or tools.
+
+Omit `sources` to activate every named bundle. An explicit list is recommended when a workflow also keeps inactive or example bundles. Source names may contain letters, numbers, dots, underscores, and dashes.
 
 *Diagram placeholder: tracker selection, flat `tracker.kind` versus a `trackers.<name>.provider` bundle, and option passthrough to `provider.parseOptions`. Caption: how the parser picks a provider and hands it its option slice.*
 
 ## `trackers.<name>`
 
-Named tracker bundles, used with the `dispatch` kind or to define multiple trackers. Keys beyond `provider` pass through to the named provider.
+Named tracker bundles, selected individually through `tracker.kind` or concurrently through `tracker.kind: dispatch`. Keys beyond `provider` pass through to the named provider.
 
 | Key | Type | Default | Meaning |
 | --- | --- | --- | --- |

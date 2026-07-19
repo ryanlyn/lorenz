@@ -161,6 +161,7 @@ export const agentRecordOverrideSchema = z
 export const trackerRecordSchema = z
   .object({
     kind: z.string().optional(),
+    sources: z.array(z.string()).optional(),
     provider: z.string().optional(),
     endpoint: z.string().optional(),
     apiKey: z.string().optional(),

@@ -8,12 +8,14 @@ import {
   parseConfig as parseConfigWith,
   parseWorkflowContent,
   settingsForIssueState,
+  settingsForTrackerIssue,
+  trackerSettingsForIssue,
   validateDispatchConfig as validateDispatchConfigWith,
   workflowFilePath,
 } from "@lorenz/cli";
 import { acpExecutorProvider } from "@lorenz/acp";
 import { AgentExecutorRegistry, type AgentExecutorProvider } from "@lorenz/agent-sdk";
-import type { Settings } from "@lorenz/domain";
+import { scopedTrackerIssueId, type Settings } from "@lorenz/domain";
 import { jiraTrackerOptions, registerJiraTrackers } from "@lorenz/jira-tracker";
 import { registerLinearTracker } from "@lorenz/linear-tracker";
 import { registerLocalTracker } from "@lorenz/local-tracker";
@@ -451,6 +453,90 @@ test("tracker.kind selects a named trackers bundle with its own provider", () =>
         trackers: { primary: { provider: "linear", active_states: "Todo" } },
       }),
     /trackers\.primary\.active_states must be a list of strings/,
+  );
+});
+
+test("single-tracker bundle names retain legacy characters", () => {
+  const settings = parseConfig({
+    tracker: { kind: "support team" },
+    trackers: {
+      "support team": { provider: "memory" },
+    },
+  });
+
+  assert.equal(settings.tracker.kind, "memory");
+});
+
+test("tracker.kind dispatch composes selected named tracker bundles", () => {
+  const settings = parseConfig({
+    tracker: { kind: "dispatch", sources: ["chat", "tasks"] },
+    trackers: {
+      chat: {
+        provider: "memory",
+        active_states: ["Queued"],
+        terminal_states: ["Archived"],
+        dispatch: { only_routes: ["support"] },
+      },
+      tasks: {
+        provider: "local",
+        path: "/tmp/board",
+        active_states: ["Ready"],
+        terminal_states: ["Shipped"],
+        dispatch: { only_routes: ["engineering"] },
+      },
+      unused: { provider: "local", path: "/tmp/unused" },
+    },
+  });
+
+  assert.equal(settings.tracker.kind, "dispatch");
+  assert.deepEqual(Object.keys(settings.trackers), ["chat", "tasks"]);
+  assert.equal(settings.trackers.chat?.kind, "memory");
+  assert.equal(settings.trackers.tasks?.kind, "local");
+  assert.deepEqual(settings.tracker.activeStates, ["Queued", "Ready"]);
+  assert.deepEqual(settings.tracker.terminalStates, ["Archived", "Shipped"]);
+
+  const chatId = scopedTrackerIssueId("chat", "C-1");
+  const tasksId = scopedTrackerIssueId("tasks", "T-1");
+  assert.deepEqual(trackerSettingsForIssue(settings, chatId).activeStates, ["Queued"]);
+  assert.deepEqual(trackerSettingsForIssue(settings, tasksId).dispatch.onlyRoutes, ["engineering"]);
+  const taskRunSettings = settingsForTrackerIssue(settings, tasksId);
+  assert.equal(taskRunSettings.tracker.kind, "local");
+  assert.equal(taskRunSettings.server.port, 0);
+  validateDispatchConfig(settings);
+});
+
+test("multi-tracker config rejects missing, recursive, and ambiguous sources", () => {
+  assert.throws(
+    () =>
+      parseConfig({
+        tracker: { kind: "dispatch", sources: ["missing"] },
+        trackers: { chat: { provider: "memory" } },
+      }),
+    /trackers\.missing is required by tracker\.sources/,
+  );
+  assert.throws(
+    () =>
+      parseConfig({
+        tracker: { kind: "dispatch", sources: ["nested"] },
+        trackers: { nested: { provider: "dispatch" } },
+      }),
+    /trackers\.nested\.provider must not be dispatch/,
+  );
+  assert.throws(
+    () =>
+      parseConfig({
+        tracker: { kind: "memory", sources: ["chat"] },
+        trackers: { chat: { provider: "memory" } },
+      }),
+    /tracker\.sources requires tracker\.kind: dispatch/,
+  );
+  assert.throws(
+    () =>
+      parseConfig({
+        tracker: { kind: "dispatch", sources: ["bad::source"] },
+        trackers: { "bad::source": { provider: "memory" } },
+      }),
+    /tracker source names must contain only/,
   );
 });
 

@@ -14,11 +14,14 @@ export {
   runAgentAttempt,
   runtimeAdapters,
 } from "./daemon.js";
+export { MultiTrackerClient } from "./multiTrackerClient.js";
 export { parseDoctorArgs, renderDoctorReport, runDoctorCommand, runDoctorMain } from "./doctor.js";
 export {
   defaultSettings,
   parseConfig,
   settingsForIssueState,
+  settingsForTrackerIssue,
+  trackerSettingsForIssue,
   validateDispatchConfig,
   normalizeStateName,
   normalizeRouteName,

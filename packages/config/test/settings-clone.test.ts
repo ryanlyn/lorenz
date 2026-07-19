@@ -13,6 +13,14 @@ test("settings cloning preserves accessors and Maps while isolating nested optio
     nested: { values: ["tracker-source"] },
     lookup: new Map([["tracker", { enabled: true }]]),
   };
+  settings.trackers.chat = {
+    ...settings.tracker,
+    kind: "memory",
+    activeStates: ["Queued"],
+    terminalStates: ["Archived"],
+    dispatch: { ...settings.tracker.dispatch, onlyRoutes: ["chat"] },
+    options: { nested: { values: ["source-bundle"] } },
+  };
   settings.worker.sshHosts = ["worker-source"];
   settings.worker.workerPool = withDerivedMaxInFlight({
     enabled: true,
@@ -67,6 +75,8 @@ test("settings cloning preserves accessors and Maps while isolating nested optio
   clonePool.spend!.maxWorkerSeconds = 1;
   clone.tracker.activeStates[0] = "Review";
   clone.tracker.dispatch.onlyRoutes![0] = "runtime";
+  clone.trackers.chat!.activeStates[0] = "Running";
+  (clone.trackers.chat!.options.nested as { values: string[] }).values[0] = "bundle-clone";
   clone.worker.sshHosts[0] = "worker-clone";
   clone.agent.skills[0] = "skill-clone";
 
@@ -77,6 +87,8 @@ test("settings cloning preserves accessors and Maps while isolating nested optio
   assert.equal(sourcePool.spend!.maxWorkerSeconds, 120);
   assert.deepEqual(settings.tracker.activeStates, ["Todo"]);
   assert.deepEqual(settings.tracker.dispatch.onlyRoutes, ["docs"]);
+  assert.deepEqual(settings.trackers.chat!.activeStates, ["Queued"]);
+  assert.deepEqual(settings.trackers.chat!.options.nested, { values: ["source-bundle"] });
   assert.deepEqual(settings.worker.sshHosts, ["worker-source"]);
   assert.deepEqual(settings.agent.skills, ["skill-source"]);
 

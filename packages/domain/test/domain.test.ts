@@ -1,7 +1,12 @@
 import { assert } from "@lorenz/test-utils";
 import { test } from "vitest";
 
-import { withDerivedMaxInFlight } from "@lorenz/domain";
+import {
+  parseScopedTrackerIssueId,
+  scopedTrackerIssueId,
+  scopedTrackerWorkspaceIdentifier,
+  withDerivedMaxInFlight,
+} from "@lorenz/domain";
 import type {
   WorkerDriverKind,
   WorkerPoolSettings,
@@ -110,6 +115,18 @@ const customDriverKind: WorkerDriverKind = "acme-cloud";
 
 test("WorkerDriverKind is open: any registry-resolvable string compiles", () => {
   assert.equal(customDriverKind, "acme-cloud");
+});
+
+test("tracker issue ids round-trip through a collision-free source scope", () => {
+  const scoped = scopedTrackerIssueId("discord", "channel:message");
+  assert.equal(scoped, "discord::channel:message");
+  assert.deepEqual(parseScopedTrackerIssueId(scoped), {
+    source: "discord",
+    issueId: "channel:message",
+  });
+  assert.equal(parseScopedTrackerIssueId("channel:message"), null);
+  assert.equal(scopedTrackerWorkspaceIdentifier("discord", "DSC-1"), "7-discord-DSC-1");
+  assert.throws(() => scopedTrackerIssueId("bad::source", "issue"), /letters, numbers/);
 });
 
 test("WorkerPoolSettings shape compiles with and without optionals", () => {

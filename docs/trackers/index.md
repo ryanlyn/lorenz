@@ -5,9 +5,10 @@ accepts comments and status changes back. This is the operator hub: how you pick
 surface every tracker shares, the agent tools that ride on top, and where each backend documents its
 exact keys.
 
-Lorenz polls one tracker, turns matching issues into agent runs, and writes results back to that
-same tracker. The tracker is an extension point, so Linear, Jira, a local Markdown board, Slack,
-Discord, and an in-process fixture all plug into the same contract.
+Lorenz can poll one tracker or compose several named tracker sources, turn matching issues into
+agent runs, and write results back to the source that produced each issue. The tracker is an
+extension point, so Linear, Jira, a local Markdown board, Slack, Discord, and an in-process fixture
+all plug into the same contract.
 
 ## Picking a tracker
 
@@ -41,6 +42,32 @@ An unknown provider fails fast at startup. `TrackerRegistry.require` throws
 `tracker.kind is required`. The supported set is whatever the composition root registered.
 `registerBuiltinBackends` in `apps/cli/src/daemon.ts` wires the kinds below.
 
+### Watching multiple trackers
+
+Use the built-in `dispatch` selector to activate several bundles:
+
+```yaml
+tracker:
+  kind: dispatch
+  sources: [discord, slack]
+trackers:
+  discord:
+    provider: discord
+    guild_id: $DISCORD_GUILD_ID
+    channels: [$DISCORD_CHANNEL_ID]
+    bot_user_id: $DISCORD_BOT_USER_ID
+  slack:
+    provider: slack
+    channels: [$SLACK_CHANNEL_ID]
+    bot_user_id: $SLACK_BOT_USER_ID
+```
+
+The composite client polls every source and opens every available push stream. Internal ids are
+source-scoped so two backends can return the same native id without colliding. Before a run starts,
+Lorenz selects that issue's source settings, restores its native id for the prompt, and mounts only
+the source provider's default tools. Shared agent, worker, workspace, and polling settings still
+apply across the whole process, including the global concurrency cap.
+
 ## The supported kinds
 
 | `provider` | Backend | Use it when |
@@ -65,8 +92,9 @@ Each provider owns its own config slice and its own page:
 ## The shared read surface
 
 Every tracker drives dispatch through one runtime client contract: `TrackerProvider.createClient`
-returns a `RuntimeTrackerClient`. The poll loop calls a fixed set of methods on it and never reaches
-into the backend directly.
+returns a `RuntimeTrackerClient`. In multi-tracker mode a composite client delegates that same
+contract to each source. The poll loop calls a fixed set of methods and never reaches into a backend
+directly.
 
 - `fetchCandidateIssues()` returns the issues eligible for dispatch this tick. Each provider scopes
   this to its own notion of "active": Linear polls `tracker.active_states`, the local board calls

@@ -15,10 +15,15 @@ import {
   registerLocalWorkerDriver,
   type WorkerDriverRegistry,
 } from "@lorenz/worker-sdk";
-import { trackerSpecifierFromConfig, type DefaultSettingsOptions } from "@lorenz/config";
+import { trackerSpecifiersFromConfig, type DefaultSettingsOptions } from "@lorenz/config";
 import { registerDockerWorkerDriver } from "@lorenz/docker-worker";
 import { registerDiscordTracker } from "@lorenz/discord-tracker";
-import { systemClock, type RuntimeTrackerClient, type Settings } from "@lorenz/domain";
+import {
+  MULTI_TRACKER_KIND,
+  systemClock,
+  type RuntimeTrackerClient,
+  type Settings,
+} from "@lorenz/domain";
 import { registerJiraTrackers } from "@lorenz/jira-tracker";
 import { registerLinearTracker } from "@lorenz/linear-tracker";
 import { registerLocalTracker } from "@lorenz/local-tracker";
@@ -47,6 +52,7 @@ import { defaultTrackerRegistry, type TrackerRegistry } from "@lorenz/tracker-sd
 
 import { ensureWorkerDriverLoaded } from "./workerDriverLoader.js";
 import { ensureTrackerProviderLoaded } from "./trackerLoader.js";
+import { MultiTrackerClient } from "./multiTrackerClient.js";
 
 export interface BackendRegistries {
   trackers?: TrackerRegistry | undefined;
@@ -89,15 +95,14 @@ export function runtimeDefaultSettingsOptions(): DefaultSettingsOptions {
 }
 
 /**
- * `loadWorkflow` pre-parse hook: dynamic-import any out-of-tree tracker named by
- * `tracker.kind` (a module specifier rather than a registered kind) and register
- * it into `trackers` under that exact string, BEFORE the config parser resolves
- * the tracker provider. Mirrors {@link buildWorkerPool}'s driver-loading step:
+ * `loadWorkflow` pre-parse hook: dynamic-import every out-of-tree provider selected directly,
+ * through a named bundle, or through multi-tracker dispatch. Register each exact specifier before
+ * the config parser resolves provider options. Mirrors {@link buildWorkerPool}'s driver-loading step:
  * the loader is a no-op for a built-in kind, dynamic-imports on a miss, and
  * fail-loud on an unresolvable specifier / SDK mismatch at the same startup point
  * as an unregistered kind. Re-running it on a reload re-encounters an
  * already-loaded specifier and emits `tracker_provider_module_pinned`; a config
- * that switches `tracker.kind` to a NEW specifier hot-loads it.
+ * that adds a new source specifier hot-loads it.
  *
  * `baseDir` anchors `./relative` specifiers to the workflow file's directory (the
  * most predictable anchor for operators), and `logEvent` routes the
@@ -108,24 +113,30 @@ export async function prepareTrackerExtensions(
   rawConfig: Record<string, unknown>,
   context: { baseDir: string; logFile?: string | undefined; trackers?: TrackerRegistry },
 ): Promise<void> {
-  const specifier = trackerSpecifierFromConfig(rawConfig);
-  if (specifier === undefined) return;
+  const specifiers = trackerSpecifiersFromConfig(rawConfig);
+  if (specifiers.length === 0) return;
   const trackers = context.trackers ?? defaultTrackerRegistry;
   const logEvent =
     context.logFile === undefined
       ? undefined
       : (event: Record<string, unknown>): void => void appendLogEvent(context.logFile!, event);
-  await ensureTrackerProviderLoaded(specifier, trackers, {
-    baseDir: context.baseDir,
-    logEvent,
-  });
+  for (const specifier of specifiers) {
+    await ensureTrackerProviderLoaded(specifier, trackers, {
+      baseDir: context.baseDir,
+      logEvent,
+    });
+  }
 }
 
 export function createTrackerClient(
   settings: Settings,
   env: NodeJS.ProcessEnv = process.env,
+  registry: TrackerRegistry = defaultTrackerRegistry,
 ): RuntimeTrackerClient {
-  return defaultTrackerRegistry.require(settings.tracker.kind).createClient(settings, { env });
+  if (settings.tracker.kind === MULTI_TRACKER_KIND) {
+    return new MultiTrackerClient(settings, env, registry);
+  }
+  return registry.require(settings.tracker.kind).createClient(settings, { env });
 }
 
 /** Options for {@link buildWorkerPool} / {@link buildDispatchCoordinator}. */
