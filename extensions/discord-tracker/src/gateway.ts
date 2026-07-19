@@ -382,6 +382,7 @@ function parseInteraction(value: unknown): DiscordInteraction | null {
 
   const customId = stringField(value.data, "custom_id");
   if (!customId) return null;
+  const componentValues = stringArray(value.data.values);
   return {
     id,
     applicationId,
@@ -392,6 +393,7 @@ function parseInteraction(value: unknown): DiscordInteraction | null {
     userId,
     userBot: user.bot === true,
     customId,
+    ...(componentValues.length > 0 ? { componentValues } : {}),
   };
 }
 
@@ -403,6 +405,12 @@ function interactionOptions(value: unknown): Record<string, string> {
     if (typeof option.value === "string") out[option.name] = option.value;
   }
   return out;
+}
+
+function stringArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string")
+    : [];
 }
 
 function stringField(value: Record<string, unknown>, key: string): string | null {

@@ -69,6 +69,7 @@ export interface DiscordInteraction {
   commandName?: string | undefined;
   commandOptions?: Record<string, string> | undefined;
   customId?: string | undefined;
+  componentValues?: string[] | undefined;
   targetId?: string | undefined;
 }
 

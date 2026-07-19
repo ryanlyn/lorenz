@@ -3,6 +3,7 @@ export { DiscordGatewayChangeStream } from "./gateway.js";
 export { InMemoryDiscordTransport } from "./inMemoryTransport.js";
 export {
   DISCORD_STATUS_COMPONENT_PREFIX,
+  DISCORD_STATUS_SELECT_ID,
   DISCORD_TRACK_MESSAGE_COMMAND,
   discordApplicationCommands,
   interactionAction,

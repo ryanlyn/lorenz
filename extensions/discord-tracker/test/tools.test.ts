@@ -73,6 +73,31 @@ test("Workpad tool posts structured rich content instead of flattening it into a
   });
 });
 
+test("Workpad tool does not read thread history to render configured statuses", async () => {
+  const settings = parseDiscordConfig();
+  const root = message({ id: "723456789012345678", hasThread: true });
+  const transport = new InMemoryDiscordTransport([root]);
+  transport.getThread = () => {
+    throw new Error("Workpad rendering must not read thread history");
+  };
+
+  const result = await executeDiscordTool(
+    "discord_workpad",
+    {
+      issueId: `${CHANNEL_ID}:${root.id}`,
+      environment: "host:/workspace@abc1234",
+      plan: ["Implement"],
+      acceptanceCriteria: ["Configured statuses are rendered"],
+      validationCommands: ["mise run test"],
+    },
+    settings,
+    transport,
+  );
+
+  assert.equal(result.success, true);
+  assert.equal(transport.postedWorkpads.length, 1);
+});
+
 test("comments, reads, queries, user lookups, and context stay inside the tracker scope", async () => {
   const settings = parseDiscordConfig();
   const root = message({ id: "723456789012345678", hasThread: true });

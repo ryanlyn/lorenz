@@ -61,9 +61,9 @@ export function discordToolSpecs(): ToolSpec[] {
     {
       name: "discord_workpad",
       description:
-        "Post a native rich Workpad card in the Discord issue thread. The card includes status " +
-        "buttons for human interaction. Args: issueId, environment, plan, acceptanceCriteria, " +
-        "validationCommands, progress?.",
+        "Post a native rich Workpad card in the Discord issue thread. The card includes a " +
+        "workflow-configured status selector for human interaction. Args: issueId, environment, " +
+        "plan, acceptanceCriteria, validationCommands, progress?.",
       inputSchema: {
         type: "object",
         properties: {

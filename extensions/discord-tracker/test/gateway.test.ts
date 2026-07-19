@@ -112,6 +112,21 @@ test("Gateway forwards slash and component interactions without waiting for a po
       data: { component_type: 2, custom_id: "lorenz:status:Cancelled" },
     },
   });
+  socket.receive({
+    op: 0,
+    t: "INTERACTION_CREATE",
+    s: 3,
+    d: {
+      id: "623456789012345680",
+      application_id: "323456789012345678",
+      token: "secret-token-3",
+      type: 3,
+      guild_id: GUILD_ID,
+      channel_id: "723456789012345678",
+      member: { user: { id: "523456789012345678", bot: false } },
+      data: { component_type: 3, custom_id: "lorenz:status", values: ["Done"] },
+    },
+  });
 
   assert.deepEqual(interactions, [
     {
@@ -136,6 +151,18 @@ test("Gateway forwards slash and component interactions without waiting for a po
       userId: "523456789012345678",
       userBot: false,
       customId: "lorenz:status:Cancelled",
+    },
+    {
+      id: "623456789012345680",
+      applicationId: "323456789012345678",
+      token: "secret-token-3",
+      type: "component",
+      guildId: GUILD_ID,
+      channelId: "723456789012345678",
+      userId: "523456789012345678",
+      userBot: false,
+      customId: "lorenz:status",
+      componentValues: ["Done"],
     },
   ]);
   assert.equal(changes.mock.calls.length, 0);
