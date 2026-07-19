@@ -11,7 +11,7 @@ export type {
 } from "./transport.js";
 export { STATUS_METADATA_EVENT, WORKPAD_METADATA_EVENT } from "./transport.js";
 export { InMemorySlackTransport } from "./inMemoryTransport.js";
-export { makeMetadataSeq, SlackWebTransport } from "./webTransport.js";
+export { makeMetadataSeq, SlackApiError, SlackWebTransport } from "./webTransport.js";
 export type { SlackTrackerLogger } from "./webTransport.js";
 export { stripBroadcastMentions } from "./sanitize.js";
 export { MirrorBackedSlackTransport } from "./mirror.js";

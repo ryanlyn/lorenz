@@ -8,6 +8,7 @@ import {
   statusEmojiMap,
   stripLeadingMention,
 } from "./mapping.js";
+import { compareSlackTs } from "./ids.js";
 import { slackTrackerOptions } from "./options.js";
 import { STATUS_METADATA_EVENT, WORKPAD_METADATA_EVENT } from "./transport.js";
 import type { SlackMessage, SlackThreadReply, SlackTransport } from "./transport.js";
@@ -24,7 +25,7 @@ import type { SlackMessage, SlackThreadReply, SlackTransport } from "./transport
  * - A bot-mention reply with NO command re-opens a terminal issue to the default
  *   non-terminal state: mentioning the bot again always means "this needs attention".
  * - The latest event by ts wins. Reactions remain a bot-owned visibility mirror and the
- *   back-compat source for threads that have never seen a command or bot status reply.
+ *   fallback source for threads that have never seen a command or bot status reply.
  */
 
 /** Recognized prefix of the bot's own authoritative status replies. */
@@ -167,11 +168,14 @@ export function stateFromThread(
   settings: Settings,
 ): ThreadState {
   const { botUserId, users } = slackTrackerOptions(settings);
-  const ordered = [...replies].sort((a, b) => tsValue(a.ts) - tsValue(b.ts));
+  const ordered = [...replies].sort((a, b) => compareSlackTs(a.ts, b.ts));
   const rootIsMention = isBotMention(root.text, botUserId);
 
+  type FoldInput =
+    | { kind: "status"; event: ThreadStatusEvent }
+    | { kind: "bare"; ts: string; actor?: string | undefined };
+  const foldInputs: FoldInput[] = [];
   const events: ThreadStatusEvent[] = [];
-  const bareMentionTs: string[] = [];
   let request: ThreadState["request"];
   let workpad: ThreadWorkpad | undefined;
 
@@ -202,7 +206,10 @@ export function stateFromThread(
         const raw = metadata.payload.state;
         const state = typeof raw === "string" ? resolveStateName(raw, settings) : null;
         if (state) {
-          events.push({ ts: reply.ts, state, actor: botUserId });
+          foldInputs.push({
+            kind: "status",
+            event: { ts: reply.ts, state, actor: botUserId },
+          });
           continue;
         }
         // An unresolvable metadata state falls through to the text parse rather than being
@@ -211,7 +218,12 @@ export function stateFromThread(
       const status = BOT_STATUS_RE.exec(reply.text.trim());
       if (status) {
         const state = resolveStateName(status[1]!, settings);
-        if (state) events.push({ ts: reply.ts, state, actor: botUserId });
+        if (state) {
+          foldInputs.push({
+            kind: "status",
+            event: { ts: reply.ts, state, actor: botUserId },
+          });
+        }
       }
       continue;
     }
@@ -229,30 +241,46 @@ export function stateFromThread(
       continue;
     }
     const command = parseStatusCommand(classificationText, botUserId, settings);
-    if (command) events.push({ ts: reply.ts, state: command.state, actor: reply.user });
-    else bareMentionTs.push(reply.ts);
+    if (command) {
+      foldInputs.push({
+        kind: "status",
+        event: {
+          ts: reply.ts,
+          state: command.state,
+          ...(reply.user !== undefined ? { actor: reply.user } : {}),
+        },
+      });
+    } else {
+      foldInputs.push({
+        kind: "bare",
+        ts: reply.ts,
+        ...(reply.user !== undefined ? { actor: reply.user } : {}),
+      });
+    }
   }
 
-  let state: string;
-  let lastEventTs: number;
-  const lastEvent = events[events.length - 1];
-  if (lastEvent) {
-    state = lastEvent.state;
-    lastEventTs = tsValue(lastEvent.ts);
-  } else if (rootIsMention) {
-    // Only the BOT's own reactions read as state: the mirror it wrote in an earlier session, or
-    // legacy reaction-managed threads. A human's reaction never moves an issue - humans
-    // transition through `!`-command replies, which are ts-ordered and auditable.
-    state = stateFromReactions(root.botReactions, statusEmojiMap(settings), settings);
-    // Reactions carry no ordering, so any later bare mention may re-open a terminal reading.
-    lastEventTs = Number.NEGATIVE_INFINITY;
-  } else {
-    state = "Todo";
-    lastEventTs = Number.NEGATIVE_INFINITY;
-  }
-
-  if (isTerminalState(state, settings) && bareMentionTs.some((ts) => tsValue(ts) > lastEventTs)) {
+  const hasExplicitStatus = foldInputs.some((input) => input.kind === "status");
+  // Reactions are an unordered fallback only when the thread has no explicit transition. When
+  // explicit events exist, bare mentions before the first one cannot be ordered against the
+  // reaction mirror and therefore do not create a transition.
+  let state = rootIsMention
+    ? stateFromReactions(root.botReactions, statusEmojiMap(settings), settings)
+    : "Todo";
+  let explicitStatusSeen = !hasExplicitStatus;
+  for (const input of foldInputs) {
+    if (input.kind === "status") {
+      state = input.event.state;
+      events.push(input.event);
+      explicitStatusSeen = true;
+      continue;
+    }
+    if (!explicitStatusSeen || !isTerminalState(state, settings)) continue;
     state = reopenState(settings);
+    events.push({
+      ts: input.ts,
+      state,
+      ...(input.actor !== undefined ? { actor: input.actor } : {}),
+    });
   }
 
   return {
@@ -261,11 +289,6 @@ export function stateFromThread(
     ...(request !== undefined ? { request } : {}),
     ...(workpad !== undefined ? { workpad } : {}),
   };
-}
-
-function tsValue(ts: string): number {
-  const value = Number.parseFloat(ts);
-  return Number.isFinite(value) ? value : 0;
 }
 
 interface ThreadStateCacheEntry {

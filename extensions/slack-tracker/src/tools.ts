@@ -66,8 +66,9 @@ export function slackToolSpecs(): ToolSpec[] {
     {
       name: "slack_workpad",
       description:
-        "Create or update the issue's workpad: ONE bot message in the thread, edited in place, " +
-        "carrying the live plan checklist and latest note (plus Cancel/Details buttons). Use it " +
+        "Create or update the issue's workpad: one bot message in the thread, edited in place, " +
+        "carrying the live plan checklist and latest note. Socket Mode adds Cancel/Details " +
+        "buttons. Use it " +
         "for the continuously-changing checklist instead of posting new comments - edits do not " +
         "notify the thread. Omitting plan/note keeps the existing section. Args: issueId, " +
         "plan? (mrkdwn checklist), note? (short status line).",

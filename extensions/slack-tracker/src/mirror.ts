@@ -102,12 +102,11 @@ export class MirrorBackedSlackTransport implements SlackTransport {
   private readonly logger: SlackTrackerLogger;
   private socketHealthy = false;
   /**
-   * Serialized event application. `applyEvent` is called synchronously from the socket handler
-   * but application can need API lookups (an unknown thread root); the queue keeps events in
-   * arrival order, and reads settle it first so a nudge-triggered poll observes the very event
-   * that nudged it.
+   * Serialized mirror mutation. Events, reconciliation snapshot installation, and fetched-thread
+   * installation share this queue so an API response can never overwrite an event that arrived
+   * while the request was in flight.
    */
-  private eventQueue: Promise<void> = Promise.resolve();
+  private mutationQueue: Promise<void> = Promise.resolve();
   /** Reply ts values whose ignored edit already produced a thread notice (one per message). */
   private readonly editNoticed = new Set<string>();
 
@@ -133,10 +132,12 @@ export class MirrorBackedSlackTransport implements SlackTransport {
 
   /** Force real scans everywhere (reconnect gaps, operator suspicion). */
   markAllDirty(reason: string): void {
-    for (const state of this.channels.values()) state.dirty = true;
-    if (this.channels.size > 0) {
-      this.logger.warn(`slack mirror: marked all channels dirty (${reason})`);
-    }
+    void this.enqueueMutation(() => {
+      for (const state of this.channels.values()) state.dirty = true;
+      if (this.channels.size > 0) {
+        this.logger.warn(`slack mirror: marked all channels dirty (${reason})`);
+      }
+    });
   }
 
   /**
@@ -145,7 +146,7 @@ export class MirrorBackedSlackTransport implements SlackTransport {
    * the socket, and reads settle the queue before serving.
    */
   applyEvent(payload: Record<string, unknown>): void {
-    this.eventQueue = this.eventQueue.then(async () => {
+    void this.enqueueMutation(async () => {
       try {
         await this.applyEventNow(payload);
       } catch (error) {
@@ -178,6 +179,9 @@ export class MirrorBackedSlackTransport implements SlackTransport {
         }
       }),
     );
+    // Events arriving during an API scan are queued behind snapshot installation. Settle them
+    // before collecting so this poll includes both the snapshot and its concurrent live events.
+    await this.settleEvents();
     const failures = results.filter((r) => !r.ok);
     if (failures.length > 0 && failures.length === channels.length) {
       throw new Error(
@@ -223,9 +227,20 @@ export class MirrorBackedSlackTransport implements SlackTransport {
           .map((reply) => toThreadReply(reply));
       }
     }
-    const replies = await this.inner.getThread(channel, ts, abortSignal);
-    this.storeFetchedThread(channel, ts, replies);
-    return replies.map((reply) => this.enrichFetchedReply(channel, ts, reply));
+    const fetch = settlePromise(this.inner.getThread(channel, ts, abortSignal));
+    await this.enqueueMutation(async () => {
+      const result = await fetch;
+      if (!result.ok) throw result.error;
+      this.storeFetchedThread(channel, ts, result.value);
+    });
+    // A live event queued while the API read was in flight applies after the fetched snapshot.
+    await this.settleEvents();
+    const stored = this.channels.get(channel)?.threads.get(ts);
+    return stored
+      ? [...stored.values()]
+          .sort((left, right) => compareSlackTs(left.ts, right.ts))
+          .map(toThreadReply)
+      : [];
   }
 
   async getThreadPage(
@@ -288,19 +303,23 @@ export class MirrorBackedSlackTransport implements SlackTransport {
     await this.inner.addReaction(channel, ts, name);
     // The bot's own reactions are state-bearing (marker + mirror), so reflect them immediately
     // rather than waiting for the reaction event to echo back.
-    this.mutateRoot(channel, ts, (root) => {
-      if (!root.reactions.includes(name)) root.reactions.push(name);
-      if (!root.botReactions.includes(name)) root.botReactions.push(name);
+    await this.enqueueMutation(() => {
+      this.mutateRoot(channel, ts, (root) => {
+        if (!root.reactions.includes(name)) root.reactions.push(name);
+        if (!root.botReactions.includes(name)) root.botReactions.push(name);
+      });
     });
   }
 
   async removeReaction(channel: string, ts: string, name: string): Promise<void> {
     await this.inner.removeReaction(channel, ts, name);
-    this.mutateRoot(channel, ts, (root) => {
-      root.botReactions = root.botReactions.filter((r) => r !== name);
-      // Display list keeps the name only if a human also reacted with it; we cannot know from
-      // here, so drop it and let the next event/scan restore a human copy. Display-only either way.
-      root.reactions = root.reactions.filter((r) => r !== name);
+    await this.enqueueMutation(() => {
+      this.mutateRoot(channel, ts, (root) => {
+        root.botReactions = root.botReactions.filter((r) => r !== name);
+        // Display list keeps the name only if a human also reacted with it; we cannot know from
+        // here, so drop it and let the next event/scan restore a human copy.
+        root.reactions = root.reactions.filter((r) => r !== name);
+      });
     });
   }
 
@@ -346,16 +365,18 @@ export class MirrorBackedSlackTransport implements SlackTransport {
     await this.inner.updateMessage(channel, ts, body, options);
     // The bot's own edits (workpad refreshes) update the mirror text directly; they are display
     // mirrors, never folded commands, so first-seen protection deliberately does not apply.
-    const state = this.channels.get(channel);
-    const rootTs = state?.replyIndex.get(ts);
-    if (state && rootTs !== undefined) {
-      const reply = state.threads.get(rootTs)?.get(ts);
-      if (reply) {
-        reply.text = body;
-        reply.firstSeenText = body;
-        if (options?.metadata !== undefined) reply.metadata = options.metadata;
+    await this.enqueueMutation(() => {
+      const state = this.channels.get(channel);
+      const rootTs = state?.replyIndex.get(ts);
+      if (state && rootTs !== undefined) {
+        const reply = state.threads.get(rootTs)?.get(ts);
+        if (reply) {
+          reply.text = body;
+          reply.firstSeenText = body;
+          if (options?.metadata !== undefined) reply.metadata = options.metadata;
+        }
       }
-    }
+    });
   }
 
   async postEphemeral(
@@ -377,9 +398,22 @@ export class MirrorBackedSlackTransport implements SlackTransport {
 
   // ------------------------------------------------------------------ internals
 
-  /** Reads await pending event applications so a nudge-triggered poll sees its own trigger. */
+  /** Reads await pending mirror mutations so a nudge-triggered poll sees its own event. */
   private async settleEvents(): Promise<void> {
-    await this.eventQueue;
+    await this.mutationQueue;
+  }
+
+  /**
+   * Append one mirror mutation while preserving the caller's result. A failed API-backed mutation
+   * rejects its caller but is absorbed by the queue tail so later events continue to apply.
+   */
+  private async enqueueMutation<T>(mutation: () => T | Promise<T>): Promise<T> {
+    const result = this.mutationQueue.then(mutation);
+    this.mutationQueue = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
   }
 
   private isFresh(channel: string): boolean {
@@ -422,7 +456,18 @@ export class MirrorBackedSlackTransport implements SlackTransport {
    * first-seen text survives for replies the substrate still carries.
    */
   private async rebuildChannel(channel: string): Promise<void> {
-    const scan = await this.inner.scanChannels([channel]);
+    // Start reads concurrently across channels, then install each completed snapshot through the
+    // mutation queue. Events received after this call are queued behind the snapshot and replayed
+    // onto it, so the snapshot cannot erase them.
+    const fetch = settlePromise(this.inner.scanChannels([channel]));
+    await this.enqueueMutation(async () => {
+      const result = await fetch;
+      if (!result.ok) throw result.error;
+      this.installChannelSnapshot(channel, result.value);
+    });
+  }
+
+  private installChannelSnapshot(channel: string, scan: SlackChannelScan): void {
     const state = this.channelState(channel);
     const seen = new Set<string>();
     const previousRoots = state.roots;
@@ -832,6 +877,20 @@ function latestTsOf(thread: Map<string, MirrorReply>): string | undefined {
     if (latest === undefined || compareSlackTs(reply.ts, latest) > 0) latest = reply.ts;
   }
   return latest;
+}
+
+/**
+ * Observe an in-flight API read immediately while carrying its rejection into the mutation queue.
+ * This keeps concurrent reads from producing an unhandled rejection while another queued
+ * snapshot is still installing.
+ */
+async function settlePromise<T>(
+  promise: Promise<T>,
+): Promise<{ ok: true; value: T } | { ok: false; error: unknown }> {
+  return promise.then(
+    (value) => ({ ok: true, value }),
+    (error: unknown) => ({ ok: false, error }),
+  );
 }
 
 /** Channel of an events_api payload, for scoping failure fallout. */

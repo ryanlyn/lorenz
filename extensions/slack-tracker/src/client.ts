@@ -32,6 +32,7 @@ import {
   isAsideText,
   parseStatusCommand,
   resolveThreadState,
+  stateFromThread,
   type ThreadState,
 } from "./threadState.js";
 import { isBotMarked } from "./transport.js";
@@ -511,8 +512,8 @@ export class SlackTrackerClient implements RuntimeTrackerClient {
     const missingTarget = target !== null && !root.botReactions.includes(target);
     // The workpad header is a second display mirror healed on the same state-change cadence
     // (a human `!done` must not leave the workpad saying "In Progress" forever).
-    const workpad = thread.workpad;
-    if (!staleManaged && !missingTarget && workpad === undefined) return;
+    const hasWorkpad = thread.workpad !== undefined;
+    if (!staleManaged && !missingTarget && !hasWorkpad) return;
     // Capture only what the heal needs: the queued closure can outlive minutes of 429 backoff,
     // and holding `root` would pin every backlogged message body in memory until the queue drains.
     const { channel, ts } = root;
@@ -523,7 +524,14 @@ export class SlackTrackerClient implements RuntimeTrackerClient {
         if (healReaction) {
           await mirrorStatusReaction(this.settings, this.transport, channel, ts, state, observed);
         }
-        if (workpad !== undefined) {
+        if (hasWorkpad) {
+          // The queue may wait behind reaction backoff while the agent edits the workpad. Read its
+          // current metadata before healing the header so a delayed write cannot restore stale
+          // plan or note text.
+          const replies = await this.transport.getThread(channel, ts);
+          const current = stateFromThread(root, replies, this.settings);
+          const workpad = current.workpad;
+          if (workpad === undefined) return;
           await upsertWorkpad(
             this.settings,
             this.transport,
@@ -531,7 +539,7 @@ export class SlackTrackerClient implements RuntimeTrackerClient {
             ts,
             {
               issueId: key,
-              state,
+              state: current.state,
               ...(workpad.plan !== undefined ? { plan: workpad.plan } : {}),
               ...(workpad.note !== undefined ? { note: workpad.note } : {}),
             },
@@ -540,7 +548,9 @@ export class SlackTrackerClient implements RuntimeTrackerClient {
         }
       } catch {
         // Defensive only (mirror writes already swallow their own failures): a rejection here
-        // would poison the serialized queue and silently skip every later heal.
+        // would poison the serialized queue and silently skip every later heal. Let the next
+        // poll reschedule this issue if its workpad read or update failed.
+        this.mirroredStates.delete(key);
       }
     });
   }

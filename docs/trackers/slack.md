@@ -52,7 +52,9 @@ reconciliation - at startup, after every reconnect (Slack replays nothing missed
 disconnected), whenever an event cannot be applied cleanly, and on the `reconcile_interval_ms`
 cadence as a standing repair pass. The fold over thread events is idempotent, so a duplicated or
 re-scanned input re-derives the same state; while the socket is unhealthy the mirror never serves
-and every poll is a real scan, exactly the pull-only behavior. `interactive` envelopes (the
+and every poll is a real scan, exactly the pull-only behavior. The same fallback applies when
+Slack reports multiple open Socket Mode connections because it splits events across them.
+`interactive` envelopes (the
 workpad's Cancel/Details buttons) arrive over the same connection, so interactivity needs no
 public HTTP endpoint - enable **Interactivity** in the Slack app config to use the buttons.
 Eligible human thread replies also travel with the event as structured issue data and are
@@ -316,7 +318,8 @@ a section. Like the reactions, it is a display mirror, never state: the daemon h
 header on the same per-state-change cadence as the reaction mirror, and a workpad that cannot be
 edited (deleted, edit window closed) is simply reposted.
 
-The workpad carries two buttons, delivered as `interactive` Socket Mode envelopes:
+With Socket Mode enabled, the workpad carries two buttons delivered as `interactive` envelopes.
+Pull-only workpads omit the actions because no interaction stream is available:
 
 - **Cancel** posts the authoritative `status: Cancelled` reply with an attribution line naming
   the clicker, then nudges a poll so the runtime's reconciliation aborts the running agent within

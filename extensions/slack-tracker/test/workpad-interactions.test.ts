@@ -8,11 +8,13 @@ import {
   handleSlackInteraction,
   InMemorySlackTransport,
   renderWorkpadBlocks,
+  SlackApiError,
   SlackTrackerClient,
   SlackWebTransport,
   stateFromThread,
   stripBroadcastMentions,
   STATUS_METADATA_EVENT,
+  upsertWorkpad,
   WORKPAD_METADATA_EVENT,
   type SlackMessage,
 } from "@lorenz/slack-tracker";
@@ -76,6 +78,25 @@ test("workpad blocks and metadata sanitize broadcast tokens", () => {
   assert.ok(serialized.includes("@channel"));
   assert.ok(serialized.includes("@eng"));
   assert.ok(serialized.includes("@here"));
+  assert.ok(!serialized.includes("lorenz_cancel"));
+});
+
+test("workpad actions render only when Socket Mode can deliver interactions", () => {
+  const withSocket = parseSlackConfig(
+    {
+      tracker: {
+        kind: "slack",
+        channels: ["C1"],
+        bot_user_id: "U_BOT",
+        app_token: "xapp-test",
+      },
+    },
+    { SLACK_BOT_TOKEN: "xoxb" },
+  );
+
+  const rendered = renderWorkpadBlocks({ issueId: "C1:1.0", state: "In Progress" }, withSocket);
+
+  assert.ok(JSON.stringify(rendered.blocks).includes("lorenz_cancel"));
 });
 
 // ------------------------------------------------------------------ fold: metadata + asides
@@ -183,6 +204,52 @@ test("slack_workpad creates one message, then partial updates preserve the other
   assert.equal(workpads.length, 1);
   assert.equal(workpads[0]!.metadata!.payload.plan, "- [ ] reproduce\n- [ ] fix");
   assert.equal(workpads[0]!.metadata!.payload.note, "tests running");
+});
+
+test("a transient workpad update failure propagates without posting a duplicate", async () => {
+  const transport = new InMemorySlackTransport(
+    { C1: [{ ts: "1.0", text: "<@U_BOT> do it", user: "U2" }] },
+    { botUserId: "U_BOT" },
+  );
+  transport.updateMessage = async () => {
+    throw new Error("temporary failure");
+  };
+
+  await assert.rejects(
+    () =>
+      upsertWorkpad(
+        settings(),
+        transport,
+        "C1",
+        "1.0",
+        { issueId: "C1:1.0", state: "In Progress", plan: "- [ ] keep this" },
+        { ts: "1.5", plan: "- [ ] keep this" },
+      ),
+    /temporary failure/,
+  );
+  assert.equal(transport.replies.length, 0);
+});
+
+test("a definitive missing-message error reposts the workpad", async () => {
+  const transport = new InMemorySlackTransport(
+    { C1: [{ ts: "1.0", text: "<@U_BOT> do it", user: "U2" }] },
+    { botUserId: "U_BOT" },
+  );
+  transport.updateMessage = async () => {
+    throw new SlackApiError("chat.update", "message_not_found");
+  };
+
+  const ts = await upsertWorkpad(
+    settings(),
+    transport,
+    "C1",
+    "1.0",
+    { issueId: "C1:1.0", state: "In Progress", plan: "- [ ] keep this" },
+    { ts: "1.5", plan: "- [ ] keep this" },
+  );
+
+  assert.ok(ts !== "1.5");
+  assert.equal(transport.replies.length, 1);
 });
 
 // ------------------------------------------------------------------ interactions
@@ -397,6 +464,60 @@ test("when the marker is absent the post provably failed and is safely retried",
   });
   assert.equal(ts, "2.5");
   assert.equal(postAttempts, 2);
+});
+
+test("the final ambiguous post attempt is reconciled before failing", async () => {
+  let postAttempts = 0;
+  let replyReads = 0;
+  const fetchImpl = (async (url: string | URL) => {
+    const u = String(url);
+    if (u.includes("chat.postMessage")) {
+      postAttempts += 1;
+      return jsonResponse({ ok: false }, 503);
+    }
+    if (u.includes("conversations.replies")) {
+      replyReads += 1;
+      return jsonResponse({
+        ok: true,
+        messages:
+          postAttempts === 3
+            ? [
+                { ts: "1.0", text: "root" },
+                {
+                  ts: "1.9",
+                  text: "status: Done",
+                  user: "U1",
+                  metadata: {
+                    event_type: STATUS_METADATA_EVENT,
+                    event_payload: { issue: "C1:1.0", state: "Done", seq: "seq-final" },
+                  },
+                },
+              ]
+            : [{ ts: "1.0", text: "root" }],
+      });
+    }
+    return jsonResponse({ ok: true, messages: [] });
+  }) as typeof fetch;
+  const transport = new SlackWebTransport(
+    parseSlackConfig(
+      { tracker: { kind: "slack", channels: ["C1"], bot_user_id: "U1" } },
+      { SLACK_BOT_TOKEN: "xoxb" },
+    ),
+    fetchImpl,
+    () => Promise.resolve(),
+    silentLogger,
+  );
+
+  const ts = await transport.postReply("C1", "1.0", "status: Done", {
+    metadata: {
+      eventType: STATUS_METADATA_EVENT,
+      payload: { issue: "C1:1.0", state: "Done", seq: "seq-final" },
+    },
+  });
+
+  assert.equal(ts, "1.9");
+  assert.equal(postAttempts, 3);
+  assert.equal(replyReads, 3);
 });
 
 test("a failed reconciliation read never retries an ambiguous post", async () => {

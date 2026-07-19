@@ -236,14 +236,15 @@ export class SlackSocketMode implements TrackerChangeStream {
       // A live connection resets the backoff so the NEXT drop retries promptly.
       this.reconnectAttempts = 0;
       this.connected = true;
-      // Slack routes each event to exactly ONE of an app's open Socket Mode connections. More
-      // than one connection on this app token means another process is silently consuming a
-      // share of our events - nearly undebuggable without this warning.
+      // Slack routes each event to exactly one of an app's open Socket Mode connections. A split
+      // feed cannot back an authoritative mirror, so keep the socket for the envelopes it does
+      // receive but force tracker reads through the Web API.
       const connections = numConnectionsOf(frame);
-      if (connections !== null && connections > 1) {
+      const feedComplete = connections === null || connections <= 1;
+      if (!feedComplete) {
         this.logger.warn(
           `slack socket mode: this app has ${connections} open socket connections; events are ` +
-            "split across them, so another process may be consuming this tracker's events",
+            "split across them, so mirror-backed reads are disabled",
         );
       }
       if (this.hadConnection) {
@@ -252,7 +253,7 @@ export class SlackSocketMode implements TrackerChangeStream {
         this.safeNotify(this.onReconnect, "onReconnect");
       }
       this.hadConnection = true;
-      this.safeNotify(() => this.onConnectionState?.(true), "onConnectionState");
+      this.safeNotify(() => this.onConnectionState?.(feedComplete), "onConnectionState");
       return;
     }
     if (frame.type === "disconnect") {

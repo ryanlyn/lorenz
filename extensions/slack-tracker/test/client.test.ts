@@ -7,6 +7,7 @@ import { parseSlackConfig } from "./helpers.js";
 import {
   InMemorySlackTransport,
   SlackTrackerClient,
+  WORKPAD_METADATA_EVENT,
   type SlackSocketMode,
   type SlackSocketModeOptions,
 } from "@lorenz/slack-tracker";
@@ -677,6 +678,69 @@ test("a rate-limited mirror heal does not block candidate discovery", async () =
   releaseRemove();
   await client.flushStatusMirrorHeals();
   assert.deepEqual((await transport.getMessage("C1", "1700000000.000100"))!.reactions, []);
+});
+
+test("a delayed workpad header heal preserves newer plan and note text", async () => {
+  const rootTs = "1700000000.000100";
+  const workpadTs = "1700000000.000160";
+  const transport = new InMemorySlackTransport(
+    {
+      C1: [
+        {
+          ts: rootTs,
+          text: "<@U_BOT> preserve the workpad",
+          reactions: ["eyes"],
+          replies: [
+            { ts: "1700000000.000150", text: "<@U_BOT> !done", user: "U_HUMAN" },
+            {
+              ts: workpadTs,
+              text: "Lorenz workpad - status: In Progress",
+              user: "U_BOT",
+              metadata: {
+                eventType: WORKPAD_METADATA_EVENT,
+                payload: {
+                  issue: `C1:${rootTs}`,
+                  seq: "workpad",
+                  plan: "old plan",
+                  note: "old note",
+                },
+              },
+            },
+          ],
+        },
+      ],
+    },
+    { botUserId: "U_BOT" },
+  );
+  let releaseRemove!: () => void;
+  const removeGate = new Promise<void>((resolve) => {
+    releaseRemove = resolve;
+  });
+  const remove = transport.removeReaction.bind(transport);
+  transport.removeReaction = async (channel, ts, name) => {
+    await removeGate;
+    return remove(channel, ts, name);
+  };
+  const client = new SlackTrackerClient(settings(), transport);
+
+  await client.fetchCandidateIssues();
+  await transport.updateMessage("C1", workpadTs, "Lorenz workpad - status: Done", {
+    metadata: {
+      eventType: WORKPAD_METADATA_EVENT,
+      payload: {
+        issue: `C1:${rootTs}`,
+        seq: "workpad-update",
+        plan: "new plan",
+        note: "new note",
+      },
+    },
+  });
+  releaseRemove();
+  await client.flushStatusMirrorHeals();
+
+  const workpad = (await transport.getThread("C1", rootTs)).find((reply) => reply.ts === workpadTs);
+  assert.equal(workpad!.metadata!.payload.plan, "new plan");
+  assert.equal(workpad!.metadata!.payload.note, "new note");
 });
 
 test("fetchIssuesByIds derives in-window issues from the scan and warms the candidate cache", async () => {

@@ -438,7 +438,7 @@ export class SlackWebTransport implements SlackTransport {
         const response = await this.post("chat.postMessage", params, { idempotent: false });
         return typeof response.ts === "string" ? response.ts : "";
       } catch (error) {
-        if (marker === null || !(error instanceof SlackAmbiguousDeliveryError) || attempt >= 2) {
+        if (marker === null || !(error instanceof SlackAmbiguousDeliveryError)) {
           throw error;
         }
         this.logger.warn(
@@ -447,6 +447,7 @@ export class SlackWebTransport implements SlackTransport {
         );
         const deliveredTs = await this.findReplyByMarker(channel, threadTs, marker);
         if (deliveredTs !== null) return deliveredTs;
+        if (attempt >= 2) throw error;
         // Marker absent from the thread: the ambiguous send provably did not land, so a retry
         // cannot duplicate it. Loop and post again.
       }
@@ -652,7 +653,7 @@ export class SlackWebTransport implements SlackTransport {
       // (the goal). reactions.remove: no_reaction means the reaction is already absent (the goal).
       if (method === "reactions.add" && reason === "already_reacted") return body;
       if (method === "reactions.remove" && reason === "no_reaction") return body;
-      throw new Error(`slack ${method} failed: ${reason}`);
+      throw new SlackApiError(method, reason);
     }
     return body;
   }
@@ -740,6 +741,17 @@ class SlackAmbiguousDeliveryError extends Error {
   constructor(message: string, cause?: unknown) {
     super(message, cause === undefined ? undefined : { cause });
     this.name = "SlackAmbiguousDeliveryError";
+  }
+}
+
+/** A definitive Slack Web API error response with its machine-readable error code. */
+export class SlackApiError extends Error {
+  constructor(
+    readonly method: string,
+    readonly code: string,
+  ) {
+    super(`slack ${method} failed: ${code}`);
+    this.name = "SlackApiError";
   }
 }
 

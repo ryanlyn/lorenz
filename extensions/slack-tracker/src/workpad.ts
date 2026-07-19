@@ -1,18 +1,17 @@
 import type { Settings } from "@lorenz/domain";
 
 import { emojiForState, statusEmojiMap } from "./mapping.js";
+import { slackTrackerOptions } from "./options.js";
 import { stripBroadcastMentions } from "./sanitize.js";
 import type { ThreadWorkpad } from "./threadState.js";
 import { WORKPAD_METADATA_EVENT } from "./transport.js";
 import type { SlackPostOptions, SlackTransport } from "./transport.js";
-import { makeMetadataSeq } from "./webTransport.js";
+import { makeMetadataSeq, SlackApiError } from "./webTransport.js";
 
 /**
- * The workpad: ONE bot message per issue thread, edited in place, that carries the live plan
- * checklist, the latest note, and the Cancel/Details buttons. It replaces the old convention of
- * posting the whole "Lorenz Workpad" template as a stream of comments - milestone comments still
- * post as replies (replies notify; edits do not), while the continuously-changing checklist
- * lives here without spamming the thread.
+ * The workpad: one bot message per issue thread, edited in place, that carries the live plan
+ * checklist, latest note, and Socket Mode actions. Milestone comments still post as replies
+ * because replies notify while edits do not.
  *
  * Like the reaction mirror, the workpad is a DISPLAY surface, never state: the fold recognizes
  * it by its `lorenz_workpad` metadata purely to skip it as a status event and to round-trip the
@@ -60,34 +59,37 @@ export function renderWorkpadBlocks(content: WorkpadContent, settings: Settings)
       elements: [{ type: "mrkdwn", text: safeContent.note }],
     });
   }
-  blocks.push({
-    type: "actions",
-    block_id: "lorenz_workpad_actions",
-    elements: [
-      {
-        type: "button",
-        text: { type: "plain_text", text: "Details" },
-        action_id: WORKPAD_DETAILS_ACTION,
-        value: content.issueId,
-      },
-      {
-        type: "button",
-        text: { type: "plain_text", text: "Cancel" },
-        action_id: WORKPAD_CANCEL_ACTION,
-        style: "danger",
-        value: content.issueId,
-        confirm: {
-          title: { type: "plain_text", text: "Cancel this issue?" },
-          text: {
-            type: "plain_text",
-            text: "Posts a Cancelled status; the running agent is stopped by the daemon.",
-          },
-          confirm: { type: "plain_text", text: "Cancel issue" },
-          deny: { type: "plain_text", text: "Keep working" },
+  const { appToken } = slackTrackerOptions(settings);
+  if (appToken !== undefined && appToken.trim() !== "") {
+    blocks.push({
+      type: "actions",
+      block_id: "lorenz_workpad_actions",
+      elements: [
+        {
+          type: "button",
+          text: { type: "plain_text", text: "Details" },
+          action_id: WORKPAD_DETAILS_ACTION,
+          value: content.issueId,
         },
-      },
-    ],
-  });
+        {
+          type: "button",
+          text: { type: "plain_text", text: "Cancel" },
+          action_id: WORKPAD_CANCEL_ACTION,
+          style: "danger",
+          value: content.issueId,
+          confirm: {
+            title: { type: "plain_text", text: "Cancel this issue?" },
+            text: {
+              type: "plain_text",
+              text: "Posts a Cancelled status; the running agent is stopped by the daemon.",
+            },
+            confirm: { type: "plain_text", text: "Cancel issue" },
+            deny: { type: "plain_text", text: "Keep working" },
+          },
+        },
+      ],
+    });
+  }
   return {
     blocks,
     metadata: {
@@ -132,8 +134,15 @@ export async function upsertWorkpad(
     try {
       await transport.updateMessage(channel, existing.ts, fallback, options);
       return existing.ts;
-    } catch {
-      // message_not_found / edit_window_closed / tombstoned - post a fresh workpad below.
+    } catch (error) {
+      if (
+        !(error instanceof SlackApiError) ||
+        (error.code !== "message_not_found" && error.code !== "cant_update_message")
+      ) {
+        throw error;
+      }
+      // Slack definitively rejected the stored message identity, so posting cannot duplicate an
+      // update that may already have landed.
     }
   }
   return transport.postReply(channel, rootTs, fallback, options);

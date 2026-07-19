@@ -100,6 +100,110 @@ test("mirror serves repeat scans and new events from memory after one bootstrap 
   assert.deepEqual(third.mentions.map((m) => m.ts).sort(), ["1.0", "2.0"]);
 });
 
+test("an event arriving during reconciliation is applied after the API snapshot", async () => {
+  const raw = new InMemorySlackTransport(
+    { C1: [{ ts: "1.0", text: "<@U_BOT> bootstrap", user: "U2" }] },
+    { botUserId: "U_BOT" },
+  );
+  const inner = counting(raw);
+  const scan = inner.scanChannels.bind(inner);
+  let delayScan = false;
+  let releaseScan!: () => void;
+  let reportScanStarted!: () => void;
+  const scanGate = new Promise<void>((resolve) => {
+    releaseScan = resolve;
+  });
+  const scanStarted = new Promise<void>((resolve) => {
+    reportScanStarted = resolve;
+  });
+  inner.scanChannels = async (channels) => {
+    const snapshot = await scan(channels);
+    if (delayScan) {
+      reportScanStarted();
+      await scanGate;
+    }
+    return snapshot;
+  };
+  let clock = 0;
+  const mirror = mirrored(inner, () => clock);
+  await mirror.scanChannels(["C1"]);
+
+  clock = 120_000;
+  delayScan = true;
+  const reconciling = mirror.scanChannels(["C1"]);
+  await scanStarted;
+  mirror.applyEvent(
+    messageEvent({
+      type: "message",
+      channel: "C1",
+      ts: "2.0",
+      text: "<@U_BOT> arrived during reconciliation",
+      user: "U3",
+    }),
+  );
+  releaseScan();
+
+  const result = await reconciling;
+  assert.deepEqual(
+    result.mentions.map((message) => message.ts),
+    ["1.0", "2.0"],
+  );
+});
+
+test("an event arriving during a thread read survives snapshot installation", async () => {
+  const raw = new InMemorySlackTransport(
+    {
+      C1: [
+        {
+          ts: "1.0",
+          text: "<@U_BOT> bootstrap",
+          user: "U2",
+          replies: [{ ts: "1.1", text: "existing", user: "U2" }],
+        },
+      ],
+    },
+    { botUserId: "U_BOT" },
+  );
+  const inner = counting(raw);
+  const read = inner.getThread.bind(inner);
+  let releaseRead!: () => void;
+  let reportReadStarted!: () => void;
+  const readGate = new Promise<void>((resolve) => {
+    releaseRead = resolve;
+  });
+  const readStarted = new Promise<void>((resolve) => {
+    reportReadStarted = resolve;
+  });
+  inner.getThread = async (channel, ts) => {
+    const snapshot = await read(channel, ts);
+    reportReadStarted();
+    await readGate;
+    return snapshot;
+  };
+  const mirror = mirrored(inner);
+  await mirror.scanChannels(["C1"]);
+
+  const reading = mirror.getThread("C1", "1.0");
+  await readStarted;
+  mirror.applyEvent(
+    messageEvent({
+      type: "message",
+      channel: "C1",
+      ts: "1.2",
+      thread_ts: "1.0",
+      text: "arrived during the read",
+      user: "U3",
+    }),
+  );
+  releaseRead();
+
+  const replies = await reading;
+  assert.deepEqual(
+    replies.map((reply) => reply.ts),
+    ["1.1", "1.2"],
+  );
+});
+
 test("an event-built thread folds without a conversations.replies read", async () => {
   const inner = counting(
     new InMemorySlackTransport(

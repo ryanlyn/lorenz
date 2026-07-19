@@ -366,3 +366,20 @@ test("reconnect fires onReconnect (a gap) and onConnectionState tracks both edge
   assert.deepEqual(states, [true, false, true]);
   sm.close();
 });
+
+test("a split Socket Mode feed disables mirror-backed reads", async () => {
+  const socket = new FakeSocket();
+  const states: boolean[] = [];
+  const sm = makeSocketMode({
+    onChange: () => {},
+    onConnectionState: (connected) => states.push(connected),
+    socketQueue: [socket],
+  });
+  sm.start();
+  await flush();
+
+  socket.receive({ type: "hello", num_connections: 2 });
+
+  assert.deepEqual(states, [false]);
+  sm.close();
+});
