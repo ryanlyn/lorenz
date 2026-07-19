@@ -78,7 +78,8 @@ interface RuntimeTrackerClient {
   below.
 - `fetchIssueEvents(issueId, sinceTs, query)` recovers events missed across a change-stream or
   run-lifecycle gap. It is optional for providers that never publish issue events. Each event uses a
-  unique, canonical non-negative decimal `ts` key. Return the oldest events newer than `sinceTs` in
+  unique positive decimal `ts` key. Zero is reserved for the empty snapshot cursor. Return the
+  oldest events newer than `sinceTs` in
   ascending order, limited by `query.maxEvents` and `query.maxBytes`, and set `hasMore` when another
   page is available. Stop the request when `query.abortSignal` aborts. If one message exceeds the
   page byte limit, use `boundTrackerIssueEventText` from `@lorenz/domain` to preserve its ordering

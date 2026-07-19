@@ -725,7 +725,7 @@ export interface WorkflowDefinition {
 
 /** One human-authored tracker event, such as a reply on an issue thread. */
 export interface TrackerIssueEvent {
-  /** Unique tracker-native ordering key encoded as a canonical non-negative decimal string. */
+  /** Unique tracker-native ordering key encoded as a positive decimal string. Zero is reserved for an empty snapshot cursor. */
   ts: string;
   /** True only after the tracker provider authorizes this event to steer an agent. */
   authorizedForSteering: boolean;
@@ -870,7 +870,8 @@ export interface RuntimeTrackerClient {
     onChange: (change?: TrackerChange) => void,
   ): TrackerChangeStream | null | Promise<TrackerChangeStream | null>;
   /**
-   * Optional recovery feed for human-authored issue events newer than `sinceTs`. Each page
+   * Optional recovery feed for human-authored issue events newer than `sinceTs`. Each event key
+   * is a positive decimal string; zero is reserved for the empty snapshot cursor. Each page
    * contains the oldest matching events in ascending order and must obey both query bounds.
    * `"0"` means from the beginning. Set `hasMore` when newer matching events remain so callers
    * can advance through accepted pages without skipping events. Tracker issue snapshots provide

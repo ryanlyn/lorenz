@@ -330,7 +330,8 @@ class RunController {
       if (
         steeringSnapshotCursorTs !== null &&
         steeringSnapshotCursorTs !== undefined &&
-        !decimalOrderingKey(steeringSnapshotCursorTs)
+        steeringSnapshotCursorTs !== "0" &&
+        !positiveDecimalOrderingKey(steeringSnapshotCursorTs)
       ) {
         throw new Error(`invalid tracker issue event ordering key: ${steeringSnapshotCursorTs}`);
       }
@@ -819,7 +820,7 @@ function freshSteeringEvents(
   const invalidTs: string[] = [];
   const fresh = events
     .filter((event) => {
-      if (!decimalOrderingKey(event.ts)) {
+      if (!positiveDecimalOrderingKey(event.ts)) {
         invalidTs.push(event.ts);
         return false;
       }
@@ -968,7 +969,7 @@ function utf8Suffix(value: string, maxBytes: number): string {
 function maxSteeringTs(events: TrackerIssueEvent[], current: string): string {
   let max = current;
   for (const event of events) {
-    if (!decimalOrderingKey(event.ts)) continue;
+    if (!positiveDecimalOrderingKey(event.ts)) continue;
     if (compareSteeringTs(event.ts, max) > 0) max = event.ts;
   }
   return max;
@@ -1026,6 +1027,12 @@ function decimalOrderingKey(value: string): { integer: string; fraction: string 
     integer: match[1]!.replace(/^0+(?=\d)/, ""),
     fraction: (match[2] ?? "").replace(/0+$/, ""),
   };
+}
+
+function positiveDecimalOrderingKey(value: string): { integer: string; fraction: string } | null {
+  const key = decimalOrderingKey(value);
+  if (!key || (key.integer === "0" && key.fraction === "")) return null;
+  return key;
 }
 
 function removePendingActivity(pending: TurnActivity[], activity: TurnActivity): void {

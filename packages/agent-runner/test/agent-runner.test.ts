@@ -213,7 +213,7 @@ test("live delivery ignores events represented by the initial issue snapshot", a
   assert.match(queuedPrompts[0]!, /new steering/);
 });
 
-test("live delivery preserves valid events beside a malformed ordering key", async () => {
+test("live delivery preserves valid events beside invalid and reserved ordering keys", async () => {
   const settings = fakeSettings({ agent: { ...defaultSettings().agent, maxTurns: 1 } });
   const queuedPrompts: string[] = [];
   const updates: AgentUpdate[] = [];
@@ -265,6 +265,12 @@ test("live delivery preserves valid events beside a malformed ordering key", asy
       author: "ryan",
       text: "malformed metadata",
     },
+    {
+      authorizedForSteering: true,
+      ts: "0.0",
+      author: "ryan",
+      text: "reserved cursor boundary",
+    },
     { authorizedForSteering: true, ts: "11.0", author: "ryan", text: "valid steering" },
   ]);
   await vi.waitFor(() => assert.equal(queuedPrompts.length, 1));
@@ -273,13 +279,14 @@ test("live delivery preserves valid events beside a malformed ordering key", asy
   const result = await attempt;
   assert.equal(result.turnCount, 2);
   assert.notMatch(queuedPrompts[0]!, /malformed metadata/);
+  assert.notMatch(queuedPrompts[0]!, /reserved cursor boundary/);
   assert.match(queuedPrompts[0]!, /valid steering/);
   assert.ok(
     updates.some(
       (update) =>
         update.type === "stderr" &&
         update.message.includes(
-          "Ignoring steering event validation failure: invalid ordering keys: not-a-decimal",
+          "Ignoring steering event validation failure: invalid ordering keys: not-a-decimal, 0.0",
         ),
     ),
   );
