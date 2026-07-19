@@ -343,10 +343,17 @@ test("every accepted hello reconciles its API-to-feed gap and reports connection
   const second = new FakeSocket();
   let reconnects = 0;
   const states: boolean[] = [];
+  const readyOrder: string[] = [];
   const sm = makeSocketMode({
     onChange: () => {},
-    onReconnect: () => (reconnects += 1),
-    onConnectionState: (connected) => states.push(connected),
+    onReconnect: () => {
+      reconnects += 1;
+      readyOrder.push("reconcile");
+    },
+    onConnectionState: (connected) => {
+      states.push(connected);
+      if (connected) readyOrder.push("healthy");
+    },
     socketQueue: [first, second],
     reconnectDelayMs: () => 0,
   });
@@ -356,6 +363,7 @@ test("every accepted hello reconciles its API-to-feed gap and reports connection
   first.receive({ type: "hello" });
   assert.equal(reconnects, 1);
   assert.deepEqual(states, [true]);
+  assert.deepEqual(readyOrder, ["healthy", "reconcile"]);
 
   first.close();
   await vi.waitFor(() => assert.ok(second.hasListener("message")));
@@ -363,6 +371,7 @@ test("every accepted hello reconciles its API-to-feed gap and reports connection
 
   assert.equal(reconnects, 2);
   assert.deepEqual(states, [true, false, true]);
+  assert.deepEqual(readyOrder, ["healthy", "reconcile", "healthy", "reconcile"]);
   sm.close();
 });
 

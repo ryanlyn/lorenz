@@ -101,8 +101,8 @@ export async function updateSlackStatus(
   // The reply text stays human-readable (`status: <Name>`, plus an optional attribution line for
   // e.g. button-initiated transitions), while the metadata is the machine-readable event the
   // fold prefers: only the posting app can attach metadata, so it cannot be forged, and the
-  // unique `seq` upgrades delivery to exactly-once (an ambiguous outcome reconciles against the
-  // thread instead of silently losing - or duplicating - a transition).
+  // unique `seq` lets an ambiguous outcome recover when the original reply is already visible in
+  // the thread. If it is not visible yet, the post remains at-most-once and fails without retry.
   await postStatusReply(transport, channel, ts, canonical, options);
   await mirrorStatusReaction(settings, transport, channel, ts, canonical, root.botReactions);
   return { ok: true, status: canonical, root };

@@ -286,9 +286,14 @@ export class SlackTrackerClient implements RuntimeTrackerClient {
           nudge: () => onChange(),
         });
       },
-      // Each accepted connection closes the gap after the preceding API snapshot; while
-      // disconnected the mirror refuses to serve at all (connection-state gate).
-      onReconnect: () => this.channelMirror?.markAllDirty("socket connection ready"),
+      // Each accepted connection closes the gap after the preceding API snapshot. Clear both
+      // cache layers and nudge immediately so activity missed while disconnected is reconciled
+      // now, independently of the configured polling interval.
+      onReconnect: () => {
+        this.channelMirror?.markAllDirty("socket connection ready");
+        this.scanCache = null;
+        onChange();
+      },
       onConnectionState: (connected) => this.channelMirror?.setSocketHealthy(connected),
     });
     socket.start();

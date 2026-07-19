@@ -971,6 +971,72 @@ test("watch opens Socket Mode with the resolved app token and watched channels",
   assert.equal(closed, true);
 });
 
+test("an accepted Socket Mode connection invalidates scans and nudges reconciliation", async () => {
+  const transport = new InMemorySlackTransport({ C1: [] });
+  let scans = 0;
+  let includeMissedIssue = false;
+  transport.scanChannels = async () => {
+    scans += 1;
+    return {
+      mentions: [
+        {
+          channel: "C1",
+          ts: "1.0",
+          text: "<@U_BOT> before connection",
+          user: "U1",
+          reactions: [],
+          botReactions: [],
+        },
+        ...(includeMissedIssue
+          ? [
+              {
+                channel: "C1",
+                ts: "2.0",
+                text: "<@U_BOT> arrived while disconnected",
+                user: "U2",
+                reactions: [],
+                botReactions: [],
+              },
+            ]
+          : []),
+      ],
+      threadedRoots: [],
+    };
+  };
+  const withApp = parseSlackConfig(
+    {
+      tracker: {
+        kind: "slack",
+        channels: ["C1"],
+        bot_user_id: "U_BOT",
+        active_states: ["Todo"],
+      },
+    },
+    { SLACK_BOT_TOKEN: "xoxb-test", SLACK_APP_TOKEN: "xapp-123" },
+  );
+  let opened: SlackSocketModeOptions | null = null;
+  const client = new SlackTrackerClient(withApp, transport, (options) => {
+    opened = options;
+    return { start: () => {}, close: () => {} } as unknown as SlackSocketMode;
+  });
+
+  assert.equal((await client.fetchCandidateIssues()).length, 1);
+  assert.equal(scans, 1);
+  includeMissedIssue = true;
+  const changes: Array<TrackerChange | undefined> = [];
+  client.watch((change) => changes.push(change));
+  const opts = opened as unknown as SlackSocketModeOptions;
+  opts.onConnectionState?.(true);
+  opts.onReconnect?.();
+
+  assert.deepEqual(changes, [undefined]);
+  assert.deepEqual(
+    (await client.fetchCandidateIssues()).map((issue) => issue.id),
+    ["C1:1.0", "C1:2.0"],
+  );
+  assert.equal(scans, 2);
+});
+
 test("watch applies steering policy while admitting thread broadcasts", () => {
   const transport = new InMemorySlackTransport({ C1: [] });
   const withApp = parseSlackConfig(

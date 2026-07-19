@@ -157,11 +157,11 @@ export interface SlackTransport {
   removeReaction(channel: string, ts: string, name: string): Promise<void>;
   /**
    * Post a thread reply and return its ts. `options.metadata` attaches machine-readable message
-   * metadata AND upgrades the delivery contract: a metadata-bearing post that fails ambiguously
-   * (5xx/network after the request was sent) is reconciled against the thread by its unique
-   * metadata marker instead of being reported failed - exactly-once, where a bare post can only
-   * promise at-most-once. `options.blocks` attaches Block Kit blocks with `body` as fallback.
-   * Every body is broadcast-sanitized (see sanitize.ts).
+   * metadata and gives an ambiguous post (5xx/network after the request was sent) a recovery
+   * marker. If the original reply is already visible, reconciliation returns its ts. Otherwise
+   * the post fails at-most-once without retrying because marker absence cannot prove that Slack
+   * will not finish the original request. `options.blocks` attaches Block Kit blocks with `body`
+   * as fallback. Every body is broadcast-sanitized (see sanitize.ts).
    */
   postReply(
     channel: string,

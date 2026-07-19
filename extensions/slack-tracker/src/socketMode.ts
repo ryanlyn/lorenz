@@ -244,9 +244,10 @@ export class SlackSocketMode implements TrackerChangeStream {
       this.reconnectAttempts = 0;
       this.connected = true;
       // This includes the first hello: a bootstrap scan may have completed while the socket was
-      // opening, so every accepted connection closes its preceding API-to-feed gap.
-      this.safeNotify(this.onReconnect, "onReconnect");
+      // opening, so every accepted connection closes its preceding API-to-feed gap. Publish the
+      // healthy edge first so the reconciliation nudge can serve the newly accepted feed.
       this.safeNotify(() => this.onConnectionState?.(true), "onConnectionState");
+      this.safeNotify(this.onReconnect, "onReconnect");
       return;
     }
 

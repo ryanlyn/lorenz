@@ -351,6 +351,28 @@ test("a definitive missing-message error reposts the workpad", async () => {
   assert.equal(transport.replies.length, 1);
 });
 
+test("a closed Slack edit window reposts the workpad", async () => {
+  const transport = new InMemorySlackTransport(
+    { C1: [{ ts: "1.0", text: "<@U_BOT> do it", user: "U2" }] },
+    { botUserId: "U_BOT" },
+  );
+  transport.updateMessage = async () => {
+    throw new SlackApiError("chat.update", "edit_window_closed");
+  };
+
+  const ts = await upsertWorkpad(
+    settings(),
+    transport,
+    "C1",
+    "1.0",
+    { issueId: "C1:1.0", note: "current progress" },
+    { ts: "1.5", note: "old progress" },
+  );
+
+  assert.ok(ts !== "1.5");
+  assert.equal(transport.replies.length, 1);
+});
+
 // ------------------------------------------------------------------ interactions
 
 test("the Cancel button posts an attributed authoritative status reply and nudges", async () => {
@@ -594,16 +616,17 @@ test("an ambiguous status post reconciles by its metadata marker instead of fail
   assert.equal(calls.filter((u) => u.includes("chat.postMessage")).length, 1);
 });
 
-test("when the marker is absent the post provably failed and is safely retried", async () => {
+test("a marker miss preserves at-most-once delivery for an ambiguous HTTP response", async () => {
   let postAttempts = 0;
+  let replyReads = 0;
   const fetchImpl = (async (url: string | URL) => {
     const u = String(url);
     if (u.includes("chat.postMessage")) {
       postAttempts += 1;
-      if (postAttempts === 1) return jsonResponse({ ok: false }, 503);
-      return jsonResponse({ ok: true, ts: "2.5" });
+      return jsonResponse({ ok: false }, 503);
     }
     if (u.includes("conversations.replies")) {
+      replyReads += 1;
       return jsonResponse({ ok: true, messages: [{ ts: "1.0", text: "root" }] });
     }
     return jsonResponse({ ok: true, messages: [] });
@@ -618,45 +641,32 @@ test("when the marker is absent the post provably failed and is safely retried",
     () => Promise.resolve(),
     silentLogger,
   );
-  const ts = await transport.postReply("C1", "1.0", "status: Done", {
-    metadata: {
-      eventType: STATUS_METADATA_EVENT,
-      payload: { issue: "C1:1.0", state: "Done", seq: "seq-2" },
-    },
-  });
-  assert.equal(ts, "2.5");
-  assert.equal(postAttempts, 2);
+  await assert.rejects(
+    () =>
+      transport.postReply("C1", "1.0", "status: Done", {
+        metadata: {
+          eventType: STATUS_METADATA_EVENT,
+          payload: { issue: "C1:1.0", state: "Done", seq: "seq-2" },
+        },
+      }),
+    /chat\.postMessage.*503/,
+  );
+  assert.equal(postAttempts, 1);
+  assert.equal(replyReads, 1);
 });
 
-test("the final ambiguous post attempt is reconciled before failing", async () => {
+test("a marker miss preserves at-most-once delivery after a network failure", async () => {
   let postAttempts = 0;
   let replyReads = 0;
   const fetchImpl = (async (url: string | URL) => {
     const u = String(url);
     if (u.includes("chat.postMessage")) {
       postAttempts += 1;
-      return jsonResponse({ ok: false }, 503);
+      throw new Error("connection closed");
     }
     if (u.includes("conversations.replies")) {
       replyReads += 1;
-      return jsonResponse({
-        ok: true,
-        messages:
-          postAttempts === 3
-            ? [
-                { ts: "1.0", text: "root" },
-                {
-                  ts: "1.9",
-                  text: "status: Done",
-                  user: "U1",
-                  metadata: {
-                    event_type: STATUS_METADATA_EVENT,
-                    event_payload: { issue: "C1:1.0", state: "Done", seq: "seq-final" },
-                  },
-                },
-              ]
-            : [{ ts: "1.0", text: "root" }],
-      });
+      return jsonResponse({ ok: true, messages: [{ ts: "1.0", text: "root" }] });
     }
     return jsonResponse({ ok: true, messages: [] });
   }) as typeof fetch;
@@ -670,16 +680,18 @@ test("the final ambiguous post attempt is reconciled before failing", async () =
     silentLogger,
   );
 
-  const ts = await transport.postReply("C1", "1.0", "status: Done", {
-    metadata: {
-      eventType: STATUS_METADATA_EVENT,
-      payload: { issue: "C1:1.0", state: "Done", seq: "seq-final" },
-    },
-  });
-
-  assert.equal(ts, "1.9");
-  assert.equal(postAttempts, 3);
-  assert.equal(replyReads, 3);
+  await assert.rejects(
+    () =>
+      transport.postReply("C1", "1.0", "status: Done", {
+        metadata: {
+          eventType: STATUS_METADATA_EVENT,
+          payload: { issue: "C1:1.0", state: "Done", seq: "seq-network" },
+        },
+      }),
+    /chat\.postMessage.*connection closed/,
+  );
+  assert.equal(postAttempts, 1);
+  assert.equal(replyReads, 1);
 });
 
 test("a failed reconciliation read never retries an ambiguous post", async () => {

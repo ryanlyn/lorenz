@@ -416,10 +416,10 @@ export class SlackWebTransport implements SlackTransport {
     // chat.postMessage is NOT idempotent: a blind retry posts a DUPLICATE reply. It may retry
     // internally only on a 429 (rejected before processing). An AMBIGUOUS outcome - a 5xx or a
     // network/timeout failure after the request was sent, where the reply may or may not have
-    // been delivered - is resolved by metadata reconciliation when the post carries a unique
-    // marker (`metadata.payload.seq`): scan the thread for the marker; found means the original
-    // send landed (return its real ts), not found proves it did not (a retry cannot duplicate).
-    // Without a marker, ambiguous outcomes fail loudly.
+    // been delivered - is checked by metadata reconciliation when the post carries a unique
+    // marker (`metadata.payload.seq`). A found marker recovers the original send's real ts. An
+    // absent marker is not proof of non-delivery because Slack may still be processing or
+    // indexing the post, so the ambiguous error is surfaced without retrying.
     const params: Record<string, unknown> = {
       channel,
       thread_ts: threadTs,
@@ -433,31 +433,27 @@ export class SlackWebTransport implements SlackTransport {
       };
     }
     const marker = reconcilableMarker(options.metadata);
-    for (let attempt = 0; ; attempt += 1) {
-      try {
-        const response = await this.post("chat.postMessage", params, { idempotent: false });
-        return typeof response.ts === "string" ? response.ts : "";
-      } catch (error) {
-        if (marker === null || !(error instanceof SlackAmbiguousDeliveryError)) {
-          throw error;
-        }
-        this.logger.warn(
-          `slack chat.postMessage outcome unknown (${errorMessage(error)}); reconciling by ` +
-            `metadata marker before retrying`,
-        );
-        const deliveredTs = await this.findReplyByMarker(channel, threadTs, marker);
-        if (deliveredTs !== null) return deliveredTs;
-        if (attempt >= 2) throw error;
-        // Marker absent from the thread: the ambiguous send provably did not land, so a retry
-        // cannot duplicate it. Loop and post again.
+    try {
+      const response = await this.post("chat.postMessage", params, { idempotent: false });
+      return typeof response.ts === "string" ? response.ts : "";
+    } catch (error) {
+      if (marker === null || !(error instanceof SlackAmbiguousDeliveryError)) {
+        throw error;
       }
+      this.logger.warn(
+        `slack chat.postMessage outcome unknown (${errorMessage(error)}); checking the ` +
+          `metadata marker before surfacing failure`,
+      );
+      const deliveredTs = await this.findReplyByMarker(channel, threadTs, marker);
+      if (deliveredTs !== null) return deliveredTs;
+      throw error;
     }
   }
 
   /**
    * Scan the complete thread for this bot's reply carrying the metadata marker. A read failure or
-   * safety-cap truncation propagates: absence proves a retry is safe only after an authoritative
-   * scan reaches the end of the thread.
+   * safety-cap truncation propagates. A complete scan can recover an already-visible send, but
+   * absence never authorizes another non-idempotent post.
    */
   private async findReplyByMarker(
     channel: string,
@@ -734,8 +730,8 @@ export function toMessageMetadata(
 }
 
 /**
- * An ambiguous write outcome: the request may or may not have been applied. postReply resolves
- * these by metadata-marker reconciliation; everything else propagates them as plain failures.
+ * An ambiguous write outcome: the request may or may not have been applied. postReply can recover
+ * one whose metadata marker is already visible; it never retries an unresolved send.
  */
 class SlackAmbiguousDeliveryError extends Error {
   constructor(message: string, cause?: unknown) {

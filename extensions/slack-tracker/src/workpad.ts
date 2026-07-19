@@ -153,7 +153,9 @@ export async function upsertWorkpad(
     } catch (error) {
       if (
         !(error instanceof SlackApiError) ||
-        (error.code !== "message_not_found" && error.code !== "cant_update_message")
+        (error.code !== "message_not_found" &&
+          error.code !== "cant_update_message" &&
+          error.code !== "edit_window_closed")
       ) {
         throw error;
       }

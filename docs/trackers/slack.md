@@ -166,11 +166,11 @@ Two event kinds count:
 - **Bot `status:` replies.** `slack_update_status` writes these. Each carries Slack **message
   metadata** (`lorenz_status` with the canonical state and a unique `seq`), which the fold
   prefers over text parsing: only the posting app can attach metadata, so it cannot be forged,
-  and the text is free to carry extra lines (for example a Cancel-button attribution). Replies
-  Bot replies without metadata still fold through the `^status:\s*(.+)$` regex (case-insensitive).
-  The `seq` also upgrades delivery to exactly-once: an ambiguous outcome (5xx/timeout after the
-  request was sent) is reconciled against the thread by its marker instead of silently losing -
-  or duplicating - a transition.
+  and the text is free to carry extra lines (for example a Cancel-button attribution). Bot
+  replies without metadata still fold through the `^status:\s*(.+)$` regex (case-insensitive).
+  The `seq` also provides an ambiguity-recovery marker: after a 5xx/timeout, an already-visible
+  original reply is recovered from the thread. A marker miss never triggers a retry because the
+  original request may still complete or become visible later.
 - **Human `!`-command mentions.** A reply that starts with the bot mention followed by a
   `!`-prefixed body.
 
@@ -305,10 +305,10 @@ replies are recovered between turns rather than pushed during an executing turn.
 
 Reads retry on 429 and 5xx. Each retry wait is logged so a rate-limited scan is visible in daemon
 logs instead of looking hung. `chat.postMessage` retries only on 429, never blindly on an
-ambiguous 5xx, since it is non-idempotent - but metadata-marked posts (`status:` replies, the
-workpad) resolve ambiguity by scanning the thread for their unique marker: found means the send
-landed (no duplicate), and a successful read with no marker proves a retry is safe. A failed
-reconciliation read fails loudly without retrying the post. Reaction writes are idempotent:
+ambiguous 5xx, since it is non-idempotent. Metadata-marked posts (`status:` replies, the workpad)
+check the thread for their unique marker: found means the original send is recovered, while a miss
+still fails without retry because Slack may finish or index the request later. A failed
+reconciliation read also fails without retrying the post. Reaction writes are idempotent:
 Slack's `already_reacted` and `no_reaction` errors are treated as success. Backoff is
 exponential with jitter, honors `Retry-After`, and is capped, with a 30-second request timeout.
 
@@ -321,7 +321,8 @@ still belong in `slack_comment` replies). The workpad is recognized by its `lore
 message metadata, which also round-trips the plan/note so partial updates and restarts never lose
 a section. It is a display surface, never state. Status remains in the thread event fold and the
 bot-owned reaction mirror, so workpad updates only touch plan and note content. A workpad that
-cannot be edited because Slack definitively rejects its stored message identity is reposted.
+cannot be edited because Slack rejects its stored message identity or the workspace's edit window
+has closed is reposted.
 The top-level plain-text fallback includes the plan and note for clients and accessibility tools
 that do not render Block Kit content. Plan and note share one bounded content budget, so the
 fallback and message metadata remain valid when an update supplies unusually long sections.
