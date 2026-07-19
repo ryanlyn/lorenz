@@ -1,7 +1,11 @@
 import { assert } from "@lorenz/test-utils";
 import { test } from "vitest";
 
-import { withDerivedMaxInFlight } from "@lorenz/domain";
+import {
+  boundTrackerIssueEventText,
+  trackerIssueEventsBytes,
+  withDerivedMaxInFlight,
+} from "@lorenz/domain";
 import type {
   WorkerDriverKind,
   WorkerPoolSettings,
@@ -190,4 +194,35 @@ test("RunningEntry.workerHost is optional and concrete-or-null", () => {
   assert.equal(runningEntryFixture.workerHost, undefined);
   const withHost: RunningEntry = { ...runningEntryFixture, workerHost: "user@host-a:22" };
   assert.equal(withHost.workerHost, "user@host-a:22");
+});
+
+test("boundTrackerIssueEventText preserves event identity within a byte limit", () => {
+  const event = {
+    ts: "11.0",
+    author: "ryan",
+    text: `prefix-marker${"🙂".repeat(30_000)}tail-marker`,
+  };
+  const bounded = boundTrackerIssueEventText(event, 64 * 1024);
+
+  assert.ok(bounded);
+  assert.equal(bounded.ts, event.ts);
+  assert.equal(bounded.author, event.author);
+  assert.match(bounded.text, /^prefix-marker/);
+  assert.match(bounded.text, /tail-marker$/);
+  assert.match(bounded.text, /\[message shortened for live delivery/);
+  assert.ok(trackerIssueEventsBytes([bounded]) <= 64 * 1024);
+});
+
+test("boundTrackerIssueEventText rejects metadata that leaves no text marker space", () => {
+  assert.equal(
+    boundTrackerIssueEventText(
+      {
+        ts: "1".repeat(64),
+        author: "ryan",
+        text: "message",
+      },
+      64,
+    ),
+    null,
+  );
 });

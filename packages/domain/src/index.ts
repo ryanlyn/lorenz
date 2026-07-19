@@ -746,6 +746,71 @@ export interface TrackerIssueEventPage {
   hasMore: boolean;
 }
 
+/** Aggregate UTF-8 content bytes for tracker issue events. */
+export function trackerIssueEventsBytes(events: readonly TrackerIssueEvent[]): number {
+  let bytes = 0;
+  for (const event of events) {
+    bytes += Buffer.byteLength(event.ts);
+    bytes += Buffer.byteLength(event.author ?? "");
+    bytes += Buffer.byteLength(event.text);
+  }
+  return bytes;
+}
+
+/**
+ * Fits one event within a live-delivery byte limit by shortening only its text. The ordering key
+ * and author remain unchanged so deduplication and attribution keep their tracker-native meaning.
+ * Returns `null` when metadata alone leaves no room for a shortening marker.
+ */
+export function boundTrackerIssueEventText(
+  event: TrackerIssueEvent,
+  maxBytes: number,
+): TrackerIssueEvent | null {
+  if (trackerIssueEventsBytes([event]) <= maxBytes) return event;
+  const metadataBytes = Buffer.byteLength(event.ts) + Buffer.byteLength(event.author ?? "");
+  const marker =
+    "\n[message shortened for live delivery; the complete message remains on the issue]\n";
+  const availableTextBytes = maxBytes - metadataBytes;
+  const markerBytes = Buffer.byteLength(marker);
+  if (availableTextBytes < markerBytes) return null;
+  const contentBytes = availableTextBytes - markerBytes;
+  const prefixBytes = Math.ceil(contentBytes / 2);
+  const suffixBytes = Math.floor(contentBytes / 2);
+  return {
+    ...event,
+    text: `${utf8Prefix(event.text, prefixBytes)}${marker}${utf8Suffix(event.text, suffixBytes)}`,
+  };
+}
+
+function utf8Prefix(value: string, maxBytes: number): string {
+  const parts: string[] = [];
+  let bytes = 0;
+  for (const character of value) {
+    const characterBytes = Buffer.byteLength(character);
+    if (bytes + characterBytes > maxBytes) break;
+    parts.push(character);
+    bytes += characterBytes;
+  }
+  return parts.join("");
+}
+
+function utf8Suffix(value: string, maxBytes: number): string {
+  const parts: string[] = [];
+  let bytes = 0;
+  for (let end = value.length; end > 0; ) {
+    let start = end - 1;
+    const trailing = value.charCodeAt(start);
+    if (trailing >= 0xdc00 && trailing <= 0xdfff && start > 0) start -= 1;
+    const character = value.slice(start, end);
+    const characterBytes = Buffer.byteLength(character);
+    if (bytes + characterBytes > maxBytes) break;
+    parts.push(character);
+    bytes += characterBytes;
+    end = start;
+  }
+  return parts.reverse().join("");
+}
+
 /** Structured data attached to a tracker change notification. */
 export interface TrackerChange {
   /** Human-authored events that can steer every active run for this issue. */

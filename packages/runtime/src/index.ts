@@ -8,11 +8,13 @@ import { ProjectionActor } from "@lorenz/projections";
 import { RetryScheduler } from "@lorenz/retry-scheduler";
 import { workflowFileChanged, workflowStampsEqual } from "@lorenz/workflow";
 import {
+  boundTrackerIssueEventText,
   durationMs,
   errorMessage,
   redactDiagnosticText,
   redactDiagnosticValue,
   systemClock,
+  trackerIssueEventsBytes,
   withDerivedMaxInFlight,
   type ClockPort,
   type TimerHandle,
@@ -329,11 +331,16 @@ class ActiveRunHandle {
   publishIssueEvents(events: TrackerIssueEvent[]): void {
     if (!this.isActive || this.issueEventDeliveryClosed || events.length === 0) return;
     if (this.issueEventListeners.size === 0) {
-      const batchBytes = issueEventBytes(events);
-      if (this.pendingIssueEventBytes + batchBytes <= maxPendingIssueEventBytes) {
-        this.pendingIssueEventBatches.push(events);
-        this.pendingIssueEventBytes += batchBytes;
+      const boundedEvents: TrackerIssueEvent[] = [];
+      for (const event of events) {
+        const bounded = boundTrackerIssueEventText(event, maxPendingIssueEventBytes);
+        if (!bounded) continue;
+        const eventBytes = trackerIssueEventsBytes([bounded]);
+        if (this.pendingIssueEventBytes + eventBytes > maxPendingIssueEventBytes) continue;
+        boundedEvents.push(bounded);
+        this.pendingIssueEventBytes += eventBytes;
       }
+      if (boundedEvents.length > 0) this.pendingIssueEventBatches.push(boundedEvents);
       return;
     }
     for (const listener of this.issueEventListeners) listener(events);
@@ -674,6 +681,14 @@ export class LorenzRuntime {
     return false;
   }
 
+  private hasForeignActiveRunOwnership(issueId: string): boolean {
+    for (const handle of this.activeRuns.values()) {
+      if (handle.issueId !== issueId) continue;
+      if (handle.trackerClient !== this.client || handle.workflow !== this.workflow) return true;
+    }
+    return false;
+  }
+
   private retireTrackerClientStream(client: RuntimeTrackerClient): void {
     if (client === this.client || this.hasActiveRunsForTrackerClient(client)) return;
     void this.closeChangeStream(client);
@@ -817,6 +832,10 @@ export class LorenzRuntime {
   }
 
   private async maybeDispatch(issue: Issue): Promise<Array<Promise<void>>> {
+    if (this.hasForeignActiveRunOwnership(issue.id)) {
+      this.addEvent("dispatch_skipped", `${issue.identifier} retained_run_ownership`);
+      return [];
+    }
     const refreshed = await this.fetchIssueForDispatch(issue);
     if (!refreshed) {
       this.addEvent("dispatch_skipped", `${issue.identifier} missing_before_dispatch`);
@@ -1415,6 +1434,7 @@ export class LorenzRuntime {
     const snapshot = await this.orchestrator.snapshotAsync();
     const empty: ReconcileOutcome = { dueRetryCandidates: [], retryTimerIssues: [] };
     const dueRetryIds = new Set<string>();
+    const mixedOwnershipIssueIds = new Set<string>();
     const tracked = new Map<
       string,
       {
@@ -1426,13 +1446,36 @@ export class LorenzRuntime {
         workspacePath?: string | null | undefined;
       }
     >();
+    const track = (
+      issueId: string,
+      meta: {
+        kind: "claim" | "retry";
+        identifier: string;
+        trackerClient: RuntimeTrackerClient;
+        workflow: WorkflowDefinition;
+        workerHost?: string | null | undefined;
+        workspacePath?: string | null | undefined;
+      },
+    ): void => {
+      if (mixedOwnershipIssueIds.has(issueId)) return;
+      const existing = tracked.get(issueId);
+      if (
+        existing &&
+        (existing.trackerClient !== meta.trackerClient || existing.workflow !== meta.workflow)
+      ) {
+        tracked.delete(issueId);
+        mixedOwnershipIssueIds.add(issueId);
+        return;
+      }
+      tracked.set(issueId, meta);
+    };
     // Reserving (in-acquire) slots are tracked host-less so an issue that goes
     // terminal mid-acquire is still aborted and cleaned up; running/retrying
     // entries below override with their richer metadata when present.
     for (const entry of snapshot.reserving) {
       if (!(await this.orchestrator.ownsClaimAsync(entry.issueId, entry.slotIndex))) continue;
       const handle = this.activeRuns.get(slotKey(entry.issueId, entry.slotIndex));
-      tracked.set(entry.issueId, {
+      track(entry.issueId, {
         kind: "claim",
         identifier: entry.identifier,
         trackerClient: handle?.trackerClient ?? this.client,
@@ -1444,7 +1487,7 @@ export class LorenzRuntime {
     for (const entry of snapshot.running) {
       if (!(await this.orchestrator.ownsClaimAsync(entry.issue.id, entry.slotIndex))) continue;
       const handle = this.activeRuns.get(slotKey(entry.issue.id, entry.slotIndex));
-      tracked.set(entry.issue.id, {
+      track(entry.issue.id, {
         kind: "claim",
         identifier: entry.issue.identifier,
         trackerClient: handle?.trackerClient ?? this.client,
@@ -1455,8 +1498,8 @@ export class LorenzRuntime {
     }
     for (const entry of snapshot.retrying) {
       if (this.retrySnapshotIsDue(entry)) dueRetryIds.add(entry.issueId);
-      if (tracked.has(entry.issueId)) continue;
-      tracked.set(entry.issueId, {
+      if (tracked.has(entry.issueId) || mixedOwnershipIssueIds.has(entry.issueId)) continue;
+      track(entry.issueId, {
         kind: "retry",
         identifier: entry.identifier,
         trackerClient: this.client,
@@ -1464,6 +1507,9 @@ export class LorenzRuntime {
         workerHost: entry.workerHost,
         workspacePath: entry.workspacePath,
       });
+    }
+    for (const issueId of mixedOwnershipIssueIds) {
+      this.addEvent("reconcile_refresh_failed", `mixed tracker ownership for issue ${issueId}`);
     }
     if (tracked.size === 0) return empty;
 
@@ -1960,16 +2006,6 @@ function hookExecutionRuntimeMessage(
 
 function inlineLogValue(value: string): string {
   return JSON.stringify(value.replace(/\s+/g, " ").trim());
-}
-
-function issueEventBytes(events: readonly TrackerIssueEvent[]): number {
-  let bytes = 0;
-  for (const event of events) {
-    bytes += Buffer.byteLength(event.ts);
-    bytes += Buffer.byteLength(event.author ?? "");
-    bytes += Buffer.byteLength(event.text);
-  }
-  return bytes;
 }
 
 async function delay(clock: ClockPort, ms: number, stopped: () => boolean): Promise<void> {

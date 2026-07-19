@@ -4,7 +4,9 @@ import type { AgentMcpEndpointLease } from "@lorenz/mcp";
 import { ensembleSize } from "@lorenz/issue";
 import { buildPrompt, continuationPrompt, issueEventsPrompt } from "@lorenz/prompt";
 import {
+  boundTrackerIssueEventText,
   errorMessage,
+  trackerIssueEventsBytes,
   type AgentExecutor,
   type AgentSession,
   type AgentUpdate,
@@ -144,13 +146,20 @@ class RunController {
     let bufferedIssueEventBytes = 0;
     let issueEventBufferOverflow = false;
     const bufferIssueEvents = (events: TrackerIssueEvent[]): void => {
-      const batchBytes = issueEventBytes(events);
-      if (bufferedIssueEventBytes + batchBytes > maxBufferedIssueEventBytes) {
-        issueEventBufferOverflow = true;
-        return;
+      for (const event of events) {
+        const bounded = boundTrackerIssueEventText(event, maxBufferedIssueEventBytes);
+        if (!bounded) {
+          issueEventBufferOverflow = true;
+          continue;
+        }
+        const eventBytes = trackerIssueEventsBytes([bounded]);
+        if (bufferedIssueEventBytes + eventBytes > maxBufferedIssueEventBytes) {
+          issueEventBufferOverflow = true;
+          continue;
+        }
+        bufferedIssueEvents.push(bounded);
+        bufferedIssueEventBytes += eventBytes;
       }
-      bufferedIssueEvents.push(...events);
-      bufferedIssueEventBytes += batchBytes;
     };
     let receiveIssueEvents = (events: TrackerIssueEvent[]): void => {
       bufferIssueEvents(events);
@@ -461,12 +470,20 @@ class RunController {
             "buffer",
             new Error("pending issue messages exceeded the live-delivery buffer"),
           );
+          issueEventBufferOverflow = false;
         }
         await enqueueSteeringFlush(false);
       };
 
       receiveIssueEvents = (events) => {
         bufferIssueEvents(events);
+        if (issueEventBufferOverflow) {
+          reportSteeringFailure(
+            "buffer",
+            new Error("pending issue messages exceeded the live-delivery buffer"),
+          );
+          issueEventBufferOverflow = false;
+        }
         if (steeringReady) scheduleOptionalSteeringFlush();
       };
 
@@ -790,7 +807,7 @@ function steeringEventChunk(
   let bytes = 0;
   for (let index = start; index < events.length; index += 1) {
     const event = events[index]!;
-    const eventBytes = issueEventBytes([event]);
+    const eventBytes = trackerIssueEventsBytes([event]);
     if (candidates.length === 0 && eventBytes > maxBytes)
       return shortenedEventChunk(event, maxBytes);
     if (bytes + eventBytes > maxBytes) break;
@@ -914,16 +931,6 @@ function maxSteeringTs(events: TrackerIssueEvent[], current: string): string {
   return max;
 }
 
-function issueEventBytes(events: readonly TrackerIssueEvent[]): number {
-  let bytes = 0;
-  for (const event of events) {
-    bytes += Buffer.byteLength(event.ts);
-    bytes += Buffer.byteLength(event.author ?? "");
-    bytes += Buffer.byteLength(event.text);
-  }
-  return bytes;
-}
-
 function validateIssueEventPage(
   page: TrackerIssueEventPage,
   maxEvents: number,
@@ -934,7 +941,7 @@ function validateIssueEventPage(
       `tracker issue event page exceeds event limit: ${page.events.length} > ${maxEvents}`,
     );
   }
-  const pageBytes = issueEventBytes(page.events);
+  const pageBytes = trackerIssueEventsBytes(page.events);
   if (pageBytes > maxBytes) {
     throw new Error(`tracker issue event page exceeds byte limit: ${pageBytes} > ${maxBytes}`);
   }

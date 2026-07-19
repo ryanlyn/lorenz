@@ -55,8 +55,8 @@ interface RuntimeTrackerClient {
   fetchIssueEvents?(
     issueId: string,
     sinceTs: string,
-    abortSignal?: AbortSignal,
-  ): Promise<TrackerIssueEvent[]>;
+    query: TrackerIssueEventQuery,
+  ): Promise<TrackerIssueEventPage>;
 }
 ```
 
@@ -73,19 +73,21 @@ interface RuntimeTrackerClient {
   waiting for that poll. Active runs retain the client instance that dispatched them, so a workflow
   reload cannot mix recovery or pushed events across tracker configurations. A provider that
   publishes issue events must implement the recovery feed and snapshot boundary below.
-- `fetchIssueEvents(issueId, sinceTs)` recovers events missed across a change-stream or run-lifecycle
-  gap. It is optional for providers that never publish issue events. Each event uses a unique,
-  canonical non-negative decimal `ts` key. The feed returns events newer than `sinceTs`. Set
-  `Issue.issueEventCursor` to the latest event key already represented in prompt-visible fields of
-  each issue snapshot. The runner ignores live replays at or before that immutable boundary,
-  reconciles recovery results before newer live events, and advances its recovery cursor only
-  through events accepted into bounded queued turns. Exceptionally long messages are shortened for
-  live delivery and remain complete in the next issue snapshot. The runner submits each accepted
-  prompt to the session queue immediately, then activates it after an issue refresh confirms that
-  the issue is active and the effective backend profile is unchanged. A run submits later human
-  events even when the autonomous turn budget is exhausted and accepts at most `agent.max_turns`
-  steering turns; additional prompt-visible events remain eligible for the next attempt. Stop the
-  request when `abortSignal` aborts.
+- `fetchIssueEvents(issueId, sinceTs, query)` recovers events missed across a change-stream or
+  run-lifecycle gap. It is optional for providers that never publish issue events. Each event uses a
+  unique, canonical non-negative decimal `ts` key. Return the oldest events newer than `sinceTs` in
+  ascending order, limited by `query.maxEvents` and `query.maxBytes`, and set `hasMore` when another
+  page is available. Stop the request when `query.abortSignal` aborts. If one message exceeds the
+  page byte limit, use `boundTrackerIssueEventText` from `@lorenz/domain` to preserve its ordering
+  key and author while shortening its live-delivery text. The complete message remains on the issue.
+  Set `Issue.issueEventCursor` to the latest event key already represented in prompt-visible fields
+  of each issue snapshot. The runner ignores live replays at or before that immutable boundary,
+  accepts recovery pages before newer live events, and advances its recovery cursor only through
+  events accepted into bounded queued turns. The runner submits each accepted prompt to the session
+  queue immediately, then activates it after an issue refresh confirms that the issue is active and
+  the effective backend profile is unchanged. A run submits later human events even when the
+  autonomous turn budget is exhausted and accepts at most `agent.max_turns` steering turns;
+  additional prompt-visible events remain eligible for the next attempt.
 
 Each client returns the domain `Issue` shape, not the backend's raw payload. `Issue` requires
 `stateType: IssueStateType` (one of `backlog`, `unstarted`, `started`, `completed`, `canceled`,

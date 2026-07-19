@@ -1514,16 +1514,19 @@ test("active runs retain their tracker client across workflow reloads", async ()
   const workflowFile = path.join(dir, "WORKFLOW.md");
   await fs.writeFile(workflowFile, workflowMarkdown({ intervalMs: 600_000 }));
   const workflow = await loadWorkflow(workflowFile, {}, { cwd: dir });
+  workflow.settings.agent.ensembleSize = 2;
   const issue = {
     ...issueFixture("shared-issue-id", "MT-PINNED-CLIENT"),
     issueEventCursor: "10.0",
   };
+  const replacementIssue = { ...issue, state: "Other" };
   const callbacks: Array<((change?: TrackerChange) => void) | undefined> = [];
   const streamCloses = [0, 0];
   const recoveryCalls = [0, 0];
   const issueRefreshCalls = [0, 0];
   const delivered: TrackerIssueEvent[] = [];
   let clientBuilds = 0;
+  let runnerCalls = 0;
   let activeRecovery:
     | ((sinceTs: string, query: TrackerIssueEventQuery) => Promise<TrackerIssueEventPage>)
     | undefined;
@@ -1544,6 +1547,10 @@ test("active runs retain their tracker client across workflow reloads", async ()
               ...reloaded.settings.tracker,
               activeStates: ["Other"],
             },
+            agent: {
+              ...reloaded.settings.agent,
+              ensembleSize: 2,
+            },
           },
         };
       },
@@ -1551,10 +1558,10 @@ test("active runs retain their tracker client across workflow reloads", async ()
         const index = clientBuilds;
         clientBuilds += 1;
         return {
-          fetchCandidateIssues: async () => (index === 0 ? [issue] : []),
+          fetchCandidateIssues: async () => (index === 0 ? [issue] : [replacementIssue]),
           fetchIssuesByIds: async () => {
             issueRefreshCalls[index] = (issueRefreshCalls[index] ?? 0) + 1;
-            return index === 0 ? [issue] : [];
+            return index === 0 ? [issue] : [replacementIssue];
           },
           fetchIssueEvents: async () => {
             recoveryCalls[index] = (recoveryCalls[index] ?? 0) + 1;
@@ -1571,6 +1578,7 @@ test("active runs retain their tracker client across workflow reloads", async ()
         };
       },
       runner: async (input) => {
+        runnerCalls += 1;
         activeRecovery = input.fetchIssueEvents;
         const unsubscribe = input.subscribeIssueEvents?.((events) => delivered.push(...events));
         await runFinished;
@@ -1597,6 +1605,8 @@ test("active runs retain their tracker client across workflow reloads", async ()
     assert.equal(clientBuilds, 2);
     assert.ok(callbacks[1]);
     assert.deepEqual(issueRefreshCalls, [2, 0]);
+    assert.equal(runnerCalls, 1);
+    assert.equal(runtime.snapshot().running.length, 1);
 
     await activeRecovery?.("10.0", { maxEvents: 1, maxBytes: 1 });
     assert.deepEqual(recoveryCalls, [1, 0]);
@@ -2519,7 +2529,7 @@ test("a tracker push delivers issue events to every active run for that issue", 
   }
 });
 
-test("pending issue event delivery is bounded before the runner subscribes", async () => {
+test("pending issue event delivery shortens oversized text before the runner subscribes", async () => {
   const issue = {
     ...issueFixture("issue-bounded-steering", "MT-BOUNDED-STEERING"),
     issueEventCursor: "10.0",
@@ -2563,12 +2573,29 @@ test("pending issue event delivery is bounded before the runner subscribes", asy
     captured!({
       issueEvents: {
         issueId: issue.id,
-        events: [{ ts: "11.0", author: "ryan", text: "x".repeat(64 * 1024) }],
+        events: [
+          {
+            ts: "11.0",
+            author: "ryan",
+            text: `prefix-marker${"x".repeat(100 * 1024)}tail-marker`,
+          },
+        ],
       },
     });
     releaseSubscription?.();
     await waitFor(() => runtime.snapshot().runHistory.length === 1, 1_000);
-    assert.deepEqual(delivered, []);
+    assert.equal(delivered.length, 1);
+    assert.equal(delivered[0]?.ts, "11.0");
+    assert.equal(delivered[0]?.author, "ryan");
+    assert.match(delivered[0]?.text ?? "", /^prefix-marker/);
+    assert.match(delivered[0]?.text ?? "", /tail-marker$/);
+    assert.match(delivered[0]?.text ?? "", /\[message shortened for live delivery/);
+    assert.ok(
+      Buffer.byteLength(delivered[0]?.ts ?? "") +
+        Buffer.byteLength(delivered[0]?.author ?? "") +
+        Buffer.byteLength(delivered[0]?.text ?? "") <=
+        64 * 1024,
+    );
   } finally {
     releaseSubscription?.();
     runtime.stop();

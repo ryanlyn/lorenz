@@ -1091,6 +1091,68 @@ test("live delivery chunks large batches within the recovery byte bound", async 
   assert.ok(queuedPrompts.every((prompt) => Buffer.byteLength(prompt) <= 64 * 1024));
 });
 
+test("live delivery shortens a single oversized message before queueing it", async () => {
+  const settings = fakeSettings({ agent: { ...defaultSettings().agent, maxTurns: 1 } });
+  const queuedPrompts: string[] = [];
+  let issueEventListener: ((events: TrackerIssueEvent[]) => void) | undefined;
+  let releaseFirstTurn: (() => void) | undefined;
+  let markFirstTurnStarted: (() => void) | undefined;
+  const firstTurnStarted = new Promise<void>((resolve) => {
+    markFirstTurnStarted = resolve;
+  });
+  const firstTurnRelease = new Promise<void>((resolve) => {
+    releaseFirstTurn = resolve;
+  });
+  const session = fakeSession({
+    queueTurn: async (prompt) => {
+      queuedPrompts.push(prompt);
+      return [{ type: "turn_completed" }];
+    },
+  });
+  const executor: AgentExecutor = {
+    kind: "codex",
+    async startSession() {
+      return session;
+    },
+    async runTurn() {
+      markFirstTurnStarted?.();
+      await firstTurnRelease;
+      return [{ type: "turn_completed" }];
+    },
+  };
+
+  const attempt = runAgentAttempt({
+    issue: fakeIssue({ issueEventCursor: "10.0" }),
+    workflow: { path: "/workflow.md", config: {}, promptTemplate: "Fix it", settings },
+    settings,
+    fetchIssue: async (issue) => issue,
+    fetchIssueEvents: async () => issueEventPage([]),
+    subscribeIssueEvents: (listener) => {
+      issueEventListener = listener;
+      return () => {};
+    },
+    adapters: fakeAdapters({ executorFactory: () => executor }),
+  });
+
+  await firstTurnStarted;
+  issueEventListener?.([
+    {
+      ts: "11.0",
+      author: "ryan",
+      text: `prefix-marker${"x".repeat(100 * 1024)}tail-marker`,
+    },
+  ]);
+  await vi.waitFor(() => assert.equal(queuedPrompts.length, 1));
+  releaseFirstTurn?.();
+
+  const result = await attempt;
+  assert.equal(result.turnCount, 2);
+  assert.ok(Buffer.byteLength(queuedPrompts[0]!) <= 64 * 1024);
+  assert.match(queuedPrompts[0]!, /prefix-marker/);
+  assert.match(queuedPrompts[0]!, /tail-marker/);
+  assert.match(queuedPrompts[0]!, /\[message shortened for live delivery/);
+});
+
 test("live delivery bounds oversized event metadata", async () => {
   const settings = fakeSettings({ agent: { ...defaultSettings().agent, maxTurns: 1 } });
   const queuedPrompts: string[] = [];
