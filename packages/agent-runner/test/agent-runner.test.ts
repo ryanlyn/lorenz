@@ -1628,6 +1628,74 @@ test("a state override can add turn capacity for steering recovery", async () =>
   assert.match(queuedPrompts[0]!, /recovered after transition/);
 });
 
+test("a state override can lower the steering turn limit before activation", async () => {
+  const overrides = new Map<string, { agent?: Partial<Settings["agent"]> }>();
+  overrides.set("in progress", { agent: { maxTurns: 1 } });
+  const settings = fakeSettings({
+    agent: { ...defaultSettings().agent, maxTurns: 3 },
+    statusOverrides: overrides as Settings["statusOverrides"],
+  });
+  const queuedPrompts: string[] = [];
+  let backendActivations = 0;
+  let issueEventListener: ((events: TrackerIssueEvent[]) => void) | undefined;
+  let releaseFirstTurn: (() => void) | undefined;
+  let markFirstTurnStarted: (() => void) | undefined;
+  const firstTurnStarted = new Promise<void>((resolve) => {
+    markFirstTurnStarted = resolve;
+  });
+  const firstTurnRelease = new Promise<void>((resolve) => {
+    releaseFirstTurn = resolve;
+  });
+  const session = fakeSession({
+    queueTurn: async (prompt, options) => {
+      queuedPrompts.push(prompt);
+      await options?.startWhen;
+      backendActivations += 1;
+      return [{ type: "turn_completed" }];
+    },
+  });
+  const executor: AgentExecutor = {
+    kind: "codex",
+    async startSession() {
+      return session;
+    },
+    async runTurn() {
+      markFirstTurnStarted?.();
+      await firstTurnRelease;
+      return [{ type: "turn_completed" }];
+    },
+  };
+
+  const attempt = runAgentAttempt({
+    issue: fakeIssue({ issueEventCursor: "10.0" }),
+    workflow: { path: "/workflow.md", config: {}, promptTemplate: "Fix it", settings },
+    settings,
+    fetchIssue: async (issue) => ({ ...issue, state: "In Progress" }),
+    fetchIssueEvents: async () => issueEventPage([]),
+    subscribeIssueEvents: (listener) => {
+      issueEventListener = listener;
+      return () => {};
+    },
+    adapters: fakeAdapters({ executorFactory: () => executor }),
+  });
+
+  await firstTurnStarted;
+  issueEventListener?.([
+    { authorizedForSteering: true, ts: "11.0", text: `first ${"a".repeat(40 * 1024)}` },
+  ]);
+  await vi.waitFor(() => assert.equal(queuedPrompts.length, 1));
+  issueEventListener?.([
+    { authorizedForSteering: true, ts: "12.0", text: `second ${"b".repeat(40 * 1024)}` },
+  ]);
+  await vi.waitFor(() => assert.equal(queuedPrompts.length, 2));
+  releaseFirstTurn?.();
+
+  const result = await attempt;
+  assert.equal(result.turnCount, 2);
+  assert.equal(queuedPrompts.length, 2);
+  assert.equal(backendActivations, 1);
+});
+
 test("live steering is drained after the autonomous turn budget is exhausted", async () => {
   const settings = fakeSettings({ agent: { ...defaultSettings().agent, maxTurns: 1 } });
   const queuedPrompts: string[] = [];

@@ -338,6 +338,7 @@ class RunController {
       let steeringRecoveryCursorTs = steeringSnapshotCursorTs ?? "0";
       let steeringReady = false;
       let steeringTurnCount = 0;
+      let completedSteeringTurnCount = 0;
       let queuedSteeringBytes = 0;
       const seenSteeringEventTs = new Set<string>();
       const reportSteeringFailure = (stage: string, error: unknown): void => {
@@ -547,6 +548,7 @@ class RunController {
               backendProfile(refreshed) !== backendProfile(runtime);
             if (backendChanged) break;
             runtime = refreshed;
+            if (completedSteeringTurnCount >= runtime.agent.maxTurns) break;
             queuedTurns[0]?.activate();
           }
         }
@@ -564,6 +566,7 @@ class RunController {
             );
             if ("error" in outcome) throw outcome.error;
             turnUpdates = outcome.updates;
+            completedSteeringTurnCount += 1;
           } finally {
             queuedSteeringBytes = Math.max(0, queuedSteeringBytes - queuedTurn.promptBytes);
             removePendingActivity(pendingStreamActivities, turnActivity);
@@ -674,6 +677,7 @@ class RunController {
         if (backendChanged) break;
         runtime = refreshed;
         if (queuedTurnBeforeIssueRefresh && queuedTurns[0] === queuedTurnBeforeIssueRefresh) {
+          if (completedSteeringTurnCount >= runtime.agent.maxTurns) break;
           queuedTurnBeforeIssueRefresh.activate();
           continue;
         }
