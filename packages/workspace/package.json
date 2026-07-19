@@ -12,6 +12,7 @@
     "execa": "catalog:",
     "liquidjs": "catalog:",
     "@lorenz/domain": "workspace:*",
+    "@lorenz/process-supervisor": "workspace:*",
     "@lorenz/ssh": "workspace:*"
   }
 }

@@ -1,7 +1,7 @@
 import type * as NodeFs from "node:fs";
 import { fileURLToPath } from "node:url";
 
-import type { TicketTraceResponse } from "@lorenz/traceviz-server";
+import type { TicketTraceResponse } from "@lorenz/traceviz-core";
 import { describe, expect, it, vi } from "vitest";
 
 const serverMock = vi.hoisted(() => ({
@@ -42,7 +42,7 @@ vi.mock("node:fs", async (importOriginal) => {
 });
 
 const fixturePath = fileURLToPath(
-  new URL("../../../packages/traceviz-server/test/fixtures/minimal-trace.jsonl", import.meta.url),
+  new URL("../../../packages/traceviz-core/test/fixtures/minimal-trace.jsonl", import.meta.url),
 );
 
 async function loadStandaloneFetch(): Promise<(request: Request) => Response | Promise<Response>> {
@@ -98,4 +98,22 @@ describe("standalone traceviz routes", () => {
     );
     expect(statsResponse.status).toBe(404);
   });
+
+  it.each(["events", "stats"])(
+    "returns structured 400 for malformed ticket ids on the %s route",
+    async (route) => {
+      const fetch = await loadStandaloneFetch();
+
+      const response = await fetch(
+        new Request(`http://localhost/api/v1/tickets/%E0%A4%A/${route}`),
+      );
+      expect(response.status).toBe(400);
+      expect(await response.json()).toEqual({
+        error: {
+          code: "invalid_path_parameter",
+          message: "Malformed percent encoding in path parameter",
+        },
+      });
+    },
+  );
 });

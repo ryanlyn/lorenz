@@ -24,7 +24,7 @@ import path from "node:path";
 import { LinearClient, parseConfig, loadWorkflow } from "@lorenz/cli";
 import { LorenzRuntime } from "@lorenz/runtime";
 import { TraceEmitter } from "@lorenz/traceviz-emitter";
-import { parseTraceLines } from "@lorenz/traceviz-server";
+import { parseTraceLines } from "@lorenz/traceviz-core";
 import { startObservabilityServer } from "@lorenz/server";
 import { configureLogFile } from "@lorenz/log-file";
 import {

@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import { createFixedTraceDataSource } from "@lorenz/server/trace-routes";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { createTracevizApp } from "../app.js";
@@ -37,9 +38,10 @@ describe("traceviz static dashboard serving", () => {
     process.chdir(os.tmpdir());
     const app = createTracevizApp({
       dashboardDist,
-      events: [],
-      identifier: "TEST-1",
-      issueId: "test-id",
+      source: createFixedTraceDataSource(
+        { events: [], identifier: "TEST-1", issueId: "test-id" },
+        0,
+      ),
       stats: {},
     });
 
@@ -54,9 +56,10 @@ describe("traceviz static dashboard serving", () => {
   it("keeps the SPA fallback for app routes", async () => {
     const app = createTracevizApp({
       dashboardDist,
-      events: [],
-      identifier: "TEST-1",
-      issueId: "test-id",
+      source: createFixedTraceDataSource(
+        { events: [], identifier: "TEST-1", issueId: "test-id" },
+        0,
+      ),
       stats: {},
     });
 

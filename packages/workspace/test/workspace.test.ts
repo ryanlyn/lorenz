@@ -560,6 +560,38 @@ while :; do sleep 1; done
   );
 });
 
+test("syncWorkspaceSkills - bounds remote process diagnostics", async () => {
+  const root = await tempDir("ws-remote-skills-output");
+  const trace = path.join(root, "ssh.trace");
+  const sources = await tempDir("ws-remote-skill-output-source");
+  const skill = path.join(sources, "lorenz-land");
+  await fs.mkdir(skill, { recursive: true });
+  await fs.writeFile(path.join(skill, "SKILL.md"), "land\n");
+  await installFakeSsh(
+    root,
+    trace,
+    `#!/bin/sh
+printf '%05000d' 0 >&2
+exit 9
+`,
+  );
+
+  const error = await syncWorkspaceSkills(
+    "/remote/workspaces/MT-1",
+    skillOverlay([skill]),
+    "localhost",
+    { timeoutMs: 5_000 },
+  ).then(
+    () => null,
+    (reason: unknown) => reason,
+  );
+  const message = String(error);
+
+  assert.match(message, /workspace_skill_remote_sync_failed: localhost 9/);
+  assert.match(message, /\[truncated 904 chars\]/);
+  assert.ok(message.length < 4_500);
+});
+
 test("createWorkspaceForIssue — installs skills into shared workspaces", async () => {
   const root = await tempDir("ws-shared-skills");
   const sources = await tempDir("ws-shared-skill-source");

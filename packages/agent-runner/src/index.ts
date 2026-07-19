@@ -2,7 +2,6 @@ import { settingsForIssueState } from "@lorenz/config";
 import { issueIsActive } from "@lorenz/dispatch";
 import type { AgentMcpEndpointLease } from "@lorenz/mcp";
 import { ensembleSize } from "@lorenz/issue";
-import { buildPrompt, continuationPrompt } from "@lorenz/prompt";
 import {
   errorMessage,
   type AgentExecutor,
@@ -14,10 +13,14 @@ import {
   type WorkflowDefinition,
 } from "@lorenz/domain";
 
+import { buildPrompt, continuationPrompt } from "./prompt.js";
+
 const workerSetupTimeoutGraceMs = 1_000;
 const workspaceCreateStage = "workspace.create_for_issue";
 const beforeRunHookStage = "workspace.run_before_run_hook";
 const afterRunHookStage = "workspace.run_after_run_hook";
+
+export { buildPrompt, continuationPrompt } from "./prompt.js";
 
 interface SetupStageSignalOptions {
   abortSignal?: AbortSignal | undefined;
@@ -48,6 +51,15 @@ export interface RunAgentAttemptAdapters {
   ): Promise<void>;
   executorFactory(settings: Settings): Promise<AgentExecutor> | AgentExecutor;
 }
+
+/**
+ * Production callers compose a complete `RunAgentAttemptAdapters` object at the
+ * runtime boundary, then pass per-run overrides through `adapters`. Keeping the
+ * core input partial is intentional: tests can override only the adapter under
+ * inspection, while missing production defaults still fail at the exact adapter
+ * lookup that cannot continue.
+ */
+type RunAgentAttemptAdapterOverrides = Partial<RunAgentAttemptAdapters>;
 
 /**
  * The executor `startSession` input EXTENDED with the optional per-run
@@ -96,7 +108,7 @@ export interface RunAgentAttemptInput {
   onUpdate?: (update: AgentUpdate) => void;
   fetchIssue?: (issue: Issue) => Promise<Issue>;
   abortSignal?: AbortSignal | undefined;
-  adapters?: Partial<RunAgentAttemptAdapters> | undefined;
+  adapters?: RunAgentAttemptAdapterOverrides | undefined;
 }
 
 export async function runAgentAttempt(input: RunAgentAttemptInput): Promise<RunResult> {
@@ -357,7 +369,7 @@ function throwIfAborted(abortSignal: AbortSignal | undefined): void {
 }
 
 async function executorFor(
-  adapters: Partial<RunAgentAttemptAdapters> | undefined,
+  adapters: RunAgentAttemptAdapterOverrides | undefined,
   settings: Settings,
 ): Promise<AgentExecutor> {
   if (adapters?.executorFactory) return adapters.executorFactory(settings);
@@ -450,7 +462,7 @@ function backendProfile(settings: Settings): string {
 }
 
 async function createWorkspaceForIssue(
-  adapters: Partial<RunAgentAttemptAdapters> | undefined,
+  adapters: RunAgentAttemptAdapterOverrides | undefined,
   settings: Settings,
   issue: Issue,
   options: {
@@ -468,7 +480,7 @@ async function createWorkspaceForIssue(
 }
 
 async function runHook(
-  adapters: Partial<RunAgentAttemptAdapters> | undefined,
+  adapters: RunAgentAttemptAdapterOverrides | undefined,
   command: string,
   workspacePath: string,
   hooks: Settings["hooks"],

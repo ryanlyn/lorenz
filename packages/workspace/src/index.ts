@@ -8,6 +8,11 @@ import { pipeline } from "node:stream/promises";
 import { Liquid } from "liquidjs";
 import { runSsh, shellEscape, startSshProcess } from "@lorenz/ssh";
 import {
+  directChildTerminationAdapter,
+  processGroupTerminationAdapter,
+  superviseChild,
+} from "@lorenz/process-supervisor";
+import {
   errorMessage,
   type HookExecutionMessage,
   type HooksSettings,
@@ -17,8 +22,7 @@ import {
 import { execa } from "execa";
 
 const remoteWorkspaceMarker = "__LORENZ_WORKSPACE__";
-const hookForceKillDelayMs = 5_000;
-const hookLogMaxChars = 4_096;
+const processOutputMaxChars = 4_096;
 
 const hookTemplateReferencePattern = /(?:\{\{|\{%)[\s\S]*\bissue(?:\.|\[)/;
 
@@ -471,67 +475,29 @@ export async function runHook(
     stdin: "ignore",
     detached: true,
   });
-  let timeoutTimer: ReturnType<typeof setTimeout> | undefined;
-  let forceKillTimer: ReturnType<typeof setTimeout> | undefined;
-  let terminationRequested = false;
-  let abortHandler: (() => void) | undefined;
-
-  const killProcessGroup = (signal: NodeJS.Signals): void => {
-    if (subprocess.pid === undefined) return;
-    try {
-      process.kill(-subprocess.pid, signal);
-    } catch {
-      /* process already exited */
-    }
-  };
-
-  const forceKillProcessGroup = (): void => {
-    forceKillTimer ??= setTimeout(() => {
-      killProcessGroup("SIGKILL");
-    }, hookForceKillDelayMs);
-  };
-
-  const clearForceKillTimer = (): void => {
-    if (forceKillTimer !== undefined) clearTimeout(forceKillTimer);
-  };
-
-  const clearTimers = (): void => {
-    if (timeoutTimer !== undefined) clearTimeout(timeoutTimer);
-    if (!terminationRequested) clearForceKillTimer();
-    if (abortHandler) options.abortSignal?.removeEventListener("abort", abortHandler);
-  };
-
-  const terminate = (error: Error, reject: (reason: Error) => void): void => {
-    terminationRequested = true;
-    killProcessGroup("SIGTERM");
-    forceKillProcessGroup();
-    reject(error);
-  };
-
-  const races: Array<Promise<unknown>> = [subprocess];
-  if (Number.isFinite(hooks.timeoutMs) && hooks.timeoutMs > 0) {
-    races.push(
-      new Promise<never>((_resolve, reject) => {
-        timeoutTimer = setTimeout(() => {
-          terminate(new Error(`hook timed out after ${hooks.timeoutMs}ms`), reject);
-        }, hooks.timeoutMs);
-      }),
-    );
-  }
-  if (options.abortSignal) {
-    races.push(
-      new Promise<never>((_resolve, reject) => {
-        abortHandler = () => terminate(new Error("hook canceled"), reject);
-        options.abortSignal?.addEventListener("abort", abortHandler, { once: true });
-      }),
-    );
-  }
-
-  void subprocess.then(clearForceKillTimer, clearForceKillTimer);
 
   let result: Awaited<typeof subprocess>;
   try {
-    result = (await Promise.race(races).finally(clearTimers)) as Awaited<typeof subprocess>;
+    result = await superviseChild({
+      completion: subprocess,
+      termination: processGroupTerminationAdapter(subprocess.pid),
+      ...(Number.isFinite(hooks.timeoutMs) && hooks.timeoutMs > 0
+        ? {
+            timeout: {
+              afterMs: hooks.timeoutMs,
+              error: () => new Error(`hook timed out after ${hooks.timeoutMs}ms`),
+            },
+          }
+        : {}),
+      ...(options.abortSignal
+        ? {
+            cancellation: {
+              signal: options.abortSignal,
+              error: () => new Error("hook canceled"),
+            },
+          }
+        : {}),
+    });
   } catch (error) {
     const logError = truncateHookLogText(errorMessage(error));
     emitHookEvent(options, {
@@ -788,17 +754,6 @@ rm -rf "$target"`;
   const archiveDir = await fs.mkdtemp(path.join(os.tmpdir(), "lorenz-skill-archive-"));
   const archivePath = path.join(archiveDir, "skill.tar");
 
-  let timeoutTimer: ReturnType<typeof setTimeout> | undefined;
-  let forceKillTimer: ReturnType<typeof setTimeout> | undefined;
-  let terminationRequested = false;
-  let abortHandler: (() => void) | undefined;
-
-  const clearTimers = (): void => {
-    if (timeoutTimer !== undefined) clearTimeout(timeoutTimer);
-    if (!terminationRequested && forceKillTimer !== undefined) clearTimeout(forceKillTimer);
-    if (abortHandler) options.abortSignal?.removeEventListener("abort", abortHandler);
-  };
-
   try {
     const archiveResult = await execa(
       "tar",
@@ -817,62 +772,48 @@ rm -rf "$target"`;
     }
 
     const remote = startSshProcess(workerHost, command);
-    const remoteStdout = collectStreamText(remote.stdout);
-    const remoteStderr = collectStreamText(remote.stderr);
+    const remoteStdoutResult = collectStreamText(remote.stdout);
+    const remoteStderrResult = collectStreamText(remote.stderr);
     const remoteExit = waitForProcessExit(remote);
-    const forceKill = (): void => {
-      forceKillTimer ??= setTimeout(() => {
-        remote.kill("SIGKILL");
-      }, hookForceKillDelayMs);
-    };
-    const terminate = (error: Error, reject: (reason: Error) => void): void => {
-      terminationRequested = true;
-      remote.kill("SIGTERM");
-      forceKill();
-      reject(error);
-    };
     const pipeResult = pipeline(createReadStream(archivePath), remote.stdin).then(
       () => null,
       (error: unknown) => error,
     );
-    const syncResult = Promise.all([remoteExit, remoteStdout, remoteStderr, pipeResult]);
-    void syncResult.then(
-      () => {
-        if (forceKillTimer !== undefined) clearTimeout(forceKillTimer);
+    const syncResult = Promise.all([
+      remoteExit,
+      remoteStdoutResult,
+      remoteStderrResult,
+      pipeResult,
+    ]);
+    const [remoteResult, remoteStdout, remoteStderr, pipeError] = await superviseChild({
+      completion: syncResult,
+      termination: directChildTerminationAdapter(remote),
+      timeout: {
+        afterMs: timeoutMs,
+        error: () => new Error(`workspace_skill_remote_sync_timeout: ${workerHost} ${timeoutMs}`),
       },
-      () => {
-        if (forceKillTimer !== undefined) clearTimeout(forceKillTimer);
-      },
-    );
-
-    const races: Array<Promise<unknown>> = [syncResult];
-    races.push(
-      new Promise<never>((_resolve, reject) => {
-        timeoutTimer = setTimeout(() => {
-          terminate(
-            new Error(`workspace_skill_remote_sync_timeout: ${workerHost} ${timeoutMs}`),
-            reject,
-          );
-        }, timeoutMs);
-      }),
-    );
-    if (options.abortSignal) {
-      races.push(
-        new Promise<never>((_resolve, reject) => {
-          abortHandler = () => terminate(new Error("workspace_skill_sync_canceled"), reject);
-          options.abortSignal?.addEventListener("abort", abortHandler, { once: true });
-        }),
-      );
-    }
-
-    const [remoteResult, remoteOutput, remoteError, pipeError] = (await Promise.race(races).finally(
-      clearTimers,
-    )) as Awaited<typeof syncResult>;
+      ...(options.abortSignal
+        ? {
+            cancellation: {
+              signal: options.abortSignal,
+              error: () => new Error("workspace_skill_sync_canceled"),
+            },
+          }
+        : {}),
+    });
     if (options.abortSignal?.aborted) throw new Error("workspace_skill_sync_canceled");
     if (remoteResult.exitCode !== 0) {
-      const output = `${remoteOutput}${remoteOutput && remoteError ? "\n" : ""}${remoteError}`;
+      const output = `${remoteStdout.text}${
+        remoteStdout.text && remoteStderr.text ? "\n" : ""
+      }${remoteStderr.text}`;
       throw new Error(
         `workspace_skill_remote_sync_failed: ${workerHost} ${remoteResult.exitCode} ${output}`.trim(),
+      );
+    }
+    const streamError = remoteStdout.error ?? remoteStderr.error;
+    if (streamError) {
+      throw new Error(
+        `workspace_skill_remote_sync_failed: ${workerHost} ${errorMessage(streamError)}`,
       );
     }
     if (pipeError) {
@@ -881,7 +822,6 @@ rm -rf "$target"`;
       );
     }
   } finally {
-    clearTimers();
     await fs.rm(archiveDir, { recursive: true, force: true });
   }
 }
@@ -937,18 +877,54 @@ async function sameRealPath(left: string, right: string): Promise<boolean> {
   }
 }
 
-async function collectStreamText(stream: NodeJS.ReadableStream | null): Promise<string> {
-  if (!stream) return "";
+interface CollectedStreamText {
+  text: string;
+  error: Error | null;
+}
+
+async function collectStreamText(
+  stream: NodeJS.ReadableStream | null,
+): Promise<CollectedStreamText> {
+  if (!stream) return { text: "", error: null };
   let output = "";
+  let outputChars = 0;
+  let streamError: Error | null = null;
   stream.setEncoding("utf8");
-  stream.on("data", (chunk: string) => {
-    output += chunk;
+  const collect = (chunk: string): void => {
+    outputChars += chunk.length;
+    const remainingChars = processOutputMaxChars - output.length;
+    if (remainingChars > 0) output += chunk.slice(0, remainingChars);
+  };
+  stream.on("data", collect);
+  await new Promise<void>((resolve) => {
+    let settled = false;
+    const finish = (): void => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve();
+    };
+    const fail = (error: Error): void => {
+      if (settled) return;
+      streamError = error;
+      finish();
+    };
+    const cleanup = (): void => {
+      stream.removeListener("data", collect);
+      stream.removeListener("end", finish);
+      stream.removeListener("close", finish);
+      stream.removeListener("error", fail);
+    };
+    stream.on("end", finish);
+    stream.on("close", finish);
+    stream.on("error", fail);
   });
-  await new Promise<void>((resolve, reject) => {
-    stream.on("end", resolve);
-    stream.on("error", reject);
-  });
-  return output.trim();
+  const truncatedChars = outputChars - output.length;
+  return {
+    text:
+      truncatedChars > 0 ? `${output.trim()}\n[truncated ${truncatedChars} chars]` : output.trim(),
+    error: streamError,
+  };
 }
 
 async function waitForProcessExit(
@@ -1182,9 +1158,11 @@ function emitHookEvent(options: WorkspaceRunHookOptions, event: HookExecutionMes
 }
 
 function truncateHookLogText(text: string): { text: string; truncated: boolean } {
-  if (text.length <= hookLogMaxChars) return { text, truncated: false };
+  if (text.length <= processOutputMaxChars) return { text, truncated: false };
   return {
-    text: `${text.slice(0, hookLogMaxChars)}\n[truncated ${text.length - hookLogMaxChars} chars]`,
+    text: `${text.slice(0, processOutputMaxChars)}\n[truncated ${
+      text.length - processOutputMaxChars
+    } chars]`,
     truncated: true,
   };
 }

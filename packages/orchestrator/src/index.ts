@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 
 import {
+  agentKindForIssue,
   dispatchBlockReason,
   firstUnclaimedSlot,
   issueIsActive,
@@ -9,7 +10,7 @@ import {
   sortForDispatch,
 } from "@lorenz/dispatch";
 import { ensembleSize } from "@lorenz/issue";
-import { normalizeStateName, settingsForIssueState } from "@lorenz/config";
+import { normalizeStateName } from "@lorenz/config";
 import { retryBackoffMs } from "@lorenz/policies/retry";
 import { mergeMonotonicUsage } from "@lorenz/policies/usage";
 import { selectLeastLoadedHost } from "@lorenz/policies/workerHost";
@@ -87,7 +88,7 @@ export interface SlotReservation {
    */
   readonly affinityHost: string | null;
   readonly retryAttempt: number | null;
-  /** Defensive expiry (acquireTimeoutMs * 2 + 60s grace); swept by eligibleIssues. */
+  /** Defensive expiry (acquireTimeoutMs * 2 + 60s grace); swept by eligibleIssuesAsync. */
   readonly expiresAtMonotonicMs: number;
 }
 
@@ -96,7 +97,7 @@ export type ClaimResult =
   | { kind: "running"; entry: RunningEntry }
   /**
    * Pool governs: the slot is held host-less; the concrete host arrives via
-   * {@link Orchestrator.bindReservation} after the coordinator binds a run slot.
+   * {@link Orchestrator.bindReservationAsync} after the coordinator binds a run slot.
    */
   | { kind: "reserved"; reservation: SlotReservation };
 
@@ -153,7 +154,7 @@ function retrySlotIndex(retry: RetryEntry): number {
  * reports whether the live pool currently governs capacity: only while it does are worker-host
  * decisions delegated to {@link CapacityProbe.canAcquire} and the static `sshHosts` selection
  * bypassed (claim then holds the slot as a host-less reservation until
- * {@link Orchestrator.bindReservation} supplies the concrete bound host). Once it no longer
+ * {@link Orchestrator.bindReservationAsync} supplies the concrete bound host). Once it no longer
  * governs (a disabled pool), both paths fall through to the normal static/local logic so a
  * reload that turns the pool off cannot permanently block dispatch as `worker_host_capacity`.
  */
@@ -182,39 +183,17 @@ export class Orchestrator {
     return this.claimStore.status();
   }
 
-  ownsClaim(issueId: string, slotIndex: number): boolean {
-    const key = slotKey(issueId, slotIndex);
-    return this.syncClaimStore().read(() => this.claimIsOwnedByThisStore(key));
-  }
-
   async ownsClaimAsync(issueId: string, slotIndex: number): Promise<boolean> {
     const key = slotKey(issueId, slotIndex);
     return this.claimStore.read(() => this.claimIsOwnedByThisStore(key));
-  }
-
-  heartbeatClaimOwner(): void {
-    this.syncClaimStore().heartbeatOwner();
   }
 
   async heartbeatClaimOwnerAsync(): Promise<void> {
     await this.claimStore.heartbeatOwner();
   }
 
-  private withClaimStore<T>(operation: ClaimStoreOperation, run: () => T): T {
-    return this.syncClaimStore().transaction(operation, run);
-  }
-
   private async withClaimStoreAsync<T>(operation: ClaimStoreOperation, run: () => T): Promise<T> {
     return this.claimStore.transaction(operation, run);
-  }
-
-  private noopAsNull<T>(run: () => T): T | null {
-    try {
-      return run();
-    } catch (error) {
-      if (error instanceof NoopClaimStoreMutation) return null;
-      throw error;
-    }
   }
 
   private async noopAsNullAsync<T>(run: () => Promise<T>): Promise<T | null> {
@@ -222,15 +201,6 @@ export class Orchestrator {
       return await run();
     } catch (error) {
       if (error instanceof NoopClaimStoreMutation) return null;
-      throw error;
-    }
-  }
-
-  private ignoreNoop(run: () => void): void {
-    try {
-      run();
-    } catch (error) {
-      if (error instanceof NoopClaimStoreMutation) return;
       throw error;
     }
   }
@@ -297,15 +267,6 @@ export class Orchestrator {
     );
   }
 
-  eligibleIssues(issues: Issue[]): Issue[] {
-    try {
-      return this.withClaimStore("eligible_issues", () => this.eligibleIssuesInTransaction(issues));
-    } catch (error) {
-      if (error instanceof NoopClaimStoreMutation) return error.result as Issue[];
-      throw error;
-    }
-  }
-
   async eligibleIssuesAsync(issues: Issue[]): Promise<Issue[]> {
     try {
       return await this.withClaimStoreAsync("eligible_issues", () =>
@@ -363,12 +324,6 @@ export class Orchestrator {
     return result;
   }
 
-  claim(issue: Issue): ClaimResult | null {
-    return this.noopAsNull(() =>
-      this.withClaimStore("claim", () => this.claimInTransaction(issue)),
-    );
-  }
-
   async claimAsync(issue: Issue): Promise<ClaimResult | null> {
     return this.noopAsNullAsync(async () =>
       this.withClaimStoreAsync("claim", () => this.claimInTransaction(issue)),
@@ -406,7 +361,7 @@ export class Orchestrator {
     }
     if (this.capacityProbe?.governs()) {
       // The pool governs capacity: hold the slot host-less while the coordinator
-      // negotiates a concrete worker asynchronously (bindReservation mints the
+      // negotiates a concrete worker asynchronously (bindReservationAsync mints the
       // RunningEntry only once a real host is bound).
       return { kind: "reserved", reservation: this.reserveSlot(issue, slotIndex, retryEntry) };
     }
@@ -418,7 +373,6 @@ export class Orchestrator {
       throw new NoopClaimStoreMutation();
     }
     const workerHost = selected;
-    const effective = settingsForIssueState(this.settings, issue.state);
     const size = ensembleSize(issue) ?? this.settings.agent.ensembleSize;
     const key = slotKey(issue.id, slotIndex);
     const entry: RunningEntry = {
@@ -426,7 +380,7 @@ export class Orchestrator {
       identifier: issue.identifier,
       slotIndex,
       ensembleSize: size,
-      agentKind: effective.agent.kind,
+      agentKind: agentKindForIssue(this.settings, issue),
       workerHost,
       workspacePath: null,
       sessionId: null,
@@ -454,14 +408,13 @@ export class Orchestrator {
   /**
    * Phase 1 of the pool-governed dispatch: registers a host-less {@link ReservationRecord}
    * holding the dispatch slot (claimed + reserved, NOT running) and consumes the due retry
-   * entry, stashing it on the record so {@link Orchestrator.cancelReservation} can restore it.
+   * entry, stashing it on the record so {@link Orchestrator.cancelReservationAsync} can restore it.
    */
   private reserveSlot(
     issue: Issue,
     slotIndex: number,
     retryEntry: [string, RetryEntry] | undefined,
   ): SlotReservation {
-    const effective = settingsForIssueState(this.settings, issue.state);
     const size = ensembleSize(issue) ?? this.settings.agent.ensembleSize;
     const key = slotKey(issue.id, slotIndex);
     const acquireTimeoutMs = this.settings.worker.workerPool?.acquireTimeoutMs ?? 30_000;
@@ -472,7 +425,7 @@ export class Orchestrator {
       issue,
       slotIndex,
       token: `reservation-${randomUUID()}`,
-      agentKind: effective.agent.kind,
+      agentKind: agentKindForIssue(this.settings, issue),
       ensembleSize: size,
       affinityHost: retryEntry?.[1].workerHost ?? null,
       retryAttempt: retryEntry?.[1].attempt ?? null,
@@ -508,14 +461,6 @@ export class Orchestrator {
    * releases the bound slot healthy. `startedAt` is the bind time, so run seconds never bill
    * the provision wait.
    */
-  bindReservation(reservation: SlotReservation, workerHost: string): RunningEntry | null {
-    return this.noopAsNull(() =>
-      this.withClaimStore("bind_reservation", () =>
-        this.bindReservationInTransaction(reservation, workerHost),
-      ),
-    );
-  }
-
   async bindReservationAsync(
     reservation: SlotReservation,
     workerHost: string,
@@ -569,14 +514,6 @@ export class Orchestrator {
    * attempt counter survive a capacity miss). Idempotent and token-checked: a stale reservation
    * (cancelled, expired, or superseded by a re-reserve) is a no-op.
    */
-  cancelReservation(reservation: SlotReservation): void {
-    this.ignoreNoop(() =>
-      this.withClaimStore("cancel_reservation", () =>
-        this.cancelReservationInTransaction(reservation),
-      ),
-    );
-  }
-
   async cancelReservationAsync(reservation: SlotReservation): Promise<void> {
     await this.ignoreNoopAsync(async () =>
       this.withClaimStoreAsync("cancel_reservation", () =>
@@ -591,14 +528,6 @@ export class Orchestrator {
     if (!record || record.token !== reservation.token || !this.claimIsOwnedByThisStore(key))
       throw new NoopClaimStoreMutation();
     this.cancelReservationRecord(key, record);
-  }
-
-  abandonClaim(issueId: string, slotIndex: number): void {
-    this.ignoreNoop(() =>
-      this.withClaimStore("abandon_claim", () =>
-        this.abandonClaimInTransaction(issueId, slotIndex),
-      ),
-    );
   }
 
   async abandonClaimAsync(issueId: string, slotIndex: number): Promise<void> {
@@ -625,7 +554,7 @@ export class Orchestrator {
     this.state.usageDeltaBases.delete(key);
   }
 
-  /** Shared cancel path for token-checked cancels, the expiry sweep, and cleanupIssue. */
+  /** Shared cancel path for token-checked cancels, the expiry sweep, and cleanupIssueAsync. */
   private cancelReservationRecord(key: string, record: ReservationRecord): void {
     this.state.reserved.delete(key);
     this.state.claimed.delete(key);
@@ -692,14 +621,6 @@ export class Orchestrator {
     return this.selectWorkerHost() !== undefined;
   }
 
-  refreshRunningIssue(issue: Issue): void {
-    this.ignoreNoop(() =>
-      this.withClaimStore("refresh_running_issue", () =>
-        this.refreshRunningIssueInTransaction(issue),
-      ),
-    );
-  }
-
   async refreshRunningIssueAsync(issue: Issue): Promise<void> {
     await this.ignoreNoopAsync(async () =>
       this.withClaimStoreAsync("refresh_running_issue", () =>
@@ -725,21 +646,6 @@ export class Orchestrator {
       }
     }
     if (!stateChanged) throw new NoopClaimStoreMutation();
-  }
-
-  applyUpdate(issueId: string, slotIndex: number, update: AgentUpdate): void {
-    try {
-      if (agentUpdateCanSkipCheckpoint(update)) {
-        this.applyUpdateInTransaction(issueId, slotIndex, update);
-        return;
-      }
-      this.withClaimStore("apply_update", () =>
-        this.applyUpdateInTransaction(issueId, slotIndex, update),
-      );
-    } catch (error) {
-      if (error instanceof NoopClaimStoreMutation) return;
-      throw error;
-    }
   }
 
   async applyUpdateAsync(issueId: string, slotIndex: number, update: AgentUpdate): Promise<void> {
@@ -773,20 +679,6 @@ export class Orchestrator {
     if (isToolCallNotification(update)) entry.toolCallCount = (entry.toolCallCount ?? 0) + 1;
     if (update.rateLimits !== undefined) this.state.rateLimits = update.rateLimits;
     if (update.usage) this.applyUsageUpdate(key, entry, update);
-  }
-
-  finish(
-    issueId: string,
-    slotIndex: number,
-    normal: boolean,
-    error?: string,
-    retryKind: "failure" | "continuation" = "failure",
-  ): RunningEntry | null {
-    return this.noopAsNull(() =>
-      this.withClaimStore("finish", () =>
-        this.finishInTransaction(issueId, slotIndex, normal, error, retryKind),
-      ),
-    );
   }
 
   async finishAsync(
@@ -843,12 +735,6 @@ export class Orchestrator {
       });
     }
     return entry;
-  }
-
-  cleanupIssue(issueId: string): void {
-    this.ignoreNoop(() =>
-      this.withClaimStore("cleanup_issue", () => this.cleanupIssueInTransaction(issueId)),
-    );
   }
 
   async cleanupIssueAsync(issueId: string): Promise<void> {

@@ -6,7 +6,8 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
-    ".": "./dist/index.js"
+    ".": "./dist/index.js",
+    "./trace-routes": "./dist/trace-routes.js"
   },
   "dependencies": {
     "@hono/node-server": "catalog:",
@@ -15,7 +16,7 @@
     "@lorenz/mcp": "workspace:*",
     "@lorenz/presenter": "workspace:*",
     "@lorenz/runtime-events": "workspace:*",
-    "@lorenz/traceviz-server": "workspace:*",
+    "@lorenz/traceviz-core": "workspace:*",
     "better-sqlite3": "catalog:",
     "hono": "catalog:"
   },

@@ -205,9 +205,10 @@ test("doctor checks node bridge target files", async () => {
 });
 
 test("doctor checks env-wrapped bridge commands", async () => {
+  const bridgeCommand = 'env CODEX_PATH="$(command -v codex)" missing-lorenz-env-acp';
   const fixture = await doctorFixture({
     withDashboard: true,
-    bridgeCommand: 'env CODEX_PATH="$(command -v codex)" missing-lorenz-env-acp',
+    bridgeCommand,
   });
 
   const report = await runDoctorCommand({
@@ -217,10 +218,22 @@ test("doctor checks env-wrapped bridge commands", async () => {
   });
 
   assert.equal(report.status, "warning");
-  assert.equal(statusFor(report, "agent_bridge_codex"), "warning");
-  assert.match(
-    messageFor(report, "agent_bridge_codex"),
-    /Agent bridge command was not found for codex: missing-lorenz-env-acp/,
+  assert.deepEqual(
+    report.checks.find((check) => check.id === "agent_bridge_codex"),
+    {
+      id: "agent_bridge_codex",
+      status: "warning",
+      message: "Agent bridge command was not found for codex: missing-lorenz-env-acp",
+      details: {
+        kind: "codex",
+        command: bridgeCommand,
+        state: null,
+        executable: "missing-lorenz-env-acp",
+        wrapperExecutable: "env",
+        resolvedCommand: bridgeCommand,
+        bridgeTarget: null,
+      },
+    },
   );
 });
 

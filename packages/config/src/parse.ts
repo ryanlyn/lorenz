@@ -1,6 +1,5 @@
 import path from "node:path";
 
-import { execaSync } from "execa";
 import { z } from "zod";
 import type {
   AgentConfig,
@@ -12,14 +11,12 @@ import type {
   TrackerSettings,
   WorkerPoolSettings,
   WorkerPoolSettingsInput,
-  WorkerSettings,
 } from "@lorenz/domain";
 import {
   errorMessage,
   isDiagnosticSecretKey,
   isRecord as isPlainRecord,
   normalizeHttpBindHost,
-  registerDiagnosticSecret,
   withDerivedMaxInFlight,
 } from "@lorenz/domain";
 import {
@@ -28,13 +25,19 @@ import {
   type AgentExecutorRegistry,
 } from "@lorenz/agent-sdk";
 import type { ToolRegistry } from "@lorenz/tool-sdk";
-import { defaultTrackerRegistry, type TrackerRegistry } from "@lorenz/tracker-sdk";
+import {
+  defaultTrackerRegistry,
+  resolveEnvReference,
+  type TrackerRegistry,
+} from "@lorenz/tracker-sdk";
 
 import { hooksAliases, normalizeAliases } from "./aliases.js";
 import { warnConfigDeprecations } from "./deprecations.js";
 import { defaultAgentRecords, defaultSettings, type DefaultSettingsOptions } from "./defaults.js";
 import { configErrorMessage } from "./errors.js";
 import { joinPath, nonEmptyString } from "./leaf-utils.js";
+import { resolveConfiguredSecret } from "./secret-resolution.js";
+import { cloneAgentRecords, cloneSettings } from "./settings-clone.js";
 import {
   agentRecordOverrideSchema,
   agentRecordSchema,
@@ -215,7 +218,8 @@ export function validateDispatchConfig(
     }
   }
 
-  const requiredBackends = new Set<AgentKind>([settings.agent.kind]);
+  const requiredBackends = new Set<AgentKind>(Object.keys(settings.agents));
+  requiredBackends.add(settings.agent.kind);
   for (const override of settings.statusOverrides.values()) {
     if (override.agent?.kind) requiredBackends.add(override.agent.kind);
   }
@@ -314,19 +318,13 @@ function parseTracker(
   // rejected with the full list of known kinds by validateDispatchConfig.
   const provider = registry.get(kind);
 
-  const apiKey = resolveConfiguredSecret(
-    trackerRecord.apiKey,
-    env,
-    provider?.envFallbacks?.apiKey,
-    {
-      register: true,
-    },
-  );
-  const assignee = resolveConfiguredSecret(
-    trackerRecord.assignee,
-    env,
-    provider?.envFallbacks?.assignee,
-  );
+  const apiKey = resolveConfiguredSecret(trackerRecord.apiKey, env, {
+    fallbackEnvName: provider?.envFallbacks?.apiKey,
+    register: true,
+  });
+  const assignee = resolveConfiguredSecret(trackerRecord.assignee, env, {
+    fallbackEnvName: provider?.envFallbacks?.assignee,
+  });
   const endpoint = trackerRecord.endpoint ?? provider?.defaultEndpoint ?? defaults.endpoint;
 
   const providerRaw: Record<string, unknown> = {};
@@ -338,7 +336,10 @@ function parseTracker(
     ? provider.parseOptions(aliased, {
         env,
         resolveSecret: (value, fallbackEnvVar) =>
-          resolveConfiguredSecret(value, env, fallbackEnvVar, { register: true }),
+          resolveConfiguredSecret(value, env, {
+            fallbackEnvName: fallbackEnvVar,
+            register: true,
+          }),
       })
     : aliased;
 
@@ -408,7 +409,7 @@ function parseTrackerRecord(raw: Record<string, unknown>, label: string): Tracke
 }
 
 function expandLocalPath(value: string, env: NodeJS.ProcessEnv): string {
-  const expanded = expandPathVariables(value, env);
+  const expanded = resolveEnvReference(value, env);
   const home = nonEmptyString(env.HOME) ?? nonEmptyString(env.USERPROFILE);
   if (home && expanded === "~") return home;
   if (home && expanded.startsWith("~/")) return joinPath(home, expanded.slice(2));
@@ -879,7 +880,8 @@ function parseAgentOptions(
   try {
     return provider.parseOptions(options, {
       env,
-      resolveSecret: (value, fallbackEnvVar) => resolveConfiguredSecret(value, env, fallbackEnvVar),
+      resolveSecret: (value, fallbackEnvVar) =>
+        resolveConfiguredSecret(value, env, { fallbackEnvName: fallbackEnvVar }),
     });
   } catch (error) {
     throw new Error(`${label}: ${errorMessage(error)}`, { cause: error });
@@ -1059,7 +1061,7 @@ function resolveToolOptionReferences(
     resolved[pack] = Object.fromEntries(
       Object.entries(structuredClone(options)).flatMap(([key, value]) => {
         if (typeof value !== "string") return [[key, value]];
-        const secret = resolveConfiguredSecret(value, env, undefined, {
+        const secret = resolveConfiguredSecret(value, env, {
           register: isSecretOptionKey(key),
         });
         return secret === undefined ? [] : [[key, secret]];
@@ -1071,73 +1073,6 @@ function resolveToolOptionReferences(
 
 function isSecretOptionKey(key: string): boolean {
   return isDiagnosticSecretKey(key);
-}
-
-function cloneSettings(settings: Settings): Settings {
-  return {
-    ...settings,
-    tracker: cloneTracker(settings.tracker),
-    polling: { ...settings.polling },
-    workspace: { ...settings.workspace },
-    worker: cloneWorkerSettings(settings.worker),
-    hooks: { ...settings.hooks },
-    agent: { ...settings.agent, skills: [...settings.agent.skills] },
-    agents: cloneAgentRecords(settings.agents),
-    ...(settings.toolOptions !== undefined && {
-      toolOptions: structuredClone(settings.toolOptions),
-    }),
-    observability: { ...settings.observability },
-    server: { ...settings.server },
-    logging: { ...settings.logging },
-    statusOverrides: new Map(settings.statusOverrides),
-  };
-}
-
-function cloneWorkerSettings(worker: WorkerSettings): WorkerSettings {
-  const cloned: WorkerSettings = { ...worker, sshHosts: [...worker.sshHosts] };
-  if (worker.workerPool === undefined) {
-    delete cloned.workerPool;
-  } else {
-    cloned.workerPool = cloneWorkerPool(worker.workerPool);
-  }
-  return cloned;
-}
-
-function cloneWorkerPool(workerPool: WorkerPoolSettings): WorkerPoolSettings {
-  // A shallow spread copies the enumerable `maxInFlight` getter as a plain data property; strip it
-  // and re-install the derived accessor over the cloned `slotsPerMachine` so the clone stays
-  // drift-proof (single own field) exactly like the parse path.
-  const { maxInFlight: _maxInFlight, ...rest } = workerPool;
-  const input: WorkerPoolSettingsInput = { ...rest };
-  if (workerPool.spend !== undefined) input.spend = { ...workerPool.spend };
-  if (workerPool.driverOptions !== undefined) {
-    // structuredClone guarantees nested arrays/objects (e.g. ssh_hosts) are copied,
-    // so a per-issue settings clone never aliases the source driverOptions.
-    input.driverOptions = structuredClone(workerPool.driverOptions);
-  }
-  return withDerivedMaxInFlight(input);
-}
-
-/**
- * Deep-copy mutable tracker collections (dispatch, state lists, provider options) so
- * per-issue-state clones cannot mutate the shared base config.
- */
-function cloneTracker(tracker: TrackerSettings): TrackerSettings {
-  return {
-    ...tracker,
-    dispatch: { ...tracker.dispatch },
-    activeStates: [...tracker.activeStates],
-    terminalStates: [...tracker.terminalStates],
-    options: structuredClone(tracker.options),
-  };
-}
-
-function cloneAgentRecords(records: Record<string, AgentConfig>): Record<string, AgentConfig> {
-  const cloned: Record<string, AgentConfig> = {};
-  for (const [name, record] of Object.entries(records)) {
-    cloned[name] = { ...record, options: structuredClone(record.options) };
-  }
-  return cloned;
 }
 
 function asRecord(value: unknown, label: string): Record<string, unknown> {
@@ -1163,124 +1098,4 @@ function normalizeOnlyRoutes(routes: string[]): string[] {
     throw new Error("tracker.dispatch.only_routes must not contain blank routes");
   }
   return [...new Set(normalized)];
-}
-
-function resolveEnv(value: string, env: NodeJS.ProcessEnv): string {
-  const name = wholeEnvName(value);
-  if (name === null) return value;
-  return env[name] ?? "";
-}
-
-function resolveConfiguredSecret(
-  value: string | undefined,
-  env: NodeJS.ProcessEnv,
-  fallbackEnvName?: string,
-  options: { register?: boolean | undefined } = {},
-): string | undefined {
-  const fallback = fallbackEnvName === undefined ? undefined : nonEmptyString(env[fallbackEnvName]);
-  const shouldRegister =
-    options.register === true ||
-    (value !== undefined && value.startsWith("op://")) ||
-    (fallback !== undefined && fallback.startsWith("op://"));
-  let secret: string | undefined;
-  if (value === undefined) {
-    secret = resolveOnePasswordRef(fallback, env);
-  } else {
-    const resolved = resolveEnv(value, env);
-    const candidate = nonEmptyString(resolved) ?? fallback;
-    secret = resolveOnePasswordRef(candidate, env);
-  }
-  if (shouldRegister) registerDiagnosticSecret(secret);
-  return secret;
-}
-
-const DEFAULT_SECRET_RESOLUTION_TIMEOUT_MS = 30_000;
-const SECRET_RESOLUTION_TIMEOUT_ENV = "LORENZ_SECRET_RESOLUTION_TIMEOUT_MS";
-const SECRET_PROVIDER_ENV_KEYS = new Set([
-  "HOME",
-  "LOGNAME",
-  "PATH",
-  "SHELL",
-  "TMPDIR",
-  "USER",
-  "XDG_CACHE_HOME",
-  "XDG_CONFIG_HOME",
-  "XDG_DATA_HOME",
-  "XDG_STATE_HOME",
-]);
-
-function resolveOnePasswordRef(
-  value: string | undefined,
-  env: NodeJS.ProcessEnv,
-): string | undefined {
-  if (value === undefined || !value.startsWith("op://")) return value;
-  const providerEnv = secretProviderEnv(env);
-  const timeout = secretResolutionTimeoutMs(env);
-  try {
-    const result = execaSync("op", ["read", value], {
-      env: providerEnv,
-      extendEnv: false,
-      timeout,
-    });
-    return result.stdout.trim();
-  } catch (error) {
-    if (isTimeoutError(error)) {
-      // eslint-disable-next-line preserve-caught-error -- Secret-boundary rethrows must not retain provider error objects.
-      throw new Error(
-        `Timed out resolving 1Password reference after ${timeout}ms; check 1Password CLI sign-in, network access, and vault permissions.`,
-      );
-    }
-    if (isMissingExecutableError(error)) {
-      // eslint-disable-next-line preserve-caught-error -- Secret-boundary rethrows must not retain provider error objects.
-      throw new Error(
-        "1Password CLI (op) is required to resolve op:// references but was not found. " +
-          "Install it from https://developer.1password.com/docs/cli/get-started - it cannot be managed by mise.",
-      );
-    }
-    // eslint-disable-next-line preserve-caught-error -- Secret-boundary rethrows must not retain provider error objects.
-    throw new Error(
-      "Failed to resolve 1Password reference; check the redacted op:// reference, vault access, and 1Password sign-in.",
-    );
-  }
-}
-
-function secretProviderEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  const out: NodeJS.ProcessEnv = {};
-  for (const source of [process.env, env]) {
-    for (const [key, value] of Object.entries(source)) {
-      if (value === undefined || !isSecretProviderEnvKey(key)) continue;
-      out[key] = value;
-    }
-  }
-  return out;
-}
-
-function isSecretProviderEnvKey(key: string): boolean {
-  return SECRET_PROVIDER_ENV_KEYS.has(key) || key.startsWith("OP_");
-}
-
-function secretResolutionTimeoutMs(env: NodeJS.ProcessEnv): number {
-  const raw = env[SECRET_RESOLUTION_TIMEOUT_ENV] ?? process.env[SECRET_RESOLUTION_TIMEOUT_ENV];
-  const parsed = raw === undefined ? NaN : Number(raw);
-  return Number.isInteger(parsed) && parsed > 0 ? parsed : DEFAULT_SECRET_RESOLUTION_TIMEOUT_MS;
-}
-
-function isTimeoutError(error: unknown): boolean {
-  if (!isPlainRecord(error)) return false;
-  return error.timedOut === true || error.code === "ETIMEDOUT";
-}
-
-function isMissingExecutableError(error: unknown): boolean {
-  if (!isPlainRecord(error)) return false;
-  return error.code === "ENOENT";
-}
-
-function expandPathVariables(value: string, env: NodeJS.ProcessEnv): string {
-  const name = wholeEnvName(value);
-  return name === null ? value : (env[name] ?? "");
-}
-
-function wholeEnvName(value: string): string | null {
-  const match = /^\$([A-Za-z_][A-Za-z0-9_]*)$/.exec(value);
-  return match?.[1] ?? null;
 }

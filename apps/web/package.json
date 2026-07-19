@@ -9,8 +9,9 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@lorenz/domain": "workspace:*",
     "@lorenz/presenter": "workspace:*",
-    "@lorenz/traceviz-server": "workspace:*",
+    "@lorenz/traceviz-core": "workspace:*",
     "react": "catalog:",
     "react-dom": "catalog:",
     "react-markdown": "catalog:",

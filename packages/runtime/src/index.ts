@@ -1,11 +1,15 @@
-import { issueHasOpenBlockers, issueIsActive, routedToThisWorker, slotKey } from "@lorenz/dispatch";
-import { reconciliationStopReason } from "@lorenz/policies/reconciliation";
+import {
+  issueHasOpenBlockers,
+  issueIsActive,
+  routeAgentKind,
+  routedToThisWorker,
+  settingsWithRouteAgent,
+  slotKey,
+} from "@lorenz/dispatch";
 import { isTerminalState } from "@lorenz/issue";
 import { Orchestrator, type ClaimStoreLike, type SlotReservation } from "@lorenz/orchestrator";
 import { settingsForIssueState, validateDispatchConfig } from "@lorenz/config";
 import { runAgentAttempt, type RunResult } from "@lorenz/agent-runner";
-import { ProjectionActor } from "@lorenz/projections";
-import { RetryScheduler } from "@lorenz/retry-scheduler";
 import { workflowFileChanged, workflowStampsEqual } from "@lorenz/workflow";
 import {
   durationMs,
@@ -49,8 +53,14 @@ import {
   type RunSlot,
 } from "@lorenz/dispatch-coordinator";
 
+import { ProjectionActor } from "./projection.js";
+import { RetryScheduler } from "./retry-scheduler.js";
+import { reconciliationStopReason } from "./reconciliation.js";
+
 export type RuntimeRunner = (input: Parameters<typeof runAgentAttempt>[0]) => Promise<RunResult>;
 
+export { ProjectionActor } from "./projection.js";
+export type { RuntimeProjectionInput } from "./projection.js";
 export { RUNTIME_EVENT_TYPES, RUNTIME_RUN_OUTCOMES } from "@lorenz/runtime-events";
 export type {
   RuntimeAppStatus,
@@ -68,8 +78,9 @@ export type {
 } from "@lorenz/runtime-events";
 export {
   RUNTIME_RECONCILIATION_REASONS,
+  reconciliationStopReason,
   type RuntimeReconciliationReason,
-} from "@lorenz/policies/reconciliation";
+} from "./reconciliation.js";
 
 export interface LorenzRuntimeOptions {
   workflow: WorkflowDefinition;
@@ -698,6 +709,16 @@ export class LorenzRuntime {
       this.addEvent("dispatch_skipped", `${refreshed.identifier} stale_before_dispatch`);
       return [];
     }
+    const routeAgent = routeAgentKind(refreshed, this.workflow.settings);
+    if (routeAgent.conflicts) {
+      const mappings = routeAgent.conflicts
+        .map(({ route, agentKind }) => `${route}=${agentKind}`)
+        .join(", ");
+      this.addEvent(
+        "poll_error",
+        `${refreshed.identifier} agent_route_conflict (${mappings}); no route agent override applied`,
+      );
+    }
     const slotIndex =
       claim.kind === "running" ? claim.entry.slotIndex : claim.reservation.slotIndex;
     const key = slotKey(refreshed.id, slotIndex);
@@ -708,12 +729,13 @@ export class LorenzRuntime {
     // signal reaches the pool's FIFO waiter) exactly as they abort a running one.
     const handle = new ActiveRunHandle(refreshed.id, slotIndex, key, runId, this.activeRuns);
     this.activeRuns.set(key, handle);
+    let acknowledgement: Promise<void> | null = null;
     try {
       this.syncRetryTimer(refreshed.id);
       await this.startClaimOwnerHeartbeat();
       // On the static/local path the run starts immediately. On the pool-governed
       // path run_reserving marks dispatch intent and run_started moves AFTER
-      // bindReservation (inside runReservedClaim): a capacity-refused dispatch
+      // bindReservationAsync (inside runReservedClaim): a capacity-refused dispatch
       // never emits a phantom run_started.
       if (claim.kind === "running") {
         this.addEvent("run_started", `${refreshed.identifier} slot=${slotIndex}`);
@@ -721,6 +743,7 @@ export class LorenzRuntime {
         this.addEvent("run_reserving", `${refreshed.identifier} slot=${slotIndex}`);
       }
       this.input.onIssueDispatched?.(refreshed);
+      if (claim.kind === "running") acknowledgement = this.acknowledgeIssue(refreshed);
     } catch (error) {
       try {
         await this.orchestrator.abandonClaimAsync(refreshed.id, slotIndex);
@@ -733,7 +756,7 @@ export class LorenzRuntime {
       throw error;
     }
 
-    const run =
+    const execution =
       claim.kind === "running"
         ? this.runClaim(
             refreshed,
@@ -744,6 +767,9 @@ export class LorenzRuntime {
             handle,
           )
         : this.runReservedClaim(refreshed, claim.reservation, runId, handle);
+    const run = acknowledgement
+      ? Promise.all([execution, acknowledgement]).then(() => undefined)
+      : execution;
     this.inFlight.add(run);
     void run.finally(() => {
       this.inFlight.delete(run);
@@ -753,6 +779,23 @@ export class LorenzRuntime {
     });
     this.emit();
     return [run];
+  }
+
+  private acknowledgeIssue(issue: Issue): Promise<void> | null {
+    if (!this.client.acknowledgeIssue) return null;
+    try {
+      return this.client.acknowledgeIssue(issue).then(
+        (acknowledged) => {
+          if (acknowledged) this.addEvent("tracker_acknowledged", issue.identifier);
+        },
+        (error) => {
+          this.addEvent("tracker_acknowledge_failed", `${issue.identifier} ${errorMessage(error)}`);
+        },
+      );
+    } catch (error) {
+      this.addEvent("tracker_acknowledge_failed", `${issue.identifier} ${errorMessage(error)}`);
+      return null;
+    }
   }
 
   private async fetchIssueForDispatch(issue: Issue): Promise<Issue | null> {
@@ -948,7 +991,8 @@ export class LorenzRuntime {
       return;
     }
     this.addEvent("run_started", `${issue.identifier} slot=${reservation.slotIndex}`);
-    await this.runClaim(
+    const acknowledgement = this.acknowledgeIssue(issue);
+    const execution = this.runClaim(
       issue,
       reservation.slotIndex,
       reservation.agentKind,
@@ -957,6 +1001,11 @@ export class LorenzRuntime {
       handle,
       slot,
     );
+    if (acknowledgement) {
+      await Promise.all([execution, acknowledgement]);
+    } else {
+      await execution;
+    }
   }
 
   private async cancelReservationAfterSkippedAcquire(
@@ -1021,6 +1070,7 @@ export class LorenzRuntime {
       const result = await this.runner({
         issue,
         workflow: this.workflow,
+        settings: settingsWithRouteAgent(this.workflow.settings, issue),
         workerHost: effectiveWorkerHost,
         slotIndex,
         // Thread the bound slot's per-run MCP endpoint (or null on the local /

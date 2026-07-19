@@ -31,7 +31,7 @@ export {
   workflowFilePath,
 } from "@lorenz/workflow";
 export { normalizeIssue, ensembleSize, isTerminalState } from "@lorenz/issue";
-export { buildPrompt, continuationPrompt } from "@lorenz/prompt";
+export { buildPrompt, continuationPrompt } from "@lorenz/agent-runner";
 export {
   safeIdentifier,
   workspacePath,
@@ -83,8 +83,13 @@ export type {
 export { daemonStatusPayload, type DaemonStatusPayload } from "./daemonStatus.js";
 export { Orchestrator } from "@lorenz/orchestrator";
 export type { RunResult } from "@lorenz/agent-runner";
-export { LorenzRuntime, RUNTIME_EVENT_TYPES } from "@lorenz/runtime";
-export type { RuntimeEvent, RuntimeRunHistoryEntry, LorenzRuntimeOptions } from "@lorenz/runtime";
+export { LorenzRuntime, ProjectionActor, RUNTIME_EVENT_TYPES } from "@lorenz/runtime";
+export type {
+  RuntimeEvent,
+  RuntimeProjectionInput,
+  RuntimeRunHistoryEntry,
+  LorenzRuntimeOptions,
+} from "@lorenz/runtime";
 export { statePayload, issuePayload, runsPayload } from "@lorenz/presenter";
 export { retryBackoffMs, actionForStopReason, mergeMonotonicUsage } from "@lorenz/policies";
 export {
@@ -99,8 +104,6 @@ export {
   firstUnclaimedSlot,
   sortForDispatch,
 } from "@lorenz/dispatch";
-export { ProjectionActor } from "@lorenz/projections";
-export type { RuntimeProjectionInput } from "@lorenz/projections";
 export { Executor, hostAgentBinaryEnv, resolveBridgeCommand } from "@lorenz/acp";
 export { AGENT_UPDATE_TYPES, ISSUE_STATE_TYPES } from "@lorenz/domain";
 export type * from "@lorenz/domain";
