@@ -43,5 +43,8 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Run clean release build
+        run: pnpm build
+
       - name: Run mise check
         run: mise check
