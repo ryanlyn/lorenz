@@ -31,13 +31,16 @@ function settings() {
 function counting(inner: SlackTransport): SlackTransport & {
   scans: number;
   threadReads: number;
+  messageReads: number;
 } {
   const wrapper = Object.create(inner) as SlackTransport & {
     scans: number;
     threadReads: number;
+    messageReads: number;
   };
   wrapper.scans = 0;
   wrapper.threadReads = 0;
+  wrapper.messageReads = 0;
   wrapper.scanChannels = async (channels) => {
     wrapper.scans += 1;
     return inner.scanChannels(channels);
@@ -45,6 +48,10 @@ function counting(inner: SlackTransport): SlackTransport & {
   wrapper.getThread = async (channel, ts) => {
     wrapper.threadReads += 1;
     return inner.getThread(channel, ts);
+  };
+  wrapper.getMessage = async (channel, ts) => {
+    wrapper.messageReads += 1;
+    return inner.getMessage(channel, ts);
   };
   return wrapper;
 }
@@ -473,6 +480,87 @@ test("a reply into an unknown root fetches the root instead of dirtying the chan
   const threaded = scan.threadedRoots.find((m) => m.ts === "5.0");
   assert.ok(threaded !== undefined);
   assert.equal(threaded!.replyCount, 1);
+  assert.equal(inner.messageReads, 1);
+});
+
+test("an irrelevant reply into an unknown root performs no serialized point read", async () => {
+  const inner = counting(
+    new InMemorySlackTransport(
+      {
+        C1: [
+          { ts: "1.0", text: "<@U_BOT> tracked", user: "U2" },
+          { ts: "5.0", text: "plain root", user: "U3" },
+        ],
+      },
+      { botUserId: "U_BOT" },
+    ),
+  );
+  const mirror = mirrored(inner);
+  await mirror.scanChannels(["C1"]);
+
+  mirror.applyEvent(
+    messageEvent({
+      type: "message",
+      channel: "C1",
+      ts: "5.5",
+      thread_ts: "5.0",
+      text: "ordinary thread discussion",
+      user: "U3",
+    }),
+  );
+  const scan = await mirror.scanChannels(["C1"]);
+
+  assert.equal(inner.messageReads, 0);
+  assert.equal(inner.scans, 1);
+  assert.equal(
+    scan.threadedRoots.some((message) => message.ts === "5.0"),
+    false,
+  );
+});
+
+test("standing reconciliation refetches threads whose replies may have been edited", async () => {
+  const raw = new InMemorySlackTransport(
+    {
+      C1: [
+        {
+          ts: "1.0",
+          text: "<@U_BOT> tracked",
+          user: "U2",
+          replies: [
+            {
+              ts: "1.5",
+              text: "Lorenz workpad",
+              user: "U_BOT",
+              metadata: {
+                eventType: WORKPAD_METADATA_EVENT,
+                payload: { issue: "C1:1.0", plan: "- [ ] old" },
+              },
+            },
+          ],
+        },
+      ],
+    },
+    { botUserId: "U_BOT" },
+  );
+  const inner = counting(raw);
+  let clock = 0;
+  const mirror = mirrored(inner, () => clock);
+  await mirror.scanChannels(["C1"]);
+  const initial = await mirror.getThread("C1", "1.0");
+  assert.equal(initial[0]!.metadata!.payload.plan, "- [ ] old");
+
+  await raw.updateMessage("C1", "1.5", "Lorenz workpad", {
+    metadata: {
+      eventType: WORKPAD_METADATA_EVENT,
+      payload: { issue: "C1:1.0", plan: "- [x] repaired" },
+    },
+  });
+  clock = 60_001;
+  await mirror.scanChannels(["C1"]);
+  const repaired = await mirror.getThread("C1", "1.0");
+
+  assert.equal(inner.threadReads, 2);
+  assert.equal(repaired[0]!.metadata!.payload.plan, "- [x] repaired");
 });
 
 test("editing an unmirrored root to mention the bot makes it immediately discoverable", async () => {

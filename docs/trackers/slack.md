@@ -48,13 +48,15 @@ Socket Mode is optional. Without an app token, discovery is pure polling of
 socket becomes a data feed, not just a doorbell: every watched `app_mention`, `message`, and
 reaction event payload is applied to an in-memory **channel mirror**, the poll the event nudges
 reads that mirror instead of re-scanning Slack, and the real history scan runs only as
-reconciliation - at startup, after every reconnect (Slack replays nothing missed while
-disconnected), whenever an event cannot be applied cleanly, and on the `reconcile_interval_ms`
-cadence as a standing repair pass. The fold over thread events is idempotent, so a duplicated or
-re-scanned input re-derives the same state; while the socket is unhealthy the mirror never serves
-and every poll is a real scan, exactly the pull-only behavior. Lorenz rejects an additional Socket
-Mode connection when Slack reports that it would split the feed, preserving exclusive ownership
-for the connection that already backs the mirror. `interactive` envelopes (the
+reconciliation - after every accepted connection, whenever an event cannot be applied cleanly,
+and on the `reconcile_interval_ms` cadence as a standing repair pass. Reconciliation invalidates
+cached thread authority so the following thread read repairs missed edits as well as additions
+and deletions. The fold over thread events is idempotent, so a duplicated or re-scanned input
+re-derives the same state; while the socket is unhealthy the mirror never serves and every poll
+is a real scan, exactly the pull-only behavior. Lorenz rejects an additional Socket Mode
+connection when Slack reports that it would split the feed, preserving exclusive ownership for
+the connection that already backs the mirror. Envelopes buffered on the rejected connection are
+left unacknowledged so Slack can retry them on the owner. `interactive` envelopes (the
 workpad's Cancel/Details buttons) arrive over the same connection, so interactivity needs no
 public HTTP endpoint - enable **Interactivity** in the Slack app config to use the buttons.
 Eligible human thread replies also travel with the event as structured issue data and are

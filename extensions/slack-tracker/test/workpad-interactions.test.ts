@@ -281,6 +281,29 @@ test("the Cancel button posts an attributed authoritative status reply and nudge
   assert.equal(folded.events.at(-1)?.actor, "U9");
 });
 
+test("the Cancel button reports a failed status write to the clicker", async () => {
+  const transport = new InMemorySlackTransport(
+    { C1: [{ ts: "1.0", text: "<@U_BOT> do it", user: "U2" }] },
+    { botUserId: "U_BOT" },
+  );
+  transport.postReply = async () => {
+    throw new Error("status write unavailable");
+  };
+
+  await handleSlackInteraction(
+    {
+      type: "block_actions",
+      user: { id: "U9" },
+      actions: [{ action_id: "lorenz_cancel", value: "C1:1.0" }],
+    },
+    { settings: settings(), transport, logger: silentLogger },
+  );
+
+  assert.equal(transport.ephemerals.length, 1);
+  assert.equal(transport.ephemerals[0]!.user, "U9");
+  assert.ok(transport.ephemerals[0]!.body.includes("status write unavailable"));
+});
+
 test("the Details button opens the session modal; refresh re-renders in place", async () => {
   const transport = new InMemorySlackTransport(
     {

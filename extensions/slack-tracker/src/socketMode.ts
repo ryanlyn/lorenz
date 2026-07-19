@@ -66,9 +66,8 @@ export interface SlackSocketModeOptions {
    */
   onInteractive?: (payload: Record<string, unknown>) => void;
   /**
-   * Invoked when a connection is (re-)established after a previous one existed. Slack replays
-   * nothing that was missed while disconnected, so the mirror treats every reconnect as a gap
-   * and re-syncs from a real scan.
+   * Invoked whenever an exclusive connection becomes ready. The mirror re-syncs from a real scan
+   * because Slack does not replay activity between the preceding API snapshot and this hello.
    */
   onReconnect?: () => void;
   /** Invoked on connect (`true`, on hello) and disconnect (`false`); drives mirror freshness. */
@@ -91,8 +90,8 @@ export interface SlackSocketModeOptions {
  * The connection self-heals: Slack recycles Socket Mode connections periodically (a `disconnect`
  * frame precedes closure) and the network can drop, so a closed socket reconnects with capped
  * exponential backoff. The nudge is best-effort by contract - the interval poll remains the safety
- * net - so a dropped frame or a reconnect gap only delays discovery to the next interval, never
- * loses an issue.
+ * net. Every accepted hello also triggers reconciliation, closing the gap between the preceding
+ * API snapshot and the live feed.
  */
 export class SlackSocketMode implements TrackerChangeStream {
   private readonly endpoint: string;
@@ -112,10 +111,10 @@ export class SlackSocketMode implements TrackerChangeStream {
   private closed = false;
   private reconnectAttempts = 0;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-  /** True once any connection has said hello; a later hello is then a RE-connect (a gap). */
-  private hadConnection = false;
   /** Tracks the live-connection state so close/error only reports a transition once. */
   private connected = false;
+  /** Connections rejected for splitting the feed never acknowledge buffered envelopes. */
+  private readonly rejectedSockets = new WeakSet<SlackWebSocketLike>();
 
   constructor(options: SlackSocketModeOptions) {
     this.endpoint = options.endpoint.replace(/\/+$/, "");
@@ -221,16 +220,7 @@ export class SlackSocketMode implements TrackerChangeStream {
       return;
     }
     if (!isRecord(frame)) return;
-
-    // Every envelope-bearing frame MUST be acknowledged or Slack treats delivery as failed and
-    // redelivers; ack first, then act, so a throw in handling never drops the ack.
-    if (typeof frame.envelope_id === "string") {
-      try {
-        socket.send(JSON.stringify({ envelope_id: frame.envelope_id }));
-      } catch {
-        // A send on a half-closed socket throws; the close handler will reconnect.
-      }
-    }
+    if (this.socket !== socket || this.rejectedSockets.has(socket)) return;
 
     if (frame.type === "hello") {
       // Slack routes each envelope to one open connection. Reject a connection that would split
@@ -242,6 +232,7 @@ export class SlackSocketMode implements TrackerChangeStream {
           `slack socket mode: this app has ${connections} open socket connections; events are ` +
             "split across them, so this connection is closing to preserve exclusive ownership",
         );
+        this.rejectedSockets.add(socket);
         try {
           socket.close();
         } catch {
@@ -252,15 +243,23 @@ export class SlackSocketMode implements TrackerChangeStream {
       // A live exclusive connection resets the backoff so the next drop retries promptly.
       this.reconnectAttempts = 0;
       this.connected = true;
-      if (this.hadConnection) {
-        // Anything delivered while we were between connections is gone (Slack replays nothing),
-        // so a reconnect is a gap by definition - the mirror re-syncs from a real scan.
-        this.safeNotify(this.onReconnect, "onReconnect");
-      }
-      this.hadConnection = true;
+      // This includes the first hello: a bootstrap scan may have completed while the socket was
+      // opening, so every accepted connection closes its preceding API-to-feed gap.
+      this.safeNotify(this.onReconnect, "onReconnect");
       this.safeNotify(() => this.onConnectionState?.(true), "onConnectionState");
       return;
     }
+
+    // Every envelope-bearing frame MUST be acknowledged or Slack treats delivery as failed and
+    // redelivers; ack first, then act, so a throw in handling never drops the ack.
+    if (typeof frame.envelope_id === "string") {
+      try {
+        socket.send(JSON.stringify({ envelope_id: frame.envelope_id }));
+      } catch {
+        // A send on a half-closed socket throws; the close handler will reconnect.
+      }
+    }
+
     if (frame.type === "disconnect") {
       // Slack is recycling this connection. Close so the standard reconnect path opens a fresh
       // one (the interval poll covers the brief gap).

@@ -338,7 +338,7 @@ test("a throwing onEvent handler still acks and still nudges", async () => {
   sm.close();
 });
 
-test("reconnect fires onReconnect (a gap) and onConnectionState tracks both edges", async () => {
+test("every accepted hello reconciles its API-to-feed gap and reports connection edges", async () => {
   const first = new FakeSocket();
   const second = new FakeSocket();
   let reconnects = 0;
@@ -354,15 +354,14 @@ test("reconnect fires onReconnect (a gap) and onConnectionState tracks both edge
   await flush();
 
   first.receive({ type: "hello" });
-  // The FIRST hello is a connect, not a reconnect: there was no gap to repair.
-  assert.equal(reconnects, 0);
+  assert.equal(reconnects, 1);
   assert.deepEqual(states, [true]);
 
   first.close();
   await vi.waitFor(() => assert.ok(second.hasListener("message")));
   second.receive({ type: "hello" });
 
-  assert.equal(reconnects, 1);
+  assert.equal(reconnects, 2);
   assert.deepEqual(states, [true, false, true]);
   sm.close();
 });
@@ -370,8 +369,9 @@ test("reconnect fires onReconnect (a gap) and onConnectionState tracks both edge
 test("a split Socket Mode feed rejects the new connection", async () => {
   const socket = new FakeSocket();
   const states: boolean[] = [];
+  let nudges = 0;
   const sm = makeSocketMode({
-    onChange: () => {},
+    onChange: () => (nudges += 1),
     onConnectionState: (connected) => states.push(connected),
     socketQueue: [socket],
   });
@@ -379,8 +379,15 @@ test("a split Socket Mode feed rejects the new connection", async () => {
   await flush();
 
   socket.receive({ type: "hello", num_connections: 2 });
+  socket.receive({
+    type: "events_api",
+    envelope_id: "env-rejected",
+    payload: { event: { type: "message", channel: "C1", ts: "1.2" } },
+  });
 
   assert.equal(socket.closed, true);
+  assert.equal(nudges, 0);
+  assert.deepEqual(socket.sent, []);
   assert.deepEqual(states, []);
   sm.close();
 });

@@ -15,7 +15,7 @@ trackers:
     # still performs every read and write; this token is used only to open the events socket.
     app_token: $SLACK_APP_TOKEN
     # With Socket Mode, how often the event-fed mirror re-syncs from a real history scan.
-    # Bootstrap, reconnects, and events that cannot be applied also force a real scan.
+    # Every accepted connection and every event that cannot be applied also forces a real scan.
     # reconcile_interval_ms: 900000
     # Optional author allowlist: when set, only these users' bot-mentions create issues and only
     # their eligible thread replies steer active agents. Leave it out for no author constraint.

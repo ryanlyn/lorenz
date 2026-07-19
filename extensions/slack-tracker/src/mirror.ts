@@ -449,11 +449,10 @@ export class MirrorBackedSlackTransport implements SlackTransport {
   }
 
   /**
-   * Rebuild one channel's roots from a real scan. Thread maps survive for roots still present:
-   * events since the last fetch are already in them, and `authoritativeThreads` is re-checked
-   * against the scan's reply counters so a drifted thread (a missed event) re-fetches on next
-   * read. Tombstones are dropped - reconciliation is where deletions take effect - while
-   * first-seen text survives for replies the substrate still carries.
+   * Rebuild one channel's roots from a real scan. Thread maps survive for roots still present,
+   * but every real scan invalidates their authority so the next read can repair edits as well as
+   * additions and deletions. Tombstones are dropped during reconciliation, while first-seen text
+   * survives for replies the substrate still carries.
    */
   private async rebuildChannel(channel: string): Promise<void> {
     // Start reads concurrently across channels, then install each completed snapshot through the
@@ -483,14 +482,10 @@ export class MirrorBackedSlackTransport implements SlackTransport {
             state.replyIndex.delete(ts);
           }
         }
-        // Authority survives only when the substrate agrees with the event-maintained map;
-        // disagreement means a missed event, and the next getThread re-fetches (merging
-        // first-seen text for surviving replies).
-        const countersAgree =
-          (message.replyCount ?? 0) === thread.size &&
-          (thread.size === 0 || latestTsOf(thread) === message.latestReply);
-        if (!countersAgree) state.authoritativeThreads.delete(message.ts);
       }
+      // Reply counts and latest timestamps cannot reveal edits. A standing repair pass therefore
+      // makes the next thread read authoritative even when those scan hints still agree.
+      state.authoritativeThreads.delete(message.ts);
     }
     // Roots gone from the scan (deleted, edited away, or aged out of the scan window) drop out
     // of the mirror exactly as they drop out of a real scan; claimed issues still resolve via
@@ -571,6 +566,9 @@ export class MirrorBackedSlackTransport implements SlackTransport {
         deleted: false,
       });
       state.replyIndex.set(reply.ts, rootTs);
+    }
+    for (const ts of previous?.keys() ?? []) {
+      if (!thread.has(ts)) state.replyIndex.delete(ts);
     }
     state.threads.set(rootTs, thread);
     // Only a synced channel can keep a thread current afterwards (events feed the same state).
@@ -692,10 +690,17 @@ export class MirrorBackedSlackTransport implements SlackTransport {
   ): Promise<void> {
     const state = this.channelState(channel);
     if (!state.roots.has(rootTs)) {
+      const couldTrackRoot =
+        reply.isBot === true ||
+        reply.user === this.botUserId ||
+        (reply.user !== undefined &&
+          isAllowedAuthor(reply.user, this.allowedUsers) &&
+          isBotMention(reply.text, this.botUserId));
+      if (!couldTrackRoot) return;
       // A reply into a thread whose root the mirror does not carry (older than the scan window,
-      // or a plain message receiving its first reply). Fetch the root - one authoritative
-      // point read - rather than guessing or dirtying the whole channel; an unreadable root is
-      // the doubt case that DOES dirty.
+      // or a plain message receiving its first relevant reply) needs one authoritative point
+      // read. Ordinary unknown-thread traffic is ignored above so it cannot block the serialized
+      // event queue behind a rate-limited history call.
       const root = await this.inner.getMessage(channel, rootTs);
       if (root === null) {
         this.markDirty(channel, `reply ${reply.ts} references unknown root ${rootTs}`);

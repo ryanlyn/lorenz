@@ -87,27 +87,44 @@ async function handleCancel(
     userId !== null
       ? `(requested by <@${userId}> via the workpad Cancel button)`
       : "(requested via the workpad Cancel button)";
-  const outcome = await updateSlackStatus(
-    context.settings,
-    context.transport,
-    channel,
-    ts,
-    "Cancelled",
-    { attribution, ...(userId !== null ? { actor: userId } : {}) },
-  );
+  let outcome;
+  try {
+    outcome = await updateSlackStatus(
+      context.settings,
+      context.transport,
+      channel,
+      ts,
+      "Cancelled",
+      { attribution, ...(userId !== null ? { actor: userId } : {}) },
+    );
+  } catch (error) {
+    await reportCancelFailure(issueId, channel, ts, userId, errorMessage(error), context);
+    return;
+  }
   if (!outcome.ok) {
-    context.logger.warn(`slack workpad cancel for ${issueId} failed: ${outcome.message}`);
-    if (userId !== null) {
-      try {
-        await context.transport.postEphemeral(
-          channel,
-          userId,
-          ts,
-          `Could not cancel this issue: ${outcome.message}`,
-        );
-      } catch {
-        // The log line above already records the failure; the ephemeral is best-effort.
-      }
+    await reportCancelFailure(issueId, channel, ts, userId, outcome.message, context);
+  }
+}
+
+async function reportCancelFailure(
+  issueId: string,
+  channel: string,
+  ts: string,
+  userId: string | null,
+  message: string,
+  context: SlackInteractionContext,
+): Promise<void> {
+  context.logger.warn(`slack workpad cancel for ${issueId} failed: ${message}`);
+  if (userId !== null) {
+    try {
+      await context.transport.postEphemeral(
+        channel,
+        userId,
+        ts,
+        `Could not cancel this issue: ${message}`,
+      );
+    } catch {
+      // The log line above records the failure; notifying the clicker is best-effort.
     }
   }
 }
