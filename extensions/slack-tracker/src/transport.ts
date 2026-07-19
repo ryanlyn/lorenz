@@ -37,6 +37,8 @@ export interface SlackThreadReply {
   ts: string;
   text: string;
   user?: string;
+  /** True when Slack marks the reply as bot-authored. */
+  isBot?: boolean;
 }
 
 /** A workspace member, as resolved via `users.info`. */
@@ -71,7 +73,7 @@ export interface SlackTransport {
    */
   teamUrl(): Promise<string | null>;
   /** Return the thread replies for the message at `ts`, EXCLUDING the parent (root) message. */
-  getThread(channel: string, ts: string): Promise<SlackThreadReply[]>;
+  getThread(channel: string, ts: string, abortSignal?: AbortSignal): Promise<SlackThreadReply[]>;
   /** Resolve a workspace member via `users.info`; `null` when unknown or unreadable. */
   getUser(userId: string): Promise<SlackUser | null>;
   /**

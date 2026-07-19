@@ -1,5 +1,5 @@
 import { test } from "vitest";
-import type { TrackerChange } from "@lorenz/domain";
+import { trackerIssueEventsBytes, type TrackerChange } from "@lorenz/domain";
 import { assert } from "@lorenz/test-utils";
 
 import { parseSlackConfig } from "./helpers.js";
@@ -56,6 +56,7 @@ test("mentions become issues; the bot's reactions drive state", async () => {
   assert.equal(candidates[0]!.id, "C1:1700000000.000100");
   assert.equal(candidates[0]!.state, "Todo");
   assert.equal(candidates[0]!.description, "<@U_BOT> fix the flaky test\nmore detail");
+  assert.equal(candidates[0]!.issueEventCursor, "0");
 
   const byId = await client.fetchIssuesByIds(["C1:1700000000.000200"]);
   assert.deepEqual(
@@ -177,6 +178,13 @@ test("InMemorySlackTransport getThread returns seeded replies and a posted reply
 
   // An unknown / non-parent ts yields an empty thread.
   assert.deepEqual(await transport.getThread("C1", "9.9"), []);
+
+  const controller = new AbortController();
+  controller.abort(new Error("stop thread recovery"));
+  await assert.rejects(
+    () => transport.getThread("C1", "1700000000.000100", controller.signal),
+    /stop thread recovery/,
+  );
 });
 
 test("with botUserId only mentions of the bot become candidates", async () => {
@@ -413,6 +421,7 @@ test("a bot mention in a reply tracks the thread: request title, marker, restart
   assert.equal(candidates[0]!.title, "please fix this #backend");
   assert.deepEqual(candidates[0]!.labels, ["backend"]);
   assert.match(candidates[0]!.description ?? "", /flaky deploys in prod/);
+  assert.equal(candidates[0]!.issueEventCursor, replyTs);
   // The bot marked the root so the thread stays tracked without re-reading replies.
   assert.ok((await transport.getMessage("C1", rootTs))!.botReactions.includes("robot_face"));
 
@@ -884,6 +893,7 @@ test("watch opens Socket Mode with the resolved app token and watched channels",
         issueId: "C1:1700000000.000100",
         events: [
           {
+            authorizedForSteering: true,
             ts: "1700000001.000200",
             author: "U_HUMAN",
             text: "steer left",
@@ -905,6 +915,7 @@ test("watch excludes replies that are not agent steering", () => {
         kind: "slack",
         channels: ["C1"],
         bot_user_id: "U_BOT",
+        users: ["U_ALICE"],
         active_states: ["Todo"],
       },
     },
@@ -932,15 +943,39 @@ test("watch excludes replies that are not agent steering", () => {
   };
 
   emit({ ...reply, user: "U_BOT", text: "status: In Progress" });
+  emit({ ...reply, text: "not allowed" });
   emit({ ...reply, text: "<@U_BOT> !done" });
   emit({ ...reply, text: "<@U_BOT> !aside context only" });
+  emit({ ...reply, bot_id: "B_OTHER", text: "bot reply" });
   emit({ ...reply, subtype: "message_changed", text: "edited" });
   emit({ ...reply, thread_ts: undefined, text: "root message" });
+  emit({ ...reply, user: "U_ALICE", text: "allowed steering" });
 
-  assert.deepEqual(changes, [{}, {}, {}, {}, {}]);
+  assert.deepEqual(changes, [
+    {},
+    {},
+    {},
+    {},
+    {},
+    {},
+    {},
+    {
+      issueEvents: {
+        issueId: "C1:1700000000.000100",
+        events: [
+          {
+            authorizedForSteering: true,
+            ts: "1700000001.000200",
+            author: "U_ALICE",
+            text: "allowed steering",
+          },
+        ],
+      },
+    },
+  ]);
 });
 
-test("fetchIssueEvents returns only new human steering replies", async () => {
+test("fetchIssueEvents returns a bounded page of authorized human steering replies", async () => {
   const transport = new InMemorySlackTransport({
     C1: [
       {
@@ -953,6 +988,8 @@ test("fetchIssueEvents returns only new human steering replies", async () => {
           { ts: "1700000000.000400", text: "<@U_BOT> !done", user: "U_HUMAN" },
           { ts: "1700000000.000500", text: "!aside context only", user: "U_HUMAN" },
           { ts: "1700000000.000600", text: "steer left", user: "U_HUMAN" },
+          { ts: "1700000000.000650", text: "steer right", user: "U_HUMAN" },
+          { ts: "1700000000.000675", text: "another bot", user: "U_OTHER_BOT", isBot: true },
           { ts: "1700000000.000700", text: "missing author" },
         ],
       },
@@ -960,11 +997,63 @@ test("fetchIssueEvents returns only new human steering replies", async () => {
   });
   const client = new SlackTrackerClient(settings(), transport);
 
-  assert.deepEqual(await client.fetchIssueEvents("C1:1700000000.000100", "1700000000.000200"), [
-    {
-      ts: "1700000000.000600",
-      author: "U_HUMAN",
-      text: "steer left",
-    },
-  ]);
+  const first = await client.fetchIssueEvents("C1:1700000000.000100", "1700000000.000200", {
+    maxEvents: 1,
+    maxBytes: 64 * 1024,
+  });
+  assert.deepEqual(first, {
+    events: [
+      {
+        authorizedForSteering: true,
+        ts: "1700000000.000600",
+        author: "U_HUMAN",
+        text: "steer left",
+      },
+    ],
+    hasMore: true,
+  });
+
+  const second = await client.fetchIssueEvents("C1:1700000000.000100", "1700000000.000600", {
+    maxEvents: 1,
+    maxBytes: 64 * 1024,
+  });
+  assert.deepEqual(second, {
+    events: [
+      {
+        authorizedForSteering: true,
+        ts: "1700000000.000650",
+        author: "U_HUMAN",
+        text: "steer right",
+      },
+    ],
+    hasMore: false,
+  });
+});
+
+test("fetchIssueEvents applies tracker.users authorization and the page byte limit", async () => {
+  const transport = new InMemorySlackTransport({
+    C1: [
+      {
+        ts: "1700000000.000100",
+        text: "<@U_BOT> do it",
+        reactions: ["eyes"],
+        replies: [
+          { ts: "1700000000.000200", text: "not authorized", user: "U_BOB" },
+          { ts: "1700000000.000300", text: "a".repeat(1_000), user: "U_ALICE" },
+        ],
+      },
+    ],
+  });
+  const client = new SlackTrackerClient(allowlistSettings(), transport);
+
+  const page = await client.fetchIssueEvents("C1:1700000000.000100", "0", {
+    maxEvents: 10,
+    maxBytes: 256,
+  });
+  assert.equal(page.events.length, 1);
+  assert.equal(page.events[0]!.author, "U_ALICE");
+  assert.equal(page.events[0]!.authorizedForSteering, true);
+  assert.ok(trackerIssueEventsBytes(page.events) <= 256);
+  assert.match(page.events[0]!.text, /message shortened for live delivery/);
+  assert.equal(page.hasMore, false);
 });

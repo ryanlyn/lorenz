@@ -84,7 +84,12 @@ export class InMemorySlackTransport implements SlackTransport {
     return Promise.resolve(found ? this.snapshot(found) : null);
   }
 
-  async getThread(channel: string, ts: string): Promise<SlackThreadReply[]> {
+  async getThread(
+    channel: string,
+    ts: string,
+    abortSignal?: AbortSignal,
+  ): Promise<SlackThreadReply[]> {
+    abortSignal?.throwIfAborted();
     const found = (this.messages.get(channel) ?? []).find((m) => m.ts === ts);
     return Promise.resolve(found ? found.thread.map((r) => ({ ...r })) : []);
   }

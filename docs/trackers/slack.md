@@ -86,7 +86,8 @@ trackers:
 | `channels`            |                     |                                                               | Required. List of `C...` channel ids. Entries resolve `$VAR` references; an unresolved ref collapses to empty and is dropped.         |
 | `bot_user_id`         | `SLACK_BOT_USER_ID` |                                                               | Required. The bot's `U...` id. An empty string does not satisfy it.                                                                   |
 | `api_key`             | `SLACK_BOT_TOKEN`   |                                                               | The `xoxb-` bot token.                                                                                                                |
-| `app_token`           | `SLACK_APP_TOKEN`   |                                                               | Optional `xapp-` app-level token for Socket Mode push wakeups.                                                                        |
+| `app_token`           | `SLACK_APP_TOKEN`   |                                                               | Optional `xapp-` app-level token for Socket Mode wakeups and immediate live steering.                                                  |
+| `users`               |                     | Any authenticated human                                       | Optional author allowlist applied to issue creation and steering replies.                                                             |
 | `endpoint`            |                     | `https://slack.com/api`                                       | Slack Web API base.                                                                                                                   |
 | `emoji_states`        |                     | `eyes: In Progress`, `white_check_mark: Done`, `x: Cancelled` | Emoji name to state name, merged over the built-in `DEFAULT_EMOJI_STATES`.                                                            |
 | `marker_emoji`        |                     | `robot_face`                                                  | The reaction the bot adds to mark a tracked thread root.                                                                              |
@@ -252,10 +253,16 @@ delivers it. ACP queues the prompt behind any turn already executing, so that re
 next turn. The runner consumes the queued result as the next turn slot and does not append the reply
 to a separate continuation prompt.
 
-Bot-authored replies, status commands, `!aside` replies, message edits, system messages, and channel
-roots do not steer the agent. A thread read recovers eligible human replies after a reconnect or
-turn boundary using the latest submitted Slack timestamp as a watermark. Without Socket Mode,
-eligible replies are recovered between turns rather than pushed during an executing turn.
+Slack authenticates the reply author. The same `tracker.users` policy used for issue creation
+authorizes steering: when the list is non-empty only listed users can direct the agent; when it is
+empty any authenticated human in a watched channel is eligible. Bot-authored replies, unknown
+authors, status commands, `!aside` replies, message edits, system messages, and channel roots do not
+steer the agent.
+
+`conversations.replies` recovers eligible messages after a reconnect or turn boundary. Recovery
+returns oldest-first bounded pages, advances only through accepted events, and shortens oversized
+live-delivery text without changing its Slack timestamp or author. Without Socket Mode, eligible
+replies are recovered between turns rather than pushed during an executing turn.
 
 Reads retry on 429 and 5xx. Each retry wait is logged so a rate-limited scan is visible in daemon
 logs instead of looking hung. `chat.postMessage` retries only on 429, never on an ambiguous 5xx,

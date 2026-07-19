@@ -811,6 +811,7 @@ test("getThread reads conversations.replies and drops the parent message", async
           { ts: "1.1", text: "<@U1> the root", reactions: [{ name: "eyes" }] },
           { ts: "1.2", text: "first reply", user: "U_HUMAN" },
           { ts: "1.3", text: "second reply" },
+          { ts: "1.4", text: "automation", user: "U_AUTOMATION", bot_id: "B1" },
         ],
       }),
       { status: 200, headers: { "content-type": "application/json" } },
@@ -823,10 +824,32 @@ test("getThread reads conversations.replies and drops the parent message", async
   assert.deepEqual(replies, [
     { ts: "1.2", text: "first reply", user: "U_HUMAN" },
     { ts: "1.3", text: "second reply" },
+    { ts: "1.4", text: "automation", user: "U_AUTOMATION", isBot: true },
   ]);
   assert.match(calls[0]!.url, /\/conversations\.replies\?/);
   assert.match(calls[0]!.url, /channel=C1/);
   assert.match(calls[0]!.url, /ts=1\.1/);
+});
+
+test("getThread propagates cancellation to the Slack request", async () => {
+  const controller = new AbortController();
+  let receivedSignal: AbortSignal | null = null;
+  const fetchImpl = (async (_url: string | URL, init?: RequestInit) => {
+    receivedSignal = init?.signal ?? null;
+    return new Promise<Response>((_resolve, reject) => {
+      init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), { once: true });
+    });
+  }) as typeof fetch;
+
+  const pending = new SlackWebTransport(settings(), fetchImpl).getThread(
+    "C1",
+    "1.1",
+    controller.signal,
+  );
+  controller.abort(new Error("stop thread recovery"));
+
+  await assert.rejects(() => pending, /stop thread recovery/);
+  assert.equal(receivedSignal?.aborted, true);
 });
 
 test("getThread follows next_cursor across pages, excluding the parent on each page", async () => {

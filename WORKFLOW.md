@@ -112,6 +112,7 @@ The agent should be able to talk to Linear, either via a configured Linear MCP s
 - Keep ticket metadata current (state, checklist, acceptance criteria, links).
 - Treat a single persistent Linear comment as the source of truth for progress.
 - Use that single workpad comment for all progress and handoff notes; do not post separate "done"/summary comments.
+- Treat a human tracker message delivered as a queued turn as current issue input. Reconcile it with the issue state and scope before continuing.
 - Treat any ticket-authored `Validation`, `Test Plan`, or `Testing` section as non-negotiable acceptance input: mirror it in the workpad and execute it before considering the work complete.
 - When meaningful out-of-scope improvements are discovered during execution,
   file a separate tracker issue instead of expanding scope. The follow-up issue

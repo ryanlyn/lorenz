@@ -14,6 +14,8 @@ interface RawSlackMessage {
   ts?: string;
   text?: string;
   user?: string;
+  bot_id?: string;
+  subtype?: string;
   reply_count?: number;
   latest_reply?: string;
   reactions?: Array<{ name?: string; users?: string[] }>;
@@ -311,16 +313,21 @@ export class SlackWebTransport implements SlackTransport {
     return [...merged.values()].sort((a, b) => Number.parseFloat(a.ts) - Number.parseFloat(b.ts));
   }
 
-  async getThread(channel: string, ts: string): Promise<SlackThreadReply[]> {
+  async getThread(
+    channel: string,
+    ts: string,
+    abortSignal?: AbortSignal,
+  ): Promise<SlackThreadReply[]> {
     // conversations.replies returns the parent (root) message FIRST followed by its replies. Page
     // through next_cursor like listMentions (a pure read, safe to retry on 429/5xx) and drop the
     // parent (the message whose ts === the thread ts) so only the replies are returned.
     const out: SlackThreadReply[] = [];
     let cursor: string | undefined;
     for (let page = 0; page < this.maxHistoryPages; page += 1) {
+      abortSignal?.throwIfAborted();
       const params: Record<string, string> = { channel, ts, limit: "200" };
       if (cursor) params.cursor = cursor;
-      const body = await this.get("conversations.replies", params);
+      const body = await this.get("conversations.replies", params, abortSignal);
       const messages = Array.isArray(body.messages) ? (body.messages as RawSlackMessage[]) : [];
       for (const m of messages) {
         if (typeof m.ts !== "string") continue;
@@ -369,18 +376,22 @@ export class SlackWebTransport implements SlackTransport {
   private async get(
     method: string,
     params: Record<string, string>,
+    abortSignal?: AbortSignal,
   ): Promise<Record<string, unknown>> {
     const url = `${this.endpoint}/${method}?${new URLSearchParams(params).toString()}`;
     // GET (conversations.history) is a pure read: safe to retry on both 429 and 5xx.
     const response = await this.fetchWithRetry(
       method,
-      async () =>
-        this.fetchImpl(url, {
+      async () => {
+        abortSignal?.throwIfAborted();
+        const timeoutSignal = AbortSignal.timeout(30_000);
+        return this.fetchImpl(url, {
           method: "GET",
           headers: { authorization: `Bearer ${this.token}` },
-          signal: AbortSignal.timeout(30_000),
-        }),
-      { idempotent: true },
+          signal: abortSignal ? AbortSignal.any([abortSignal, timeoutSignal]) : timeoutSignal,
+        });
+      },
+      { idempotent: true, ...(abortSignal ? { abortSignal } : {}) },
     );
     return this.parse(method, response);
   }
@@ -410,9 +421,10 @@ export class SlackWebTransport implements SlackTransport {
   private async fetchWithRetry(
     method: string,
     send: () => Promise<Response>,
-    options: { idempotent: boolean },
+    options: { idempotent: boolean; abortSignal?: AbortSignal },
   ): Promise<Response> {
     for (let retryCount = 0; ; retryCount += 1) {
+      options.abortSignal?.throwIfAborted();
       let response: Response;
       try {
         response = await send();
@@ -440,7 +452,7 @@ export class SlackWebTransport implements SlackTransport {
         `slack ${method}: HTTP ${response.status}; backing off ${Math.round(delayMs / 1000)}s ` +
           `before retry ${retryCount + 1}/${MAX_RETRIES}`,
       );
-      await this.sleep(delayMs);
+      await sleepWithAbort(this.sleep(delayMs), options.abortSignal);
     }
   }
 
@@ -523,5 +535,30 @@ function toThreadReply(m: RawSlackMessage): SlackThreadReply {
   // exactOptionalPropertyTypes: only set `user` when present rather than assigning undefined.
   const reply: SlackThreadReply = { ts: m.ts ?? "", text: m.text ?? "" };
   if (typeof m.user === "string") reply.user = m.user;
+  if (typeof m.bot_id === "string" || m.subtype === "bot_message") reply.isBot = true;
   return reply;
+}
+
+async function sleepWithAbort(
+  sleep: Promise<void>,
+  abortSignal: AbortSignal | undefined,
+): Promise<void> {
+  if (!abortSignal) {
+    await sleep;
+    return;
+  }
+  abortSignal.throwIfAborted();
+  let onAbort: (() => void) | undefined;
+  const aborted = new Promise<never>((_resolve, reject) => {
+    onAbort = () => {
+      const reason = abortSignal.reason as unknown;
+      reject(reason instanceof Error ? reason : new Error("Slack request aborted"));
+    };
+    abortSignal.addEventListener("abort", onAbort, { once: true });
+  });
+  try {
+    await Promise.race([sleep, aborted]);
+  } finally {
+    if (onAbort) abortSignal.removeEventListener("abort", onAbort);
+  }
 }
