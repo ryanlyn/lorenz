@@ -4,6 +4,7 @@ import { assert } from "@lorenz/test-utils";
 import { parseSlackConfig } from "./helpers.js";
 
 import {
+  isAsideText,
   parseStatusCommand,
   stateFromThread,
   type SlackMessage,
@@ -58,6 +59,23 @@ test("command grammar: keywords, explicit status, punctuation, and non-commands"
   assert.equal(parseStatusCommand("please <@U_BOT> !done", "U_BOT", s), null);
   // Unknown explicit status names are not commands.
   assert.equal(parseStatusCommand("<@U_BOT> !status Shipped", "U_BOT", s), null);
+});
+
+test("asides are recognized and do not reopen or transition an issue", () => {
+  const s = settings();
+  assert.equal(isAsideText("!aside context only", "U_BOT"), true);
+  assert.equal(isAsideText("<@U_BOT> !ASIDE context only", "U_BOT"), true);
+  assert.equal(isAsideText("!aside-ish is ordinary text", "U_BOT"), false);
+
+  const result = stateFromThread(
+    root("<@U_BOT> fix it"),
+    [
+      reply("101.1", "status: Done", "U_BOT"),
+      reply("102.1", "<@U_BOT> !aside this should not reopen the issue", "U_HUMAN"),
+    ],
+    s,
+  );
+  assert.equal(result.state, "Done");
 });
 
 test("the latest command or bot status reply wins by ts order", () => {

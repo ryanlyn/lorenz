@@ -37,6 +37,27 @@ export interface SlackThreadReply {
   ts: string;
   text: string;
   user?: string;
+  /** Slack message subtype, when present. Only `thread_broadcast` is steering-eligible. */
+  subtype?: string;
+  /** True when Slack marks the reply as bot-authored. */
+  isBot?: boolean;
+  /** True when Slack reports that the stored reply text was edited. */
+  edited?: boolean;
+}
+
+/** One Slack API page of thread replies newer than an event cursor. */
+export interface SlackThreadReplyPage {
+  replies: SlackThreadReply[];
+  /** Opaque Slack pagination cursor. Omitted when the thread page is complete. */
+  nextCursor?: string;
+}
+
+/** Bounds and cancellation for one Slack thread-reply page. */
+export interface SlackThreadReplyPageQuery {
+  afterTs: string;
+  limit: number;
+  cursor?: string;
+  abortSignal?: AbortSignal;
 }
 
 /** A workspace member, as resolved via `users.info`. */
@@ -71,7 +92,13 @@ export interface SlackTransport {
    */
   teamUrl(): Promise<string | null>;
   /** Return the thread replies for the message at `ts`, EXCLUDING the parent (root) message. */
-  getThread(channel: string, ts: string): Promise<SlackThreadReply[]>;
+  getThread(channel: string, ts: string, abortSignal?: AbortSignal): Promise<SlackThreadReply[]>;
+  /** Return one bounded page of replies newer than `afterTs`, excluding the thread root. */
+  getThreadPage(
+    channel: string,
+    ts: string,
+    query: SlackThreadReplyPageQuery,
+  ): Promise<SlackThreadReplyPage>;
   /** Resolve a workspace member via `users.info`; `null` when unknown or unreadable. */
   getUser(userId: string): Promise<SlackUser | null>;
   /**

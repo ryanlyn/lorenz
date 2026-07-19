@@ -3,6 +3,8 @@ import type {
   SlackChannelScan,
   SlackMessage,
   SlackThreadReply,
+  SlackThreadReplyPage,
+  SlackThreadReplyPageQuery,
   SlackTransport,
   SlackUser,
 } from "./transport.js";
@@ -84,9 +86,36 @@ export class InMemorySlackTransport implements SlackTransport {
     return Promise.resolve(found ? this.snapshot(found) : null);
   }
 
-  async getThread(channel: string, ts: string): Promise<SlackThreadReply[]> {
+  async getThread(
+    channel: string,
+    ts: string,
+    abortSignal?: AbortSignal,
+  ): Promise<SlackThreadReply[]> {
+    abortSignal?.throwIfAborted();
     const found = (this.messages.get(channel) ?? []).find((m) => m.ts === ts);
     return Promise.resolve(found ? found.thread.map((r) => ({ ...r })) : []);
+  }
+
+  async getThreadPage(
+    channel: string,
+    ts: string,
+    query: SlackThreadReplyPageQuery,
+  ): Promise<SlackThreadReplyPage> {
+    query.abortSignal?.throwIfAborted();
+    const found = (this.messages.get(channel) ?? []).find((m) => m.ts === ts);
+    const after = Number.parseFloat(query.afterTs);
+    const offset = query.cursor === undefined ? 0 : Number.parseInt(query.cursor, 10);
+    if (!Number.isInteger(offset) || offset < 0) {
+      throw new Error(`invalid in-memory Slack thread cursor: ${query.cursor}`);
+    }
+    const replies = (found?.thread ?? [])
+      .filter((reply) => Number.parseFloat(reply.ts) > after)
+      .sort((left, right) => Number.parseFloat(left.ts) - Number.parseFloat(right.ts));
+    const end = Math.min(replies.length, offset + query.limit);
+    return Promise.resolve({
+      replies: replies.slice(offset, end).map((reply) => ({ ...reply })),
+      ...(end < replies.length ? { nextCursor: String(end) } : {}),
+    });
   }
 
   async getUser(userId: string): Promise<SlackUser | null> {

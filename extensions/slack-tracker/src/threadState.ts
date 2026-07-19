@@ -115,6 +115,16 @@ export function parseStatusCommand(
   return null;
 }
 
+/**
+ * True when the first line begins with `!aside` after an optional leading bot mention.
+ * Asides remain visible in Slack but do not steer the agent or change issue state.
+ */
+export function isAsideText(text: string, botUserId: string | undefined): boolean {
+  const stripped = stripLeadingMention(text.trim(), botUserId);
+  const firstLine = (stripped.split("\n")[0] ?? "").trim();
+  return /^!aside(?:\s|$)/i.test(firstLine);
+}
+
 /** Derived status of one tracked thread plus, for reply-tracked threads, the request reply. */
 export interface ThreadState {
   state: string;
@@ -150,6 +160,7 @@ export function stateFromThread(
       }
       continue;
     }
+    if (isAsideText(reply.text, botUserId)) continue;
     if (!isBotMention(reply.text, botUserId)) continue;
     if (!rootIsMention && request === undefined) {
       // The first bot-mention reply from an allowed author in a non-mention thread is the request

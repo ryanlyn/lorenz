@@ -43,8 +43,8 @@ export interface SlackSocketModeOptions {
   appToken: string;
   /** Watched channel ids; events outside these are ignored so we never poll on unrelated traffic. */
   channels: string[];
-  /** Invoked when a watched channel sees a mention/reply/reaction so the runtime re-polls promptly. */
-  onChange: () => void;
+  /** Invoked with the watched event payload so the tracker can attach structured change data. */
+  onChange: (payload?: Record<string, unknown>) => void;
   fetchImpl?: typeof fetch;
   webSocketFactory?: SlackWebSocketFactory;
   logger?: SlackTrackerLogger;
@@ -55,10 +55,10 @@ export interface SlackSocketModeOptions {
 /**
  * Slack Socket Mode client: opens a WebSocket via `apps.connections.open` and invokes
  * {@link SlackSocketModeOptions.onChange} the instant a watched channel sees an `app_mention`,
- * a `message` (covers thread-reply mentions and human `!status` commands), or a reaction change.
- * This is Slack's recommended push transport - no public HTTP endpoint, just an app-level token -
- * and it lets the runtime dispatch immediately instead of waiting out the (deliberately
- * conservative) poll interval.
+ * a `message` (covers issue mentions, human commands, and eligible steering replies), or a
+ * reaction change. This is Slack's recommended push transport - no public HTTP endpoint, just an
+ * app-level token - and it lets the runtime react immediately instead of waiting out the
+ * deliberately conservative poll interval.
  *
  * The connection self-heals: Slack recycles Socket Mode connections periodically (a `disconnect`
  * frame precedes closure) and the network can drop, so a closed socket reconnects with capped
@@ -70,7 +70,7 @@ export class SlackSocketMode implements TrackerChangeStream {
   private readonly endpoint: string;
   private readonly appToken: string;
   private readonly channels: Set<string>;
-  private readonly onChange: () => void;
+  private readonly onChange: (payload?: Record<string, unknown>) => void;
   private readonly fetchImpl: typeof fetch;
   private readonly webSocketFactory: SlackWebSocketFactory;
   private readonly logger: SlackTrackerLogger;
@@ -208,7 +208,7 @@ export class SlackSocketMode implements TrackerChangeStream {
       return;
     }
     if (frame.type === "events_api" && this.eventTouchesWatchedChannel(frame.payload)) {
-      this.onChange();
+      this.onChange(frame.payload as Record<string, unknown>);
     }
   }
 

@@ -2,6 +2,8 @@ export type {
   SlackChannelScan,
   SlackMessage,
   SlackThreadReply,
+  SlackThreadReplyPage,
+  SlackThreadReplyPageQuery,
   SlackTransport,
   SlackUser,
 } from "./transport.js";
@@ -28,6 +30,7 @@ export { slackTrackerOptions } from "./options.js";
 export type { SlackTrackerOptions } from "./options.js";
 export {
   BOT_STATUS_PREFIX,
+  isAsideText,
   parseStatusCommand,
   resolveStateName,
   stateFromThread,

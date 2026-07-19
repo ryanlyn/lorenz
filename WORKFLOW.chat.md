@@ -40,7 +40,8 @@ trackers:
     bot_user_id: $SLACK_BOT_USER_ID
     # Optional Socket Mode token (xapp-..., scope connections:write) for low-latency wake-ups.
     app_token: $SLACK_APP_TOKEN
-    # Restrict issue creation to known requesters when a channel has a broad audience.
+    # Restrict issue creation and active-agent steering to known requesters when a channel has a
+    # broad audience.
     # users:
     #   - $SLACK_REQUESTER_ID
     emoji_states:
@@ -187,9 +188,11 @@ tracker selected by `tracker.kind`.
 8. Before every commit, run the `simplify` skill, then use `lorenz-commit` and `lorenz-push`.
 9. Re-read the tracker thread before completion. Honor a human cancellation or scope change
    immediately.
-10. Mark the issue `Done` only when the acceptance criteria are complete, validation is green, and
+10. Treat a tracker message delivered as a queued turn as current issue input. Reconcile it with
+    the issue state and scope before continuing.
+11. Mark the issue `Done` only when the acceptance criteria are complete, validation is green, and
    the pull request is open and green.
-11. If blocked by missing required tools, authentication, or permissions, post one concise blocker
+12. If blocked by missing required tools, authentication, or permissions, post one concise blocker
     note in the selected tracker thread and leave the issue in the appropriate non-terminal state.
 
 Keep all checkouts and task changes inside the provided per-issue workspace. Do not modify other

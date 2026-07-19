@@ -2,9 +2,10 @@
 
 Use Slack channels as the source of work. An `@`-mention of your bot becomes an issue, the
 mention's thread carries the status, and Lorenz reads the watched channels over the Slack Web API.
-Optional Socket Mode push can wake the poll loop immediately after relevant Slack events; the Web
-API poll remains the source of truth. This page is for operators: it covers the Slack app setup, the
-required config, the status model, and the `slack_*` agent tools. The provider lives in
+Optional Socket Mode push can wake the poll loop immediately after relevant Slack events and send a
+human thread reply directly to the active agent as its next queued turn. The Web API poll remains
+the source of truth for discovery and status. This page is for operators: it covers the Slack app
+setup, the required config, the status model, and the `slack_*` agent tools. The provider lives in
 `extensions/slack-tracker`.
 
 ## The model in one screen
@@ -33,6 +34,8 @@ the transport calls; they are not declared in the extension source.
 | ------------------- | ----------------------------------------------------------------------------------------------- |
 | `channels:history`  | Read message history in public channels (`conversations.history`, `conversations.replies`).     |
 | `groups:history`    | Read history in private channels.                                                               |
+| `im:history`        | Read direct-message history.                                                                    |
+| `mpim:history`      | Read multiparty direct-message history.                                                         |
 | `app_mentions:read` | Receive `app_mention` events when Socket Mode push wakeups are enabled.                         |
 | `reactions:read`    | Read reactions to derive fallback status and detect the bot's marker.                           |
 | `reactions:write`   | Add and remove the bot's own marker and status reactions (`reactions.add`, `reactions.remove`). |
@@ -41,16 +44,17 @@ the transport calls; they are not declared in the extension source.
 
 Socket Mode is optional. Without an app token, discovery is pure polling of
 `conversations.history`. With an app-level token, Lorenz opens a Socket Mode connection and treats
-watched `app_mention`, `message`, and reaction events as a prompt to re-poll immediately. Event
-handling is deliberately only a wakeup: the subsequent poll re-derives candidates, status, routing,
-and reconciliation from the Web API, and the interval poll remains the safety net for missed events.
-A per-channel incremental watermark is a deferred enhancement; each poll re-scans recent history
-from the newest message.
+watched `app_mention`, `message`, and reaction events as a prompt to re-poll immediately. Candidate
+discovery, status, routing, and reconciliation are still re-derived from the Web API. A new human
+thread reply is also attached to that push as a structured issue event and submitted immediately to
+the active ACP session as its next queued user turn. `conversations.replies` recovers missed replies
+after a reconnect or turn boundary, and the interval poll remains the safety net for missed events.
 
 To receive Socket Mode wakeups, enable Event Subscriptions in the Slack app and subscribe to the bot
 events Lorenz watches: `app_mention`, `message.channels` for public channels, `message.groups` for
-private channels, plus `reaction_added` and `reaction_removed`. Socket Mode delivers those events
-over the WebSocket; the bot token still performs every read and write.
+private channels, `message.im` for direct messages, `message.mpim` for multiparty direct messages,
+plus `reaction_added` and `reaction_removed`. Socket Mode delivers those events over the WebSocket;
+the bot token still performs every read and write.
 
 The bot needs two distinct identifiers from the app, plus an optional Socket Mode token:
 
@@ -82,10 +86,11 @@ trackers:
 | Key                   | Env fallback        | Default                                                       | Meaning                                                                                                                               |
 | --------------------- | ------------------- | ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
 | `kind` / `provider`   |                     |                                                               | `tracker.kind: slack` selects the bundle; `trackers.slack.provider: slack` names the implementation.                                  |
-| `channels`            |                     |                                                               | Required. List of `C...` channel ids. Entries resolve `$VAR` references; an unresolved ref collapses to empty and is dropped.         |
+| `channels`            |                     |                                                               | Required. List of public (`C...`), private or multiparty (`G...`), or direct-message (`D...`) conversation ids. Entries resolve `$VAR` references; an unresolved ref collapses to empty and is dropped. |
 | `bot_user_id`         | `SLACK_BOT_USER_ID` |                                                               | Required. The bot's `U...` id. An empty string does not satisfy it.                                                                   |
 | `api_key`             | `SLACK_BOT_TOKEN`   |                                                               | The `xoxb-` bot token.                                                                                                                |
-| `app_token`           | `SLACK_APP_TOKEN`   |                                                               | Optional `xapp-` app-level token for Socket Mode push wakeups.                                                                        |
+| `app_token`           | `SLACK_APP_TOKEN`   |                                                               | Optional `xapp-` app-level token for Socket Mode wakeups and immediate live steering.                                                  |
+| `users`               |                     | Any authenticated human                                       | Optional author allowlist applied to issue creation and steering replies.                                                             |
 | `endpoint`            |                     | `https://slack.com/api`                                       | Slack Web API base.                                                                                                                   |
 | `emoji_states`        |                     | `eyes: In Progress`, `white_check_mark: Done`, `x: Cancelled` | Emoji name to state name, merged over the built-in `DEFAULT_EMOJI_STATES`.                                                            |
 | `marker_emoji`        |                     | `robot_face`                                                  | The reaction the bot adds to mark a tracked thread root.                                                                              |
@@ -170,6 +175,11 @@ A bare bot-mention reply with no recognized command reopens a terminal issue to 
 active state. Reaction-only state is treated as having ts of negative infinity, so any later bare
 mention reopens it. Re-mentioning the bot always means "this needs attention again".
 
+Prefix a reply with `!aside`, optionally after the bot mention, to keep it visible in the Slack
+thread without steering the active agent or changing issue state. For example,
+`@bot !aside deployment logs are archived elsewhere` is context for humans and future thread reads,
+not a queued agent turn.
+
 ### Reactions as a mirror
 
 `slack_update_status` is transactional: it resolves the canonical state name (rejecting an unknown
@@ -238,6 +248,24 @@ With Socket Mode enabled, push is a latency trigger rather than a separate candi
 watched Slack event queues the same full poll path the interval uses, so reconciliation, retry
 timers, terminal cleanup, blocked-dispatch snapshots, and candidate counts stay consistent. The
 interval still runs to recover any dropped event or reconnect gap.
+
+### Steering a running agent
+
+A new human thread reply is submitted to the active ACP session immediately when Socket Mode
+delivers it. ACP queues the prompt behind any turn already executing, so that reply itself is the
+next turn. The runner consumes the queued result as the next turn slot and does not append the reply
+to a separate continuation prompt.
+
+Slack authenticates the reply author. The same `tracker.users` policy used for issue creation
+authorizes steering: when the list is non-empty only listed users can direct the agent; when it is
+empty any authenticated human in a watched channel is eligible. Bot-authored replies, unknown
+authors, status commands, `!aside` replies, message edits, system messages, and channel roots do not
+steer the agent.
+
+`conversations.replies` recovers eligible messages after a reconnect or turn boundary. Recovery
+returns oldest-first bounded pages, advances only through accepted events, and shortens oversized
+live-delivery text without changing its Slack timestamp or author. Without Socket Mode, eligible
+replies are recovered between turns rather than pushed during an executing turn.
 
 Reads retry on 429 and 5xx. Each retry wait is logged so a rate-limited scan is visible in daemon
 logs instead of looking hung. `chat.postMessage` retries only on 429, never on an ambiguous 5xx,
