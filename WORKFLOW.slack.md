@@ -158,7 +158,6 @@ Status transitions are ts-ordered events in the issue's thread; the latest wins:
 
 - You (the agent) set status with `slack_update_status`, which posts the bot's authoritative `status: <Name>` thread reply and then mirrors the state onto the bot's own reaction (`emoji_states`: `:eyes:` -> `In Progress`, `:white_check_mark:` -> `Done`, `:x:` -> `Cancelled`) for glanceability.
 - Humans transition status by mentioning the bot with a `!`-prefixed command reply: `@bot !done`, `@bot !cancel`, `@bot !reopen`, `@bot !in progress`, `@bot !status <Name>`. The bang keeps transitions unmistakable next to ordinary prompts addressed to the bot.
-- Thread replies from authenticated humans allowed by `tracker.users` steer an active agent. Leaving `tracker.users` unset permits any authenticated human in a watched channel. With Socket Mode an eligible reply is submitted immediately as the next queued ACP turn; without Socket Mode it is recovered between turns. Prefix a reply with `!aside`, optionally after the bot mention, to keep it as thread context without steering the agent or changing status.
 - A human mention with **no** recognized command re-opens a terminal issue to the first active state: re-mentioning the bot always means "this needs attention again".
 - Reactions are per-author in Slack (the bot cannot remove a human's reaction and vice versa), so reactions are never the source of truth once a status event exists; do not reason about status from reactions.
 
