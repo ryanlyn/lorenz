@@ -75,6 +75,7 @@ export function registerBuiltinBackends(registries: BackendRegistries = {}): voi
   registerMemoryTracker({ trackers });
   registerJiraTrackers({ trackers, tools });
   registerSlackTracker({ trackers, tools });
+  registerDiscordTracker({ trackers, tools });
   if (executors.get(acpExecutorProvider.executor) === undefined) {
     executors.register(acpExecutorProvider);
   }
@@ -92,7 +93,7 @@ The Jira extension owns the `jira` tool pack, registered here through `registerJ
 
 ## The directory rule
 
-Extensions live under the top-level `extensions/` directory: `linear-tracker`, `jira-tracker`, `local-tracker`, `memory-tracker`, `slack-tracker`, and `docker-worker`. The SDKs and engine live under `packages/`. The one exception worth knowing: the static-SSH driver ships as `static-worker` under `packages/`, not `extensions/`.
+Extensions live under the top-level `extensions/` directory: `linear-tracker`, `jira-tracker`, `local-tracker`, `memory-tracker`, `slack-tracker`, `discord-tracker`, and `docker-worker`. The SDKs and engine live under `packages/`. The one exception worth knowing: the static-SSH driver ships as `static-worker` under `packages/`, not `extensions/`.
 
 A dependency-cruiser rule, `extensions-depend-on-sdk-layers-only` in `.dependency-cruiser.cjs`, blocks any module under `extensions/` from importing an engine package. The comment states the intent: a provider or tool pack must be implementable from the SDK surface alone, so the extension never couples to the core it extends. A companion rule, `engine-must-not-import-extensions`, keeps the dependency arrow pointing one way. If your extension needs something only the engine has, that is a sign the SDK contract should grow, not that you should reach past the barrier.
 

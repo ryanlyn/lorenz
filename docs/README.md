@@ -69,6 +69,7 @@ Pick the path that matches what you came to do.
 - [Jira](trackers/jira.md) - Jira Cloud over REST or MCP
 - [Local board](trackers/local.md) - a directory of Markdown issues
 - [Slack](trackers/slack.md) - mentions in channels as issues
+- [Discord](trackers/discord.md) - bot and managed-role mentions with native issue threads
 - [Memory](trackers/memory.md) - in-process fixture from an env var
 
 ### Agents

@@ -32,15 +32,6 @@
       "path": "../orchestrator"
     },
     {
-      "path": "../policies"
-    },
-    {
-      "path": "../projections"
-    },
-    {
-      "path": "../retry-scheduler"
-    },
-    {
       "path": "../runtime-events"
     },
     {

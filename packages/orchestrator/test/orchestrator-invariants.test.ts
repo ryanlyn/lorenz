@@ -10,8 +10,8 @@ import { Orchestrator } from "@lorenz/orchestrator";
 // --- Helpers ---
 
 /** Claims on the static/local path, asserting the union arm and unwrapping the entry. */
-function claimEntry(orch: Orchestrator, issue: Issue): RunningEntry | null {
-  const result = orch.claim(issue);
+async function claimEntry(orch: Orchestrator, issue: Issue): Promise<RunningEntry | null> {
+  const result = await orch.claimAsync(issue);
   if (result === null) return null;
   assert.equal(result.kind, "running");
   return result.kind === "running" ? result.entry : null;
@@ -44,7 +44,7 @@ function makeSettings(overrides: { maxConcurrent?: number; ensembleSize?: number
 // ============================================================================
 
 describe("INVARIANT: When the global concurrency cap is reached, the system SHALL NOT dispatch new work", () => {
-  test("eligibleIssues blocks dispatch when running map size equals global maxConcurrentAgents", () => {
+  test("eligibleIssuesAsync blocks dispatch when running map size equals global maxConcurrentAgents", async () => {
     const settings = parseConfig({ agent: { max_concurrent_agents: 2 } });
     const clock = makeClock(1000000);
     const orch = new Orchestrator(settings, clock);
@@ -53,11 +53,11 @@ describe("INVARIANT: When the global concurrency cap is reached, the system SHAL
     const i2 = makeIssue({ id: "i2", identifier: "T-2" });
     const i3 = makeIssue({ id: "i3", identifier: "T-3" });
 
-    assert.ok(claimEntry(orch, i1) !== null);
-    assert.ok(claimEntry(orch, i2) !== null);
+    assert.ok((await claimEntry(orch, i1)) !== null);
+    assert.ok((await claimEntry(orch, i2)) !== null);
     assert.equal(orch.state.running.size, 2);
 
-    const eligible = orch.eligibleIssues([i3]);
+    const eligible = await orch.eligibleIssuesAsync([i3]);
     assert.deepEqual(eligible, []);
 
     const snap = orch.snapshot();
@@ -68,7 +68,7 @@ describe("INVARIANT: When the global concurrency cap is reached, the system SHAL
 });
 
 describe("INVARIANT: When a per-state concurrency cap is reached, the system SHALL block only issues in that state", () => {
-  test("eligibleIssues applies per-state cap only to running entries in that state", () => {
+  test("eligibleIssuesAsync applies per-state cap only to running entries in that state", async () => {
     const settings = parseConfig({
       agent: { max_concurrent_agents: 10 },
       status_overrides: { Todo: { agent: { max_concurrent_agents: 1 } } },
@@ -85,9 +85,9 @@ describe("INVARIANT: When a per-state concurrency cap is reached, the system SHA
     });
     const issueC = makeIssue({ id: "todo-c", identifier: "T-C", state: "Todo" });
 
-    assert.ok(claimEntry(orch, issueA) !== null);
+    assert.ok((await claimEntry(orch, issueA)) !== null);
 
-    const eligible = orch.eligibleIssues([issueC, issueB]);
+    const eligible = await orch.eligibleIssuesAsync([issueC, issueB]);
 
     assert.ok(eligible.some((i) => i.id === "ip-b"));
     assert.ok(!eligible.some((i) => i.id === "todo-c"));
@@ -95,7 +95,7 @@ describe("INVARIANT: When a per-state concurrency cap is reached, the system SHA
 });
 
 describe("INVARIANT: When dispatch is evaluated, both global and per-state caps SHALL have room simultaneously", () => {
-  test("dispatch requires both global and state caps to have room simultaneously", () => {
+  test("dispatch requires both global and state caps to have room simultaneously", async () => {
     const settings = parseConfig({
       agent: { max_concurrent_agents: 2 },
       status_overrides: { Todo: { agent: { max_concurrent_agents: 2 } } },
@@ -112,10 +112,10 @@ describe("INVARIANT: When dispatch is evaluated, both global and per-state caps 
       stateType: "started",
     });
 
-    assert.ok(claimEntry(orch, a) !== null);
-    assert.ok(claimEntry(orch, b) !== null);
+    assert.ok((await claimEntry(orch, a)) !== null);
+    assert.ok((await claimEntry(orch, b)) !== null);
 
-    const eligible = orch.eligibleIssues([c]);
+    const eligible = await orch.eligibleIssuesAsync([c]);
     assert.deepEqual(eligible, []);
 
     const snap = orch.snapshot();
@@ -126,7 +126,7 @@ describe("INVARIANT: When dispatch is evaluated, both global and per-state caps 
 });
 
 describe("INVARIANT: When all worker hosts are at capacity, the system SHALL NOT dispatch new work", () => {
-  test("worker host running count derived from running map entries per host", () => {
+  test("worker host running count derived from running map entries per host", async () => {
     const settings = defaultSettings();
     settings.agent.maxConcurrentAgents = 10;
     settings.worker.sshHosts = ["host-a", "host-b"];
@@ -136,29 +136,29 @@ describe("INVARIANT: When all worker hosts are at capacity, the system SHALL NOT
 
     const claimed: RunningEntry[] = [];
     for (let i = 0; i < 4; i++) {
-      const entry = claimEntry(orch, makeIssue({ id: `i${i}`, identifier: `T-${i}` }));
+      const entry = await claimEntry(orch, makeIssue({ id: `i${i}`, identifier: `T-${i}` }));
       assert.ok(entry !== null);
       claimed.push(entry!);
     }
 
     // Both hosts should be at capacity (2 each)
-    const fifth = claimEntry(orch, makeIssue({ id: "i4", identifier: "T-4" }));
+    const fifth = await claimEntry(orch, makeIssue({ id: "i4", identifier: "T-4" }));
     assert.equal(fifth, null);
 
     // Finish one entry on host-a
     const hostAEntry = claimed.find((e) => e.workerHost === "host-a")!;
     clock.advance(1000);
-    orch.finish(hostAEntry.issue.id, hostAEntry.slotIndex, false);
+    await orch.finishAsync(hostAEntry.issue.id, hostAEntry.slotIndex, false);
 
     // Now a new claim should succeed and go to host-a (freed host)
-    const reclaimed = claimEntry(orch, makeIssue({ id: "i5", identifier: "T-5" }));
+    const reclaimed = await claimEntry(orch, makeIssue({ id: "i5", identifier: "T-5" }));
     assert.ok(reclaimed !== null);
     assert.equal(reclaimed!.workerHost, "host-a");
   });
 });
 
 describe("INVARIANT: When multiple hosts are tied at the lowest load, the system SHALL select the first in config order", () => {
-  test("host selection picks first host in config order on equal load tie", () => {
+  test("host selection picks first host in config order on equal load tie", async () => {
     const settings = defaultSettings();
     settings.agent.maxConcurrentAgents = 10;
     settings.worker.sshHosts = ["host-a", "host-b", "host-c"];
@@ -167,19 +167,19 @@ describe("INVARIANT: When multiple hosts are tied at the lowest load, the system
     const orch = new Orchestrator(settings, clock);
 
     // All hosts at load 0: first in config order wins
-    const entry1 = claimEntry(orch, makeIssue({ id: "i1", identifier: "T-1" }));
+    const entry1 = await claimEntry(orch, makeIssue({ id: "i1", identifier: "T-1" }));
     assert.equal(entry1!.workerHost, "host-a");
 
     // host-a:1, host-b:0, host-c:0 -> host-b is least-loaded first in order
-    const entry2 = claimEntry(orch, makeIssue({ id: "i2", identifier: "T-2" }));
+    const entry2 = await claimEntry(orch, makeIssue({ id: "i2", identifier: "T-2" }));
     assert.equal(entry2!.workerHost, "host-b");
 
     // host-a:1, host-b:1, host-c:0 -> host-c is least-loaded
-    const entry3 = claimEntry(orch, makeIssue({ id: "i3", identifier: "T-3" }));
+    const entry3 = await claimEntry(orch, makeIssue({ id: "i3", identifier: "T-3" }));
     assert.equal(entry3!.workerHost, "host-c");
 
     // host-a:1, host-b:1, host-c:1 -> all tied at 1, first in config order
-    const entry4 = claimEntry(orch, makeIssue({ id: "i4", identifier: "T-4" }));
+    const entry4 = await claimEntry(orch, makeIssue({ id: "i4", identifier: "T-4" }));
     assert.equal(entry4!.workerHost, "host-a");
   });
 });
@@ -188,17 +188,17 @@ describe("INVARIANT: When multiple hosts are tied at the lowest load, the system
 // CLAIM LIFECYCLE
 // ============================================================================
 
-describe("INVARIANT: When a slot is already claimed, a repeated claim for the same issue SHALL return null", () => {
-  test("claimed slot cannot be double-claimed by repeated claim calls", () => {
+describe("INVARIANT: When a slot is already claimed, a repeated claimAsync for the same issue SHALL return null", () => {
+  test("claimed slot cannot be double-claimed by repeated claimAsync calls", async () => {
     const settings = makeSettings({ maxConcurrent: 10, ensembleSize: 1 });
     const clock = makeClock(1000000);
     const orch = new Orchestrator(settings, clock);
     const issue = makeIssue();
 
-    const first = claimEntry(orch, issue);
+    const first = await claimEntry(orch, issue);
     assert.ok(first !== null);
 
-    const second = claimEntry(orch, issue);
+    const second = await claimEntry(orch, issue);
     assert.equal(second, null);
 
     assert.equal(orch.state.claimed.has(slotKey(issue.id, 0)), true);
@@ -206,24 +206,24 @@ describe("INVARIANT: When a slot is already claimed, a repeated claim for the sa
   });
 });
 
-describe("INVARIANT: When a claim succeeds, the retryAttempts entry for that slot SHALL be deleted", () => {
-  test("successful claim deletes the retryAttempts entry for the claimed slot", () => {
+describe("INVARIANT: When claimAsync succeeds, the retryAttempts entry for that slot SHALL be deleted", () => {
+  test("successful claimAsync deletes the retryAttempts entry for the claimed slot", async () => {
     const clock = makeClock(1000000);
     const settings = makeSettings({ maxConcurrent: 10 });
     const orch = new Orchestrator(settings, clock);
     const issue = makeIssue();
 
-    const entry = claimEntry(orch, issue);
+    const entry = await claimEntry(orch, issue);
     assert.ok(entry !== null);
     clock.advance(1000);
-    orch.finish(issue.id, 0, true, undefined, "continuation");
+    await orch.finishAsync(issue.id, 0, true, undefined, "continuation");
 
     const snap1 = orch.snapshot();
     assert.equal(snap1.retrying.length, 1);
 
     // Advance past due time
     clock.advance(10000);
-    const entry2 = claimEntry(orch, issue);
+    const entry2 = await claimEntry(orch, issue);
     assert.ok(entry2 !== null);
 
     assert.equal(orch.state.retryAttempts.has(slotKey(issue.id, 0)), false);
@@ -232,18 +232,18 @@ describe("INVARIANT: When a claim succeeds, the retryAttempts entry for that slo
 });
 
 describe("INVARIANT: When an entry is finished, its slot key SHALL be removed from both the running map and claimed set", () => {
-  test("finish removes slot key from running map and claimed set", () => {
+  test("finishAsync removes slot key from running map and claimed set", async () => {
     const clock = makeClock(1000000);
     const settings = makeSettings({ maxConcurrent: 10 });
     const orch = new Orchestrator(settings, clock);
     const issue = makeIssue();
 
-    claimEntry(orch, issue);
+    await claimEntry(orch, issue);
     assert.equal(orch.state.running.has(slotKey(issue.id, 0)), true);
     assert.equal(orch.state.claimed.has(slotKey(issue.id, 0)), true);
 
     clock.advance(5000);
-    orch.finish(issue.id, 0, false);
+    await orch.finishAsync(issue.id, 0, false);
 
     assert.equal(orch.state.running.has(slotKey(issue.id, 0)), false);
     assert.equal(orch.state.claimed.has(slotKey(issue.id, 0)), false);
@@ -251,23 +251,23 @@ describe("INVARIANT: When an entry is finished, its slot key SHALL be removed fr
   });
 });
 
-describe("INVARIANT: When all ensemble slots are claimed, the system SHALL return null on subsequent claim attempts", () => {
-  test("issue with all ensemble slots claimed returns null on subsequent claim", () => {
-    fc.assert(
-      fc.property(fc.integer({ min: 1, max: 5 }), (ensembleSize) => {
+describe("INVARIANT: When all ensemble slots are claimed, the system SHALL return null on subsequent claimAsync attempts", () => {
+  test("issue with all ensemble slots claimed returns null on subsequent claimAsync", async () => {
+    await fc.assert(
+      fc.asyncProperty(fc.integer({ min: 1, max: 5 }), async (ensembleSize) => {
         const clock = makeClock(1000000);
         const settings = makeSettings({ maxConcurrent: 20, ensembleSize });
         const orch = new Orchestrator(settings, clock);
         const issue = makeIssue();
 
         for (let i = 0; i < ensembleSize; i++) {
-          const entry = claimEntry(orch, issue);
+          const entry = await claimEntry(orch, issue);
           assert.ok(entry !== null);
           assert.equal(entry!.slotIndex, i);
         }
 
-        assert.equal(claimEntry(orch, issue), null);
-        assert.equal(orch.eligibleIssues([issue]).length, 0);
+        assert.equal(await claimEntry(orch, issue), null);
+        assert.equal((await orch.eligibleIssuesAsync([issue])).length, 0);
       }),
       { numRuns: 200 },
     );
@@ -275,7 +275,7 @@ describe("INVARIANT: When all ensemble slots are claimed, the system SHALL retur
 });
 
 describe("INVARIANT: When a retry becomes due, stale claimed slots SHALL be released and re-dispatch SHALL proceed", () => {
-  test("stale claim released when retry becomes due and re-dispatch proceeds", () => {
+  test("stale claim released when retry becomes due and re-dispatch proceeds", async () => {
     const clock = makeClock(1000000);
     const settings = makeSettings({ maxConcurrent: 10 });
     const orch = new Orchestrator(settings, clock);
@@ -294,8 +294,8 @@ describe("INVARIANT: When a retry becomes due, stale claimed slots SHALL be rele
       error: "agent exited",
     });
 
-    // claim should release the stale claim and succeed
-    const claimed = claimEntry(orch, issue);
+    // claimAsync should release the stale claim and succeed
+    const claimed = await claimEntry(orch, issue);
     assert.ok(claimed !== null);
     assert.equal(claimed!.slotIndex, 0);
     assert.equal(orch.snapshot().retrying.length, 0);
@@ -307,23 +307,23 @@ describe("INVARIANT: When a retry becomes due, stale claimed slots SHALL be rele
 // ============================================================================
 
 describe("INVARIANT: When an update targets a nonexistent slot key, the system SHALL NOT throw or mutate state", () => {
-  test("applyUpdate with nonexistent slotKey does not throw and does not mutate state", () => {
-    fc.assert(
-      fc.property(
+  test("applyUpdateAsync with nonexistent slotKey does not throw and does not mutate state", async () => {
+    await fc.assert(
+      fc.asyncProperty(
         fc.string({ minLength: 1, maxLength: 20 }),
         fc.integer({ min: 0, max: 100 }),
-        (issueId, slotIndex) => {
+        async (issueId, slotIndex) => {
           const clock = makeClock(1000000);
           const settings = makeSettings({ maxConcurrent: 10 });
           const orch = new Orchestrator(settings, clock);
 
           const existing = makeIssue({ id: "existing-1", identifier: "E-1" });
-          claimEntry(orch, existing);
+          await claimEntry(orch, existing);
 
           const snapBefore = JSON.stringify(orch.snapshot());
           if (slotKey(issueId, slotIndex) === slotKey("existing-1", 0)) return;
 
-          orch.applyUpdate(issueId, slotIndex, {
+          await orch.applyUpdateAsync(issueId, slotIndex, {
             type: "turn_completed",
             sessionId: "s1",
             usage: { inputTokens: 100, outputTokens: 50, totalTokens: 150 },
@@ -339,25 +339,25 @@ describe("INVARIANT: When an update targets a nonexistent slot key, the system S
 });
 
 describe("INVARIANT: When a turn_completed event is applied, turnCount SHALL increment by exactly one", () => {
-  test("turnCount increments by exactly one per turn_completed event", () => {
-    fc.assert(
-      fc.property(fc.integer({ min: 1, max: 20 }), (numTurns) => {
+  test("turnCount increments by exactly one per turn_completed event", async () => {
+    await fc.assert(
+      fc.asyncProperty(fc.integer({ min: 1, max: 20 }), async (numTurns) => {
         const clock = makeClock(1000000);
         const settings = makeSettings({ maxConcurrent: 10 });
         const orch = new Orchestrator(settings, clock);
         const issue = makeIssue();
 
-        claimEntry(orch, issue);
+        await claimEntry(orch, issue);
 
         for (let i = 0; i < numTurns; i++) {
-          orch.applyUpdate(issue.id, 0, { type: "turn_completed" });
+          await orch.applyUpdateAsync(issue.id, 0, { type: "turn_completed" });
         }
 
         const running = orch.state.running.get(slotKey(issue.id, 0));
         assert.equal(running!.turnCount, numTurns);
 
         // Non-turn_completed events do NOT increment turnCount
-        orch.applyUpdate(issue.id, 0, { type: "usage", usage: { inputTokens: 10 } });
+        await orch.applyUpdateAsync(issue.id, 0, { type: "usage", usage: { inputTokens: 10 } });
         assert.equal(running!.turnCount, numTurns);
       }),
       { numRuns: 200 },
@@ -366,21 +366,21 @@ describe("INVARIANT: When a turn_completed event is applied, turnCount SHALL inc
 });
 
 describe("INVARIANT: When a usage update reports lower values, entry usageTotals SHALL NOT decrease", () => {
-  test("entry usageTotals never decrease even when update reports lower values", () => {
+  test("entry usageTotals never decrease even when update reports lower values", async () => {
     const clock = makeClock(1000000);
     const settings = makeSettings({ maxConcurrent: 10 });
     const orch = new Orchestrator(settings, clock);
     const issue = makeIssue();
 
-    claimEntry(orch, issue);
+    await claimEntry(orch, issue);
 
-    orch.applyUpdate(issue.id, 0, {
+    await orch.applyUpdateAsync(issue.id, 0, {
       type: "usage",
       usage: { inputTokens: 100, outputTokens: 50, totalTokens: 150 },
     });
 
     // Report lower values
-    orch.applyUpdate(issue.id, 0, {
+    await orch.applyUpdateAsync(issue.id, 0, {
       type: "usage",
       usage: { inputTokens: 80, outputTokens: 30, totalTokens: 110 },
     });
@@ -393,16 +393,16 @@ describe("INVARIANT: When a usage update reports lower values, entry usageTotals
 });
 
 describe("INVARIANT: When global usage totals are updated, growth SHALL be bounded by positive deltas from highwater marks", () => {
-  test("global usageTotals only accumulates positive deltas from lastReported highwater marks", () => {
+  test("global usageTotals only accumulates positive deltas from lastReported highwater marks", async () => {
     const clock = makeClock(1000000);
     const settings = makeSettings({ maxConcurrent: 10 });
     const orch = new Orchestrator(settings, clock);
     const issue = makeIssue();
 
-    claimEntry(orch, issue);
+    await claimEntry(orch, issue);
 
     // First update: global totals become 100/50/150
-    orch.applyUpdate(issue.id, 0, {
+    await orch.applyUpdateAsync(issue.id, 0, {
       type: "usage",
       usage: { inputTokens: 100, outputTokens: 50, totalTokens: 150 },
     });
@@ -411,7 +411,7 @@ describe("INVARIANT: When global usage totals are updated, growth SHALL be bound
     assert.equal(orch.state.usageTotals.totalTokens, 150);
 
     // Regression: global totals should remain unchanged (delta clamped to 0)
-    orch.applyUpdate(issue.id, 0, {
+    await orch.applyUpdateAsync(issue.id, 0, {
       type: "usage",
       usage: { inputTokens: 80, outputTokens: 30, totalTokens: 110 },
     });
@@ -420,7 +420,7 @@ describe("INVARIANT: When global usage totals are updated, growth SHALL be bound
     assert.equal(orch.state.usageTotals.totalTokens, 150);
 
     // Increase past highwater: delta of 20/10/30 added to previous 100/50/150
-    orch.applyUpdate(issue.id, 0, {
+    await orch.applyUpdateAsync(issue.id, 0, {
       type: "usage",
       usage: { inputTokens: 120, outputTokens: 60, totalTokens: 180 },
     });
@@ -431,20 +431,20 @@ describe("INVARIANT: When global usage totals are updated, growth SHALL be bound
 });
 
 describe("INVARIANT: When a running issue is refreshed, the update SHALL propagate to every ensemble slot for that issue", () => {
-  test("refreshRunningIssue updates issue object on every ensemble slot for the same issue", () => {
-    fc.assert(
-      fc.property(fc.integer({ min: 2, max: 5 }), (ensembleSize) => {
+  test("refreshRunningIssueAsync updates issue object on every ensemble slot for the same issue", async () => {
+    await fc.assert(
+      fc.asyncProperty(fc.integer({ min: 2, max: 5 }), async (ensembleSize) => {
         const clock = makeClock(1000000);
         const settings = makeSettings({ maxConcurrent: 20, ensembleSize });
         const orch = new Orchestrator(settings, clock);
         const issue = makeIssue();
 
         for (let i = 0; i < ensembleSize; i++) {
-          claimEntry(orch, issue);
+          await claimEntry(orch, issue);
         }
 
         const updatedIssue = makeIssue({ state: "In Progress", stateType: "started" });
-        orch.refreshRunningIssue(updatedIssue);
+        await orch.refreshRunningIssueAsync(updatedIssue);
 
         const snap = orch.snapshot();
         for (let i = 0; i < ensembleSize; i++) {
@@ -463,26 +463,26 @@ describe("INVARIANT: When a running issue is refreshed, the update SHALL propaga
 // ============================================================================
 
 describe("INVARIANT: When an issue is cleaned up, all running entries, claimed slots, and retry state SHALL be removed", () => {
-  test("cleanupIssue removes all running entries, claimed slots, and retry for the issue", () => {
+  test("cleanupIssueAsync removes all running entries, claimed slots, and retry for the issue", async () => {
     const clock = makeClock(1000000);
     const settings = makeSettings({ maxConcurrent: 20, ensembleSize: 2 });
     const orch = new Orchestrator(settings, clock);
     const issue = makeIssue();
 
     // Claim both ensemble slots
-    claimEntry(orch, issue);
-    claimEntry(orch, issue);
+    await claimEntry(orch, issue);
+    await claimEntry(orch, issue);
 
     // Finish slot 0 to create retry entry
     clock.advance(1000);
-    orch.finish(issue.id, 0, true, undefined, "continuation");
+    await orch.finishAsync(issue.id, 0, true, undefined, "continuation");
 
     // Confirm state before cleanup
     assert.equal(orch.state.running.has(slotKey(issue.id, 1)), true);
     assert.equal(orch.state.claimed.has(slotKey(issue.id, 1)), true);
     assert.equal(orch.state.retryAttempts.has(slotKey(issue.id, 0)), true);
 
-    orch.cleanupIssue(issue.id);
+    await orch.cleanupIssueAsync(issue.id);
 
     assert.equal(orch.state.running.size, 0);
     assert.equal(orch.state.claimed.size, 0);
@@ -492,37 +492,37 @@ describe("INVARIANT: When an issue is cleaned up, all running entries, claimed s
 });
 
 describe("INVARIANT: When an entry is finished, elapsed seconds SHALL be computed from startedAt to clock.now and accumulated", () => {
-  test("finish computes elapsed seconds from startedAt to clock.now and accumulates", () => {
+  test("finishAsync computes elapsed seconds from startedAt to clock.now and accumulates", async () => {
     const clock = makeClock(new Date("2025-01-01T00:00:00Z").getTime());
     const settings = makeSettings({ maxConcurrent: 10 });
     const orch = new Orchestrator(settings, clock);
 
     const issue1 = makeIssue({ id: "i1", identifier: "T-1" });
-    claimEntry(orch, issue1);
+    await claimEntry(orch, issue1);
 
     clock.advance(30_000);
-    orch.finish(issue1.id, 0, false);
+    await orch.finishAsync(issue1.id, 0, false);
     assert.equal(orch.snapshot().usageTotals.secondsRunning, 30);
 
     const issue2 = makeIssue({ id: "i2", identifier: "T-2" });
-    claimEntry(orch, issue2);
+    await claimEntry(orch, issue2);
 
     clock.advance(15_000);
-    orch.finish(issue2.id, 0, false);
+    await orch.finishAsync(issue2.id, 0, false);
     assert.equal(orch.snapshot().usageTotals.secondsRunning, 45);
   });
 });
 
-describe("INVARIANT: When a continuation finish occurs, the issue SHALL be added to both the completed set AND retryAttempts (scheduling re-dispatch)", () => {
-  test("continuation finish adds issue to completed set and creates retry entry for re-dispatch", () => {
+describe("INVARIANT: When a continuation finishAsync occurs, the issue SHALL be added to both the completed set AND retryAttempts (scheduling re-dispatch)", () => {
+  test("continuation finishAsync adds issue to completed set and creates retry entry for re-dispatch", async () => {
     const clock = makeClock(1000000);
     const settings = makeSettings({ maxConcurrent: 10 });
     const orch = new Orchestrator(settings, clock);
     const issue = makeIssue();
 
-    claimEntry(orch, issue);
+    await claimEntry(orch, issue);
     clock.advance(5000);
-    orch.finish(issue.id, 0, true, undefined, "continuation");
+    await orch.finishAsync(issue.id, 0, true, undefined, "continuation");
 
     const snap = orch.snapshot();
     assert.equal(snap.retrying.length, 1);
@@ -537,15 +537,15 @@ describe("INVARIANT: When a continuation finish occurs, the issue SHALL be added
 });
 
 describe("INVARIANT: When a snapshot is taken, its arrays and objects SHALL be independent copies that do not alias internals", () => {
-  test("snapshot arrays and objects are independent copies that do not alias orchestrator internals", () => {
+  test("snapshot arrays and objects are independent copies that do not alias orchestrator internals", async () => {
     const clock = makeClock(1000000);
     const settings = makeSettings({ maxConcurrent: 10 });
     const orch = new Orchestrator(settings, clock);
     const issue = makeIssue();
 
-    claimEntry(orch, issue);
+    await claimEntry(orch, issue);
     clock.advance(5000);
-    orch.finish(issue.id, 0, true, undefined, "continuation");
+    await orch.finishAsync(issue.id, 0, true, undefined, "continuation");
 
     // Take first snapshot and mutate it
     const snap1 = orch.snapshot();

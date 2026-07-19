@@ -16,7 +16,12 @@ import {
 } from "@lorenz/tracker-sdk";
 
 import { markdownToAdf } from "./adf.js";
-import { jiraTrackerOptions, type JiraMcpToolMap } from "./options.js";
+import {
+  jiraTrackerOptions,
+  type JiraMcpToolMap,
+  type JiraMcpToolName,
+  type JiraTrackerOptions,
+} from "./options.js";
 
 const JIRA_REQUEST_TIMEOUT_MS = 30_000;
 /** Issues must carry this label to be picked up for dispatch; it marks them as delegated to agents. */
@@ -57,19 +62,21 @@ export interface JiraClientLogger {
 export class JiraClient implements RuntimeTrackerClient {
   private readonly fetchImpl: typeof fetch;
   private readonly logger: JiraClientLogger;
+  private readonly options: JiraTrackerOptions;
   private readonly paginationLimits: TrackerPaginationLimits | undefined;
 
   constructor(
     private readonly settings: Settings,
     deps: JiraClientDeps = {},
   ) {
+    this.options = jiraTrackerOptions(settings);
     this.fetchImpl = deps.fetchImpl ?? fetch;
     this.logger = deps.logger ?? { warn: (message) => console.warn(message) };
     this.paginationLimits = deps.paginationLimits;
   }
 
   async fetchCandidateIssues(): Promise<Issue[]> {
-    return this.searchIssues(candidateJql(this.settings));
+    return this.searchIssues(candidateJql(this.settings, this.options));
   }
 
   async fetchIssuesByIds(ids: string[]): Promise<Issue[]> {
@@ -86,7 +93,7 @@ export class JiraClient implements RuntimeTrackerClient {
   }
 
   async fetchIssuesByStates(states: string[]): Promise<Issue[]> {
-    const jql = statesJql(this.settings, states);
+    const jql = statesJql(this.options, states);
     return jql ? this.searchIssues(jql) : [];
   }
 
@@ -186,7 +193,7 @@ export class JiraClient implements RuntimeTrackerClient {
         fields: {
           project: { key: projectKey },
           issuetype: {
-            name: jiraTrackerOptions(this.settings).issueType ?? DEFAULT_JIRA_ISSUE_TYPE,
+            name: this.options.issueType ?? DEFAULT_JIRA_ISSUE_TYPE,
           },
           summary: input.title,
           ...(input.body !== undefined ? { description: markdownToAdf(input.body) } : {}),
@@ -240,13 +247,13 @@ export class JiraClient implements RuntimeTrackerClient {
   }
 
   private requiredProjectKey(): string {
-    const key = jiraTrackerOptions(this.settings).projectKeys?.[0]?.trim();
+    const key = this.options.projectKeys?.[0]?.trim();
     if (!key) throw new Error("tracker.project_keys is required to create Jira issues");
     return key;
   }
 
   private baseUrl(): string {
-    const baseUrl = jiraTrackerOptions(this.settings).baseUrl?.replace(/\/+$/, "");
+    const baseUrl = this.options.baseUrl?.replace(/\/+$/, "");
     if (!baseUrl) throw new Error("tracker.base_url is required for jira tracker");
     return baseUrl;
   }
@@ -267,7 +274,7 @@ export class JiraClient implements RuntimeTrackerClient {
   }
 
   private authHeader(): string {
-    const email = jiraTrackerOptions(this.settings).email;
+    const email = this.options.email;
     const token = this.settings.tracker.apiKey;
     if (!email) throw new Error("tracker.email is required for jira tracker");
     if (!token) throw new Error("tracker.api_key is required for jira tracker");
@@ -297,19 +304,21 @@ export class JiraClient implements RuntimeTrackerClient {
 export class JiraMcpClient implements RuntimeTrackerClient {
   private readonly fetchImpl: typeof fetch;
   private readonly logger: JiraClientLogger;
+  private readonly options: JiraTrackerOptions;
   private readonly paginationLimits: TrackerPaginationLimits | undefined;
 
   constructor(
     private readonly settings: Settings,
     deps: JiraClientDeps = {},
   ) {
+    this.options = jiraTrackerOptions(settings);
     this.fetchImpl = deps.fetchImpl ?? fetch;
     this.logger = deps.logger ?? { warn: (message) => console.warn(message) };
     this.paginationLimits = deps.paginationLimits;
   }
 
   async fetchCandidateIssues(): Promise<Issue[]> {
-    return this.searchIssues(candidateJql(this.settings));
+    return this.searchIssues(candidateJql(this.settings, this.options));
   }
 
   async fetchIssuesByIds(ids: string[]): Promise<Issue[]> {
@@ -334,7 +343,7 @@ export class JiraMcpClient implements RuntimeTrackerClient {
   }
 
   async fetchIssuesByStates(states: string[]): Promise<Issue[]> {
-    const jql = statesJql(this.settings, states);
+    const jql = statesJql(this.options, states);
     return jql ? this.searchIssues(jql) : [];
   }
 
@@ -422,10 +431,9 @@ export class JiraMcpClient implements RuntimeTrackerClient {
     status?: string | undefined;
     assignee?: string | undefined;
   }): Promise<Issue> {
-    const options = jiraTrackerOptions(this.settings);
     const payload = await this.callTool(this.toolName("createIssue"), {
-      projectKey: options.projectKeys?.[0],
-      issueType: options.issueType ?? DEFAULT_JIRA_ISSUE_TYPE,
+      projectKey: this.options.projectKeys?.[0],
+      issueType: this.options.issueType ?? DEFAULT_JIRA_ISSUE_TYPE,
       title: input.title,
       summary: input.title,
       body: input.body,
@@ -453,19 +461,19 @@ export class JiraMcpClient implements RuntimeTrackerClient {
   }
 
   private baseUrlOrNull(): string | null {
-    return jiraTrackerOptions(this.settings).baseUrl?.replace(/\/+$/, "") ?? null;
+    return this.options.baseUrl?.replace(/\/+$/, "") ?? null;
   }
 
-  private toolName(name: keyof Required<JiraMcpToolMap>, required?: true): string;
-  private toolName(name: keyof Required<JiraMcpToolMap>, required: false): string | null;
-  private toolName(name: keyof Required<JiraMcpToolMap>, required = true): string | null {
-    const tool = jiraTrackerOptions(this.settings).mcp?.tools?.[name] ?? DEFAULT_MCP_TOOLS[name];
+  private toolName(name: JiraMcpToolName, required?: true): string;
+  private toolName(name: JiraMcpToolName, required: false): string | null;
+  private toolName(name: JiraMcpToolName, required = true): string | null {
+    const tool = this.options.mcp?.tools?.[name] ?? DEFAULT_MCP_TOOLS[name];
     if (!tool && required) throw new Error(`tracker.mcp.tools.${name} is required`);
     return tool || null;
   }
 
   private async callTool(name: string, args: Record<string, unknown>): Promise<unknown> {
-    const mcp = jiraTrackerOptions(this.settings).mcp;
+    const mcp = this.options.mcp;
     const url = mcp?.url;
     if (!url) throw new Error("tracker.mcp.url is required for jira-mcp tracker");
     const response = await this.fetchImpl(url, {
@@ -502,9 +510,9 @@ export class JiraMcpClient implements RuntimeTrackerClient {
  * assigned to the worker's user and labeled {@link AGENT_LABEL}, so Lorenz never picks up
  * work that was not explicitly delegated to it — even when `tracker.jql` widens the scope.
  */
-function candidateJql(settings: Settings): string {
+function candidateJql(settings: Settings, options: JiraTrackerOptions): string {
   const parts: string[] = [];
-  const base = baseScopeJql(settings);
+  const base = baseScopeJql(options);
   if (base) parts.push(base);
   if (settings.tracker.activeStates.length > 0) {
     parts.push(`status in (${settings.tracker.activeStates.map(jqlString).join(", ")})`);
@@ -520,16 +528,15 @@ function assigneeJql(settings: Settings): string {
     : `assignee = ${jqlString(assignee)}`;
 }
 
-function statesJql(settings: Settings, states: string[]): string | null {
+function statesJql(options: JiraTrackerOptions, states: string[]): string | null {
   const stateNames = normalizeStateNames(states);
   if (stateNames.length === 0) return null;
   const stateJql = `status in (${stateNames.map(jqlString).join(", ")})`;
-  const scoped = baseScopeJql(settings);
+  const scoped = baseScopeJql(options);
   return scoped ? `${scoped} AND ${stateJql}` : stateJql;
 }
 
-function baseScopeJql(settings: Settings): string {
-  const options = jiraTrackerOptions(settings);
+function baseScopeJql(options: JiraTrackerOptions): string {
   const jql = options.jql?.trim();
   if (jql) return `(${jql})`;
   const projectKeys = options.projectKeys ?? [];
