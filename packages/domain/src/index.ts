@@ -1079,12 +1079,29 @@ export type TraceEvent = {
  * Handle to a started agent process, returned by {@link AgentExecutor.startSession}.
  * The same instance is passed back into `runTurn` for each prompt and closed via `stop`.
  */
+export interface QueuedTurnOptions {
+  /**
+   * Optional activation gate. The prompt enters the executor's queue immediately but must not
+   * begin backend execution until this promise resolves.
+   */
+  startWhen?: Promise<void> | undefined;
+}
+
 export interface AgentSession {
   agentKind: AgentKind;
   /** Provider session id; populated once the executor receives it from the backend. */
   sessionId?: string | null | undefined;
   /** OS pid of the agent child as a string; `null` if not applicable. */
   executorPid?: string | null | undefined;
+  /**
+   * Submits another prompt while the current turn is still running. The executor must hand the
+   * prompt to its queue immediately and preserve submission order. When {@link
+   * QueuedTurnOptions.startWhen} is present, the queued prompt remains inactive until the gate
+   * resolves. The returned promise settles when that queued turn finishes.
+   *
+   * Optional because not every executor backend supports live prompt queuing.
+   */
+  queueTurn?(prompt: string, options?: QueuedTurnOptions): Promise<AgentUpdate[]>;
   /** Closes the session and tears down the underlying process; must be safe to call from a `finally` block. */
   stop(): Promise<void>;
 }

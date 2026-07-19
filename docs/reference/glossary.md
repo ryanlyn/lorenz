@@ -152,8 +152,9 @@ through it. See [../trackers/index.md](../trackers/index.md).
 `events` and `events_append` messages. See [../observability.md](../observability.md).
 
 **Turn timeout** - the hard timer that cancels a turn after `agents.<kind>.turn_timeout_ms` (default
-3600000) regardless of activity, distinct from the stall timeout. On fire it cancels the ACP turn and
-rejects the run. See [../agents/index.md](../agents/index.md).
+3600000) regardless of activity, distinct from the stall timeout. On fire the ACP executor rejects
+the active and queued turns, terminates the session, and rejects the run. See
+[../agents/index.md](../agents/index.md).
 
 ## W
 

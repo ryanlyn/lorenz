@@ -49,7 +49,7 @@ const config: KnipConfig = {
     },
   },
   ignoreDependencies: ["tsx"],
-  ignoreBinaries: ["op", "tar"],
+  ignoreBinaries: ["op", "powershell.exe", "tar"],
   // Test fixtures consumed by file path (cruised through dependency-cruiser, or
   // compiled by the TypeScript API) rather than statically imported, so knip's
   // static graph cannot see them used.

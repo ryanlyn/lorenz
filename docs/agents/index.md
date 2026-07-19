@@ -75,8 +75,8 @@ bag. The shared keys:
 | Key | Default | Meaning |
 | --- | --- | --- |
 | `executor` | `acp` | Selects the executor that runs this kind. |
-| `turn_timeout_ms` | `3600000` | Hard cap on a single turn; the executor cancels the turn when it fires. |
-| `stall_timeout_ms` | `300000` | Inactivity cap, reset on every update; `<= 0` disables stall detection. |
+| `turn_timeout_ms` | `3600000` | Hard cap on a single turn; an ACP timeout rejects queued turns and terminates the session. |
+| `stall_timeout_ms` | `300000` | Inactivity cap, reset on every update; an ACP timeout rejects queued turns and terminates the session. `<= 0` disables stall detection. |
 | `options` | per-kind | Executor-owned bag (for `acp`: `bridge_command`, `usage_accounting`, `provider_config`, `strict_mcp_config`). |
 
 The executor validates the keys inside `options`, not the config core. The `acp` executor rejects

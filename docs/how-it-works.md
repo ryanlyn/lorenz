@@ -77,8 +77,8 @@ agent kind via `agents.<kind>.executor`.
 The agent runner builds the workspace, runs `before_run`, opens a session, then loops `runTurn` up to
 `agent.max_turns` (default 20). Turn 0 sends the rendered prompt; later turns send a continuation
 prompt. Two timers guard each turn: a hard turn timeout (`turn_timeout_ms`, default 3600000) and a
-stall timeout (`stall_timeout_ms`, default 300000) reset on every agent event. Either firing cancels
-the turn.
+stall timeout (`stall_timeout_ms`, default 300000) reset on every agent event. Either firing rejects
+the active turn and terminates its ACP session.
 
 Codex and Claude differ only in how Lorenz feeds them provider config and reads token usage; both
 ride the same ACP path. The bridge contract, including how Lorenz normalizes each bridge's counts

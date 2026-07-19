@@ -27765,6 +27765,9 @@ var CodexAcpServer = class _CodexAcpServer {
   pendingMcpStartupSessions;
   pendingTurnStarts;
   activePrompts;
+  // symphony-patch: serialize ACP prompts before they reach app-server.
+  pendingPrompts;
+  promptGenerations;
   closingSessions;
   sessionGenerations;
   sessionOpenGenerations;
@@ -27773,6 +27776,8 @@ var CodexAcpServer = class _CodexAcpServer {
     this.pendingMcpStartupSessions = /* @__PURE__ */ new Map();
     this.pendingTurnStarts = /* @__PURE__ */ new Map();
     this.activePrompts = /* @__PURE__ */ new Map();
+    this.pendingPrompts = /* @__PURE__ */ new Map();
+    this.promptGenerations = /* @__PURE__ */ new Map();
     this.closingSessions = /* @__PURE__ */ new Map();
     this.sessionGenerations = /* @__PURE__ */ new Map();
     this.sessionOpenGenerations = /* @__PURE__ */ new Map();
@@ -27807,6 +27812,11 @@ var CodexAcpServer = class _CodexAcpServer {
         version: package_default.version
       },
       agentCapabilities: {
+        // symphony-patch: advertise ordered prompt submission with stable IDs.
+        _meta: {
+          "symphony/promptQueueing": true,
+          "symphony/stableSessionId": true
+        },
         auth: {
           logout: {}
         },
@@ -27934,6 +27944,12 @@ You have been logged out. Please try again.`);
     const generation = this.getSessionGeneration(sessionId) + 1;
     this.sessionGenerations.set(sessionId, generation);
     return generation;
+  }
+  getPromptGeneration(sessionId) {
+    return this.promptGenerations.get(sessionId) ?? 0;
+  }
+  invalidatePromptQueue(sessionId) {
+    this.promptGenerations.set(sessionId, this.getPromptGeneration(sessionId) + 1);
   }
   async tryCreateSession(request) {
     const requestedSessionGeneration = "sessionId" in request ? this.beginSessionOpen(request.sessionId) : null;
@@ -28097,6 +28113,7 @@ You have been logged out. Please try again.`);
   }
   async closeSession(params) {
     logger.log("Closing session...", { sessionId: params.sessionId });
+    this.invalidatePromptQueue(params.sessionId);
     const closeGeneration = this.bumpSessionGeneration(params.sessionId);
     const sessionState = this.sessions.get(params.sessionId);
     this.beginSessionCloseFence(params.sessionId);
@@ -28143,7 +28160,7 @@ You have been logged out. Please try again.`);
     return {};
   }
   hasLocalSession(sessionId) {
-    return this.sessions.has(sessionId) || this.pendingMcpStartupSessions.has(sessionId) || this.pendingTurnStarts.has(sessionId) || this.activePrompts.has(sessionId) || this.hasPendingSessionOpen(sessionId) || this.sessionIsClosing(sessionId);
+    return this.sessions.has(sessionId) || this.pendingMcpStartupSessions.has(sessionId) || this.pendingTurnStarts.has(sessionId) || this.activePrompts.has(sessionId) || this.pendingPrompts.has(sessionId) || this.hasPendingSessionOpen(sessionId) || this.sessionIsClosing(sessionId);
   }
   hasPendingSessionOpen(sessionId) {
     return this.sessionOpenGenerations.get(sessionId) === this.getSessionGeneration(sessionId);
@@ -28841,7 +28858,32 @@ ${item.text}`
     }
     return turnId;
   }
+  // symphony-patch: app-server permits one active turn per thread, so concurrent
+  // ACP prompts wait on a per-session FIFO before entering the upstream handler.
   async prompt(params, signal) {
+    const sessionId = params.sessionId;
+    const generation = this.getPromptGeneration(sessionId);
+    const previous = this.pendingPrompts.get(sessionId) ?? Promise.resolve();
+    const queued = previous.catch(() => {
+    }).then(async () => {
+      if (generation !== this.getPromptGeneration(sessionId) || signal?.aborted || this.sessionIsClosing(sessionId) || !this.sessions.has(sessionId)) {
+        return { stopReason: "cancelled" };
+      }
+      return await this.runPrompt(params, signal);
+    });
+    const handoff = queued.then(
+      () => new Promise((resolve) => setImmediate(resolve)),
+      () => new Promise((resolve) => setImmediate(resolve))
+    );
+    this.pendingPrompts.set(sessionId, handoff);
+    void handoff.finally(() => {
+      if (this.pendingPrompts.get(sessionId) === handoff) {
+        this.pendingPrompts.delete(sessionId);
+      }
+    });
+    return await queued;
+  }
+  async runPrompt(params, signal) {
     logger.log("Prompt received", {
       sessionId: params.sessionId,
       prompt: params.prompt
@@ -29062,6 +29104,7 @@ ${stderr}` : "";
     }
   }
   async cancel(params) {
+    this.invalidatePromptQueue(params.sessionId);
     const sessionState = this.sessions.get(params.sessionId);
     if (!sessionState) {
       logger.log("Cancel request rejected: session not found", { sessionId: params.sessionId });

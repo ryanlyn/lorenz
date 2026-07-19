@@ -543,6 +543,9 @@ export class ClaudeAcpAgent {
             protocolVersion: 1,
             agentCapabilities: {
                 _meta: {
+                    // symphony-patch: advertise the persistent per-session FIFO.
+                    "symphony/promptQueueing": true,
+                    "symphony/stableSessionId": true,
                     claudeCode: {
                         promptQueueing: true,
                     },
