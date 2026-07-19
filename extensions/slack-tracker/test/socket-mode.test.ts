@@ -407,6 +407,7 @@ test("every accepted hello reconciles its API-to-feed gap and reports connection
   assert.deepEqual(states, [true, false, true]);
   assert.deepEqual(readyOrder, ["healthy", "reconcile", "healthy", "reconcile"]);
   sm.close();
+  assert.deepEqual(states, [true, false, true, false]);
 });
 
 test("a split Socket Mode feed rejects the new connection", async () => {

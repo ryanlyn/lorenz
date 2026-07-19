@@ -1513,7 +1513,7 @@ test("runtime polling does not wait for replacement stream startup", async () =>
   }
 });
 
-test("active runs retain pinned reads while replacement push events reach the run", async () => {
+test("active runs retain pinned issue reads while steering moves to the replacement client", async () => {
   const dir = await tempDir("lorenz-runtime-reload-active-client");
   const workflowFile = path.join(dir, "WORKFLOW.md");
   await fs.writeFile(workflowFile, workflowMarkdown({ intervalMs: 600_000 }));
@@ -1613,7 +1613,7 @@ test("active runs retain pinned reads while replacement push events reach the ru
     assert.equal(runtime.snapshot().running.length, 1);
 
     await activeRecovery?.("10.0", { maxEvents: 1, maxBytes: 1 });
-    assert.deepEqual(recoveryCalls, [1, 0]);
+    assert.deepEqual(recoveryCalls, [0, 1]);
 
     callbacks[1]?.({
       issueEvents: {

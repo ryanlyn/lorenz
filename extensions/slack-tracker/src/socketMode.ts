@@ -147,6 +147,7 @@ export class SlackSocketMode implements TrackerChangeStream {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
+    this.reportDisconnected();
     const socket = this.socket;
     this.socket = null;
     if (socket) {
@@ -331,11 +332,14 @@ export class SlackSocketMode implements TrackerChangeStream {
   private onSocketClosed(socket: SlackWebSocketLike): void {
     if (this.socket !== socket) return; // a stale socket (already replaced); ignore.
     this.socket = null;
-    if (this.connected) {
-      this.connected = false;
-      this.safeNotify(() => this.onConnectionState?.(false), "onConnectionState");
-    }
+    this.reportDisconnected();
     this.scheduleReconnect("socket closed");
+  }
+
+  private reportDisconnected(): void {
+    if (!this.connected) return;
+    this.connected = false;
+    this.safeNotify(() => this.onConnectionState?.(false), "onConnectionState");
   }
 
   private scheduleReconnect(reason: string): void {

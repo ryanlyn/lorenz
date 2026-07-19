@@ -41,6 +41,7 @@ import type {
   RuntimeTrackerClient,
   TrackerChangeStream,
   TrackerIssueEvent,
+  TrackerIssueEventPage,
   TrackerIssueEventQuery,
   WorkflowDefinition,
 } from "@lorenz/domain";
@@ -293,7 +294,11 @@ class ActiveRunHandle {
     private readonly activeRuns: Map<string, ActiveRunHandle>,
     private readonly onRelease: (handle: ActiveRunHandle) => void,
     private readonly onExternalFinish: (handle: ActiveRunHandle) => void,
-  ) {}
+  ) {
+    this.issueEventClient = trackerClient;
+  }
+
+  private issueEventClient: RuntimeTrackerClient;
 
   get signal(): AbortSignal {
     return this.controller.signal;
@@ -305,6 +310,24 @@ class ActiveRunHandle {
 
   abort(): void {
     this.controller.abort();
+  }
+
+  acceptsIssueEventPush(client: RuntimeTrackerClient): boolean {
+    return this.issueEventClient === client;
+  }
+
+  rebindIssueEventClient(previous: RuntimeTrackerClient, replacement: RuntimeTrackerClient): void {
+    if (this.issueEventClient === previous) this.issueEventClient = replacement;
+  }
+
+  async fetchIssueEvents(
+    sinceTs: string,
+    query: TrackerIssueEventQuery,
+  ): Promise<TrackerIssueEventPage> {
+    const fetchIssueEvents = this.issueEventClient.fetchIssueEvents?.bind(this.issueEventClient);
+    return fetchIssueEvents
+      ? fetchIssueEvents(this.issueId, sinceTs, query)
+      : { events: [], hasMore: false };
   }
 
   subscribeIssueEvents(listener: (events: TrackerIssueEvent[]) => void): () => void {
@@ -754,10 +777,7 @@ export class LorenzRuntime {
           (event) => event.authorizedForSteering === true,
         );
         for (const handle of this.activeRuns.values()) {
-          if (
-            handle.issueId === issueEvents.issueId &&
-            (handle.trackerClient === client || client === this.client)
-          ) {
+          if (handle.issueId === issueEvents.issueId && handle.acceptsIssueEventPush(client)) {
             handle.publishIssueEvents(authorizedEvents);
           }
         }
@@ -1230,10 +1250,7 @@ export class LorenzRuntime {
         ...(trackerClient.fetchIssueEvents
           ? {
               fetchIssueEvents: async (sinceTs: string, query: TrackerIssueEventQuery) =>
-                (await trackerClient.fetchIssueEvents?.(issue.id, sinceTs, query)) ?? {
-                  events: [],
-                  hasMore: false,
-                },
+                handle.fetchIssueEvents(sinceTs, query),
             }
           : {}),
         abortSignal: handle.signal,
@@ -1445,8 +1462,11 @@ export class LorenzRuntime {
       if (clientChanged) this.issueEventRecoveryWarningIssued = false;
       if (clientChanged && this.changeStreamEnabled) {
         // Exclusive push backends cannot overlap old and replacement subscriptions. Close the
-        // old feed first, then route replacement events to matching active runs regardless of
-        // which client owns their in-flight attempt.
+        // old feed first. Active runs keep their execution reads pinned, while steering recovery
+        // moves with the replacement feed so both paths share one authorization policy.
+        for (const handle of this.activeRuns.values()) {
+          handle.rebindIssueEventClient(previousClient, nextClient);
+        }
         await this.closeChangeStream(previousClient);
         void this.openChangeStream(nextClient);
       } else if (clientChanged && !this.hasActiveRunsForTrackerClient(previousClient)) {

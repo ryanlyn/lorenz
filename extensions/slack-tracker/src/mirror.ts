@@ -861,6 +861,23 @@ export class MirrorBackedSlackTransport implements SlackTransport {
       if (existing.metadata === undefined && reply.metadata !== undefined) {
         existing.metadata = reply.metadata;
       }
+      // Snapshot replay can restore older root hints while preserving the event-built thread.
+      // Recompute those hints even for a duplicate so the thread cache key still advances.
+      const root = state.roots.get(rootTs);
+      if (root) {
+        // More preserved replies than the snapshot reported proves the snapshot predates this
+        // event. Keep the event-built thread authoritative so an immediate API read cannot erase
+        // a command that Slack has already delivered over the socket.
+        if (thread.size > root.replyCountHint) state.authoritativeThreads.add(rootTs);
+        root.replyCountHint = Math.max(root.replyCountHint, thread.size);
+        const latest = latestTsOf(thread);
+        if (
+          root.latestReplyHint === undefined ||
+          (latest !== undefined && compareSlackTs(latest, root.latestReplyHint) > 0)
+        ) {
+          root.latestReplyHint = latest;
+        }
+      }
       return;
     }
     thread.set(reply.ts, {

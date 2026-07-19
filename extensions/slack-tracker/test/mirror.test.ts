@@ -154,6 +154,16 @@ test("an event arriving during reconciliation is applied after the API snapshot"
       user: "U3",
     }),
   );
+  mirror.applyEvent(
+    messageEvent({
+      type: "message",
+      channel: "C1",
+      ts: "1.5",
+      thread_ts: "1.0",
+      text: "<@U_BOT> !cancel",
+      user: "U2",
+    }),
+  );
   let markerSettled = false;
   const markerWrite = mirror.addReaction("C1", "1.0", "robot_face").then(() => {
     markerSettled = true;
@@ -171,6 +181,12 @@ test("an event arriving during reconciliation is applied after the API snapshot"
     ["1.0", "2.0"],
   );
   assert.deepEqual(result.mentions[0]!.botReactions, ["robot_face"]);
+  assert.equal(result.mentions[0]!.replyCount, 1);
+  assert.equal(result.mentions[0]!.latestReply, "1.5");
+  assert.equal(
+    stateFromThread(result.mentions[0]!, await mirror.getThread("C1", "1.0"), settings()).state,
+    "Cancelled",
+  );
 });
 
 test("an event arriving during a thread read survives snapshot installation", async () => {
