@@ -321,6 +321,10 @@ const serverRawSchema = z
     port: coercedPort.optional(),
     traceDir: z.string().optional(),
     staticDir: z.string().optional(),
+    // Externally-reachable base URL for the MCP endpoint advertised to agents (e.g. when the
+    // orchestrator sits behind a reverse proxy / Cloudflare Worker and agents run in a separate
+    // network from the bind interface). The server still binds to host/port.
+    publicUrl: z.string().optional(),
   })
   .strict();
 const loggingRawSchema = z.object({ logFile: z.string().optional() }).strict();

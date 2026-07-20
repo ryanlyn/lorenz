@@ -574,6 +574,14 @@ export interface ServerSettings {
   traceDir?: string | undefined;
   /** Built frontend assets directory (override for dashboard SPA). */
   staticDir?: string | undefined;
+  /**
+   * Externally-reachable base URL for the MCP endpoint advertised to agents. Use when the
+   * orchestrator runs behind a reverse proxy / Cloudflare Worker and agents run in a separate
+   * network from the bind interface: the agent-facing MCP URL becomes `${publicUrl}/mcp`
+   * instead of `http://<host>:<port>/mcp`. The server still binds to `host`/`port`; this only
+   * changes the URL handed to agents. Does not apply to SSH-tunnel remote workers.
+   */
+  publicUrl?: string | undefined;
 }
 
 /**
