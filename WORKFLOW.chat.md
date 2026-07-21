@@ -147,11 +147,7 @@ tracker selected by `tracker.kind`.
   status, progress, and human follow-up.
 - Lorenz acknowledges a newly dispatched `Todo` issue as `In Progress` before agent setup. If the
   thread is still `Todo`, set `In Progress` with `discord_update_status` before active work.
-- Post the initial structured workpad with `discord_workpad`. Use `discord_comment` for later
-  evidence, decisions, and milestone updates.
-- Re-read the thread at milestones and immediately before finishing so late commands and scope
-  changes are honored.
-- Set `Done` with `discord_update_status` only after implementation and validation are complete.
+- Create the Workpad with `discord_workpad`.
 - Reactions are a visual mirror, not the source of truth.
 - Humans create work by mentioning the bot in a configured source channel or by choosing
   **Apps > Track with Lorenz** on an existing message. They change status with slash commands or
@@ -162,14 +158,17 @@ tracker selected by `tracker.kind`.
 - Start by calling `slack_read_thread(issueId)`. The Slack thread is authoritative for status,
   progress, and human follow-up.
 - Set `In Progress` with `slack_update_status` before active work.
-- Keep the plan, acceptance criteria, and latest validation note in one `slack_workpad` message
-  updated in place. Use `slack_comment` for milestones worth notifying to the thread.
-- Re-read the thread at milestones and immediately before finishing so late commands and scope
-  changes are honored.
-- Set `Done` with `slack_update_status` only after implementation and validation are complete.
+- Maintain the Workpad in one `slack_workpad` message updated in place.
 - Reactions are a visual mirror, not the source of truth.
 - Humans create work by mentioning the bot in a configured channel or thread. There is no
   `slack_create_issue`.
+
+## Communication
+
+- Keep operational detail in the Workpad. Outside the Workpad, talk to the requester like a
+  teammate.
+- Comment only when the requester needs an update, decision, or answer. Do not post standalone
+  environment, reproduction, validation, or completion logs.
 
 ## Execution contract
 
@@ -182,18 +181,16 @@ tracker selected by `tracker.kind`.
    - `Todo`: move to `In Progress`, then begin execution.
    - `In Progress`: resume from the workspace and existing thread notes.
    - `Done` or `Cancelled`: do nothing and stop.
-4. Post a human-visible workpad with `discord_workpad` or `slack_workpad`. Keep it current in
-   place and use the selected tracker's comment tool for milestones worth notifying.
+4. Post a human-visible Workpad using the selected tracker.
    Include:
    - a compact environment stamp: `<host>:<abs-workdir>@<short-sha>`
    - a hierarchical plan
    - acceptance criteria
    - validation commands
    - timestamped progress notes
-5. Reproduce the current behavior before editing and record the evidence in the tracker thread.
+5. Reproduce the current behavior before editing.
 6. Run the `lorenz-pull` skill before code edits and record the resulting revision.
-7. Implement and validate against the workpad. Keep the tracker thread current at meaningful
-   milestones.
+7. Implement and validate against the Workpad.
 8. Before every commit, run the `simplify` skill, then use `lorenz-commit` and `lorenz-push`.
 9. Re-read the tracker thread before completion. Honor a human cancellation or scope change
    immediately.
