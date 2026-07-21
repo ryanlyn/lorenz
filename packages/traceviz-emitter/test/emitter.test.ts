@@ -178,4 +178,30 @@ describe("TraceEmitter", () => {
       consoleError.mockRestore();
     }
   });
+
+  it("bounds retained write failures between drains while logging every failure", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      for (let index = 0; index < 101; index += 1) {
+        const issueId = `id-${index}`;
+        emitter.emit(issueId, `ENG-${index}`, makeUpdate());
+        const filePath = TraceEmitter.tracePathForIssue(traceDir, issueId);
+        mkdirSync(path.dirname(filePath), { recursive: true });
+        mkdirSync(filePath, { recursive: true });
+      }
+
+      let caught: unknown;
+      try {
+        await emitter.drain();
+      } catch (error) {
+        caught = error;
+      }
+
+      expect(caught).toBeInstanceOf(AggregateError);
+      expect((caught as AggregateError).errors).toHaveLength(100);
+      expect(consoleError).toHaveBeenCalledTimes(101);
+    } finally {
+      consoleError.mockRestore();
+    }
+  });
 });
