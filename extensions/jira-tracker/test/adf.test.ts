@@ -70,3 +70,38 @@ test("markdownToAdf keeps a task list separate from a following bullet list", ()
   assert.equal(blocks[0]!["type"], "taskList");
   assert.equal(blocks[1]!["type"], "bulletList");
 });
+
+test("markdownToAdf converts a pipe table with header and data rows", () => {
+  const table = kids(
+    markdownToAdf("| Grader | Status |\n| --- | --- |\n| `proper_i18n` | ⏳ attempt 1/3 |"),
+  )[0]!;
+  assert.equal(table["type"], "table");
+  const rows = kids(table);
+  assert.equal(rows.length, 2);
+  assert.equal(rows[0]!["type"], "tableRow");
+  const headerCells = kids(rows[0]!);
+  assert.equal(headerCells[0]!["type"], "tableHeader");
+  assert.equal(kids(kids(headerCells[0]!)[0]!)[0]!["text"], "Grader");
+  const dataCells = kids(rows[1]!);
+  assert.equal(dataCells[0]!["type"], "tableCell");
+  const graderInline = kids(kids(dataCells[0]!)[0]!)[0]!;
+  assert.equal(graderInline["text"], "proper_i18n");
+  assert.deepEqual(graderInline["marks"], [{ type: "code" }]);
+  assert.equal(kids(kids(dataCells[1]!)[0]!)[0]!["text"], "⏳ attempt 1/3");
+});
+
+test("markdownToAdf table stops at the first non-table line and handles empty cells", () => {
+  const blocks = kids(markdownToAdf("| A | B |\n| :-- | --: |\n| x | |\nafter"));
+  assert.equal(blocks.length, 2);
+  assert.equal(blocks[0]!["type"], "table");
+  const dataRow = kids(blocks[0]!)[1]!;
+  const emptyCell = kids(dataRow)[1]!;
+  assert.deepEqual(kids(kids(emptyCell)[0]!), []);
+  assert.equal(blocks[1]!["type"], "paragraph");
+});
+
+test("markdownToAdf leaves a lone pipe line without separator as a paragraph", () => {
+  const blocks = kids(markdownToAdf("| not | a table |"));
+  assert.equal(blocks.length, 1);
+  assert.equal(blocks[0]!["type"], "paragraph");
+});

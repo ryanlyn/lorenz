@@ -1,7 +1,8 @@
 // Markdown -> Atlassian Document Format (ADF) for Jira comment/description bodies.
 // The Jira REST API only accepts ADF, but callers author markdown. Supports headings,
 // bullet/ordered lists, GitHub task lists (- [ ] / - [x]) with nesting, fenced code
-// blocks, and inline marks (**bold**, *italic*/_italic_, `code`, [text](url)).
+// blocks, pipe tables (header + |---| separator), and inline marks (**bold**,
+// *italic*/_italic_, `code`, [text](url)).
 export function markdownToAdf(text: string): Record<string, unknown> {
   const lines = text.split(/\r?\n/);
   const content: Record<string, unknown>[] = [];
@@ -38,6 +39,13 @@ export function markdownToAdf(text: string): Record<string, unknown> {
     if (listKindOf(line) !== null) {
       const [list, next] = buildList(lines, i, localIds);
       content.push(list);
+      i = next;
+      continue;
+    }
+
+    if (isTableRow(line) && isTableSeparator(lines[i + 1])) {
+      const [table, next] = buildTable(lines, i);
+      content.push(table);
       i = next;
       continue;
     }
@@ -140,6 +148,48 @@ function listItem(
 function nextLocalId(localIds: { value: number }): string {
   localIds.value += 1;
   return `local-${localIds.value}`;
+}
+
+// GitHub-style pipe tables: a header row, a |---|---| separator (alignment colons
+// tolerated, alignment itself ignored), then data rows until the first non-table line.
+// Cells may not contain escaped pipes (\|); ragged rows are emitted as-is.
+function isTableRow(line: string | undefined): boolean {
+  return line !== undefined && /^\s*\|.*\|\s*$/.test(line);
+}
+
+function isTableSeparator(line: string | undefined): boolean {
+  return line !== undefined && /^\s*\|(\s*:?-+:?\s*\|)+\s*$/.test(line);
+}
+
+function tableCells(line: string): string[] {
+  return line
+    .trim()
+    .replace(/^\|/, "")
+    .replace(/\|$/, "")
+    .split("|")
+    .map((cell) => cell.trim());
+}
+
+function buildTable(lines: string[], start: number): [Record<string, unknown>, number] {
+  const rows: Record<string, unknown>[] = [tableRow(tableCells(lines[start]!), "tableHeader")];
+  let i = start + 2; // skip the header and separator rows
+  while (i < lines.length && isTableRow(lines[i]) && !isTableSeparator(lines[i])) {
+    rows.push(tableRow(tableCells(lines[i]!), "tableCell"));
+    i++;
+  }
+  return [{ type: "table", attrs: { layout: "default" }, content: rows }, i];
+}
+
+function tableRow(cells: string[], cellType: "tableHeader" | "tableCell"): Record<string, unknown> {
+  return {
+    type: "tableRow",
+    content: cells.map((cell) => ({
+      type: cellType,
+      attrs: {},
+      // ADF text nodes must be non-empty, so an empty cell gets an empty paragraph.
+      content: [{ type: "paragraph", content: cell === "" ? [] : inlineNodes(cell) }],
+    })),
+  };
 }
 
 function codeBlock(code: string, language: string | undefined): Record<string, unknown> {
