@@ -145,6 +145,8 @@ tracker selected by `tracker.kind`.
 
 - Start by calling `discord_read_thread(issueId)`. The native Discord thread is authoritative for
   status, progress, and human follow-up.
+- When a source or thread message includes attachment metadata, use `discord_read_attachment` to
+  read the selected attachment. Do not copy signed Discord CDN URLs into progress notes.
 - Lorenz acknowledges a newly dispatched `Todo` issue as `In Progress` before agent setup. If the
   thread is still `Todo`, set `In Progress` with `discord_update_status` before active work.
 - Post the initial structured workpad with `discord_workpad`. Use `discord_comment` for later

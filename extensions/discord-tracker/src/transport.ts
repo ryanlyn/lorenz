@@ -5,6 +5,20 @@ export interface DiscordReaction {
   me: boolean;
 }
 
+export interface DiscordAttachment {
+  id: string;
+  filename: string;
+  title?: string | undefined;
+  description?: string | undefined;
+  contentType?: string | undefined;
+  size: number;
+}
+
+export interface DiscordAttachmentRead {
+  attachment: DiscordAttachment;
+  body: Uint8Array;
+}
+
 export interface DiscordMessage {
   id: string;
   channelId: string;
@@ -20,6 +34,7 @@ export interface DiscordMessage {
   /** Guild role ids Discord reports as managed by the configured bot. */
   botRoleIds: string[];
   reactions: DiscordReaction[];
+  attachments: DiscordAttachment[];
   /** Discord reports an attached native thread whose id equals this message id. */
   hasThread: boolean;
   /** Latest thread message id when Discord includes thread metadata on the source message. */
@@ -110,4 +125,31 @@ export interface DiscordTransport {
     messageId: string,
     window: { before: number; after: number },
   ): Promise<DiscordMessage[]>;
+  readAttachment(
+    channelId: string,
+    messageId: string,
+    attachmentId?: string,
+  ): Promise<DiscordAttachmentRead>;
+}
+
+export function selectDiscordAttachment(
+  message: DiscordMessage,
+  attachmentId: string | undefined,
+): DiscordAttachment {
+  if (attachmentId) {
+    const attachment = message.attachments.find((candidate) => candidate.id === attachmentId);
+    if (!attachment) {
+      throw new Error(
+        `attachment ${attachmentId} does not belong to Discord message ${message.id}`,
+      );
+    }
+    return attachment;
+  }
+  if (message.attachments.length === 0) {
+    throw new Error(`Discord message ${message.id} has no attachments`);
+  }
+  if (message.attachments.length > 1) {
+    throw new Error(`attachmentId is required for Discord message ${message.id}`);
+  }
+  return message.attachments[0]!;
 }

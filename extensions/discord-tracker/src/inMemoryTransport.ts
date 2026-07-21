@@ -1,5 +1,7 @@
+import { selectDiscordAttachment } from "./transport.js";
 import type {
   DiscordApplicationCommand,
+  DiscordAttachmentRead,
   DiscordChannelScan,
   DiscordInteractionResult,
   DiscordMessage,
@@ -23,6 +25,7 @@ export class InMemoryDiscordTransport implements DiscordTransport {
     interactionToken: string;
     result: DiscordInteractionResult;
   }> = [];
+  readonly attachmentBodies = new Map<string, Uint8Array>();
 
   constructor(
     readonly messages: DiscordMessage[] = [],
@@ -40,12 +43,27 @@ export class InMemoryDiscordTransport implements DiscordTransport {
     return Promise.resolve(
       this.messages.find(
         (message) => message.channelId === channelId && message.id === messageId,
-      ) ?? null,
+      ) ??
+        this.threads.get(channelId)?.find((message) => message.id === messageId) ??
+        null,
     );
   }
 
   async getThread(messageId: string): Promise<DiscordMessage[]> {
     return Promise.resolve([...(this.threads.get(messageId) ?? [])]);
+  }
+
+  async readAttachment(
+    channelId: string,
+    messageId: string,
+    attachmentId?: string,
+  ): Promise<DiscordAttachmentRead> {
+    const message = await this.getMessage(channelId, messageId);
+    if (!message) throw new Error(`message ${messageId} does not belong to this Discord issue`);
+    const attachment = selectDiscordAttachment(message, attachmentId);
+    const body = this.attachmentBodies.get(attachment.id);
+    if (!body) throw new Error(`missing in-memory Discord attachment: ${attachment.id}`);
+    return { attachment, body: body.slice() };
   }
 
   async getChannelParent(channelId: string): Promise<string | null> {

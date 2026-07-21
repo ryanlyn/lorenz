@@ -170,8 +170,9 @@ Each built-in tracker owns its own pack:
   `local_create_issue`, `local_read_issue`, and `local_query`.
 - The `slack` tracker mounts its `slack` pack: `slack_update_status`, `slack_comment`,
   `slack_read_thread`, `slack_query`, `slack_user_info`, and `slack_channel_context`.
-- The `discord` tracker mounts its `discord` pack: `discord_update_status`, `discord_comment`,
-  `discord_read_thread`, `discord_query`, `discord_user_info`, and `discord_channel_context`.
+- The `discord` tracker mounts its `discord` pack: `discord_update_status`, `discord_workpad`,
+  `discord_comment`, `discord_read_thread`, `discord_read_attachment`, `discord_query`,
+  `discord_user_info`, and `discord_channel_context`.
 - The `memory` tracker declares no `defaultToolPacks`, so it advertises no tools.
 
 The select/filter projection for `jira_query` lives alongside the pack in
