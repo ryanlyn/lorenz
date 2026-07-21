@@ -181,6 +181,7 @@ describe("observability /ws trace subscriptions", () => {
 
       ws.send(JSON.stringify({ type: "unsubscribe", issueId: "issue-1" }));
       await waitFor(() => fake.unsubscribe.mock.calls.length === 1);
+      fake.getEventsForTicket.mockClear();
 
       // Watcher changes still broadcast ticket updates but no longer send
       // deltas to the unsubscribed client.
@@ -188,6 +189,7 @@ describe("observability /ws trace subscriptions", () => {
       fake.emit();
 
       await waitFor(() => messages.some((message) => message.type === "update"));
+      expect(fake.getEventsForTicket).not.toHaveBeenCalled();
       expect(messages.some((message) => message.type === "events_append")).toBe(false);
 
       ws.close();
@@ -207,6 +209,7 @@ function createFakeWatcher(initialEvents: DisplayEvent[]): {
   watcher: TraceWatcher;
   subscribe: ReturnType<typeof vi.fn>;
   unsubscribe: ReturnType<typeof vi.fn>;
+  getEventsForTicket: ReturnType<typeof vi.fn>;
   setEvents(events: DisplayEvent[]): void;
   emit(): void;
 } {
@@ -221,6 +224,7 @@ function createFakeWatcher(initialEvents: DisplayEvent[]): {
   let callback: ((issueId: string, ticket: TicketInfo) => void) | null = null;
   const subscribe = vi.fn();
   const unsubscribe = vi.fn();
+  const getEventsForTicket = vi.fn((issueId: string) => (issueId === ticket.issueId ? events : []));
   const watcher = {
     start: vi.fn((next: (issueId: string, ticket: TicketInfo) => void) => {
       callback = next;
@@ -229,13 +233,14 @@ function createFakeWatcher(initialEvents: DisplayEvent[]): {
     getTickets: vi.fn(() => [ticket]),
     subscribe,
     unsubscribe,
-    getEventsForTicket: vi.fn((issueId: string) => (issueId === ticket.issueId ? events : [])),
+    getEventsForTicket,
   } as unknown as TraceWatcher;
 
   return {
     watcher,
     subscribe,
     unsubscribe,
+    getEventsForTicket,
     setEvents(nextEvents: DisplayEvent[]) {
       events = nextEvents;
     },
