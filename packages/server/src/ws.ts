@@ -149,7 +149,7 @@ export function createWsHandler(
   watcher?.start((issueId) => {
     broadcast({ type: "update", issueId, tickets: watcher.getTickets() });
 
-    const events = watcher.getEventsForTicket(issueId);
+    let events: DisplayEvent[] | null = null;
     // Subscribed clients converge on the same sentEvents array reference after
     // their first delta, so memoize the diff and its serialized payload by
     // that identity instead of redoing the O(events) comparison per client.
@@ -157,6 +157,7 @@ export function createWsHandler(
 
     for (const [ws, clientState] of connections) {
       if (clientState.subscribedIssueId !== issueId) continue;
+      events ??= watcher.getEventsForTicket(issueId);
 
       if (memo === null || memo.previous !== clientState.sentEvents) {
         const fromIndex = findFirstChangedEventIndex(clientState.sentEvents, events);
