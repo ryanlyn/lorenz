@@ -10,10 +10,22 @@ const DEFAULT_SSH_TIMEOUT_MS = 60_000;
 const DEFAULT_REMOTE_TCP_PORT_READY_TIMEOUT_MS = 10_000;
 const DEFAULT_REMOTE_TCP_PORT_READY_INTERVAL_MS = 200;
 const DEFAULT_REMOTE_TCP_PORT_READY_ATTEMPT_TIMEOUT_MS = 1_000;
+const REVERSE_TUNNEL_STDERR_DRAIN_TIMEOUT_MS = 1_000;
+const REVERSE_TUNNEL_STDERR_TAIL_MAX_CHARS = 4_096;
 const TCP_PORT_MAX = 65_535;
 const NUMERIC_CHMOD_MODE = /^[0-7]{3,4}$/;
 const SYMBOLIC_CHMOD_MODE =
   /^(?:[ugoa]*(?:(?:[+-][rwxXstugo]+)|(?:=[rwxXstugo]*)))(?:,(?:[ugoa]*(?:(?:[+-][rwxXstugo]+)|(?:=[rwxXstugo]*))))*$/;
+const SSH_CONNECTION_OPTIONS = [
+  "BatchMode=yes",
+  "NumberOfPasswordPrompts=0",
+  "PasswordAuthentication=no",
+  "KbdInteractiveAuthentication=no",
+  "StrictHostKeyChecking=yes",
+  "UpdateHostKeys=no",
+  "ConnectionAttempts=1",
+  "ConnectTimeout=10",
+] as const;
 
 function requireSshExecutable(): string {
   const pathValue = process.env.PATH ?? "";
@@ -65,6 +77,11 @@ export interface RemoteTcpPortWaitOptions {
   intervalMs?: number | undefined;
   attemptTimeoutMs?: number | undefined;
   sshExecutablePath?: string | undefined;
+}
+
+export interface ReverseTunnelProcess extends ChildProcessWithoutNullStreams {
+  readStderrTail(): string;
+  waitForStderr(): Promise<void>;
 }
 
 export async function runSsh(
@@ -134,7 +151,7 @@ export function startReverseTunnel(
   remotePort: number,
   localHost: string,
   localPort: number,
-): ChildProcessWithoutNullStreams {
+): ReverseTunnelProcess {
   const subprocess = execa(
     requireSshExecutable(),
     reverseTunnelArgs(host, remotePort, localHost, localPort),
@@ -148,12 +165,11 @@ export function startReverseTunnel(
       buffer: false,
     },
   ) as unknown as ChildProcessWithoutNullStreams;
-  // No caller consumes tunnel output. With buffering off, someone must drain
-  // the pipes or a chatty ssh (warnings, debug output) eventually fills them
-  // and blocks the tunnel; discard the data instead of retaining it.
+  const tunnelProcess = trackReverseTunnelStderr(subprocess);
+  // No caller consumes tunnel stdout. With buffering off, someone must drain
+  // the pipe or a chatty ssh eventually fills it and blocks the tunnel.
   subprocess.stdout.resume();
-  subprocess.stderr.resume();
-  return subprocess;
+  return tunnelProcess;
 }
 
 export async function waitForRemoteTcpPort(
@@ -221,7 +237,7 @@ export async function writeRemoteFile(
 export function sshArgs(host: string, command: string): string[] {
   const target = parseSshTarget(host);
   return [
-    ...sshConfigArgs(),
+    ...sshConnectionArgs(),
     "-T",
     ...(target.port ? ["-p", target.port] : []),
     "--",
@@ -238,7 +254,7 @@ export function reverseTunnelArgs(
 ): string[] {
   const target = parseSshTarget(host);
   return [
-    ...sshConfigArgs(),
+    ...sshConnectionArgs(),
     "-T",
     "-N",
     "-o",
@@ -290,9 +306,42 @@ function sshMissingExitCodeError(host: string, result: SshExitMetadata): Error {
   });
 }
 
-function sshConfigArgs(): string[] {
+function sshConnectionArgs(): string[] {
   const configPath = process.env.LORENZ_SSH_CONFIG;
-  return configPath ? ["-F", configPath] : [];
+  return [
+    ...(configPath ? ["-F", configPath] : []),
+    ...SSH_CONNECTION_OPTIONS.flatMap((option) => ["-o", option]),
+  ];
+}
+
+function trackReverseTunnelStderr(process: ChildProcessWithoutNullStreams): ReverseTunnelProcess {
+  let stderrTail = "";
+  const stderrClosed = new Promise<void>((resolve) => {
+    const settle = (): void => {
+      process.stderr.off("end", settle);
+      process.stderr.off("close", settle);
+      process.stderr.off("error", settle);
+      resolve();
+    };
+    process.stderr.once("end", settle);
+    process.stderr.once("close", settle);
+    process.stderr.once("error", settle);
+  });
+  process.stderr.on("data", (chunk: Buffer | string) => {
+    stderrTail = `${stderrTail}${chunk.toString()}`.slice(-REVERSE_TUNNEL_STDERR_TAIL_MAX_CHARS);
+  });
+  return Object.assign(process, {
+    readStderrTail: (): string => stderrTail,
+    waitForStderr: async (): Promise<void> => {
+      await new Promise<void>((resolve) => {
+        const timer = setTimeout(resolve, REVERSE_TUNNEL_STDERR_DRAIN_TIMEOUT_MS);
+        void stderrClosed.then(() => {
+          clearTimeout(timer);
+          resolve();
+        });
+      });
+    },
+  });
 }
 
 function validPortDestination(destination: string): boolean {

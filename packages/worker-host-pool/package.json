@@ -9,6 +9,7 @@
     ".": "./dist/index.js"
   },
   "dependencies": {
+    "@lorenz/domain": "workspace:*",
     "@lorenz/ssh": "workspace:*"
   }
 }

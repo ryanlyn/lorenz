@@ -1,8 +1,9 @@
 import EventEmitter from "node:events";
-import type { ChildProcessWithoutNullStreams } from "node:child_process";
 
 import { beforeEach, test, vi } from "vitest";
+import { registerDiagnosticSecret } from "@lorenz/domain";
 import { startReverseTunnel, waitForRemoteTcpPort } from "@lorenz/ssh";
+import type { ReverseTunnelProcess } from "@lorenz/ssh";
 import { assert } from "@lorenz/test-utils";
 
 import { WorkerHostPool } from "@lorenz/worker-host-pool";
@@ -15,11 +16,13 @@ vi.mock("@lorenz/ssh", () => ({
 const mockStartReverseTunnel = vi.mocked(startReverseTunnel);
 const mockWaitForRemoteTcpPort = vi.mocked(waitForRemoteTcpPort);
 
-function makeFakeProcess(): ChildProcessWithoutNullStreams {
+function makeFakeProcess(): ReverseTunnelProcess {
   const emitter = new EventEmitter();
   (emitter as unknown as Record<string, unknown>).kill = vi.fn();
   (emitter as unknown as Record<string, unknown>).pid = 12345;
-  return emitter as unknown as ChildProcessWithoutNullStreams;
+  (emitter as unknown as Record<string, unknown>).readStderrTail = vi.fn(() => "");
+  (emitter as unknown as Record<string, unknown>).waitForStderr = vi.fn(async () => {});
+  return emitter as unknown as ReverseTunnelProcess;
 }
 
 beforeEach(() => {
@@ -38,12 +41,11 @@ function setupProcessTrackingMock(): Array<{
 }> {
   const processes: Array<{ kill: ReturnType<typeof vi.fn>; emitter: EventEmitter }> = [];
   mockStartReverseTunnel.mockImplementation(() => {
-    const emitter = new EventEmitter();
+    const emitter = makeFakeProcess() as ReverseTunnelProcess & EventEmitter;
     const kill = vi.fn();
     (emitter as unknown as Record<string, unknown>).kill = kill;
-    (emitter as unknown as Record<string, unknown>).pid = 12345;
     processes.push({ kill, emitter });
-    return emitter as unknown as ChildProcessWithoutNullStreams;
+    return emitter;
   });
   return processes;
 }
@@ -76,15 +78,19 @@ test("acquireRemoteMcpTunnel creates a new MCP tunnel lease for a session", asyn
 });
 
 test("acquireRemoteMcpTunnel rejects when reverse tunnel closes before readiness", async () => {
-  const fakeProcess = makeFakeProcess() as ChildProcessWithoutNullStreams & EventEmitter;
+  const fakeProcess = makeFakeProcess() as ReverseTunnelProcess & EventEmitter;
   mockStartReverseTunnel.mockReturnValue(fakeProcess);
+  vi.mocked(fakeProcess.readStderrTail).mockReturnValue("Host key verification failed.");
   mockWaitForRemoteTcpPort.mockImplementation(() => new Promise(() => {}));
   const pool = new WorkerHostPool();
 
   const acquisition = pool.acquireRemoteMcpTunnel("worker-1", "127.0.0.1", 3000);
-  fakeProcess.emit("close", 255);
+  fakeProcess.emit("close", 255, null);
 
-  await assert.rejects(() => acquisition, /remote_mcp_tunnel_setup_failed/);
+  await assert.rejects(
+    () => acquisition,
+    /remote_mcp_tunnel_setup_failed: worker-1 46000 reason="reverse_tunnel_closed: 255 null" stderr_tail="Host key verification failed\."/,
+  );
 
   mockStartReverseTunnel.mockImplementation(() => makeFakeProcess());
   mockWaitForRemoteTcpPort.mockResolvedValue(undefined);
@@ -93,8 +99,85 @@ test("acquireRemoteMcpTunnel rejects when reverse tunnel closes before readiness
   assert.equal(mockStartReverseTunnel.mock.calls.length, 2);
 });
 
+test("acquireRemoteMcpTunnel waits for close before reporting stderr written after exit", async () => {
+  const fakeProcess = makeFakeProcess() as ReverseTunnelProcess & EventEmitter;
+  let stderrTail = "";
+  mockStartReverseTunnel.mockReturnValue(fakeProcess);
+  vi.mocked(fakeProcess.readStderrTail).mockImplementation(() => stderrTail);
+  mockWaitForRemoteTcpPort.mockImplementation(() => new Promise(() => {}));
+  const pool = new WorkerHostPool();
+
+  let settled = false;
+  const acquisition = pool.acquireRemoteMcpTunnel("worker-1", "127.0.0.1", 3000).finally(() => {
+    settled = true;
+  });
+
+  fakeProcess.emit("exit", 255, null);
+  await Promise.resolve();
+  assert.equal(settled, false);
+
+  stderrTail = "late host-key diagnostic";
+  fakeProcess.emit("close", 255, null);
+
+  await assert.rejects(
+    () => acquisition,
+    /reason="reverse_tunnel_closed: 255 null" stderr_tail="late host-key diagnostic"/,
+  );
+});
+
+test("acquireRemoteMcpTunnel bounds stderr draining when exit races with readiness", async () => {
+  const fakeProcess = makeFakeProcess() as ReverseTunnelProcess & EventEmitter;
+  const ready = deferred<void>();
+  const stderrClosed = deferred<void>();
+  let stderrTail = "";
+  mockStartReverseTunnel.mockReturnValue(fakeProcess);
+  vi.mocked(fakeProcess.readStderrTail).mockImplementation(() => stderrTail);
+  mockWaitForRemoteTcpPort.mockReturnValue(ready.promise);
+  vi.mocked(fakeProcess.waitForStderr).mockReturnValue(stderrClosed.promise);
+  const pool = new WorkerHostPool();
+
+  let settled = false;
+  const acquisition = pool.acquireRemoteMcpTunnel("worker-1", "127.0.0.1", 3000).finally(() => {
+    settled = true;
+  });
+
+  fakeProcess.emit("exit", 255, null);
+  ready.resolve();
+  await vi.waitFor(() => {
+    assert.equal(vi.mocked(fakeProcess.waitForStderr).mock.calls.length, 1);
+  });
+  assert.equal(settled, false);
+
+  stderrTail = "delayed authentication diagnostic";
+  stderrClosed.resolve();
+
+  await assert.rejects(
+    () => acquisition,
+    /reason="reverse_tunnel_process_ended" stderr_tail="delayed authentication diagnostic"/,
+  );
+});
+
+test("acquireRemoteMcpTunnel redacts secrets from operator diagnostics", async () => {
+  const fakeProcess = makeFakeProcess() as ReverseTunnelProcess & EventEmitter;
+  const secret = "mono-471-tunnel-secret";
+  registerDiagnosticSecret(secret);
+  mockStartReverseTunnel.mockReturnValue(fakeProcess);
+  vi.mocked(fakeProcess.readStderrTail).mockReturnValue(`token=${secret}`);
+  mockWaitForRemoteTcpPort.mockImplementation(() => new Promise(() => {}));
+  const pool = new WorkerHostPool();
+
+  const acquisition = pool.acquireRemoteMcpTunnel("worker-1", "127.0.0.1", 3000);
+  fakeProcess.emit("close", 255, null);
+
+  await assert.rejects(
+    () => acquisition,
+    (error: Error) =>
+      !error.message.includes(secret) && error.message.includes("[REDACTED]"),
+  );
+});
+
 test("acquireRemoteMcpTunnel rejects when reverse tunnel errors before readiness", async () => {
-  const fakeProcess = makeFakeProcess() as ChildProcessWithoutNullStreams & EventEmitter;
+  const fakeProcess = makeFakeProcess() as ReverseTunnelProcess & EventEmitter;
   mockStartReverseTunnel.mockReturnValue(fakeProcess);
   mockWaitForRemoteTcpPort.mockImplementation(() => new Promise(() => {}));
   const pool = new WorkerHostPool();
@@ -358,12 +441,13 @@ test("rapid concurrent acquire/release of many workers maintains consistent port
 });
 
 test("tunnel close event triggers cleanup and port recycling", async () => {
-  let fakeProcess: EventEmitter & { kill: ReturnType<typeof vi.fn> };
+  let fakeProcess: ReverseTunnelProcess & EventEmitter & { kill: ReturnType<typeof vi.fn> };
   mockStartReverseTunnel.mockImplementation(() => {
-    fakeProcess = new EventEmitter() as EventEmitter & { kill: ReturnType<typeof vi.fn> };
+    fakeProcess = makeFakeProcess() as ReverseTunnelProcess &
+      EventEmitter & { kill: ReturnType<typeof vi.fn> };
     fakeProcess.kill = vi.fn();
     (fakeProcess as unknown as Record<string, unknown>).pid = 99;
-    return fakeProcess as unknown as ChildProcessWithoutNullStreams;
+    return fakeProcess;
   });
 
   const pool = new WorkerHostPool();

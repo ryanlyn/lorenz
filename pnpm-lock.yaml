@@ -1060,6 +1060,9 @@ importers:
 
   packages/worker-host-pool:
     dependencies:
+      '@lorenz/domain':
+        specifier: workspace:*
+        version: link:../domain
       '@lorenz/ssh':
         specifier: workspace:*
         version: link:../ssh

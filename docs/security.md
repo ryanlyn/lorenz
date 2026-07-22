@@ -52,7 +52,9 @@ Hook subprocesses are spawned detached in their own process group. On timeout (`
 When work runs on a remote worker host, hooks and the agent execute over SSH (`packages/ssh/src/index.ts`). SSH inherits the host's own trust: Lorenz runs `cd <workspace> && <command>` on the worker under whatever credentials the SSH config provides.
 
 - The `LORENZ_SSH_CONFIG` environment variable is passed to `ssh` as `-F <path>`, letting you pin host keys, identities, jump hosts, and `ProxyCommand` per deployment without touching the workflow.
+- Every worker command, remote process, readiness probe, and reverse tunnel uses the same command-line policy: batch mode, password and keyboard-interactive authentication disabled, zero password prompts, strict host-key checking, automatic host-key updates disabled, one connection attempt, and a 10-second connect timeout. Unknown or changed host keys fail closed even if the SSH config requests a weaker policy.
 - Remote commands run in a detached process group; on timeout (`worker.ssh_timeout_ms`, default `60000`) the entire group is `SIGTERM`ed then `SIGKILL`ed after `5000ms`.
+- Reverse-tunnel setup is bounded by the readiness deadline and reports a secret-redacted tail retained from only the last 4096 characters of SSH stderr.
 - Remote workspace root resolution expands `~` / `$HOME` against the worker's `$HOME` over SSH, not the local one, so a remote root cannot be aliased to a local path by accident.
 
 Two unrelated config surfaces share the "static SSH" name: the legacy `worker.ssh_hosts` list (pre-existing destinations the runtime shards across, no provisioning) and the `static-ssh` worker-pool driver. They are mutually exclusive in config. See [Static SSH workers](workers/static-ssh.md).
