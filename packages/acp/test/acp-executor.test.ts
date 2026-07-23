@@ -1673,10 +1673,18 @@ eval "$last_arg"
 }
 
 function tunnelTraceCount(trace: string): number {
+  // Match on the tunnel's defining flags (-N plus a reverse forward) rather
+  // than an exact option sequence, so option-order/insertion changes in
+  // reverseTunnelArgs don't silently zero the count.
   return trace
     .split("\n")
-    .filter((line) => line.includes("-N -o ExitOnForwardFailure=yes") && line.includes("-R "))
-    .length;
+    .filter(
+      (line) =>
+        line.includes("ARGV:") &&
+        / -N /.test(line) &&
+        line.includes("ExitOnForwardFailure=yes") &&
+        line.includes("-R "),
+    ).length;
 }
 
 function acpAuthHeader(server: unknown): string | undefined {

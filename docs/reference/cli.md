@@ -99,6 +99,7 @@ default) or `--once`, no lease is acquired.
 | `LORENZ_FLAG_*`          | `@lorenz/flags`       | Set a flag whose manifest entry declares that env name, e.g. `LORENZ_FLAG_CLAIM_STORE__BACKEND=turso`. |
 | `LORENZ_FEATURE_*`       | `@lorenz/flags`       | Enable a feature whose manifest entry declares that env name, e.g. `LORENZ_FEATURE_DURABLE_CLAIMS=1`.  |
 | `LORENZ_SSH_CONFIG`      | `packages/ssh`        | Path passed to `ssh -F` for remote workers.                                                            |
+| `LORENZ_SSH_DEDICATED_REVERSE_TUNNEL=1` | `packages/ssh` | Give each reverse tunnel a non-multiplexed SSH connection; unset preserves existing SSH behavior. |
 | `CLAUDE_CODE_EXECUTABLE` | ACP bridges, `doctor` | Override path to the `claude` CLI.                                                                     |
 | `CODEX_PATH`             | ACP bridges, `doctor` | Override path to the `codex` CLI.                                                                      |
 

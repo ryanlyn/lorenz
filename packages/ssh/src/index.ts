@@ -10,6 +10,7 @@ const DEFAULT_SSH_TIMEOUT_MS = 60_000;
 const DEFAULT_REMOTE_TCP_PORT_READY_TIMEOUT_MS = 10_000;
 const DEFAULT_REMOTE_TCP_PORT_READY_INTERVAL_MS = 200;
 const DEFAULT_REMOTE_TCP_PORT_READY_ATTEMPT_TIMEOUT_MS = 1_000;
+const DEDICATED_REVERSE_TUNNEL_ENV = "LORENZ_SSH_DEDICATED_REVERSE_TUNNEL";
 const TCP_PORT_MAX = 65_535;
 const NUMERIC_CHMOD_MODE = /^[0-7]{3,4}$/;
 const SYMBOLIC_CHMOD_MODE =
@@ -241,19 +242,7 @@ export function reverseTunnelArgs(
     ...sshConfigArgs(),
     "-T",
     "-N",
-    // The pool tears a tunnel down by killing THIS process and treats
-    // forward-lifecycle == process-lifecycle as an invariant. Connection
-    // multiplexing breaks it: a -R forward requested over a shared
-    // ControlMaster can outlive the mux client on the persisted master, and
-    // when the recycled remote port is requested again the new forward fails
-    // on the master while the readiness probe happily reaches the STALE
-    // listener - handing agents an MCP endpoint that connects to nowhere.
-    // Force a dedicated connection so ExitOnForwardFailure and teardown mean
-    // what the pool thinks they mean, regardless of the user's ssh config.
-    "-o",
-    "ControlMaster=no",
-    "-o",
-    "ControlPath=none",
+    ...dedicatedReverseTunnelArgs(),
     "-o",
     "ExitOnForwardFailure=yes",
     ...(target.port ? ["-p", target.port] : []),
@@ -306,6 +295,15 @@ function sshMissingExitCodeError(host: string, result: SshExitMetadata): Error {
 function sshConfigArgs(): string[] {
   const configPath = process.env.LORENZ_SSH_CONFIG;
   return configPath ? ["-F", configPath] : [];
+}
+
+function dedicatedReverseTunnelArgs(): string[] {
+  if (process.env[DEDICATED_REVERSE_TUNNEL_ENV] !== "1") return [];
+  // The pool tears a tunnel down by killing THIS process. A deployment that
+  // persists ControlMaster connections can opt into a dedicated connection so
+  // the reverse forward cannot outlive that child. Default-off preserves the
+  // SSH topology and multiplexing behavior of every existing deployment.
+  return ["-o", "ControlMaster=no", "-o", "ControlPath=none"];
 }
 
 function validPortDestination(destination: string): boolean {

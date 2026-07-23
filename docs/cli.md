@@ -153,6 +153,7 @@ Bridge checks run only for the `acp` executor. They inspect the active config an
 | `LORENZ_WORKFLOW`        | Workflow file path. Absolute is used as-is; relative joins the current directory. |
 | `LORENZ_WORKSPACE_ROOT`  | Overrides `workspace.root`.                                                       |
 | `LORENZ_SSH_CONFIG`      | Path passed to `ssh -F` for [remote workers](workers/static-ssh.md).              |
+| `LORENZ_SSH_DEDICATED_REVERSE_TUNNEL=1` | Disable SSH multiplexing only for reverse-tunnel children; unset preserves existing behavior. |
 | `CLAUDE_CODE_EXECUTABLE` | Overrides the `claude` binary path used by doctor and the ACP bridge.             |
 | `CODEX_PATH`             | Overrides the `codex` binary path used by doctor and the ACP bridge.              |
 
