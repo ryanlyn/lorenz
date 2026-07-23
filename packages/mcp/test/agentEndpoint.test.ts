@@ -1,43 +1,42 @@
-import EventEmitter from "node:events";
 import { createServer } from "node:net";
 import { createServer as createHttpServer } from "node:http";
-import type { ChildProcessWithoutNullStreams } from "node:child_process";
 
 import { afterEach, beforeEach, test, vi } from "vitest";
-import { startReverseTunnel } from "@lorenz/ssh";
+import { startReverseTunnel, type ReverseTunnelHandle } from "@lorenz/ssh";
 import { workerHostPool } from "@lorenz/worker-host-pool";
 import type { Settings } from "@lorenz/domain";
 import { assert } from "@lorenz/test-utils";
 
-import { acquireAgentMcpEndpointForRun } from "../src/agentEndpoint.js";
+import {
+  acquireAgentMcpEndpointForRun,
+  type RemoteMcpTunnelTransport,
+} from "../src/agentEndpoint.js";
 import { resolveRunClaim } from "../src/auth.js";
 
-// Avoid spawning a real `ssh -N` reverse tunnel; the per-run tunnel allocation
-// logic in WorkerHostPool is exercised against a fake child process.
+// Avoid opening a real reverse tunnel; the per-run tunnel allocation logic in
+// WorkerHostPool is exercised against a fake logical tunnel handle.
 vi.mock("@lorenz/ssh", () => ({
   startReverseTunnel: vi.fn(),
-  // The pool awaits remote-port readiness before returning a lease; the fake
-  // resolves immediately so these tests exercise the lease lifecycle, not the
-  // readiness probe.
-  waitForRemoteTcpPort: vi.fn(async () => {}),
+  waitForRemoteTcpPortClosed: vi.fn(async () => {}),
 }));
 
 const mockStartReverseTunnel = vi.mocked(startReverseTunnel);
 
-interface FakeProcess extends EventEmitter {
-  kill: ReturnType<typeof vi.fn>;
-}
-
-function makeFakeProcess(): ChildProcessWithoutNullStreams {
-  const emitter = new EventEmitter() as FakeProcess;
-  // Port recycling is deferred until the ssh child actually ends, so the fake
-  // child ends (emits close) as soon as it is killed.
-  emitter.kill = vi.fn(() => {
-    emitter.emit("close", null, "SIGTERM");
-    return true;
+function makeFakeTunnel(): ReverseTunnelHandle {
+  let resolveEnded!: () => void;
+  let closed = false;
+  const ended = new Promise<void>((resolve) => {
+    resolveEnded = resolve;
   });
-  (emitter as unknown as Record<string, unknown>).pid = 12345;
-  return emitter as unknown as ChildProcessWithoutNullStreams;
+  return {
+    ended,
+    check: vi.fn(async () => {}),
+    close: vi.fn(async () => {
+      if (closed) return;
+      closed = true;
+      resolveEnded();
+    }),
+  };
 }
 
 // A free localhost TCP port that no server is listening on, so the local MCP
@@ -78,7 +77,7 @@ function settingsWithPort(port: number): Settings {
 
 beforeEach(() => {
   mockStartReverseTunnel.mockReset();
-  mockStartReverseTunnel.mockImplementation(() => makeFakeProcess());
+  mockStartReverseTunnel.mockImplementation(async () => makeFakeTunnel());
 });
 
 afterEach(() => {
@@ -165,6 +164,65 @@ test("acquireAgentMcpEndpointForRun.release() revokes the token, drops the local
   assert.equal(await mcpServerReachable("127.0.0.1", port), false);
 });
 
+test("per-run release waits for asynchronous tunnel cleanup before stopping its local server", async () => {
+  const port = await freeLocalPort();
+  const closeGate = deferred<void>();
+  const closeForRun = vi.fn(() => closeGate.promise);
+  const tunnels: RemoteMcpTunnelTransport = {
+    acquireRemoteMcpTunnel: vi.fn(async () => ({ remotePort: 46_000 })),
+    releaseRemoteMcpTunnel: vi.fn(),
+    openForRun: vi.fn(async () => ({ remotePort: 46_001 })),
+    closeForRun,
+  };
+  const lease = await acquireAgentMcpEndpointForRun(
+    settingsWithPort(port),
+    "worker-1",
+    "run-async-close",
+    tunnels,
+  );
+
+  let releaseSettled = false;
+  const releasePromise = lease.release().finally(() => {
+    releaseSettled = true;
+  });
+  try {
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    assert.deepEqual(closeForRun.mock.calls[0], ["worker-1", "run-async-close"]);
+    assert.equal(releaseSettled, false);
+    assert.equal(await mcpServerReachable("127.0.0.1", port), true);
+  } finally {
+    closeGate.resolve();
+    await releasePromise;
+  }
+
+  assert.equal(releaseSettled, true);
+  assert.equal(await mcpServerReachable("127.0.0.1", port), false);
+});
+
+test("per-run release still stops its local server when tunnel cleanup fails", async () => {
+  const port = await freeLocalPort();
+  const closeForRun = vi.fn(async () => {
+    throw new Error("per-run tunnel cleanup failed");
+  });
+  const tunnels: RemoteMcpTunnelTransport = {
+    acquireRemoteMcpTunnel: vi.fn(async () => ({ remotePort: 46_000 })),
+    releaseRemoteMcpTunnel: vi.fn(),
+    openForRun: vi.fn(async () => ({ remotePort: 46_002 })),
+    closeForRun,
+  };
+  const lease = await acquireAgentMcpEndpointForRun(
+    settingsWithPort(port),
+    "worker-1",
+    "run-close-failure",
+    tunnels,
+  );
+
+  await assert.rejects(() => lease.release(), /per-run tunnel cleanup failed/);
+
+  assert.equal(await mcpServerReachable("127.0.0.1", port), false);
+});
+
 test("acquireAgentMcpEndpointForRun releases the local-server ref AND revokes the token when openForRun throws", async () => {
   const port = await freeLocalPort();
   const settings = settingsWithPort(port);
@@ -192,7 +250,7 @@ test("acquireAgentMcpEndpointForRun releases the local-server ref AND revokes th
   // successful acquire on the SAME host:port re-uses the recycled remote port
   // and brings the local server back up, then releases cleanly — proving the
   // failed attempt left no lingering refcount that would keep the server alive.
-  mockStartReverseTunnel.mockImplementation(() => makeFakeProcess());
+  mockStartReverseTunnel.mockImplementation(async () => makeFakeTunnel());
   const lease = await acquireAgentMcpEndpointForRun(settings, "worker-1", "run-ok", workerHostPool);
   assert.ok(resolveRunClaim(lease.token));
   assert.equal(await mcpServerReachable("127.0.0.1", port), true);
@@ -324,6 +382,17 @@ function parseJsonRpcId(body: string): unknown {
   } catch {
     return null;
   }
+}
+
+function deferred<T>(): {
+  promise: Promise<T>;
+  resolve(value: T): void;
+} {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((innerResolve) => {
+    resolve = innerResolve;
+  });
+  return { promise, resolve };
 }
 
 test("acquireAgentMcpEndpointForRun falls back to an ephemeral OWNED server when a foreign server holds the configured port (dashboard coexistence)", async () => {

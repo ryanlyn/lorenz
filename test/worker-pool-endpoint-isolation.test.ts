@@ -3,10 +3,9 @@
 // the REAL `acquireAgentMcpEndpointForRun` (token + refcounted local mcp server +
 // reverse tunnel behind ONE lease), the concrete per-run `McpEndpointManager`,
 // and the REAL `DispatchCoordinator` over a fake machine `WorkerPool`. The ONLY seam
-// replaced is `@lorenz/ssh` (`startReverseTunnel`'s `ssh -N` child plus its
-// readiness probe), mocked so no real ssh is spawned and so a leaked / surviving
-// child shows up as an un-`kill()`ed fake
-// process. Everything else - the three sub-resources of the endpoint lease, the
+// replaced is `@lorenz/ssh` (`startReverseTunnel`), mocked so no real ssh is
+// spawned and so a leaked / surviving logical tunnel shows up as an unclosed
+// fake handle. Everything else - the three sub-resources of the endpoint lease, the
 // per-run tunnel keying, the open-after-bind / close-before-settle ordering, the
 // recycle-driven clean fail, and the force-drain endpoint sweep - is the real
 // code path two co-resident runs would take.
@@ -16,14 +15,14 @@
 // dispatch-coordinator/test/coordinator). This file pins the CROSS-CUTTING
 // invariants that only emerge when the layers are composed:
 //   - a machine recycle/poison for run A fails A CLEANLY (token revoked, local
-//     server ref dropped, ssh child killed, lease settled, slot deregistered) and
+//     server ref dropped, tunnel closed, lease settled, slot deregistered) and
 //     leaves run B's endpoint + lease completely untouched;
 //   - an endpoint-open throw settles the just-bound lease HEALTHY and leaves NO
-//     half-open ssh child (the recycled remote port is free for reuse);
+//     half-open tunnel (the recycled remote port is free for reuse);
 //   - a stall (AbortSignal) during the open-endpoint window aborts the open,
-//     settles the lease healthy, and closes any half-opened child;
-//   - a force-drain closes EVERY surviving registry endpoint (no leaked ssh -N
-//     child on shutdown);
+//     settles the lease healthy, and closes any half-opened tunnel;
+//   - a force-drain closes EVERY surviving registry endpoint (no leaked tunnel
+//     on shutdown);
 //   - the local-host path leaves acp owning (acquiring AND releasing) its own
 //     endpoint byte-for-byte (the coordinator mints nothing);
 //   - the default single-slot path opens EXACTLY ONE endpoint per machine.
@@ -38,13 +37,11 @@
 // fake `startReverseTunnel`. Tests import the compiled package barrels (the suite
 // runs against tsc --build output).
 
-import EventEmitter from "node:events";
 import { createServer } from "node:net";
-import type { ChildProcessWithoutNullStreams } from "node:child_process";
 
 import { assert, settle } from "@lorenz/test-utils";
 import { afterEach, beforeEach, test, vi } from "vitest";
-import { startReverseTunnel } from "@lorenz/ssh";
+import { startReverseTunnel, type ReverseTunnelHandle } from "@lorenz/ssh";
 import { parseConfig } from "@lorenz/config";
 import type { WorkerPoolSettings } from "@lorenz/domain";
 import { acquireAgentMcpEndpointForRun, resolveRunClaim } from "@lorenz/mcp";
@@ -60,14 +57,11 @@ import type {
   Settings,
 } from "@lorenz/cli";
 
-// The reverse-tunnel child is the ONE seam we replace: a fake EventEmitter whose
-// `kill()` is observable, so a surviving (un-killed) child is a leaked ssh -N.
-// The pool awaits remote-port readiness before returning a lease; the fake
-// `waitForRemoteTcpPort` resolves immediately so the suite exercises the lease
-// lifecycle, not the readiness probe.
+// The reverse tunnel is the ONE seam we replace: a fake logical handle whose
+// `close()` is observable, so a surviving unclosed handle is a leaked tunnel.
 vi.mock("@lorenz/ssh", () => ({
   startReverseTunnel: vi.fn(),
-  waitForRemoteTcpPort: vi.fn(async () => {}),
+  waitForRemoteTcpPortClosed: vi.fn(async () => {}),
 }));
 
 const mockStartReverseTunnel = vi.mocked(startReverseTunnel);
@@ -83,21 +77,31 @@ interface AcquireRunSlotRequest {
   signal?: AbortSignal;
 }
 
-interface FakeProcess extends EventEmitter {
-  kill: ReturnType<typeof vi.fn>;
+interface FakeTunnel {
+  handle: ReverseTunnelHandle;
 }
 
-function makeFakeProcess(processes: FakeProcess[]): ChildProcessWithoutNullStreams {
-  const emitter = new EventEmitter() as FakeProcess;
-  // Port recycling is deferred until the ssh child actually ends, so the fake
-  // child ends (emits close) as soon as it is killed.
-  emitter.kill = vi.fn(() => {
-    emitter.emit("close", null, "SIGTERM");
-    return true;
+interface FakeTunnelOptions {
+  check?: (() => Promise<void>) | undefined;
+}
+
+function makeFakeTunnel(
+  tunnels: FakeTunnel[],
+  options: FakeTunnelOptions = {},
+): ReverseTunnelHandle {
+  let resolveEnded: () => void = () => {};
+  const ended = new Promise<void>((resolve) => {
+    resolveEnded = resolve;
   });
-  (emitter as unknown as Record<string, unknown>).pid = 4242;
-  processes.push(emitter);
-  return emitter as unknown as ChildProcessWithoutNullStreams;
+  const handle: ReverseTunnelHandle = {
+    ended,
+    check: vi.fn(options.check ?? (async () => {})),
+    close: vi.fn(async () => {
+      resolveEnded();
+    }),
+  };
+  tunnels.push({ handle });
+  return handle;
 }
 
 // A free localhost TCP port for the refcounted local MCP server, so the suite
@@ -315,9 +319,9 @@ afterEach(async () => {
 // Machine recycle / poison: fail run A cleanly, leave run B untouched.
 // ---------------------------------------------------------------------------
 
-test("recycle/poison of run A fails A CLEANLY (token revoked, ssh child killed, lease settled, deregistered) and leaves run B untouched", async () => {
-  const processes: FakeProcess[] = [];
-  mockStartReverseTunnel.mockImplementation(() => makeFakeProcess(processes));
+test("recycle/poison of run A fails A CLEANLY (token revoked, tunnel closed, lease settled, deregistered) and leaves run B untouched", async () => {
+  const tunnels: FakeTunnel[] = [];
+  mockStartReverseTunnel.mockImplementation(async () => makeFakeTunnel(tunnels));
   const pool = makeFakeMachinePool();
   const coordinator = makeCoordinator(pool);
 
@@ -332,30 +336,30 @@ test("recycle/poison of run A fails A CLEANLY (token revoked, ssh child killed, 
   const tokenA = a.slot.mcpEndpoint!.token;
   const tokenB = b.slot.mcpEndpoint!.token;
   liveEndpoints.push(b.slot.mcpEndpoint!);
-  // Both endpoints opened real per-run tunnels: two distinct ssh children, both
+  // Both endpoints opened real per-run tunnels: two distinct logical handles, both
   // tokens valid.
-  assert.equal(processes.length, 2);
+  assert.equal(tunnels.length, 2);
   assert.ok(tokenIsLive(tokenA));
   assert.ok(tokenIsLive(tokenB));
   assert.equal(coordinator.snapshot().slots.length, 2);
 
   // The pool recycles run A's worker (poison/reaper). The coordinator's registered
   // onMachineRecycling fails A's slot: close the WHOLE endpoint (revoke token,
-  // drop local-server ref, kill ssh child) THEN settle the lease THEN deregister.
+  // drop local-server ref, close tunnel) THEN settle the lease THEN deregister.
   pool.triggerRecycling(a.slot.machineLeaseId);
   await flushMicrotasks();
 
   // Run A is torn down cleanly end-to-end:
   assert.equal(tokenIsLive(tokenA), false); // token revoked
-  assert.equal(processes[0]!.kill.mock.calls.length, 1); // A's ssh child killed
+  assert.equal(vi.mocked(tunnels[0]!.handle.close).mock.calls.length, 1); // A's tunnel closed
   assert.deepEqual(pool.leases.get(a.slot.machineLeaseId)!.settles, [
     { kind: "fail", arg: "machine_recycled" },
   ]); // lease settled exactly once as a fail
 
-  // Run B is completely untouched: token still valid, child still alive, slot
+  // Run B is completely untouched: token still valid, tunnel still open, slot
   // still registered.
   assert.ok(tokenIsLive(tokenB));
-  assert.equal(processes[1]!.kill.mock.calls.length, 0);
+  assert.equal(vi.mocked(tunnels[1]!.handle.close).mock.calls.length, 0);
   const slots = coordinator.snapshot().slots;
   assert.equal(slots.length, 1);
   assert.equal(slots[0]?.issueId, "issue-b");
@@ -367,8 +371,8 @@ test("recycle/poison of run A fails A CLEANLY (token revoked, ssh child killed, 
 });
 
 test("two co-resident runs on ONE machine SHARE one reverse tunnel (refcounted); closing A keeps B's endpoint + the shared tunnel live", async () => {
-  const processes: FakeProcess[] = [];
-  mockStartReverseTunnel.mockImplementation(() => makeFakeProcess(processes));
+  const tunnels: FakeTunnel[] = [];
+  mockStartReverseTunnel.mockImplementation(async () => makeFakeTunnel(tunnels));
   // Both slots resolve to the SAME host (co-residence). Per-HOST collapse: the two
   // runs share ONE `ssh -R` reverse tunnel / remote port; they are kept apart by
   // their distinct per-run Token B claim, NOT by a distinct remote port.
@@ -380,20 +384,20 @@ test("two co-resident runs on ONE machine SHARE one reverse tunnel (refcounted);
   if (a.status !== "bound" || b.status !== "bound") return;
   liveEndpoints.push(b.slot.mcpEndpoint!);
 
-  // SHARED tunnel: one ssh child, the SAME remote port for both co-resident runs.
+  // SHARED logical tunnel, with the SAME remote port for both co-resident runs.
   const portA = Number(new URL(a.slot.mcpEndpoint!.url).port);
   const portB = Number(new URL(b.slot.mcpEndpoint!.url).port);
   assert.equal(portA, portB);
-  assert.equal(processes.length, 1);
+  assert.equal(tunnels.length, 1);
   // DISTINCT per-run Token B claims (the run isolation that replaced per-run ports).
   assert.notEqual(a.slot.mcpEndpoint!.token, b.slot.mcpEndpoint!.token);
   assert.ok(tokenIsLive(a.slot.mcpEndpoint!.token));
   assert.ok(tokenIsLive(b.slot.mcpEndpoint!.token));
 
   // Close A's run: its Token B claim is revoked, but the SHARED tunnel stays alive
-  // (refcount drops to B only) so the ssh child is NOT killed and B's claim is live.
+  // (refcount drops to B only) so the tunnel is NOT closed and B's claim is live.
   await a.slot.release("healthy");
-  assert.equal(processes[0]!.kill.mock.calls.length, 0);
+  assert.equal(vi.mocked(tunnels[0]!.handle.close).mock.calls.length, 0);
   assert.equal(tokenIsLive(a.slot.mcpEndpoint!.token), false); // A's claim revoked
   assert.ok(tokenIsLive(b.slot.mcpEndpoint!.token)); // B's claim still live
   assert.equal(coordinator.snapshot().slots.length, 1);
@@ -401,25 +405,28 @@ test("two co-resident runs on ONE machine SHARE one reverse tunnel (refcounted);
   // Closing the LAST co-resident run (B) finally tears the shared tunnel down.
   liveEndpoints = [];
   await b.slot.release("healthy");
-  assert.equal(processes[0]!.kill.mock.calls.length, 1);
+  assert.equal(vi.mocked(tunnels[0]!.handle.close).mock.calls.length, 1);
   assert.equal(tokenIsLive(b.slot.mcpEndpoint!.token), false);
 });
 
 // ---------------------------------------------------------------------------
-// Endpoint-open throw: settle lease healthy, no half-open ssh child.
+// Endpoint-open throw: settle lease healthy, no half-open tunnel.
 // ---------------------------------------------------------------------------
 
-test("endpoint-open throw settles the lease HEALTHY and leaves NO half-open ssh child (port freed for reuse)", async () => {
-  const processes: FakeProcess[] = [];
-  // The reverse tunnel allocates a port then FAILS to spawn (the real
-  // openForRun catch recycles the just-allocated port); the whole-endpoint
-  // acquire rejects, so the coordinator settles the lease healthy and rethrows a
-  // structured EndpointOpenError.
-  mockStartReverseTunnel
-    .mockImplementationOnce(() => {
-      throw new Error("ssh spawn failed: EMFILE");
-    })
-    .mockImplementation(() => makeFakeProcess(processes));
+test("endpoint-open throw settles the lease HEALTHY and leaves NO half-open tunnel (port freed for reuse)", async () => {
+  const tunnels: FakeTunnel[] = [];
+  // The reverse tunnel allocates a port then FAILS its logical readiness check.
+  // WorkerHostPool closes the returned handle and recycles the just-allocated
+  // port; the whole-endpoint acquire rejects, so the coordinator settles the
+  // lease healthy and rethrows a structured EndpointOpenError.
+  mockStartReverseTunnel.mockImplementationOnce(async () =>
+    makeFakeTunnel(tunnels, {
+      check: async () => {
+        throw new Error("ssh tunnel readiness failed");
+      },
+    }),
+  );
+  mockStartReverseTunnel.mockImplementation(async () => makeFakeTunnel(tunnels));
   const pool = makeFakeMachinePool();
   const coordinator = makeCoordinator(pool);
 
@@ -437,9 +444,10 @@ test("endpoint-open throw settles the lease HEALTHY and leaves NO half-open ssh 
   // endpoint failed) - NOT poisoned.
   const [workerId] = [...pool.leases.keys()];
   assert.deepEqual(pool.leases.get(workerId!)!.settles, [{ kind: "release", arg: "healthy" }]);
-  // NO half-open ssh child survives (the spawn threw; no process was created) and
-  // NO slot is registered.
-  assert.equal(processes.length, 0);
+  // NO half-open tunnel survives: the failed logical handle was closed and no
+  // slot is registered.
+  assert.equal(tunnels.length, 1);
+  assert.equal(vi.mocked(tunnels[0]!.handle.close).mock.calls.length, 1);
   assert.equal(coordinator.snapshot().slots.length, 0);
 
   // The just-allocated remote port was recycled by openForRun's catch, so the
@@ -455,8 +463,8 @@ test("endpoint-open throw settles the lease HEALTHY and leaves NO half-open ssh 
 // ---------------------------------------------------------------------------
 
 test("a stall during the open-endpoint window aborts open, settles the lease HEALTHY, and closes any half-opened endpoint", async () => {
-  const processes: FakeProcess[] = [];
-  mockStartReverseTunnel.mockImplementation(() => makeFakeProcess(processes));
+  const tunnels: FakeTunnel[] = [];
+  mockStartReverseTunnel.mockImplementation(async () => makeFakeTunnel(tunnels));
   const pool = makeFakeMachinePool();
 
   // A manager whose open() honours the AbortSignal: it opens the REAL whole
@@ -491,23 +499,23 @@ test("a stall during the open-endpoint window aborts open, settles the lease HEA
   }
 
   // The stall surfaced as a structured EndpointOpenError; the lease settled
-  // HEALTHY; the half-opened ssh child was killed by the endpoint close; no slot
+  // HEALTHY; the half-opened tunnel was closed by the endpoint release; no slot
   // registered.
   assert.ok(isEndpointOpenError(thrown));
   const [workerId] = [...pool.leases.keys()];
   assert.deepEqual(pool.leases.get(workerId!)!.settles, [{ kind: "release", arg: "healthy" }]);
-  assert.equal(processes.length, 1);
-  assert.equal(processes[0]!.kill.mock.calls.length, 1);
+  assert.equal(tunnels.length, 1);
+  assert.equal(vi.mocked(tunnels[0]!.handle.close).mock.calls.length, 1);
   assert.equal(coordinator.snapshot().slots.length, 0);
 });
 
 // ---------------------------------------------------------------------------
-// Force-drain: close every surviving registry endpoint (no leaked ssh -N).
+// Force-drain: close every surviving registry endpoint (no leaked tunnel).
 // ---------------------------------------------------------------------------
 
-test("force-drain closes EVERY surviving registry endpoint (no leaked ssh -N child on shutdown)", async () => {
-  const processes: FakeProcess[] = [];
-  mockStartReverseTunnel.mockImplementation(() => makeFakeProcess(processes));
+test("force-drain closes EVERY surviving registry endpoint (no leaked tunnel on shutdown)", async () => {
+  const tunnels: FakeTunnel[] = [];
+  mockStartReverseTunnel.mockImplementation(async () => makeFakeTunnel(tunnels));
   const pool = makeFakeMachinePool();
   const coordinator = makeCoordinator(pool);
 
@@ -518,19 +526,19 @@ test("force-drain closes EVERY surviving registry endpoint (no leaked ssh -N chi
     if (r.status !== "bound") throw new Error("expected bound");
     slots.push(r.slot);
   }
-  assert.equal(processes.length, 3);
+  assert.equal(tunnels.length, 3);
   assert.equal(coordinator.snapshot().slots.length, 3);
   const tokens = slots.map((s) => s.mcpEndpoint!.token);
   for (const token of tokens) assert.ok(tokenIsLive(token));
 
   // Force-drain: the real pool recycles every worker on drain (firing the recycle
-  // callback per worker), so every surviving registry endpoint is closed - no ssh -N
-  // child survives shutdown.
+  // callback per worker), so every surviving registry endpoint is closed - no
+  // logical tunnel survives shutdown.
   await coordinator.drain({ deadlineMs: 5_000 });
   await flushMicrotasks();
 
   for (let i = 0; i < 3; i += 1) {
-    assert.equal(processes[i]!.kill.mock.calls.length, 1); // every ssh child killed
+    assert.equal(vi.mocked(tunnels[i]!.handle.close).mock.calls.length, 1);
     assert.equal(tokenIsLive(tokens[i]!), false); // every token revoked
   }
   // Every slot deregistered: the registry is empty after a force-drain.
@@ -542,8 +550,8 @@ test("force-drain closes EVERY surviving registry endpoint (no leaked ssh -N chi
 // ---------------------------------------------------------------------------
 
 test("local-host path: the coordinator mints NO endpoint (acp keeps acquiring AND releasing its own), byte-for-byte", async () => {
-  const processes: FakeProcess[] = [];
-  mockStartReverseTunnel.mockImplementation(() => makeFakeProcess(processes));
+  const tunnels: FakeTunnel[] = [];
+  mockStartReverseTunnel.mockImplementation(async () => makeFakeTunnel(tunnels));
   // The machine resolves to a local (empty) host: the concrete manager returns
   // null for it (acp owns its own endpoint exactly as in the single-tenant path).
   const pool = makeFakeMachinePool({ hostFor: () => "" });
@@ -557,11 +565,11 @@ test("local-host path: the coordinator mints NO endpoint (acp keeps acquiring AN
   if (r.status !== "bound") throw new Error("expected bound");
 
   // No per-run endpoint was opened: slot.mcpEndpoint is null, the injected
-  // acquireForRun was never called, and no ssh child was spawned. acp will
+  // acquireForRun was never called, and no tunnel was opened. acp will
   // acquire AND release its own endpoint downstream (the byte-identical local path).
   assert.equal(r.slot.mcpEndpoint, null);
   assert.equal(acquireCalled, 0);
-  assert.equal(processes.length, 0);
+  assert.equal(tunnels.length, 0);
 
   // Release is a clean no-op for the null endpoint, then settles the lease.
   await r.slot.release("healthy");
@@ -573,9 +581,9 @@ test("local-host path: the coordinator mints NO endpoint (acp keeps acquiring AN
 // Single-slot: exactly one endpoint per machine (live-ssh/e2e unchanged).
 // ---------------------------------------------------------------------------
 
-test("single-slot path opens EXACTLY ONE endpoint per machine (one ssh child, one token, one tunnel)", async () => {
-  const processes: FakeProcess[] = [];
-  mockStartReverseTunnel.mockImplementation(() => makeFakeProcess(processes));
+test("single-slot path opens EXACTLY ONE endpoint per machine (one handle, one token, one tunnel)", async () => {
+  const tunnels: FakeTunnel[] = [];
+  mockStartReverseTunnel.mockImplementation(async () => makeFakeTunnel(tunnels));
   const pool = makeFakeMachinePool();
   const coordinator = makeCoordinator(pool);
 
@@ -583,21 +591,21 @@ test("single-slot path opens EXACTLY ONE endpoint per machine (one ssh child, on
   if (r.status !== "bound") throw new Error("expected bound");
   liveEndpoints.push(r.slot.mcpEndpoint!);
 
-  // Exactly one endpoint: one token, one ssh child, one per-run tunnel. A
+  // Exactly one endpoint: one token, one logical handle, one per-run tunnel. A
   // heartbeat / resume within the run never re-opens.
   r.slot.heartbeat();
   assert.ok(r.slot.mcpEndpoint);
   assert.ok(tokenIsLive(r.slot.mcpEndpoint!.token));
-  assert.equal(processes.length, 1);
+  assert.equal(tunnels.length, 1);
   assert.equal(coordinator.snapshot().slots.length, 1);
 
-  // Releasing closes that single endpoint (token revoked, ssh child killed) and
+  // Releasing closes that single endpoint (token revoked, tunnel closed) and
   // settles the lease.
   const token = r.slot.mcpEndpoint!.token;
   liveEndpoints = [];
   await r.slot.release("healthy");
   assert.equal(tokenIsLive(token), false);
-  assert.equal(processes[0]!.kill.mock.calls.length, 1);
+  assert.equal(vi.mocked(tunnels[0]!.handle.close).mock.calls.length, 1);
 });
 
 // ---------------------------------------------------------------------------

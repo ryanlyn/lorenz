@@ -59,14 +59,14 @@ export interface RemoteMcpTunnelTransport {
     localHost: string,
     localPort: number,
   ): Promise<RemoteMcpTunnel>;
-  releaseRemoteMcpTunnel(tunnel: RemoteMcpTunnel): void;
+  releaseRemoteMcpTunnel(tunnel: RemoteMcpTunnel): void | Promise<void>;
   openForRun(
     workerHost: string,
     runKey: string,
     localHost: string,
     localPort: number,
   ): Promise<RemoteMcpTunnel>;
-  closeForRun(workerHost: string, runKey: string): void;
+  closeForRun(workerHost: string, runKey: string): void | Promise<void>;
 }
 
 interface McpEndpoint {
@@ -79,7 +79,7 @@ interface McpEndpoint {
    * recycle; a later request carrying a stale generation fails the liveness fence.
    */
   generation: number;
-  releaseTunnel?: (() => void) | undefined;
+  releaseTunnel?: (() => void | Promise<void>) | undefined;
   localServer?: LocalMcpServerLease | undefined;
 }
 
@@ -161,7 +161,7 @@ export async function acquireAgentMcpEndpoint(
         released = true;
         revokeMcpToken(token);
         try {
-          endpoint?.releaseTunnel?.();
+          if (endpoint?.releaseTunnel) await endpoint.releaseTunnel();
         } finally {
           if (endpoint?.localServer) await releaseLocalMcpServer(endpoint.localServer);
         }
@@ -170,7 +170,7 @@ export async function acquireAgentMcpEndpoint(
   } catch (error) {
     revokeMcpToken(token);
     try {
-      endpoint?.releaseTunnel?.();
+      if (endpoint?.releaseTunnel) await endpoint.releaseTunnel();
     } catch {
       // The acquisition error below is the actionable failure; tunnel cleanup is best-effort.
     }
@@ -231,13 +231,20 @@ export async function acquireAgentMcpEndpointForRun(
         if (released) return;
         released = true;
         revokeRunClaim(token);
-        tunnels.closeForRun(workerHost, runKey);
-        if (endpoint?.localServer) await releaseLocalMcpServer(endpoint.localServer);
+        try {
+          await tunnels.closeForRun(workerHost, runKey);
+        } finally {
+          if (endpoint?.localServer) await releaseLocalMcpServer(endpoint.localServer);
+        }
       },
     };
   } catch (error) {
     revokeRunClaim(token);
-    tunnels.closeForRun(workerHost, runKey);
+    try {
+      await tunnels.closeForRun(workerHost, runKey);
+    } catch {
+      // The acquisition error below is the actionable failure; tunnel cleanup is best-effort.
+    }
     if (endpoint?.localServer) await releaseLocalMcpServer(endpoint.localServer);
     throw error;
   }
@@ -308,7 +315,7 @@ async function acquireRemoteMcpEndpoint(
         localServer?.handle.authScope ??
         mcpAuthScopeForSettings(settings, normalizeHttpBindHost(settings.server.host), localPort),
       generation: localServer?.generation ?? 1,
-      releaseTunnel: () => tunnels.releaseRemoteMcpTunnel(tunnel),
+      releaseTunnel: (): void | Promise<void> => tunnels.releaseRemoteMcpTunnel(tunnel),
       localServer: localServer ?? undefined,
     };
   } catch (error) {

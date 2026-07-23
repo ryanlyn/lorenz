@@ -10,7 +10,7 @@ const DEFAULT_SSH_TIMEOUT_MS = 60_000;
 const DEFAULT_REMOTE_TCP_PORT_READY_TIMEOUT_MS = 10_000;
 const DEFAULT_REMOTE_TCP_PORT_READY_INTERVAL_MS = 200;
 const DEFAULT_REMOTE_TCP_PORT_READY_ATTEMPT_TIMEOUT_MS = 1_000;
-const DEDICATED_REVERSE_TUNNEL_ENV = "LORENZ_SSH_DEDICATED_REVERSE_TUNNEL";
+const DEFAULT_REMOTE_TCP_PORT_CLOSED_TIMEOUT_MS = 5_000;
 const TCP_PORT_MAX = 65_535;
 const NUMERIC_CHMOD_MODE = /^[0-7]{3,4}$/;
 const SYMBOLIC_CHMOD_MODE =
@@ -68,9 +68,26 @@ export interface RemoteTcpPortWaitOptions {
   sshExecutablePath?: string | undefined;
 }
 
+export interface ReverseTunnelHandle {
+  /** Resolves after explicit close or when an owned tunnel process ends. */
+  readonly ended: Promise<void>;
+  /** Checks the recorded SSH transport before probing the remote listener. */
+  check(): Promise<void>;
+  /** Removes the exact remote forward without stopping a shared ControlMaster. */
+  close(): Promise<void>;
+}
+
 export async function runSsh(
   host: string,
   command: string,
+  options: SshRunOptions = {},
+): Promise<SshRunResult> {
+  return runSshArgs(host, sshArgs(host, command), options);
+}
+
+async function runSshArgs(
+  host: string,
+  args: string[],
   options: SshRunOptions = {},
 ): Promise<SshRunResult> {
   const timeoutMs = options.timeoutMs ?? DEFAULT_SSH_TIMEOUT_MS;
@@ -79,7 +96,7 @@ export async function runSsh(
   if (options.abortSignal?.aborted) throw new Error(`ssh_aborted: ${host}`);
 
   try {
-    const subprocess = execa(options.sshExecutablePath ?? "ssh", sshArgs(host, command), {
+    const subprocess = execa(options.sshExecutablePath ?? "ssh", args, {
       reject: false,
       ...(options.stderrToStdout ? { all: true } : {}),
       stdin: "ignore",
@@ -130,14 +147,70 @@ export function startSshProcess(host: string, command: string): ChildProcessWith
   }) as unknown as ChildProcessWithoutNullStreams;
 }
 
-export function startReverseTunnel(
+export async function startReverseTunnel(
   host: string,
   remotePort: number,
   localHost: string,
   localPort: number,
-): ChildProcessWithoutNullStreams {
+): Promise<ReverseTunnelHandle> {
+  const sshExecutablePath = requireSshExecutable();
+  const existingPortState = await remoteTcpPortState(host, remotePort, {
+    sshExecutablePath,
+    timeoutMs: DEFAULT_REMOTE_TCP_PORT_READY_ATTEMPT_TIMEOUT_MS,
+  });
+  if (existingPortState === "open") {
+    throw new Error(`remote_reverse_tunnel_port_in_use: ${host} ${remotePort}`);
+  }
+
+  const existingMaster = await activeControlMaster(host, sshExecutablePath);
+  if (existingMaster) {
+    const forwarded = await runSshArgs(
+      host,
+      controlForwardArgs(
+        existingMaster.controlPath,
+        host,
+        "forward",
+        remotePort,
+        localHost,
+        localPort,
+      ),
+      { sshExecutablePath, stderrToStdout: true },
+    );
+    if (forwarded.status === 0) {
+      const handle = new SshReverseTunnelHandle({
+        controlMaster: existingMaster,
+        host,
+        localHost,
+        localPort,
+        remotePort,
+        sshExecutablePath,
+      });
+      try {
+        await handle.check();
+        return handle;
+      } catch (error) {
+        await cleanupOwnedControlForward(handle, host, remotePort);
+        throw error;
+      }
+    }
+
+    // The master can disappear between check and forward. Fall through to the
+    // ordinary ssh path only when a second check confirms that happened; a
+    // real forwarding failure on a live master must not be hidden by retrying.
+    const masterStillRunning = await controlMasterRunning(existingMaster, host, sshExecutablePath);
+    const forwardError = new Error(
+      `ssh_control_forward_failed: ${host} ${forwarded.status} ${forwarded.stdout}`,
+    );
+    if (masterStillRunning) throw forwardError;
+    try {
+      await waitForRemoteTcpPortClosed(host, remotePort, { sshExecutablePath });
+    } catch {
+      throw forwardError;
+    }
+  }
+
   const subprocess = execa(
-    requireSshExecutable(),
+    sshExecutablePath,
     reverseTunnelArgs(host, remotePort, localHost, localPort),
     {
       stdin: "pipe",
@@ -154,7 +227,288 @@ export function startReverseTunnel(
   // and blocks the tunnel; discard the data instead of retaining it.
   subprocess.stdout.resume();
   subprocess.stderr.resume();
-  return subprocess;
+  const handle = new SshReverseTunnelHandle({
+    child: subprocess,
+    host,
+    localHost,
+    localPort,
+    remotePort,
+    sshExecutablePath,
+  });
+  try {
+    await handle.check();
+    return handle;
+  } catch (error) {
+    await handle.close();
+    throw error;
+  }
+}
+
+async function cleanupOwnedControlForward(
+  handle: ReverseTunnelHandle,
+  host: string,
+  remotePort: number,
+): Promise<void> {
+  try {
+    await handle.close();
+  } catch (error) {
+    throw new Error(`ssh_control_forward_cleanup_failed: ${host} ${remotePort}`, {
+      cause: error,
+    });
+  }
+}
+
+interface ActiveControlMaster {
+  controlPath: string;
+  pid: number | null;
+}
+
+interface SshReverseTunnelHandleOptions {
+  child?: ChildProcessWithoutNullStreams | undefined;
+  controlMaster?: ActiveControlMaster | undefined;
+  host: string;
+  localHost: string;
+  localPort: number;
+  remotePort: number;
+  sshExecutablePath: string;
+}
+
+class SshReverseTunnelHandle implements ReverseTunnelHandle {
+  readonly ended: Promise<void>;
+
+  private readonly child: ChildProcessWithoutNullStreams | undefined;
+  private readonly host: string;
+  private readonly localHost: string;
+  private readonly localPort: number;
+  private readonly remotePort: number;
+  private readonly sshExecutablePath: string;
+  private controlMaster: ActiveControlMaster | null;
+  private childEnded = false;
+  private closing = false;
+  private closePromise: Promise<void> | null = null;
+  private endResolved = false;
+  private resolveEnded: () => void = () => {};
+
+  constructor(options: SshReverseTunnelHandleOptions) {
+    this.child = options.child;
+    this.controlMaster = options.controlMaster ?? null;
+    this.host = options.host;
+    this.localHost = options.localHost;
+    this.localPort = options.localPort;
+    this.remotePort = options.remotePort;
+    this.sshExecutablePath = options.sshExecutablePath;
+    this.ended = new Promise<void>((resolve) => {
+      this.resolveEnded = resolve;
+    });
+
+    const child = this.child;
+    if (child) {
+      const onEnd = (): void => {
+        if (this.childEnded) return;
+        this.childEnded = true;
+        this.handleChildEnd();
+      };
+      child.once("close", onEnd);
+      child.once("exit", onEnd);
+      child.once("error", onEnd);
+    }
+  }
+
+  async check(): Promise<void> {
+    if (
+      this.controlMaster &&
+      !(await controlMasterRunning(this.controlMaster, this.host, this.sshExecutablePath))
+    ) {
+      throw new Error(`ssh_control_master_ended: ${this.host}`);
+    }
+    if (
+      this.child &&
+      (this.childEnded || this.child.exitCode !== null || this.child.signalCode !== null)
+    ) {
+      throw new Error(`reverse_tunnel_process_ended: ${this.host}`);
+    }
+    const readiness = waitForRemoteTcpPort(this.host, this.remotePort, {
+      sshExecutablePath: this.sshExecutablePath,
+    });
+    if (!this.child) {
+      await readiness;
+      return;
+    }
+
+    await Promise.race([
+      readiness,
+      this.ended.then(() => {
+        throw new Error(`reverse_tunnel_process_ended: ${this.host}`);
+      }),
+    ]);
+    if (this.childEnded || this.child.exitCode !== null || this.child.signalCode !== null) {
+      throw new Error(`reverse_tunnel_process_ended: ${this.host}`);
+    }
+  }
+
+  async close(): Promise<void> {
+    if (this.closePromise) return this.closePromise;
+    const closePromise = this.closeOnce();
+    this.closePromise = closePromise;
+    try {
+      await closePromise;
+    } catch (error) {
+      if (this.closePromise === closePromise) this.closePromise = null;
+      throw error;
+    }
+  }
+
+  private async liveControlMaster(): Promise<ActiveControlMaster | null> {
+    if (
+      this.controlMaster &&
+      (await controlMasterRunning(this.controlMaster, this.host, this.sshExecutablePath))
+    ) {
+      return this.controlMaster;
+    }
+    return null;
+  }
+
+  private async closeOnce(): Promise<void> {
+    this.closing = true;
+    try {
+      const master = await this.liveControlMaster();
+      if (master) {
+        await runSshArgs(
+          this.host,
+          controlForwardArgs(
+            master.controlPath,
+            this.host,
+            "cancel",
+            this.remotePort,
+            this.localHost,
+            this.localPort,
+          ),
+          {
+            sshExecutablePath: this.sshExecutablePath,
+            stderrToStdout: true,
+          },
+        );
+      } else if (this.child && !this.childEnded) {
+        this.child.kill();
+      }
+
+      try {
+        await waitForRemoteTcpPortClosed(this.host, this.remotePort, {
+          sshExecutablePath: this.sshExecutablePath,
+        });
+      } catch (error) {
+        // The direct tunnel process may still be exiting after the first
+        // signal. Signal it again, then require positive closure before reuse.
+        if (this.child && !this.childEnded) {
+          this.child.kill();
+          await waitForRemoteTcpPortClosed(this.host, this.remotePort, {
+            sshExecutablePath: this.sshExecutablePath,
+          });
+        } else {
+          throw error;
+        }
+      }
+      this.resolveEnd();
+    } finally {
+      this.closing = false;
+    }
+  }
+
+  private handleChildEnd(): void {
+    if (this.closing) return;
+    this.resolveEnd();
+  }
+
+  private resolveEnd(): void {
+    if (this.endResolved) return;
+    this.endResolved = true;
+    this.resolveEnded();
+  }
+}
+
+async function activeControlMaster(
+  host: string,
+  sshExecutablePath: string,
+): Promise<ActiveControlMaster | null> {
+  const controlPath = await resolveControlPath(host, sshExecutablePath);
+  if (!controlPath) return null;
+  const result = await runSshArgs(host, controlCheckArgs(controlPath, host), {
+    sshExecutablePath,
+    stderrToStdout: true,
+  });
+  if (result.status !== 0) return null;
+  const pidMatch = /Master running \(pid=(\d+)\)/.exec(result.stdout);
+  return {
+    controlPath,
+    pid: pidMatch?.[1] ? Number(pidMatch[1]) : null,
+  };
+}
+
+async function controlMasterRunning(
+  master: ActiveControlMaster,
+  host: string,
+  sshExecutablePath: string,
+): Promise<boolean> {
+  const result = await runSshArgs(host, controlCheckArgs(master.controlPath, host), {
+    sshExecutablePath,
+    stderrToStdout: true,
+  });
+  if (result.status !== 0) return false;
+  if (master.pid === null) return true;
+  const pidMatch = /Master running \(pid=(\d+)\)/.exec(result.stdout);
+  return pidMatch?.[1] === String(master.pid);
+}
+
+async function resolveControlPath(host: string, sshExecutablePath: string): Promise<string | null> {
+  const result = await runSshArgs(host, sshConfigQueryArgs(host), {
+    sshExecutablePath,
+    stderrToStdout: true,
+  });
+  if (result.status !== 0) return null;
+  const configLines = result.stdout.split("\n");
+  const controlPathLine = configLines.find((line) => line.toLowerCase().startsWith("controlpath "));
+  const controlPath = controlPathLine?.slice("controlpath ".length).trim();
+  return controlPath && controlPath !== "none" ? controlPath : null;
+}
+
+function sshConfigQueryArgs(host: string): string[] {
+  const target = parseSshTarget(host);
+  return [
+    ...sshConfigArgs(),
+    "-T",
+    "-G",
+    ...(target.port ? ["-p", target.port] : []),
+    "--",
+    target.destination,
+  ];
+}
+
+function controlCheckArgs(controlPath: string, host: string): string[] {
+  const target = parseSshTarget(host);
+  return ["-F", "none", "-S", controlPath, "-O", "check", "--", target.destination];
+}
+
+function controlForwardArgs(
+  controlPath: string,
+  host: string,
+  operation: "forward" | "cancel",
+  remotePort: number,
+  localHost: string,
+  localPort: number,
+): string[] {
+  const target = parseSshTarget(host);
+  return [
+    "-F",
+    "none",
+    "-S",
+    controlPath,
+    "-O",
+    operation,
+    "-R",
+    `${remotePort}:${localHost}:${localPort}`,
+    "--",
+    target.destination,
+  ];
 }
 
 export async function waitForRemoteTcpPort(
@@ -203,6 +557,77 @@ export async function waitForRemoteTcpPort(
   });
 }
 
+export async function waitForRemoteTcpPortClosed(
+  host: string,
+  remotePort: number,
+  options: RemoteTcpPortWaitOptions = {},
+): Promise<void> {
+  const timeoutMs = options.timeoutMs ?? DEFAULT_REMOTE_TCP_PORT_CLOSED_TIMEOUT_MS;
+  const intervalMs = options.intervalMs ?? DEFAULT_REMOTE_TCP_PORT_READY_INTERVAL_MS;
+  const attemptTimeoutMs =
+    options.attemptTimeoutMs ?? DEFAULT_REMOTE_TCP_PORT_READY_ATTEMPT_TIMEOUT_MS;
+  if (!Number.isInteger(remotePort) || remotePort <= 0 || remotePort > TCP_PORT_MAX) {
+    throw new Error(`invalid_remote_tcp_port: ${remotePort}`);
+  }
+  if (!Number.isInteger(timeoutMs) || timeoutMs <= 0) {
+    throw new Error(`invalid_remote_tcp_port_closed_timeout: ${timeoutMs}`);
+  }
+  if (!Number.isInteger(intervalMs) || intervalMs <= 0) {
+    throw new Error(`invalid_remote_tcp_port_closed_interval: ${intervalMs}`);
+  }
+  if (!Number.isInteger(attemptTimeoutMs) || attemptTimeoutMs <= 0) {
+    throw new Error(`invalid_remote_tcp_port_closed_attempt_timeout: ${attemptTimeoutMs}`);
+  }
+
+  const deadline = Date.now() + timeoutMs;
+  let lastFailure: unknown;
+  while (Date.now() < deadline) {
+    const remainingMs = Math.max(1, deadline - Date.now());
+    try {
+      const state = await remoteTcpPortState(host, remotePort, {
+        sshExecutablePath: options.sshExecutablePath,
+        timeoutMs: Math.min(attemptTimeoutMs, remainingMs),
+      });
+      if (state === "closed") return;
+      lastFailure = new Error(`remote_tcp_port_still_reachable: ${host} ${remotePort}`);
+    } catch (error) {
+      lastFailure = error;
+    }
+
+    const sleepMs = Math.min(intervalMs, Math.max(0, deadline - Date.now()));
+    if (sleepMs > 0) await delay(sleepMs);
+  }
+  throw new Error(`remote_tcp_port_still_reachable: ${host} ${remotePort}`, {
+    cause: lastFailure,
+  });
+}
+
+type RemoteTcpPortState = "open" | "closed";
+
+async function remoteTcpPortState(
+  host: string,
+  remotePort: number,
+  options: Pick<RemoteTcpPortWaitOptions, "sshExecutablePath"> & { timeoutMs: number },
+): Promise<RemoteTcpPortState> {
+  const closedMarker = "__LORENZ_REMOTE_PORT_CLOSED__";
+  const openMarker = "__LORENZ_REMOTE_PORT_OPEN__";
+  const command =
+    `if : < /dev/tcp/127.0.0.1/${remotePort} 2>/dev/null; ` +
+    `then printf ${shellEscape(openMarker)}; else printf ${shellEscape(closedMarker)}; fi`;
+  const result = await runSsh(host, command, {
+    sshExecutablePath: options.sshExecutablePath,
+    timeoutMs: options.timeoutMs,
+  });
+  if (result.status !== 0) {
+    throw new Error(`remote_tcp_port_probe_failed: ${host} ${remotePort} ${result.status}`, {
+      cause: result,
+    });
+  }
+  if (result.stdout.includes(openMarker)) return "open";
+  if (result.stdout.includes(closedMarker)) return "closed";
+  throw new Error(`remote_tcp_port_probe_invalid: ${host} ${remotePort}`);
+}
+
 export async function writeRemoteFile(
   host: string,
   remotePath: string,
@@ -242,7 +667,12 @@ export function reverseTunnelArgs(
     ...sshConfigArgs(),
     "-T",
     "-N",
-    ...dedicatedReverseTunnelArgs(),
+    "-S",
+    "none",
+    "-o",
+    "ControlMaster=no",
+    "-o",
+    "ControlPath=none",
     "-o",
     "ExitOnForwardFailure=yes",
     ...(target.port ? ["-p", target.port] : []),
@@ -295,15 +725,6 @@ function sshMissingExitCodeError(host: string, result: SshExitMetadata): Error {
 function sshConfigArgs(): string[] {
   const configPath = process.env.LORENZ_SSH_CONFIG;
   return configPath ? ["-F", configPath] : [];
-}
-
-function dedicatedReverseTunnelArgs(): string[] {
-  if (process.env[DEDICATED_REVERSE_TUNNEL_ENV] !== "1") return [];
-  // The pool tears a tunnel down by killing THIS process. A deployment that
-  // persists ControlMaster connections can opt into a dedicated connection so
-  // the reverse forward cannot outlive that child. Default-off preserves the
-  // SSH topology and multiplexing behavior of every existing deployment.
-  return ["-o", "ControlMaster=no", "-o", "ControlPath=none"];
 }
 
 function validPortDestination(destination: string): boolean {

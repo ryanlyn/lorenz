@@ -5,11 +5,15 @@ import { assert } from "@lorenz/test-utils";
 
 const mockAcquireRemoteMcpTunnel = vi.fn();
 const mockReleaseRemoteMcpTunnel = vi.fn();
+const mockOpenForRun = vi.fn();
+const mockCloseForRun = vi.fn();
 const mockStartMcpServer = vi.fn();
 
 const fakeTunnels = {
   acquireRemoteMcpTunnel: mockAcquireRemoteMcpTunnel,
   releaseRemoteMcpTunnel: mockReleaseRemoteMcpTunnel,
+  openForRun: mockOpenForRun,
+  closeForRun: mockCloseForRun,
 };
 
 vi.mock("../src/server.js", () => ({
@@ -21,6 +25,8 @@ const { acquireAgentMcpEndpoint } = await import("../src/agentEndpoint.js");
 afterEach(() => {
   mockAcquireRemoteMcpTunnel.mockReset();
   mockReleaseRemoteMcpTunnel.mockReset();
+  mockOpenForRun.mockReset();
+  mockCloseForRun.mockReset();
   mockStartMcpServer.mockReset();
 });
 
@@ -42,8 +48,10 @@ test("remote endpoint acquisition releases a newly-started local MCP server when
 test("remote endpoint release returns the acquired tunnel lease", async () => {
   const handle = fakeServerHandle(39_004);
   const tunnelLease = { leaseId: "lease-1", workerHost: "worker-1", remotePort: 46_000 };
+  const releaseGate = deferred<void>();
   mockStartMcpServer.mockResolvedValue(handle);
   mockAcquireRemoteMcpTunnel.mockReturnValue(tunnelLease);
+  mockReleaseRemoteMcpTunnel.mockReturnValue(releaseGate.promise);
 
   const lease = await acquireAgentMcpEndpoint(
     settingsWithServerPort(39_004),
@@ -51,9 +59,35 @@ test("remote endpoint release returns the acquired tunnel lease", async () => {
     fakeTunnels,
   );
 
-  await lease.release();
+  const releasePromise = lease.release();
+  try {
+    await new Promise<void>((resolve) => setImmediate(resolve));
 
-  assert.deepEqual(mockReleaseRemoteMcpTunnel.mock.calls[0], [tunnelLease]);
+    assert.deepEqual(mockReleaseRemoteMcpTunnel.mock.calls[0], [tunnelLease]);
+    assert.equal(handle.stop.mock.calls.length, 0);
+  } finally {
+    releaseGate.resolve();
+    await releasePromise;
+  }
+
+  assert.equal(handle.stop.mock.calls.length, 1);
+});
+
+test("remote endpoint release still stops its local server when tunnel cleanup fails", async () => {
+  const handle = fakeServerHandle(39_006);
+  const tunnelLease = { remotePort: 46_001 };
+  mockStartMcpServer.mockResolvedValue(handle);
+  mockAcquireRemoteMcpTunnel.mockReturnValue(tunnelLease);
+  mockReleaseRemoteMcpTunnel.mockRejectedValue(new Error("tunnel cleanup failed"));
+
+  const lease = await acquireAgentMcpEndpoint(
+    settingsWithServerPort(39_006),
+    "worker-1",
+    fakeTunnels,
+  );
+
+  await assert.rejects(() => lease.release(), /tunnel cleanup failed/);
+
   assert.equal(handle.stop.mock.calls.length, 1);
 });
 

@@ -2,7 +2,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 import { assert, tempDir, writeExecutable } from "@lorenz/test-utils";
-import { afterEach, beforeEach, test } from "vitest";
+import { afterEach, beforeEach, test, vi } from "vitest";
+import * as sshModule from "@lorenz/ssh";
 import {
   buildWorkerPool,
   createTrackerClient,
@@ -14,6 +15,13 @@ import {
 } from "@lorenz/cli";
 import type { WorkerLease, WorkerPool, Settings, WorkflowDefinition } from "@lorenz/cli";
 
+vi.mock("@lorenz/ssh", async (importOriginal) => ({
+  ...(await importOriginal<typeof sshModule>()),
+  startReverseTunnel: vi.fn(),
+}));
+
+const mockStartReverseTunnel = vi.mocked(sshModule.startReverseTunnel);
+
 // The composition root decides which tracker/executor backends exist; the e2e
 // harness mirrors the CLI entrypoints and registers the built-ins once.
 registerBuiltinBackends();
@@ -21,10 +29,10 @@ registerBuiltinBackends();
 // ---------------------------------------------------------------------------
 // Always-on end-to-end demo (T17): the REAL `runDaemon` wiring with a
 // `tracker.kind=memory` client and the REAL `@lorenz/worker-pool`
-// (driver=fake, max=1, warm=1). No fakes are injected into the runtime - the
-// pool, orchestrator, runner, and ACP executor are all the real production
-// code paths. The pool yields `fake://worker-<id>` as the workerHost; the runner
-// then drives the ACP bridge (and its per-run MCP reverse tunnel) over
+// (driver=fake, max=1, warm=1). The pool, orchestrator, runner, and ACP executor
+// are all the real production code paths; only the reverse tunnel transport is
+// replaced with an observable logical handle. The pool yields
+// `fake://worker-<id>` as the workerHost; the runner then drives the ACP bridge over
 // `ssh fake://worker-<id> ...`, so a PATH-shimmed `ssh` evaluates the remote
 // workspace + bridge commands locally (HOME pinned to a sandbox), making the
 // demo hermetic while exercising the same code an SSH-addressable worker would.
@@ -42,7 +50,28 @@ interface Harness {
   restoreEnv(): void;
 }
 
+interface FakeTunnel {
+  handle: sshModule.ReverseTunnelHandle;
+}
+
+function makeFakeTunnel(): FakeTunnel {
+  let resolveEnded: () => void = () => {};
+  const ended = new Promise<void>((resolve) => {
+    resolveEnded = resolve;
+  });
+  return {
+    handle: {
+      ended,
+      check: vi.fn(async () => {}),
+      close: vi.fn(async () => {
+        resolveEnded();
+      }),
+    },
+  };
+}
+
 let activeHarness: Harness | null = null;
+let logicalTunnels: FakeTunnel[] = [];
 
 afterEach(async () => {
   const harness = activeHarness;
@@ -54,6 +83,13 @@ afterEach(async () => {
 });
 
 beforeEach(() => {
+  mockStartReverseTunnel.mockReset();
+  logicalTunnels = [];
+  mockStartReverseTunnel.mockImplementation(async () => {
+    const tunnel = makeFakeTunnel();
+    logicalTunnels.push(tunnel);
+    return tunnel.handle;
+  });
   delete process.env[MEMORY_ENV];
 });
 
@@ -88,6 +124,8 @@ test("memory-tracker daemon leases a fake worker, completes a run, and returns i
   // The lease settled exactly as a healthy completion: the worker was returned to
   // warm, never destroyed, and never re-leased after the run.
   assert.equal(snapshot.running.length, 0);
+  assert.equal(logicalTunnels.length, 1);
+  assert.equal(vi.mocked(logicalTunnels[0]!.handle.close).mock.calls.length, 1);
 });
 
 test("pool at capacity surfaces worker_host_capacity via canAcquire with no claim-then-backoff churn", async () => {
@@ -124,6 +162,7 @@ test("pool at capacity surfaces worker_host_capacity via canAcquire with no clai
   assert.deepEqual(snapshot.running, []);
   assert.deepEqual(snapshot.retrying, []);
   assert.deepEqual(snapshot.runHistory, []);
+  assert.equal(logicalTunnels.length, 0);
 
   // Release the occupant so the shared worker returns to warm (afterEach drains).
   await heldLease.release("healthy");
@@ -139,6 +178,8 @@ test("stop then drainWorkerPool destroys every worker (zero workers remain)", as
   await harness.runtime.start({ once: true, dryRun: false });
   assert.equal(harness.pool.snapshot().total, 1);
   assert.equal(harness.pool.snapshot().warmIdle, 1);
+  assert.equal(logicalTunnels.length, 1);
+  assert.equal(vi.mocked(logicalTunnels[0]!.handle.close).mock.calls.length, 1);
 
   harness.runtime.stop();
   await harness.runtime.drainWorkerPool();
@@ -173,9 +214,8 @@ async function setupHarness(
 
   // PATH-shimmed `ssh`: the fake worker host (`fake://worker-<id>`) is not a real SSH
   // target, so the shim evaluates the runner's remote commands locally with
-  // HOME pinned to a sandbox (and keeps reverse-tunnel `-N` children alive).
-  // This is the only seam the demo replaces; the pool, orchestrator, runner,
-  // and ACP executor are all real.
+  // HOME pinned to a sandbox. Reverse tunnels use the observable logical handle
+  // above; the pool, orchestrator, runner, and ACP executor remain real.
   await installEvalSsh(root, remoteHome);
 
   const fakeBridge = path.join(root, "fake-acp.mjs");
@@ -281,10 +321,8 @@ function eligibleIssue(id: string, identifier: string): Record<string, unknown> 
 }
 
 // Mirrors workspace-prompt-resume.test.ts's eval-ssh transport: a `bash`-only
-// shim that keeps reverse-tunnel (`-N`) children alive until killed, answers
-// the runner's `$HOME` probe with the sandbox home, reports the tunnel's
-// remote-port readiness probe as ready, and otherwise evaluates the last argv
-// (the `bash -lc '<cmd>'` payload) locally.
+// shim that answers the runner's `$HOME` probe with the sandbox home and
+// otherwise evaluates the last argv (the `bash -lc '<cmd>'` payload) locally.
 async function installEvalSsh(root: string, remoteHome: string): Promise<string> {
   const bin = path.join(root, "bin");
   await fs.mkdir(bin, { recursive: true });
@@ -292,21 +330,14 @@ async function installEvalSsh(root: string, remoteHome: string): Promise<string>
   await writeExecutable(
     path.join(bin, "ssh"),
     `#!/bin/sh
-is_tunnel=0
 for arg in "$@"; do
-  if [ "$arg" = "-N" ]; then is_tunnel=1; fi
   last_arg="$arg"
 done
-if [ "$is_tunnel" = "1" ]; then
-  trap 'exit 0' TERM INT
-  while :; do sleep 1; done
-fi
 case "$last_arg" in
   *'printf "%s\\n" "$HOME"'*)
     printf '%s\\n' '${canonicalRemoteHome}'
     exit 0
     ;;
-  *'/dev/tcp/127.0.0.1/'*) exit 0 ;;
 esac
 export HOME='${canonicalRemoteHome}'
 eval "$last_arg"
