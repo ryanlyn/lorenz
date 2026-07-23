@@ -86,6 +86,7 @@ interface McpEndpoint {
 interface LocalMcpServerEntry {
   handle: ObservabilityServerHandle;
   identity: string;
+  enforcePerRunClaim: boolean;
   refCount: number;
   /**
    * Monotonic generation for this host:port slot. Bumped each time a brand-new
@@ -110,6 +111,12 @@ interface LocalMcpServerLease {
 interface IssuedMcpToken {
   authScope: string;
   token: string;
+}
+
+interface McpListener {
+  host: string;
+  port: number | undefined;
+  sharesDashboard: boolean;
 }
 
 const mcpPath = "/mcp";
@@ -140,11 +147,12 @@ export async function acquireAgentMcpEndpoint(
   let token: string | null = null;
   let released = false;
   try {
-    const configuredToken = issueConfiguredMcpToken(settings);
+    const listener = workerHost ? remoteMcpListener(settings) : sharedMcpListener(settings);
+    const configuredToken = issueConfiguredMcpToken(settings, listener);
     token = configuredToken?.token ?? null;
     endpoint = workerHost
-      ? await acquireRemoteMcpEndpoint(workerHost, settings, configuredToken, tunnels)
-      : await localMcpEndpoint(settings, configuredToken);
+      ? await acquireRemoteMcpEndpoint(workerHost, settings, configuredToken, listener, tunnels)
+      : await localMcpEndpoint(settings, configuredToken, listener);
     token ??= issueMcpToken(endpoint.authScope);
     return {
       url: endpoint.url,
@@ -200,18 +208,24 @@ export async function acquireAgentMcpEndpointForRun(
   let token: string | null = null;
   let released = false;
   try {
-    const configuredToken = issueConfiguredMcpToken(settings);
-    endpoint = await acquirePerRunMcpEndpoint(
-      workerHost,
-      runKey,
-      settings,
-      configuredToken,
-      tunnels,
-      isRunLive,
-    );
-    // The per-run lease is scoped solely by Token B (minted below), never by the
-    // settings-wide token, so revoke any configured token immediately.
-    revokeMcpToken(configuredToken?.token);
+    const listener = remoteMcpListener(settings);
+    const configuredToken = issueConfiguredMcpToken(settings, listener);
+    try {
+      endpoint = await acquirePerRunMcpEndpoint(
+        workerHost,
+        runKey,
+        settings,
+        configuredToken,
+        listener,
+        tunnels,
+        isRunLive,
+      );
+    } finally {
+      // The per-run lease is scoped solely by Token B (minted below), never by
+      // the settings-wide token. Revoke the temporary Token A on both success
+      // and acquisition failure.
+      revokeMcpToken(configuredToken?.token);
+    }
     // Mint Token B: an opaque per-run token bound to a server-side claim. The
     // claim's generation was captured BEFORE the `openForRun` await (see
     // `acquirePerRunMcpEndpoint`), so a host recycle that bumps the slot's
@@ -271,16 +285,15 @@ function runClaimForLease(
 async function localMcpEndpoint(
   settings: Settings,
   configuredToken: IssuedMcpToken | null,
+  listener: McpListener,
 ): Promise<McpEndpoint> {
-  const localServer = await ensureLocalMcpServer(settings, configuredToken);
-  const serverHost = normalizeHttpBindHost(settings.server.host);
-  const configuredPort = settings.server.port;
+  const localServer = await ensureLocalMcpServer(settings, configuredToken, listener);
   return {
-    url: localServer ? localServer.handle.url(mcpPath) : configuredLocalMcpUrl(settings),
+    url: localServer ? localServer.handle.url(mcpPath) : configuredLocalMcpUrl(listener),
     authScope:
       configuredToken?.authScope ??
       localServer?.handle.authScope ??
-      mcpAuthScopeForSettings(settings, serverHost, configuredPort),
+      mcpAuthScopeForSettings(settings, listener.host, listener.port),
     generation: localServer?.generation ?? 1,
     localServer: localServer ?? undefined,
   };
@@ -290,13 +303,14 @@ async function acquireRemoteMcpEndpoint(
   workerHost: string,
   settings: Settings,
   configuredToken: IssuedMcpToken | null,
+  listener: McpListener,
   tunnels: RemoteMcpTunnelTransport | undefined,
 ): Promise<McpEndpoint> {
   if (!tunnels) throw new Error("remote_acp_mcp_requires_tunnel_transport");
-  const localServer = await ensureLocalMcpServer(settings, configuredToken);
+  const localServer = await ensureLocalMcpServer(settings, configuredToken, listener);
   try {
     const localHost = "127.0.0.1";
-    const localPort = localServer?.handle.port ?? settings.server.port;
+    const localPort = localServer?.handle.port ?? listener.port;
     if (typeof localPort !== "number" || localPort <= 0) {
       throw new Error("remote_acp_mcp_requires_server_port");
     }
@@ -306,7 +320,7 @@ async function acquireRemoteMcpEndpoint(
       authScope:
         configuredToken?.authScope ??
         localServer?.handle.authScope ??
-        mcpAuthScopeForSettings(settings, normalizeHttpBindHost(settings.server.host), localPort),
+        mcpAuthScopeForSettings(settings, listener.host, localPort),
       generation: localServer?.generation ?? 1,
       releaseTunnel: () => tunnels.releaseRemoteMcpTunnel(tunnel),
       localServer: localServer ?? undefined,
@@ -322,6 +336,7 @@ async function acquirePerRunMcpEndpoint(
   runKey: string,
   settings: Settings,
   configuredToken: IssuedMcpToken | null,
+  listener: McpListener,
   tunnels: RemoteMcpTunnelTransport,
   isRunLive?: IsRunLive,
 ): Promise<McpEndpoint> {
@@ -333,9 +348,16 @@ async function acquirePerRunMcpEndpoint(
   // local MCP servers / their listeners. The per-run server is mounted with the
   // injected `isRunLive` oracle so its Token B middleware enforces the owner
   // re-check + generation fence on every request. `requireOwnedServer: true`
-  // starts an owned fallback instead of attaching to a server that cannot
-  // enforce that fence.
-  const localServer = await ensureLocalMcpServer(settings, configuredToken, isRunLive, true);
+  // refuses to attach to a foreign server Lorenz cannot enforce that fence over.
+  // Remote-worker workflows whose dashboard owns `server.port` must configure a
+  // distinct `server.mcp_port`.
+  const localServer = await ensureLocalMcpServer(
+    settings,
+    configuredToken,
+    listener,
+    isRunLive,
+    true,
+  );
   // Capture the shared local server's generation BEFORE the `openForRun` await.
   // The event loop is single-writer only BETWEEN awaits, so stamping the claim
   // with the generation live at this point (not re-read after the await, when a
@@ -344,7 +366,7 @@ async function acquirePerRunMcpEndpoint(
   const generation = localServer?.generation ?? 1;
   try {
     const localHost = "127.0.0.1";
-    const localPort = localServer?.handle.port ?? settings.server.port;
+    const localPort = localServer?.handle.port ?? listener.port;
     if (typeof localPort !== "number" || localPort <= 0) {
       throw new Error("remote_acp_mcp_requires_server_port");
     }
@@ -352,9 +374,9 @@ async function acquirePerRunMcpEndpoint(
     return {
       url: `http://127.0.0.1:${tunnel.remotePort}${mcpPath}`,
       authScope:
-        localServer?.handle.authScope ??
         configuredToken?.authScope ??
-        mcpAuthScopeForSettings(settings, normalizeHttpBindHost(settings.server.host), localPort),
+        localServer?.handle.authScope ??
+        mcpAuthScopeForSettings(settings, listener.host, localPort),
       generation,
       localServer: localServer ?? undefined,
     };
@@ -367,11 +389,13 @@ async function acquirePerRunMcpEndpoint(
 async function ensureLocalMcpServer(
   settings: Settings,
   configuredToken: IssuedMcpToken | null,
+  listener: McpListener,
   isRunLive?: IsRunLive,
   requireOwnedServer = false,
 ): Promise<LocalMcpServerLease | null> {
-  const configuredPort = settings.server.port;
-  const serverHost = normalizeHttpBindHost(settings.server.host);
+  const configuredPort = listener.port;
+  const serverHost = listener.host;
+  const enforcePerRunClaim = isRunLive !== undefined;
   if (typeof configuredPort === "number" && configuredPort > 0) {
     const key = `${serverHost}:${configuredPort}`;
     const identity = mcpAuthScopeForSettings(settings, serverHost, configuredPort);
@@ -381,57 +405,22 @@ async function ensureLocalMcpServer(
     return withLocalMcpServerLock(key, async () => {
       const existing = localMcpServers.get(key);
       if (existing) {
-        if (existing.identity !== identity) {
+        if (existing.identity !== identity || existing.enforcePerRunClaim !== enforcePerRunClaim) {
           throw new Error("configured_mcp_server_conflict");
         }
         existing.refCount += 1;
         return { key, handle: existing.handle, generation: existing.generation };
       }
-      const fallbackKey = `${key}#per-run-owned`;
-      if (requireOwnedServer) {
-        const fallback = await withLocalMcpServerLock(fallbackKey, () => {
-          const entry = localMcpServers.get(fallbackKey);
-          if (!entry) return null;
-          if (entry.identity !== identity) {
-            throw new Error("configured_mcp_server_conflict");
-          }
-          entry.refCount += 1;
-          return { key: fallbackKey, handle: entry.handle, generation: entry.generation };
-        });
-        if (fallback) return fallback;
-      }
-      if (await configuredMcpServerReachable(settings, configuredToken.token)) {
-        // The dashboard already owns the configured port. A per-run endpoint
-        // needs a server Lorenz owns so it can enforce Token B claims.
+      if (await configuredMcpServerReachable(settings, configuredToken.token, listener)) {
+        // A foreign MCP server is already reachable on the configured port. The
+        // ACP/local path attaches to it, but the per-run claim path must refuse:
+        // Lorenz cannot enforce Token B's owner and generation checks there.
         if (requireOwnedServer) {
-          return withLocalMcpServerLock(fallbackKey, async () => {
-            const existingFallback = localMcpServers.get(fallbackKey);
-            if (existingFallback) {
-              if (existingFallback.identity !== identity) {
-                throw new Error("configured_mcp_server_conflict");
-              }
-              existingFallback.refCount += 1;
-              return {
-                key: fallbackKey,
-                handle: existingFallback.handle,
-                generation: existingFallback.generation,
-              };
-            }
-            const handle = await startMcpServer(settings, {
-              host: serverHost,
-              port: 0,
-              isRunLive,
-            });
-            const generation = (localMcpServerGenerations.get(fallbackKey) ?? 0) + 1;
-            localMcpServerGenerations.set(fallbackKey, generation);
-            localMcpServers.set(fallbackKey, {
-              handle,
-              identity,
-              refCount: 1,
-              generation,
-            });
-            return { key: fallbackKey, handle, generation };
-          });
+          throw new Error(
+            listener.sharesDashboard
+              ? "per_run_mcp_endpoint_requires_server_mcp_port"
+              : "per_run_mcp_endpoint_requires_lorenz_owned_server",
+          );
         }
         return null;
       }
@@ -447,7 +436,13 @@ async function ensureLocalMcpServer(
       // fenced out by the per-request liveness re-check.
       const generation = (localMcpServerGenerations.get(key) ?? 0) + 1;
       localMcpServerGenerations.set(key, generation);
-      localMcpServers.set(key, { handle, identity, refCount: 1, generation });
+      localMcpServers.set(key, {
+        handle,
+        identity,
+        enforcePerRunClaim,
+        refCount: 1,
+        generation,
+      });
       return { key, handle, generation };
     });
   }
@@ -458,15 +453,14 @@ async function ensureLocalMcpServer(
   return { key: null, handle, generation: 1 };
 }
 
-function issueConfiguredMcpToken(settings: Settings): IssuedMcpToken | null {
-  const configuredPort = settings.server.port;
+function issueConfiguredMcpToken(settings: Settings, listener: McpListener): IssuedMcpToken | null {
+  const configuredPort = listener.port;
   if (typeof configuredPort !== "number" || configuredPort <= 0) return null;
-  const serverHost = normalizeHttpBindHost(settings.server.host);
-  const authScope = mcpAuthScopeForSettings(settings, serverHost, configuredPort);
+  const authScope = mcpAuthScopeForSettings(settings, listener.host, configuredPort);
   return { authScope, token: issueMcpToken(authScope) };
 }
 
-async function withLocalMcpServerLock<T>(key: string, action: () => T | Promise<T>): Promise<T> {
+async function withLocalMcpServerLock<T>(key: string, action: () => Promise<T>): Promise<T> {
   const previous = localMcpServerLocks.get(key) ?? Promise.resolve();
   let release!: () => void;
   const current = new Promise<void>((resolve) => {
@@ -506,8 +500,12 @@ async function releaseLocalMcpServer(lease: LocalMcpServerLease): Promise<void> 
   });
 }
 
-async function configuredMcpServerReachable(settings: Settings, token: string): Promise<boolean> {
-  const url = configuredLocalMcpUrl(settings);
+async function configuredMcpServerReachable(
+  settings: Settings,
+  token: string,
+  listener: McpListener,
+): Promise<boolean> {
+  const url = configuredLocalMcpUrl(listener);
   try {
     const response = await fetch(url, {
       method: "POST",
@@ -534,6 +532,29 @@ async function configuredMcpServerReachable(settings: Settings, token: string): 
   }
 }
 
-function configuredLocalMcpUrl(settings: Settings): string {
-  return `http://${httpUrlHost(settings.server.host)}:${settings.server.port}${mcpPath}`;
+function configuredLocalMcpUrl(listener: McpListener): string {
+  return `http://${httpUrlHost(listener.host)}:${listener.port}${mcpPath}`;
+}
+
+function sharedMcpListener(settings: Settings): McpListener {
+  return {
+    host: normalizeHttpBindHost(settings.server.host),
+    port: settings.server.port,
+    sharesDashboard: true,
+  };
+}
+
+function remoteMcpListener(settings: Settings): McpListener {
+  const port = settings.server.mcpPort ?? settings.server.port;
+  const sharesDashboard =
+    settings.server.mcpPort === undefined || settings.server.mcpPort === settings.server.port;
+  // A dedicated agent MCP listener is only reached locally or through `ssh -R`.
+  // Keep it on loopback even when the operator exposes the dashboard. An
+  // explicitly equal MCP/dashboard port is still the shared endpoint, so retain
+  // the dashboard host and surface the actionable dedicated-port error.
+  return {
+    host: sharesDashboard ? normalizeHttpBindHost(settings.server.host) : "127.0.0.1",
+    port,
+    sharesDashboard,
+  };
 }

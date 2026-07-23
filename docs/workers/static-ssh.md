@@ -40,6 +40,11 @@ These keys live under `worker` in your `WORKFLOW.md` front matter.
 A minimal config:
 
 ```yaml
+server:
+  # Keep remote per-run claims on a Lorenz-owned listener while the dashboard
+  # uses the default server.port (4040).
+  mcp_port: 4041
+
 worker:
   ssh_hosts:
     - build-1
@@ -48,6 +53,8 @@ worker:
   ssh_timeout_ms: 90000
   max_concurrent_agents_per_host: 2
 ```
+
+With the dashboard enabled, remote workers require a dedicated `server.mcp_port` so Lorenz can enforce their per-run claims. Local-only workflows can omit it and continue sharing `server.port` with the dashboard. The dedicated listener binds to loopback and is reached from workers through Lorenz's reverse SSH tunnel.
 
 ### Host destination format
 
@@ -113,6 +120,9 @@ Host build-b
 `WORKFLOW.md` front matter:
 
 ```yaml
+server:
+  mcp_port: 4041
+
 worker:
   ssh_hosts:
     - build-a
@@ -137,6 +147,7 @@ With this config Lorenz can run up to six agents at once (three per host across 
 | `ssh_not_found` | No `ssh` on the daemon's `PATH`. |
 | `ssh_timeout` | A command exceeded `worker.ssh_timeout_ms`. On timeout Lorenz sends `SIGTERM`, then `SIGKILL` after 5 seconds, to the whole remote process group. |
 | `invalid_ssh_destination` | A host entry is empty or starts with `-`. |
+| `per_run_mcp_endpoint_requires_server_mcp_port` | The dashboard owns the shared port for a remote run. Set a distinct `server.mcp_port`. |
 | Runs never leave local execution | `worker.ssh_hosts` is empty, or a parse error rejected the combination with `worker.kind` or `worker.worker_pool`. |
 | Dispatch stalls with `worker_host_capacity` | Every host is at `max_concurrent_agents_per_host`. Raise the cap or add hosts. |
 

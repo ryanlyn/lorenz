@@ -76,6 +76,7 @@ const observabilityAliases = {
   refresh_ms: "refreshMs",
   render_interval_ms: "renderIntervalMs",
 };
+const serverAliases = { mcp_port: "mcpPort" };
 const loggingAliases = { log_file: "logFile" };
 
 export function normalizeWorkflowConfig(value: unknown): unknown {
@@ -93,7 +94,7 @@ export function normalizeWorkflowConfig(value: unknown): unknown {
   normalizeNested(normalized, "codex", codexAliases);
   normalizeNested(normalized, "claude", claudeAliases);
   normalizeNested(normalized, "observability", observabilityAliases);
-  normalizeNested(normalized, "server", {});
+  normalizeNested(normalized, "server", serverAliases);
   normalizeNested(normalized, "logging", loggingAliases);
 
   if (isPlainRecord(normalized.tracker)) {

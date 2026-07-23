@@ -1295,6 +1295,36 @@ test("runtime reloads workflow settings on each poll with last-known-good fallba
   );
 });
 
+test("runtime rejects a server.mcp_port reload and keeps the startup value", async () => {
+  const firstWorkflow = workflowFixture();
+  firstWorkflow.settings.server.mcpPort = 4_041;
+  const secondWorkflow = workflowFixture();
+  secondWorkflow.settings.server.mcpPort = 4_042;
+  const runtime = new LorenzRuntime(
+    runtimeOptions({
+      workflow: firstWorkflow,
+      reloadWorkflow: async () => secondWorkflow,
+      client: {
+        fetchCandidateIssues: async () => [],
+        fetchIssuesByIds: async () => [],
+      },
+    }),
+  );
+
+  await runtime.pollOnce({ dryRun: true });
+
+  assert.equal(runtime.workflow.settings.server.mcpPort, 4_041);
+  const reloadFailed = runtime
+    .snapshot()
+    .recentEvents.find((event) => event.type === "workflow_reload_failed");
+  assert.ok(reloadFailed);
+  assert.match(reloadFailed.message, /server\.mcp_port changed after startup/);
+  assert.equal(
+    runtime.snapshot().recentEvents.some((event) => event.type === "workflow_reloaded"),
+    false,
+  );
+});
+
 test("runtime redacts reload failures in recent events and logs while polling last-good config", async () => {
   const secret = "resolved-env-secret-runtime-sentinel";
   const ref = "op://vault/item/runtime-field";

@@ -1507,6 +1507,13 @@ export class LorenzRuntime {
       const previous = this.input.workflow;
       const workflow = await this.input.reloadWorkflow();
       if (workflow === previous || workflowStampsEqual(previous.stamp, workflow.stamp)) return;
+      // One worker host must keep one stable reverse-tunnel target for every
+      // co-resident run. Changing the dedicated MCP listener while runs are live
+      // would temporarily create a second host tunnel and invalidate tunnel-cap
+      // accounting, so this fixed listener is restart-only.
+      if (workflow.settings.server.mcpPort !== previous.settings.server.mcpPort) {
+        throw new Error("server.mcp_port changed after startup; restart Lorenz to apply");
+      }
       // Enforce the SAME slots-per-machine co-residence gate the daemon runs at
       // startup. The startup gate runs ONCE; without this a live daemon could
       // reload max_in_flight 1 -> >1 WITHOUT the per-run-endpoint capability OR the

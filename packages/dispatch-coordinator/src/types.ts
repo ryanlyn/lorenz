@@ -80,11 +80,12 @@ export interface AcquireRunSlotRequest {
   /**
    * The FULL workflow {@link Settings}, threaded straight to
    * `McpEndpointManager.open`. The concrete per-run manager reads
-   * `settings.server.port` (via `acquireAgentMcpEndpointForRun`) to build the
-   * remote endpoint, so the coordinator must forward the workflow Settings here -
-   * NOT its own `WorkerPoolSettings`, which has no `server.port` and would make an
-   * enabled per-run-endpoint pool fail at acquire and never dispatch. The null
-   * passthrough ignores it.
+   * `settings.server.mcpPort ?? settings.server.port` (via
+   * `acquireAgentMcpEndpointForRun`) to build the remote endpoint, so the
+   * coordinator must forward the workflow Settings here - NOT its own
+   * `WorkerPoolSettings`, which contains neither setting and would make an enabled
+   * per-run-endpoint pool fail at acquire and never dispatch. The null passthrough
+   * ignores it.
    *
    * Optional only so a legacy passthrough caller that pre-dates this field (and
    * already injects a full Settings as the coordinator's constructor `settings`)

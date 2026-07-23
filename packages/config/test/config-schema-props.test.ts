@@ -142,6 +142,43 @@ test("INVARIANT: coercedPort SHALL reject negative ports", () => {
   );
 });
 
+// --- coercedPositivePort (via server.mcp_port) ---
+
+test("INVARIANT: coercedPositivePort SHALL accept valid port numbers 1-65535", () => {
+  fc.assert(
+    fc.property(fc.integer({ min: 1, max: PORT_MAX }), (n) => {
+      const settings = parseConfig({ server: { mcp_port: n } });
+      assert.equal(settings.server.mcpPort, n);
+    }),
+  );
+});
+
+test("coercedPositivePort — accepts valid port as string", () => {
+  fc.assert(
+    fc.property(fc.integer({ min: 1, max: PORT_MAX }), (n) => {
+      const settings = parseConfig({ server: { mcp_port: String(n) } });
+      assert.equal(settings.server.mcpPort, n);
+    }),
+  );
+});
+
+test("INVARIANT: coercedPositivePort SHALL reject ports outside 1-65535", () => {
+  fc.assert(
+    fc.property(
+      fc.oneof(
+        fc.integer({ min: -1_000_000, max: 0 }),
+        fc.integer({ min: PORT_MAX + 1, max: 1_000_000 }),
+      ),
+      (n) => {
+        assert.throws(
+          () => parseConfig({ server: { mcp_port: n } }),
+          /server.mcp_port must be a valid port number/,
+        );
+      },
+    ),
+  );
+});
+
 // --- coercedBoolean (via observability.dashboard_enabled) ---
 
 test("INVARIANT: coercedBoolean SHALL accept boolean values", () => {

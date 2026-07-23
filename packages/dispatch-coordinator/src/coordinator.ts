@@ -636,14 +636,15 @@ export function createDispatchCoordinator(
           endpoint = await mcpEndpointManager.open({
             // Thread the FULL workflow Settings the REQUEST carries (NOT the
             // coordinator's WorkerPoolSettings). The concrete per-run manager reads
-            // `settings.server.port` via acquireAgentMcpEndpointForRun to build the
-            // remote endpoint; a WorkerPoolSettings has no server.port, so forwarding it
-            // would fail every acquire and never dispatch. The null manager ignores it.
+            // `settings.server.mcpPort ?? settings.server.port` via
+            // acquireAgentMcpEndpointForRun to build the remote endpoint; a
+            // WorkerPoolSettings contains neither setting, so forwarding it would
+            // fail every acquire and never dispatch. The null manager ignores it.
             // The production runtime ALWAYS supplies the full Settings here; the
             // `?? currentSettings` bridge only covers a legacy passthrough caller that
             // pre-dates the request field (which already injects a full Settings as its
-            // coordinator `settings`), so the no-server.port WorkerPoolSettings never
-            // reaches the concrete manager.
+            // coordinator `settings`), so the server-port-free WorkerPoolSettings
+            // never reaches the concrete manager.
             settings: req.settings ?? (currentSettings as unknown as Settings),
             workerHost: acquired.lease.workerHost,
             runKey,
