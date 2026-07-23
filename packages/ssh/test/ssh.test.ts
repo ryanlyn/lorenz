@@ -54,6 +54,13 @@ test("SSH target parsing and command args match host:port behavior", () => {
   assert.deepEqual(reverseTunnelArgs("localhost:2222", 9000, "127.0.0.1", 4040), [
     "-T",
     "-N",
+    // Tunnels must own their connection: a -R forward requested over a shared
+    // ControlMaster can outlive the mux client, so teardown-by-killing-the-child
+    // (the pool's invariant) silently stops working under a mux-enabled config.
+    "-o",
+    "ControlMaster=no",
+    "-o",
+    "ControlPath=none",
     "-o",
     "ExitOnForwardFailure=yes",
     "-p",

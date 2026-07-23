@@ -241,6 +241,19 @@ export function reverseTunnelArgs(
     ...sshConfigArgs(),
     "-T",
     "-N",
+    // The pool tears a tunnel down by killing THIS process and treats
+    // forward-lifecycle == process-lifecycle as an invariant. Connection
+    // multiplexing breaks it: a -R forward requested over a shared
+    // ControlMaster can outlive the mux client on the persisted master, and
+    // when the recycled remote port is requested again the new forward fails
+    // on the master while the readiness probe happily reaches the STALE
+    // listener - handing agents an MCP endpoint that connects to nowhere.
+    // Force a dedicated connection so ExitOnForwardFailure and teardown mean
+    // what the pool thinks they mean, regardless of the user's ssh config.
+    "-o",
+    "ControlMaster=no",
+    "-o",
+    "ControlPath=none",
     "-o",
     "ExitOnForwardFailure=yes",
     ...(target.port ? ["-p", target.port] : []),
