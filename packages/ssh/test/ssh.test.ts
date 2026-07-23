@@ -269,6 +269,25 @@ esac
   assert.match(traceText, /\/dev\/tcp\/127\.0\.0\.1\/46000/);
 });
 
+test("SSH waitForRemoteTcpPort lets a slow ProxyCommand use the readiness budget", async () => {
+  const root = await tempDir("lorenz-ssh-slow-port-probe");
+  const trace = path.join(root, "ssh.trace");
+
+  const sshExecutablePath = await installFakeSsh(
+    root,
+    trace,
+    `#!/bin/sh
+sleep 1.2
+exit 0
+`,
+  );
+
+  await waitForRemoteTcpPort("localhost", 46_000, {
+    sshExecutablePath,
+    timeoutMs: 2_000,
+  });
+});
+
 test("SSH writeRemoteFile rejects unsafe string modes without executing them", async () => {
   const root = await tempDir("lorenz-ssh-unsafe-mode");
   const trace = path.join(root, "ssh.trace");

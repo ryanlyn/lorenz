@@ -326,12 +326,7 @@ function parseJsonRpcId(body: string): unknown {
   }
 }
 
-test("acquireAgentMcpEndpointForRun REFUSES to attach to an externally-configured MCP server (lorenz does not own the auth surface)", async () => {
-  // Stand up a FOREIGN server on the configured port that answers `tools/list`
-  // exactly like a real MCP server, so `configuredMcpServerReachable` treats it as
-  // reachable. The ACP/local path would ATTACH to it (return null); the per-run
-  // claim path must REFUSE, because lorenz cannot enforce its Token B owner re-check
-  // / generation fence against a server it did not start.
+test("per-run MCP falls back to an owned server when the dashboard holds the configured port", async () => {
   const port = await freeLocalPort();
   const foreign = createHttpServer((req, res) => {
     let body = "";
@@ -345,13 +340,87 @@ test("acquireAgentMcpEndpointForRun REFUSES to attach to an externally-configure
   await new Promise<void>((resolve) => foreign.listen(port, "127.0.0.1", resolve));
   try {
     const settings = settingsWithPort(port);
-    await assert.rejects(
-      () => acquireAgentMcpEndpointForRun(settings, "worker-1", "run-external", workerHostPool),
-      /per_run_mcp_endpoint_requires_lorenz_owned_server/,
+    let live = true;
+    const lease = await acquireAgentMcpEndpointForRun(
+      settings,
+      "worker-1",
+      "run-external",
+      workerHostPool,
+      () => live,
     );
-    // The refusal happened BEFORE any reverse tunnel was opened (no half-open child
-    // pointed at a server lorenz does not own).
-    assert.equal(mockStartReverseTunnel.mock.calls.length, 0);
+    try {
+      assert.equal(mockStartReverseTunnel.mock.calls.length, 1);
+      const tunnelLocalPort = mockStartReverseTunnel.mock.calls[0]?.[3];
+      assert.ok(typeof tunnelLocalPort === "number" && tunnelLocalPort > 0);
+      assert.notEqual(tunnelLocalPort, port);
+      assert.notEqual(await mcpListStatus("127.0.0.1", tunnelLocalPort, lease.token), 401);
+      live = false;
+      assert.equal(await mcpListStatus("127.0.0.1", tunnelLocalPort, lease.token), 401);
+    } finally {
+      await lease.release();
+    }
+  } finally {
+    await new Promise<void>((resolve) => foreign.close(() => resolve()));
+  }
+});
+
+test("co-resident runs share one fallback MCP server and tunnel", async () => {
+  const port = await freeLocalPort();
+  const foreign = createHttpServer((req, res) => {
+    let body = "";
+    req.on("data", (chunk: Buffer) => (body += chunk.toString()));
+    req.on("end", () => {
+      const id = parseJsonRpcId(body);
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ jsonrpc: "2.0", id, result: { tools: [] } }));
+    });
+  });
+  await new Promise<void>((resolve) => foreign.listen(port, "127.0.0.1", resolve));
+  try {
+    const settings = settingsWithPort(port);
+    const first = await acquireAgentMcpEndpointForRun(
+      settings,
+      "worker-1",
+      "issue-1#0",
+      workerHostPool,
+      () => true,
+    );
+    const second = await acquireAgentMcpEndpointForRun(
+      settings,
+      "worker-1",
+      "issue-2#0",
+      workerHostPool,
+      () => true,
+    );
+    try {
+      assert.equal(mockStartReverseTunnel.mock.calls.length, 1);
+      const fallbackPort = mockStartReverseTunnel.mock.calls[0]?.[3];
+      assert.ok(typeof fallbackPort === "number" && fallbackPort > 0);
+      assert.notEqual(first.token, second.token);
+      assert.equal(first.generation, second.generation);
+      assert.notEqual(await mcpListStatus("127.0.0.1", fallbackPort, first.token), 401);
+      assert.notEqual(await mcpListStatus("127.0.0.1", fallbackPort, second.token), 401);
+
+      await second.release();
+      assert.notEqual(await mcpListStatus("127.0.0.1", fallbackPort, first.token), 401);
+    } finally {
+      await second.release();
+      await first.release();
+    }
+
+    const next = await acquireAgentMcpEndpointForRun(
+      settings,
+      "worker-1",
+      "issue-3#0",
+      workerHostPool,
+      () => true,
+    );
+    try {
+      assert.equal(mockStartReverseTunnel.mock.calls.length, 2);
+      assert.equal(next.generation, first.generation + 1);
+    } finally {
+      await next.release();
+    }
   } finally {
     await new Promise<void>((resolve) => foreign.close(() => resolve()));
   }

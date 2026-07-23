@@ -205,6 +205,30 @@ test("createWorkspaceForIssue — reuses existing workspace directory", async ()
   assert.equal(first, second);
 });
 
+test("createWorkspaceForIssue — ignores SSH stderr while resolving a remote home", async () => {
+  const root = await tempDir("ws-create-remote");
+  const remoteHome = path.join(root, "home");
+  const trace = path.join(root, "ssh.trace");
+  await fs.mkdir(remoteHome);
+  await installFakeSsh(
+    root,
+    trace,
+    `#!/bin/sh
+printf '%s\\n' 'remote startup notice' >&2
+export HOME=${shellEscape(remoteHome)}
+for arg in "$@"; do last_arg="$arg"; done
+eval "$last_arg"
+`,
+  );
+  const settings = makeSettings("~/lorenz-workspaces");
+
+  const workspace = await createWorkspaceForIssue(settings, sampleIssue, {
+    workerHost: "remote-worker",
+  });
+
+  assert.equal(workspace, path.join(remoteHome, "lorenz-workspaces", sampleIssue.identifier));
+});
+
 test("createWorkspaceForIssue — runs afterCreate hook on new workspace", async () => {
   const root = await tempDir("ws-create");
   const settings = makeSettings(root, { afterCreate: "touch .hook-ran" });

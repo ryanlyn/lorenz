@@ -333,8 +333,8 @@ async function acquirePerRunMcpEndpoint(
   // local MCP servers / their listeners. The per-run server is mounted with the
   // injected `isRunLive` oracle so its Token B middleware enforces the owner
   // re-check + generation fence on every request. `requireOwnedServer: true`
-  // refuses to attach to a foreign server lorenz cannot enforce that fence over
-  // (see `ensureLocalMcpServer`).
+  // starts an owned fallback instead of attaching to a server that cannot
+  // enforce that fence.
   const localServer = await ensureLocalMcpServer(settings, configuredToken, isRunLive, true);
   // Capture the shared local server's generation BEFORE the `openForRun` await.
   // The event loop is single-writer only BETWEEN awaits, so stamping the claim
@@ -352,8 +352,8 @@ async function acquirePerRunMcpEndpoint(
     return {
       url: `http://127.0.0.1:${tunnel.remotePort}${mcpPath}`,
       authScope:
-        configuredToken?.authScope ??
         localServer?.handle.authScope ??
+        configuredToken?.authScope ??
         mcpAuthScopeForSettings(settings, normalizeHttpBindHost(settings.server.host), localPort),
       generation,
       localServer: localServer ?? undefined,
@@ -387,14 +387,51 @@ async function ensureLocalMcpServer(
         existing.refCount += 1;
         return { key, handle: existing.handle, generation: existing.generation };
       }
+      const fallbackKey = `${key}#per-run-owned`;
+      if (requireOwnedServer) {
+        const fallback = await withLocalMcpServerLock(fallbackKey, () => {
+          const entry = localMcpServers.get(fallbackKey);
+          if (!entry) return null;
+          if (entry.identity !== identity) {
+            throw new Error("configured_mcp_server_conflict");
+          }
+          entry.refCount += 1;
+          return { key: fallbackKey, handle: entry.handle, generation: entry.generation };
+        });
+        if (fallback) return fallback;
+      }
       if (await configuredMcpServerReachable(settings, configuredToken.token)) {
-        // A foreign MCP server is already reachable on the configured port. The
-        // ACP/local path ATTACHES to it (returns null); but the per-run claim path
-        // sets `requireOwnedServer` because lorenz cannot enforce its Token B owner
-        // re-check / generation fence against a server it does not own - attaching
-        // would silently bypass the per-run claim model. Refuse loudly instead.
+        // The dashboard already owns the configured port. A per-run endpoint
+        // needs a server Lorenz owns so it can enforce Token B claims.
         if (requireOwnedServer) {
-          throw new Error("per_run_mcp_endpoint_requires_lorenz_owned_server");
+          return withLocalMcpServerLock(fallbackKey, async () => {
+            const existingFallback = localMcpServers.get(fallbackKey);
+            if (existingFallback) {
+              if (existingFallback.identity !== identity) {
+                throw new Error("configured_mcp_server_conflict");
+              }
+              existingFallback.refCount += 1;
+              return {
+                key: fallbackKey,
+                handle: existingFallback.handle,
+                generation: existingFallback.generation,
+              };
+            }
+            const handle = await startMcpServer(settings, {
+              host: serverHost,
+              port: 0,
+              isRunLive,
+            });
+            const generation = (localMcpServerGenerations.get(fallbackKey) ?? 0) + 1;
+            localMcpServerGenerations.set(fallbackKey, generation);
+            localMcpServers.set(fallbackKey, {
+              handle,
+              identity,
+              refCount: 1,
+              generation,
+            });
+            return { key: fallbackKey, handle, generation };
+          });
         }
         return null;
       }
@@ -429,7 +466,7 @@ function issueConfiguredMcpToken(settings: Settings): IssuedMcpToken | null {
   return { authScope, token: issueMcpToken(authScope) };
 }
 
-async function withLocalMcpServerLock<T>(key: string, action: () => Promise<T>): Promise<T> {
+async function withLocalMcpServerLock<T>(key: string, action: () => T | Promise<T>): Promise<T> {
   const previous = localMcpServerLocks.get(key) ?? Promise.resolve();
   let release!: () => void;
   const current = new Promise<void>((resolve) => {

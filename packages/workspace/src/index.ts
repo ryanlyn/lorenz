@@ -1176,11 +1176,12 @@ async function remoteWorkspaceRoot(
   if (root === "~" || root.startsWith("~/")) {
     const result = await runSsh(workerHost, 'printf "%s\\n" "$HOME"', {
       timeoutMs: settings.worker.sshTimeoutMs,
-      stderrToStdout: true,
       abortSignal: options.abortSignal,
     });
-    if (result.status !== 0)
-      throw new Error(`remote_home_lookup_failed: ${workerHost} ${result.status} ${result.stdout}`);
+    if (result.status !== 0) {
+      const output = result.stderr.trim() || result.stdout.trim();
+      throw new Error(`remote_home_lookup_failed: ${workerHost} ${result.status} ${output}`);
+    }
     const home = result.stdout.trim();
     if (!home) throw new Error(`remote_home_lookup_failed: ${workerHost} empty_home`);
     return root === "~" ? home : path.posix.join(home, root.slice(2));
