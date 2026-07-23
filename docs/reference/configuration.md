@@ -64,6 +64,8 @@ These are read directly, outside the front matter.
 | `CLAUDE_CODE_EXECUTABLE` | Path to the `claude` binary; auto-resolved from a login shell if unset, explicit value wins. |
 | `CODEX_PATH` | Path to the `codex` binary; auto-resolved from a login shell if unset, explicit value wins. |
 
+Reverse forwards reuse an active configured SSH control socket and are cancelled individually without stopping its master. When no control socket is active, Lorenz opens a process-owned tunnel instead.
+
 ## `tracker`
 
 The core tracker bundle. `tracker.kind` selects the provider. There is no default kind: `validateDispatchConfig` throws `tracker.kind is required` if it is unset, so this key is effectively mandatory. See [trackers](../trackers/index.md).

@@ -559,6 +559,9 @@ new acp.AgentSideConnection((connection) => new FakeAgent(connection), stream);
   assert.match(traceText, /after_create/);
   assert.match(traceText, /before_run/);
   assert.match(traceText, /after_run/);
+  assert.match(traceText, /-O forward -R /);
+  assert.match(traceText, /-O cancel -R /);
+  assert.equal(/ -N /.test(traceText), false);
 
   vi.unstubAllEnvs();
 });
@@ -636,25 +639,50 @@ async function installEvalSsh(
   await fs.mkdir(bin, { recursive: true });
   await fs.mkdir(remoteHome, { recursive: true });
   const canonicalRemoteHome = await fs.realpath(remoteHome);
+  const controlPath = path.join(root, "ssh-control");
+  const tunnelState = path.join(root, "ssh-tunnel-open");
   await writeExecutable(
     path.join(bin, "ssh"),
     `#!/bin/sh
 printf 'ARGV:%s\\n' "$*" >> ${shellEscape(trace)}
-is_tunnel=0
+case " $* " in
+  *" -G "*)
+    printf 'controlpath %s\\n' ${shellEscape(controlPath)}
+    exit 0
+    ;;
+  *" -O check "*)
+    printf 'Master running (pid=4242)\\n'
+    exit 0
+    ;;
+  *" -O forward "*)
+    : > ${shellEscape(tunnelState)}
+    exit 0
+    ;;
+  *" -O cancel "*)
+    rm -f ${shellEscape(tunnelState)}
+    exit 0
+    ;;
+esac
 for arg in "$@"; do
-  if [ "$arg" = "-N" ]; then is_tunnel=1; fi
   last_arg="$arg"
 done
-if [ "$is_tunnel" = "1" ]; then
-  trap 'exit 0' TERM INT
-  while :; do sleep 1; done
-fi
 case "$last_arg" in
   *'printf "%s\\n" "$HOME"'*)
     printf '%s\\n' ${shellEscape(canonicalRemoteHome)}
     exit 0
     ;;
-  *'/dev/tcp/127.0.0.1/'*) exit 0 ;;
+  *'__LORENZ_REMOTE_PORT_CLOSED__'*)
+    if [ -f ${shellEscape(tunnelState)} ]; then
+      printf '__LORENZ_REMOTE_PORT_OPEN__'
+    else
+      printf '__LORENZ_REMOTE_PORT_CLOSED__'
+    fi
+    exit 0
+    ;;
+  *'/dev/tcp/127.0.0.1/'*)
+    [ -f ${shellEscape(tunnelState)} ]
+    exit $?
+    ;;
 esac
 export HOME=${shellEscape(canonicalRemoteHome)}
 eval "$last_arg"

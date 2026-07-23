@@ -16,11 +16,15 @@ import {
   runSsh,
   shellEscape,
   sshArgs,
+  startReverseTunnel,
   waitForRemoteTcpPort,
   writeRemoteFile,
 } from "@lorenz/ssh";
 
-let savedEnv: { PATH: string | undefined; LORENZ_SSH_CONFIG: string | undefined };
+let savedEnv: {
+  PATH: string | undefined;
+  LORENZ_SSH_CONFIG: string | undefined;
+};
 
 beforeEach(() => {
   savedEnv = {
@@ -54,6 +58,12 @@ test("SSH target parsing and command args match host:port behavior", () => {
   assert.deepEqual(reverseTunnelArgs("localhost:2222", 9000, "127.0.0.1", 4040), [
     "-T",
     "-N",
+    "-S",
+    "none",
+    "-o",
+    "ControlMaster=no",
+    "-o",
+    "ControlPath=none",
     "-o",
     "ExitOnForwardFailure=yes",
     "-p",
@@ -75,6 +85,460 @@ test("SSH args reject empty and option-like targets", () => {
       /invalid_ssh_destination/,
     );
   }
+});
+
+test("reverse tunnel uses an active ControlMaster without inheriting configured forwards", async () => {
+  const root = await tempDir("lorenz-ssh-mux-tunnel");
+  const trace = path.join(root, "ssh.trace");
+  const configPath = path.join(root, "ssh-config");
+  const controlPath = path.join(root, "control.sock");
+  const masterState = path.join(root, "master.state");
+  const forwardState = path.join(root, "forward.state");
+  const configuredForward = "47000:127.0.0.1:9999";
+  const requestedForward = "46000:127.0.0.1:4040";
+  const controlCheckArgs = `-F none -S ${controlPath} -O check -- worker`;
+  const controlForwardArgs = `-F none -S ${controlPath} -O forward -R ${requestedForward} -- worker`;
+  const controlCancelArgs = `-F none -S ${controlPath} -O cancel -R ${requestedForward} -- worker`;
+
+  await fs.writeFile(
+    configPath,
+    `Host worker\n  ControlPath ${controlPath}\n  RemoteForward ${configuredForward}\n`,
+  );
+  await fs.writeFile(masterState, "alive");
+  await installFakeSsh(
+    root,
+    trace,
+    `#!/bin/sh
+printf 'ARGV:%s\\n' "$*" >> ${shellEscape(trace)}
+args="$*"
+if [ "$args" = ${shellEscape(controlCheckArgs)} ]; then
+  if [ -f ${shellEscape(masterState)} ]; then
+    printf 'Master running (pid=4242)\\n'
+    exit 0
+  fi
+  exit 255
+fi
+if [ "$args" = ${shellEscape(controlForwardArgs)} ]; then
+  printf 'active' > ${shellEscape(forwardState)}
+  exit 0
+fi
+if [ "$args" = ${shellEscape(controlCancelArgs)} ]; then
+  rm -f ${shellEscape(forwardState)}
+  exit 0
+fi
+case "$args" in
+  *' -G '*)
+    printf 'controlpath %s\\n' ${shellEscape(controlPath)}
+    printf 'remoteforward %s\\n' ${shellEscape(configuredForward)}
+    exit 0
+    ;;
+esac
+for arg in "$@"; do last_arg="$arg"; done
+case "$last_arg" in
+  *'__LORENZ_REMOTE_PORT_CLOSED__'*)
+    if [ -f ${shellEscape(forwardState)} ]; then
+      printf '__LORENZ_REMOTE_PORT_OPEN__'
+    else
+      printf '__LORENZ_REMOTE_PORT_CLOSED__'
+    fi
+    exit 0
+    ;;
+  *'/dev/tcp/127.0.0.1/46000'*)
+    test -f ${shellEscape(forwardState)}
+    exit $?
+    ;;
+esac
+exit 91
+`,
+  );
+  process.env.LORENZ_SSH_CONFIG = configPath;
+
+  const tunnel = await startReverseTunnel("worker:2222", 46_000, "127.0.0.1", 4040);
+  await tunnel.check();
+  assert.equal(await fs.readFile(forwardState, "utf8"), "active");
+
+  await tunnel.close();
+  await tunnel.close();
+  await tunnel.ended;
+
+  await assertMissing(forwardState, "mux close left the Lorenz forward active");
+  assert.equal(await fs.readFile(masterState, "utf8"), "alive");
+
+  const traceText = await fs.readFile(trace, "utf8");
+  const controlCommands = traceText
+    .split("\n")
+    .filter((line) => line.includes(" -O "))
+    .filter(Boolean);
+  assert.deepEqual(controlCommands, [
+    `ARGV:${controlCheckArgs}`,
+    `ARGV:${controlForwardArgs}`,
+    `ARGV:${controlCheckArgs}`,
+    `ARGV:${controlCheckArgs}`,
+    `ARGV:${controlCheckArgs}`,
+    `ARGV:${controlCancelArgs}`,
+  ]);
+  for (const command of controlCommands) {
+    assert.notMatch(command, new RegExp(escapeRegExp(configPath)));
+    assert.notMatch(command, new RegExp(escapeRegExp(configuredForward)));
+  }
+  assert.notMatch(traceText, / -O exit /);
+  assert.match(traceText, /\/dev\/tcp\/127\.0\.0\.1\/46000/);
+  assert.match(traceText, /__LORENZ_REMOTE_PORT_CLOSED__/);
+});
+
+test("reverse tunnel rejects a replacement ControlMaster even when the port stays open", async () => {
+  const root = await tempDir("lorenz-ssh-mux-replaced-master");
+  const trace = path.join(root, "ssh.trace");
+  const configPath = path.join(root, "ssh-config");
+  const controlPath = path.join(root, "control.sock");
+  const masterState = path.join(root, "master.state");
+  const forwardState = path.join(root, "forward.state");
+  const requestedForward = "46000:127.0.0.1:4040";
+  const controlCheckArgs = `-F none -S ${controlPath} -O check -- worker`;
+  const controlForwardArgs = `-F none -S ${controlPath} -O forward -R ${requestedForward} -- worker`;
+  const controlCancelArgs = `-F none -S ${controlPath} -O cancel -R ${requestedForward} -- worker`;
+
+  await fs.writeFile(
+    configPath,
+    `Host worker\n  ControlMaster auto\n  ControlPath ${controlPath}\n`,
+  );
+  await fs.writeFile(masterState, "4242");
+  await installFakeSsh(
+    root,
+    trace,
+    `#!/bin/sh
+printf 'ARGV:%s\\n' "$*" >> ${shellEscape(trace)}
+args="$*"
+if [ "$args" = ${shellEscape(controlCheckArgs)} ]; then
+  test -f ${shellEscape(masterState)} || exit 255
+  printf 'Master running (pid=%s)\\n' "$(cat ${shellEscape(masterState)})"
+  exit 0
+fi
+if [ "$args" = ${shellEscape(controlForwardArgs)} ]; then
+  printf 'active' > ${shellEscape(forwardState)}
+  exit 0
+fi
+if [ "$args" = ${shellEscape(controlCancelArgs)} ]; then
+  rm -f ${shellEscape(forwardState)}
+  exit 0
+fi
+case "$args" in
+  *' -G '*)
+    printf 'controlmaster auto\\n'
+    printf 'controlpath %s\\n' ${shellEscape(controlPath)}
+    exit 0
+    ;;
+esac
+for arg in "$@"; do last_arg="$arg"; done
+case "$last_arg" in
+  *'__LORENZ_REMOTE_PORT_CLOSED__'*)
+    if [ -f ${shellEscape(forwardState)} ]; then
+      printf '__LORENZ_REMOTE_PORT_OPEN__'
+    else
+      printf '__LORENZ_REMOTE_PORT_CLOSED__'
+    fi
+    exit 0
+    ;;
+  *'/dev/tcp/127.0.0.1/46000'*)
+    test -f ${shellEscape(forwardState)}
+    exit $?
+    ;;
+esac
+exit 91
+`,
+  );
+  process.env.LORENZ_SSH_CONFIG = configPath;
+
+  const tunnel = await startReverseTunnel("worker:2222", 46_000, "127.0.0.1", 4040);
+  await fs.writeFile(masterState, "9999");
+
+  await assert.rejects(() => tunnel.check(), /ssh_control_master_ended/);
+
+  await fs.rm(forwardState);
+  await tunnel.close();
+
+  const traceText = await fs.readFile(trace, "utf8");
+  assert.notMatch(traceText, new RegExp(`^ARGV:${escapeRegExp(controlCancelArgs)}$`, "m"));
+});
+
+test("reverse tunnel preserves a pre-existing remote forward instead of claiming it", async () => {
+  const root = await tempDir("lorenz-ssh-mux-existing-forward");
+  const trace = path.join(root, "ssh.trace");
+  const configPath = path.join(root, "ssh-config");
+  const controlPath = path.join(root, "control.sock");
+  const masterState = path.join(root, "master.state");
+  const forwardState = path.join(root, "forward.state");
+  const requestedForward = "46000:127.0.0.1:4040";
+  const controlCheckArgs = `-F none -S ${controlPath} -O check -- worker`;
+  const controlForwardArgs = `-F none -S ${controlPath} -O forward -R ${requestedForward} -- worker`;
+  const controlCancelArgs = `-F none -S ${controlPath} -O cancel -R ${requestedForward} -- worker`;
+
+  await fs.writeFile(
+    configPath,
+    `Host worker\n  ControlMaster auto\n  ControlPath ${controlPath}\n`,
+  );
+  await fs.writeFile(masterState, "alive");
+  await fs.writeFile(forwardState, "pre-existing");
+  await installFakeSsh(
+    root,
+    trace,
+    `#!/bin/sh
+printf 'ARGV:%s\\n' "$*" >> ${shellEscape(trace)}
+args="$*"
+if [ "$args" = ${shellEscape(controlCheckArgs)} ]; then
+  printf 'Master running (pid=4242)\\n'
+  exit 0
+fi
+if [ "$args" = ${shellEscape(controlForwardArgs)} ]; then
+  exit 0
+fi
+if [ "$args" = ${shellEscape(controlCancelArgs)} ]; then
+  rm -f ${shellEscape(forwardState)}
+  exit 0
+fi
+case "$args" in
+  *' -G '*)
+    printf 'controlmaster auto\\n'
+    printf 'controlpath %s\\n' ${shellEscape(controlPath)}
+    exit 0
+    ;;
+esac
+for arg in "$@"; do last_arg="$arg"; done
+case "$last_arg" in
+  *'__LORENZ_REMOTE_PORT_CLOSED__'*)
+    printf '__LORENZ_REMOTE_PORT_OPEN__'
+    exit 0
+    ;;
+  *'/dev/tcp/127.0.0.1/46000'*)
+    test -f ${shellEscape(forwardState)}
+    exit $?
+    ;;
+esac
+exit 91
+`,
+  );
+  process.env.LORENZ_SSH_CONFIG = configPath;
+
+  await assert.rejects(() => startReverseTunnel("worker:2222", 46_000, "127.0.0.1", 4040));
+
+  assert.equal(await fs.readFile(masterState, "utf8"), "alive");
+  assert.equal(await fs.readFile(forwardState, "utf8"), "pre-existing");
+  const traceText = await fs.readFile(trace, "utf8");
+  assert.notMatch(traceText, / -O (?:forward|cancel) /);
+});
+
+test("a failed mux forward never cancels a concurrent winner", async () => {
+  const root = await tempDir("lorenz-ssh-mux-forward-race");
+  const trace = path.join(root, "ssh.trace");
+  const configPath = path.join(root, "ssh-config");
+  const controlPath = path.join(root, "control.sock");
+  const forwardState = path.join(root, "forward.state");
+  const requestedForward = "46000:127.0.0.1:4040";
+  const controlCheckArgs = `-F none -S ${controlPath} -O check -- worker`;
+  const controlForwardArgs = `-F none -S ${controlPath} -O forward -R ${requestedForward} -- worker`;
+  const controlCancelArgs = `-F none -S ${controlPath} -O cancel -R ${requestedForward} -- worker`;
+
+  await fs.writeFile(
+    configPath,
+    `Host worker\n  ControlMaster auto\n  ControlPath ${controlPath}\n`,
+  );
+  await installFakeSsh(
+    root,
+    trace,
+    `#!/bin/sh
+printf 'ARGV:%s\\n' "$*" >> ${shellEscape(trace)}
+args="$*"
+if [ "$args" = ${shellEscape(controlCheckArgs)} ]; then
+  printf 'Master running (pid=4242)\\n'
+  exit 0
+fi
+if [ "$args" = ${shellEscape(controlForwardArgs)} ]; then
+  printf 'concurrent-winner' > ${shellEscape(forwardState)}
+  printf 'remote port forwarding failed\\n'
+  exit 1
+fi
+if [ "$args" = ${shellEscape(controlCancelArgs)} ]; then
+  rm -f ${shellEscape(forwardState)}
+  exit 0
+fi
+case "$args" in
+  *' -G '*)
+    printf 'controlmaster auto\\n'
+    printf 'controlpath %s\\n' ${shellEscape(controlPath)}
+    exit 0
+    ;;
+esac
+for arg in "$@"; do last_arg="$arg"; done
+case "$last_arg" in
+  *'__LORENZ_REMOTE_PORT_CLOSED__'*)
+    if [ -f ${shellEscape(forwardState)} ]; then
+      printf '__LORENZ_REMOTE_PORT_OPEN__'
+    else
+      printf '__LORENZ_REMOTE_PORT_CLOSED__'
+    fi
+    exit 0
+    ;;
+esac
+exit 91
+`,
+  );
+  process.env.LORENZ_SSH_CONFIG = configPath;
+
+  await assert.rejects(
+    () => startReverseTunnel("worker:2222", 46_000, "127.0.0.1", 4040),
+    /ssh_control_forward_failed/,
+  );
+
+  assert.equal(await fs.readFile(forwardState, "utf8"), "concurrent-winner");
+  const traceText = await fs.readFile(trace, "utf8");
+  assert.notMatch(traceText, new RegExp(`^ARGV:${escapeRegExp(controlCancelArgs)}$`, "m"));
+});
+
+test("reverse tunnel reuses an active control socket even when ControlMaster is disabled", async () => {
+  const root = await tempDir("lorenz-ssh-controlmaster-disabled");
+  const trace = path.join(root, "ssh.trace");
+  const configPath = path.join(root, "ssh-config");
+  const controlPath = path.join(root, "control.sock");
+  const masterState = path.join(root, "master.state");
+  const forwardState = path.join(root, "forward.state");
+  const requestedForward = "46000:127.0.0.1:4040";
+  const controlCheckArgs = `-F none -S ${controlPath} -O check -- worker`;
+  const controlForwardArgs = `-F none -S ${controlPath} -O forward -R ${requestedForward} -- worker`;
+  const controlCancelArgs = `-F none -S ${controlPath} -O cancel -R ${requestedForward} -- worker`;
+  const directArgs =
+    `-F ${configPath} -T -N -S none -o ControlMaster=no -o ControlPath=none ` +
+    `-o ExitOnForwardFailure=yes -p 2222 ` +
+    `-R ${requestedForward} -- worker`;
+
+  await fs.writeFile(configPath, `Host worker\n  ControlMaster no\n  ControlPath ${controlPath}\n`);
+  await fs.writeFile(masterState, "alive");
+  await installFakeSsh(
+    root,
+    trace,
+    `#!/bin/sh
+printf 'ARGV:%s\\n' "$*" >> ${shellEscape(trace)}
+args="$*"
+case "$args" in
+  *' -G '*)
+    printf 'controlmaster false\\n'
+    printf 'controlpath %s\\n' ${shellEscape(controlPath)}
+    exit 0
+    ;;
+esac
+if [ "$args" = ${shellEscape(controlCheckArgs)} ]; then
+  printf 'Master running (pid=4242)\\n'
+  exit 0
+fi
+if [ "$args" = ${shellEscape(controlForwardArgs)} ]; then
+  printf 'mux' > ${shellEscape(forwardState)}
+  exit 0
+fi
+if [ "$args" = ${shellEscape(controlCancelArgs)} ]; then
+  rm -f ${shellEscape(forwardState)}
+  exit 0
+fi
+if [ "$args" = ${shellEscape(directArgs)} ]; then
+  printf 'direct' > ${shellEscape(forwardState)}
+  trap 'rm -f ${shellEscape(forwardState)}; exit 0' TERM INT HUP
+  while :; do sleep 1; done
+fi
+for arg in "$@"; do last_arg="$arg"; done
+case "$last_arg" in
+  *'__LORENZ_REMOTE_PORT_CLOSED__'*)
+    if [ -f ${shellEscape(forwardState)} ]; then
+      printf '__LORENZ_REMOTE_PORT_OPEN__'
+    else
+      printf '__LORENZ_REMOTE_PORT_CLOSED__'
+    fi
+    exit 0
+    ;;
+  *'/dev/tcp/127.0.0.1/46000'*)
+    test -f ${shellEscape(forwardState)}
+    exit $?
+    ;;
+esac
+exit 91
+`,
+  );
+  process.env.LORENZ_SSH_CONFIG = configPath;
+
+  const tunnel = await startReverseTunnel("worker:2222", 46_000, "127.0.0.1", 4040);
+  let activeForward: string;
+  try {
+    activeForward = await fs.readFile(forwardState, "utf8");
+  } finally {
+    await tunnel.close();
+  }
+
+  assert.equal(activeForward, "mux");
+  await assertMissing(forwardState, "mux tunnel survived close");
+  assert.equal(await fs.readFile(masterState, "utf8"), "alive");
+  const traceText = await fs.readFile(trace, "utf8");
+  assert.notMatch(traceText, new RegExp(`^ARGV:${escapeRegExp(directArgs)}$`, "m"));
+  assert.match(traceText, / -O forward /);
+  assert.match(traceText, / -O cancel /);
+});
+
+test("reverse tunnel falls back to a process-owned connection without a ControlMaster", async () => {
+  const root = await tempDir("lorenz-ssh-direct-tunnel");
+  const trace = path.join(root, "ssh.trace");
+  const configPath = path.join(root, "ssh-config");
+  const forwardState = path.join(root, "forward.state");
+  const requestedForward = "46000:127.0.0.1:4040";
+  const directArgs =
+    `-F ${configPath} -T -N -S none -o ControlMaster=no -o ControlPath=none ` +
+    `-o ExitOnForwardFailure=yes -p 2222 ` +
+    `-R ${requestedForward} -- worker`;
+
+  await fs.writeFile(configPath, "Host worker\n  ControlPath none\n");
+  await installFakeSsh(
+    root,
+    trace,
+    `#!/bin/sh
+printf 'ARGV:%s\\n' "$*" >> ${shellEscape(trace)}
+args="$*"
+case "$args" in
+  *' -G '*)
+    printf 'controlpath none\\n'
+    exit 0
+    ;;
+esac
+if [ "$args" = ${shellEscape(directArgs)} ]; then
+  printf 'active' > ${shellEscape(forwardState)}
+  trap 'rm -f ${shellEscape(forwardState)}; exit 0' TERM INT HUP
+  while :; do sleep 1; done
+fi
+for arg in "$@"; do last_arg="$arg"; done
+case "$last_arg" in
+  *'__LORENZ_REMOTE_PORT_CLOSED__'*)
+    if [ -f ${shellEscape(forwardState)} ]; then
+      printf '__LORENZ_REMOTE_PORT_OPEN__'
+    else
+      printf '__LORENZ_REMOTE_PORT_CLOSED__'
+    fi
+    exit 0
+    ;;
+  *'/dev/tcp/127.0.0.1/46000'*)
+    test -f ${shellEscape(forwardState)}
+    exit $?
+    ;;
+esac
+exit 91
+`,
+  );
+  process.env.LORENZ_SSH_CONFIG = configPath;
+
+  const tunnel = await startReverseTunnel("worker:2222", 46_000, "127.0.0.1", 4040);
+  assert.equal(await fs.readFile(forwardState, "utf8"), "active");
+
+  await tunnel.close();
+  await tunnel.ended;
+
+  await assertMissing(forwardState, "direct tunnel process survived close");
+  const traceText = await fs.readFile(trace, "utf8");
+  assert.match(traceText, new RegExp(`^ARGV:${escapeRegExp(directArgs)}$`, "m"));
+  assert.notMatch(traceText, / -O (?:forward|cancel) /);
+  assert.match(traceText, /__LORENZ_REMOTE_PORT_CLOSED__/);
 });
 
 test("SSH run honors LORENZ_SSH_CONFIG, stderr folding, missing ssh, and timeouts", async () => {
@@ -339,6 +803,10 @@ async function installFakeSsh(root: string, trace: string, source: string): Prom
 function restoreEnv(key: string, value: string | undefined): void {
   if (value === undefined) delete process.env[key];
   else process.env[key] = value;
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 async function waitForProcessExit(pid: number, timeoutMs: number): Promise<void> {

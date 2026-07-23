@@ -978,6 +978,7 @@ test("ACP MCP endpoint leases reuse one reverse tunnel per worker host with per-
     assert.notEqual(first.token, second.token);
     assert.notEqual(acpAuthHeader(first.acpServer()), acpAuthHeader(second.acpServer()));
     await waitForTunnelTrace(trace, 1);
+    assert.equal((await fs.readFile(trace, "utf8")).includes(" -N "), false);
 
     await first.release();
     leases.splice(leases.indexOf(first), 1);
@@ -989,9 +990,14 @@ test("ACP MCP endpoint leases reuse one reverse tunnel per worker host with per-
     leases.splice(leases.indexOf(second), 1);
     await third.release();
     leases.splice(leases.indexOf(third), 1);
+    assert.equal(cancelTraceCount(await fs.readFile(trace, "utf8")), 1);
     const fourth = await acquireAgentMcpEndpoint(settings, "worker-acp", workerHostPool);
     leases.push(fourth);
+    assert.equal(fourth.url, "http://127.0.0.1:46000/mcp");
     await waitForTunnelTrace(trace, 2);
+    await fourth.release();
+    leases.splice(leases.indexOf(fourth), 1);
+    assert.equal(cancelTraceCount(await fs.readFile(trace, "utf8")), 2);
   } finally {
     await Promise.all(leases.map((lease) => lease.release()));
     vi.unstubAllEnvs();
@@ -1648,22 +1654,47 @@ async function readTrace(trace: string): Promise<any[]> {
 
 async function installEvalSsh(root: string, trace: string): Promise<void> {
   const bin = path.join(root, "bin");
+  const controlPath = path.join(root, "ssh-control");
+  const tunnelState = path.join(root, "ssh-tunnel-open");
   await fs.mkdir(bin, { recursive: true });
   await writeExecutable(
     path.join(bin, "ssh"),
     `#!/bin/sh
 printf 'ARGV:%s\\n' "$*" >> ${shellEscape(trace)}
-is_tunnel=0
+case " $* " in
+  *" -G "*)
+    printf 'controlpath %s\\n' ${shellEscape(controlPath)}
+    exit 0
+    ;;
+  *" -O check "*)
+    printf 'Master running (pid=4242)\\n'
+    exit 0
+    ;;
+  *" -O forward "*)
+    : > ${shellEscape(tunnelState)}
+    exit 0
+    ;;
+  *" -O cancel "*)
+    rm -f ${shellEscape(tunnelState)}
+    exit 0
+    ;;
+esac
 for arg in "$@"; do
-  if [ "$arg" = "-N" ]; then is_tunnel=1; fi
   last_arg="$arg"
 done
-if [ "$is_tunnel" = "1" ]; then
-  trap 'exit 0' TERM INT
-  while :; do sleep 1; done
-fi
 case "$last_arg" in
-  *'/dev/tcp/127.0.0.1/'*) exit 0 ;;
+  *'__LORENZ_REMOTE_PORT_CLOSED__'*)
+    if [ -f ${shellEscape(tunnelState)} ]; then
+      printf '__LORENZ_REMOTE_PORT_OPEN__'
+    else
+      printf '__LORENZ_REMOTE_PORT_CLOSED__'
+    fi
+    exit 0
+    ;;
+  *'/dev/tcp/127.0.0.1/'*)
+    [ -f ${shellEscape(tunnelState)} ]
+    exit $?
+    ;;
 esac
 eval "$last_arg"
 `,
@@ -1675,7 +1706,14 @@ eval "$last_arg"
 function tunnelTraceCount(trace: string): number {
   return trace
     .split("\n")
-    .filter((line) => line.includes("-N -o ExitOnForwardFailure=yes") && line.includes("-R "))
+    .filter((line) => line.includes("ARGV:") && line.includes("-O forward") && line.includes("-R "))
+    .length;
+}
+
+function cancelTraceCount(trace: string): number {
+  return trace
+    .split("\n")
+    .filter((line) => line.includes("ARGV:") && line.includes("-O cancel") && line.includes("-R "))
     .length;
 }
 

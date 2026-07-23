@@ -59,14 +59,14 @@ export interface RemoteMcpTunnelTransport {
     localHost: string,
     localPort: number,
   ): Promise<RemoteMcpTunnel>;
-  releaseRemoteMcpTunnel(tunnel: RemoteMcpTunnel): void;
+  releaseRemoteMcpTunnel(tunnel: RemoteMcpTunnel): void | Promise<void>;
   openForRun(
     workerHost: string,
     runKey: string,
     localHost: string,
     localPort: number,
   ): Promise<RemoteMcpTunnel>;
-  closeForRun(workerHost: string, runKey: string): void;
+  closeForRun(workerHost: string, runKey: string): void | Promise<void>;
 }
 
 interface McpEndpoint {
@@ -79,7 +79,7 @@ interface McpEndpoint {
    * recycle; a later request carrying a stale generation fails the liveness fence.
    */
   generation: number;
-  releaseTunnel?: (() => void) | undefined;
+  releaseTunnel?: (() => void | Promise<void>) | undefined;
   localServer?: LocalMcpServerLease | undefined;
 }
 
@@ -161,7 +161,7 @@ export async function acquireAgentMcpEndpoint(
         released = true;
         revokeMcpToken(token);
         try {
-          endpoint?.releaseTunnel?.();
+          if (endpoint?.releaseTunnel) await endpoint.releaseTunnel();
         } finally {
           if (endpoint?.localServer) await releaseLocalMcpServer(endpoint.localServer);
         }
@@ -170,7 +170,7 @@ export async function acquireAgentMcpEndpoint(
   } catch (error) {
     revokeMcpToken(token);
     try {
-      endpoint?.releaseTunnel?.();
+      if (endpoint?.releaseTunnel) await endpoint.releaseTunnel();
     } catch {
       // The acquisition error below is the actionable failure; tunnel cleanup is best-effort.
     }
@@ -231,13 +231,20 @@ export async function acquireAgentMcpEndpointForRun(
         if (released) return;
         released = true;
         revokeRunClaim(token);
-        tunnels.closeForRun(workerHost, runKey);
-        if (endpoint?.localServer) await releaseLocalMcpServer(endpoint.localServer);
+        try {
+          await tunnels.closeForRun(workerHost, runKey);
+        } finally {
+          if (endpoint?.localServer) await releaseLocalMcpServer(endpoint.localServer);
+        }
       },
     };
   } catch (error) {
     revokeRunClaim(token);
-    tunnels.closeForRun(workerHost, runKey);
+    try {
+      await tunnels.closeForRun(workerHost, runKey);
+    } catch {
+      // The acquisition error below is the actionable failure; tunnel cleanup is best-effort.
+    }
     if (endpoint?.localServer) await releaseLocalMcpServer(endpoint.localServer);
     throw error;
   }
@@ -308,7 +315,7 @@ async function acquireRemoteMcpEndpoint(
         localServer?.handle.authScope ??
         mcpAuthScopeForSettings(settings, normalizeHttpBindHost(settings.server.host), localPort),
       generation: localServer?.generation ?? 1,
-      releaseTunnel: () => tunnels.releaseRemoteMcpTunnel(tunnel),
+      releaseTunnel: (): void | Promise<void> => tunnels.releaseRemoteMcpTunnel(tunnel),
       localServer: localServer ?? undefined,
     };
   } catch (error) {
@@ -351,9 +358,14 @@ async function acquirePerRunMcpEndpoint(
     const tunnel = await tunnels.openForRun(workerHost, runKey, localHost, localPort);
     return {
       url: `http://127.0.0.1:${tunnel.remotePort}${mcpPath}`,
+      // Prefer the scope of the server we actually OWN and tunnel to: under the
+      // ephemeral fallback (foreign server on the configured port) the configured
+      // token's scope names a server this lease never touches. Identical when the
+      // owned server IS the configured one, and the configured scope still covers
+      // the attach case (localServer null).
       authScope:
-        configuredToken?.authScope ??
         localServer?.handle.authScope ??
+        configuredToken?.authScope ??
         mcpAuthScopeForSettings(settings, normalizeHttpBindHost(settings.server.host), localPort),
       generation,
       localServer: localServer ?? undefined,
@@ -387,14 +399,69 @@ async function ensureLocalMcpServer(
         existing.refCount += 1;
         return { key, handle: existing.handle, generation: existing.generation };
       }
+      // A live derived fallback entry is reused BEFORE the reachability probe:
+      // once per-run traffic is on the shared fallback server, later acquires
+      // must stick to it regardless of the probe's outcome. Probing first would
+      // let a transient probe failure (foreign server restarting) route a
+      // co-resident acquire to the configured-port branch - a second server on
+      // a second local port, and thus a second same-host tunnel behind the
+      // coordinator's per-host tunnel-ceiling exemption. The entry drains
+      // naturally at refcount zero, after which the probe decides afresh.
+      if (requireOwnedServer) {
+        const fallbackKey = `${key}#per-run-owned`;
+        // eslint-disable-next-line @typescript-eslint/require-await -- the lock runner expects an async thunk
+        const shared = await withLocalMcpServerLock(fallbackKey, async () => {
+          const fallback = localMcpServers.get(fallbackKey);
+          if (!fallback) return null;
+          if (fallback.identity !== identity) {
+            throw new Error("configured_mcp_server_conflict");
+          }
+          fallback.refCount += 1;
+          return { key: fallbackKey, handle: fallback.handle, generation: fallback.generation };
+        });
+        if (shared) return shared;
+      }
       if (await configuredMcpServerReachable(settings, configuredToken.token)) {
-        // A foreign MCP server is already reachable on the configured port. The
-        // ACP/local path ATTACHES to it (returns null); but the per-run claim path
-        // sets `requireOwnedServer` because lorenz cannot enforce its Token B owner
-        // re-check / generation fence against a server it does not own - attaching
-        // would silently bypass the per-run claim model. Refuse loudly instead.
+        // A foreign MCP server is already reachable on the configured port. In a
+        // daemon with the web dashboard enabled this is the OBSERVABILITY server:
+        // main.ts writes the dashboard's bound port back into
+        // `settings.server.port`, so the per-run path ALWAYS finds it here. The
+        // ACP/local path ATTACHES to it (returns null); the per-run claim path
+        // cannot - lorenz cannot enforce its Token B owner re-check / generation
+        // fence against a server it does not own, and attaching would silently
+        // bypass the per-run claim model. Instead of refusing the run (which made
+        // the dashboard and pool-driver remote workers mutually exclusive), fall
+        // back to an EPHEMERAL (port 0) owned server: the fence stays enforceable
+        // (the `isRunLive` oracle is mounted on a server lorenz owns) without
+        // demanding the port the dashboard already holds.
+        //
+        // The fallback server is SHARED and refcounted under a derived key, like
+        // the configured-owned path: co-resident runs must tunnel to ONE local
+        // port per host, or each run would open its own reverse tunnel and the
+        // coordinator's per-host `maxConcurrentTunnels` accounting (which exempts
+        // same-host follow-up runs) would be bypassed. The derived key keeps the
+        // entry invisible to the non-claim ACP/attach path, whose Token A would
+        // fail against this server's Token-B-only mount. Acquire nests the
+        // derived-key lock inside the configured-key lock (always in that order);
+        // release locks only the derived key - the entry is never mutated
+        // without holding it.
         if (requireOwnedServer) {
-          throw new Error("per_run_mcp_endpoint_requires_lorenz_owned_server");
+          const fallbackKey = `${key}#per-run-owned`;
+          return withLocalMcpServerLock(fallbackKey, async () => {
+            const fallback = localMcpServers.get(fallbackKey);
+            if (fallback) {
+              if (fallback.identity !== identity) {
+                throw new Error("configured_mcp_server_conflict");
+              }
+              fallback.refCount += 1;
+              return { key: fallbackKey, handle: fallback.handle, generation: fallback.generation };
+            }
+            const handle = await startMcpServer(settings, { host: serverHost, port: 0, isRunLive });
+            const generation = (localMcpServerGenerations.get(fallbackKey) ?? 0) + 1;
+            localMcpServerGenerations.set(fallbackKey, generation);
+            localMcpServers.set(fallbackKey, { handle, identity, refCount: 1, generation });
+            return { key: fallbackKey, handle, generation };
+          });
         }
         return null;
       }
