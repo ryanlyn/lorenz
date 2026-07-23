@@ -570,6 +570,11 @@ export interface ServerSettings {
    * (e.g. Claude, which needs the MCP endpoint). `0` requests an ephemeral local port.
    */
   port?: number | undefined;
+  /**
+   * Optional dedicated loopback port for remote per-run MCP claims. Local agents always share
+   * {@link port}. A configured value must be a positive TCP port.
+   */
+  mcpPort?: number | undefined;
   /** Directory containing JSONL trace files (same directory TraceEmitter writes to). */
   traceDir?: string | undefined;
   /** Built frontend assets directory (override for dashboard SPA). */

@@ -149,6 +149,7 @@ To relocate the log, pass `--logs-root <path>` to the daemon; logs then go to `<
 | `observability.render_interval_ms` | `16` | Declared; not consumed by the TUI |
 | `server.host` | `127.0.0.1` | Bind host for the web server |
 | `server.port` | `4040` | Bind port; `0` means ephemeral; rewritten to the bound port after start |
+| `server.mcp_port` | unset | Optional loopback-only port for remote per-run MCP claims; local agents always share `server.port`; changing it requires a restart |
 | `server.traceDir` | `~/.lorenz/issues` | Per-issue `trace.jsonl` directory; enables trace routes with the issue store |
 | `server.staticDir` | built dashboard dir | Override for the prebuilt SPA assets |
 | `logging.log_file` | `~/.lorenz/log/lorenz.log` | Structured log path |

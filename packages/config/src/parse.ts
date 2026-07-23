@@ -147,6 +147,7 @@ export function parseConfig(
   const serverRaw = parsed.server ?? {};
   settings.server.host = normalizeHttpBindHost(serverRaw.host ?? settings.server.host);
   if (serverRaw.port !== undefined) settings.server.port = serverRaw.port;
+  if (serverRaw.mcpPort !== undefined) settings.server.mcpPort = serverRaw.mcpPort;
   if (serverRaw.traceDir !== undefined) settings.server.traceDir = serverRaw.traceDir;
   if (serverRaw.staticDir !== undefined) settings.server.staticDir = serverRaw.staticDir;
 

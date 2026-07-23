@@ -9,8 +9,9 @@ import { workerHostPool } from "@lorenz/worker-host-pool";
 import type { Settings } from "@lorenz/domain";
 import { assert } from "@lorenz/test-utils";
 
-import { acquireAgentMcpEndpointForRun } from "../src/agentEndpoint.js";
+import { acquireAgentMcpEndpoint, acquireAgentMcpEndpointForRun } from "../src/agentEndpoint.js";
 import { resolveRunClaim } from "../src/auth.js";
+import { startMcpServer } from "../src/server.js";
 
 // Avoid spawning a real `ssh -N` reverse tunnel; the per-run tunnel allocation
 // logic in WorkerHostPool is exercised against a fake child process.
@@ -53,6 +54,11 @@ async function freeLocalPort(): Promise<number> {
       probe.close(() => resolve(port));
     });
   });
+}
+
+async function freeLocalPortOtherThan(excludedPort: number): Promise<number> {
+  const port = await freeLocalPort();
+  return port === excludedPort ? freeLocalPortOtherThan(excludedPort) : port;
 }
 
 async function mcpServerReachable(host: string, port: number): Promise<boolean> {
@@ -134,6 +140,44 @@ test("the per-run server enforces the INJECTED isRunLive on every Token B reques
   assert.equal(deniedStatus, 401);
 
   await lease.release();
+});
+
+test("a local agent keeps sharing server.port when server.mcp_port is configured", async () => {
+  const dashboardPort = await freeLocalPort();
+  const mcpPort = await freeLocalPortOtherThan(dashboardPort);
+  const settings = settingsWithPort(dashboardPort);
+  settings.server.mcpPort = mcpPort;
+
+  const lease = await acquireAgentMcpEndpoint(settings);
+  try {
+    assert.match(lease.url, new RegExp(`:${dashboardPort}/mcp$`));
+    assert.equal(await mcpServerReachable("127.0.0.1", dashboardPort), true);
+    assert.equal(await mcpServerReachable("127.0.0.1", mcpPort), false);
+  } finally {
+    await lease.release();
+  }
+});
+
+test("a per-run claim server does not reuse a live local Token-A listener", async () => {
+  const port = await freeLocalPort();
+  const settings = settingsWithPort(port);
+  const localLease = await acquireAgentMcpEndpoint(settings);
+  try {
+    await assert.rejects(
+      () =>
+        acquireAgentMcpEndpointForRun(
+          settings,
+          "worker-1",
+          "run-mixed-auth",
+          workerHostPool,
+          () => true,
+        ),
+      /configured_mcp_server_conflict/,
+    );
+    assert.equal(mockStartReverseTunnel.mock.calls.length, 0);
+  } finally {
+    await localLease.release();
+  }
 });
 
 test("acquireAgentMcpEndpointForRun.release() revokes the token, drops the local-server ref, AND closes the per-run tunnel", async () => {
@@ -326,12 +370,7 @@ function parseJsonRpcId(body: string): unknown {
   }
 }
 
-test("acquireAgentMcpEndpointForRun REFUSES to attach to an externally-configured MCP server (lorenz does not own the auth surface)", async () => {
-  // Stand up a FOREIGN server on the configured port that answers `tools/list`
-  // exactly like a real MCP server, so `configuredMcpServerReachable` treats it as
-  // reachable. The ACP/local path would ATTACH to it (return null); the per-run
-  // claim path must REFUSE, because lorenz cannot enforce its Token B owner re-check
-  // / generation fence against a server it did not start.
+test("per-run MCP requires server.mcp_port when the dashboard owns the shared port", async () => {
   const port = await freeLocalPort();
   const foreign = createHttpServer((req, res) => {
     let body = "";
@@ -346,12 +385,93 @@ test("acquireAgentMcpEndpointForRun REFUSES to attach to an externally-configure
   try {
     const settings = settingsWithPort(port);
     await assert.rejects(
-      () => acquireAgentMcpEndpointForRun(settings, "worker-1", "run-external", workerHostPool),
-      /per_run_mcp_endpoint_requires_lorenz_owned_server/,
+      () =>
+        acquireAgentMcpEndpointForRun(
+          settings,
+          "worker-1",
+          "run-external",
+          workerHostPool,
+          () => true,
+        ),
+      /per_run_mcp_endpoint_requires_server_mcp_port/,
     );
-    // The refusal happened BEFORE any reverse tunnel was opened (no half-open child
-    // pointed at a server lorenz does not own).
     assert.equal(mockStartReverseTunnel.mock.calls.length, 0);
+  } finally {
+    await new Promise<void>((resolve) => foreign.close(() => resolve()));
+  }
+});
+
+test("an equal MCP/dashboard port on a wildcard host reports the dedicated-port error", async () => {
+  const port = await freeLocalPort();
+  const settings = settingsWithPort(port);
+  settings.server.host = "0.0.0.0";
+  settings.server.mcpPort = port;
+  const dashboardMcp = await startMcpServer(settings, { host: "0.0.0.0", port });
+  try {
+    await assert.rejects(
+      () =>
+        acquireAgentMcpEndpointForRun(
+          settings,
+          "worker-1",
+          "run-shared",
+          workerHostPool,
+          () => true,
+        ),
+      /per_run_mcp_endpoint_requires_server_mcp_port/,
+    );
+    assert.equal(mockStartReverseTunnel.mock.calls.length, 0);
+  } finally {
+    await dashboardMcp.stop();
+  }
+});
+
+test("server.mcp_port gives co-resident remote runs one dedicated MCP server and tunnel", async () => {
+  const dashboardPort = await freeLocalPort();
+  const foreign = createHttpServer((req, res) => {
+    let body = "";
+    req.on("data", (chunk: Buffer) => (body += chunk.toString()));
+    req.on("end", () => {
+      const id = parseJsonRpcId(body);
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ jsonrpc: "2.0", id, result: { tools: [] } }));
+    });
+  });
+  await new Promise<void>((resolve) => foreign.listen(dashboardPort, "127.0.0.1", resolve));
+  try {
+    const mcpPort = await freeLocalPort();
+    const settings = settingsWithPort(dashboardPort);
+    settings.server.host = "0.0.0.0";
+    settings.server.mcpPort = mcpPort;
+    const first = await acquireAgentMcpEndpointForRun(
+      settings,
+      "worker-1",
+      "issue-1#0",
+      workerHostPool,
+      () => true,
+    );
+    const second = await acquireAgentMcpEndpointForRun(
+      settings,
+      "worker-1",
+      "issue-2#0",
+      workerHostPool,
+      () => true,
+    );
+    try {
+      assert.equal(mockStartReverseTunnel.mock.calls.length, 1);
+      assert.equal(mockStartReverseTunnel.mock.calls[0]?.[2], "127.0.0.1");
+      assert.equal(mockStartReverseTunnel.mock.calls[0]?.[3], mcpPort);
+      assert.notEqual(first.token, second.token);
+      assert.equal(first.generation, second.generation);
+      assert.notEqual(await mcpListStatus("127.0.0.1", mcpPort, first.token), 401);
+      assert.notEqual(await mcpListStatus("127.0.0.1", mcpPort, second.token), 401);
+
+      await second.release();
+      assert.notEqual(await mcpListStatus("127.0.0.1", mcpPort, first.token), 401);
+    } finally {
+      await second.release();
+      await first.release();
+    }
+    assert.equal(await mcpServerReachable("127.0.0.1", mcpPort), false);
   } finally {
     await new Promise<void>((resolve) => foreign.close(() => resolve()));
   }

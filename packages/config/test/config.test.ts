@@ -689,6 +689,22 @@ test("server.host falls back to loopback when configured as an empty string", ()
   assert.equal(settings.server.host, "127.0.0.1");
 });
 
+test("server.mcp_port is optional and parses a dedicated positive port", () => {
+  assert.equal(parseConfig().server.mcpPort, undefined);
+  assert.equal(parseConfig({ server: { mcp_port: 4041 } }).server.mcpPort, 4041);
+});
+
+test("server.mcp_port rejects zero and out-of-range ports", () => {
+  assert.throws(
+    () => parseConfig({ server: { mcp_port: 0 } }),
+    /server.mcp_port must be a valid port number/,
+  );
+  assert.throws(
+    () => parseConfig({ server: { mcp_port: 65_536 } }),
+    /server.mcp_port must be a valid port number/,
+  );
+});
+
 test("dispatch config rejects blank routes and normalizes unique route names", () => {
   assert.throws(
     () => parseConfig({ tracker: { dispatch: { only_routes: ["backend", " "] } } }),
