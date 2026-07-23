@@ -326,12 +326,15 @@ function parseJsonRpcId(body: string): unknown {
   }
 }
 
-test("acquireAgentMcpEndpointForRun REFUSES to attach to an externally-configured MCP server (lorenz does not own the auth surface)", async () => {
+test("acquireAgentMcpEndpointForRun falls back to an ephemeral OWNED server when a foreign server holds the configured port (dashboard coexistence)", async () => {
   // Stand up a FOREIGN server on the configured port that answers `tools/list`
   // exactly like a real MCP server, so `configuredMcpServerReachable` treats it as
-  // reachable. The ACP/local path would ATTACH to it (return null); the per-run
-  // claim path must REFUSE, because lorenz cannot enforce its Token B owner re-check
-  // / generation fence against a server it did not start.
+  // reachable — this is what the observability/dashboard server looks like to the
+  // per-run path (main.ts back-writes the dashboard's bound port into
+  // `settings.server.port`). The ACP/local path would ATTACH to it; the per-run
+  // claim path must NOT (it cannot enforce Token B against a server it did not
+  // start) — instead it starts a fresh ephemeral server it OWNS and tunnels to
+  // that, so the dashboard and pool-driver remote workers can share one daemon.
   const port = await freeLocalPort();
   const foreign = createHttpServer((req, res) => {
     let body = "";
@@ -345,14 +348,121 @@ test("acquireAgentMcpEndpointForRun REFUSES to attach to an externally-configure
   await new Promise<void>((resolve) => foreign.listen(port, "127.0.0.1", resolve));
   try {
     const settings = settingsWithPort(port);
-    await assert.rejects(
-      () => acquireAgentMcpEndpointForRun(settings, "worker-1", "run-external", workerHostPool),
-      /per_run_mcp_endpoint_requires_lorenz_owned_server/,
+    let live = true;
+    const isRunLive = (): boolean => live;
+    const lease = await acquireAgentMcpEndpointForRun(
+      settings,
+      "worker-1",
+      "run-external",
+      workerHostPool,
+      isRunLive,
     );
-    // The refusal happened BEFORE any reverse tunnel was opened (no half-open child
-    // pointed at a server lorenz does not own).
-    assert.equal(mockStartReverseTunnel.mock.calls.length, 0);
+    try {
+      // The run proceeds: exactly one reverse tunnel was opened…
+      assert.equal(mockStartReverseTunnel.mock.calls.length, 1);
+      // …and it targets the fresh lorenz-owned EPHEMERAL server, never the
+      // foreign one on the configured port.
+      const tunnelLocalPort = mockStartReverseTunnel.mock.calls[0]?.[3];
+      assert.ok(typeof tunnelLocalPort === "number" && tunnelLocalPort > 0);
+      assert.notEqual(tunnelLocalPort, port);
+      // The Token B owner re-check + generation fence is ENFORCED on the owned
+      // ephemeral server — the entire reason attaching to the foreign server is
+      // forbidden. Live: request passes; not live: the SAME token fails closed.
+      const okStatus = await mcpListStatus("127.0.0.1", tunnelLocalPort, lease.token);
+      assert.notEqual(okStatus, 401);
+      live = false;
+      const deniedStatus = await mcpListStatus("127.0.0.1", tunnelLocalPort, lease.token);
+      assert.equal(deniedStatus, 401);
+    } finally {
+      await lease.release();
+    }
   } finally {
+    await new Promise<void>((resolve) => foreign.close(() => resolve()));
+  }
+});
+
+test("co-resident runs SHARE one fallback server and one tunnel per host (tunnel accounting stays per-host)", async () => {
+  // Two runs on the SAME worker host with a foreign server on the configured
+  // port. The fallback must hand both runs the SAME owned ephemeral server:
+  // WorkerHostPool keys reverse tunnels by (workerHost, localHost, localPort)
+  // and the dispatch coordinator's `maxConcurrentTunnels` accounting assumes
+  // one tunnel per host — a per-run ephemeral port would open a second tunnel
+  // behind the ceiling's back.
+  const port = await freeLocalPort();
+  const foreign = createHttpServer((req, res) => {
+    let body = "";
+    req.on("data", (chunk: Buffer) => (body += chunk.toString()));
+    req.on("end", () => {
+      const id = parseJsonRpcId(body);
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ jsonrpc: "2.0", id, result: { tools: [] } }));
+    });
+  });
+  await new Promise<void>((resolve) => foreign.listen(port, "127.0.0.1", resolve));
+  try {
+    const settings = settingsWithPort(port);
+    const isRunLive = (): boolean => true;
+    const leaseA = await acquireAgentMcpEndpointForRun(
+      settings,
+      "worker-1",
+      "issue-1#0",
+      workerHostPool,
+      isRunLive,
+    );
+    const leaseB = await acquireAgentMcpEndpointForRun(
+      settings,
+      "worker-1",
+      "issue-1#1",
+      workerHostPool,
+      isRunLive,
+    );
+    try {
+      // ONE ssh child serves both runs: the second openForRun refcounts the
+      // existing (workerHost, localHost, localPort) tunnel instead of spawning.
+      assert.equal(mockStartReverseTunnel.mock.calls.length, 1);
+      // Distinct Token B claims, same shared owned server.
+      assert.notEqual(leaseA.token, leaseB.token);
+      assert.equal(leaseA.generation, leaseB.generation);
+    } finally {
+      await leaseB.release();
+      await leaseA.release();
+    }
+    // Full release tears the shared fallback server down; the next acquire
+    // starts a FRESH one whose bumped generation fences stale Token Bs.
+    const leaseC = await acquireAgentMcpEndpointForRun(
+      settings,
+      "worker-1",
+      "issue-1#2",
+      workerHostPool,
+      isRunLive,
+    );
+    try {
+      assert.equal(leaseC.generation, leaseA.generation + 1);
+      // The live fallback entry is reused BEFORE the foreign server is
+      // re-probed: even with the foreign server GONE (probe would fail, and
+      // the configured port would look free), a co-resident acquire must join
+      // the existing shared server rather than start a second one on another
+      // port (which would open a second same-host tunnel behind the
+      // coordinator's per-host tunnel-ceiling exemption).
+      await new Promise<void>((resolve) => foreign.close(() => resolve()));
+      const leaseD = await acquireAgentMcpEndpointForRun(
+        settings,
+        "worker-1",
+        "issue-1#3",
+        workerHostPool,
+        isRunLive,
+      );
+      try {
+        assert.equal(leaseD.generation, leaseC.generation);
+        assert.equal(mockStartReverseTunnel.mock.calls.length, 2); // C's tunnel, refcounted by D
+      } finally {
+        await leaseD.release();
+      }
+    } finally {
+      await leaseC.release();
+    }
+  } finally {
+    foreign.closeAllConnections?.();
     await new Promise<void>((resolve) => foreign.close(() => resolve()));
   }
 });
