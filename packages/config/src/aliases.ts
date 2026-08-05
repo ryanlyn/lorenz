@@ -76,7 +76,7 @@ const observabilityAliases = {
   refresh_ms: "refreshMs",
   render_interval_ms: "renderIntervalMs",
 };
-const serverAliases = { mcp_port: "mcpPort" };
+const serverAliases = { mcp_port: "mcpPort", issue_store_path: "issueStorePath" };
 const loggingAliases = { log_file: "logFile" };
 
 export function normalizeWorkflowConfig(value: unknown): unknown {

@@ -78,7 +78,7 @@ The `runs` limit defaults to 20 and is clamped to a max of 200. `/api/v1/refresh
 connected clients on each update. The exact payload shapes, query params, auth requirements, and
 error codes are in [reference/http-api.md](reference/http-api.md).
 
-The trace REST routes (`/api/v1/issues/*`, `/api/v1/tickets/*`) mount only when both `server.traceDir` and an `IssueStore` are present. The CLI supplies both, so they are live under the daemon.
+The trace REST routes (`/api/v1/issues/*`, `/api/v1/tickets/*`) mount only when both `server.traceDir` and an `IssueStore` are present. The CLI supplies both, so they are live under the daemon. Issue metadata defaults to `~/.lorenz/issues.db`; configure `server.issue_store_path` when separate daemons under the same home directory must not share dashboard history.
 
 ## The runs command
 
@@ -151,6 +151,7 @@ To relocate the log, pass `--logs-root <path>` to the daemon; logs then go to `<
 | `server.port` | `4040` | Bind port; `0` means ephemeral; rewritten to the bound port after start |
 | `server.mcp_port` | unset | Optional loopback-only port for remote per-run MCP claims; local agents always share `server.port`; changing it requires a restart |
 | `server.traceDir` | `~/.lorenz/issues` | Per-issue `trace.jsonl` directory; enables trace routes with the issue store |
+| `server.issue_store_path` | `~/.lorenz/issues.db` | SQLite issue metadata path; use separate paths to isolate dashboards for multiple daemons |
 | `server.staticDir` | built dashboard dir | Override for the prebuilt SPA assets |
 | `logging.log_file` | `~/.lorenz/log/lorenz.log` | Structured log path |
 

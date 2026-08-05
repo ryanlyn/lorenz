@@ -18,6 +18,7 @@ const mocks = vi.hoisted(() => ({
   runtimeDefaultSettingsOptions: vi.fn(() => ({})),
   // No worker.worker_pool in the fixture, so the real builder returns undefined.
   buildDispatchCoordinator: vi.fn(() => undefined),
+  issueStorePaths: [] as string[],
   acquireDaemonLock: null as
     | ((
         ...args: Parameters<typeof daemonLockModule.acquireDaemonLock>
@@ -76,6 +77,10 @@ vi.mock("@lorenz/log-file", () => ({
 vi.mock("@lorenz/server", () => ({
   startObservabilityServer: mocks.startObservabilityServer,
   IssueStore: class {
+    constructor(dbPath: string) {
+      mocks.issueStorePaths.push(dbPath);
+    }
+
     upsert() {}
     close() {}
   },
@@ -183,6 +188,7 @@ beforeEach(() => {
   mocks.runAgentAttempt.mockReset();
   mocks.runtimeDefaultSettingsOptions.mockClear();
   mocks.buildDispatchCoordinator.mockClear();
+  mocks.issueStorePaths.length = 0;
   mocks.acquireDaemonLock = null;
   mocks.runtimeInstances.length = 0;
   stderrWriteSpy = vi.spyOn(process.stderr, "write").mockReturnValue(true);
@@ -219,6 +225,33 @@ async function waitForRuntimeInstance(): Promise<FakeRuntime> {
   );
   return mocks.runtimeInstances[0]!;
 }
+
+test("runDaemon opens the workflow's configured issue store", async () => {
+  const fixture = await workflowFixture();
+  const issueStorePath = path.join(path.dirname(fixture.path), "state", "issues.db");
+  fixture.settings.server.issueStorePath = issueStorePath;
+  mocks.loadWorkflow.mockResolvedValue(fixture);
+
+  const sigintBaseline = process.listeners("SIGINT");
+  const daemonPromise = runDaemon({
+    workflowPath: "WORKFLOW.md",
+    once: false,
+    dryRun: false,
+    tui: false,
+    dashboard: false,
+    port: null,
+    logsRoot: null,
+    featureTokens: ["daemon"],
+  });
+
+  const runtime = await waitForRuntimeInstance();
+  await runtime.startEntered;
+  const [sigintHandler] = addedProcessListeners("SIGINT", sigintBaseline);
+  sigintHandler!();
+
+  assert.equal(await daemonPromise, 0);
+  assert.deepEqual(mocks.issueStorePaths, [issueStorePath]);
+});
 
 test("runDaemon stops gracefully on the first SIGINT and returns success", async () => {
   mocks.loadWorkflow.mockResolvedValue(await workflowFixture());

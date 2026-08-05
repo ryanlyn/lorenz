@@ -227,7 +227,7 @@ On success returns `200`:
 
 ### Trace routes
 
-These read from the SQLite issue store and the `TraceWatcher` over `traceDir`. They are mounted only when both are configured.
+These read from the SQLite issue store and the `TraceWatcher` over `traceDir`. They are mounted only when both are configured. The CLI opens `server.issue_store_path` when set, otherwise `~/.lorenz/issues.db`.
 
 - **`GET /api/v1/issues/recent`** returns `{issues}` from the issue store, newest first. `limit` (1-100, default 5).
 - **`GET /api/v1/issues/search`** returns `{issues}` matching `q` (default empty). `limit` (1-100, default 20).
