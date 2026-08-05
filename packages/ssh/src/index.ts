@@ -9,7 +9,6 @@ import { processGroupTerminationAdapter, superviseChild } from "@lorenz/process-
 const DEFAULT_SSH_TIMEOUT_MS = 60_000;
 const DEFAULT_REMOTE_TCP_PORT_READY_TIMEOUT_MS = 10_000;
 const DEFAULT_REMOTE_TCP_PORT_READY_INTERVAL_MS = 200;
-const DEFAULT_REMOTE_TCP_PORT_READY_ATTEMPT_TIMEOUT_MS = 1_000;
 const TCP_PORT_MAX = 65_535;
 const NUMERIC_CHMOD_MODE = /^[0-7]{3,4}$/;
 const SYMBOLIC_CHMOD_MODE =
@@ -163,8 +162,9 @@ export async function waitForRemoteTcpPort(
 ): Promise<void> {
   const timeoutMs = options.timeoutMs ?? DEFAULT_REMOTE_TCP_PORT_READY_TIMEOUT_MS;
   const intervalMs = options.intervalMs ?? DEFAULT_REMOTE_TCP_PORT_READY_INTERVAL_MS;
-  const attemptTimeoutMs =
-    options.attemptTimeoutMs ?? DEFAULT_REMOTE_TCP_PORT_READY_ATTEMPT_TIMEOUT_MS;
+  // A ProxyCommand may need several seconds to establish its transport. By
+  // default, let one probe use the existing overall readiness budget.
+  const attemptTimeoutMs = options.attemptTimeoutMs ?? timeoutMs;
   if (!Number.isInteger(remotePort) || remotePort <= 0 || remotePort > TCP_PORT_MAX) {
     throw new Error(`invalid_remote_tcp_port: ${remotePort}`);
   }

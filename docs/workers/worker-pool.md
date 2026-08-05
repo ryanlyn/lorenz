@@ -9,6 +9,11 @@ The pool is the single dispatch path for every `workerHost`. The legacy static l
 The pool is always on - it is the single dispatch path. With no `worker.worker_pool` block and no `worker.ssh_hosts`, the pool defaults to the `local` driver at `max: 1`, which runs agents locally on the daemon's own in-process endpoint (no SSH, no provisioning). To put runs on real machines, set a `driver` (and its sizing knobs); there is no `enabled` flag to set:
 
 ```yaml
+server:
+  # Remote per-run claims use this loopback listener while the dashboard keeps
+  # the default server.port (4040).
+  mcp_port: 4041
+
 worker:
   worker_pool:
     driver: docker
@@ -16,6 +21,8 @@ worker:
     max: 4
     warm: 2
 ```
+
+SSH-addressable pool drivers require a distinct `server.mcp_port` while the dashboard is enabled. The remote agents reach it through Lorenz's reverse SSH tunnels; local-driver workflows can omit it and keep sharing the dashboard port.
 
 When `worker.worker_pool` is present but `driver` is unspecified, the driver defaults to `fake` (in-memory, never touches SSH or disk). Set it to a real driver for real machines.
 

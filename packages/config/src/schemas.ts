@@ -73,6 +73,12 @@ const coercedPort = numericInput
   })
   .describe("non-negative");
 
+const coercedPositivePort = numericInput
+  .refine((n) => Number.isInteger(n) && n >= 1 && n <= PORT_MAX, {
+    message: `must be a valid port number (1-${PORT_MAX})`,
+  })
+  .describe("positive");
+
 export const coercedTimeoutMs = numericInput
   .refine((n) => isValidTimeoutMs(n), {
     message: `must be a positive integer no greater than ${ONE_WEEK_MS} (1 week)`,
@@ -319,6 +325,7 @@ const serverRawSchema = z
   .object({
     host: z.string().optional(),
     port: coercedPort.optional(),
+    mcpPort: coercedPositivePort.optional(),
     traceDir: z.string().optional(),
     staticDir: z.string().optional(),
   })

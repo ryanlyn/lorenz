@@ -360,12 +360,13 @@ TUI dashboard settings. See [observability](../observability.md).
 
 ## `server`
 
-The HTTP observability server and trace store. See [http-api.md](http-api.md).
+The HTTP observability server, agent MCP listener, and trace store. See [http-api.md](http-api.md).
 
 | Key | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `server.host` | string | `127.0.0.1` | Bind host. |
 | `server.port` | integer (valid port) | `4040` | Bind port. `0` binds an ephemeral port. The `--port` flag overrides this. |
+| `server.mcp_port` | integer (1-65535) | (none) | Optional loopback-only port for remote per-run MCP claims. Local agents always share `server.port`; remote per-run agents need a distinct value while the dashboard is enabled. Changing it requires a restart. |
 | `server.trace_dir` | string | `~/.lorenz/issues` | JSONL trace directory; enables trace routes when paired with the issue store. |
 | `server.static_dir` | string | (built SPA dir) | Override for the built dashboard assets. |
 

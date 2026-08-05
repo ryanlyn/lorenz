@@ -132,10 +132,10 @@ that means the `jira` pack (`jira_read_issue`, `jira_query`, `jira_update_status
 `jira_list_comments`, `jira_comment`, `jira_update_comment`, `jira_create_issue`); other
 trackers mount their own bespoke packs instead.
 
-The observability server hosts that `/mcp` endpoint, so it starts automatically for Claude workflows
-even when you have not configured a web dashboard port. The ACP bridge needs a reachable endpoint to
-serve tools. For a remote worker the endpoint is leased over an SSH reverse tunnel. The MCP server,
-auth scope, and endpoint leasing live in [observability.md](../observability.md) and
+Local Claude sessions use the observability server's `/mcp` mount. Remote sessions use the dedicated
+loopback listener configured by `server.mcp_port` and reach it through an SSH reverse tunnel. If the
+dashboard is disabled, Lorenz can start the required MCP endpoint on `server.port` instead. The MCP
+server, auth scope, and endpoint leasing live in [observability.md](../observability.md) and
 [../reference/jira-tools.md](../reference/jira-tools.md).
 
 ## Binary resolution

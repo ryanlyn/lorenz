@@ -184,6 +184,7 @@ meaning.
 | `observability.dashboard_enabled` | `true` | Enable the status surface. |
 | `observability.refresh_ms` | `1000` | Status refresh interval. |
 | `server.port` | `4040` | Bind port for the web server. The server is gated by `--no-dashboard`, not this key; CLI `--port` overrides it. |
+| `server.mcp_port` | unset | Optional loopback-only port for remote per-run MCP claims. Local agents always share `server.port`. Changing it requires a restart. |
 | `server.host` | `127.0.0.1` | Bind host. |
 | `logging.log_file` | `~/.lorenz/log/lorenz.log` | JSON event log target. |
 | `status_overrides.<state>` | unset | Per-state partial overrides of agent settings. |
@@ -527,12 +528,15 @@ is captured for display and never drives logic.
 ### 9.4 Optional HTTP server
 
 The HTTP server runs by default and is disabled with `--no-dashboard`. `server.port` in front matter
-and the CLI `--port` set the bind port (`--port` wins). It binds loopback by default. It serves a dashboard at `/` and a read-only JSON API
-under `/api/v1/*` with a `/api/v1/state` summary, `/api/v1/runs`, `/api/v1/daemon`, a
+and the CLI `--port` set the bind port (`--port` wins). It binds loopback by default. Local agents
+always use its `/mcp` mount. Remote per-run agents use the separate loopback-only listener selected
+by `server.mcp_port`; they require it while the dashboard owns `server.port`. The server also serves
+a dashboard at `/` and a read-only JSON API under `/api/v1/*` with a `/api/v1/state` summary,
+`/api/v1/runs`, `/api/v1/daemon`, a
 `/api/v1/<issue_identifier>` detail (404 when the issue is unknown), `POST /api/v1/refresh`, and
 `POST /api/v1/stop`. Refresh and stop require the daemon control bearer token. Errors use a
 `{"error":{"code","message"}}` envelope; an unsupported method on a defined route returns `405`.
-The server is observability and control only and is never required for orchestrator correctness. See
+The observability and control surface is never required for orchestrator correctness. See
 [reference/http-api](http-api.md).
 
 ## 10. Security and safety posture
