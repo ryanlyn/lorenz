@@ -126,18 +126,20 @@ Five tools over the filesystem board (`<prefix><n>.md` files in the board direct
 
 ### `slack` pack
 
-Six tools over the watched Slack channels. Every tool requires a configured `bot_user_id`, a watched channel, and a tracked message; the production transport fails closed without a bot user id.
+Eight tools over the watched Slack channels. Every per-issue tool requires a configured `bot_user_id`, a watched channel, and a tracked message; the production transport fails closed without a bot user id.
 
 | Tool | Required args | Optional args | Returns |
 | --- | --- | --- | --- |
 | `slack_update_status` | `issueId`, `status` | | `{ ok: true, status }` |
-| `slack_comment` | `issueId`, `body` | | `{ ok: true }` |
+| `slack_prepare_file_upload` | `issueId`, `filename`, `length` | `title`, `altText`, `snippetType` | signed `uploadUrl`, `fileId`, expiry, upload method |
+| `slack_comment` | `issueId`, `body` | `fileIds` | `{ ok: true, files? }` |
+| `slack_workpad` | `issueId` | `plan`, `note` | `{ ok: true, workpadTs }` |
 | `slack_read_thread` | `issueId` | | source message, thread-derived status, reactions, permalink, replies |
 | `slack_query` | | `channels`, `where`, `select`, `expand`, `order_by`, `limit`, `offset` | `{ rows, total }` |
 | `slack_user_info` | `userId` | | `{ user }` |
 | `slack_channel_context` | `issueId` | `before`, `after` | `{ anchor, messages }` |
 
-A Slack `issueId` is `<channel>:<ts>` of the thread root. `slack_update_status` posts the bot's authoritative `status:` reply (reactions are only a visibility mirror) and rejects an unknown state name. `slack_query` rows are `issueId`, `channel`, `ts`, `title`, `state`, `stateType`, `labels`, `text`, `url`; `expand` accepts `thread` and `reactions`; requested `channels` are intersected with the configured allow-list. Its default projection is `issueId`, `title`, `state`, `labels`. `slack_channel_context` reads `before` and `after` messages around the anchor (each defaults to `10`, maximum `50`).
+A Slack `issueId` is `<channel>:<ts>` of the thread root. `slack_update_status` posts the bot's authoritative `status:` reply (reactions are only a visibility mirror) and rejects an unknown state name. To attach a local file, call `slack_prepare_file_upload`, POST the exact bytes to its signed URL without authorization or redirects, then pass its single-use `fileId` to `slack_comment`. Up to 10 files, 25 MiB each and 100 MiB total may be pending for one issue. `slack_query` rows are `issueId`, `channel`, `ts`, `title`, `state`, `stateType`, `labels`, `text`, `files`, `url`; `expand` accepts `thread` and `reactions`; requested `channels` are intersected with the configured allow-list. Its default projection is `issueId`, `title`, `state`, `labels`. `slack_channel_context` reads `before` and `after` messages around the anchor (each defaults to `10`, maximum `50`).
 
 There is no `slack_create_issue`: only a human creating an @-mention starts a Slack issue.
 

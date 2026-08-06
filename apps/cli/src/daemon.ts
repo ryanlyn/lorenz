@@ -36,6 +36,7 @@ import {
 import {
   createWorkspaceForIssue,
   listIssueWorkspaceIdentifiers,
+  materializeWorkspaceIssueAttachments,
   removeIssueWorkspaces,
   runHook,
   type WorkspaceSkillOverlay,
@@ -270,6 +271,14 @@ function createRunAgentAttemptAdapters(): RunAgentAttemptAdapters {
         ...options,
         skillOverlay: resolveSkillOverlay(settings),
       }),
+    materializeIssueAttachments: async (workspace, attachments, opener, workerHost, options) =>
+      materializeWorkspaceIssueAttachments(
+        workspace,
+        attachments,
+        async (attachment, openOptions) => opener(attachment.id, openOptions),
+        workerHost,
+        options,
+      ),
     runHook,
     executorFactory: async (settings) => {
       const kind = settings.agent.kind;

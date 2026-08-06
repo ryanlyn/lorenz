@@ -60,6 +60,168 @@ test("listMentions calls conversations.history with auth and parses messages", a
   assert.equal(calls[0]!.auth, "Bearer xoxb-abc");
 });
 
+test("message file metadata is preserved without private download URLs", async () => {
+  const fetchImpl = (async () =>
+    new Response(
+      JSON.stringify({
+        ok: true,
+        messages: [
+          {
+            ts: "1.1",
+            text: "<@U1> inspect these",
+            files: [
+              {
+                id: "F1",
+                name: "spec.pdf",
+                title: "Spec",
+                mimetype: "application/pdf",
+                size: 123,
+                url_private: "https://files.slack.com/private/secret",
+              },
+            ],
+            x_files: ["F2"],
+          },
+        ],
+      }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    )) as typeof fetch;
+
+  const [message] = await new SlackWebTransport(settings(), fetchImpl).listMentions(["C1"]);
+
+  assert.deepEqual(message!.files, [
+    { id: "F1", name: "spec.pdf", title: "Spec", mimetype: "application/pdf", size: 123 },
+    { id: "F2", mode: "file_access", fileAccess: "check_file_info" },
+  ]);
+  assert.equal(JSON.stringify(message).includes("url_private"), false);
+});
+
+test("openFile hydrates with files.info and downloads privately with the bot token", async () => {
+  const calls: Array<{ url: string; auth: string | null }> = [];
+  const fetchImpl = (async (url: string | URL, init?: RequestInit) => {
+    const href = String(url);
+    calls.push({ url: href, auth: new Headers(init?.headers).get("authorization") });
+    if (href.includes("/files.info?")) {
+      return new Response(
+        JSON.stringify({
+          ok: true,
+          file: {
+            id: "F1",
+            name: "spec.pdf",
+            mimetype: "application/pdf",
+            size: 4,
+            url_private_download: "https://files.slack.com/files-pri/T1-F1/download/spec.pdf",
+          },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }
+    return new Response(new Uint8Array([1, 2, 3, 4]), {
+      status: 200,
+      headers: { "content-length": "4", "content-type": "application/pdf" },
+    });
+  }) as typeof fetch;
+  const opened = await new SlackWebTransport(settings(), fetchImpl).openFile("F1", {
+    maxBytes: 10,
+  });
+  const chunks: Uint8Array[] = [];
+  for await (const chunk of opened.body) chunks.push(chunk);
+
+  assert.deepEqual([...chunks[0]!], [1, 2, 3, 4]);
+  assert.equal(opened.mediaType, "application/pdf");
+  assert.equal(opened.sizeBytes, 4);
+  assert.match(calls[0]!.url, /\/files\.info\?file=F1/);
+  assert.equal(calls[0]!.auth, "Bearer xoxb-abc");
+  assert.equal(calls[1]!.url, "https://files.slack.com/files-pri/T1-F1/download/spec.pdf");
+  assert.equal(calls[1]!.auth, "Bearer xoxb-abc");
+});
+
+test("openFile refuses an untrusted private URL without forwarding the bot token", async () => {
+  const calls: string[] = [];
+  const fetchImpl = (async (url: string | URL) => {
+    calls.push(String(url));
+    return new Response(
+      JSON.stringify({
+        ok: true,
+        file: {
+          id: "F1",
+          url_private_download: "https://attacker.example/collect",
+        },
+      }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+  }) as typeof fetch;
+
+  await assert.rejects(
+    () => new SlackWebTransport(settings(), fetchImpl).openFile("F1", { maxBytes: 10 }),
+    /refused untrusted URL/,
+  );
+  assert.equal(calls.length, 1);
+});
+
+test("openFile revalidates redirects before forwarding the bot token", async () => {
+  const calls: Array<{ url: string; auth: string | null }> = [];
+  const fetchImpl = (async (url: string | URL, init?: RequestInit) => {
+    const href = String(url);
+    calls.push({ url: href, auth: new Headers(init?.headers).get("authorization") });
+    if (href.includes("/files.info?")) {
+      return new Response(
+        JSON.stringify({
+          ok: true,
+          file: { id: "F1", url_private_download: "https://files.slack.com/start" },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }
+    return new Response(null, {
+      status: 302,
+      headers: { location: "https://attacker.example/collect" },
+    });
+  }) as typeof fetch;
+
+  await assert.rejects(
+    () => new SlackWebTransport(settings(), fetchImpl).openFile("F1", { maxBytes: 10 }),
+    /refused untrusted URL/,
+  );
+  assert.deepEqual(calls, [
+    {
+      url: "https://slack.com/api/files.info?file=F1",
+      auth: "Bearer xoxb-abc",
+    },
+    { url: "https://files.slack.com/start", auth: "Bearer xoxb-abc" },
+  ]);
+});
+
+test("openFile bounds actual streamed bytes when Slack omits a usable size", async () => {
+  const fetchImpl = (async (url: string | URL) => {
+    if (String(url).includes("/files.info?")) {
+      return new Response(
+        JSON.stringify({
+          ok: true,
+          file: { id: "F1", url_private_download: "https://files.slack.com/download" },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array([1, 2]));
+        controller.enqueue(new Uint8Array([3, 4]));
+        controller.close();
+      },
+    });
+    return new Response(body, { status: 200 });
+  }) as typeof fetch;
+  const opened = await new SlackWebTransport(settings(), fetchImpl).openFile("F1", {
+    maxBytes: 3,
+  });
+
+  await assert.rejects(async () => {
+    for await (const _chunk of opened.body) {
+      // Consume the provider stream so the actual byte cap is exercised.
+    }
+  }, /exceeds the 3-byte file limit while downloading/);
+});
+
 test("botReactions carries only reactions whose users list includes the bot", async () => {
   // State derivation reads botReactions exclusively: a human's :white_check_mark: (or a
   // reaction with no users list at all) must be visible in `reactions` but never state-bearing.
@@ -120,6 +282,108 @@ test("listMentions filters to the configured bot user when botUserId is set", as
     messages.map((m) => m.ts),
     ["1.2", "1.3"],
   );
+});
+
+test("openFile rejects advertised file and response sizes before streaming", async () => {
+  let calls = 0;
+  const advertisedFetch = (async (url: string | URL) => {
+    calls += 1;
+    assert.match(String(url), /\/files\.info\?/);
+    return new Response(
+      JSON.stringify({
+        ok: true,
+        file: {
+          id: "F1",
+          size: 11,
+          url_private_download: "https://files.slack.com/download",
+        },
+      }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+  }) as typeof fetch;
+  await assert.rejects(
+    () => new SlackWebTransport(settings(), advertisedFetch).openFile("F1", { maxBytes: 10 }),
+    /exceeds the 10-byte file limit \(11\)/,
+  );
+  assert.equal(calls, 1);
+
+  let responseCanceled = false;
+  const contentLengthFetch = (async (url: string | URL) => {
+    if (String(url).includes("/files.info?")) {
+      return new Response(
+        JSON.stringify({
+          ok: true,
+          file: { id: "F1", url_private_download: "https://files.slack.com/download" },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array([1]));
+      },
+      cancel() {
+        responseCanceled = true;
+      },
+    });
+    return new Response(body, { status: 200, headers: { "content-length": "11" } });
+  }) as typeof fetch;
+  await assert.rejects(
+    () => new SlackWebTransport(settings(), contentLengthFetch).openFile("F1", { maxBytes: 10 }),
+    /exceeds the 10-byte file limit \(11\)/,
+  );
+  assert.equal(responseCanceled, true);
+});
+
+test("openFile aborts before network access and cancels a body aborted during streaming", async () => {
+  const alreadyAborted = new AbortController();
+  alreadyAborted.abort(new Error("stop before download"));
+  let calls = 0;
+  const neverFetch = (async () => {
+    calls += 1;
+    throw new Error("unexpected fetch");
+  }) as typeof fetch;
+  await assert.rejects(
+    () =>
+      new SlackWebTransport(settings(), neverFetch).openFile("F1", {
+        maxBytes: 10,
+        abortSignal: alreadyAborted.signal,
+      }),
+    /stop before download/,
+  );
+  assert.equal(calls, 0);
+
+  let bodyCanceled = false;
+  const controller = new AbortController();
+  const streamingFetch = (async (url: string | URL) => {
+    if (String(url).includes("/files.info?")) {
+      return new Response(
+        JSON.stringify({
+          ok: true,
+          file: { id: "F1", url_private_download: "https://files.slack.com/download" },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }
+    const body = new ReadableStream<Uint8Array>({
+      start(streamController) {
+        streamController.enqueue(new Uint8Array([1]));
+      },
+      cancel() {
+        bodyCanceled = true;
+      },
+    });
+    return new Response(body, { status: 200 });
+  }) as typeof fetch;
+  const opened = await new SlackWebTransport(settings(), streamingFetch).openFile("F1", {
+    maxBytes: 10,
+    abortSignal: controller.signal,
+  });
+  const iterator = opened.body[Symbol.asyncIterator]();
+  assert.deepEqual(await iterator.next(), { value: new Uint8Array([1]), done: false });
+  controller.abort(new Error("stop during download"));
+  await assert.rejects(() => iterator.next(), /stop during download/);
+  assert.equal(bodyCanceled, true);
 });
 
 test("listMentions fails closed when no botUserId is configured: no mentions, warns once, no fetch", async () => {
@@ -522,10 +786,19 @@ test("addReaction posts to reactions.add", async () => {
 
 test("get retries once on HTTP 429 honoring Retry-After then succeeds", async () => {
   let calls = 0;
+  let retryBodyCanceled = false;
   const fetchImpl = (async () => {
     calls += 1;
     if (calls === 1) {
-      return new Response("rate limited", {
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode("rate limited"));
+        },
+        cancel() {
+          retryBodyCanceled = true;
+        },
+      });
+      return new Response(body, {
         status: 429,
         headers: { "retry-after": "0" },
       });
@@ -543,6 +816,7 @@ test("get retries once on HTTP 429 honoring Retry-After then succeeds", async ()
   const messages = await transport.listMentions(["C1"]);
 
   assert.equal(calls, 2);
+  assert.equal(retryBodyCanceled, true);
   assert.deepEqual(
     messages.map((m) => m.ts),
     ["1.1"],
@@ -798,6 +1072,134 @@ test("postReply posts to chat.postMessage with thread_ts and text", async () => 
 
   assert.match(calls[0]!.url, /\/chat\.postMessage$/);
   assert.deepEqual(calls[0]!.body, { channel: "C1", thread_ts: "1.1", text: "done!" });
+});
+
+test("prepareFileUpload requests a trusted signed Slack URL with file metadata", async () => {
+  const calls: Array<{ url: string; auth: string | null; body: unknown }> = [];
+  const fetchImpl = (async (url: string | URL, init?: RequestInit) => {
+    calls.push({
+      url: String(url),
+      auth: new Headers(init?.headers).get("authorization"),
+      body: JSON.parse(String(init?.body ?? "{}")),
+    });
+    return new Response(
+      JSON.stringify({
+        ok: true,
+        file_id: "F_PREPARED",
+        upload_url: "https://files.slack.com/upload/v1/signed-ticket",
+      }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+  }) as typeof fetch;
+
+  const prepared = await new SlackWebTransport(settings(), fetchImpl).prepareFileUpload({
+    filename: "report.pdf",
+    length: 123,
+    altText: "Quarterly report",
+    snippetType: "text",
+  });
+
+  assert.deepEqual(prepared, {
+    fileId: "F_PREPARED",
+    uploadUrl: "https://files.slack.com/upload/v1/signed-ticket",
+  });
+  assert.match(calls[0]!.url, /\/files\.getUploadURLExternal$/);
+  assert.equal(calls[0]!.auth, "Bearer xoxb-abc");
+  assert.deepEqual(calls[0]!.body, {
+    filename: "report.pdf",
+    length: 123,
+    alt_txt: "Quarterly report",
+    snippet_type: "text",
+  });
+});
+
+test("prepareFileUpload refuses an upload URL outside trusted Slack hosts", async () => {
+  const fetchImpl = (async () =>
+    new Response(
+      JSON.stringify({
+        ok: true,
+        file_id: "F_PREPARED",
+        upload_url: "https://attacker.example/collect",
+      }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    )) as typeof fetch;
+
+  await assert.rejects(
+    () =>
+      new SlackWebTransport(settings(), fetchImpl).prepareFileUpload({
+        filename: "secrets.txt",
+        length: 7,
+      }),
+    /refused untrusted upload URL: https:\/\/attacker\.example/,
+  );
+});
+
+test("completeFileUploads creates one sanitized file-bearing thread reply", async () => {
+  const calls: Array<{ url: string; auth: string | null; body: unknown }> = [];
+  const fetchImpl = (async (url: string | URL, init?: RequestInit) => {
+    calls.push({
+      url: String(url),
+      auth: new Headers(init?.headers).get("authorization"),
+      body: JSON.parse(String(init?.body ?? "{}")),
+    });
+    return new Response(
+      JSON.stringify({
+        ok: true,
+        files: [
+          {
+            id: "F_ONE",
+            name: "one.txt",
+            title: "One",
+            size: 3,
+            url_private: "https://files.slack.com/private/secret",
+          },
+          { id: "F_TWO", name: "two.log", size: 4 },
+        ],
+      }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+  }) as typeof fetch;
+
+  const completed = await new SlackWebTransport(settings(), fetchImpl).completeFileUploads(
+    "C1",
+    "1.1",
+    "results for <!channel>",
+    [{ fileId: "F_ONE", title: "One" }, { fileId: "F_TWO" }],
+  );
+
+  assert.match(calls[0]!.url, /\/files\.completeUploadExternal$/);
+  assert.equal(calls[0]!.auth, "Bearer xoxb-abc");
+  assert.deepEqual(calls[0]!.body, {
+    files: [{ id: "F_ONE", title: "One" }, { id: "F_TWO" }],
+    channel_id: "C1",
+    thread_ts: "1.1",
+    initial_comment: "results for @channel",
+  });
+  assert.deepEqual(completed, [
+    { id: "F_ONE", name: "one.txt", title: "One", size: 3 },
+    { id: "F_TWO", name: "two.log", size: 4 },
+  ]);
+  assert.equal(JSON.stringify(completed).includes("url_private"), false);
+});
+
+test("completeFileUploads does not retry an ambiguous 5xx completion", async () => {
+  let calls = 0;
+  const fetchImpl = (async () => {
+    calls += 1;
+    return new Response(JSON.stringify({ ok: false }), {
+      status: 503,
+      headers: { "content-type": "application/json" },
+    });
+  }) as typeof fetch;
+
+  await assert.rejects(
+    () =>
+      new SlackWebTransport(settings(), fetchImpl).completeFileUploads("C1", "1.1", "report", [
+        { fileId: "F_ONE" },
+      ]),
+    /files\.completeUploadExternal.*503/,
+  );
+  assert.equal(calls, 1);
 });
 
 test("getThread reads conversations.replies and drops the parent message", async () => {

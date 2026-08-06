@@ -44,6 +44,10 @@ test("stages a source-free CLI release tree with rewritten package manifests", a
     true,
   );
   assert.equal(
+    await exists(path.join(releaseDir, "node_modules/@lorenz/acp/skills/test-skill/SKILL.md")),
+    true,
+  );
+  assert.equal(
     await exists(path.join(releaseDir, "node_modules/@lorenz/dashboard/dist/index.html")),
     true,
   );
@@ -251,6 +255,11 @@ catalog:
       execa: "catalog:",
     },
   });
+  await writeFile(
+    workspaceRoot,
+    "packages/acp/skills/test-skill/SKILL.md",
+    "---\nname: test-skill\ndescription: Release fixture.\n---\n",
+  );
 
   await seedPackage(workspaceRoot, "packages/server", {
     name: "@lorenz/server",

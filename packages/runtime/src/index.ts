@@ -42,6 +42,7 @@ import type {
   WorkerPoolSettings,
   HookExecutionMessage,
   Issue,
+  OpenIssueAttachmentOptions,
   RunningEntry,
   TrackerChange,
   RuntimeTrackerClient,
@@ -1288,6 +1289,7 @@ export class LorenzRuntime {
     slot: RunSlot | null = null,
   ): Promise<void> {
     const trackerClient = handle.trackerClient;
+    const openIssueAttachment = trackerClient.openIssueAttachment?.bind(trackerClient);
     const workflow = handle.workflow;
     const startedAt = this.clock.now().toISOString();
     const effectiveWorkerHost = workerHost;
@@ -1331,6 +1333,14 @@ export class LorenzRuntime {
           if (!next) throw new Error(`tracker issue missing during active run: ${current.id}`);
           return next;
         },
+        ...(openIssueAttachment
+          ? {
+              openIssueAttachment: async (
+                attachmentId: string,
+                options: OpenIssueAttachmentOptions,
+              ) => openIssueAttachment(issue.id, attachmentId, options),
+            }
+          : {}),
         subscribeIssueEvents: (listener) => handle.subscribeIssueEvents(listener),
         ...(trackerClient.fetchIssueEvents
           ? {

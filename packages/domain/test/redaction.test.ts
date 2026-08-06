@@ -39,6 +39,16 @@ test("redacted quoted JSON assignments still parse as JSON", () => {
   assert.deepEqual(JSON.parse(redacted), { api_key: "[REDACTED]", keep: "x" });
 });
 
+test("redactDiagnosticText removes signed external-upload capabilities", () => {
+  const uploadUrl = "https://files.slack.com/upload/v1/capability-secret?x=1";
+
+  assert.equal(redactDiagnosticText(`upload ${uploadUrl} now`), "upload [REDACTED] now");
+  assert.equal(
+    redactDiagnosticText(JSON.stringify({ uploadUrl, keep: "x" })),
+    JSON.stringify({ uploadUrl: "[REDACTED]", keep: "x" }),
+  );
+});
+
 test("redactDiagnosticValue copies an own __proto__ key instead of mutating the clone's prototype", () => {
   // JSON.parse produces "__proto__" as an ordinary own key; the clone must keep
   // it as an own property, not route it through the Object.prototype setter.

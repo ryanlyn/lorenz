@@ -1,8 +1,12 @@
 export type {
   SlackChannelScan,
+  SlackFile,
+  SlackFileUploadCompletion,
+  SlackFileUploadRequest,
   SlackMessage,
   SlackMessageMetadata,
   SlackPostOptions,
+  SlackPreparedFileUpload,
   SlackThreadReply,
   SlackThreadReplyPage,
   SlackThreadReplyPageQuery,

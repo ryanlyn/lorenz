@@ -17,6 +17,10 @@ import {
   type HookExecutionMessage,
   type HooksSettings,
   type Issue,
+  type IssueAttachment,
+  issueAttachmentRelativePath,
+  type OpenedIssueAttachment,
+  type OpenIssueAttachmentOptions,
   type Settings,
 } from "@lorenz/domain";
 import { execa } from "execa";
@@ -57,6 +61,7 @@ async function renderHookCommand(command: string, context: HookTemplateContext):
       identifier: issue.identifier,
       title: issue.title,
       description: issue.description ?? null,
+      attachments: (issue.attachments ?? []).map(issueAttachmentHookContext),
       priority: issue.priority ?? null,
       state: issue.state,
       state_type: issue.stateType ?? null,
@@ -81,6 +86,16 @@ function issueRefHookContext(issue: Issue["blockers"][number]): Record<string, u
   };
 }
 
+function issueAttachmentHookContext(attachment: IssueAttachment): Record<string, unknown> {
+  return {
+    id: attachment.id,
+    name: attachment.name,
+    media_type: attachment.mediaType ?? null,
+    size_bytes: attachment.sizeBytes ?? null,
+    relative_path: issueAttachmentRelativePath(attachment),
+  };
+}
+
 export interface WorkspaceCreateOptions {
   slotIndex?: number | undefined;
   ensembleSize?: number | undefined;
@@ -102,6 +117,35 @@ export interface WorkspaceSkillOverlay {
   sources: string[];
   /** Workspace-relative destination, e.g. `.lorenz/skills`. */
   destDir: string;
+}
+
+export interface MaterializeWorkspaceIssueAttachmentsOptions {
+  maxFiles: number;
+  maxFileBytes: number;
+  maxTotalBytes: number;
+  abortSignal?: AbortSignal | undefined;
+  timeoutMs?: number | undefined;
+}
+
+export type WorkspaceIssueAttachmentOpener = (
+  attachment: IssueAttachment,
+  options: OpenIssueAttachmentOptions,
+) => Promise<OpenedIssueAttachment>;
+
+export interface MaterializedWorkspaceIssueAttachment {
+  attachment: IssueAttachment;
+  relativePath: string;
+  actualSizeBytes: number;
+}
+
+export interface WorkspaceIssueAttachmentFailure {
+  attachment: IssueAttachment;
+  error: Error;
+}
+
+export interface MaterializeWorkspaceIssueAttachmentsResult {
+  materialized: MaterializedWorkspaceIssueAttachment[];
+  failures: WorkspaceIssueAttachmentFailure[];
 }
 
 export interface WorkspaceRunHookOptions {
@@ -231,6 +275,22 @@ export async function syncWorkspaceSkills(
   workerHost?: string | null,
   options: { abortSignal?: AbortSignal | undefined; timeoutMs?: number | undefined } = {},
 ): Promise<void> {
+  await syncWorkspaceDirectories(workspace, overlay, workerHost, {
+    ...options,
+    writeGitignore: true,
+  });
+}
+
+async function syncWorkspaceDirectories(
+  workspace: string,
+  overlay: WorkspaceSkillOverlay,
+  workerHost: string | null | undefined,
+  options: {
+    abortSignal?: AbortSignal | undefined;
+    timeoutMs?: number | undefined;
+    writeGitignore: boolean;
+  },
+): Promise<void> {
   if (overlay.sources.length === 0) return;
   if (options.abortSignal?.aborted) throw new Error("workspace_skill_sync_canceled");
   const plans = await workspaceSkillSourcePlans(overlay.sources);
@@ -242,7 +302,309 @@ export async function syncWorkspaceSkills(
     });
     return;
   }
-  await syncLocalWorkspaceSkills(workspace, plans, destSegments);
+  await syncLocalWorkspaceSkills(workspace, plans, destSegments, options.writeGitignore);
+}
+
+/**
+ * Download issue attachments into a private staging directory, then replace the workspace's
+ * managed `.lorenz/attachments` tree using the same guarded local/SSH transfer as skill overlays.
+ */
+export async function materializeWorkspaceIssueAttachments(
+  workspace: string,
+  attachments: readonly IssueAttachment[],
+  openAttachment: WorkspaceIssueAttachmentOpener,
+  workerHost: string | null | undefined,
+  options: MaterializeWorkspaceIssueAttachmentsOptions,
+): Promise<MaterializeWorkspaceIssueAttachmentsResult> {
+  validateAttachmentMaterializationOptions(options);
+  throwIfAttachmentMaterializationAborted(options.abortSignal);
+
+  const stagingRoot = await fs.mkdtemp(path.join(os.tmpdir(), "lorenz-issue-attachments-"));
+  const attachmentsRoot = path.join(stagingRoot, "attachments");
+  const materialized: MaterializedWorkspaceIssueAttachment[] = [];
+  const failures: WorkspaceIssueAttachmentFailure[] = [];
+  let materializedBytes = 0;
+  const materializedPaths = new Set<string>();
+
+  try {
+    await fs.mkdir(attachmentsRoot, { mode: 0o700 });
+    await fs.chmod(attachmentsRoot, 0o700);
+
+    for (const [index, attachment] of attachments.entries()) {
+      throwIfAttachmentMaterializationAborted(options.abortSignal);
+
+      if (index >= options.maxFiles) {
+        failures.push({
+          attachment,
+          error: new Error(
+            `workspace_attachment_file_limit_exceeded: ${attachments.length} > ${options.maxFiles}`,
+          ),
+        });
+        continue;
+      }
+
+      let relativePath: string;
+      try {
+        relativePath = issueAttachmentRelativePath(attachment);
+      } catch (error) {
+        failures.push({ attachment, error: attachmentError(error) });
+        continue;
+      }
+
+      if (materializedPaths.has(relativePath)) {
+        failures.push({
+          attachment,
+          error: new Error(`workspace_attachment_path_collision: ${relativePath}`),
+        });
+        continue;
+      }
+      const remainingTotalBytes = options.maxTotalBytes - materializedBytes;
+      const advertisedError = attachmentAdvertisedSizeError(
+        attachment.sizeBytes,
+        attachment,
+        options.maxFileBytes,
+        remainingTotalBytes,
+      );
+      if (advertisedError) {
+        failures.push({ attachment, error: advertisedError });
+        continue;
+      }
+
+      let opened: OpenedIssueAttachment;
+      try {
+        opened = await openAttachment(attachment, {
+          maxBytes: Math.min(options.maxFileBytes, remainingTotalBytes),
+          ...(options.abortSignal ? { abortSignal: options.abortSignal } : {}),
+        });
+      } catch (error) {
+        throwIfAttachmentMaterializationAborted(options.abortSignal);
+        failures.push({ attachment, error: attachmentError(error) });
+        continue;
+      }
+
+      let openedAdvertisedError: Error | null;
+      try {
+        openedAdvertisedError = attachmentAdvertisedSizeError(
+          opened.sizeBytes,
+          attachment,
+          options.maxFileBytes,
+          remainingTotalBytes,
+        );
+      } catch (error) {
+        failures.push({ attachment, error: attachmentError(error) });
+        continue;
+      }
+      if (openedAdvertisedError) {
+        await releaseOpenedAttachment(opened);
+        failures.push({ attachment, error: openedAdvertisedError });
+        continue;
+      }
+
+      const target = attachmentStagingPath(attachmentsRoot, relativePath);
+      let actualSizeBytes: number;
+      try {
+        actualSizeBytes = await writeOpenedAttachment(
+          target,
+          opened,
+          attachment,
+          options.maxFileBytes,
+          remainingTotalBytes,
+        );
+      } catch (error) {
+        throwIfAttachmentMaterializationAborted(options.abortSignal);
+        if (!(error instanceof RecoverableAttachmentError)) throw error;
+        failures.push({ attachment, error: error.attachmentError });
+        continue;
+      }
+
+      materializedBytes += actualSizeBytes;
+      materializedPaths.add(relativePath);
+      materialized.push({ attachment, relativePath, actualSizeBytes });
+    }
+
+    throwIfAttachmentMaterializationAborted(options.abortSignal);
+    await syncWorkspaceDirectories(
+      workspace,
+      { sources: [attachmentsRoot], destDir: ".lorenz" },
+      workerHost,
+      {
+        ...(options.abortSignal ? { abortSignal: options.abortSignal } : {}),
+        ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
+        writeGitignore: false,
+      },
+    );
+    return { materialized, failures };
+  } finally {
+    await fs.rm(stagingRoot, { recursive: true, force: true });
+  }
+}
+
+class RecoverableAttachmentError extends Error {
+  constructor(readonly attachmentError: Error) {
+    super(attachmentError.message, { cause: attachmentError });
+    this.name = "RecoverableAttachmentError";
+  }
+}
+
+function validateAttachmentMaterializationOptions(
+  options: MaterializeWorkspaceIssueAttachmentsOptions,
+): void {
+  for (const [name, value] of Object.entries({
+    maxFiles: options.maxFiles,
+    maxFileBytes: options.maxFileBytes,
+    maxTotalBytes: options.maxTotalBytes,
+  })) {
+    if (!Number.isSafeInteger(value) || value < 0) {
+      throw new Error(`workspace_attachment_limit_invalid: ${name}=${value}`);
+    }
+  }
+}
+
+function throwIfAttachmentMaterializationAborted(signal: AbortSignal | undefined): void {
+  if (signal?.aborted) throw new Error("workspace_attachment_materialization_canceled");
+}
+
+function attachmentError(error: unknown): Error {
+  return error instanceof Error ? error : new Error(errorMessage(error));
+}
+
+function attachmentAdvertisedSizeError(
+  advertisedSize: number | undefined,
+  attachment: IssueAttachment,
+  maxFileBytes: number,
+  remainingTotalBytes: number,
+): Error | null {
+  if (advertisedSize === undefined) return null;
+  if (!Number.isSafeInteger(advertisedSize) || advertisedSize < 0) {
+    return new Error(
+      `workspace_attachment_advertised_size_invalid: ${attachment.id} ${advertisedSize}`,
+    );
+  }
+  if (advertisedSize > maxFileBytes) {
+    return new Error(
+      `workspace_attachment_file_size_limit_exceeded: ${attachment.id} ${advertisedSize} > ${maxFileBytes}`,
+    );
+  }
+  if (advertisedSize > remainingTotalBytes) {
+    return new Error(
+      `workspace_attachment_total_size_limit_exceeded: ${attachment.id} ${advertisedSize} > ${remainingTotalBytes}`,
+    );
+  }
+  return null;
+}
+
+function attachmentStagingPath(attachmentsRoot: string, relativePath: string): string {
+  const attachmentsPrefix = ".lorenz/attachments/";
+  if (!relativePath.startsWith(attachmentsPrefix)) {
+    throw new Error(`workspace_attachment_path_invalid: ${relativePath}`);
+  }
+  const filename = relativePath.slice(attachmentsPrefix.length);
+  if (filename === "" || filename.includes("/") || filename.includes("\\")) {
+    throw new Error(`workspace_attachment_path_invalid: ${relativePath}`);
+  }
+  const target = path.join(attachmentsRoot, filename);
+  ensureInsideRoot(target, attachmentsRoot);
+  return target;
+}
+
+async function releaseOpenedAttachment(opened: OpenedIssueAttachment): Promise<void> {
+  try {
+    const iterator = opened.body[Symbol.asyncIterator]();
+    await iterator.return?.();
+  } catch {
+    // The advertised-size failure remains authoritative.
+  }
+}
+
+async function writeOpenedAttachment(
+  target: string,
+  opened: OpenedIssueAttachment,
+  attachment: IssueAttachment,
+  maxFileBytes: number,
+  remainingTotalBytes: number,
+): Promise<number> {
+  const handle = await fs.open(target, "wx", 0o600);
+  let operationError: Error | undefined;
+  let iterator: AsyncIterator<Uint8Array> | undefined;
+  let iteratorCompleted = false;
+  let actualSizeBytes = 0;
+
+  try {
+    try {
+      iterator = opened.body[Symbol.asyncIterator]();
+    } catch (error) {
+      throw new RecoverableAttachmentError(attachmentError(error));
+    }
+
+    while (true) {
+      let next: IteratorResult<Uint8Array>;
+      try {
+        next = await iterator.next();
+      } catch (error) {
+        throw new RecoverableAttachmentError(attachmentError(error));
+      }
+      if (next.done) {
+        iteratorCompleted = true;
+        break;
+      }
+      if (!(next.value instanceof Uint8Array)) {
+        throw new RecoverableAttachmentError(
+          new Error(`workspace_attachment_chunk_invalid: ${attachment.id}`),
+        );
+      }
+
+      const nextSizeBytes = actualSizeBytes + next.value.byteLength;
+      if (!Number.isSafeInteger(nextSizeBytes) || nextSizeBytes > maxFileBytes) {
+        throw new RecoverableAttachmentError(
+          new Error(
+            `workspace_attachment_file_size_limit_exceeded: ${attachment.id} ${nextSizeBytes} > ${maxFileBytes}`,
+          ),
+        );
+      }
+      if (nextSizeBytes > remainingTotalBytes) {
+        throw new RecoverableAttachmentError(
+          new Error(
+            `workspace_attachment_total_size_limit_exceeded: ${attachment.id} ${nextSizeBytes} > ${remainingTotalBytes}`,
+          ),
+        );
+      }
+
+      await handle.writeFile(next.value);
+      actualSizeBytes = nextSizeBytes;
+    }
+    await handle.chmod(0o600);
+  } catch (error) {
+    operationError = attachmentError(error);
+  }
+
+  if (operationError && iterator && !iteratorCompleted && iterator.return) {
+    try {
+      await iterator.return();
+    } catch {
+      // The primary provider or filesystem error remains authoritative.
+    }
+  }
+
+  let closeError: Error | undefined;
+  try {
+    await handle.close();
+  } catch (error) {
+    closeError = attachmentError(error);
+  }
+
+  if (operationError || closeError) {
+    let removeError: Error | undefined;
+    try {
+      await fs.rm(target, { force: true });
+    } catch (error) {
+      removeError = attachmentError(error);
+    }
+    if (closeError) throw closeError;
+    if (removeError) throw removeError;
+    if (operationError) throw operationError;
+  }
+
+  return actualSizeBytes;
 }
 
 /** Split a destination path (e.g. `.lorenz/skills`) into safe path segments. */
@@ -675,6 +1037,7 @@ async function syncLocalWorkspaceSkills(
   workspace: string,
   plans: WorkspaceSkillSourcePlan[],
   destSegments: string[],
+  writeGitignore: boolean,
 ): Promise<void> {
   const skillsRoot = path.join(workspace, ...destSegments);
   await ensureDirectoryPathWithoutSymlinks(workspace, skillsRoot);
@@ -689,8 +1052,10 @@ async function syncLocalWorkspaceSkills(
       recursive: true,
     });
   }
-  const gitignorePath = path.join(skillsRoot, ".gitignore");
-  await fs.writeFile(gitignorePath, "*\n");
+  if (writeGitignore) {
+    const gitignorePath = path.join(skillsRoot, ".gitignore");
+    await fs.writeFile(gitignorePath, "*\n");
+  }
 }
 
 async function syncRemoteWorkspaceSkills(

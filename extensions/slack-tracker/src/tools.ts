@@ -1,3 +1,6 @@
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
 import { errorMessage, isRecord, type Settings } from "@lorenz/domain";
 import {
   applyQuery,
@@ -18,12 +21,18 @@ import { requireBotUserId, requireTrackedMessage, updateSlackStatus } from "./op
 import { slackTrackerOptions } from "./options.js";
 import { resolveThreadState, stateFromObservedThread } from "./threadState.js";
 import { slackRuntimeKey, slackRuntimeTransport } from "./toolTransport.js";
-import { isBotMarked, type SlackTransport } from "./transport.js";
+import {
+  isBotMarked,
+  type SlackFileUploadCompletion,
+  type SlackFileUploadRequest,
+  type SlackTransport,
+} from "./transport.js";
 import { SlackWebTransport } from "./webTransport.js";
 import { upsertWorkpad } from "./workpad.js";
 
 const TOOL_NAMES = [
   "slack_update_status",
+  "slack_prepare_file_upload",
   "slack_comment",
   "slack_workpad",
   "slack_read_thread",
@@ -39,8 +48,32 @@ const SLACK_EXPAND_FIELDS = new Set(["thread", "reactions"]);
 /** Bounds for the `slack_channel_context` window. */
 const CONTEXT_DEFAULT = 10;
 const CONTEXT_MAX = 50;
+const OUTBOUND_UPLOAD_MAX_FILES = 10;
+const OUTBOUND_UPLOAD_MAX_FILE_BYTES = 25 * 1024 * 1024;
+const OUTBOUND_UPLOAD_MAX_TOTAL_BYTES = 100 * 1024 * 1024;
+const OUTBOUND_UPLOAD_TICKET_TTL_MS = 15 * 60_000;
+const OUTBOUND_UPLOAD_MAX_PENDING_PER_RUNTIME = 256;
 /** Per-runtime queues protecting each workpad's read-modify-write operation. */
 const workpadQueues = new Map<string, Map<string, Promise<void>>>();
+/** Short-lived Slack file ids issued by prepare, bound to one runtime and tracked issue. */
+const pendingUploadsByRuntime = new Map<string, Map<string, PendingSlackFileUpload>>();
+
+interface PendingSlackFileUpload {
+  fileId: string;
+  issueId: string;
+  filename: string;
+  length: number;
+  title?: string | undefined;
+  expiresAt: number;
+}
+
+/** Bundled worker guidance, resolved from both `src` and compiled `dist`. */
+const lorenzSlackSkillDir = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "..",
+  "skills",
+  "lorenz-slack",
+);
 
 export function slackToolSpecs(): ToolSpec[] {
   return [
@@ -57,13 +90,43 @@ export function slackToolSpecs(): ToolSpec[] {
       },
     },
     {
+      name: "slack_prepare_file_upload",
+      description:
+        "Prepare a local file for a Slack issue reply. Returns a signed uploadUrl and fileId. " +
+        "POST exactly length bytes to that URL without an Authorization header or redirects, " +
+        "then pass fileId in slack_comment.fileIds. Args: issueId, filename, length, title?, " +
+        "altText?, snippetType?.",
+      inputSchema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          issueId: { type: "string" },
+          filename: { type: "string" },
+          length: { type: "number" },
+          title: { type: "string" },
+          altText: { type: "string" },
+          snippetType: { type: "string" },
+        },
+        required: ["issueId", "filename", "length"],
+      },
+    },
+    {
       name: "slack_comment",
       description:
         "Reply in the Slack issue's thread. Use for milestone updates and findings that " +
-        "SHOULD notify the thread (replies notify; workpad edits do not). Args: issueId, body.",
+        "SHOULD notify the thread (replies notify; workpad edits do not). To attach prepared " +
+        "files, pass their single-use ids in fileIds. Args: issueId, body, fileIds?.",
       inputSchema: {
         type: "object",
-        properties: { issueId: { type: "string" }, body: { type: "string" } },
+        properties: {
+          issueId: { type: "string" },
+          body: { type: "string" },
+          fileIds: {
+            type: "array",
+            maxItems: OUTBOUND_UPLOAD_MAX_FILES,
+            items: { type: "string" },
+          },
+        },
         required: ["issueId", "body"],
       },
     },
@@ -104,7 +167,7 @@ export function slackToolSpecs(): ToolSpec[] {
         "Query tracked Slack issues (read-only): bot-mention roots plus bot-marked " +
         "reply-tracked threads in the configured channels, with thread-derived state. Filter " +
         "with a JSON predicate DSL, project fields, order, and page. Row fields: issueId, " +
-        "channel, ts, title, state, stateType, labels, text, url. Use expand for 'thread' " +
+        "channel, ts, title, state, stateType, labels, text, files, url. Use expand for 'thread' " +
         "(replies) and 'reactions'. Args: channels? (intersected with the allow-list), where?, " +
         "select?, expand?, order_by?, limit?, offset?.",
       inputSchema: {
@@ -184,11 +247,54 @@ export async function executeSlackTool(
         if (outcome.ok) return toolSuccess({ ok: true, status: outcome.status });
         return toolFailure(outcome.message);
       }
+      case "slack_prepare_file_upload": {
+        // Allocate upload URLs only for watched, tracked threads; otherwise this could become a
+        // generic file-hosting capability over the configured Slack workspace.
+        await requireTrackedMessage(settings, transport, channel, ts);
+        const issueId = `${channel}:${ts}`;
+        const request = outboundUploadRequest(args);
+        assertPendingUploadCapacity(settings, issueId, request.length);
+        const uploadRequest: SlackFileUploadRequest = {
+          filename: request.filename,
+          length: request.length,
+          ...(request.altText !== undefined ? { altText: request.altText } : {}),
+          ...(request.snippetType !== undefined ? { snippetType: request.snippetType } : {}),
+        };
+        const prepared = await transport.prepareFileUpload(uploadRequest);
+        const pending = registerPendingUpload(settings, issueId, prepared.fileId, request);
+        return toolSuccess({
+          ok: true,
+          fileId: pending.fileId,
+          uploadUrl: prepared.uploadUrl,
+          expiresAt: new Date(pending.expiresAt).toISOString(),
+          upload: {
+            method: "POST",
+            headers: { "Content-Type": "application/octet-stream" },
+            followRedirects: false,
+          },
+        });
+      }
       case "slack_comment": {
         // Same trust-boundary check as update_status: only reply on a watched, tracked issue.
         await requireTrackedMessage(settings, transport, channel, ts);
-        await transport.postReply(channel, ts, requireStr(args, "body"));
-        return toolSuccess({ ok: true });
+        const body = requireStr(args, "body");
+        const fileIds = outboundUploadFileIds(args.fileIds);
+        if (fileIds.length === 0) {
+          await transport.postReply(channel, ts, body);
+          return toolSuccess({ ok: true });
+        }
+        // Consume before the single-use completion request. A network/5xx outcome may have
+        // completed in Slack, so restoring the ids would authorize an unsafe second attempt.
+        const files = consumePendingUploads(settings, `${channel}:${ts}`, fileIds);
+        try {
+          const completed = await transport.completeFileUploads(channel, ts, body, files);
+          return toolSuccess({ ok: true, files: completed });
+        } catch (error) {
+          throw new Error(
+            `${errorMessage(error)}; upload file ids were consumed - prepare new uploads before retrying`,
+            { cause: error },
+          );
+        }
       }
       case "slack_workpad": {
         const issueId = `${channel}:${ts}`;
@@ -228,6 +334,7 @@ export async function executeSlackTool(
           // trail an agent needs to distinguish "human cancelled" from "I finished".
           statusEvents: thread.events,
           text: root.text,
+          ...(root.files && root.files.length > 0 ? { files: root.files } : {}),
           ...(thread.request !== undefined ? { request: thread.request } : {}),
           ...(thread.workpad !== undefined ? { workpad: thread.workpad } : {}),
           reactions: root.reactions,
@@ -248,6 +355,7 @@ export async function executeSlackTool(
             ts: m.ts,
             ...(m.user !== undefined ? { user: m.user } : {}),
             text: m.text,
+            ...(m.files && m.files.length > 0 ? { files: m.files } : {}),
           })),
         });
       }
@@ -257,6 +365,175 @@ export async function executeSlackTool(
   } catch (error) {
     return toolFailure(errorMessage(error));
   }
+}
+
+interface OutboundUploadRequest extends SlackFileUploadRequest {
+  title?: string | undefined;
+}
+
+function containsAsciiControl(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code <= 0x1f || code === 0x7f) return true;
+  }
+  return false;
+}
+
+function outboundUploadRequest(args: Record<string, unknown>): OutboundUploadRequest {
+  const filename = requireStr(args, "filename").trim();
+  if (
+    filename.length > 255 ||
+    filename === "." ||
+    filename === ".." ||
+    filename.includes("/") ||
+    filename.includes("\\") ||
+    containsAsciiControl(filename)
+  ) {
+    throw new Error("'filename' must be a safe basename of at most 255 characters");
+  }
+  const length = args.length;
+  if (
+    typeof length !== "number" ||
+    !Number.isSafeInteger(length) ||
+    length <= 0 ||
+    length > OUTBOUND_UPLOAD_MAX_FILE_BYTES
+  ) {
+    throw new Error(
+      `'length' must be a positive integer no greater than ${OUTBOUND_UPLOAD_MAX_FILE_BYTES}`,
+    );
+  }
+  const title = optionalBoundedString(args, "title", 255);
+  const altText = optionalBoundedString(args, "altText", 1_000);
+  const snippetType = optionalBoundedString(args, "snippetType", 100);
+  return {
+    filename,
+    length,
+    ...(title !== undefined ? { title } : {}),
+    ...(altText !== undefined ? { altText } : {}),
+    ...(snippetType !== undefined ? { snippetType } : {}),
+  };
+}
+
+function optionalBoundedString(
+  args: Record<string, unknown>,
+  key: string,
+  maxLength: number,
+): string | undefined {
+  const value = args[key];
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== "string" || value.trim() === "" || value.length > maxLength) {
+    throw new Error(`'${key}' must be a non-empty string of at most ${maxLength} characters`);
+  }
+  return value.trim();
+}
+
+function outboundUploadFileIds(input: unknown): string[] {
+  if (input === undefined || input === null) return [];
+  if (!Array.isArray(input)) throw new Error("'fileIds' must be an array of strings");
+  if (input.length > OUTBOUND_UPLOAD_MAX_FILES) {
+    throw new Error(`'fileIds' may contain at most ${OUTBOUND_UPLOAD_MAX_FILES} items`);
+  }
+  const fileIds: string[] = [];
+  for (const item of input) {
+    if (typeof item !== "string" || item.trim() === "") {
+      throw new Error("'fileIds' must be an array of non-empty strings");
+    }
+    const fileId = item.trim();
+    if (fileIds.includes(fileId)) throw new Error(`duplicate Slack upload file id: ${fileId}`);
+    fileIds.push(fileId);
+  }
+  return fileIds;
+}
+
+function assertPendingUploadCapacity(settings: Settings, issueId: string, length: number): void {
+  const runtimeKey = slackRuntimeKey(settings);
+  const pending = activePendingUploads(runtimeKey);
+  if (pending.size >= OUTBOUND_UPLOAD_MAX_PENDING_PER_RUNTIME) {
+    throw new Error(
+      `Slack upload ticket capacity reached (${OUTBOUND_UPLOAD_MAX_PENDING_PER_RUNTIME})`,
+    );
+  }
+  const issueUploads = [...pending.values()].filter((upload) => upload.issueId === issueId);
+  if (issueUploads.length >= OUTBOUND_UPLOAD_MAX_FILES) {
+    throw new Error(`Slack issue may have at most ${OUTBOUND_UPLOAD_MAX_FILES} pending uploads`);
+  }
+  const pendingBytes = issueUploads.reduce((total, upload) => total + upload.length, 0);
+  if (pendingBytes + length > OUTBOUND_UPLOAD_MAX_TOTAL_BYTES) {
+    throw new Error(
+      `Slack issue pending uploads exceed ${OUTBOUND_UPLOAD_MAX_TOTAL_BYTES} total bytes`,
+    );
+  }
+}
+
+function registerPendingUpload(
+  settings: Settings,
+  issueId: string,
+  rawFileId: string,
+  request: OutboundUploadRequest,
+): PendingSlackFileUpload {
+  const fileId = rawFileId.trim();
+  if (fileId === "" || containsAsciiControl(fileId)) {
+    throw new Error("Slack returned an invalid upload file id");
+  }
+  assertPendingUploadCapacity(settings, issueId, request.length);
+  const runtimeKey = slackRuntimeKey(settings);
+  let pending = pendingUploadsByRuntime.get(runtimeKey);
+  if (pending === undefined) {
+    pending = new Map();
+    pendingUploadsByRuntime.set(runtimeKey, pending);
+  }
+  if (pending.has(fileId)) throw new Error(`Slack returned a duplicate upload file id: ${fileId}`);
+  const upload: PendingSlackFileUpload = {
+    fileId,
+    issueId,
+    filename: request.filename,
+    length: request.length,
+    ...(request.title !== undefined ? { title: request.title } : {}),
+    expiresAt: Date.now() + OUTBOUND_UPLOAD_TICKET_TTL_MS,
+  };
+  pending.set(fileId, upload);
+  return upload;
+}
+
+function consumePendingUploads(
+  settings: Settings,
+  issueId: string,
+  fileIds: readonly string[],
+): SlackFileUploadCompletion[] {
+  const runtimeKey = slackRuntimeKey(settings);
+  const pending = activePendingUploads(runtimeKey);
+  const uploads = fileIds.map((fileId) => {
+    const upload = pending.get(fileId);
+    if (upload === undefined) {
+      throw new Error(`Slack upload file id is unknown or expired: ${fileId}`);
+    }
+    if (upload.issueId !== issueId) {
+      throw new Error(`Slack upload file id ${fileId} belongs to a different issue`);
+    }
+    return upload;
+  });
+  // Delete only after every id has been validated, then do so synchronously before the caller's
+  // first await. Concurrent completions therefore cannot both acquire the same single-use ids.
+  for (const upload of uploads) pending.delete(upload.fileId);
+  if (pending.size === 0) pendingUploadsByRuntime.delete(runtimeKey);
+  return uploads.map((upload) => ({
+    fileId: upload.fileId,
+    ...(upload.title !== undefined ? { title: upload.title } : {}),
+  }));
+}
+
+function activePendingUploads(runtimeKey: string): Map<string, PendingSlackFileUpload> {
+  const pending = pendingUploadsByRuntime.get(runtimeKey);
+  if (pending === undefined) return new Map();
+  const now = Date.now();
+  for (const [fileId, upload] of pending) {
+    if (upload.expiresAt <= now) pending.delete(fileId);
+  }
+  if (pending.size === 0) {
+    pendingUploadsByRuntime.delete(runtimeKey);
+    return new Map();
+  }
+  return pending;
 }
 
 async function serializeWorkpadUpdate<T>(
@@ -292,6 +569,7 @@ async function serializeWorkpadUpdate<T>(
 /** The Slack tool pack: status, threaded comments, reads, and scoped channel context. */
 export const slackToolProvider: ToolProvider = {
   name: "slack",
+  skills: [lorenzSlackSkillDir],
   toolSpecs: () => slackToolSpecs(),
   executeTool: async (name, input, context) =>
     executeSlackTool(
@@ -339,6 +617,7 @@ async function executeSlackQuery(
         permalinkBase: base,
         state: thread.state,
         request: thread.request,
+        files: thread.attachments,
       }) as unknown as Record<string, unknown>,
     );
   }

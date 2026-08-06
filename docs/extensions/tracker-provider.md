@@ -168,8 +168,9 @@ Each built-in tracker owns its own pack:
   single `linear_graphql` tool and bundles the `lorenz-linear` skill.
 - The `local` tracker mounts its `local` pack: `local_update_status`, `local_comment`,
   `local_create_issue`, `local_read_issue`, and `local_query`.
-- The `slack` tracker mounts its `slack` pack: `slack_update_status`, `slack_comment`,
-  `slack_read_thread`, `slack_query`, `slack_user_info`, and `slack_channel_context`.
+- The `slack` tracker mounts its `slack` pack: `slack_update_status`,
+  `slack_prepare_file_upload`, `slack_comment`, `slack_workpad`, `slack_read_thread`,
+  `slack_query`, `slack_user_info`, and `slack_channel_context`; it bundles `lorenz-slack`.
 - The `discord` tracker mounts its `discord` pack: `discord_update_status`, `discord_comment`,
   `discord_read_thread`, `discord_query`, `discord_user_info`, and `discord_channel_context`.
 - The `memory` tracker declares no `defaultToolPacks`, so it advertises no tools.

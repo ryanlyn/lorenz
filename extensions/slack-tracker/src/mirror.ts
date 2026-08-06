@@ -6,6 +6,7 @@ import { slackTrackerOptions } from "./options.js";
 import { parseStatusCommand } from "./threadState.js";
 import type {
   SlackChannelScan,
+  SlackFile,
   SlackMessage,
   SlackMessageMetadata,
   SlackPostOptions,
@@ -15,7 +16,7 @@ import type {
   SlackTransport,
   SlackUser,
 } from "./transport.js";
-import { toMessageMetadata, type SlackTrackerLogger } from "./webTransport.js";
+import { toMessageMetadata, toSlackFiles, type SlackTrackerLogger } from "./webTransport.js";
 
 /**
  * Event-primary discovery: a transport wrapper that serves `scanChannels`/`getThread` from a
@@ -60,6 +61,7 @@ interface MirrorReply {
   metadata?: SlackMessageMetadata | undefined;
   /** Tombstone: deleted after observation. Keeps its folded role until the next real scan. */
   deleted: boolean;
+  files?: SlackFile[] | undefined;
 }
 
 interface MirrorRoot {
@@ -75,6 +77,7 @@ interface MirrorRoot {
    */
   replyCountHint: number;
   latestReplyHint?: string | undefined;
+  files?: SlackFile[] | undefined;
 }
 
 interface ChannelState {
@@ -347,6 +350,12 @@ export class MirrorBackedSlackTransport implements SlackTransport {
     return this.inner.getUser(userId);
   }
 
+  async openFile(
+    ...args: Parameters<SlackTransport["openFile"]>
+  ): ReturnType<SlackTransport["openFile"]> {
+    return this.inner.openFile(...args);
+  }
+
   async listAround(
     channel: string,
     ts: string,
@@ -389,6 +398,32 @@ export class MirrorBackedSlackTransport implements SlackTransport {
       apply();
     };
     await this.enqueueMutation(mutation);
+  }
+
+  async prepareFileUpload(
+    ...args: Parameters<SlackTransport["prepareFileUpload"]>
+  ): ReturnType<SlackTransport["prepareFileUpload"]> {
+    return this.inner.prepareFileUpload(...args);
+  }
+
+  async completeFileUploads(
+    ...args: Parameters<SlackTransport["completeFileUploads"]>
+  ): ReturnType<SlackTransport["completeFileUploads"]> {
+    const [channel, threadTs] = args;
+    const files = await this.inner.completeFileUploads(...args);
+    // The completion response does not promise the file-share reply ts, so it cannot be safely
+    // self-applied like chat.postMessage. Invalidate only the affected thread; a full channel
+    // history refresh is unnecessary, and the next thread read reconciles it from Slack (or a
+    // socket echo wins first).
+    await this.enqueueMutation(() => {
+      const invalidate = (): void => {
+        const state = this.channelState(channel);
+        state.authoritativeThreads.delete(threadTs);
+      };
+      this.recordSnapshotMutation(channel, invalidate);
+      invalidate();
+    });
+    return files;
   }
 
   async postReply(
@@ -606,7 +641,8 @@ export class MirrorBackedSlackTransport implements SlackTransport {
     state.roots = new Map();
     for (const message of [...scan.mentions, ...scan.threadedRoots]) {
       seen.add(message.ts);
-      this.storeRoot(state, message, true);
+      const files = enrichSlackFiles(previousRoots.get(message.ts)?.files, message.files ?? []);
+      this.storeRoot(state, files.length > 0 ? { ...message, files } : message, true);
       const thread = state.threads.get(message.ts);
       if (thread) {
         for (const [ts, reply] of [...thread]) {
@@ -645,6 +681,9 @@ export class MirrorBackedSlackTransport implements SlackTransport {
       botReactions: [...message.botReactions],
       replyCountHint: message.replyCount ?? 0,
       latestReplyHint: message.latestReply,
+      ...(message.files && message.files.length > 0
+        ? { files: message.files.map((file) => ({ ...file })) }
+        : {}),
     });
   }
 
@@ -677,6 +716,9 @@ export class MirrorBackedSlackTransport implements SlackTransport {
       ...(root.user !== undefined ? { user: root.user } : {}),
       ...(replyCount > 0 ? { replyCount } : {}),
       ...(latestReply !== undefined ? { latestReply } : {}),
+      ...(root.files && root.files.length > 0
+        ? { files: root.files.map((file) => ({ ...file })) }
+        : {}),
     };
   }
 
@@ -686,6 +728,7 @@ export class MirrorBackedSlackTransport implements SlackTransport {
     const thread = new Map<string, MirrorReply>();
     for (const reply of replies) {
       const existing = previous?.get(reply.ts);
+      const files = enrichSlackFiles(existing?.files, reply.files ?? []);
       thread.set(reply.ts, {
         ts: reply.ts,
         text: reply.text,
@@ -698,6 +741,7 @@ export class MirrorBackedSlackTransport implements SlackTransport {
         user: reply.user,
         metadata: reply.metadata,
         deleted: false,
+        ...(files.length > 0 ? { files } : {}),
       });
       state.replyIndex.set(reply.ts, rootTs);
     }
@@ -722,11 +766,13 @@ export class MirrorBackedSlackTransport implements SlackTransport {
   ): SlackThreadReply {
     const stored = this.channels.get(channel)?.threads.get(rootTs)?.get(reply.ts);
     if (!stored) return reply;
+    const files = enrichSlackFiles(stored.files, reply.files ?? []);
     return {
       ...reply,
       ...(stored.firstSeenText !== reply.text ? { firstSeenText: stored.firstSeenText } : {}),
       ...(stored.edited ? { edited: true } : {}),
       ...(stored.deleted ? { deleted: true } : {}),
+      ...(files.length > 0 ? { files } : {}),
     };
   }
 
@@ -771,6 +817,7 @@ export class MirrorBackedSlackTransport implements SlackTransport {
     const text = typeof event.text === "string" ? event.text : "";
     const user = typeof event.user === "string" ? event.user : undefined;
     const metadata = toMessageMetadata(isRecord(event.metadata) ? event.metadata : undefined);
+    const files = toSlackFiles(event.files, event.x_files);
     const threadTs = typeof event.thread_ts === "string" ? event.thread_ts : undefined;
     if (threadTs !== undefined && threadTs !== ts) {
       await this.applyReplyUpsert(channel, threadTs, {
@@ -783,15 +830,21 @@ export class MirrorBackedSlackTransport implements SlackTransport {
           typeof event.bot_id === "string" ||
           subtype === "bot_message" ||
           (user !== undefined && user === this.botUserId),
+        ...(files.length > 0 ? { files } : {}),
       });
     } else {
-      this.applyRootUpsert(channel, { ts, text, user });
+      this.applyRootUpsert(channel, { ts, text, user, ...(files.length > 0 ? { files } : {}) });
     }
   }
 
   private applyRootUpsert(
     channel: string,
-    message: { ts: string; text: string; user?: string | undefined },
+    message: {
+      ts: string;
+      text: string;
+      user?: string | undefined;
+      files?: SlackFile[] | undefined;
+    },
   ): void {
     const state = this.channelState(channel);
     if (state.rootCreateBarriers.has(message.ts)) return;
@@ -800,6 +853,9 @@ export class MirrorBackedSlackTransport implements SlackTransport {
       // Root text changes arrive as `message_changed`. A plain message/app_mention event for an
       // existing timestamp is a duplicate create and must not overwrite a later edit.
       if (message.user !== undefined) existing.user = message.user;
+      if (message.files && message.files.length > 0) {
+        existing.files = mergeSlackFiles(existing.files, message.files);
+      }
       return;
     }
     state.roots.set(message.ts, {
@@ -809,6 +865,9 @@ export class MirrorBackedSlackTransport implements SlackTransport {
       reactions: [],
       botReactions: [],
       replyCountHint: 0,
+      ...(message.files && message.files.length > 0
+        ? { files: message.files.map((file) => ({ ...file })) }
+        : {}),
     });
   }
 
@@ -822,6 +881,7 @@ export class MirrorBackedSlackTransport implements SlackTransport {
       metadata?: SlackMessageMetadata | undefined;
       subtype?: string | undefined;
       isBot?: boolean | undefined;
+      files?: SlackFile[] | undefined;
     },
   ): Promise<void> {
     const state = this.channelState(channel);
@@ -849,6 +909,9 @@ export class MirrorBackedSlackTransport implements SlackTransport {
         botReactions: [...root.botReactions],
         replyCountHint: root.replyCount ?? 0,
         latestReplyHint: root.latestReply,
+        ...(root.files && root.files.length > 0
+          ? { files: root.files.map((file) => ({ ...file })) }
+          : {}),
       });
     }
     let thread = state.threads.get(rootTs);
@@ -867,6 +930,9 @@ export class MirrorBackedSlackTransport implements SlackTransport {
       // Duplicate delivery (app_mention + message, redelivered envelope): first one won.
       if (existing.metadata === undefined && reply.metadata !== undefined) {
         existing.metadata = reply.metadata;
+      }
+      if (reply.files && reply.files.length > 0) {
+        existing.files = mergeSlackFiles(existing.files, reply.files);
       }
       // Snapshot replay can restore older root hints while preserving the event-built thread.
       // Recompute those hints even for a duplicate so the thread cache key still advances.
@@ -897,6 +963,9 @@ export class MirrorBackedSlackTransport implements SlackTransport {
       user: reply.user,
       metadata: reply.metadata,
       deleted: false,
+      ...(reply.files && reply.files.length > 0
+        ? { files: reply.files.map((file) => ({ ...file })) }
+        : {}),
     });
     state.replyIndex.set(reply.ts, rootTs);
     const root = state.roots.get(rootTs);
@@ -917,6 +986,8 @@ export class MirrorBackedSlackTransport implements SlackTransport {
     if (!isRecord(edited) || typeof edited.ts !== "string") return;
     const ts = edited.ts;
     const newText = typeof edited.text === "string" ? edited.text : "";
+    const hasFilePayload = Array.isArray(edited.files) || Array.isArray(edited.x_files);
+    const newFiles = toSlackFiles(edited.files, edited.x_files);
     const state = this.channelState(channel);
     const root = state.roots.get(ts);
     if (root) {
@@ -924,6 +995,7 @@ export class MirrorBackedSlackTransport implements SlackTransport {
       // the next fold, exactly as a re-scan would observe it (the documented contract).
       rememberBounded(state.rootCreateBarriers, ts, ROOT_CREATE_BARRIERS_MAX);
       root.text = newText;
+      if (hasFilePayload) root.files = newFiles;
       return;
     }
     const rootTs = state.replyIndex.get(ts);
@@ -957,6 +1029,7 @@ export class MirrorBackedSlackTransport implements SlackTransport {
     const previous = reply.text;
     reply.text = newText;
     reply.edited = true;
+    if (hasFilePayload) reply.files = newFiles;
     const metadata = toMessageMetadata(isRecord(edited.metadata) ? edited.metadata : undefined);
     if (metadata !== undefined) reply.metadata = metadata;
     if (reply.firstSeenText === newText || previous === newText) return;
@@ -1066,6 +1139,7 @@ function toThreadReply(reply: MirrorReply): SlackThreadReply {
   if (reply.metadata !== undefined) out.metadata = reply.metadata;
   if (reply.firstSeenText !== reply.text) out.firstSeenText = reply.firstSeenText;
   if (reply.deleted) out.deleted = true;
+  if (reply.files && reply.files.length > 0) out.files = reply.files.map((file) => ({ ...file }));
   return out;
 }
 
@@ -1075,6 +1149,21 @@ function latestTsOf(thread: Map<string, MirrorReply>): string | undefined {
     if (latest === undefined || compareSlackTs(reply.ts, latest) > 0) latest = reply.ts;
   }
   return latest;
+}
+
+function mergeSlackFiles(existing: SlackFile[] | undefined, incoming: SlackFile[]): SlackFile[] {
+  const merged = new Map<string, SlackFile>();
+  for (const file of existing ?? []) merged.set(file.id, { ...file });
+  for (const file of incoming) {
+    merged.set(file.id, { ...merged.get(file.id), ...file });
+  }
+  return [...merged.values()];
+}
+
+/** Enrich an authoritative incoming file list without retaining ids it no longer contains. */
+function enrichSlackFiles(existing: SlackFile[] | undefined, incoming: SlackFile[]): SlackFile[] {
+  const existingById = new Map((existing ?? []).map((file) => [file.id, file]));
+  return incoming.map((file) => ({ ...existingById.get(file.id), ...file }));
 }
 
 function rememberBounded(values: Set<string>, value: string, max: number): void {

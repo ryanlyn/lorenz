@@ -110,6 +110,10 @@ const MIN_REGISTERED_SECRET_LENGTH = 3;
 const OP_REFERENCE_PATTERN = /op:\/\/[^\s"'`),\]}]+/g;
 const BEARER_AUTH_PATTERN = /\bBearer\s+[A-Za-z0-9._~+/=%-]+/gi;
 const BASIC_AUTH_PATTERN = /\bBasic\s+[A-Za-z0-9._~+/=%-]+/gi;
+// Slack external-upload URLs are short-lived bearer capabilities. They appear as ordinary URLs,
+// not Authorization headers, so scrub the whole capability wherever agent tool output is traced.
+// Match the stable signed-upload path rather than a token shape that Slack may change.
+const SIGNED_UPLOAD_URL_PATTERN = /\bhttps:\/\/[^\s"'`),\]}]+\/upload\/v1\/[^\s"'`),\]}]+/gi;
 // The scheme length is BOUNDED: with an unbounded `[A-Za-z0-9+.-]*` the scan is
 // quadratic on long unbroken tokens (hex dumps, ids) - the greedy run consumes
 // the whole token at every start position before failing to find `://` - and
@@ -146,6 +150,7 @@ export function redactDiagnosticText(value: string): string {
     redacted
       .replace(BEARER_AUTH_PATTERN, `Bearer ${DIAGNOSTIC_REDACTION}`)
       .replace(BASIC_AUTH_PATTERN, `Basic ${DIAGNOSTIC_REDACTION}`)
+      .replace(SIGNED_UPLOAD_URL_PATTERN, DIAGNOSTIC_REDACTION)
       .replace(URL_AUTH_PATTERN, `$1${DIAGNOSTIC_REDACTION}@`)
       // The value group stops before the closing quote, so that quote survives in
       // the output and must not be re-emitted here.
@@ -255,6 +260,62 @@ export interface IssueRef {
 }
 
 /**
+ * Serializable metadata for a file attached to a tracker issue. Private download URLs and
+ * credentials deliberately do not belong here: providers expose bytes through
+ * {@link RuntimeTrackerClient.openIssueAttachment} only while a workspace is being prepared.
+ */
+export interface IssueAttachment {
+  /** Tracker-native stable file id. */
+  id: string;
+  /** Human-facing filename (not trusted as a filesystem path). */
+  name: string;
+  /** Provider-reported media type; advisory only. */
+  mediaType?: string | undefined;
+  /** Provider-reported byte size; actual streamed bytes are bounded independently. */
+  sizeBytes?: number | undefined;
+}
+
+/** Bounds and cancellation for opening one issue attachment. */
+export interface OpenIssueAttachmentOptions {
+  maxBytes: number;
+  abortSignal?: AbortSignal | undefined;
+}
+
+/** A provider-owned attachment stream. The caller must still enforce the actual byte limit. */
+export interface OpenedIssueAttachment {
+  body: AsyncIterable<Uint8Array>;
+  /** Resolved media type, when more precise than the issue snapshot. */
+  mediaType?: string | undefined;
+  /** Resolved advertised size, when available. */
+  sizeBytes?: number | undefined;
+}
+
+const ISSUE_ATTACHMENTS_DIR = ".lorenz/attachments";
+
+/**
+ * Deterministic workspace-relative path for an attachment. Both providers and the workspace
+ * materializer use this helper, so prompt-visible paths cannot drift from the written file.
+ */
+export function issueAttachmentRelativePath(
+  attachment: Pick<IssueAttachment, "id" | "name">,
+): string {
+  const id = safeAttachmentPathComponent(attachment.id, "file", 80);
+  const name = safeAttachmentPathComponent(attachment.name, "attachment", 140);
+  return `${ISSUE_ATTACHMENTS_DIR}/${id}-${name}`;
+}
+
+function safeAttachmentPathComponent(value: string, fallback: string, maxLength: number): string {
+  const safe = value
+    .normalize("NFKC")
+    .replace(/[^A-Za-z0-9_.-]+/g, "_")
+    .replace(/^\.+/, "")
+    .replace(/_+/g, "_")
+    .slice(0, maxLength)
+    .replace(/[._-]+$/, "");
+  return safe || fallback;
+}
+
+/**
  * Normalized view of a tracker issue with everything needed to dispatch, prompt, and route it.
  * Produced from raw tracker payloads; the source object is preserved on `raw`.
  */
@@ -265,6 +326,8 @@ export interface Issue {
   identifier: string;
   title: string;
   description?: string | null | undefined;
+  /** Serializable attachment metadata; file bytes are materialized separately per run. */
+  attachments?: IssueAttachment[] | undefined;
   /** Display name of the workflow state (e.g. `"In Progress"`). Used as a lookup key for per-state setting overrides. */
   state: string;
   /** Category bucket from the tracker: `"unstarted" | "started" | "completed" | "canceled" | "backlog" | "triage"`. All trackers must provide this. */
@@ -856,6 +919,16 @@ export interface RuntimeTrackerClient {
    * cannot answer state queries cheaply may omit it and the caller will skip those flows.
    */
   fetchIssuesByStates?(states: string[]): Promise<Issue[]>;
+  /**
+   * Open one issue attachment as an authenticated provider-owned byte stream. The runtime binds
+   * this method to the client retained by the run, and the worker receives only materialized
+   * workspace files - never tracker credentials or private URLs.
+   */
+  openIssueAttachment?(
+    issueId: string,
+    attachmentId: string,
+    options: OpenIssueAttachmentOptions,
+  ): Promise<OpenedIssueAttachment>;
   /**
    * Optional best-effort dispatch acknowledgement. The runtime starts this after it owns the
    * issue claim and lets it run alongside agent setup, so a tracker can provide immediate

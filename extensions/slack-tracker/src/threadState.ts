@@ -15,7 +15,7 @@ import {
   TRACKING_METADATA_EVENT,
   WORKPAD_METADATA_EVENT,
 } from "./transport.js";
-import type { SlackMessage, SlackThreadReply, SlackTransport } from "./transport.js";
+import type { SlackFile, SlackMessage, SlackThreadReply, SlackTransport } from "./transport.js";
 
 /**
  * Thread-command state model. Slack reactions are per-author (the bot cannot remove a human's
@@ -146,13 +146,22 @@ export interface ThreadStatusEvent {
 export interface ThreadState {
   state: string;
   /** First bot-mention reply when the ROOT does not mention the bot (the actual request). */
-  request?: { ts: string; text: string; user?: string | undefined } | undefined;
+  request?:
+    | {
+        ts: string;
+        text: string;
+        user?: string | undefined;
+        files?: SlackFile[] | undefined;
+      }
+    | undefined;
   /** Durable origin recorded by the bot after accepting a root or reply request. */
   tracking?: ThreadTracking | undefined;
   /** The folded status transitions in ts order (the audit trail the session modal renders). */
   events: ThreadStatusEvent[];
   /** The bot's workpad message in this thread, when one exists (see workpad.ts). */
   workpad?: ThreadWorkpad | undefined;
+  /** Files carried by authorized, steering-eligible human replies in this thread. */
+  attachments?: SlackFile[] | undefined;
 }
 
 /** The workpad reply's identity and its metadata-carried sections (the plan/note round-trip). */
@@ -190,6 +199,7 @@ export function stateFromThread(
   const events: ThreadStatusEvent[] = [];
   let request: ThreadState["request"];
   let workpad: ThreadWorkpad | undefined;
+  const attachments = new Map<string, { file: SlackFile; ts: string }>();
 
   for (const reply of ordered) {
     // FIRST-SEEN text classifies a reply when the mirror recorded one: an edit must not
@@ -245,6 +255,26 @@ export function stateFromThread(
     // Asides opt out of the fold entirely: not a command, and - crucially - not a bare mention,
     // so `@bot !aside fyi...` on a Done issue does not re-open it.
     if (isAsideText(classificationText, botUserId)) continue;
+    const command = parseStatusCommand(classificationText, botUserId, settings);
+    const attachmentBearingSteeringReply =
+      reply.user !== undefined &&
+      reply.isBot !== true &&
+      reply.edited !== true &&
+      reply.deleted !== true &&
+      reply.user !== botUserId &&
+      isAllowedAuthor(reply.user, users) &&
+      command === null &&
+      (reply.subtype === undefined ||
+        reply.subtype === "thread_broadcast" ||
+        reply.subtype === "file_share");
+    if (attachmentBearingSteeringReply) {
+      for (const file of reply.files ?? []) {
+        attachments.set(file.id, {
+          file: { ...attachments.get(file.id)?.file, ...file },
+          ts: reply.ts,
+        });
+      }
+    }
     if (!isBotMention(classificationText, botUserId)) continue;
     if (!rootIsMention && !rootOrigin && request === undefined) {
       // A recorded request keeps the authorization it had when accepted, while still requiring
@@ -252,7 +282,6 @@ export function stateFromThread(
       // the marker itself is the durable acceptance decision.
       const matchesRecordedRequest =
         tracking?.origin === "reply" && reply.ts === tracking.requestTs;
-      const command = parseStatusCommand(classificationText, botUserId, settings);
       const canUseMarkerRecord =
         markerRecordsReplyOrigin && command === null && foldInputs.length === 0;
       const canCreateRequest =
@@ -261,11 +290,17 @@ export function stateFromThread(
         command === null &&
         isAllowedAuthor(reply.user, users);
       if (matchesRecordedRequest || canUseMarkerRecord || canCreateRequest) {
-        request = { ts: reply.ts, text: reply.text, user: reply.user };
+        request = {
+          ts: reply.ts,
+          text: reply.text,
+          user: reply.user,
+          ...(reply.files && reply.files.length > 0
+            ? { files: reply.files.map((file) => ({ ...file })) }
+            : {}),
+        };
       }
       continue;
     }
-    const command = parseStatusCommand(classificationText, botUserId, settings);
     if (command) {
       foldInputs.push({
         kind: "status",
@@ -310,12 +345,22 @@ export function stateFromThread(
     });
   }
 
+  const eligibleAttachments = [...attachments.values()]
+    .filter(
+      ({ ts }) =>
+        rootIsMention ||
+        rootOrigin ||
+        (request !== undefined && compareSlackTs(ts, request.ts) >= 0),
+    )
+    .map(({ file }) => file);
+
   return {
     state,
     events,
     ...(request !== undefined ? { request } : {}),
     ...(tracking !== undefined ? { tracking } : {}),
     ...(workpad !== undefined ? { workpad } : {}),
+    ...(eligibleAttachments.length > 0 ? { attachments: eligibleAttachments } : {}),
   };
 }
 
@@ -377,12 +422,12 @@ interface ThreadStateCacheEntry {
 }
 
 /**
- * Cross-call cache: thread state only changes when the thread (or the root's reactions)
+ * Per-transport cache: thread state only changes when the thread (or the root's reactions)
  * changes, and `conversations.history` reports `latest_reply`/`reply_count` on every scan, so
- * unchanged threads never pay a `conversations.replies` fetch. Module-level because the tool
- * packs construct a fresh transport per call.
+ * unchanged threads never pay a `conversations.replies` fetch. Transport scoping is a trust
+ * boundary: channel ids and timestamps are not globally unique across Slack workspaces.
  */
-const threadStateCache = new Map<string, ThreadStateCacheEntry>();
+const threadStateCache = new WeakMap<SlackTransport, Map<string, ThreadStateCacheEntry>>();
 const THREAD_STATE_CACHE_MAX = 5_000;
 
 /** Resolve a tracked root's thread state, fetching replies only when the thread changed. */
@@ -396,10 +441,15 @@ export async function resolveThreadState(
     return stateFromObservedThread(root, [], settings, transport);
   }
   const key = `${root.channel}:${root.ts}`;
+  let cache = threadStateCache.get(transport);
+  if (!cache) {
+    cache = new Map();
+    threadStateCache.set(transport, cache);
+  }
   const latestReply = root.latestReply ?? "";
   // Only bot-authored reactions can change the derived state, so only they invalidate.
   const reactionsKey = [...root.botReactions].sort().join(",");
-  const cached = threadStateCache.get(key);
+  const cached = cache.get(key);
   if (
     cached &&
     cached.latestReply === latestReply &&
@@ -410,7 +460,7 @@ export async function resolveThreadState(
   }
   const replies = await transport.getThread(root.channel, root.ts);
   const resolved = stateFromObservedThread(root, replies, settings, transport);
-  if (threadStateCache.size >= THREAD_STATE_CACHE_MAX) threadStateCache.clear();
-  threadStateCache.set(key, { latestReply, replyCount, reactionsKey, resolved });
+  if (cache.size >= THREAD_STATE_CACHE_MAX) cache.clear();
+  cache.set(key, { latestReply, replyCount, reactionsKey, resolved });
   return resolved;
 }

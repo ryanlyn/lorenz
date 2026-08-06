@@ -106,6 +106,31 @@ describe("TraceEmitter", () => {
     expect(content).toContain("[REDACTED]");
   });
 
+  it("redacts signed upload URLs from structured tool output", async () => {
+    const uploadUrl = "https://files.slack.com/upload/v1/trace-capability?x=1";
+    emitter.emit(
+      "id-1",
+      "ENG-1",
+      makeUpdate({
+        type: "session_notification",
+        message: {
+          update: {
+            sessionUpdate: "tool_call_update",
+            toolCallId: "tool-upload",
+            status: "completed",
+            rawOutput: { uploadUrl, fileId: "F123" },
+          },
+        },
+      }),
+    );
+    await emitter.drain();
+
+    const content = readFileSync(TraceEmitter.tracePathForIssue(traceDir, "id-1"), "utf-8");
+    expect(content).not.toContain(uploadUrl);
+    expect(content).toContain('"uploadUrl":"[REDACTED]"');
+    expect(content).toContain('"fileId":"F123"');
+  });
+
   it("encodes issue ids for directory names", async () => {
     emitter.emit("id/1", "ENG/1..2", makeUpdate());
     await emitter.drain();

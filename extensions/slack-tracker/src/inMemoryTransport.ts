@@ -1,9 +1,15 @@
+import type { OpenIssueAttachmentOptions, OpenedIssueAttachment } from "@lorenz/domain";
+
 import { isAllowedAuthor, isBotMention } from "./mapping.js";
 import { stripBroadcastMentions } from "./sanitize.js";
 import type {
   SlackChannelScan,
+  SlackFile,
+  SlackFileUploadCompletion,
+  SlackFileUploadRequest,
   SlackMessage,
   SlackPostOptions,
+  SlackPreparedFileUpload,
   SlackThreadReply,
   SlackThreadReplyPage,
   SlackThreadReplyPageQuery,
@@ -20,6 +26,7 @@ interface SeedMessage {
   /** Reactions authored by humans: visible on the message but never state-bearing. */
   humanReactions?: string[];
   replies?: SlackThreadReply[];
+  files?: SlackFile[];
 }
 
 interface StoredMessage extends Omit<SlackMessage, "reactions"> {
@@ -33,9 +40,12 @@ interface InMemoryOptions {
   allowedUsers?: string[];
   /** Resolvable user profiles for `getUser` (defaults to none). */
   users?: Record<string, SlackUser>;
+  /** Attachment bodies addressable by Slack file id. */
+  files?: Record<string, { content: string | Uint8Array; mediaType?: string; sizeBytes?: number }>;
 }
 
 const SLACK_TS_SCALE = 1_000_000n;
+let nextInMemoryUploadId = 1;
 
 function slackTsMicros(ts: string): bigint {
   const [seconds = "0", fraction = ""] = ts.split(".", 2);
@@ -47,7 +57,22 @@ function slackTsFromMicros(value: bigint): string {
 }
 
 export class InMemorySlackTransport implements SlackTransport {
-  readonly replies: Array<{ channel: string; threadTs: string; body: string }> = [];
+  readonly replies: Array<{
+    channel: string;
+    threadTs: string;
+    body: string;
+    files?: SlackFile[];
+  }> = [];
+  readonly preparedUploads: Array<{
+    request: SlackFileUploadRequest;
+    result: SlackPreparedFileUpload;
+  }> = [];
+  readonly completedUploads: Array<{
+    channel: string;
+    threadTs: string;
+    body: string;
+    files: SlackFileUploadCompletion[];
+  }> = [];
   readonly ephemerals: Array<{ channel: string; user: string; threadTs: string; body: string }> =
     [];
   readonly openedViews: Array<{ triggerId: string; view: Record<string, unknown> }> = [];
@@ -56,11 +81,14 @@ export class InMemorySlackTransport implements SlackTransport {
   private readonly botUserId: string | undefined;
   private readonly allowedUsers: string[];
   private readonly users: Record<string, SlackUser>;
+  private readonly files: NonNullable<InMemoryOptions["files"]>;
+  private readonly pendingUploads = new Map<string, SlackFileUploadRequest>();
 
   constructor(seed: Record<string, SeedMessage[]> = {}, opts: InMemoryOptions = {}) {
     this.botUserId = opts.botUserId;
     this.allowedUsers = opts.allowedUsers ?? [];
     this.users = opts.users ?? {};
+    this.files = opts.files ?? {};
     for (const [channel, msgs] of Object.entries(seed)) {
       this.messages.set(
         channel,
@@ -72,6 +100,7 @@ export class InMemorySlackTransport implements SlackTransport {
           botReactions: [...(m.reactions ?? [])],
           humanReactions: [...(m.humanReactions ?? [])],
           thread: (m.replies ?? []).map((r) => ({ ...r })),
+          ...(m.files && m.files.length > 0 ? { files: m.files.map((file) => ({ ...file })) } : {}),
         })),
       );
     }
@@ -154,6 +183,35 @@ export class InMemorySlackTransport implements SlackTransport {
     return Promise.resolve(all.slice(start, end).map((m) => this.snapshot(m)));
   }
 
+  async openFile(
+    fileId: string,
+    options: OpenIssueAttachmentOptions,
+  ): Promise<OpenedIssueAttachment> {
+    options.abortSignal?.throwIfAborted();
+    const stored = this.files[fileId];
+    if (!stored) throw new Error(`unknown in-memory Slack file: ${fileId}`);
+    const content =
+      typeof stored.content === "string"
+        ? new TextEncoder().encode(stored.content)
+        : stored.content;
+    const advertised = stored.sizeBytes ?? content.byteLength;
+    if (advertised > options.maxBytes || content.byteLength > options.maxBytes) {
+      throw new Error(`in-memory Slack file ${fileId} exceeds ${options.maxBytes} bytes`);
+    }
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        options.abortSignal?.throwIfAborted();
+        controller.enqueue(content);
+        controller.close();
+      },
+    });
+    return Promise.resolve({
+      body,
+      ...(stored.mediaType ? { mediaType: stored.mediaType } : {}),
+      sizeBytes: advertised,
+    });
+  }
+
   async addReaction(channel: string, ts: string, name: string): Promise<void> {
     const msg = (this.messages.get(channel) ?? []).find((m) => m.ts === ts);
     // This transport acts as the bot, so a reaction it adds is bot-authored.
@@ -169,6 +227,56 @@ export class InMemorySlackTransport implements SlackTransport {
     return Promise.resolve();
   }
 
+  async prepareFileUpload(request: SlackFileUploadRequest): Promise<SlackPreparedFileUpload> {
+    const fileId = `F_UPLOAD_${nextInMemoryUploadId++}`;
+    const result = {
+      fileId,
+      uploadUrl: `https://files.slack.com/upload/v1/${fileId}`,
+    };
+    this.pendingUploads.set(fileId, { ...request });
+    this.preparedUploads.push({ request: { ...request }, result: { ...result } });
+    return Promise.resolve(result);
+  }
+
+  async completeFileUploads(
+    channel: string,
+    threadTs: string,
+    body: string,
+    files: readonly SlackFileUploadCompletion[],
+  ): Promise<SlackFile[]> {
+    const completed = files.map((file): SlackFile => {
+      const pending = this.pendingUploads.get(file.fileId);
+      if (pending === undefined) {
+        throw new Error(`slack files.completeUploadExternal failed: file_not_found`);
+      }
+      return {
+        id: file.fileId,
+        name: pending.filename,
+        size: pending.length,
+        ...(file.title !== undefined ? { title: file.title } : {}),
+      };
+    });
+    for (const file of files) this.pendingUploads.delete(file.fileId);
+    const text = stripBroadcastMentions(body);
+    this.completedUploads.push({
+      channel,
+      threadTs,
+      body: text,
+      files: files.map((file) => ({ ...file })),
+    });
+    this.replies.push({
+      channel,
+      threadTs,
+      body: text,
+      files: completed.map((file) => ({ ...file })),
+    });
+    this.appendThreadReply(channel, threadTs, text, {
+      files: completed,
+      subtype: "file_share",
+    });
+    return Promise.resolve(completed.map((file) => ({ ...file })));
+  }
+
   async postReply(
     channel: string,
     threadTs: string,
@@ -177,6 +285,23 @@ export class InMemorySlackTransport implements SlackTransport {
   ): Promise<string> {
     const text = stripBroadcastMentions(body);
     this.replies.push({ channel, threadTs, body: text });
+    return Promise.resolve(
+      this.appendThreadReply(channel, threadTs, text, {
+        ...(options.metadata !== undefined ? { metadata: options.metadata } : {}),
+      }),
+    );
+  }
+
+  private appendThreadReply(
+    channel: string,
+    threadTs: string,
+    text: string,
+    options: {
+      metadata?: SlackPostOptions["metadata"];
+      files?: SlackFile[];
+      subtype?: string;
+    } = {},
+  ): string {
     // Append the reply to the parent message's thread so a posted reply can be read back via
     // getThread in tests. The reply is authored by the bot, with a ts after the parent's.
     const parent = (this.messages.get(channel) ?? []).find((m) => m.ts === threadTs);
@@ -188,12 +313,19 @@ export class InMemorySlackTransport implements SlackTransport {
       : threadTs;
     const ts = slackTsFromMicros(slackTsMicros(latestTs) + 1n);
     if (parent) {
-      const reply: SlackThreadReply = { ts, text };
+      const reply: SlackThreadReply = {
+        ts,
+        text,
+        ...(options.subtype !== undefined ? { subtype: options.subtype } : {}),
+        ...(options.files !== undefined
+          ? { files: options.files.map((file) => ({ ...file })) }
+          : {}),
+      };
       if (this.botUserId !== undefined) reply.user = this.botUserId;
       if (options.metadata !== undefined) reply.metadata = options.metadata;
       parent.thread.push(reply);
     }
-    return Promise.resolve(ts);
+    return ts;
   }
 
   async updateMessage(

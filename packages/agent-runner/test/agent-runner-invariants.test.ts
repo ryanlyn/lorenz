@@ -53,6 +53,7 @@ function fakeSession(overrides: Partial<AgentSession> = {}): AgentSession {
 function fakeAdapters(overrides: Partial<RunAgentAttemptAdapters> = {}): RunAgentAttemptAdapters {
   return {
     createWorkspaceForIssue: async () => "/tmp/workspace/TEST-1",
+    materializeIssueAttachments: async () => ({ materialized: [], failures: [] }),
     runHook: async () => {},
     executorFactory: () => ({
       kind: "codex",

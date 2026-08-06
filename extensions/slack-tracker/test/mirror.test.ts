@@ -79,6 +79,44 @@ function messageEvent(event: Record<string, unknown>): Record<string, unknown> {
 const silent = { warn: () => {} };
 void silent;
 
+test("file completion invalidates the mirror and reads back the uploaded reply", async () => {
+  const inner = counting(
+    new InMemorySlackTransport(
+      { C1: [{ ts: "1.0", text: "<@U_BOT> attach output", user: "U_HUMAN" }] },
+      { botUserId: "U_BOT" },
+    ),
+  );
+  const mirror = mirrored(inner);
+  await mirror.scanChannels(["C1"]);
+  await mirror.getThread("C1", "1.0");
+  assert.equal(inner.threadReads, 1);
+
+  const prepared = await mirror.prepareFileUpload({ filename: "result.txt", length: 6 });
+  await mirror.completeFileUploads("C1", "1.0", "attached", [
+    { fileId: prepared.fileId, title: "Result" },
+  ]);
+
+  await mirror.scanChannels(["C1"]);
+  assert.equal(inner.scans, 1, "file completion should not force a full channel history scan");
+
+  const replies = await mirror.getThread("C1", "1.0");
+  assert.equal(inner.threadReads, 2);
+  assert.deepEqual(replies.at(-1), {
+    ts: "1.000001",
+    text: "attached",
+    user: "U_BOT",
+    subtype: "file_share",
+    files: [
+      {
+        id: prepared.fileId,
+        name: "result.txt",
+        title: "Result",
+        size: 6,
+      },
+    ],
+  });
+});
+
 test("mirror serves repeat scans and new events from memory after one bootstrap scan", async () => {
   const inner = counting(
     new InMemorySlackTransport(
@@ -111,6 +149,119 @@ test("mirror serves repeat scans and new events from memory after one bootstrap 
   const third = await mirror.scanChannels(["C1"]);
   assert.equal(inner.scans, 1);
   assert.deepEqual(third.mentions.map((m) => m.ts).sort(), ["1.0", "2.0"]);
+});
+
+test("mirror preserves files from API snapshots and Socket Mode root/reply events", async () => {
+  const inner = new InMemorySlackTransport(
+    {
+      C1: [
+        {
+          ts: "1.0",
+          text: "<@U_BOT> inspect",
+          user: "U2",
+          files: [{ id: "F_API", name: "api.txt", mimetype: "text/plain", size: 3 }],
+        },
+      ],
+    },
+    { botUserId: "U_BOT" },
+  );
+  const mirror = mirrored(inner);
+  const initial = await mirror.scanChannels(["C1"]);
+  assert.deepEqual(initial.mentions[0]!.files, [
+    { id: "F_API", name: "api.txt", mimetype: "text/plain", size: 3 },
+  ]);
+
+  mirror.applyEvent(
+    messageEvent({
+      type: "app_mention",
+      channel: "C1",
+      ts: "2.0",
+      text: "<@U_BOT> event request",
+      user: "U2",
+      files: [{ id: "F_ROOT", name: "root.png", mimetype: "image/png" }],
+    }),
+  );
+  mirror.applyEvent(
+    messageEvent({
+      type: "message",
+      subtype: "file_share",
+      channel: "C1",
+      ts: "2.1",
+      thread_ts: "2.0",
+      text: "",
+      user: "U2",
+      files: [{ id: "F_REPLY", name: "reply.pdf", mimetype: "application/pdf" }],
+    }),
+  );
+
+  const scan = await mirror.scanChannels(["C1"]);
+  const eventRoot = scan.mentions.find((message) => message.ts === "2.0")!;
+  assert.deepEqual(eventRoot.files, [{ id: "F_ROOT", name: "root.png", mimetype: "image/png" }]);
+  assert.deepEqual((await mirror.getThread("C1", "2.0"))[0]!.files, [
+    { id: "F_REPLY", name: "reply.pdf", mimetype: "application/pdf" },
+  ]);
+});
+
+test("API repair keeps richer file metadata learned from Socket Mode", async () => {
+  const placeholder = {
+    id: "F_CONNECT",
+    mode: "file_access",
+    fileAccess: "check_file_info",
+  };
+  const inner = new InMemorySlackTransport(
+    {
+      C1: [
+        {
+          ts: "1.0",
+          text: "<@U_BOT> inspect",
+          user: "U2",
+          replies: [
+            {
+              ts: "1.1",
+              text: "<@U_BOT> attached evidence",
+              user: "U2",
+              subtype: "file_share",
+              files: [placeholder],
+            },
+          ],
+        },
+      ],
+    },
+    { botUserId: "U_BOT" },
+  );
+  const mirror = mirrored(inner);
+  mirror.applyEvent(
+    messageEvent({
+      type: "message",
+      subtype: "file_share",
+      channel: "C1",
+      ts: "1.1",
+      thread_ts: "1.0",
+      text: "<@U_BOT> attached evidence",
+      user: "U2",
+      files: [
+        {
+          id: "F_CONNECT",
+          name: "evidence.pdf",
+          mimetype: "application/pdf",
+          size: 42,
+        },
+      ],
+    }),
+  );
+
+  const page = await mirror.getThreadPage("C1", "1.0", { afterTs: "1.0", limit: 10 });
+  assert.deepEqual(page.replies[0]!.files, [
+    {
+      id: "F_CONNECT",
+      name: "evidence.pdf",
+      mimetype: "application/pdf",
+      size: 42,
+      mode: "file_access",
+      fileAccess: "check_file_info",
+    },
+  ]);
+  assert.deepEqual((await mirror.getThread("C1", "1.0"))[0]!.files, page.replies[0]!.files);
 });
 
 test("an event arriving during reconciliation is applied after the API snapshot", async () => {

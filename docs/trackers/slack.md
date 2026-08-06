@@ -41,7 +41,13 @@ the transport calls; they are not declared in the extension source.
 | `reactions:read`    | Read reactions to derive fallback status and detect the bot's marker.                           |
 | `reactions:write`   | Add and remove the bot's own marker and status reactions (`reactions.add`, `reactions.remove`). |
 | `chat:write`        | Post the bot's `status:` and comment replies (`chat.postMessage`).                              |
+| `files:read`        | Resolve metadata and download files attached to tracked messages (`files.info`).                |
+| `files:write`       | Prepare and complete files uploaded by workers into issue threads.                              |
 | `users:read`        | Resolve a `U...` id to a profile for `slack_user_info` (`users.info`).                          |
+
+After adding `files:read` or `files:write` to an existing app, reinstall or re-authorize the app so
+its bot token receives the new scopes. Lorenz never exposes that token or Slack's private download
+URLs to the agent.
 
 Socket Mode is optional. Without an app token, discovery is pure polling of
 `conversations.history`. With an app-level token, Lorenz opens a Socket Mode connection and the
@@ -153,6 +159,47 @@ The root message maps to a normalized issue:
 Labels come from hashtags in the message text. `deriveLabels` strips all `<...>` mrkdwn tokens
 first, then matches `#tag` only at the start of the text or after whitespace, lowercased and
 deduped. Channel refs, user mentions, and hashtags inside link captions do not leak into labels.
+
+## Attached files
+
+Files on a root mention, a reply-origin request, or an eligible human steering reply are available
+inside the worker workspace under `.lorenz/attachments`. Lorenz resolves each file through
+`files.info` (including Slack Connect file placeholders), downloads it with the bot token, and
+passes the resulting workspace path to the agent. Private Slack URLs and credentials never enter
+the prompt or worker environment.
+
+Attachment staging is intentionally bounded: at most 10 files, 25 MiB per file, and 100 MiB in
+total are materialized for one issue. Filenames are sanitized and prefixed with the Slack file id,
+files are written with owner-only permissions, and the destination is replaced on refresh so a
+new `file_share` reply can be used in the next queued turn. A file that exceeds a limit or cannot
+be downloaded is reported in the run updates and is not written. Treat every attachment as
+untrusted input.
+
+### Files in worker replies
+
+Workers can attach local workspace files to `slack_comment` replies without exposing the Slack bot
+token or moving binary data through MCP JSON. The `slack_prepare_file_upload` tool asks Slack for a
+short-lived, single-file upload URL and binds its file id to the tracked issue. The worker POSTs the
+exact local bytes directly to that signed URL, then passes up to ten prepared `fileIds` to
+`slack_comment`. Lorenz calls `files.completeUploadExternal` once with the issue channel, root
+timestamp, sanitized comment, and all prepared files, producing one file-bearing thread reply.
+
+Outbound uploads use the same safety bounds as inbound staging: 10 files, 25 MiB per file, and 100
+MiB pending per issue. Filenames must be basenames, pending ids expire after 15 minutes, and ids are
+consumed before completion because Slack permits completion only once. The raw upload carries no
+Authorization header and must not follow redirects. Workers need outbound HTTPS access to the
+signed `files.slack.com` URL.
+
+Codex's default `workspace-write` mode disables command network access, so its `curl` step cannot
+reach Slack. If file replies are required, run the worker in an externally isolated environment
+and opt that agent into `agent-full-access`, for example by adding
+`INITIAL_AGENT_MODE=agent-full-access` to its `bridge_command`. That mode also removes the
+workspace-only write sandbox; do not enable it casually. Claude and custom workers likewise need
+outbound HTTPS allowed by their own sandbox or host policy.
+
+The mounted `lorenz-slack` skill gives workers the exact prepare -> raw POST -> comment sequence.
+Signed upload URLs are capabilities: do not paste them into a comment, workpad, log, or repository.
+Lorenz redacts the stable signed-upload URL shape from diagnostic and trace output.
 
 ## Status lives in the thread
 
@@ -298,6 +345,10 @@ empty any authenticated human in a watched channel is eligible. Bot-authored rep
 authors, status commands, `!aside` replies, message edits, system messages, and channel roots do not
 steer the agent.
 
+An eligible reply may contain text, files, or both. A file-only `file_share` event is valid
+steering: Lorenz refreshes `.lorenz/attachments` before the queued turn and includes the local file
+paths in that turn's context.
+
 `conversations.replies` recovers eligible messages after a reconnect or turn boundary. Recovery
 returns oldest-first bounded pages, advances only through accepted events, and shortens oversized
 live-delivery text without changing its Slack timestamp or author. Without Socket Mode, eligible
@@ -370,11 +421,12 @@ broadcast token. An agent cannot page a channel; there is no knob to get wrong.
 The `slack` tool pack mounts automatically for the Slack tracker (its `defaultToolPacks` returns
 `["slack"]`), and it is the only pack the Slack tracker mounts. Its Slack-native tools expose the
 thread model directly: `slack_update_status` and `slack_comment` write the bot's reply,
+`slack_prepare_file_upload` creates a scoped signed-upload ticket for file-bearing comments, and
 `slack_workpad` creates/edits the single in-place plan message, with per-issue serialization so
-concurrent partial updates merge against the latest metadata. `slack_read_thread` returns the
-authoritative thread-derived state plus the folded `statusEvents` audit trail, `slack_query` runs
-the read-only `where` DSL, and `slack_user_info` / `slack_channel_context` resolve people and
-surrounding conversation.
+concurrent partial updates merge against the latest metadata. The pack bundles the `lorenz-slack`
+skill with the worker upload sequence. `slack_read_thread` returns the authoritative thread-derived
+state plus the folded `statusEvents` audit trail, `slack_query` runs the read-only `where` DSL, and
+`slack_user_info` / `slack_channel_context` resolve people and surrounding conversation.
 
 Every tool enforces the same trust boundary: a configured `bot_user_id`, a watched channel, and a
 tracked message. `slack_query` rejects `jql` (use the `where` DSL) and always intersects requested
@@ -386,7 +438,8 @@ narrow it with `where`, `order_by`, and paging.
 
 Issues are created only by humans mentioning the bot. The `slack` pack ships no issue-creation tool
 deliberately, so there is no agent path to create a Slack issue. Agents read and update existing
-threads through `slack_read_thread`, `slack_query`, `slack_update_status`, and `slack_comment`.
+threads through `slack_read_thread`, `slack_query`, `slack_update_status`,
+`slack_prepare_file_upload`, and `slack_comment`.
 
 ## Workflow example
 

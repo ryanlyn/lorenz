@@ -824,6 +824,9 @@ function cloneIssueForMemory(issue: RunningEntry["issue"]): RunningEntry["issue"
     ...issue,
     labels: [...issue.labels],
     blockers: issue.blockers.map((blocker) => ({ ...blocker })),
+    ...(issue.attachments
+      ? { attachments: issue.attachments.map((attachment) => ({ ...attachment })) }
+      : {}),
   };
 }
 

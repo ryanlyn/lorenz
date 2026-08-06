@@ -76,6 +76,27 @@ test("normalizeIssue preserves the issue event recovery cursor", () => {
   assert.equal(issue.issueEventCursor, "9007199254740993.1");
 });
 
+test("normalizeIssue trims, aliases, and deduplicates valid attachment metadata", () => {
+  const issue = normalizeIssue({
+    id: "i1",
+    identifier: "MT-1",
+    title: "Title",
+    state: { name: "Todo", type: "unstarted" },
+    attachments: [
+      { id: "  file-1  ", name: " report.txt ", media_type: " text/plain ", size_bytes: 12 },
+      { id: "file-1", name: "duplicate.txt" },
+      { id: "   ", name: "blank-id.txt" },
+      { id: "file-2", name: "   " },
+      { id: "file-3", name: "image.png", mimetype: "   ", size: -1 },
+    ],
+  });
+
+  assert.deepEqual(issue.attachments, [
+    { id: "file-1", name: "report.txt", mediaType: "text/plain", sizeBytes: 12 },
+    { id: "file-3", name: "image.png" },
+  ]);
+});
+
 test("normalizeIssue — assigns assignedToWorker=false if assignee does not match current worker", () => {
   const issue = normalizeIssue(
     {

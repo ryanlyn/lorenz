@@ -1,3 +1,17 @@
+import type { OpenIssueAttachmentOptions, OpenedIssueAttachment } from "@lorenz/domain";
+
+/** Safe, serializable subset of Slack's file object. Private URLs never leave the transport. */
+export interface SlackFile {
+  id: string;
+  name?: string | undefined;
+  title?: string | undefined;
+  mimetype?: string | undefined;
+  size?: number | undefined;
+  /** `file_access` placeholders are hydrated through `files.info` before download. */
+  mode?: string | undefined;
+  fileAccess?: string | undefined;
+}
+
 export interface SlackMessage {
   channel: string;
   ts: string;
@@ -20,6 +34,8 @@ export interface SlackMessage {
   replyCount?: number | undefined;
   /** ts of the newest thread reply (root messages only). */
   latestReply?: string | undefined;
+  /** Files attached to this message, in Slack's display order. */
+  files?: SlackFile[] | undefined;
 }
 
 /**
@@ -75,6 +91,8 @@ export interface SlackThreadReply {
    * them. Also excluded from steering context.
    */
   deleted?: boolean | undefined;
+  /** Files attached to this reply, in Slack's display order. */
+  files?: SlackFile[] | undefined;
 }
 
 /** One Slack API page of thread replies newer than an event cursor. */
@@ -99,6 +117,26 @@ export interface SlackUser {
   realName?: string | undefined;
   displayName?: string | undefined;
   isBot?: boolean | undefined;
+}
+
+/** Metadata Slack needs before issuing a signed URL for one outbound file upload. */
+export interface SlackFileUploadRequest {
+  filename: string;
+  length: number;
+  altText?: string | undefined;
+  snippetType?: string | undefined;
+}
+
+/** One signed, single-file upload target allocated by Slack. */
+export interface SlackPreparedFileUpload {
+  fileId: string;
+  uploadUrl: string;
+}
+
+/** A file that has already been sent to its signed URL and is ready to share. */
+export interface SlackFileUploadCompletion {
+  fileId: string;
+  title?: string | undefined;
 }
 
 /** One pass over the watched channels' root messages. */
@@ -142,6 +180,21 @@ export interface SlackTransport {
     ts: string,
     window: { before: number; after: number },
   ): Promise<SlackMessage[]>;
+  /** Resolve and open a Slack file without exposing its private URL or the bot token. */
+  openFile(fileId: string, options: OpenIssueAttachmentOptions): Promise<OpenedIssueAttachment>;
+  /** Allocate a signed Slack URL to which a worker can POST one local file without a bot token. */
+  prepareFileUpload(request: SlackFileUploadRequest): Promise<SlackPreparedFileUpload>;
+  /**
+   * Finalize previously uploaded files as one thread reply. This is separate from
+   * {@link postReply}: Slack's completion API is single-use and supports neither message metadata
+   * nor the existing Block Kit write contract.
+   */
+  completeFileUploads(
+    channel: string,
+    threadTs: string,
+    body: string,
+    files: readonly SlackFileUploadCompletion[],
+  ): Promise<SlackFile[]>;
   addReaction(channel: string, ts: string, name: string): Promise<void>;
   removeReaction(channel: string, ts: string, name: string): Promise<void>;
   /**

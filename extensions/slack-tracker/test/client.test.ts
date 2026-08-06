@@ -67,6 +67,100 @@ test("mentions become issues; the bot's reactions drive state", async () => {
   );
 });
 
+test("root mention files become normalized attachments and open through the tracker client", async () => {
+  const transport = new InMemorySlackTransport(
+    {
+      C1: [
+        {
+          ts: "1700000000.000150",
+          text: "<@U_BOT>",
+          files: [{ id: "F_IMG", name: "screen shot.png", mimetype: "image/png", size: 4 }],
+          replies: [
+            {
+              ts: "1700000000.000160",
+              text: "the matching log",
+              user: "U_HUMAN",
+              subtype: "file_share",
+              files: [{ id: "F_LOG", name: "run.log", mimetype: "text/plain", size: 7 }],
+            },
+          ],
+        },
+      ],
+    },
+    {
+      files: {
+        F_IMG: { content: new Uint8Array([1, 2, 3, 4]), mediaType: "image/png" },
+      },
+    },
+  );
+  const client = new SlackTrackerClient(settings(), transport);
+
+  const [issue] = await client.fetchCandidateIssues();
+  assert.equal(issue!.title, "screen shot.png");
+  assert.deepEqual(issue!.attachments, [
+    { id: "F_LOG", name: "run.log", mediaType: "text/plain", sizeBytes: 7 },
+    { id: "F_IMG", name: "screen shot.png", mediaType: "image/png", sizeBytes: 4 },
+  ]);
+  const opened = await client.openIssueAttachment(issue!.id, "F_IMG", { maxBytes: 10 });
+  const bytes: number[] = [];
+  for await (const chunk of opened.body) bytes.push(...chunk);
+  assert.deepEqual(bytes, [1, 2, 3, 4]);
+});
+
+test("attachment opening is bound to the issue snapshot that exposed the file", async () => {
+  const transport = new InMemorySlackTransport({
+    C1: [
+      {
+        ts: "1700000000.000170",
+        text: "<@U_BOT> first",
+        files: [{ id: "F_FIRST", name: "first.txt" }],
+      },
+      {
+        ts: "1700000000.000180",
+        text: "<@U_BOT> second",
+        files: [{ id: "F_SECOND", name: "second.txt" }],
+      },
+    ],
+  });
+  const client = new SlackTrackerClient(settings(), transport);
+  const issues = await client.fetchCandidateIssues();
+  const first = issues.find((issue) => issue.id === "C1:1700000000.000170")!;
+
+  await assert.rejects(
+    () => client.openIssueAttachment(first.id, "F_SECOND", { maxBytes: 10 }),
+    /not attached to issue/,
+  );
+});
+
+test("thread attachment caches are isolated between Slack transports", async () => {
+  const issueFor = async (fileId: string, name: string) => {
+    const transport = new InMemorySlackTransport({
+      C1: [
+        {
+          ts: "1700000000.000190",
+          text: "<@U_BOT> inspect",
+          replies: [
+            {
+              ts: "1700000000.000191",
+              text: "evidence",
+              user: "U_HUMAN",
+              files: [{ id: fileId, name }],
+            },
+          ],
+        },
+      ],
+    });
+    return (await new SlackTrackerClient(settings(), transport).fetchCandidateIssues())[0]!;
+  };
+
+  assert.deepEqual((await issueFor("F_ONE", "one.txt")).attachments, [
+    { id: "F_ONE", name: "one.txt" },
+  ]);
+  assert.deepEqual((await issueFor("F_TWO", "two.txt")).attachments, [
+    { id: "F_TWO", name: "two.txt" },
+  ]);
+});
+
 test("piped mention form <@U_BOT|worker> is detected and stripped from the title", async () => {
   const transport = new InMemorySlackTransport({
     C1: [{ ts: "1700000000.000300", text: "<@U_BOT|worker> do it", reactions: [] }],
@@ -475,7 +569,20 @@ test("a bot mention in a reply tracks the thread: request title, marker, restart
           ts: rootTs,
           text: "we're seeing flaky deploys in prod",
           reactions: [],
-          replies: [{ ts: replyTs, text: "<@U_BOT> please fix this #backend", user: "U_HUMAN" }],
+          replies: [
+            {
+              ts: `${(now - 2700).toFixed(6)}`,
+              text: "context from before Lorenz was requested",
+              user: "U_HUMAN",
+              files: [{ id: "F_OLD", name: "old.txt", mimetype: "text/plain", size: 3 }],
+            },
+            {
+              ts: replyTs,
+              text: "<@U_BOT> please fix this #backend",
+              user: "U_HUMAN",
+              files: [{ id: "F_SPEC", name: "spec.pdf", mimetype: "application/pdf", size: 9 }],
+            },
+          ],
         },
       ],
     },
@@ -493,6 +600,9 @@ test("a bot mention in a reply tracks the thread: request title, marker, restart
   assert.deepEqual(candidates[0]!.labels, ["backend"]);
   assert.match(candidates[0]!.description ?? "", /flaky deploys in prod/);
   assert.equal(candidates[0]!.issueEventCursor, replyTs);
+  assert.deepEqual(candidates[0]!.attachments, [
+    { id: "F_SPEC", name: "spec.pdf", mediaType: "application/pdf", sizeBytes: 9 },
+  ]);
   // The bot marked the root so the thread stays tracked without re-reading replies.
   assert.ok((await transport.getMessage("C1", rootTs))!.botReactions.includes("robot_face"));
 
@@ -1202,7 +1312,13 @@ test("watch applies steering policy while admitting thread broadcasts", () => {
   emit({ ...reply, text: "<@U_BOT> !aside context only" });
   emit({ ...reply, bot_id: "B_OTHER", text: "bot reply" });
   emit({ ...reply, subtype: "message_changed", text: "edited" });
-  emit({ ...reply, user: "U_ALICE", subtype: "file_share", text: "system subtype" });
+  emit({
+    ...reply,
+    user: "U_ALICE",
+    subtype: "file_share",
+    text: "",
+    files: [{ id: "F1", name: "evidence.png", mimetype: "image/png", size: 123 }],
+  });
   emit({ ...reply, thread_ts: undefined, text: "root message" });
   emit({
     ...reply,
@@ -1218,7 +1334,19 @@ test("watch applies steering policy while admitting thread broadcasts", () => {
     {},
     {},
     {},
-    {},
+    {
+      issueEvents: {
+        issueId: "C1:1700000000.000100",
+        events: [
+          {
+            authorizedForSteering: true,
+            ts: "1700000001.000200",
+            author: "U_ALICE",
+            text: "Attachments:\n- evidence.png: `.lorenz/attachments/F1-evidence.png` (image/png, 123 bytes)",
+          },
+        ],
+      },
+    },
     {},
     {
       issueEvents: {
@@ -1317,9 +1445,10 @@ test("fetchIssueEvents returns a bounded page of authorized human steering repli
           },
           {
             ts: "1700000000.000670",
-            text: "file upload",
+            text: "",
             user: "U_HUMAN",
             subtype: "file_share",
+            files: [{ id: "F1", name: "trace.txt", mimetype: "text/plain", size: 5 }],
           },
           { ts: "1700000000.000675", text: "another bot", user: "U_OTHER_BOT", isBot: true },
           { ts: "1700000000.000700", text: "missing author" },
@@ -1367,11 +1496,27 @@ test("fetchIssueEvents returns a bounded page of authorized human steering repli
         text: "steer right",
       },
     ],
+    hasMore: true,
+  });
+  const third = await client.fetchIssueEvents("C1:1700000000.000100", "1700000000.000650", {
+    maxEvents: 1,
+    maxBytes: 64 * 1024,
+  });
+  assert.deepEqual(third, {
+    events: [
+      {
+        authorizedForSteering: true,
+        ts: "1700000000.000670",
+        author: "U_HUMAN",
+        text: "Attachments:\n- trace.txt: `.lorenz/attachments/F1-trace.txt` (text/plain, 5 bytes)",
+      },
+    ],
     hasMore: false,
   });
   assert.deepEqual(pageQueries, [
     { afterTs: "1700000000.000200", limit: 200 },
     { afterTs: "1700000000.000600", limit: 200 },
+    { afterTs: "1700000000.000650", limit: 200 },
   ]);
 });
 

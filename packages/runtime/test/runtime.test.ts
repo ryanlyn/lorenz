@@ -384,6 +384,56 @@ test("runtime starts tracker acknowledgement alongside the claimed run", async (
   assert.ok(runtime.snapshot().recentEvents.some((event) => event.type === "tracker_acknowledged"));
 });
 
+test("runtime binds attachment opening to the run's retained tracker client and issue", async () => {
+  const issue = {
+    ...issueFixture("issue-attachment", "MT-ATTACHMENT"),
+    attachments: [{ id: "file-1", name: "notes.txt" }],
+  };
+  const opened: Array<{ issueId: string; attachmentId: string; maxBytes: number }> = [];
+  let trackerThisWasPreserved = false;
+  const client = {
+    fetchCandidateIssues: async () => [issue],
+    fetchIssuesByIds: async () => [issue],
+    async openIssueAttachment(
+      this: unknown,
+      issueId: string,
+      attachmentId: string,
+      options: { maxBytes: number },
+    ) {
+      trackerThisWasPreserved = this === client;
+      opened.push({ issueId, attachmentId, maxBytes: options.maxBytes });
+      return {
+        body: (async function* attachmentBody() {
+          yield* [] as Uint8Array[];
+        })(),
+      };
+    },
+  };
+  const runtime = new LorenzRuntime(
+    runtimeOptions({
+      workflow: workflowFixture(),
+      client,
+      runner: async (input) => {
+        assert.ok(input.openIssueAttachment);
+        await input.openIssueAttachment("file-1", { maxBytes: 321 });
+        return {
+          workspace: "/tmp/lorenz/MT-ATTACHMENT",
+          turnCount: 1,
+          agentKind: "codex",
+          finalIssue: issue,
+        };
+      },
+    }),
+  );
+
+  await runtime.pollOnce({ waitForRuns: true });
+
+  assert.equal(trackerThisWasPreserved, true);
+  assert.deepEqual(opened, [
+    { issueId: "issue-attachment", attachmentId: "file-1", maxBytes: 321 },
+  ]);
+});
+
 test("tracker acknowledgement failures do not fail the claimed run", async () => {
   const issue = issueFixture("issue-acknowledgement-failure", "MT-ACKNOWLEDGEMENT-FAILURE");
   let runnerCalls = 0;

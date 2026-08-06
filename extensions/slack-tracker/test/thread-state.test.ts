@@ -183,3 +183,45 @@ test("a reply mention in a non-mention thread is the request, not a transition",
   assert.equal(result.request?.ts, "102.1");
   assert.match(result.request?.text ?? "", /please fix this/);
 });
+
+test("authorized steering replies contribute durable thread attachments", () => {
+  const result = stateFromThread(
+    root("<@U_BOT> inspect the reports"),
+    [
+      {
+        ts: "101.1",
+        text: "first report",
+        user: "U_HUMAN",
+        files: [{ id: "F1", name: "first.txt", size: 12 }],
+      },
+      {
+        ts: "102.1",
+        text: "replacement report",
+        user: "U_HUMAN",
+        subtype: "file_share",
+        files: [
+          { id: "F1", name: "renamed.txt", mimetype: "text/plain" },
+          { id: "F2", title: "second image", mimetype: "image/png" },
+        ],
+      },
+      {
+        ts: "103.1",
+        text: "<@U_BOT> !aside reference only",
+        user: "U_HUMAN",
+        files: [{ id: "F3", name: "aside.txt" }],
+      },
+      {
+        ts: "104.1",
+        text: "status: In Progress",
+        user: "U_BOT",
+        files: [{ id: "F4", name: "bot.txt" }],
+      },
+    ],
+    settings(),
+  );
+
+  assert.deepEqual(result.attachments, [
+    { id: "F1", name: "renamed.txt", size: 12, mimetype: "text/plain" },
+    { id: "F2", title: "second image", mimetype: "image/png" },
+  ]);
+});

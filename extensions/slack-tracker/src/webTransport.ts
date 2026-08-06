@@ -1,19 +1,41 @@
-import { errorMessage, isRecord, type Settings } from "@lorenz/domain";
+import {
+  errorMessage,
+  isRecord,
+  type OpenIssueAttachmentOptions,
+  type OpenedIssueAttachment,
+  type Settings,
+} from "@lorenz/domain";
 
 import { isAllowedAuthor, isBotMention } from "./mapping.js";
 import { slackEndpoint, slackTrackerOptions } from "./options.js";
 import { stripBroadcastMentions } from "./sanitize.js";
 import type {
   SlackChannelScan,
+  SlackFile,
+  SlackFileUploadCompletion,
+  SlackFileUploadRequest,
   SlackMessage,
   SlackMessageMetadata,
   SlackPostOptions,
+  SlackPreparedFileUpload,
   SlackThreadReply,
   SlackThreadReplyPage,
   SlackThreadReplyPageQuery,
   SlackTransport,
   SlackUser,
 } from "./transport.js";
+
+interface RawSlackFile {
+  id?: string;
+  name?: string;
+  title?: string;
+  mimetype?: string;
+  size?: number;
+  mode?: string;
+  file_access?: string;
+  url_private?: string;
+  url_private_download?: string;
+}
 
 interface RawSlackMessage {
   ts?: string;
@@ -26,6 +48,9 @@ interface RawSlackMessage {
   latest_reply?: string;
   reactions?: Array<{ name?: string; users?: string[] }>;
   metadata?: { event_type?: string; event_payload?: unknown };
+  files?: RawSlackFile[];
+  /** Slack Connect/event payloads may supply file ids separately from partial file objects. */
+  x_files?: string[];
 }
 
 // Generous safety cap on conversations.history pages. The normal terminal condition is Slack
@@ -333,6 +358,169 @@ export class SlackWebTransport implements SlackTransport {
     return [...merged.values()].sort((a, b) => Number.parseFloat(a.ts) - Number.parseFloat(b.ts));
   }
 
+  async openFile(
+    fileId: string,
+    options: OpenIssueAttachmentOptions,
+  ): Promise<OpenedIssueAttachment> {
+    if (!Number.isSafeInteger(options.maxBytes) || options.maxBytes <= 0) {
+      throw new Error(`invalid Slack attachment byte limit: ${options.maxBytes}`);
+    }
+    options.abortSignal?.throwIfAborted();
+    // Always hydrate through files.info. Besides refreshing stale private URLs, this is required
+    // for Slack Connect's `file_access: check_file_info` placeholder objects.
+    const info = await this.get("files.info", { file: fileId }, options.abortSignal);
+    if (!isRecord(info.file)) throw new Error(`slack files.info returned no file: ${fileId}`);
+    const raw = info.file as RawSlackFile;
+    if (typeof raw.id !== "string" || raw.id !== fileId) {
+      throw new Error(`slack files.info returned the wrong file for ${fileId}`);
+    }
+    if (typeof raw.size === "number" && raw.size > options.maxBytes) {
+      throw new Error(
+        `slack attachment ${fileId} exceeds the ${options.maxBytes}-byte file limit (${raw.size})`,
+      );
+    }
+    const privateUrl =
+      typeof raw.url_private_download === "string" && raw.url_private_download !== ""
+        ? raw.url_private_download
+        : typeof raw.url_private === "string" && raw.url_private !== ""
+          ? raw.url_private
+          : null;
+    if (privateUrl === null) {
+      throw new Error(`slack attachment ${fileId} is unavailable for download`);
+    }
+    const response = await this.fetchPrivateFile(privateUrl, options.abortSignal);
+    if (!response.ok) {
+      await cancelResponseBody(response);
+      throw new Error(`slack attachment ${fileId} download failed: HTTP ${response.status}`);
+    }
+    const contentLength = response.headers.get("content-length");
+    if (contentLength !== null) {
+      const advertised = Number(contentLength);
+      if (Number.isSafeInteger(advertised) && advertised > options.maxBytes) {
+        await cancelResponseBody(response);
+        throw new Error(
+          `slack attachment ${fileId} exceeds the ${options.maxBytes}-byte file limit (${advertised})`,
+        );
+      }
+    }
+    if (response.body === null) {
+      throw new Error(`slack attachment ${fileId} download returned no body`);
+    }
+    const mediaType =
+      (typeof raw.mimetype === "string" && raw.mimetype !== "" ? raw.mimetype : undefined) ??
+      response.headers.get("content-type")?.split(";", 1)[0]?.trim();
+    return {
+      body: boundedResponseBody(response.body, options.maxBytes, fileId, options.abortSignal),
+      ...(mediaType ? { mediaType } : {}),
+      ...(typeof raw.size === "number" && Number.isSafeInteger(raw.size) && raw.size >= 0
+        ? { sizeBytes: raw.size }
+        : {}),
+    };
+  }
+
+  /** Fetch a private Slack file without ever forwarding the bearer token to an untrusted host. */
+  private async fetchPrivateFile(url: string, abortSignal?: AbortSignal): Promise<Response> {
+    let current = new URL(url);
+    for (let redirectCount = 0; redirectCount <= 3; redirectCount += 1) {
+      if (!trustedSlackFileUrl(current, this.endpoint)) {
+        throw new Error(`slack attachment download refused untrusted URL: ${current.origin}`);
+      }
+      const response = await this.fetchWithRetry(
+        "files.download",
+        async () => {
+          abortSignal?.throwIfAborted();
+          const timeoutSignal = AbortSignal.timeout(30_000);
+          return this.fetchImpl(current, {
+            method: "GET",
+            headers: { authorization: `Bearer ${this.token}` },
+            redirect: "manual",
+            signal: abortSignal ? AbortSignal.any([abortSignal, timeoutSignal]) : timeoutSignal,
+          });
+        },
+        { idempotent: true, ...(abortSignal ? { abortSignal } : {}) },
+      );
+      if (response.status < 300 || response.status >= 400) return response;
+      const location = response.headers.get("location");
+      await cancelResponseBody(response);
+      if (!location || redirectCount === 3) {
+        throw new Error("slack attachment download returned an invalid redirect");
+      }
+      current = new URL(location, current);
+    }
+    throw new Error("slack attachment download exceeded the redirect limit");
+  }
+
+  async prepareFileUpload(request: SlackFileUploadRequest): Promise<SlackPreparedFileUpload> {
+    // Allocating another upload ticket after an ambiguous/5xx outcome can only leave the first
+    // uncompleted ticket to be discarded by Slack; it cannot share a file or post a message.
+    // Retrying HTTP failures is therefore safe at the operation's goal level.
+    const response = await this.post(
+      "files.getUploadURLExternal",
+      {
+        filename: request.filename,
+        length: request.length,
+        ...(request.altText !== undefined ? { alt_txt: request.altText } : {}),
+        ...(request.snippetType !== undefined ? { snippet_type: request.snippetType } : {}),
+      },
+      { idempotent: true },
+    );
+    const fileId = response.file_id;
+    const uploadUrl = response.upload_url;
+    if (typeof fileId !== "string" || fileId === "") {
+      throw new Error("slack files.getUploadURLExternal returned no file id");
+    }
+    if (typeof uploadUrl !== "string" || uploadUrl === "") {
+      throw new Error("slack files.getUploadURLExternal returned no upload URL");
+    }
+    let parsedUploadUrl: URL;
+    try {
+      parsedUploadUrl = new URL(uploadUrl);
+    } catch (error) {
+      throw new Error("slack files.getUploadURLExternal returned an invalid upload URL", {
+        cause: error,
+      });
+    }
+    // The worker will send local file bytes to this URL. Refuse an unexpected host before the URL
+    // crosses that boundary, even though the API response itself came from authenticated Slack.
+    if (!trustedSlackFileUrl(parsedUploadUrl, this.endpoint)) {
+      throw new Error(
+        `slack files.getUploadURLExternal refused untrusted upload URL: ${parsedUploadUrl.origin}`,
+      );
+    }
+    return { fileId, uploadUrl: parsedUploadUrl.toString() };
+  }
+
+  async completeFileUploads(
+    channel: string,
+    threadTs: string,
+    body: string,
+    files: readonly SlackFileUploadCompletion[],
+  ): Promise<SlackFile[]> {
+    // Slack documents completion as single-use. Treat it like chat.postMessage: retry only a 429
+    // that Slack rejected before processing, never an ambiguous network/5xx outcome.
+    const response = await this.post(
+      "files.completeUploadExternal",
+      {
+        files: files.map((file) => ({
+          id: file.fileId,
+          ...(file.title !== undefined ? { title: file.title } : {}),
+        })),
+        channel_id: channel,
+        thread_ts: threadTs,
+        initial_comment: stripBroadcastMentions(body),
+      },
+      { idempotent: false },
+    );
+    const completed = toSlackFiles(response.files);
+    const completedIds = new Set(completed.map((file) => file.id));
+    for (const file of files) {
+      if (!completedIds.has(file.fileId)) {
+        throw new Error(`slack files.completeUploadExternal omitted completed file ${file.fileId}`);
+      }
+    }
+    return completed;
+  }
+
   async getThread(
     channel: string,
     ts: string,
@@ -608,6 +796,7 @@ export class SlackWebTransport implements SlackTransport {
       const canRetry = options.idempotent ? isRetryable(response.status) : response.status === 429;
       if (!canRetry || retryCount >= MAX_RETRIES) {
         if (response.status >= 500) {
+          await cancelResponseBody(response);
           throw new SlackAmbiguousDeliveryError(
             `slack ${method} failed: status ${response.status}`,
           );
@@ -615,6 +804,7 @@ export class SlackWebTransport implements SlackTransport {
         if (isRetryable(response.status)) {
           // A 429 at retry exhaustion is definitive: Slack rejected every attempt before
           // processing, so nothing was delivered.
+          await cancelResponseBody(response);
           throw new Error(`slack ${method} failed: status ${response.status}`);
         }
         return response;
@@ -628,6 +818,7 @@ export class SlackWebTransport implements SlackTransport {
         `slack ${method}: HTTP ${response.status}; backing off ${Math.round(delayMs / 1000)}s ` +
           `before retry ${retryCount + 1}/${MAX_RETRIES}`,
       );
+      await cancelResponseBody(response);
       await this.sleep(delayMs, options.abortSignal);
     }
   }
@@ -674,6 +865,67 @@ function retryDelayMs(headers: Headers, retryCount: number): number {
   return Math.min(1_000 * 2 ** retryCount, 30_000);
 }
 
+function trustedSlackFileUrl(url: URL, endpoint: string): boolean {
+  if (url.username !== "" || url.password !== "") return false;
+  const endpointUrl = new URL(endpoint);
+  if (url.origin === endpointUrl.origin) return true;
+  if (url.protocol !== "https:") return false;
+  const host = url.hostname.toLowerCase();
+  return (
+    host === "files.slack.com" ||
+    host.endsWith(".slack.com") ||
+    host === "slack-files.com" ||
+    host.endsWith(".slack-files.com") ||
+    host === "slack-gov.com" ||
+    host.endsWith(".slack-gov.com")
+  );
+}
+
+async function cancelResponseBody(response: Response): Promise<void> {
+  try {
+    await response.body?.cancel();
+  } catch {
+    // Releasing a response is best-effort and must not replace the primary Slack error.
+  }
+}
+
+async function* boundedResponseBody(
+  body: ReadableStream<Uint8Array>,
+  maxBytes: number,
+  fileId: string,
+  abortSignal?: AbortSignal,
+): AsyncIterable<Uint8Array> {
+  const reader = body.getReader();
+  let bytes = 0;
+  let complete = false;
+  try {
+    for (;;) {
+      abortSignal?.throwIfAborted();
+      const chunk = await reader.read();
+      if (chunk.done) {
+        complete = true;
+        return;
+      }
+      bytes += chunk.value.byteLength;
+      if (bytes > maxBytes) {
+        throw new Error(
+          `slack attachment ${fileId} exceeds the ${maxBytes}-byte file limit while downloading`,
+        );
+      }
+      yield chunk.value;
+    }
+  } finally {
+    if (!complete) {
+      try {
+        await reader.cancel();
+      } catch {
+        // The primary abort, limit, or consumer error wins.
+      }
+    }
+    reader.releaseLock();
+  }
+}
+
 function nextCursor(body: Record<string, unknown>): string | undefined {
   const meta = body.response_metadata;
   if (typeof meta !== "object" || meta === null) return undefined;
@@ -704,6 +956,7 @@ function toMessage(channel: string, m: RawSlackMessage, botUserId?: string): Sla
       ? { replyCount: m.reply_count }
       : {}),
     ...(typeof m.latest_reply === "string" ? { latestReply: m.latest_reply } : {}),
+    ...filesProperty(m.files, m.x_files),
   };
 }
 
@@ -716,7 +969,58 @@ function toThreadReply(m: RawSlackMessage): SlackThreadReply {
   if (m.edited !== undefined) reply.edited = true;
   const metadata = toMessageMetadata(m.metadata);
   if (metadata !== undefined) reply.metadata = metadata;
+  const files = toSlackFiles(m.files, m.x_files);
+  if (files.length > 0) reply.files = files;
   return reply;
+}
+
+/** Defensively project Slack file objects without retaining private download URLs. */
+export function toSlackFiles(files: unknown, xFiles: unknown = undefined): SlackFile[] {
+  const out: SlackFile[] = [];
+  const seen = new Set<string>();
+  if (Array.isArray(files)) {
+    for (const value of files) {
+      if (!isRecord(value) || typeof value.id !== "string" || value.id === "") continue;
+      const file = safeSlackFile(value);
+      if (seen.has(file.id)) continue;
+      seen.add(file.id);
+      out.push(file);
+    }
+  }
+  if (Array.isArray(xFiles)) {
+    for (const value of xFiles) {
+      if (typeof value !== "string" || value === "" || seen.has(value)) continue;
+      seen.add(value);
+      out.push({ id: value, mode: "file_access", fileAccess: "check_file_info" });
+    }
+  }
+  return out;
+}
+
+function filesProperty(
+  files: RawSlackFile[] | undefined,
+  xFiles: string[] | undefined,
+): { files?: SlackFile[] } {
+  const projected = toSlackFiles(files, xFiles);
+  return projected.length > 0 ? { files: projected } : {};
+}
+
+function safeSlackFile(file: RawSlackFile): SlackFile {
+  return {
+    id: file.id!,
+    ...(typeof file.name === "string" && file.name !== "" ? { name: file.name } : {}),
+    ...(typeof file.title === "string" && file.title !== "" ? { title: file.title } : {}),
+    ...(typeof file.mimetype === "string" && file.mimetype !== ""
+      ? { mimetype: file.mimetype }
+      : {}),
+    ...(typeof file.size === "number" && Number.isSafeInteger(file.size) && file.size >= 0
+      ? { size: file.size }
+      : {}),
+    ...(typeof file.mode === "string" && file.mode !== "" ? { mode: file.mode } : {}),
+    ...(typeof file.file_access === "string" && file.file_access !== ""
+      ? { fileAccess: file.file_access }
+      : {}),
+  };
 }
 
 /** Map Slack's raw `metadata` field onto {@link SlackMessageMetadata}; undefined when absent. */

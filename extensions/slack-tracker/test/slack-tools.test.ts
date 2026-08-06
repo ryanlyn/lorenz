@@ -1,4 +1,4 @@
-import { test } from "vitest";
+import { test, vi } from "vitest";
 import { assert } from "@lorenz/test-utils";
 
 import { parseSlackConfig } from "./helpers.js";
@@ -23,6 +23,7 @@ test("slack toolSpecs lists the status, comment, read, query, and context tools"
     slackToolSpecs().map((t) => t.name),
     [
       "slack_update_status",
+      "slack_prepare_file_upload",
       "slack_comment",
       "slack_workpad",
       "slack_read_thread",
@@ -31,6 +32,19 @@ test("slack toolSpecs lists the status, comment, read, query, and context tools"
       "slack_channel_context",
     ],
   );
+});
+
+test("slack upload tools expose the bounded signed-upload contract", () => {
+  const prepare = slackToolSpecs().find((tool) => tool.name === "slack_prepare_file_upload")!;
+  const comment = slackToolSpecs().find((tool) => tool.name === "slack_comment")!;
+
+  assert.deepEqual(prepare.inputSchema.required, ["issueId", "filename", "length"]);
+  assert.equal(prepare.inputSchema.additionalProperties, false);
+  const commentProperties = comment.inputSchema.properties as Record<
+    string,
+    Record<string, unknown>
+  >;
+  assert.equal(commentProperties.fileIds!.maxItems, 10);
 });
 
 test("slack_query lists bot-mention issues with derived state and labels", async () => {
@@ -105,6 +119,42 @@ test("slack_query filters by state, then expands thread and reactions", async ()
     row.thread.map((t) => t.text),
     ["working"],
   );
+});
+
+test("slack_query files include attachments from eligible steering replies", async () => {
+  const transport = new InMemorySlackTransport({
+    C1: [
+      {
+        ts: "1.15",
+        text: "<@U1> inspect",
+        replies: [
+          {
+            ts: "1.16",
+            text: "supporting evidence",
+            user: "U2",
+            files: [{ id: "F_REPLY", name: "evidence.txt", mimetype: "text/plain", size: 8 }],
+          },
+        ],
+      },
+    ],
+  });
+
+  const res = await executeSlackTool(
+    "slack_query",
+    { select: ["issueId", "files"] },
+    settings(),
+    transport,
+  );
+  assert.equal(res.success, true);
+  const result = res.result as {
+    rows: Array<{ issueId: string; files: Array<Record<string, unknown>> }>;
+  };
+  assert.deepEqual(result.rows, [
+    {
+      issueId: "C1:1.15",
+      files: [{ id: "F_REPLY", name: "evidence.txt", mimetype: "text/plain", size: 8 }],
+    },
+  ]);
 });
 
 test("slack_query only scans allow-listed channels (a requested channel is intersected)", async () => {
@@ -227,6 +277,282 @@ test("slack_read_thread reads back a reply posted via slack_comment", async () =
     result.replies.map((r) => r.text),
     ["all done"],
   );
+});
+
+test("worker-prepared files complete as one Slack thread reply and read back safely", async () => {
+  const transport = new InMemorySlackTransport(
+    { C1: [{ ts: "1.1", text: "<@U1> generate the reports", reactions: ["eyes"] }] },
+    { botUserId: "U1" },
+  );
+
+  const first = await executeSlackTool(
+    "slack_prepare_file_upload",
+    {
+      issueId: "C1:1.1",
+      filename: "report.pdf",
+      length: 123,
+      title: "Report",
+      altText: "A generated report",
+    },
+    settings(),
+    transport,
+  );
+  const second = await executeSlackTool(
+    "slack_prepare_file_upload",
+    { issueId: "C1:1.1", filename: "trace.log", length: 45 },
+    settings(),
+    transport,
+  );
+  assert.equal(first.success, true);
+  assert.equal(second.success, true);
+  const firstUpload = first.result as { fileId: string; uploadUrl: string };
+  const secondUpload = second.result as { fileId: string; uploadUrl: string };
+  assert.match(firstUpload.uploadUrl, /^https:\/\/files\.slack\.com\/upload\/v1\//);
+  assert.deepEqual(transport.preparedUploads[0]!.request, {
+    filename: "report.pdf",
+    length: 123,
+    altText: "A generated report",
+  });
+
+  const commented = await executeSlackTool(
+    "slack_comment",
+    {
+      issueId: "C1:1.1",
+      body: "Generated files for <!channel>",
+      fileIds: [firstUpload.fileId, secondUpload.fileId],
+    },
+    settings(),
+    transport,
+  );
+  assert.equal(commented.success, true);
+  assert.deepEqual(transport.completedUploads[0], {
+    channel: "C1",
+    threadTs: "1.1",
+    body: "Generated files for @channel",
+    files: [{ fileId: firstUpload.fileId, title: "Report" }, { fileId: secondUpload.fileId }],
+  });
+
+  const read = await executeSlackTool(
+    "slack_read_thread",
+    { issueId: "C1:1.1" },
+    settings(),
+    transport,
+  );
+  const replies = (read.result as { replies: Array<{ text: string; files?: unknown[] }> }).replies;
+  assert.equal(replies.at(-1)!.text, "Generated files for @channel");
+  assert.deepEqual(replies.at(-1)!.files, [
+    { id: firstUpload.fileId, name: "report.pdf", title: "Report", size: 123 },
+    { id: secondUpload.fileId, name: "trace.log", size: 45 },
+  ]);
+});
+
+test("prepared Slack file ids are issue-bound and remain usable after a mismatched attempt", async () => {
+  const transport = new InMemorySlackTransport({
+    C1: [
+      { ts: "1.1", text: "<@U1> first", reactions: ["eyes"] },
+      { ts: "1.2", text: "<@U1> second", reactions: ["eyes"] },
+    ],
+  });
+  const prepared = await executeSlackTool(
+    "slack_prepare_file_upload",
+    { issueId: "C1:1.1", filename: "result.txt", length: 6 },
+    settings(),
+    transport,
+  );
+  const fileId = (prepared.result as { fileId: string }).fileId;
+
+  const wrongIssue = await executeSlackTool(
+    "slack_comment",
+    { issueId: "C1:1.2", body: "wrong", fileIds: [fileId] },
+    settings(),
+    transport,
+  );
+  assert.equal(wrongIssue.success, false);
+  assert.match(wrongIssue.error!, /belongs to a different issue/);
+
+  const correctIssue = await executeSlackTool(
+    "slack_comment",
+    { issueId: "C1:1.1", body: "right", fileIds: [fileId] },
+    settings(),
+    transport,
+  );
+  assert.equal(correctIssue.success, true);
+});
+
+test("Slack upload file ids are consumed before an ambiguous completion attempt", async () => {
+  const transport = new InMemorySlackTransport({
+    C1: [{ ts: "1.1", text: "<@U1> upload", reactions: ["eyes"] }],
+  });
+  const prepared = await executeSlackTool(
+    "slack_prepare_file_upload",
+    { issueId: "C1:1.1", filename: "result.txt", length: 6 },
+    settings(),
+    transport,
+  );
+  const fileId = (prepared.result as { fileId: string }).fileId;
+  transport.completeFileUploads = async () => {
+    throw new Error("slack files.completeUploadExternal outcome unknown");
+  };
+
+  const first = await executeSlackTool(
+    "slack_comment",
+    { issueId: "C1:1.1", body: "result", fileIds: [fileId] },
+    settings(),
+    transport,
+  );
+  assert.equal(first.success, false);
+  assert.match(first.error!, /file ids were consumed/);
+
+  const retried = await executeSlackTool(
+    "slack_comment",
+    { issueId: "C1:1.1", body: "result", fileIds: [fileId] },
+    settings(),
+    transport,
+  );
+  assert.equal(retried.success, false);
+  assert.match(retried.error!, /unknown or expired/);
+});
+
+test("Slack upload ids expire and mixed validation does not partially consume them", async () => {
+  const transport = new InMemorySlackTransport({
+    C1: [{ ts: "1.1", text: "<@U1> upload", reactions: ["eyes"] }],
+  });
+  const prepared = await executeSlackTool(
+    "slack_prepare_file_upload",
+    { issueId: "C1:1.1", filename: "atomic.txt", length: 6 },
+    settings(),
+    transport,
+  );
+  const fileId = (prepared.result as { fileId: string }).fileId;
+
+  const mixed = await executeSlackTool(
+    "slack_comment",
+    { issueId: "C1:1.1", body: "mixed", fileIds: [fileId, "F_UNKNOWN"] },
+    settings(),
+    transport,
+  );
+  assert.equal(mixed.success, false);
+  assert.match(mixed.error!, /unknown or expired/);
+
+  const valid = await executeSlackTool(
+    "slack_comment",
+    { issueId: "C1:1.1", body: "valid", fileIds: [fileId] },
+    settings(),
+    transport,
+  );
+  assert.equal(valid.success, true);
+
+  vi.useFakeTimers();
+  try {
+    vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
+    const expiring = await executeSlackTool(
+      "slack_prepare_file_upload",
+      { issueId: "C1:1.1", filename: "expires.txt", length: 7 },
+      settings(),
+      transport,
+    );
+    const expiringId = (expiring.result as { fileId: string }).fileId;
+    vi.advanceTimersByTime(15 * 60_000);
+
+    const expired = await executeSlackTool(
+      "slack_comment",
+      { issueId: "C1:1.1", body: "late", fileIds: [expiringId] },
+      settings(),
+      transport,
+    );
+    assert.equal(expired.success, false);
+    assert.match(expired.error!, /unknown or expired/);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test("Slack upload preparation enforces per-issue file and total-byte caps", async () => {
+  const transport = new InMemorySlackTransport({
+    C1: [{ ts: "1.1", text: "<@U1> upload", reactions: ["eyes"] }],
+  });
+  const tinyIds: string[] = [];
+  for (let index = 0; index < 10; index += 1) {
+    const prepared = await executeSlackTool(
+      "slack_prepare_file_upload",
+      { issueId: "C1:1.1", filename: `tiny-${index}.txt`, length: 1 },
+      settings(),
+      transport,
+    );
+    assert.equal(prepared.success, true);
+    tinyIds.push((prepared.result as { fileId: string }).fileId);
+  }
+  const eleventh = await executeSlackTool(
+    "slack_prepare_file_upload",
+    { issueId: "C1:1.1", filename: "tiny-10.txt", length: 1 },
+    settings(),
+    transport,
+  );
+  assert.equal(eleventh.success, false);
+  assert.match(eleventh.error!, /at most 10 pending uploads/);
+  assert.equal(
+    (
+      await executeSlackTool(
+        "slack_comment",
+        { issueId: "C1:1.1", body: "tiny files", fileIds: tinyIds },
+        settings(),
+        transport,
+      )
+    ).success,
+    true,
+  );
+
+  const largeIds: string[] = [];
+  for (let index = 0; index < 4; index += 1) {
+    const prepared = await executeSlackTool(
+      "slack_prepare_file_upload",
+      { issueId: "C1:1.1", filename: `large-${index}.bin`, length: 25 * 1024 * 1024 },
+      settings(),
+      transport,
+    );
+    assert.equal(prepared.success, true);
+    largeIds.push((prepared.result as { fileId: string }).fileId);
+  }
+  const overTotal = await executeSlackTool(
+    "slack_prepare_file_upload",
+    { issueId: "C1:1.1", filename: "large-4.bin", length: 1 },
+    settings(),
+    transport,
+  );
+  assert.equal(overTotal.success, false);
+  assert.match(overTotal.error!, /100 MiB|104857600 total bytes/);
+  assert.equal(
+    (
+      await executeSlackTool(
+        "slack_comment",
+        { issueId: "C1:1.1", body: "large files", fileIds: largeIds },
+        settings(),
+        transport,
+      )
+    ).success,
+    true,
+  );
+});
+
+test("Slack upload preparation rejects unsafe filenames and out-of-bounds lengths", async () => {
+  const transport = new InMemorySlackTransport({
+    C1: [{ ts: "1.1", text: "<@U1> upload", reactions: ["eyes"] }],
+  });
+  for (const input of [
+    { filename: "../secret", length: 1 },
+    { filename: "subdir\\secret", length: 1 },
+    { filename: "empty.txt", length: 0 },
+    { filename: "large.bin", length: 25 * 1024 * 1024 + 1 },
+  ]) {
+    const result = await executeSlackTool(
+      "slack_prepare_file_upload",
+      { issueId: "C1:1.1", ...input },
+      settings(),
+      transport,
+    );
+    assert.equal(result.success, false);
+  }
+  assert.equal(transport.preparedUploads.length, 0);
 });
 
 test("slack_read_thread rejects a channel that is not in tracker.channels", async () => {
