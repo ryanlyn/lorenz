@@ -368,6 +368,7 @@ The HTTP observability server, agent MCP listener, and trace store. See [http-ap
 | `server.port` | integer (valid port) | `4040` | Bind port. `0` binds an ephemeral port. The `--port` flag overrides this. |
 | `server.mcp_port` | integer (1-65535) | (none) | Optional loopback-only port for remote per-run MCP claims. Local agents always share `server.port`; remote per-run agents need a distinct value while the dashboard is enabled. Changing it requires a restart. |
 | `server.trace_dir` | string | `~/.lorenz/issues` | JSONL trace directory; enables trace routes when paired with the issue store. |
+| `server.issue_store_path` | string | `~/.lorenz/issues.db` | SQLite issue metadata path. Set a distinct path for each daemon when multiple workflows share a home directory. Changing it requires a restart. |
 | `server.static_dir` | string | (built SPA dir) | Override for the built dashboard assets. |
 
 The config default for `server.port` is `4040`, not disabled. Whether the web server actually starts is gated separately by the `--no-dashboard` CLI flag, not by this default.

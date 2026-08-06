@@ -577,6 +577,8 @@ export interface ServerSettings {
   mcpPort?: number | undefined;
   /** Directory containing JSONL trace files (same directory TraceEmitter writes to). */
   traceDir?: string | undefined;
+  /** SQLite database containing issue metadata displayed by the dashboard. */
+  issueStorePath?: string | undefined;
   /** Built frontend assets directory (override for dashboard SPA). */
   staticDir?: string | undefined;
 }

@@ -327,6 +327,7 @@ const serverRawSchema = z
     port: coercedPort.optional(),
     mcpPort: coercedPositivePort.optional(),
     traceDir: z.string().optional(),
+    issueStorePath: z.string().optional(),
     staticDir: z.string().optional(),
   })
   .strict();

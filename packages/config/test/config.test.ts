@@ -21,7 +21,6 @@ import { registerMemoryTracker } from "@lorenz/memory-tracker";
 import { ToolRegistry } from "@lorenz/tool-sdk";
 import { TrackerRegistry } from "@lorenz/tracker-sdk";
 import { assert, tempDir, writeExecutable } from "@lorenz/test-utils";
-
 import type { DefaultSettingsOptions } from "@lorenz/config";
 
 // Private registries keep these tests hermetic: the process-wide default registries belong
@@ -702,6 +701,17 @@ test("server.mcp_port rejects zero and out-of-range ports", () => {
   assert.throws(
     () => parseConfig({ server: { mcp_port: 65_536 } }),
     /server.mcp_port must be a valid port number/,
+  );
+});
+
+test("server.issue_store_path configures a workflow-specific issue database", () => {
+  assert.equal(parseConfig().server.issueStorePath, undefined);
+  assert.equal(
+    parseConfig(
+      { server: { issue_store_path: "~/.lorenz/state/jira/issues.db" } },
+      { HOME: "/home/agent" },
+    ).server.issueStorePath,
+    "/home/agent/.lorenz/state/jira/issues.db",
   );
 });
 

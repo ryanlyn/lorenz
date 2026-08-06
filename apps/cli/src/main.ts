@@ -326,7 +326,9 @@ export async function runDaemon(options: CliOptions): Promise<number> {
       assertSlotsPerMachineGate(workflow.settings, coordinator);
       const traceDir = workflow.settings.server.traceDir!;
       const traceEmitter = new TraceEmitter(traceDir);
-      issueStore = new IssueStore(defaultIssueStorePath());
+      issueStore = new IssueStore(
+        workflow.settings.server.issueStorePath ?? defaultIssueStorePath(),
+      );
       runtime = new LorenzRuntime({
         workflow,
         clientFactory: createTrackerClient,

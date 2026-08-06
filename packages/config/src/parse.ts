@@ -149,6 +149,9 @@ export function parseConfig(
   if (serverRaw.port !== undefined) settings.server.port = serverRaw.port;
   if (serverRaw.mcpPort !== undefined) settings.server.mcpPort = serverRaw.mcpPort;
   if (serverRaw.traceDir !== undefined) settings.server.traceDir = serverRaw.traceDir;
+  if (serverRaw.issueStorePath !== undefined) {
+    settings.server.issueStorePath = expandLocalPath(serverRaw.issueStorePath, env);
+  }
   if (serverRaw.staticDir !== undefined) settings.server.staticDir = serverRaw.staticDir;
 
   const loggingRaw = parsed.logging ?? {};
