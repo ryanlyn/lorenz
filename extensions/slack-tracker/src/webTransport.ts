@@ -462,7 +462,9 @@ export class SlackWebTransport implements SlackTransport {
         ...(request.altText !== undefined ? { alt_txt: request.altText } : {}),
         ...(request.snippetType !== undefined ? { snippet_type: request.snippetType } : {}),
       },
-      { idempotent: true },
+      // Slack advertises JSON for this method, but some production workspaces treat a JSON body as
+      // empty and report both required fields missing. Form encoding is accepted consistently.
+      { idempotent: true, encoding: "form" },
     );
     const fileId = response.file_id;
     const uploadUrl = response.upload_url;
@@ -751,8 +753,9 @@ export class SlackWebTransport implements SlackTransport {
   private async post(
     method: string,
     params: Record<string, unknown>,
-    options: { idempotent: boolean },
+    options: { idempotent: boolean; encoding?: "json" | "form" },
   ): Promise<Record<string, unknown>> {
+    const formEncoded = options.encoding === "form";
     const response = await this.fetchWithRetry(
       method,
       async () =>
@@ -760,9 +763,11 @@ export class SlackWebTransport implements SlackTransport {
           method: "POST",
           headers: {
             authorization: `Bearer ${this.token}`,
-            "content-type": "application/json; charset=utf-8",
+            "content-type": formEncoded
+              ? "application/x-www-form-urlencoded"
+              : "application/json; charset=utf-8",
           },
-          body: JSON.stringify(params),
+          body: formEncoded ? slackFormBody(params) : JSON.stringify(params),
           signal: AbortSignal.timeout(30_000),
         }),
       options,
@@ -844,6 +849,17 @@ export class SlackWebTransport implements SlackTransport {
     }
     return body;
   }
+}
+
+function slackFormBody(params: Record<string, unknown>): string {
+  const body = new URLSearchParams();
+  for (const [name, value] of Object.entries(params)) {
+    if (typeof value !== "string" && typeof value !== "number" && typeof value !== "boolean") {
+      throw new Error(`slack form parameter ${name} must be a string, number, or boolean`);
+    }
+    body.set(name, String(value));
+  }
+  return body.toString();
 }
 
 function isRetryable(status: number): boolean {

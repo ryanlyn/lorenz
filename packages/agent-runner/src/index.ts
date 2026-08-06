@@ -246,6 +246,23 @@ class RunController {
           }),
         input.abortSignal,
       );
+      // A claimed run can wait minutes for a worker before workspace setup begins. Refresh the
+      // attachment capability snapshot at the last responsible moment so files posted during that
+      // wait are present for the first turn. Keep the claim-time issue fields (especially the event
+      // cursor and routing state): a reply that added a file still needs normal steering delivery.
+      if (input.fetchIssue && input.openIssueAttachment) {
+        try {
+          const refreshed = await input.fetchIssue(issue);
+          issue = replaceIssueAttachments(issue, refreshed);
+        } catch (error) {
+          throwIfAborted(input.abortSignal);
+          input.onUpdate?.({
+            type: "stderr",
+            workspacePath: workspace,
+            message: `Ignoring initial attachment refresh failure: ${errorMessage(error)}`,
+          });
+        }
+      }
     } catch (error) {
       unsubscribeIssueEvents?.();
       throw error;
@@ -1343,6 +1360,16 @@ function issueAttachmentSnapshot(
       issueAttachmentFingerprint(attachment),
     ]),
   );
+}
+
+function replaceIssueAttachments(issue: Issue, refreshed: Issue): Issue {
+  const next = { ...issue };
+  if (refreshed.attachments === undefined) {
+    delete next.attachments;
+  } else {
+    next.attachments = refreshed.attachments;
+  }
+  return next;
 }
 
 function issueAttachmentSnapshotsEqual(

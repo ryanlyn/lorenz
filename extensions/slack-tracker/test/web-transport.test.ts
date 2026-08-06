@@ -1075,12 +1075,19 @@ test("postReply posts to chat.postMessage with thread_ts and text", async () => 
 });
 
 test("prepareFileUpload requests a trusted signed Slack URL with file metadata", async () => {
-  const calls: Array<{ url: string; auth: string | null; body: unknown }> = [];
+  const calls: Array<{
+    url: string;
+    auth: string | null;
+    contentType: string | null;
+    body: Record<string, string>;
+  }> = [];
   const fetchImpl = (async (url: string | URL, init?: RequestInit) => {
+    const headers = new Headers(init?.headers);
     calls.push({
       url: String(url),
-      auth: new Headers(init?.headers).get("authorization"),
-      body: JSON.parse(String(init?.body ?? "{}")),
+      auth: headers.get("authorization"),
+      contentType: headers.get("content-type"),
+      body: Object.fromEntries(new URLSearchParams(String(init?.body ?? ""))),
     });
     return new Response(
       JSON.stringify({
@@ -1105,9 +1112,10 @@ test("prepareFileUpload requests a trusted signed Slack URL with file metadata",
   });
   assert.match(calls[0]!.url, /\/files\.getUploadURLExternal$/);
   assert.equal(calls[0]!.auth, "Bearer xoxb-abc");
+  assert.equal(calls[0]!.contentType, "application/x-www-form-urlencoded");
   assert.deepEqual(calls[0]!.body, {
     filename: "report.pdf",
-    length: 123,
+    length: "123",
     alt_txt: "Quarterly report",
     snippet_type: "text",
   });

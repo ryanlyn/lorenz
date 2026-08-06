@@ -169,6 +169,7 @@ test("queued steering rematerializes changed attachments before activation and r
   const settings = fakeSettings({ agent: { ...defaultSettings().agent, maxTurns: 1 } });
   const sequence: string[] = [];
   const updates: AgentUpdate[] = [];
+  let issueRefreshCount = 0;
   let issueEventListener: ((events: TrackerIssueEvent[]) => void) | undefined;
   let releaseFirstTurn: (() => void) | undefined;
   let markFirstTurnStarted: (() => void) | undefined;
@@ -203,7 +204,10 @@ test("queued steering rematerializes changed attachments before activation and r
     workflow: { path: "/workflow.md", config: {}, promptTemplate: "Fix it", settings },
     settings,
     openIssueAttachment: async () => ({ body: attachmentBody() }),
-    fetchIssue: async () => refreshedIssue,
+    fetchIssue: async () => {
+      issueRefreshCount += 1;
+      return issueRefreshCount === 1 ? initialIssue : refreshedIssue;
+    },
     subscribeIssueEvents: (listener) => {
       issueEventListener = listener;
       return () => {};
@@ -259,6 +263,111 @@ test("queued steering rematerializes changed attachments before activation and r
         update.message.includes("temporary denial"),
     ),
   );
+});
+
+test("attachments added while workspace setup is pending materialize before the first turn", async () => {
+  const rootAttachment = { id: "file-1", name: "root.json", sizeBytes: 10 };
+  const replyAttachment = { id: "file-2", name: "reply.png", sizeBytes: 20 };
+  const claimedIssue = fakeIssue({
+    attachments: [rootAttachment],
+    issueEventCursor: "10.0",
+  });
+  const issueWithReply = fakeIssue({
+    attachments: [rootAttachment, replyAttachment],
+    issueEventCursor: "10.0",
+  });
+  const terminalIssue = fakeIssue({
+    attachments: [rootAttachment, replyAttachment],
+    issueEventCursor: "10.0",
+    state: "Needs input",
+  });
+  const settings = fakeSettings({ agent: { ...defaultSettings().agent, maxTurns: 1 } });
+  const materializedSnapshots: string[][] = [];
+  const firstPrompts: string[] = [];
+  const queuedPrompts: string[] = [];
+  const activatedPrompts: string[] = [];
+  let issueEventListener: ((events: TrackerIssueEvent[]) => void) | undefined;
+  let markWorkspaceStarted: (() => void) | undefined;
+  let releaseWorkspace: (() => void) | undefined;
+  let issueRefreshCount = 0;
+  const workspaceStarted = new Promise<void>((resolve) => {
+    markWorkspaceStarted = resolve;
+  });
+  const workspaceRelease = new Promise<void>((resolve) => {
+    releaseWorkspace = resolve;
+  });
+  const session = fakeSession({
+    queueTurn: async (prompt, options) => {
+      queuedPrompts.push(prompt);
+      await options?.startWhen;
+      activatedPrompts.push(prompt);
+      return [{ type: "turn_completed" }];
+    },
+  });
+
+  const attempt = runAgentAttempt({
+    issue: claimedIssue,
+    workflow: { path: "/workflow.md", config: {}, promptTemplate: "Inspect the files", settings },
+    settings,
+    openIssueAttachment: async () => ({ body: attachmentBody() }),
+    fetchIssue: async () => {
+      issueRefreshCount += 1;
+      return issueRefreshCount === 1 ? issueWithReply : terminalIssue;
+    },
+    subscribeIssueEvents: (listener) => {
+      issueEventListener = listener;
+      return () => {};
+    },
+    adapters: fakeAdapters({
+      createWorkspaceForIssue: async () => {
+        markWorkspaceStarted?.();
+        await workspaceRelease;
+        return "/tmp/workspace/TEST-1";
+      },
+      materializeIssueAttachments: async (_workspace, attachments) => {
+        materializedSnapshots.push(attachments.map((attachment) => attachment.id));
+        return {
+          materialized: attachments.map((attachment) => ({
+            attachment,
+            relativePath: `.lorenz/attachments/${attachment.id}-${attachment.name}`,
+            actualSizeBytes: attachment.sizeBytes ?? 0,
+          })),
+          failures: [],
+        };
+      },
+      executorFactory: () => ({
+        kind: "codex",
+        async startSession() {
+          return session;
+        },
+        async runTurn(_session, prompt) {
+          firstPrompts.push(prompt);
+          return [{ type: "turn_completed" }];
+        },
+      }),
+    }),
+  });
+
+  await workspaceStarted;
+  assert.ok(issueEventListener);
+  issueEventListener([
+    {
+      authorizedForSteering: true,
+      ts: "11.0",
+      author: "ryan",
+      text: "Inspect `.lorenz/attachments/file-2-reply.png`",
+    },
+  ]);
+  releaseWorkspace?.();
+
+  const result = await attempt;
+
+  assert.deepEqual(materializedSnapshots, [["file-1", "file-2"]]);
+  assert.match(firstPrompts[0]!, /\.lorenz\/attachments\/file-1-root\.json/);
+  assert.match(firstPrompts[0]!, /\.lorenz\/attachments\/file-2-reply\.png/);
+  assert.equal(queuedPrompts.length, 1);
+  assert.equal(activatedPrompts.length, 0);
+  assert.equal(result.turnCount, 1);
 });
 
 test("live delivery ignores events represented by the initial issue snapshot", async () => {
@@ -2206,6 +2315,44 @@ test("issue attachments materialize before workspace preparation, hooks, and ses
     "before_run",
     "session_started",
   ]);
+});
+
+test("an initial attachment refresh failure keeps the claimed snapshot and reports it", async () => {
+  const attachment = { id: "file-1", name: "claimed.txt", sizeBytes: 12 };
+  const issue = fakeIssue({ attachments: [attachment] });
+  const settings = fakeSettings();
+  const updates: AgentUpdate[] = [];
+  const materializedSnapshots: string[][] = [];
+  let issueRefreshCount = 0;
+
+  await runAgentAttempt({
+    issue,
+    workflow: { path: "/workflow.md", config: {}, promptTemplate: "Fix it", settings },
+    settings,
+    openIssueAttachment: async () => ({ body: attachmentBody() }),
+    fetchIssue: async () => {
+      issueRefreshCount += 1;
+      if (issueRefreshCount === 1) throw new Error("temporary tracker failure");
+      return issue;
+    },
+    onUpdate: (update) => updates.push(update),
+    adapters: fakeAdapters({
+      materializeIssueAttachments: async (_workspace, attachments) => {
+        materializedSnapshots.push(attachments.map((value) => value.id));
+        return { materialized: [], failures: [] };
+      },
+    }),
+  });
+
+  assert.deepEqual(materializedSnapshots, [["file-1"]]);
+  assert.ok(
+    updates.some(
+      (update) =>
+        update.type === "stderr" &&
+        update.message.includes("Ignoring initial attachment refresh failure") &&
+        update.message.includes("temporary tracker failure"),
+    ),
+  );
 });
 
 test("the first custom-template prompt lists materialized attachments and per-file failures", async () => {
