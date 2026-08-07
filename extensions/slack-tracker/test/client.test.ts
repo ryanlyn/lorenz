@@ -67,6 +67,20 @@ test("mentions become issues; the bot's reactions drive state", async () => {
   );
 });
 
+test("dispatch receipt immediately adds the non-status tracking marker", async () => {
+  const transport = new InMemorySlackTransport({
+    C1: [{ ts: "1700000000.000250", text: "<@U_BOT> start a worker", reactions: [] }],
+  });
+  const client = new SlackTrackerClient(settings(), transport);
+  const [issue] = await client.fetchCandidateIssues();
+
+  assert.equal(await client.acknowledgeIssueReceipt(issue!), true);
+  assert.deepEqual((await transport.getMessage("C1", "1700000000.000250"))!.botReactions, [
+    "robot_face",
+  ]);
+  assert.equal((await client.fetchIssuesByIds([issue!.id]))[0]?.state, "Todo");
+});
+
 test("piped mention form <@U_BOT|worker> is detected and stripped from the title", async () => {
   const transport = new InMemorySlackTransport({
     C1: [{ ts: "1700000000.000300", text: "<@U_BOT|worker> do it", reactions: [] }],

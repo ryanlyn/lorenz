@@ -966,6 +966,7 @@ export class LorenzRuntime {
       (settling) => this.settlingRunOwnership.add(settling),
     );
     this.activeRuns.set(key, handle);
+    let receiptAcknowledgement: Promise<void> | null;
     let acknowledgement: Promise<void> | null = null;
     try {
       this.syncRetryTimer(refreshed.id);
@@ -980,6 +981,7 @@ export class LorenzRuntime {
         this.addEvent("run_reserving", `${refreshed.identifier} slot=${slotIndex}`);
       }
       this.input.onIssueDispatched?.(refreshed);
+      receiptAcknowledgement = this.acknowledgeIssueReceipt(refreshed);
       if (claim.kind === "running") acknowledgement = this.acknowledgeIssue(refreshed);
     } catch (error) {
       try {
@@ -1004,9 +1006,12 @@ export class LorenzRuntime {
             handle,
           )
         : this.runReservedClaim(refreshed, claim.reservation, runId, handle);
-    const run = acknowledgement
+    let run = acknowledgement
       ? Promise.all([execution, acknowledgement]).then(() => undefined)
       : execution;
+    if (receiptAcknowledgement) {
+      run = Promise.all([run, receiptAcknowledgement]).then(() => undefined);
+    }
     this.inFlight.add(run);
     void run.finally(() => {
       this.settlingRunOwnership.delete(handle);
@@ -1020,10 +1025,24 @@ export class LorenzRuntime {
     return [run];
   }
 
+  private acknowledgeIssueReceipt(issue: Issue): Promise<void> | null {
+    const acknowledge = this.client.acknowledgeIssueReceipt?.bind(this.client);
+    if (!acknowledge) return null;
+    return this.observeTrackerAcknowledgement(issue, async () => acknowledge(issue));
+  }
+
   private acknowledgeIssue(issue: Issue): Promise<void> | null {
-    if (!this.client.acknowledgeIssue) return null;
+    const acknowledge = this.client.acknowledgeIssue?.bind(this.client);
+    if (!acknowledge) return null;
+    return this.observeTrackerAcknowledgement(issue, async () => acknowledge(issue));
+  }
+
+  private observeTrackerAcknowledgement(
+    issue: Issue,
+    acknowledge: () => Promise<boolean>,
+  ): Promise<void> | null {
     try {
-      return this.client.acknowledgeIssue(issue).then(
+      return acknowledge().then(
         (acknowledged) => {
           if (acknowledged) this.addEvent("tracker_acknowledged", issue.identifier);
         },

@@ -857,10 +857,14 @@ export interface RuntimeTrackerClient {
    */
   fetchIssuesByStates?(states: string[]): Promise<Issue[]>;
   /**
-   * Optional best-effort dispatch acknowledgement. The runtime starts this after it owns the
-   * issue claim and lets it run alongside agent setup, so a tracker can provide immediate
-   * human-visible feedback without delaying execution. Rejections are reported as runtime events
-   * and never fail the claimed run.
+   * Optional best-effort receipt after the runtime owns the issue claim but before it acquires a
+   * worker. This must acknowledge queuing without presenting the issue as actively running.
+   */
+  acknowledgeIssueReceipt?(issue: Issue): Promise<boolean>;
+  /**
+   * Optional best-effort start acknowledgement. The runtime starts this once the run has a
+   * concrete worker slot and lets it run alongside agent setup. Rejections are reported as
+   * runtime events and never fail the claimed run.
    */
   acknowledgeIssue?(issue: Issue): Promise<boolean>;
   /**
