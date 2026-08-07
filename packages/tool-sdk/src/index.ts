@@ -1,4 +1,4 @@
-export type { ToolContext, ToolProvider, ToolResult, ToolSpec } from "./provider.js";
+export type { ToolContext, ToolProvider, ToolResult, ToolSpec, ToolWorkspace } from "./provider.js";
 export {
   ToolRegistry,
   defaultToolRegistry,

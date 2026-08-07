@@ -1,9 +1,11 @@
 import { createHash, randomBytes } from "node:crypto";
 
 import type { Settings } from "@lorenz/domain";
+import type { ToolWorkspace } from "@lorenz/tool-sdk";
 
 const defaultMcpAuthScope = "mcp:default";
 const activeTokens = new Map<string, string>();
+const workspaceByToken = new Map<string, ToolWorkspace>();
 
 export function createMcpAuthScope(): string {
   return `mcp:${randomBytes(16).toString("base64url")}`;
@@ -66,7 +68,10 @@ export function issueMcpToken(scope = defaultMcpAuthScope): string {
 }
 
 export function revokeMcpToken(token: string | null | undefined): void {
-  if (token) activeTokens.delete(token);
+  if (token) {
+    activeTokens.delete(token);
+    workspaceByToken.delete(token);
+  }
 }
 
 export function validMcpToken(
@@ -143,7 +148,39 @@ export function resolveRunClaim(token: string | null | undefined): RunClaim | un
 
 /** Revoke a per-run token, dropping its claim. Safe no-op on unknown input. */
 export function revokeRunClaim(token: string | null | undefined): void {
-  if (token) runClaims.delete(token);
+  if (token) {
+    runClaims.delete(token);
+    workspaceByToken.delete(token);
+  }
+}
+
+/**
+ * Bind one validated worker workspace to an opaque daemon-issued token. The binding is immutable
+ * for the token's lifetime and is resolved server-side for every tool request.
+ */
+export function bindMcpTokenWorkspace(token: string, workspace: ToolWorkspace): void {
+  const runClaim = runClaims.get(token);
+  if (!activeTokens.has(token) && runClaim === undefined) {
+    throw new Error("mcp_workspace_bind_unknown_token");
+  }
+  if (workspace.path.trim() === "") throw new Error("mcp_workspace_bind_blank_path");
+  if (runClaim && runClaim.workerHost !== (workspace.workerHost ?? "")) {
+    throw new Error("mcp_workspace_bind_worker_mismatch");
+  }
+  const existing = workspaceByToken.get(token);
+  if (existing) {
+    if (existing.path === workspace.path && existing.workerHost === workspace.workerHost) return;
+    throw new Error("mcp_workspace_bind_retargeted");
+  }
+  workspaceByToken.set(token, workspace);
+}
+
+/** Workspace capability carried by this exact token, if ACP has bound one. */
+export function resolveMcpTokenWorkspace(
+  token: string | null | undefined,
+): ToolWorkspace | undefined {
+  if (typeof token !== "string") return undefined;
+  return workspaceByToken.get(token);
 }
 
 /** Inputs to {@link checkRunClaim}: what the request is asking to do. */

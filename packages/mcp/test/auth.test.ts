@@ -2,6 +2,14 @@ import { test } from "vitest";
 import { issueMcpToken, revokeMcpToken, validMcpToken } from "@lorenz/cli";
 import { parseConfig } from "@lorenz/config";
 import { assert } from "@lorenz/test-utils";
+import type { ToolWorkspace } from "@lorenz/tool-sdk";
+
+import {
+  bindMcpTokenWorkspace,
+  issueMcpToken as issueWorkspaceToken,
+  resolveMcpTokenWorkspace,
+  revokeMcpToken as revokeWorkspaceToken,
+} from "../src/auth.js";
 
 import { mcpAuthScopeForSettings } from "@lorenz/mcp";
 
@@ -59,6 +67,26 @@ test("revokeMcpToken — revoking a token causes validMcpToken to return false",
   } finally {
     // Ensure cleanup even if assertion before revoke fails
     revokeMcpToken(token);
+  }
+});
+
+test("workspace bindings are token-isolated and removed on revoke", () => {
+  const first = issueWorkspaceToken();
+  const second = issueWorkspaceToken();
+  const firstWorkspace = { path: "/work/first", workerHost: null } as ToolWorkspace;
+  const secondWorkspace = { path: "/work/second", workerHost: null } as ToolWorkspace;
+  try {
+    bindMcpTokenWorkspace(first, firstWorkspace);
+    bindMcpTokenWorkspace(second, secondWorkspace);
+    assert.equal(resolveMcpTokenWorkspace(first), firstWorkspace);
+    assert.equal(resolveMcpTokenWorkspace(second), secondWorkspace);
+
+    revokeWorkspaceToken(first);
+    assert.equal(resolveMcpTokenWorkspace(first), undefined);
+    assert.equal(resolveMcpTokenWorkspace(second), secondWorkspace);
+  } finally {
+    revokeWorkspaceToken(first);
+    revokeWorkspaceToken(second);
   }
 });
 

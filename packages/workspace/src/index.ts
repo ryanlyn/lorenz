@@ -1,8 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
-import { createReadStream } from "node:fs";
+import { constants, createReadStream, createWriteStream } from "node:fs";
+import { randomUUID } from "node:crypto";
 import os from "node:os";
+import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 
 import { Liquid } from "liquidjs";
@@ -19,10 +21,13 @@ import {
   type Issue,
   type Settings,
 } from "@lorenz/domain";
+import type { ToolWorkspace } from "@lorenz/tool-sdk";
 import { execa } from "execa";
 
 const remoteWorkspaceMarker = "__LORENZ_WORKSPACE__";
 const processOutputMaxChars = 4_096;
+const toolAttachmentsDir = ".lorenz/attachments";
+const toolOutboxDir = ".lorenz/outbox";
 
 const hookTemplateReferencePattern = /(?:\{\{|\{%)[\s\S]*\bissue(?:\.|\[)/;
 
@@ -113,6 +118,254 @@ export interface WorkspaceRunHookOptions {
 
 export interface WorkspaceHookEventOptions {
   onHookEvent?: ((event: HookExecutionMessage) => void) | undefined;
+}
+
+/**
+ * Build the narrow filesystem capability exposed to tools invoked by one authenticated run.
+ * File bytes stay outside MCP JSON: local workspaces use filesystem streams and remote
+ * workspaces use SSH stdin/stdout streams.
+ */
+export function createToolWorkspace(
+  workspacePath: string,
+  workerHost: string | null,
+): ToolWorkspace {
+  if (workspacePath.trim() === "") throw new Error("tool_workspace_path_must_not_be_blank");
+  const root = workerHost ? path.posix.normalize(workspacePath) : path.resolve(workspacePath);
+  if (workerHost ? !path.posix.isAbsolute(root) : !path.isAbsolute(root)) {
+    throw new Error(`tool_workspace_path_must_be_absolute: ${workspacePath}`);
+  }
+
+  return {
+    path: root,
+    workerHost,
+    writeAttachment: async (filename, body) => {
+      const leaf = requirePlainToolFilename(filename, "attachment filename");
+      return workerHost
+        ? writeRemoteToolAttachment(root, workerHost, leaf, body)
+        : writeLocalToolAttachment(root, leaf, body);
+    },
+    withOutput: async (relativePath, use) => {
+      const leaf = requireToolOutboxPath(relativePath);
+      return workerHost
+        ? withRemoteToolOutput(root, workerHost, leaf, use)
+        : withLocalToolOutput(root, leaf, use);
+    },
+  };
+}
+
+function requirePlainToolFilename(value: string, label: string): string {
+  if (
+    value.trim() === "" ||
+    value === "." ||
+    value === ".." ||
+    value.includes("/") ||
+    value.includes("\\") ||
+    value.includes("\0") ||
+    Buffer.byteLength(value) > 255
+  ) {
+    throw new Error(`${label} must be a plain name up to 255 bytes`);
+  }
+  return value;
+}
+
+function requireToolOutboxPath(value: string): string {
+  if (value.includes("\\") || value.includes("\0") || path.posix.normalize(value) !== value) {
+    throw new Error("tool output path must be a normalized workspace-relative path");
+  }
+  if (path.posix.dirname(value) !== toolOutboxDir) {
+    throw new Error(`tool output path must be directly beneath ${toolOutboxDir}/`);
+  }
+  return requirePlainToolFilename(path.posix.basename(value), "tool output filename");
+}
+
+function toolAttachmentPath(filename: string): string {
+  return path.posix.join(toolAttachmentsDir, filename);
+}
+
+async function writeLocalToolAttachment(
+  root: string,
+  filename: string,
+  body: ReadableStream<Uint8Array>,
+): Promise<string> {
+  const directory = path.join(root, ".lorenz", "attachments");
+  await ensureDirectoryPathWithoutSymlinks(root, directory);
+  const target = path.join(directory, filename);
+  const temporary = path.join(directory, `.lorenz-transfer-${randomUUID()}.tmp`);
+  try {
+    await pipeline(webBodyToNode(body), createWriteStream(temporary, { flags: "wx", mode: 0o600 }));
+    await rejectExistingSymlink(target);
+    await fs.rename(temporary, target);
+    return toolAttachmentPath(filename);
+  } finally {
+    await fs.rm(temporary, { force: true }).catch(() => {});
+  }
+}
+
+async function writeRemoteToolAttachment(
+  root: string,
+  workerHost: string,
+  filename: string,
+  body: ReadableStream<Uint8Array>,
+): Promise<string> {
+  const lorenzDir = path.posix.join(root, ".lorenz");
+  const directory = path.posix.join(root, toolAttachmentsDir);
+  const target = path.posix.join(directory, filename);
+  const temporary = path.posix.join(directory, `.lorenz-transfer-${randomUUID()}.tmp`);
+  const command = [
+    "set -eu",
+    `workspace=${shellEscape(root)}`,
+    `lorenz_dir=${shellEscape(lorenzDir)}`,
+    `directory=${shellEscape(directory)}`,
+    `target=${shellEscape(target)}`,
+    `temporary=${shellEscape(temporary)}`,
+    'if [ ! -d "$workspace" ] || [ -L "$workspace" ] || [ -L "$lorenz_dir" ] || [ -L "$directory" ]; then',
+    "  printf '%s\\n' \"unsafe tool attachment directory: $directory\" >&2",
+    "  exit 1",
+    "fi",
+    'mkdir -p "$directory"',
+    'if [ ! -d "$lorenz_dir" ] || [ ! -d "$directory" ] || [ -L "$target" ]; then',
+    "  printf '%s\\n' \"unsafe tool attachment path: $target\" >&2",
+    "  exit 1",
+    "fi",
+    'if [ -e "$target" ] && [ ! -f "$target" ]; then',
+    "  printf '%s\\n' \"tool attachment target is not a regular file: $target\" >&2",
+    "  exit 1",
+    "fi",
+    "umask 077",
+    "trap 'rm -f -- \"$temporary\"' EXIT",
+    'cat > "$temporary"',
+    'mv -f -- "$temporary" "$target"',
+    "trap - EXIT",
+  ].join("\n");
+  const remote = startSshProcess(workerHost, command);
+  remote.stdout.resume();
+  const remoteStderrResult = collectStreamText(remote.stderr);
+  const remoteExit = waitForProcessExit(remote);
+  const termination = directChildTerminationAdapter(remote);
+  try {
+    await pipeline(webBodyToNode(body), remote.stdin);
+  } catch (error) {
+    termination.terminate("SIGKILL");
+    throw error;
+  }
+  const [remoteResult, remoteStderr] = await Promise.all([remoteExit, remoteStderrResult]);
+  if (remoteResult.exitCode !== 0) {
+    throw new Error(
+      `tool workspace attachment write failed: ${workerHost} ${remoteResult.exitCode} ${remoteStderr.text}`.trim(),
+    );
+  }
+  if (remoteStderr.error) {
+    throw new Error(`tool workspace attachment write failed: ${errorMessage(remoteStderr.error)}`);
+  }
+  return toolAttachmentPath(filename);
+}
+
+async function withLocalToolOutput<T>(
+  root: string,
+  filename: string,
+  use: (body: ReadableStream<Uint8Array>, size: number) => Promise<T>,
+): Promise<T> {
+  const lorenzDir = path.join(root, ".lorenz");
+  const directory = path.join(root, toolOutboxDir);
+  await rejectFinalSymlink(root);
+  await rejectFinalSymlink(lorenzDir);
+  await rejectFinalSymlink(directory);
+  const target = path.join(directory, filename);
+  let handle: fs.FileHandle | undefined;
+  let stream: ReturnType<fs.FileHandle["createReadStream"]> | undefined;
+  try {
+    handle = await fs.open(target, constants.O_RDONLY | constants.O_NOFOLLOW);
+    const stat = await handle.stat();
+    if (!stat.isFile()) throw new Error(`tool output is not a regular file: ${target}`);
+    const size = Number(stat.size);
+    if (!Number.isSafeInteger(size)) {
+      throw new Error(`tool workspace output size is not a safe integer: ${stat.size}`);
+    }
+    stream = handle.createReadStream({
+      autoClose: true,
+    });
+    return await use(nodeBodyToWeb(stream), size);
+  } finally {
+    stream?.destroy();
+    await handle?.close().catch(() => {});
+  }
+}
+
+async function withRemoteToolOutput<T>(
+  root: string,
+  workerHost: string,
+  filename: string,
+  use: (body: ReadableStream<Uint8Array>, size: number) => Promise<T>,
+): Promise<T> {
+  const stat = await runSsh(workerHost, remoteToolOutputCommand(root, filename, "stat"), {
+    stderrToStdout: true,
+  });
+  if (stat.status !== 0) {
+    throw new Error(
+      `tool workspace output stat failed: ${workerHost} ${stat.status} ${stat.stdout}`.trim(),
+    );
+  }
+  const sizeText = stat.stdout.trim();
+  if (!/^\d+$/.test(sizeText)) {
+    throw new Error(`tool workspace output stat returned an invalid size: ${sizeText}`);
+  }
+  const size = Number(sizeText);
+  if (!Number.isSafeInteger(size)) {
+    throw new Error(`tool workspace output size is not a safe integer: ${sizeText}`);
+  }
+  const remote = startSshProcess(workerHost, remoteToolOutputCommand(root, filename, "read"));
+  remote.stdin.end();
+  const stderrResult = collectStreamText(remote.stderr);
+  const remoteExit = waitForProcessExit(remote);
+  const termination = directChildTerminationAdapter(remote);
+  let result: [T, { exitCode: number | null }, CollectedStreamText];
+  try {
+    result = await Promise.all([use(nodeBodyToWeb(remote.stdout), size), remoteExit, stderrResult]);
+  } catch (error) {
+    // A failed upload callback may never consume stdout, leaving remote `cat` blocked.
+    termination.terminate("SIGKILL");
+    throw error;
+  }
+  const [value, exit, stderr] = result;
+  if (exit.exitCode !== 0) {
+    throw new Error(
+      `tool workspace output read failed: ${workerHost} ${exit.exitCode} ${stderr.text}`.trim(),
+    );
+  }
+  if (stderr.error) {
+    throw new Error(`tool workspace output read failed: ${errorMessage(stderr.error)}`);
+  }
+  return value;
+}
+
+function remoteToolOutputCommand(root: string, filename: string, action: "stat" | "read"): string {
+  const lorenzDir = path.posix.join(root, ".lorenz");
+  const outbox = path.posix.join(root, toolOutboxDir);
+  const target = path.posix.join(outbox, filename);
+  return [
+    "set -eu",
+    `workspace=${shellEscape(root)}`,
+    `lorenz_dir=${shellEscape(lorenzDir)}`,
+    `outbox=${shellEscape(outbox)}`,
+    `target=${shellEscape(target)}`,
+    'if [ ! -d "$workspace" ] || [ -L "$workspace" ] || [ -L "$lorenz_dir" ] || [ -L "$outbox" ] || [ -L "$target" ]; then',
+    "  printf '%s\\n' \"unsafe tool output path: $target\" >&2",
+    "  exit 1",
+    "fi",
+    'if [ ! -d "$lorenz_dir" ] || [ ! -d "$outbox" ] || [ ! -f "$target" ]; then',
+    "  printf '%s\\n' \"tool output is not a regular file: $target\" >&2",
+    "  exit 1",
+    "fi",
+    action === "stat" ? "stat -c '%s' -- \"$target\"" : 'exec cat -- "$target"',
+  ].join("\n");
+}
+
+function webBodyToNode(body: ReadableStream<Uint8Array>): Readable {
+  return Readable.fromWeb(body);
+}
+
+function nodeBodyToWeb(body: Readable): ReadableStream<Uint8Array> {
+  return Readable.toWeb(body);
 }
 
 interface WorkspaceSkillSourcePlan {
@@ -828,6 +1081,7 @@ rm -rf "$target"`;
 
 async function ensureDirectoryPathWithoutSymlinks(root: string, target: string): Promise<void> {
   ensureInsideRoot(target, root);
+  await rejectFinalSymlink(root);
   const relative = path.relative(root, target);
   let current = root;
   const segments = relative.split(path.sep).filter((segment) => segment !== "");

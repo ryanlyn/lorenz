@@ -20,6 +20,29 @@ export interface SlackMessage {
   replyCount?: number | undefined;
   /** ts of the newest thread reply (root messages only). */
   latestReply?: string | undefined;
+  /** Files attached directly to this message. Private Slack URLs are never exposed. */
+  files?: SlackFile[] | undefined;
+}
+
+/** Agent-safe Slack file metadata. Download URLs stay inside the daemon transport. */
+export interface SlackFile {
+  id: string;
+  name?: string | undefined;
+  title?: string | undefined;
+  mimetype?: string | undefined;
+  size?: number | undefined;
+}
+
+/** Authenticated Slack download stream. */
+export interface SlackFileDownload {
+  file: SlackFile;
+  body: ReadableStream<Uint8Array>;
+}
+
+/** Lazy worker-file source used by Slack's external upload flow. */
+export interface SlackUploadFile {
+  filename: string;
+  withBody<T>(use: (body: ReadableStream<Uint8Array>, size: number) => Promise<T>): Promise<T>;
 }
 
 /**
@@ -75,6 +98,8 @@ export interface SlackThreadReply {
    * them. Also excluded from steering context.
    */
   deleted?: boolean | undefined;
+  /** Files attached to this reply. Private Slack URLs are never exposed. */
+  files?: SlackFile[] | undefined;
 }
 
 /** One Slack API page of thread replies newer than an event cursor. */
@@ -133,6 +158,8 @@ export interface SlackTransport {
   ): Promise<SlackThreadReplyPage>;
   /** Resolve a workspace member via `users.info`; `null` when unknown or unreadable. */
   getUser(userId: string): Promise<SlackUser | null>;
+  /** Download one Slack file with the daemon-owned bot token. */
+  readFile?(fileId: string, abortSignal?: AbortSignal): Promise<SlackFileDownload>;
   /**
    * Channel messages around an anchor ts: up to `before` messages at-or-before the anchor and
    * `after` messages strictly after it, in ascending ts order. Read-only context window.
@@ -183,4 +210,6 @@ export interface SlackTransport {
 export interface SlackPostOptions {
   metadata?: SlackMessageMetadata | undefined;
   blocks?: unknown[] | undefined;
+  files?: SlackUploadFile[] | undefined;
+  abortSignal?: AbortSignal | undefined;
 }

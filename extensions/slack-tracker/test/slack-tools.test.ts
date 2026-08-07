@@ -1,5 +1,6 @@
 import { test } from "vitest";
 import { assert } from "@lorenz/test-utils";
+import type { ToolWorkspace } from "@lorenz/tool-sdk";
 
 import { parseSlackConfig } from "./helpers.js";
 
@@ -26,6 +27,7 @@ test("slack toolSpecs lists the status, comment, read, query, and context tools"
       "slack_comment",
       "slack_workpad",
       "slack_read_thread",
+      "slack_read_file",
       "slack_query",
       "slack_user_info",
       "slack_channel_context",
@@ -141,14 +143,21 @@ test("slack_query rejects a malformed expand value", async () => {
 });
 
 test("slack_read_thread returns text, derived status, reactions, and the thread replies", async () => {
+  const expected = new Uint8Array([0, 255, 7, 42]);
   const transport = new InMemorySlackTransport({
     C1: [
       {
         ts: "1.1",
         text: "<@U1> do the thing",
         reactions: ["eyes"],
+        files: [{ id: "F_ROOT", name: "root.png" }],
         replies: [
-          { ts: "1.2", text: "on it", user: "U2" },
+          {
+            ts: "1.2",
+            text: "on it",
+            user: "U2",
+            files: [{ id: "F_REPLY", name: "reply.bin" }],
+          },
           {
             ts: "1.3",
             text: "Lorenz workpad",
@@ -160,7 +169,12 @@ test("slack_read_thread returns text, derived status, reactions, and the thread 
           },
         ],
       },
+      { ts: "2.1", text: "<@U1> another issue", files: [{ id: "F_FOREIGN" }] },
     ],
+  });
+  transport.readFile = async (fileId) => ({
+    file: { id: fileId, name: "reply.bin" },
+    body: new Blob([expected]).stream(),
   });
 
   const result = await executeSlackTool(
@@ -180,9 +194,15 @@ test("slack_read_thread returns text, derived status, reactions, and the thread 
     text: "<@U1> do the thing",
     workpad: { ts: "1.3", plan: "- [ ] test", note: "running" },
     reactions: ["eyes"],
+    files: [{ id: "F_ROOT", name: "root.png" }],
     permalink: "https://example.slack.com/archives/C1/p11",
     replies: [
-      { ts: "1.2", text: "on it", user: "U2" },
+      {
+        ts: "1.2",
+        text: "on it",
+        user: "U2",
+        files: [{ id: "F_REPLY", name: "reply.bin" }],
+      },
       {
         ts: "1.3",
         text: "Lorenz workpad",
@@ -194,20 +214,81 @@ test("slack_read_thread returns text, derived status, reactions, and the thread 
       },
     ],
   });
+
+  let written: { filename: string; body: Uint8Array } | undefined;
+  const workspace = {
+    path: "/worker/issue",
+    workerHost: null,
+    writeAttachment: async (filename, body) => {
+      const bytes = new Uint8Array(await new Response(body).arrayBuffer());
+      written = { filename, body: bytes };
+      return `.lorenz/attachments/${filename}`;
+    },
+  } as ToolWorkspace;
+  const read = await executeSlackTool(
+    "slack_read_file",
+    { issueId: "C1:1.1", fileId: "F_REPLY" },
+    settings(),
+    transport,
+    workspace,
+  );
+  assert.deepEqual(read.result, {
+    file: { id: "F_REPLY", name: "reply.bin" },
+    path: ".lorenz/attachments/F_REPLY-reply.bin",
+  });
+  assert.deepEqual(written, { filename: "F_REPLY-reply.bin", body: expected });
+
+  const foreign = await executeSlackTool(
+    "slack_read_file",
+    { issueId: "C1:1.1", fileId: "F_FOREIGN" },
+    settings(),
+    transport,
+    workspace,
+  );
+  assert.match(foreign.error ?? "", /not attached to Slack issue C1:1\.1/);
 });
 
-test("slack_read_thread reads back a reply posted via slack_comment", async () => {
+test("slack_comment streams an attachment and its reply reads back", async () => {
+  const expected = new Uint8Array([1, 2, 3, 254]);
   const transport = new InMemorySlackTransport({
     C1: [{ ts: "1.1", text: "<@U1> do the thing", reactions: ["white_check_mark"] }],
   });
+  const postReply = transport.postReply.bind(transport);
+  let uploaded: Uint8Array | undefined;
+  let uploadedName: string | undefined;
+  transport.postReply = async (channel, threadTs, body, options) => {
+    const file = options.files![0]!;
+    uploadedName = file.filename;
+    await file.withBody(async (stream) => {
+      uploaded = new Uint8Array(await new Response(stream).arrayBuffer());
+    });
+    return postReply(channel, threadTs, body, options);
+  };
+  let outputPath: string | undefined;
+  const workspace = {
+    path: "/worker/issue",
+    workerHost: null,
+    withOutput: async (path, use) => {
+      outputPath = path;
+      return use(new Blob([expected]).stream(), expected.byteLength);
+    },
+  } as ToolWorkspace;
 
   const replied = await executeSlackTool(
     "slack_comment",
-    { issueId: "C1:1.1", body: "all done" },
+    {
+      issueId: "C1:1.1",
+      body: "all done",
+      attachments: [".lorenz/outbox/artifact.bin"],
+    },
     settings(),
     transport,
+    workspace,
   );
   assert.equal(replied.success, true);
+  assert.equal(outputPath, ".lorenz/outbox/artifact.bin");
+  assert.equal(uploadedName, "artifact.bin");
+  assert.deepEqual(uploaded, expected);
 
   const read = await executeSlackTool(
     "slack_read_thread",

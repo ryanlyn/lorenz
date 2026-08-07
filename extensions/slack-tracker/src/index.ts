@@ -1,5 +1,7 @@
 export type {
   SlackChannelScan,
+  SlackFile,
+  SlackFileDownload,
   SlackMessage,
   SlackMessageMetadata,
   SlackPostOptions,
@@ -7,6 +9,7 @@ export type {
   SlackThreadReplyPage,
   SlackThreadReplyPageQuery,
   SlackTransport,
+  SlackUploadFile,
   SlackUser,
 } from "./transport.js";
 export {

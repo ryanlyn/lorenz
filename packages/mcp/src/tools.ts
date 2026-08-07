@@ -7,6 +7,7 @@ import {
   type ToolRegistry,
   type ToolResult,
   type ToolSpec,
+  type ToolWorkspace,
 } from "@lorenz/tool-sdk";
 import { defaultTrackerRegistry, type TrackerRegistry } from "@lorenz/tracker-sdk";
 
@@ -84,9 +85,12 @@ export async function executeTool(
   fetchImpl: typeof fetch = fetch,
   registry: ToolRegistry = defaultToolRegistry,
   trackers: TrackerRegistry = defaultTrackerRegistry,
+  context: { workspace?: ToolWorkspace | undefined; abortSignal?: AbortSignal | undefined } = {},
 ): Promise<ToolResult> {
   return executeMountedTool(mountedPacks(settings, registry, trackers), name, input, {
     settings,
     fetchImpl,
+    ...(context.workspace ? { workspace: context.workspace } : {}),
+    ...(context.abortSignal ? { abortSignal: context.abortSignal } : {}),
   });
 }

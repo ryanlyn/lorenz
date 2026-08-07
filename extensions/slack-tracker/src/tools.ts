@@ -10,6 +10,7 @@ import {
   type ToolProvider,
   type ToolResult,
   type ToolSpec,
+  type ToolWorkspace,
 } from "@lorenz/tool-sdk";
 
 import { slackMessageToRow, slackPermalink, splitIssueId, trackedRootsOf } from "./client.js";
@@ -18,7 +19,7 @@ import { requireBotUserId, requireTrackedMessage, updateSlackStatus } from "./op
 import { slackTrackerOptions } from "./options.js";
 import { resolveThreadState, stateFromObservedThread } from "./threadState.js";
 import { slackRuntimeKey, slackRuntimeTransport } from "./toolTransport.js";
-import { isBotMarked, type SlackTransport } from "./transport.js";
+import { isBotMarked, type SlackTransport, type SlackUploadFile } from "./transport.js";
 import { SlackWebTransport } from "./webTransport.js";
 import { upsertWorkpad } from "./workpad.js";
 
@@ -27,6 +28,7 @@ const TOOL_NAMES = [
   "slack_comment",
   "slack_workpad",
   "slack_read_thread",
+  "slack_read_file",
   "slack_query",
   "slack_user_info",
   "slack_channel_context",
@@ -60,10 +62,16 @@ export function slackToolSpecs(): ToolSpec[] {
       name: "slack_comment",
       description:
         "Reply in the Slack issue's thread. Use for milestone updates and findings that " +
-        "SHOULD notify the thread (replies notify; workpad edits do not). Args: issueId, body.",
+        "SHOULD notify the thread (replies notify; workpad edits do not). To attach generated " +
+        "worker output, provide workspace-relative paths directly beneath .lorenz/outbox/. " +
+        "Args: issueId, body, attachments?.",
       inputSchema: {
         type: "object",
-        properties: { issueId: { type: "string" }, body: { type: "string" } },
+        properties: {
+          issueId: { type: "string" },
+          body: { type: "string" },
+          attachments: { type: "array", items: { type: "string" } },
+        },
         required: ["issueId", "body"],
       },
     },
@@ -91,11 +99,24 @@ export function slackToolSpecs(): ToolSpec[] {
       description:
         "Read a Slack issue's authoritative state: its source message, thread-derived status " +
         "(human `@bot !` commands and bot `status:` replies, latest wins), status audit trail, " +
-        "workpad, reactions, permalink, and thread replies. Args: issueId.",
+        "workpad, reactions, permalink, every root/reply file, and thread replies. Use " +
+        "slack_read_file to stream a listed file into the worker workspace. Args: issueId.",
       inputSchema: {
         type: "object",
         properties: { issueId: { type: "string" } },
         required: ["issueId"],
+      },
+    },
+    {
+      name: "slack_read_file",
+      description:
+        "Stream a file attached anywhere in a tracked Slack issue's complete thread into " +
+        ".lorenz/attachments/ in the active worker workspace. The file must be listed by " +
+        "slack_read_thread. Args: issueId, fileId.",
+      inputSchema: {
+        type: "object",
+        properties: { issueId: { type: "string" }, fileId: { type: "string" } },
+        required: ["issueId", "fileId"],
       },
     },
     {
@@ -155,6 +176,8 @@ export async function executeSlackTool(
   input: unknown,
   settings: Settings,
   transport: SlackTransport,
+  workspace?: ToolWorkspace,
+  abortSignal?: AbortSignal,
 ): Promise<ToolResult> {
   const args = isRecord(input) ? input : {};
   try {
@@ -187,7 +210,22 @@ export async function executeSlackTool(
       case "slack_comment": {
         // Same trust-boundary check as update_status: only reply on a watched, tracked issue.
         await requireTrackedMessage(settings, transport, channel, ts);
-        await transport.postReply(channel, ts, requireStr(args, "body"));
+        const attachmentPaths = commentAttachmentPaths(args.attachments);
+        const body = requireStr(args, "body");
+        if (attachmentPaths.length > 0 && !workspace) {
+          throw new Error("Slack file uploads require an active worker workspace");
+        }
+        const files = attachmentPaths.map((relativePath): SlackUploadFile => {
+          const filename = relativePath.slice(relativePath.lastIndexOf("/") + 1);
+          return {
+            filename,
+            withBody: async (use) => workspace!.withOutput(relativePath, use),
+          };
+        });
+        await transport.postReply(channel, ts, body, {
+          ...(files.length ? { files } : {}),
+          ...(abortSignal ? { abortSignal } : {}),
+        });
         return toolSuccess({ ok: true });
       }
       case "slack_workpad": {
@@ -231,9 +269,36 @@ export async function executeSlackTool(
           ...(thread.request !== undefined ? { request: thread.request } : {}),
           ...(thread.workpad !== undefined ? { workpad: thread.workpad } : {}),
           reactions: root.reactions,
+          ...(root.files?.length ? { files: root.files } : {}),
           ...(base ? { permalink: slackPermalink(base, channel, ts) } : {}),
           replies,
         });
+      }
+      case "slack_read_file": {
+        const root = await requireTrackedMessage(settings, transport, channel, ts);
+        const replies = await transport.getThread(channel, ts);
+        const fileId = requireStr(args, "fileId");
+        const attached = [root, ...replies]
+          .flatMap((message) => message.files ?? [])
+          .find((file) => file.id === fileId);
+        if (!attached) {
+          throw new Error(`file ${fileId} is not attached to Slack issue ${channel}:${ts}`);
+        }
+        if (!transport.readFile) throw new Error("Slack file reads are not supported");
+        if (!workspace) throw new Error("Slack file reads require an active worker workspace");
+        const downloaded = await transport.readFile(fileId, abortSignal);
+        const file = { ...attached, ...downloaded.file, id: attached.id };
+        let savedPath;
+        try {
+          savedPath = await workspace.writeAttachment(
+            attachmentFilename(file.id, file.name ?? file.title),
+            downloaded.body,
+          );
+        } catch (error) {
+          await downloaded.body.cancel().catch(() => {});
+          throw error;
+        }
+        return toolSuccess({ file, path: savedPath });
       }
       case "slack_channel_context": {
         // Context reads are scoped: anchored to a TRACKED issue in a watched channel, never a
@@ -300,6 +365,8 @@ export const slackToolProvider: ToolProvider = {
       context.settings,
       slackRuntimeTransport(context.settings) ??
         new SlackWebTransport(context.settings, context.fetchImpl),
+      context.workspace,
+      context.abortSignal,
     ),
 };
 
@@ -375,6 +442,20 @@ function parseStringArray(input: unknown, label: string): string[] | undefined {
     throw new Error(`${label} must be an array of strings`);
   }
   return input;
+}
+
+function commentAttachmentPaths(input: unknown): string[] {
+  if (input === undefined || input === null) return [];
+  if (!Array.isArray(input) || !input.every((value) => typeof value === "string")) {
+    throw new Error("'attachments' must be an array of workspace-relative paths");
+  }
+  return input;
+}
+
+function attachmentFilename(fileId: string, preferred: string | undefined): string {
+  const safeId = fileId.replace(/[^A-Za-z0-9._-]/g, "_") || "file";
+  const safeName = (preferred ?? fileId).replace(/[^A-Za-z0-9._-]/g, "_") || "attachment";
+  return `${safeId}-${safeName}`.slice(0, 255);
 }
 
 function windowArg(value: unknown, label: string): number {

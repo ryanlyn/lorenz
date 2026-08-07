@@ -28,6 +28,7 @@ test("slack dispatch mounts the slack pack by default", () => {
       "slack_comment",
       "slack_workpad",
       "slack_read_thread",
+      "slack_read_file",
       "slack_query",
       "slack_user_info",
       "slack_channel_context",

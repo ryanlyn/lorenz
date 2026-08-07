@@ -29,7 +29,7 @@ import {
 import { actionForStopReason } from "@lorenz/policies/stopReason";
 import { shellEscape, startSshProcess } from "@lorenz/ssh";
 import { workerHostPool } from "@lorenz/worker-host-pool";
-import { validateWorkspaceCwd } from "@lorenz/workspace";
+import { createToolWorkspace, validateWorkspaceCwd } from "@lorenz/workspace";
 import { execa } from "execa";
 import {
   errorMessage,
@@ -180,6 +180,8 @@ export class Executor implements AgentExecutor {
           input.workerHost ?? null,
           mcpTunnelTransport,
         ));
+      if (!mcpEndpoint.bindWorkspace) throw new Error("mcp_workspace_binding_unavailable");
+      mcpEndpoint.bindWorkspace(createToolWorkspace(workspace, input.workerHost ?? null));
       child = startBridgeProcess(acpOptions.bridgeCommand, workspace, input.workerHost ?? null);
       const client = acpClient({
         workspace,

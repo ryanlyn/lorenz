@@ -20,10 +20,33 @@ export interface ToolResult {
   error?: string;
 }
 
+/**
+ * Narrow, request-authenticated access to the active worker workspace.
+ *
+ * Tracker tools never receive SSH credentials or an unrestricted filesystem handle. Inbound
+ * files can only be written beneath `.lorenz/attachments/`; outbound files can only be read from
+ * `.lorenz/outbox/`.
+ */
+export interface ToolWorkspace {
+  /** Canonical workspace path, retained for diagnostics and binding checks. */
+  readonly path: string;
+  /** SSH destination for a remote worker, or `null` for a local workspace. */
+  readonly workerHost: string | null;
+  writeAttachment(filename: string, body: ReadableStream<Uint8Array>): Promise<string>;
+  withOutput<T>(
+    path: string,
+    use: (body: ReadableStream<Uint8Array>, size: number) => Promise<T>,
+  ): Promise<T>;
+}
+
 /** Dependencies handed to a tool pack when executing one of its tools. */
 export interface ToolContext {
   settings: Settings;
   fetchImpl: typeof fetch;
+  /** Present only for a tool call authenticated as one active agent run. */
+  workspace?: ToolWorkspace | undefined;
+  /** Aborted when the MCP request is abandoned. */
+  abortSignal?: AbortSignal | undefined;
 }
 
 /**

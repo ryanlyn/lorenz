@@ -2,6 +2,7 @@ import { isAllowedAuthor, isBotMention } from "./mapping.js";
 import { stripBroadcastMentions } from "./sanitize.js";
 import type {
   SlackChannelScan,
+  SlackFile,
   SlackMessage,
   SlackPostOptions,
   SlackThreadReply,
@@ -20,6 +21,7 @@ interface SeedMessage {
   /** Reactions authored by humans: visible on the message but never state-bearing. */
   humanReactions?: string[];
   replies?: SlackThreadReply[];
+  files?: SlackFile[];
 }
 
 interface StoredMessage extends Omit<SlackMessage, "reactions"> {
@@ -72,6 +74,7 @@ export class InMemorySlackTransport implements SlackTransport {
           botReactions: [...(m.reactions ?? [])],
           humanReactions: [...(m.humanReactions ?? [])],
           thread: (m.replies ?? []).map((r) => ({ ...r })),
+          ...(m.files?.length ? { files: m.files.map((file) => ({ ...file })) } : {}),
         })),
       );
     }
@@ -243,6 +246,7 @@ export class InMemorySlackTransport implements SlackTransport {
     const { thread, humanReactions, ...rest } = message;
     return {
       ...rest,
+      ...(message.files?.length ? { files: message.files.map((file) => ({ ...file })) } : {}),
       reactions: [...new Set([...message.botReactions, ...humanReactions])],
       botReactions: [...message.botReactions],
       ...(thread.length > 0

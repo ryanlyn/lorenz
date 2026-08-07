@@ -16,7 +16,12 @@ import {
 import type { HookExecutionMessage, Settings } from "@lorenz/domain";
 import { assert, tempDir, sampleIssue, writeExecutable, settle } from "@lorenz/test-utils";
 
-import { runHook, syncWorkspaceSkills, type WorkspaceSkillOverlay } from "../src/index.js";
+import {
+  createToolWorkspace,
+  runHook,
+  syncWorkspaceSkills,
+  type WorkspaceSkillOverlay,
+} from "../src/index.js";
 
 let savedPath: string | undefined;
 
@@ -131,6 +136,45 @@ test("ensureInsideRoot — path outside root throws", () => {
 
 test("ensureInsideRoot — root itself does not throw", () => {
   ensureInsideRoot("/root/workspace", "/root/workspace");
+});
+
+test("createToolWorkspace streams local files and confines both directions", async () => {
+  const parent = await tempDir("tool-workspace");
+  const workspace = path.join(parent, "run");
+  const outside = path.join(parent, "outside");
+  await fs.mkdir(path.join(workspace, ".lorenz", "outbox"), { recursive: true });
+  await fs.writeFile(path.join(workspace, ".lorenz", "outbox", "result.bin"), "outbound");
+
+  const toolWorkspace = createToolWorkspace(workspace, null);
+  const saved = await toolWorkspace.writeAttachment("F1-input.bin", new Blob(["inbound"]).stream());
+  assert.equal(saved, ".lorenz/attachments/F1-input.bin");
+  assert.equal(
+    await fs.readFile(path.join(workspace, ".lorenz", "attachments", "F1-input.bin"), "utf8"),
+    "inbound",
+  );
+
+  const output = await toolWorkspace.withOutput(
+    ".lorenz/outbox/result.bin",
+    async (body, size) => ({ size, text: await new Response(body).text() }),
+  );
+  assert.deepEqual(output, { size: 8, text: "outbound" });
+  await assert.rejects(
+    () => toolWorkspace.withOutput("result.bin", async () => undefined),
+    /directly beneath \.lorenz\/outbox/,
+  );
+
+  await fs.mkdir(path.join(outside, ".lorenz", "outbox"), { recursive: true });
+  await fs.writeFile(path.join(outside, ".lorenz", "outbox", "result.bin"), "escape");
+  await fs.rm(workspace, { recursive: true });
+  await fs.symlink(outside, workspace);
+  await assert.rejects(
+    () => toolWorkspace.writeAttachment("escape.bin", new Blob(["escape"]).stream()),
+    /symlink/,
+  );
+  await assert.rejects(
+    () => toolWorkspace.withOutput(".lorenz/outbox/result.bin", async () => undefined),
+    /symlink/,
+  );
 });
 
 // --- validateWorkspaceCwd ---

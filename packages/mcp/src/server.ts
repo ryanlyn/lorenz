@@ -4,7 +4,8 @@ import { Hono, type Context } from "hono";
 import { match } from "ts-pattern";
 import { z } from "zod";
 import { httpUrlHost, isRecord, normalizeHttpBindHost, type Settings } from "@lorenz/domain";
-import { defaultToolRegistry, type ToolRegistry } from "@lorenz/tool-sdk";
+import { defaultToolRegistry, type ToolRegistry, type ToolWorkspace } from "@lorenz/tool-sdk";
+import { defaultTrackerRegistry } from "@lorenz/tracker-sdk";
 
 import {
   bearerToken,
@@ -12,6 +13,7 @@ import {
   createMcpAuthScope,
   mcpAuthScopeForSettings,
   resolveRunClaim,
+  resolveMcpTokenWorkspace,
   validMcpToken,
 } from "./auth.js";
 import { executeTool, toolSpecs } from "./tools.js";
@@ -191,7 +193,13 @@ async function handleMcp(settings: Settings, c: Context, tools?: ToolRegistry): 
     );
   }
 
-  const response = await mcpResponse(settings, body, tools);
+  const response = await mcpResponse(
+    settings,
+    body,
+    tools,
+    resolveMcpTokenWorkspace(bearerToken(c.req.header("authorization"))),
+    c.req.raw.signal,
+  );
   if (response === null) return new Response("", { status: 204 });
   return jsonResponse(response);
 }
@@ -249,6 +257,8 @@ export async function mcpResponse(
   settings: Settings,
   body: Record<string, unknown>,
   tools: ToolRegistry = defaultToolRegistry,
+  workspace?: ToolWorkspace,
+  abortSignal?: AbortSignal,
 ): Promise<Record<string, unknown> | null> {
   const method = typeof body.method === "string" ? body.method : "";
   const id = body.id ?? null;
@@ -281,6 +291,11 @@ export async function mcpResponse(
         settings,
         fetch,
         tools,
+        defaultTrackerRegistry,
+        {
+          ...(workspace ? { workspace } : {}),
+          ...(abortSignal ? { abortSignal } : {}),
+        },
       );
       const payload = result.success
         ? (result.result ?? {})

@@ -161,9 +161,13 @@ tracker selected by `tracker.kind`.
 
 - Start by calling `slack_read_thread(issueId)`. The Slack thread is authoritative for status,
   progress, and human follow-up.
+- Inspect files listed on the root and every reply. Use `slack_read_file(issueId, fileId)` when a
+  file matters; it is streamed into `.lorenz/attachments/` in this workspace.
 - Set `In Progress` with `slack_update_status` before active work.
 - Keep the plan, acceptance criteria, and latest validation note in one `slack_workpad` message
   updated in place. Use `slack_comment` for milestones worth notifying to the thread.
+- When the user asks for generated output as a file, create it directly under
+  `.lorenz/outbox/` and pass that workspace-relative path in `slack_comment.attachments`.
 - Re-read the thread at milestones and immediately before finishing so late commands and scope
   changes are honored.
 - Set `Done` with `slack_update_status` only after implementation and validation are complete.

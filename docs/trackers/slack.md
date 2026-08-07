@@ -42,6 +42,12 @@ the transport calls; they are not declared in the extension source.
 | `reactions:write`   | Add and remove the bot's own marker and status reactions (`reactions.add`, `reactions.remove`). |
 | `chat:write`        | Post the bot's `status:` and comment replies (`chat.postMessage`).                              |
 | `users:read`        | Resolve a `U...` id to a profile for `slack_user_info` (`users.info`).                          |
+| `files:read`        | Optional: download thread files requested through `slack_read_file` (`files.info`).             |
+| `files:write`       | Optional: attach worker output to `slack_comment` replies (external upload methods).            |
+
+The file scopes are independent and optional. Without `files:read`, ordinary thread reads and
+text-bearing replies still work, but `slack_read_file` reports Slack's missing-scope error. Without
+`files:write`, text comments still work, but a `slack_comment` containing attachments fails.
 
 Socket Mode is optional. Without an app token, discovery is pure polling of
 `conversations.history`. With an app-level token, Lorenz opens a Socket Mode connection and the
@@ -372,9 +378,15 @@ The `slack` tool pack mounts automatically for the Slack tracker (its `defaultTo
 thread model directly: `slack_update_status` and `slack_comment` write the bot's reply,
 `slack_workpad` creates/edits the single in-place plan message, with per-issue serialization so
 concurrent partial updates merge against the latest metadata. `slack_read_thread` returns the
-authoritative thread-derived state plus the folded `statusEvents` audit trail, `slack_query` runs
-the read-only `where` DSL, and `slack_user_info` / `slack_channel_context` resolve people and
-surrounding conversation.
+authoritative thread-derived state, every file attached to the root or any reply, and the folded
+`statusEvents` audit trail. `slack_read_file` streams one listed file through the daemon into
+`.lorenz/attachments/` in the active worker workspace; the bot token and Slack's private download
+URL never leave the daemon. To send generated output, place it directly under `.lorenz/outbox/`
+and pass its workspace-relative path in `slack_comment.attachments`. Lorenz streams local files
+from disk and remote files over SSH directly into Slack's external upload service. It creates no
+daemon-side copy, does not delete the outbox source, and applies no additional file-size limit;
+Slack and workspace policy remain authoritative. `slack_query` runs the read-only `where` DSL,
+and `slack_user_info` / `slack_channel_context` resolve people and surrounding conversation.
 
 Every tool enforces the same trust boundary: a configured `bot_user_id`, a watched channel, and a
 tracked message. `slack_query` rejects `jql` (use the `where` DSL) and always intersects requested

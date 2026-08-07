@@ -1122,6 +1122,9 @@ importers:
       '@lorenz/ssh':
         specifier: workspace:*
         version: link:../ssh
+      '@lorenz/tool-sdk':
+        specifier: workspace:*
+        version: link:../tool-sdk
       execa:
         specifier: 'catalog:'
         version: 9.6.1

@@ -6,9 +6,11 @@ import {
   type TrackerKind,
 } from "@lorenz/domain";
 import type { McpServer } from "@agentclientprotocol/sdk";
+import type { ToolWorkspace } from "@lorenz/tool-sdk";
 
 import { startMcpServer, type IsRunLive, type ObservabilityServerHandle } from "./server.js";
 import {
+  bindMcpTokenWorkspace,
   issueMcpToken,
   issueRunMcpToken,
   mcpAuthScopeForSettings,
@@ -34,6 +36,8 @@ export interface AgentMcpEndpointLease {
    * server is recycled in place there).
    */
   generation: number;
+  /** Bind the canonical workspace before the endpoint is exposed to the worker. */
+  bindWorkspace?(workspace: ToolWorkspace): void;
   acpServer(): McpServer;
   release(): Promise<void>;
 }
@@ -158,6 +162,13 @@ export async function acquireAgentMcpEndpoint(
       url: endpoint.url,
       token,
       generation: endpoint.generation,
+      bindWorkspace: (workspace) => {
+        if (workspace.workerHost !== (workerHost ?? null)) {
+          throw new Error("mcp_workspace_bind_worker_mismatch");
+        }
+        if (!token) throw new Error("mcp_workspace_bind_missing_token");
+        bindMcpTokenWorkspace(token, workspace);
+      },
       acpServer: () => ({
         type: "http",
         name: trackerMcpServerName(settings.tracker.kind),
@@ -235,6 +246,13 @@ export async function acquireAgentMcpEndpointForRun(
       url: endpoint.url,
       token,
       generation: endpoint.generation,
+      bindWorkspace: (workspace) => {
+        if (workspace.workerHost !== workerHost) {
+          throw new Error("mcp_workspace_bind_worker_mismatch");
+        }
+        if (!token) throw new Error("mcp_workspace_bind_missing_token");
+        bindMcpTokenWorkspace(token, workspace);
+      },
       acpServer: () => ({
         type: "http",
         name: trackerMcpServerName(settings.tracker.kind),

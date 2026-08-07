@@ -1234,6 +1234,15 @@ test("watch applies steering policy while admitting thread broadcasts", () => {
       },
     },
   ]);
+
+  emit({
+    ...reply,
+    user: "U_ALICE",
+    subtype: "file_share",
+    text: "",
+    files: [{ id: "F1", name: "screenshot.png" }],
+  });
+  assert.equal(changes.at(-1)?.issueEvents?.events[0]?.text, "Attachments: screenshot.png (F1)");
 });
 
 test("busy notices follow the same author allowlist as live steering", async () => {

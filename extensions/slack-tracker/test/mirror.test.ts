@@ -232,6 +232,7 @@ test("an event arriving during a thread read survives snapshot installation", as
       thread_ts: "1.0",
       text: "arrived during the read",
       user: "U3",
+      files: [{ id: "F1", name: "evidence.png" }],
     }),
   );
   releaseRead();
@@ -241,6 +242,7 @@ test("an event arriving during a thread read survives snapshot installation", as
     replies.map((reply) => reply.ts),
     ["1.1", "1.2"],
   );
+  assert.deepEqual(replies[1]!.files, [{ id: "F1", name: "evidence.png" }]);
 });
 
 test("an event-built thread folds without a conversations.replies read", async () => {

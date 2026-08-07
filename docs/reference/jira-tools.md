@@ -126,13 +126,15 @@ Five tools over the filesystem board (`<prefix><n>.md` files in the board direct
 
 ### `slack` pack
 
-Six tools over the watched Slack channels. Every tool requires a configured `bot_user_id`, a watched channel, and a tracked message; the production transport fails closed without a bot user id.
+Eight tools over the watched Slack channels. Every tool requires a configured `bot_user_id`, a watched channel, and a tracked message; the production transport fails closed without a bot user id.
 
 | Tool | Required args | Optional args | Returns |
 | --- | --- | --- | --- |
 | `slack_update_status` | `issueId`, `status` | | `{ ok: true, status }` |
-| `slack_comment` | `issueId`, `body` | | `{ ok: true }` |
-| `slack_read_thread` | `issueId` | | source message, thread-derived status, reactions, permalink, replies |
+| `slack_comment` | `issueId`, `body` | `attachments` | `{ ok: true }` |
+| `slack_workpad` | `issueId` | `plan`, `note` | `{ ok: true, workpadTs }` |
+| `slack_read_thread` | `issueId` | | source message, thread-derived status, files, reactions, permalink, replies |
+| `slack_read_file` | `issueId`, `fileId` | | `{ file, path }` |
 | `slack_query` | | `channels`, `where`, `select`, `expand`, `order_by`, `limit`, `offset` | `{ rows, total }` |
 | `slack_user_info` | `userId` | | `{ user }` |
 | `slack_channel_context` | `issueId` | `before`, `after` | `{ anchor, messages }` |

@@ -1019,6 +1019,7 @@ test("ACP executor consumes a threaded mcpEndpoint and SKIPS its own acquire and
   // newSession's mcpServers came from the threaded lease's acpServer(), proving acp
   // did NOT acquire its own endpoint.
   assert.equal(lease.acpServerCalls > 0, true);
+  assert.deepEqual(lease.workspaceCalls, [[await fs.realpath(root), null, 0]]);
   const traceEvents = await readTrace(trace);
   const newSession = traceEvents.find((event) => event.method === "newSession");
   assert.ok(newSession);
@@ -1163,6 +1164,7 @@ test("resolveBridgeCommand preserves arguments, custom commands, and remote host
 interface FakeEndpointLease extends AgentMcpEndpointLease {
   acpServerCalls: number;
   releaseCalls: number;
+  workspaceCalls: Array<[path: string, workerHost: string | null, acpServerCalls: number]>;
 }
 
 function makeFakeEndpointLease(): FakeEndpointLease {
@@ -1172,6 +1174,10 @@ function makeFakeEndpointLease(): FakeEndpointLease {
     generation: 1,
     acpServerCalls: 0,
     releaseCalls: 0,
+    workspaceCalls: [],
+    bindWorkspace(workspace) {
+      lease.workspaceCalls.push([workspace.path, workspace.workerHost, lease.acpServerCalls]);
+    },
     acpServer() {
       lease.acpServerCalls += 1;
       return {
