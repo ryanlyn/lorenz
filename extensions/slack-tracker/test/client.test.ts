@@ -78,10 +78,23 @@ test("root mention files become normalized attachments and open through the trac
           replies: [
             {
               ts: "1700000000.000160",
-              text: "the matching log",
+              text: "the matching log before pickup",
               user: "U_HUMAN",
               subtype: "file_share",
               files: [{ id: "F_LOG", name: "run.log", mimetype: "text/plain", size: 7 }],
+            },
+            {
+              ts: "1700000000.000161",
+              text: "tracking: root",
+              user: "U_BOT",
+              metadata: { eventType: TRACKING_METADATA_EVENT, payload: { origin: "root" } },
+            },
+            {
+              ts: "1700000000.000162",
+              text: "additional evidence after pickup",
+              user: "U_HUMAN",
+              subtype: "file_share",
+              files: [{ id: "F_AFTER", name: "after.png", mimetype: "image/png", size: 5 }],
             },
           ],
         },
@@ -89,7 +102,7 @@ test("root mention files become normalized attachments and open through the trac
     },
     {
       files: {
-        F_IMG: { content: new Uint8Array([1, 2, 3, 4]), mediaType: "image/png" },
+        F_IMG: { content: new Uint8Array([1, 2, 3, 4]) },
       },
     },
   );
@@ -98,8 +111,9 @@ test("root mention files become normalized attachments and open through the trac
   const [issue] = await client.fetchCandidateIssues();
   assert.equal(issue!.title, "screen shot.png");
   assert.deepEqual(issue!.attachments, [
-    { id: "F_LOG", name: "run.log", mediaType: "text/plain", sizeBytes: 7 },
     { id: "F_IMG", name: "screen shot.png", mediaType: "image/png", sizeBytes: 4 },
+    { id: "F_LOG", name: "run.log", mediaType: "text/plain", sizeBytes: 7 },
+    { id: "F_AFTER", name: "after.png", mediaType: "image/png", sizeBytes: 5 },
   ]);
   const opened = await client.openIssueAttachment(issue!.id, "F_IMG", { maxBytes: 10 });
   const bytes: number[] = [];
@@ -107,28 +121,28 @@ test("root mention files become normalized attachments and open through the trac
   assert.deepEqual(bytes, [1, 2, 3, 4]);
 });
 
-test("attachment opening is bound to the issue snapshot that exposed the file", async () => {
-  const transport = new InMemorySlackTransport({
-    C1: [
-      {
-        ts: "1700000000.000170",
-        text: "<@U_BOT> first",
-        files: [{ id: "F_FIRST", name: "first.txt" }],
-      },
-      {
-        ts: "1700000000.000180",
-        text: "<@U_BOT> second",
-        files: [{ id: "F_SECOND", name: "second.txt" }],
-      },
-    ],
-  });
+test("attachment opening is stateless and restricted to watched Slack issue ids", async () => {
+  const transport = new InMemorySlackTransport(
+    { C1: [{ ts: "1700000000.000170", text: "<@U_BOT> inspect" }] },
+    { files: { F_DIRECT: { content: "ok" } } },
+  );
   const client = new SlackTrackerClient(settings(), transport);
-  const issues = await client.fetchCandidateIssues();
-  const first = issues.find((issue) => issue.id === "C1:1700000000.000170")!;
 
+  // The runtime supplies ids from its run-bound issue snapshot; opening does not depend on a
+  // mutable client cache populated by a preceding fetch.
+  const opened = await client.openIssueAttachment("C1:1700000000.000170", "F_DIRECT", {
+    maxBytes: 10,
+  });
+  const bytes: number[] = [];
+  for await (const chunk of opened.body) bytes.push(...chunk);
+  assert.equal(new TextDecoder().decode(new Uint8Array(bytes)), "ok");
   await assert.rejects(
-    () => client.openIssueAttachment(first.id, "F_SECOND", { maxBytes: 10 }),
-    /not attached to issue/,
+    () => client.openIssueAttachment("C2:1700000000.000170", "F_DIRECT", { maxBytes: 10 }),
+    /invalid Slack issue id/,
+  );
+  await assert.rejects(
+    () => client.openIssueAttachment("C1:not-a-ts", "F_DIRECT", { maxBytes: 10 }),
+    /invalid Slack issue id/,
   );
 });
 
@@ -569,6 +583,7 @@ test("a bot mention in a reply tracks the thread: request title, marker, restart
           ts: rootTs,
           text: "we're seeing flaky deploys in prod",
           reactions: [],
+          files: [{ id: "F_ROOT", name: "surrounding.txt", mimetype: "text/plain", size: 4 }],
           replies: [
             {
               ts: `${(now - 2700).toFixed(6)}`,
@@ -581,6 +596,13 @@ test("a bot mention in a reply tracks the thread: request title, marker, restart
               text: "<@U_BOT> please fix this #backend",
               user: "U_HUMAN",
               files: [{ id: "F_SPEC", name: "spec.pdf", mimetype: "application/pdf", size: 9 }],
+            },
+            {
+              ts: `${(now - 1700).toFixed(6)}`,
+              text: "follow-up evidence",
+              user: "U_HUMAN",
+              subtype: "file_share",
+              files: [{ id: "F_FOLLOW", name: "follow-up.png", mimetype: "image/png", size: 6 }],
             },
           ],
         },
@@ -602,6 +624,7 @@ test("a bot mention in a reply tracks the thread: request title, marker, restart
   assert.equal(candidates[0]!.issueEventCursor, replyTs);
   assert.deepEqual(candidates[0]!.attachments, [
     { id: "F_SPEC", name: "spec.pdf", mediaType: "application/pdf", sizeBytes: 9 },
+    { id: "F_FOLLOW", name: "follow-up.png", mediaType: "image/png", sizeBytes: 6 },
   ]);
   // The bot marked the root so the thread stays tracked without re-reading replies.
   assert.ok((await transport.getMessage("C1", rootTs))!.botReactions.includes("robot_face"));
@@ -1342,7 +1365,7 @@ test("watch applies steering policy while admitting thread broadcasts", () => {
             authorizedForSteering: true,
             ts: "1700000001.000200",
             author: "U_ALICE",
-            text: "Attachments:\n- evidence.png: `.lorenz/attachments/F1-evidence.png` (image/png, 123 bytes)",
+            text: "Attachments:\n- evidence.png (image/png, 123 bytes)",
           },
         ],
       },
@@ -1508,7 +1531,7 @@ test("fetchIssueEvents returns a bounded page of authorized human steering repli
         authorizedForSteering: true,
         ts: "1700000000.000670",
         author: "U_HUMAN",
-        text: "Attachments:\n- trace.txt: `.lorenz/attachments/F1-trace.txt` (text/plain, 5 bytes)",
+        text: "Attachments:\n- trace.txt (text/plain, 5 bytes)",
       },
     ],
     hasMore: false,
@@ -1518,6 +1541,42 @@ test("fetchIssueEvents returns a bounded page of authorized human steering repli
     { afterTs: "1700000000.000600", limit: 200 },
     { afterTs: "1700000000.000650", limit: 200 },
   ]);
+});
+
+test("steering attachment notices bound filenames and aggregate overflow without workspace paths", async () => {
+  const files = Array.from({ length: 12 }, (_, index) => ({
+    id: `F${index + 1}`,
+    name: `file-${index + 1}.txt`,
+  }));
+  const transport = new InMemorySlackTransport({
+    C1: [
+      {
+        ts: "1700000010.000100",
+        text: "<@U_BOT> inspect",
+        replies: [
+          {
+            ts: "1700000010.000200",
+            text: "",
+            user: "U_HUMAN",
+            subtype: "file_share",
+            files,
+          },
+        ],
+      },
+    ],
+  });
+  const client = new SlackTrackerClient(settings(), transport);
+
+  const page = await client.fetchIssueEvents("C1:1700000010.000100", "0", {
+    maxEvents: 10,
+    maxBytes: 64 * 1024,
+  });
+  const expectedFiles = files
+    .slice(0, 10)
+    .map((file) => `- ${file.name}`)
+    .join("\n");
+  assert.equal(page.events[0]!.text, `Attachments:\n${expectedFiles}\n- 2 additional attachments`);
+  assert.equal(page.events[0]!.text.includes(".lorenz/attachments"), false);
 });
 
 test("fetchIssueEvents pages past ineligible replies before returning steering", async () => {

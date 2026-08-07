@@ -4,6 +4,7 @@ import {
   executeMountedTool,
   mountedToolSpecs,
   type ToolProvider,
+  type ToolAuthorization,
   type ToolRegistry,
   type ToolResult,
   type ToolSpec,
@@ -84,9 +85,11 @@ export async function executeTool(
   fetchImpl: typeof fetch = fetch,
   registry: ToolRegistry = defaultToolRegistry,
   trackers: TrackerRegistry = defaultTrackerRegistry,
+  authorization?: ToolAuthorization,
 ): Promise<ToolResult> {
   return executeMountedTool(mountedPacks(settings, registry, trackers), name, input, {
     settings,
     fetchImpl,
+    ...(authorization ? { authorization } : {}),
   });
 }

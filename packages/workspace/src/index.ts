@@ -1,8 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
-import { createReadStream } from "node:fs";
+import { createReadStream, createWriteStream } from "node:fs";
 import os from "node:os";
+import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 
 import { Liquid } from "liquidjs";
@@ -18,7 +19,6 @@ import {
   type HooksSettings,
   type Issue,
   type IssueAttachment,
-  issueAttachmentRelativePath,
   type OpenedIssueAttachment,
   type OpenIssueAttachmentOptions,
   type Settings,
@@ -61,7 +61,6 @@ async function renderHookCommand(command: string, context: HookTemplateContext):
       identifier: issue.identifier,
       title: issue.title,
       description: issue.description ?? null,
-      attachments: (issue.attachments ?? []).map(issueAttachmentHookContext),
       priority: issue.priority ?? null,
       state: issue.state,
       state_type: issue.stateType ?? null,
@@ -83,16 +82,6 @@ function issueRefHookContext(issue: Issue["blockers"][number]): Record<string, u
     identifier: issue.identifier ?? null,
     state: issue.state ?? null,
     state_type: issue.stateType ?? null,
-  };
-}
-
-function issueAttachmentHookContext(attachment: IssueAttachment): Record<string, unknown> {
-  return {
-    id: attachment.id,
-    name: attachment.name,
-    media_type: attachment.mediaType ?? null,
-    size_bytes: attachment.sizeBytes ?? null,
-    relative_path: issueAttachmentRelativePath(attachment),
   };
 }
 
@@ -141,11 +130,34 @@ export interface MaterializedWorkspaceIssueAttachment {
 export interface WorkspaceIssueAttachmentFailure {
   attachment: IssueAttachment;
   error: Error;
+  retryable?: boolean | undefined;
 }
 
 export interface MaterializeWorkspaceIssueAttachmentsResult {
   materialized: MaterializedWorkspaceIssueAttachment[];
   failures: WorkspaceIssueAttachmentFailure[];
+}
+
+const issueAttachmentsDir = ".lorenz/attachments";
+
+/** Deterministic workspace-relative path for an untrusted attachment name. */
+export function issueAttachmentRelativePath(
+  attachment: Pick<IssueAttachment, "id" | "name">,
+): string {
+  const id = safeAttachmentPathComponent(attachment.id, "file", 80);
+  const name = safeAttachmentPathComponent(attachment.name, "attachment", 140);
+  return `${issueAttachmentsDir}/${id}-${name}`;
+}
+
+function safeAttachmentPathComponent(value: string, fallback: string, maxLength: number): string {
+  const safe = value
+    .normalize("NFKC")
+    .replace(/[^A-Za-z0-9_.-]+/g, "_")
+    .replace(/^\.+/, "")
+    .replace(/_+/g, "_")
+    .slice(0, maxLength)
+    .replace(/[._-]+$/, "");
+  return safe || fallback;
 }
 
 export interface WorkspaceRunHookOptions {
@@ -329,32 +341,18 @@ export async function materializeWorkspaceIssueAttachments(
   try {
     await fs.mkdir(attachmentsRoot, { mode: 0o700 });
     await fs.chmod(attachmentsRoot, 0o700);
+    await fs.writeFile(path.join(attachmentsRoot, ".gitignore"), "*\n", { mode: 0o600 });
 
-    for (const [index, attachment] of attachments.entries()) {
+    for (const attachment of attachments.slice(0, options.maxFiles)) {
       throwIfAttachmentMaterializationAborted(options.abortSignal);
 
-      if (index >= options.maxFiles) {
-        failures.push({
-          attachment,
-          error: new Error(
-            `workspace_attachment_file_limit_exceeded: ${attachments.length} > ${options.maxFiles}`,
-          ),
-        });
-        continue;
-      }
-
-      let relativePath: string;
-      try {
-        relativePath = issueAttachmentRelativePath(attachment);
-      } catch (error) {
-        failures.push({ attachment, error: attachmentError(error) });
-        continue;
-      }
+      const relativePath = issueAttachmentRelativePath(attachment);
 
       if (materializedPaths.has(relativePath)) {
         failures.push({
           attachment,
           error: new Error(`workspace_attachment_path_collision: ${relativePath}`),
+          retryable: false,
         });
         continue;
       }
@@ -366,7 +364,7 @@ export async function materializeWorkspaceIssueAttachments(
         remainingTotalBytes,
       );
       if (advertisedError) {
-        failures.push({ attachment, error: advertisedError });
+        failures.push({ attachment, error: advertisedError, retryable: false });
         continue;
       }
 
@@ -378,25 +376,23 @@ export async function materializeWorkspaceIssueAttachments(
         });
       } catch (error) {
         throwIfAttachmentMaterializationAborted(options.abortSignal);
-        failures.push({ attachment, error: attachmentError(error) });
+        failures.push({
+          attachment,
+          error: attachmentError(error),
+          ...(isPermanentAttachmentError(error) ? { retryable: false } : {}),
+        });
         continue;
       }
 
-      let openedAdvertisedError: Error | null;
-      try {
-        openedAdvertisedError = attachmentAdvertisedSizeError(
-          opened.sizeBytes,
-          attachment,
-          options.maxFileBytes,
-          remainingTotalBytes,
-        );
-      } catch (error) {
-        failures.push({ attachment, error: attachmentError(error) });
-        continue;
-      }
+      const openedAdvertisedError = attachmentAdvertisedSizeError(
+        opened.sizeBytes,
+        attachment,
+        options.maxFileBytes,
+        remainingTotalBytes,
+      );
       if (openedAdvertisedError) {
         await releaseOpenedAttachment(opened);
-        failures.push({ attachment, error: openedAdvertisedError });
+        failures.push({ attachment, error: openedAdvertisedError, retryable: false });
         continue;
       }
 
@@ -409,17 +405,31 @@ export async function materializeWorkspaceIssueAttachments(
           attachment,
           options.maxFileBytes,
           remainingTotalBytes,
+          options.abortSignal,
         );
       } catch (error) {
         throwIfAttachmentMaterializationAborted(options.abortSignal);
-        if (!(error instanceof RecoverableAttachmentError)) throw error;
-        failures.push({ attachment, error: error.attachmentError });
+        failures.push({
+          attachment,
+          error: attachmentError(error),
+          ...(isPermanentAttachmentError(error) ? { retryable: false } : {}),
+        });
         continue;
       }
 
       materializedBytes += actualSizeBytes;
       materializedPaths.add(relativePath);
       materialized.push({ attachment, relativePath, actualSizeBytes });
+    }
+
+    if (attachments.length > options.maxFiles) {
+      failures.push({
+        attachment: attachments[options.maxFiles]!,
+        error: new Error(
+          `workspace_attachment_file_limit_exceeded: only ${options.maxFiles} files can be staged; additional files were omitted`,
+        ),
+        retryable: false,
+      });
     }
 
     throwIfAttachmentMaterializationAborted(options.abortSignal);
@@ -436,13 +446,6 @@ export async function materializeWorkspaceIssueAttachments(
     return { materialized, failures };
   } finally {
     await fs.rm(stagingRoot, { recursive: true, force: true });
-  }
-}
-
-class RecoverableAttachmentError extends Error {
-  constructor(readonly attachmentError: Error) {
-    super(attachmentError.message, { cause: attachmentError });
-    this.name = "RecoverableAttachmentError";
   }
 }
 
@@ -466,6 +469,17 @@ function throwIfAttachmentMaterializationAborted(signal: AbortSignal | undefined
 
 function attachmentError(error: unknown): Error {
   return error instanceof Error ? error : new Error(errorMessage(error));
+}
+
+function isPermanentAttachmentError(error: unknown): boolean {
+  if (typeof error === "object" && error !== null && "code" in error) {
+    if (error.code === "missing_scope") return true;
+  }
+  const message = errorMessage(error);
+  return (
+    message.startsWith("workspace_attachment_file_size_limit_exceeded:") ||
+    message.startsWith("workspace_attachment_total_size_limit_exceeded:")
+  );
 }
 
 function attachmentAdvertisedSizeError(
@@ -522,88 +536,47 @@ async function writeOpenedAttachment(
   attachment: IssueAttachment,
   maxFileBytes: number,
   remainingTotalBytes: number,
+  abortSignal?: AbortSignal,
 ): Promise<number> {
-  const handle = await fs.open(target, "wx", 0o600);
-  let operationError: Error | undefined;
-  let iterator: AsyncIterator<Uint8Array> | undefined;
-  let iteratorCompleted = false;
   let actualSizeBytes = 0;
-
-  try {
-    try {
-      iterator = opened.body[Symbol.asyncIterator]();
-    } catch (error) {
-      throw new RecoverableAttachmentError(attachmentError(error));
-    }
-
-    while (true) {
-      let next: IteratorResult<Uint8Array>;
-      try {
-        next = await iterator.next();
-      } catch (error) {
-        throw new RecoverableAttachmentError(attachmentError(error));
-      }
-      if (next.done) {
-        iteratorCompleted = true;
-        break;
-      }
-      if (!(next.value instanceof Uint8Array)) {
-        throw new RecoverableAttachmentError(
-          new Error(`workspace_attachment_chunk_invalid: ${attachment.id}`),
-        );
-      }
-
-      const nextSizeBytes = actualSizeBytes + next.value.byteLength;
+  const limiter = new Transform({
+    transform(chunk: Buffer, _encoding, callback) {
+      const nextSizeBytes = actualSizeBytes + chunk.byteLength;
       if (!Number.isSafeInteger(nextSizeBytes) || nextSizeBytes > maxFileBytes) {
-        throw new RecoverableAttachmentError(
+        callback(
           new Error(
             `workspace_attachment_file_size_limit_exceeded: ${attachment.id} ${nextSizeBytes} > ${maxFileBytes}`,
           ),
         );
+        return;
       }
       if (nextSizeBytes > remainingTotalBytes) {
-        throw new RecoverableAttachmentError(
+        callback(
           new Error(
             `workspace_attachment_total_size_limit_exceeded: ${attachment.id} ${nextSizeBytes} > ${remainingTotalBytes}`,
           ),
         );
+        return;
       }
-
-      await handle.writeFile(next.value);
       actualSizeBytes = nextSizeBytes;
-    }
-    await handle.chmod(0o600);
-  } catch (error) {
-    operationError = attachmentError(error);
-  }
-
-  if (operationError && iterator && !iteratorCompleted && iterator.return) {
-    try {
-      await iterator.return();
-    } catch {
-      // The primary provider or filesystem error remains authoritative.
-    }
-  }
-
-  let closeError: Error | undefined;
+      callback(null, chunk);
+    },
+  });
   try {
-    await handle.close();
+    await pipeline(
+      Readable.from(opened.body),
+      limiter,
+      createWriteStream(target, { flags: "wx", mode: 0o600 }),
+      abortSignal ? { signal: abortSignal } : {},
+    );
   } catch (error) {
-    closeError = attachmentError(error);
-  }
-
-  if (operationError || closeError) {
-    let removeError: Error | undefined;
     try {
       await fs.rm(target, { force: true });
-    } catch (error) {
-      removeError = attachmentError(error);
+    } catch {
+      // Preserve the stream or filesystem error that caused the partial file.
     }
-    if (closeError) throw closeError;
-    if (removeError) throw removeError;
-    if (operationError) throw operationError;
+    throw error;
   }
-
   return actualSizeBytes;
 }
 

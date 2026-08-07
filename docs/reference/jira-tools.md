@@ -131,7 +131,7 @@ Eight tools over the watched Slack channels. Every per-issue tool requires a con
 | Tool | Required args | Optional args | Returns |
 | --- | --- | --- | --- |
 | `slack_update_status` | `issueId`, `status` | | `{ ok: true, status }` |
-| `slack_prepare_file_upload` | `issueId`, `filename`, `length` | `title`, `altText`, `snippetType` | signed `uploadUrl`, `fileId`, expiry, upload method |
+| `slack_prepare_file_upload` | `issueId`, `filename`, `length` | `title` | signed `uploadUrl`, `fileId`, expiry, upload method |
 | `slack_comment` | `issueId`, `body` | `fileIds` | `{ ok: true, files? }` |
 | `slack_workpad` | `issueId` | `plan`, `note` | `{ ok: true, workpadTs }` |
 | `slack_read_thread` | `issueId` | | source message, thread-derived status, reactions, permalink, replies |

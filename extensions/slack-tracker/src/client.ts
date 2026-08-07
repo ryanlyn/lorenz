@@ -1,7 +1,6 @@
 import { defaultStateType, normalizeIssue } from "@lorenz/issue";
 import {
   boundTrackerIssueEventText,
-  issueAttachmentRelativePath,
   isRecord,
   trackerIssueEventsBytes,
   type Issue,
@@ -37,6 +36,7 @@ import { slackEndpoint, slackTrackerOptions } from "./options.js";
 import { SlackSocketMode, type SlackSocketModeOptions } from "./socketMode.js";
 import {
   isAsideText,
+  MAX_SLACK_ISSUE_ATTACHMENTS,
   parseStatusCommand,
   resolveThreadState,
   stateFromObservedThread,
@@ -100,7 +100,7 @@ export interface SlackIssueRow {
   labels: string[];
   /** Full root message text. */
   text: string;
-  /** Files attached to the request (and the surrounding root, for reply-origin issues). */
+  /** Bounded files attached to the request and eligible steering replies. */
   files?: SlackFile[] | undefined;
   reactions: string[];
   /** Permalink to the source message, when the workspace URL is known. */
@@ -114,7 +114,7 @@ export interface SlackIssueContext {
   state?: string | undefined;
   /** The request reply for threads whose root does not mention the bot. */
   request?: ThreadState["request"];
-  /** Files carried by authorized steering replies elsewhere in the thread. */
+  /** Complete bounded file set selected by the resolved thread state. */
   files?: SlackFile[] | undefined;
 }
 
@@ -140,11 +140,9 @@ export function slackMessageToRow(
   // For reply-tracked threads the request reply carries the ask; the root is surrounding
   // conversation. Title (and routing hashtags) come from the request, labels from both.
   const requestText = context.request?.text;
-  const files = mergeSlackFileLists(
-    context.request?.files ?? [],
-    context.files ?? [],
-    message.files ?? [],
-  );
+  const files = (context.files ?? [])
+    .slice(0, MAX_SLACK_ISSUE_ATTACHMENTS + 1)
+    .map((file) => ({ ...file }));
   const titleSource = requestText ?? message.text;
   const firstLine = (titleSource.split("\n")[0] ?? "").trim();
   const titleFiles = context.request ? (context.request.files ?? []) : (message.files ?? []);
@@ -187,12 +185,11 @@ function slackMessageToIssue(
     ? `${context.request.text}\n\n(thread root) ${message.text}`
     : message.text;
   const attachments = (row.files ?? []).map(slackFileToIssueAttachment);
-  return normalizeIssue({
+  const issue = normalizeIssue({
     id: row.issueId,
     identifier: `SLK-${message.channel}-${message.ts.replace(/\./g, "-")}`,
     title: row.title,
     description,
-    ...(attachments.length > 0 ? { attachments } : {}),
     state: row.state,
     state_type: row.stateType,
     labels: row.labels,
@@ -201,6 +198,7 @@ function slackMessageToIssue(
     ...(Number.isFinite(createdAtMs) ? { created_at: new Date(createdAtMs).toISOString() } : {}),
     raw: message,
   });
+  return attachments.length > 0 ? { ...issue, attachments } : issue;
 }
 
 function slackFileName(file: SlackFile | undefined): string {
@@ -217,27 +215,32 @@ function slackFileToIssueAttachment(file: SlackFile): IssueAttachment {
   };
 }
 
-function mergeSlackFileLists(...lists: readonly SlackFile[][]): SlackFile[] {
-  const merged = new Map<string, SlackFile>();
-  for (const files of lists) {
-    for (const file of files) {
-      merged.set(file.id, { ...merged.get(file.id), ...file });
-    }
-  }
-  return [...merged.values()];
-}
-
 /** Render attachment-only Slack replies into useful, token-free steering text. */
 function slackTextWithAttachments(text: string, files: readonly SlackFile[]): string {
   if (files.length === 0) return text;
-  const attachments = files.map((file) => {
+  const visible = new Map<string, SlackFile>();
+  let overflow = 0;
+  for (const file of files) {
+    const existing = visible.get(file.id);
+    if (existing !== undefined) {
+      visible.set(file.id, { ...existing, ...file });
+    } else if (visible.size < MAX_SLACK_ISSUE_ATTACHMENTS) {
+      visible.set(file.id, { ...file });
+    } else {
+      overflow += 1;
+    }
+  }
+  const attachments = [...visible.values()].map((file) => {
     const attachment = slackFileToIssueAttachment(file);
     const details = [attachment.mediaType, formatAttachmentSize(attachment.sizeBytes)].filter(
       (value): value is string => value !== undefined && value !== "",
     );
     const suffix = details.length > 0 ? ` (${details.join(", ")})` : "";
-    return `- ${attachment.name}: \`${issueAttachmentRelativePath(attachment)}\`${suffix}`;
+    return `- ${attachment.name}${suffix}`;
   });
+  if (overflow > 0) {
+    attachments.push(`- ${overflow} additional attachment${overflow === 1 ? "" : "s"}`);
+  }
   const body = text.trimEnd();
   return `${body === "" ? "Attachments:" : `${body}\n\nAttachments:`}\n${attachments.join("\n")}`;
 }
@@ -280,8 +283,6 @@ const MAX_THREAD_RECOVERY_PAGES = 500;
 
 export class SlackTrackerClient implements RuntimeTrackerClient {
   private scanCache: { at: number; key: string; scan: SlackChannelScan } | null = null;
-  /** Issue-bound capability set populated from the same snapshots returned to the runtime. */
-  private readonly attachmentIdsByIssue = new Map<string, ReadonlySet<string>>();
   /** Last state the reaction mirror was reconciled to, per issue (see healStatusMirror). */
   private readonly mirroredStates = new Map<string, string>();
   /** Serialized background queue of pending reaction-mirror heals (see healStatusMirror). */
@@ -476,17 +477,12 @@ export class SlackTrackerClient implements RuntimeTrackerClient {
 
   /** Resolve a tracked root's thread state and map it to a normalized issue. */
   private issueFromRoot(root: SlackMessage, base: string | null, thread: ThreadState): Issue {
-    const issue = slackMessageToIssue(root, this.settings, {
+    return slackMessageToIssue(root, this.settings, {
       permalinkBase: base,
       state: thread.state,
       request: thread.request,
       files: thread.attachments,
     });
-    this.attachmentIdsByIssue.set(
-      issue.id,
-      new Set((issue.attachments ?? []).map((attachment) => attachment.id)),
-    );
-    return issue;
   }
 
   /**
@@ -549,14 +545,15 @@ export class SlackTrackerClient implements RuntimeTrackerClient {
     options: Parameters<SlackTransport["openFile"]>[1],
   ): ReturnType<SlackTransport["openFile"]> {
     const parts = splitIssueId(issueId);
-    if (!parts || !this.channels().includes(parts[0])) {
+    if (!parts || !isSlackTs(parts[1]) || !this.channels().includes(parts[0])) {
       throw new Error(`invalid Slack issue id for attachment download: ${issueId}`);
     }
-    if (attachmentId.trim() === "") throw new Error("Slack attachment id is required");
-    if (!this.attachmentIdsByIssue.get(issueId)?.has(attachmentId)) {
-      throw new Error(`Slack attachment ${attachmentId} is not attached to issue ${issueId}`);
-    }
-    return this.transport.openFile(attachmentId, options);
+    const fileId = attachmentId.trim();
+    if (fileId === "") throw new Error("Slack attachment id is required");
+    // This provider method is not agent-facing: the runtime binds it to one run's issue id and
+    // the materializer supplies only ids from that run's refreshed Issue.attachments snapshot.
+    // Keeping it stateless avoids a mutable snapshot cache racing later thread refreshes.
+    return this.transport.openFile(fileId, options);
   }
 
   private async trackedIssues(): Promise<Issue[]> {

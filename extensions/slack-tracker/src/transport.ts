@@ -7,9 +7,6 @@ export interface SlackFile {
   title?: string | undefined;
   mimetype?: string | undefined;
   size?: number | undefined;
-  /** `file_access` placeholders are hydrated through `files.info` before download. */
-  mode?: string | undefined;
-  fileAccess?: string | undefined;
 }
 
 export interface SlackMessage {
@@ -123,8 +120,6 @@ export interface SlackUser {
 export interface SlackFileUploadRequest {
   filename: string;
   length: number;
-  altText?: string | undefined;
-  snippetType?: string | undefined;
 }
 
 /** One signed, single-file upload target allocated by Slack. */
@@ -136,7 +131,6 @@ export interface SlackPreparedFileUpload {
 /** A file that has already been sent to its signed URL and is ready to share. */
 export interface SlackFileUploadCompletion {
   fileId: string;
-  title?: string | undefined;
 }
 
 /** One pass over the watched channels' root messages. */
@@ -180,9 +174,9 @@ export interface SlackTransport {
     ts: string,
     window: { before: number; after: number },
   ): Promise<SlackMessage[]>;
-  /** Resolve and open a Slack file without exposing its private URL or the bot token. */
+  /** Resolve and open a Slack file without returning its private URL or the bot token. */
   openFile(fileId: string, options: OpenIssueAttachmentOptions): Promise<OpenedIssueAttachment>;
-  /** Allocate a signed Slack URL to which a worker can POST one local file without a bot token. */
+  /** Allocate a signed Slack URL to which a worker can POST without sending a bot token. */
   prepareFileUpload(request: SlackFileUploadRequest): Promise<SlackPreparedFileUpload>;
   /**
    * Finalize previously uploaded files as one thread reply. This is separate from

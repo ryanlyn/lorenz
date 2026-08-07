@@ -1,10 +1,12 @@
+import { createHash } from "node:crypto";
+
 import { serve } from "@hono/node-server";
 import type { ServerType } from "@hono/node-server";
 import { Hono, type Context } from "hono";
 import { match } from "ts-pattern";
 import { z } from "zod";
 import { httpUrlHost, isRecord, normalizeHttpBindHost, type Settings } from "@lorenz/domain";
-import { defaultToolRegistry, type ToolRegistry } from "@lorenz/tool-sdk";
+import { defaultToolRegistry, type ToolAuthorization, type ToolRegistry } from "@lorenz/tool-sdk";
 
 import {
   bearerToken,
@@ -70,6 +72,7 @@ const mcpPath = "/mcp";
 // the JSON is parsed once per request. A WeakMap avoids typing the untyped Hono
 // app's context store and lets the entry be collected with the request.
 const parsedRequestBodies = new WeakMap<Request, Record<string, unknown>>();
+const requestAuthorizations = new WeakMap<Request, ToolAuthorization>();
 
 export async function startMcpServer(
   settings: Settings,
@@ -128,6 +131,11 @@ export function mountMcp(
       if (isRecord(parsedBody)) parsedRequestBodies.set(c.req.raw, parsedBody);
       const decision = checkRunClaim(claim, { toolName: requestToolName(parsedBody), isRunLive });
       if (!decision.ok) return unauthorizedMcpResponse();
+      requestAuthorizations.set(c.req.raw, {
+        claimId: createHash("sha256").update(bearer!).digest("base64url"),
+        runKey: decision.claim.runKey,
+        issueId: decision.claim.issueId,
+      });
       await next();
       return;
     }
@@ -191,7 +199,7 @@ async function handleMcp(settings: Settings, c: Context, tools?: ToolRegistry): 
     );
   }
 
-  const response = await mcpResponse(settings, body, tools);
+  const response = await mcpResponse(settings, body, tools, requestAuthorizations.get(c.req.raw));
   if (response === null) return new Response("", { status: 204 });
   return jsonResponse(response);
 }
@@ -249,6 +257,7 @@ export async function mcpResponse(
   settings: Settings,
   body: Record<string, unknown>,
   tools: ToolRegistry = defaultToolRegistry,
+  authorization?: ToolAuthorization,
 ): Promise<Record<string, unknown> | null> {
   const method = typeof body.method === "string" ? body.method : "";
   const id = body.id ?? null;
@@ -281,6 +290,8 @@ export async function mcpResponse(
         settings,
         fetch,
         tools,
+        undefined,
+        authorization,
       );
       const payload = result.success
         ? (result.result ?? {})

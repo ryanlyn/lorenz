@@ -3,7 +3,6 @@ import {
   isRecord,
   normalizeStateType,
   type Issue,
-  type IssueAttachment,
   type IssueRef,
   type IssueStateType,
   type Priority,
@@ -46,7 +45,6 @@ export function normalizeIssue(input: Record<string, unknown>, assignee?: string
     identifier,
     title,
     description: optionalString(input.description),
-    ...normalizeAttachments(input.attachments),
     state,
     stateType,
     branchName: optionalString(input.branchName ?? input.branch_name),
@@ -61,38 +59,6 @@ export function normalizeIssue(input: Record<string, unknown>, assignee?: string
     assignedToWorker,
     raw: input,
   };
-}
-
-function normalizeAttachments(value: unknown): { attachments?: IssueAttachment[] } {
-  if (!Array.isArray(value)) return {};
-  const attachments: IssueAttachment[] = [];
-  const seen = new Set<string>();
-  for (const item of value) {
-    if (!isRecord(item)) continue;
-    const id = nonBlankAttachmentString(item.id);
-    const name = nonBlankAttachmentString(item.name);
-    if (!id || !name || seen.has(id)) continue;
-    seen.add(id);
-    const mediaType = nonBlankAttachmentString(item.mediaType ?? item.media_type ?? item.mimetype);
-    const rawSize = item.sizeBytes ?? item.size_bytes ?? item.size;
-    const sizeBytes =
-      typeof rawSize === "number" && Number.isSafeInteger(rawSize) && rawSize >= 0
-        ? rawSize
-        : undefined;
-    attachments.push({
-      id,
-      name,
-      ...(mediaType !== undefined && mediaType !== null ? { mediaType } : {}),
-      ...(sizeBytes !== undefined ? { sizeBytes } : {}),
-    });
-  }
-  return attachments.length > 0 ? { attachments } : {};
-}
-
-function nonBlankAttachmentString(value: unknown): string | null {
-  if (typeof value !== "string") return null;
-  const trimmed = value.trim();
-  return trimmed === "" ? null : trimmed;
 }
 
 const DEFAULT_STATE_TYPES: Record<string, IssueStateType> = {

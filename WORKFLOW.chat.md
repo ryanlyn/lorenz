@@ -88,8 +88,9 @@ agents:
   stall_timeout_ms: 300000
   codex:
     # Slack file replies perform a direct HTTPS upload. Codex's default workspace-write mode
-    # blocks that step. On an externally isolated worker, prepend
-    # INITIAL_AGENT_MODE=agent-full-access when outbound attachments are required.
+    # blocks that step. On an externally isolated worker, use the commented command instead when
+    # outbound attachments are required.
+    # bridge_command: 'env INITIAL_AGENT_MODE=agent-full-access CODEX_PATH="$(command -v codex)" codex-acp'
     bridge_command: 'env CODEX_PATH="$(command -v codex)" codex-acp'
     provider_config:
       shell_environment_policy:
@@ -167,8 +168,9 @@ tracker selected by `tracker.kind`.
 - Set `In Progress` with `slack_update_status` before active work.
 - Keep the plan, acceptance criteria, and latest validation note in one `slack_workpad` message
   updated in place. Use `slack_comment` for milestones worth notifying to the thread.
-- When a reply needs a local file, follow the mounted `lorenz-slack` skill: prepare the signed
-  upload, POST the exact bytes, then pass its file id to `slack_comment`.
+- When this worker has outbound HTTPS enabled and a reply needs a local file, call
+  `slack_prepare_file_upload`, POST the exact bytes to its signed URL, then pass the returned file
+  id to `slack_comment`. Otherwise use a text-only reply.
 - Re-read the thread at milestones and immediately before finishing so late commands and scope
   changes are honored.
 - Set `Done` with `slack_update_status` only after implementation and validation are complete.

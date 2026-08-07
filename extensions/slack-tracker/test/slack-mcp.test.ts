@@ -1,5 +1,5 @@
 import { test } from "vitest";
-import { mountedSkillSources, toolSpecs, trackerMcpServerName } from "@lorenz/mcp";
+import { toolSpecs, trackerMcpServerName } from "@lorenz/mcp";
 import { ToolRegistry } from "@lorenz/tool-sdk";
 import { TrackerRegistry } from "@lorenz/tracker-sdk";
 import { assert } from "@lorenz/test-utils";
@@ -33,11 +33,6 @@ test("slack dispatch mounts the slack pack by default", () => {
       "slack_user_info",
       "slack_channel_context",
     ],
-  );
-  assert.ok(
-    mountedSkillSources(settings(), tools, trackers).some((source) =>
-      source.endsWith("/skills/lorenz-slack"),
-    ),
   );
 });
 

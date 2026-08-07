@@ -41,7 +41,7 @@ interface InMemoryOptions {
   /** Resolvable user profiles for `getUser` (defaults to none). */
   users?: Record<string, SlackUser>;
   /** Attachment bodies addressable by Slack file id. */
-  files?: Record<string, { content: string | Uint8Array; mediaType?: string; sizeBytes?: number }>;
+  files?: Record<string, { content: string | Uint8Array; sizeBytes?: number }>;
 }
 
 const SLACK_TS_SCALE = 1_000_000n;
@@ -207,7 +207,6 @@ export class InMemorySlackTransport implements SlackTransport {
     });
     return Promise.resolve({
       body,
-      ...(stored.mediaType ? { mediaType: stored.mediaType } : {}),
       sizeBytes: advertised,
     });
   }
@@ -253,7 +252,6 @@ export class InMemorySlackTransport implements SlackTransport {
         id: file.fileId,
         name: pending.filename,
         size: pending.length,
-        ...(file.title !== undefined ? { title: file.title } : {}),
       };
     });
     for (const file of files) this.pendingUploads.delete(file.fileId);

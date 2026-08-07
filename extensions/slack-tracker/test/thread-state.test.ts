@@ -1,5 +1,7 @@
-import { test } from "vitest";
+import { test, vi } from "vitest";
 import { assert } from "@lorenz/test-utils";
+
+import { resolveThreadState } from "../src/threadState.js";
 
 import { parseSlackConfig } from "./helpers.js";
 
@@ -9,7 +11,9 @@ import {
   stateFromThread,
   type SlackMessage,
   type SlackThreadReply,
+  type SlackTransport,
 } from "@lorenz/slack-tracker";
+
 
 function settings(overrides: Record<string, unknown> = {}) {
   return parseSlackConfig(
@@ -185,8 +189,12 @@ test("a reply mention in a non-mention thread is the request, not a transition",
 });
 
 test("authorized steering replies contribute durable thread attachments", () => {
+  const issueRoot = {
+    ...root("<@U_BOT> inspect the reports"),
+    files: [{ id: "F_ROOT", name: "request.txt", mimetype: "text/plain" }],
+  };
   const result = stateFromThread(
-    root("<@U_BOT> inspect the reports"),
+    issueRoot,
     [
       {
         ts: "101.1",
@@ -221,7 +229,92 @@ test("authorized steering replies contribute durable thread attachments", () => 
   );
 
   assert.deepEqual(result.attachments, [
+    { id: "F_ROOT", name: "request.txt", mimetype: "text/plain" },
     { id: "F1", name: "renamed.txt", size: 12, mimetype: "text/plain" },
     { id: "F2", title: "second image", mimetype: "image/png" },
   ]);
+});
+
+test("attachment-bearing thread state is refreshed when a reply is edited", async () => {
+  const issueRoot = {
+    ...root("<@U_BOT> inspect the report"),
+    replyCount: 1,
+    latestReply: "101.1",
+  };
+  const getThread = vi
+    .fn<SlackTransport["getThread"]>()
+    .mockResolvedValueOnce([
+      {
+        ts: "101.1",
+        text: "report",
+        user: "U_HUMAN",
+        files: [{ id: "F1", name: "report.txt" }],
+      },
+    ])
+    .mockResolvedValueOnce([
+      { ts: "101.1", text: "report removed", user: "U_HUMAN", edited: true },
+    ]);
+  const transport = { getThread } as unknown as SlackTransport;
+
+  const first = await resolveThreadState(settings(), transport, issueRoot);
+  const second = await resolveThreadState(settings(), transport, issueRoot);
+
+  assert.deepEqual(first.attachments, [{ id: "F1", name: "report.txt" }]);
+  assert.equal(second.attachments, undefined);
+  assert.equal(getThread.mock.calls.length, 2);
+});
+
+test("reply-origin attachments prioritize the request and retain the latest overflow file", () => {
+  const postRequestFiles = Array.from({ length: 10 }, (_, index) => ({
+    id: `F_POST_${index + 1}`,
+    name: `post-${index + 1}.txt`,
+  }));
+  const result = stateFromThread(
+    {
+      ...root("surrounding conversation"),
+      files: [{ id: "F_ROOT", name: "root-only.txt" }],
+    },
+    [
+      {
+        ts: "101.1",
+        text: "context before the request",
+        user: "U_HUMAN",
+        files: [{ id: "F_PRE", name: "pre-request.txt" }],
+      },
+      {
+        ts: "102.1",
+        text: "<@U_BOT> please inspect",
+        user: "U_HUMAN",
+        files: [
+          { id: "F_REQUEST_1", name: "request-1.txt" },
+          { id: "F_REQUEST_2", name: "request-2.txt" },
+        ],
+      },
+      {
+        ts: "103.1",
+        text: "more evidence",
+        user: "U_HUMAN",
+        subtype: "file_share",
+        files: postRequestFiles,
+      },
+    ],
+    settings(),
+  );
+
+  assert.deepEqual(
+    result.attachments?.map((file) => file.id),
+    [
+      "F_REQUEST_1",
+      "F_REQUEST_2",
+      "F_POST_1",
+      "F_POST_2",
+      "F_POST_3",
+      "F_POST_4",
+      "F_POST_5",
+      "F_POST_6",
+      "F_POST_7",
+      "F_POST_8",
+      "F_POST_10",
+    ],
+  );
 });

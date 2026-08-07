@@ -90,7 +90,7 @@ test("message file metadata is preserved without private download URLs", async (
 
   assert.deepEqual(message!.files, [
     { id: "F1", name: "spec.pdf", title: "Spec", mimetype: "application/pdf", size: 123 },
-    { id: "F2", mode: "file_access", fileAccess: "check_file_info" },
+    { id: "F2" },
   ]);
   assert.equal(JSON.stringify(message).includes("url_private"), false);
 });
@@ -127,12 +127,31 @@ test("openFile hydrates with files.info and downloads privately with the bot tok
   for await (const chunk of opened.body) chunks.push(chunk);
 
   assert.deepEqual([...chunks[0]!], [1, 2, 3, 4]);
-  assert.equal(opened.mediaType, "application/pdf");
   assert.equal(opened.sizeBytes, 4);
   assert.match(calls[0]!.url, /\/files\.info\?file=F1/);
   assert.equal(calls[0]!.auth, "Bearer xoxb-abc");
   assert.equal(calls[1]!.url, "https://files.slack.com/files-pri/T1-F1/download/spec.pdf");
   assert.equal(calls[1]!.auth, "Bearer xoxb-abc");
+});
+
+test("file APIs explain optional OAuth scopes without disabling text operation", async () => {
+  const fetchImpl = (async (url: string | URL) => {
+    const method = String(url).includes("files.info") ? "files.info" : "files.getUploadURLExternal";
+    return new Response(JSON.stringify({ ok: false, error: "missing_scope" }), {
+      status: 200,
+      headers: { "content-type": "application/json", "x-test-method": method },
+    });
+  }) as typeof fetch;
+  const transport = new SlackWebTransport(settings(), fetchImpl);
+
+  await assert.rejects(
+    () => transport.openFile("F1", { maxBytes: 10 }),
+    /missing optional OAuth scope files:read.*text-only Slack operation remains available/,
+  );
+  await assert.rejects(
+    () => transport.prepareFileUpload({ filename: "result.txt", length: 4 }),
+    /missing optional OAuth scope files:write.*text-only Slack operation remains available/,
+  );
 });
 
 test("openFile refuses an untrusted private URL without forwarding the bot token", async () => {
@@ -1102,8 +1121,6 @@ test("prepareFileUpload requests a trusted signed Slack URL with file metadata",
   const prepared = await new SlackWebTransport(settings(), fetchImpl).prepareFileUpload({
     filename: "report.pdf",
     length: 123,
-    altText: "Quarterly report",
-    snippetType: "text",
   });
 
   assert.deepEqual(prepared, {
@@ -1116,8 +1133,6 @@ test("prepareFileUpload requests a trusted signed Slack URL with file metadata",
   assert.deepEqual(calls[0]!.body, {
     filename: "report.pdf",
     length: "123",
-    alt_txt: "Quarterly report",
-    snippet_type: "text",
   });
 });
 
@@ -1138,7 +1153,59 @@ test("prepareFileUpload refuses an upload URL outside trusted Slack hosts", asyn
         filename: "secrets.txt",
         length: 7,
       }),
-    /refused untrusted upload URL: https:\/\/attacker\.example/,
+    /refused an unsupported upload URL/,
+  );
+});
+
+test("prepareFileUpload refuses trusted URLs that diagnostic redaction cannot recognize", async () => {
+  const fetchImpl = (async () =>
+    new Response(
+      JSON.stringify({
+        ok: true,
+        file_id: "F_PREPARED",
+        upload_url: "https://files.slack.com/a-different-signed-path/secret",
+      }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    )) as typeof fetch;
+
+  await assert.rejects(
+    () =>
+      new SlackWebTransport(settings(), fetchImpl).prepareFileUpload({
+        filename: "secrets.txt",
+        length: 7,
+      }),
+    /refused an unsupported upload URL/,
+  );
+});
+
+test("prepareFileUpload refuses an HTTP upload URL on the configured endpoint", async () => {
+  const fetchImpl = (async () =>
+    new Response(
+      JSON.stringify({
+        ok: true,
+        file_id: "F_PREPARED",
+        upload_url: "http://slack.test/upload/v1/secret",
+      }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    )) as typeof fetch;
+
+  await assert.rejects(
+    () =>
+      new SlackWebTransport(
+        parseSlackConfig(
+          {
+            tracker: {
+              kind: "slack",
+              endpoint: "http://slack.test/api",
+              channels: ["C1"],
+              bot_user_id: "U1",
+            },
+          },
+          { SLACK_BOT_TOKEN: "xoxb-abc" },
+        ),
+        fetchImpl,
+      ).prepareFileUpload({ filename: "secrets.txt", length: 7 }),
+    /refused an unsupported upload URL/,
   );
 });
 
@@ -1172,13 +1239,13 @@ test("completeFileUploads creates one sanitized file-bearing thread reply", asyn
     "C1",
     "1.1",
     "results for <!channel>",
-    [{ fileId: "F_ONE", title: "One" }, { fileId: "F_TWO" }],
+    [{ fileId: "F_ONE" }, { fileId: "F_TWO" }],
   );
 
   assert.match(calls[0]!.url, /\/files\.completeUploadExternal$/);
   assert.equal(calls[0]!.auth, "Bearer xoxb-abc");
   assert.deepEqual(calls[0]!.body, {
-    files: [{ id: "F_ONE", title: "One" }, { id: "F_TWO" }],
+    files: [{ id: "F_ONE" }, { id: "F_TWO" }],
     channel_id: "C1",
     thread_ts: "1.1",
     initial_comment: "results for @channel",

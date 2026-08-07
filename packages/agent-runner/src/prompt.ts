@@ -1,9 +1,7 @@
 import { Liquid } from "liquidjs";
 import {
-  issueAttachmentRelativePath,
   type EnsembleContext,
   type Issue,
-  type IssueAttachment,
   type IssueRef,
   type TrackerIssueEvent,
 } from "@lorenz/domain";
@@ -82,7 +80,6 @@ function issuePromptContext(issue: Issue): Record<string, unknown> {
     identifier: issue.identifier,
     title: issue.title,
     description: issue.description ?? null,
-    attachments: (issue.attachments ?? []).map(issueAttachmentPromptContext),
     priority: issue.priority ?? null,
     state: issue.state,
     state_type: issue.stateType ?? null,
@@ -94,16 +91,6 @@ function issuePromptContext(issue: Issue): Record<string, unknown> {
     assigned_to_worker: issue.assignedToWorker ?? true,
     created_at: issue.createdAt ?? null,
     updated_at: issue.updatedAt ?? null,
-  };
-}
-
-function issueAttachmentPromptContext(attachment: IssueAttachment): Record<string, unknown> {
-  return {
-    id: attachment.id,
-    name: attachment.name,
-    media_type: attachment.mediaType ?? null,
-    size_bytes: attachment.sizeBytes ?? null,
-    relative_path: issueAttachmentRelativePath(attachment),
   };
 }
 

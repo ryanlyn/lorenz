@@ -1,13 +1,14 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
-import { issueAttachmentRelativePath, type IssueAttachment } from "@lorenz/domain";
+import type { IssueAttachment } from "@lorenz/domain";
 import { assert, tempDir } from "@lorenz/test-utils";
+import { execa } from "execa";
 import { test, vi } from "vitest";
 
 import {
+  issueAttachmentRelativePath,
   materializeWorkspaceIssueAttachments,
-  runHook,
   type WorkspaceIssueAttachmentOpener,
 } from "../src/index.js";
 
@@ -19,6 +20,7 @@ const generousLimits = {
 
 test("materializeWorkspaceIssueAttachments sanitizes names and returns the prompt-visible path", async () => {
   const workspace = await tempDir("ws-attachments-path");
+  await execa("git", ["init", "--quiet"], { cwd: workspace });
   const attachment: IssueAttachment = {
     id: "../../private/id",
     name: "../../../outside secret.txt",
@@ -42,6 +44,15 @@ test("materializeWorkspaceIssueAttachments sanitizes names and returns the promp
   );
   assert.equal((await fs.stat(path.join(workspace, expectedRelativePath))).mode & 0o777, 0o600);
   assert.equal(await fileExists(path.join(workspace, "outside secret.txt")), false);
+  assert.equal(
+    await fs.readFile(path.join(workspace, ".lorenz", "attachments", ".gitignore"), "utf8"),
+    "*\n",
+  );
+  const ignored = await execa("git", ["check-ignore", "--quiet", "--", expectedRelativePath], {
+    cwd: workspace,
+    reject: false,
+  });
+  assert.equal(ignored.exitCode, 0);
 });
 
 test("materializeWorkspaceIssueAttachments enforces advertised limits before opening", async () => {
@@ -82,6 +93,7 @@ test("materializeWorkspaceIssueAttachments caps the number of opened files", asy
   const attachments: IssueAttachment[] = [
     { id: "first", name: "first.txt" },
     { id: "second", name: "second.txt" },
+    { id: "third", name: "third.txt" },
   ];
   const openAttachment = vi.fn<WorkspaceIssueAttachmentOpener>(async () => ({
     body: chunks("ok"),
@@ -102,6 +114,7 @@ test("materializeWorkspaceIssueAttachments caps the number of opened files", asy
   );
   assert.equal(result.failures[0]?.attachment, attachments[1]);
   assert.match(result.failures[0]?.error.message ?? "", /file_limit_exceeded/);
+  assert.match(result.failures[0]?.error.message ?? "", /additional files were omitted/);
 });
 
 test("materializeWorkspaceIssueAttachments enforces actual streamed per-file and total caps", async () => {
@@ -137,6 +150,8 @@ test("materializeWorkspaceIssueAttachments enforces actual streamed per-file and
   assert.equal(result.failures.length, 2);
   assert.match(result.failures[0]?.error.message ?? "", /file_size_limit_exceeded/);
   assert.match(result.failures[1]?.error.message ?? "", /total_size_limit_exceeded/);
+  assert.equal(result.failures[0]?.retryable, false);
+  assert.equal(result.failures[1]?.retryable, false);
   assert.equal(
     await fileExists(path.join(workspace, issueAttachmentRelativePath(attachments[0]!))),
     false,
@@ -154,7 +169,9 @@ test("materializeWorkspaceIssueAttachments isolates opener and stream failures",
     { id: "stream-fails", name: "two.txt" },
     { id: "works", name: "three.txt" },
   ];
-  const openError = new Error("provider refused download");
+  const openError = Object.assign(new Error("provider refused download"), {
+    code: "missing_scope",
+  });
   const streamError = new Error("provider stream disconnected");
 
   const result = await materializeWorkspaceIssueAttachments(
@@ -176,6 +193,8 @@ test("materializeWorkspaceIssueAttachments isolates opener and stream failures",
       ["stream-fails", streamError],
     ],
   );
+  assert.equal(result.failures[0]?.retryable, false);
+  assert.equal(result.failures[1]?.retryable, undefined);
   assert.deepEqual(
     result.materialized.map(({ attachment }) => attachment.id),
     ["works"],
@@ -207,7 +226,7 @@ test("materializeWorkspaceIssueAttachments clears stale managed files when every
   assert.equal(result.materialized.length, 0);
   assert.equal(result.failures.length, 1);
   assert.equal(await fileExists(path.join(managedRoot, "stale.txt")), false);
-  assert.deepEqual(await fs.readdir(managedRoot), []);
+  assert.deepEqual(await fs.readdir(managedRoot), [".gitignore"]);
   assert.equal(
     await fs.readFile(path.join(workspace, ".lorenz", ".gitignore"), "utf8"),
     "keep-me\n",
@@ -231,40 +250,6 @@ test("materializeWorkspaceIssueAttachments throws guarded filesystem failures", 
     /unsafe symlink/,
   );
   assert.deepEqual(await fs.readdir(outside), []);
-});
-
-test("hook attachment paths match materialized prompt paths", async () => {
-  const workspace = await tempDir("ws-attachments-hook-path");
-  const output = path.join(workspace, "hook-path.txt");
-  const attachment: IssueAttachment = { id: "slack/file", name: "screen shot.png" };
-  const result = await materializeWorkspaceIssueAttachments(
-    workspace,
-    [attachment],
-    async () => ({ body: chunks("image") }),
-    undefined,
-    generousLimits,
-  );
-
-  await runHook(
-    `printf '%s' {% for attachment in issue.attachments %}{{ attachment.relative_path }}{% endfor %} > ${JSON.stringify(output)}`,
-    workspace,
-    { timeoutMs: 5_000 },
-    undefined,
-    {},
-    {
-      id: "issue-id",
-      identifier: "SLACK-1",
-      title: "Attachment intake",
-      attachments: [attachment],
-      state: "Todo",
-      stateType: "unstarted",
-      blockers: [],
-      labels: [],
-      raw: {},
-    },
-  );
-
-  assert.equal(await fs.readFile(output, "utf8"), result.materialized[0]?.relativePath);
 });
 
 async function* chunks(...values: string[]): AsyncIterable<Uint8Array> {

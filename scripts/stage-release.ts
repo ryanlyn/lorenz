@@ -321,10 +321,6 @@ async function stageBundledPackage(
     path.join(workspacePackage.absoluteDir, "dist"),
     path.join(targetDir, "dist"),
   );
-  const skillsDir = path.join(workspacePackage.absoluteDir, "skills");
-  if (await pathExists(skillsDir)) {
-    await copyDirectory(skillsDir, path.join(targetDir, "skills"));
-  }
 
   if (workspacePackage.name === "@lorenz/cli") {
     await copyDirectory(

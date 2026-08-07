@@ -92,9 +92,7 @@ test("file completion invalidates the mirror and reads back the uploaded reply",
   assert.equal(inner.threadReads, 1);
 
   const prepared = await mirror.prepareFileUpload({ filename: "result.txt", length: 6 });
-  await mirror.completeFileUploads("C1", "1.0", "attached", [
-    { fileId: prepared.fileId, title: "Result" },
-  ]);
+  await mirror.completeFileUploads("C1", "1.0", "attached", [{ fileId: prepared.fileId }]);
 
   await mirror.scanChannels(["C1"]);
   assert.equal(inner.scans, 1, "file completion should not force a full channel history scan");
@@ -110,11 +108,36 @@ test("file completion invalidates the mirror and reads back the uploaded reply",
       {
         id: prepared.fileId,
         name: "result.txt",
-        title: "Result",
         size: 6,
       },
     ],
   });
+});
+
+test("ambiguous file completion invalidates the mirror before the next read", async () => {
+  const base = new InMemorySlackTransport(
+    { C1: [{ ts: "1.0", text: "<@U_BOT> attach output", user: "U_HUMAN" }] },
+    { botUserId: "U_BOT" },
+  );
+  const inner = counting(base);
+  const mirror = mirrored(inner);
+  await mirror.scanChannels(["C1"]);
+  await mirror.getThread("C1", "1.0");
+  const prepared = await mirror.prepareFileUpload({ filename: "result.txt", length: 6 });
+  const complete = base.completeFileUploads.bind(base);
+  inner.completeFileUploads = async (...args) => {
+    await complete(...args);
+    throw new Error("Slack response was lost");
+  };
+
+  await assert.rejects(
+    async () => mirror.completeFileUploads("C1", "1.0", "attached", [{ fileId: prepared.fileId }]),
+    /response was lost/,
+  );
+  const replies = await mirror.getThread("C1", "1.0");
+  assert.equal(inner.threadReads, 2);
+  assert.equal(replies.at(-1)!.text, "attached");
+  assert.equal(replies.at(-1)!.files?.[0]?.id, prepared.fileId);
 });
 
 test("mirror serves repeat scans and new events from memory after one bootstrap scan", async () => {
@@ -205,8 +228,6 @@ test("mirror preserves files from API snapshots and Socket Mode root/reply event
 test("API repair keeps richer file metadata learned from Socket Mode", async () => {
   const placeholder = {
     id: "F_CONNECT",
-    mode: "file_access",
-    fileAccess: "check_file_info",
   };
   const inner = new InMemorySlackTransport(
     {
@@ -257,8 +278,6 @@ test("API repair keeps richer file metadata learned from Socket Mode", async () 
       name: "evidence.pdf",
       mimetype: "application/pdf",
       size: 42,
-      mode: "file_access",
-      fileAccess: "check_file_info",
     },
   ]);
   assert.deepEqual((await mirror.getThread("C1", "1.0"))[0]!.files, page.replies[0]!.files);

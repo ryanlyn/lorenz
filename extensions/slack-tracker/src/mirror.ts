@@ -410,20 +410,20 @@ export class MirrorBackedSlackTransport implements SlackTransport {
     ...args: Parameters<SlackTransport["completeFileUploads"]>
   ): ReturnType<SlackTransport["completeFileUploads"]> {
     const [channel, threadTs] = args;
-    const files = await this.inner.completeFileUploads(...args);
-    // The completion response does not promise the file-share reply ts, so it cannot be safely
-    // self-applied like chat.postMessage. Invalidate only the affected thread; a full channel
-    // history refresh is unnecessary, and the next thread read reconciles it from Slack (or a
-    // socket echo wins first).
-    await this.enqueueMutation(() => {
-      const invalidate = (): void => {
-        const state = this.channelState(channel);
-        state.authoritativeThreads.delete(threadTs);
-      };
-      this.recordSnapshotMutation(channel, invalidate);
-      invalidate();
-    });
-    return files;
+    try {
+      return await this.inner.completeFileUploads(...args);
+    } finally {
+      // Slack may have completed the upload even when its response is lost. Invalidate on every
+      // outcome so the next read reconciles instead of serving an authoritative stale thread.
+      await this.enqueueMutation(() => {
+        const invalidate = (): void => {
+          const state = this.channelState(channel);
+          state.authoritativeThreads.delete(threadTs);
+        };
+        this.recordSnapshotMutation(channel, invalidate);
+        invalidate();
+      });
+    }
   }
 
   async postReply(

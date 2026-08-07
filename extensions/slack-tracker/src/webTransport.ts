@@ -31,8 +31,6 @@ interface RawSlackFile {
   title?: string;
   mimetype?: string;
   size?: number;
-  mode?: string;
-  file_access?: string;
   url_private?: string;
   url_private_download?: string;
 }
@@ -406,12 +404,8 @@ export class SlackWebTransport implements SlackTransport {
     if (response.body === null) {
       throw new Error(`slack attachment ${fileId} download returned no body`);
     }
-    const mediaType =
-      (typeof raw.mimetype === "string" && raw.mimetype !== "" ? raw.mimetype : undefined) ??
-      response.headers.get("content-type")?.split(";", 1)[0]?.trim();
     return {
       body: boundedResponseBody(response.body, options.maxBytes, fileId, options.abortSignal),
-      ...(mediaType ? { mediaType } : {}),
       ...(typeof raw.size === "number" && Number.isSafeInteger(raw.size) && raw.size >= 0
         ? { sizeBytes: raw.size }
         : {}),
@@ -459,8 +453,6 @@ export class SlackWebTransport implements SlackTransport {
       {
         filename: request.filename,
         length: request.length,
-        ...(request.altText !== undefined ? { alt_txt: request.altText } : {}),
-        ...(request.snippetType !== undefined ? { snippet_type: request.snippetType } : {}),
       },
       // Slack advertises JSON for this method, but some production workspaces treat a JSON body as
       // empty and report both required fields missing. Form encoding is accepted consistently.
@@ -484,10 +476,12 @@ export class SlackWebTransport implements SlackTransport {
     }
     // The worker will send local file bytes to this URL. Refuse an unexpected host before the URL
     // crosses that boundary, even though the API response itself came from authenticated Slack.
-    if (!trustedSlackFileUrl(parsedUploadUrl, this.endpoint)) {
-      throw new Error(
-        `slack files.getUploadURLExternal refused untrusted upload URL: ${parsedUploadUrl.origin}`,
-      );
+    if (
+      parsedUploadUrl.protocol !== "https:" ||
+      !trustedSlackFileUrl(parsedUploadUrl, this.endpoint) ||
+      !parsedUploadUrl.pathname.startsWith("/upload/v1/")
+    ) {
+      throw new Error("slack files.getUploadURLExternal refused an unsupported upload URL");
     }
     return { fileId, uploadUrl: parsedUploadUrl.toString() };
   }
@@ -503,10 +497,7 @@ export class SlackWebTransport implements SlackTransport {
     const response = await this.post(
       "files.completeUploadExternal",
       {
-        files: files.map((file) => ({
-          id: file.fileId,
-          ...(file.title !== undefined ? { title: file.title } : {}),
-        })),
+        files: files.map((file) => ({ id: file.fileId })),
         channel_id: channel,
         thread_ts: threadTs,
         initial_comment: stripBroadcastMentions(body),
@@ -1007,7 +998,7 @@ export function toSlackFiles(files: unknown, xFiles: unknown = undefined): Slack
     for (const value of xFiles) {
       if (typeof value !== "string" || value === "" || seen.has(value)) continue;
       seen.add(value);
-      out.push({ id: value, mode: "file_access", fileAccess: "check_file_info" });
+      out.push({ id: value });
     }
   }
   return out;
@@ -1031,10 +1022,6 @@ function safeSlackFile(file: RawSlackFile): SlackFile {
       : {}),
     ...(typeof file.size === "number" && Number.isSafeInteger(file.size) && file.size >= 0
       ? { size: file.size }
-      : {}),
-    ...(typeof file.mode === "string" && file.mode !== "" ? { mode: file.mode } : {}),
-    ...(typeof file.file_access === "string" && file.file_access !== ""
-      ? { fileAccess: file.file_access }
       : {}),
   };
 }
@@ -1066,9 +1053,23 @@ export class SlackApiError extends Error {
     readonly method: string,
     readonly code: string,
   ) {
-    super(`slack ${method} failed: ${code}`);
+    const scope = requiredFileScope(method, code);
+    super(
+      scope
+        ? `slack ${method} failed: missing optional OAuth scope ${scope}; add it and re-authorize the app (text-only Slack operation remains available)`
+        : `slack ${method} failed: ${code}`,
+    );
     this.name = "SlackApiError";
   }
+}
+
+function requiredFileScope(method: string, code: string): "files:read" | "files:write" | null {
+  if (code !== "missing_scope") return null;
+  if (method === "files.info") return "files:read";
+  if (method === "files.getUploadURLExternal" || method === "files.completeUploadExternal") {
+    return "files:write";
+  }
+  return null;
 }
 
 /** The reconciliation key of a metadata payload: present only when `seq` is a unique string. */

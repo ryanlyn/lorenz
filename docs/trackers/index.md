@@ -88,8 +88,10 @@ trigger workspace cleanup. Comparison is case-insensitive and trims whitespace. 
 [dispatch.md](../dispatch.md) for the full eligibility chain that consumes these candidates.
 
 Whatever the backend returns is normalized into the domain `Issue` shape before it reaches the
-runtime: `id`, `identifier`, `title`, `state`, a required `stateType`, `labels`, and the raw
-payload. A provider that cannot produce a well-formed issue drops it rather than emit a partial one.
+runtime: `id`, `identifier`, `title`, `state`, a required `stateType`, `labels`, optional attachment
+metadata, and the raw payload. Attachment metadata contains no credentials or private download
+URLs; providers stream bytes through their optional authenticated opener. A provider that cannot
+produce a well-formed issue drops it rather than emit a partial one.
 
 ## The agent tools
 

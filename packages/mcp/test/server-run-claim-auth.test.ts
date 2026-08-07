@@ -1,7 +1,7 @@
 import { parseConfig as parseWorkflowConfig } from "@lorenz/config";
 import type { Settings } from "@lorenz/domain";
 import { registerJiraTrackers } from "@lorenz/jira-tracker";
-import { ToolRegistry } from "@lorenz/tool-sdk";
+import { ToolRegistry, type ToolAuthorization } from "@lorenz/tool-sdk";
 import { TrackerRegistry } from "@lorenz/tracker-sdk";
 import { Hono } from "hono";
 import { test } from "vitest";
@@ -86,6 +86,37 @@ test("Token B: a resolved, live, allowed claim authorizes the request", async ()
   const token = issueRunMcpToken(baseClaim({ allowedTools: ["jira_query"] }));
   try {
     assert.equal(await toolsCall(app, token, "jira_query"), 200);
+  } finally {
+    revokeRunClaim(token);
+  }
+});
+
+test("Token B: verified run identity reaches tool execution", async () => {
+  const claimTools = new ToolRegistry();
+  let authorization: ToolAuthorization | undefined;
+  claimTools.register({
+    name: "jira",
+    toolSpecs: () => [
+      {
+        name: "jira_query",
+        description: "test",
+        inputSchema: { type: "object" },
+      },
+    ],
+    executeTool: async (_name, _input, context) => {
+      authorization = context.authorization;
+      return await Promise.resolve({ success: true });
+    },
+  });
+  const { app } = mountWith({ isRunLive: () => true, tools: claimTools });
+  const token = issueRunMcpToken(
+    baseClaim({ runKey: "run-verified", issueId: "ISSUE-verified", allowedTools: ["jira_query"] }),
+  );
+  try {
+    assert.equal(await toolsCall(app, token, "jira_query"), 200);
+    assert.equal(authorization?.runKey, "run-verified");
+    assert.equal(authorization?.issueId, "ISSUE-verified");
+    assert.match(authorization?.claimId ?? "", /^[A-Za-z0-9_-]{43}$/);
   } finally {
     revokeRunClaim(token);
   }

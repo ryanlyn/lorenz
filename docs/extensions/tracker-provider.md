@@ -49,6 +49,11 @@ interface RuntimeTrackerClient {
   fetchCandidateIssues(): Promise<Issue[]>;
   fetchIssuesByIds(ids: string[]): Promise<Issue[]>;
   fetchIssuesByStates?(states: string[]): Promise<Issue[]>;
+  openIssueAttachment?(
+    issueId: string,
+    attachmentId: string,
+    options: OpenIssueAttachmentOptions,
+  ): Promise<OpenedIssueAttachment>;
   acknowledgeIssue?(issue: Issue): Promise<boolean>;
   watch?(
     onChange: (change?: TrackerChange) => void,
@@ -69,6 +74,10 @@ interface RuntimeTrackerClient {
 - `fetchIssuesByStates(states)` is optional. It backs best-effort flows, notably terminal-state
   workspace cleanup at startup. A backend that cannot answer state queries cheaply omits it, and the
   caller skips those flows.
+- `openIssueAttachment(issueId, attachmentId, options)` is optional. A provider that returns
+  `Issue.attachments` implements it to stream authenticated bytes to Lorenz without placing private
+  URLs or tracker credentials in the issue. Respect `options.maxBytes` and `options.abortSignal`;
+  the workspace layer independently enforces the actual streamed size.
 - `acknowledgeIssue(issue)` is optional. After a successful claim, the runtime starts it alongside
   agent setup so a provider can expose immediate human-visible feedback. It returns `true` when it
   wrote an acknowledgement. Failures are observable and never fail the claimed run.
@@ -100,7 +109,9 @@ interface RuntimeTrackerClient {
   `agent.max_turns` steering turns; additional prompt-visible events remain eligible for the next
   attempt.
 
-Each client returns the domain `Issue` shape, not the backend's raw payload. `Issue` requires
+Each client returns the domain `Issue` shape, not the backend's raw payload. `Issue.attachments` is
+optional serializable metadata (`id`, `name`, optional media type and byte size); private URLs and
+credentials never belong in it. `Issue` requires
 `stateType: IssueStateType` (one of `backlog`, `unstarted`, `started`, `completed`, `canceled`,
 `triage`); normalizing the backend's status into that field is the provider's job. The Linear client maps Linear states, the
 Jira client maps Jira `statusCategory.key`. Keep the raw payload on the issue for the agent to read.
@@ -170,7 +181,7 @@ Each built-in tracker owns its own pack:
   `local_create_issue`, `local_read_issue`, and `local_query`.
 - The `slack` tracker mounts its `slack` pack: `slack_update_status`,
   `slack_prepare_file_upload`, `slack_comment`, `slack_workpad`, `slack_read_thread`,
-  `slack_query`, `slack_user_info`, and `slack_channel_context`; it bundles `lorenz-slack`.
+  `slack_query`, `slack_user_info`, and `slack_channel_context`.
 - The `discord` tracker mounts its `discord` pack: `discord_update_status`, `discord_comment`,
   `discord_read_thread`, `discord_query`, `discord_user_info`, and `discord_channel_context`.
 - The `memory` tracker declares no `defaultToolPacks`, so it advertises no tools.

@@ -28,8 +28,7 @@ workpad/session-modal surfaces, and the `slack_*` agent tools. The provider live
 ## Setting up the Slack app
 
 Create a Slack app for your workspace, install it to the channels Lorenz watches, and grant it the
-OAuth bot scopes below. These are the OAuth bot scopes Lorenz needs, implied by the Web API methods
-the transport calls; they are not declared in the extension source.
+baseline OAuth bot scopes below. These scopes provide the normal text-only tracker behavior.
 
 | Scope               | Why Lorenz needs it                                                                             |
 | ------------------- | ----------------------------------------------------------------------------------------------- |
@@ -41,13 +40,20 @@ the transport calls; they are not declared in the extension source.
 | `reactions:read`    | Read reactions to derive fallback status and detect the bot's marker.                           |
 | `reactions:write`   | Add and remove the bot's own marker and status reactions (`reactions.add`, `reactions.remove`). |
 | `chat:write`        | Post the bot's `status:` and comment replies (`chat.postMessage`).                              |
-| `files:read`        | Resolve metadata and download files attached to tracked messages (`files.info`).                |
-| `files:write`       | Prepare and complete files uploaded by workers into issue threads.                              |
 | `users:read`        | Resolve a `U...` id to a profile for `slack_user_info` (`users.info`).                          |
 
-After adding `files:read` or `files:write` to an existing app, reinstall or re-authorize the app so
-its bot token receives the new scopes. Lorenz never exposes that token or Slack's private download
-URLs to the agent.
+File support is optional and each direction can be enabled independently:
+
+| Optional scope | Enables                                                                 | Without it                                                                    |
+| -------------- | ----------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| `files:read`   | Download files attached to tracked Slack messages through `files.info`. | Attached bytes are skipped; text intake and replies continue.                 |
+| `files:write`  | Prepare and complete worker-generated files in issue threads.           | `slack_prepare_file_upload` reports the missing scope; text replies continue. |
+
+With neither optional scope, Lorenz remains a text-only Slack tracker. After adding either scope to
+an existing app, reinstall or re-authorize the app so its bot token receives the new grant. Lorenz
+does not require a feature flag or probe scopes at startup: a file operation reports the specific
+missing optional scope when it is used. The attachment flow does not put the bot token or Slack
+private download URLs in issue metadata, generated prompts, or MCP tool results.
 
 Socket Mode is optional. Without an app token, discovery is pure polling of
 `conversations.history`. With an app-level token, Lorenz opens a Socket Mode connection and the
@@ -102,20 +108,20 @@ trackers:
     bot_user_id: $SLACK_BOT_USER_ID
 ```
 
-| Key                   | Env fallback        | Default                                                       | Meaning                                                                                                                               |
-| --------------------- | ------------------- | ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
-| `kind` / `provider`   |                     |                                                               | `tracker.kind: slack` selects the bundle; `trackers.slack.provider: slack` names the implementation.                                  |
-| `channels`            |                     |                                                               | Required. List of public (`C...`), private or multiparty (`G...`), or direct-message (`D...`) conversation ids. Entries resolve `$VAR` references; an unresolved ref collapses to empty and is dropped. |
-| `bot_user_id`         | `SLACK_BOT_USER_ID` |                                                               | Required. The bot's `U...` id. An empty string does not satisfy it.                                                                   |
-| `api_key`             | `SLACK_BOT_TOKEN`   |                                                               | The `xoxb-` bot token.                                                                                                                |
-| `app_token`           | `SLACK_APP_TOKEN`   |                                                               | Optional `xapp-` app-level token for Socket Mode wakeups and immediate live steering.                                                  |
-| `users`               |                     | Any authenticated human                                       | Optional author allowlist applied to issue creation and steering replies.                                                             |
-| `endpoint`            |                     | `https://slack.com/api`                                       | Slack Web API base.                                                                                                                   |
-| `emoji_states`        |                     | `eyes: In Progress`, `white_check_mark: Done`, `x: Cancelled` | Emoji name to state name, merged over the built-in `DEFAULT_EMOJI_STATES`.                                                            |
-| `marker_emoji`        |                     | `robot_face`                                                  | The reaction the bot adds to mark a tracked thread root.                                                                              |
-| `reply_lookback_days` |                     | `2`                                                           | How far back to discover new reply-mention threads.                                                                                   |
-| `scan_lookback_days`  |                     | Unbounded                                                     | How far back the candidate `conversations.history` scan pages. The shipped sample sets `30`; set `0` or omit for a full-history scan. |
-| `reconcile_interval_ms` |                   | `900000` (15 min)                                             | With Socket Mode: how often the event-fed channel mirror re-syncs from a real scan. Ignored without `app_token` (pull-only scans every poll). |
+| Key                     | Env fallback        | Default                                                       | Meaning                                                                                                                                                                                                 |
+| ----------------------- | ------------------- | ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `kind` / `provider`     |                     |                                                               | `tracker.kind: slack` selects the bundle; `trackers.slack.provider: slack` names the implementation.                                                                                                    |
+| `channels`              |                     |                                                               | Required. List of public (`C...`), private or multiparty (`G...`), or direct-message (`D...`) conversation ids. Entries resolve `$VAR` references; an unresolved ref collapses to empty and is dropped. |
+| `bot_user_id`           | `SLACK_BOT_USER_ID` |                                                               | Required. The bot's `U...` id. An empty string does not satisfy it.                                                                                                                                     |
+| `api_key`               | `SLACK_BOT_TOKEN`   |                                                               | The `xoxb-` bot token.                                                                                                                                                                                  |
+| `app_token`             | `SLACK_APP_TOKEN`   |                                                               | Optional `xapp-` app-level token for Socket Mode wakeups and immediate live steering.                                                                                                                   |
+| `users`                 |                     | Any authenticated human                                       | Optional author allowlist applied to issue creation and steering replies.                                                                                                                               |
+| `endpoint`              |                     | `https://slack.com/api`                                       | Slack Web API base.                                                                                                                                                                                     |
+| `emoji_states`          |                     | `eyes: In Progress`, `white_check_mark: Done`, `x: Cancelled` | Emoji name to state name, merged over the built-in `DEFAULT_EMOJI_STATES`.                                                                                                                              |
+| `marker_emoji`          |                     | `robot_face`                                                  | The reaction the bot adds to mark a tracked thread root.                                                                                                                                                |
+| `reply_lookback_days`   |                     | `2`                                                           | How far back to discover new reply-mention threads.                                                                                                                                                     |
+| `scan_lookback_days`    |                     | Unbounded                                                     | How far back the candidate `conversations.history` scan pages. The shipped sample sets `30`; set `0` or omit for a full-history scan.                                                                   |
+| `reconcile_interval_ms` |                     | `900000` (15 min)                                             | With Socket Mode: how often the event-fed channel mirror re-syncs from a real scan. Ignored without `app_token` (pull-only scans every poll).                                                           |
 
 See [reference/configuration.md](../reference/configuration.md) for the full `tracker.*` key reference and the active/terminal state defaults.
 
@@ -162,33 +168,40 @@ deduped. Channel refs, user mentions, and hashtags inside link captions do not l
 
 ## Attached files
 
-Files on a root mention, a reply-origin request, or an eligible human steering reply are available
-inside the worker workspace under `.lorenz/attachments`. Lorenz resolves each file through
-`files.info` (including Slack Connect file placeholders), downloads it with the bot token, and
-passes the resulting workspace path to the agent. Private Slack URLs and credentials never enter
-the prompt or worker environment.
+With the optional `files:read` scope, files on a root mention, a reply-origin request, or an eligible
+human steering reply are available inside an isolated worker workspace under
+`.lorenz/attachments`. Lorenz resolves each file through `files.info` (including Slack Connect file
+placeholders), downloads it with the bot token, and passes the resulting workspace path to the
+agent. The attachment synchronization protocol does not include private Slack URLs or the bot token
+in the prompt. Attachment staging is skipped when `workspace.isolation: none` so files cannot leak
+between runs sharing one directory; text processing continues.
+
+For a root-mention issue, the root files and eligible human file replies are included even when the
+reply arrived before Lorenz claimed the issue. For a reply-origin issue, collection starts at the
+request reply: files on the surrounding non-request root and earlier replies are excluded.
 
 Attachment staging is intentionally bounded: at most 10 files, 25 MiB per file, and 100 MiB in
 total are materialized for one issue. Filenames are sanitized and prefixed with the Slack file id,
 files are written with owner-only permissions, and the destination is replaced on refresh so a
-new `file_share` reply can be used in the next queued turn. A file that exceeds a limit or cannot
-be downloaded is reported in the run updates and is not written. Treat every attachment as
-untrusted input.
+new `file_share` reply can be used in the next queued turn. Files that exceed those bounds are
+reported as omitted; a file that cannot be downloaded is reported in the run updates and is not
+written. Treat every attachment as untrusted input.
 
 ### Files in worker replies
 
-Workers can attach local workspace files to `slack_comment` replies without exposing the Slack bot
-token or moving binary data through MCP JSON. The `slack_prepare_file_upload` tool asks Slack for a
+With the optional `files:write` scope, workers can attach local workspace files to `slack_comment`
+replies without sending the Slack bot token or binary data through MCP. The
+`slack_prepare_file_upload` tool asks Slack for a
 short-lived, single-file upload URL and binds its file id to the tracked issue. The worker POSTs the
 exact local bytes directly to that signed URL, then passes up to ten prepared `fileIds` to
 `slack_comment`. Lorenz calls `files.completeUploadExternal` once with the issue channel, root
 timestamp, sanitized comment, and all prepared files, producing one file-bearing thread reply.
 
 Outbound uploads use the same safety bounds as inbound staging: 10 files, 25 MiB per file, and 100
-MiB pending per issue. Filenames must be basenames, pending ids expire after 15 minutes, and ids are
-consumed before completion because Slack permits completion only once. The raw upload carries no
-Authorization header and must not follow redirects. Workers need outbound HTTPS access to the
-signed `files.slack.com` URL.
+MiB pending per issue. Filenames must be basenames. Lorenz forgets an unused upload ticket after 15
+minutes; Slack controls the signed URL's own lifetime. File ids are consumed before completion
+because Slack permits completion only once. The raw upload carries no Authorization header and must
+not follow redirects. Workers need outbound HTTPS access to the signed `files.slack.com` URL.
 
 Codex's default `workspace-write` mode disables command network access, so its `curl` step cannot
 reach Slack. If file replies are required, run the worker in an externally isolated environment
@@ -197,9 +210,10 @@ and opt that agent into `agent-full-access`, for example by adding
 workspace-only write sandbox; do not enable it casually. Claude and custom workers likewise need
 outbound HTTPS allowed by their own sandbox or host policy.
 
-The mounted `lorenz-slack` skill gives workers the exact prepare -> raw POST -> comment sequence.
 Signed upload URLs are capabilities: do not paste them into a comment, workpad, log, or repository.
-Lorenz redacts the stable signed-upload URL shape from diagnostic and trace output.
+Lorenz rejects them in Slack text-writing tools and redacts their accepted shape from diagnostic
+and trace output. If completion returns an unknown network or server outcome, read the thread to
+see whether Slack created the file reply before preparing another upload.
 
 ## Status lives in the thread
 
@@ -346,8 +360,9 @@ authors, status commands, `!aside` replies, message edits, system messages, and 
 steer the agent.
 
 An eligible reply may contain text, files, or both. A file-only `file_share` event is valid
-steering: Lorenz refreshes `.lorenz/attachments` before the queued turn and includes the local file
-paths in that turn's context.
+steering. With `files:read` and an isolated workspace, Lorenz refreshes `.lorenz/attachments`
+before the queued turn and includes confirmed local paths in that turn's context. Otherwise the
+text and file metadata are still delivered, with unavailable files reported to the worker.
 
 `conversations.replies` recovers eligible messages after a reconnect or turn boundary. Recovery
 returns oldest-first bounded pages, advances only through accepted events, and shortens oversized
@@ -423,10 +438,10 @@ The `slack` tool pack mounts automatically for the Slack tracker (its `defaultTo
 thread model directly: `slack_update_status` and `slack_comment` write the bot's reply,
 `slack_prepare_file_upload` creates a scoped signed-upload ticket for file-bearing comments, and
 `slack_workpad` creates/edits the single in-place plan message, with per-issue serialization so
-concurrent partial updates merge against the latest metadata. The pack bundles the `lorenz-slack`
-skill with the worker upload sequence. `slack_read_thread` returns the authoritative thread-derived
-state plus the folded `statusEvents` audit trail, `slack_query` runs the read-only `where` DSL, and
-`slack_user_info` / `slack_channel_context` resolve people and surrounding conversation.
+concurrent partial updates merge against the latest metadata. `slack_read_thread` returns the
+authoritative thread-derived state plus the folded `statusEvents` audit trail, `slack_query` runs
+the read-only `where` DSL, and `slack_user_info` / `slack_channel_context` resolve people and
+surrounding conversation.
 
 Every tool enforces the same trust boundary: a configured `bot_user_id`, a watched channel, and a
 tracked message. `slack_query` rejects `jql` (use the `where` DSL) and always intersects requested

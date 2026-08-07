@@ -35,6 +35,10 @@ import type { SlackFile, SlackMessage, SlackThreadReply, SlackTransport } from "
 /** Recognized prefix of the bot's own authoritative status replies. */
 export const BOT_STATUS_PREFIX = "status:";
 
+/** Maximum files materialized for one normalized Slack issue. */
+export const MAX_SLACK_ISSUE_ATTACHMENTS = 10;
+const MAX_SLACK_ISSUE_ATTACHMENT_METADATA = MAX_SLACK_ISSUE_ATTACHMENTS + 1;
+
 const BOT_STATUS_RE = /^status:\s*(.+?)\s*$/i;
 
 /** Standard state names recognized even when a workflow does not list them explicitly. */
@@ -160,7 +164,7 @@ export interface ThreadState {
   events: ThreadStatusEvent[];
   /** The bot's workpad message in this thread, when one exists (see workpad.ts). */
   workpad?: ThreadWorkpad | undefined;
-  /** Files carried by authorized, steering-eligible human replies in this thread. */
+  /** Complete bounded file set for this issue, in request-first priority order. */
   attachments?: SlackFile[] | undefined;
 }
 
@@ -199,7 +203,7 @@ export function stateFromThread(
   const events: ThreadStatusEvent[] = [];
   let request: ThreadState["request"];
   let workpad: ThreadWorkpad | undefined;
-  const attachments = new Map<string, { file: SlackFile; ts: string }>();
+  const replyAttachments = new Map<string, { file: SlackFile; ts: string }>();
 
   for (const reply of ordered) {
     // FIRST-SEEN text classifies a reply when the mirror recorded one: an edit must not
@@ -269,8 +273,8 @@ export function stateFromThread(
         reply.subtype === "file_share");
     if (attachmentBearingSteeringReply) {
       for (const file of reply.files ?? []) {
-        attachments.set(file.id, {
-          file: { ...attachments.get(file.id)?.file, ...file },
+        replyAttachments.set(file.id, {
+          file: { ...replyAttachments.get(file.id)?.file, ...file },
           ts: reply.ts,
         });
       }
@@ -290,13 +294,12 @@ export function stateFromThread(
         command === null &&
         isAllowedAuthor(reply.user, users);
       if (matchesRecordedRequest || canUseMarkerRecord || canCreateRequest) {
+        const requestFiles = mergeSlackFiles(reply.files ?? []);
         request = {
           ts: reply.ts,
           text: reply.text,
           user: reply.user,
-          ...(reply.files && reply.files.length > 0
-            ? { files: reply.files.map((file) => ({ ...file })) }
-            : {}),
+          ...(requestFiles.length > 0 ? { files: requestFiles } : {}),
         };
       }
       continue;
@@ -345,14 +348,14 @@ export function stateFromThread(
     });
   }
 
-  const eligibleAttachments = [...attachments.values()]
+  const isRootOrigin = rootIsMention || rootOrigin;
+  const originFiles = isRootOrigin ? (root.files ?? []) : (request?.files ?? []);
+  const steeringFiles = [...replyAttachments.values()]
     .filter(
-      ({ ts }) =>
-        rootIsMention ||
-        rootOrigin ||
-        (request !== undefined && compareSlackTs(ts, request.ts) >= 0),
+      ({ ts }) => isRootOrigin || (request !== undefined && compareSlackTs(ts, request.ts) >= 0),
     )
     .map(({ file }) => file);
+  const eligibleAttachments = mergeSlackFiles(originFiles, steeringFiles);
 
   return {
     state,
@@ -362,6 +365,26 @@ export function stateFromThread(
     ...(workpad !== undefined ? { workpad } : {}),
     ...(eligibleAttachments.length > 0 ? { attachments: eligibleAttachments } : {}),
   };
+}
+
+/** Keep the ten materializable files plus the latest overflow file so omission is visible. */
+function mergeSlackFiles(...sources: readonly SlackFile[][]): SlackFile[] {
+  const merged = new Map<string, SlackFile>();
+  for (const files of sources) {
+    for (const file of files) {
+      const existing = merged.get(file.id);
+      if (existing !== undefined) {
+        merged.set(file.id, { ...existing, ...file });
+        continue;
+      }
+      if (merged.size >= MAX_SLACK_ISSUE_ATTACHMENT_METADATA) {
+        const overflowId = [...merged.keys()].at(-1)!;
+        merged.delete(overflowId);
+      }
+      merged.set(file.id, { ...file });
+    }
+  }
+  return [...merged.values()];
 }
 
 function trackingRecordOf(
@@ -454,7 +477,10 @@ export async function resolveThreadState(
     cached &&
     cached.latestReply === latestReply &&
     cached.replyCount === replyCount &&
-    cached.reactionsKey === reactionsKey
+    cached.reactionsKey === reactionsKey &&
+    // Editing an existing Slack reply does not advance the root's thread hints. Re-read threads
+    // that contain files so an edit cannot leave removed attachment metadata cached indefinitely.
+    cached.resolved.attachments === undefined
   ) {
     return cached.resolved;
   }

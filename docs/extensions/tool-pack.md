@@ -25,25 +25,31 @@ interface ToolProvider {
 }
 ```
 
-| Member | Required | Meaning |
-| --- | --- | --- |
-| `name` | yes | The pack's mount name. Tracker providers name it in `defaultToolPacks`, and a workflow names it as a key under `tools:`. Registering blank throws `tool provider name must not be blank`. |
-| `skills` | no | Absolute skill directories this pack bundles. When the pack mounts, the composition root overlays them into the workspace's skills directory alongside `agent.skills`, so enabling a tool ships the skill that documents it. |
-| `validateOptions` | no | Validate this pack's per-pack config slice. Called once at startup by `validateDispatchConfig`. Throw with a `tools.<pack>.<key> ...` message on unknown keys or bad values. |
-| `toolSpecs` | yes | The tools this pack advertises for the given settings. May return `[]`. |
-| `executeTool` | yes | Run one tool the pack declared. Returns a `Promise<ToolResult>`. |
+| Member            | Required | Meaning                                                                                                                                                                                                                      |
+| ----------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `name`            | yes      | The pack's mount name. Tracker providers name it in `defaultToolPacks`, and a workflow names it as a key under `tools:`. Registering blank throws `tool provider name must not be blank`.                                    |
+| `skills`          | no       | Absolute skill directories this pack bundles. When the pack mounts, the composition root overlays them into the workspace's skills directory alongside `agent.skills`, so enabling a tool ships the skill that documents it. |
+| `validateOptions` | no       | Validate this pack's per-pack config slice. Called once at startup by `validateDispatchConfig`. Throw with a `tools.<pack>.<key> ...` message on unknown keys or bad values.                                                 |
+| `toolSpecs`       | yes      | The tools this pack advertises for the given settings. May return `[]`.                                                                                                                                                      |
+| `executeTool`     | yes      | Run one tool the pack declared. Returns a `Promise<ToolResult>`.                                                                                                                                                             |
 
-`executeTool` receives a `ToolContext` of two fields:
+`executeTool` receives a `ToolContext` with two always-present dependencies and optional verified
+run identity:
 
 ```ts
 interface ToolContext {
   settings: Settings;
   fetchImpl: typeof fetch;
+  authorization?: { claimId: string; runKey: string; issueId: string };
 }
 ```
 
 Use `context.fetchImpl` for any HTTP call rather than the global `fetch`. There is no `env` field on
-`ToolContext`; read environment-derived configuration from `context.settings`.
+`ToolContext`; read environment-derived configuration from `context.settings`. `authorization` is
+present only for a Token-B request whose run claim passed the MCP server's liveness checks.
+`claimId` is an opaque identity for that specific claim, while `runKey` may be reused by a later
+retry. Use the context to bind issue-scoped mutations to the claim; do not infer equivalent
+authority when it is absent.
 
 ## ToolSpec and ToolResult
 
@@ -72,10 +78,10 @@ interface ToolResult {
 `false`. Build results with the helpers in `packages/tool-sdk/src/result.ts` instead of
 constructing the object by hand:
 
-| Helper | Produces |
-| --- | --- |
-| `toolSuccess(result)` | `{ success: true, result }`. |
-| `toolFailure(message, details?)` | `{ success: false, error: message, result: { error: { message, ...details } } }`. |
+| Helper                                         | Produces                                                                                                |
+| ---------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| `toolSuccess(result)`                          | `{ success: true, result }`.                                                                            |
+| `toolFailure(message, details?)`               | `{ success: false, error: message, result: { error: { message, ...details } } }`.                       |
 | `unsupportedToolFailure(name, supportedTools)` | A `toolFailure` with message `Unsupported tool: "<name>".` and a `supportedTools` array in the details. |
 
 ## Failure is data, never an exception
@@ -158,14 +164,14 @@ tools that filter, project, sort, and page in-memory records. It is the composab
 read-only GraphQL query: a query never mutates the backend, so it carries no trust-boundary or
 atomicity risk. The DSL is total. No regex, no `eval`, no JSONPath.
 
-| Function | Purpose |
-| --- | --- |
-| `parseFilter(input)` | Validate untrusted agent input into a typed `Filter`, rebuilding each node so stray properties cannot survive. |
-| `matchesFilter(record, filter)` | Evaluate a validated `Filter` against one record. |
-| `parseQuerySpec(args)` | Parse the shared `where` / `order_by` / `limit` / `offset` envelope into a `QuerySpec`. |
-| `applyQuery(records, spec)` | Filter, stably sort, then page; returns `{ rows, total }` where `total` is the pre-page count. |
-| `parseSelect(input)` | Validate an optional `select` projection: an array of field-name strings, or `undefined`. |
-| `pickFields(record, fields)` | Project a record to the named fields, dropping any the record lacks. |
+| Function                        | Purpose                                                                                                        |
+| ------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| `parseFilter(input)`            | Validate untrusted agent input into a typed `Filter`, rebuilding each node so stray properties cannot survive. |
+| `matchesFilter(record, filter)` | Evaluate a validated `Filter` against one record.                                                              |
+| `parseQuerySpec(args)`          | Parse the shared `where` / `order_by` / `limit` / `offset` envelope into a `QuerySpec`.                        |
+| `applyQuery(records, spec)`     | Filter, stably sort, then page; returns `{ rows, total }` where `total` is the pre-page count.                 |
+| `parseSelect(input)`            | Validate an optional `select` projection: an array of field-name strings, or `undefined`.                      |
+| `pickFields(record, fields)`    | Project a record to the named fields, dropping any the record lacks.                                           |
 
 A `Filter` is a predicate or a combinator:
 
@@ -180,12 +186,12 @@ string-vs-string; mixed types are incomparable.
 
 The DSL is bounded so a hostile or runaway filter cannot exhaust the process:
 
-| Constant | Value |
-| --- | --- |
-| `MAX_FILTER_DEPTH` | 12 |
-| `MAX_FILTER_NODES` | 200 |
-| `DEFAULT_LIMIT` | 100 |
-| `MAX_LIMIT` | 1000 (the requested `limit` is clamped to this) |
+| Constant           | Value                                           |
+| ------------------ | ----------------------------------------------- |
+| `MAX_FILTER_DEPTH` | 12                                              |
+| `MAX_FILTER_NODES` | 200                                             |
+| `DEFAULT_LIMIT`    | 100                                             |
+| `MAX_LIMIT`        | 1000 (the requested `limit` is clamped to this) |
 
 `parseSelect` only chooses fields; the calling tool decides the default projection when `select` is
 omitted. The `local` pack uses `["id", "title", "state", "stateType", "labels"]`. The jira

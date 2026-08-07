@@ -284,35 +284,8 @@ export interface OpenIssueAttachmentOptions {
 /** A provider-owned attachment stream. The caller must still enforce the actual byte limit. */
 export interface OpenedIssueAttachment {
   body: AsyncIterable<Uint8Array>;
-  /** Resolved media type, when more precise than the issue snapshot. */
-  mediaType?: string | undefined;
   /** Resolved advertised size, when available. */
   sizeBytes?: number | undefined;
-}
-
-const ISSUE_ATTACHMENTS_DIR = ".lorenz/attachments";
-
-/**
- * Deterministic workspace-relative path for an attachment. Both providers and the workspace
- * materializer use this helper, so prompt-visible paths cannot drift from the written file.
- */
-export function issueAttachmentRelativePath(
-  attachment: Pick<IssueAttachment, "id" | "name">,
-): string {
-  const id = safeAttachmentPathComponent(attachment.id, "file", 80);
-  const name = safeAttachmentPathComponent(attachment.name, "attachment", 140);
-  return `${ISSUE_ATTACHMENTS_DIR}/${id}-${name}`;
-}
-
-function safeAttachmentPathComponent(value: string, fallback: string, maxLength: number): string {
-  const safe = value
-    .normalize("NFKC")
-    .replace(/[^A-Za-z0-9_.-]+/g, "_")
-    .replace(/^\.+/, "")
-    .replace(/_+/g, "_")
-    .slice(0, maxLength)
-    .replace(/[._-]+$/, "");
-  return safe || fallback;
 }
 
 /**
@@ -921,8 +894,8 @@ export interface RuntimeTrackerClient {
   fetchIssuesByStates?(states: string[]): Promise<Issue[]>;
   /**
    * Open one issue attachment as an authenticated provider-owned byte stream. The runtime binds
-   * this method to the client retained by the run, and the worker receives only materialized
-   * workspace files - never tracker credentials or private URLs.
+   * this method to the client retained by the run, so attachment metadata does not need tracker
+   * credentials or private URLs.
    */
   openIssueAttachment?(
     issueId: string,

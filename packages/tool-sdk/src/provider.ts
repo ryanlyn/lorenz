@@ -20,10 +20,20 @@ export interface ToolResult {
   error?: string;
 }
 
+/** Run identity verified by the MCP server for a per-run bearer token. */
+export interface ToolAuthorization {
+  /** Opaque identity of this specific verified claim, distinct across retries of one run key. */
+  claimId: string;
+  runKey: string;
+  issueId: string;
+}
+
 /** Dependencies handed to a tool pack when executing one of its tools. */
 export interface ToolContext {
   settings: Settings;
   fetchImpl: typeof fetch;
+  /** Present only when the request used a verified per-run MCP claim. */
+  authorization?: ToolAuthorization | undefined;
 }
 
 /**

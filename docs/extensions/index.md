@@ -30,7 +30,7 @@ A tracker can ship inside the repo or load from an out-of-tree module: `tracker.
 
 ### ToolProvider
 
-A `ToolProvider` (`packages/tool-sdk/src/provider.ts`) adds a named pack of MCP tools an agent can call. The required members are `name` (a string), `toolSpecs(settings)` returning the advertised `ToolSpec[]`, and `executeTool(name, input, context)` returning a `ToolResult`. Optional members are `skills` (absolute skill directories overlaid into the workspace when the pack is mounted) and `validateOptions(options)`. The `ToolContext` passed to `executeTool` is exactly `{ settings, fetchImpl }`.
+A `ToolProvider` (`packages/tool-sdk/src/provider.ts`) adds a named pack of MCP tools an agent can call. The required members are `name` (a string), `toolSpecs(settings)` returning the advertised `ToolSpec[]`, and `executeTool(name, input, context)` returning a `ToolResult`. Optional members are `skills` (absolute skill directories overlaid into the workspace when the pack is mounted) and `validateOptions(options)`. The `ToolContext` carries `settings`, `fetchImpl`, and an optional verified per-run `authorization`.
 
 Build results with `toolSuccess`, `toolFailure`, and `unsupportedToolFailure` from `packages/tool-sdk/src/result.ts`. The side-effect-free query and filter DSL in `packages/tool-sdk/src/filter.ts` gives you `parseFilter`, `applyQuery`, `parseQuerySpec`, `parseSelect`, and `pickFields` for in-memory projection. See [tool-pack.md](tool-pack.md).
 
