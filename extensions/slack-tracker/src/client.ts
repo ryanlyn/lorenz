@@ -267,6 +267,14 @@ export class SlackTrackerClient implements RuntimeTrackerClient {
     return this.fetchIssuesByStates(this.settings.tracker.activeStates);
   }
 
+  /** Mark a claimed request as received without moving it out of Todo before a worker is bound. */
+  async acknowledgeIssueReceipt(issue: Issue): Promise<boolean> {
+    const parts = splitIssueId(issue.id);
+    if (!parts) throw new Error(`invalid Slack issue id '${issue.id}'`);
+    await this.transport.addReaction(parts[0], parts[1], this.markerEmoji());
+    return true;
+  }
+
   /**
    * Push capability (see {@link RuntimeTrackerClient.watch}). When an app-level token is
    * configured, open a Slack Socket Mode connection. Watched events update the channel mirror

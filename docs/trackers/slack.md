@@ -106,7 +106,7 @@ trackers:
 | `users`               |                     | Any authenticated human                                       | Optional author allowlist applied to issue creation and steering replies.                                                             |
 | `endpoint`            |                     | `https://slack.com/api`                                       | Slack Web API base.                                                                                                                   |
 | `emoji_states`        |                     | `eyes: In Progress`, `white_check_mark: Done`, `x: Cancelled` | Emoji name to state name, merged over the built-in `DEFAULT_EMOJI_STATES`.                                                            |
-| `marker_emoji`        |                     | `robot_face`                                                  | The reaction the bot adds to mark a tracked thread root.                                                                              |
+| `marker_emoji`        |                     | `robot_face`                                                  | Non-status reaction marking a tracked root and acknowledging a claimed request before worker assignment.                              |
 | `reply_lookback_days` |                     | `2`                                                           | How far back to discover new reply-mention threads.                                                                                   |
 | `scan_lookback_days`  |                     | Unbounded                                                     | How far back the candidate `conversations.history` scan pages. The shipped sample sets `30`; set `0` or omit for a full-history scan. |
 | `reconcile_interval_ms` |                   | `900000` (15 min)                                             | With Socket Mode: how often the event-fed channel mirror re-syncs from a real scan. Ignored without `app_token` (pull-only scans every poll). |
@@ -139,6 +139,10 @@ threaded root the bot has already reacted to with its marker emoji, or an untrac
 whose first bot-mention reply Lorenz discovers within `reply_lookback_days`. On discovery of a
 reply-mention thread, the bot adds its marker reaction to the root so later polls recognize it
 without re-scanning.
+
+After the runtime successfully claims a request, the daemon also adds this marker immediately,
+before worker acquisition or startup. It is an idempotent receipt that leaves the issue in `Todo`;
+the worker moves the issue to `In Progress` only after it starts.
 
 The mention regex matches `<@BOTID>` or the piped form `<@BOTID|label>`. A reply-mention posted
 while the daemon was down longer than the lookback window is never picked up.
