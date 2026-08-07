@@ -297,12 +297,10 @@ async function withRemoteToolOutput<T>(
   filename: string,
   use: (body: ReadableStream<Uint8Array>, size: number) => Promise<T>,
 ): Promise<T> {
-  const stat = await runSsh(workerHost, remoteToolOutputCommand(root, filename, "stat"), {
-    stderrToStdout: true,
-  });
+  const stat = await runSsh(workerHost, remoteToolOutputCommand(root, filename, "stat"));
   if (stat.status !== 0) {
     throw new Error(
-      `tool workspace output stat failed: ${workerHost} ${stat.status} ${stat.stdout}`.trim(),
+      `tool workspace output stat failed: ${workerHost} ${stat.status} ${stat.stderr}`.trim(),
     );
   }
   const sizeText = stat.stdout.trim();
