@@ -768,6 +768,93 @@ test("getMessage returns null when no message matches the requested ts", async (
   assert.equal(await transport.getMessage("C1", "1.1"), null);
 });
 
+test("message and reply files are parsed safely and readFile downloads with bot auth", async () => {
+  const calls: Array<{ url: string; auth: string | null }> = [];
+  const downloadUrl = "https://files.slack.com/files-pri/T1-F_ROOT/download/report.txt";
+  const fetchImpl = (async (url: string | URL, init?: RequestInit) => {
+    const value = String(url);
+    calls.push({ url: value, auth: new Headers(init?.headers).get("authorization") });
+    if (value.includes("/conversations.history?")) {
+      return new Response(
+        JSON.stringify({
+          ok: true,
+          messages: [
+            {
+              ts: "1.1",
+              text: "<@U1> inspect these",
+              files: [
+                {
+                  id: "F_ROOT",
+                  name: "report.txt",
+                  title: "Report",
+                  mimetype: "text/plain",
+                  size: 3,
+                  url_private_download: downloadUrl,
+                },
+              ],
+            },
+          ],
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }
+    if (value.includes("/conversations.replies?")) {
+      return new Response(
+        JSON.stringify({
+          ok: true,
+          messages: [
+            { ts: "1.1", text: "<@U1> inspect these" },
+            {
+              ts: "1.2",
+              text: "another file",
+              files: [{ id: "F_REPLY", name: "image.png", mimetype: "image/png", size: 4 }],
+            },
+          ],
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }
+    if (value.includes("/files.info?")) {
+      return new Response(
+        JSON.stringify({
+          ok: true,
+          file: {
+            id: "F_ROOT",
+            name: "report.txt",
+            title: "Report",
+            mimetype: "text/plain",
+            size: 3,
+            url_private_download: downloadUrl,
+          },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }
+    if (value === downloadUrl) {
+      return new Response(new Uint8Array([65, 66, 67]), {
+        status: 200,
+        headers: { "content-length": "3" },
+      });
+    }
+    throw new Error(`unexpected request: ${value}`);
+  }) as typeof fetch;
+
+  const transport = new SlackWebTransport(settings(), fetchImpl);
+  const root = await transport.getMessage("C1", "1.1");
+  const replies = await transport.getThread("C1", "1.1");
+  const downloaded = await transport.readFile("F_ROOT", 10);
+
+  assert.deepEqual(root?.files, [
+    { id: "F_ROOT", name: "report.txt", title: "Report", mimetype: "text/plain", size: 3 },
+  ]);
+  assert.deepEqual(replies[0]?.files, [
+    { id: "F_REPLY", name: "image.png", mimetype: "image/png", size: 4 },
+  ]);
+  assert.deepEqual(downloaded.file, root?.files?.[0]);
+  assert.deepEqual([...downloaded.body], [65, 66, 67]);
+  assert.equal(calls.find((call) => call.url === downloadUrl)?.auth, "Bearer xoxb-abc");
+});
+
 test("removeReaction posts the channel/timestamp/name to reactions.remove", async () => {
   const calls: Array<{ url: string; body: unknown }> = [];
   const fetchImpl = (async (url: string | URL, init?: RequestInit) => {
@@ -798,6 +885,64 @@ test("postReply posts to chat.postMessage with thread_ts and text", async () => 
 
   assert.match(calls[0]!.url, /\/chat\.postMessage$/);
   assert.deepEqual(calls[0]!.body, { channel: "C1", thread_ts: "1.1", text: "done!" });
+});
+
+test("postReply uploads a file and completes it as one threaded reply", async () => {
+  const uploadUrl = "https://files.slack.com/upload/v1/UPLOAD_1";
+  const calls: Array<{ url: string; init?: RequestInit }> = [];
+  const fetchImpl = (async (url: string | URL, init?: RequestInit) => {
+    const value = String(url);
+    calls.push({ url: value, ...(init ? { init } : {}) });
+    if (value.endsWith("/files.getUploadURLExternal")) {
+      return new Response(
+        JSON.stringify({ ok: true, upload_url: uploadUrl, file_id: "F_UPLOAD" }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }
+    if (value === uploadUrl) return new Response("OK - 3", { status: 200 });
+    if (value.endsWith("/files.completeUploadExternal")) {
+      return new Response(JSON.stringify({ ok: true, files: [{ id: "F_UPLOAD" }] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    throw new Error(`unexpected request: ${value}`);
+  }) as typeof fetch;
+
+  await new SlackWebTransport(settings(), fetchImpl).postReply("C1", "1.1", "attached", {
+    files: [{ filename: "result.bin", body: new Uint8Array([0, 255, 1]) }],
+  });
+
+  assert.deepEqual(
+    calls.map((call) => call.url),
+    [
+      "https://slack.com/api/files.getUploadURLExternal",
+      uploadUrl,
+      "https://slack.com/api/files.completeUploadExternal",
+    ],
+  );
+  assert.equal(calls[0]!.init?.method, "POST");
+  assert.deepEqual(JSON.parse(String(calls[0]!.init?.body)), {
+    filename: "result.bin",
+    length: 3,
+  });
+  assert.equal(calls[1]!.init?.method, "POST");
+  assert.equal(
+    new Headers(calls[1]!.init?.headers).get("content-type"),
+    "application/octet-stream",
+  );
+  assert.ok(calls[1]!.init?.body instanceof Uint8Array);
+  assert.deepEqual([...(calls[1]!.init!.body as Uint8Array)], [0, 255, 1]);
+  assert.deepEqual(JSON.parse(String(calls[2]!.init?.body)), {
+    files: [{ id: "F_UPLOAD" }],
+    channel_id: "C1",
+    thread_ts: "1.1",
+    initial_comment: "attached",
+  });
+  assert.equal(
+    calls.some((call) => call.url.endsWith("/chat.postMessage")),
+    false,
+  );
 });
 
 test("getThread reads conversations.replies and drops the parent message", async () => {

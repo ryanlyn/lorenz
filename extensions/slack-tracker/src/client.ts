@@ -48,6 +48,7 @@ import type {
   SlackThreadReply,
   SlackTransport,
 } from "./transport.js";
+import { slackFilesFromRaw } from "./webTransport.js";
 
 // Re-exported here for API stability because package consumers and the tool pack import it from
 // the client module.
@@ -383,9 +384,10 @@ export class SlackTrackerClient implements RuntimeTrackerClient {
     const channel = typeof record.channel === "string" ? record.channel : null;
     const ts = typeof record.ts === "string" ? record.ts : null;
     const threadTs = typeof record.thread_ts === "string" ? record.thread_ts : null;
-    const text = typeof record.text === "string" ? record.text : null;
+    const text = typeof record.text === "string" ? record.text : "";
+    const files = slackFilesFromRaw(record.files, record.x_files);
     const user = typeof record.user === "string" ? record.user : null;
-    if (!channel || !ts || !threadTs || threadTs === ts || !text || !user) return {};
+    if (!channel || !ts || !threadTs || threadTs === ts || !user) return {};
     const steeringEvent = steeringEventForReply(
       {
         ts,
@@ -393,6 +395,7 @@ export class SlackTrackerClient implements RuntimeTrackerClient {
         user,
         ...(subtype ? { subtype } : {}),
         isBot: typeof record.bot_id === "string",
+        ...(files.length > 0 ? { files } : {}),
       },
       this.settings,
     );
@@ -685,7 +688,13 @@ function steeringEventForReply(
 ): TrackerIssueEvent | null {
   const { botUserId, users } = slackTrackerOptions(settings);
   if (!isSlackTs(reply.ts) || compareSlackTs(reply.ts, "0") <= 0) return null;
-  if (reply.subtype !== undefined && reply.subtype !== "thread_broadcast") return null;
+  if (
+    reply.subtype !== undefined &&
+    reply.subtype !== "thread_broadcast" &&
+    reply.subtype !== "file_share"
+  ) {
+    return null;
+  }
   if (
     reply.user === undefined ||
     reply.isBot === true ||
@@ -696,6 +705,7 @@ function steeringEventForReply(
     return null;
   }
   if (!isAllowedAuthor(reply.user, users)) return null;
+  if (reply.text.trim() === "" && (reply.files?.length ?? 0) === 0) return null;
   const classificationText = reply.firstSeenText ?? reply.text;
   if (isAsideText(classificationText, botUserId)) return null;
   if (parseStatusCommand(classificationText, botUserId, settings) !== null) return null;
@@ -703,6 +713,14 @@ function steeringEventForReply(
     authorizedForSteering: true,
     ts: reply.ts,
     author: reply.user,
-    text: reply.text,
+    text: reply.text.trim() === "" ? attachmentSteeringText(reply) : reply.text,
   };
+}
+
+function attachmentSteeringText(reply: SlackThreadReply): string {
+  const labels = (reply.files ?? []).map((file) => {
+    const name = file.name?.trim() || file.title?.trim();
+    return name ? `${name} (${file.id})` : file.id;
+  });
+  return `Attachments: ${labels.join(", ")}`;
 }

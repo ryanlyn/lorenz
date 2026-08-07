@@ -42,6 +42,12 @@ the transport calls; they are not declared in the extension source.
 | `reactions:write`   | Add and remove the bot's own marker and status reactions (`reactions.add`, `reactions.remove`). |
 | `chat:write`        | Post the bot's `status:` and comment replies (`chat.postMessage`).                              |
 | `users:read`        | Resolve a `U...` id to a profile for `slack_user_info` (`users.info`).                          |
+| `files:read`        | Optional. Read files listed on root messages and thread replies (`files.info`).                 |
+| `files:write`       | Optional. Attach worker-generated files to thread replies.                                      |
+
+The file scopes are independent and optional. Without `files:read`, normal thread reads still work
+but `slack_read_file` reports Slack's missing-scope error. Without `files:write`, text comments
+still work but comments containing attachments fail.
 
 Socket Mode is optional. Without an app token, discovery is pure polling of
 `conversations.history`. With an app-level token, Lorenz opens a Socket Mode connection and the
@@ -96,20 +102,20 @@ trackers:
     bot_user_id: $SLACK_BOT_USER_ID
 ```
 
-| Key                   | Env fallback        | Default                                                       | Meaning                                                                                                                               |
-| --------------------- | ------------------- | ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
-| `kind` / `provider`   |                     |                                                               | `tracker.kind: slack` selects the bundle; `trackers.slack.provider: slack` names the implementation.                                  |
-| `channels`            |                     |                                                               | Required. List of public (`C...`), private or multiparty (`G...`), or direct-message (`D...`) conversation ids. Entries resolve `$VAR` references; an unresolved ref collapses to empty and is dropped. |
-| `bot_user_id`         | `SLACK_BOT_USER_ID` |                                                               | Required. The bot's `U...` id. An empty string does not satisfy it.                                                                   |
-| `api_key`             | `SLACK_BOT_TOKEN`   |                                                               | The `xoxb-` bot token.                                                                                                                |
-| `app_token`           | `SLACK_APP_TOKEN`   |                                                               | Optional `xapp-` app-level token for Socket Mode wakeups and immediate live steering.                                                  |
-| `users`               |                     | Any authenticated human                                       | Optional author allowlist applied to issue creation and steering replies.                                                             |
-| `endpoint`            |                     | `https://slack.com/api`                                       | Slack Web API base.                                                                                                                   |
-| `emoji_states`        |                     | `eyes: In Progress`, `white_check_mark: Done`, `x: Cancelled` | Emoji name to state name, merged over the built-in `DEFAULT_EMOJI_STATES`.                                                            |
-| `marker_emoji`        |                     | `robot_face`                                                  | The reaction the bot adds to mark a tracked thread root.                                                                              |
-| `reply_lookback_days` |                     | `2`                                                           | How far back to discover new reply-mention threads.                                                                                   |
-| `scan_lookback_days`  |                     | Unbounded                                                     | How far back the candidate `conversations.history` scan pages. The shipped sample sets `30`; set `0` or omit for a full-history scan. |
-| `reconcile_interval_ms` |                   | `900000` (15 min)                                             | With Socket Mode: how often the event-fed channel mirror re-syncs from a real scan. Ignored without `app_token` (pull-only scans every poll). |
+| Key                     | Env fallback        | Default                                                       | Meaning                                                                                                                                                                                                 |
+| ----------------------- | ------------------- | ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `kind` / `provider`     |                     |                                                               | `tracker.kind: slack` selects the bundle; `trackers.slack.provider: slack` names the implementation.                                                                                                    |
+| `channels`              |                     |                                                               | Required. List of public (`C...`), private or multiparty (`G...`), or direct-message (`D...`) conversation ids. Entries resolve `$VAR` references; an unresolved ref collapses to empty and is dropped. |
+| `bot_user_id`           | `SLACK_BOT_USER_ID` |                                                               | Required. The bot's `U...` id. An empty string does not satisfy it.                                                                                                                                     |
+| `api_key`               | `SLACK_BOT_TOKEN`   |                                                               | The `xoxb-` bot token.                                                                                                                                                                                  |
+| `app_token`             | `SLACK_APP_TOKEN`   |                                                               | Optional `xapp-` app-level token for Socket Mode wakeups and immediate live steering.                                                                                                                   |
+| `users`                 |                     | Any authenticated human                                       | Optional author allowlist applied to issue creation and steering replies.                                                                                                                               |
+| `endpoint`              |                     | `https://slack.com/api`                                       | Slack Web API base.                                                                                                                                                                                     |
+| `emoji_states`          |                     | `eyes: In Progress`, `white_check_mark: Done`, `x: Cancelled` | Emoji name to state name, merged over the built-in `DEFAULT_EMOJI_STATES`.                                                                                                                              |
+| `marker_emoji`          |                     | `robot_face`                                                  | The reaction the bot adds to mark a tracked thread root.                                                                                                                                                |
+| `reply_lookback_days`   |                     | `2`                                                           | How far back to discover new reply-mention threads.                                                                                                                                                     |
+| `scan_lookback_days`    |                     | Unbounded                                                     | How far back the candidate `conversations.history` scan pages. The shipped sample sets `30`; set `0` or omit for a full-history scan.                                                                   |
+| `reconcile_interval_ms` |                     | `900000` (15 min)                                             | With Socket Mode: how often the event-fed channel mirror re-syncs from a real scan. Ignored without `app_token` (pull-only scans every poll).                                                           |
 
 See [reference/configuration.md](../reference/configuration.md) for the full `tracker.*` key reference and the active/terminal state defaults.
 
@@ -372,9 +378,12 @@ The `slack` tool pack mounts automatically for the Slack tracker (its `defaultTo
 thread model directly: `slack_update_status` and `slack_comment` write the bot's reply,
 `slack_workpad` creates/edits the single in-place plan message, with per-issue serialization so
 concurrent partial updates merge against the latest metadata. `slack_read_thread` returns the
-authoritative thread-derived state plus the folded `statusEvents` audit trail, `slack_query` runs
-the read-only `where` DSL, and `slack_user_info` / `slack_channel_context` resolve people and
-surrounding conversation.
+authoritative thread-derived state, every root/reply file, and the folded `statusEvents` audit
+trail. `slack_read_file` returns the contents of a file listed by that thread. `slack_comment` can
+attach up to five worker files (10 MiB decoded total) by accepting their filename and base64
+content in the same tool call. File bytes pass through the authenticated MCP request; the Slack bot
+token remains in the daemon. `slack_query` runs the read-only `where` DSL, and `slack_user_info` /
+`slack_channel_context` resolve people and surrounding conversation.
 
 Every tool enforces the same trust boundary: a configured `bot_user_id`, a watched channel, and a
 tracked message. `slack_query` rejects `jql` (use the `where` DSL) and always intersects requested

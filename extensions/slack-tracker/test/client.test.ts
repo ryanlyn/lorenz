@@ -1202,7 +1202,7 @@ test("watch applies steering policy while admitting thread broadcasts", () => {
   emit({ ...reply, text: "<@U_BOT> !aside context only" });
   emit({ ...reply, bot_id: "B_OTHER", text: "bot reply" });
   emit({ ...reply, subtype: "message_changed", text: "edited" });
-  emit({ ...reply, user: "U_ALICE", subtype: "file_share", text: "system subtype" });
+  emit({ ...reply, user: "U_ALICE", subtype: "channel_join", text: "system subtype" });
   emit({ ...reply, thread_ts: undefined, text: "root message" });
   emit({
     ...reply,
@@ -1234,6 +1234,78 @@ test("watch applies steering policy while admitting thread broadcasts", () => {
       },
     },
   ]);
+});
+
+test("file-only Slack replies steer live and recovered runs with attachment names and ids", async () => {
+  const transport = new InMemorySlackTransport({ C1: [] });
+  const withApp = parseSlackConfig(
+    {
+      tracker: {
+        kind: "slack",
+        channels: ["C1"],
+        bot_user_id: "U_BOT",
+        active_states: ["Todo"],
+      },
+    },
+    { SLACK_BOT_TOKEN: "xoxb-test", SLACK_APP_TOKEN: "xapp-123" },
+  );
+  let opened: SlackSocketModeOptions | null = null;
+  const changes: Array<TrackerChange | undefined> = [];
+  const client = new SlackTrackerClient(withApp, transport, (options) => {
+    opened = options;
+    return { start: () => {}, close: () => {} } as unknown as SlackSocketMode;
+  });
+  client.watch((change) => changes.push(change));
+  const reply = {
+    type: "message",
+    subtype: "file_share",
+    channel: "C1",
+    ts: "1700000001.000200",
+    thread_ts: "1700000000.000100",
+    user: "U_ALICE",
+    text: "",
+    files: [
+      { id: "F_REPORT", name: "report.pdf" },
+      { id: "F_IMAGE", title: "diagram.png" },
+    ],
+  };
+
+  (opened as unknown as SlackSocketModeOptions).onChange({ event: reply });
+
+  const expectedEvent = {
+    authorizedForSteering: true,
+    ts: "1700000001.000200",
+    author: "U_ALICE",
+    text: "Attachments: report.pdf (F_REPORT), diagram.png (F_IMAGE)",
+  };
+  assert.deepEqual(changes, [
+    {
+      issueEvents: {
+        issueId: "C1:1700000000.000100",
+        events: [expectedEvent],
+      },
+    },
+  ]);
+
+  transport.getThreadPage = () =>
+    Promise.resolve({
+      replies: [
+        {
+          ts: reply.ts,
+          text: reply.text,
+          user: reply.user,
+          subtype: reply.subtype,
+          files: reply.files,
+        },
+      ],
+    });
+  assert.deepEqual(
+    await client.fetchIssueEvents("C1:1700000000.000100", "0", {
+      maxEvents: 10,
+      maxBytes: 64 * 1024,
+    }),
+    { events: [expectedEvent], hasMore: false },
+  );
 });
 
 test("busy notices follow the same author allowlist as live steering", async () => {
@@ -1319,7 +1391,7 @@ test("fetchIssueEvents returns a bounded page of authorized human steering repli
             ts: "1700000000.000670",
             text: "file upload",
             user: "U_HUMAN",
-            subtype: "file_share",
+            subtype: "channel_join",
           },
           { ts: "1700000000.000675", text: "another bot", user: "U_OTHER_BOT", isBot: true },
           { ts: "1700000000.000700", text: "missing author" },

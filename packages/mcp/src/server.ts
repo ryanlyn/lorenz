@@ -285,11 +285,12 @@ export async function mcpResponse(
       const payload = result.success
         ? (result.result ?? {})
         : (result.result ?? { error: { message: result.error ?? "dynamic tool failed" } });
+      const content = result.content ?? [{ type: "text", text: JSON.stringify(payload, null, 2) }];
       return {
         jsonrpc: "2.0",
         id,
         result: {
-          content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
+          content,
           isError: !result.success,
         },
       };

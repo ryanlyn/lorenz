@@ -26,6 +26,7 @@ test("slack toolSpecs lists the status, comment, read, query, and context tools"
       "slack_comment",
       "slack_workpad",
       "slack_read_thread",
+      "slack_read_file",
       "slack_query",
       "slack_user_info",
       "slack_channel_context",
@@ -180,6 +181,7 @@ test("slack_read_thread returns text, derived status, reactions, and the thread 
     text: "<@U1> do the thing",
     workpad: { ts: "1.3", plan: "- [ ] test", note: "running" },
     reactions: ["eyes"],
+    files: [],
     permalink: "https://example.slack.com/archives/C1/p11",
     replies: [
       { ts: "1.2", text: "on it", user: "U2" },
@@ -194,6 +196,108 @@ test("slack_read_thread returns text, derived status, reactions, and the thread 
       },
     ],
   });
+});
+
+test("slack_read_thread lists every thread file and slack_read_file returns only attached images", async () => {
+  const image = new Uint8Array([0x89, 0x50, 0x4e, 0x47]);
+  const rootFile = { id: "F_ROOT", name: "root.png", mimetype: "image/png", size: image.length };
+  const firstReplyFile = { id: "F_FIRST", name: "first.txt", mimetype: "text/plain" };
+  const lastReplyFile = { id: "F_LAST", title: "last.pdf", mimetype: "application/pdf" };
+  const transport = new InMemorySlackTransport(
+    {
+      C1: [
+        {
+          ts: "1.1",
+          text: "<@U1> inspect every attachment",
+          reactions: [],
+          files: [rootFile],
+          replies: [
+            { ts: "1.2", text: "first reply", user: "U2", files: [firstReplyFile] },
+            { ts: "1.3", text: "last reply", user: "U2", files: [lastReplyFile] },
+          ],
+        },
+      ],
+    },
+    {
+      files: {
+        F_ROOT: { file: rootFile, body: image },
+        F_NOT_ATTACHED: {
+          file: { id: "F_NOT_ATTACHED", name: "private.png", mimetype: "image/png" },
+          body: image,
+        },
+      },
+    },
+  );
+
+  const thread = await executeSlackTool(
+    "slack_read_thread",
+    { issueId: "C1:1.1" },
+    settings(),
+    transport,
+  );
+  assert.equal(thread.success, true);
+  const result = thread.result as {
+    files: Array<{ id: string }>;
+    replies: Array<{ files?: Array<{ id: string }> }>;
+  };
+  assert.deepEqual(result.files, [rootFile]);
+  assert.deepEqual(
+    result.replies.flatMap((reply) => reply.files ?? []),
+    [firstReplyFile, lastReplyFile],
+  );
+
+  const read = await executeSlackTool(
+    "slack_read_file",
+    { issueId: "C1:1.1", fileId: "F_ROOT" },
+    settings(),
+    transport,
+  );
+  assert.equal(read.success, true);
+  assert.deepEqual(read.content, [
+    { type: "text", text: JSON.stringify({ file: rootFile }, null, 2) },
+    { type: "image", data: Buffer.from(image).toString("base64"), mimeType: "image/png" },
+  ]);
+
+  const unattached = await executeSlackTool(
+    "slack_read_file",
+    { issueId: "C1:1.1", fileId: "F_NOT_ATTACHED" },
+    settings(),
+    transport,
+  );
+  assert.equal(unattached.success, false);
+  assert.match(unattached.error ?? "", /not attached to Slack issue C1:1\.1/);
+});
+
+test("slack_comment decodes and posts one base64 worker attachment", async () => {
+  const transport = new InMemorySlackTransport(
+    { C1: [{ ts: "1.1", text: "<@U1> send the output", reactions: [] }] },
+    { botUserId: "U1" },
+  );
+  const body = new Uint8Array([0x00, 0x01, 0xfe, 0xff]);
+
+  const posted = await executeSlackTool(
+    "slack_comment",
+    {
+      issueId: "C1:1.1",
+      body: "Attached output",
+      attachments: [
+        { filename: "output.bin", contentBase64: Buffer.from(body).toString("base64") },
+      ],
+    },
+    settings(),
+    transport,
+  );
+
+  assert.equal(posted.success, true);
+  assert.deepEqual(transport.replies, [
+    { channel: "C1", threadTs: "1.1", body: "Attached output" },
+  ]);
+  const [reply] = await transport.getThread("C1", "1.1");
+  assert.deepEqual(reply?.files, [
+    { id: "F_UPLOAD_1", name: "output.bin", title: "output.bin", size: body.byteLength },
+  ]);
+  const uploaded = await transport.readFile(reply!.files![0]!.id, body.byteLength);
+  assert.deepEqual(uploaded.body, body);
 });
 
 test("slack_read_thread reads back a reply posted via slack_comment", async () => {

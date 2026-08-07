@@ -1,4 +1,5 @@
 import { parseConfig } from "@lorenz/config";
+import { ToolRegistry } from "@lorenz/tool-sdk";
 import { test } from "vitest";
 import { assert } from "@lorenz/test-utils";
 
@@ -36,5 +37,40 @@ test("MCP initialize rejects array-shaped params instead of treating them as omi
     jsonrpc: "2.0",
     id: 2,
     error: { code: -32602, message: "Invalid params" },
+  });
+});
+
+test("MCP tools/call returns tool-provided content blocks verbatim", async () => {
+  const tools = new ToolRegistry();
+  tools.register({
+    name: "linear",
+    toolSpecs: () => [
+      { name: "rich_result", description: "Return rich content", inputSchema: { type: "object" } },
+    ],
+    executeTool: async () => ({
+      success: true,
+      result: { ignoredWhenContentIsPresent: true },
+      content: [{ type: "image", data: "aW1hZ2U=", mimeType: "image/png" }],
+    }),
+  });
+
+  const response = await mcpResponse(
+    settings,
+    {
+      jsonrpc: "2.0",
+      id: 3,
+      method: "tools/call",
+      params: { name: "rich_result", arguments: {} },
+    },
+    tools,
+  );
+
+  assert.deepEqual(response, {
+    jsonrpc: "2.0",
+    id: 3,
+    result: {
+      content: [{ type: "image", data: "aW1hZ2U=", mimeType: "image/png" }],
+      isError: false,
+    },
   });
 });

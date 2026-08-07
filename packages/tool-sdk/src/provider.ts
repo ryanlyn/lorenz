@@ -10,14 +10,22 @@ export interface ToolSpec {
   inputSchema: Record<string, unknown>;
 }
 
+/** One MCP content block returned directly to the agent. */
+export interface ToolContent {
+  type: string;
+  [key: string]: unknown;
+}
+
 /**
  * Outcome of one tool invocation. `result` is returned to the agent verbatim; `error` is a
- * human-readable summary set when `success` is false.
+ * human-readable summary set when `success` is false. `content`, when present, is returned as
+ * MCP content blocks instead of wrapping `result` in a JSON text block.
  */
 export interface ToolResult {
   success: boolean;
   result?: unknown;
   error?: string;
+  content?: ToolContent[];
 }
 
 /** Dependencies handed to a tool pack when executing one of its tools. */

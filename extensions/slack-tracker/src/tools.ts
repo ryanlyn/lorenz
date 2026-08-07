@@ -7,6 +7,7 @@ import {
   toolFailure,
   toolSuccess,
   unsupportedToolFailure,
+  type ToolContent,
   type ToolProvider,
   type ToolResult,
   type ToolSpec,
@@ -18,7 +19,7 @@ import { requireBotUserId, requireTrackedMessage, updateSlackStatus } from "./op
 import { slackTrackerOptions } from "./options.js";
 import { resolveThreadState, stateFromObservedThread } from "./threadState.js";
 import { slackRuntimeKey, slackRuntimeTransport } from "./toolTransport.js";
-import { isBotMarked, type SlackTransport } from "./transport.js";
+import { isBotMarked, type SlackTransport, type SlackUploadFile } from "./transport.js";
 import { SlackWebTransport } from "./webTransport.js";
 import { upsertWorkpad } from "./workpad.js";
 
@@ -27,6 +28,7 @@ const TOOL_NAMES = [
   "slack_comment",
   "slack_workpad",
   "slack_read_thread",
+  "slack_read_file",
   "slack_query",
   "slack_user_info",
   "slack_channel_context",
@@ -39,6 +41,8 @@ const SLACK_EXPAND_FIELDS = new Set(["thread", "reactions"]);
 /** Bounds for the `slack_channel_context` window. */
 const CONTEXT_DEFAULT = 10;
 const CONTEXT_MAX = 50;
+const MAX_FILE_BYTES = 10 * 1024 * 1024;
+const MAX_COMMENT_FILES = 5;
 /** Per-runtime queues protecting each workpad's read-modify-write operation. */
 const workpadQueues = new Map<string, Map<string, Promise<void>>>();
 
@@ -60,10 +64,27 @@ export function slackToolSpecs(): ToolSpec[] {
       name: "slack_comment",
       description:
         "Reply in the Slack issue's thread. Use for milestone updates and findings that " +
-        "SHOULD notify the thread (replies notify; workpad edits do not). Args: issueId, body.",
+        "SHOULD notify the thread (replies notify; workpad edits do not). To attach worker " +
+        "output, include attachments with filename and padded base64 content. Args: issueId, " +
+        "body, attachments?.",
       inputSchema: {
         type: "object",
-        properties: { issueId: { type: "string" }, body: { type: "string" } },
+        properties: {
+          issueId: { type: "string" },
+          body: { type: "string" },
+          attachments: {
+            type: "array",
+            maxItems: MAX_COMMENT_FILES,
+            items: {
+              type: "object",
+              properties: {
+                filename: { type: "string" },
+                contentBase64: { type: "string" },
+              },
+              required: ["filename", "contentBase64"],
+            },
+          },
+        },
         required: ["issueId", "body"],
       },
     },
@@ -91,11 +112,24 @@ export function slackToolSpecs(): ToolSpec[] {
       description:
         "Read a Slack issue's authoritative state: its source message, thread-derived status " +
         "(human `@bot !` commands and bot `status:` replies, latest wins), status audit trail, " +
-        "workpad, reactions, permalink, and thread replies. Args: issueId.",
+        "workpad, reactions, permalink, every root/reply file, and thread replies. Use " +
+        "slack_read_file to read a listed file's contents. Args: issueId.",
       inputSchema: {
         type: "object",
         properties: { issueId: { type: "string" } },
         required: ["issueId"],
+      },
+    },
+    {
+      name: "slack_read_file",
+      description:
+        "Read a file attached anywhere in a tracked Slack issue's complete thread. The file must " +
+        "be listed by slack_read_thread. Images and other resources are returned as native MCP " +
+        "content. Args: issueId, fileId.",
+      inputSchema: {
+        type: "object",
+        properties: { issueId: { type: "string" }, fileId: { type: "string" } },
+        required: ["issueId", "fileId"],
       },
     },
     {
@@ -187,7 +221,10 @@ export async function executeSlackTool(
       case "slack_comment": {
         // Same trust-boundary check as update_status: only reply on a watched, tracked issue.
         await requireTrackedMessage(settings, transport, channel, ts);
-        await transport.postReply(channel, ts, requireStr(args, "body"));
+        const files = commentFiles(args.attachments);
+        await transport.postReply(channel, ts, requireStr(args, "body"), {
+          ...(files.length ? { files } : {}),
+        });
         return toolSuccess({ ok: true });
       }
       case "slack_workpad": {
@@ -231,9 +268,53 @@ export async function executeSlackTool(
           ...(thread.request !== undefined ? { request: thread.request } : {}),
           ...(thread.workpad !== undefined ? { workpad: thread.workpad } : {}),
           reactions: root.reactions,
+          files: root.files ?? [],
           ...(base ? { permalink: slackPermalink(base, channel, ts) } : {}),
           replies,
         });
+      }
+      case "slack_read_file": {
+        const root = await requireTrackedMessage(settings, transport, channel, ts);
+        const replies = await transport.getThread(channel, ts);
+        const fileId = requireStr(args, "fileId");
+        const attached = [root, ...replies]
+          .flatMap((message) => message.files ?? [])
+          .find((file) => file.id === fileId);
+        if (!attached)
+          throw new Error(`file ${fileId} is not attached to Slack issue ${channel}:${ts}`);
+        if (!transport.readFile) throw new Error("Slack file reads are not supported");
+        const downloaded = await transport.readFile(fileId, MAX_FILE_BYTES);
+        const file = { ...downloaded.file, ...attached };
+        const data = Buffer.from(downloaded.body).toString("base64");
+        const mimeType = file.mimetype ?? "application/octet-stream";
+        const metadata: ToolContent = {
+          type: "text",
+          text: JSON.stringify({ file }, null, 2),
+        };
+        let content: ToolContent[];
+        if (mimeType.startsWith("image/")) {
+          content = [metadata, { type: "image", data, mimeType }];
+        } else if (mimeType.startsWith("audio/")) {
+          content = [metadata, { type: "audio", data, mimeType }];
+        } else if (mimeType.startsWith("text/")) {
+          content = [
+            metadata,
+            { type: "text", text: Buffer.from(downloaded.body).toString("utf8") },
+          ];
+        } else {
+          content = [
+            metadata,
+            {
+              type: "resource",
+              resource: {
+                uri: `slack://file/${encodeURIComponent(file.id)}/${encodeURIComponent(file.name ?? file.id)}`,
+                mimeType,
+                blob: data,
+              },
+            },
+          ];
+        }
+        return { success: true, result: { file }, content };
       }
       case "slack_channel_context": {
         // Context reads are scoped: anchored to a TRACKED issue in a watched channel, never a
@@ -375,6 +456,40 @@ function parseStringArray(input: unknown, label: string): string[] | undefined {
     throw new Error(`${label} must be an array of strings`);
   }
   return input;
+}
+
+function commentFiles(input: unknown): SlackUploadFile[] {
+  if (input === undefined || input === null) return [];
+  if (!Array.isArray(input)) throw new Error("'attachments' must be an array");
+  if (input.length > MAX_COMMENT_FILES) {
+    throw new Error(`'attachments' supports at most ${MAX_COMMENT_FILES} files`);
+  }
+  const files: SlackUploadFile[] = [];
+  let totalBytes = 0;
+  for (const value of input) {
+    if (!isRecord(value)) throw new Error("each attachment must be an object");
+    const filename = requireStr(value, "filename");
+    if (filename.length > 255 || /[\\/\0]/.test(filename)) {
+      throw new Error("attachment filenames must be plain names up to 255 characters");
+    }
+    const encoded = requireStr(value, "contentBase64");
+    if (
+      encoded.length % 4 !== 0 ||
+      !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(encoded)
+    ) {
+      throw new Error(`attachment '${filename}' has invalid padded base64 content`);
+    }
+    const body = Buffer.from(encoded, "base64");
+    if (body.toString("base64") !== encoded) {
+      throw new Error(`attachment '${filename}' has invalid padded base64 content`);
+    }
+    totalBytes += body.byteLength;
+    if (totalBytes > MAX_FILE_BYTES) {
+      throw new Error(`attachments exceed the ${MAX_FILE_BYTES}-byte total limit`);
+    }
+    files.push({ filename, body });
+  }
+  return files;
 }
 
 function windowArg(value: unknown, label: string): number {

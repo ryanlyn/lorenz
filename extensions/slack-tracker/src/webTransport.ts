@@ -5,6 +5,8 @@ import { slackEndpoint, slackTrackerOptions } from "./options.js";
 import { stripBroadcastMentions } from "./sanitize.js";
 import type {
   SlackChannelScan,
+  SlackFile,
+  SlackFileContent,
   SlackMessage,
   SlackMessageMetadata,
   SlackPostOptions,
@@ -26,6 +28,18 @@ interface RawSlackMessage {
   latest_reply?: string;
   reactions?: Array<{ name?: string; users?: string[] }>;
   metadata?: { event_type?: string; event_payload?: unknown };
+  files?: unknown;
+  x_files?: unknown;
+}
+
+interface RawSlackFile {
+  id?: unknown;
+  name?: unknown;
+  title?: unknown;
+  mimetype?: unknown;
+  size?: unknown;
+  url_private?: unknown;
+  url_private_download?: unknown;
 }
 
 // Generous safety cap on conversations.history pages. The normal terminal condition is Slack
@@ -297,6 +311,45 @@ export class SlackWebTransport implements SlackTransport {
     };
   }
 
+  async readFile(fileId: string, maxBytes: number): Promise<SlackFileContent> {
+    const info = await this.get("files.info", { file: fileId });
+    if (!isRecord(info.file)) throw new Error(`slack file not found: ${fileId}`);
+    const raw = info.file as RawSlackFile;
+    const [file] = slackFilesFromRaw([raw]);
+    if (!file) throw new Error(`slack file not found: ${fileId}`);
+    if (file.size !== undefined && file.size > maxBytes) {
+      throw new Error(`slack file exceeds the ${maxBytes}-byte read limit: ${fileId}`);
+    }
+    const downloadUrl =
+      typeof raw.url_private_download === "string"
+        ? raw.url_private_download
+        : typeof raw.url_private === "string"
+          ? raw.url_private
+          : undefined;
+    if (!downloadUrl) throw new Error(`slack file is not downloadable: ${fileId}`);
+    const response = await this.fetchWithRetry(
+      "files.download",
+      async () =>
+        this.fetchImpl(downloadUrl, {
+          headers: { authorization: `Bearer ${this.token}` },
+          signal: AbortSignal.timeout(30_000),
+        }),
+      { idempotent: true },
+    );
+    if (!response.ok) {
+      throw new Error(`slack file download failed: status ${response.status}`);
+    }
+    const advertisedLength = Number(response.headers.get("content-length"));
+    if (Number.isFinite(advertisedLength) && advertisedLength > maxBytes) {
+      throw new Error(`slack file exceeds the ${maxBytes}-byte read limit: ${fileId}`);
+    }
+    const body = new Uint8Array(await response.arrayBuffer());
+    if (body.byteLength > maxBytes) {
+      throw new Error(`slack file exceeds the ${maxBytes}-byte read limit: ${fileId}`);
+    }
+    return { file, body };
+  }
+
   async listAround(
     channel: string,
     ts: string,
@@ -413,6 +466,43 @@ export class SlackWebTransport implements SlackTransport {
     body: string,
     options: SlackPostOptions = {},
   ): Promise<string> {
+    if (options.files?.length) {
+      const files: Array<{ id: string }> = [];
+      for (const file of options.files) {
+        const prepared = await this.post(
+          "files.getUploadURLExternal",
+          {
+            filename: file.filename,
+            length: file.body.byteLength,
+          },
+          { idempotent: false },
+        );
+        if (typeof prepared.upload_url !== "string" || typeof prepared.file_id !== "string") {
+          throw new Error("slack files.getUploadURLExternal returned an invalid response");
+        }
+        const upload = await this.fetchImpl(prepared.upload_url, {
+          method: "POST",
+          headers: { "content-type": "application/octet-stream" },
+          body: Buffer.from(file.body),
+          signal: AbortSignal.timeout(30_000),
+        });
+        if (!upload.ok) {
+          throw new Error(`slack file upload failed: status ${upload.status}`);
+        }
+        files.push({ id: prepared.file_id });
+      }
+      await this.post(
+        "files.completeUploadExternal",
+        {
+          files,
+          channel_id: channel,
+          thread_ts: threadTs,
+          initial_comment: stripBroadcastMentions(body),
+        },
+        { idempotent: false },
+      );
+      return "";
+    }
     // chat.postMessage is NOT idempotent: a blind retry posts a DUPLICATE reply. It may retry
     // internally only on a 429 (rejected before processing). An AMBIGUOUS outcome - a 5xx or a
     // network/timeout failure after the request was sent, where the reply may or may not have
@@ -704,6 +794,9 @@ function toMessage(channel: string, m: RawSlackMessage, botUserId?: string): Sla
       ? { replyCount: m.reply_count }
       : {}),
     ...(typeof m.latest_reply === "string" ? { latestReply: m.latest_reply } : {}),
+    ...(slackFilesFromRaw(m.files, m.x_files).length > 0
+      ? { files: slackFilesFromRaw(m.files, m.x_files) }
+      : {}),
   };
 }
 
@@ -716,7 +809,34 @@ function toThreadReply(m: RawSlackMessage): SlackThreadReply {
   if (m.edited !== undefined) reply.edited = true;
   const metadata = toMessageMetadata(m.metadata);
   if (metadata !== undefined) reply.metadata = metadata;
+  const files = slackFilesFromRaw(m.files, m.x_files);
+  if (files.length > 0) reply.files = files;
   return reply;
+}
+
+/** Parse Slack file objects and Slack Connect `x_files` placeholders without exposing URLs. */
+export function slackFilesFromRaw(raw: unknown, rawIds?: unknown): SlackFile[] {
+  const files = new Map<string, SlackFile>();
+  if (Array.isArray(raw)) {
+    for (const value of raw) {
+      if (!isRecord(value) || typeof value.id !== "string" || value.id === "") continue;
+      files.set(value.id, {
+        id: value.id,
+        ...(typeof value.name === "string" ? { name: value.name } : {}),
+        ...(typeof value.title === "string" ? { title: value.title } : {}),
+        ...(typeof value.mimetype === "string" ? { mimetype: value.mimetype } : {}),
+        ...(typeof value.size === "number" && Number.isFinite(value.size)
+          ? { size: value.size }
+          : {}),
+      });
+    }
+  }
+  if (Array.isArray(rawIds)) {
+    for (const id of rawIds) {
+      if (typeof id === "string" && id !== "" && !files.has(id)) files.set(id, { id });
+    }
+  }
+  return [...files.values()];
 }
 
 /** Map Slack's raw `metadata` field onto {@link SlackMessageMetadata}; undefined when absent. */

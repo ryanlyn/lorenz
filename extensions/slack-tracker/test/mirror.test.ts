@@ -113,6 +113,46 @@ test("mirror serves repeat scans and new events from memory after one bootstrap 
   assert.deepEqual(third.mentions.map((m) => m.ts).sort(), ["1.0", "2.0"]);
 });
 
+test("mirror retains files from API roots and live thread replies", async () => {
+  const mirror = mirrored(
+    new InMemorySlackTransport(
+      {
+        C1: [
+          {
+            ts: "1.0",
+            text: "<@U_BOT> inspect this",
+            user: "U2",
+            files: [{ id: "F_ROOT", name: "root.png", mimetype: "image/png" }],
+          },
+        ],
+      },
+      { botUserId: "U_BOT" },
+    ),
+  );
+
+  const scan = await mirror.scanChannels(["C1"]);
+  assert.deepEqual(scan.mentions[0]!.files, [
+    { id: "F_ROOT", name: "root.png", mimetype: "image/png" },
+  ]);
+
+  mirror.applyEvent(
+    messageEvent({
+      type: "message",
+      subtype: "file_share",
+      channel: "C1",
+      ts: "1.1",
+      thread_ts: "1.0",
+      text: "",
+      user: "U2",
+      files: [{ id: "F_REPLY", name: "reply.pdf", mimetype: "application/pdf" }],
+    }),
+  );
+  const replies = await mirror.getThread("C1", "1.0");
+  assert.deepEqual(replies[0]!.files, [
+    { id: "F_REPLY", name: "reply.pdf", mimetype: "application/pdf" },
+  ]);
+});
+
 test("an event arriving during reconciliation is applied after the API snapshot", async () => {
   const raw = new InMemorySlackTransport(
     { C1: [{ ts: "1.0", text: "<@U_BOT> bootstrap", user: "U2" }] },

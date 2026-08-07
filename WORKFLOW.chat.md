@@ -160,10 +160,13 @@ tracker selected by `tracker.kind`.
 ## Slack contract
 
 - Start by calling `slack_read_thread(issueId)`. The Slack thread is authoritative for status,
-  progress, and human follow-up.
+  progress, human follow-up, and files on the root or any reply. Read a listed file with
+  `slack_read_file` when its contents matter to the request.
 - Set `In Progress` with `slack_update_status` before active work.
 - Keep the plan, acceptance criteria, and latest validation note in one `slack_workpad` message
   updated in place. Use `slack_comment` for milestones worth notifying to the thread.
+- When the user asks for generated output as a file, include it in `slack_comment.attachments` with
+  its filename and base64 content.
 - Re-read the thread at milestones and immediately before finishing so late commands and scope
   changes are honored.
 - Set `Done` with `slack_update_status` only after implementation and validation are complete.

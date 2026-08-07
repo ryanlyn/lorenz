@@ -2,6 +2,8 @@ import { isAllowedAuthor, isBotMention } from "./mapping.js";
 import { stripBroadcastMentions } from "./sanitize.js";
 import type {
   SlackChannelScan,
+  SlackFile,
+  SlackFileContent,
   SlackMessage,
   SlackPostOptions,
   SlackThreadReply,
@@ -20,6 +22,7 @@ interface SeedMessage {
   /** Reactions authored by humans: visible on the message but never state-bearing. */
   humanReactions?: string[];
   replies?: SlackThreadReply[];
+  files?: SlackFile[];
 }
 
 interface StoredMessage extends Omit<SlackMessage, "reactions"> {
@@ -33,6 +36,7 @@ interface InMemoryOptions {
   allowedUsers?: string[];
   /** Resolvable user profiles for `getUser` (defaults to none). */
   users?: Record<string, SlackUser>;
+  files?: Record<string, SlackFileContent>;
 }
 
 const SLACK_TS_SCALE = 1_000_000n;
@@ -56,11 +60,15 @@ export class InMemorySlackTransport implements SlackTransport {
   private readonly botUserId: string | undefined;
   private readonly allowedUsers: string[];
   private readonly users: Record<string, SlackUser>;
+  private readonly files = new Map<string, SlackFileContent>();
 
   constructor(seed: Record<string, SeedMessage[]> = {}, opts: InMemoryOptions = {}) {
     this.botUserId = opts.botUserId;
     this.allowedUsers = opts.allowedUsers ?? [];
     this.users = opts.users ?? {};
+    for (const [id, file] of Object.entries(opts.files ?? {})) {
+      this.files.set(id, { file: { ...file.file }, body: new Uint8Array(file.body) });
+    }
     for (const [channel, msgs] of Object.entries(seed)) {
       this.messages.set(
         channel,
@@ -72,6 +80,7 @@ export class InMemorySlackTransport implements SlackTransport {
           botReactions: [...(m.reactions ?? [])],
           humanReactions: [...(m.humanReactions ?? [])],
           thread: (m.replies ?? []).map((r) => ({ ...r })),
+          ...(m.files?.length ? { files: m.files.map((file) => ({ ...file })) } : {}),
         })),
       );
     }
@@ -139,6 +148,18 @@ export class InMemorySlackTransport implements SlackTransport {
     return Promise.resolve(this.users[userId] ?? null);
   }
 
+  async readFile(fileId: string, maxBytes: number): Promise<SlackFileContent> {
+    const found = await Promise.resolve(this.files.get(fileId));
+    if (!found) throw new Error(`slack file not found: ${fileId}`);
+    if (found.body.byteLength > maxBytes) {
+      throw new Error(`slack file exceeds the ${maxBytes}-byte read limit: ${fileId}`);
+    }
+    return {
+      file: { ...found.file },
+      body: new Uint8Array(found.body),
+    };
+  }
+
   async listAround(
     channel: string,
     ts: string,
@@ -191,6 +212,18 @@ export class InMemorySlackTransport implements SlackTransport {
       const reply: SlackThreadReply = { ts, text };
       if (this.botUserId !== undefined) reply.user = this.botUserId;
       if (options.metadata !== undefined) reply.metadata = options.metadata;
+      if (options.files?.length) {
+        reply.files = options.files.map((file) => {
+          const metadata: SlackFile = {
+            id: `F_UPLOAD_${this.files.size + 1}`,
+            name: file.filename,
+            title: file.filename,
+            size: file.body.byteLength,
+          };
+          this.files.set(metadata.id, { file: metadata, body: new Uint8Array(file.body) });
+          return metadata;
+        });
+      }
       parent.thread.push(reply);
     }
     return Promise.resolve(ts);
