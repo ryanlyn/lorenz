@@ -159,6 +159,8 @@ tracker selected by `tracker.kind`.
 
 ## Slack contract
 
+- Lorenz adds the configured tracking reaction as soon as the daemon claims a request, before it
+  acquires or starts a worker. This is a receipt, not a status transition.
 - Start by calling `slack_read_thread(issueId)`. The Slack thread is authoritative for status,
   progress, and human follow-up.
 - Set `In Progress` with `slack_update_status` before active work.

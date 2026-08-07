@@ -4386,6 +4386,7 @@ test("worker pool: a codex run is skipped when the per-run endpoint open THROWS 
     canAcquire: () => true,
   });
   let runnerCalls = 0;
+  let receipts = 0;
   let acknowledgements = 0;
   const runtime = new LorenzRuntime(
     runtimeOptions({
@@ -4395,6 +4396,10 @@ test("worker pool: a codex run is skipped when the per-run endpoint open THROWS 
       client: {
         fetchCandidateIssues: async () => [issue],
         fetchIssuesByIds: async () => [issue],
+        acknowledgeIssueReceipt: async () => {
+          receipts += 1;
+          return true;
+        },
         acknowledgeIssue: async () => {
           acknowledgements += 1;
           return true;
@@ -4413,6 +4418,7 @@ test("worker pool: a codex run is skipped when the per-run endpoint open THROWS 
   // ran, and the dispatch was skipped with a clear acquire error.
   assert.equal(openCalls, 1);
   assert.equal(runnerCalls, 0);
+  assert.equal(receipts, 1);
   assert.equal(acknowledgements, 0);
   const snapshot = runtime.snapshot();
   assert.equal(snapshot.runHistory.length, 0);
