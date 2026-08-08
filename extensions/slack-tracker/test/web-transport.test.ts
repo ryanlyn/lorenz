@@ -522,13 +522,15 @@ test("addReaction posts to reactions.add", async () => {
 
 test("get retries once on HTTP 429 honoring Retry-After then succeeds", async () => {
   let calls = 0;
+  let retryResponse: Response | undefined;
   const fetchImpl = (async () => {
     calls += 1;
     if (calls === 1) {
-      return new Response("rate limited", {
+      retryResponse = new Response("rate limited", {
         status: 429,
         headers: { "retry-after": "0" },
       });
+      return retryResponse;
     }
     return new Response(
       JSON.stringify({
@@ -543,6 +545,7 @@ test("get retries once on HTTP 429 honoring Retry-After then succeeds", async ()
   const messages = await transport.listMentions(["C1"]);
 
   assert.equal(calls, 2);
+  assert.equal(retryResponse?.bodyUsed, true);
   assert.deepEqual(
     messages.map((m) => m.ts),
     ["1.1"],
@@ -551,26 +554,35 @@ test("get retries once on HTTP 429 honoring Retry-After then succeeds", async ()
 
 test("get gives up after the retry cap on a persistent 429 with a clear error", async () => {
   let calls = 0;
+  const responses: Response[] = [];
   const fetchImpl = (async () => {
     calls += 1;
-    return new Response("rate limited", {
+    const response = new Response("rate limited", {
       status: 429,
       headers: { "retry-after": "0" },
     });
+    responses.push(response);
+    return response;
   }) as typeof fetch;
 
   const transport = new SlackWebTransport(settings(), fetchImpl, () => Promise.resolve());
   await assert.rejects(() => transport.listMentions(["C1"]), /conversations\.history.*429/);
   assert.equal(calls, 5);
+  assert.equal(
+    responses.every((response) => response.bodyUsed),
+    true,
+  );
 });
 
 test("post retries on HTTP 5xx with backoff then succeeds", async () => {
   // reactions.add is idempotent, so retrying after an ambiguous 5xx is allowed.
   let calls = 0;
+  let retryResponse: Response | undefined;
   const fetchImpl = (async () => {
     calls += 1;
     if (calls === 1) {
-      return new Response("server error", { status: 503 });
+      retryResponse = new Response("server error", { status: 503 });
+      return retryResponse;
     }
     return new Response(JSON.stringify({ ok: true }), {
       status: 200,
@@ -582,6 +594,7 @@ test("post retries on HTTP 5xx with backoff then succeeds", async () => {
   await transport.addReaction("C1", "1.1", "eyes");
 
   assert.equal(calls, 2);
+  assert.equal(retryResponse?.bodyUsed, true);
 });
 
 test("addReaction treats already_reacted as success (idempotent re-apply resolves)", async () => {
@@ -641,15 +654,18 @@ test("chat.postMessage does NOT retry on a 5xx (ambiguous - reply may have poste
   // (the reply may already have been delivered), so the transport must NOT retry - it makes exactly
   // ONE fetch to chat.postMessage and surfaces a clear failure rather than risk a duplicate.
   let calls = 0;
+  let failedResponse: Response | undefined;
   const fetchImpl = (async () => {
     calls += 1;
-    return new Response("server error", { status: 503 });
+    failedResponse = new Response("server error", { status: 503 });
+    return failedResponse;
   }) as typeof fetch;
 
   const transport = new SlackWebTransport(settings(), fetchImpl, () => Promise.resolve());
   await assert.rejects(() => transport.postReply("C1", "1.1", "done!"), /chat\.postMessage.*503/);
   // Exactly one fetch: no retry on the ambiguous 5xx, so no possibility of a duplicate reply.
   assert.equal(calls, 1);
+  assert.equal(failedResponse?.bodyUsed, true);
 });
 
 test("chat.postMessage retries on a 429 then succeeds (pre-processing rejection is safe)", async () => {

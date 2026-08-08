@@ -607,12 +607,13 @@ export class SlackWebTransport implements SlackTransport {
       // it surfaces as SlackAmbiguousDeliveryError so metadata-marked posts can reconcile.
       const canRetry = options.idempotent ? isRetryable(response.status) : response.status === 429;
       if (!canRetry || retryCount >= MAX_RETRIES) {
-        if (response.status >= 500) {
-          throw new SlackAmbiguousDeliveryError(
-            `slack ${method} failed: status ${response.status}`,
-          );
-        }
         if (isRetryable(response.status)) {
+          await cancelResponseBody(response);
+          if (response.status >= 500) {
+            throw new SlackAmbiguousDeliveryError(
+              `slack ${method} failed: status ${response.status}`,
+            );
+          }
           // A 429 at retry exhaustion is definitive: Slack rejected every attempt before
           // processing, so nothing was delivered.
           throw new Error(`slack ${method} failed: status ${response.status}`);
@@ -628,6 +629,7 @@ export class SlackWebTransport implements SlackTransport {
         `slack ${method}: HTTP ${response.status}; backing off ${Math.round(delayMs / 1000)}s ` +
           `before retry ${retryCount + 1}/${MAX_RETRIES}`,
       );
+      await cancelResponseBody(response);
       await this.sleep(delayMs, options.abortSignal);
     }
   }
@@ -657,6 +659,14 @@ export class SlackWebTransport implements SlackTransport {
 
 function isRetryable(status: number): boolean {
   return status === 429 || status >= 500;
+}
+
+async function cancelResponseBody(response: Response): Promise<void> {
+  try {
+    await response.body?.cancel();
+  } catch {
+    // Preserve the primary Slack retry or delivery error if a stream refuses cancellation.
+  }
 }
 
 function retryDelayMs(headers: Headers, retryCount: number): number {
