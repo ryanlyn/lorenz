@@ -143,7 +143,7 @@ There is no `slack_create_issue`: only a human creating an @-mention starts a Sl
 
 ### `discord` pack
 
-Seven tools over configured Discord guild channels. Every per-issue tool requires a configured bot
+Eight tools over configured Discord guild channels. Every per-issue tool requires a configured bot
 user id, an allowed channel, and a source message tracked by a mention or the bot's marker reaction.
 
 | Tool | Required args | Optional args | Returns |
@@ -151,7 +151,8 @@ user id, an allowed channel, and a source message tracked by a mention or the bo
 | `discord_update_status` | `issueId`, `status` | | `{ ok: true, status }` |
 | `discord_workpad` | `issueId`, `environment`, `plan`, `acceptanceCriteria`, `validationCommands` | `progress` | `{ ok: true, messageId }` |
 | `discord_comment` | `issueId`, `body` | | `{ ok: true }` |
-| `discord_read_thread` | `issueId` | | source message, state, reactions, permalink, thread messages |
+| `discord_read_thread` | `issueId` | | source message, state, reactions, attachment metadata, permalink, thread messages |
+| `discord_read_attachment` | `issueId`, `messageId` | `attachmentId`, `encoding` | scoped attachment metadata and UTF-8 or base64 content |
 | `discord_query` | | `channels`, `where`, `select`, `expand`, `order_by`, `limit`, `offset` | `{ rows, total }` |
 | `discord_user_info` | `userId` | | `{ user }` |
 | `discord_channel_context` | `issueId` | `before`, `after` | `{ anchor, messages }` |
@@ -161,7 +162,9 @@ notes live in a native thread whose id equals the source message id. Reactions o
 only a visual state mirror and are self-healed in the background after human commands. A newly
 claimed `Todo` issue receives a best-effort `👀` acknowledgement while agent setup runs. Requested
 query channels are intersected with the configured allowlist, and outbound tool messages disable
-Discord mention parsing.
+Discord mention parsing. `discord_read_attachment` only reads attachments from the tracked source
+or its native thread, omits signed CDN URLs from its result, never forwards bot authorization to the
+CDN, and rejects bodies larger than 8 MiB.
 
 There is no `discord_create_issue`: a human mentions the bot or chooses the native **Track with
 Lorenz** message command to start a Discord issue.

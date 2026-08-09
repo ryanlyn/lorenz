@@ -54,6 +54,7 @@ export function message(
     mentionRoleIds: [],
     botRoleIds: [],
     reactions: [] as DiscordReaction[],
+    attachments: [],
     hasThread: false,
     ...overrides,
   };

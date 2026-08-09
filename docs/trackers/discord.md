@@ -165,14 +165,17 @@ The tracker automatically mounts the `discord` tool pack:
 | `discord_update_status`   | Post the authoritative status event and update the reaction mirror.      |
 | `discord_workpad`         | Post a structured Components V2 Workpad with a native status selector.   |
 | `discord_comment`         | Post a progress note in the native issue thread.                         |
-| `discord_read_thread`     | Read the source, resolved state, permalink, reactions, and thread.       |
+| `discord_read_thread`     | Read the source, resolved state, attachments, and native thread.         |
+| `discord_read_attachment` | Read one UTF-8 or base64 attachment from the source or native thread.    |
 | `discord_query`           | Query tracked messages with filtering, projection, ordering, and paging. |
 | `discord_user_info`       | Resolve a Discord user id.                                               |
 | `discord_channel_context` | Read a bounded context window around the source message.                 |
 
 Every per-issue tool validates that the issue references a configured channel and a currently
 tracked mention or bot-owned marker before reading or writing. `discord_query` intersects requested
-channels with the configured channel allowlist.
+channels with the configured channel allowlist. Attachment reads additionally require the selected
+message and attachment to belong to that tracked issue. The bot token is never sent to the Discord
+CDN, signed URLs are not returned to the agent, and attachment bodies are capped at 8 MiB.
 
 ## Gateway and polling
 

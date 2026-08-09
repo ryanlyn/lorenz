@@ -134,7 +134,7 @@ Every tracker that exposes agent tools owns a pack and mounts it through the pro
 | `linear` | `linear` | `linear_graphql` |
 | `local` | `local` | `local_query`, `local_read_issue`, `local_update_status`, `local_comment`, `local_create_issue` |
 | `slack` | `slack` | `slack_update_status`, `slack_comment`, `slack_read_thread`, `slack_query`, `slack_user_info`, `slack_channel_context` |
-| `discord` | `discord` | `discord_update_status`, `discord_workpad`, `discord_comment`, `discord_read_thread`, `discord_query`, `discord_user_info`, `discord_channel_context` |
+| `discord` | `discord` | `discord_update_status`, `discord_workpad`, `discord_comment`, `discord_read_thread`, `discord_read_attachment`, `discord_query`, `discord_user_info`, `discord_channel_context` |
 
 The `memory` tracker declares no `defaultToolPacks`, so it ships no tools. The pack name (`linear`)
 stays distinct from the provider kind (`linear`) even when the strings match. Name a pack in the
