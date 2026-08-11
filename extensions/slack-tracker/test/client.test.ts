@@ -44,8 +44,18 @@ function botSettings() {
 test("mentions become issues; the bot's reactions drive state", async () => {
   const transport = new InMemorySlackTransport({
     C1: [
-      { ts: "1700000000.000100", text: "<@U_BOT> fix the flaky test\nmore detail", reactions: [] },
-      { ts: "1700000000.000200", text: "<@U_BOT> ship docs", reactions: ["white_check_mark"] },
+      {
+        ts: "1700000000.000100",
+        text: "<@U_BOT> fix the flaky test\nmore detail",
+        user: "U_HUMAN",
+        reactions: [],
+      },
+      {
+        ts: "1700000000.000200",
+        text: "<@U_BOT> ship docs",
+        user: "U_HUMAN",
+        reactions: ["white_check_mark"],
+      },
     ],
   });
   const client = new SlackTrackerClient(settings(), transport);
@@ -69,7 +79,14 @@ test("mentions become issues; the bot's reactions drive state", async () => {
 
 test("dispatch receipt immediately adds the non-status tracking marker", async () => {
   const transport = new InMemorySlackTransport({
-    C1: [{ ts: "1700000000.000250", text: "<@U_BOT> start a worker", reactions: [] }],
+    C1: [
+      {
+        ts: "1700000000.000250",
+        text: "<@U_BOT> start a worker",
+        user: "U_HUMAN",
+        reactions: [],
+      },
+    ],
   });
   const client = new SlackTrackerClient(settings(), transport);
   const [issue] = await client.fetchCandidateIssues();
@@ -83,7 +100,14 @@ test("dispatch receipt immediately adds the non-status tracking marker", async (
 
 test("piped mention form <@U_BOT|worker> is detected and stripped from the title", async () => {
   const transport = new InMemorySlackTransport({
-    C1: [{ ts: "1700000000.000300", text: "<@U_BOT|worker> do it", reactions: [] }],
+    C1: [
+      {
+        ts: "1700000000.000300",
+        text: "<@U_BOT|worker> do it",
+        user: "U_HUMAN",
+        reactions: [],
+      },
+    ],
   });
   const client = new SlackTrackerClient(settings(), transport);
 
@@ -97,7 +121,12 @@ test("piped mention form <@U_BOT|worker> is detected and stripped from the title
 test("hashtag tokens in the message become deduped, lowercased labels", async () => {
   const transport = new InMemorySlackTransport({
     C1: [
-      { ts: "1700000000.000400", text: "<@U_BOT> fix the build #backend #Urgent", reactions: [] },
+      {
+        ts: "1700000000.000400",
+        text: "<@U_BOT> fix the build #backend #Urgent",
+        user: "U_HUMAN",
+        reactions: [],
+      },
     ],
   });
   const client = new SlackTrackerClient(settings(), transport);
@@ -112,6 +141,7 @@ test("channel references and user mentions are not mistaken for hashtag labels",
       {
         ts: "1700000000.000450",
         text: "<@U_BOT> ask <@U1> in <#C0ABC|general> #backend",
+        user: "U_HUMAN",
         reactions: [],
       },
     ],
@@ -128,6 +158,7 @@ test("in-token '#' (hex colors, URL fragments) does not leak as a bogus label", 
       {
         ts: "1700000000.000475",
         text: "<@U_BOT> fix color:#fff see http://x#frag then #Backend and #api",
+        user: "U_HUMAN",
         reactions: [],
       },
     ],
@@ -140,7 +171,14 @@ test("in-token '#' (hex colors, URL fragments) does not leak as a bogus label", 
 
 test("a message with no hashtags yields no labels", async () => {
   const transport = new InMemorySlackTransport({
-    C1: [{ ts: "1700000000.000500", text: "<@U_BOT> fix the build", reactions: [] }],
+    C1: [
+      {
+        ts: "1700000000.000500",
+        text: "<@U_BOT> fix the build",
+        user: "U_HUMAN",
+        reactions: [],
+      },
+    ],
   });
   const client = new SlackTrackerClient(settings(), transport);
 
@@ -152,11 +190,28 @@ test("fetchIssuesByIds re-validates channel and bot mention (refresh-path trust 
   const transport = new InMemorySlackTransport(
     {
       C1: [
-        { ts: "1700000000.000600", text: "<@U_BOT> still tracked", reactions: ["eyes"] },
+        {
+          ts: "1700000000.000600",
+          text: "<@U_BOT> still tracked",
+          user: "U_HUMAN",
+          reactions: ["eyes"],
+        },
         // A HUMAN's reaction: with the mention edited away and no bot marker, the issue is gone.
-        { ts: "1700000000.000700", text: "<@U_OTHER> mention removed", humanReactions: ["eyes"] },
+        {
+          ts: "1700000000.000700",
+          text: "<@U_OTHER> mention removed",
+          user: "U_HUMAN",
+          humanReactions: ["eyes"],
+        },
       ],
-      C9: [{ ts: "1700000000.000800", text: "<@U_BOT> wrong channel", reactions: ["eyes"] }],
+      C9: [
+        {
+          ts: "1700000000.000800",
+          text: "<@U_BOT> wrong channel",
+          user: "U_HUMAN",
+          reactions: ["eyes"],
+        },
+      ],
     },
     { botUserId: "U_BOT" },
   );
@@ -179,6 +234,7 @@ test("InMemorySlackTransport getThread returns seeded replies and a posted reply
       {
         ts: "1700000000.000100",
         text: "<@U_BOT> do it",
+        user: "U_HUMAN",
         reactions: ["eyes"],
         replies: [{ ts: "1700000000.000101", text: "first", user: "U_HUMAN" }],
       },
@@ -213,9 +269,24 @@ test("with botUserId only mentions of the bot become candidates", async () => {
   const transport = new InMemorySlackTransport(
     {
       C1: [
-        { ts: "1700000000.000100", text: "<@U_OTHER> human chatter", reactions: [] },
-        { ts: "1700000000.000200", text: "<@U_BOT> handle this", reactions: [] },
-        { ts: "1700000000.000300", text: "<@U_BOT|worker> and this", reactions: [] },
+        {
+          ts: "1700000000.000100",
+          text: "<@U_OTHER> human chatter",
+          user: "U_HUMAN",
+          reactions: [],
+        },
+        {
+          ts: "1700000000.000200",
+          text: "<@U_BOT> handle this",
+          user: "U_HUMAN",
+          reactions: [],
+        },
+        {
+          ts: "1700000000.000300",
+          text: "<@U_BOT|worker> and this",
+          user: "U_HUMAN",
+          reactions: [],
+        },
       ],
     },
     { botUserId: "U_BOT" },
@@ -279,6 +350,7 @@ test("tracker.users gates reply-mention tracking by the request reply's author",
         {
           ts: rootA,
           text: "some discussion",
+          user: "U_HUMAN",
           reactions: [],
           replies: [
             { ts: `${(now - 1800).toFixed(6)}`, text: "<@U_BOT> please do it", user: "U_BOB" },
@@ -287,6 +359,7 @@ test("tracker.users gates reply-mention tracking by the request reply's author",
         {
           ts: rootB,
           text: "other discussion",
+          user: "U_HUMAN",
           reactions: [],
           replies: [
             { ts: `${(now - 1700).toFixed(6)}`, text: "<@U_BOT> handle this", user: "U_ALICE" },
@@ -331,6 +404,7 @@ test("reply tracking retains the authorization recorded when the request was acc
         {
           ts: rootTs,
           text: "discussion",
+          user: "U_HUMAN",
           replies: [{ ts: requestTs, text: "<@U_BOT> handle this", user: "U_ALICE" }],
         },
       ],
@@ -415,8 +489,22 @@ test("tracker.users gates the tool trust boundary, but a bot-marked root stays t
 
 test("issue identifiers keep the channel: equal ts values in two channels stay distinct", async () => {
   const transport = new InMemorySlackTransport({
-    C1: [{ ts: "1700000000.000100", text: "<@U_BOT> in channel one", reactions: [] }],
-    C2: [{ ts: "1700000000.000100", text: "<@U_BOT> in channel two", reactions: [] }],
+    C1: [
+      {
+        ts: "1700000000.000100",
+        text: "<@U_BOT> in channel one",
+        user: "U_HUMAN",
+        reactions: [],
+      },
+    ],
+    C2: [
+      {
+        ts: "1700000000.000100",
+        text: "<@U_BOT> in channel two",
+        user: "U_HUMAN",
+        reactions: [],
+      },
+    ],
   });
   const settings = parseSlackConfig(
     { tracker: { kind: "slack", channels: ["C1", "C2"], active_states: ["Todo"] } },
@@ -432,7 +520,14 @@ test("issue identifiers keep the channel: equal ts values in two channels stay d
 
 test("issues carry a permalink and creation time derived from the message", async () => {
   const transport = new InMemorySlackTransport({
-    C1: [{ ts: "1700000000.000100", text: "<@U_BOT> link me", reactions: [] }],
+    C1: [
+      {
+        ts: "1700000000.000100",
+        text: "<@U_BOT> link me",
+        user: "U_HUMAN",
+        reactions: [],
+      },
+    ],
   });
   const client = new SlackTrackerClient(settings(), transport);
 
@@ -447,6 +542,7 @@ test("hashtags inside link captions are not labels", async () => {
       {
         ts: "1700000000.000600",
         text: "<@U_BOT> see <https://wiki/x|the #route-prod runbook> then fix #backend",
+        user: "U_HUMAN",
         reactions: [],
       },
     ],
@@ -461,7 +557,14 @@ test("hashtags inside link captions are not labels", async () => {
 
 test("one mention scan serves the back-to-back reads of a single poll cycle", async () => {
   const transport = new InMemorySlackTransport({
-    C1: [{ ts: "1700000000.000700", text: "<@U_BOT> cache me", reactions: [] }],
+    C1: [
+      {
+        ts: "1700000000.000700",
+        text: "<@U_BOT> cache me",
+        user: "U_HUMAN",
+        reactions: [],
+      },
+    ],
   });
   let scans = 0;
   const original = transport.scanChannels.bind(transport);
@@ -488,6 +591,7 @@ test("a bot mention in a reply tracks the thread: request title, marker, restart
         {
           ts: rootTs,
           text: "we're seeing flaky deploys in prod",
+          user: "U_HUMAN",
           reactions: [],
           replies: [{ ts: replyTs, text: "<@U_BOT> please fix this #backend", user: "U_HUMAN" }],
         },
@@ -566,6 +670,7 @@ test("pull-only reads preserve the first observed command classification after a
         {
           ts: "1700000000.000100",
           text: "<@U_BOT> tracked",
+          user: "U_HUMAN",
           replies: [{ ts: "1700000000.000200", text: "<@U_BOT> !done", user: "U_HUMAN" }],
         },
       ],
@@ -590,6 +695,7 @@ test("untracked threads older than the reply lookback are not inspected", async 
         {
           ts: "1000.000100",
           text: "ancient conversation",
+          user: "U_HUMAN",
           reactions: [],
           replies: [{ ts: "1000.000200", text: "<@U_BOT> old request", user: "U_HUMAN" }],
         },
@@ -614,6 +720,7 @@ test("the bot's reaction mirror self-heals after a human command", async () => {
         {
           ts: "1700000000.000100",
           text: "<@U_BOT> fix the thing",
+          user: "U_HUMAN",
           reactions: ["eyes"],
           replies: [{ ts: "1700000000.000200", text: "<@U_BOT> !done", user: "U_HUMAN" }],
         },
@@ -661,6 +768,7 @@ test("human reactions never drive state and never trigger mirror writes", async 
         {
           ts: "1700000000.000100",
           text: "<@U_BOT> fix the thing",
+          user: "U_HUMAN",
           humanReactions: ["white_check_mark", "eyes"],
         },
       ],
@@ -690,7 +798,12 @@ test("the bot's own reactions still drive the eventless-state fallback", async (
     {
       C1: [
         // Seeded `reactions` are bot-authored: the mirror written in an earlier session.
-        { ts: "1700000000.000100", text: "<@U_BOT> shipped earlier", reactions: ["eyes"] },
+        {
+          ts: "1700000000.000100",
+          text: "<@U_BOT> shipped earlier",
+          user: "U_HUMAN",
+          reactions: ["eyes"],
+        },
       ],
     },
     { botUserId: "U_BOT" },
@@ -714,6 +827,7 @@ test("a mirror heal only removes managed reactions actually present on the messa
         {
           ts: "1700000000.000100",
           text: "<@U_BOT> fix the thing",
+          user: "U_HUMAN",
           reactions: ["eyes"],
           replies: [{ ts: "1700000000.000200", text: "<@U_BOT> !done", user: "U_HUMAN" }],
         },
@@ -750,6 +864,7 @@ test("a heal that is only missing its target emoji costs one add and zero remove
         {
           ts: "1700000000.000100",
           text: "<@U_BOT> fix the thing",
+          user: "U_HUMAN",
           reactions: [],
           replies: [{ ts: "1700000000.000200", text: "<@U_BOT> !wip", user: "U_HUMAN" }],
         },
@@ -785,10 +900,16 @@ test("a rate-limited mirror heal does not block candidate discovery", async () =
         {
           ts: "1700000000.000100",
           text: "<@U_BOT> healed later",
+          user: "U_HUMAN",
           reactions: ["eyes"],
           replies: [{ ts: "1700000000.000150", text: "<@U_BOT> !todo", user: "U_HUMAN" }],
         },
-        { ts: "1700000000.000200", text: "<@U_BOT> fresh request", reactions: [] },
+        {
+          ts: "1700000000.000200",
+          text: "<@U_BOT> fresh request",
+          user: "U_HUMAN",
+          reactions: [],
+        },
       ],
     },
     { botUserId: "U_BOT" },
@@ -827,6 +948,7 @@ test("a delayed reaction heal leaves workpad plan and note untouched", async () 
         {
           ts: rootTs,
           text: "<@U_BOT> preserve the workpad",
+          user: "U_HUMAN",
           reactions: ["eyes"],
           replies: [
             { ts: "1700000000.000150", text: "<@U_BOT> !done", user: "U_HUMAN" },
@@ -883,7 +1005,16 @@ test("a delayed reaction heal leaves workpad plan and note untouched", async () 
 
 test("fetchIssuesByIds derives in-window issues from the scan and warms the candidate cache", async () => {
   const transport = new InMemorySlackTransport(
-    { C1: [{ ts: "1700000000.000100", text: "<@U_BOT> tracked work", reactions: ["eyes"] }] },
+    {
+      C1: [
+        {
+          ts: "1700000000.000100",
+          text: "<@U_BOT> tracked work",
+          user: "U_HUMAN",
+          reactions: ["eyes"],
+        },
+      ],
+    },
     { botUserId: "U_BOT" },
   );
   let scans = 0;
@@ -914,7 +1045,16 @@ test("fetchIssuesByIds derives in-window issues from the scan and warms the cand
 
 test("fetchIssuesByIds skips the scan entirely when no id is parseable", async () => {
   const transport = new InMemorySlackTransport(
-    { C1: [{ ts: "1700000000.000100", text: "<@U_BOT> tracked work", reactions: ["eyes"] }] },
+    {
+      C1: [
+        {
+          ts: "1700000000.000100",
+          text: "<@U_BOT> tracked work",
+          user: "U_HUMAN",
+          reactions: ["eyes"],
+        },
+      ],
+    },
     { botUserId: "U_BOT" },
   );
   let scans = 0;
@@ -932,7 +1072,16 @@ test("fetchIssuesByIds skips the scan entirely when no id is parseable", async (
 
 test("fetchIssuesByIds takes a fresh scan before deciding tracked issue state", async () => {
   const transport = new InMemorySlackTransport(
-    { C1: [{ ts: "1700000000.000100", text: "<@U_BOT> tracked work", reactions: ["eyes"] }] },
+    {
+      C1: [
+        {
+          ts: "1700000000.000100",
+          text: "<@U_BOT> tracked work",
+          user: "U_HUMAN",
+          reactions: ["eyes"],
+        },
+      ],
+    },
     { botUserId: "U_BOT" },
   );
   let scans = 0;
@@ -972,7 +1121,12 @@ test("fetchIssuesByIds falls back to getMessage for ids outside the scan window 
   const transport = new InMemorySlackTransport(
     {
       C1: [
-        { ts: "1700000000.000100", text: "<@U_BOT> aged out of the window", reactions: ["eyes"] },
+        {
+          ts: "1700000000.000100",
+          text: "<@U_BOT> aged out of the window",
+          user: "U_HUMAN",
+          reactions: ["eyes"],
+        },
       ],
     },
     { botUserId: "U_BOT" },
@@ -996,12 +1150,56 @@ test("fetchIssuesByIds falls back to getMessage for ids outside the scan window 
   assert.ok(getMessages > 0);
 });
 
+test("fetchIssuesByIds rejects poisoned channel joins despite durable marker or status evidence", async () => {
+  const markerTs = "1700000000.000110";
+  const statusTs = "1700000000.000120";
+  const transport = new InMemorySlackTransport(
+    {
+      C1: [
+        {
+          ts: markerTs,
+          text: "<@U_BOT|lorenz> has joined the channel",
+          user: "U_BOT",
+          subtype: "channel_join",
+          reactions: ["robot_face"],
+        },
+        {
+          ts: statusTs,
+          text: "<@U_BOT|lorenz> has joined the channel",
+          user: "U_BOT",
+          subtype: "channel_join",
+          reactions: ["eyes"],
+        },
+      ],
+    },
+    { botUserId: "U_BOT", allowedUsers: ["U_ALICE"] },
+  );
+  // Force authoritative point reads: this is the reconciliation path for an already-durable
+  // claim whose invalid root no longer appears in candidate scans.
+  transport.scanChannels = async () => ({ mentions: [], threadedRoots: [] });
+  const client = new SlackTrackerClient(allowlistSettings(), transport);
+
+  assert.deepEqual(await client.fetchIssuesByIds([`C1:${markerTs}`, `C1:${statusTs}`]), []);
+  assert.deepEqual(transport.replies, []);
+  assert.deepEqual((await transport.getMessage("C1", statusTs))!.botReactions, ["eyes"]);
+});
+
 test("fetchIssuesByIds preserves the requested id order across scan hits and fallbacks", async () => {
   const transport = new InMemorySlackTransport(
     {
       C1: [
-        { ts: "1700000000.000100", text: "<@U_BOT> out of scan", reactions: ["eyes"] },
-        { ts: "1700000000.000200", text: "<@U_BOT> in scan", reactions: ["eyes"] },
+        {
+          ts: "1700000000.000100",
+          text: "<@U_BOT> out of scan",
+          user: "U_HUMAN",
+          reactions: ["eyes"],
+        },
+        {
+          ts: "1700000000.000200",
+          text: "<@U_BOT> in scan",
+          user: "U_HUMAN",
+          reactions: ["eyes"],
+        },
       ],
     },
     { botUserId: "U_BOT" },
@@ -1015,6 +1213,7 @@ test("fetchIssuesByIds preserves the requested id order across scan hits and fal
         channel: "C1",
         ts: "1700000000.000200",
         text: "<@U_BOT> in scan",
+        user: "U_HUMAN",
         reactions: ["eyes"],
         botReactions: ["eyes"],
       },
@@ -1220,9 +1419,11 @@ test("watch applies steering policy while admitting thread broadcasts", () => {
   emit({ ...reply, thread_ts: undefined, text: "root message" });
   emit({
     ...reply,
+    thread_ts: undefined,
     user: "U_ALICE",
     subtype: "thread_broadcast",
     text: "allowed steering",
+    root: { thread_ts: "1700000000.000100" },
   });
 
   assert.deepEqual(changes, [
@@ -1302,6 +1503,12 @@ test("busy notices follow the same author allowlist as live steering", async () 
   await new Promise<void>((resolve) => setImmediate(resolve));
   assert.equal(transport.ephemerals.length, 0);
 
+  onEvent({
+    event: { ...reply, ts: "1700000000.000250", user: "U_ALICE", bot_id: "B_OTHER" },
+  });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(transport.ephemerals.length, 0);
+
   onEvent({ event: { ...reply, ts: "1700000000.000300", user: "U_ALICE" } });
   await new Promise<void>((resolve) => setImmediate(resolve));
   assert.equal(transport.ephemerals.length, 1);
@@ -1315,6 +1522,7 @@ test("fetchIssueEvents returns a bounded page of authorized human steering repli
       {
         ts: "1700000000.000100",
         text: "<@U_BOT> do it",
+        user: "U_HUMAN",
         reactions: ["eyes"],
         replies: [
           { ts: "1700000000.000200", text: "already delivered", user: "U_HUMAN" },
@@ -1438,6 +1646,7 @@ test("fetchIssueEvents applies tracker.users authorization and the page byte lim
       {
         ts: "1700000000.000100",
         text: "<@U_BOT> do it",
+        user: "U_HUMAN",
         reactions: ["eyes"],
         replies: [
           { ts: "1700000000.000200", text: "not authorized", user: "U_BOB" },

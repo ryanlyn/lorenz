@@ -36,9 +36,19 @@ test("slack toolSpecs lists the status, comment, read, query, and context tools"
 test("slack_query lists bot-mention issues with derived state and labels", async () => {
   const transport = new InMemorySlackTransport({
     C1: [
-      { ts: "1.1", text: "<@U1> fix the build #backend", reactions: ["eyes"] },
-      { ts: "1.2", text: "<@U1> ship docs", reactions: ["white_check_mark"] },
-      { ts: "1.3", text: "just chatter, no mention", reactions: [] },
+      {
+        ts: "1.1",
+        text: "<@U1> fix the build #backend",
+        user: "U_HUMAN",
+        reactions: ["eyes"],
+      },
+      {
+        ts: "1.2",
+        text: "<@U1> ship docs",
+        user: "U_HUMAN",
+        reactions: ["white_check_mark"],
+      },
+      { ts: "1.3", text: "just chatter, no mention", user: "U_HUMAN", reactions: [] },
     ],
   });
 
@@ -69,10 +79,16 @@ test("slack_query filters by state, then expands thread and reactions", async ()
       {
         ts: "1.1",
         text: "<@U1> alpha",
+        user: "U_HUMAN",
         reactions: ["eyes"],
         replies: [{ ts: "1.1a", text: "working", user: "U2" }],
       },
-      { ts: "1.2", text: "<@U1> beta", reactions: ["white_check_mark"] },
+      {
+        ts: "1.2",
+        text: "<@U1> beta",
+        user: "U_HUMAN",
+        reactions: ["white_check_mark"],
+      },
     ],
   });
 
@@ -109,8 +125,8 @@ test("slack_query filters by state, then expands thread and reactions", async ()
 
 test("slack_query only scans allow-listed channels (a requested channel is intersected)", async () => {
   const transport = new InMemorySlackTransport({
-    C1: [{ ts: "1.1", text: "<@U1> allowed", reactions: [] }],
-    C9: [{ ts: "9.1", text: "<@U1> off-limits", reactions: [] }],
+    C1: [{ ts: "1.1", text: "<@U1> allowed", user: "U_HUMAN", reactions: [] }],
+    C9: [{ ts: "9.1", text: "<@U1> off-limits", user: "U_HUMAN", reactions: [] }],
   });
 
   // Requesting C9 (not in tracker.channels=["C1"]) yields nothing - it is dropped, never fetched.
@@ -132,7 +148,7 @@ test("slack_query only scans allow-listed channels (a requested channel is inter
 
 test("slack_query rejects a malformed expand value", async () => {
   const transport = new InMemorySlackTransport({
-    C1: [{ ts: "1.1", text: "<@U1> x", reactions: [] }],
+    C1: [{ ts: "1.1", text: "<@U1> x", user: "U_HUMAN", reactions: [] }],
   });
 
   const res = await executeSlackTool("slack_query", { expand: ["bogus"] }, settings(), transport);
@@ -146,6 +162,7 @@ test("slack_read_thread returns text, derived status, reactions, and the thread 
       {
         ts: "1.1",
         text: "<@U1> do the thing",
+        user: "U_HUMAN",
         reactions: ["eyes"],
         replies: [
           { ts: "1.2", text: "on it", user: "U2" },
@@ -198,7 +215,14 @@ test("slack_read_thread returns text, derived status, reactions, and the thread 
 
 test("slack_read_thread reads back a reply posted via slack_comment", async () => {
   const transport = new InMemorySlackTransport({
-    C1: [{ ts: "1.1", text: "<@U1> do the thing", reactions: ["white_check_mark"] }],
+    C1: [
+      {
+        ts: "1.1",
+        text: "<@U1> do the thing",
+        user: "U_HUMAN",
+        reactions: ["white_check_mark"],
+      },
+    ],
   });
 
   const replied = await executeSlackTool(
@@ -231,7 +255,7 @@ test("slack_read_thread reads back a reply posted via slack_comment", async () =
 
 test("slack_read_thread rejects a channel that is not in tracker.channels", async () => {
   const transport = new InMemorySlackTransport({
-    C9: [{ ts: "1.1", text: "<@U1> do the thing", reactions: ["eyes"] }],
+    C9: [{ ts: "1.1", text: "<@U1> do the thing", user: "U_HUMAN", reactions: ["eyes"] }],
   });
 
   const result = await executeSlackTool(
@@ -247,7 +271,7 @@ test("slack_read_thread rejects a channel that is not in tracker.channels", asyn
 
 test("slack_read_thread fails when no message exists at the issueId", async () => {
   const transport = new InMemorySlackTransport({
-    C1: [{ ts: "1.1", text: "<@U1> do the thing", reactions: ["eyes"] }],
+    C1: [{ ts: "1.1", text: "<@U1> do the thing", user: "U_HUMAN", reactions: ["eyes"] }],
   });
 
   const result = await executeSlackTool(
@@ -264,7 +288,14 @@ test("slack_read_thread fails when no message exists at the issueId", async () =
 test("slack_read_thread fails when the message is not a bot mention", async () => {
   // A HUMAN's reaction on random chatter is not the bot's tracking marker.
   const transport = new InMemorySlackTransport({
-    C1: [{ ts: "1.1", text: "just chatting, no mention here", humanReactions: ["eyes"] }],
+    C1: [
+      {
+        ts: "1.1",
+        text: "just chatting, no mention here",
+        user: "U_HUMAN",
+        humanReactions: ["eyes"],
+      },
+    ],
   });
 
   const result = await executeSlackTool(
@@ -280,7 +311,16 @@ test("slack_read_thread fails when the message is not a bot mention", async () =
 
 test("slack_update_status posts the authoritative status reply and mirrors the reaction", async () => {
   const transport = new InMemorySlackTransport(
-    { C1: [{ ts: "1.1", text: "<@U1> do the thing", reactions: ["eyes"] }] },
+    {
+      C1: [
+        {
+          ts: "1.1",
+          text: "<@U1> do the thing",
+          user: "U_HUMAN",
+          reactions: ["eyes"],
+        },
+      ],
+    },
     { botUserId: "U1" },
   );
 
@@ -320,7 +360,7 @@ test("slack_update_status posts the authoritative status reply and mirrors the r
 
 test("slack_update_status resolves a case-variant status to the canonical name", async () => {
   const transport = new InMemorySlackTransport(
-    { C1: [{ ts: "1.1", text: "<@U1> do the thing", reactions: [] }] },
+    { C1: [{ ts: "1.1", text: "<@U1> do the thing", user: "U_HUMAN", reactions: [] }] },
     { botUserId: "U1" },
   );
 
@@ -341,7 +381,7 @@ test("slack_update_status resolves a case-variant status to the canonical name",
 
 test("slack_update_status rejects a status outside the workflow's states", async () => {
   const transport = new InMemorySlackTransport(
-    { C1: [{ ts: "1.1", text: "<@U1> do the thing", reactions: [] }] },
+    { C1: [{ ts: "1.1", text: "<@U1> do the thing", user: "U_HUMAN", reactions: [] }] },
     { botUserId: "U1" },
   );
 
@@ -361,7 +401,7 @@ test("slack_update_status works for custom states with no mapped emoji", async (
   // The reaction swap used to fail without an emoji mapping; the thread reply carries the
   // state regardless, so custom states no longer require an emoji_states entry.
   const transport = new InMemorySlackTransport(
-    { C1: [{ ts: "1.1", text: "<@U1> ship it", reactions: [] }] },
+    { C1: [{ ts: "1.1", text: "<@U1> ship it", user: "U_HUMAN", reactions: [] }] },
     { botUserId: "U1" },
   );
   const custom = parseSlackConfig(
@@ -403,7 +443,16 @@ test("slack_update_status only removes managed reactions present on the root", a
   // The root carries only :eyes:; transitioning to Done must remove exactly that and add
   // :white_check_mark:, not sweep a reactions.remove for every managed emoji (Tier-3 calls).
   const transport = new InMemorySlackTransport(
-    { C1: [{ ts: "1.1", text: "<@U1> do the thing", reactions: ["eyes"] }] },
+    {
+      C1: [
+        {
+          ts: "1.1",
+          text: "<@U1> do the thing",
+          user: "U_HUMAN",
+          reactions: ["eyes"],
+        },
+      ],
+    },
     { botUserId: "U1" },
   );
   const removed: string[] = [];
@@ -430,7 +479,16 @@ test("slack_update_status only removes managed reactions present on the root", a
 
 test("a failing reaction mirror never fails the status transition", async () => {
   const transport = new InMemorySlackTransport(
-    { C1: [{ ts: "1.1", text: "<@U1> do the thing", reactions: ["eyes"] }] },
+    {
+      C1: [
+        {
+          ts: "1.1",
+          text: "<@U1> do the thing",
+          user: "U_HUMAN",
+          reactions: ["eyes"],
+        },
+      ],
+    },
     { botUserId: "U1" },
   );
   transport.addReaction = async () => {
@@ -463,6 +521,7 @@ test("a human command in the thread overrides the reaction reading", async () =>
         {
           ts: "1.1",
           text: "<@U1> do the thing",
+          user: "U_HUMAN",
           reactions: ["eyes"],
           replies: [{ ts: "1.2", text: "<@U1> !done", user: "U_HUMAN" }],
         },
@@ -487,6 +546,7 @@ test("a bare re-mention reopens a terminal issue to the default active state", a
         {
           ts: "1.1",
           text: "<@U1> do the thing",
+          user: "U_HUMAN",
           reactions: ["white_check_mark"],
           replies: [
             { ts: "1.3", text: "<@U1> this broke again, take another look", user: "U_HUMAN" },
@@ -510,7 +570,7 @@ test("slack_update_status rejects a channel that is not in tracker.channels", as
   // Seed the disallowed channel with a real bot-mention message so the only failing guard is
   // the channel allow-list, and assert no reaction side effect occurred.
   const transport = new InMemorySlackTransport({
-    C9: [{ ts: "1.1", text: "<@U1> do the thing", reactions: ["eyes"] }],
+    C9: [{ ts: "1.1", text: "<@U1> do the thing", user: "U_HUMAN", reactions: ["eyes"] }],
   });
 
   const result = await executeSlackTool(
@@ -528,7 +588,7 @@ test("slack_update_status rejects a channel that is not in tracker.channels", as
 
 test("slack_comment rejects a channel that is not in tracker.channels", async () => {
   const transport = new InMemorySlackTransport({
-    C9: [{ ts: "1.1", text: "<@U1> do the thing", reactions: [] }],
+    C9: [{ ts: "1.1", text: "<@U1> do the thing", user: "U_HUMAN", reactions: [] }],
   });
 
   const result = await executeSlackTool(
@@ -545,7 +605,7 @@ test("slack_comment rejects a channel that is not in tracker.channels", async ()
 
 test("slack_update_status fails when no message exists at the issueId", async () => {
   const transport = new InMemorySlackTransport({
-    C1: [{ ts: "1.1", text: "<@U1> do the thing", reactions: ["eyes"] }],
+    C1: [{ ts: "1.1", text: "<@U1> do the thing", user: "U_HUMAN", reactions: ["eyes"] }],
   });
 
   const result = await executeSlackTool(
@@ -561,7 +621,7 @@ test("slack_update_status fails when no message exists at the issueId", async ()
 
 test("slack_comment fails when no message exists at the issueId", async () => {
   const transport = new InMemorySlackTransport({
-    C1: [{ ts: "1.1", text: "<@U1> do the thing", reactions: [] }],
+    C1: [{ ts: "1.1", text: "<@U1> do the thing", user: "U_HUMAN", reactions: [] }],
   });
 
   const result = await executeSlackTool(
@@ -579,7 +639,14 @@ test("slack_comment fails when no message exists at the issueId", async () => {
 test("slack_update_status fails when the message is not a bot mention", async () => {
   // A HUMAN's reaction on random chatter is not the bot's tracking marker.
   const transport = new InMemorySlackTransport({
-    C1: [{ ts: "1.1", text: "just chatting, no mention here", humanReactions: ["eyes"] }],
+    C1: [
+      {
+        ts: "1.1",
+        text: "just chatting, no mention here",
+        user: "U_HUMAN",
+        humanReactions: ["eyes"],
+      },
+    ],
   });
 
   const result = await executeSlackTool(
@@ -597,7 +664,7 @@ test("slack_update_status fails when the message is not a bot mention", async ()
 
 test("slack_comment fails when the message is not a bot mention", async () => {
   const transport = new InMemorySlackTransport({
-    C1: [{ ts: "1.1", text: "just chatting, no mention here", reactions: [] }],
+    C1: [{ ts: "1.1", text: "just chatting, no mention here", user: "U_HUMAN", reactions: [] }],
   });
 
   const result = await executeSlackTool(
@@ -621,7 +688,7 @@ test("slack tools fail loudly when bot_user_id is not configured", async () => {
     { SLACK_BOT_TOKEN: "xoxb" },
   );
   const transport = new InMemorySlackTransport({
-    C1: [{ ts: "1.1", text: "<@U1> tracked", reactions: [] }],
+    C1: [{ ts: "1.1", text: "<@U1> tracked", user: "U_HUMAN", reactions: [] }],
   });
 
   const query = await executeSlackTool("slack_query", {}, noBot, transport);
@@ -707,10 +774,11 @@ test("slack_query includes bot-marked reply-tracked threads with thread state", 
   const transport = new InMemorySlackTransport(
     {
       C1: [
-        { ts: "1.1", text: "<@U1> mention-tracked", reactions: [] },
+        { ts: "1.1", text: "<@U1> mention-tracked", user: "U_HUMAN", reactions: [] },
         {
           ts: "2.1",
           text: "background discussion",
+          user: "U_HUMAN",
           reactions: ["robot_face"],
           replies: [
             { ts: "2.2", text: "<@U1> please handle #infra", user: "U_HUMAN" },

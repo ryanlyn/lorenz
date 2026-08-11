@@ -1,4 +1,4 @@
-import { isAllowedAuthor, isBotMention } from "./mapping.js";
+import { isAllowedRequestMessage, isTrackableThreadRoot } from "./mapping.js";
 import { stripBroadcastMentions } from "./sanitize.js";
 import type {
   SlackChannelScan,
@@ -15,6 +15,9 @@ interface SeedMessage {
   ts: string;
   text: string;
   user?: string;
+  subtype?: string;
+  isBot?: boolean;
+  threadTs?: string;
   /** Reactions authored by the bot, including status mirrors and the tracking marker. */
   reactions?: string[];
   /** Reactions authored by humans: visible on the message but never state-bearing. */
@@ -69,6 +72,9 @@ export class InMemorySlackTransport implements SlackTransport {
           ts: m.ts,
           text: m.text,
           ...(m.user !== undefined ? { user: m.user } : {}),
+          ...(m.subtype !== undefined ? { subtype: m.subtype } : {}),
+          ...(m.isBot !== undefined ? { isBot: m.isBot } : {}),
+          ...(m.threadTs !== undefined ? { threadTs: m.threadTs } : {}),
           botReactions: [...(m.reactions ?? [])],
           humanReactions: [...(m.humanReactions ?? [])],
           thread: (m.replies ?? []).map((r) => ({ ...r })),
@@ -82,9 +88,13 @@ export class InMemorySlackTransport implements SlackTransport {
     const threadedRoots: SlackMessage[] = [];
     for (const channel of channels) {
       for (const m of this.messages.get(channel) ?? []) {
-        if (isBotMention(m.text, this.botUserId) && isAllowedAuthor(m.user, this.allowedUsers))
-          mentions.push(this.snapshot(m));
-        else if (m.thread.length > 0) threadedRoots.push(this.snapshot(m));
+        const message = this.snapshot(m);
+        if (!isTrackableThreadRoot(message)) continue;
+        if (isAllowedRequestMessage(message, this.botUserId, this.allowedUsers, "root")) {
+          mentions.push(message);
+        } else if (m.thread.length > 0) {
+          threadedRoots.push(message);
+        }
       }
     }
     return Promise.resolve({ mentions, threadedRoots });

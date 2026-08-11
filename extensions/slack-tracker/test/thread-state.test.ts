@@ -28,7 +28,14 @@ function settings(overrides: Record<string, unknown> = {}) {
 }
 
 function root(text: string, botReactions: string[] = []): SlackMessage {
-  return { channel: "C1", ts: "100.000100", text, reactions: botReactions, botReactions };
+  return {
+    channel: "C1",
+    ts: "100.000100",
+    text,
+    user: "U_HUMAN",
+    reactions: botReactions,
+    botReactions,
+  };
 }
 
 function reply(ts: string, text: string, user?: string): SlackThreadReply {
@@ -182,4 +189,41 @@ test("a reply mention in a non-mention thread is the request, not a transition",
   assert.equal(result.state, "Done");
   assert.equal(result.request?.ts, "102.1");
   assert.match(result.request?.text ?? "", /please fix this/);
+});
+
+test("bot, system, and unknown-author replies cannot request or transition work", () => {
+  const s = settings();
+  const invalidReplies: SlackThreadReply[] = [
+    { ts: "101.1", text: "<@U_BOT> bot request", user: "U_OTHER_BOT", isBot: true },
+    {
+      ts: "102.1",
+      text: "<@U_BOT> system request",
+      user: "U_HUMAN",
+      subtype: "channel_join",
+    },
+    { ts: "103.1", text: "<@U_BOT> unknown request" },
+  ];
+
+  const request = stateFromThread(
+    root("background discussion"),
+    [
+      ...invalidReplies,
+      {
+        ts: "104.1",
+        text: "<@U_BOT> valid broadcast request",
+        user: "U_HUMAN",
+        subtype: "thread_broadcast",
+      },
+    ],
+    s,
+  );
+  assert.equal(request.request?.ts, "104.1");
+
+  const transition = stateFromThread(
+    root("<@U_BOT> fix it"),
+    [reply("100.1", "status: Done", "U_BOT"), ...invalidReplies],
+    s,
+  );
+  assert.equal(transition.state, "Done");
+  assert.deepEqual(transition.events, [{ ts: "100.1", state: "Done", actor: "U_BOT" }]);
 });

@@ -13,7 +13,7 @@ import {
 } from "@lorenz/tool-sdk";
 
 import { slackMessageToRow, slackPermalink, splitIssueId, trackedRootsOf } from "./client.js";
-import { isAllowedAuthor, isBotMention } from "./mapping.js";
+import { isAllowedAuthor, isRequestMessage } from "./mapping.js";
 import { requireBotUserId, requireTrackedMessage, updateSlackStatus } from "./operations.js";
 import { slackTrackerOptions } from "./options.js";
 import { resolveThreadState, stateFromObservedThread } from "./threadState.js";
@@ -331,7 +331,7 @@ async function executeSlackQuery(
   for (const root of trackedRootsOf(scan, markerEmoji)) {
     const thread = await resolveThreadState(settings, transport, root);
     const rootMentionIsTracked =
-      isBotMention(root.text, options.botUserId) &&
+      isRequestMessage(root, options.botUserId, "root") &&
       (isAllowedAuthor(root.user, options.users) || isBotMarked(root, markerEmoji));
     if (!rootMentionIsTracked && thread.request === undefined) continue;
     records.push(

@@ -2,6 +2,7 @@ import type { Settings } from "@lorenz/domain";
 import { defaultStateType } from "@lorenz/issue";
 
 import { slackTrackerOptions } from "./options.js";
+import type { SlackMessage, SlackThreadReply } from "./transport.js";
 
 export const DEFAULT_EMOJI_STATES: Record<string, string> = {
   eyes: "In Progress",
@@ -45,6 +46,73 @@ export function isBotMention(text: string, botUserId?: string): boolean {
 export function isAllowedAuthor(user: string | undefined, allowedUsers: string[]): boolean {
   if (allowedUsers.length === 0) return true;
   return user !== undefined && allowedUsers.includes(user);
+}
+
+/** Where a Slack message is being considered as the source of an issue request. */
+export type SlackRequestOrigin = "root" | "reply";
+
+type SlackRequestMessage = Pick<
+  SlackMessage | SlackThreadReply,
+  "text" | "user" | "subtype" | "isBot"
+> & {
+  ts?: string | undefined;
+  threadTs?: string | undefined;
+};
+
+/**
+ * True when a channel-history row is an actual thread root worth retaining for request
+ * discovery. Bot-authored roots remain valid containers for a later human reply request, but
+ * system rows and broadcast replies do not.
+ */
+export function isTrackableThreadRoot(message: SlackRequestMessage): boolean {
+  if (message.threadTs !== undefined && message.threadTs !== message.ts) return false;
+  return (
+    message.subtype === undefined ||
+    message.subtype === "file_share" ||
+    message.subtype === "me_message" ||
+    message.subtype === "bot_message"
+  );
+}
+
+/**
+ * True when a Slack message can intrinsically be an issue request. This is deliberately separate
+ * from the configurable author allowlist: an established marker may preserve an earlier
+ * authorization decision, but it must never make a system, bot-authored, self-authored, or
+ * broadcast pseudo-root message into a request.
+ *
+ * Plain messages, human file shares, and `/me` messages retain request semantics. A
+ * `thread_broadcast` may be a reply request, but never a second root issue from channel history.
+ */
+export function isRequestMessage(
+  message: SlackRequestMessage,
+  botUserId: string | undefined,
+  origin: SlackRequestOrigin,
+): boolean {
+  if (!isBotMention(message.text, botUserId)) return false;
+  if (message.user === undefined) return false;
+  if (message.isBot === true) return false;
+  if (botUserId !== undefined && message.user === botUserId) return false;
+  if (origin === "root" && !isTrackableThreadRoot(message)) return false;
+  if (
+    message.subtype === undefined ||
+    message.subtype === "file_share" ||
+    message.subtype === "me_message"
+  ) {
+    return true;
+  }
+  return origin === "reply" && message.subtype === "thread_broadcast";
+}
+
+/** Apply the configured author allowlist on top of intrinsic request provenance. */
+export function isAllowedRequestMessage(
+  message: SlackRequestMessage,
+  botUserId: string | undefined,
+  allowedUsers: string[],
+  origin: SlackRequestOrigin,
+): boolean {
+  return (
+    isRequestMessage(message, botUserId, origin) && isAllowedAuthor(message.user, allowedUsers)
+  );
 }
 
 /**

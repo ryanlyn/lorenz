@@ -147,6 +147,14 @@ the worker moves the issue to `In Progress` only after it starts.
 The mention regex matches `<@BOTID>` or the piped form `<@BOTID|label>`. A reply-mention posted
 while the daemon was down longer than the lookback window is never picked up.
 
+Request provenance fails closed. The author must be an authenticated human: messages authored by
+the configured bot, another Slack bot or integration, or no reported user are never requests.
+System subtypes such as `channel_join` are also ignored even when their generated text mentions the
+bot. Plain human messages, file shares, and `/me` messages can be roots; a `thread_broadcast` can be
+a human reply request anchored to its parent, but never a second root issue from channel history.
+An existing marker or status reaction may preserve an earlier `users` allowlist decision for a
+valid human request, but it cannot override these provenance checks.
+
 The root message maps to a normalized issue:
 
 - **Channel root mention**: the root text is the title and description.

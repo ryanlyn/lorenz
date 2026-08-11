@@ -32,11 +32,15 @@ export {
   DEFAULT_EMOJI_STATES,
   emojiForState,
   isAllowedAuthor,
+  isAllowedRequestMessage,
   isBotMention,
+  isRequestMessage,
+  isTrackableThreadRoot,
   stateFromReactions,
   statusEmojiMap,
   stripLeadingMention,
 } from "./mapping.js";
+export type { SlackRequestOrigin } from "./mapping.js";
 export { slackTrackerOptions } from "./options.js";
 export type { SlackTrackerOptions } from "./options.js";
 export {

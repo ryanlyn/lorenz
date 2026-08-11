@@ -3,7 +3,8 @@ import { defaultStateType } from "@lorenz/issue";
 
 import {
   isAllowedAuthor,
-  isBotMention,
+  isRequestMessage,
+  isTrackableThreadRoot,
   stateFromReactions,
   statusEmojiMap,
   stripLeadingMention,
@@ -177,11 +178,15 @@ export function stateFromThread(
 ): ThreadState {
   const { botUserId, users, markerEmoji = "robot_face" } = slackTrackerOptions(settings);
   const ordered = [...replies].sort((a, b) => compareSlackTs(a.ts, b.ts));
-  const rootIsMention = isBotMention(root.text, botUserId);
+  const rootIsMention = isRequestMessage(root, botUserId, "root");
+  const rootCanAnchorRequest = isTrackableThreadRoot(root);
   const tracking = trackingRecordOf(ordered, botUserId);
   const rootOrigin = tracking?.origin === "root";
   const markerRecordsReplyOrigin =
-    !rootIsMention && tracking === undefined && root.botReactions.includes(markerEmoji);
+    !rootIsMention &&
+    rootCanAnchorRequest &&
+    tracking === undefined &&
+    root.botReactions.includes(markerEmoji);
 
   type FoldInput =
     | { kind: "status"; event: ThreadStatusEvent }
@@ -242,11 +247,11 @@ export function stateFromThread(
       }
       continue;
     }
+    if (!isRequestMessage({ ...reply, text: classificationText }, botUserId, "reply")) continue;
     // Asides opt out of the fold entirely: not a command, and - crucially - not a bare mention,
     // so `@bot !aside fyi...` on a Done issue does not re-open it.
     if (isAsideText(classificationText, botUserId)) continue;
-    if (!isBotMention(classificationText, botUserId)) continue;
-    if (!rootIsMention && !rootOrigin && request === undefined) {
+    if (rootCanAnchorRequest && !rootIsMention && !rootOrigin && request === undefined) {
       // A recorded request keeps the authorization it had when accepted, while still requiring
       // that exact reply and mention to exist. Marker-only records use the first mention because
       // the marker itself is the durable acceptance decision.
