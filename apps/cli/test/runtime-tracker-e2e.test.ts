@@ -85,9 +85,14 @@ test("runtime discovers a Todo issue from a real local board via createTrackerCl
 test("runtime discovers a bot-mention issue from a real Slack transport via createTrackerClient", async () => {
   const transport = new InMemorySlackTransport({
     C1: [
-      { ts: "10.1", text: "<@U_BOT> please handle this", reactions: [] },
+      { ts: "10.1", text: "<@U_BOT> please handle this", user: "U_HUMAN", reactions: [] },
       { ts: "10.2", text: "no mention here", reactions: [] },
-      { ts: "10.3", text: "<@U_BOT> already done", reactions: ["white_check_mark"] },
+      {
+        ts: "10.3",
+        text: "<@U_BOT> already done",
+        user: "U_HUMAN",
+        reactions: ["white_check_mark"],
+      },
     ],
   });
 

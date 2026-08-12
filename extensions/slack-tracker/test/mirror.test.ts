@@ -113,6 +113,61 @@ test("mirror serves repeat scans and new events from memory after one bootstrap 
   assert.deepEqual(third.mentions.map((m) => m.ts).sort(), ["1.0", "2.0"]);
 });
 
+test("mirror rejects channel joins from both bootstrap snapshots and live events", async () => {
+  const raw = new InMemorySlackTransport(
+    { C1: [{ ts: "1.0", text: "<@U_BOT> valid request", user: "U_HUMAN" }] },
+    { botUserId: "U_BOT" },
+  );
+  const inner = counting(raw);
+  const scanChannels = inner.scanChannels.bind(inner);
+  inner.scanChannels = async (channels) => {
+    const scan = await scanChannels(channels);
+    return {
+      mentions: [
+        ...scan.mentions,
+        {
+          channel: "C1",
+          ts: "2.0",
+          text: "<@U_BOT|lorenz> has joined the channel",
+          user: "U_BOT",
+          subtype: "channel_join",
+          isBot: true,
+          reactions: ["robot_face", "eyes"],
+          botReactions: ["robot_face", "eyes"],
+          replyCount: 2,
+          latestReply: "2.2",
+        },
+      ],
+      threadedRoots: scan.threadedRoots,
+    };
+  };
+  const mirror = mirrored(inner);
+
+  const bootstrapped = await mirror.scanChannels(["C1"]);
+  assert.deepEqual(
+    bootstrapped.mentions.map((message) => message.ts),
+    ["1.0"],
+  );
+  assert.deepEqual(bootstrapped.threadedRoots, []);
+
+  mirror.applyEvent(
+    messageEvent({
+      type: "message",
+      subtype: "channel_join",
+      channel: "C1",
+      ts: "3.0",
+      user: "U_BOT",
+      text: "<@U_BOT|lorenz> has joined the channel",
+    }),
+  );
+  const afterEvent = await mirror.scanChannels(["C1"]);
+  assert.deepEqual(
+    afterEvent.mentions.map((message) => message.ts),
+    ["1.0"],
+  );
+  assert.deepEqual(afterEvent.threadedRoots, []);
+});
+
 test("an event arriving during reconciliation is applied after the API snapshot", async () => {
   const raw = new InMemorySlackTransport(
     { C1: [{ ts: "1.0", text: "<@U_BOT> bootstrap", user: "U2" }] },
@@ -272,6 +327,39 @@ test("an event-built thread folds without a conversations.replies read", async (
   assert.equal(root.replyCount, 1);
   assert.equal(root.latestReply, "1.5");
   assert.equal(stateFromThread(root, replies, settings()).state, "In Progress");
+});
+
+test("a thread broadcast resolves its parent from the nested root when thread_ts is omitted", async () => {
+  const inner = counting(
+    new InMemorySlackTransport(
+      { C1: [{ ts: "1.0", text: "discussion", user: "U2" }] },
+      { botUserId: "U_BOT" },
+    ),
+  );
+  const mirror = mirrored(inner);
+  await mirror.scanChannels(["C1"]);
+
+  mirror.applyEvent(
+    messageEvent({
+      type: "message",
+      subtype: "thread_broadcast",
+      channel: "C1",
+      ts: "1.5",
+      text: "<@U_BOT> handle this",
+      user: "U2",
+      root: { thread_ts: "1.0" },
+    }),
+  );
+
+  const scan = await mirror.scanChannels(["C1"]);
+  assert.deepEqual(scan.mentions, []);
+  assert.deepEqual(
+    scan.threadedRoots.map((root) => root.ts),
+    ["1.0"],
+  );
+  const replies = await mirror.getThread("C1", "1.0");
+  assert.equal(replies[0]!.subtype, "thread_broadcast");
+  assert.equal(stateFromThread(scan.threadedRoots[0]!, replies, settings()).request?.ts, "1.5");
 });
 
 test("first-seen wins: an edited command does not rewrite the fold, and a notice posts once", async () => {

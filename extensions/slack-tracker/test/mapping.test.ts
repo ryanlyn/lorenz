@@ -6,7 +6,10 @@ import { parseSlackConfig } from "./helpers.js";
 import {
   DEFAULT_EMOJI_STATES,
   emojiForState,
+  isAllowedRequestMessage,
   isBotMention,
+  isRequestMessage,
+  isTrackableThreadRoot,
   stateFromReactions,
   statusEmojiMap,
   stripLeadingMention,
@@ -52,6 +55,40 @@ test("isBotMention matches any user mention when botUserId is unset", () => {
   assert.equal(isBotMention("<@U_OTHER> hi"), true);
   assert.equal(isBotMention("<@U123|alice> hi"), true);
   assert.equal(isBotMention("plain text"), false);
+});
+
+test("request admission rejects system, bot, self, unknown-author, and broadcast roots", () => {
+  const request = { ts: "1.0", text: "<@U_BOT> fix it", user: "U_HUMAN" };
+  assert.equal(isRequestMessage(request, "U_BOT", "root"), true);
+  assert.equal(isRequestMessage({ ...request, subtype: "file_share" }, "U_BOT", "root"), true);
+  assert.equal(isRequestMessage({ ...request, subtype: "me_message" }, "U_BOT", "root"), true);
+  assert.equal(isRequestMessage({ ...request, subtype: "channel_join" }, "U_BOT", "root"), false);
+  assert.equal(isRequestMessage({ ...request, subtype: "bot_message" }, "U_BOT", "root"), false);
+  assert.equal(isRequestMessage({ ...request, isBot: true }, "U_BOT", "root"), false);
+  assert.equal(isRequestMessage({ ...request, user: "U_BOT" }, "U_BOT", "root"), false);
+  assert.equal(isRequestMessage({ ...request, user: undefined }, "U_BOT", "root"), false);
+  assert.equal(
+    isRequestMessage({ ...request, subtype: "thread_broadcast", threadTs: "0.5" }, "U_BOT", "root"),
+    false,
+  );
+});
+
+test("request admission accepts supported human replies and applies the author allowlist last", () => {
+  const request = { text: "<@U_BOT> fix it", user: "U_HUMAN" };
+  for (const subtype of [undefined, "file_share", "me_message", "thread_broadcast"] as const) {
+    assert.equal(
+      isRequestMessage(
+        { ...request, ...(subtype === undefined ? {} : { subtype }) },
+        "U_BOT",
+        "reply",
+      ),
+      true,
+    );
+  }
+  assert.equal(isAllowedRequestMessage(request, "U_BOT", ["U_HUMAN"], "reply"), true);
+  assert.equal(isAllowedRequestMessage(request, "U_BOT", ["U_OTHER"], "reply"), false);
+  assert.equal(isTrackableThreadRoot({ ...request, subtype: "bot_message", isBot: true }), true);
+  assert.equal(isTrackableThreadRoot({ ...request, subtype: "channel_join" }), false);
 });
 
 test("stripLeadingMention removes only the leading bot mention when botUserId is set", () => {

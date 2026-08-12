@@ -3,7 +3,7 @@ import type { Settings } from "@lorenz/domain";
 import {
   emojiForState,
   isAllowedAuthor,
-  isBotMention,
+  isRequestMessage,
   stateFromReactions,
   statusEmojiMap,
 } from "./mapping.js";
@@ -61,7 +61,7 @@ export async function requireTrackedMessage(
   if (!message) {
     throw new Error(`no tracked issue at ${channel}:${ts}`);
   }
-  if (isBotMention(message.text, botUserId)) {
+  if (isRequestMessage(message, botUserId, "root")) {
     // A dedicated marker records acceptance by an earlier poll. It keeps a root mention tracked
     // if the author allowlist is later tightened, while new issues still honor the allowlist.
     if (isAllowedAuthor(message.user, users) || isBotMarked(message, markerEmoji)) return message;
@@ -168,7 +168,7 @@ export async function ensureSlackTrackingRecord(
     );
   if (thread.tracking !== undefined) return thread.tracking;
   const botUserId = requireBotUserId(settings);
-  const tracking: ThreadTracking | undefined = isBotMention(root.text, botUserId)
+  const tracking: ThreadTracking | undefined = isRequestMessage(root, botUserId, "root")
     ? { origin: "root" }
     : thread.request !== undefined
       ? { origin: "reply", requestTs: thread.request.ts }

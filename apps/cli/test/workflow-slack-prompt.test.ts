@@ -69,7 +69,14 @@ test("the Slack id rendered into WORKFLOW.chat.md is accepted by slack_update_st
   assert.equal(renderedIssueId, ISSUE_ID);
 
   const transport = new InMemorySlackTransport({
-    [CHANNEL]: [{ ts: TS, text: "<@U999> please fix the deploy script", reactions: ["eyes"] }],
+    [CHANNEL]: [
+      {
+        ts: TS,
+        text: "<@U999> please fix the deploy script",
+        user: "U_HUMAN",
+        reactions: ["eyes"],
+      },
+    ],
   });
 
   const result = await executeSlackTool(
@@ -85,7 +92,14 @@ test("the Slack id rendered into WORKFLOW.chat.md is accepted by slack_update_st
 
 test("the SLK display label would be rejected by slack_update_status (regression guard)", async () => {
   const transport = new InMemorySlackTransport({
-    [CHANNEL]: [{ ts: TS, text: "<@U999> please fix the deploy script", reactions: ["eyes"] }],
+    [CHANNEL]: [
+      {
+        ts: TS,
+        text: "<@U999> please fix the deploy script",
+        user: "U_HUMAN",
+        reactions: ["eyes"],
+      },
+    ],
   });
 
   const result = await executeSlackTool(

@@ -43,7 +43,14 @@ test("listMentions calls conversations.history with auth and parses messages", a
     return new Response(
       JSON.stringify({
         ok: true,
-        messages: [{ ts: "1.1", text: "<@U1> hi", reactions: [{ name: "eyes", count: 1 }] }],
+        messages: [
+          {
+            ts: "1.1",
+            text: "<@U1> hi",
+            user: "U_HUMAN",
+            reactions: [{ name: "eyes", count: 1 }],
+          },
+        ],
       }),
       { status: 200, headers: { "content-type": "application/json" } },
     );
@@ -71,6 +78,7 @@ test("botReactions carries only reactions whose users list includes the bot", as
           {
             ts: "1.1",
             text: "<@U_BOT> do it",
+            user: "U_HUMAN",
             reactions: [
               { name: "eyes", users: ["U_BOT", "U_HUMAN"], count: 2 },
               { name: "white_check_mark", users: ["U_HUMAN"], count: 1 },
@@ -100,9 +108,14 @@ test("listMentions filters to the configured bot user when botUserId is set", as
       JSON.stringify({
         ok: true,
         messages: [
-          { ts: "1.1", text: "<@U_OTHER> human chatter", reactions: [] },
-          { ts: "1.2", text: "<@U_BOT> do it", reactions: [] },
-          { ts: "1.3", text: "<@U_BOT|worker> and this", reactions: [] },
+          { ts: "1.1", text: "<@U_OTHER> human chatter", user: "U_HUMAN", reactions: [] },
+          { ts: "1.2", text: "<@U_BOT> do it", user: "U_HUMAN", reactions: [] },
+          {
+            ts: "1.3",
+            text: "<@U_BOT|worker> and this",
+            user: "U_HUMAN",
+            reactions: [],
+          },
         ],
       }),
       { status: 200, headers: { "content-type": "application/json" } },
@@ -136,9 +149,14 @@ test("listMentions fails closed when no botUserId is configured: no mentions, wa
       JSON.stringify({
         ok: true,
         messages: [
-          { ts: "1.1", text: "<@U_OTHER> human chatter", reactions: [] },
-          { ts: "1.2", text: "<@U_BOT> do it", reactions: [] },
-          { ts: "1.3", text: "<@U_BOT|worker> and this", reactions: [] },
+          { ts: "1.1", text: "<@U_OTHER> human chatter", user: "U_HUMAN", reactions: [] },
+          { ts: "1.2", text: "<@U_BOT> do it", user: "U_HUMAN", reactions: [] },
+          {
+            ts: "1.3",
+            text: "<@U_BOT|worker> and this",
+            user: "U_HUMAN",
+            reactions: [],
+          },
         ],
       }),
       { status: 200, headers: { "content-type": "application/json" } },
@@ -197,6 +215,92 @@ test("listMentions applies the tracker.users author allowlist on top of the bot 
   );
 });
 
+test("scanChannels excludes Slack system, bot, self, unknown-author, and broadcast pseudo-roots", async () => {
+  const fetchImpl = (async () =>
+    new Response(
+      JSON.stringify({
+        ok: true,
+        messages: [
+          { ts: "1.1", text: "<@U_BOT> valid request", user: "U_HUMAN" },
+          {
+            ts: "1.2",
+            text: "<@U_BOT|lorenz> has joined the channel",
+            user: "U_BOT",
+            subtype: "channel_join",
+            reply_count: 2,
+            latest_reply: "1.4",
+            reactions: [{ name: "robot_face", users: ["U_BOT"] }],
+          },
+          { ts: "1.3", text: "<@U_BOT> self post", user: "U_BOT" },
+          {
+            ts: "1.4",
+            text: "<@U_BOT> integration post",
+            user: "U_OTHER_BOT",
+            bot_id: "B_OTHER",
+          },
+          { ts: "1.5", text: "<@U_BOT> unknown author" },
+          {
+            ts: "1.6",
+            thread_ts: "1.0",
+            text: "<@U_BOT> broadcast reply",
+            user: "U_HUMAN",
+            subtype: "thread_broadcast",
+          },
+          {
+            ts: "1.7",
+            thread_ts: "1.7",
+            text: "ordinary root with a human request reply",
+            user: "U_HUMAN",
+            reply_count: 1,
+            latest_reply: "1.8",
+          },
+          {
+            ts: "1.8",
+            text: "<@U_BOT> inspect this upload",
+            user: "U_HUMAN",
+            subtype: "file_share",
+          },
+          {
+            ts: "1.9",
+            text: "<@U_BOT> investigates the failure",
+            user: "U_HUMAN",
+            subtype: "me_message",
+          },
+          {
+            ts: "2.0",
+            text: "<@U_BOT> legacy integration post",
+            user: "U_OTHER_BOT",
+            subtype: "bot_message",
+          },
+          {
+            ts: "2.1",
+            text: "<@U_BOT> future system text",
+            user: "U_HUMAN",
+            subtype: "future_system_subtype",
+            reply_count: 1,
+            latest_reply: "2.2",
+          },
+        ],
+      }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    )) as typeof fetch;
+  const configured = parseSlackConfig(
+    { tracker: { kind: "slack", channels: ["C1"], bot_user_id: "U_BOT" } },
+    { SLACK_BOT_TOKEN: "xoxb-abc" },
+  );
+
+  const scan = await new SlackWebTransport(configured, fetchImpl).scanChannels(["C1"]);
+
+  assert.deepEqual(
+    scan.mentions.map((message) => message.ts),
+    ["1.1", "1.8", "1.9"],
+  );
+  assert.deepEqual(
+    scan.threadedRoots.map((message) => message.ts),
+    ["1.7"],
+  );
+});
+
 test("listMentions follows response_metadata.next_cursor across pages", async () => {
   const calls: Array<{ url: string }> = [];
   const fetchImpl = (async (url: string | URL) => {
@@ -207,7 +311,7 @@ test("listMentions follows response_metadata.next_cursor across pages", async ()
       return new Response(
         JSON.stringify({
           ok: true,
-          messages: [{ ts: "1.1", text: "<@U1> first page", reactions: [] }],
+          messages: [{ ts: "1.1", text: "<@U1> first page", user: "U_HUMAN", reactions: [] }],
           response_metadata: { next_cursor: "CURSOR_2" },
         }),
         { status: 200, headers: { "content-type": "application/json" } },
@@ -216,7 +320,7 @@ test("listMentions follows response_metadata.next_cursor across pages", async ()
     return new Response(
       JSON.stringify({
         ok: true,
-        messages: [{ ts: "2.2", text: "<@U1> second page", reactions: [] }],
+        messages: [{ ts: "2.2", text: "<@U1> second page", user: "U_HUMAN", reactions: [] }],
         response_metadata: { next_cursor: "" },
       }),
       { status: 200, headers: { "content-type": "application/json" } },
@@ -242,7 +346,7 @@ test("listMentions stops paging when next_cursor is empty", async () => {
     return new Response(
       JSON.stringify({
         ok: true,
-        messages: [{ ts: `${pages}.0`, text: "<@U1> only page", reactions: [] }],
+        messages: [{ ts: `${pages}.0`, text: "<@U1> only page", user: "U_HUMAN", reactions: [] }],
         response_metadata: { next_cursor: "" },
       }),
       { status: 200, headers: { "content-type": "application/json" } },
@@ -269,7 +373,7 @@ test("listMentions returns all pages and emits NO truncation warning when histor
     return new Response(
       JSON.stringify({
         ok: true,
-        messages: [{ ts: `${page}.0`, text: "<@U1> page mention", reactions: [] }],
+        messages: [{ ts: `${page}.0`, text: "<@U1> page mention", user: "U_HUMAN", reactions: [] }],
         response_metadata: { next_cursor },
       }),
       { status: 200, headers: { "content-type": "application/json" } },
@@ -300,7 +404,7 @@ test("listMentions warns LOUDLY (not silently) when the page cap is hit with a c
     return new Response(
       JSON.stringify({
         ok: true,
-        messages: [{ ts: `${pages}.0`, text: "<@U1> endless", reactions: [] }],
+        messages: [{ ts: `${pages}.0`, text: "<@U1> endless", user: "U_HUMAN", reactions: [] }],
         response_metadata: { next_cursor: `CURSOR_${pages + 1}` },
       }),
       { status: 200, headers: { "content-type": "application/json" } },
@@ -341,7 +445,7 @@ test("listMentions isolates a failing channel: skips it, logs, and returns the r
     return new Response(
       JSON.stringify({
         ok: true,
-        messages: [{ ts: "2.2", text: "<@U1> from good channel", reactions: [] }],
+        messages: [{ ts: "2.2", text: "<@U1> from good channel", user: "U_HUMAN", reactions: [] }],
       }),
       { status: 200, headers: { "content-type": "application/json" } },
     );
@@ -376,7 +480,14 @@ test("listMentions REJECTS when a single channel fails mid-pagination (no channe
       return new Response(
         JSON.stringify({
           ok: true,
-          messages: [{ ts: "1.1", text: "<@U1> first page does NOT survive", reactions: [] }],
+          messages: [
+            {
+              ts: "1.1",
+              text: "<@U1> first page does NOT survive",
+              user: "U_HUMAN",
+              reactions: [],
+            },
+          ],
           response_metadata: { next_cursor: "CURSOR_2" },
         }),
         { status: 200, headers: { "content-type": "application/json" } },
@@ -413,7 +524,14 @@ test("listMentions returns ONLY a fully-scanned channel's mentions when a siblin
         return new Response(
           JSON.stringify({
             ok: true,
-            messages: [{ ts: "A1.1", text: "<@U1> A page 1 discarded", reactions: [] }],
+            messages: [
+              {
+                ts: "A1.1",
+                text: "<@U1> A page 1 discarded",
+                user: "U_HUMAN",
+                reactions: [],
+              },
+            ],
             response_metadata: { next_cursor: "CURSOR_A2" },
           }),
           { status: 200, headers: { "content-type": "application/json" } },
@@ -427,7 +545,14 @@ test("listMentions returns ONLY a fully-scanned channel's mentions when a siblin
     return new Response(
       JSON.stringify({
         ok: true,
-        messages: [{ ts: "B1.1", text: "<@U1> B fully exhausts", reactions: [] }],
+        messages: [
+          {
+            ts: "B1.1",
+            text: "<@U1> B fully exhausts",
+            user: "U_HUMAN",
+            reactions: [],
+          },
+        ],
         response_metadata: { next_cursor: "" },
       }),
       { status: 200, headers: { "content-type": "application/json" } },
@@ -533,7 +658,7 @@ test("get retries once on HTTP 429 honoring Retry-After then succeeds", async ()
     return new Response(
       JSON.stringify({
         ok: true,
-        messages: [{ ts: "1.1", text: "<@U1> hi", reactions: [] }],
+        messages: [{ ts: "1.1", text: "<@U1> hi", user: "U_HUMAN", reactions: [] }],
       }),
       { status: 200, headers: { "content-type": "application/json" } },
     );
@@ -735,7 +860,17 @@ test("getMessage requests a single inclusive message and parses the match", asyn
     return new Response(
       JSON.stringify({
         ok: true,
-        messages: [{ ts: "1.1", text: "<@U1> hi", reactions: [{ name: "eyes", count: 1 }] }],
+        messages: [
+          {
+            ts: "1.1",
+            text: "<@U1> hi",
+            user: "U1",
+            subtype: "channel_join",
+            bot_id: "B1",
+            thread_ts: "1.0",
+            reactions: [{ name: "eyes", count: 1 }],
+          },
+        ],
       }),
       { status: 200, headers: { "content-type": "application/json" } },
     );
@@ -747,6 +882,9 @@ test("getMessage requests a single inclusive message and parses the match", asyn
   assert.ok(message);
   assert.equal(message!.ts, "1.1");
   assert.equal(message!.channel, "C1");
+  assert.equal(message!.subtype, "channel_join");
+  assert.equal(message!.isBot, true);
+  assert.equal(message!.threadTs, "1.0");
   assert.deepEqual(message!.reactions, ["eyes"]);
   const url = new URL(calls[0]!);
   assert.match(url.pathname, /\/conversations\.history$/);

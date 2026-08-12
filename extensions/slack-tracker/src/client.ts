@@ -19,12 +19,12 @@ import { handleSlackInteraction } from "./interactions.js";
 import {
   emojiForState,
   isAllowedAuthor,
-  isBotMention,
+  isRequestMessage,
   stateFromReactions,
   statusEmojiMap,
   stripLeadingMention,
 } from "./mapping.js";
-import { MirrorBackedSlackTransport } from "./mirror.js";
+import { MirrorBackedSlackTransport, threadTsOfSlackMessage } from "./mirror.js";
 import {
   ensureSlackTrackingRecord,
   isBotStatusMarked,
@@ -390,7 +390,7 @@ export class SlackTrackerClient implements RuntimeTrackerClient {
     const subtype = typeof record.subtype === "string" ? record.subtype : null;
     const channel = typeof record.channel === "string" ? record.channel : null;
     const ts = typeof record.ts === "string" ? record.ts : null;
-    const threadTs = typeof record.thread_ts === "string" ? record.thread_ts : null;
+    const threadTs = threadTsOfSlackMessage(record) ?? null;
     const text = typeof record.text === "string" ? record.text : null;
     const user = typeof record.user === "string" ? record.user : null;
     if (!channel || !ts || !threadTs || threadTs === ts || !text || !user) return {};
@@ -460,7 +460,7 @@ export class SlackTrackerClient implements RuntimeTrackerClient {
       const thread = await resolveThreadState(this.settings, this.transport, root);
       const { botUserId, users } = slackTrackerOptions(this.settings);
       const rootMentionIsTracked =
-        isBotMention(root.text, botUserId) &&
+        isRequestMessage(root, botUserId, "root") &&
         (isAllowedAuthor(root.user, users) ||
           isBotMarked(root, markerEmoji) ||
           isBotStatusMarked(root, this.settings));
@@ -493,12 +493,12 @@ export class SlackTrackerClient implements RuntimeTrackerClient {
     const issues: Issue[] = [];
     const { botUserId, users } = slackTrackerOptions(this.settings);
     for (const root of roots) {
-      const rootIsMention = isBotMention(root.text, botUserId);
-      if (rootIsMention && !isAllowedAuthor(root.user, users) && !isBotMarked(root, markerEmoji)) {
+      const rootIsRequest = isRequestMessage(root, botUserId, "root");
+      if (rootIsRequest && !isAllowedAuthor(root.user, users) && !isBotMarked(root, markerEmoji)) {
         continue;
       }
       const thread = await resolveThreadState(this.settings, this.transport, root);
-      if (!rootIsMention && thread.request === undefined) {
+      if (!rootIsRequest && thread.request === undefined) {
         // A root edited away while the daemon was offline can retain its marker. Reconstructing
         // the request from the thread prevents that stale reaction from keeping the issue alive.
         continue;
@@ -603,14 +603,18 @@ export class SlackTrackerClient implements RuntimeTrackerClient {
     if (typeof event.subtype === "string") return; // edits/deletes/system messages are not asks
     const channel = typeof event.channel === "string" ? event.channel : null;
     const ts = typeof event.ts === "string" ? event.ts : null;
-    const threadTs = typeof event.thread_ts === "string" ? event.thread_ts : null;
+    const threadTs = threadTsOfSlackMessage(event) ?? null;
     const user = typeof event.user === "string" ? event.user : null;
     const text = typeof event.text === "string" ? event.text : "";
     if (channel === null || ts === null || threadTs === null || threadTs === ts) return;
     const { botUserId, users } = slackTrackerOptions(this.settings);
-    if (user === null || botUserId === undefined || user === botUserId) return;
+    if (user === null || botUserId === undefined) return;
+    if (
+      !isRequestMessage({ text, user, isBot: typeof event.bot_id === "string" }, botUserId, "reply")
+    ) {
+      return;
+    }
     if (!isAllowedAuthor(user, users)) return;
-    if (!isBotMention(text, botUserId)) return;
     if (isAsideText(text, botUserId)) return;
     if (parseStatusCommand(text, botUserId, this.settings) !== null) return;
     const noticeKey = `${channel}:${threadTs}:${user}`;

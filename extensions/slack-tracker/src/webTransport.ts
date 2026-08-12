@@ -1,6 +1,6 @@
 import { errorMessage, isRecord, type Settings } from "@lorenz/domain";
 
-import { isAllowedAuthor, isBotMention } from "./mapping.js";
+import { isAllowedRequestMessage, isTrackableThreadRoot } from "./mapping.js";
 import { slackEndpoint, slackTrackerOptions } from "./options.js";
 import { stripBroadcastMentions } from "./sanitize.js";
 import type {
@@ -21,6 +21,7 @@ interface RawSlackMessage {
   user?: string;
   bot_id?: string;
   subtype?: string;
+  thread_ts?: string;
   edited?: unknown;
   reply_count?: number;
   latest_reply?: string;
@@ -216,16 +217,15 @@ export class SlackWebTransport implements SlackTransport {
       const messages = Array.isArray(body.messages) ? (body.messages as RawSlackMessage[]) : [];
       for (const m of messages) {
         if (typeof m.ts !== "string") continue;
-        if (
-          isBotMention(m.text ?? "", this.botUserId) &&
-          isAllowedAuthor(m.user, this.allowedUsers)
-        ) {
-          buffer.mentions.push(toMessage(channel, m, this.botUserId));
-        } else if ((m.reply_count ?? 0) > 0) {
+        const message = toMessage(channel, m, this.botUserId);
+        if (!isTrackableThreadRoot(message)) continue;
+        if (isAllowedRequestMessage(message, this.botUserId, this.allowedUsers, "root")) {
+          buffer.mentions.push(message);
+        } else if ((message.replyCount ?? 0) > 0) {
           // Non-mention roots (and root mentions from a non-allowed author) that carry a thread:
           // candidates for reply-mention tracking. A reply from an allowed user mentioning the bot
           // can still make the thread an issue; resolveThreadState applies the same author gate.
-          buffer.threadedRoots.push(toMessage(channel, m, this.botUserId));
+          buffer.threadedRoots.push(message);
         }
       }
       cursor = nextCursor(body);
@@ -689,6 +689,13 @@ function toMessage(channel: string, m: RawSlackMessage, botUserId?: string): Sla
     ts: m.ts ?? "",
     text: m.text ?? "",
     ...(typeof m.user === "string" ? { user: m.user } : {}),
+    ...(typeof m.subtype === "string" ? { subtype: m.subtype } : {}),
+    ...(typeof m.bot_id === "string" ||
+    m.subtype === "bot_message" ||
+    (botUserId !== undefined && m.user === botUserId)
+      ? { isBot: true }
+      : {}),
+    ...(typeof m.thread_ts === "string" ? { threadTs: m.thread_ts } : {}),
     reactions: raw.map((r) => r.name).filter((n): n is string => typeof n === "string"),
     // Bot authorship comes from each reaction's `users` list. Slack may truncate that list on
     // heavily-reacted messages, so a bot reaction can occasionally be invisible here; state then
