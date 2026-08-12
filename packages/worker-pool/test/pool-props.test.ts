@@ -518,9 +518,9 @@ test("pool — reaper never destroys a LEASED worker (only flags it markedForDes
           hasGrowthBudget: () => true,
           destroyWorker: async (record: WorkerRecord) => {
             destroyed.push(record.workerId);
-            inventory.delete(record.workerId);
+            return inventory.delete(record.workerId);
           },
-          provisionWarm: async () => undefined,
+          provisionWarm: async () => false,
           logEvent: () => undefined,
           wakeWaiters: () => undefined,
         };
