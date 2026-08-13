@@ -274,8 +274,11 @@ class WorkerPoolImpl implements WorkerPool {
       hydrated: () => this.hydrated,
       pendingProvisionIds: () => this.pendingProvisionIds,
       hasGrowthBudget: () => this.hasGrowthHeadroom(),
-      destroyWorker: async (record: WorkerRecord, reason: TeardownReason) =>
-        this.recycle(record, reason),
+      destroyWorker: async (record: WorkerRecord, reason: TeardownReason) => {
+        const wasTracked = this.inventory.has(record.workerId);
+        await this.recycle(record, reason);
+        return wasTracked && !this.inventory.has(record.workerId);
+      },
       provisionWarm: async () => this.provisionWarm(),
       logEvent: this.logEvent,
       wakeWaiters: () => this.wakeWaiters(),
@@ -1491,13 +1494,14 @@ class WorkerPoolImpl implements WorkerPool {
    * top-up). Goes through the same reservation as `grow` so a concurrent acquire
    * cannot push the live count past `max`, but the worker is left WARM_IDLE (no
    * lease stamped) so the next acquire can claim it. Failures are logged and
-   * swallowed so a single bad provision never stalls the reaper.
+   * swallowed so a single bad provision never stalls the reaper. Returns true only
+   * when the new worker remains as usable capacity in the live inventory.
    */
-  private async provisionWarm(): Promise<void> {
+  private async provisionWarm(): Promise<boolean> {
     this.reservedProvisions += 1;
     if (this.liveWorkerCount() + this.reservedProvisions > this.settings.max) {
       this.reservedProvisions -= 1;
-      return;
+      return false;
     }
     const workerId = `worker-${this.workerSeq++}`;
     const labels = [POOL_OWNED_LABEL];
@@ -1534,7 +1538,7 @@ class WorkerPoolImpl implements WorkerPool {
       // destroyed and skipped (the reaper re-tops-up); inert for an already-up host.
       if (!(await this.probeUntilReady(descriptor, originDriver))) {
         await this.destroyDescriptor(descriptor, "unhealthy", originDriver);
-        return;
+        return false;
       }
 
       // A drain (or disable) may have begun WHILE this warm provision OR the readiness
@@ -1543,7 +1547,7 @@ class WorkerPoolImpl implements WorkerPool {
       // on the ORIGIN driver that created it.
       if (this.draining || !this.settings.enabled) {
         await this.destroyDescriptor(descriptor, "drain", originDriver);
-        return;
+        return false;
       }
       const now = this.leaseClock.now();
       const record: WorkerRecord = {
@@ -1583,7 +1587,9 @@ class WorkerPoolImpl implements WorkerPool {
           if (record.inFlight !== 0) return; // a lease landed first; settle recycles it
           await this.recycle(record, "shrink");
         });
+        return false;
       }
+      return true;
     } catch (error) {
       this.logEvent({
         event: "worker_pool_warm_provision_failed",
@@ -1593,6 +1599,7 @@ class WorkerPoolImpl implements WorkerPool {
       // Drop the write-ahead provisional row for a failed warm provision so no
       // dangling row outlives the attempt.
       await this.ledger.delete(workerId);
+      return false;
     } finally {
       this.reservedProvisions -= 1;
       this.pendingProvisionIds.delete(workerId);

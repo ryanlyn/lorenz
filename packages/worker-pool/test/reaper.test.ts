@@ -172,13 +172,15 @@ function makeInternals(
     hasGrowthBudget: () => true,
     destroyWorker: async (record: WorkerRecord) => {
       destroyed.push(record.workerId);
-      inventory.delete(record.workerId);
+      const removed = inventory.delete(record.workerId);
       mutexes.delete(record.workerId);
+      return removed;
     },
     provisionWarm: async () => {
       const id = `warm-${provisioned.length}`;
       provisioned.push(id);
       inventory.set(id, makeRecord({ workerId: id }));
+      return true;
     },
     logEvent: () => undefined,
     wakeWaiters: () => undefined,
@@ -192,12 +194,62 @@ test("ttl-exceeded WARM_IDLE above min is destroyed", async () => {
   const settings = poolSettings({ min: 0, ttlMs: 1_000 });
   const record = makeRecord({ state: "WARM_IDLE", createdAtMs: 0, lastIdleAtMs: 0 });
   const { internals, inventory, destroyed } = makeInternals(settings, [record]);
+  let wakeups = 0;
+  internals.wakeWaiters = () => {
+    wakeups += 1;
+  };
   internals.now = () => 2_000; // 2s past createdAt, ttl is 1s
 
   await runReaperTick(internals);
 
   assert.deepEqual(destroyed, ["worker-0"]);
   assert.equal(inventory.size, 0);
+  assert.equal(wakeups, 1);
+});
+
+test("failed reap does not announce capacity that remains unavailable", async () => {
+  const settings = poolSettings({ min: 0, ttlMs: 1_000 });
+  const record = makeRecord({ state: "WARM_IDLE", createdAtMs: 0, lastIdleAtMs: 0 });
+  const { internals, inventory } = makeInternals(settings, [record]);
+  let wakeups = 0;
+  internals.now = () => 2_000;
+  internals.destroyWorker = async () => false;
+  internals.wakeWaiters = () => {
+    wakeups += 1;
+  };
+
+  await runReaperTick(internals);
+
+  assert.equal(inventory.has(record.workerId), true);
+  assert.equal(wakeups, 0);
+});
+
+test("failed reap preserves a healthy worker at the min floor", async () => {
+  const settings = poolSettings({ min: 1, idleReapMs: 1_000, ttlMs: 1_000_000 });
+  const failing = makeRecord({ workerId: "worker-0", state: "WARM_IDLE", lastIdleAtMs: 0 });
+  const healthy = makeRecord({ workerId: "worker-1", state: "WARM_IDLE", lastIdleAtMs: 1 });
+  const { internals, inventory } = makeInternals(settings, [failing, healthy]);
+  const attempts: string[] = [];
+  let wakeups = 0;
+  internals.now = () => 5_000;
+  internals.destroyWorker = async (record) => {
+    attempts.push(record.workerId);
+    if (record === failing) {
+      record.markedForDestroy = true;
+      return false;
+    }
+    inventory.delete(record.workerId);
+    return true;
+  };
+  internals.wakeWaiters = () => {
+    wakeups += 1;
+  };
+
+  await runReaperTick(internals);
+
+  assert.deepEqual(attempts, ["worker-0"]);
+  assert.equal(inventory.has(healthy.workerId), true);
+  assert.equal(wakeups, 0);
 });
 
 test("idle-exceeded above min destroyed; min floor respected", async () => {
@@ -542,11 +594,16 @@ test("registered-but-missing-in-list is marked DESTROYED", async () => {
   const settings = poolSettings({ min: 0 });
   const record = makeRecord({ workerId: "worker-0", state: "WARM_IDLE" });
   const { internals, inventory } = makeInternals(settings, [record], { driver });
+  let wakeups = 0;
+  internals.wakeWaiters = () => {
+    wakeups += 1;
+  };
 
   await runReaperTick(internals);
 
   // The vanished worker is dropped from inventory (reconciled to DESTROYED).
   assert.equal(inventory.has("worker-0"), false);
+  assert.equal(wakeups, 1);
 });
 
 test("reconcile-missing leaves a LEASED detached-driver worker alone (no old-driver leak after a swap)", async () => {
@@ -577,23 +634,65 @@ test("reconcile-missing leaves a LEASED detached-driver worker alone (no old-dri
 
 // --- top-up ----------------------------------------------------------------
 
+test("no-op reaper tick does not announce unchanged capacity", async () => {
+  const settings = poolSettings({ min: 0, warm: 0, max: 4 });
+  const { internals } = makeInternals(settings, []);
+  let wakeups = 0;
+  internals.wakeWaiters = () => {
+    wakeups += 1;
+  };
+
+  await runReaperTick(internals);
+
+  assert.equal(wakeups, 0);
+});
+
 test("top-up provisions toward min/warm only within spend budget", async () => {
   const settings = poolSettings({ min: 2, warm: 2, max: 4 });
   const { internals, provisioned } = makeInternals(settings, []);
+  let wakeups = 0;
   internals.hasGrowthBudget = () => true;
+  internals.wakeWaiters = () => {
+    wakeups += 1;
+  };
 
   await runReaperTick(internals);
   // Empty pool, min=2 -> tops up two warm workers.
   assert.equal(provisioned.length, 2);
+  assert.equal(wakeups, 1);
 });
 
 test("top-up does NOT provision when spend budget is exhausted", async () => {
   const settings = poolSettings({ min: 2, warm: 2, max: 4 });
   const { internals, provisioned } = makeInternals(settings, []);
+  let wakeups = 0;
   internals.hasGrowthBudget = () => false; // budget exhausted
+  internals.wakeWaiters = () => {
+    wakeups += 1;
+  };
 
   await runReaperTick(internals);
   assert.equal(provisioned.length, 0);
+  assert.equal(wakeups, 0);
+});
+
+test("failed top-up does not announce capacity that never landed", async () => {
+  const settings = poolSettings({ min: 1, warm: 1, max: 4 });
+  const { internals } = makeInternals(settings, []);
+  let attempts = 0;
+  let wakeups = 0;
+  internals.provisionWarm = async () => {
+    attempts += 1;
+    return false;
+  };
+  internals.wakeWaiters = () => {
+    wakeups += 1;
+  };
+
+  await runReaperTick(internals);
+
+  assert.equal(attempts, 1);
+  assert.equal(wakeups, 0);
 });
 
 test("top-up is HELD for a survivor-owning driver until hydrate completes (no pre-hydrate duplicates)", async () => {
@@ -649,6 +748,7 @@ test("reaper serial: a second tick while one is in progress is skipped", async (
     });
     inventory.set(`warm-${bodyRuns}`, makeRecord({ workerId: `warm-${bodyRuns}` }));
     inBody -= 1;
+    return true;
   };
 
   const first = runReaperTick(internals);

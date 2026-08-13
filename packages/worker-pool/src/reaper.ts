@@ -65,10 +65,10 @@ export interface ReaperInternals {
   pendingProvisionIds: () => ReadonlySet<string>;
   /** Whether the spend budget allows provisioning one more worker right now. */
   hasGrowthBudget: () => boolean;
-  /** Destroys a worker (driver.destroy + inventory/mutex removal). Idempotent. */
-  destroyWorker: (record: WorkerRecord, reason: TeardownReasonInternal) => Promise<void>;
-  /** Provisions one warm worker toward the min/warm target (under budget). */
-  provisionWarm: () => Promise<void>;
+  /** Destroys a worker, returning whether it was removed from pool inventory. Idempotent. */
+  destroyWorker: (record: WorkerRecord, reason: TeardownReasonInternal) => Promise<boolean>;
+  /** Provisions one warm worker, returning whether usable capacity landed in inventory. */
+  provisionWarm: () => Promise<boolean>;
   /** Structured-log sink. */
   logEvent: (event: Record<string, unknown>) => void;
   /** Wakes any FIFO waiters after capacity frees (e.g. a reaped worker). */
@@ -105,6 +105,10 @@ const inProgress = new WeakSet<ReaperInternals>();
  *     failing probe demotes it to DEGRADED and tears it down.
  *  5. top-up toward min/warm within the spend budget.
  *
+ * Waiters are woken only when one of those steps actually removes a tracked worker or lands usable
+ * warm capacity. A no-op health pass must not masquerade as a capacity event and nudge the runtime
+ * into an off-cadence poll.
+ *
  * Every per-worker mutation runs inside that worker's mutex so a concurrent lease
  * release observing the same `inFlight->0` is serialized (the reaper-vs-release
  * race fix). `now` is read once per call (passed implicitly via `internals.now`).
@@ -113,12 +117,12 @@ export async function runReaperTick(internals: ReaperInternals): Promise<void> {
   if (inProgress.has(internals)) return;
   inProgress.add(internals);
   try {
-    await reconcileWithDriverList(internals);
-    await reapOrphans(internals);
-    await reapTtlAndIdle(internals);
-    await reapUnhealthy(internals);
-    await topUp(internals);
-    internals.wakeWaiters();
+    let capacityChanged = await reconcileWithDriverList(internals);
+    if (await reapOrphans(internals)) capacityChanged = true;
+    if (await reapTtlAndIdle(internals)) capacityChanged = true;
+    if (await reapUnhealthy(internals)) capacityChanged = true;
+    if (await topUp(internals)) capacityChanged = true;
+    if (capacityChanged) internals.wakeWaiters();
   } finally {
     inProgress.delete(internals);
   }
@@ -134,7 +138,7 @@ export async function runReaperTick(internals: ReaperInternals): Promise<void> {
  *  - pool-has / driver-lacks: a registered record the authoritative list no
  *    longer shows (the machine vanished). Mark it DESTROYED and drop it.
  */
-async function reconcileWithDriverList(internals: ReaperInternals): Promise<void> {
+async function reconcileWithDriverList(internals: ReaperInternals): Promise<boolean> {
   let listed: WorkerDescriptor[];
   try {
     listed = await internals.driver.list();
@@ -142,8 +146,9 @@ async function reconcileWithDriverList(internals: ReaperInternals): Promise<void
     // list() is advisory-on-failure: a transient driver error must not cause a
     // mass reconcile (which could destroy or drop workers). Skip reconcile this pass.
     internals.logEvent({ event: "worker_pool_list_failed", error: errorMessage(error) });
-    return;
+    return false;
   }
+  let capacityChanged = false;
 
   const listedById = new Map<string, WorkerDescriptor>();
   for (const descriptor of listed) listedById.set(descriptor.workerId, descriptor);
@@ -205,16 +210,19 @@ async function reconcileWithDriverList(internals: ReaperInternals): Promise<void
     // and `originDriver.destroy()` is never called - leaking the paid machine.
     if (record.originDriver !== undefined || record.inFlight > 0) continue;
     internals.logEvent({ event: "worker_pool_reconcile_missing", workerId: record.workerId });
-    await internals.mutexFor(record.workerId).runExclusive(async () => {
+    const removed = await internals.mutexFor(record.workerId).runExclusive(async () => {
       record.state = "DESTROYED";
       record.inFlight = 0;
       record.leaseId = null;
-      internals.inventory.delete(record.workerId);
+      const deleted = internals.inventory.delete(record.workerId);
       // The body is synchronous; awaiting a resolved promise satisfies the
       // mutex's Promise-returning contract without a meaningless async hop.
       await Promise.resolve();
+      return deleted;
     });
+    if (removed) capacityChanged = true;
   }
+  return capacityChanged;
 }
 
 /**
@@ -229,9 +237,10 @@ async function reconcileWithDriverList(internals: ReaperInternals): Promise<void
  * orphans are recovered by `hydrate`. Runs inside the per-worker mutex so a racing
  * late release cannot underflow.
  */
-async function reapOrphans(internals: ReaperInternals): Promise<void> {
+async function reapOrphans(internals: ReaperInternals): Promise<boolean> {
   const now = internals.now();
   const stale = internals.settings.staleHeartbeatMs;
+  let capacityChanged = false;
   for (const record of [...internals.inventory.values()]) {
     if (record.state !== "LEASED") continue;
     if (record.inFlight <= 0) continue;
@@ -239,16 +248,18 @@ async function reapOrphans(internals: ReaperInternals): Promise<void> {
     // Stale heartbeat: in the live pool the run is always still active, so this is
     // a no-op there; a unit-injected `false` predicate exercises the force-return.
     if (internals.isRunActive(record)) continue;
-    await internals.mutexFor(record.workerId).runExclusive(async () => {
+    const removed = await internals.mutexFor(record.workerId).runExclusive(async () => {
       // Re-check inside the mutex: a release may have settled while we queued.
-      if (record.state === "DESTROYED" || record.inFlight <= 0) return;
+      if (record.state === "DESTROYED" || record.inFlight <= 0) return false;
       internals.logEvent({ event: "worker_pool_orphan_reaped", workerId: record.workerId });
       record.inFlight = 0;
       record.leaseId = null;
       record.leaseIssues?.clear();
-      await internals.destroyWorker(record, "orphan");
+      return internals.destroyWorker(record, "orphan");
     });
+    if (removed) capacityChanged = true;
   }
+  return capacityChanged;
 }
 
 /**
@@ -258,9 +269,10 @@ async function reapOrphans(internals: ReaperInternals): Promise<void> {
  * pool's lease-settle recycles it the instant its last lease returns. A worker that
  * is ALREADY flagged and idle is recycled here too.
  */
-async function reapTtlAndIdle(internals: ReaperInternals): Promise<void> {
+async function reapTtlAndIdle(internals: ReaperInternals): Promise<boolean> {
   const now = internals.now();
   const { ttlMs, idleReapMs, min } = internals.settings;
+  let capacityChanged = false;
 
   // Flag LEASED workers past ttl (and recycle any already-flagged idle worker).
   for (const record of internals.inventory.values()) {
@@ -285,12 +297,16 @@ async function reapTtlAndIdle(internals: ReaperInternals): Promise<void> {
     // still reaped because the operator/ttl explicitly wants it gone).
     if (!flagged && liveAbove <= min) continue;
     const reason: TeardownReasonInternal = ttlExpired ? "ttl" : "idle";
-    await internals.mutexFor(record.workerId).runExclusive(async () => {
-      if (record.state !== "WARM_IDLE" || record.inFlight !== 0) return;
-      await internals.destroyWorker(record, reason);
+    const removed = await internals.mutexFor(record.workerId).runExclusive(async () => {
+      if (record.state !== "WARM_IDLE" || record.inFlight !== 0) return false;
+      return internals.destroyWorker(record, reason);
     });
+    if (removed) capacityChanged = true;
+    // A failed destroy leaves the selected worker marked for teardown and non-leasable. Count the
+    // attempt against this pass's floor so a failure cannot make us reap the last healthy worker.
     liveAbove -= 1;
   }
+  return capacityChanged;
 }
 
 /**
@@ -299,7 +315,8 @@ async function reapTtlAndIdle(internals: ReaperInternals): Promise<void> {
  * probe demotes it to DEGRADED and then tears it down (a dead worker serves no leases).
  * Only idle workers are probed, so a live run is never disturbed by a readiness check.
  */
-async function reapUnhealthy(internals: ReaperInternals): Promise<void> {
+async function reapUnhealthy(internals: ReaperInternals): Promise<boolean> {
+  let capacityChanged = false;
   for (const record of [...internals.inventory.values()]) {
     if (record.state !== "WARM_IDLE" || record.inFlight !== 0) continue;
     let health: { ok: boolean };
@@ -316,13 +333,15 @@ async function reapUnhealthy(internals: ReaperInternals): Promise<void> {
       });
     }
     if (health.ok) continue;
-    await internals.mutexFor(record.workerId).runExclusive(async () => {
-      if (record.state !== "WARM_IDLE" || record.inFlight !== 0) return;
+    const removed = await internals.mutexFor(record.workerId).runExclusive(async () => {
+      if (record.state !== "WARM_IDLE" || record.inFlight !== 0) return false;
       record.state = "DEGRADED";
       internals.logEvent({ event: "worker_pool_degraded", workerId: record.workerId });
-      await internals.destroyWorker(record, "unhealthy");
+      return internals.destroyWorker(record, "unhealthy");
     });
+    if (removed) capacityChanged = true;
   }
+  return capacityChanged;
 }
 
 /**
@@ -330,7 +349,7 @@ async function reapUnhealthy(internals: ReaperInternals): Promise<void> {
  * time, ONLY while the spend budget allows. Capped by `max` via `hasGrowthBudget`
  * / the pool's own headroom check inside `provisionWarm`.
  */
-async function topUp(internals: ReaperInternals): Promise<void> {
+async function topUp(internals: ReaperInternals): Promise<boolean> {
   // Hold top-up until the first hydrate has adopted any driver survivors, but ONLY
   // for a driver that actually OWNS survivors (paid: usesLedger / ephemeral). The
   // ctor arms the reaper before `hydrate()` runs, so a pre-hydrate tick sees an empty
@@ -340,20 +359,22 @@ async function topUp(internals: ReaperInternals): Promise<void> {
   // A non-paid driver (fake / static-ssh) owns no survivors and need not wait on a
   // one-time list(), so it warms immediately regardless of `hydrated`.
   const caps = internals.driver.capabilities;
-  if (!internals.hydrated() && (caps.usesLedger || caps.ephemeral)) return;
+  if (!internals.hydrated() && (caps.usesLedger || caps.ephemeral)) return false;
 
   const target = Math.max(internals.settings.min, internals.settings.warm);
+  let capacityChanged = false;
   // Bound attempts to the size of the gap so a persistently-failing provision
   // (which never adds a worker) cannot spin the tick forever; the next tick retries.
   let attempts = Math.max(0, target - internals.liveWorkerCount());
   while (attempts > 0 && internals.liveWorkerCount() < target) {
     if (!internals.hasGrowthBudget()) {
       internals.logEvent({ event: "worker_pool_topup_budget_blocked" });
-      return;
+      return capacityChanged;
     }
-    await internals.provisionWarm();
+    if (await internals.provisionWarm()) capacityChanged = true;
     attempts -= 1;
   }
+  return capacityChanged;
 }
 
 /** Reconstructs a WorkerDescriptor from a record for driver probe/destroy calls. */

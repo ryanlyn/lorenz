@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { assert, settle } from "@lorenz/test-utils";
-import { afterEach, beforeEach, test } from "vitest";
+import { afterEach, beforeEach, test, vi } from "vitest";
 import type { WorkerPoolSettings } from "@lorenz/domain";
 import { withDerivedMaxInFlight } from "@lorenz/domain";
 import type { ClockPort, TimerHandle } from "@lorenz/domain";
@@ -563,6 +563,33 @@ test("onCapacityAvailable fires when a release returns a worker to warm; never w
   const beforeDrain = fired;
   await pool.drain({ deadlineMs: 1_000 });
   assert.equal(fired, beforeDrain);
+});
+
+test("no-op reaper ticks do not announce unchanged capacity", async () => {
+  vi.useFakeTimers();
+  try {
+    const { clock } = controllableClock(0);
+    const pool = createWorkerPool(
+      poolSettings({ min: 0, max: 10, warm: 0, reapIntervalMs: 15_000 }),
+      {
+        clock,
+        drivers,
+        logEvent: () => undefined,
+      },
+    );
+    let fired = 0;
+    pool.onCapacityAvailable?.(() => {
+      fired += 1;
+    });
+
+    await vi.advanceTimersByTimeAsync(45_000);
+
+    assert.equal(pool.snapshot().total, 0);
+    assert.equal(fired, 0);
+    await pool.drain({ deadlineMs: 1_000 });
+  } finally {
+    vi.useRealTimers();
+  }
 });
 
 test("onCapacityAvailable is suppressed when a FIFO waiter consumed the freed worker", async () => {
