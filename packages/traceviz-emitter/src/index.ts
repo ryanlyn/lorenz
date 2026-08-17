@@ -4,6 +4,8 @@ import path from "node:path";
 
 import { redactDiagnosticValue, type AgentUpdate, type TraceEvent } from "@lorenz/domain";
 
+const MAX_RETAINED_WRITE_FAILURES = 100;
+
 export class TraceEmitter {
   private readonly traceDir: string;
   private initialized = new Set<string>();
@@ -121,6 +123,9 @@ export class TraceEmitter {
     const prev = this.writeQueues.get(filePath) ?? Promise.resolve();
     const next = prev.then(operation).catch((err: unknown) => {
       const error = this.asError(err, errorMessage);
+      if (this.writeFailures.length >= MAX_RETAINED_WRITE_FAILURES) {
+        this.writeFailures.shift();
+      }
       this.writeFailures.push(error);
       console.error(error.message, err);
     });
