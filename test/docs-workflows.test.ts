@@ -27,6 +27,17 @@ test("the chat workflow leaves repository setup to the dispatched agent", async 
   assert.match(workflow, /per-issue workspace starts empty/);
 });
 
+test("the chat workflow keeps operational records out of conversational replies", async () => {
+  const workflow = await fs.readFile(path.join(repoRoot, "WORKFLOW.chat.md"), "utf8");
+  const communication = extractMarkdownSection(workflow, "Communication");
+
+  assert.match(communication, /operational detail in the Workpad/);
+  assert.match(communication, /talk to the requester like a\s+teammate/);
+  assert.match(communication, /Comment only when the requester needs/);
+  assert.match(communication, /Do not post standalone\s+environment, reproduction, validation/);
+  assert.notMatch(communication, /\b(?:discord|slack)_/i);
+});
+
 test("workspace bootstrap hooks fail when clone fails without mise", async () => {
   for (const filename of bootstrapWorkflowFiles) {
     const workflow = await fs.readFile(path.join(repoRoot, filename), "utf8");
@@ -114,6 +125,16 @@ test("workspace scripts avoid duplicate parity aliases", async () => {
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function extractMarkdownSection(markdown: string, heading: string): string {
+  const marker = `## ${heading}\n`;
+  const start = markdown.indexOf(marker);
+  assert.notEqual(start, -1);
+
+  const contentStart = start + marker.length;
+  const nextHeading = markdown.indexOf("\n## ", contentStart);
+  return markdown.slice(contentStart, nextHeading === -1 ? undefined : nextHeading).trim();
 }
 
 function extractAfterCreateHook(workflow: string): string {
