@@ -194,6 +194,59 @@ test("REST creates the source-message thread and suppresses outbound mentions", 
   });
 });
 
+test("REST preserves attachment metadata and reads the Discord CDN without bot auth", async () => {
+  const attachment = {
+    id: "923456789012345678",
+    filename: "memory-report.md",
+    description: "Heap growth report",
+    content_type: "text/markdown; charset=utf-8",
+    size: 21,
+    url: "https://cdn.discordapp.com/attachments/1/2/memory-report.md?ex=abc",
+    proxy_url: "https://media.discordapp.net/attachments/1/2/memory-report.md?ex=abc",
+    height: null,
+    width: null,
+    ephemeral: false,
+  };
+  const fetchMock = vi
+    .fn()
+    .mockResolvedValueOnce(
+      jsonResponse(rawMessage({ id: "723456789012345678", attachments: [attachment] })),
+    )
+    .mockResolvedValueOnce(
+      jsonResponse(rawMessage({ id: "723456789012345678", attachments: [attachment] })),
+    )
+    .mockResolvedValueOnce(
+      new Response("retained heap report\n", {
+        headers: { "content-type": "text/markdown; charset=utf-8" },
+      }),
+    );
+  const transport = new DiscordRestTransport(
+    parseDiscordConfig(),
+    fetchMock as unknown as typeof fetch,
+  );
+
+  const root = await transport.getMessage(CHANNEL_ID, "723456789012345678");
+
+  assert.deepEqual(root?.attachments, [
+    {
+      id: attachment.id,
+      filename: attachment.filename,
+      description: attachment.description,
+      contentType: attachment.content_type,
+      size: attachment.size,
+    },
+  ]);
+  const read = await transport.readAttachment(CHANNEL_ID, "723456789012345678", attachment.id);
+  assert.deepEqual(read.attachment, root?.attachments[0]);
+  assert.equal(new TextDecoder().decode(read.body), "retained heap report\n");
+  const request = fetchMock.mock.calls[2];
+  assert.equal(String(request?.[0]), attachment.url);
+  assert.equal(
+    ((request?.[1] as RequestInit).headers as Record<string, string>).authorization,
+    undefined,
+  );
+});
+
 test("REST posts the Workpad using Components V2 and suppressed mentions", async () => {
   const settings = parseDiscordConfig();
   const fetchMock = vi
@@ -312,6 +365,7 @@ function rawMessage(options: {
   mentionRoles?: string[];
   content?: string;
   reactions?: Array<{ name: string; me: boolean }>;
+  attachments?: unknown[];
 }) {
   return {
     id: options.id,
@@ -335,7 +389,7 @@ function rawMessage(options: {
       avatar: null,
     })),
     mention_roles: options.mentionRoles ?? [],
-    attachments: [],
+    attachments: options.attachments ?? [],
     embeds: [],
     pinned: false,
     type: 0,

@@ -3,7 +3,9 @@ import { errorMessage, type Settings } from "@lorenz/domain";
 
 import { isAllowedAuthor, isBotMarked, isBotMention } from "./mapping.js";
 import { discordEndpoint, discordTrackerOptions } from "./options.js";
+import { selectDiscordAttachment } from "./transport.js";
 import type {
+  DiscordAttachmentRead,
   DiscordApplicationCommand,
   DiscordChannelScan,
   DiscordInteractionResult,
@@ -19,6 +21,7 @@ const MAX_THREAD_PAGES = 100;
 const MAX_RETRIES = 4;
 const MAX_RETRY_DELAY_MS = 60_000;
 const RESPONSE_BODY_LIMIT_BYTES = 8 * 1024 * 1024;
+const ATTACHMENT_BODY_LIMIT_BYTES = RESPONSE_BODY_LIMIT_BYTES;
 const SECONDS_PER_DAY = 86_400;
 
 const DISCORD_USER_AGENT = "DiscordBot (https://github.com/ryanlyn/lorenz, 0.1.1)";
@@ -399,6 +402,64 @@ export class DiscordRestTransport implements DiscordTransport {
     );
   }
 
+  async readAttachment(
+    channelId: string,
+    messageId: string,
+    attachmentId?: string,
+  ): Promise<DiscordAttachmentRead> {
+    const raw = await this.requestJson<APIMessage>(
+      "GET",
+      `/channels/${routeSegment(channelId)}/messages/${routeSegment(messageId)}`,
+      { idempotent: true, allowNotFound: true },
+    );
+    if (!raw) throw new Error(`message ${messageId} does not belong to this Discord issue`);
+    const message = toMessage(raw, channelId);
+    if (message.channelId !== channelId || message.id !== messageId) {
+      throw new Error(`message ${messageId} does not belong to this Discord issue`);
+    }
+    const attachment = selectDiscordAttachment(message, attachmentId);
+    if (attachment.size > ATTACHMENT_BODY_LIMIT_BYTES) {
+      throw new Error(
+        `discord attachment ${attachment.id} exceeds ${ATTACHMENT_BODY_LIMIT_BYTES} bytes`,
+      );
+    }
+    const rawAttachment = raw.attachments.find((candidate) => candidate.id === attachment.id);
+    if (!rawAttachment) {
+      throw new Error(
+        `attachment ${attachment.id} does not belong to Discord message ${message.id}`,
+      );
+    }
+    const url = discordAttachmentUrl(attachment.id, rawAttachment.url);
+    let response: Response;
+    try {
+      response = await this.fetchImpl(url, {
+        method: "GET",
+        headers: { "user-agent": DISCORD_USER_AGENT },
+        signal: AbortSignal.timeout(30_000),
+      });
+    } catch (error) {
+      throw new Error(
+        `discord attachment ${attachment.id} request failed: ${errorMessage(error)}`,
+        {
+          cause: error,
+        },
+      );
+    }
+    if (!response.ok) {
+      const responseBody = await readResponseBody(response);
+      throw new DiscordApiError(
+        response.status,
+        "GET",
+        `/attachments/${routeSegment(attachment.id)}`,
+        responseBody,
+      );
+    }
+    return {
+      attachment,
+      body: await readResponseBytes(response, ATTACHMENT_BODY_LIMIT_BYTES),
+    };
+  }
+
   private async listRelative(
     channelId: string,
     direction: "before" | "after",
@@ -540,13 +601,32 @@ function toMessage(raw: APIMessage, channelId: string): DiscordMessage {
         : reaction.emoji.name;
       return emoji ? [{ emoji, me: reaction.me }] : [];
     }),
+    attachments: (raw.attachments ?? []).map((attachment) => ({
+      id: attachment.id,
+      filename: attachment.filename,
+      ...(attachment.title !== undefined ? { title: attachment.title } : {}),
+      ...(attachment.description !== undefined ? { description: attachment.description } : {}),
+      ...(attachment.content_type !== undefined ? { contentType: attachment.content_type } : {}),
+      size: attachment.size,
+    })),
     hasThread: raw.thread !== undefined || ((raw.flags ?? 0) & (1 << 5)) !== 0,
     ...(typeof threadLastMessageId === "string" ? { threadLastMessageId } : {}),
   };
 }
 
 async function readResponseBody(response: Response): Promise<unknown> {
-  if (!response.body) return undefined;
+  const combined = await readResponseBytes(response, RESPONSE_BODY_LIMIT_BYTES);
+  if (combined.byteLength === 0) return undefined;
+  const text = new TextDecoder().decode(combined);
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    return text;
+  }
+}
+
+async function readResponseBytes(response: Response, limitBytes: number): Promise<Uint8Array> {
+  if (!response.body) return new Uint8Array();
   const reader = (
     response.body as unknown as {
       getReader(): {
@@ -563,25 +643,30 @@ async function readResponseBody(response: Response): Promise<unknown> {
     const value = result.value;
     if (!value) continue;
     size += value.byteLength;
-    if (size > RESPONSE_BODY_LIMIT_BYTES) {
+    if (size > limitBytes) {
       await reader.cancel();
-      throw new Error(`discord response body exceeds ${RESPONSE_BODY_LIMIT_BYTES} bytes`);
+      throw new Error(`discord response body exceeds ${limitBytes} bytes`);
     }
     chunks.push(value);
   }
-  if (size === 0) return undefined;
   const combined = new Uint8Array(size);
   let offset = 0;
   for (const chunk of chunks) {
     combined.set(chunk, offset);
     offset += chunk.byteLength;
   }
-  const text = new TextDecoder().decode(combined);
-  try {
-    return JSON.parse(text) as unknown;
-  } catch {
-    return text;
+  return combined;
+}
+
+function discordAttachmentUrl(attachmentId: string, attachmentUrl: string): URL {
+  const url = new URL(attachmentUrl);
+  if (
+    url.protocol !== "https:" ||
+    (url.hostname !== "cdn.discordapp.com" && url.hostname !== "media.discordapp.net")
+  ) {
+    throw new Error(`discord attachment ${attachmentId} has an untrusted CDN URL`);
   }
+  return url;
 }
 
 function retryDelayMs(response: Response, body: unknown, retryCount: number): number {

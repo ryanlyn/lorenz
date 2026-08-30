@@ -156,6 +156,80 @@ test("comments, reads, queries, user lookups, and context stay inside the tracke
   assert.match(JSON.stringify(context), /investigate/);
 });
 
+test("attachment reads are scoped to the tracked source and its native thread", async () => {
+  const settings = parseDiscordConfig();
+  const root = message({ id: "723456789012345678", hasThread: true });
+  const attachment = {
+    id: "923456789012345678",
+    filename: "memory-report.md",
+    contentType: "text/markdown; charset=utf-8",
+    size: 21,
+  };
+  const threadMessage = message({
+    id: "823456789012345678",
+    channelId: root.id,
+    content: "",
+    mentionUserIds: [],
+    attachments: [attachment],
+  });
+  const transport = new InMemoryDiscordTransport([root], new Map([[root.id, [threadMessage]]]));
+  transport.attachmentBodies.set(attachment.id, new TextEncoder().encode("retained heap report\n"));
+  const issueId = `${CHANNEL_ID}:${root.id}`;
+
+  const read = await executeDiscordTool("discord_read_thread", { issueId }, settings, transport);
+  assert.match(JSON.stringify(read), /memory-report\.md/);
+  assert.equal(/cdn\.discordapp\.com/.test(JSON.stringify(read)), false);
+  transport.getThread = () => {
+    throw new Error("attachment reads must not paginate the native thread");
+  };
+  let attachmentReads = 0;
+  const readAttachment = transport.readAttachment.bind(transport);
+  transport.readAttachment = async (...args) => {
+    attachmentReads += 1;
+    return readAttachment(...args);
+  };
+
+  const invalidEncoding = await executeDiscordTool(
+    "discord_read_attachment",
+    { issueId, messageId: threadMessage.id, encoding: "hex" },
+    settings,
+    transport,
+  );
+  assert.equal(invalidEncoding.success, false);
+  assert.equal(attachmentReads, 0);
+
+  const result = await executeDiscordTool(
+    "discord_read_attachment",
+    { issueId, messageId: threadMessage.id },
+    settings,
+    transport,
+  );
+  assert.equal(attachmentReads, 1);
+  assert.deepEqual(result, {
+    success: true,
+    result: {
+      messageId: threadMessage.id,
+      attachment: {
+        id: attachment.id,
+        filename: attachment.filename,
+        contentType: attachment.contentType,
+        size: attachment.size,
+      },
+      encoding: "utf8",
+      content: "retained heap report\n",
+    },
+  });
+
+  const outside = await executeDiscordTool(
+    "discord_read_attachment",
+    { issueId, messageId: "833456789012345678" },
+    settings,
+    transport,
+  );
+  assert.equal(outside.success, false);
+  assert.match(JSON.stringify(outside), /does not belong to this Discord issue/);
+});
+
 test("tools reject unconfigured channels and non-mention messages", async () => {
   const settings = parseDiscordConfig();
   const untracked = message({
