@@ -66,11 +66,11 @@ These are read directly, outside the front matter.
 
 ## `tracker`
 
-The core tracker bundle. `tracker.kind` selects the provider. There is no default kind: `validateDispatchConfig` throws `tracker.kind is required` if it is unset, so this key is effectively mandatory. See [trackers](../trackers/index.md).
+The core tracker bundle. `tracker.kind` selects the provider and defaults to `local` when omitted. See [trackers](../trackers/index.md).
 
 | Key | Type | Default | Meaning |
 | --- | --- | --- | --- |
-| `tracker.kind` | string | (none) | Selects the provider: `linear`, `jira`, `jira-mcp`, `local`, `slack`, `discord`, `memory`, or `dispatch`, or an out-of-tree module specifier. Required. |
+| `tracker.kind` | string | `local` | Selects the provider: `linear`, `jira`, `jira-mcp`, `local`, `slack`, `discord`, `memory`, or `dispatch`, or an out-of-tree module specifier. |
 | `tracker.provider` | string | (none) | Provider name when `kind` names a bundle rather than a provider directly. |
 | `tracker.endpoint` | string | provider default | API base URL. Falls back to the provider's `defaultEndpoint`. |
 | `tracker.api_key` | string (secret) | (none) | API credential. Resolves `$VAR` / `op://` / provider env fallback. |

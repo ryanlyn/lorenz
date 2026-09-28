@@ -1,28 +1,21 @@
 ---
 tracker:
-  kind: linear
+  kind: local
 trackers:
-  linear:
-    provider: linear
-    project_slug: "lorenz-414bf2e49ff2"
+  local:
+    provider: local
+    path: .lorenz/local/lorenz
+    id_prefix: "BOARD-" # optional, default "BOARD-"; sets the <prefix><n> issue-id shape
     active_states:
       - Todo
       - In Progress
-      - Agent Review
-      - Merging
-      - Rework
     terminal_states:
-      - Closed
-      - Cancelled
-      - Canceled
-      - Duplicate
       - Done
+      - Cancelled
     dispatch:
       accept_unrouted: true
       only_routes: null
       route_label_prefix: "Lorenz:"
-      # Any route matching a key under agents selects that agent without changing eligibility.
-      # For example, the label Lorenz:claude selects agents.claude below.
 polling:
   interval_ms: 5000
 workspace:
@@ -67,13 +60,14 @@ agents:
     strict_mcp_config: true
 ---
 
-You are working on a Linear ticket `{{ issue.identifier }}`
+You are working on a local board issue `{{ issue.identifier }}`
 
 {% if attempt %}
 Continuation context:
 
-- This is retry attempt #{{ attempt }} because the ticket is still in an active state.
-- Resume from the current workspace state instead of restarting from scratch.
+- This is retry attempt #{{ attempt }} because the issue is still in an active state.
+- Resume from the current workspace state instead of restarting from scratch. Your resumable state is your restored git workspace (your branch, commits, and any open PR) plus the issue's current status (`Current status` above) and the issue context - reconstruct what is already done from those.
+- The rendered issue context above is your initial snapshot. To recover authoritative state, call `local_read_issue(issueId)`: it returns the current status, description, and your prior `local_comment` progress notes, so you can re-read the plan/validation notes you posted on earlier turns and pick up where you left off.
 - Do not repeat already-completed investigation or validation unless needed for new code changes.
 - Do not end the turn while the issue remains in an active state unless you are blocked by missing required permissions/secrets.
   {% endif %}
@@ -82,9 +76,7 @@ Issue context:
 Identifier: {{ issue.identifier }}
 Title: {{ issue.title }}
 Current status: {{ issue.state }}
-Current owner: {{ issue.assignee_id }}
 Labels: {{ issue.labels }}
-URL: {{ issue.url }}
 
 Description:
 {% if issue.description %}
@@ -96,39 +88,41 @@ No description provided.
 Instructions:
 
 1. This is an unattended orchestration session. Never ask a human to perform follow-up actions.
-2. Only stop early for a true blocker (missing required auth/permissions/secrets). If blocked, record it in the workpad and move the issue according to workflow.
+2. Only stop early for a true blocker (missing required auth/permissions/secrets). If blocked, record it in the issue via `local_comment` and move the issue according to workflow.
 3. Final message must report completed actions and blockers only. Do not include "next steps for user".
 
 Work only in the provided repository copy. Do not touch any other path.
 
-## Prerequisite: Linear MCP or `linear_graphql` tool is available
+## Tracker: local Markdown board
 
-The agent should be able to talk to Linear, either via a configured Linear MCP server or injected `linear_graphql` tool. If none are present, stop and ask the user to configure Linear.
+This workflow is backed by a **local board**, not Linear. There is **no Linear and no `linear_graphql` tool**. Issues live as Markdown files on disk under the board directory configured in `tracker.path` (default `.lorenz/local/`).
+
+- On the daemon side each issue is a Markdown file named `BOARD-<n>.md` (for example `.lorenz/local/BOARD-7.md`). That board directory lives outside your cloned repo workspace, so you never open the file directly - you read its state through the `local_read_issue` tool instead.
+- The issue's status, title, and description are surfaced to you in the rendered issue context above (use the `Current status` line for status). To re-read authoritative state at any point, call `local_read_issue(issueId)`, which returns the current status, title, description, and comments.
+- Comments are appended to the issue file by the `local_comment` tool as human-visible progress notes. They are readable: `local_read_issue(issueId)` returns your prior comments, so you can recover plan and validation notes you posted on earlier turns.
+
+Active statuses (`Todo`, `In Progress`) mean the issue is yours to work. Terminal statuses (`Done`, `Cancelled`) mean it is finished and you must not reopen it.
+
+## Available tools
+
+You have four board tools (three writes plus one read, symmetric with how `linear_graphql` both reads and writes). Use them via their tool names:
+
+- `local_update_status` - move an issue to a new status. Args: `issueId`, `status`. Example: set `BOARD-7` to `In Progress` before you start, then to `Done` when complete.
+- `local_comment` - append a progress note / comment to an issue. Args: `issueId`, `body`. Use it to post human-visible progress notes. These notes are readable later: `local_read_issue` returns them, so you can recover plan/validation state across turns.
+- `local_create_issue` - create a new board issue for genuinely out-of-scope follow-up work. Args: `title`, optional `body`, optional `status`.
+- `local_read_issue` - read an issue's authoritative state. Args: `issueId`. Returns the current status, title, description, and comments. Use it to recover your prior progress notes and the latest status on a continuation turn.
+
+There is **no `linear_graphql`** tool and no Linear MCP server. Do not attempt to call Linear. Do not stop because "Linear is not configured" - this workflow never uses Linear.
 
 ## Default posture
 
-- Start by determining the ticket's current status, then follow the matching flow for that status.
-- Start every task by opening the tracking workpad comment and bringing it up to date before doing new implementation work.
+- Start from the `Current status` in the rendered issue context above, then follow the matching flow for that status. On a continuation turn, call `local_read_issue(issueId)` to confirm the authoritative status and re-read your prior comments before routing.
+- Post human-visible progress as comments with `local_comment`. They are also readable via `local_read_issue`, so they double as your continuation notes alongside the restored workspace and the issue's current status.
 - Spend extra effort up front on planning and verification design before implementation.
-- Reproduce first: always confirm the current behavior/issue signal before changing code so the fix target is explicit.
-- Keep ticket metadata current (state, checklist, acceptance criteria, links).
-- Treat the tracker's single persistent workpad surface as the source of truth for progress.
-- Keep plan, validation, progress, and handoff in the tracker's single persistent workpad surface.
-- When the tracker exposes separate notifying comments, reserve them for milestones worth notifying.
-- Treat tracker messages that are delivered as queued agent turns as current issue input. Reconcile each delivered turn with the issue state and scope before continuing.
-- Treat any ticket-authored `Validation`, `Test Plan`, or `Testing` section as non-negotiable acceptance input: mirror it in the workpad and execute it before considering the work complete.
-- When meaningful out-of-scope improvements are discovered during execution,
-  file a separate tracker issue instead of expanding scope. The follow-up issue
-  must include a clear title, description, and acceptance criteria, be placed in
-  `Backlog`, be assigned to the current owner and the same project as the current issue, link the
-  current issue as `related`, and use `blockedBy` when the follow-up depends on
-  the current issue.
-  When creating the follow-up issue, pass `assignee: {{ issue.assignee_id }}` when
-  `Current owner` is not null. Create it with `linear_graphql` (`issueCreate`, see the
-  `lorenz-linear` skill).
-- Move status only when the matching quality bar is met.
+- Reproduce first: confirm the current behavior/issue signal before changing code so the fix target is explicit.
+- Move status only when the matching quality bar is met (use `local_update_status`).
 - Operate autonomously end-to-end unless blocked by missing requirements, secrets, or permissions.
-- Use the blocked-access escape hatch only for true external blockers (missing required tools/auth) after exhausting documented fallbacks.
+- When meaningful out-of-scope improvements are discovered, file a separate board issue with `local_create_issue` (clear title, description, acceptance criteria) instead of expanding scope.
 
 ## Effort and context discipline
 
@@ -137,252 +131,74 @@ The agent should be able to talk to Linear, either via a configured Linear MCP s
 - Before spawning, inspect existing agents and reuse or follow up relevant work. Never duplicate or restart an active wave; after a retry or compaction, resume from current work and evidence.
 - Keep context narrow. Use targeted queries, structured fields, line ranges, and output caps; avoid whole-file, tree-wide, history, comment-thread, diff, or log dumps when a narrower query suffices. Delegated results should be concise findings with stable evidence handles, not raw transcripts.
 - Run the narrowest useful validation in quiet mode. Record the command and result, omit successful log detail, and retain only relevant excerpts for failures or surprising behavior.
-- Summarize large results once in the workpad and reread them only if the source changed or an exact detail is needed. Reserve adversarial or independent review for changes whose risk or ambiguity justifies it.
+- Summarize large results once in the issue comments and reread them only if the source changed or an exact detail is needed. Reserve adversarial or independent review for changes whose risk or ambiguity justifies it.
 
 ## Related skills
 
-- `lorenz-linear`: interact with Linear.
 - `lorenz-commit`: produce clean, logical commits during implementation.
 - `simplify`: review changed code for reuse, quality, and efficiency before committing.
-- `lorenz-push`: keep remote branch current and publish updates.
+- `lorenz-push`: keep remote branch current and open/update the pull request.
 - `lorenz-pull`: keep branch updated with latest `origin/main` before handoff.
-- `lorenz-land`: when ticket reaches `Merging`, explicitly open and follow `.lorenz/skills/lorenz-land/SKILL.md`, which includes the `land` loop.
+- `lorenz-land`: when the work is approved, follow the `land` loop to merge the PR.
 
 ## Status map
 
-- `Backlog` -> out of scope for this workflow; do not modify.
-- `Todo` -> queued; immediately transition to `In Progress` before active work.
-  - Special case: if a PR is already attached and the issue is `Todo`, `In Progress`, or `Rework`, treat it as the feedback/rework (run full PR feedback sweep, address or explicitly push back, revalidate, return to `Agent Review`).
+- `Todo` -> queued; immediately transition to `In Progress` with `local_update_status` before active work.
 - `In Progress` -> implementation actively underway.
-- `Agent Review` -> autonomous mergeability review with a bias toward merging; escalate only for blockers or explicit decisions/risk.
-- `Human Review` -> exception-only path for ambiguous blockers, risk acceptance, or external blockers that cannot be resolved autonomously.
-- `Merging` -> approved; execute the `lorenz-land` skill flow (do not call `gh pr merge` directly).
-- `Rework` -> reviewer requested changes; planning + implementation required.
-- `Done` -> terminal state; no further action required.
+- `Done` -> terminal; no further action required.
+- `Cancelled` -> terminal; do not reopen or modify.
 
-## Step 0: Determine current ticket state and route
+## Step 0: Determine current status and route
 
-1. Fetch the issue by explicit ticket ID.
-2. Read the current state.
-3. Route to the matching flow:
-   - `Backlog` -> do not modify issue content/state; stop and wait for human to move it to `Todo`.
-   - `Todo` -> immediately move to `In Progress`, then ensure bootstrap workpad comment exists (create if missing), then start execution flow.
-     - If PR is already attached, start by reviewing all open PR comments and deciding required changes vs explicit pushback responses.
-   - `In Progress` -> continue execution flow from current scratchpad comment.
-   - `Agent Review` -> run the autonomous review protocol.
-   - `Human Review` -> wait and poll for decision/review updates.
-   - `Merging` -> on entry, open and follow `.lorenz/skills/lorenz-land/SKILL.md`; do not call `gh pr merge` directly.
-   - `Rework` -> run rework flow.
-   - `Done` -> do nothing and shut down.
-4. Check whether a PR already exists for the current branch and whether it is closed.
-   - If a branch PR exists and is `CLOSED` or `MERGED`, treat prior branch work as non-reusable for this run.
-   - Create a fresh branch from `origin/main` and restart execution flow as a new attempt.
-5. For `Todo` tickets, do startup sequencing in this exact order:
-   - `update_issue(..., state: "In Progress")`
-   - find/create `## Codex Workpad` bootstrap comment
-   - only then begin analysis/planning/implementation work.
-6. Add a short comment if state and issue content are inconsistent, then proceed with the safest flow.
+1. Use the `Current status` from the rendered issue context above as your initial snapshot, then call `local_read_issue(issueId)` to recover the authoritative current status, description, and your prior comments. State comes from this tool, not from opening the daemon's on-disk issue file directly.
+2. Route to the matching flow:
+   - `Todo` -> call `local_update_status(issueId, "In Progress")`, then start the execution flow.
+   - `In Progress` -> continue the execution flow using your restored workspace (branch/commits and any open PR), the issue's current state, and your prior comments from `local_read_issue(issueId)` as the source of truth for what is done.
+   - `Done` / `Cancelled` -> do nothing and shut down.
+3. If a PR already exists for the current branch and it is `CLOSED` or `MERGED`, treat prior branch work as non-reusable. Create a fresh branch from `origin/main` and restart the execution flow.
 
-## Step 1: Start/continue execution (Todo or In Progress)
+## Step 1: Start / continue execution
 
-1.  Find or create a single persistent scratchpad comment for the issue:
-    - Search existing comments for a marker header: `## Codex Workpad`.
-    - Ignore resolved comments while searching; only active/unresolved comments are eligible to be reused as the live workpad.
-    - If found, reuse that comment; do not create a new workpad comment.
-    - If not found, create one workpad comment and use it for all updates.
-    - Persist the workpad comment ID and only write progress updates to that ID.
-2.  If arriving from `Todo`, do not delay on additional status transitions: the issue should already be `In Progress` before this step begins.
-3.  Immediately reconcile the workpad before new edits:
-    - Check off items that are already done.
-    - Expand/fix the plan so it is comprehensive for current scope.
-    - Ensure `Acceptance Criteria` and `Validation` are current and still make sense for the task.
-4.  Start work by writing/updating a hierarchical plan in the workpad comment.
-5.  Ensure the workpad includes a compact environment stamp at the top as a code fence line:
-    - Format: `<host>:<abs-workdir>@<short-sha>`
-    - Example: `devbox-01:/home/dev-user/code/lorenz-workspaces/MT-32@7bdde33bc`
-    - Do not include metadata already inferable from Linear issue fields (`issue ID`, `status`, `branch`, `PR link`).
-6.  Add explicit acceptance criteria and TODOs in checklist form in the same comment.
-    - If changes are user-facing, include a UI walkthrough acceptance criterion that describes the end-to-end user path to validate.
-    - If changes touch app files or app behavior, add explicit app-specific flow checks to `Acceptance Criteria` in the workpad (for example: launch path, changed interaction path, and expected result path).
-    - If the ticket description/comment context includes `Validation`, `Test Plan`, or `Testing` sections, copy those requirements into the workpad `Acceptance Criteria` and `Validation` sections as required checkboxes (no optional downgrade).
-7.  Run a principal-style self-review of the plan and refine it in the comment.
-8.  Before implementing, capture a concrete reproduction signal and record it in the workpad `Notes` section (command/output, screenshot, or deterministic UI behavior).
-9.  Run the `lorenz-pull` skill to sync with latest `origin/main` before any code edits, then record the pull/sync result in the workpad `Notes`.
-    - Include a `pull skill evidence` note with:
-      - merge source(s),
-      - result (`clean` or `conflicts resolved`),
-      - resulting `HEAD` short SHA.
-10. Compact context and proceed to execution.
+1. Post a `local_comment` with a hierarchical plan and acceptance criteria in checklist form, plus follow-up comments on each milestone, as a human-visible progress log. These comments are readable via `local_read_issue`, so they serve as continuation notes; still keep your durable state reflected in the git workspace (commits/PR) and the issue status.
+2. If arriving from `Todo`, ensure the issue is already `In Progress` (you moved it in Step 0).
+3. Add a compact environment stamp at the top of the workpad as a code fence line: `<host>:<abs-workdir>@<short-sha>`.
+4. Capture a concrete reproduction signal and record it in the workpad before implementing.
+5. Run the `lorenz-pull` skill to sync with latest `origin/main` before code edits, and record the result in the workpad.
 
-## PR feedback sweep protocol (required)
+## Step 2: Implement and validate
 
-When a ticket has an attached PR, run this protocol before moving to `Agent Review`:
+1. Implement against the plan, checking off completed items in the workpad via `local_comment` updates.
+2. Run validation/tests/proof-of-work for the scope. Prefer a targeted proof that demonstrates the behavior you changed.
+3. Re-check all acceptance criteria and close any gaps.
+4. Before every `git commit`, run the `simplify` skill, then the `lorenz-commit` skill to commit and `lorenz-push` to push and open/update the PR.
+5. Update the workpad with the final checklist status and validation notes via `local_comment`.
 
-1. Identify the PR number from issue links/attachments.
-2. Gather feedback from all channels:
-   - Top-level PR comments (`gh pr view --comments`).
-   - Inline review comments (`gh api repos/<owner>/<repo>/pulls/<pr>/comments`).
-   - Review summaries/states (`gh pr view --json reviews`).
-3. Treat every actionable reviewer comment (human or bot), including inline review comments, as blocking until one of these is true:
-   - code/test/docs updated to address it, or
-   - explicit, justified pushback reply is posted on that thread.
-4. Update the workpad plan/checklist to include each feedback item and its resolution status.
-5. Re-run validation after feedback-driven changes and push updates.
-6. Repeat this sweep until there are no outstanding actionable comments.
+## Step 3: Complete
 
-## Blocked-access escape hatch (required behavior)
+1. When implementation is complete, validated, and the PR is open and green, move the issue to `Done` with `local_update_status(issueId, "Done")`.
+2. If the work is abandoned for a legitimate reason, move it to `Cancelled` and record why in the workpad.
 
-Use this only when completion is blocked by missing required tools or missing auth/permissions that cannot be resolved in-session.
+## Completion bar before Done
 
-- GitHub is **not** a valid blocker by default. Always try fallback strategies first (alternate remote/auth mode, then continue publish/review flow).
-- Do not move to `Human Review` for GitHub access/auth until all fallback strategies have been attempted and documented in the workpad.
-- If a non-GitHub required tool is missing, or required non-GitHub auth is unavailable, move the ticket to `Human Review` with a short blocker brief in the workpad that includes:
-  - what is missing,
-  - why it blocks required acceptance/validation,
-  - exact human action needed to unblock.
-- Keep the brief concise and action-oriented; do not add extra top-level comments outside the workpad.
-
-## Step 2: Execution phase (Todo -> In Progress -> Agent Review)
-
-1.  Determine current repo state (`branch`, `git status`, `HEAD`) and verify the kickoff `pull` sync result is already recorded in the workpad before implementation continues.
-2.  If current issue state is `Todo`, move it to `In Progress`; otherwise leave the current state unchanged.
-3.  Load the existing workpad comment and treat it as the active execution checklist.
-    - Edit it liberally whenever reality changes (scope, risks, validation approach, discovered tasks).
-4.  Implement against the hierarchical TODOs and keep the comment current:
-    - Check off completed items.
-    - Add newly discovered items in the appropriate section.
-    - Keep parent/child structure intact as scope evolves.
-    - Update the workpad immediately after each meaningful milestone (for example: reproduction complete, code change landed, validation run, review feedback addressed).
-    - Never leave completed work unchecked in the plan.
-    - For tickets that started as `Todo` with an attached PR, run the full PR feedback sweep protocol immediately after kickoff and before new feature work.
-5.  Run validation/tests/proof-of-work required for the scope.
-    - Mandatory gate: execute all ticket-provided `Validation`/`Test Plan`/ `Testing` requirements when present; treat unmet items as incomplete work.
-    - Treat ticket-provided `Validation`/`Test Plan`/`Testing` requirements as the required bar.
-    - Add validation beyond that bar only when it materially improves confidence for the change's risk; keep routine or mechanical changes targeted.
-    - Prefer a targeted proof that directly demonstrates the behavior you changed.
-    - For UX changes, prefer a short video or GIF.
-    - For UI changes, prefer screenshots in all relevant screen sizes.
-    - Prefer TUI renders when terminal output or terminal UX changed.
-    - You may make temporary local proof edits to validate assumptions (for example: tweak a local build input for `make`, or hardcode a UI account / response path) when this increases confidence.
-    - Revert every temporary proof edit before commit/push.
-    - Document these temporary proof steps and outcomes in the workpad `Validation`/`Notes` sections so reviewers can follow the evidence.
-    - If app-touching, run `launch-app` validation and capture/upload media via `github-pr-media` before handoff.
-6.  Re-check all acceptance criteria and close any gaps.
-7.  Before every `git commit`, run the `simplify` skill to review changed code for reuse, quality, and efficiency. Then invoke the `lorenz-commit` skill to commit and the `lorenz-push` skill to push.
-8.  Attach PR URL to the issue (prefer attachment; use the workpad comment only if attachment is unavailable).
-    - Ensure the GitHub PR has label `lorenz` (add it if missing).
-9.  Update the workpad comment with final checklist status and validation notes.
-    - Mark completed plan/acceptance/validation checklist items as checked.
-    - Add final handoff notes (commit + validation summary) in the same workpad comment.
-    - Do not include PR URL in the workpad comment; keep PR linkage on the issue via attachment/link fields.
-    - Add a short `### Confusions` section at the bottom when any part of task execution was unclear/confusing, with concise bullets.
-    - Do not post any additional completion summary comment.
-10. Before moving to `Agent Review`, poll PR feedback and checks:
-    - Read the PR `Manual QA Plan` comment (when present) and use it to sharpen UI/runtime test coverage for the current change.
-    - Run the full PR feedback sweep protocol.
-    - Confirm PR checks are passing (green) after the latest changes.
-    - Confirm every required ticket-provided validation/test-plan item is explicitly marked complete in the workpad.
-    - Repeat this check-address-verify loop until no outstanding comments remain and checks are fully passing.
-    - Re-open and refresh the workpad before state transition so `Plan`, `Acceptance Criteria`, and `Validation` exactly match completed work.
-11. Only then move issue to `Agent Review`.
-    - Exception: if blocked by missing required non-GitHub tools/auth per the blocked-access escape hatch, move to `Human Review` with the blocker brief and explicit unblock actions.
-12. For `Todo` tickets that already had a PR attached at kickoff:
-    - Ensure all existing PR feedback was reviewed and resolved, including inline review comments (code changes or explicit, justified pushback response).
-    - Ensure branch was pushed with any required updates.
-    - Then move to `Agent Review`.
-
-## Step 3: Agent Review
-
-1. When the issue is in `Agent Review`, do not do new feature work. Review mergeability with a bias toward merging.
-2. Evaluate the change holistically across:
-   - correctness and ticket fit,
-   - whether it solves the right problem,
-   - sufficiency and validity of proof,
-   - unnecessary complexity or over-engineering,
-   - conflicting patterns or divergence from established repo conventions,
-   - uniformity and consistency with surrounding code/workflows,
-   - observability gaps, debugging blind spots, or poor failure surfacing,
-   - missing rollback/failure handling where the change clearly needs it,
-   - missing docs/tests/validation when they are necessary to trust the change.
-3. Use this severity rubric:
-   - `P0` -> catastrophic merge blocker, such as destructive behavior, data loss, credential/security exposure, or obviously repo-breaking behavior.
-   - `P1` -> serious merge blocker. Insufficient, invalid, or missing proof is always a `P1`. Other `P1`s include solving the wrong problem, high-confidence regressions, serious pattern conflicts or needless complexity that materially reduce trust, significant observability gaps, missing required validation, failing checks, or unresolved required feedback.
-   - `P2` -> anything that should not block merging.
-   - `P3` -> optional polish bucket if useful, but not required for the workflow to function.
-4. `Agent Review` does not own merge-queue readiness tasks such as rebasing onto latest `origin/main`, resolving merge conflicts, or completing the final land. `Merging` owns those tasks.
-5. If there are no unresolved `P0` or `P1` findings, required checks remain green on the reviewed head, and no hard-risk trigger is present, move the issue to `Merging`.
-6. If a blocker is actionable and can be fixed autonomously, move the issue to `Rework`.
-   - Add a concise blocker summary to the workpad that includes severity, root concern, and what must be different on the next attempt.
-7. If a blocker is non-actionable, ambiguous, or requires product/risk judgment, move the issue to `Human Review`.
-   - Add a concise escalation brief to the workpad that includes the blocker, why it cannot be resolved autonomously, and the exact decision or risk acceptance needed.
-8. Meaningful `P2` or `P3` findings should not block merge. When they merit future action, create a separate Backlog issue rather than expanding current scope.
-   - Include a clear title, description, and acceptance criteria, assign it to the current owner and the same project, link the current issue as `related`, and use `blockedBy` when the follow-up truly depends on the current issue.
-   - Apply appropriate labels for the finding and issue context, but do not block on taxonomy.
-9. Record in the workpad which non-blocking findings were converted into Backlog issues versus intentionally left as comments only.
-10. Take an adversarial approach when reviewing but all else being equal, bias toward merging
-
-## Step 4: Human Review
-
-1. When the issue is in `Human Review`, do not code or change ticket content.
-2. `Human Review` is exception-only. It should be used for ambiguous blockers, explicit risk acceptance, or external blockers that cannot be resolved autonomously.
-3. Poll for updates as needed, including GitHub PR review comments from humans and bots.
-4. If review feedback requires changes, move the issue to `Rework` and follow the rework flow.
-5. If approved, human moves the issue to `Merging`.
-
-## Step 5: Merging
-
-1. When the issue is in `Merging`, open and follow `.lorenz/skills/lorenz-land/SKILL.md`, then run the `lorenz-land` skill in a loop until the PR is merged. Do not call `gh pr merge` directly.
-2. After merge is complete, move the issue to `Done`.
-
-## Step 6: Rework handling
-
-1. Treat `Rework` as a full approach reset, not incremental patching.
-2. Re-read the full issue body and all review feedback; explicitly identify what will be done differently this attempt.
-3. Close the existing PR tied to the issue.
-4. Remove the existing `## Codex Workpad` comment from the issue.
-5. Create a fresh branch from `origin/main`.
-6. Start over from the normal kickoff flow:
-   - If current issue state is `Todo`, move it to `In Progress`; otherwise keep the current state.
-   - Create a new bootstrap `## Codex Workpad` comment.
-   - Build a fresh plan/checklist and execute end-to-end.
-
-## Completion bar before Agent Review
-
-- Step 1/2 checklist is fully complete and accurately reflected in the single workpad comment.
-- Acceptance criteria and required ticket-provided validation items are complete.
+- Plan/acceptance/validation checklist is complete and reflected in the workpad.
 - Validation/tests are green for the latest commit.
-- PR feedback sweep is complete and no actionable comments remain.
-- PR checks are green, branch is pushed, and PR is linked on the issue.
-- Required PR metadata is present (`lorenz` label).
-- If app-touching, runtime validation/media requirements from `App runtime validation (required)` are complete.
+- PR is pushed, linked in the workpad, and checks are green.
 
 ## Guardrails
 
-- If the branch PR is already closed/merged, do not reuse that branch or prior implementation state for continuation.
-- For closed/merged branch PRs, create a new branch from `origin/main` and restart from reproduction/planning as if starting fresh.
-- If issue state is `Backlog`, do not modify it; wait for human to move to `Todo`.
-- Do not edit the issue body/description for planning or progress tracking.
-- Use exactly one persistent workpad comment (`## Codex Workpad`) per issue.
-- If comment editing is unavailable in-session, use the update script. Only report blocked if both MCP editing and script-based editing are unavailable.
-- Temporary proof edits are allowed only for local verification and must be reverted before commit.
-- If out-of-scope improvements are found, create a separate Backlog issue rather
-  than expanding current scope, and include a clear
-  title/description/acceptance criteria, current-owner and same-project assignment,
-  a `related` link to the current issue, and `blockedBy` when the follow-up depends
-  on the current issue.
-- Do not move to `Agent Review` unless the `Completion bar before Agent Review` is satisfied.
-- In `Agent Review`, do not do new feature work or attempt to merge yourself; review only.
-- In `Human Review`, do not make changes; wait and poll.
-- If state is terminal (`Done`), do nothing and shut down.
-- Keep issue text concise, specific, and reviewer-oriented.
-- If blocked and no workpad exists yet, add one blocker comment describing blocker, impact, and next unblock action.
+- Never call Linear or `linear_graphql`; this board is local-only.
+- If the branch PR is already closed/merged, create a new branch from `origin/main` and restart from reproduction/planning.
+- Do not modify terminal (`Done`/`Cancelled`) issues.
+- Use `local_comment` as a human-visible progress log; comments are readable via `local_read_issue`, so they can back your continuation state alongside the git workspace and issue status. Do not edit the issue description for progress tracking.
+- If out-of-scope improvements are found, create a separate board issue with `local_create_issue` rather than expanding current scope.
+- If blocked by missing required tools/auth, append one blocker comment via `local_comment` describing the blocker, its impact, and the next unblock action.
 
-## Workpad template
+## Progress-note template
 
-Use this exact structure for the persistent workpad comment and keep it updated in place throughout execution:
+Use this structure for the first `local_comment` progress note and keep follow-ups consistent. These comments are human-visible notes and are readable back via `local_read_issue`:
 
 ````md
-## Codex Workpad
+## Lorenz Workpad
 
 ```text
 <hostname>:<abs-path>@<short-sha>
@@ -392,7 +208,6 @@ Use this exact structure for the persistent workpad comment and keep it updated 
 
 - [ ] 1\. Parent task
   - [ ] 1.1 Child task
-  - [ ] 1.2 Child task
 - [ ] 2\. Parent task
 
 ### Acceptance Criteria
@@ -400,19 +215,11 @@ Use this exact structure for the persistent workpad comment and keep it updated 
 - [ ] Criterion 1
 - [ ] Criterion 2
 
-### Validation and Proof of Work
+### Validation
 
 - [ ] targeted tests: `<command>`
 
 ### Notes
 
 - <short progress note with timestamp>
-
-### Confusions
-
-- <only include when something was confusing during execution>
-
-### Agent Reviews
-
-- <agent review notes with timestamps>
 ````

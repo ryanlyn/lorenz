@@ -2,7 +2,7 @@
 _.file = ".env"
 
 [hooks]
-enter = "mise run check-env && pnpm --config.ignore-scripts=false install --frozen-lockfile && prek install --hook-type pre-push -v"
+enter = "pnpm --config.ignore-scripts=false install --frozen-lockfile && prek install --hook-type pre-push -v"
 
 [settings]
 experimental = true
@@ -14,28 +14,6 @@ prek = "0.4.3"
 # The ACP bridges are vendored at vendor/ and resolved from the pnpm
 # workspace; local runs do not use PATH installs. Remote SSH worker hosts
 # install their own bridges.
-
-[tasks.check-env]
-run = '''
-if [ -n "$LINEAR_API_KEY" ] && [ -n "$JIRA_API_KEY" ]; then
-  echo "ERROR: Both LINEAR_API_KEY and JIRA_API_KEY are set. Only one tracker may be configured at a time." >&2
-  exit 1
-fi
-if [ -z "$LINEAR_API_KEY" ] && [ -z "$JIRA_API_KEY" ]; then
-  echo "ERROR: Neither LINEAR_API_KEY nor JIRA_API_KEY is set. Copy .env.template to .env and fill in values for one tracker." >&2
-  exit 1
-fi
-if [ -n "$LINEAR_API_KEY" ] && [ -z "$LINEAR_PROJECT_SLUG" ]; then
-  echo "ERROR: LINEAR_API_KEY is set but LINEAR_PROJECT_SLUG is missing." >&2
-  exit 1
-fi
-if [ -n "$JIRA_API_KEY" ] && [ -z "$JIRA_EMAIL" ]; then
-  echo "ERROR: JIRA_API_KEY is set but JIRA_EMAIL is missing." >&2
-  exit 1
-fi
-'''
-description = "Validate required environment variables"
-quiet = true
 
 [tasks.build]
 run = "pnpm build"

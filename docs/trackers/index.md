@@ -13,7 +13,7 @@ Discord, and an in-process fixture all plug into the same contract.
 
 Two config keys select the backend. Both resolve to a registered `TrackerProvider.kind`.
 
-- `tracker.kind` is the selector. It names a bundle under `trackers.<name>`.
+- `tracker.kind` is the selector. It names a bundle under `trackers.<name>` and defaults to `local`.
 - `trackers.<name>.provider` is the resolved provider kind for that bundle.
 
 The nested bundle form is the recommended shape. The flat form (provider options written directly
@@ -37,8 +37,7 @@ Name a bundle that does not exist under `trackers` and parsing throws
 `trackers.<name>.provider is required`.
 
 An unknown provider fails fast at startup. `TrackerRegistry.require` throws
-`unsupported tracker.kind: <kind> (known kinds: ...)`, and a missing kind throws
-`tracker.kind is required`. The supported set is whatever the composition root registered.
+`unsupported tracker.kind: <kind> (known kinds: ...)`. The supported set is whatever the composition root registered.
 `registerBuiltinBackends` in `apps/cli/src/daemon.ts` wires the kinds below.
 
 ## The supported kinds
