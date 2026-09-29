@@ -233,6 +233,13 @@ export class SessionModeManager {
                 description: "Claude handles permission decisions",
                 ...kind("auto_review"),
             },
+            // symphony-patch: keep dontAsk available so Lorenz's default mode is not clamped.
+            {
+                id: "dontAsk",
+                name: "Don't ask",
+                description: "Don't prompt for permissions, deny if not pre-approved",
+                ...kind("standard"),
+            },
         ];
         if (allowBypass) {
             modes.push({

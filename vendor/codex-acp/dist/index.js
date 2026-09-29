@@ -33045,7 +33045,8 @@ var AgentMode = class _AgentMode {
     { "type": "dangerFullAccess" },
     "danger-full-access"
   );
-  static DEFAULT_AGENT_MODE = _AgentMode.Agent;
+  // symphony-patch: keep client-reviewed workspace-write approvals as the default.
+  static DEFAULT_AGENT_MODE = _AgentMode.WorkspaceWrite;
   /** Only AIR gets the mode kind, in `_meta.jetbrains.air.kind`. */
   toSessionMode(airClient) {
     const meta3 = airOnlyMeta(airClient, AIR_KIND_KEY, this.kind);

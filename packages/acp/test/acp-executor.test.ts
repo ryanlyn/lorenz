@@ -5,6 +5,7 @@ import v8 from "node:v8";
 import vm from "node:vm";
 
 import { test, vi } from "vitest";
+import { SessionModeManager } from "@agentclientprotocol/claude-agent-acp/dist/session-mode.js";
 import {
   Executor,
   acquireAgentMcpEndpoint,
@@ -480,6 +481,47 @@ test("vendored prompt queues advertise capability and enforce per-session FIFO b
     codexSource.slice(codexCancelStart),
     /this\.invalidatePromptQueue\(params\.sessionId\)/,
   );
+});
+
+test("vendored claude bridge keeps the default dontAsk permission mode", async () => {
+  const errors: unknown[][] = [];
+  const syncedModes: string[] = [];
+  const sessionModes = new SessionModeManager({
+    getSession: () => undefined,
+    sessionEndedMessage: "session ended",
+    updateConfigOption: async () => {},
+    sessionUpdate: async () => {},
+    logError: (...args: unknown[]) => errors.push(args),
+  });
+
+  const { modes } = await sessionModes.initialize({
+    query: {
+      setPermissionMode: async (mode) => {
+        syncedModes.push(mode);
+      },
+    },
+    requestedMode: "dontAsk",
+    currentModelId: "default",
+    allowBypass: true,
+  });
+
+  assert.equal(modes.currentModeId, "dontAsk");
+  assert.ok(modes.availableModes.some((mode) => mode.id === "dontAsk"));
+  assert.deepEqual(syncedModes, []);
+  assert.deepEqual(errors, []);
+});
+
+test("vendored codex bridge defaults to client-reviewed workspace-write approvals", async () => {
+  const codexSource = await fs.readFile(path.resolve("vendor/codex-acp/dist/index.js"), "utf8");
+  assert.match(codexSource, /static DEFAULT_AGENT_MODE = _AgentMode\.WorkspaceWrite;/);
+
+  const workspaceWriteStart = codexSource.indexOf("static WorkspaceWrite = new _AgentMode(");
+  const agentStart = codexSource.indexOf("static Agent = new _AgentMode(", workspaceWriteStart);
+  assert.ok(workspaceWriteStart >= 0);
+  assert.ok(agentStart > workspaceWriteStart);
+  const workspaceWrite = codexSource.slice(workspaceWriteStart, agentStart);
+  assert.match(workspaceWrite, /"on-request",\s*"user",/);
+  assert.match(workspaceWrite, /type: "workspaceWrite"[\s\S]*networkAccess: false/);
 });
 
 test("bridge guardian fails closed and completes process-group cleanup", async () => {

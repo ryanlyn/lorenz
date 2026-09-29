@@ -32,6 +32,8 @@ The patches add two capabilities upstream ACP lacks, both carried on `_meta` key
 
 The claude bridge carries two further patches: it rewrites `/mcp:server:command args` slash commands to `/server:command (MCP) args`, and it hardcodes `settingSources` to `['user','project','local']` and `disallowedTools` to `['AskUserQuestion']`.
 
+Both bridges also keep Lorenz's permission defaults. The claude bridge keeps `dontAsk` in its mode catalog; upstream would clamp the built-in `permissions.defaultMode: dontAsk` to `default`. The codex bridge defaults to its `workspace-write` mode, which sends approval requests to the client; upstream's default `agent` mode sends them to Codex's auto-reviewer instead.
+
 Which `_meta` key carries `provider_config` is decided per bridge family by `isClaudeCompatibleBridgeCommand(bridgeCommand)` (regex `/(^|\s|/)claude-agent-acp(\s|$)/`) or `agentKind === 'claude'`: claude gets `symphony/settings`, everything else gets `symphony/config`. When `provider_config` is absent, the session request omits `_meta` entirely.
 
 ## One turn end to end

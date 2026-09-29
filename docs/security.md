@@ -70,11 +70,11 @@ The shared dashboard/MCP endpoint binds to `server.host` (default `127.0.0.1`); 
 
 ## The Codex sandbox default
 
-The vendored `codex-acp` bridge runs Codex in its `Agent` mode by default (`DEFAULT_AGENT_MODE`). That mode is `workspace-write`: the agent may read and edit files in the workspace and run commands, with `networkAccess: false` and approvals set to `on-request`. Because Lorenz auto-approves those requests (next section), the practical effect is workspace-scoped writes with no network, no approval prompts.
+The vendored `codex-acp` bridge runs Codex in its `workspace-write` mode by default (`DEFAULT_AGENT_MODE`). The agent may read and edit files in the workspace and run commands, with `networkAccess: false` and approvals set to `on-request` and sent to the client. Upstream's default is the `agent` mode, which sends those requests to Codex's auto-reviewer instead; the vendored bridge patches the default back so Lorenz keeps answering them. Because Lorenz auto-approves those requests (next section), the practical effect is workspace-scoped writes with no network, no approval prompts.
 
 A workflow can widen this to `agent-full-access` (`danger-full-access`), which lets Codex edit files outside the workspace and run commands with network access. That is a deliberate, documented step up in blast radius. The default is the narrower mode; do not move to full access without a reason.
 
-Claude sessions are configured through a `provider_config` overlay (settings.json shape) rather than a sandbox mode. The default Claude record sets `provider_config.permissions.defaultMode = 'dontAsk'`; the vendored `claude-agent-acp` bridge additionally disallows the `AskUserQuestion` tool for every Claude session, independent of the record. See [Codex](agents/codex.md) and [Claude](agents/claude.md) for the per-agent details.
+Claude sessions are configured through a `provider_config` overlay (settings.json shape) rather than a sandbox mode. The default Claude record sets `provider_config.permissions.defaultMode = 'dontAsk'`, so tools that are not pre-approved are denied rather than prompted. The vendored bridge patches its mode catalog to keep `dontAsk`, which upstream would clamp to `default`. The vendored `claude-agent-acp` bridge additionally disallows the `AskUserQuestion` tool for every Claude session, independent of the record. See [Codex](agents/codex.md) and [Claude](agents/claude.md) for the per-agent details.
 
 ## Slack bot_user_id gating
 

@@ -111,13 +111,17 @@ effect.
 ## How the Claude bridge differs
 
 The vendored `claude-agent-acp` bridge wraps the Claude Agent SDK and carries Lorenz patches over
-the upstream package. Three behaviors are specific to it:
+the upstream package. Four behaviors are specific to it:
 
 - **`/mcp` slash-command rewriting.** The bridge rewrites a `/mcp:server:command args` slash command
   into `/server:command (MCP) args` so the underlying Claude session resolves it as an MCP command.
 - **Fixed setting sources and disallowed tools.** The bridge hardcodes `settingSources` to
   `["user", "project", "local"]` and adds `AskUserQuestion` to `disallowedTools`, so a Claude run
   cannot block on an interactive question.
+- **`dontAsk` stays available.** Upstream dropped `dontAsk` from its ACP mode catalog and clamps a
+  `dontAsk` default to `default`, which prompts for permission and so reaches the executor's
+  auto-approval. The vendored bridge keeps the mode, so the built-in
+  `permissions.defaultMode: dontAsk` denies tools that are not pre-approved.
 - **Per-message usage.** The bridge emits a `symphony/callUsage` bucket per assistant message,
   derived from the message's `input_tokens`, `output_tokens`, `cache_read_input_tokens`, and
   `cache_creation_input_tokens`.
