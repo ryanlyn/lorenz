@@ -48,8 +48,7 @@ Each page is a flat enumeration, not a narrative. Scan it like a man page.
   field names the engine normalizes them to internally. `polling.interval_ms`, not `intervalMs`.
 - A default in a table is the value applied when you omit the key. `polling.interval_ms` defaults to
   `30000`; `server.port` defaults to `4040`; `agent.max_concurrent_agents` defaults to `10`.
-- A few keys have no default and are required at validation time. `tracker.kind` is the notable one:
-  there is no default tracker, and dispatch validation rejects a config that leaves it unset.
+- `tracker.kind` defaults to `local`, which uses a Markdown board without tracker credentials.
 - Where a behavior depends on order (secret resolution, tracker selection, per-state overrides), the
   page states the order explicitly and ties it to the module that enforces it.
 

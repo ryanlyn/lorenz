@@ -29,7 +29,6 @@ Config validation runs at startup and again as the per-reload dispatch hook. Run
 
 | Symptom | Cause | Fix |
 | --- | --- | --- |
-| `tracker.kind is required` | No tracker selected. There is no default tracker. | Set `tracker.kind` (for example `linear`, `local`, `jira`, `memory`). |
 | `tracker.<key> is not supported` / `<section>.<key> is not supported` | An unknown key in a `.strict()` section. | Remove or rename the key. Provider-specific options pass through under the tracker/agents records; core sections reject unknowns. |
 | `tracker.api_key is required` (Linear) | Linear dispatch has no API key. | Set `tracker.api_key`, or export `LINEAR_API_KEY` (the provider's env fallback). |
 | Linear: exactly-one-of error on `project_slug` / `project_slugs` / `project_labels` | Zero or more than one project selector set. | Set exactly one. `project_slug` is the deprecated single form; `project_slugs` is the explicit list; `project_labels` discovers projects by label. |

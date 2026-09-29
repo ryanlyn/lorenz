@@ -17,7 +17,7 @@ export const defaultSettings = (options: DefaultSettingsOptions = {}): Settings 
   const workspaceRoot = joinPath(tmpdir, "lorenz_workspaces");
   return {
     tracker: {
-      kind: undefined,
+      kind: "local",
       activeStates: ["Todo", "In Progress"],
       terminalStates: ["Closed", "Cancelled", "Canceled", "Duplicate", "Done"],
       dispatch: {

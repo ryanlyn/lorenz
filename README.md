@@ -123,13 +123,12 @@ Every front-matter key, its type, verified default, and meaning are in the
 [Configuration reference](./docs/reference/configuration.md). `workspace.root` supports `~` and
 whole-value `$VAR` expansion, and `LORENZ_WORKSPACE_ROOT` overrides it at runtime.
 
-## Linear
+## Trackers
 
-Linear is the default tracker: issues live in a Linear project, read access uses `LINEAR_API_KEY`,
-and project selection uses `project_slug`. Route labels such as `Lorenz:backend` let multiple
-instances share one project. Setup and configuration are in
-[Linear tracker](./docs/trackers/linear.md). Other sources (Jira, Slack, Discord, local, memory) are covered
-under [Trackers](./docs/trackers/index.md).
+The default tracker is a local Markdown board and needs no tracker credentials. The checked-in
+`WORKFLOW.md` uses it. For Linear, use `WORKFLOW.linear.md` and set `LINEAR_API_KEY`; setup is in
+[Linear tracker](./docs/trackers/linear.md). Jira, Slack, Discord, and memory are covered under
+[Trackers](./docs/trackers/index.md).
 
 ## Workflow Prompt
 
@@ -223,7 +222,7 @@ evidence stay at the workspace root.
 
 ### Compatibility Contracts
 
-The checked-in workflow files (`WORKFLOW.md`, `WORKFLOW.local.md`, and `WORKFLOW.chat.md`) are executable fixtures.
+The checked-in workflow files (`WORKFLOW.md`, `WORKFLOW.local.md`, `WORKFLOW.linear.md`, and `WORKFLOW.chat.md`) are executable fixtures.
 `pnpm test` guards workflow docs, prompt rendering, dashboard snapshots, runtime behavior, and CLI
 documentation. Update the fixture and the matching test together when the public contract changes.
 

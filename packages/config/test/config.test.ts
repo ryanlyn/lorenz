@@ -407,13 +407,13 @@ test("jira-mcp tracker config parses MCP settings and tool aliases", () => {
 test("config defaults and validation match expected defaults", () => {
   const settings = parseConfig({}, {});
 
-  assert.equal(settings.tracker.kind, undefined);
+  assert.equal(settings.tracker.kind, "local");
   assert.deepEqual(settings.agents.claude.options.providerConfig, {
     model: "claude-opus-4-6[1m]",
     permissions: { defaultMode: "dontAsk" },
   });
   assert.equal(settings.observability.renderIntervalMs, 16);
-  assert.throws(() => validateDispatchConfig(settings), /tracker.kind is required/);
+  validateDispatchConfig(settings);
 });
 
 test("tracker.kind selects a named trackers bundle with its own provider", () => {
@@ -1081,7 +1081,7 @@ test("undocumented top-level compatibility keys are ignored", () => {
     hook_before_run: "echo legacy",
   });
 
-  assert.equal(settings.tracker.kind, undefined);
+  assert.equal(settings.tracker.kind, "local");
   assert.equal(settings.agent.maxTurns, 20);
   assert.equal(settings.agents.codex.options.bridgeCommand, "codex-acp");
   assert.notEqual(settings.workspace.root, "/tmp/legacy-root");
@@ -1199,11 +1199,8 @@ test("config rejects empty strings and booleans for typed fields", () => {
     () => parseConfig({ observability: { dashboard_enabled: "" } }),
     /expected a boolean/,
   );
-  // A blank kind parses as "unset" and is rejected when dispatch is validated.
-  assert.throws(
-    () => validateDispatchConfig(parseConfig({ tracker: { kind: "" } })),
-    /tracker.kind is required/,
-  );
+  // A blank kind uses the local default.
+  assert.equal(parseConfig({ tracker: { kind: "" } }).tracker.kind, "local");
 });
 
 test("stall_timeout_ms=0 is accepted as a valid value at top-level and in status overrides", () => {
@@ -1296,12 +1293,9 @@ test("status overrides reject legacy per-state map and unknown sections", () => 
 
 test("the shipped WORKFLOW.md loads independently in the TypeScript port", async () => {
   const root = path.resolve(".");
-  const workflow = await loadWorkflow(
-    path.join(root, "WORKFLOW.md"),
-    { LINEAR_API_KEY: "test-token", LINEAR_ASSIGNEE: "worker@example.com" },
-    { trackers, executors },
-  );
+  const workflow = await loadWorkflow(path.join(root, "WORKFLOW.md"), {}, { trackers, executors });
   assert.equal(workflow.settings.tracker.dispatch.acceptUnrouted, true);
+  assert.equal(workflow.settings.tracker.kind, "local");
   assert.equal(workflow.settings.tracker.dispatch.routeLabelPrefix, "Lorenz:");
   assert.ok(workflow.promptTemplate.length > 100);
 });

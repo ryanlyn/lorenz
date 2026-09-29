@@ -57,7 +57,7 @@ A few defaults to know, all from the code:
 - `server.host` defaults to `127.0.0.1`; `server.port` defaults to `4040`; `server.trace_dir` defaults to `~/.lorenz/issues`.
 - `logging.log_file` defaults to `~/.lorenz/log/lorenz.log`.
 
-There is no default tracker. `tracker.kind` is unset until you set it, and pre-poll validation throws `tracker.kind is required` when it is missing. Treat it as mandatory.
+`tracker.kind` defaults to `local`, a Markdown board that needs no tracker credentials.
 
 ### Tracker selection
 
@@ -224,16 +224,17 @@ The `after_create` hook runs once when the per-issue workspace is created; `git 
 
 ## The checked-in examples
 
-The repository root ships three example workflows. Each is a complete, runnable file you can copy
+The repository root ships four example workflows. Each is a complete, runnable file you can copy
 and adapt.
 
 | File | Tracker | Demonstrates |
 | --- | --- | --- |
-| `WORKFLOW.md` | Linear | The reference Linear flow: `project_slug`, an `Agent Review` state with an autonomous review protocol, both `codex` and `claude` configured (`claude` with `bypassPermissions`), and a full multi-step prompt with a `## Codex Workpad` comment protocol and a `lorenz-land` handoff |
+| `WORKFLOW.md` | Local board | Default workflow; no tracker credentials required |
+| `WORKFLOW.linear.md` | Linear | The reference Linear flow: `project_slug`, an `Agent Review` state with an autonomous review protocol, both `codex` and `claude` configured (`claude` with `bypassPermissions`), and a full multi-step prompt with a `## Codex Workpad` comment protocol and a `lorenz-land` handoff |
 | `WORKFLOW.local.md` | Local board | No credentials and no Linear: `tracker.kind: local` with `id_prefix`, the `local_*` tools, and a prompt that reads state through `local_read_issue` |
 | `WORKFLOW.chat.md` | Discord or Slack | Named Discord and Slack bundles in one file, with Discord selected by default and the canonical `WORKFLOW.md` agent configuration |
 
-The non-Linear examples show how the prompt body changes with the tracker: each documents its own
+The other examples show how the prompt body changes with the tracker: each documents its own
 tool surface and tells the agent not to call Linear. See
 [trackers/index.md](trackers/index.md) for the matching provider pages.
 
