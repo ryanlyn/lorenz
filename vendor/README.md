@@ -50,6 +50,12 @@ so they ride the protocol's sanctioned extension point:
 - `session/cancel` invalidates prompts that entered the Codex bridge's queue
   before the cancellation boundary. The Claude bridge cancels queued turns
   through its persistent consumer.
+- Session permission mode (claude): `dist/session-mode.js` keeps `dontAsk` in
+  the ACP mode catalog. Upstream dropped it in 0.71.0 and clamps
+  `permissions.defaultMode: "dontAsk"` from `symphony/settings` to `default`.
+- Default agent mode (codex): `DEFAULT_AGENT_MODE` is `workspace-write`, whose
+  `on-request` approvals go to the client. Upstream defaults to `agent`, which
+  sends approval requests to Codex's auto-reviewer instead of Lorenz.
 
 ## Refreshing from upstream
 

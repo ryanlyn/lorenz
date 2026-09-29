@@ -1,7 +1,9 @@
 #!/usr/bin/env node
-import { resolveSettings } from "@anthropic-ai/claude-agent-sdk";
 import { claudeCliPath, runAcp } from "./acp-agent.js";
+import { applyManagedPolicyEnv } from "./managed-policy.js";
 import packageJson from "../package.json" with { type: "json" };
+import { appendFileSync, mkdirSync } from "node:fs";
+import { join } from "node:path";
 // `--cli` is checked first so that `--version`/`-v` (and any other flags) are
 // forwarded to the wrapped native CLI rather than swallowed by our own version
 // handler below. Our version flag only applies when not delegating.
@@ -41,13 +43,10 @@ else if (process.argv.includes("--version") || process.argv.includes("-v")) {
 }
 else {
     // Apply env vars from the managed-policy tier before any SDK call so the
-    // SDK subprocess inherits them. Going through resolveSettings (vs. a raw
-    // read of managed-settings.json) also picks up MDM sources on macOS and
-    // HKLM/HKCU on Windows.
-    const policy = await resolveSettings({ settingSources: [] });
-    for (const [key, value] of Object.entries(policy.effective.env ?? {})) {
-        process.env[key] = value;
-    }
+    // SDK subprocess inherits them. Reading the tier is best-effort: a transient
+    // failure leaves the agent running with no policy env instead of aborting
+    // module evaluation here, before any ACP traffic.
+    await applyManagedPolicyEnv();
     // stdout is used to send messages to the client
     // we redirect everything else to stderr to make sure it doesn't interfere with ACP
     console.log = console.error;
@@ -57,7 +56,28 @@ else {
     process.on("unhandledRejection", (reason, promise) => {
         console.error("Unhandled Rejection at:", promise, "reason:", reason);
     });
-    const { connection, agent } = runAcp();
+    const logDirectory = process.env.CLAUDE_AGENT_LOGS;
+    const logger = logDirectory
+        ? (() => {
+            mkdirSync(logDirectory, { recursive: true });
+            const logFile = join(logDirectory, "agent.log");
+            const writeLog = (...args) => {
+                const rendered = args
+                    .map((arg) => (arg instanceof Error ? (arg.stack ?? arg.message) : String(arg)))
+                    .join(" ");
+                appendFileSync(logFile, `${new Date().toISOString()} pid=${process.pid} ${rendered}\n`);
+            };
+            return {
+                log: writeLog,
+                error: (...args) => {
+                    console.error(...args);
+                    writeLog(...args);
+                },
+            };
+        })()
+        : undefined;
+    logger?.log("Claude ACP started");
+    const { connection, agent } = runAcp(logger);
     async function shutdown() {
         await agent.dispose().catch((err) => {
             console.error("Error during cleanup:", err);

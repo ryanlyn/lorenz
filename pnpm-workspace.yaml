@@ -12,7 +12,7 @@ onlyBuiltDependencies:
 
 catalog:
   "@eslint/js": "^10.0.1"
-  "@agentclientprotocol/sdk": "^0.21.0"
+  "@agentclientprotocol/sdk": "^1.5.1"
   "@types/better-sqlite3": "^7.6.13"
   better-sqlite3: "^12.10.0"
   "@hono/node-server": "^1.19.14"
@@ -61,4 +61,4 @@ catalog:
   vitest: "^4.0.14"
   ws: "8.21.0"
   yaml: "^2.8.0"
-  zod: "^4.4.3"
+  zod: "^4.6.5"

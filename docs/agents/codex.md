@@ -101,21 +101,23 @@ The per-kind value wins over the shared default.
 
 ## Sandbox
 
-The `codex-acp` bridge starts each session in Codex's default agent mode, `workspace-write`. In this
-mode Codex can read and write inside the workspace and run commands, with the sandbox restricting
-writes outside the workspace. The bridge exposes three modes:
+The `codex-acp` bridge starts each session in its `workspace-write` mode. In this mode Codex can read
+and write inside the workspace and run commands, with the sandbox restricting writes outside the
+workspace. Approval requests go to the client. The bridge exposes four modes:
 
 | Mode | `sandbox_mode` | Behavior |
 | --- | --- | --- |
-| Read Only | `read-only` | Requires approval to edit files and run commands. |
-| Agent (default) | `workspace-write` | Reads, writes, and runs commands inside the workspace. |
-| Agent (Full Access) | `danger-full-access` | Drops the workspace sandbox for full-access workflows. |
+| Read-only (`read-only`) | `read-only` | Requires approval to edit files and access the internet. |
+| Workspace access (`workspace-write`, default) | `workspace-write` | Reads, writes, and runs commands inside the workspace; approval requests go to the client. |
+| Auto review (`agent`) | `workspace-write` | Same sandbox, but Codex's auto-reviewer approves or denies approval requests. |
+| Full access (`agent-full-access`) | `danger-full-access` | Drops the workspace sandbox for full-access workflows. |
 
 The bridge picks its starting mode from the `INITIAL_AGENT_MODE` environment variable, falling back
-to `workspace-write` when it is unset or unrecognized. Full-access workflows carry an operational
-catch: Lorenz auto-approves the bridge's permission requests, so a `danger-full-access` session runs
-unsandboxed commands without a human gate. Reserve it for isolated workers, not your laptop. For
-sandbox tradeoffs see [security.md](../security.md).
+to `workspace-write` when it is unset or unrecognized. Upstream falls back to `agent`; the vendored
+bridge patches the default so approval requests keep reaching Lorenz. Full-access workflows carry an
+operational catch: Lorenz auto-approves the bridge's permission requests, so a `danger-full-access`
+session runs unsandboxed commands without a human gate. Reserve it for isolated workers, not your
+laptop. For sandbox tradeoffs see [security.md](../security.md).
 
 ## Provider config
 

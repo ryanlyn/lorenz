@@ -1,3 +1,5 @@
+import path from "node:path";
+
 import { test } from "vitest";
 import { Executor, parseConfig as parseConfigWith } from "@lorenz/cli";
 import { acpExecutorProvider } from "@lorenz/acp";
@@ -18,7 +20,7 @@ const runLiveClaude = process.env.LORENZ_TS_RUN_REAL_CLAUDE_E2E === "1" && Boole
 
 test("live Claude ACP bridge smoke", { timeout: 180_000, skip: !runLiveClaude }, async () => {
   const workspace = await tempDir("lorenz-live-claude");
-  const settings = liveClaudeSettings(180_000);
+  const settings = liveClaudeSettings(180_000, path.dirname(workspace));
   const executor = new Executor("claude");
   const session = await executor.startSession({ workspace, settings, issue: sampleIssue });
   const updates = await executor.runTurn(
@@ -36,7 +38,7 @@ test(
   async () => {
     assert.ok(process.env.LINEAR_API_KEY, "LINEAR_API_KEY is required for live MCP E2E");
     const workspace = await tempDir("lorenz-live-mcp");
-    const settings = liveClaudeSettings(240_000, {
+    const settings = liveClaudeSettings(240_000, path.dirname(workspace), {
       tracker: {
         api_key: "$LINEAR_API_KEY",
         project_slug: "lorenz-414bf2e49ff2",
@@ -65,9 +67,14 @@ test(
   },
 );
 
-function liveClaudeSettings(timeoutMs: number, extra: Record<string, unknown> = {}) {
+function liveClaudeSettings(
+  timeoutMs: number,
+  workspaceRoot: string,
+  extra: Record<string, unknown> = {},
+) {
   return parseConfig({
     ...extra,
+    workspace: { root: workspaceRoot },
     agent: { kind: "claude" },
     agents: {
       claude: {

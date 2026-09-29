@@ -3,7 +3,7 @@ import * as path from "node:path";
 // resolveSettings and filterEscalatingDefaultMode are marked @alpha in the
 // SDK; API may shift in a future release.
 import { filterEscalatingDefaultMode, resolveSettings, } from "@anthropic-ai/claude-agent-sdk";
-import { CLAUDE_CONFIG_DIR } from "./acp-agent.js";
+import { claudeConfigDir } from "./paths.js";
 /**
  * Permission rule format examples:
  * - "Read" - matches all Read tool calls
@@ -37,6 +37,7 @@ function getManagedSettingsPath() {
 export class SettingsManager {
     cwd;
     effective = {};
+    managedDeniedModels = [];
     watchers = [];
     onChange;
     logger;
@@ -75,7 +76,7 @@ export class SettingsManager {
      */
     getWatchedPaths() {
         return [
-            path.join(CLAUDE_CONFIG_DIR, "settings.json"),
+            path.join(claudeConfigDir(), "settings.json"),
             path.join(this.cwd, ".claude", "settings.json"),
             path.join(this.cwd, ".claude", "settings.local.json"),
             getManagedSettingsPath(),
@@ -89,10 +90,15 @@ export class SettingsManager {
         try {
             const resolved = await resolveSettings({ cwd: this.cwd });
             this.effective = filterEscalatingDefaultMode(resolved);
+            // The CLI reads `deniedModels` from managed settings only.
+            this.managedDeniedModels = resolved.sources
+                .filter((entry) => entry.source === "managed")
+                .flatMap((entry) => entry.settings.deniedModels ?? []);
         }
         catch (error) {
             this.logger.error("Failed to resolve settings:", error);
             this.effective = {};
+            this.managedDeniedModels = [];
         }
     }
     /**
@@ -148,6 +154,13 @@ export class SettingsManager {
      */
     getSettings() {
         return this.effective;
+    }
+    /**
+     * `deniedModels` entries from the managed tier, the only tier the CLI
+     * honors them from.
+     */
+    getManagedDeniedModels() {
+        return this.managedDeniedModels;
     }
     /**
      * Returns the current working directory

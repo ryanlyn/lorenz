@@ -18,6 +18,7 @@ export interface SettingsManagerOptions {
 export declare class SettingsManager {
     private cwd;
     private effective;
+    private managedDeniedModels;
     private watchers;
     private onChange?;
     private logger;
@@ -52,6 +53,11 @@ export declare class SettingsManager {
      * Returns the current merged settings
      */
     getSettings(): Settings;
+    /**
+     * `deniedModels` entries from the managed tier, the only tier the CLI
+     * honors them from.
+     */
+    getManagedDeniedModels(): string[];
     /**
      * Returns the current working directory
      */
