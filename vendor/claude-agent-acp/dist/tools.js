@@ -1,785 +1,51 @@
-import path from "node:path";
+import { ClientCapabilities } from "./tool-calls/client-capabilities.js";
+import { AcpToolCallRenderer } from "./tool-calls/renderer.js";
+export { markdownEscape, toDisplayPath } from "./tool-calls/content.js";
 /**
- * Convert an absolute file path to a project-relative path for display.
- * Returns the original path if it's outside the project directory or if no cwd is provided.
+ * The title, kind, content, and locations of a tool use, for a client with the
+ * given terminal and patch capabilities. The {@link AcpToolCallRenderer} builds
+ * them from the facts of the tool reporter.
  */
-export function toDisplayPath(filePath, cwd) {
-    if (!cwd)
-        return filePath;
-    const resolvedCwd = path.resolve(cwd);
-    const resolvedFile = path.resolve(filePath);
-    if (resolvedFile.startsWith(resolvedCwd + path.sep) || resolvedFile === resolvedCwd) {
-        return path.relative(resolvedCwd, resolvedFile);
-    }
-    return filePath;
-}
-export function toolInfoFromToolUse(toolUse, supportsTerminalOutput = false, cwd) {
-    const name = toolUse.name;
-    switch (name) {
-        case "Agent":
-        case "Task": {
-            const input = toolUse.input;
-            return {
-                title: input?.description ? input.description : "Task",
-                kind: "think",
-                content: input && "prompt" in input
-                    ? [
-                        {
-                            type: "content",
-                            content: { type: "text", text: input.prompt },
-                        },
-                    ]
-                    : [],
-            };
-        }
-        case "Bash": {
-            const input = toolUse.input;
-            return {
-                title: input?.command ? input.command : "Terminal",
-                kind: "execute",
-                content: supportsTerminalOutput
-                    ? [{ type: "terminal", terminalId: toolUse.id }]
-                    : input && input.description
-                        ? [
-                            {
-                                type: "content",
-                                content: { type: "text", text: input.description },
-                            },
-                        ]
-                        : [],
-            };
-        }
-        case "Read": {
-            const input = toolUse.input;
-            let limit = "";
-            if (input?.limit && input.limit > 0) {
-                limit = " (" + (input.offset ?? 1) + " - " + ((input.offset ?? 1) + input.limit - 1) + ")";
-            }
-            else if (input?.offset) {
-                limit = " (from line " + input.offset + ")";
-            }
-            const displayPath = input?.file_path ? toDisplayPath(input.file_path, cwd) : "File";
-            return {
-                title: "Read " + displayPath + limit,
-                kind: "read",
-                locations: input?.file_path
-                    ? [
-                        {
-                            path: input.file_path,
-                            line: input.offset ?? 1,
-                        },
-                    ]
-                    : [],
-                content: [],
-            };
-        }
-        case "Write": {
-            const input = toolUse.input;
-            let content = [];
-            if (input && input.file_path) {
-                content = [
-                    {
-                        type: "diff",
-                        path: input.file_path,
-                        oldText: null,
-                        newText: input.content,
-                    },
-                ];
-            }
-            else if (input && input.content) {
-                content = [
-                    {
-                        type: "content",
-                        content: { type: "text", text: input.content },
-                    },
-                ];
-            }
-            const displayPath = input?.file_path ? toDisplayPath(input.file_path, cwd) : undefined;
-            return {
-                title: displayPath ? `Write ${displayPath}` : "Write",
-                kind: "edit",
-                content,
-                locations: input?.file_path ? [{ path: input.file_path }] : [],
-            };
-        }
-        case "Edit": {
-            const input = toolUse.input;
-            let content = [];
-            if (input && input.file_path && (input.old_string || input.new_string)) {
-                content = [
-                    {
-                        type: "diff",
-                        path: input.file_path,
-                        oldText: input.old_string || null,
-                        newText: input.new_string ?? "",
-                    },
-                ];
-            }
-            const displayPath = input?.file_path ? toDisplayPath(input.file_path, cwd) : undefined;
-            return {
-                title: displayPath ? `Edit ${displayPath}` : "Edit",
-                kind: "edit",
-                content,
-                locations: input?.file_path ? [{ path: input.file_path }] : [],
-            };
-        }
-        case "Glob": {
-            const input = toolUse.input;
-            let label = "Find";
-            if (input?.path) {
-                label += ` \`${input.path}\``;
-            }
-            if (input?.pattern) {
-                label += ` \`${input.pattern}\``;
-            }
-            return {
-                title: label,
-                kind: "search",
-                content: [],
-                locations: input?.path ? [{ path: input.path }] : [],
-            };
-        }
-        case "Grep": {
-            const input = toolUse.input;
-            let label = "grep";
-            if (input?.["-i"]) {
-                label += " -i";
-            }
-            if (input?.["-n"]) {
-                label += " -n";
-            }
-            if (input?.["-A"] !== undefined) {
-                label += ` -A ${input["-A"]}`;
-            }
-            if (input?.["-B"] !== undefined) {
-                label += ` -B ${input["-B"]}`;
-            }
-            if (input?.["-C"] !== undefined) {
-                label += ` -C ${input["-C"]}`;
-            }
-            if (input?.output_mode) {
-                switch (input.output_mode) {
-                    case "files_with_matches":
-                        label += " -l";
-                        break;
-                    case "count":
-                        label += " -c";
-                        break;
-                    case "content":
-                    default:
-                        break;
-                }
-            }
-            if (input?.head_limit !== undefined) {
-                label += ` | head -${input.head_limit}`;
-            }
-            if (input?.glob) {
-                label += ` --include="${input.glob}"`;
-            }
-            if (input?.type) {
-                label += ` --type=${input.type}`;
-            }
-            if (input?.multiline) {
-                label += " -P";
-            }
-            if (input?.pattern) {
-                label += ` "${input.pattern}"`;
-            }
-            if (input?.path) {
-                label += ` ${input.path}`;
-            }
-            return {
-                title: label,
-                kind: "search",
-                content: [],
-            };
-        }
-        case "WebFetch": {
-            const input = toolUse.input;
-            return {
-                title: input?.url ? `Fetch ${input.url}` : "Fetch",
-                kind: "fetch",
-                content: input && input.prompt
-                    ? [
-                        {
-                            type: "content",
-                            content: { type: "text", text: input.prompt },
-                        },
-                    ]
-                    : [],
-            };
-        }
-        case "WebSearch": {
-            const input = toolUse.input;
-            let label = input?.query ? `"${input.query}"` : "Web search";
-            if (input?.allowed_domains && input.allowed_domains.length > 0) {
-                label += ` (allowed: ${input.allowed_domains.join(", ")})`;
-            }
-            if (input?.blocked_domains && input.blocked_domains.length > 0) {
-                label += ` (blocked: ${input.blocked_domains.join(", ")})`;
-            }
-            return {
-                title: label,
-                kind: "fetch",
-                content: [],
-            };
-        }
-        case "TodoWrite": {
-            const input = toolUse.input;
-            return {
-                title: Array.isArray(input?.todos)
-                    ? `Update TODOs: ${input.todos.map((todo) => todo.content).join(", ")}`
-                    : "Update TODOs",
-                kind: "think",
-                content: [],
-            };
-        }
-        case "ReportFindings": {
-            const input = toolUse.input;
-            const findings = input?.findings ?? [];
-            return {
-                title: findings.length === 0
-                    ? "Report findings: none found"
-                    : `Report ${findings.length} finding${findings.length === 1 ? "" : "s"}`,
-                kind: "think",
-                content: findings.map((finding) => ({
-                    type: "content",
-                    content: {
-                        type: "text",
-                        text: `**${finding.file}${finding.line ? `:${finding.line}` : ""}** — ${finding.summary}`,
-                    },
-                })),
-            };
-        }
-        case "TaskCreate": {
-            const input = toolUse.input;
-            return {
-                title: input?.subject ? `Create task: ${input.subject}` : "Create task",
-                kind: "think",
-                content: [],
-            };
-        }
-        case "TaskUpdate": {
-            const input = toolUse.input;
-            return {
-                title: input?.subject ? `Update task: ${input.subject}` : "Update task",
-                kind: "think",
-                content: [],
-            };
-        }
-        case "TaskList": {
-            return {
-                title: "List tasks",
-                kind: "think",
-                content: [],
-            };
-        }
-        case "TaskGet": {
-            return {
-                title: "Get task",
-                kind: "think",
-                content: [],
-            };
-        }
-        case "ExitPlanMode": {
-            const planInput = toolUse.input;
-            return {
-                title: "Ready to code?",
-                kind: "switch_mode",
-                content: planInput?.plan
-                    ? [{ type: "content", content: { type: "text", text: planInput.plan } }]
-                    : [],
-            };
-        }
-        case "AskUserQuestion": {
-            const input = toolUse.input;
-            const questions = Array.isArray(input?.questions) ? input.questions : [];
-            return {
-                title: questions.length === 1 && questions[0]?.question
-                    ? questions[0].question
-                    : "Asking for your input",
-                kind: "other",
-                content: questions
-                    .filter((q) => typeof q?.question === "string")
-                    .map((q) => ({
-                    type: "content",
-                    content: { type: "text", text: q.question },
-                })),
-            };
-        }
-        case "Other": {
-            const input = toolUse.input;
-            let output;
-            try {
-                output = JSON.stringify(input, null, 2);
-            }
-            catch {
-                output = typeof input === "string" ? input : "{}";
-            }
-            return {
-                title: name || "Unknown Tool",
-                kind: "other",
-                content: [
-                    {
-                        type: "content",
-                        content: {
-                            type: "text",
-                            text: `\`\`\`json\n${output}\`\`\``,
-                        },
-                    },
-                ],
-            };
-        }
-        default:
-            return {
-                title: name || "Unknown Tool",
-                kind: "other",
-                content: [],
-            };
-    }
+export function toolInfoFromToolUse(toolUse, supportsTerminalOutput = false, cwd, supportsDiffPatch = false) {
+    const renderer = new AcpToolCallRenderer(new ClientCapabilities(supportsTerminalOutput, false, supportsDiffPatch));
+    return renderer.toolInfo({ id: toolUse?.id, name: toolUse?.name, input: toolUse?.input }, cwd);
 }
 /**
- * Narrow the untyped message-level `tool_use_result` toward a per-tool Output
- * shape: rejects everything but a plain non-null object (arrays pass a bare
- * `typeof === "object"` check, so they're excluded here). The returned value
- * is only *nominally* typed — it arrives over the wire from arbitrary CLI
- * versions, so each caller must still guard the specific fields it reads
- * before trusting them.
+ * The result fields of a tool result, for a client with the given terminal
+ * capabilities. The {@link AcpToolCallRenderer} builds them from the facts of
+ * the tool reporter.
  */
-function structuredResult(toolUseResult) {
-    return toolUseResult !== null &&
-        typeof toolUseResult === "object" &&
-        !Array.isArray(toolUseResult)
-        ? toolUseResult
-        : undefined;
-}
-/**
- * Strip the model-directed trailer from a raw Agent/Task tool_result text:
- * a `<usage>…</usage>` totals block and/or an
- * `agentId: <id> (use SendMessage …)` continuation line at the end of the
- * text. Both patterns are tail-anchored and independent (older CLIs emit
- * variants with only one of them), so a format change makes them stop
- * matching rather than mangle the report.
- */
-function stripAgentTrailer(text) {
-    return text
-        .replace(/\n?<usage>[\s\S]*?<\/usage>\s*$/, "")
-        .replace(/\n?agentId: [\w-]+ \([^)]*\)\s*$/, "");
-}
-/** Apply {@link stripAgentTrailer} across a raw tool_result `content` (plain
- *  string or block array), leaving non-text blocks untouched. */
-function stripAgentTrailerFromContent(content) {
-    if (typeof content === "string") {
-        return stripAgentTrailer(content);
-    }
-    if (Array.isArray(content)) {
-        return content.map((block) => block !== null &&
-            typeof block === "object" &&
-            block.type === "text" &&
-            typeof block.text === "string"
-            ? { ...block, text: stripAgentTrailer(block.text) }
-            : block);
-    }
-    return content;
-}
-export function toolUpdateFromToolResult(toolResult, toolUse, supportsTerminalOutput = false, toolUseResult) {
-    if ("is_error" in toolResult &&
-        toolResult.is_error &&
-        toolResult.content &&
-        toolResult.content.length > 0 &&
-        !(toolUse?.name === "Bash" && supportsTerminalOutput)) {
-        // Only return errors
-        return toAcpContentUpdate(toolResult.content, true);
-    }
-    // Shared raw-text fallback: renders the tool_result content the model saw.
-    // The structured cases below fall back to this when `tool_use_result` is
-    // absent or fails its shape guard (older CLIs, replayed sessions).
-    const rawContentUpdate = () => toAcpContentUpdate(toolResult.content, "is_error" in toolResult ? toolResult.is_error : false);
-    switch (toolUse?.name) {
-        case "Read": {
-            // The raw tool_result text is the model-facing view: line-numbered
-            // content plus any appended <system-reminder> blocks (malicious-code
-            // checks, memory staleness notes, …) that clients shouldn't see. The
-            // structured FileReadOutput carries the clean content — rebuild the
-            // line-numbered view from it. Non-text variants (image/notebook/pdf)
-            // fall back to the raw content blocks, which already render fine.
-            const structuredRead = structuredResult(toolUseResult);
-            if (structuredRead?.type === "text" &&
-                typeof structuredRead.file?.content === "string" &&
-                // An empty file has nothing to line-number; keep the raw view (the
-                // model-facing "file is empty" note) rather than a phantom blank line.
-                structuredRead.file.content.length > 0) {
-                // startLine is typed non-optional but defended anyway; a Read's
-                // `offset` input is the same 1-based starting line, so it beats a
-                // blind 1 when an emitter omits the field.
-                const startLine = structuredRead.file.startLine ??
-                    toolUse.input?.offset ??
-                    1;
-                // A trailing newline is a line terminator, not an extra line — don't
-                // number a phantom empty line after it.
-                let numbered = structuredRead.file.content
-                    .replace(/\n$/, "")
-                    .split("\n")
-                    .map((line, i) => `${startLine + i}\t${line}`)
-                    .join("\n");
-                // The model-facing truncation banner doesn't survive reconstruction
-                // from file.content (the SDK flag exists for exactly this case) —
-                // re-establish it so a partial first page doesn't read as the whole
-                // file.
-                if (structuredRead.file.truncatedByTokenCap) {
-                    const { numLines, totalLines } = structuredRead.file;
-                    const detail = typeof numLines === "number" && typeof totalLines === "number"
-                        ? `: showing ${numLines} of ${totalLines} lines`
-                        : "";
-                    numbered += `\n[File truncated${detail}]`;
-                }
-                return {
-                    content: [
-                        {
-                            type: "content",
-                            content: { type: "text", text: markdownEscape(numbered) },
-                        },
-                    ],
-                };
-            }
-            if (Array.isArray(toolResult.content) && toolResult.content.length > 0) {
-                return {
-                    content: toolResult.content.map((content) => ({
-                        type: "content",
-                        content: content.type === "text"
-                            ? {
-                                type: "text",
-                                text: markdownEscape(content.text),
-                            }
-                            : toAcpContentBlock(content, false),
-                    })),
-                };
-            }
-            else if (typeof toolResult.content === "string" && toolResult.content.length > 0) {
-                return {
-                    content: [
-                        {
-                            type: "content",
-                            content: {
-                                type: "text",
-                                text: markdownEscape(toolResult.content),
-                            },
-                        },
-                    ],
-                };
-            }
-            return {};
-        }
-        case "Bash": {
-            const result = toolResult.content;
-            const terminalId = "tool_use_id" in toolResult ? String(toolResult.tool_use_id) : "";
-            const isError = "is_error" in toolResult && toolResult.is_error;
-            // Extract output and exit code from either format:
-            // 1. The structured BashOutput (message-level tool_use_result): its
-            //    stdout/stderr exclude the model-directed suffixes the raw text
-            //    carries (stale-read hints, gh rate-limit hints, the
-            //    persisted-output wrapper for too-large outputs — the interruption
-            //    and truncation facts those carried are re-established from the
-            //    structured flags below). Skipped for image output (the raw content
-            //    array carries the actual image blocks) and backgrounded commands
-            //    (the raw text carries the background-task notice; structured
-            //    stdout may be empty).
-            // 2. BetaBashCodeExecutionResultBlock: { type: "bash_code_execution_result", stdout, stderr, return_code }
-            // 3. Plain string content from a regular tool_result
-            // 4. Array content (e.g. [{ type: "text", text: "..." }] for stdout,
-            //    or [{ type: "image", source: {...} }] when the local Bash tool
-            //    produces an image, e.g. piping a base64 data URI)
-            let output = "";
-            let exitCode = isError ? 1 : 0;
-            const structuredBash = structuredResult(toolUseResult);
-            if (structuredBash &&
-                typeof structuredBash.stdout === "string" &&
-                typeof structuredBash.stderr === "string" &&
-                !structuredBash.isImage &&
-                structuredBash.backgroundTaskId === undefined) {
-                output = [structuredBash.stdout, structuredBash.stderr].filter(Boolean).join("\n");
-                // Two raw-text notices don't survive the structured stdout/stderr —
-                // re-establish them so the client isn't shown a clean-looking result:
-                // the CLI appends its abort marker only to the model-facing text, and
-                // an aborted command isn't a success, so synthesize a failing exit
-                // code when the result wasn't already an error.
-                if (structuredBash.interrupted) {
-                    output = [output, "[Command was aborted before completion]"].filter(Boolean).join("\n");
-                    exitCode = 1;
-                }
-                // Structured stdout is clipped (~30k chars) when the full output was
-                // persisted to disk; without this note the clip is silent and the
-                // path to the full output is lost.
-                if (typeof structuredBash.persistedOutputPath === "string") {
-                    const size = typeof structuredBash.persistedOutputSize === "number"
-                        ? ` (${structuredBash.persistedOutputSize} bytes total)`
-                        : "";
-                    output = [
-                        output,
-                        `[Output truncated${size}: full output saved to ${structuredBash.persistedOutputPath}]`,
-                    ]
-                        .filter(Boolean)
-                        .join("\n");
-                }
-            }
-            else if (result &&
-                typeof result === "object" &&
-                "type" in result &&
-                result.type === "bash_code_execution_result") {
-                const bashResult = result;
-                output = [bashResult.stdout, bashResult.stderr].filter(Boolean).join("\n");
-                exitCode = bashResult.return_code;
-            }
-            else if (typeof result === "string") {
-                output = result;
-            }
-            else if (Array.isArray(result) && result.length > 0) {
-                const textOnly = result.every((c) => c && typeof c === "object" && typeof c.text === "string");
-                if (textOnly) {
-                    output = result.map((c) => c.text).join("\n");
-                }
-                else {
-                    // Image (or mixed non-text) content. Binary payloads can't be
-                    // streamed through the terminal-output _meta channel, so bypass
-                    // it and surface the blocks as ACP content. This handles the
-                    // local Bash tool's image output, which previously failed the
-                    // text-only guard and was silently dropped.
-                    return toAcpContentUpdate(result, isError);
-                }
-            }
-            if (supportsTerminalOutput) {
-                return {
-                    content: [{ type: "terminal", terminalId }],
-                    _meta: {
-                        terminal_info: {
-                            terminal_id: terminalId,
-                        },
-                        terminal_output: {
-                            terminal_id: terminalId,
-                            data: output,
-                        },
-                        terminal_exit: {
-                            terminal_id: terminalId,
-                            exit_code: exitCode,
-                            signal: null,
-                        },
-                    },
-                };
-            }
-            // Fallback: format output as a code block without terminal _meta
-            if (output.trim()) {
-                return {
-                    content: [
-                        {
-                            type: "content",
-                            content: {
-                                type: "text",
-                                text: `\`\`\`console\n${output.trimEnd()}\n\`\`\``,
-                            },
-                        },
-                    ],
-                };
-            }
-            return {};
-        }
-        case "Agent":
-        case "Task": {
-            // The raw tool_result text ends with a model-directed trailer (an
-            // `agentId: … (use SendMessage …)` line plus a `<usage>` totals block)
-            // that ACP clients shouldn't see. The message-level `tool_use_result`
-            // carries the structured AgentOutput whose `content` is the subagent's
-            // report without the trailer — render from it when present (per the SDK
-            // 0.3.207 guidance) and fall back to the raw text otherwise (older CLIs,
-            // replayed sessions).
-            // Narrowed to the full union, not the completed variant — the status
-            // check below is what discriminates it, and pre-narrowing would let
-            // future field reads typecheck against a variant the runtime value may
-            // not be.
-            const structured = structuredResult(toolUseResult);
-            if (structured?.status === "completed" &&
-                Array.isArray(structured.content) &&
-                // A completed subagent can end with zero text blocks; an empty
-                // structured render would beat the raw fallback for no benefit.
-                structured.content.length > 0) {
-                return toAcpContentUpdate(structured.content, "is_error" in toolResult ? toolResult.is_error : false);
-            }
-            // No structured report to render from (replayed sessions —
-            // getSessionMessages doesn't expose the transcript's toolUseResult —
-            // and older CLIs). The SDK advises rendering from tool_use_result
-            // instead of parsing the text, but with no structured value the
-            // tail-anchored strip is the only cleanup available; if the trailer
-            // format changes it simply stops matching and the full raw text
-            // renders, no worse than before.
-            return toAcpContentUpdate(stripAgentTrailerFromContent(toolResult.content), "is_error" in toolResult ? toolResult.is_error : false);
-        }
-        case "Edit": // Edit is handled in hooks
-        case "Write": {
-            return {};
-        }
-        case "ExitPlanMode": {
-            return { title: "Exited Plan Mode" };
-        }
-        case "WebSearch": {
-            // The raw tool_result text is a model-directed dump ("Web search
-            // results for query: …\n\nLinks: [{…json…}]"). The structured
-            // WebSearchOutput carries the hits — render them the way server-side
-            // web_search_result blocks render ("Title (url)").
-            const structuredSearch = structuredResult(toolUseResult);
-            if (structuredSearch && Array.isArray(structuredSearch.results)) {
-                const lines = structuredSearch.results.flatMap((entry) => typeof entry === "string"
-                    ? [entry]
-                    : Array.isArray(entry?.content)
-                        ? // tool_use_result arrives untyped across CLI version skew —
-                            // skip off-spec hits rather than rendering
-                            // "undefined (undefined)" lines.
-                            entry.content.flatMap((hit) => typeof hit?.title === "string" && typeof hit?.url === "string"
-                                ? [formatWebSearchHit(hit)]
-                                : [])
-                        : []);
-                if (lines.length > 0) {
-                    return {
-                        content: [
-                            {
-                                type: "content",
-                                content: { type: "text", text: lines.join("\n") },
-                            },
-                        ],
-                    };
-                }
-            }
-            return rawContentUpdate();
-        }
-        default: {
-            return rawContentUpdate();
-        }
-    }
-}
-/** One display format for a web-search hit, shared by the structured
- *  WebSearchOutput render and the server-side `web_search_result` block so
- *  the two paths can't drift. */
-function formatWebSearchHit(hit) {
-    return `${hit.title} (${hit.url})`;
-}
-function toAcpContentUpdate(content, isError = false) {
-    if (Array.isArray(content) && content.length > 0) {
-        return {
-            content: content.map((c) => ({
-                type: "content",
-                content: toAcpContentBlock(c, isError),
-            })),
-        };
-    }
-    else if (typeof content === "object" && content !== null && "type" in content) {
-        return {
-            content: [
-                {
-                    type: "content",
-                    content: toAcpContentBlock(content, isError),
-                },
-            ],
-        };
-    }
-    else if (typeof content === "string" && content.length > 0) {
-        return {
-            content: [
-                {
-                    type: "content",
-                    content: {
-                        type: "text",
-                        text: isError ? `\`\`\`\n${content}\n\`\`\`` : content,
-                    },
-                },
-            ],
-        };
-    }
-    return {};
-}
-function toAcpContentBlock(content, isError) {
-    const wrapText = (text) => ({
-        type: "text",
-        text: isError ? `\`\`\`\n${text}\n\`\`\`` : text,
-    });
-    switch (content.type) {
-        case "text":
-            return {
-                type: "text",
-                text: isError ? `\`\`\`\n${content.text}\n\`\`\`` : content.text,
-            };
-        case "image":
-            if (content.source.type === "base64") {
-                return {
-                    type: "image",
-                    data: content.source.data,
-                    mimeType: content.source.media_type,
-                };
-            }
-            // URL and file-based images can't be converted to ACP format (requires data)
-            return wrapText(content.source.type === "url"
-                ? `[image: ${content.source.url}]`
-                : "[image: file reference]");
-        case "tool_reference":
-            return wrapText(`Tool: ${content.tool_name}`);
-        case "tool_search_tool_search_result":
-            return wrapText(`Tools found: ${content.tool_references.map((r) => r.tool_name).join(", ") || "none"}`);
-        case "tool_search_tool_result_error":
-            return wrapText(`Error: ${content.error_code}${content.error_message ? ` - ${content.error_message}` : ""}`);
-        case "web_search_result":
-            return wrapText(formatWebSearchHit(content));
-        case "web_search_tool_result_error":
-            return wrapText(`Error: ${content.error_code}`);
-        case "web_fetch_result":
-            return wrapText(`Fetched: ${content.url}`);
-        case "web_fetch_tool_result_error":
-            return wrapText(`Error: ${content.error_code}`);
-        case "code_execution_result":
-            return wrapText(`Output: ${content.stdout || content.stderr || ""}`);
-        case "bash_code_execution_result":
-            return wrapText(`Output: ${content.stdout || content.stderr || ""}`);
-        case "code_execution_tool_result_error":
-        case "bash_code_execution_tool_result_error":
-            return wrapText(`Error: ${content.error_code}`);
-        case "text_editor_code_execution_view_result":
-            return wrapText(content.content);
-        case "text_editor_code_execution_create_result":
-            return wrapText(content.is_file_update ? "File updated" : "File created");
-        case "text_editor_code_execution_str_replace_result":
-            return wrapText(content.lines?.join("\n") || "");
-        case "text_editor_code_execution_tool_result_error":
-            return wrapText(`Error: ${content.error_code}${content.error_message ? ` - ${content.error_message}` : ""}`);
-        default:
-            return wrapText(JSON.stringify(content));
-    }
+export function toolUpdateFromToolResult(toolResult, toolUse, supportsTerminalOutput = false, toolUseResult, preferTerminalOutputDelta = false) {
+    const renderer = new AcpToolCallRenderer(new ClientCapabilities(supportsTerminalOutput, preferTerminalOutputDelta));
+    return renderer.resultFields({ id: toolUse?.id, name: toolUse?.name ?? "", input: toolUse?.input }, toolResult, toolUseResult);
 }
 export function planEntries(input) {
     return (input?.todos ?? []).map((todo) => ({
-        content: todo.content,
+        content: todo.status === "in_progress" && todo.activeForm ? todo.activeForm : todo.content,
         status: todo.status,
         priority: "medium",
     }));
 }
 /**
- * Best-effort parse of a TaskCreate tool_result content into the structured
- * TaskCreateOutput. The SDK delivers tool outputs either as a string or as
- * an array of TextBlockParam-like blocks containing JSON text; try both.
+ * Best-effort parse of a structured Task* tool_result. The SDK delivers tool
+ * outputs either as a string or as an array of TextBlockParam-like blocks
+ * containing JSON text; try both.
  */
-export function parseTaskCreateOutput(content) {
+function parseJsonToolOutput(content, isExpectedOutput) {
     const tryParse = (text) => {
         try {
             const parsed = JSON.parse(text);
-            if (parsed &&
-                typeof parsed === "object" &&
-                parsed.task &&
-                typeof parsed.task.id === "string") {
-                return parsed;
-            }
+            return isExpectedOutput(parsed) ? parsed : undefined;
         }
         catch {
-            // ignore
+            return undefined;
         }
-        return undefined;
     };
     if (typeof content === "string") {
         return tryParse(content);
+    }
+    if (content && typeof content === "object" && !Array.isArray(content)) {
+        return isExpectedOutput(content) ? content : undefined;
     }
     if (Array.isArray(content)) {
         for (const block of content) {
@@ -791,6 +57,119 @@ export function parseTaskCreateOutput(content) {
                         return parsed;
                 }
             }
+        }
+    }
+    return undefined;
+}
+function toolOutputTexts(content) {
+    if (typeof content === "string")
+        return [content];
+    if (!Array.isArray(content))
+        return [];
+    return content.flatMap((block) => block &&
+        typeof block === "object" &&
+        "type" in block &&
+        block.type === "text" &&
+        "text" in block &&
+        typeof block.text === "string"
+        ? [block.text]
+        : []);
+}
+export function parseTaskCreateOutput(content) {
+    const structured = parseJsonToolOutput(content, (parsed) => Boolean(parsed &&
+        typeof parsed === "object" &&
+        "task" in parsed &&
+        parsed.task &&
+        typeof parsed.task === "object" &&
+        "id" in parsed.task &&
+        typeof parsed.task.id === "string"));
+    if (structured)
+        return structured;
+    for (const text of toolOutputTexts(content)) {
+        const match = /^Task #(\S+) created successfully: (.+)$/.exec(text.trim());
+        if (match)
+            return { task: { id: match[1], subject: match[2] } };
+    }
+    return undefined;
+}
+export function parseTaskListOutput(content) {
+    const validStatuses = new Set(["pending", "in_progress", "completed"]);
+    const structured = parseJsonToolOutput(content, (parsed) => Boolean(parsed &&
+        typeof parsed === "object" &&
+        "tasks" in parsed &&
+        Array.isArray(parsed.tasks) &&
+        parsed.tasks.every((task) => task &&
+            typeof task === "object" &&
+            typeof task.id === "string" &&
+            typeof task.subject === "string" &&
+            typeof task.status === "string" &&
+            validStatuses.has(task.status))));
+    if (structured)
+        return structured;
+    for (const text of toolOutputTexts(content)) {
+        if (text.trim() === "No tasks found")
+            return { tasks: [] };
+        const tasks = [];
+        const lines = text.trim().split("\n");
+        for (const line of lines) {
+            const match = /^#(\S+) \[(pending|in_progress|completed)\] (.+)$/.exec(line);
+            if (!match) {
+                tasks.length = 0;
+                break;
+            }
+            let subject = match[3];
+            let owner;
+            let blockedBy = [];
+            const blockedMarker = " [blocked by ";
+            const blockedStart = subject.lastIndexOf(blockedMarker);
+            if (blockedStart > 0 && subject.endsWith("]")) {
+                const dependencies = subject.slice(blockedStart + blockedMarker.length, -1).split(", ");
+                if (dependencies.every((dependency) => dependency.length > 1 &&
+                    dependency.startsWith("#") &&
+                    !dependency.includes(",") &&
+                    !dependency.includes("]"))) {
+                    subject = subject.slice(0, blockedStart);
+                    blockedBy = dependencies.map((dependency) => dependency.slice(1));
+                }
+            }
+            const ownerStart = subject.lastIndexOf(" (");
+            if (ownerStart > 0 && subject.endsWith(")")) {
+                const candidate = subject.slice(ownerStart + 2, -1);
+                if (!candidate.includes("(") && !candidate.includes(")")) {
+                    subject = subject.slice(0, ownerStart);
+                    owner = candidate || undefined;
+                }
+            }
+            tasks.push({
+                id: match[1],
+                subject,
+                status: match[2],
+                ...(owner ? { owner } : {}),
+                blockedBy,
+            });
+        }
+        if (tasks.length > 0)
+            return { tasks };
+    }
+    return undefined;
+}
+export function parseTaskUpdateOutput(content, expectedTaskId) {
+    const structured = parseJsonToolOutput(content, (parsed) => Boolean(parsed &&
+        typeof parsed === "object" &&
+        "success" in parsed &&
+        typeof parsed.success === "boolean" &&
+        "taskId" in parsed &&
+        typeof parsed.taskId === "string" &&
+        "updatedFields" in parsed &&
+        Array.isArray(parsed.updatedFields) &&
+        parsed.updatedFields.every((field) => typeof field === "string")));
+    if (structured)
+        return structured;
+    for (const text of toolOutputTexts(content)) {
+        const notFound = /^Task #(\S+) not found$/.exec(text.trim());
+        const taskId = notFound?.[1] ?? expectedTaskId;
+        if (taskId && (notFound || text.trim() === "Failed to delete task")) {
+            return { success: false, taskId, updatedFields: [], error: text.trim() };
         }
     }
     return undefined;
@@ -826,93 +205,107 @@ export function applyTaskUpdate(state, input) {
         description: input.description ?? existing?.description,
     });
 }
+export function applyTaskList(state, output) {
+    const previous = new Map(state);
+    state.clear();
+    for (const task of output.tasks) {
+        const existing = previous.get(task.id);
+        state.set(task.id, {
+            subject: task.subject,
+            status: task.status,
+            activeForm: existing?.activeForm,
+            description: existing?.description,
+        });
+    }
+}
 export function taskStateToPlanEntries(state) {
     return Array.from(state.values()).map((task) => ({
-        content: task.subject,
+        content: task.status === "in_progress" && task.activeForm ? task.activeForm : task.subject,
         status: task.status,
         priority: "medium",
     }));
 }
-export function markdownEscape(text) {
-    let escape = "```";
-    for (const [m] of text.matchAll(/^```+/gm)) {
-        while (m.length >= escape.length) {
-            escape += "`";
-        }
-    }
-    return escape + "\n" + text + (text.endsWith("\n") ? "" : "\n") + escape;
-}
+/** The plan entries that the client holds for each task list, as JSON. */
+const publishedTaskPlans = new WeakMap();
 /**
- * Builds diff ToolUpdate content from the structured toolResponse provided by
- * the PostToolUse hook for diff-producing tools (Edit, Write). Unlike parsing
- * the plain unified diff string, this uses the pre-parsed structuredPatch
- * which supports multiple replacement sites (replaceAll) and always includes
- * context lines for better readability.
+ * The plan entries of the task list, or undefined when the client already
+ * holds the same entries. The TaskCreated and TaskCompleted hooks and the
+ * Task* tool results report the same change, so the second report of a
+ * change has nothing new.
+ *
+ * Only an AIR client skips the repeated plan. Every other client gets every
+ * plan, like upstream.
  */
-export function toolUpdateFromDiffToolResponse(toolResponse) {
-    if (!toolResponse || typeof toolResponse !== "object")
-        return {};
-    const response = toolResponse;
-    if (!response.filePath || !Array.isArray(response.structuredPatch))
-        return {};
-    const content = [];
-    const locations = [];
-    for (const { lines, newStart } of response.structuredPatch) {
-        const oldText = [];
-        const newText = [];
-        for (const line of lines) {
-            if (line.startsWith("-")) {
-                oldText.push(line.slice(1));
-            }
-            else if (line.startsWith("+")) {
-                newText.push(line.slice(1));
-            }
-            else {
-                oldText.push(line.slice(1));
-                newText.push(line.slice(1));
-            }
-        }
-        if (oldText.length > 0 || newText.length > 0) {
-            locations.push({ path: response.filePath, line: newStart });
-            content.push({
-                type: "diff",
-                path: response.filePath,
-                oldText: oldText.join("\n") || null,
-                newText: newText.join("\n"),
-            });
-        }
-    }
-    const result = {};
-    if (content.length > 0)
-        result.content = content;
-    if (locations.length > 0)
-        result.locations = locations;
-    return result;
+export function changedTaskPlanEntries(state, airClient) {
+    const entries = taskStateToPlanEntries(state);
+    if (!airClient)
+        return entries;
+    const json = JSON.stringify(entries);
+    if (publishedTaskPlans.get(state) === json)
+        return undefined;
+    publishedTaskPlans.set(state, json);
+    return entries;
 }
-/* A global variable to store callbacks that should be executed when receiving hooks from Claude Code */
-const toolUseCallbacks = {};
-/* Setup callbacks that will be called when receiving hooks from Claude Code */
-export const registerHookCallback = (toolUseID, { onPostToolUseHook, }) => {
-    toolUseCallbacks[toolUseID] = {
+/** Forgets the plan that the client holds, so that the next plan goes out, for example on replay. */
+export function forgetPublishedTaskPlan(state) {
+    publishedTaskPlans.delete(state);
+}
+/* Callbacks are keyed globally because the SDK hook is process-wide, but each
+ * entry retains its owning ACP session so cancellation/teardown can release it. */
+const toolUseCallbacks = new Map();
+/* Setup callbacks that will be called when receiving hooks from Claude Code.
+ * `onRelease` runs once when the callback leaves the registry: after the hook
+ * fired, after the grace period, or at session teardown. */
+export const registerHookCallback = (toolUseID, { onPostToolUseHook, onRelease, }, ownerId) => {
+    unregisterHookCallback(toolUseID);
+    toolUseCallbacks.set(toolUseID, {
+        ownerId,
         onPostToolUseHook,
-    };
+        onRelease,
+    });
 };
+export function unregisterHookCallback(toolUseID) {
+    const callback = toolUseCallbacks.get(toolUseID);
+    if (callback?.cleanupTimer)
+        clearTimeout(callback.cleanupTimer);
+    toolUseCallbacks.delete(toolUseID);
+    callback?.onRelease?.();
+}
+/** Whether a PostToolUse callback for the tool use is still registered. */
+export function hasHookCallback(toolUseID) {
+    return toolUseCallbacks.has(toolUseID);
+}
+/** PostToolUse normally follows tool_result, so keep the callback for a short
+ * grace period while still bounding retention when the hook never arrives. */
+export function completeHookCallback(toolUseID) {
+    const callback = toolUseCallbacks.get(toolUseID);
+    if (!callback || callback.cleanupTimer)
+        return;
+    callback.cleanupTimer = setTimeout(() => unregisterHookCallback(toolUseID), 30_000);
+    callback.cleanupTimer.unref?.();
+}
+export function clearHookCallbacks(ownerId) {
+    for (const [toolUseID, callback] of toolUseCallbacks) {
+        if (callback.ownerId === ownerId)
+            unregisterHookCallback(toolUseID);
+    }
+}
 /* A callback for Claude Code that is called when receiving a PostToolUse hook */
-export const createPostToolUseHook = (logger = console, options) => async (input, toolUseID) => {
+export const createPostToolUseHook = (options) => async (input, toolUseID) => {
     if (input.hook_event_name === "PostToolUse") {
         // Handle EnterPlanMode tool - notify client of mode change after successful execution
         if (input.tool_name === "EnterPlanMode" && options?.onEnterPlanMode) {
             await options.onEnterPlanMode();
         }
         if (toolUseID) {
-            const onPostToolUseHook = toolUseCallbacks[toolUseID]?.onPostToolUseHook;
-            if (onPostToolUseHook) {
-                await onPostToolUseHook(toolUseID, input.tool_input, input.tool_response);
-                delete toolUseCallbacks[toolUseID]; // Cleanup after execution
+            const onPostToolUseHook = toolUseCallbacks.get(toolUseID)?.onPostToolUseHook;
+            try {
+                if (onPostToolUseHook) {
+                    await onPostToolUseHook(toolUseID, input.tool_input, input.tool_response);
+                }
             }
-            else {
-                logger.error(`No onPostToolUseHook found for tool use ID: ${toolUseID}`);
-                delete toolUseCallbacks[toolUseID];
+            finally {
+                unregisterHookCallback(toolUseID);
             }
         }
     }

@@ -1,41 +1,26 @@
-import { PlanEntry, ToolCallContent, ToolCallLocation, ToolKind } from "@agentclientprotocol/sdk";
+import type { PlanEntry, ToolCallContent, ToolCallLocation, ToolKind } from "@agentclientprotocol/sdk";
 import { HookCallback } from "@anthropic-ai/claude-agent-sdk";
-import { TaskCreateInput, TaskCreateOutput, TaskUpdateInput } from "@anthropic-ai/claude-agent-sdk/sdk-tools.js";
-import { ToolResultBlockParam, WebSearchToolResultBlockParam } from "@anthropic-ai/sdk/resources";
-import { BetaBashCodeExecutionToolResultBlockParam, BetaCodeExecutionToolResultBlockParam, BetaRequestMCPToolResultBlockParam, BetaTextEditorCodeExecutionToolResultBlockParam, BetaToolResultBlockParam, BetaToolSearchToolResultBlockParam, BetaWebFetchToolResultBlockParam, BetaWebSearchToolResultBlockParam } from "@anthropic-ai/sdk/resources/beta.mjs";
-import { Logger } from "./acp-agent.js";
-interface ToolInfo {
+import type { TaskCreateInput, TaskCreateOutput, TaskListOutput, TaskUpdateInput, TaskUpdateOutput } from "@anthropic-ai/claude-agent-sdk/sdk-tools.js";
+import type { ToolResultBlock } from "./tool-calls/content.js";
+import { type RenderedResult } from "./tool-calls/renderer.js";
+export { markdownEscape, toDisplayPath } from "./tool-calls/content.js";
+/**
+ * The title, kind, content, and locations of a tool use, for a client with the
+ * given terminal and patch capabilities. The {@link AcpToolCallRenderer} builds
+ * them from the facts of the tool reporter.
+ */
+export declare function toolInfoFromToolUse(toolUse: any, supportsTerminalOutput?: boolean, cwd?: string, supportsDiffPatch?: boolean): {
     title: string;
     kind: ToolKind;
     content: ToolCallContent[];
     locations?: ToolCallLocation[];
-}
-interface ToolUpdate {
-    title?: string;
-    content?: ToolCallContent[];
-    locations?: ToolCallLocation[];
-    _meta?: {
-        terminal_info?: {
-            terminal_id: string;
-        };
-        terminal_output?: {
-            terminal_id: string;
-            data: string;
-        };
-        terminal_exit?: {
-            terminal_id: string;
-            exit_code: number;
-            signal: string | null;
-        };
-    };
-}
+};
 /**
- * Convert an absolute file path to a project-relative path for display.
- * Returns the original path if it's outside the project directory or if no cwd is provided.
+ * The result fields of a tool result, for a client with the given terminal
+ * capabilities. The {@link AcpToolCallRenderer} builds them from the facts of
+ * the tool reporter.
  */
-export declare function toDisplayPath(filePath: string, cwd?: string): string;
-export declare function toolInfoFromToolUse(toolUse: any, supportsTerminalOutput?: boolean, cwd?: string): ToolInfo;
-export declare function toolUpdateFromToolResult(toolResult: ToolResultBlockParam | BetaToolResultBlockParam | BetaWebSearchToolResultBlockParam | BetaWebFetchToolResultBlockParam | WebSearchToolResultBlockParam | BetaCodeExecutionToolResultBlockParam | BetaBashCodeExecutionToolResultBlockParam | BetaTextEditorCodeExecutionToolResultBlockParam | BetaRequestMCPToolResultBlockParam | BetaToolSearchToolResultBlockParam, toolUse: any | undefined, supportsTerminalOutput?: boolean, toolUseResult?: unknown): ToolUpdate;
+export declare function toolUpdateFromToolResult(toolResult: ToolResultBlock, toolUse: any | undefined, supportsTerminalOutput?: boolean, toolUseResult?: unknown, preferTerminalOutputDelta?: boolean): RenderedResult;
 export type ClaudePlanEntry = {
     content: string;
     status: "pending" | "in_progress" | "completed";
@@ -58,31 +43,37 @@ export type TaskEntry = {
     description?: string;
 };
 export type TaskState = Map<string, TaskEntry>;
-/**
- * Best-effort parse of a TaskCreate tool_result content into the structured
- * TaskCreateOutput. The SDK delivers tool outputs either as a string or as
- * an array of TextBlockParam-like blocks containing JSON text; try both.
- */
 export declare function parseTaskCreateOutput(content: unknown): TaskCreateOutput | undefined;
+export declare function parseTaskListOutput(content: unknown): TaskListOutput | undefined;
+export declare function parseTaskUpdateOutput(content: unknown, expectedTaskId?: string): TaskUpdateOutput | undefined;
 export declare function applyTaskCreate(state: TaskState, input: TaskCreateInput | undefined, output: TaskCreateOutput | undefined): void;
 export declare function applyTaskUpdate(state: TaskState, input: TaskUpdateInput | undefined): void;
+export declare function applyTaskList(state: TaskState, output: TaskListOutput): void;
 export declare function taskStateToPlanEntries(state: TaskState): PlanEntry[];
-export declare function markdownEscape(text: string): string;
 /**
- * Builds diff ToolUpdate content from the structured toolResponse provided by
- * the PostToolUse hook for diff-producing tools (Edit, Write). Unlike parsing
- * the plain unified diff string, this uses the pre-parsed structuredPatch
- * which supports multiple replacement sites (replaceAll) and always includes
- * context lines for better readability.
+ * The plan entries of the task list, or undefined when the client already
+ * holds the same entries. The TaskCreated and TaskCompleted hooks and the
+ * Task* tool results report the same change, so the second report of a
+ * change has nothing new.
+ *
+ * Only an AIR client skips the repeated plan. Every other client gets every
+ * plan, like upstream.
  */
-export declare function toolUpdateFromDiffToolResponse(toolResponse: unknown): {
-    content?: ToolCallContent[];
-    locations?: ToolCallLocation[];
-};
-export declare const registerHookCallback: (toolUseID: string, { onPostToolUseHook, }: {
+export declare function changedTaskPlanEntries(state: TaskState, airClient: boolean): PlanEntry[] | undefined;
+/** Forgets the plan that the client holds, so that the next plan goes out, for example on replay. */
+export declare function forgetPublishedTaskPlan(state: TaskState): void;
+export declare const registerHookCallback: (toolUseID: string, { onPostToolUseHook, onRelease, }: {
     onPostToolUseHook?: (toolUseID: string, toolInput: unknown, toolResponse: unknown) => Promise<void>;
-}) => void;
-export declare const createPostToolUseHook: (logger?: Logger, options?: {
+    onRelease?: () => void;
+}, ownerId?: string) => void;
+export declare function unregisterHookCallback(toolUseID: string): void;
+/** Whether a PostToolUse callback for the tool use is still registered. */
+export declare function hasHookCallback(toolUseID: string): boolean;
+/** PostToolUse normally follows tool_result, so keep the callback for a short
+ * grace period while still bounding retention when the hook never arrives. */
+export declare function completeHookCallback(toolUseID: string): void;
+export declare function clearHookCallbacks(ownerId: string): void;
+export declare const createPostToolUseHook: (options?: {
     onEnterPlanMode?: () => Promise<void>;
 }) => HookCallback;
 /**
@@ -99,5 +90,4 @@ export declare const createTaskHook: (options: {
     taskState: TaskState;
     onChange?: () => Promise<void>;
 }) => HookCallback;
-export {};
 //# sourceMappingURL=tools.d.ts.map

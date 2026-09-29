@@ -1,0 +1,1 @@
+{"version":3,"file":"background.d.ts","sourceRoot":"","sources":["../../src/tool-calls/background.ts"],"names":[],"mappings":"AAAA,OAAO,KAAK,EAAE,mBAAmB,EAAE,MAAM,0BAA0B,CAAC;AAEpE,OAAO,KAAK,EAAE,gBAAgB,EAAE,MAAM,mBAAmB,CAAC;AAE1D;;;;;;;;;;;;;;;GAeG;AACH,wBAAgB,wBAAwB,CACtC,YAAY,EAAE,mBAAmB,EACjC,IAAI,EAAE,gBAAgB,GAAG,SAAS,EAClC,mBAAmB,EAAE,OAAO,GAC3B,mBAAmB,CAkBrB"}

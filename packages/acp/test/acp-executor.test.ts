@@ -455,21 +455,24 @@ test("vendored prompt queues advertise capability and enforce per-session FIFO b
     consumerBody,
     /const activateTurn = \(turn\) => \{[\s\S]*session\.cancelled = false[\s\S]*resetTurnScratch\(\)/,
   );
-  assert.match(consumerBody, /session\.accumulatedUsage = \{/);
+  assert.match(
+    consumerBody,
+    /session\.accumulatedUsage = session\.activeTurn\?\.carriedUsage \?\? \{/,
+  );
   const cancelBody = claudeSource.slice(cancelStart, teardownStart);
   assert.match(cancelBody, /turn\.resolve\(\{ stopReason: "cancelled" \}\)/);
   assert.match(cancelBody, /session\.turnQueue = session\.turnQueue\.filter/);
 
-  const codexPromptStart = codexSource.indexOf("async prompt(params, signal)");
+  const codexPromptStart = codexSource.indexOf("async prompt(params, signal, onTurnStarted)");
   const codexRunPromptStart = codexSource.indexOf(
-    "async runPrompt(params, signal)",
+    "async runPrompt(params, signal, onTurnStarted)",
     codexPromptStart,
   );
   assert.ok(codexPromptStart >= 0);
   assert.ok(codexRunPromptStart > codexPromptStart);
   const codexPromptBody = codexSource.slice(codexPromptStart, codexRunPromptStart);
   assert.match(codexPromptBody, /const generation = this\.getPromptGeneration\(sessionId\)/);
-  assert.match(codexPromptBody, /return await this\.runPrompt\(params, signal\)/);
+  assert.match(codexPromptBody, /return await this\.runPrompt\(params, signal, onTurnStarted\)/);
   assert.match(codexPromptBody, /stopReason: "cancelled"/);
   assert.match(codexPromptBody, /setImmediate\(resolve\)/);
   const codexCancelStart = codexSource.indexOf("async cancel(params)", codexRunPromptStart);

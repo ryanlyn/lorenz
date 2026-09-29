@@ -57,11 +57,13 @@ export declare function extractAskUserQuestions(input: Record<string, unknown>):
  *
  * Each question is followed by its own optional free-text "custom answer" field
  * (`question_<n>_custom`), mirroring the CLI's per-question "Other" box: the
- * user can type their own answer instead of picking an option, scoped to that
- * specific question. Nothing is marked required, so the user can also just skip
- * — matching the built-in tool, which always offers Skip + a free-text box.
+ * user can type their own answer instead of picking an option, add it to a
+ * multi-select's picks, or attach it as a note to a single-select's pick (see
+ * `applyAskElicitationResponse`), scoped to that specific question. Nothing is
+ * marked required, so the user can also just skip — matching the built-in tool,
+ * which always offers Skip + a free-text box.
  */
-export declare function askUserQuestionsToCreateRequest(questions: AskUserQuestion[], sessionId: string, toolCallId: string | undefined): CreateElicitationRequest;
+export declare function askUserQuestionsToCreateRequest(questions: AskUserQuestion[], sessionId: string, toolCallId: string | undefined, airClient?: boolean): CreateElicitationRequest;
 /** Outcome of an AskUserQuestion elicitation, decoupled from any transport. */
 export type AskUserQuestionOutcome = {
     action: "answered";
@@ -73,13 +75,19 @@ export type AskUserQuestionOutcome = {
  * Fold an ACP elicitation response into the AskUserQuestion tool's input.
  *
  * Selected labels are read back from the indexed form fields and written into
- * `answers` as a `{ [questionText]: label }` map (comma-joining multi-selects)
- * — the key shape the tool's own `call()` reads. A non-empty per-question
- * custom-answer field (`question_<n>_custom`) takes precedence over that
- * question's selection, since the user typed their own answer instead of
- * picking one. Decline yields empty answers (the model is told the user skipped
- * rather than the turn aborting); cancel — and any custom/future action we
- * don't understand — aborts the tool call.
+ * `answers` as a `{ [questionText]: label }` map — the key shape the tool's own
+ * `call()` reads — with multi-selects comma-joined in the CLI's own quoted form
+ * (see `joinMultiSelectAnswer`). A non-empty per-question custom-answer field
+ * (`question_<n>_custom`) joins the selection of a multi-select question, where
+ * the two fields are independent and filling both means both. For a
+ * single-select question it is the answer when nothing was picked (the user
+ * typed their own instead), and otherwise travels beside the pick as the
+ * tool's own per-question `annotations[question].notes` — the slot the CLI
+ * uses for free text attached to a selection and renders to the model as
+ * `"Q"="A" notes: ...` — so a client that presents the box as a notes field
+ * cannot make the selection disappear. Decline yields empty answers (the model
+ * is told the user skipped rather than the turn aborting); cancel — and any
+ * custom/future action we don't understand — aborts the tool call.
  */
 export declare function applyAskElicitationResponse(response: CreateElicitationResponse, toolInput: Record<string, unknown>, questions: AskUserQuestion[]): AskUserQuestionOutcome;
 /**
