@@ -44,6 +44,8 @@ export type { DiscordRestTransportOptions, DiscordTrackerLogger } from "./restTr
 export { BOT_STATUS_PREFIX, resolveStateName, stateFromThread } from "./threadState.js";
 export { discordToolSpecs, executeDiscordTool } from "./tools.js";
 export type {
+  DiscordAttachment,
+  DiscordAttachmentRead,
   DiscordApplicationCommand,
   DiscordApplicationCommandOption,
   DiscordApplicationCommandOptionChoice,

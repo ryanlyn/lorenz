@@ -1,3 +1,5 @@
+import { Buffer } from "node:buffer";
+
 import { errorMessage, isRecord, type Settings } from "@lorenz/domain";
 import {
   applyQuery,
@@ -27,13 +29,14 @@ import {
 import { discordTrackerOptions } from "./options.js";
 import { chunkDiscordText, DiscordRestTransport } from "./restTransport.js";
 import { botStatusRecord, stateFromThread } from "./threadState.js";
-import type { DiscordTransport } from "./transport.js";
+import type { DiscordAttachment, DiscordMessage, DiscordTransport } from "./transport.js";
 
 const TOOL_NAMES = [
   "discord_update_status",
   "discord_workpad",
   "discord_comment",
   "discord_read_thread",
+  "discord_read_attachment",
   "discord_query",
   "discord_user_info",
   "discord_channel_context",
@@ -95,6 +98,23 @@ export function discordToolSpecs(): ToolSpec[] {
         type: "object",
         properties: { issueId: { type: "string" } },
         required: ["issueId"],
+      },
+    },
+    {
+      name: "discord_read_attachment",
+      description:
+        "Read an attachment from a Discord issue's source message or native thread. The message " +
+        "must belong to the tracked issue. Args: issueId, messageId, attachmentId? (required " +
+        "when the message has multiple attachments), encoding? ('utf8' by default, or 'base64').",
+      inputSchema: {
+        type: "object",
+        properties: {
+          issueId: { type: "string" },
+          messageId: { type: "string" },
+          attachmentId: { type: "string" },
+          encoding: { type: "string", enum: ["utf8", "base64"] },
+        },
+        required: ["issueId", "messageId"],
       },
     },
     {
@@ -217,8 +237,41 @@ export async function executeDiscordTool(
             emoji: reaction.emoji,
             ownedByBot: reaction.me,
           })),
+          attachments: root.attachments.map(attachmentForTool),
           permalink: discordPermalink(tracker.guildId ?? "@me", channelId, messageId),
-          messages,
+          messages: messages.map(messageForTool),
+        });
+      }
+      case "discord_read_attachment": {
+        const requestedMessageId = requireStr(args, "messageId");
+        if (!isDiscordSnowflake(requestedMessageId)) {
+          throw new Error("messageId must be a Discord snowflake");
+        }
+        const requestedAttachmentId =
+          args.attachmentId === undefined ? undefined : requireStr(args, "attachmentId");
+        if (requestedAttachmentId && !isDiscordSnowflake(requestedAttachmentId)) {
+          throw new Error("attachmentId must be a Discord snowflake");
+        }
+        const encoding = attachmentEncoding(args.encoding);
+        const root = await requireTrackedMessage(settings, transport, channelId, messageId);
+        const attachmentChannelId =
+          requestedMessageId === root.id ? root.channelId : root.hasThread ? root.id : undefined;
+        if (!attachmentChannelId) {
+          throw new Error(`message ${requestedMessageId} does not belong to this Discord issue`);
+        }
+        const { attachment, body } = await transport.readAttachment(
+          attachmentChannelId,
+          requestedMessageId,
+          requestedAttachmentId,
+        );
+        return toolSuccess({
+          messageId: requestedMessageId,
+          attachment: attachmentForTool(attachment),
+          encoding,
+          content:
+            encoding === "base64"
+              ? Buffer.from(body.buffer, body.byteOffset, body.byteLength).toString("base64")
+              : decodeAttachmentText(attachment, body),
         });
       }
       case "discord_channel_context": {
@@ -234,6 +287,7 @@ export async function executeDiscordTool(
             ...(message.authorId !== undefined ? { authorId: message.authorId } : {}),
             ...(message.authorName !== undefined ? { authorName: message.authorName } : {}),
             text: message.content,
+            attachments: message.attachments.map(attachmentForTool),
           })),
         });
       }
@@ -284,10 +338,88 @@ async function executeDiscordQuery(
   const projectedRows = rows.map((row) => {
     const projected = pickFields(row, select);
     if (expand.includes("reactions")) projected.reactions = row.reactions;
-    if (expand.includes("thread")) projected.thread = threads.get(String(row.messageId)) ?? [];
+    if (expand.includes("thread")) {
+      projected.thread = (threads.get(String(row.messageId)) ?? []).map(messageForTool);
+    }
     return projected;
   });
   return toolSuccess({ rows: projectedRows, total });
+}
+
+function attachmentEncoding(input: unknown): "utf8" | "base64" {
+  if (input === undefined || input === null || input === "utf8") return "utf8";
+  if (input === "base64") return "base64";
+  throw new Error("encoding must be 'utf8' or 'base64'");
+}
+
+function decodeAttachmentText(attachment: DiscordAttachment, bytes: Uint8Array): string {
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    throw new Error(
+      `discord attachment ${attachment.id} is not valid UTF-8; request encoding 'base64'`,
+    );
+  }
+}
+
+interface DiscordAttachmentToolView {
+  id: string;
+  filename: string;
+  title?: string | undefined;
+  description?: string | undefined;
+  contentType?: string | undefined;
+  size: number;
+}
+
+function attachmentForTool(attachment: DiscordAttachment): DiscordAttachmentToolView {
+  return {
+    id: attachment.id,
+    filename: attachment.filename,
+    ...(attachment.title !== undefined ? { title: attachment.title } : {}),
+    ...(attachment.description !== undefined ? { description: attachment.description } : {}),
+    ...(attachment.contentType !== undefined ? { contentType: attachment.contentType } : {}),
+    size: attachment.size,
+  };
+}
+
+interface DiscordMessageToolView {
+  id: string;
+  channelId: string;
+  guildId?: string | undefined;
+  content: string;
+  timestamp: string;
+  authorId?: string | undefined;
+  authorName?: string | undefined;
+  authorBot: boolean;
+  mentionUserIds: string[];
+  mentionRoleIds: string[];
+  botRoleIds: string[];
+  reactions: Array<{ emoji: string; me: boolean }>;
+  attachments: DiscordAttachmentToolView[];
+  hasThread: boolean;
+  threadLastMessageId?: string | undefined;
+}
+
+function messageForTool(message: DiscordMessage): DiscordMessageToolView {
+  return {
+    id: message.id,
+    channelId: message.channelId,
+    ...(message.guildId !== undefined ? { guildId: message.guildId } : {}),
+    content: message.content,
+    timestamp: message.timestamp,
+    ...(message.authorId !== undefined ? { authorId: message.authorId } : {}),
+    ...(message.authorName !== undefined ? { authorName: message.authorName } : {}),
+    authorBot: message.authorBot,
+    mentionUserIds: message.mentionUserIds,
+    mentionRoleIds: message.mentionRoleIds,
+    botRoleIds: message.botRoleIds,
+    reactions: message.reactions.map((reaction) => ({ ...reaction })),
+    attachments: message.attachments.map(attachmentForTool),
+    hasThread: message.hasThread,
+    ...(message.threadLastMessageId !== undefined
+      ? { threadLastMessageId: message.threadLastMessageId }
+      : {}),
+  };
 }
 
 function parseExpand(input: unknown): string[] {
